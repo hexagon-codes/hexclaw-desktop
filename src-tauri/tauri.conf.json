@@ -1,0 +1,90 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicegui/tauri/refs/heads/main/crates/tauri-utils/schema.json",
+  "productName": "HexClaw",
+  "version": "0.0.1",
+  "identifier": "com.everyday-items.hexclaw",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm build-only",
+    "beforeDevCommand": "pnpm dev"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "HexClaw",
+        "width": 1280,
+        "height": 820,
+        "minWidth": 900,
+        "minHeight": 600,
+        "decorations": false,
+        "center": true,
+        "visible": true
+      }
+    ],
+    "trayIcon": {
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true,
+      "tooltip": "HexClaw"
+    },
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:16060 ws://localhost:16060; img-src 'self' data: https:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "externalBin": ["binaries/hexclaw"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "displayLanguageSelector": true,
+        "languages": ["SimpChinese", "English"]
+      }
+    },
+    "linux": {
+      "deb": {
+        "desktopFile": {
+          "categories": ["Utility", "Development"]
+        }
+      },
+      "appimage": {
+        "bundleMediaFramework": true
+      }
+    }
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    },
+    "notification": {
+      "all": true
+    },
+    "autostart": {
+      "all": true
+    },
+    "process": {
+      "all": true
+    },
+    "store": {
+      "all": true
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/everyday-items/hexclaw-desktop/releases/latest/download/latest.json"
+      ],
+      "pubkey": ""
+    }
+  }
+}

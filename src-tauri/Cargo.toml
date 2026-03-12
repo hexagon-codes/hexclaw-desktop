@@ -1,0 +1,36 @@
+[package]
+name = "hexclaw-desktop"
+version = "0.0.1"
+description = "HexClaw Desktop — 企业级安全个人 AI Agent 桌面客户端"
+authors = ["everyday-items"]
+license = "MIT"
+repository = "https://github.com/everyday-items/hexclaw-desktop"
+edition = "2021"
+
+[lib]
+name = "hexclaw_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-shell = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-process = "2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tokio = { version = "1", features = ["time"] }
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

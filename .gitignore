@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+src-tauri/target/
+src-tauri/binaries/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment (本地覆盖文件，不提交)
+.env.local
+.env.*.local
+
+# Test
+coverage/
+
+# Claude Code
+.claude/

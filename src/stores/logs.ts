@@ -1,0 +1,105 @@
+import { ref, computed } from 'vue'
+import { defineStore } from 'pinia'
+import { connectLogStream, getLogStats } from '@/api/logs'
+import { trySafe } from '@/utils/errors'
+import { logger } from '@/utils/logger'
+import type { LogEntry, LogStats, ApiError } from '@/types'
+
+const MAX_ENTRIES = 1000
+
+export const useLogsStore = defineStore('logs', () => {
+  const entries = ref<LogEntry[]>([])
+  const connected = ref(false)
+  const filter = ref<{ level?: string; source?: string; keyword?: string }>({})
+  const stats = ref<LogStats | null>(null)
+  const error = ref<ApiError | null>(null)
+
+  let ws: WebSocket | null = null
+
+  /** 过滤后的日志条目 */
+  const filteredEntries = computed(() => {
+    let result = entries.value
+
+    if (filter.value.level) {
+      result = result.filter((e) => e.level === filter.value.level)
+    }
+    if (filter.value.source) {
+      result = result.filter((e) => e.source === filter.value.source)
+    }
+    if (filter.value.keyword) {
+      const kw = filter.value.keyword.toLowerCase()
+      result = result.filter((e) => e.message.toLowerCase().includes(kw))
+    }
+
+    return result
+  })
+
+  /** 建立 WebSocket 连接 */
+  function connect() {
+    if (ws) return
+
+    ws = connectLogStream(
+      (entry) => {
+        entries.value.push(entry)
+        if (entries.value.length > MAX_ENTRIES) {
+          entries.value = entries.value.slice(-MAX_ENTRIES)
+        }
+      },
+      () => {
+        connected.value = false
+        ws = null
+        setTimeout(connect, 5000)
+      },
+    )
+
+    ws.onopen = () => {
+      connected.value = true
+      logger.info('日志流已连接')
+    }
+
+    ws.onclose = () => {
+      connected.value = false
+      ws = null
+    }
+  }
+
+  /** 断开连接 */
+  function disconnect() {
+    if (ws) {
+      ws.close()
+      ws = null
+    }
+    connected.value = false
+  }
+
+  /** 加载统计 */
+  async function loadStats() {
+    const [res, err] = await trySafe(() => getLogStats(), '加载日志统计')
+    if (res) stats.value = res
+    error.value = err
+  }
+
+  /** 更新过滤器 */
+  function setFilter(f: Partial<typeof filter.value>) {
+    filter.value = { ...filter.value, ...f }
+  }
+
+  /** 清空日志 */
+  function clear() {
+    entries.value = []
+  }
+
+  return {
+    entries,
+    connected,
+    filter,
+    stats,
+    error,
+    filteredEntries,
+    connect,
+    disconnect,
+    loadStats,
+    setFilter,
+    clear,
+  }
+})

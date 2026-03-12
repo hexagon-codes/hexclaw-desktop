@@ -1,0 +1,151 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            go_os: darwin
+            go_arch: arm64
+            sidecar_name: hexclaw-aarch64-apple-darwin
+            tauri_args: --target aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            go_os: darwin
+            go_arch: amd64
+            sidecar_name: hexclaw-x86_64-apple-darwin
+            tauri_args: --target x86_64-apple-darwin
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            go_os: linux
+            go_arch: amd64
+            sidecar_name: hexclaw-x86_64-unknown-linux-gnu
+            tauri_args: ''
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            go_os: windows
+            go_arch: amd64
+            sidecar_name: hexclaw-x86_64-pc-windows-msvc.exe
+            tauri_args: --target x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Go sidecar cross-compilation ---
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: false
+
+      - name: Checkout hexclaw backend
+        uses: actions/checkout@v4
+        with:
+          repository: everyday-items/hexclaw
+          path: hexclaw
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build hexclaw sidecar
+        env:
+          GOOS: ${{ matrix.go_os }}
+          GOARCH: ${{ matrix.go_arch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p src-tauri/binaries
+          cd hexclaw && go build -ldflags="-s -w" -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
+
+      # --- Frontend & Tauri build ---
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Install dependencies (Ubuntu)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: pnpm vitest run
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code signing
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Tauri updater signing
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'HexClaw Desktop ${{ github.ref_name }}'
+          releaseBody: |
+            ## HexClaw Desktop ${{ github.ref_name }}
+
+            ### Downloads
+            - **macOS**: `.dmg` (Apple Silicon / Intel)
+            - **Windows**: `.msi` / `.exe` (NSIS installer)
+            - **Linux**: `.deb` / `.AppImage`
+
+            ### Homebrew (macOS)
+            ```bash
+            brew install --cask hexclaw
+            ```
+
+            ### Changelog
+            See [CHANGELOG.md](https://github.com/everyday-items/hexclaw-desktop/blob/main/CHANGELOG.md) for details.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.tauri_args }}
+          includeUpdaterJson: true
+
+  # Upload updater JSON as a separate job after all builds complete
+  upload-updater:
+    name: Upload Updater JSON
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download updater artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Upload updater JSON to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: artifacts/**/latest.json
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,106 @@
+@import 'tailwindcss';
+
+/* HexClaw Desktop 全局样式 */
+
+/* 暗色主题变量 (默认) */
+:root,
+[data-theme='dark'] {
+  --hc-bg-sidebar: #1a1b2e;
+  --hc-bg-main: #1e1f33;
+  --hc-bg-panel: #1a1b2e;
+  --hc-bg-card: #252640;
+  --hc-bg-input: #2a2b45;
+  --hc-bg-hover: #303152;
+
+  --hc-text-primary: #e4e4e7;
+  --hc-text-secondary: #a1a1aa;
+  --hc-text-muted: #52525b;
+
+  --hc-border: #2d2e45;
+  --hc-accent: #3b82f6;
+  --hc-success: #22c55e;
+  --hc-warning: #eab308;
+  --hc-error: #ef4444;
+
+  color-scheme: dark;
+}
+
+/* 浅色主题变量 */
+[data-theme='light'] {
+  --hc-bg-sidebar: #f8f9fc;
+  --hc-bg-main: #ffffff;
+  --hc-bg-panel: #f8f9fc;
+  --hc-bg-card: #f3f4f6;
+  --hc-bg-input: #ffffff;
+  --hc-bg-hover: #e5e7eb;
+
+  --hc-text-primary: #111827;
+  --hc-text-secondary: #4b5563;
+  --hc-text-muted: #9ca3af;
+
+  --hc-border: #e5e7eb;
+  --hc-accent: #2563eb;
+  --hc-success: #16a34a;
+  --hc-warning: #ca8a04;
+  --hc-error: #dc2626;
+
+  color-scheme: light;
+}
+
+/* 全局基础 */
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--hc-bg-main);
+  color: var(--hc-text-primary);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', sans-serif;
+}
+
+/* Tauri: 自定义标题栏拖拽区域 */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+}
+
+/* 滚动条样式 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--hc-text-muted);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--hc-text-secondary);
+}
+
+/* 选中文字颜色 */
+::selection {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+/* 路由过渡动画 */
+.page-enter-active {
+  transition: opacity 0.15s ease-out;
+}
+
+.page-leave-active {
+  transition: opacity 0.1s ease-in;
+}
+
+.page-enter-from,
+.page-leave-to {
+  opacity: 0;
+}

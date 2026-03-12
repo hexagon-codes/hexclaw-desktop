@@ -1,0 +1,231 @@
+<script setup lang="ts">
+import { onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { ScrollText, Trash2, Download, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { useLogsStore } from '@/stores/logs'
+import PageHeader from '@/components/common/PageHeader.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
+import StatusBadge from '@/components/common/StatusBadge.vue'
+
+const { t } = useI18n()
+
+const logsStore = useLogsStore()
+const autoScroll = ref(true)
+const logsContainer = ref<HTMLDivElement>()
+const expandedIds = ref<Set<string>>(new Set())
+
+const levelTabs = [
+  { key: '', label: t('logs.all') },
+  { key: 'debug', label: 'Debug' },
+  { key: 'info', label: 'Info' },
+  { key: 'warn', label: 'Warn' },
+  { key: 'error', label: 'Error' },
+] as const
+
+const activeLevel = ref('')
+
+onMounted(() => {
+  logsStore.connect()
+  logsStore.loadStats()
+})
+
+onUnmounted(() => {
+  logsStore.disconnect()
+})
+
+function setLevel(level: string) {
+  activeLevel.value = level
+  logsStore.setFilter({ level: level || undefined })
+}
+
+function clearLogs() {
+  logsStore.clear()
+  expandedIds.value.clear()
+}
+
+function toggleExpand(id: string) {
+  if (expandedIds.value.has(id)) {
+    expandedIds.value.delete(id)
+  } else {
+    expandedIds.value.add(id)
+  }
+}
+
+function exportLogs() {
+  const entries = logsStore.filteredEntries
+  if (entries.length === 0) return
+
+  const lines = entries.map(e => {
+    const ts = formatTime(e.timestamp)
+    return `[${ts}] [${e.level.toUpperCase().padEnd(5)}] [${e.source || '-'}] ${e.message}`
+  })
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `hexclaw-logs-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.log`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// 自动滚动到底部
+function scrollToBottom() {
+  if (autoScroll.value && logsContainer.value) {
+    nextTick(() => {
+      logsContainer.value!.scrollTop = logsContainer.value!.scrollHeight
+    })
+  }
+}
+
+function handleScroll() {
+  if (!logsContainer.value) return
+  const { scrollTop, scrollHeight, clientHeight } = logsContainer.value
+  autoScroll.value = scrollHeight - scrollTop - clientHeight < 50
+}
+
+const levelColor: Record<string, string> = {
+  debug: '#8b8b8b',
+  info: '#3b82f6',
+  warn: '#eab308',
+  error: '#ef4444',
+}
+
+function formatTime(ts: string): string {
+  try {
+    const d = new Date(ts)
+    return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      + '.' + String(d.getMilliseconds()).padStart(3, '0')
+  } catch {
+    return ts
+  }
+}
+</script>
+
+<template>
+  <div class="h-full flex flex-col overflow-hidden">
+    <PageHeader :title="t('logs.title')" :description="t('logs.description')">
+      <template #actions>
+        <StatusBadge :status="logsStore.connected ? 'online' : 'offline'" />
+        <button
+          class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
+          :style="{ color: 'var(--hc-text-secondary)' }"
+          :title="t('common.download')"
+          @click="exportLogs"
+        >
+          <Download :size="16" />
+        </button>
+        <button
+          class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
+          :style="{ color: 'var(--hc-text-secondary)' }"
+          :title="t('common.delete')"
+          @click="clearLogs"
+        >
+          <Trash2 :size="16" />
+        </button>
+      </template>
+    </PageHeader>
+
+    <!-- 过滤器 -->
+    <div class="flex items-center gap-3 px-6 py-2 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+      <div class="flex gap-1">
+        <button
+          v-for="tab in levelTabs"
+          :key="tab.key"
+          class="px-3 py-1 rounded-md text-xs font-medium transition-colors"
+          :style="{
+            background: activeLevel === tab.key ? 'var(--hc-accent)' : 'transparent',
+            color: activeLevel === tab.key ? '#fff' : 'var(--hc-text-secondary)',
+          }"
+          @click="setLevel(tab.key)"
+        >
+          {{ tab.label }}
+        </button>
+      </div>
+      <div class="flex-1" />
+      <SearchInput
+        :model-value="logsStore.filter.keyword || ''"
+        :placeholder="t('logs.searchPlaceholder')"
+        @update:model-value="logsStore.setFilter({ keyword: $event || undefined })"
+      />
+      <label class="flex items-center gap-1.5 cursor-pointer select-none">
+        <input v-model="autoScroll" type="checkbox" class="accent-blue-500 w-3 h-3" />
+        <span class="text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">Auto-scroll</span>
+      </label>
+      <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
+        {{ logsStore.filteredEntries.length }}
+      </span>
+    </div>
+
+    <!-- 日志流 -->
+    <div ref="logsContainer" class="flex-1 overflow-y-auto font-mono text-xs" @scroll="handleScroll">
+      <div
+        v-for="entry in logsStore.filteredEntries"
+        :key="entry.id"
+        class="border-b border-white/[0.03]"
+      >
+        <div
+          class="flex items-start gap-3 px-6 py-1 hover:bg-white/[0.02] cursor-pointer"
+          @click="toggleExpand(entry.id)"
+        >
+          <component
+            :is="expandedIds.has(entry.id) ? ChevronDown : ChevronRight"
+            :size="12"
+            class="shrink-0 mt-0.5"
+            :style="{ color: 'var(--hc-text-muted)' }"
+          />
+          <span class="text-[10px] tabular-nums shrink-0 pt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
+            {{ formatTime(entry.timestamp) }}
+          </span>
+          <span
+            class="w-12 text-center rounded text-[10px] font-bold uppercase shrink-0 pt-0.5"
+            :style="{ color: levelColor[entry.level] || 'var(--hc-text-secondary)' }"
+          >
+            {{ entry.level }}
+          </span>
+          <span class="text-[10px] shrink-0 pt-0.5 w-16 truncate" :style="{ color: 'var(--hc-text-muted)' }">
+            {{ entry.source }}
+          </span>
+          <span class="flex-1 break-all" :class="{ 'truncate': !expandedIds.has(entry.id) }" :style="{ color: 'var(--hc-text-primary)' }">
+            {{ entry.message }}
+          </span>
+        </div>
+
+        <!-- 展开详情 -->
+        <div
+          v-if="expandedIds.has(entry.id)"
+          class="px-6 py-2 ml-[21px] space-y-1"
+          :style="{ background: 'var(--hc-bg-hover)' }"
+        >
+          <div class="flex gap-8 text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
+            <span>ID: {{ entry.id }}</span>
+            <span>Source: {{ entry.source || '-' }}</span>
+            <span>Level: {{ entry.level }}</span>
+            <span>Time: {{ entry.timestamp }}</span>
+          </div>
+          <pre class="text-[11px] whitespace-pre-wrap break-all mt-1" :style="{ color: 'var(--hc-text-primary)' }">{{ entry.message }}</pre>
+        </div>
+      </div>
+
+      <div v-if="logsStore.filteredEntries.length === 0" class="flex items-center justify-center h-full">
+        <div class="text-center" :style="{ color: 'var(--hc-text-muted)' }">
+          <ScrollText :size="40" class="mx-auto mb-3 opacity-30" />
+          <p class="text-sm">{{ logsStore.connected ? t('logs.connected') : t('logs.disconnected') }}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 统计栏 -->
+    <div
+      v-if="logsStore.stats"
+      class="flex items-center gap-6 px-6 py-2 border-t text-xs"
+      :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-muted)', background: 'var(--hc-bg-sidebar)' }"
+    >
+      <span>Total: {{ logsStore.stats.total }}</span>
+      <span :style="{ color: levelColor.info }">Info: {{ logsStore.stats.by_level?.info || 0 }}</span>
+      <span :style="{ color: levelColor.warn }">Warn: {{ logsStore.stats.by_level?.warn || 0 }}</span>
+      <span :style="{ color: levelColor.error }">Error: {{ logsStore.stats.by_level?.error || 0 }}</span>
+      <span>{{ logsStore.stats.requests_per_minute?.toFixed(1) || 0 }} req/min</span>
+    </div>
+  </div>
+</template>
