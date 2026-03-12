@@ -6,6 +6,7 @@
 // 关闭主窗口时隐藏到托盘而不是退出应用
 
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
 /// 创建 Quick Chat 浮窗
 ///
@@ -50,11 +51,12 @@ pub fn register_shortcuts(app: &tauri::App) -> Result<(), Box<dyn std::error::Er
 /// 设置主窗口关闭行为: 隐藏到托盘而非退出
 pub fn setup_close_behavior(app: &tauri::App) {
     if let Some(window) = app.get_webview_window("main") {
+        let w = window.clone();
         window.on_window_event(move |event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 阻止默认关闭，改为隐藏
                 api.prevent_close();
-                let _ = window.hide();
+                let _ = w.hide();
             }
         });
     }

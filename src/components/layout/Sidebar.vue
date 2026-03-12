@@ -17,6 +17,7 @@ import {
   PanelLeft,
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
+import logoUrl from '@/assets/logo.png'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -49,6 +50,11 @@ function isActive(path: string): boolean {
     :class="appStore.sidebarCollapsed ? 'w-[56px]' : 'w-[220px]'"
     :style="{ background: 'var(--hc-bg-sidebar)', borderRight: '1px solid var(--hc-border)' }"
   >
+    <!-- 品牌 Logo -->
+    <div class="flex items-center justify-center py-3 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+      <img :src="logoUrl" alt="HexClaw" class="w-8 h-8" />
+    </div>
+
     <!-- 导航列表 -->
     <nav role="navigation" class="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto">
       <router-link

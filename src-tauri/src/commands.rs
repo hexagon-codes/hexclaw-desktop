@@ -4,7 +4,6 @@
 // 业务逻辑不放在这里，业务 API 全部走 hexclaw REST API。
 
 use serde::Serialize;
-use tauri::Manager;
 
 use crate::sidecar;
 

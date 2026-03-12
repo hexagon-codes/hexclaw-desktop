@@ -1,19 +1,15 @@
-<p align="center">
-  <img src="src-tauri/icons/128x128@2x.png" alt="HexClaw" width="128" />
-</p>
+<div align="center">
 
-<h1 align="center">HexClaw Desktop</h1>
+<img src=".github/assets/logo.jpg" alt="HexClaw Logo" width="160">
 
-<p align="center">
-  企业级安全的个人 AI Agent 一体化桌面客户端
-</p>
+**企业级安全的个人 AI Agent 一体化桌面客户端**
 
-<p align="center">
-  <a href="https://github.com/everyday-items/hexclaw-desktop/actions"><img src="https://github.com/everyday-items/hexclaw-desktop/workflows/CI/badge.svg" alt="CI" /></a>
-  <a href="https://github.com/everyday-items/hexclaw-desktop/releases"><img src="https://img.shields.io/github/v/release/everyday-items/hexclaw-desktop?include_prereleases" alt="Release" /></a>
-  <a href="https://github.com/everyday-items/hexclaw-desktop/blob/main/LICENSE"><img src="https://img.shields.io/github/license/everyday-items/hexclaw-desktop" alt="License" /></a>
-  <a href="https://github.com/everyday-items/hexclaw-desktop/releases"><img src="https://img.shields.io/github/downloads/everyday-items/hexclaw-desktop/total" alt="Downloads" /></a>
-</p>
+[![CI](https://github.com/everyday-items/hexclaw-desktop/workflows/CI/badge.svg)](https://github.com/everyday-items/hexclaw-desktop/actions)
+[![Release](https://img.shields.io/github/v/release/everyday-items/hexclaw-desktop?include_prereleases)](https://github.com/everyday-items/hexclaw-desktop/releases)
+[![License](https://img.shields.io/github/license/everyday-items/hexclaw-desktop)](https://github.com/everyday-items/hexclaw-desktop/blob/main/LICENSE)
+[![Downloads](https://img.shields.io/github/downloads/everyday-items/hexclaw-desktop/total)](https://github.com/everyday-items/hexclaw-desktop/releases)
+
+</div>
 
 ---
 

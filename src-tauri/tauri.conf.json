@@ -55,9 +55,7 @@
     },
     "linux": {
       "deb": {
-        "desktopFile": {
-          "categories": ["Utility", "Development"]
-        }
+        "depends": []
       },
       "appimage": {
         "bundleMediaFramework": true
@@ -67,18 +65,6 @@
   "plugins": {
     "shell": {
       "open": true
-    },
-    "notification": {
-      "all": true
-    },
-    "autostart": {
-      "all": true
-    },
-    "process": {
-      "all": true
-    },
-    "store": {
-      "all": true
     },
     "updater": {
       "endpoints": [

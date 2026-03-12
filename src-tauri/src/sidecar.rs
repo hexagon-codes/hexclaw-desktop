@@ -10,7 +10,7 @@
 use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::Duration;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Sidecar 进程句柄，用于生命周期管理
 static SIDECAR_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
@@ -82,32 +82,46 @@ pub fn is_ready(app_handle: &tauri::AppHandle) -> bool {
 
 /// 启动 hexclaw sidecar 进程
 ///
-/// 从应用资源目录中查找 hexclaw 二进制文件并启动。
+/// Tauri externalBin 会将 sidecar 放在与主程序同目录 (Contents/MacOS/)。
 /// 进程句柄存储在全局静态变量中，供 stop_sidecar 使用。
 pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("获取资源路径失败: {}", e))?;
-
     let binary_name = if cfg!(target_os = "windows") {
         "hexclaw.exe"
     } else {
         "hexclaw"
     };
 
-    let binary_path = resource_path.join("binaries").join(binary_name);
+    // externalBin 的 sidecar 与主程序在同一目录 (Contents/MacOS/)
+    let binary_path = std::env::current_exe()
+        .map_err(|e| format!("获取当前程序路径失败: {}", e))?
+        .parent()
+        .ok_or("无法获取程序所在目录")?
+        .join(binary_name);
 
     if !binary_path.exists() {
-        return Err(format!("sidecar 二进制不存在: {:?}", binary_path));
+        // 开发模式回退：从 resource_dir/binaries 查找
+        let resource_path = app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("获取资源路径失败: {}", e))?;
+        let fallback_path = resource_path.join("binaries").join(binary_name);
+        if !fallback_path.exists() {
+            return Err(format!("sidecar 二进制不存在: {:?} 和 {:?}", binary_path, fallback_path));
+        }
+        return spawn_child(&fallback_path);
     }
 
-    let child = Command::new(&binary_path)
+    spawn_child(&binary_path)
+}
+
+/// 启动子进程并记录 PID
+fn spawn_child(path: &std::path::Path) -> Result<(), String> {
+    let child = Command::new(path)
         .args(["serve", "--desktop", "--port", &HEXCLAW_PORT.to_string()])
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败: {}", e))?;
 
-    log::info!("sidecar 已启动, PID: {}", child.id());
+    log::info!("sidecar 已启动, PID: {}, 路径: {:?}", child.id(), path);
 
     if let Ok(mut guard) = SIDECAR_PROCESS.lock() {
         *guard = Some(child);
