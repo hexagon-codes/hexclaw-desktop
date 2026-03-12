@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import logoUrl from '@/assets/logo.png'
 
 const appWindow = getCurrentWindow()
 
@@ -23,7 +24,8 @@ function close() {
     :style="{ background: 'var(--hc-bg-sidebar)' }"
   >
     <!-- macOS 留出红绿灯按钮空间 -->
-    <div class="flex items-center gap-2 pl-[70px]">
+    <div class="flex items-center gap-1.5 pl-[70px]">
+      <img :src="logoUrl" alt="HexClaw" class="w-5 h-5" />
       <span class="text-xs font-semibold tracking-wide" :style="{ color: 'var(--hc-text-secondary)' }">
         HexClaw
       </span>
