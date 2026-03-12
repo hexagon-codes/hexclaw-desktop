@@ -30,14 +30,16 @@ async function handleSend(text: string) {
   scrollToBottom()
 }
 
-function handleRetry(msgIndex: number) {
+async function handleRetry(msgIndex: number) {
   // 找到该 assistant 消息之前的最后一条 user 消息
   const msgs = chatStore.messages
   for (let i = msgIndex - 1; i >= 0; i--) {
     if (msgs[i]?.role === 'user') {
       // 移除该 assistant 消息及之后的消息
       chatStore.messages.splice(msgIndex)
-      chatStore.sendMessage(msgs[i]!.content)
+      await chatStore.sendMessage(msgs[i]!.content)
+      await nextTick()
+      scrollToBottom()
       break
     }
   }
@@ -47,8 +49,9 @@ function handleEdit(msgIndex: number) {
   const msg = chatStore.messages[msgIndex]
   if (!msg || msg.role !== 'user') return
   // 将消息内容填入输入框，移除该消息及之后的消息
+  const content = msg.content
   chatStore.messages.splice(msgIndex)
-  chatInputRef.value?.focus()
+  chatInputRef.value?.setInput(content)
 }
 
 function scrollToBottom() {

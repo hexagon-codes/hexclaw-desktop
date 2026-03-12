@@ -49,8 +49,13 @@ pub fn run() {
             // 系统托盘
             tray::setup(app)?;
 
-            // 异步启动 sidecar 健康检查
-            // (实际的 hexclaw 进程由外部启动或 sidecar 模式管理)
+            // 启动 hexclaw sidecar 进程
+            match sidecar::spawn_sidecar(&app.handle()) {
+                Ok(()) => log::info!("sidecar 进程已启动"),
+                Err(e) => log::error!("sidecar 启动失败: {}", e),
+            }
+
+            // 异步健康检查，等待 sidecar 就绪
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 sidecar::wait_for_healthy(handle, 30).await;
@@ -70,6 +75,12 @@ pub fn run() {
             commands::get_sidecar_status,
             commands::get_platform_info,
         ])
+        .on_window_event(|_window, event| {
+            // 所有窗口销毁时停止 sidecar 进程
+            if let tauri::WindowEvent::Destroyed = event {
+                sidecar::stop_sidecar();
+            }
+        })
         .run(tauri::generate_context!())
         .expect("HexClaw Desktop 启动失败");
 }

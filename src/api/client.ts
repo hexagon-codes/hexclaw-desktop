@@ -43,7 +43,13 @@ export function apiGet<T>(url: string, query?: Record<string, unknown>) {
 
 /** POST 请求 */
 export function apiPost<T>(url: string, body?: Record<string, unknown> | FormData | object) {
-  return api<T>(url, { method: 'POST', body: body as Record<string, unknown> })
+  const opts: Record<string, unknown> = { method: 'POST' }
+  if (body instanceof FormData) {
+    opts.body = body
+  } else if (body) {
+    opts.body = body as Record<string, unknown>
+  }
+  return api<T>(url, opts)
 }
 
 /** PUT 请求 */

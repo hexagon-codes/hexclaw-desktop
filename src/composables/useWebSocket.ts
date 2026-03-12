@@ -50,6 +50,7 @@ export function useWebSocket<T = unknown>(
       ws.onclose = () => {
         connected.value = false
         ws = null
+        error.value = null
         scheduleReconnect()
       }
     } catch (e) {

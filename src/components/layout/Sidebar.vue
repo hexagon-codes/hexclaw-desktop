@@ -50,11 +50,12 @@ function isActive(path: string): boolean {
     :style="{ background: 'var(--hc-bg-sidebar)', borderRight: '1px solid var(--hc-border)' }"
   >
     <!-- 导航列表 -->
-    <nav class="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto">
+    <nav role="navigation" class="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto">
       <router-link
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
+        :aria-label="item.label"
         class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors"
         :style="{
           background: isActive(item.path) ? 'var(--hc-bg-hover)' : 'transparent',
@@ -85,6 +86,7 @@ function isActive(path: string): boolean {
         v-for="item in bottomItems"
         :key="item.path"
         :to="item.path"
+        :aria-label="item.label"
         class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors"
         :style="{
           background: isActive(item.path) ? 'var(--hc-bg-hover)' : 'transparent',
@@ -97,6 +99,7 @@ function isActive(path: string): boolean {
 
       <!-- 折叠按钮 -->
       <button
+        :aria-label="t('nav.collapse')"
         class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors w-full"
         :style="{ color: 'var(--hc-text-muted)' }"
         @click="appStore.toggleSidebar"

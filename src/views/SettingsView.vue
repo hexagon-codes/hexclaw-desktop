@@ -74,24 +74,22 @@ const config = computed(() => settingsStore.config)
 async function saveConfig() {
   if (!settingsStore.config) return
 
-  // 根据当前激活的配置区域执行验证
-  if (activeSection.value === 'llm') {
-    const valid = validateAllLlm({
-      api_key: settingsStore.config.llm.api_key,
-      base_url: settingsStore.config.llm.base_url,
-      temperature: settingsStore.config.llm.temperature,
-      max_tokens: settingsStore.config.llm.max_tokens,
-    })
-    if (!valid) return
+  // 验证所有区域（不仅限于当前激活的标签页）
+  const llmValues = {
+    api_key: settingsStore.config.llm.api_key,
+    base_url: settingsStore.config.llm.base_url,
+    temperature: settingsStore.config.llm.temperature,
+    max_tokens: settingsStore.config.llm.max_tokens,
   }
+  const llmValid = validateAllLlm(llmValues)
+  if (!llmValid) return
 
-  if (activeSection.value === 'security') {
-    const valid = validateAllSec({
-      max_tokens_per_request: settingsStore.config.security.max_tokens_per_request,
-      rate_limit_rpm: settingsStore.config.security.rate_limit_rpm,
-    })
-    if (!valid) return
+  const secValues = {
+    max_tokens_per_request: settingsStore.config.security.max_tokens_per_request,
+    rate_limit_rpm: settingsStore.config.security.rate_limit_rpm,
   }
+  const secValid = validateAllSec(secValues)
+  if (!secValid) return
 
   await settingsStore.saveConfig(settingsStore.config)
   saved.value = true
@@ -423,28 +421,28 @@ async function saveConfig() {
                   <span class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ t('settings.notification.system') }}</span>
                   <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ t('settings.notification.systemDesc') }}</p>
                 </div>
-                <input type="checkbox" checked class="accent-blue-500 w-4 h-4" />
+                <input v-model="config.notification.system_enabled" type="checkbox" class="accent-blue-500 w-4 h-4" />
               </label>
               <label class="flex items-center justify-between cursor-pointer">
                 <div>
                   <span class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ t('settings.notification.sound') }}</span>
                   <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ t('settings.notification.soundDesc') }}</p>
                 </div>
-                <input type="checkbox" class="accent-blue-500 w-4 h-4" />
+                <input v-model="config.notification.sound_enabled" type="checkbox" class="accent-blue-500 w-4 h-4" />
               </label>
               <label class="flex items-center justify-between cursor-pointer">
                 <div>
                   <span class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ t('settings.notification.cron') }}</span>
                   <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ t('settings.notification.cronDesc') }}</p>
                 </div>
-                <input type="checkbox" checked class="accent-blue-500 w-4 h-4" />
+                <input v-model="config.notification.agent_complete" type="checkbox" class="accent-blue-500 w-4 h-4" />
               </label>
               <label class="flex items-center justify-between cursor-pointer">
                 <div>
                   <span class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ t('settings.notification.heartbeat') }}</span>
                   <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ t('settings.notification.heartbeatDesc') }}</p>
                 </div>
-                <input type="checkbox" checked class="accent-blue-500 w-4 h-4" />
+                <input v-model="config.notification.agent_complete" type="checkbox" class="accent-blue-500 w-4 h-4" />
               </label>
             </div>
 
@@ -528,6 +526,7 @@ async function saveConfig() {
               <div>
                 <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('settings.mcp.defaultProtocol') }}</label>
                 <select
+                  v-model="config.mcp.default_protocol"
                   class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
                   :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
                 >

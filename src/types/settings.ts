@@ -26,9 +26,23 @@ export interface GeneralConfig {
   auto_start: boolean
 }
 
+/** 通知配置 */
+export interface NotificationConfig {
+  system_enabled: boolean
+  sound_enabled: boolean
+  agent_complete: boolean
+}
+
+/** MCP 配置 */
+export interface MCPConfig {
+  default_protocol: string
+}
+
 /** 应用配置 */
 export interface AppConfig {
   llm: LLMConfig
   security: SecurityConfig
   general: GeneralConfig
+  notification: NotificationConfig
+  mcp: MCPConfig
 }

@@ -36,7 +36,10 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     TrayIconBuilder::new()
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(app.default_window_icon().cloned().unwrap_or_else(|| {
+            log::warn!("默认窗口图标不存在，使用空图标");
+            tauri::image::Image::new(&[], 0, 0)
+        }))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -53,14 +56,14 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
-                    let _ = window.eval("window.location.hash = '#/logs'");
+                    let _ = window.emit("navigate", "/logs");
                 }
             }
             "settings" => {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
-                    let _ = window.eval("window.location.hash = '#/settings'");
+                    let _ = window.emit("navigate", "/settings");
                 }
             }
             "quit" => {

@@ -65,7 +65,16 @@ function focus() {
   textareaRef.value?.focus()
 }
 
-defineExpose({ focus })
+/** 设置输入框内容并聚焦 */
+function setInput(text: string) {
+  inputText.value = text
+  nextTick(() => {
+    handleInput()
+    focus()
+  })
+}
+
+defineExpose({ focus, setInput })
 </script>
 
 <template>

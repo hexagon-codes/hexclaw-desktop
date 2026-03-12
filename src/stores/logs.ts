@@ -15,6 +15,7 @@ export const useLogsStore = defineStore('logs', () => {
   const error = ref<ApiError | null>(null)
 
   let ws: WebSocket | null = null
+  let reconnectDelay = 1000
 
   /** 过滤后的日志条目 */
   const filteredEntries = computed(() => {
@@ -40,20 +41,22 @@ export const useLogsStore = defineStore('logs', () => {
 
     ws = connectLogStream(
       (entry) => {
-        entries.value.push(entry)
-        if (entries.value.length > MAX_ENTRIES) {
-          entries.value = entries.value.slice(-MAX_ENTRIES)
+        if (entries.value.length >= MAX_ENTRIES) {
+          entries.value.shift()
         }
+        entries.value.push(entry)
       },
       () => {
         connected.value = false
         ws = null
-        setTimeout(connect, 5000)
+        setTimeout(connect, reconnectDelay)
+        reconnectDelay = Math.min(reconnectDelay * 2, 30000)
       },
     )
 
     ws.onopen = () => {
       connected.value = true
+      reconnectDelay = 1000
       logger.info('日志流已连接')
     }
 

@@ -23,7 +23,12 @@ export const useSettingsStore = defineStore('settings', () => {
     error.value = null
     const [res, err] = await trySafe(() => getConfig(), '加载配置')
     if (res) {
-      config.value = res
+      // 合并默认值，防止后端返回的配置缺少新增字段
+      config.value = {
+        ...res,
+        notification: res.notification ?? { system_enabled: true, sound_enabled: false, agent_complete: true },
+        mcp: res.mcp ?? { default_protocol: 'stdio' },
+      }
     } else {
       // 后端不可达时使用默认配置
       config.value = {
@@ -47,6 +52,14 @@ export const useSettingsStore = defineStore('settings', () => {
           log_level: 'info',
           data_dir: '',
           auto_start: false,
+        },
+        notification: {
+          system_enabled: true,
+          sound_enabled: false,
+          agent_complete: true,
+        },
+        mcp: {
+          default_protocol: 'stdio',
         },
       }
     }
@@ -97,6 +110,8 @@ export const useSettingsStore = defineStore('settings', () => {
           ...res.llm,
           api_key: apiKey,
         },
+        notification: res.notification ?? newConfig.notification,
+        mcp: res.mcp ?? newConfig.mcp,
       }
     }
     if (err) {

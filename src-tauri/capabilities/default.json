@@ -18,7 +18,10 @@
     "core:window:allow-show",
     "core:window:allow-hide",
     "shell:default",
-    "shell:allow-open",
+    {
+      "identifier": "shell:allow-open",
+      "allow": [{ "url": "https://*" }, { "url": "http://localhost:*" }]
+    },
     "notification:default",
     "notification:allow-notify",
     "notification:allow-request-permission",

@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
+import { nanoid } from 'nanoid'
 import {
   getSessions,
   getSessionMessages,
@@ -9,6 +10,8 @@ import {
 import { trySafe } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 import type { ChatMessage, ChatSession, ApiError } from '@/types'
+
+const MAX_STREAM_SIZE = 1024 * 1024 // 1MB
 
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
@@ -53,7 +56,7 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(text: string) {
     // 添加用户消息到列表
     const userMsg: ChatMessage = {
-      id: `tmp-${Date.now()}`,
+      id: nanoid(),
       role: 'user',
       content: text,
       timestamp: new Date().toISOString(),
@@ -78,7 +81,7 @@ export const useChatStore = defineStore('chat', () => {
     if (streamErr || !stream) {
       error.value = streamErr
       messages.value.push({
-        id: `err-${Date.now()}`,
+        id: nanoid(),
         role: 'assistant',
         content: streamErr?.message ?? '发送失败',
         timestamp: new Date().toISOString(),
@@ -95,22 +98,27 @@ export const useChatStore = defineStore('chat', () => {
         const { done, value } = await reader.read()
         if (done) break
 
+        let parsed: any
         try {
-          const parsed = JSON.parse(value)
-          if (parsed.content) {
-            streamingContent.value += parsed.content
-          }
-          if (parsed.session_id && !currentSessionId.value) {
-            currentSessionId.value = parsed.session_id
-          }
+          parsed = JSON.parse(value)
         } catch {
           streamingContent.value += value
+          continue
+        }
+        if (parsed.content) {
+          if (streamingContent.value.length + parsed.content.length > MAX_STREAM_SIZE) {
+            throw new Error('流式内容超过最大限制')
+          }
+          streamingContent.value += parsed.content
+        }
+        if (parsed.session_id && !currentSessionId.value) {
+          currentSessionId.value = parsed.session_id
         }
       }
 
       // 流结束，将内容转为正式消息
       messages.value.push({
-        id: `msg-${Date.now()}`,
+        id: nanoid(),
         role: 'assistant',
         content: streamingContent.value,
         timestamp: new Date().toISOString(),
@@ -136,7 +144,7 @@ export const useChatStore = defineStore('chat', () => {
     streaming.value = false
     if (streamingContent.value) {
       messages.value.push({
-        id: `msg-${Date.now()}`,
+        id: nanoid(),
         role: 'assistant',
         content: streamingContent.value,
         timestamp: new Date().toISOString(),

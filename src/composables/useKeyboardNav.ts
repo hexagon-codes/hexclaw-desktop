@@ -32,6 +32,11 @@ export function useKeyboardNav(options?: {
 export function trapFocus(container: HTMLElement) {
   const focusableSelector = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
   const focusableElements = container.querySelectorAll<HTMLElement>(focusableSelector)
+
+  if (focusableElements.length === 0) {
+    return () => {} // 无可聚焦元素，返回空清理函数
+  }
+
   const first = focusableElements[0]
   const last = focusableElements[focusableElements.length - 1]
 

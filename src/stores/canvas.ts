@@ -23,16 +23,26 @@ export const useCanvasStore = defineStore('canvas', () => {
   const executing = ref(false)
   const error = ref<ApiError | null>(null)
 
+  // ─── 变更计数 (替代 JSON.stringify 深比较) ─────────────
+  const changeCount = ref(0)
+  const savedChangeCount = ref(0)
+
   // ─── Getters ─────────────────────────────────────────
   const isDirty = computed(() => {
-    if (!currentWorkflow.value) return nodes.value.length > 0 || edges.value.length > 0
-    return (
-      JSON.stringify(nodes.value) !== JSON.stringify(currentWorkflow.value.nodes) ||
-      JSON.stringify(edges.value) !== JSON.stringify(currentWorkflow.value.edges)
-    )
+    return changeCount.value !== savedChangeCount.value
   })
 
   const isRunning = computed(() => currentRun.value?.status === 'running')
+
+  // ─── 轮询计时器管理 ─────────────────────────────────
+  const pollTimer = ref<ReturnType<typeof setTimeout> | null>(null)
+
+  function cancelPoll() {
+    if (pollTimer.value !== null) {
+      clearTimeout(pollTimer.value)
+      pollTimer.value = null
+    }
+  }
 
   // ─── Actions ─────────────────────────────────────────
 
@@ -69,13 +79,17 @@ export const useCanvasStore = defineStore('canvas', () => {
         () => canvasApi.updateWorkflow(currentWorkflow.value!.id, data),
         '保存工作流',
       )
-      if (res) currentWorkflow.value = res
+      if (res) {
+        currentWorkflow.value = res
+        savedChangeCount.value = changeCount.value
+      }
       error.value = err
     } else {
       const [res, err] = await trySafe(() => canvasApi.createWorkflow(data), '创建工作流')
       if (res) {
         currentWorkflow.value = res
         workflows.value.push(res)
+        savedChangeCount.value = changeCount.value
       }
       error.value = err
     }
@@ -114,6 +128,7 @@ export const useCanvasStore = defineStore('canvas', () => {
   }
 
   async function pollRunStatus(workflowId: string, runId: string) {
+    cancelPoll()
     const poll = async () => {
       const [res] = await trySafe(
         () => canvasApi.getWorkflowRun(workflowId, runId),
@@ -122,39 +137,49 @@ export const useCanvasStore = defineStore('canvas', () => {
       if (res) {
         currentRun.value = res
         if (res.status === 'running' || res.status === 'pending') {
-          setTimeout(poll, 2000)
+          pollTimer.value = setTimeout(poll, 2000)
         } else {
+          pollTimer.value = null
           executing.value = false
           logger.info(`工作流执行完成: ${res.status}`)
         }
       }
     }
-    setTimeout(poll, 2000)
+    pollTimer.value = setTimeout(poll, 2000)
   }
 
   // ─── Canvas 操作 ─────────────────────────────────────
 
   function addNode(node: CanvasNode) {
     nodes.value.push(node)
+    changeCount.value++
   }
 
   function updateNode(id: string, updates: Partial<CanvasNode>) {
     const idx = nodes.value.findIndex((n) => n.id === id)
-    if (idx !== -1) nodes.value[idx] = { ...nodes.value[idx], ...updates }
+    if (idx !== -1) {
+      nodes.value[idx] = { ...nodes.value[idx], ...updates }
+      changeCount.value++
+    }
   }
 
   function removeNode(id: string) {
     nodes.value = nodes.value.filter((n) => n.id !== id)
     edges.value = edges.value.filter((e) => e.from !== id && e.to !== id)
+    changeCount.value++
   }
 
   function addEdge(edge: CanvasEdge) {
     const exists = edges.value.some((e) => e.from === edge.from && e.to === edge.to)
-    if (!exists) edges.value.push(edge)
+    if (!exists) {
+      edges.value.push(edge)
+      changeCount.value++
+    }
   }
 
   function removeEdge(id: string) {
     edges.value = edges.value.filter((e) => e.id !== id)
+    changeCount.value++
   }
 
   function clearCanvas() {
@@ -168,6 +193,11 @@ export const useCanvasStore = defineStore('canvas', () => {
     clearCanvas()
   }
 
+  /** 清理资源，停止轮询 */
+  function $dispose() {
+    cancelPoll()
+  }
+
   return {
     // state
     workflows,
@@ -179,6 +209,8 @@ export const useCanvasStore = defineStore('canvas', () => {
     saving,
     executing,
     error,
+    changeCount,
+    savedChangeCount,
     // getters
     isDirty,
     isRunning,
@@ -195,5 +227,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     removeEdge,
     clearCanvas,
     newWorkflow,
+    cancelPoll,
+    $dispose,
   }
 })

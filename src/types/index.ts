@@ -22,7 +22,7 @@ export type {
   WorkflowRunStatus,
   WorkflowRun,
 } from './canvas'
-export type { AppConfig, LLMConfig, SecurityConfig, GeneralConfig } from './settings'
+export type { AppConfig, LLMConfig, SecurityConfig, GeneralConfig, NotificationConfig, MCPConfig } from './settings'
 export type { SystemStats, PlatformInfo } from './system'
 
 // ─── UI 类型 ─────────────────────────────────────────

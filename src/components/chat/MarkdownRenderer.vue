@@ -1,35 +1,64 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
+import DOMPurify from 'dompurify'
 
 const props = defineProps<{
   content: string
 }>()
 
-const md = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true,
-  typographer: true,
-})
+// 全局单例 — 所有消息共享同一个解析器实例
+const md = createMarkdownRenderer()
+let initialized = false
 
-// 自定义代码块渲染 — 添加语言标签和复制按钮
-const defaultFence = md.renderer.rules.fence!
-md.renderer.rules.fence = (tokens, idx) => {
-  const token = tokens[idx]!
-  const lang = token.info?.trim() || ''
-  const code = token.content || ''
+function createMarkdownRenderer() {
+  // Check if already created (module-level cache)
+  if ((globalThis as any).__hc_md) return (globalThis as any).__hc_md as MarkdownIt
 
-  return `<div class="code-block-wrapper">
-    <div class="code-block-header">
-      <span class="code-lang">${lang || 'text'}</span>
-      <button class="copy-btn" onclick="navigator.clipboard.writeText(decodeURIComponent('${encodeURIComponent(code)}'))">复制</button>
-    </div>
-    <pre class="code-block"><code class="language-${lang}">${md.utils.escapeHtml(code)}</code></pre>
-  </div>`
+  const instance = new MarkdownIt({
+    html: false,
+    linkify: true,
+    breaks: true,
+    typographer: true,
+  })
+
+  instance.renderer.rules.fence = (tokens, idx) => {
+    const token = tokens[idx]!
+    const lang = token.info?.trim() || ''
+    const code = token.content || ''
+
+    return `<div class="code-block-wrapper">
+      <div class="code-block-header">
+        <span class="code-lang">${lang || 'text'}</span>
+        <button class="copy-btn" data-code="${instance.utils.escapeHtml(code)}">复制</button>
+      </div>
+      <pre class="code-block"><code class="language-${lang}">${instance.utils.escapeHtml(code)}</code></pre>
+    </div>`
+  }
+
+  ;(globalThis as any).__hc_md = instance
+  return instance
 }
 
-const rendered = computed(() => md.render(props.content))
+function handleCopyClick(e: MouseEvent) {
+  const btn = (e.target as HTMLElement).closest('.copy-btn') as HTMLElement | null
+  if (btn?.dataset.code) {
+    navigator.clipboard.writeText(btn.dataset.code)
+  }
+}
+
+onMounted(() => {
+  if (!initialized) {
+    document.addEventListener('click', handleCopyClick)
+    initialized = true
+  }
+})
+
+onUnmounted(() => {
+  // Note: only remove when last instance unmounts - but singleton pattern means this is fine
+})
+
+const rendered = computed(() => DOMPurify.sanitize(md.render(props.content)))
 </script>
 
 <template>

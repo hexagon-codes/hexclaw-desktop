@@ -7,9 +7,13 @@
 //
 // 架构对标: Docker Desktop 管理 Docker Engine
 
+use std::process::{Child, Command};
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::Manager;
+
+/// Sidecar 进程句柄，用于生命周期管理
+static SIDECAR_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 
 /// Sidecar 状态，存储在 Tauri 全局状态中
 pub struct SidecarState {
@@ -74,4 +78,55 @@ pub fn is_ready(app_handle: &tauri::AppHandle) -> bool {
         .try_state::<SidecarState>()
         .map(|s| *s.ready.lock().unwrap())
         .unwrap_or(false)
+}
+
+/// 启动 hexclaw sidecar 进程
+///
+/// 从应用资源目录中查找 hexclaw 二进制文件并启动。
+/// 进程句柄存储在全局静态变量中，供 stop_sidecar 使用。
+pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
+    let resource_path = app
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("获取资源路径失败: {}", e))?;
+
+    let binary_name = if cfg!(target_os = "windows") {
+        "hexclaw.exe"
+    } else {
+        "hexclaw"
+    };
+
+    let binary_path = resource_path.join("binaries").join(binary_name);
+
+    if !binary_path.exists() {
+        return Err(format!("sidecar 二进制不存在: {:?}", binary_path));
+    }
+
+    let child = Command::new(&binary_path)
+        .args(["serve", "--desktop", "--port", &HEXCLAW_PORT.to_string()])
+        .spawn()
+        .map_err(|e| format!("启动 sidecar 失败: {}", e))?;
+
+    log::info!("sidecar 已启动, PID: {}", child.id());
+
+    if let Ok(mut guard) = SIDECAR_PROCESS.lock() {
+        *guard = Some(child);
+    }
+
+    Ok(())
+}
+
+/// 停止 sidecar 进程
+///
+/// 向 sidecar 进程发送 kill 信号并等待退出。
+/// 应在应用退出时调用，确保子进程不会变成孤儿进程。
+pub fn stop_sidecar() {
+    if let Ok(mut guard) = SIDECAR_PROCESS.lock() {
+        if let Some(mut child) = guard.take() {
+            log::info!("正在停止 sidecar...");
+            let _ = child.kill();
+            let _ = child.wait();
+            log::info!("sidecar 已停止");
+        }
+    }
 }

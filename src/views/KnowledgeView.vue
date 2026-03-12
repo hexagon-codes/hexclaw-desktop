@@ -19,6 +19,11 @@ const fileInput = ref<HTMLInputElement>()
 const activeTab = ref<'documents' | 'search'>('documents')
 const dragOver = ref(false)
 
+// 分页
+const PAGE_SIZE = 50
+const visibleCount = ref(PAGE_SIZE)
+const visibleDocs = computed(() => docs.value.slice(0, visibleCount.value))
+
 // 搜索测试
 const searchQuery = ref('')
 const searchResults = ref<{ content: string; score: number; doc_name: string }[]>([])
@@ -120,9 +125,11 @@ async function handleSearch() {
 }
 
 function formatSize(bytes: number): string {
+  if (bytes < 0) return '0 B'
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+  return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB'
 }
 
 function docStatus(s: string): 'online' | 'running' | 'error' | 'idle' {
@@ -231,7 +238,7 @@ function docStatus(s: string): 'online' | 'running' | 'error' | 'idle' {
           <!-- 文档列表 -->
           <div class="space-y-3 max-w-2xl">
             <div
-              v-for="doc in docs"
+              v-for="doc in visibleDocs"
               :key="doc.id"
               class="flex items-center gap-4 rounded-xl border p-4"
               :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
@@ -259,6 +266,17 @@ function docStatus(s: string): 'online' | 'running' | 'error' | 'idle' {
                 <Trash2 :size="16" />
               </button>
             </div>
+          </div>
+
+          <!-- 加载更多 -->
+          <div v-if="visibleCount < docs.length" class="mt-4 max-w-2xl text-center">
+            <button
+              class="px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-primary)' }"
+              @click="visibleCount += PAGE_SIZE"
+            >
+              加载更多（还有 {{ docs.length - visibleCount }} 个文档）
+            </button>
           </div>
 
           <!-- 拖放区 -->

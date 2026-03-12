@@ -36,6 +36,13 @@ vi.mock('@/api/settings', () => ({
   getModels: vi.fn().mockResolvedValue({ models: [] }),
 }))
 
+// Mock secure-store: jsdom 中 PBKDF2 100k 迭代太慢，直接跳过加密
+vi.mock('@/utils/secure-store', () => ({
+  saveSecureValue: vi.fn().mockResolvedValue(undefined),
+  loadSecureValue: vi.fn().mockResolvedValue(null),
+  removeSecureValue: vi.fn().mockResolvedValue(undefined),
+}))
+
 // Mock lucide-vue-next 图标：获取原始导出的所有 key，统一替换为 stub
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
