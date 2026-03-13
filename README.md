@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/logo.jpg" alt="HexClaw Logo" width="160">
+<img src=".github/assets/logo.png" alt="HexClaw Logo" width="160">
 
 **企业级安全的个人 AI Agent 一体化桌面客户端**
 
@@ -66,6 +66,8 @@ HexClaw.app
 前后端通过 HTTP API + WebSocket 通信，完全解耦。
 设计模式与 **Docker Desktop 管理 Docker Engine** 一致 — Tauri 壳管理 Go Sidecar 进程。
 
+> Go Sidecar 默认监听 `localhost:16060`，可通过 hexclaw 配置文件修改端口。
+
 ## 技术栈
 
 | 层 | 技术 | 版本 |
@@ -93,6 +95,8 @@ HexClaw.app
 ### Homebrew (macOS)
 
 ```bash
+# 添加 tap 并安装
+brew tap everyday-items/tap
 brew install --cask hexclaw
 ```
 
@@ -131,12 +135,19 @@ cd hexclaw-desktop
 make install
 # 等价于: pnpm install && cd src-tauri && cargo fetch
 
-# 3. 编译 Go sidecar (首次需要)
+# 3. 编译 Go sidecar (首次需要，需要同级目录存在 hexclaw 仓库)
 make sidecar
 
 # 4. 启动开发模式
 make dev
 ```
+
+> **注意**: `make sidecar` 需要在 `hexclaw-desktop` 同级目录下克隆 [hexclaw](https://github.com/everyday-items/hexclaw) 仓库，目录结构如下：
+> ```
+> work/
+> ├── hexclaw/           # Go 后端仓库
+> └── hexclaw-desktop/   # 本仓库
+> ```
 
 ### Make 命令
 
@@ -201,13 +212,32 @@ hexclaw-desktop/
 │   └── assets/                   # 静态资源
 ├── src-tauri/                    # Tauri (Rust) 层
 │   ├── src/                      # Rust 源码
-│   ├── binaries/                 # Go sidecar 二进制
+│   │   ├── main.rs               # 入口
+│   │   ├── lib.rs                # 应用初始化 & 插件注册
+│   │   ├── commands.rs           # Tauri IPC 命令
+│   │   ├── sidecar.rs            # Go Sidecar 进程管理
+│   │   ├── tray.rs               # 系统托盘
+│   │   └── window.rs             # 窗口管理
+│   ├── binaries/                 # Go sidecar 二进制 (编译生成)
 │   ├── icons/                    # 应用图标
 │   ├── capabilities/             # Tauri 权限配置
 │   ├── tauri.conf.json           # Tauri 配置
+│   ├── build.rs                  # Rust 构建脚本
 │   └── Cargo.toml                # Rust 依赖
+├── Casks/                        # Homebrew Cask 定义
+│   └── hexclaw.rb
+├── .github/                      # GitHub 配置
+│   ├── workflows/
+│   │   ├── ci.yml                # CI 流水线
+│   │   └── release.yml           # 发布流水线
+│   └── assets/                   # README 资源文件
 ├── Makefile                      # 开发命令
+├── vite.config.ts                # Vite 配置
+├── vitest.config.ts              # Vitest 测试配置
+├── eslint.config.ts              # ESLint 配置
+├── tsconfig.json                 # TypeScript 配置
 ├── package.json                  # Node 依赖
+├── LICENSE                       # MIT 许可证
 └── README.md
 ```
 
@@ -251,6 +281,28 @@ make test
 - 测试文件与源码同目录，命名为 `*.test.ts` 或 `*.spec.ts`
 - Store 测试放在 `src/stores/__tests__/` 目录
 - 使用 Vitest + @vue/test-utils
+
+## 常见问题
+
+### macOS 提示"无法打开，因为无法验证开发者"
+
+在 **系统设置 → 隐私与安全性** 中找到 HexClaw，点击"仍要打开"。或在终端执行：
+
+```bash
+xattr -cr /Applications/HexClaw.app
+```
+
+### `make sidecar` 编译失败
+
+1. 确认 Go >= 1.23 已安装: `go version`
+2. 确认 `hexclaw` 仓库在同级目录: `ls ../hexclaw/cmd/hexclaw`
+3. 确认 Rust 工具链已安装 (用于检测平台 triple): `rustc -vV`
+
+### `make dev` 启动后白屏
+
+Sidecar 可能未编译或端口冲突。检查：
+1. 确认已执行 `make sidecar`
+2. 确认 `16060` 端口未被占用: `lsof -i :16060`
 
 ## 贡献指南
 
