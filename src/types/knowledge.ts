@@ -1,18 +1,16 @@
-/** 知识库文档 */
+/** 知识库文档（后端返回） */
 export interface KnowledgeDoc {
   id: string
-  filename: string
-  content_type: string
-  size: number
+  title: string
+  content?: string
+  source?: string
   chunk_count: number
-  status: 'processing' | 'ready' | 'error'
   created_at: string
-  error?: string
 }
 
-/** 知识库统计 */
-export interface KnowledgeStats {
-  total_docs: number
-  total_chunks: number
-  total_size: number
+/** 知识库搜索结果 */
+export interface KnowledgeSearchResult {
+  content: string
+  score: number
+  metadata?: Record<string, unknown>
 }

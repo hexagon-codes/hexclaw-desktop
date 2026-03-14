@@ -1,28 +1,19 @@
-import { apiGet, apiPost, apiDelete } from './client'
-import type { MemoryEntry } from '@/types'
+import { apiGet, apiPost } from './client'
+import type { MemoryData } from '@/types'
 
-export type { MemoryEntry }
+export type { MemoryData }
 
-/** 获取记忆列表 */
-export function getMemories(query?: { type?: string; limit?: number }) {
-  const params = new URLSearchParams()
-  if (query?.type) params.set('type', query.type)
-  if (query?.limit) params.set('limit', String(query.limit))
-  const qs = params.toString()
-  return apiGet<{ memories: MemoryEntry[]; total: number }>(`/api/v1/memory${qs ? '?' + qs : ''}`)
+/** 获取记忆内容 */
+export function getMemory() {
+  return apiGet<MemoryData>('/api/v1/memory')
+}
+
+/** 保存记忆 */
+export function saveMemory(content: string, type?: 'memory' | 'daily') {
+  return apiPost<{ message: string }>('/api/v1/memory', { content, type: type ?? 'memory' })
 }
 
 /** 搜索记忆 */
-export function searchMemory(query: string, limit?: number) {
-  return apiPost<{ memories: MemoryEntry[] }>('/api/v1/memory/search', { query, limit })
-}
-
-/** 删除记忆 */
-export function deleteMemory(id: string) {
-  return apiDelete(`/api/v1/memory/${id}`)
-}
-
-/** 清空全部记忆 */
-export function clearMemory() {
-  return apiDelete('/api/v1/memory')
+export function searchMemory(query: string) {
+  return apiGet<{ results: string[]; total: number }>('/api/v1/memory/search', { q: query })
 }

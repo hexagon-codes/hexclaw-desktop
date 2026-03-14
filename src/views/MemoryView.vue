@@ -1,302 +1,252 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Brain, Trash2, Clock, Tag, CheckSquare, Square } from 'lucide-vue-next'
-import { getMemories, searchMemory, deleteMemory, clearMemory, type MemoryEntry } from '@/api/memory'
+import { Brain, Search, Save } from 'lucide-vue-next'
+import { getMemory, saveMemory, searchMemory } from '@/api/memory'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
-import SearchInput from '@/components/common/SearchInput.vue'
-import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
 
-const memories = ref<MemoryEntry[]>([])
 const loading = ref(true)
+const errorMsg = ref('')
+const memoryContent = ref('')
+const memoryContext = ref('')
+const activeTab = ref<'view' | 'add' | 'search'>('view')
+
+// 添加记忆
+const newContent = ref('')
+const saving = ref(false)
+
+// 搜索记忆
 const searchQuery = ref('')
-const activeType = ref('')
-const selectedIds = ref<Set<string>>(new Set())
-const showClearConfirm = ref(false)
-
-const memoryTypes = computed(() => {
-  const types = new Set(memories.value.map((m) => m.type))
-  return ['', ...Array.from(types)]
-})
-
-const filteredMemories = computed(() => {
-  if (!activeType.value) return memories.value
-  return memories.value.filter((m) => m.type === activeType.value)
-})
-
-const isAllSelected = computed(() =>
-  filteredMemories.value.length > 0 && filteredMemories.value.every((m) => selectedIds.value.has(m.id)),
-)
+const searchResults = ref<string[]>([])
+const searching = ref(false)
 
 onMounted(async () => {
-  await loadMemories()
+  await loadMemory()
 })
 
-async function loadMemories() {
+async function loadMemory() {
   loading.value = true
+  errorMsg.value = ''
   try {
-    const res = await getMemories()
-    memories.value = res.memories || []
+    const res = await getMemory()
+    memoryContent.value = res.content || ''
+    memoryContext.value = res.context || ''
   } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '加载记忆失败'
     console.error('加载记忆失败:', e)
   } finally {
     loading.value = false
   }
 }
 
-async function handleSearch(query: string) {
-  searchQuery.value = query
-  if (!query.trim()) {
-    await loadMemories()
+async function handleSave() {
+  if (!newContent.value.trim()) return
+  saving.value = true
+  errorMsg.value = ''
+  try {
+    await saveMemory(newContent.value.trim())
+    newContent.value = ''
+    await loadMemory()
+    activeTab.value = 'view'
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '保存记忆失败'
+    console.error('保存记忆失败:', e)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function handleSearch() {
+  if (!searchQuery.value.trim()) {
+    searchResults.value = []
     return
   }
-  loading.value = true
+  searching.value = true
+  errorMsg.value = ''
   try {
-    const res = await searchMemory(query)
-    memories.value = res.memories || []
+    const res = await searchMemory(searchQuery.value)
+    searchResults.value = res.results || []
   } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '搜索记忆失败'
     console.error('搜索记忆失败:', e)
   } finally {
-    loading.value = false
+    searching.value = false
   }
-}
-
-async function handleDelete(entry: MemoryEntry) {
-  try {
-    await deleteMemory(entry.id)
-    memories.value = memories.value.filter((m) => m.id !== entry.id)
-    selectedIds.value.delete(entry.id)
-  } catch (e) {
-    console.error('删除记忆失败:', e)
-  }
-}
-
-async function handleBatchDelete() {
-  const ids = Array.from(selectedIds.value)
-  for (const id of ids) {
-    try {
-      await deleteMemory(id)
-      memories.value = memories.value.filter((m) => m.id !== id)
-    } catch (e) {
-      console.error('批量删除失败:', e)
-    }
-  }
-  selectedIds.value.clear()
-}
-
-async function handleClearAll() {
-  try {
-    await clearMemory()
-    memories.value = []
-    selectedIds.value.clear()
-  } catch (e) {
-    console.error('清空记忆失败:', e)
-  }
-  showClearConfirm.value = false
-}
-
-function toggleSelect(id: string) {
-  if (selectedIds.value.has(id)) {
-    selectedIds.value.delete(id)
-  } else {
-    selectedIds.value.add(id)
-  }
-}
-
-function toggleSelectAll() {
-  if (isAllSelected.value) {
-    selectedIds.value.clear()
-  } else {
-    for (const m of filteredMemories.value) {
-      selectedIds.value.add(m.id)
-    }
-  }
-}
-
-function formatTime(ts: string): string {
-  const d = new Date(ts)
-  const now = new Date()
-  const diff = now.getTime() - d.getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return t('memory.justNow')
-  if (mins < 60) return t('memory.minutesAgo', { n: mins })
-  const hours = Math.floor(mins / 60)
-  if (hours < 24) return t('memory.hoursAgo', { n: hours })
-  const days = Math.floor(hours / 24)
-  if (days < 7) return t('memory.daysAgo', { n: days })
-  return d.toLocaleDateString()
-}
-
-function typeColor(type: string): string {
-  const colors: Record<string, string> = {
-    episodic: '#3b82f6',
-    semantic: '#8b5cf6',
-    procedural: '#10b981',
-    fact: '#f59e0b',
-  }
-  return colors[type] || 'var(--hc-accent)'
 }
 </script>
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-    <PageHeader :title="t('memory.title')" :description="t('memory.description')">
-      <template #actions>
-        <SearchInput
-          :model-value="searchQuery"
-          :placeholder="t('common.search') + '...'"
-          @update:model-value="handleSearch"
-        />
-      </template>
-    </PageHeader>
+    <PageHeader :title="t('memory.title')" :description="t('memory.description')" />
 
-    <!-- 类型标签页 + 批量操作栏 -->
-    <div class="flex items-center gap-3 px-6 py-2 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-      <div class="flex gap-1">
-        <button
-          v-for="type in memoryTypes"
-          :key="type"
-          class="px-3 py-1 rounded-md text-xs font-medium transition-colors"
-          :style="{
-            background: activeType === type ? 'var(--hc-accent)' : 'transparent',
-            color: activeType === type ? '#fff' : 'var(--hc-text-secondary)',
-          }"
-          @click="activeType = type"
-        >
-          {{ type || t('logs.all') }}
-        </button>
-      </div>
-      <div class="flex-1" />
-      <template v-if="selectedIds.size > 0">
-        <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
-          {{ t('memory.selected', { count: selectedIds.size }) }}
-        </span>
-        <button
-          class="px-2.5 py-1 rounded-md text-xs font-medium"
-          :style="{ color: 'var(--hc-error)' }"
-          @click="handleBatchDelete"
-        >
-          {{ t('common.delete') }}
-        </button>
-      </template>
+    <!-- 错误提示 -->
+    <div
+      v-if="errorMsg"
+      class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
+      style="background: #ef444420; color: #ef4444;"
+    >
+      <span>{{ errorMsg }}</span>
+      <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
+    </div>
+
+    <!-- 标签页 -->
+    <div class="flex items-center gap-0 px-6 pt-3 border-b" :style="{ borderColor: 'var(--hc-border)' }">
       <button
-        v-if="memories.length > 0"
-        class="px-2.5 py-1 rounded-md text-xs"
-        :style="{ color: 'var(--hc-text-muted)' }"
-        @click="showClearConfirm = true"
+        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
+        :style="{
+          borderColor: activeTab === 'view' ? 'var(--hc-accent)' : 'transparent',
+          color: activeTab === 'view' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
+        }"
+        @click="activeTab = 'view'"
       >
-        {{ t('memory.clearAll') }}
+        {{ t('memory.currentMemory') }}
       </button>
-      <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
-        {{ t('memory.items', { count: filteredMemories.length }) }}
-      </span>
+      <button
+        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
+        :style="{
+          borderColor: activeTab === 'add' ? 'var(--hc-accent)' : 'transparent',
+          color: activeTab === 'add' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
+        }"
+        @click="activeTab = 'add'"
+      >
+        {{ t('memory.addMemory') }}
+      </button>
+      <button
+        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
+        :style="{
+          borderColor: activeTab === 'search' ? 'var(--hc-accent)' : 'transparent',
+          color: activeTab === 'search' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
+        }"
+        @click="activeTab = 'search'"
+      >
+        {{ t('memory.searchMemory') }}
+      </button>
     </div>
 
     <div class="flex-1 overflow-y-auto p-6">
       <LoadingState v-if="loading" />
 
-      <EmptyState
-        v-else-if="filteredMemories.length === 0"
-        :icon="Brain"
-        :title="t('common.noData')"
-        :description="searchQuery ? t('common.noData') : t('memory.description')"
-      />
+      <!-- 查看记忆 -->
+      <template v-else-if="activeTab === 'view'">
+        <EmptyState
+          v-if="!memoryContent && !memoryContext"
+          :icon="Brain"
+          :title="t('common.noData')"
+          :description="t('memory.description')"
+        />
 
-      <!-- 时间线视图 -->
-      <div v-else class="max-w-2xl">
-        <!-- 全选 -->
-        <div class="flex items-center gap-2 mb-3 px-1">
-          <button class="p-0.5" @click="toggleSelectAll">
-            <CheckSquare v-if="isAllSelected" :size="14" :style="{ color: 'var(--hc-accent)' }" />
-            <Square v-else :size="14" :style="{ color: 'var(--hc-text-muted)' }" />
-          </button>
-          <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('memory.selectAll') }}</span>
-        </div>
-
-        <div class="relative">
-          <!-- 时间线竖线 -->
+        <div v-else class="max-w-2xl space-y-4">
           <div
-            class="absolute left-[22px] top-0 bottom-0 w-px"
-            :style="{ background: 'var(--hc-border)' }"
-          />
-
-          <div
-            v-for="entry in filteredMemories"
-            :key="entry.id"
-            class="relative flex gap-4 pb-4 group"
+            v-if="memoryContent"
+            class="rounded-xl border p-4"
+            :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
           >
-            <!-- 时间线节点 -->
-            <div class="relative z-10 flex-shrink-0 mt-1">
-              <button class="p-0.5" @click="toggleSelect(entry.id)">
-                <CheckSquare
-                  v-if="selectedIds.has(entry.id)"
-                  :size="14"
-                  :style="{ color: 'var(--hc-accent)' }"
-                />
-                <div
-                  v-else
-                  class="w-3.5 h-3.5 rounded-full border-2"
-                  :style="{ borderColor: typeColor(entry.type), background: 'var(--hc-bg-main)' }"
-                />
-              </button>
+            <div class="flex items-center gap-2 mb-3">
+              <Brain :size="14" :style="{ color: 'var(--hc-accent)' }" />
+              <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('memory.memoryContent') }}</span>
             </div>
+            <p class="text-sm leading-relaxed whitespace-pre-wrap" :style="{ color: 'var(--hc-text-primary)' }">
+              {{ memoryContent }}
+            </p>
+          </div>
 
-            <!-- 内容 -->
-            <div
-              class="flex-1 rounded-xl border p-4"
-              :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-            >
-              <div class="flex items-start justify-between mb-2">
-                <div class="flex items-center gap-2">
-                  <span
-                    class="text-xs px-2 py-0.5 rounded font-medium"
-                    :style="{ background: typeColor(entry.type) + '20', color: typeColor(entry.type) }"
-                  >
-                    <Tag :size="10" class="inline mr-0.5" />
-                    {{ entry.type }}
-                  </span>
-                  <span v-if="entry.importance > 0.7" class="text-xs" :style="{ color: 'var(--hc-warning)' }">
-                    ★ {{ entry.importance.toFixed(1) }}
-                  </span>
-                </div>
-                <div class="flex items-center gap-1">
-                  <span class="text-[10px] flex items-center gap-1" :style="{ color: 'var(--hc-text-muted)' }">
-                    <Clock :size="10" />
-                    {{ formatTime(entry.created_at) }}
-                  </span>
-                  <button
-                    class="p-1 rounded-md opacity-0 group-hover:opacity-100 hover:bg-white/5 transition-all"
-                    :style="{ color: 'var(--hc-text-muted)' }"
-                    :title="t('common.delete')"
-                    @click="handleDelete(entry)"
-                  >
-                    <Trash2 :size="12" />
-                  </button>
-                </div>
-              </div>
-              <p class="text-sm leading-relaxed" :style="{ color: 'var(--hc-text-primary)' }">
-                {{ entry.content }}
-              </p>
-              <div v-if="entry.source" class="mt-2 text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
-                {{ t('memory.source') }}: {{ entry.source }}
-              </div>
+          <div
+            v-if="memoryContext"
+            class="rounded-xl border p-4"
+            :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+          >
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('memory.context') }}</span>
             </div>
+            <p class="text-sm leading-relaxed whitespace-pre-wrap" :style="{ color: 'var(--hc-text-primary)' }">
+              {{ memoryContext }}
+            </p>
           </div>
         </div>
-      </div>
-    </div>
+      </template>
 
-    <ConfirmDialog
-      :open="showClearConfirm"
-      :title="t('memory.clearTitle')"
-      :message="t('memory.clearMessage')"
-      :confirm-text="t('memory.clearConfirm')"
-      @confirm="handleClearAll"
-      @cancel="showClearConfirm = false"
-    />
+      <!-- 添加记忆 -->
+      <template v-else-if="activeTab === 'add'">
+        <div class="max-w-2xl">
+          <p class="text-sm mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
+            {{ t('memory.addDesc') }}
+          </p>
+          <textarea
+            v-model="newContent"
+            rows="8"
+            class="w-full rounded-lg border px-3 py-2 text-sm outline-none resize-none mb-4"
+            :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+            :placeholder="t('memory.inputPlaceholder')"
+          />
+          <button
+            class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
+            :style="{ background: 'var(--hc-accent)', opacity: (!newContent.trim() || saving) ? 0.4 : 1 }"
+            :disabled="!newContent.trim() || saving"
+            @click="handleSave"
+          >
+            <Save :size="14" />
+            {{ saving ? t('memory.saving') : t('memory.saveMemory') }}
+          </button>
+        </div>
+      </template>
+
+      <!-- 搜索记忆 -->
+      <template v-else>
+        <div class="max-w-2xl">
+          <p class="text-sm mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
+            {{ t('memory.searchDesc') }}
+          </p>
+
+          <div class="flex gap-2 mb-6">
+            <input
+              v-model="searchQuery"
+              type="text"
+              class="flex-1 rounded-lg border px-3 py-2 text-sm outline-none"
+              :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+              :placeholder="t('memory.searchPlaceholder')"
+              @keydown.enter="handleSearch"
+            />
+            <button
+              class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
+              :style="{ background: 'var(--hc-accent)' }"
+              :disabled="searching || !searchQuery.trim()"
+              @click="handleSearch"
+            >
+              <Search :size="14" />
+              {{ searching ? t('memory.searching') : t('common.search') }}
+            </button>
+          </div>
+
+          <div v-if="searchResults.length > 0" class="space-y-3">
+            <div
+              v-for="(result, idx) in searchResults"
+              :key="idx"
+              class="rounded-xl border p-4"
+              :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+            >
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
+                  #{{ idx + 1 }}
+                </span>
+              </div>
+              <p class="text-sm leading-relaxed" :style="{ color: 'var(--hc-text-primary)' }">
+                {{ result }}
+              </p>
+            </div>
+          </div>
+
+          <EmptyState
+            v-else-if="!searching && searchQuery"
+            :icon="Search"
+            :title="t('common.noData')"
+            :description="t('memory.noSearchResults')"
+          />
+        </div>
+      </template>
+    </div>
   </div>
 </template>

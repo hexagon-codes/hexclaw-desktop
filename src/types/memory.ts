@@ -1,10 +1,5 @@
-/** 记忆条目 */
-export interface MemoryEntry {
-  id: string
+/** 记忆内容（后端 GET /api/v1/memory 返回） */
+export interface MemoryData {
   content: string
-  type: string
-  source: string
-  importance: number
-  created_at: string
-  metadata?: Record<string, unknown>
+  context: string
 }

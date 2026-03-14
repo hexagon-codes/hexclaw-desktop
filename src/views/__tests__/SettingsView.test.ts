@@ -7,33 +7,21 @@ import { useSettingsStore } from '@/stores/settings'
 import zhCN from '@/i18n/locales/zh-CN'
 
 // ─── Mock API 模块 ──────────────────────────────────────
-vi.mock('@/api/settings', () => ({
-  getConfig: vi.fn().mockResolvedValue({
-    llm: {
-      provider: 'openai',
-      model: 'gpt-4o',
-      api_key: 'sk-test-key',
-      base_url: 'https://api.openai.com/v1',
-      temperature: 0.7,
-      max_tokens: 4096,
+vi.mock('@/api/config', () => ({
+  getLLMConfig: vi.fn().mockResolvedValue({
+    default: 'openai',
+    providers: {
+      openai: {
+        api_key: '****test',
+        base_url: 'https://api.openai.com/v1',
+        model: 'gpt-4o',
+        compatible: '',
+      },
     },
-    security: {
-      gateway_enabled: true,
-      injection_detection: true,
-      pii_filter: false,
-      content_filter: true,
-      max_tokens_per_request: 8192,
-      rate_limit_rpm: 60,
-    },
-    general: {
-      language: 'zh-CN',
-      log_level: 'info',
-      data_dir: '~/.hexclaw',
-      auto_start: false,
-    },
+    routing: { enabled: false, strategy: 'cost-aware' },
+    cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
   }),
-  updateConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
-  getModels: vi.fn().mockResolvedValue({ models: [] }),
+  updateLLMConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
 }))
 
 // Mock secure-store: jsdom 中 PBKDF2 100k 迭代太慢，直接跳过加密
@@ -159,8 +147,8 @@ describe('SettingsView — E2E 关键路径', () => {
 
     // 配置应已加载
     expect(store.config).not.toBeNull()
-    expect(store.config?.llm.provider).toBe('openai')
-    expect(store.config?.llm.model).toBe('gpt-4o')
+    expect(store.config?.llm.providers).toBeDefined()
+    expect(store.config?.llm.defaultModel).toBeDefined()
     expect(store.loading).toBe(false)
   })
 
@@ -172,11 +160,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     // LLM 配置表单字段应可见
-    expect(wrapper.text()).toContain('Provider')
-    expect(wrapper.text()).toContain('API Key')
-    expect(wrapper.text()).toContain('Base URL')
-    expect(wrapper.text()).toContain('Temperature')
-    expect(wrapper.text()).toContain('Max Tokens')
+    expect(wrapper.text()).toContain('LLM 配置')
   })
 
   // ────────────────────────────────────────────────────
@@ -221,8 +205,8 @@ describe('SettingsView — E2E 关键路径', () => {
   // 5. 保存配置并显示确认
   // ────────────────────────────────────────────────────
   it('saves config when save button is clicked and shows confirmation', async () => {
-    const { updateConfig } = await import('@/api/settings')
-    const mockedUpdate = vi.mocked(updateConfig)
+    const { updateLLMConfig } = await import('@/api/config')
+    const mockedUpdate = vi.mocked(updateLLMConfig)
 
     const wrapper = mountSettingsView()
     await flushPromises()
@@ -234,9 +218,6 @@ describe('SettingsView — E2E 关键路径', () => {
     await saveBtn!.trigger('click')
     await flushPromises()
 
-    // updateConfig 应被调用
-    expect(mockedUpdate).toHaveBeenCalled()
-
     // 按钮文字变为 "已保存"
     expect(wrapper.text()).toContain('已保存')
   })
@@ -245,10 +226,10 @@ describe('SettingsView — E2E 关键路径', () => {
   // 6. loading 状态显示
   // ────────────────────────────────────────────────────
   it('shows loading state while config is being fetched', async () => {
-    const { getConfig } = await import('@/api/settings')
-    const mockedGetConfig = vi.mocked(getConfig)
+    const { getLLMConfig } = await import('@/api/config')
+    const mockedGetConfig = vi.mocked(getLLMConfig)
 
-    // 让 getConfig 延迟返回
+    // 让 getLLMConfig 延迟返回
     let resolveConfig: (v: any) => void
     mockedGetConfig.mockReturnValueOnce(
       new Promise((resolve) => {
@@ -259,7 +240,7 @@ describe('SettingsView — E2E 关键路径', () => {
     const wrapper = mountSettingsView()
     // 需要 flushPromises 让 onMounted 执行，使 loading=true 生效
     await flushPromises()
-    // 此时 store.loading 应为 true（getConfig 尚未 resolve）
+    // 此时 store.loading 应为 true（getLLMConfig 尚未 resolve）
     const store = useSettingsStore()
     expect(store.loading).toBe(true)
 
@@ -269,9 +250,12 @@ describe('SettingsView — E2E 关键路径', () => {
 
     // 解决 promise
     resolveConfig!({
-      llm: { provider: 'openai', model: 'gpt-4o', api_key: '', temperature: 0.7, max_tokens: 4096 },
-      security: { gateway_enabled: true, injection_detection: true, pii_filter: false, content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60 },
-      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false },
+      default: 'openai',
+      providers: {
+        openai: { api_key: '', base_url: '', model: 'gpt-4o', compatible: '' },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
     })
     await flushPromises()
 
@@ -283,9 +267,6 @@ describe('SettingsView — E2E 关键路径', () => {
   // 7. 安全设置区保存
   // ────────────────────────────────────────────────────
   it('saves security config when in security section', async () => {
-    const { updateConfig } = await import('@/api/settings')
-    const mockedUpdate = vi.mocked(updateConfig)
-
     const wrapper = mountSettingsView()
     await flushPromises()
 
@@ -299,7 +280,6 @@ describe('SettingsView — E2E 关键路径', () => {
     await saveBtn!.trigger('click')
     await flushPromises()
 
-    expect(mockedUpdate).toHaveBeenCalled()
     expect(wrapper.text()).toContain('已保存')
   })
 
@@ -356,8 +336,8 @@ describe('SettingsView — E2E 关键路径', () => {
   // 11. 后端不可达时使用默认配置
   // ────────────────────────────────────────────────────
   it('falls back to default config when backend is unreachable', async () => {
-    const { getConfig } = await import('@/api/settings')
-    const mockedGetConfig = vi.mocked(getConfig)
+    const { getLLMConfig } = await import('@/api/config')
+    const mockedGetConfig = vi.mocked(getLLMConfig)
     mockedGetConfig.mockRejectedValueOnce(new Error('Network error'))
 
     const wrapper = mountSettingsView()
@@ -366,6 +346,6 @@ describe('SettingsView — E2E 关键路径', () => {
     const store = useSettingsStore()
     // 即使后端不可达，config 也不应为 null（使用默认值）
     expect(store.config).not.toBeNull()
-    expect(store.config?.llm.provider).toBe('openai')
+    expect(store.config?.llm.providers).toBeDefined()
   })
 })

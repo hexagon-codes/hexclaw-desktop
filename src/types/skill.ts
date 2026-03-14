@@ -1,13 +1,9 @@
-/** Skill 定义 */
+/** 后端返回的 Skill（Markdown 技能） */
 export interface Skill {
-  id: string
   name: string
-  display_name: string
   description: string
-  version: string
   author: string
-  category: string
-  enabled: boolean
-  installed: boolean
-  config?: Record<string, unknown>
+  version: string
+  triggers: string[]
+  tags: string[]
 }

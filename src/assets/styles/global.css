@@ -1,53 +1,101 @@
 @import 'tailwindcss';
 
-/* HexClaw Desktop 全局样式 */
+/* ═══════════════════════════════════════════════════════════
+   HexClaw Desktop — Apple-Inspired Design System
+   ═══════════════════════════════════════════════════════════ */
 
-/* 暗色主题变量 (默认) */
+/* ─── Dark Theme (Default) ──────────────────────────────── */
 :root,
 [data-theme='dark'] {
-  --hc-bg-sidebar: #1a1b2e;
-  --hc-bg-main: #1e1f33;
-  --hc-bg-panel: #1a1b2e;
-  --hc-bg-card: #252640;
-  --hc-bg-input: #2a2b45;
-  --hc-bg-hover: #303152;
+  --hc-bg-sidebar: rgba(30, 31, 46, 0.82);
+  --hc-bg-sidebar-solid: #1e1f2e;
+  --hc-bg-main: #161722;
+  --hc-bg-panel: rgba(30, 31, 46, 0.82);
+  --hc-bg-card: rgba(255, 255, 255, 0.04);
+  --hc-bg-input: rgba(255, 255, 255, 0.06);
+  --hc-bg-hover: rgba(255, 255, 255, 0.07);
+  --hc-bg-active: rgba(255, 255, 255, 0.1);
+  --hc-bg-elevated: rgba(40, 42, 58, 0.95);
 
-  --hc-text-primary: #e4e4e7;
-  --hc-text-secondary: #a1a1aa;
-  --hc-text-muted: #52525b;
+  --hc-text-primary: #f0f0f3;
+  --hc-text-secondary: #9d9da7;
+  --hc-text-muted: #5c5c6b;
 
-  --hc-border: #2d2e45;
-  --hc-accent: #3b82f6;
-  --hc-success: #22c55e;
-  --hc-warning: #eab308;
-  --hc-error: #ef4444;
+  --hc-border: rgba(255, 255, 255, 0.08);
+  --hc-border-subtle: rgba(255, 255, 255, 0.04);
+  --hc-divider: rgba(255, 255, 255, 0.06);
+
+  --hc-accent: #4a90d9;
+  --hc-accent-hover: #5a9ee5;
+  --hc-accent-subtle: rgba(74, 144, 217, 0.12);
+  --hc-success: #32d583;
+  --hc-warning: #f0b429;
+  --hc-error: #f56565;
+
+  --hc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --hc-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --hc-shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.35);
+  --hc-shadow-float: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+
+  --hc-radius-sm: 6px;
+  --hc-radius-md: 10px;
+  --hc-radius-lg: 14px;
+  --hc-radius-xl: 18px;
+
+  --hc-blur: 20px;
+  --hc-blur-heavy: 40px;
+
+  /* ─── Spacing (8pt grid) ─── */
+  --hc-space-1: 4px;
+  --hc-space-2: 8px;
+  --hc-space-3: 12px;
+  --hc-space-4: 16px;
+  --hc-space-5: 20px;
+  --hc-space-6: 24px;
+  --hc-space-7: 28px;
+  --hc-space-8: 32px;
+  --hc-space-10: 40px;
+  --hc-space-12: 48px;
 
   color-scheme: dark;
 }
 
-/* 浅色主题变量 */
+/* ─── Light Theme ───────────────────────────────────────── */
 [data-theme='light'] {
-  --hc-bg-sidebar: #f8f9fc;
+  --hc-bg-sidebar: rgba(244, 245, 247, 0.82);
+  --hc-bg-sidebar-solid: #f4f5f7;
   --hc-bg-main: #ffffff;
-  --hc-bg-panel: #f8f9fc;
-  --hc-bg-card: #f3f4f6;
-  --hc-bg-input: #ffffff;
-  --hc-bg-hover: #e5e7eb;
+  --hc-bg-panel: rgba(244, 245, 247, 0.82);
+  --hc-bg-card: rgba(0, 0, 0, 0.025);
+  --hc-bg-input: rgba(0, 0, 0, 0.04);
+  --hc-bg-hover: rgba(0, 0, 0, 0.04);
+  --hc-bg-active: rgba(0, 0, 0, 0.07);
+  --hc-bg-elevated: rgba(255, 255, 255, 0.96);
 
-  --hc-text-primary: #111827;
-  --hc-text-secondary: #4b5563;
-  --hc-text-muted: #9ca3af;
+  --hc-text-primary: #1d1d1f;
+  --hc-text-secondary: #6e6e73;
+  --hc-text-muted: #aeaeb2;
 
-  --hc-border: #e5e7eb;
-  --hc-accent: #2563eb;
-  --hc-success: #16a34a;
-  --hc-warning: #ca8a04;
-  --hc-error: #dc2626;
+  --hc-border: rgba(0, 0, 0, 0.08);
+  --hc-border-subtle: rgba(0, 0, 0, 0.04);
+  --hc-divider: rgba(0, 0, 0, 0.06);
+
+  --hc-accent: #4a90d9;
+  --hc-accent-hover: #5a9ee5;
+  --hc-accent-subtle: rgba(74, 144, 217, 0.08);
+  --hc-success: #28a745;
+  --hc-warning: #e69500;
+  --hc-error: #ff3b30;
+
+  --hc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --hc-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --hc-shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --hc-shadow-float: 0 12px 40px rgba(0, 0, 0, 0.15), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
 
   color-scheme: light;
 }
 
-/* 全局基础 */
+/* ─── Global Base ───────────────────────────────────────── */
 html,
 body,
 #app {
@@ -58,16 +106,27 @@ body,
   background: var(--hc-bg-main);
   color: var(--hc-text-primary);
   font-family:
-    -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', sans-serif;
+    -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+    'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Segoe UI', sans-serif;
+  font-feature-settings: 'kern' 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* Tauri: 自定义标题栏拖拽区域 */
+/* ─── Tauri Drag Region ─────────────────────────────────── */
 [data-tauri-drag-region] {
   -webkit-app-region: drag;
 }
 
-/* 滚动条样式 */
+[data-tauri-drag-region] button,
+[data-tauri-drag-region] a,
+[data-tauri-drag-region] input {
+  -webkit-app-region: no-drag;
+}
+
+/* ─── Scrollbar — macOS style thin scrollbar ────────────── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -78,29 +137,216 @@ body,
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--hc-text-muted);
+  background: transparent;
   border-radius: 3px;
+  transition: background 0.3s;
 }
 
+*:hover > ::-webkit-scrollbar-thumb,
 ::-webkit-scrollbar-thumb:hover {
+  background: var(--hc-text-muted);
+}
+
+::-webkit-scrollbar-thumb:active {
   background: var(--hc-text-secondary);
 }
 
-/* 选中文字颜色 */
+/* ─── Selection ─────────────────────────────────────────── */
 ::selection {
-  background: rgba(59, 130, 246, 0.3);
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
 }
 
-/* 路由过渡动画 */
+/* ─── Focus Ring — Apple-style ──────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 2px;
+  border-radius: var(--hc-radius-sm);
+}
+
+/* ─── Page Transitions ──────────────────────────────────── */
 .page-enter-active {
-  transition: opacity 0.15s ease-out;
+  transition: opacity 0.2s cubic-bezier(0.25, 0.1, 0.25, 1),
+              transform 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 .page-leave-active {
-  transition: opacity 0.1s ease-in;
+  transition: opacity 0.12s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
-.page-enter-from,
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(4px);
+}
+
 .page-leave-to {
   opacity: 0;
+}
+
+/* ─── Vibrancy Backdrop ─────────────────────────────────── */
+.hc-vibrancy {
+  backdrop-filter: saturate(180%) blur(var(--hc-blur));
+  -webkit-backdrop-filter: saturate(180%) blur(var(--hc-blur));
+}
+
+.hc-vibrancy-heavy {
+  backdrop-filter: saturate(200%) blur(var(--hc-blur-heavy));
+  -webkit-backdrop-filter: saturate(200%) blur(var(--hc-blur-heavy));
+}
+
+/* ─── Button Base ───────────────────────────────────────── */
+.hc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--hc-space-2);
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+  border-radius: var(--hc-radius-sm);
+}
+
+.hc-btn:active {
+  transform: scale(0.97);
+  transition-duration: 0.1s;
+}
+
+.hc-btn-primary {
+  background: var(--hc-accent);
+  color: #fff;
+  padding: var(--hc-space-2) var(--hc-space-4);
+  font-size: 13px;
+  border-radius: var(--hc-radius-sm);
+}
+
+.hc-btn-primary:hover {
+  background: var(--hc-accent-hover);
+}
+
+.hc-btn-secondary {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+  padding: var(--hc-space-2) var(--hc-space-4);
+  font-size: 13px;
+  border-radius: var(--hc-radius-sm);
+}
+
+.hc-btn-secondary:hover {
+  background: var(--hc-bg-active);
+}
+
+.hc-btn-ghost {
+  background: transparent;
+  color: var(--hc-text-secondary);
+  padding: var(--hc-space-1) var(--hc-space-2);
+  font-size: 13px;
+}
+
+.hc-btn-ghost:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+
+/* ─── Input Base ────────────────────────────────────────── */
+.hc-input {
+  width: 100%;
+  border-radius: var(--hc-radius-sm);
+  border: 1px solid var(--hc-border);
+  padding: var(--hc-space-2) var(--hc-space-3);
+  font-size: 13px;
+  outline: none;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.hc-input:focus {
+  border-color: var(--hc-accent);
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+
+.hc-input::placeholder {
+  color: var(--hc-text-muted);
+}
+
+/* ─── Card Base ─────────────────────────────────────────── */
+.hc-card {
+  background: var(--hc-bg-card);
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-lg);
+  transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+}
+
+.hc-card-interactive:hover {
+  border-color: var(--hc-accent-subtle);
+  box-shadow: var(--hc-shadow-md);
+  transform: translateY(-1px);
+}
+
+/* ─── Toggle Switch — macOS style ───────────────────────── */
+.hc-toggle {
+  appearance: none;
+  width: 34px;
+  height: 20px;
+  border-radius: 10px;
+  background: var(--hc-bg-active);
+  position: relative;
+  cursor: pointer;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+
+.hc-toggle::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.hc-toggle:checked {
+  background: var(--hc-accent);
+}
+
+.hc-toggle:checked::before {
+  transform: translateX(14px);
+}
+
+/* ─── Separator ─────────────────────────────────────────── */
+.hc-separator {
+  height: 1px;
+  background: var(--hc-divider);
+  border: none;
+  margin: 0;
+}
+
+/* ─── Animations ────────────────────────────────────────── */
+@keyframes hc-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes hc-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes hc-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes hc-scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes hc-slide-up {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
 }

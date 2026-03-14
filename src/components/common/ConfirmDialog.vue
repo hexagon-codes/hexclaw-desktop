@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { AlertTriangle } from 'lucide-vue-next'
+import { AlertTriangle, Info } from 'lucide-vue-next'
 
-const props = withDefaults(
+withDefaults(
   defineProps<{
     open: boolean
     title?: string
@@ -27,45 +27,28 @@ const emit = defineEmits<{
 
 <template>
   <Teleport to="body">
-    <Transition
-      enter-active-class="transition-opacity duration-200"
-      leave-active-class="transition-opacity duration-150"
-      enter-from-class="opacity-0"
-      leave-to-class="opacity-0"
-    >
+    <Transition name="hc-dialog">
       <div
         v-if="open"
-        class="fixed inset-0 z-[9998] flex items-center justify-center bg-black/50"
+        class="hc-dialog-overlay"
         @click.self="emit('cancel')"
       >
-        <div
-          class="w-full max-w-sm rounded-2xl border p-6 shadow-2xl"
-          :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-        >
-          <div class="flex items-start gap-3 mb-4">
-            <div
-              class="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0"
-              :style="{ background: danger ? 'rgba(239,68,68,0.1)' : 'rgba(59,130,246,0.1)' }"
-            >
-              <AlertTriangle :size="20" :style="{ color: danger ? 'var(--hc-error)' : 'var(--hc-accent)' }" />
+        <div class="hc-dialog">
+          <div class="hc-dialog__header">
+            <div class="hc-dialog__icon" :class="danger ? 'hc-dialog__icon--danger' : 'hc-dialog__icon--info'">
+              <AlertTriangle v-if="danger" :size="20" />
+              <Info v-else :size="20" />
             </div>
             <div>
-              <h3 class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ title }}</h3>
-              <p class="text-xs mt-1" :style="{ color: 'var(--hc-text-secondary)' }">{{ message }}</p>
+              <h3 class="hc-dialog__title">{{ title }}</h3>
+              <p class="hc-dialog__msg">{{ message }}</p>
             </div>
           </div>
-
-          <div class="flex justify-end gap-2">
+          <div class="hc-dialog__actions">
+            <button class="hc-btn hc-btn-secondary" @click="emit('cancel')">{{ cancelText }}</button>
             <button
-              class="px-4 py-1.5 rounded-lg text-sm"
-              :style="{ color: 'var(--hc-text-secondary)' }"
-              @click="emit('cancel')"
-            >
-              {{ cancelText }}
-            </button>
-            <button
-              class="px-4 py-1.5 rounded-lg text-sm font-medium text-white"
-              :style="{ background: danger ? 'var(--hc-error)' : 'var(--hc-accent)' }"
+              class="hc-btn"
+              :class="danger ? 'hc-dialog__btn--danger' : 'hc-btn-primary'"
               @click="emit('confirm')"
             >
               {{ confirmText }}
@@ -76,3 +59,99 @@ const emit = defineEmits<{
     </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+.hc-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.hc-dialog {
+  width: 100%;
+  max-width: 380px;
+  border-radius: var(--hc-radius-xl);
+  background: var(--hc-bg-elevated);
+  border: 1px solid var(--hc-border);
+  box-shadow: var(--hc-shadow-float);
+  padding: 24px;
+  animation: hc-scale-in 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.hc-dialog__header {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.hc-dialog__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.hc-dialog__icon--danger {
+  background: rgba(245, 101, 101, 0.1);
+  color: var(--hc-error);
+}
+
+.hc-dialog__icon--info {
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+}
+
+.hc-dialog__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
+  margin: 0;
+}
+
+.hc-dialog__msg {
+  font-size: 13px;
+  color: var(--hc-text-secondary);
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+.hc-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.hc-dialog__btn--danger {
+  background: var(--hc-error);
+  color: #fff;
+  padding: 6px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--hc-radius-sm);
+}
+
+.hc-dialog__btn--danger:hover {
+  opacity: 0.9;
+}
+
+/* Transitions */
+.hc-dialog-enter-active {
+  transition: opacity 0.2s ease-out;
+}
+.hc-dialog-leave-active {
+  transition: opacity 0.15s ease-in;
+}
+.hc-dialog-enter-from,
+.hc-dialog-leave-to {
+  opacity: 0;
+}
+</style>

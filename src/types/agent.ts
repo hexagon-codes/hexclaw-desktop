@@ -1,27 +1,15 @@
-/** Agent 角色 */
+/** Agent 角色（后端 /api/v1/roles 返回） */
 export interface AgentRole {
-  id: string
   name: string
-  display_name: string
-  description: string
-  system_prompt: string
-  model: string
-  temperature: number
-  tools: string[]
-  skills: string[]
-  created_at: string
-  updated_at: string
-  status: 'active' | 'inactive'
+  title: string
+  goal: string
 }
 
-/** 创建/更新角色请求 */
-export interface AgentRoleInput {
+
+/** 多 Agent 路由配置（后端 /api/v1/agents 返回） */
+export interface AgentConfig {
   name: string
   display_name: string
-  description: string
-  system_prompt: string
-  model?: string
-  temperature?: number
-  tools?: string[]
-  skills?: string[]
+  model: string
+  provider: string
 }

@@ -13,24 +13,14 @@ const emit = defineEmits<{
 
 <template>
   <Transition name="panel">
-    <div
-      v-if="open"
-      class="w-[300px] flex-shrink-0 flex flex-col border-l overflow-hidden"
-      :style="{ background: 'var(--hc-bg-panel)', borderColor: 'var(--hc-border)' }"
-    >
-      <div class="flex items-center justify-between px-4 py-3 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-        <span class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">
-          {{ title || '详情' }}
-        </span>
-        <button
-          class="p-1 rounded hover:bg-white/5 transition-colors"
-          :style="{ color: 'var(--hc-text-muted)' }"
-          @click="emit('close')"
-        >
-          <X :size="16" />
+    <div v-if="open" class="hc-detail-panel">
+      <div class="hc-detail-panel__header">
+        <span class="hc-detail-panel__title">{{ title || '详情' }}</span>
+        <button class="hc-detail-panel__close" @click="emit('close')">
+          <X :size="15" />
         </button>
       </div>
-      <div class="flex-1 overflow-y-auto p-4">
+      <div class="hc-detail-panel__body">
         <slot />
       </div>
     </div>
@@ -38,9 +28,59 @@ const emit = defineEmits<{
 </template>
 
 <style scoped>
+.hc-detail-panel {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--hc-border-subtle);
+  background: var(--hc-bg-panel);
+  backdrop-filter: saturate(180%) blur(var(--hc-blur));
+  -webkit-backdrop-filter: saturate(180%) blur(var(--hc-blur));
+  overflow: hidden;
+}
+
+.hc-detail-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--hc-divider);
+}
+
+.hc-detail-panel__title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
+}
+
+.hc-detail-panel__close {
+  padding: 4px;
+  border-radius: var(--hc-radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+  display: flex;
+  transition: background 0.15s, color 0.15s;
+}
+
+.hc-detail-panel__close:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-secondary);
+}
+
+.hc-detail-panel__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* Transition */
 .panel-enter-active,
 .panel-leave-active {
-  transition: width 0.2s ease, opacity 0.2s ease;
+  transition: width 0.25s cubic-bezier(0.25, 0.1, 0.25, 1),
+              opacity 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
 .panel-enter-from,

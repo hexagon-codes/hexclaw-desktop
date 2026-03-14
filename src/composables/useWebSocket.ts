@@ -54,7 +54,7 @@ export function useWebSocket<T = unknown>(
         scheduleReconnect()
       }
     } catch (e) {
-      error.value = String(e)
+      error.value = e instanceof Error ? e.message : String(e)
       scheduleReconnect()
     }
   }

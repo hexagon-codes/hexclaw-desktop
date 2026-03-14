@@ -1,77 +1,43 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, Plus, Trash2, RefreshCw, Wrench } from 'lucide-vue-next'
-import { getMcpServers, addMcpServer, removeMcpServer, reconnectMcpServer, type McpServer } from '@/api/mcp'
+import { Server, Wrench, RefreshCw } from 'lucide-vue-next'
+import { getMcpServers, getMcpTools } from '@/api/mcp'
+import type { McpTool } from '@/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
-import StatusBadge from '@/components/common/StatusBadge.vue'
 
 const { t } = useI18n()
 
-const servers = ref<McpServer[]>([])
+const servers = ref<string[]>([])
+const tools = ref<McpTool[]>([])
 const loading = ref(true)
-const showAddForm = ref(false)
-const newName = ref('')
-const newUrl = ref('')
-const newTransport = ref<'stdio' | 'sse' | 'streamable_http'>('stdio')
-const selectedTool = ref<{ name: string; description: string; schema?: any } | null>(null)
+const errorMsg = ref('')
+const activeTab = ref<'servers' | 'tools'>('servers')
+const expandedTool = ref<string | null>(null)
 
 onMounted(async () => {
-  await loadServers()
+  await loadAll()
 })
 
-async function loadServers() {
+async function loadAll() {
   loading.value = true
+  errorMsg.value = ''
   try {
-    const res = await getMcpServers()
-    servers.value = res.servers || []
+    const [srvRes, toolRes] = await Promise.all([getMcpServers(), getMcpTools()])
+    servers.value = srvRes.servers || []
+    tools.value = toolRes.tools || []
   } catch (e) {
-    console.error('加载 MCP 服务器失败:', e)
+    errorMsg.value = e instanceof Error ? e.message : '加载 MCP 数据失败'
+    console.error('加载 MCP 数据失败:', e)
   } finally {
     loading.value = false
   }
 }
 
-async function handleAdd() {
-  if (!newName.value.trim() || !newUrl.value.trim()) return
-  try {
-    const server = await addMcpServer(newName.value.trim(), newUrl.value.trim())
-    servers.value.push(server)
-    newName.value = ''
-    newUrl.value = ''
-    showAddForm.value = false
-  } catch (e) {
-    console.error('添加 MCP 服务器失败:', e)
-  }
-}
-
-async function handleRemove(server: McpServer) {
-  try {
-    await removeMcpServer(server.id)
-    servers.value = servers.value.filter(s => s.id !== server.id)
-  } catch (e) {
-    console.error('删除 MCP 服务器失败:', e)
-  }
-}
-
-async function handleReconnect(server: McpServer) {
-  try {
-    await reconnectMcpServer(server.id)
-    server.status = 'connected'
-  } catch (e) {
-    console.error('重连 MCP 服务器失败:', e)
-  }
-}
-
-function serverStatus(s: string): 'online' | 'offline' | 'error' {
-  const map: Record<string, 'online' | 'offline' | 'error'> = {
-    connected: 'online',
-    disconnected: 'offline',
-    error: 'error',
-  }
-  return map[s] || 'offline'
+function toggleTool(name: string) {
+  expandedTool.value = expandedTool.value === name ? null : name
 }
 </script>
 
@@ -80,127 +46,116 @@ function serverStatus(s: string): 'online' | 'offline' | 'error' {
     <PageHeader :title="t('mcp.title')" :description="t('mcp.description')">
       <template #actions>
         <button
-          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-          :style="{ background: 'var(--hc-accent)' }"
-          @click="showAddForm = !showAddForm"
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium"
+          :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
+          @click="loadAll"
         >
-          <Plus :size="16" />
-          {{ t('common.create') }}
+          <RefreshCw :size="14" />
+          {{ t('common.refresh') || '刷新' }}
         </button>
       </template>
     </PageHeader>
 
-    <div class="flex-1 overflow-y-auto p-6">
-      <!-- 添加表单 -->
-      <div
-        v-if="showAddForm"
-        class="mb-6 max-w-lg rounded-xl border p-4 space-y-3"
-        :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-      >
-        <input
-          v-model="newName"
-          type="text"
-          :placeholder="t('mcp.serverName')"
-          class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-          :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-        />
-        <input
-          v-model="newUrl"
-          type="text"
-          :placeholder="t('mcp.serverUrl')"
-          class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-          :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-        />
-        <select
-          v-model="newTransport"
-          class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-          :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-        >
-          <option value="stdio">stdio</option>
-          <option value="sse">SSE</option>
-          <option value="streamable_http">Streamable HTTP</option>
-        </select>
-        <div class="flex gap-2">
-          <button
-            class="px-3 py-1.5 rounded-lg text-sm text-white"
-            :style="{ background: 'var(--hc-accent)' }"
-            @click="handleAdd"
-          >
-            {{ t('common.create') }}
-          </button>
-          <button
-            class="px-3 py-1.5 rounded-lg text-sm"
-            :style="{ color: 'var(--hc-text-secondary)' }"
-            @click="showAddForm = false"
-          >
-            {{ t('common.cancel') }}
-          </button>
-        </div>
-      </div>
+    <!-- 错误提示 -->
+    <div
+      v-if="errorMsg"
+      class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
+      style="background: #ef444420; color: #ef4444;"
+    >
+      <span>{{ errorMsg }}</span>
+      <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
+    </div>
 
+    <!-- 标签页 -->
+    <div class="flex items-center gap-0 px-6 pt-3 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+      <button
+        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
+        :style="{
+          borderColor: activeTab === 'servers' ? 'var(--hc-accent)' : 'transparent',
+          color: activeTab === 'servers' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
+        }"
+        @click="activeTab = 'servers'"
+      >
+        {{ t('mcp.servers') }} ({{ servers.length }})
+      </button>
+      <button
+        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
+        :style="{
+          borderColor: activeTab === 'tools' ? 'var(--hc-accent)' : 'transparent',
+          color: activeTab === 'tools' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
+        }"
+        @click="activeTab = 'tools'"
+      >
+        {{ t('mcp.tools') }} ({{ tools.length }})
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-6">
       <LoadingState v-if="loading" />
 
-      <EmptyState
-        v-else-if="servers.length === 0"
-        :icon="Server"
-        :title="t('common.noData')"
-        :description="t('mcp.emptyDesc')"
-      />
+      <!-- 服务器列表 -->
+      <template v-else-if="activeTab === 'servers'">
+        <EmptyState
+          v-if="servers.length === 0"
+          :icon="Server"
+          :title="t('common.noData')"
+          :description="t('mcp.emptyDesc')"
+        />
 
-      <div v-else class="space-y-4 max-w-2xl">
-        <div
-          v-for="server in servers"
-          :key="server.id"
-          class="rounded-xl border p-4"
-          :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-        >
-          <div class="flex items-start justify-between mb-3">
-            <div>
-              <div class="flex items-center gap-2">
-                <span class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ server.name }}</span>
-                <StatusBadge :status="serverStatus(server.status)" />
-              </div>
-              <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ server.url }}</p>
-            </div>
-            <div class="flex items-center gap-1">
-              <button
-                class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
-                :style="{ color: 'var(--hc-text-secondary)' }"
-                :title="t('mcp.reconnect')"
-                @click="handleReconnect(server)"
-              >
-                <RefreshCw :size="14" />
-              </button>
-              <button
-                class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
-                :style="{ color: 'var(--hc-error)' }"
-                :title="t('common.delete')"
-                @click="handleRemove(server)"
-              >
-                <Trash2 :size="14" />
-              </button>
-            </div>
+        <div v-else class="space-y-3 max-w-2xl">
+          <div
+            v-for="name in servers"
+            :key="name"
+            class="flex items-center gap-3 rounded-xl border p-4"
+            :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+          >
+            <Server :size="16" :style="{ color: 'var(--hc-accent)' }" />
+            <span class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ name }}</span>
           </div>
+        </div>
+      </template>
 
-          <!-- 工具列表 -->
-          <div v-if="server.tools.length > 0">
-            <div class="text-xs mb-1.5" :style="{ color: 'var(--hc-text-muted)' }">
-              <Wrench :size="12" class="inline mr-1" />
-              {{ t('mcp.toolCount', { count: server.tools.length }) }}
-            </div>
-            <div class="flex flex-wrap gap-1">
-              <span
-                v-for="tool in server.tools"
-                :key="tool.name"
-                class="px-2 py-0.5 rounded text-xs"
-                :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-secondary)' }"
-              >
-                {{ tool.name }}
+      <!-- 工具列表 -->
+      <template v-else>
+        <EmptyState
+          v-if="tools.length === 0"
+          :icon="Wrench"
+          :title="t('common.noData')"
+          :description="t('mcp.noTools')"
+        />
+
+        <div v-else class="space-y-3 max-w-2xl">
+          <div
+            v-for="tool in tools"
+            :key="tool.name"
+            class="rounded-xl border overflow-hidden"
+            :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+          >
+            <div
+              class="flex items-center gap-3 p-4 cursor-pointer hover:bg-white/[0.02] transition-colors"
+              @click="toggleTool(tool.name)"
+            >
+              <Wrench :size="14" :style="{ color: 'var(--hc-accent)' }" />
+              <div class="flex-1 min-w-0">
+                <span class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ tool.name }}</span>
+                <p v-if="tool.description" class="text-xs mt-0.5 truncate" :style="{ color: 'var(--hc-text-muted)' }">
+                  {{ tool.description }}
+                </p>
+              </div>
+              <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+                {{ expandedTool === tool.name ? '▲' : '▼' }}
               </span>
+            </div>
+            <div
+              v-if="expandedTool === tool.name && tool.input_schema"
+              class="px-4 pb-4 border-t"
+              :style="{ borderColor: 'var(--hc-border)' }"
+            >
+              <pre class="text-xs mt-3 p-3 rounded-lg overflow-x-auto" :style="{ background: 'var(--hc-bg-main)', color: 'var(--hc-text-secondary)' }">{{ JSON.stringify(tool.input_schema, null, 2) }}</pre>
             </div>
           </div>
         </div>
-      </div>
+      </template>
     </div>
   </div>
 </template>

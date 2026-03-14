@@ -42,30 +42,100 @@ defineExpose({
 
 <template>
   <Teleport to="body">
-    <div class="fixed top-4 right-4 z-[9999] flex flex-col gap-2 pointer-events-none">
+    <div class="hc-toast-container">
       <TransitionGroup
-        enter-active-class="transition-all duration-300 ease-out"
-        leave-active-class="transition-all duration-200 ease-in"
-        enter-from-class="opacity-0 translate-x-8"
-        leave-to-class="opacity-0 translate-x-8"
+        enter-active-class="hc-toast--enter"
+        leave-active-class="hc-toast--leave"
+        enter-from-class="hc-toast--hidden"
+        leave-to-class="hc-toast--hidden"
       >
         <div
           v-for="toast in toasts"
           :key="toast.id"
-          class="pointer-events-auto flex items-center gap-2.5 px-4 py-3 rounded-xl border shadow-lg min-w-[280px] max-w-[400px]"
-          :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+          class="hc-toast"
         >
-          <component :is="iconMap[toast.type]" :size="18" :style="{ color: colorMap[toast.type] }" class="flex-shrink-0" />
-          <span class="flex-1 text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ toast.message }}</span>
-          <button
-            class="flex-shrink-0 p-0.5 rounded hover:bg-white/5 transition-colors"
-            :style="{ color: 'var(--hc-text-muted)' }"
-            @click="removeToast(toast.id)"
-          >
-            <X :size="14" />
+          <component
+            :is="iconMap[toast.type]"
+            :size="17"
+            :style="{ color: colorMap[toast.type] }"
+            class="hc-toast__icon"
+          />
+          <span class="hc-toast__msg">{{ toast.message }}</span>
+          <button class="hc-toast__close" @click="removeToast(toast.id)">
+            <X :size="13" />
           </button>
         </div>
       </TransitionGroup>
     </div>
   </Teleport>
 </template>
+
+<style scoped>
+.hc-toast-container {
+  position: fixed;
+  top: var(--hc-space-4);
+  right: var(--hc-space-4);
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.hc-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--hc-space-3);
+  padding: var(--hc-space-3) var(--hc-space-4);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-elevated);
+  border: 1px solid var(--hc-border);
+  box-shadow: var(--hc-shadow-lg);
+  backdrop-filter: saturate(180%) blur(var(--hc-blur));
+  -webkit-backdrop-filter: saturate(180%) blur(var(--hc-blur));
+  min-width: 260px;
+  max-width: 400px;
+}
+
+.hc-toast__icon {
+  flex-shrink: 0;
+}
+
+.hc-toast__msg {
+  flex: 1;
+  font-size: 13px;
+  color: var(--hc-text-primary);
+  line-height: 1.4;
+}
+
+.hc-toast__close {
+  flex-shrink: 0;
+  padding: 3px;
+  border-radius: var(--hc-radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+  display: flex;
+  transition: background 0.15s;
+}
+
+.hc-toast__close:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-secondary);
+}
+
+.hc-toast--enter {
+  transition: all 0.3s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.hc-toast--leave {
+  transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.hc-toast--hidden {
+  opacity: 0;
+  transform: translateX(16px) scale(0.96);
+}
+</style>

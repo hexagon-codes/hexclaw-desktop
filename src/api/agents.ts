@@ -1,29 +1,28 @@
-import { apiGet, apiPost, apiPut, apiDelete } from './client'
-import type { AgentRole, AgentRoleInput } from '@/types'
+import { apiGet, apiPost, apiDelete } from './client'
+import type { AgentRole, AgentConfig } from '@/types'
 
-export type { AgentRole, AgentRoleInput }
+export type { AgentRole, AgentConfig }
+
+// --- 角色 API (只读) ---
 
 /** 获取角色列表 */
 export function getRoles() {
   return apiGet<{ roles: AgentRole[] }>('/api/v1/roles')
 }
 
-/** 获取单个角色 */
-export function getRole(id: string) {
-  return apiGet<AgentRole>(`/api/v1/roles/${id}`)
+// --- 多 Agent 路由 API ---
+
+/** 获取已注册的 Agent 列表 */
+export function getAgents() {
+  return apiGet<{ agents: AgentConfig[]; total: number; default: string }>('/api/v1/agents')
 }
 
-/** 创建角色 */
-export function createRole(role: AgentRoleInput) {
-  return apiPost<AgentRole>('/api/v1/roles', role)
+/** 注册 Agent */
+export function registerAgent(agent: AgentConfig) {
+  return apiPost<{ message: string; name: string }>('/api/v1/agents', agent)
 }
 
-/** 更新角色 */
-export function updateRole(id: string, role: Partial<AgentRoleInput>) {
-  return apiPut<AgentRole>(`/api/v1/roles/${id}`, role)
-}
-
-/** 删除角色 */
-export function deleteRole(id: string) {
-  return apiDelete(`/api/v1/roles/${id}`)
+/** 注销 Agent */
+export function unregisterAgent(name: string) {
+  return apiDelete<{ message: string }>(`/api/v1/agents/${encodeURIComponent(name)}`)
 }

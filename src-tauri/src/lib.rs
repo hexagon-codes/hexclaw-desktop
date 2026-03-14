@@ -7,11 +7,41 @@
 //   window    — 窗口管理 + 全局快捷键
 
 pub mod commands;
+pub mod menu;
 pub mod sidecar;
 pub mod tray;
 pub mod window;
 
 use tauri::Manager;
+use tauri_plugin_sql::{Migration, MigrationKind};
+
+/// 数据库迁移脚本
+fn include_migrations() -> Vec<Migration> {
+    vec![Migration {
+        version: 1,
+        description: "create chat tables",
+        sql: "
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL DEFAULT '新对话',
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE TABLE IF NOT EXISTS messages (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                metadata TEXT,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
+            CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
+        ",
+        kind: MigrationKind::Up,
+    }]
+}
 
 /// 运行 Tauri 应用
 ///
@@ -35,6 +65,11 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(
+            tauri_plugin_sql::Builder::default()
+                .add_migrations("sqlite:hexclaw.db", include_migrations())
+                .build(),
+        )
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 已有实例运行时，聚焦主窗口
             if let Some(window) = app.get_webview_window("main") {
@@ -46,13 +81,24 @@ pub fn run() {
         .manage(sidecar::SidecarState::default())
         // 初始化
         .setup(|app| {
+            eprintln!("[HexClaw] setup 开始...");
+
+            // macOS 原生菜单栏
+            menu::setup(app)?;
+
             // 系统托盘
             tray::setup(app)?;
 
             // 启动 hexclaw sidecar 进程
             match sidecar::spawn_sidecar(&app.handle()) {
-                Ok(()) => log::info!("sidecar 进程已启动"),
-                Err(e) => log::error!("sidecar 启动失败: {}", e),
+                Ok(()) => {
+                    log::info!("sidecar 进程已启动");
+                    eprintln!("[HexClaw] sidecar 进程已启动");
+                }
+                Err(e) => {
+                    log::error!("sidecar 启动失败: {}", e);
+                    eprintln!("[HexClaw] sidecar 启动失败: {}", e);
+                }
             }
 
             // 异步健康检查，等待 sidecar 就绪
@@ -74,6 +120,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_sidecar_status,
             commands::get_platform_info,
+            commands::check_engine_health,
+            commands::proxy_api_request,
+            commands::stream_chat,
+            commands::backend_chat,
         ])
         .on_window_event(|_window, event| {
             // 所有窗口销毁时停止 sidecar 进程

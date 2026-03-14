@@ -80,8 +80,8 @@ export async function apiSSE(
   })
 
   if (!response.ok) {
-    const err = fromHttpStatus(response.status)
-    throw err
+    const apiErr = fromHttpStatus(response.status)
+    throw new Error(apiErr.message)
   }
 
   const reader = response.body!.getReader()
@@ -126,13 +126,19 @@ export function apiWebSocket(path: string): WebSocket {
 
 // ─── 健康检查 ────────────────────────────────────────
 
-/** 健康检查 */
+/** 健康检查（通过 Tauri command 绕过 CORS，回退到 HTTP） */
 export async function checkHealth(): Promise<boolean> {
   try {
-    await api('/health', { timeout: 3000 })
-    return true
+    const { invoke } = await import('@tauri-apps/api/core')
+    return await invoke<boolean>('check_engine_health')
   } catch {
-    return false
+    // 非 Tauri 环境或 invoke 失败，回退到直接 HTTP
+    try {
+      await api('/health', { timeout: 3000 })
+      return true
+    } catch {
+      return false
+    }
   }
 }
 

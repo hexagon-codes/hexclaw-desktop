@@ -1,21 +1,25 @@
-import { apiGet, apiPost, apiPut, apiDelete } from './client'
+import { apiGet, apiPost, apiDelete } from './client'
+import { DESKTOP_USER_ID } from '@/constants'
 import type { CronJob, CronJobInput } from '@/types'
 
 export type { CronJob, CronJobInput }
 
 /** 获取任务列表 */
 export function getCronJobs() {
-  return apiGet<{ jobs: CronJob[] }>('/api/v1/cron/jobs')
+  return apiGet<{ jobs: CronJob[]; total: number }>('/api/v1/cron/jobs', {
+    user_id: DESKTOP_USER_ID,
+  })
 }
 
 /** 创建任务 */
-export function createCronJob(job: CronJobInput) {
-  return apiPost<CronJob>('/api/v1/cron/jobs', job)
-}
-
-/** 更新任务 */
-export function updateCronJob(id: string, job: Partial<CronJobInput & { enabled: boolean }>) {
-  return apiPut<CronJob>(`/api/v1/cron/jobs/${id}`, job)
+export function createCronJob(input: CronJobInput) {
+  return apiPost<{ id: string; name: string; next_run_at: string }>('/api/v1/cron/jobs', {
+    name: input.name,
+    schedule: input.schedule,
+    prompt: input.prompt,
+    type: input.type ?? 'cron',
+    user_id: DESKTOP_USER_ID,
+  })
 }
 
 /** 删除任务 */
@@ -23,7 +27,12 @@ export function deleteCronJob(id: string) {
   return apiDelete(`/api/v1/cron/jobs/${id}`)
 }
 
-/** 手动触发任务 */
-export function triggerCronJob(id: string) {
-  return apiPost(`/api/v1/cron/jobs/${id}/trigger`)
+/** 暂停任务 */
+export function pauseCronJob(id: string) {
+  return apiPost(`/api/v1/cron/jobs/${id}/pause`)
+}
+
+/** 恢复任务 */
+export function resumeCronJob(id: string) {
+  return apiPost(`/api/v1/cron/jobs/${id}/resume`)
 }

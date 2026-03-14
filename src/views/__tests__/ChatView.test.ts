@@ -7,10 +7,30 @@ import zhCN from '@/i18n/locales/zh-CN'
 
 // ─── Mock API 模块 ──────────────────────────────────────
 vi.mock('@/api/chat', () => ({
-  getSessions: vi.fn().mockResolvedValue({ sessions: [] }),
-  getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
-  sendChatStream: vi.fn(),
-  deleteSession: vi.fn().mockResolvedValue({}),
+  sendChatViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
+  sendChat: vi.fn(),
+}))
+
+vi.mock('@/api/websocket', () => ({
+  hexclawWS: {
+    isConnected: vi.fn().mockReturnValue(false),
+    connect: vi.fn().mockRejectedValue(new Error('test')),
+    clearCallbacks: vi.fn(),
+    onChunk: vi.fn(),
+    onReply: vi.fn(),
+    onError: vi.fn(),
+    sendMessage: vi.fn(),
+  },
+}))
+
+vi.mock('@/db/chat', () => ({
+  dbGetSessions: vi.fn().mockResolvedValue([]),
+  dbCreateSession: vi.fn().mockResolvedValue(undefined),
+  dbUpdateSessionTitle: vi.fn().mockResolvedValue(undefined),
+  dbTouchSession: vi.fn().mockResolvedValue(undefined),
+  dbDeleteSession: vi.fn().mockResolvedValue(undefined),
+  dbGetMessages: vi.fn().mockResolvedValue([]),
+  dbSaveMessage: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/api/agents', () => ({
@@ -122,19 +142,6 @@ describe('ChatView — E2E 关键路径', () => {
   // 3. 发送消息：用户输入并点击发送
   // ────────────────────────────────────────────────────
   it('sends a message when user types and clicks send', async () => {
-    const { sendChatStream } = await import('@/api/chat')
-    const mockedSendStream = vi.mocked(sendChatStream)
-
-    // 模拟 SSE 流：返回一个立即完成的 ReadableStream
-    mockedSendStream.mockResolvedValueOnce(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(JSON.stringify({ content: '你好！' }))
-          controller.close()
-        },
-      }),
-    )
-
     const wrapper = mountChatView()
     await flushPromises()
 
@@ -225,11 +232,11 @@ describe('ChatView — E2E 关键路径', () => {
   // 7. API 错误优雅处理
   // ────────────────────────────────────────────────────
   it('handles API error gracefully on sendMessage', async () => {
-    const { sendChatStream } = await import('@/api/chat')
-    const mockedSendStream = vi.mocked(sendChatStream)
+    const { sendChatViaBackend } = await import('@/api/chat')
+    const mockedSend = vi.mocked(sendChatViaBackend)
 
-    // 模拟 API 调用失败
-    mockedSendStream.mockRejectedValueOnce(new Error('Network error'))
+    // 模拟 API 调用失败（WebSocket 和 HTTP 都失败）
+    mockedSend.mockRejectedValueOnce(new Error('Network error'))
 
     const wrapper = mountChatView()
     await flushPromises()

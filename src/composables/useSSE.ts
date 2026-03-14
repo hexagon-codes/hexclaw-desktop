@@ -37,9 +37,12 @@ export function useSSE() {
         // 尝试解析 JSON，提取 content 字段
         try {
           const parsed = JSON.parse(value)
-          const chunk = parsed.content || parsed.text || value
-          content.value += chunk
-          onChunk?.(chunk)
+          const chunk = typeof parsed.content === 'string' ? parsed.content
+            : typeof parsed.text === 'string' ? parsed.text
+            : parsed.choices?.[0]?.delta?.content ?? value
+          const text = typeof chunk === 'string' ? chunk : String(chunk)
+          content.value += text
+          onChunk?.(text)
         } catch {
           content.value += value
           onChunk?.(value)
@@ -49,7 +52,7 @@ export function useSSE() {
       onDone?.(content.value)
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
-        error.value = String(e)
+        error.value = e instanceof Error ? e.message : String(e)
       }
     } finally {
       streaming.value = false

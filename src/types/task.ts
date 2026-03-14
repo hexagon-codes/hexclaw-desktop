@@ -2,23 +2,21 @@
 export interface CronJob {
   id: string
   name: string
-  description: string
-  cron_expr: string
-  agent_id: string
-  agent_name: string
-  prompt: string
-  enabled: boolean
-  last_run?: string
-  next_run?: string
+  type: 'cron' | 'once'
+  schedule: string       // Cron expression: "0 9 * * *", "@daily", "@every 5m"
+  prompt: string         // Agent instruction
+  user_id: string
+  status: 'active' | 'paused' | 'done'
+  last_run_at: string
+  next_run_at: string
   run_count: number
-  status: 'idle' | 'running' | 'error'
+  created_at: string
 }
 
 /** 创建任务请求 */
 export interface CronJobInput {
   name: string
-  description?: string
-  cron_expr: string
-  agent_id: string
+  schedule: string
   prompt: string
+  type?: 'cron' | 'once'
 }

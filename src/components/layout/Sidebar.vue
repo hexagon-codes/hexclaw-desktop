@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, onMounted, onUnmounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
+  LayoutDashboard,
   MessageSquare,
   Bot,
   Clock,
@@ -12,17 +13,36 @@ import {
   Server,
   ScrollText,
   Layout,
+  Users,
   Settings,
-  PanelLeftClose,
-  PanelLeft,
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
 const route = useRoute()
+const router = useRouter()
 const appStore = useAppStore()
+const collapsed = computed(() => appStore.sidebarCollapsed)
+
+function handleKeydown(e: KeyboardEvent) {
+  if (!e.metaKey && !e.ctrlKey) return
+  const key = e.key
+  const shortcuts: Record<string, string> = {
+    '1': '/chat',
+    '2': '/agents',
+    '3': '/tasks',
+  }
+  if (shortcuts[key]) {
+    e.preventDefault()
+    router.push(shortcuts[key])
+  }
+}
+
+onMounted(() => document.addEventListener('keydown', handleKeydown))
+onUnmounted(() => document.removeEventListener('keydown', handleKeydown))
 
 const navItems = computed(() => [
+  { path: '/dashboard', label: t('nav.dashboard'), icon: LayoutDashboard },
   { path: '/chat', label: t('nav.chat'), icon: MessageSquare },
   { path: '/agents', label: t('nav.agents'), icon: Bot },
   { path: '/tasks', label: t('nav.tasks'), icon: Clock },
@@ -32,10 +52,7 @@ const navItems = computed(() => [
   { path: '/mcp', label: t('nav.mcp'), icon: Server },
   { path: '/logs', label: t('nav.logs'), icon: ScrollText },
   { path: '/canvas', label: t('nav.canvas'), icon: Layout },
-])
-
-const bottomItems = computed(() => [
-  { path: '/settings', label: t('nav.settings'), icon: Settings },
+  { path: '/team', label: t('nav.team'), icon: Users },
 ])
 
 function isActive(path: string): boolean {
@@ -44,70 +61,155 @@ function isActive(path: string): boolean {
 </script>
 
 <template>
-  <div
-    class="flex flex-col h-full transition-all duration-200"
-    :class="appStore.sidebarCollapsed ? 'w-[56px]' : 'w-[220px]'"
-    :style="{ background: 'var(--hc-bg-sidebar)', borderRight: '1px solid var(--hc-border)' }"
+  <aside
+    class="hc-sidebar hc-vibrancy"
+    :class="{ 'hc-sidebar--collapsed': collapsed }"
   >
-    <!-- 导航列表 -->
-    <nav role="navigation" class="flex-1 py-2 px-2 space-y-0.5 overflow-y-auto">
+    <!-- Navigation -->
+    <nav class="hc-sidebar__nav" role="navigation">
       <router-link
         v-for="item in navItems"
         :key="item.path"
         :to="item.path"
         :aria-label="item.label"
-        class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors"
-        :style="{
-          background: isActive(item.path) ? 'var(--hc-bg-hover)' : 'transparent',
-          color: isActive(item.path) ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
-        }"
+        class="hc-sidebar__item"
+        :class="{ 'hc-sidebar__item--active': isActive(item.path) }"
       >
-        <component :is="item.icon" :size="18" class="flex-shrink-0" />
-        <span v-if="!appStore.sidebarCollapsed" class="truncate">{{ item.label }}</span>
+        <component :is="item.icon" :size="17" class="hc-sidebar__icon" />
+        <span v-if="!collapsed" class="hc-sidebar__label">{{ item.label }}</span>
       </router-link>
     </nav>
 
-    <!-- 底部 -->
-    <div class="py-2 px-2 space-y-0.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
-      <!-- 连接状态 -->
-      <div
-        v-if="!appStore.sidebarCollapsed"
-        class="flex items-center gap-2 px-3 py-1.5 text-xs"
-        :style="{ color: 'var(--hc-text-muted)' }"
-      >
+    <!-- Bottom: status + settings -->
+    <div class="hc-sidebar__bottom">
+      <div v-if="!collapsed" class="hc-sidebar__status">
         <span
-          class="w-2 h-2 rounded-full"
-          :style="{ background: appStore.sidecarReady ? 'var(--hc-success)' : 'var(--hc-error)' }"
+          class="hc-sidebar__dot"
+          :class="appStore.sidecarReady ? 'hc-sidebar__dot--ok' : 'hc-sidebar__dot--err'"
         />
-        {{ appStore.sidecarReady ? t('nav.connected') : t('nav.disconnected') }}
+        <span class="hc-sidebar__status-text">
+          {{ appStore.sidecarReady ? t('nav.connected') : t('nav.disconnected') }}
+        </span>
       </div>
 
       <router-link
-        v-for="item in bottomItems"
-        :key="item.path"
-        :to="item.path"
-        :aria-label="item.label"
-        class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors"
-        :style="{
-          background: isActive(item.path) ? 'var(--hc-bg-hover)' : 'transparent',
-          color: isActive(item.path) ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
-        }"
+        to="/settings"
+        :aria-label="t('nav.settings')"
+        class="hc-sidebar__item"
+        :class="{ 'hc-sidebar__item--active': isActive('/settings') }"
       >
-        <component :is="item.icon" :size="18" class="flex-shrink-0" />
-        <span v-if="!appStore.sidebarCollapsed" class="truncate">{{ item.label }}</span>
+        <Settings :size="17" class="hc-sidebar__icon" />
+        <span v-if="!collapsed" class="hc-sidebar__label">{{ t('nav.settings') }}</span>
       </router-link>
-
-      <!-- 折叠按钮 -->
-      <button
-        :aria-label="t('nav.collapse')"
-        class="flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors w-full"
-        :style="{ color: 'var(--hc-text-muted)' }"
-        @click="appStore.toggleSidebar"
-      >
-        <PanelLeftClose v-if="!appStore.sidebarCollapsed" :size="18" class="flex-shrink-0" />
-        <PanelLeft v-else :size="18" class="flex-shrink-0" />
-        <span v-if="!appStore.sidebarCollapsed" class="truncate">{{ t('nav.collapse') }}</span>
-      </button>
     </div>
-  </div>
+  </aside>
 </template>
+
+<style scoped>
+.hc-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 210px;
+  background: var(--hc-bg-sidebar);
+  border-right: 1px solid var(--hc-border-subtle);
+  transition: width 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+  overflow: hidden;
+}
+
+.hc-sidebar--collapsed {
+  width: 54px;
+}
+
+.hc-sidebar__nav {
+  flex: 1;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+}
+
+.hc-sidebar__item {
+  display: flex;
+  align-items: center;
+  gap: var(--hc-space-2);
+  padding: var(--hc-space-2) var(--hc-space-3);
+  border-radius: var(--hc-radius-sm);
+  font-size: 13px;
+  color: var(--hc-text-secondary);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.hc-sidebar__item:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+
+.hc-sidebar__item--active {
+  background: var(--hc-bg-active);
+  color: var(--hc-text-primary);
+  font-weight: 500;
+}
+
+.hc-sidebar__icon {
+  flex-shrink: 0;
+  opacity: 0.8;
+}
+
+.hc-sidebar__item--active .hc-sidebar__icon {
+  opacity: 1;
+  color: var(--hc-accent);
+}
+
+.hc-sidebar__label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Bottom ---- */
+.hc-sidebar__bottom {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  border-top: 1px solid var(--hc-divider);
+}
+
+.hc-sidebar__status {
+  display: flex;
+  align-items: center;
+  gap: var(--hc-space-2);
+  padding: var(--hc-space-1) var(--hc-space-3) var(--hc-space-2);
+}
+
+.hc-sidebar__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.hc-sidebar__dot--ok {
+  background: var(--hc-success);
+  box-shadow: 0 0 6px var(--hc-success);
+}
+
+.hc-sidebar__dot--err {
+  background: var(--hc-error);
+  box-shadow: 0 0 6px var(--hc-error);
+}
+
+.hc-sidebar__status-text {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+}
+</style>

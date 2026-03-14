@@ -7,12 +7,10 @@ const props = defineProps<{
   content: string
 }>()
 
-// 全局单例 — 所有消息共享同一个解析器实例
 const md = createMarkdownRenderer()
 let initialized = false
 
 function createMarkdownRenderer() {
-  // Check if already created (module-level cache)
   if ((globalThis as any).__hc_md) return (globalThis as any).__hc_md as MarkdownIt
 
   const instance = new MarkdownIt({
@@ -54,9 +52,7 @@ onMounted(() => {
   }
 })
 
-onUnmounted(() => {
-  // Note: only remove when last instance unmounts - but singleton pattern means this is fine
-})
+onUnmounted(() => {})
 
 const rendered = computed(() => DOMPurify.sanitize(md.render(props.content)))
 </script>
@@ -65,132 +61,159 @@ const rendered = computed(() => DOMPurify.sanitize(md.render(props.content)))
   <div class="markdown-body" v-html="rendered" />
 </template>
 
-<style>
+<style scoped>
 .markdown-body {
   line-height: 1.7;
   word-wrap: break-word;
+  font-size: 14px;
 }
 
-.markdown-body p {
+.markdown-body :deep(p) {
   margin: 0.5em 0;
 }
 
-.markdown-body p:first-child {
+.markdown-body :deep(p:first-child) {
   margin-top: 0;
 }
 
-.markdown-body p:last-child {
+.markdown-body :deep(p:last-child) {
   margin-bottom: 0;
 }
 
-.markdown-body ul,
-.markdown-body ol {
+.markdown-body :deep(ul),
+.markdown-body :deep(ol) {
   padding-left: 1.5em;
   margin: 0.5em 0;
 }
 
-.markdown-body li {
+.markdown-body :deep(li) {
   margin: 0.25em 0;
 }
 
-.markdown-body a {
+.markdown-body :deep(a) {
   color: var(--hc-accent);
   text-decoration: none;
 }
 
-.markdown-body a:hover {
+.markdown-body :deep(a:hover) {
   text-decoration: underline;
 }
 
-.markdown-body code {
+.markdown-body :deep(code) {
   background: var(--hc-bg-hover);
-  padding: 0.15em 0.4em;
-  border-radius: 4px;
-  font-size: 0.9em;
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  padding: 0.15em 0.45em;
+  border-radius: 5px;
+  font-size: 0.88em;
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
 }
 
-.markdown-body pre code {
+.markdown-body :deep(pre code) {
   background: none;
   padding: 0;
 }
 
-.markdown-body blockquote {
-  border-left: 3px solid var(--hc-border);
+.markdown-body :deep(blockquote) {
+  border-left: 3px solid var(--hc-accent);
   padding-left: 1em;
   margin: 0.5em 0;
   color: var(--hc-text-secondary);
 }
 
-.markdown-body strong {
+.markdown-body :deep(strong) {
   font-weight: 600;
 }
 
-.markdown-body table {
+.markdown-body :deep(table) {
   border-collapse: collapse;
   width: 100%;
   margin: 0.5em 0;
+  border-radius: var(--hc-radius-md);
+  overflow: hidden;
 }
 
-.markdown-body th,
-.markdown-body td {
+.markdown-body :deep(th),
+.markdown-body :deep(td) {
   border: 1px solid var(--hc-border);
-  padding: 0.4em 0.8em;
+  padding: 0.5em 0.8em;
   text-align: left;
+  font-size: 13px;
 }
 
-.markdown-body th {
+.markdown-body :deep(th) {
   background: var(--hc-bg-hover);
   font-weight: 600;
 }
 
-.code-block-wrapper {
+.markdown-body :deep(hr) {
+  border: none;
+  height: 1px;
+  background: var(--hc-divider);
+  margin: 1em 0;
+}
+
+.markdown-body :deep(h1),
+.markdown-body :deep(h2),
+.markdown-body :deep(h3),
+.markdown-body :deep(h4) {
+  margin: 1em 0 0.5em;
+  font-weight: 600;
+}
+
+.markdown-body :deep(h1) { font-size: 1.4em; }
+.markdown-body :deep(h2) { font-size: 1.2em; }
+.markdown-body :deep(h3) { font-size: 1.1em; }
+
+/* ─── Code Blocks ───── */
+.markdown-body :deep(.code-block-wrapper) {
   margin: 0.5em 0;
-  border-radius: 8px;
+  border-radius: var(--hc-radius-md);
   overflow: hidden;
   border: 1px solid var(--hc-border);
 }
 
-.code-block-header {
+.markdown-body :deep(.code-block-header) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.4em 0.8em;
+  padding: var(--hc-space-2) var(--hc-space-3);
   background: var(--hc-bg-hover);
-  font-size: 0.75em;
+  font-size: 11px;
 }
 
-.code-lang {
+.markdown-body :deep(.code-lang) {
   color: var(--hc-text-muted);
   text-transform: uppercase;
-  font-weight: 500;
+  font-weight: 600;
+  letter-spacing: 0.03em;
 }
 
-.copy-btn {
+.markdown-body :deep(.copy-btn) {
   color: var(--hc-text-muted);
   background: none;
   border: none;
   cursor: pointer;
-  font-size: inherit;
-  padding: 0.2em 0.5em;
-  border-radius: 4px;
-  transition: color 0.2s;
+  font-size: 11px;
+  padding: var(--hc-space-1) var(--hc-space-2);
+  border-radius: var(--hc-space-1);
+  transition: all 0.15s;
+  font-weight: 500;
 }
 
-.copy-btn:hover {
+.markdown-body :deep(.copy-btn:hover) {
   color: var(--hc-text-primary);
+  background: var(--hc-bg-active);
 }
 
-.code-block {
+.markdown-body :deep(.code-block) {
   margin: 0;
-  padding: 0.8em;
+  padding: var(--hc-space-3) var(--hc-space-4);
   background: var(--hc-bg-input);
   overflow-x: auto;
-  font-size: 0.85em;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
-.code-block code {
-  font-family: 'SF Mono', 'Fira Code', monospace;
+.markdown-body :deep(.code-block code) {
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
 }
 </style>

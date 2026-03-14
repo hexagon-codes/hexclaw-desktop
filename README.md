@@ -2,12 +2,16 @@
 
 <img src=".github/assets/logo.png" alt="HexClaw Logo" width="160">
 
+# HexClaw Desktop (河蟹桌面客户端)
+
 **企业级安全的个人 AI Agent 一体化桌面客户端**
 
 [![CI](https://github.com/everyday-items/hexclaw-desktop/workflows/CI/badge.svg)](https://github.com/everyday-items/hexclaw-desktop/actions)
 [![Release](https://img.shields.io/github/v/release/everyday-items/hexclaw-desktop?include_prereleases)](https://github.com/everyday-items/hexclaw-desktop/releases)
 [![License](https://img.shields.io/github/license/everyday-items/hexclaw-desktop)](https://github.com/everyday-items/hexclaw-desktop/blob/main/LICENSE)
 [![Downloads](https://img.shields.io/github/downloads/everyday-items/hexclaw-desktop/total)](https://github.com/everyday-items/hexclaw-desktop/releases)
+
+macOS / Windows / Linux 原生运行 · Sidecar 架构本地部署 · 零云端依赖 · 数据完全私有
 
 </div>
 
@@ -23,48 +27,73 @@
 
 | 功能 | 说明 |
 |------|------|
-| **AI 聊天** | 多模型支持: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama，流式输出，Markdown 渲染，代码高亮 |
-| **Agent 角色** | 自定义角色名称/目标/背景故事，多 Agent 协作，角色模板库 |
+| **AI 对话** | 多模型支持: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama，流式输出，Markdown 渲染，代码高亮 |
+| **Agent 编排** | 自定义 Agent 角色/目标/背景，多 Agent 协作，Agent 会议模式，角色模板库 |
 | **Skill 系统** | 技能市场 + 自定义技能，Tool 注册与权限管理 |
 | **工作流画布** | 可视化拖拽编排 Agent 工作流，DAG 图执行引擎 |
 | **MCP 协议** | Model Context Protocol 工具集成，外部工具即插即用 |
-| **知识库** | 文档上传/解析/向量检索，支持 PDF/Markdown/TXT 等格式 |
+| **知识库 (RAG)** | 文档上传/解析/向量检索，支持 PDF / Markdown / TXT 等格式 |
 | **记忆系统** | 长期记忆 + 短期记忆 + 语义搜索，跨会话记忆持久化 |
 | **定时任务** | Cron 调度，周期性执行 Agent 任务 |
 | **安全网关** | Prompt 注入检测 / PII 过滤 / 内容过滤 / RBAC 权限控制 |
+| **团队协作** | 多用户工作空间，共享 Agent 和会话 |
 | **实时日志** | WebSocket 流式日志，Agent 执行链路全程追踪 |
 | **多语言** | 中文 / English，vue-i18n 国际化 |
 | **系统托盘** | 最小化到托盘，托盘菜单快捷操作 |
-| **全局快捷键** | 随时唤起 Quick Chat 窗口 |
+| **全局快捷键** | `⌘+Shift+H` 随时唤起 Quick Chat 窗口 |
 | **自动更新** | Tauri Updater，应用内一键升级 |
+
+## 生态链
+
+```
+toolkit → ai-core → hexagon → hexclaw → hexclaw-desktop
+                                       → hexclaw-ui
+                                       → hexagon-ui
+```
+
+| 项目 | 定位 | 语言 |
+|------|------|------|
+| [toolkit](https://github.com/everyday-items/toolkit) | 通用工具箱 — 基础设施库 (日志/配置/HTTP/并发/错误链) | Go |
+| [ai-core](https://github.com/everyday-items/ai-core) | AI 能力底座 — LLM Provider/Embedding/向量/记忆 | Go |
+| [hexagon](https://github.com/everyday-items/hexagon) | 全能 AI Agent 框架 — ReAct/Plan-and-Execute/Tool 调度 | Go |
+| [hexclaw](https://github.com/everyday-items/hexclaw) | 河蟹后端 — Sidecar 服务 (RESTful API/RAG/Cron/安全网关) | Go |
+| **hexclaw-desktop** | **河蟹桌面客户端 (本仓库)** | **Rust + Vue 3** |
+| [hexclaw-ui](https://github.com/everyday-items/hexclaw-ui) | 河蟹 Web 端 — Web 客户端 (同时作为桌面端 UI 渲染层复用) | Vue 3 |
+| [hexagon-ui](https://github.com/everyday-items/hexagon-ui) | Agent 观测台 — 可观测性面板 (链路追踪/推理回放/性能分析) | Vue 3 |
 
 ## 架构
 
 ```
 HexClaw.app
-┌─────────────────────────────────────────────────────────────────┐
-│  Tauri Shell (Rust)                                             │
-│  窗口管理 · 系统托盘 · 全局快捷键 · 单实例 · 自动更新 · Sidecar │
-├─────────────────────────────────────────────────────────────────┤
-│  Vue 3 前端 (WebView)                                           │
-│  ┌──────┬────────┬────────┬────────┬───────┬────────┬────────┐ │
-│  │ 聊天  │ Agent  │ Skills │ 画布   │ 知识库 │ 记忆   │ 设置   │ │
-│  │ Chat  │ Roles  │ Market │ Canvas │  KB   │ Memory │ Config │ │
-│  └──┬───┴───┬────┴───┬────┴───┬────┴───┬───┴───┬────┴───┬────┘ │
-│     │  Pinia Store   │  Vue Router     │  API Client (ofetch)  │ │
-├─────┴────────────────┴─────────────────┴───────────────────────┤
-│  HTTP / WebSocket  ←→  localhost:16060                          │
-├─────────────────────────────────────────────────────────────────┤
-│  hexclaw serve (Go Sidecar)                                     │
-│  Agent 引擎 · LLM 路由 · RAG · MCP · 安全网关 · 日志 · Cron    │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │  Hexagon Framework  ←  ai-core (LLM/Tool/Memory)        │   │
-│  └──────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│  Tauri Shell (Rust)                                               │
+│  窗口管理 · 系统托盘 · 原生菜单 · 全局快捷键 · 单实例 · 自动更新  │
+│  API 代理 (CORS bypass) · Sidecar 进程管理                        │
+├───────────────────────────────────────────────────────────────────┤
+│  Vue 3 前端 (WebView)                                             │
+│  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
+│  │Dashboard│  Chat  │ Agents │ Skills │ Canvas │ 知识库  │  MCP  │ │
+│  ├────────┼────────┼────────┼────────┼────────┼────────┼───────┤ │
+│  │  记忆   │  日志  │  任务  │  团队  │  设置  │  关于   │ Quick │ │
+│  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
+│      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
+├──────┴─────────────────┴──────────────────┴───────────────────────┤
+│  Tauri Commands (Rust → Go)                                       │
+│  check_engine_health · proxy_api_request · get_sidecar_status     │
+├───────────────────────────────────────────────────────────────────┤
+│  HTTP / WebSocket  ←→  localhost:16060                            │
+├───────────────────────────────────────────────────────────────────┤
+│  hexclaw serve (Go Sidecar)                                       │
+│  Agent 引擎 · LLM 路由 · RAG · MCP · CORS · 安全网关 · Cron      │
+│  ┌────────────────────────────────────────────────────────────┐   │
+│  │  Hexagon Framework  ←  ai-core (LLM/Tool/Memory)          │   │
+│  │                     ←  toolkit (Log/Config/HTTP/Concurrency)│   │
+│  └────────────────────────────────────────────────────────────┘   │
+└───────────────────────────────────────────────────────────────────┘
 ```
 
-前后端通过 HTTP API + WebSocket 通信，完全解耦。
 设计模式与 **Docker Desktop 管理 Docker Engine** 一致 — Tauri 壳管理 Go Sidecar 进程。
+前后端通过 **Tauri IPC 代理**通信（解决 WebView CORS 限制），完全解耦。
 
 > Go Sidecar 默认监听 `localhost:16060`，可通过 hexclaw 配置文件修改端口。
 
@@ -82,7 +111,7 @@ HexClaw.app
 | 国际化 | vue-i18n | 11.x |
 | 图标 | Lucide Vue | - |
 | Markdown | markdown-it + Shiki (代码高亮) | - |
-| HTTP 客户端 | ofetch | - |
+| HTTP 客户端 | ofetch (前端) / reqwest (Rust 代理) | - |
 | 构建工具 | Vite | 7.x |
 | 测试 | Vitest + @vue/test-utils | - |
 | Lint | ESLint + oxlint + Prettier | - |
@@ -95,7 +124,6 @@ HexClaw.app
 ### Homebrew (macOS)
 
 ```bash
-# 添加 tap 并安装
 brew tap everyday-items/tap
 brew install --cask hexclaw
 ```
@@ -113,6 +141,8 @@ brew install --cask hexclaw
 
 > 首次打开 macOS 版本可能需要在 **系统设置 → 隐私与安全性** 中允许运行。
 
+详细使用说明请参阅 [使用指南](docs/guide.md)。
+
 ## 开发
 
 ### 前置要求
@@ -121,8 +151,8 @@ brew install --cask hexclaw
 |------|---------|------|
 | Node.js | >= 20.19 或 >= 22.12 | JavaScript 运行时 |
 | pnpm | >= 9 | 包管理器 |
-| Rust | stable | Tauri 编译需要 |
-| Go | >= 1.23 | Sidecar 编译需要 |
+| Rust | stable (2021 edition) | Tauri 编译 |
+| Go | >= 1.23 | Sidecar 编译 |
 
 ### 快速开始
 
@@ -142,7 +172,7 @@ make sidecar
 make dev
 ```
 
-> **注意**: `make sidecar` 需要在 `hexclaw-desktop` 同级目录下克隆 [hexclaw](https://github.com/everyday-items/hexclaw) 仓库，目录结构如下：
+> **注意**: `make sidecar` 需要在 `hexclaw-desktop` 同级目录下克隆 [hexclaw](https://github.com/everyday-items/hexclaw) 仓库：
 > ```
 > work/
 > ├── hexclaw/           # Go 后端仓库
@@ -170,8 +200,8 @@ make dev
 ```
 hexclaw-desktop/
 ├── src/                          # Vue 3 前端源码
-│   ├── api/                      # API 客户端 (与 Go sidecar 通信)
-│   │   ├── client.ts             # HTTP/WS 基础客户端
+│   ├── api/                      # API 客户端 (Tauri IPC + HTTP fallback)
+│   │   ├── client.ts             # HTTP/WS/IPC 基础客户端
 │   │   ├── chat.ts               # 聊天 API
 │   │   ├── agents.ts             # Agent 管理 API
 │   │   ├── skills.ts             # Skill API
@@ -186,12 +216,13 @@ hexclaw-desktop/
 │   ├── components/               # 组件
 │   │   ├── chat/                 # 聊天组件
 │   │   ├── agent/                # Agent 组件
-│   │   ├── common/               # 通用组件
-│   │   ├── layout/               # 布局组件
+│   │   ├── canvas/               # 画布组件
+│   │   ├── common/               # 通用组件 (CommandPalette/ContextMenu/Toast 等)
+│   │   ├── layout/               # 布局组件 (AppLayout/Sidebar/TitleBar)
 │   │   └── logs/                 # 日志组件
 │   ├── views/                    # 页面视图
-│   │   ├── ChatView.vue          # 聊天页
-│   │   ├── QuickChatView.vue     # 快捷聊天
+│   │   ├── DashboardView.vue     # 仪表板 (首页)
+│   │   ├── ChatView.vue          # AI 对话
 │   │   ├── AgentsView.vue        # Agent 管理
 │   │   ├── SkillsView.vue        # Skill 市场
 │   │   ├── CanvasView.vue        # 工作流画布
@@ -200,7 +231,10 @@ hexclaw-desktop/
 │   │   ├── MemoryView.vue        # 记忆管理
 │   │   ├── TasksView.vue         # 定时任务
 │   │   ├── LogsView.vue          # 日志查看
+│   │   ├── TeamView.vue          # 团队协作
 │   │   ├── SettingsView.vue      # 设置
+│   │   ├── AboutView.vue         # 关于 (独立窗口)
+│   │   ├── QuickChatView.vue     # 快捷聊天 (独立窗口)
 │   │   └── WelcomeView.vue       # 欢迎页
 │   ├── stores/                   # Pinia 状态管理
 │   ├── composables/              # 组合式函数
@@ -208,36 +242,34 @@ hexclaw-desktop/
 │   ├── router/                   # 路由配置
 │   ├── types/                    # TypeScript 类型定义
 │   ├── utils/                    # 工具函数
-│   ├── config/                   # 前端配置
-│   └── assets/                   # 静态资源
+│   ├── config/                   # 前端配置 (env.ts 等)
+│   └── assets/                   # 静态资源 (Logo/图标)
 ├── src-tauri/                    # Tauri (Rust) 层
-│   ├── src/                      # Rust 源码
+│   ├── src/
 │   │   ├── main.rs               # 入口
 │   │   ├── lib.rs                # 应用初始化 & 插件注册
-│   │   ├── commands.rs           # Tauri IPC 命令
+│   │   ├── commands.rs           # Tauri IPC 命令 (健康检查/API 代理)
 │   │   ├── sidecar.rs            # Go Sidecar 进程管理
 │   │   ├── tray.rs               # 系统托盘
-│   │   └── window.rs             # 窗口管理
+│   │   ├── menu.rs               # macOS 原生菜单
+│   │   └── window.rs             # 窗口管理 & 全局快捷键
 │   ├── binaries/                 # Go sidecar 二进制 (编译生成)
 │   ├── icons/                    # 应用图标
-│   ├── capabilities/             # Tauri 权限配置
+│   ├── capabilities/             # Tauri v2 权限配置
 │   ├── tauri.conf.json           # Tauri 配置
 │   ├── build.rs                  # Rust 构建脚本
 │   └── Cargo.toml                # Rust 依赖
+├── docs/                         # 文档
+│   └── guide.md                  # 使用指南
 ├── Casks/                        # Homebrew Cask 定义
-│   └── hexclaw.rb
-├── .github/                      # GitHub 配置
-│   ├── workflows/
-│   │   ├── ci.yml                # CI 流水线
-│   │   └── release.yml           # 发布流水线
-│   └── assets/                   # README 资源文件
+├── .github/                      # GitHub CI/CD
 ├── Makefile                      # 开发命令
 ├── vite.config.ts                # Vite 配置
 ├── vitest.config.ts              # Vitest 测试配置
 ├── eslint.config.ts              # ESLint 配置
 ├── tsconfig.json                 # TypeScript 配置
 ├── package.json                  # Node 依赖
-├── LICENSE                       # MIT 许可证
+├── LICENSE                       # Apache 2.0 许可证
 └── README.md
 ```
 
@@ -249,7 +281,19 @@ hexclaw-desktop/
 # 完整构建 (前端 + Tauri 打包)
 make build
 
-# 输出位置: src-tauri/target/release/bundle/
+# 输出位置:
+#   macOS: src-tauri/target/release/bundle/macos/HexClaw.app
+#   DMG:   src-tauri/target/release/bundle/dmg/HexClaw_*.dmg
+```
+
+### 指定目标平台构建
+
+```bash
+# macOS Intel
+npx @tauri-apps/cli build --target x86_64-apple-darwin
+
+# macOS Apple Silicon
+npx @tauri-apps/cli build --target aarch64-apple-darwin
 ```
 
 ### Sidecar 交叉编译
@@ -292,6 +336,12 @@ make test
 xattr -cr /Applications/HexClaw.app
 ```
 
+### 侧边栏显示 "Engine stopped" 但后端已启动
+
+1. 确认 hexclaw 进程在运行: `ps aux | grep hexclaw`
+2. 确认端口监听正常: `curl http://localhost:16060/health`
+3. 如果 curl 成功但前端仍显示 stopped，检查是否是旧版本应用（重新 `make build` 并安装最新版本）
+
 ### `make sidecar` 编译失败
 
 1. 确认 Go >= 1.23 已安装: `go version`
@@ -303,6 +353,12 @@ xattr -cr /Applications/HexClaw.app
 Sidecar 可能未编译或端口冲突。检查：
 1. 确认已执行 `make sidecar`
 2. 确认 `16060` 端口未被占用: `lsof -i :16060`
+
+### hexclaw 后端启动失败
+
+1. 查看错误日志: `~/.hexclaw/hexclaw.log`
+2. 直接运行 sidecar 查看输出: `./src-tauri/binaries/hexclaw-$(rustc -vV | grep host | awk '{print $2}') serve --desktop`
+3. 即使未配置 LLM API Key，hexclaw 也应该能正常启动（LLM 功能降级，基础 API 仍可用）
 
 ## 贡献指南
 
@@ -334,17 +390,6 @@ test: 测试相关
 chore: 构建/工具链
 ```
 
-## 相关项目
-
-| 项目 | 说明 | 仓库 |
-|------|------|------|
-| **Hexagon** | Go AI Agent 框架 (核心引擎) | [hexagon](https://github.com/everyday-items/hexagon) |
-| **ai-core** | AI 基础能力库 (LLM/Tool/Memory) | [ai-core](https://github.com/everyday-items/ai-core) |
-| **toolkit** | Go 通用工具库 | [toolkit](https://github.com/everyday-items/toolkit) |
-| **hexagon-ui** | Hexagon Dev UI 观测面板 (Vue 3) | [hexagon-ui](https://github.com/everyday-items/hexagon-ui) |
-| **hexclaw** | HexClaw Go 后端 (Sidecar) | [hexclaw](https://github.com/everyday-items/hexclaw) |
-| **hexclaw-ui** | HexClaw Web 前端 (Vue 3) | [hexclaw-ui](https://github.com/everyday-items/hexclaw-ui) |
-
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)

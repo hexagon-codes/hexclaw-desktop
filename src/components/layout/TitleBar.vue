@@ -1,59 +1,88 @@
 <script setup lang="ts">
-import { getCurrentWindow } from '@tauri-apps/api/window'
-import logoUrl from '@/assets/logo.png'
+import { usePlatform } from '@/composables/usePlatform'
+import { useAppStore } from '@/stores/app'
+import { PanelLeft } from 'lucide-vue-next'
 
-const appWindow = getCurrentWindow()
-
-function minimize() {
-  appWindow.minimize()
-}
-
-function toggleMaximize() {
-  appWindow.toggleMaximize()
-}
-
-function close() {
-  appWindow.close()
-}
+const { isMac } = usePlatform()
+const appStore = useAppStore()
 </script>
 
 <template>
   <div
     data-tauri-drag-region
-    class="h-[38px] flex items-center justify-between px-4 flex-shrink-0 select-none"
-    :style="{ background: 'var(--hc-bg-sidebar)' }"
+    class="hc-titlebar"
+    :class="{ 'hc-titlebar--mac': isMac }"
   >
-    <!-- macOS 留出红绿灯按钮空间 -->
-    <div class="flex items-center gap-1.5 pl-[18px]">
-      <img :src="logoUrl" alt="HexClaw" class="w-5 h-5" />
-      <span class="text-xs font-semibold tracking-wide" :style="{ color: 'var(--hc-text-secondary)' }">
-        HexClaw
-      </span>
-    </div>
+    <div class="hc-titlebar__left" />
 
-    <!-- 右侧窗口控制 (macOS 使用原生控制，这里做 fallback) -->
-    <div class="flex items-center gap-0.5 -mr-1">
-      <button
-        class="w-7 h-7 flex items-center justify-center rounded hover:bg-white/5 transition-colors"
-        :style="{ color: 'var(--hc-text-muted)' }"
-        @click="minimize"
-      >
-        <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
-      </button>
-      <button
-        class="w-7 h-7 flex items-center justify-center rounded hover:bg-white/5 transition-colors"
-        :style="{ color: 'var(--hc-text-muted)' }"
-        @click="toggleMaximize"
-      >
-        <svg width="8" height="8" viewBox="0 0 8 8"><rect x="0.5" y="0.5" width="7" height="7" rx="1" fill="none" stroke="currentColor"/></svg>
-      </button>
-      <button
-        class="w-7 h-7 flex items-center justify-center rounded hover:bg-red-500/80 transition-colors"
-        :style="{ color: 'var(--hc-text-muted)' }"
-        @click="close"
-      >
-        <svg width="8" height="8" viewBox="0 0 8 8"><line x1="1" y1="1" x2="7" y2="7" stroke="currentColor" stroke-width="1.2"/><line x1="7" y1="1" x2="1" y2="7" stroke="currentColor" stroke-width="1.2"/></svg>
+    <!-- Center: app title -->
+    <span class="hc-titlebar__title">HexClaw Desktop</span>
+
+    <!-- Right: sidebar toggle -->
+    <div class="hc-titlebar__right">
+      <button class="hc-titlebar__btn" @click="appStore.toggleSidebar">
+        <PanelLeft :size="16" />
       </button>
     </div>
   </div>
 </template>
+
+<style scoped>
+.hc-titlebar {
+  height: 38px;
+  flex-shrink: 0;
+  user-select: none;
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+}
+
+.hc-titlebar--mac {
+  padding-left: 78px;
+}
+
+/* ── Left spacer ── */
+.hc-titlebar__left {
+  width: 28px;
+}
+
+/* ── Center ── */
+.hc-titlebar__title {
+  flex: 1;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hc-text-secondary);
+}
+
+/* ── Right ── */
+.hc-titlebar__right {
+  display: flex;
+  align-items: center;
+}
+
+.hc-titlebar__btn {
+  padding: 5px 7px;
+  border-radius: var(--hc-radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+  -webkit-app-region: no-drag;
+}
+
+.hc-titlebar__btn:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+
+.hc-titlebar__btn:active {
+  background: var(--hc-bg-active);
+  transform: scale(0.95);
+}
+</style>

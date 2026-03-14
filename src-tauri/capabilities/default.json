@@ -2,11 +2,12 @@
   "$schema": "https://raw.githubusercontent.com/nicegui/tauri/refs/heads/main/crates/tauri-utils/schema.json",
   "identifier": "default",
   "description": "HexClaw Desktop 默认权限",
-  "windows": ["main", "quick-chat"],
+  "windows": ["main", "quick-chat", "about"],
   "permissions": [
     "core:default",
     "core:window:default",
     "core:window:allow-create",
+    "core:webview:allow-create-webview-window",
     "core:window:allow-close",
     "core:window:allow-set-focus",
     "core:window:allow-center",
@@ -29,6 +30,14 @@
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
     "updater:default",
-    "store:default"
+    "store:default",
+    "sql:default",
+    "sql:allow-load",
+    "sql:allow-execute",
+    "sql:allow-select",
+    "sql:allow-close",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen"
   ]
 }

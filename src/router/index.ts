@@ -5,7 +5,12 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      redirect: '/chat',
+      redirect: '/dashboard',
+    },
+    {
+      path: '/dashboard',
+      name: 'dashboard',
+      component: () => import('@/views/DashboardView.vue'),
     },
     {
       path: '/welcome',
@@ -64,9 +69,20 @@ const router = createRouter({
       component: () => import('@/views/CanvasView.vue'),
     },
     {
+      path: '/team',
+      name: 'team',
+      component: () => import('@/views/TeamView.vue'),
+    },
+    {
       path: '/quick-chat',
       name: 'quick-chat',
       component: () => import('@/views/QuickChatView.vue'),
+      meta: { layout: 'blank' },
+    },
+    {
+      path: '/about',
+      name: 'about',
+      component: () => import('@/views/AboutView.vue'),
       meta: { layout: 'blank' },
     },
   ],

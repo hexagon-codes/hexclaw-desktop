@@ -7,14 +7,14 @@
 
 // ─── 领域模型 ───────────────────────────────────────
 
-export type { ChatMessage, ToolCall, ChatSession, ChatRequest } from './chat'
-export type { AgentRole, AgentRoleInput } from './agent'
+export type { ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ExecMode } from './chat'
+export type { AgentRole, AgentConfig } from './agent'
 export type { LogEntry, LogQuery, LogStats } from './log'
-export type { MemoryEntry } from './memory'
+export type { MemoryData } from './memory'
 export type { McpServer, McpTool } from './mcp'
 export type { Skill } from './skill'
 export type { CronJob, CronJobInput } from './task'
-export type { KnowledgeDoc, KnowledgeStats } from './knowledge'
+export type { KnowledgeDoc, KnowledgeSearchResult } from './knowledge'
 export type {
   CanvasNode,
   CanvasEdge,
@@ -22,7 +22,22 @@ export type {
   WorkflowRunStatus,
   WorkflowRun,
 } from './canvas'
-export type { AppConfig, LLMConfig, SecurityConfig, GeneralConfig, NotificationConfig, MCPConfig } from './settings'
+export type {
+  AppConfig,
+  LLMConfig,
+  SecurityConfig,
+  GeneralConfig,
+  NotificationConfig,
+  MCPConfig,
+  ProviderConfig,
+  ProviderType,
+  ProviderPreset,
+  ModelOption,
+  ModelCapability,
+  ChatParams,
+  BackendLLMProvider,
+  BackendLLMConfig,
+} from './settings'
 export type { SystemStats, PlatformInfo } from './system'
 
 // ─── UI 类型 ─────────────────────────────────────────

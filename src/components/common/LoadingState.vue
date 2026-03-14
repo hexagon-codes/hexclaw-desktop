@@ -5,25 +5,33 @@ defineProps<{
 </script>
 
 <template>
-  <div class="flex flex-col items-center justify-center py-12">
-    <div class="loading-spinner mb-3" />
-    <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ text || '加载中...' }}</span>
+  <div class="hc-loading">
+    <div class="hc-loading__spinner" />
+    <span class="hc-loading__text">{{ text || '...' }}</span>
   </div>
 </template>
 
 <style scoped>
-.loading-spinner {
-  width: 24px;
-  height: 24px;
+.hc-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  gap: 12px;
+}
+
+.hc-loading__spinner {
+  width: 22px;
+  height: 22px;
   border: 2px solid var(--hc-border);
   border-top-color: var(--hc-accent);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: hc-spin 0.7s linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.hc-loading__text {
+  font-size: 12px;
+  color: var(--hc-text-muted);
 }
 </style>

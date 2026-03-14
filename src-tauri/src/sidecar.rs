@@ -1,7 +1,7 @@
 // hexclaw sidecar 进程管理
 //
 // 负责 hexclaw serve 进程的完整生命周期：
-//   - 应用启动时自动启动 hexclaw serve --desktop --port 16060
+//   - 应用启动时自动启动 hexclaw serve --desktop (默认端口 16060)
 //   - 周期性健康检查 (GET /health)
 //   - 应用退出时优雅关闭进程
 //
@@ -117,7 +117,7 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 /// 启动子进程并记录 PID
 fn spawn_child(path: &std::path::Path) -> Result<(), String> {
     let child = Command::new(path)
-        .args(["serve", "--desktop", "--port", &HEXCLAW_PORT.to_string()])
+        .args(["serve", "--desktop"])
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败: {}", e))?;
 

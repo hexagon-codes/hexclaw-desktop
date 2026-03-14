@@ -6,10 +6,10 @@ const props = defineProps<{
 }>()
 
 const levelColors: Record<string, string> = {
-  debug: '#8b8b8b',
-  info: '#3b82f6',
-  warn: '#eab308',
-  error: '#ef4444',
+  debug: 'var(--hc-text-muted)',
+  info: 'var(--hc-accent)',
+  warn: 'var(--hc-warning)',
+  error: 'var(--hc-error)',
 }
 
 function formatTime(ts: string): string {
@@ -27,28 +27,75 @@ function formatTime(ts: string): string {
 </script>
 
 <template>
-  <div class="flex items-start gap-3 px-6 py-1.5 hover:bg-white/[0.02] border-b border-white/[0.03] font-mono text-xs">
-    <span class="text-[10px] tabular-nums shrink-0 pt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
-      {{ formatTime(entry.timestamp) }}
-    </span>
-    <span
-      class="w-11 text-center text-[10px] font-bold uppercase shrink-0 pt-0.5"
-      :style="{ color: levelColors[entry.level] || 'var(--hc-text-secondary)' }"
-    >
+  <div class="hc-log-entry">
+    <span class="hc-log-entry__time">{{ formatTime(entry.timestamp) }}</span>
+    <span class="hc-log-entry__level" :style="{ color: levelColors[entry.level] || 'var(--hc-text-secondary)' }">
       {{ entry.level }}
     </span>
-    <span class="text-[10px] shrink-0 pt-0.5 w-16 truncate" :style="{ color: 'var(--hc-text-muted)' }">
-      {{ entry.source }}
-    </span>
-    <span class="flex-1 break-all" :style="{ color: 'var(--hc-text-primary)' }">
-      {{ entry.message }}
-    </span>
-    <span
-      v-if="entry.trace_id"
-      class="text-[9px] shrink-0 pt-0.5 tabular-nums"
-      :style="{ color: 'var(--hc-text-muted)' }"
-    >
-      {{ entry.trace_id.slice(0, 8) }}
-    </span>
+    <span class="hc-log-entry__source">{{ entry.source }}</span>
+    <span class="hc-log-entry__msg">{{ entry.message }}</span>
+    <span v-if="entry.trace_id" class="hc-log-entry__trace">{{ entry.trace_id.slice(0, 8) }}</span>
   </div>
 </template>
+
+<style scoped>
+.hc-log-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 4px 20px;
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  border-bottom: 1px solid var(--hc-border-subtle);
+  transition: background 0.1s;
+}
+
+.hc-log-entry:hover {
+  background: var(--hc-bg-hover);
+}
+
+.hc-log-entry__time {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--hc-text-muted);
+  flex-shrink: 0;
+  padding-top: 1px;
+}
+
+.hc-log-entry__level {
+  width: 44px;
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+
+.hc-log-entry__source {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  flex-shrink: 0;
+  width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-top: 1px;
+}
+
+.hc-log-entry__msg {
+  flex: 1;
+  color: var(--hc-text-primary);
+  word-break: break-all;
+}
+
+.hc-log-entry__trace {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--hc-text-muted);
+  flex-shrink: 0;
+  padding-top: 2px;
+}
+</style>

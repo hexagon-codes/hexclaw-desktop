@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted } from 'vue'
 import TitleBar from './TitleBar.vue'
 import Sidebar from './Sidebar.vue'
+import CommandPalette from '@/components/common/CommandPalette.vue'
 import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
@@ -16,13 +17,37 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-screen flex flex-col overflow-hidden" :style="{ background: 'var(--hc-bg-main)' }">
+  <div class="hc-app">
     <TitleBar />
-    <div class="flex-1 flex overflow-hidden">
+    <div class="hc-app__body">
       <Sidebar />
-      <main class="flex-1 overflow-hidden">
+      <main class="hc-app__content">
         <slot />
       </main>
     </div>
+    <CommandPalette />
   </div>
 </template>
+
+<style scoped>
+.hc-app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--hc-bg-main);
+}
+
+.hc-app__body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.hc-app__content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+  min-width: 0;
+}
+</style>

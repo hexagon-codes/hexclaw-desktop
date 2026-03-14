@@ -2,7 +2,7 @@
 import { ref, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Send, StopCircle, X } from 'lucide-vue-next'
-import { sendChatStream } from '@/api/chat'
+import { sendChat } from '@/api/chat'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 
 interface Message {
@@ -30,30 +30,13 @@ async function handleSend() {
   })
 
   streaming.value = true
-  streamingContent.value = ''
 
   try {
-    const stream = await sendChatStream({ message: text })
-    const reader = stream.getReader()
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      try {
-        const parsed = JSON.parse(value)
-        if (parsed.content) {
-          streamingContent.value += parsed.content
-        }
-      } catch {
-        streamingContent.value += value
-      }
-    }
-
+    const resp = await sendChat({ message: text })
     messages.value.push({
       id: Date.now().toString(),
       role: 'assistant',
-      content: streamingContent.value,
+      content: typeof resp.reply === 'string' ? resp.reply : '收到回复',
     })
   } catch (e) {
     console.error('发送失败:', e)
@@ -64,7 +47,6 @@ async function handleSend() {
     })
   } finally {
     streaming.value = false
-    streamingContent.value = ''
   }
 }
 

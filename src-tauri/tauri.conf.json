@@ -18,16 +18,13 @@
         "height": 820,
         "minWidth": 900,
         "minHeight": 600,
-        "decorations": false,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "center": true,
         "visible": true
       }
     ],
-    "trayIcon": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true,
-      "tooltip": "HexClaw"
-    },
     "security": {
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:16060 ws://localhost:16060; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
     }

@@ -13,21 +13,59 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="flex flex-col items-center justify-center py-12 text-center">
-    <AlertTriangle :size="40" class="mb-3" :style="{ color: 'var(--hc-error)' }" />
-    <h3 class="text-sm font-medium mb-1" :style="{ color: 'var(--hc-text-primary)' }">
-      {{ title || '出错了' }}
-    </h3>
-    <p class="text-xs mb-4 max-w-xs" :style="{ color: 'var(--hc-text-secondary)' }">
-      {{ message }}
-    </p>
+  <div class="hc-error-state">
+    <div class="hc-error-state__icon-wrap">
+      <AlertTriangle :size="24" class="hc-error-state__icon" />
+    </div>
+    <h3 class="hc-error-state__title">{{ title || '出错了' }}</h3>
+    <p class="hc-error-state__msg">{{ message }}</p>
     <button
       v-if="retryable !== false"
-      class="px-3 py-1.5 rounded-lg text-xs text-white"
-      :style="{ background: 'var(--hc-accent)' }"
+      class="hc-btn hc-btn-primary"
       @click="emit('retry')"
     >
       重试
     </button>
   </div>
 </template>
+
+<style scoped>
+.hc-error-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  text-align: center;
+  animation: hc-fade-in 0.4s ease-out;
+}
+
+.hc-error-state__icon-wrap {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: rgba(245, 101, 101, 0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 14px;
+}
+
+.hc-error-state__icon {
+  color: var(--hc-error);
+}
+
+.hc-error-state__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
+  margin: 0 0 4px;
+}
+
+.hc-error-state__msg {
+  font-size: 13px;
+  color: var(--hc-text-secondary);
+  max-width: 300px;
+  margin: 0 0 16px;
+}
+</style>
