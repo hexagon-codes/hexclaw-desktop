@@ -27,5 +27,8 @@ Casks/
 # Test
 coverage/
 
+# Cache
+.eslintcache
+
 # Claude Code
 .claude/

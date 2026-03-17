@@ -1,3 +1,5 @@
+[English](guide.en.md) | **中文**
+
 # HexClaw Desktop 使用指南
 
 ## 目录
@@ -35,13 +37,13 @@
 **macOS (Homebrew)**
 
 ```bash
-brew tap everyday-items/tap
+brew tap hexagon-codes/tap
 brew install --cask hexclaw
 ```
 
 **macOS / Windows / Linux (手动下载)**
 
-1. 前往 [GitHub Releases](https://github.com/everyday-items/hexclaw-desktop/releases) 页面
+1. 前往 [GitHub Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) 页面
 2. 下载对应平台安装包：
    - macOS: `.dmg` 文件，双击打开后拖入 Applications
    - Windows: `.msi` 或 `.exe` 安装程序
@@ -441,7 +443,7 @@ curl http://localhost:16060/health
 rm -rf ~/.hexclaw
 
 # 删除应用配置 (Tauri Store)
-rm -rf ~/Library/Application\ Support/com.everyday-items.hexclaw
+rm -rf ~/Library/Application\ Support/com.hexagon-codes.hexclaw
 ```
 
 > **警告**: 此操作会清除所有对话记录、Agent 配置和记忆数据，不可恢复。
@@ -572,6 +574,8 @@ HexClaw Desktop 和 OpenClaw 面向不同场景，可以互补使用：
 
 ## 更多帮助
 
-- **GitHub Issues**: [提交 Bug 或功能建议](https://github.com/everyday-items/hexclaw-desktop/issues)
-- **GitHub Discussions**: [社区讨论](https://github.com/everyday-items/hexclaw-desktop/discussions)
+- **GitHub Issues**: [提交 Bug 或功能建议](https://github.com/hexagon-codes/hexclaw-desktop/issues)
+- **GitHub Discussions**: [社区讨论](https://github.com/hexagon-codes/hexclaw-desktop/discussions)
+- **河蟹 AI**: ai@hexclaw.net
+- **河蟹支持**: support@hexclaw.net
 - **关于页面**: 系统菜单 → HexClaw → 关于 HexClaw
