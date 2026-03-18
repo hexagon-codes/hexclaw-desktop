@@ -25,6 +25,8 @@ jobs:
           ref: ${{ inputs.ref }}
 
       - uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -105,6 +107,8 @@ jobs:
           cd hexclaw && go build -ldflags="-s -w" -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
 
       - uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       - uses: actions/setup-node@v4
         with:
