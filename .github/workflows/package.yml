@@ -1,47 +1,28 @@
-name: Release
+name: Package
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to package (branch, tag, or commit SHA)
+        required: false
+        default: main
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: package-${{ inputs.ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  validate:
-    name: Validate Release Metadata
-    runs-on: ubuntu-latest
-    outputs:
-      prerelease: ${{ steps.meta.outputs.prerelease }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Validate version and updater config
-        run: node ./scripts/ci/verify-release.mjs "${GITHUB_REF_NAME}"
-
-      - name: Detect prerelease tag
-        id: meta
-        run: |
-          if [[ "${GITHUB_REF_NAME}" == *-* ]]; then
-            echo "prerelease=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "prerelease=false" >> "$GITHUB_OUTPUT"
-          fi
-
   checks:
     name: Lint, Type Check & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: pnpm/action-setup@v4
 
@@ -62,8 +43,8 @@ jobs:
         run: pnpm test:unit
 
   build:
-    name: Build (${{ matrix.target }})
-    needs: [validate, checks]
+    name: Package (${{ matrix.target }})
+    needs: checks
     defaults:
       run:
         shell: bash
@@ -99,8 +80,9 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
-      # --- Go sidecar build (checkout first so Go can cache modules) ---
       - name: Checkout hexclaw backend
         uses: actions/checkout@v4
         with:
@@ -122,7 +104,6 @@ jobs:
           mkdir -p src-tauri/binaries
           cd hexclaw && go build -ldflags="-s -w" -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
 
-      # --- Frontend & Tauri build ---
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -147,61 +128,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Validate release secrets
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          missing=()
-          for var in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
-            if [ -z "${!var}" ]; then
-              missing+=("$var")
-            fi
-          done
-
-          if [ "${{ matrix.platform }}" = "macos-latest" ]; then
-            for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-              if [ -z "${!var}" ]; then
-                missing+=("$var")
-              fi
-            done
-          fi
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf '::error::Missing required release secrets: %s\n' "${missing[*]}"
-            exit 1
-          fi
-
-      - name: Build Tauri app
+      - name: Build Tauri packages
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS code signing
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Tauri updater signing
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'HexClaw Desktop ${{ github.ref_name }}'
-          releaseBody: |
-            See the generated release notes below for changes in this version.
-          generateReleaseNotes: true
-          releaseDraft: false
-          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           args: ${{ matrix.tauri_args }}
           retryAttempts: 2
-          uploadUpdaterJson: true
+          uploadUpdaterJson: false
+          uploadUpdaterSignatures: false
           uploadWorkflowArtifacts: true
           workflowArtifactNamePattern: 'hexclaw-[platform]-[arch]-[bundle]'
