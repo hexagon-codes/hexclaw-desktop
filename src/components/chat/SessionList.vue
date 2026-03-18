@@ -1,13 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, nextTick } from 'vue'
 import { MessageSquare, Trash2, Copy, Pencil } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
+import { dbUpdateSessionTitle } from '@/db/chat'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 
 const chatStore = useChatStore()
 const ctxMenu = ref<InstanceType<typeof ContextMenu>>()
 const ctxSessionId = ref<string | null>(null)
+
+// Inline rename state
+const renamingId = ref<string | null>(null)
+const renameValue = ref('')
+const renameInputRef = ref<HTMLInputElement>()
 
 const sessionMenuItems: ContextMenuItem[] = [
   { id: 'rename', label: '重命名', icon: Pencil },
@@ -26,11 +32,50 @@ function formatDate(ts: string): string {
 }
 
 function selectSession(sessionId: string) {
+  if (renamingId.value) return
   chatStore.selectSession(sessionId)
 }
 
 async function deleteSession(sessionId: string) {
   await chatStore.deleteSession(sessionId)
+}
+
+function startRename(sessionId: string) {
+  const session = chatStore.sessions.find(s => s.id === sessionId)
+  if (!session) return
+  renamingId.value = sessionId
+  renameValue.value = session.title || '新对话'
+  nextTick(() => {
+    renameInputRef.value?.focus()
+    renameInputRef.value?.select()
+  })
+}
+
+async function commitRename() {
+  const sid = renamingId.value
+  if (!sid) return
+  const newTitle = renameValue.value.trim() || '新对话'
+  renamingId.value = null
+  try {
+    await dbUpdateSessionTitle(sid, newTitle)
+    const session = chatStore.sessions.find(s => s.id === sid)
+    if (session) session.title = newTitle
+  } catch (e) {
+    console.error('重命名失败:', e)
+  }
+}
+
+function cancelRename() {
+  renamingId.value = null
+}
+
+function handleRenameKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    commitRename()
+  } else if (e.key === 'Escape') {
+    cancelRename()
+  }
 }
 
 function handleContextMenu(e: MouseEvent, sessionId: string) {
@@ -44,6 +89,9 @@ async function handleCtxAction(action: string) {
   switch (action) {
     case 'delete':
       await deleteSession(sid)
+      break
+    case 'rename':
+      startRename(sid)
       break
     case 'copy_title': {
       const session = chatStore.sessions.find(s => s.id === sid)
@@ -62,12 +110,22 @@ async function handleCtxAction(action: string) {
       class="hc-sessions__item"
       :class="{ 'hc-sessions__item--active': chatStore.currentSessionId === session.id }"
       @click="selectSession(session.id)"
+      @dblclick.stop="startRename(session.id)"
       @contextmenu="handleContextMenu($event, session.id)"
     >
       <MessageSquare :size="14" class="hc-sessions__icon" />
       <div class="hc-sessions__content">
-        <div class="hc-sessions__title">{{ session.title || '新对话' }}</div>
-        <div class="hc-sessions__time">{{ formatDate(session.updated_at) }}</div>
+        <input
+          v-if="renamingId === session.id"
+          ref="renameInputRef"
+          v-model="renameValue"
+          class="hc-sessions__rename-input"
+          @blur="commitRename"
+          @keydown="handleRenameKeydown"
+          @click.stop
+        />
+        <div v-else class="hc-sessions__title">{{ session.title || '新对话' }}</div>
+        <div v-if="renamingId !== session.id" class="hc-sessions__time">{{ formatDate(session.updated_at) }}</div>
       </div>
       <button
         class="hc-sessions__delete"
@@ -160,6 +218,17 @@ async function handleCtxAction(action: string) {
 
 .hc-sessions__delete:hover {
   color: var(--hc-error);
+}
+
+.hc-sessions__rename-input {
+  width: 100%;
+  font-size: 13px;
+  color: var(--hc-text-primary);
+  background: var(--hc-bg-input, var(--hc-bg-hover));
+  border: 1px solid var(--hc-accent);
+  border-radius: 4px;
+  padding: 1px 4px;
+  outline: none;
 }
 
 .hc-sessions__empty {

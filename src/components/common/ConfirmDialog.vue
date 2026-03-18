@@ -63,8 +63,11 @@ const emit = defineEmits<{
 <style scoped>
 .hc-dialog-overlay {
   position: fixed;
-  inset: 0;
-  z-index: 9998;
+  top: var(--hc-titlebar-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--hc-z-modal);
   display: flex;
   align-items: center;
   justify-content: center;

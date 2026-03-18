@@ -124,6 +124,7 @@ pub fn run() {
             commands::proxy_api_request,
             commands::stream_chat,
             commands::backend_chat,
+            commands::restart_sidecar,
         ])
         .on_window_event(|_window, event| {
             // 所有窗口销毁时停止 sidecar 进程

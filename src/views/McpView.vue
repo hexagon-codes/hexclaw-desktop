@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, Wrench, RefreshCw } from 'lucide-vue-next'
-import { getMcpServers, getMcpTools } from '@/api/mcp'
+import { Server, Wrench, RefreshCw, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X } from 'lucide-vue-next'
+import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer } from '@/api/mcp'
 import type { McpTool } from '@/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -11,11 +11,19 @@ import LoadingState from '@/components/common/LoadingState.vue'
 const { t } = useI18n()
 
 const servers = ref<string[]>([])
+const serverStatuses = ref<Record<string, 'connected' | 'disconnected' | 'error'>>({})
 const tools = ref<McpTool[]>([])
 const loading = ref(true)
 const errorMsg = ref('')
 const activeTab = ref<'servers' | 'tools'>('servers')
 const expandedTool = ref<string | null>(null)
+const toolSearchQuery = ref('')
+
+// ─── Tool testing state ──────────────────────────────
+const testingTool = ref<string | null>(null)
+const testParams = ref<Record<string, string>>({})
+const testRunningTools = ref<Set<string>>(new Set())
+const testResult = ref<{ output?: unknown; error?: string } | null>(null)
 
 onMounted(async () => {
   await loadAll()
@@ -28,6 +36,16 @@ async function loadAll() {
     const [srvRes, toolRes] = await Promise.all([getMcpServers(), getMcpTools()])
     servers.value = srvRes.servers || []
     tools.value = toolRes.tools || []
+    // Try to load server statuses
+    try {
+      const statusRes = await getMcpServerStatus()
+      serverStatuses.value = statusRes.statuses || {}
+    } catch {
+      // If status API not available, mark all as connected (optimistic)
+      const statuses: Record<string, 'connected'> = {}
+      for (const s of servers.value) statuses[s] = 'connected'
+      serverStatuses.value = statuses
+    }
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : '加载 MCP 数据失败'
     console.error('加载 MCP 数据失败:', e)
@@ -38,6 +56,130 @@ async function loadAll() {
 
 function toggleTool(name: string) {
   expandedTool.value = expandedTool.value === name ? null : name
+  // Close test form when collapsing
+  if (expandedTool.value !== name && testingTool.value === name) {
+    testingTool.value = null
+    testResult.value = null
+  }
+}
+
+// ─── Tool search ─────────────────────────────────────
+const filteredTools = computed(() => {
+  const q = toolSearchQuery.value.toLowerCase().trim()
+  if (!q) return tools.value
+  return tools.value.filter(
+    (tool) =>
+      tool.name.toLowerCase().includes(q) ||
+      (tool.description && tool.description.toLowerCase().includes(q)),
+  )
+})
+
+// ─── Tool testing ────────────────────────────────────
+function openTestForm(toolName: string) {
+  if (testingTool.value === toolName) {
+    testingTool.value = null
+    testResult.value = null
+    return
+  }
+  testingTool.value = toolName
+  testResult.value = null
+  // Initialize params from schema
+  const tool = tools.value.find((t) => t.name === toolName)
+  const params: Record<string, string> = {}
+  if (tool?.input_schema) {
+    const props = (tool.input_schema as Record<string, unknown>).properties as
+      | Record<string, unknown>
+      | undefined
+    if (props) {
+      for (const key of Object.keys(props)) {
+        params[key] = ''
+      }
+    }
+  }
+  testParams.value = params
+}
+
+function isTestRunning(toolName: string): boolean {
+  return testRunningTools.value.has(toolName)
+}
+
+async function executeTest(toolName: string) {
+  testRunningTools.value = new Set([...testRunningTools.value, toolName])
+  testResult.value = null
+  try {
+    // Parse params - try to parse JSON values
+    const args: Record<string, unknown> = {}
+    for (const [key, val] of Object.entries(testParams.value)) {
+      if (!val.trim()) continue
+      try {
+        args[key] = JSON.parse(val)
+      } catch {
+        args[key] = val
+      }
+    }
+    const res = await callMcpTool(toolName, args)
+    testResult.value = { output: res.result, error: res.error }
+  } catch (e: unknown) {
+    testResult.value = { error: e instanceof Error ? e.message : 'Execution failed' }
+  } finally {
+    const next = new Set(testRunningTools.value)
+    next.delete(toolName)
+    testRunningTools.value = next
+  }
+}
+
+function getSchemaProperties(tool: McpTool): Array<{ key: string; type: string; description: string; required: boolean }> {
+  if (!tool.input_schema) return []
+  const schema = tool.input_schema as Record<string, unknown>
+  const props = schema.properties as Record<string, Record<string, unknown>> | undefined
+  const required = (schema.required as string[]) || []
+  if (!props) return []
+  return Object.entries(props).map(([key, val]) => ({
+    key,
+    type: (val.type as string) || 'string',
+    description: (val.description as string) || '',
+    required: required.includes(key),
+  }))
+}
+
+function getServerStatus(name: string): 'connected' | 'disconnected' | 'error' {
+  return serverStatuses.value[name] || 'disconnected'
+}
+
+// ─── Server management ──────────────────────────────
+const showAddServer = ref(false)
+const newServerName = ref('')
+const newServerCommand = ref('')
+const newServerArgs = ref('')
+const addingServer = ref(false)
+
+async function handleAddServer() {
+  if (!newServerName.value.trim() || !newServerCommand.value.trim()) return
+  addingServer.value = true
+  try {
+    const args = newServerArgs.value.trim() ? newServerArgs.value.trim().split(/\s+/) : undefined
+    await addMcpServer(newServerName.value.trim(), newServerCommand.value.trim(), args)
+    showAddServer.value = false
+    newServerName.value = ''
+    newServerCommand.value = ''
+    newServerArgs.value = ''
+    await loadAll()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '添加服务器失败'
+  } finally {
+    addingServer.value = false
+  }
+}
+
+async function handleRemoveServer(name: string) {
+  if (!confirm(t('mcpManage.removeConfirm'))) return
+  try {
+    await removeMcpServer(name)
+    servers.value = servers.value.filter(s => s !== name)
+    delete serverStatuses.value[name]
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '移除服务器失败'
+  }
 }
 </script>
 
@@ -51,7 +193,15 @@ function toggleTool(name: string) {
           @click="loadAll"
         >
           <RefreshCw :size="14" />
-          {{ t('common.refresh') || '刷新' }}
+          {{ t('common.refresh') }}
+        </button>
+        <button
+          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
+          :style="{ background: 'var(--hc-accent)' }"
+          @click="showAddServer = true"
+        >
+          <Plus :size="14" />
+          {{ t('mcpManage.addServer') }}
         </button>
       </template>
     </PageHeader>
@@ -109,16 +259,63 @@ function toggleTool(name: string) {
             class="flex items-center gap-3 rounded-xl border p-4"
             :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
           >
+            <!-- Status dot -->
+            <div
+              class="w-2.5 h-2.5 rounded-full flex-shrink-0"
+              :style="{
+                background: getServerStatus(name) === 'connected' ? '#10b981' : getServerStatus(name) === 'error' ? '#ef4444' : '#6b7280',
+              }"
+              :title="getServerStatus(name) === 'connected' ? t('mcp.serverConnected') : t('mcp.serverDisconnected')"
+            />
             <Server :size="16" :style="{ color: 'var(--hc-accent)' }" />
-            <span class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ name }}</span>
+            <span class="text-sm font-medium flex-1" :style="{ color: 'var(--hc-text-primary)' }">{{ name }}</span>
+            <button
+              class="p-1.5 rounded-md hover:bg-white/5 transition-colors flex-shrink-0"
+              :style="{ color: 'var(--hc-text-muted)' }"
+              :title="t('mcpManage.removeServer')"
+              @click="handleRemoveServer(name)"
+            >
+              <Trash2 :size="14" />
+            </button>
+            <span
+              class="text-xs px-2 py-0.5 rounded-full"
+              :style="{
+                background: getServerStatus(name) === 'connected' ? '#10b98120' : '#6b728020',
+                color: getServerStatus(name) === 'connected' ? '#10b981' : '#6b7280',
+              }"
+            >
+              {{ getServerStatus(name) === 'connected' ? t('mcp.serverConnected') : t('mcp.serverDisconnected') }}
+            </span>
           </div>
         </div>
       </template>
 
       <!-- 工具列表 -->
       <template v-else>
+        <!-- Tool search bar -->
+        <div class="max-w-2xl mb-4">
+          <div class="relative">
+            <Search
+              :size="16"
+              class="absolute left-3 top-1/2 -translate-y-1/2"
+              :style="{ color: 'var(--hc-text-muted)' }"
+            />
+            <input
+              v-model="toolSearchQuery"
+              type="text"
+              :placeholder="t('mcp.searchTools')"
+              class="w-full pl-9 pr-3 py-2 rounded-lg border text-sm outline-none transition-colors"
+              :style="{
+                background: 'var(--hc-bg-primary)',
+                borderColor: 'var(--hc-border)',
+                color: 'var(--hc-text-primary)',
+              }"
+            />
+          </div>
+        </div>
+
         <EmptyState
-          v-if="tools.length === 0"
+          v-if="filteredTools.length === 0"
           :icon="Wrench"
           :title="t('common.noData')"
           :description="t('mcp.noTools')"
@@ -126,7 +323,7 @@ function toggleTool(name: string) {
 
         <div v-else class="space-y-3 max-w-2xl">
           <div
-            v-for="tool in tools"
+            v-for="tool in filteredTools"
             :key="tool.name"
             class="rounded-xl border overflow-hidden"
             :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
@@ -142,10 +339,24 @@ function toggleTool(name: string) {
                   {{ tool.description }}
                 </p>
               </div>
+              <!-- Test button -->
+              <button
+                class="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors hover:bg-white/10"
+                :style="{
+                  color: testingTool === tool.name ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
+                  background: testingTool === tool.name ? 'var(--hc-accent-subtle)' : 'transparent',
+                }"
+                @click.stop="openTestForm(tool.name)"
+              >
+                <Play :size="11" />
+                {{ t('mcp.testTool') }}
+              </button>
               <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
                 {{ expandedTool === tool.name ? '▲' : '▼' }}
               </span>
             </div>
+
+            <!-- Expanded schema view -->
             <div
               v-if="expandedTool === tool.name && tool.input_schema"
               class="px-4 pb-4 border-t"
@@ -153,9 +364,113 @@ function toggleTool(name: string) {
             >
               <pre class="text-xs mt-3 p-3 rounded-lg overflow-x-auto" :style="{ background: 'var(--hc-bg-main)', color: 'var(--hc-text-secondary)' }">{{ JSON.stringify(tool.input_schema, null, 2) }}</pre>
             </div>
+
+            <!-- Test form -->
+            <div
+              v-if="testingTool === tool.name"
+              class="px-4 pb-4 border-t"
+              :style="{ borderColor: 'var(--hc-border)' }"
+            >
+              <div class="mt-3 space-y-2">
+                <div class="text-xs font-medium" :style="{ color: 'var(--hc-text-primary)' }">
+                  {{ t('mcp.testToolTitle') }}: {{ tool.name }}
+                </div>
+
+                <!-- Parameter inputs from schema -->
+                <div
+                  v-for="prop in getSchemaProperties(tool)"
+                  :key="prop.key"
+                  class="flex flex-col gap-1"
+                >
+                  <label class="text-[10px] font-medium flex items-center gap-1" :style="{ color: 'var(--hc-text-muted)' }">
+                    {{ prop.key }}
+                    <span class="text-[9px] px-1 rounded" :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }">{{ prop.type }}</span>
+                    <span v-if="prop.required" class="text-red-400">*</span>
+                  </label>
+                  <input
+                    v-model="testParams[prop.key]"
+                    type="text"
+                    class="w-full px-2.5 py-1.5 rounded-lg text-xs border outline-none transition-colors"
+                    :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                    :placeholder="prop.description || prop.key"
+                  />
+                </div>
+
+                <!-- If no schema properties, show generic key-value -->
+                <div v-if="getSchemaProperties(tool).length === 0" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+                  {{ t('mcp.noTools') }}
+                </div>
+
+                <!-- Execute button -->
+                <button
+                  class="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors"
+                  :style="{ background: isTestRunning(tool.name) ? 'var(--hc-text-muted)' : 'var(--hc-accent)' }"
+                  :disabled="isTestRunning(tool.name)"
+                  @click="executeTest(tool.name)"
+                >
+                  <Loader2 v-if="isTestRunning(tool.name)" :size="12" class="animate-spin" />
+                  <Play v-else :size="12" />
+                  {{ isTestRunning(tool.name) ? t('mcp.testing') : t('mcp.testExecute') }}
+                </button>
+
+                <!-- Test result -->
+                <div v-if="testResult" class="mt-2">
+                  <div v-if="testResult.error" class="rounded-lg p-3" style="background: #ef444410;">
+                    <div class="flex items-center gap-1.5 mb-1">
+                      <CircleX :size="12" style="color: #ef4444;" />
+                      <span class="text-xs font-medium" style="color: #ef4444;">{{ t('mcp.testError') }}</span>
+                    </div>
+                    <pre class="text-xs whitespace-pre-wrap" style="color: #ef4444;">{{ testResult.error }}</pre>
+                  </div>
+                  <div v-if="testResult.output !== undefined" class="rounded-lg p-3" :style="{ background: 'var(--hc-bg-main)' }">
+                    <div class="flex items-center gap-1.5 mb-1">
+                      <CircleCheck :size="12" style="color: #10b981;" />
+                      <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ t('mcp.testResult') }}</span>
+                    </div>
+                    <pre class="text-xs whitespace-pre-wrap overflow-x-auto" :style="{ color: 'var(--hc-text-secondary)' }">{{ typeof testResult.output === 'string' ? testResult.output : JSON.stringify(testResult.output, null, 2) }}</pre>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </template>
     </div>
+
+    <!-- 添加 MCP 服务器对话框 -->
+    <Teleport to="body">
+      <div v-if="showAddServer" class="fixed inset-0 z-50 flex items-center justify-center" style="background: rgba(0,0,0,0.45); backdrop-filter: blur(4px);" @click.self="showAddServer = false">
+        <div class="w-full max-w-md rounded-xl border shadow-lg overflow-hidden" :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }">
+          <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+            <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('mcpManage.addServerTitle') }}</h2>
+            <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="showAddServer = false">
+              <X :size="17" />
+            </button>
+          </div>
+          <div class="p-5 flex flex-col gap-3.5">
+            <div class="flex flex-col gap-1.5">
+              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverName') }}</label>
+              <input v-model="newServerName" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverNamePlaceholder')" />
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverCommand') }}</label>
+              <input v-model="newServerCommand" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverCommandPlaceholder')" />
+            </div>
+            <div class="flex flex-col gap-1.5">
+              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverArgs') }}</label>
+              <input v-model="newServerArgs" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverArgsPlaceholder')" />
+            </div>
+          </div>
+          <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
+            <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="showAddServer = false">{{ t('common.cancel') }}</button>
+            <button class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)', opacity: (!newServerName.trim() || !newServerCommand.trim()) ? 0.4 : 1 }" :disabled="!newServerName.trim() || !newServerCommand.trim() || addingServer" @click="handleAddServer">
+              <Loader2 v-if="addingServer" :size="14" class="animate-spin" />
+              <Plus v-else :size="14" />
+              {{ t('common.create') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>

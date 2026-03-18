@@ -1,11 +1,19 @@
 import { apiGet, apiPost, apiDelete } from './client'
 import { DESKTOP_USER_ID } from '@/constants'
 
+/** Webhook 类型 */
+export type WebhookType = 'wecom' | 'feishu' | 'dingtalk' | 'custom'
+
+/** 触发事件类型 */
+export type WebhookEvent = 'task_complete' | 'agent_complete' | 'error'
+
 /** Webhook 定义 */
 export interface Webhook {
   id: string
   name: string
-  type: 'generic' | 'github' | 'gitlab'
+  type: WebhookType
+  url: string
+  events: WebhookEvent[]
   secret: string
   prompt: string
   user_id: string
@@ -19,12 +27,14 @@ export function getWebhooks() {
 }
 
 /** 注册 Webhook */
-export function registerWebhook(name: string, prompt: string, type?: string, secret?: string) {
+export function createWebhook(data: { name: string; type: WebhookType; url: string; events: WebhookEvent[] }) {
   return apiPost<{ id: string; name: string; url: string }>('/api/v1/webhooks', {
-    name,
-    prompt,
-    type: type ?? 'generic',
-    secret: secret ?? '',
+    name: data.name,
+    type: data.type,
+    url: data.url,
+    events: data.events,
+    prompt: '',
+    secret: '',
     user_id: DESKTOP_USER_ID,
   })
 }
@@ -32,4 +42,15 @@ export function registerWebhook(name: string, prompt: string, type?: string, sec
 /** 删除 Webhook */
 export function deleteWebhook(name: string) {
   return apiDelete<{ message: string }>(`/api/v1/webhooks/${name}`)
+}
+
+/** 旧版兼容 — registerWebhook */
+export function registerWebhook(name: string, prompt: string, type?: string, secret?: string) {
+  return apiPost<{ id: string; name: string; url: string }>('/api/v1/webhooks', {
+    name,
+    prompt,
+    type: type ?? 'custom',
+    secret: secret ?? '',
+    user_id: DESKTOP_USER_ID,
+  })
 }

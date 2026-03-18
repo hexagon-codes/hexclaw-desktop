@@ -12,7 +12,7 @@ export type { AgentRole, AgentConfig } from './agent'
 export type { LogEntry, LogQuery, LogStats } from './log'
 export type { MemoryData } from './memory'
 export type { McpServer, McpTool } from './mcp'
-export type { Skill } from './skill'
+export type { Skill, ClawHubSkill } from './skill'
 export type { CronJob, CronJobInput } from './task'
 export type { KnowledgeDoc, KnowledgeSearchResult } from './knowledge'
 export type {

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick, type Component } from 'vue'
 
 export interface ContextMenuItem {
   id: string
   label: string
-  icon?: any
+  icon?: Component
   shortcut?: string
   danger?: boolean
   separator?: boolean
@@ -114,7 +114,7 @@ defineExpose({ show, hide })
 <style scoped>
 .hc-ctx {
   position: fixed;
-  z-index: 9999;
+  z-index: var(--hc-z-popover);
   min-width: 180px;
   padding: 4px;
   border-radius: var(--hc-radius-md);

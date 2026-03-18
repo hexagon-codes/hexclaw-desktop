@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, type Component } from 'vue'
 import { X, FileText, Mail, Search, Code, Shield, Database } from 'lucide-vue-next'
 
 const emit = defineEmits<{
@@ -12,7 +12,7 @@ export interface WorkflowTemplate {
   name: string
   description: string
   category: string
-  icon: any
+  icon: Component
   nodes: { id: string; type: string; label: string; x: number; y: number; config: Record<string, string> }[]
   edges: { id: string; from: string; to: string }[]
 }
@@ -195,8 +195,11 @@ function filterByCategory(cat: string) {
 <style scoped>
 .hc-tpl-overlay {
   position: fixed;
-  inset: 0;
-  z-index: 50;
+  top: var(--hc-titlebar-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--hc-z-modal);
   display: flex;
   align-items: center;
   justify-content: center;

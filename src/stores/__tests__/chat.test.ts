@@ -2,17 +2,37 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useChatStore } from '../chat'
 
-// Mock API
-vi.mock('@/api/chat', () => ({
-  getSessions: vi.fn().mockResolvedValue({ sessions: [
+// Mock 正确的依赖模块：chat store 使用 @/db/chat + @/api/websocket
+vi.mock('@/db/chat', () => ({
+  dbGetSessions: vi.fn().mockResolvedValue([
     { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01' },
-  ]}),
-  getSessionMessages: vi.fn().mockResolvedValue({ messages: [
-    { id: 'm1', role: 'user', content: 'hello', timestamp: '2026-01-01' },
-    { id: 'm2', role: 'assistant', content: 'hi', timestamp: '2026-01-01' },
-  ]}),
-  sendChatStream: vi.fn(),
-  deleteSession: vi.fn().mockResolvedValue({}),
+  ]),
+  dbGetMessages: vi.fn().mockResolvedValue([
+    { id: 'm1', session_id: 's1', role: 'user', content: 'hello', timestamp: '2026-01-01', metadata: null },
+    { id: 'm2', session_id: 's1', role: 'assistant', content: 'hi', timestamp: '2026-01-01', metadata: null },
+  ]),
+  dbCreateSession: vi.fn().mockResolvedValue(undefined),
+  dbUpdateSessionTitle: vi.fn().mockResolvedValue(undefined),
+  dbTouchSession: vi.fn().mockResolvedValue(undefined),
+  dbDeleteSession: vi.fn().mockResolvedValue(undefined),
+  dbSaveMessage: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/api/websocket', () => ({
+  hexclawWS: {
+    isConnected: vi.fn().mockReturnValue(false),
+    connect: vi.fn().mockRejectedValue(new Error('test')),
+    clearCallbacks: vi.fn(),
+    onChunk: vi.fn(),
+    onReply: vi.fn(),
+    onError: vi.fn(),
+    sendMessage: vi.fn(),
+  },
+}))
+
+vi.mock('@/api/chat', () => ({
+  sendChatViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
+  sendChat: vi.fn(),
 }))
 
 describe('useChatStore', () => {

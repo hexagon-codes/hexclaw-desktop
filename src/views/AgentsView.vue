@@ -2,9 +2,9 @@
 import { onMounted, ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Bot, MessageSquare, Plus, Trash2, X, Users } from 'lucide-vue-next'
+import { Bot, MessageSquare, Plus, Trash2, X, Users, Pencil, ChevronDown, ChevronUp, Wrench, ShieldAlert } from 'lucide-vue-next'
 import { useAgentsStore } from '@/stores/agents'
-import { getAgents, registerAgent, unregisterAgent } from '@/api/agents'
+import { getAgents, registerAgent, unregisterAgent, updateAgent } from '@/api/agents'
 import type { AgentRole, AgentConfig } from '@/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -20,12 +20,19 @@ const searchQuery = ref('')
 const activeTab = ref<'roles' | 'agents'>('roles')
 const errorMsg = ref('')
 
+// Role detail expansion
+const expandedRole = ref<string | null>(null)
+
 // Agent 路由
 const agents = ref<AgentConfig[]>([])
 const defaultAgent = ref('')
 const agentsLoading = ref(false)
 const showAddAgent = ref(false)
 const newAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
+
+// Edit agent modal
+const showEditAgent = ref(false)
+const editingAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
 
 // 注销确认
 const showUnregisterConfirm = ref(false)
@@ -51,7 +58,33 @@ async function loadAgents() {
 }
 
 function handleChat(role: AgentRole) {
-  router.push({ path: '/chat', query: { role: role.name } })
+  router.push({ path: '/chat', query: { role: role.name, roleTitle: role.title || role.name } })
+}
+
+function toggleRoleDetail(roleName: string) {
+  expandedRole.value = expandedRole.value === roleName ? null : roleName
+}
+
+function openEditAgent(agent: AgentConfig) {
+  editingAgent.value = { ...agent }
+  showEditAgent.value = true
+}
+
+async function handleEditAgent() {
+  if (!editFormValid.value) return
+  errorMsg.value = ''
+  try {
+    await updateAgent(editingAgent.value.name, {
+      display_name: editingAgent.value.display_name,
+      provider: editingAgent.value.provider,
+      model: editingAgent.value.model,
+    })
+    showEditAgent.value = false
+    await loadAgents()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '编辑 Agent 失败'
+    console.error('编辑 Agent 失败:', e)
+  }
 }
 
 const filteredRoles = computed(() => {
@@ -70,8 +103,16 @@ const filteredAgents = computed(() => {
   )
 })
 
+const registerFormValid = computed(() => {
+  return newAgent.value.name.trim() !== '' && newAgent.value.provider.trim() !== '' && newAgent.value.model.trim() !== ''
+})
+
+const editFormValid = computed(() => {
+  return editingAgent.value.name.trim() !== '' && editingAgent.value.provider.trim() !== '' && editingAgent.value.model.trim() !== ''
+})
+
 async function handleRegisterAgent() {
-  if (!newAgent.value.name.trim()) return
+  if (!registerFormValid.value) return
   errorMsg.value = ''
   try {
     await registerAgent(newAgent.value)
@@ -163,27 +204,74 @@ async function handleUnregisterAgent() {
           <div
             v-for="role in filteredRoles"
             :key="role.name"
-            class="rounded-xl border p-4 cursor-pointer transition-colors"
-            :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-            @click="handleChat(role)"
+            class="rounded-xl border p-4 transition-colors"
+            :style="{
+              background: 'var(--hc-bg-card)',
+              borderColor: expandedRole === role.name ? 'var(--hc-accent)' : 'var(--hc-border)',
+            }"
           >
-            <div class="flex items-center gap-3 mb-3">
+            <div class="flex items-center gap-3 mb-3 cursor-pointer" @click="toggleRoleDetail(role.name)">
               <div
                 class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
                 :style="{ background: 'var(--hc-accent)', color: '#fff' }"
               >
                 <Bot :size="18" />
               </div>
-              <div class="min-w-0">
+              <div class="min-w-0 flex-1">
                 <div class="text-sm font-semibold truncate" :style="{ color: 'var(--hc-text-primary)' }">
                   {{ role.title || role.name }}
                 </div>
                 <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ role.name }}</div>
               </div>
+              <component
+                :is="expandedRole === role.name ? ChevronUp : ChevronDown"
+                :size="16"
+                :style="{ color: 'var(--hc-text-muted)', flexShrink: 0 }"
+              />
             </div>
             <p class="text-xs leading-relaxed line-clamp-2" :style="{ color: 'var(--hc-text-secondary)' }">
               {{ role.goal || t('agents.noDesc') }}
             </p>
+
+            <!-- Expanded detail view -->
+            <div v-if="expandedRole === role.name" class="mt-3 pt-3 border-t flex flex-col gap-2.5" :style="{ borderColor: 'var(--hc-border)' }">
+              <div v-if="role.backstory">
+                <div class="text-[11px] font-medium mb-1" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.backstory') }}</div>
+                <p class="text-xs leading-relaxed" :style="{ color: 'var(--hc-text-secondary)' }">{{ role.backstory }}</p>
+              </div>
+              <div v-if="role.tools?.length">
+                <div class="text-[11px] font-medium mb-1" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.tools') }}</div>
+                <div class="flex flex-wrap gap-1">
+                  <span
+                    v-for="tool in role.tools"
+                    :key="tool"
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px]"
+                    :style="{ background: 'var(--hc-accent-subtle, rgba(99,102,241,0.1))', color: 'var(--hc-accent)' }"
+                  >
+                    <Wrench :size="10" />
+                    {{ tool }}
+                  </span>
+                </div>
+              </div>
+              <div v-if="role.constraints?.length">
+                <div class="text-[11px] font-medium mb-1" :style="{ color: 'var(--hc-text-muted)' }">约束条件</div>
+                <ul class="list-none m-0 p-0 flex flex-col gap-1">
+                  <li
+                    v-for="(c, ci) in role.constraints"
+                    :key="ci"
+                    class="flex items-start gap-1 text-[11px]"
+                    :style="{ color: 'var(--hc-text-secondary)' }"
+                  >
+                    <ShieldAlert :size="11" class="mt-0.5 flex-shrink-0" :style="{ color: 'var(--hc-warning, #f0b429)' }" />
+                    {{ c }}
+                  </li>
+                </ul>
+              </div>
+              <div v-if="!role.backstory && !role.tools?.length && !role.constraints?.length">
+                <p class="text-[11px]" :style="{ color: 'var(--hc-text-muted)' }">暂无更多详情</p>
+              </div>
+            </div>
+
             <div class="flex items-center gap-2 mt-3">
               <button
                 class="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium"
@@ -251,6 +339,14 @@ async function handleUnregisterAgent() {
               </div>
               <button
                 class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
+                :style="{ color: 'var(--hc-text-secondary)' }"
+                :title="t('common.edit')"
+                @click="openEditAgent(agent)"
+              >
+                <Pencil :size="15" />
+              </button>
+              <button
+                class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
                 :style="{ color: 'var(--hc-error)' }"
                 :title="t('agents.unregister')"
                 @click="confirmUnregister(agent.name)"
@@ -301,12 +397,62 @@ async function handleUnregisterAgent() {
               </button>
               <button
                 class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-                :style="{ background: 'var(--hc-accent)', opacity: !newAgent.name.trim() ? 0.4 : 1 }"
-                :disabled="!newAgent.name.trim()"
+                :style="{ background: 'var(--hc-accent)', opacity: !registerFormValid ? 0.4 : 1 }"
+                :disabled="!registerFormValid"
                 @click="handleRegisterAgent"
               >
                 <Plus :size="14" />
                 {{ t('common.create') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
+
+    <!-- 编辑 Agent 路由对话框 -->
+    <Teleport to="body">
+      <Transition name="modal">
+        <div v-if="showEditAgent" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="showEditAgent = false">
+          <div
+            class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden"
+            :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
+          >
+            <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+              <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('agents.editAgent') }}</h2>
+              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="showEditAgent = false">
+                <X :size="17" />
+              </button>
+            </div>
+            <div class="p-5 flex flex-col gap-3.5">
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.name') }}</label>
+                <input :value="editingAgent.name" type="text" disabled class="rounded-lg border px-3 py-2 text-sm outline-none opacity-60" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.displayName') }}</label>
+                <input v-model="editingAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.provider') }}</label>
+                <input v-model="editingAgent.provider" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
+                <input v-model="editingAgent.model" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+              </div>
+            </div>
+            <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
+              <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="showEditAgent = false">
+                {{ t('common.cancel') }}
+              </button>
+              <button
+                class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
+                :style="{ background: 'var(--hc-accent)', opacity: !editFormValid ? 0.4 : 1 }"
+                :disabled="!editFormValid"
+                @click="handleEditAgent"
+              >
+                {{ t('common.save') }}
               </button>
             </div>
           </div>

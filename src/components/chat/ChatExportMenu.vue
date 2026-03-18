@@ -86,7 +86,7 @@ function download(content: string, filename: string, type: string) {
   background: var(--hc-bg-elevated);
   border: 1px solid var(--hc-border);
   box-shadow: var(--hc-shadow-float);
-  z-index: 20;
+  z-index: var(--hc-z-dropdown);
   overflow: hidden;
   animation: hc-scale-in 0.15s ease-out;
 }

@@ -18,20 +18,38 @@ const SECURE_PREFIX = 'hc-sec-'
 /** Tauri Store 文件名 */
 const STORE_FILE = 'secure.dat'
 
-/** PBKDF2 密钥派生口令 */
-const APP_SALT = 'hexclaw-desktop-2026'
+/** localStorage 中存储设备专属 salt 的 key */
+const DEVICE_SALT_KEY = 'hc-device-salt'
 
 // ─── 加密/解密 (浏览器降级方案 — AES-GCM) ─────────────
 
-/** 使用 PBKDF2 从静态口令派生 AES-GCM 密钥 */
+/**
+ * 获取设备专属 salt（首次使用时随机生成并持久化）
+ *
+ * 每个设备/浏览器有独立的随机 salt，不再使用硬编码值。
+ * 注意：这仍然是浏览器降级方案，真正的安全存储应使用 Tauri Store。
+ */
+function getDeviceSalt(): Uint8Array {
+  const existing = localStorage.getItem(DEVICE_SALT_KEY)
+  if (existing) {
+    return Uint8Array.from(atob(existing), (c) => c.charCodeAt(0))
+  }
+  const salt = crypto.getRandomValues(new Uint8Array(32))
+  localStorage.setItem(DEVICE_SALT_KEY, btoa(String.fromCharCode(...salt)))
+  return salt
+}
+
+/** 使用 PBKDF2 从设备专属 salt 派生 AES-GCM 密钥 */
 async function deriveKey(): Promise<CryptoKey> {
+  const salt = getDeviceSalt()
+  // 使用固定口令 + 随机 salt：salt 的随机性提供了安全性
   const enc = new TextEncoder()
   const keyMaterial = await crypto.subtle.importKey(
-    'raw', enc.encode(APP_SALT), 'PBKDF2', false, ['deriveKey']
+    'raw', enc.encode('hexclaw-desktop'), 'PBKDF2', false, ['deriveKey'],
   )
   return crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt: enc.encode('hexclaw-salt'), iterations: 100000, hash: 'SHA-256' },
-    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']
+    { name: 'PBKDF2', salt: salt as BufferSource, iterations: 100000, hash: 'SHA-256' },
+    keyMaterial, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt'],
   )
 }
 
@@ -41,7 +59,7 @@ async function encrypt(value: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const enc = new TextEncoder()
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv }, key, enc.encode(value)
+    { name: 'AES-GCM', iv }, key, enc.encode(value),
   )
   // 拼接 IV + 密文并 Base64 编码
   const combined = new Uint8Array(iv.length + new Uint8Array(ciphertext).length)
@@ -53,20 +71,20 @@ async function encrypt(value: string): Promise<string> {
 /** AES-GCM 解密，输入为 Base64(IV + ciphertext) */
 async function decrypt(data: string): Promise<string> {
   const key = await deriveKey()
-  const combined = Uint8Array.from(atob(data), c => c.charCodeAt(0))
+  const combined = Uint8Array.from(atob(data), (c) => c.charCodeAt(0))
   const iv = combined.slice(0, 12)
   const ciphertext = combined.slice(12)
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv }, key, ciphertext
+    { name: 'AES-GCM', iv }, key, ciphertext,
   )
   return new TextDecoder().decode(plaintext)
 }
 
 // ─── 环境检测 ───────────────────────────────────────────
 
-/** 检测是否运行在 Tauri 桌面环境中 */
+/** 检测是否运行在 Tauri 桌面环境中（与 @tauri-apps/api/core 保持一致） */
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window
+  return !!(globalThis as Record<string, unknown>).isTauri
 }
 
 // ─── 公开 API ───────────────────────────────────────────

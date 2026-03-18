@@ -167,6 +167,19 @@ brew install --cask hexclaw
 
 > 首次打开 macOS 版本可能需要在 **系统设置 → 隐私与安全性** 中允许运行。
 
+### CI / 打包 / Release 流程
+
+- `push / PR -> CI`: 自动运行 lint、type-check、test、web build
+- `Actions -> Package -> Run workflow`: 手动构建各平台测试安装包，产物保存在 workflow artifacts
+- `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 构建并发布正式 GitHub Release 安装包
+
+正式发布前需要满足：
+
+- `package.json` 与 `src-tauri/tauri.conf.json` 的版本号和 tag 一致
+- `src-tauri/tauri.conf.json` 中已写入 Tauri updater 公钥 `plugins.updater.pubkey`
+- GitHub Actions secrets 已配置 `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- macOS 发布额外需要 Apple 签名与 notarization secrets
+
 详细使用说明请参阅 [使用指南](docs/guide.md)（[English Guide](docs/guide.en.md)）。
 
 ## 开发
@@ -215,6 +228,7 @@ make dev
 | `make sidecar` | 编译 Go sidecar (当前平台) |
 | `make sidecar-all` | 交叉编译所有平台 sidecar |
 | `make lint` | 代码检查 (oxlint + ESLint) |
+| `make lint-fix` | 代码检查并自动修复 |
 | `make format` | 代码格式化 (Prettier) |
 | `make type-check` | TypeScript 类型检查 |
 | `make test` | 运行单元测试 |
@@ -404,7 +418,7 @@ Sidecar 可能未编译或端口冲突。检查：
 ### 代码规范
 
 - **格式化**: `make format` (Prettier)
-- **检查**: `make lint` (ESLint + oxlint)
+- **检查**: `make lint` (ESLint + oxlint，只检查不修改文件)
 - **类型检查**: `make type-check` (vue-tsc)
 
 ### Commit Message 格式

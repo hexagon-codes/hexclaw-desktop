@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import SearchInput from '@/components/common/SearchInput.vue'
 
-const props = defineProps<{
+defineProps<{
   level: string
   keyword: string
 }>()

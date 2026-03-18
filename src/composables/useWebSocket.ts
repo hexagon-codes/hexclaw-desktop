@@ -3,7 +3,7 @@ import { ref, onUnmounted } from 'vue'
 interface UseWebSocketOptions {
   /** 自动重连间隔 (ms)，0 表示不重连 */
   reconnectInterval?: number
-  /** 最大重连次数，0 表示无限 */
+  /** 最大重连次数，-1 表示无限重连，0 表示不重连 */
   maxRetries?: number
 }
 
@@ -13,7 +13,7 @@ export function useWebSocket<T = unknown>(
   onMessage: (data: T) => void,
   options: UseWebSocketOptions = {},
 ) {
-  const { reconnectInterval = 5000, maxRetries = 0 } = options
+  const { reconnectInterval = 5000, maxRetries = -1 } = options
 
   const connected = ref(false)
   const error = ref<string | null>(null)
@@ -61,7 +61,7 @@ export function useWebSocket<T = unknown>(
 
   function scheduleReconnect() {
     if (!reconnectInterval) return
-    if (maxRetries > 0 && retries >= maxRetries) return
+    if (maxRetries >= 0 && retries >= maxRetries) return
 
     reconnectTimer = setTimeout(() => {
       retries++

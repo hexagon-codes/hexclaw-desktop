@@ -24,6 +24,7 @@ export async function sendChatViaBackend(
   options?: {
     sessionId?: string
     role?: string
+    model?: string
   },
 ): Promise<BackendChatResponse> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -36,6 +37,7 @@ export async function sendChatViaBackend(
       session_id: options?.sessionId || null,
       role: options?.role || null,
       user_id: DESKTOP_USER_ID,
+      model: options?.model || null,
     },
   })
 
@@ -48,6 +50,7 @@ export async function sendChatViaBackend(
 export function sendChat(req: ChatRequest) {
   return sendChatViaBackend(req.message, {
     sessionId: req.session_id,
+    model: req.model,
   })
 }
 

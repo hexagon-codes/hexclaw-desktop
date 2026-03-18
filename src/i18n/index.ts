@@ -13,7 +13,7 @@ export const i18n = createI18n({
 })
 
 export function setLocale(locale: 'zh-CN' | 'en') {
-  ;(i18n.global.locale as any).value = locale
+  ;(i18n.global.locale as { value: string }).value = locale
   localStorage.setItem('hc-locale', locale)
   document.documentElement.lang = locale === 'zh-CN' ? 'zh' : 'en'
 }

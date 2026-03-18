@@ -7,7 +7,7 @@
 
 import { ofetch } from 'ofetch'
 import { env } from '@/config/env'
-import { fromHttpStatus, fromNativeError, createApiError, type ApiError } from '@/utils/errors'
+import { fromHttpStatus, fromNativeError, type ApiError } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 
 // ─── HTTP 客户端 (ofetch) ────────────────────────────
@@ -84,7 +84,10 @@ export async function apiSSE(
     throw new Error(apiErr.message)
   }
 
-  const reader = response.body!.getReader()
+  if (!response.body) {
+    throw new Error('SSE 响应体为空')
+  }
+  const reader = response.body.getReader()
   const decoder = new TextDecoder()
 
   return new ReadableStream<string>({
@@ -146,3 +149,4 @@ export async function checkHealth(): Promise<boolean> {
 
 export type { ApiError }
 export { fromNativeError, createApiError, isRetryable, getErrorMessage } from '@/utils/errors'
+

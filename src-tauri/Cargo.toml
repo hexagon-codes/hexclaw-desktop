@@ -2,9 +2,9 @@
 name = "hexclaw-desktop"
 version = "0.0.1"
 description = "HexClaw Desktop — 企业级安全个人 AI Agent 桌面客户端"
-authors = ["everyday-items"]
+authors = ["hexagon-codes <ai@hexclaw.net>"]
 license = "Apache-2.0"
-repository = "https://github.com/everyday-items/hexclaw-desktop"
+repository = "https://github.com/hexagon-codes/hexclaw-desktop"
 edition = "2021"
 
 [lib]

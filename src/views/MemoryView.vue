@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Brain, Search, Save } from 'lucide-vue-next'
-import { getMemory, saveMemory, searchMemory } from '@/api/memory'
+import { Brain, Search, Save, Pencil, Trash2, X, Check, Eraser } from 'lucide-vue-next'
+import { getMemory, saveMemory, updateMemory, clearAllMemory, searchMemory } from '@/api/memory'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
 
@@ -14,6 +15,19 @@ const errorMsg = ref('')
 const memoryContent = ref('')
 const memoryContext = ref('')
 const activeTab = ref<'view' | 'add' | 'search'>('view')
+
+// 编辑状态
+const editingContent = ref(false)
+const editingContext = ref(false)
+const editContentValue = ref('')
+const editContextValue = ref('')
+const savingEdit = ref(false)
+
+// 删除确认
+const showDeleteContentConfirm = ref(false)
+const showDeleteContextConfirm = ref(false)
+const showClearAllConfirm = ref(false)
+const deleting = ref(false)
 
 // 添加记忆
 const newContent = ref('')
@@ -40,6 +54,104 @@ async function loadMemory() {
     console.error('加载记忆失败:', e)
   } finally {
     loading.value = false
+  }
+}
+
+// 编辑记忆内容
+function startEditContent() {
+  editContentValue.value = memoryContent.value
+  editingContent.value = true
+}
+
+function cancelEditContent() {
+  editingContent.value = false
+  editContentValue.value = ''
+}
+
+async function saveEditContent() {
+  if (!editContentValue.value.trim()) return
+  savingEdit.value = true
+  errorMsg.value = ''
+  try {
+    await updateMemory(editContentValue.value.trim())
+    memoryContent.value = editContentValue.value.trim()
+    editingContent.value = false
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '保存记忆失败'
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+// 编辑上下文
+function startEditContext() {
+  editContextValue.value = memoryContext.value
+  editingContext.value = true
+}
+
+function cancelEditContext() {
+  editingContext.value = false
+  editContextValue.value = ''
+}
+
+async function saveEditContext() {
+  if (!editContextValue.value.trim()) return
+  savingEdit.value = true
+  errorMsg.value = ''
+  try {
+    await updateMemory(editContextValue.value.trim())
+    memoryContext.value = editContextValue.value.trim()
+    editingContext.value = false
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '保存记忆失败'
+  } finally {
+    savingEdit.value = false
+  }
+}
+
+// 删除记忆内容
+async function handleDeleteContent() {
+  deleting.value = true
+  errorMsg.value = ''
+  try {
+    await updateMemory('')
+    memoryContent.value = ''
+    showDeleteContentConfirm.value = false
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '删除记忆失败'
+  } finally {
+    deleting.value = false
+  }
+}
+
+// 删除上下文
+async function handleDeleteContext() {
+  deleting.value = true
+  errorMsg.value = ''
+  try {
+    await updateMemory('')
+    memoryContext.value = ''
+    showDeleteContextConfirm.value = false
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '删除记忆失败'
+  } finally {
+    deleting.value = false
+  }
+}
+
+// 清空全部
+async function handleClearAll() {
+  deleting.value = true
+  errorMsg.value = ''
+  try {
+    await clearAllMemory()
+    memoryContent.value = ''
+    memoryContext.value = ''
+    showClearAllConfirm.value = false
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '清空记忆失败'
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -81,7 +193,19 @@ async function handleSearch() {
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-    <PageHeader :title="t('memory.title')" :description="t('memory.description')" />
+    <PageHeader :title="t('memory.title')" :description="t('memory.description')">
+      <template #actions>
+        <button
+          v-if="memoryContent || memoryContext"
+          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+          style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
+          @click="showClearAllConfirm = true"
+        >
+          <Eraser :size="13" />
+          {{ t('memory.clearAll') }}
+        </button>
+      </template>
+    </PageHeader>
 
     <!-- 错误提示 -->
     <div
@@ -140,29 +264,119 @@ async function handleSearch() {
         />
 
         <div v-else class="max-w-2xl space-y-4">
+          <!-- 记忆内容卡片 -->
           <div
-            v-if="memoryContent"
+            v-if="memoryContent || editingContent"
             class="rounded-xl border p-4"
             :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
           >
             <div class="flex items-center gap-2 mb-3">
               <Brain :size="14" :style="{ color: 'var(--hc-accent)' }" />
               <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('memory.memoryContent') }}</span>
+              <div class="ml-auto flex items-center gap-1">
+                <template v-if="editingContent">
+                  <button
+                    class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    :style="{ color: 'var(--hc-success, #10b981)' }"
+                    :disabled="savingEdit"
+                    @click="saveEditContent"
+                  >
+                    <Check :size="14" />
+                  </button>
+                  <button
+                    class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                    @click="cancelEditContent"
+                  >
+                    <X :size="14" />
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                    title="编辑"
+                    @click="startEditContent"
+                  >
+                    <Pencil :size="13" />
+                  </button>
+                  <button
+                    class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    style="color: #ef4444;"
+                    title="删除"
+                    @click="showDeleteContentConfirm = true"
+                  >
+                    <Trash2 :size="13" />
+                  </button>
+                </template>
+              </div>
             </div>
-            <p class="text-sm leading-relaxed whitespace-pre-wrap" :style="{ color: 'var(--hc-text-primary)' }">
+            <textarea
+              v-if="editingContent"
+              v-model="editContentValue"
+              rows="6"
+              class="w-full rounded-lg border px-3 py-2 text-sm outline-none resize-none"
+              :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+            />
+            <p v-else class="text-sm leading-relaxed whitespace-pre-wrap" :style="{ color: 'var(--hc-text-primary)' }">
               {{ memoryContent }}
             </p>
           </div>
 
+          <!-- 上下文卡片 -->
           <div
-            v-if="memoryContext"
+            v-if="memoryContext || editingContext"
             class="rounded-xl border p-4"
             :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
           >
             <div class="flex items-center gap-2 mb-3">
               <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('memory.context') }}</span>
+              <div class="ml-auto flex items-center gap-1">
+                <template v-if="editingContext">
+                  <button
+                    class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    :style="{ color: 'var(--hc-success, #10b981)' }"
+                    :disabled="savingEdit"
+                    @click="saveEditContext"
+                  >
+                    <Check :size="14" />
+                  </button>
+                  <button
+                    class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                    @click="cancelEditContext"
+                  >
+                    <X :size="14" />
+                  </button>
+                </template>
+                <template v-else>
+                  <button
+                    class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                    title="编辑"
+                    @click="startEditContext"
+                  >
+                    <Pencil :size="13" />
+                  </button>
+                  <button
+                    class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                    style="color: #ef4444;"
+                    title="删除"
+                    @click="showDeleteContextConfirm = true"
+                  >
+                    <Trash2 :size="13" />
+                  </button>
+                </template>
+              </div>
             </div>
-            <p class="text-sm leading-relaxed whitespace-pre-wrap" :style="{ color: 'var(--hc-text-primary)' }">
+            <textarea
+              v-if="editingContext"
+              v-model="editContextValue"
+              rows="6"
+              class="w-full rounded-lg border px-3 py-2 text-sm outline-none resize-none"
+              :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+            />
+            <p v-else class="text-sm leading-relaxed whitespace-pre-wrap" :style="{ color: 'var(--hc-text-primary)' }">
               {{ memoryContext }}
             </p>
           </div>
@@ -248,5 +462,36 @@ async function handleSearch() {
         </div>
       </template>
     </div>
+
+    <!-- 确认对话框 -->
+    <ConfirmDialog
+      :open="showDeleteContentConfirm"
+      title="删除记忆内容"
+      message="确定要删除这条记忆内容吗？此操作不可撤销。"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="handleDeleteContent"
+      @cancel="showDeleteContentConfirm = false"
+    />
+
+    <ConfirmDialog
+      :open="showDeleteContextConfirm"
+      title="删除上下文"
+      message="确定要删除这条上下文内容吗？此操作不可撤销。"
+      confirm-text="删除"
+      :danger="true"
+      @confirm="handleDeleteContext"
+      @cancel="showDeleteContextConfirm = false"
+    />
+
+    <ConfirmDialog
+      :open="showClearAllConfirm"
+      :title="t('memory.clearTitle')"
+      :message="t('memory.clearMessage')"
+      :confirm-text="t('memory.clearConfirm')"
+      :danger="true"
+      @confirm="handleClearAll"
+      @cancel="showClearAllConfirm = false"
+    />
   </div>
 </template>

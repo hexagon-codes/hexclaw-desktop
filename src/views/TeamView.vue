@@ -1,63 +1,58 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Users, Share2, Upload, Download, Globe, Lock,
-  Copy, ExternalLink, Plus, Search, UserPlus,
+  Copy, ExternalLink, Trash2, UserPlus, Loader2, RefreshCw,
 } from 'lucide-vue-next'
 import PageHeader from '@/components/common/PageHeader.vue'
-import EmptyState from '@/components/common/EmptyState.vue'
+import {
+  getSharedAgents,
+  deleteSharedAgent,
+  getTeamMembers,
+  inviteTeamMember,
+  removeTeamMember,
+  exportAllConfig,
+  importConfig,
+  type SharedAgent,
+  type TeamMember,
+  type ExportBundle,
+} from '@/api/team'
 
-const { t } = useI18n()
+useI18n()
 
 const activeTab = ref<'shared' | 'team' | 'import'>('shared')
+const loading = ref(false)
+const errorMsg = ref('')
 
-interface SharedAgent {
-  id: string
-  name: string
-  author: string
-  description: string
-  downloads: number
-  visibility: 'public' | 'team' | 'private'
-  updated_at: string
+// ─── 共享 Agent ──────────────────────────────────────
+const sharedAgents = ref<SharedAgent[]>([])
+
+async function loadSharedAgents() {
+  loading.value = true
+  errorMsg.value = ''
+  try {
+    sharedAgents.value = await getSharedAgents()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '加载共享 Agent 失败'
+  } finally {
+    loading.value = false
+  }
 }
 
-const sharedAgents = ref<SharedAgent[]>([
-  {
-    id: '1', name: '研究助手', author: 'admin',
-    description: '擅长信息检索、深度分析和报告生成',
-    downloads: 128, visibility: 'public', updated_at: '2026-03-10',
-  },
-  {
-    id: '2', name: '代码审查员', author: 'dev-team',
-    description: '自动化代码审查，检查安全漏洞和最佳实践',
-    downloads: 56, visibility: 'team', updated_at: '2026-03-12',
-  },
-  {
-    id: '3', name: '邮件摘要', author: 'admin',
-    description: '每日邮件自动分类和摘要生成',
-    downloads: 89, visibility: 'public', updated_at: '2026-03-08',
-  },
-])
-
-interface TeamMember {
-  id: string
-  name: string
-  email: string
-  role: 'admin' | 'member' | 'viewer'
-  avatar?: string
-  last_active: string
+async function handleDeleteAgent(id: string) {
+  if (!confirm('确定删除该共享 Agent？')) return
+  try {
+    await deleteSharedAgent(id)
+    sharedAgents.value = sharedAgents.value.filter(a => a.id !== id)
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '删除失败'
+  }
 }
 
-const teamMembers = ref<TeamMember[]>([
-  { id: '1', name: '管理员', email: 'admin@example.com', role: 'admin', last_active: '在线' },
-  { id: '2', name: '张三', email: 'zhang@example.com', role: 'member', last_active: '2小时前' },
-  { id: '3', name: '李四', email: 'li@example.com', role: 'viewer', last_active: '1天前' },
-])
-
-const searchQuery = ref('')
-const showInvite = ref(false)
-const inviteEmail = ref('')
+function copyShareLink(agent: SharedAgent) {
+  navigator.clipboard.writeText(`hexclaw://agent/${agent.id}`)
+}
 
 function exportAgent(agent: SharedAgent) {
   const data = JSON.stringify(agent, null, 2)
@@ -70,27 +65,128 @@ function exportAgent(agent: SharedAgent) {
   URL.revokeObjectURL(url)
 }
 
-function copyShareLink(agent: SharedAgent) {
-  navigator.clipboard.writeText(`hexclaw://agent/${agent.id}`)
+// ─── 团队成员 ────────────────────────────────────────
+const teamMembers = ref<TeamMember[]>([])
+const showInvite = ref(false)
+const inviteEmail = ref('')
+const inviteRole = ref<'member' | 'viewer'>('member')
+const inviting = ref(false)
+
+async function loadTeamMembers() {
+  loading.value = true
+  try {
+    teamMembers.value = await getTeamMembers()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '加载团队成员失败'
+  } finally {
+    loading.value = false
+  }
 }
 
+async function handleInvite() {
+  if (!inviteEmail.value.trim()) return
+  inviting.value = true
+  try {
+    const member = await inviteTeamMember({ email: inviteEmail.value.trim(), role: inviteRole.value })
+    teamMembers.value.push(member)
+    showInvite.value = false
+    inviteEmail.value = ''
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '邀请失败'
+  } finally {
+    inviting.value = false
+  }
+}
+
+async function handleRemoveMember(id: string) {
+  if (id === 'self') return
+  if (!confirm('确定移除该成员？')) return
+  try {
+    await removeTeamMember(id)
+    teamMembers.value = teamMembers.value.filter(m => m.id !== id)
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '移除失败'
+  }
+}
+
+// ─── 导入导出 ────────────────────────────────────────
+const importing = ref(false)
+const exporting = ref(false)
+
+async function handleExportAll() {
+  exporting.value = true
+  try {
+    const bundle = await exportAllConfig()
+    const data = JSON.stringify(bundle, null, 2)
+    const blob = new Blob([data], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `hexclaw-export-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : '导出失败'
+  } finally {
+    exporting.value = false
+  }
+}
+
+async function handleImportFile() {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.json'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    importing.value = true
+    try {
+      const text = await file.text()
+      const bundle = JSON.parse(text) as ExportBundle
+      const result = await importConfig(bundle)
+      await loadSharedAgents()
+      errorMsg.value = '' // clear errors
+      alert(`成功导入 ${result.imported} 项配置`)
+    } catch (e) {
+      errorMsg.value = e instanceof Error ? e.message : '导入失败，请检查文件格式'
+    } finally {
+      importing.value = false
+    }
+  }
+  input.click()
+}
+
+// ─── 角色标签 ────────────────────────────────────────
 const roleLabel: Record<string, string> = {
   admin: '管理员',
   member: '成员',
   viewer: '只读',
 }
+
+// ─── 初始化 ──────────────────────────────────────────
+onMounted(async () => {
+  await Promise.all([loadSharedAgents(), loadTeamMembers()])
+})
 </script>
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
     <PageHeader title="团队协作" description="共享智能体配置、团队知识库和协作管理">
       <template #actions>
+        <button class="hc-btn hc-btn-ghost" @click="loadSharedAgents(); loadTeamMembers()">
+          <RefreshCw :size="14" />
+        </button>
         <button class="hc-btn hc-btn-primary" @click="showInvite = true">
           <UserPlus :size="14" />
           邀请成员
         </button>
       </template>
     </PageHeader>
+
+    <div v-if="errorMsg" class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between" style="background: #ef444420; color: #ef4444;">
+      <span>{{ errorMsg }}</span>
+      <button class="text-xs underline ml-4" @click="errorMsg = ''">关闭</button>
+    </div>
 
     <!-- Tabs -->
     <div class="hc-team__tabs">
@@ -118,9 +214,19 @@ const roleLabel: Record<string, string> = {
     </div>
 
     <div class="hc-team__body">
+      <!-- Loading -->
+      <div v-if="loading" class="flex items-center justify-center py-12">
+        <Loader2 :size="20" class="animate-spin" style="color: var(--hc-text-muted);" />
+      </div>
+
       <!-- Shared Agents -->
-      <template v-if="activeTab === 'shared'">
-        <div class="hc-team__grid">
+      <template v-else-if="activeTab === 'shared'">
+        <div v-if="sharedAgents.length === 0" class="hc-team__empty">
+          <Share2 :size="28" style="color: var(--hc-text-muted);" />
+          <p>暂无共享智能体</p>
+          <span>将你的 Agent 配置共享给团队成员</span>
+        </div>
+        <div v-else class="hc-team__grid">
           <div
             v-for="agent in sharedAgents"
             :key="agent.id"
@@ -147,6 +253,9 @@ const roleLabel: Record<string, string> = {
               <button class="hc-btn hc-btn-ghost" @click="exportAgent(agent)">
                 <Download :size="12" /> 导出
               </button>
+              <button class="hc-btn hc-btn-ghost hc-btn-danger" @click="handleDeleteAgent(agent.id)">
+                <Trash2 :size="12" />
+              </button>
             </div>
           </div>
         </div>
@@ -169,6 +278,13 @@ const roleLabel: Record<string, string> = {
               {{ roleLabel[member.role] }}
             </span>
             <span class="hc-team__member-active">{{ member.last_active }}</span>
+            <button
+              v-if="member.id !== 'self'"
+              class="hc-btn hc-btn-ghost hc-btn-sm hc-btn-danger"
+              @click="handleRemoveMember(member.id)"
+            >
+              <Trash2 :size="12" />
+            </button>
           </div>
         </div>
       </template>
@@ -176,22 +292,28 @@ const roleLabel: Record<string, string> = {
       <!-- Import/Export -->
       <template v-else>
         <div class="hc-team__import">
-          <div class="hc-team__import-card hc-card">
+          <div class="hc-team__import-card hc-card" @click="handleImportFile">
             <Upload :size="24" style="color: var(--hc-accent);" />
             <h4>导入智能体配置</h4>
             <p>从 JSON 文件导入智能体、工作流或知识库配置</p>
-            <button class="hc-btn hc-btn-secondary">选择文件</button>
+            <button class="hc-btn hc-btn-secondary" :disabled="importing">
+              <Loader2 v-if="importing" :size="12" class="animate-spin" />
+              {{ importing ? '导入中...' : '选择文件' }}
+            </button>
           </div>
-          <div class="hc-team__import-card hc-card">
+          <div class="hc-team__import-card hc-card" @click="handleExportAll">
             <Download :size="24" style="color: #10b981;" />
             <h4>导出全部配置</h4>
             <p>导出所有智能体、工作流和技能配置到 JSON 文件</p>
-            <button class="hc-btn hc-btn-secondary">导出全部</button>
+            <button class="hc-btn hc-btn-secondary" :disabled="exporting">
+              <Loader2 v-if="exporting" :size="12" class="animate-spin" />
+              {{ exporting ? '导出中...' : '导出全部' }}
+            </button>
           </div>
-          <div class="hc-team__import-card hc-card">
+          <div class="hc-team__import-card hc-card" @click="$router.push('/skills')">
             <ExternalLink :size="24" style="color: #8b5cf6;" />
             <h4>社区模板库</h4>
-            <p>浏览和导入社区共享的优质智能体模板</p>
+            <p>浏览 ClawHub 技能市场，导入社区共享的优质智能体模板</p>
             <button class="hc-btn hc-btn-secondary">浏览模板</button>
           </div>
         </div>
@@ -210,11 +332,17 @@ const roleLabel: Record<string, string> = {
             <div class="hc-modal__body">
               <div class="hc-field">
                 <label class="hc-field__label">邮箱地址</label>
-                <input v-model="inviteEmail" type="email" class="hc-input" placeholder="user@example.com" />
+                <input
+                  v-model="inviteEmail"
+                  type="email"
+                  class="hc-input"
+                  placeholder="user@example.com"
+                  @keyup.enter="handleInvite"
+                />
               </div>
               <div class="hc-field">
                 <label class="hc-field__label">角色</label>
-                <select class="hc-input">
+                <select v-model="inviteRole" class="hc-input">
                   <option value="member">成员</option>
                   <option value="viewer">只读</option>
                 </select>
@@ -222,7 +350,14 @@ const roleLabel: Record<string, string> = {
             </div>
             <div class="hc-modal__footer">
               <button class="hc-btn hc-btn-secondary" @click="showInvite = false">取消</button>
-              <button class="hc-btn hc-btn-primary" @click="showInvite = false">发送邀请</button>
+              <button
+                class="hc-btn hc-btn-primary"
+                :disabled="!inviteEmail.trim() || inviting"
+                @click="handleInvite"
+              >
+                <Loader2 v-if="inviting" :size="12" class="animate-spin" />
+                {{ inviting ? '发送中...' : '发送邀请' }}
+              </button>
             </div>
           </div>
         </div>
@@ -265,6 +400,17 @@ const roleLabel: Record<string, string> = {
   overflow-y: auto;
   padding: 20px 24px;
 }
+
+.hc-team__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 48px 0;
+  text-align: center;
+}
+.hc-team__empty p { font-size: 14px; font-weight: 500; color: var(--hc-text-primary); margin: 0; }
+.hc-team__empty span { font-size: 12px; color: var(--hc-text-muted); }
 
 .hc-team__grid {
   display: grid;
@@ -323,6 +469,9 @@ const roleLabel: Record<string, string> = {
   display: flex;
   gap: 4px;
 }
+
+.hc-btn-danger { color: var(--hc-error, #ef4444) !important; }
+.hc-btn-danger:hover { background: rgba(239, 68, 68, 0.1) !important; }
 
 /* Members */
 .hc-team__members {
@@ -399,6 +548,12 @@ const roleLabel: Record<string, string> = {
   align-items: center;
   gap: 8px;
   border: 1px solid var(--hc-border);
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.hc-team__import-card:hover {
+  border-color: var(--hc-accent);
 }
 
 .hc-team__import-card h4 {
@@ -416,7 +571,7 @@ const roleLabel: Record<string, string> = {
 }
 
 /* Modal reuse */
-.hc-modal-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); backdrop-filter: blur(4px); }
+.hc-modal-overlay { position: fixed; top: var(--hc-titlebar-height); left: 0; right: 0; bottom: 0; z-index: var(--hc-z-modal); display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.45); backdrop-filter: blur(4px); }
 .hc-modal { width: 100%; border-radius: var(--hc-radius-xl); background: var(--hc-bg-elevated); border: 1px solid var(--hc-border); box-shadow: var(--hc-shadow-float); overflow: hidden; animation: hc-scale-in 0.2s cubic-bezier(0.25,0.1,0.25,1); }
 .hc-modal__header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--hc-divider); }
 .hc-modal__title { font-size: 15px; font-weight: 600; color: var(--hc-text-primary); margin: 0; }
@@ -425,6 +580,8 @@ const roleLabel: Record<string, string> = {
 .hc-modal__footer { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid var(--hc-divider); }
 .hc-field { display: flex; flex-direction: column; gap: 6px; }
 .hc-field__label { font-size: 13px; font-weight: 500; color: var(--hc-text-secondary); }
+.hc-input { padding: 8px 12px; border-radius: var(--hc-radius-md); border: 1px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-primary); font-size: 13px; outline: none; width: 100%; box-sizing: border-box; }
+.hc-input:focus { border-color: var(--hc-accent); }
 .modal-enter-active { transition: opacity 0.2s ease-out; }
 .modal-leave-active { transition: opacity 0.15s ease-in; }
 .modal-enter-from, .modal-leave-to { opacity: 0; }

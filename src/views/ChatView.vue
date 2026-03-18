@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted, watch, computed } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { MessageSquarePlus, Search, Download, Image as ImageIcon, ChevronDown, Settings2, PanelRightOpen, FileCode, Eye, Video, Headphones, Wrench } from 'lucide-vue-next'
+import { MessageSquarePlus, Search, Download, ChevronDown, Settings2, PanelRightOpen, FileCode, Eye, Video, Headphones, Wrench, Zap } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
+import { dbDeleteMessage } from '@/db/chat'
 import { useAgentsStore } from '@/stores/agents'
 import { useSettingsStore } from '@/stores/settings'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
@@ -11,11 +13,17 @@ import ChatInput from '@/components/chat/ChatInput.vue'
 import SessionList from '@/components/chat/SessionList.vue'
 import ChatSearchDialog from '@/components/chat/ChatSearchDialog.vue'
 import ChatExportMenu from '@/components/chat/ChatExportMenu.vue'
+import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
+import ContextMenu from '@/components/common/ContextMenu.vue'
+import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import crabLogo from '@/assets/logo-crab.png'
 
 const { t } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const chatStore = useChatStore()
 const agentsStore = useAgentsStore()
 const settingsStore = useSettingsStore()
@@ -29,6 +37,86 @@ const showExport = ref(false)
 const attachmentPreview = ref<{ url: string; name: string; type: 'image' | 'video' | 'file'; file: File } | null>(null)
 const showModelSelector = ref(false)
 
+// Message context menu
+const msgCtxMenu = ref<InstanceType<typeof ContextMenu>>()
+const ctxMsgIndex = ref(-1)
+const ctxMsgRole = ref<'user' | 'assistant'>('user')
+
+const msgContextItems = computed<ContextMenuItem[]>(() => {
+  const items: ContextMenuItem[] = [
+    { id: 'copy', label: t('chat.copyMessage'), icon: undefined },
+  ]
+  if (ctxMsgRole.value === 'assistant') {
+    items.push({ id: 'retry', label: t('chat.regenerate'), icon: undefined })
+  } else {
+    items.push({ id: 'edit', label: t('chat.editMessage'), icon: undefined })
+  }
+  items.push(
+    { id: 'sep1', label: '', separator: true },
+    { id: 'delete', label: t('chat.deleteMessage'), icon: undefined, danger: true },
+  )
+  return items
+})
+
+function handleMsgContextMenu(e: MouseEvent, idx: number, role: 'user' | 'assistant') {
+  ctxMsgIndex.value = idx
+  ctxMsgRole.value = role
+  msgCtxMenu.value?.show(e)
+}
+
+async function handleMsgCtxAction(action: string) {
+  const idx = ctxMsgIndex.value
+  const msg = chatStore.messages[idx]
+  if (!msg) return
+  switch (action) {
+    case 'copy':
+      await navigator.clipboard.writeText(msg.content)
+      break
+    case 'retry':
+      handleRetry(idx)
+      break
+    case 'edit':
+      handleEdit(idx)
+      break
+    case 'delete': {
+      const removed = chatStore.messages.splice(idx, 1)
+      for (const m of removed) {
+        dbDeleteMessage(m.id).catch(() => {})
+      }
+      break
+    }
+  }
+}
+
+// Token count estimate (rough: ~4 chars per token for Chinese, ~4 chars per token for English)
+const estimatedTokens = computed(() => {
+  let total = 0
+  for (const msg of chatStore.messages) {
+    total += Math.ceil(msg.content.length / 3)
+  }
+  return total
+})
+
+function formatTokenCount(n: number): string {
+  if (n < 1000) return String(n)
+  return (n / 1000).toFixed(1) + 'k'
+}
+
+function formatFullTime(ts: string): string {
+  return new Date(ts).toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
+}
+
+// Document parsing state
+const documentParsing = ref(false)
+const parsedDocument = ref<{ text: string; fileName: string; pageCount?: number } | null>(null)
+
 // 当前选中的模型
 const selectedModel = ref('')
 const chatTemperature = ref(0.7)
@@ -37,6 +125,7 @@ const showChatParams = ref(false)
 
 // 当前模型的显示名
 const selectedModelDisplay = computed(() => {
+  if (selectedModel.value === 'auto') return 'Auto'
   if (!selectedModel.value) return 'Select Model'
   const found = settingsStore.availableModels.find((m) => m.modelId === selectedModel.value)
   return found ? `${found.modelName}` : selectedModel.value
@@ -64,6 +153,12 @@ const selectedModelCapabilities = computed(() => {
 const supportsVision = computed(() => selectedModelCapabilities.value.includes('vision'))
 const supportsVideo = computed(() => selectedModelCapabilities.value.includes('video'))
 
+// Research mode state
+const isResearchMode = computed(() => chatStore.chatMode === 'research')
+const researchStreamingContentLength = computed(() =>
+  isResearchMode.value && chatStore.isCurrentStreaming ? (chatStore.isCurrentStreamingContent?.length ?? 0) : 0,
+)
+
 function formatTime(ts: string) {
   const d = new Date(ts)
   const now = new Date()
@@ -75,9 +170,8 @@ function formatTime(ts: string) {
   return `${month}/${day} ${h}:${m}`
 }
 
-/** 加载 LLM 配置并初始化模型选择 */
-async function loadLLMConfig() {
-  await settingsStore.loadConfig()
+/** 初始化模型选择（路由守卫已保证 config 就绪，无需再调 loadConfig） */
+function loadLLMConfig() {
   if (settingsStore.config?.llm?.defaultModel) {
     selectedModel.value = settingsStore.config.llm.defaultModel
   } else if (settingsStore.availableModels.length > 0) {
@@ -90,21 +184,39 @@ onMounted(async () => {
   chatStore.loadSessions()
   agentsStore.loadRoles()
 
-  // 先尝试加载，如果 sidecar 还没就绪则监听 sidecar-ready 事件后重试
-  await loadLLMConfig()
-
-  if (settingsStore.enabledProviders.length === 0) {
-    try {
-      const { listen } = await import('@tauri-apps/api/event')
-      const unlisten = await listen('sidecar-ready', async () => {
-        await loadLLMConfig()
-        unlisten()
-      })
-      // 30 秒后自动清理监听
-      setTimeout(() => unlisten(), 30000)
-    } catch {
-      // 非 Tauri 环境忽略
+  // 从 Agent 管理页跳转过来：复用已有同角色会话 或 新建
+  const roleQuery = route.query.role as string | undefined
+  const roleTitleQuery = route.query.roleTitle as string | undefined
+  if (roleQuery) {
+    const roleTitle = roleTitleQuery || roleQuery
+    // 查找是否已有同名会话
+    const existing = chatStore.sessions.find(s => s.title === roleTitle)
+    if (existing) {
+      await chatStore.selectSession(existing.id)
+    } else {
+      chatStore.newSession(roleTitle)
+      await chatStore.ensureSession()
+      chatStore.loadSessions()
     }
+    chatStore.chatMode = 'agent'
+    chatStore.agentRole = roleQuery
+    router.replace({ path: '/chat' })
+  }
+
+  // 初始化模型选择（config 由路由守卫保证已就绪）
+  loadLLMConfig()
+
+  // sidecar-ready 事件：后端延迟就绪时重新同步 providers
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen('sidecar-ready', async () => {
+      await settingsStore.loadConfig({ force: true })
+      loadLLMConfig()
+      unlisten()
+    })
+    setTimeout(() => unlisten(), 30000)
+  } catch {
+    // 非 Tauri 环境忽略
   }
 })
 
@@ -116,7 +228,7 @@ function selectModel(modelId: string) {
 
 /** 同步模型和参数到 chatStore */
 function syncChatParams() {
-  chatStore.chatParams.model = selectedModel.value
+  chatStore.chatParams.model = selectedModel.value === 'auto' ? 'auto' : selectedModel.value
   chatStore.chatParams.temperature = chatTemperature.value
   chatStore.chatParams.maxTokens = chatMaxTokens.value
 }
@@ -135,7 +247,22 @@ async function handleSend(text: string) {
     attachments.push({ type, name: file.name, mime: file.type, data })
     clearAttachmentPreview()
   }
-  await chatStore.sendMessage(text, attachments.length > 0 ? attachments : undefined)
+
+  // If a document was parsed, prepend its content to the message
+  let finalText = text
+  if (parsedDocument.value) {
+    const doc = parsedDocument.value
+    const pageInfo = doc.pageCount ? ` (${doc.pageCount}页)` : ''
+    finalText = `[文件: ${doc.fileName}${pageInfo}]\n\n${doc.text}\n\n---\n${text}`
+    parsedDocument.value = null
+  }
+
+  // Set agent role for research mode
+  if (chatStore.chatMode === 'research') {
+    chatStore.agentRole = 'researcher'
+  }
+
+  await chatStore.sendMessage(finalText, attachments.length > 0 ? attachments : undefined)
   await nextTick()
   scrollToBottom()
 }
@@ -158,7 +285,10 @@ async function handleRetry(msgIndex: number) {
   const msgs = chatStore.messages
   for (let i = msgIndex - 1; i >= 0; i--) {
     if (msgs[i]?.role === 'user') {
-      chatStore.messages.splice(msgIndex)
+      const removed = chatStore.messages.splice(msgIndex)
+      for (const m of removed) {
+        dbDeleteMessage(m.id).catch(() => {})
+      }
       await chatStore.sendMessage(msgs[i]!.content)
       await nextTick()
       scrollToBottom()
@@ -171,7 +301,10 @@ function handleEdit(msgIndex: number) {
   const msg = chatStore.messages[msgIndex]
   if (!msg || msg.role !== 'user') return
   const content = msg.content
-  chatStore.messages.splice(msgIndex)
+  const removed = chatStore.messages.splice(msgIndex)
+  for (const m of removed) {
+    dbDeleteMessage(m.id).catch(() => {})
+  }
   chatInputRef.value?.setInput(content)
 }
 
@@ -183,7 +316,7 @@ watch(() => chatStore.messages.length, () => {
   nextTick(scrollToBottom)
 })
 
-watch(() => chatStore.streamingContent, () => {
+watch(() => chatStore.isCurrentStreamingContent, () => {
   nextTick(scrollToBottom)
 })
 
@@ -203,12 +336,26 @@ function scrollToMessage(msgId: string) {
   }
 }
 
-function handleFileUpload(file: File) {
+async function handleFileUpload(file: File) {
   const url = URL.createObjectURL(file)
   let type: 'image' | 'video' | 'file' = 'file'
   if (file.type.startsWith('image/')) type = 'image'
   else if (file.type.startsWith('video/')) type = 'video'
   attachmentPreview.value = { url, name: file.name, type, file }
+
+  // Parse document files to extract text
+  if (isDocumentFile(file)) {
+    documentParsing.value = true
+    parsedDocument.value = null
+    try {
+      parsedDocument.value = await parseDocument(file)
+    } catch (err) {
+      console.error('Document parsing failed:', err)
+      // Still allow sending as raw file attachment
+    } finally {
+      documentParsing.value = false
+    }
+  }
 }
 
 function clearAttachmentPreview() {
@@ -216,6 +363,8 @@ function clearAttachmentPreview() {
     URL.revokeObjectURL(attachmentPreview.value.url)
     attachmentPreview.value = null
   }
+  parsedDocument.value = null
+  documentParsing.value = false
 }
 
 function handleSearchShortcut(e: KeyboardEvent) {
@@ -252,13 +401,26 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
             class="hc-mode-tab__btn"
             :class="{ 'hc-mode-tab__btn--active': chatStore.chatMode === 'chat' }"
             @click="chatStore.chatMode = 'chat'"
-          >Chat</button>
+          >对话</button>
           <button
             class="hc-mode-tab__btn"
             :class="{ 'hc-mode-tab__btn--active': chatStore.chatMode === 'agent' }"
             @click="chatStore.chatMode = 'agent'"
           >Agent</button>
+          <button
+            class="hc-mode-tab__btn hc-mode-tab__btn--research"
+            :class="{ 'hc-mode-tab__btn--active': chatStore.chatMode === 'research' }"
+            @click="chatStore.chatMode = 'research'"
+          >深度研究</button>
         </div>
+
+        <!-- Research mode badge -->
+        <span v-if="isResearchMode" class="hc-research-badge">🔍 Deep Research · Hexagon 引擎驱动</span>
+
+        <!-- Token count -->
+        <span v-if="chatStore.messages.length > 0" class="hc-token-badge" :title="`约 ${estimatedTokens} tokens`">
+          ~{{ formatTokenCount(estimatedTokens) }} tok
+        </span>
 
         <!-- Model selector -->
         <div class="hc-model-selector">
@@ -273,6 +435,17 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 
           <!-- Dropdown -->
           <div v-if="showModelSelector" class="hc-model-selector__dropdown" @mouseleave="showModelSelector = false">
+            <!-- Auto 选项 -->
+            <button
+              class="hc-model-selector__item hc-model-selector__item--auto"
+              :class="{ 'hc-model-selector__item--active': selectedModel === 'auto' }"
+              @click="selectModel('auto')"
+            >
+              <Zap :size="12" style="color: var(--hc-accent); margin-right: 4px" />
+              <span class="hc-model-selector__item-name">Auto</span>
+              <span class="hc-model-selector__item-hint">自动选择，故障切换</span>
+            </button>
+            <div class="hc-model-selector__divider" />
             <template v-if="Object.keys(groupedModels).length > 0">
               <div v-for="(group, pid) in groupedModels" :key="pid" class="hc-model-selector__group">
                 <div class="hc-model-selector__group-label">{{ group.providerName }}</div>
@@ -353,7 +526,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 
       <!-- Messages -->
       <div class="hc-chat__messages">
-        <div v-if="chatStore.messages.length === 0 && !chatStore.streaming" class="hc-chat__empty">
+        <div v-if="chatStore.messages.length === 0 && !chatStore.isCurrentStreaming" class="hc-chat__empty">
           <EmptyState
             :icon="MessageSquarePlus"
             :title="t('chat.startChat')"
@@ -371,6 +544,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
             :class="msg.role === 'user' ? 'hc-msg--user' : 'hc-msg--assistant'"
             @mouseenter="hoveredMsgId = msg.id"
             @mouseleave="hoveredMsgId = null"
+            @contextmenu="handleMsgContextMenu($event, idx, msg.role as 'user' | 'assistant')"
           >
             <!-- Assistant message (Feishu style: avatar left + bubble) -->
             <template v-if="msg.role === 'assistant'">
@@ -381,7 +555,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
               <div class="hc-msg__body">
                 <div class="hc-msg__name">{{ msg.agent_name || '小蟹' }}</div>
                 <div class="hc-msg__bubble-wrap">
-                  <div class="hc-msg__bubble hc-msg__bubble--assistant">
+                  <div class="hc-msg__bubble hc-msg__bubble--assistant" :title="formatFullTime(msg.timestamp)">
                     <MarkdownRenderer :content="msg.content" />
                   </div>
                   <!-- Hover actions toolbar (floating above bubble) -->
@@ -430,7 +604,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
             <template v-else-if="msg.role === 'user'">
               <div class="hc-msg__body hc-msg__body--user">
                 <div class="hc-msg__bubble-wrap hc-msg__bubble-wrap--user">
-                  <div class="hc-msg__bubble hc-msg__bubble--user">
+                  <div class="hc-msg__bubble hc-msg__bubble--user" :title="formatFullTime(msg.timestamp)">
                     {{ msg.content }}
                   </div>
                   <!-- Hover actions toolbar -->
@@ -447,8 +621,15 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
             </template>
           </div>
 
+          <!-- Research progress panel -->
+          <ResearchProgress
+            v-if="isResearchMode && chatStore.isCurrentStreaming"
+            :active="chatStore.isCurrentStreaming"
+            :content-length="researchStreamingContentLength"
+          />
+
           <!-- Streaming / Typing indicator -->
-          <div v-if="chatStore.streaming" class="hc-msg hc-msg--assistant">
+          <div v-if="chatStore.isCurrentStreaming" class="hc-msg hc-msg--assistant">
             <div class="hc-msg__avatar">
               <img :src="crabLogo" alt="HC" class="hc-msg__avatar-img" />
               <span class="hc-msg__avatar-badge" />
@@ -457,8 +638,8 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
               <div class="hc-msg__name">小蟹</div>
               <div class="hc-msg__bubble hc-msg__bubble--assistant">
                 <MarkdownRenderer
-                  v-if="chatStore.streamingContent"
-                  :content="chatStore.streamingContent"
+                  v-if="chatStore.isCurrentStreamingContent"
+                  :content="chatStore.isCurrentStreamingContent"
                 />
                 <span v-else class="hc-msg__typing">
                   <span class="hc-msg__typing-icon">&#x2328;&#xFE0F;</span>
@@ -482,13 +663,17 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
             <div v-else class="hc-chat__attach-file-icon">📄</div>
             <div class="hc-chat__attach-info">
               <span class="hc-chat__attach-name">{{ attachmentPreview.name }}</span>
-              <span class="hc-chat__attach-type">{{ attachmentPreview.type === 'image' ? '图片' : attachmentPreview.type === 'video' ? '视频' : '文件' }}</span>
+              <span v-if="documentParsing" class="hc-chat__attach-type hc-chat__attach-type--parsing">正在解析文档...</span>
+              <span v-else-if="parsedDocument" class="hc-chat__attach-type hc-chat__attach-type--parsed">
+                已解析{{ parsedDocument.pageCount ? ` (${parsedDocument.pageCount}页)` : '' }} - {{ parsedDocument.text.length }} 字符
+              </span>
+              <span v-else class="hc-chat__attach-type">{{ attachmentPreview.type === 'image' ? '图片' : attachmentPreview.type === 'video' ? '视频' : '文件' }}</span>
             </div>
             <button class="hc-chat__attach-remove" @click="clearAttachmentPreview">×</button>
           </div>
           <ChatInput
             ref="chatInputRef"
-            :streaming="chatStore.streaming"
+            :streaming="chatStore.isCurrentStreaming"
             :exec-mode="chatStore.execMode"
             :agents="agentsStore.roles"
             :skills="[]"
@@ -499,9 +684,13 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
             @file="handleFileUpload"
             @update:exec-mode="chatStore.execMode = $event"
           />
+          <div class="hc-chat__input-hint">Enter 发送 · Shift+Enter 换行</div>
         </div>
       </div>
     </div>
+
+    <!-- Message context menu -->
+    <ContextMenu ref="msgCtxMenu" :items="msgContextItems" @select="handleMsgCtxAction" />
 
     <!-- Artifacts Panel (right side) -->
     <ArtifactsPanel
@@ -671,7 +860,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 .hc-msg__actions-float {
   position: absolute;
   top: -36px;
-  z-index: 10;
+  z-index: var(--hc-z-dropdown);
   animation: hc-actions-fade-in 0.15s ease;
 }
 
@@ -857,7 +1046,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-card);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  z-index: 200;
+  z-index: var(--hc-z-dropdown);
   padding: 4px;
 }
 
@@ -941,6 +1130,23 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
   font-weight: 500;
+}
+
+.hc-model-selector__item--auto {
+  display: flex;
+  align-items: center;
+}
+
+.hc-model-selector__item-hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--hc-text-muted);
+}
+
+.hc-model-selector__divider {
+  height: 1px;
+  background: var(--hc-border);
+  margin: 4px 8px;
 }
 
 .hc-model-selector__empty {
@@ -1120,5 +1326,57 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 .hc-chat__input-wrap {
   max-width: 720px;
   margin: 0 auto;
+}
+
+/* ─── Research Mode ───── */
+.hc-mode-tab__btn--research.hc-mode-tab__btn--active {
+  background: rgba(88, 86, 214, 0.12);
+  color: #5856d6;
+}
+
+.hc-research-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: rgba(88, 86, 214, 0.12);
+  color: #5856d6;
+  white-space: nowrap;
+}
+
+/* ─── Document Parsing States ───── */
+.hc-chat__attach-type--parsing {
+  color: var(--hc-accent) !important;
+  animation: hc-parsing-pulse 1.5s ease-in-out infinite;
+}
+
+.hc-chat__attach-type--parsed {
+  color: #34c759 !important;
+}
+
+@keyframes hc-parsing-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ─── Token Badge ───── */
+.hc-token-badge {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Input Hint ───── */
+.hc-chat__input-hint {
+  text-align: center;
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  margin-top: 6px;
+  opacity: 0.7;
 }
 </style>

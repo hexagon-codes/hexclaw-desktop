@@ -29,13 +29,16 @@ const appStore = useAppStore()
 
 <style scoped>
 .hc-titlebar {
-  height: 38px;
+  height: var(--hc-titlebar-height);
   flex-shrink: 0;
   user-select: none;
   -webkit-app-region: drag;
+  cursor: default;
   display: flex;
   align-items: center;
   padding: 0 12px;
+  position: relative;
+  z-index: var(--hc-z-toast);
 }
 
 .hc-titlebar--mac {
@@ -54,6 +57,8 @@ const appStore = useAppStore()
   font-size: 13px;
   font-weight: 500;
   color: var(--hc-text-secondary);
+  cursor: default;
+  pointer-events: none;
 }
 
 /* ── Right ── */

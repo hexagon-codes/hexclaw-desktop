@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { sendChatViaBackend } from '@/api/chat'
@@ -20,6 +20,7 @@ export const useChatStore = defineStore('chat', () => {
   const currentSessionId = ref<string | null>(null)
   const messages = ref<ChatMessage[]>([])
   const streaming = ref(false)
+  const streamingSessionId = ref<string | null>(null)
   const streamingContent = ref('')
   const error = ref<ApiError | null>(null)
 
@@ -45,8 +46,6 @@ export const useChatStore = defineStore('chat', () => {
       sessions.value = rows.map((r) => ({
         id: r.id,
         title: r.title,
-        agent_id: '',
-        agent_name: '',
         created_at: r.created_at,
         updated_at: r.updated_at,
         message_count: 0,
@@ -75,13 +74,19 @@ export const useChatStore = defineStore('chat', () => {
     error.value = null
   }
 
-  /** 新建会话 */
-  function newSession() {
+  /** 新建会话，可选指定标题 */
+  const pendingSessionTitle = ref<string | null>(null)
+  /** 标记会话标题是否由用户/Agent 指定（不应被第一条消息覆盖） */
+  const hasCustomTitle = ref(false)
+
+  function newSession(title?: string) {
     currentSessionId.value = null
     messages.value = []
     artifacts.value = []
     selectedArtifactId.value = null
     error.value = null
+    pendingSessionTitle.value = title ?? null
+    hasCustomTitle.value = !!title
   }
 
   /** 确保当前有会话 ID（没有则创建），加锁防止并发创建 */
@@ -92,7 +97,8 @@ export const useChatStore = defineStore('chat', () => {
     _ensureSessionPromise = (async () => {
       const id = nanoid(12)
       try {
-        await dbCreateSession(id, '新对话')
+        await dbCreateSession(id, pendingSessionTitle.value || '新对话')
+        pendingSessionTitle.value = null
       } catch (e) {
         logger.warn('创建会话失败', e)
       }
@@ -175,8 +181,8 @@ export const useChatStore = defineStore('chat', () => {
     // 持久化助手消息
     persistMessage(assistantMsg, sessionId)
 
-    // 用第一条消息更新会话标题
-    if (messages.value.length <= 2) {
+    // 用第一条消息更新会话标题（除非已有自定义标题，如从 Agent 页跳转）
+    if (messages.value.length <= 2 && !hasCustomTitle.value) {
       const title = userText.slice(0, 30) + (userText.length > 30 ? '...' : '')
       dbUpdateSessionTitle(sessionId, title).catch(() => {})
     }
@@ -224,7 +230,7 @@ export const useChatStore = defineStore('chat', () => {
         }
       })
 
-      hexclawWS.onReply((content: string, _replySessionId: string) => {
+      hexclawWS.onReply((content: string) => {
         finalizeAssistantMessage(content, sessionId, text)
         resolve()
       })
@@ -233,7 +239,7 @@ export const useChatStore = defineStore('chat', () => {
         reject(new Error(errMsg))
       })
 
-      hexclawWS.sendMessage(text, sessionId)
+      hexclawWS.sendMessage(text, sessionId, undefined, agentRole.value || undefined)
     })
   }
 
@@ -274,6 +280,7 @@ export const useChatStore = defineStore('chat', () => {
     persistMessage(userMsg, sessionId)
 
     streaming.value = true
+    streamingSessionId.value = sessionId
     streamingContent.value = ''
     error.value = null
 
@@ -296,7 +303,21 @@ export const useChatStore = defineStore('chat', () => {
 
   /** 停止流式输出 */
   function stopStreaming() {
+    // 保存已接收的部分内容，避免用户可见内容丢失
+    if (streamingContent.value.trim()) {
+      const partialMsg: ChatMessage = {
+        id: nanoid(),
+        role: 'assistant',
+        content: streamingContent.value,
+        timestamp: new Date().toISOString(),
+      }
+      messages.value.push(partialMsg)
+      if (currentSessionId.value) {
+        persistMessage(partialMsg, currentSessionId.value)
+      }
+    }
     streaming.value = false
+    streamingSessionId.value = null
     streamingContent.value = ''
     hexclawWS.clearCallbacks()
   }
@@ -318,12 +339,25 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /** 当前会话是否正在流式输出 */
+  const isCurrentStreaming = computed(() =>
+    streaming.value && streamingSessionId.value === currentSessionId.value,
+  )
+
+  /** 当前流式输出的内容（仅当前会话活跃时返回） */
+  const isCurrentStreamingContent = computed(() =>
+    isCurrentStreaming.value ? streamingContent.value : '',
+  )
+
   return {
     sessions,
     currentSessionId,
     messages,
     streaming,
+    streamingSessionId,
     streamingContent,
+    isCurrentStreaming,
+    isCurrentStreamingContent,
     error,
     chatMode,
     execMode,
@@ -335,6 +369,7 @@ export const useChatStore = defineStore('chat', () => {
     loadSessions,
     selectSession,
     newSession,
+    ensureSession,
     sendMessage,
     stopStreaming,
     deleteSession,

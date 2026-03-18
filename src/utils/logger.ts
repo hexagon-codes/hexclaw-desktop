@@ -33,7 +33,7 @@ function formatTime(): string {
   return new Date().toISOString().slice(11, 23) // HH:mm:ss.SSS
 }
 
-function formatLog(level: LogLevel, msg: string, extra?: unknown[]): string {
+function formatLog(level: LogLevel, msg: string): string {
   return `[${formatTime()}] [${level.toUpperCase().padEnd(5)}] ${msg}`
 }
 

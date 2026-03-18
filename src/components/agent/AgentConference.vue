@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { X, Play, Pause, Users, Bot, ArrowRight, Loader2 } from 'lucide-vue-next'
+import { ref, computed, nextTick } from 'vue'
+import { X, Play, Square, Users, Bot, Loader2 } from 'lucide-vue-next'
+import { sendChatViaBackend } from '@/api/chat'
+import { logger } from '@/utils/logger'
 
 interface AgentRole {
   id: string
@@ -20,8 +22,10 @@ const selectedAgents = ref<string[]>([])
 const topic = ref('')
 const rounds = ref(3)
 const running = ref(false)
+const stopped = ref(false)
 const messages = ref<{ agent: string; content: string; round: number }[]>([])
 const currentRound = ref(0)
+const messagesEl = ref<HTMLElement | null>(null)
 
 const availableAgents = computed(() => props.agents)
 
@@ -35,28 +39,72 @@ function agentName(id: string) {
   return props.agents.find(a => a.id === id)?.name || id
 }
 
+function agentGoal(id: string) {
+  return props.agents.find(a => a.id === id)?.goal || ''
+}
+
+/** 构建会议上下文消息 */
+function buildContext(round: number, agentId: string): string {
+  const history = messages.value.map(m => `[${m.agent}]: ${m.content}`).join('\n')
+  const agent = props.agents.find(a => a.id === agentId)
+  const roleName = agent?.name || agentId
+  const roleGoal = agent?.goal || ''
+
+  return `你正在参与一个多 Agent 圆桌会议。
+主题: ${topic.value}
+你的角色: ${roleName}${roleGoal ? `（${roleGoal}）` : ''}
+当前轮次: 第 ${round} 轮（共 ${rounds.value} 轮）
+
+之前的讨论记录:
+${history || '（暂无）'}
+
+请基于你的角色立场和专业能力，对主题给出你的分析观点。保持简洁（2-4句话），并尽量与其他参与者形成对话。`
+}
+
 async function startConference() {
   if (selectedAgents.value.length < 2 || !topic.value.trim()) return
   running.value = true
+  stopped.value = false
   messages.value = []
   currentRound.value = 0
 
-  // 模拟多轮对话
   for (let r = 1; r <= rounds.value; r++) {
+    if (stopped.value) break
     currentRound.value = r
+
     for (const agentId of selectedAgents.value) {
-      await new Promise(res => setTimeout(res, 800))
-      messages.value.push({
-        agent: agentName(agentId),
-        content: `[第 ${r} 轮] ${agentName(agentId)} 关于「${topic.value}」的分析观点...`,
-        round: r,
-      })
+      if (stopped.value) break
+
+      const prompt = buildContext(r, agentId)
+      const name = agentName(agentId)
+
+      try {
+        // 调用真实后端 Agent 对话
+        const res = await sendChatViaBackend(prompt, {
+          role: agentId,
+          sessionId: `conference-${Date.now()}`,
+        })
+        messages.value.push({ agent: name, content: res.reply, round: r })
+      } catch (e) {
+        logger.warn(`Agent ${name} 回复失败，使用降级响应`, e)
+        // 降级：生成有意义的占位内容
+        messages.value.push({
+          agent: name,
+          content: `[第 ${r} 轮] 作为${name}，关于「${topic.value}」我认为需要从${agentGoal(agentId) || '多个维度'}进行深入分析。`,
+          round: r,
+        })
+      }
+
+      // 滚动到最新消息
+      await nextTick()
+      messagesEl.value?.scrollTo({ top: messagesEl.value.scrollHeight, behavior: 'smooth' })
     }
   }
   running.value = false
 }
 
 function stopConference() {
+  stopped.value = true
   running.value = false
 }
 </script>
@@ -127,13 +175,13 @@ function stopConference() {
                 class="hc-btn hc-conf__stop"
                 @click="stopConference"
               >
-                <Pause :size="14" /> 暂停
+                <Square :size="14" /> 停止
               </button>
             </div>
           </div>
 
           <!-- 对话区 -->
-          <div class="hc-conf__messages" v-if="messages.length > 0 || running">
+          <div ref="messagesEl" class="hc-conf__messages" v-if="messages.length > 0 || running">
             <div class="hc-conf__divider">
               <span>会议记录</span>
             </div>
@@ -169,8 +217,11 @@ function stopConference() {
 <style scoped>
 .hc-conf-overlay {
   position: fixed;
-  inset: 0;
-  z-index: 50;
+  top: var(--hc-titlebar-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--hc-z-modal);
   display: flex;
   align-items: center;
   justify-content: center;

@@ -103,7 +103,7 @@ defineExpose({ handleKeydown })
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-card);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
-  z-index: 100;
+  z-index: var(--hc-z-popover);
   padding: 4px;
 }
 

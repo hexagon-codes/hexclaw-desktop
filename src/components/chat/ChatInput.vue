@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick } from 'vue'
-import { ArrowUp, Square, Paperclip, Zap, PenLine, Wand2 } from 'lucide-vue-next'
+import { ArrowUp, Square, Paperclip, Zap, PenLine, Wand2, Mic, MicOff } from 'lucide-vue-next'
+import { speechToText, getVoiceStatus } from '@/api/voice'
 import MentionPopup from './MentionPopup.vue'
 import type { ExecMode } from '@/types'
 
@@ -37,7 +38,7 @@ const canSend = computed(() => inputText.value.trim() && !props.streaming && !pr
 
 /** 根据模型能力动态生成文件接受类型 */
 const fileAccept = computed(() => {
-  const types = ['.pdf', '.txt', '.md', '.doc', '.docx', '.csv', '.json']
+  const types = ['.pdf', '.txt', '.md', '.doc', '.docx', '.xlsx', '.xls', '.csv', '.json']
   if (props.allowImage !== false) {
     types.push('.png', '.jpg', '.jpeg', '.gif', '.webp')
   }
@@ -106,12 +107,25 @@ function detectMention() {
       mentionQuery.value = query
       showMention.value = true
 
-      // 计算弹出位置
+      // 计算弹出位置，确保不溢出视口
       const rect = el.getBoundingClientRect()
-      mentionPosition.value = {
-        bottom: window.innerHeight - rect.top + 8,
-        left: rect.left + 40,
+      const popupMaxHeight = 240
+      const popupWidth = 320
+      let bottom = window.innerHeight - rect.top + 8
+      let left = rect.left + 40
+
+      // 防止顶部溢出（popup 从底部向上展开）
+      if (bottom + popupMaxHeight > window.innerHeight) {
+        bottom = window.innerHeight - rect.bottom - 8
       }
+      // 防止右侧溢出
+      if (left + popupWidth > window.innerWidth) {
+        left = window.innerWidth - popupWidth - 8
+      }
+      // 防止左侧溢出
+      if (left < 8) left = 8
+
+      mentionPosition.value = { bottom, left }
       return
     }
   }
@@ -164,6 +178,64 @@ function insertSkill(skillName: string) {
   })
 }
 
+// ─── 语音输入 ───────────────────────────────────────
+const recording = ref(false)
+const voiceAvailable = ref(false)
+let mediaRecorder: MediaRecorder | null = null
+let audioChunks: Blob[] = []
+
+// 检查语音服务可用性
+;(async () => {
+  try {
+    const status = await getVoiceStatus()
+    voiceAvailable.value = status.stt_enabled
+  } catch {
+    voiceAvailable.value = false
+  }
+})()
+
+async function toggleVoice() {
+  if (recording.value) {
+    stopRecording()
+    return
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    mediaRecorder = new MediaRecorder(stream)
+    audioChunks = []
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data)
+    }
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop())
+      if (audioChunks.length === 0) return
+      const blob = new Blob(audioChunks, { type: 'audio/webm' })
+      const file = new File([blob], 'voice.webm', { type: 'audio/webm' })
+      try {
+        const res = await speechToText(file)
+        if (res.text) {
+          inputText.value += res.text
+          nextTick(() => handleInput())
+        }
+      } catch {
+        // STT 服务不可用时静默失败
+      }
+    }
+    mediaRecorder.start()
+    recording.value = true
+  } catch {
+    // 麦克风权限被拒绝
+    voiceAvailable.value = false
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop()
+  }
+  recording.value = false
+}
+
 function focus() {
   textareaRef.value?.focus()
 }
@@ -204,11 +276,22 @@ defineExpose({ focus, setInput })
         v-model="inputText"
         rows="1"
         class="hc-chat-input__textarea"
-        placeholder="输入消息... (@ 提及 Agent/Skill, Enter 发送)"
+        placeholder="输入消息...（@ 提及 Agent/Skill）"
         :disabled="disabled"
         @keydown="handleKeydown"
         @input="handleInput"
       />
+
+      <button
+        v-if="voiceAvailable"
+        class="hc-chat-input__voice"
+        :class="{ 'hc-chat-input__voice--active': recording }"
+        :title="recording ? '停止录音' : '语音输入'"
+        @click="toggleVoice"
+      >
+        <MicOff v-if="recording" :size="15" />
+        <Mic v-else :size="15" />
+      </button>
 
       <button
         v-if="streaming"
@@ -240,7 +323,7 @@ defineExpose({ focus, setInput })
           @click="emit('update:execMode', 'craft')"
         >
           <PenLine :size="12" />
-          Craft
+          精编
         </button>
         <button
           class="hc-chat-input__mode-btn"
@@ -248,7 +331,7 @@ defineExpose({ focus, setInput })
           @click="emit('update:execMode', 'auto')"
         >
           <Wand2 :size="12" />
-          Auto
+          自动
         </button>
       </div>
 
@@ -376,6 +459,32 @@ defineExpose({ focus, setInput })
 
 .hc-chat-input__send:disabled {
   cursor: default;
+}
+
+.hc-chat-input__voice {
+  padding: var(--hc-space-2);
+  border-radius: var(--hc-radius-sm);
+  border: none;
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+  display: flex;
+  transition: color 0.15s;
+  margin-bottom: 1px;
+}
+
+.hc-chat-input__voice:hover {
+  color: var(--hc-text-secondary);
+}
+
+.hc-chat-input__voice--active {
+  color: var(--hc-error);
+  animation: hc-pulse 1.5s infinite;
+}
+
+@keyframes hc-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
 }
 
 /* ─── Bottom Toolbar ───── */

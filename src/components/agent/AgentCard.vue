@@ -2,7 +2,7 @@
 import { Bot, MessageSquare } from 'lucide-vue-next'
 import type { AgentRole } from '@/types'
 
-const props = defineProps<{
+defineProps<{
   role: AgentRole
 }>()
 

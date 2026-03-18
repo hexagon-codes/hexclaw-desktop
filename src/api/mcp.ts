@@ -1,4 +1,4 @@
-import { apiGet } from './client'
+import { apiGet, apiPost, apiDelete } from './client'
 import type { McpTool } from '@/types'
 
 export type { McpServer, McpTool } from '@/types'
@@ -11,4 +11,27 @@ export function getMcpTools() {
 /** 获取 MCP 服务器列表 */
 export function getMcpServers() {
   return apiGet<{ servers: string[]; total: number }>('/api/v1/mcp/servers')
+}
+
+/** 调用 MCP 工具（测试） */
+export function callMcpTool(toolName: string, args: Record<string, unknown>) {
+  return apiPost<{ result: unknown; error?: string }>('/api/v1/mcp/tools/call', {
+    tool: toolName,
+    arguments: args,
+  })
+}
+
+/** 获取 MCP 服务器状态 */
+export function getMcpServerStatus() {
+  return apiGet<{ statuses: Record<string, 'connected' | 'disconnected' | 'error'> }>('/api/v1/mcp/status')
+}
+
+/** 添加 MCP 服务器 */
+export function addMcpServer(name: string, command: string, args?: string[]) {
+  return apiPost<{ message: string }>('/api/v1/mcp/servers', { name, command, args })
+}
+
+/** 移除 MCP 服务器 */
+export function removeMcpServer(name: string) {
+  return apiDelete<{ message: string }>(`/api/v1/mcp/servers/${encodeURIComponent(name)}`)
 }

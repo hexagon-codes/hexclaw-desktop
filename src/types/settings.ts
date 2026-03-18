@@ -70,6 +70,7 @@ export interface GeneralConfig {
   log_level: string
   data_dir: string
   auto_start: boolean
+  welcomeCompleted?: boolean
 }
 
 /** 通知配置 */

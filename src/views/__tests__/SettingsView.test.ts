@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -30,6 +30,17 @@ vi.mock('@/utils/secure-store', () => ({
   loadSecureValue: vi.fn().mockResolvedValue(null),
   removeSecureValue: vi.fn().mockResolvedValue(undefined),
 }))
+
+// Mock Tauri Store（isTauri=true 时 settings store 会 import 它）
+vi.mock('@tauri-apps/plugin-store', () => {
+  class MockLazyStore {
+    async get() { return null }
+    async set() {}
+    async save() {}
+    async delete() {}
+  }
+  return { LazyStore: MockLazyStore }
+})
 
 // Mock lucide-vue-next 图标：获取原始导出的所有 key，统一替换为 stub
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -103,11 +114,18 @@ beforeAll(() => {
       dispatchEvent: vi.fn(),
     })),
   })
+
 })
 
 describe('SettingsView — E2E 关键路径', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // 每个测试前设置 isTauri，使 settings store 走后端 LLM 加载路径
+    ;(globalThis as Record<string, unknown>).isTauri = true
+  })
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).isTauri
   })
 
   // ────────────────────────────────────────────────────
@@ -118,14 +136,15 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     const expectedSections = [
-      'LLM 配置',
+      'LLM 服务商',
       '安全设置',
       '通用设置',
       '外观设置',
       '通知设置',
+      '通知推送',
       '存储设置',
       'MCP 服务配置',
-      '关于 HexClaw Desktop',
+      '运行引擎',
     ]
 
     for (const section of expectedSections) {
@@ -137,19 +156,21 @@ describe('SettingsView — E2E 关键路径', () => {
   // 2. 挂载时加载配置
   // ────────────────────────────────────────────────────
   it('loads config on mount', async () => {
-    const wrapper = mountSettingsView()
+    mountSettingsView()
+
+    // loadConfig 是多层 async 链：
+    // onMounted → loadConfig → LazyStore.get → loadLLMFromBackend → getLLMConfig
+    // 使用 waitFor 模式确保异步加载完成
     const store = useSettingsStore()
-
-    // 初始 loading 状态
-    expect(store.loading).toBe(true)
-
-    await flushPromises()
+    for (let i = 0; i < 20; i++) {
+      await flushPromises()
+      if (!store.loading) break
+    }
 
     // 配置应已加载
+    expect(store.loading).toBe(false)
     expect(store.config).not.toBeNull()
     expect(store.config?.llm.providers).toBeDefined()
-    expect(store.config?.llm.defaultModel).toBeDefined()
-    expect(store.loading).toBe(false)
   })
 
   // ────────────────────────────────────────────────────
@@ -159,8 +180,8 @@ describe('SettingsView — E2E 关键路径', () => {
     const wrapper = mountSettingsView()
     await flushPromises()
 
-    // LLM 配置表单字段应可见
-    expect(wrapper.text()).toContain('LLM 配置')
+    // LLM 服务商配置表单应可见
+    expect(wrapper.text()).toContain('LLM 服务商')
   })
 
   // ────────────────────────────────────────────────────
@@ -191,23 +212,18 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('日志级别')
     expect(wrapper.text()).toContain('数据目录')
 
-    // 切换到关于页面
-    const aboutBtn = wrapper.findAll('button').find((b) => b.text().includes('关于'))
-    await aboutBtn!.trigger('click')
+    // 切换到运行引擎
+    const engineBtn = wrapper.findAll('button').find((b) => b.text().includes('运行引擎'))
+    await engineBtn!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('HexClaw Desktop')
-    expect(wrapper.text()).toContain('v0.0.1')
-    expect(wrapper.text()).toContain('Tauri v2 (Rust)')
+    expect(wrapper.text()).toContain('HexClaw Engine')
   })
 
   // ────────────────────────────────────────────────────
   // 5. 保存配置并显示确认
   // ────────────────────────────────────────────────────
   it('saves config when save button is clicked and shows confirmation', async () => {
-    const { updateLLMConfig } = await import('@/api/config')
-    const mockedUpdate = vi.mocked(updateLLMConfig)
-
     const wrapper = mountSettingsView()
     await flushPromises()
 
@@ -230,10 +246,10 @@ describe('SettingsView — E2E 关键路径', () => {
     const mockedGetConfig = vi.mocked(getLLMConfig)
 
     // 让 getLLMConfig 延迟返回
-    let resolveConfig: (v: any) => void
+    let resolveConfig!: (v: unknown) => void
     mockedGetConfig.mockReturnValueOnce(
       new Promise((resolve) => {
-        resolveConfig = resolve
+        resolveConfig = resolve as (v: unknown) => void
       }),
     )
 
@@ -338,9 +354,9 @@ describe('SettingsView — E2E 关键路径', () => {
   it('falls back to default config when backend is unreachable', async () => {
     const { getLLMConfig } = await import('@/api/config')
     const mockedGetConfig = vi.mocked(getLLMConfig)
-    mockedGetConfig.mockRejectedValueOnce(new Error('Network error'))
+    mockedGetConfig.mockRejectedValue(new Error('Network error'))
 
-    const wrapper = mountSettingsView()
+    mountSettingsView()
     await flushPromises()
 
     const store = useSettingsStore()

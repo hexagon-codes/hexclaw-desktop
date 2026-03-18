@@ -71,6 +71,7 @@ describe('trapFocus', () => {
 
     const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })
     // Should not throw
-    container.dispatchEvent(enterEvent)
+    const dispatched = container.dispatchEvent(enterEvent)
+    expect(dispatched).toBe(true)
   })
 })

@@ -73,9 +73,9 @@ defineExpose({
 <style scoped>
 .hc-toast-container {
   position: fixed;
-  top: var(--hc-space-4);
+  top: calc(var(--hc-titlebar-height) + var(--hc-space-2));
   right: var(--hc-space-4);
-  z-index: 9999;
+  z-index: var(--hc-z-toast);
   display: flex;
   flex-direction: column;
   gap: 8px;

@@ -8,7 +8,7 @@ describe('ConfirmDialog', () => {
       props: { open: false },
       global: { stubs: { Teleport: true } },
     })
-    expect(wrapper.find('.fixed').exists()).toBe(false)
+    expect(wrapper.find('.hc-dialog-overlay').exists()).toBe(false)
   })
 
   it('shows when open is true', () => {
@@ -16,7 +16,7 @@ describe('ConfirmDialog', () => {
       props: { open: true },
       global: { stubs: { Teleport: true } },
     })
-    expect(wrapper.find('.fixed').exists()).toBe(true)
+    expect(wrapper.find('.hc-dialog-overlay').exists()).toBe(true)
   })
 
   it('renders custom title and message', () => {

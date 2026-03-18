@@ -69,38 +69,38 @@ import hexagonLogoUrl from '@/assets/hexagon-logo.png'
       <section class="hc-about__eco">
         <h2 class="hc-about__section-title">HEXAGON 开源生态</h2>
         <div class="hc-about__eco-chain">
-          <a href="https://github.com/everyday-items/toolkit" target="_blank" class="hc-about__eco-node">
+          <a href="https://github.com/hexagon-codes/toolkit" target="_blank" class="hc-about__eco-node">
             <span class="hc-about__eco-emoji">🛠</span>
             <span class="hc-about__eco-label">toolkit</span>
             <span class="hc-about__eco-sub">基础设施</span>
           </a>
           <span class="hc-about__eco-arrow">→</span>
-          <a href="https://github.com/everyday-items/ai-core" target="_blank" class="hc-about__eco-node">
+          <a href="https://github.com/hexagon-codes/ai-core" target="_blank" class="hc-about__eco-node">
             <span class="hc-about__eco-emoji">🧠</span>
             <span class="hc-about__eco-label">ai-core</span>
             <span class="hc-about__eco-sub">LLM 适配</span>
           </a>
           <span class="hc-about__eco-arrow">→</span>
-          <a href="https://github.com/everyday-items/hexagon" target="_blank" class="hc-about__eco-node hc-about__eco-node--hl">
+          <a href="https://github.com/hexagon-codes/hexagon" target="_blank" class="hc-about__eco-node hc-about__eco-node--hl">
             <span class="hc-about__eco-emoji">🔷</span>
             <span class="hc-about__eco-label">hexagon</span>
             <span class="hc-about__eco-sub">Agent 框架</span>
           </a>
           <span class="hc-about__eco-arrow">→</span>
-          <a href="https://github.com/everyday-items/hexclaw" target="_blank" class="hc-about__eco-node">
+          <a href="https://github.com/hexagon-codes/hexclaw" target="_blank" class="hc-about__eco-node">
             <span class="hc-about__eco-emoji">🦀</span>
             <span class="hc-about__eco-label">hexclaw</span>
             <span class="hc-about__eco-sub">后端服务</span>
           </a>
         </div>
         <div class="hc-about__eco-apps">
-          <a href="https://github.com/everyday-items/hexclaw-desktop" target="_blank" class="hc-about__eco-app hc-about__eco-app--current">
+          <a href="https://github.com/hexagon-codes/hexclaw-desktop" target="_blank" class="hc-about__eco-app hc-about__eco-app--current">
             hexclaw-desktop<span>桌面客户端</span>
           </a>
-          <a href="https://github.com/everyday-items/hexclaw-ui" target="_blank" class="hc-about__eco-app">
+          <a href="https://github.com/hexagon-codes/hexclaw-ui" target="_blank" class="hc-about__eco-app">
             hexclaw-ui<span>Web 客户端</span>
           </a>
-          <a href="https://github.com/everyday-items/hexagon-ui" target="_blank" class="hc-about__eco-app">
+          <a href="https://github.com/hexagon-codes/hexagon-ui" target="_blank" class="hc-about__eco-app">
             hexagon-ui<span>Agent 观测台</span>
           </a>
         </div>
@@ -108,16 +108,20 @@ import hexagonLogoUrl from '@/assets/hexagon-logo.png'
 
       <!-- Links -->
       <nav class="hc-about__links">
-        <a href="https://github.com/everyday-items/hexclaw-desktop/releases" target="_blank">Release Notes</a>
+        <a href="https://github.com/hexagon-codes/hexclaw-desktop/releases" target="_blank">Release Notes</a>
         <span class="hc-about__links-sep" />
-        <a href="https://github.com/everyday-items/hexclaw-desktop" target="_blank">GitHub</a>
+        <a href="https://github.com/hexagon-codes/hexclaw-desktop" target="_blank">GitHub</a>
         <span class="hc-about__links-sep" />
-        <a href="https://github.com/everyday-items/hexclaw-desktop/issues" target="_blank">反馈问题</a>
+        <a href="https://github.com/hexagon-codes/hexclaw-desktop/issues" target="_blank">反馈问题</a>
+        <span class="hc-about__links-sep" />
+        <a href="mailto:ai@hexclaw.net">河蟹 AI · ai@hexclaw.net</a>
+        <span class="hc-about__links-sep" />
+        <a href="mailto:support@hexclaw.net">河蟹支持 · support@hexclaw.net</a>
       </nav>
 
       <!-- Footer -->
       <footer class="hc-about__footer">
-        Copyright &copy; 2025–2026 everyday-items. Open-source under the Apache License 2.0.
+        Copyright &copy; 2025–2026 hexagon-codes. Open-source under the Apache License 2.0.
       </footer>
     </main>
   </div>

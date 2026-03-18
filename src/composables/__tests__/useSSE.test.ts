@@ -35,6 +35,7 @@ describe('useSSE', () => {
     expect(error.value).toBeNull()
   })
 
+
   it('streams content from SSE', async () => {
     const stream = createMockStream(['{"content":"Hello"}', '{"content":" World"}'])
     mockApiSSE.mockResolvedValue(stream)
@@ -90,9 +91,8 @@ describe('useSSE', () => {
 
   it('stop cancels the reader', async () => {
     // 创建一个不会自动结束的流
-    let controller: ReadableStreamDefaultController<string>
     const stream = new ReadableStream<string>({
-      start(c) { controller = c },
+      start() { /* keep stream open */ },
     })
     mockApiSSE.mockResolvedValue(stream)
 

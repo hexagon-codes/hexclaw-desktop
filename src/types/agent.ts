@@ -3,6 +3,9 @@ export interface AgentRole {
   name: string
   title: string
   goal: string
+  backstory?: string
+  tools?: string[]
+  constraints?: string[]
 }
 
 

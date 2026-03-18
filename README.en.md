@@ -168,6 +168,19 @@ Go to [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) to d
 
 > First launch on macOS may require allowing the app in **System Settings → Privacy & Security**.
 
+### CI / Packaging / Release Flow
+
+- `push / PR -> CI`: runs lint, type-check, tests, and web build automatically
+- `Actions -> Package -> Run workflow`: builds test installers for all platforms and uploads them as workflow artifacts
+- `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: builds and publishes the official GitHub Release assets
+
+Before creating a release tag, make sure:
+
+- `package.json` and `src-tauri/tauri.conf.json` versions match the tag
+- the Tauri updater public key is committed at `src-tauri/tauri.conf.json -> plugins.updater.pubkey`
+- GitHub Actions secrets include `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+- macOS releases also have the Apple signing and notarization secrets configured
+
 See the [User Guide](docs/guide.en.md) for detailed instructions.
 
 ## Development
@@ -216,6 +229,7 @@ make dev
 | `make sidecar` | Compile Go sidecar (current platform) |
 | `make sidecar-all` | Cross-compile sidecar for all platforms |
 | `make lint` | Code linting (oxlint + ESLint) |
+| `make lint-fix` | Lint and auto-fix |
 | `make format` | Code formatting (Prettier) |
 | `make type-check` | TypeScript type checking |
 | `make test` | Run unit tests |
@@ -406,7 +420,7 @@ Sidecar may not be compiled or there's a port conflict. Check:
 ### Code Standards
 
 - **Formatting**: `make format` (Prettier)
-- **Linting**: `make lint` (ESLint + oxlint)
+- **Linting**: `make lint` (ESLint + oxlint, check-only)
 - **Type checking**: `make type-check` (vue-tsc)
 
 ### Commit Message Format

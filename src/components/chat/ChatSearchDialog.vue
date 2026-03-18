@@ -86,6 +86,7 @@ nextTick(() => inputRef.value?.focus())
   background: var(--hc-bg-elevated);
   border-bottom: 1px solid var(--hc-border);
   animation: hc-slide-down 0.15s ease-out;
+  overflow: hidden;
 }
 
 @keyframes hc-slide-down {

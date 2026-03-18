@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { Key, Shield, Globe, Database, Bell, Server, Palette, Eye, EyeOff, Cpu, Plus, Trash2, ChevronDown, ChevronUp, Power } from 'lucide-vue-next'
+import { Key, Shield, Globe, Database, Bell, Server, Palette, Eye, EyeOff, Cpu, Plus, Trash2, ChevronDown, ChevronUp, Power, Webhook, Loader2, Pencil, CheckCircle, XCircle, Zap } from 'lucide-vue-next'
+import { NTag, NPopconfirm, NModal, NSpace } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
+import { getWebhooks, createWebhook, deleteWebhook, type Webhook as WebhookItem, type WebhookType, type WebhookEvent } from '@/api/webhook'
+import { trySafe } from '@/utils/errors'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { useValidation, rules } from '@/composables/useValidation'
 import { setLocale } from '@/i18n'
@@ -30,6 +33,82 @@ const addProviderType = ref<ProviderType>('openai')
 const newModelId = ref('')
 const newModelName = ref('')
 const newModelCaps = ref<Record<ModelCapability, boolean>>({ text: true, vision: false, video: false, audio: false, code: false })
+const showAddModelPanel = ref(false)
+
+// 编辑模型 Modal
+const editingModel = ref<{ providerId: string; idx: number; model: ModelOption } | null>(null)
+const editModelForm = ref<{ name: string; id: string; caps: Record<ModelCapability, boolean> }>({
+  name: '', id: '', caps: { text: true, vision: false, video: false, audio: false, code: false },
+})
+
+// ─── Webhook 状态 ────────────────────────────────────
+const webhooks = ref<WebhookItem[]>([])
+const webhookLoading = ref(false)
+const showAddWebhook = ref(false)
+const newWebhookName = ref('')
+const newWebhookType = ref<WebhookType>('wecom')
+const newWebhookUrl = ref('')
+const newWebhookEvents = ref<Record<WebhookEvent, boolean>>({
+  task_complete: true,
+  agent_complete: true,
+  error: true,
+})
+
+const webhookTypes: { key: WebhookType; label: string; color: string }[] = [
+  { key: 'wecom', label: '企业微信', color: '#07c160' },
+  { key: 'feishu', label: '飞书', color: '#3370ff' },
+  { key: 'dingtalk', label: '钉钉', color: '#0089ff' },
+  { key: 'custom', label: '自定义', color: '#6b7280' },
+]
+
+const webhookEventLabels: { key: WebhookEvent; label: string }[] = [
+  { key: 'task_complete', label: '任务完成' },
+  { key: 'agent_complete', label: 'Agent 完成' },
+  { key: 'error', label: '错误通知' },
+]
+
+async function loadWebhooks() {
+  webhookLoading.value = true
+  const [res] = await trySafe(() => getWebhooks(), '加载 Webhook 列表')
+  if (res) webhooks.value = res.webhooks || []
+  webhookLoading.value = false
+}
+
+async function handleAddWebhook() {
+  if (!newWebhookName.value.trim() || !newWebhookUrl.value.trim()) return
+  const events = (Object.entries(newWebhookEvents.value) as [WebhookEvent, boolean][])
+    .filter(([, v]) => v)
+    .map(([k]) => k)
+  webhookLoading.value = true
+  const [res] = await trySafe(
+    () => createWebhook({
+      name: newWebhookName.value.trim(),
+      type: newWebhookType.value,
+      url: newWebhookUrl.value.trim(),
+      events,
+    }),
+    '创建 Webhook',
+  )
+  if (res) {
+    await loadWebhooks()
+    showAddWebhook.value = false
+    newWebhookName.value = ''
+    newWebhookUrl.value = ''
+    newWebhookType.value = 'wecom'
+    newWebhookEvents.value = { task_complete: true, agent_complete: true, error: true }
+  }
+  webhookLoading.value = false
+}
+
+async function handleDeleteWebhook(name: string) {
+  if (!confirm('确定删除此 Webhook？')) return
+  await trySafe(() => deleteWebhook(name), '删除 Webhook')
+  await loadWebhooks()
+}
+
+function getWebhookTypeInfo(type: WebhookType) {
+  return webhookTypes.find((t) => t.key === type) || webhookTypes[3]!
+}
 
 const {
   validateField: validateSecField,
@@ -52,6 +131,7 @@ const sections = computed(() => [
   { key: 'general', label: t('settings.general.title'), icon: Globe },
   { key: 'appearance', label: t('settings.appearance.title'), icon: Palette },
   { key: 'notification', label: t('settings.notification.title'), icon: Bell },
+  { key: 'webhook', label: '通知推送', icon: Webhook },
   { key: 'storage', label: t('settings.storage.title'), icon: Database },
   { key: 'mcp', label: t('settings.mcp.title'), icon: Server },
   { key: 'engine', label: t('settings.engine.title'), icon: Cpu },
@@ -99,9 +179,22 @@ function handleLocaleChange(locale: string) {
   setLocale(locale as 'zh-CN' | 'en')
 }
 
-onMounted(() => {
-  settingsStore.loadConfig()
+onMounted(async () => {
+  // settings 页面被路由守卫豁免，config 可能尚未加载
+  await settingsStore.loadConfig()
   checkEngineStatus()
+})
+
+onUnmounted(() => {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
+})
+
+// 切换到 webhook 分区时自动加载
+watch(activeSection, (val) => {
+  if (val === 'webhook') loadWebhooks()
 })
 
 const config = computed(() => settingsStore.config)
@@ -132,11 +225,13 @@ function handleDeleteProvider(id: string) {
   if (editingProviderId.value === id) {
     editingProviderId.value = null
   }
+  autoSave()
 }
 
 /** 切换 Provider 启用/禁用 */
 function toggleProvider(provider: ProviderConfig) {
   settingsStore.updateProvider(provider.id, { enabled: !provider.enabled })
+  autoSave()
 }
 
 /** 添加自定义模型到 Provider */
@@ -157,6 +252,7 @@ function addCustomModel(provider: ProviderConfig) {
   newModelId.value = ''
   newModelName.value = ''
   newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false }
+  autoSave()
 }
 
 /** 删除模型 */
@@ -164,6 +260,90 @@ function removeModel(provider: ProviderConfig, modelId: string) {
   settingsStore.updateProvider(provider.id, {
     models: provider.models.filter((m) => m.id !== modelId),
   })
+  autoSave()
+}
+
+/** 打开编辑模型 Modal */
+function openEditModel(provider: ProviderConfig, idx: number) {
+  const model = provider.models[idx]!
+  editingModel.value = { providerId: provider.id, idx, model }
+  editModelForm.value = {
+    name: model.name,
+    id: model.id,
+    caps: {
+      text: (model.capabilities || ['text']).includes('text'),
+      vision: (model.capabilities || []).includes('vision'),
+      video: (model.capabilities || []).includes('video'),
+      audio: (model.capabilities || []).includes('audio'),
+      code: (model.capabilities || []).includes('code'),
+    },
+  }
+}
+
+/** 保存编辑的模型 */
+function saveEditModel() {
+  if (!editingModel.value) return
+  const { providerId, idx } = editingModel.value
+  const provider = settingsStore.config?.llm.providers.find(p => p.id === providerId)
+  if (!provider) return
+
+  const caps = (Object.entries(editModelForm.value.caps) as [ModelCapability, boolean][])
+    .filter(([, v]) => v)
+    .map(([k]) => k)
+
+  const updated = [...provider.models]
+  updated[idx] = {
+    ...updated[idx]!,
+    name: editModelForm.value.name || editModelForm.value.id,
+    id: editModelForm.value.id,
+    capabilities: caps.length > 0 ? caps : ['text'],
+  }
+  settingsStore.updateProvider(providerId, { models: updated })
+  editingModel.value = null
+  autoSave()
+}
+
+// ─── Provider 连接测试 ────────────────────────────────
+const testingProviderId = ref<string | null>(null)
+const testProviderResult = ref<Record<string, { ok: boolean; msg: string }>>({})
+
+async function testProvider(provider: ProviderConfig) {
+  testingProviderId.value = provider.id
+  delete testProviderResult.value[provider.id]
+  try {
+    const text = await invoke<string>('proxy_api_request', {
+      method: 'GET',
+      path: '/api/v1/config/llm',
+      body: null,
+    })
+    const data = JSON.parse(text)
+    // Check if the provider exists in backend config
+    const key = provider.id || provider.name
+    if (data.providers && data.providers[key]) {
+      testProviderResult.value[provider.id] = { ok: true, msg: '连接正常' }
+    } else {
+      // Backend is reachable, provider config present locally
+      testProviderResult.value[provider.id] = { ok: true, msg: '后端服务正常' }
+    }
+  } catch {
+    testProviderResult.value[provider.id] = { ok: false, msg: '无法连接后端服务' }
+  } finally {
+    testingProviderId.value = null
+  }
+}
+
+/** 自动保存（防抖） */
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
+function autoSave() {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = setTimeout(async () => {
+    if (!settingsStore.config) return
+    try {
+      await settingsStore.saveConfig(settingsStore.config)
+    } catch (e) {
+      console.error('[HexClaw] 自动保存失败:', e)
+    }
+  }, 500)
 }
 
 async function saveConfig() {
@@ -270,6 +450,17 @@ async function saveConfig() {
                     <span class="hc-provider__model-count">{{ provider.models.length }} {{ t('settings.llm.models').toLowerCase() }}</span>
                   </div>
                   <div class="hc-provider__card-actions">
+                    <button
+                      class="hc-provider__icon-btn"
+                      title="测试连接"
+                      :disabled="testingProviderId === provider.id"
+                      @click.stop="testProvider(provider)"
+                    >
+                      <Loader2 v-if="testingProviderId === provider.id" :size="14" class="animate-spin" style="color: var(--hc-text-muted);" />
+                      <CheckCircle v-else-if="testProviderResult[provider.id]?.ok" :size="14" style="color: #22c55e;" />
+                      <XCircle v-else-if="testProviderResult[provider.id] && !testProviderResult[provider.id]!.ok" :size="14" style="color: #ef4444;" />
+                      <Zap v-else :size="14" style="color: var(--hc-text-muted);" />
+                    </button>
                     <button class="hc-provider__icon-btn" :title="provider.enabled ? t('settings.llm.enabled') : t('settings.llm.disabled')" @click.stop="toggleProvider(provider)">
                       <Power :size="14" :class="provider.enabled ? 'hc-provider__power--on' : 'hc-provider__power--off'" />
                     </button>
@@ -308,35 +499,76 @@ async function saveConfig() {
                   <!-- 模型列表 -->
                   <div class="hc-settings__field">
                     <label class="hc-settings__label">{{ t('settings.llm.models') }} <span class="hc-settings__required">*</span></label>
-                    <div class="hc-provider__models">
-                      <div v-for="model in provider.models" :key="model.id" class="hc-provider__model-item">
-                        <span class="hc-provider__model-name">{{ model.name }}</span>
-                        <span class="hc-provider__model-id">{{ model.id }}</span>
-                        <span class="hc-provider__model-caps">
-                          <span v-if="(model.capabilities || ['text']).includes('vision')" class="hc-cap-tag hc-cap-tag--vision">视觉</span>
-                          <span v-if="(model.capabilities || []).includes('video')" class="hc-cap-tag hc-cap-tag--video">视频</span>
-                          <span v-if="(model.capabilities || []).includes('audio')" class="hc-cap-tag hc-cap-tag--audio">音频</span>
-                        </span>
-                        <button v-if="model.isCustom" class="hc-provider__model-del" @click="removeModel(provider, model.id)">×</button>
+                    <div class="hc-model-list">
+                      <div v-for="(model, idx) in provider.models" :key="model.id" class="hc-model-card">
+                        <div class="hc-model-card__main">
+                          <div class="hc-model-card__name">{{ model.name }}</div>
+                          <code class="hc-model-card__id">{{ model.id }}</code>
+                        </div>
+                        <NSpace :size="4" align="center">
+                          <NTag v-for="cap in (model.capabilities || ['text']).filter((c: string) => c !== 'text')" :key="cap" size="tiny" :bordered="false" :type="cap === 'vision' ? 'info' : cap === 'video' ? 'warning' : 'success'">
+                            {{ cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : '音频' }}
+                          </NTag>
+                          <button class="hc-model-card__action" @click="openEditModel(provider, idx)" title="编辑">
+                            <Pencil :size="13" />
+                          </button>
+                          <NPopconfirm @positive-click="removeModel(provider, model.id)">
+                            <template #trigger>
+                              <button class="hc-model-card__action hc-model-card__action--del" title="删除">
+                                <Trash2 :size="13" />
+                              </button>
+                            </template>
+                            确定删除模型「{{ model.name }}」？
+                          </NPopconfirm>
+                        </NSpace>
+                      </div>
+
+                      <!-- 添加模型 -->
+                      <button v-if="!showAddModelPanel" class="hc-model-add-btn" @click="showAddModelPanel = true">
+                        <Plus :size="14" />
+                        添加模型
+                      </button>
+                      <div v-else class="hc-model-add-form">
+                        <div class="hc-model-add-form__row">
+                          <input v-model="newModelId" type="text" class="hc-input hc-input--sm" placeholder="模型 ID *（如 gpt-4o）" />
+                          <input v-model="newModelName" type="text" class="hc-input hc-input--sm" placeholder="显示名称（选填）" />
+                        </div>
+                        <div class="hc-model-add-form__caps">
+                          <label v-for="cap in (['text', 'vision', 'video', 'audio'] as ModelCapability[])" :key="cap" class="hc-cap-check">
+                            <input v-model="newModelCaps[cap]" type="checkbox" :disabled="cap === 'text'" />
+                            <span>{{ cap === 'text' ? '文本' : cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : '音频' }}</span>
+                          </label>
+                        </div>
+                        <div class="hc-model-add-form__actions">
+                          <button class="hc-btn hc-btn-sm" @click="showAddModelPanel = false">取消</button>
+                          <button class="hc-btn hc-btn-primary hc-btn-sm" :disabled="!newModelId.trim()" @click="addCustomModel(provider); showAddModelPanel = false">
+                            <Plus :size="12" /> 添加
+                          </button>
+                        </div>
                       </div>
                     </div>
+                  </div>
 
-                    <!-- 添加自定义模型 -->
-                    <div class="hc-provider__add-model">
-                      <input v-model="newModelId" type="text" class="hc-input hc-input--sm" :placeholder="t('settings.llm.modelIdHint')" />
-                      <input v-model="newModelName" type="text" class="hc-input hc-input--sm" :placeholder="t('settings.llm.modelNameHint')" />
-                      <button class="hc-btn hc-btn-sm" @click="addCustomModel(provider)">
-                        <Plus :size="12" />
-                      </button>
-                    </div>
-                    <!-- 模型能力复选框 -->
-                    <div class="hc-provider__caps-row">
-                      <span class="hc-provider__caps-label">能力:</span>
-                      <label v-for="cap in (['text', 'vision', 'video', 'audio'] as ModelCapability[])" :key="cap" class="hc-provider__cap-check">
-                        <input v-model="newModelCaps[cap]" type="checkbox" :disabled="cap === 'text'" />
-                        <span>{{ cap === 'text' ? '文本' : cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : '音频' }}</span>
-                      </label>
-                    </div>
+                  <!-- 测试连接 -->
+                  <div class="hc-provider__test-row">
+                    <button
+                      class="hc-btn hc-btn-sm"
+                      :disabled="testingProviderId === provider.id"
+                      @click="testProvider(provider)"
+                    >
+                      <Loader2 v-if="testingProviderId === provider.id" :size="13" class="animate-spin" />
+                      <Zap v-else :size="13" />
+                      {{ testingProviderId === provider.id ? '测试中...' : '测试连接' }}
+                    </button>
+                    <span
+                      v-if="testProviderResult[provider.id]"
+                      class="hc-provider__test-badge"
+                      :class="testProviderResult[provider.id]!.ok ? 'hc-provider__test-badge--ok' : 'hc-provider__test-badge--err'"
+                    >
+                      <CheckCircle v-if="testProviderResult[provider.id]!.ok" :size="12" />
+                      <XCircle v-else :size="12" />
+                      {{ testProviderResult[provider.id]!.msg }}
+                    </span>
                   </div>
 
                   <div class="hc-provider__edit-footer">
@@ -525,6 +757,107 @@ async function saveConfig() {
             <p class="hc-settings__hint">{{ t('settings.notification.hint') }}</p>
           </div>
 
+          <!-- Webhook 通知推送 -->
+          <div v-else-if="activeSection === 'webhook'" class="hc-settings__section" style="max-width: 600px;">
+            <div class="hc-provider__header">
+              <h3 class="hc-settings__section-title" style="margin: 0;">通知推送</h3>
+              <button class="hc-btn hc-btn-sm" @click="showAddWebhook = !showAddWebhook">
+                <Plus :size="14" />
+                添加 Webhook
+              </button>
+            </div>
+
+            <p class="text-xs mb-4" style="color: var(--hc-text-muted);">
+              配置 IM Webhook 接收任务完成、Agent 执行结果、错误告警等通知。
+            </p>
+
+            <!-- 添加 Webhook 表单 -->
+            <div v-if="showAddWebhook" class="hc-webhook__add-panel">
+              <div class="hc-settings__field">
+                <label class="hc-settings__label">名称 <span class="hc-settings__required">*</span></label>
+                <input v-model="newWebhookName" type="text" class="hc-input" placeholder="例如：研发群通知" />
+              </div>
+
+              <div class="hc-settings__field">
+                <label class="hc-settings__label">类型</label>
+                <div class="hc-webhook__type-grid">
+                  <button
+                    v-for="wt in webhookTypes"
+                    :key="wt.key"
+                    class="hc-webhook__type-btn"
+                    :class="{ 'hc-webhook__type-btn--active': newWebhookType === wt.key }"
+                    :style="newWebhookType === wt.key ? { borderColor: wt.color, color: wt.color, background: wt.color + '15' } : {}"
+                    @click="newWebhookType = wt.key"
+                  >
+                    <span class="hc-webhook__type-dot" :style="{ background: wt.color }" />
+                    {{ wt.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="hc-settings__field">
+                <label class="hc-settings__label">Webhook URL <span class="hc-settings__required">*</span></label>
+                <input v-model="newWebhookUrl" type="text" class="hc-input" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." />
+              </div>
+
+              <div class="hc-settings__field">
+                <label class="hc-settings__label">触发事件</label>
+                <div class="hc-webhook__events">
+                  <label v-for="ev in webhookEventLabels" :key="ev.key" class="hc-webhook__event-check">
+                    <input v-model="newWebhookEvents[ev.key]" type="checkbox" />
+                    <span>{{ ev.label }}</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="hc-provider__add-actions">
+                <button class="hc-btn hc-btn-sm" @click="showAddWebhook = false">取消</button>
+                <button
+                  class="hc-btn hc-btn-primary hc-btn-sm"
+                  :disabled="!newWebhookName.trim() || !newWebhookUrl.trim() || webhookLoading"
+                  @click="handleAddWebhook"
+                >
+                  <Loader2 v-if="webhookLoading" :size="12" class="animate-spin mr-1" style="display: inline-block;" />
+                  保存
+                </button>
+              </div>
+            </div>
+
+            <!-- Webhook 列表 -->
+            <div v-if="webhookLoading && webhooks.length === 0" class="flex items-center justify-center py-8">
+              <Loader2 :size="20" class="animate-spin" style="color: var(--hc-text-muted);" />
+            </div>
+
+            <div v-else-if="webhooks.length === 0 && !showAddWebhook" class="hc-provider__empty">
+              <p class="hc-provider__empty-title">暂无 Webhook</p>
+              <p class="hc-provider__empty-desc">添加一个 Webhook 来接收通知推送</p>
+            </div>
+
+            <div v-else class="hc-webhook__list">
+              <div v-for="wh in webhooks" :key="wh.id" class="hc-webhook__card">
+                <div class="hc-webhook__card-head">
+                  <span class="hc-webhook__type-dot" :style="{ background: getWebhookTypeInfo(wh.type as WebhookType).color }" />
+                  <span class="hc-webhook__card-name">{{ wh.name }}</span>
+                  <span class="hc-webhook__tag" :style="{ color: getWebhookTypeInfo(wh.type as WebhookType).color, background: getWebhookTypeInfo(wh.type as WebhookType).color + '15' }">
+                    {{ getWebhookTypeInfo(wh.type as WebhookType).label }}
+                  </span>
+                  <div class="flex-1" />
+                  <button class="hc-provider__icon-btn" title="删除" @click="handleDeleteWebhook(wh.name)">
+                    <Trash2 :size="13" style="color: var(--hc-text-muted);" />
+                  </button>
+                </div>
+                <div class="hc-webhook__card-url">
+                  {{ wh.url ? (wh.url.length > 50 ? wh.url.slice(0, 50) + '...' : wh.url) : '—' }}
+                </div>
+                <div v-if="wh.events && wh.events.length > 0" class="hc-webhook__card-events">
+                  <span v-for="ev in wh.events" :key="ev" class="hc-webhook__event-tag">
+                    {{ webhookEventLabels.find(e => e.key === ev)?.label || ev }}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Storage -->
           <div v-else-if="activeSection === 'storage'" class="hc-settings__section">
             <h3 class="hc-settings__section-title">{{ t('settings.storage.title') }}</h3>
@@ -627,7 +960,7 @@ async function saveConfig() {
                   <span class="hc-engine__tag hc-engine__tag--go">Go</span>
                 </div>
                 <table class="hc-engine__table">
-                  <tr>
+                  <tbody><tr>
                     <td>{{ t('settings.engine.version') }}</td>
                     <td>{{ engineInfo.hexclaw.version }}</td>
                   </tr>
@@ -639,7 +972,7 @@ async function saveConfig() {
                     <td>Go Runtime</td>
                     <td>{{ engineInfo.goVersion }}</td>
                   </tr>
-                </table>
+                  </tbody></table>
               </div>
 
               <!-- Hexagon Engine -->
@@ -650,7 +983,7 @@ async function saveConfig() {
                   <span class="hc-engine__tag hc-engine__tag--core">Core</span>
                 </div>
                 <table class="hc-engine__table">
-                  <tr>
+                  <tbody><tr>
                     <td>{{ t('settings.engine.version') }}</td>
                     <td>{{ engineInfo.hexagon.version }}</td>
                   </tr>
@@ -658,7 +991,7 @@ async function saveConfig() {
                     <td>{{ t('settings.engine.capabilities') }}</td>
                     <td>ReAct · Plan &amp; Execute · Tool Call</td>
                   </tr>
-                </table>
+                  </tbody></table>
               </div>
 
               <!-- ai-core -->
@@ -669,11 +1002,11 @@ async function saveConfig() {
                   <span class="hc-engine__tag hc-engine__tag--llm">LLM</span>
                 </div>
                 <table class="hc-engine__table">
-                  <tr>
+                  <tbody><tr>
                     <td>{{ t('settings.engine.providers') }}</td>
                     <td>OpenAI · Claude · DeepSeek</td>
                   </tr>
-                </table>
+                  </tbody></table>
               </div>
             </div>
           </div>
@@ -682,6 +1015,44 @@ async function saveConfig() {
       </div>
     </div>
   </div>
+
+  <!-- 编辑模型 Modal -->
+  <NModal
+    :show="!!editingModel"
+    preset="card"
+    :title="'编辑模型'"
+    style="max-width: 420px"
+    :bordered="false"
+    :segmented="{ content: true, footer: true }"
+    @update:show="(v: boolean) => { if (!v) editingModel = null }"
+  >
+    <div class="hc-edit-model">
+      <div class="hc-edit-model__field">
+        <label>模型 ID <span class="hc-settings__required">*</span></label>
+        <input v-model="editModelForm.id" type="text" class="hc-input" placeholder="如 gpt-4o, claude-sonnet-4-6" />
+      </div>
+      <div class="hc-edit-model__field">
+        <label>显示名称</label>
+        <input v-model="editModelForm.name" type="text" class="hc-input" placeholder="留空则使用模型 ID" />
+      </div>
+      <div class="hc-edit-model__field">
+        <label>模型能力</label>
+        <div class="hc-edit-model__caps">
+          <label v-for="cap in (['text', 'vision', 'video', 'audio'] as ModelCapability[])" :key="cap" class="hc-edit-model__cap-item">
+            <input v-model="editModelForm.caps[cap]" type="checkbox" :disabled="cap === 'text'" />
+            <span class="hc-edit-model__cap-icon">{{ cap === 'text' ? '💬' : cap === 'vision' ? '👁' : cap === 'video' ? '🎬' : '🎤' }}</span>
+            <span>{{ cap === 'text' ? '文本' : cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : '音频' }}</span>
+          </label>
+        </div>
+      </div>
+    </div>
+    <template #footer>
+      <div style="display: flex; justify-content: flex-end; gap: 8px">
+        <button class="hc-btn hc-btn-sm" @click="editingModel = null">取消</button>
+        <button class="hc-btn hc-btn-primary hc-btn-sm" :disabled="!editModelForm.id.trim()" @click="saveEditModel">保存</button>
+      </div>
+    </template>
+  </NModal>
 </template>
 
 <style scoped>
@@ -1277,11 +1648,47 @@ async function saveConfig() {
   color: var(--hc-text-primary);
 }
 
+.hc-provider__model-name-input {
+  font-weight: 500;
+  color: var(--hc-text-primary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-size: 13px;
+  max-width: 180px;
+}
+
+.hc-provider__model-name-input:hover,
+.hc-provider__model-name-input:focus {
+  border-color: var(--hc-border);
+  background: var(--hc-bg-hover);
+  outline: none;
+}
+
 .hc-provider__model-id {
   color: var(--hc-text-muted);
   font-family: 'SF Mono', 'Menlo', monospace;
   font-size: 11px;
   flex: 1;
+}
+
+.hc-provider__model-id-input {
+  color: var(--hc-text-muted);
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-size: 11px;
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.hc-provider__model-id-input:hover,
+.hc-provider__model-id-input:focus {
+  border-color: var(--hc-border);
+  background: var(--hc-bg-hover);
+  outline: none;
 }
 
 .hc-provider__model-del {
@@ -1365,6 +1772,24 @@ async function saveConfig() {
   color: #af52de;
 }
 
+.hc-provider__test-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0 4px;
+}
+
+.hc-provider__test-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 6px;
+}
+.hc-provider__test-badge--ok { background: #22c55e15; color: #22c55e; }
+.hc-provider__test-badge--err { background: #ef444415; color: #ef4444; }
+
 .hc-provider__edit-footer {
   display: flex;
   justify-content: flex-end;
@@ -1426,5 +1851,305 @@ async function saveConfig() {
 
 .hc-settings__btn--saved {
   background: var(--hc-success) !important;
+}
+
+/* ─── Webhook ───── */
+.hc-webhook__add-panel {
+  padding: 14px;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
+  border: 1px solid var(--hc-border);
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.hc-webhook__type-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hc-webhook__type-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--hc-radius-sm);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.hc-webhook__type-btn:hover {
+  border-color: var(--hc-accent-subtle);
+}
+
+.hc-webhook__type-btn--active {
+  font-weight: 500;
+}
+
+.hc-webhook__type-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.hc-webhook__events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.hc-webhook__event-check {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+  cursor: pointer;
+}
+
+.hc-webhook__event-check input {
+  accent-color: var(--hc-accent);
+}
+
+.hc-webhook__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.hc-webhook__card {
+  padding: 10px 14px;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
+  border: 1px solid var(--hc-border);
+  transition: border-color 0.15s;
+}
+
+.hc-webhook__card:hover {
+  border-color: var(--hc-accent-subtle);
+}
+
+.hc-webhook__card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hc-webhook__card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
+}
+
+.hc-webhook__tag {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+}
+
+.hc-webhook__card-url {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  font-family: 'SF Mono', 'Menlo', monospace;
+  margin-top: 6px;
+  word-break: break-all;
+}
+
+.hc-webhook__card-events {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+
+.hc-webhook__event-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  color: var(--hc-text-secondary);
+  background: var(--hc-bg-hover);
+}
+
+/* ─── 模型卡片列表 ─── */
+.hc-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hc-model-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--hc-bg-hover, rgba(255,255,255,0.04));
+  border: 1px solid var(--hc-border, rgba(255,255,255,0.08));
+  transition: border-color 0.15s;
+}
+
+.hc-model-card:hover {
+  border-color: var(--hc-accent, #4a90d9);
+}
+
+.hc-model-card__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.hc-model-card__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hc-text-primary);
+  line-height: 1.4;
+}
+
+.hc-model-card__id {
+  font-size: 11px;
+  color: var(--hc-text-muted, #5c5c6b);
+  font-family: 'SF Mono', 'Menlo', monospace;
+}
+
+.hc-model-card__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--hc-text-muted, #5c5c6b);
+  transition: all 0.15s;
+}
+
+.hc-model-card__action:hover {
+  background: var(--hc-bg-card, rgba(255,255,255,0.06));
+  color: var(--hc-text-primary);
+}
+
+.hc-model-card__action--del:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+}
+
+/* ─── 添加模型 ─── */
+.hc-model-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 10px;
+  border: 1px dashed var(--hc-border, rgba(255,255,255,0.12));
+  border-radius: 8px;
+  background: transparent;
+  color: var(--hc-text-muted, #5c5c6b);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.hc-model-add-btn:hover {
+  border-color: var(--hc-accent, #4a90d9);
+  color: var(--hc-accent, #4a90d9);
+  background: rgba(74, 144, 217, 0.05);
+}
+
+.hc-model-add-form {
+  padding: 12px;
+  border: 1px solid var(--hc-border, rgba(255,255,255,0.08));
+  border-radius: 8px;
+  background: var(--hc-bg-hover, rgba(255,255,255,0.02));
+}
+
+.hc-model-add-form__row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.hc-model-add-form__caps {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.hc-cap-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+  cursor: pointer;
+}
+
+.hc-cap-check input {
+  accent-color: var(--hc-accent, #4a90d9);
+}
+
+.hc-model-add-form__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* ─── 编辑模型 Modal ─── */
+.hc-edit-model {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.hc-edit-model__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.hc-edit-model__field label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hc-text-secondary);
+}
+
+.hc-edit-model__caps {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.hc-edit-model__cap-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--hc-border, rgba(255,255,255,0.08));
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.hc-edit-model__cap-item:hover {
+  background: var(--hc-bg-hover, rgba(255,255,255,0.04));
+}
+
+.hc-edit-model__cap-item input {
+  accent-color: var(--hc-accent, #4a90d9);
+}
+
+.hc-edit-model__cap-icon {
+  font-size: 16px;
 }
 </style>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ScrollText, Trash2, Download, ChevronDown, ChevronRight } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
@@ -13,24 +13,44 @@ const logsStore = useLogsStore()
 const autoScroll = ref(true)
 const logsContainer = ref<HTMLDivElement>()
 const expandedIds = ref<Set<string>>(new Set())
+const now = ref(Date.now())
 
-const levelTabs = [
-  { key: '', label: t('logs.all') },
-  { key: 'debug', label: 'Debug' },
-  { key: 'info', label: 'Info' },
-  { key: 'warn', label: 'Warn' },
-  { key: 'error', label: 'Error' },
-] as const
+// Level counts from in-memory entries
+const levelCounts = computed(() => {
+  const counts: Record<string, number> = { debug: 0, info: 0, warn: 0, error: 0 }
+  for (const e of logsStore.entries) {
+    if (counts[e.level] !== undefined) counts[e.level]!++
+  }
+  return counts
+})
+
+const levelTabs = computed(() => [
+  { key: '', label: `${t('logs.all')} (${logsStore.entries.length})` },
+  { key: 'debug', label: `Debug (${levelCounts.value.debug})` },
+  { key: 'info', label: `Info (${levelCounts.value.info})` },
+  { key: 'warn', label: `Warn (${levelCounts.value.warn})` },
+  { key: 'error', label: `Error (${levelCounts.value.error})` },
+])
 
 const activeLevel = ref('')
+
+let nowTimer: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
   logsStore.connect()
   logsStore.loadStats()
+  // Update "now" every second for relative timestamps
+  nowTimer = setInterval(() => { now.value = Date.now() }, 1000)
+})
+
+// Auto-scroll when new log entries arrive
+watch(() => logsStore.entries.length, () => {
+  scrollToBottom()
 })
 
 onUnmounted(() => {
   logsStore.disconnect()
+  if (nowTimer) clearInterval(nowTimer)
 })
 
 function setLevel(level: string) {
@@ -64,7 +84,8 @@ function exportLogs() {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = `hexclaw-logs-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.log`
+  const dateStr = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+  a.download = `hexclaw-logs-${dateStr}.log`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -96,6 +117,23 @@ function formatTime(ts: string): string {
     const d = new Date(ts)
     return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
       + '.' + String(d.getMilliseconds()).padStart(3, '0')
+  } catch {
+    return ts
+  }
+}
+
+function formatRelativeTime(ts: string): string {
+  try {
+    const diff = now.value - new Date(ts).getTime()
+    if (diff < 0) return '刚刚'
+    const seconds = Math.floor(diff / 1000)
+    if (seconds < 5) return '刚刚'
+    if (seconds < 60) return `${seconds}s ago`
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours}h ago`
+    return `${Math.floor(hours / 24)}d ago`
   } catch {
     return ts
   }
@@ -174,8 +212,8 @@ function formatTime(ts: string): string {
             class="shrink-0 mt-0.5"
             :style="{ color: 'var(--hc-text-muted)' }"
           />
-          <span class="text-[10px] tabular-nums shrink-0 pt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
-            {{ formatTime(entry.timestamp) }}
+          <span class="text-[10px] tabular-nums shrink-0 pt-0.5" :style="{ color: 'var(--hc-text-muted)' }" :title="formatTime(entry.timestamp)">
+            {{ formatRelativeTime(entry.timestamp) }}
           </span>
           <span
             class="w-12 text-center rounded text-[10px] font-bold uppercase shrink-0 pt-0.5"

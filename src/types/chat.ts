@@ -22,8 +22,8 @@ export interface ChatMessage {
 export interface ChatSession {
   id: string
   title: string
-  agent_id: string
-  agent_name: string
+  agent_id?: string
+  agent_name?: string
   created_at: string
   updated_at: string
   message_count: number
@@ -68,7 +68,7 @@ export interface Artifact {
 }
 
 /** 聊天模式 */
-export type ChatMode = 'chat' | 'agent'
+export type ChatMode = 'chat' | 'agent' | 'research'
 
 /** 执行模式 */
 export type ExecMode = 'craft' | 'auto'

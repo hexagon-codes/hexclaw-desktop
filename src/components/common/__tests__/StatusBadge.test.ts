@@ -6,19 +6,21 @@ describe('StatusBadge', () => {
   it('renders online status', () => {
     const wrapper = mount(StatusBadge, { props: { status: 'online' } })
     expect(wrapper.text()).toBe('在线')
-    const dot = wrapper.find('span.w-1\\.5')
-    // jsdom 会将 hex 转为 rgb
-    expect(dot.attributes('style')).toContain('rgb(34, 197, 94)')
+    // 组件使用 BEM 类名 hc-badge--online 和 hc-badge__dot
+    expect(wrapper.find('.hc-badge--online').exists()).toBe(true)
+    expect(wrapper.find('.hc-badge__dot').exists()).toBe(true)
   })
 
   it('renders error status', () => {
     const wrapper = mount(StatusBadge, { props: { status: 'error' } })
     expect(wrapper.text()).toBe('错误')
+    expect(wrapper.find('.hc-badge--error').exists()).toBe(true)
   })
 
   it('renders running status', () => {
     const wrapper = mount(StatusBadge, { props: { status: 'running' } })
     expect(wrapper.text()).toBe('运行中')
+    expect(wrapper.find('.hc-badge--running').exists()).toBe(true)
   })
 
   it('renders offline status', () => {
@@ -34,5 +36,6 @@ describe('StatusBadge', () => {
   it('renders warning status', () => {
     const wrapper = mount(StatusBadge, { props: { status: 'warning' } })
     expect(wrapper.text()).toBe('警告')
+    expect(wrapper.find('.hc-badge--warning').exists()).toBe(true)
   })
 })

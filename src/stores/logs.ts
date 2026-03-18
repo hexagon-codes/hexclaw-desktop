@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { connectLogStream, getLogStats } from '@/api/logs'
+import { connectLogStream, getLogs, getLogStats } from '@/api/logs'
 import { trySafe } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 import type { LogEntry, LogStats, ApiError } from '@/types'
@@ -54,10 +54,12 @@ export const useLogsStore = defineStore('logs', () => {
       },
     )
 
-    ws.onopen = () => {
+    ws.onopen = async () => {
       connected.value = true
       reconnectDelay = 1000
       logger.info('日志流已连接')
+      // 加载历史日志
+      await loadHistory()
     }
 
     ws.onclose = () => {
@@ -73,6 +75,17 @@ export const useLogsStore = defineStore('logs', () => {
       ws = null
     }
     connected.value = false
+  }
+
+  /** 加载历史日志 */
+  async function loadHistory() {
+    const [res] = await trySafe(() => getLogs({ limit: MAX_ENTRIES }), '加载历史日志')
+    if (res?.logs?.length) {
+      // 历史日志是倒序的（最新在前），翻转为正序追加
+      const existing = new Set(entries.value.map(e => e.id))
+      const newEntries = res.logs.reverse().filter(e => !existing.has(e.id))
+      entries.value = [...newEntries, ...entries.value].slice(-MAX_ENTRIES)
+    }
   }
 
   /** 加载统计 */

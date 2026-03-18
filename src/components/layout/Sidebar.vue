@@ -1,3 +1,4 @@
+<!-- eslint-disable vue/multi-word-component-names -->
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -11,9 +12,10 @@ import {
   BookOpen,
   Brain,
   Server,
+  Radio,
   ScrollText,
   Layout,
-  Users,
+
   Settings,
 } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
@@ -50,9 +52,10 @@ const navItems = computed(() => [
   { path: '/knowledge', label: t('nav.knowledge'), icon: BookOpen },
   { path: '/memory', label: t('nav.memory'), icon: Brain },
   { path: '/mcp', label: t('nav.mcp'), icon: Server },
+  { path: '/im-channels', label: t('nav.imChannels'), icon: Radio },
   { path: '/logs', label: t('nav.logs'), icon: ScrollText },
   { path: '/canvas', label: t('nav.canvas'), icon: Layout },
-  { path: '/team', label: t('nav.team'), icon: Users },
+
 ])
 
 function isActive(path: string): boolean {

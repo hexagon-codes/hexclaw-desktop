@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Clock, Plus, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown } from 'lucide-vue-next'
-import { getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, type CronJob, type CronJobInput } from '@/api/tasks'
+import { Clock, Plus, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader } from 'lucide-vue-next'
+import { getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory, type CronJob, type CronJobInput, type CronJobRun } from '@/api/tasks'
 import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -21,18 +21,21 @@ const form = ref<CronJobInput>({
   type: 'cron',
 })
 
-const schedulePresets = [
-  { label: '每天早上 9 点', value: '0 9 * * *' },
-  { label: '每小时', value: '@every 1h' },
-  { label: '每 30 分钟', value: '@every 30m' },
-  { label: '每 5 分钟', value: '@every 5m' },
-  { label: '每周一早上 9 点', value: '0 9 * * 1' },
-  { label: '每天中午 12 点', value: '0 12 * * *' },
-  { label: '每天晚上 6 点', value: '0 18 * * *' },
-  { label: '每天', value: '@daily' },
-]
+const schedulePresets = computed(() => [
+  { label: t('tasks.presetDaily9'), value: '0 9 * * *' },
+  { label: t('tasks.presetHourly'), value: '@every 1h' },
+  { label: t('tasks.preset30min'), value: '@every 30m' },
+  { label: t('tasks.preset5min'), value: '@every 5m' },
+  { label: t('tasks.presetMon9'), value: '0 9 * * 1' },
+  { label: t('tasks.presetNoon'), value: '0 12 * * *' },
+  { label: t('tasks.presetEvening'), value: '0 18 * * *' },
+  { label: t('tasks.presetDaily'), value: '@daily' },
+])
 
 const showPresets = ref(false)
+const triggeringJobs = ref<Set<string>>(new Set())
+const jobHistories = ref<Record<string, CronJobRun[]>>({})
+const expandedJobId = ref<string | null>(null)
 
 const formValid = computed(() => {
   return form.value.name.trim() !== '' && form.value.schedule.trim() !== '' && form.value.prompt.trim() !== ''
@@ -100,13 +103,78 @@ async function handleDelete(job: CronJob) {
   }
 }
 
+async function handleTrigger(job: CronJob) {
+  if (triggeringJobs.value.has(job.id)) return
+  triggeringJobs.value = new Set([...triggeringJobs.value, job.id])
+  try {
+    await triggerCronJob(job.id)
+    job.run_count += 1
+    job.last_run_at = new Date().toISOString()
+    // Refresh history if expanded
+    if (expandedJobId.value === job.id) {
+      await loadJobHistory(job.id)
+    }
+  } catch (e) {
+    console.error('手动触发任务失败:', e)
+  } finally {
+    const next = new Set(triggeringJobs.value)
+    next.delete(job.id)
+    triggeringJobs.value = next
+  }
+}
+
+async function loadJobHistory(jobId: string) {
+  try {
+    const res = await getCronJobHistory(jobId, 5)
+    jobHistories.value[jobId] = res.runs || []
+  } catch (e) {
+    console.error('加载执行历史失败:', e)
+    // Provide empty array so UI doesn't break
+    jobHistories.value[jobId] = []
+  }
+}
+
+async function toggleHistory(jobId: string) {
+  if (expandedJobId.value === jobId) {
+    expandedJobId.value = null
+  } else {
+    expandedJobId.value = jobId
+    await loadJobHistory(jobId)
+  }
+}
+
+function formatDuration(ms?: number): string {
+  if (!ms) return '-'
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  return `${(ms / 60000).toFixed(1)}min`
+}
+
+function runStatusIcon(status: string) {
+  switch (status) {
+    case 'success': return CheckCircle
+    case 'failed': return XCircle
+    case 'running': return Loader
+    default: return Clock
+  }
+}
+
+function runStatusColor(status: string): string {
+  switch (status) {
+    case 'success': return 'var(--hc-success)'
+    case 'failed': return 'var(--hc-error)'
+    case 'running': return 'var(--hc-accent)'
+    default: return 'var(--hc-text-muted)'
+  }
+}
+
 function formatTime(ts?: string): string {
   if (!ts) return '-'
   return new Date(ts).toLocaleString('zh-CN')
 }
 
 function scheduleLabel(schedule: string): string {
-  const preset = schedulePresets.find((p) => p.value === schedule)
+  const preset = schedulePresets.value.find((p) => p.value === schedule)
   return preset ? preset.label : schedule
 }
 
@@ -130,9 +198,9 @@ function statusBg(status: string): string {
 
 function statusText(status: string): string {
   switch (status) {
-    case 'active': return '运行中'
-    case 'paused': return '已暂停'
-    case 'done': return '已完成'
+    case 'active': return t('tasks.statusActive')
+    case 'paused': return t('tasks.statusPaused')
+    case 'done': return t('tasks.statusDone')
     default: return status
   }
 }
@@ -146,7 +214,7 @@ function statusText(status: string): string {
           class="hc-btn hc-btn-secondary"
           style="padding: 6px 8px;"
           @click="loadJobs"
-          title="刷新"
+          :title="t('common.refresh')"
         >
           <RefreshCw :size="15" />
         </button>
@@ -198,47 +266,81 @@ function statusText(status: string): string {
               <Calendar :size="13" />
               <span>{{ scheduleLabel(job.schedule) }}</span>
             </div>
-            <div class="task-card__meta-item">
+            <div class="task-card__meta-item task-card__meta-item--next" :style="{ color: 'var(--hc-accent)', fontWeight: 500 }">
               <Clock :size="13" />
-              <span>下次: {{ formatTime(job.next_run_at) }}</span>
+              <span>{{ t('tasks.nextRun', { time: formatTime(job.next_run_at) }) }}</span>
             </div>
             <div class="task-card__meta-item">
               <Hash :size="13" />
-              <span>已执行 {{ job.run_count }} 次</span>
+              <span>{{ t('tasks.execCount', { count: job.run_count }) }}</span>
             </div>
           </div>
 
           <!-- Card info row -->
           <div class="task-card__info">
             <span class="task-card__type-badge">
-              {{ job.type === 'cron' ? '重复' : '单次' }}
+              {{ job.type === 'cron' ? t('tasks.repeat') : t('tasks.once') }}
             </span>
             <span v-if="job.last_run_at" class="task-card__last-run">
-              上次运行: {{ formatTime(job.last_run_at) }}
+              {{ t('tasks.lastRunAt', { time: formatTime(job.last_run_at) }) }}
             </span>
           </div>
 
           <!-- Card actions -->
           <div class="task-card__actions">
             <button
+              class="task-card__action-btn task-card__action-btn--trigger"
+              :style="{ color: 'var(--hc-accent)' }"
+              :title="t('tasks.triggerNow')"
+              :disabled="triggeringJobs.has(job.id)"
+              @click="handleTrigger(job)"
+            >
+              <Loader v-if="triggeringJobs.has(job.id)" :size="14" class="animate-spin" />
+              <Zap v-else :size="14" />
+              <span>{{ triggeringJobs.has(job.id) ? t('tasks.triggering') : t('tasks.triggerNow') }}</span>
+            </button>
+            <button
               v-if="job.status !== 'done'"
               class="task-card__action-btn"
               :style="{ color: job.status === 'active' ? 'var(--hc-warning)' : 'var(--hc-success)' }"
-              :title="job.status === 'active' ? '暂停' : '恢复'"
+              :title="job.status === 'active' ? t('tasks.pauseTask') : t('tasks.resumeTask')"
               @click="handlePauseResume(job)"
             >
               <Pause v-if="job.status === 'active'" :size="14" />
               <Play v-else :size="14" />
-              <span>{{ job.status === 'active' ? '暂停' : '恢复' }}</span>
+              <span>{{ job.status === 'active' ? t('tasks.pauseTask') : t('tasks.resumeTask') }}</span>
+            </button>
+            <button
+              class="task-card__action-btn"
+              :style="{ color: expandedJobId === job.id ? 'var(--hc-accent)' : 'var(--hc-text-secondary)' }"
+              :title="t('tasks.execHistory')"
+              @click="toggleHistory(job.id)"
+            >
+              <History :size="14" />
+              <span>{{ t('tasks.history') }}</span>
             </button>
             <button
               class="task-card__action-btn task-card__action-btn--danger"
-              title="删除"
+              :title="t('common.delete')"
               @click="handleDelete(job)"
             >
               <Trash2 :size="14" />
-              <span>删除</span>
+              <span>{{ t('common.delete') }}</span>
             </button>
+          </div>
+
+          <!-- Execution history -->
+          <div v-if="expandedJobId === job.id" class="task-card__history">
+            <div class="task-card__history-title">{{ t('tasks.recentExecHistory') }}</div>
+            <div v-if="!jobHistories[job.id]?.length" class="task-card__history-empty">{{ t('tasks.noExecHistory') }}</div>
+            <div v-else class="task-card__history-list">
+              <div v-for="run in jobHistories[job.id]" :key="run.id" class="task-card__history-item">
+                <component :is="runStatusIcon(run.status)" :size="13" :style="{ color: runStatusColor(run.status), flexShrink: 0 }" />
+                <span class="task-card__history-time">{{ formatTime(run.started_at) }}</span>
+                <span v-if="run.duration_ms" class="task-card__history-duration">{{ formatDuration(run.duration_ms) }}</span>
+                <span class="task-card__history-status" :style="{ color: runStatusColor(run.status) }">{{ run.status }}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -263,20 +365,20 @@ function statusText(status: string): string {
                   v-model="form.name"
                   type="text"
                   class="hc-input"
-                  placeholder="例如: 每日新闻摘要"
+                  :placeholder="t('tasks.taskNamePlaceholder')"
                 />
               </div>
 
               <!-- Schedule -->
               <div class="hc-field">
-                <label class="hc-field__label">执行计划</label>
+                <label class="hc-field__label">{{ t('tasks.schedule') }}</label>
                 <div class="schedule-input-wrap">
                   <input
                     v-model="form.schedule"
                     type="text"
                     class="hc-input"
                     style="font-family: monospace;"
-                    placeholder="Cron 表达式，如 0 9 * * *"
+                    :placeholder="t('tasks.cronExprPlaceholder')"
                   />
                   <button
                     class="schedule-preset-btn"
@@ -310,13 +412,13 @@ function statusText(status: string): string {
                   rows="4"
                   class="hc-input"
                   style="resize: none; font-family: inherit;"
-                  placeholder="描述 Agent 需要执行的任务..."
+                  :placeholder="t('tasks.promptPlaceholder')"
                 />
               </div>
 
               <!-- Type toggle -->
               <div class="hc-field">
-                <label class="hc-field__label">任务类型</label>
+                <label class="hc-field__label">{{ t('tasks.taskType') }}</label>
                 <div class="type-toggle">
                   <button
                     class="type-toggle__btn"
@@ -324,7 +426,7 @@ function statusText(status: string): string {
                     @click="form.type = 'cron'"
                   >
                     <RefreshCw :size="14" />
-                    重复
+                    {{ t('tasks.repeat') }}
                   </button>
                   <button
                     class="type-toggle__btn"
@@ -332,20 +434,20 @@ function statusText(status: string): string {
                     @click="form.type = 'once'"
                   >
                     <Play :size="14" />
-                    单次
+                    {{ t('tasks.once') }}
                   </button>
                 </div>
               </div>
             </div>
             <div class="hc-modal__footer">
-              <button class="hc-btn hc-btn-secondary" @click="showForm = false">取消</button>
+              <button class="hc-btn hc-btn-secondary" @click="showForm = false">{{ t('common.cancel') }}</button>
               <button
                 class="hc-btn hc-btn-primary"
                 :disabled="!formValid || submitting"
                 @click="handleCreate"
               >
                 <Save :size="14" />
-                创建
+                {{ t('common.create') }}
               </button>
             </div>
           </div>
@@ -505,11 +607,82 @@ function statusText(status: string): string {
   background: rgba(245, 101, 101, 0.1);
 }
 
+.task-card__action-btn--trigger:hover {
+  background: var(--hc-accent-subtle, rgba(99, 102, 241, 0.1));
+}
+
+.task-card__action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ── History ── */
+.task-card__history {
+  padding-top: 8px;
+  border-top: 1px solid var(--hc-divider);
+}
+
+.task-card__history-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--hc-text-muted);
+  margin-bottom: 6px;
+}
+
+.task-card__history-empty {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  padding: 4px 0;
+}
+
+.task-card__history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-card__history-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--hc-text-secondary);
+  padding: 3px 0;
+}
+
+.task-card__history-time {
+  flex: 1;
+  min-width: 0;
+}
+
+.task-card__history-duration {
+  color: var(--hc-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-card__history-status {
+  font-weight: 500;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
 /* ── Modal ── */
 .hc-modal-overlay {
   position: fixed;
-  inset: 0;
-  z-index: 50;
+  top: var(--hc-titlebar-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--hc-z-modal);
   display: flex;
   align-items: center;
   justify-content: center;

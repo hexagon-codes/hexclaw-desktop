@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { LogEntry } from '@/api/logs'
 
-const props = defineProps<{
+defineProps<{
   entry: LogEntry
 }>()
 

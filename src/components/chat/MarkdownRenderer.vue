@@ -11,7 +11,7 @@ const md = createMarkdownRenderer()
 let initialized = false
 
 function createMarkdownRenderer() {
-  if ((globalThis as any).__hc_md) return (globalThis as any).__hc_md as MarkdownIt
+  if ((globalThis as unknown as Record<string, unknown>).__hc_md) return (globalThis as unknown as Record<string, unknown>).__hc_md as MarkdownIt
 
   const instance = new MarkdownIt({
     html: false,
@@ -34,7 +34,7 @@ function createMarkdownRenderer() {
     </div>`
   }
 
-  ;(globalThis as any).__hc_md = instance
+  ;(globalThis as unknown as Record<string, unknown>).__hc_md = instance
   return instance
 }
 
@@ -52,7 +52,10 @@ onMounted(() => {
   }
 })
 
-onUnmounted(() => {})
+onUnmounted(() => {
+  document.removeEventListener('click', handleCopyClick)
+  initialized = false
+})
 
 const rendered = computed(() => DOMPurify.sanitize(md.render(props.content)))
 </script>

@@ -24,15 +24,36 @@ export function createCronJob(input: CronJobInput) {
 
 /** 删除任务 */
 export function deleteCronJob(id: string) {
-  return apiDelete(`/api/v1/cron/jobs/${id}`)
+  return apiDelete<{ message: string }>(`/api/v1/cron/jobs/${id}`)
 }
 
 /** 暂停任务 */
 export function pauseCronJob(id: string) {
-  return apiPost(`/api/v1/cron/jobs/${id}/pause`)
+  return apiPost<{ message: string }>(`/api/v1/cron/jobs/${id}/pause`)
 }
 
 /** 恢复任务 */
 export function resumeCronJob(id: string) {
-  return apiPost(`/api/v1/cron/jobs/${id}/resume`)
+  return apiPost<{ message: string }>(`/api/v1/cron/jobs/${id}/resume`)
+}
+
+/** 立即触发任务 */
+export function triggerCronJob(id: string) {
+  return apiPost<{ message: string; run_id?: string }>(`/api/v1/cron/jobs/${id}/trigger`)
+}
+
+/** 获取任务执行历史 */
+export function getCronJobHistory(id: string, limit = 5) {
+  return apiGet<{ runs: CronJobRun[] }>(`/api/v1/cron/jobs/${id}/history`, { limit })
+}
+
+/** 任务执行记录 */
+export interface CronJobRun {
+  id: string
+  job_id: string
+  status: 'success' | 'failed' | 'running'
+  started_at: string
+  finished_at?: string
+  duration_ms?: number
+  error?: string
 }

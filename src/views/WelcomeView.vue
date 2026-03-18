@@ -1,16 +1,46 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Key, Bot, Sparkles, ArrowRight, ArrowLeft, Check } from 'lucide-vue-next'
+import { Key, Bot, Sparkles, ArrowRight, ArrowLeft, Check, Loader2, CheckCircle, XCircle } from 'lucide-vue-next'
+import { invoke } from '@tauri-apps/api/core'
+import { useSettingsStore } from '@/stores/settings'
+import { PROVIDER_PRESETS } from '@/config/providers'
+import type { ProviderType } from '@/types'
 
 const router = useRouter()
 const { t } = useI18n()
+const settingsStore = useSettingsStore()
 const step = ref(0)
+const finishing = ref(false)
 
 const apiKey = ref('')
-const provider = ref('openai')
+const provider = ref<ProviderType>('openai')
 const model = ref('gpt-4o')
+
+/** Available models based on selected provider */
+const providerModels = computed(() => {
+  const preset = PROVIDER_PRESETS[provider.value]
+  return preset?.defaultModels ?? []
+})
+
+/** Whether the current provider requires an API key */
+const requiresApiKey = computed(() => provider.value !== 'ollama')
+
+/** Validation: API key required for non-Ollama providers */
+const canProceedFromStep0 = computed(() => {
+  if (!requiresApiKey.value) return true
+  return apiKey.value.trim().length > 0
+})
+
+// Reset model when provider changes
+watch(provider, (newProvider) => {
+  const preset = PROVIDER_PRESETS[newProvider]
+  const defaultModels = preset?.defaultModels ?? []
+  model.value = defaultModels[0]?.id ?? ''
+  // Clear API key when switching providers
+  apiKey.value = ''
+})
 
 const steps = computed(() => [
   { title: t('welcome.step1Title'), description: t('welcome.step1Desc'), icon: Key },
@@ -18,11 +48,78 @@ const steps = computed(() => [
   { title: t('welcome.step3Title'), description: t('welcome.step3Desc'), icon: Sparkles },
 ])
 
-function nextStep() {
+// ─── 连接测试 ──────────────────────────────────────
+const connectionTesting = ref(false)
+const connectionResult = ref<{ ok: boolean; msg: string } | null>(null)
+
+async function testConnection() {
+  connectionTesting.value = true
+  connectionResult.value = null
+  try {
+    const text = await invoke<string>('proxy_api_request', {
+      method: 'GET',
+      path: '/health',
+      body: null,
+    })
+    const data = JSON.parse(text)
+    if (data.status === 'ok' || data.version) {
+      connectionResult.value = { ok: true, msg: '连接成功，后端服务运行正常' }
+    } else {
+      connectionResult.value = { ok: true, msg: '后端服务已响应' }
+    }
+  } catch {
+    connectionResult.value = { ok: false, msg: '无法连接后端服务，请确认 Engine 已启动' }
+  } finally {
+    connectionTesting.value = false
+  }
+}
+
+async function finishWizard() {
+  if (finishing.value) return
+  finishing.value = true
+  try {
+  // Ensure config is loaded
+  if (!settingsStore.config) {
+    await settingsStore.loadConfig()
+  }
+
+  const preset = PROVIDER_PRESETS[provider.value]
+
+  // Build and add provider config
+  const selectedModel = providerModels.value.find(m => m.id === model.value)
+  settingsStore.addProvider({
+    name: preset.name,
+    type: provider.value,
+    enabled: true,
+    apiKey: requiresApiKey.value ? apiKey.value.trim() : '',
+    baseUrl: preset.defaultBaseUrl,
+    models: selectedModel
+      ? [{ id: selectedModel.id, name: selectedModel.name, capabilities: selectedModel.capabilities ?? ['text'] }]
+      : providerModels.value.length > 0
+        ? [providerModels.value[0]!]
+        : [],
+  })
+
+  // Set default model
+  if (settingsStore.config) {
+    settingsStore.config.llm.defaultModel = model.value
+    settingsStore.config.general.welcomeCompleted = true
+    await settingsStore.saveConfig(settingsStore.config)
+  }
+
+  router.push('/chat')
+  } finally {
+    finishing.value = false
+  }
+}
+
+async function nextStep() {
+  if (finishing.value) return
+  if (step.value === 0 && !canProceedFromStep0.value) return
   if (step.value < 2) {
     step.value++
   } else {
-    router.push('/chat')
+    await finishWizard()
   }
 }
 
@@ -30,7 +127,15 @@ function prevStep() {
   if (step.value > 0) step.value--
 }
 
-function skip() {
+async function skip() {
+  // Mark welcome as completed even when skipping
+  if (!settingsStore.config) {
+    await settingsStore.loadConfig()
+  }
+  if (settingsStore.config) {
+    settingsStore.config.general.welcomeCompleted = true
+    await settingsStore.saveConfig(settingsStore.config)
+  }
   router.push('/chat')
 }
 </script>
@@ -97,6 +202,9 @@ function skip() {
               <option value="openai">OpenAI</option>
               <option value="deepseek">DeepSeek</option>
               <option value="anthropic">Anthropic</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="qwen">通义千问</option>
+              <option value="ark">豆包 (Ark)</option>
               <option value="ollama">Ollama (本地)</option>
             </select>
           </div>
@@ -107,8 +215,27 @@ function skip() {
               type="password"
               class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
               :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-              placeholder="sk-..."
+              :placeholder="PROVIDER_PRESETS[provider].placeholder"
+              :disabled="!requiresApiKey"
             />
+            <p v-if="!requiresApiKey" class="text-xs mt-1" :style="{ color: 'var(--hc-text-muted)' }">
+              Ollama 运行在本地，无需 API Key
+            </p>
+            <p v-else-if="apiKey.trim().length === 0" class="text-xs mt-1" :style="{ color: 'var(--hc-warning, #f59e0b)' }">
+              请输入 API Key 以继续
+            </p>
+          </div>
+          <div>
+            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Model</label>
+            <select
+              v-model="model"
+              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
+              :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+            >
+              <option v-for="m in providerModels" :key="m.id" :value="m.id">
+                {{ m.name }}
+              </option>
+            </select>
           </div>
         </div>
 
@@ -134,9 +261,41 @@ function skip() {
         <div v-else class="text-center py-4">
           <Sparkles :size="48" class="mx-auto mb-4" :style="{ color: 'var(--hc-accent)' }" />
           <p class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ t('welcome.step3Desc') }}</p>
-          <p class="text-xs mt-1" :style="{ color: 'var(--hc-text-secondary)' }">
+          <p class="text-xs mt-1 mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
             {{ t('welcome.startJourney') }}
           </p>
+
+          <!-- 测试连接 -->
+          <button
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border"
+            :style="{
+              borderColor: 'var(--hc-border)',
+              color: 'var(--hc-text-secondary)',
+              background: 'var(--hc-bg-main)',
+            }"
+            :disabled="connectionTesting"
+            @click="testConnection"
+          >
+            <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
+            <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: #22c55e;" />
+            <XCircle v-else-if="connectionResult && !connectionResult.ok" :size="12" style="color: #ef4444;" />
+            {{ connectionTesting ? '测试中...' : '测试连接' }}
+          </button>
+
+          <div v-if="connectionResult" class="mt-3">
+            <p
+              class="text-xs px-3 py-1.5 rounded-lg inline-block"
+              :style="{
+                background: connectionResult.ok ? '#22c55e15' : '#ef444415',
+                color: connectionResult.ok ? '#22c55e' : '#ef4444',
+              }"
+            >
+              {{ connectionResult.msg }}
+            </p>
+            <p v-if="!connectionResult.ok" class="text-xs mt-1.5" :style="{ color: 'var(--hc-text-muted)' }">
+              可跳过测试，稍后在设置中重新配置
+            </p>
+          </div>
         </div>
       </div>
 
@@ -161,8 +320,13 @@ function skip() {
         </button>
 
         <button
-          class="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium text-white"
-          :style="{ background: 'var(--hc-accent)' }"
+          class="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-medium text-white transition-opacity"
+          :style="{
+            background: 'var(--hc-accent)',
+            opacity: (step === 0 && !canProceedFromStep0) || finishing ? 0.5 : 1,
+            cursor: (step === 0 && !canProceedFromStep0) || finishing ? 'not-allowed' : 'pointer',
+          }"
+          :disabled="finishing"
           @click="nextStep"
         >
           {{ step === 2 ? t('welcome.start') : t('welcome.next') }}

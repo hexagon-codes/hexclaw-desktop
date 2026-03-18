@@ -1,6 +1,6 @@
 # HexClaw Desktop — 开发命令
 
-.PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 lint format
+.PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 lint lint-fix format
 
 # 开发模式 (前端 + Tauri 窗口)
 dev:
@@ -43,6 +43,10 @@ sidecar-windows-amd64:
 # 代码检查
 lint:
 	pnpm lint
+
+# 代码检查并自动修复
+lint-fix:
+	pnpm lint:fix
 
 # 代码格式化
 format:

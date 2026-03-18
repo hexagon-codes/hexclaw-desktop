@@ -20,7 +20,7 @@ useTheme()
 
 // 全局 toast
 if (typeof window !== 'undefined') {
-  ;(window as any).__hcToast = toastRef
+  ;(window as unknown as Record<string, unknown>).__hcToast = toastRef
 }
 
 // 监听 Tauri 托盘导航事件 (替代不安全的 window.eval)

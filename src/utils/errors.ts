@@ -45,10 +45,10 @@ export function fromHttpStatus(status: number, serverMessage?: string): ApiError
 
 /** 从原生错误推断类型 */
 export function fromNativeError(err: unknown): ApiError {
-  // 已经是 ApiError 结构
+  // 已经是 ApiError 结构（code 必须是 string，排除 DOMException 等 numeric code）
   if (err && typeof err === 'object' && 'code' in err && 'message' in err) {
     const ae = err as ApiError
-    if (typeof ae.message === 'string') return ae
+    if (typeof ae.code === 'string' && typeof ae.message === 'string') return ae
   }
   if (err instanceof TypeError && err.message.includes('fetch')) {
     return createApiError('NETWORK_ERROR', 'HexClaw 服务未启动或网络不可达', undefined, err)
@@ -65,7 +65,7 @@ export function fromNativeError(err: unknown): ApiError {
     }
     return createApiError('UNKNOWN', err.message, undefined, err)
   }
-  const msg = err instanceof Error ? err.message : (typeof err === 'string' ? err : '未知错误')
+  const msg = typeof err === 'string' ? err : '未知错误'
   return createApiError('UNKNOWN', msg, undefined, err)
 }
 

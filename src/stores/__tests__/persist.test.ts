@@ -37,7 +37,8 @@ describe('createPersistPlugin', () => {
         const count = ref(0)
         return { count }
       },
-      { persist: true } as any,
+      // @ts-expect-error -- test-only: injecting persist option
+      { persist: true },
     )
 
     const store = useTestStore()
@@ -65,7 +66,8 @@ describe('createPersistPlugin', () => {
         const count = ref(0)
         return { count }
       },
-      { persist: true } as any,
+      // @ts-expect-error -- test-only: injecting persist option
+      { persist: true },
     )
 
     const store = useTestStore()
@@ -86,7 +88,8 @@ describe('createPersistPlugin', () => {
         const count = ref(0)
         return { count }
       },
-      { persist: { version: 2 } } as any,
+      // @ts-expect-error -- test-only: injecting persist option
+      { persist: { version: 2 } },
     )
 
     const store = useTestStore()
@@ -104,7 +107,8 @@ describe('createPersistPlugin', () => {
         const secret = ref('sensitive')
         return { name, secret }
       },
-      { persist: { pick: ['name'] } } as any,
+      // @ts-expect-error -- test-only: injecting persist option
+      { persist: { pick: ['name'] } },
     )
 
     const store = useTestStore()
@@ -142,7 +146,8 @@ describe('createPersistPlugin', () => {
         const val = ref('test')
         return { val }
       },
-      { persist: { key: 'my-custom-key' } } as any,
+      // @ts-expect-error -- test-only: injecting persist option
+      { persist: { key: 'my-custom-key' } },
     )
 
     const store = useTestStore()

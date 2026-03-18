@@ -45,6 +45,18 @@
   --hc-blur: 20px;
   --hc-blur-heavy: 40px;
 
+  /* ─── Z-Index Hierarchy ─── */
+  --hc-z-dropdown: 100;
+  --hc-z-sticky: 200;
+  --hc-z-overlay: 9000;
+  --hc-z-modal: 9100;
+  --hc-z-popover: 9200;
+  --hc-z-toast: 9300;
+  --hc-z-tooltip: 9400;
+
+  /* ─── Titlebar ─── */
+  --hc-titlebar-height: 38px;
+
   /* ─── Spacing (8pt grid) ─── */
   --hc-space-1: 4px;
   --hc-space-2: 8px;

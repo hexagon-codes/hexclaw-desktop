@@ -43,17 +43,24 @@ function defaultConfig(): AppConfig {
   }
 }
 
-/** 检测是否运行在 Tauri 桌面环境中 */
+/** 检测是否运行在 Tauri 桌面环境中（与 @tauri-apps/api/core 保持一致） */
 function isTauri(): boolean {
-  return typeof window !== 'undefined' && '__TAURI__' in window
+  return !!(globalThis as Record<string, unknown>).isTauri
 }
+
+const KNOWN_PROVIDER_TYPES = ['openai', 'anthropic', 'deepseek', 'qwen', 'gemini', 'ark', 'ollama'] as const
+type KnownProviderType = (typeof KNOWN_PROVIDER_TYPES)[number]
 
 /** 后端格式 -> 桌面格式 */
 function backendToProviders(backend: BackendLLMConfig): ProviderConfig[] {
   return Object.entries(backend.providers).map(([name, p]) => ({
     id: name,
     name: name,
-    type: (p.compatible === 'openai' ? 'custom' : name) as ProviderConfig['type'],
+    type: (p.compatible === 'openai'
+      ? 'custom'
+      : KNOWN_PROVIDER_TYPES.includes(name as KnownProviderType)
+        ? name
+        : 'custom') as ProviderConfig['type'],
     enabled: true,
     baseUrl: p.base_url || '',
     apiKey: p.api_key || '',
@@ -71,7 +78,7 @@ function providersToBackend(providers: ProviderConfig[], defaultModel: string): 
       api_key: p.apiKey || '',
       base_url: p.baseUrl || '',
       model: p.models?.[0]?.id || '',
-      compatible: p.type === 'custom' || !['openai', 'anthropic', 'deepseek', 'qwen', 'gemini', 'ollama'].includes(p.type)
+      compatible: p.type === 'custom' || !KNOWN_PROVIDER_TYPES.includes(p.type as KnownProviderType)
         ? 'openai'
         : '',
     }
@@ -119,8 +126,28 @@ export const useSettingsStore = defineStore('settings', () => {
     return models
   })
 
+  /** 并发锁：防止 loadConfig 被多次并发调用 */
+  let loadConfigPromise: Promise<void> | null = null
+
   /** 加载配置 — 非 LLM 配置从 Tauri Store 读取，LLM 配置从后端 API 读取 */
-  async function loadConfig() {
+  async function loadConfig({ force = false } = {}) {
+    // 已有 providers 且非强制重载，说明完整配置已就绪，无需重新加载
+    if (!force && config.value?.llm.providers.length) {
+      return
+    }
+    // 如果已在加载中，复用已有 Promise
+    if (loadConfigPromise) {
+      return loadConfigPromise
+    }
+    loadConfigPromise = doLoadConfig()
+    try {
+      await loadConfigPromise
+    } finally {
+      loadConfigPromise = null
+    }
+  }
+
+  async function doLoadConfig() {
     loading.value = true
     error.value = null
 
@@ -145,38 +172,24 @@ export const useSettingsStore = defineStore('settings', () => {
         }
       }
 
-      // 合并默认值（非 LLM 部分）
+      // 合并默认值（非 LLM 部分）——保留已有的 LLM 配置，避免切页时短暂清空 providers
       const defaults = defaultConfig()
+      const existingLlm = config.value?.llm ?? defaults.llm
       if (savedConfig) {
         config.value = {
-          llm: {
-            providers: defaults.llm.providers,
-            defaultModel: defaults.llm.defaultModel,
-          },
+          llm: existingLlm,
           security: { ...defaults.security, ...savedConfig.security },
           general: { ...defaults.general, ...savedConfig.general },
           notification: { ...defaults.notification, ...savedConfig.notification },
           mcp: { ...defaults.mcp, ...savedConfig.mcp },
         }
       } else {
-        config.value = defaults
+        config.value = { ...defaults, llm: existingLlm }
       }
 
-      // 从后端 API 加载 LLM 配置
+      // 从后端 API 加载 LLM 配置（带重试，等待 sidecar 就绪）
       if (isTauri()) {
-        try {
-          const backendConfig = await getLLMConfig()
-          logger.debug('后端 LLM 配置:', backendConfig)
-          const providers = backendToProviders(backendConfig)
-          config.value.llm.providers = providers
-          config.value.llm.defaultModel = backendConfig.default
-            ? (backendConfig.providers[backendConfig.default]?.model || '')
-            : ''
-        } catch (e) {
-          logger.warn('后端 LLM 配置加载失败，使用空 providers', e)
-          config.value.llm.providers = []
-          config.value.llm.defaultModel = ''
-        }
+        await loadLLMFromBackend()
       }
     } catch (e) {
       logger.error('加载配置失败', e)
@@ -184,6 +197,35 @@ export const useSettingsStore = defineStore('settings', () => {
     }
 
     loading.value = false
+  }
+
+  /** 从后端加载 LLM 配置，带重试机制 */
+  async function loadLLMFromBackend(maxRetries = 3, delayMs = 2000) {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const backendConfig = await getLLMConfig()
+        console.log('[HexClaw] 后端 LLM 配置原始数据:', JSON.stringify(backendConfig))
+        const providers = backendToProviders(backendConfig)
+        console.log('[HexClaw] 转换后 providers:', JSON.stringify(providers))
+        config.value!.llm.providers = providers
+        config.value!.llm.defaultModel = backendConfig.default
+          ? (backendConfig.providers[backendConfig.default]?.model || '')
+          : ''
+        console.log('[HexClaw] LLM 配置加载成功, providers 数量:', providers.length)
+        return // 成功，直接返回
+      } catch (e) {
+        console.error(`[HexClaw] 后端 LLM 配置加载失败 (${attempt}/${maxRetries}):`, e)
+        if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, delayMs))
+        }
+      }
+    }
+    // 所有重试都失败：若已有 providers（如用户刚保存过），保留现有配置，不清空
+    console.error('[HexClaw] 后端 LLM 配置加载最终失败，保留现有 providers')
+    if ((config.value?.llm.providers.length ?? 0) === 0) {
+      config.value!.llm.providers = []
+      config.value!.llm.defaultModel = ''
+    }
   }
 
   /** 保存配置 — LLM 配置保存到后端 API，其余保存到 Tauri Store */

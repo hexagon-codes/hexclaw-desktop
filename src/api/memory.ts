@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from './client'
+import { apiGet, apiPost, apiPut, apiDelete } from './client'
 import type { MemoryData } from '@/types'
 
 export type { MemoryData }
@@ -11,6 +11,21 @@ export function getMemory() {
 /** 保存记忆 */
 export function saveMemory(content: string, type?: 'memory' | 'daily') {
   return apiPost<{ message: string }>('/api/v1/memory', { content, type: type ?? 'memory' })
+}
+
+/** 更新记忆内容 */
+export function updateMemory(content: string) {
+  return apiPut<{ message: string }>('/api/v1/memory', { content })
+}
+
+/** 删除单条记忆 */
+export function deleteMemory(id: string) {
+  return apiDelete<{ message: string }>(`/api/v1/memory/${encodeURIComponent(id)}`)
+}
+
+/** 清空所有记忆 */
+export function clearAllMemory() {
+  return apiDelete<{ message: string }>('/api/v1/memory')
 }
 
 /** 搜索记忆 */

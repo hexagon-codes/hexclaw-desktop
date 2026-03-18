@@ -6,7 +6,6 @@
  */
 
 import type { PiniaPluginContext } from 'pinia'
-import { watch } from 'vue'
 import { logger } from '@/utils/logger'
 
 /** 持久化配置 (在 store 的 $persist 选项中设置) */
@@ -52,7 +51,7 @@ export function createPersistPlugin() {
       if (raw) {
         const persisted = JSON.parse(raw) as PersistedData
         if (persisted.v === version && persisted.d) {
-          store.$patch(persisted.d as Record<string, unknown> as any)
+          store.$patch(persisted.d as unknown as Parameters<typeof store.$patch>[0])
           logger.debug(`恢复 store [${store.$id}] 状态`)
         } else {
           // 版本不匹配，清理旧数据
@@ -69,7 +68,7 @@ export function createPersistPlugin() {
     store.$subscribe(
       () => {
         try {
-          const data = pickFields(store.$state, opts.pick)
+          const data = pickFields(store.$state as unknown as Record<string, unknown>, opts.pick)
           const persisted: PersistedData = { v: version, d: data }
           localStorage.setItem(key, JSON.stringify(persisted))
         } catch (e) {

@@ -8,6 +8,8 @@ interface WsMessage {
   type: 'message'
   content: string
   session_id?: string
+  model?: string
+  role?: string
 }
 
 interface WsServerMessage {
@@ -106,7 +108,7 @@ class HexClawWS {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN
   }
 
-  sendMessage(content: string, sessionId?: string): void {
+  sendMessage(content: string, sessionId?: string, model?: string, role?: string): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.errorCallbacks.forEach((cb) => cb('WebSocket is not connected'))
       return
@@ -116,22 +118,27 @@ class HexClawWS {
       type: 'message',
       content,
       session_id: sessionId,
+      model,
+      role,
     }
 
     this.ws.send(JSON.stringify(msg))
     logger.debug(`→ ws: ${content.slice(0, 50)}...`)
   }
 
-  onChunk(callback: ChunkCallback): void {
+  onChunk(callback: ChunkCallback): () => void {
     this.chunkCallbacks.push(callback)
+    return () => { this.chunkCallbacks = this.chunkCallbacks.filter((cb) => cb !== callback) }
   }
 
-  onReply(callback: ReplyCallback): void {
+  onReply(callback: ReplyCallback): () => void {
     this.replyCallbacks.push(callback)
+    return () => { this.replyCallbacks = this.replyCallbacks.filter((cb) => cb !== callback) }
   }
 
-  onError(callback: ErrorCallback): void {
+  onError(callback: ErrorCallback): () => void {
     this.errorCallbacks.push(callback)
+    return () => { this.errorCallbacks = this.errorCallbacks.filter((cb) => cb !== callback) }
   }
 
   /** Remove all registered callbacks (useful for re-registering) */
