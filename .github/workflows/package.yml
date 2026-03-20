@@ -87,7 +87,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: hexagon-codes/hexclaw
-          token: ${{ secrets.PRIVATE_REPO_TOKEN }}
           path: hexclaw
 
       - name: Setup Go
@@ -97,6 +96,7 @@ jobs:
           cache-dependency-path: hexclaw/go.sum
 
       - name: Configure private modules
+        if: ${{ secrets.PRIVATE_REPO_TOKEN != '' }}
         run: |
           git config --global url."https://${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
