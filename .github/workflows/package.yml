@@ -135,14 +135,31 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      - name: Disable updater artifacts when signing key is unavailable
+        run: |
+          node -e "const fs=require('fs'); const path='src-tauri/tauri.conf.json'; const cfg=JSON.parse(fs.readFileSync(path,'utf8')); if (!process.env.TAURI_SIGNING_PRIVATE_KEY) { cfg.bundle = { ...(cfg.bundle || {}), createUpdaterArtifacts: false }; fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n'); console.log('Disabled updater artifacts for unsigned package build.'); } else { console.log('Keeping updater artifacts enabled.'); }"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
       - name: Build Tauri packages
         uses: tauri-apps/tauri-action@action-v0.6.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.tauri_args }}
           retryAttempts: 2
-          uploadUpdaterJson: false
-          uploadUpdaterSignatures: false
-          uploadWorkflowArtifacts: true
-          workflowArtifactNamePattern: 'hexclaw-[platform]-[arch]-[bundle]'
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hexclaw-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            ${{ startsWith(matrix.target, 'aarch64-apple-darwin') && 'src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg' || '' }}
+            ${{ startsWith(matrix.target, 'x86_64-apple-darwin') && 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg' || '' }}
+            ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/appimage/*.AppImage' || '' }}
+            ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/deb/*.deb' || '' }}
+            ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe' || '' }}
+            ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi' || '' }}

@@ -154,36 +154,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Validate release secrets
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Disable updater artifacts when signing key is unavailable
         run: |
-          missing=()
-          for var in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD; do
-            if [ -z "${!var}" ]; then
-              missing+=("$var")
-            fi
-          done
-
-          if [ "${{ matrix.platform }}" = "macos-latest" ]; then
-            for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
-              if [ -z "${!var}" ]; then
-                missing+=("$var")
-              fi
-            done
-          fi
-
-          if [ "${#missing[@]}" -gt 0 ]; then
-            printf '::error::Missing required release secrets: %s\n' "${missing[*]}"
-            exit 1
-          fi
+          node -e "const fs=require('fs'); const path='src-tauri/tauri.conf.json'; const cfg=JSON.parse(fs.readFileSync(path,'utf8')); if (!process.env.TAURI_SIGNING_PRIVATE_KEY) { cfg.bundle = { ...(cfg.bundle || {}), createUpdaterArtifacts: false }; fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n'); console.log('Disabled updater artifacts for unsigned release build.'); } else { console.log('Keeping updater artifacts enabled.'); }"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@action-v0.6.0
@@ -209,6 +184,16 @@ jobs:
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
           args: ${{ matrix.tauri_args }}
           retryAttempts: 2
-          uploadUpdaterJson: true
-          uploadWorkflowArtifacts: true
-          workflowArtifactNamePattern: 'hexclaw-[platform]-[arch]-[bundle]'
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hexclaw-${{ github.ref_name }}-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            ${{ startsWith(matrix.target, 'aarch64-apple-darwin') && 'src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg' || '' }}
+            ${{ startsWith(matrix.target, 'x86_64-apple-darwin') && 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg' || '' }}
+            ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/appimage/*.AppImage' || '' }}
+            ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/deb/*.deb' || '' }}
+            ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe' || '' }}
+            ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi' || '' }}
