@@ -267,7 +267,10 @@ async function getStore() {
   if (!_store) {
     _store = (async () => {
       const { load } = await import('@tauri-apps/plugin-store')
-      return load('im-channels.json', { autoSave: true })
+      return load('im-channels.json', {
+        defaults: {},
+        autoSave: true,
+      })
     })()
   }
   return _store as Promise<{
@@ -452,7 +455,7 @@ export async function updateIMInstance(
     await syncBackendInstance(next)
   }
 
-  Object.assign(all[id], next)
+  all[id] = next
   await writeInstances(all)
   return true
 }

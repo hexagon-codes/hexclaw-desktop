@@ -1,6 +1,6 @@
 [package]
 name = "hexclaw-desktop"
-version = "0.0.1"
+version = "0.0.2"
 description = "HexClaw Desktop — 企业级安全个人 AI Agent 桌面客户端"
 authors = ["hexagon-codes <ai@hexclaw.net>"]
 license = "Apache-2.0"
