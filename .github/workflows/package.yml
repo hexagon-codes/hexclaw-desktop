@@ -96,9 +96,10 @@ jobs:
           cache-dependency-path: hexclaw/go.sum
 
       - name: Configure private modules
-        if: ${{ secrets.PRIVATE_REPO_TOKEN != '' }}
         run: |
-          git config --global url."https://${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          if [ -n "${{ secrets.PRIVATE_REPO_TOKEN }}" ]; then
+            git config --global url."https://${{ secrets.PRIVATE_REPO_TOKEN }}@github.com/".insteadOf "https://github.com/"
+          fi
 
       - name: Build hexclaw sidecar
         env:
