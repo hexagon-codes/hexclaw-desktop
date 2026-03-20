@@ -1,18 +1,24 @@
-import { invoke } from '@tauri-apps/api/core'
-import { load } from '@tauri-apps/plugin-store'
+import { nanoid } from 'nanoid'
 
 // ─── 类型定义 ────────────────────────────────────────
 
-export type IMChannelType = 'feishu' | 'dingtalk' | 'wecom' | 'wechat' | 'slack' | 'discord' | 'telegram'
-export type IMChannelStatus = 'connected' | 'disconnected' | 'error'
+export type IMChannelType =
+  | 'feishu'
+  | 'dingtalk'
+  | 'wecom'
+  | 'wechat'
+  | 'slack'
+  | 'discord'
+  | 'telegram'
 
-/** 通道配置（与 hexclaw.yaml platforms 字段对齐） */
-export interface IMChannel {
-  type: IMChannelType
+/** 多实例：每个实例有唯一 id，可以同一平台添加多个 */
+export interface IMInstance {
+  id: string
   name: string
+  type: IMChannelType
   enabled: boolean
   config: Record<string, string>
-  status?: IMChannelStatus
+  createdAt: number
 }
 
 /** 各通道类型的配置字段定义 */
@@ -25,40 +31,112 @@ export interface IMChannelConfigField {
   optional?: boolean
 }
 
-/** 各通道类型的配置字段（与 hexclaw.yaml 结构对齐） */
+/** 各通道类型的配置字段 */
 export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]> = {
   feishu: [
     { key: 'app_id', label: 'App ID', labelEn: 'App ID', placeholder: 'cli_xxxxxxxxxx' },
-    { key: 'app_secret', label: 'App Secret', labelEn: 'App Secret', placeholder: '输入 App Secret', secret: true },
-    { key: 'verification_token', label: '验证 Token（选填）', labelEn: 'Verification Token (optional)', placeholder: '事件订阅验证，可留空', secret: true, optional: true },
+    {
+      key: 'app_secret',
+      label: 'App Secret',
+      labelEn: 'App Secret',
+      placeholder: '输入 App Secret',
+      secret: true,
+    },
+    {
+      key: 'verification_token',
+      label: '验证 Token（选填）',
+      labelEn: 'Verification Token (optional)',
+      placeholder: '事件订阅验证，可留空',
+      secret: true,
+      optional: true,
+    },
   ],
   dingtalk: [
     { key: 'app_key', label: 'App Key', labelEn: 'App Key', placeholder: '输入 App Key' },
-    { key: 'app_secret', label: 'App Secret', labelEn: 'App Secret', placeholder: '输入 App Secret', secret: true },
-    { key: 'robot_code', label: 'Robot Code', labelEn: 'Robot Code', placeholder: '输入 Robot Code' },
+    {
+      key: 'app_secret',
+      label: 'App Secret',
+      labelEn: 'App Secret',
+      placeholder: '输入 App Secret',
+      secret: true,
+    },
+    {
+      key: 'robot_code',
+      label: 'Robot Code',
+      labelEn: 'Robot Code',
+      placeholder: '输入 Robot Code',
+    },
   ],
   wecom: [
     { key: 'corp_id', label: '企业 ID', labelEn: 'Corp ID', placeholder: '输入企业 ID' },
     { key: 'agent_id', label: '应用 ID', labelEn: 'Agent ID', placeholder: '输入应用 Agent ID' },
-    { key: 'secret', label: 'Secret', labelEn: 'Secret', placeholder: '输入应用 Secret', secret: true },
+    {
+      key: 'secret',
+      label: 'Secret',
+      labelEn: 'Secret',
+      placeholder: '输入应用 Secret',
+      secret: true,
+    },
     { key: 'token', label: 'Token', labelEn: 'Token', placeholder: '输入回调 Token', secret: true },
-    { key: 'aes_key', label: 'AES Key', labelEn: 'AES Key', placeholder: '输入 AES Key', secret: true },
+    {
+      key: 'aes_key',
+      label: 'AES Key',
+      labelEn: 'AES Key',
+      placeholder: '输入 AES Key',
+      secret: true,
+    },
   ],
   wechat: [
     { key: 'app_id', label: 'App ID', labelEn: 'App ID', placeholder: '输入 App ID' },
-    { key: 'app_secret', label: 'App Secret', labelEn: 'App Secret', placeholder: '输入 App Secret', secret: true },
+    {
+      key: 'app_secret',
+      label: 'App Secret',
+      labelEn: 'App Secret',
+      placeholder: '输入 App Secret',
+      secret: true,
+    },
     { key: 'token', label: 'Token', labelEn: 'Token', placeholder: '输入 Token', secret: true },
-    { key: 'aes_key', label: 'AES Key', labelEn: 'AES Key', placeholder: '输入 AES Key', secret: true },
+    {
+      key: 'aes_key',
+      label: 'AES Key',
+      labelEn: 'AES Key',
+      placeholder: '输入 AES Key',
+      secret: true,
+    },
   ],
   slack: [
-    { key: 'token', label: 'Bot Token', labelEn: 'Bot Token', placeholder: 'xoxb-xxxxxxxxxxxx', secret: true },
-    { key: 'signing_secret', label: 'Signing Secret', labelEn: 'Signing Secret', placeholder: '输入 Signing Secret', secret: true },
+    {
+      key: 'token',
+      label: 'Bot Token',
+      labelEn: 'Bot Token',
+      placeholder: 'xoxb-xxxxxxxxxxxx',
+      secret: true,
+    },
+    {
+      key: 'signing_secret',
+      label: 'Signing Secret',
+      labelEn: 'Signing Secret',
+      placeholder: '输入 Signing Secret',
+      secret: true,
+    },
   ],
   discord: [
-    { key: 'token', label: 'Bot Token', labelEn: 'Bot Token', placeholder: '输入 Bot Token', secret: true },
+    {
+      key: 'token',
+      label: 'Bot Token',
+      labelEn: 'Bot Token',
+      placeholder: '输入 Bot Token',
+      secret: true,
+    },
   ],
   telegram: [
-    { key: 'token', label: 'Bot Token', labelEn: 'Bot Token', placeholder: '输入 Bot Token', secret: true },
+    {
+      key: 'token',
+      label: 'Bot Token',
+      labelEn: 'Bot Token',
+      placeholder: '输入 Bot Token',
+      secret: true,
+    },
   ],
 }
 
@@ -81,13 +159,62 @@ import discordLogo from '@/assets/im-logos/discord.svg'
 import telegramLogo from '@/assets/im-logos/telegram.svg'
 
 export const CHANNEL_TYPES: IMChannelMeta[] = [
-  { type: 'feishu', name: '飞书', nameEn: 'Feishu', logo: feishuLogo, color: '#3370ff', helpUrl: 'https://open.feishu.cn/document/home/index' },
-  { type: 'dingtalk', name: '钉钉', nameEn: 'DingTalk', logo: dingtalkLogo, color: '#0089ff', helpUrl: 'https://open.dingtalk.com/document/' },
-  { type: 'wecom', name: '企业微信', nameEn: 'WeCom', logo: wecomLogo, color: '#07c160', helpUrl: 'https://developer.work.weixin.qq.com/document/' },
-  { type: 'wechat', name: '微信', nameEn: 'WeChat', logo: wechatLogo, color: '#07c160', helpUrl: 'https://developers.weixin.qq.com/doc/' },
-  { type: 'slack', name: 'Slack', nameEn: 'Slack', logo: slackLogo, color: '#4a154b', helpUrl: 'https://api.slack.com/docs' },
-  { type: 'discord', name: 'Discord', nameEn: 'Discord', logo: discordLogo, color: '#5865f2', helpUrl: 'https://discord.com/developers/docs' },
-  { type: 'telegram', name: 'Telegram', nameEn: 'Telegram', logo: telegramLogo, color: '#0088cc', helpUrl: 'https://core.telegram.org/bots/api' },
+  {
+    type: 'feishu',
+    name: '飞书',
+    nameEn: 'Feishu',
+    logo: feishuLogo,
+    color: '#3370ff',
+    helpUrl: 'https://open.feishu.cn/document/home/index',
+  },
+  {
+    type: 'dingtalk',
+    name: '钉钉',
+    nameEn: 'DingTalk',
+    logo: dingtalkLogo,
+    color: '#0089ff',
+    helpUrl: 'https://open.dingtalk.com/document/',
+  },
+  {
+    type: 'wecom',
+    name: '企业微信',
+    nameEn: 'WeCom',
+    logo: wecomLogo,
+    color: '#0082EF',
+    helpUrl: 'https://developer.work.weixin.qq.com/document/',
+  },
+  {
+    type: 'wechat',
+    name: '微信',
+    nameEn: 'WeChat',
+    logo: wechatLogo,
+    color: '#07c160',
+    helpUrl: 'https://developers.weixin.qq.com/doc/',
+  },
+  {
+    type: 'slack',
+    name: 'Slack',
+    nameEn: 'Slack',
+    logo: slackLogo,
+    color: '#4a154b',
+    helpUrl: 'https://api.slack.com/docs',
+  },
+  {
+    type: 'discord',
+    name: 'Discord',
+    nameEn: 'Discord',
+    logo: discordLogo,
+    color: '#5865f2',
+    helpUrl: 'https://discord.com/developers/docs',
+  },
+  {
+    type: 'telegram',
+    name: 'Telegram',
+    nameEn: 'Telegram',
+    logo: telegramLogo,
+    color: '#0088cc',
+    helpUrl: 'https://core.telegram.org/bots/api',
+  },
 ]
 
 /** 各平台简要配置说明 */
@@ -106,7 +233,7 @@ export const CHANNEL_HELP_TEXT: Record<IMChannelType, { zh: string; en: string }
   },
   wechat: {
     zh: '在微信公众平台注册服务号，获取 App ID 和 App Secret，配置服务器 URL 和 Token。',
-    en: 'Register a Service Account on WeChat Official Platform, get App ID & App Secret, configure server URL.',
+    en: 'Register a Service Account on WeChat Official Platform, get App ID & App Secret, and configure server URL.',
   },
   slack: {
     zh: '在 Slack API 创建 App，获取 Bot Token（xoxb-）和 Signing Secret，安装到工作区。',
@@ -128,111 +255,246 @@ export function getChannelHelpText(type: IMChannelType, locale: string): string 
 }
 
 export function getChannelMeta(type: IMChannelType): IMChannelMeta {
-  return CHANNEL_TYPES.find(c => c.type === type) ?? CHANNEL_TYPES[0]!
+  return CHANNEL_TYPES.find((c) => c.type === type) ?? CHANNEL_TYPES[0]!
 }
 
-// ─── Tauri Store 持久化 IM 通道配置 ──────────────────
+// ─── Tauri Store 持久化 ──────────────────────────────
 
-const STORE_KEY = 'im-channels'
-let _store: Promise<Awaited<ReturnType<typeof load>>> | null = null
+const STORE_KEY = 'im-instances'
+let _store: Promise<unknown> | null = null
 
 async function getStore() {
   if (!_store) {
-    _store = load('im-channels.json', { autoSave: true } as Parameters<typeof load>[1])
+    _store = (async () => {
+      const { load } = await import('@tauri-apps/plugin-store')
+      return load('im-channels.json', { autoSave: true })
+    })()
   }
-  return _store
+  return _store as Promise<{
+    get: <T>(key: string) => Promise<T | undefined>
+    set: (key: string, value: unknown) => Promise<void>
+  }>
 }
 
-/** 读取所有平台配置 */
-async function readAllConfigs(): Promise<Record<string, { enabled: boolean; config: Record<string, string> }>> {
+async function readAllInstances(): Promise<Record<string, IMInstance>> {
   try {
     const store = await getStore()
-    const data = await store.get<Record<string, { enabled: boolean; config: Record<string, string> }>>(STORE_KEY)
-    return data ?? {}
+    const data = await store.get<Record<string, IMInstance>>(STORE_KEY)
+    if (data) return data
+
+    // 兼容旧格式：迁移 type-keyed 配置到多实例格式
+    const legacy =
+      await store.get<Record<string, { enabled: boolean; config: Record<string, string> }>>(
+        'im-channels',
+      )
+    if (legacy && Object.keys(legacy).length > 0) {
+      const migrated: Record<string, IMInstance> = {}
+      for (const [type, cfg] of Object.entries(legacy)) {
+        if (!CHANNEL_TYPES.find((c) => c.type === type)) continue
+        const id = nanoid(10)
+        const meta = getChannelMeta(type as IMChannelType)
+        migrated[id] = {
+          id,
+          name: meta.name,
+          type: type as IMChannelType,
+          enabled: cfg.enabled,
+          config: cfg.config,
+          createdAt: Date.now(),
+        }
+      }
+      await store.set(STORE_KEY, migrated)
+      return migrated
+    }
+
+    return {}
   } catch (e) {
-    console.warn('Failed to read IM channel configs:', e)
+    console.warn('Failed to read IM instances:', e)
     return {}
   }
 }
 
-/** 写入单个平台配置 */
-async function writeConfig(type: string, data: { enabled: boolean; config: Record<string, string> }): Promise<boolean> {
+async function writeInstances(instances: Record<string, IMInstance>): Promise<boolean> {
   try {
     const store = await getStore()
-    const all = await readAllConfigs()
-    all[type] = data
-    await store.set(STORE_KEY, all)
+    await store.set(STORE_KEY, instances)
     return true
   } catch (e) {
-    console.warn('Failed to write IM channel config:', e)
+    console.warn('Failed to write IM instances:', e)
     return false
   }
 }
 
-// ─── 公开 API ────────────────────────────────────────
-
-/** 获取所有 IM 通道（始终返回 7 个平台） */
-export async function getIMChannels(): Promise<IMChannel[]> {
-  const saved = await readAllConfigs()
-
-  return CHANNEL_TYPES.map(meta => {
-    const s = saved[meta.type]
-    const config: Record<string, string> = {}
-    const fields = CHANNEL_CONFIG_FIELDS[meta.type]
-    for (const field of fields) {
-      config[field.key] = s?.config?.[field.key] ?? ''
+async function proxyApiRequest<T = Record<string, unknown>>(
+  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  path: string,
+  body?: Record<string, unknown> | null,
+): Promise<T | null> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const text = await invoke<string>('proxy_api_request', {
+      method,
+      path,
+      body: body ? JSON.stringify(body) : null,
+    })
+    return text ? (JSON.parse(text) as T) : null
+  } catch (e) {
+    if (e instanceof TypeError || (e instanceof Error && e.message.includes('plugin'))) {
+      return null
     }
+    throw e
+  }
+}
 
-    const enabled = s?.enabled ?? false
-    const hasConfig = Object.values(config).some(v => v.trim())
+export function getRequiredFieldLabels(instance: Pick<IMInstance, 'type' | 'config'>): string[] {
+  const fields = CHANNEL_CONFIG_FIELDS[instance.type]
+  return fields.filter((f) => !f.optional && !instance.config[f.key]?.trim()).map((f) => f.label)
+}
 
-    return {
-      type: meta.type,
-      name: meta.name,
-      enabled,
-      config,
-      status: enabled && hasConfig ? 'connected' as IMChannelStatus : 'disconnected' as IMChannelStatus,
-    }
+async function syncBackendInstance(
+  instance: Pick<IMInstance, 'name' | 'type' | 'enabled' | 'config'>,
+) {
+  const missingFields = getRequiredFieldLabels(instance)
+  if (missingFields.length > 0) {
+    throw new Error(`缺少必填配置项: ${missingFields.join('、')}`)
+  }
+
+  return proxyApiRequest('POST', '/api/v1/platforms/instances', {
+    provider: instance.type,
+    name: instance.name,
+    enabled: instance.enabled,
+    config: instance.config,
   })
 }
 
-/** 保存单个通道配置 */
-export async function saveIMChannel(type: IMChannelType, enabled: boolean, config: Record<string, string>): Promise<boolean> {
-  return writeConfig(type, { enabled, config })
+async function deleteBackendInstance(name: string) {
+  return proxyApiRequest('DELETE', `/api/v1/platforms/instances/${encodeURIComponent(name)}`)
 }
 
-/** 测试通道连接 — 验证后端服务可用性 + 通道配置有效性 */
-export async function testIMChannel(type: IMChannelType): Promise<{ success: boolean; message: string }> {
-  // 1. 检查后端服务是否可用
+async function syncExistingInstancesToBackend(instances: IMInstance[]) {
+  await Promise.allSettled(
+    instances.map(async (instance) => {
+      try {
+        await syncBackendInstance(instance)
+      } catch (e) {
+        console.warn(`[IM] failed to sync instance "${instance.name}" to backend:`, e)
+      }
+    }),
+  )
+}
+
+async function listStoredInstances(): Promise<IMInstance[]> {
+  const all = await readAllInstances()
+  return Object.values(all).sort((a, b) => a.createdAt - b.createdAt)
+}
+
+let backendSyncPromise: Promise<void> | null = null
+
+export async function ensureIMInstancesSyncedToBackend(): Promise<void> {
+  if (!backendSyncPromise) {
+    backendSyncPromise = (async () => {
+      const instances = await listStoredInstances()
+      await syncExistingInstancesToBackend(instances)
+    })().finally(() => {
+      backendSyncPromise = null
+    })
+  }
+
+  await backendSyncPromise
+}
+
+// ─── 公开 API ────────────────────────────────────────
+
+/** 获取所有实例列表 */
+export async function getIMInstances(): Promise<IMInstance[]> {
+  const instances = await listStoredInstances()
+  await syncExistingInstancesToBackend(instances)
+  return instances
+}
+
+/** 创建实例 */
+export async function createIMInstance(
+  name: string,
+  type: IMChannelType,
+  config: Record<string, string>,
+  enabled = false,
+): Promise<IMInstance> {
+  const id = nanoid(10)
+  const instance: IMInstance = { id, name, type, enabled, config, createdAt: Date.now() }
+  await syncBackendInstance(instance)
+
+  const all = await readAllInstances()
+  all[id] = instance
+  await writeInstances(all)
+  return instance
+}
+
+/** 更新实例 */
+export async function updateIMInstance(
+  id: string,
+  updates: Partial<Pick<IMInstance, 'name' | 'enabled' | 'config'>>,
+): Promise<boolean> {
+  const all = await readAllInstances()
+  const current = all[id]
+  if (!current) return false
+
+  const next: IMInstance = {
+    ...current,
+    ...updates,
+  }
+
+  if (current.name !== next.name) {
+    await syncBackendInstance({ ...next, enabled: false })
+    await deleteBackendInstance(current.name)
+    if (next.enabled) {
+      await syncBackendInstance(next)
+    }
+  } else {
+    await syncBackendInstance(next)
+  }
+
+  Object.assign(all[id], next)
+  await writeInstances(all)
+  return true
+}
+
+/** 删除实例 */
+export async function deleteIMInstance(id: string): Promise<boolean> {
+  const all = await readAllInstances()
+  const current = all[id]
+  if (!current) return false
+  await deleteBackendInstance(current.name)
+  delete all[id]
+  await writeInstances(all)
+  return true
+}
+
+/** 测试实例连接 */
+export async function testIMInstance(
+  instance: IMInstance,
+): Promise<{ success: boolean; message: string }> {
+  const { invoke } = await import('@tauri-apps/api/core')
+
   try {
     await invoke<string>('proxy_api_request', {
       method: 'GET',
-      path: '/api/v1/health',
+      path: '/health',
       body: null,
     })
   } catch {
     return { success: false, message: '无法连接后端服务，请确认 Engine 已启动' }
   }
 
-  // 2. 读取本地配置并检查必填项
-  const saved = await readAllConfigs()
-  const channelConfig = saved[type]
-  if (!channelConfig) {
-    return { success: false, message: '未找到该通道的本地配置，请先填写并保存' }
-  }
-  const fields = CHANNEL_CONFIG_FIELDS[type]
-  const missingFields = fields.filter(f => !f.optional && !channelConfig.config[f.key]?.trim())
+  const missingFields = getRequiredFieldLabels(instance)
   if (missingFields.length > 0) {
-    const labels = missingFields.map(f => f.label).join('、')
+    const labels = missingFields.join('、')
     return { success: false, message: `缺少必填配置项: ${labels}` }
   }
 
-  // 3. 调用后端通道验证接口
   try {
     const res = await invoke<string>('proxy_api_request', {
       method: 'POST',
-      path: `/api/v1/im/channels/${type}/test`,
-      body: JSON.stringify(channelConfig.config),
+      path: `/api/v1/im/channels/${instance.type}/test`,
+      body: JSON.stringify(instance.config),
     })
     const result = JSON.parse(res) as { success?: boolean; message?: string }
     return {
@@ -240,10 +502,59 @@ export async function testIMChannel(type: IMChannelType): Promise<{ success: boo
       message: result.message ?? '通道验证通过',
     }
   } catch {
-    // 后端尚未实现验证接口时，退回配置完整性检查结果
-    if (channelConfig.enabled) {
+    if (instance.enabled) {
       return { success: true, message: '配置已保存，后端验证接口暂不可用（配置项完整）' }
     }
     return { success: true, message: '配置项完整，保存后启用即可生效' }
   }
+}
+
+/** 对已保存实例执行真实运行时健康检查 */
+export async function testSavedIMInstanceRuntime(
+  instance: IMInstance,
+): Promise<{ success: boolean; message: string }> {
+  const { invoke } = await import('@tauri-apps/api/core')
+
+  try {
+    await invoke<string>('proxy_api_request', {
+      method: 'GET',
+      path: '/health',
+      body: null,
+    })
+  } catch {
+    return { success: false, message: '无法连接后端服务，请确认 Engine 已启动' }
+  }
+
+  const missingFields = getRequiredFieldLabels(instance)
+  if (missingFields.length > 0) {
+    const labels = missingFields.join('、')
+    return { success: false, message: `缺少必填配置项: ${labels}` }
+  }
+
+  if (!instance.enabled) {
+    return { success: true, message: '配置已保存，实例未启用；启用后可执行实时连通性检查' }
+  }
+
+  try {
+    await syncBackendInstance(instance)
+    const result = await proxyApiRequest<{
+      success?: boolean
+      message?: string
+      last_error?: string
+    }>('POST', `/api/v1/platforms/instances/${encodeURIComponent(instance.name)}/test`)
+
+    if (result) {
+      return {
+        success: result.success ?? false,
+        message: result.message ?? result.last_error ?? '实例健康检查未通过',
+      }
+    }
+  } catch (e) {
+    return {
+      success: false,
+      message: e instanceof Error ? e.message : '实例健康检查失败',
+    }
+  }
+
+  return testIMInstance(instance)
 }
