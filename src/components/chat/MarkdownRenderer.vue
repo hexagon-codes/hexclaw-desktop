@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
+import { codeToHtml } from 'shiki'
 
 const props = defineProps<{
   content: string
@@ -11,6 +12,7 @@ const props = defineProps<{
 const { t } = useI18n()
 
 let activeInstanceCount = 0
+const highlightCache = new Map<string, string>()
 
 function createMarkdownRenderer(copyLabel: string) {
   const instance = new MarkdownIt({
@@ -24,17 +26,49 @@ function createMarkdownRenderer(copyLabel: string) {
     const token = tokens[idx]!
     const lang = token.info?.trim() || ''
     const code = token.content || ''
+    const cacheKey = `${lang}:${code}`
+    const highlighted = highlightCache.get(cacheKey)
+
+    const codeHtml = highlighted
+      ? highlighted
+      : `<pre class="code-block"><code class="language-${lang}">${instance.utils.escapeHtml(code)}</code></pre>`
 
     return `<div class="code-block-wrapper">
       <div class="code-block-header">
         <span class="code-lang">${lang || 'text'}</span>
         <button class="copy-btn" data-code="${instance.utils.escapeHtml(code)}">${instance.utils.escapeHtml(copyLabel)}</button>
       </div>
-      <pre class="code-block"><code class="language-${lang}">${instance.utils.escapeHtml(code)}</code></pre>
+      ${codeHtml}
     </div>`
   }
 
   return instance
+}
+
+async function highlightCodeBlocks(content: string) {
+  const fenceRegex = /```(\w+)?\n([\s\S]*?)```/g
+  let match: RegExpExecArray | null
+  let needsRerender = false
+
+  while ((match = fenceRegex.exec(content)) !== null) {
+    const lang = match[1] || 'text'
+    const code = match[2] || ''
+    const cacheKey = `${lang}:${code}`
+    if (highlightCache.has(cacheKey)) continue
+
+    try {
+      const html = await codeToHtml(code, {
+        lang: lang as never,
+        theme: 'github-dark',
+      })
+      highlightCache.set(cacheKey, html)
+      needsRerender = true
+    } catch {
+      highlightCache.set(cacheKey, '')
+    }
+  }
+
+  if (needsRerender) renderVersion.value++
 }
 
 function handleCopyClick(e: MouseEvent) {
@@ -60,6 +94,7 @@ onUnmounted(() => {
 
 const cachedCopyLabel = ref(t('common.copy'))
 const mdInstance = ref(createMarkdownRenderer(cachedCopyLabel.value))
+const renderVersion = ref(0)
 
 watch(() => t('common.copy'), (newLabel) => {
   if (newLabel !== cachedCopyLabel.value) {
@@ -68,7 +103,12 @@ watch(() => t('common.copy'), (newLabel) => {
   }
 })
 
+watch(() => props.content, (content) => {
+  if (content.includes('```')) highlightCodeBlocks(content)
+}, { immediate: true })
+
 const rendered = computed(() => {
+  void renderVersion.value
   return DOMPurify.sanitize(mdInstance.value.render(props.content))
 })
 </script>
@@ -230,6 +270,20 @@ const rendered = computed(() => {
 }
 
 .markdown-body :deep(.code-block code) {
+  font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+}
+
+/* Shiki highlighted output */
+.markdown-body :deep(.code-block-wrapper .shiki) {
+  margin: 0;
+  padding: var(--hc-space-3) var(--hc-space-4);
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  border-radius: 0;
+}
+
+.markdown-body :deep(.code-block-wrapper .shiki code) {
   font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
 }
 </style>

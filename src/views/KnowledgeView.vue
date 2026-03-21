@@ -10,7 +10,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const ACCEPTED_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.csv', '.json']
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 
 const docs = ref<KnowledgeDoc[]>([])
 const totalDocs = ref(0)
@@ -425,7 +425,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
                 <div class="flex items-center gap-3 mt-1 text-xs" :style="{ color: 'var(--hc-text-muted)' }">
                   <span>{{ doc.chunk_count }} chunks</span>
                   <span v-if="doc.source">{{ t('knowledge.source') }}: {{ doc.source }}</span>
-                  <span>{{ new Date(doc.updated_at || doc.created_at).toLocaleDateString('zh-CN') }}</span>
+                  <span>{{ new Date(doc.updated_at || doc.created_at).toLocaleDateString(locale) }}</span>
                 </div>
                 <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626;">
                   {{ doc.error_message }}
@@ -623,7 +623,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
             <div class="p-5 overflow-y-auto space-y-4">
               <div class="grid grid-cols-2 gap-4 text-xs" :style="{ color: 'var(--hc-text-secondary)' }">
                 <div>{{ t('knowledge.docCount', { count: 1 }) }} · {{ selectedDoc.chunk_count }} chunks</div>
-                <div>{{ t('knowledge.updatedAt') }}: {{ new Date(selectedDoc.updated_at || selectedDoc.created_at).toLocaleString('zh-CN') }}</div>
+                <div>{{ t('knowledge.updatedAt') }}: {{ new Date(selectedDoc.updated_at || selectedDoc.created_at).toLocaleString(locale) }}</div>
               </div>
               <div v-if="selectedDoc.error_message" class="rounded-lg px-3 py-2 text-sm" style="background: #ef444415; color: #dc2626;">
                 {{ selectedDoc.error_message }}

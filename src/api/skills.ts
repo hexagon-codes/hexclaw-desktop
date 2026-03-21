@@ -230,7 +230,7 @@ const MOCK_SKILLS: ClawHubSkill[] = [
   },
 ]
 
-/** 本地过滤 Mock 数据 */
+/** 本地过滤 Mock 数据（标记 _mock 以区分真实 Hub 数据） */
 function filterMockSkills(query?: string, category?: string): ClawHubSkill[] {
   let results = [...MOCK_SKILLS]
   if (category && category !== 'all') {
@@ -246,10 +246,41 @@ function filterMockSkills(query?: string, category?: string): ClawHubSkill[] {
         s.tags.some((t) => t.toLowerCase().includes(q)),
     )
   }
-  return results
+  return results.map((s) => ({ ...s, _mock: true }))
 }
 
-/** 搜索 ClawHub 技能市场（优先真实 API，降级到内置数据） */
+const HUB_CATEGORIES = [
+  'coding',
+  'research',
+  'writing',
+  'data',
+  'automation',
+  'productivity',
+] as const
+
+function normalizeHubCategory(raw: unknown): ClawHubSkill['category'] {
+  const s = typeof raw === 'string' ? raw.toLowerCase().trim() : ''
+  if (HUB_CATEGORIES.includes(s as (typeof HUB_CATEGORIES)[number])) {
+    return s as ClawHubSkill['category']
+  }
+  return 'coding'
+}
+
+function mapHubMetaToClawHubSkill(m: Record<string, unknown>): ClawHubSkill {
+  return {
+    name: String(m.name ?? ''),
+    display_name: typeof m.display_name === 'string' ? m.display_name : undefined,
+    description: String(m.description ?? ''),
+    author: String(m.author ?? ''),
+    version: String(m.version ?? ''),
+    tags: Array.isArray(m.tags) ? (m.tags as string[]) : [],
+    downloads: typeof m.downloads === 'number' ? m.downloads : 0,
+    rating: typeof m.rating === 'number' ? m.rating : undefined,
+    category: normalizeHubCategory(m.category),
+  }
+}
+
+/** 搜索 ClawHub 技能市场（默认优先真实 API；失败或空结果降级 Mock；开发可设 CLAWHUB_FORCE_MOCK） */
 export async function searchClawHub(
   query?: string,
   category?: string,
@@ -258,34 +289,35 @@ export async function searchClawHub(
     return filterMockSkills(query, category)
   }
 
-  // 尝试真实 API
+  const params = new URLSearchParams()
+  if (query) params.set('q', query)
+  if (category && category !== 'all') params.set('category', category)
+  const qs = params.toString()
+
   try {
-    const params = new URLSearchParams()
-    if (query) params.set('q', query)
-    if (category && category !== 'all') params.set('category', category)
-    const qs = params.toString()
-    const res = await apiGet<{ skills: ClawHubSkill[] } | ClawHubSkill[]>(
-      `/api/v1/clawhub/search${qs ? '?' + qs : ''}`,
-    )
-    const skills = Array.isArray(res) ? res : res.skills ?? []
-    if (skills.length > 0) {
-      return skills
+    const res = await apiGet<{
+      skills?: unknown[]
+      error?: string
+    }>(`/api/v1/clawhub/search${qs ? '?' + qs : ''}`)
+
+    if (typeof res.error === 'string' && res.error.trim() !== '') {
+      return filterMockSkills(query, category)
     }
-    return filterMockSkills(query, category)
+
+    const raw = Array.isArray(res) ? res : res.skills ?? []
+    const mapped = (raw as Record<string, unknown>[]).map(mapHubMetaToClawHubSkill)
+    if (mapped.length === 0) {
+      return filterMockSkills(query, category)
+    }
+    return mapped
   } catch {
-    // 真实 API 不可用，降级到内置 Mock 数据
     return filterMockSkills(query, category)
   }
 }
 
-/** 从 ClawHub 安装 Skill（优先真实 API，后端不可用时模拟安装） */
+/** 从 ClawHub 安装 Skill */
 export async function installFromHub(skillName: string): Promise<void> {
-  try {
-    await apiPost('/api/v1/skills/install', {
-      source: `clawhub://${skillName}`,
-    })
-  } catch {
-    // 后端不支持 ClawHub 协议时，模拟安装（返回成功以保持 UI 流畅）
-    await new Promise((r) => setTimeout(r, 800))
-  }
+  await apiPost('/api/v1/skills/install', {
+    source: `clawhub://${skillName}`,
+  })
 }

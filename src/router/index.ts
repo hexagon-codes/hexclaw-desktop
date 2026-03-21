@@ -63,7 +63,11 @@ const router = createRouter({
     { path: '/mcp', redirect: '/integration/mcp' },
     { path: '/im-channels', redirect: '/channels' },
     { path: '/integration/im', redirect: '/channels' },
-    { path: '/team', redirect: '/dashboard' },
+    {
+      path: '/team',
+      name: 'team',
+      component: () => import('@/views/TeamView.vue'),
+    },
     // 独立窗口页面
     {
       path: '/quick-chat',
@@ -121,11 +125,11 @@ router.beforeEach(async (to, from) => {
     }
 
     if (!isWelcomeDone()) {
-      markWelcomeDone()
       const hasProvider = (settingsStore.config?.llm.providers?.length ?? 0) > 0
       if (!hasProvider) {
         return '/welcome'
       }
+      markWelcomeDone()
     }
   } catch (e) {
     logger.error('导航守卫异常，放行以避免页面卡死:', e)

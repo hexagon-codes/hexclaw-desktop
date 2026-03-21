@@ -18,15 +18,19 @@ export interface Skill {
   message?: string
 }
 
-/** ClawHub 技能市场的 Skill */
+/** ClawHub 技能市场的 Skill（与后端 hub.SkillMeta 对齐） */
 export interface ClawHubSkill {
   name: string
+  display_name?: string
   description: string
   author: string
   version: string
   tags: string[]
   downloads: number
+  rating?: number
   category: 'coding' | 'research' | 'writing' | 'data' | 'automation' | 'productivity'
+  /** 仅开发：CLAWHUB_FORCE_MOCK 时使用内置数据 */
+  _mock?: boolean
 }
 
 export interface SkillStatusUpdateResult {

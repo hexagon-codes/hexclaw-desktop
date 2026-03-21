@@ -26,6 +26,7 @@ const stats = ref({
   knowledgeDocs: 0,
   memoryEntries: 0,
   mcpServers: 0,
+  llmProviders: 0,
   tasksRunToday: 0,
   todayMessages: 0,
   imChannels: 0,
@@ -89,7 +90,9 @@ async function fetchStats() {
     try {
       const { getMemory } = await import('@/api/memory')
       const memRes = await getMemory()
-      stats.value.memoryEntries = Object.keys(memRes.content || {}).length
+      stats.value.memoryEntries = typeof memRes.content === 'string'
+        ? (memRes.content.trim() ? 1 : 0)
+        : Object.keys(memRes.content || {}).length
     } catch {}
 
     try {
@@ -102,6 +105,12 @@ async function fetchStats() {
       const { getIMInstances } = await import('@/api/im-channels')
       const imRes = await getIMInstances()
       stats.value.imChannels = imRes?.length || 0
+    } catch {}
+
+    try {
+      const { getLLMConfig } = await import('@/api/config')
+      const llmRes = await getLLMConfig()
+      stats.value.llmProviders = Object.keys(llmRes.providers || {}).length
     } catch {}
   } finally {
     loading.value = false
@@ -187,90 +196,88 @@ function navigateTo(path: string) {
 
     <!-- Content -->
     <div class="hc-dash__body">
-      <div class="hc-dash__grid-two">
-        <div class="hc-dash__card">
-          <div class="hc-dash__card-body">
-            <div class="hc-dash__card-title">{{ t('dashboard.coreCapabilities', 'Core Capabilities') }}</div>
-            <div class="hc-dash__notes">
-              <div class="hc-dash__note hc-dash__note--highlight" @click="navigateTo('/channels')">
-                <div class="hc-dash__note-title">{{ t('dashboard.imChannels', 'IM Channels — Feishu / DingTalk / Discord / Telegram') }}</div>
-              </div>
-              <div class="hc-dash__note">
-                <div class="hc-dash__note-title">{{ t('dashboard.localDeploy', 'Local deployment, private data') }}</div>
-              </div>
-              <div class="hc-dash__note">
-                <div class="hc-dash__note-title">{{ t('dashboard.agentEngine', 'In-house agent engine') }}</div>
-              </div>
-            </div>
-          </div>
+      <!-- Stats Grid -->
+      <div class="hc-dash__stats-grid">
+        <div class="hc-dash__stat-card" @click="navigateTo('/chat')">
+          <div class="hc-dash__stat-label">{{ t('dashboard.sessions', 'Sessions') }}</div>
+          <div class="hc-dash__stat-value">{{ stats.totalSessions }}</div>
         </div>
-
-        <div class="hc-dash__card">
-          <div class="hc-dash__card-body">
-            <div class="hc-dash__metrics">
-              <div class="hc-dash__metric">
-                <div>
-                  <div class="hc-dash__metric-title">{{ t('dashboard.modelProviders', 'Model Providers') }}</div>
-                  <div class="hc-dash__metric-sub">OpenAI / Claude / DeepSeek / Gemini / Ollama</div>
-                </div>
-                <div class="hc-dash__metric-value">{{ String(stats.mcpServers || 5).padStart(2, '0') }}</div>
-              </div>
-              <div class="hc-dash__metric">
-                <div>
-                  <div class="hc-dash__metric-title">{{ t('dashboard.activeAgents', 'Active Agents') }}</div>
-                  <div class="hc-dash__metric-sub">{{ t('dashboard.agentsSummary', { n: stats.activeAgents }) }}</div>
-                </div>
-                <div class="hc-dash__metric-value">{{ String(stats.activeAgents || 0).padStart(2, '0') }}</div>
-              </div>
-              <div class="hc-dash__metric" @click="navigateTo('/channels')" style="cursor: pointer">
-                <div>
-                  <div class="hc-dash__metric-title">{{ t('dashboard.imChannelsMetric', 'IM Channels') }}</div>
-                  <div class="hc-dash__metric-sub">Feishu / DingTalk / Discord / Telegram</div>
-                </div>
-                <div class="hc-dash__metric-value">{{ String(stats.imChannels || 0).padStart(2, '0') }}</div>
-              </div>
-            </div>
-          </div>
+        <div class="hc-dash__stat-card" @click="navigateTo('/settings')">
+          <div class="hc-dash__stat-label">{{ t('dashboard.modelProviders', 'Model Providers') }}</div>
+          <div class="hc-dash__stat-value">{{ stats.llmProviders }}</div>
+        </div>
+        <div class="hc-dash__stat-card" @click="navigateTo('/agents')">
+          <div class="hc-dash__stat-label">{{ t('dashboard.activeAgents', 'Agents') }}</div>
+          <div class="hc-dash__stat-value">{{ stats.activeAgents }}</div>
+        </div>
+        <div class="hc-dash__stat-card" @click="navigateTo('/channels')">
+          <div class="hc-dash__stat-label">{{ t('dashboard.imChannelsMetric', 'IM Channels') }}</div>
+          <div class="hc-dash__stat-value">{{ stats.imChannels }}</div>
+        </div>
+        <div class="hc-dash__stat-card" @click="navigateTo('/integration/mcp')">
+          <div class="hc-dash__stat-label">{{ t('dashboard.mcpServers', 'MCP Servers') }}</div>
+          <div class="hc-dash__stat-value">{{ stats.mcpServers }}</div>
+        </div>
+        <div class="hc-dash__stat-card" @click="navigateTo('/knowledge')">
+          <div class="hc-dash__stat-label">{{ t('dashboard.knowledgeDocs', 'Knowledge') }}</div>
+          <div class="hc-dash__stat-value">{{ stats.knowledgeDocs }}</div>
+        </div>
+        <div class="hc-dash__stat-card" @click="navigateTo('/knowledge/memory')">
+          <div class="hc-dash__stat-label">{{ t('dashboard.memoryEntries', 'Memory') }}</div>
+          <div class="hc-dash__stat-value">{{ stats.memoryEntries }}</div>
+        </div>
+        <div class="hc-dash__stat-card" @click="navigateTo('/automation')">
+          <div class="hc-dash__stat-label">{{ t('dashboard.tasksToday', 'Tasks') }}</div>
+          <div class="hc-dash__stat-value">{{ stats.tasksRunToday }}</div>
         </div>
       </div>
 
       <div class="hc-dash__grid-equal">
+        <!-- Recent Activity -->
         <div class="hc-dash__card">
           <div class="hc-dash__card-body">
-            <div class="hc-dash__card-title">{{ t('dashboard.realWorkflows', 'Real Workflows') }}</div>
+            <div class="hc-dash__card-title">{{ t('dashboard.recentActivity', 'Recent Activity') }}</div>
           </div>
           <div class="hc-dash__list">
-            <div class="hc-dash__list-item" @click="navigateTo('/channels')">
-              <div class="hc-dash__list-title">{{ t('dashboard.imWorkflow', 'Agent responds via IM channels') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--purple">{{ t('dashboard.channels', 'Channels') }}</span>
-            </div>
-            <div class="hc-dash__list-item" @click="navigateTo('/automation')">
-              <div class="hc-dash__list-title">{{ t('dashboard.multiStepTask', 'Run multi-step research') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--blue">{{ t('dashboard.orchestration', 'Orchestration') }}</span>
-            </div>
-            <div class="hc-dash__list-item" @click="navigateTo('/chat')">
-              <div class="hc-dash__list-title">{{ t('dashboard.localFiles', 'Work with local files') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--green">{{ t('dashboard.local', 'Local') }}</span>
-            </div>
+            <template v-if="recentActivity.length > 0">
+              <div
+                v-for="item in recentActivity"
+                :key="item.id"
+                class="hc-dash__list-item"
+                @click="navigateTo('/chat')"
+              >
+                <div>
+                  <div class="hc-dash__list-title">{{ item.title }}</div>
+                  <div class="hc-dash__list-desc">{{ formatActivityTime(item.time) }}</div>
+                </div>
+                <span class="hc-dash__badge hc-dash__badge--blue">{{ item.type }}</span>
+              </div>
+            </template>
+            <div v-else class="hc-dash__empty">{{ t('dashboard.noActivity', 'No recent activity') }}</div>
           </div>
         </div>
 
+        <!-- Quick Actions -->
         <div class="hc-dash__card">
           <div class="hc-dash__card-body">
-            <div class="hc-dash__card-title">{{ t('dashboard.runtimeCapabilities', 'Runtime Capabilities') }}</div>
+            <div class="hc-dash__card-title">{{ t('dashboard.realWorkflows', 'Quick Actions') }}</div>
           </div>
           <div class="hc-dash__list">
-            <div class="hc-dash__list-item" @click="navigateTo('/settings')">
-              <div class="hc-dash__list-title">{{ t('dashboard.localRuntime', 'Local-first runtime') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--green">{{ t('dashboard.enabled', 'Enabled') }}</span>
-            </div>
             <div class="hc-dash__list-item" @click="navigateTo('/chat')">
-              <div class="hc-dash__list-title">{{ t('dashboard.unifiedModel', 'Unified model layer') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--blue">{{ t('dashboard.hotSwitch', 'Hot Switch') }}</span>
+              <div class="hc-dash__list-title">{{ t('dashboard.newChat', 'New Chat') }}</div>
+              <span class="hc-dash__badge hc-dash__badge--green">{{ t('dashboard.local', 'Chat') }}</span>
             </div>
-            <div class="hc-dash__list-item" @click="navigateTo('/logs')">
-              <div class="hc-dash__list-title">{{ t('dashboard.observability', 'End-to-end observability') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--amber">{{ t('dashboard.traceable', 'Traceable') }}</span>
+            <div class="hc-dash__list-item" @click="navigateTo('/knowledge')">
+              <div class="hc-dash__list-title">{{ t('dashboard.knowledgeBase', 'Knowledge Base') }}</div>
+              <span class="hc-dash__badge hc-dash__badge--amber">{{ t('dashboard.knowledge', 'Knowledge') }}</span>
+            </div>
+            <div class="hc-dash__list-item" @click="navigateTo('/channels')">
+              <div class="hc-dash__list-title">{{ t('dashboard.imWorkflow', 'IM Channels') }}</div>
+              <span class="hc-dash__badge hc-dash__badge--purple">{{ t('dashboard.channels', 'Channels') }}</span>
+            </div>
+            <div class="hc-dash__list-item" @click="navigateTo('/automation')">
+              <div class="hc-dash__list-title">{{ t('dashboard.multiStepTask', 'Automation') }}</div>
+              <span class="hc-dash__badge hc-dash__badge--blue">{{ t('dashboard.orchestration', 'Orchestration') }}</span>
             </div>
           </div>
         </div>
@@ -297,22 +304,41 @@ function navigateTo(path: string) {
   min-height: 0;
 }
 
-.hc-dash__grid-two {
+.hc-dash__stats-grid {
   display: grid;
-  grid-template-columns: 1.4fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
-  flex-shrink: 1;
-  min-height: 0;
-  overflow: hidden;
+  flex-shrink: 0;
 }
 
-.hc-dash__grid-two > .hc-dash__card {
-  min-height: 0;
-  overflow: hidden;
+.hc-dash__stat-card {
+  background: var(--hc-bg-card);
+  border: 1px solid var(--hc-border);
+  border-radius: 12px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: transform 0.15s, background 0.15s;
 }
 
-.hc-dash__grid-two > .hc-dash__card > .hc-dash__card-body {
-  overflow: hidden;
+.hc-dash__stat-card:hover {
+  transform: translateY(-1px);
+  background: var(--hc-accent-subtle);
+}
+
+.hc-dash__stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--hc-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.hc-dash__stat-value {
+  font-size: 22px;
+  font-family: 'SF Mono', 'Menlo', monospace;
+  font-weight: 800;
+  color: var(--hc-text-primary);
+  margin-top: 2px;
 }
 
 .hc-dash__grid-equal {
@@ -361,92 +387,6 @@ function navigateTo(path: string) {
   color: var(--hc-text-muted);
 }
 
-/* ── Notes ── */
-.hc-dash__notes {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-top: 6px;
-  overflow: hidden;
-}
-
-.hc-dash__note {
-  border-radius: 8px;
-  background: var(--hc-bg-hover);
-  padding: 6px 10px;
-  border: 1px solid transparent;
-  transition: transform 0.15s, background 0.15s;
-}
-
-.hc-dash__note:hover {
-  transform: translateY(-1px);
-  background: var(--hc-accent-subtle);
-}
-
-.hc-dash__note--highlight {
-  background: rgba(147, 51, 234, 0.08);
-  border-color: rgba(147, 51, 234, 0.2);
-  cursor: pointer;
-}
-
-.hc-dash__note--highlight:hover {
-  background: rgba(147, 51, 234, 0.14);
-}
-
-.hc-dash__note-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--hc-text-primary);
-}
-
-.hc-dash__note-desc {
-  margin-top: 2px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--hc-text-muted);
-}
-
-/* ── Metrics ── */
-.hc-dash__metrics {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.hc-dash__metric {
-  border-radius: 8px;
-  background: var(--hc-bg-hover);
-  padding: 8px 12px;
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-  border: 1px solid transparent;
-  transition: transform 0.15s, background 0.15s;
-}
-
-.hc-dash__metric:hover {
-  transform: translateY(-1px);
-  background: var(--hc-accent-subtle);
-}
-
-.hc-dash__metric-title {
-  font-size: 11px;
-  color: var(--hc-text-muted);
-}
-
-.hc-dash__metric-sub {
-  margin-top: 2px;
-  font-size: 10px;
-  color: var(--hc-text-secondary);
-}
-
-.hc-dash__metric-value {
-  font-size: 20px;
-  font-family: 'SF Mono', 'Menlo', monospace;
-  color: var(--hc-text-primary);
-  font-weight: 800;
-}
 
 /* ── List ── */
 .hc-dash__list {

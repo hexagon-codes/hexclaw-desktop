@@ -180,6 +180,12 @@ async function handleRemoveServer(name: string) {
     errorMsg.value = e instanceof Error ? e.message : '移除服务器失败'
   }
 }
+
+function openAddServer() {
+  showAddServer.value = true
+}
+
+defineExpose({ openAddServer })
 </script>
 
 <template>
@@ -197,6 +203,7 @@ async function handleRemoveServer(name: string) {
 
     <!-- 标签页 -->
     <div class="flex items-center gap-0 px-6 pt-3 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+      <div class="flex-1 flex items-center gap-0">
       <button
         class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
         :style="{
@@ -216,6 +223,16 @@ async function handleRemoveServer(name: string) {
         @click="activeTab = 'tools'"
       >
         {{ t('mcp.tools') }} ({{ tools.length }})
+      </button>
+      </div>
+      <button
+        v-if="activeTab === 'servers'"
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white -mb-px"
+        :style="{ background: 'var(--hc-accent)' }"
+        @click="openAddServer"
+      >
+        <Plus :size="13" />
+        {{ t('mcpManage.addServerTitle', 'Add Server') }}
       </button>
     </div>
 
@@ -377,7 +394,7 @@ async function handleRemoveServer(name: string) {
 
                 <!-- If no schema properties, show generic key-value -->
                 <div v-if="getSchemaProperties(tool).length === 0" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
-                  {{ t('mcp.noTools') }}
+                  {{ t('mcp.noParams') }}
                 </div>
 
                 <!-- Execute button -->

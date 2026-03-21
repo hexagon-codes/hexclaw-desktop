@@ -1,19 +1,30 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest'
 import { createPinia, defineStore } from 'pinia'
 import { createApp, nextTick, ref } from 'vue'
 import { createPersistPlugin } from '../plugins/persist'
 
 describe('createPersistPlugin', () => {
   let mockStorage: Record<string, string>
+  const ls = globalThis.localStorage
+
+  beforeAll(() => {
+    vi.spyOn(ls, 'getItem').mockImplementation(() => null)
+    vi.spyOn(ls, 'setItem').mockImplementation(() => {})
+    vi.spyOn(ls, 'removeItem').mockImplementation(() => {})
+    vi.spyOn(ls, 'clear').mockImplementation(() => {})
+  })
 
   beforeEach(() => {
     mockStorage = {}
-    vi.spyOn(Storage.prototype, 'getItem').mockImplementation((key) => mockStorage[key] ?? null)
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, val) => {
+    vi.mocked(ls.getItem).mockImplementation((key: string) => mockStorage[key] ?? null)
+    vi.mocked(ls.setItem).mockImplementation((key: string, val: string) => {
       mockStorage[key] = val
     })
-    vi.spyOn(Storage.prototype, 'removeItem').mockImplementation((key) => {
+    vi.mocked(ls.removeItem).mockImplementation((key: string) => {
       delete mockStorage[key]
+    })
+    vi.mocked(ls.clear).mockImplementation(() => {
+      for (const k of Object.keys(mockStorage)) delete mockStorage[k]
     })
   })
 

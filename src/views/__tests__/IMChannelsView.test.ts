@@ -34,7 +34,7 @@ function createTestI18n() {
     legacy: false,
     locale: 'zh-CN',
     fallbackLocale: 'zh-CN',
-    messages: { 'zh-CN': zhCN },
+    messages: { 'zh-CN': zhCN, zh: zhCN },
   })
 }
 
@@ -61,18 +61,18 @@ describe('IMChannelsView', () => {
     vi.clearAllMocks()
     getIMInstances.mockResolvedValue([
       {
-        id: 'wechat-1',
-        name: '微信客服',
-        type: 'wechat',
+        id: 'feishu-1',
+        name: '飞书',
+        type: 'feishu',
         enabled: false,
-        config: { app_id: 'wx-1', app_secret: 'secret' },
+        config: { app_id: 'cli_xxx', app_secret: 'secret' },
         createdAt: 1,
       },
     ])
     updateIMInstance.mockResolvedValue(true)
   })
 
-  it('edits a wechat instance and reloads the list after save', async () => {
+  it('edits a feishu instance and reloads the list after save', async () => {
     const wrapper = mountIMChannelsView()
     await flushPromises()
 
@@ -83,7 +83,7 @@ describe('IMChannelsView', () => {
     await flushPromises()
 
     const nameInput = wrapper.find('input[placeholder="输入实例名称"]')
-    await nameInput.setValue('微信客服-已编辑')
+    await nameInput.setValue('飞书-已编辑')
 
     const saveBtn = wrapper.findAll('button').find((btn) => btn.text().includes('保存'))
     expect(saveBtn).toBeDefined()
@@ -91,8 +91,8 @@ describe('IMChannelsView', () => {
     await saveBtn!.trigger('click')
     await flushPromises()
 
-    expect(updateIMInstance).toHaveBeenCalledWith('wechat-1', expect.objectContaining({
-      name: '微信客服-已编辑',
+    expect(updateIMInstance).toHaveBeenCalledWith('feishu-1', expect.objectContaining({
+      name: '飞书-已编辑',
       enabled: false,
     }))
     expect(getIMInstances).toHaveBeenCalledTimes(2)

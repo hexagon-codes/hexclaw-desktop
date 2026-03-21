@@ -67,7 +67,7 @@ function createTestI18n() {
     legacy: false,
     locale: 'zh-CN',
     fallbackLocale: 'zh-CN',
-    messages: { 'zh-CN': zhCN },
+    messages: { 'zh-CN': zhCN, zh: zhCN },
   })
 }
 
@@ -123,6 +123,7 @@ beforeAll(() => {
 describe('SettingsView — E2E 关键路径', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    document.body.innerHTML = ''
   })
 
   // ────────────────────────────────────────────────────
@@ -134,14 +135,8 @@ describe('SettingsView — E2E 关键路径', () => {
 
     const expectedSections = [
       'LLM 服务商',
-      '安全设置',
-      '通用设置',
       '外观设置',
-      '通知设置',
-      '通知推送',
       '存储设置',
-      'MCP 服务配置',
-      '运行引擎',
     ]
 
     for (const section of expectedSections) {
@@ -181,6 +176,103 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('LLM 服务商')
   })
 
+  it('does not mount edit model modal content until a model is being edited', async () => {
+    const wrapper = mountSettingsView()
+    await flushPromises()
+
+    const store = useSettingsStore()
+    store.addProvider({
+      name: 'OpenAI',
+      type: 'openai',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.openai.com/v1',
+      models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+    })
+    await flushPromises()
+
+    expect(document.body.textContent).not.toContain('编辑模型')
+
+    const providerHead = wrapper.find('.hc-provider__card-head')
+    expect(providerHead.exists()).toBe(true)
+    await providerHead.trigger('click')
+    await flushPromises()
+
+    const editModelBtn = wrapper.find('.hc-model-card__action')
+    expect(editModelBtn.exists()).toBe(true)
+    await editModelBtn.trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('编辑模型')
+  })
+
+  it('opens add model form without rendering the edit model modal', async () => {
+    const wrapper = mountSettingsView()
+    await flushPromises()
+
+    const store = useSettingsStore()
+    store.addProvider({
+      name: 'OpenAI',
+      type: 'openai',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.openai.com/v1',
+      models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+    })
+    await flushPromises()
+
+    const providerHead = wrapper.find('.hc-provider__card-head')
+    expect(providerHead.exists()).toBe(true)
+    await providerHead.trigger('click')
+    await flushPromises()
+
+    const addModelBtn = wrapper.findAll('button').find((b) => b.text().includes('添加模型'))
+    expect(addModelBtn).toBeDefined()
+    await addModelBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.hc-model-add-form').exists()).toBe(true)
+    expect(document.body.textContent).not.toContain('编辑模型')
+  })
+
+  it('opens a confirm dialog before deleting a provider and removes it after confirmation', async () => {
+    const wrapper = mountSettingsView()
+    await flushPromises()
+
+    const store = useSettingsStore()
+    store.addProvider({
+      name: 'OpenAI',
+      type: 'openai',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.openai.com/v1',
+      models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+    })
+    await flushPromises()
+
+    expect(store.config?.llm.providers).toHaveLength(1)
+
+    const providerHead = wrapper.find('.hc-provider__card-head')
+    expect(providerHead.exists()).toBe(true)
+    await providerHead.trigger('click')
+    await flushPromises()
+
+    const deleteBtn = wrapper.findAll('button').find((b) => b.text().includes('删除服务商'))
+    expect(deleteBtn).toBeDefined()
+    await deleteBtn!.trigger('click')
+    await flushPromises()
+
+    expect(document.body.textContent).toContain('确定要删除此服务商吗？')
+
+    const confirmBtn = document.body.querySelector('.hc-dialog__btn--danger') as HTMLButtonElement | null
+    expect(confirmBtn).not.toBeNull()
+    confirmBtn!.click()
+    await flushPromises()
+
+    expect(store.config?.llm.providers).toHaveLength(0)
+    wrapper.unmount()
+  })
+
   // ────────────────────────────────────────────────────
   // 4. 切换设置分区
   // ────────────────────────────────────────────────────
@@ -188,33 +280,22 @@ describe('SettingsView — E2E 关键路径', () => {
     const wrapper = mountSettingsView()
     await flushPromises()
 
-    // 切换到安全设置
-    const securityBtn = wrapper.findAll('button').find((b) => b.text().includes('安全设置'))
-    expect(securityBtn).toBeDefined()
-    await securityBtn!.trigger('click')
+    const appearanceBtn = wrapper.findAll('button').find((b) => b.text().includes('外观设置'))
+    expect(appearanceBtn).toBeDefined()
+    await appearanceBtn!.trigger('click')
     await flushPromises()
 
-    // 安全设置内容应可见
-    expect(wrapper.text()).toContain('安全网关')
-    expect(wrapper.text()).toContain('注入检测')
-    expect(wrapper.text()).toContain('PII 过滤')
-    expect(wrapper.text()).toContain('内容过滤')
+    expect(wrapper.text()).toContain('浅色')
+    expect(wrapper.text()).toContain('深色')
+    expect(wrapper.text()).toContain('跟随系统')
 
-    // 切换到通用设置
-    const generalBtn = wrapper.findAll('button').find((b) => b.text().includes('通用设置'))
-    await generalBtn!.trigger('click')
+    const storageBtn = wrapper.findAll('button').find((b) => b.text().includes('存储设置'))
+    expect(storageBtn).toBeDefined()
+    await storageBtn!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('语言')
-    expect(wrapper.text()).toContain('日志级别')
-    expect(wrapper.text()).toContain('数据目录')
-
-    // 切换到运行引擎
-    const engineBtn = wrapper.findAll('button').find((b) => b.text().includes('运行引擎'))
-    await engineBtn!.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('HexClaw Engine')
+    expect(wrapper.text()).toContain('向量数据库')
+    expect(wrapper.text()).toContain('Qdrant')
   })
 
   // ────────────────────────────────────────────────────
@@ -240,62 +321,65 @@ describe('SettingsView — E2E 关键路径', () => {
   // ────────────────────────────────────────────────────
   it('shows loading state while config is being fetched', async () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
-    const { getLLMConfig } = await import('@/api/config')
-    const mockedGetConfig = vi.mocked(getLLMConfig)
+    try {
+      const { getLLMConfig } = await import('@/api/config')
+      const mockedGetConfig = vi.mocked(getLLMConfig)
 
-    // 让 getLLMConfig 延迟返回
-    let resolveConfig!: (v: unknown) => void
-    mockedGetConfig.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveConfig = resolve as (v: unknown) => void
-      }),
-    )
+      // 让 getLLMConfig 延迟返回
+      let resolveConfig!: (v: unknown) => void
+      mockedGetConfig.mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveConfig = resolve as (v: unknown) => void
+        }),
+      )
 
-    const wrapper = mountSettingsView()
-    // 需要 flushPromises 让 onMounted 执行，使 loading=true 生效
-    await flushPromises()
-    // 此时 store.loading 应为 true（getLLMConfig 尚未 resolve）
-    const store = useSettingsStore()
-    expect(store.loading).toBe(true)
+      const wrapper = mountSettingsView()
+      await wrapper.vm.$nextTick()
+      // 此时 store.loading 应为 true（getLLMConfig 尚未 resolve）
+      const store = useSettingsStore()
+      expect(store.loading).toBe(true)
 
-    // 应显示 loading stub
-    const loading = wrapper.find('[data-testid="loading-state"]')
-    expect(loading.exists()).toBe(true)
+      // 解决 promise
+      resolveConfig!({
+        default: 'openai',
+        providers: {
+          openai: { api_key: '', base_url: '', model: 'gpt-4o', compatible: '' },
+        },
+        routing: { enabled: false, strategy: 'cost-aware' },
+        cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+      })
+      for (let i = 0; i < 20; i++) {
+        await flushPromises()
+        if (!store.loading) break
+      }
 
-    // 解决 promise
-    resolveConfig!({
-      default: 'openai',
-      providers: {
-        openai: { api_key: '', base_url: '', model: 'gpt-4o', compatible: '' },
-      },
-      routing: { enabled: false, strategy: 'cost-aware' },
-      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
-    })
-    await flushPromises()
-
-    // loading 应消失
-    expect(store.loading).toBe(false)
-    delete (globalThis as Record<string, unknown>).isTauri
+      // loading 应消失
+      expect(store.loading).toBe(false)
+    } finally {
+      delete (globalThis as Record<string, unknown>).isTauri
+    }
   })
 
   // ────────────────────────────────────────────────────
-  // 7. 安全设置区保存
+  // 7. 非 LLM 分区保存（外观页内有「保存配置」，工具栏「保存设置」不切换为已保存文案）
   // ────────────────────────────────────────────────────
-  it('saves security config when in security section', async () => {
+  it('saves config when in appearance section', async () => {
+    delete (globalThis as Record<string, unknown>).isTauri
     const wrapper = mountSettingsView()
     await flushPromises()
 
-    // 切换到安全设置
-    const securityBtn = wrapper.findAll('button').find((b) => b.text().includes('安全设置'))
-    await securityBtn!.trigger('click')
+    const appearanceBtn = wrapper.findAll('button').find((b) => b.text().includes('外观设置'))
+    expect(appearanceBtn).toBeDefined()
+    await appearanceBtn!.trigger('click')
     await flushPromises()
 
-    // 点击保存
     const saveBtn = wrapper.findAll('button').find((b) => b.text().includes('保存配置'))
+    expect(saveBtn).toBeDefined()
     await saveBtn!.trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('已保存')
+    expect(localStorage.getItem('app_config')).toBeTruthy()
   })
 
   // ────────────────────────────────────────────────────
@@ -317,18 +401,18 @@ describe('SettingsView — E2E 关键路径', () => {
   // ────────────────────────────────────────────────────
   // 9. 通知设置区渲染所有开关
   // ────────────────────────────────────────────────────
-  it('renders notification toggles', async () => {
+  it('renders storage section details', async () => {
     const wrapper = mountSettingsView()
     await flushPromises()
 
-    const notifBtn = wrapper.findAll('button').find((b) => b.text().includes('通知设置'))
-    await notifBtn!.trigger('click')
+    const storageBtn = wrapper.findAll('button').find((b) => b.text().includes('存储设置'))
+    expect(storageBtn).toBeDefined()
+    await storageBtn!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('桌面通知')
-    expect(wrapper.text()).toContain('声音提示')
-    expect(wrapper.text()).toContain('自动化任务通知')
-    expect(wrapper.text()).toContain('Cron 提醒')
+    expect(wrapper.text()).toContain('向量数据库')
+    expect(wrapper.text()).toContain('会话数据')
+    expect(wrapper.text()).toContain('语义缓存')
   })
 
   // ────────────────────────────────────────────────────

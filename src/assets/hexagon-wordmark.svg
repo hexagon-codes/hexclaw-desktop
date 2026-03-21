@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 220" width="960" height="220" role="img" aria-label="hexagon">
+  <defs>
+    <linearGradient id="hexagon-wordmark-fill" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8fd2ff"/>
+      <stop offset="45%" stop-color="#5eb0f0"/>
+      <stop offset="100%" stop-color="#3d8cda"/>
+    </linearGradient>
+    <filter id="hexagon-wordmark-glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="12" result="blur"/>
+      <feColorMatrix
+        in="blur"
+        type="matrix"
+        values="1 0 0 0 0
+                0 1 0 0 0
+                0 0 1 0 0
+                0 0 0 .26 0"
+      />
+    </filter>
+  </defs>
+
+  <g transform="translate(26 14)">
+    <polygon
+      points="144,0 264,70 264,190 144,260 24,190 24,70"
+      transform="scale(0.74)"
+      fill="url(#hexagon-wordmark-fill)"
+      filter="url(#hexagon-wordmark-glow)"
+    />
+    <polygon
+      points="144,0 264,70 264,190 144,260 24,190 24,70"
+      transform="scale(0.74)"
+      fill="url(#hexagon-wordmark-fill)"
+    />
+    <path
+      d="M82 83
+         C72 69 74 52 91 48
+         C107 45 116 58 115 72
+         C136 63 162 63 185 69
+         C201 73 213 83 220 98
+         C222 104 228 108 237 108
+         C255 109 264 130 253 144
+         C248 151 241 154 233 154
+         C229 193 207 221 176 236
+         C157 246 137 250 117 249
+         C110 249 106 241 110 236
+         C118 227 131 215 147 204
+         C165 191 174 177 178 160
+         C179 154 176 149 168 148
+         C154 148 133 155 113 171
+         C90 189 75 211 64 237
+         C61 244 52 244 49 237
+         C39 215 39 190 48 166
+         C58 140 74 121 96 109
+         C92 101 88 92 82 83 Z"
+      transform="translate(6 -2) scale(0.56)"
+      fill="none"
+      stroke="#ffffff"
+      stroke-width="11"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    />
+    <circle cx="124" cy="88" r="7.5" fill="#ffffff"/>
+  </g>
+
+  <text
+    x="320"
+    y="155"
+    fill="#111111"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="156"
+    font-weight="700"
+    letter-spacing="-7"
+  >hexagon</text>
+</svg>

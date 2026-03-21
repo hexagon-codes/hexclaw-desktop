@@ -5,6 +5,7 @@ import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import KnowledgeCenterView from '../KnowledgeCenterView.vue'
 import IntegrationView from '../IntegrationView.vue'
+import ChannelsView from '../ChannelsView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
 const { getDocuments, uploadDocument } = vi.hoisted(() => ({
@@ -87,7 +88,7 @@ function createTestI18n() {
     legacy: false,
     locale: 'zh-CN',
     fallbackLocale: 'zh-CN',
-    messages: { 'zh-CN': zhCN },
+    messages: { 'zh-CN': zhCN, zh: zhCN },
   })
 }
 
@@ -99,7 +100,7 @@ async function mountWithRouter(component: object, initialPath: string) {
       { path: '/knowledge/memory', component: KnowledgeCenterView },
       { path: '/integration', component: IntegrationView },
       { path: '/integration/mcp', component: IntegrationView },
-      { path: '/integration/im', component: IntegrationView },
+      { path: '/channels', component: ChannelsView },
     ],
   })
 
@@ -151,11 +152,11 @@ describe('Workspace flows', () => {
 
     getIMInstances.mockResolvedValue([
       {
-        id: 'wechat-1',
-        name: '微信客服',
-        type: 'wechat',
+        id: 'feishu-1',
+        name: '飞书',
+        type: 'feishu',
         enabled: false,
-        config: { app_id: 'wx-1', app_secret: 'secret' },
+        config: { app_id: 'cli_xxx', app_secret: 'secret' },
         createdAt: 1,
       },
     ])
@@ -192,7 +193,7 @@ describe('Workspace flows', () => {
   it('switches to Skills tab in Integration and toggles a skill', async () => {
     localStorage.setItem('hexclaw_disabled_skills', JSON.stringify(['demo-skill']))
 
-    const { wrapper, router } = await mountWithRouter(IntegrationView, '/integration/im')
+    const { wrapper, router } = await mountWithRouter(IntegrationView, '/integration')
     await flushPromises()
 
     const skillsTab = wrapper.findAll('button').find((btn) => btn.text().includes('工具能力'))
@@ -219,17 +220,11 @@ describe('Workspace flows', () => {
     expect(wrapper.text()).toContain('已启用')
   })
 
-  it('switches to IM tab in Integration and edits a wechat instance', async () => {
-    const { wrapper, router } = await mountWithRouter(IntegrationView, '/integration')
+  it('edits a feishu instance on Channels page', async () => {
+    const { wrapper } = await mountWithRouter(ChannelsView, '/channels')
     await flushPromises()
 
-    const imTab = wrapper.findAll('button').find((btn) => btn.text().includes('外部通道'))
-    expect(imTab).toBeDefined()
-    await imTab!.trigger('click')
-    await flushPromises()
-
-    expect(router.currentRoute.value.path).toBe('/integration/im')
-    expect(wrapper.text()).toContain('微信客服')
+    expect(wrapper.text()).toContain('飞书')
 
     const configBtn = wrapper.findAll('button').find((btn) => btn.text().includes('配置'))
     expect(configBtn).toBeDefined()
@@ -237,15 +232,15 @@ describe('Workspace flows', () => {
     await flushPromises()
 
     const nameInput = wrapper.find('input[placeholder="输入实例名称"]')
-    await nameInput.setValue('微信客服-工作台')
+    await nameInput.setValue('飞书-工作台')
 
     const saveBtn = wrapper.findAll('button').find((btn) => btn.text().includes('保存'))
     expect(saveBtn).toBeDefined()
     await saveBtn!.trigger('click')
     await flushPromises()
 
-    expect(updateIMInstance).toHaveBeenCalledWith('wechat-1', expect.objectContaining({
-      name: '微信客服-工作台',
+    expect(updateIMInstance).toHaveBeenCalledWith('feishu-1', expect.objectContaining({
+      name: '飞书-工作台',
     }))
     expect(getIMInstances).toHaveBeenCalledTimes(2)
   })

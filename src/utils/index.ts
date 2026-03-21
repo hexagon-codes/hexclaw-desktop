@@ -7,6 +7,7 @@ export {
   trySafe,
   isRetryable,
   getErrorMessage,
+  messageFromUnknownError,
 } from './errors'
 export {
   saveSecureValue,

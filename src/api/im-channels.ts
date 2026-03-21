@@ -37,32 +37,32 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
       key: 'app_secret',
       label: 'App Secret',
       labelEn: 'App Secret',
-      placeholder: '输入 App Secret',
+      placeholder: 'Enter App Secret',
       secret: true,
     },
     {
       key: 'verification_token',
       label: '验证 Token（选填）',
       labelEn: 'Verification Token (optional)',
-      placeholder: '需与飞书事件订阅保持一致；若留空，平台端也必须留空',
+      placeholder: 'Must match Feishu event subscription; leave empty if not configured',
       secret: true,
       optional: true,
     },
   ],
   dingtalk: [
-    { key: 'app_key', label: 'App Key', labelEn: 'App Key', placeholder: '输入 App Key' },
+    { key: 'app_key', label: 'App Key', labelEn: 'App Key', placeholder: 'Enter App Key' },
     {
       key: 'app_secret',
       label: 'App Secret',
       labelEn: 'App Secret',
-      placeholder: '输入 App Secret',
+      placeholder: 'Enter App Secret',
       secret: true,
     },
     {
       key: 'robot_code',
       label: 'Robot Code',
       labelEn: 'Robot Code',
-      placeholder: '输入 Robot Code',
+      placeholder: 'Enter Robot Code',
     },
   ],
   discord: [
@@ -70,7 +70,7 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
       key: 'token',
       label: 'Bot Token',
       labelEn: 'Bot Token',
-      placeholder: '输入 Bot Token',
+      placeholder: 'Enter Bot Token',
       secret: true,
     },
   ],
@@ -79,7 +79,7 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
       key: 'token',
       label: 'Bot Token',
       labelEn: 'Bot Token',
-      placeholder: '输入 Bot Token',
+      placeholder: 'Enter Bot Token',
       secret: true,
     },
   ],
@@ -175,13 +175,15 @@ let _store: Promise<unknown> | null = null
 
 async function getStore() {
   if (!_store) {
-    _store = (async () => {
+    const p = (async () => {
       const { load } = await import('@tauri-apps/plugin-store')
       return load('im-channels.json', {
         defaults: {},
         autoSave: true,
       })
     })()
+    _store = p
+    p.catch(() => { _store = null })
   }
   return _store as Promise<{
     get: <T>(key: string) => Promise<T | undefined>
@@ -242,6 +244,7 @@ async function proxyApiRequest<T = Record<string, unknown>>(
   path: string,
   body?: Record<string, unknown> | null,
 ): Promise<T | null> {
+  const { messageFromUnknownError } = await import('@/utils/errors')
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     const text = await invoke<string>('proxy_api_request', {
@@ -254,7 +257,7 @@ async function proxyApiRequest<T = Record<string, unknown>>(
     if (e instanceof TypeError || (e instanceof Error && e.message.includes('plugin'))) {
       return null
     }
-    throw e
+    throw new Error(messageFromUnknownError(e))
   }
 }
 
@@ -268,7 +271,7 @@ async function syncBackendInstance(
 ) {
   const missingFields = getRequiredFieldLabels(instance)
   if (missingFields.length > 0) {
-    throw new Error(`缺少必填配置项: ${missingFields.join('、')}`)
+    throw new Error(`Missing required fields: ${missingFields.join(', ')}`)
   }
 
   return proxyApiRequest('POST', '/api/v1/platforms/instances', {
@@ -394,13 +397,13 @@ export async function testIMInstance(
       body: null,
     })
   } catch {
-    return { success: false, message: '无法连接后端服务，请确认 Engine 已启动' }
+    return { success: false, message: 'Cannot connect to backend. Please ensure Engine is running.' }
   }
 
   const missingFields = getRequiredFieldLabels(instance)
   if (missingFields.length > 0) {
-    const labels = missingFields.join('、')
-    return { success: false, message: `缺少必填配置项: ${labels}` }
+    const labels = missingFields.join(', ')
+    return { success: false, message: `Missing required fields: ${labels}` }
   }
 
   try {
@@ -412,13 +415,11 @@ export async function testIMInstance(
     const result = JSON.parse(res) as { success?: boolean; message?: string }
     return {
       success: result.success ?? true,
-      message: result.message ?? '通道验证通过',
+      message: result.message ?? 'Channel verified successfully',
     }
-  } catch {
-    if (instance.enabled) {
-      return { success: true, message: '配置已保存，后端验证接口暂不可用（配置项完整）' }
-    }
-    return { success: true, message: '配置项完整，保存后启用即可生效' }
+  } catch (e) {
+    const { messageFromUnknownError } = await import('@/utils/errors')
+    return { success: false, message: `Connection test failed: ${messageFromUnknownError(e)}` }
   }
 }
 
@@ -435,17 +436,17 @@ export async function testSavedIMInstanceRuntime(
       body: null,
     })
   } catch {
-    return { success: false, message: '无法连接后端服务，请确认 Engine 已启动' }
+    return { success: false, message: 'Cannot connect to backend. Please ensure Engine is running.' }
   }
 
   const missingFields = getRequiredFieldLabels(instance)
   if (missingFields.length > 0) {
-    const labels = missingFields.join('、')
-    return { success: false, message: `缺少必填配置项: ${labels}` }
+    const labels = missingFields.join(', ')
+    return { success: false, message: `Missing required fields: ${labels}` }
   }
 
   if (!instance.enabled) {
-    return { success: true, message: '配置已保存，实例未启用；启用后可执行实时连通性检查' }
+    return { success: true, message: 'Config saved. Instance is disabled; enable it to run connectivity check.' }
   }
 
   try {
@@ -459,13 +460,14 @@ export async function testSavedIMInstanceRuntime(
     if (result) {
       return {
         success: result.success ?? false,
-        message: result.message ?? result.last_error ?? '实例健康检查未通过',
+        message: result.message ?? result.last_error ?? 'Instance health check failed',
       }
     }
   } catch (e) {
+    const { messageFromUnknownError } = await import('@/utils/errors')
     return {
       success: false,
-      message: e instanceof Error ? e.message : '实例健康检查失败',
+      message: messageFromUnknownError(e),
     }
   }
 

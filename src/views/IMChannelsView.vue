@@ -25,10 +25,12 @@ import {
   getChannelMeta,
   getChannelHelpText,
   getRequiredFieldLabels,
+  getPlatformHookUrl,
   CHANNEL_TYPES,
   CHANNEL_CONFIG_FIELDS,
 } from '@/api/im-channels'
 import type { IMInstance, IMChannelType } from '@/api/im-channels'
+import { setClipboard } from '@/api/desktop'
 import PageHeader from '@/components/common/PageHeader.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 
@@ -121,6 +123,8 @@ function selectType(type: IMChannelType) {
   const meta = getChannelMeta(type)
   formName.value = locale.value === 'zh-CN' ? meta.name : meta.nameEn
   formConfig.value = {}
+  formEnabled.value = false
+  modalTestResult.value = null
   modalStep.value = 2
 }
 
@@ -236,7 +240,11 @@ async function handleTestModal() {
     createdAt: Date.now(),
   }
   try {
-    modalTestResult.value = await testIMInstance(tempInstance)
+    if (modalMode.value === 'edit' && editingId.value) {
+      modalTestResult.value = await testSavedIMInstanceRuntime(tempInstance)
+    } else {
+      modalTestResult.value = await testIMInstance(tempInstance)
+    }
   } catch (e) {
     modalTestResult.value = {
       success: false,
@@ -276,6 +284,9 @@ async function restartEngine() {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
     await invoke('restart_sidecar')
+    await new Promise(r => setTimeout(r, 2000))
+    const { useAppStore } = await import('@/stores/app')
+    useAppStore().checkConnection()
   } catch (e) {
     console.warn('重启 sidecar:', e)
   }
@@ -302,6 +313,19 @@ function getStatusText(inst: IMInstance) {
   if (inst.enabled && isConfigIncomplete(inst)) return t('imChannels.configIncomplete')
   if (inst.enabled) return t('imChannels.running')
   return t('imChannels.disabled')
+}
+
+async function copyWebhookUrl() {
+  const text = getPlatformHookUrl({ name: formName.value, type: formType.value })
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      await setClipboard(text)
+    }
+  } catch {
+    await setClipboard(text)
+  }
 }
 </script>
 
@@ -633,52 +657,66 @@ function getStatusText(inst: IMInstance) {
                 </label>
               </div>
 
-              <!-- Modal test result -->
+              <!-- Webhook URL (only in edit mode with a saved name) -->
+              <div v-if="modalMode === 'edit' && formName" class="hc-im-field">
+                <label class="hc-im-field__label">Webhook URL</label>
+                <div class="hc-im-webhook-url">
+                  <code class="hc-im-webhook-url__text">{{ getPlatformHookUrl({ name: formName, type: formType }) }}</code>
+                  <button
+                    class="hc-im-webhook-url__copy"
+                    :title="t('common.copy')"
+                    @click="copyWebhookUrl"
+                  >
+                    {{ t('common.copy') }}
+                  </button>
+                </div>
+              </div>
+
+            </div>
+
+            <!-- Modal footer (sticky at bottom, never hidden by scroll) -->
+            <div v-if="modalStep === 2" class="hc-im-modal__footer-wrap">
               <div
                 v-if="modalTestResult"
                 class="hc-im-test-result"
-                :class="
-                  modalTestResult.success ? 'hc-im-test-result--ok' : 'hc-im-test-result--err'
-                "
+                :class="modalTestResult.success ? 'hc-im-test-result--ok' : 'hc-im-test-result--err'"
               >
                 {{ modalTestResult.message }}
               </div>
-            </div>
-
-            <!-- Modal footer -->
-            <div v-if="modalStep === 2" class="hc-im-modal__footer">
-              <button
-                class="hc-im-btn hc-im-btn--ghost"
-                :disabled="modalTesting"
-                @click="handleTestModal"
-              >
-                <Zap :size="14" />
-                {{ modalTesting ? '...' : t('imChannels.testConnection') }}
-              </button>
-              <div class="flex-1" />
-              <button
-                v-if="modalMode === 'create'"
-                class="hc-im-btn hc-im-btn--ghost"
-                @click="modalStep = 1"
-              >
-                {{ t('imChannels.back') }}
-              </button>
-              <button class="hc-im-btn hc-im-btn--ghost" @click="closeModal">
-                {{ t('common.cancel') }}
-              </button>
-              <button
-                class="hc-im-btn hc-im-btn--primary"
-                :disabled="formSaving"
-                @click="handleSave"
-              >
-                {{
-                  formSaving
-                    ? '...'
-                    : modalMode === 'create'
-                      ? t('common.create')
-                      : t('common.save')
-                }}
-              </button>
+              <div class="hc-im-modal__footer">
+                <button
+                  class="hc-im-btn hc-im-btn--ghost"
+                  :disabled="modalTesting"
+                  @click="handleTestModal"
+                >
+                  <Zap :size="14" />
+                  {{ modalTesting ? '...' : t('imChannels.testConnection') }}
+                </button>
+                <div class="flex-1" />
+                <button
+                  v-if="modalMode === 'create'"
+                  class="hc-im-btn hc-im-btn--ghost"
+                  @click="modalStep = 1"
+                >
+                  {{ t('imChannels.back') }}
+                </button>
+                <button class="hc-im-btn hc-im-btn--ghost" @click="closeModal">
+                  {{ t('common.cancel') }}
+                </button>
+                <button
+                  class="hc-im-btn hc-im-btn--primary"
+                  :disabled="formSaving"
+                  @click="handleSave"
+                >
+                  {{
+                    formSaving
+                      ? '...'
+                      : modalMode === 'create'
+                        ? t('common.create')
+                        : t('common.save')
+                  }}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1081,7 +1119,7 @@ function getStatusText(inst: IMInstance) {
 
 .hc-im-modal {
   width: 520px;
-  max-height: 85vh;
+  max-height: 95vh;
   border-radius: 16px;
   background: var(--hc-bg-main, #fff);
   border: 1px solid var(--hc-border);
@@ -1117,8 +1155,9 @@ function getStatusText(inst: IMInstance) {
 
 .hc-im-modal__body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 20px;
+  padding: 16px 20px;
 }
 
 .hc-im-modal__subtitle {
@@ -1127,12 +1166,20 @@ function getStatusText(inst: IMInstance) {
   margin: 0 0 16px;
 }
 
+.hc-im-modal__footer-wrap {
+  flex-shrink: 0;
+  border-top: 1px solid var(--hc-border);
+}
+
+.hc-im-modal__footer-wrap .hc-im-test-result {
+  margin: 12px 20px 0;
+}
+
 .hc-im-modal__footer {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 12px 20px;
-  border-top: 1px solid var(--hc-border);
 }
 
 .hc-im-modal__type-header {
@@ -1209,7 +1256,7 @@ function getStatusText(inst: IMInstance) {
 }
 
 .hc-im-help-box {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   padding: 10px 12px;
   border-radius: 8px;
   background: var(--hc-bg-hover);
@@ -1225,7 +1272,7 @@ function getStatusText(inst: IMInstance) {
 /* ── Form fields ────────────────────────────────────── */
 
 .hc-im-field {
-  margin-bottom: 14px;
+  margin-bottom: 12px;
 }
 
 .hc-im-field--row {
@@ -1244,6 +1291,42 @@ function getStatusText(inst: IMInstance) {
 
 .hc-im-field--row .hc-im-field__label {
   margin-bottom: 0;
+}
+
+.hc-im-webhook-url {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--hc-bg-input);
+  border: 1px solid var(--hc-border);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.hc-im-webhook-url__text {
+  flex: 1;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  color: var(--hc-text-secondary);
+  word-break: break-all;
+  user-select: all;
+}
+
+.hc-im-webhook-url__copy {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  border: none;
+  background: var(--hc-accent);
+  color: white;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.hc-im-webhook-url__copy:hover {
+  opacity: 0.85;
 }
 
 .hc-im-input-wrap {
@@ -1294,7 +1377,6 @@ function getStatusText(inst: IMInstance) {
   font-size: 13px;
   padding: 8px 12px;
   border-radius: 8px;
-  margin-top: 4px;
 }
 
 .hc-im-test-result--ok {

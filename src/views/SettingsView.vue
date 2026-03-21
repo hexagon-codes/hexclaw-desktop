@@ -2,22 +2,22 @@
 import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { Key, Shield, Globe, Database, Bell, Server, Palette, Eye, EyeOff, Plus, Trash2, ChevronDown, ChevronUp, Power, Webhook, Loader2, Pencil, CheckCircle, XCircle, Zap, RotateCcw, Plug, Save } from 'lucide-vue-next'
-import { NTag, NPopconfirm, NModal, NSpace } from 'naive-ui'
+import { Key, Globe, Database, Server, Palette, Eye, EyeOff, Plus, Trash2, ChevronDown, ChevronUp, Power, Webhook, Loader2, Pencil, CheckCircle, XCircle, Zap, RotateCcw, Plug, Save } from 'lucide-vue-next'
+import { NTag, NModal, NSpace } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
 import { getWebhooks, createWebhook, deleteWebhook, type Webhook as WebhookItem, type WebhookType, type WebhookEvent } from '@/api/webhook'
-import { trySafe } from '@/utils/errors'
+import { trySafe, messageFromUnknownError } from '@/utils/errors'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { useValidation, rules } from '@/composables/useValidation'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
-import type { ProviderConfig, ProviderType, ModelOption, ModelCapability, SecurityConfig, NotificationConfig } from '@/types'
+import { testLLMConnection } from '@/api/config'
+import type { ProviderConfig, ProviderType, ModelOption, ModelCapability } from '@/types'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
-import SettingsSecurity from '@/components/settings/SettingsSecurity.vue'
-import SettingsNotification from '@/components/settings/SettingsNotification.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -28,6 +28,8 @@ const saved = ref(false)
 const settingsSearch = ref('')
 
 // Provider 编辑状态
+const showRestartBanner = ref(false)
+const restarting = ref(false)
 const editingProviderId = ref<string | null>(null)
 const showApiKeys = ref<Record<string, boolean>>({})
 const showAddProvider = ref(false)
@@ -44,6 +46,8 @@ const editingModel = ref<{ providerId: string; idx: number; model: ModelOption }
 const editModelForm = ref<{ name: string; id: string; caps: Record<ModelCapability, boolean> }>({
   name: '', id: '', caps: { text: true, vision: false, video: false, audio: false, code: false },
 })
+const pendingDeleteProviderId = ref<string | null>(null)
+const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName: string } | null>(null)
 
 // ─── Webhook 状态 ────────────────────────────────────
 const webhooks = ref<WebhookItem[]>([])
@@ -148,6 +152,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   editingModel.value = null
   showAddModelPanel.value = false
+  pendingDeleteProviderId.value = null
+  pendingDeleteModel.value = null
   if (autoSaveTimer) {
     clearTimeout(autoSaveTimer)
     autoSaveTimer = null
@@ -189,7 +195,7 @@ function handleAddProvider() {
   }
 }
 
-/** 删除 Provider（由 NPopconfirm 确认后触发） */
+/** 真正执行 Provider 删除 */
 async function handleDeleteProvider(id: string) {
   settingsStore.removeProvider(id)
   if (editingProviderId.value === id) {
@@ -202,6 +208,17 @@ async function handleDeleteProvider(id: string) {
       console.error('[HexClaw] 删除 Provider 后保存失败:', e)
     }
   }
+}
+
+function openDeleteProviderConfirm(id: string) {
+  pendingDeleteProviderId.value = id
+}
+
+async function confirmDeleteProvider() {
+  const id = pendingDeleteProviderId.value
+  pendingDeleteProviderId.value = null
+  if (!id) return
+  await handleDeleteProvider(id)
 }
 
 /** 切换 Provider 启用/禁用 */
@@ -237,6 +254,25 @@ function removeModel(provider: ProviderConfig, modelId: string) {
     models: provider.models.filter((m) => m.id !== modelId),
   })
   autoSave()
+}
+
+function openDeleteModelConfirm(providerId: string, model: ModelOption) {
+  pendingDeleteModel.value = {
+    providerId,
+    modelId: model.id,
+    modelName: model.name,
+  }
+}
+
+function confirmDeleteModel() {
+  const target = pendingDeleteModel.value
+  pendingDeleteModel.value = null
+  if (!target) return
+
+  const provider = settingsStore.config?.llm.providers.find((p) => p.id === target.providerId)
+  if (!provider) return
+
+  removeModel(provider, target.modelId)
 }
 
 /** 打开编辑模型 Modal */
@@ -286,23 +322,46 @@ const testProviderResult = ref<Record<string, { ok: boolean; msg: string }>>({})
 async function testProvider(provider: ProviderConfig) {
   testingProviderId.value = provider.id
   delete testProviderResult.value[provider.id]
-  try {
-    const text = await invoke<string>('proxy_api_request', {
-      method: 'GET',
-      path: '/api/v1/config/llm',
-      body: null,
-    })
-    const data = JSON.parse(text)
-    // Check if the provider exists in backend config
-    const key = provider.name || provider.id
-    if (data.providers && data.providers[key]) {
-      testProviderResult.value[provider.id] = { ok: true, msg: '连接正常' }
-    } else {
-      // Backend is reachable, provider config present locally
-      testProviderResult.value[provider.id] = { ok: true, msg: '后端服务正常' }
+
+  const firstModelId = provider.models?.[0]?.id?.trim() ?? ''
+  if (!firstModelId) {
+    testProviderResult.value[provider.id] = {
+      ok: false,
+      msg: t('settings.llm.testNeedsModel'),
     }
-  } catch {
-    testProviderResult.value[provider.id] = { ok: false, msg: '无法连接后端服务' }
+    testingProviderId.value = null
+    return
+  }
+
+  const needsApiKey = provider.type !== 'ollama'
+  if (needsApiKey && !provider.apiKey?.trim()) {
+    testProviderResult.value[provider.id] = {
+      ok: false,
+      msg: t('settings.llm.testNeedsApiKey'),
+    }
+    testingProviderId.value = null
+    return
+  }
+
+  try {
+    const preset = PROVIDER_PRESETS[provider.type]
+    const result = await testLLMConnection({
+      provider: {
+        type: provider.type,
+        api_key: provider.apiKey?.trim() ?? '',
+        base_url: provider.baseUrl || preset?.defaultBaseUrl || '',
+        model: firstModelId,
+      },
+    })
+    testProviderResult.value[provider.id] = {
+      ok: result.ok,
+      msg: result.message || (result.ok ? t('settings.llm.connectionOk') : t('settings.llm.connectionFailed')),
+    }
+  } catch (e) {
+    testProviderResult.value[provider.id] = {
+      ok: false,
+      msg: messageFromUnknownError(e),
+    }
   } finally {
     testingProviderId.value = null
   }
@@ -316,30 +375,31 @@ function autoSave() {
     if (!settingsStore.config) return
     try {
       await settingsStore.saveConfig(settingsStore.config)
+      if (activeSection.value === 'llm') showRestartBanner.value = true
     } catch (e) {
       console.error('[HexClaw] 自动保存失败:', e)
     }
   }, 500)
 }
 
-function patchSecurity(p: Partial<SecurityConfig>) {
-  const c = settingsStore.config
-  if (!c) return
-  Object.assign(c.security, p)
-  autoSave()
-}
-
-function patchNotification(p: Partial<NotificationConfig>) {
-  const c = settingsStore.config
-  if (!c) return
-  Object.assign(c.notification, p)
-  autoSave()
+async function restartEngine() {
+  restarting.value = true
+  try {
+    await invoke('restart_sidecar')
+    await new Promise(r => setTimeout(r, 2000))
+    const { useAppStore } = await import('@/stores/app')
+    useAppStore().checkConnection()
+  } catch (e) {
+    console.warn('重启 sidecar:', e)
+  }
+  showRestartBanner.value = false
+  restarting.value = false
 }
 
 async function onToolbarReset() {
   if (!settingsStore.config) return
   try {
-    await settingsStore.loadConfig()
+    await settingsStore.loadConfig({ force: true })
     saved.value = false
   } catch (e) {
     console.error('[HexClaw] Reset failed:', e)
@@ -350,21 +410,34 @@ async function onToolbarTestConnection() {
   if (!settingsStore.config) return
   const provider = settingsStore.config.llm.providers.find(p => p.enabled)
   if (!provider) return
+
+  const firstModelId = provider.models?.[0]?.id?.trim() ?? ''
+  if (!firstModelId) {
+    window.$message?.error?.(t('settings.llm.testNeedsModel'))
+    return
+  }
+  const needsApiKey = provider.type !== 'ollama'
+  if (needsApiKey && !provider.apiKey?.trim()) {
+    window.$message?.error?.(t('settings.llm.testNeedsApiKey'))
+    return
+  }
+
   try {
     const { testLLMConnection } = await import('@/api/config')
+    const preset = PROVIDER_PRESETS[provider.type]
     const result = await testLLMConnection({
       provider: {
         type: provider.type,
-        base_url: provider.baseUrl,
-        api_key: provider.apiKey,
-        model: provider.models[0]?.id ?? '',
+        base_url: provider.baseUrl || preset?.defaultBaseUrl || '',
+        api_key: provider.apiKey?.trim() ?? '',
+        model: firstModelId,
       },
     })
     window.$message?.[result.ok ? 'success' : 'error'](
       result.message || (result.ok ? 'OK' : 'Failed'),
     )
   } catch (e) {
-    window.$message?.error?.(e instanceof Error ? e.message : 'Connection test failed')
+    window.$message?.error?.(messageFromUnknownError(e))
   }
 }
 
@@ -399,16 +472,10 @@ async function saveConfig() {
     }
   }
 
-  const secValues = {
-    max_tokens_per_request: settingsStore.config.security.max_tokens_per_request,
-    rate_limit_rpm: settingsStore.config.security.rate_limit_rpm,
-  }
-  const secValid = validateAllSec(secValues)
-  if (!secValid) return
-
   try {
     await settingsStore.saveConfig(settingsStore.config)
     saved.value = true
+    if (activeSection.value === 'llm') showRestartBanner.value = true
     setTimeout(() => { saved.value = false }, 2000)
   } catch (e) {
     console.error('保存配置失败:', e)
@@ -444,6 +511,24 @@ async function saveConfig() {
         <template v-if="config">
           <!-- LLM Providers -->
           <div v-if="activeSection === 'llm'" class="hc-settings__section hc-settings__section--scroll" style="max-width: 600px;">
+            <!-- Restart engine banner -->
+            <div v-if="showRestartBanner" class="hc-settings__restart-banner">
+              <div class="hc-settings__restart-text">
+                <Zap :size="14" />
+                {{ t('settings.llm.restartHint', 'LLM config updated. Restart engine to apply changes.') }}
+              </div>
+              <div class="hc-settings__restart-actions">
+                <button class="hc-btn hc-btn-sm" @click="showRestartBanner = false">
+                  {{ t('common.later', 'Later') }}
+                </button>
+                <button class="hc-btn hc-btn-primary hc-btn-sm" :disabled="restarting" @click="restartEngine">
+                  <RotateCcw v-if="!restarting" :size="13" />
+                  <Loader2 v-else :size="13" class="animate-spin" />
+                  {{ restarting ? t('settings.llm.restarting', 'Restarting...') : t('settings.llm.restartNow', 'Restart Now') }}
+                </button>
+              </div>
+            </div>
+
             <div class="hc-provider__header">
               <h3 class="hc-settings__section-title" style="margin: 0;">{{ t('settings.llm.title') }}</h3>
               <button class="hc-btn hc-btn-sm" @click="showAddProvider = !showAddProvider">
@@ -517,7 +602,7 @@ async function saveConfig() {
                 <div v-if="editingProviderId === provider.id" class="hc-provider__edit">
                   <div class="hc-settings__field">
                     <label class="hc-settings__label">{{ t('settings.llm.provider') }} <span class="hc-settings__required">*</span></label>
-                    <input v-model="provider.name" type="text" class="hc-input" />
+                    <input v-model="provider.name" type="text" class="hc-input" @change="autoSave()" />
                   </div>
 
                   <div class="hc-settings__field">
@@ -528,6 +613,7 @@ async function saveConfig() {
                         :type="showApiKeys[provider.id] ? 'text' : 'password'"
                         class="hc-input"
                         :placeholder="PROVIDER_PRESETS[provider.type]?.placeholder || 'API Key'"
+                        @change="autoSave()"
                       />
                       <button class="hc-settings__eye-btn" @click="showApiKeys[provider.id] = !showApiKeys[provider.id]">
                         <Eye v-if="!showApiKeys[provider.id]" :size="15" />
@@ -538,7 +624,7 @@ async function saveConfig() {
 
                   <div class="hc-settings__field">
                     <label class="hc-settings__label">{{ t('settings.llm.baseUrl') }} <span class="hc-settings__required">*</span></label>
-                    <input v-model="provider.baseUrl" type="text" class="hc-input" :placeholder="PROVIDER_PRESETS[provider.type]?.defaultBaseUrl" />
+                    <input v-model="provider.baseUrl" type="text" class="hc-input" :placeholder="PROVIDER_PRESETS[provider.type]?.defaultBaseUrl" @change="autoSave()" />
                   </div>
 
                   <!-- 模型列表 -->
@@ -551,20 +637,19 @@ async function saveConfig() {
                           <code class="hc-model-card__id">{{ model.id }}</code>
                         </div>
                         <NSpace :size="4" align="center">
-                          <NTag v-for="cap in (model.capabilities || ['text']).filter((c: string) => c !== 'text')" :key="cap" size="tiny" :bordered="false" :type="cap === 'vision' ? 'info' : cap === 'video' ? 'warning' : 'success'">
-                            {{ cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : '音频' }}
+                          <NTag v-for="cap in (model.capabilities || ['text']).filter((c: string) => c !== 'text')" :key="cap" size="tiny" :bordered="false" :type="cap === 'vision' ? 'info' : cap === 'video' ? 'warning' : cap === 'code' ? 'default' : 'success'">
+                            {{ cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : cap === 'audio' ? '音频' : cap === 'code' ? '代码' : cap }}
                           </NTag>
                           <button class="hc-model-card__action" @click="openEditModel(provider, idx)" title="编辑">
                             <Pencil :size="13" />
                           </button>
-                          <NPopconfirm @positive-click="removeModel(provider, model.id)">
-                            <template #trigger>
-                              <button class="hc-model-card__action hc-model-card__action--del" title="删除">
-                                <Trash2 :size="13" />
-                              </button>
-                            </template>
-                            确定删除模型「{{ model.name }}」？
-                          </NPopconfirm>
+                          <button
+                            class="hc-model-card__action hc-model-card__action--del"
+                            title="删除"
+                            @click="openDeleteModelConfirm(provider.id, model)"
+                          >
+                            <Trash2 :size="13" />
+                          </button>
                         </NSpace>
                       </div>
 
@@ -617,15 +702,10 @@ async function saveConfig() {
                   </div>
 
                   <div class="hc-provider__edit-footer">
-                    <NPopconfirm @positive-click="handleDeleteProvider(provider.id)">
-                      <template #trigger>
-                        <button class="hc-provider__delete-btn">
-                          <Trash2 :size="13" />
-                          {{ t('settings.llm.deleteProvider') }}
-                        </button>
-                      </template>
-                      {{ t('settings.llm.deleteProviderConfirm', '确定删除该 Provider？') }}
-                    </NPopconfirm>
+                    <button class="hc-provider__delete-btn" @click="openDeleteProviderConfirm(provider.id)">
+                      <Trash2 :size="13" />
+                      {{ t('settings.llm.deleteProvider') }}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -653,7 +733,7 @@ async function saveConfig() {
                     :key="opt.key"
                     class="hc-settings__theme-card"
                     :class="{ 'hc-settings__theme-card--active': themeMode === opt.key }"
-                    @click="setTheme(opt.key)"
+                    @click="setTheme(opt.key); autoSave()"
                   >
                     <div class="hc-settings__theme-label">{{ opt.label }}</div>
                     <div class="hc-settings__theme-desc">{{ opt.desc }}</div>
@@ -663,7 +743,7 @@ async function saveConfig() {
 
               <div class="hc-settings__field">
                 <label class="hc-settings__label">{{ t('settings.general.language') }}</label>
-                <select v-model="config.general.language" class="hc-input" @change="handleLocaleChange(config.general.language)">
+                <select v-model="config.general.language" class="hc-input" @change="handleLocaleChange(config.general.language); autoSave()">
                   <option value="zh-CN">中文</option>
                   <option value="en">English</option>
                 </select>
@@ -674,7 +754,7 @@ async function saveConfig() {
                   <span class="hc-settings__toggle-label">{{ t('settings.general.autoStart') }}</span>
                   <p class="hc-settings__toggle-desc">{{ t('settings.general.autoStartDesc') }}</p>
                 </div>
-                <input v-model="config.general.auto_start" type="checkbox" class="hc-toggle" />
+                <input v-model="config.general.auto_start" type="checkbox" class="hc-toggle" @change="autoSave()" />
               </label>
             </div>
 
@@ -739,7 +819,8 @@ async function saveConfig() {
 
   <!-- 编辑模型 Modal -->
   <NModal
-    :show="!!editingModel"
+    v-if="editingModel"
+    :show="true"
     preset="card"
     :title="'编辑模型'"
     style="max-width: 420px"
@@ -777,6 +858,26 @@ async function saveConfig() {
       </div>
     </template>
   </NModal>
+
+  <ConfirmDialog
+    :open="pendingDeleteProviderId !== null"
+    :title="t('settings.llm.deleteProvider')"
+    :message="t('settings.llm.deleteProviderConfirm')"
+    :confirm-text="t('common.delete')"
+    :cancel-text="t('common.cancel')"
+    @confirm="confirmDeleteProvider"
+    @cancel="pendingDeleteProviderId = null"
+  />
+
+  <ConfirmDialog
+    :open="pendingDeleteModel !== null"
+    :title="t('settings.llm.deleteModel')"
+    :message="pendingDeleteModel ? t('settings.llm.deleteModelConfirm', { name: pendingDeleteModel.modelName }) : ''"
+    :confirm-text="t('common.delete')"
+    :cancel-text="t('common.cancel')"
+    @confirm="confirmDeleteModel"
+    @cancel="pendingDeleteModel = null"
+  />
 </template>
 
 <style scoped>
@@ -998,6 +1099,35 @@ async function saveConfig() {
 
 /* ─── Engine ───── */
 /* ─── Provider Management ───── */
+.hc-settings__restart-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  margin-bottom: 10px;
+  flex-shrink: 0;
+}
+
+.hc-settings__restart-text {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #3b82f6;
+}
+
+.hc-settings__restart-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .hc-provider__header {
   display: flex;
   align-items: center;
@@ -1649,12 +1779,19 @@ async function saveConfig() {
 
 .hc-model-add-form__row {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 8px;
 }
 
+.hc-model-add-form__row > * {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 .hc-model-add-form__caps {
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 10px;
 }
@@ -1676,6 +1813,20 @@ async function saveConfig() {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+@media (max-width: 640px) {
+  .hc-model-add-form__row {
+    flex-direction: column;
+  }
+
+  .hc-model-add-form__actions {
+    justify-content: stretch;
+  }
+
+  .hc-model-add-form__actions .hc-btn {
+    flex: 1 1 0;
+  }
 }
 
 /* ─── 编辑模型 Modal ─── */

@@ -37,6 +37,7 @@ const showPresets = ref(false)
 const triggeringJobs = ref<Set<string>>(new Set())
 const jobHistories = ref<Record<string, CronJobRun[]>>({})
 const expandedJobId = ref<string | null>(null)
+const expandedRunId = ref<string | null>(null)
 
 const formValid = computed(() => {
   return form.value.name.trim() !== '' && form.value.schedule.trim() !== '' && form.value.prompt.trim() !== ''
@@ -129,11 +130,9 @@ async function handleTrigger(job: CronJob) {
 
 async function loadJobHistory(jobId: string) {
   try {
-    const res = await getCronJobHistory(jobId, 5)
-    jobHistories.value[jobId] = res.runs || []
+    jobHistories.value[jobId] = await getCronJobHistory(jobId, 5)
   } catch (e) {
     console.error('加载执行历史失败:', e)
-    // Provide empty array so UI doesn't break
     jobHistories.value[jobId] = []
   }
 }
@@ -141,10 +140,16 @@ async function loadJobHistory(jobId: string) {
 async function toggleHistory(jobId: string) {
   if (expandedJobId.value === jobId) {
     expandedJobId.value = null
+    expandedRunId.value = null
   } else {
     expandedJobId.value = jobId
+    expandedRunId.value = null
     await loadJobHistory(jobId)
   }
+}
+
+function toggleRunDetail(runId: string) {
+  expandedRunId.value = expandedRunId.value === runId ? null : runId
 }
 
 function formatDuration(ms?: number): string {
@@ -319,11 +324,28 @@ defineExpose({ openCreateForm, loadJobs })
             <div class="task-card__history-title">{{ t('tasks.recentExecHistory') }}</div>
             <div v-if="!jobHistories[job.id]?.length" class="task-card__history-empty">{{ t('tasks.noExecHistory') }}</div>
             <div v-else class="task-card__history-list">
-              <div v-for="run in jobHistories[job.id]" :key="run.id" class="task-card__history-item">
-                <component :is="runStatusIcon(run.status)" :size="13" :style="{ color: runStatusColor(run.status), flexShrink: 0 }" />
-                <span class="task-card__history-time">{{ formatTime(run.started_at) }}</span>
-                <span v-if="run.duration_ms" class="task-card__history-duration">{{ formatDuration(run.duration_ms) }}</span>
-                <span class="task-card__history-status" :style="{ color: runStatusColor(run.status) }">{{ run.status }}</span>
+              <div v-for="run in jobHistories[job.id]" :key="run.id" class="task-card__history-entry">
+                <div
+                  class="task-card__history-item"
+                  :class="{ 'task-card__history-item--clickable': !!(run.result || run.error) }"
+                  @click="run.result || run.error ? toggleRunDetail(run.id) : undefined"
+                >
+                  <component :is="runStatusIcon(run.status)" :size="13" :style="{ color: runStatusColor(run.status), flexShrink: 0 }" />
+                  <span class="task-card__history-time">{{ formatTime(run.started_at) }}</span>
+                  <span v-if="run.duration_ms" class="task-card__history-duration">{{ formatDuration(run.duration_ms) }}</span>
+                  <span class="task-card__history-status" :style="{ color: runStatusColor(run.status) }">{{ run.status === 'success' ? t('tasks.statusSuccess', 'SUCCESS') : t('tasks.statusFailed', 'FAILED') }}</span>
+                  <ChevronDown
+                    v-if="run.result || run.error"
+                    :size="12"
+                    class="task-card__history-chevron"
+                    :class="{ 'task-card__history-chevron--open': expandedRunId === run.id }"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                  />
+                </div>
+                <div v-if="expandedRunId === run.id" class="task-card__history-detail">
+                  <div v-if="run.error" class="task-card__history-error">{{ run.error }}</div>
+                  <div v-if="run.result" class="task-card__history-result">{{ run.result }}</div>
+                </div>
               </div>
             </div>
           </div>
@@ -658,6 +680,54 @@ defineExpose({ openCreateForm, loadJobs })
   font-weight: 500;
   font-size: 10px;
   text-transform: uppercase;
+}
+
+.task-card__history-entry {
+  border-bottom: 1px solid var(--hc-border);
+  padding-bottom: 4px;
+}
+.task-card__history-entry:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.task-card__history-item--clickable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 3px 4px;
+  margin: 0 -4px;
+}
+.task-card__history-item--clickable:hover {
+  background: var(--hc-bg-hover);
+}
+
+.task-card__history-chevron {
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+.task-card__history-chevron--open {
+  transform: rotate(180deg);
+}
+
+.task-card__history-detail {
+  padding: 6px 8px;
+  margin: 2px 0 4px 19px;
+  border-radius: 6px;
+  background: var(--hc-bg-hover);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.task-card__history-error {
+  color: var(--hc-danger);
+}
+
+.task-card__history-result {
+  color: var(--hc-text-primary);
 }
 
 /* ── Modal ── */

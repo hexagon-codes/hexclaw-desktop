@@ -32,7 +32,7 @@ function createTestI18n() {
     legacy: false,
     locale: 'zh-CN',
     fallbackLocale: 'zh-CN',
-    messages: { 'zh-CN': zhCN },
+    messages: { 'zh-CN': zhCN, zh: zhCN },
   })
 }
 

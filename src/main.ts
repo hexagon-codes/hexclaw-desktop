@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import { open as shellOpen } from '@tauri-apps/plugin-shell'
 
 import App from './App.vue'
 import router from './router'
@@ -28,6 +29,16 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 app.mount('#app')
+
+// Open external links in system browser instead of the webview
+document.addEventListener('click', (e) => {
+  const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null
+  if (!anchor) return
+  const href = anchor.getAttribute('href')
+  if (!href || href.startsWith('#') || href.startsWith('/')) return
+  e.preventDefault()
+  shellOpen(href).catch(() => window.open(href, '_blank'))
+})
 
 // 移除启动 splash screen
 const splash = document.getElementById('splash-screen')

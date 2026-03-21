@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Puzzle,
@@ -112,8 +112,16 @@ function getSkillScope(skill: Skill): 'runtime' | 'local' {
   return typeof skill.enabled === 'boolean' ? 'runtime' : 'local'
 }
 
+const pendingUninstall = ref<string | null>(null)
+
 async function handleUninstall(name: string) {
-  if (!confirm(t('common.confirm') + ` — ${name}?`)) return
+  pendingUninstall.value = name
+}
+
+async function confirmUninstall() {
+  const name = pendingUninstall.value
+  if (!name) return
+  pendingUninstall.value = null
   try {
     await uninstallSkill(name)
     skills.value = skills.value.filter((s) => s.name !== name)
@@ -211,7 +219,7 @@ const filteredSkills = computed(() => {
     (s) =>
       s.name.toLowerCase().includes(q) ||
       s.description.toLowerCase().includes(q) ||
-      s.tags?.some((t) => t.toLowerCase().includes(q)),
+      s.tags?.some((tag) => tag.toLowerCase().includes(q)),
   )
 })
 
@@ -226,6 +234,8 @@ const hubSearchQuery = ref('')
 const hubCategory = ref<ClawHubCategory>('all')
 const hubInstallingSet = ref<Set<string>>(new Set())
 const hubInstalledSet = ref<Set<string>>(new Set())
+const hubInstallError = ref('')
+const hubSearchError = ref('')
 
 const categoryLabels: Record<ClawHubCategory, string> = {
   all: 'skills.hub.catAll',
@@ -239,13 +249,17 @@ const categoryLabels: Record<ClawHubCategory, string> = {
 
 async function loadHubSkills() {
   hubLoading.value = true
+  hubSearchError.value = ''
   try {
     hubSkills.value = await searchClawHub(
       hubSearchQuery.value || undefined,
       hubCategory.value,
     )
   } catch (e) {
-    console.error('加载 ClawHub 失败:', e)
+    hubSkills.value = []
+    hubSearchError.value =
+      e instanceof Error ? e.message : t('skills.hub.catalogLoadFailed', 'Failed to load skill catalog')
+    console.error('加载技能目录失败:', e)
   } finally {
     hubLoading.value = false
   }
@@ -269,28 +283,20 @@ function onHubSearchInput() {
   }, 300)
 }
 
+onBeforeUnmount(() => {
+  if (hubSearchTimer) clearTimeout(hubSearchTimer)
+})
+
 async function handleHubInstall(skill: ClawHubSkill) {
   hubInstallingSet.value = new Set([...hubInstallingSet.value, skill.name])
+  hubInstallError.value = ''
   try {
     await installFromHub(skill.name)
     hubInstalledSet.value = new Set([...hubInstalledSet.value, skill.name])
     await loadSkills()
-    if (!skills.value.some((s) => s.name === skill.name)) {
-      skills.value = [
-        ...skills.value,
-        {
-          name: skill.name,
-          description: skill.description,
-          version: skill.version,
-          author: skill.author,
-          tags: skill.tags,
-          triggers: [],
-          enabled: true,
-        } as Skill,
-      ]
-    }
   } catch (e) {
-    console.error('从 ClawHub 安装失败:', e)
+    const msg = e instanceof Error ? e.message : String(e)
+    hubInstallError.value = `${skill.name}: ${msg}`
   } finally {
     const s = new Set(hubInstallingSet.value)
     s.delete(skill.name)
@@ -309,6 +315,12 @@ function isHubSkillInstalled(name: string): boolean {
     skills.value.some((s) => s.name === name)
   )
 }
+
+function openInstallDialog() {
+  showInstallDialog.value = true
+}
+
+defineExpose({ openInstallDialog })
 </script>
 
 <template>
@@ -644,15 +656,34 @@ function isHubSkillInstalled(name: string): boolean {
 
       <LoadingState v-if="hubLoading" />
 
-      <EmptyState
-        v-else-if="hubSkills.length === 0"
-        :icon="Store"
-        :title="t('skills.hub.noResults')"
-        :description="t('skills.hub.noResultsDesc')"
-      />
+      <template v-else>
+        <!-- 安装错误提示 -->
+        <div
+          v-if="hubInstallError"
+          class="mb-4 max-w-4xl rounded-lg border px-4 py-3 text-sm"
+          :style="{ background: 'color-mix(in srgb, var(--hc-danger) 10%, transparent)', borderColor: 'var(--hc-danger)', color: 'var(--hc-danger)' }"
+        >
+          {{ hubInstallError }}
+        </div>
 
-      <!-- 技能卡片网格 -->
-      <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl">
+        <!-- 目录加载失败（网络 / 仓库不可用） -->
+        <div
+          v-if="hubSearchError"
+          class="mb-4 max-w-4xl rounded-lg border px-4 py-3 text-sm"
+          :style="{ background: 'color-mix(in srgb, var(--hc-danger) 10%, transparent)', borderColor: 'var(--hc-danger)', color: 'var(--hc-danger)' }"
+        >
+          {{ hubSearchError }}
+        </div>
+
+        <EmptyState
+          v-else-if="hubSkills.length === 0"
+          :icon="Store"
+          :title="t('skills.hub.noResults')"
+          :description="t('skills.hub.noResultsDesc')"
+        />
+
+        <!-- 技能卡片网格 -->
+        <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl">
         <div
           v-for="skill in hubSkills"
           :key="skill.name"
@@ -663,7 +694,7 @@ function isHubSkillInstalled(name: string): boolean {
           <div class="flex items-start justify-between gap-2 mb-2">
             <div class="min-w-0">
               <h4 class="text-sm font-medium truncate" :style="{ color: 'var(--hc-text-primary)' }">
-                {{ skill.name }}
+                {{ skill.display_name || skill.name }}
               </h4>
               <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
                 {{ skill.author }} &middot; v{{ skill.version }}
@@ -709,6 +740,14 @@ function isHubSkillInstalled(name: string): boolean {
             {{ t('skills.hub.installed') }}
           </button>
           <button
+            v-else-if="skill._mock"
+            class="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+            :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
+            disabled
+          >
+            {{ t('skills.hub.comingSoon', '即将上线') }}
+          </button>
+          <button
             v-else-if="hubInstallingSet.has(skill.name)"
             class="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white"
             :style="{ background: 'var(--hc-text-muted)' }"
@@ -727,7 +766,8 @@ function isHubSkillInstalled(name: string): boolean {
             {{ t('skills.hub.install') }}
           </button>
         </div>
-      </div>
+        </div>
+      </template>
     </div>
 
     <!-- 安装对话框 -->
@@ -778,6 +818,41 @@ function isHubSkillInstalled(name: string): boolean {
               @click="handleInstall"
             >
               {{ installing ? t('skills.hub.installing') : t('common.install') }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 卸载确认对话框 -->
+    <Teleport to="body">
+      <div
+        v-if="pendingUninstall"
+        class="fixed inset-0 z-50 flex items-center justify-center"
+        @click.self="pendingUninstall = null"
+      >
+        <div class="absolute inset-0 bg-black/50" @click="pendingUninstall = null" />
+        <div
+          class="relative z-10 w-80 rounded-xl border p-6 shadow-xl"
+          :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+        >
+          <p class="text-sm mb-4" :style="{ color: 'var(--hc-text-primary)' }">
+            {{ t('common.confirm') }} — {{ pendingUninstall }}?
+          </p>
+          <div class="flex justify-end gap-2">
+            <button
+              class="px-3 py-1.5 rounded-lg text-sm"
+              :style="{ color: 'var(--hc-text-secondary)' }"
+              @click="pendingUninstall = null"
+            >
+              {{ t('common.cancel') }}
+            </button>
+            <button
+              class="px-3 py-1.5 rounded-lg text-sm text-white"
+              style="background: #ef4444;"
+              @click="confirmUninstall"
+            >
+              {{ t('common.delete') }}
             </button>
           </div>
         </div>

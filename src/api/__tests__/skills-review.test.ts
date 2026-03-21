@@ -17,14 +17,14 @@ vi.mock('../client', () => ({
   apiDelete,
 }))
 
-beforeEach(() => {
-  apiGet.mockRejectedValue(new Error('API not available in test'))
-  apiPost.mockRejectedValue(new Error('API not available in test'))
-  apiPut.mockRejectedValue(new Error('API not available in test'))
-  apiDelete.mockRejectedValue(new Error('API not available in test'))
-})
-
 describe('ClawHub 技能市场 — 功能修复验证', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiGet.mockRejectedValue(new Error('API not available in test'))
+    apiPost.mockRejectedValue(new Error('API not available in test'))
+    apiPut.mockRejectedValue(new Error('API not available in test'))
+    apiDelete.mockRejectedValue(new Error('API not available in test'))
+  })
   it('CLAWHUB_FORCE_MOCK 不再硬编码为 true', async () => {
     const sourceCode = await import('../skills?raw')
     const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default

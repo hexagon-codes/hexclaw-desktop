@@ -95,3 +95,11 @@ export function isRetryable(err: ApiError): boolean {
 export function getErrorMessage(err: ApiError): string {
   return err.message
 }
+
+/**
+ * Tauri `invoke` 失败时可能抛出 string（如 Rust `Err(format!(...))`），
+ * 不能依赖 `instanceof Error`。统一转为可读文案。
+ */
+export function messageFromUnknownError(err: unknown): string {
+  return getErrorMessage(fromNativeError(err))
+}

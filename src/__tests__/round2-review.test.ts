@@ -202,7 +202,8 @@ describe('Sidebar — 动态地址和工作区切换', () => {
     expect(src).not.toContain("127.0.0.1:16060")
   })
 
-  it('工作区切换有 click handler', () => {
-    expect(src).toContain('handleWorkspaceSwitch')
+  it('侧边栏包含引擎与会话相关的点击处理', () => {
+    expect(src).toContain('restartEngine')
+    expect(src).toContain("router.push('/settings')")
   })
 })

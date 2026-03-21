@@ -137,8 +137,8 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                         "about",
                         WebviewUrl::App("/about".into()),
                     )
-                    .title("About HexClaw")
-                    .inner_size(520.0, 720.0)
+                    .title("关于 河蟹 AI")
+                    .inner_size(520.0, 760.0)
                     .resizable(false)
                     .minimizable(false)
                     .maximizable(false)

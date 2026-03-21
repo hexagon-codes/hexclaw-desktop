@@ -81,6 +81,7 @@ toolkit → ai-core → hexagon → hexclaw → hexclaw-desktop
 | [ai-core](https://github.com/hexagon-codes/ai-core) | AI capability foundation — LLM Provider/Embedding/Vector/Memory | Go |
 | [hexagon](https://github.com/hexagon-codes/hexagon) | Full-featured AI Agent framework — ReAct/Plan-and-Execute/Tool dispatch | Go |
 | [hexclaw](https://github.com/hexagon-codes/hexclaw) | HexClaw backend — Sidecar service (RESTful API/RAG/Cron/Security Gateway) | Go |
+| [hexclaw-hub](https://github.com/hexagon-codes/hexclaw-hub) | Skill marketplace data — online catalog (`index.json` + Markdown skills) | Data repo |
 | **hexclaw-desktop** | **HexClaw desktop client (this repo)** | **Rust + Vue 3** |
 | [hexclaw-ui](https://github.com/hexagon-codes/hexclaw-ui) | HexClaw Web client (also reused as desktop UI render layer) | Vue 3 |
 | [hexagon-ui](https://github.com/hexagon-codes/hexagon-ui) | Agent Observatory — observability dashboard (trace/reasoning replay/performance analysis) | Vue 3 |

@@ -1,14 +1,22 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest'
 import { ref } from 'vue'
 
 // 模拟 useTheme 的核心逻辑（不依赖 onMounted）
 describe('useTheme logic', () => {
   let mockStorage: Record<string, string>
+  const ls = globalThis.localStorage
+
+  beforeAll(() => {
+    vi.spyOn(ls, 'getItem').mockImplementation(() => null)
+    vi.spyOn(ls, 'setItem').mockImplementation(() => {})
+  })
 
   beforeEach(() => {
     mockStorage = {}
-    vi.spyOn(Storage.prototype, 'getItem').mockImplementation((key) => mockStorage[key] ?? null)
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation((key, val) => { mockStorage[key] = val })
+    vi.mocked(ls.getItem).mockImplementation((key: string) => mockStorage[key] ?? null)
+    vi.mocked(ls.setItem).mockImplementation((key: string, val: string) => {
+      mockStorage[key] = val
+    })
   })
 
   it('defaults to system theme', () => {

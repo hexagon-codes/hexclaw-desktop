@@ -55,17 +55,19 @@ type KnownProviderType = (typeof KNOWN_PROVIDER_TYPES)[number]
 
 /** 后端格式 -> 桌面格式 */
 function backendToProviders(backend: BackendLLMConfig): ProviderConfig[] {
-  return Object.entries(backend.providers).map(([name, p]) => ({
-    id: name,
-    name: name,
-    type: (KNOWN_PROVIDER_TYPES.includes(name as KnownProviderType)
-      ? name
-      : 'custom') as ProviderConfig['type'],
-    enabled: true,
-    baseUrl: p.base_url || '',
-    apiKey: p.api_key || '',
-    models: [{ id: p.model, name: p.model, capabilities: ['text'] as ModelCapability[] }],
-  }))
+  return Object.entries(backend.providers).map(([name, p]) => {
+    const lowerName = name.toLowerCase()
+    const matchedType = KNOWN_PROVIDER_TYPES.find(t => lowerName === t || lowerName.startsWith(t))
+    return {
+      id: name,
+      name: name,
+      type: (matchedType ?? 'custom') as ProviderConfig['type'],
+      enabled: true,
+      baseUrl: p.base_url || '',
+      apiKey: p.api_key || '',
+      models: [{ id: p.model, name: p.model, capabilities: ['text'] as ModelCapability[] }],
+    }
+  })
 }
 
 /** 桌面格式 -> 后端格式 */
@@ -207,12 +209,18 @@ export const useSettingsStore = defineStore('settings', () => {
         logger.debug('后端 LLM 配置原始数据', backendConfig)
         const providers = backendToProviders(backendConfig)
 
-        // 合并本地保存的 enabled 状态（后端不存储 enabled 字段）
+        // 合并本地保存的 enabled/apiKey 状态（后端不存储 enabled，API key 可能已脱敏）
         const localProviders = config.value?.llm.providers ?? []
-        const enabledMap = new Map(localProviders.map(p => [p.name || p.id, p.enabled]))
+        const localMap = new Map(localProviders.map(p => [p.name || p.id, p]))
         for (const p of providers) {
-          const localEnabled = enabledMap.get(p.name) ?? enabledMap.get(p.id)
-          if (localEnabled !== undefined) p.enabled = localEnabled
+          const local = localMap.get(p.name) ?? localMap.get(p.id)
+          if (local) {
+            if (local.enabled !== undefined) p.enabled = local.enabled
+            // 如果后端返回的 key 看起来是脱敏的（包含 *** 或长度 < 8），保留本地的真实 key
+            if (p.apiKey && (p.apiKey.includes('*') || p.apiKey.length < 8) && local.apiKey) {
+              p.apiKey = local.apiKey
+            }
+          }
         }
         for (const lp of localProviders) {
           if (!lp.enabled && !providers.some(p => p.name === lp.name)) {
@@ -269,13 +277,14 @@ export const useSettingsStore = defineStore('settings', () => {
       }
     }
 
-    // 非 LLM 配置保存到 Tauri Store（不含敏感 apiKey）
+    // 非 LLM 配置保存到 Tauri Store
+    // 保留已禁用 provider 的 apiKey（因为它们不会同步到后端）
     const configToSave: AppConfig = {
       ...plainConfig,
       llm: {
         providers: plainConfig.llm.providers.map(p => ({
           ...p,
-          apiKey: '',
+          apiKey: p.enabled ? '' : p.apiKey,
         })),
         defaultModel: plainConfig.llm.defaultModel,
       },

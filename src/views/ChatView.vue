@@ -556,6 +556,16 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
           <SegmentedControl v-model="chatViewTab" :segments="chatViewSegments" />
 
           <div class="hc-chat__stat-strip">
+            <!-- Chat mode toggle -->
+            <button
+              class="hc-chat__mode-btn"
+              :class="{ 'hc-chat__mode-btn--active': chatStore.chatMode === 'research' }"
+              :title="t('chat.researchMode', 'Research Mode')"
+              @click="chatStore.chatMode = chatStore.chatMode === 'research' ? 'chat' : 'research'"
+            >
+              <BookOpen :size="12" />
+              {{ t('chat.research', 'Research') }}
+            </button>
             <span class="hc-chat__stat-pill"
               >{{ chatStore.messages.length }} {{ t('chat.messagesStat') }}</span
             >
@@ -1482,6 +1492,32 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   font-size: 11px;
   font-weight: 600;
   color: var(--hc-text-muted);
+}
+
+.hc-chat__mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-card);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.hc-chat__mode-btn:hover {
+  color: var(--hc-text-secondary);
+  border-color: var(--hc-accent);
+}
+
+.hc-chat__mode-btn--active {
+  background: rgba(88, 86, 214, 0.12);
+  color: #5856d6;
+  border-color: rgba(88, 86, 214, 0.3);
 }
 
 .hc-chat__toolbar-btn {

@@ -1,95 +1,113 @@
 <script setup lang="ts">
+import { computed, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import logoUrl from '@/assets/logo.png'
-import hexagonLogoUrl from '@/assets/hexagon-logo.svg'
+import hexagonWordmarkUrl from '@/assets/hexagon-wordmark.jpg'
 
 const { t } = useI18n()
 
-const techStack = [
-  { name: 'Tauri v2', detail: 'Rust', color: '#f74c00' },
-  { name: 'Vue 3', detail: 'TypeScript', color: '#42b883' },
-  { name: 'Go Sidecar', detail: 'hexclaw serve', color: '#00add8' },
-]
+watchEffect(() => {
+  document.title = t('about.title', '关于 河蟹 AI')
+})
 
-const ecosystem = [
-  { name: 'toolkit', emoji: '🛠', url: 'https://github.com/hexagon-codes/toolkit' },
-  { name: 'ai-core', emoji: '🧠', url: 'https://github.com/hexagon-codes/ai-core' },
-  { name: 'hexagon', emoji: '🔷', url: 'https://github.com/hexagon-codes/hexagon', hl: true },
-  { name: 'hexclaw', emoji: '🦀', url: 'https://github.com/everyday-items/hexclaw' },
-  { name: 'hexclaw-desktop', emoji: '🖥', url: 'https://github.com/hexagon-codes/hexclaw-desktop', hl: true },
-  { name: 'hexagon-ui', emoji: '📊', url: 'https://github.com/hexagon-codes/hexagon-ui' },
-]
+const appName = computed(() => t('about.brandAi', '河蟹 AI'))
+
+const techStack = computed(() => [
+  { name: 'Tauri v2', detail: 'Rust', color: '#f36b2a' },
+  { name: 'Vue 3', detail: 'TypeScript', color: '#4fc67e' },
+  { name: 'Go Sidecar', detail: 'HexClaw Serve', color: '#2eb3e8' },
+  {
+    name: t('about.securityGateway', '安全网关'),
+    detail: `PII · ${t('about.injectionGuard', '注入检测')}`,
+    color: '#f2b53b',
+  },
+])
+
+const ecosystem = computed(() => [
+  { name: 'toolkit', sub: t('about.ecoInfra', '基础设施'), emoji: '🛠', url: 'https://github.com/hexagon-codes/toolkit' },
+  { name: 'ai-core', sub: t('about.ecoLlm', 'LLM 适配'), emoji: '🧠', url: 'https://github.com/hexagon-codes/ai-core' },
+  { name: 'hexagon', sub: t('about.ecoAgent', 'Agent 框架'), emoji: '🔷', url: 'https://github.com/hexagon-codes/hexagon' },
+  { name: 'hexclaw', sub: t('about.ecoBackend', '后端服务'), emoji: '🦀', url: 'https://github.com/everyday-items/hexclaw' },
+  { name: 'hexclaw-desktop', sub: t('about.ecoDesktop', '桌面客户端'), emoji: '🖥', url: 'https://github.com/hexagon-codes/hexclaw-desktop' },
+  { name: 'hexagon-ui', sub: t('about.ecoConsole', 'Agent 观测台'), emoji: '📊', url: 'https://github.com/hexagon-codes/hexagon-ui' },
+])
 </script>
 
 <template>
-  <div class="hc-about" data-tauri-drag-region>
-    <!-- Hero -->
-    <header class="hc-about__hero">
-      <div class="hc-about__hero-pattern" />
-      <div class="hc-about__identity">
-        <img :src="logoUrl" alt="HexClaw" class="hc-about__logo" draggable="false" />
-        <h1 class="hc-about__name">HexClaw Desktop</h1>
-        <p class="hc-about__tagline">{{ t('about.subtitle', '企业级安全的个人 AI Agent 桌面客户端') }}</p>
+  <div class="hc-about-page" data-tauri-drag-region>
+    <header class="hc-about-page__hero">
+      <div class="hc-about-page__hero-pattern" />
+
+      <div class="hc-about-page__hero-mark">
+        <img :src="logoUrl" alt="HexClaw" class="hc-about-page__logo" draggable="false" />
       </div>
-      <div class="hc-about__version">
-        <span class="hc-about__version-tag">v0.0.2</span>
-        <span class="hc-about__version-sep">·</span>
-        <span class="hc-about__version-meta">Build 1</span>
-        <span class="hc-about__version-sep">·</span>
-        <span class="hc-about__version-meta">Apache-2.0</span>
+
+      <h1 class="hc-about-page__name">{{ appName }}</h1>
+      <p class="hc-about-page__subtitle">
+        {{ t('about.subtitle', '企业级安全的个人 AI Agent 桌面客户端') }}
+      </p>
+
+      <div class="hc-about-page__meta">
+        <span class="hc-about-page__meta-pill">v0.0.2</span>
+        <span class="hc-about-page__meta-text">Build 1</span>
+        <span class="hc-about-page__meta-text">Apache-2.0</span>
       </div>
     </header>
 
-    <!-- Body -->
-    <main class="hc-about__body">
-      <!-- Engine -->
-      <section class="hc-about__engine">
-        <img :src="hexagonLogoUrl" alt="Hexagon" class="hc-about__engine-logo" draggable="false" />
-        <div class="hc-about__engine-info">
-          <span class="hc-about__engine-sup">POWERED BY</span>
-          <span class="hc-about__engine-name">Hexagon AI Agent Engine</span>
+    <main class="hc-about-page__body">
+      <section class="hc-about-page__engine">
+        <div class="hc-about-page__engine-brand">
+          <div class="hc-about-page__engine-copy">
+            <span class="hc-about-page__engine-kicker">POWERED BY</span>
+            <img
+              :src="hexagonWordmarkUrl"
+              alt="Hexagon AI Agent Engine"
+              class="hc-about-page__engine-wordmark"
+              draggable="false"
+            />
+          </div>
         </div>
-        <span class="hc-about__engine-caps">ReAct · Tool {{ t('about.dispatch', '调度') }} · {{ t('about.declarative', '声明式编排') }}</span>
+
+        <span class="hc-about-page__engine-caps">
+          ReAct · Tool {{ t('about.dispatch', '调度') }} · {{ t('about.declarative', '声明式编排') }}
+        </span>
       </section>
 
-      <!-- Tech Stack -->
-      <section class="hc-about__stack">
-        <div v-for="item in techStack" :key="item.name" class="hc-about__stack-row">
-          <span class="hc-about__dot" :style="{ background: item.color }" />
-          <span class="hc-about__stack-name">{{ item.name }}</span>
-          <span class="hc-about__stack-detail">{{ item.detail }}</span>
-        </div>
+      <section class="hc-about-page__tech">
+        <article v-for="item in techStack" :key="item.name" class="hc-about-page__tech-item">
+          <span class="hc-about-page__tech-dot" :style="{ background: item.color }" />
+          <span class="hc-about-page__tech-name">{{ item.name }}</span>
+          <span class="hc-about-page__tech-detail">{{ item.detail }}</span>
+        </article>
       </section>
 
-      <!-- Ecosystem -->
-      <section class="hc-about__eco">
-        <h2 class="hc-about__section-title">HEXAGON {{ t('about.ecoLabel', '开源生态') }}</h2>
-        <div class="hc-about__eco-grid">
+      <section class="hc-about-page__eco">
+        <h2 class="hc-about-page__eco-title">HEXAGON {{ t('about.ecoLabel', '开源生态') }}</h2>
+
+        <div class="hc-about-page__eco-grid">
           <a
             v-for="item in ecosystem"
             :key="item.name"
             :href="item.url"
             target="_blank"
-            class="hc-about__eco-node"
-            :class="{ 'hc-about__eco-node--hl': item.hl }"
+            rel="noreferrer"
+            class="hc-about-page__eco-card"
           >
-            <span class="hc-about__eco-emoji">{{ item.emoji }}</span>
-            <span class="hc-about__eco-label">{{ item.name }}</span>
+            <span class="hc-about-page__eco-emoji">{{ item.emoji }}</span>
+            <span class="hc-about-page__eco-name">{{ item.name }}</span>
+            <span class="hc-about-page__eco-sub">{{ item.sub }}</span>
           </a>
         </div>
       </section>
 
-      <!-- Links -->
-      <nav class="hc-about__links">
-        <a href="https://hexclaw.net" target="_blank">{{ t('about.website', '官网') }} · hexclaw.net</a>
-        <span class="hc-about__links-sep" />
-        <a href="https://github.com/hexagon-codes/hexclaw-desktop" target="_blank">GitHub</a>
-        <span class="hc-about__links-sep" />
+      <nav class="hc-about-page__links">
+        <a href="https://hexclaw.net" target="_blank" rel="noreferrer">{{ t('about.website', '官网') }} · hexclaw.net</a>
+        <a href="https://github.com/hexagon-codes/hexclaw-desktop" target="_blank" rel="noreferrer">GitHub</a>
         <a href="mailto:support@hexclaw.net">{{ t('about.feedback', '反馈') }} · support@hexclaw.net</a>
+        <a href="mailto:ai@hexclaw.net">{{ t('about.brandAi', '河蟹 AI') }} · ai@hexclaw.net</a>
       </nav>
 
-      <!-- Footer -->
-      <footer class="hc-about__footer">
+      <footer class="hc-about-page__footer">
         Copyright &copy; 2025–2026 hexagon-codes · Open-source under the Apache License 2.0.
       </footer>
     </main>
@@ -97,292 +115,318 @@ const ecosystem = [
 </template>
 
 <style scoped>
-.hc-about {
+.hc-about-page {
   width: 100%;
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--hc-bg-main, #f5f5f5);
+  align-items: stretch;
+  justify-content: flex-start;
   overflow: hidden;
   user-select: none;
-  -webkit-app-region: drag;
+  background: linear-gradient(180deg, #fbfcfe 0%, #f5f7fb 100%);
+  color: #24415f;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
+  -webkit-app-region: drag;
 }
 
-/* ── Hero ── */
-.hc-about__hero {
+.hc-about-page__hero {
   position: relative;
-  padding: 36px 28px 22px;
-  text-align: center;
   flex-shrink: 0;
   overflow: hidden;
+  padding: 24px 24px 16px;
+  text-align: center;
   background:
-    radial-gradient(circle at 50% 10%, rgba(255,255,255,0.12), rgba(255,255,255,0) 28%),
-    linear-gradient(135deg, #2d6f9f 0%, #4094d7 100%);
+    radial-gradient(circle at 50% -10%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 34%),
+    linear-gradient(145deg, #3a77b2 0%, #468aca 48%, #5ca7e2 100%);
+  border-bottom: 1px solid rgba(76, 130, 181, 0.18);
 }
 
-.hc-about__hero-pattern {
+.hc-about-page__hero-pattern {
   position: absolute;
   inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='104'%3E%3Cpath d='M60 0l52 30v60L60 120 8 90V30z' fill='none' stroke='white' stroke-width='0.7' opacity='0.08'/%3E%3C/svg%3E");
-  background-size: 120px 104px;
-  mix-blend-mode: screen;
   pointer-events: none;
+  opacity: 0.12;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='104' viewBox='0 0 120 104'%3E%3Cpath d='M30 1h60l29 51-29 51H30L1 52 30 1z' fill='none' stroke='white' stroke-width='0.9'/%3E%3C/svg%3E");
+  background-size: 120px 104px;
 }
 
-.hc-about__identity {
+.hc-about-page__hero-mark,
+.hc-about-page__name,
+.hc-about-page__subtitle,
+.hc-about-page__meta {
   position: relative;
   z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 16px;
 }
 
-.hc-about__logo {
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
-}
-
-.hc-about__name {
-  font-size: 22px;
-  font-weight: 700;
-  color: #fff;
-  margin: 0;
-  letter-spacing: -0.3px;
-}
-
-.hc-about__tagline {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
-  margin: 0;
-}
-
-.hc-about__version {
-  position: relative;
-  z-index: 1;
+.hc-about-page__hero-mark {
+  width: 86px;
+  height: 86px;
+  margin: 0 auto 14px;
   display: flex;
   align-items: center;
   justify-content: center;
+  border-radius: 24px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.1));
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 16px 34px rgba(22, 77, 126, 0.18);
+  backdrop-filter: blur(10px);
+}
+
+.hc-about-page__logo {
+  width: 62px;
+  height: 62px;
+  object-fit: contain;
+}
+
+.hc-about-page__name {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.hc-about-page__subtitle {
+  margin: 7px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.hc-about-page__meta {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.hc-about-page__meta-pill {
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+
+.hc-about-page__meta-text {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.hc-about-page__body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 14px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  -webkit-app-region: no-drag;
+}
+
+.hc-about-page__engine,
+.hc-about-page__eco {
+  background: #ffffff;
+  border: 1px solid #dbe5f0;
+  border-radius: 18px;
+  box-shadow: 0 8px 24px rgba(51, 83, 123, 0.05);
+}
+
+.hc-about-page__engine {
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.hc-about-page__engine-brand {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hc-about-page__engine-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.hc-about-page__engine-kicker {
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 2.8px;
+  color: #4c89c9;
+}
+
+.hc-about-page__engine-wordmark {
+  display: block;
+  width: 196px;
+  max-width: 100%;
+  height: auto;
+}
+
+.hc-about-page__engine-caps {
+  flex-shrink: 0;
+  font-size: 9px;
+  color: #8398b2;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.hc-about-page__tech {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
-.hc-about__version-tag {
-  font-size: 12px;
-  font-weight: 600;
-  color: #fff;
-  background: rgba(255, 255, 255, 0.14);
-  padding: 2px 10px;
-  border-radius: 5px;
-  backdrop-filter: blur(6px);
-}
-
-.hc-about__version-sep {
-  font-size: 10px;
-  color: rgba(255, 255, 255, 0.3);
-}
-
-.hc-about__version-meta {
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.45);
-}
-
-/* ── Body ── */
-.hc-about__body {
-  flex: 1;
-  padding: 14px 20px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  overflow: hidden;
-  -webkit-app-region: no-drag;
-}
-
-/* ── Engine ── */
-.hc-about__engine {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, rgba(90, 159, 212, 0.08) 0%, rgba(90, 159, 212, 0.02) 100%);
-  border: 1px solid rgba(90, 159, 212, 0.22);
-  flex-shrink: 0;
-}
-
-.hc-about__engine-logo {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  flex-shrink: 0;
-}
-
-.hc-about__engine-info {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 0;
-}
-
-.hc-about__engine-sup {
-  font-size: 8px;
-  font-weight: 700;
-  letter-spacing: 1.6px;
-  color: #5a9fd4;
-  opacity: 0.6;
-}
-
-.hc-about__engine-name {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--hc-text-primary, #e8e8e8);
-}
-
-.hc-about__engine-caps {
-  font-size: 10px;
-  color: var(--hc-text-muted, #888);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* ── Stack ── */
-.hc-about__stack {
-  display: flex;
-  gap: 5px;
-  flex-shrink: 0;
-}
-
-.hc-about__stack-row {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 10px;
-  border-radius: 7px;
-  background: var(--hc-bg-card, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.06));
-}
-
-.hc-about__dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.hc-about__stack-name {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--hc-text-primary, #e8e8e8);
-}
-
-.hc-about__stack-detail {
-  font-size: 10px;
-  color: var(--hc-text-muted, #888);
-  margin-left: auto;
-}
-
-/* ── Ecosystem ── */
-.hc-about__eco {
-  flex-shrink: 0;
-}
-
-.hc-about__section-title {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 1.2px;
-  color: var(--hc-text-muted, #888);
-  margin: 0 0 8px;
-  opacity: 0.7;
-}
-
-.hc-about__eco-grid {
+.hc-about-page__tech-item {
+  min-height: 0;
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 5px;
+  grid-template-columns: auto auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #f4f8fc 0%, #edf2f8 100%);
+  border: 1px solid #d7e1ed;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
 }
 
-.hc-about__eco-node {
+.hc-about-page__tech-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.hc-about-page__tech-name {
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: #2f445d;
+}
+
+.hc-about-page__tech-detail {
+  min-width: 0;
+  margin-left: auto;
+  text-align: right;
+  font-size: 10px;
+  font-weight: 700;
+  color: #9aaabd;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+
+.hc-about-page__eco {
+  padding: 10px 10px 9px;
+}
+
+.hc-about-page__eco-title {
+  margin: 0 0 9px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 2.5px;
+  color: #90a2b7;
+}
+
+.hc-about-page__eco-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hc-about-page__eco-card {
+  min-height: 72px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 3px;
-  padding: 8px 4px;
-  border-radius: 8px;
-  background: var(--hc-bg-card, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.06));
+  padding: 8px 8px;
+  border-radius: 14px;
+  border: 1px solid #e3e8f0;
+  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
   text-decoration: none;
-  transition: border-color 0.15s;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94);
+  transition: border-color 0.15s ease, transform 0.15s ease;
 }
 
-.hc-about__eco-node:hover {
-  border-color: rgba(90, 159, 212, 0.3);
+.hc-about-page__eco-card:hover {
+  transform: translateY(-1px);
+  border-color: #c8d8ea;
 }
 
-.hc-about__eco-node--hl {
-  border-color: rgba(90, 159, 212, 0.3);
-  background: rgba(90, 159, 212, 0.06);
-}
-
-.hc-about__eco-emoji {
-  font-size: 16px;
+.hc-about-page__eco-emoji {
+  font-size: 17px;
   line-height: 1;
 }
 
-.hc-about__eco-label {
-  font-size: 9px;
-  font-weight: 600;
-  color: var(--hc-text-primary, #e8e8e8);
-  font-family: 'SF Mono', 'Menlo', monospace;
+.hc-about-page__eco-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: #2f445d;
   text-align: center;
-  word-break: break-all;
 }
 
-/* ── Links ── */
-.hc-about__links {
+.hc-about-page__eco-sub {
+  font-size: 10px;
+  color: #93a3b7;
+  text-align: center;
+}
+
+.hc-about-page__links {
+  margin-top: 1px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: auto;
-  flex-shrink: 0;
+  gap: 6px 12px;
+  padding-top: 0;
 }
 
-.hc-about__links a {
+.hc-about-page__links a {
   font-size: 11px;
-  font-weight: 500;
-  color: #5a9fd4;
+  font-weight: 600;
+  color: #4c89c9;
   text-decoration: none;
+  white-space: nowrap;
 }
 
-.hc-about__links a:hover {
+.hc-about-page__links a:hover {
   text-decoration: underline;
 }
 
-.hc-about__links-sep {
-  width: 3px;
-  height: 3px;
-  border-radius: 50%;
-  background: var(--hc-text-muted, #666);
-  opacity: 0.35;
-}
-
-/* ── Footer ── */
-.hc-about__footer {
+.hc-about-page__footer {
+  margin-top: -1px;
   text-align: center;
   font-size: 10px;
-  color: var(--hc-text-muted, #666);
-  opacity: 0.5;
-  padding-top: 8px;
-  border-top: 1px solid var(--hc-divider, rgba(255, 255, 255, 0.06));
-  line-height: 1.5;
-  flex-shrink: 0;
+  line-height: 1.35;
+  color: #98a7b9;
+}
+
+@media (max-width: 460px) {
+  .hc-about-page__engine {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hc-about-page__engine-caps {
+    white-space: normal;
+  }
+
+  .hc-about-page__tech,
+  .hc-about-page__eco-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

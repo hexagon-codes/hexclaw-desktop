@@ -8,6 +8,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
 import type { ModelCapability, ModelOption, ProviderType } from '@/types'
 import { testLLMConnection } from '@/api/config'
+import { messageFromUnknownError } from '@/utils/errors'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -84,6 +85,20 @@ async function testConnection() {
     const preset = PROVIDER_PRESETS[provider.value]
     const effectiveBaseUrl = isCustomProvider.value ? customBaseUrl.value.trim() : preset.defaultBaseUrl
     const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
+    if (!effectiveModel) {
+      connectionResult.value = {
+        ok: false,
+        msg: t('welcome.testNeedsModel'),
+      }
+      return
+    }
+    if (requiresApiKey.value && !apiKey.value.trim()) {
+      connectionResult.value = {
+        ok: false,
+        msg: t('welcome.testNeedsApiKey'),
+      }
+      return
+    }
     const result = await testLLMConnection({
       provider: {
         type: provider.value,
@@ -97,21 +112,23 @@ async function testConnection() {
       msg: result.message || (result.ok ? t('welcome.connectionTestSuccess') : t('welcome.connectionTestFailed')),
     }
   } catch (e) {
-    const errMsg = e instanceof Error ? e.message : ''
+    const errMsg = messageFromUnknownError(e)
     connectionResult.value = {
       ok: false,
-      msg: errMsg.includes('404') ? t('welcome.connectionTestUnavailable') : (errMsg || t('welcome.connectionTestFailed')),
+      msg: errMsg.includes('404') ? t('welcome.connectionTestUnavailable') : errMsg,
     }
   } finally {
     connectionTesting.value = false
   }
 }
 
+const finishError = ref('')
+
 async function finishWizard() {
   if (finishing.value) return
   finishing.value = true
+  finishError.value = ''
   try {
-  // Ensure config is loaded
   if (!settingsStore.config) {
     await settingsStore.loadConfig()
   }
@@ -153,6 +170,8 @@ async function finishWizard() {
       roleTitle: selectedAgentTitle.value,
     },
   })
+  } catch (e) {
+    finishError.value = messageFromUnknownError(e)
   } finally {
     finishing.value = false
   }
@@ -264,10 +283,10 @@ async function skip() {
               :disabled="!requiresApiKey"
             />
             <p v-if="!requiresApiKey" class="text-xs mt-1" :style="{ color: 'var(--hc-text-muted)' }">
-              Ollama 运行在本地，无需 API Key
+              {{ t('welcome.ollamaNoKey') }}
             </p>
             <p v-else-if="apiKey.trim().length === 0" class="text-xs mt-1" :style="{ color: 'var(--hc-warning, #f59e0b)' }">
-              请输入 API Key 以继续
+              {{ t('welcome.enterApiKey') }}
             </p>
           </div>
           <div v-if="isCustomProvider">
@@ -286,7 +305,7 @@ async function skip() {
               v-model="customModelId"
               type="text"
               class="hc-input"
-              placeholder="模型 ID（如 gpt-4o）"
+              :placeholder="t('welcome.customModelPlaceholder')"
             />
             <select
               v-else
@@ -424,13 +443,14 @@ async function skip() {
             opacity: (step === 0 && !canProceedFromStep0) || finishing ? 0.5 : 1,
             cursor: (step === 0 && !canProceedFromStep0) || finishing ? 'not-allowed' : 'pointer',
           }"
-          :disabled="finishing"
+          :disabled="finishing || (step === 0 && !canProceedFromStep0)"
           @click="nextStep"
         >
           {{ step === 2 ? t('welcome.start') : t('welcome.next') }}
           <ArrowRight :size="14" />
         </button>
       </div>
+      <p v-if="finishError" class="text-xs text-center mt-2" style="color: #ef4444;">{{ finishError }}</p>
     </div>
   </div>
 </template>

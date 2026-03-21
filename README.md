@@ -81,6 +81,7 @@ toolkit → ai-core → hexagon → hexclaw → hexclaw-desktop
 | [ai-core](https://github.com/hexagon-codes/ai-core) | AI 能力底座 — LLM Provider/Embedding/向量/记忆 | Go |
 | [hexagon](https://github.com/hexagon-codes/hexagon) | 全能 AI Agent 框架 — ReAct/Plan-and-Execute/Tool 调度 | Go |
 | [hexclaw](https://github.com/hexagon-codes/hexclaw) | 河蟹后端 — Sidecar 服务 (RESTful API/RAG/Cron/安全网关) | Go |
+| [hexclaw-hub](https://github.com/hexagon-codes/hexclaw-hub) | 技能市场数据 — 在线技能目录 (`index.json` + Markdown 技能) | 数据仓库 |
 | **hexclaw-desktop** | **河蟹桌面客户端 (本仓库)** | **Rust + Vue 3** |
 | [hexclaw-ui](https://github.com/hexagon-codes/hexclaw-ui) | 河蟹 Web 端 — Web 客户端 (同时作为桌面端 UI 渲染层复用) | Vue 3 |
 | [hexagon-ui](https://github.com/hexagon-codes/hexagon-ui) | Agent 观测台 — 可观测性面板 (链路追踪/推理回放/性能分析) | Vue 3 |

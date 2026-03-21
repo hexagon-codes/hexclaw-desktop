@@ -6,6 +6,7 @@ import {
   trySafe,
   isRetryable,
   getErrorMessage,
+  messageFromUnknownError,
 } from '../errors'
 
 describe('createApiError', () => {
@@ -127,5 +128,15 @@ describe('getErrorMessage', () => {
   it('returns the error message', () => {
     const err = createApiError('NETWORK_ERROR', '服务不可达')
     expect(getErrorMessage(err)).toBe('服务不可达')
+  })
+})
+
+describe('messageFromUnknownError', () => {
+  it('returns message for Error', () => {
+    expect(messageFromUnknownError(new Error('boom'))).toBe('boom')
+  })
+
+  it('returns string for Tauri-style string rejection', () => {
+    expect(messageFromUnknownError('HTTP 400: {"error":"bad"}')).toBe('HTTP 400: {"error":"bad"}')
   })
 })

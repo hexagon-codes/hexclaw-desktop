@@ -8,6 +8,8 @@ export const i18n = createI18n({
   fallbackLocale: 'zh-CN',
   messages: {
     'zh-CN': zhCN,
+    /** 部分环境 / 测试链会解析为 `zh`，与 zh-CN 共用文案 */
+    zh: zhCN,
     en,
   },
 })
