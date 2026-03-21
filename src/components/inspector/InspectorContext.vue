@@ -43,7 +43,7 @@ const section = computed<InspectorSection>(() => {
 
 const activeProvider = computed(() => {
   const providers = settingsStore.enabledProviders
-  return providers.length > 0 ? providers[0].name : '—'
+  return providers[0]?.name ?? '—'
 })
 
 const activeModel = computed(() => {
@@ -54,7 +54,7 @@ const activeAgent = computed(() => {
   const role = chatStore.agentRole
   if (role) return role
   const roles = agentsStore.roles
-  return roles.length > 0 ? roles[0].name : '—'
+  return roles[0]?.name ?? '—'
 })
 
 const sessionCount = computed(() => chatStore.sessions.length)
@@ -121,7 +121,7 @@ function nowTime() {
           <TimelineItem
             v-for="(session, idx) in chatStore.sessions.slice(0, 3)"
             :key="session.id"
-            :time="new Date(session.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })"
+            :time="new Date(session.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })"
             :text="session.title || t('chat.newSession')"
             :dot-color="idx === 0 ? 'var(--hc-accent)' : '#22c55e'"
           />
@@ -142,7 +142,7 @@ function nowTime() {
             v-for="role in agentsStore.roles.slice(0, 3)"
             :key="role.name"
             :label="role.name"
-            :value="role.description?.slice(0, 20) || '—'"
+            :value="role.goal?.slice(0, 20) || '—'"
           />
         </template>
       </ContextCard>

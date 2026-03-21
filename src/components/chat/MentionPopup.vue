@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { Bot, Wrench } from 'lucide-vue-next'
+import type { Skill } from '@/types'
 
 interface MentionItem {
   type: 'agent' | 'skill'
@@ -13,7 +14,7 @@ const props = defineProps<{
   visible: boolean
   query: string
   agents: { name: string; title?: string; goal?: string }[]
-  skills: { name: string; display_name?: string; description?: string }[]
+  skills: Skill[]
   position: { bottom: number; left: number }
 }>()
 

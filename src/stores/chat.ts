@@ -304,8 +304,12 @@ export const useChatStore = defineStore('chat', () => {
         reject(new Error(errMsg))
       })
 
-      const meta = attachments?.length ? { attachments } : undefined
-      hexclawWS.sendMessage(text, sessionId, meta, agentRole.value || undefined)
+      hexclawWS.sendMessage(
+        text,
+        sessionId,
+        chatParams.value.model,
+        agentRole.value || undefined,
+      )
     })
   }
 

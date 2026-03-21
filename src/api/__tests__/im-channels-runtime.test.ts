@@ -64,8 +64,8 @@ describe('im-channels runtime sync', () => {
       if (payload.path === '/api/v1/platforms/instances') {
         return JSON.stringify({ message: '实例已保存' })
       }
-      if (payload.path === '/api/v1/platforms/instances/Slack%20Main/test') {
-        return JSON.stringify({ success: false, message: 'slack bot id 未初始化' })
+      if (payload.path === '/api/v1/platforms/instances/Discord%20Main/test') {
+        return JSON.stringify({ success: false, message: 'discord bot id 未初始化' })
       }
       throw new Error(`unexpected path: ${payload.path}`)
     })
@@ -73,17 +73,17 @@ describe('im-channels runtime sync', () => {
     const mod = await import('../im-channels')
     const result = await mod.testSavedIMInstanceRuntime({
       id: 'slack1',
-      name: 'Slack Main',
-      type: 'slack',
+      name: 'Discord Main',
+      type: 'discord',
       enabled: true,
-      config: { token: 'xoxb-token', signing_secret: 'secret' },
+      config: { token: 'discord-token' },
       createdAt: 1,
     })
 
-    expect(result).toEqual({ success: false, message: 'slack bot id 未初始化' })
+    expect(result).toEqual({ success: false, message: 'discord bot id 未初始化' })
     expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
       method: 'POST',
-      path: '/api/v1/platforms/instances/Slack%20Main/test',
+      path: '/api/v1/platforms/instances/Discord%20Main/test',
       body: null,
     })
   })

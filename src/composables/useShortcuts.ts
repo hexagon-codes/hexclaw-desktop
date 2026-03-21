@@ -17,9 +17,10 @@ export function useShortcuts() {
 
     if (!meta) return
 
-    if (numKeyRoutes[e.key]) {
+    const targetRoute = numKeyRoutes[e.key]
+    if (targetRoute) {
       e.preventDefault()
-      router.push(numKeyRoutes[e.key])
+      router.push(targetRoute)
       return
     }
 

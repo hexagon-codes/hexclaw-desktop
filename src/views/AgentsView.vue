@@ -470,7 +470,7 @@ async function handleUnregisterAgent() {
 
       <AgentConference
         v-else-if="activeTab === 'conference'"
-        :agents="agentsStore.roles.map(r => ({ id: r.name, name: r.name, goal: r.system_prompt?.slice(0, 80) || '' }))"
+        :agents="agentsStore.roles.map(r => ({ id: r.name, name: r.name, goal: r.goal?.slice(0, 80) || '' }))"
         @close="activeTab = 'roles'"
       />
 

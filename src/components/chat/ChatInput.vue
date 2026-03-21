@@ -4,7 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { ArrowUp, Square, Paperclip, Zap, PenLine, Wand2, Mic, MicOff } from 'lucide-vue-next'
 import { speechToText, getVoiceStatus } from '@/api/voice'
 import MentionPopup from './MentionPopup.vue'
-import type { ExecMode } from '@/types'
+import type { ExecMode, Skill } from '@/types'
 
 const { t } = useI18n()
 
@@ -13,7 +13,7 @@ const props = defineProps<{
   disabled?: boolean
   execMode?: ExecMode
   agents?: { name: string; title?: string; goal?: string }[]
-  skills?: { id: string; name: string; display_name?: string; description?: string; enabled?: boolean }[]
+  skills?: Skill[]
   /** 是否允许上传图片 */
   allowImage?: boolean
   /** 是否允许上传视频 */

@@ -1,6 +1,8 @@
 /** 后端返回的 Skill（Markdown 技能） */
 export interface Skill {
+  id?: string
   name: string
+  display_name?: string
   description: string
   author: string
   version: string
