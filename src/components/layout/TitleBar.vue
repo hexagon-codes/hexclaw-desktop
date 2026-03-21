@@ -5,14 +5,14 @@ import { usePlatform } from '@/composables/usePlatform'
 import { useAppStore } from '@/stores/app'
 import { useTheme } from '@/composables/useTheme'
 import { useI18n } from 'vue-i18n'
-import { PanelLeft, PanelRightOpen, Sun, Moon, Command } from 'lucide-vue-next'
+import { PanelLeft, Sun, Moon, Command } from 'lucide-vue-next'
 import { navigationItems } from '@/config/navigation'
 
 const { isMac } = usePlatform()
 const route = useRoute()
 const appStore = useAppStore()
 const { resolvedTheme, setTheme } = useTheme()
-const { locale, t } = useI18n()
+const { t } = useI18n()
 
 const currentSection = computed(() => {
   const match = navigationItems.find(
@@ -21,17 +21,8 @@ const currentSection = computed(() => {
   return match ? t(match.i18nKey) : 'HexClaw'
 })
 
-const engineLabel = computed(() =>
-  appStore.sidecarReady ? t('nav.connected') : t('nav.disconnected'),
-)
-
 function toggleTheme() {
   setTheme(resolvedTheme.value === 'dark' ? 'light' : 'dark')
-}
-
-function toggleLang() {
-  locale.value = locale.value === 'zh-CN' ? 'en' : 'zh-CN'
-  localStorage.setItem('hc-locale', locale.value)
 }
 
 function openCommandPalette() {
@@ -56,31 +47,12 @@ function openCommandPalette() {
       <span class="hc-titlebar__section">{{ currentSection }}</span>
     </div>
 
-    <span class="hc-titlebar__title">HexClaw Desktop Workspace</span>
+    <div class="hc-titlebar__spacer" />
 
     <div class="hc-titlebar__right">
-      <span class="hc-titlebar__status">
-        <span
-          class="hc-titlebar__status-dot"
-          :class="
-            appStore.sidecarReady ? 'hc-titlebar__status-dot--ok' : 'hc-titlebar__status-dot--err'
-          "
-        />
-        {{ engineLabel }}
-      </span>
-      <button
-        class="hc-titlebar__btn"
-        :title="t('chat.toggleInspector')"
-        @click="appStore.toggleDetailPanel"
-      >
-        <PanelRightOpen :size="15" />
-      </button>
       <button class="hc-titlebar__btn hc-titlebar__btn--kbd" @click="openCommandPalette">
         <Command :size="12" />
         <span>K</span>
-      </button>
-      <button class="hc-titlebar__btn" @click="toggleLang">
-        {{ locale === 'zh-CN' ? 'EN' : '中' }}
       </button>
       <button class="hc-titlebar__btn" @click="toggleTheme">
         <Sun v-if="resolvedTheme === 'dark'" :size="15" />
@@ -116,14 +88,8 @@ function openCommandPalette() {
   min-width: 0;
 }
 
-.hc-titlebar__title {
+.hc-titlebar__spacer {
   flex: 1;
-  text-align: center;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--hc-text-secondary);
-  cursor: default;
-  pointer-events: none;
 }
 
 .hc-titlebar__section {
@@ -139,33 +105,6 @@ function openCommandPalette() {
   display: flex;
   align-items: center;
   gap: 6px;
-}
-
-.hc-titlebar__status {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--hc-border);
-  border-radius: 999px;
-  font-size: 11px;
-  color: var(--hc-text-secondary);
-  background: rgba(255, 255, 255, 0.03);
-  -webkit-app-region: no-drag;
-}
-
-.hc-titlebar__status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-}
-
-.hc-titlebar__status-dot--ok {
-  background: var(--hc-success);
-}
-
-.hc-titlebar__status-dot--err {
-  background: var(--hc-error);
 }
 
 .hc-titlebar__btn {

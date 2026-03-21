@@ -11,7 +11,7 @@ import { checkHealth } from '@/api/client'
 const setup = () => {
   const sidecarReady = ref(false)
   const sidebarCollapsed = ref(false)
-  const detailPanelOpen = ref(true)
+  const detailPanelOpen = ref(false)
 
   let healthTimer: ReturnType<typeof setInterval> | null = null
 

@@ -92,6 +92,17 @@ function nowTime() {
         <KeyValueRow :label="t('inspector.kv.agent')" :value="activeAgent" />
         <KeyValueRow :label="t('inspector.kv.sessions')" :value="String(sessionCount)" />
       </ContextCard>
+      <ContextCard :eyebrow="t('inspector.eyebrow.recentActivity')" :title="t('inspector.demo.activityTitle')">
+        <div class="hc-inspector-context__timeline">
+          <TimelineItem
+            v-for="(session, idx) in chatStore.sessions.slice(0, 4)"
+            :key="session.id"
+            :time="new Date(session.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })"
+            :text="session.title || t('chat.newSession')"
+            :dot-color="idx === 0 ? 'var(--hc-accent)' : '#22c55e'"
+          />
+        </div>
+      </ContextCard>
       <ContextCard :eyebrow="t('inspector.eyebrow.systemStatus')" :title="t('inspector.demo.activityTitle')">
         <KeyValueRow label="HexClaw Engine" :value="engineStatus" />
         <KeyValueRow :label="t('inspector.kv.agentCount')" :value="String(agentCount)" />

@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, Wrench, RefreshCw, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X } from 'lucide-vue-next'
+import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X } from 'lucide-vue-next'
 import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer } from '@/api/mcp'
 import type { McpTool } from '@/types'
-import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 
@@ -185,26 +184,6 @@ async function handleRemoveServer(name: string) {
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-    <PageHeader :title="t('mcp.title')" :description="t('mcp.description')">
-      <template #actions>
-        <button
-          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium"
-          :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
-          @click="loadAll"
-        >
-          <RefreshCw :size="14" />
-          {{ t('common.refresh') }}
-        </button>
-        <button
-          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-          :style="{ background: 'var(--hc-accent)' }"
-          @click="showAddServer = true"
-        >
-          <Plus :size="14" />
-          {{ t('mcpManage.addServer') }}
-        </button>
-      </template>
-    </PageHeader>
 
     <!-- 错误提示 -->
     <div

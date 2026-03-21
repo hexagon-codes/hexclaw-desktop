@@ -3,7 +3,6 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Brain, Search, Save, Pencil, Trash2, X, Check, Eraser } from 'lucide-vue-next'
 import { getMemory, saveMemory, updateMemory, clearAllMemory, searchMemory } from '@/api/memory'
-import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -193,19 +192,17 @@ async function handleSearch() {
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-    <PageHeader :title="t('memory.title')" :description="t('memory.description')">
-      <template #actions>
-        <button
-          v-if="memoryContent || memoryContext"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-          style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
-          @click="showClearAllConfirm = true"
-        >
-          <Eraser :size="13" />
-          {{ t('memory.clearAll') }}
-        </button>
-      </template>
-    </PageHeader>
+    <!-- Clear All button (contextual, only when content exists) -->
+    <div v-if="memoryContent || memoryContext" class="flex justify-end px-6 pt-2">
+      <button
+        class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+        style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
+        @click="showClearAllConfirm = true"
+      >
+        <Eraser :size="13" />
+        {{ t('memory.clearAll') }}
+      </button>
+    </div>
 
     <!-- 错误提示 -->
     <div

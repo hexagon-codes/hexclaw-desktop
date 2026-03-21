@@ -2,6 +2,7 @@ export default {
   nav: {
     dashboard: 'Dashboard',
     chat: 'Chat',
+    channels: 'IM Channels',
     agents: 'Agents',
     knowledge: 'Knowledge',
     knowledgeDocs: 'Knowledge Base',
@@ -21,6 +22,7 @@ export default {
     groupSystem: 'System',
     connected: 'Engine running',
     disconnected: 'Engine stopped',
+    restartEngine: 'Restart engine',
     collapse: 'Collapse',
     tasks: 'Tasks',
     skills: 'Skills',
@@ -267,9 +269,16 @@ export default {
     newTask: 'New Task',
   },
 
+  channels: {
+    title: 'IM Channels',
+    eyebrow: 'IM channels',
+    description: 'Connect Feishu, DingTalk, Discord, and Telegram to let agents work across messaging platforms.',
+    addChannel: 'Add Channel',
+  },
+
   integration: {
     title: 'Integrations',
-    description: 'Connect tools, MCP servers, and messaging channels',
+    description: 'Manage skills, MCP servers, and diagnostics.',
     eyebrow: 'Integration',
     searchPlaceholder: 'Search skills, MCP, IM channels...',
     exportLogs: 'Export Logs',
@@ -442,7 +451,7 @@ export default {
     addChannel: 'Add Channel',
     editChannel: 'Edit Channel',
     noChannels: 'No IM Channels',
-    noChannelsDesc: 'Add IM channel instances to connect AI with Feishu, DingTalk, Slack, and more',
+    noChannelsDesc: 'Add IM channel instances to connect AI with Feishu, DingTalk, Discord, Telegram, and more',
     selectType: 'Select channel type',
     channelName: 'Channel Name',
     testConnection: 'Test Connection',
@@ -857,10 +866,10 @@ export default {
     coreCapabilities: 'Core Capabilities',
     coreCapabilitiesDesc:
       'Local deployment, in-house agent engine, MCP-native tooling, unified models, and end-to-end observability.',
-    localDeploy: 'Local deployment, private data',
+    localDeploy: 'Local deployment, one-click install, private data, claw with confidence',
     localDeployDesc:
       'The sidecar runs on your machine and API keys go directly to providers with no relay.',
-    agentEngine: 'In-house agent engine',
+    agentEngine: 'In-house AI Agent engine, fully open-source Apache 2.0',
     agentEngineDesc:
       'ReAct and Plan-and-Execute reasoning with declarative definitions and automatic tool orchestration.',
     mcpKnowledge: 'MCP + knowledge retrieval',
@@ -884,6 +893,10 @@ export default {
     orchestration: 'Orchestration',
     local: 'Local',
     knowledge: 'Knowledge',
+    imChannels: 'IM Channels — Feishu / DingTalk / Discord / Telegram',
+    imChannelsMetric: 'IM Channels',
+    imWorkflow: 'Agent responds via IM channels',
+    channels: 'IM Channels',
   },
 
   team: {

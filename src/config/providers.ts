@@ -7,6 +7,26 @@
 
 import type { ProviderPreset, ProviderType } from '@/types'
 
+import openaiLogo from '@/assets/provider-logos/openai.svg'
+import deepseekLogo from '@/assets/provider-logos/deepseek.svg'
+import anthropicLogo from '@/assets/provider-logos/anthropic.svg'
+import geminiLogo from '@/assets/provider-logos/gemini.svg'
+import qwenLogo from '@/assets/provider-logos/qwen.svg'
+import arkLogo from '@/assets/provider-logos/ark.svg'
+import ollamaLogo from '@/assets/provider-logos/ollama.svg'
+import customLogo from '@/assets/provider-logos/custom.svg'
+
+export const PROVIDER_LOGOS: Record<ProviderType, string> = {
+  openai: openaiLogo,
+  deepseek: deepseekLogo,
+  anthropic: anthropicLogo,
+  gemini: geminiLogo,
+  qwen: qwenLogo,
+  ark: arkLogo,
+  ollama: ollamaLogo,
+  custom: customLogo,
+}
+
 export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
   openai: {
     type: 'openai',

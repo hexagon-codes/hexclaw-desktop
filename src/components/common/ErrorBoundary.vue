@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onErrorCaptured, watch } from 'vue'
+import { ref, onErrorCaptured, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AlertCircle, RotateCcw } from 'lucide-vue-next'
@@ -10,13 +10,15 @@ const route = useRoute()
 const error = ref<Error | null>(null)
 
 onErrorCaptured((err) => {
-  error.value = err
   logger.error('ErrorBoundary captured', err)
+  error.value = err
   return false
 })
 
-watch(() => route.path, () => {
-  error.value = null
+watch(() => route.fullPath, () => {
+  if (error.value) {
+    nextTick(() => { error.value = null })
+  }
 })
 
 function retry() {

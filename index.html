@@ -32,14 +32,16 @@
         width: 88px;
         height: 88px;
         border-radius: 22px;
-        background: linear-gradient(135deg, #4a90d9, #5a9ee5);
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        overflow: hidden;
         box-shadow:
           0 12px 40px rgba(74, 144, 217, 0.3),
           0 0 0 1px rgba(255, 255, 255, 0.06);
         animation: splash-breathe 2.4s ease-in-out infinite;
+      }
+      .splash-logo img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
       }
       @keyframes splash-breathe {
         0%, 100% { transform: scale(1); box-shadow: 0 12px 40px rgba(74,144,217,0.3), 0 0 0 1px rgba(255,255,255,0.06); }
@@ -86,11 +88,7 @@
     <!-- Splash screen: visible immediately, removed after Vue mounts -->
     <div id="splash-screen">
       <div class="splash-logo">
-        <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-          <path d="M24 4L42 14V34L24 44L6 34V14L24 4Z" stroke="white" stroke-width="2.2" stroke-linejoin="round" fill="rgba(255,255,255,0.12)"/>
-          <path d="M24 14L33 19.2V29.8L24 35L15 29.8V19.2L24 14Z" stroke="white" stroke-width="1.6" stroke-linejoin="round" fill="rgba(255,255,255,0.08)"/>
-          <circle cx="24" cy="24.5" r="3.5" fill="white" opacity="0.9"/>
-        </svg>
+        <img src="/logo.png" alt="HexClaw" />
       </div>
       <div class="splash-title">HexClaw</div>
       <div class="splash-subtitle">正在启动...</div>

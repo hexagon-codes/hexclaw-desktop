@@ -73,7 +73,7 @@ function providersToBackend(providers: ProviderConfig[], defaultModel: string): 
   const backendProviders: Record<string, BackendLLMProvider> = {}
   for (const p of providers) {
     if (!p.enabled) continue
-    const key = p.id || p.name
+    const key = p.name || p.id
     backendProviders[key] = {
       api_key: p.apiKey || '',
       base_url: p.baseUrl || '',
@@ -209,14 +209,13 @@ export const useSettingsStore = defineStore('settings', () => {
 
         // 合并本地保存的 enabled 状态（后端不存储 enabled 字段）
         const localProviders = config.value?.llm.providers ?? []
-        const enabledMap = new Map(localProviders.map(p => [p.id || p.name, p.enabled]))
+        const enabledMap = new Map(localProviders.map(p => [p.name || p.id, p.enabled]))
         for (const p of providers) {
-          const localEnabled = enabledMap.get(p.id)
+          const localEnabled = enabledMap.get(p.name) ?? enabledMap.get(p.id)
           if (localEnabled !== undefined) p.enabled = localEnabled
         }
-        // 追加本地存在但后端不存在的 disabled providers（用户禁用后后端不再存储）
         for (const lp of localProviders) {
-          if (!lp.enabled && !providers.some(p => p.id === (lp.id || lp.name))) {
+          if (!lp.enabled && !providers.some(p => p.name === lp.name)) {
             providers.push(lp)
           }
         }
@@ -247,6 +246,9 @@ export const useSettingsStore = defineStore('settings', () => {
     // 深拷贝去掉 Vue 响应式代理，确保序列化正确
     const plainConfig: AppConfig = JSON.parse(JSON.stringify(newConfig))
 
+    // 先更新本地状态，确保 UI 不会因为异步操作延迟而丢失响应性
+    config.value = plainConfig
+
     // LLM 配置保存到后端 API
     if (isTauri()) {
       try {
@@ -268,7 +270,6 @@ export const useSettingsStore = defineStore('settings', () => {
     }
 
     // 非 LLM 配置保存到 Tauri Store（不含敏感 apiKey）
-    // 保留 provider id/enabled 映射，以便从后端加载后恢复 enabled 状态
     const configToSave: AppConfig = {
       ...plainConfig,
       llm: {
@@ -294,8 +295,6 @@ export const useSettingsStore = defineStore('settings', () => {
     } else {
       localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
     }
-
-    config.value = plainConfig
   }
 
   /** 添加 Provider */

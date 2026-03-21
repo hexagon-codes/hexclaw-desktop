@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4a90d9"/>
+      <stop offset="100%" stop-color="#357abd"/>
+    </linearGradient>
+  </defs>
+  <!-- Body (hexagonal) -->
+  <polygon points="60,20 95,38 95,82 60,100 25,82 25,38" fill="url(#cg)" rx="6"/>
+  <!-- Claws -->
+  <path d="M25,50 Q10,38 6,28 Q4,22 10,24 Q16,26 20,34 L25,42" fill="#4a90d9" stroke="#357abd" stroke-width="1"/>
+  <path d="M6,28 Q2,20 8,16 Q12,14 12,22" fill="#4a90d9" stroke="#357abd" stroke-width="0.8"/>
+  <path d="M95,50 Q110,38 114,28 Q116,22 110,24 Q104,26 100,34 L95,42" fill="#4a90d9" stroke="#357abd" stroke-width="1"/>
+  <path d="M114,28 Q118,20 112,16 Q108,14 108,22" fill="#4a90d9" stroke="#357abd" stroke-width="0.8"/>
+  <!-- Legs (3 per side) -->
+  <line x1="28" y1="58" x2="12" y2="64" stroke="#4a90d9" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="26" y1="68" x2="10" y2="76" stroke="#4a90d9" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="28" y1="78" x2="14" y2="88" stroke="#4a90d9" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="92" y1="58" x2="108" y2="64" stroke="#4a90d9" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="94" y1="68" x2="110" y2="76" stroke="#4a90d9" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="92" y1="78" x2="106" y2="88" stroke="#4a90d9" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Eyes -->
+  <circle cx="48" cy="42" r="5" fill="white"/>
+  <circle cx="72" cy="42" r="5" fill="white"/>
+  <circle cx="49" cy="41" r="2.5" fill="#1a3a5c"/>
+  <circle cx="73" cy="41" r="2.5" fill="#1a3a5c"/>
+  <!-- Mouth (subtle smile) -->
+  <path d="M50,62 Q60,70 70,62" fill="none" stroke="rgba(255,255,255,0.6)" stroke-width="2" stroke-linecap="round"/>
+</svg>

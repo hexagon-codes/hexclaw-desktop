@@ -40,7 +40,7 @@ function onRebuildIndex() {
 }
 
 function onUploadDoc() {
-  knowledgeViewRef.value?.openUpload?.()
+  knowledgeViewRef.value?.openFilePicker?.()
 }
 </script>
 
@@ -51,22 +51,22 @@ function onUploadDoc() {
         <SegmentedControl v-model="activeTab" :segments="segments" />
       </template>
       <template #actions>
-        <button
-          class="hc-btn hc-btn-ghost"
-          data-action="rebuild-index"
-          @click="onRebuildIndex"
-        >
-          <RefreshCw :size="14" />
-          {{ t('knowledge.rebuildIndex', 'Rebuild Index') }}
-        </button>
-        <button
-          class="hc-btn hc-btn-primary"
-          data-action="upload-doc"
-          @click="onUploadDoc"
-        >
-          <Upload :size="14" />
-          {{ t('knowledge.uploadDocument', 'Upload Document') }}
-        </button>
+        <template v-if="activeTab === 'docs'">
+          <button
+            class="hc-btn hc-btn-ghost"
+            @click="onRebuildIndex"
+          >
+            <RefreshCw :size="14" />
+            {{ t('knowledge.rebuildIndex', 'Rebuild Index') }}
+          </button>
+          <button
+            class="hc-btn hc-btn-primary"
+            @click="onUploadDoc"
+          >
+            <Upload :size="14" />
+            {{ t('knowledge.uploadDocument', 'Upload Document') }}
+          </button>
+        </template>
       </template>
     </PageToolbar>
     <PageHeader

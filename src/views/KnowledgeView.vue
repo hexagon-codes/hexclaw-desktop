@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { BookOpen, Upload, Trash2, Search, FileText, Plus, X, FileUp, RefreshCw } from 'lucide-vue-next'
+import { BookOpen, Upload, Trash2, Search, FileText, X, FileUp, RefreshCw } from 'lucide-vue-next'
 import { getDocuments, addDocument, deleteDocument, searchKnowledge, uploadDocument, reindexDocument } from '@/api/knowledge'
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
-import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -282,41 +281,19 @@ function openUpload() {
   showAddDialog.value = true
 }
 
-defineExpose({ rebuildAll, openUpload })
+defineExpose({ rebuildAll, openUpload, openFilePicker })
 </script>
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-    <PageHeader :title="t('knowledge.title')" :description="t('knowledge.description')">
-      <template #actions>
-        <div class="flex items-center gap-2">
-          <button
-            class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-            :style="{ background: 'var(--hc-accent)' }"
-            @click="openFilePicker"
-          >
-            <FileUp :size="16" />
-            {{ t('knowledge.uploadDoc') }}
-          </button>
-          <button
-            class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-            :style="{ background: 'var(--hc-accent)' }"
-            @click="showAddDialog = true"
-          >
-            <Plus :size="16" />
-            {{ t('knowledge.addDoc') }}
-          </button>
-        </div>
-        <input
-          ref="fileInputRef"
-          type="file"
-          :accept="'.pdf,.txt,.md,.docx,.doc,.csv,.json'"
-          multiple
-          class="hidden"
-          @change="handleFileSelect"
-        />
-      </template>
-    </PageHeader>
+    <input
+      ref="fileInputRef"
+      type="file"
+      :accept="'.pdf,.txt,.md,.docx,.doc,.csv,.json'"
+      multiple
+      class="hidden"
+      @change="handleFileSelect"
+    />
 
     <!-- 错误提示 -->
     <div

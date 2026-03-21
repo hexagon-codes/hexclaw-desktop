@@ -2,6 +2,7 @@ import type { Component } from 'vue'
 import {
   LayoutDashboard,
   MessageSquare,
+  Radio,
   Bot,
   BookOpen,
   Zap,
@@ -62,6 +63,14 @@ export const navigationItems: NavItem[] = [
     group: 'core',
   },
   {
+    id: 'channels',
+    path: '/channels',
+    i18nKey: 'nav.channels',
+    icon: Radio,
+    keywords: 'channels 通道 IM 飞书 钉钉 discord telegram feishu dingtalk',
+    group: 'core',
+  },
+  {
     id: 'agents',
     path: '/agents',
     i18nKey: 'nav.agents',
@@ -105,7 +114,6 @@ export const navigationItems: NavItem[] = [
     children: [
       { id: 'integration-skills', path: '/integration', i18nKey: 'nav.integrationSkills' },
       { id: 'integration-mcp', path: '/integration/mcp', i18nKey: 'nav.integrationMcp' },
-      { id: 'integration-im', path: '/integration/im', i18nKey: 'nav.integrationIm' },
       { id: 'integration-diagnostics', path: '/integration/diagnostics', i18nKey: 'nav.integrationDiagnostics' },
     ],
   },

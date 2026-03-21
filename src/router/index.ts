@@ -6,6 +6,7 @@ import { navigationItems } from '@/config/navigation'
 const navRouteComponents = {
   dashboard: () => import('@/views/DashboardView.vue'),
   chat: () => import('@/views/ChatView.vue'),
+  channels: () => import('@/views/ChannelsView.vue'),
   agents: () => import('@/views/AgentsView.vue'),
   knowledge: () => import('@/views/KnowledgeCenterView.vue'),
   automation: () => import('@/views/AutomationView.vue'),
@@ -60,7 +61,8 @@ const router = createRouter({
     { path: '/canvas', redirect: '/automation/canvas' },
     { path: '/skills', redirect: '/integration' },
     { path: '/mcp', redirect: '/integration/mcp' },
-    { path: '/im-channels', redirect: '/integration/im' },
+    { path: '/im-channels', redirect: '/channels' },
+    { path: '/integration/im', redirect: '/channels' },
     { path: '/team', redirect: '/dashboard' },
     // 独立窗口页面
     {
@@ -69,7 +71,12 @@ const router = createRouter({
       component: () => import('@/views/QuickChatView.vue'),
       meta: { layout: 'blank' },
     },
-    { path: '/about', redirect: '/dashboard' },
+    {
+      path: '/about',
+      name: 'about',
+      component: () => import('@/views/AboutView.vue'),
+      meta: { layout: 'blank' },
+    },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
 })

@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { Key, Shield, Globe, Database, Bell, Server, Palette, Eye, EyeOff, Cpu, Plus, Trash2, ChevronDown, ChevronUp, Power, Webhook, Loader2, Pencil, CheckCircle, XCircle, Zap, RotateCcw, Plug, Save } from 'lucide-vue-next'
+import { Key, Shield, Globe, Database, Bell, Server, Palette, Eye, EyeOff, Plus, Trash2, ChevronDown, ChevronUp, Power, Webhook, Loader2, Pencil, CheckCircle, XCircle, Zap, RotateCcw, Plug, Save } from 'lucide-vue-next'
 import { NTag, NPopconfirm, NModal, NSpace } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
@@ -11,7 +11,7 @@ import { trySafe } from '@/utils/errors'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { useValidation, rules } from '@/composables/useValidation'
 import { setLocale } from '@/i18n'
-import { PROVIDER_PRESETS, getProviderTypes } from '@/config/providers'
+import { PROVIDER_PRESETS, PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
 import type { ProviderConfig, ProviderType, ModelOption, ModelCapability, SecurityConfig, NotificationConfig } from '@/types'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
@@ -132,53 +132,9 @@ const {
 
 const sections = computed(() => [
   { key: 'llm', label: t('settings.llm.title'), icon: Key },
-  { key: 'security', label: t('settings.security.title'), icon: Shield },
-  { key: 'general', label: t('settings.general.title'), icon: Globe },
   { key: 'appearance', label: t('settings.appearance.title'), icon: Palette },
-  { key: 'notification', label: t('settings.notification.title'), icon: Bell },
-  { key: 'webhook', label: t('settings.webhook.title'), icon: Webhook },
   { key: 'storage', label: t('settings.storage.title'), icon: Database },
-  { key: 'mcp', label: t('settings.mcp.title'), icon: Server },
-  { key: 'engine', label: t('settings.engine.title'), icon: Cpu },
 ])
-
-// 引擎运行时版本
-const engineRefreshing = ref(false)
-const engineInfo = ref({
-  hexclaw: { version: '-', status: 'checking' as 'checking' | 'running' | 'stopped' | 'update' },
-  hexagon: { version: '-' },
-  goVersion: '-',
-})
-
-async function checkEngineStatus() {
-  try {
-    // 通过 Tauri command 代理请求，绕过 CORS
-    const text = await invoke<string>('proxy_api_request', {
-      method: 'GET',
-      path: '/health',
-      body: null,
-    })
-    const data = JSON.parse(text)
-    engineInfo.value.hexclaw.version = data.version || '0.0.1'
-    engineInfo.value.hexclaw.status = 'running'
-    engineInfo.value.hexagon.version = data.hexagon_version || '0.1.0'
-    engineInfo.value.goVersion = data.go_version || 'go1.23'
-  } catch {
-    engineInfo.value.hexclaw.status = 'stopped'
-    engineInfo.value.hexclaw.version = '0.0.1'
-    engineInfo.value.hexagon.version = '0.1.0'
-    engineInfo.value.goVersion = 'go1.23'
-  }
-}
-
-async function refreshEngine() {
-  if (engineRefreshing.value) return
-  engineRefreshing.value = true
-  engineInfo.value.hexclaw.status = 'checking'
-  await checkEngineStatus()
-  // 保持动画至少转完一圈
-  setTimeout(() => { engineRefreshing.value = false }, 600)
-}
 
 function handleLocaleChange(locale: string) {
   setLocale(locale as 'zh-CN' | 'en')
@@ -187,19 +143,29 @@ function handleLocaleChange(locale: string) {
 onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
   await settingsStore.loadConfig()
-  checkEngineStatus()
 })
 
-onUnmounted(() => {
+onBeforeUnmount(() => {
+  editingModel.value = null
+  showAddModelPanel.value = false
   if (autoSaveTimer) {
     clearTimeout(autoSaveTimer)
     autoSaveTimer = null
   }
+  editingProviderId.value = null
 })
 
 // 切换到 webhook 分区时自动加载
 watch(activeSection, (val) => {
   if (val === 'webhook') loadWebhooks()
+})
+
+// 切换编辑的 Provider 时重置模型添加面板
+watch(editingProviderId, () => {
+  showAddModelPanel.value = false
+  newModelId.value = ''
+  newModelName.value = ''
+  newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false }
 })
 
 const config = computed(() => settingsStore.config)
@@ -223,14 +189,19 @@ function handleAddProvider() {
   }
 }
 
-/** 删除 Provider */
-function handleDeleteProvider(id: string) {
-  if (!confirm(t('settings.llm.deleteProviderConfirm'))) return
+/** 删除 Provider（由 NPopconfirm 确认后触发） */
+async function handleDeleteProvider(id: string) {
   settingsStore.removeProvider(id)
   if (editingProviderId.value === id) {
     editingProviderId.value = null
   }
-  autoSave()
+  if (settingsStore.config) {
+    try {
+      await settingsStore.saveConfig(settingsStore.config)
+    } catch (e) {
+      console.error('[HexClaw] 删除 Provider 后保存失败:', e)
+    }
+  }
 }
 
 /** 切换 Provider 启用/禁用 */
@@ -323,7 +294,7 @@ async function testProvider(provider: ProviderConfig) {
     })
     const data = JSON.parse(text)
     // Check if the provider exists in backend config
-    const key = provider.id || provider.name
+    const key = provider.name || provider.id
     if (data.providers && data.providers[key]) {
       testProviderResult.value[provider.id] = { ok: true, msg: '连接正常' }
     } else {
@@ -400,11 +371,31 @@ async function onToolbarTestConnection() {
 async function saveConfig() {
   if (!settingsStore.config) return
 
+  // 取消挂起的自动保存，防止并发写入冲突
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
+
   // 如果有未提交的自定义模型输入，自动添加到当前编辑的 Provider
   if (newModelId.value.trim() && editingProviderId.value) {
     const provider = settingsStore.config.llm.providers.find((p) => p.id === editingProviderId.value)
     if (provider) {
-      addCustomModel(provider)
+      const caps = (Object.entries(newModelCaps.value) as [ModelCapability, boolean][])
+        .filter(([, v]) => v)
+        .map(([k]) => k)
+      const pendingModel: ModelOption = {
+        id: newModelId.value.trim(),
+        name: newModelName.value.trim() || newModelId.value.trim(),
+        isCustom: true,
+        capabilities: caps.length > 0 ? caps : ['text'],
+      }
+      settingsStore.updateProvider(provider.id, {
+        models: [...provider.models, pendingModel],
+      })
+      newModelId.value = ''
+      newModelName.value = ''
+      newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false }
     }
   }
 
@@ -431,17 +422,13 @@ async function saveConfig() {
       <template #tabs>
         <SegmentedControl
           v-model="activeSection"
-          :segments="sections.slice(0, 4).map(s => ({ key: s.key, label: s.label }))"
+          :segments="sections.map(s => ({ key: s.key, label: s.label }))"
         />
       </template>
       <template #actions>
         <button class="hc-btn hc-btn-ghost" @click="onToolbarReset">
           <RotateCcw :size="14" />
           {{ t('settings.toolbar.reset', 'Reset') }}
-        </button>
-        <button class="hc-btn hc-btn-ghost" @click="onToolbarTestConnection">
-          <Plug :size="14" />
-          {{ t('settings.toolbar.testConnection', 'Test Connection') }}
         </button>
         <button class="hc-btn hc-btn-primary" @click="saveConfig">
           <Save :size="14" />
@@ -451,25 +438,10 @@ async function saveConfig() {
     </PageToolbar>
 
     <div class="hc-settings__body">
-      <!-- Left nav -->
-      <div class="hc-settings__nav">
-        <button
-          v-for="section in sections"
-          :key="section.key"
-          class="hc-settings__nav-item"
-          :class="{ 'hc-settings__nav-item--active': activeSection === section.key }"
-          @click="activeSection = section.key"
-        >
-          <component :is="section.icon" :size="16" class="hc-settings__nav-icon" />
-          {{ section.label }}
-        </button>
-      </div>
-
-      <!-- Right content -->
       <div class="hc-settings__content">
-        <LoadingState v-if="settingsStore.loading" />
+        <LoadingState v-if="settingsStore.loading && !config" />
 
-        <template v-else-if="config">
+        <template v-if="config">
           <!-- LLM Providers -->
           <div v-if="activeSection === 'llm'" class="hc-settings__section hc-settings__section--scroll" style="max-width: 600px;">
             <div class="hc-provider__header">
@@ -491,6 +463,7 @@ async function saveConfig() {
                   :class="{ 'hc-provider__type-btn--active': addProviderType === preset.type }"
                   @click="addProviderType = preset.type"
                 >
+                  <img :src="PROVIDER_LOGOS[preset.type]" :alt="preset.type" class="hc-provider__type-logo" />
                   {{ preset.name }}
                 </button>
               </div>
@@ -516,7 +489,7 @@ async function saveConfig() {
                 <!-- Provider 头部 -->
                 <div class="hc-provider__card-head" @click="editingProviderId = editingProviderId === provider.id ? null : provider.id">
                   <div class="hc-provider__card-info">
-                    <span class="hc-provider__led" :class="provider.enabled ? 'hc-provider__led--on' : 'hc-provider__led--off'" />
+                    <img :src="PROVIDER_LOGOS[provider.type] || PROVIDER_LOGOS.custom" :alt="provider.type" class="hc-provider__logo" />
                     <span class="hc-provider__card-name">{{ provider.name }}</span>
                     <span class="hc-provider__tag">{{ provider.type }}</span>
                     <span class="hc-provider__model-count">{{ provider.models.length }} {{ t('settings.llm.models').toLowerCase() }}</span>
@@ -644,10 +617,15 @@ async function saveConfig() {
                   </div>
 
                   <div class="hc-provider__edit-footer">
-                    <button class="hc-provider__delete-btn" @click="handleDeleteProvider(provider.id)">
-                      <Trash2 :size="13" />
-                      {{ t('settings.llm.deleteProvider') }}
-                    </button>
+                    <NPopconfirm @positive-click="handleDeleteProvider(provider.id)">
+                      <template #trigger>
+                        <button class="hc-provider__delete-btn">
+                          <Trash2 :size="13" />
+                          {{ t('settings.llm.deleteProvider') }}
+                        </button>
+                      </template>
+                      {{ t('settings.llm.deleteProviderConfirm', '确定删除该 Provider？') }}
+                    </NPopconfirm>
                   </div>
                 </div>
               </div>
@@ -658,104 +636,7 @@ async function saveConfig() {
             </button>
           </div>
 
-          <!-- Security -->
-          <div v-else-if="activeSection === 'security'" class="hc-settings__section">
-            <h3 class="hc-settings__section-title">{{ t('settings.security.title') }}</h3>
-
-            <SettingsSecurity
-              :security="config.security"
-              @patch="patchSecurity"
-            />
-
-            <div class="hc-settings__form">
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.security.gateway') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.security.gatewayDesc') }}</p>
-                </div>
-                <input v-model="config.security.gateway_enabled" type="checkbox" class="hc-toggle" />
-              </label>
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.security.contentFilter') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.security.contentFilterDesc') }}</p>
-                </div>
-                <input v-model="config.security.content_filter" type="checkbox" class="hc-toggle" />
-              </label>
-
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.security.maxTokens') }}</label>
-                <input
-                  v-model.number="config.security.max_tokens_per_request"
-                  type="number" min="256" max="128000"
-                  class="hc-input"
-                  :class="{ 'hc-settings__input--error': getSecError('max_tokens_per_request') }"
-                  @blur="validateSecField('max_tokens_per_request', config.security.max_tokens_per_request)"
-                />
-                <p v-if="getSecError('max_tokens_per_request')" class="hc-settings__error">{{ getSecError('max_tokens_per_request') }}</p>
-              </div>
-
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.security.rateLimit') }}</label>
-                <input
-                  v-model.number="config.security.rate_limit_rpm"
-                  type="number" min="1" max="600"
-                  class="hc-input"
-                  :class="{ 'hc-settings__input--error': getSecError('rate_limit_rpm') }"
-                  @blur="validateSecField('rate_limit_rpm', config.security.rate_limit_rpm)"
-                />
-                <p v-if="getSecError('rate_limit_rpm')" class="hc-settings__error">{{ getSecError('rate_limit_rpm') }}</p>
-              </div>
-            </div>
-
-            <button class="hc-btn hc-btn-primary" :class="{ 'hc-settings__btn--saved': saved }" @click="saveConfig">
-              {{ saved ? t('common.saved') : t('settings.saveConfig') }}
-            </button>
-          </div>
-
-          <!-- General -->
-          <div v-else-if="activeSection === 'general'" class="hc-settings__section">
-            <h3 class="hc-settings__section-title">{{ t('settings.general.title') }}</h3>
-
-            <div class="hc-settings__form">
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.general.language') }}</label>
-                <select v-model="config.general.language" class="hc-input" @change="handleLocaleChange(config.general.language)">
-                  <option value="zh-CN">中文</option>
-                  <option value="en">English</option>
-                </select>
-              </div>
-
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.general.logLevel') }}</label>
-                <select v-model="config.general.log_level" class="hc-input">
-                  <option value="debug">Debug</option>
-                  <option value="info">Info</option>
-                  <option value="warn">Warn</option>
-                  <option value="error">Error</option>
-                </select>
-              </div>
-
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.general.dataDir') }}</label>
-                <input v-model="config.general.data_dir" type="text" class="hc-input" placeholder="~/.hexclaw" />
-              </div>
-
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.general.autoStart') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.general.autoStartDesc') }}</p>
-                </div>
-                <input v-model="config.general.auto_start" type="checkbox" class="hc-toggle" />
-              </label>
-            </div>
-
-            <button class="hc-btn hc-btn-primary" :class="{ 'hc-settings__btn--saved': saved }" @click="saveConfig">
-              {{ saved ? t('common.saved') : t('settings.saveConfig') }}
-            </button>
-          </div>
-
-          <!-- Appearance -->
+          <!-- Appearance (merged: theme + language + auto start) -->
           <div v-else-if="activeSection === 'appearance'" class="hc-settings__section">
             <h3 class="hc-settings__section-title">{{ t('settings.appearance.title') }}</h3>
 
@@ -779,120 +660,27 @@ async function saveConfig() {
                   </button>
                 </div>
               </div>
-            </div>
-          </div>
-
-          <!-- Notification -->
-          <div v-else-if="activeSection === 'notification'" class="hc-settings__section">
-            <h3 class="hc-settings__section-title">{{ t('settings.notification.title') }}</h3>
-
-            <SettingsNotification
-              :notification="config.notification"
-              @patch="patchNotification"
-            />
-
-            <p class="hc-settings__hint">{{ t('settings.notification.hint') }}</p>
-          </div>
-
-          <!-- Webhook 通知推送 -->
-          <div v-else-if="activeSection === 'webhook'" class="hc-settings__section hc-settings__section--scroll" style="max-width: 600px;">
-            <div class="hc-provider__header">
-              <h3 class="hc-settings__section-title" style="margin: 0;">通知推送</h3>
-              <button class="hc-btn hc-btn-sm" @click="showAddWebhook = !showAddWebhook">
-                <Plus :size="14" />
-                添加 Webhook
-              </button>
-            </div>
-
-            <p class="text-xs mb-4" style="color: var(--hc-text-muted);">
-              配置 IM Webhook 接收任务完成、Agent 执行结果、错误告警等通知。
-            </p>
-
-            <!-- 添加 Webhook 表单 -->
-            <div v-if="showAddWebhook" class="hc-webhook__add-panel">
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">名称 <span class="hc-settings__required">*</span></label>
-                <input v-model="newWebhookName" type="text" class="hc-input" placeholder="例如：研发群通知" />
-              </div>
 
               <div class="hc-settings__field">
-                <label class="hc-settings__label">类型</label>
-                <div class="hc-webhook__type-grid">
-                  <button
-                    v-for="wt in webhookTypes"
-                    :key="wt.key"
-                    class="hc-webhook__type-btn"
-                    :class="{ 'hc-webhook__type-btn--active': newWebhookType === wt.key }"
-                    :style="newWebhookType === wt.key ? { borderColor: wt.color, color: wt.color, background: wt.color + '15' } : {}"
-                    @click="newWebhookType = wt.key"
-                  >
-                    <span class="hc-webhook__type-dot" :style="{ background: wt.color }" />
-                    {{ wt.label }}
-                  </button>
+                <label class="hc-settings__label">{{ t('settings.general.language') }}</label>
+                <select v-model="config.general.language" class="hc-input" @change="handleLocaleChange(config.general.language)">
+                  <option value="zh-CN">中文</option>
+                  <option value="en">English</option>
+                </select>
+              </div>
+
+              <label class="hc-settings__toggle-row">
+                <div>
+                  <span class="hc-settings__toggle-label">{{ t('settings.general.autoStart') }}</span>
+                  <p class="hc-settings__toggle-desc">{{ t('settings.general.autoStartDesc') }}</p>
                 </div>
-              </div>
-
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">Webhook URL <span class="hc-settings__required">*</span></label>
-                <input v-model="newWebhookUrl" type="text" class="hc-input" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." />
-              </div>
-
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">触发事件</label>
-                <div class="hc-webhook__events">
-                  <label v-for="ev in webhookEventLabels" :key="ev.key" class="hc-webhook__event-check">
-                    <input v-model="newWebhookEvents[ev.key]" type="checkbox" />
-                    <span>{{ ev.label }}</span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="hc-provider__add-actions">
-                <button class="hc-btn hc-btn-sm" @click="showAddWebhook = false">取消</button>
-                <button
-                  class="hc-btn hc-btn-primary hc-btn-sm"
-                  :disabled="!newWebhookName.trim() || !newWebhookUrl.trim() || webhookLoading"
-                  @click="handleAddWebhook"
-                >
-                  <Loader2 v-if="webhookLoading" :size="12" class="animate-spin mr-1" style="display: inline-block;" />
-                  保存
-                </button>
-              </div>
+                <input v-model="config.general.auto_start" type="checkbox" class="hc-toggle" />
+              </label>
             </div>
 
-            <!-- Webhook 列表 -->
-            <div v-if="webhookLoading && webhooks.length === 0" class="flex items-center justify-center py-8">
-              <Loader2 :size="20" class="animate-spin" style="color: var(--hc-text-muted);" />
-            </div>
-
-            <div v-else-if="webhooks.length === 0 && !showAddWebhook" class="hc-provider__empty">
-              <p class="hc-provider__empty-title">暂无 Webhook</p>
-              <p class="hc-provider__empty-desc">添加一个 Webhook 来接收通知推送</p>
-            </div>
-
-            <div v-else class="hc-webhook__list">
-              <div v-for="wh in webhooks" :key="wh.id" class="hc-webhook__card">
-                <div class="hc-webhook__card-head">
-                  <span class="hc-webhook__type-dot" :style="{ background: getWebhookTypeInfo(wh.type as WebhookType).color }" />
-                  <span class="hc-webhook__card-name">{{ wh.name }}</span>
-                  <span class="hc-webhook__tag" :style="{ color: getWebhookTypeInfo(wh.type as WebhookType).color, background: getWebhookTypeInfo(wh.type as WebhookType).color + '15' }">
-                    {{ getWebhookTypeInfo(wh.type as WebhookType).label }}
-                  </span>
-                  <div class="flex-1" />
-                  <button class="hc-provider__icon-btn" title="删除" @click="handleDeleteWebhook(wh.name)">
-                    <Trash2 :size="13" style="color: var(--hc-text-muted);" />
-                  </button>
-                </div>
-                <div class="hc-webhook__card-url">
-                  {{ wh.url ? (wh.url.length > 50 ? wh.url.slice(0, 50) + '...' : wh.url) : '—' }}
-                </div>
-                <div v-if="wh.events && wh.events.length > 0" class="hc-webhook__card-events">
-                  <span v-for="ev in wh.events" :key="ev" class="hc-webhook__event-tag">
-                    {{ webhookEventLabels.find(e => e.key === ev)?.label || ev }}
-                  </span>
-                </div>
-              </div>
-            </div>
+            <button class="hc-btn hc-btn-primary" :class="{ 'hc-settings__btn--saved': saved }" @click="saveConfig">
+              {{ saved ? t('common.saved') : t('settings.saveConfig') }}
+            </button>
           </div>
 
           <!-- Storage -->
@@ -944,110 +732,6 @@ async function saveConfig() {
             </div>
           </div>
 
-          <!-- MCP -->
-          <div v-else-if="activeSection === 'mcp'" class="hc-settings__section">
-            <h3 class="hc-settings__section-title">{{ t('settings.mcp.title') }}</h3>
-            <p class="hc-settings__desc-text">
-              {{ t('settings.mcp.desc') }}
-              <button class="hc-settings__link" @click="router.push('/mcp')">{{ t('settings.mcp.mcpPage') }}</button>
-            </p>
-
-            <div class="hc-settings__form">
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.mcp.defaultProtocol') }}</label>
-                <select v-model="config.mcp.default_protocol" class="hc-input">
-                  <option value="stdio">stdio</option>
-                  <option value="sse">SSE</option>
-                  <option value="streamable_http">Streamable HTTP</option>
-                </select>
-              </div>
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.mcp.autoReconnect') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.mcp.autoReconnectDesc') }}</p>
-                </div>
-                <input type="checkbox" v-model="config.mcp.auto_reconnect" class="hc-toggle" @change="autoSave()" />
-              </label>
-            </div>
-          </div>
-
-          <!-- Engine -->
-          <div v-else-if="activeSection === 'engine'" class="hc-settings__section">
-            <div class="hc-engine__header">
-              <div>
-                <h3 class="hc-settings__section-title">{{ t('settings.engine.title') }}</h3>
-                <p class="hc-settings__desc-text">{{ t('settings.engine.desc') }}</p>
-              </div>
-              <button
-                class="hc-engine__refresh-btn"
-                :class="{ 'hc-engine__refresh-btn--spinning': engineRefreshing }"
-                @click="refreshEngine"
-                :title="t('settings.engine.refresh')"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-              </button>
-            </div>
-
-            <div class="hc-engine__cards">
-              <!-- HexClaw Engine -->
-              <div class="hc-engine__card">
-                <div class="hc-engine__card-head">
-                  <span class="hc-engine__led" :class="'hc-engine__led--' + engineInfo.hexclaw.status" />
-                  <span class="hc-engine__card-title">HexClaw Engine</span>
-                  <span class="hc-engine__tag hc-engine__tag--go">Go</span>
-                </div>
-                <table class="hc-engine__table">
-                  <tbody><tr>
-                    <td>{{ t('settings.engine.version') }}</td>
-                    <td>{{ engineInfo.hexclaw.version }}</td>
-                  </tr>
-                  <tr>
-                    <td>{{ t('settings.engine.endpoint') }}</td>
-                    <td>localhost:16060</td>
-                  </tr>
-                  <tr>
-                    <td>Go Runtime</td>
-                    <td>{{ engineInfo.goVersion }}</td>
-                  </tr>
-                  </tbody></table>
-              </div>
-
-              <!-- Hexagon Engine -->
-              <div class="hc-engine__card">
-                <div class="hc-engine__card-head">
-                  <span class="hc-engine__led hc-engine__led--running" />
-                  <span class="hc-engine__card-title">Hexagon Agent Engine</span>
-                  <span class="hc-engine__tag hc-engine__tag--core">Core</span>
-                </div>
-                <table class="hc-engine__table">
-                  <tbody><tr>
-                    <td>{{ t('settings.engine.version') }}</td>
-                    <td>{{ engineInfo.hexagon.version }}</td>
-                  </tr>
-                  <tr>
-                    <td>{{ t('settings.engine.capabilities') }}</td>
-                    <td>ReAct · Plan &amp; Execute · Tool Call</td>
-                  </tr>
-                  </tbody></table>
-              </div>
-
-              <!-- ai-core -->
-              <div class="hc-engine__card">
-                <div class="hc-engine__card-head">
-                  <span class="hc-engine__led hc-engine__led--running" />
-                  <span class="hc-engine__card-title">ai-core</span>
-                  <span class="hc-engine__tag hc-engine__tag--llm">LLM</span>
-                </div>
-                <table class="hc-engine__table">
-                  <tbody><tr>
-                    <td>{{ t('settings.engine.providers') }}</td>
-                    <td>OpenAI · Claude · DeepSeek</td>
-                  </tr>
-                  </tbody></table>
-              </div>
-            </div>
-          </div>
-
         </template>
       </div>
     </div>
@@ -1061,7 +745,10 @@ async function saveConfig() {
     style="max-width: 420px"
     :bordered="false"
     :segmented="{ content: true, footer: true }"
+    :close-on-esc="true"
+    :mask-closable="true"
     @update:show="(v: boolean) => { if (!v) editingModel = null }"
+    @after-leave="editingModel = null"
   >
     <div class="hc-edit-model">
       <div class="hc-edit-model__field">
@@ -1104,52 +791,6 @@ async function saveConfig() {
   flex: 1;
   display: flex;
   overflow: hidden;
-}
-
-/* ─── Nav ───── */
-.hc-settings__nav {
-  width: 200px;
-  flex-shrink: 0;
-  border-right: 1px solid var(--hc-border-subtle);
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.hc-settings__nav-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 10px;
-  border-radius: var(--hc-radius-sm);
-  font-size: 13px;
-  color: var(--hc-text-secondary);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
-  transition: background 0.15s, color 0.15s;
-}
-
-.hc-settings__nav-item:hover {
-  background: var(--hc-bg-hover);
-}
-
-.hc-settings__nav-item--active {
-  background: var(--hc-bg-active);
-  color: var(--hc-text-primary);
-  font-weight: 500;
-}
-
-.hc-settings__nav-icon {
-  opacity: 0.7;
-}
-
-.hc-settings__nav-item--active .hc-settings__nav-icon {
-  opacity: 1;
-  color: var(--hc-accent);
 }
 
 /* ─── Content ───── */
@@ -1356,136 +997,6 @@ async function saveConfig() {
 
 
 /* ─── Engine ───── */
-.hc-engine__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 12px;
-}
-
-.hc-engine__refresh-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--hc-radius-sm);
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-secondary);
-  cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
-  flex-shrink: 0;
-}
-
-.hc-engine__refresh-btn:hover {
-  color: var(--hc-accent);
-  border-color: var(--hc-accent);
-}
-
-.hc-engine__refresh-btn--spinning svg {
-  animation: hc-spin 0.6s linear infinite;
-}
-
-@keyframes hc-spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-.hc-engine__cards {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.hc-engine__card {
-  padding: 10px 14px;
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card);
-  border: 1px solid var(--hc-border);
-}
-
-.hc-engine__card-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--hc-divider);
-}
-
-.hc-engine__led {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.hc-engine__led--running {
-  background: #34c759;
-  box-shadow: 0 0 6px rgba(52, 199, 89, 0.4);
-}
-
-.hc-engine__led--stopped {
-  background: #ff453a;
-  box-shadow: 0 0 6px rgba(255, 69, 58, 0.4);
-}
-
-.hc-engine__led--checking {
-  background: var(--hc-text-muted);
-  opacity: 0.5;
-}
-
-.hc-engine__card-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--hc-text-primary);
-}
-
-.hc-engine__tag {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: 4px;
-  margin-left: auto;
-}
-
-.hc-engine__tag--go {
-  color: #00add8;
-  background: rgba(0, 173, 216, 0.1);
-}
-
-.hc-engine__tag--core {
-  color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-}
-
-.hc-engine__tag--llm {
-  color: #af52de;
-  background: rgba(175, 82, 222, 0.1);
-}
-
-.hc-engine__table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.hc-engine__table td {
-  font-size: 12px;
-  padding: 3px 0;
-}
-
-.hc-engine__table td:first-child {
-  color: var(--hc-text-muted);
-  width: 100px;
-}
-
-.hc-engine__table td:last-child {
-  color: var(--hc-text-secondary);
-  font-family: 'SF Mono', 'Menlo', monospace;
-  text-align: right;
-}
-
 /* ─── Provider Management ───── */
 .hc-provider__header {
   display: flex;
@@ -1513,6 +1024,9 @@ async function saveConfig() {
 }
 
 .hc-provider__type-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 5px 12px;
   border-radius: var(--hc-radius-sm);
   border: 1px solid var(--hc-border);
@@ -1521,6 +1035,13 @@ async function saveConfig() {
   font-size: 12px;
   cursor: pointer;
   transition: all 0.15s;
+}
+
+.hc-provider__type-logo {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 
 .hc-provider__type-btn:hover {
@@ -1593,6 +1114,13 @@ async function saveConfig() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.hc-provider__logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  flex-shrink: 0;
 }
 
 .hc-provider__led {

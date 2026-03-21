@@ -3,9 +3,10 @@ import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Key, Bot, Sparkles, ArrowRight, ArrowLeft, Check, Loader2, CheckCircle, XCircle } from 'lucide-vue-next'
+import hexagonLogo from '@/assets/logo.png'
 import { useSettingsStore } from '@/stores/settings'
-import { PROVIDER_PRESETS } from '@/config/providers'
-import type { ProviderType } from '@/types'
+import { PROVIDER_PRESETS, PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
+import type { ModelCapability, ModelOption, ProviderType } from '@/types'
 import { testLLMConnection } from '@/api/config'
 
 const router = useRouter()
@@ -28,10 +29,18 @@ const providerModels = computed(() => {
 /** Whether the current provider requires an API key */
 const requiresApiKey = computed(() => provider.value !== 'ollama')
 
-/** Validation: API key required for non-Ollama providers */
+/** Whether the current provider is custom (needs base URL and manual model input) */
+const isCustomProvider = computed(() => provider.value === 'custom')
+
+const customBaseUrl = ref('')
+const customModelId = ref('')
+
+/** Validation: API key required for non-Ollama providers, custom needs base URL */
 const canProceedFromStep0 = computed(() => {
   if (requiresApiKey.value && apiKey.value.trim().length === 0) return false
-  return !!model.value && connectionResult.value?.ok === true
+  if (isCustomProvider.value && !customBaseUrl.value.trim()) return false
+  const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
+  return !!effectiveModel && connectionResult.value?.ok === true
 })
 
 // Reset model when provider changes
@@ -39,11 +48,12 @@ watch(provider, (newProvider) => {
   const preset = PROVIDER_PRESETS[newProvider]
   const defaultModels = preset?.defaultModels ?? []
   model.value = defaultModels[0]?.id ?? ''
-  // Clear API key when switching providers
   apiKey.value = ''
+  customBaseUrl.value = ''
+  customModelId.value = ''
 })
 
-watch([provider, apiKey, model], () => {
+watch([provider, apiKey, model, customBaseUrl, customModelId], () => {
   connectionResult.value = null
 })
 
@@ -72,12 +82,14 @@ async function testConnection() {
   connectionResult.value = null
   try {
     const preset = PROVIDER_PRESETS[provider.value]
+    const effectiveBaseUrl = isCustomProvider.value ? customBaseUrl.value.trim() : preset.defaultBaseUrl
+    const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
     const result = await testLLMConnection({
       provider: {
         type: provider.value,
-        base_url: preset.defaultBaseUrl,
+        base_url: effectiveBaseUrl,
         api_key: requiresApiKey.value ? apiKey.value.trim() : '',
-        model: model.value,
+        model: effectiveModel,
       },
     })
     connectionResult.value = {
@@ -105,25 +117,30 @@ async function finishWizard() {
   }
 
   const preset = PROVIDER_PRESETS[provider.value]
+  const effectiveBaseUrl = isCustomProvider.value ? customBaseUrl.value.trim() : preset.defaultBaseUrl
+  const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
 
   // Build and add provider config
   const selectedModel = providerModels.value.find(m => m.id === model.value)
-  settingsStore.addProvider({
-    name: preset.name,
-    type: provider.value,
-    enabled: true,
-    apiKey: requiresApiKey.value ? apiKey.value.trim() : '',
-    baseUrl: preset.defaultBaseUrl,
-    models: selectedModel
+  const providerModelsForConfig: ModelOption[] = isCustomProvider.value
+    ? [{ id: effectiveModel, name: effectiveModel, capabilities: ['text'] as ModelCapability[] }]
+    : selectedModel
       ? [{ id: selectedModel.id, name: selectedModel.name, capabilities: selectedModel.capabilities ?? ['text'] }]
       : providerModels.value.length > 0
         ? [providerModels.value[0]!]
-        : [],
+        : []
+  settingsStore.addProvider({
+    name: isCustomProvider.value ? t('welcome.customProvider', '自定义') : preset.name,
+    type: provider.value,
+    enabled: true,
+    apiKey: requiresApiKey.value ? apiKey.value.trim() : '',
+    baseUrl: effectiveBaseUrl,
+    models: providerModelsForConfig,
   })
 
   // Set default model
   if (settingsStore.config) {
-    settingsStore.config.llm.defaultModel = model.value
+    settingsStore.config.llm.defaultModel = effectiveModel
     settingsStore.config.general.welcomeCompleted = true
     settingsStore.config.general.defaultAgentRole = selectedAgentRole.value
     await settingsStore.saveConfig(settingsStore.config)
@@ -170,26 +187,27 @@ async function skip() {
 
 <template>
   <div class="h-full flex items-center justify-center" :style="{ background: 'var(--hc-bg-main)' }">
-    <div class="w-full max-w-md px-8">
-      <!-- Logo -->
-      <div class="text-center mb-10">
-        <h1 class="text-2xl font-bold mb-2" :style="{ color: 'var(--hc-text-primary)' }">
+    <div class="w-full max-w-lg px-8">
+      <!-- Logo & Title -->
+      <div class="text-center mb-5">
+        <img :src="hexagonLogo" alt="HexClaw" class="hc-welcome__logo mx-auto mb-3" />
+        <h1 class="text-xl font-bold mb-1" :style="{ color: 'var(--hc-text-primary)' }">
           {{ t('welcome.title') }}
         </h1>
-        <p class="text-sm" :style="{ color: 'var(--hc-text-secondary)' }">
+        <p class="text-xs" :style="{ color: 'var(--hc-text-secondary)' }">
           {{ t('welcome.tagline') }}
         </p>
       </div>
 
       <!-- 步骤指示器 -->
-      <div class="flex items-center justify-center gap-2 mb-8">
+      <div class="flex items-center justify-center gap-2 mb-4">
         <div
           v-for="(s, i) in steps"
           :key="i"
           class="flex items-center"
         >
           <div
-            class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-medium transition-colors"
+            class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-colors"
             :style="{
               background: i <= step ? 'var(--hc-accent)' : 'var(--hc-bg-card)',
               color: i <= step ? '#fff' : 'var(--hc-text-muted)',
@@ -208,13 +226,13 @@ async function skip() {
 
       <!-- 步骤内容 -->
       <div
-        class="rounded-xl border p-6 mb-6"
+        class="rounded-xl border p-5 mb-4"
         :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
       >
-        <h2 class="text-base font-medium mb-1" :style="{ color: 'var(--hc-text-primary)' }">
+        <h2 class="text-sm font-medium mb-0.5" :style="{ color: 'var(--hc-text-primary)' }">
           {{ steps[step]?.title }}
         </h2>
-        <p class="text-xs mb-6" :style="{ color: 'var(--hc-text-secondary)' }">
+        <p class="text-xs mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
           {{ steps[step]?.description }}
         </p>
 
@@ -222,18 +240,18 @@ async function skip() {
         <div v-if="step === 0" class="space-y-4">
           <div>
             <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Provider</label>
-            <select
-              v-model="provider"
-              class="hc-input"
-            >
-              <option value="openai">OpenAI</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="gemini">Google Gemini</option>
-              <option value="qwen">通义千问</option>
-              <option value="ark">豆包 (Ark)</option>
-              <option value="ollama">Ollama (本地)</option>
-            </select>
+            <div class="hc-welcome__provider-grid">
+              <button
+                v-for="preset in getProviderTypes()"
+                :key="preset.type"
+                class="hc-welcome__provider-btn"
+                :class="{ 'hc-welcome__provider-btn--active': provider === preset.type }"
+                @click="provider = preset.type"
+              >
+                <img :src="PROVIDER_LOGOS[preset.type]" :alt="preset.type" class="hc-welcome__provider-logo" />
+                <span>{{ preset.name }}</span>
+              </button>
+            </div>
           </div>
           <div>
             <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">API Key</label>
@@ -252,9 +270,26 @@ async function skip() {
               请输入 API Key 以继续
             </p>
           </div>
+          <div v-if="isCustomProvider">
+            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Base URL</label>
+            <input
+              v-model="customBaseUrl"
+              type="text"
+              class="hc-input"
+              placeholder="https://your-api.example.com/v1"
+            />
+          </div>
           <div>
             <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Model</label>
+            <input
+              v-if="isCustomProvider"
+              v-model="customModelId"
+              type="text"
+              class="hc-input"
+              placeholder="模型 ID（如 gpt-4o）"
+            />
             <select
+              v-else
               v-model="model"
               class="hc-input"
             >
@@ -271,7 +306,7 @@ async function skip() {
                 color: connectionResult?.ok ? '#16a34a' : 'var(--hc-text-secondary)',
                 background: 'var(--hc-bg-main)',
               }"
-              :disabled="connectionTesting || (requiresApiKey && apiKey.trim().length === 0) || !model"
+              :disabled="connectionTesting || (requiresApiKey && apiKey.trim().length === 0) || !(isCustomProvider ? customModelId.trim() : model) || (isCustomProvider && !customBaseUrl.trim())"
               @click="testConnection"
             >
               <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
@@ -346,7 +381,7 @@ async function skip() {
             </div>
             <div class="flex items-center justify-between text-xs mb-2">
               <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryModel') }}</span>
-              <span :style="{ color: 'var(--hc-text-primary)' }">{{ providerModels.find((m) => m.id === model)?.name || model }}</span>
+              <span :style="{ color: 'var(--hc-text-primary)' }">{{ isCustomProvider ? customModelId : (providerModels.find((m) => m.id === model)?.name || model) }}</span>
             </div>
             <div class="flex items-center justify-between text-xs mb-2">
               <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryAgent') }}</span>
@@ -399,3 +434,58 @@ async function skip() {
     </div>
   </div>
 </template>
+
+<style scoped>
+.hc-welcome__logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  object-fit: cover;
+}
+
+.hc-welcome__provider-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.hc-welcome__provider-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.hc-welcome__provider-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hc-welcome__provider-btn:hover {
+  border-color: var(--hc-accent-subtle);
+}
+
+.hc-welcome__provider-btn--active {
+  border-color: var(--hc-accent);
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  font-weight: 600;
+}
+
+.hc-welcome__provider-logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+</style>

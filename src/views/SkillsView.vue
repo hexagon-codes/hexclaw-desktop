@@ -30,7 +30,6 @@ import {
   type ClawHubSkill,
   type ClawHubCategory,
 } from '@/api/skills'
-import PageHeader from '@/components/common/PageHeader.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
@@ -314,26 +313,13 @@ function isHubSkillInstalled(name: string): boolean {
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-    <PageHeader :title="t('skills.title')" :description="t('skills.description')">
-      <template #actions>
-        <div class="flex items-center gap-2">
-          <SearchInput
-            v-if="activeTab === 'installed'"
-            v-model="searchQuery"
-            :placeholder="t('skills.searchPlaceholder')"
-          />
-          <button
-            v-if="activeTab === 'installed'"
-            class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm text-white"
-            :style="{ background: 'var(--hc-accent)' }"
-            @click="showInstallDialog = true"
-          >
-            <Download :size="14" />
-            {{ t('skills.hub.installLocal') }}
-          </button>
-        </div>
-      </template>
-    </PageHeader>
+    <!-- Inline search for installed tab -->
+    <div v-if="activeTab === 'installed'" class="px-6 pt-2">
+      <SearchInput
+        v-model="searchQuery"
+        :placeholder="t('skills.searchPlaceholder')"
+      />
+    </div>
 
     <!-- Tab 切换栏 -->
     <div

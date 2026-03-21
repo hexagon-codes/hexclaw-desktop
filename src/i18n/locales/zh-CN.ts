@@ -3,8 +3,9 @@ export default {
   nav: {
     dashboard: '概览',
     chat: '聊天',
+    channels: 'IM 通道',
     agents: '智能体',
-    knowledge: '知识',
+    knowledge: '知识库',
     knowledgeDocs: '知识库',
     knowledgeMemory: '记忆',
     automation: '自动化',
@@ -24,6 +25,7 @@ export default {
     // 状态
     connected: '引擎运行中',
     disconnected: '引擎已停止',
+    restartEngine: '重启引擎',
     collapse: '收起',
     // 旧 key 兼容（子页面内部仍可能引用）
     tasks: '定时任务',
@@ -274,6 +276,14 @@ export default {
     newTask: '新建任务',
   },
 
+  // 通道（IM 通道独立页）
+  channels: {
+    title: 'IM 通道',
+    eyebrow: 'IM 通道',
+    description: '连接飞书、钉钉、Discord、Telegram，让智能体跨平台协作',
+    addChannel: '添加通道',
+  },
+
   // 集成（聚合页工具栏等）
   integration: {
     title: '集成',
@@ -453,7 +463,7 @@ export default {
     addChannel: '添加通道',
     editChannel: '编辑通道',
     noChannels: '暂无 IM 通道',
-    noChannelsDesc: '添加 IM 通道实例，让 AI 连接飞书、钉钉、Slack 等平台',
+    noChannelsDesc: '添加 IM 通道实例，让 AI 连接飞书、钉钉、Discord、Telegram 等平台',
     selectType: '选择通道类型',
     channelName: '通道名称',
     testConnection: '测试连接',
@@ -758,7 +768,7 @@ export default {
 
   // 引导页（首次启动）
   onboarding: {
-    welcome: '欢迎使用 HexClaw Desktop',
+    welcome: '欢迎使用 HexClaw 河蟹 AI',
     subtitle: '本地优先的 AI 智能体工作台',
     step1: '配置 LLM Provider\n添加 API Key 或连接兼容的模型服务',
     step2: '创建智能体\n选择预设模板或自定义 Agent 角色',
@@ -790,7 +800,7 @@ export default {
 
   // Welcome 页
   welcome: {
-    title: '欢迎使用 HexClaw',
+    title: '欢迎使用 HexClaw 河蟹 AI',
     tagline: '企业级安全的个人 AI Agent',
     step1Title: '配置 LLM',
     step1Desc: '选择服务商、模型并完成真实连接测试',
@@ -876,9 +886,9 @@ export default {
     newChat: '新建聊天',
     coreCapabilities: '核心能力概览',
     coreCapabilitiesDesc: '本地部署、自研 Agent 引擎、MCP 工具协议、多模型统一适配与全链路可观测。',
-    localDeploy: '本地部署，数据私有',
+    localDeploy: '本地部署，一键安装，数据私有，横行无忧',
     localDeployDesc: 'Sidecar 架构运行在本机，API Key 直连模型服务商，中间零代理。',
-    agentEngine: '自研 Agent 引擎',
+    agentEngine: '自研 AI Agent 引擎，全栈开源 Apache 2.0 协议',
     agentEngineDesc: '支持 ReAct / Plan-and-Execute，Tool 自动调度，声明式编排。',
     mcpKnowledge: 'MCP 与知识库',
     mcpKnowledgeDesc: '文件、数据库、API 即插即用，私有知识库支持来源追踪与检索。',
@@ -897,6 +907,10 @@ export default {
     orchestration: '编排',
     local: '本地',
     knowledge: '知识',
+    imChannels: 'IM 通道 — 飞书 / 钉钉 / Discord / Telegram',
+    imChannelsMetric: 'IM 通道',
+    imWorkflow: '智能体通过 IM 通道自动应答',
+    channels: 'IM 通道',
   },
 
   // 团队协作

@@ -6,7 +6,6 @@ import { Download, Plus } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
 import SkillsView from '@/views/SkillsView.vue'
 import McpView from '@/views/McpView.vue'
-import IMChannelsView from '@/views/IMChannelsView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -18,7 +17,6 @@ const router = useRouter()
 
 function resolveTab(path: string): string {
   if (path.startsWith('/integration/mcp')) return 'mcp'
-  if (path.startsWith('/integration/im')) return 'im'
   if (path.startsWith('/integration/diagnostics')) return 'diagnostics'
   return 'skills'
 }
@@ -29,7 +27,6 @@ const integrationSearch = ref('')
 const tabKeyMap: Record<string, string> = {
   'integration-skills': 'skills',
   'integration-mcp': 'mcp',
-  'integration-im': 'im',
   'integration-diagnostics': 'diagnostics',
 }
 
@@ -45,7 +42,7 @@ watch(() => route.path, (p) => {
 })
 
 watch(activeTab, (tab) => {
-  const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp', im: '/integration/im', diagnostics: '/integration/diagnostics' }
+  const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp', diagnostics: '/integration/diagnostics' }
   const target = pathMap[tab] || '/integration'
   if (route.path !== target) router.replace(target)
 })
@@ -93,16 +90,16 @@ function onAddInstance() {
 
 <template>
   <div class="hc-page-shell">
-    <PageToolbar :search-placeholder="t('integration.searchPlaceholder', 'Search skills, MCP, IM channels...')" @search="integrationSearch = $event">
+    <PageToolbar :search-placeholder="t('integration.searchPlaceholder', 'Search skills, MCP servers...')" @search="integrationSearch = $event">
       <template #tabs>
         <SegmentedControl v-model="activeTab" :segments="segments" />
       </template>
       <template #actions>
-        <button class="hc-btn hc-btn-ghost" @click="onExportIntegrationLogs">
+        <button v-if="activeTab === 'diagnostics'" class="hc-btn hc-btn-ghost" @click="onExportIntegrationLogs">
           <Download :size="14" />
           {{ t('integration.exportLogs', 'Export Logs') }}
         </button>
-        <button class="hc-btn hc-btn-primary" @click="onAddInstance">
+        <button v-if="activeTab === 'skills' || activeTab === 'mcp'" class="hc-btn hc-btn-primary" @click="onAddInstance">
           <Plus :size="14" />
           {{ t('integration.addInstance', 'Add Instance') }}
         </button>
@@ -111,12 +108,11 @@ function onAddInstance() {
     <PageHeader
       :eyebrow="t('integration.eyebrow', 'integration')"
       :title="t('integration.title', 'Integrations')"
-      :description="t('integration.description', 'Connect tools, MCP servers, and messaging channels.')"
+      :description="t('integration.description', 'Manage skills, MCP servers, and diagnostics.')"
     />
     <div class="hc-page-shell__content">
       <SkillsView v-if="activeTab === 'skills'" ref="skillsViewRef" />
       <McpView v-else-if="activeTab === 'mcp'" ref="mcpViewRef" />
-      <IMChannelsView v-else-if="activeTab === 'im'" />
       <div v-else-if="activeTab === 'diagnostics'" class="hc-diagnostics">
         <div class="hc-diagnostics__card">
           <div class="hc-diagnostics__title">{{ t('integration.recentFailures', 'Recent Failures') }}</div>

@@ -1,15 +1,13 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { onMounted, onUnmounted, watch } from 'vue'
 import TitleBar from './TitleBar.vue'
 import Sidebar from './Sidebar.vue'
 import DetailPanel from './DetailPanel.vue'
 import InspectorContext from '@/components/inspector/InspectorContext.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
-import AboutModal from '@/components/common/AboutModal.vue'
 import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
-const showAbout = ref(false)
 
 async function syncIMInstancesWhenReady() {
   try {
@@ -42,7 +40,7 @@ watch(
   <div class="hc-app">
     <TitleBar />
     <div class="hc-app__body">
-      <Sidebar @open-about="showAbout = true" />
+      <Sidebar />
       <main class="hc-app__content">
         <slot />
       </main>
@@ -51,7 +49,6 @@ watch(
       </DetailPanel>
     </div>
     <CommandPalette />
-    <AboutModal :visible="showAbout" @close="showAbout = false" />
   </div>
 </template>
 

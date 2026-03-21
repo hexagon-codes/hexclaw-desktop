@@ -121,7 +121,7 @@ const ecosystem = [
   background: rgba(0,0,0,0.45); backdrop-filter: blur(6px);
 }
 .hc-about-modal {
-  width: min(520px, 92%); max-height: 85vh;
+  width: min(520px, 92%); height: 680px;
   background: var(--hc-bg-elevated); border: 1px solid var(--hc-border);
   border-radius: var(--hc-radius-xl, 16px); overflow: hidden;
   box-shadow: 0 24px 64px rgba(0,0,0,0.2);
@@ -130,6 +130,7 @@ const ecosystem = [
 .hc-about-modal__chrome {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 16px; border-bottom: 1px solid var(--hc-border);
+  flex-shrink: 0;
 }
 .hc-about-modal__dots { display: flex; gap: 6px; }
 .hc-about-modal__dot {
@@ -145,21 +146,22 @@ const ecosystem = [
 
 /* Hero */
 .hc-about-modal__hero {
-  padding: 34px 28px 22px; text-align: center;
+  padding: 28px 28px 18px; text-align: center;
   background: linear-gradient(150deg, #1a5580, #4a9ad0);
+  flex-shrink: 0;
 }
 .hc-about-modal__logo {
-  width: 74px; height: 74px; border-radius: 18px;
+  width: 68px; height: 68px; border-radius: 18px;
   box-shadow: 0 6px 24px rgba(0,0,0,0.25);
 }
 .hc-about-modal__name {
-  margin-top: 12px; font-size: 20px; font-weight: 700; color: #fff;
+  margin-top: 10px; font-size: 20px; font-weight: 700; color: #fff;
 }
 .hc-about-modal__subtitle {
-  margin-top: 8px; font-size: 12px; color: rgba(255,255,255,0.55);
+  margin-top: 6px; font-size: 12px; color: rgba(255,255,255,0.55);
 }
 .hc-about-modal__meta {
-  margin-top: 16px; display: flex; align-items: center;
+  margin-top: 14px; display: flex; align-items: center;
   justify-content: center; gap: 8px; font-size: 11px; color: rgba(255,255,255,0.4);
 }
 .hc-about-modal__pill {
@@ -169,32 +171,34 @@ const ecosystem = [
 
 /* Body */
 .hc-about-modal__body {
-  flex: 1; overflow-y: auto; padding: 16px 20px;
-  display: flex; flex-direction: column; gap: 14px;
+  flex: 1; overflow: hidden; padding: 14px 20px;
+  display: flex; flex-direction: column; gap: 10px;
 }
 
 /* Powered */
 .hc-about-modal__powered {
   display: flex; align-items: center; gap: 10px;
-  padding: 12px 14px; border-radius: 12px;
+  padding: 10px 14px; border-radius: 12px;
   background: linear-gradient(135deg, rgba(90,159,212,0.08), rgba(90,159,212,0.02));
   border: 1px solid rgba(90,159,212,0.22);
+  flex-shrink: 0;
 }
-.hc-about-modal__powered-mark { width: 42px; height: 42px; border-radius: 10px; }
+.hc-about-modal__powered-mark { width: 38px; height: 38px; border-radius: 10px; }
 .hc-about-modal__powered-info { display: flex; flex-direction: column; flex: 1; }
 .hc-about-modal__powered-sup {
   font-size: 9px; font-weight: 700; letter-spacing: 1.2px; color: #5a9fd4; opacity: 0.6;
 }
-.hc-about-modal__powered-name { font-size: 14px; font-weight: 700; color: var(--hc-text-primary); }
+.hc-about-modal__powered-name { font-size: 13px; font-weight: 700; color: var(--hc-text-primary); }
 .hc-about-modal__powered-caps { font-size: 10px; color: var(--hc-text-muted); white-space: nowrap; }
 
 /* Tech */
 .hc-about-modal__tech {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 5px;
+  flex-shrink: 0;
 }
 .hc-about-modal__tech-item {
   display: flex; align-items: center; gap: 6px;
-  padding: 8px 12px; border-radius: 10px;
+  padding: 7px 12px; border-radius: 10px;
   background: var(--hc-bg-card); border: 1px solid var(--hc-border);
 }
 .hc-about-modal__tech-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -203,20 +207,21 @@ const ecosystem = [
 
 /* Ecosystem */
 .hc-about-modal__eco-section {
-  padding: 14px; border-radius: 14px;
+  padding: 12px; border-radius: 14px;
   background: var(--hc-bg-card); border: 1px solid var(--hc-border);
+  flex-shrink: 0;
 }
 .hc-about-modal__eco-title {
   font-size: 10px; font-weight: 600; letter-spacing: 1.2px;
-  color: var(--hc-text-muted); opacity: 0.7; margin-bottom: 10px;
+  color: var(--hc-text-muted); opacity: 0.7; margin-bottom: 8px;
 }
 .hc-about-modal__eco-grid {
   display: grid; grid-template-columns: repeat(3, 1fr);
-  gap: 6px;
+  gap: 5px;
 }
 .hc-about-modal__eco-node {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 6px 10px; border-radius: 10px;
+  padding: 6px 8px; border-radius: 10px;
   background: var(--hc-bg-elevated); border: 1px solid var(--hc-border);
   text-decoration: none; transition: border-color 0.15s, background 0.15s; cursor: pointer;
 }
@@ -224,7 +229,7 @@ const ecosystem = [
   border-color: rgba(90,159,212,0.35);
   background: rgba(90,159,212,0.06);
 }
-.hc-about-modal__eco-emoji { font-size: 16px; }
+.hc-about-modal__eco-emoji { font-size: 14px; }
 .hc-about-modal__eco-name {
   font-size: 10px; font-weight: 600; color: var(--hc-text-primary);
   font-family: 'SF Mono', 'Fira Code', monospace;
@@ -234,7 +239,7 @@ const ecosystem = [
 /* Links */
 .hc-about-modal__links {
   display: flex; gap: 6px; justify-content: center; align-items: center;
-  flex-wrap: wrap; margin-top: auto;
+  flex-wrap: wrap; margin-top: auto; flex-shrink: 0;
 }
 .hc-about-modal__links a {
   font-size: 11px; color: #5a9fd4; text-decoration: none;
@@ -247,7 +252,8 @@ const ecosystem = [
 /* Footer */
 .hc-about-modal__footer {
   text-align: center; font-size: 10px; color: var(--hc-text-muted); opacity: 0.5;
-  padding-top: 10px; border-top: 1px solid var(--hc-divider);
+  padding-top: 8px; border-top: 1px solid var(--hc-divider);
+  flex-shrink: 0;
 }
 
 /* Transition */

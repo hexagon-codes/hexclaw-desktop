@@ -43,10 +43,8 @@ onUnmounted(() => {
 <template>
   <ErrorBoundary>
     <AppLayout v-if="!isBlankLayout">
-      <RouterView v-slot="{ Component }">
-        <Transition name="page" mode="out-in" :duration="{ enter: 200, leave: 150 }">
-          <component :is="Component" :key="'/' + (route.path.split('/')[1] || '')" />
-        </Transition>
+      <RouterView v-slot="{ Component, route: viewRoute }">
+        <component :is="Component" :key="viewRoute.path" />
       </RouterView>
     </AppLayout>
     <RouterView v-else />
