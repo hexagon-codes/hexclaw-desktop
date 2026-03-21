@@ -62,6 +62,9 @@ export interface SecurityConfig {
   content_filter: boolean
   max_tokens_per_request: number
   rate_limit_rpm: number
+  conversation_encrypt?: boolean
+  secure_storage?: boolean
+  key_rotation?: boolean
 }
 
 /** 通用配置 */
@@ -71,6 +74,7 @@ export interface GeneralConfig {
   data_dir: string
   auto_start: boolean
   welcomeCompleted?: boolean
+  defaultAgentRole?: string
 }
 
 /** 通知配置 */
@@ -78,11 +82,14 @@ export interface NotificationConfig {
   system_enabled: boolean
   sound_enabled: boolean
   agent_complete: boolean
+  cron_notify?: boolean
+  dnd_enabled?: boolean
 }
 
 /** MCP 配置 */
 export interface MCPConfig {
   default_protocol: string
+  auto_reconnect?: boolean
 }
 
 /** 应用配置 */
@@ -108,4 +115,23 @@ export interface BackendLLMConfig {
   providers: Record<string, BackendLLMProvider>
   routing: { enabled: boolean; strategy: string }
   cache: { enabled: boolean; similarity: number; ttl: string; max_entries: number }
+}
+
+/** 单个 Provider 的连接测试请求 */
+export interface LLMConnectionTestRequest {
+  provider: {
+    type: ProviderType
+    base_url: string
+    api_key: string
+    model: string
+  }
+}
+
+/** 单个 Provider 的连接测试结果 */
+export interface LLMConnectionTestResponse {
+  ok: boolean
+  message: string
+  provider?: string
+  model?: string
+  latency_ms?: number
 }

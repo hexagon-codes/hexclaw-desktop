@@ -97,14 +97,15 @@ HexClaw.app
 ├───────────────────────────────────────────────────────────────────┤
 │  Vue 3 Frontend (WebView)                                         │
 │  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
-│  │Dashboard│  Chat  │ Agents │ Skills │ Canvas │Knowledge│  MCP  │ │
-│  ├────────┼────────┼────────┼────────┼────────┼────────┼───────┤ │
-│  │ Memory  │  Logs  │ Tasks  │   IM   │Settings│ About  │ Quick │ │
+│  │Overview│  Chat  │ Agents │Knowledg│Automati│Integrat│  Logs │ │
+│  │        │        │        │Doc|Mem │Task|Can│Skl|MCP │       │ │
+│  │        │        │        │        │        │IM|Diag │       │ │
 │  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
 │      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
 ├──────┴─────────────────┴──────────────────┴───────────────────────┤
 │  Tauri Commands (Rust → Go)                                       │
-│  check_engine_health · proxy_api_request · get_sidecar_status    │
+│  check_engine_health · proxy_api_request · get_sidecar_status     │
+│  backend_chat · stream_chat · restart_sidecar · get_platform_info │
 ├───────────────────────────────────────────────────────────────────┤
 │  HTTP / WebSocket  ←→  localhost:16060                            │
 ├───────────────────────────────────────────────────────────────────┤
@@ -130,7 +131,7 @@ Frontend and backend communicate via **Tauri IPC proxy** (resolving WebView CORS
 | Frontend framework | Vue 3 (Composition API) | 3.5+ |
 | Language | TypeScript | 5.9+ |
 | State management | Pinia | 3.x |
-| UI component library | Custom design system (Apple-Inspired) | - |
+| UI component library | Naive UI + Custom design system | - |
 | Styling | Tailwind CSS | 4.x |
 | Routing | Vue Router | 5.x |
 | Internationalization | vue-i18n | 11.x |
@@ -243,58 +244,88 @@ hexclaw-desktop/
 ├── src/                          # Vue 3 frontend source
 │   ├── api/                      # API clients (Tauri IPC + HTTP fallback)
 │   │   ├── client.ts             # HTTP/WS/IPC base client
-│   │   ├── chat.ts               # Chat API
+│   │   ├── chat.ts               # Chat API (WebSocket + HTTP fallback)
 │   │   ├── agents.ts             # Agent management API
-│   │   ├── skills.ts             # Skill API
+│   │   ├── skills.ts             # Skill + ClawHub marketplace API
 │   │   ├── canvas.ts             # Workflow canvas API
 │   │   ├── mcp.ts                # MCP protocol API
 │   │   ├── knowledge.ts          # Knowledge base API
 │   │   ├── memory.ts             # Memory system API
 │   │   ├── tasks.ts              # Scheduled tasks API
+│   │   ├── config.ts             # LLM config API (Tauri proxy)
+│   │   ├── desktop.ts            # Desktop features API (notifications/clipboard)
 │   │   ├── im-channels.ts        # IM channel API (Lark/DingTalk/WeCom etc.)
+│   │   ├── team.ts               # Team collaboration API
+│   │   ├── voice.ts              # Voice API (TTS/STT)
 │   │   ├── webhook.ts            # Webhook notification API
-│   │   ├── logs.ts               # Logs API
+│   │   ├── websocket.ts          # Chat WebSocket client
+│   │   ├── logs.ts               # Logs API + WebSocket stream
 │   │   ├── settings.ts           # Settings API
 │   │   └── system.ts             # System info API
 │   ├── components/               # Components
-│   │   ├── chat/                 # Chat components
-│   │   │   ├── ResearchProgress.vue  # Deep research progress panel
-│   │   ├── agent/                # Agent components
-│   │   ├── canvas/               # Canvas components
-│   │   ├── common/               # Shared components (CommandPalette/ContextMenu/Toast etc.)
-│   │   ├── layout/               # Layout components (AppLayout/Sidebar/TitleBar)
-│   │   └── logs/                 # Log components
+│   │   ├── layout/               # Layout (AppLayout/Sidebar/TitleBar/ContextBar/DetailPanel)
+│   │   ├── chat/                 # Chat (ChatInput/SessionList/MarkdownRenderer/ResearchProgress etc.)
+│   │   ├── agent/                # Agent (AgentCard/AgentForm/AgentStatus/AgentConference)
+│   │   ├── agents/               # Multi-Agent collaboration (AgentConference)
+│   │   ├── artifacts/            # Artifacts (ArtifactsPanel/ArtifactPreview/CodeView/DiffView)
+│   │   ├── inspector/            # Inspector (InspectorContext/ContextCard/KeyValueRow/TimelineItem)
+│   │   ├── canvas/               # Canvas (TemplateGallery)
+│   │   ├── settings/             # Settings (SettingsNotification/SettingsSecurity)
+│   │   ├── logs/                 # Logs (LogEntry/LogFilter/LogStats)
+│   │   └── common/               # Shared (CommandPalette/ConfirmDialog/Toast/ErrorBoundary etc.)
 │   ├── views/                    # Page views
-│   │   ├── DashboardView.vue     # Dashboard (home)
-│   │   ├── ChatView.vue          # AI chat
-│   │   ├── AgentsView.vue        # Agent management
-│   │   ├── SkillsView.vue        # Skill marketplace
-│   │   ├── CanvasView.vue        # Workflow canvas
-│   │   ├── McpView.vue           # MCP management
-│   │   ├── KnowledgeView.vue     # Knowledge base
-│   │   ├── MemoryView.vue        # Memory management
-│   │   ├── TasksView.vue         # Scheduled tasks
-│   │   ├── LogsView.vue          # Log viewer
-│   │   ├── IMChannelsView.vue    # IM channel management
-│   │   ├── TeamView.vue          # Team collaboration (planned)
-│   │   ├── SettingsView.vue      # Settings
+│   │   ├── DashboardView.vue     # Dashboard (stats overview + recent activity)
+│   │   ├── ChatView.vue          # AI chat (sessions/attachments/Artifacts/model switching)
+│   │   ├── AgentsView.vue        # Agent management (templates/running/rules/conference)
+│   │   ├── KnowledgeCenterView.vue # Knowledge center (Documents + Memory tabs)
+│   │   ├── KnowledgeView.vue     # Knowledge base (document CRUD/upload/search)
+│   │   ├── MemoryView.vue        # Memory management (edit/search/clear)
+│   │   ├── AutomationView.vue    # Automation (Tasks + Canvas tabs)
+│   │   ├── TasksView.vue         # Scheduled tasks (Cron management)
+│   │   ├── CanvasView.vue        # Workflow canvas (DAG orchestration)
+│   │   ├── IntegrationView.vue   # Integration (Skills + MCP + IM + Diagnostics tabs)
+│   │   ├── SkillsView.vue        # Skill management + ClawHub marketplace
+│   │   ├── McpView.vue           # MCP management (servers/tools/testing)
+│   │   ├── IMChannelsView.vue    # IM channel management (Lark/DingTalk/WeCom etc.)
+│   │   ├── LogsView.vue          # Log viewer (real-time stream/filter/stats)
+│   │   ├── SettingsView.vue      # Settings (LLM/security/notification/webhook/theme/locale)
 │   │   ├── AboutView.vue         # About (separate window)
 │   │   ├── QuickChatView.vue     # Quick chat (separate window)
-│   │   └── WelcomeView.vue       # Welcome page
+│   │   └── WelcomeView.vue       # Onboarding wizard (Provider → model → test)
 │   ├── stores/                   # Pinia state management
+│   │   ├── app.ts                # Global state (connection/sidebar/detail panel)
+│   │   ├── chat.ts               # Chat (sessions/messages/streaming/Artifacts, SQLite persistence)
+│   │   ├── agents.ts             # Agent roles
+│   │   ├── canvas.ts             # Canvas (nodes/edges/workflows/run)
+│   │   ├── logs.ts               # Logs (WebSocket stream/filter/stats)
+│   │   └── settings.ts           # Settings (LLM + security + notification, Tauri Store persistence)
 │   ├── composables/              # Composable functions
-│   ├── i18n/                     # Internationalization resources
-│   ├── router/                   # Router configuration
+│   │   ├── useHexclaw.ts         # hexclaw connection status + health check polling
+│   │   ├── useWebSocket.ts       # WebSocket wrapper (auto-reconnect)
+│   │   ├── useSSE.ts             # SSE streaming requests
+│   │   ├── useShortcuts.ts       # In-app shortcuts (⌘1~7 page switching)
+│   │   ├── useTheme.ts           # Theme (dark/light/follow system)
+│   │   ├── useAutoStart.ts       # Auto-start (Tauri autostart)
+│   │   ├── useAutoUpdate.ts      # Auto-update (Tauri updater)
+│   │   ├── useValidation.ts      # Form validation
+│   │   ├── useKeyboardNav.ts     # Keyboard navigation + focus trap
+│   │   └── usePlatform.ts        # Platform detection (macOS/Windows/Linux)
+│   ├── i18n/                     # Internationalization (Chinese/English)
+│   ├── router/                   # Router (dynamically built from navigation.ts)
 │   ├── types/                    # TypeScript type definitions
 │   ├── utils/                    # Utility functions
-│   │   ├── file-parser.ts        # Document parser (PDF/Word/Excel/CSV)
-│   ├── config/                   # Frontend config (env.ts etc.)
-│   └── assets/                   # Static assets (Logo/icons)
+│   │   └── file-parser.ts        # Document parser (PDF/Word/Excel/CSV)
+│   ├── db/                       # Local database (SQLite)
+│   ├── config/                   # Frontend config
+│   │   ├── env.ts                # Environment config
+│   │   ├── navigation.ts         # Navigation registry (3-tier groups: core/integration/system)
+│   │   └── providers.ts          # LLM Provider config
+│   └── assets/                   # Static assets (Logo/icons/IM logos)
 ├── src-tauri/                    # Tauri (Rust) layer
 │   ├── src/
 │   │   ├── main.rs               # Entry point
 │   │   ├── lib.rs                # App initialization & plugin registration
-│   │   ├── commands.rs           # Tauri IPC commands (health check/API proxy)
+│   │   ├── commands.rs           # Tauri IPC commands (health check/API proxy/streaming chat)
 │   │   ├── sidecar.rs            # Go Sidecar process management
 │   │   ├── tray.rs               # System tray
 │   │   ├── menu.rs               # macOS native menu
@@ -309,6 +340,7 @@ hexclaw-desktop/
 │   ├── guide.md                  # User guide (Chinese)
 │   └── guide.en.md               # User guide (English)
 ├── Casks/                        # Homebrew Cask definition
+├── scripts/                      # CI/build scripts
 ├── .github/                      # GitHub CI/CD
 ├── Makefile                      # Dev commands
 ├── vite.config.ts                # Vite config

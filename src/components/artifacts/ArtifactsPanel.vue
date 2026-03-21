@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { X, FileCode, Eye, GitCompareArrows, Code2 } from 'lucide-vue-next'
 import type { Artifact } from '@/types'
 import ArtifactCodeView from './ArtifactCodeView.vue'
 import ArtifactPreview from './ArtifactPreview.vue'
 import ArtifactDiffView from './ArtifactDiffView.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   artifacts: Artifact[]
@@ -25,14 +28,14 @@ const selectedArtifact = computed(() =>
 
 const tabs = computed(() => {
   const base = [
-    { key: 'list' as TabKey, icon: FileCode, label: '产物' },
-    { key: 'code' as TabKey, icon: Code2, label: '代码' },
+    { key: 'list' as TabKey, icon: FileCode, label: t('chat.artifacts') },
+    { key: 'code' as TabKey, icon: Code2, label: 'Code' },
   ]
   if (selectedArtifact.value?.type === 'html') {
-    base.push({ key: 'preview' as TabKey, icon: Eye, label: '预览' })
+    base.push({ key: 'preview' as TabKey, icon: Eye, label: 'Preview' })
   }
   if (selectedArtifact.value?.previousContent) {
-    base.push({ key: 'diff' as TabKey, icon: GitCompareArrows, label: '变更' })
+    base.push({ key: 'diff' as TabKey, icon: GitCompareArrows, label: 'Diff' })
   }
   return base
 })
@@ -75,8 +78,8 @@ function typeLabel(type: string) {
       <div v-if="activeTab === 'list'" class="hc-artifacts__list">
         <div v-if="artifacts.length === 0" class="hc-artifacts__empty">
           <FileCode :size="28" class="hc-artifacts__empty-icon" />
-          <p>暂无产物</p>
-          <p class="hc-artifacts__empty-hint">AI 生成的代码和文件将显示在这里</p>
+          <p>{{ t('chat.artifactsEmpty') }}</p>
+          <p class="hc-artifacts__empty-hint">{{ t('chat.artifactsHint') }}</p>
         </div>
         <button
           v-for="art in artifacts"
@@ -97,7 +100,7 @@ function typeLabel(type: string) {
       <div v-else-if="activeTab === 'code'" class="hc-artifacts__detail">
         <ArtifactCodeView v-if="selectedArtifact" :artifact="selectedArtifact" />
         <div v-else class="hc-artifacts__empty">
-          <p>请选择一个产物查看详情</p>
+          <p>{{ t('chat.selectArtifact') }}</p>
         </div>
       </div>
 

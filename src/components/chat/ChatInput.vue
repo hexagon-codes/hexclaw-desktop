@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { ArrowUp, Square, Paperclip, Zap, PenLine, Wand2, Mic, MicOff } from 'lucide-vue-next'
 import { speechToText, getVoiceStatus } from '@/api/voice'
 import MentionPopup from './MentionPopup.vue'
 import type { ExecMode } from '@/types'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   streaming?: boolean
@@ -184,15 +187,14 @@ const voiceAvailable = ref(false)
 let mediaRecorder: MediaRecorder | null = null
 let audioChunks: Blob[] = []
 
-// 检查语音服务可用性
-;(async () => {
+onMounted(async () => {
   try {
     const status = await getVoiceStatus()
     voiceAvailable.value = status.stt_enabled
   } catch {
     voiceAvailable.value = false
   }
-})()
+})
 
 async function toggleVoice() {
   if (recording.value) {
@@ -248,7 +250,11 @@ function setInput(text: string) {
   })
 }
 
-defineExpose({ focus, setInput })
+function triggerFileUpload() {
+  handleFileClick()
+}
+
+defineExpose({ focus, setInput, triggerFileUpload })
 </script>
 
 <template>
@@ -258,7 +264,7 @@ defineExpose({ focus, setInput })
       <button
         v-if="showUploadBtn"
         class="hc-chat-input__attach"
-        :title="allowVideo ? '上传图片/视频/文件' : allowImage !== false ? '上传图片/文件' : '上传文件'"
+        :title="allowVideo ? t('chat.uploadImage') : allowImage !== false ? t('chat.uploadImageFile') : t('chat.uploadFileOnly')"
         @click="handleFileClick"
       >
         <Paperclip :size="16" />
@@ -276,7 +282,7 @@ defineExpose({ focus, setInput })
         v-model="inputText"
         rows="1"
         class="hc-chat-input__textarea"
-        placeholder="输入消息...（@ 提及 Agent/Skill）"
+        :placeholder="t('chat.inputPlaceholder')"
         :disabled="disabled"
         @keydown="handleKeydown"
         @input="handleInput"
@@ -286,7 +292,7 @@ defineExpose({ focus, setInput })
         v-if="voiceAvailable"
         class="hc-chat-input__voice"
         :class="{ 'hc-chat-input__voice--active': recording }"
-        :title="recording ? '停止录音' : '语音输入'"
+        :title="recording ? t('chat.voiceStop') : t('chat.voiceStart')"
         @click="toggleVoice"
       >
         <MicOff v-if="recording" :size="15" />
@@ -296,7 +302,7 @@ defineExpose({ focus, setInput })
       <button
         v-if="streaming"
         class="hc-chat-input__send hc-chat-input__send--stop"
-        title="停止生成"
+        :title="t('chat.stopGenerate')"
         @click="emit('stop')"
       >
         <Square :size="12" />
@@ -306,7 +312,7 @@ defineExpose({ focus, setInput })
         class="hc-chat-input__send"
         :class="{ 'hc-chat-input__send--active': canSend }"
         :disabled="!canSend"
-        title="发送 (Enter)"
+        :title="t('chat.sendTitle')"
         @click="handleSend"
       >
         <ArrowUp :size="15" stroke-width="2.5" />
@@ -323,7 +329,7 @@ defineExpose({ focus, setInput })
           @click="emit('update:execMode', 'craft')"
         >
           <PenLine :size="12" />
-          精编
+          {{ t('chat.craftMode') }}
         </button>
         <button
           class="hc-chat-input__mode-btn"
@@ -331,7 +337,7 @@ defineExpose({ focus, setInput })
           @click="emit('update:execMode', 'auto')"
         >
           <Wand2 :size="12" />
-          自动
+          {{ t('chat.autoMode') }}
         </button>
       </div>
 

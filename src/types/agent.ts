@@ -4,6 +4,7 @@ export interface AgentRole {
   title: string
   goal: string
   backstory?: string
+  expertise?: string[]
   tools?: string[]
   constraints?: string[]
 }
@@ -15,4 +16,15 @@ export interface AgentConfig {
   display_name: string
   model: string
   provider: string
+}
+
+/** 路由规则（platform/instance/user/chat → agent_name） */
+export interface AgentRule {
+  id: number
+  platform: string
+  instance_id: string
+  user_id: string
+  chat_id: string
+  agent_name: string
+  priority: number
 }

@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { Search, X, ArrowUp, ArrowDown } from 'lucide-vue-next'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   messages: { id: string; role: string; content: string; timestamp: string }[]
@@ -59,11 +62,11 @@ nextTick(() => inputRef.value?.focus())
       ref="inputRef"
       v-model="query"
       class="hc-search-bar__input"
-      placeholder="搜索消息..."
+      :placeholder="t('chat.searchMessages')"
       @keydown="handleKeydown"
     />
     <span v-if="query" class="hc-search-bar__count">
-      {{ results.length > 0 ? `${currentIndex + 1}/${results.length}` : '无结果' }}
+      {{ results.length > 0 ? `${currentIndex + 1}/${results.length}` : t('cmd.noResults') }}
     </span>
     <button class="hc-search-bar__btn" @click="prev" :disabled="results.length === 0">
       <ArrowUp :size="14" />

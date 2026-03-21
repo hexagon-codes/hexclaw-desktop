@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ScrollText, Trash2, Download, ChevronDown, ChevronRight } from 'lucide-vue-next'
+import { ScrollText, Trash2, Download, ChevronDown, ChevronRight, Package, RefreshCw } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
 import PageHeader from '@/components/common/PageHeader.vue'
+import PageToolbar from '@/components/common/PageToolbar.vue'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 
@@ -23,6 +25,32 @@ const levelCounts = computed(() => {
   }
   return counts
 })
+
+const domainCounts = computed(() => {
+  const counts: Record<string, number> = {}
+  for (const entry of logsStore.entries) {
+    if (!entry.domain) continue
+    counts[entry.domain] = (counts[entry.domain] || 0) + 1
+  }
+  return counts
+})
+
+const availableDomains = computed(() => Object.keys(domainCounts.value).sort())
+
+const recentFailures = computed(() =>
+  logsStore.filteredEntries
+    .filter((entry) => entry.level === 'warn' || entry.level === 'error')
+    .slice(-5)
+    .reverse(),
+)
+
+const errorCount = computed(() =>
+  logsStore.filteredEntries.filter((entry) => entry.level === 'error').length,
+)
+
+const warnCount = computed(() =>
+  logsStore.filteredEntries.filter((entry) => entry.level === 'warn').length,
+)
 
 const levelTabs = computed(() => [
   { key: '', label: `${t('logs.all')} (${logsStore.entries.length})` },
@@ -58,17 +86,23 @@ function setLevel(level: string) {
   logsStore.setFilter({ level: level || undefined })
 }
 
+function setDomain(domain: string) {
+  logsStore.setFilter({ domain: domain || undefined })
+}
+
 function clearLogs() {
   logsStore.clear()
   expandedIds.value.clear()
 }
 
 function toggleExpand(id: string) {
-  if (expandedIds.value.has(id)) {
-    expandedIds.value.delete(id)
+  const next = new Set(expandedIds.value)
+  if (next.has(id)) {
+    next.delete(id)
   } else {
-    expandedIds.value.add(id)
+    next.add(id)
   }
+  expandedIds.value = next
 }
 
 function exportLogs() {
@@ -86,6 +120,29 @@ function exportLogs() {
   a.href = url
   const dateStr = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   a.download = `hexclaw-logs-${dateStr}.log`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+function refreshLogs() {
+  logsStore.loadStats()
+  logsStore.disconnect()
+  logsStore.connect()
+}
+
+function exportDiagnostics() {
+  const payload = {
+    exported_at: new Date().toISOString(),
+    filter: logsStore.filter,
+    stats: logsStore.stats,
+    entries: logsStore.filteredEntries,
+  }
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `hexclaw-diagnostics-${new Date().toISOString().slice(0, 10)}.json`
   a.click()
   URL.revokeObjectURL(url)
 }
@@ -142,7 +199,13 @@ function formatRelativeTime(ts: string): string {
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-    <PageHeader :title="t('logs.title')" :description="t('logs.description')">
+    <PageToolbar :search-placeholder="t('logs.searchPlaceholder', 'Search logs, error codes...')">
+      <template #tabs>
+        <SegmentedControl
+          v-model="activeLevel"
+          :segments="levelTabs.map(l => ({ key: l.key, label: l.label }))"
+        />
+      </template>
       <template #actions>
         <StatusBadge :status="logsStore.connected ? 'online' : 'offline'" />
         <button
@@ -153,6 +216,14 @@ function formatRelativeTime(ts: string): string {
         >
           <Download :size="16" />
         </button>
+        <button class="hc-btn hc-btn-ghost" @click="exportDiagnostics">
+          <Package :size="14" />
+          {{ t('logs.exportDiagnostics', 'Download Diagnostics') }}
+        </button>
+        <button class="hc-btn hc-btn-primary" @click="refreshLogs">
+          <RefreshCw :size="14" />
+          {{ t('logs.refreshLogs', 'Refresh Logs') }}
+        </button>
         <button
           class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
           :style="{ color: 'var(--hc-text-secondary)' }"
@@ -162,9 +233,17 @@ function formatRelativeTime(ts: string): string {
           <Trash2 :size="16" />
         </button>
       </template>
-    </PageHeader>
+    </PageToolbar>
 
-    <!-- 过滤器 -->
+    <PageHeader
+      :eyebrow="t('logs.eyebrow', 'diagnostics')"
+      :title="t('logs.title')"
+      :description="t('logs.description')"
+      :status="logsStore.connected ? t('logs.connected', 'Connected') : t('logs.disconnected', 'Disconnected')"
+      :status-variant="logsStore.connected ? 'success' : 'error'"
+    />
+
+    <!-- Filters -->
     <div class="flex items-center gap-3 px-6 py-2 border-b" :style="{ borderColor: 'var(--hc-border)' }">
       <div class="flex gap-1">
         <button
@@ -181,6 +260,18 @@ function formatRelativeTime(ts: string): string {
         </button>
       </div>
       <div class="flex-1" />
+      <select
+        v-if="availableDomains.length > 0"
+        class="hc-input"
+        style="width: auto; min-width: 120px;"
+        :value="logsStore.filter.domain || ''"
+        @change="setDomain(($event.target as HTMLSelectElement).value)"
+      >
+        <option value="">{{ t('logs.allDomains') }}</option>
+        <option v-for="domain in availableDomains" :key="domain" :value="domain">
+          {{ domain }} ({{ domainCounts[domain] }})
+        </option>
+      </select>
       <SearchInput
         :model-value="logsStore.filter.keyword || ''"
         :placeholder="t('logs.searchPlaceholder')"
@@ -193,6 +284,44 @@ function formatRelativeTime(ts: string): string {
       <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
         {{ logsStore.filteredEntries.length }}
       </span>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-3 px-6 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+      <div class="rounded-xl border px-4 py-3" :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }">
+        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('logs.summaryVisible') }}</div>
+        <div class="text-lg font-semibold mt-1" :style="{ color: 'var(--hc-text-primary)' }">{{ logsStore.filteredEntries.length }}</div>
+      </div>
+      <div class="rounded-xl border px-4 py-3" :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }">
+        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('logs.summaryErrors') }}</div>
+        <div class="text-lg font-semibold mt-1" style="color: #dc2626;">{{ errorCount }}</div>
+      </div>
+      <div class="rounded-xl border px-4 py-3" :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }">
+        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('logs.summaryWarnings') }}</div>
+        <div class="text-lg font-semibold mt-1" style="color: #b45309;">{{ warnCount }}</div>
+      </div>
+      <div class="rounded-xl border px-4 py-3" :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }">
+        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('logs.summaryDomains') }}</div>
+        <div class="text-lg font-semibold mt-1" :style="{ color: 'var(--hc-text-primary)' }">{{ availableDomains.length }}</div>
+      </div>
+    </div>
+
+    <div v-if="recentFailures.length > 0" class="px-6 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+      <div class="text-sm font-medium mb-3" :style="{ color: 'var(--hc-text-primary)' }">{{ t('logs.recentFailures') }}</div>
+      <div class="space-y-2">
+        <div
+          v-for="entry in recentFailures"
+          :key="`failure-${entry.id}`"
+          class="rounded-xl border px-4 py-3"
+          :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+        >
+          <div class="flex items-center gap-2 text-xs mb-1" :style="{ color: 'var(--hc-text-muted)' }">
+            <span :style="{ color: levelColor[entry.level] || 'var(--hc-text-secondary)' }">{{ entry.level.toUpperCase() }}</span>
+            <span>{{ entry.domain || entry.source || '-' }}</span>
+            <span>{{ formatRelativeTime(entry.timestamp) }}</span>
+          </div>
+          <div class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ entry.message }}</div>
+        </div>
+      </div>
     </div>
 
     <!-- 日志流 -->
@@ -238,6 +367,7 @@ function formatRelativeTime(ts: string): string {
           <div class="flex gap-8 text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
             <span>ID: {{ entry.id }}</span>
             <span>Source: {{ entry.source || '-' }}</span>
+            <span>Domain: {{ entry.domain || '-' }}</span>
             <span>Level: {{ entry.level }}</span>
             <span>Time: {{ entry.timestamp }}</span>
           </div>

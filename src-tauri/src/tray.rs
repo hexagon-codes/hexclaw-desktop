@@ -14,13 +14,13 @@ use tauri::{
 
 /// 构建系统托盘
 pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let open = MenuItem::with_id(app, "open", "打开 HexClaw", true, None::<&str>)?;
-    let quick_chat = MenuItem::with_id(app, "quick_chat", "快捷对话...", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open HexClaw", true, None::<&str>)?;
+    let quick_chat = MenuItem::with_id(app, "quick_chat", "Quick Chat...", true, None::<&str>)?;
     let separator1 = PredefinedMenuItem::separator(app)?;
-    let logs = MenuItem::with_id(app, "logs", "日志", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
+    let logs = MenuItem::with_id(app, "logs", "Logs", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 HexClaw", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit HexClaw", true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,

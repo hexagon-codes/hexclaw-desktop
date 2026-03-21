@@ -2,8 +2,9 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Search, MessageSquare, Bot, Clock, Puzzle, BookOpen, Brain, Server, ScrollText, Layout, Settings, MessageCircle, Users, Sun, Plus, BarChart3 } from 'lucide-vue-next'
+import { Search, Sun, Plus } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
+import { navigationItems } from '@/config/navigation'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -27,27 +28,22 @@ function toggleTheme() {
   const root = document.documentElement
   const current = root.getAttribute('data-theme')
   root.setAttribute('data-theme', current === 'dark' ? 'light' : 'dark')
-  localStorage.setItem('hexclaw-theme', current === 'dark' ? 'light' : 'dark')
+  localStorage.setItem('hc-theme', current === 'dark' ? 'light' : 'dark')
 }
 
 const allItems = computed<CmdItem[]>(() => [
-  // Navigation
-  { id: 'chat', label: t('nav.chat'), icon: MessageSquare, action: () => router.push('/chat'), keywords: 'chat 聊天 对话', group: '导航' },
-  { id: 'agents', label: t('nav.agents'), icon: Bot, action: () => router.push('/agents'), keywords: 'agents 智能体 角色', group: '导航' },
-  { id: 'tasks', label: t('nav.tasks'), icon: Clock, action: () => router.push('/tasks'), keywords: 'tasks 任务 定时 cron', group: '导航' },
-  { id: 'skills', label: t('nav.skills'), icon: Puzzle, action: () => router.push('/skills'), keywords: 'skills 技能 插件', group: '导航' },
-  { id: 'knowledge', label: t('nav.knowledge'), icon: BookOpen, action: () => router.push('/knowledge'), keywords: 'knowledge 知识库 文档', group: '导航' },
-  { id: 'memory', label: t('nav.memory'), icon: Brain, action: () => router.push('/memory'), keywords: 'memory 记忆', group: '导航' },
-  { id: 'mcp', label: t('nav.mcp'), icon: Server, action: () => router.push('/mcp'), keywords: 'mcp server 服务器', group: '导航' },
-  { id: 'im-channels', label: t('nav.imChannels'), icon: MessageCircle, action: () => router.push('/im-channels'), keywords: 'im channels 通道 飞书 钉钉 slack', group: '导航' },
-  { id: 'logs', label: t('nav.logs'), icon: ScrollText, action: () => router.push('/logs'), keywords: 'logs 日志', group: '导航' },
-  { id: 'canvas', label: t('nav.canvas'), icon: Layout, action: () => router.push('/canvas'), keywords: 'canvas 画布 工作流', group: '导航' },
-  { id: 'team', label: t('nav.team'), icon: Users, action: () => router.push('/team'), keywords: 'team 团队 协作', group: '导航' },
-  { id: 'dashboard', label: t('nav.dashboard'), icon: BarChart3, action: () => router.push('/dashboard'), keywords: 'dashboard 概览 首页', group: '导航' },
-  { id: 'settings', label: t('nav.settings'), icon: Settings, action: () => router.push('/settings'), keywords: 'settings 设置 偏好', group: '导航' },
+  // Navigation items from registry
+  ...navigationItems.map(item => ({
+    id: item.id,
+    label: t(item.i18nKey),
+    icon: item.icon,
+    action: () => router.push(item.path),
+    keywords: item.keywords,
+    group: t('cmd.groupNav'),
+  })),
   // Actions
-  { id: 'new-chat', label: '新建对话', icon: Plus, action: () => { chatStore.newSession(); router.push('/chat') }, keywords: 'new chat 新建 对话 会话', group: '操作' },
-  { id: 'toggle-theme', label: '切换主题', icon: Sun, action: toggleTheme, keywords: 'theme 主题 深色 浅色 dark light toggle', group: '操作' },
+  { id: 'new-chat', label: t('cmd.newChat'), icon: Plus, action: () => { chatStore.newSession(); router.push('/chat') }, keywords: 'new chat 新建 对话 会话', group: t('cmd.groupAction') },
+  { id: 'toggle-theme', label: t('cmd.toggleTheme'), icon: Sun, action: toggleTheme, keywords: 'theme 主题 深色 浅色 dark light toggle', group: t('cmd.groupAction') },
 ])
 
 const filtered = computed(() => {
@@ -104,12 +100,19 @@ function handleGlobalKeydown(e: KeyboardEvent) {
   }
 }
 
+function handleToggleEvent() {
+  if (visible.value) close()
+  else open()
+}
+
 onMounted(() => {
   document.addEventListener('keydown', handleGlobalKeydown)
+  window.addEventListener('hc:toggle-command-palette', handleToggleEvent)
 })
 
 onUnmounted(() => {
   document.removeEventListener('keydown', handleGlobalKeydown)
+  window.removeEventListener('hc:toggle-command-palette', handleToggleEvent)
 })
 
 defineExpose({ open, close })
@@ -131,7 +134,7 @@ defineExpose({ open, close })
               ref="inputRef"
               v-model="query"
               class="hc-cmd__input"
-              placeholder="搜索页面、功能..."
+              :placeholder="t('cmd.searchPlaceholder')"
               @keydown="handleKeydown"
             />
             <kbd class="hc-cmd__kbd">ESC</kbd>
@@ -143,7 +146,7 @@ defineExpose({ open, close })
                 v-if="idx === 0 || filtered[idx - 1]?.group !== item.group"
                 class="hc-cmd__group-label"
               >
-                {{ item.group || '其他' }}
+                {{ item.group || t('cmd.groupOther') }}
               </div>
               <button
                 class="hc-cmd__item"
@@ -157,7 +160,7 @@ defineExpose({ open, close })
             </template>
           </div>
           <div v-else class="hc-cmd__empty">
-            无匹配结果
+            {{ t('cmd.noResults') }}
           </div>
         </div>
       </div>

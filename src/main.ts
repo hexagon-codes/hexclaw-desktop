@@ -19,7 +19,6 @@ app.use(pinia)
 app.use(router)
 app.use(i18n)
 
-// 全局未处理异常捕获
 app.config.errorHandler = (err, _instance, info) => {
   logger.error(`Vue 未处理异常 [${info}]:`, err)
 }
@@ -29,3 +28,10 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 app.mount('#app')
+
+// 移除启动 splash screen
+const splash = document.getElementById('splash-screen')
+if (splash) {
+  splash.classList.add('fade-out')
+  splash.addEventListener('transitionend', () => splash.remove(), { once: true })
+}

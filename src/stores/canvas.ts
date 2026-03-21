@@ -298,16 +298,18 @@ export const useCanvasStore = defineStore('canvas', () => {
         finishedAt: res.finished_at,
       }
     } else {
-      // 后端不可用 — 本地模拟执行
+      // 后端不可用 — 本地模拟执行（标记为 failed 以区分真实结果）
       for (const nid of order) {
         nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'running' }
         await new Promise((r) => setTimeout(r, 300))
         nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'completed' }
       }
-      runStatus.value = 'completed'
-      runOutput.value = '工作流本地模拟执行完成（后端不可用）'
+      runStatus.value = 'failed'
+      const simMsg = '⚠ 工作流仅在本地模拟执行（后端不可用），结果不可靠'
+      runOutput.value = simMsg
       runResult.value = {
-        output: '工作流本地模拟执行完成（后端不可用）',
+        output: simMsg,
+        error: err?.message ?? 'Backend unavailable',
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
       }

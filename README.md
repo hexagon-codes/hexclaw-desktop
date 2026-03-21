@@ -96,14 +96,15 @@ HexClaw.app
 ├───────────────────────────────────────────────────────────────────┤
 │  Vue 3 前端 (WebView)                                             │
 │  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
-│  │Dashboard│  Chat  │ Agents │ Skills │ Canvas │ 知识库  │  MCP  │ │
-│  ├────────┼────────┼────────┼────────┼────────┼────────┼───────┤ │
-│  │  记忆   │  日志  │  任务  │ IM通道 │  设置  │  关于   │ Quick │ │
+│  │Overview│  Chat  │ Agents │知识中心 │ 自动化 │  集成   │  日志 │ │
+│  │        │        │        │文档|记忆│任务|画布│技能|MCP │       │ │
+│  │        │        │        │        │        │IM|诊断  │       │ │
 │  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
 │      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
 ├──────┴─────────────────┴──────────────────┴───────────────────────┤
 │  Tauri Commands (Rust → Go)                                       │
 │  check_engine_health · proxy_api_request · get_sidecar_status     │
+│  backend_chat · stream_chat · restart_sidecar · get_platform_info │
 ├───────────────────────────────────────────────────────────────────┤
 │  HTTP / WebSocket  ←→  localhost:16060                            │
 ├───────────────────────────────────────────────────────────────────┤
@@ -129,7 +130,7 @@ HexClaw.app
 | 前端框架 | Vue 3 (Composition API) | 3.5+ |
 | 语言 | TypeScript | 5.9+ |
 | 状态管理 | Pinia | 3.x |
-| UI 组件库 | 自研设计系统 (Apple-Inspired) | - |
+| UI 组件库 | Naive UI + 自定义设计系统 | - |
 | 样式 | Tailwind CSS | 4.x |
 | 路由 | Vue Router | 5.x |
 | 国际化 | vue-i18n | 11.x |
@@ -242,58 +243,88 @@ hexclaw-desktop/
 ├── src/                          # Vue 3 前端源码
 │   ├── api/                      # API 客户端 (Tauri IPC + HTTP fallback)
 │   │   ├── client.ts             # HTTP/WS/IPC 基础客户端
-│   │   ├── chat.ts               # 聊天 API
+│   │   ├── chat.ts               # 聊天 API (WebSocket + HTTP 回退)
 │   │   ├── agents.ts             # Agent 管理 API
-│   │   ├── skills.ts             # Skill API
+│   │   ├── skills.ts             # Skill + ClawHub 市场 API
 │   │   ├── canvas.ts             # 工作流画布 API
 │   │   ├── mcp.ts                # MCP 协议 API
 │   │   ├── knowledge.ts          # 知识库 API
 │   │   ├── memory.ts             # 记忆系统 API
 │   │   ├── tasks.ts              # 定时任务 API
-│   │   ├── im-channels.ts       # IM 通道 API (飞书/钉钉/企微等)
+│   │   ├── config.ts             # LLM 配置 API (Tauri 代理)
+│   │   ├── desktop.ts            # 桌面功能 API (通知/剪贴板)
+│   │   ├── im-channels.ts        # IM 通道 API (飞书/钉钉/企微等)
+│   │   ├── team.ts               # 团队协作 API
+│   │   ├── voice.ts              # 语音 API (TTS/STT)
 │   │   ├── webhook.ts            # Webhook 通知 API
-│   │   ├── logs.ts               # 日志 API
+│   │   ├── websocket.ts          # 聊天 WebSocket 客户端
+│   │   ├── logs.ts               # 日志 API + WebSocket 流
 │   │   ├── settings.ts           # 设置 API
 │   │   └── system.ts             # 系统信息 API
 │   ├── components/               # 组件
-│   │   ├── chat/                 # 聊天组件
-│   │   │   ├── ResearchProgress.vue  # 深度研究进度面板
-│   │   ├── agent/                # Agent 组件
-│   │   ├── canvas/               # 画布组件
-│   │   ├── common/               # 通用组件 (CommandPalette/ContextMenu/Toast 等)
-│   │   ├── layout/               # 布局组件 (AppLayout/Sidebar/TitleBar)
-│   │   └── logs/                 # 日志组件
+│   │   ├── layout/               # 布局 (AppLayout/Sidebar/TitleBar/ContextBar/DetailPanel)
+│   │   ├── chat/                 # 聊天 (ChatInput/SessionList/MarkdownRenderer/ResearchProgress 等)
+│   │   ├── agent/                # Agent (AgentCard/AgentForm/AgentStatus/AgentConference)
+│   │   ├── agents/               # 多 Agent 协作 (AgentConference)
+│   │   ├── artifacts/            # 产物 (ArtifactsPanel/ArtifactPreview/ArtifactCodeView/ArtifactDiffView)
+│   │   ├── inspector/            # 右侧详情 (InspectorContext/ContextCard/KeyValueRow/TimelineItem)
+│   │   ├── canvas/               # 画布 (TemplateGallery)
+│   │   ├── settings/             # 设置 (SettingsNotification/SettingsSecurity)
+│   │   ├── logs/                 # 日志 (LogEntry/LogFilter/LogStats)
+│   │   └── common/               # 通用 (CommandPalette/ConfirmDialog/Toast/ErrorBoundary 等)
 │   ├── views/                    # 页面视图
-│   │   ├── DashboardView.vue     # 仪表板 (首页)
-│   │   ├── ChatView.vue          # AI 对话
-│   │   ├── AgentsView.vue        # Agent 管理
-│   │   ├── SkillsView.vue        # Skill 市场
-│   │   ├── CanvasView.vue        # 工作流画布
-│   │   ├── McpView.vue           # MCP 管理
-│   │   ├── KnowledgeView.vue     # 知识库
-│   │   ├── MemoryView.vue        # 记忆管理
-│   │   ├── TasksView.vue         # 定时任务
-│   │   ├── LogsView.vue          # 日志查看
-│   │   ├── IMChannelsView.vue    # IM 通道管理
-│   │   ├── TeamView.vue          # 团队协作 (规划中)
-│   │   ├── SettingsView.vue      # 设置
+│   │   ├── DashboardView.vue     # 仪表板 (概览统计 + 最近活动)
+│   │   ├── ChatView.vue          # AI 对话 (会话/附件/Artifacts/模型切换)
+│   │   ├── AgentsView.vue        # Agent 管理 (模板/运行中/规则/会议)
+│   │   ├── KnowledgeCenterView.vue # 知识中心 (文档 + 记忆 Tab)
+│   │   ├── KnowledgeView.vue     # 知识库 (文档 CRUD/上传/搜索)
+│   │   ├── MemoryView.vue        # 记忆管理 (编辑/搜索/清空)
+│   │   ├── AutomationView.vue    # 自动化 (任务 + 画布 Tab)
+│   │   ├── TasksView.vue         # 定时任务 (Cron 管理)
+│   │   ├── CanvasView.vue        # 工作流画布 (DAG 编排)
+│   │   ├── IntegrationView.vue   # 集成 (技能 + MCP + IM + 诊断 Tab)
+│   │   ├── SkillsView.vue        # Skill 管理 + ClawHub 市场
+│   │   ├── McpView.vue           # MCP 管理 (服务器/工具/测试)
+│   │   ├── IMChannelsView.vue    # IM 通道管理 (飞书/钉钉/企微等)
+│   │   ├── LogsView.vue          # 日志查看 (实时流/过滤/统计)
+│   │   ├── SettingsView.vue      # 设置 (LLM/安全/通知/Webhook/主题/语言)
 │   │   ├── AboutView.vue         # 关于 (独立窗口)
 │   │   ├── QuickChatView.vue     # 快捷聊天 (独立窗口)
-│   │   └── WelcomeView.vue       # 欢迎页
+│   │   └── WelcomeView.vue       # 首次引导 (Provider → 模型 → 测试)
 │   ├── stores/                   # Pinia 状态管理
+│   │   ├── app.ts                # 全局状态 (连接/侧边栏/详情面板)
+│   │   ├── chat.ts               # 聊天 (会话/消息/流式/Artifacts, SQLite 持久化)
+│   │   ├── agents.ts             # Agent 角色
+│   │   ├── canvas.ts             # 画布 (节点/边/工作流/运行)
+│   │   ├── logs.ts               # 日志 (WebSocket 流/过滤/统计)
+│   │   └── settings.ts           # 设置 (LLM + 安全 + 通知, Tauri Store 持久化)
 │   ├── composables/              # 组合式函数
-│   ├── i18n/                     # 国际化资源
-│   ├── router/                   # 路由配置
+│   │   ├── useHexclaw.ts         # hexclaw 连接状态 + 健康检查轮询
+│   │   ├── useWebSocket.ts       # WebSocket 封装 (自动重连)
+│   │   ├── useSSE.ts             # SSE 流式请求
+│   │   ├── useShortcuts.ts       # 应用内快捷键 (⌘1~7 切页面)
+│   │   ├── useTheme.ts           # 主题 (深色/浅色/跟随系统)
+│   │   ├── useAutoStart.ts       # 开机自启 (Tauri autostart)
+│   │   ├── useAutoUpdate.ts      # 自动更新 (Tauri updater)
+│   │   ├── useValidation.ts      # 表单校验
+│   │   ├── useKeyboardNav.ts     # 键盘导航 + 焦点陷阱
+│   │   └── usePlatform.ts        # 平台检测 (macOS/Windows/Linux)
+│   ├── i18n/                     # 国际化 (中文/英文)
+│   ├── router/                   # 路由 (基于 navigation.ts 动态生成)
 │   ├── types/                    # TypeScript 类型定义
 │   ├── utils/                    # 工具函数
-│   │   ├── file-parser.ts        # 文档解析器 (PDF/Word/Excel/CSV)
-│   ├── config/                   # 前端配置 (env.ts 等)
-│   └── assets/                   # 静态资源 (Logo/图标)
+│   │   └── file-parser.ts        # 文档解析器 (PDF/Word/Excel/CSV)
+│   ├── db/                       # 本地数据库 (SQLite)
+│   ├── config/                   # 前端配置
+│   │   ├── env.ts                # 环境配置
+│   │   ├── navigation.ts         # 导航注册表 (三层分组: 核心/集成/系统)
+│   │   └── providers.ts          # LLM Provider 配置
+│   └── assets/                   # 静态资源 (Logo/图标/IM Logo)
 ├── src-tauri/                    # Tauri (Rust) 层
 │   ├── src/
 │   │   ├── main.rs               # 入口
 │   │   ├── lib.rs                # 应用初始化 & 插件注册
-│   │   ├── commands.rs           # Tauri IPC 命令 (健康检查/API 代理)
+│   │   ├── commands.rs           # Tauri IPC 命令 (健康检查/API 代理/流式聊天)
 │   │   ├── sidecar.rs            # Go Sidecar 进程管理
 │   │   ├── tray.rs               # 系统托盘
 │   │   ├── menu.rs               # macOS 原生菜单
@@ -305,8 +336,10 @@ hexclaw-desktop/
 │   ├── build.rs                  # Rust 构建脚本
 │   └── Cargo.toml                # Rust 依赖
 ├── docs/                         # 文档
-│   └── guide.md                  # 使用指南
+│   ├── guide.md                  # 使用指南 (中文)
+│   └── guide.en.md               # 使用指南 (英文)
 ├── Casks/                        # Homebrew Cask 定义
+├── scripts/                      # CI/构建脚本
 ├── .github/                      # GitHub CI/CD
 ├── Makefile                      # 开发命令
 ├── vite.config.ts                # Vite 配置

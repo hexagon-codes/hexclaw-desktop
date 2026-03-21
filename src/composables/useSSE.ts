@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, onUnmounted, getCurrentInstance } from 'vue'
 import { apiSSE } from '@/api/client'
 
 /** SSE 流式请求封装 */
@@ -22,6 +22,7 @@ export function useSSE() {
     onChunk?: (text: string) => void,
     onDone?: (fullContent: string) => void,
   ) {
+    if (streaming.value) return
     streaming.value = true
     content.value = ''
     error.value = null
@@ -34,7 +35,6 @@ export function useSSE() {
         const { done, value } = await reader.read()
         if (done) break
 
-        // 尝试解析 JSON，提取 content 字段
         try {
           const parsed = JSON.parse(value)
           const chunk = typeof parsed.content === 'string' ? parsed.content
@@ -67,6 +67,10 @@ export function useSSE() {
       reader = null
     }
     streaming.value = false
+  }
+
+  if (getCurrentInstance()) {
+    onUnmounted(stop)
   }
 
   return {

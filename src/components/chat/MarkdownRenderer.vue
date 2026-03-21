@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 
@@ -7,12 +8,11 @@ const props = defineProps<{
   content: string
 }>()
 
-const md = createMarkdownRenderer()
-let initialized = false
+const { t } = useI18n()
 
-function createMarkdownRenderer() {
-  if ((globalThis as unknown as Record<string, unknown>).__hc_md) return (globalThis as unknown as Record<string, unknown>).__hc_md as MarkdownIt
+let activeInstanceCount = 0
 
+function createMarkdownRenderer(copyLabel: string) {
   const instance = new MarkdownIt({
     html: false,
     linkify: true,
@@ -28,13 +28,12 @@ function createMarkdownRenderer() {
     return `<div class="code-block-wrapper">
       <div class="code-block-header">
         <span class="code-lang">${lang || 'text'}</span>
-        <button class="copy-btn" data-code="${instance.utils.escapeHtml(code)}">复制</button>
+        <button class="copy-btn" data-code="${instance.utils.escapeHtml(code)}">${instance.utils.escapeHtml(copyLabel)}</button>
       </div>
       <pre class="code-block"><code class="language-${lang}">${instance.utils.escapeHtml(code)}</code></pre>
     </div>`
   }
 
-  ;(globalThis as unknown as Record<string, unknown>).__hc_md = instance
   return instance
 }
 
@@ -46,18 +45,32 @@ function handleCopyClick(e: MouseEvent) {
 }
 
 onMounted(() => {
-  if (!initialized) {
+  if (activeInstanceCount === 0) {
     document.addEventListener('click', handleCopyClick)
-    initialized = true
   }
+  activeInstanceCount++
 })
 
 onUnmounted(() => {
-  document.removeEventListener('click', handleCopyClick)
-  initialized = false
+  activeInstanceCount--
+  if (activeInstanceCount === 0) {
+    document.removeEventListener('click', handleCopyClick)
+  }
 })
 
-const rendered = computed(() => DOMPurify.sanitize(md.render(props.content)))
+const cachedCopyLabel = ref(t('common.copy'))
+const mdInstance = ref(createMarkdownRenderer(cachedCopyLabel.value))
+
+watch(() => t('common.copy'), (newLabel) => {
+  if (newLabel !== cachedCopyLabel.value) {
+    cachedCopyLabel.value = newLabel
+    mdInstance.value = createMarkdownRenderer(newLabel)
+  }
+})
+
+const rendered = computed(() => {
+  return DOMPurify.sanitize(mdInstance.value.render(props.content))
+})
 </script>
 
 <template>

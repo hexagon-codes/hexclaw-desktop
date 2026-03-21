@@ -8,13 +8,10 @@
 - [Interface Overview](#interface-overview)
 - [AI Chat](#ai-chat)
 - [Agent Management](#agent-management)
-- [Skill System](#skill-system)
-- [Workflow Canvas](#workflow-canvas)
-- [MCP Tool Integration](#mcp-tool-integration)
-- [Knowledge Base](#knowledge-base)
-- [Memory System](#memory-system)
-- [Scheduled Tasks](#scheduled-tasks)
-- [Team Collaboration](#team-collaboration)
+- [Knowledge Center](#knowledge-center)
+- [Automation](#automation)
+- [Integration](#integration)
+- [Logs](#logs)
 - [Settings & Configuration](#settings--configuration)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [System Tray](#system-tray)
@@ -90,20 +87,30 @@ HexClaw uses a classic three-column layout:
 
 ### Sidebar Navigation
 
-| Icon | Page | Description |
-|------|------|-------------|
-| Dashboard | Dashboard | System overview and quick access |
-| Chat | Chat | AI multi-turn conversation |
-| Agents | Agents | Agent role management |
-| Tasks | Tasks | Scheduled task management |
-| Skills | Skills | Skill marketplace and management |
-| Knowledge | Knowledge | RAG knowledge management |
-| Memory | Memory | Long-term memory management |
-| MCP | MCP | External tool integration |
-| Logs | Logs | Real-time runtime logs |
-| Canvas | Canvas | Workflow orchestration |
-| Team | Team | Multi-user collaboration |
-| Settings | Settings | App configuration |
+The navigation uses a three-tier grouping design with 8 top-level entries:
+
+**Workspace (Core)**
+
+| Page | Description | Sub-tabs |
+|------|-------------|----------|
+| Dashboard | System overview, statistics, and recent activity | — |
+| Chat | AI multi-turn conversation, session management, Artifacts | — |
+| Agents | Agent templates, running instances, routing rules, conference mode | — |
+| Knowledge | Knowledge and memory management | Documents · Memory |
+| Automation | Scheduled tasks and workflow orchestration | Tasks · Canvas |
+
+**Integration & Ops**
+
+| Page | Description | Sub-tabs |
+|------|-------------|----------|
+| Integration | External tools and channel integration | Skills · MCP · IM Channels · Diagnostics |
+| Logs | Real-time runtime log viewing and filtering | — |
+
+**System**
+
+| Page | Description |
+|------|-------------|
+| Settings | LLM providers, security, notifications, webhooks, theme, locale, etc. |
 
 ### Engine Status Indicator
 
@@ -183,79 +190,26 @@ Supports multiple Agents collaborating in the same session. Use Agent conference
 
 ---
 
-## Skill System
+## Knowledge Center
 
-Skills are external tool capabilities that Agents can invoke.
+The Knowledge Center combines document knowledge base and long-term memory management, accessible via in-page tabs.
 
-### Built-in Skills
-
-| Skill | Description | Default State |
-|-------|-------------|---------------|
-| Search | Web search | Enabled |
-| Weather | Weather query | Enabled |
-| Translate | Translation | Enabled |
-| Summary | Text summarization | Enabled |
-| Browser | Web browsing | Enabled |
-| Code | Code execution | **Disabled** (high risk) |
-| Shell | Command execution | **Disabled** (high risk) |
-
-### Skill Marketplace
-
-Browse and install third-party Skills contributed by the community, with one-click install/uninstall.
-
----
-
-## Workflow Canvas
-
-Visually orchestrate Agent workflows:
-
-1. Go to the **Canvas** page
-2. Drag nodes from the left panel (Agent / Tool / Condition etc.)
-3. Connect nodes to establish execution flow
-4. Click "Run" to execute the entire workflow
-
-Supports DAG (Directed Acyclic Graph) execution engine with automatic parallel processing of independent nodes.
-
----
-
-## MCP Tool Integration
-
-[Model Context Protocol (MCP)](https://modelcontextprotocol.io/) is a standardized AI tool integration protocol.
-
-### Adding an MCP Server
-
-1. Go to the **MCP** page
-2. Click "Add Server"
-3. Configure the connection:
-   - **stdio** — local process communication
-   - **SSE** — Server-Sent Events
-   - **Streamable HTTP** — HTTP streaming
-4. Once connected, tools provided by the server are automatically registered to the Agent's available tool list
-
-### Configuring in Settings
-
-In **Settings → MCP** you can configure the default protocol and auto-reconnect behavior.
-
----
-
-## Knowledge Base
+### Knowledge Base (Documents Tab)
 
 RAG (Retrieval-Augmented Generation) based knowledge management:
 
-### Upload Documents
+#### Upload Documents
 
-1. Go to the **Knowledge** page
+1. Go to the **Knowledge Center** page, select the **Documents** tab
 2. Click "Upload Document"
 3. Supported formats: PDF / Markdown / TXT / DOCX
 4. Documents are automatically parsed, chunked, and vectorized
 
-### Using the Knowledge Base
+#### Using the Knowledge Base
 
-During conversations, Agents automatically retrieve relevant content from the knowledge base as context to provide more accurate answers.
+During conversations, Agents automatically retrieve relevant content from the knowledge base as context to provide more accurate answers. You can also search documents and rebuild indexes.
 
----
-
-## Memory System
+### Memory System (Memory Tab)
 
 HexClaw supports cross-session long-term memory:
 
@@ -263,32 +217,100 @@ HexClaw supports cross-session long-term memory:
 - **Long-term memory** — cross-session persistent knowledge and preferences
 - **Semantic search** — retrieve relevant memories based on vector similarity
 
-In the **Memory** page you can view, search, and manage stored memories.
+In the Knowledge Center's **Memory** tab you can view, search, edit, and clear stored memories.
 
 ---
 
-## Scheduled Tasks
+## Automation
+
+The Automation page combines scheduled tasks and workflow canvas, accessible via in-page tabs.
+
+### Scheduled Tasks (Tasks Tab)
 
 Use Cron expressions to periodically execute Agent tasks:
 
-1. Go to the **Tasks** page
+1. Go to the **Automation** page, select the **Tasks** tab
 2. Click "New Task"
 3. Configure:
    - **Name** — task description
    - **Cron expression** — e.g. `0 9 * * *` (daily at 9:00)
    - **Prompt** — the Agent instruction to execute
-4. Tasks run automatically on schedule, results are sent as system notifications
+4. Tasks support pause/resume/manual trigger, with execution history
+5. Results are sent as system notifications
+
+### Workflow Canvas (Canvas Tab)
+
+Visually orchestrate Agent workflows:
+
+1. Go to the **Automation** page, select the **Canvas** tab
+2. Choose from the template gallery or create manually
+3. Add nodes (Agent / Tool / Condition / Output)
+4. Connect nodes to establish execution flow
+5. Click "Run" to execute the entire workflow
+
+Supports DAG (Directed Acyclic Graph) execution engine with automatic parallel processing of independent nodes. Includes built-in templates (daily digest, email classification, research pipeline, code review, etc.).
 
 ---
 
-## Team Collaboration
+## Integration
 
-The **Team** page provides multi-user collaboration features:
+The Integration page provides unified management for all external tools and channel integrations, with four sub-tabs.
 
-- Create and manage workspaces
-- Invite team members
-- Share Agent configurations and session records
-- Centrally manage team LLM usage and quotas
+### Skill System (Skills Tab)
+
+Skills are external tool capabilities that Agents can invoke.
+
+**Installed Skills**: View and manage installed Skills, with enable/disable toggle.
+
+**ClawHub Skill Marketplace**: Browse, search, and install community-contributed Skills. Filter by category (coding/research/writing/data/automation), with one-click install/uninstall.
+
+### MCP Tool Integration (MCP Tab)
+
+[Model Context Protocol (MCP)](https://modelcontextprotocol.io/) is a standardized AI tool integration protocol.
+
+1. Go to the **Integration** page, select the **MCP** tab
+2. Click "Add Server"
+3. Configure the connection:
+   - **stdio** — local process communication
+   - **SSE** — Server-Sent Events
+   - **Streamable HTTP** — HTTP streaming
+4. Once connected, tools provided by the server are automatically registered to the Agent's available tool list
+5. View tool listings and test tools online
+
+### IM Channel Management (IM Channels Tab)
+
+Chat with AI remotely via IM channels:
+
+1. Go to the **Integration** page, select the **IM Channels** tab
+2. Click "Add Channel"
+3. Supported IM platforms:
+   - **Lark** (飞书)
+   - **DingTalk** (钉钉)
+   - **WeCom** (企业微信)
+   - **Slack**
+   - **Discord**
+   - **Telegram**
+   - **WeChat** (微信)
+4. Enter the corresponding platform's Bot Token or Webhook URL
+5. Test channel connectivity online
+
+### Diagnostics (Diagnostics Tab)
+
+View recent integration failure records for troubleshooting connectivity issues.
+
+---
+
+## Logs
+
+Real-time log viewing and filtering:
+
+1. Go to the **Logs** page
+2. Receive real-time log streams via WebSocket
+3. Filter by level: debug / info / warn / error
+4. Filter by domain for specific module logs
+5. Expand individual log entries for details
+6. View recent failure summary
+7. Download log files
 
 ---
 
@@ -356,7 +378,11 @@ Each component shows runtime status (green/red), version, and key info. Click th
 |----------|--------|
 | `⌘+1` | Switch to Chat page |
 | `⌘+2` | Switch to Agents page |
-| `⌘+3` | Switch to Tasks page |
+| `⌘+3` | Switch to Automation page |
+| `⌘+4` | Switch to Integration page |
+| `⌘+5` | Switch to Logs page |
+| `⌘+6` | Switch to Knowledge Center |
+| `⌘+7` | Switch to Settings page |
 | `⌘+N` | New conversation |
 | `⌘+,` | Open Settings |
 | `⌘+K` | Open Command Palette |
@@ -380,9 +406,9 @@ When the main window is closed, HexClaw minimizes to the system tray rather than
 
 - **Left-click tray icon** — show/hide main window
 - **Right-click menu**:
-  - Show main window
-  - New conversation
-  - Quick Chat
+  - Open HexClaw (show main window)
+  - Quick Chat... (quick chat window)
+  - Logs (view logs)
   - Settings
   - Quit
 

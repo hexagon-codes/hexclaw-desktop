@@ -1,13 +1,11 @@
 import { nanoid } from 'nanoid'
+import { env } from '@/config/env'
 
 // ─── 类型定义 ────────────────────────────────────────
 
 export type IMChannelType =
   | 'feishu'
   | 'dingtalk'
-  | 'wecom'
-  | 'wechat'
-  | 'slack'
   | 'discord'
   | 'telegram'
 
@@ -46,7 +44,7 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
       key: 'verification_token',
       label: '验证 Token（选填）',
       labelEn: 'Verification Token (optional)',
-      placeholder: '事件订阅验证，可留空',
+      placeholder: '需与飞书事件订阅保持一致；若留空，平台端也必须留空',
       secret: true,
       optional: true,
     },
@@ -65,59 +63,6 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
       label: 'Robot Code',
       labelEn: 'Robot Code',
       placeholder: '输入 Robot Code',
-    },
-  ],
-  wecom: [
-    { key: 'corp_id', label: '企业 ID', labelEn: 'Corp ID', placeholder: '输入企业 ID' },
-    { key: 'agent_id', label: '应用 ID', labelEn: 'Agent ID', placeholder: '输入应用 Agent ID' },
-    {
-      key: 'secret',
-      label: 'Secret',
-      labelEn: 'Secret',
-      placeholder: '输入应用 Secret',
-      secret: true,
-    },
-    { key: 'token', label: 'Token', labelEn: 'Token', placeholder: '输入回调 Token', secret: true },
-    {
-      key: 'aes_key',
-      label: 'AES Key',
-      labelEn: 'AES Key',
-      placeholder: '输入 AES Key',
-      secret: true,
-    },
-  ],
-  wechat: [
-    { key: 'app_id', label: 'App ID', labelEn: 'App ID', placeholder: '输入 App ID' },
-    {
-      key: 'app_secret',
-      label: 'App Secret',
-      labelEn: 'App Secret',
-      placeholder: '输入 App Secret',
-      secret: true,
-    },
-    { key: 'token', label: 'Token', labelEn: 'Token', placeholder: '输入 Token', secret: true },
-    {
-      key: 'aes_key',
-      label: 'AES Key',
-      labelEn: 'AES Key',
-      placeholder: '输入 AES Key',
-      secret: true,
-    },
-  ],
-  slack: [
-    {
-      key: 'token',
-      label: 'Bot Token',
-      labelEn: 'Bot Token',
-      placeholder: 'xoxb-xxxxxxxxxxxx',
-      secret: true,
-    },
-    {
-      key: 'signing_secret',
-      label: 'Signing Secret',
-      labelEn: 'Signing Secret',
-      placeholder: '输入 Signing Secret',
-      secret: true,
     },
   ],
   discord: [
@@ -152,9 +97,6 @@ export interface IMChannelMeta {
 
 import feishuLogo from '@/assets/im-logos/feishu.svg'
 import dingtalkLogo from '@/assets/im-logos/dingtalk.svg'
-import wecomLogo from '@/assets/im-logos/wecom.svg'
-import wechatLogo from '@/assets/im-logos/wechat.svg'
-import slackLogo from '@/assets/im-logos/slack.svg'
 import discordLogo from '@/assets/im-logos/discord.svg'
 import telegramLogo from '@/assets/im-logos/telegram.svg'
 
@@ -174,30 +116,6 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
     logo: dingtalkLogo,
     color: '#0089ff',
     helpUrl: 'https://open.dingtalk.com/document/',
-  },
-  {
-    type: 'wecom',
-    name: '企业微信',
-    nameEn: 'WeCom',
-    logo: wecomLogo,
-    color: '#0082EF',
-    helpUrl: 'https://developer.work.weixin.qq.com/document/',
-  },
-  {
-    type: 'wechat',
-    name: '微信',
-    nameEn: 'WeChat',
-    logo: wechatLogo,
-    color: '#07c160',
-    helpUrl: 'https://developers.weixin.qq.com/doc/',
-  },
-  {
-    type: 'slack',
-    name: 'Slack',
-    nameEn: 'Slack',
-    logo: slackLogo,
-    color: '#4a154b',
-    helpUrl: 'https://api.slack.com/docs',
   },
   {
     type: 'discord',
@@ -220,24 +138,12 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
 /** 各平台简要配置说明 */
 export const CHANNEL_HELP_TEXT: Record<IMChannelType, { zh: string; en: string }> = {
   feishu: {
-    zh: '前往飞书开放平台创建企业自建应用，获取 App ID 和 App Secret，并启用机器人能力。',
-    en: 'Create an app on Feishu Open Platform, get App ID & App Secret, and enable Bot capability.',
+    zh: '前往飞书开放平台创建企业自建应用，获取 App ID 和 App Secret，启用机器人能力。使用 WebSocket 长连接模式，无需公网地址。',
+    en: 'Create an app on Feishu Open Platform, get App ID & App Secret, enable Bot capability. Uses WebSocket long connection, no public URL needed.',
   },
   dingtalk: {
-    zh: '在钉钉开放平台创建企业内部应用，获取 App Key 和 App Secret，并创建机器人。',
-    en: 'Create an internal app on DingTalk Open Platform, get App Key & App Secret, and add a Robot.',
-  },
-  wecom: {
-    zh: '在企业微信管理后台创建自建应用，获取 Corp ID、Agent ID 和 Secret，配置回调 URL。',
-    en: 'Create a self-built app in WeCom Admin, get Corp ID, Agent ID & Secret, and set callback URL.',
-  },
-  wechat: {
-    zh: '在微信公众平台注册服务号，获取 App ID 和 App Secret，配置服务器 URL 和 Token。',
-    en: 'Register a Service Account on WeChat Official Platform, get App ID & App Secret, and configure server URL.',
-  },
-  slack: {
-    zh: '在 Slack API 创建 App，获取 Bot Token（xoxb-）和 Signing Secret，安装到工作区。',
-    en: 'Create an App on Slack API, get Bot Token (xoxb-) and Signing Secret, install to workspace.',
+    zh: '在钉钉开放平台创建企业内部应用，获取 App Key 和 App Secret，并创建机器人。使用 Stream 长连接模式，无需公网地址。',
+    en: 'Create an internal app on DingTalk Open Platform, get App Key & App Secret, and add a Robot. Uses Stream long connection, no public URL needed.',
   },
   discord: {
     zh: '在 Discord Developer Portal 创建 Bot，获取 Bot Token，添加到服务器并启用消息权限。',
@@ -256,6 +162,10 @@ export function getChannelHelpText(type: IMChannelType, locale: string): string 
 
 export function getChannelMeta(type: IMChannelType): IMChannelMeta {
   return CHANNEL_TYPES.find((c) => c.type === type) ?? CHANNEL_TYPES[0]!
+}
+
+export function getPlatformHookUrl(instance: Pick<IMInstance, 'name' | 'type'>): string {
+  return `${env.apiBase}/api/v1/platforms/hooks/${instance.type}/${encodeURIComponent(instance.name)}`
 }
 
 // ─── Tauri Store 持久化 ──────────────────────────────

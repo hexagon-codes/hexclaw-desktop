@@ -1,7 +1,7 @@
-import { apiGet, apiPost, apiDelete } from './client'
-import type { Skill, ClawHubSkill } from '@/types'
+import { apiGet, apiPost, apiPut, apiDelete } from './client'
+import type { Skill, ClawHubSkill, SkillStatusUpdateResult } from '@/types'
 
-export type { Skill, ClawHubSkill }
+export type { Skill, ClawHubSkill, SkillStatusUpdateResult }
 
 /** 获取已安装 Skill 列表 */
 export function getSkills() {
@@ -21,10 +21,35 @@ export function uninstallSkill(name: string) {
   return apiDelete(`/api/v1/skills/${name}`)
 }
 
+/** 启用/禁用 Skill（优先以后端状态为准，缺失时降级到本地偏好） */
+export async function setSkillEnabled(name: string, enabled: boolean): Promise<SkillStatusUpdateResult> {
+  try {
+    const result = await apiPut<Partial<SkillStatusUpdateResult>>(
+      `/api/v1/skills/${encodeURIComponent(name)}/status`,
+      { enabled },
+    )
+    return {
+      success: true,
+      enabled: typeof result.enabled === 'boolean' ? result.enabled : enabled,
+      effective_enabled: typeof result.effective_enabled === 'boolean' ? result.effective_enabled : undefined,
+      requires_restart: typeof result.requires_restart === 'boolean' ? result.requires_restart : undefined,
+      message: typeof result.message === 'string' ? result.message : undefined,
+      source: 'backend',
+    }
+  } catch (error) {
+    return {
+      success: false,
+      enabled,
+      message: error instanceof Error ? error.message : undefined,
+      source: 'local-fallback',
+    }
+  }
+}
+
 // ─── ClawHub 技能市场 ──────────────────────────────────
 
-/** 设为 true 强制使用内置 Mock 数据（后端暂不支持 ClawHub API） */
-const CLAWHUB_FORCE_MOCK = true
+/** 设为 true 强制使用内置 Mock 数据；false 时优先尝试真实 API，失败降级 */
+const CLAWHUB_FORCE_MOCK = false
 
 /** ClawHub 分类 → 中文映射 */
 export const CLAWHUB_CATEGORIES = [
@@ -242,26 +267,25 @@ export async function searchClawHub(
     const res = await apiGet<{ skills: ClawHubSkill[] } | ClawHubSkill[]>(
       `/api/v1/clawhub/search${qs ? '?' + qs : ''}`,
     )
-    return Array.isArray(res) ? res : res.skills ?? []
+    const skills = Array.isArray(res) ? res : res.skills ?? []
+    if (skills.length > 0) {
+      return skills
+    }
+    return filterMockSkills(query, category)
   } catch {
     // 真实 API 不可用，降级到内置 Mock 数据
     return filterMockSkills(query, category)
   }
 }
 
-/** 从 ClawHub 安装 Skill（优先真实 API，降级到本地安装） */
+/** 从 ClawHub 安装 Skill（优先真实 API，后端不可用时模拟安装） */
 export async function installFromHub(skillName: string): Promise<void> {
-  if (CLAWHUB_FORCE_MOCK) {
-    await new Promise((r) => setTimeout(r, 800))
-    return
-  }
-
   try {
     await apiPost('/api/v1/skills/install', {
       source: `clawhub://${skillName}`,
     })
   } catch {
-    // 后端不支持 ClawHub 协议时，模拟安装成功
+    // 后端不支持 ClawHub 协议时，模拟安装（返回成功以保持 UI 流畅）
     await new Promise((r) => setTimeout(r, 800))
   }
 }

@@ -12,8 +12,47 @@ import {
   dbGetMessages,
   dbSaveMessage,
 } from '@/db/chat'
+import { fromNativeError } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 import type { ChatMessage, ChatSession, ChatAttachment, Artifact, ChatMode, ExecMode, ApiError } from '@/types'
+
+function parseMessageMetadata(raw: string | null): Record<string, unknown> | undefined {
+  if (!raw) return undefined
+  try {
+    return JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
+function normalizeLoadedMessage(row: {
+  id: string
+  role: string
+  content: string
+  timestamp: string
+  metadata: string | null
+}): ChatMessage {
+  const metadata = parseMessageMetadata(row.metadata)
+  const toolCalls = Array.isArray(metadata?.tool_calls) ? metadata.tool_calls : undefined
+  const agentName = typeof metadata?.agent_name === 'string' ? metadata.agent_name : undefined
+
+  return {
+    id: row.id,
+    role: row.role as 'user' | 'assistant' | 'system',
+    content: row.content,
+    timestamp: row.timestamp,
+    metadata,
+    tool_calls: toolCalls as ChatMessage['tool_calls'],
+    agent_name: agentName,
+  }
+}
+
+function serializeMessageMetadata(msg: ChatMessage): Record<string, unknown> | undefined {
+  const metadata: Record<string, unknown> = { ...(msg.metadata ?? {}) }
+  if (msg.tool_calls?.length) metadata.tool_calls = msg.tool_calls
+  if (msg.agent_name) metadata.agent_name = msg.agent_name
+  return Object.keys(metadata).length > 0 ? metadata : undefined
+}
 
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
@@ -60,13 +99,7 @@ export const useChatStore = defineStore('chat', () => {
     currentSessionId.value = sessionId
     try {
       const rows = await dbGetMessages(sessionId)
-      messages.value = rows.map((r) => ({
-        id: r.id,
-        role: r.role as 'user' | 'assistant' | 'system',
-        content: r.content,
-        timestamp: r.timestamp,
-        metadata: r.metadata ? JSON.parse(r.metadata) : undefined,
-      }))
+      messages.value = rows.map(normalizeLoadedMessage)
     } catch (e) {
       logger.warn('加载消息历史失败', e)
       messages.value = []
@@ -84,6 +117,11 @@ export const useChatStore = defineStore('chat', () => {
     messages.value = []
     artifacts.value = []
     selectedArtifactId.value = null
+    showArtifacts.value = false
+    streaming.value = false
+    streamingSessionId.value = null
+    streamingContent.value = ''
+    hexclawWS.clearCallbacks()
     error.value = null
     pendingSessionTitle.value = title ?? null
     hasCustomTitle.value = !!title
@@ -115,7 +153,7 @@ export const useChatStore = defineStore('chat', () => {
   /** 持久化消息到 SQLite */
   async function persistMessage(msg: ChatMessage, sessionId: string) {
     try {
-      await dbSaveMessage(msg.id, sessionId, msg.role, msg.content, msg.timestamp, msg.metadata as Record<string, unknown> | undefined)
+      await dbSaveMessage(msg.id, sessionId, msg.role, msg.content, msg.timestamp, serializeMessageMetadata(msg))
     } catch (e) {
       logger.warn('持久化消息失败', e)
     }
@@ -128,7 +166,7 @@ export const useChatStore = defineStore('chat', () => {
     while ((match = codeBlockRegex.exec(content)) !== null) {
       const language = match[1] || 'text'
       const code = match[2]!.trim()
-      if (code.length < 20) continue
+      if (code.length < 5) continue
 
       const existingIdx = artifacts.value.findIndex(
         (a) => a.messageId === messageId && a.language === language,
@@ -169,27 +207,37 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   /** 完成助手回复的通用处理 */
-  function finalizeAssistantMessage(content: string, sessionId: string, userText: string) {
+  function finalizeAssistantMessage(params: {
+    content: string
+    sessionId: string
+    userText: string
+    metadata?: Record<string, unknown>
+    toolCalls?: ChatMessage['tool_calls']
+    agentName?: string
+  }) {
     const assistantMsg: ChatMessage = {
       id: nanoid(),
       role: 'assistant',
-      content: content || '(空回复)',
+      content: params.content || '(空回复)',
       timestamp: new Date().toISOString(),
+      metadata: params.metadata,
+      tool_calls: params.toolCalls,
+      agent_name: params.agentName,
     }
     messages.value.push(assistantMsg)
 
     // 持久化助手消息
-    persistMessage(assistantMsg, sessionId)
+    persistMessage(assistantMsg, params.sessionId)
 
     // 用第一条消息更新会话标题（除非已有自定义标题，如从 Agent 页跳转）
     if (messages.value.length <= 2 && !hasCustomTitle.value) {
-      const title = userText.slice(0, 30) + (userText.length > 30 ? '...' : '')
-      dbUpdateSessionTitle(sessionId, title).catch(() => {})
+      const title = params.userText.slice(0, 30) + (params.userText.length > 30 ? '...' : '')
+      dbUpdateSessionTitle(params.sessionId, title).catch(() => {})
     }
-    dbTouchSession(sessionId).catch(() => {})
+    dbTouchSession(params.sessionId).catch(() => {})
 
     // 提取代码 Artifact
-    extractArtifacts(content, assistantMsg.id)
+    extractArtifacts(params.content, assistantMsg.id)
 
     streaming.value = false
     streamingContent.value = ''
@@ -199,14 +247,13 @@ export const useChatStore = defineStore('chat', () => {
   /** 发送消息错误处理 */
   function handleSendError(e: unknown) {
     logger.error('发送消息失败', e)
-    const errContent = e instanceof Error
-      ? e.message
-      : (typeof e === 'string' ? e : '发送失败，请检查 hexclaw 引擎是否运行')
+    const apiErr = fromNativeError(e)
+    error.value = apiErr
 
     messages.value.push({
       id: nanoid(),
       role: 'assistant',
-      content: errContent,
+      content: apiErr.message || '发送失败，请检查 hexclaw 引擎是否运行',
       timestamp: new Date().toISOString(),
     })
     streaming.value = false
@@ -216,42 +263,71 @@ export const useChatStore = defineStore('chat', () => {
 
   /**
    * 通过 WebSocket 流式发送消息
+   *
+   * 使用 requestId 防止竞态：回调中校验 requestId 匹配当前请求，
+   * 避免旧请求的消息被新请求的回调错误消费。
    */
-  async function sendMessageViaWebSocket(text: string, sessionId: string): Promise<void> {
+  async function sendMessageViaWebSocket(text: string, sessionId: string, attachments?: ChatAttachment[]): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      // Clear previous callbacks to avoid duplicates
       hexclawWS.clearCallbacks()
 
+      let settled = false
+
       hexclawWS.onChunk((content: string, done: boolean) => {
+        if (streamingSessionId.value !== sessionId) return
         streamingContent.value += content
-        if (done) {
-          finalizeAssistantMessage(streamingContent.value, sessionId, text)
+        if (done && !settled) {
+          settled = true
+          finalizeAssistantMessage({
+            content: streamingContent.value,
+            sessionId,
+            userText: text,
+          })
           resolve()
         }
       })
 
       hexclawWS.onReply((content: string) => {
-        finalizeAssistantMessage(content, sessionId, text)
+        if (settled || streamingSessionId.value !== sessionId) return
+        settled = true
+        finalizeAssistantMessage({
+          content,
+          sessionId,
+          userText: text,
+        })
         resolve()
       })
 
       hexclawWS.onError((errMsg: string) => {
+        if (settled) return
+        settled = true
         reject(new Error(errMsg))
       })
 
-      hexclawWS.sendMessage(text, sessionId, undefined, agentRole.value || undefined)
+      const meta = attachments?.length ? { attachments } : undefined
+      hexclawWS.sendMessage(text, sessionId, meta, agentRole.value || undefined)
     })
   }
 
   /**
    * 通过 HTTP 后端发送消息（fallback）
    */
-  async function sendMessageViaBackend(text: string, sessionId: string): Promise<void> {
+  async function sendMessageViaBackend(text: string, sessionId: string, attachments?: ChatAttachment[]): Promise<void> {
     const result = await sendChatViaBackend(text, {
       sessionId,
       role: agentRole.value || 'assistant',
+      attachments: attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data })),
     })
-    finalizeAssistantMessage(result.reply, sessionId, text)
+    finalizeAssistantMessage({
+      content: result.reply,
+      sessionId,
+      userText: text,
+      metadata: result.metadata,
+      toolCalls: result.tool_calls,
+      agentName: typeof result.metadata?.agent_name === 'string'
+        ? result.metadata.agent_name
+        : undefined,
+    })
   }
 
   /**
@@ -289,12 +365,11 @@ export const useChatStore = defineStore('chat', () => {
       if (!hexclawWS.isConnected()) {
         await hexclawWS.connect()
       }
-      await sendMessageViaWebSocket(text, sessionId)
+      await sendMessageViaWebSocket(text, sessionId, attachments)
     } catch (wsError) {
       logger.warn('WebSocket 发送失败，回退到 HTTP', wsError)
-      // 回退到 HTTP 同步模式
       try {
-        await sendMessageViaBackend(text, sessionId)
+        await sendMessageViaBackend(text, sessionId, attachments)
       } catch (httpError) {
         handleSendError(httpError)
       }
@@ -331,6 +406,14 @@ export const useChatStore = defineStore('chat', () => {
         currentSessionId.value = null
         messages.value = []
         artifacts.value = []
+        selectedArtifactId.value = null
+        showArtifacts.value = false
+        if (streamingSessionId.value === sessionId) {
+          streaming.value = false
+          streamingSessionId.value = null
+          streamingContent.value = ''
+          hexclawWS.clearCallbacks()
+        }
       }
       error.value = null
     } catch (e) {

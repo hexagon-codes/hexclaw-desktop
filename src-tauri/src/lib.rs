@@ -126,12 +126,16 @@ pub fn run() {
             commands::backend_chat,
             commands::restart_sidecar,
         ])
-        .on_window_event(|_window, event| {
-            // 所有窗口销毁时停止 sidecar 进程
+        .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                sidecar::stop_sidecar();
+                if window.label() == "main" {
+                    sidecar::stop_sidecar();
+                }
             }
         })
         .run(tauri::generate_context!())
-        .expect("HexClaw Desktop 启动失败");
+        .unwrap_or_else(|e| {
+            eprintln!("HexClaw Desktop 启动失败: {}", e);
+            std::process::exit(1);
+        });
 }

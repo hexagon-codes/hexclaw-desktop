@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { Activity, Zap, AlertTriangle, Clock } from 'lucide-vue-next'
 import type { LogStats } from '@/api/logs'
+
+const { t } = useI18n()
 
 defineProps<{
   stats: LogStats
@@ -15,7 +18,7 @@ defineProps<{
     >
       <div class="flex items-center gap-2 mb-1">
         <Activity :size="14" :style="{ color: 'var(--hc-accent)' }" />
-        <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">总请求</span>
+        <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">Total</span>
       </div>
       <div class="text-lg font-semibold tabular-nums" :style="{ color: 'var(--hc-text-primary)' }">
         {{ stats.total.toLocaleString() }}
@@ -41,7 +44,7 @@ defineProps<{
     >
       <div class="flex items-center gap-2 mb-1">
         <AlertTriangle :size="14" :style="{ color: '#ef4444' }" />
-        <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">错误</span>
+        <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('statusBadge.error') }}</span>
       </div>
       <div class="text-lg font-semibold tabular-nums" :style="{ color: 'var(--hc-text-primary)' }">
         {{ (stats.by_level?.error || 0).toLocaleString() }}

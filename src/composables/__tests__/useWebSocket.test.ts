@@ -4,6 +4,8 @@
  * 验证 WebSocket composable 的重连逻辑和边界情况
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { defineComponent } from 'vue'
+import { mount } from '@vue/test-utils'
 
 // Mock WebSocket
 class MockWebSocket {
@@ -42,6 +44,22 @@ vi.stubGlobal('WebSocket', MockWebSocket)
 // 必须在 mock 之后导入
 const { useWebSocket } = await import('../useWebSocket')
 
+function mountUseWebSocket(options?: { reconnectInterval?: number; maxRetries?: number }) {
+  let api: ReturnType<typeof useWebSocket> | null = null
+
+  const wrapper = mount(defineComponent({
+    setup() {
+      api = useWebSocket('ws://localhost:16060/ws', vi.fn(), options)
+      return () => null
+    },
+  }))
+
+  return {
+    wrapper,
+    api: api!,
+  }
+}
+
 describe('useWebSocket', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -52,27 +70,27 @@ describe('useWebSocket', () => {
   })
 
   it('连接后 connected 应为 true', async () => {
-    const onMessage = vi.fn()
-    const { connected, connect } = useWebSocket('ws://localhost:16060/ws', onMessage)
+    const { wrapper, api } = mountUseWebSocket()
 
-    connect()
+    api.connect()
     await vi.advanceTimersByTimeAsync(10)
 
-    expect(connected.value).toBe(true)
+    expect(api.connected.value).toBe(true)
+    wrapper.unmount()
   })
 
   it('断开后应自动重连', async () => {
-    const onMessage = vi.fn()
-    const { connected, connect, disconnect } = useWebSocket('ws://localhost:16060/ws', onMessage, {
+    const { wrapper, api } = mountUseWebSocket({
       reconnectInterval: 1000,
     })
 
-    connect()
+    api.connect()
     await vi.advanceTimersByTimeAsync(10)
-    expect(connected.value).toBe(true)
+    expect(api.connected.value).toBe(true)
 
-    disconnect()
-    expect(connected.value).toBe(false)
+    api.disconnect()
+    expect(api.connected.value).toBe(false)
+    wrapper.unmount()
   })
 
   it('maxRetries = 0 表示不重连（修复后语义）', () => {
@@ -88,13 +106,13 @@ describe('useWebSocket', () => {
   })
 
   it('非 JSON 消息不应崩溃', async () => {
-    const onMessage = vi.fn()
-    const { connect } = useWebSocket('ws://localhost:16060/ws', onMessage)
+    const { wrapper, api } = mountUseWebSocket()
 
-    connect()
+    api.connect()
     await vi.advanceTimersByTimeAsync(10)
 
     // 不会有 onmessage 在测试中被调用，但验证它不会 throw
-    expect(onMessage).not.toHaveBeenCalled()
+    expect(api.error.value).toBeNull()
+    wrapper.unmount()
   })
 })

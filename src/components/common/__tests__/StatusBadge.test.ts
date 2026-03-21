@@ -1,40 +1,59 @@
 import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createI18n } from 'vue-i18n'
 import StatusBadge from '../StatusBadge.vue'
+import zhCN from '@/i18n/locales/zh-CN'
+
+function createTestI18n() {
+  return createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: { 'zh-CN': zhCN },
+  })
+}
+
+function mountStatusBadge(status: 'online' | 'offline' | 'error' | 'warning' | 'idle' | 'running') {
+  return mount(StatusBadge, {
+    props: { status },
+    global: {
+      plugins: [createTestI18n()],
+    },
+  })
+}
 
 describe('StatusBadge', () => {
   it('renders online status', () => {
-    const wrapper = mount(StatusBadge, { props: { status: 'online' } })
+    const wrapper = mountStatusBadge('online')
     expect(wrapper.text()).toBe('在线')
-    // 组件使用 BEM 类名 hc-badge--online 和 hc-badge__dot
     expect(wrapper.find('.hc-badge--online').exists()).toBe(true)
     expect(wrapper.find('.hc-badge__dot').exists()).toBe(true)
   })
 
   it('renders error status', () => {
-    const wrapper = mount(StatusBadge, { props: { status: 'error' } })
+    const wrapper = mountStatusBadge('error')
     expect(wrapper.text()).toBe('错误')
     expect(wrapper.find('.hc-badge--error').exists()).toBe(true)
   })
 
   it('renders running status', () => {
-    const wrapper = mount(StatusBadge, { props: { status: 'running' } })
+    const wrapper = mountStatusBadge('running')
     expect(wrapper.text()).toBe('运行中')
     expect(wrapper.find('.hc-badge--running').exists()).toBe(true)
   })
 
   it('renders offline status', () => {
-    const wrapper = mount(StatusBadge, { props: { status: 'offline' } })
+    const wrapper = mountStatusBadge('offline')
     expect(wrapper.text()).toBe('离线')
   })
 
   it('renders idle status', () => {
-    const wrapper = mount(StatusBadge, { props: { status: 'idle' } })
+    const wrapper = mountStatusBadge('idle')
     expect(wrapper.text()).toBe('空闲')
   })
 
   it('renders warning status', () => {
-    const wrapper = mount(StatusBadge, { props: { status: 'warning' } })
+    const wrapper = mountStatusBadge('warning')
     expect(wrapper.text()).toBe('警告')
     expect(wrapper.find('.hc-badge--warning').exists()).toBe(true)
   })

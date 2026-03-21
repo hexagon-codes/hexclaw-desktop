@@ -1,37 +1,33 @@
 <script setup lang="ts">
 defineProps<{
   text?: string
+  rows?: number
 }>()
 </script>
 
 <template>
-  <div class="hc-loading">
-    <div class="hc-loading__spinner" />
-    <span class="hc-loading__text">{{ text || '...' }}</span>
+  <div class="hc-skeleton" role="status" :aria-label="text || 'Loading...'">
+    <div class="hc-skeleton__row">
+      <div class="hc-skeleton__block hc-skeleton__block--circle" />
+      <div class="hc-skeleton__block hc-skeleton__block--line" />
+    </div>
+    <div class="hc-skeleton__row">
+      <div class="hc-skeleton__block hc-skeleton__block--circle" />
+      <div class="hc-skeleton__block hc-skeleton__block--line" />
+    </div>
+    <div class="hc-skeleton__block hc-skeleton__block--card" />
+    <div class="hc-skeleton__row">
+      <div class="hc-skeleton__block hc-skeleton__block--line" />
+    </div>
+    <div class="hc-skeleton__row">
+      <div class="hc-skeleton__block hc-skeleton__block--line-short" />
+    </div>
+    <template v-if="(rows || 5) > 5">
+      <div class="hc-skeleton__block hc-skeleton__block--card" />
+      <div class="hc-skeleton__row">
+        <div class="hc-skeleton__block hc-skeleton__block--circle" />
+        <div class="hc-skeleton__block hc-skeleton__block--line" />
+      </div>
+    </template>
   </div>
 </template>
-
-<style scoped>
-.hc-loading {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 48px 24px;
-  gap: 12px;
-}
-
-.hc-loading__spinner {
-  width: 22px;
-  height: 22px;
-  border: 2px solid var(--hc-border);
-  border-top-color: var(--hc-accent);
-  border-radius: 50%;
-  animation: hc-spin 0.7s linear infinite;
-}
-
-.hc-loading__text {
-  font-size: 12px;
-  color: var(--hc-text-muted);
-}
-</style>

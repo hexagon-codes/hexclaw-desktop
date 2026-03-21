@@ -22,6 +22,7 @@ import {
   getSkills,
   installSkill,
   uninstallSkill,
+  setSkillEnabled,
   searchClawHub,
   installFromHub,
   CLAWHUB_CATEGORIES,
@@ -37,7 +38,7 @@ import SearchInput from '@/components/common/SearchInput.vue'
 const { t } = useI18n()
 
 // ─── Tab 切换 ─────────────────────────────────────────
-const activeTab = ref<'installed' | 'hub'>('hub')
+const activeTab = ref<'installed' | 'hub'>('installed')
 
 // ─── 已安装 Skill ─────────────────────────────────────
 const skills = ref<Skill[]>([])
@@ -48,10 +49,23 @@ const showInstallDialog = ref(false)
 const installSource = ref('')
 const installing = ref(false)
 const installError = ref('')
+const disabledSkills = ref<Set<string>>(readDisabledSkillsFromStorage())
+const expandedSkill = ref<string | null>(null)
+const statusNotice = ref<{ tone: 'info' | 'warn' | 'success'; message: string } | null>(null)
+const togglingSkills = ref<Set<string>>(new Set())
 
 onMounted(async () => {
   await Promise.all([loadSkills(), loadHubSkills()])
 })
+
+function readDisabledSkillsFromStorage(): Set<string> {
+  try {
+    const raw = localStorage.getItem('hexclaw_disabled_skills')
+    return raw ? new Set(JSON.parse(raw)) : new Set()
+  } catch {
+    return new Set()
+  }
+}
 
 async function loadSkills() {
   loading.value = true
@@ -59,6 +73,15 @@ async function loadSkills() {
     const res = await getSkills()
     skills.value = res.skills || []
     skillsDir.value = res.dir || ''
+    const localDisabled = readDisabledSkillsFromStorage()
+    const next = new Set<string>()
+    for (const s of skills.value) {
+      if (s.enabled === false || (s.enabled == null && localDisabled.has(s.name))) {
+        next.add(s.name)
+      }
+    }
+    disabledSkills.value = next
+    localStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...next]))
   } catch (e) {
     console.error('加载 Skill 列表失败:', e)
   } finally {
@@ -66,11 +89,41 @@ async function loadSkills() {
   }
 }
 
+function setLocalSkillEnabled(name: string, enabled: boolean) {
+  const next = new Set(disabledSkills.value)
+  if (enabled) {
+    next.delete(name)
+  } else {
+    next.add(name)
+  }
+  disabledSkills.value = next
+  localStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...next]))
+}
+
+function updateSkill(name: string, patch: Partial<Skill>) {
+  const idx = skills.value.findIndex((skill) => skill.name === name)
+  if (idx < 0) return
+  skills.value[idx] = {
+    ...skills.value[idx]!,
+    ...patch,
+  }
+}
+
+function getSkillScope(skill: Skill): 'runtime' | 'local' {
+  return typeof skill.enabled === 'boolean' ? 'runtime' : 'local'
+}
+
 async function handleUninstall(name: string) {
   if (!confirm(t('common.confirm') + ` — ${name}?`)) return
   try {
     await uninstallSkill(name)
     skills.value = skills.value.filter((s) => s.name !== name)
+    if (disabledSkills.value.has(name)) {
+      const next = new Set(disabledSkills.value)
+      next.delete(name)
+      disabledSkills.value = next
+      localStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...next]))
+    }
   } catch (e) {
     console.error('卸载 Skill 失败:', e)
   }
@@ -92,37 +145,65 @@ async function handleInstall() {
   }
 }
 
-// ─── Enable/Disable + Detail state ──────────────────
-const disabledSkills = ref<Set<string>>(new Set())
-const expandedSkill = ref<string | null>(null)
+async function toggleSkillEnabled(name: string) {
+  if (togglingSkills.value.has(name)) return
+  const skill = skills.value.find((item) => item.name === name)
+  if (!skill) return
 
-function toggleSkillEnabled(name: string) {
-  if (disabledSkills.value.has(name)) {
-    disabledSkills.value.delete(name)
+  const previousSkill = { ...skill }
+  const previousLocal = new Set(disabledSkills.value)
+  const nextEnabled = !isSkillEnabled(skill)
+
+  statusNotice.value = null
+  togglingSkills.value = new Set([...togglingSkills.value, name])
+
+  if (getSkillScope(skill) === 'runtime') {
+    updateSkill(name, { enabled: nextEnabled })
   } else {
-    disabledSkills.value.add(name)
+    setLocalSkillEnabled(name, nextEnabled)
   }
-  // Trigger reactivity
-  disabledSkills.value = new Set(disabledSkills.value)
-  // Persist to localStorage
-  localStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...disabledSkills.value]))
+
+  const result = await setSkillEnabled(name, nextEnabled)
+  if (result.success && result.source === 'backend') {
+    updateSkill(name, {
+      enabled: result.enabled,
+      effective_enabled: result.effective_enabled ?? result.enabled,
+      requires_restart: result.requires_restart,
+      message: result.message,
+    })
+    statusNotice.value = result.message
+      ? { tone: result.requires_restart ? 'warn' : 'success', message: result.message }
+      : null
+  } else if (getSkillScope(previousSkill) === 'runtime') {
+    updateSkill(name, previousSkill)
+    disabledSkills.value = previousLocal
+    statusNotice.value = {
+      tone: 'warn',
+      message: result.message || t('skills.runtimeToggleFailed'),
+    }
+  } else {
+    statusNotice.value = {
+      tone: 'info',
+      message: t('skills.localOnlyNotice'),
+    }
+  }
+
+  const nextToggling = new Set(togglingSkills.value)
+  nextToggling.delete(name)
+  togglingSkills.value = nextToggling
 }
 
-function isSkillEnabled(name: string): boolean {
-  return !disabledSkills.value.has(name)
+function isSkillEnabled(skillOrName: Skill | string): boolean {
+  const skill = typeof skillOrName === 'string'
+    ? skills.value.find((item) => item.name === skillOrName)
+    : skillOrName
+  if (!skill) return !disabledSkills.value.has(typeof skillOrName === 'string' ? skillOrName : skillOrName.name)
+  return typeof skill.enabled === 'boolean' ? skill.enabled : !disabledSkills.value.has(skill.name)
 }
 
 function toggleSkillDetail(name: string) {
   expandedSkill.value = expandedSkill.value === name ? null : name
 }
-
-// Load disabled skills from localStorage on mount
-onMounted(() => {
-  try {
-    const raw = localStorage.getItem('hexclaw_disabled_skills')
-    if (raw) disabledSkills.value = new Set(JSON.parse(raw))
-  } catch { /* ignore */ }
-})
 
 const filteredSkills = computed(() => {
   const q = searchQuery.value.toLowerCase()
@@ -134,6 +215,10 @@ const filteredSkills = computed(() => {
       s.tags?.some((t) => t.toLowerCase().includes(q)),
   )
 })
+
+const hasLocalOnlySkills = computed(() =>
+  skills.value.some((skill) => getSkillScope(skill) === 'local'),
+)
 
 // ─── ClawHub 技能市场 ────────────────────────────────
 const hubSkills = ref<ClawHubSkill[]>([])
@@ -190,8 +275,21 @@ async function handleHubInstall(skill: ClawHubSkill) {
   try {
     await installFromHub(skill.name)
     hubInstalledSet.value = new Set([...hubInstalledSet.value, skill.name])
-    // 刷新已安装列表
     await loadSkills()
+    if (!skills.value.some((s) => s.name === skill.name)) {
+      skills.value = [
+        ...skills.value,
+        {
+          name: skill.name,
+          description: skill.description,
+          version: skill.version,
+          author: skill.author,
+          tags: skill.tags,
+          triggers: [],
+          enabled: true,
+        } as Skill,
+      ]
+    }
   } catch (e) {
     console.error('从 ClawHub 安装失败:', e)
   } finally {
@@ -283,6 +381,19 @@ function isHubSkillInstalled(name: string): boolean {
       :style="{ borderBottom: '1px solid var(--hc-border)' }"
     />
 
+    <div v-if="statusNotice || hasLocalOnlySkills" class="px-6 pt-4">
+      <div
+        class="rounded-xl border px-4 py-3 text-sm"
+        :style="{
+          borderColor: statusNotice?.tone === 'warn' ? '#f59e0b55' : statusNotice?.tone === 'success' ? '#22c55e55' : 'var(--hc-border)',
+          background: statusNotice?.tone === 'warn' ? '#f59e0b12' : statusNotice?.tone === 'success' ? '#22c55e12' : 'var(--hc-bg-card)',
+          color: statusNotice?.tone === 'warn' ? '#b45309' : statusNotice?.tone === 'success' ? '#15803d' : 'var(--hc-text-secondary)',
+        }"
+      >
+        {{ statusNotice?.message || t('skills.localOnlyNotice') }}
+      </div>
+    </div>
+
     <!-- ════════ 已安装 Tab ════════ -->
     <div v-if="activeTab === 'installed'" class="flex-1 overflow-y-auto p-6">
       <LoadingState v-if="loading" />
@@ -320,7 +431,7 @@ function isHubSkillInstalled(name: string): boolean {
           :style="{
             background: 'var(--hc-bg-card)',
             borderColor: 'var(--hc-border)',
-            opacity: isSkillEnabled(skill.name) ? 1 : 0.6,
+            opacity: isSkillEnabled(skill) ? 1 : 0.6,
           }"
         >
           <!-- Main card row -->
@@ -329,7 +440,7 @@ function isHubSkillInstalled(name: string): boolean {
               class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
               :style="{ background: 'var(--hc-bg-hover)' }"
             >
-              <Puzzle :size="20" :style="{ color: isSkillEnabled(skill.name) ? 'var(--hc-accent)' : 'var(--hc-text-muted)' }" />
+              <Puzzle :size="20" :style="{ color: isSkillEnabled(skill) ? 'var(--hc-accent)' : 'var(--hc-text-muted)' }" />
             </div>
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
@@ -349,6 +460,15 @@ function isHubSkillInstalled(name: string): boolean {
                   @click="toggleSkillDetail(skill.name)"
                 />
                 <span
+                  class="text-[10px] px-1.5 py-0.5 rounded-full"
+                  :style="{
+                    background: getSkillScope(skill) === 'runtime' ? '#0ea5e91a' : '#f59e0b1a',
+                    color: getSkillScope(skill) === 'runtime' ? '#0284c7' : '#b45309',
+                  }"
+                >
+                  {{ getSkillScope(skill) === 'runtime' ? t('skills.runtimeState') : t('skills.localPreference') }}
+                </span>
+                <span
                   v-if="skill.version"
                   class="text-xs px-1.5 py-0.5 rounded"
                   :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
@@ -365,6 +485,13 @@ function isHubSkillInstalled(name: string): boolean {
               </div>
               <p class="text-xs mt-1" :style="{ color: 'var(--hc-text-secondary)' }">
                 {{ skill.description }}
+              </p>
+              <p
+                v-if="skill.requires_restart || skill.message"
+                class="text-[11px] mt-2"
+                :style="{ color: skill.requires_restart ? '#b45309' : 'var(--hc-text-muted)' }"
+              >
+                {{ skill.message || t('skills.restartRequired') }}
               </p>
               <!-- 触发词 (compact in main view) -->
               <div v-if="skill.triggers?.length && expandedSkill !== skill.name" class="flex flex-wrap gap-1.5 mt-2">
@@ -386,15 +513,17 @@ function isHubSkillInstalled(name: string): boolean {
             <button
               class="relative w-9 h-5 rounded-full transition-colors flex-shrink-0 mt-1"
               :style="{
-                background: isSkillEnabled(skill.name) ? 'var(--hc-accent)' : 'var(--hc-text-muted)',
+                background: isSkillEnabled(skill) ? 'var(--hc-accent)' : 'var(--hc-text-muted)',
+                opacity: togglingSkills.has(skill.name) ? 0.65 : 1,
               }"
-              :title="isSkillEnabled(skill.name) ? t('skills.disableSkill') : t('skills.enableSkill')"
+              :title="isSkillEnabled(skill) ? t('skills.disableSkill') : t('skills.enableSkill')"
+              :disabled="togglingSkills.has(skill.name)"
               @click="toggleSkillEnabled(skill.name)"
             >
               <div
                 class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform"
                 :style="{
-                  transform: isSkillEnabled(skill.name) ? 'translateX(18px)' : 'translateX(2px)',
+                  transform: isSkillEnabled(skill) ? 'translateX(18px)' : 'translateX(2px)',
                 }"
               />
             </button>
@@ -472,10 +601,13 @@ function isHubSkillInstalled(name: string): boolean {
             <div class="mt-3 flex items-center gap-2">
               <div
                 class="w-2 h-2 rounded-full"
-                :style="{ background: isSkillEnabled(skill.name) ? '#10b981' : '#6b7280' }"
+                :style="{ background: isSkillEnabled(skill) ? '#10b981' : '#6b7280' }"
               />
-              <span class="text-xs" :style="{ color: isSkillEnabled(skill.name) ? '#10b981' : 'var(--hc-text-muted)' }">
-                {{ isSkillEnabled(skill.name) ? t('skills.enabled') : t('skills.disabled') }}
+              <span class="text-xs" :style="{ color: isSkillEnabled(skill) ? '#10b981' : 'var(--hc-text-muted)' }">
+                {{ isSkillEnabled(skill) ? t('skills.enabled') : t('skills.disabled') }}
+              </span>
+              <span class="text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
+                · {{ getSkillScope(skill) === 'runtime' ? t('skills.runtimeState') : t('skills.localPreference') }}
               </span>
             </div>
           </div>

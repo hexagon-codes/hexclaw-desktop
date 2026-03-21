@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { AlertTriangle } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 defineProps<{
   title?: string
@@ -17,14 +20,14 @@ const emit = defineEmits<{
     <div class="hc-error-state__icon-wrap">
       <AlertTriangle :size="24" class="hc-error-state__icon" />
     </div>
-    <h3 class="hc-error-state__title">{{ title || '出错了' }}</h3>
+    <h3 class="hc-error-state__title">{{ title || t('error.unknown') }}</h3>
     <p class="hc-error-state__msg">{{ message }}</p>
     <button
       v-if="retryable !== false"
       class="hc-btn hc-btn-primary"
       @click="emit('retry')"
     >
-      重试
+      {{ t('common.retry') }}
     </button>
   </div>
 </template>

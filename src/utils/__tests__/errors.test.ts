@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   createApiError,
   fromHttpStatus,
@@ -99,6 +99,7 @@ describe('trySafe', () => {
   })
 
   it('returns [null, error] on failure', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     const [data, err] = await trySafe(() => Promise.reject(new Error('fail')))
     expect(data).toBeNull()
     expect(err).not.toBeNull()

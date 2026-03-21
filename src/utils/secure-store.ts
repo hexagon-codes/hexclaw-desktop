@@ -5,6 +5,13 @@
  *   - Tauri 桌面环境: 使用 @tauri-apps/plugin-store 存储到独立加密文件
  *   - 浏览器开发环境: 使用 Web Crypto API AES-GCM 加密后存入 localStorage
  *
+ * ⚠️ 浏览器降级方案安全等级说明:
+ *   浏览器模式下使用固定口令 ('hexclaw-desktop') + 随机 salt 进行 PBKDF2 密钥派生。
+ *   salt 存储在 localStorage 中，口令硬编码在源码中。任何能执行 JS 的上下文
+ *   （如 XSS 或恶意浏览器扩展）都可以读取 salt 并结合已知口令解密所有值。
+ *   因此浏览器模式下的加密本质上是 **混淆 (obfuscation)**，而非真正的安全加密。
+ *   生产环境应始终使用 Tauri Store 方案。
+ *
  * 使用示例:
  *   await saveSecureValue('llm_api_key', 'sk-abc123...')
  *   const key = await loadSecureValue('llm_api_key')

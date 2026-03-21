@@ -1,16 +1,22 @@
 <script setup lang="ts">
-import { ref, onErrorCaptured } from 'vue'
+import { ref, onErrorCaptured, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AlertCircle, RotateCcw } from 'lucide-vue-next'
 import { logger } from '@/utils/logger'
 
 const { t } = useI18n()
+const route = useRoute()
 const error = ref<Error | null>(null)
 
 onErrorCaptured((err) => {
   error.value = err
-  logger.error('组件渲染异常', err)
+  logger.error('ErrorBoundary captured', err)
   return false
+})
+
+watch(() => route.path, () => {
+  error.value = null
 })
 
 function retry() {

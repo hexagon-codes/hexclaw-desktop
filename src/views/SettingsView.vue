@@ -2,7 +2,7 @@
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { Key, Shield, Globe, Database, Bell, Server, Palette, Eye, EyeOff, Cpu, Plus, Trash2, ChevronDown, ChevronUp, Power, Webhook, Loader2, Pencil, CheckCircle, XCircle, Zap } from 'lucide-vue-next'
+import { Key, Shield, Globe, Database, Bell, Server, Palette, Eye, EyeOff, Cpu, Plus, Trash2, ChevronDown, ChevronUp, Power, Webhook, Loader2, Pencil, CheckCircle, XCircle, Zap, RotateCcw, Plug, Save } from 'lucide-vue-next'
 import { NTag, NPopconfirm, NModal, NSpace } from 'naive-ui'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
@@ -12,9 +12,12 @@ import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { useValidation, rules } from '@/composables/useValidation'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, getProviderTypes } from '@/config/providers'
-import type { ProviderConfig, ProviderType, ModelOption, ModelCapability } from '@/types'
-import PageHeader from '@/components/common/PageHeader.vue'
+import type { ProviderConfig, ProviderType, ModelOption, ModelCapability, SecurityConfig, NotificationConfig } from '@/types'
+import PageToolbar from '@/components/common/PageToolbar.vue'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import SettingsSecurity from '@/components/settings/SettingsSecurity.vue'
+import SettingsNotification from '@/components/settings/SettingsNotification.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -22,6 +25,7 @@ const settingsStore = useSettingsStore()
 const { themeMode, setTheme } = useTheme()
 const activeSection = ref('llm')
 const saved = ref(false)
+const settingsSearch = ref('')
 
 // Provider 编辑状态
 const editingProviderId = ref<string | null>(null)
@@ -54,22 +58,22 @@ const newWebhookEvents = ref<Record<WebhookEvent, boolean>>({
   error: true,
 })
 
-const webhookTypes: { key: WebhookType; label: string; color: string }[] = [
-  { key: 'wecom', label: '企业微信', color: '#07c160' },
-  { key: 'feishu', label: '飞书', color: '#3370ff' },
-  { key: 'dingtalk', label: '钉钉', color: '#0089ff' },
-  { key: 'custom', label: '自定义', color: '#6b7280' },
-]
+const webhookTypes = computed(() => [
+  { key: 'wecom' as WebhookType, label: t('settings.webhook.wecom'), color: '#07c160' },
+  { key: 'feishu' as WebhookType, label: t('settings.webhook.feishu'), color: '#3370ff' },
+  { key: 'dingtalk' as WebhookType, label: t('settings.webhook.dingtalk'), color: '#0089ff' },
+  { key: 'custom' as WebhookType, label: t('settings.webhook.custom'), color: '#6b7280' },
+])
 
-const webhookEventLabels: { key: WebhookEvent; label: string }[] = [
-  { key: 'task_complete', label: '任务完成' },
-  { key: 'agent_complete', label: 'Agent 完成' },
-  { key: 'error', label: '错误通知' },
-]
+const webhookEventLabels = computed(() => [
+  { key: 'task_complete' as WebhookEvent, label: t('settings.webhook.taskComplete') },
+  { key: 'agent_complete' as WebhookEvent, label: t('settings.webhook.agentComplete') },
+  { key: 'error' as WebhookEvent, label: t('settings.webhook.errorNotify') },
+])
 
 async function loadWebhooks() {
   webhookLoading.value = true
-  const [res] = await trySafe(() => getWebhooks(), '加载 Webhook 列表')
+  const [res] = await trySafe(() => getWebhooks(), t('settings.webhook.noWebhooksDesc'))
   if (res) webhooks.value = res.webhooks || []
   webhookLoading.value = false
 }
@@ -87,7 +91,7 @@ async function handleAddWebhook() {
       url: newWebhookUrl.value.trim(),
       events,
     }),
-    '创建 Webhook',
+    t('settings.webhook.create'),
   )
   if (res) {
     await loadWebhooks()
@@ -101,13 +105,14 @@ async function handleAddWebhook() {
 }
 
 async function handleDeleteWebhook(name: string) {
-  if (!confirm('确定删除此 Webhook？')) return
-  await trySafe(() => deleteWebhook(name), '删除 Webhook')
+  if (!confirm(t('settings.webhook.deleteConfirm'))) return
+  await trySafe(() => deleteWebhook(name), t('common.delete'))
   await loadWebhooks()
 }
 
 function getWebhookTypeInfo(type: WebhookType) {
-  return webhookTypes.find((t) => t.key === type) || webhookTypes[3]!
+  const list = webhookTypes.value
+  return list.find((x) => x.key === type) || list[3]!
 }
 
 const {
@@ -116,12 +121,12 @@ const {
   getError: getSecError,
 } = useValidation({
   max_tokens_per_request: [
-    rules.positiveInt('请输入正整数'),
-    rules.range(256, 128000, '值应在 256 到 128000 之间'),
+    rules.positiveInt(t('settings.validation.positiveInt')),
+    rules.range(256, 128000, t('settings.validation.range256_128k')),
   ],
   rate_limit_rpm: [
-    rules.positiveInt('请输入正整数'),
-    rules.range(1, 600, '值应在 1 到 600 之间'),
+    rules.positiveInt(t('settings.validation.positiveInt')),
+    rules.range(1, 600, t('settings.validation.range1_600')),
   ],
 })
 
@@ -131,7 +136,7 @@ const sections = computed(() => [
   { key: 'general', label: t('settings.general.title'), icon: Globe },
   { key: 'appearance', label: t('settings.appearance.title'), icon: Palette },
   { key: 'notification', label: t('settings.notification.title'), icon: Bell },
-  { key: 'webhook', label: '通知推送', icon: Webhook },
+  { key: 'webhook', label: t('settings.webhook.title'), icon: Webhook },
   { key: 'storage', label: t('settings.storage.title'), icon: Database },
   { key: 'mcp', label: t('settings.mcp.title'), icon: Server },
   { key: 'engine', label: t('settings.engine.title'), icon: Cpu },
@@ -346,6 +351,52 @@ function autoSave() {
   }, 500)
 }
 
+function patchSecurity(p: Partial<SecurityConfig>) {
+  const c = settingsStore.config
+  if (!c) return
+  Object.assign(c.security, p)
+  autoSave()
+}
+
+function patchNotification(p: Partial<NotificationConfig>) {
+  const c = settingsStore.config
+  if (!c) return
+  Object.assign(c.notification, p)
+  autoSave()
+}
+
+async function onToolbarReset() {
+  if (!settingsStore.config) return
+  try {
+    await settingsStore.loadConfig()
+    saved.value = false
+  } catch (e) {
+    console.error('[HexClaw] Reset failed:', e)
+  }
+}
+
+async function onToolbarTestConnection() {
+  if (!settingsStore.config) return
+  const provider = settingsStore.config.llm.providers.find(p => p.enabled)
+  if (!provider) return
+  try {
+    const { testLLMConnection } = await import('@/api/config')
+    const result = await testLLMConnection({
+      provider: {
+        type: provider.type,
+        base_url: provider.baseUrl,
+        api_key: provider.apiKey,
+        model: provider.models[0]?.id ?? '',
+      },
+    })
+    window.$message?.[result.ok ? 'success' : 'error'](
+      result.message || (result.ok ? 'OK' : 'Failed'),
+    )
+  } catch (e) {
+    window.$message?.error?.(e instanceof Error ? e.message : 'Connection test failed')
+  }
+}
+
 async function saveConfig() {
   if (!settingsStore.config) return
 
@@ -376,7 +427,28 @@ async function saveConfig() {
 
 <template>
   <div class="hc-settings">
-    <PageHeader :title="t('settings.title')" />
+    <PageToolbar :search-placeholder="t('settings.searchPlaceholder', 'Search settings...')" @search="settingsSearch = $event">
+      <template #tabs>
+        <SegmentedControl
+          v-model="activeSection"
+          :segments="sections.slice(0, 4).map(s => ({ key: s.key, label: s.label }))"
+        />
+      </template>
+      <template #actions>
+        <button class="hc-btn hc-btn-ghost" @click="onToolbarReset">
+          <RotateCcw :size="14" />
+          {{ t('settings.toolbar.reset', 'Reset') }}
+        </button>
+        <button class="hc-btn hc-btn-ghost" @click="onToolbarTestConnection">
+          <Plug :size="14" />
+          {{ t('settings.toolbar.testConnection', 'Test Connection') }}
+        </button>
+        <button class="hc-btn hc-btn-primary" @click="saveConfig">
+          <Save :size="14" />
+          {{ t('settings.toolbar.saveSettings', 'Save Settings') }}
+        </button>
+      </template>
+    </PageToolbar>
 
     <div class="hc-settings__body">
       <!-- Left nav -->
@@ -399,7 +471,7 @@ async function saveConfig() {
 
         <template v-else-if="config">
           <!-- LLM Providers -->
-          <div v-if="activeSection === 'llm'" class="hc-settings__section" style="max-width: 600px;">
+          <div v-if="activeSection === 'llm'" class="hc-settings__section hc-settings__section--scroll" style="max-width: 600px;">
             <div class="hc-provider__header">
               <h3 class="hc-settings__section-title" style="margin: 0;">{{ t('settings.llm.title') }}</h3>
               <button class="hc-btn hc-btn-sm" @click="showAddProvider = !showAddProvider">
@@ -590,6 +662,11 @@ async function saveConfig() {
           <div v-else-if="activeSection === 'security'" class="hc-settings__section">
             <h3 class="hc-settings__section-title">{{ t('settings.security.title') }}</h3>
 
+            <SettingsSecurity
+              :security="config.security"
+              @patch="patchSecurity"
+            />
+
             <div class="hc-settings__form">
               <label class="hc-settings__toggle-row">
                 <div>
@@ -597,20 +674,6 @@ async function saveConfig() {
                   <p class="hc-settings__toggle-desc">{{ t('settings.security.gatewayDesc') }}</p>
                 </div>
                 <input v-model="config.security.gateway_enabled" type="checkbox" class="hc-toggle" />
-              </label>
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.security.injection') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.security.injectionDesc') }}</p>
-                </div>
-                <input v-model="config.security.injection_detection" type="checkbox" class="hc-toggle" />
-              </label>
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.security.pii') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.security.piiDesc') }}</p>
-                </div>
-                <input v-model="config.security.pii_filter" type="checkbox" class="hc-toggle" />
               </label>
               <label class="hc-settings__toggle-row">
                 <div>
@@ -723,42 +786,16 @@ async function saveConfig() {
           <div v-else-if="activeSection === 'notification'" class="hc-settings__section">
             <h3 class="hc-settings__section-title">{{ t('settings.notification.title') }}</h3>
 
-            <div class="hc-settings__form">
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.notification.system') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.notification.systemDesc') }}</p>
-                </div>
-                <input v-model="config.notification.system_enabled" type="checkbox" class="hc-toggle" />
-              </label>
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.notification.sound') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.notification.soundDesc') }}</p>
-                </div>
-                <input v-model="config.notification.sound_enabled" type="checkbox" class="hc-toggle" />
-              </label>
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.notification.cron') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.notification.cronDesc') }}</p>
-                </div>
-                <input v-model="config.notification.agent_complete" type="checkbox" class="hc-toggle" />
-              </label>
-              <label class="hc-settings__toggle-row">
-                <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.notification.heartbeat') }}</span>
-                  <p class="hc-settings__toggle-desc">{{ t('settings.notification.heartbeatDesc') }}</p>
-                </div>
-                <input v-model="config.notification.agent_complete" type="checkbox" class="hc-toggle" />
-              </label>
-            </div>
+            <SettingsNotification
+              :notification="config.notification"
+              @patch="patchNotification"
+            />
 
             <p class="hc-settings__hint">{{ t('settings.notification.hint') }}</p>
           </div>
 
           <!-- Webhook 通知推送 -->
-          <div v-else-if="activeSection === 'webhook'" class="hc-settings__section" style="max-width: 600px;">
+          <div v-else-if="activeSection === 'webhook'" class="hc-settings__section hc-settings__section--scroll" style="max-width: 600px;">
             <div class="hc-provider__header">
               <h3 class="hc-settings__section-title" style="margin: 0;">通知推送</h3>
               <button class="hc-btn hc-btn-sm" @click="showAddWebhook = !showAddWebhook">
@@ -929,7 +966,7 @@ async function saveConfig() {
                   <span class="hc-settings__toggle-label">{{ t('settings.mcp.autoReconnect') }}</span>
                   <p class="hc-settings__toggle-desc">{{ t('settings.mcp.autoReconnectDesc') }}</p>
                 </div>
-                <input type="checkbox" checked class="hc-toggle" />
+                <input type="checkbox" v-model="config.mcp.auto_reconnect" class="hc-toggle" @change="autoSave()" />
               </label>
             </div>
           </div>
@@ -1118,34 +1155,42 @@ async function saveConfig() {
 /* ─── Content ───── */
 .hc-settings__content {
   flex: 1;
-  overflow-y: auto;
-  padding: 24px 32px;
+  overflow: hidden;
+  padding: 16px 24px;
 }
 
 .hc-settings__section {
   max-width: 520px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
   animation: hc-fade-in 0.25s ease-out;
 }
 
+.hc-settings__section--scroll {
+  overflow-y: auto;
+}
+
 .hc-settings__section-title {
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--hc-text-primary);
-  margin: 0 0 20px;
+  margin: 0 0 12px;
   letter-spacing: -0.01em;
+  flex-shrink: 0;
 }
 
 .hc-settings__form {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  margin-bottom: 24px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .hc-settings__field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .hc-settings__label {
@@ -1229,8 +1274,8 @@ async function saveConfig() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0;
+  gap: 12px;
+  padding: 6px 0;
   cursor: pointer;
 }
 
@@ -1257,7 +1302,7 @@ async function saveConfig() {
   border-radius: var(--hc-radius-md);
   border: 1.5px solid var(--hc-border);
   background: var(--hc-bg-card);
-  padding: 14px;
+  padding: 10px 12px;
   text-align: left;
   cursor: pointer;
   transition: border-color 0.2s, box-shadow 0.2s;
@@ -1446,7 +1491,8 @@ async function saveConfig() {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .hc-provider__add-panel {
@@ -1841,7 +1887,7 @@ async function saveConfig() {
 .hc-settings__desc-text {
   font-size: 13px;
   color: var(--hc-text-secondary);
-  margin-bottom: 20px;
+  margin-bottom: 10px;
 }
 
 .hc-settings__hint {

@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { FileText, FileJson, X } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   messages: { id: string; role: string; content: string; timestamp: string; agent_name?: string }[]
@@ -11,11 +14,11 @@ const emit = defineEmits<{
 }>()
 
 function exportMarkdown() {
-  const title = props.sessionTitle || '对话记录'
+  const title = props.sessionTitle || t('chat.title')
   let md = `# ${title}\n\n`
-  md += `> 导出时间: ${new Date().toLocaleString()}\n\n---\n\n`
+  md += `> ${t('chat.exportedAt')}: ${new Date().toLocaleString()}\n\n---\n\n`
   for (const msg of props.messages) {
-    const who = msg.role === 'user' ? '**用户**' : `**${msg.agent_name || 'Agent'}**`
+    const who = msg.role === 'user' ? `**${t('chat.exportUser')}**` : `**${msg.agent_name || t('chat.modeAgent')}**`
     const time = new Date(msg.timestamp).toLocaleString()
     md += `### ${who} · ${time}\n\n${msg.content}\n\n---\n\n`
   }
@@ -24,7 +27,7 @@ function exportMarkdown() {
 }
 
 function exportJSON() {
-  const title = props.sessionTitle || '对话记录'
+  const title = props.sessionTitle || t('chat.title')
   const data = {
     title,
     exported_at: new Date().toISOString(),
@@ -54,7 +57,7 @@ function download(content: string, filename: string, type: string) {
 <template>
   <div class="hc-export-menu">
     <div class="hc-export-menu__header">
-      <span class="hc-export-menu__title">导出对话</span>
+      <span class="hc-export-menu__title">{{ t('common.download') }}</span>
       <button class="hc-export-menu__close" @click="emit('close')">
         <X :size="14" />
       </button>
@@ -63,14 +66,14 @@ function download(content: string, filename: string, type: string) {
       <FileText :size="16" />
       <div class="hc-export-menu__info">
         <span class="hc-export-menu__name">Markdown</span>
-        <span class="hc-export-menu__desc">导出为 .md 文件，适合阅读和分享</span>
+        <span class="hc-export-menu__desc">{{ t('chat.exportMarkdownDesc') }}</span>
       </div>
     </button>
     <button class="hc-export-menu__item" @click="exportJSON">
       <FileJson :size="16" />
       <div class="hc-export-menu__info">
         <span class="hc-export-menu__name">JSON</span>
-        <span class="hc-export-menu__desc">导出为 .json 文件，适合数据处理</span>
+        <span class="hc-export-menu__desc">{{ t('chat.exportJsonDesc') }}</span>
       </div>
     </button>
   </div>

@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { logger } from '@/utils/logger'
 import { getLLMConfig, updateLLMConfig } from '@/api/config'
+import { updateConfig } from '@/api/settings'
 import type { AppConfig, ProviderConfig, ApiError, ModelCapability, BackendLLMConfig, BackendLLMProvider } from '@/types'
 
 /** Tauri Store 中配置的键名 */
@@ -31,6 +32,7 @@ function defaultConfig(): AppConfig {
       log_level: 'info',
       data_dir: '',
       auto_start: false,
+      defaultAgentRole: 'assistant',
     },
     notification: {
       system_enabled: true,
@@ -56,11 +58,9 @@ function backendToProviders(backend: BackendLLMConfig): ProviderConfig[] {
   return Object.entries(backend.providers).map(([name, p]) => ({
     id: name,
     name: name,
-    type: (p.compatible === 'openai'
-      ? 'custom'
-      : KNOWN_PROVIDER_TYPES.includes(name as KnownProviderType)
-        ? name
-        : 'custom') as ProviderConfig['type'],
+    type: (KNOWN_PROVIDER_TYPES.includes(name as KnownProviderType)
+      ? name
+      : 'custom') as ProviderConfig['type'],
     enabled: true,
     baseUrl: p.base_url || '',
     apiKey: p.api_key || '',
@@ -204,24 +204,38 @@ export const useSettingsStore = defineStore('settings', () => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         const backendConfig = await getLLMConfig()
-        console.log('[HexClaw] 后端 LLM 配置原始数据:', JSON.stringify(backendConfig))
+        logger.debug('后端 LLM 配置原始数据', backendConfig)
         const providers = backendToProviders(backendConfig)
-        console.log('[HexClaw] 转换后 providers:', JSON.stringify(providers))
+
+        // 合并本地保存的 enabled 状态（后端不存储 enabled 字段）
+        const localProviders = config.value?.llm.providers ?? []
+        const enabledMap = new Map(localProviders.map(p => [p.id || p.name, p.enabled]))
+        for (const p of providers) {
+          const localEnabled = enabledMap.get(p.id)
+          if (localEnabled !== undefined) p.enabled = localEnabled
+        }
+        // 追加本地存在但后端不存在的 disabled providers（用户禁用后后端不再存储）
+        for (const lp of localProviders) {
+          if (!lp.enabled && !providers.some(p => p.id === (lp.id || lp.name))) {
+            providers.push(lp)
+          }
+        }
+
+        logger.debug('转换后的 providers', providers)
         config.value!.llm.providers = providers
         config.value!.llm.defaultModel = backendConfig.default
           ? (backendConfig.providers[backendConfig.default]?.model || '')
           : ''
-        console.log('[HexClaw] LLM 配置加载成功, providers 数量:', providers.length)
-        return // 成功，直接返回
+        logger.info('LLM 配置加载成功', { providerCount: providers.length })
+        return
       } catch (e) {
-        console.error(`[HexClaw] 后端 LLM 配置加载失败 (${attempt}/${maxRetries}):`, e)
+        logger.warn(`后端 LLM 配置加载失败 (${attempt}/${maxRetries})`, e)
         if (attempt < maxRetries) {
           await new Promise(resolve => setTimeout(resolve, delayMs))
         }
       }
     }
-    // 所有重试都失败：若已有 providers（如用户刚保存过），保留现有配置，不清空
-    console.error('[HexClaw] 后端 LLM 配置加载最终失败，保留现有 providers')
+    logger.error('后端 LLM 配置加载最终失败，保留现有 providers')
     if ((config.value?.llm.providers.length ?? 0) === 0) {
       config.value!.llm.providers = []
       config.value!.llm.defaultModel = ''
@@ -243,14 +257,26 @@ export const useSettingsStore = defineStore('settings', () => {
         logger.error('LLM 配置保存到后端失败', e)
         throw e
       }
+
+      // 安全配置同步到后端
+      try {
+        await updateConfig({ security: plainConfig.security })
+        logger.debug('安全配置已同步到后端', plainConfig.security)
+      } catch (e) {
+        logger.warn('安全配置同步到后端失败（非致命）', e)
+      }
     }
 
-    // 非 LLM 配置保存到 Tauri Store（不含 LLM providers/apiKey）
+    // 非 LLM 配置保存到 Tauri Store（不含敏感 apiKey）
+    // 保留 provider id/enabled 映射，以便从后端加载后恢复 enabled 状态
     const configToSave: AppConfig = {
       ...plainConfig,
       llm: {
-        providers: [],
-        defaultModel: '',
+        providers: plainConfig.llm.providers.map(p => ({
+          ...p,
+          apiKey: '',
+        })),
+        defaultModel: plainConfig.llm.defaultModel,
       },
     }
 

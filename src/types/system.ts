@@ -1,12 +1,11 @@
-/** 系统统计 */
+/** 系统统计（匹配后端 GET /api/v1/stats） */
 export interface SystemStats {
-  uptime: number
-  total_requests: number
-  total_tokens: number
-  total_cost: number
-  active_sessions: number
-  active_agents: number
-  memory_usage: number
+  uptime_seconds: number
+  goroutines: number
+  memory_alloc_mb: number
+  memory_sys_mb: number
+  gc_cycles: number
+  log_entries: number
 }
 
 /** 平台信息 */

@@ -63,6 +63,9 @@ pub async fn proxy_api_request(
     path: String,
     body: Option<String>,
 ) -> Result<String, String> {
+    if !path.starts_with('/') || path.contains("..") {
+        return Err(format!("Invalid API path: {}", path));
+    }
     let url = format!("{}{}", sidecar::base_url(), path);
     let client = reqwest::Client::new();
 
@@ -138,10 +141,19 @@ pub struct StreamEvent {
 ///   - `chat-stream` { request_id, event_type: "error", data: "error message" }
 #[tauri::command]
 pub async fn stream_chat(app: tauri::AppHandle, params: StreamChatParams) -> Result<(), String> {
-    let url = format!(
-        "{}/chat/completions",
-        params.base_url.trim_end_matches('/')
-    );
+    let trimmed = params.base_url.trim_end_matches('/');
+    if let Ok(parsed) = trimmed.parse::<url::Url>() {
+        let scheme = parsed.scheme();
+        if scheme != "https" && scheme != "http" {
+            return Err(format!("Unsupported scheme: {}", scheme));
+        }
+        if let Some(host) = parsed.host_str() {
+            if host == "169.254.169.254" || host == "metadata.google.internal" {
+                return Err("Blocked: cloud metadata endpoint".to_string());
+            }
+        }
+    }
+    let url = format!("{}/chat/completions", trimmed);
 
     let body = serde_json::json!({
         "model": params.model,

@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Clock, Plus, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader } from 'lucide-vue-next'
+import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader } from 'lucide-vue-next'
 import { getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory, type CronJob, type CronJobInput, type CronJobRun } from '@/api/tasks'
-import PageHeader from '@/components/common/PageHeader.vue'
+import { useToast } from '@/composables'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 
 const { t } = useI18n()
+const toast = useToast()
 
 const jobs = ref<CronJob[]>([])
 const loading = ref(true)
@@ -72,9 +73,12 @@ async function handleCreate() {
   try {
     await createCronJob(form.value)
     showForm.value = false
+    toast.success(t('tasks.createTaskSuccess'))
     await loadJobs()
   } catch (e) {
     console.error('创建任务失败:', e)
+    const msg = e instanceof Error ? e.message : String(e)
+    toast.error(`${t('tasks.createTaskFailed')}: ${msg}`)
   } finally {
     submitting.value = false
   }
@@ -204,31 +208,12 @@ function statusText(status: string): string {
     default: return status
   }
 }
+
+defineExpose({ openCreateForm, loadJobs })
 </script>
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-    <PageHeader :title="t('tasks.title')" :description="t('tasks.description')">
-      <template #actions>
-        <button
-          class="hc-btn hc-btn-secondary"
-          style="padding: 6px 8px;"
-          @click="loadJobs"
-          :title="t('common.refresh')"
-        >
-          <RefreshCw :size="15" />
-        </button>
-        <button
-          class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-          :style="{ background: 'var(--hc-accent)' }"
-          @click="openCreateForm"
-        >
-          <Plus :size="16" />
-          {{ t('tasks.createTask') }}
-        </button>
-      </template>
-    </PageHeader>
-
     <div class="flex-1 overflow-y-auto p-6">
       <LoadingState v-if="loading" />
 

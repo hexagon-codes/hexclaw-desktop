@@ -11,7 +11,7 @@ import { checkHealth } from '@/api/client'
 const setup = () => {
   const sidecarReady = ref(false)
   const sidebarCollapsed = ref(false)
-  const detailPanelOpen = ref(false)
+  const detailPanelOpen = ref(true)
 
   let healthTimer: ReturnType<typeof setInterval> | null = null
 
@@ -62,12 +62,8 @@ type AppStoreOptions = DefineSetupStoreOptions<
   _ExtractActionsFromSetupStore<AppStoreSetup>
 >
 
-export const useAppStore = defineStore(
-  'app',
-  setup,
-  {
-    persist: {
-      pick: ['sidebarCollapsed'],
-    },
-  } as AppStoreOptions,
-)
+export const useAppStore = defineStore('app', setup, {
+  persist: {
+    pick: ['sidebarCollapsed', 'detailPanelOpen'],
+  },
+} as AppStoreOptions)

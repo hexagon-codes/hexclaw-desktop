@@ -56,7 +56,7 @@ pub async fn wait_for_healthy(app_handle: tauri::AppHandle, timeout_secs: u64) {
             Ok(resp) if resp.status().is_success() => {
                 log::info!("hexclaw sidecar 就绪: {}", url);
                 if let Some(state) = app_handle.try_state::<SidecarState>() {
-                    *state.ready.lock().unwrap() = true;
+                    *state.ready.lock().unwrap_or_else(|e| e.into_inner()) = true;
                 }
                 // 通知前端 sidecar 已就绪
                 let _ = app_handle.emit("sidecar-ready", true);
@@ -76,7 +76,7 @@ pub async fn wait_for_healthy(app_handle: tauri::AppHandle, timeout_secs: u64) {
 pub fn is_ready(app_handle: &tauri::AppHandle) -> bool {
     app_handle
         .try_state::<SidecarState>()
-        .map(|s| *s.ready.lock().unwrap())
+        .map(|s| *s.ready.lock().unwrap_or_else(|e| e.into_inner()))
         .unwrap_or(false)
 }
 

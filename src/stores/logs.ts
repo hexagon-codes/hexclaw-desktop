@@ -10,7 +10,7 @@ const MAX_ENTRIES = 1000
 export const useLogsStore = defineStore('logs', () => {
   const entries = ref<LogEntry[]>([])
   const connected = ref(false)
-  const filter = ref<{ level?: string; source?: string; keyword?: string }>({})
+  const filter = ref<{ level?: string; source?: string; domain?: string; keyword?: string }>({})
   const stats = ref<LogStats | null>(null)
   const error = ref<ApiError | null>(null)
 
@@ -27,13 +27,23 @@ export const useLogsStore = defineStore('logs', () => {
     if (filter.value.source) {
       result = result.filter((e) => e.source === filter.value.source)
     }
+    if (filter.value.domain) {
+      result = result.filter((e) => e.domain === filter.value.domain)
+    }
     if (filter.value.keyword) {
       const kw = filter.value.keyword.toLowerCase()
-      result = result.filter((e) => e.message.toLowerCase().includes(kw))
+      result = result.filter((e) =>
+        e.message.toLowerCase().includes(kw)
+        || e.source?.toLowerCase().includes(kw)
+        || e.domain?.toLowerCase().includes(kw)
+        || e.trace_id?.toLowerCase().includes(kw),
+      )
     }
 
     return result
   })
+
+  let reconnecting = false
 
   /** 建立 WebSocket 连接 */
   function connect() {
@@ -42,29 +52,36 @@ export const useLogsStore = defineStore('logs', () => {
     ws = connectLogStream(
       (entry) => {
         if (entries.value.length >= MAX_ENTRIES) {
-          entries.value.shift()
+          entries.value = [...entries.value.slice(1), entry]
+        } else {
+          entries.value.push(entry)
         }
-        entries.value.push(entry)
       },
       () => {
         connected.value = false
         ws = null
-        setTimeout(connect, reconnectDelay)
-        reconnectDelay = Math.min(reconnectDelay * 2, 30000)
       },
     )
 
     ws.onopen = async () => {
       connected.value = true
       reconnectDelay = 1000
+      reconnecting = false
       logger.info('日志流已连接')
-      // 加载历史日志
       await loadHistory()
     }
 
     ws.onclose = () => {
       connected.value = false
       ws = null
+      if (!reconnecting) {
+        reconnecting = true
+        setTimeout(() => {
+          reconnecting = false
+          connect()
+        }, reconnectDelay)
+        reconnectDelay = Math.min(reconnectDelay * 2, 30000)
+      }
     }
   }
 
@@ -114,6 +131,7 @@ export const useLogsStore = defineStore('logs', () => {
     filteredEntries,
     connect,
     disconnect,
+    loadHistory,
     loadStats,
     setFilter,
     clear,

@@ -10,7 +10,7 @@ export interface BackendChatResponse {
   reply: string
   session_id: string
   tool_calls?: import('@/types').ToolCall[]
-  metadata?: Record<string, string>
+  metadata?: Record<string, unknown>
 }
 
 /**
@@ -25,6 +25,7 @@ export async function sendChatViaBackend(
     sessionId?: string
     role?: string
     model?: string
+    attachments?: { type: string; name: string; mime: string; data: string }[]
   },
 ): Promise<BackendChatResponse> {
   const { invoke } = await import('@tauri-apps/api/core')
@@ -38,6 +39,7 @@ export async function sendChatViaBackend(
       role: options?.role || null,
       user_id: DESKTOP_USER_ID,
       model: options?.model || null,
+      attachments: options?.attachments || null,
     },
   })
 

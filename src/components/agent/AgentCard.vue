@@ -1,6 +1,9 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import { Bot, MessageSquare } from 'lucide-vue-next'
 import type { AgentRole } from '@/types'
+
+const { t } = useI18n()
 
 defineProps<{
   role: AgentRole
@@ -30,7 +33,7 @@ const emit = defineEmits<{
       <div class="hc-agent-card__actions">
         <button
           class="hc-agent-card__action"
-          title="聊天"
+          :title="t('agents.chat')"
           @click.stop="emit('chat', role)"
         >
           <MessageSquare :size="14" />
@@ -38,7 +41,7 @@ const emit = defineEmits<{
       </div>
     </div>
 
-    <p class="hc-agent-card__desc">{{ role.goal || '暂无描述' }}</p>
+    <p class="hc-agent-card__desc">{{ role.goal || t('agents.noDesc') }}</p>
   </div>
 </template>
 

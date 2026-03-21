@@ -18,10 +18,10 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         "HexClaw",
         true,
         &[
-            &MenuItemBuilder::with_id("about", "关于 HexClaw")
+            &MenuItemBuilder::with_id("about", "About HexClaw")
                 .build(handle)?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItemBuilder::with_id("preferences", "设置...")
+            &MenuItemBuilder::with_id("preferences", "Settings...")
                 .accelerator("CmdOrCtrl+,")
                 .build(handle)?,
             &PredefinedMenuItem::separator(handle)?,
@@ -38,57 +38,57 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // ─── File Menu ───
     let file_menu = Submenu::with_items(
         handle,
-        "文件",
+        "File",
         true,
         &[
-            &MenuItemBuilder::with_id("new_chat", "新建对话")
+            &MenuItemBuilder::with_id("new_chat", "New Chat")
                 .accelerator("CmdOrCtrl+N")
                 .build(handle)?,
             &PredefinedMenuItem::separator(handle)?,
-            &PredefinedMenuItem::close_window(handle, Some("关闭窗口"))?,
+            &PredefinedMenuItem::close_window(handle, Some("Close Window"))?,
         ],
     )?;
 
     // ─── Edit Menu ───
     let edit_menu = Submenu::with_items(
         handle,
-        "编辑",
+        "Edit",
         true,
         &[
-            &PredefinedMenuItem::undo(handle, Some("撤销"))?,
-            &PredefinedMenuItem::redo(handle, Some("重做"))?,
+            &PredefinedMenuItem::undo(handle, None)?,
+            &PredefinedMenuItem::redo(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
-            &PredefinedMenuItem::cut(handle, Some("剪切"))?,
-            &PredefinedMenuItem::copy(handle, Some("拷贝"))?,
-            &PredefinedMenuItem::paste(handle, Some("粘贴"))?,
-            &PredefinedMenuItem::select_all(handle, Some("全选"))?,
+            &PredefinedMenuItem::cut(handle, None)?,
+            &PredefinedMenuItem::copy(handle, None)?,
+            &PredefinedMenuItem::paste(handle, None)?,
+            &PredefinedMenuItem::select_all(handle, None)?,
         ],
     )?;
 
     // ─── View Menu ───
     let view_menu = Submenu::with_items(
         handle,
-        "显示",
+        "View",
         true,
         &[
-            &MenuItemBuilder::with_id("toggle_sidebar", "切换侧边栏")
+            &MenuItemBuilder::with_id("toggle_sidebar", "Toggle Sidebar")
                 .accelerator("CmdOrCtrl+\\")
                 .build(handle)?,
             &PredefinedMenuItem::separator(handle)?,
-            &PredefinedMenuItem::fullscreen(handle, Some("进入全屏幕"))?,
+            &PredefinedMenuItem::fullscreen(handle, None)?,
         ],
     )?;
 
     // ─── Window Menu ───
     let window_menu = Submenu::with_items(
         handle,
-        "窗口",
+        "Window",
         true,
         &[
-            &PredefinedMenuItem::minimize(handle, Some("最小化"))?,
-            &PredefinedMenuItem::maximize(handle, Some("最大化"))?,
+            &PredefinedMenuItem::minimize(handle, None)?,
+            &PredefinedMenuItem::maximize(handle, None)?,
             &PredefinedMenuItem::separator(handle)?,
-            &MenuItemBuilder::with_id("quick_chat", "快捷对话")
+            &MenuItemBuilder::with_id("quick_chat", "Quick Chat")
                 .accelerator("CmdOrCtrl+Shift+H")
                 .build(handle)?,
         ],
@@ -97,12 +97,12 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     // ─── Help Menu ───
     let help_menu = Submenu::with_items(
         handle,
-        "帮助",
+        "Help",
         true,
         &[
-            &MenuItemBuilder::with_id("docs", "文档")
+            &MenuItemBuilder::with_id("docs", "Documentation")
                 .build(handle)?,
-            &MenuItemBuilder::with_id("logs", "查看日志")
+            &MenuItemBuilder::with_id("logs", "View Logs")
                 .build(handle)?,
         ],
     )?;
@@ -137,7 +137,7 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                         "about",
                         WebviewUrl::App("/about".into()),
                     )
-                    .title("关于 HexClaw")
+                    .title("About HexClaw")
                     .inner_size(520.0, 720.0)
                     .resizable(false)
                     .minimizable(false)

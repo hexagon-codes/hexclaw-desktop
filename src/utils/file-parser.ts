@@ -15,7 +15,9 @@ const DOCUMENT_EXTENSIONS = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv', '
 
 /** Check if a file is a parseable document (not image/video) */
 export function isDocumentFile(file: File): boolean {
-  const ext = '.' + file.name.split('.').pop()?.toLowerCase()
+  const dotIdx = file.name.lastIndexOf('.')
+  if (dotIdx <= 0) return false
+  const ext = file.name.slice(dotIdx).toLowerCase()
   return DOCUMENT_EXTENSIONS.includes(ext)
 }
 

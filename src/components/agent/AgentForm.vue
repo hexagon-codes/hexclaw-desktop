@@ -78,7 +78,7 @@ const isReadonly = () => props.readonly ?? false
       <div v-if="visible" class="hc-modal-overlay" @click.self="emit('close')">
         <div class="hc-modal">
           <div class="hc-modal__header">
-            <h2 class="hc-modal__title">{{ readonly ? '角色详情' : (role ? '编辑角色' : '创建角色') }}</h2>
+            <h2 class="hc-modal__title">{{ readonly ? t('agents.title') : (role ? t('agents.editAgent') : t('agents.createAgent')) }}</h2>
             <button class="hc-modal__close" @click="emit('close')">
               <X :size="17" />
             </button>
@@ -86,33 +86,33 @@ const isReadonly = () => props.readonly ?? false
           <div class="hc-modal__body">
             <!-- 基本信息 -->
             <div class="hc-field">
-              <label class="hc-field__label">名称 (ID)</label>
+              <label class="hc-field__label">{{ t('agents.name') }} (ID)</label>
               <input
                 v-if="!isReadonly()"
                 v-model="form.name"
                 class="hc-input"
-                placeholder="如: researcher, coder"
+                placeholder="e.g. researcher, coder"
                 :disabled="!!role"
               />
               <div v-else class="hc-readonly">{{ form.name }}</div>
             </div>
             <div class="hc-field">
-              <label class="hc-field__label">标题</label>
+              <label class="hc-field__label">{{ t('agents.displayName') }}</label>
               <input
                 v-if="!isReadonly()"
                 v-model="form.title"
                 class="hc-input"
-                placeholder="如: 研究分析师"
+                placeholder="e.g. Research Analyst"
               />
               <div v-else class="hc-readonly">{{ form.title }}</div>
             </div>
             <div class="hc-field">
-              <label class="hc-field__label">目标</label>
+              <label class="hc-field__label">{{ t('agents.goal') }}</label>
               <textarea
                 v-if="!isReadonly()"
                 v-model="form.goal"
                 class="hc-input hc-textarea"
-                placeholder="角色的核心目标..."
+                :placeholder="t('agents.goal') + '...'"
                 rows="2"
               />
               <div v-else class="hc-readonly">{{ form.goal }}</div>
@@ -121,22 +121,22 @@ const isReadonly = () => props.readonly ?? false
             <!-- 背景故事 -->
             <div class="hc-field">
               <label class="hc-field__label">
-                <BookOpen :size="12" class="inline" /> 背景故事
+                <BookOpen :size="12" class="inline" /> {{ t('agents.backstory') }}
               </label>
               <textarea
                 v-if="!isReadonly()"
                 v-model="form.backstory"
                 class="hc-input hc-textarea"
-                placeholder="角色的背景描述、专业能力说明..."
+                :placeholder="t('agents.backstory') + '...'"
                 rows="3"
               />
-              <div v-else class="hc-readonly hc-readonly--pre">{{ form.backstory || '（无）' }}</div>
+              <div v-else class="hc-readonly hc-readonly--pre">{{ form.backstory || '-' }}</div>
             </div>
 
             <!-- 工具列表 -->
             <div class="hc-field">
               <label class="hc-field__label">
-                <Wrench :size="12" class="inline" /> 可用工具
+                <Wrench :size="12" class="inline" /> {{ t('agents.tools') }}
               </label>
               <div v-if="form.tools && form.tools.length > 0" class="hc-tag-list">
                 <span v-for="(tool, i) in form.tools" :key="i" class="hc-tag">
@@ -146,12 +146,12 @@ const isReadonly = () => props.readonly ?? false
                   </button>
                 </span>
               </div>
-              <div v-else-if="isReadonly()" class="hc-readonly">（无）</div>
+              <div v-else-if="isReadonly()" class="hc-readonly">-</div>
               <div v-if="!isReadonly()" class="hc-add-row">
                 <input
                   v-model="newTool"
                   class="hc-input hc-input--sm"
-                  placeholder="添加工具名称..."
+                  placeholder="Add tool name..."
                   @keyup.enter="addTool"
                 />
                 <button class="hc-add-btn" @click="addTool">
@@ -163,7 +163,7 @@ const isReadonly = () => props.readonly ?? false
             <!-- 约束条件 -->
             <div class="hc-field">
               <label class="hc-field__label">
-                <Shield :size="12" class="inline" /> 约束条件
+                <Shield :size="12" class="inline" /> Constraints
               </label>
               <div v-if="form.constraints && form.constraints.length > 0" class="hc-constraint-list">
                 <div v-for="(c, i) in form.constraints" :key="i" class="hc-constraint-item">
@@ -173,12 +173,12 @@ const isReadonly = () => props.readonly ?? false
                   </button>
                 </div>
               </div>
-              <div v-else-if="isReadonly()" class="hc-readonly">（无）</div>
+              <div v-else-if="isReadonly()" class="hc-readonly">-</div>
               <div v-if="!isReadonly()" class="hc-add-row">
                 <input
                   v-model="newConstraint"
                   class="hc-input hc-input--sm"
-                  placeholder="添加约束条件..."
+                  placeholder="Add constraint..."
                   @keyup.enter="addConstraint"
                 />
                 <button class="hc-add-btn" @click="addConstraint">
@@ -189,7 +189,7 @@ const isReadonly = () => props.readonly ?? false
           </div>
           <div class="hc-modal__footer">
             <button class="hc-btn hc-btn-secondary" @click="emit('close')">
-              {{ readonly ? (t('common.close') || '关闭') : (t('common.cancel') || '取消') }}
+              {{ readonly ? t('common.close') : t('common.cancel') }}
             </button>
             <button
               v-if="!readonly"
@@ -197,7 +197,7 @@ const isReadonly = () => props.readonly ?? false
               :disabled="!form.name.trim() || !form.title.trim()"
               @click="handleSave"
             >
-              {{ t('common.save') || '保存' }}
+              {{ t('common.save') }}
             </button>
           </div>
         </div>

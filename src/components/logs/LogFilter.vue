@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
 import SearchInput from '@/components/common/SearchInput.vue'
+
+const { t } = useI18n()
 
 defineProps<{
   level: string
@@ -12,7 +15,7 @@ const emit = defineEmits<{
 }>()
 
 const levels = [
-  { key: '', label: '全部' },
+  { key: '', label: 'logs.all' },
   { key: 'debug', label: 'Debug' },
   { key: 'info', label: 'Info' },
   { key: 'warn', label: 'Warn' },
@@ -33,13 +36,13 @@ const levels = [
         }"
         @click="emit('update:level', l.key)"
       >
-        {{ l.label }}
+        {{ l.key === '' ? t(l.label) : l.label }}
       </button>
     </div>
     <div class="flex-1" />
     <SearchInput
       :model-value="keyword"
-      placeholder="搜索日志..."
+      :placeholder="t('logs.searchPlaceholder')"
       @update:model-value="emit('update:keyword', $event)"
     />
   </div>

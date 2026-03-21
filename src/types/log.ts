@@ -5,6 +5,7 @@ export interface LogEntry {
   level: 'debug' | 'info' | 'warn' | 'error'
   source: string
   message: string
+  domain?: string
   fields?: Record<string, unknown>
   trace_id?: string
 }
@@ -13,6 +14,7 @@ export interface LogEntry {
 export interface LogQuery {
   level?: string
   source?: string
+  domain?: string
   keyword?: string
   start_time?: string
   end_time?: string

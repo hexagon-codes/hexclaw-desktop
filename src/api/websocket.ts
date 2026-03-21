@@ -1,3 +1,4 @@
+import { env } from '@/config/env'
 import { logger } from '@/utils/logger'
 
 type ChunkCallback = (content: string, done: boolean) => void
@@ -12,16 +13,26 @@ interface WsMessage {
   role?: string
 }
 
+interface WsUsage {
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  provider: string
+  model: string
+  cost?: number
+}
+
 interface WsServerMessage {
   type: 'chunk' | 'reply' | 'error' | 'pong'
   content: string
   done?: boolean
   session_id?: string
+  usage?: WsUsage
 }
 
 class HexClawWS {
   private ws: WebSocket | null = null
-  private url = 'ws://localhost:16060/ws'
+  private url = `${env.wsBase}/ws`
 
   private chunkCallbacks: ChunkCallback[] = []
   private replyCallbacks: ReplyCallback[] = []

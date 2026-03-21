@@ -6,10 +6,41 @@ export interface DiffLine {
   newLineNo?: number
 }
 
+const MAX_LCS_CELLS = 4_000_000
+
 /**
- * 简单行级 diff（LCS 算法，滚动数组优化）
+ * Simple line-by-line diff for large files (O(m+n) memory).
+ * Falls back to this when LCS would exceed MAX_LCS_CELLS.
+ */
+function computeDiffSimple(oldLines: string[], newLines: string[]): DiffLine[] {
+  const result: DiffLine[] = []
+  const maxLen = Math.max(oldLines.length, newLines.length)
+  let oi = 0, ni = 0
+  while (oi < oldLines.length && ni < newLines.length) {
+    if (oldLines[oi] === newLines[ni]) {
+      result.push({ type: 'equal', content: oldLines[oi]!, oldLineNo: oi + 1, newLineNo: ni + 1 })
+      oi++; ni++
+    } else {
+      result.push({ type: 'remove', content: oldLines[oi]!, oldLineNo: oi + 1 })
+      result.push({ type: 'add', content: newLines[ni]!, newLineNo: ni + 1 })
+      oi++; ni++
+    }
+  }
+  while (oi < oldLines.length) {
+    result.push({ type: 'remove', content: oldLines[oi]!, oldLineNo: oi + 1 })
+    oi++
+  }
+  while (ni < newLines.length) {
+    result.push({ type: 'add', content: newLines[ni]!, newLineNo: ni + 1 })
+    ni++
+  }
+  return result
+}
+
+/**
+ * 行级 diff（LCS 算法，滚动数组 + 方向矩阵）
  *
- * 使用 O(n) 空间代替 O(n²) DP 表，避免大文件内存溢出。
+ * 对于超大文件（m*n > 4M cells）降级到简单逐行比较以避免 OOM。
  */
 export function computeDiff(oldText: string, newText: string): DiffLine[] {
   const oldLines = oldText.split('\n')
@@ -17,12 +48,14 @@ export function computeDiff(oldText: string, newText: string): DiffLine[] {
   const m = oldLines.length
   const n = newLines.length
 
-  // LCS DP — 滚动数组，O(n) 空间
+  if (m * n > MAX_LCS_CELLS) {
+    return computeDiffSimple(oldLines, newLines)
+  }
+
   let prev = new Array<number>(n + 1).fill(0)
   let curr = new Array<number>(n + 1).fill(0)
 
-  // 方向矩阵仍然需要 O(m*n)，但只存 2-bit 方向标记（远小于 8-byte number）
-  // 用 Uint8Array 存储: 0=diag(match), 1=left, 2=up
+  // 0=diag(match), 1=left, 2=up
   const dir = new Uint8Array(m * n)
 
   for (let i = 1; i <= m; i++) {

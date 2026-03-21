@@ -154,6 +154,8 @@ beforeAll(() => {
 describe('ChatView — E2E 关键路径', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     ;(globalThis as Record<string, unknown>).isTauri = true
   })
 

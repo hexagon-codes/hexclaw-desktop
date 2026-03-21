@@ -17,7 +17,7 @@ defineProps<{
     >
       <Activity :size="14" :style="{ color: 'var(--hc-accent)' }" />
       <div>
-        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">轮次</div>
+        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">Rounds</div>
         <div class="text-sm font-medium tabular-nums" :style="{ color: 'var(--hc-text-primary)' }">
           {{ rounds ?? '-' }}
         </div>
@@ -41,7 +41,7 @@ defineProps<{
     >
       <DollarSign :size="14" :style="{ color: 'var(--hc-success)' }" />
       <div>
-        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">费用</div>
+        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">Cost</div>
         <div class="text-sm font-medium tabular-nums" :style="{ color: 'var(--hc-text-primary)' }">
           ${{ cost?.toFixed(4) ?? '-' }}
         </div>
@@ -53,7 +53,7 @@ defineProps<{
     >
       <Clock :size="14" :style="{ color: 'var(--hc-text-secondary)' }" />
       <div>
-        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">延迟</div>
+        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">Latency</div>
         <div class="text-sm font-medium tabular-nums" :style="{ color: 'var(--hc-text-primary)' }">
           {{ latency ? latency.toFixed(1) + 's' : '-' }}
         </div>

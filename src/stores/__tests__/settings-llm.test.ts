@@ -24,6 +24,16 @@ vi.mock('@/api/config', () => ({
   updateLLMConfig: (...args: unknown[]) => mockUpdateLLMConfig(...args),
 }))
 
+vi.mock('@tauri-apps/plugin-store', () => {
+  class MockLazyStore {
+    async get() { return null }
+    async set() {}
+    async save() {}
+    async delete() {}
+  }
+  return { LazyStore: MockLazyStore }
+})
+
 describe('Settings Store — isTauri 检测与 LLM 加载', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -129,6 +139,8 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
   })
 
   it('getLLMConfig 失败时应重试 3 次', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
     mockGetLLMConfig.mockRejectedValue(new Error('connection refused'))
     ;(globalThis as unknown as Record<string, unknown>).isTauri = true
 
@@ -141,6 +153,7 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
   }, 30000)
 
   it('第一次失败第二次成功时应正常加载', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
     mockGetLLMConfig
       .mockRejectedValueOnce(new Error('connection refused'))
       .mockResolvedValueOnce(MOCK_BACKEND_CONFIG)

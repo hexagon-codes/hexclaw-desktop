@@ -1,20 +1,25 @@
 <script setup lang="ts">
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
+
 defineProps<{
   status: 'online' | 'offline' | 'error' | 'warning' | 'idle' | 'running'
 }>()
+
+const labels: Record<string, string> = {
+  online: 'statusBadge.online',
+  offline: 'statusBadge.offline',
+  error: 'statusBadge.error',
+  warning: 'statusBadge.warning',
+  idle: 'statusBadge.idle',
+  running: 'statusBadge.running',
+}
 </script>
 
 <template>
   <span class="hc-badge" :class="`hc-badge--${status}`">
     <span class="hc-badge__dot" />
-    <span class="hc-badge__label">
-      <template v-if="status === 'online'">在线</template>
-      <template v-else-if="status === 'offline'">离线</template>
-      <template v-else-if="status === 'error'">错误</template>
-      <template v-else-if="status === 'warning'">警告</template>
-      <template v-else-if="status === 'idle'">空闲</template>
-      <template v-else-if="status === 'running'">运行中</template>
-    </span>
+    <span class="hc-badge__label">{{ t(labels[status] || status) }}</span>
   </span>
 </template>
 

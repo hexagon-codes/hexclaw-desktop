@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import logoUrl from '@/assets/logo.png'
-import hexagonLogoUrl from '@/assets/hexagon-logo.png'
+import hexagonLogoUrl from '@/assets/hexagon-logo.svg'
 </script>
 
 <template>
@@ -21,7 +21,7 @@ import hexagonLogoUrl from '@/assets/hexagon-logo.png'
       </div>
 
       <div class="hc-about__version">
-        <span class="hc-about__version-tag">v0.0.1</span>
+        <span class="hc-about__version-tag">v0.0.2</span>
         <span class="hc-about__version-sep">·</span>
         <span class="hc-about__version-meta">Build 1</span>
         <span class="hc-about__version-sep">·</span>
@@ -87,7 +87,7 @@ import hexagonLogoUrl from '@/assets/hexagon-logo.png'
             <span class="hc-about__eco-sub">Agent 框架</span>
           </a>
           <span class="hc-about__eco-arrow">→</span>
-          <a href="https://github.com/hexagon-codes/hexclaw" target="_blank" class="hc-about__eco-node">
+          <a href="https://github.com/everyday-items/hexclaw" target="_blank" class="hc-about__eco-node">
             <span class="hc-about__eco-emoji">🦀</span>
             <span class="hc-about__eco-label">hexclaw</span>
             <span class="hc-about__eco-sub">后端服务</span>

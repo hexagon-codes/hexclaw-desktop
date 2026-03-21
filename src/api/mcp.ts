@@ -26,7 +26,7 @@ export function getMcpServerStatus() {
   return apiGet<{ statuses: Record<string, 'connected' | 'disconnected' | 'error'> }>('/api/v1/mcp/status')
 }
 
-/** 添加 MCP 服务器 */
+/** 添加 MCP 服务器（运行时动态添加，无需重启） */
 export function addMcpServer(name: string, command: string, args?: string[]) {
   return apiPost<{ message: string }>('/api/v1/mcp/servers', { name, command, args })
 }

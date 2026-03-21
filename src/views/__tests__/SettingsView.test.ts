@@ -1,10 +1,16 @@
-import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import SettingsView from '../SettingsView.vue'
 import { useSettingsStore } from '@/stores/settings'
 import zhCN from '@/i18n/locales/zh-CN'
+
+const { mockRouter } = vi.hoisted(() => ({
+  mockRouter: {
+    push: vi.fn(),
+  },
+}))
 
 // ─── Mock API 模块 ──────────────────────────────────────
 vi.mock('@/api/config', () => ({
@@ -68,9 +74,9 @@ function createTestI18n() {
 /**
  * Mock router (SettingsView 中 MCP 页面跳转需要)
  */
-const mockRouter = {
-  push: vi.fn(),
-}
+vi.mock('vue-router', () => ({
+  useRouter: vi.fn().mockReturnValue(mockRouter),
+}))
 
 /**
  * 挂载 SettingsView 的辅助函数
@@ -85,15 +91,12 @@ function mountSettingsView() {
       plugins: [pinia, i18n],
       stubs: {
         PageHeader: {
-          props: ['title'],
-          template: '<div class="page-header-stub">{{ title }}</div>',
+          props: ['title', 'description'],
+          template: '<div class="page-header-stub">{{ title }} {{ description }}</div>',
         },
         LoadingState: {
           template: '<div data-testid="loading-state">加载中...</div>',
         },
-      },
-      mocks: {
-        $router: mockRouter,
       },
     },
   })
@@ -120,12 +123,6 @@ beforeAll(() => {
 describe('SettingsView — E2E 关键路径', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // 每个测试前设置 isTauri，使 settings store 走后端 LLM 加载路径
-    ;(globalThis as Record<string, unknown>).isTauri = true
-  })
-
-  afterEach(() => {
-    delete (globalThis as Record<string, unknown>).isTauri
   })
 
   // ────────────────────────────────────────────────────
@@ -242,6 +239,7 @@ describe('SettingsView — E2E 关键路径', () => {
   // 6. loading 状态显示
   // ────────────────────────────────────────────────────
   it('shows loading state while config is being fetched', async () => {
+    ;(globalThis as Record<string, unknown>).isTauri = true
     const { getLLMConfig } = await import('@/api/config')
     const mockedGetConfig = vi.mocked(getLLMConfig)
 
@@ -277,6 +275,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     // loading 应消失
     expect(store.loading).toBe(false)
+    delete (globalThis as Record<string, unknown>).isTauri
   })
 
   // ────────────────────────────────────────────────────
@@ -326,10 +325,10 @@ describe('SettingsView — E2E 关键路径', () => {
     await notifBtn!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('系统通知')
+    expect(wrapper.text()).toContain('桌面通知')
     expect(wrapper.text()).toContain('声音提示')
-    expect(wrapper.text()).toContain('定时任务通知')
-    expect(wrapper.text()).toContain('Heartbeat 异常告警')
+    expect(wrapper.text()).toContain('自动化任务通知')
+    expect(wrapper.text()).toContain('Cron 提醒')
   })
 
   // ────────────────────────────────────────────────────

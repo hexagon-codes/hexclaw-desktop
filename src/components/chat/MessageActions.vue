@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { Copy, RotateCcw, Pencil, ThumbsUp, ThumbsDown } from 'lucide-vue-next'
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   role: 'user' | 'assistant'
@@ -35,7 +38,7 @@ async function handleCopy() {
     copied.value = true
     setTimeout(() => (copied.value = false), 1500)
   } catch {
-    console.error('复制失败')
+    // clipboard write can fail in certain environments
   }
   emit('copy')
 }
@@ -43,29 +46,27 @@ async function handleCopy() {
 
 <template>
   <div class="hc-msg-actions">
-    <!-- AI message actions: like, dislike, copy, retry -->
     <template v-if="role === 'assistant'">
-      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active': liked === 'like' }" title="赞" @click="handleLike">
+      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active': liked === 'like' }" :title="t('chat.liked')" @click="handleLike">
         <ThumbsUp :size="13" />
       </button>
-      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active-bad': liked === 'dislike' }" title="踩" @click="handleDislike">
+      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active-bad': liked === 'dislike' }" :title="t('chat.disliked')" @click="handleDislike">
         <ThumbsDown :size="13" />
       </button>
       <span class="hc-msg-actions__divider" />
-      <button class="hc-msg-actions__btn" :title="copied ? '已复制' : '复制'" @click="handleCopy">
+      <button class="hc-msg-actions__btn" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
         <Copy :size="13" />
       </button>
-      <button class="hc-msg-actions__btn" title="重新生成" @click="emit('retry')">
+      <button class="hc-msg-actions__btn" :title="t('chat.regenerate')" @click="emit('retry')">
         <RotateCcw :size="13" />
       </button>
     </template>
 
-    <!-- User message actions: copy, edit -->
     <template v-else>
-      <button class="hc-msg-actions__btn" :title="copied ? '已复制' : '复制'" @click="handleCopy">
+      <button class="hc-msg-actions__btn" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
         <Copy :size="13" />
       </button>
-      <button class="hc-msg-actions__btn" title="编辑" @click="emit('edit')">
+      <button class="hc-msg-actions__btn" :title="t('chat.editMessage')" @click="emit('edit')">
         <Pencil :size="13" />
       </button>
     </template>

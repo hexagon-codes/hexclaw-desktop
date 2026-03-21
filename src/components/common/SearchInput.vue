@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { Search, X } from 'lucide-vue-next'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 defineProps<{
   modelValue: string
@@ -18,7 +21,7 @@ const emit = defineEmits<{
       :value="modelValue"
       type="text"
       class="hc-search__input"
-      :placeholder="placeholder || '搜索...'"
+      :placeholder="placeholder || `${t('common.search')}...`"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
     />
     <button

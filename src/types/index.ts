@@ -8,11 +8,11 @@
 // ─── 领域模型 ───────────────────────────────────────
 
 export type { ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ExecMode } from './chat'
-export type { AgentRole, AgentConfig } from './agent'
+export type { AgentRole, AgentConfig, AgentRule } from './agent'
 export type { LogEntry, LogQuery, LogStats } from './log'
 export type { MemoryData } from './memory'
 export type { McpServer, McpTool } from './mcp'
-export type { Skill, ClawHubSkill } from './skill'
+export type { Skill, ClawHubSkill, SkillStatusUpdateResult } from './skill'
 export type { CronJob, CronJobInput } from './task'
 export type { KnowledgeDoc, KnowledgeSearchResult } from './knowledge'
 export type {
@@ -20,6 +20,7 @@ export type {
   CanvasEdge,
   Workflow,
   WorkflowRunStatus,
+  WorkflowNodeRun,
   WorkflowRun,
 } from './canvas'
 export type {
@@ -37,6 +38,8 @@ export type {
   ChatParams,
   BackendLLMProvider,
   BackendLLMConfig,
+  LLMConnectionTestRequest,
+  LLMConnectionTestResponse,
 } from './settings'
 export type { SystemStats, PlatformInfo } from './system'
 

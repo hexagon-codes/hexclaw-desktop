@@ -46,6 +46,7 @@ export function apiPost<T>(url: string, body?: Record<string, unknown> | FormDat
   const opts: Record<string, unknown> = { method: 'POST' }
   if (body instanceof FormData) {
     opts.body = body
+    opts.headers = {}
   } else if (body) {
     opts.body = body as Record<string, unknown>
   }
@@ -133,9 +134,9 @@ export function apiWebSocket(path: string): WebSocket {
 export async function checkHealth(): Promise<boolean> {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
-    return await invoke<boolean>('check_engine_health')
+    const result = await invoke<boolean>('check_engine_health')
+    return Boolean(result)
   } catch {
-    // 非 Tauri 环境或 invoke 失败，回退到直接 HTTP
     try {
       await api('/health', { timeout: 3000 })
       return true

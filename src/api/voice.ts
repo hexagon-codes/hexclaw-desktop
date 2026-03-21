@@ -5,6 +5,7 @@
  */
 
 import { apiGet, apiPost } from './client'
+import { env } from '@/config/env'
 
 /** 语音服务状态 */
 export interface VoiceStatus {
@@ -14,27 +15,18 @@ export interface VoiceStatus {
   tts_provider: string
 }
 
-/** TTS 合成请求 */
+/** TTS 合成请求 — 匹配后端 handleVoiceSynthesize */
 export interface TTSRequest {
   text: string
   voice?: string
-  speed?: number
-  language?: string
 }
 
-/** TTS 合成响应 */
-export interface TTSResponse {
-  audio_url: string
-  duration_ms: number
-  format: string
-}
-
-/** STT 识别响应 */
+/** STT 识别响应 — 匹配后端 voice.TranscribeResult */
 export interface STTResponse {
   text: string
   confidence: number
   language: string
-  duration_ms: number
+  duration: number
 }
 
 /** 获取语音服务状态 */
@@ -42,20 +34,26 @@ export function getVoiceStatus() {
   return apiGet<VoiceStatus>('/api/v1/voice/status')
 }
 
-/** 获取可用 TTS 音色列表 */
-export function getVoiceList() {
-  return apiGet<{ voices: { id: string; name: string; language: string; preview_url?: string }[] }>('/api/v1/voice/tts/voices')
+/**
+ * 文本转语音 — 注意：后端返回音频二进制流（audio/mpeg 等），
+ * 不是 JSON，需要用 fetch + blob 接收。当前未被调用。
+ */
+export async function textToSpeech(req: TTSRequest): Promise<Blob> {
+  const res = await fetch(`${env.apiBase}/api/v1/voice/synthesize`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) throw new Error(`TTS failed: ${res.status}`)
+  return res.blob()
 }
 
-/** 文本转语音 */
-export function textToSpeech(req: TTSRequest) {
-  return apiPost<TTSResponse>('/api/v1/voice/tts', req)
-}
-
-/** 语音转文本 — 接受音频文件 FormData */
+/** 语音转文本 — 接受音频文件 FormData，language 通过 query param 传递 */
 export function speechToText(audioFile: File, language?: string) {
   const form = new FormData()
   form.append('audio', audioFile)
-  if (language) form.append('language', language)
-  return apiPost<STTResponse>('/api/v1/voice/stt', form)
+  const params = new URLSearchParams()
+  if (language) params.set('language', language)
+  const qs = params.toString()
+  return apiPost<STTResponse>(`/api/v1/voice/transcribe${qs ? `?${qs}` : ''}`, form)
 }

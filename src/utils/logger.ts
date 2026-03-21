@@ -15,6 +15,7 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
 }
 
 function getMinLevel(): LogLevel {
+  if (import.meta.env?.MODE === 'test' || import.meta.env?.VITEST) return 'warn'
   // 延迟读取，避免循环依赖
   try {
     const envVal = import.meta.env.VITE_LOG_LEVEL as string | undefined

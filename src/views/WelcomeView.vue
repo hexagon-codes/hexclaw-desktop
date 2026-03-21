@@ -3,10 +3,10 @@ import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Key, Bot, Sparkles, ArrowRight, ArrowLeft, Check, Loader2, CheckCircle, XCircle } from 'lucide-vue-next'
-import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
 import { PROVIDER_PRESETS } from '@/config/providers'
 import type { ProviderType } from '@/types'
+import { testLLMConnection } from '@/api/config'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -17,6 +17,7 @@ const finishing = ref(false)
 const apiKey = ref('')
 const provider = ref<ProviderType>('openai')
 const model = ref('gpt-4o')
+const selectedAgentRole = ref<'assistant' | 'coder' | 'writer'>('assistant')
 
 /** Available models based on selected provider */
 const providerModels = computed(() => {
@@ -29,8 +30,8 @@ const requiresApiKey = computed(() => provider.value !== 'ollama')
 
 /** Validation: API key required for non-Ollama providers */
 const canProceedFromStep0 = computed(() => {
-  if (!requiresApiKey.value) return true
-  return apiKey.value.trim().length > 0
+  if (requiresApiKey.value && apiKey.value.trim().length === 0) return false
+  return !!model.value && connectionResult.value?.ok === true
 })
 
 // Reset model when provider changes
@@ -42,11 +43,25 @@ watch(provider, (newProvider) => {
   apiKey.value = ''
 })
 
+watch([provider, apiKey, model], () => {
+  connectionResult.value = null
+})
+
 const steps = computed(() => [
   { title: t('welcome.step1Title'), description: t('welcome.step1Desc'), icon: Key },
   { title: t('welcome.step2Title'), description: t('welcome.step2Desc'), icon: Bot },
   { title: t('welcome.step3Title'), description: t('welcome.step3Desc'), icon: Sparkles },
 ])
+
+const agentOptions = computed(() => [
+  { role: 'assistant' as const, title: t('welcome.generalAssistant'), description: t('welcome.generalAssistantDesc') },
+  { role: 'coder' as const, title: t('welcome.codeAssistant'), description: t('welcome.codeAssistantDesc') },
+  { role: 'writer' as const, title: t('welcome.writingAssistant'), description: t('welcome.writingAssistantDesc') },
+])
+
+const selectedAgentTitle = computed(() =>
+  agentOptions.value.find((agent) => agent.role === selectedAgentRole.value)?.title || t('welcome.generalAssistant'),
+)
 
 // ─── 连接测试 ──────────────────────────────────────
 const connectionTesting = ref(false)
@@ -56,19 +71,25 @@ async function testConnection() {
   connectionTesting.value = true
   connectionResult.value = null
   try {
-    const text = await invoke<string>('proxy_api_request', {
-      method: 'GET',
-      path: '/health',
-      body: null,
+    const preset = PROVIDER_PRESETS[provider.value]
+    const result = await testLLMConnection({
+      provider: {
+        type: provider.value,
+        base_url: preset.defaultBaseUrl,
+        api_key: requiresApiKey.value ? apiKey.value.trim() : '',
+        model: model.value,
+      },
     })
-    const data = JSON.parse(text)
-    if (data.status === 'ok' || data.version) {
-      connectionResult.value = { ok: true, msg: '连接成功，后端服务运行正常' }
-    } else {
-      connectionResult.value = { ok: true, msg: '后端服务已响应' }
+    connectionResult.value = {
+      ok: result.ok,
+      msg: result.message || (result.ok ? t('welcome.connectionTestSuccess') : t('welcome.connectionTestFailed')),
     }
-  } catch {
-    connectionResult.value = { ok: false, msg: '无法连接后端服务，请确认 Engine 已启动' }
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : ''
+    connectionResult.value = {
+      ok: false,
+      msg: errMsg.includes('404') ? t('welcome.connectionTestUnavailable') : (errMsg || t('welcome.connectionTestFailed')),
+    }
   } finally {
     connectionTesting.value = false
   }
@@ -104,10 +125,17 @@ async function finishWizard() {
   if (settingsStore.config) {
     settingsStore.config.llm.defaultModel = model.value
     settingsStore.config.general.welcomeCompleted = true
+    settingsStore.config.general.defaultAgentRole = selectedAgentRole.value
     await settingsStore.saveConfig(settingsStore.config)
   }
 
-  router.push('/chat')
+  router.push({
+    path: '/chat',
+    query: {
+      role: selectedAgentRole.value,
+      roleTitle: selectedAgentTitle.value,
+    },
+  })
   } finally {
     finishing.value = false
   }
@@ -196,8 +224,7 @@ async function skip() {
             <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Provider</label>
             <select
               v-model="provider"
-              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-              :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+              class="hc-input"
             >
               <option value="openai">OpenAI</option>
               <option value="deepseek">DeepSeek</option>
@@ -229,23 +256,55 @@ async function skip() {
             <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Model</label>
             <select
               v-model="model"
-              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-              :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+              class="hc-input"
             >
               <option v-for="m in providerModels" :key="m.id" :value="m.id">
                 {{ m.name }}
               </option>
             </select>
           </div>
+          <div class="pt-1">
+            <button
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border"
+              :style="{
+                borderColor: connectionResult?.ok ? '#22c55e55' : 'var(--hc-border)',
+                color: connectionResult?.ok ? '#16a34a' : 'var(--hc-text-secondary)',
+                background: 'var(--hc-bg-main)',
+              }"
+              :disabled="connectionTesting || (requiresApiKey && apiKey.trim().length === 0) || !model"
+              @click="testConnection"
+            >
+              <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
+              <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: #22c55e;" />
+              <XCircle v-else-if="connectionResult && !connectionResult.ok" :size="12" style="color: #ef4444;" />
+              {{ connectionTesting ? t('welcome.testing') : t('welcome.testConnection') }}
+            </button>
+
+            <div v-if="connectionResult" class="mt-3">
+              <p
+                class="text-xs px-3 py-1.5 rounded-lg inline-block"
+                :style="{
+                  background: connectionResult.ok ? '#22c55e15' : '#ef444415',
+                  color: connectionResult.ok ? '#22c55e' : '#ef4444',
+                }"
+              >
+                {{ connectionResult.msg }}
+              </p>
+            </div>
+          </div>
         </div>
 
         <!-- Step 2: 选择 Agent -->
         <div v-else-if="step === 1" class="space-y-3">
           <div
-            v-for="agent in [t('welcome.generalAssistant'), t('welcome.codeAssistant'), t('welcome.writingAssistant')]"
-            :key="agent"
+            v-for="agent in agentOptions"
+            :key="agent.role"
             class="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors hover:border-blue-500/30"
-            :style="{ borderColor: 'var(--hc-border)' }"
+            :style="{
+              borderColor: selectedAgentRole === agent.role ? 'var(--hc-accent)' : 'var(--hc-border)',
+              background: selectedAgentRole === agent.role ? 'var(--hc-bg-hover)' : 'transparent',
+            }"
+            @click="selectedAgentRole = agent.role"
           >
             <div
               class="w-8 h-8 rounded-lg flex items-center justify-center"
@@ -253,7 +312,20 @@ async function skip() {
             >
               <Bot :size="16" />
             </div>
-            <span class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ agent }}</span>
+            <div class="min-w-0">
+              <div class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ agent.title }}</div>
+              <div class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-secondary)' }">{{ agent.description }}</div>
+            </div>
+            <div
+              class="ml-auto w-4 h-4 rounded-full border flex items-center justify-center"
+              :style="{ borderColor: selectedAgentRole === agent.role ? 'var(--hc-accent)' : 'var(--hc-border)' }"
+            >
+              <div
+                v-if="selectedAgentRole === agent.role"
+                class="w-2 h-2 rounded-full"
+                :style="{ background: 'var(--hc-accent)' }"
+              />
+            </div>
           </div>
         </div>
 
@@ -264,37 +336,28 @@ async function skip() {
           <p class="text-xs mt-1 mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
             {{ t('welcome.startJourney') }}
           </p>
-
-          <!-- 测试连接 -->
-          <button
-            class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border"
-            :style="{
-              borderColor: 'var(--hc-border)',
-              color: 'var(--hc-text-secondary)',
-              background: 'var(--hc-bg-main)',
-            }"
-            :disabled="connectionTesting"
-            @click="testConnection"
+          <div
+            class="mx-auto mt-5 max-w-sm rounded-xl border p-4 text-left"
+            :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
           >
-            <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
-            <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: #22c55e;" />
-            <XCircle v-else-if="connectionResult && !connectionResult.ok" :size="12" style="color: #ef4444;" />
-            {{ connectionTesting ? '测试中...' : '测试连接' }}
-          </button>
-
-          <div v-if="connectionResult" class="mt-3">
-            <p
-              class="text-xs px-3 py-1.5 rounded-lg inline-block"
-              :style="{
-                background: connectionResult.ok ? '#22c55e15' : '#ef444415',
-                color: connectionResult.ok ? '#22c55e' : '#ef4444',
-              }"
-            >
-              {{ connectionResult.msg }}
-            </p>
-            <p v-if="!connectionResult.ok" class="text-xs mt-1.5" :style="{ color: 'var(--hc-text-muted)' }">
-              可跳过测试，稍后在设置中重新配置
-            </p>
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryProvider') }}</span>
+              <span :style="{ color: 'var(--hc-text-primary)' }">{{ PROVIDER_PRESETS[provider].name }}</span>
+            </div>
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryModel') }}</span>
+              <span :style="{ color: 'var(--hc-text-primary)' }">{{ providerModels.find((m) => m.id === model)?.name || model }}</span>
+            </div>
+            <div class="flex items-center justify-between text-xs mb-2">
+              <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryAgent') }}</span>
+              <span :style="{ color: 'var(--hc-text-primary)' }">{{ selectedAgentTitle }}</span>
+            </div>
+            <div class="flex items-center justify-between text-xs">
+              <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryConnection') }}</span>
+              <span :style="{ color: connectionResult?.ok ? '#22c55e' : '#ef4444' }">
+                {{ connectionResult?.ok ? t('welcome.connectionReady') : t('welcome.connectionPending') }}
+              </span>
+            </div>
           </div>
         </div>
       </div>
