@@ -95,7 +95,7 @@ const ecosystem = [
               {{ t('about.subtitle', '企业级安全的个人 AI Agent 桌面客户端') }}
             </div>
             <div class="hc-about-modal__meta">
-              <span class="hc-about-modal__pill">v0.0.2</span>
+              <span class="hc-about-modal__pill">v0.1.0-beta</span>
               <span>Apache-2.0</span>
             </div>
           </div>

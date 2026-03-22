@@ -23,7 +23,7 @@ watchEffect(() => {
   document.title = t('about.title', '关于 河蟹 AI')
 })
 
-const appVersion = ref('v0.0.2')
+const appVersion = ref('v0.1.0-beta')
 const appName = computed(() => t('about.brandAi', '河蟹 AI'))
 
 const techStack = computed(() => [

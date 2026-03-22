@@ -86,7 +86,7 @@ function getGroupItems(group: NavGroup) {
           >
             <RotateCw :size="12" />
           </button>
-          <span class="hc-sidebar__version">v0.0.2</span>
+          <span class="hc-sidebar__version">v0.1.0-beta</span>
         </template>
       </div>
     </div>
