@@ -11,6 +11,7 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import { getNavigationChildren } from '@/config/navigation'
 import { useCanvasStore } from '@/stores/canvas'
 import { useToast } from '@/composables/useToast'
+import type { Workflow } from '@/types'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -55,13 +56,17 @@ async function onImportFlow() {
         return
       }
 
-      canvasStore.loadWorkflowToCanvas({
+      const importedWorkflow: Workflow = {
         id: data.id || `imported-${Date.now()}`,
         name: data.name || file.name.replace(/\.json$/, ''),
         description: data.description || '',
         nodes: data.nodes,
         edges: data.edges || [],
-      })
+        created_at: data.created_at || new Date().toISOString(),
+        updated_at: data.updated_at || new Date().toISOString(),
+      }
+
+      canvasStore.loadWorkflowToCanvas(importedWorkflow)
 
       if (activeTab.value !== 'canvas') {
         activeTab.value = 'canvas'

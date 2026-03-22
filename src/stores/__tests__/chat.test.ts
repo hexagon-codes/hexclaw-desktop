@@ -360,7 +360,7 @@ describe('useChatStore', () => {
 
     expect(sendChatViaBackend).not.toHaveBeenCalled()
     expect(store.streaming).toBe(false)
-    expect(store.messages.at(-1)?.content).toContain('超时')
+    expect(store.messages[store.messages.length - 1]?.content).toContain('超时')
 
     vi.useRealTimers()
   })

@@ -394,7 +394,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1)
     expect(mockedUpdateLLMConfig).toHaveBeenCalled()
-    const backendPayload = mockedUpdateLLMConfig.mock.calls.at(-1)?.[0] as {
+    const backendPayload = mockedUpdateLLMConfig.mock.calls[mockedUpdateLLMConfig.mock.calls.length - 1]?.[0] as {
       providers: Record<string, unknown>
     }
     expect(Object.keys(backendPayload.providers)).toHaveLength(2)
@@ -427,7 +427,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1)
     expect(mockedUpdateLLMConfig).toHaveBeenCalled()
-    const backendPayload = mockedUpdateLLMConfig.mock.calls.at(-1)?.[0] as {
+    const backendPayload = mockedUpdateLLMConfig.mock.calls[mockedUpdateLLMConfig.mock.calls.length - 1]?.[0] as {
       providers: Record<string, { api_key: string }>
     }
     expect(backendPayload.providers.openai?.api_key).toBe('sk-fresh-key')

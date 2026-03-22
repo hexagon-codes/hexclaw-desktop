@@ -38,6 +38,7 @@ export type {
   ChatParams,
   BackendLLMProvider,
   BackendLLMConfig,
+  BackendRuntimeConfig,
   LLMConnectionTestRequest,
   LLMConnectionTestResponse,
 } from './settings'

@@ -2,6 +2,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import type { AppConfig, BackendLLMConfig, ProviderConfig } from '@/types'
 
+type AppConfigOverrides = Omit<
+  Partial<AppConfig>,
+  'llm' | 'security' | 'general' | 'notification' | 'mcp'
+> & {
+  llm?: Partial<AppConfig['llm']>
+  security?: Partial<AppConfig['security']>
+  general?: Partial<AppConfig['general']>
+  notification?: Partial<AppConfig['notification']>
+  mcp?: Partial<AppConfig['mcp']>
+}
+
 const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig } = vi.hoisted(() => ({
   state: {
     savedConfig: null as AppConfig | null,
@@ -13,12 +24,12 @@ const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig } = vi.ho
 }))
 
 vi.mock('@/api/config', () => ({
-  getLLMConfig: (...args: unknown[]) => mockGetLLMConfig(...args),
-  updateLLMConfig: (...args: unknown[]) => mockUpdateLLMConfig(...args),
+  getLLMConfig: () => mockGetLLMConfig(),
+  updateLLMConfig: (config: unknown) => mockUpdateLLMConfig(config),
 }))
 
 vi.mock('@/api/settings', () => ({
-  updateConfig: (...args: unknown[]) => mockUpdateConfig(...args),
+  updateConfig: (config: unknown) => mockUpdateConfig(config),
 }))
 
 vi.mock('@/utils/secure-store', () => ({
@@ -45,7 +56,7 @@ vi.mock('@tauri-apps/plugin-store', () => {
   return { LazyStore: MockLazyStore }
 })
 
-function makeConfig(overrides?: Partial<AppConfig>): AppConfig {
+function makeConfig(overrides?: AppConfigOverrides): AppConfig {
   return {
     llm: {
       providers: [],

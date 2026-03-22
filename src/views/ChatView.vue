@@ -62,7 +62,7 @@ import {
 } from '@/utils/chat-automation'
 import { openSanitizedArtifact } from '@/utils/safe-html'
 import { getSkills, type Skill } from '@/api/skills'
-import type { ChatMessage, CronJob, KnowledgeDoc } from '@/types'
+import type { ChatAttachment, ChatMessage, CronJob, KnowledgeDoc } from '@/types'
 import crabLogo from '@/assets/logo-crab.png'
 
 const { t } = useI18n()
@@ -177,6 +177,11 @@ function formatFullTime(ts: string): string {
     minute: '2-digit',
     second: '2-digit',
   })
+}
+
+function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
+  const attachments = message.metadata?.attachments
+  return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
 }
 
 // Document parsing state
@@ -1401,12 +1406,8 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                       class="hc-msg__bubble hc-msg__bubble--user"
                       :title="formatFullTime(msg.timestamp)"
                     >
-                      <div v-if="msg.metadata?.attachments?.length" class="hc-msg__attachments">
-                        <template
-                          v-for="(att, ai) in msg.metadata
-                            .attachments as import('@/types').ChatAttachment[]"
-                          :key="ai"
-                        >
+                      <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
+                        <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
                           <img
                             v-if="att.type === 'image'"
                             class="hc-msg__attachment-img"

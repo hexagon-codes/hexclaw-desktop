@@ -156,7 +156,7 @@ function isMaskedApiKey(value: string | undefined | null): boolean {
 function providerMatchesBackendKey(provider: ProviderConfig, backendKey: string): boolean {
   const normalizedBackendKey = backendKey.trim().toLowerCase()
   return [provider.id, provider.backendKey, provider.name]
-    .filter(Boolean)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
     .some((value) => value.trim().toLowerCase() === normalizedBackendKey)
 }
 
@@ -461,6 +461,10 @@ export const useSettingsStore = defineStore('settings', () => {
 
       // 合并默认值（非 LLM 部分）——保留已有的 LLM 配置，避免切页时短暂清空 providers
       const defaults = defaultConfig()
+      const defaultRouting = defaults.llm.routing ?? {
+        enabled: false,
+        strategy: 'cost-aware',
+      }
       const existingLlm = config.value?.llm ?? defaults.llm
       const persistedLlm = savedConfig?.llm
         ? {
@@ -468,8 +472,8 @@ export const useSettingsStore = defineStore('settings', () => {
             defaultModel: savedConfig.llm.defaultModel ?? '',
             defaultProviderId: savedConfig.llm.defaultProviderId ?? '',
             routing: {
-              enabled: savedConfig.llm.routing?.enabled ?? defaults.llm.routing.enabled,
-              strategy: savedConfig.llm.routing?.strategy || defaults.llm.routing.strategy,
+              enabled: savedConfig.llm.routing?.enabled ?? defaultRouting.enabled,
+              strategy: savedConfig.llm.routing?.strategy || defaultRouting.strategy,
             },
           }
         : {
@@ -477,8 +481,8 @@ export const useSettingsStore = defineStore('settings', () => {
             defaultModel: existingLlm.defaultModel,
             defaultProviderId: existingLlm.defaultProviderId ?? '',
             routing: {
-              enabled: existingLlm.routing?.enabled ?? defaults.llm.routing.enabled,
-              strategy: existingLlm.routing?.strategy || defaults.llm.routing.strategy,
+              enabled: existingLlm.routing?.enabled ?? defaultRouting.enabled,
+              strategy: existingLlm.routing?.strategy || defaultRouting.strategy,
             },
           }
       if (savedConfig) {

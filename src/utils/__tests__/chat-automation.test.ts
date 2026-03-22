@@ -5,14 +5,15 @@ import {
   type ConversationAutomationAction,
 } from '../chat-automation'
 
+type ActionByKind<T extends ConversationAutomationAction['kind']> = ConversationAutomationAction & {
+  kind: T
+}
+
 function findAction<T extends ConversationAutomationAction['kind']>(
   actions: ConversationAutomationAction[],
   kind: T,
 ) {
-  return actions.find((action) => action.kind === kind) as Extract<
-    ConversationAutomationAction,
-    { kind: T }
-  > | undefined
+  return actions.find((action): action is ActionByKind<T> => action.kind === kind)
 }
 
 describe('chat automation parser', () => {

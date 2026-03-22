@@ -339,7 +339,7 @@ const selectedDefaultModelValue = computed({
       return
     }
 
-    const [providerId, modelId] = value.split('::', 2)
+    const [providerId, modelId = ''] = value.split('::', 2)
     config.value.llm.defaultProviderId = providerId
     config.value.llm.defaultModel = modelId
     autoSave()

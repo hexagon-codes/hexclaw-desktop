@@ -44,14 +44,14 @@ export function triggerCronJob(id: string) {
 
 /** 获取任务执行历史 */
 export async function getCronJobHistory(id: string, limit = 5): Promise<CronJobRun[]> {
-  const res = await apiGet<{ history?: CronJobRun[]; runs?: CronJobRun[] }>(
+  const res = await apiGet<{ history?: CronJobRunWire[]; runs?: CronJobRunWire[] }>(
     `/api/v1/cron/jobs/${id}/history`,
     { limit },
   )
   const raw = res.history ?? res.runs ?? []
   return raw.map((r) => ({
     ...r,
-    started_at: r.started_at || (r as Record<string, unknown>).run_at as string || '',
+    started_at: r.started_at || r.run_at || '',
   }))
 }
 
@@ -65,4 +65,8 @@ export interface CronJobRun {
   finished_at?: string
   duration_ms?: number
   error?: string
+}
+
+interface CronJobRunWire extends CronJobRun {
+  run_at?: string
 }

@@ -32,12 +32,12 @@ const { mockGetLLMConfig, mockListen, wsMock } = vi.hoisted(() => {
 })
 
 vi.mock('@/api/config', () => ({
-  getLLMConfig: (...args: unknown[]) => mockGetLLMConfig(...args),
+  getLLMConfig: () => mockGetLLMConfig(),
   updateLLMConfig: vi.fn().mockResolvedValue({}),
 }))
 
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: (...args: unknown[]) => mockListen(...args),
+  listen: (event: string, callback: () => Promise<void> | void) => mockListen(event, callback),
 }))
 
 vi.mock('@/api/chat', () => ({

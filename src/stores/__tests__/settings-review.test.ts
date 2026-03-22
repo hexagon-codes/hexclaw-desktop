@@ -9,12 +9,12 @@ const mockUpdateLLMConfig = vi.fn().mockResolvedValue({})
 const mockUpdateConfig = vi.fn().mockResolvedValue({})
 
 vi.mock('@/api/config', () => ({
-  getLLMConfig: (...args: unknown[]) => mockGetLLMConfig(...args),
-  updateLLMConfig: (...args: unknown[]) => mockUpdateLLMConfig(...args),
+  getLLMConfig: () => mockGetLLMConfig(),
+  updateLLMConfig: (config: unknown) => mockUpdateLLMConfig(config),
 }))
 
 vi.mock('@/api/settings', () => ({
-  updateConfig: (...args: unknown[]) => mockUpdateConfig(...args),
+  updateConfig: (config: unknown) => mockUpdateConfig(config),
 }))
 
 vi.mock('@tauri-apps/plugin-store', () => {

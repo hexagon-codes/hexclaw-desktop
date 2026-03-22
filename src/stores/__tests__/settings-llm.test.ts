@@ -21,8 +21,8 @@ const mockUpdateLLMConfig = vi.fn().mockResolvedValue({})
 let mockPersistedAppConfig: unknown = null
 
 vi.mock('@/api/config', () => ({
-  getLLMConfig: (...args: unknown[]) => mockGetLLMConfig(...args),
-  updateLLMConfig: (...args: unknown[]) => mockUpdateLLMConfig(...args),
+  getLLMConfig: () => mockGetLLMConfig(),
+  updateLLMConfig: (config: unknown) => mockUpdateLLMConfig(config),
 }))
 
 vi.mock('@tauri-apps/plugin-store', () => {
