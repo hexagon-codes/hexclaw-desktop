@@ -66,6 +66,22 @@ if (typeof globalThis.sessionStorage === 'undefined' || (() => {
   })
 }
 
+if (typeof globalThis.addEventListener !== 'function' && typeof window !== 'undefined') {
+  Object.defineProperty(globalThis, 'addEventListener', {
+    value: window.addEventListener.bind(window),
+    configurable: true,
+    writable: true,
+  })
+}
+
+if (typeof globalThis.removeEventListener !== 'function' && typeof window !== 'undefined') {
+  Object.defineProperty(globalThis, 'removeEventListener', {
+    value: window.removeEventListener.bind(window),
+    configurable: true,
+    writable: true,
+  })
+}
+
 beforeEach(() => {
   try {
     globalThis.localStorage?.clear?.()

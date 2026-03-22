@@ -5,27 +5,35 @@ import { createPersistPlugin } from '../plugins/persist'
 
 describe('createPersistPlugin', () => {
   let mockStorage: Record<string, string>
-  const ls = globalThis.localStorage
+  const mockLocalStorage = {
+    getItem: vi.fn<(key: string) => string | null>(),
+    setItem: vi.fn<(key: string, value: string) => void>(),
+    removeItem: vi.fn<(key: string) => void>(),
+    clear: vi.fn<() => void>(),
+    key: vi.fn<(index: number) => string | null>(),
+    length: 0,
+  } as unknown as Storage
 
   beforeAll(() => {
-    vi.spyOn(ls, 'getItem').mockImplementation(() => null)
-    vi.spyOn(ls, 'setItem').mockImplementation(() => {})
-    vi.spyOn(ls, 'removeItem').mockImplementation(() => {})
-    vi.spyOn(ls, 'clear').mockImplementation(() => {})
+    Object.defineProperty(globalThis, 'localStorage', {
+      value: mockLocalStorage,
+      configurable: true,
+      writable: true,
+    })
   })
 
   beforeEach(() => {
     mockStorage = {}
-    vi.mocked(ls.getItem).mockImplementation((key: string) => mockStorage[key] ?? null)
-    vi.mocked(ls.setItem).mockImplementation((key: string, val: string) => {
+    mockLocalStorage.getItem = vi.fn((key: string) => mockStorage[key] ?? null) as Storage['getItem']
+    mockLocalStorage.setItem = vi.fn((key: string, val: string) => {
       mockStorage[key] = val
-    })
-    vi.mocked(ls.removeItem).mockImplementation((key: string) => {
+    }) as Storage['setItem']
+    mockLocalStorage.removeItem = vi.fn((key: string) => {
       delete mockStorage[key]
-    })
-    vi.mocked(ls.clear).mockImplementation(() => {
+    }) as Storage['removeItem']
+    mockLocalStorage.clear = vi.fn(() => {
       for (const k of Object.keys(mockStorage)) delete mockStorage[k]
-    })
+    }) as Storage['clear']
   })
 
   /** 创建带 persist 插件的 pinia 并挂载到 Vue app */
