@@ -43,6 +43,11 @@ if (typeof updaterPubkey !== 'string' || updaterPubkey.trim() === '') {
   errors.push('src-tauri/tauri.conf.json plugins.updater.pubkey is empty. Commit the Tauri updater public key before creating a release tag.')
 }
 
+const updaterEndpoints = tauriConfig.plugins?.updater?.endpoints
+if (!Array.isArray(updaterEndpoints) || updaterEndpoints.length === 0) {
+  errors.push('src-tauri/tauri.conf.json plugins.updater.endpoints is empty. Configure at least one updater endpoint before creating a release tag.')
+}
+
 if (tauriConfig.bundle?.createUpdaterArtifacts !== true) {
   errors.push('src-tauri/tauri.conf.json bundle.createUpdaterArtifacts must be true for Tauri updater releases.')
 }

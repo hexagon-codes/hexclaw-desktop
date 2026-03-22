@@ -1,35 +1,53 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
-import { Key, Globe, Database, Server, Palette, Eye, EyeOff, Plus, Trash2, ChevronDown, ChevronUp, Power, Webhook, Loader2, Pencil, CheckCircle, XCircle, Zap, RotateCcw, Plug, Save } from 'lucide-vue-next'
+import {
+  Key,
+  Database,
+  Palette,
+  Eye,
+  EyeOff,
+  Plus,
+  Trash2,
+  ChevronDown,
+  ChevronUp,
+  Power,
+  Loader2,
+  Pencil,
+  CheckCircle,
+  XCircle,
+  Zap,
+  RotateCcw,
+  Save,
+} from 'lucide-vue-next'
 import { NTag, NModal, NSpace } from 'naive-ui'
-import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
-import { getWebhooks, createWebhook, deleteWebhook, type Webhook as WebhookItem, type WebhookType, type WebhookEvent } from '@/api/webhook'
-import { trySafe, messageFromUnknownError } from '@/utils/errors'
+import { getRuntimeConfig } from '@/api/settings'
+import { getLLMConfig, testLLMConnection } from '@/api/config'
+import { messageFromUnknownError } from '@/utils/errors'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
-import { useValidation, rules } from '@/composables/useValidation'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
-import { testLLMConnection } from '@/api/config'
-import type { ProviderConfig, ProviderType, ModelOption, ModelCapability } from '@/types'
+import type {
+  ProviderConfig,
+  ProviderType,
+  ModelOption,
+  ModelCapability,
+  BackendRuntimeConfig,
+  BackendLLMConfig,
+} from '@/types'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
-const router = useRouter()
 const settingsStore = useSettingsStore()
 const { themeMode, setTheme } = useTheme()
 const activeSection = ref('llm')
 const saved = ref(false)
-const settingsSearch = ref('')
 
 // Provider 编辑状态
-const showRestartBanner = ref(false)
-const restarting = ref(false)
 const editingProviderId = ref<string | null>(null)
 const showApiKeys = ref<Record<string, boolean>>({})
 const showAddProvider = ref(false)
@@ -38,101 +56,34 @@ const addProviderType = ref<ProviderType>('openai')
 // 自定义模型输入
 const newModelId = ref('')
 const newModelName = ref('')
-const newModelCaps = ref<Record<ModelCapability, boolean>>({ text: true, vision: false, video: false, audio: false, code: false })
+const newModelCaps = ref<Record<ModelCapability, boolean>>({
+  text: true,
+  vision: false,
+  video: false,
+  audio: false,
+  code: false,
+})
 const showAddModelPanel = ref(false)
 
 // 编辑模型 Modal
 const editingModel = ref<{ providerId: string; idx: number; model: ModelOption } | null>(null)
 const editModelForm = ref<{ name: string; id: string; caps: Record<ModelCapability, boolean> }>({
-  name: '', id: '', caps: { text: true, vision: false, video: false, audio: false, code: false },
+  name: '',
+  id: '',
+  caps: { text: true, vision: false, video: false, audio: false, code: false },
 })
 const pendingDeleteProviderId = ref<string | null>(null)
-const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName: string } | null>(null)
-
-// ─── Webhook 状态 ────────────────────────────────────
-const webhooks = ref<WebhookItem[]>([])
-const webhookLoading = ref(false)
-const showAddWebhook = ref(false)
-const newWebhookName = ref('')
-const newWebhookType = ref<WebhookType>('wecom')
-const newWebhookUrl = ref('')
-const newWebhookEvents = ref<Record<WebhookEvent, boolean>>({
-  task_complete: true,
-  agent_complete: true,
-  error: true,
-})
-
-const webhookTypes = computed(() => [
-  { key: 'wecom' as WebhookType, label: t('settings.webhook.wecom'), color: '#07c160' },
-  { key: 'feishu' as WebhookType, label: t('settings.webhook.feishu'), color: '#3370ff' },
-  { key: 'dingtalk' as WebhookType, label: t('settings.webhook.dingtalk'), color: '#0089ff' },
-  { key: 'custom' as WebhookType, label: t('settings.webhook.custom'), color: '#6b7280' },
-])
-
-const webhookEventLabels = computed(() => [
-  { key: 'task_complete' as WebhookEvent, label: t('settings.webhook.taskComplete') },
-  { key: 'agent_complete' as WebhookEvent, label: t('settings.webhook.agentComplete') },
-  { key: 'error' as WebhookEvent, label: t('settings.webhook.errorNotify') },
-])
-
-async function loadWebhooks() {
-  webhookLoading.value = true
-  const [res] = await trySafe(() => getWebhooks(), t('settings.webhook.noWebhooksDesc'))
-  if (res) webhooks.value = res.webhooks || []
-  webhookLoading.value = false
-}
-
-async function handleAddWebhook() {
-  if (!newWebhookName.value.trim() || !newWebhookUrl.value.trim()) return
-  const events = (Object.entries(newWebhookEvents.value) as [WebhookEvent, boolean][])
-    .filter(([, v]) => v)
-    .map(([k]) => k)
-  webhookLoading.value = true
-  const [res] = await trySafe(
-    () => createWebhook({
-      name: newWebhookName.value.trim(),
-      type: newWebhookType.value,
-      url: newWebhookUrl.value.trim(),
-      events,
-    }),
-    t('settings.webhook.create'),
-  )
-  if (res) {
-    await loadWebhooks()
-    showAddWebhook.value = false
-    newWebhookName.value = ''
-    newWebhookUrl.value = ''
-    newWebhookType.value = 'wecom'
-    newWebhookEvents.value = { task_complete: true, agent_complete: true, error: true }
-  }
-  webhookLoading.value = false
-}
-
-async function handleDeleteWebhook(name: string) {
-  if (!confirm(t('settings.webhook.deleteConfirm'))) return
-  await trySafe(() => deleteWebhook(name), t('common.delete'))
-  await loadWebhooks()
-}
-
-function getWebhookTypeInfo(type: WebhookType) {
-  const list = webhookTypes.value
-  return list.find((x) => x.key === type) || list[3]!
-}
-
-const {
-  validateField: validateSecField,
-  validateAll: validateAllSec,
-  getError: getSecError,
-} = useValidation({
-  max_tokens_per_request: [
-    rules.positiveInt(t('settings.validation.positiveInt')),
-    rules.range(256, 128000, t('settings.validation.range256_128k')),
-  ],
-  rate_limit_rpm: [
-    rules.positiveInt(t('settings.validation.positiveInt')),
-    rules.range(1, 600, t('settings.validation.range1_600')),
-  ],
-})
+const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName: string } | null>(
+  null,
+)
+const runtimeConfig = ref<BackendRuntimeConfig | null>(null)
+const runtimeLLMConfig = ref<BackendLLMConfig | null>(null)
+const runtimeInfoLoading = ref(false)
+let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
+let autoSavePromise: Promise<void> | null = null
+let hasPendingAutoSave = false
+let unlistenCloseRequested: (() => void) | null = null
+let closingAfterFlush = false
 
 const sections = computed(() => [
   { key: 'llm', label: t('settings.llm.title'), icon: Key },
@@ -144,12 +95,194 @@ function handleLocaleChange(locale: string) {
   setLocale(locale as 'zh-CN' | 'en')
 }
 
+function handleThemeSelect(mode: ThemeMode) {
+  setTheme(mode)
+  autoSave()
+}
+
+function handleRoutingToggle() {
+  if (!config.value) return
+  config.value.llm.routing = {
+    enabled: config.value.llm.routing?.enabled ?? false,
+    strategy: config.value.llm.routing?.strategy || 'cost-aware',
+  }
+  autoSave()
+}
+
+function handleRoutingStrategyChange() {
+  if (!config.value) return
+  config.value.llm.routing = {
+    enabled: config.value.llm.routing?.enabled ?? false,
+    strategy: config.value.llm.routing?.strategy || 'cost-aware',
+  }
+  autoSave()
+}
+
+function isDesktopRuntime() {
+  return !!(globalThis as Record<string, unknown>).isTauri
+}
+
+function hasUnsavedChanges() {
+  return hasPendingAutoSave || autoSaveTimer !== null || !!newModelId.value.trim()
+}
+
+function resetPendingModelDraft() {
+  newModelId.value = ''
+  newModelName.value = ''
+  newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false }
+}
+
+function commitPendingModelDraft() {
+  if (!settingsStore.config || !newModelId.value.trim() || !editingProviderId.value) return
+
+  const provider = settingsStore.config.llm.providers.find((p) => p.id === editingProviderId.value)
+  if (!provider) return
+
+  const caps = (Object.entries(newModelCaps.value) as [ModelCapability, boolean][])
+    .filter(([, v]) => v)
+    .map(([k]) => k)
+  const pendingModel: ModelOption = {
+    id: newModelId.value.trim(),
+    name: newModelName.value.trim() || newModelId.value.trim(),
+    isCustom: true,
+    capabilities: caps.length > 0 ? caps : ['text'],
+  }
+  settingsStore.updateProvider(provider.id, {
+    models: [...provider.models, pendingModel],
+    selectedModelId: provider.selectedModelId || pendingModel.id,
+  })
+  resetPendingModelDraft()
+}
+
+async function persistSettings({
+  showSavedFeedback = false,
+  refreshRuntimeInfo = false,
+}: {
+  showSavedFeedback?: boolean
+  refreshRuntimeInfo?: boolean
+} = {}) {
+  if (!settingsStore.config) return
+
+  commitPendingModelDraft()
+  await settingsStore.saveConfig(settingsStore.config)
+
+  if (refreshRuntimeInfo) {
+    await loadRuntimeInfo()
+  }
+
+  if (showSavedFeedback) {
+    saved.value = true
+    setTimeout(() => {
+      saved.value = false
+    }, 2000)
+  }
+}
+
+async function flushAutoSave({
+  force = false,
+  showSavedFeedback = false,
+  refreshRuntimeInfo = false,
+}: {
+  force?: boolean
+  showSavedFeedback?: boolean
+  refreshRuntimeInfo?: boolean
+} = {}) {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer)
+    autoSaveTimer = null
+  }
+
+  const shouldSave = force || hasPendingAutoSave || !!newModelId.value.trim()
+  if (!shouldSave) {
+    if (autoSavePromise) {
+      await autoSavePromise
+    }
+    return
+  }
+  if (!settingsStore.config) return
+  if (autoSavePromise) {
+    await autoSavePromise
+    return
+  }
+
+  hasPendingAutoSave = false
+  autoSavePromise = persistSettings({ showSavedFeedback, refreshRuntimeInfo })
+  try {
+    await autoSavePromise
+  } catch (e) {
+    hasPendingAutoSave = true
+    throw e
+  } finally {
+    autoSavePromise = null
+  }
+}
+
+function handleBeforeUnload() {
+  if (!hasUnsavedChanges()) return
+  void flushAutoSave({ force: true })
+}
+
+function toggleEditingProvider(providerId: string) {
+  editingProviderId.value = editingProviderId.value === providerId ? null : providerId
+}
+
+function handleLanguageChange() {
+  if (!config.value) return
+  handleLocaleChange(config.value.general.language)
+  autoSave()
+}
+
+function handleEditModelVisibility(visible: boolean) {
+  if (!visible) editingModel.value = null
+}
+
 onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
   await settingsStore.loadConfig()
+
+  if (typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', handleBeforeUnload)
+  }
+
+  if (isDesktopRuntime()) {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      const appWindow = getCurrentWindow()
+      unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
+        if (closingAfterFlush || !hasUnsavedChanges()) return
+
+        event.preventDefault()
+        try {
+          await flushAutoSave({ force: true })
+        } catch (e) {
+          console.error('[HexClaw] 关闭前保存设置失败:', e)
+          return
+        }
+
+        closingAfterFlush = true
+        try {
+          await appWindow.close()
+        } catch (e) {
+          console.error('[HexClaw] 自动关闭窗口失败:', e)
+        } finally {
+          closingAfterFlush = false
+        }
+      })
+    } catch (e) {
+      console.warn('[HexClaw] 注册 close-requested 监听失败:', e)
+    }
+  }
 })
 
 onBeforeUnmount(() => {
+  if (hasUnsavedChanges()) {
+    void flushAutoSave({ force: true })
+  }
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('beforeunload', handleBeforeUnload)
+  }
+  unlistenCloseRequested?.()
+  unlistenCloseRequested = null
   editingModel.value = null
   showAddModelPanel.value = false
   pendingDeleteProviderId.value = null
@@ -161,20 +294,120 @@ onBeforeUnmount(() => {
   editingProviderId.value = null
 })
 
-// 切换到 webhook 分区时自动加载
 watch(activeSection, (val) => {
-  if (val === 'webhook') loadWebhooks()
+  if (val === 'storage') {
+    loadRuntimeInfo()
+  }
 })
 
 // 切换编辑的 Provider 时重置模型添加面板
 watch(editingProviderId, () => {
   showAddModelPanel.value = false
-  newModelId.value = ''
-  newModelName.value = ''
-  newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false }
+  resetPendingModelDraft()
 })
 
 const config = computed(() => settingsStore.config)
+const editableProviders = computed(() => config.value?.llm.providers ?? [])
+const defaultModelOptions = computed(() =>
+  editableProviders.value
+    .filter((provider) => provider.enabled)
+    .flatMap((provider) =>
+      provider.models.map((model) => ({
+        value: `${provider.id}::${model.id}`,
+        providerId: provider.id,
+        modelId: model.id,
+        label: `${provider.name} / ${model.name}`,
+      })),
+    ),
+)
+const selectedDefaultModelValue = computed({
+  get() {
+    const llmConfig = config.value?.llm
+    if (!llmConfig?.defaultModel) return ''
+    const providerId =
+      llmConfig.defaultProviderId ||
+      defaultModelOptions.value.find((option) => option.modelId === llmConfig.defaultModel)?.providerId ||
+      ''
+    return providerId ? `${providerId}::${llmConfig.defaultModel}` : ''
+  },
+  set(value: string) {
+    if (!config.value) return
+    if (!value) {
+      config.value.llm.defaultProviderId = ''
+      config.value.llm.defaultModel = ''
+      autoSave()
+      return
+    }
+
+    const [providerId, modelId] = value.split('::', 2)
+    config.value.llm.defaultProviderId = providerId
+    config.value.llm.defaultModel = modelId
+    autoSave()
+  },
+})
+const routingStrategyOptions = computed(() => [
+  {
+    value: 'cost-aware',
+    label: t('settings.llm.routingCostAware', '成本优先'),
+  },
+  {
+    value: 'quality-first',
+    label: t('settings.llm.routingQualityFirst', '质量优先'),
+  },
+  {
+    value: 'latency-first',
+    label: t('settings.llm.routingLatencyFirst', '延迟优先'),
+  },
+])
+
+const runtimeProviderCount = computed(
+  () => Object.keys(runtimeLLMConfig.value?.providers ?? {}).length,
+)
+const runtimeDefaultProvider = computed(() => runtimeLLMConfig.value?.default || '—')
+const runtimeDefaultModel = computed(() => {
+  const defaultProvider = runtimeLLMConfig.value?.default
+  if (!defaultProvider) return '—'
+  return runtimeLLMConfig.value?.providers[defaultProvider]?.model || '—'
+})
+const runtimeModeDisplay = computed(() => {
+  const rawMode = runtimeConfig.value?.server.mode?.trim()
+  if (!rawMode) return '—'
+
+  switch (rawMode.toLowerCase()) {
+    case 'production':
+      return `${t('settings.storage.modeProduction', '生产模式')} (${rawMode})`
+    case 'development':
+      return `${t('settings.storage.modeDevelopment', '开发模式')} (${rawMode})`
+    case 'desktop':
+      return `${t('settings.storage.modeDesktop', '桌面模式')} (${rawMode})`
+    default:
+      return rawMode
+  }
+})
+const runtimeApiEndpoint = computed(
+  () => `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
+)
+const runtimeLocalStoreEngine = 'SQLite'
+const runtimeLocalStoreFile = 'hexclaw.db'
+const runtimeVectorDbIndexMode = 'FTS5 + 向量 BLOB'
+
+async function loadRuntimeInfo() {
+  runtimeInfoLoading.value = true
+  try {
+    const [nextRuntimeConfig, nextLLMConfig] = await Promise.all([
+      getRuntimeConfig(),
+      getLLMConfig(),
+    ])
+    runtimeConfig.value = nextRuntimeConfig
+    runtimeLLMConfig.value = nextLLMConfig
+  } catch (e) {
+    runtimeConfig.value = null
+    runtimeLLMConfig.value = null
+    console.warn('[HexClaw] 运行时配置加载失败:', e)
+  } finally {
+    runtimeInfoLoading.value = false
+  }
+}
 
 /** 添加一个新 Provider */
 function handleAddProvider() {
@@ -193,6 +426,7 @@ function handleAddProvider() {
   if (providers?.length) {
     editingProviderId.value = providers[providers.length - 1]!.id
   }
+  autoSave()
 }
 
 /** 真正执行 Provider 删除 */
@@ -242,9 +476,19 @@ function addCustomModel(provider: ProviderConfig) {
   settingsStore.updateProvider(provider.id, {
     models: [...provider.models, model],
   })
-  newModelId.value = ''
-  newModelName.value = ''
-  newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false }
+  resetPendingModelDraft()
+  autoSave()
+}
+
+function handleAddCustomModel(provider: ProviderConfig) {
+  addCustomModel(provider)
+  showAddModelPanel.value = false
+}
+
+function handleProviderModelChange(provider: ProviderConfig) {
+  settingsStore.updateProvider(provider.id, {
+    selectedModelId: provider.selectedModelId || provider.models[0]?.id || '',
+  })
   autoSave()
 }
 
@@ -296,8 +540,9 @@ function openEditModel(provider: ProviderConfig, idx: number) {
 function saveEditModel() {
   if (!editingModel.value) return
   const { providerId, idx } = editingModel.value
-  const provider = settingsStore.config?.llm.providers.find(p => p.id === providerId)
+  const provider = settingsStore.config?.llm.providers.find((p) => p.id === providerId)
   if (!provider) return
+  const previousModelId = provider.models[idx]!.id
 
   const caps = (Object.entries(editModelForm.value.caps) as [ModelCapability, boolean][])
     .filter(([, v]) => v)
@@ -310,7 +555,11 @@ function saveEditModel() {
     id: editModelForm.value.id,
     capabilities: caps.length > 0 ? caps : ['text'],
   }
-  settingsStore.updateProvider(providerId, { models: updated })
+  settingsStore.updateProvider(providerId, {
+    models: updated,
+    selectedModelId:
+      provider.selectedModelId === previousModelId ? editModelForm.value.id : provider.selectedModelId,
+  })
   editingModel.value = null
   autoSave()
 }
@@ -323,8 +572,8 @@ async function testProvider(provider: ProviderConfig) {
   testingProviderId.value = provider.id
   delete testProviderResult.value[provider.id]
 
-  const firstModelId = provider.models?.[0]?.id?.trim() ?? ''
-  if (!firstModelId) {
+  const selectedModelId = (provider.selectedModelId || provider.models?.[0]?.id || '').trim()
+  if (!selectedModelId) {
     testProviderResult.value[provider.id] = {
       ok: false,
       msg: t('settings.llm.testNeedsModel'),
@@ -350,12 +599,14 @@ async function testProvider(provider: ProviderConfig) {
         type: provider.type,
         api_key: provider.apiKey?.trim() ?? '',
         base_url: provider.baseUrl || preset?.defaultBaseUrl || '',
-        model: firstModelId,
+        model: selectedModelId,
       },
     })
     testProviderResult.value[provider.id] = {
       ok: result.ok,
-      msg: result.message || (result.ok ? t('settings.llm.connectionOk') : t('settings.llm.connectionFailed')),
+      msg:
+        result.message ||
+        (result.ok ? t('settings.llm.connectionOk') : t('settings.llm.connectionFailed')),
     }
   } catch (e) {
     testProviderResult.value[provider.id] = {
@@ -368,32 +619,16 @@ async function testProvider(provider: ProviderConfig) {
 }
 
 /** 自动保存（防抖） */
-let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 function autoSave() {
+  hasPendingAutoSave = true
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   autoSaveTimer = setTimeout(async () => {
-    if (!settingsStore.config) return
     try {
-      await settingsStore.saveConfig(settingsStore.config)
-      if (activeSection.value === 'llm') showRestartBanner.value = true
+      await flushAutoSave()
     } catch (e) {
       console.error('[HexClaw] 自动保存失败:', e)
     }
   }, 500)
-}
-
-async function restartEngine() {
-  restarting.value = true
-  try {
-    await invoke('restart_sidecar')
-    await new Promise(r => setTimeout(r, 2000))
-    const { useAppStore } = await import('@/stores/app')
-    useAppStore().checkConnection()
-  } catch (e) {
-    console.warn('重启 sidecar:', e)
-  }
-  showRestartBanner.value = false
-  restarting.value = false
 }
 
 async function onToolbarReset() {
@@ -406,77 +641,13 @@ async function onToolbarReset() {
   }
 }
 
-async function onToolbarTestConnection() {
-  if (!settingsStore.config) return
-  const provider = settingsStore.config.llm.providers.find(p => p.enabled)
-  if (!provider) return
-
-  const firstModelId = provider.models?.[0]?.id?.trim() ?? ''
-  if (!firstModelId) {
-    window.$message?.error?.(t('settings.llm.testNeedsModel'))
-    return
-  }
-  const needsApiKey = provider.type !== 'ollama'
-  if (needsApiKey && !provider.apiKey?.trim()) {
-    window.$message?.error?.(t('settings.llm.testNeedsApiKey'))
-    return
-  }
-
-  try {
-    const { testLLMConnection } = await import('@/api/config')
-    const preset = PROVIDER_PRESETS[provider.type]
-    const result = await testLLMConnection({
-      provider: {
-        type: provider.type,
-        base_url: provider.baseUrl || preset?.defaultBaseUrl || '',
-        api_key: provider.apiKey?.trim() ?? '',
-        model: firstModelId,
-      },
-    })
-    window.$message?.[result.ok ? 'success' : 'error'](
-      result.message || (result.ok ? 'OK' : 'Failed'),
-    )
-  } catch (e) {
-    window.$message?.error?.(messageFromUnknownError(e))
-  }
-}
-
 async function saveConfig() {
-  if (!settingsStore.config) return
-
-  // 取消挂起的自动保存，防止并发写入冲突
-  if (autoSaveTimer) {
-    clearTimeout(autoSaveTimer)
-    autoSaveTimer = null
-  }
-
-  // 如果有未提交的自定义模型输入，自动添加到当前编辑的 Provider
-  if (newModelId.value.trim() && editingProviderId.value) {
-    const provider = settingsStore.config.llm.providers.find((p) => p.id === editingProviderId.value)
-    if (provider) {
-      const caps = (Object.entries(newModelCaps.value) as [ModelCapability, boolean][])
-        .filter(([, v]) => v)
-        .map(([k]) => k)
-      const pendingModel: ModelOption = {
-        id: newModelId.value.trim(),
-        name: newModelName.value.trim() || newModelId.value.trim(),
-        isCustom: true,
-        capabilities: caps.length > 0 ? caps : ['text'],
-      }
-      settingsStore.updateProvider(provider.id, {
-        models: [...provider.models, pendingModel],
-      })
-      newModelId.value = ''
-      newModelName.value = ''
-      newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false }
-    }
-  }
-
   try {
-    await settingsStore.saveConfig(settingsStore.config)
-    saved.value = true
-    if (activeSection.value === 'llm') showRestartBanner.value = true
-    setTimeout(() => { saved.value = false }, 2000)
+    await flushAutoSave({
+      force: true,
+      showSavedFeedback: true,
+      refreshRuntimeInfo: activeSection.value === 'storage',
+    })
   } catch (e) {
     console.error('保存配置失败:', e)
   }
@@ -485,11 +656,14 @@ async function saveConfig() {
 
 <template>
   <div class="hc-settings">
-    <PageToolbar :search-placeholder="t('settings.searchPlaceholder', 'Search settings...')" @search="settingsSearch = $event">
+    <PageToolbar
+      :search-placeholder="t('settings.searchPlaceholder', 'Search settings...')"
+      @search="() => {}"
+    >
       <template #tabs>
         <SegmentedControl
           v-model="activeSection"
-          :segments="sections.map(s => ({ key: s.key, label: s.label }))"
+          :segments="sections.map((s) => ({ key: s.key, label: s.label }))"
         />
       </template>
       <template #actions>
@@ -497,9 +671,14 @@ async function saveConfig() {
           <RotateCcw :size="14" />
           {{ t('settings.toolbar.reset', 'Reset') }}
         </button>
-        <button class="hc-btn hc-btn-primary" @click="saveConfig">
-          <Save :size="14" />
-          {{ t('settings.toolbar.saveSettings', 'Save Settings') }}
+        <button
+          class="hc-btn hc-btn-primary"
+          :class="{ 'hc-settings__btn--saved': saved }"
+          @click="saveConfig"
+        >
+          <CheckCircle v-if="saved" :size="14" />
+          <Save v-else :size="14" />
+          {{ saved ? t('common.saved') : t('settings.toolbar.saveSettings', 'Save Settings') }}
         </button>
       </template>
     </PageToolbar>
@@ -510,31 +689,95 @@ async function saveConfig() {
 
         <template v-if="config">
           <!-- LLM Providers -->
-          <div v-if="activeSection === 'llm'" class="hc-settings__section hc-settings__section--scroll" style="max-width: 600px;">
-            <!-- Restart engine banner -->
-            <div v-if="showRestartBanner" class="hc-settings__restart-banner">
-              <div class="hc-settings__restart-text">
-                <Zap :size="14" />
-                {{ t('settings.llm.restartHint', 'LLM config updated. Restart engine to apply changes.') }}
-              </div>
-              <div class="hc-settings__restart-actions">
-                <button class="hc-btn hc-btn-sm" @click="showRestartBanner = false">
-                  {{ t('common.later', 'Later') }}
-                </button>
-                <button class="hc-btn hc-btn-primary hc-btn-sm" :disabled="restarting" @click="restartEngine">
-                  <RotateCcw v-if="!restarting" :size="13" />
-                  <Loader2 v-else :size="13" class="animate-spin" />
-                  {{ restarting ? t('settings.llm.restarting', 'Restarting...') : t('settings.llm.restartNow', 'Restart Now') }}
-                </button>
-              </div>
-            </div>
-
+          <div
+            v-if="activeSection === 'llm'"
+            class="hc-settings__section hc-settings__section--scroll"
+            style="max-width: 600px"
+          >
             <div class="hc-provider__header">
-              <h3 class="hc-settings__section-title" style="margin: 0;">{{ t('settings.llm.title') }}</h3>
+              <h3 class="hc-settings__section-title" style="margin: 0">
+                {{ t('settings.llm.title') }}
+              </h3>
               <button class="hc-btn hc-btn-sm" @click="showAddProvider = !showAddProvider">
                 <Plus :size="14" />
                 {{ t('settings.llm.addProvider') }}
               </button>
+            </div>
+
+            <div class="hc-card hc-settings__llm-controls">
+              <div class="hc-settings__field">
+                <label class="hc-settings__label">
+                  {{ t('settings.llm.defaultModel') }}
+                </label>
+                <select
+                  v-model="selectedDefaultModelValue"
+                  data-testid="llm-default-model-select"
+                  class="hc-input"
+                  :disabled="defaultModelOptions.length === 0"
+                >
+                  <option value="">
+                    {{ t('settings.llm.noEnabledModels', '请先启用至少一个模型') }}
+                  </option>
+                  <option
+                    v-for="option in defaultModelOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+                <p class="hc-settings__hint">
+                  {{
+                    t(
+                      'settings.llm.defaultModelHint',
+                      '新对话、Quick Chat 和未显式选模的入口会优先使用这里的 provider / model。',
+                    )
+                  }}
+                </p>
+              </div>
+
+              <div class="hc-settings__field">
+                <label class="hc-settings__label">
+                  {{ t('settings.storage.routing', 'Routing') }}
+                </label>
+                <label class="hc-settings__toggle-row hc-settings__toggle-row--compact">
+                  <div>
+                    <span class="hc-settings__toggle-label">
+                      {{ t('settings.llm.routingEnabled', '启用路由策略') }}
+                    </span>
+                    <p class="hc-settings__toggle-desc">
+                      {{
+                        t(
+                          'settings.llm.routingHint',
+                          '只对未显式指定 provider / model 的请求生效；显式选模时严格按选择执行。',
+                        )
+                      }}
+                    </p>
+                  </div>
+                  <input
+                    v-model="config.llm.routing!.enabled"
+                    data-testid="llm-routing-toggle"
+                    type="checkbox"
+                    class="hc-toggle"
+                    @change="handleRoutingToggle"
+                  />
+                </label>
+                <select
+                  v-model="config.llm.routing!.strategy"
+                  data-testid="llm-routing-strategy-select"
+                  class="hc-input"
+                  :disabled="!config.llm.routing?.enabled"
+                  @change="handleRoutingStrategyChange"
+                >
+                  <option
+                    v-for="option in routingStrategyOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </option>
+                </select>
+              </div>
             </div>
 
             <!-- 添加 Provider 面板 -->
@@ -548,18 +791,29 @@ async function saveConfig() {
                   :class="{ 'hc-provider__type-btn--active': addProviderType === preset.type }"
                   @click="addProviderType = preset.type"
                 >
-                  <img :src="PROVIDER_LOGOS[preset.type]" :alt="preset.type" class="hc-provider__type-logo" />
+                  <img
+                    :src="PROVIDER_LOGOS[preset.type]"
+                    :alt="preset.type"
+                    class="hc-provider__type-logo"
+                  />
                   {{ preset.name }}
                 </button>
               </div>
               <div class="hc-provider__add-actions">
-                <button class="hc-btn hc-btn-sm" @click="showAddProvider = false">{{ t('common.cancel') }}</button>
-                <button class="hc-btn hc-btn-primary hc-btn-sm" @click="handleAddProvider">{{ t('common.confirm') }}</button>
+                <button class="hc-btn hc-btn-sm" @click="showAddProvider = false">
+                  {{ t('common.cancel') }}
+                </button>
+                <button class="hc-btn hc-btn-primary hc-btn-sm" @click="handleAddProvider">
+                  {{ t('common.confirm') }}
+                </button>
               </div>
             </div>
 
             <!-- Provider 列表 -->
-            <div v-if="config.llm.providers.length === 0 && !showAddProvider" class="hc-provider__empty">
+            <div
+              v-if="config.llm.providers.length === 0 && !showAddProvider"
+              class="hc-provider__empty"
+            >
               <p class="hc-provider__empty-title">{{ t('settings.llm.noProviders') }}</p>
               <p class="hc-provider__empty-desc">{{ t('settings.llm.noProvidersDesc') }}</p>
             </div>
@@ -572,12 +826,19 @@ async function saveConfig() {
                 :class="{ 'hc-provider__card--disabled': !provider.enabled }"
               >
                 <!-- Provider 头部 -->
-                <div class="hc-provider__card-head" @click="editingProviderId = editingProviderId === provider.id ? null : provider.id">
+                <div class="hc-provider__card-head" @click="toggleEditingProvider(provider.id)">
                   <div class="hc-provider__card-info">
-                    <img :src="PROVIDER_LOGOS[provider.type] || PROVIDER_LOGOS.custom" :alt="provider.type" class="hc-provider__logo" />
+                    <img
+                      :src="PROVIDER_LOGOS[provider.type] || PROVIDER_LOGOS.custom"
+                      :alt="provider.type"
+                      class="hc-provider__logo"
+                    />
                     <span class="hc-provider__card-name">{{ provider.name }}</span>
                     <span class="hc-provider__tag">{{ provider.type }}</span>
-                    <span class="hc-provider__model-count">{{ provider.models.length }} {{ t('settings.llm.models').toLowerCase() }}</span>
+                    <span class="hc-provider__model-count"
+                      >{{ provider.models.length }}
+                      {{ t('settings.llm.models').toLowerCase() }}</span
+                    >
                   </div>
                   <div class="hc-provider__card-actions">
                     <button
@@ -586,36 +847,80 @@ async function saveConfig() {
                       :disabled="testingProviderId === provider.id"
                       @click.stop="testProvider(provider)"
                     >
-                      <Loader2 v-if="testingProviderId === provider.id" :size="14" class="animate-spin" style="color: var(--hc-text-muted);" />
-                      <CheckCircle v-else-if="testProviderResult[provider.id]?.ok" :size="14" style="color: #22c55e;" />
-                      <XCircle v-else-if="testProviderResult[provider.id] && !testProviderResult[provider.id]!.ok" :size="14" style="color: #ef4444;" />
-                      <Zap v-else :size="14" style="color: var(--hc-text-muted);" />
+                      <Loader2
+                        v-if="testingProviderId === provider.id"
+                        :size="14"
+                        class="animate-spin"
+                        style="color: var(--hc-text-muted)"
+                      />
+                      <CheckCircle
+                        v-else-if="testProviderResult[provider.id]?.ok"
+                        :size="14"
+                        style="color: #22c55e"
+                      />
+                      <XCircle
+                        v-else-if="
+                          testProviderResult[provider.id] && !testProviderResult[provider.id]!.ok
+                        "
+                        :size="14"
+                        style="color: #ef4444"
+                      />
+                      <Zap v-else :size="14" style="color: var(--hc-text-muted)" />
                     </button>
-                    <button class="hc-provider__icon-btn" :title="provider.enabled ? t('settings.llm.enabled') : t('settings.llm.disabled')" @click.stop="toggleProvider(provider)">
-                      <Power :size="14" :class="provider.enabled ? 'hc-provider__power--on' : 'hc-provider__power--off'" />
+                    <button
+                      class="hc-provider__icon-btn"
+                      :title="
+                        provider.enabled ? t('settings.llm.enabled') : t('settings.llm.disabled')
+                      "
+                      @click.stop="toggleProvider(provider)"
+                    >
+                      <Power
+                        :size="14"
+                        :class="
+                          provider.enabled ? 'hc-provider__power--on' : 'hc-provider__power--off'
+                        "
+                      />
                     </button>
-                    <component :is="editingProviderId === provider.id ? ChevronUp : ChevronDown" :size="14" class="hc-provider__chevron" />
+                    <component
+                      :is="editingProviderId === provider.id ? ChevronUp : ChevronDown"
+                      :size="14"
+                      class="hc-provider__chevron"
+                    />
                   </div>
                 </div>
 
                 <!-- Provider 编辑面板 -->
                 <div v-if="editingProviderId === provider.id" class="hc-provider__edit">
                   <div class="hc-settings__field">
-                    <label class="hc-settings__label">{{ t('settings.llm.provider') }} <span class="hc-settings__required">*</span></label>
-                    <input v-model="provider.name" type="text" class="hc-input" @change="autoSave()" />
+                    <label class="hc-settings__label"
+                      >{{ t('settings.llm.provider') }}
+                      <span class="hc-settings__required">*</span></label
+                    >
+                    <input
+                      v-model="provider.name"
+                      type="text"
+                      class="hc-input"
+                      @input="autoSave()"
+                    />
                   </div>
 
                   <div class="hc-settings__field">
-                    <label class="hc-settings__label">{{ t('settings.llm.apiKey') }} <span class="hc-settings__required">*</span></label>
+                    <label class="hc-settings__label"
+                      >{{ t('settings.llm.apiKey') }}
+                      <span class="hc-settings__required">*</span></label
+                    >
                     <div class="hc-settings__input-group">
                       <input
                         v-model="provider.apiKey"
                         :type="showApiKeys[provider.id] ? 'text' : 'password'"
                         class="hc-input"
                         :placeholder="PROVIDER_PRESETS[provider.type]?.placeholder || 'API Key'"
-                        @change="autoSave()"
+                        @input="autoSave()"
                       />
-                      <button class="hc-settings__eye-btn" @click="showApiKeys[provider.id] = !showApiKeys[provider.id]">
+                      <button
+                        class="hc-settings__eye-btn"
+                        @click="showApiKeys[provider.id] = !showApiKeys[provider.id]"
+                      >
                         <Eye v-if="!showApiKeys[provider.id]" :size="15" />
                         <EyeOff v-else :size="15" />
                       </button>
@@ -623,24 +928,93 @@ async function saveConfig() {
                   </div>
 
                   <div class="hc-settings__field">
-                    <label class="hc-settings__label">{{ t('settings.llm.baseUrl') }} <span class="hc-settings__required">*</span></label>
-                    <input v-model="provider.baseUrl" type="text" class="hc-input" :placeholder="PROVIDER_PRESETS[provider.type]?.defaultBaseUrl" @change="autoSave()" />
+                    <label class="hc-settings__label"
+                      >{{ t('settings.llm.baseUrl') }}
+                      <span class="hc-settings__required">*</span></label
+                    >
+                    <input
+                      v-model="provider.baseUrl"
+                      type="text"
+                      class="hc-input"
+                      :placeholder="PROVIDER_PRESETS[provider.type]?.defaultBaseUrl"
+                      @input="autoSave()"
+                    />
                   </div>
 
                   <!-- 模型列表 -->
                   <div class="hc-settings__field">
-                    <label class="hc-settings__label">{{ t('settings.llm.models') }} <span class="hc-settings__required">*</span></label>
+                    <label class="hc-settings__label"
+                      >{{ t('settings.llm.models') }}
+                      <span class="hc-settings__required">*</span></label
+                    >
+                    <select
+                      v-if="provider.models.length > 0"
+                      v-model="provider.selectedModelId"
+                      class="hc-input"
+                      style="margin-bottom: 10px"
+                      @change="handleProviderModelChange(provider)"
+                    >
+                      <option
+                        v-for="model in provider.models"
+                        :key="model.id"
+                        :value="model.id"
+                      >
+                        {{ model.name }} ({{ model.id }})
+                      </option>
+                    </select>
                     <div class="hc-model-list">
-                      <div v-for="(model, idx) in provider.models" :key="model.id" class="hc-model-card">
+                      <div
+                        v-for="(model, idx) in provider.models"
+                        :key="model.id"
+                        class="hc-model-card"
+                      >
                         <div class="hc-model-card__main">
                           <div class="hc-model-card__name">{{ model.name }}</div>
                           <code class="hc-model-card__id">{{ model.id }}</code>
                         </div>
                         <NSpace :size="4" align="center">
-                          <NTag v-for="cap in (model.capabilities || ['text']).filter((c: string) => c !== 'text')" :key="cap" size="tiny" :bordered="false" :type="cap === 'vision' ? 'info' : cap === 'video' ? 'warning' : cap === 'code' ? 'default' : 'success'">
-                            {{ cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : cap === 'audio' ? '音频' : cap === 'code' ? '代码' : cap }}
+                          <NTag
+                            v-if="provider.selectedModelId === model.id"
+                            size="tiny"
+                            :bordered="false"
+                            type="success"
+                          >
+                            {{ t('settings.llm.selectedModel', '当前生效') }}
                           </NTag>
-                          <button class="hc-model-card__action" @click="openEditModel(provider, idx)" title="编辑">
+                          <NTag
+                            v-for="cap in (model.capabilities || ['text']).filter(
+                              (c: string) => c !== 'text',
+                            )"
+                            :key="cap"
+                            size="tiny"
+                            :bordered="false"
+                            :type="
+                              cap === 'vision'
+                                ? 'info'
+                                : cap === 'video'
+                                  ? 'warning'
+                                  : cap === 'code'
+                                    ? 'default'
+                                    : 'success'
+                            "
+                          >
+                            {{
+                              cap === 'vision'
+                                ? '视觉'
+                                : cap === 'video'
+                                  ? '视频'
+                                  : cap === 'audio'
+                                    ? '音频'
+                                    : cap === 'code'
+                                      ? '代码'
+                                      : cap
+                            }}
+                          </NTag>
+                          <button
+                            class="hc-model-card__action"
+                            @click="openEditModel(provider, idx)"
+                            title="编辑"
+                          >
                             <Pencil :size="13" />
                           </button>
                           <button
@@ -654,24 +1028,60 @@ async function saveConfig() {
                       </div>
 
                       <!-- 添加模型 -->
-                      <button v-if="!showAddModelPanel" class="hc-model-add-btn" @click="showAddModelPanel = true">
+                      <button
+                        v-if="!showAddModelPanel"
+                        class="hc-model-add-btn"
+                        @click="showAddModelPanel = true"
+                      >
                         <Plus :size="14" />
                         添加模型
                       </button>
                       <div v-else class="hc-model-add-form">
                         <div class="hc-model-add-form__row">
-                          <input v-model="newModelId" type="text" class="hc-input hc-input--sm" placeholder="模型 ID *（如 gpt-4o）" />
-                          <input v-model="newModelName" type="text" class="hc-input hc-input--sm" placeholder="显示名称（选填）" />
+                          <input
+                            v-model="newModelId"
+                            type="text"
+                            class="hc-input hc-input--sm"
+                            placeholder="模型 ID *（如 gpt-4o）"
+                          />
+                          <input
+                            v-model="newModelName"
+                            type="text"
+                            class="hc-input hc-input--sm"
+                            placeholder="显示名称（选填）"
+                          />
                         </div>
                         <div class="hc-model-add-form__caps">
-                          <label v-for="cap in (['text', 'vision', 'video', 'audio'] as ModelCapability[])" :key="cap" class="hc-cap-check">
-                            <input v-model="newModelCaps[cap]" type="checkbox" :disabled="cap === 'text'" />
-                            <span>{{ cap === 'text' ? '文本' : cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : '音频' }}</span>
+                          <label
+                            v-for="cap in ['text', 'vision', 'video', 'audio'] as ModelCapability[]"
+                            :key="cap"
+                            class="hc-cap-check"
+                          >
+                            <input
+                              v-model="newModelCaps[cap]"
+                              type="checkbox"
+                              :disabled="cap === 'text'"
+                            />
+                            <span>{{
+                              cap === 'text'
+                                ? '文本'
+                                : cap === 'vision'
+                                  ? '视觉'
+                                  : cap === 'video'
+                                    ? '视频'
+                                    : '音频'
+                            }}</span>
                           </label>
                         </div>
                         <div class="hc-model-add-form__actions">
-                          <button class="hc-btn hc-btn-sm" @click="showAddModelPanel = false">取消</button>
-                          <button class="hc-btn hc-btn-primary hc-btn-sm" :disabled="!newModelId.trim()" @click="addCustomModel(provider); showAddModelPanel = false">
+                          <button class="hc-btn hc-btn-sm" @click="showAddModelPanel = false">
+                            取消
+                          </button>
+                          <button
+                            class="hc-btn hc-btn-primary hc-btn-sm"
+                            :disabled="!newModelId.trim()"
+                            @click="handleAddCustomModel(provider)"
+                          >
                             <Plus :size="12" /> 添加
                           </button>
                         </div>
@@ -686,14 +1096,22 @@ async function saveConfig() {
                       :disabled="testingProviderId === provider.id"
                       @click="testProvider(provider)"
                     >
-                      <Loader2 v-if="testingProviderId === provider.id" :size="13" class="animate-spin" />
+                      <Loader2
+                        v-if="testingProviderId === provider.id"
+                        :size="13"
+                        class="animate-spin"
+                      />
                       <Zap v-else :size="13" />
                       {{ testingProviderId === provider.id ? '测试中...' : '测试连接' }}
                     </button>
                     <span
                       v-if="testProviderResult[provider.id]"
                       class="hc-provider__test-badge"
-                      :class="testProviderResult[provider.id]!.ok ? 'hc-provider__test-badge--ok' : 'hc-provider__test-badge--err'"
+                      :class="
+                        testProviderResult[provider.id]!.ok
+                          ? 'hc-provider__test-badge--ok'
+                          : 'hc-provider__test-badge--err'
+                      "
                     >
                       <CheckCircle v-if="testProviderResult[provider.id]!.ok" :size="12" />
                       <XCircle v-else :size="12" />
@@ -702,7 +1120,10 @@ async function saveConfig() {
                   </div>
 
                   <div class="hc-provider__edit-footer">
-                    <button class="hc-provider__delete-btn" @click="openDeleteProviderConfirm(provider.id)">
+                    <button
+                      class="hc-provider__delete-btn"
+                      @click="openDeleteProviderConfirm(provider.id)"
+                    >
                       <Trash2 :size="13" />
                       {{ t('settings.llm.deleteProvider') }}
                     </button>
@@ -710,10 +1131,6 @@ async function saveConfig() {
                 </div>
               </div>
             </div>
-
-            <button class="hc-btn hc-btn-primary" :class="{ 'hc-settings__btn--saved': saved }" style="margin-top: 20px;" @click="saveConfig">
-              {{ saved ? t('common.saved') : t('settings.saveConfig') }}
-            </button>
           </div>
 
           <!-- Appearance (merged: theme + language + auto start) -->
@@ -726,14 +1143,26 @@ async function saveConfig() {
                 <div class="hc-settings__theme-grid">
                   <button
                     v-for="opt in [
-                      { key: 'light' as ThemeMode, label: t('settings.appearance.light'), desc: t('settings.appearance.lightDesc') },
-                      { key: 'dark' as ThemeMode, label: t('settings.appearance.dark'), desc: t('settings.appearance.darkDesc') },
-                      { key: 'system' as ThemeMode, label: t('settings.appearance.system'), desc: t('settings.appearance.systemDesc') },
+                      {
+                        key: 'light' as ThemeMode,
+                        label: t('settings.appearance.light'),
+                        desc: t('settings.appearance.lightDesc'),
+                      },
+                      {
+                        key: 'dark' as ThemeMode,
+                        label: t('settings.appearance.dark'),
+                        desc: t('settings.appearance.darkDesc'),
+                      },
+                      {
+                        key: 'system' as ThemeMode,
+                        label: t('settings.appearance.system'),
+                        desc: t('settings.appearance.systemDesc'),
+                      },
                     ]"
                     :key="opt.key"
                     class="hc-settings__theme-card"
                     :class="{ 'hc-settings__theme-card--active': themeMode === opt.key }"
-                    @click="setTheme(opt.key); autoSave()"
+                    @click="handleThemeSelect(opt.key)"
                   >
                     <div class="hc-settings__theme-label">{{ opt.label }}</div>
                     <div class="hc-settings__theme-desc">{{ opt.desc }}</div>
@@ -743,7 +1172,11 @@ async function saveConfig() {
 
               <div class="hc-settings__field">
                 <label class="hc-settings__label">{{ t('settings.general.language') }}</label>
-                <select v-model="config.general.language" class="hc-input" @change="handleLocaleChange(config.general.language); autoSave()">
+                <select
+                  v-model="config.general.language"
+                  class="hc-input"
+                  @change="handleLanguageChange"
+                >
                   <option value="zh-CN">中文</option>
                   <option value="en">English</option>
                 </select>
@@ -751,67 +1184,201 @@ async function saveConfig() {
 
               <label class="hc-settings__toggle-row">
                 <div>
-                  <span class="hc-settings__toggle-label">{{ t('settings.general.autoStart') }}</span>
+                  <span class="hc-settings__toggle-label">{{
+                    t('settings.general.autoStart')
+                  }}</span>
                   <p class="hc-settings__toggle-desc">{{ t('settings.general.autoStartDesc') }}</p>
                 </div>
-                <input v-model="config.general.auto_start" type="checkbox" class="hc-toggle" @change="autoSave()" />
+                <input
+                  v-model="config.general.auto_start"
+                  type="checkbox"
+                  class="hc-toggle"
+                  @change="autoSave()"
+                />
               </label>
             </div>
-
-            <button class="hc-btn hc-btn-primary" :class="{ 'hc-settings__btn--saved': saved }" @click="saveConfig">
-              {{ saved ? t('common.saved') : t('settings.saveConfig') }}
-            </button>
           </div>
 
           <!-- Storage -->
-          <div v-else-if="activeSection === 'storage'" class="hc-settings__section">
+          <div
+            v-else-if="activeSection === 'storage'"
+            class="hc-settings__section hc-settings__section--scroll hc-settings__section--storage"
+          >
             <h3 class="hc-settings__section-title">{{ t('settings.storage.title') }}</h3>
 
-            <div class="hc-settings__form">
-              <div class="hc-card" style="padding: 16px;">
-                <div class="hc-settings__info-title">{{ t('settings.storage.vectorDb') }}</div>
-                <div class="hc-settings__info-grid">
-                  <div>
-                    <span class="hc-settings__info-label">{{ t('settings.storage.type') }}</span>
-                    <div class="hc-settings__info-value">Qdrant</div>
-                  </div>
+            <div class="hc-settings__form hc-settings__form--storage">
+              <div class="hc-card hc-settings__info-card hc-settings__info-card--wide">
+                <div class="hc-settings__info-title">
+                  {{ t('settings.storage.runtime', '运行时状态') }}
+                </div>
+                <div class="hc-settings__info-grid hc-settings__info-grid--runtime">
                   <div>
                     <span class="hc-settings__info-label">{{ t('settings.storage.status') }}</span>
-                    <div class="hc-settings__info-value" style="color: var(--hc-success);">{{ t('settings.storage.running') }}</div>
+                    <div
+                      class="hc-settings__info-value"
+                      :style="{
+                        color: runtimeConfig ? 'var(--hc-success)' : 'var(--hc-text-muted)',
+                      }"
+                    >
+                      {{
+                        runtimeConfig
+                          ? t('settings.storage.running')
+                          : t('common.unavailable', 'Unavailable')
+                      }}
+                    </div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.type', 'Mode')
+                    }}</span>
+                    <div class="hc-settings__info-value">{{ runtimeModeDisplay }}</div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.apiEndpoint', 'API Endpoint')
+                    }}</span>
+                    <div class="hc-settings__info-value hc-settings__info-value--mono">
+                      {{ runtimeApiEndpoint }}
+                    </div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.loadedProviders', 'Loaded Providers')
+                    }}</span>
+                    <div class="hc-settings__info-value">{{ runtimeProviderCount }}</div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.defaultProvider', 'Default Provider')
+                    }}</span>
+                    <div class="hc-settings__info-value">{{ runtimeDefaultProvider }}</div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.defaultModel', 'Default Model')
+                    }}</span>
+                    <div class="hc-settings__info-value">{{ runtimeDefaultModel }}</div>
                   </div>
                 </div>
               </div>
 
-              <div class="hc-card" style="padding: 16px;">
-                <div class="hc-settings__info-title">{{ t('settings.storage.sessionData') }}</div>
+              <div class="hc-card hc-settings__info-card">
+                <div class="hc-settings__info-title">
+                  {{ t('settings.storage.localDataStore', '本地数据存储') }}
+                </div>
                 <div class="hc-settings__info-grid">
                   <div>
-                    <span class="hc-settings__info-label">{{ t('settings.storage.type') }}</span>
-                    <div class="hc-settings__info-value">SQLite</div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.engine', 'Engine')
+                    }}</span>
+                    <div class="hc-settings__info-value">{{ runtimeLocalStoreEngine }}</div>
                   </div>
                   <div>
-                    <span class="hc-settings__info-label">{{ t('settings.storage.path') }}</span>
-                    <div class="hc-settings__info-value" style="overflow: hidden; text-overflow: ellipsis;">~/.hexclaw/data.db</div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.databaseFile', 'Database File')
+                    }}</span>
+                    <div class="hc-settings__info-value hc-settings__info-value--mono">
+                      {{ runtimeLocalStoreFile }}
+                    </div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.sessionData')
+                    }}</span>
+                    <div class="hc-settings__info-value">
+                      {{ t('settings.storage.localDesktop', 'Local desktop only') }}
+                    </div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.vectorDb')
+                    }}</span>
+                    <div
+                      class="hc-settings__info-value"
+                      :style="{
+                        color: runtimeConfig?.knowledge.enabled
+                          ? 'var(--hc-success)'
+                          : 'var(--hc-text-muted)',
+                      }"
+                    >
+                      {{
+                        runtimeConfig?.knowledge.enabled
+                          ? t('settings.storage.enabled')
+                          : t('settings.storage.disabled', 'Disabled')
+                      }}
+                    </div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.indexMode', 'Index Mode')
+                    }}</span>
+                    <div class="hc-settings__info-value">{{ runtimeVectorDbIndexMode }}</div>
                   </div>
                 </div>
               </div>
 
-              <div class="hc-card" style="padding: 16px;">
+              <div class="hc-card hc-settings__info-card">
                 <div class="hc-settings__info-title">{{ t('settings.storage.cache') }}</div>
                 <div class="hc-settings__info-grid">
                   <div>
-                    <span class="hc-settings__info-label">{{ t('settings.storage.semanticCache') }}</span>
-                    <div class="hc-settings__info-value" style="color: var(--hc-success);">{{ t('settings.storage.enabled') }}</div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.semanticCache')
+                    }}</span>
+                    <div
+                      class="hc-settings__info-value"
+                      :style="{
+                        color: runtimeLLMConfig?.cache.enabled
+                          ? 'var(--hc-success)'
+                          : 'var(--hc-text-muted)',
+                      }"
+                    >
+                      {{
+                        runtimeLLMConfig?.cache.enabled
+                          ? t('settings.storage.enabled')
+                          : t('settings.storage.disabled', 'Disabled')
+                      }}
+                    </div>
                   </div>
                   <div>
-                    <span class="hc-settings__info-label">{{ t('settings.storage.localCache') }}</span>
-                    <div class="hc-settings__info-value" style="color: var(--hc-success);">{{ t('settings.storage.enabled') }}</div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.ttl', 'TTL')
+                    }}</span>
+                    <div class="hc-settings__info-value">
+                      {{ runtimeLLMConfig?.cache.ttl || '—' }}
+                    </div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.maxEntries', 'Max Entries')
+                    }}</span>
+                    <div class="hc-settings__info-value">
+                      {{ runtimeLLMConfig?.cache.max_entries ?? '—' }}
+                    </div>
+                  </div>
+                  <div>
+                    <span class="hc-settings__info-label">{{
+                      t('settings.storage.routing', 'Routing')
+                    }}</span>
+                    <div class="hc-settings__info-value">
+                      {{
+                        runtimeLLMConfig?.routing.enabled
+                          ? runtimeLLMConfig.routing.strategy
+                          : t('settings.storage.disabled', 'Disabled')
+                      }}
+                    </div>
                   </div>
                 </div>
               </div>
+
+              <p
+                v-if="runtimeInfoLoading"
+                class="text-xs"
+                :style="{ color: 'var(--hc-text-muted)' }"
+              >
+                {{ t('common.loading', 'Loading...') }}
+              </p>
             </div>
           </div>
-
         </template>
       </div>
     </div>
@@ -828,25 +1395,49 @@ async function saveConfig() {
     :segmented="{ content: true, footer: true }"
     :close-on-esc="true"
     :mask-closable="true"
-    @update:show="(v: boolean) => { if (!v) editingModel = null }"
+    @update:show="handleEditModelVisibility"
     @after-leave="editingModel = null"
   >
     <div class="hc-edit-model">
       <div class="hc-edit-model__field">
         <label>模型 ID <span class="hc-settings__required">*</span></label>
-        <input v-model="editModelForm.id" type="text" class="hc-input" placeholder="如 gpt-4o, claude-sonnet-4-6" />
+        <input
+          v-model="editModelForm.id"
+          type="text"
+          class="hc-input"
+          placeholder="如 gpt-4o, claude-sonnet-4-6"
+        />
       </div>
       <div class="hc-edit-model__field">
         <label>显示名称</label>
-        <input v-model="editModelForm.name" type="text" class="hc-input" placeholder="留空则使用模型 ID" />
+        <input
+          v-model="editModelForm.name"
+          type="text"
+          class="hc-input"
+          placeholder="留空则使用模型 ID"
+        />
       </div>
       <div class="hc-edit-model__field">
         <label>模型能力</label>
         <div class="hc-edit-model__caps">
-          <label v-for="cap in (['text', 'vision', 'video', 'audio'] as ModelCapability[])" :key="cap" class="hc-edit-model__cap-item">
+          <label
+            v-for="cap in ['text', 'vision', 'video', 'audio'] as ModelCapability[]"
+            :key="cap"
+            class="hc-edit-model__cap-item"
+          >
             <input v-model="editModelForm.caps[cap]" type="checkbox" :disabled="cap === 'text'" />
-            <span class="hc-edit-model__cap-icon">{{ cap === 'text' ? '💬' : cap === 'vision' ? '👁' : cap === 'video' ? '🎬' : '🎤' }}</span>
-            <span>{{ cap === 'text' ? '文本' : cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : '音频' }}</span>
+            <span class="hc-edit-model__cap-icon">{{
+              cap === 'text' ? '💬' : cap === 'vision' ? '👁' : cap === 'video' ? '🎬' : '🎤'
+            }}</span>
+            <span>{{
+              cap === 'text'
+                ? '文本'
+                : cap === 'vision'
+                  ? '视觉'
+                  : cap === 'video'
+                    ? '视频'
+                    : '音频'
+            }}</span>
           </label>
         </div>
       </div>
@@ -854,7 +1445,13 @@ async function saveConfig() {
     <template #footer>
       <div style="display: flex; justify-content: flex-end; gap: 8px">
         <button class="hc-btn hc-btn-sm" @click="editingModel = null">取消</button>
-        <button class="hc-btn hc-btn-primary hc-btn-sm" :disabled="!editModelForm.id.trim()" @click="saveEditModel">保存</button>
+        <button
+          class="hc-btn hc-btn-primary hc-btn-sm"
+          :disabled="!editModelForm.id.trim()"
+          @click="saveEditModel"
+        >
+          保存
+        </button>
       </div>
     </template>
   </NModal>
@@ -872,7 +1469,11 @@ async function saveConfig() {
   <ConfirmDialog
     :open="pendingDeleteModel !== null"
     :title="t('settings.llm.deleteModel')"
-    :message="pendingDeleteModel ? t('settings.llm.deleteModelConfirm', { name: pendingDeleteModel.modelName }) : ''"
+    :message="
+      pendingDeleteModel
+        ? t('settings.llm.deleteModelConfirm', { name: pendingDeleteModel.modelName })
+        : ''
+    "
     :confirm-text="t('common.delete')"
     :cancel-text="t('common.cancel')"
     @confirm="confirmDeleteModel"
@@ -903,6 +1504,7 @@ async function saveConfig() {
 
 .hc-settings__section {
   max-width: 520px;
+  width: 100%;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -911,6 +1513,12 @@ async function saveConfig() {
 
 .hc-settings__section--scroll {
   overflow-y: auto;
+}
+
+.hc-settings__section--storage {
+  max-width: min(560px, 100%);
+  margin: 0;
+  padding-right: 4px;
 }
 
 .hc-settings__section-title {
@@ -927,6 +1535,13 @@ async function saveConfig() {
   flex-direction: column;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.hc-settings__form--storage {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  align-content: start;
 }
 
 .hc-settings__field {
@@ -1021,6 +1636,11 @@ async function saveConfig() {
   cursor: pointer;
 }
 
+.hc-settings__toggle-row--compact {
+  padding: 0;
+  margin-bottom: 8px;
+}
+
 .hc-settings__toggle-label {
   font-size: 13px;
   font-weight: 500;
@@ -1031,6 +1651,14 @@ async function saveConfig() {
   font-size: 12px;
   color: var(--hc-text-muted);
   margin: 2px 0 0;
+}
+
+.hc-settings__llm-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
 }
 
 /* ─── Theme Cards ───── */
@@ -1047,7 +1675,9 @@ async function saveConfig() {
   padding: 10px 12px;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
 .hc-settings__theme-card:hover {
@@ -1073,16 +1703,28 @@ async function saveConfig() {
 
 /* ─── Info Display ───── */
 .hc-settings__info-title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--hc-text-primary);
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+
+.hc-settings__info-card {
+  padding: 12px 14px;
+}
+
+.hc-settings__info-card--wide {
+  grid-column: 1 / -1;
 }
 
 .hc-settings__info-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  gap: 8px 12px;
+}
+
+.hc-settings__info-grid--runtime {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .hc-settings__info-label {
@@ -1091,11 +1733,26 @@ async function saveConfig() {
 }
 
 .hc-settings__info-value {
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.35;
   color: var(--hc-text-primary);
-  margin-top: 2px;
+  margin-top: 1px;
 }
 
+.hc-settings__info-value--mono {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    'Liberation Mono',
+    'Courier New',
+    monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* ─── Engine ───── */
 /* ─── Provider Management ───── */
@@ -1491,8 +2148,14 @@ async function saveConfig() {
   padding: 2px 8px;
   border-radius: 6px;
 }
-.hc-provider__test-badge--ok { background: #22c55e15; color: #22c55e; }
-.hc-provider__test-badge--err { background: #ef444415; color: #ef4444; }
+.hc-provider__test-badge--ok {
+  background: #22c55e15;
+  color: #22c55e;
+}
+.hc-provider__test-badge--err {
+  background: #ef444415;
+  color: #ef4444;
+}
 
 .hc-provider__edit-footer {
   display: flex;
@@ -1555,6 +2218,15 @@ async function saveConfig() {
 
 .hc-settings__btn--saved {
   background: var(--hc-success) !important;
+}
+
+.hc-settings :deep(.hc-toolbar__search) {
+  min-width: 160px;
+  max-width: 280px;
+}
+
+.hc-settings :deep(.hc-toolbar__right) {
+  flex-shrink: 0;
 }
 
 /* ─── Webhook ───── */
@@ -1696,8 +2368,8 @@ async function saveConfig() {
   justify-content: space-between;
   padding: 10px 12px;
   border-radius: 8px;
-  background: var(--hc-bg-hover, rgba(255,255,255,0.04));
-  border: 1px solid var(--hc-border, rgba(255,255,255,0.08));
+  background: var(--hc-bg-hover, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.08));
   transition: border-color 0.15s;
 }
 
@@ -1738,7 +2410,7 @@ async function saveConfig() {
 }
 
 .hc-model-card__action:hover {
-  background: var(--hc-bg-card, rgba(255,255,255,0.06));
+  background: var(--hc-bg-card, rgba(255, 255, 255, 0.06));
   color: var(--hc-text-primary);
 }
 
@@ -1755,7 +2427,7 @@ async function saveConfig() {
   gap: 6px;
   width: 100%;
   padding: 10px;
-  border: 1px dashed var(--hc-border, rgba(255,255,255,0.12));
+  border: 1px dashed var(--hc-border, rgba(255, 255, 255, 0.12));
   border-radius: 8px;
   background: transparent;
   color: var(--hc-text-muted, #5c5c6b);
@@ -1772,9 +2444,9 @@ async function saveConfig() {
 
 .hc-model-add-form {
   padding: 12px;
-  border: 1px solid var(--hc-border, rgba(255,255,255,0.08));
+  border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.08));
   border-radius: 8px;
-  background: var(--hc-bg-hover, rgba(255,255,255,0.02));
+  background: var(--hc-bg-hover, rgba(255, 255, 255, 0.02));
 }
 
 .hc-model-add-form__row {
@@ -1859,7 +2531,7 @@ async function saveConfig() {
   align-items: center;
   gap: 6px;
   padding: 8px 10px;
-  border: 1px solid var(--hc-border, rgba(255,255,255,0.08));
+  border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.08));
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
@@ -1867,7 +2539,7 @@ async function saveConfig() {
 }
 
 .hc-edit-model__cap-item:hover {
-  background: var(--hc-bg-hover, rgba(255,255,255,0.04));
+  background: var(--hc-bg-hover, rgba(255, 255, 255, 0.04));
 }
 
 .hc-edit-model__cap-item input {
@@ -1876,5 +2548,50 @@ async function saveConfig() {
 
 .hc-edit-model__cap-icon {
   font-size: 16px;
+}
+
+@media (min-width: 1440px) {
+  .hc-settings :deep(.hc-toolbar__search) {
+    max-width: 360px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .hc-settings__content {
+    padding: 14px 18px;
+  }
+}
+
+@media (max-width: 880px) {
+  .hc-settings :deep(.hc-toolbar) {
+    gap: 8px;
+    padding: 0 10px;
+  }
+
+  .hc-settings :deep(.hc-toolbar__left) {
+    gap: 8px;
+  }
+
+  .hc-settings :deep(.hc-toolbar__search) {
+    min-width: 0;
+    max-width: 220px;
+  }
+
+  .hc-settings :deep(.hc-toolbar__right) {
+    gap: 6px;
+  }
+
+  .hc-settings__theme-grid {
+    flex-direction: column;
+  }
+
+  .hc-settings__info-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  .hc-settings__info-grid--runtime {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

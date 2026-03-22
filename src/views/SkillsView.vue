@@ -33,8 +33,18 @@ import {
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
+import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
+const appStore = useAppStore()
+
+const props = withDefaults(defineProps<{
+  embeddedSearch?: string
+  hideInstalledSearch?: boolean
+}>(), {
+  embeddedSearch: undefined,
+  hideInstalledSearch: false,
+})
 
 // ─── Tab 切换 ─────────────────────────────────────────
 const activeTab = ref<'installed' | 'hub'>('installed')
@@ -54,7 +64,7 @@ const statusNotice = ref<{ tone: 'info' | 'warn' | 'success'; message: string } 
 const togglingSkills = ref<Set<string>>(new Set())
 
 onMounted(async () => {
-  await Promise.all([loadSkills(), loadHubSkills()])
+  await loadSkills()
 })
 
 function readDisabledSkillsFromStorage(): Set<string> {
@@ -124,13 +134,10 @@ async function confirmUninstall() {
   pendingUninstall.value = null
   try {
     await uninstallSkill(name)
-    skills.value = skills.value.filter((s) => s.name !== name)
-    if (disabledSkills.value.has(name)) {
-      const next = new Set(disabledSkills.value)
-      next.delete(name)
-      disabledSkills.value = next
-      localStorage.setItem('hexclaw_disabled_skills', JSON.stringify([...next]))
-    }
+    await restartEngineAfterSkillChange(
+      `技能「${name}」已卸载，正在重启引擎...`,
+      `技能「${name}」已卸载并重新载入`,
+    )
   } catch (e) {
     console.error('卸载 Skill 失败:', e)
   }
@@ -144,7 +151,10 @@ async function handleInstall() {
     await installSkill(installSource.value.trim())
     showInstallDialog.value = false
     installSource.value = ''
-    await loadSkills()
+    await restartEngineAfterSkillChange(
+      '技能已安装，正在重启引擎...',
+      '技能已安装并重新载入',
+    )
   } catch (e: unknown) {
     installError.value = e instanceof Error ? e.message : '安装失败'
   } finally {
@@ -178,9 +188,16 @@ async function toggleSkillEnabled(name: string) {
       requires_restart: result.requires_restart,
       message: result.message,
     })
-    statusNotice.value = result.message
-      ? { tone: result.requires_restart ? 'warn' : 'success', message: result.message }
-      : null
+    if (result.requires_restart) {
+      await restartEngineAfterSkillChange(
+        result.message || t('skills.restartRequired'),
+        `技能「${name}」已更新并重新载入`,
+      )
+    } else {
+      statusNotice.value = result.message
+        ? { tone: 'success', message: result.message }
+        : null
+    }
   } else if (getSkillScope(previousSkill) === 'runtime') {
     updateSkill(name, previousSkill)
     disabledSkills.value = previousLocal
@@ -213,7 +230,7 @@ function toggleSkillDetail(name: string) {
 }
 
 const filteredSkills = computed(() => {
-  const q = searchQuery.value.toLowerCase()
+  const q = (props.embeddedSearch ?? searchQuery.value).toLowerCase()
   if (!q) return skills.value
   return skills.value.filter(
     (s) =>
@@ -233,9 +250,9 @@ const hubLoading = ref(false)
 const hubSearchQuery = ref('')
 const hubCategory = ref<ClawHubCategory>('all')
 const hubInstallingSet = ref<Set<string>>(new Set())
-const hubInstalledSet = ref<Set<string>>(new Set())
 const hubInstallError = ref('')
 const hubSearchError = ref('')
+let hubRequestSeq = 0
 
 const categoryLabels: Record<ClawHubCategory, string> = {
   all: 'skills.hub.catAll',
@@ -248,19 +265,24 @@ const categoryLabels: Record<ClawHubCategory, string> = {
 }
 
 async function loadHubSkills() {
+  const requestSeq = ++hubRequestSeq
   hubLoading.value = true
   hubSearchError.value = ''
   try {
-    hubSkills.value = await searchClawHub(
+    const nextSkills = await searchClawHub(
       hubSearchQuery.value || undefined,
       hubCategory.value,
     )
+    if (requestSeq !== hubRequestSeq) return
+    hubSkills.value = nextSkills
   } catch (e) {
+    if (requestSeq !== hubRequestSeq) return
     hubSkills.value = []
     hubSearchError.value =
       e instanceof Error ? e.message : t('skills.hub.catalogLoadFailed', 'Failed to load skill catalog')
     console.error('加载技能目录失败:', e)
   } finally {
+    if (requestSeq !== hubRequestSeq) return
     hubLoading.value = false
   }
 }
@@ -292,8 +314,10 @@ async function handleHubInstall(skill: ClawHubSkill) {
   hubInstallError.value = ''
   try {
     await installFromHub(skill.name)
-    hubInstalledSet.value = new Set([...hubInstalledSet.value, skill.name])
-    await loadSkills()
+    await restartEngineAfterSkillChange(
+      `技能「${skill.name}」已安装，正在重启引擎...`,
+      `技能「${skill.name}」已安装并重新载入`,
+    )
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     hubInstallError.value = `${skill.name}: ${msg}`
@@ -310,14 +334,25 @@ function formatDownloads(n: number): string {
 }
 
 function isHubSkillInstalled(name: string): boolean {
-  return (
-    hubInstalledSet.value.has(name) ||
-    skills.value.some((s) => s.name === name)
-  )
+  return skills.value.some((s) => s.name === name)
 }
 
 function openInstallDialog() {
   showInstallDialog.value = true
+}
+
+async function restartEngineAfterSkillChange(startMessage: string, successMessage: string) {
+  statusNotice.value = { tone: 'info', message: startMessage }
+  const ok = await appStore.restartSidecar()
+  if (ok) {
+    statusNotice.value = { tone: 'success', message: successMessage }
+    await loadSkills()
+  } else {
+    statusNotice.value = {
+      tone: 'warn',
+      message: '技能变更已保存，但引擎重启失败，请手动重试。',
+    }
+  }
 }
 
 defineExpose({ openInstallDialog })
@@ -326,7 +361,7 @@ defineExpose({ openInstallDialog })
 <template>
   <div class="h-full flex flex-col overflow-hidden">
     <!-- Inline search for installed tab -->
-    <div v-if="activeTab === 'installed'" class="px-6 pt-2">
+    <div v-if="activeTab === 'installed' && !props.hideInstalledSearch" class="px-6 pt-2">
       <SearchInput
         v-model="searchQuery"
         :placeholder="t('skills.searchPlaceholder')"

@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
-import { Play, ShieldOff } from 'lucide-vue-next'
+import { computed } from 'vue'
 import type { Artifact } from '@/types'
+import { sanitizeArtifactHtml } from '@/utils/safe-html'
 
 const props = defineProps<{
   artifact: Artifact
 }>()
 
-const allowScripts = ref(false)
-const sandboxAttr = computed(() => allowScripts.value ? 'allow-scripts' : '')
+const previewHtml = computed(() =>
+  sanitizeArtifactHtml(props.artifact.content, props.artifact.title),
+)
 </script>
 
 <template>
@@ -16,24 +17,12 @@ const sandboxAttr = computed(() => allowScripts.value ? 'allow-scripts' : '')
     <div class="hc-preview__header">
       <span class="hc-preview__badge">Preview</span>
       <span class="hc-preview__title">{{ artifact.title }}</span>
-      <button
-        v-if="!allowScripts"
-        class="hc-preview__run-btn"
-        title="Allow scripts to run in this preview"
-        @click="allowScripts = true"
-      >
-        <Play :size="12" />
-        Run
-      </button>
-      <span v-else class="hc-preview__running-badge">
-        <ShieldOff :size="11" />
-        Scripts enabled
-      </span>
     </div>
     <iframe
       class="hc-preview__frame"
-      :srcdoc="artifact.content"
-      :sandbox="sandboxAttr"
+      :title="artifact.title || 'Artifact Preview'"
+      :srcdoc="previewHtml"
+      sandbox=""
     />
   </div>
 </template>
@@ -68,33 +57,6 @@ const sandboxAttr = computed(() => allowScripts.value ? 'allow-scripts' : '')
 .hc-preview__title {
   flex: 1;
   color: var(--hc-text-muted);
-}
-
-.hc-preview__run-btn {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 8px;
-  border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-sm);
-  background: transparent;
-  color: var(--hc-text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.hc-preview__run-btn:hover {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
-}
-
-.hc-preview__running-badge {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  font-size: 10px;
-  color: var(--hc-warning, #ff9500);
 }
 
 .hc-preview__frame {

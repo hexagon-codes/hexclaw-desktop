@@ -3,8 +3,25 @@
  *
  * 验证文件解析器的边界情况和安全性
  */
-import { describe, it, expect } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { isDocumentFile, parseDocument } from '../file-parser'
+
+const {
+  mockGetDocument,
+  mockGlobalWorkerOptions,
+} = vi.hoisted(() => ({
+  mockGetDocument: vi.fn(),
+  mockGlobalWorkerOptions: {} as { workerPort?: unknown; workerSrc?: string },
+}))
+
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
+  getDocument: mockGetDocument,
+  GlobalWorkerOptions: mockGlobalWorkerOptions,
+}))
+
+vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({
+  default: '/assets/pdf.worker.mock.js',
+}))
 
 describe('isDocumentFile', () => {
   it('识别 PDF 文件', () => {
@@ -58,6 +75,12 @@ describe('isDocumentFile', () => {
 })
 
 describe('parseDocument', () => {
+  beforeEach(() => {
+    mockGetDocument.mockReset()
+    delete mockGlobalWorkerOptions.workerPort
+    delete mockGlobalWorkerOptions.workerSrc
+  })
+
   it('解析纯文本文件', async () => {
     const content = 'Hello, World!\nLine 2'
     const file = new File([content], 'test.txt', { type: 'text/plain' })
@@ -98,5 +121,33 @@ describe('parseDocument', () => {
     const file = new File(['some content'], 'file.xyz')
     const result = await parseDocument(file)
     expect(result.text).toBe('some content')
+  })
+
+  it('解析 PDF 时应配置 workerSrc 并禁用直接 workerPort 注入', async () => {
+    mockGetDocument.mockReturnValue({
+      promise: Promise.resolve({
+        numPages: 1,
+        destroy: vi.fn().mockResolvedValue(undefined),
+        getPage: vi.fn().mockResolvedValue({
+          getTextContent: vi.fn().mockResolvedValue({
+            items: [{ str: 'PDF content' }],
+          }),
+        }),
+      }),
+    })
+
+    const file = new File(['%PDF'], 'sample.pdf', { type: 'application/pdf' })
+    const result = await parseDocument(file)
+
+    expect(result.text).toBe('PDF content')
+    expect(mockGlobalWorkerOptions.workerPort).toBeNull()
+    expect(mockGlobalWorkerOptions.workerSrc).toBe('/assets/pdf.worker.mock.js')
+    expect(mockGetDocument).toHaveBeenCalledWith({
+      data: expect.any(Uint8Array),
+      useWorkerFetch: false,
+      isOffscreenCanvasSupported: false,
+      isImageDecoderSupported: false,
+      stopAtErrors: true,
+    })
   })
 })

@@ -18,6 +18,7 @@ const MOCK_BACKEND_CONFIG = {
 
 const mockGetLLMConfig = vi.fn().mockResolvedValue(MOCK_BACKEND_CONFIG)
 const mockUpdateLLMConfig = vi.fn().mockResolvedValue({})
+let mockPersistedAppConfig: unknown = null
 
 vi.mock('@/api/config', () => ({
   getLLMConfig: (...args: unknown[]) => mockGetLLMConfig(...args),
@@ -26,7 +27,9 @@ vi.mock('@/api/config', () => ({
 
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() { return null }
+    async get() {
+      return mockPersistedAppConfig
+    }
     async set() {}
     async save() {}
     async delete() {}
@@ -39,6 +42,7 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     setActivePinia(createPinia())
     mockGetLLMConfig.mockClear()
     mockGetLLMConfig.mockResolvedValue(MOCK_BACKEND_CONFIG)
+    mockPersistedAppConfig = null
   })
 
   afterEach(() => {
@@ -115,6 +119,7 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     expect(provider.baseUrl).toBe('https://apimart.asia/v1')
     expect(provider.models).toHaveLength(1)
     expect(provider.models[0]!.id).toBe('claude-sonnet-4-6-apimart')
+    expect(provider.selectedModelId).toBe('claude-sonnet-4-6-apimart')
   })
 
   it('defaultModel 正确映射', async () => {
@@ -125,6 +130,7 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     await store.loadConfig()
 
     expect(store.config!.llm.defaultModel).toBe('claude-sonnet-4-6-apimart')
+    expect(store.config!.llm.defaultProviderId).toBe('apimart')
   })
 
   it('availableModels 计算属性正确', async () => {
@@ -136,6 +142,40 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
 
     expect(store.availableModels).toHaveLength(1)
     expect(store.availableModels[0]!.modelId).toBe('claude-sonnet-4-6-apimart')
+    expect(store.availableModels[0]!.providerKey).toBe('apimart')
+  })
+
+  it('聊天运行时只暴露后端已加载的 providers，不把本地未保存草稿带进 availableModels', async () => {
+    mockPersistedAppConfig = {
+      llm: {
+        providers: [
+          {
+            id: 'zhipu-local',
+            name: '智谱',
+            type: 'custom',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+            models: [{ id: 'glm-5', name: 'glm-5', capabilities: ['text'] }],
+          },
+        ],
+        defaultModel: 'glm-5',
+      },
+      security: {},
+      general: {},
+      notification: {},
+      mcp: {},
+    }
+    ;(globalThis as unknown as Record<string, unknown>).isTauri = true
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+
+    expect(store.config!.llm.providers.some((provider) => provider.name === '智谱')).toBe(true)
+    expect(store.availableModels).toHaveLength(1)
+    expect(store.availableModels[0]!.providerKey).toBe('apimart')
+    expect(store.availableModels.some((model) => model.providerName === '智谱')).toBe(false)
   })
 
   it('getLLMConfig 失败时应重试 3 次', async () => {
@@ -166,4 +206,46 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     expect(mockGetLLMConfig).toHaveBeenCalledTimes(2)
     expect(store.config!.llm.providers).toHaveLength(1)
   }, 15000)
+
+  it('保存后会使用后端热生效的 runtime providers 刷新聊天模型列表', async () => {
+    ;(globalThis as unknown as Record<string, unknown>).isTauri = true
+    mockGetLLMConfig.mockResolvedValueOnce(MOCK_BACKEND_CONFIG).mockResolvedValueOnce({
+      default: '智谱',
+      providers: {
+        智谱: {
+          api_key: '****zhipu',
+          base_url: 'https://open.bigmodel.cn/api/paas/v4',
+          model: 'glm-5',
+          compatible: 'openai',
+        },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+    })
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+
+    store.config!.llm.providers = [
+      {
+        id: 'zhipu-local',
+        name: '智谱',
+        type: 'custom',
+        enabled: true,
+        apiKey: 'sk-zhipu',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        models: [{ id: 'glm-5', name: 'glm-5', capabilities: ['text'] }],
+      },
+    ]
+    store.config!.llm.defaultModel = 'glm-5'
+    store.config!.llm.defaultProviderId = 'zhipu-local'
+
+    await store.saveConfig(store.config!)
+
+    expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(1)
+    expect(store.availableModels).toHaveLength(1)
+    expect(store.availableModels[0]!.providerKey).toBe('智谱')
+    expect(store.config!.llm.defaultProviderId).toBe('zhipu-local')
+  })
 })

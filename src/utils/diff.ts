@@ -14,16 +14,18 @@ const MAX_LCS_CELLS = 4_000_000
  */
 function computeDiffSimple(oldLines: string[], newLines: string[]): DiffLine[] {
   const result: DiffLine[] = []
-  const maxLen = Math.max(oldLines.length, newLines.length)
-  let oi = 0, ni = 0
+  let oi = 0,
+    ni = 0
   while (oi < oldLines.length && ni < newLines.length) {
     if (oldLines[oi] === newLines[ni]) {
       result.push({ type: 'equal', content: oldLines[oi]!, oldLineNo: oi + 1, newLineNo: ni + 1 })
-      oi++; ni++
+      oi++
+      ni++
     } else {
       result.push({ type: 'remove', content: oldLines[oi]!, oldLineNo: oi + 1 })
       result.push({ type: 'add', content: newLines[ni]!, newLineNo: ni + 1 })
-      oi++; ni++
+      oi++
+      ni++
     }
   }
   while (oi < oldLines.length) {
@@ -80,7 +82,8 @@ export function computeDiff(oldText: string, newText: string): DiffLine[] {
   }
 
   // 回溯构建 diff
-  let i = m, j = n
+  let i = m,
+    j = n
   const stack: DiffLine[] = []
 
   while (i > 0 || j > 0) {
@@ -90,7 +93,8 @@ export function computeDiff(oldText: string, newText: string): DiffLine[] {
       if (d === 0) {
         // diagonal — equal
         stack.push({ type: 'equal', content: oldLines[i - 1]!, oldLineNo: i, newLineNo: j })
-        i--; j--
+        i--
+        j--
       } else if (d === 1) {
         // left — add
         stack.push({ type: 'add', content: newLines[j - 1]!, newLineNo: j })

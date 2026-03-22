@@ -13,12 +13,16 @@ export interface ModelOption {
 /** Provider 配置 */
 export interface ProviderConfig {
   id: string
+  /** 后端运行时识别的 provider key（对应 hexclaw /api/v1/config/llm 的 map key） */
+  backendKey?: string
   name: string
   type: ProviderType
   enabled: boolean
   apiKey: string
   baseUrl: string
   models: ModelOption[]
+  /** 当前 provider 在后端运行时默认使用的模型 */
+  selectedModelId?: string
 }
 
 /** 支持的 Provider 类型 */
@@ -42,9 +46,16 @@ export interface ProviderPreset {
 }
 
 /** LLM 配置 (多 Provider) */
+export interface LLMRoutingSettings {
+  enabled: boolean
+  strategy: string
+}
+
 export interface LLMConfig {
   providers: ProviderConfig[]
   defaultModel: string
+  defaultProviderId?: string
+  routing?: LLMRoutingSettings
 }
 
 /** 对话级参数 */
@@ -115,6 +126,39 @@ export interface BackendLLMConfig {
   providers: Record<string, BackendLLMProvider>
   routing: { enabled: boolean; strategy: string }
   cache: { enabled: boolean; similarity: number; ttl: string; max_entries: number }
+}
+
+export interface BackendRuntimeConfig {
+  server: {
+    host: string
+    port: number
+    mode: string
+  }
+  llm: {
+    default: string
+    providers: Record<
+      string,
+      {
+        model: string
+        base_url: string
+        has_key: boolean
+      }
+    >
+  }
+  knowledge: { enabled: boolean }
+  mcp: { enabled: boolean }
+  cron: { enabled: boolean }
+  webhook: { enabled: boolean }
+  canvas: { enabled: boolean }
+  voice: { enabled: boolean }
+  security: {
+    gateway_enabled: boolean
+    injection_detection: boolean
+    pii_filter: boolean
+    content_filter: boolean
+    rate_limit_rpm: number
+    max_tokens_per_request: number
+  }
 }
 
 /** 单个 Provider 的连接测试请求 */

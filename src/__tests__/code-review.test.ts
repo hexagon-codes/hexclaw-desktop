@@ -4,7 +4,7 @@
  * 验证 code review 中发现的问题已被修复。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 
 // ─── Critical Fixes ───────────────────────────────────
 
@@ -113,8 +113,8 @@ describe('High Fixes', () => {
 
 describe('Medium Fixes', () => {
   describe('#CR-9: LogsView toggleExpand 响应式修复', () => {
-    it('使用 new Set 替代直接修改保证响应式', () => {
-      const { ref } = require('vue') as typeof import('vue')
+    it('使用 new Set 替代直接修改保证响应式', async () => {
+      const { ref } = await import('vue')
       const expandedIds = ref(new Set<string>())
 
       // 修复后的做法：创建新 Set
@@ -163,8 +163,7 @@ describe('Medium Fixes', () => {
   describe('#CR-15: proxy_api_request path 校验', () => {
     it('路径穿越和无前导斜杠应被阻止', () => {
       // Rust 端修复验证（通过逻辑校验）
-      const isValidPath = (path: string) =>
-        path.startsWith('/') && !path.includes('..')
+      const isValidPath = (path: string) => path.startsWith('/') && !path.includes('..')
 
       expect(isValidPath('/api/v1/config')).toBe(true)
       expect(isValidPath('/../../../etc/passwd')).toBe(false)
@@ -240,7 +239,9 @@ describe('Error Handling', () => {
 
     it('失败时返回 [null, error]', async () => {
       const { trySafe } = await import('@/utils/errors')
-      const [data, err] = await trySafe(async () => { throw new Error('fail') }, 'test')
+      const [data, err] = await trySafe(async () => {
+        throw new Error('fail')
+      }, 'test')
       expect(data).toBeNull()
       expect(err).not.toBeNull()
       expect(err!.message).toBe('fail')
@@ -282,7 +283,9 @@ describe('WebSocket Module', () => {
     hexclawWS.disconnect()
 
     let errorMsg = ''
-    hexclawWS.onError((msg) => { errorMsg = msg })
+    hexclawWS.onError((msg) => {
+      errorMsg = msg
+    })
     hexclawWS.sendMessage('test')
     expect(errorMsg).toBe('WebSocket is not connected')
   })

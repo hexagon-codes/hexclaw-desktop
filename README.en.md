@@ -207,19 +207,17 @@ cd hexclaw-desktop
 make install
 # Equivalent to: pnpm install && cd src-tauri && cargo fetch
 
-# 3. Compile Go sidecar (required on first setup, needs hexclaw repo in sibling directory)
+# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.1.0-beta by default)
 make sidecar
 
 # 4. Start development mode
 make dev
 ```
 
-> **Note**: `make sidecar` requires the [hexclaw](https://github.com/hexagon-codes/hexclaw) repository to be cloned in the sibling directory:
-> ```
-> work/
-> ├── hexclaw/           # Go backend repo
-> └── hexclaw-desktop/   # This repo
-> ```
+> **Note**:
+> - `make sidecar` pulls `refs/tags/v0.1.0-beta` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
+> - To build another backend version, pass it explicitly: `make sidecar HEXCLAW_REF=refs/tags/<tag>`
+> - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.1` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
 
 ### Make Commands
 
@@ -389,7 +387,7 @@ make sidecar-linux-amd64     # Linux x86_64
 make sidecar-windows-amd64   # Windows x86_64
 ```
 
-Sidecar binaries are output to `src-tauri/binaries/` and automatically bundled during Tauri packaging.
+Sidecar binaries are output to `src-tauri/binaries/` and automatically bundled during Tauri packaging. Builds now inject the actual tag / commit / built timestamp so the installed app can report the backend version accurately.
 
 ## Testing
 
@@ -425,7 +423,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` compilation fails
 
 1. Verify Go >= 1.23 is installed: `go version`
-2. Verify `hexclaw` repo exists in sibling directory: `ls ../hexclaw/cmd/hexclaw`
+2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.1.0-beta`
 3. Verify Rust toolchain is installed (needed for platform triple detection): `rustc -vV`
 
 ### `make dev` starts but shows white screen

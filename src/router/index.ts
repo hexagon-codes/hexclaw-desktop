@@ -20,11 +20,13 @@ function buildNavigationRoutes() {
     const component = navRouteComponents[item.id as keyof typeof navRouteComponents]
     if (!component) return []
 
-    const routes = [{
-      path: item.path,
-      name: item.id,
-      component,
-    }]
+    const routes = [
+      {
+        path: item.path,
+        name: item.id,
+        component,
+      },
+    ]
 
     if (item.children) {
       for (const child of item.children) {
@@ -112,7 +114,7 @@ function markWelcomeDone(): void {
   }
 }
 
-router.beforeEach(async (to, from) => {
+router.beforeEach(async (to) => {
   if (to.meta?.layout === 'blank' || to.path === '/settings') {
     return true
   }

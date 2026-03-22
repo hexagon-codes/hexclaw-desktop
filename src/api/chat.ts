@@ -24,6 +24,7 @@ export async function sendChatViaBackend(
   options?: {
     sessionId?: string
     role?: string
+    provider?: string
     model?: string
     attachments?: { type: string; name: string; mime: string; data: string }[]
   },
@@ -37,6 +38,7 @@ export async function sendChatViaBackend(
       message,
       session_id: options?.sessionId || null,
       role: options?.role || null,
+      provider: options?.provider || null,
       user_id: DESKTOP_USER_ID,
       model: options?.model || null,
       attachments: options?.attachments || null,
@@ -52,6 +54,7 @@ export async function sendChatViaBackend(
 export function sendChat(req: ChatRequest) {
   return sendChatViaBackend(req.message, {
     sessionId: req.session_id,
+    provider: req.provider ?? req.provider_id,
     model: req.model,
   })
 }

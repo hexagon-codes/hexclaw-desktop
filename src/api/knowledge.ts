@@ -1,9 +1,134 @@
 import { apiGet, apiPost, apiDelete } from './client'
-import { fromHttpStatus } from '@/utils/errors'
+import { fromHttpStatus, fromNativeError } from '@/utils/errors'
 import { env } from '@/config/env'
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 
 export type { KnowledgeDoc, KnowledgeSearchResult }
+
+const KNOWLEDGE_UPLOAD_PATHS = [
+  '/api/v1/knowledge/upload',
+  '/api/v1/knowledge/documents/upload',
+] as const
+const KNOWLEDGE_DISABLED_MESSAGE =
+  '知识库暂不可用，请重启应用后重试'
+
+type UploadResponse = { id: string; title: string; chunk_count: number; created_at: string }
+
+function createUploadFormData(file: File): FormData {
+  const formData = new FormData()
+  formData.append('file', file)
+  return formData
+}
+
+function normalizeUploadError(status: number, responseText: string): Error {
+  try {
+    const body = JSON.parse(responseText) as { error?: string }
+    if (body.error) return new Error(body.error)
+  } catch {
+    // ignore non-json responses
+  }
+
+  return new Error(fromHttpStatus(status).message)
+}
+
+function normalizeKnowledgeEndpointError(error: unknown): Error {
+  const rawStatus =
+    typeof error === 'object' && error !== null
+      ? ((error as { status?: number; statusCode?: number }).status ??
+        (error as { status?: number; statusCode?: number }).statusCode)
+      : undefined
+
+  if (rawStatus === 404 || rawStatus === 405) {
+    return new Error(KNOWLEDGE_DISABLED_MESSAGE)
+  }
+
+  const normalized = fromNativeError(error)
+
+  if (normalized.status === 404 || normalized.status === 405) {
+    return new Error(KNOWLEDGE_DISABLED_MESSAGE)
+  }
+
+  return error instanceof Error ? error : new Error(normalized.message)
+}
+
+export function isKnowledgeUploadEndpointMissing(error: unknown): boolean {
+  const rawStatus =
+    typeof error === 'object' && error !== null
+      ? ((error as { status?: number; statusCode?: number }).status ??
+        (error as { status?: number; statusCode?: number }).statusCode)
+      : undefined
+  const normalized = error instanceof Error ? error : new Error(String(error))
+  return (
+    rawStatus === 404 ||
+    rawStatus === 405 ||
+    normalized.message === fromHttpStatus(404).message ||
+    normalized.message === fromHttpStatus(405).message ||
+    normalized.message.includes('404') ||
+    normalized.message.includes('405') ||
+    normalized.message.includes('未提供知识库上传接口') ||
+    normalized.message.includes('未启用知识库')
+  )
+}
+
+export function isKnowledgeUploadUnsupportedFormat(error: unknown): boolean {
+  const rawStatus =
+    typeof error === 'object' && error !== null
+      ? ((error as { status?: number; statusCode?: number }).status ??
+        (error as { status?: number; statusCode?: number }).statusCode)
+      : undefined
+  const normalized = error instanceof Error ? error : new Error(String(error))
+  const message = normalized.message.toLowerCase()
+
+  return (
+    rawStatus === 400 ||
+    rawStatus === 415 ||
+    rawStatus === 422 ||
+    message.includes('unsupported') ||
+    message.includes('not supported') ||
+    message.includes('invalid file type') ||
+    message.includes('invalid mime') ||
+    normalized.message.includes('不支持') ||
+    normalized.message.includes('格式错误') ||
+    normalized.message.includes('文件类型错误') ||
+    normalized.message.includes('文件格式错误')
+  )
+}
+
+function uploadViaXhr(
+  file: File,
+  path: string,
+  onProgress?: (pct: number) => void,
+): Promise<UploadResponse> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${env.apiBase}${path}`)
+
+    if (onProgress) {
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          onProgress(Math.round((e.loaded / e.total) * 100))
+        }
+      })
+    }
+
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText))
+        } catch {
+          reject(new Error('Invalid response'))
+        }
+        return
+      }
+
+      reject(normalizeUploadError(xhr.status, xhr.responseText))
+    })
+
+    xhr.addEventListener('error', () => reject(new Error('Network error')))
+    xhr.addEventListener('abort', () => reject(new Error('Upload aborted')))
+    xhr.send(createUploadFormData(file))
+  })
+}
 
 /** 获取知识库文档列表 */
 export function getDocuments() {
@@ -15,55 +140,42 @@ export function addDocument(title: string, content: string, source?: string) {
   return apiPost<{ id: string; title: string; chunk_count: number; created_at: string }>(
     '/api/v1/knowledge/documents',
     { title, content, source },
-  )
+  ).catch((error) => {
+    throw normalizeKnowledgeEndpointError(error)
+  })
 }
 
 /** 上传文件到知识库（支持 PDF/TXT/MD/DOCX） */
 export async function uploadDocument(
   file: File,
   onProgress?: (pct: number) => void,
-): Promise<{ id: string; title: string; chunk_count: number; created_at: string }> {
-  const formData = new FormData()
-  formData.append('file', file)
+): Promise<UploadResponse> {
+  let lastError: Error | null = null
 
-  if (onProgress) {
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest()
-      xhr.open('POST', `${env.apiBase}/api/v1/knowledge/upload`)
+  for (const path of KNOWLEDGE_UPLOAD_PATHS) {
+    try {
+      if (onProgress) {
+        return await uploadViaXhr(file, path, onProgress)
+      }
 
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          onProgress(Math.round((e.loaded / e.total) * 100))
+      return await apiPost<UploadResponse>(path, createUploadFormData(file))
+    } catch (error) {
+      const normalized = error instanceof Error ? error : new Error(String(error))
+      lastError = normalized
+
+      if (
+        !isKnowledgeUploadEndpointMissing(normalized) ||
+        path === KNOWLEDGE_UPLOAD_PATHS[KNOWLEDGE_UPLOAD_PATHS.length - 1]
+      ) {
+        if (isKnowledgeUploadEndpointMissing(normalized)) {
+          throw new Error('当前后端未提供知识库上传接口，请检查 HexClaw 后端版本')
         }
-      })
-
-      xhr.addEventListener('load', () => {
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            resolve(JSON.parse(xhr.responseText))
-          } catch {
-            reject(new Error('Invalid response'))
-          }
-        } else {
-          try {
-            const body = JSON.parse(xhr.responseText) as { error?: string }
-            reject(new Error(body.error || fromHttpStatus(xhr.status).message))
-          } catch {
-            reject(new Error(fromHttpStatus(xhr.status).message))
-          }
-        }
-      })
-
-      xhr.addEventListener('error', () => reject(new Error('Network error')))
-      xhr.addEventListener('abort', () => reject(new Error('Upload aborted')))
-      xhr.send(formData)
-    })
+        throw normalized
+      }
+    }
   }
 
-  return apiPost<{ id: string; title: string; chunk_count: number; created_at: string }>(
-    '/api/v1/knowledge/upload',
-    formData,
-  )
+  throw lastError ?? new Error('上传失败')
 }
 
 /** 删除知识库文档 */
@@ -103,13 +215,15 @@ function normalizeKnowledgeSearchResults(payload: unknown): KnowledgeSearchResul
 
 /** 搜索知识库 */
 export async function searchKnowledge(query: string, topK?: number) {
-  const response = await apiPost<{ result?: KnowledgeSearchResult[] | string; results?: KnowledgeSearchResult[] | string }>(
-    '/api/v1/knowledge/search',
-    {
-      query,
-      top_k: topK ?? 3,
-    },
-  )
+  const response = await apiPost<{
+    result?: KnowledgeSearchResult[] | string
+    results?: KnowledgeSearchResult[] | string
+  }>('/api/v1/knowledge/search', {
+    query,
+    top_k: topK ?? 3,
+  }).catch((error) => {
+    throw normalizeKnowledgeEndpointError(error)
+  })
 
   return {
     result: normalizeKnowledgeSearchResults(response.result ?? response.results),
@@ -118,5 +232,9 @@ export async function searchKnowledge(query: string, topK?: number) {
 
 /** 触发单个知识文档重建索引 */
 export function reindexDocument(id: string) {
-  return apiPost<{ status?: string; message?: string }>(`/api/v1/knowledge/documents/${encodeURIComponent(id)}/reindex`)
+  return apiPost<{ status?: string; message?: string }>(
+    `/api/v1/knowledge/documents/${encodeURIComponent(id)}/reindex`,
+  ).catch((error) => {
+    throw normalizeKnowledgeEndpointError(error)
+  })
 }

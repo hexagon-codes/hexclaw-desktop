@@ -45,6 +45,8 @@ export interface ChatRequest {
   agent_id?: string
   role_id?: string
   attachments?: ChatAttachment[]
+  /** Provider 名称（与后端配置键一致） */
+  provider?: string
   /** LLM 模型 ID */
   model?: string
   /** Provider ID（前端配置的服务商） */

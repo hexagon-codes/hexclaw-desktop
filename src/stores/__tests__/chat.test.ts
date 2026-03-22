@@ -12,6 +12,14 @@ const {
   dbDeleteSession,
   dbSaveMessage,
   sendChatViaBackend,
+  wsIsConnected,
+  wsConnect,
+  wsClearCallbacks,
+  wsOnChunk,
+  wsOnReply,
+  wsOnError,
+  wsSendMessage,
+  updateMessageFeedback,
 } = vi.hoisted(() => ({
   dbGetSessions: vi.fn().mockResolvedValue([
     { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01' },
@@ -26,6 +34,14 @@ const {
   dbDeleteSession: vi.fn().mockResolvedValue(undefined),
   dbSaveMessage: vi.fn().mockResolvedValue(undefined),
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
+  wsIsConnected: vi.fn().mockReturnValue(false),
+  wsConnect: vi.fn().mockRejectedValue(new Error('test')),
+  wsClearCallbacks: vi.fn(),
+  wsOnChunk: vi.fn(),
+  wsOnReply: vi.fn(),
+  wsOnError: vi.fn(),
+  wsSendMessage: vi.fn(),
+  updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
 }))
 
 vi.mock('@/db/chat', () => ({
@@ -40,13 +56,13 @@ vi.mock('@/db/chat', () => ({
 
 vi.mock('@/api/websocket', () => ({
   hexclawWS: {
-    isConnected: vi.fn().mockReturnValue(false),
-    connect: vi.fn().mockRejectedValue(new Error('test')),
-    clearCallbacks: vi.fn(),
-    onChunk: vi.fn(),
-    onReply: vi.fn(),
-    onError: vi.fn(),
-    sendMessage: vi.fn(),
+    isConnected: wsIsConnected,
+    connect: wsConnect,
+    clearCallbacks: wsClearCallbacks,
+    onChunk: wsOnChunk,
+    onReply: wsOnReply,
+    onError: wsOnError,
+    sendMessage: wsSendMessage,
   },
 }))
 
@@ -55,11 +71,21 @@ vi.mock('@/api/chat', () => ({
   sendChat: vi.fn(),
 }))
 
+vi.mock('@/api/messages', () => ({
+  updateMessageFeedback,
+}))
+
 describe('useChatStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     sendChatViaBackend.mockResolvedValue({ reply: '你好！', session_id: 's1' })
+    wsIsConnected.mockReturnValue(false)
+    wsConnect.mockRejectedValue(new Error('test'))
+    wsOnChunk.mockImplementation(() => () => {})
+    wsOnReply.mockImplementation(() => () => {})
+    wsOnError.mockImplementation(() => () => {})
+    updateMessageFeedback.mockResolvedValue({ message: 'ok' })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
 
@@ -187,5 +213,170 @@ describe('useChatStore', () => {
     expect(assistantMsg?.tool_calls).toHaveLength(1)
     expect(assistantMsg?.metadata?.provider).toBe('openai')
     expect(dbSaveMessage).toHaveBeenCalled()
+  })
+
+  it('sends explicit provider and model to websocket requests', async () => {
+    wsIsConnected.mockReturnValue(true)
+
+    let replyHandler: ((message: {
+      content: string
+      metadata?: Record<string, unknown>
+    }) => void) | undefined
+
+    wsOnReply.mockImplementation((cb) => {
+      replyHandler = cb
+      return () => {}
+    })
+
+    const store = useChatStore()
+    store.currentSessionId = 's1'
+    store.chatParams.provider = '智谱'
+    store.chatParams.model = 'glm-5'
+
+    const promise = store.sendMessage('hello')
+    await Promise.resolve()
+
+    expect(wsSendMessage).toHaveBeenCalledWith(
+      'hello',
+      's1',
+      'glm-5',
+      'assistant',
+      undefined,
+      '智谱',
+    )
+
+    replyHandler?.({ content: '已完成' })
+    await promise
+  })
+
+  it('persists assistant metadata and tool calls from websocket done chunks', async () => {
+    wsIsConnected.mockReturnValue(true)
+
+    let chunkHandler: ((message: {
+      content: string
+      done?: boolean
+      metadata?: Record<string, unknown>
+      tool_calls?: { id: string; name: string; arguments: string }[]
+    }) => void) | undefined
+
+    wsOnChunk.mockImplementation((cb) => {
+      chunkHandler = cb
+      return () => {}
+    })
+
+    const store = useChatStore()
+    store.currentSessionId = 's1'
+    const promise = store.sendMessage('hello')
+    await Promise.resolve()
+
+    chunkHandler?.({ content: '已完成', done: false })
+    chunkHandler?.({
+      content: '',
+      done: true,
+      metadata: {
+        backend_message_id: 'msg-backend-ws',
+        agent_name: 'Coder',
+      },
+      tool_calls: [{ id: 'tool-1', name: 'search', arguments: '{}' }],
+    })
+
+    const assistantMsg = await promise
+    expect(assistantMsg?.metadata?.backend_message_id).toBe('msg-backend-ws')
+    expect(assistantMsg?.agent_name).toBe('Coder')
+    expect(assistantMsg?.tool_calls).toHaveLength(1)
+  })
+
+  it('updates an existing message and persists the patch', async () => {
+    const store = useChatStore()
+    await store.selectSession('s1')
+
+    await store.updateMessage('m2', (current) => ({
+      ...current,
+      content: 'updated',
+      metadata: { user_feedback: 'like' },
+    }))
+
+    expect(store.messages[1]?.content).toBe('updated')
+    expect(dbSaveMessage).toHaveBeenCalledWith(
+      'm2',
+      's1',
+      'assistant',
+      'updated',
+      '2026-01-01',
+      { user_feedback: 'like' },
+    )
+  })
+
+  it('syncs assistant feedback to backend when backend_message_id exists', async () => {
+    dbGetMessages.mockResolvedValueOnce([
+      {
+        id: 'm2',
+        session_id: 's1',
+        role: 'assistant',
+        content: 'hi',
+        timestamp: '2026-01-01',
+        metadata: JSON.stringify({ backend_message_id: 'msg-backend-1' }),
+      },
+    ])
+
+    const store = useChatStore()
+    await store.selectSession('s1')
+
+    await store.setMessageFeedback('m2', 'like')
+
+    expect(updateMessageFeedback).toHaveBeenCalledWith('msg-backend-1', 'like')
+    expect(store.messages[0]?.metadata?.user_feedback).toBe('like')
+  })
+
+  it('reverts local feedback when backend sync fails', async () => {
+    updateMessageFeedback.mockRejectedValueOnce(new Error('sync failed'))
+    dbGetMessages.mockResolvedValueOnce([
+      {
+        id: 'm2',
+        session_id: 's1',
+        role: 'assistant',
+        content: 'hi',
+        timestamp: '2026-01-01',
+        metadata: JSON.stringify({ backend_message_id: 'msg-backend-1', user_feedback: 'dislike' }),
+      },
+    ])
+
+    const store = useChatStore()
+    await store.selectSession('s1')
+
+    await expect(store.setMessageFeedback('m2', 'like')).rejects.toThrow('sync failed')
+    expect(store.messages[0]?.metadata?.user_feedback).toBe('dislike')
+  })
+
+  it('times out stalled websocket requests without falling back to backend', async () => {
+    vi.useFakeTimers()
+    wsIsConnected.mockReturnValue(true)
+
+    const store = useChatStore()
+    const promise = store.sendMessage('卡住的请求')
+
+    await vi.advanceTimersByTimeAsync(45_001)
+    await promise
+
+    expect(sendChatViaBackend).not.toHaveBeenCalled()
+    expect(store.streaming).toBe(false)
+    expect(store.messages.at(-1)?.content).toContain('超时')
+
+    vi.useRealTimers()
+  })
+
+  it('sends explicit provider and model to backend fallback requests', async () => {
+    wsIsConnected.mockReturnValue(false)
+
+    const store = useChatStore()
+    store.chatParams.provider = '智谱'
+    store.chatParams.model = 'glm-5'
+
+    await store.sendMessage('走 HTTP')
+
+    expect(sendChatViaBackend).toHaveBeenCalledWith('走 HTTP', expect.objectContaining({
+      provider: '智谱',
+      model: 'glm-5',
+    }))
   })
 })

@@ -154,11 +154,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Disable updater artifacts when signing key is unavailable
-        run: |
-          node -e "const fs=require('fs'); const path='src-tauri/tauri.conf.json'; const cfg=JSON.parse(fs.readFileSync(path,'utf8')); if (!process.env.TAURI_SIGNING_PRIVATE_KEY) { cfg.bundle = { ...(cfg.bundle || {}), createUpdaterArtifacts: false }; fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n'); console.log('Disabled updater artifacts for unsigned release build.'); } else { console.log('Keeping updater artifacts enabled.'); }"
+      - name: Require updater signing key for release
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is required for tagged releases." >&2
+            exit 1
+          fi
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@action-v0.6.0

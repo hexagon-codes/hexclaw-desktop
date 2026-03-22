@@ -2,6 +2,7 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { sendChatViaBackend } from '@/api/chat'
+import { updateMessageFeedback as updateBackendMessageFeedback, type UserFeedback } from '@/api/messages'
 import { hexclawWS } from '@/api/websocket'
 import {
   dbGetSessions,
@@ -15,6 +16,35 @@ import {
 import { fromNativeError } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 import type { ChatMessage, ChatSession, ChatAttachment, Artifact, ChatMode, ExecMode, ApiError } from '@/types'
+
+const WS_FIRST_REPLY_TIMEOUT_MS = 45_000
+const WS_INACTIVITY_TIMEOUT_MS = 90_000
+const BACKEND_REPLY_TIMEOUT_MS = 120_000
+
+class ChatRequestError extends Error {
+  noFallback: boolean
+
+  constructor(message: string, noFallback = false) {
+    super(message)
+    this.name = 'ChatRequestError'
+    this.noFallback = noFallback
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs)
+    promise
+      .then((value) => {
+        clearTimeout(timer)
+        resolve(value)
+      })
+      .catch((error) => {
+        clearTimeout(timer)
+        reject(error)
+      })
+  })
+}
 
 function parseMessageMetadata(raw: string | null): Record<string, unknown> | undefined {
   if (!raw) return undefined
@@ -54,6 +84,14 @@ function serializeMessageMetadata(msg: ChatMessage): Record<string, unknown> | u
   return Object.keys(metadata).length > 0 ? metadata : undefined
 }
 
+function cloneMessage(message: ChatMessage): ChatMessage {
+  return {
+    ...message,
+    metadata: message.metadata ? { ...message.metadata } : undefined,
+    tool_calls: message.tool_calls ? [...message.tool_calls] : undefined,
+  }
+}
+
 export const useChatStore = defineStore('chat', () => {
   const sessions = ref<ChatSession[]>([])
   const currentSessionId = ref<string | null>(null)
@@ -76,7 +114,7 @@ export const useChatStore = defineStore('chat', () => {
   const showArtifacts = ref(false)
 
   // 聊天参数（保留兼容，后端模式下仅 role 生效）
-  const chatParams = ref<{ model?: string; temperature?: number; maxTokens?: number }>({})
+  const chatParams = ref<{ provider?: string; model?: string; temperature?: number; maxTokens?: number }>({})
 
   /** 加载会话列表（从 SQLite） */
   async function loadSessions() {
@@ -159,6 +197,63 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  /** 更新消息并同步持久化 */
+  async function updateMessage(
+    messageId: string,
+    updater: Partial<ChatMessage> | ((current: ChatMessage) => ChatMessage),
+  ): Promise<ChatMessage | null> {
+    const idx = messages.value.findIndex((msg) => msg.id === messageId)
+    if (idx < 0) return null
+
+    const current = messages.value[idx]!
+    const next = typeof updater === 'function' ? updater(current) : { ...current, ...updater }
+    messages.value[idx] = next
+
+    const sessionId = currentSessionId.value
+    if (sessionId) {
+      await persistMessage(next, sessionId)
+      dbTouchSession(sessionId).catch(() => {})
+    }
+
+    return next
+  }
+
+  async function setMessageFeedback(
+    messageId: string,
+    feedback: Exclude<UserFeedback, ''> | null,
+  ): Promise<ChatMessage | null> {
+    const current = messages.value.find((message) => message.id === messageId)
+    if (!current || current.role !== 'assistant') return null
+
+    const previous = cloneMessage(current)
+    const next = await updateMessage(messageId, (message) => {
+      const metadata = { ...(message.metadata ?? {}) }
+      if (feedback) metadata.user_feedback = feedback
+      else delete metadata.user_feedback
+
+      return {
+        ...message,
+        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+      }
+    })
+
+    const backendMessageId = typeof previous.metadata?.backend_message_id === 'string'
+      ? previous.metadata.backend_message_id
+      : null
+    if (!backendMessageId) {
+      logger.warn('消息缺少 backend_message_id，反馈仅保存在本地', { messageId })
+      return next
+    }
+
+    try {
+      await updateBackendMessageFeedback(backendMessageId, feedback ?? '')
+      return next
+    } catch (syncError) {
+      await updateMessage(messageId, previous)
+      throw syncError
+    }
+  }
+
   /** 从内容中提取 Artifact（代码块） */
   function extractArtifacts(content: string, messageId: string) {
     const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g
@@ -214,7 +309,7 @@ export const useChatStore = defineStore('chat', () => {
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
     agentName?: string
-  }) {
+  }): ChatMessage {
     const assistantMsg: ChatMessage = {
       id: nanoid(),
       role: 'assistant',
@@ -242,6 +337,8 @@ export const useChatStore = defineStore('chat', () => {
     streaming.value = false
     streamingContent.value = ''
     loadSessions()
+
+    return assistantMsg
   }
 
   /** 发送消息错误处理 */
@@ -250,14 +347,21 @@ export const useChatStore = defineStore('chat', () => {
     const apiErr = fromNativeError(e)
     error.value = apiErr
 
+    if (streaming.value) {
+      stopStreaming()
+    } else {
+      streaming.value = false
+      streamingSessionId.value = null
+      streamingContent.value = ''
+      hexclawWS.clearCallbacks()
+    }
+
     messages.value.push({
       id: nanoid(),
       role: 'assistant',
       content: apiErr.message || '发送失败，请检查 hexclaw 引擎是否运行',
       timestamp: new Date().toISOString(),
     })
-    streaming.value = false
-    streamingContent.value = ''
     loadSessions()
   }
 
@@ -267,48 +371,104 @@ export const useChatStore = defineStore('chat', () => {
    * 使用 requestId 防止竞态：回调中校验 requestId 匹配当前请求，
    * 避免旧请求的消息被新请求的回调错误消费。
    */
-  async function sendMessageViaWebSocket(text: string, sessionId: string, attachments?: ChatAttachment[]): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
+  async function sendMessageViaWebSocket(text: string, sessionId: string, attachments?: ChatAttachment[]): Promise<ChatMessage> {
+    return new Promise<ChatMessage>((resolve, reject) => {
       hexclawWS.clearCallbacks()
 
       let settled = false
+      let firstReplyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+        fail(new ChatRequestError('助手长时间未开始回复，已超时并停止等待。', true))
+      }, WS_FIRST_REPLY_TIMEOUT_MS)
+      let inactivityTimer: ReturnType<typeof setTimeout> | null = null
 
-      hexclawWS.onChunk((content: string, done: boolean) => {
+      function clearTimers() {
+        if (firstReplyTimer) {
+          clearTimeout(firstReplyTimer)
+          firstReplyTimer = null
+        }
+        if (inactivityTimer) {
+          clearTimeout(inactivityTimer)
+          inactivityTimer = null
+        }
+      }
+
+      function markActivity() {
+        if (firstReplyTimer) {
+          clearTimeout(firstReplyTimer)
+          firstReplyTimer = null
+        }
+        if (inactivityTimer) {
+          clearTimeout(inactivityTimer)
+        }
+        inactivityTimer = setTimeout(() => {
+          fail(new ChatRequestError('助手回复长时间无新内容，已超时并停止等待。', true))
+        }, WS_INACTIVITY_TIMEOUT_MS)
+      }
+
+      function fail(err: unknown) {
+        if (settled) return
+        settled = true
+        clearTimers()
+        hexclawWS.clearCallbacks()
+        reject(err)
+      }
+
+      hexclawWS.onChunk((chunk) => {
         if (streamingSessionId.value !== sessionId) return
-        streamingContent.value += content
-        if (done && !settled) {
+        markActivity()
+        streamingContent.value += chunk.content
+        if (chunk.done && !settled) {
           settled = true
-          finalizeAssistantMessage({
+          clearTimers()
+          const assistantMsg = finalizeAssistantMessage({
             content: streamingContent.value,
             sessionId,
             userText: text,
+            metadata: chunk.metadata,
+            toolCalls: chunk.tool_calls,
+            agentName: typeof chunk.metadata?.agent_name === 'string'
+              ? chunk.metadata.agent_name
+              : undefined,
           })
-          resolve()
+          resolve(assistantMsg)
         }
       })
 
-      hexclawWS.onReply((content: string) => {
+      hexclawWS.onReply((reply) => {
         if (settled || streamingSessionId.value !== sessionId) return
+        markActivity()
         settled = true
-        finalizeAssistantMessage({
-          content,
+        clearTimers()
+        const assistantMsg = finalizeAssistantMessage({
+          content: reply.content,
           sessionId,
           userText: text,
+          metadata: reply.metadata,
+          toolCalls: reply.tool_calls,
+          agentName: typeof reply.metadata?.agent_name === 'string'
+            ? reply.metadata.agent_name
+            : undefined,
         })
-        resolve()
+        resolve(assistantMsg)
       })
 
       hexclawWS.onError((errMsg: string) => {
-        if (settled) return
-        settled = true
-        reject(new Error(errMsg))
+        fail(new ChatRequestError(errMsg || 'WebSocket 请求失败', true))
       })
 
+      const wsAttachments = attachments?.map(a => ({
+        type: a.type,
+        name: a.name,
+        mime: a.mime,
+        data: a.data,
+      }))
       hexclawWS.sendMessage(
         text,
         sessionId,
         chatParams.value.model,
         agentRole.value || undefined,
+        wsAttachments,
+        chatParams.value.provider,
       )
     })
   }
@@ -316,13 +476,19 @@ export const useChatStore = defineStore('chat', () => {
   /**
    * 通过 HTTP 后端发送消息（fallback）
    */
-  async function sendMessageViaBackend(text: string, sessionId: string, attachments?: ChatAttachment[]): Promise<void> {
-    const result = await sendChatViaBackend(text, {
-      sessionId,
-      role: agentRole.value || 'assistant',
-      attachments: attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data })),
-    })
-    finalizeAssistantMessage({
+  async function sendMessageViaBackend(text: string, sessionId: string, attachments?: ChatAttachment[]): Promise<ChatMessage> {
+    const result = await withTimeout(
+      sendChatViaBackend(text, {
+        sessionId,
+        role: agentRole.value || 'assistant',
+        provider: chatParams.value.provider,
+        model: chatParams.value.model,
+        attachments: attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data })),
+      }),
+      BACKEND_REPLY_TIMEOUT_MS,
+      '后端长时间未返回结果，已超时并停止等待。',
+    )
+    return finalizeAssistantMessage({
       content: result.reply,
       sessionId,
       userText: text,
@@ -340,7 +506,7 @@ export const useChatStore = defineStore('chat', () => {
    * WebSocket 流式: 前端 ↔ ws://localhost:16060/ws → Agent → 分块回复
    * HTTP 回退: 前端 → Rust backend_chat → hexclaw POST /api/v1/chat → 完整回复
    */
-  async function sendMessage(text: string, attachments?: ChatAttachment[]) {
+  async function sendMessage(text: string, attachments?: ChatAttachment[]): Promise<ChatMessage | null> {
     // 如果正在流式输出，先停止上一次
     if (streaming.value) {
       stopStreaming()
@@ -365,17 +531,33 @@ export const useChatStore = defineStore('chat', () => {
     error.value = null
 
     try {
-      // 尝试 WebSocket 流式
       if (!hexclawWS.isConnected()) {
         await hexclawWS.connect()
       }
-      await sendMessageViaWebSocket(text, sessionId, attachments)
-    } catch (wsError) {
-      logger.warn('WebSocket 发送失败，回退到 HTTP', wsError)
+    } catch (connectError) {
+      logger.warn('WebSocket 连接失败，回退到 HTTP', connectError)
       try {
-        await sendMessageViaBackend(text, sessionId, attachments)
+        return await sendMessageViaBackend(text, sessionId, attachments)
       } catch (httpError) {
         handleSendError(httpError)
+        return null
+      }
+    }
+
+    try {
+      return await sendMessageViaWebSocket(text, sessionId, attachments)
+    } catch (wsError) {
+      if (wsError instanceof ChatRequestError && wsError.noFallback) {
+        handleSendError(wsError)
+        return null
+      }
+
+      logger.warn('WebSocket 发送失败，回退到 HTTP', wsError)
+      try {
+        return await sendMessageViaBackend(text, sessionId, attachments)
+      } catch (httpError) {
+        handleSendError(httpError)
+        return null
       }
     }
   }
@@ -458,6 +640,8 @@ export const useChatStore = defineStore('chat', () => {
     newSession,
     ensureSession,
     sendMessage,
+    updateMessage,
+    setMessageFeedback,
     stopStreaming,
     deleteSession,
     addArtifact,

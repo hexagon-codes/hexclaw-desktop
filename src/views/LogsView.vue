@@ -7,7 +7,6 @@ import PageHeader from '@/components/common/PageHeader.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
-import StatusBadge from '@/components/common/StatusBadge.vue'
 
 const { t } = useI18n()
 
@@ -16,6 +15,7 @@ const autoScroll = ref(true)
 const logsContainer = ref<HTMLDivElement>()
 const expandedIds = ref<Set<string>>(new Set())
 const now = ref(Date.now())
+const refreshing = ref(false)
 
 // Level counts from in-memory entries
 const levelCounts = computed(() => {
@@ -60,7 +60,7 @@ const levelTabs = computed(() => [
   { key: 'error', label: `Error (${levelCounts.value.error})` },
 ])
 
-const activeLevel = ref('')
+const activeLevel = ref(logsStore.filter.level || '')
 
 let nowTimer: ReturnType<typeof setInterval> | null = null
 
@@ -76,15 +76,14 @@ watch(() => logsStore.entries.length, () => {
   scrollToBottom()
 })
 
+watch(activeLevel, (level) => {
+  logsStore.setFilter({ level: level || undefined })
+})
+
 onUnmounted(() => {
   logsStore.disconnect()
   if (nowTimer) clearInterval(nowTimer)
 })
-
-function setLevel(level: string) {
-  activeLevel.value = level
-  logsStore.setFilter({ level: level || undefined })
-}
 
 function setDomain(domain: string) {
   logsStore.setFilter({ domain: domain || undefined })
@@ -125,9 +124,58 @@ function exportLogs() {
 }
 
 function refreshLogs() {
-  logsStore.loadStats()
-  logsStore.disconnect()
-  logsStore.connect()
+  void runRefreshLogs()
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function waitForReconnect(timeoutMs = 5000): Promise<void> {
+  return new Promise((resolve) => {
+    if (logsStore.connected) {
+      resolve()
+      return
+    }
+
+    const stop = watch(
+      () => logsStore.connected,
+      (connected) => {
+        if (connected) {
+          cleanup()
+          resolve()
+        }
+      },
+    )
+
+    const timer = window.setTimeout(() => {
+      cleanup()
+      resolve()
+    }, timeoutMs)
+
+    function cleanup() {
+      stop()
+      window.clearTimeout(timer)
+    }
+  })
+}
+
+async function runRefreshLogs() {
+  if (refreshing.value) return
+
+  refreshing.value = true
+  try {
+    const statsPromise = logsStore.loadStats()
+    logsStore.disconnect()
+    logsStore.connect()
+    await Promise.allSettled([
+      statsPromise,
+      wait(700),
+      waitForReconnect(),
+    ])
+  } finally {
+    refreshing.value = false
+  }
 }
 
 function exportDiagnostics() {
@@ -198,8 +246,8 @@ function formatRelativeTime(ts: string): string {
 </script>
 
 <template>
-  <div class="h-full flex flex-col overflow-hidden">
-    <PageToolbar :search-placeholder="t('logs.searchPlaceholder', 'Search logs, error codes...')">
+  <div class="hc-logs-page h-full flex flex-col overflow-hidden">
+    <PageToolbar>
       <template #tabs>
         <SegmentedControl
           v-model="activeLevel"
@@ -207,21 +255,16 @@ function formatRelativeTime(ts: string): string {
         />
       </template>
       <template #actions>
-        <StatusBadge :status="logsStore.connected ? 'online' : 'offline'" />
-        <button
-          class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
-          :style="{ color: 'var(--hc-text-secondary)' }"
-          :title="t('common.download')"
-          @click="exportLogs"
-        >
-          <Download :size="16" />
+        <button class="hc-btn hc-btn-ghost" @click="exportLogs">
+          <Download :size="14" />
+          {{ t('logs.exportLogs', '导出日志') }}
         </button>
         <button class="hc-btn hc-btn-ghost" @click="exportDiagnostics">
           <Package :size="14" />
           {{ t('logs.exportDiagnostics', 'Download Diagnostics') }}
         </button>
-        <button class="hc-btn hc-btn-primary" @click="refreshLogs">
-          <RefreshCw :size="14" />
+        <button class="hc-btn hc-btn-primary" :disabled="refreshing" @click="refreshLogs">
+          <RefreshCw :size="14" :class="{ 'hc-spin-icon': refreshing }" />
           {{ t('logs.refreshLogs', 'Refresh Logs') }}
         </button>
         <button
@@ -243,47 +286,36 @@ function formatRelativeTime(ts: string): string {
       :status-variant="logsStore.connected ? 'success' : 'error'"
     />
 
-    <!-- Filters -->
-    <div class="flex items-center gap-3 px-6 py-2 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-      <div class="flex gap-1">
-        <button
-          v-for="tab in levelTabs"
-          :key="tab.key"
-          class="px-3 py-1 rounded-md text-xs font-medium transition-colors"
-          :style="{
-            background: activeLevel === tab.key ? 'var(--hc-accent)' : 'transparent',
-            color: activeLevel === tab.key ? '#fff' : 'var(--hc-text-secondary)',
-          }"
-          @click="setLevel(tab.key)"
+    <div class="hc-logs__filters">
+      <div class="hc-logs__filters-left">
+        <select
+          v-if="availableDomains.length > 0"
+          class="hc-input hc-logs__domain"
+          :value="logsStore.filter.domain || ''"
+          @change="setDomain(($event.target as HTMLSelectElement).value)"
         >
-          {{ tab.label }}
-        </button>
+          <option value="">{{ t('logs.allDomains') }}</option>
+          <option v-for="domain in availableDomains" :key="domain" :value="domain">
+            {{ domain }} ({{ domainCounts[domain] }})
+          </option>
+        </select>
+        <div class="hc-logs__search">
+          <SearchInput
+            :model-value="logsStore.filter.keyword || ''"
+            :placeholder="t('logs.searchPlaceholder')"
+            @update:model-value="logsStore.setFilter({ keyword: $event || undefined })"
+          />
+        </div>
       </div>
-      <div class="flex-1" />
-      <select
-        v-if="availableDomains.length > 0"
-        class="hc-input"
-        style="width: auto; min-width: 120px;"
-        :value="logsStore.filter.domain || ''"
-        @change="setDomain(($event.target as HTMLSelectElement).value)"
-      >
-        <option value="">{{ t('logs.allDomains') }}</option>
-        <option v-for="domain in availableDomains" :key="domain" :value="domain">
-          {{ domain }} ({{ domainCounts[domain] }})
-        </option>
-      </select>
-      <SearchInput
-        :model-value="logsStore.filter.keyword || ''"
-        :placeholder="t('logs.searchPlaceholder')"
-        @update:model-value="logsStore.setFilter({ keyword: $event || undefined })"
-      />
-      <label class="flex items-center gap-1.5 cursor-pointer select-none">
-        <input v-model="autoScroll" type="checkbox" class="accent-blue-500 w-3 h-3" />
-        <span class="text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">Auto-scroll</span>
-      </label>
-      <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
-        {{ logsStore.filteredEntries.length }}
-      </span>
+      <div class="hc-logs__filters-right">
+        <label class="hc-logs__autoscroll">
+          <input v-model="autoScroll" type="checkbox" class="accent-blue-500 w-3 h-3" />
+          <span>Auto-scroll</span>
+        </label>
+        <span class="hc-logs__count">
+          {{ logsStore.filteredEntries.length }}
+        </span>
+      </div>
     </div>
 
     <div class="grid grid-cols-1 md:grid-cols-4 gap-3 px-6 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
@@ -397,3 +429,97 @@ function formatRelativeTime(ts: string): string {
     </div>
   </div>
 </template>
+
+<style scoped>
+.hc-logs__filters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 0 18px 10px;
+  margin-top: -4px;
+  border-bottom: 1px solid var(--hc-border);
+}
+
+.hc-logs__filters-left,
+.hc-logs__filters-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.hc-logs__filters-left {
+  flex: 1;
+  min-width: 0;
+}
+
+.hc-logs__filters-right {
+  justify-content: flex-end;
+}
+
+.hc-logs__domain {
+  width: auto;
+  min-width: 148px;
+  height: 34px;
+  padding: 0 34px 0 12px;
+  line-height: 32px;
+  box-sizing: border-box;
+}
+
+.hc-logs__search :deep(.hc-search) {
+  width: 240px;
+}
+
+.hc-logs__autoscroll {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  color: var(--hc-text-muted);
+}
+
+.hc-logs__count {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--hc-text-muted);
+}
+
+.hc-spin-icon {
+  animation: hc-log-spin 1s linear infinite;
+}
+
+@keyframes hc-log-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1100px) {
+  .hc-logs__filters {
+    align-items: flex-start;
+  }
+
+  .hc-logs__filters-left,
+  .hc-logs__filters-right {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .hc-logs__search {
+    flex: 1;
+    min-width: 180px;
+  }
+
+  .hc-logs__search :deep(.hc-search) {
+    width: 100%;
+  }
+}
+</style>

@@ -11,6 +11,7 @@ class MockWebSocket {
   static OPEN = 1
   static CLOSING = 2
   static CLOSED = 3
+  static instances: MockWebSocket[] = []
 
   readyState = MockWebSocket.CONNECTING
   onopen: ((event: Event) => void) | null = null
@@ -18,6 +19,10 @@ class MockWebSocket {
   onclose: (() => void) | null = null
   onerror: ((event: Event) => void) | null = null
   sentMessages: string[] = []
+
+  constructor() {
+    MockWebSocket.instances.push(this)
+  }
 
   send(data: string) {
     this.sentMessages.push(data)
@@ -52,6 +57,7 @@ const { hexclawWS } = await import('../../api/websocket')
 describe('HexClawWS', () => {
   beforeEach(() => {
     hexclawWS.disconnect()
+    MockWebSocket.instances = []
     vi.useFakeTimers()
   })
 
@@ -94,6 +100,25 @@ describe('HexClawWS', () => {
     hexclawWS.sendMessage('hello')
 
     expect(errorCb).toHaveBeenCalledWith('WebSocket is not connected')
+  })
+
+  it('发送消息时应携带显式 provider 和 model', async () => {
+    const connectPromise = hexclawWS.connect()
+    const ws = MockWebSocket.instances[0]!
+    ws.simulateOpen()
+    await connectPromise
+
+    hexclawWS.sendMessage('hello', 'sess-1', 'glm-5', 'analyst', undefined, '智谱')
+
+    expect(ws.sentMessages).toHaveLength(1)
+    expect(JSON.parse(ws.sentMessages[0]!)).toMatchObject({
+      type: 'message',
+      content: 'hello',
+      session_id: 'sess-1',
+      provider: '智谱',
+      model: 'glm-5',
+      role: 'analyst',
+    })
   })
 
   // ─── 消息解析 ──────────────────────────────────────

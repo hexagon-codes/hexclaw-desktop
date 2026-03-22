@@ -23,7 +23,6 @@ function resolveTab(path: string): string {
 
 const activeTab = ref(resolveTab(route.path))
 const integrationSearch = ref('')
-
 const tabKeyMap: Record<string, string> = {
   'integration-skills': 'skills',
   'integration-mcp': 'mcp',
@@ -90,7 +89,10 @@ function onAddInstance() {
 
 <template>
   <div class="hc-page-shell">
-    <PageToolbar :search-placeholder="t('integration.searchPlaceholder', 'Search skills, MCP servers...')" @search="integrationSearch = $event">
+    <PageToolbar
+      :search-placeholder="activeTab === 'skills' ? t('integration.searchPlaceholder', 'Search skills, MCP servers...') : undefined"
+      @search="integrationSearch = $event"
+    >
       <template #tabs>
         <SegmentedControl v-model="activeTab" :segments="segments" />
       </template>
@@ -111,7 +113,12 @@ function onAddInstance() {
       :description="t('integration.description', 'Manage skills, MCP servers, and diagnostics.')"
     />
     <div class="hc-page-shell__content">
-      <SkillsView v-if="activeTab === 'skills'" ref="skillsViewRef" />
+      <SkillsView
+        v-if="activeTab === 'skills'"
+        ref="skillsViewRef"
+        :embedded-search="integrationSearch"
+        :hide-installed-search="true"
+      />
       <McpView v-else-if="activeTab === 'mcp'" ref="mcpViewRef" />
       <div v-else-if="activeTab === 'diagnostics'" class="hc-diagnostics">
         <div class="hc-diagnostics__card">

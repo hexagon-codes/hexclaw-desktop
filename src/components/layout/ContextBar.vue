@@ -12,19 +12,31 @@ const appStore = useAppStore()
 const chatStore = useChatStore()
 
 const defaultProvider = computed(() => {
-  const providers = settingsStore.config?.llm?.providers ?? []
+  const providers = settingsStore.enabledProviders
   const defaultModelId = settingsStore.config?.llm?.defaultModel
+  const defaultProviderId = settingsStore.config?.llm?.defaultProviderId
   if (defaultModelId) {
-    const p = providers.find((pp) => pp.models.some((m) => m.id === defaultModelId))
+    const p =
+      providers.find(
+        (pp) =>
+          (!defaultProviderId || pp.id === defaultProviderId) &&
+          pp.models.some((m) => m.id === defaultModelId),
+      ) ?? providers.find((pp) => pp.models.some((m) => m.id === defaultModelId))
     if (p) return p.name || p.id
   }
   return providers[0]?.name || providers[0]?.id || null
 })
 
 const defaultModel = computed(() => {
-  const providers = settingsStore.config?.llm?.providers ?? []
+  const providers = settingsStore.enabledProviders
   const defaultModelId = settingsStore.config?.llm?.defaultModel
+  const defaultProviderId = settingsStore.config?.llm?.defaultProviderId
   if (defaultModelId) {
+    for (const provider of providers) {
+      if (defaultProviderId && provider.id !== defaultProviderId) continue
+      const model = provider.models.find((m) => m.id === defaultModelId)
+      if (model) return model.name || model.id
+    }
     for (const provider of providers) {
       const model = provider.models.find((m) => m.id === defaultModelId)
       if (model) return model.name || model.id
@@ -54,7 +66,11 @@ const engineReady = computed(() => appStore.sidecarReady)
     </div>
 
     <!-- Agent -->
-    <div v-if="currentAgent" class="hc-context-bar__item hc-context-bar__item--accent" :title="t('nav.agents')">
+    <div
+      v-if="currentAgent"
+      class="hc-context-bar__item hc-context-bar__item--accent"
+      :title="t('nav.agents')"
+    >
       <Bot :size="11" />
       <span>{{ currentAgent }}</span>
     </div>

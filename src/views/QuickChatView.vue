@@ -26,11 +26,56 @@ const streaming = ref(false)
 const streamingContent = ref('')
 const messagesEnd = ref<HTMLDivElement>()
 const selectedModel = ref('')
+const selectedProviderId = ref('')
+const selectedProviderKey = ref('')
 const showModelDropdown = ref(false)
 const useWebSocket = ref(false)
 const wsConnected = ref(false)
 
 const availableModels = computed(() => settingsStore.availableModels)
+
+function applySelectedModel(model: (typeof availableModels.value)[number] | null | undefined) {
+  selectedModel.value = model?.modelId ?? ''
+  selectedProviderId.value = model?.providerId ?? ''
+  selectedProviderKey.value = model?.providerKey ?? ''
+}
+
+function resolvePreferredModel() {
+  const defaultModelId = settingsStore.config?.llm.defaultModel ?? ''
+  const defaultProviderId = settingsStore.config?.llm.defaultProviderId ?? ''
+  if (defaultModelId) {
+    return (
+      availableModels.value.find(
+        (model) =>
+          model.modelId === defaultModelId &&
+          (!defaultProviderId || model.providerId === defaultProviderId),
+      ) ?? availableModels.value.find((model) => model.modelId === defaultModelId)
+    )
+  }
+  return availableModels.value[0]
+}
+
+function loadModelSelection() {
+  try {
+    const savedModel = localStorage.getItem(MODEL_STORAGE_KEY)
+    const [savedProviderId, savedModelId] = (savedModel || '').includes('::')
+      ? (savedModel || '').split('::', 2)
+      : ['', savedModel || '']
+    const matched = availableModels.value.find(
+      (model) =>
+        model.modelId === savedModelId &&
+        (!savedProviderId || model.providerId === savedProviderId),
+    )
+    if (matched) {
+      applySelectedModel(matched)
+      return
+    }
+  } catch {
+    // ignore persisted selection failures
+  }
+
+  applySelectedModel(resolvePreferredModel())
+}
 
 // Load persisted messages and model selection
 onMounted(async () => {
@@ -47,18 +92,7 @@ onMounted(async () => {
     }
   } catch {}
 
-  // Restore model selection
-  try {
-    const savedModel = localStorage.getItem(MODEL_STORAGE_KEY)
-    if (savedModel && availableModels.value.some(m => m.modelId === savedModel)) {
-      selectedModel.value = savedModel
-    }
-  } catch {}
-
-  // Default to first available model if none selected
-  if (!selectedModel.value && availableModels.value.length > 0) {
-    selectedModel.value = availableModels.value[0]!.modelId
-  }
+  loadModelSelection()
 
   // Try to connect WebSocket
   try {
@@ -70,6 +104,27 @@ onMounted(async () => {
     wsConnected.value = false
     useWebSocket.value = false
   }
+
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen('sidecar-ready', async () => {
+      await settingsStore.loadConfig({ force: true })
+      loadModelSelection()
+      try {
+        await hexclawWS.connect()
+        wsConnected.value = true
+        useWebSocket.value = true
+        setupWsCallbacks()
+      } catch {
+        wsConnected.value = false
+        useWebSocket.value = false
+      }
+      unlisten()
+    })
+    setTimeout(() => unlisten(), 30000)
+  } catch {
+    // 非 Tauri 环境忽略
+  }
 })
 
 onUnmounted(() => {
@@ -77,24 +132,39 @@ onUnmounted(() => {
 })
 
 // Persist messages on change
-watch(messages, (val) => {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(val))
-  } catch {}
-}, { deep: true })
+watch(
+  messages,
+  (val) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(val))
+    } catch {}
+  },
+  { deep: true },
+)
 
 // Persist model selection
-watch(selectedModel, (val) => {
-  if (val) {
-    localStorage.setItem(MODEL_STORAGE_KEY, val)
+watch([selectedProviderId, selectedModel], ([providerId, modelId]) => {
+  if (modelId) {
+    localStorage.setItem(MODEL_STORAGE_KEY, `${providerId}::${modelId}`)
+  }
+})
+
+watch(availableModels, () => {
+  const current = availableModels.value.find(
+    (model) =>
+      model.modelId === selectedModel.value && model.providerId === selectedProviderId.value,
+  )
+  if (!current) {
+    loadModelSelection()
   }
 })
 
 function setupWsCallbacks() {
   hexclawWS.clearCallbacks()
 
-  hexclawWS.onChunk((content, done) => {
-    if (done) {
+  hexclawWS.onChunk((chunk) => {
+    streamingContent.value += chunk.content
+    if (chunk.done) {
       // Streaming complete - push final message
       if (streamingContent.value) {
         messages.value.push({
@@ -105,16 +175,14 @@ function setupWsCallbacks() {
         streamingContent.value = ''
       }
       streaming.value = false
-    } else {
-      streamingContent.value += content
     }
   })
 
-  hexclawWS.onReply((content) => {
+  hexclawWS.onReply((reply) => {
     messages.value.push({
       id: Date.now().toString(),
       role: 'assistant',
-      content,
+      content: reply.content,
     })
     streaming.value = false
     streamingContent.value = ''
@@ -143,7 +211,7 @@ async function handleSend(retryContent?: string) {
   // Remove the failed message if retrying
   if (retryContent) {
     // Find and remove the last error message and its preceding user message with this content
-    const lastErrIdx = messages.value.reduce((acc, m, i) => m.error ? i : acc, -1)
+    const lastErrIdx = messages.value.reduce((acc, m, i) => (m.error ? i : acc), -1)
     if (lastErrIdx >= 0) {
       messages.value.splice(lastErrIdx, 1)
     }
@@ -160,11 +228,22 @@ async function handleSend(retryContent?: string) {
 
   if (useWebSocket.value && wsConnected.value && hexclawWS.isConnected()) {
     // WebSocket streaming mode
-    hexclawWS.sendMessage(text, undefined, selectedModel.value || undefined)
+    hexclawWS.sendMessage(
+      text,
+      undefined,
+      selectedModel.value || undefined,
+      undefined,
+      undefined,
+      selectedProviderKey.value || undefined,
+    )
   } else {
     // HTTP fallback
     try {
-      const resp = await sendChat({ message: text, model: selectedModel.value || undefined })
+      const resp = await sendChat({
+        message: text,
+        provider: selectedProviderKey.value || undefined,
+        model: selectedModel.value || undefined,
+      })
       messages.value.push({
         id: Date.now().toString(),
         role: 'assistant',
@@ -195,7 +274,7 @@ function handleRetry(msg: Message) {
     }
   }
   // Fallback: just remove the error message
-  messages.value = messages.value.filter(m => m.id !== msg.id)
+  messages.value = messages.value.filter((m) => m.id !== msg.id)
 }
 
 function clearChat() {
@@ -221,8 +300,10 @@ function handleStop() {
   }
 }
 
-function selectModel(modelId: string) {
+function selectModel(modelId: string, providerId: string, providerKey: string) {
   selectedModel.value = modelId
+  selectedProviderId.value = providerId
+  selectedProviderKey.value = providerKey
   showModelDropdown.value = false
 }
 
@@ -237,11 +318,16 @@ function scrollToBottom() {
   messagesEnd.value?.scrollIntoView({ behavior: 'smooth' })
 }
 
-watch(() => messages.value.length, () => nextTick(scrollToBottom))
+watch(
+  () => messages.value.length,
+  () => nextTick(scrollToBottom),
+)
 watch(streamingContent, () => nextTick(scrollToBottom))
 
 const selectedModelName = computed(() => {
-  const m = availableModels.value.find(m => m.modelId === selectedModel.value)
+  const m = availableModels.value.find(
+    (m) => m.modelId === selectedModel.value && m.providerId === selectedProviderId.value,
+  )
   return m ? m.modelName : selectedModel.value || 'Default'
 })
 </script>
@@ -254,7 +340,9 @@ const selectedModelName = computed(() => {
       class="h-[38px] flex items-center justify-between px-4 flex-shrink-0"
       :style="{ background: 'var(--hc-bg-sidebar)' }"
     >
-      <span class="text-xs font-medium pl-16" :style="{ color: 'var(--hc-text-secondary)' }">Quick Chat</span>
+      <span class="text-xs font-medium pl-16" :style="{ color: 'var(--hc-text-secondary)' }"
+        >Quick Chat</span
+      >
       <div class="flex items-center gap-2">
         <!-- Model Selector -->
         <div class="relative">
@@ -276,14 +364,23 @@ const selectedModelName = computed(() => {
               :key="model.modelId"
               class="w-full text-left px-3 py-2 text-xs hover:bg-black/5 dark:hover:bg-white/5 transition-colors flex flex-col"
               :style="{
-                color: model.modelId === selectedModel ? 'var(--hc-accent)' : 'var(--hc-text-primary)',
+                color:
+                  model.modelId === selectedModel && model.providerId === selectedProviderId
+                    ? 'var(--hc-accent)'
+                    : 'var(--hc-text-primary)',
               }"
-              @click="selectModel(model.modelId)"
+              @click="selectModel(model.modelId, model.providerId, model.providerKey)"
             >
               <span class="font-medium truncate">{{ model.modelName }}</span>
-              <span class="text-[10px] truncate" :style="{ color: 'var(--hc-text-muted)' }">{{ model.providerName }}</span>
+              <span class="text-[10px] truncate" :style="{ color: 'var(--hc-text-muted)' }">{{
+                model.providerName
+              }}</span>
             </button>
-            <div v-if="availableModels.length === 0" class="px-3 py-2 text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+            <div
+              v-if="availableModels.length === 0"
+              class="px-3 py-2 text-xs"
+              :style="{ color: 'var(--hc-text-muted)' }"
+            >
               {{ t('chat.noModels') }}
             </div>
           </div>
@@ -303,11 +400,7 @@ const selectedModelName = computed(() => {
 
     <!-- 消息区 -->
     <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3" @click="showModelDropdown = false">
-      <div
-        v-for="msg in messages"
-        :key="msg.id"
-        class="text-sm leading-relaxed"
-      >
+      <div v-for="msg in messages" :key="msg.id" class="text-sm leading-relaxed">
         <div v-if="msg.role === 'user'" class="text-right">
           <span
             class="inline-block rounded-xl px-3 py-2 text-white max-w-[85%] text-left"
@@ -328,7 +421,7 @@ const selectedModelName = computed(() => {
             <button
               v-if="msg.error"
               class="flex items-center gap-1 mt-1.5 text-xs px-2 py-0.5 rounded transition-colors"
-              style="color: #ef4444; background: rgba(239, 68, 68, 0.1);"
+              style="color: #ef4444; background: rgba(239, 68, 68, 0.1)"
               @click="handleRetry(msg)"
             >
               <RotateCcw :size="11" />
@@ -353,9 +446,18 @@ const selectedModelName = computed(() => {
           :style="{ background: 'var(--hc-bg-card)', color: 'var(--hc-text-muted)' }"
         >
           <span class="inline-flex gap-1">
-            <span class="w-1.5 h-1.5 rounded-full bg-current animate-bounce" style="animation-delay: 0ms;" />
-            <span class="w-1.5 h-1.5 rounded-full bg-current animate-bounce" style="animation-delay: 150ms;" />
-            <span class="w-1.5 h-1.5 rounded-full bg-current animate-bounce" style="animation-delay: 300ms;" />
+            <span
+              class="w-1.5 h-1.5 rounded-full bg-current animate-bounce"
+              style="animation-delay: 0ms"
+            />
+            <span
+              class="w-1.5 h-1.5 rounded-full bg-current animate-bounce"
+              style="animation-delay: 150ms"
+            />
+            <span
+              class="w-1.5 h-1.5 rounded-full bg-current animate-bounce"
+              style="animation-delay: 300ms"
+            />
           </span>
         </div>
       </div>

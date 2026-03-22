@@ -3,7 +3,7 @@
 .PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 lint lint-fix format prepare-sidecar-src
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
-HEXCLAW_REF ?= refs/tags/v0.0.2-base
+HEXCLAW_REF ?= refs/tags/v0.1.0-beta
 HEXCLAW_SRC_DIR ?= /tmp/hexclaw-gith-src
 DESKTOP_ROOT := $(CURDIR)
 SIDECAR_BIN_DIR := $(DESKTOP_ROOT)/src-tauri/binaries
@@ -35,7 +35,12 @@ prepare-sidecar-src:
 sidecar: prepare-sidecar-src
 	@echo "编译 hexclaw sidecar..."
 	@mkdir -p src-tauri/binaries
-	cd "$(HEXCLAW_SRC_DIR)" && go build -o "$(SIDECAR_BIN_DIR)/hexclaw-$$(rustc -vV | grep 'host:' | awk '{print $$2}')" ./cmd/hexclaw
+	cd "$(HEXCLAW_SRC_DIR)" && \
+		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		COMMIT="$$(git rev-parse --short HEAD)" && \
+		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
+		go build -ldflags="-X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-o "$(SIDECAR_BIN_DIR)/hexclaw-$$(rustc -vV | grep 'host:' | awk '{print $$2}')" ./cmd/hexclaw
 	@echo "sidecar 编译完成"
 
 # Cross-compile sidecar for all platforms
@@ -43,19 +48,43 @@ sidecar-all: sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidec
 
 sidecar-darwin-arm64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
-	cd "$(HEXCLAW_SRC_DIR)" && GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$(SIDECAR_BIN_DIR)/hexclaw-aarch64-apple-darwin" ./cmd/hexclaw
+	cd "$(HEXCLAW_SRC_DIR)" && \
+		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		COMMIT="$$(git rev-parse --short HEAD)" && \
+		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
+		GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build \
+			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-o "$(SIDECAR_BIN_DIR)/hexclaw-aarch64-apple-darwin" ./cmd/hexclaw
 
 sidecar-darwin-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
-	cd "$(HEXCLAW_SRC_DIR)" && GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-apple-darwin" ./cmd/hexclaw
+	cd "$(HEXCLAW_SRC_DIR)" && \
+		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		COMMIT="$$(git rev-parse --short HEAD)" && \
+		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
+		GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build \
+			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-apple-darwin" ./cmd/hexclaw
 
 sidecar-linux-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
-	cd "$(HEXCLAW_SRC_DIR)" && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-unknown-linux-gnu" ./cmd/hexclaw
+	cd "$(HEXCLAW_SRC_DIR)" && \
+		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		COMMIT="$$(git rev-parse --short HEAD)" && \
+		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
+		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build \
+			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-unknown-linux-gnu" ./cmd/hexclaw
 
 sidecar-windows-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
-	cd "$(HEXCLAW_SRC_DIR)" && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-pc-windows-msvc.exe" ./cmd/hexclaw
+	cd "$(HEXCLAW_SRC_DIR)" && \
+		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		COMMIT="$$(git rev-parse --short HEAD)" && \
+		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
+		GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build \
+			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-pc-windows-msvc.exe" ./cmd/hexclaw
 
 # 代码检查
 lint:

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Bot, MessageSquare, Plus, Trash2, X, Users, Pencil, ChevronDown, ChevronUp, Wrench, ShieldAlert } from 'lucide-vue-next'
 import { useAgentsStore } from '@/stores/agents'
+import { useSettingsStore } from '@/stores/settings'
 import { getAgents, getRules, addRule, deleteRule, setDefaultAgent, registerAgent, unregisterAgent, updateAgent } from '@/api/agents'
 import type { AgentRole, AgentConfig, AgentRule } from '@/types'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -17,6 +18,7 @@ import AgentConference from '@/components/agent/AgentConference.vue'
 const { t } = useI18n()
 const router = useRouter()
 const agentsStore = useAgentsStore()
+const settingsStore = useSettingsStore()
 
 const searchQuery = ref('')
 const activeTab = ref<'roles' | 'agents' | 'rules' | 'conference'>('roles')
@@ -71,7 +73,7 @@ const sortedRules = computed(() =>
 const canAddRule = computed(() => agents.value.length > 0)
 
 onMounted(async () => {
-  await Promise.all([agentsStore.loadRoles(), loadAgents(), loadRules()])
+  await Promise.all([agentsStore.loadRoles(), loadAgents(), loadRules(), settingsStore.loadConfig()])
 })
 
 async function loadAgents() {
@@ -159,6 +161,7 @@ function toggleRoleDetail(roleName: string) {
 
 function openEditAgent(agent: AgentConfig) {
   editingAgent.value = { ...agent }
+  syncAgentModelSelection(editingAgent.value)
   showEditAgent.value = true
 }
 
@@ -198,12 +201,55 @@ const filteredAgents = computed(() => {
   )
 })
 
+const runtimeProviderOptions = computed(() =>
+  settingsStore.enabledProviders.map((provider) => ({
+    key: provider.backendKey || provider.name || provider.id,
+    label: provider.name,
+    models: provider.models,
+  })),
+)
+
+function modelsForProvider(providerKey: string) {
+  return runtimeProviderOptions.value.find((provider) => provider.key === providerKey)?.models ?? []
+}
+
+function syncAgentModelSelection(agent: AgentConfig) {
+  const models = modelsForProvider(agent.provider)
+  if (!models.length) {
+    agent.model = ''
+    return
+  }
+  if (!models.some((model) => model.id === agent.model)) {
+    agent.model = models[0]!.id
+  }
+}
+
+watch(() => newAgent.value.provider, () => {
+  syncAgentModelSelection(newAgent.value)
+})
+
+watch(() => editingAgent.value.provider, () => {
+  syncAgentModelSelection(editingAgent.value)
+})
+
 const registerFormValid = computed(() => {
-  return newAgent.value.name.trim() !== '' && newAgent.value.provider.trim() !== '' && newAgent.value.model.trim() !== ''
+  const models = modelsForProvider(newAgent.value.provider)
+  return (
+    newAgent.value.name.trim() !== '' &&
+    newAgent.value.provider.trim() !== '' &&
+    newAgent.value.model.trim() !== '' &&
+    models.some((model) => model.id === newAgent.value.model)
+  )
 })
 
 const editFormValid = computed(() => {
-  return editingAgent.value.name.trim() !== '' && editingAgent.value.provider.trim() !== '' && editingAgent.value.model.trim() !== ''
+  const models = modelsForProvider(editingAgent.value.provider)
+  return (
+    editingAgent.value.name.trim() !== '' &&
+    editingAgent.value.provider.trim() !== '' &&
+    editingAgent.value.model.trim() !== '' &&
+    models.some((model) => model.id === editingAgent.value.model)
+  )
 })
 
 async function handleRegisterAgent() {
@@ -559,11 +605,38 @@ async function handleUnregisterAgent() {
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.provider') }}</label>
-                <input v-model="newAgent.provider" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="openai" />
+                <select
+                  v-model="newAgent.provider"
+                  class="rounded-lg border px-3 py-2 text-sm outline-none"
+                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                >
+                  <option value="">{{ t('settings.llm.selectProvider') }}</option>
+                  <option
+                    v-for="provider in runtimeProviderOptions"
+                    :key="provider.key"
+                    :value="provider.key"
+                  >
+                    {{ provider.label }}
+                  </option>
+                </select>
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
-                <input v-model="newAgent.model" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="gpt-4o" />
+                <select
+                  v-model="newAgent.model"
+                  class="rounded-lg border px-3 py-2 text-sm outline-none"
+                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  :disabled="!newAgent.provider"
+                >
+                  <option value="">{{ t('settings.llm.models') }}</option>
+                  <option
+                    v-for="model in modelsForProvider(newAgent.provider)"
+                    :key="model.id"
+                    :value="model.id"
+                  >
+                    {{ model.name }}
+                  </option>
+                </select>
               </div>
             </div>
             <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
@@ -610,11 +683,54 @@ async function handleUnregisterAgent() {
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.provider') }}</label>
-                <input v-model="editingAgent.provider" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+                <select
+                  v-model="editingAgent.provider"
+                  class="rounded-lg border px-3 py-2 text-sm outline-none"
+                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                >
+                  <option
+                    v-if="
+                      editingAgent.provider &&
+                      !runtimeProviderOptions.some((provider) => provider.key === editingAgent.provider)
+                    "
+                    :value="editingAgent.provider"
+                  >
+                    {{ editingAgent.provider }} (invalid)
+                  </option>
+                  <option
+                    v-for="provider in runtimeProviderOptions"
+                    :key="provider.key"
+                    :value="provider.key"
+                  >
+                    {{ provider.label }}
+                  </option>
+                </select>
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
-                <input v-model="editingAgent.model" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+                <select
+                  v-model="editingAgent.model"
+                  class="rounded-lg border px-3 py-2 text-sm outline-none"
+                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  :disabled="!editingAgent.provider"
+                >
+                  <option
+                    v-if="
+                      editingAgent.model &&
+                      !modelsForProvider(editingAgent.provider).some((model) => model.id === editingAgent.model)
+                    "
+                    :value="editingAgent.model"
+                  >
+                    {{ editingAgent.model }} (invalid)
+                  </option>
+                  <option
+                    v-for="model in modelsForProvider(editingAgent.provider)"
+                    :key="model.id"
+                    :value="model.id"
+                  >
+                    {{ model.name }}
+                  </option>
+                </select>
               </div>
             </div>
             <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">

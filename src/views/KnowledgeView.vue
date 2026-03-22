@@ -1,14 +1,33 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { BookOpen, Upload, Trash2, Search, FileText, X, FileUp, RefreshCw } from 'lucide-vue-next'
-import { getDocuments, addDocument, deleteDocument, searchKnowledge, uploadDocument, reindexDocument } from '@/api/knowledge'
+import {
+  getDocuments,
+  addDocument,
+  deleteDocument,
+  searchKnowledge,
+  uploadDocument,
+  reindexDocument,
+  isKnowledgeUploadEndpointMissing,
+  isKnowledgeUploadUnsupportedFormat,
+} from '@/api/knowledge'
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { parseDocument } from '@/utils/file-parser'
 
-const ACCEPTED_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.csv', '.json']
+const ACCEPTED_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.json']
+const props = withDefaults(
+  defineProps<{
+    knowledgeEnabled?: boolean
+  }>(),
+  {
+    knowledgeEnabled: true,
+  },
+)
+const knowledgeEnabled = computed(() => props.knowledgeEnabled)
 
 const { t, locale } = useI18n()
 
@@ -36,7 +55,9 @@ const reindexingDocIds = ref<Set<string>>(new Set())
 
 // File upload state
 const isDragging = ref(false)
-const uploadingFiles = ref<{ name: string; progress: number; status: 'uploading' | 'done' | 'error'; error?: string }[]>([])
+const uploadingFiles = ref<
+  { name: string; progress: number; status: 'uploading' | 'done' | 'error'; error?: string }[]
+>([])
 const fileInputRef = ref<HTMLInputElement>()
 
 onMounted(async () => {
@@ -58,12 +79,23 @@ async function loadDocs() {
   }
 }
 
+function ensureKnowledgeEnabled() {
+  if (knowledgeEnabled.value) return true
+  errorMsg.value = t('knowledge.backendDisabled')
+  return false
+}
+
 async function handleAdd() {
+  if (!ensureKnowledgeEnabled()) return
   if (!newTitle.value.trim() || !newContent.value.trim()) return
   adding.value = true
   errorMsg.value = ''
   try {
-    await addDocument(newTitle.value.trim(), newContent.value.trim(), newSource.value.trim() || undefined)
+    await addDocument(
+      newTitle.value.trim(),
+      newContent.value.trim(),
+      newSource.value.trim() || undefined,
+    )
     showAddDialog.value = false
     newTitle.value = ''
     newContent.value = ''
@@ -99,7 +131,13 @@ async function handleDelete() {
   }
 }
 
+function closeDeleteConfirm() {
+  showDeleteConfirm.value = false
+  deletingDoc.value = null
+}
+
 async function handleSearch() {
+  if (!ensureKnowledgeEnabled()) return
   if (!searchQuery.value.trim()) {
     searchResults.value = []
     return
@@ -156,6 +194,7 @@ function openDocDetail(doc: KnowledgeDoc) {
 }
 
 async function handleReindex(doc: KnowledgeDoc) {
+  if (!ensureKnowledgeEnabled()) return
   const next = new Set(reindexingDocIds.value)
   next.add(doc.id)
   reindexingDocIds.value = next
@@ -163,15 +202,18 @@ async function handleReindex(doc: KnowledgeDoc) {
 
   try {
     await reindexDocument(doc.id)
-    docs.value = docs.value.map((item) => (
+    docs.value = docs.value.map((item) =>
       item.id === doc.id
-        ? { ...item, status: 'processing', error_message: undefined, updated_at: new Date().toISOString() }
-        : item
-    ))
+        ? {
+            ...item,
+            status: 'processing',
+            error_message: undefined,
+            updated_at: new Date().toISOString(),
+          }
+        : item,
+    )
   } catch (e) {
-    errorMsg.value = e instanceof Error
-      ? e.message
-      : t('knowledge.reindexUnavailable')
+    errorMsg.value = e instanceof Error ? e.message : t('knowledge.reindexUnavailable')
   } finally {
     const current = new Set(reindexingDocIds.value)
     current.delete(doc.id)
@@ -197,6 +239,7 @@ function resultMeta(result: KnowledgeSearchResult): string {
 
 function handleDragOver(e: DragEvent) {
   e.preventDefault()
+  if (!knowledgeEnabled.value) return
   isDragging.value = true
 }
 
@@ -206,46 +249,89 @@ function handleDragLeave() {
 
 function handleDrop(e: DragEvent) {
   e.preventDefault()
+  if (!ensureKnowledgeEnabled()) return
   isDragging.value = false
   const files = e.dataTransfer?.files
   if (files) processFiles(files)
 }
 
 function handleFileSelect(e: Event) {
+  if (!ensureKnowledgeEnabled()) return
   const input = e.target as HTMLInputElement
   if (input.files) processFiles(input.files)
   input.value = ''
 }
 
 function openFilePicker() {
+  if (!ensureKnowledgeEnabled()) return
   fileInputRef.value?.click()
 }
 
+async function uploadDocumentThroughLegacyFallback(file: File, onProgress?: (pct: number) => void) {
+  onProgress?.(10)
+  const parsed = await parseDocument(file)
+  const content = parsed.text.trim()
+
+  if (!content) {
+    throw new Error(t('knowledge.parsedContentEmpty'))
+  }
+
+  onProgress?.(75)
+  await addDocument(parsed.fileName, content, file.name)
+  onProgress?.(100)
+}
+
 async function processFiles(files: FileList) {
+  if (!ensureKnowledgeEnabled()) return
   const uploadTasks: Promise<void>[] = []
   let uploadedAny = false
 
   for (const file of Array.from(files)) {
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
-    if (!ACCEPTED_TYPES.includes(ext)) continue
+    if (!ACCEPTED_TYPES.includes(ext)) {
+      uploadingFiles.value.push({
+        name: file.name,
+        progress: 0,
+        status: 'error',
+        error: t('knowledge.unsupportedFileType', { types: ACCEPTED_TYPES.join(', ') }),
+      })
+      continue
+    }
 
     const entry = { name: file.name, progress: 0, status: 'uploading' as const }
     uploadingFiles.value.push(entry)
     const idx = uploadingFiles.value.length - 1
 
-    uploadTasks.push((async () => {
-      try {
-        await uploadDocument(file, (pct) => {
+    uploadTasks.push(
+      (async () => {
+        const updateProgress = (pct: number) => {
           uploadingFiles.value[idx]!.progress = pct
-        })
-        uploadingFiles.value[idx]!.status = 'done'
-        uploadingFiles.value[idx]!.progress = 100
-        uploadedAny = true
-      } catch (e) {
-        uploadingFiles.value[idx]!.status = 'error'
-        uploadingFiles.value[idx]!.error = e instanceof Error ? e.message : 'Upload failed'
-      }
-    })())
+        }
+
+        try {
+          await uploadDocument(file, updateProgress)
+          uploadingFiles.value[idx]!.status = 'done'
+          uploadingFiles.value[idx]!.progress = 100
+          uploadedAny = true
+        } catch (e) {
+          if (isKnowledgeUploadEndpointMissing(e) || isKnowledgeUploadUnsupportedFormat(e)) {
+            try {
+              await uploadDocumentThroughLegacyFallback(file, updateProgress)
+              uploadingFiles.value[idx]!.status = 'done'
+              uploadingFiles.value[idx]!.progress = 100
+              uploadedAny = true
+              return
+            } catch (fallbackError) {
+              e = fallbackError
+            }
+          }
+
+          uploadingFiles.value[idx]!.status = 'error'
+          uploadingFiles.value[idx]!.error =
+            e instanceof Error ? e.message : t('knowledge.uploadFailed')
+        }
+      })(),
+    )
   }
 
   await Promise.all(uploadTasks)
@@ -261,7 +347,9 @@ async function processFiles(files: FileList) {
 }
 
 // Global drag prevention
-function preventDefaultDrag(e: DragEvent) { e.preventDefault() }
+function preventDefaultDrag(e: DragEvent) {
+  e.preventDefault()
+}
 onMounted(() => {
   document.addEventListener('dragover', preventDefaultDrag)
   document.addEventListener('drop', preventDefaultDrag)
@@ -272,12 +360,14 @@ onUnmounted(() => {
 })
 
 function rebuildAll() {
+  if (!ensureKnowledgeEnabled()) return
   for (const doc of docs.value) {
     handleReindex(doc)
   }
 }
 
 function openUpload() {
+  if (!ensureKnowledgeEnabled()) return
   showAddDialog.value = true
 }
 
@@ -289,7 +379,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
     <input
       ref="fileInputRef"
       type="file"
-      :accept="'.pdf,.txt,.md,.docx,.doc,.csv,.json'"
+      :accept="ACCEPTED_TYPES.join(',')"
       multiple
       class="hidden"
       @change="handleFileSelect"
@@ -299,14 +389,28 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
     <div
       v-if="errorMsg"
       class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
-      style="background: #ef444420; color: #ef4444;"
+      style="background: #ef444420; color: #ef4444"
     >
       <span>{{ errorMsg }}</span>
       <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
     </div>
 
+    <div
+      v-if="!knowledgeEnabled"
+      class="mx-6 mt-2 px-4 py-3 rounded-xl text-sm"
+      :style="{ background: 'var(--hc-warning-soft, #f59e0b15)', color: 'var(--hc-warning-text, #b45309)' }"
+    >
+      <div class="font-medium">{{ t('knowledge.backendDisabled') }}</div>
+      <div class="mt-1 text-xs" :style="{ color: 'var(--hc-text-secondary)' }">
+        {{ t('knowledge.backendDisabledDesc') }}
+      </div>
+    </div>
+
     <!-- 标签页 -->
-    <div class="flex items-center gap-0 px-6 pt-3 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+    <div
+      class="flex items-center gap-0 px-6 pt-3 border-b"
+      :style="{ borderColor: 'var(--hc-border)' }"
+    >
       <button
         class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
         :style="{
@@ -337,10 +441,18 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
     >
       <!-- Drag overlay -->
       <Transition name="modal">
-        <div v-if="isDragging" class="absolute inset-0 z-30 flex items-center justify-center bg-black/20 backdrop-blur-sm rounded-xl pointer-events-none">
-          <div class="flex flex-col items-center gap-3 p-8 rounded-2xl border-2 border-dashed" :style="{ borderColor: 'var(--hc-accent)', background: 'var(--hc-bg-elevated)' }">
+        <div
+          v-if="isDragging"
+          class="absolute inset-0 z-30 flex items-center justify-center bg-black/20 backdrop-blur-sm rounded-xl pointer-events-none"
+        >
+          <div
+            class="flex flex-col items-center gap-3 p-8 rounded-2xl border-2 border-dashed"
+            :style="{ borderColor: 'var(--hc-accent)', background: 'var(--hc-bg-elevated)' }"
+          >
             <FileUp :size="40" :style="{ color: 'var(--hc-accent)' }" />
-            <span class="text-sm font-medium" :style="{ color: 'var(--hc-accent)' }">{{ t('knowledge.dropHint') }}</span>
+            <span class="text-sm font-medium" :style="{ color: 'var(--hc-accent)' }">{{
+              t('knowledge.dropHint')
+            }}</span>
           </div>
         </div>
       </Transition>
@@ -353,16 +465,43 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
           class="flex items-center gap-3 px-4 py-2.5 rounded-lg border"
           :style="{
             background: 'var(--hc-bg-card)',
-            borderColor: uf.status === 'error' ? '#ef4444' : uf.status === 'done' ? '#10b981' : 'var(--hc-border)',
+            borderColor:
+              uf.status === 'error'
+                ? '#ef4444'
+                : uf.status === 'done'
+                  ? '#10b981'
+                  : 'var(--hc-border)',
           }"
         >
-          <Upload :size="14" :class="{ 'animate-pulse': uf.status === 'uploading' }" :style="{ color: uf.status === 'error' ? '#ef4444' : uf.status === 'done' ? '#10b981' : 'var(--hc-accent)' }" />
+          <Upload
+            :size="14"
+            :class="{ 'animate-pulse': uf.status === 'uploading' }"
+            :style="{
+              color:
+                uf.status === 'error'
+                  ? '#ef4444'
+                  : uf.status === 'done'
+                    ? '#10b981'
+                    : 'var(--hc-accent)',
+            }"
+          />
           <div class="flex-1 min-w-0">
-            <div class="text-xs font-medium truncate" :style="{ color: 'var(--hc-text-primary)' }">{{ uf.name }}</div>
-            <div v-if="uf.status === 'uploading'" class="mt-1 h-1 rounded-full overflow-hidden" :style="{ background: 'var(--hc-bg-hover)' }">
-              <div class="h-full rounded-full transition-all" :style="{ width: uf.progress + '%', background: 'var(--hc-accent)' }" />
+            <div class="text-xs font-medium truncate" :style="{ color: 'var(--hc-text-primary)' }">
+              {{ uf.name }}
             </div>
-            <div v-else-if="uf.status === 'error'" class="text-xs mt-0.5" style="color: #ef4444">{{ uf.error }}</div>
+            <div
+              v-if="uf.status === 'uploading'"
+              class="mt-1 h-1 rounded-full overflow-hidden"
+              :style="{ background: 'var(--hc-bg-hover)' }"
+            >
+              <div
+                class="h-full rounded-full transition-all"
+                :style="{ width: uf.progress + '%', background: 'var(--hc-accent)' }"
+              />
+            </div>
+            <div v-else-if="uf.status === 'error'" class="text-xs mt-0.5" style="color: #ef4444">
+              {{ uf.error }}
+            </div>
           </div>
           <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
             {{ uf.status === 'uploading' ? uf.progress + '%' : uf.status === 'done' ? '✓' : '✗' }}
@@ -380,10 +519,20 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
           :title="t('knowledge.noDocs')"
           :description="t('knowledge.noDocsDesc')"
         >
-          <p class="text-xs mt-2 mb-4" :style="{ color: 'var(--hc-text-muted)' }">{{ t('knowledge.dragHint') }}</p>
+          <p
+            v-if="knowledgeEnabled"
+            class="text-xs mt-2 mb-2"
+            :style="{ color: 'var(--hc-text-secondary)' }"
+          >
+            {{ t('knowledge.modeHint') }}
+          </p>
+          <p class="text-xs mt-2 mb-4" :style="{ color: 'var(--hc-text-muted)' }">
+            {{ t('knowledge.dragHint') }}
+          </p>
           <button
             class="px-4 py-2 rounded-lg text-sm text-white"
-            :style="{ background: 'var(--hc-accent)' }"
+            :style="{ background: 'var(--hc-accent)', opacity: knowledgeEnabled ? 1 : 0.5 }"
+            :disabled="!knowledgeEnabled"
             @click="openFilePicker"
           >
             {{ t('knowledge.uploadDoc') }}
@@ -398,7 +547,9 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
           >
             <div class="flex items-center gap-2">
               <FileText :size="14" :style="{ color: 'var(--hc-accent)' }" />
-              <span class="text-xs" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('knowledge.docCount', { count: totalDocs }) }}</span>
+              <span class="text-xs" :style="{ color: 'var(--hc-text-secondary)' }">{{
+                t('knowledge.docCount', { count: totalDocs })
+              }}</span>
             </div>
           </div>
 
@@ -412,7 +563,10 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
             >
               <button class="flex-1 min-w-0 text-left" @click="openDocDetail(doc)">
                 <div class="flex items-center gap-2">
-                  <span class="text-sm font-medium truncate" :style="{ color: 'var(--hc-text-primary)' }">
+                  <span
+                    class="text-sm font-medium truncate"
+                    :style="{ color: 'var(--hc-text-primary)' }"
+                  >
                     {{ doc.title }}
                   </span>
                   <span
@@ -422,30 +576,40 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
                     {{ getDocStatusLabel(doc) }}
                   </span>
                 </div>
-                <div class="flex items-center gap-3 mt-1 text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+                <div
+                  class="flex items-center gap-3 mt-1 text-xs"
+                  :style="{ color: 'var(--hc-text-muted)' }"
+                >
                   <span>{{ doc.chunk_count }} chunks</span>
                   <span v-if="doc.source">{{ t('knowledge.source') }}: {{ doc.source }}</span>
-                  <span>{{ new Date(doc.updated_at || doc.created_at).toLocaleDateString(locale) }}</span>
+                  <span>{{
+                    new Date(doc.updated_at || doc.created_at).toLocaleDateString(locale)
+                  }}</span>
                 </div>
-                <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626;">
+                <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626">
                   {{ doc.error_message }}
                 </p>
               </button>
               <button
                 class="px-2 py-1 rounded-md text-xs hover:bg-white/5 transition-colors"
                 :style="{ color: 'var(--hc-text-secondary)' }"
-                :disabled="reindexingDocIds.has(doc.id)"
+                :disabled="!knowledgeEnabled || reindexingDocIds.has(doc.id)"
                 @click="handleReindex(doc)"
               >
                 <span class="inline-flex items-center gap-1">
                   <RefreshCw :size="12" :class="{ 'animate-spin': reindexingDocIds.has(doc.id) }" />
-                  {{ getDocStatus(doc) === 'failed' ? t('knowledge.retryIndex') : t('knowledge.reindex') }}
+                  {{
+                    getDocStatus(doc) === 'failed'
+                      ? t('knowledge.retryIndex')
+                      : t('knowledge.reindex')
+                  }}
                 </span>
               </button>
               <button
                 class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
                 :style="{ color: 'var(--hc-error)' }"
                 :title="t('common.delete')"
+                :disabled="!knowledgeEnabled"
                 @click="confirmDelete(doc)"
               >
                 <Trash2 :size="16" />
@@ -467,14 +631,19 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
               v-model="searchQuery"
               type="text"
               class="flex-1 rounded-lg border px-3 py-2 text-sm outline-none"
-              :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+              :style="{
+                background: 'var(--hc-bg-input)',
+                borderColor: 'var(--hc-border)',
+                color: 'var(--hc-text-primary)',
+              }"
+              :disabled="!knowledgeEnabled"
               :placeholder="t('knowledge.searchPlaceholder')"
               @keydown.enter="handleSearch"
             />
             <button
               class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
               :style="{ background: 'var(--hc-accent)' }"
-              :disabled="searching || !searchQuery.trim()"
+              :disabled="!knowledgeEnabled || searching || !searchQuery.trim()"
               @click="handleSearch"
             >
               <Search :size="14" />
@@ -491,10 +660,17 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
             >
               <div class="flex items-center justify-between mb-2">
                 <div class="min-w-0">
-                  <div class="text-sm font-medium truncate" :style="{ color: 'var(--hc-text-primary)' }">
+                  <div
+                    class="text-sm font-medium truncate"
+                    :style="{ color: 'var(--hc-text-primary)' }"
+                  >
                     {{ resultTitle(result) }}
                   </div>
-                  <div v-if="resultMeta(result)" class="text-[11px] mt-1" :style="{ color: 'var(--hc-text-muted)' }">
+                  <div
+                    v-if="resultMeta(result)"
+                    class="text-[11px] mt-1"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                  >
                     {{ resultMeta(result) }}
                   </div>
                 </div>
@@ -521,50 +697,93 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
     <!-- 添加文档对话框 -->
     <Teleport to="body">
       <Transition name="modal">
-        <div v-if="showAddDialog" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="showAddDialog = false">
+        <div
+          v-if="showAddDialog"
+          class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm"
+          @click.self="showAddDialog = false"
+        >
           <div
             class="w-full max-w-lg rounded-2xl border flex flex-col overflow-hidden"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-              <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('knowledge.addDocTitle') }}</h2>
-              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="showAddDialog = false">
+            <div
+              class="flex items-center justify-between px-5 py-4 border-b"
+              :style="{ borderColor: 'var(--hc-border)' }"
+            >
+              <h2
+                class="text-[15px] font-semibold m-0"
+                :style="{ color: 'var(--hc-text-primary)' }"
+              >
+                {{ t('knowledge.addDocTitle') }}
+              </h2>
+              <button
+                class="p-1 rounded-md hover:bg-white/5"
+                :style="{ color: 'var(--hc-text-muted)' }"
+                @click="showAddDialog = false"
+              >
                 <X :size="17" />
               </button>
             </div>
             <div class="p-5 flex flex-col gap-3.5">
               <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('knowledge.docTitle') }}</label>
+                <label
+                  class="text-[13px] font-medium"
+                  :style="{ color: 'var(--hc-text-secondary)' }"
+                  >{{ t('knowledge.docTitle') }}</label
+                >
                 <input
                   v-model="newTitle"
                   type="text"
                   class="rounded-lg border px-3 py-2 text-sm outline-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  :style="{
+                    background: 'var(--hc-bg-input)',
+                    borderColor: 'var(--hc-border)',
+                    color: 'var(--hc-text-primary)',
+                  }"
                   :placeholder="t('knowledge.docTitlePlaceholder')"
                 />
               </div>
               <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('knowledge.docContent') }}</label>
+                <label
+                  class="text-[13px] font-medium"
+                  :style="{ color: 'var(--hc-text-secondary)' }"
+                  >{{ t('knowledge.docContent') }}</label
+                >
                 <textarea
                   v-model="newContent"
                   rows="6"
                   class="rounded-lg border px-3 py-2 text-sm outline-none resize-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  :style="{
+                    background: 'var(--hc-bg-input)',
+                    borderColor: 'var(--hc-border)',
+                    color: 'var(--hc-text-primary)',
+                  }"
                   :placeholder="t('knowledge.docContentPlaceholder')"
                 />
               </div>
               <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('knowledge.docSource') }}</label>
+                <label
+                  class="text-[13px] font-medium"
+                  :style="{ color: 'var(--hc-text-secondary)' }"
+                  >{{ t('knowledge.docSource') }}</label
+                >
                 <input
                   v-model="newSource"
                   type="text"
                   class="rounded-lg border px-3 py-2 text-sm outline-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  :style="{
+                    background: 'var(--hc-bg-input)',
+                    borderColor: 'var(--hc-border)',
+                    color: 'var(--hc-text-primary)',
+                  }"
                   :placeholder="t('knowledge.docSourcePlaceholder')"
                 />
               </div>
             </div>
-            <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
+            <div
+              class="flex items-center justify-end gap-2 px-5 py-3.5 border-t"
+              :style="{ borderColor: 'var(--hc-border)' }"
+            >
               <button
                 class="px-3 py-1.5 rounded-lg text-sm font-medium"
                 :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
@@ -574,8 +793,12 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
               </button>
               <button
                 class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-                :style="{ background: 'var(--hc-accent)', opacity: (!newTitle.trim() || !newContent.trim() || adding) ? 0.4 : 1 }"
-                :disabled="!newTitle.trim() || !newContent.trim() || adding"
+                :style="{
+                  background: 'var(--hc-accent)',
+                  opacity:
+                    !knowledgeEnabled || !newTitle.trim() || !newContent.trim() || adding ? 0.4 : 1,
+                }"
+                :disabled="!knowledgeEnabled || !newTitle.trim() || !newContent.trim() || adding"
                 @click="handleAdd"
               >
                 <Upload :size="14" />
@@ -594,7 +817,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
       :message="t('knowledge.deleteConfirmMessage')"
       :confirm-text="t('common.delete')"
       @confirm="handleDelete"
-      @cancel="showDeleteConfirm = false; deletingDoc = null"
+      @cancel="closeDeleteConfirm"
     />
 
     <Teleport to="body">
@@ -608,29 +831,61 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
             class="w-full max-w-3xl max-h-[80vh] rounded-2xl border flex flex-col overflow-hidden"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+            <div
+              class="flex items-center justify-between px-5 py-4 border-b"
+              :style="{ borderColor: 'var(--hc-border)' }"
+            >
               <div class="min-w-0">
-                <h2 class="text-[15px] font-semibold truncate" :style="{ color: 'var(--hc-text-primary)' }">{{ selectedDoc.title }}</h2>
+                <h2
+                  class="text-[15px] font-semibold truncate"
+                  :style="{ color: 'var(--hc-text-primary)' }"
+                >
+                  {{ selectedDoc.title }}
+                </h2>
                 <p class="text-xs mt-1" :style="{ color: 'var(--hc-text-secondary)' }">
                   {{ getDocStatusLabel(selectedDoc) }}
                   <span v-if="selectedDoc.source"> · {{ selectedDoc.source }}</span>
                 </p>
               </div>
-              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="showDocDetail = false">
+              <button
+                class="p-1 rounded-md hover:bg-white/5"
+                :style="{ color: 'var(--hc-text-muted)' }"
+                @click="showDocDetail = false"
+              >
                 <X :size="17" />
               </button>
             </div>
             <div class="p-5 overflow-y-auto space-y-4">
-              <div class="grid grid-cols-2 gap-4 text-xs" :style="{ color: 'var(--hc-text-secondary)' }">
-                <div>{{ t('knowledge.docCount', { count: 1 }) }} · {{ selectedDoc.chunk_count }} chunks</div>
-                <div>{{ t('knowledge.updatedAt') }}: {{ new Date(selectedDoc.updated_at || selectedDoc.created_at).toLocaleString(locale) }}</div>
+              <div
+                class="grid grid-cols-2 gap-4 text-xs"
+                :style="{ color: 'var(--hc-text-secondary)' }"
+              >
+                <div>
+                  {{ t('knowledge.docCount', { count: 1 }) }} · {{ selectedDoc.chunk_count }} chunks
+                </div>
+                <div>
+                  {{ t('knowledge.updatedAt') }}:
+                  {{
+                    new Date(selectedDoc.updated_at || selectedDoc.created_at).toLocaleString(
+                      locale,
+                    )
+                  }}
+                </div>
               </div>
-              <div v-if="selectedDoc.error_message" class="rounded-lg px-3 py-2 text-sm" style="background: #ef444415; color: #dc2626;">
+              <div
+                v-if="selectedDoc.error_message"
+                class="rounded-lg px-3 py-2 text-sm"
+                style="background: #ef444415; color: #dc2626"
+              >
                 {{ selectedDoc.error_message }}
               </div>
               <div
                 class="rounded-xl border p-4 whitespace-pre-wrap break-words text-sm leading-6"
-                :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                :style="{
+                  background: 'var(--hc-bg-main)',
+                  borderColor: 'var(--hc-border)',
+                  color: 'var(--hc-text-primary)',
+                }"
               >
                 {{ selectedDoc.content || t('knowledge.noContentDetail') }}
               </div>
@@ -643,7 +898,14 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
 </template>
 
 <style scoped>
-.modal-enter-active { transition: opacity 0.2s ease-out; }
-.modal-leave-active { transition: opacity 0.15s ease-in; }
-.modal-enter-from, .modal-leave-to { opacity: 0; }
+.modal-enter-active {
+  transition: opacity 0.2s ease-out;
+}
+.modal-leave-active {
+  transition: opacity 0.15s ease-in;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
 </style>

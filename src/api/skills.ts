@@ -48,7 +48,7 @@ export async function setSkillEnabled(name: string, enabled: boolean): Promise<S
 
 // ─── ClawHub 技能市场 ──────────────────────────────────
 
-/** 设为 true 强制使用内置 Mock 数据；false 时优先尝试真实 API，失败降级 */
+/** 设为 true 强制使用内置 Mock 数据；false 时仅使用真实 API */
 const CLAWHUB_FORCE_MOCK = false
 
 /** ClawHub 分类 → 中文映射 */
@@ -280,7 +280,7 @@ function mapHubMetaToClawHubSkill(m: Record<string, unknown>): ClawHubSkill {
   }
 }
 
-/** 搜索 ClawHub 技能市场（默认优先真实 API；失败或空结果降级 Mock；开发可设 CLAWHUB_FORCE_MOCK） */
+/** 搜索 ClawHub 技能市场（仅在显式 FORCE_MOCK 时降级到内置 Mock） */
 export async function searchClawHub(
   query?: string,
   category?: string,
@@ -294,25 +294,17 @@ export async function searchClawHub(
   if (category && category !== 'all') params.set('category', category)
   const qs = params.toString()
 
-  try {
-    const res = await apiGet<{
-      skills?: unknown[]
-      error?: string
-    }>(`/api/v1/clawhub/search${qs ? '?' + qs : ''}`)
+  const res = await apiGet<{
+    skills?: unknown[]
+    error?: string
+  }>(`/api/v1/clawhub/search${qs ? '?' + qs : ''}`)
 
-    if (typeof res.error === 'string' && res.error.trim() !== '') {
-      return filterMockSkills(query, category)
-    }
-
-    const raw = Array.isArray(res) ? res : res.skills ?? []
-    const mapped = (raw as Record<string, unknown>[]).map(mapHubMetaToClawHubSkill)
-    if (mapped.length === 0) {
-      return filterMockSkills(query, category)
-    }
-    return mapped
-  } catch {
-    return filterMockSkills(query, category)
+  if (typeof res.error === 'string' && res.error.trim() !== '') {
+    throw new Error(res.error.trim())
   }
+
+  const raw = Array.isArray(res) ? res : Array.isArray(res.skills) ? res.skills : []
+  return (raw as Record<string, unknown>[]).map(mapHubMetaToClawHubSkill)
 }
 
 /** 从 ClawHub 安装 Skill */

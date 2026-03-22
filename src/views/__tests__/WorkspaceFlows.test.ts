@@ -23,12 +23,20 @@ const { getIMInstances, updateIMInstance } = vi.hoisted(() => ({
   updateIMInstance: vi.fn(),
 }))
 
+const { getRuntimeConfig } = vi.hoisted(() => ({
+  getRuntimeConfig: vi.fn(),
+}))
+
 vi.mock('@/api/knowledge', () => ({
   getDocuments,
   addDocument: vi.fn(),
   deleteDocument: vi.fn(),
   searchKnowledge: vi.fn(),
   uploadDocument,
+}))
+
+vi.mock('@/api/settings', () => ({
+  getRuntimeConfig,
 }))
 
 vi.mock('@/api/skills', () => ({
@@ -161,6 +169,9 @@ describe('Workspace flows', () => {
       },
     ])
     updateIMInstance.mockResolvedValue(true)
+    getRuntimeConfig.mockResolvedValue({
+      knowledge: { enabled: true },
+    })
   })
 
   it('uploads documents from Knowledge Center and can switch to memory tab', async () => {

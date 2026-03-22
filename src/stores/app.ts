@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import type {
   DefineSetupStoreOptions,
@@ -8,16 +8,26 @@ import type {
 } from 'pinia'
 import { checkHealth } from '@/api/client'
 
+type SidecarStatus = 'running' | 'stopped' | 'starting'
+
 const setup = () => {
   const sidecarReady = ref(false)
+  const sidecarStatus = ref<SidecarStatus>('stopped')
   const sidebarCollapsed = ref(false)
   const detailPanelOpen = ref(false)
 
+  const isRestarting = computed(() => sidecarStatus.value === 'starting')
+
   let healthTimer: ReturnType<typeof setInterval> | null = null
+  let restartPromise: Promise<boolean> | null = null
 
   /** 检查 hexclaw 后端连接状态 */
   async function checkConnection() {
-    sidecarReady.value = await checkHealth()
+    const ok = await checkHealth()
+    sidecarReady.value = ok
+    if (!isRestarting.value) {
+      sidecarStatus.value = ok ? 'running' : 'stopped'
+    }
   }
 
   /** 启动健康检查轮询 */
@@ -34,6 +44,38 @@ const setup = () => {
     }
   }
 
+  /**
+   * 重启 sidecar 引擎，状态切换为：starting(黄) → running/stopped
+   * 返回 true 表示重启成功
+   */
+  function restartSidecar(): Promise<boolean> {
+    if (restartPromise) return restartPromise
+
+    sidecarStatus.value = 'starting'
+    sidecarReady.value = false
+
+    restartPromise = (async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke<string>('restart_sidecar')
+
+        const ok = await checkHealth()
+        sidecarStatus.value = ok ? 'running' : 'stopped'
+        sidecarReady.value = ok
+        return ok
+      } catch (e) {
+        console.error('[AppStore] restart sidecar failed:', e)
+        sidecarStatus.value = 'stopped'
+        sidecarReady.value = false
+        return false
+      } finally {
+        restartPromise = null
+      }
+    })()
+
+    return restartPromise
+  }
+
   function toggleSidebar() {
     sidebarCollapsed.value = !sidebarCollapsed.value
   }
@@ -44,11 +86,14 @@ const setup = () => {
 
   return {
     sidecarReady,
+    sidecarStatus,
+    isRestarting,
     sidebarCollapsed,
     detailPanelOpen,
     checkConnection,
     startHealthCheck,
     stopHealthCheck,
+    restartSidecar,
     toggleSidebar,
     toggleDetailPanel,
   }

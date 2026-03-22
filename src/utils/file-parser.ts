@@ -3,6 +3,9 @@
  */
 
 const MAX_TEXT_LENGTH = 50000
+type PdfJsModule = typeof import('pdfjs-dist')
+
+let pdfJsLoaderPromise: Promise<PdfJsModule> | null = null
 
 export interface ParsedDocument {
   text: string
@@ -56,26 +59,53 @@ function truncateText(text: string): string {
   return text.slice(0, MAX_TEXT_LENGTH) + '\n\n[... content truncated, showing first 50000 characters ...]'
 }
 
+async function loadPdfJs() {
+  if (!pdfJsLoaderPromise) {
+    pdfJsLoaderPromise = Promise.all([
+      import('pdfjs-dist/legacy/build/pdf.mjs'),
+      import('pdfjs-dist/legacy/build/pdf.worker.mjs?url'),
+    ]).then(([pdfjsLib, workerUrl]) => {
+      // Let PDF.js manage the worker lifecycle so it can fall back to a fake
+      // worker in environments where spawning a real Worker fails.
+      pdfjsLib.GlobalWorkerOptions.workerPort = null
+      if (pdfjsLib.GlobalWorkerOptions.workerSrc !== workerUrl.default) {
+        pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl.default
+      }
+      return pdfjsLib as PdfJsModule
+    })
+  }
+
+  return pdfJsLoaderPromise
+}
+
 async function parsePDF(file: File, fileName: string): Promise<ParsedDocument> {
-  const pdfjsLib = await import('pdfjs-dist')
+  const pdfjsLib = await loadPdfJs()
 
-  // Use bundled worker — disable worker to avoid CDN dependency in desktop app
-  pdfjsLib.GlobalWorkerOptions.workerSrc = ''
-
-  const arrayBuffer = await file.arrayBuffer()
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise
+  const data = new Uint8Array(await file.arrayBuffer())
+  const loadingTask = pdfjsLib.getDocument({
+    data,
+    useWorkerFetch: false,
+    isOffscreenCanvasSupported: false,
+    isImageDecoderSupported: false,
+    stopAtErrors: true,
+  })
+  const pdf = await loadingTask.promise
   const pageCount = pdf.numPages
   const textParts: string[] = []
 
-  for (let i = 1; i <= pageCount; i++) {
-    const page = await pdf.getPage(i)
-    const content = await page.getTextContent()
-    const pageText = content.items
-      .map((item) => ('str' in item ? item.str : ''))
-      .join(' ')
-    if (pageText.trim()) {
-      textParts.push(pageText)
+  try {
+    for (let i = 1; i <= pageCount; i++) {
+      const page = await pdf.getPage(i)
+      const content = await page.getTextContent()
+      const pageText = content.items
+        .map((item) => ('str' in item ? item.str : ''))
+        .join(' ')
+      if (pageText.trim()) {
+        textParts.push(pageText)
+      }
     }
+  } finally {
+    await pdf.destroy()
   }
 
   const text = truncateText(textParts.join('\n\n'))

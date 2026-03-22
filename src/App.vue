@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ToastProvider from '@/components/common/ToastProvider.vue'
 import ErrorBoundary from '@/components/common/ErrorBoundary.vue'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { useTheme } from '@/composables/useTheme'
+import { useAutoUpdate } from '@/composables/useAutoUpdate'
+import { useToast } from '@/composables/useToast'
 
 const route = useRoute()
 const router = useRouter()
 const isBlankLayout = computed(() => route.meta.layout === 'blank')
+const { t } = useI18n()
+const toast = useToast()
+const { checkForUpdate } = useAutoUpdate()
 
 const toastRef = ref<InstanceType<typeof ToastProvider>>()
 
@@ -33,6 +39,11 @@ onMounted(async () => {
     })
   } catch {
     // 非 Tauri 环境 (浏览器开发模式)
+  }
+
+  const updateResult = await checkForUpdate()
+  if (updateResult.status === 'available' && updateResult.version) {
+    toast.info(t('about.updateAvailableToast', { version: updateResult.version }))
   }
 })
 onUnmounted(() => {

@@ -9,10 +9,14 @@ import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getNavigationChildren } from '@/config/navigation'
+import { useCanvasStore } from '@/stores/canvas'
+import { useToast } from '@/composables/useToast'
 
 const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
+const canvasStore = useCanvasStore()
+const toast = useToast()
 
 const activeTab = ref(route.path.startsWith('/automation/canvas') ? 'canvas' : 'tasks')
 const automationSearch = ref('')
@@ -38,25 +42,43 @@ const tasksViewRef = ref<{ openCreateForm?: () => void; loadJobs?: () => void }>
 async function onImportFlow() {
   const input = document.createElement('input')
   input.type = 'file'
-  input.accept = '.json,.yaml,.yml'
+  input.accept = '.json'
   input.onchange = async () => {
     const file = input.files?.[0]
     if (!file) return
     try {
       const text = await file.text()
       const data = JSON.parse(text)
-      console.log('[AutomationView] imported flow:', data)
-      window.$message?.success?.('Flow imported')
-    } catch (e) {
-      window.$message?.error?.('Import failed: invalid file')
+
+      if (!data.nodes || !Array.isArray(data.nodes)) {
+        toast.error(t('automation.importInvalid', 'Invalid workflow file: missing nodes'))
+        return
+      }
+
+      canvasStore.loadWorkflowToCanvas({
+        id: data.id || `imported-${Date.now()}`,
+        name: data.name || file.name.replace(/\.json$/, ''),
+        description: data.description || '',
+        nodes: data.nodes,
+        edges: data.edges || [],
+      })
+
+      if (activeTab.value !== 'canvas') {
+        activeTab.value = 'canvas'
+      }
+      toast.success(t('automation.importSuccess', 'Workflow imported'))
+    } catch {
+      toast.error(t('automation.importFailed', 'Import failed: invalid JSON'))
     }
   }
   input.click()
 }
 
-function onRefresh() {
+async function onRefresh() {
   if (activeTab.value === 'tasks') {
     tasksViewRef.value?.loadJobs?.()
+  } else {
+    await canvasStore.loadWorkflows()
   }
 }
 

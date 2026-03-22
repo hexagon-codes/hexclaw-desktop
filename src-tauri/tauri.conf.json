@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' http://localhost:16060 ws://localhost:16060; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' http://localhost:16060 ws://localhost:16060; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
     }
   },
   "bundle": {
@@ -68,7 +68,7 @@
       "endpoints": [
         "https://github.com/hexagon-codes/hexclaw-desktop/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYwM0I1NTlCODkxQzUyQTAKUldTZ1VoeUptMVU3OEVVOFlGUStYWnd1WXk5ZFVXWGJ4SUpFdkRTNTdkNVQ0QThKM2ViWVJPOVAK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlGQkVGODc5NjczNUZCREQKUldUZCt6Vm5lZmkrbit1NCtIejdUdVpCVDJHQlhSdndrTjJaTCtGNVpSUmdEZSsrNjRGWFkyQkYK"
     }
   }
 }

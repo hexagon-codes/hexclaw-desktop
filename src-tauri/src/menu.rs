@@ -18,8 +18,7 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         "HexClaw",
         true,
         &[
-            &MenuItemBuilder::with_id("about", "About HexClaw")
-                .build(handle)?,
+            &MenuItemBuilder::with_id("about", "About HexClaw").build(handle)?,
             &PredefinedMenuItem::separator(handle)?,
             &MenuItemBuilder::with_id("preferences", "Settings...")
                 .accelerator("CmdOrCtrl+,")
@@ -100,10 +99,8 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         "Help",
         true,
         &[
-            &MenuItemBuilder::with_id("docs", "Documentation")
-                .build(handle)?,
-            &MenuItemBuilder::with_id("logs", "View Logs")
-                .build(handle)?,
+            &MenuItemBuilder::with_id("docs", "Documentation").build(handle)?,
+            &MenuItemBuilder::with_id("logs", "View Logs").build(handle)?,
         ],
     )?;
 
@@ -132,18 +129,15 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = w.set_focus();
                 } else {
                     // 创建自定义 About 窗口
-                    let _ = WebviewWindowBuilder::new(
-                        app,
-                        "about",
-                        WebviewUrl::App("/about".into()),
-                    )
-                    .title("关于 河蟹 AI")
-                    .inner_size(520.0, 760.0)
-                    .resizable(false)
-                    .minimizable(false)
-                    .maximizable(false)
-                    .center()
-                    .build();
+                    let _ =
+                        WebviewWindowBuilder::new(app, "about", WebviewUrl::App("/about".into()))
+                            .title("关于 河蟹 AI")
+                            .inner_size(520.0, 760.0)
+                            .resizable(false)
+                            .minimizable(false)
+                            .maximizable(false)
+                            .center()
+                            .build();
                 }
             }
             "preferences" => {

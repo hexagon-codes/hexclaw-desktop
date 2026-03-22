@@ -607,8 +607,10 @@ select.hc-input:focus {
   transition: background 0.15s, border-color 0.15s;
 }
 
-.hc-chat-attach-zone:hover {
+.hc-chat-attach-zone:hover,
+.hc-chat-attach-zone--drag {
   border-color: var(--hc-accent);
+  background: color-mix(in srgb, var(--hc-accent) 10%, transparent);
 }
 
 .hc-chat-attach-zone__label { font-size: 12px; color: var(--hc-text-muted); }

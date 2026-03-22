@@ -46,6 +46,15 @@ interface RecentActivity {
 }
 const recentActivity = ref<RecentActivity[]>([])
 
+interface WorkflowEntry {
+  id: string
+  title: string
+  description: string
+  badge: string
+  badgeClass: string
+  route: string
+}
+
 const lastRefreshedText = computed(() => {
   if (!lastRefreshed.value) return ''
   const h = lastRefreshed.value.getHours().toString().padStart(2, '0')
@@ -54,64 +63,99 @@ const lastRefreshedText = computed(() => {
   return `${h}:${m}:${s}`
 })
 
+const workflowEntries = computed<WorkflowEntry[]>(() => [
+  {
+    id: 'knowledge-qa',
+    title: t('dashboard.workflowKnowledgeQaTitle', '企业知识问答'),
+    description: t('dashboard.workflowKnowledgeQaSummary', '围绕企业文档与私有知识，快速完成带来源的问答。'),
+    badge: t('dashboard.workflowEntryChatIm', '聊天 / IM'),
+    badgeClass: 'hc-dash__badge--green',
+    route: '/chat',
+  },
+  {
+    id: 'attachment-qa',
+    title: t('dashboard.workflowAttachmentQaTitle', '附件解析问答'),
+    description: t('dashboard.workflowAttachmentQaSummary', '上传 PDF、Word 等材料后，直接在会话里提问和整理。'),
+    badge: t('dashboard.workflowEntryChat', '聊天'),
+    badgeClass: 'hc-dash__badge--green',
+    route: '/chat',
+  },
+  {
+    id: 'im-duty',
+    title: t('dashboard.workflowImDutyTitle', 'IM 值班助手'),
+    description: t('dashboard.workflowImDutySummary', '把飞书、钉钉等消息接进来，让智能体自动检索并回复。'),
+    badge: t('dashboard.channels', 'IM 通道'),
+    badgeClass: 'hc-dash__badge--purple',
+    route: '/channels',
+  },
+  {
+    id: 'multi-step-task',
+    title: t('dashboard.multiStepTask', '多步骤任务自动执行'),
+    description: t('dashboard.multiStepTaskSummary', '把研究、整理、生成这类任务交给自动化持续执行。'),
+    badge: t('dashboard.orchestration', '编排'),
+    badgeClass: 'hc-dash__badge--blue',
+    route: '/automation',
+  },
+])
+
+async function safeFetch<T>(fn: () => Promise<T>, label: string): Promise<T | null> {
+  try {
+    return await fn()
+  } catch (e) {
+    console.warn(`[Dashboard] ${label}:`, e)
+    return null
+  }
+}
+
 async function fetchStats() {
   try {
     const { apiGet } = await import('@/api/client')
-    try {
-      const res = await apiGet<Record<string, unknown>>('/api/v1/stats')
-      if (res) Object.assign(stats.value, res)
-    } catch {}
+    const res = await safeFetch(
+      () => apiGet<Record<string, unknown>>('/api/v1/stats'),
+      'stats',
+    )
+    if (res) {
+      Object.assign(stats.value, res)
+    }
 
-    try {
-      const { dbGetSessions } = await import('@/db/chat')
-      const sessions = await dbGetSessions()
-      stats.value.totalSessions = sessions?.length || 0
-      const recent = (sessions || []).slice(0, 3).map((s) => ({
-        id: s.id,
-        title: s.title || t('chat.newSessionDefault'),
-        type: 'chat' as const,
-        time: s.updated_at,
-      }))
-      recentActivity.value = recent
-    } catch {}
+    const { dbGetSessions } = await import('@/db/chat')
+    const sessions = await safeFetch(() => dbGetSessions(), 'sessions')
+    stats.value.totalSessions = sessions?.length || 0
+    const recent = (sessions || []).slice(0, 3).map((s) => ({
+      id: s.id,
+      title: s.title || t('chat.newSessionDefault'),
+      type: 'chat' as const,
+      time: s.updated_at,
+    }))
+    recentActivity.value = recent
 
-    try {
-      const { getRoles } = await import('@/api/agents')
-      const agentRes = await getRoles()
-      stats.value.activeAgents = agentRes.roles?.length || 0
-    } catch {}
+    const { getRoles } = await import('@/api/agents')
+    const agentRes = await safeFetch(() => getRoles(), 'agents')
+    stats.value.activeAgents = agentRes?.roles?.length || 0
 
-    try {
-      const { getMcpServers } = await import('@/api/mcp')
-      const mcpRes = await getMcpServers()
-      stats.value.mcpServers = mcpRes.servers?.length || 0
-    } catch {}
+    const { getMcpServers } = await import('@/api/mcp')
+    const mcpRes = await safeFetch(() => getMcpServers(), 'mcp')
+    stats.value.mcpServers = mcpRes?.servers?.length || 0
 
-    try {
-      const { getMemory } = await import('@/api/memory')
-      const memRes = await getMemory()
+    const { getMemory } = await import('@/api/memory')
+    const memRes = await safeFetch(() => getMemory(), 'memory')
+    if (memRes) {
       stats.value.memoryEntries = typeof memRes.content === 'string'
         ? (memRes.content.trim() ? 1 : 0)
         : Object.keys(memRes.content || {}).length
-    } catch {}
+    }
 
-    try {
-      const { getDocuments } = await import('@/api/knowledge')
-      const kRes = await getDocuments()
-      stats.value.knowledgeDocs = kRes.documents?.length || 0
-    } catch {}
+    const { getDocuments } = await import('@/api/knowledge')
+    const kRes = await safeFetch(() => getDocuments(), 'knowledge')
+    stats.value.knowledgeDocs = kRes?.documents?.length || 0
 
-    try {
-      const { getIMInstances } = await import('@/api/im-channels')
-      const imRes = await getIMInstances()
-      stats.value.imChannels = imRes?.length || 0
-    } catch {}
+    const { getIMInstances } = await import('@/api/im-channels')
+    const imRes = await safeFetch(() => getIMInstances(), 'im-channels')
+    stats.value.imChannels = imRes?.length || 0
 
-    try {
-      const { getLLMConfig } = await import('@/api/config')
-      const llmRes = await getLLMConfig()
-      stats.value.llmProviders = Object.keys(llmRes.providers || {}).length
-    } catch {}
+    const { getLLMConfig } = await import('@/api/config')
+    const llmRes = await safeFetch(() => getLLMConfig(), 'llm-config')
+    stats.value.llmProviders = Object.keys(llmRes?.providers || {}).length
   } finally {
     loading.value = false
     lastRefreshed.value = new Date()
@@ -258,26 +302,22 @@ function navigateTo(path: string) {
         </div>
 
         <!-- Quick Actions -->
-        <div class="hc-dash__card">
+        <div class="hc-dash__card hc-dash__card--workflows">
           <div class="hc-dash__card-body">
             <div class="hc-dash__card-title">{{ t('dashboard.realWorkflows', 'Quick Actions') }}</div>
           </div>
           <div class="hc-dash__list">
-            <div class="hc-dash__list-item" @click="navigateTo('/chat')">
-              <div class="hc-dash__list-title">{{ t('dashboard.newChat', 'New Chat') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--green">{{ t('dashboard.local', 'Chat') }}</span>
-            </div>
-            <div class="hc-dash__list-item" @click="navigateTo('/knowledge')">
-              <div class="hc-dash__list-title">{{ t('dashboard.knowledgeBase', 'Knowledge Base') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--amber">{{ t('dashboard.knowledge', 'Knowledge') }}</span>
-            </div>
-            <div class="hc-dash__list-item" @click="navigateTo('/channels')">
-              <div class="hc-dash__list-title">{{ t('dashboard.imWorkflow', 'IM Channels') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--purple">{{ t('dashboard.channels', 'Channels') }}</span>
-            </div>
-            <div class="hc-dash__list-item" @click="navigateTo('/automation')">
-              <div class="hc-dash__list-title">{{ t('dashboard.multiStepTask', 'Automation') }}</div>
-              <span class="hc-dash__badge hc-dash__badge--blue">{{ t('dashboard.orchestration', 'Orchestration') }}</span>
+            <div
+              v-for="entry in workflowEntries"
+              :key="entry.id"
+              class="hc-dash__list-item"
+              @click="navigateTo(entry.route)"
+            >
+              <div>
+                <div class="hc-dash__list-title">{{ entry.title }}</div>
+                <div class="hc-dash__list-desc">{{ entry.description }}</div>
+              </div>
+              <span class="hc-dash__badge" :class="entry.badgeClass">{{ entry.badge }}</span>
             </div>
           </div>
         </div>
@@ -361,6 +401,10 @@ function navigateTo(path: string) {
   min-height: 0;
 }
 
+.hc-dash__card--workflows > .hc-dash__list {
+  overflow: hidden;
+}
+
 /* ── Card ── */
 .hc-dash__card {
   background: var(--hc-bg-card);
@@ -386,7 +430,6 @@ function navigateTo(path: string) {
   line-height: 1.5;
   color: var(--hc-text-muted);
 }
-
 
 /* ── List ── */
 .hc-dash__list {
@@ -423,6 +466,26 @@ function navigateTo(path: string) {
   font-size: 11px;
   line-height: 1.4;
   color: var(--hc-text-muted);
+}
+
+.hc-dash__card--workflows .hc-dash__list {
+  height: 100%;
+  gap: 4px;
+}
+
+.hc-dash__card--workflows .hc-dash__list-item {
+  flex: 1 1 0;
+  min-height: 0;
+  align-items: center;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.hc-dash__card--workflows .hc-dash__list-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 /* ── Badges ── */

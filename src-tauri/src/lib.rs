@@ -12,7 +12,6 @@ pub mod sidecar;
 pub mod tray;
 pub mod window;
 
-use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
 /// 数据库迁移脚本
@@ -53,7 +52,7 @@ fn include_migrations() -> Vec<Migration> {
 pub fn run() {
     env_logger::init();
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         // 插件
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
@@ -72,10 +71,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 已有实例运行时，聚焦主窗口
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
-            }
+            crate::window::show_main_window(app);
         }))
         // 全局状态
         .manage(sidecar::SidecarState::default())
@@ -90,22 +86,26 @@ pub fn run() {
             tray::setup(app)?;
 
             // 启动 hexclaw sidecar 进程
-            match sidecar::spawn_sidecar(&app.handle()) {
+            let sidecar_started = match sidecar::spawn_sidecar(&app.handle()) {
                 Ok(()) => {
                     log::info!("sidecar 进程已启动");
                     eprintln!("[HexClaw] sidecar 进程已启动");
+                    true
                 }
                 Err(e) => {
                     log::error!("sidecar 启动失败: {}", e);
                     eprintln!("[HexClaw] sidecar 启动失败: {}", e);
+                    false
                 }
-            }
+            };
 
             // 异步健康检查，等待 sidecar 就绪
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                sidecar::wait_for_healthy(handle, 30).await;
-            });
+            if sidecar_started {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    sidecar::wait_for_healthy(handle, 30).await;
+                });
+            }
 
             // 全局快捷键
             window::register_shortcuts(app)?;
@@ -133,9 +133,33 @@ pub fn run() {
                 }
             }
         })
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .unwrap_or_else(|e| {
             eprintln!("HexClaw Desktop 启动失败: {}", e);
             std::process::exit(1);
         });
+
+    app.run(|app_handle, event| {
+        #[cfg(target_os = "macos")]
+        match event {
+            tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } => {
+                if !has_visible_windows {
+                    crate::window::show_main_window(app_handle);
+                }
+            }
+            tauri::RunEvent::ExitRequested { code, api, .. } => {
+                if crate::window::consume_app_exit_request() {
+                    return;
+                }
+
+                let _ = code;
+                api.prevent_exit();
+                crate::window::hide_app_to_background(app_handle);
+            }
+            _ => {}
+        }
+    });
 }

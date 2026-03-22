@@ -71,6 +71,26 @@ const showSecrets = ref<Record<string, boolean>>({})
 const configFields = computed(() => CHANNEL_CONFIG_FIELDS[formType.value] || [])
 const currentMeta = computed(() => getChannelMeta(formType.value))
 
+function normalizeInstanceName(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+function suggestUniqueInstanceName(baseName: string): string {
+  const trimmedBaseName = baseName.trim()
+  if (!trimmedBaseName) return ''
+
+  const usedNames = new Set(instances.value.map(instance => normalizeInstanceName(instance.name)))
+  if (!usedNames.has(normalizeInstanceName(trimmedBaseName))) {
+    return trimmedBaseName
+  }
+
+  let index = 2
+  while (usedNames.has(normalizeInstanceName(`${trimmedBaseName} ${index}`))) {
+    index += 1
+  }
+  return `${trimmedBaseName} ${index}`
+}
+
 // ─── Test connection ─────────────────────────────────
 
 const testingId = ref<string | null>(null)
@@ -121,7 +141,7 @@ function openCreate() {
 function selectType(type: IMChannelType) {
   formType.value = type
   const meta = getChannelMeta(type)
-  formName.value = locale.value === 'zh-CN' ? meta.name : meta.nameEn
+  formName.value = suggestUniqueInstanceName(locale.value === 'zh-CN' ? meta.name : meta.nameEn)
   formConfig.value = {}
   formEnabled.value = false
   modalTestResult.value = null
@@ -282,11 +302,8 @@ async function handleDelete(id: string) {
 async function restartEngine() {
   restarting.value = true
   try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    await invoke('restart_sidecar')
-    await new Promise(r => setTimeout(r, 2000))
     const { useAppStore } = await import('@/stores/app')
-    useAppStore().checkConnection()
+    await useAppStore().restartSidecar()
   } catch (e) {
     console.warn('重启 sidecar:', e)
   }

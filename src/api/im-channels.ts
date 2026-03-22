@@ -173,6 +173,26 @@ export function getPlatformHookUrl(instance: Pick<IMInstance, 'name' | 'type'>):
 const STORE_KEY = 'im-instances'
 let _store: Promise<unknown> | null = null
 
+function normalizeInstanceName(name: string): string {
+  return name.trim().toLowerCase()
+}
+
+function assertUniqueInstanceName(
+  instances: Record<string, IMInstance>,
+  name: string,
+  excludeId?: string,
+) {
+  const normalizedTargetName = normalizeInstanceName(name)
+  if (!normalizedTargetName) return
+
+  for (const instance of Object.values(instances)) {
+    if (instance.id === excludeId) continue
+    if (normalizeInstanceName(instance.name) === normalizedTargetName) {
+      throw new Error(`实例名称重复：${name.trim()}。请使用唯一名称`)
+    }
+  }
+}
+
 async function getStore() {
   if (!_store) {
     const p = (async () => {
@@ -286,9 +306,52 @@ async function deleteBackendInstance(name: string) {
   return proxyApiRequest('DELETE', `/api/v1/platforms/instances/${encodeURIComponent(name)}`)
 }
 
+interface BackendInstanceRecord {
+  provider: string
+  name: string
+  enabled: boolean
+  config?: Record<string, unknown>
+}
+
+function stableConfigString(config: Record<string, unknown> | undefined): string {
+  if (!config) return '{}'
+  const sortedEntries = Object.entries(config).sort(([a], [b]) => a.localeCompare(b))
+  return JSON.stringify(Object.fromEntries(sortedEntries))
+}
+
+function isBackendInstanceInSync(
+  local: Pick<IMInstance, 'name' | 'type' | 'enabled' | 'config'>,
+  backend: BackendInstanceRecord | undefined,
+): boolean {
+  if (!backend) return false
+  return (
+    backend.name === local.name &&
+    backend.provider === local.type &&
+    backend.enabled === local.enabled &&
+    stableConfigString(backend.config) === stableConfigString(local.config)
+  )
+}
+
+async function listBackendInstances(): Promise<Map<string, BackendInstanceRecord>> {
+  const result = await proxyApiRequest<{ instances?: BackendInstanceRecord[] }>('GET', '/api/v1/platforms/instances')
+  const items = result?.instances || []
+  return new Map(items.map((item) => [item.name, item]))
+}
+
 async function syncExistingInstancesToBackend(instances: IMInstance[]) {
+  let backendByName = new Map<string, BackendInstanceRecord>()
+
+  try {
+    backendByName = await listBackendInstances()
+  } catch (e) {
+    console.warn('[IM] failed to list backend instances before sync, fallback to full sync:', e)
+  }
+
   await Promise.allSettled(
     instances.map(async (instance) => {
+      if (isBackendInstanceInSync(instance, backendByName.get(instance.name))) {
+        return
+      }
       try {
         await syncBackendInstance(instance)
       } catch (e) {
@@ -322,9 +385,7 @@ export async function ensureIMInstancesSyncedToBackend(): Promise<void> {
 
 /** 获取所有实例列表 */
 export async function getIMInstances(): Promise<IMInstance[]> {
-  const instances = await listStoredInstances()
-  await syncExistingInstancesToBackend(instances)
-  return instances
+  return listStoredInstances()
 }
 
 /** 创建实例 */
@@ -334,11 +395,14 @@ export async function createIMInstance(
   config: Record<string, string>,
   enabled = false,
 ): Promise<IMInstance> {
+  const all = await readAllInstances()
+  const finalName = name.trim()
+  assertUniqueInstanceName(all, finalName)
+
   const id = nanoid(10)
-  const instance: IMInstance = { id, name, type, enabled, config, createdAt: Date.now() }
+  const instance: IMInstance = { id, name: finalName, type, enabled, config, createdAt: Date.now() }
   await syncBackendInstance(instance)
 
-  const all = await readAllInstances()
   all[id] = instance
   await writeInstances(all)
   return instance
@@ -357,6 +421,8 @@ export async function updateIMInstance(
     ...current,
     ...updates,
   }
+  next.name = next.name.trim()
+  assertUniqueInstanceName(all, next.name, id)
 
   if (current.name !== next.name) {
     await syncBackendInstance({ ...next, enabled: false })

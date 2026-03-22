@@ -96,7 +96,10 @@ pub async fn proxy_api_request(
         .map_err(|e| format!("请求失败: {}", e))?;
 
     let status = resp.status().as_u16();
-    let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败: {}", e))?;
 
     if status >= 400 {
         return Err(format!("HTTP {}: {}", status, text));
@@ -254,13 +257,28 @@ pub async fn stream_chat(app: tauri::AppHandle, params: StreamChatParams) -> Res
     Ok(())
 }
 
+/// 聊天附件
+#[derive(Deserialize, Serialize, Clone)]
+pub struct ChatAttachment {
+    pub r#type: String,
+    pub name: String,
+    pub mime: String,
+    #[serde(default)]
+    pub data: String,
+    #[serde(default)]
+    pub url: String,
+}
+
 /// 后端聊天请求参数
 #[derive(Deserialize)]
 pub struct BackendChatParams {
     pub message: String,
     pub session_id: Option<String>,
     pub role: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
     pub user_id: Option<String>,
+    pub attachments: Option<Vec<ChatAttachment>>,
 }
 
 /// 通过 hexclaw 后端 Agent 聊天
@@ -271,12 +289,17 @@ pub struct BackendChatParams {
 pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {
     let url = format!("{}/api/v1/chat", sidecar::base_url());
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "message": params.message,
         "session_id": params.session_id.unwrap_or_default(),
         "user_id": params.user_id.unwrap_or_else(|| "desktop-user".into()),
         "role": params.role.unwrap_or_default(),
+        "provider": params.provider.unwrap_or_default(),
+        "model": params.model.unwrap_or_default(),
     });
+    if let Some(attachments) = params.attachments {
+        body["attachments"] = serde_json::to_value(attachments).unwrap_or_default();
+    }
 
     let client = reqwest::Client::new();
     let resp = client
@@ -289,7 +312,10 @@ pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {
         .map_err(|e| format!("请求失败: {}", e))?;
 
     let status = resp.status().as_u16();
-    let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取响应失败: {}", e))?;
 
     if status >= 400 {
         return Err(format!("HTTP {}: {}", status, text));

@@ -43,11 +43,29 @@ const section = computed<InspectorSection>(() => {
 
 const activeProvider = computed(() => {
   const providers = settingsStore.enabledProviders
-  return providers[0]?.name ?? '—'
+  const defaultProviderId = settingsStore.config?.llm.defaultProviderId
+  return (
+    providers.find((provider) => provider.id === defaultProviderId)?.name ??
+    providers[0]?.name ??
+    '—'
+  )
 })
 
 const activeModel = computed(() => {
-  return settingsStore.config?.llm.defaultModel || 'auto'
+  const defaultModelId = settingsStore.config?.llm.defaultModel
+  const defaultProviderId = settingsStore.config?.llm.defaultProviderId
+  if (!defaultModelId) return 'auto'
+
+  const providers = settingsStore.enabledProviders
+  const preferredProvider = providers.find((provider) => provider.id === defaultProviderId)
+  const preferredModel = preferredProvider?.models.find((model) => model.id === defaultModelId)
+  if (preferredModel) return preferredModel.name || preferredModel.id
+
+  for (const provider of providers) {
+    const model = provider.models.find((item) => item.id === defaultModelId)
+    if (model) return model.name || model.id
+  }
+  return defaultModelId
 })
 
 const activeAgent = computed(() => {
@@ -92,18 +110,29 @@ function nowTime() {
         <KeyValueRow :label="t('inspector.kv.agent')" :value="activeAgent" />
         <KeyValueRow :label="t('inspector.kv.sessions')" :value="String(sessionCount)" />
       </ContextCard>
-      <ContextCard :eyebrow="t('inspector.eyebrow.recentActivity')" :title="t('inspector.demo.activityTitle')">
+      <ContextCard
+        :eyebrow="t('inspector.eyebrow.recentActivity')"
+        :title="t('inspector.demo.activityTitle')"
+      >
         <div class="hc-inspector-context__timeline">
           <TimelineItem
             v-for="(session, idx) in chatStore.sessions.slice(0, 4)"
             :key="session.id"
-            :time="new Date(session.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })"
+            :time="
+              new Date(session.updated_at).toLocaleTimeString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            "
             :text="session.title || t('chat.newSession')"
             :dot-color="idx === 0 ? 'var(--hc-accent)' : '#22c55e'"
           />
         </div>
       </ContextCard>
-      <ContextCard :eyebrow="t('inspector.eyebrow.systemStatus')" :title="t('inspector.demo.activityTitle')">
+      <ContextCard
+        :eyebrow="t('inspector.eyebrow.systemStatus')"
+        :title="t('inspector.demo.activityTitle')"
+      >
         <KeyValueRow label="HexClaw Engine" :value="engineStatus" />
         <KeyValueRow :label="t('inspector.kv.agentCount')" :value="String(agentCount)" />
       </ContextCard>
@@ -121,7 +150,10 @@ function nowTime() {
         <KeyValueRow :label="t('inspector.kv.messages')" :value="String(messageCount)" />
         <KeyValueRow :label="t('inspector.kv.artifacts')" :value="String(artifactCount)" />
       </ContextCard>
-      <ContextCard :eyebrow="t('inspector.eyebrow.recentActivity')" :title="t('inspector.demo.activityTitle')">
+      <ContextCard
+        :eyebrow="t('inspector.eyebrow.recentActivity')"
+        :title="t('inspector.demo.activityTitle')"
+      >
         <div class="hc-inspector-context__timeline">
           <TimelineItem
             v-if="chatStore.isCurrentStreaming"
@@ -132,7 +164,12 @@ function nowTime() {
           <TimelineItem
             v-for="(session, idx) in chatStore.sessions.slice(0, 3)"
             :key="session.id"
-            :time="new Date(session.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })"
+            :time="
+              new Date(session.updated_at).toLocaleTimeString('zh-CN', {
+                hour: '2-digit',
+                minute: '2-digit',
+              })
+            "
             :text="session.title || t('chat.newSession')"
             :dot-color="idx === 0 ? 'var(--hc-accent)' : '#22c55e'"
           />
@@ -202,7 +239,10 @@ function nowTime() {
         :title="t('inspector.demo.logsHeadline')"
         :description="t('inspector.demo.logsDesc')"
       >
-        <KeyValueRow :label="t('inspector.kv.level')" :value="settingsStore.config?.general.log_level ?? 'info'" />
+        <KeyValueRow
+          :label="t('inspector.kv.level')"
+          :value="settingsStore.config?.general.log_level ?? 'info'"
+        />
         <KeyValueRow label="HexClaw Engine" :value="engineStatus" />
       </ContextCard>
     </template>

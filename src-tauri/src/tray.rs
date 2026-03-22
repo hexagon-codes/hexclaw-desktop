@@ -42,35 +42,30 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     TrayIconBuilder::new()
         .icon(icon)
-        .icon_as_template(true)
+        .icon_as_template(false)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                crate::window::show_main_window(app);
             }
             "quick_chat" => {
                 let _ = crate::window::open_quick_chat(app);
             }
             "logs" => {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    crate::window::show_main_window(app);
                     let _ = window.emit("navigate", "/logs");
                 }
             }
             "settings" => {
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    crate::window::show_main_window(app);
                     let _ = window.emit("navigate", "/settings");
                 }
             }
             "quit" => {
-                app.exit(0);
+                crate::window::request_app_exit(app);
             }
             _ => {}
         })
@@ -83,10 +78,7 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             } = event
             {
                 let app = tray.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
+                crate::window::show_main_window(app);
             }
         })
         .build(app)?;

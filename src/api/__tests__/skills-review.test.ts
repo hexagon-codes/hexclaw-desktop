@@ -33,24 +33,31 @@ describe('ClawHub 技能市场 — 功能修复验证', () => {
     expect(raw).not.toContain('const CLAWHUB_FORCE_MOCK = true')
   })
 
-  it('searchClawHub 降级返回 mock 数据（API 不可用时）', async () => {
+  it('searchClawHub 在 API 不可用时抛出错误', async () => {
     const { searchClawHub } = await import('../skills')
-    const results = await searchClawHub()
-
-    expect(results.length).toBeGreaterThan(0)
-    expect(results.some(s => s.name === 'code-review-pro')).toBe(true)
+    await expect(searchClawHub()).rejects.toThrow('API not available in test')
   })
 
-  it('searchClawHub 在真实 API 返回空列表时也会降级到 mock 数据', async () => {
+  it('searchClawHub 在真实 API 返回空列表时保留空列表', async () => {
     apiGet.mockResolvedValueOnce({ skills: [] })
     const { searchClawHub } = await import('../skills')
     const results = await searchClawHub()
 
-    expect(results.length).toBeGreaterThan(0)
-    expect(results.some(s => s.name === 'code-review-pro')).toBe(true)
+    expect(results).toEqual([])
   })
 
   it('searchClawHub 支持分类过滤', async () => {
+    apiGet
+      .mockResolvedValueOnce({
+        skills: [
+          { name: 'code-review-pro', description: 'demo', author: 'openclaw', version: '1.0.0', tags: [], downloads: 1, category: 'coding' },
+        ],
+      })
+      .mockResolvedValueOnce({
+        skills: [
+          { name: 'arxiv-reader', description: 'demo', author: 'openclaw', version: '1.0.0', tags: [], downloads: 1, category: 'research' },
+        ],
+      })
     const { searchClawHub } = await import('../skills')
 
     const codingSkills = await searchClawHub(undefined, 'coding')
@@ -67,5 +74,12 @@ describe('ClawHub 技能市场 — 功能修复验证', () => {
     expect(raw).toContain("await apiPost('/api/v1/skills/install'")
     const installFnBody = raw.slice(raw.indexOf('async function installFromHub'))
     expect(installFnBody).not.toMatch(/if\s*\(CLAWHUB_FORCE_MOCK\)/)
+  })
+
+  it('searchClawHub 在后端返回 error 字段时抛出错误', async () => {
+    apiGet.mockResolvedValueOnce({ error: 'hub unavailable' })
+    const { searchClawHub } = await import('../skills')
+
+    await expect(searchClawHub()).rejects.toThrow('hub unavailable')
   })
 })

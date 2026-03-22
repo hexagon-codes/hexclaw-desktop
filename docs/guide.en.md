@@ -4,7 +4,9 @@
 
 ## Table of Contents
 
+- [Overview](#overview)
 - [Installation & First Launch](#installation--first-launch)
+- [Auto-Update Releases](#auto-update-releases)
 - [Interface Overview](#interface-overview)
 - [AI Chat](#ai-chat)
 - [Agent Management](#agent-management)
@@ -18,6 +20,18 @@
 - [Troubleshooting](#troubleshooting)
 
 ---
+
+## Overview
+
+If you want the fastest way to understand how HexClaw is meant to be used, start with the [Overview](./overview.en.md).
+
+It focuses on three questions:
+
+- what to do after the first launch
+- what each main module is responsible for
+- how Chat, IM, Knowledge, Agents, Integration, and Automation work together
+
+Then come back to this guide for the detailed workflow and page-level instructions.
 
 ## Installation & First Launch
 
@@ -62,6 +76,24 @@ First launch may show "Cannot verify developer". To resolve:
 
 - **Option A**: System Settings → Privacy & Security → find HexClaw → click "Open Anyway"
 - **Option B**: Run in terminal: `xattr -cr /Applications/HexClaw.app`
+
+## Auto-Update Releases
+
+HexClaw already integrates Tauri updater. The app performs a silent update check on launch, and users can manually check or install updates from the **About** page.
+
+If you only need local packaging for testing:
+
+- You do not need an updater private key
+- The `Package` workflow disables updater artifacts automatically when the signing key is missing
+- Those packages can be installed manually, but they cannot be used for in-app auto updates
+
+If you want a real auto-update release:
+
+- You must configure the Tauri updater signing private key
+- You must keep `plugins.updater.pubkey` in [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json)
+- You must publish through the tag-driven `Release` workflow so it can generate signed updater artifacts and `latest.json`
+
+See [Auto-Update Release Guide](./updates.en.md) for the full setup.
 
 ---
 

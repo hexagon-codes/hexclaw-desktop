@@ -1,9 +1,8 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { invoke } from '@tauri-apps/api/core'
 import { RotateCw } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
 import { getGroupedNavItems, isNavActive, type NavGroup } from '@/config/navigation'
@@ -15,24 +14,23 @@ const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 
-const restarting = ref(false)
-
-async function restartEngine() {
-  if (restarting.value) return
-  restarting.value = true
-  try {
-    await invoke<string>('restart_sidecar')
-    await appStore.checkConnection()
-  } catch (e) {
-    console.error('[Sidebar] restart sidecar failed:', e)
-  } finally {
-    restarting.value = false
-  }
-}
-
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
 const groupOrder: NavGroup[] = ['core', 'integration', 'system']
+
+const dotClass = computed(() => {
+  const s = appStore.sidecarStatus
+  if (s === 'running') return 'hc-sidebar__dot--ok'
+  if (s === 'starting') return 'hc-sidebar__dot--starting'
+  return 'hc-sidebar__dot--err'
+})
+
+const engineLabel = computed(() => {
+  const s = appStore.sidecarStatus
+  if (s === 'running') return t('nav.engineRunning', 'Engine running')
+  if (s === 'starting') return t('nav.engineStarting', 'Engine starting…')
+  return t('nav.engineStopped', 'Engine stopped')
+})
 
 function getGroupItems(group: NavGroup) {
   return groups.value[group] ?? []
@@ -74,20 +72,17 @@ function getGroupItems(group: NavGroup) {
     <!-- Footer: engine status -->
     <div class="hc-sidebar__footer">
       <div class="hc-sidebar__engine-row" :title="env.apiBase">
-        <span
-          class="hc-sidebar__dot"
-          :class="appStore.sidecarReady ? 'hc-sidebar__dot--ok' : 'hc-sidebar__dot--err'"
-        />
+        <span class="hc-sidebar__dot" :class="dotClass" />
         <template v-if="!collapsed">
           <span class="hc-sidebar__engine-label" role="button" @click="router.push('/settings')">
-            {{ appStore.sidecarReady ? t('nav.engineRunning', 'Engine running') : t('nav.engineStopped', 'Engine stopped') }}
+            {{ engineLabel }}
           </span>
           <button
             class="hc-sidebar__restart-btn"
-            :class="{ 'hc-sidebar__restart-btn--spinning': restarting }"
+            :class="{ 'hc-sidebar__restart-btn--spinning': appStore.isRestarting }"
             :title="t('nav.restartEngine', 'Restart engine')"
-            :disabled="restarting"
-            @click.stop="restartEngine"
+            :disabled="appStore.isRestarting"
+            @click.stop="appStore.restartSidecar()"
           >
             <RotateCw :size="12" />
           </button>
@@ -306,9 +301,22 @@ function getGroupItems(group: NavGroup) {
 
 .hc-sidebar__dot--ok {
   background: var(--hc-success);
+  transition: background 0.4s ease;
+}
+
+.hc-sidebar__dot--starting {
+  background: var(--hc-warning, #eab308);
+  animation: hc-dot-pulse 1s ease-in-out infinite;
+  transition: background 0.4s ease;
 }
 
 .hc-sidebar__dot--err {
   background: var(--hc-error);
+  transition: background 0.4s ease;
+}
+
+@keyframes hc-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 </style>

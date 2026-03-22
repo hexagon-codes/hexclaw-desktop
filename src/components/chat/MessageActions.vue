@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Copy, RotateCcw, Pencil, ThumbsUp, ThumbsDown } from 'lucide-vue-next'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const { t } = useI18n()
@@ -8,6 +8,7 @@ const { t } = useI18n()
 const props = defineProps<{
   role: 'user' | 'assistant'
   content: string
+  feedback?: 'like' | 'dislike' | null
 }>()
 
 const emit = defineEmits<{
@@ -20,17 +21,7 @@ const emit = defineEmits<{
 }>()
 
 const copied = ref(false)
-const liked = ref<'like' | 'dislike' | null>(null)
-
-function handleLike() {
-  liked.value = liked.value === 'like' ? null : 'like'
-  emit('like')
-}
-
-function handleDislike() {
-  liked.value = liked.value === 'dislike' ? null : 'dislike'
-  emit('dislike')
-}
+const activeFeedback = computed(() => props.feedback ?? null)
 
 async function handleCopy() {
   try {
@@ -47,10 +38,10 @@ async function handleCopy() {
 <template>
   <div class="hc-msg-actions">
     <template v-if="role === 'assistant'">
-      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active': liked === 'like' }" :title="t('chat.liked')" @click="handleLike">
+      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active': activeFeedback === 'like' }" :title="t('chat.liked')" @click="emit('like')">
         <ThumbsUp :size="13" />
       </button>
-      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active-bad': liked === 'dislike' }" :title="t('chat.disliked')" @click="handleDislike">
+      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active-bad': activeFeedback === 'dislike' }" :title="t('chat.disliked')" @click="emit('dislike')">
         <ThumbsDown :size="13" />
       </button>
       <span class="hc-msg-actions__divider" />

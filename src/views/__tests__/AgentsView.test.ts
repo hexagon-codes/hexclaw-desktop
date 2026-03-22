@@ -3,7 +3,6 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
-import AgentsView from '../AgentsView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
 const { getRoles, getAgents, getRules } = vi.hoisted(() => ({
@@ -11,6 +10,39 @@ const { getRoles, getAgents, getRules } = vi.hoisted(() => ({
   getAgents: vi.fn(),
   getRules: vi.fn(),
 }))
+
+vi.mock('@/api/config', () => ({
+  getLLMConfig: vi.fn().mockResolvedValue({
+    default: '智谱',
+    providers: {
+      智谱: {
+        api_key: '****zhipu',
+        base_url: 'https://open.bigmodel.cn/api/paas/v4',
+        model: 'glm-5',
+        compatible: 'openai',
+      },
+    },
+    routing: { enabled: false, strategy: 'cost-aware' },
+    cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+  }),
+  updateLLMConfig: vi.fn(),
+}))
+
+vi.mock('@/utils/secure-store', () => ({
+  saveSecureValue: vi.fn().mockResolvedValue(undefined),
+  loadSecureValue: vi.fn().mockResolvedValue(null),
+  removeSecureValue: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@tauri-apps/plugin-store', () => {
+  class MockLazyStore {
+    async get() { return null }
+    async set() {}
+    async save() {}
+    async delete() {}
+  }
+  return { LazyStore: MockLazyStore }
+})
 
 vi.mock('@/api/agents', () => ({
   getRoles,
@@ -42,6 +74,7 @@ function createTestI18n() {
 }
 
 async function mountView() {
+  const AgentsView = (await import('../AgentsView.vue')).default
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/agents', component: AgentsView }],
@@ -73,6 +106,7 @@ async function mountView() {
 describe('AgentsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    ;(globalThis as Record<string, unknown>).isTauri = true
 
     getRoles.mockResolvedValue({
       roles: [
@@ -109,5 +143,29 @@ describe('AgentsView', () => {
     expect(wrapper.text()).toContain('任务规划')
     expect(wrapper.text()).toContain('约束条件')
     expect(wrapper.text()).toContain('不编造不确定信息')
+  })
+
+  it('uses runtime provider and model options in the register form', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const agentsTab = wrapper.findAll('button').find((button) => button.text().includes('注册的 Agent'))
+    expect(agentsTab?.exists()).toBe(true)
+    await agentsTab!.trigger('click')
+    await flushPromises()
+
+    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('注册智能体'))
+    expect(registerButton?.exists()).toBe(true)
+    await registerButton!.trigger('click')
+    await flushPromises()
+
+    const selects = wrapper.findAll('select')
+    expect(selects).toHaveLength(2)
+    expect(selects[0]!.text()).toContain('智谱')
+
+    await selects[0]!.setValue('智谱')
+    await flushPromises()
+
+    expect(selects[1]!.text()).toContain('glm-5')
   })
 })

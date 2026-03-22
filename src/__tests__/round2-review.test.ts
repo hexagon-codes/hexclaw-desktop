@@ -13,7 +13,7 @@
  * 9. sendChatViaBackend attachments 参数
  * 10. env.d.ts $message 类型声明
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -100,7 +100,7 @@ describe('ChatAttachment 数据完整性', () => {
 
   it('sendChatViaBackend 签名接受 attachments 参数', () => {
     expect(chatApiSrc).toContain('attachments?:')
-    expect(chatApiSrc).toContain("attachments: options?.attachments || null")
+    expect(chatApiSrc).toContain('attachments: options?.attachments || null')
   })
 })
 
@@ -199,7 +199,7 @@ describe('Sidebar — 动态地址和工作区切换', () => {
 
   it('使用 env.apiBase 而非硬编码 IP', () => {
     expect(src).toContain('env.apiBase')
-    expect(src).not.toContain("127.0.0.1:16060")
+    expect(src).not.toContain('127.0.0.1:16060')
   })
 
   it('侧边栏包含引擎与会话相关的点击处理', () => {

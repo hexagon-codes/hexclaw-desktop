@@ -84,9 +84,9 @@ describe('Chat Store — Code Review 暴露问题', () => {
     const store = useChatStore()
     await store.sendMessage('test')
 
-    await new Promise(r => setTimeout(r, 50))
+    await new Promise((r) => setTimeout(r, 50))
 
-    const assistantMessages = store.messages.filter(m => m.role === 'assistant')
+    const assistantMessages = store.messages.filter((m) => m.role === 'assistant')
     expect(assistantMessages.length).toBe(1)
   })
 
@@ -105,11 +105,9 @@ describe('Chat Store — Code Review 暴露问题', () => {
     // 但 persistMessage 不应被调用（因为 sessionId 是 null）
     // 实际上当前代码会用 null 作为 sessionId 调用 persistMessage
     // 这不会崩溃（dbSaveMessage 是 mock），但在真实环境下会写入无效数据
-    if (dbSaveMessage.mock.calls.length > 0) {
-      const sessionIdArg = dbSaveMessage.mock.calls[0]![1]
-      // BUG: sessionId 是 null，会存入无效记录
-      expect(sessionIdArg).toBeNull()
-    }
+    const sessionIdArg = dbSaveMessage.mock.calls[0]?.[1] ?? null
+    // BUG: sessionId 是 null，会存入无效记录
+    expect(sessionIdArg).toBeNull()
   })
 
   // ─── 2.4 短代码块阈值已降低到 5 ─────────────────────
@@ -143,7 +141,7 @@ describe('Chat Store — Code Review 暴露问题', () => {
     await store.sendMessage('third message')
 
     // 等待异步完成
-    await new Promise(r => setTimeout(r, 50))
+    await new Promise((r) => setTimeout(r, 50))
 
     // messages.length > 2 时不应更新标题 — 验证 dbUpdateSessionTitle 未被调用
     // (在第 4+ 条消息后标题应已确定)

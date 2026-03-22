@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { onMounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { RefreshCw, Upload } from 'lucide-vue-next'
+import { FileText, RefreshCw, Upload } from 'lucide-vue-next'
 import KnowledgeView from '@/views/KnowledgeView.vue'
 import MemoryView from '@/views/MemoryView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getNavigationChildren } from '@/config/navigation'
+import { getRuntimeConfig } from '@/api/settings'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -16,6 +17,7 @@ const router = useRouter()
 
 const activeTab = ref(route.path === '/knowledge/memory' ? 'memory' : 'docs')
 const knowledgeSearch = ref('')
+const knowledgeEnabled = ref(true)
 
 const segments = computed(() =>
   getNavigationChildren('knowledge').map((tab) => ({
@@ -24,9 +26,12 @@ const segments = computed(() =>
   })),
 )
 
-watch(() => route.path, (p) => {
-  activeTab.value = p === '/knowledge/memory' ? 'memory' : 'docs'
-})
+watch(
+  () => route.path,
+  (p) => {
+    activeTab.value = p === '/knowledge/memory' ? 'memory' : 'docs'
+  },
+)
 
 watch(activeTab, (tab) => {
   const path = tab === 'memory' ? '/knowledge/memory' : '/knowledge'
@@ -35,6 +40,15 @@ watch(activeTab, (tab) => {
 
 const knowledgeViewRef = ref<InstanceType<typeof KnowledgeView>>()
 
+onMounted(async () => {
+  try {
+    const runtimeConfig = await getRuntimeConfig()
+    knowledgeEnabled.value = runtimeConfig.knowledge.enabled !== false
+  } catch {
+    knowledgeEnabled.value = true
+  }
+})
+
 function onRebuildIndex() {
   knowledgeViewRef.value?.rebuildAll?.()
 }
@@ -42,11 +56,18 @@ function onRebuildIndex() {
 function onUploadDoc() {
   knowledgeViewRef.value?.openFilePicker?.()
 }
+
+function onAddTextDoc() {
+  knowledgeViewRef.value?.openUpload?.()
+}
 </script>
 
 <template>
   <div class="hc-page-shell">
-    <PageToolbar :search-placeholder="t('knowledge.searchPlaceholder', 'Search knowledge...')" @search="knowledgeSearch = $event">
+    <PageToolbar
+      :search-placeholder="t('knowledge.searchPlaceholder', 'Search knowledge...')"
+      @search="knowledgeSearch = $event"
+    >
       <template #tabs>
         <SegmentedControl v-model="activeTab" :segments="segments" />
       </template>
@@ -54,6 +75,8 @@ function onUploadDoc() {
         <template v-if="activeTab === 'docs'">
           <button
             class="hc-btn hc-btn-ghost"
+            :disabled="!knowledgeEnabled"
+            :title="!knowledgeEnabled ? t('knowledge.backendDisabled') : undefined"
             @click="onRebuildIndex"
           >
             <RefreshCw :size="14" />
@@ -61,10 +84,21 @@ function onUploadDoc() {
           </button>
           <button
             class="hc-btn hc-btn-primary"
+            :disabled="!knowledgeEnabled"
+            :title="!knowledgeEnabled ? t('knowledge.backendDisabled') : undefined"
             @click="onUploadDoc"
           >
             <Upload :size="14" />
             {{ t('knowledge.uploadDocument', 'Upload Document') }}
+          </button>
+          <button
+            class="hc-btn hc-btn-ghost"
+            :disabled="!knowledgeEnabled"
+            :title="!knowledgeEnabled ? t('knowledge.backendDisabled') : undefined"
+            @click="onAddTextDoc"
+          >
+            <FileText :size="14" />
+            {{ t('knowledge.addDoc', 'Add Document') }}
           </button>
         </template>
       </template>
@@ -72,10 +106,16 @@ function onUploadDoc() {
     <PageHeader
       :eyebrow="t('knowledge.eyebrow', 'knowledge base')"
       :title="t('knowledge.title', 'Knowledge')"
-      :description="t('knowledge.description', 'Manage documents and memory for contextual AI responses.')"
+      :description="
+        t('knowledge.description', 'Manage documents and memory for contextual AI responses.')
+      "
     />
     <div class="hc-page-shell__content">
-      <KnowledgeView v-if="activeTab === 'docs'" ref="knowledgeViewRef" />
+      <KnowledgeView
+        v-if="activeTab === 'docs'"
+        ref="knowledgeViewRef"
+        :knowledge-enabled="knowledgeEnabled"
+      />
       <MemoryView v-else />
     </div>
   </div>

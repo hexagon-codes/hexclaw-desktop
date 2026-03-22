@@ -39,11 +39,18 @@ describe('im-channels runtime sync', () => {
       return undefined
     })
 
-    invoke.mockResolvedValueOnce(JSON.stringify({ status: 'running' }))
+    invoke
+      .mockResolvedValueOnce(JSON.stringify({ instances: [] }))
+      .mockResolvedValueOnce(JSON.stringify({ status: 'running' }))
 
     const mod = await import('../im-channels')
     await mod.ensureIMInstancesSyncedToBackend()
 
+    expect(invoke).toHaveBeenNthCalledWith(1, 'proxy_api_request', {
+      method: 'GET',
+      path: '/api/v1/platforms/instances',
+      body: null,
+    })
     expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
       method: 'POST',
       path: '/api/v1/platforms/instances',
@@ -54,6 +61,70 @@ describe('im-channels runtime sync', () => {
         config: { token: 'bot-token' },
       }),
     })
+  })
+
+  it('does not resync unchanged enabled instances on startup', async () => {
+    storeGet.mockImplementation(async (key: string) => {
+      if (key === 'im-instances') {
+        return {
+          feishu1: {
+            id: 'feishu1',
+            name: '飞书',
+            type: 'feishu',
+            enabled: true,
+            config: { app_id: 'cli_xxx', app_secret: 'secret' },
+            createdAt: 1,
+          },
+        }
+      }
+      return undefined
+    })
+
+    invoke.mockResolvedValueOnce(JSON.stringify({
+      instances: [
+        {
+          name: '飞书',
+          provider: 'feishu',
+          enabled: true,
+          config: { app_id: 'cli_xxx', app_secret: 'secret' },
+        },
+      ],
+    }))
+
+    const mod = await import('../im-channels')
+    await mod.ensureIMInstancesSyncedToBackend()
+
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
+      method: 'GET',
+      path: '/api/v1/platforms/instances',
+      body: null,
+    })
+  })
+
+  it('reads stored instances without pushing runtime updates', async () => {
+    storeGet.mockImplementation(async (key: string) => {
+      if (key === 'im-instances') {
+        return {
+          feishu1: {
+            id: 'feishu1',
+            name: '飞书',
+            type: 'feishu',
+            enabled: true,
+            config: { app_id: 'cli_xxx', app_secret: 'secret' },
+            createdAt: 1,
+          },
+        }
+      }
+      return undefined
+    })
+
+    const mod = await import('../im-channels')
+    const instances = await mod.getIMInstances()
+
+    expect(instances).toHaveLength(1)
+    expect(instances[0]?.name).toBe('飞书')
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('tests saved enabled instances against backend runtime health endpoint', async () => {
@@ -86,5 +157,31 @@ describe('im-channels runtime sync', () => {
       path: '/api/v1/platforms/instances/Discord%20Main/test',
       body: null,
     })
+  })
+
+  it('rejects duplicate instance names before syncing to backend', async () => {
+    storeGet.mockImplementation(async (key: string) => {
+      if (key === 'im-instances') {
+        return {
+          telegram1: {
+            id: 'telegram1',
+            name: 'Telegram Main',
+            type: 'telegram',
+            enabled: true,
+            config: { token: 'bot-token' },
+            createdAt: 1,
+          },
+        }
+      }
+      return undefined
+    })
+
+    const mod = await import('../im-channels')
+
+    await expect(mod.createIMInstance(' telegram main ', 'telegram', { token: 'another-token' }, true))
+      .rejects
+      .toThrow('实例名称重复')
+
+    expect(invoke).not.toHaveBeenCalled()
   })
 })

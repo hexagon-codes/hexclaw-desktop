@@ -206,19 +206,17 @@ cd hexclaw-desktop
 make install
 # 等价于: pnpm install && cd src-tauri && cargo fetch
 
-# 3. 编译 Go sidecar (首次需要，需要同级目录存在 hexclaw 仓库)
+# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.1.0-beta)
 make sidecar
 
 # 4. 启动开发模式
 make dev
 ```
 
-> **注意**: `make sidecar` 需要在 `hexclaw-desktop` 同级目录下克隆 [hexclaw](https://github.com/hexagon-codes/hexclaw) 仓库：
-> ```
-> work/
-> ├── hexclaw/           # Go 后端仓库
-> └── hexclaw-desktop/   # 本仓库
-> ```
+> **注意**:
+> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.1.0-beta` 到 `/tmp/hexclaw-gith-src` 并编译
+> - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
+> - 技能市场默认读取 `https://github.com/hexagon-codes/hexclaw-hub` 的 `v0.0.1` 标签；运行时可在 `~/.hexclaw/hexclaw.yaml` 的 `skills.hub` 覆盖
 
 ### Make 命令
 
@@ -388,7 +386,7 @@ make sidecar-linux-amd64     # Linux x86_64
 make sidecar-windows-amd64   # Windows x86_64
 ```
 
-Sidecar 二进制输出到 `src-tauri/binaries/` 目录，Tauri 打包时会自动内嵌。
+Sidecar 二进制输出到 `src-tauri/binaries/` 目录，Tauri 打包时会自动内嵌。构建时会注入真实的 tag / commit / built 时间，方便在已安装应用里核对后端版本。
 
 ## 测试
 
@@ -424,7 +422,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` 编译失败
 
 1. 确认 Go >= 1.23 已安装: `go version`
-2. 确认 `hexclaw` 仓库在同级目录: `ls ../hexclaw/cmd/hexclaw`
+2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.1.0-beta`
 3. 确认 Rust 工具链已安装 (用于检测平台 triple): `rustc -vV`
 
 ### `make dev` 启动后白屏

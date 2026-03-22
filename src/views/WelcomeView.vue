@@ -2,7 +2,17 @@
 import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Key, Bot, Sparkles, ArrowRight, ArrowLeft, Check, Loader2, CheckCircle, XCircle } from 'lucide-vue-next'
+import {
+  Key,
+  Bot,
+  Sparkles,
+  ArrowRight,
+  ArrowLeft,
+  Check,
+  Loader2,
+  CheckCircle,
+  XCircle,
+} from 'lucide-vue-next'
 import hexagonLogo from '@/assets/logo.png'
 import { useSettingsStore } from '@/stores/settings'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
@@ -65,13 +75,27 @@ const steps = computed(() => [
 ])
 
 const agentOptions = computed(() => [
-  { role: 'assistant' as const, title: t('welcome.generalAssistant'), description: t('welcome.generalAssistantDesc') },
-  { role: 'coder' as const, title: t('welcome.codeAssistant'), description: t('welcome.codeAssistantDesc') },
-  { role: 'writer' as const, title: t('welcome.writingAssistant'), description: t('welcome.writingAssistantDesc') },
+  {
+    role: 'assistant' as const,
+    title: t('welcome.generalAssistant'),
+    description: t('welcome.generalAssistantDesc'),
+  },
+  {
+    role: 'coder' as const,
+    title: t('welcome.codeAssistant'),
+    description: t('welcome.codeAssistantDesc'),
+  },
+  {
+    role: 'writer' as const,
+    title: t('welcome.writingAssistant'),
+    description: t('welcome.writingAssistantDesc'),
+  },
 ])
 
-const selectedAgentTitle = computed(() =>
-  agentOptions.value.find((agent) => agent.role === selectedAgentRole.value)?.title || t('welcome.generalAssistant'),
+const selectedAgentTitle = computed(
+  () =>
+    agentOptions.value.find((agent) => agent.role === selectedAgentRole.value)?.title ||
+    t('welcome.generalAssistant'),
 )
 
 // ─── 连接测试 ──────────────────────────────────────
@@ -83,7 +107,9 @@ async function testConnection() {
   connectionResult.value = null
   try {
     const preset = PROVIDER_PRESETS[provider.value]
-    const effectiveBaseUrl = isCustomProvider.value ? customBaseUrl.value.trim() : preset.defaultBaseUrl
+    const effectiveBaseUrl = isCustomProvider.value
+      ? customBaseUrl.value.trim()
+      : preset.defaultBaseUrl
     const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
     if (!effectiveModel) {
       connectionResult.value = {
@@ -109,7 +135,9 @@ async function testConnection() {
     })
     connectionResult.value = {
       ok: result.ok,
-      msg: result.message || (result.ok ? t('welcome.connectionTestSuccess') : t('welcome.connectionTestFailed')),
+      msg:
+        result.message ||
+        (result.ok ? t('welcome.connectionTestSuccess') : t('welcome.connectionTestFailed')),
     }
   } catch (e) {
     const errMsg = messageFromUnknownError(e)
@@ -129,47 +157,56 @@ async function finishWizard() {
   finishing.value = true
   finishError.value = ''
   try {
-  if (!settingsStore.config) {
-    await settingsStore.loadConfig()
-  }
+    if (!settingsStore.config) {
+      await settingsStore.loadConfig()
+    }
 
-  const preset = PROVIDER_PRESETS[provider.value]
-  const effectiveBaseUrl = isCustomProvider.value ? customBaseUrl.value.trim() : preset.defaultBaseUrl
-  const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
+    const preset = PROVIDER_PRESETS[provider.value]
+    const effectiveBaseUrl = isCustomProvider.value
+      ? customBaseUrl.value.trim()
+      : preset.defaultBaseUrl
+    const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
 
-  // Build and add provider config
-  const selectedModel = providerModels.value.find(m => m.id === model.value)
-  const providerModelsForConfig: ModelOption[] = isCustomProvider.value
-    ? [{ id: effectiveModel, name: effectiveModel, capabilities: ['text'] as ModelCapability[] }]
-    : selectedModel
-      ? [{ id: selectedModel.id, name: selectedModel.name, capabilities: selectedModel.capabilities ?? ['text'] }]
-      : providerModels.value.length > 0
-        ? [providerModels.value[0]!]
-        : []
-  settingsStore.addProvider({
-    name: isCustomProvider.value ? t('welcome.customProvider', '自定义') : preset.name,
-    type: provider.value,
-    enabled: true,
-    apiKey: requiresApiKey.value ? apiKey.value.trim() : '',
-    baseUrl: effectiveBaseUrl,
-    models: providerModelsForConfig,
-  })
+    // Build and add provider config
+    const selectedModel = providerModels.value.find((m) => m.id === model.value)
+    const providerModelsForConfig: ModelOption[] = isCustomProvider.value
+      ? [{ id: effectiveModel, name: effectiveModel, capabilities: ['text'] as ModelCapability[] }]
+      : selectedModel
+        ? [
+            {
+              id: selectedModel.id,
+              name: selectedModel.name,
+              capabilities: selectedModel.capabilities ?? ['text'],
+            },
+          ]
+        : providerModels.value.length > 0
+          ? [providerModels.value[0]!]
+          : []
+    const createdProvider = settingsStore.addProvider({
+      name: isCustomProvider.value ? t('welcome.customProvider', '自定义') : preset.name,
+      type: provider.value,
+      enabled: true,
+      apiKey: requiresApiKey.value ? apiKey.value.trim() : '',
+      baseUrl: effectiveBaseUrl,
+      models: providerModelsForConfig,
+    })
 
-  // Set default model
-  if (settingsStore.config) {
-    settingsStore.config.llm.defaultModel = effectiveModel
-    settingsStore.config.general.welcomeCompleted = true
-    settingsStore.config.general.defaultAgentRole = selectedAgentRole.value
-    await settingsStore.saveConfig(settingsStore.config)
-  }
+    // Set default model
+    if (settingsStore.config) {
+      settingsStore.config.llm.defaultModel = effectiveModel
+      settingsStore.config.llm.defaultProviderId = createdProvider?.id ?? ''
+      settingsStore.config.general.welcomeCompleted = true
+      settingsStore.config.general.defaultAgentRole = selectedAgentRole.value
+      await settingsStore.saveConfig(settingsStore.config)
+    }
 
-  router.push({
-    path: '/chat',
-    query: {
-      role: selectedAgentRole.value,
-      roleTitle: selectedAgentTitle.value,
-    },
-  })
+    router.push({
+      path: '/chat',
+      query: {
+        role: selectedAgentRole.value,
+        roleTitle: selectedAgentTitle.value,
+      },
+    })
   } catch (e) {
     finishError.value = messageFromUnknownError(e)
   } finally {
@@ -220,11 +257,7 @@ async function skip() {
 
       <!-- 步骤指示器 -->
       <div class="flex items-center justify-center gap-2 mb-4">
-        <div
-          v-for="(s, i) in steps"
-          :key="i"
-          class="flex items-center"
-        >
+        <div v-for="(s, i) in steps" :key="i" class="flex items-center">
           <div
             class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-colors"
             :style="{
@@ -258,7 +291,9 @@ async function skip() {
         <!-- Step 1: LLM 配置 -->
         <div v-if="step === 0" class="space-y-4">
           <div>
-            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Provider</label>
+            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }"
+              >Provider</label
+            >
             <div class="hc-welcome__provider-grid">
               <button
                 v-for="preset in getProviderTypes()"
@@ -267,30 +302,50 @@ async function skip() {
                 :class="{ 'hc-welcome__provider-btn--active': provider === preset.type }"
                 @click="provider = preset.type"
               >
-                <img :src="PROVIDER_LOGOS[preset.type]" :alt="preset.type" class="hc-welcome__provider-logo" />
+                <img
+                  :src="PROVIDER_LOGOS[preset.type]"
+                  :alt="preset.type"
+                  class="hc-welcome__provider-logo"
+                />
                 <span>{{ preset.name }}</span>
               </button>
             </div>
           </div>
           <div>
-            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">API Key</label>
+            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }"
+              >API Key</label
+            >
             <input
               v-model="apiKey"
               type="password"
               class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-              :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+              :style="{
+                background: 'var(--hc-bg-input)',
+                borderColor: 'var(--hc-border)',
+                color: 'var(--hc-text-primary)',
+              }"
               :placeholder="PROVIDER_PRESETS[provider].placeholder"
               :disabled="!requiresApiKey"
             />
-            <p v-if="!requiresApiKey" class="text-xs mt-1" :style="{ color: 'var(--hc-text-muted)' }">
+            <p
+              v-if="!requiresApiKey"
+              class="text-xs mt-1"
+              :style="{ color: 'var(--hc-text-muted)' }"
+            >
               {{ t('welcome.ollamaNoKey') }}
             </p>
-            <p v-else-if="apiKey.trim().length === 0" class="text-xs mt-1" :style="{ color: 'var(--hc-warning, #f59e0b)' }">
+            <p
+              v-else-if="apiKey.trim().length === 0"
+              class="text-xs mt-1"
+              :style="{ color: 'var(--hc-warning, #f59e0b)' }"
+            >
               {{ t('welcome.enterApiKey') }}
             </p>
           </div>
           <div v-if="isCustomProvider">
-            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Base URL</label>
+            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }"
+              >Base URL</label
+            >
             <input
               v-model="customBaseUrl"
               type="text"
@@ -299,7 +354,9 @@ async function skip() {
             />
           </div>
           <div>
-            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }">Model</label>
+            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }"
+              >Model</label
+            >
             <input
               v-if="isCustomProvider"
               v-model="customModelId"
@@ -307,11 +364,7 @@ async function skip() {
               class="hc-input"
               :placeholder="t('welcome.customModelPlaceholder')"
             />
-            <select
-              v-else
-              v-model="model"
-              class="hc-input"
-            >
+            <select v-else v-model="model" class="hc-input">
               <option v-for="m in providerModels" :key="m.id" :value="m.id">
                 {{ m.name }}
               </option>
@@ -325,12 +378,21 @@ async function skip() {
                 color: connectionResult?.ok ? '#16a34a' : 'var(--hc-text-secondary)',
                 background: 'var(--hc-bg-main)',
               }"
-              :disabled="connectionTesting || (requiresApiKey && apiKey.trim().length === 0) || !(isCustomProvider ? customModelId.trim() : model) || (isCustomProvider && !customBaseUrl.trim())"
+              :disabled="
+                connectionTesting ||
+                (requiresApiKey && apiKey.trim().length === 0) ||
+                !(isCustomProvider ? customModelId.trim() : model) ||
+                (isCustomProvider && !customBaseUrl.trim())
+              "
               @click="testConnection"
             >
               <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
-              <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: #22c55e;" />
-              <XCircle v-else-if="connectionResult && !connectionResult.ok" :size="12" style="color: #ef4444;" />
+              <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: #22c55e" />
+              <XCircle
+                v-else-if="connectionResult && !connectionResult.ok"
+                :size="12"
+                style="color: #ef4444"
+              />
               {{ connectionTesting ? t('welcome.testing') : t('welcome.testConnection') }}
             </button>
 
@@ -355,7 +417,8 @@ async function skip() {
             :key="agent.role"
             class="flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors hover:border-blue-500/30"
             :style="{
-              borderColor: selectedAgentRole === agent.role ? 'var(--hc-accent)' : 'var(--hc-border)',
+              borderColor:
+                selectedAgentRole === agent.role ? 'var(--hc-accent)' : 'var(--hc-border)',
               background: selectedAgentRole === agent.role ? 'var(--hc-bg-hover)' : 'transparent',
             }"
             @click="selectedAgentRole = agent.role"
@@ -367,12 +430,19 @@ async function skip() {
               <Bot :size="16" />
             </div>
             <div class="min-w-0">
-              <div class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ agent.title }}</div>
-              <div class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-secondary)' }">{{ agent.description }}</div>
+              <div class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">
+                {{ agent.title }}
+              </div>
+              <div class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-secondary)' }">
+                {{ agent.description }}
+              </div>
             </div>
             <div
               class="ml-auto w-4 h-4 rounded-full border flex items-center justify-center"
-              :style="{ borderColor: selectedAgentRole === agent.role ? 'var(--hc-accent)' : 'var(--hc-border)' }"
+              :style="{
+                borderColor:
+                  selectedAgentRole === agent.role ? 'var(--hc-accent)' : 'var(--hc-border)',
+              }"
             >
               <div
                 v-if="selectedAgentRole === agent.role"
@@ -386,7 +456,9 @@ async function skip() {
         <!-- Step 3: 完成 -->
         <div v-else class="text-center py-4">
           <Sparkles :size="48" class="mx-auto mb-4" :style="{ color: 'var(--hc-accent)' }" />
-          <p class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ t('welcome.step3Desc') }}</p>
+          <p class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">
+            {{ t('welcome.step3Desc') }}
+          </p>
           <p class="text-xs mt-1 mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
             {{ t('welcome.startJourney') }}
           </p>
@@ -395,21 +467,39 @@ async function skip() {
             :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
           >
             <div class="flex items-center justify-between text-xs mb-2">
-              <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryProvider') }}</span>
-              <span :style="{ color: 'var(--hc-text-primary)' }">{{ PROVIDER_PRESETS[provider].name }}</span>
+              <span :style="{ color: 'var(--hc-text-muted)' }">{{
+                t('welcome.summaryProvider')
+              }}</span>
+              <span :style="{ color: 'var(--hc-text-primary)' }">{{
+                PROVIDER_PRESETS[provider].name
+              }}</span>
             </div>
             <div class="flex items-center justify-between text-xs mb-2">
-              <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryModel') }}</span>
-              <span :style="{ color: 'var(--hc-text-primary)' }">{{ isCustomProvider ? customModelId : (providerModels.find((m) => m.id === model)?.name || model) }}</span>
+              <span :style="{ color: 'var(--hc-text-muted)' }">{{
+                t('welcome.summaryModel')
+              }}</span>
+              <span :style="{ color: 'var(--hc-text-primary)' }">{{
+                isCustomProvider
+                  ? customModelId
+                  : providerModels.find((m) => m.id === model)?.name || model
+              }}</span>
             </div>
             <div class="flex items-center justify-between text-xs mb-2">
-              <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryAgent') }}</span>
+              <span :style="{ color: 'var(--hc-text-muted)' }">{{
+                t('welcome.summaryAgent')
+              }}</span>
               <span :style="{ color: 'var(--hc-text-primary)' }">{{ selectedAgentTitle }}</span>
             </div>
             <div class="flex items-center justify-between text-xs">
-              <span :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.summaryConnection') }}</span>
+              <span :style="{ color: 'var(--hc-text-muted)' }">{{
+                t('welcome.summaryConnection')
+              }}</span>
               <span :style="{ color: connectionResult?.ok ? '#22c55e' : '#ef4444' }">
-                {{ connectionResult?.ok ? t('welcome.connectionReady') : t('welcome.connectionPending') }}
+                {{
+                  connectionResult?.ok
+                    ? t('welcome.connectionReady')
+                    : t('welcome.connectionPending')
+                }}
               </span>
             </div>
           </div>
@@ -450,7 +540,9 @@ async function skip() {
           <ArrowRight :size="14" />
         </button>
       </div>
-      <p v-if="finishError" class="text-xs text-center mt-2" style="color: #ef4444;">{{ finishError }}</p>
+      <p v-if="finishError" class="text-xs text-center mt-2" style="color: #ef4444">
+        {{ finishError }}
+      </p>
     </div>
   </div>
 </template>

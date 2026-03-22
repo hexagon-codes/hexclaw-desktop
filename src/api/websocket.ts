@@ -1,16 +1,27 @@
 import { env } from '@/config/env'
 import { logger } from '@/utils/logger'
+import type { ToolCall } from '@/types'
 
-type ChunkCallback = (content: string, done: boolean) => void
-type ReplyCallback = (content: string, sessionId: string) => void
+type ChunkCallback = (message: WsServerMessage) => void
+type ReplyCallback = (message: WsServerMessage) => void
 type ErrorCallback = (error: string) => void
+
+interface WsAttachment {
+  type: string
+  name: string
+  mime: string
+  data?: string
+  url?: string
+}
 
 interface WsMessage {
   type: 'message'
   content: string
   session_id?: string
+  provider?: string
   model?: string
   role?: string
+  attachments?: WsAttachment[]
 }
 
 interface WsUsage {
@@ -28,6 +39,8 @@ interface WsServerMessage {
   done?: boolean
   session_id?: string
   usage?: WsUsage
+  tool_calls?: ToolCall[]
+  metadata?: Record<string, unknown>
 }
 
 class HexClawWS {
@@ -119,7 +132,14 @@ class HexClawWS {
     return this.ws !== null && this.ws.readyState === WebSocket.OPEN
   }
 
-  sendMessage(content: string, sessionId?: string, model?: string, role?: string): void {
+  sendMessage(
+    content: string,
+    sessionId?: string,
+    model?: string,
+    role?: string,
+    attachments?: WsAttachment[],
+    provider?: string,
+  ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.errorCallbacks.forEach((cb) => cb('WebSocket is not connected'))
       return
@@ -129,12 +149,16 @@ class HexClawWS {
       type: 'message',
       content,
       session_id: sessionId,
+      provider,
       model,
       role,
     }
+    if (attachments?.length) {
+      msg.attachments = attachments
+    }
 
     this.ws.send(JSON.stringify(msg))
-    logger.debug(`→ ws: ${content.slice(0, 50)}...`)
+    logger.debug(`→ ws: ${content.slice(0, 50)}... (${attachments?.length ?? 0} attachments)`)
   }
 
   onChunk(callback: ChunkCallback): () => void {
@@ -170,10 +194,10 @@ class HexClawWS {
 
     switch (msg.type) {
       case 'chunk':
-        this.chunkCallbacks.forEach((cb) => cb(msg.content, !!msg.done))
+        this.chunkCallbacks.forEach((cb) => cb(msg))
         break
       case 'reply':
-        this.replyCallbacks.forEach((cb) => cb(msg.content, msg.session_id || ''))
+        this.replyCallbacks.forEach((cb) => cb(msg))
         break
       case 'error':
         this.errorCallbacks.forEach((cb) => cb(msg.content))

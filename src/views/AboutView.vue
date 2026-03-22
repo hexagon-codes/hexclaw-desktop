@@ -1,25 +1,39 @@
 <script setup lang="ts">
-import { computed, watchEffect } from 'vue'
+import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
 import logoUrl from '@/assets/logo.png'
-import hexagonWordmarkUrl from '@/assets/hexagon-wordmark.jpg'
+import hexagonLogoUrl from '@/assets/hexagon-engine-logo.png'
+import { useAutoUpdate } from '@/composables/useAutoUpdate'
+import { useToast } from '@/composables/useToast'
 
 const { t } = useI18n()
+const toast = useToast()
+const {
+  updateAvailable,
+  updateVersion,
+  checking,
+  downloading,
+  checkError,
+  lastCheckedAt,
+  checkForUpdate,
+  installUpdate,
+} = useAutoUpdate()
 
 watchEffect(() => {
   document.title = t('about.title', '关于 河蟹 AI')
 })
 
+const appVersion = ref('v0.0.2')
 const appName = computed(() => t('about.brandAi', '河蟹 AI'))
 
 const techStack = computed(() => [
   { name: 'Tauri v2', detail: 'Rust', color: '#f36b2a' },
-  { name: 'Vue 3', detail: 'TypeScript', color: '#4fc67e' },
-  { name: 'Go Sidecar', detail: 'HexClaw Serve', color: '#2eb3e8' },
+  { name: 'Vue 3', detail: 'TypeScript', color: '#42b883' },
+  { name: 'Go Sidecar', detail: 'HexClaw Serve', color: '#00add8' },
   {
     name: t('about.securityGateway', '安全网关'),
     detail: `PII · ${t('about.injectionGuard', '注入检测')}`,
-    color: '#f2b53b',
+    color: '#f5a623',
   },
 ])
 
@@ -31,6 +45,89 @@ const ecosystem = computed(() => [
   { name: 'hexclaw-desktop', sub: t('about.ecoDesktop', '桌面客户端'), emoji: '🖥', url: 'https://github.com/hexagon-codes/hexclaw-desktop' },
   { name: 'hexagon-ui', sub: t('about.ecoConsole', 'Agent 观测台'), emoji: '📊', url: 'https://github.com/hexagon-codes/hexagon-ui' },
 ])
+
+function formatUpdaterErrorMessage(message: string, install = false) {
+  const normalized = message.toLowerCase()
+  if (normalized.includes('valid release json')) {
+    return t('about.updateInvalidFeed', '当前更新源未提供有效版本信息')
+  }
+  if (normalized.includes('failed to fetch') || normalized.includes('network') || normalized.includes('dns')) {
+    return t('about.updateSourceUnavailable', '暂时无法连接更新源')
+  }
+  return install
+    ? t('about.updateInstallFailed', '安装更新失败')
+    : t('about.updateCheckFailed', '检查更新失败')
+}
+
+const updateStatusTone = computed(() => {
+  if (updateAvailable.value) return 'available'
+  if (checkError.value) return 'error'
+  if (lastCheckedAt.value) return 'success'
+  return 'idle'
+})
+
+const updateStatusText = computed(() => {
+  if (downloading.value) {
+    return t('about.updateInstalling', '正在安装更新')
+  }
+  if (checking.value) {
+    return t('about.updateChecking', '正在检查更新')
+  }
+  if (updateAvailable.value && updateVersion.value) {
+    return t('about.updateAvailableDetail', {
+      version: updateVersion.value,
+    })
+  }
+  if (checkError.value) {
+    return formatUpdaterErrorMessage(checkError.value)
+  }
+  if (lastCheckedAt.value) {
+    return t('about.updateUpToDate', '当前已是最新版本')
+  }
+  return ''
+})
+
+const showUpdateStatus = computed(() => updateStatusText.value.length > 0)
+
+async function handleCheckUpdate() {
+  const result = await checkForUpdate()
+
+  if (result.status === 'available' && result.version) {
+    toast.info(t('about.updateAvailableToast', { version: result.version }))
+    return
+  }
+
+  if (result.status === 'up-to-date') {
+    toast.success(t('about.updateUpToDate', '当前已是最新版本'))
+    return
+  }
+
+  toast.error(formatUpdaterErrorMessage(result.error || '', false))
+}
+
+async function handleInstallUpdate() {
+  const result = await installUpdate()
+  if (result.status === 'no-update') {
+    toast.info(t('about.updateUpToDate', '当前已是最新版本'))
+    return
+  }
+
+  if (result.status === 'error') {
+    toast.error(formatUpdaterErrorMessage(result.error || '', true))
+  }
+}
+
+onMounted(async () => {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const info = await invoke<{ version: string }>('get_platform_info')
+    if (info?.version) {
+      appVersion.value = `v${info.version}`
+    }
+  } catch {
+    // 浏览器开发模式不提供该命令
+  }
+})
 </script>
 
 <template>
@@ -43,31 +140,55 @@ const ecosystem = computed(() => [
       </div>
 
       <h1 class="hc-about-page__name">{{ appName }}</h1>
+      <p class="hc-about-page__tagline">
+        {{ t('about.fullStack', '全栈开源') }} · Apache-2.0 {{ t('about.license', '协议') }}
+      </p>
       <p class="hc-about-page__subtitle">
         {{ t('about.subtitle', '企业级安全的个人 AI Agent 桌面客户端') }}
       </p>
 
       <div class="hc-about-page__meta">
-        <span class="hc-about-page__meta-pill">v0.0.2</span>
-        <span class="hc-about-page__meta-text">Build 1</span>
+        <span class="hc-about-page__meta-pill">{{ appVersion }}</span>
+        <button
+          class="hc-about-page__meta-action hc-about-page__meta-action--secondary"
+          type="button"
+          :disabled="checking || downloading"
+          @click="handleCheckUpdate"
+        >
+          {{ checking ? t('about.updateChecking', '正在检查更新') : t('about.checkUpdates', '检查更新') }}
+        </button>
+        <button
+          v-if="updateAvailable"
+          class="hc-about-page__meta-action hc-about-page__meta-action--primary"
+          type="button"
+          :disabled="checking || downloading"
+          @click="handleInstallUpdate"
+        >
+          {{ downloading ? t('about.updateInstalling', '正在安装更新') : t('about.installUpdate', '下载并安装') }}
+        </button>
         <span class="hc-about-page__meta-text">Apache-2.0</span>
       </div>
+      <p
+        v-if="showUpdateStatus"
+        class="hc-about-page__update-note"
+        :class="`hc-about-page__update-note--${updateStatusTone}`"
+      >
+        {{ updateStatusText }}
+      </p>
     </header>
 
     <main class="hc-about-page__body">
       <section class="hc-about-page__engine">
-        <div class="hc-about-page__engine-brand">
-          <div class="hc-about-page__engine-copy">
-            <span class="hc-about-page__engine-kicker">POWERED BY</span>
-            <img
-              :src="hexagonWordmarkUrl"
-              alt="Hexagon AI Agent Engine"
-              class="hc-about-page__engine-wordmark"
-              draggable="false"
-            />
-          </div>
+        <img
+          :src="hexagonLogoUrl"
+          alt="Hexagon"
+          class="hc-about-page__engine-mark"
+          draggable="false"
+        />
+        <div class="hc-about-page__engine-info">
+          <span class="hc-about-page__engine-kicker">POWERED BY</span>
+          <span class="hc-about-page__engine-name">Hexagon AI Agent Engine</span>
         </div>
-
         <span class="hc-about-page__engine-caps">
           ReAct · Tool {{ t('about.dispatch', '调度') }} · {{ t('about.declarative', '声明式编排') }}
         </span>
@@ -124,13 +245,14 @@ const ecosystem = computed(() => [
   justify-content: flex-start;
   overflow: hidden;
   user-select: none;
-  background: linear-gradient(180deg, #fbfcfe 0%, #f5f7fb 100%);
-  color: #24415f;
+  background: linear-gradient(180deg, #f8fafe 0%, #eef3f9 100%);
+  color: #1a3a5c;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -webkit-app-region: drag;
 }
 
+/* ── Hero ── */
 .hc-about-page__hero {
   position: relative;
   flex-shrink: 0;
@@ -138,24 +260,26 @@ const ecosystem = computed(() => [
   padding: 24px 24px 16px;
   text-align: center;
   background:
-    radial-gradient(circle at 50% -10%, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0) 34%),
-    linear-gradient(145deg, #3a77b2 0%, #468aca 48%, #5ca7e2 100%);
-  border-bottom: 1px solid rgba(76, 130, 181, 0.18);
+    radial-gradient(ellipse at 50% -20%, rgba(255, 255, 255, 0.18) 0%, transparent 60%),
+    linear-gradient(160deg, #1a5580 0%, #3a7ab5 40%, #4a9ad0 100%);
+  border-bottom: 1px solid rgba(76, 130, 181, 0.12);
 }
 
 .hc-about-page__hero-pattern {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.12;
+  opacity: 0.08;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='104' viewBox='0 0 120 104'%3E%3Cpath d='M30 1h60l29 51-29 51H30L1 52 30 1z' fill='none' stroke='white' stroke-width='0.9'/%3E%3C/svg%3E");
   background-size: 120px 104px;
 }
 
 .hc-about-page__hero-mark,
 .hc-about-page__name,
+.hc-about-page__tagline,
 .hc-about-page__subtitle,
-.hc-about-page__meta {
+.hc-about-page__meta,
+.hc-about-page__update-note {
   position: relative;
   z-index: 1;
 }
@@ -168,11 +292,11 @@ const ecosystem = computed(() => [
   align-items: center;
   justify-content: center;
   border-radius: 24px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0.1));
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08));
+  border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    0 16px 34px rgba(22, 77, 126, 0.18);
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 16px 34px rgba(22, 77, 126, 0.2);
   backdrop-filter: blur(10px);
 }
 
@@ -184,17 +308,26 @@ const ecosystem = computed(() => [
 
 .hc-about-page__name {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   line-height: 1.2;
-  font-weight: 700;
+  font-weight: 800;
   color: #ffffff;
+  letter-spacing: -0.01em;
+}
+
+.hc-about-page__tagline {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.75);
 }
 
 .hc-about-page__subtitle {
-  margin: 7px 0 0;
+  margin: 4px 0 0;
   font-size: 11px;
   line-height: 1.45;
-  color: rgba(255, 255, 255, 0.6);
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .hc-about-page__meta {
@@ -212,15 +345,77 @@ const ecosystem = computed(() => [
   font-size: 11px;
   font-weight: 700;
   color: #ffffff;
-  background: rgba(255, 255, 255, 0.16);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 .hc-about-page__meta-text {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.7);
+  color: rgba(255, 255, 255, 0.55);
 }
 
+.hc-about-page__meta-action {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+}
+
+.hc-about-page__meta-action:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.hc-about-page__meta-action:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.hc-about-page__meta-action--secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.hc-about-page__meta-action--primary {
+  background: rgba(87, 213, 140, 0.2);
+  border-color: rgba(87, 213, 140, 0.34);
+}
+
+.hc-about-page__meta-action--primary:hover:not(:disabled) {
+  background: rgba(87, 213, 140, 0.28);
+}
+
+.hc-about-page__update-note {
+  margin: 10px auto 0;
+  max-width: 420px;
+  font-size: 11px;
+  line-height: 1.45;
+  text-align: center;
+  -webkit-app-region: no-drag;
+}
+
+.hc-about-page__update-note--available {
+  color: rgba(220, 255, 230, 0.92);
+}
+
+.hc-about-page__update-note--success {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.hc-about-page__update-note--error {
+  color: rgba(255, 226, 226, 0.92);
+}
+
+.hc-about-page__update-note--idle {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* ── Body ── */
 .hc-about-page__body {
   flex: 1;
   min-height: 0;
@@ -228,62 +423,61 @@ const ecosystem = computed(() => [
   padding: 12px 14px 8px;
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  gap: 8px;
   -webkit-app-region: no-drag;
 }
 
-.hc-about-page__engine,
-.hc-about-page__eco {
-  background: #ffffff;
-  border: 1px solid #dbe5f0;
-  border-radius: 18px;
-  box-shadow: 0 8px 24px rgba(51, 83, 123, 0.05);
-}
-
+/* ── Engine (Powered By) — mirrors hexclaw.net .engine-bar ── */
 .hc-about-page__engine {
-  padding: 10px 12px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
+  padding: 11px 15px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(223, 242, 254, 0.76));
+  border: 1px solid #d4e2f0;
+  box-shadow: 0 16px 36px rgba(95, 179, 234, 0.08);
 }
 
-.hc-about-page__engine-brand {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+.hc-about-page__engine-mark {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  flex-shrink: 0;
+  object-fit: contain;
 }
 
-.hc-about-page__engine-copy {
-  min-width: 0;
+.hc-about-page__engine-info {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  flex: 1;
+  min-width: 0;
 }
 
 .hc-about-page__engine-kicker {
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: 2.8px;
-  color: #4c89c9;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.7px;
+  color: #1a5580;
+  opacity: 0.72;
 }
 
-.hc-about-page__engine-wordmark {
-  display: block;
-  width: 196px;
-  max-width: 100%;
-  height: auto;
+.hc-about-page__engine-name {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1a3a5c;
+  white-space: nowrap;
 }
 
 .hc-about-page__engine-caps {
   flex-shrink: 0;
-  font-size: 9px;
-  color: #8398b2;
+  font-size: 13px;
+  color: #7a9ab8;
   white-space: nowrap;
   text-align: right;
 }
 
+/* ── Tech Stack ── */
 .hc-about-page__tech {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -298,9 +492,9 @@ const ecosystem = computed(() => [
   gap: 8px;
   padding: 9px 12px;
   border-radius: 12px;
-  background: linear-gradient(180deg, #f4f8fc 0%, #edf2f8 100%);
-  border: 1px solid #d7e1ed;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85);
+  background: linear-gradient(180deg, #ffffff 0%, #f6f9fc 100%);
+  border: 1px solid #dce6f0;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .hc-about-page__tech-dot {
@@ -313,7 +507,7 @@ const ecosystem = computed(() => [
   min-width: 0;
   font-size: 12px;
   font-weight: 700;
-  color: #2f445d;
+  color: #2a4562;
 }
 
 .hc-about-page__tech-detail {
@@ -322,13 +516,22 @@ const ecosystem = computed(() => [
   text-align: right;
   font-size: 10px;
   font-weight: 700;
-  color: #9aaabd;
+  color: #94a8bc;
   letter-spacing: 1.2px;
   text-transform: uppercase;
 }
 
+/* ── Ecosystem ── */
 .hc-about-page__eco {
-  padding: 10px 10px 9px;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border: 1px solid #dce6f0;
+  border-radius: 16px;
+  box-shadow: 0 4px 16px rgba(51, 83, 123, 0.04);
+  padding: 12px 12px 10px;
 }
 
 .hc-about-page__eco-title {
@@ -336,34 +539,38 @@ const ecosystem = computed(() => [
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 2.5px;
-  color: #90a2b7;
+  color: #8a9eb5;
 }
 
 .hc-about-page__eco-grid {
+  flex: 1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: minmax(72px, 1fr);
+  align-content: stretch;
   gap: 8px;
 }
 
 .hc-about-page__eco-card {
-  min-height: 72px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 8px 8px;
-  border-radius: 14px;
-  border: 1px solid #e3e8f0;
-  background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid #e4ebf2;
+  background: linear-gradient(180deg, #ffffff 0%, #f9fbfd 100%);
   text-decoration: none;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94);
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
 
 .hc-about-page__eco-card:hover {
   transform: translateY(-1px);
-  border-color: #c8d8ea;
+  border-color: #bdd0e4;
+  box-shadow: 0 4px 12px rgba(51, 83, 123, 0.08);
 }
 
 .hc-about-page__eco-emoji {
@@ -374,44 +581,47 @@ const ecosystem = computed(() => [
 .hc-about-page__eco-name {
   font-size: 11px;
   font-weight: 700;
-  color: #2f445d;
+  color: #2a4562;
   text-align: center;
 }
 
 .hc-about-page__eco-sub {
   font-size: 10px;
-  color: #93a3b7;
+  color: #8a9eb5;
   text-align: center;
 }
 
+/* ── Links ── */
 .hc-about-page__links {
-  margin-top: 1px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
   gap: 6px 12px;
-  padding-top: 0;
+  padding-top: 2px;
 }
 
 .hc-about-page__links a {
   font-size: 11px;
   font-weight: 600;
-  color: #4c89c9;
+  color: #4a88bf;
   text-decoration: none;
   white-space: nowrap;
 }
 
 .hc-about-page__links a:hover {
   text-decoration: underline;
+  color: #3672a8;
 }
 
+/* ── Footer ── */
 .hc-about-page__footer {
-  margin-top: -1px;
+  margin-top: 2px;
+  padding-bottom: 2px;
   text-align: center;
   font-size: 10px;
   line-height: 1.35;
-  color: #98a7b9;
+  color: #94a8bc;
 }
 
 @media (max-width: 460px) {
