@@ -141,6 +141,22 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
+      - name: Resolve Tauri bundle args
+        id: tauri_args
+        shell: bash
+        run: |
+          args="${{ matrix.tauri_args }}"
+          version="$(node -p "require('./package.json').version")"
+          prerelease=false
+          if [[ "$version" == *-* ]]; then
+            prerelease=true
+          fi
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" && "$prerelease" == "true" ]]; then
+            args="$args --bundles nsis"
+          fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
       - name: Build Tauri packages
         uses: tauri-apps/tauri-action@action-v0.6.0
         env:
@@ -148,7 +164,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          args: ${{ matrix.tauri_args }}
+          args: ${{ steps.tauri_args.outputs.args }}
           retryAttempts: 2
 
       - name: Upload packaged artifacts
@@ -162,4 +178,4 @@ jobs:
             ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/appimage/*.AppImage' || '' }}
             ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/deb/*.deb' || '' }}
             ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe' || '' }}
-            ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi' || '' }}
+            ${{ matrix.target == 'x86_64-pc-windows-msvc' && steps.tauri_args.outputs.prerelease != 'true' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi' || '' }}

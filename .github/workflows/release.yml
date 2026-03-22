@@ -154,14 +154,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Require updater signing key for release
+      - name: Disable updater artifacts when signing key is unavailable
+        run: |
+          node -e "const fs=require('fs'); const path='src-tauri/tauri.conf.json'; const cfg=JSON.parse(fs.readFileSync(path,'utf8')); if (!process.env.TAURI_SIGNING_PRIVATE_KEY) { cfg.bundle = { ...(cfg.bundle || {}), createUpdaterArtifacts: false }; fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + '\n'); console.log('Disabled updater artifacts for unsigned release build.'); } else { console.log('Keeping updater artifacts enabled.'); }"
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Resolve Tauri bundle args
+        id: tauri_args
+        shell: bash
         run: |
-          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY is required for tagged releases." >&2
-            exit 1
+          args="${{ matrix.tauri_args }}"
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" && "${{ needs.validate.outputs.prerelease }}" == "true" ]]; then
+            args="$args --bundles nsis"
           fi
+          echo "args=$args" >> "$GITHUB_OUTPUT"
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@action-v0.6.0
@@ -178,7 +185,7 @@ jobs:
           generateReleaseNotes: true
           releaseDraft: false
           prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
-          args: ${{ matrix.tauri_args }}
+          args: ${{ steps.tauri_args.outputs.args }}
           retryAttempts: 2
 
       - name: Upload packaged artifacts
@@ -192,4 +199,4 @@ jobs:
             ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/appimage/*.AppImage' || '' }}
             ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/deb/*.deb' || '' }}
             ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe' || '' }}
-            ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi' || '' }}
+            ${{ matrix.target == 'x86_64-pc-windows-msvc' && needs.validate.outputs.prerelease != 'true' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi' || '' }}
