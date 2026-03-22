@@ -333,7 +333,7 @@ onMounted(async () => {
   loadLLMConfig()
 
   if (!roleQuery) {
-    chatStore.agentRole = settingsStore.config?.general.defaultAgentRole || 'assistant'
+    chatStore.agentRole = ''
   }
 
   // sidecar-ready 事件：后端延迟就绪时重新同步 providers
@@ -824,7 +824,7 @@ watch([() => chatTemperature.value, () => chatMaxTokens.value], syncChatParams)
 
 function newSession() {
   if (chatStore.chatMode !== 'research') {
-    chatStore.agentRole = settingsStore.config?.general.defaultAgentRole || 'assistant'
+    chatStore.agentRole = ''
   }
   chatStore.newSession()
 }

@@ -99,6 +99,7 @@ describe('useChatStore', () => {
     expect(store.messages).toEqual([])
     expect(store.streaming).toBe(false)
     expect(store.currentSessionId).toBeNull()
+    expect(store.agentRole).toBe('')
   })
 
   it('loads sessions', async () => {
@@ -215,7 +216,7 @@ describe('useChatStore', () => {
     expect(dbSaveMessage).toHaveBeenCalled()
   })
 
-  it('sends explicit provider and model to websocket requests', async () => {
+  it('omits role for regular chat websocket requests', async () => {
     wsIsConnected.mockReturnValue(true)
 
     let replyHandler: ((message: {
@@ -240,7 +241,42 @@ describe('useChatStore', () => {
       'hello',
       's1',
       'glm-5',
-      'assistant',
+      undefined,
+      undefined,
+      '智谱',
+    )
+
+    replyHandler?.({ content: '已完成' })
+    await promise
+  })
+
+  it('sends explicit agent role to websocket requests when entering a specialist mode', async () => {
+    wsIsConnected.mockReturnValue(true)
+
+    let replyHandler: ((message: {
+      content: string
+      metadata?: Record<string, unknown>
+    }) => void) | undefined
+
+    wsOnReply.mockImplementation((cb) => {
+      replyHandler = cb
+      return () => {}
+    })
+
+    const store = useChatStore()
+    store.currentSessionId = 's1'
+    store.chatParams.provider = '智谱'
+    store.chatParams.model = 'glm-5'
+    store.agentRole = 'coder'
+
+    const promise = store.sendMessage('hello')
+    await Promise.resolve()
+
+    expect(wsSendMessage).toHaveBeenCalledWith(
+      'hello',
+      's1',
+      'glm-5',
+      'coder',
       undefined,
       '智谱',
     )
@@ -377,6 +413,7 @@ describe('useChatStore', () => {
     expect(sendChatViaBackend).toHaveBeenCalledWith('走 HTTP', expect.objectContaining({
       provider: '智谱',
       model: 'glm-5',
+      role: undefined,
     }))
   })
 })

@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
+import { useSettingsStore } from '@/stores/settings'
 
 // ─── Mock API 模块 ──────────────────────────────────────
 vi.mock('@/api/chat', () => ({
@@ -109,9 +110,10 @@ vi.mock('vue-router', () => ({
 /**
  * 挂载 ChatView 的辅助函数
  */
-function mountChatView() {
+function mountChatView(options?: { setup?: () => void }) {
   const pinia = createPinia()
   setActivePinia(pinia)
+  options?.setup?.()
   const i18n = createTestI18n()
 
   return mount(ChatView, {
@@ -177,6 +179,49 @@ describe('ChatView — E2E 关键路径', () => {
     // 发送按钮存在（title="发送 (Enter)"）
     const sendBtn = wrapper.find('button[title="发送 (Enter)"]')
     expect(sendBtn.exists()).toBe(true)
+  })
+
+  it('keeps regular chat on Xiaoxie default persona even if an old default role is stored', async () => {
+    mountChatView({
+      setup: () => {
+        const settingsStore = useSettingsStore()
+        settingsStore.config = {
+          llm: {
+            providers: [],
+            defaultModel: '',
+            defaultProviderId: '',
+          },
+          security: {
+            gateway_enabled: true,
+            injection_detection: true,
+            pii_filter: false,
+            content_filter: true,
+            max_tokens_per_request: 8192,
+            rate_limit_rpm: 60,
+          },
+          general: {
+            language: 'zh-CN',
+            log_level: 'info',
+            data_dir: '',
+            auto_start: false,
+            defaultAgentRole: 'assistant',
+          },
+          notification: {
+            system_enabled: true,
+            sound_enabled: false,
+            agent_complete: true,
+          },
+          mcp: {
+            default_protocol: 'stdio',
+          },
+        }
+      },
+    })
+    await flushPromises()
+
+    const { useChatStore } = await import('@/stores/chat')
+    const store = useChatStore()
+    expect(store.agentRole).toBe('')
   })
 
   // ────────────────────────────────────────────────────

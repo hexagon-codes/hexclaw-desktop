@@ -29,7 +29,7 @@ const finishing = ref(false)
 const apiKey = ref('')
 const provider = ref<ProviderType>('openai')
 const model = ref('gpt-4o')
-const selectedAgentRole = ref<'assistant' | 'coder' | 'writer'>('assistant')
+const selectedAgentRole = ref<'' | 'coder' | 'writer'>('')
 
 /** Available models based on selected provider */
 const providerModels = computed(() => {
@@ -76,7 +76,7 @@ const steps = computed(() => [
 
 const agentOptions = computed(() => [
   {
-    role: 'assistant' as const,
+    role: '' as const,
     title: t('welcome.generalAssistant'),
     description: t('welcome.generalAssistantDesc'),
   },
@@ -196,17 +196,21 @@ async function finishWizard() {
       settingsStore.config.llm.defaultModel = effectiveModel
       settingsStore.config.llm.defaultProviderId = createdProvider?.id ?? ''
       settingsStore.config.general.welcomeCompleted = true
-      settingsStore.config.general.defaultAgentRole = selectedAgentRole.value
+      settingsStore.config.general.defaultAgentRole = ''
       await settingsStore.saveConfig(settingsStore.config)
     }
 
-    router.push({
-      path: '/chat',
-      query: {
-        role: selectedAgentRole.value,
-        roleTitle: selectedAgentTitle.value,
-      },
-    })
+    if (selectedAgentRole.value) {
+      router.push({
+        path: '/chat',
+        query: {
+          role: selectedAgentRole.value,
+          roleTitle: selectedAgentTitle.value,
+        },
+      })
+    } else {
+      router.push('/chat')
+    }
   } catch (e) {
     finishError.value = messageFromUnknownError(e)
   } finally {

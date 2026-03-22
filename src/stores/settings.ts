@@ -46,7 +46,7 @@ function defaultConfig(): AppConfig {
       log_level: 'info',
       data_dir: '',
       auto_start: false,
-      defaultAgentRole: 'assistant',
+      defaultAgentRole: '',
     },
     notification: {
       system_enabled: true,

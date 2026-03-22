@@ -105,8 +105,8 @@ export const useChatStore = defineStore('chat', () => {
   const chatMode = ref<ChatMode>('chat')
   const execMode = ref<ExecMode>('craft')
 
-  // Agent 角色 (assistant/researcher/writer/coder/translator/analyst)
-  const agentRole = ref<string>('assistant')
+  // 显式 Agent 角色；为空时走后端默认「小蟹」systemPrompt
+  const agentRole = ref<string>('')
 
   // Artifacts 状态
   const artifacts = ref<Artifact[]>([])
@@ -480,7 +480,7 @@ export const useChatStore = defineStore('chat', () => {
     const result = await withTimeout(
       sendChatViaBackend(text, {
         sessionId,
-        role: agentRole.value || 'assistant',
+        role: agentRole.value || undefined,
         provider: chatParams.value.provider,
         model: chatParams.value.model,
         attachments: attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data })),
