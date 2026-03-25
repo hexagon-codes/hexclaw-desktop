@@ -254,6 +254,32 @@ function formatRelativeTime(ts: string): string {
           :segments="levelTabs.map(l => ({ key: l.key, label: l.label }))"
         />
       </template>
+      <template #center>
+        <div class="hc-logs__toolbar-filters">
+          <select
+            v-if="availableDomains.length > 0"
+            class="hc-input hc-logs__domain"
+            :value="logsStore.filter.domain || ''"
+            @change="setDomain(($event.target as HTMLSelectElement).value)"
+          >
+            <option value="">{{ t('logs.allDomains') }}</option>
+            <option v-for="domain in availableDomains" :key="domain" :value="domain">
+              {{ domain }} ({{ domainCounts[domain] }})
+            </option>
+          </select>
+          <div class="hc-logs__search">
+            <SearchInput
+              :model-value="logsStore.filter.keyword || ''"
+              :placeholder="t('logs.searchPlaceholder')"
+              @update:model-value="logsStore.setFilter({ keyword: $event || undefined })"
+            />
+          </div>
+          <label class="hc-logs__autoscroll">
+            <input v-model="autoScroll" type="checkbox" class="accent-blue-500 w-3 h-3" />
+            <span>Auto-scroll</span>
+          </label>
+        </div>
+      </template>
       <template #actions>
         <button class="hc-btn hc-btn-ghost" @click="exportLogs">
           <Download :size="14" />
@@ -279,82 +305,12 @@ function formatRelativeTime(ts: string): string {
     </PageToolbar>
 
     <PageHeader
-      :eyebrow="t('logs.eyebrow', 'diagnostics')"
+      :eyebrow="t('logs.eyebrow', '诊断')"
       :title="t('logs.title')"
       :description="t('logs.description')"
-      :status="logsStore.connected ? t('logs.connected', 'Connected') : t('logs.disconnected', 'Disconnected')"
+      :status="logsStore.connected ? t('logs.connected', '已连接') : t('logs.disconnected', '未连接')"
       :status-variant="logsStore.connected ? 'success' : 'error'"
     />
-
-    <div class="hc-logs__filters">
-      <div class="hc-logs__filters-left">
-        <select
-          v-if="availableDomains.length > 0"
-          class="hc-input hc-logs__domain"
-          :value="logsStore.filter.domain || ''"
-          @change="setDomain(($event.target as HTMLSelectElement).value)"
-        >
-          <option value="">{{ t('logs.allDomains') }}</option>
-          <option v-for="domain in availableDomains" :key="domain" :value="domain">
-            {{ domain }} ({{ domainCounts[domain] }})
-          </option>
-        </select>
-        <div class="hc-logs__search">
-          <SearchInput
-            :model-value="logsStore.filter.keyword || ''"
-            :placeholder="t('logs.searchPlaceholder')"
-            @update:model-value="logsStore.setFilter({ keyword: $event || undefined })"
-          />
-        </div>
-      </div>
-      <div class="hc-logs__filters-right">
-        <label class="hc-logs__autoscroll">
-          <input v-model="autoScroll" type="checkbox" class="accent-blue-500 w-3 h-3" />
-          <span>Auto-scroll</span>
-        </label>
-        <span class="hc-logs__count">
-          {{ logsStore.filteredEntries.length }}
-        </span>
-      </div>
-    </div>
-
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-3 px-6 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-      <div class="rounded-xl border px-4 py-3" :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }">
-        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('logs.summaryVisible') }}</div>
-        <div class="text-lg font-semibold mt-1" :style="{ color: 'var(--hc-text-primary)' }">{{ logsStore.filteredEntries.length }}</div>
-      </div>
-      <div class="rounded-xl border px-4 py-3" :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }">
-        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('logs.summaryErrors') }}</div>
-        <div class="text-lg font-semibold mt-1" style="color: #dc2626;">{{ errorCount }}</div>
-      </div>
-      <div class="rounded-xl border px-4 py-3" :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }">
-        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('logs.summaryWarnings') }}</div>
-        <div class="text-lg font-semibold mt-1" style="color: #b45309;">{{ warnCount }}</div>
-      </div>
-      <div class="rounded-xl border px-4 py-3" :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }">
-        <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('logs.summaryDomains') }}</div>
-        <div class="text-lg font-semibold mt-1" :style="{ color: 'var(--hc-text-primary)' }">{{ availableDomains.length }}</div>
-      </div>
-    </div>
-
-    <div v-if="recentFailures.length > 0" class="px-6 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-      <div class="text-sm font-medium mb-3" :style="{ color: 'var(--hc-text-primary)' }">{{ t('logs.recentFailures') }}</div>
-      <div class="space-y-2">
-        <div
-          v-for="entry in recentFailures"
-          :key="`failure-${entry.id}`"
-          class="rounded-xl border px-4 py-3"
-          :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-        >
-          <div class="flex items-center gap-2 text-xs mb-1" :style="{ color: 'var(--hc-text-muted)' }">
-            <span :style="{ color: levelColor[entry.level] || 'var(--hc-text-secondary)' }">{{ entry.level.toUpperCase() }}</span>
-            <span>{{ entry.domain || entry.source || '-' }}</span>
-            <span>{{ formatRelativeTime(entry.timestamp) }}</span>
-          </div>
-          <div class="text-sm" :style="{ color: 'var(--hc-text-primary)' }">{{ entry.message }}</div>
-        </div>
-      </div>
-    </div>
 
     <!-- 日志流 -->
     <div ref="logsContainer" class="flex-1 overflow-y-auto font-mono text-xs" @scroll="handleScroll">
@@ -364,7 +320,7 @@ function formatRelativeTime(ts: string): string {
         class="border-b border-white/[0.03]"
       >
         <div
-          class="flex items-start gap-3 px-6 py-1 hover:bg-white/[0.02] cursor-pointer"
+          class="hc-logs__row flex items-start gap-3 px-6 py-1.5 cursor-pointer"
           @click="toggleExpand(entry.id)"
         >
           <component
@@ -415,77 +371,66 @@ function formatRelativeTime(ts: string): string {
       </div>
     </div>
 
-    <!-- 统计栏 -->
+    <!-- 底部状态栏 -->
     <div
-      v-if="logsStore.stats"
-      class="flex items-center gap-6 px-6 py-2 border-t text-xs"
+      class="flex items-center gap-6 px-6 py-1.5 border-t text-[11px]"
       :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-muted)', background: 'var(--hc-bg-sidebar)' }"
     >
-      <span>Total: {{ logsStore.stats.total }}</span>
-      <span :style="{ color: levelColor.info }">Info: {{ logsStore.stats.by_level?.info || 0 }}</span>
-      <span :style="{ color: levelColor.warn }">Warn: {{ logsStore.stats.by_level?.warn || 0 }}</span>
-      <span :style="{ color: levelColor.error }">Error: {{ logsStore.stats.by_level?.error || 0 }}</span>
-      <span>{{ logsStore.stats.requests_per_minute?.toFixed(1) || 0 }} req/min</span>
+      <span class="flex items-center gap-1.5">
+        <span
+          class="w-1.5 h-1.5 rounded-full"
+          :style="{ background: logsStore.connected ? 'var(--hc-success, #34C759)' : 'var(--hc-error, #FF3B30)' }"
+        />
+        {{ logsStore.connected ? t('logs.connected', '已连接') : t('logs.disconnected', '未连接') }}
+      </span>
+      <span>Total: {{ logsStore.filteredEntries.length }}</span>
+      <span :style="{ color: levelColor.info }">Info: {{ levelCounts.info }}</span>
+      <span :style="{ color: levelColor.warn }">Warn: {{ levelCounts.warn }}</span>
+      <span :style="{ color: levelColor.error }">Error: {{ levelCounts.error }}</span>
+      <span v-if="logsStore.stats">{{ logsStore.stats.requests_per_minute?.toFixed(1) || 0 }} req/min</span>
     </div>
   </div>
 </template>
 
 <style scoped>
-.hc-logs__filters {
+.hc-logs__row {
+  transition: background 0.12s;
+}
+
+.hc-logs__row:hover {
+  background: var(--hc-bg-hover);
+}
+
+.hc-logs__toolbar-filters {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-  padding: 0 18px 10px;
-  margin-top: -4px;
-  border-bottom: 1px solid var(--hc-border);
-}
-
-.hc-logs__filters-left,
-.hc-logs__filters-right {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.hc-logs__filters-left {
-  flex: 1;
-  min-width: 0;
-}
-
-.hc-logs__filters-right {
-  justify-content: flex-end;
+  gap: 8px;
 }
 
 .hc-logs__domain {
   width: auto;
-  min-width: 148px;
-  height: 34px;
-  padding: 0 34px 0 12px;
-  line-height: 32px;
+  min-width: 120px;
+  height: 28px;
+  padding: 0 28px 0 10px;
+  line-height: 26px;
   box-sizing: border-box;
+  font-size: 12px;
 }
 
 .hc-logs__search :deep(.hc-search) {
-  width: 240px;
+  width: 200px;
+  height: 28px;
 }
 
 .hc-logs__autoscroll {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   cursor: pointer;
   user-select: none;
   font-size: 11px;
   color: var(--hc-text-muted);
-}
-
-.hc-logs__count {
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-  color: var(--hc-text-muted);
+  white-space: nowrap;
 }
 
 .hc-spin-icon {
@@ -503,23 +448,12 @@ function formatRelativeTime(ts: string): string {
 }
 
 @media (max-width: 1100px) {
-  .hc-logs__filters {
-    align-items: flex-start;
-  }
-
-  .hc-logs__filters-left,
-  .hc-logs__filters-right {
-    width: 100%;
-    justify-content: flex-start;
-  }
-
-  .hc-logs__search {
-    flex: 1;
-    min-width: 180px;
+  .hc-logs__toolbar-filters {
+    flex-wrap: wrap;
   }
 
   .hc-logs__search :deep(.hc-search) {
-    width: 100%;
+    width: 160px;
   }
 }
 </style>

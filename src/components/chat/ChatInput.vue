@@ -79,7 +79,7 @@ function handleKeydown(e: KeyboardEvent) {
   if (showMention.value && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
     mentionRef.value?.handleKeydown(e); return
   }
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+  if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.metaKey) { e.preventDefault(); handleSend() }
 }
 
 function handleInput() {

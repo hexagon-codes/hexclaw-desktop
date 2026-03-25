@@ -827,6 +827,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                 <div class="hc-msg__body hc-msg__body--user">
                   <div class="hc-msg__bubble-wrap hc-msg__bubble-wrap--user">
                     <div
+                      v-if="editingMsgId !== msg.id"
                       class="hc-msg__bubble hc-msg__bubble--user"
                       :title="formatFullTime(msg.timestamp)"
                     >
@@ -841,7 +842,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
                       </div>
-                      <template v-if="editingMsgId !== msg.id">{{ msg.content }}</template>
+                      {{ msg.content }}
                     </div>
                     <!-- DeepSeek 风格原位编辑框（独立圆角卡片） -->
                     <div v-if="editingMsgId === msg.id" class="hc-msg__edit-card">

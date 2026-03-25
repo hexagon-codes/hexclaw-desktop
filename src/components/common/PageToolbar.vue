@@ -24,6 +24,7 @@ function onInput(e: Event) {
           @input="onInput"
         />
       </div>
+      <slot name="center" />
     </div>
     <div class="hc-toolbar__right">
       <slot name="actions" />

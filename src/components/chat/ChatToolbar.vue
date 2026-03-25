@@ -21,7 +21,7 @@ const emit = defineEmits<{
 }>()
 
 const segments = computed(() => [
-  { key: 'chat' as const, label: t('chat.chat') },
+  { key: 'chat' as const, label: t('chat.modeChat') },
   { key: 'artifacts' as const, label: t('chat.artifacts') },
   { key: 'history' as const, label: t('chat.history') },
 ])
@@ -70,3 +70,81 @@ defineProps<{
     </div>
   </div>
 </template>
+
+<style scoped>
+.hc-chat__toolbar {
+  flex-shrink: 0;
+  border-bottom: 0.5px solid var(--hc-divider);
+  background: var(--hc-bg-panel);
+  padding: 0 14px;
+}
+
+.hc-chat__toolbar-row {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hc-chat__stat-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+
+.hc-token-badge {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  white-space: nowrap;
+}
+
+.hc-chat__toolbar-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  position: relative;
+  transition: background 0.15s, color 0.15s;
+}
+
+.hc-chat__toolbar-btn:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+
+.hc-chat__toolbar-btn--active {
+  color: var(--hc-accent);
+  background: var(--hc-accent-subtle, rgba(0, 122, 255, 0.08));
+}
+
+.hc-chat__toolbar-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--hc-divider);
+  margin: 0 2px;
+}
+
+.hc-chat__artifact-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 14px;
+  height: 14px;
+  border-radius: 7px;
+  background: var(--hc-accent);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+}
+</style>

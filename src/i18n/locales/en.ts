@@ -130,7 +130,7 @@ export default {
     fileImage: 'Image',
     fileVideo: 'Video',
     fileGeneric: 'File',
-    aboutTokens: 'Approx. {n} tokens',
+    aboutTokens: '≈ {n} tokens',
     knowledgeHit: 'Knowledge hit',
     memoryHit: 'Memory hit',
     routeSource: 'Route Source',

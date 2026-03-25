@@ -136,7 +136,7 @@ export default {
     fileImage: '图片',
     fileVideo: '视频',
     fileGeneric: '文件',
-    aboutTokens: '约 {n} tokens',
+    aboutTokens: '≈ {n} 词元',
     knowledgeHit: '知识库命中',
     memoryHit: '记忆命中',
     routeSource: '路由来源',
