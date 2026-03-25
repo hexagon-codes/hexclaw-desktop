@@ -86,12 +86,14 @@ If you only need local packaging for testing:
 - You do not need an updater private key
 - The `Package` workflow disables updater artifacts automatically when the signing key is missing
 - Those packages can be installed manually, but they cannot be used for in-app auto updates
+- macOS targets still require Apple signing / notarization secrets; otherwise the workflow fails early instead of producing browser-downloaded bundles that Gatekeeper treats as "damaged"
 
 If you want a real auto-update release:
 
 - You must configure the Tauri updater signing private key
 - You must keep `plugins.updater.pubkey` in [src-tauri/tauri.conf.json](../src-tauri/tauri.conf.json)
 - You must publish through the tag-driven `Release` workflow so it can generate signed updater artifacts and `latest.json`
+- If macOS targets are included, you must also configure Apple code-signing and notarization secrets
 
 See [Auto-Update Release Guide](./updates.en.md) for the full setup.
 
@@ -187,7 +189,7 @@ Configure in **Settings → LLM Configuration**: select Provider, enter API Key 
 
 ### Quick Chat
 
-Press `⌘+Shift+H` (macOS) or `Ctrl+Shift+H` (Windows/Linux) to summon the Quick Chat window from anywhere, without switching to the main interface.
+Press `⌘+Shift+H` (macOS) or `Ctrl+Shift+H` (Windows/Linux) to summon the Quick Chat window from anywhere, without switching to the main interface. Quick Chat uses the same Auto-RAG and model parameter pass-through capabilities as the main chat.
 
 ---
 
@@ -239,7 +241,13 @@ RAG (Retrieval-Augmented Generation) based knowledge management:
 
 #### Using the Knowledge Base
 
-During conversations, Agents automatically retrieve relevant content from the knowledge base as context to provide more accurate answers. You can also search documents and rebuild indexes.
+During conversations, Auto-RAG automatically searches the knowledge base before sending each message. Hits with a relevance score >= 0.35 are injected into the backend context, giving the AI more accurate reference material. The user still sees only their original question in the chat UI; the knowledge context is visible only on the backend side.
+
+You can also search documents and rebuild indexes.
+
+#### Document Detail View
+
+Click a document in the knowledge base list to view its full content. The system first tries `GET /documents/{id}` to fetch the complete body; if the backend does not support that endpoint, it falls back to searching the document title and reassembling the content from chunks in order.
 
 ### Memory System (Memory Tab)
 
@@ -356,8 +364,8 @@ Real-time log viewing and filtering:
 | Model | Model name |
 | API Key | Provider API key |
 | Base URL | Custom API endpoint (optional) |
-| Temperature | Generation randomness (0-2) |
-| Max Tokens | Maximum output token count |
+| Temperature | Generation randomness (0-2), passed through to backend (WebSocket and HTTP paths) |
+| Max Tokens | Maximum output token count, passed through to backend (WebSocket and HTTP paths) |
 
 ### Security Configuration
 

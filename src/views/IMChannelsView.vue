@@ -358,7 +358,7 @@ async function copyWebhookUrl() {
             :placeholder="t('imChannels.searchPlaceholder')"
           />
         </div>
-        <button class="hc-im-btn hc-im-btn--accent" @click="openCreate">
+        <button v-if="instances.length > 0" class="hc-im-btn hc-im-btn--accent" @click="openCreate">
           <Plus :size="14" />
           {{ t('imChannels.newInstance') }}
         </button>
@@ -1017,6 +1017,16 @@ async function copyWebhookUrl() {
 
 .hc-im-btn--accent:hover:not(:disabled) {
   opacity: 0.9;
+}
+
+.hc-im-btn--outline {
+  background: transparent;
+  color: var(--hc-accent);
+  border: 1px solid var(--hc-accent);
+}
+
+.hc-im-btn--outline:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hc-accent) 8%, transparent);
 }
 
 .hc-im-btn--ghost {

@@ -5,19 +5,7 @@
  * 所有会话和消息的 CRUD 操作集中在此模块。
  */
 
-import Database from '@tauri-apps/plugin-sql'
-import { logger } from '@/utils/logger'
-
-let db: Database | null = null
-
-/** 获取数据库连接（单例） */
-async function getDB(): Promise<Database> {
-  if (!db) {
-    db = await Database.load('sqlite:hexclaw.db')
-    logger.debug('SQLite 数据库已连接')
-  }
-  return db
-}
+import { getDB } from './connection'
 
 // ─── 会话操作 ───────────────────────────────────────
 

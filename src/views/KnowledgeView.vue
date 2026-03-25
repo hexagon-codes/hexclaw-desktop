@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { BookOpen, Upload, Trash2, Search, FileText, X, FileUp, RefreshCw } from 'lucide-vue-next'
+import { BookOpen, Upload, Trash2, Search, FileText, X, FileUp, RefreshCw, AlertTriangle } from 'lucide-vue-next'
 import {
   getDocuments,
+  getDocumentContent,
   addDocument,
   deleteDocument,
   searchKnowledge,
@@ -12,11 +13,13 @@ import {
   isKnowledgeUploadEndpointMissing,
   isKnowledgeUploadUnsupportedFormat,
 } from '@/api/knowledge'
+import { dbGetCachedKnowledgeDocs, dbReplaceKnowledgeDocsCache, dbGetKnowledgeCacheTimestamp } from '@/db/knowledge'
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { parseDocument } from '@/utils/file-parser'
+import { logger } from '@/utils/logger'
 
 const ACCEPTED_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.json']
 const props = withDefaults(
@@ -35,6 +38,9 @@ const docs = ref<KnowledgeDoc[]>([])
 const totalDocs = ref(0)
 const loading = ref(true)
 const errorMsg = ref('')
+const errorSeverity = ref<'error' | 'warning' | null>(null)
+const revalidating = ref(false)
+const CACHE_TTL_MS = 5 * 60 * 1000 // 缓存 TTL: 5 分钟
 const activeTab = ref<'documents' | 'search'>('documents')
 
 const showAddDialog = ref(false)
@@ -64,18 +70,71 @@ onMounted(async () => {
   await loadDocs()
 })
 
+/**
+ * Stale-While-Revalidate 加载策略：
+ * 1. 先展示 SQLite 缓存（快速首屏）
+ * 2. 后台从 Sidecar API 拉取最新数据
+ * 3. API 成功 → 更新 UI + 刷新缓存；失败 → 保留缓存 + 提示
+ */
 async function loadDocs() {
-  loading.value = true
   errorMsg.value = ''
+  errorSeverity.value = null
+
+  // Phase 1: 从缓存快速展示（仅 TTL 内有效）
+  let hadCache = false
+  try {
+    const ts = await dbGetKnowledgeCacheTimestamp()
+    const isFresh = ts && Date.now() - new Date(ts).getTime() < CACHE_TTL_MS
+
+    if (isFresh) {
+      const cached = await dbGetCachedKnowledgeDocs()
+      if (cached.length > 0) {
+        docs.value = cached
+        totalDocs.value = cached.length
+        loading.value = false
+        hadCache = true
+      }
+    }
+  } catch (e) {
+    logger.debug('知识库缓存读取失败（首次运行或非 Tauri 环境）', e)
+  }
+
+  if (!hadCache) {
+    loading.value = true
+  }
+
+  // Phase 2: 从后端 API 刷新
+  await revalidateFromApi(hadCache)
+}
+
+async function revalidateFromApi(hadCache = docs.value.length > 0) {
+  revalidating.value = true
   try {
     const res = await getDocuments()
-    docs.value = res.documents || []
-    totalDocs.value = res.total || 0
+    const freshDocs = res.documents || []
+    docs.value = freshDocs
+    totalDocs.value = res.total || freshDocs.length
+    errorMsg.value = ''
+    errorSeverity.value = null
+
+    // 更新本地缓存（fire-and-forget）
+    dbReplaceKnowledgeDocsCache(freshDocs).catch((e) =>
+      logger.warn('更新知识库缓存失败', e),
+    )
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('knowledge.loadFailed')
-    console.error('[Knowledge] load failed:', e)
+    if (hadCache) {
+      // 有缓存兜底：软提示
+      errorMsg.value = t('knowledge.syncFailed')
+      errorSeverity.value = 'warning'
+    } else {
+      // 无缓存：硬错误
+      errorMsg.value = e instanceof Error ? e.message : t('knowledge.loadFailed')
+      errorSeverity.value = 'error'
+    }
+    logger.warn('[Knowledge] API revalidation failed', e)
   } finally {
     loading.value = false
+    revalidating.value = false
   }
 }
 
@@ -188,9 +247,29 @@ function getDocStatusStyle(doc: KnowledgeDoc) {
   }
 }
 
-function openDocDetail(doc: KnowledgeDoc) {
+const loadingDocContent = ref(false)
+
+async function openDocDetail(doc: KnowledgeDoc) {
   selectedDoc.value = doc
   showDocDetail.value = true
+
+  // 如果列表接口未返回正文，主动获取内容
+  if (!doc.content?.trim()) {
+    loadingDocContent.value = true
+    try {
+      const content = await getDocumentContent(doc)
+      if (content && selectedDoc.value?.id === doc.id) {
+        selectedDoc.value = { ...doc, content }
+        // 同步更新列表中的文档对象，避免下次打开重复请求
+        const idx = docs.value.findIndex((d) => d.id === doc.id)
+        if (idx >= 0) docs.value[idx] = selectedDoc.value
+      }
+    } catch {
+      // 获取失败保持原提示
+    } finally {
+      loadingDocContent.value = false
+    }
+  }
 }
 
 async function handleReindex(doc: KnowledgeDoc) {
@@ -371,7 +450,7 @@ function openUpload() {
   showAddDialog.value = true
 }
 
-defineExpose({ rebuildAll, openUpload, openFilePicker })
+defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
 </script>
 
 <template>
@@ -385,14 +464,29 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
       @change="handleFileSelect"
     />
 
-    <!-- 错误提示 -->
+    <!-- 错误/警告提示 -->
     <div
       v-if="errorMsg"
       class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
-      style="background: #ef444420; color: #ef4444"
+      :style="{
+        background: errorSeverity === 'warning' ? '#f59e0b20' : '#ef444420',
+        color: errorSeverity === 'warning' ? '#d97706' : '#ef4444',
+      }"
     >
-      <span>{{ errorMsg }}</span>
-      <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
+      <span class="flex items-center gap-2">
+        <AlertTriangle v-if="errorSeverity === 'warning'" :size="14" />
+        {{ errorMsg }}
+      </span>
+      <span class="flex items-center gap-2">
+        <button
+          v-if="errorSeverity === 'error'"
+          class="text-xs underline"
+          @click="revalidateFromApi(false)"
+        >
+          {{ t('knowledge.retrySync') }}
+        </button>
+        <button class="text-xs underline" @click="errorMsg = ''">{{ t('common.close') }}</button>
+      </span>
     </div>
 
     <div
@@ -529,14 +623,6 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
           <p class="text-xs mt-2 mb-4" :style="{ color: 'var(--hc-text-muted)' }">
             {{ t('knowledge.dragHint') }}
           </p>
-          <button
-            class="px-4 py-2 rounded-lg text-sm text-white"
-            :style="{ background: 'var(--hc-accent)', opacity: knowledgeEnabled ? 1 : 0.5 }"
-            :disabled="!knowledgeEnabled"
-            @click="openFilePicker"
-          >
-            {{ t('knowledge.uploadDoc') }}
-          </button>
         </EmptyState>
 
         <template v-else>
@@ -550,6 +636,10 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
               <span class="text-xs" :style="{ color: 'var(--hc-text-secondary)' }">{{
                 t('knowledge.docCount', { count: totalDocs })
               }}</span>
+            </div>
+            <div v-if="revalidating" class="flex items-center gap-1.5">
+              <RefreshCw :size="12" class="animate-spin" :style="{ color: 'var(--hc-text-muted)' }" />
+              <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('knowledge.syncing') }}</span>
             </div>
           </div>
 
@@ -884,10 +974,11 @@ defineExpose({ rebuildAll, openUpload, openFilePicker })
                 :style="{
                   background: 'var(--hc-bg-main)',
                   borderColor: 'var(--hc-border)',
-                  color: 'var(--hc-text-primary)',
+                  color: loadingDocContent ? 'var(--hc-text-muted)' : 'var(--hc-text-primary)',
                 }"
               >
-                {{ selectedDoc.content || t('knowledge.noContentDetail') }}
+                <template v-if="loadingDocContent">{{ t('common.loading', '加载中...') }}</template>
+                <template v-else>{{ selectedDoc.content || t('knowledge.noContentDetail') }}</template>
               </div>
             </div>
           </div>

@@ -159,12 +159,15 @@ watch(availableModels, () => {
   }
 })
 
+let replySettled = false
+
 function setupWsCallbacks() {
   hexclawWS.clearCallbacks()
 
   hexclawWS.onChunk((chunk) => {
     streamingContent.value += chunk.content
-    if (chunk.done) {
+    if (chunk.done && !replySettled) {
+      replySettled = true
       // Streaming complete - push final message
       if (streamingContent.value) {
         messages.value.push({
@@ -179,6 +182,8 @@ function setupWsCallbacks() {
   })
 
   hexclawWS.onReply((reply) => {
+    if (replySettled) return
+    replySettled = true
     messages.value.push({
       id: Date.now().toString(),
       role: 'assistant',
@@ -189,6 +194,7 @@ function setupWsCallbacks() {
   })
 
   hexclawWS.onError((error) => {
+    replySettled = true
     messages.value.push({
       id: Date.now().toString(),
       role: 'assistant',
@@ -225,6 +231,7 @@ async function handleSend(retryContent?: string) {
 
   streaming.value = true
   streamingContent.value = ''
+  replySettled = false
 
   if (useWebSocket.value && wsConnected.value && hexclawWS.isConnected()) {
     // WebSocket streaming mode

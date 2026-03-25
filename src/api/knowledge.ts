@@ -135,6 +135,43 @@ export function getDocuments() {
   return apiGet<{ documents: KnowledgeDoc[]; total: number }>('/api/v1/knowledge/documents')
 }
 
+/** 获取单个知识文档详情（含正文内容） */
+export async function getDocument(id: string): Promise<KnowledgeDoc> {
+  return apiGet<KnowledgeDoc>(
+    `/api/v1/knowledge/documents/${encodeURIComponent(id)}`,
+  ).catch((error) => {
+    throw normalizeKnowledgeEndpointError(error)
+  })
+}
+
+/**
+ * 获取文档内容：优先请求详情 API，回退到搜索文档标题拼接 chunk
+ */
+export async function getDocumentContent(doc: KnowledgeDoc): Promise<string> {
+  // 尝试详情接口
+  try {
+    const detail = await getDocument(doc.id)
+    if (detail.content?.trim()) return detail.content
+  } catch {
+    // 详情接口不存在或失败，回退到搜索
+  }
+
+  // 回退：通过知识库搜索获取该文档的 chunk 内容
+  try {
+    const { result } = await searchKnowledge(doc.title, doc.chunk_count || 5)
+    const docChunks = result
+      .filter((hit) => hit.doc_id === doc.id || hit.doc_title === doc.title)
+      .sort((a, b) => (a.chunk_index ?? 0) - (b.chunk_index ?? 0))
+    if (docChunks.length > 0) {
+      return docChunks.map((chunk) => chunk.content).join('\n\n')
+    }
+  } catch {
+    // 搜索也失败
+  }
+
+  return ''
+}
+
 /** 添加文档到知识库 */
 export function addDocument(title: string, content: string, source?: string) {
   return apiPost<{ id: string; title: string; chunk_count: number; created_at: string }>(

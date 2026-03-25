@@ -87,9 +87,9 @@ describe('Settings Store — backendToProviders 类型映射逻辑', () => {
 
   it('disabled provider 在保存时不发送到后端，但本地保留', async () => {
     mockGetLLMConfig.mockResolvedValue({
-      default: 'apimart',
+      default: 'testprovider',
       providers: {
-        apimart: { api_key: 'key1', base_url: 'url1', model: 'model1', compatible: 'openai' },
+        testprovider: { api_key: 'key1', base_url: 'url1', model: 'model1', compatible: 'openai' },
         ollama: { api_key: '', base_url: 'http://localhost:11434', model: 'llama3', compatible: '' },
       },
       routing: { enabled: false, strategy: 'cost-aware' },

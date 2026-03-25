@@ -50,14 +50,14 @@ Native macOS / Windows / Linux · Sidecar local deployment · Zero cloud depende
 | **Skill System** | Skill marketplace + custom skills, tool registration and permission management |
 | **Workflow Canvas** | Visual drag-and-drop Agent workflow orchestration, DAG execution engine |
 | **MCP Protocol** | Model Context Protocol tool integration, plug-and-play external tools |
-| **Knowledge Base (RAG)** | Document upload/parsing/vector retrieval, supports PDF / Markdown / TXT and more |
+| **Knowledge Base (RAG)** | Document upload/parsing/vector retrieval, supports PDF / Markdown / TXT and more; Auto-RAG automatically retrieves knowledge base context before sending (score >= 0.35) |
 | **Memory System** | Long-term + short-term memory + semantic search, cross-session memory persistence |
 | **Scheduled Tasks** | Cron scheduling, periodic Agent task execution |
 | **Security Gateway** | Prompt injection detection / PII filtering / content filtering / RBAC access control |
 | **Team Collaboration** | *(Planned)* Multi-user workspaces, shared Agents and sessions |
 | **IM Channels** | Lark / DingTalk / WeCom / WeChat / Slack / Discord / Telegram — chat with AI remotely via IM |
 | **Deep Research** | 4-phase autonomous investigation (search → analyze → synthesize → report), powered by Hexagon Plan-and-Execute engine |
-| **Document Parsing** | Upload PDF / Word / Excel / CSV directly in chat, text auto-extracted as context |
+| **Document Parsing** | Upload PDF / Word / Excel / CSV directly in chat, text auto-extracted as context; document detail view supports full content retrieval (API fetch + chunk reassembly fallback) |
 | **Webhook Notifications** | WeCom / Lark / DingTalk bot webhook push, auto-notify on task completion |
 | **ClawHub Skill Market** | Browse, search, and install OpenClaw community Skills, filter by category (coding/research/writing/data/automation) |
 | **Onboarding Wizard** | 3-step Welcome guide (choose Provider → choose model → test connection), zero-config barrier |
@@ -169,6 +169,7 @@ Go to [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) to d
 | Linux | `.deb` / `.AppImage` |
 
 > First launch on macOS may require allowing the app in **System Settings → Privacy & Security**.
+> If a browser-downloaded `.dmg` is reported as "damaged", the package is usually not actually corrupted; it was released without proper Apple signing / notarization.
 
 ### CI / Packaging / Release Flow
 
@@ -181,7 +182,21 @@ Before creating a release tag, make sure:
 - `package.json` and `src-tauri/tauri.conf.json` versions match the tag
 - the Tauri updater public key is committed at `src-tauri/tauri.conf.json -> plugins.updater.pubkey`
 - GitHub Actions secrets include `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- macOS releases also have the Apple signing and notarization secrets configured
+- macOS releases also require Apple code-signing secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`
+- macOS releases also need one notarization credential set (choose one):
+- Apple ID flow: `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`
+- App Store Connect flow: `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_PRIVATE_KEY` (the workflow writes it to `private_keys/AuthKey_<APPLE_API_KEY>.p8`)
+
+If those macOS secrets are missing, the `Release` and `Package` workflows now fail early instead of publishing browser-downloaded bundles that Gatekeeper flags as "damaged".
+
+If you already have the `.p12` certificate and `AuthKey_*.p8`, you can start from:
+
+```bash
+make macos-release-secrets-help
+make macos-release-bootstrap-help
+```
+
+For the Apple-side setup, see [macOS Release Setup](docs/macos-release.en.md).
 
 See the [User Guide](docs/guide.en.md) for detailed instructions.
 
@@ -263,7 +278,7 @@ hexclaw-desktop/
 │   │   └── system.ts             # System info API
 │   ├── components/               # Components
 │   │   ├── layout/               # Layout (AppLayout/Sidebar/TitleBar/ContextBar/DetailPanel)
-│   │   ├── chat/                 # Chat (ChatInput/SessionList/MarkdownRenderer/ResearchProgress etc.)
+│   │   ├── chat/                 # Chat (ChatInput/SessionList/MarkdownRenderer/TemplatePopup/ResearchProgress etc.)
 │   │   ├── agent/                # Agent (AgentCard/AgentForm/AgentStatus/AgentConference)
 │   │   ├── agents/               # Multi-Agent collaboration (AgentConference)
 │   │   ├── artifacts/            # Artifacts (ArtifactsPanel/ArtifactPreview/CodeView/DiffView)
@@ -291,7 +306,7 @@ hexclaw-desktop/
 │   │   ├── AboutView.vue         # About (separate window)
 │   │   ├── QuickChatView.vue     # Quick chat (separate window)
 │   │   └── WelcomeView.vue       # Onboarding wizard (Provider → model → test)
-│   ├── stores/                   # Pinia state management
+│   ├── stores/                   # Pinia state management (thin store, business logic delegated to services/)
 │   │   ├── app.ts                # Global state (connection/sidebar/detail panel)
 │   │   ├── chat.ts               # Chat (sessions/messages/streaming/Artifacts, SQLite persistence)
 │   │   ├── agents.ts             # Agent roles
@@ -308,13 +323,19 @@ hexclaw-desktop/
 │   │   ├── useAutoUpdate.ts      # Auto-update (Tauri updater)
 │   │   ├── useValidation.ts      # Form validation
 │   │   ├── useKeyboardNav.ts     # Keyboard navigation + focus trap
-│   │   └── usePlatform.ts        # Platform detection (macOS/Windows/Linux)
+│   │   ├── usePlatform.ts        # Platform detection (macOS/Windows/Linux)
+│   │   ├── useChatSend.ts        # Send message + Auto-RAG knowledge retrieval
+│   │   ├── useChatActions.ts     # Chat actions (resend/edit/delete etc.)
+│   │   └── useConversationAutomation.ts # Conversation automation (auto-title etc.)
+│   ├── services/                 # Business logic service layer
+│   │   ├── chatService.ts        # Chat service (WebSocket/HTTP send)
+│   │   └── messageService.ts     # Message service (build/persist messages)
 │   ├── i18n/                     # Internationalization (Chinese/English)
 │   ├── router/                   # Router (dynamically built from navigation.ts)
 │   ├── types/                    # TypeScript type definitions
 │   ├── utils/                    # Utility functions
 │   │   └── file-parser.ts        # Document parser (PDF/Word/Excel/CSV)
-│   ├── db/                       # Local database (SQLite)
+│   ├── db/                       # Local database (SQLite: chat/artifacts/knowledge/templates/outbox)
 │   ├── config/                   # Frontend config
 │   │   ├── env.ts                # Environment config
 │   │   ├── navigation.ts         # Navigation registry (3-tier groups: core/integration/system)
@@ -337,7 +358,11 @@ hexclaw-desktop/
 │   └── Cargo.toml                # Rust dependencies
 ├── docs/                         # Documentation
 │   ├── guide.md                  # User guide (Chinese)
-│   └── guide.en.md               # User guide (English)
+│   ├── guide.en.md               # User guide (English)
+│   ├── updates.md                # Auto-update release guide (Chinese)
+│   ├── updates.en.md             # Auto-update release guide (English)
+│   ├── overview.md               # Product overview (Chinese)
+│   └── overview.en.md            # Product overview (English)
 ├── Casks/                        # Homebrew Cask definition
 ├── scripts/                      # CI/build scripts
 ├── .github/                      # GitHub CI/CD

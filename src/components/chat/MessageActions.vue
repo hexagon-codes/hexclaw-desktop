@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, RotateCcw, Pencil, ThumbsUp, ThumbsDown } from 'lucide-vue-next'
+import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -45,8 +45,9 @@ async function handleCopy() {
         <ThumbsDown :size="13" />
       </button>
       <span class="hc-msg-actions__divider" />
-      <button class="hc-msg-actions__btn" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
-        <Copy :size="13" />
+      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
+        <Check v-if="copied" :size="13" />
+        <Copy v-else :size="13" />
       </button>
       <button class="hc-msg-actions__btn" :title="t('chat.regenerate')" @click="emit('retry')">
         <RotateCcw :size="13" />
@@ -54,8 +55,9 @@ async function handleCopy() {
     </template>
 
     <template v-else>
-      <button class="hc-msg-actions__btn" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
-        <Copy :size="13" />
+      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
+        <Check v-if="copied" :size="13" />
+        <Copy v-else :size="13" />
       </button>
       <button class="hc-msg-actions__btn" :title="t('chat.editMessage')" @click="emit('edit')">
         <Pencil :size="13" />
@@ -65,65 +67,64 @@ async function handleCopy() {
 </template>
 
 <style scoped>
+/* Apple HIG: 毛玻璃浮层 + 弹簧入场动效 */
 .hc-msg-actions {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 3px 4px;
-  border-radius: 8px;
-  background: var(--hc-bg-card);
-  border: 1px solid var(--hc-border);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
-  animation: hc-actions-fade-in 0.15s ease;
+  padding: 4px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  animation: hc-spring-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
 .hc-msg-actions__divider {
-  width: 1px;
-  height: 14px;
-  background: var(--hc-border);
+  width: 0.5px;
+  height: 16px;
+  background: rgba(0, 0, 0, 0.1);
   margin: 0 2px;
 }
 
 .hc-msg-actions__btn {
-  padding: 4px 6px;
-  border-radius: 5px;
+  padding: 5px 7px;
+  border-radius: 6px;
   border: none;
   background: transparent;
-  color: var(--hc-text-muted);
+  color: var(--hc-text-secondary, #6E6E73);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.15s, color 0.15s;
+  transition: background-color 0.15s, color 0.15s;
 }
 
 .hc-msg-actions__btn:hover {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--hc-text-primary, #1D1D1F);
 }
 
 .hc-msg-actions__btn:active {
   transform: scale(0.92);
 }
 
+.hc-msg-actions__btn--copied { color: #34C759 !important; }
+
 .hc-msg-actions__btn--active {
-  color: var(--hc-accent);
-  background: var(--hc-accent-subtle, rgba(79, 140, 255, 0.1));
+  color: var(--hc-accent, #007AFF);
+  background: rgba(0, 122, 255, 0.1);
 }
 
 .hc-msg-actions__btn--active-bad {
-  color: var(--hc-error, #ff3b30);
+  color: var(--hc-error, #FF3B30);
   background: rgba(255, 59, 48, 0.08);
 }
 
-@keyframes hc-actions-fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+@keyframes hc-spring-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 </style>

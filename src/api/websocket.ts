@@ -22,6 +22,8 @@ interface WsMessage {
   model?: string
   role?: string
   attachments?: WsAttachment[]
+  temperature?: number
+  max_tokens?: number
 }
 
 interface WsUsage {
@@ -139,6 +141,8 @@ class HexClawWS {
     role?: string,
     attachments?: WsAttachment[],
     provider?: string,
+    temperature?: number,
+    maxTokens?: number,
   ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.errorCallbacks.forEach((cb) => cb('WebSocket is not connected'))
@@ -155,6 +159,12 @@ class HexClawWS {
     }
     if (attachments?.length) {
       msg.attachments = attachments
+    }
+    if (temperature !== undefined) {
+      msg.temperature = temperature
+    }
+    if (maxTokens !== undefined) {
+      msg.max_tokens = maxTokens
     }
 
     this.ws.send(JSON.stringify(msg))

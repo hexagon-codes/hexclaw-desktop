@@ -127,10 +127,11 @@ router.beforeEach(async (to) => {
     }
 
     if (!isWelcomeDone()) {
-      const hasProvider = (settingsStore.config?.llm.providers?.length ?? 0) > 0
-      if (!hasProvider) {
-        return '/welcome'
-      }
+      // TODO: 恢复 welcome 检测
+      // const hasProvider = (settingsStore.config?.llm.providers?.length ?? 0) > 0
+      // if (!hasProvider) {
+      //   return '/welcome'
+      // }
       markWelcomeDone()
     }
   } catch (e) {

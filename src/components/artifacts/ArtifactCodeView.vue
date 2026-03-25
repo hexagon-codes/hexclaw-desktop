@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch, onMounted } from 'vue'
 import { Copy, Check } from 'lucide-vue-next'
+import DOMPurify from 'dompurify'
 import type { Artifact } from '@/types'
 
 const props = defineProps<{
@@ -10,16 +11,21 @@ const props = defineProps<{
 const codeHtml = ref('')
 const copied = ref(false)
 
+function sanitize(html: string): string {
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
+}
+
 async function highlight() {
   try {
     const { codeToHtml } = await import('shiki')
-    codeHtml.value = await codeToHtml(props.artifact.content, {
+    const raw = await codeToHtml(props.artifact.content, {
       lang: props.artifact.language || 'text',
       theme: 'github-dark',
     })
+    codeHtml.value = sanitize(raw)
   } catch {
     // fallback: 纯文本
-    codeHtml.value = `<pre><code>${escapeHtml(props.artifact.content)}</code></pre>`
+    codeHtml.value = sanitize(`<pre><code>${escapeHtml(props.artifact.content)}</code></pre>`)
   }
 }
 

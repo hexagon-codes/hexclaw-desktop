@@ -100,8 +100,8 @@ function makeBackendConfig(): BackendLLMConfig {
     providers: {
       'API Mart': {
         api_key: '****key',
-        base_url: 'https://apimart.asia/v1',
-        model: 'claude-sonnet-4-6-apimart',
+        base_url: 'https://api.example.com/v1',
+        model: 'claude-sonnet-4-6-test',
         compatible: 'openai',
       },
     },
@@ -117,12 +117,12 @@ function makeLocalProvider(overrides?: Partial<ProviderConfig>): ProviderConfig 
     type: 'custom',
     enabled: true,
     apiKey: '',
-    baseUrl: 'https://apimart.asia/v1',
+    baseUrl: 'https://api.example.com/v1',
     models: [
-      { id: 'claude-sonnet-4-6-apimart', name: 'Claude Sonnet 4.6', capabilities: ['text'] },
+      { id: 'claude-sonnet-4-6-test', name: 'Claude Sonnet 4.6', capabilities: ['text'] },
       { id: 'gpt-4o', name: 'GPT-4o', capabilities: ['text', 'vision'] },
     ],
-    selectedModelId: 'claude-sonnet-4-6-apimart',
+    selectedModelId: 'claude-sonnet-4-6-test',
     ...overrides,
   }
 }
@@ -169,7 +169,7 @@ describe('Settings Store persistence', () => {
     expect(provider.type).toBe('custom')
     expect(provider.apiKey).toBe('sk-live-key')
     expect(provider.models.map((model) => model.id)).toEqual([
-      'claude-sonnet-4-6-apimart',
+      'claude-sonnet-4-6-test',
       'gpt-4o',
     ])
   })
@@ -228,7 +228,7 @@ describe('Settings Store persistence', () => {
     state.savedConfig = makeConfig({
       llm: {
         providers: [makeLocalProvider()],
-        defaultModel: 'claude-sonnet-4-6-apimart',
+        defaultModel: 'claude-sonnet-4-6-test',
         defaultProviderId: 'custom-1',
         routing: {
           enabled: true,
@@ -284,7 +284,7 @@ describe('Settings Store persistence', () => {
     state.savedConfig = makeConfig({
       llm: {
         providers: [makeLocalProvider({ backendKey: 'API Mart', apiKey: '****key' })],
-        defaultModel: 'claude-sonnet-4-6-apimart',
+        defaultModel: 'claude-sonnet-4-6-test',
         defaultProviderId: 'custom-1',
       },
       general: {

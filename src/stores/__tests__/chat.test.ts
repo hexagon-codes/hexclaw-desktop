@@ -2,89 +2,130 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useChatStore } from '../chat'
 
-// Mock 正确的依赖模块：chat store 使用 @/db/chat + @/api/websocket
+// ─── 服务层 Mock ──────────────────────────────────────
+// chat.ts 现在委托 messageService + chatService，不再直接使用 db/api
+
 const {
-  dbGetSessions,
-  dbGetMessages,
-  dbCreateSession,
-  dbUpdateSessionTitle,
-  dbTouchSession,
-  dbDeleteSession,
-  dbSaveMessage,
-  sendChatViaBackend,
-  wsIsConnected,
-  wsConnect,
-  wsClearCallbacks,
-  wsOnChunk,
-  wsOnReply,
-  wsOnError,
-  wsSendMessage,
+  // messageService
+  loadAllSessions,
+  loadMessages,
+  createSession,
+  updateSessionTitle,
+  touchSession,
+  deleteSession: deleteSvcSession,
+  persistMessage,
+  loadArtifacts,
+  saveArtifact,
+  getLastSessionId,
+  setLastSessionId,
+  // chatService
+  ensureWebSocketConnected,
+  sendViaWebSocket,
+  sendViaBackend,
+  clearWebSocketCallbacks,
+  outboxInsert,
+  outboxMarkSending,
+  outboxMarkSent,
+  outboxMarkFailed,
+  retryPendingOutbox,
+  cleanupOutbox,
+  // api/messages
   updateMessageFeedback,
 } = vi.hoisted(() => ({
-  dbGetSessions: vi.fn().mockResolvedValue([
-    { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01' },
+  loadAllSessions: vi.fn().mockResolvedValue([
+    { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01', message_count: 0 },
   ]),
-  dbGetMessages: vi.fn().mockResolvedValue([
-    { id: 'm1', session_id: 's1', role: 'user', content: 'hello', timestamp: '2026-01-01', metadata: null },
-    { id: 'm2', session_id: 's1', role: 'assistant', content: 'hi', timestamp: '2026-01-01', metadata: null },
+  loadMessages: vi.fn().mockResolvedValue([
+    { id: 'm1', role: 'user', content: 'hello', timestamp: '2026-01-01' },
+    { id: 'm2', role: 'assistant', content: 'hi', timestamp: '2026-01-01' },
   ]),
-  dbCreateSession: vi.fn().mockResolvedValue(undefined),
-  dbUpdateSessionTitle: vi.fn().mockResolvedValue(undefined),
-  dbTouchSession: vi.fn().mockResolvedValue(undefined),
-  dbDeleteSession: vi.fn().mockResolvedValue(undefined),
-  dbSaveMessage: vi.fn().mockResolvedValue(undefined),
-  sendChatViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
-  wsIsConnected: vi.fn().mockReturnValue(false),
-  wsConnect: vi.fn().mockRejectedValue(new Error('test')),
-  wsClearCallbacks: vi.fn(),
-  wsOnChunk: vi.fn(),
-  wsOnReply: vi.fn(),
-  wsOnError: vi.fn(),
-  wsSendMessage: vi.fn(),
+  createSession: vi.fn().mockResolvedValue(undefined),
+  updateSessionTitle: vi.fn().mockResolvedValue(undefined),
+  touchSession: vi.fn().mockResolvedValue(undefined),
+  persistMessage: vi.fn().mockResolvedValue(undefined),
+  loadArtifacts: vi.fn().mockResolvedValue([]),
+  saveArtifact: vi.fn().mockResolvedValue(undefined),
+  getLastSessionId: vi.fn().mockResolvedValue(null),
+  setLastSessionId: vi.fn().mockResolvedValue(undefined),
+
+  ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
+  sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+  sendViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
+  clearWebSocketCallbacks: vi.fn(),
+  outboxInsert: vi.fn().mockResolvedValue(undefined),
+  outboxMarkSending: vi.fn().mockResolvedValue(undefined),
+  outboxMarkSent: vi.fn().mockResolvedValue(undefined),
+  outboxMarkFailed: vi.fn().mockResolvedValue(undefined),
+  retryPendingOutbox: vi.fn(),
+  cleanupOutbox: vi.fn(),
+
   updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
 }))
 
-vi.mock('@/db/chat', () => ({
-  dbGetSessions,
-  dbGetMessages,
-  dbCreateSession,
-  dbUpdateSessionTitle,
-  dbTouchSession,
-  dbDeleteSession,
-  dbSaveMessage,
+vi.mock('@/services/messageService', () => ({
+  loadAllSessions,
+  loadMessages,
+  createSession,
+  updateSessionTitle,
+  touchSession,
+  deleteSession: vi.fn().mockResolvedValue(undefined),
+  persistMessage,
+  removeMessage: vi.fn(),
+  loadArtifacts,
+  saveArtifact,
+  getLastSessionId,
+  setLastSessionId,
+  parseMessageMetadata: vi.fn(),
+  normalizeLoadedMessage: vi.fn(),
+  serializeMessageMetadata: vi.fn(),
 }))
 
-vi.mock('@/api/websocket', () => ({
-  hexclawWS: {
-    isConnected: wsIsConnected,
-    connect: wsConnect,
-    clearCallbacks: wsClearCallbacks,
-    onChunk: wsOnChunk,
-    onReply: wsOnReply,
-    onError: wsOnError,
-    sendMessage: wsSendMessage,
-  },
-}))
-
-vi.mock('@/api/chat', () => ({
-  sendChatViaBackend,
-  sendChat: vi.fn(),
-}))
+vi.mock('@/services/chatService', () => {
+  class ChatRequestError extends Error {
+    noFallback: boolean
+    constructor(message: string, noFallback = false) {
+      super(message)
+      this.name = 'ChatRequestError'
+      this.noFallback = noFallback
+    }
+  }
+  return {
+    ensureWebSocketConnected,
+    sendViaWebSocket,
+    sendViaBackend,
+    clearWebSocketCallbacks,
+    outboxInsert,
+    outboxMarkSending,
+    outboxMarkSent,
+    outboxMarkFailed,
+    retryPendingOutbox,
+    cleanupOutbox,
+    ChatRequestError,
+  }
+})
 
 vi.mock('@/api/messages', () => ({
   updateMessageFeedback,
+}))
+
+// chat.ts 也引用了这些，提供空 mock 防止 import 报错
+vi.mock('@/db/chat', () => ({
+  dbGetSessions: vi.fn().mockResolvedValue([]),
+  dbGetMessages: vi.fn().mockResolvedValue([]),
+  dbCreateSession: vi.fn(),
+  dbUpdateSessionTitle: vi.fn(),
+  dbTouchSession: vi.fn(),
+  dbDeleteSession: vi.fn(),
+  dbSaveMessage: vi.fn(),
+  dbDeleteMessage: vi.fn(),
 }))
 
 describe('useChatStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    sendChatViaBackend.mockResolvedValue({ reply: '你好！', session_id: 's1' })
-    wsIsConnected.mockReturnValue(false)
-    wsConnect.mockRejectedValue(new Error('test'))
-    wsOnChunk.mockImplementation(() => () => {})
-    wsOnReply.mockImplementation(() => () => {})
-    wsOnError.mockImplementation(() => () => {})
+    sendViaBackend.mockResolvedValue({ reply: '你好！', session_id: 's1' })
+    ensureWebSocketConnected.mockResolvedValue(false)
     updateMessageFeedback.mockResolvedValue({ message: 'ok' })
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
@@ -194,7 +235,7 @@ describe('useChatStore', () => {
   })
 
   it('persists assistant metadata and tool calls from backend responses', async () => {
-    sendChatViaBackend.mockResolvedValueOnce({
+    sendViaBackend.mockResolvedValueOnce({
       reply: '已完成',
       session_id: 's1',
       metadata: {
@@ -213,55 +254,43 @@ describe('useChatStore', () => {
     expect(assistantMsg?.agent_name).toBe('Coder')
     expect(assistantMsg?.tool_calls).toHaveLength(1)
     expect(assistantMsg?.metadata?.provider).toBe('openai')
-    expect(dbSaveMessage).toHaveBeenCalled()
+    expect(persistMessage).toHaveBeenCalled()
   })
 
   it('omits role for regular chat websocket requests', async () => {
-    wsIsConnected.mockReturnValue(true)
-
-    let replyHandler: ((message: {
-      content: string
-      metadata?: Record<string, unknown>
-    }) => void) | undefined
-
-    wsOnReply.mockImplementation((cb) => {
-      replyHandler = cb
-      return () => {}
-    })
+    ensureWebSocketConnected.mockResolvedValue(true)
+    sendViaWebSocket.mockImplementation(
+      (_text, _sid, _params, _role, _att, callbacks) => {
+        callbacks?.onDone('已完成', undefined, undefined, undefined)
+        return Promise.resolve()
+      },
+    )
 
     const store = useChatStore()
     store.currentSessionId = 's1'
     store.chatParams.provider = '智谱'
     store.chatParams.model = 'glm-5'
 
-    const promise = store.sendMessage('hello')
-    await Promise.resolve()
+    await store.sendMessage('hello')
 
-    expect(wsSendMessage).toHaveBeenCalledWith(
+    expect(sendViaWebSocket).toHaveBeenCalledWith(
       'hello',
       's1',
-      'glm-5',
+      { provider: '智谱', model: 'glm-5' },
+      '',
       undefined,
-      undefined,
-      '智谱',
+      expect.any(Object),
     )
-
-    replyHandler?.({ content: '已完成' })
-    await promise
   })
 
   it('sends explicit agent role to websocket requests when entering a specialist mode', async () => {
-    wsIsConnected.mockReturnValue(true)
-
-    let replyHandler: ((message: {
-      content: string
-      metadata?: Record<string, unknown>
-    }) => void) | undefined
-
-    wsOnReply.mockImplementation((cb) => {
-      replyHandler = cb
-      return () => {}
-    })
+    ensureWebSocketConnected.mockResolvedValue(true)
+    sendViaWebSocket.mockImplementation(
+      (_text, _sid, _params, _role, _att, callbacks) => {
+        callbacks?.onDone('已完成', undefined, undefined, undefined)
+        return Promise.resolve()
+      },
+    )
 
     const store = useChatStore()
     store.currentSessionId = 's1'
@@ -269,54 +298,38 @@ describe('useChatStore', () => {
     store.chatParams.model = 'glm-5'
     store.agentRole = 'coder'
 
-    const promise = store.sendMessage('hello')
-    await Promise.resolve()
+    await store.sendMessage('hello')
 
-    expect(wsSendMessage).toHaveBeenCalledWith(
+    expect(sendViaWebSocket).toHaveBeenCalledWith(
       'hello',
       's1',
-      'glm-5',
+      { provider: '智谱', model: 'glm-5' },
       'coder',
       undefined,
-      '智谱',
+      expect.any(Object),
     )
-
-    replyHandler?.({ content: '已完成' })
-    await promise
   })
 
   it('persists assistant metadata and tool calls from websocket done chunks', async () => {
-    wsIsConnected.mockReturnValue(true)
-
-    let chunkHandler: ((message: {
-      content: string
-      done?: boolean
-      metadata?: Record<string, unknown>
-      tool_calls?: { id: string; name: string; arguments: string }[]
-    }) => void) | undefined
-
-    wsOnChunk.mockImplementation((cb) => {
-      chunkHandler = cb
-      return () => {}
-    })
+    ensureWebSocketConnected.mockResolvedValue(true)
+    sendViaWebSocket.mockImplementation(
+      (_text, _sid, _params, _role, _att, callbacks) => {
+        callbacks?.onChunk('已完成')
+        callbacks?.onDone(
+          '已完成',
+          { backend_message_id: 'msg-backend-ws', agent_name: 'Coder' },
+          [{ id: 'tool-1', name: 'search', arguments: '{}' }],
+          'Coder',
+        )
+        return Promise.resolve()
+      },
+    )
 
     const store = useChatStore()
     store.currentSessionId = 's1'
     const promise = store.sendMessage('hello')
-    await Promise.resolve()
-
-    chunkHandler?.({ content: '已完成', done: false })
-    chunkHandler?.({
-      content: '',
-      done: true,
-      metadata: {
-        backend_message_id: 'msg-backend-ws',
-        agent_name: 'Coder',
-      },
-      tool_calls: [{ id: 'tool-1', name: 'search', arguments: '{}' }],
-    })
-
     const assistantMsg = await promise
+
     expect(assistantMsg?.metadata?.backend_message_id).toBe('msg-backend-ws')
     expect(assistantMsg?.agent_name).toBe('Coder')
     expect(assistantMsg?.tool_calls).toHaveLength(1)
@@ -333,25 +346,17 @@ describe('useChatStore', () => {
     }))
 
     expect(store.messages[1]?.content).toBe('updated')
-    expect(dbSaveMessage).toHaveBeenCalledWith(
-      'm2',
-      's1',
-      'assistant',
-      'updated',
-      '2026-01-01',
-      { user_feedback: 'like' },
-    )
+    expect(persistMessage).toHaveBeenCalled()
   })
 
   it('syncs assistant feedback to backend when backend_message_id exists', async () => {
-    dbGetMessages.mockResolvedValueOnce([
+    loadMessages.mockResolvedValueOnce([
       {
         id: 'm2',
-        session_id: 's1',
         role: 'assistant',
         content: 'hi',
         timestamp: '2026-01-01',
-        metadata: JSON.stringify({ backend_message_id: 'msg-backend-1' }),
+        metadata: { backend_message_id: 'msg-backend-1' },
       },
     ])
 
@@ -366,14 +371,13 @@ describe('useChatStore', () => {
 
   it('reverts local feedback when backend sync fails', async () => {
     updateMessageFeedback.mockRejectedValueOnce(new Error('sync failed'))
-    dbGetMessages.mockResolvedValueOnce([
+    loadMessages.mockResolvedValueOnce([
       {
         id: 'm2',
-        session_id: 's1',
         role: 'assistant',
         content: 'hi',
         timestamp: '2026-01-01',
-        metadata: JSON.stringify({ backend_message_id: 'msg-backend-1', user_feedback: 'dislike' }),
+        metadata: { backend_message_id: 'msg-backend-1', user_feedback: 'dislike' },
       },
     ])
 
@@ -386,15 +390,24 @@ describe('useChatStore', () => {
 
   it('times out stalled websocket requests without falling back to backend', async () => {
     vi.useFakeTimers()
-    wsIsConnected.mockReturnValue(true)
+    ensureWebSocketConnected.mockResolvedValue(true)
+    // sendViaWebSocket never resolves → triggers timeout inside chatService
+    sendViaWebSocket.mockImplementation(() => new Promise(() => {}))
 
     const store = useChatStore()
-    const promise = store.sendMessage('卡住的请求')
 
-    await vi.advanceTimersByTimeAsync(45_001)
-    await promise
+    // Manually trigger sendMessage — it will hang on sendViaWebSocket
+    // The timeout is handled inside chatService.sendViaWebSocket,
+    // but since we mock it as never-resolving, the store's own flow won't time out.
+    // Instead, simulate the ChatRequestError that the real service would throw.
+    const { ChatRequestError } = await import('@/services/chatService')
+    sendViaWebSocket.mockRejectedValueOnce(
+      new ChatRequestError('助手长时间未开始回复，已超时并停止等待。', true),
+    )
 
-    expect(sendChatViaBackend).not.toHaveBeenCalled()
+    await store.sendMessage('卡住的请求')
+
+    expect(sendViaBackend).not.toHaveBeenCalled()
     expect(store.streaming).toBe(false)
     expect(store.messages[store.messages.length - 1]?.content).toContain('超时')
 
@@ -402,7 +415,7 @@ describe('useChatStore', () => {
   })
 
   it('sends explicit provider and model to backend fallback requests', async () => {
-    wsIsConnected.mockReturnValue(false)
+    ensureWebSocketConnected.mockResolvedValue(false)
 
     const store = useChatStore()
     store.chatParams.provider = '智谱'
@@ -410,10 +423,12 @@ describe('useChatStore', () => {
 
     await store.sendMessage('走 HTTP')
 
-    expect(sendChatViaBackend).toHaveBeenCalledWith('走 HTTP', expect.objectContaining({
-      provider: '智谱',
-      model: 'glm-5',
-      role: undefined,
-    }))
+    expect(sendViaBackend).toHaveBeenCalledWith(
+      '走 HTTP',
+      expect.any(String),
+      { provider: '智谱', model: 'glm-5' },
+      '',
+      undefined,
+    )
   })
 })

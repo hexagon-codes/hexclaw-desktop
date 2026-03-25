@@ -42,6 +42,17 @@ vi.mock('@/api/agents', () => ({
   deleteRole: vi.fn(),
 }))
 
+vi.mock('@/api/knowledge', () => ({
+  searchKnowledge: vi.fn().mockResolvedValue({ result: [] }),
+  getDocuments: vi.fn().mockResolvedValue({ documents: [], total: 0 }),
+  addDocument: vi.fn(),
+  deleteDocument: vi.fn(),
+  reindexDocument: vi.fn(),
+  uploadDocument: vi.fn(),
+  isKnowledgeUploadEndpointMissing: vi.fn().mockReturnValue(false),
+  isKnowledgeUploadUnsupportedFormat: vi.fn().mockReturnValue(false),
+}))
+
 vi.mock('@/api/config', () => ({
   getLLMConfig: vi.fn().mockResolvedValue({
     default: 'openai',

@@ -21,7 +21,7 @@ import {
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import { useAppStore } from '@/stores/app'
 import { useChatStore } from '@/stores/chat'
-import { dbDeleteMessage } from '@/db/chat'
+import { removeMessage } from '@/services/messageService'
 import { useAgentsStore } from '@/stores/agents'
 import { useSettingsStore } from '@/stores/settings'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
@@ -30,39 +30,17 @@ import ChatInput from '@/components/chat/ChatInput.vue'
 import SessionList from '@/components/chat/SessionList.vue'
 import ChatSearchDialog from '@/components/chat/ChatSearchDialog.vue'
 import ChatExportMenu from '@/components/chat/ChatExportMenu.vue'
+import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import { useToast } from '@/composables'
-import {
-  createCronJob,
-  deleteCronJob,
-  getCronJobs,
-  pauseCronJob,
-  resumeCronJob,
-  triggerCronJob,
-} from '@/api/tasks'
-import {
-  addDocument,
-  deleteDocument,
-  getDocuments,
-  reindexDocument,
-  searchKnowledge,
-} from '@/api/knowledge'
+import { useToast, useConversationAutomation, useChatSend, useChatActions } from '@/composables'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
-import {
-  CHAT_AUTOMATION_METADATA_KEY,
-  buildConversationAutomationActions,
-  getConversationAutomationActions,
-  getParsedDocumentContentFromMessage,
-  type ConversationAutomationAction,
-  type ConversationAutomationResult,
-} from '@/utils/chat-automation'
 import { openSanitizedArtifact } from '@/utils/safe-html'
 import { getSkills, type Skill } from '@/api/skills'
-import type { ChatAttachment, ChatMessage, CronJob, KnowledgeDoc } from '@/types'
+import type { ChatAttachment, ChatMessage } from '@/types'
 import crabLogo from '@/assets/logo-crab.png'
 
 const { t } = useI18n()
@@ -78,6 +56,19 @@ const messagesEndRef = ref<HTMLDivElement>()
 const chatInputRef = ref<InstanceType<typeof ChatInput>>()
 const showSessions = ref(true)
 const hoveredMsgId = ref<string | null>(null)
+let hoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function delayedClearHover() {
+  if (hoverTimer) clearTimeout(hoverTimer)
+  hoverTimer = setTimeout(() => { hoveredMsgId.value = null; hoverTimer = null }, 150)
+}
+
+function setHoveredMsg(id: string) {
+  if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null }
+  hoveredMsgId.value = id
+}
+
+onUnmounted(() => { if (hoverTimer) clearTimeout(hoverTimer) })
 const showSearch = ref(false)
 const showExport = ref(false)
 const attachmentPreview = ref<{
@@ -147,7 +138,7 @@ async function handleMsgCtxAction(action: string) {
     case 'delete': {
       const removed = chatStore.messages.splice(idx, 1)
       for (const m of removed) {
-        dbDeleteMessage(m.id).catch(() => {})
+        removeMessage(m.id).catch(() => {})
       }
       break
     }
@@ -373,437 +364,50 @@ function getMessageArtifacts(messageId: string) {
   return chatStore.artifacts.filter((a) => a.messageId === messageId)
 }
 
-function clipAutomationText(value: string, maxLength = 180): string {
-  const normalized = value.trim()
-  if (normalized.length <= maxLength) return normalized
-  return `${normalized.slice(0, maxLength)}...`
-}
-
-function normalizeLookupValue(value: string): string {
-  return value.replace(/\s+/g, '').toLowerCase()
-}
-
-function findPreviousUserMessage(messageId: string): ChatMessage | null {
-  const idx = chatStore.messages.findIndex((message) => message.id === messageId)
-  if (idx < 0) return null
-  for (let i = idx - 1; i >= 0; i--) {
-    if (chatStore.messages[i]?.role === 'user') {
-      return chatStore.messages[i] as ChatMessage
-    }
-  }
-  return null
-}
-
-function mergeConversationActions(
-  current: ConversationAutomationAction[],
-  incoming: ConversationAutomationAction[],
-): ConversationAutomationAction[] {
-  const merged = [...current]
-  for (const action of incoming) {
-    const exists = merged.some(
-      (item) => item.kind === action.kind && item.description === action.description,
-    )
-    if (!exists) merged.push(action)
-  }
-  return merged
-}
-
-function getVisibleConversationActions(message: ChatMessage): ConversationAutomationAction[] {
-  return getConversationAutomationActions(message).filter((action) => action.status !== 'dismissed')
-}
-
-async function attachConversationAutomationActions(params: {
-  userText: string
-  assistantMessage: ChatMessage | null
-  attachment?: {
-    fileName: string
-    parsedText?: string
-  } | null
-}) {
-  if (!params.assistantMessage) return
-
-  const sourceMessage = findPreviousUserMessage(params.assistantMessage.id)
-  if (!sourceMessage) return
-
-  const actions = buildConversationAutomationActions({
-    userText: params.userText,
-    assistantContent: params.assistantMessage.content,
-    sourceMessageId: sourceMessage.id,
-    attachment: params.attachment,
-  })
-
-  if (!actions.length) return
-
-  await chatStore.updateMessage(params.assistantMessage.id, (current) => ({
-    ...current,
-    metadata: {
-      ...(current.metadata ?? {}),
-      [CHAT_AUTOMATION_METADATA_KEY]: mergeConversationActions(
-        getConversationAutomationActions(current),
-        actions,
-      ),
-    },
-  }))
-}
-
-function automationStatusLabel(status: ConversationAutomationAction['status']): string {
-  switch (status) {
-    case 'running':
-      return '执行中'
-    case 'completed':
-      return '已完成'
-    case 'failed':
-      return '失败'
-    case 'dismissed':
-      return '已忽略'
-    default:
-      return '待确认'
-  }
-}
-
-function automationExecuteLabel(action: ConversationAutomationAction): string {
-  if (action.status === 'failed') return '重试'
-
-  switch (action.kind) {
-    case 'create_task':
-      return '创建任务'
-    case 'pause_task':
-      return '暂停'
-    case 'resume_task':
-      return '恢复'
-    case 'trigger_task':
-      return '立即执行'
-    case 'delete_task':
-      return '删除任务'
-    case 'add_text_to_knowledge':
-    case 'add_attachment_to_knowledge':
-      return '写入知识库'
-    case 'search_knowledge':
-      return '执行搜索'
-    case 'reindex_document':
-      return '重建索引'
-    case 'delete_document':
-      return '删除文档'
-  }
-}
-
-async function updateConversationAction(
-  messageId: string,
-  actionId: string,
-  updater: (action: ConversationAutomationAction) => ConversationAutomationAction,
-) {
-  await chatStore.updateMessage(messageId, (current) => {
-    const actions = getConversationAutomationActions(current)
-    return {
-      ...current,
-      metadata: {
-        ...(current.metadata ?? {}),
-        [CHAT_AUTOMATION_METADATA_KEY]: actions.map((action) =>
-          action.id === actionId ? updater(action) : action,
-        ),
-      },
-    }
-  })
-}
-
-async function dismissConversationAction(messageId: string, actionId: string) {
-  await updateConversationAction(messageId, actionId, (action) => ({
-    ...action,
-    status: 'dismissed',
-    error: undefined,
-  }))
-}
-
-async function resolveTaskByName(targetName: string): Promise<CronJob> {
-  const response = await getCronJobs()
-  const jobs = response.jobs || []
-  const target = normalizeLookupValue(targetName)
-
-  const exact = jobs.find((job) => normalizeLookupValue(job.name) === target)
-  if (exact) return exact
-
-  const fuzzy = jobs.filter((job) => normalizeLookupValue(job.name).includes(target))
-  if (fuzzy.length === 1) return fuzzy[0] as CronJob
-  if (fuzzy.length > 1) {
-    throw new Error(
-      `找到多个匹配任务：${fuzzy
-        .slice(0, 3)
-        .map((job) => job.name)
-        .join('、')}`,
-    )
-  }
-
-  throw new Error(`未找到任务：${targetName}`)
-}
-
-async function resolveDocumentByTitle(targetTitle: string): Promise<KnowledgeDoc> {
-  const response = await getDocuments()
-  const docs = response.documents || []
-  const target = normalizeLookupValue(targetTitle)
-
-  const exact = docs.find((doc) => normalizeLookupValue(doc.title) === target)
-  if (exact) return exact
-
-  const fuzzy = docs.filter((doc) => normalizeLookupValue(doc.title).includes(target))
-  if (fuzzy.length === 1) return fuzzy[0] as KnowledgeDoc
-  if (fuzzy.length > 1) {
-    throw new Error(
-      `找到多个匹配文档：${fuzzy
-        .slice(0, 3)
-        .map((doc) => doc.title)
-        .join('、')}`,
-    )
-  }
-
-  throw new Error(`未找到知识文档：${targetTitle}`)
-}
-
-async function executeConversationAction(
-  action: ConversationAutomationAction,
-): Promise<ConversationAutomationResult> {
-  switch (action.kind) {
-    case 'create_task': {
-      const created = await createCronJob(action.payload)
-      return {
-        summary: `已创建任务「${created.name || action.payload.name}」`,
-        items: [
-          { title: '计划', content: action.payload.schedule },
-          { title: '下一次执行', content: created.next_run_at || '等待调度' },
-        ],
-      }
-    }
-    case 'pause_task': {
-      const job = await resolveTaskByName(action.payload.targetName)
-      await pauseCronJob(job.id)
-      return { summary: `已暂停任务「${job.name}」` }
-    }
-    case 'resume_task': {
-      const job = await resolveTaskByName(action.payload.targetName)
-      await resumeCronJob(job.id)
-      return { summary: `已恢复任务「${job.name}」` }
-    }
-    case 'trigger_task': {
-      const job = await resolveTaskByName(action.payload.targetName)
-      await triggerCronJob(job.id)
-      return { summary: `已触发任务「${job.name}」` }
-    }
-    case 'delete_task': {
-      const job = await resolveTaskByName(action.payload.targetName)
-      await deleteCronJob(job.id)
-      return { summary: `已删除任务「${job.name}」` }
-    }
-    case 'add_text_to_knowledge': {
-      await addDocument(action.payload.title, action.payload.content, action.payload.source)
-      return {
-        summary: `已写入知识库文档「${action.payload.title}」`,
-        items: [
-          {
-            title: '内容预览',
-            content: clipAutomationText(action.payload.content, 120),
-          },
-        ],
-      }
-    }
-    case 'add_attachment_to_knowledge': {
-      const sourceMessage = chatStore.messages.find(
-        (message) => message.id === action.payload.sourceMessageId,
-      )
-      const parsedDocument = getParsedDocumentContentFromMessage(sourceMessage)
-      if (!parsedDocument) {
-        throw new Error('未找到可写入知识库的附件文本内容')
-      }
-      await addDocument(action.payload.title, parsedDocument.content, action.payload.source)
-      return {
-        summary: `已将附件写入知识库「${action.payload.title}」`,
-        items: [
-          {
-            title: '内容预览',
-            content: clipAutomationText(parsedDocument.content, 120),
-          },
-        ],
-      }
-    }
-    case 'search_knowledge': {
-      const response = await searchKnowledge(action.payload.query, action.payload.topK)
-      const results = response.result || []
-      return {
-        summary: results.length
-          ? `找到 ${results.length} 条与「${action.payload.query}」相关的知识库结果`
-          : `未找到与「${action.payload.query}」相关的知识库内容`,
-        items: results.slice(0, action.payload.topK).map((item, index) => {
-          const metaParts: string[] = []
-          if (item.source) metaParts.push(item.source)
-          if (typeof item.chunk_index === 'number') {
-            const total = typeof item.chunk_count === 'number' ? `/${item.chunk_count}` : ''
-            metaParts.push(`Chunk ${item.chunk_index + 1}${total}`)
-          }
-          return {
-            title: item.doc_title || item.source || `结果 ${index + 1}`,
-            subtitle: metaParts.join(' · ') || undefined,
-            content: clipAutomationText(item.content, 140),
-          }
-        }),
-      }
-    }
-    case 'reindex_document': {
-      const doc = await resolveDocumentByTitle(action.payload.targetTitle)
-      await reindexDocument(doc.id)
-      return { summary: `已触发文档「${doc.title}」重建索引` }
-    }
-    case 'delete_document': {
-      const doc = await resolveDocumentByTitle(action.payload.targetTitle)
-      await deleteDocument(doc.id)
-      return { summary: `已删除知识文档「${doc.title}」` }
-    }
-  }
-}
-
-async function handleConversationAction(messageId: string, actionId: string) {
-  const message = chatStore.messages.find((item) => item.id === messageId)
-  if (!message) return
-
-  const action = getConversationAutomationActions(message).find((item) => item.id === actionId)
-  if (!action || action.status === 'running' || action.status === 'completed') return
-
-  await updateConversationAction(messageId, actionId, (current) => ({
-    ...current,
-    status: 'running',
-    error: undefined,
-  }))
-
-  try {
-    const result = await executeConversationAction(action)
-    await updateConversationAction(messageId, actionId, (current) => ({
-      ...current,
-      status: 'completed',
-      result,
-      error: undefined,
-    }))
-    toast.success(result.summary)
-  } catch (error) {
-    const messageText = error instanceof Error ? error.message : String(error)
-    await updateConversationAction(messageId, actionId, (current) => ({
-      ...current,
-      status: 'failed',
-      error: messageText,
-    }))
-    toast.error(messageText)
-  }
-}
-
-async function handleSend(text: string) {
-  const attachmentAutomation =
-    attachmentPreview.value?.type === 'file' && parsedDocument.value
-      ? {
-          fileName: attachmentPreview.value.name,
-          parsedText: parsedDocument.value.text,
-        }
-      : null
-
-  // 如果有附件，转成 base64 一并发送
-  const attachments: import('@/types').ChatAttachment[] = []
-  if (attachmentPreview.value) {
-    const { file, type } = attachmentPreview.value
-    const data = await fileToBase64(file)
-    attachments.push({ type, name: file.name, mime: file.type, data })
-    clearAttachmentPreview()
-  }
-
-  // If a document was parsed, prepend its content to the message
-  let finalText = text
-  if (parsedDocument.value) {
-    const doc = parsedDocument.value
-    const pageInfo = doc.pageCount ? ` (${doc.pageCount}页)` : ''
-    finalText = `[文件: ${doc.fileName}${pageInfo}]\n\n${doc.text}\n\n---\n${text}`
-    parsedDocument.value = null
-  }
-
-  // Set agent role for research mode
-  if (chatStore.chatMode === 'research') {
-    chatStore.agentRole = 'researcher'
-  }
-
-  const assistantMessage = await chatStore.sendMessage(
-    finalText,
-    attachments.length > 0 ? attachments : undefined,
-  )
-  await attachConversationAutomationActions({
-    userText: text,
-    assistantMessage,
-    attachment: attachmentAutomation,
-  })
-  await nextTick()
-  scrollToBottom()
-}
-
-/** File → Base64 */
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const result = reader.result as string
-      // 去掉 data:xxx;base64, 前缀
-      resolve(result.split(',')[1] || result)
-    }
-    reader.onerror = reject
-    reader.readAsDataURL(file)
-  })
-}
-
-async function handleRetry(msgIndex: number) {
-  const msgs = chatStore.messages
-  for (let i = msgIndex - 1; i >= 0; i--) {
-    if (msgs[i]?.role === 'user') {
-      const removed = chatStore.messages.splice(msgIndex)
-      for (const m of removed) {
-        dbDeleteMessage(m.id).catch(() => {})
-      }
-      await chatStore.sendMessage(msgs[i]!.content)
-      await nextTick()
-      scrollToBottom()
-      break
-    }
-  }
-}
-
-async function handleLike(msgId: string) {
-  const message = chatStore.messages.find((item) => item.id === msgId)
-  if (!message) return
-
-  const nextFeedback = message.metadata?.user_feedback === 'like' ? null : 'like'
-  try {
-    await chatStore.setMessageFeedback(msgId, nextFeedback)
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : '同步点赞状态失败')
-  }
-}
-
-async function handleDislike(msgId: string) {
-  const message = chatStore.messages.find((item) => item.id === msgId)
-  if (!message) return
-
-  const nextFeedback = message.metadata?.user_feedback === 'dislike' ? null : 'dislike'
-  try {
-    await chatStore.setMessageFeedback(msgId, nextFeedback)
-  } catch (error) {
-    toast.error(error instanceof Error ? error.message : '同步点踩状态失败')
-  }
-}
-
-function handleEdit(msgIndex: number) {
-  const msg = chatStore.messages[msgIndex]
-  if (!msg || msg.role !== 'user') return
-  const content = msg.content
-  const removed = chatStore.messages.splice(msgIndex)
-  for (const m of removed) {
-    dbDeleteMessage(m.id).catch(() => {})
-  }
-  chatInputRef.value?.setInput(content)
-}
-
 function scrollToBottom() {
   messagesEndRef.value?.scrollIntoView({ behavior: 'smooth' })
 }
+
+function clearAttachmentPreview() {
+  if (attachmentPreview.value) {
+    URL.revokeObjectURL(attachmentPreview.value.url)
+    attachmentPreview.value = null
+  }
+  parsedDocument.value = null
+  documentParsing.value = false
+}
+
+// ─── Composables ────────────────────────────────────
+const {
+  getVisibleConversationActions,
+  attachConversationAutomationActions,
+  automationStatusLabel,
+  automationExecuteLabel,
+  handleConversationAction,
+  dismissConversationAction,
+} = useConversationAutomation(chatStore, toast)
+
+const { handleSend } = useChatSend({
+  chatStore,
+  parsedDocument,
+  attachmentPreview,
+  clearAttachmentPreview,
+  scrollToBottom,
+  attachConversationAutomationActions,
+})
+
+const {
+  editingMsgId,
+  editingText,
+  setEditTextareaEl,
+  handleRetry,
+  handleLike,
+  handleDislike,
+  handleEdit,
+  confirmEdit,
+  cancelEdit,
+  autoResizeEditTextarea,
+} = useChatActions(chatStore, toast, handleSend)
 
 watch(
   () => chatStore.messages.length,
@@ -912,15 +516,6 @@ function handleDrop(e: DragEvent) {
   if (file) handleFileUpload(file)
 }
 
-function clearAttachmentPreview() {
-  if (attachmentPreview.value) {
-    URL.revokeObjectURL(attachmentPreview.value.url)
-    attachmentPreview.value = null
-  }
-  parsedDocument.value = null
-  documentParsing.value = false
-}
-
 function handleSearchShortcut(e: KeyboardEvent) {
   if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
     e.preventDefault()
@@ -946,199 +541,28 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
     </div>
 
     <!-- Main chat area -->
-    <div class="hc-chat__main">
-      <!-- Compact toolbar -->
-      <div class="hc-chat__toolbar">
-        <div class="hc-chat__toolbar-row">
-          <!-- Chat / Artifacts / History segmented control -->
-          <SegmentedControl v-model="chatViewTab" :segments="chatViewSegments" />
-
-          <div class="hc-chat__stat-strip">
-            <!-- Chat mode toggle -->
-            <button
-              class="hc-chat__mode-btn"
-              :class="{ 'hc-chat__mode-btn--active': chatStore.chatMode === 'research' }"
-              :title="t('chat.researchMode', 'Research Mode')"
-              @click="chatStore.chatMode = chatStore.chatMode === 'research' ? 'chat' : 'research'"
-            >
-              <BookOpen :size="12" />
-              {{ t('chat.research', 'Research') }}
-            </button>
-            <span class="hc-chat__stat-pill"
-              >{{ chatStore.messages.length }} {{ t('chat.messagesStat') }}</span
-            >
-            <span class="hc-chat__stat-pill"
-              >{{ chatStore.artifacts.length }} {{ t('chat.artifactsStat') }}</span
-            >
-            <span class="hc-chat__stat-pill"
-              >{{ activeSkillCount }} {{ t('chat.skillsStat') }}</span
-            >
-            <span
-              v-if="chatStore.messages.length > 0"
-              class="hc-token-badge"
-              :title="t('chat.aboutTokens', { n: estimatedTokens })"
-            >
-              {{ t('chat.aboutTokens', { n: formatTokenCount(estimatedTokens) }) }}
-            </span>
+    <div
+      class="hc-chat__main"
+      @dragover.prevent="isDragging = true"
+      @dragleave.prevent="isDragging = false"
+      @drop.prevent="handleDrop"
+    >
+      <!-- Drag overlay (文件拖入时显示) -->
+      <Transition name="fade">
+        <div v-if="isDragging" class="hc-chat__drop-overlay">
+          <div class="hc-chat__drop-hint">
+            {{ t('chat.dropHint', '松开以添加文件') }}
           </div>
-
-          <!-- Model selector -->
-          <div class="hc-model-selector">
-            <button class="hc-model-selector__btn" @click="showModelSelector = !showModelSelector">
-              <span class="hc-model-selector__name">{{ selectedModelDisplay }}</span>
-              <span v-if="supportsVision || supportsVideo" class="hc-model-selector__btn-caps">
-                <Eye
-                  v-if="supportsVision"
-                  :size="11"
-                  class="hc-model-selector__cap-icon hc-model-selector__cap-icon--vision"
-                />
-                <Video
-                  v-if="supportsVideo"
-                  :size="11"
-                  class="hc-model-selector__cap-icon hc-model-selector__cap-icon--video"
-                />
-              </span>
-              <ChevronDown :size="13" />
-            </button>
-
-            <!-- Dropdown -->
-            <div
-              v-if="showModelSelector"
-              class="hc-model-selector__dropdown"
-              @mouseleave="showModelSelector = false"
-            >
-              <!-- Auto 选项 -->
-              <button
-                class="hc-model-selector__item hc-model-selector__item--auto"
-                :class="{ 'hc-model-selector__item--active': selectedModel === 'auto' }"
-                @click="selectModel('auto')"
-              >
-                <Zap :size="12" style="color: var(--hc-accent); margin-right: 4px" />
-                <span class="hc-model-selector__item-name">Auto</span>
-                <span class="hc-model-selector__item-hint">{{ t('chat.autoMode') }}</span>
-              </button>
-              <div class="hc-model-selector__divider" />
-              <template v-if="Object.keys(groupedModels).length > 0">
-                <div
-                  v-for="(group, pid) in groupedModels"
-                  :key="pid"
-                  class="hc-model-selector__group"
-                >
-                  <div class="hc-model-selector__group-label">{{ group.providerName }}</div>
-                  <button
-                    v-for="m in group.models"
-                    :key="m.modelId"
-                    class="hc-model-selector__item"
-                    :class="{
-                      'hc-model-selector__item--active':
-                        selectedModel === m.modelId && selectedProviderId === pid,
-                    }"
-                    @click="selectModel(m.modelId, String(pid), m.providerKey, group.providerName)"
-                  >
-                    <span class="hc-model-selector__item-name">{{ m.modelName }}</span>
-                    <span class="hc-model-selector__caps">
-                      <Eye
-                        v-if="m.capabilities.includes('vision')"
-                        :size="11"
-                        class="hc-model-selector__cap-icon hc-model-selector__cap-icon--vision"
-                        title="Vision"
-                      />
-                      <Video
-                        v-if="m.capabilities.includes('video')"
-                        :size="11"
-                        class="hc-model-selector__cap-icon hc-model-selector__cap-icon--video"
-                        title="Video"
-                      />
-                      <Headphones
-                        v-if="m.capabilities.includes('audio')"
-                        :size="11"
-                        class="hc-model-selector__cap-icon hc-model-selector__cap-icon--audio"
-                        title="Audio"
-                      />
-                    </span>
-                  </button>
-                </div>
-              </template>
-              <div v-else class="hc-model-selector__empty">
-                {{
-                  settingsStore.enabledProviders.length > 0
-                    ? t('chat.noModels')
-                    : t('settings.llm.noProvidersDesc')
-                }}
-              </div>
-            </div>
-          </div>
-
-          <!-- Chat params toggle -->
-          <button
-            class="hc-chat__toolbar-btn"
-            :title="t('settings.llm.temperature')"
-            @click="showChatParams = !showChatParams"
-            :class="{ 'hc-chat__toolbar-btn--active': showChatParams }"
-          >
-            <Settings2 :size="14" />
-          </button>
-
-          <div style="flex: 1" />
-
-          <!-- Right actions -->
-          <button
-            v-if="chatStore.messages.length > 0"
-            class="hc-chat__toolbar-btn"
-            :title="t('common.search') + ' (⌘F)'"
-            @click="showSearch = !showSearch"
-          >
-            <Search :size="14" />
-          </button>
-          <button
-            v-if="chatStore.messages.length > 0"
-            class="hc-chat__toolbar-btn"
-            :title="t('common.download')"
-            @click="showExport = !showExport"
-          >
-            <Download :size="14" />
-          </button>
-          <ChatExportMenu
-            v-if="showExport"
-            :messages="chatStore.messages"
-            @close="showExport = false"
-          />
-
-          <!-- Artifacts panel toggle -->
-          <button
-            class="hc-chat__toolbar-btn"
-            :class="{ 'hc-chat__toolbar-btn--active': chatStore.showArtifacts }"
-            :title="t('chat.artifacts')"
-            @click="chatStore.showArtifacts = !chatStore.showArtifacts"
-          >
-            <PanelRightOpen :size="14" />
-            <span v-if="chatStore.artifacts.length > 0" class="hc-chat__artifact-badge">{{
-              chatStore.artifacts.length
-            }}</span>
-          </button>
-
-          <span class="hc-chat__toolbar-sep" />
-
-          <!-- Session list toggle -->
-          <button
-            class="hc-chat__toolbar-btn"
-            :class="{ 'hc-chat__toolbar-btn--active': showSessions }"
-            :title="t('chat.toggleSessions')"
-            @click="showSessions = !showSessions"
-          >
-            <MessageSquarePlus :size="14" />
-          </button>
-
-          <!-- Context panel toggle -->
-          <button
-            class="hc-chat__toolbar-btn"
-            :title="t('chat.contextPanel')"
-            @click="appStore.toggleDetailPanel"
-          >
-            <PanelRightOpen :size="14" />
-          </button>
         </div>
-      </div>
+      </Transition>
+      <!-- Compact toolbar -->
+      <ChatToolbar
+        v-model:active-tab="chatViewTab"
+        v-model:show-sessions="showSessions"
+        :message-count="chatStore.messages.length"
+        :token-badge="t('chat.aboutTokens', { n: formatTokenCount(estimatedTokens) })"
+        @search="showSearch = !showSearch"
+      />
 
       <!-- Chat params bar -->
       <div v-if="showChatParams" class="hc-chat__params">
@@ -1199,8 +623,8 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
               :key="msg.id"
               class="hc-msg"
               :class="msg.role === 'user' ? 'hc-msg--user' : 'hc-msg--assistant'"
-              @mouseenter="hoveredMsgId = msg.id"
-              @mouseleave="hoveredMsgId = null"
+              @mouseenter="setHoveredMsg(msg.id)"
+              @mouseleave="delayedClearHover()"
               @contextmenu="handleMsgContextMenu($event, idx, msg.role as 'user' | 'assistant')"
             >
               <!-- Assistant message (Feishu style: avatar left + bubble) -->
@@ -1417,7 +841,23 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
                       </div>
-                      {{ msg.content }}
+                      <template v-if="editingMsgId !== msg.id">{{ msg.content }}</template>
+                    </div>
+                    <!-- DeepSeek 风格原位编辑框（独立圆角卡片） -->
+                    <div v-if="editingMsgId === msg.id" class="hc-msg__edit-card">
+                      <textarea
+                        :ref="(el) => { if (el) setEditTextareaEl(el as HTMLTextAreaElement) }"
+                        v-model="editingText"
+                        class="hc-msg__edit-textarea"
+                        rows="1"
+                        @keydown.enter.exact.prevent="confirmEdit(msg.id)"
+                        @keydown.escape="cancelEdit"
+                        @input="autoResizeEditTextarea"
+                      />
+                      <div class="hc-msg__edit-actions">
+                        <button class="hc-msg__edit-btn hc-msg__edit-btn--cancel" @click="cancelEdit">取消</button>
+                        <button class="hc-msg__edit-btn hc-msg__edit-btn--send" @click="confirmEdit(msg.id)">发送</button>
+                      </div>
                     </div>
                     <!-- Hover actions toolbar -->
                     <div
@@ -1510,46 +950,57 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
               </div>
               <button class="hc-chat__attach-remove" @click="clearAttachmentPreview">×</button>
             </div>
-            <div
-              v-if="!attachmentPreview"
-              class="hc-chat-attach-zone"
-              :class="{ 'hc-chat-attach-zone--drag': isDragging }"
-              @click="chatInputRef?.triggerFileUpload?.()"
-              @dragover.prevent="isDragging = true"
-              @dragleave.prevent="isDragging = false"
-              @drop.prevent="handleDrop"
-            >
-              <span>📎</span>
-              <span class="hc-chat-attach-zone__label">{{
-                t('chat.attachHint', '拖拽文件到此处或点击添加附件')
-              }}</span>
-            </div>
             <ChatInput
               ref="chatInputRef"
               :streaming="chatStore.isCurrentStreaming"
-              :exec-mode="chatStore.execMode"
               :agents="agentsStore.roles"
               :skills="availableSkills"
               :allow-image="supportsVision"
               :allow-video="supportsVideo"
+              :recipient-name="chatStore.agentRole || t('chat.defaultAgent', '小蟹')"
               @send="handleSend"
               @stop="chatStore.stopStreaming()"
-              @file="handleFileUpload"
-              @update:exec-mode="chatStore.execMode = $event"
-            />
-            <!-- Composer chips -->
-            <div class="hc-chat__composer-chips">
-              <span v-if="selectedProviderName" class="hc-chat__chip"
-                >{{ t('chat.provider') }}：{{ selectedProviderName }}</span
-              >
-              <span v-if="selectedModelDisplay" class="hc-chat__chip"
-                >{{ t('chat.model') }}：{{ selectedModelDisplay }}</span
-              >
-              <span v-if="chatStore.agentRole" class="hc-chat__chip"
-                >{{ t('chat.modeAgent') }}：{{ chatStore.agentRole }}</span
-              >
-            </div>
-            <div class="hc-chat__input-hint">{{ t('chat.inputHint') }}</div>
+            >
+              <!-- 模型选择器 + 深度研究（ChatGPT 风格，在输入框内底部工具栏） -->
+              <template #tools>
+                <div class="hc-model-selector hc-model-selector--inline">
+                  <button class="hc-model-selector__btn" @click="showModelSelector = !showModelSelector">
+                    <span class="hc-model-selector__name">{{ selectedModelDisplay }}</span>
+                    <ChevronDown :size="12" />
+                  </button>
+                  <div v-if="showModelSelector" class="hc-model-selector__dropdown hc-model-selector__dropdown--up" @mouseleave="showModelSelector = false">
+                    <button class="hc-model-selector__item hc-model-selector__item--auto" :class="{ 'hc-model-selector__item--active': selectedModel === 'auto' }" @click="selectModel('auto')">
+                      <Zap :size="12" style="color: var(--hc-accent); margin-right: 4px" />
+                      <span class="hc-model-selector__item-name">Auto</span>
+                    </button>
+                    <div class="hc-model-selector__divider" />
+                    <template v-if="Object.keys(groupedModels).length > 0">
+                      <div v-for="(group, pid) in groupedModels" :key="pid" class="hc-model-selector__group">
+                        <div class="hc-model-selector__group-label">{{ group.providerName }}</div>
+                        <button v-for="m in group.models" :key="m.modelId" class="hc-model-selector__item" :class="{ 'hc-model-selector__item--active': selectedModel === m.modelId && selectedProviderId === pid }" @click="selectModel(m.modelId, String(pid), m.providerKey, group.providerName)">
+                          <span class="hc-model-selector__item-name">{{ m.modelName }}</span>
+                          <span v-if="selectedModel === m.modelId && selectedProviderId === pid" style="color: var(--hc-accent); margin-left: auto;">✓</span>
+                        </button>
+                      </div>
+                    </template>
+                    <div v-else class="hc-model-selector__empty">
+                      <template v-if="settingsStore.enabledProviders.length > 0">{{ t('chat.noModels') }}</template>
+                      <button v-else class="hc-model-selector__add-link" @click="showModelSelector = false; $router.push('/settings')">
+                        {{ t('settings.llm.noProvidersDesc') }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  class="hc-chat__research-btn"
+                  :class="{ 'hc-chat__research-btn--active': chatStore.chatMode === 'research' }"
+                  @click="chatStore.chatMode = chatStore.chatMode === 'research' ? 'chat' : 'research'"
+                >
+                  <BookOpen :size="12" />
+                  {{ t('chat.research', 'Research') }}
+                </button>
+              </template>
+            </ChatInput>
           </div>
         </div>
       </template>
@@ -1699,12 +1150,39 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
 }
+
+/* 拖拽文件 overlay */
+.hc-chat__drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.hc-chat__drop-hint {
+  padding: 16px 32px;
+  border-radius: 12px;
+  border: 2px dashed var(--hc-accent);
+  background: var(--hc-bg-elevated);
+  color: var(--hc-accent);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.15s; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
 .hc-chat__messages {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: 12px 16px 80px;
 }
 
 .hc-chat__empty {
@@ -1800,12 +1278,13 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   align-items: flex-end;
 }
 
-/* ─── Actions floating toolbar ───── */
+/* ─── Actions floating toolbar（气泡下方，不会被顶部裁剪） ───── */
 .hc-msg__actions-float {
   position: absolute;
-  top: -36px;
+  bottom: -28px;
   z-index: var(--hc-z-dropdown);
   animation: hc-actions-fade-in 0.15s ease;
+  padding-top: 4px;
 }
 
 .hc-msg__actions-float--left {
@@ -1844,9 +1323,89 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 .hc-msg__bubble--user {
-  background: var(--hc-accent);
-  color: #fff;
+  background: color-mix(in srgb, var(--hc-accent) 8%, var(--hc-bg-card));
+  color: var(--hc-text-primary);
   border-bottom-right-radius: 4px;
+  border: 1px solid color-mix(in srgb, var(--hc-accent) 10%, transparent);
+}
+
+/* ─── DeepSeek 风格原位编辑卡片 ───── */
+/* Apple HIG: 编辑卡片 — 0.5px 边框, 16px 圆角, 弹簧入场 */
+.hc-msg__edit-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+  padding: 20px;
+  border: 0.5px solid var(--hc-accent, #007AFF);
+  border-radius: 16px;
+  background: var(--hc-bg-input);
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12),
+              0 4px 12px rgba(0, 0, 0, 0.08);
+  max-width: 100%;
+  animation: fadeScaleIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.hc-msg__edit-textarea {
+  width: 100%;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--hc-text-primary, #1D1D1F);
+  font-size: 16px;
+  line-height: 1.6;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  padding: 0;
+  overflow-y: auto;
+  max-height: 200px;
+}
+
+.hc-msg__edit-textarea::placeholder { color: var(--hc-text-secondary, #6E6E73); }
+
+.hc-msg__edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.hc-msg__edit-btn {
+  padding: 7px 20px;
+  border-radius: 10px;
+  border: none;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  transition: background-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.hc-msg__edit-btn:active { transform: scale(0.96); }
+
+.hc-msg__edit-btn--cancel {
+  background: var(--hc-bg-card, #F5F5F7);
+  color: var(--hc-text-secondary, #6E6E73);
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+}
+
+.hc-msg__edit-btn--cancel:hover {
+  background: var(--hc-bg-hover, #EBEBED);
+}
+
+.hc-msg__edit-btn--send {
+  background: var(--hc-accent, #007AFF);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 122, 255, 0.25);
+}
+
+.hc-msg__edit-btn--send:hover {
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+}
+
+@keyframes fadeScaleIn {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 /* ─── Time ───── */
@@ -1953,8 +1512,10 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 .hc-chat__stat-strip {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .hc-chat__stat-pill {
@@ -2040,6 +1601,80 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 /* ─── Model Selector ───── */
+/* 胶囊按钮（Apple + DeepSeek 融合风格） */
+/* Apple HIG 胶囊按钮: 0.5px 边框, 10px 圆角, 禁止 transition: all */
+.hc-chat__research-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 7px 16px;
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  background: var(--hc-bg-card, #F5F5F7);
+  color: var(--hc-text-secondary, #6E6E73);
+  font-size: 14px;
+  font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  cursor: pointer;
+  border-radius: 10px;
+  transition: border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+              color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+
+.hc-chat__research-btn:hover {
+  border-color: rgba(0, 122, 255, 0.3);
+  color: var(--hc-accent, #007AFF);
+  background: rgba(0, 122, 255, 0.06);
+}
+
+.hc-chat__research-btn:active { transform: scale(0.97); }
+
+.hc-chat__research-btn--active {
+  border-color: rgba(0, 122, 255, 0.3);
+  background: rgba(0, 122, 255, 0.08);
+  color: var(--hc-accent, #007AFF);
+}
+
+/* 模型选择胶囊 */
+.hc-model-selector--inline .hc-model-selector__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 16px;
+  border: 0.5px solid rgba(0, 0, 0, 0.1);
+  background: var(--hc-bg-card, #F5F5F7);
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  color: var(--hc-text-secondary, #6E6E73);
+  cursor: pointer;
+  transition: border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+              color 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  white-space: nowrap;
+}
+
+.hc-model-selector--inline .hc-model-selector__btn:hover {
+  border-color: rgba(0, 122, 255, 0.3);
+  color: var(--hc-accent, #007AFF);
+}
+
+.hc-model-selector--inline .hc-model-selector__btn:active { transform: scale(0.97); }
+
+.hc-model-selector--inline .hc-model-selector__dropdown {
+  bottom: 100%;
+  top: auto;
+  margin-bottom: 8px;
+  left: 0;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.06);
+  z-index: 100;
+}
+
 .hc-model-selector {
   position: relative;
 }
@@ -2079,7 +1714,9 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   overflow-y: auto;
   border-radius: var(--hc-radius-md);
   border: 1px solid var(--hc-border);
-  background: var(--hc-bg-card);
+  background: var(--hc-bg-elevated, var(--hc-bg-card, #fff));
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
   z-index: var(--hc-z-dropdown);
   padding: 4px;
@@ -2189,6 +1826,21 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   text-align: center;
   font-size: 12px;
   color: var(--hc-text-muted);
+}
+
+.hc-model-selector__add-link {
+  border: none;
+  background: none;
+  color: var(--hc-accent);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.hc-model-selector__add-link:hover {
+  color: var(--hc-accent-hover);
 }
 
 /* ─── Chat Params Bar ───── */

@@ -60,7 +60,33 @@ Set these repository secrets:
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 
+To build distributable macOS installers, also configure the Apple code-signing secrets:
+
+- `APPLE_CERTIFICATE`
+- `APPLE_CERTIFICATE_PASSWORD`
+
+And provide one notarization authentication path:
+
+- Apple ID: `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`
+- App Store Connect: `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_PRIVATE_KEY` (the workflow writes it to `private_keys/AuthKey_<APPLE_API_KEY>.p8`)
+
 If your private key has no password, the second secret can stay empty or be omitted.
+
+If you already have the `.p12` certificate and `AuthKey_*.p8`, you can push them into GitHub secrets with the repo helper:
+
+```bash
+bash ./scripts/ci/set-github-macos-secrets.sh \
+  --repo hexagon-codes/hexclaw-desktop \
+  --certificate ~/Downloads/developer-id.p12 \
+  --certificate-password '***' \
+  --api-key-id ABC123XYZ9 \
+  --api-issuer 11111111-2222-3333-4444-555555555555 \
+  --api-private-key ~/Downloads/AuthKey_ABC123XYZ9.p8
+```
+
+Add `--dry-run` if you want to validate the arguments first without writing any secrets.
+
+For the full Apple-side setup, see [macOS Release Setup](./macos-release.en.md).
 
 ## Release Flow
 
@@ -105,7 +131,16 @@ That tells Tauri to generate updater artifacts and sign them during build. If `T
 
 ### Does this affect manual `.app` / `.dmg` distribution?
 
-No. It affects updater signing, not the ordinary installer packages.
+Not for the Tauri updater key alone. That only affects updater signing, not the ordinary installer packages.
+
+Apple signing / notarization on macOS does affect manual distribution. Without those secrets, browser-downloaded `.dmg` / `.app` bundles are likely to be blocked by Gatekeeper as "damaged".
+
+### What does the workflow validate now?
+
+- It checks that the required macOS signing / notarization secrets exist before build.
+- It runs `codesign --verify` on the generated `.app`.
+- It runs `spctl -a -vv` on the generated `.app`.
+- If a `.dmg` exists, it also runs `xcrun stapler validate`.
 
 ### Do prereleases auto-update?
 

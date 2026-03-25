@@ -2,7 +2,7 @@
 import { onMounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { FileText, RefreshCw, Upload } from 'lucide-vue-next'
+import { FileText } from 'lucide-vue-next'
 import KnowledgeView from '@/views/KnowledgeView.vue'
 import MemoryView from '@/views/MemoryView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
@@ -74,25 +74,7 @@ function onAddTextDoc() {
       <template #actions>
         <template v-if="activeTab === 'docs'">
           <button
-            class="hc-btn hc-btn-ghost"
-            :disabled="!knowledgeEnabled"
-            :title="!knowledgeEnabled ? t('knowledge.backendDisabled') : undefined"
-            @click="onRebuildIndex"
-          >
-            <RefreshCw :size="14" />
-            {{ t('knowledge.rebuildIndex', 'Rebuild Index') }}
-          </button>
-          <button
             class="hc-btn hc-btn-primary"
-            :disabled="!knowledgeEnabled"
-            :title="!knowledgeEnabled ? t('knowledge.backendDisabled') : undefined"
-            @click="onUploadDoc"
-          >
-            <Upload :size="14" />
-            {{ t('knowledge.uploadDocument', 'Upload Document') }}
-          </button>
-          <button
-            class="hc-btn hc-btn-ghost"
             :disabled="!knowledgeEnabled"
             :title="!knowledgeEnabled ? t('knowledge.backendDisabled') : undefined"
             @click="onAddTextDoc"

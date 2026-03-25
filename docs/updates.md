@@ -60,7 +60,33 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
 - `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 
+如果要构建可正常分发的 macOS 安装包，还要配置 Apple 代码签名 secrets：
+
+- `APPLE_CERTIFICATE`
+- `APPLE_CERTIFICATE_PASSWORD`
+
+并提供一组 notarization 认证方式：
+
+- Apple ID：`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`
+- App Store Connect：`APPLE_API_KEY`、`APPLE_API_ISSUER`、`APPLE_API_PRIVATE_KEY`（workflow 会自动生成 `private_keys/AuthKey_<APPLE_API_KEY>.p8`）
+
 如果你的私钥没有密码，第二项可以留空或不设置。
+
+如果你已经拿到 `.p12` 和 `AuthKey_*.p8` 文件，可以直接用仓库里的脚本把它们写入 GitHub secrets：
+
+```bash
+bash ./scripts/ci/set-github-macos-secrets.sh \
+  --repo hexagon-codes/hexclaw-desktop \
+  --certificate ~/Downloads/developer-id.p12 \
+  --certificate-password '***' \
+  --api-key-id ABC123XYZ9 \
+  --api-issuer 11111111-2222-3333-4444-555555555555 \
+  --api-private-key ~/Downloads/AuthKey_ABC123XYZ9.p8
+```
+
+如果你想先确认参数，不实际写入 secrets，可以追加 `--dry-run`。
+
+Apple 平台侧的完整准备步骤见 [macOS 正式发布准备](./macos-release.md)。
 
 ## 发布流程
 
@@ -105,7 +131,16 @@ git push origin v0.0.3
 
 ### 这会影响 `.app` / `.dmg` 手动安装吗？
 
-不会。它影响的是自动更新制品签名，不影响普通安装包的手动分发。
+Tauri updater 私钥不会。它影响的是自动更新制品签名，不影响普通安装包的手动分发。
+
+但 macOS 的 Apple 签名 / notarization 会影响。缺少这组 secrets 时，浏览器下载的 `.dmg` / `.app` 很可能会被 Gatekeeper 提示为“已损坏，无法打开”。
+
+### workflow 现在会自动验证什么？
+
+- 构建前检查 macOS 签名 / notarization secrets 是否齐全
+- 构建后在 macOS runner 上执行 `codesign --verify`
+- 构建后执行 `spctl -a -vv`
+- 如果有 `.dmg`，额外执行 `xcrun stapler validate`
 
 ### 预发布版本会自动更新吗？
 

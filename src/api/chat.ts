@@ -26,6 +26,8 @@ export async function sendChatViaBackend(
     role?: string
     provider?: string
     model?: string
+    temperature?: number
+    maxTokens?: number
     attachments?: { type: string; name: string; mime: string; data: string }[]
   },
 ): Promise<BackendChatResponse> {
@@ -41,6 +43,8 @@ export async function sendChatViaBackend(
       provider: options?.provider || null,
       user_id: DESKTOP_USER_ID,
       model: options?.model || null,
+      temperature: options?.temperature ?? null,
+      max_tokens: options?.maxTokens ?? null,
       attachments: options?.attachments || null,
     },
   })

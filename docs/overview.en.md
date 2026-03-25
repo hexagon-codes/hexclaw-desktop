@@ -47,6 +47,8 @@ Use `Dashboard` to check system status, model count, knowledge status, channels,
 
 `Knowledge` manages documents and memory, and provides retrieval context for chat and agent execution.
 
+Auto-RAG automatically searches the knowledge base before each message is sent, injecting high-relevance hits (score >= 0.35) into the backend context without any manual action.
+
 ### Agents
 
 `Agents` manage role templates, registered agents, default agents, and routing rules.

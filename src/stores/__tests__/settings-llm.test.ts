@@ -3,12 +3,12 @@ import { setActivePinia, createPinia } from 'pinia'
 
 // 模拟后端返回的 LLM 配置
 const MOCK_BACKEND_CONFIG = {
-  default: 'apimart',
+  default: 'testprovider',
   providers: {
-    apimart: {
+    testprovider: {
       api_key: '****5OsG',
-      base_url: 'https://apimart.asia/v1',
-      model: 'claude-sonnet-4-6-apimart',
+      base_url: 'https://api.example.com/v1',
+      model: 'claude-sonnet-4-6-test',
       compatible: 'openai',
     },
   },
@@ -93,7 +93,7 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     // 应调用 getLLMConfig
     expect(mockGetLLMConfig).toHaveBeenCalled()
     expect(store.config!.llm.providers).toHaveLength(1)
-    expect(store.config!.llm.providers[0]!.id).toBe('apimart')
+    expect(store.config!.llm.providers[0]!.id).toBe('testprovider')
   })
 
   it('无任何 Tauri 标识时不应加载后端 LLM 配置', async () => {
@@ -113,13 +113,13 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     await store.loadConfig()
 
     const provider = store.config!.llm.providers[0]!
-    expect(provider.id).toBe('apimart')
-    expect(provider.name).toBe('apimart')
+    expect(provider.id).toBe('testprovider')
+    expect(provider.name).toBe('testprovider')
     expect(provider.enabled).toBe(true)
-    expect(provider.baseUrl).toBe('https://apimart.asia/v1')
+    expect(provider.baseUrl).toBe('https://api.example.com/v1')
     expect(provider.models).toHaveLength(1)
-    expect(provider.models[0]!.id).toBe('claude-sonnet-4-6-apimart')
-    expect(provider.selectedModelId).toBe('claude-sonnet-4-6-apimart')
+    expect(provider.models[0]!.id).toBe('claude-sonnet-4-6-test')
+    expect(provider.selectedModelId).toBe('claude-sonnet-4-6-test')
   })
 
   it('defaultModel 正确映射', async () => {
@@ -129,8 +129,8 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     const store = useSettingsStore()
     await store.loadConfig()
 
-    expect(store.config!.llm.defaultModel).toBe('claude-sonnet-4-6-apimart')
-    expect(store.config!.llm.defaultProviderId).toBe('apimart')
+    expect(store.config!.llm.defaultModel).toBe('claude-sonnet-4-6-test')
+    expect(store.config!.llm.defaultProviderId).toBe('testprovider')
   })
 
   it('availableModels 计算属性正确', async () => {
@@ -141,8 +141,8 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     await store.loadConfig()
 
     expect(store.availableModels).toHaveLength(1)
-    expect(store.availableModels[0]!.modelId).toBe('claude-sonnet-4-6-apimart')
-    expect(store.availableModels[0]!.providerKey).toBe('apimart')
+    expect(store.availableModels[0]!.modelId).toBe('claude-sonnet-4-6-test')
+    expect(store.availableModels[0]!.providerKey).toBe('testprovider')
   })
 
   it('聊天运行时只暴露后端已加载的 providers，不把本地未保存草稿带进 availableModels', async () => {
@@ -174,7 +174,7 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
 
     expect(store.config!.llm.providers.some((provider) => provider.name === '智谱')).toBe(true)
     expect(store.availableModels).toHaveLength(1)
-    expect(store.availableModels[0]!.providerKey).toBe('apimart')
+    expect(store.availableModels[0]!.providerKey).toBe('testprovider')
     expect(store.availableModels.some((model) => model.providerName === '智谱')).toBe(false)
   })
 

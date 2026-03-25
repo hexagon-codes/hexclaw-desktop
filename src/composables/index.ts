@@ -15,6 +15,11 @@ export { useHexclaw } from './useHexclaw'
 export { useValidation, rules } from './useValidation'
 export type { ValidationRule, FieldErrors } from './useValidation'
 
+// ─── Chat ────────────────────────────────────────────
+export { useConversationAutomation } from './useConversationAutomation'
+export { useChatSend } from './useChatSend'
+export { useChatActions } from './useChatActions'
+
 // ─── Tauri 桌面能力 ─────────────────────────────────
 export { useAutoStart } from './useAutoStart'
 export { useAutoUpdate } from './useAutoUpdate'
