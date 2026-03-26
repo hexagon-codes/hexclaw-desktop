@@ -518,7 +518,7 @@ function navigateTo(path: string) {
 
 .hc-dash__badge--purple {
   background: rgba(147, 51, 234, 0.12);
-  color: #9333ea;
+  color: var(--hc-accent);
 }
 
 /* ── Empty ── */

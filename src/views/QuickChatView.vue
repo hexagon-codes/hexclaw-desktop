@@ -420,15 +420,15 @@ const selectedModelName = computed(() => {
           <div
             class="inline-block rounded-xl px-3 py-2 max-w-[85%]"
             :style="{
-              background: msg.error ? 'rgba(239, 68, 68, 0.08)' : 'var(--hc-bg-card)',
-              color: msg.error ? '#ef4444' : 'var(--hc-text-primary)',
+              background: msg.error ? 'color-mix(in srgb, var(--hc-error) 8%, transparent)' : 'var(--hc-bg-card)',
+              color: msg.error ? 'var(--hc-error)' : 'var(--hc-text-primary)',
             }"
           >
             <MarkdownRenderer :content="msg.content" />
             <button
               v-if="msg.error"
               class="flex items-center gap-1 mt-1.5 text-xs px-2 py-0.5 rounded transition-colors"
-              style="color: #ef4444; background: rgba(239, 68, 68, 0.1)"
+              style="color: var(--hc-error); background: color-mix(in srgb, var(--hc-error) 10%, transparent)"
               @click="handleRetry(msg)"
             >
               <RotateCcw :size="11" />
@@ -489,7 +489,7 @@ const selectedModelName = computed(() => {
         <button
           v-if="streaming"
           class="p-1 rounded transition-colors opacity-100"
-          :style="{ color: '#ef4444' }"
+          :style="{ color: 'var(--hc-error)' }"
           :title="t('chat.stopGenerate')"
           @click="handleStop"
         >

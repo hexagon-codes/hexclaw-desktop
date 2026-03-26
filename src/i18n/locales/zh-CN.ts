@@ -551,6 +551,7 @@ export default {
     summaryWarnings: '警告数',
     summaryDomains: '业务域',
     recentFailures: '最近失败事件',
+    entryUnit: '条日志',
     connecting: '连接中...',
     connected: '已连接',
     disconnected: '已断开',

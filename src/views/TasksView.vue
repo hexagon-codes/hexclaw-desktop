@@ -868,7 +868,7 @@ defineExpose({ openCreateForm, loadJobs })
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-card);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s;
   font-size: 12px;
 }
 
@@ -914,7 +914,7 @@ defineExpose({ openCreateForm, loadJobs })
   font-weight: 500;
   color: var(--hc-text-secondary);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
   justify-content: center;
 }
 

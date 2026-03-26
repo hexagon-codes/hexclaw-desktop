@@ -856,14 +856,14 @@ async function saveConfig() {
                       <CheckCircle
                         v-else-if="testProviderResult[provider.id]?.ok"
                         :size="14"
-                        style="color: #22c55e"
+                        style="color: var(--hc-success)"
                       />
                       <XCircle
                         v-else-if="
                           testProviderResult[provider.id] && !testProviderResult[provider.id]!.ok
                         "
                         :size="14"
-                        style="color: #ef4444"
+                        style="color: var(--hc-error)"
                       />
                       <Zap v-else :size="14" style="color: var(--hc-text-muted)" />
                     </button>
@@ -1775,7 +1775,7 @@ async function saveConfig() {
   gap: 8px;
   font-size: 12px;
   font-weight: 600;
-  color: #3b82f6;
+  color: var(--hc-accent);
 }
 
 .hc-settings__restart-actions {
@@ -1821,7 +1821,7 @@ async function saveConfig() {
   color: var(--hc-text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .hc-provider__type-logo {
@@ -1918,8 +1918,8 @@ async function saveConfig() {
 }
 
 .hc-provider__led--on {
-  background: #34c759;
-  box-shadow: 0 0 5px rgba(52, 199, 89, 0.35);
+  background: var(--hc-success);
+  box-shadow: 0 0 5px color-mix(in srgb, var(--hc-success) 35%, transparent);
 }
 
 .hc-provider__led--off {
@@ -1968,7 +1968,7 @@ async function saveConfig() {
 }
 
 .hc-provider__power--on {
-  color: #34c759;
+  color: var(--hc-success);
 }
 
 .hc-provider__power--off {
@@ -2119,18 +2119,18 @@ async function saveConfig() {
 }
 
 .hc-cap-tag--vision {
-  background: rgba(52, 199, 89, 0.12);
-  color: #34c759;
+  background: color-mix(in srgb, var(--hc-success) 12%, transparent);
+  color: var(--hc-success);
 }
 
 .hc-cap-tag--video {
-  background: rgba(255, 149, 0, 0.12);
-  color: #ff9500;
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+  color: var(--hc-warning);
 }
 
 .hc-cap-tag--audio {
-  background: rgba(175, 82, 222, 0.12);
-  color: #af52de;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
 }
 
 .hc-provider__test-row {
@@ -2149,12 +2149,12 @@ async function saveConfig() {
   border-radius: 6px;
 }
 .hc-provider__test-badge--ok {
-  background: #22c55e15;
-  color: #22c55e;
+  background: color-mix(in srgb, var(--hc-success) 8%, transparent);
+  color: var(--hc-success);
 }
 .hc-provider__test-badge--err {
-  background: #ef444415;
-  color: #ef4444;
+  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+  color: var(--hc-error);
 }
 
 .hc-provider__edit-footer {
@@ -2258,7 +2258,7 @@ async function saveConfig() {
   color: var(--hc-text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: border-color 0.15s, color 0.15s;
 }
 
 .hc-webhook__type-btn:hover {
@@ -2406,7 +2406,7 @@ async function saveConfig() {
   border-radius: 6px;
   cursor: pointer;
   color: var(--hc-text-muted, #5c5c6b);
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .hc-model-card__action:hover {
@@ -2415,8 +2415,8 @@ async function saveConfig() {
 }
 
 .hc-model-card__action--del:hover {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+  color: var(--hc-error);
 }
 
 /* ─── 添加模型 ─── */
@@ -2433,7 +2433,7 @@ async function saveConfig() {
   color: var(--hc-text-muted, #5c5c6b);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .hc-model-add-btn:hover {
@@ -2535,7 +2535,7 @@ async function saveConfig() {
   border-radius: 6px;
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s;
 }
 
 .hc-edit-model__cap-item:hover {

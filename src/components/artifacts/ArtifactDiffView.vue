@@ -64,11 +64,11 @@ const hasDiff = computed(() => !!props.artifact.previousContent)
 }
 
 .hc-diff__line--add {
-  background: rgba(52, 199, 89, 0.12);
+  background: color-mix(in srgb, var(--hc-success) 12%, transparent);
 }
 
 .hc-diff__line--remove {
-  background: rgba(255, 69, 58, 0.12);
+  background: color-mix(in srgb, var(--hc-error) 12%, transparent);
 }
 
 .hc-diff__gutter {
@@ -89,11 +89,11 @@ const hasDiff = computed(() => !!props.artifact.previousContent)
 }
 
 .hc-diff__line--add .hc-diff__sign {
-  color: #34c759;
+  color: var(--hc-success);
 }
 
 .hc-diff__line--remove .hc-diff__sign {
-  color: #ff453a;
+  color: var(--hc-error);
 }
 
 .hc-diff__content {

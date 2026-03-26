@@ -20,6 +20,7 @@
   --hc-text-primary: #f0f0f3;
   --hc-text-secondary: #9d9da7;
   --hc-text-muted: #5c5c6b;
+  --hc-text-inverse: #ffffff;
 
   --hc-border: rgba(255, 255, 255, 0.08);
   --hc-border-subtle: rgba(255, 255, 255, 0.04);
@@ -87,6 +88,7 @@
   --hc-text-primary: #1d1d1f;
   --hc-text-secondary: #6e6e73;
   --hc-text-muted: #aeaeb2;
+  --hc-text-inverse: #ffffff;
 
   --hc-border: rgba(0, 0, 0, 0.08);
   --hc-border-subtle: rgba(0, 0, 0, 0.04);
@@ -215,8 +217,8 @@ body,
   border: none;
   cursor: pointer;
   font-weight: 500;
-  transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
-  border-radius: var(--hc-radius-sm);
+  transition: background 0.2s cubic-bezier(0.25, 0.1, 0.25, 1), color 0.2s cubic-bezier(0.25, 0.1, 0.25, 1), transform 0.1s;
+  border-radius: var(--hc-radius-md);
 }
 
 .hc-btn:active {
@@ -226,10 +228,10 @@ body,
 
 .hc-btn-primary {
   background: var(--hc-accent);
-  color: #fff;
+  color: var(--hc-text-inverse);
   padding: var(--hc-space-2) var(--hc-space-4);
   font-size: 13px;
-  border-radius: var(--hc-radius-sm);
+  border-radius: var(--hc-radius-md);
 }
 
 .hc-btn-primary:hover {
@@ -241,7 +243,7 @@ body,
   color: var(--hc-text-primary);
   padding: var(--hc-space-2) var(--hc-space-4);
   font-size: 13px;
-  border-radius: var(--hc-radius-sm);
+  border-radius: var(--hc-radius-md);
 }
 
 .hc-btn-secondary:hover {
@@ -263,7 +265,7 @@ body,
 /* ─── Input Base ────────────────────────────────────────── */
 .hc-input {
   width: 100%;
-  border-radius: var(--hc-radius-sm);
+  border-radius: var(--hc-radius-md);
   border: 1px solid var(--hc-border);
   padding: var(--hc-space-2) var(--hc-space-3);
   font-size: 13px;
@@ -334,7 +336,7 @@ select.hc-input:focus {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: #fff;
+  background: var(--hc-text-inverse);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
   transition: transform 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
@@ -452,7 +454,7 @@ select.hc-input:focus {
 
 /* ─── Drop Zone ─── */
 .hc-drop-zone {
-  border: 2px dashed var(--hc-border);
+  border: 1px dashed var(--hc-border);
   border-radius: var(--hc-radius-md);
   padding: 40px 24px;
   text-align: center;
@@ -509,7 +511,7 @@ select.hc-input:focus {
   height: 10px;
   border-radius: 50%;
   background: var(--hc-accent);
-  border: 2px solid var(--hc-bg-elevated);
+  border: 1px solid var(--hc-bg-elevated);
   position: absolute;
 }
 
@@ -549,7 +551,7 @@ select.hc-input:focus {
   justify-content: center;
   font-size: 14px;
   font-weight: 700;
-  color: #fff;
+  color: var(--hc-text-inverse);
 }
 
 .hc-conference__avatar--blue { background: var(--hc-accent); }
@@ -635,7 +637,7 @@ select.hc-input:focus {
   align-items: center;
   justify-content: center;
   font-size: 44px;
-  color: #fff;
+  color: var(--hc-text-inverse);
   box-shadow: 0 8px 24px rgba(74, 144, 217, 0.22);
 }
 
@@ -671,7 +673,7 @@ select.hc-input:focus {
   height: 32px;
   border-radius: 50%;
   background: var(--hc-accent);
-  color: #fff;
+  color: var(--hc-text-inverse);
   font-size: 14px;
   font-weight: 700;
   display: flex;
@@ -748,7 +750,7 @@ select.hc-input:focus {
   align-items: center;
   justify-content: center;
   font-size: 36px;
-  color: #fff;
+  color: var(--hc-text-inverse);
   box-shadow: 0 12px 32px rgba(74, 144, 217, 0.3);
 }
 
@@ -784,7 +786,7 @@ select.hc-input:focus {
   padding: var(--hc-space-2) var(--hc-space-4);
   font-size: 13px;
   border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-sm);
+  border-radius: var(--hc-radius-md);
 }
 
 .hc-btn-ghost-outline:hover {

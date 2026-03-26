@@ -384,7 +384,7 @@ onMounted(async () => {
   color: var(--hc-text-secondary);
   border: none;
   background: transparent;
-  border-bottom: 2px solid transparent;
+  border-bottom: 1.5px solid transparent;
   cursor: pointer;
   margin-bottom: -1px;
   transition: color 0.15s;

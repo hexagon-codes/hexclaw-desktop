@@ -139,7 +139,7 @@ defineProps<{
   height: 14px;
   border-radius: 7px;
   background: var(--hc-accent);
-  color: #fff;
+  color: var(--hc-text-inverse);
   font-size: 9px;
   font-weight: 600;
   display: flex;

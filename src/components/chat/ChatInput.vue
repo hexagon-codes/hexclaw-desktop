@@ -426,7 +426,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
 
 .hc-composer__send--active {
   background: var(--hc-accent, #007AFF);
-  color: #fff;
+  color: var(--hc-text-inverse);
   box-shadow: 0 2px 8px rgba(0, 122, 255, 0.25);
 }
 
@@ -440,7 +440,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
 
 .hc-composer__send--stop {
   background: var(--hc-error, #FF3B30);
-  color: #fff;
+  color: var(--hc-text-inverse);
 }
 
 /* ─── 入场动效 (Apple 弹簧曲线) ───── */

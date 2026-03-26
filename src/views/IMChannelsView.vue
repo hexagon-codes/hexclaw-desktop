@@ -369,7 +369,7 @@ async function copyWebhookUrl() {
     <div
       v-if="errorMsg"
       class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
-      style="background: #ef444420; color: #ef4444"
+      style="background: color-mix(in srgb, var(--hc-error) 12%, transparent); color: var(--hc-error)"
     >
       <span>{{ errorMsg }}</span>
       <button class="text-xs underline ml-4" @click="errorMsg = ''">
@@ -381,7 +381,7 @@ async function copyWebhookUrl() {
     <div
       v-if="showRestartBanner"
       class="mx-6 mt-2 px-4 py-2.5 rounded-lg text-sm flex items-center gap-3"
-      style="background: #3b82f620; color: #3b82f6"
+      style="background: color-mix(in srgb, var(--hc-accent) 12%, transparent); color: var(--hc-accent)"
     >
       <Info :size="16" class="shrink-0" />
       <span class="flex-1">
@@ -389,7 +389,7 @@ async function copyWebhookUrl() {
       </span>
       <button
         class="inline-flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium"
-        style="background: #3b82f6; color: #fff"
+        style="background: var(--hc-accent); color: var(--hc-text-inverse)"
         :disabled="restarting"
         @click="restartEngine"
       >
@@ -478,9 +478,9 @@ async function copyWebhookUrl() {
                 :style="{
                   background:
                     inst.enabled && isConfigIncomplete(inst)
-                      ? '#f59e0b'
+                      ? 'var(--hc-warning)'
                       : inst.enabled
-                        ? 'var(--hc-success, #22c55e)'
+                        ? 'var(--hc-success)'
                         : 'var(--hc-text-muted)',
                 }"
               />
@@ -796,8 +796,8 @@ async function copyWebhookUrl() {
   width: 72px;
   height: 72px;
   border-radius: 20px;
-  background: var(--hc-accent, #6366f1);
-  color: #fff;
+  background: var(--hc-accent);
+  color: var(--hc-text-inverse);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -840,7 +840,7 @@ async function copyWebhookUrl() {
   position: relative;
   border-radius: var(--hc-radius-lg, 12px);
   border: 1px solid var(--hc-border);
-  border-left: 3px solid var(--hc-border);
+  border-left: 2px solid var(--hc-border);
   background: var(--hc-bg-card);
   padding: 16px;
   display: flex;
@@ -940,13 +940,13 @@ async function copyWebhookUrl() {
 }
 
 .hc-im-card__test-result--ok {
-  background: #22c55e15;
-  color: #22c55e;
+  background: color-mix(in srgb, var(--hc-success) 8%, transparent);
+  color: var(--hc-success);
 }
 
 .hc-im-card__test-result--err {
-  background: #ef444415;
-  color: #ef4444;
+  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+  color: var(--hc-error);
 }
 
 /* ── Delete overlay ─────────────────────────────────── */
@@ -1003,7 +1003,7 @@ async function copyWebhookUrl() {
 
 .hc-im-btn--primary {
   background: var(--hc-accent);
-  color: #fff;
+  color: var(--hc-text-inverse);
 }
 
 .hc-im-btn--primary:hover:not(:disabled) {
@@ -1012,7 +1012,7 @@ async function copyWebhookUrl() {
 
 .hc-im-btn--accent {
   background: var(--hc-accent);
-  color: #fff;
+  color: var(--hc-text-inverse);
 }
 
 .hc-im-btn--accent:hover:not(:disabled) {
@@ -1040,12 +1040,12 @@ async function copyWebhookUrl() {
 }
 
 .hc-im-btn--danger {
-  background: #ef4444;
-  color: #fff;
+  background: var(--hc-error);
+  color: var(--hc-text-inverse);
 }
 
 .hc-im-btn--danger:hover:not(:disabled) {
-  background: #dc2626;
+  background: color-mix(in srgb, var(--hc-error) 85%, black);
 }
 
 .hc-im-btn--danger-text {
@@ -1053,8 +1053,8 @@ async function copyWebhookUrl() {
 }
 
 .hc-im-btn--danger-text:hover:not(:disabled) {
-  color: #ef4444;
-  background: #ef444418;
+  color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
 }
 
 .hc-im-btn--sm {
@@ -1097,7 +1097,7 @@ async function copyWebhookUrl() {
   height: 16px;
   left: 2px;
   bottom: 2px;
-  background: #fff;
+  background: var(--hc-text-inverse);
   border-radius: 50%;
   transition: transform 0.2s;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
@@ -1407,13 +1407,13 @@ async function copyWebhookUrl() {
 }
 
 .hc-im-test-result--ok {
-  background: #22c55e15;
-  color: #22c55e;
+  background: color-mix(in srgb, var(--hc-success) 8%, transparent);
+  color: var(--hc-success);
 }
 
 .hc-im-test-result--err {
-  background: #ef444415;
-  color: #ef4444;
+  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+  color: var(--hc-error);
 }
 
 /* ── Modal transitions ──────────────────────────────── */

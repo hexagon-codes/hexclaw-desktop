@@ -305,7 +305,7 @@ function stopConference() {
   color: var(--hc-text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .hc-conf__agent-chip--selected {

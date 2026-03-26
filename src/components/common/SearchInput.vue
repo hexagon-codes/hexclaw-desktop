@@ -40,10 +40,12 @@ const emit = defineEmits<{
   align-items: center;
   gap: 6px;
   border-radius: var(--hc-radius-sm);
-  border: 1px solid var(--hc-border);
+  border: 0.5px solid var(--hc-border);
   background: var(--hc-bg-input);
-  padding: 5px 10px;
+  padding: 0 10px;
+  height: 32px;
   width: 200px;
+  box-sizing: border-box;
   transition: border-color 0.2s, box-shadow 0.2s;
 }
 

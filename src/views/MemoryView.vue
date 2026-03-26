@@ -152,7 +152,7 @@ async function handleSearch() {
     <div v-if="memoryContent || memoryContext" class="flex justify-end px-6 pt-2">
       <button
         class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-        style="background: rgba(239, 68, 68, 0.1); color: #ef4444;"
+        style="background: color-mix(in srgb, var(--hc-error) 10%, transparent); color: var(--hc-error);"
         @click="showClearAllConfirm = true"
       >
         <Eraser :size="13" />
@@ -164,7 +164,7 @@ async function handleSearch() {
     <div
       v-if="errorMsg"
       class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
-      style="background: #ef444420; color: #ef4444;"
+      style="background: color-mix(in srgb, var(--hc-error) 12%, transparent); color: var(--hc-error);"
     >
       <span>{{ errorMsg }}</span>
       <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
@@ -255,7 +255,7 @@ async function handleSearch() {
                   </button>
                   <button
                     class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                    style="color: #ef4444;"
+                    style="color: var(--hc-error);"
                     title="删除"
                     @click="showDeleteContentConfirm = true"
                   >

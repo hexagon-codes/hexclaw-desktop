@@ -215,7 +215,7 @@ onUnmounted(clearPhaseTimer)
 .hc-research-progress__spinner {
   width: 10px;
   height: 10px;
-  border: 2px solid var(--hc-accent-subtle);
+  border: 1.5px solid var(--hc-accent-subtle);
   border-top-color: var(--hc-accent);
   border-radius: 50%;
   animation: hc-research-spin 0.8s linear infinite;

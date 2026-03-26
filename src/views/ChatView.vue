@@ -1232,7 +1232,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   height: 36px;
   border-radius: 50%;
   object-fit: cover;
-  background: #5b9bd5;
+  background: var(--hc-accent);
   transform: scale(1.25);
 }
 
@@ -1243,7 +1243,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  background: #34c759;
+  background: var(--hc-success);
   border: 2px solid var(--hc-bg-card, #fff);
   box-sizing: border-box;
 }
@@ -1396,7 +1396,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 
 .hc-msg__edit-btn--send {
   background: var(--hc-accent, #007AFF);
-  color: #fff;
+  color: var(--hc-text-inverse);
   box-shadow: 0 1px 3px rgba(0, 122, 255, 0.25);
 }
 
@@ -1471,7 +1471,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   font-weight: 500;
   cursor: pointer;
   border-radius: 4px;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
 
 .hc-mode-tab__btn:hover {
@@ -1543,7 +1543,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   font-weight: 600;
   color: var(--hc-text-muted);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 
 .hc-chat__mode-btn:hover {
@@ -1552,9 +1552,9 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 .hc-chat__mode-btn--active {
-  background: rgba(88, 86, 214, 0.12);
-  color: #5856d6;
-  border-color: rgba(88, 86, 214, 0.3);
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
+  border-color: color-mix(in srgb, var(--hc-accent) 30%, transparent);
 }
 
 .hc-chat__toolbar-btn {
@@ -1592,13 +1592,13 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 .hc-context-tag--agent {
-  background: rgba(139, 92, 246, 0.12);
-  color: #8b5cf6;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
 }
 
 .hc-context-tag--provider {
-  background: rgba(14, 165, 233, 0.12);
-  color: #0284c7;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
 }
 
 /* ─── Model Selector ───── */
@@ -1776,15 +1776,15 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 .hc-model-selector__cap-icon--vision {
-  color: #34c759;
+  color: var(--hc-success);
 }
 
 .hc-model-selector__cap-icon--video {
-  color: #ff9500;
+  color: var(--hc-warning);
 }
 
 .hc-model-selector__cap-icon--audio {
-  color: #af52de;
+  color: var(--hc-accent);
 }
 
 .hc-model-selector__btn-caps {
@@ -1906,7 +1906,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 .hc-chat__attach-thumb--video {
-  background: #000;
+  background: var(--hc-text-primary);
 }
 
 .hc-chat__attach-file-icon {
@@ -1966,7 +1966,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   font-size: 9px;
   font-weight: 700;
   background: var(--hc-accent);
-  color: #fff;
+  color: var(--hc-text-inverse);
   border-radius: 6px;
   padding: 0 4px;
   min-width: 14px;
@@ -1997,7 +1997,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   font-size: 11px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
 
 .hc-msg__artifact-card:hover {
@@ -2019,8 +2019,8 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 
 /* ─── Research Mode ───── */
 .hc-mode-tab__btn--research.hc-mode-tab__btn--active {
-  background: rgba(88, 86, 214, 0.12);
-  color: #5856d6;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
 }
 
 .hc-research-badge {
@@ -2028,8 +2028,8 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 8px;
-  background: rgba(88, 86, 214, 0.12);
-  color: #5856d6;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
   white-space: nowrap;
 }
 
@@ -2040,7 +2040,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 .hc-chat__attach-type--parsed {
-  color: #34c759 !important;
+  color: var(--hc-success) !important;
 }
 
 @keyframes hc-parsing-pulse {
@@ -2171,7 +2171,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 
 .hc-msg__automation-error {
   font-size: 11px;
-  color: #dc2626;
+  color: var(--hc-error);
   line-height: 1.45;
 }
 
@@ -2191,7 +2191,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease, color 0.15s ease;
 }
 
 .hc-msg__automation-btn:hover:not(:disabled) {
@@ -2207,7 +2207,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 .hc-msg__automation-btn--primary {
   background: var(--hc-accent);
   border-color: var(--hc-accent);
-  color: #fff;
+  color: var(--hc-text-inverse);
 }
 
 .hc-msg__automation-btn--primary:hover:not(:disabled) {
@@ -2252,18 +2252,18 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 .hc-msg__source-tag--knowledge {
-  background: rgba(59, 130, 246, 0.12);
-  color: #3b82f6;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
 }
 
 .hc-msg__source-tag--memory {
-  background: rgba(168, 85, 247, 0.12);
-  color: #a855f7;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
 }
 
 .hc-msg__source-tag--agent {
-  background: rgba(139, 92, 246, 0.12);
-  color: #8b5cf6;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
 }
 
 .hc-msg__hit-list {
@@ -2366,7 +2366,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-card);
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
 
 .hc-chat__artifact-row:hover {
@@ -2461,7 +2461,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   background: var(--hc-bg-card);
   margin-bottom: 6px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s;
 }
 
 .hc-chat__history-row:hover {

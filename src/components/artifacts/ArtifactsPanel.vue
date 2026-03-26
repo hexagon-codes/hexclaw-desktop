@@ -158,7 +158,7 @@ function typeLabel(type: string) {
   color: var(--hc-text-muted);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .hc-artifacts__tab:hover {
@@ -210,7 +210,7 @@ function typeLabel(type: string) {
   background: var(--hc-bg-card);
   cursor: pointer;
   text-align: left;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s;
   width: 100%;
 }
 

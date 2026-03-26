@@ -169,7 +169,7 @@ const rendered = computed(() => {
 }
 
 .markdown-body :deep(blockquote) {
-  border-left: 3px solid var(--hc-accent);
+  border-left: 2px solid var(--hc-accent);
   padding-left: 1em;
   margin: 0.5em 0;
   color: var(--hc-text-secondary);
@@ -251,7 +251,7 @@ const rendered = computed(() => {
   font-size: 11px;
   padding: var(--hc-space-1) var(--hc-space-2);
   border-radius: var(--hc-space-1);
-  transition: all 0.15s;
+  transition: color 0.15s, background 0.15s;
   font-weight: 500;
 }
 

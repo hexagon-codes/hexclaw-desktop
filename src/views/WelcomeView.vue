@@ -266,7 +266,7 @@ async function skip() {
             class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium transition-colors"
             :style="{
               background: i <= step ? 'var(--hc-accent)' : 'var(--hc-bg-card)',
-              color: i <= step ? '#fff' : 'var(--hc-text-muted)',
+              color: i <= step ? 'var(--hc-text-inverse)' : 'var(--hc-text-muted)',
             }"
           >
             <Check v-if="i < step" :size="14" />
@@ -378,8 +378,8 @@ async function skip() {
             <button
               class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border"
               :style="{
-                borderColor: connectionResult?.ok ? '#22c55e55' : 'var(--hc-border)',
-                color: connectionResult?.ok ? '#16a34a' : 'var(--hc-text-secondary)',
+                borderColor: connectionResult?.ok ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)' : 'var(--hc-border)',
+                color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-text-secondary)',
                 background: 'var(--hc-bg-main)',
               }"
               :disabled="
@@ -391,11 +391,11 @@ async function skip() {
               @click="testConnection"
             >
               <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
-              <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: #22c55e" />
+              <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: var(--hc-success)" />
               <XCircle
                 v-else-if="connectionResult && !connectionResult.ok"
                 :size="12"
-                style="color: #ef4444"
+                style="color: var(--hc-error)"
               />
               {{ connectionTesting ? t('welcome.testing') : t('welcome.testConnection') }}
             </button>
@@ -404,8 +404,8 @@ async function skip() {
               <p
                 class="text-xs px-3 py-1.5 rounded-lg inline-block"
                 :style="{
-                  background: connectionResult.ok ? '#22c55e15' : '#ef444415',
-                  color: connectionResult.ok ? '#22c55e' : '#ef4444',
+                  background: connectionResult.ok ? 'color-mix(in srgb, var(--hc-success) 8%, transparent)' : 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
+                  color: connectionResult.ok ? 'var(--hc-success)' : 'var(--hc-error)',
                 }"
               >
                 {{ connectionResult.msg }}
@@ -429,7 +429,7 @@ async function skip() {
           >
             <div
               class="w-8 h-8 rounded-lg flex items-center justify-center"
-              :style="{ background: 'var(--hc-accent)', color: '#fff' }"
+              :style="{ background: 'var(--hc-accent)', color: 'var(--hc-text-inverse)' }"
             >
               <Bot :size="16" />
             </div>
@@ -498,7 +498,7 @@ async function skip() {
               <span :style="{ color: 'var(--hc-text-muted)' }">{{
                 t('welcome.summaryConnection')
               }}</span>
-              <span :style="{ color: connectionResult?.ok ? '#22c55e' : '#ef4444' }">
+              <span :style="{ color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-error)' }">
                 {{
                   connectionResult?.ok
                     ? t('welcome.connectionReady')
@@ -544,7 +544,7 @@ async function skip() {
           <ArrowRight :size="14" />
         </button>
       </div>
-      <p v-if="finishError" class="text-xs text-center mt-2" style="color: #ef4444">
+      <p v-if="finishError" class="text-xs text-center mt-2" style="color: var(--hc-error)">
         {{ finishError }}
       </p>
     </div>
@@ -576,7 +576,7 @@ async function skip() {
   color: var(--hc-text-secondary);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
   white-space: nowrap;
   overflow: hidden;
   min-width: 0;

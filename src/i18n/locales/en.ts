@@ -538,6 +538,7 @@ export default {
     exportLogs: 'Export Logs',
     exportDiagnostics: 'Export Diagnostics',
     summaryVisible: 'Visible Logs',
+    entryUnit: 'entries',
     summaryErrors: 'Errors',
     summaryWarnings: 'Warnings',
     summaryDomains: 'Domains',
