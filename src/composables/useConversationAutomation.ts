@@ -34,8 +34,10 @@ import type { useToast } from './useToast'
 
 type ChatStore = ReturnType<typeof useChatStore>
 type Toast = ReturnType<typeof useToast>
+type TFunc = (key: string, fallback?: string) => string
 
-export function useConversationAutomation(chatStore: ChatStore, toast: Toast) {
+export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?: TFunc) {
+  const tr = (key: string, fallback: string) => t ? t(key, fallback) : fallback
   function clipAutomationText(value: string, maxLength = 180): string {
     const normalized = value.trim()
     if (normalized.length <= maxLength) return normalized
@@ -113,42 +115,27 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast) {
 
   function automationStatusLabel(status: ConversationAutomationAction['status']): string {
     switch (status) {
-      case 'running':
-        return '执行中'
-      case 'completed':
-        return '已完成'
-      case 'failed':
-        return '失败'
-      case 'dismissed':
-        return '已忽略'
-      default:
-        return '待确认'
+      case 'running': return tr('chat.automationRunning', '执行中')
+      case 'completed': return tr('chat.automationCompleted', '已完成')
+      case 'failed': return tr('chat.automationFailed', '失败')
+      case 'dismissed': return tr('chat.automationDismissed', '已忽略')
+      default: return tr('chat.automationPending', '待确认')
     }
   }
 
   function automationExecuteLabel(action: ConversationAutomationAction): string {
-    if (action.status === 'failed') return '重试'
-
+    if (action.status === 'failed') return tr('chat.automationRetry', '重试')
     switch (action.kind) {
-      case 'create_task':
-        return '创建任务'
-      case 'pause_task':
-        return '暂停'
-      case 'resume_task':
-        return '恢复'
-      case 'trigger_task':
-        return '立即执行'
-      case 'delete_task':
-        return '删除任务'
+      case 'create_task': return tr('chat.automationCreateTask', '创建任务')
+      case 'pause_task': return tr('chat.automationPauseTask', '暂停')
+      case 'resume_task': return tr('chat.automationResumeTask', '恢复')
+      case 'trigger_task': return tr('chat.automationTriggerTask', '立即执行')
+      case 'delete_task': return tr('chat.automationDeleteTask', '删除任务')
       case 'add_text_to_knowledge':
-      case 'add_attachment_to_knowledge':
-        return '写入知识库'
-      case 'search_knowledge':
-        return '执行搜索'
-      case 'reindex_document':
-        return '重建索引'
-      case 'delete_document':
-        return '删除文档'
+      case 'add_attachment_to_knowledge': return tr('chat.automationAddKnowledge', '写入知识库')
+      case 'search_knowledge': return tr('chat.automationSearchKnowledge', '执行搜索')
+      case 'reindex_document': return tr('chat.automationReindex', '重建索引')
+      case 'delete_document': return tr('chat.automationDeleteDocument', '删除文档')
     }
   }
 

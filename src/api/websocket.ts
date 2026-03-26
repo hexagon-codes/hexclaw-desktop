@@ -102,6 +102,10 @@ class HexClawWS {
       this.ws.onclose = () => {
         logger.info('WebSocket disconnected')
         this.stopHeartbeat()
+        // Notify active streaming callbacks so they don't wait for the inactivity timeout
+        if (!this.intentionalClose && this.errorCallbacks.length > 0) {
+          this.errorCallbacks.forEach((cb) => cb('WebSocket connection lost'))
+        }
         if (!this.intentionalClose) {
           this.attemptReconnect()
         }

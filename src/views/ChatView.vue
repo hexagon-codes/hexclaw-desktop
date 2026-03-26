@@ -3,23 +3,14 @@ import { ref, nextTick, onMounted, onUnmounted, watch, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  MessageSquarePlus,
-  Search,
-  Download,
   ChevronDown,
-  Settings2,
-  PanelRightOpen,
   FileCode,
-  Eye,
   Video,
-  Headphones,
   Wrench,
   Zap,
   BookOpen,
   ExternalLink,
 } from 'lucide-vue-next'
-import SegmentedControl from '@/components/common/SegmentedControl.vue'
-import { useAppStore } from '@/stores/app'
 import { useChatStore } from '@/stores/chat'
 import { removeMessage } from '@/services/messageService'
 import { useAgentsStore } from '@/stores/agents'
@@ -29,7 +20,6 @@ import MessageActions from '@/components/chat/MessageActions.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import SessionList from '@/components/chat/SessionList.vue'
 import ChatSearchDialog from '@/components/chat/ChatSearchDialog.vue'
-import ChatExportMenu from '@/components/chat/ChatExportMenu.vue'
 import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
@@ -43,10 +33,9 @@ import { getSkills, type Skill } from '@/api/skills'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import crabLogo from '@/assets/logo-crab.png'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
-const appStore = useAppStore()
 const chatStore = useChatStore()
 const agentsStore = useAgentsStore()
 const settingsStore = useSettingsStore()
@@ -70,7 +59,6 @@ function setHoveredMsg(id: string) {
 
 onUnmounted(() => { if (hoverTimer) clearTimeout(hoverTimer) })
 const showSearch = ref(false)
-const showExport = ref(false)
 const attachmentPreview = ref<{
   url: string
   name: string
@@ -160,7 +148,7 @@ function formatTokenCount(n: number): string {
 }
 
 function formatFullTime(ts: string): string {
-  return new Date(ts).toLocaleString('zh-CN', {
+  return new Date(ts).toLocaleString(locale.value, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -385,7 +373,7 @@ const {
   automationExecuteLabel,
   handleConversationAction,
   dismissConversationAction,
-} = useConversationAutomation(chatStore, toast)
+} = useConversationAutomation(chatStore, toast, t)
 
 const { handleSend } = useChatSend({
   chatStore,
@@ -813,7 +801,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                           :disabled="action.status === 'running'"
                           @click="dismissConversationAction(msg.id, action.id)"
                         >
-                          忽略
+                          {{ t('chat.automationDismiss') }}
                         </button>
                       </div>
                     </div>
@@ -856,8 +844,8 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                         @input="autoResizeEditTextarea"
                       />
                       <div class="hc-msg__edit-actions">
-                        <button class="hc-msg__edit-btn hc-msg__edit-btn--cancel" @click="cancelEdit">取消</button>
-                        <button class="hc-msg__edit-btn hc-msg__edit-btn--send" @click="confirmEdit(msg.id)">发送</button>
+                        <button class="hc-msg__edit-btn hc-msg__edit-btn--cancel" @click="cancelEdit">{{ t('common.cancel') }}</button>
+                        <button class="hc-msg__edit-btn hc-msg__edit-btn--send" @click="confirmEdit(msg.id)">{{ t('common.send') }}</button>
                       </div>
                     </div>
                     <!-- Hover actions toolbar -->
