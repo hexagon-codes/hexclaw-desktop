@@ -1202,7 +1202,7 @@ async function saveConfig() {
           <!-- Storage -->
           <div
             v-else-if="activeSection === 'storage'"
-            class="hc-settings__section hc-settings__section--scroll hc-settings__section--storage"
+            class="hc-settings__section hc-settings__section--storage"
           >
             <h3 class="hc-settings__section-title">{{ t('settings.storage.title') }}</h3>
 
@@ -1516,7 +1516,7 @@ async function saveConfig() {
 }
 
 .hc-settings__section--storage {
-  max-width: min(560px, 100%);
+  max-width: 600px;
   margin: 0;
   padding-right: 4px;
 }
@@ -1706,11 +1706,11 @@ async function saveConfig() {
   font-size: 13px;
   font-weight: 600;
   color: var(--hc-text-primary);
-  margin-bottom: 10px;
+  margin-bottom: 6px;
 }
 
 .hc-settings__info-card {
-  padding: 12px 14px;
+  padding: 10px 14px;
 }
 
 .hc-settings__info-card--wide {
@@ -1720,7 +1720,7 @@ async function saveConfig() {
 .hc-settings__info-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px 12px;
+  gap: 6px 16px;
 }
 
 .hc-settings__info-grid--runtime {
