@@ -6,6 +6,9 @@ import { env } from '@/config/env'
 export type IMChannelType =
   | 'feishu'
   | 'dingtalk'
+  | 'wechat'
+  | 'wecom'
+  | 'slack'
   | 'discord'
   | 'telegram'
 
@@ -83,6 +86,23 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
       secret: true,
     },
   ],
+  wechat: [
+    { key: 'app_id', label: '公众号 AppID', labelEn: 'Official Account AppID', placeholder: 'wx...' },
+    { key: 'app_secret', label: 'AppSecret', labelEn: 'AppSecret', placeholder: 'Enter AppSecret', secret: true },
+    { key: 'token', label: '令牌 Token', labelEn: 'Verification Token', placeholder: 'Enter Token', secret: true },
+    { key: 'encoding_aes_key', label: '消息加密密钥（选填）', labelEn: 'EncodingAESKey (optional)', placeholder: '43 characters', secret: true, optional: true },
+  ],
+  wecom: [
+    { key: 'corp_id', label: '企业 ID', labelEn: 'Corp ID', placeholder: 'ww...' },
+    { key: 'agent_id', label: '应用 AgentId', labelEn: 'Agent ID', placeholder: '1000002' },
+    { key: 'secret', label: '应用 Secret', labelEn: 'App Secret', placeholder: 'Enter Secret', secret: true },
+    { key: 'token', label: '回调 Token', labelEn: 'Callback Token', placeholder: 'Enter Token', secret: true },
+    { key: 'encoding_aes_key', label: '回调 EncodingAESKey', labelEn: 'Callback EncodingAESKey', placeholder: '43 characters', secret: true },
+  ],
+  slack: [
+    { key: 'bot_token', label: 'Bot Token', labelEn: 'Bot Token', placeholder: 'xoxb-...', secret: true },
+    { key: 'app_token', label: 'App Token', labelEn: 'App Token', placeholder: 'xapp-...', secret: true },
+  ],
 }
 
 /** 通道类型元数据 */
@@ -97,6 +117,9 @@ export interface IMChannelMeta {
 
 import feishuLogo from '@/assets/im-logos/feishu.svg'
 import dingtalkLogo from '@/assets/im-logos/dingtalk.svg'
+import wechatLogo from '@/assets/im-logos/wechat.svg'
+import wecomLogo from '@/assets/im-logos/wecom.svg'
+import slackLogo from '@/assets/im-logos/slack.svg'
 import discordLogo from '@/assets/im-logos/discord.svg'
 import telegramLogo from '@/assets/im-logos/telegram.svg'
 
@@ -116,6 +139,30 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
     logo: dingtalkLogo,
     color: '#0089ff',
     helpUrl: 'https://open.dingtalk.com/document/',
+  },
+  {
+    type: 'wechat',
+    name: '微信公众号',
+    nameEn: 'WeChat',
+    logo: wechatLogo,
+    color: '#07c160',
+    helpUrl: 'https://developers.weixin.qq.com/doc/offiaccount/Getting_Started/Overview.html',
+  },
+  {
+    type: 'wecom',
+    name: '企业微信',
+    nameEn: 'WeCom',
+    logo: wecomLogo,
+    color: '#2dae67',
+    helpUrl: 'https://developer.work.weixin.qq.com/document/',
+  },
+  {
+    type: 'slack',
+    name: 'Slack',
+    nameEn: 'Slack',
+    logo: slackLogo,
+    color: '#4a154b',
+    helpUrl: 'https://api.slack.com/start',
   },
   {
     type: 'discord',
@@ -152,6 +199,18 @@ export const CHANNEL_HELP_TEXT: Record<IMChannelType, { zh: string; en: string }
   telegram: {
     zh: '通过 @BotFather 创建 Bot，获取 Bot Token，无需额外配置。',
     en: 'Create a Bot via @BotFather, get Bot Token. No additional configuration needed.',
+  },
+  wechat: {
+    zh: '在微信公众平台创建服务号或订阅号，获取 AppID 和 AppSecret，在"基本配置"中设置服务器 URL 和 Token。',
+    en: 'Create a service/subscription account on WeChat Official Account Platform. Get AppID & AppSecret, configure server URL and Token.',
+  },
+  wecom: {
+    zh: '在企业微信管理后台创建自建应用，获取 Corp ID、Agent ID 和 Secret。在"接收消息"中配置回调 URL、Token 和 EncodingAESKey。',
+    en: 'Create an internal app in WeCom admin console. Get Corp ID, Agent ID & Secret. Configure callback URL, Token and EncodingAESKey.',
+  },
+  slack: {
+    zh: '在 Slack API 创建 App，启用 Socket Mode，获取 Bot Token (xoxb-) 和 App Token (xapp-)。无需公网地址。',
+    en: 'Create an App on Slack API, enable Socket Mode. Get Bot Token (xoxb-) and App Token (xapp-). No public URL needed.',
   },
 }
 
