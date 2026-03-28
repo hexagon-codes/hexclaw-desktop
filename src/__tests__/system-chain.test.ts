@@ -941,9 +941,12 @@ describe('Chain 7: IM Channel API Alignment', () => {
     const types = CHANNEL_TYPES.map((c) => c.type)
     expect(types).toContain('feishu')
     expect(types).toContain('dingtalk')
+    expect(types).toContain('wechat')
+    expect(types).toContain('wecom')
+    expect(types).toContain('slack')
     expect(types).toContain('discord')
     expect(types).toContain('telegram')
-    expect(types).toHaveLength(4)
+    expect(types).toHaveLength(7)
   })
 
   it('CHANNEL_CONFIG_FIELDS has required fields for each platform', async () => {

@@ -35,3 +35,26 @@ export function addMcpServer(name: string, command: string, args?: string[]) {
 export function removeMcpServer(name: string) {
   return apiDelete<{ message: string }>(`/api/v1/mcp/servers/${encodeURIComponent(name)}`)
 }
+
+/** MCP 市场条目 */
+export interface McpMarketplaceEntry {
+  name: string
+  display_name: string
+  description: string
+  category: string
+  command: string
+  args: string[]
+  config_hint?: string
+  downloads: number
+  rating: number
+}
+
+/** 搜索 MCP 市场 */
+export function searchMcpMarketplace(query: string) {
+  return apiGet<{ servers: McpMarketplaceEntry[] }>(`/api/v1/clawhub/search?q=${encodeURIComponent(query)}&type=mcp`)
+}
+
+/** 获取 MCP 市场全部条目 */
+export function getMcpMarketplace() {
+  return apiGet<{ servers: McpMarketplaceEntry[] }>('/api/v1/clawhub/search?type=mcp')
+}

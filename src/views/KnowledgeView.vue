@@ -815,6 +815,25 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
               </button>
             </div>
             <div class="p-5 flex flex-col gap-3.5">
+              <!-- 文件上传区 -->
+              <div
+                class="flex items-center gap-3 p-3 rounded-lg border border-dashed cursor-pointer hover:border-solid transition-colors"
+                :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-secondary)' }"
+                @click="openFilePicker"
+              >
+                <Upload :size="20" style="color: var(--hc-accent)" />
+                <div>
+                  <div class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">
+                    {{ t('knowledge.uploadFile', '上传文件') }}
+                  </div>
+                  <div class="text-xs" :style="{ color: 'var(--hc-text-secondary)' }">
+                    PDF / Word / TXT / Markdown / CSV / Excel
+                  </div>
+                </div>
+              </div>
+              <div class="text-center text-xs" :style="{ color: 'var(--hc-text-tertiary)' }">
+                {{ t('knowledge.orManualInput', '— 或手动输入 —') }}
+              </div>
               <div class="flex flex-col gap-1.5">
                 <label
                   class="text-[13px] font-medium"

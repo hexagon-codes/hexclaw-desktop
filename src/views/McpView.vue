@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X } from 'lucide-vue-next'
-import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer } from '@/api/mcp'
+import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Store, Download } from 'lucide-vue-next'
+import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, getMcpMarketplace, searchMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
 import type { McpTool } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -14,7 +14,32 @@ const serverStatuses = ref<Record<string, 'connected' | 'disconnected' | 'error'
 const tools = ref<McpTool[]>([])
 const loading = ref(true)
 const errorMsg = ref('')
-const activeTab = ref<'servers' | 'tools'>('servers')
+const activeTab = ref<'servers' | 'tools' | 'marketplace'>('servers')
+
+// ─── MCP Marketplace state ──────────────────────────────
+const marketplaceItems = ref<McpMarketplaceEntry[]>([])
+const marketplaceLoading = ref(false)
+const marketplaceSearch = ref('')
+const installingServer = ref<string | null>(null)
+
+async function loadMarketplace() {
+  marketplaceLoading.value = true
+  try {
+    const q = marketplaceSearch.value.trim()
+    const res = q ? await searchMcpMarketplace(q) : await getMcpMarketplace()
+    marketplaceItems.value = res.servers || []
+  } catch { marketplaceItems.value = [] }
+  finally { marketplaceLoading.value = false }
+}
+
+async function installFromMarketplace(entry: McpMarketplaceEntry) {
+  installingServer.value = entry.name
+  try {
+    await addMcpServer(entry.name, entry.command, entry.args)
+    await loadAll()
+  } catch (e) { errorMsg.value = e instanceof Error ? e.message : 'Install failed' }
+  finally { installingServer.value = null }
+}
 const expandedTool = ref<string | null>(null)
 const toolSearchQuery = ref('')
 
@@ -224,6 +249,16 @@ defineExpose({ openAddServer })
       >
         {{ t('mcp.tools') }} ({{ tools.length }})
       </button>
+      <button
+        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
+        :style="{
+          borderColor: activeTab === 'marketplace' ? 'var(--hc-accent)' : 'transparent',
+          color: activeTab === 'marketplace' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
+        }"
+        @click="activeTab = 'marketplace'; loadMarketplace()"
+      >
+        {{ t('mcp.marketplace', 'Marketplace') }}
+      </button>
       </div>
       <button
         v-if="activeTab === 'servers'"
@@ -426,6 +461,58 @@ defineExpose({ openAddServer })
                     <pre class="text-xs whitespace-pre-wrap overflow-x-auto" :style="{ color: 'var(--hc-text-secondary)' }">{{ typeof testResult.output === 'string' ? testResult.output : JSON.stringify(testResult.output, null, 2) }}</pre>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+
+      <!-- Marketplace Tab -->
+      <template v-if="activeTab === 'marketplace'">
+        <div class="p-4">
+          <div class="flex gap-2 mb-4">
+            <div class="relative flex-1">
+              <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2" style="color: var(--hc-text-tertiary)" />
+              <input
+                v-model="marketplaceSearch"
+                class="w-full pl-9 pr-3 py-2 rounded-lg text-sm border"
+                :style="{ background: 'var(--hc-bg-secondary)', borderColor: 'var(--hc-border)' }"
+                :placeholder="t('mcp.searchMarketplace', 'Search MCP servers...')"
+                @keydown.enter="loadMarketplace"
+              />
+            </div>
+            <button class="px-3 py-2 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)' }" @click="loadMarketplace">
+              <Search :size="14" />
+            </button>
+          </div>
+          <div v-if="marketplaceLoading" class="text-center py-8">
+            <Loader2 :size="20" class="animate-spin mx-auto" style="color: var(--hc-accent)" />
+          </div>
+          <div v-else-if="marketplaceItems.length === 0" class="text-center py-8" style="color: var(--hc-text-secondary)">
+            {{ t('mcp.noMarketplaceResults', 'No MCP servers found. Try a different search.') }}
+          </div>
+          <div v-else class="space-y-3">
+            <div v-for="item in marketplaceItems" :key="item.name" class="p-3 rounded-lg border" :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-secondary)' }">
+              <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-2">
+                  <Server :size="14" style="color: var(--hc-accent)" />
+                  <span class="font-medium text-sm">{{ item.display_name || item.name }}</span>
+                  <span v-if="item.category" class="px-1.5 py-0.5 rounded text-xs" style="background: var(--hc-bg-tertiary)">{{ item.category }}</span>
+                </div>
+                <button
+                  class="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium text-white"
+                  :style="{ background: servers.includes(item.name) ? 'var(--hc-text-tertiary)' : 'var(--hc-accent)' }"
+                  :disabled="servers.includes(item.name) || installingServer === item.name"
+                  @click="installFromMarketplace(item)"
+                >
+                  <Loader2 v-if="installingServer === item.name" :size="12" class="animate-spin" />
+                  <Download v-else :size="12" />
+                  {{ servers.includes(item.name) ? t('mcp.installed', 'Installed') : t('mcp.install', 'Install') }}
+                </button>
+              </div>
+              <p class="text-xs mb-1" style="color: var(--hc-text-secondary)">{{ item.description }}</p>
+              <div v-if="item.config_hint" class="text-xs" style="color: var(--hc-warning, #f59e0b)">
+                {{ item.config_hint }}
               </div>
             </div>
           </div>
