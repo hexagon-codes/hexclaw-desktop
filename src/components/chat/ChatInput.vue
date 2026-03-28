@@ -1,12 +1,22 @@
 <script setup lang="ts">
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowUp, Square, Paperclip } from 'lucide-vue-next'
+import { ArrowUp, Square, Paperclip, Mic } from 'lucide-vue-next'
 import MentionPopup from './MentionPopup.vue'
 import TemplatePopup from './TemplatePopup.vue'
+import { useVoice } from '@/composables/useVoice'
 import type { Skill } from '@/types'
 
 const { t } = useI18n()
+const { isListening, transcript, isSupported: voiceSupported, toggleListening } = useVoice()
+
+// 语音识别结果 -> 输入框
+watch(transcript, (text) => {
+  if (text) {
+    inputText.value = text
+    nextTick(() => handleInput())
+  }
+})
 
 const props = defineProps<{
   streaming?: boolean
@@ -219,6 +229,15 @@ defineExpose({ focus, setInput, triggerFileUpload })
           <button class="hc-composer__tool" :title="t('chat.addFile', '添加文件')" @click="handleFileClick">
             <Paperclip :size="18" />
           </button>
+          <button
+            v-if="voiceSupported"
+            class="hc-composer__tool"
+            :class="{ 'hc-composer__tool--recording': isListening }"
+            :title="isListening ? t('chat.voiceStop') : t('chat.voiceStart')"
+            @click="toggleListening"
+          >
+            <Mic :size="18" />
+          </button>
           <slot name="tools" />
         </div>
         <div class="hc-composer__actions">
@@ -402,6 +421,17 @@ defineExpose({ focus, setInput, triggerFileUpload })
 .hc-composer__tool:hover {
   color: var(--hc-text-primary, #1D1D1F);
   background: rgba(0, 0, 0, 0.05);
+}
+
+/* 语音录音中 — 红色脉动 */
+.hc-composer__tool--recording {
+  color: var(--hc-error, #FF3B30);
+  animation: voicePulse 1.2s ease-in-out infinite;
+}
+
+@keyframes voicePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 /* 发送按钮 */

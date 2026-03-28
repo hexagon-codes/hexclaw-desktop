@@ -28,7 +28,18 @@ export function clearAllMemory() {
   return apiDelete<{ message: string }>('/api/v1/memory')
 }
 
-/** 搜索记忆 */
+/** 向量搜索结果 */
+export interface VectorSearchResult {
+  content: string
+  score: number
+  source: string
+}
+
+/** 搜索记忆 (关键词 + 语义) */
 export function searchMemory(query: string) {
-  return apiGet<{ results: string[]; total: number }>('/api/v1/memory/search', { q: query })
+  return apiGet<{
+    results: string[]
+    vector_results: VectorSearchResult[] | null
+    total: number
+  }>('/api/v1/memory/search', { q: query })
 }

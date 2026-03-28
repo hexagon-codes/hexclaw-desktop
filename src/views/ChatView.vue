@@ -22,6 +22,8 @@ import SessionList from '@/components/chat/SessionList.vue'
 import ChatSearchDialog from '@/components/chat/ChatSearchDialog.vue'
 import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
+import AgentBadge from '@/components/chat/AgentBadge.vue'
+import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
@@ -282,6 +284,7 @@ function loadLLMConfig() {
 
 onMounted(async () => {
   chatStore.loadSessions()
+  chatStore.initApprovalListener()
   agentsStore.loadRoles()
   getSkills()
     .then((r) => {
@@ -352,8 +355,13 @@ function getMessageArtifacts(messageId: string) {
   return chatStore.artifacts.filter((a) => a.messageId === messageId)
 }
 
+let _scrollTimer: ReturnType<typeof setTimeout> | null = null
 function scrollToBottom() {
-  messagesEndRef.value?.scrollIntoView({ behavior: 'smooth' })
+  if (_scrollTimer) return // throttle: max 1 scroll per 100ms
+  _scrollTimer = setTimeout(() => {
+    messagesEndRef.value?.scrollIntoView({ behavior: 'smooth' })
+    _scrollTimer = null
+  }, 100)
 }
 
 function clearAttachmentPreview() {
@@ -623,6 +631,11 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                 </div>
                 <div class="hc-msg__body">
                   <div class="hc-msg__name">{{ msg.agent_name || t('chat.botName') }}</div>
+                  <AgentBadge
+                    v-if="msg.agent_name || (msg.metadata?.agent_name as string)"
+                    :agent-name="msg.agent_name || (msg.metadata?.agent_name as string) || ''"
+                    :is-handoff="idx > 0 && chatStore.messages[idx - 1]?.role === 'assistant' && chatStore.messages[idx - 1]?.agent_name !== msg.agent_name"
+                  />
                   <div class="hc-msg__bubble-wrap">
                     <div
                       class="hc-msg__bubble hc-msg__bubble--assistant"
@@ -891,6 +904,16 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                 </div>
               </div>
             </div>
+
+            <!-- 工具审批卡片 -->
+            <ToolApprovalCard
+              v-if="chatStore.pendingApproval"
+              :request-id="chatStore.pendingApproval.requestId"
+              :tool-name="chatStore.pendingApproval.toolName"
+              :risk="(chatStore.pendingApproval.risk as 'safe' | 'sensitive' | 'dangerous')"
+              :reason="chatStore.pendingApproval.reason"
+              @respond="chatStore.respondApproval"
+            />
 
             <div ref="messagesEndRef" />
           </div>

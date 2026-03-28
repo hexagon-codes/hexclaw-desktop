@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import { FileInput, Plus, RefreshCw } from 'lucide-vue-next'
 import TasksView from '@/views/TasksView.vue'
 import CanvasView from '@/views/CanvasView.vue'
+import WebhookPanel from '@/components/automation/WebhookPanel.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -19,7 +20,11 @@ const router = useRouter()
 const canvasStore = useCanvasStore()
 const toast = useToast()
 
-const activeTab = ref(route.path.startsWith('/automation/canvas') ? 'canvas' : 'tasks')
+const activeTab = ref(
+  route.path.startsWith('/automation/canvas') ? 'canvas'
+    : route.path.startsWith('/automation/webhooks') ? 'webhooks'
+    : 'tasks'
+)
 const automationSearch = ref('')
 
 const segments = computed(() =>
@@ -124,6 +129,7 @@ async function onNewTask() {
     />
     <div class="hc-page-shell__content">
       <TasksView v-if="activeTab === 'tasks'" ref="tasksViewRef" />
+      <WebhookPanel v-else-if="activeTab === 'webhooks'" />
       <CanvasView v-else />
     </div>
   </div>

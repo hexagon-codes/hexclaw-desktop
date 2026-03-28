@@ -20,7 +20,10 @@ vi.mock('@/api/websocket', () => ({
     onChunk: vi.fn().mockReturnValue(() => {}),
     onReply: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}),
+    onApprovalRequest: vi.fn().mockReturnValue(() => {}),
     sendMessage: vi.fn(),
+    sendRaw: vi.fn(),
+    sendApprovalResponse: vi.fn(),
   },
 }))
 

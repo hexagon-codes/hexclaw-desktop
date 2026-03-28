@@ -4,15 +4,37 @@ import { useI18n } from 'vue-i18n'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { codeToHtml } from 'shiki'
+import ArtifactRenderer from '@/components/chat/ArtifactRenderer.vue'
 
 const props = defineProps<{
   content: string
 }>()
 
+/** Extract previewable code blocks (html/svg) from raw markdown */
+const previewableBlocks = computed(() => {
+  const blocks: { language: string; code: string }[] = []
+  const fenceRe = /```(html|svg)\n([\s\S]*?)```/g
+  let m: RegExpExecArray | null
+  while ((m = fenceRe.exec(props.content)) !== null) {
+    blocks.push({ language: m[1]!, code: m[2] || '' })
+  }
+  return blocks
+})
+
 const { t } = useI18n()
 
 let activeInstanceCount = 0
+const HIGHLIGHT_CACHE_MAX = 200
 const highlightCache = new Map<string, string>()
+
+// LRU eviction: when cache exceeds max, remove oldest entries
+function highlightCacheSet(key: string, value: string) {
+  if (highlightCache.size >= HIGHLIGHT_CACHE_MAX) {
+    const firstKey = highlightCache.keys().next().value
+    if (firstKey !== undefined) highlightCache.delete(firstKey)
+  }
+  highlightCache.set(key, value)
+}
 
 function createMarkdownRenderer(copyLabel: string) {
   const instance = new MarkdownIt({
@@ -61,10 +83,10 @@ async function highlightCodeBlocks(content: string) {
         lang: lang as never,
         theme: 'github-dark',
       })
-      highlightCache.set(cacheKey, html)
+      highlightCacheSet(cacheKey, html)
       needsRerender = true
     } catch {
-      highlightCache.set(cacheKey, '')
+      highlightCacheSet(cacheKey, '')
     }
   }
 
@@ -114,7 +136,15 @@ const rendered = computed(() => {
 </script>
 
 <template>
-  <div class="markdown-body" v-html="rendered" />
+  <div>
+    <div class="markdown-body" v-html="rendered" />
+    <ArtifactRenderer
+      v-for="(block, i) in previewableBlocks"
+      :key="`artifact-${i}`"
+      :content="block.code"
+      :language="block.language"
+    />
+  </div>
 </template>
 
 <style scoped>

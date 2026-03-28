@@ -38,6 +38,7 @@ import type {
 } from '@/types'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
+import OllamaCard from '@/components/settings/OllamaCard.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
@@ -410,6 +411,20 @@ async function loadRuntimeInfo() {
 }
 
 /** 添加一个新 Provider */
+function handleAssociateOllama() {
+  const ollamaPreset = PROVIDER_PRESETS['ollama']
+  if (ollamaPreset) {
+    settingsStore.addProvider({
+      name: ollamaPreset.name,
+      type: 'ollama' as ProviderType,
+      enabled: true,
+      apiKey: '',
+      baseUrl: ollamaPreset.defaultBaseUrl || 'http://localhost:11434',
+      models: [...(ollamaPreset.defaultModels || [])],
+    })
+  }
+}
+
 function handleAddProvider() {
   const preset = PROVIDER_PRESETS[addProviderType.value]
   settingsStore.addProvider({
@@ -808,6 +823,9 @@ async function saveConfig() {
                 </button>
               </div>
             </div>
+
+            <!-- 本地 LLM (Ollama) 卡片 -->
+            <OllamaCard @associate="handleAssociateOllama" />
 
             <!-- Provider 列表 -->
             <div

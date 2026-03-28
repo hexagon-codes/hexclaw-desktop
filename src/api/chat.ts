@@ -120,3 +120,19 @@ export async function sendStreamViaTauri(
 
   return { requestId, unlisten }
 }
+
+// ============== Session Fork (D10) ==============
+
+import { apiPost, apiGet } from './client'
+
+/** 从指定消息处分支对话 */
+export function forkSession(sessionId: string, messageId?: string) {
+  return apiPost<{ session_id: string; message: string }>(`/api/v1/sessions/${sessionId}/fork`, {
+    message_id: messageId,
+  })
+}
+
+/** 获取会话的分支列表 */
+export function getSessionBranches(sessionId: string) {
+  return apiGet<{ branches: ChatSession[] }>(`/api/v1/sessions/${sessionId}/branches`)
+}

@@ -3,6 +3,7 @@ import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Brain, Search, Save, Pencil, Trash2, X, Check, Eraser } from 'lucide-vue-next'
 import { getMemory, saveMemory, updateMemory, clearAllMemory, searchMemory } from '@/api/memory'
+import type { VectorSearchResult } from '@/api/memory'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -32,6 +33,7 @@ const saving = ref(false)
 // 搜索记忆
 const searchQuery = ref('')
 const searchResults = ref<string[]>([])
+const vectorResults = ref<VectorSearchResult[]>([])
 const searching = ref(false)
 
 onMounted(async () => {
@@ -137,6 +139,7 @@ async function handleSearch() {
   try {
     const res = await searchMemory(searchQuery.value)
     searchResults.value = res.results || []
+    vectorResults.value = res.vector_results || []
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('memory.searchFailed', 'Search failed')
     console.error('Failed to search memory:', e)
@@ -363,8 +366,30 @@ async function handleSearch() {
             </div>
           </div>
 
+          <!-- Vector (Semantic) Results -->
+          <div v-if="vectorResults.length > 0" class="space-y-3" style="margin-top: 16px;">
+            <div class="text-xs font-medium" :style="{ color: 'var(--hc-text-muted)' }">
+              Semantic Results ({{ vectorResults.length }})
+            </div>
+            <div
+              v-for="(vr, idx) in vectorResults"
+              :key="'v-' + idx"
+              class="rounded-xl border p-4"
+              :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-accent-border)' }"
+            >
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
+                  Score: {{ (vr.score * 100).toFixed(1) }}%
+                </span>
+              </div>
+              <p class="text-sm leading-relaxed" :style="{ color: 'var(--hc-text-primary)' }">
+                {{ vr.content }}
+              </p>
+            </div>
+          </div>
+
           <EmptyState
-            v-else-if="!searching && searchQuery"
+            v-else-if="!searching && searchQuery && searchResults.length === 0"
             :icon="Search"
             :title="t('common.noData')"
             :description="t('memory.noSearchResults')"

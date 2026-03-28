@@ -53,6 +53,9 @@ vi.mock('@/api/websocket', () => ({
       replyCallback = cb
     }),
     onError: vi.fn(),
+    onApprovalRequest: vi.fn().mockReturnValue(() => {}),
+    sendRaw: vi.fn(),
+    sendApprovalResponse: vi.fn(),
     sendMessage: vi.fn().mockImplementation(() => {
       // Simulate: both chunk(done=true) AND reply fire
       // This is the bug — both resolve the same Promise

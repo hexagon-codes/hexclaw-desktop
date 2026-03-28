@@ -17,6 +17,7 @@ import type { ChatMessage, ChatSession, ChatAttachment, Artifact, ChatMode, Exec
 
 import * as msgSvc from '@/services/messageService'
 import * as chatSvc from '@/services/chatService'
+import { hexclawWS, type ToolApprovalRequest } from '@/api/websocket'
 
 function cloneMessage(message: ChatMessage): ChatMessage {
   return {
@@ -46,6 +47,23 @@ export const useChatStore = defineStore('chat', () => {
   const showArtifacts = ref(false)
 
   const chatParams = ref<{ provider?: string; model?: string; temperature?: number; maxTokens?: number }>({})
+
+  // ─── 工具审批状态 ──────────────────────────────────
+  const pendingApproval = ref<ToolApprovalRequest | null>(null)
+
+  // 初始化 WS 审批监听 (全局，只注册一次)
+  let approvalCleanup: (() => void) | null = null
+  function initApprovalListener() {
+    if (approvalCleanup) return
+    approvalCleanup = hexclawWS.onApprovalRequest((req) => {
+      pendingApproval.value = req
+    })
+  }
+
+  function respondApproval(requestId: string, approved: boolean, remember: boolean) {
+    hexclawWS.sendApprovalResponse(requestId, approved, remember)
+    pendingApproval.value = null
+  }
 
   // ─── 会话管理 ──────────────────────────────────
 
@@ -324,6 +342,8 @@ export const useChatStore = defineStore('chat', () => {
       messages.value.push(partialMsg)
       if (currentSessionId.value) persistMessage(partialMsg, currentSessionId.value)
     }
+    // 通知后端取消当前流式生成
+    hexclawWS.sendRaw({ type: 'cancel', session_id: streamingSessionId.value })
     streaming.value = false
     streamingSessionId.value = null
     streamingContent.value = ''
@@ -359,9 +379,11 @@ export const useChatStore = defineStore('chat', () => {
     isCurrentStreaming, isCurrentStreamingContent, error,
     chatMode, execMode, agentRole, chatParams,
     artifacts, selectedArtifactId, showArtifacts,
+    pendingApproval,
     loadSessions, selectSession, newSession, ensureSession,
     sendMessage, updateMessage, setMessageFeedback,
     stopStreaming, deleteSession,
     addArtifact, selectArtifact, extractArtifacts,
+    initApprovalListener, respondApproval,
   }
 })

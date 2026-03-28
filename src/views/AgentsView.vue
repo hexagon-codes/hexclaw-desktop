@@ -438,18 +438,8 @@ async function handleUnregisterAgent() {
         <LoadingState v-if="agentsLoading" />
 
         <template v-else>
-          <div class="flex items-center justify-between mb-4 max-w-2xl">
-            <div class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
-              <span v-if="defaultAgent">{{ t('agents.defaultAgent') }}: <strong>{{ defaultAgent }}</strong></span>
-            </div>
-            <button
-              class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-              :style="{ background: 'var(--hc-accent)' }"
-              @click="showAddAgent = true"
-            >
-              <Plus :size="14" />
-              {{ t('agents.registerAgent') }}
-            </button>
+          <div v-if="defaultAgent" class="mb-4 max-w-2xl text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+            {{ t('agents.defaultAgent') }}: <strong>{{ defaultAgent }}</strong>
           </div>
 
           <EmptyState

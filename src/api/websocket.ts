@@ -36,7 +36,7 @@ interface WsUsage {
 }
 
 interface WsServerMessage {
-  type: 'chunk' | 'reply' | 'error' | 'pong'
+  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request'
   content: string
   done?: boolean
   session_id?: string
@@ -45,6 +45,16 @@ interface WsServerMessage {
   metadata?: Record<string, unknown>
 }
 
+export interface ToolApprovalRequest {
+  requestId: string
+  toolName: string
+  risk: string
+  reason: string
+  sessionId: string
+}
+
+type ApprovalCallback = (req: ToolApprovalRequest) => void
+
 class HexClawWS {
   private ws: WebSocket | null = null
   private url = `${env.wsBase}/ws`
@@ -52,6 +62,7 @@ class HexClawWS {
   private chunkCallbacks: ChunkCallback[] = []
   private replyCallbacks: ReplyCallback[] = []
   private errorCallbacks: ErrorCallback[] = []
+  private approvalCallbacks: ApprovalCallback[] = []
 
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
@@ -190,11 +201,33 @@ class HexClawWS {
     return () => { this.errorCallbacks = this.errorCallbacks.filter((cb) => cb !== callback) }
   }
 
+  onApprovalRequest(callback: ApprovalCallback): () => void {
+    this.approvalCallbacks.push(callback)
+    return () => { this.approvalCallbacks = this.approvalCallbacks.filter((cb) => cb !== callback) }
+  }
+
+  /** Send tool approval response back to backend */
+  sendApprovalResponse(requestId: string, approved: boolean, remember: boolean): void {
+    const content = remember ? 'approved_remember' : approved ? 'approved' : 'denied'
+    this.sendRaw({
+      type: 'tool_approval_response',
+      content,
+      metadata: { request_id: requestId },
+    })
+  }
+
+  /** Send a raw JSON message to the backend */
+  sendRaw(data: Record<string, unknown>): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
+    this.ws.send(JSON.stringify(data))
+  }
+
   /** Remove all registered callbacks (useful for re-registering) */
   clearCallbacks(): void {
     this.chunkCallbacks = []
     this.replyCallbacks = []
     this.errorCallbacks = []
+    this.approvalCallbacks = []
   }
 
   private handleMessage(data: string): void {
@@ -218,6 +251,15 @@ class HexClawWS {
         break
       case 'pong':
         this.lastPongTime = Date.now()
+        break
+      case 'tool_approval_request':
+        this.approvalCallbacks.forEach((cb) => cb({
+          requestId: (msg.metadata?.request_id as string) || '',
+          toolName: (msg.metadata?.tool_name as string) || '',
+          risk: (msg.metadata?.risk as string) || 'sensitive',
+          reason: msg.content || '',
+          sessionId: msg.session_id || '',
+        }))
         break
       default:
         logger.warn('WebSocket unknown message type:', msg)

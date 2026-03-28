@@ -101,7 +101,7 @@ function onAddInstance() {
           <Download :size="14" />
           {{ t('integration.exportLogs', 'Export Logs') }}
         </button>
-        <button v-if="activeTab === 'skills' || activeTab === 'mcp'" class="hc-btn hc-btn-primary" @click="onAddInstance">
+        <button v-if="activeTab === 'skills'" class="hc-btn hc-btn-primary" @click="onAddInstance">
           <Plus :size="14" />
           {{ t('integration.addInstance', 'Add Instance') }}
         </button>

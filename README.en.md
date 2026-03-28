@@ -37,7 +37,7 @@ Native macOS / Windows / Linux · Sidecar local deployment · Zero cloud depende
 
 <!-- TODO: Add screenshots
 <p align="center">
-  <img src="docs/screenshots/chat.png" alt="Chat UI" width="800" />
+  <img src=".github/assets/screenshots/chat.png" alt="Chat UI" width="800" />
 </p>
 -->
 
