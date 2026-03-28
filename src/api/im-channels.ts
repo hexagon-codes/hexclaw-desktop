@@ -8,7 +8,6 @@ export type IMChannelType =
   | 'dingtalk'
   | 'wechat'
   | 'wecom'
-  | 'slack'
   | 'discord'
   | 'telegram'
 
@@ -99,10 +98,6 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
     { key: 'token', label: '回调 Token', labelEn: 'Callback Token', placeholder: 'Enter Token', secret: true },
     { key: 'encoding_aes_key', label: '回调 EncodingAESKey', labelEn: 'Callback EncodingAESKey', placeholder: '43 characters', secret: true },
   ],
-  slack: [
-    { key: 'bot_token', label: 'Bot Token', labelEn: 'Bot Token', placeholder: 'xoxb-...', secret: true },
-    { key: 'app_token', label: 'App Token', labelEn: 'App Token', placeholder: 'xapp-...', secret: true },
-  ],
 }
 
 /** 通道类型元数据 */
@@ -119,7 +114,6 @@ import feishuLogo from '@/assets/im-logos/feishu.svg'
 import dingtalkLogo from '@/assets/im-logos/dingtalk.svg'
 import wechatLogo from '@/assets/im-logos/wechat.svg'
 import wecomLogo from '@/assets/im-logos/wecom.svg'
-import slackLogo from '@/assets/im-logos/slack.svg'
 import discordLogo from '@/assets/im-logos/discord.svg'
 import telegramLogo from '@/assets/im-logos/telegram.svg'
 
@@ -157,12 +151,6 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
     helpUrl: 'https://developer.work.weixin.qq.com/document/',
   },
   {
-    type: 'slack',
-    name: 'Slack',
-    nameEn: 'Slack',
-    logo: slackLogo,
-    color: '#4a154b',
-    helpUrl: 'https://api.slack.com/start',
   },
   {
     type: 'discord',
@@ -207,10 +195,6 @@ export const CHANNEL_HELP_TEXT: Record<IMChannelType, { zh: string; en: string }
   wecom: {
     zh: '在企业微信管理后台创建自建应用，获取 Corp ID、Agent ID 和 Secret。在"接收消息"中配置回调 URL、Token 和 EncodingAESKey。',
     en: 'Create an internal app in WeCom admin console. Get Corp ID, Agent ID & Secret. Configure callback URL, Token and EncodingAESKey.',
-  },
-  slack: {
-    zh: '在 Slack API 创建 App，启用 Socket Mode，获取 Bot Token (xoxb-) 和 App Token (xapp-)。无需公网地址。',
-    en: 'Create an App on Slack API, enable Socket Mode. Get Bot Token (xoxb-) and App Token (xapp-). No public URL needed.',
   },
 }
 
