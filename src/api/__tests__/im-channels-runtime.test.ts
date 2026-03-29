@@ -184,4 +184,80 @@ describe('im-channels runtime sync', () => {
 
     expect(invoke).not.toHaveBeenCalled()
   })
+
+  it('rename rollback: cleans up new instance if old delete fails', async () => {
+    const existing = {
+      id1: {
+        id: 'id1',
+        name: 'OldName',
+        type: 'feishu' as const,
+        enabled: true,
+        config: { app_id: 'cli_x', app_secret: 's' },
+        createdAt: 1,
+      },
+    }
+    storeGet.mockImplementation(async (key: string) => {
+      if (key === 'im-instances') return { ...existing }
+      return undefined
+    })
+
+    let callCount = 0
+    invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
+      callCount++
+      // 1st call: POST create new name → success
+      if (callCount === 1 && payload.method === 'POST') {
+        return JSON.stringify({ status: 'ok' })
+      }
+      // 2nd call: DELETE old name → fail
+      if (callCount === 2 && payload.method === 'DELETE') {
+        throw new Error('delete failed')
+      }
+      // 3rd call: DELETE new name (rollback) → success
+      if (callCount === 3 && payload.method === 'DELETE') {
+        return JSON.stringify({ ok: true })
+      }
+      return JSON.stringify({})
+    })
+
+    const mod = await import('../im-channels')
+    await expect(mod.updateIMInstance('id1', { name: 'NewName' })).rejects.toThrow('delete failed')
+
+    // Verify rollback: DELETE was called for the new name
+    const deleteCalls = invoke.mock.calls.filter((c) => c[1]?.method === 'DELETE')
+    expect(deleteCalls).toHaveLength(2) // old name (failed) + new name (rollback)
+    expect(deleteCalls[1][1].path).toContain('NewName')
+  })
+
+  it('proxyApiRequest logs warning for swallowed errors', async () => {
+    storeGet.mockImplementation(async (key: string) => {
+      if (key === 'im-instances') {
+        return {
+          f1: {
+            id: 'f1',
+            name: 'Feishu',
+            type: 'feishu' as const,
+            enabled: true,
+            config: { app_id: 'x', app_secret: 's' },
+            createdAt: 1,
+          },
+        }
+      }
+      return undefined
+    })
+
+    // Simulate plugin not available error
+    invoke.mockRejectedValue(new Error('plugin not available'))
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const mod = await import('../im-channels')
+    await mod.ensureIMInstancesSyncedToBackend()
+
+    // Should have logged the swallowed error
+    const warnCalls = warnSpy.mock.calls.filter((c) =>
+      typeof c[0] === 'string' && c[0].includes('[IM] proxyApiRequest'),
+    )
+    expect(warnCalls.length).toBeGreaterThan(0)
+    warnSpy.mockRestore()
+  })
 })

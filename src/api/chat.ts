@@ -49,7 +49,12 @@ export async function sendChatViaBackend(
     },
   })
 
-  const result: BackendChatResponse = JSON.parse(text)
+  let result: BackendChatResponse
+  try {
+    result = JSON.parse(text)
+  } catch {
+    throw new Error(`后端返回非 JSON 响应: ${text.slice(0, 200)}`)
+  }
   logger.debug(`← backend_chat: reply=${result.reply.slice(0, 50)}... session=${result.session_id}`)
   return result
 }
@@ -135,4 +140,61 @@ export function forkSession(sessionId: string, messageId?: string) {
 /** 获取会话的分支列表 */
 export function getSessionBranches(sessionId: string) {
   return apiGet<{ branches: ChatSession[] }>(`/api/v1/sessions/${sessionId}/branches`)
+}
+
+// ============== Session Management ==============
+
+import { apiDelete } from './client'
+
+/** 会话摘要（列表用） */
+export interface SessionSummary {
+  id: string
+  title: string
+  user_id: string
+  parent_id?: string
+  fork_message_id?: string
+  created_at: string
+  updated_at: string
+  message_count?: number
+}
+
+/** 获取会话列表 */
+export function listSessions(opts?: { limit?: number; offset?: number }) {
+  const q: Record<string, unknown> = { user_id: DESKTOP_USER_ID }
+  if (opts?.limit) q.limit = opts.limit
+  if (opts?.offset) q.offset = opts.offset
+  return apiGet<{ sessions: SessionSummary[]; total: number }>('/api/v1/sessions', q)
+}
+
+/** 获取单个会话详情 */
+export function getSession(sessionId: string) {
+  return apiGet<SessionSummary>(`/api/v1/sessions/${sessionId}`)
+}
+
+/** 获取会话消息历史 */
+export function listSessionMessages(sessionId: string, opts?: { limit?: number; offset?: number }) {
+  const q: Record<string, unknown> = {}
+  if (opts?.limit) q.limit = opts.limit
+  if (opts?.offset) q.offset = opts.offset
+  return apiGet<{ messages: ChatMessage[]; total: number }>(`/api/v1/sessions/${sessionId}/messages`, q)
+}
+
+/** 删除会话 */
+export function deleteSession(sessionId: string) {
+  return apiDelete<{ message: string }>(`/api/v1/sessions/${sessionId}`)
+}
+
+/** 跨会话全文搜索消息 */
+export function searchMessages(query: string, opts?: { limit?: number; offset?: number }) {
+  const q: Record<string, unknown> = { q: query, user_id: DESKTOP_USER_ID }
+  if (opts?.limit) q.limit = opts.limit
+  if (opts?.offset) q.offset = opts.offset
+  return apiGet<{ results: Array<ChatMessage & { session_id: string; score?: number }>; total: number; query: string }>('/api/v1/messages/search', q)
+}
+
+/** 更新消息反馈 (like/dislike) */
+export function updateMessageFeedback(messageId: string, feedback: 'like' | 'dislike' | '') {
+  return import('./client').then(({ apiPut }) =>
+    apiPut<{ message: string }>(`/api/v1/messages/${messageId}/feedback`, { feedback }),
+  )
 }

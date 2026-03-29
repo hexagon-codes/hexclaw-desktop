@@ -9,6 +9,7 @@ import {
   Blocks,
   ScrollText,
   Settings,
+  Webhook,
 } from 'lucide-vue-next'
 
 export interface NavItem {
@@ -114,6 +115,7 @@ export const navigationItems: NavItem[] = [
     children: [
       { id: 'integration-skills', path: '/integration', i18nKey: 'nav.integrationSkills' },
       { id: 'integration-mcp', path: '/integration/mcp', i18nKey: 'nav.integrationMcp' },
+      { id: 'integration-webhooks', path: '/integration/webhooks', i18nKey: 'nav.integrationWebhooks' },
       { id: 'integration-diagnostics', path: '/integration/diagnostics', i18nKey: 'nav.integrationDiagnostics' },
     ],
   },

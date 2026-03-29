@@ -89,14 +89,14 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
     { key: 'app_id', label: '公众号 AppID', labelEn: 'Official Account AppID', placeholder: 'wx...' },
     { key: 'app_secret', label: 'AppSecret', labelEn: 'AppSecret', placeholder: 'Enter AppSecret', secret: true },
     { key: 'token', label: '令牌 Token', labelEn: 'Verification Token', placeholder: 'Enter Token', secret: true },
-    { key: 'encoding_aes_key', label: '消息加密密钥（选填）', labelEn: 'EncodingAESKey (optional)', placeholder: '43 characters', secret: true, optional: true },
+    { key: 'aes_key', label: '消息加密密钥（选填）', labelEn: 'EncodingAESKey (optional)', placeholder: '43 characters', secret: true, optional: true },
   ],
   wecom: [
     { key: 'corp_id', label: '企业 ID', labelEn: 'Corp ID', placeholder: 'ww...' },
     { key: 'agent_id', label: '应用 AgentId', labelEn: 'Agent ID', placeholder: '1000002' },
     { key: 'secret', label: '应用 Secret', labelEn: 'App Secret', placeholder: 'Enter Secret', secret: true },
     { key: 'token', label: '回调 Token', labelEn: 'Callback Token', placeholder: 'Enter Token', secret: true },
-    { key: 'encoding_aes_key', label: '回调 EncodingAESKey', labelEn: 'Callback EncodingAESKey', placeholder: '43 characters', secret: true },
+    { key: 'aes_key', label: '回调 EncodingAESKey', labelEn: 'Callback EncodingAESKey', placeholder: '43 characters', secret: true },
   ],
 }
 
@@ -137,7 +137,7 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
   {
     type: 'wechat',
     name: '微信公众号',
-    nameEn: 'WeChat',
+    nameEn: 'WeChat Official',
     logo: wechatLogo,
     color: '#07c160',
     helpUrl: 'https://developers.weixin.qq.com/doc/offiaccount/Getting_Started/Overview.html',
@@ -149,8 +149,6 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
     logo: wecomLogo,
     color: '#2dae67',
     helpUrl: 'https://developer.work.weixin.qq.com/document/',
-  },
-  {
   },
   {
     type: 'discord',
@@ -189,8 +187,8 @@ export const CHANNEL_HELP_TEXT: Record<IMChannelType, { zh: string; en: string }
     en: 'Create a Bot via @BotFather, get Bot Token. No additional configuration needed.',
   },
   wechat: {
-    zh: '在微信公众平台创建服务号或订阅号，获取 AppID 和 AppSecret，在"基本配置"中设置服务器 URL 和 Token。',
-    en: 'Create a service/subscription account on WeChat Official Account Platform. Get AppID & AppSecret, configure server URL and Token.',
+    zh: '在微信公众平台创建公众号（服务号），获取 AppID 和 AppSecret，在"基本配置"中设置服务器 Token 和 EncodingAESKey。',
+    en: 'Create an Official Account (Service) on WeChat MP. Get AppID & AppSecret, configure Token and EncodingAESKey in Basic Settings.',
   },
   wecom: {
     zh: '在企业微信管理后台创建自建应用，获取 Corp ID、Agent ID 和 Secret。在"接收消息"中配置回调 URL、Token 和 EncodingAESKey。',
@@ -318,6 +316,7 @@ async function proxyApiRequest<T = Record<string, unknown>>(
     return text ? (JSON.parse(text) as T) : null
   } catch (e) {
     if (e instanceof TypeError || (e instanceof Error && e.message.includes('plugin'))) {
+      console.warn(`[IM] proxyApiRequest ${method} ${path} failed (non-fatal):`, e)
       return null
     }
     throw new Error(messageFromUnknownError(e))
@@ -469,7 +468,13 @@ export async function updateIMInstance(
 
   if (current.name !== next.name) {
     await syncBackendInstance({ ...next, enabled: false })
-    await deleteBackendInstance(current.name)
+    try {
+      await deleteBackendInstance(current.name)
+    } catch (e) {
+      // Rollback: remove the newly created instance to avoid duplicates
+      await deleteBackendInstance(next.name).catch(() => {})
+      throw e
+    }
     if (next.enabled) {
       await syncBackendInstance(next)
     }
@@ -582,3 +587,53 @@ export async function testSavedIMInstanceRuntime(
 
   return testIMInstance(instance)
 }
+
+// ─── 实例运行时控制 ─────────────────────────────────
+
+/** 实例健康状态 */
+export interface IMInstanceHealth {
+  name: string
+  provider: string
+  status: string  // running | stopped | error
+  enabled: boolean
+  last_error?: string
+  uptime?: number
+}
+
+/** 启动实例 */
+export async function startIMInstance(name: string): Promise<{ success: boolean; message: string }> {
+  const result = await proxyApiRequest<{ message?: string; error?: string }>(
+    'POST', `/api/v1/platforms/instances/${encodeURIComponent(name)}/start`,
+  )
+  return {
+    success: !result?.error,
+    message: result?.message || result?.error || 'OK',
+  }
+}
+
+/** 停止实例 */
+export async function stopIMInstance(name: string): Promise<{ success: boolean; message: string }> {
+  const result = await proxyApiRequest<{ message?: string; error?: string }>(
+    'POST', `/api/v1/platforms/instances/${encodeURIComponent(name)}/stop`,
+  )
+  return {
+    success: !result?.error,
+    message: result?.message || result?.error || 'OK',
+  }
+}
+
+/** 获取单个实例健康状态 */
+export async function getIMInstanceHealth(name: string): Promise<IMInstanceHealth | null> {
+  return proxyApiRequest<IMInstanceHealth>(
+    'GET', `/api/v1/platforms/instances/${encodeURIComponent(name)}/health`,
+  )
+}
+
+/** 获取所有实例健康状态 */
+export async function listIMInstancesHealth(): Promise<IMInstanceHealth[]> {
+  const result = await proxyApiRequest<{ instances?: IMInstanceHealth[] }>(
+    'GET', '/api/v1/platforms/instances/health',
+  )
+  return result?.instances || []
+}
+

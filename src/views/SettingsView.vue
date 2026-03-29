@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref, computed, watch } from 'vue'
+import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Key,
@@ -19,15 +19,28 @@ import {
   Zap,
   RotateCcw,
   Save,
+  Activity,
 } from 'lucide-vue-next'
-import { NTag, NModal, NSpace } from 'naive-ui'
+import { NTag, NSpace } from 'naive-ui'
 import { useSettingsStore } from '@/stores/settings'
 import { getRuntimeConfig } from '@/api/settings'
 import { getLLMConfig, testLLMConnection } from '@/api/config'
+import {
+  getBudgetStatus,
+  getToolCacheStats,
+  getToolMetrics,
+  getToolPermissions,
+} from '@/api/tools-status'
+import type {
+  BudgetStatus,
+  ToolCacheStats,
+  ToolMetrics,
+  ToolPermissions,
+} from '@/api/tools-status'
 import { messageFromUnknownError } from '@/utils/errors'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { setLocale } from '@/i18n'
-import { PROVIDER_PRESETS, PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
+import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
 import type {
   ProviderConfig,
   ProviderType,
@@ -37,6 +50,7 @@ import type {
   BackendLLMConfig,
 } from '@/types'
 import PageToolbar from '@/components/common/PageToolbar.vue'
+import ProviderSelect from '@/components/common/ProviderSelect.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import OllamaCard from '@/components/settings/OllamaCard.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -68,6 +82,8 @@ const showAddModelPanel = ref(false)
 
 // 编辑模型 Modal
 const editingModel = ref<{ providerId: string; idx: number; model: ModelOption } | null>(null)
+const editModelOverlayRef = ref<HTMLDivElement | null>(null)
+watch(editingModel, (v) => { if (v) nextTick(() => editModelOverlayRef.value?.focus()) })
 const editModelForm = ref<{ name: string; id: string; caps: Record<ModelCapability, boolean> }>({
   name: '',
   id: '',
@@ -90,6 +106,7 @@ const sections = computed(() => [
   { key: 'llm', label: t('settings.llm.title'), icon: Key },
   { key: 'appearance', label: t('settings.appearance.title'), icon: Palette },
   { key: 'storage', label: t('settings.storage.title'), icon: Database },
+  { key: 'status', label: t('settings.status.title', '系统状态'), icon: Activity },
 ])
 
 function handleLocaleChange(locale: string) {
@@ -233,9 +250,6 @@ function handleLanguageChange() {
   autoSave()
 }
 
-function handleEditModelVisibility(visible: boolean) {
-  if (!visible) editingModel.value = null
-}
 
 onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
@@ -298,6 +312,9 @@ onBeforeUnmount(() => {
 watch(activeSection, (val) => {
   if (val === 'storage') {
     loadRuntimeInfo()
+  }
+  if (val === 'status' && statusExpanded.value && !budgetStatus.value && !statusError.value) {
+    loadSystemStatus()
   }
 })
 
@@ -392,26 +409,94 @@ const runtimeLocalStoreEngine = 'SQLite'
 const runtimeLocalStoreFile = 'hexclaw.db'
 const runtimeVectorDbIndexMode = 'FTS5 + 向量 BLOB'
 
+let runtimeInfoGen = 0
 async function loadRuntimeInfo() {
+  const gen = ++runtimeInfoGen
   runtimeInfoLoading.value = true
   try {
     const [nextRuntimeConfig, nextLLMConfig] = await Promise.all([
       getRuntimeConfig(),
       getLLMConfig(),
     ])
+    if (gen !== runtimeInfoGen) return // stale response from earlier call, discard
     runtimeConfig.value = nextRuntimeConfig
     runtimeLLMConfig.value = nextLLMConfig
   } catch (e) {
+    if (gen !== runtimeInfoGen) return
     runtimeConfig.value = null
     runtimeLLMConfig.value = null
     console.warn('[HexClaw] 运行时配置加载失败:', e)
   } finally {
-    runtimeInfoLoading.value = false
+    if (gen === runtimeInfoGen) runtimeInfoLoading.value = false
   }
 }
 
+// ─── 系统状态 (Status) ────────────────────────────────
+const statusExpanded = ref(false)
+const statusLoading = ref(false)
+const budgetStatus = ref<BudgetStatus | null>(null)
+const toolCacheStats = ref<ToolCacheStats | null>(null)
+const toolMetrics = ref<ToolMetrics | null>(null)
+const toolPermissions = ref<ToolPermissions | null>(null)
+const statusError = ref('')
+
+async function loadSystemStatus() {
+  if (statusLoading.value) return
+  statusLoading.value = true
+  statusError.value = ''
+  try {
+    const [budget, cache, metrics, permissions] = await Promise.all([
+      getBudgetStatus(),
+      getToolCacheStats(),
+      getToolMetrics(),
+      getToolPermissions(),
+    ])
+    budgetStatus.value = budget
+    toolCacheStats.value = cache
+    toolMetrics.value = metrics
+    toolPermissions.value = permissions
+  } catch (e) {
+    statusError.value = messageFromUnknownError(e)
+  } finally {
+    statusLoading.value = false
+  }
+}
+
+function toggleStatusSection() {
+  statusExpanded.value = !statusExpanded.value
+  if (statusExpanded.value && !budgetStatus.value && !statusError.value) {
+    loadSystemStatus()
+  }
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`
+}
+
+function formatDuration(value: string | number): string {
+  if (typeof value === 'string') return value
+  if (value < 60) return `${value.toFixed(0)}s`
+  if (value < 3600) return `${(value / 60).toFixed(1)}m`
+  return `${(value / 3600).toFixed(1)}h`
+}
+
+function formatCost(value: number): string {
+  return `$${value.toFixed(4)}`
+}
+
+const topToolsByUsage = computed(() => {
+  if (!toolMetrics.value?.tools) return []
+  return [...toolMetrics.value.tools]
+    .sort((a, b) => b.call_count - a.call_count)
+    .slice(0, 10)
+})
+
 /** 添加一个新 Provider */
 function handleAssociateOllama() {
+  // 防止重复添加 Ollama
+  const alreadyExists = settingsStore.config?.llm.providers.some((p) => p.type === 'ollama')
+  if (alreadyExists) return
+
   const ollamaPreset = PROVIDER_PRESETS['ollama']
   if (ollamaPreset) {
     settingsStore.addProvider({
@@ -422,11 +507,22 @@ function handleAssociateOllama() {
       baseUrl: ollamaPreset.defaultBaseUrl || 'http://localhost:11434',
       models: [...(ollamaPreset.defaultModels || [])],
     })
+    autoSave()
   }
 }
 
 function handleAddProvider() {
   const preset = PROVIDER_PRESETS[addProviderType.value]
+
+  // 防止重复添加 Ollama（只允许一个）
+  if (preset.type === 'ollama') {
+    const alreadyExists = settingsStore.config?.llm.providers.some((p) => p.type === 'ollama')
+    if (alreadyExists) {
+      showAddProvider.value = false
+      return
+    }
+  }
+
   settingsStore.addProvider({
     name: preset.name,
     type: preset.type,
@@ -798,22 +894,7 @@ async function saveConfig() {
             <!-- 添加 Provider 面板 -->
             <div v-if="showAddProvider" class="hc-provider__add-panel">
               <label class="hc-settings__label">{{ t('settings.llm.selectProvider') }}</label>
-              <div class="hc-provider__type-grid">
-                <button
-                  v-for="preset in getProviderTypes()"
-                  :key="preset.type"
-                  class="hc-provider__type-btn"
-                  :class="{ 'hc-provider__type-btn--active': addProviderType === preset.type }"
-                  @click="addProviderType = preset.type"
-                >
-                  <img
-                    :src="PROVIDER_LOGOS[preset.type]"
-                    :alt="preset.type"
-                    class="hc-provider__type-logo"
-                  />
-                  {{ preset.name }}
-                </button>
-              </div>
+              <ProviderSelect v-model="addProviderType" />
               <div class="hc-provider__add-actions">
                 <button class="hc-btn hc-btn-sm" @click="showAddProvider = false">
                   {{ t('common.cancel') }}
@@ -922,7 +1003,7 @@ async function saveConfig() {
                     />
                   </div>
 
-                  <div class="hc-settings__field">
+                  <div v-if="provider.type !== 'ollama'" class="hc-settings__field">
                     <label class="hc-settings__label"
                       >{{ t('settings.llm.apiKey') }}
                       <span class="hc-settings__required">*</span></label
@@ -957,6 +1038,9 @@ async function saveConfig() {
                       :placeholder="PROVIDER_PRESETS[provider.type]?.defaultBaseUrl"
                       @input="autoSave()"
                     />
+                    <p v-if="provider.type === 'ollama'" class="hc-settings__hint">
+                      {{ t('settings.llm.ollamaBaseUrlHint', '本地 Ollama 服务地址，默认端口 11434。如需修改端口，请同步修改此地址。') }}
+                    </p>
                   </div>
 
                   <!-- 模型列表 -->
@@ -1397,82 +1481,265 @@ async function saveConfig() {
               </p>
             </div>
           </div>
+
+          <!-- System Status -->
+          <div
+            v-else-if="activeSection === 'status'"
+            class="hc-settings__section hc-settings__section--scroll hc-settings__section--storage"
+          >
+            <h3 class="hc-settings__section-title">
+              {{ t('settings.status.title', '系统状态') }}
+            </h3>
+
+            <!-- Collapsible trigger -->
+            <button class="hc-status__trigger" @click="toggleStatusSection">
+              <span class="hc-status__trigger-label">
+                {{ t('settings.status.loadData', '加载运行时状态') }}
+              </span>
+              <component :is="statusExpanded ? ChevronUp : ChevronDown" :size="14" />
+            </button>
+
+            <template v-if="statusExpanded">
+              <!-- Loading -->
+              <p v-if="statusLoading" class="hc-status__loading">
+                <Loader2 :size="14" class="animate-spin" />
+                {{ t('common.loading', 'Loading...') }}
+              </p>
+
+              <!-- Error -->
+              <p v-else-if="statusError" class="hc-settings__error">
+                {{ statusError }}
+              </p>
+
+              <template v-else-if="budgetStatus">
+                <!-- Budget -->
+                <div class="hc-card hc-settings__info-card hc-settings__info-card--wide">
+                  <div class="hc-settings__info-title">
+                    {{ t('settings.status.budget', 'Budget') }}
+                  </div>
+
+                  <div class="hc-status__progress-list">
+                    <!-- Tokens -->
+                    <div class="hc-status__progress-item">
+                      <div class="hc-status__progress-header">
+                        <span class="hc-settings__info-label">Tokens</span>
+                        <span class="hc-status__progress-value">
+                          {{ budgetStatus.tokens_used.toLocaleString() }} / {{ budgetStatus.tokens_max.toLocaleString() }}
+                        </span>
+                      </div>
+                      <div class="hc-status__progress-bar">
+                        <div
+                          class="hc-status__progress-fill"
+                          :style="{ width: budgetStatus.tokens_max > 0 ? `${Math.min((budgetStatus.tokens_used / budgetStatus.tokens_max) * 100, 100)}%` : '0%' }"
+                          :class="{ 'hc-status__progress-fill--warn': budgetStatus.tokens_max > 0 && budgetStatus.tokens_used / budgetStatus.tokens_max > 0.8 }"
+                        />
+                      </div>
+                    </div>
+
+                    <!-- Cost -->
+                    <div class="hc-status__progress-item">
+                      <div class="hc-status__progress-header">
+                        <span class="hc-settings__info-label">Cost</span>
+                        <span class="hc-status__progress-value">
+                          {{ formatCost(budgetStatus.cost_used) }} / {{ formatCost(budgetStatus.cost_max) }}
+                        </span>
+                      </div>
+                      <div class="hc-status__progress-bar">
+                        <div
+                          class="hc-status__progress-fill"
+                          :style="{ width: budgetStatus.cost_max > 0 ? `${Math.min((budgetStatus.cost_used / budgetStatus.cost_max) * 100, 100)}%` : '0%' }"
+                          :class="{ 'hc-status__progress-fill--warn': budgetStatus.cost_max > 0 && budgetStatus.cost_used / budgetStatus.cost_max > 0.8 }"
+                        />
+                      </div>
+                    </div>
+
+                    <!-- Duration -->
+                    <div class="hc-status__progress-item">
+                      <div class="hc-status__progress-header">
+                        <span class="hc-settings__info-label">Duration</span>
+                        <span class="hc-status__progress-value">
+                          {{ formatDuration(budgetStatus.duration_used) }} / {{ formatDuration(budgetStatus.duration_max) }}
+                        </span>
+                      </div>
+                      <div class="hc-status__progress-bar">
+                        <div
+                          class="hc-status__progress-fill"
+                          :style="{ width: budgetStatus.exhausted ? '100%' : '0%' }"
+                          :class="{ 'hc-status__progress-fill--warn': budgetStatus.exhausted }"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tool Cache -->
+                <div v-if="toolCacheStats" class="hc-card hc-settings__info-card">
+                  <div class="hc-settings__info-title">
+                    {{ t('settings.status.toolCache', 'Tool Cache') }}
+                  </div>
+                  <div class="hc-settings__info-grid">
+                    <div>
+                      <span class="hc-settings__info-label">Entries</span>
+                      <div class="hc-settings__info-value">{{ toolCacheStats.entries }}</div>
+                    </div>
+                    <div>
+                      <span class="hc-settings__info-label">Hit Rate</span>
+                      <div
+                        class="hc-settings__info-value"
+                        :style="{ color: toolCacheStats.hit_rate > 0.5 ? 'var(--hc-success)' : 'var(--hc-text-primary)' }"
+                      >
+                        {{ formatPercent(toolCacheStats.hit_rate) }}
+                      </div>
+                    </div>
+                    <div>
+                      <span class="hc-settings__info-label">Hits</span>
+                      <div class="hc-settings__info-value">{{ toolCacheStats.hits }}</div>
+                    </div>
+                    <div>
+                      <span class="hc-settings__info-label">Misses</span>
+                      <div class="hc-settings__info-value">{{ toolCacheStats.misses }}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Tool Metrics -->
+                <div v-if="topToolsByUsage.length > 0" class="hc-card hc-settings__info-card hc-settings__info-card--wide">
+                  <div class="hc-settings__info-title">
+                    {{ t('settings.status.toolMetrics', 'Tool Metrics') }}
+                  </div>
+                  <table class="hc-status__table">
+                    <thead>
+                      <tr>
+                        <th>{{ t('settings.status.toolName', 'Tool') }}</th>
+                        <th>{{ t('settings.status.toolCalls', 'Calls') }}</th>
+                        <th>{{ t('settings.status.toolSuccessRate', 'Success') }}</th>
+                        <th>{{ t('settings.status.toolLatency', 'Avg Latency') }}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="tool in topToolsByUsage" :key="tool.tool">
+                        <td class="hc-status__table-name">{{ tool.tool }}</td>
+                        <td>{{ tool.call_count }}</td>
+                        <td :style="{ color: tool.success_rate >= 0.95 ? 'var(--hc-success)' : tool.success_rate < 0.8 ? 'var(--hc-error)' : 'var(--hc-text-primary)' }">
+                          {{ formatPercent(tool.success_rate) }}
+                        </td>
+                        <td>{{ tool.avg_latency_ms.toFixed(0) }}ms</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <!-- Tool Permissions -->
+                <div v-if="toolPermissions && toolPermissions.rules.length > 0" class="hc-card hc-settings__info-card">
+                  <div class="hc-settings__info-title">
+                    {{ t('settings.status.toolPermissions', 'Tool Permissions') }}
+                  </div>
+                  <div class="hc-status__permissions">
+                    <div
+                      v-for="(rule, idx) in toolPermissions.rules"
+                      :key="idx"
+                      class="hc-status__permission-row"
+                    >
+                      <code class="hc-status__permission-pattern">{{ rule.pattern }}</code>
+                      <span
+                        class="hc-status__permission-action"
+                        :class="{
+                          'hc-status__permission-action--allow': rule.action === 'allow',
+                          'hc-status__permission-action--deny': rule.action === 'deny',
+                        }"
+                      >
+                        {{ rule.action }}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Refresh button -->
+                <button class="hc-btn hc-btn-ghost hc-btn-sm" @click="loadSystemStatus">
+                  <RotateCcw :size="12" />
+                  {{ t('settings.status.refresh', 'Refresh') }}
+                </button>
+              </template>
+            </template>
+          </div>
         </template>
       </div>
     </div>
   </div>
 
   <!-- 编辑模型 Modal -->
-  <NModal
-    v-if="editingModel"
-    :show="true"
-    preset="card"
-    :title="'编辑模型'"
-    style="max-width: 420px"
-    :bordered="false"
-    :segmented="{ content: true, footer: true }"
-    :close-on-esc="true"
-    :mask-closable="true"
-    @update:show="handleEditModelVisibility"
-    @after-leave="editingModel = null"
-  >
-    <div class="hc-edit-model">
-      <div class="hc-edit-model__field">
-        <label>模型 ID <span class="hc-settings__required">*</span></label>
-        <input
-          v-model="editModelForm.id"
-          type="text"
-          class="hc-input"
-          placeholder="如 gpt-4o, claude-sonnet-4-6"
-        />
-      </div>
-      <div class="hc-edit-model__field">
-        <label>显示名称</label>
-        <input
-          v-model="editModelForm.name"
-          type="text"
-          class="hc-input"
-          placeholder="留空则使用模型 ID"
-        />
-      </div>
-      <div class="hc-edit-model__field">
-        <label>模型能力</label>
-        <div class="hc-edit-model__caps">
-          <label
-            v-for="cap in ['text', 'vision', 'video', 'audio'] as ModelCapability[]"
-            :key="cap"
-            class="hc-edit-model__cap-item"
-          >
-            <input v-model="editModelForm.caps[cap]" type="checkbox" :disabled="cap === 'text'" />
-            <span class="hc-edit-model__cap-icon">{{
-              cap === 'text' ? '💬' : cap === 'vision' ? '👁' : cap === 'video' ? '🎬' : '🎤'
-            }}</span>
-            <span>{{
-              cap === 'text'
-                ? '文本'
-                : cap === 'vision'
-                  ? '视觉'
-                  : cap === 'video'
-                    ? '视频'
-                    : '音频'
-            }}</span>
-          </label>
+  <Teleport to="body">
+    <Transition name="hc-dialog">
+      <div
+        v-if="editingModel"
+        ref="editModelOverlayRef"
+        class="hc-dialog-overlay"
+        tabindex="-1"
+        @click.self="editingModel = null"
+        @keydown.esc="editingModel = null"
+      >
+        <div class="hc-edit-model-dialog">
+          <div class="hc-edit-model-dialog__header">
+            <h3 class="hc-edit-model-dialog__title">编辑模型</h3>
+          </div>
+          <div class="hc-edit-model">
+            <div class="hc-edit-model__field">
+              <label>模型 ID <span class="hc-settings__required">*</span></label>
+              <input
+                v-model="editModelForm.id"
+                type="text"
+                class="hc-input"
+                placeholder="如 gpt-4o, claude-sonnet-4-6"
+              />
+            </div>
+            <div class="hc-edit-model__field">
+              <label>显示名称</label>
+              <input
+                v-model="editModelForm.name"
+                type="text"
+                class="hc-input"
+                placeholder="留空则使用模型 ID"
+              />
+            </div>
+            <div class="hc-edit-model__field">
+              <label>模型能力</label>
+              <div class="hc-edit-model__caps">
+                <label
+                  v-for="cap in ['text', 'vision', 'video', 'audio'] as ModelCapability[]"
+                  :key="cap"
+                  class="hc-edit-model__cap-item"
+                >
+                  <input v-model="editModelForm.caps[cap]" type="checkbox" :disabled="cap === 'text'" />
+                  <span class="hc-edit-model__cap-icon">{{
+                    cap === 'text' ? '💬' : cap === 'vision' ? '👁' : cap === 'video' ? '🎬' : '🎤'
+                  }}</span>
+                  <span>{{
+                    cap === 'text'
+                      ? '文本'
+                      : cap === 'vision'
+                        ? '视觉'
+                        : cap === 'video'
+                          ? '视频'
+                          : '音频'
+                  }}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="hc-edit-model-dialog__actions">
+            <button class="hc-btn hc-btn-secondary" @click="editingModel = null">取消</button>
+            <button
+              class="hc-btn hc-btn-primary"
+              :disabled="!editModelForm.id.trim()"
+              @click="saveEditModel"
+            >
+              保存
+            </button>
+          </div>
         </div>
       </div>
-    </div>
-    <template #footer>
-      <div style="display: flex; justify-content: flex-end; gap: 8px">
-        <button class="hc-btn hc-btn-sm" @click="editingModel = null">取消</button>
-        <button
-          class="hc-btn hc-btn-primary hc-btn-sm"
-          :disabled="!editModelForm.id.trim()"
-          @click="saveEditModel"
-        >
-          保存
-        </button>
-      </div>
-    </template>
-  </NModal>
+    </Transition>
+  </Teleport>
 
   <ConfirmDialog
     :open="pendingDeleteProviderId !== null"
@@ -1822,43 +2089,6 @@ async function saveConfig() {
   gap: 10px;
 }
 
-.hc-provider__type-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.hc-provider__type-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 12px;
-  border-radius: var(--hc-radius-sm);
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-card);
-  color: var(--hc-text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.hc-provider__type-logo {
-  width: 18px;
-  height: 18px;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-
-.hc-provider__type-btn:hover {
-  border-color: var(--hc-accent-subtle);
-}
-
-.hc-provider__type-btn--active {
-  border-color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-  color: var(--hc-accent);
-  font-weight: 500;
-}
 
 .hc-provider__add-actions {
   display: flex;
@@ -2520,6 +2750,61 @@ async function saveConfig() {
 }
 
 /* ─── 编辑模型 Modal ─── */
+.hc-dialog-overlay {
+  position: fixed;
+  top: var(--hc-titlebar-height);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--hc-z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.hc-dialog-enter-active {
+  transition: opacity 0.2s ease-out;
+}
+.hc-dialog-leave-active {
+  transition: opacity 0.15s ease-in;
+}
+.hc-dialog-enter-from,
+.hc-dialog-leave-to {
+  opacity: 0;
+}
+
+.hc-edit-model-dialog {
+  width: 100%;
+  max-width: 420px;
+  border-radius: var(--hc-radius-xl);
+  background: var(--hc-bg-elevated);
+  border: 1px solid var(--hc-border);
+  box-shadow: var(--hc-shadow-float);
+  padding: 24px;
+  animation: hc-scale-in 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+.hc-edit-model-dialog__header {
+  margin-bottom: 20px;
+}
+
+.hc-edit-model-dialog__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
+  margin: 0;
+}
+
+.hc-edit-model-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
 .hc-edit-model {
   display: flex;
   flex-direction: column;
@@ -2611,5 +2896,156 @@ async function saveConfig() {
   .hc-settings__info-grid--runtime {
     grid-template-columns: 1fr;
   }
+}
+
+/* ─── System Status ───── */
+.hc-status__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
+  border: 1px solid var(--hc-border);
+  color: var(--hc-text-primary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  margin-bottom: 10px;
+}
+
+.hc-status__trigger:hover {
+  border-color: var(--hc-accent-subtle);
+}
+
+.hc-status__trigger-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hc-status__loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--hc-text-muted);
+  margin: 8px 0;
+}
+
+.hc-status__progress-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.hc-status__progress-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hc-status__progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.hc-status__progress-value {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--hc-text-muted);
+}
+
+.hc-status__progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--hc-bg-hover);
+  overflow: hidden;
+}
+
+.hc-status__progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--hc-accent);
+  transition: width 0.4s ease;
+  min-width: 0;
+}
+
+.hc-status__progress-fill--warn {
+  background: var(--hc-warning, #f5a623);
+}
+
+.hc-status__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.hc-status__table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--hc-text-muted);
+  padding: 4px 8px 6px 0;
+  border-bottom: 1px solid var(--hc-divider);
+}
+
+.hc-status__table td {
+  padding: 5px 8px 5px 0;
+  color: var(--hc-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-status__table-name {
+  font-weight: 500;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+}
+
+.hc-status__table tbody tr {
+  border-bottom: 1px solid var(--hc-divider);
+}
+
+.hc-status__table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.hc-status__permissions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.hc-status__permission-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.hc-status__permission-pattern {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--hc-text-secondary);
+}
+
+.hc-status__permission-action {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.hc-status__permission-action--allow {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 12%, transparent);
+}
+
+.hc-status__permission-action--deny {
+  color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 12%, transparent);
 }
 </style>

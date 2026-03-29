@@ -22,6 +22,9 @@ import {
   deleteIMInstance,
   testIMInstance,
   testSavedIMInstanceRuntime,
+  startIMInstance,
+  stopIMInstance,
+  listIMInstancesHealth,
   getChannelMeta,
   getChannelHelpText,
   getRequiredFieldLabels,
@@ -29,7 +32,7 @@ import {
   CHANNEL_TYPES,
   CHANNEL_CONFIG_FIELDS,
 } from '@/api/im-channels'
-import type { IMInstance, IMChannelType } from '@/api/im-channels'
+import type { IMInstance, IMChannelType, IMInstanceHealth } from '@/api/im-channels'
 import { setClipboard } from '@/api/desktop'
 import PageHeader from '@/components/common/PageHeader.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -98,6 +101,42 @@ const testResults = ref<Record<string, { success: boolean; message: string }>>({
 const modalTestResult = ref<{ success: boolean; message: string } | null>(null)
 const modalTesting = ref(false)
 
+// ─── Instance health ────────────────────────────────
+
+const healthMap = ref<Record<string, IMInstanceHealth>>({})
+const togglingId = ref<string | null>(null)
+
+async function loadHealth() {
+  try {
+    const list = await listIMInstancesHealth()
+    const map: Record<string, IMInstanceHealth> = {}
+    for (const h of list) map[h.name] = h
+    healthMap.value = map
+  } catch { /* non-critical */ }
+}
+
+function getHealth(inst: IMInstance): IMInstanceHealth | undefined {
+  return healthMap.value[inst.name]
+}
+
+async function handleStartStop(inst: IMInstance) {
+  const health = getHealth(inst)
+  const isRunning = health?.status === 'running'
+  togglingId.value = inst.id
+  try {
+    if (isRunning) {
+      await stopIMInstance(inst.name)
+    } else {
+      await startIMInstance(inst.name)
+    }
+    await loadHealth()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : t('imChannels.updateFailed')
+  } finally {
+    togglingId.value = null
+  }
+}
+
 // ─── Delete confirmation ─────────────────────────────
 
 const deletingId = ref<string | null>(null)
@@ -121,6 +160,7 @@ async function loadInstances() {
   } finally {
     loading.value = false
   }
+  loadHealth() // keep health status in sync
 }
 
 // ─── Create ──────────────────────────────────────────
@@ -220,6 +260,7 @@ function closeModal() {
 async function handleToggle(inst: IMInstance) {
   if (!inst.enabled && isConfigIncomplete(inst)) {
     errorMsg.value = t('imChannels.enableNeedConfig')
+    await loadInstances() // force checkbox revert
     return
   }
   try {
@@ -228,6 +269,7 @@ async function handleToggle(inst: IMInstance) {
     showRestartBanner.value = true
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('imChannels.updateFailed')
+    await loadInstances() // force checkbox revert to backend state
   }
 }
 
@@ -293,6 +335,7 @@ async function handleDelete(id: string) {
     await loadInstances()
     showRestartBanner.value = true
   } catch (e) {
+    deletingId.value = null // close overlay so user isn't stuck
     errorMsg.value = e instanceof Error ? e.message : t('imChannels.deleteFailed')
   }
 }
@@ -510,6 +553,27 @@ async function copyWebhookUrl() {
             </span>
           </div>
 
+          <!-- Runtime status row -->
+          <div v-if="inst.enabled && getHealth(inst)" class="hc-im-card__runtime">
+            <span
+              class="hc-im-card__runtime-dot"
+              :class="{
+                'hc-im-card__runtime-dot--running': getHealth(inst)?.status === 'running',
+                'hc-im-card__runtime-dot--error': getHealth(inst)?.status === 'error',
+              }"
+            />
+            <span class="hc-im-card__runtime-text">
+              {{ getHealth(inst)?.status === 'running' ? t('imChannels.statusRunning') : getHealth(inst)?.status === 'error' ? (getHealth(inst)?.last_error || t('imChannels.statusError')) : t('imChannels.statusStopped') }}
+            </span>
+            <button
+              class="hc-im-btn hc-im-btn--ghost hc-im-btn--xs"
+              :disabled="togglingId === inst.id"
+              @click="handleStartStop(inst)"
+            >
+              {{ togglingId === inst.id ? '...' : getHealth(inst)?.status === 'running' ? t('imChannels.stop') : t('imChannels.start') }}
+            </button>
+          </div>
+
           <!-- Actions row -->
           <div class="hc-im-card__actions">
             <label class="hc-im-toggle">
@@ -633,61 +697,63 @@ async function copyWebhookUrl() {
                 <p class="hc-im-help-box__text">{{ getChannelHelpText(formType, locale) }}</p>
               </div>
 
-              <!-- Instance name -->
-              <div class="hc-im-field">
-                <label class="hc-im-field__label">{{ t('imChannels.instanceName') }}</label>
-                <input
-                  v-model="formName"
-                  class="hc-im-input"
-                  :placeholder="t('imChannels.instanceNamePlaceholder')"
-                />
-              </div>
+              <!-- ─── Credential fields ─── -->
 
-              <!-- Config fields -->
-              <div v-for="field in configFields" :key="field.key" class="hc-im-field">
-                <label class="hc-im-field__label">
-                  {{ locale === 'zh-CN' ? field.label : field.labelEn }}
-                </label>
-                <div class="hc-im-input-wrap">
+                <!-- Instance name -->
+                <div class="hc-im-field">
+                  <label class="hc-im-field__label">{{ t('imChannels.instanceName') }}</label>
                   <input
-                    v-model="formConfig[field.key]"
-                    :type="field.secret && !showSecrets[field.key] ? 'password' : 'text'"
+                    v-model="formName"
                     class="hc-im-input"
-                    :placeholder="field.placeholder"
+                    :placeholder="t('imChannels.instanceNamePlaceholder')"
                   />
-                  <button
-                    v-if="field.secret"
-                    class="hc-im-input-eye"
-                    @click="toggleSecret(field.key)"
-                  >
-                    <component :is="showSecrets[field.key] ? EyeOff : Eye" :size="14" />
-                  </button>
                 </div>
-              </div>
 
-              <!-- Enable toggle -->
-              <div class="hc-im-field hc-im-field--row">
-                <label class="hc-im-field__label">{{ t('common.enable') }}</label>
-                <label class="hc-im-toggle">
-                  <input v-model="formEnabled" type="checkbox" />
-                  <span class="hc-im-toggle__slider" />
-                </label>
-              </div>
-
-              <!-- Webhook URL (only in edit mode with a saved name) -->
-              <div v-if="modalMode === 'edit' && formName" class="hc-im-field">
-                <label class="hc-im-field__label">Webhook URL</label>
-                <div class="hc-im-webhook-url">
-                  <code class="hc-im-webhook-url__text">{{ getPlatformHookUrl({ name: formName, type: formType }) }}</code>
-                  <button
-                    class="hc-im-webhook-url__copy"
-                    :title="t('common.copy')"
-                    @click="copyWebhookUrl"
-                  >
-                    {{ t('common.copy') }}
-                  </button>
+                <!-- Config fields -->
+                <div v-for="field in configFields" :key="field.key" class="hc-im-field">
+                  <label class="hc-im-field__label">
+                    {{ locale === 'zh-CN' ? field.label : field.labelEn }}
+                  </label>
+                  <div class="hc-im-input-wrap">
+                    <input
+                      v-model="formConfig[field.key]"
+                      :type="field.secret && !showSecrets[field.key] ? 'password' : 'text'"
+                      class="hc-im-input"
+                      :placeholder="field.placeholder"
+                    />
+                    <button
+                      v-if="field.secret"
+                      class="hc-im-input-eye"
+                      @click="toggleSecret(field.key)"
+                    >
+                      <component :is="showSecrets[field.key] ? EyeOff : Eye" :size="14" />
+                    </button>
+                  </div>
                 </div>
-              </div>
+
+                <!-- Enable toggle -->
+                <div class="hc-im-field hc-im-field--row">
+                  <label class="hc-im-field__label">{{ t('common.enable') }}</label>
+                  <label class="hc-im-toggle">
+                    <input v-model="formEnabled" type="checkbox" />
+                    <span class="hc-im-toggle__slider" />
+                  </label>
+                </div>
+
+                <!-- Webhook URL (only in edit mode with a saved name) -->
+                <div v-if="modalMode === 'edit' && formName" class="hc-im-field">
+                  <label class="hc-im-field__label">Webhook URL</label>
+                  <div class="hc-im-webhook-url">
+                    <code class="hc-im-webhook-url__text">{{ getPlatformHookUrl({ name: formName, type: formType }) }}</code>
+                    <button
+                      class="hc-im-webhook-url__copy"
+                      :title="t('common.copy')"
+                      @click="copyWebhookUrl"
+                    >
+                      {{ t('common.copy') }}
+                    </button>
+                  </div>
+                </div>
 
             </div>
 
@@ -701,38 +767,38 @@ async function copyWebhookUrl() {
                 {{ modalTestResult.message }}
               </div>
               <div class="hc-im-modal__footer">
-                <button
-                  class="hc-im-btn hc-im-btn--ghost"
-                  :disabled="modalTesting"
-                  @click="handleTestModal"
-                >
-                  <Zap :size="14" />
-                  {{ modalTesting ? '...' : t('imChannels.testConnection') }}
-                </button>
-                <div class="flex-1" />
-                <button
-                  v-if="modalMode === 'create'"
-                  class="hc-im-btn hc-im-btn--ghost"
-                  @click="modalStep = 1"
-                >
-                  {{ t('imChannels.back') }}
-                </button>
-                <button class="hc-im-btn hc-im-btn--ghost" @click="closeModal">
-                  {{ t('common.cancel') }}
-                </button>
-                <button
-                  class="hc-im-btn hc-im-btn--primary"
-                  :disabled="formSaving"
-                  @click="handleSave"
-                >
-                  {{
-                    formSaving
-                      ? '...'
-                      : modalMode === 'create'
-                        ? t('common.create')
-                        : t('common.save')
-                  }}
-                </button>
+                  <button
+                    class="hc-im-btn hc-im-btn--ghost"
+                    :disabled="modalTesting"
+                    @click="handleTestModal"
+                  >
+                    <Zap :size="14" />
+                    {{ modalTesting ? '...' : t('imChannels.testConnection') }}
+                  </button>
+                  <div class="flex-1" />
+                  <button
+                    v-if="modalMode === 'create'"
+                    class="hc-im-btn hc-im-btn--ghost"
+                    @click="modalStep = 1"
+                  >
+                    {{ t('imChannels.back') }}
+                  </button>
+                  <button class="hc-im-btn hc-im-btn--ghost" @click="closeModal">
+                    {{ t('common.cancel') }}
+                  </button>
+                  <button
+                    class="hc-im-btn hc-im-btn--primary"
+                    :disabled="formSaving"
+                    @click="handleSave"
+                  >
+                    {{
+                      formSaving
+                        ? '...'
+                        : modalMode === 'create'
+                          ? t('common.create')
+                          : t('common.save')
+                    }}
+                  </button>
               </div>
             </div>
           </div>
@@ -918,6 +984,25 @@ async function copyWebhookUrl() {
   align-items: center;
   gap: 8px;
 }
+
+.hc-im-card__runtime {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+}
+.hc-im-card__runtime-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hc-text-muted);
+  flex-shrink: 0;
+}
+.hc-im-card__runtime-dot--running { background: var(--hc-success); }
+.hc-im-card__runtime-dot--error { background: var(--hc-error); }
+.hc-im-card__runtime-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .hc-im-card__actions {
   display: flex;
@@ -1439,5 +1524,9 @@ async function copyWebhookUrl() {
 .hc-modal-leave-to .hc-im-modal {
   transform: scale(0.95);
   opacity: 0;
+}
+
+.hc-spin {
+  animation: hc-spin 1s linear infinite;
 }
 </style>

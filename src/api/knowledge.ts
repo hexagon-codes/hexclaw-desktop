@@ -5,10 +5,7 @@ import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 
 export type { KnowledgeDoc, KnowledgeSearchResult }
 
-const KNOWLEDGE_UPLOAD_PATHS = [
-  '/api/v1/knowledge/upload',
-  '/api/v1/knowledge/documents/upload',
-] as const
+const KNOWLEDGE_UPLOAD_PATH = '/api/v1/knowledge/upload'
 const KNOWLEDGE_DISABLED_MESSAGE =
   '知识库暂不可用，请重启应用后重试'
 
@@ -57,16 +54,22 @@ export function isKnowledgeUploadEndpointMissing(error: unknown): boolean {
       ? ((error as { status?: number; statusCode?: number }).status ??
         (error as { status?: number; statusCode?: number }).statusCode)
       : undefined
-  const normalized = error instanceof Error ? error : new Error(String(error))
+  const msg =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null
+        ? ((error as { message?: string; error?: string }).message ??
+          (error as { message?: string; error?: string }).error ?? '')
+        : String(error)
   return (
     rawStatus === 404 ||
     rawStatus === 405 ||
-    normalized.message === fromHttpStatus(404).message ||
-    normalized.message === fromHttpStatus(405).message ||
-    normalized.message.includes('404') ||
-    normalized.message.includes('405') ||
-    normalized.message.includes('未提供知识库上传接口') ||
-    normalized.message.includes('未启用知识库')
+    msg === fromHttpStatus(404).message ||
+    msg === fromHttpStatus(405).message ||
+    msg.includes('404') ||
+    msg.includes('405') ||
+    msg.includes('未提供知识库上传接口') ||
+    msg.includes('未启用知识库')
   )
 }
 
@@ -76,21 +79,32 @@ export function isKnowledgeUploadUnsupportedFormat(error: unknown): boolean {
       ? ((error as { status?: number; statusCode?: number }).status ??
         (error as { status?: number; statusCode?: number }).statusCode)
       : undefined
-  const normalized = error instanceof Error ? error : new Error(String(error))
-  const message = normalized.message.toLowerCase()
+  // 从 Error 实例或 plain object 提取消息文本
+  const rawMessage =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'object' && error !== null
+        ? ((error as { message?: string; error?: string }).message ??
+          (error as { message?: string; error?: string }).error ?? '')
+        : String(error)
+  const message = rawMessage.toLowerCase()
 
-  return (
-    rawStatus === 400 ||
-    rawStatus === 415 ||
-    rawStatus === 422 ||
+  // 415/422 一定是格式问题；400 需要结合消息内容判断（后端对 validation 错误也返回 400）
+  const isFormatKeyword =
     message.includes('unsupported') ||
     message.includes('not supported') ||
     message.includes('invalid file type') ||
     message.includes('invalid mime') ||
-    normalized.message.includes('不支持') ||
-    normalized.message.includes('格式错误') ||
-    normalized.message.includes('文件类型错误') ||
-    normalized.message.includes('文件格式错误')
+    message.includes('不支持') ||
+    message.includes('格式错误') ||
+    message.includes('文件类型错误') ||
+    message.includes('文件格式错误')
+
+  return (
+    rawStatus === 415 ||
+    rawStatus === 422 ||
+    (rawStatus === 400 && isFormatKeyword) ||
+    isFormatKeyword
   )
 }
 
@@ -187,32 +201,18 @@ export async function uploadDocument(
   file: File,
   onProgress?: (pct: number) => void,
 ): Promise<UploadResponse> {
-  let lastError: Error | null = null
-
-  for (const path of KNOWLEDGE_UPLOAD_PATHS) {
-    try {
-      if (onProgress) {
-        return await uploadViaXhr(file, path, onProgress)
-      }
-
-      return await apiPost<UploadResponse>(path, createUploadFormData(file))
-    } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error))
-      lastError = normalized
-
-      if (
-        !isKnowledgeUploadEndpointMissing(normalized) ||
-        path === KNOWLEDGE_UPLOAD_PATHS[KNOWLEDGE_UPLOAD_PATHS.length - 1]
-      ) {
-        if (isKnowledgeUploadEndpointMissing(normalized)) {
-          throw new Error('当前后端未提供知识库上传接口，请检查 HexClaw 后端版本')
-        }
-        throw normalized
-      }
+  try {
+    if (onProgress) {
+      return await uploadViaXhr(file, KNOWLEDGE_UPLOAD_PATH, onProgress)
     }
+    return await apiPost<UploadResponse>(KNOWLEDGE_UPLOAD_PATH, createUploadFormData(file))
+  } catch (error) {
+    const normalized = error instanceof Error ? error : new Error(String(error))
+    if (isKnowledgeUploadEndpointMissing(normalized)) {
+      throw new Error('当前后端未提供知识库上传接口，请检查 HexClaw 后端版本')
+    }
+    throw normalized
   }
-
-  throw lastError ?? new Error('上传失败')
 }
 
 /** 删除知识库文档 */

@@ -278,6 +278,8 @@ pub struct BackendChatParams {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub user_id: Option<String>,
+    pub temperature: Option<f64>,
+    pub max_tokens: Option<i64>,
     pub attachments: Option<Vec<ChatAttachment>>,
 }
 
@@ -297,6 +299,12 @@ pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {
         "provider": params.provider.unwrap_or_default(),
         "model": params.model.unwrap_or_default(),
     });
+    if let Some(t) = params.temperature {
+        body["temperature"] = serde_json::json!(t);
+    }
+    if let Some(m) = params.max_tokens {
+        body["max_tokens"] = serde_json::json!(m);
+    }
     if let Some(attachments) = params.attachments {
         body["attachments"] = serde_json::to_value(attachments).unwrap_or_default();
     }
