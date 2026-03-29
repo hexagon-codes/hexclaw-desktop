@@ -14,7 +14,7 @@ const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 
-const appVersion = ref('v0.2.3')
+const appVersion = ref('v0.2.4')
 onMounted(() => {
   import('@tauri-apps/api/app').then(({ getVersion }) =>
     getVersion().then((v) => (appVersion.value = 'v' + v)),
