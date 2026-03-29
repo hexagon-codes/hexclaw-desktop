@@ -356,7 +356,11 @@ describe('SettingsView — E2E 关键路径', () => {
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
       models: [{ id: 'glm-5', name: 'glm-5', capabilities: ['text'] }],
     })
-    await flushPromises()
+    // Extra flush cycles for CI — store reactivity + DOM update can lag
+    for (let i = 0; i < 5; i++) {
+      await flushPromises()
+      await wrapper.vm.$nextTick()
+    }
 
     const defaultModelSelect = wrapper.get('[data-testid="llm-default-model-select"]')
     await defaultModelSelect.setValue(`${added!.id}::glm-5`)
