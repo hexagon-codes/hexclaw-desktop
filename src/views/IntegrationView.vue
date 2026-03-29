@@ -6,7 +6,6 @@ import { Download, Plus } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
 import SkillsView from '@/views/SkillsView.vue'
 import McpView from '@/views/McpView.vue'
-import WebhooksPanel from '@/components/integration/WebhooksPanel.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -18,7 +17,6 @@ const router = useRouter()
 
 function resolveTab(path: string): string {
   if (path.startsWith('/integration/mcp')) return 'mcp'
-  if (path.startsWith('/integration/webhooks')) return 'webhooks'
   if (path.startsWith('/integration/diagnostics')) return 'diagnostics'
   return 'skills'
 }
@@ -28,7 +26,6 @@ const integrationSearch = ref('')
 const tabKeyMap: Record<string, string> = {
   'integration-skills': 'skills',
   'integration-mcp': 'mcp',
-  'integration-webhooks': 'webhooks',
   'integration-diagnostics': 'diagnostics',
 }
 
@@ -44,7 +41,7 @@ watch(() => route.path, (p) => {
 })
 
 watch(activeTab, (tab) => {
-  const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp', webhooks: '/integration/webhooks', diagnostics: '/integration/diagnostics' }
+  const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp', diagnostics: '/integration/diagnostics' }
   const target = pathMap[tab] || '/integration'
   if (route.path !== target) router.replace(target)
 })
@@ -104,9 +101,9 @@ function onAddInstance() {
           <Download :size="14" />
           {{ t('integration.exportLogs', 'Export Logs') }}
         </button>
-        <button v-if="activeTab === 'skills'" class="hc-btn hc-btn-primary" @click="onAddInstance">
+        <button v-if="activeTab === 'skills' || activeTab === 'mcp'" class="hc-btn hc-btn-primary" @click="onAddInstance">
           <Plus :size="14" />
-          {{ t('integration.addInstance', 'Add Instance') }}
+          {{ activeTab === 'mcp' ? t('mcp.addServer', 'Add Server') : t('integration.addInstance', 'Add Instance') }}
         </button>
       </template>
     </PageToolbar>
@@ -123,7 +120,6 @@ function onAddInstance() {
         :hide-installed-search="true"
       />
       <McpView v-else-if="activeTab === 'mcp'" ref="mcpViewRef" />
-      <WebhooksPanel v-else-if="activeTab === 'webhooks'" />
       <div v-else-if="activeTab === 'diagnostics'" class="hc-diagnostics">
         <div class="hc-diagnostics__card">
           <div class="hc-diagnostics__title">{{ t('integration.recentFailures', 'Recent Failures') }}</div>

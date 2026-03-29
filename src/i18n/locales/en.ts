@@ -14,7 +14,6 @@ export default {
     integrationSkills: 'Skills',
     integrationMcp: 'MCP Services',
     integrationIm: 'IM Channels',
-    integrationWebhooks: 'Webhooks',
     integrationDiagnostics: 'Diagnostics',
     logs: 'Logs',
     settings: 'Settings',

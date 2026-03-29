@@ -495,12 +495,4 @@ describe('P0-P2 feature coverage: new API exports', () => {
     expect(indexSource).toContain('./models')
   })
 
-  it('navigation includes webhook tab under integration', () => {
-    const navSource = fs.readFileSync(
-      path.resolve(__dirname, '../../config/navigation.ts'),
-      'utf-8',
-    )
-    expect(navSource).toContain('integration-webhooks')
-    expect(navSource).toContain('/integration/webhooks')
-  })
 })

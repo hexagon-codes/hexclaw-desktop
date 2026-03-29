@@ -136,10 +136,52 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     spawn_child(&binary_path)
 }
 
+/// 构建包含常用工具路径的 PATH
+///
+/// macOS GUI 应用不继承用户 shell 的 PATH（不经过 .zshrc/.bashrc），
+/// 导致 sidecar 找不到 npx/node/python/docker 等命令。
+/// 将常用安装路径追加到当前 PATH。
+fn enrich_path() -> String {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let extras: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            // nvm / fnm / volta 默认路径
+            &format!("{}/.nvm/versions/node/default/bin", std::env::var("HOME").unwrap_or_default()),
+            &format!("{}/.local/bin", std::env::var("HOME").unwrap_or_default()),
+            // cargo, go
+            &format!("{}/go/bin", std::env::var("HOME").unwrap_or_default()),
+            &format!("{}/.cargo/bin", std::env::var("HOME").unwrap_or_default()),
+        ]
+    } else {
+        &[
+            "/usr/local/bin",
+            &format!("{}/.local/bin", std::env::var("HOME").unwrap_or_default()),
+            &format!("{}/.nvm/versions/node/default/bin", std::env::var("HOME").unwrap_or_default()),
+            &format!("{}/go/bin", std::env::var("HOME").unwrap_or_default()),
+            &format!("{}/.cargo/bin", std::env::var("HOME").unwrap_or_default()),
+        ]
+    };
+    let mut parts: Vec<&str> = current.split(':').collect();
+    for extra in extras {
+        if !parts.contains(extra) {
+            parts.push(extra);
+        }
+    }
+    parts.join(":")
+}
+
 /// 启动子进程并记录 PID
 fn spawn_child(path: &std::path::Path) -> Result<(), String> {
+    // macOS GUI app 不继承 shell PATH，需要注入常用路径让 sidecar 能找到 npx/node/python 等
+    let enriched_path = enrich_path();
+
     let mut child = Command::new(path)
         .args(["serve", "--desktop"])
+        .env("PATH", &enriched_path)
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败: {}", e))?;
 

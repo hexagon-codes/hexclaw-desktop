@@ -39,7 +39,13 @@ async function loadMarketplace() {
 async function installFromMarketplace(entry: McpMarketplaceEntry) {
   installingServer.value = entry.name
   try {
-    await installFromHub(entry.name)
+    // MCP 条目有 command/args → 直接添加为 MCP Server
+    // Skill 条目 → 通过 Hub 安装
+    if (entry.command?.trim()) {
+      await addMcpServer(entry.name, entry.command, entry.args || [])
+    } else {
+      await installFromHub(entry.name)
+    }
     await loadAll()
   } catch (e) { errorMsg.value = e instanceof Error ? e.message : 'Install failed' }
   finally { installingServer.value = null }

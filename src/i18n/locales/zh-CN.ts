@@ -15,7 +15,6 @@ export default {
     integrationSkills: '工具能力',
     integrationMcp: 'MCP 服务',
     integrationIm: '外部通道',
-    integrationWebhooks: 'Webhook',
     integrationDiagnostics: '诊断',
     logs: '日志',
     settings: '设置',
