@@ -151,7 +151,7 @@ describe('frontend-backend config field alignment', () => {
 describe('IMChannelMeta: qrSetup completely removed', () => {
   it('no channel type has qrSetup property', () => {
     for (const channel of CHANNEL_TYPES) {
-      const meta = channel as Record<string, unknown>
+      const meta = channel as unknown as Record<string, unknown>
       expect(meta).not.toHaveProperty('qrSetup')
     }
   })
@@ -252,7 +252,7 @@ describe('getChannelMeta edge cases', () => {
 
   it('falls back to first channel for unknown type (defensive)', () => {
     const meta = getChannelMeta('nonexistent' as IMChannelType)
-    expect(meta.type).toBe(CHANNEL_TYPES[0].type)
+    expect(meta.type).toBe(CHANNEL_TYPES[0]!.type)
   })
 
   it('all channel colors are valid hex', () => {

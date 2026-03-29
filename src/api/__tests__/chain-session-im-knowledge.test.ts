@@ -178,7 +178,7 @@ describe('Chain 1: Session Lifecycle', () => {
     const branches = await chat.getSessionBranches('s1')
 
     expect(branches.branches).toHaveLength(1)
-    expect(branches.branches[0].parent_id).toBe('s1')
+    expect((branches.branches[0] as any).parent_id).toBe('s1')
     fetchCallIdx++
     expect(mockFetch).toHaveBeenNthCalledWith(fetchCallIdx,
       '/api/v1/sessions/s1/branches',

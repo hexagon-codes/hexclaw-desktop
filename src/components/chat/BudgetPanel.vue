@@ -26,7 +26,7 @@ const props = withDefaults(defineProps<Props>(), {
 const tokenPct = computed(() => Math.min(100, (props.usedTokens / props.maxTokens) * 100))
 const maxDurSeconds = computed(() => {
   const m = props.maxDuration.match(/^(\d+)m$/)
-  return m ? parseInt(m[1]) * 60 : 1800
+  return m ? parseInt(m[1]!) * 60 : 1800
 })
 const durationPct = computed(() => Math.min(100, (props.elapsedSeconds / maxDurSeconds.value) * 100))
 const costPct = computed(() => Math.min(100, (props.usedCost / props.maxCost) * 100))

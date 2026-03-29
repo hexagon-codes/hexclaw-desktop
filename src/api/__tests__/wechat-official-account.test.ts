@@ -89,7 +89,7 @@ describe('wechat channel meta', () => {
   })
 
   it('does NOT have qrSetup property', () => {
-    const meta = getChannelMeta('wechat') as Record<string, unknown>
+    const meta = getChannelMeta('wechat') as unknown as Record<string, unknown>
     expect(meta).not.toHaveProperty('qrSetup')
   })
 })
@@ -306,7 +306,7 @@ describe('wechat instance CRUD', () => {
       method: 'POST',
       path: '/api/v1/platforms/instances',
     }))
-    const body = JSON.parse(invoke.mock.calls[0][1].body)
+    const body = JSON.parse(invoke.mock.calls[0]![1].body)
     expect(body.provider).toBe('wechat')
     expect(body.config.app_id).toBe('wx1234567890')
   })

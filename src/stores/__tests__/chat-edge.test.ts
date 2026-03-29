@@ -322,7 +322,7 @@ describe('chat store edge cases', () => {
 
   describe('error state management', () => {
     it('error is cleared when sending a new message', async () => {
-      chatStore.error = { code: 'PREV_ERROR', status: 500, message: 'previous error' }
+      chatStore.error = { code: 'UNKNOWN' as const, status: 500, message: 'previous error' }
 
       vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValue(false)
       vi.mocked(chatSvc.sendViaBackend).mockResolvedValue({

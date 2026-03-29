@@ -361,19 +361,23 @@ describe('Chain H: Settings -> LLM Config -> Save', () => {
     const { testLLMConnection } = await import('@/api/config')
 
     const result = await testLLMConnection({
-      provider: 'openai',
-      api_key: 'sk-test',
-      base_url: '',
-      model: 'gpt-4o',
+      provider: {
+        type: 'openai',
+        api_key: 'sk-test',
+        base_url: '',
+        model: 'gpt-4o',
+      },
     })
 
     expect(mockTestLLMConnection).toHaveBeenCalledWith({
-      provider: 'openai',
-      api_key: 'sk-test',
-      base_url: '',
-      model: 'gpt-4o',
+      provider: {
+        type: 'openai',
+        api_key: 'sk-test',
+        base_url: '',
+        model: 'gpt-4o',
+      },
     })
-    expect(result.success).toBe(true)
+    expect((result as any).success).toBe(true)
     expect(result.latency_ms).toBe(120)
   })
 
@@ -386,13 +390,15 @@ describe('Chain H: Settings -> LLM Config -> Save', () => {
 
     const { testLLMConnection } = await import('@/api/config')
     const result = await testLLMConnection({
-      provider: 'openai',
-      api_key: 'invalid',
-      base_url: '',
-      model: 'gpt-4o',
+      provider: {
+        type: 'openai',
+        api_key: 'invalid',
+        base_url: '',
+        model: 'gpt-4o',
+      },
     })
 
-    expect(result.success).toBe(false)
+    expect((result as any).success).toBe(false)
     expect(result.message).toBe('Invalid API key')
   })
 

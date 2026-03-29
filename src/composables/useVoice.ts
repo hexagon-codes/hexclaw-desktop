@@ -9,6 +9,57 @@ import { ref, computed, onUnmounted, getCurrentInstance } from 'vue'
 import { textToSpeech } from '@/api/voice'
 import { logger } from '@/utils/logger'
 
+/* Web Speech API type shims (not in all TS libs) */
+declare global {
+   
+  var SpeechRecognition: {
+    new (): SpeechRecognition
+    prototype: SpeechRecognition
+  } | undefined
+   
+  var webkitSpeechRecognition: {
+    new (): SpeechRecognition
+    prototype: SpeechRecognition
+  } | undefined
+
+  interface SpeechRecognition extends EventTarget {
+    continuous: boolean
+    interimResults: boolean
+    lang: string
+    onresult: ((event: SpeechRecognitionEvent) => void) | null
+    onerror: ((event: SpeechRecognitionErrorEvent) => void) | null
+    onend: (() => void) | null
+    start(): void
+    stop(): void
+  }
+
+  interface SpeechRecognitionEvent extends Event {
+    readonly resultIndex: number
+    readonly results: SpeechRecognitionResultList
+  }
+
+  interface SpeechRecognitionResultList {
+    readonly length: number
+    [index: number]: SpeechRecognitionResult
+  }
+
+  interface SpeechRecognitionResult {
+    readonly isFinal: boolean
+    readonly length: number
+    [index: number]: SpeechRecognitionAlternative
+  }
+
+  interface SpeechRecognitionAlternative {
+    readonly transcript: string
+    readonly confidence: number
+  }
+
+  interface SpeechRecognitionErrorEvent extends Event {
+    readonly error: string
+    readonly message: string
+  }
+}
+
 export function useVoice() {
   const isListening = ref(false)
   const isSpeaking = ref(false)
@@ -60,11 +111,11 @@ export function useVoice() {
       let interim = ''
       let final = ''
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const result = event.results[i]
+        const result = event.results[i]!
         if (result.isFinal) {
-          final += result[0].transcript
+          final += result[0]!.transcript
         } else {
-          interim += result[0].transcript
+          interim += result[0]!.transcript
         }
       }
       transcript.value = final || interim

@@ -110,7 +110,7 @@ describe('getChannelMeta', () => {
     // Cast to bypass TypeScript — tests runtime behavior with bad data
     const meta = getChannelMeta('nonexistent' as IMChannelType)
     expect(meta).toBeDefined()
-    expect(meta.type).toBe(CHANNEL_TYPES[0].type)
+    expect(meta.type).toBe(CHANNEL_TYPES[0]!.type)
   })
 })
 

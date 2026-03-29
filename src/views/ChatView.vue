@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 import {
   ChevronDown,
   FileCode,
+  MessageSquarePlus,
   Wrench,
   Zap,
   BookOpen,

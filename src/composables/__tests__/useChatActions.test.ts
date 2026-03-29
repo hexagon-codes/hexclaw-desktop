@@ -21,11 +21,11 @@ function makeMockToast() {
 }
 
 describe('useChatActions', () => {
-  let mockSend: ReturnType<typeof vi.fn>
+  let mockSend: (text: string, files?: File[]) => Promise<void>
 
   beforeEach(() => {
     vi.clearAllMocks()
-    mockSend = vi.fn().mockResolvedValue(undefined)
+    mockSend = vi.fn().mockResolvedValue(undefined) as unknown as (text: string, files?: File[]) => Promise<void>
   })
 
   it('handleRetry finds user message and re-sends', async () => {

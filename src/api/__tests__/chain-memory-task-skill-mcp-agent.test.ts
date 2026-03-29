@@ -189,7 +189,7 @@ describe('Chain 5: Task / Cron Lifecycle', () => {
     expect(historyOpts.method).toBe('GET')
     expect(historyOpts.query).toEqual({ limit: 5 })
     expect(historyRes).toHaveLength(1)
-    expect(historyRes[0].status).toBe('success')
+    expect(historyRes[0]!.status).toBe('success')
 
     // 5) pauseCronJob → POST /api/v1/cron/jobs/:id/pause
     const [pausePath, pauseOpts] = callArgs(4)
@@ -224,7 +224,7 @@ describe('Chain 5: Task / Cron Lifecycle', () => {
     const history = await getCronJobHistory('job-1')
 
     expect(history).toHaveLength(1)
-    expect(history[0].started_at).toBe('2026-04-02T09:00:00Z')
+    expect(history[0]!.started_at).toBe('2026-04-02T09:00:00Z')
   })
 
   it('createCronJob defaults type to "cron" when input.type is undefined', async () => {
@@ -285,7 +285,7 @@ describe('Chain 6: Skill Lifecycle', () => {
     expect(hubPath).toBe('/api/v1/clawhub/search?q=code-review&category=coding')
     expect(hubOpts.method).toBe('GET')
     expect(hubResults).toHaveLength(1)
-    expect(hubResults[0].name).toBe('code-review-pro')
+    expect(hubResults[0]!.name).toBe('code-review-pro')
 
     // 3) installFromHub → POST /api/v1/skills/install
     const [installPath, installOpts] = callArgs(2)
@@ -464,8 +464,8 @@ describe('Chain 8: Agent / Router Lifecycle', () => {
       name: 'code-agent',
       model: 'claude-3-opus',
       system_prompt: 'You are a coding assistant.',
-    } as AgentConfig)
-    const updRes = await updateAgent('code-agent', { description: 'Handles code tasks' } as Partial<AgentConfig>)
+    } as unknown as AgentConfig)
+    const updRes = await updateAgent('code-agent', { description: 'Handles code tasks' } as unknown as Partial<AgentConfig>)
     const defaultRes = await setDefaultAgent('code-agent')
     const rules = await getRules()
     const ruleRes = await addRule({ platform: 'slack', agent_name: 'code-agent' } as Omit<AgentRule, 'id'>)

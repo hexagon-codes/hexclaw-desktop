@@ -22,7 +22,7 @@ function findBackendServerGo(): string {
   for (const p of candidates) {
     if (fs.existsSync(p)) return p
   }
-  return candidates[0] // fallback; will be handled gracefully
+  return candidates[0]! // fallback; will be handled gracefully
 }
 const BACKEND_SERVER_GO = findBackendServerGo()
 
@@ -40,8 +40,8 @@ function parseBackendRoutes(): Map<string, Set<string>> {
   const re = /mux\.HandleFunc\("(GET|POST|PUT|DELETE)\s+(\/[^"]+)"/g
   let m: RegExpExecArray | null
   while ((m = re.exec(source)) !== null) {
-    const method = m[1]
-    const routePath = m[2]
+    const method = m[1]!
+    const routePath = m[2]!
     if (!routes.has(routePath)) routes.set(routePath, new Set())
     routes.get(routePath)!.add(method)
   }
@@ -67,23 +67,23 @@ function collectFrontendAPICalls(): FrontendApiCall[] {
     const lines = fs.readFileSync(filePath, 'utf-8').split('\n')
 
     for (let i = 0; i < lines.length; i++) {
-      const line = lines[i]
+      const line = lines[i]!
 
       // Match apiGet, apiPost, apiPut, apiDelete calls
       const apiCallMatch = line.match(/api(Get|Post|Put|Delete)\s*[<(]/)
       if (apiCallMatch) {
-        const method = apiCallMatch[1].toUpperCase()
+        const method = apiCallMatch[1]!.toUpperCase()
         // Find the path argument on this or next line
         const pathMatch = line.match(/['"`](\/api\/v1\/[^'"`]+)['"`]/)
         if (pathMatch) {
-          calls.push({ file, method, path: pathMatch[1], line: i + 1 })
+          calls.push({ file, method, path: pathMatch[1]!, line: i + 1 })
         }
       }
 
       // Match proxyApiRequest calls
       const proxyMatch = line.match(/proxyApiRequest\s*(?:<[^>]+>)?\s*\(\s*'(GET|POST|PUT|DELETE)',\s*['"`](\/[^'"`]+)/)
       if (proxyMatch) {
-        calls.push({ file, method: proxyMatch[1], path: proxyMatch[2], line: i + 1 })
+        calls.push({ file, method: proxyMatch[1]!, path: proxyMatch[2]!, line: i + 1 })
       }
 
       // Match fetch calls with API paths
@@ -91,10 +91,10 @@ function collectFrontendAPICalls(): FrontendApiCall[] {
       if (fetchMatch) {
         // Determine method from options
         const methodMatch = line.match(/method:\s*'(GET|POST|PUT|DELETE)'/)
-        const method = methodMatch ? methodMatch[1] : 'GET'
+        const method = methodMatch ? methodMatch[1]! : 'GET'
         const pathFromFetch = line.match(/['"`](\/api\/v1\/[^'"`]+)['"`]/)
         if (pathFromFetch) {
-          calls.push({ file, method, path: pathFromFetch[1], line: i + 1 })
+          calls.push({ file, method, path: pathFromFetch[1]!, line: i + 1 })
         }
       }
     }

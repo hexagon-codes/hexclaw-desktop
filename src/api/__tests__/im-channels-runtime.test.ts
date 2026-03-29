@@ -225,7 +225,7 @@ describe('im-channels runtime sync', () => {
     // Verify rollback: DELETE was called for the new name
     const deleteCalls = invoke.mock.calls.filter((c) => c[1]?.method === 'DELETE')
     expect(deleteCalls).toHaveLength(2) // old name (failed) + new name (rollback)
-    expect(deleteCalls[1][1].path).toContain('NewName')
+    expect(deleteCalls[1]![1].path).toContain('NewName')
   })
 
   it('proxyApiRequest logs warning for swallowed errors', async () => {
