@@ -23,7 +23,7 @@ watchEffect(() => {
   document.title = t('about.title', '关于 河蟹 AI')
 })
 
-const appVersion = ref('v0.1.0-beta')
+const appVersion = ref('v0.2.0')
 const appName = computed(() => t('about.brandAi', '河蟹 AI'))
 
 const techStack = computed(() => [
@@ -117,16 +117,10 @@ async function handleInstallUpdate() {
   }
 }
 
-onMounted(async () => {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core')
-    const info = await invoke<{ version: string }>('get_platform_info')
-    if (info?.version) {
-      appVersion.value = `v${info.version}`
-    }
-  } catch {
-    // 浏览器开发模式不提供该命令
-  }
+onMounted(() => {
+  import('@tauri-apps/api/app').then(({ getVersion }) =>
+    getVersion().then((v) => (appVersion.value = 'v' + v)),
+  ).catch(() => {})
 })
 </script>
 

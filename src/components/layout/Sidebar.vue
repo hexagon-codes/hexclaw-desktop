@@ -1,6 +1,6 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
@@ -13,6 +13,13 @@ const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
+
+const appVersion = ref('v0.2.0')
+onMounted(() => {
+  import('@tauri-apps/api/app').then(({ getVersion }) =>
+    getVersion().then((v) => (appVersion.value = 'v' + v)),
+  ).catch(() => {})
+})
 
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
@@ -86,7 +93,7 @@ function getGroupItems(group: NavGroup) {
           >
             <RotateCw :size="12" />
           </button>
-          <span class="hc-sidebar__version">v0.1.0-beta</span>
+          <span class="hc-sidebar__version">{{ appVersion }}</span>
         </template>
       </div>
     </div>

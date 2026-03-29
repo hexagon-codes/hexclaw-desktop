@@ -13,6 +13,12 @@ import anthropicLogo from '@/assets/provider-logos/anthropic.svg'
 import geminiLogo from '@/assets/provider-logos/gemini.svg'
 import qwenLogo from '@/assets/provider-logos/qwen.svg'
 import arkLogo from '@/assets/provider-logos/ark.svg'
+import zhipuLogo from '@/assets/provider-logos/zhipu.svg'
+import kimiLogo from '@/assets/provider-logos/kimi.svg'
+import ernieLogo from '@/assets/provider-logos/ernie.svg'
+import hunyuanLogo from '@/assets/provider-logos/hunyuan.svg'
+import sparkLogo from '@/assets/provider-logos/spark.svg'
+import minimaxLogo from '@/assets/provider-logos/minimax.svg'
 import ollamaLogo from '@/assets/provider-logos/ollama.svg'
 import customLogo from '@/assets/provider-logos/custom.svg'
 
@@ -23,6 +29,12 @@ export const PROVIDER_LOGOS: Record<ProviderType, string> = {
   gemini: geminiLogo,
   qwen: qwenLogo,
   ark: arkLogo,
+  zhipu: zhipuLogo,
+  kimi: kimiLogo,
+  ernie: ernieLogo,
+  hunyuan: hunyuanLogo,
+  spark: sparkLogo,
+  minimax: minimaxLogo,
   ollama: ollamaLogo,
   custom: customLogo,
 }
@@ -96,6 +108,69 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
       { id: 'doubao-pro-32k', name: 'Doubao Pro 32K', capabilities: ['text'] },
       { id: 'doubao-lite-32k', name: 'Doubao Lite 32K', capabilities: ['text'] },
       { id: 'doubao-vision-pro-32k', name: 'Doubao Vision Pro', capabilities: ['text', 'vision'] },
+    ],
+  },
+  zhipu: {
+    type: 'zhipu',
+    name: '智谱 AI',
+    defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    placeholder: 'sk-...',
+    defaultModels: [
+      { id: 'glm-4-plus', name: 'GLM-4 Plus', capabilities: ['text'] },
+      { id: 'glm-4-flash', name: 'GLM-4 Flash', capabilities: ['text'] },
+      { id: 'glm-4v-plus', name: 'GLM-4V Plus', capabilities: ['text', 'vision'] },
+    ],
+  },
+  kimi: {
+    type: 'kimi',
+    name: 'Kimi (月之暗面)',
+    defaultBaseUrl: 'https://api.moonshot.cn/v1',
+    placeholder: 'sk-...',
+    defaultModels: [
+      { id: 'moonshot-v1-128k', name: 'Moonshot V1 128K', capabilities: ['text'] },
+      { id: 'moonshot-v1-32k', name: 'Moonshot V1 32K', capabilities: ['text'] },
+    ],
+  },
+  ernie: {
+    type: 'ernie',
+    name: '文心一言 (百度)',
+    defaultBaseUrl: 'https://qianfan.baidubce.com/v2',
+    placeholder: 'bce-v3/...',
+    defaultModels: [
+      { id: 'ernie-4.5-8k', name: 'ERNIE 4.5 8K', capabilities: ['text'] },
+      { id: 'ernie-4.0-8k', name: 'ERNIE 4.0 8K', capabilities: ['text'] },
+    ],
+  },
+  hunyuan: {
+    type: 'hunyuan',
+    name: '腾讯混元',
+    defaultBaseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
+    placeholder: 'sk-...',
+    defaultModels: [
+      { id: 'hunyuan-pro', name: 'Hunyuan Pro', capabilities: ['text'] },
+      { id: 'hunyuan-standard', name: 'Hunyuan Standard', capabilities: ['text'] },
+      { id: 'hunyuan-lite', name: 'Hunyuan Lite', capabilities: ['text'] },
+    ],
+  },
+  spark: {
+    type: 'spark',
+    name: '讯飞星火',
+    defaultBaseUrl: 'https://spark-api-open.xf-yun.com/v1',
+    placeholder: 'Bearer ...',
+    defaultModels: [
+      { id: 'spark-max', name: 'Spark Max', capabilities: ['text'] },
+      { id: 'spark-pro', name: 'Spark Pro', capabilities: ['text'] },
+      { id: 'spark-lite', name: 'Spark Lite', capabilities: ['text'] },
+    ],
+  },
+  minimax: {
+    type: 'minimax',
+    name: 'MiniMax',
+    defaultBaseUrl: 'https://api.minimax.chat/v1',
+    placeholder: 'eyJ...',
+    defaultModels: [
+      { id: 'abab6.5s-chat', name: 'ABAB 6.5s', capabilities: ['text'] },
+      { id: 'abab5.5-chat', name: 'ABAB 5.5', capabilities: ['text'] },
     ],
   },
   ollama: {

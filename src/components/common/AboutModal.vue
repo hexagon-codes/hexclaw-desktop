@@ -1,9 +1,17 @@
 <script setup lang="ts">
+import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import logoUrl from '@/assets/logo.png'
 import hexagonLogoUrl from '@/assets/hexagon-engine-logo.png'
 
 const { t } = useI18n()
+
+const appVersion = ref('v0.2.0')
+onMounted(() => {
+  import('@tauri-apps/api/app').then(({ getVersion }) =>
+    getVersion().then((v) => (appVersion.value = 'v' + v)),
+  ).catch(() => {})
+})
 
 defineProps<{
   visible: boolean
@@ -95,7 +103,7 @@ const ecosystem = [
               {{ t('about.subtitle', '企业级安全的个人 AI Agent 桌面客户端') }}
             </div>
             <div class="hc-about-modal__meta">
-              <span class="hc-about-modal__pill">v0.1.0-beta</span>
+              <span class="hc-about-modal__pill">{{ appVersion }}</span>
               <span>Apache-2.0</span>
             </div>
           </div>

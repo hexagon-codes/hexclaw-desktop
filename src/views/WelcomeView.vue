@@ -14,8 +14,9 @@ import {
   XCircle,
 } from 'lucide-vue-next'
 import hexagonLogo from '@/assets/logo.png'
+import ProviderSelect from '@/components/common/ProviderSelect.vue'
 import { useSettingsStore } from '@/stores/settings'
-import { PROVIDER_PRESETS, PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
+import { PROVIDER_PRESETS } from '@/config/providers'
 import type { ModelCapability, ModelOption, ProviderType } from '@/types'
 import { testLLMConnection } from '@/api/config'
 import { messageFromUnknownError } from '@/utils/errors'
@@ -294,40 +295,16 @@ async function skip() {
 
         <!-- Step 1: LLM 配置 -->
         <div v-if="step === 0" class="space-y-4">
-          <div>
-            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }"
-              >Provider</label
-            >
-            <div class="hc-welcome__provider-grid">
-              <button
-                v-for="preset in getProviderTypes()"
-                :key="preset.type"
-                class="hc-welcome__provider-btn"
-                :class="{ 'hc-welcome__provider-btn--active': provider === preset.type }"
-                @click="provider = preset.type"
-              >
-                <img
-                  :src="PROVIDER_LOGOS[preset.type]"
-                  :alt="preset.type"
-                  class="hc-welcome__provider-logo"
-                />
-                <span>{{ preset.name }}</span>
-              </button>
-            </div>
+          <div class="hc-settings__field">
+            <label class="hc-settings__label">Provider</label>
+            <ProviderSelect v-model="provider" />
           </div>
-          <div>
-            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }"
-              >API Key</label
-            >
+          <div class="hc-settings__field">
+            <label class="hc-settings__label">API Key</label>
             <input
               v-model="apiKey"
               type="password"
-              class="w-full rounded-lg border px-3 py-2 text-sm outline-none"
-              :style="{
-                background: 'var(--hc-bg-input)',
-                borderColor: 'var(--hc-border)',
-                color: 'var(--hc-text-primary)',
-              }"
+              class="hc-input"
               :placeholder="PROVIDER_PRESETS[provider].placeholder"
               :disabled="!requiresApiKey"
             />
@@ -346,10 +323,8 @@ async function skip() {
               {{ t('welcome.enterApiKey') }}
             </p>
           </div>
-          <div v-if="isCustomProvider">
-            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }"
-              >Base URL</label
-            >
+          <div v-if="isCustomProvider" class="hc-settings__field">
+            <label class="hc-settings__label">Base URL</label>
             <input
               v-model="customBaseUrl"
               type="text"
@@ -357,10 +332,8 @@ async function skip() {
               placeholder="https://your-api.example.com/v1"
             />
           </div>
-          <div>
-            <label class="block text-sm mb-1.5" :style="{ color: 'var(--hc-text-secondary)' }"
-              >Model</label
-            >
+          <div class="hc-settings__field">
+            <label class="hc-settings__label">Model</label>
             <input
               v-if="isCustomProvider"
               v-model="customModelId"
@@ -559,49 +532,4 @@ async function skip() {
   object-fit: cover;
 }
 
-.hc-welcome__provider-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-}
-
-.hc-welcome__provider-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-card);
-  color: var(--hc-text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-  white-space: nowrap;
-  overflow: hidden;
-  min-width: 0;
-}
-
-.hc-welcome__provider-btn span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.hc-welcome__provider-btn:hover {
-  border-color: var(--hc-accent-subtle);
-}
-
-.hc-welcome__provider-btn--active {
-  border-color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-  color: var(--hc-accent);
-  font-weight: 600;
-}
-
-.hc-welcome__provider-logo {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  flex-shrink: 0;
-}
 </style>

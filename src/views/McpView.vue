@@ -28,11 +28,15 @@ async function loadMarketplace() {
     const q = marketplaceSearch.value.trim()
     const res = q ? await searchMcpMarketplace(q) : await getMcpMarketplace()
     marketplaceItems.value = res.servers || []
-  } catch { marketplaceItems.value = [] }
+  } catch (e) {
+    console.error('Failed to load MCP marketplace:', e)
+    marketplaceItems.value = []
+  }
   finally { marketplaceLoading.value = false }
 }
 
 async function installFromMarketplace(entry: McpMarketplaceEntry) {
+  if (!entry.command?.trim()) return
   installingServer.value = entry.name
   try {
     await addMcpServer(entry.name, entry.command, entry.args)
@@ -322,7 +326,7 @@ defineExpose({ openAddServer })
       </template>
 
       <!-- 工具列表 -->
-      <template v-else>
+      <template v-else-if="activeTab === 'tools'">
         <!-- Tool search bar -->
         <div class="max-w-2xl mb-4">
           <div class="relative">
@@ -468,7 +472,7 @@ defineExpose({ openAddServer })
       </template>
 
       <!-- Marketplace Tab -->
-      <template v-if="activeTab === 'marketplace'">
+      <template v-else-if="activeTab === 'marketplace'">
         <div class="p-4">
           <div class="flex gap-2 mb-4">
             <div class="relative flex-1">

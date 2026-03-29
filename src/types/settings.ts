@@ -33,6 +33,12 @@ export type ProviderType =
   | 'gemini'
   | 'qwen'
   | 'ark'
+  | 'zhipu'
+  | 'kimi'
+  | 'ernie'
+  | 'hunyuan'
+  | 'spark'
+  | 'minimax'
   | 'ollama'
   | 'custom'
 
