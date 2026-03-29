@@ -53,7 +53,7 @@ function setupDefaultMocks() {
     total: 2,
   })
   mockGetMcpServerStatus.mockResolvedValue({ statuses: { filesystem: 'connected', github: 'disconnected' } })
-  mockGetMcpMarketplace.mockResolvedValue({ servers: [] })
+  mockGetMcpMarketplace.mockResolvedValue({ skills: [], total: 0 })
 }
 
 async function mountMcpView() {
@@ -434,9 +434,10 @@ describe('McpView — MCP 全链路', () => {
 
   it('切换到 Marketplace Tab 加载数据', async () => {
     mockGetMcpMarketplace.mockResolvedValue({
-      servers: [
+      skills: [
         { name: 'fs-server', display_name: 'Filesystem', description: 'File access', category: 'io', command: 'npx', args: ['-y', 'fs-server'], downloads: 1000, rating: 4.5 },
       ],
+      total: 1,
     })
     const wrapper = await mountMcpView()
     await flushPromises()
@@ -457,7 +458,8 @@ describe('McpView — MCP 全链路', () => {
 
   it('Marketplace 搜索', async () => {
     mockSearchMcpMarketplace.mockResolvedValue({
-      servers: [{ name: 'found', display_name: 'Found', description: 'Test', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 }],
+      skills: [{ name: 'found', display_name: 'Found', description: 'Test', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 }],
+      total: 1,
     })
     const wrapper = await mountMcpView()
     await flushPromises()
@@ -503,7 +505,8 @@ describe('McpView — MCP 全链路', () => {
 
   it('Marketplace 已安装的服务器按钮禁用', async () => {
     mockGetMcpMarketplace.mockResolvedValue({
-      servers: [{ name: 'filesystem', display_name: 'FS', description: '', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 }],
+      skills: [{ name: 'filesystem', display_name: 'FS', description: '', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 }],
+      total: 1,
     })
     const wrapper = await mountMcpView()
     await flushPromises()
