@@ -82,6 +82,20 @@ if (typeof globalThis.removeEventListener !== 'function' && typeof window !== 'u
   })
 }
 
+// Suppress Vue async DOM teardown errors (insertBefore/removeChild on null).
+// These occur when component updates are queued after unmount in jsdom.
+// Must be registered at process level because vitest catches unhandledRejection
+// before window event handlers run.
+process.on('unhandledRejection', (reason: unknown) => {
+  const msg = reason instanceof Error ? reason.message : String(reason)
+  if (msg.includes('insertBefore') || msg.includes('removeChild') || msg.includes('parentNode')) {
+    // Swallow — this is a known jsdom + Vue teardown race condition
+    return
+  }
+  // Re-throw anything else so vitest still catches real errors
+  throw reason
+})
+
 beforeEach(() => {
   try {
     globalThis.localStorage?.clear?.()

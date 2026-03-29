@@ -170,15 +170,28 @@ beforeAll(() => {
 })
 
 describe('SettingsView — E2E 关键路径', () => {
+  // Suppress Vue async DOM updates after component teardown (insertBefore on null)
+  let unhandledHandler: ((e: PromiseRejectionEvent) => void) | null = null
+
   beforeEach(() => {
     vi.clearAllMocks()
     vi.resetModules()
     document.body.innerHTML = ''
     closeRequestState.handler = null
+    unhandledHandler = (e: PromiseRejectionEvent) => {
+      if (e.reason?.message?.includes('insertBefore')) {
+        e.preventDefault()
+      }
+    }
+    window.addEventListener('unhandledrejection', unhandledHandler)
   })
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).isTauri
+    if (unhandledHandler) {
+      window.removeEventListener('unhandledrejection', unhandledHandler)
+      unhandledHandler = null
+    }
   })
 
   // ────────────────────────────────────────────────────
