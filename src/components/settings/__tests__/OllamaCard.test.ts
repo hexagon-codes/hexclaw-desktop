@@ -53,7 +53,7 @@ async function mountAsNotRunning() {
 
 /** 进入等待安装状态 */
 async function enterWaitingInstall(wrapper: ReturnType<typeof mount>) {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+   
   const vm = wrapper.vm as any
   // defineExpose 暴露的 startInstall
   if (typeof vm.startInstall === 'function') {

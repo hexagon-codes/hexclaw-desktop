@@ -6,7 +6,7 @@ import hexagonLogoUrl from '@/assets/hexagon-engine-logo.png'
 
 const { t } = useI18n()
 
-const appVersion = ref('v0.2.1')
+const appVersion = ref('v0.2.2')
 onMounted(() => {
   import('@tauri-apps/api/app').then(({ getVersion }) =>
     getVersion().then((v) => (appVersion.value = 'v' + v)),

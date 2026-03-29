@@ -57,6 +57,7 @@ const stateLabel = computed(() => {
     case 'error':
       return t('settings.ollama.error', '检测失败')
   }
+  return ''
 })
 
 async function detect() {

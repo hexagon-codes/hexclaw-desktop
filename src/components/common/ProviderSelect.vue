@@ -66,7 +66,11 @@ function closeDropdown(refocus = true) {
 }
 
 function toggle() {
-  open.value ? closeDropdown() : openDropdown()
+  if (open.value) {
+    closeDropdown()
+  } else {
+    openDropdown()
+  }
 }
 
 function pick(type: ProviderType) {

@@ -151,7 +151,7 @@ describe('chat store edge cases', () => {
         metadata: {},
       })
 
-      const result = await chatStore.sendMessage('test message')
+      await chatStore.sendMessage('test message')
 
       // Should have fallen back to HTTP
       expect(chatSvc.sendViaBackend).toHaveBeenCalled()
@@ -165,7 +165,7 @@ describe('chat store edge cases', () => {
         new ChatRequestError('Timeout', true),
       )
 
-      const result = await chatStore.sendMessage('test message')
+      await chatStore.sendMessage('test message')
 
       // Should NOT have fallen back to HTTP
       expect(chatSvc.sendViaBackend).not.toHaveBeenCalled()

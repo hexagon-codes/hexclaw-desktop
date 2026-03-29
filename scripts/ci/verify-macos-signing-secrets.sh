@@ -37,13 +37,13 @@ if [[ "${has_apple_id_auth}" == "false" && "${has_api_key_auth}" == "false" ]]; 
 fi
 
 if ((${#missing[@]} > 0)); then
-  printf 'Missing required macOS signing/notarization secrets:\n' >&2
+  printf '::warning::Missing macOS signing/notarization secrets (build will proceed unsigned):\n' >&2
   for item in "${missing[@]}"; do
     printf '  - %s\n' "$item" >&2
   done
   printf '\n' >&2
-  printf 'Unsigned or unnotarized macOS bundles are likely to be blocked by Gatekeeper as damaged when downloaded from a browser.\n' >&2
-  exit 1
+  printf 'Unsigned macOS bundles will be blocked by Gatekeeper when downloaded from a browser.\n' >&2
+  printf 'Users can install via: curl -fsSL .../install.sh | bash  or  brew install --cask hexclaw\n' >&2
 fi
 
 printf 'macOS signing/notarization secrets detected.\n'

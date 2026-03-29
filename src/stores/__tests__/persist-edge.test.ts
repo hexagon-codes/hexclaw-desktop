@@ -138,11 +138,9 @@ describe('persist plugin edge cases', () => {
       // After patch, a new entry should be written with version 2
       const stored = mockStorage['hc-store-test-vm3']
       expect(stored).toBeDefined()
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        expect(parsed.v).toBe(2)
-        expect(parsed.d.counter).toBe(7)
-      }
+      const parsed = JSON.parse(stored!)
+      expect(parsed.v).toBe(2)
+      expect(parsed.d.counter).toBe(7)
       cleanup()
     })
 
@@ -409,12 +407,10 @@ describe('persist plugin edge cases', () => {
 
       const saved = mockStorage['hc-store-test-pk1']
       expect(saved).toBeDefined()
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        expect(parsed.d.counter).toBe(42)
-        // name should NOT be persisted
-        expect(parsed.d.name).toBeUndefined()
-      }
+      const parsed = JSON.parse(saved!)
+      expect(parsed.d.counter).toBe(42)
+      // name should NOT be persisted
+      expect(parsed.d.name).toBeUndefined()
       cleanup()
     })
   })
@@ -440,10 +436,8 @@ describe('persist plugin edge cases', () => {
 
       const stored = mockStorage['my-custom-key-edge']
       expect(stored).toBeDefined()
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        expect(parsed.d.counter).toBe(7)
-      }
+      const parsed = JSON.parse(stored!)
+      expect(parsed.d.counter).toBe(7)
       // Default key should NOT exist
       expect(mockStorage['hc-store-test-ck1']).toBeUndefined()
       cleanup()

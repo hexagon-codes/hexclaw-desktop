@@ -9,7 +9,7 @@ import {
   Blocks,
   ScrollText,
   Settings,
-  Webhook,
+
 } from 'lucide-vue-next'
 
 export interface NavItem {

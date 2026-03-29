@@ -24,5 +24,11 @@ export default defineConfigWithVueTs(
     ...pluginVitest.configs.recommended,
     files: ['src/**/__tests__/*'],
   },
+  {
+    files: ['src/**/__tests__/**', 'src/**/*.test.ts', 'src/**/*.spec.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
   skipFormatting,
 )

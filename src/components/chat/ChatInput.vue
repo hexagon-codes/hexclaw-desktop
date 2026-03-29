@@ -125,7 +125,7 @@ function detectPopups() {
     if (!query.includes(' ') && !query.includes('\n') && query.length < 20) {
       mentionQuery.value = query; showMention.value = true
       const rect = el.getBoundingClientRect()
-      let bottom = window.innerHeight - rect.top + 8
+      const bottom = window.innerHeight - rect.top + 8
       let left = rect.left + 40
       if (left + 320 > window.innerWidth) left = window.innerWidth - 328
       if (left < 8) left = 8

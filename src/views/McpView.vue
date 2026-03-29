@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Store, Download } from 'lucide-vue-next'
+import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download } from 'lucide-vue-next'
 import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, getMcpMarketplace, searchMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
 import type { McpTool } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'

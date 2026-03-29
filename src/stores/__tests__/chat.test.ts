@@ -12,7 +12,6 @@ const {
   createSession,
   updateSessionTitle,
   touchSession,
-  deleteSession: deleteSvcSession,
   persistMessage,
   loadArtifacts,
   saveArtifact,

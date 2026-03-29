@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import {
   ChevronDown,
   FileCode,
-  Video,
   Wrench,
   Zap,
   BookOpen,
@@ -71,20 +70,6 @@ const showModelSelector = ref(false)
 const isDragging = ref(false)
 const chatViewTab = ref<'chat' | 'artifacts' | 'history'>('chat')
 const availableSkills = ref<Skill[]>([])
-
-const chatViewSegments = computed(() => [
-  { key: 'chat', label: t('chat.modeChat') },
-  { key: 'artifacts', label: t('chat.artifacts') },
-  { key: 'history', label: t('chat.history', 'History') },
-])
-
-const activeAgent = computed(
-  () => agentsStore.roles.find((role) => role.name === chatStore.agentRole) ?? null,
-)
-
-const activeSkillCount = computed(
-  () => activeAgent.value?.tools?.length || availableSkills.value.length || 0,
-)
 
 // Message context menu
 const msgCtxMenu = ref<InstanceType<typeof ContextMenu>>()

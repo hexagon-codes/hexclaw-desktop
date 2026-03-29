@@ -244,7 +244,7 @@ describe('Chain A: Chat -> Backend -> Response', () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
     sendViaWebSocket.mockImplementation(
-      (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: Record<string, Function>) => {
+      (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: Record<string, (...args: unknown[]) => unknown>) => {
         callbacks.onChunk?.('Part 1 ')
         callbacks.onChunk?.('Part 2 ')
         callbacks.onChunk?.('Part 3')
@@ -286,7 +286,7 @@ describe('Chain A: Chat -> Backend -> Response', () => {
 
     // Simulate a WS send that never completes naturally
     sendViaWebSocket.mockImplementation(
-      (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: Record<string, Function>) => {
+      (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: Record<string, (...args: unknown[]) => unknown>) => {
         callbacks.onChunk?.('Partial content')
         // Never calls onDone - simulating long-running stream
         return Promise.resolve()

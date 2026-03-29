@@ -49,14 +49,6 @@ onMounted(async () => {
   }
 })
 
-function onRebuildIndex() {
-  knowledgeViewRef.value?.rebuildAll?.()
-}
-
-function onUploadDoc() {
-  knowledgeViewRef.value?.openFilePicker?.()
-}
-
 function onAddTextDoc() {
   knowledgeViewRef.value?.openUpload?.()
 }

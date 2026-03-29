@@ -1,12 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
+
 import { Plus, Trash2, Globe, AlertCircle } from 'lucide-vue-next'
 import { getWebhooks, createWebhook, deleteWebhook } from '@/api/webhook'
 import type { Webhook, WebhookType, WebhookEvent } from '@/api/webhook'
 import { useToast } from '@/composables/useToast'
 
-const { t } = useI18n()
 const toast = useToast()
 
 const webhooks = ref<Webhook[]>([])
@@ -57,8 +56,8 @@ async function onCreateWebhook() {
     showCreate.value = false
     form.value = { name: '', type: 'custom', url: '', events: ['task_complete'] }
     await loadWebhooks()
-  } catch (e: any) {
-    toast.error(e?.message || 'Create failed')
+  } catch (e: unknown) {
+    toast.error((e as Error)?.message || 'Create failed')
   }
 }
 
@@ -67,8 +66,8 @@ async function onDeleteWebhook(name: string) {
     await deleteWebhook(name)
     toast.success(`Webhook "${name}" deleted`)
     await loadWebhooks()
-  } catch (e: any) {
-    toast.error(e?.message || 'Delete failed')
+  } catch (e: unknown) {
+    toast.error((e as Error)?.message || 'Delete failed')
   }
 }
 

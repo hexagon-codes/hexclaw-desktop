@@ -9,12 +9,10 @@ import * as path from 'node:path'
 import {
   CHANNEL_TYPES,
   CHANNEL_CONFIG_FIELDS,
-  CHANNEL_HELP_TEXT,
   getChannelMeta,
   getChannelHelpText,
   getRequiredFieldLabels,
   getPlatformHookUrl,
-  type IMChannelType,
 } from '../im-channels'
 
 // ────────────────────────────────────────────────────────
