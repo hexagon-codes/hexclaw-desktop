@@ -27,7 +27,7 @@ async function loadMarketplace() {
   try {
     const q = marketplaceSearch.value.trim()
     const res = q ? await searchMcpMarketplace(q) : await getMcpMarketplace()
-    marketplaceItems.value = res.servers || []
+    marketplaceItems.value = res.skills || []
   } catch (e) {
     console.error('Failed to load MCP marketplace:', e)
     marketplaceItems.value = []

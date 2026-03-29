@@ -170,21 +170,17 @@ describe('Chain G: MCP -> Servers -> Tools', () => {
 
   it('G7: searchMcpMarketplace searches via GET with type=mcp', async () => {
     mockApiGet.mockResolvedValueOnce({
-      servers: [
-        { name: 'weather-mcp', display_name: 'Weather MCP', description: 'Weather data', category: 'data', command: 'npx weather-mcp', args: [], downloads: 5000, rating: 4.5 },
+      skills: [
+        { name: 'weather-mcp', display_name: 'Weather MCP', description: 'Weather data', category: 'data', downloads: 5000, rating: 4.5 },
       ],
+      total: 1,
     })
 
     const { searchMcpMarketplace } = await import('@/api/mcp')
     const result = await searchMcpMarketplace('weather')
 
-    expect(mockApiGet).toHaveBeenCalledWith(
-      expect.stringContaining('/api/v1/clawhub/search'),
-    )
-    const calledUrl = mockApiGet.mock.calls[0]![0] as string
-    expect(calledUrl).toContain('type=mcp')
-    expect(calledUrl).toContain('q=weather')
-    expect(result.servers).toHaveLength(1)
+    expect(mockApiGet).toHaveBeenCalledWith('/api/v1/clawhub/search', { q: 'weather', type: 'mcp' })
+    expect(result.skills).toHaveLength(1)
   })
 
   it('G8: full lifecycle: add server -> list servers -> list tools -> call tool -> remove server', async () => {

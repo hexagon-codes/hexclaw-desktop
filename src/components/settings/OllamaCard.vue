@@ -81,8 +81,13 @@ async function detect() {
   }
 }
 
-function openInstallPage() {
-  window.open(OLLAMA_DOWNLOAD_URL, '_blank')
+async function openInstallPage() {
+  try {
+    const { open } = await import('@tauri-apps/plugin-shell')
+    await open(OLLAMA_DOWNLOAD_URL)
+  } catch {
+    window.open(OLLAMA_DOWNLOAD_URL, '_blank')
+  }
   startInstall()
 }
 
