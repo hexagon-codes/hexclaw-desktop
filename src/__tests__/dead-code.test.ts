@@ -14,9 +14,6 @@ function readFile(relativePath: string): string {
   return fs.readFileSync(path.resolve(__dirname, '..', relativePath), 'utf-8')
 }
 
-function readFileFromRoot(relativePath: string): string {
-  return fs.readFileSync(path.resolve(__dirname, '../..', relativePath), 'utf-8')
-}
 
 function getAllTsVueFiles(dir: string): string[] {
   const result: string[] = []
@@ -58,11 +55,7 @@ describe('dead code detection', () => {
         return content.includes('isKnowledgeUploadEndpointMissing')
       })
 
-      expect(
-        importers.length,
-        'isKnowledgeUploadEndpointMissing should be imported in at least 1 production file. ' +
-          `Found in: ${importers.map(f => path.relative(srcDir, f)).join(', ') || 'none'}`,
-      ).toBeGreaterThanOrEqual(1)
+      expect(importers.length).toBeGreaterThanOrEqual(1)
     })
 
     it('is actually called (not just imported)', () => {
@@ -85,11 +78,9 @@ describe('dead code detection', () => {
 
     it('no qrSetup in IMChannelMeta interface (would break type)', () => {
       const source = readFile('api/im-channels.ts')
-      // The interface should only have the declared fields
       const interfaceMatch = source.match(/export interface IMChannelMeta \{[\s\S]*?\}/)
-      if (interfaceMatch) {
-        expect(interfaceMatch[0]).not.toContain('qr')
-      }
+      expect(interfaceMatch).not.toBeNull()
+      expect(interfaceMatch![0]).not.toContain('qr')
     })
 
     it('CHANNEL_TYPES data does not contain qrSetup property', () => {
@@ -154,22 +145,15 @@ describe('dead code detection', () => {
       const file = path.join(apiDir, 'im-channels.ts')
       const exports = getExportedNames(file)
 
-      for (const name of exports) {
-        const used = isNameUsedElsewhere(name, file)
-        if (!used) {
-          // Some exports may only be used via barrel export in index.ts
-          // or in test files — that's acceptable. Flag only truly dead code.
-          const usedInTests = allFiles.some((f) => {
-            if (f === file) return false
-            const content = fs.readFileSync(f, 'utf-8')
-            return content.includes(name)
-          })
-          expect(
-            usedInTests,
-            `im-channels.ts exports "${name}" but it's not used anywhere (not even tests)`,
-          ).toBe(true)
-        }
-      }
+      const unusedNames = exports.filter((name) => {
+        const usedAnywhere = allFiles.some((f) => {
+          if (f === file) return false
+          const content = fs.readFileSync(f, 'utf-8')
+          return content.includes(name)
+        })
+        return !usedAnywhere
+      })
+      expect(unusedNames).toEqual([])
     })
 
     it('knowledge.ts exports are all used', () => {
@@ -213,12 +197,7 @@ describe('dead code detection', () => {
     it('does not re-export im-channels (imported directly)', () => {
       const indexSource = readFile('api/index.ts')
       // im-channels is typically imported directly, not through barrel
-      // This is fine — just documenting the pattern
-      const hasImChannels = indexSource.includes('./im-channels')
-      // If it's not in the barrel, that's expected
-      if (!hasImChannels) {
-        expect(hasImChannels).toBe(false)
-      }
+      expect(indexSource.includes('./im-channels')).toBe(false)
     })
   })
 })

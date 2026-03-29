@@ -70,7 +70,7 @@ describe('Chain B: IM Channels -> Backend Sync', () => {
     // proxyApiRequest for sync: POST to /api/v1/platforms/instances
     mockInvoke.mockResolvedValue('{"message":"ok"}')
 
-    const { createIMInstance, getIMInstances } = await import('@/api/im-channels')
+    const { createIMInstance } = await import('@/api/im-channels')
 
     const instance = await createIMInstance(
       'My Feishu Bot',

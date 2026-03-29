@@ -105,7 +105,7 @@ describe('Chain E: Tasks/Cron -> Backend', () => {
       name: 'Task',
       schedule: '0 0 * * *',
       prompt: 'Do something',
-    } as any) // type is optional in input
+    }) // type is optional in input
 
     expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs', expect.objectContaining({
       type: 'cron',
@@ -193,7 +193,7 @@ describe('Chain E: Tasks/Cron -> Backend', () => {
       name: 'Failing Job',
       schedule: '0 0 * * *',
       prompt: 'test',
-    } as any)).rejects.toThrow('Rate limit exceeded')
+    })).rejects.toThrow('Rate limit exceeded')
   })
 
   it('E9: full lifecycle: create -> pause -> resume -> trigger -> delete', async () => {
@@ -201,7 +201,7 @@ describe('Chain E: Tasks/Cron -> Backend', () => {
     mockApiPost.mockResolvedValueOnce({ id: 'job-lc', name: 'LC Job', next_run_at: '2026-01-02T00:00:00Z' })
     const { createCronJob, pauseCronJob, resumeCronJob, triggerCronJob, deleteCronJob } = await import('@/api/tasks')
 
-    const job = await createCronJob({ name: 'LC Job', schedule: '0 0 * * *', prompt: 'test' } as any)
+    const job = await createCronJob({ name: 'LC Job', schedule: '0 0 * * *', prompt: 'test' })
     expect(job.id).toBe('job-lc')
 
     // Pause

@@ -166,12 +166,9 @@ describe('Frontend-Backend API Alignment', () => {
       console.warn(`Frontend API paths with no backend route:\n${details}`)
     }
 
-    // Specifically check for known-problematic paths
-    const desktopClipboard = frontendCalls.find((c) => c.path === '/api/v1/desktop/clipboard')
-    if (desktopClipboard) {
-      const hasBackend = matchesBackendRoute('/api/v1/desktop/clipboard', backendRoutes)
-      expect(hasBackend).toBeNull() // EXPECTED: this route does NOT exist in backend
-    }
+    // desktop/clipboard is a known frontend-only path (no backend route)
+    const hasBackend = matchesBackendRoute('/api/v1/desktop/clipboard', backendRoutes)
+    expect(hasBackend).toBeNull()
   })
 
   it('desktop/clipboard path used in frontend does NOT exist in backend (known gap)', () => {
