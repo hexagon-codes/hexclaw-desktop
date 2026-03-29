@@ -62,25 +62,13 @@ describe('IM channel field alignment: frontend keys vs backend JSON tags', () =>
       const backendKeys = BACKEND_JSON_TAGS[platform].configFields
 
       it('every frontend field key exists in backend JSON tags', () => {
-        for (const key of frontendKeys) {
-          expect(
-            backendKeys,
-            `Frontend field "${key}" for ${platform} has no matching backend JSON tag. ` +
-              `Backend tags: [${backendKeys.join(', ')}]`,
-          ).toContain(key)
-        }
+        const missing = frontendKeys.filter((k) => !backendKeys.includes(k))
+        expect(missing).toEqual([])
       })
 
       it('every backend config field is exposed in the frontend', () => {
-        for (const key of backendKeys) {
-          // Only check non-optional backend fields — but actually, even optional
-          // fields should be present in the UI (marked as optional: true).
-          expect(
-            frontendKeys,
-            `Backend field "${key}" for ${platform} is missing from frontend CHANNEL_CONFIG_FIELDS. ` +
-              `Frontend keys: [${frontendKeys.join(', ')}]`,
-          ).toContain(key)
-        }
+        const missing = backendKeys.filter((k) => !frontendKeys.includes(k))
+        expect(missing).toEqual([])
       })
 
       it('field count matches between frontend and backend', () => {
@@ -126,22 +114,19 @@ describe('IM channel field alignment: frontend keys vs backend JSON tags', () =>
   })
 
   it('secret fields use secret: true', () => {
-    // Fields containing "secret", "token", "key" (except app_key/robot_code/app_id/corp_id/agent_id)
-    // should be marked as secret for password masking.
     const nonSecretExceptions = ['app_id', 'app_key', 'robot_code', 'corp_id', 'agent_id']
+    const missingSecret: string[] = []
     for (const platform of platforms) {
       for (const field of CHANNEL_CONFIG_FIELDS[platform]) {
         const lowerKey = field.key.toLowerCase()
         const shouldBeSecret =
           (lowerKey.includes('secret') || lowerKey.includes('token') || lowerKey.includes('aes_key')) &&
           !nonSecretExceptions.includes(field.key)
-        if (shouldBeSecret) {
-          expect(
-            field.secret,
-            `${platform}.${field.key} should be marked as secret`,
-          ).toBe(true)
+        if (shouldBeSecret && !field.secret) {
+          missingSecret.push(`${platform}.${field.key}`)
         }
       }
     }
+    expect(missingSecret).toEqual([])
   })
 })

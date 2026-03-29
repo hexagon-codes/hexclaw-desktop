@@ -812,7 +812,7 @@ describe('Chain 5: WebSocket Lifecycle', () => {
   it('WebSocket error triggers error callback and falls back to HTTP', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
-    const { ChatRequestError } = await import('@/services/chatService')
+    await import('@/services/chatService')
     sendViaWebSocket.mockRejectedValueOnce(new Error('Connection lost'))
     sendViaBackend.mockResolvedValueOnce({
       reply: 'Fallback response',

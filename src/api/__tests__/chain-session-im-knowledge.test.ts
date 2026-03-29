@@ -445,9 +445,7 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     })
 
     // Rename triggers: POST new name (disabled) -> DELETE old name -> POST new name (enabled)
-    let renameCallIndex = 0
     invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
-      renameCallIndex++
       if (payload.method === 'POST') return JSON.stringify({ status: 'ok' })
       if (payload.method === 'DELETE') return JSON.stringify({ ok: true })
       return JSON.stringify({})

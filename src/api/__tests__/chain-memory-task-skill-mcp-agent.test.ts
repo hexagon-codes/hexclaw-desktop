@@ -6,6 +6,7 @@
  * and parameter forwarding for every step in the lifecycle.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AgentConfig, AgentRule } from '@/types'
 
 // ─── ofetch mock (transport level) ─────────────────────
 const mockFetch = vi.hoisted(() => vi.fn())
@@ -463,11 +464,11 @@ describe('Chain 8: Agent / Router Lifecycle', () => {
       name: 'code-agent',
       model: 'claude-3-opus',
       system_prompt: 'You are a coding assistant.',
-    } as any)
-    const updRes = await updateAgent('code-agent', { description: 'Handles code tasks' } as any)
+    } as AgentConfig)
+    const updRes = await updateAgent('code-agent', { description: 'Handles code tasks' } as Partial<AgentConfig>)
     const defaultRes = await setDefaultAgent('code-agent')
     const rules = await getRules()
-    const ruleRes = await addRule({ platform: 'slack', agent_name: 'code-agent' } as any)
+    const ruleRes = await addRule({ platform: 'slack', agent_name: 'code-agent' } as Omit<AgentRule, 'id'>)
     const delRuleRes = await deleteRule(42)
     const unregRes = await unregisterAgent('code-agent')
 
@@ -534,7 +535,7 @@ describe('Chain 8: Agent / Router Lifecycle', () => {
     mockFetch.mockResolvedValueOnce({ message: 'updated' })
 
     const { updateAgent } = await import('../agents')
-    await updateAgent('agent/with spaces', { description: 'test' } as any)
+    await updateAgent('agent/with spaces', { description: 'test' } as Partial<AgentConfig>)
 
     const [path] = callArgs(0)
     expect(path).toBe(`/api/v1/agents/${encodeURIComponent('agent/with spaces')}`)

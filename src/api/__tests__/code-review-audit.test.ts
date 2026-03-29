@@ -14,7 +14,6 @@ import {
   getChannelMeta,
   getRequiredFieldLabels,
   type IMChannelType,
-  type IMChannelMeta,
 } from '../im-channels'
 import {
   isKnowledgeUploadUnsupportedFormat,
