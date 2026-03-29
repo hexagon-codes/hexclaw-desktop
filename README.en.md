@@ -230,7 +230,7 @@ make dev
 > **Note**:
 > - `make sidecar` pulls `refs/tags/v0.1.0-beta` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
 > - To build another backend version, pass it explicitly: `make sidecar HEXCLAW_REF=refs/tags/<tag>`
-> - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.1` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
+> - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.2` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
 
 ### Make Commands
 

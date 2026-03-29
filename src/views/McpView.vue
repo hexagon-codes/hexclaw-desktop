@@ -3,6 +3,7 @@ import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download } from 'lucide-vue-next'
 import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, getMcpMarketplace, searchMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
+import { installFromHub } from '@/api/skills'
 import type { McpTool } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -36,10 +37,9 @@ async function loadMarketplace() {
 }
 
 async function installFromMarketplace(entry: McpMarketplaceEntry) {
-  if (!entry.command?.trim()) return
   installingServer.value = entry.name
   try {
-    await addMcpServer(entry.name, entry.command, entry.args)
+    await installFromHub(entry.name)
     await loadAll()
   } catch (e) { errorMsg.value = e instanceof Error ? e.message : 'Install failed' }
   finally { installingServer.value = null }
@@ -515,9 +515,6 @@ defineExpose({ openAddServer })
                 </button>
               </div>
               <p class="text-xs mb-1" style="color: var(--hc-text-secondary)">{{ item.description }}</p>
-              <div v-if="item.config_hint" class="text-xs" style="color: var(--hc-warning, #f59e0b)">
-                {{ item.config_hint }}
-              </div>
             </div>
           </div>
         </div>

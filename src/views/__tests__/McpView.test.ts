@@ -13,6 +13,8 @@ const mockRemoveMcpServer = vi.fn()
 const mockGetMcpMarketplace = vi.fn()
 const mockSearchMcpMarketplace = vi.fn()
 
+const mockInstallFromHub = vi.fn()
+
 vi.mock('@/api/mcp', () => ({
   getMcpServers: () => mockGetMcpServers(),
   getMcpTools: () => mockGetMcpTools(),
@@ -22,6 +24,10 @@ vi.mock('@/api/mcp', () => ({
   removeMcpServer: (name: string) => mockRemoveMcpServer(name),
   getMcpMarketplace: () => mockGetMcpMarketplace(),
   searchMcpMarketplace: (q: string) => mockSearchMcpMarketplace(q),
+}))
+
+vi.mock('@/api/skills', () => ({
+  installFromHub: (name: string) => mockInstallFromHub(name),
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -479,8 +485,8 @@ describe('McpView — MCP 全链路', () => {
   })
 
   it('Marketplace 安装成功后刷新', async () => {
-    const entry = { name: 'new-server', display_name: 'New', description: '', category: '', command: 'npx', args: ['-y', 'new'], downloads: 0, rating: 0 }
-    mockAddMcpServer.mockResolvedValue({ message: 'added' })
+    const entry = { name: 'new-skill', display_name: 'New', description: '', category: '', downloads: 0, rating: 0 }
+    mockInstallFromHub.mockResolvedValue(undefined)
     const wrapper = await mountMcpView()
     await flushPromises()
     mockGetMcpServers.mockClear()
@@ -489,18 +495,8 @@ describe('McpView — MCP 全链路', () => {
     await vm.installFromMarketplace(entry)
     await flushPromises()
 
-    expect(mockAddMcpServer).toHaveBeenCalledWith('new-server', 'npx', ['-y', 'new'])
+    expect(mockInstallFromHub).toHaveBeenCalledWith('new-skill')
     expect(mockGetMcpServers).toHaveBeenCalled()
-  })
-
-  it('Marketplace 安装无 command 的条目不发请求', async () => {
-    const entry = { name: 'bad', display_name: 'Bad', description: '', category: '', command: '', args: [], downloads: 0, rating: 0 }
-    const wrapper = await mountMcpView()
-    await flushPromises()
-
-    const vm = wrapper.vm as unknown as { installFromMarketplace: (e: typeof entry) => Promise<void> }
-    await vm.installFromMarketplace(entry)
-    expect(mockAddMcpServer).not.toHaveBeenCalled()
   })
 
   it('Marketplace 已安装的服务器按钮禁用', async () => {

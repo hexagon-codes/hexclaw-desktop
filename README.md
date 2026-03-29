@@ -233,7 +233,7 @@ make dev
 > **注意**:
 > - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.2.2` 到 `/tmp/hexclaw-gith-src` 并编译
 > - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
-> - 技能市场默认读取 `https://github.com/hexagon-codes/hexclaw-hub` 的 `v0.0.1` 标签；运行时可在 `~/.hexclaw/hexclaw.yaml` 的 `skills.hub` 覆盖
+> - 技能市场默认读取 `https://github.com/hexagon-codes/hexclaw-hub` 的 `v0.0.2` 标签；运行时可在 `~/.hexclaw/hexclaw.yaml` 的 `skills.hub` 覆盖
 
 ### Make 命令
 
