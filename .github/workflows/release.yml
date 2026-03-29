@@ -198,14 +198,23 @@ jobs:
           fi
           echo "args=$args" >> "$GITHUB_OUTPUT"
 
-      - name: Build Tauri app
+      - name: Check if Apple signing secrets are available
+        id: signing
+        run: |
+          if [[ -n "${{ secrets.APPLE_CERTIFICATE }}" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Apple signing secrets not configured — building unsigned"
+          fi
+
+      - name: Build Tauri app (signed)
+        if: steps.signing.outputs.available == 'true'
         uses: tauri-apps/tauri-action@action-v0.6.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Tauri updater signing
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS code signing / notarization
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -215,6 +224,24 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'HexClaw Desktop ${{ github.ref_name }}'
+          releaseBody: |
+            See the generated release notes below for changes in this version.
+          generateReleaseNotes: true
+          releaseDraft: false
+          prerelease: ${{ needs.validate.outputs.prerelease == 'true' }}
+          args: ${{ steps.tauri_args.outputs.args }}
+          retryAttempts: 2
+
+      - name: Build Tauri app (unsigned)
+        if: steps.signing.outputs.available != 'true'
+        uses: tauri-apps/tauri-action@action-v0.6.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'HexClaw Desktop ${{ github.ref_name }}'
