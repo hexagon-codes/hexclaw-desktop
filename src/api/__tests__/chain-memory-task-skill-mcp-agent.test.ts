@@ -410,7 +410,7 @@ describe('Chain 7: MCP Lifecycle', () => {
     const [statusPath, statusOpts] = callArgs(4)
     expect(statusPath).toBe('/api/v1/mcp/status')
     expect(statusOpts.method).toBe('GET')
-    expect(statusRes.statuses['new-server']).toBe('connected')
+    expect(statusRes.statuses!['new-server']).toBe('connected')
 
     // 6) removeMcpServer → DELETE /api/v1/mcp/servers/:name
     const [removePath, removeOpts] = callArgs(5)

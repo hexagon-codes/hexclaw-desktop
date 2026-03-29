@@ -164,8 +164,8 @@ describe('Chain G: MCP -> Servers -> Tools', () => {
     const result = await getMcpServerStatus()
 
     expect(mockApiGet).toHaveBeenCalledWith('/api/v1/mcp/status')
-    expect(result.statuses['weather-server']).toBe('connected')
-    expect(result.statuses['broken-server']).toBe('error')
+    expect(result.statuses!['weather-server']).toBe('connected')
+    expect(result.statuses!['broken-server']).toBe('error')
   })
 
   it('G7: searchMcpMarketplace searches via GET with type=mcp', async () => {

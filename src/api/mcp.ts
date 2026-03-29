@@ -23,7 +23,11 @@ export function callMcpTool(toolName: string, args: Record<string, unknown>) {
 
 /** 获取 MCP 服务器状态 */
 export function getMcpServerStatus() {
-  return apiGet<{ statuses: Record<string, 'connected' | 'disconnected' | 'error'> }>('/api/v1/mcp/status')
+  return apiGet<{
+    statuses?: Record<string, 'connected' | 'disconnected' | 'error'>
+    servers?: Array<{ name: string; connected: boolean; tool_count: number }>
+    total?: number
+  }>('/api/v1/mcp/status')
 }
 
 /** 添加 MCP 服务器（运行时动态添加，无需重启） */

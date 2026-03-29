@@ -66,7 +66,7 @@ describe('MCP API — full coverage', () => {
     const { getMcpTools } = await import('../mcp')
     const res = await getMcpTools()
     expect(res.tools).toHaveLength(1)
-    expect(res.tools[0].name).toBe('read_file')
+    expect(res.tools[0]!.name).toBe('read_file')
   })
 
   it('callMcpTool sends tool name and arguments', async () => {
@@ -97,8 +97,8 @@ describe('MCP API — full coverage', () => {
     })
     const { getMcpServerStatus } = await import('../mcp')
     const res = await getMcpServerStatus()
-    expect(res.statuses.fs).toBe('connected')
-    expect(res.statuses.github).toBe('error')
+    expect(res.statuses!.fs).toBe('connected')
+    expect(res.statuses!.github).toBe('error')
   })
 
   // ─── Marketplace ──────────────────────────────────
@@ -117,7 +117,7 @@ describe('MCP API — full coverage', () => {
       query: { type: 'mcp' },
     })
     expect(res.skills).toHaveLength(1)
-    expect(res.skills[0].command).toBe('npx')
+    expect(res.skills[0]!.command).toBe('npx')
   })
 
   it('searchMcpMarketplace passes query and type=mcp', async () => {
@@ -183,7 +183,7 @@ describe('MCP API — full coverage', () => {
     mockFetch.mockResolvedValueOnce({ message: 'removed' })
     const { removeMcpServer } = await import('../mcp')
     await removeMcpServer('天气服务')
-    const calledPath = mockFetch.mock.calls[0][0]
+    const calledPath = mockFetch.mock.calls[0]![0]
     expect(calledPath).not.toContain('天气服务')
     expect(calledPath).toContain(encodeURIComponent('天气服务'))
   })

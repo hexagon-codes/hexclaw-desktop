@@ -73,7 +73,16 @@ async function loadAll() {
     // Try to load server statuses
     try {
       const statusRes = await getMcpServerStatus()
-      serverStatuses.value = statusRes.statuses || {}
+      if (statusRes.statuses) {
+        serverStatuses.value = statusRes.statuses
+      } else if (Array.isArray(statusRes.servers)) {
+        // 后端返回 {servers: [{name, connected, tool_count}]} 格式
+        const map: Record<string, 'connected' | 'disconnected'> = {}
+        for (const s of statusRes.servers as Array<{ name: string; connected: boolean }>) {
+          map[s.name] = s.connected ? 'connected' : 'disconnected'
+        }
+        serverStatuses.value = map
+      }
     } catch {
       // If status API not available, mark all as connected (optimistic)
       const statuses: Record<string, 'connected'> = {}
