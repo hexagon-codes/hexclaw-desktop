@@ -192,22 +192,9 @@ Before creating a release tag, make sure:
 
 - `package.json` and `src-tauri/tauri.conf.json` versions match the tag
 - the Tauri updater public key is committed at `src-tauri/tauri.conf.json -> plugins.updater.pubkey`
-- GitHub Actions secrets include `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- macOS releases also require Apple code-signing secrets: `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`
-- macOS releases also need one notarization credential set (choose one):
-- Apple ID flow: `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`
-- App Store Connect flow: `APPLE_API_KEY`, `APPLE_API_ISSUER`, `APPLE_API_PRIVATE_KEY` (the workflow writes it to `private_keys/AuthKey_<APPLE_API_KEY>.p8`)
+- GitHub Actions secrets include `TAURI_SIGNING_PRIVATE_KEY` (optional, for Tauri auto-update signing)
 
-If those macOS secrets are missing, the `Release` and `Package` workflows now fail early instead of publishing browser-downloaded bundles that Gatekeeper flags as "damaged".
-
-If you already have the `.p12` certificate and `AuthKey_*.p8`, you can start from:
-
-```bash
-make macos-release-secrets-help
-make macos-release-bootstrap-help
-```
-
-For the Apple-side setup, see [macOS Release Setup](docs/macos-release.en.md).
+> macOS builds are unsigned DMGs. Users install via `curl | bash` one-line script or Homebrew, which handle Gatekeeper automatically.
 
 See the [User Guide](docs/guide.en.md) for detailed instructions.
 

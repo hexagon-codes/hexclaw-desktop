@@ -1,6 +1,6 @@
 # HexClaw Desktop — 开发命令
 
-.PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 lint lint-fix format prepare-sidecar-src macos-release-secrets-help macos-release-bootstrap-help verify-macos-bundle
+.PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 lint lint-fix format prepare-sidecar-src
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
 HEXCLAW_REF ?= refs/tags/v0.2.2
@@ -119,13 +119,3 @@ install:
 	pnpm install
 	cd src-tauri && cargo fetch
 
-# 显示 macOS 发布 secrets 初始化脚本帮助
-macos-release-secrets-help:
-	bash ./scripts/ci/set-github-macos-secrets.sh --help
-
-macos-release-bootstrap-help:
-	bash ./scripts/ci/bootstrap-macos-release.sh --help
-
-# 校验本地 macOS 构建产物是否已通过签名/公证检查
-verify-macos-bundle:
-	bash ./scripts/ci/verify-macos-bundle.sh "$(TARGET)"

@@ -195,22 +195,9 @@ brew install --cask hexclaw
 
 - `package.json` 与 `src-tauri/tauri.conf.json` 的版本号和 tag 一致
 - `src-tauri/tauri.conf.json` 中已写入 Tauri updater 公钥 `plugins.updater.pubkey`
-- GitHub Actions secrets 已配置 `TAURI_SIGNING_PRIVATE_KEY`、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-- macOS 发布额外需要 Apple 代码签名 secrets：`APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`
-- macOS 发布还需要一组 notarization 凭据（任选其一）：
-- Apple ID 方式：`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`
-- App Store Connect 方式：`APPLE_API_KEY`、`APPLE_API_ISSUER`、`APPLE_API_PRIVATE_KEY`（workflow 会自动生成 `private_keys/AuthKey_<APPLE_API_KEY>.p8`）
+- GitHub Actions secrets 已配置 `TAURI_SIGNING_PRIVATE_KEY`（可选，用于 Tauri 自动更新签名）
 
-如果缺少这些 macOS secrets，`Release` / `Package` workflow 现在会直接失败，避免继续产出会被 Gatekeeper 判定为“已损坏”的浏览器下载包。
-
-如果你已经拿到 `.p12` 和 `AuthKey_*.p8`，可以直接运行：
-
-```bash
-make macos-release-secrets-help
-make macos-release-bootstrap-help
-```
-
-完整 Apple 侧准备步骤见 [macOS 正式发布准备](docs/macos-release.md)。
+> macOS 产物为 unsigned DMG，用户通过 `curl | bash` 一键安装脚本或 Homebrew 安装，自动处理 Gatekeeper。
 
 详细使用说明请参阅 [使用指南](docs/guide.md)（[English Guide](docs/guide.en.md)）。
 
