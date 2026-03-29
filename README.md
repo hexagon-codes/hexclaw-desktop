@@ -153,12 +153,22 @@ HexClaw.app
 
 ## 安装
 
+### 一键安装 (macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/main/install.sh | bash
+```
+
+自动检测 CPU 架构（Apple Silicon / Intel），下载最新版并安装到 `/Applications`，无需手动处理 Gatekeeper 拦截。
+
 ### Homebrew (macOS)
 
 ```bash
 brew tap hexagon-codes/tap
 brew install --cask hexclaw
 ```
+
+后续升级：`brew upgrade --cask hexclaw`
 
 ### GitHub Releases
 
@@ -171,14 +181,15 @@ brew install --cask hexclaw
 | Windows | `.msi` / `.exe` (NSIS) |
 | Linux | `.deb` / `.AppImage` |
 
-> 首次打开 macOS 版本可能需要在 **系统设置 → 隐私与安全性** 中允许运行。
-> 如果浏览器下载后的 `.dmg` 直接提示“已损坏，无法打开”，通常不是包体真的坏了，而是发布时缺少 Apple 签名 / notarization。
+> **macOS 用户注意**：浏览器直接下载的 `.dmg` 可能被 Gatekeeper 拦截。推荐使用上方的一键安装脚本或 Homebrew 安装，它们会自动处理 Gatekeeper 问题。
+> 如果手动下载安装，在终端执行 `xattr -cr /Applications/HexClaw.app` 即可解除拦截。
 
 ### CI / 打包 / Release 流程
 
 - `push / PR -> CI`: 自动运行 lint、type-check、test、web build
 - `Actions -> Package -> Run workflow`: 手动构建各平台测试安装包，产物保存在 workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: 构建并发布正式 GitHub Release 安装包
+- 正式版发布后自动更新 [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap)（计算 DMG SHA256 → 推送 Cask 更新）
 
 正式发布前需要满足：
 
@@ -225,7 +236,7 @@ cd hexclaw-desktop
 make install
 # 等价于: pnpm install && cd src-tauri && cargo fetch
 
-# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.2.0)
+# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.2.2)
 make sidecar
 
 # 4. 启动开发模式
@@ -233,7 +244,7 @@ make dev
 ```
 
 > **注意**:
-> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.2.0` 到 `/tmp/hexclaw-gith-src` 并编译
+> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.2.2` 到 `/tmp/hexclaw-gith-src` 并编译
 > - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - 技能市场默认读取 `https://github.com/hexagon-codes/hexclaw-hub` 的 `v0.0.1` 标签；运行时可在 `~/.hexclaw/hexclaw.yaml` 的 `skills.hub` 覆盖
 
@@ -367,7 +378,8 @@ hexclaw-desktop/
 │   ├── updates.en.md             # 自动更新发布说明 (英文)
 │   ├── overview.md               # 产品总览 (中文)
 │   └── overview.en.md            # 产品总览 (英文)
-├── Casks/                        # Homebrew Cask 定义
+├── homebrew/                     # Homebrew Cask 定义 + 更新脚本
+├── install.sh                    # macOS 一键安装脚本
 ├── scripts/                      # CI/构建脚本
 ├── .github/                      # GitHub CI/CD
 ├── Makefile                      # 开发命令
@@ -435,9 +447,19 @@ make test
 
 ## 常见问题
 
-### macOS 提示"无法打开，因为无法验证开发者"
+### macOS 提示"无法打开"或"已损坏"
 
-在 **系统设置 → 隐私与安全性** 中找到 HexClaw，点击"仍要打开"。或在终端执行：
+推荐使用一键安装脚本或 Homebrew 安装（自动处理 Gatekeeper）：
+
+```bash
+# 方式 1：一键安装
+curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/main/install.sh | bash
+
+# 方式 2：Homebrew
+brew tap hexagon-codes/tap && brew install --cask hexclaw
+```
+
+如果已经手动下载了 DMG，在终端执行：
 
 ```bash
 xattr -cr /Applications/HexClaw.app
@@ -452,7 +474,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` 编译失败
 
 1. 确认 Go >= 1.23 已安装: `go version`
-2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.2.0`
+2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.2.2`
 3. 确认 Rust 工具链已安装 (用于检测平台 triple): `rustc -vV`
 
 ### `make dev` 启动后白屏

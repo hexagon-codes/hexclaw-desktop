@@ -242,3 +242,68 @@ jobs:
             ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/deb/*.deb' || '' }}
             ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe' || '' }}
             ${{ matrix.target == 'x86_64-pc-windows-msvc' && needs.validate.outputs.prerelease != 'true' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi' || '' }}
+
+  update-tap:
+    name: Update Homebrew Tap
+    needs: [validate, build]
+    if: needs.validate.outputs.prerelease != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for release assets to be available
+        run: sleep 30
+
+      - name: Download macOS DMGs and compute SHA256
+        id: sha
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          REPO="hexagon-codes/hexclaw-desktop"
+
+          for ARCH in aarch64 x86_64; do
+            DMG="HexClaw_${VERSION}_${ARCH}.dmg"
+            URL="https://github.com/${REPO}/releases/download/${TAG}/${DMG}"
+            echo "Downloading ${DMG}..."
+            curl -fSL -o "/tmp/${DMG}" "$URL" || { echo "::warning::DMG not found: ${DMG}, using :no_check"; continue; }
+            SHA=$(sha256sum "/tmp/${DMG}" | awk '{print $1}')
+            echo "SHA256 (${ARCH}): ${SHA}"
+            echo "sha_${ARCH}=${SHA}" >> "$GITHUB_OUTPUT"
+          done
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout homebrew-tap
+        uses: actions/checkout@v4
+        with:
+          repository: hexagon-codes/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Cask
+        run: |
+          VERSION="${{ steps.sha.outputs.version }}"
+          SHA_ARM="${{ steps.sha.outputs.sha_aarch64 }}"
+          SHA_INTEL="${{ steps.sha.outputs.sha_x86_64 }}"
+          CASK="homebrew-tap/Casks/hexclaw.rb"
+
+          sed -i "s/^  version \".*\"/  version \"${VERSION}\"/" "$CASK"
+
+          if [[ -n "$SHA_ARM" ]]; then
+            sed -i "/on_arm/,/end/{s/sha256 .*/sha256 \"${SHA_ARM}\"/;}" "$CASK"
+          fi
+          if [[ -n "$SHA_INTEL" ]]; then
+            sed -i "/on_intel/,/end/{s/sha256 .*/sha256 \"${SHA_INTEL}\"/;}" "$CASK"
+          fi
+
+          echo "Updated Cask to ${VERSION}"
+          cat "$CASK"
+
+      - name: Push to homebrew-tap
+        run: |
+          cd homebrew-tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git commit -m "chore: bump hexclaw to ${{ steps.sha.outputs.version }}"
+          git push

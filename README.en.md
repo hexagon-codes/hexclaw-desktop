@@ -150,12 +150,22 @@ Frontend and backend communicate via **Tauri IPC proxy** (resolving WebView CORS
 
 ## Installation
 
+### One-line Install (macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/main/install.sh | bash
+```
+
+Detects CPU architecture (Apple Silicon / Intel), downloads the latest release, installs to `/Applications`, and clears the Gatekeeper quarantine flag automatically.
+
 ### Homebrew (macOS)
 
 ```bash
 brew tap hexagon-codes/tap
 brew install --cask hexclaw
 ```
+
+Upgrade later: `brew upgrade --cask hexclaw`
 
 ### GitHub Releases
 
@@ -168,14 +178,15 @@ Go to [Releases](https://github.com/hexagon-codes/hexclaw-desktop/releases) to d
 | Windows | `.msi` / `.exe` (NSIS) |
 | Linux | `.deb` / `.AppImage` |
 
-> First launch on macOS may require allowing the app in **System Settings → Privacy & Security**.
-> If a browser-downloaded `.dmg` is reported as "damaged", the package is usually not actually corrupted; it was released without proper Apple signing / notarization.
+> **macOS users**: Browser-downloaded `.dmg` files may be blocked by Gatekeeper. Use the one-line install script or Homebrew above — they handle this automatically.
+> For manual DMG installs, run `xattr -cr /Applications/HexClaw.app` in Terminal.
 
 ### CI / Packaging / Release Flow
 
 - `push / PR -> CI`: runs lint, type-check, tests, and web build automatically
 - `Actions -> Package -> Run workflow`: builds test installers for all platforms and uploads them as workflow artifacts
 - `git tag vX.Y.Z && git push origin vX.Y.Z -> Release`: builds and publishes the official GitHub Release assets
+- Stable releases automatically update the [Homebrew Tap](https://github.com/hexagon-codes/homebrew-tap) (computes DMG SHA256 and pushes Cask update)
 
 Before creating a release tag, make sure:
 
@@ -363,7 +374,8 @@ hexclaw-desktop/
 │   ├── updates.en.md             # Auto-update release guide (English)
 │   ├── overview.md               # Product overview (Chinese)
 │   └── overview.en.md            # Product overview (English)
-├── Casks/                        # Homebrew Cask definition
+├── homebrew/                     # Homebrew Cask definition + update script
+├── install.sh                    # macOS one-line install script
 ├── scripts/                      # CI/build scripts
 ├── .github/                      # GitHub CI/CD
 ├── Makefile                      # Dev commands
@@ -431,9 +443,19 @@ Test file conventions:
 
 ## Troubleshooting
 
-### macOS: "Cannot be opened because the developer cannot be verified"
+### macOS: "Cannot be opened" or "damaged"
 
-Go to **System Settings → Privacy & Security**, find HexClaw, and click "Open Anyway". Or run in terminal:
+Use the one-line install script or Homebrew (they handle Gatekeeper automatically):
+
+```bash
+# Option 1: One-line install
+curl -fsSL https://raw.githubusercontent.com/hexagon-codes/hexclaw-desktop/main/install.sh | bash
+
+# Option 2: Homebrew
+brew tap hexagon-codes/tap && brew install --cask hexclaw
+```
+
+If you already downloaded the DMG manually, run in Terminal:
 
 ```bash
 xattr -cr /Applications/HexClaw.app
