@@ -106,7 +106,6 @@ const sections = computed(() => [
   { key: 'llm', label: t('settings.llm.title'), icon: Key },
   { key: 'appearance', label: t('settings.appearance.title'), icon: Palette },
   { key: 'storage', label: t('settings.storage.title'), icon: Database },
-  { key: 'status', label: t('settings.status.title', '系统状态'), icon: Activity },
 ])
 
 function handleLocaleChange(locale: string) {

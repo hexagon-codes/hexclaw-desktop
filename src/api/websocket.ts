@@ -1,5 +1,6 @@
 import { env } from '@/config/env'
 import { logger } from '@/utils/logger'
+import { DESKTOP_USER_ID } from '@/constants'
 import type { ToolCall } from '@/types'
 
 type ChunkCallback = (message: WsServerMessage) => void
@@ -18,6 +19,7 @@ interface WsMessage {
   type: 'message'
   content: string
   session_id?: string
+  user_id?: string
   provider?: string
   model?: string
   role?: string
@@ -38,6 +40,7 @@ interface WsUsage {
 interface WsServerMessage {
   type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request'
   content: string
+  reasoning?: string
   done?: boolean
   session_id?: string
   usage?: WsUsage
@@ -168,6 +171,7 @@ class HexClawWS {
       type: 'message',
       content,
       session_id: sessionId,
+      user_id: DESKTOP_USER_ID,
       provider,
       model,
       role,

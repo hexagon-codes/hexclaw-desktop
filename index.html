@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>HexClaw</title>
     <style>
-      /* Splash screen — rendered before any JS loads */
+      /* Splash screen — follows system appearance, rendered before JS loads */
       #splash-screen {
         position: fixed;
         inset: 0;
@@ -15,72 +15,50 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        background: #161722;
+        background: #f5f5f7;
         font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display',
           'Helvetica Neue', 'PingFang SC', sans-serif;
         -webkit-font-smoothing: antialiased;
-        transition: opacity 0.45s cubic-bezier(0.4, 0, 0.2, 1);
+        transition: opacity 0.5s cubic-bezier(0.2, 0, 0, 1);
         user-select: none;
         -webkit-user-select: none;
       }
-      #splash-screen.fade-out {
-        opacity: 0;
-        pointer-events: none;
-      }
+      #splash-screen.fade-out { opacity: 0; pointer-events: none; }
 
       .splash-logo {
-        width: 88px;
-        height: 88px;
-        border-radius: 22px;
+        width: 96px;
+        height: 96px;
+        border-radius: 24px;
         overflow: hidden;
-        box-shadow:
-          0 12px 40px rgba(74, 144, 217, 0.3),
-          0 0 0 1px rgba(255, 255, 255, 0.06);
-        animation: splash-breathe 2.4s ease-in-out infinite;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
       }
-      .splash-logo img {
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-      }
-      @keyframes splash-breathe {
-        0%, 100% { transform: scale(1); box-shadow: 0 12px 40px rgba(74,144,217,0.3), 0 0 0 1px rgba(255,255,255,0.06); }
-        50% { transform: scale(1.03); box-shadow: 0 16px 48px rgba(74,144,217,0.38), 0 0 0 1px rgba(255,255,255,0.08); }
-      }
+      .splash-logo img { width: 100%; height: 100%; object-fit: cover; }
 
       .splash-title {
-        margin-top: 20px;
-        font-size: 18px;
-        font-weight: 700;
-        color: #f0f0f3;
-        letter-spacing: -0.02em;
+        margin-top: 16px;
+        font-size: 17px;
+        font-weight: 600;
+        color: rgba(0, 0, 0, 0.85);
+        letter-spacing: -0.01em;
       }
 
-      .splash-subtitle {
-        margin-top: 6px;
-        font-size: 12px;
-        color: #5c5c6b;
-        letter-spacing: 0.02em;
+      .splash-spinner {
+        margin-top: 32px;
+        width: 20px;
+        height: 20px;
+        border: 2px solid rgba(0, 0, 0, 0.08);
+        border-top-color: rgba(0, 0, 0, 0.4);
+        border-radius: 50%;
+        animation: splash-spin 0.8s linear infinite;
       }
+      @keyframes splash-spin { to { transform: rotate(360deg); } }
 
-      .splash-bar-track {
-        margin-top: 28px;
-        width: 160px;
-        height: 3px;
-        border-radius: 2px;
-        background: rgba(255, 255, 255, 0.06);
-        overflow: hidden;
-      }
-      .splash-bar-fill {
-        width: 40%;
-        height: 100%;
-        border-radius: 2px;
-        background: linear-gradient(90deg, #4a90d9, #5a9ee5);
-        animation: splash-slide 1.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
-      }
-      @keyframes splash-slide {
-        0%   { transform: translateX(-100%); }
-        100% { transform: translateX(400%); }
+      /* Dark mode — match app dark theme */
+      @media (prefers-color-scheme: dark) {
+        #splash-screen { background: #161722; }
+        .splash-logo { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3), 0 0 0 0.5px rgba(255, 255, 255, 0.06); }
+        .splash-title { color: rgba(255, 255, 255, 0.85); }
+        .splash-spinner { border-color: rgba(255, 255, 255, 0.08); border-top-color: rgba(255, 255, 255, 0.4); }
       }
     </style>
   </head>
@@ -91,10 +69,7 @@
         <img src="/logo.png" alt="HexClaw" />
       </div>
       <div class="splash-title">HexClaw</div>
-      <div class="splash-subtitle">正在启动...</div>
-      <div class="splash-bar-track">
-        <div class="splash-bar-fill"></div>
-      </div>
+      <div class="splash-spinner"></div>
     </div>
 
     <div id="app"></div>

@@ -66,10 +66,22 @@ export function useVoice() {
   const transcript = ref('')
   const error = ref<string | null>(null)
 
-  const isSupported = computed(
-    () => typeof window !== 'undefined'
-      && ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window),
-  )
+  // Tauri 的 WKWebView 有 webkitSpeechRecognition 构造函数但实际不可用，
+  // 需要尝试实例化来检测真实可用性
+  const isSupported = computed(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      const Ctor =
+        (window as unknown as Record<string, unknown>).SpeechRecognition as typeof SpeechRecognition | undefined
+        ?? (window as unknown as Record<string, unknown>).webkitSpeechRecognition as typeof SpeechRecognition | undefined
+      if (!Ctor) return false
+      // 检查是否在 Tauri 环境（WKWebView 不支持实际语音识别）
+      if ((globalThis as unknown as Record<string, unknown>).isTauri) return false
+      return true
+    } catch {
+      return false
+    }
+  })
 
   let recognition: SpeechRecognition | null = null
   let audioElement: HTMLAudioElement | null = null

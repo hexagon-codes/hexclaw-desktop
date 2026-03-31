@@ -542,6 +542,7 @@ export const useSettingsStore = defineStore('settings', () => {
         }
 
         logger.debug('转换后的 providers', providers)
+        runtimeProviders.value = cloneProviders(providers)
         config.value!.llm.providers = providers
         config.value!.llm.routing = {
           enabled: backendConfig.routing.enabled,

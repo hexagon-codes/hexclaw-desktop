@@ -337,7 +337,10 @@ function handleDrop(e: DragEvent) {
 function handleFileSelect(e: Event) {
   if (!ensureKnowledgeEnabled()) return
   const input = e.target as HTMLInputElement
-  if (input.files) processFiles(input.files)
+  if (input.files && input.files.length > 0) {
+    showAddDialog.value = false
+    processFiles(input.files)
+  }
   input.value = ''
 }
 

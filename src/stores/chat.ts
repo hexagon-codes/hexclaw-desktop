@@ -7,7 +7,7 @@
  * - 发送编排 → chatService
  */
 
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { updateMessageFeedback as updateBackendMessageFeedback, type UserFeedback } from '@/api/messages'
@@ -36,6 +36,8 @@ export const useChatStore = defineStore('chat', () => {
   const streaming = ref(false)
   const streamingSessionId = ref<string | null>(null)
   const streamingContent = ref('')
+  const streamingReasoning = ref('')
+  const streamingReasoningStartTime = ref<number>(0)
   const error = ref<ApiError | null>(null)
 
   const chatMode = ref<ChatMode>('chat')
@@ -235,11 +237,18 @@ export const useChatStore = defineStore('chat', () => {
   function finalizeAssistantMessage(params: {
     content: string; sessionId: string; userText: string
     metadata?: Record<string, unknown>; toolCalls?: ChatMessage['tool_calls']; agentName?: string
+    reasoning?: string
   }): ChatMessage {
+    const thinkingDuration = streamingReasoningStartTime.value
+      ? Math.round((Date.now() - streamingReasoningStartTime.value) / 1000)
+      : 0
+    const metadata = { ...params.metadata } as Record<string, unknown>
+    if (thinkingDuration > 0) metadata.thinking_duration = thinkingDuration
     const assistantMsg: ChatMessage = {
-      id: nanoid(), role: 'assistant', content: params.content || '(空回复)',
+      id: nanoid(), role: 'assistant', content: params.content || (params.reasoning ? '' : '(空回复)'),
       timestamp: new Date().toISOString(),
-      metadata: params.metadata, tool_calls: params.toolCalls, agent_name: params.agentName,
+      reasoning: params.reasoning || undefined,
+      metadata, tool_calls: params.toolCalls, agent_name: params.agentName,
     }
     messages.value.push(assistantMsg)
     persistMessage(assistantMsg, params.sessionId)
@@ -251,6 +260,7 @@ export const useChatStore = defineStore('chat', () => {
     extractArtifacts(params.content, assistantMsg.id)
     streaming.value = false
     streamingContent.value = ''
+    streamingReasoning.value = ''; streamingReasoningStartTime.value = 0
     loadSessions()
     return assistantMsg
   }
@@ -260,7 +270,7 @@ export const useChatStore = defineStore('chat', () => {
     const apiErr = fromNativeError(e)
     error.value = apiErr
     if (streaming.value) { stopStreaming() } else {
-      streaming.value = false; streamingSessionId.value = null; streamingContent.value = ''
+      streaming.value = false; streamingSessionId.value = null; streamingContent.value = ''; streamingReasoning.value = ''
       chatSvc.clearWebSocketCallbacks()
     }
     messages.value.push({ id: nanoid(), role: 'assistant', content: apiErr.message || '发送失败，请检查 hexclaw 引擎是否运行', timestamp: new Date().toISOString() })
@@ -304,13 +314,25 @@ export const useChatStore = defineStore('chat', () => {
 
     try {
       await chatSvc.sendViaWebSocket(backendText, sessionId, chatParams.value, agentRole.value, attachments, {
-        onChunk: (content) => {
-          if (streamingSessionId.value === sessionId) streamingContent.value += content
+        onChunk: (content, reasoning) => {
+          if (streamingSessionId.value !== sessionId) return
+          if (content) {
+            // 正式回复开始时，清除之前的 thinking 内容
+            if (streamingReasoning.value && !streamingContent.value) {
+              streamingContent.value = ''
+            }
+            streamingContent.value += content
+          }
+          if (reasoning) {
+            if (!streamingReasoningStartTime.value) streamingReasoningStartTime.value = Date.now()
+            streamingReasoning.value += reasoning
+          }
         },
         onDone: (content, metadata, toolCalls, agentName) => {
           finalizeAssistantMessage({
             content: content || streamingContent.value, sessionId, userText: text,
             metadata, toolCalls, agentName,
+            reasoning: streamingReasoning.value || undefined,
           })
         },
         onError: (err) => handleSendError(err),
@@ -338,7 +360,10 @@ export const useChatStore = defineStore('chat', () => {
 
   function stopStreaming() {
     if (streamingContent.value.trim()) {
-      const partialMsg: ChatMessage = { id: nanoid(), role: 'assistant', content: streamingContent.value, timestamp: new Date().toISOString() }
+      const partialMsg: ChatMessage = {
+        id: nanoid(), role: 'assistant', content: streamingContent.value, timestamp: new Date().toISOString(),
+        reasoning: streamingReasoning.value || undefined,
+      }
       messages.value.push(partialMsg)
       if (currentSessionId.value) persistMessage(partialMsg, currentSessionId.value)
     }
@@ -347,6 +372,7 @@ export const useChatStore = defineStore('chat', () => {
     streaming.value = false
     streamingSessionId.value = null
     streamingContent.value = ''
+    streamingReasoning.value = ''; streamingReasoningStartTime.value = 0
     chatSvc.clearWebSocketCallbacks()
   }
 
@@ -373,10 +399,25 @@ export const useChatStore = defineStore('chat', () => {
 
   const isCurrentStreaming = computed(() => streaming.value && streamingSessionId.value === currentSessionId.value)
   const isCurrentStreamingContent = computed(() => isCurrentStreaming.value ? streamingContent.value : '')
+  const isCurrentStreamingReasoning = computed(() => isCurrentStreaming.value ? streamingReasoning.value : '')
+  const streamingThinkingElapsed = ref(0)
+  let thinkingTimer: ReturnType<typeof setInterval> | null = null
+
+  watch(() => streamingReasoningStartTime.value, (v) => {
+    if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null }
+    if (v) {
+      streamingThinkingElapsed.value = 0
+      thinkingTimer = setInterval(() => {
+        streamingThinkingElapsed.value = Math.round((Date.now() - v) / 1000)
+      }, 1000)
+    } else {
+      streamingThinkingElapsed.value = 0
+    }
+  })
 
   return {
     sessions, currentSessionId, messages, streaming, streamingSessionId, streamingContent,
-    isCurrentStreaming, isCurrentStreamingContent, error,
+    isCurrentStreaming, isCurrentStreamingContent, isCurrentStreamingReasoning, streamingThinkingElapsed, error,
     chatMode, execMode, agentRole, chatParams,
     artifacts, selectedArtifactId, showArtifacts,
     pendingApproval,

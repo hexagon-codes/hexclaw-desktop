@@ -12,8 +12,8 @@ import { dbOutboxInsert, dbOutboxMarkSending, dbOutboxMarkSent, dbOutboxMarkFail
 import { logger } from '@/utils/logger'
 import type { ChatMessage, ChatAttachment } from '@/types'
 
-const WS_FIRST_REPLY_TIMEOUT_MS = 45_000
-const WS_INACTIVITY_TIMEOUT_MS = 90_000
+const WS_FIRST_REPLY_TIMEOUT_MS = 120_000
+const WS_INACTIVITY_TIMEOUT_MS = 120_000
 const BACKEND_REPLY_TIMEOUT_MS = 120_000
 
 export class ChatRequestError extends Error {
@@ -37,7 +37,7 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: 
 // ─── WebSocket 流式发送 ──────────────────────────────
 
 export interface StreamCallbacks {
-  onChunk: (content: string) => void
+  onChunk: (content: string, reasoning?: string) => void
   onDone: (content: string, metadata?: Record<string, unknown>, toolCalls?: ChatMessage['tool_calls'], agentName?: string) => void
   onError: (error: Error) => void
 }
@@ -55,7 +55,7 @@ export function sendViaWebSocket(
 
     let settled = false
     let firstReplyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-      fail(new ChatRequestError('助手长时间未开始回复，已超时并停止等待。', true))
+      fail(new ChatRequestError('助手长时间未开始回复，已超时并停止等待。', false))
     }, WS_FIRST_REPLY_TIMEOUT_MS)
     let inactivityTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -68,7 +68,7 @@ export function sendViaWebSocket(
       if (firstReplyTimer) { clearTimeout(firstReplyTimer); firstReplyTimer = null }
       if (inactivityTimer) clearTimeout(inactivityTimer)
       inactivityTimer = setTimeout(() => {
-        fail(new ChatRequestError('助手回复长时间无新内容，已超时并停止等待。', true))
+        fail(new ChatRequestError('助手回复长时间无新内容，已超时并停止等待。', false))
       }, WS_INACTIVITY_TIMEOUT_MS)
     }
 
@@ -82,7 +82,7 @@ export function sendViaWebSocket(
 
     hexclawWS.onChunk((chunk) => {
       markActivity()
-      callbacks?.onChunk(chunk.content)
+      callbacks?.onChunk(chunk.content, chunk.reasoning)
       if (chunk.done && !settled) {
         settled = true
         clearTimers()

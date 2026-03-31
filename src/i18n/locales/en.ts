@@ -122,6 +122,8 @@ export default {
     noModels: 'No models configured',
     typing: 'Typing...',
     botName: 'HexClaw',
+    thinking: 'Thinking...',
+    thoughtProcess: 'Thought process',
     toolParams: 'Params',
     toolResult: 'Result',
     parsingDoc: 'Parsing document...',

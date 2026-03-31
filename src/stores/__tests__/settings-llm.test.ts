@@ -145,7 +145,7 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     expect(store.availableModels[0]!.providerKey).toBe('testprovider')
   })
 
-  it('聊天运行时只暴露后端已加载的 providers，不把本地未保存草稿带进 availableModels', async () => {
+  it('后端加载后本地已启用的 provider（如 Ollama）也出现在 availableModels', async () => {
     mockPersistedAppConfig = {
       llm: {
         providers: [
@@ -173,9 +173,9 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     await store.loadConfig()
 
     expect(store.config!.llm.providers.some((provider) => provider.name === '智谱')).toBe(true)
-    expect(store.availableModels).toHaveLength(1)
-    expect(store.availableModels[0]!.providerKey).toBe('testprovider')
-    expect(store.availableModels.some((model) => model.providerName === '智谱')).toBe(false)
+    expect(store.availableModels).toHaveLength(2)
+    expect(store.availableModels.some((model) => model.providerKey === 'testprovider')).toBe(true)
+    expect(store.availableModels.some((model) => model.providerName === '智谱')).toBe(true)
   })
 
   it('getLLMConfig 失败时应重试 3 次', async () => {

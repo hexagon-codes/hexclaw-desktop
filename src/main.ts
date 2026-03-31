@@ -40,9 +40,4 @@ document.addEventListener('click', (e) => {
   shellOpen(href).catch(() => window.open(href, '_blank'))
 })
 
-// 移除启动 splash screen
-const splash = document.getElementById('splash-screen')
-if (splash) {
-  splash.classList.add('fade-out')
-  splash.addEventListener('transitionend', () => splash.remove(), { once: true })
-}
+// splash screen 由 AppLayout 在 sidecar 就绪后移除，见 dismissSplash()

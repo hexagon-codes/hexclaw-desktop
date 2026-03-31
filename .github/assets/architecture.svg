@@ -1,0 +1,138 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 440" font-family="system-ui,-apple-system,sans-serif" font-size="13">
+  <defs>
+    <linearGradient id="t1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1E293B"/><stop offset="100%" stop-color="#0F172A"/></linearGradient>
+    <linearGradient id="t2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3B82F6"/><stop offset="100%" stop-color="#2563EB"/></linearGradient>
+    <linearGradient id="t3" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8B5CF6"/><stop offset="100%" stop-color="#7C3AED"/></linearGradient>
+    <linearGradient id="t4" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#F59E0B"/><stop offset="100%" stop-color="#D97706"/></linearGradient>
+    <linearGradient id="t5" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#10B981"/><stop offset="100%" stop-color="#059669"/></linearGradient>
+    <marker id="arr" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#94A3B8"/></marker>
+  </defs>
+  <style>
+    text { fill: white; }
+    .title { font-size: 18px; font-weight: 700; fill: #1E293B; }
+    .sub { font-size: 11px; fill: #64748B; }
+    .label { font-size: 10.5px; fill: #94A3B8; font-weight: 600; }
+    .sm { font-size: 10px; fill: rgba(255,255,255,0.8); }
+  </style>
+
+  <text x="400" y="26" text-anchor="middle" class="title">HexClaw Desktop Architecture</text>
+  <text x="400" y="43" text-anchor="middle" class="sub">Tauri v2 + Vue 3 + Go Sidecar &#183; macOS / Windows / Linux</text>
+
+  <!-- Tauri Shell -->
+  <text x="16" y="66" class="label">Tauri Shell (Rust)</text>
+  <rect x="16" y="72" width="768" height="34" rx="6" fill="url(#t1)"/>
+  <text x="96" y="93" text-anchor="middle" font-size="11">窗口管理</text>
+  <text x="216" y="93" text-anchor="middle" font-size="11">系统托盘</text>
+  <text x="336" y="93" text-anchor="middle" font-size="11">全局快捷键 ⌘⇧H</text>
+  <text x="480" y="93" text-anchor="middle" font-size="11">API 代理 (CORS)</text>
+  <text x="616" y="93" text-anchor="middle" font-size="11">Sidecar 进程管理</text>
+  <text x="736" y="93" text-anchor="middle" font-size="11">自动更新</text>
+
+  <path d="M400 106 L400 118" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Vue 3 Frontend -->
+  <text x="16" y="130" class="label">Vue 3 Frontend (WebView)</text>
+  <rect x="16" y="136" width="768" height="74" rx="6" fill="url(#t2)" opacity="0.9"/>
+  <!-- Page boxes row 1 -->
+  <g transform="translate(28,144)">
+    <rect width="96" height="24" rx="4" fill="rgba(255,255,255,0.18)"/>
+    <text x="48" y="16" text-anchor="middle" font-size="11">概览</text>
+  </g>
+  <g transform="translate(132,144)">
+    <rect width="96" height="24" rx="4" fill="rgba(255,255,255,0.25)"/>
+    <text x="48" y="16" text-anchor="middle" font-size="11" font-weight="600">AI 对话</text>
+  </g>
+  <g transform="translate(236,144)">
+    <rect width="96" height="24" rx="4" fill="rgba(255,255,255,0.18)"/>
+    <text x="48" y="16" text-anchor="middle" font-size="11">Agent</text>
+  </g>
+  <g transform="translate(340,144)">
+    <rect width="96" height="24" rx="4" fill="rgba(255,255,255,0.18)"/>
+    <text x="48" y="16" text-anchor="middle" font-size="11">知识中心</text>
+  </g>
+  <g transform="translate(444,144)">
+    <rect width="96" height="24" rx="4" fill="rgba(255,255,255,0.18)"/>
+    <text x="48" y="16" text-anchor="middle" font-size="11">自动化</text>
+  </g>
+  <g transform="translate(548,144)">
+    <rect width="96" height="24" rx="4" fill="rgba(255,255,255,0.18)"/>
+    <text x="48" y="16" text-anchor="middle" font-size="11">集成</text>
+  </g>
+  <g transform="translate(652,144)">
+    <rect width="120" height="24" rx="4" fill="rgba(255,255,255,0.18)"/>
+    <text x="60" y="16" text-anchor="middle" font-size="11">日志</text>
+  </g>
+  <!-- Infrastructure row -->
+  <text x="100" y="190" text-anchor="middle" class="sm">Pinia Store</text>
+  <text x="250" y="190" text-anchor="middle" class="sm">Vue Router</text>
+  <text x="400" y="190" text-anchor="middle" class="sm">Tauri invoke (IPC)</text>
+  <text x="550" y="190" text-anchor="middle" class="sm">vue-i18n</text>
+  <text x="700" y="190" text-anchor="middle" class="sm">Naive UI + Tailwind</text>
+  <!-- Feature detail -->
+  <text x="100" y="204" text-anchor="middle" class="sm">文档|记忆</text>
+  <text x="250" y="204" text-anchor="middle" class="sm">技能|MCP|IM</text>
+  <text x="400" y="204" text-anchor="middle" class="sm">任务|画布</text>
+  <text x="550" y="204" text-anchor="middle" class="sm">工具审批</text>
+  <text x="700" y="204" text-anchor="middle" class="sm">Ollama 管理</text>
+
+  <path d="M400 210 L400 222" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Tauri Commands -->
+  <text x="16" y="234" class="label">Tauri Commands (Rust &#8594; Go)</text>
+  <rect x="16" y="240" width="768" height="28" rx="6" fill="url(#t3)" opacity="0.8"/>
+  <text x="120" y="258" text-anchor="middle" font-size="10.5">proxy_api_request</text>
+  <text x="280" y="258" text-anchor="middle" font-size="10.5">stream_chat (WebSocket)</text>
+  <text x="440" y="258" text-anchor="middle" font-size="10.5">check_engine_health</text>
+  <text x="600" y="258" text-anchor="middle" font-size="10.5">restart_sidecar</text>
+  <text x="730" y="258" text-anchor="middle" font-size="10.5">get_platform_info</text>
+
+  <path d="M400 268 L400 280" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Transport -->
+  <rect x="16" y="282" width="768" height="22" rx="4" fill="#E2E8F0"/>
+  <text x="400" y="297" text-anchor="middle" fill="#475569" font-size="11" font-weight="600">HTTP / WebSocket &#8596; localhost:16060</text>
+
+  <path d="M400 304 L400 316" stroke="#94A3B8" stroke-width="1.5" marker-end="url(#arr)"/>
+
+  <!-- Go Sidecar -->
+  <text x="16" y="328" class="label">hexclaw serve (Go Sidecar)</text>
+  <rect x="16" y="334" width="768" height="58" rx="6" fill="url(#t5)" opacity="0.9"/>
+  <g transform="translate(28,342)">
+    <rect width="100" height="20" rx="3" fill="rgba(255,255,255,0.18)"/>
+    <text x="50" y="14" text-anchor="middle" font-size="10.5">Agent 引擎</text>
+  </g>
+  <g transform="translate(136,342)">
+    <rect width="100" height="20" rx="3" fill="rgba(255,255,255,0.18)"/>
+    <text x="50" y="14" text-anchor="middle" font-size="10.5">安全网关 6 层</text>
+  </g>
+  <g transform="translate(244,342)">
+    <rect width="84" height="20" rx="3" fill="rgba(255,255,255,0.18)"/>
+    <text x="42" y="14" text-anchor="middle" font-size="10.5">LLM 路由</text>
+  </g>
+  <g transform="translate(336,342)">
+    <rect width="84" height="20" rx="3" fill="rgba(255,255,255,0.18)"/>
+    <text x="42" y="14" text-anchor="middle" font-size="10.5">RAG</text>
+  </g>
+  <g transform="translate(428,342)">
+    <rect width="84" height="20" rx="3" fill="rgba(255,255,255,0.18)"/>
+    <text x="42" y="14" text-anchor="middle" font-size="10.5">MCP</text>
+  </g>
+  <g transform="translate(520,342)">
+    <rect width="84" height="20" rx="3" fill="rgba(255,255,255,0.18)"/>
+    <text x="42" y="14" text-anchor="middle" font-size="10.5">沙箱</text>
+  </g>
+  <g transform="translate(612,342)">
+    <rect width="84" height="20" rx="3" fill="rgba(255,255,255,0.18)"/>
+    <text x="42" y="14" text-anchor="middle" font-size="10.5">Cron</text>
+  </g>
+  <g transform="translate(704,342)">
+    <rect width="68" height="20" rx="3" fill="rgba(255,255,255,0.18)"/>
+    <text x="34" y="14" text-anchor="middle" font-size="10.5">CORS</text>
+  </g>
+  <!-- hexagon bar -->
+  <rect x="28" y="368" width="748" height="18" rx="3" fill="rgba(0,0,0,0.2)"/>
+  <text x="400" y="381" text-anchor="middle" class="sm">Hexagon Framework &#8592; ai-core (LLM/Tool/Memory) &#8592; toolkit (Log/Config/HTTP/Concurrency)</text>
+
+  <!-- Footer -->
+  <text x="400" y="420" text-anchor="middle" class="sub">设计模式与 Docker Desktop 管理 Docker Engine 一致 &#8212; Tauri 壳管理 Go Sidecar 进程</text>
+</svg>

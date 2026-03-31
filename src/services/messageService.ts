@@ -41,12 +41,14 @@ export function normalizeLoadedMessage(row: {
   const metadata = parseMessageMetadata(row.metadata)
   const toolCalls = Array.isArray(metadata?.tool_calls) ? metadata.tool_calls : undefined
   const agentName = typeof metadata?.agent_name === 'string' ? metadata.agent_name : undefined
+  const reasoning = typeof metadata?.reasoning === 'string' ? metadata.reasoning : undefined
 
   return {
     id: row.id,
     role: row.role as 'user' | 'assistant' | 'system',
     content: row.content,
     timestamp: row.timestamp,
+    reasoning,
     metadata,
     tool_calls: toolCalls as ChatMessage['tool_calls'],
     agent_name: agentName,
@@ -57,6 +59,7 @@ export function serializeMessageMetadata(msg: ChatMessage): Record<string, unkno
   const metadata: Record<string, unknown> = { ...(msg.metadata ?? {}) }
   if (msg.tool_calls?.length) metadata.tool_calls = msg.tool_calls
   if (msg.agent_name) metadata.agent_name = msg.agent_name
+  if (msg.reasoning) metadata.reasoning = msg.reasoning
   return Object.keys(metadata).length > 0 ? metadata : undefined
 }
 

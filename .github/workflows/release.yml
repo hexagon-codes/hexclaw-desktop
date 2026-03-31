@@ -101,10 +101,18 @@ jobs:
       - uses: actions/checkout@v4
 
       # --- Go sidecar build ---
+      - name: Resolve hexclaw backend ref
+        id: sidecar_ref
+        run: |
+          REF=$(grep '^HEXCLAW_REF' Makefile | head -1 | sed 's/.*?= *//')
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "Resolved HEXCLAW_REF=${REF}"
+
       - name: Checkout hexclaw backend
         uses: actions/checkout@v4
         with:
           repository: hexagon-codes/hexclaw
+          ref: ${{ steps.sidecar_ref.outputs.ref }}
           path: hexclaw
 
       - name: Setup Go
@@ -127,7 +135,12 @@ jobs:
           GOPRIVATE: github.com/hexagon-codes/*
         run: |
           mkdir -p src-tauri/binaries
-          cd hexclaw && go build -ldflags="-s -w" -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
+          cd hexclaw
+          VERSION="$(git describe --tags --always --dirty 2>/dev/null)"
+          COMMIT="$(git rev-parse --short HEAD)"
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          go build -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
+            -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
 
       # --- Frontend & Tauri build ---
       - uses: pnpm/action-setup@v4

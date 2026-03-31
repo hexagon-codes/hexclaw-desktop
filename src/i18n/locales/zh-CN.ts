@@ -128,6 +128,8 @@ export default {
     noModels: '未配置模型',
     typing: '正在输入...',
     botName: '小蟹',
+    thinking: '正在思考...',
+    thoughtProcess: '思考过程',
     toolParams: '参数',
     toolResult: '结果',
     parsingDoc: '正在解析文档...',

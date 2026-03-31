@@ -44,6 +44,7 @@ const settingsStore = useSettingsStore()
 const toast = useToast()
 
 const messagesEndRef = ref<HTMLDivElement>()
+const thinkingContentRef = ref<HTMLDivElement>()
 const chatInputRef = ref<InstanceType<typeof ChatInput>>()
 const showSessions = ref(true)
 const hoveredMsgId = ref<string | null>(null)
@@ -405,6 +406,18 @@ watch(
   },
 )
 
+watch(
+  () => chatStore.isCurrentStreamingReasoning,
+  () => {
+    nextTick(() => {
+      if (thinkingContentRef.value) {
+        thinkingContentRef.value.scrollTop = thinkingContentRef.value.scrollHeight
+      }
+      scrollToBottom()
+    })
+  },
+)
+
 // 参数变更时同步到 chatStore
 watch([() => chatTemperature.value, () => chatMaxTokens.value], syncChatParams)
 
@@ -622,6 +635,16 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                     :agent-name="msg.agent_name || (msg.metadata?.agent_name as string) || ''"
                     :is-handoff="idx > 0 && chatStore.messages[idx - 1]?.role === 'assistant' && chatStore.messages[idx - 1]?.agent_name !== msg.agent_name"
                   />
+                  <!-- Thinking block for finalized messages -->
+                  <div v-if="msg.reasoning" class="hc-thinking">
+                    <details class="hc-thinking__details">
+                      <summary class="hc-thinking__summary">
+                        <span class="hc-thinking__label">{{ t('chat.thoughtProcess') }}</span>
+                        <span v-if="msg.metadata?.thinking_duration" class="hc-thinking__time">{{ msg.metadata.thinking_duration }}s</span>
+                      </summary>
+                      <div class="hc-thinking__content">{{ msg.reasoning }}</div>
+                    </details>
+                  </div>
                   <div class="hc-msg__bubble-wrap">
                     <div
                       class="hc-msg__bubble hc-msg__bubble--assistant"
@@ -657,8 +680,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                   <div
                     v-if="
                       metadataValue(msg, 'provider') ||
-                      metadataValue(msg, 'model') ||
-                      metadataValue(msg, 'route_source')
+                      metadataValue(msg, 'model')
                     "
                     class="hc-msg__meta"
                   >
@@ -667,9 +689,6 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                     </span>
                     <span v-if="metadataValue(msg, 'model')" class="hc-msg__meta-tag">
                       {{ t('chat.model') }}: {{ metadataValue(msg, 'model') }}
-                    </span>
-                    <span v-if="metadataValue(msg, 'route_source')" class="hc-msg__meta-tag">
-                      {{ t('chat.routeSource') }}: {{ metadataValue(msg, 'route_source') }}
                     </span>
                   </div>
                   <div
@@ -844,7 +863,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                       />
                       <div class="hc-msg__edit-actions">
                         <button class="hc-msg__edit-btn hc-msg__edit-btn--cancel" @click="cancelEdit">{{ t('common.cancel') }}</button>
-                        <button class="hc-msg__edit-btn hc-msg__edit-btn--send" @click="confirmEdit(msg.id)">{{ t('common.send') }}</button>
+                        <button class="hc-msg__edit-btn hc-msg__edit-btn--send" @click="confirmEdit(msg.id)">{{ t('chat.send') }}</button>
                       </div>
                     </div>
                     <!-- Hover actions toolbar -->
@@ -877,12 +896,30 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
               </div>
               <div class="hc-msg__body">
                 <div class="hc-msg__name">{{ t('chat.botName') }}</div>
-                <div class="hc-msg__bubble hc-msg__bubble--assistant">
-                  <MarkdownRenderer
-                    v-if="chatStore.isCurrentStreamingContent"
-                    :content="chatStore.isCurrentStreamingContent"
-                  />
-                  <span v-else class="hc-typing-dots">
+                <!-- Thinking block: open while reasoning, collapse to <details> once reply starts -->
+                <div v-if="chatStore.isCurrentStreamingReasoning && !chatStore.isCurrentStreamingContent" class="hc-thinking">
+                  <div class="hc-thinking__header">
+                    <span class="hc-thinking__spinner" />
+                    <span class="hc-thinking__label">{{ t('chat.thinking') }}</span>
+                    <span v-if="chatStore.streamingThinkingElapsed > 0" class="hc-thinking__time">{{ chatStore.streamingThinkingElapsed }}s</span>
+                  </div>
+                  <div ref="thinkingContentRef" class="hc-thinking__content">{{ chatStore.isCurrentStreamingReasoning }}</div>
+                </div>
+                <div v-else-if="chatStore.isCurrentStreamingReasoning && chatStore.isCurrentStreamingContent" class="hc-thinking">
+                  <details class="hc-thinking__details">
+                    <summary class="hc-thinking__summary">
+                      <span class="hc-thinking__label">{{ t('chat.thoughtProcess') }}</span>
+                      <span v-if="chatStore.streamingThinkingElapsed > 0" class="hc-thinking__time">{{ chatStore.streamingThinkingElapsed }}s</span>
+                    </summary>
+                    <div class="hc-thinking__content">{{ chatStore.isCurrentStreamingReasoning }}</div>
+                  </details>
+                </div>
+                <!-- Main reply content -->
+                <div v-if="chatStore.isCurrentStreamingContent" class="hc-msg__bubble hc-msg__bubble--assistant">
+                  <MarkdownRenderer :content="chatStore.isCurrentStreamingContent" />
+                </div>
+                <div v-else-if="!chatStore.isCurrentStreamingReasoning" class="hc-msg__bubble hc-msg__bubble--assistant">
+                  <span class="hc-typing-dots">
                     <span class="hc-typing-dots__dot" />
                     <span class="hc-typing-dots__dot" />
                     <span class="hc-typing-dots__dot" />
@@ -1368,10 +1405,10 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 }
 
 .hc-msg__edit-btn {
-  padding: 7px 20px;
-  border-radius: 10px;
+  padding: 5px 14px;
+  border-radius: 8px;
   border: none;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
@@ -2523,5 +2560,94 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   padding: 4px 8px;
   border-radius: var(--hc-radius-sm, 6px);
   background: rgba(255, 255, 255, 0.15);
+}
+
+/* ── Thinking / Reasoning block ──────────────────── */
+.hc-thinking {
+  margin-bottom: 8px;
+  max-width: 100%;
+}
+
+/* --- Thinking / Reasoning (Apple HIG aligned) --- */
+
+.hc-thinking { margin-bottom: 6px; }
+
+/* Collapsible details (used when reply started or finalized) */
+.hc-thinking__details {
+  border-radius: 0;
+  background: transparent;
+  border: none;
+}
+
+.hc-thinking__summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hc-text-secondary);
+  user-select: none;
+  list-style: none;
+}
+
+.hc-thinking__summary::-webkit-details-marker { display: none; }
+
+.hc-thinking__summary::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+  opacity: 0.4;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  transition: transform 0.2s ease;
+}
+
+.hc-thinking__details[open] .hc-thinking__summary::after {
+  transform: rotate(180deg);
+}
+
+/* Streaming header (visible during active thinking) */
+.hc-thinking__header {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hc-text-secondary);
+}
+
+.hc-thinking__label { flex-shrink: 0; }
+
+.hc-thinking__time {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--hc-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-thinking__spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--hc-border);
+  border-top-color: var(--hc-accent);
+  border-radius: 50%;
+  animation: hc-spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+.hc-thinking__content {
+  padding: 6px 0 4px;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--hc-text-secondary);
+  max-height: 40vh;
+  overflow-y: auto;
+  -webkit-font-smoothing: antialiased;
 }
 </style>

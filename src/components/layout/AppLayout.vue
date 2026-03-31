@@ -18,22 +18,34 @@ async function syncIMInstancesWhenReady() {
   }
 }
 
+function dismissSplash() {
+  const splash = document.getElementById('splash-screen')
+  if (splash) {
+    splash.classList.add('fade-out')
+    splash.addEventListener('transitionend', () => splash.remove(), { once: true })
+  }
+}
+
 onMounted(() => {
   appStore.startHealthCheck()
+  // 如果 sidecar 30 秒内未就绪，也移除 splash 避免永远卡住
+  const splashTimeout = setTimeout(dismissSplash, 30000)
+  watch(
+    () => appStore.sidecarReady,
+    (ready, wasReady) => {
+      if (ready && !wasReady) {
+        clearTimeout(splashTimeout)
+        dismissSplash()
+        void syncIMInstancesWhenReady()
+      }
+    },
+    { immediate: true },
+  )
 })
 
 onUnmounted(() => {
   appStore.stopHealthCheck()
 })
-
-watch(
-  () => appStore.sidecarReady,
-  (ready, wasReady) => {
-    if (ready && !wasReady) {
-      void syncIMInstancesWhenReady()
-    }
-  },
-)
 </script>
 
 <template>
