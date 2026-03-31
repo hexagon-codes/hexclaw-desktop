@@ -19,7 +19,6 @@ import {
   Zap,
   RotateCcw,
   Save,
-  Activity,
 } from 'lucide-vue-next'
 import { NTag, NSpace } from 'naive-ui'
 import { useSettingsStore } from '@/stores/settings'
