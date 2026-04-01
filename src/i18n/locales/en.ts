@@ -124,6 +124,8 @@ export default {
     botName: 'HexClaw',
     thinking: 'Thinking...',
     thoughtProcess: 'Thought process',
+    thinkingOn: 'Deep thinking enabled (model reasons before answering, slower)',
+    thinkingOff: 'Deep thinking disabled (direct answers, faster)',
     toolParams: 'Params',
     toolResult: 'Result',
     parsingDoc: 'Parsing document...',

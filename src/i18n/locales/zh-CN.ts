@@ -130,6 +130,8 @@ export default {
     botName: '小蟹',
     thinking: '正在思考...',
     thoughtProcess: '思考过程',
+    thinkingOn: '深度思考已开启（模型会先推理再回答，较慢）',
+    thinkingOff: '深度思考已关闭（直接回答，更快）',
     toolParams: '参数',
     toolResult: '结果',
     parsingDoc: '正在解析文档...',

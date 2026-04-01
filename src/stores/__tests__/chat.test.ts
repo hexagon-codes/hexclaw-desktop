@@ -279,6 +279,7 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
+      undefined,
     )
   })
 
@@ -306,6 +307,7 @@ describe('useChatStore', () => {
       'coder',
       undefined,
       expect.any(Object),
+      undefined,
     )
   })
 
@@ -411,6 +413,58 @@ describe('useChatStore', () => {
     expect(store.messages[store.messages.length - 1]?.content).toContain('超时')
 
     vi.useRealTimers()
+  })
+
+  it('sends thinking metadata when thinkingEnabled is on', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
+    sendViaWebSocket.mockImplementation(
+      (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: { onDone: (c: string) => void }) => {
+        callbacks?.onDone('已完成')
+        return Promise.resolve()
+      },
+    )
+
+    const store = useChatStore()
+    store.currentSessionId = 's1'
+    store.thinkingEnabled = true
+
+    await store.sendMessage('think hard')
+
+    expect(sendViaWebSocket).toHaveBeenCalledWith(
+      'think hard',
+      's1',
+      expect.any(Object),
+      '',
+      undefined,
+      expect.any(Object),
+      { thinking: 'on' },
+    )
+  })
+
+  it('sends undefined metadata when thinkingEnabled is off (default)', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
+    sendViaWebSocket.mockImplementation(
+      (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: { onDone: (c: string) => void }) => {
+        callbacks?.onDone('已完成')
+        return Promise.resolve()
+      },
+    )
+
+    const store = useChatStore()
+    store.currentSessionId = 's1'
+    expect(store.thinkingEnabled).toBe(false) // default
+
+    await store.sendMessage('quick reply')
+
+    expect(sendViaWebSocket).toHaveBeenCalledWith(
+      'quick reply',
+      's1',
+      expect.any(Object),
+      '',
+      undefined,
+      expect.any(Object),
+      undefined,
+    )
   })
 
   it('sends explicit provider and model to backend fallback requests', async () => {

@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowUp, Square, Paperclip, Mic } from 'lucide-vue-next'
+import { ArrowUp, Square, Paperclip, Mic, Brain } from 'lucide-vue-next'
 import MentionPopup from './MentionPopup.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import { useVoice } from '@/composables/useVoice'
+import { useChatStore } from '@/stores/chat'
 import type { Skill } from '@/types'
 
 const { t } = useI18n()
+const chatStore = useChatStore()
 const { isListening, transcript, isSupported: voiceSupported, toggleListening } = useVoice()
 
 // 语音识别结果 -> 输入框
@@ -238,6 +240,14 @@ defineExpose({ focus, setInput, triggerFileUpload })
           >
             <Mic :size="18" />
           </button>
+          <button
+            class="hc-composer__tool"
+            :class="{ 'hc-composer__tool--thinking': chatStore.thinkingEnabled }"
+            :title="chatStore.thinkingEnabled ? t('chat.thinkingOn') : t('chat.thinkingOff')"
+            @click="chatStore.thinkingEnabled = !chatStore.thinkingEnabled"
+          >
+            <Brain :size="18" />
+          </button>
           <slot name="tools" />
         </div>
         <div class="hc-composer__actions">
@@ -421,6 +431,12 @@ defineExpose({ focus, setInput, triggerFileUpload })
 .hc-composer__tool:hover {
   color: var(--hc-text-primary, #1D1D1F);
   background: rgba(0, 0, 0, 0.05);
+}
+
+/* Thinking 开启 — 紫色高亮 */
+.hc-composer__tool--thinking {
+  color: #AF52DE;
+  background: rgba(175, 82, 222, 0.1);
 }
 
 /* 语音录音中 — 红色脉动 */

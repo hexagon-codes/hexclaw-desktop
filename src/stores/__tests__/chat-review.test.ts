@@ -55,6 +55,7 @@ vi.mock('@/api/websocket', () => ({
     onError: vi.fn(),
     onApprovalRequest: vi.fn().mockReturnValue(() => {}),
     sendRaw: vi.fn(),
+    triggerError: vi.fn(),
     sendApprovalResponse: vi.fn(),
     sendMessage: vi.fn().mockImplementation(() => {
       // Simulate: both chunk(done=true) AND reply fire

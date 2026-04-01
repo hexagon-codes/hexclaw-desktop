@@ -15,7 +15,7 @@ export default defineConfigWithVueTs(
     files: ['**/*.{vue,ts,mts,tsx}'],
   },
 
-  globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**', 'src-tauri/**', '**/*.png', '**/*.ico', '**/*.icns', '**/*.svg', 'src/assets/**']),
+  globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**', 'src-tauri/**', 'tests/e2e/**', '**/*.png', '**/*.ico', '**/*.icns', '**/*.svg', 'src/assets/**']),
 
   ...pluginVue.configs['flat/essential'],
   vueTsConfigs.recommended,

@@ -82,7 +82,27 @@ describe('chatService', () => {
       onDone: vi.fn(),
       onError: vi.fn(),
     })
-    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'glm-5', 'coder', undefined, undefined, 0.5, 1024)
+    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'glm-5', 'coder', undefined, undefined, 0.5, 1024, undefined)
+  })
+
+  it('passes metadata through to WebSocket sendMessage', async () => {
+    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => { cb({ content: 'done', type: 'reply' }); return () => {} })
+    await sendViaWebSocket('hi', 's1', { model: 'qwen3:8b' }, '', undefined, {
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    }, { thinking: 'on' })
+    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'qwen3:8b', undefined, undefined, undefined, undefined, undefined, { thinking: 'on' })
+  })
+
+  it('omits metadata when undefined', async () => {
+    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => { cb({ content: 'done', type: 'reply' }); return () => {} })
+    await sendViaWebSocket('hi', 's1', { model: 'glm-5' }, '', undefined, {
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    })
+    expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'glm-5', undefined, undefined, undefined, undefined, undefined, undefined)
   })
 
   // ─── ChatRequestError ───

@@ -49,6 +49,7 @@ export const useChatStore = defineStore('chat', () => {
   const showArtifacts = ref(false)
 
   const chatParams = ref<{ provider?: string; model?: string; temperature?: number; maxTokens?: number }>({})
+  const thinkingEnabled = ref(false)
 
   // ─── 工具审批状态 ──────────────────────────────────
   const pendingApproval = ref<ToolApprovalRequest | null>(null)
@@ -313,6 +314,8 @@ export const useChatStore = defineStore('chat', () => {
     }
 
     try {
+      const wsMeta: Record<string, string> = {}
+      if (thinkingEnabled.value) wsMeta.thinking = 'on'
       await chatSvc.sendViaWebSocket(backendText, sessionId, chatParams.value, agentRole.value, attachments, {
         onChunk: (content, reasoning) => {
           if (streamingSessionId.value !== sessionId) return
@@ -336,7 +339,7 @@ export const useChatStore = defineStore('chat', () => {
           })
         },
         onError: (err) => handleSendError(err),
-      })
+      }, Object.keys(wsMeta).length > 0 ? wsMeta : undefined)
       chatSvc.outboxMarkSent(userMsg.id).catch(() => {})
       return messages.value[messages.value.length - 1] ?? null
     } catch (wsError) {
@@ -373,6 +376,8 @@ export const useChatStore = defineStore('chat', () => {
     streamingSessionId.value = null
     streamingContent.value = ''
     streamingReasoning.value = ''; streamingReasoningStartTime.value = 0
+    // 先触发 error 回调来 settle 悬挂的 sendViaWebSocket promise，再清除回调
+    hexclawWS.triggerError('用户取消')
     chatSvc.clearWebSocketCallbacks()
   }
 
@@ -418,7 +423,7 @@ export const useChatStore = defineStore('chat', () => {
   return {
     sessions, currentSessionId, messages, streaming, streamingSessionId, streamingContent,
     isCurrentStreaming, isCurrentStreamingContent, isCurrentStreamingReasoning, streamingThinkingElapsed, error,
-    chatMode, execMode, agentRole, chatParams,
+    chatMode, execMode, agentRole, chatParams, thinkingEnabled,
     artifacts, selectedArtifactId, showArtifacts,
     pendingApproval,
     loadSessions, selectSession, newSession, ensureSession,

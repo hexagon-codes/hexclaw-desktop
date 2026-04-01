@@ -26,6 +26,12 @@ Casks/
 
 # Test
 coverage/
+tests/e2e/screenshots/
+test-results/
+playwright-report/
+
+# Playwright MCP
+.playwright-mcp/
 
 # Cache
 .eslintcache

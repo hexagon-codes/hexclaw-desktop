@@ -25,6 +25,7 @@ vi.mock('@/api/websocket', () => {
       isConnected: vi.fn().mockReturnValue(true),
       sendMessage: vi.fn(),
       sendRaw: vi.fn(),
+      triggerError: vi.fn(),
       onChunk: vi.fn((cb: any) => {
         callbacks.chunk.push(cb)
         return () => { callbacks.chunk = callbacks.chunk.filter(c => c !== cb) }

@@ -33,8 +33,15 @@ function formatTime(ts: string): string {
       {{ entry.level }}
     </span>
     <span class="hc-log-entry__source">{{ entry.source }}</span>
-    <span class="hc-log-entry__msg">{{ entry.message }}</span>
-    <span v-if="entry.trace_id" class="hc-log-entry__trace">{{ entry.trace_id.slice(0, 8) }}</span>
+    <span class="hc-log-entry__msg">
+      {{ entry.message }}
+      <span v-if="entry.fields && Object.keys(entry.fields).length > 0" class="hc-log-entry__fields">
+        <span v-for="(val, key) in entry.fields" :key="key" class="hc-log-entry__field">
+          {{ key }}={{ typeof val === 'object' ? JSON.stringify(val) : val }}
+        </span>
+      </span>
+    </span>
+    <span v-if="entry.trace_id" class="hc-log-entry__trace" :title="entry.trace_id">{{ entry.trace_id.slice(0, 8) }}</span>
   </div>
 </template>
 
@@ -91,11 +98,29 @@ function formatTime(ts: string): string {
   word-break: break-all;
 }
 
+.hc-log-entry__fields {
+  color: var(--hc-text-secondary);
+  font-size: 11px;
+}
+
+.hc-log-entry__field {
+  margin-left: 6px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--hc-bg-active, rgba(0, 0, 0, 0.04));
+}
+
 .hc-log-entry__trace {
   font-size: 10px;
   font-variant-numeric: tabular-nums;
-  color: var(--hc-text-muted);
+  color: var(--hc-accent);
   flex-shrink: 0;
   padding-top: 2px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.hc-log-entry__trace:hover {
+  opacity: 1;
 }
 </style>

@@ -348,6 +348,13 @@ describe('SettingsView — E2E 关键路径', () => {
       if (!store.loading && store.config) break
     }
 
+    // 确保 config 已加载后再 addProvider
+    for (let i = 0; i < 20; i++) {
+      await flushPromises()
+      if (store.config) break
+    }
+    expect(store.config).not.toBeNull()
+
     const added = store.addProvider({
       name: '智谱',
       type: 'custom',
@@ -356,8 +363,9 @@ describe('SettingsView — E2E 关键路径', () => {
       baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
       models: [{ id: 'glm-5', name: 'glm-5', capabilities: ['text'] }],
     })
+    expect(added).not.toBeNull()
     // Extra flush cycles for CI — store reactivity + DOM update can lag
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       await flushPromises()
       await wrapper.vm.$nextTick()
     }

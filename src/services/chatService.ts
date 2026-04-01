@@ -49,6 +49,7 @@ export function sendViaWebSocket(
   agentRole: string,
   attachments?: ChatAttachment[],
   callbacks?: StreamCallbacks,
+  metadata?: Record<string, string>,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     hexclawWS.clearCallbacks()
@@ -111,11 +112,19 @@ export function sendViaWebSocket(
     })
 
     hexclawWS.onError((errMsg: string) => {
+      // 用户主动取消不是错误，直接 resolve 避免 fallback 和错误提示
+      if (errMsg === '用户取消') {
+        if (settled) return
+        settled = true
+        clearTimers()
+        resolve()
+        return
+      }
       fail(new ChatRequestError(errMsg || 'WebSocket 请求失败', true))
     })
 
     const wsAttachments = attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data }))
-    hexclawWS.sendMessage(text, sessionId, chatParams.model, agentRole || undefined, wsAttachments, chatParams.provider, chatParams.temperature, chatParams.maxTokens)
+    hexclawWS.sendMessage(text, sessionId, chatParams.model, agentRole || undefined, wsAttachments, chatParams.provider, chatParams.temperature, chatParams.maxTokens, metadata)
   })
 }
 

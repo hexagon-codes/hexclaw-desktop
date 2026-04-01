@@ -907,6 +907,7 @@ describe('Chain 6: Model Selection & Parameters', () => {
       '',
       undefined,
       expect.any(Object),
+      undefined,
     )
   })
 

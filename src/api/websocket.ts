@@ -26,6 +26,7 @@ interface WsMessage {
   attachments?: WsAttachment[]
   temperature?: number
   max_tokens?: number
+  metadata?: Record<string, string>
 }
 
 interface WsUsage {
@@ -161,6 +162,7 @@ class HexClawWS {
     provider?: string,
     temperature?: number,
     maxTokens?: number,
+    metadata?: Record<string, string>,
   ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.errorCallbacks.forEach((cb) => cb('WebSocket is not connected'))
@@ -184,6 +186,9 @@ class HexClawWS {
     }
     if (maxTokens !== undefined) {
       msg.max_tokens = maxTokens
+    }
+    if (metadata && Object.keys(metadata).length > 0) {
+      msg.metadata = metadata
     }
 
     this.ws.send(JSON.stringify(msg))
@@ -224,6 +229,11 @@ class HexClawWS {
   sendRaw(data: Record<string, unknown>): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return
     this.ws.send(JSON.stringify(data))
+  }
+
+  /** Trigger error callbacks to settle pending promises (e.g., on user cancel) */
+  triggerError(msg: string): void {
+    this.errorCallbacks.forEach((cb) => cb(msg))
   }
 
   /** Remove all registered callbacks (useful for re-registering) */

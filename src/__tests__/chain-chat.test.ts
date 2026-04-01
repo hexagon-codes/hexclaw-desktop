@@ -113,6 +113,7 @@ vi.mock('@/api/websocket', () => ({
     onApprovalRequest: vi.fn(() => () => {}),
     sendApprovalResponse: vi.fn(),
     sendRaw: vi.fn(),
+    triggerError: vi.fn(),
     disconnect: vi.fn(),
   },
 }))
