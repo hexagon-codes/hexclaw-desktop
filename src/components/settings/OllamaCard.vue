@@ -12,7 +12,7 @@ import {
   Download,
   ExternalLink,
 } from 'lucide-vue-next'
-import { getOllamaStatus, type OllamaStatus } from '@/api/ollama'
+import { getOllamaStatus, pullOllamaModel, type OllamaStatus } from '@/api/ollama'
 
 const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download'
 const POLL_INTERVAL = 3000
@@ -121,6 +121,45 @@ function clearPollTimer() {
 function formatSize(bytes: number): string {
   if (bytes < 1e9) return `${(bytes / 1e6).toFixed(0)} MB`
   return `${(bytes / 1e9).toFixed(1)} GB`
+}
+
+// ─── 模型下载 ───────────────────────────────
+const pullModelName = ref('')
+const pulling = ref(false)
+const pullStatus = ref('')
+const pullProgress = ref(0) // 0-100
+const pullError = ref('')
+
+async function startPull() {
+  const model = pullModelName.value.trim()
+  if (!model || pulling.value) return
+  pulling.value = true
+  pullStatus.value = '正在连接...'
+  pullProgress.value = 0
+  pullError.value = ''
+  try {
+    await pullOllamaModel(model, (p) => {
+      pullStatus.value = p.status || ''
+      if (p.total && p.total > 0 && p.completed !== undefined) {
+        pullProgress.value = Math.round((p.completed / p.total) * 100)
+      }
+      if (p.status === 'success') {
+        pullProgress.value = 100
+      }
+      if (p.error) {
+        pullError.value = p.error
+      }
+    })
+    if (!pullError.value) {
+      pullStatus.value = '下载完成'
+      pullModelName.value = ''
+      detect() // 刷新模型列表
+    }
+  } catch (e) {
+    pullError.value = e instanceof Error ? e.message : '下载失败'
+  } finally {
+    pulling.value = false
+  }
 }
 
 onMounted(() => detect())
@@ -261,14 +300,39 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             </span>
           </div>
         </div>
-        <p v-else class="ollama-card__hint">
-          {{
-            t(
-              'settings.ollama.noModels',
-              '暂无已下载模型。运行 `ollama pull qwen2.5` 获取模型。',
-            )
-          }}
-        </p>
+        <p v-else class="ollama-card__hint">暂无已下载模型，在下方输入模型名下载。</p>
+
+        <!-- 下载新模型 -->
+        <div class="ollama-card__pull">
+          <div class="ollama-card__pull-input">
+            <input
+              v-model="pullModelName"
+              type="text"
+              class="ollama-card__pull-field"
+              placeholder="输入模型名，如 llama3.1、qwen3:14b"
+              :disabled="pulling"
+              @keydown.enter="startPull"
+            />
+            <button
+              class="ollama-card__action-btn ollama-card__action-btn--primary"
+              :disabled="!pullModelName.trim() || pulling"
+              @click="startPull"
+            >
+              <Loader2 v-if="pulling" :size="13" class="ollama-card__spin" />
+              <Download v-else :size="13" />
+              {{ pulling ? '下载中' : '下载模型' }}
+            </button>
+          </div>
+          <div v-if="pulling || pullStatus === '下载完成'" class="ollama-card__pull-progress">
+            <div class="ollama-card__pull-bar-bg">
+              <div class="ollama-card__pull-bar" :style="{ width: pullProgress + '%' }" />
+            </div>
+            <span class="ollama-card__pull-status">
+              {{ pullStatus }} {{ pullProgress > 0 && pullProgress < 100 ? `${pullProgress}%` : '' }}
+            </span>
+          </div>
+          <p v-if="pullError" class="ollama-card__error-msg">{{ pullError }}</p>
+        </div>
       </div>
 
       <!-- Error -->
@@ -617,6 +681,66 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
 .ollama-card__model-meta {
   color: var(--hc-text-muted);
   font-size: 11px;
+}
+
+/* ─── Pull Model ───────────────────────────────────── */
+.ollama-card__pull {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--hc-border-subtle);
+}
+
+.ollama-card__pull-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.ollama-card__pull-field {
+  flex: 1;
+  padding: 6px 10px;
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-sm);
+  font-size: 12px;
+  font-family: 'SF Mono', ui-monospace, monospace;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.ollama-card__pull-field:focus {
+  border-color: var(--hc-accent);
+}
+
+.ollama-card__pull-field::placeholder {
+  color: var(--hc-text-muted);
+  font-family: -apple-system, system-ui, sans-serif;
+}
+
+.ollama-card__pull-progress {
+  margin-top: 8px;
+}
+
+.ollama-card__pull-bar-bg {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--hc-bg-hover);
+  overflow: hidden;
+}
+
+.ollama-card__pull-bar {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--hc-accent);
+  transition: width 0.3s ease;
+}
+
+.ollama-card__pull-status {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--hc-text-muted);
 }
 
 /* ─── Footer ────────────────────────────────────────── */
