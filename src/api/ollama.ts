@@ -17,12 +17,47 @@ export interface OllamaStatus {
   model_count: number
 }
 
+export interface OllamaRunningModel {
+  name: string
+  size: number
+  size_vram: number
+  expires_at: string
+  parameter_size?: string
+  quantization_level?: string
+  context_length: number
+}
+
 export async function getOllamaStatus(): Promise<OllamaStatus> {
   const resp = await fetch(`${env.apiBase}/api/v1/ollama/status`, {
     signal: AbortSignal.timeout(5000),
   })
   if (!resp.ok) throw new Error(`Ollama status: ${resp.status}`)
   return resp.json()
+}
+
+export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
+  const resp = await fetch(`${env.apiBase}/api/v1/ollama/running`, {
+    signal: AbortSignal.timeout(5000),
+  })
+  if (!resp.ok) throw new Error(`Ollama running: ${resp.status}`)
+  const data = await resp.json()
+  return data.models || []
+}
+
+export async function unloadOllamaModel(model: string): Promise<void> {
+  const resp = await fetch(`${env.apiBase}/api/v1/ollama/unload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }),
+  })
+  if (!resp.ok) throw new Error(`Unload failed: ${resp.status}`)
+}
+
+export async function deleteOllamaModel(name: string): Promise<void> {
+  const resp = await fetch(`${env.apiBase}/api/v1/ollama/models/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
+  if (!resp.ok) throw new Error(`Delete failed: ${resp.status}`)
 }
 
 export interface OllamaPullProgress {

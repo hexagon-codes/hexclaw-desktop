@@ -12,7 +12,11 @@ import {
   Download,
   ExternalLink,
 } from 'lucide-vue-next'
-import { getOllamaStatus, pullOllamaModel, type OllamaStatus } from '@/api/ollama'
+import {
+  getOllamaStatus, pullOllamaModel, getOllamaRunning,
+  unloadOllamaModel, deleteOllamaModel,
+  type OllamaStatus, type OllamaRunningModel,
+} from '@/api/ollama'
 
 const OLLAMA_DOWNLOAD_URL = 'https://ollama.com/download'
 const POLL_INTERVAL = 3000
@@ -66,6 +70,9 @@ async function detect() {
   error.value = ''
   try {
     status.value = await getOllamaStatus()
+    if (status.value?.running) {
+      refreshRunning()
+    }
     // If Ollama is now running, stop polling
     if (status.value?.running && waitingInstall.value) {
       stopPolling()
@@ -116,6 +123,40 @@ function clearPollTimer() {
     clearInterval(pollTimer)
     pollTimer = null
   }
+}
+
+// ─── 运行状态管理 ───────────────────────────
+const runningModels = ref<OllamaRunningModel[]>([])
+const unloadingModel = ref('')
+const deletingModel = ref('')
+
+function isModelRunning(name: string): boolean {
+  return runningModels.value.some(m => m.name === name)
+}
+
+async function refreshRunning() {
+  try {
+    runningModels.value = await getOllamaRunning()
+  } catch { /* ignore */ }
+}
+
+async function handleUnload(name: string) {
+  unloadingModel.value = name
+  try {
+    await unloadOllamaModel(name)
+    await refreshRunning()
+  } catch { /* ignore */ }
+  unloadingModel.value = ''
+}
+
+async function handleDelete(name: string) {
+  if (!confirm(`确定删除模型 ${name}？删除后需要重新下载。`)) return
+  deletingModel.value = name
+  try {
+    await deleteOllamaModel(name)
+    await detect()
+  } catch { /* ignore */ }
+  deletingModel.value = ''
 }
 
 function formatSize(bytes: number): string {
@@ -292,12 +333,34 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             {{ t('settings.ollama.models', '已下载模型') }} ({{ status.model_count }})
           </div>
           <div v-for="m in status.models" :key="m.name" class="ollama-card__model">
-            <span class="ollama-card__model-name">{{ m.name }}</span>
-            <span class="ollama-card__model-meta">
-              {{ formatSize(m.size) }}
-              <template v-if="m.parameter_size"> · {{ m.parameter_size }}</template>
-              <template v-if="m.quantization_level"> · {{ m.quantization_level }}</template>
-            </span>
+            <div class="ollama-card__model-left">
+              <span class="ollama-card__model-name">{{ m.name }}</span>
+              <span v-if="isModelRunning(m.name)" class="ollama-card__model-badge ollama-card__model-badge--running">运行中</span>
+              <span v-else class="ollama-card__model-badge ollama-card__model-badge--idle">未加载</span>
+            </div>
+            <div class="ollama-card__model-right">
+              <span class="ollama-card__model-meta">
+                {{ formatSize(m.size) }}
+                <template v-if="m.parameter_size"> · {{ m.parameter_size }}</template>
+              </span>
+              <button
+                v-if="isModelRunning(m.name)"
+                class="ollama-card__model-btn"
+                :disabled="unloadingModel === m.name"
+                :title="'卸载 ' + m.name"
+                @click="handleUnload(m.name)"
+              >
+                {{ unloadingModel === m.name ? '卸载中...' : '卸载' }}
+              </button>
+              <button
+                class="ollama-card__model-btn ollama-card__model-btn--danger"
+                :disabled="deletingModel === m.name"
+                :title="'删除 ' + m.name"
+                @click="handleDelete(m.name)"
+              >
+                {{ deletingModel === m.name ? '删除中...' : '删除' }}
+              </button>
+            </div>
           </div>
         </div>
         <p v-else class="ollama-card__hint">暂无已下载模型，在下方输入模型名下载。</p>
@@ -663,7 +726,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 5px 0;
+  padding: 6px 0;
   font-size: 12px;
   border-bottom: 1px solid var(--hc-border-subtle);
 }
@@ -672,15 +735,73 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   border-bottom: none;
 }
 
+.ollama-card__model-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ollama-card__model-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
 .ollama-card__model-name {
   font-family: 'SF Mono', ui-monospace, monospace;
   font-weight: 500;
   color: var(--hc-text-primary);
 }
 
+.ollama-card__model-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.ollama-card__model-badge--running {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+}
+
+.ollama-card__model-badge--idle {
+  color: var(--hc-text-muted);
+  background: var(--hc-bg-hover);
+}
+
 .ollama-card__model-meta {
   color: var(--hc-text-muted);
   font-size: 11px;
+}
+
+.ollama-card__model-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-sm);
+  background: transparent;
+  color: var(--hc-text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.ollama-card__model-btn:hover:not(:disabled) {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+
+.ollama-card__model-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.ollama-card__model-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+  color: var(--hc-error);
+  border-color: color-mix(in srgb, var(--hc-error) 30%, var(--hc-border));
 }
 
 /* ─── Pull Model ───────────────────────────────────── */
