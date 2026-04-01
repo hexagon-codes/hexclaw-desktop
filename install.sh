@@ -44,12 +44,12 @@ info "Detected architecture: ${BOLD}${ARCH}${RESET} (${DMG_ARCH})"
 # ─── Fetch latest release tag ────────────────────────
 info "Fetching latest release from GitHub..."
 LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-  | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+  | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '"v[^"]*"' | tr -d '"')
 
 if [[ -z "$LATEST_TAG" ]]; then
   # Fallback: list all releases and pick the first tag
   LATEST_TAG=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases" \
-    | grep '"tag_name"' | head -1 | sed -E 's/.*"tag_name":\s*"([^"]+)".*/\1/')
+    | grep -o '"tag_name": *"[^"]*"' | head -1 | grep -o '"v[^"]*"' | tr -d '"')
 fi
 
 [[ -n "$LATEST_TAG" ]] || fail "Could not determine latest release. Check https://github.com/${REPO}/releases"
