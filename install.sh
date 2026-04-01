@@ -36,7 +36,7 @@ command -v curl >/dev/null || fail "curl is required but not found."
 ARCH="$(uname -m)"
 case "$ARCH" in
   arm64)  DMG_ARCH="aarch64" ;;
-  x86_64) DMG_ARCH="x86_64"  ;;
+  x86_64) DMG_ARCH="x64"     ;;
   *)      fail "Unsupported architecture: $ARCH" ;;
 esac
 info "Detected architecture: ${BOLD}${ARCH}${RESET} (${DMG_ARCH})"
