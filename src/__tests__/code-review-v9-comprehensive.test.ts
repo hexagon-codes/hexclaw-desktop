@@ -22,7 +22,7 @@
  * 13. Additional code quality checks
  */
 import { describe, it, expect } from 'vitest'
-import { readFileSync, existsSync, readdirSync, statSync } from 'fs'
+import { readFileSync, readdirSync } from 'fs'
 import { resolve, join } from 'path'
 
 // ─── Helpers ────────────────────────────────────────────
@@ -341,6 +341,7 @@ describe('Issue #7: API functions exported but never imported in production code
   const productionFiles = collectProductionFiles(SRC)
 
   /** Check if a name is used in any production file other than its definition file */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   function isUsedInProduction(name: string, definedInFile: string): boolean {
     return productionFiles.some(({ file, content }) => {
       if (file === definedInFile) return false
@@ -354,18 +355,8 @@ describe('Issue #7: API functions exported but never imported in production code
   })
 
   it('getSession is exported from chat.ts but not used in production code', () => {
-    const chatFile = resolve(SRC, 'api/chat.ts')
     // getSession is defined in chat.ts. Check if any other production file references it.
     // Note: "getSession" is a common string so we check more carefully
-    const used = productionFiles.some(({ file, content }) => {
-      if (file === chatFile) return false
-      // Must appear as an import or a call, not just a substring
-      return (
-        content.includes('getSession') &&
-        !file.includes('__tests__') &&
-        (content.includes("import") && content.includes('getSession'))
-      )
-    })
     // getSession may be re-exported through index.ts barrel.
     // Check if any non-api file actually imports and calls it.
     const callers = productionFiles.filter(({ file, content }) => {
@@ -384,12 +375,7 @@ describe('Issue #7: API functions exported but never imported in production code
     })
     // deleteMemory is likely used in KnowledgeView or MemoryView
     // This test documents whether it has callers
-    if (callers.length === 0) {
-      // Document: deleteMemory is not called in any production file
-      expect(callers).toHaveLength(0)
-    } else {
-      expect(callers.length).toBeGreaterThan(0)
-    }
+    expect(callers.length).toBeGreaterThanOrEqual(0)
   })
 
   it('getStats is exported from system.ts — verify if used', () => {
@@ -399,11 +385,7 @@ describe('Issue #7: API functions exported but never imported in production code
       return content.includes('getStats(') || content.includes('getStats,')
     })
     // Document whether getStats is actually called
-    if (callers.length === 0) {
-      expect(callers).toHaveLength(0)
-    } else {
-      expect(callers.length).toBeGreaterThan(0)
-    }
+    expect(callers.length).toBeGreaterThanOrEqual(0)
   })
 
   it('getVoiceStatus is exported from voice.ts — verify if used', () => {
@@ -412,11 +394,7 @@ describe('Issue #7: API functions exported but never imported in production code
       if (file === voiceFile || file.includes('api/index.ts')) return false
       return content.includes('getVoiceStatus')
     })
-    if (callers.length === 0) {
-      expect(callers).toHaveLength(0)
-    } else {
-      expect(callers.length).toBeGreaterThan(0)
-    }
+    expect(callers.length).toBeGreaterThanOrEqual(0)
   })
 
   it('speechToText is exported from voice.ts — verify if used', () => {
@@ -425,11 +403,7 @@ describe('Issue #7: API functions exported but never imported in production code
       if (file === voiceFile || file.includes('api/index.ts')) return false
       return content.includes('speechToText')
     })
-    if (callers.length === 0) {
-      expect(callers).toHaveLength(0)
-    } else {
-      expect(callers.length).toBeGreaterThan(0)
-    }
+    expect(callers.length).toBeGreaterThanOrEqual(0)
   })
 })
 

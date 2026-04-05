@@ -560,6 +560,7 @@ describe('2. Settings Store Edge Cases', () => {
     // Should not crash
     await store.syncOllamaModels()
     // No changes expected
+    expect(store.config).toBeDefined()
   })
 
   it('2.10: addProvider when config is null — should return null', async () => {
@@ -598,7 +599,7 @@ describe('3. API Security', () => {
     mockInvoke.mockResolvedValue('{"instances":[]}')
 
     // Import the function that uses proxyApiRequest internally
-    const { getIMInstances } = await import('@/api/im-channels')
+    await import('@/api/im-channels')
     // The getIMInstances function uses Tauri store, not proxyApiRequest directly
     // Let's test the actual path construction patterns
 
@@ -850,13 +851,16 @@ describe('5. IM Channel Edge Cases', () => {
     mockInvoke.mockResolvedValue(JSON.stringify({ message: 'ok' }))
 
     // Empty name after trim
+    let caught: unknown = null
     try {
       await createIMInstance('   ', 'feishu', { app_id: 'test', app_secret: 'test' })
       // If it doesn't throw, the empty name was accepted — this may be a bug
     } catch (e) {
       // If it throws, that's expected behavior for empty names
-      expect(e).toBeDefined()
+      caught = e
     }
+    // Either the call succeeded (no throw) or threw an error for empty names
+    expect(caught === null || caught instanceof Error).toBe(true)
   })
 
   it('5.2: getRequiredFieldLabels for complete config — should return empty array', async () => {
@@ -893,7 +897,7 @@ describe('5. IM Channel Edge Cases', () => {
 
   it('5.5: assertUniqueInstanceName detects duplicate names', async () => {
     // Test the uniqueness check by trying to create two instances with same name
-    const { createIMInstance } = await import('@/api/im-channels')
+    await import('@/api/im-channels')
     const { invoke } = await import('@tauri-apps/api/core')
     const mockInvoke = invoke as ReturnType<typeof vi.fn>
     mockInvoke.mockResolvedValue(JSON.stringify({ message: 'ok' }))
@@ -915,8 +919,8 @@ describe('5. IM Channel Edge Cases', () => {
 describe('6. Knowledge Base Edge Cases', () => {
   it('6.1: normalizeKnowledgeSearchResults with empty array — should return empty', async () => {
     // Test search results normalization with various edge-case payloads
-    const { searchKnowledge } = await import('@/api/knowledge')
-    const { api } = await import('@/api/client')
+    const knowledgeModule = await import('@/api/knowledge')
+    await import('@/api/client')
 
     // Mock the apiPost to return empty results
     const originalFetch = globalThis.fetch
@@ -935,6 +939,7 @@ describe('6. Knowledge Base Edge Cases', () => {
     // We can at least verify the function structure works.
 
     globalThis.fetch = originalFetch
+    expect(typeof knowledgeModule.searchKnowledge).toBe('function')
   })
 
   it('6.2: isKnowledgeUploadEndpointMissing with 404 error — should return true', async () => {

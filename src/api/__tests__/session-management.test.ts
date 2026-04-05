@@ -248,7 +248,6 @@ describe('Session Management', () => {
   // ─── sendChat (compat wrapper) ───────────────────
 
   describe('sendChat', () => {
-    const invoke = vi.hoisted(() => vi.fn())
     // sendChat calls sendChatViaBackend → invoke('backend_chat')
     // Since invoke is mocked at module level, we just verify it doesn't throw
     it('delegates to sendChatViaBackend', async () => {

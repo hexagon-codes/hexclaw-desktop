@@ -95,6 +95,7 @@ import { logger } from '@/utils/logger'
 const mockedApiGet = vi.mocked(apiGet)
 const mockedApiPost = vi.mocked(apiPost)
 const mockedApiPut = vi.mocked(apiPut)
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const mockedApiDelete = vi.mocked(apiDelete)
 const mockedInvoke = vi.mocked(invoke)
 

@@ -519,7 +519,7 @@ describe('ChatView — edge cases', () => {
       mcp: { default_protocol: 'stdio' },
     }
 
-    const wrapper = await mountChatView()
+    await mountChatView()
     await flushPromises()
 
     const chatStore = useChatStore()
@@ -645,17 +645,15 @@ describe('AgentsView — edge cases', () => {
     await wrapper.vm.$nextTick()
     await flushPromises()
 
-    if (vm.registerFormValid) {
+    // Either the form is valid and we can test the duplicate check, or it's invalid
+    const formValid = vm.registerFormValid
+    if (formValid) {
       await vm.handleRegisterAgent()
       await flushPromises()
-
-      // Duplicate check should set error and block API call
-      expect(mockRegisterAgent).not.toHaveBeenCalled()
-      expect(vm.errorMsg).toBeTruthy()
-    } else {
-      // If form is invalid, duplicate check is unreachable (separate bug)
-      expect(vm.registerFormValid).toBe(false)
     }
+    // Duplicate check should set error and block API call, or form is invalid
+    expect(formValid ? !mockRegisterAgent.mock.calls.length : true).toBe(true)
+    expect(formValid ? !!vm.errorMsg : !formValid).toBe(true)
   })
 
   it('deleting default agent shows error and agent is not deleted', async () => {
@@ -762,7 +760,6 @@ describe('KnowledgeView — edge cases', () => {
     const wrapper = await mountKnowledgeView()
     await flushPromises()
 
-    const vm = wrapper.vm as any
     const emptyFile = new File([], 'empty.txt', { type: 'text/plain' })
     expect(emptyFile.size).toBe(0)
 
@@ -879,9 +876,8 @@ describe('SkillsView — edge cases', () => {
     // Since backend returned success=false + source='local-fallback' AND the skill
     // was runtime scope (had enabled=true), the code should roll back the runtime state
     // and show a warning notice
-    if (vm.statusNotice) {
-      expect(vm.statusNotice.tone).toBe('warn')
-    }
+    const notice = vm.statusNotice
+    expect(!notice || notice.tone === 'warn').toBe(true)
   })
 })
 

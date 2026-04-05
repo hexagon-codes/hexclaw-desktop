@@ -80,13 +80,11 @@ describe('dead code detection', () => {
       // IMChannelMeta is defined in types/, re-exported from api/im-channels.ts
       const typesSource = readFile('types/index.ts')
       const metaMatch = typesSource.match(/export interface IMChannelMeta \{[\s\S]*?\}/)
-      if (metaMatch) {
-        expect(metaMatch[0]).not.toContain('qr')
-      } else {
-        // Type may be defined in a sub-file; just ensure no qr references in the API module
-        const source = readFile('api/im-channels.ts')
-        expect(source).not.toMatch(/qr(?:Setup|_setup|Code|_code)/i)
-      }
+      // Whether type is found in types/index.ts or not, verify no qr references
+      const source = readFile('api/im-channels.ts')
+      expect(source).not.toMatch(/qr(?:Setup|_setup|Code|_code)/i)
+      // If the type definition was found, also check it directly
+      expect(!metaMatch || !metaMatch[0].includes('qr')).toBe(true)
     })
 
     it('CHANNEL_TYPES data does not contain qrSetup property', () => {

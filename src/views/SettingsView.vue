@@ -346,6 +346,7 @@ watch(editingProviderId, () => {
 })
 
 const config = computed(() => settingsStore.config)
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const editableProviders = computed(() => config.value?.llm.providers ?? [])
 const defaultModelOptions = computed(() =>
   settingsStore.availableModels.map((m) => ({
@@ -395,10 +396,13 @@ const routingStrategyOptions = computed(() => [
   },
 ])
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const runtimeProviderCount = computed(
   () => Object.keys(runtimeLLMConfig.value?.providers ?? {}).length,
 )
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const runtimeDefaultProvider = computed(() => runtimeLLMConfig.value?.default || '—')
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const runtimeDefaultModel = computed(() => {
   const defaultProvider = runtimeLLMConfig.value?.default
   if (!defaultProvider) return '—'

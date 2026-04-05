@@ -9,16 +9,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // ─── hoisted mock callbacks registry ────────────────────
-const onChunkHandlers: Function[] = []
-const onReplyHandlers: Function[] = []
-const onErrorHandlers: Function[] = []
+const onChunkHandlers: Array<(...args: unknown[]) => void> = []
+const onReplyHandlers: Array<(...args: unknown[]) => void> = []
+const onErrorHandlers: Array<(...args: unknown[]) => void> = []
 
 vi.mock('@/api/websocket', () => ({
   hexclawWS: {
     clearStreamCallbacks: vi.fn(),
-    onChunk: vi.fn((cb: Function) => { onChunkHandlers.push(cb); return () => {} }),
-    onReply: vi.fn((cb: Function) => { onReplyHandlers.push(cb); return () => {} }),
-    onError: vi.fn((cb: Function) => { onErrorHandlers.push(cb); return () => {} }),
+    onChunk: vi.fn((cb: (...args: unknown[]) => void) => { onChunkHandlers.push(cb); return () => {} }),
+    onReply: vi.fn((cb: (...args: unknown[]) => void) => { onReplyHandlers.push(cb); return () => {} }),
+    onError: vi.fn((cb: (...args: unknown[]) => void) => { onErrorHandlers.push(cb); return () => {} }),
     sendMessage: vi.fn(),
     isConnected: vi.fn(() => true),
     connect: vi.fn(),
@@ -162,12 +162,9 @@ describe('sendViaWebSocket — extended', () => {
     onErrorHandlers[0]('connection lost')
 
     await expect(p).rejects.toThrow('connection lost')
-    try {
-      await p
-    } catch (e) {
-      expect(e).toBeInstanceOf(ChatRequestError)
-      expect((e as ChatRequestError).noFallback).toBe(true)
-    }
+    const err = await p.catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(ChatRequestError)
+    expect((err as ChatRequestError).noFallback).toBe(true)
   })
 
   // ─── settled guard ─────────────────────────────────────
@@ -207,7 +204,7 @@ describe('sendViaWebSocket — extended', () => {
     ]
 
     // Settle immediately via onReply
-    ;(hexclawWS.onReply as ReturnType<typeof vi.fn>).mockImplementationOnce((cb: Function) => {
+    ;(hexclawWS.onReply as ReturnType<typeof vi.fn>).mockImplementationOnce((cb: (...args: unknown[]) => void) => {
       onReplyHandlers.push(cb)
       // Trigger reply synchronously after sendMessage runs
       setTimeout(() => cb({ content: 'ok', metadata: {} }), 0)

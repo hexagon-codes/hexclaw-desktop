@@ -347,7 +347,7 @@ describe('Journey 2: Chat message send chain with file attachment', () => {
         _chatParams: unknown,
         _agentRole: string,
         _attachments: unknown,
-        callbacks?: { onChunk: Function; onDone: Function },
+        callbacks?: { onChunk: (...args: unknown[]) => void; onDone: (...args: unknown[]) => void },
       ) => {
         // Simulate streaming chunks
         callbacks?.onChunk('Hello ', undefined)

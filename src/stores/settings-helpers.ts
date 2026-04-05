@@ -2,13 +2,11 @@
  * Settings store 纯函数helpers — 从 settings.ts 拆出以控制文件体积。
  */
 
-import { logger } from '@/utils/logger'
 import { loadSecureValue, removeSecureValue, saveSecureValue } from '@/utils/secure-store'
 import type {
   AppConfig,
   ProviderConfig,
   ModelOption,
-  ModelCapability,
   BackendLLMConfig,
   BackendLLMProvider,
 } from '@/types'

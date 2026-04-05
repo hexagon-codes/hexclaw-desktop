@@ -124,6 +124,7 @@ describe('messageService', () => {
   it('touchSession is a no-op', async () => {
     await touchSession('s1')
     // Should not throw, backend handles timestamps
+    expect(true).toBe(true)
   })
 
   // ─── deleteSession ───
@@ -145,7 +146,7 @@ describe('messageService', () => {
     expect(msgs[0]!.role).toBe('user')
   })
 
-  it('returns empty array when API fails', async () => {
+  it('returns empty array when loadMessages API fails', async () => {
     listSessionMessages.mockRejectedValueOnce(new Error('API error'))
     const msgs = await loadMessages('s1')
     expect(msgs).toEqual([])
@@ -309,6 +310,7 @@ describe('messageService', () => {
   it('saveArtifact is a no-op', async () => {
     await saveArtifact('s1', { id: 'a1', type: 'code', title: 'Snippet', language: 'ts', content: 'test', messageId: 'm1', createdAt: '' })
     // Should not throw
+    expect(true).toBe(true)
   })
 
   // ─── lastSessionId (localStorage) ───

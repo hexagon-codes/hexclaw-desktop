@@ -14,7 +14,6 @@ import {
   deleteMessage as deleteMessageApi,
 } from '@/api/chat'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
-import { logger } from '@/utils/logger'
 import type { ChatMessage, ChatSession, Artifact } from '@/types'
 
 // ─── 消息序列化（保留，供外部 normalize 使用） ───────
@@ -85,6 +84,7 @@ export async function updateSessionTitle(id: string, title: string): Promise<voi
   await updateSessionTitleApi(id, title)
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function touchSession(_id: string): Promise<void> {
   // Not needed — backend updates timestamps automatically
 }
@@ -133,6 +133,7 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
  * persistMessage: 后端在 WebSocket/backend_chat 时自动持久化消息，
  * 前端不再需要显式写入。
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function persistMessage(_msg: ChatMessage, _sessionId: string): Promise<boolean> {
   return true
 }
@@ -146,10 +147,12 @@ export async function removeMessage(id: string): Promise<void> {
 /**
  * Artifacts 在前端从消息内容中实时提取，不再持久化到 SQLite。
  */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function loadArtifacts(_sessionId: string): Promise<Artifact[]> {
   return [] // Re-extracted from messages on load
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function saveArtifact(_sessionId: string, _artifact: Artifact): Promise<void> {
   // No-op: in-memory only
 }

@@ -6,7 +6,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync, statSync } from 'fs'
+import { join } from 'path'
 
 // ─── 统一 Mock ──────────────────────────────────
 
@@ -388,6 +389,7 @@ describe('前后端对齐: API 路由完整性', () => {
       'src/api/webhook.ts', 'src/api/knowledge.ts', 'src/api/mcp.ts',
       'src/api/skills.ts', 'src/api/memory.ts', 'src/api/agents.ts', 'src/api/chat.ts',
     ]
+    const violations: string[] = []
     for (const file of files) {
       const source = readFileSync(file, 'utf-8')
       // 找所有 apiDelete 中使用模板字符串的调用
@@ -400,11 +402,12 @@ describe('前后端对齐: API 路由完整性', () => {
           // 允许内部 ID（sessionId, job.id 等后端生成的）
           const isInternalId = /^(sessionId|id|job\.id)$/.test(param)
           if (!isInternalId) {
-            throw new Error(`${file}: apiDelete 中 \${${param}} 未使用 encodeURIComponent`)
+            violations.push(`${file}: apiDelete 中 \${${param}} 未使用 encodeURIComponent`)
           }
         }
       }
     }
+    expect(violations).toHaveLength(0)
   })
 
   it('isTauri() 只在 utils/platform.ts 定义一处', () => {
@@ -421,8 +424,6 @@ describe('前后端对齐: API 路由完整性', () => {
   it('生产代码中不再有 console.error/warn（仅 logger.ts 内部实现除外）', () => {
     const dirs = ['src/stores', 'src/composables', 'src/services']
     for (const dir of dirs) {
-      const { readdirSync, statSync } = require('fs')
-      const { join } = require('path')
       for (const f of readdirSync(dir)) {
         if (f.includes('__tests__') || statSync(join(dir, f)).isDirectory()) continue
         const source = readFileSync(join(dir, f), 'utf-8')

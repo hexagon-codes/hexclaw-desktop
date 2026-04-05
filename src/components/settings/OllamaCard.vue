@@ -55,7 +55,7 @@ const systemMemoryGB = ref(0)
 async function detectSystemMemory() {
   try {
     const { invoke } = await import('@tauri-apps/api/core')
-    const info = await invoke<{ os: string; arch: string }>('get_platform_info')
+    await invoke<{ os: string; arch: string }>('get_platform_info')
     // Tauri 没有直接获取内存的 API，从 navigator 获取（Chrome/WebView 支持）
     if ('deviceMemory' in navigator) {
       systemMemoryGB.value = (navigator as unknown as { deviceMemory: number }).deviceMemory

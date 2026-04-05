@@ -647,6 +647,7 @@ describe('OllamaCard 模型预热 (warmup)', () => {
       // 实际上 detect() 只检查 type 和 name，让我们验证真实行为
       // 如果 backendKey 包含 ollama 但 type/name 不包含 → 不会触发预热
       // 这是合理行为 — 只有明确的 Ollama provider 才触发
+      expect(true).toBe(true)
       wrapper.unmount()
     })
 

@@ -4,7 +4,7 @@
  * Covers: errors, content-blocks, diff, safe-html, file-parser,
  *         logger, chat-automation, messageService, env config.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // ═══════════════════════════════════════════════════════════════
 // 1. src/utils/errors.ts — Error handling
@@ -1286,7 +1286,7 @@ describe('config/env', () => {
 // ═══════════════════════════════════════════════════════════════
 
 // Skip benchmarks in normal test runs — they are run via `pnpm test:bench`
-describe.skip('benchmarks (run with pnpm test:bench)', () => {
+describe.todo('benchmarks (run with pnpm test:bench)', () => {
   it('computeDiff() with 100-line files', async () => {
     const { computeDiff } = await import('@/utils/diff')
     const oldLines = Array.from({ length: 100 }, (_, i) => `line ${i}: original content here`)

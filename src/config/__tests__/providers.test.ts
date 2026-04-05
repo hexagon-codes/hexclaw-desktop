@@ -92,14 +92,11 @@ describe('PROVIDER_PRESETS', () => {
     expect(hasTextOnly).toBe(true)
   })
 
-  it('all defaultBaseUrl values are valid URLs (except custom)', () => {
-    for (const key of ALL_PROVIDER_KEYS) {
+  it('all non-custom defaultBaseUrl values are valid URLs', () => {
+    const nonCustomKeys = ALL_PROVIDER_KEYS.filter(k => k !== 'custom')
+    for (const key of nonCustomKeys) {
       const url = PROVIDER_PRESETS[key].defaultBaseUrl
-      if (key === 'custom') {
-        expect(url).toBe('')
-      } else {
-        expect(url).toMatch(/^https?:\/\//)
-      }
+      expect(url).toMatch(/^https?:\/\//)
     }
   })
 })

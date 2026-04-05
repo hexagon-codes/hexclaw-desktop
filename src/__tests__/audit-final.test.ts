@@ -15,7 +15,7 @@
  * 11. Security: v-html sanitization audit
  * 12. Residual issues scan (console.log, TODO, hardcoded URLs, process.env)
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 
@@ -923,11 +923,7 @@ describe('8. Security: v-html sanitization audit', () => {
       }
     }
 
-    if (unsanitized.length > 0) {
-      // CRITICAL: unsanitized v-html is an XSS vector
-      expect(unsanitized).toEqual([])
-    }
-    // All v-html usages are sanitized
+    // All v-html usages must be sanitized (XSS vector)
     expect(unsanitized).toEqual([])
   })
 
@@ -1122,12 +1118,12 @@ describe('11. i18n completeness', () => {
     return [...new Set(keys)]
   }
 
-  it('OllamaCard: all t() keys exist in both en.ts and zh-CN.ts', () => {
+  it('OllamaCard: all t() keys exist in both en.ts and zh-CN.ts', async () => {
     const ollamaCardPath = path.join(SRC, 'components/settings/OllamaCard.vue')
     const keysUsed = extractI18nKeysFromFile(ollamaCardPath)
 
-    const enMod = require(path.join(SRC, 'i18n/locales/en.ts'))
-    const zhMod = require(path.join(SRC, 'i18n/locales/zh-CN.ts'))
+    const enMod = await import(path.join(SRC, 'i18n/locales/en.ts'))
+    const zhMod = await import(path.join(SRC, 'i18n/locales/zh-CN.ts'))
     const en = enMod.default || enMod
     const zh = zhMod.default || zhMod
 
@@ -1154,18 +1150,18 @@ describe('11. i18n completeness', () => {
     expect(missingInZh).toEqual([])
   })
 
-  it('en.ts and zh-CN.ts have same top-level key structure', () => {
-    const enMod = require(path.join(SRC, 'i18n/locales/en.ts'))
-    const zhMod = require(path.join(SRC, 'i18n/locales/zh-CN.ts'))
+  it('en.ts and zh-CN.ts have same top-level key structure', async () => {
+    const enMod = await import(path.join(SRC, 'i18n/locales/en.ts'))
+    const zhMod = await import(path.join(SRC, 'i18n/locales/zh-CN.ts'))
     const en = enMod.default || enMod
     const zh = zhMod.default || zhMod
 
     expect(Object.keys(en).sort()).toEqual(Object.keys(zh).sort())
   })
 
-  it('en.ts and zh-CN.ts have matching settings.ollama keys', () => {
-    const enMod = require(path.join(SRC, 'i18n/locales/en.ts'))
-    const zhMod = require(path.join(SRC, 'i18n/locales/zh-CN.ts'))
+  it('en.ts and zh-CN.ts have matching settings.ollama keys', async () => {
+    const enMod = await import(path.join(SRC, 'i18n/locales/en.ts'))
+    const zhMod = await import(path.join(SRC, 'i18n/locales/zh-CN.ts'))
     const en = enMod.default || enMod
     const zh = zhMod.default || zhMod
 

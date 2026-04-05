@@ -745,17 +745,13 @@ describe('SettingsView — E2E 关键路径', () => {
     const providerCards = wrapper.findAll('.hc-provider__card')
     const providerCard = providerCards.find((card) => card.text().includes('Ollama'))
 
-    if (!providerCard) {
-      // Provider card not rendered — verify the store has it (the add worked)
-      expect(store.config!.llm.providers.some(p => p.type === 'ollama')).toBe(true)
-      // Skip DOM assertion — component may filter Ollama from the list
-      // since it's managed by OllamaCard separately
-      return
-    }
+    // Whether or not the Ollama provider card renders in DOM,
+    // the store should have the Ollama provider after sync
+    expect(store.config!.llm.providers.some(p => p.type === 'ollama')).toBe(true)
 
-    // 验证 Ollama provider 在 store 中已正确同步模型
+    // If providerCard is rendered, also verify models synced
     const ollamaModels = store.availableModels.filter(m => m.providerName === 'Ollama')
-    expect(ollamaModels.some(m => m.modelId === 'qwen3:8b')).toBe(true)
+    expect(!providerCard || ollamaModels.some(m => m.modelId === 'qwen3:8b')).toBe(true)
   })
 
   it('does not start a second Ollama associate flow while the first one is still syncing', async () => {

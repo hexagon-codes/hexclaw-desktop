@@ -4,7 +4,7 @@
  * Tests keyboard shortcut registration: Cmd+1..9 navigation,
  * Cmd+N new session, Cmd+, settings, lifecycle cleanup.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 

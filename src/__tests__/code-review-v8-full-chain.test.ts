@@ -6,7 +6,7 @@
  * 前后端对齐问题、性能问题、安全漏洞。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'fs'
 import { resolve } from 'path'
 
@@ -45,7 +45,7 @@ describe('API 客户端架构审计', () => {
   it('所有 API 模块应使用统一 api client 而非 raw fetch', () => {
     // ollama.ts 当前使用 raw fetch 而非 apiGet/apiPost —— 绕过统一错误处理
     const ollamaSrc = readSrc('api/ollama.ts')
-    const rawFetchCount = (ollamaSrc.match(/\bfetch\(/g) || []).length
+    const _rawFetchCount = (ollamaSrc.match(/\bfetch\(/g) || []).length // eslint-disable-line @typescript-eslint/no-unused-vars
     const apiClientCount = (ollamaSrc.match(/\bapi(Get|Post|Put|Delete)\(/g) || []).length
 
     // ollama.ts 应该使用 apiGet/apiPost 而非 raw fetch
@@ -399,7 +399,6 @@ describe('Skill 技能链路', () => {
       skillsSrc.indexOf('export async function installFromHub'),
     )
     const manualQs = searchFn.includes('new URLSearchParams()')
-    const usesApiGetQuery = searchFn.includes('apiGet<') && searchFn.includes("apiGet<")
 
     // 应该直接传 query object 给 apiGet 第二个参数
     // 而非手动构建 query string 拼接到 URL
@@ -851,6 +850,8 @@ describe('前后端 API 对齐', () => {
       'POST /api/v1/agents/rules/test',  // 前端无 testRoute 调用
     ]
 
+    // Verify backend has substantial coverage
+    expect(backendEndpoints.length).toBeGreaterThan(30)
     // 只检查确实缺失的
     expect(frontendMissing.length).toBeLessThanOrEqual(1)
   })
@@ -908,13 +909,12 @@ describe('代码质量', () => {
   it('QuickChatView 应使用 clearStreamCallbacks 而非 clearCallbacks', () => {
     // QuickChatView.vue 的 clearCallbacks() 会清除 approval 监听
     const quickChatSrc = readSrc('views/QuickChatView.vue')
-    if (quickChatSrc) {
-      const clearAllCount = (quickChatSrc.match(/clearCallbacks\(\)/g) || []).length
-      const clearStreamCount = (quickChatSrc.match(/clearStreamCallbacks\(\)/g) || []).length
-      // 应该用 clearStreamCallbacks 而非 clearCallbacks
-      expect(clearAllCount).toBe(0) // EXPECTED TO FAIL: exposes bug
-      expect(clearStreamCount).toBeGreaterThan(0)
-    }
+    expect(quickChatSrc).toBeTruthy()
+    const clearAllCount = (quickChatSrc.match(/clearCallbacks\(\)/g) || []).length
+    const clearStreamCount = (quickChatSrc.match(/clearStreamCallbacks\(\)/g) || []).length
+    // 应该用 clearStreamCallbacks 而非 clearCallbacks
+    expect(clearAllCount).toBe(0) // EXPECTED TO FAIL: exposes bug
+    expect(clearStreamCount).toBeGreaterThan(0)
   })
 })
 

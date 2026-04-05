@@ -4,7 +4,7 @@
  * 聚焦未被前几轮覆盖的代码路径。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 
 // ═══════════════════════════════════════════════════
@@ -209,9 +209,8 @@ describe('代码质量 — console.error 使用审计', () => {
     const hasConsoleError = source.includes('console.error')
     // 记录为已知问题 — 在 Tauri 环境下 logger 可能未初始化
     // 不阻塞，但记录
-    if (hasConsoleError) {
-      expect(source).toContain('console.error') // 确认存在
-    }
+    expect(hasConsoleError).toBeDefined()
+    // If console.error exists, it's a known issue — not a blocker
   })
 })
 

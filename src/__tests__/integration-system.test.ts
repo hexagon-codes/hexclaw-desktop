@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { ref, nextTick } from 'vue'
+import { ref } from 'vue'
 
 // ─── 统一 Mock 层（所有模块共享） ─────────────────
 
@@ -93,7 +93,7 @@ describe('集成: 模型配置 → 模型选择 → 发消息', () => {
       },
       security: {} as any, general: {} as any, notification: {} as any, mcp: {} as any,
     }
-    const provider = settings.addProvider({
+    settings.addProvider({
       name: 'Ollama (本地)', type: 'ollama', enabled: true,
       apiKey: '', baseUrl: 'http://localhost:11434/v1', models: [],
     })
@@ -147,7 +147,7 @@ describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
 
     // 使用 useChatSend（需要构造 deps）
     const { useChatSend } = await import('@/composables/useChatSend')
-    const { searchKnowledge } = await import('@/api/knowledge')
+    await import('@/api/knowledge') // ensure module is loaded
 
     const deps = {
       chatStore: chat,
@@ -213,7 +213,7 @@ describe('集成: 会话完整生命周期', () => {
       reply: '```ts\nconst sum = (a: number, b: number) => a + b\n```',
       metadata: {},
     })
-    const msg = await chat.sendMessage('写一个 TS 加法函数')
+    await chat.sendMessage('写一个 TS 加法函数')
 
     // 验证：自动标题（前 30 字符）
     expect(msgSvc.updateSessionTitle).toHaveBeenCalledWith(
@@ -415,7 +415,7 @@ describe('集成: 发送链路错误恢复', () => {
     chatSvc.ensureWebSocketConnected.mockResolvedValue(false)
     chatSvc.sendViaBackend.mockImplementation(() => new Promise(() => {}))
 
-    const p1 = chat.sendMessage('消息1')
+    void chat.sendMessage('消息1')
     const p2 = chat.sendMessage('消息2')
 
     const result2 = await p2

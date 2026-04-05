@@ -52,9 +52,7 @@ describe('API 成功后状态不应卡在中间态', () => {
       const fn = src.match(/async function handleAddDocument[\s\S]*?^}/m)?.[0] ||
                  src.match(/async function handleAdd[\s\S]*?^}/m)?.[0] || ''
       // 成功后应调用 loadDocs() 刷新，而不是手动设置 status
-      if (fn) {
-        expect(fn).not.toContain("status: 'processing'")
-      }
+      expect(fn === '' || !fn.includes("status: 'processing'")).toBe(true)
     })
   })
 
@@ -86,10 +84,8 @@ describe('API 成功后状态不应卡在中间态', () => {
 
     it('pause 成功后 status 设为 paused（最终态）', () => {
       const fn = src.match(/async function handlePauseResume[\s\S]*?^}/m)?.[0] || ''
-      if (fn) {
-        // 不应在成功后设为 processing
-        expect(fn).not.toContain("status = 'processing'")
-      }
+      // 不应在成功后设为 processing
+      expect(fn === '' || !fn.includes("status = 'processing'")).toBe(true)
     })
   })
 

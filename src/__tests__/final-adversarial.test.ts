@@ -7,7 +7,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { readFileSync } from 'fs'
+import { readFileSync, readdirSync, statSync } from 'fs'
+import { join } from 'path'
 
 const mockApi = vi.fn()
 vi.mock('@/api/client', () => ({
@@ -118,7 +119,7 @@ describe('对抗: 并发竞态', () => {
     chat.chatParams.model = 'test'
 
     ;(sendViaBackend as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(() => {})) // 永不完成
-    const p1 = chat.sendMessage('消息1')
+    void chat.sendMessage('消息1')
     const p2 = chat.sendMessage('消息2')
     expect(await p2).toBeNull() // 第二条立即返回 null
     expect(chat.messages.filter(m => m.role === 'user')).toHaveLength(1) // 只有第一条
@@ -304,8 +305,6 @@ describe('对抗: 代码质量最终检查', () => {
   it('生产代码无 console.error/warn（仅 logger 实现除外）', () => {
     const prodDirs = ['src/stores', 'src/composables', 'src/services']
     for (const dir of prodDirs) {
-      const { readdirSync, statSync } = require('fs')
-      const { join } = require('path')
       for (const f of readdirSync(dir)) {
         if (f.includes('__tests__') || statSync(join(dir, f)).isDirectory()) continue
         const src = readFileSync(join(dir, f), 'utf-8')

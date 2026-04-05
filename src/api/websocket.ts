@@ -106,7 +106,6 @@ class HexClawWS {
         // Only reset reconnect counter after connection stays stable for 10s
         // This prevents infinite reconnect loops when the server immediately closes
         const stableTimer = setTimeout(() => { this.reconnectAttempts = 0 }, 10_000)
-        const origOnclose = this.ws!.onclose
         this.ws!.addEventListener('close', () => clearTimeout(stableTimer), { once: true })
         this.lastPongTime = Date.now()
         this.startHeartbeat()

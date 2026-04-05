@@ -32,7 +32,6 @@ import {
   getSession,
   createSession,
   updateSessionTitle,
-  deleteSession,
   forkSession,
   getSessionBranches,
   listSessionMessages,

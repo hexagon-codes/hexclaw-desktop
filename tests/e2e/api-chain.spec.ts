@@ -7,7 +7,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { api, wsChat, BASE_URL, USER_ID, type ChatResult } from './helpers'
+import { api, wsChat, USER_ID, type ChatResult } from './helpers'
 
 // ---------------------------------------------------------------------------
 // 1. Session lifecycle

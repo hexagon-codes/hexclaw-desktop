@@ -72,20 +72,21 @@ const mockChatSvc = {
 vi.mock('@/services/chatService', () => mockChatSvc)
 
 // --- websocket ---
-const wsCallbacks: { approval: Function[]; chunk: Function[]; reply: Function[]; error: Function[] } = {
+type AnyFn = (...args: unknown[]) => unknown
+const wsCallbacks: { approval: AnyFn[]; chunk: AnyFn[]; reply: AnyFn[]; error: AnyFn[] } = {
   approval: [], chunk: [], reply: [], error: [],
 }
 const mockHexclawWS = {
-  onApprovalRequest: vi.fn((cb: Function) => { wsCallbacks.approval.push(cb); return () => { wsCallbacks.approval = wsCallbacks.approval.filter(c => c !== cb) } }),
+  onApprovalRequest: vi.fn((cb: AnyFn) => { wsCallbacks.approval.push(cb); return () => { wsCallbacks.approval = wsCallbacks.approval.filter(c => c !== cb) } }),
   sendApprovalResponse: vi.fn(),
   sendRaw: vi.fn(),
   clearStreamCallbacks: vi.fn(),
   triggerError: vi.fn(),
   isConnected: vi.fn(() => true),
   connect: vi.fn().mockResolvedValue(undefined),
-  onChunk: vi.fn((cb: Function) => { wsCallbacks.chunk.push(cb); return () => { wsCallbacks.chunk = wsCallbacks.chunk.filter(c => c !== cb) } }),
-  onReply: vi.fn((cb: Function) => { wsCallbacks.reply.push(cb); return () => { wsCallbacks.reply = wsCallbacks.reply.filter(c => c !== cb) } }),
-  onError: vi.fn((cb: Function) => { wsCallbacks.error.push(cb); return () => { wsCallbacks.error = wsCallbacks.error.filter(c => c !== cb) } }),
+  onChunk: vi.fn((cb: AnyFn) => { wsCallbacks.chunk.push(cb); return () => { wsCallbacks.chunk = wsCallbacks.chunk.filter(c => c !== cb) } }),
+  onReply: vi.fn((cb: AnyFn) => { wsCallbacks.reply.push(cb); return () => { wsCallbacks.reply = wsCallbacks.reply.filter(c => c !== cb) } }),
+  onError: vi.fn((cb: AnyFn) => { wsCallbacks.error.push(cb); return () => { wsCallbacks.error = wsCallbacks.error.filter(c => c !== cb) } }),
   sendMessage: vi.fn(),
 }
 vi.mock('@/api/websocket', () => ({
@@ -159,7 +160,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 // --- settings-helpers (partial mock, real logic not needed) ---
 vi.mock('@/stores/settings-helpers', () => ({
   cloneProviders: vi.fn((p: unknown[]) => JSON.parse(JSON.stringify(p))),
-  mergeConfigProvidersWithRuntime: vi.fn((config: unknown[], runtime: unknown[]) => [...config]),
+  mergeConfigProvidersWithRuntime: vi.fn((config: unknown[]) => [...config]),
   resolveProviderSelectedModelId: vi.fn((p: { models?: { id: string }[] }) => p.models?.[0]?.id ?? ''),
   resolveDefaultModelProviderId: vi.fn((_providers: unknown[], _model: string, existing: string) => existing),
   ensureUniqueProviderName: vi.fn((name: string) => name),
@@ -261,7 +262,7 @@ describe('Chat Store', () => {
       mockChatSvc.sendViaWebSocket.mockImplementation(() => new Promise(() => {})) // never resolves
 
       const store = await getChatStore()
-      const p1 = store.sendMessage('hello')
+      void store.sendMessage('hello')
       // Second call while first is still pending
       const result2 = await store.sendMessage('world')
       expect(result2).toBeNull()
@@ -576,9 +577,7 @@ describe('Settings Store', () => {
       let resolveLoad!: () => void
       const loadPromise = new Promise<void>(r => { resolveLoad = r })
       // Track how many times doLoadConfig runs by spying on getLLMConfig
-      let callCount = 0
       mockApiConfig.getLLMConfig.mockImplementation(() => {
-        callCount++
         return loadPromise.then(() => ({
           providers: {},
           default: '',
@@ -598,16 +597,9 @@ describe('Settings Store', () => {
     })
 
     it('force=true during load chains reload after completion', async () => {
-      let resolveFirst!: () => void
-      const firstLoad = new Promise<void>(r => { resolveFirst = r })
-      let loadCount = 0
-
       // isTauri returns false, so doLoadConfig won't call getLLMConfig
       // but we can track loading state changes
       const store = await getSettingsStore()
-
-      // Monkey-patch to track calls
-      const origLoading = store.loading
       const p1 = store.loadConfig()
       // While first load is in progress, force reload
       const p2 = store.loadConfig({ force: true })
@@ -1027,7 +1019,7 @@ describe('Chat Service', () => {
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
       // Find the chunk callback that was registered
-      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as Function
+      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as AnyFn
       chunkCb({
         type: 'chunk',
         content: 'answer text',
@@ -1047,7 +1039,7 @@ describe('Chat Service', () => {
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
-      const replyCb = mockHexclawWS.onReply.mock.calls[mockHexclawWS.onReply.mock.calls.length - 1]![0] as Function
+      const replyCb = mockHexclawWS.onReply.mock.calls[mockHexclawWS.onReply.mock.calls.length - 1]![0] as AnyFn
       replyCb({
         type: 'reply',
         content: 'full reply',
@@ -1065,15 +1057,18 @@ describe('Chat Service', () => {
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
-      const errorCb = mockHexclawWS.onError.mock.calls[mockHexclawWS.onError.mock.calls.length - 1]![0] as Function
+      const errorCb = mockHexclawWS.onError.mock.calls[mockHexclawWS.onError.mock.calls.length - 1]![0] as AnyFn
       errorCb('Backend processing error')
 
-      await expect(p).rejects.toThrow('Backend processing error')
+      let caught: unknown = null
       try {
         await p
       } catch (e: unknown) {
-        expect((e as { noFallback: boolean }).noFallback).toBe(true)
+        caught = e
       }
+      expect(caught).not.toBeNull()
+      expect((caught as { message: string }).message).toContain('Backend processing error')
+      expect((caught as { noFallback: boolean }).noFallback).toBe(true)
     })
 
     it('user cancel error "用户取消" -> resolves (not error)', async () => {
@@ -1082,7 +1077,7 @@ describe('Chat Service', () => {
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
-      const errorCb = mockHexclawWS.onError.mock.calls[mockHexclawWS.onError.mock.calls.length - 1]![0] as Function
+      const errorCb = mockHexclawWS.onError.mock.calls[mockHexclawWS.onError.mock.calls.length - 1]![0] as AnyFn
       errorCb('用户取消')
 
       // Should resolve, not reject
@@ -1096,7 +1091,7 @@ describe('Chat Service', () => {
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
       // Send first chunk (not done) — this clears first-reply timer and starts inactivity timer
-      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as Function
+      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as AnyFn
       chunkCb({ type: 'chunk', content: 'partial', done: false })
 
       // Advance past inactivity timeout (120s)
@@ -1111,7 +1106,7 @@ describe('Chat Service', () => {
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
-      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as Function
+      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as AnyFn
 
       // First chunk starts inactivity timer
       chunkCb({ type: 'chunk', content: 'a', done: false })

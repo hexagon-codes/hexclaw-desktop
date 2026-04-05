@@ -165,7 +165,7 @@ describe('useHexclaw', () => {
   // ────────────────────────────────────────────────────────
   it('doubles interval after 6 consecutive failures', async () => {
     checkHealthMock.mockResolvedValue(false)
-    const { result, wrapper } = mountComposable()
+    const { wrapper } = mountComposable()
 
     // Drain the immediate call from onMounted -> startMonitor
     await vi.runOnlyPendingTimersAsync()

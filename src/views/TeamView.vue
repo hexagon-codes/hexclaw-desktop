@@ -20,6 +20,7 @@ import {
   type ExportBundle,
 } from '@/api/team'
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 const { t } = useI18n()
 
 const activeTab = ref<'shared' | 'team' | 'import'>('shared')

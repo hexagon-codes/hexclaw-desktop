@@ -4,7 +4,7 @@
  * 单元测试 → 模块测试 → 集成测试，基于测试结果暴露问题。
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'fs'
 
 // ═══════════════════════════════════════════════════

@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { ref } from 'vue'
+// vue import removed (ref was unused)
 
 // ─── 统一 Mock 层 ───────────────────────────────
 
@@ -183,11 +183,10 @@ describe('集成: 对话自动化 action 识别', () => {
 
     // 应识别出 create_task action
     const createAction = actions.find(a => a.kind === 'create_task')
-    if (createAction) {
-      expect(createAction.status).toBe('pending')
-      expect(createAction.payload).toBeDefined()
-    }
     // 即使未识别也不算 bug — 取决于自然语言匹配规则
+    expect(actions).toBeDefined()
+    // If recognized, verify structure
+    expect(!createAction || (createAction.status === 'pending' && createAction.payload !== undefined)).toBe(true)
   })
 
   it('getConversationAutomationActions 从 metadata 提取 actions', async () => {
