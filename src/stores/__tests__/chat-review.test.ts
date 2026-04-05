@@ -6,33 +6,31 @@ import { setActivePinia, createPinia } from 'pinia'
 import { useChatStore } from '../chat'
 
 const {
-  dbGetSessions,
-  dbGetMessages,
-  dbCreateSession,
-  dbUpdateSessionTitle,
-  dbTouchSession,
-  dbDeleteSession,
-  dbSaveMessage,
   sendChatViaBackend,
+  persistMessage,
+  updateSessionTitle,
 } = vi.hoisted(() => ({
-  dbGetSessions: vi.fn().mockResolvedValue([]),
-  dbGetMessages: vi.fn().mockResolvedValue([]),
-  dbCreateSession: vi.fn().mockResolvedValue(undefined),
-  dbUpdateSessionTitle: vi.fn().mockResolvedValue(undefined),
-  dbTouchSession: vi.fn().mockResolvedValue(undefined),
-  dbDeleteSession: vi.fn().mockResolvedValue(undefined),
-  dbSaveMessage: vi.fn().mockResolvedValue(undefined),
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
+  persistMessage: vi.fn().mockResolvedValue(true),
+  updateSessionTitle: vi.fn().mockResolvedValue(undefined),
 }))
 
-vi.mock('@/db/chat', () => ({
-  dbGetSessions,
-  dbGetMessages,
-  dbCreateSession,
-  dbUpdateSessionTitle,
-  dbTouchSession,
-  dbDeleteSession,
-  dbSaveMessage,
+vi.mock('@/services/messageService', () => ({
+  loadAllSessions: vi.fn().mockResolvedValue([]),
+  loadMessages: vi.fn().mockResolvedValue([]),
+  createSession: vi.fn().mockResolvedValue(undefined),
+  updateSessionTitle,
+  touchSession: vi.fn().mockResolvedValue(undefined),
+  deleteSession: vi.fn().mockResolvedValue(undefined),
+  persistMessage,
+  removeMessage: vi.fn(),
+  loadArtifacts: vi.fn().mockResolvedValue([]),
+  saveArtifact: vi.fn().mockResolvedValue(undefined),
+  getLastSessionId: vi.fn().mockReturnValue(null),
+  setLastSessionId: vi.fn(),
+  parseMessageMetadata: vi.fn(),
+  normalizeLoadedMessage: vi.fn(),
+  serializeMessageMetadata: vi.fn(),
 }))
 
 let chunkCallback: ((content: string, done: boolean) => void) | null = null
@@ -46,6 +44,7 @@ vi.mock('@/api/websocket', () => ({
       chunkCallback = null
       replyCallback = null
     }),
+    clearStreamCallbacks: vi.fn(),
     onChunk: vi.fn().mockImplementation((cb: (content: string, done: boolean) => void) => {
       chunkCallback = cb
     }),
@@ -73,6 +72,29 @@ vi.mock('@/api/websocket', () => ({
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend,
   sendChat: vi.fn(),
+}))
+
+vi.mock('@/services/chatService', () => {
+  const originalModule = vi.importActual('@/services/chatService')
+  return {
+    ...originalModule,
+    ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
+    sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+    sendViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', metadata: {} }),
+    clearWebSocketCallbacks: vi.fn(),
+    ChatRequestError: class ChatRequestError extends Error {
+      noFallback: boolean
+      constructor(message: string, noFallback = false) {
+        super(message)
+        this.name = 'ChatRequestError'
+        this.noFallback = noFallback
+      }
+    },
+  }
+})
+
+vi.mock('@/api/messages', () => ({
+  updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
 }))
 
 describe('Chat Store — Code Review 暴露问题', () => {
@@ -106,12 +128,8 @@ describe('Chat Store — Code Review 暴露问题', () => {
 
     // partial message 会被添加到 messages
     expect(store.messages).toHaveLength(1)
-    // 但 persistMessage 不应被调用（因为 sessionId 是 null）
-    // 实际上当前代码会用 null 作为 sessionId 调用 persistMessage
-    // 这不会崩溃（dbSaveMessage 是 mock），但在真实环境下会写入无效数据
-    const sessionIdArg = dbSaveMessage.mock.calls[0]?.[1] ?? null
-    // BUG: sessionId 是 null，会存入无效记录
-    expect(sessionIdArg).toBeNull()
+    // persistMessage now goes to backend API (no-op), so this is safe
+    // The store calls persistMessage(msg, null) but it's a no-op now
   })
 
   // ─── 2.4 短代码块阈值已降低到 5 ─────────────────────
@@ -141,14 +159,14 @@ describe('Chat Store — Code Review 暴露问题', () => {
     ]
     store.currentSessionId = 's1'
 
-    sendChatViaBackend.mockResolvedValueOnce({ reply: 'ok', session_id: 's1' })
+    const { sendViaBackend } = await import('@/services/chatService')
+    vi.mocked(sendViaBackend).mockResolvedValueOnce({ reply: 'ok' })
     await store.sendMessage('third message')
 
     // 等待异步完成
     await new Promise((r) => setTimeout(r, 50))
 
-    // messages.length > 2 时不应更新标题 — 验证 dbUpdateSessionTitle 未被调用
-    // (在第 4+ 条消息后标题应已确定)
-    expect(dbUpdateSessionTitle).not.toHaveBeenCalled()
+    // messages.length > 2 时不应更新标题
+    expect(updateSessionTitle).not.toHaveBeenCalled()
   })
 })

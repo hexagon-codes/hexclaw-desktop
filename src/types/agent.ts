@@ -14,8 +14,14 @@ export interface AgentRole {
 export interface AgentConfig {
   name: string
   display_name: string
+  description?: string
   model: string
   provider: string
+  system_prompt?: string
+  skills?: string[]
+  max_tokens?: number
+  temperature?: number
+  metadata?: Record<string, unknown>
 }
 
 /** 路由规则（platform/instance/user/chat → agent_name） */

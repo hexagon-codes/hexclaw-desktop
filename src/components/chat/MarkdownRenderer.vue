@@ -5,6 +5,7 @@ import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { codeToHtml } from 'shiki'
 import ArtifactRenderer from '@/components/chat/ArtifactRenderer.vue'
+import { setClipboard } from '@/api/desktop'
 
 const props = defineProps<{
   content: string
@@ -96,7 +97,9 @@ async function highlightCodeBlocks(content: string) {
 function handleCopyClick(e: MouseEvent) {
   const btn = (e.target as HTMLElement).closest('.copy-btn') as HTMLElement | null
   if (btn?.dataset.code) {
-    navigator.clipboard.writeText(btn.dataset.code)
+    setClipboard(btn.dataset.code).catch(() => {
+      // clipboard access can be unavailable in tests or restricted runtimes
+    })
   }
 }
 

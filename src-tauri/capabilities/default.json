@@ -31,11 +31,8 @@
     "global-shortcut:allow-unregister",
     "updater:default",
     "store:default",
-    "sql:default",
-    "sql:allow-load",
-    "sql:allow-execute",
-    "sql:allow-select",
-    "sql:allow-close",
+    "dialog:default",
+    "dialog:allow-open",
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen"

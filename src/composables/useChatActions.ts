@@ -27,6 +27,13 @@ export function useChatActions(
   }
 
   async function handleRetry(msgIndex: number) {
+    const targetMsg = chatStore.messages[msgIndex]
+    if (!targetMsg || targetMsg.role !== 'assistant') return
+
+    // 先检查模型是否可用，避免在 handleSend 静默返回前删除消息
+    const model = chatStore.chatParams.model
+    if (!model || (model !== 'auto' && model.trim() === '')) return
+
     // 找到触发重试的 AI 消息之前的用户消息
     const msgs = chatStore.messages
     let userMsgIdx = -1
@@ -95,16 +102,24 @@ export function useChatActions(
       return
     }
 
+    // 先检查模型是否可用，避免在 handleSend 静默返回前删除消息
+    const model = chatStore.chatParams.model
+    if (!model || (model !== 'auto' && model.trim() === '')) {
+      cancelEdit()
+      return
+    }
+
+    const idx = chatStore.messages.findIndex((m) => m.id === msgId)
+
     editingMsgId.value = null
     editingText.value = ''
 
+    if (idx < 0) return
+
     // 删除原消息及其之后的所有回复（DeepSeek 风格：编辑即替换）
-    const idx = chatStore.messages.findIndex((m) => m.id === msgId)
-    if (idx >= 0) {
-      const toRemove = chatStore.messages.splice(idx)
-      for (const m of toRemove) {
-        removeMessage(m.id).catch(() => {})
-      }
+    const toRemove = chatStore.messages.splice(idx)
+    for (const m of toRemove) {
+      removeMessage(m.id).catch(() => {})
     }
 
     // 重新发送（会创建新用户消息 + 获取 AI 回复）

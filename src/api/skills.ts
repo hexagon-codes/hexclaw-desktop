@@ -1,4 +1,5 @@
 import { apiGet, apiPost, apiPut, apiDelete } from './client'
+import { MOCK_SKILLS } from '@/config/skills-marketplace'
 import type { Skill, ClawHubSkill, SkillStatusUpdateResult } from '@/types'
 
 export type { Skill, ClawHubSkill, SkillStatusUpdateResult }
@@ -8,17 +9,26 @@ export function getSkills() {
   return apiGet<{ skills: Skill[]; total: number; dir: string }>('/api/v1/skills')
 }
 
-/** 安装 Skill（从本地路径） */
-export function installSkill(source: string) {
-  return apiPost<{ name: string; description: string; version: string; message: string }>(
+export type SkillInstallType = 'file' | 'url' | 'clawhub'
+
+interface SkillInstallResult {
+  name: string
+  description?: string
+  version?: string
+  message: string
+}
+
+/** 安装 Skill — 支持本地文件、URL、ClawHub 三种来源 */
+export function installSkill(source: string, type?: SkillInstallType) {
+  return apiPost<SkillInstallResult>(
     '/api/v1/skills/install',
-    { source },
+    { source, type },
   )
 }
 
 /** 卸载 Skill */
 export function uninstallSkill(name: string) {
-  return apiDelete(`/api/v1/skills/${name}`)
+  return apiDelete(`/api/v1/skills/${encodeURIComponent(name)}`)
 }
 
 /** 启用/禁用 Skill（优先以后端状态为准，缺失时降级到本地偏好） */
@@ -38,8 +48,9 @@ export async function setSkillEnabled(name: string, enabled: boolean): Promise<S
     }
   } catch (error) {
     return {
-      success: false,
+      success: true,
       enabled,
+      warning: 'Backend unreachable; applied locally only and may revert on restart.',
       message: error instanceof Error ? error.message : undefined,
       source: 'local-fallback',
     }
@@ -63,172 +74,6 @@ export const CLAWHUB_CATEGORIES = [
 ] as const
 
 export type ClawHubCategory = (typeof CLAWHUB_CATEGORIES)[number]
-
-/** Mock 数据 */
-const MOCK_SKILLS: ClawHubSkill[] = [
-  {
-    name: 'code-review-pro',
-    description: '自动化代码审查，支持多种语言的代码规范检查、安全漏洞扫描和性能优化建议',
-    author: 'openclaw',
-    version: '2.1.0',
-    tags: ['code-review', 'security', 'lint'],
-    downloads: 28430,
-    category: 'coding',
-  },
-  {
-    name: 'git-commit-craft',
-    description: '根据 diff 自动生成符合 Conventional Commits 规范的提交信息',
-    author: 'devtools-hub',
-    version: '1.4.2',
-    tags: ['git', 'commit', 'conventional'],
-    downloads: 19200,
-    category: 'coding',
-  },
-  {
-    name: 'test-generator',
-    description: '根据源代码自动生成单元测试，支持 Jest / Vitest / pytest / Go test',
-    author: 'testcraft',
-    version: '1.8.0',
-    tags: ['testing', 'unit-test', 'tdd'],
-    downloads: 15670,
-    category: 'coding',
-  },
-  {
-    name: 'arxiv-reader',
-    description: '自动解析 arXiv 论文，提取关键信息、方法论和结论，生成结构化摘要',
-    author: 'research-ai',
-    version: '1.2.1',
-    tags: ['arxiv', 'paper', 'summary'],
-    downloads: 12840,
-    category: 'research',
-  },
-  {
-    name: 'web-researcher',
-    description: '深度网络调研工具，自动搜索、汇总多个来源的信息并生成调研报告',
-    author: 'openclaw',
-    version: '2.0.3',
-    tags: ['search', 'report', 'web'],
-    downloads: 22100,
-    category: 'research',
-  },
-  {
-    name: 'fact-checker',
-    description: '对 Agent 输出内容进行事实核查，交叉验证多个信息源',
-    author: 'verify-ai',
-    version: '1.0.5',
-    tags: ['fact-check', 'verify', 'accuracy'],
-    downloads: 8930,
-    category: 'research',
-  },
-  {
-    name: 'blog-writer',
-    description: '根据主题和大纲生成高质量博客文章，支持 SEO 优化和多种写作风格',
-    author: 'content-craft',
-    version: '1.6.0',
-    tags: ['blog', 'seo', 'content'],
-    downloads: 17500,
-    category: 'writing',
-  },
-  {
-    name: 'doc-translator',
-    description: '高质量文档翻译，保持格式和术语一致性，支持 30+ 语言',
-    author: 'polyglot-ai',
-    version: '2.3.1',
-    tags: ['translation', 'i18n', 'docs'],
-    downloads: 24600,
-    category: 'writing',
-  },
-  {
-    name: 'copywriting-pro',
-    description: '营销文案生成，支持广告、社交媒体、邮件等多种场景',
-    author: 'marketer-ai',
-    version: '1.3.0',
-    tags: ['copywriting', 'marketing', 'ad'],
-    downloads: 11200,
-    category: 'writing',
-  },
-  {
-    name: 'csv-analyst',
-    description: '自动分析 CSV/Excel 数据集，生成统计摘要、可视化图表和洞察报告',
-    author: 'data-works',
-    version: '1.5.2',
-    tags: ['csv', 'analytics', 'visualization'],
-    downloads: 13400,
-    category: 'data',
-  },
-  {
-    name: 'sql-assistant',
-    description: '自然语言转 SQL 查询，支持 PostgreSQL / MySQL / SQLite 方言',
-    author: 'dbtools',
-    version: '2.0.0',
-    tags: ['sql', 'database', 'query'],
-    downloads: 20800,
-    category: 'data',
-  },
-  {
-    name: 'json-transformer',
-    description: 'JSON 数据格式转换、清洗和验证工具，支持 JSONPath 和 Schema 校验',
-    author: 'data-works',
-    version: '1.1.3',
-    tags: ['json', 'transform', 'schema'],
-    downloads: 9700,
-    category: 'data',
-  },
-  {
-    name: 'cron-scheduler',
-    description: '智能 Cron 任务编排，根据自然语言描述生成复杂的调度计划',
-    author: 'ops-toolkit',
-    version: '1.2.0',
-    tags: ['cron', 'scheduler', 'ops'],
-    downloads: 7600,
-    category: 'automation',
-  },
-  {
-    name: 'api-integrator',
-    description: '快速集成第三方 API，自动生成请求代码和错误处理逻辑',
-    author: 'openclaw',
-    version: '1.7.1',
-    tags: ['api', 'integration', 'http'],
-    downloads: 16300,
-    category: 'automation',
-  },
-  {
-    name: 'file-organizer',
-    description: '智能文件分类和整理，根据内容自动重命名、分类和归档',
-    author: 'productivity-lab',
-    version: '1.0.8',
-    tags: ['files', 'organize', 'rename'],
-    downloads: 10500,
-    category: 'automation',
-  },
-  {
-    name: 'meeting-notes',
-    description: '会议记录整理和摘要生成，自动提取行动项和决议',
-    author: 'productivity-lab',
-    version: '1.4.0',
-    tags: ['meeting', 'notes', 'summary'],
-    downloads: 14200,
-    category: 'productivity',
-  },
-  {
-    name: 'email-composer',
-    description: '智能邮件撰写助手，根据上下文生成专业的商务邮件',
-    author: 'office-ai',
-    version: '1.2.5',
-    tags: ['email', 'business', 'compose'],
-    downloads: 18700,
-    category: 'productivity',
-  },
-  {
-    name: 'daily-digest',
-    description: '每日信息汇总，自动收集和整理来自多个渠道的更新和通知',
-    author: 'productivity-lab',
-    version: '1.1.0',
-    tags: ['digest', 'news', 'daily'],
-    downloads: 6800,
-    category: 'productivity',
-  },
-]
 
 /** 本地过滤 Mock 数据（标记 _mock 以区分真实 Hub 数据） */
 function filterMockSkills(query?: string, category?: string): ClawHubSkill[] {
@@ -289,15 +134,15 @@ export async function searchClawHub(
     return filterMockSkills(query, category)
   }
 
-  const params = new URLSearchParams()
-  if (query) params.set('q', query)
-  if (category && category !== 'all') params.set('category', category)
-  const qs = params.toString()
+  const q: Record<string, unknown> = {}
+  if (query) q.q = query
+  if (category && category !== 'all') q.category = category
 
+  // 共享 ClawHub 搜索端点（同 mcp.ts searchMcpMarketplace）
   const res = await apiGet<{
     skills?: unknown[]
     error?: string
-  }>(`/api/v1/clawhub/search${qs ? '?' + qs : ''}`)
+  }>('/api/v1/clawhub/search', q)
 
   if (typeof res.error === 'string' && res.error.trim() !== '') {
     throw new Error(res.error.trim())

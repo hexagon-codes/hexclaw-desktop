@@ -7,6 +7,7 @@ use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
+use crate::ollama;
 use crate::sidecar;
 
 /// Sidecar 状态信息
@@ -85,7 +86,20 @@ pub async fn proxy_api_request(
             }
             r
         }
-        "DELETE" => client.delete(&url),
+        "PATCH" => {
+            let mut r = client.patch(&url);
+            if let Some(b) = body {
+                r = r.header("Content-Type", "application/json").body(b);
+            }
+            r
+        }
+        "DELETE" => {
+            let mut r = client.delete(&url);
+            if let Some(b) = body {
+                r = r.header("Content-Type", "application/json").body(b);
+            }
+            r
+        }
         _ => return Err(format!("不支持的 HTTP 方法: {}", method)),
     };
 
@@ -151,8 +165,19 @@ pub async fn stream_chat(app: tauri::AppHandle, params: StreamChatParams) -> Res
             return Err(format!("Unsupported scheme: {}", scheme));
         }
         if let Some(host) = parsed.host_str() {
+            // Block cloud metadata endpoints
             if host == "169.254.169.254" || host == "metadata.google.internal" {
                 return Err("Blocked: cloud metadata endpoint".to_string());
+            }
+            // Block private/loopback IPs (SSRF protection)
+            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+                let is_private = match ip {
+                    std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified(),
+                    std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+                };
+                if is_private {
+                    return Err(format!("Blocked: private/loopback address {}", host));
+                }
             }
         }
     }
@@ -348,4 +373,41 @@ pub struct PlatformInfo {
     pub os: String,
     pub arch: String,
     pub version: String,
+}
+
+
+// ─── Ollama Commands ─────────────────────────────────
+
+/// Ollama 状态信息
+#[derive(Serialize)]
+pub struct OllamaStatus {
+    /// 是否就绪
+    pub ready: bool,
+    /// 是否由本应用管理（false = 外部实例）
+    pub managed: bool,
+    /// API 基础 URL
+    pub base_url: String,
+    /// 端口号
+    pub port: u16,
+}
+
+/// 获取 Ollama 状态
+#[tauri::command]
+pub fn get_ollama_status(app: tauri::AppHandle) -> OllamaStatus {
+    OllamaStatus {
+        ready: ollama::is_ready(&app),
+        managed: ollama::is_managed(),
+        base_url: ollama::base_url(),
+        port: ollama::OLLAMA_PORT,
+    }
+}
+
+/// 重启 Ollama 进程
+#[tauri::command]
+pub async fn restart_ollama(app: tauri::AppHandle) -> Result<String, String> {
+    ollama::stop_ollama();
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    ollama::spawn_ollama(&app)?;
+    ollama::wait_for_healthy(app, 15).await;
+    Ok("ollama restarted".to_string())
 }

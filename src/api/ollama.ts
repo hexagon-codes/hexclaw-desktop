@@ -1,4 +1,5 @@
 import { env } from '@/config/env'
+import { apiGet, apiPost, apiDelete } from './client'
 
 export interface OllamaModel {
   name: string
@@ -27,37 +28,36 @@ export interface OllamaRunningModel {
   context_length: number
 }
 
-export async function getOllamaStatus(): Promise<OllamaStatus> {
-  const resp = await fetch(`${env.apiBase}/api/v1/ollama/status`, {
-    signal: AbortSignal.timeout(5000),
-  })
-  if (!resp.ok) throw new Error(`Ollama status: ${resp.status}`)
-  return resp.json()
+export function getOllamaStatus(): Promise<OllamaStatus> {
+  return apiGet<OllamaStatus>('/api/v1/ollama/status')
 }
 
 export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
-  const resp = await fetch(`${env.apiBase}/api/v1/ollama/running`, {
-    signal: AbortSignal.timeout(5000),
-  })
-  if (!resp.ok) throw new Error(`Ollama running: ${resp.status}`)
-  const data = await resp.json()
+  const data = await apiGet<{ models?: OllamaRunningModel[] }>('/api/v1/ollama/running')
   return data.models || []
 }
 
-export async function unloadOllamaModel(model: string): Promise<void> {
-  const resp = await fetch(`${env.apiBase}/api/v1/ollama/unload`, {
+export async function loadOllamaModel(model: string): Promise<void> {
+  // 直接调 Ollama 原生 API 预热模型（后端无 /load 接口）
+  const res = await fetch('http://localhost:11434/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model }),
+    body: JSON.stringify({ model, prompt: '', keep_alive: '5m' }),
   })
-  if (!resp.ok) throw new Error(`Unload failed: ${resp.status}`)
+  if (!res.ok) throw new Error(`Ollama load failed: ${res.status}`)
 }
 
-export async function deleteOllamaModel(name: string): Promise<void> {
-  const resp = await fetch(`${env.apiBase}/api/v1/ollama/models/${encodeURIComponent(name)}`, {
-    method: 'DELETE',
-  })
-  if (!resp.ok) throw new Error(`Delete failed: ${resp.status}`)
+export function unloadOllamaModel(model: string): Promise<void> {
+  return apiPost('/api/v1/ollama/unload', { model })
+}
+
+export function deleteOllamaModel(name: string): Promise<void> {
+  return apiDelete(`/api/v1/ollama/models/${encodeURIComponent(name)}`)
+}
+
+export async function restartOllama(): Promise<string> {
+  const data = await apiPost<{ status?: string }>('/api/v1/ollama/restart')
+  return data.status || 'unknown'
 }
 
 export interface OllamaPullProgress {
@@ -77,11 +77,13 @@ export interface OllamaPullProgress {
 export async function pullOllamaModel(
   model: string,
   onProgress: (p: OllamaPullProgress) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const resp = await fetch(`${env.apiBase}/api/v1/ollama/pull`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model }),
+    signal,
   })
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }))
@@ -92,18 +94,27 @@ export async function pullOllamaModel(
 
   const decoder = new TextDecoder()
   let buffer = ''
+  let streamError = ''
+  let receivedAnyEvent = false
   while (true) {
     const { done, value } = await reader.read()
-    if (done) break
-    buffer += decoder.decode(value, { stream: true })
+    if (!done) {
+      buffer += decoder.decode(value, { stream: true })
+    }
     const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
+    buffer = done ? '' : (lines.pop() || '')
     for (const line of lines) {
       const trimmed = line.replace(/^data:\s*/, '').trim()
       if (!trimmed) continue
       try {
-        onProgress(JSON.parse(trimmed))
+        const p: OllamaPullProgress = JSON.parse(trimmed)
+        receivedAnyEvent = true
+        if (p.error) streamError = p.error
+        onProgress(p)
       } catch { /* ignore non-JSON lines */ }
     }
+    if (done) break
   }
+  if (streamError) throw new Error(streamError)
+  if (!receivedAnyEvent) throw new Error('Download interrupted — no progress events received')
 }

@@ -29,7 +29,10 @@ import {
   type Skill,
   type ClawHubSkill,
   type ClawHubCategory,
+  type SkillInstallType,
 } from '@/api/skills'
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
@@ -56,15 +59,33 @@ const loading = ref(true)
 const searchQuery = ref('')
 const showInstallDialog = ref(false)
 const installSource = ref('')
+const installUrl = ref('')
 const installing = ref(false)
 const installError = ref('')
+const dragOver = ref(false)
 const disabledSkills = ref<Set<string>>(readDisabledSkillsFromStorage())
 const expandedSkill = ref<string | null>(null)
 const statusNotice = ref<{ tone: 'info' | 'warn' | 'success'; message: string } | null>(null)
 const togglingSkills = ref<Set<string>>(new Set())
 
+let unlistenDrop: (() => void) | null = null
+
 onMounted(async () => {
   await loadSkills()
+  // Tauri 原生拖拽监听
+  getCurrentWindow().onDragDropEvent((event) => {
+    if (!showInstallDialog.value) return
+    if (event.payload.type === 'over') {
+      dragOver.value = true
+    } else if (event.payload.type === 'drop') {
+      dragOver.value = false
+      handleFileDrop(event.payload.paths)
+    } else if (event.payload.type === 'leave' || event.payload.type === 'cancelled') {
+      dragOver.value = false
+    }
+  }).then((unlisten) => {
+    unlistenDrop = unlisten
+  })
 })
 
 function readDisabledSkillsFromStorage(): Set<string> {
@@ -143,14 +164,13 @@ async function confirmUninstall() {
   }
 }
 
-async function handleInstall() {
-  if (!installSource.value.trim()) return
+async function doInstall(source: string, type: SkillInstallType) {
+  if (installing.value) return
   installing.value = true
   installError.value = ''
   try {
-    await installSkill(installSource.value.trim())
-    showInstallDialog.value = false
-    installSource.value = ''
+    await installSkill(source, type)
+    closeInstallDialog()
     await restartEngineAfterSkillChange(
       '技能已安装，正在重启引擎...',
       '技能已安装并重新载入',
@@ -159,6 +179,33 @@ async function handleInstall() {
     installError.value = e instanceof Error ? e.message : '安装失败'
   } finally {
     installing.value = false
+  }
+}
+
+async function handlePickFile() {
+  const path = await openFileDialog({
+    filters: [{ name: 'Skill', extensions: ['md'] }],
+    multiple: false,
+  })
+  if (path) doInstall(path, 'file')
+}
+
+function handleUrlInstall() {
+  const url = installUrl.value.trim()
+  if (!url) return
+  if (!url.startsWith('https://')) {
+    installError.value = t('skills.installDialog.errorUrlHttps')
+    return
+  }
+  doInstall(url, 'url')
+}
+
+function handleFileDrop(paths: string[]) {
+  const md = paths.find((p) => p.toLowerCase().endsWith('.md'))
+  if (md) {
+    doInstall(md, 'file')
+  } else {
+    installError.value = t('skills.installDialog.errorNotMd')
   }
 }
 
@@ -180,41 +227,53 @@ async function toggleSkillEnabled(name: string) {
     setLocalSkillEnabled(name, nextEnabled)
   }
 
-  const result = await setSkillEnabled(name, nextEnabled)
-  if (result.success && result.source === 'backend') {
-    updateSkill(name, {
-      enabled: result.enabled,
-      effective_enabled: result.effective_enabled ?? result.enabled,
-      requires_restart: result.requires_restart,
-      message: result.message,
-    })
-    if (result.requires_restart) {
-      await restartEngineAfterSkillChange(
-        result.message || t('skills.restartRequired'),
-        `技能「${name}」已更新并重新载入`,
-      )
+  try {
+    const result = await setSkillEnabled(name, nextEnabled)
+    if (result.success && result.source === 'backend') {
+      updateSkill(name, {
+        enabled: result.enabled,
+        effective_enabled: result.effective_enabled ?? result.enabled,
+        requires_restart: result.requires_restart,
+        message: result.message,
+      })
+      if (result.requires_restart) {
+        await restartEngineAfterSkillChange(
+          result.message || t('skills.restartRequired'),
+          `技能「${name}」已更新并重新载入`,
+        )
+      } else {
+        statusNotice.value = result.message
+          ? { tone: 'success', message: result.message }
+          : null
+      }
+    } else if (getSkillScope(previousSkill) === 'runtime') {
+      updateSkill(name, previousSkill)
+      disabledSkills.value = previousLocal
+      statusNotice.value = {
+        tone: 'warn',
+        message: result.message || t('skills.runtimeToggleFailed'),
+      }
     } else {
-      statusNotice.value = result.message
-        ? { tone: 'success', message: result.message }
-        : null
+      statusNotice.value = {
+        tone: 'info',
+        message: t('skills.localOnlyNotice'),
+      }
     }
-  } else if (getSkillScope(previousSkill) === 'runtime') {
-    updateSkill(name, previousSkill)
-    disabledSkills.value = previousLocal
+  } catch (e) {
+    if (getSkillScope(previousSkill) === 'runtime') {
+      updateSkill(name, previousSkill)
+    } else {
+      disabledSkills.value = previousLocal
+    }
     statusNotice.value = {
       tone: 'warn',
-      message: result.message || t('skills.runtimeToggleFailed'),
+      message: e instanceof Error ? e.message : t('skills.runtimeToggleFailed'),
     }
-  } else {
-    statusNotice.value = {
-      tone: 'info',
-      message: t('skills.localOnlyNotice'),
-    }
+  } finally {
+    const nextToggling = new Set(togglingSkills.value)
+    nextToggling.delete(name)
+    togglingSkills.value = nextToggling
   }
-
-  const nextToggling = new Set(togglingSkills.value)
-  nextToggling.delete(name)
-  togglingSkills.value = nextToggling
 }
 
 function isSkillEnabled(skillOrName: Skill | string): boolean {
@@ -288,6 +347,8 @@ async function loadHubSkills() {
 }
 
 watch(activeTab, (tab) => {
+  hubInstallError.value = ''
+  hubSearchError.value = ''
   if (tab === 'hub' && hubSkills.value.length === 0 && !hubLoading.value) {
     loadHubSkills()
   }
@@ -307,9 +368,11 @@ function onHubSearchInput() {
 
 onBeforeUnmount(() => {
   if (hubSearchTimer) clearTimeout(hubSearchTimer)
+  unlistenDrop?.()
 })
 
 async function handleHubInstall(skill: ClawHubSkill) {
+  if (hubInstallingSet.value.has(skill.name)) return
   hubInstallingSet.value = new Set([...hubInstallingSet.value, skill.name])
   hubInstallError.value = ''
   try {
@@ -338,7 +401,20 @@ function isHubSkillInstalled(name: string): boolean {
 }
 
 function openInstallDialog() {
+  resetInstallDialog()
   showInstallDialog.value = true
+}
+
+function resetInstallDialog() {
+  installSource.value = ''
+  installUrl.value = ''
+  installError.value = ''
+  dragOver.value = false
+}
+
+function closeInstallDialog() {
+  showInstallDialog.value = false
+  resetInstallDialog()
 }
 
 async function restartEngineAfterSkillChange(startMessage: string, successMessage: string) {
@@ -355,7 +431,11 @@ async function restartEngineAfterSkillChange(startMessage: string, successMessag
   }
 }
 
-defineExpose({ openInstallDialog })
+function switchToHub() {
+  activeTab.value = 'hub'
+}
+
+defineExpose({ openInstallDialog, switchToHub })
 </script>
 
 <template>
@@ -460,7 +540,7 @@ defineExpose({ openInstallDialog })
         <div
           v-for="skill in filteredSkills"
           :key="skill.name"
-          class="rounded-xl border overflow-hidden transition-all"
+          class="rounded-xl border overflow-hidden transition"
           :style="{
             background: 'var(--hc-bg-card)',
             borderColor: 'var(--hc-border)',
@@ -810,50 +890,94 @@ defineExpose({ openInstallDialog })
       <div
         v-if="showInstallDialog"
         class="fixed inset-0 z-50 flex items-center justify-center"
-        @click.self="showInstallDialog = false"
+        @click.self="closeInstallDialog"
       >
-        <div class="absolute inset-0 bg-black/50" @click="showInstallDialog = false" />
+        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @click="closeInstallDialog" />
         <div
-          class="relative z-10 w-96 rounded-xl border p-6 shadow-xl"
-          :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+          class="relative z-10 w-[420px] rounded-xl border p-6 shadow-xl"
+          :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
         >
-          <h3 class="text-base font-medium mb-4" :style="{ color: 'var(--hc-text-primary)' }">
-            {{ t('skills.hub.installLocal') }}
-          </h3>
-          <p class="text-xs mb-3" :style="{ color: 'var(--hc-text-secondary)' }">
-            {{ t('skills.hub.installLocalDesc') }}
-          </p>
-          <input
-            v-model="installSource"
-            type="text"
-            :placeholder="t('skills.hub.installLocalPlaceholder')"
-            class="w-full px-3 py-2 rounded-lg border text-sm"
+          <!-- Header -->
+          <div class="flex items-center justify-between mb-5">
+            <h3 class="text-base font-semibold" :style="{ color: 'var(--hc-text-primary)' }">
+              {{ t('skills.installDialog.title') }}
+            </h3>
+            <button
+              class="p-1 rounded-md transition-colors"
+              :style="{ color: 'var(--hc-text-muted)' }"
+              @click="closeInstallDialog"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+          </div>
+
+          <!-- Drop zone -->
+          <div
+            class="rounded-lg border-2 border-dashed p-8 text-center transition-colors mb-4"
             :style="{
-              background: 'var(--hc-bg-primary)',
-              borderColor: 'var(--hc-border)',
-              color: 'var(--hc-text-primary)',
+              borderColor: dragOver ? 'var(--hc-accent)' : 'var(--hc-border)',
+              background: dragOver ? 'color-mix(in srgb, var(--hc-accent) 8%, transparent)' : 'var(--hc-bg-primary)',
             }"
-            @keydown.enter="handleInstall"
-          />
-          <p v-if="installError" class="text-xs mt-2" style="color: var(--hc-error)">
+          >
+            <div class="mb-3" :style="{ color: dragOver ? 'var(--hc-accent)' : 'var(--hc-text-muted)' }">
+              <Download :size="28" class="mx-auto" />
+            </div>
+            <p class="text-sm mb-1" :style="{ color: dragOver ? 'var(--hc-accent)' : 'var(--hc-text-secondary)' }">
+              {{ dragOver ? t('skills.installDialog.dropHint') : t('skills.installDialog.dropZone') }}
+            </p>
+            <p class="text-xs mb-3" :style="{ color: 'var(--hc-text-muted)' }">
+              {{ t('skills.installDialog.dropZoneOr') }}
+            </p>
+            <button
+              class="px-4 py-1.5 rounded-lg text-sm font-medium text-white transition-opacity hover:opacity-90"
+              :style="{ background: 'var(--hc-accent)' }"
+              :disabled="installing"
+              @click="handlePickFile"
+            >
+              <FolderOpen :size="14" class="inline -mt-0.5 mr-1" />
+              {{ t('skills.installDialog.pickFile') }}
+            </button>
+          </div>
+
+          <!-- URL input -->
+          <div class="mb-4">
+            <label class="block text-xs font-medium mb-1.5" :style="{ color: 'var(--hc-text-muted)' }">
+              {{ t('skills.installDialog.urlLabel') }}
+            </label>
+            <div class="flex gap-2">
+              <input
+                v-model="installUrl"
+                type="text"
+                :placeholder="t('skills.installDialog.urlPlaceholder')"
+                class="flex-1 px-3 py-2 rounded-lg border text-sm"
+                :style="{
+                  background: 'var(--hc-bg-primary)',
+                  borderColor: 'var(--hc-border)',
+                  color: 'var(--hc-text-primary)',
+                }"
+                :disabled="installing"
+                @keydown.enter="handleUrlInstall"
+              />
+              <button
+                class="px-3 py-2 rounded-lg text-sm font-medium text-white flex-shrink-0 transition-opacity hover:opacity-90"
+                :style="{ background: installing ? 'var(--hc-text-muted)' : 'var(--hc-accent)' }"
+                :disabled="installing || !installUrl.trim()"
+                @click="handleUrlInstall"
+              >
+                {{ installing ? t('skills.installDialog.installing') : t('common.install') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- Error -->
+          <p v-if="installError" class="text-xs px-1" style="color: var(--hc-error)">
             {{ installError }}
           </p>
-          <div class="flex justify-end gap-2 mt-4">
-            <button
-              class="px-3 py-1.5 rounded-lg text-sm"
-              :style="{ color: 'var(--hc-text-secondary)' }"
-              @click="showInstallDialog = false"
-            >
-              {{ t('common.cancel') }}
-            </button>
-            <button
-              class="px-3 py-1.5 rounded-lg text-sm text-white"
-              :style="{ background: installing ? 'var(--hc-text-muted)' : 'var(--hc-accent)' }"
-              :disabled="installing || !installSource.trim()"
-              @click="handleInstall"
-            >
-              {{ installing ? t('skills.hub.installing') : t('common.install') }}
-            </button>
+
+          <!-- Installing spinner -->
+          <div v-if="installing" class="flex items-center gap-2 mt-3 px-1">
+            <Loader2 :size="14" class="animate-spin" :style="{ color: 'var(--hc-accent)' }" />
+            <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('skills.installDialog.installing') }}</span>
           </div>
         </div>
       </div>
@@ -869,7 +993,7 @@ defineExpose({ openInstallDialog })
         <div class="absolute inset-0 bg-black/50" @click="pendingUninstall = null" />
         <div
           class="relative z-10 w-80 rounded-xl border p-6 shadow-xl"
-          :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+          :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
         >
           <p class="text-sm mb-4" :style="{ color: 'var(--hc-text-primary)' }">
             {{ t('common.confirm') }} — {{ pendingUninstall }}?

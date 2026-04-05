@@ -1,4 +1,5 @@
 import { ref } from 'vue'
+import { logger } from '@/utils/logger'
 
 const autoStartEnabled = ref(false)
 
@@ -23,7 +24,7 @@ export function useAutoStart() {
       }
       autoStartEnabled.value = enable
     } catch (e) {
-      console.error('切换开机自启失败:', e)
+      logger.error('Toggle autostart failed:', e)
     }
   }
 

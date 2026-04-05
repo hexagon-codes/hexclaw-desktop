@@ -2,13 +2,14 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Download, Plus } from 'lucide-vue-next'
+import { Download, Plus, Store, FolderOpen, Link } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
 import SkillsView from '@/views/SkillsView.vue'
 import McpView from '@/views/McpView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
+import SplitButton, { type SplitButtonItem } from '@/components/common/SplitButton.vue'
 import { getNavigationChildren } from '@/config/navigation'
 
 const { t } = useI18n()
@@ -78,12 +79,42 @@ onMounted(() => {
   if (logsStore.entries.length === 0) logsStore.loadHistory()
 })
 
-const skillsViewRef = ref<{ openInstallDialog?: () => void }>()
-const mcpViewRef = ref<{ openAddServer?: () => void }>()
+const skillsViewRef = ref<{ openInstallDialog?: () => void; switchToHub?: () => void }>()
+const mcpViewRef = ref<{ openAddServer?: () => void; switchToMarketplace?: () => void }>()
 
-function onAddInstance() {
-  if (activeTab.value === 'skills') skillsViewRef.value?.openInstallDialog?.()
+const splitLabel = computed(() =>
+  activeTab.value === 'mcp'
+    ? t('mcp.addServer', 'Add Server')
+    : t('integration.installSkill', 'Install Skill'),
+)
+
+const splitItems = computed<SplitButtonItem[]>(() => {
+  if (activeTab.value === 'mcp') {
+    return [
+      { id: 'manual', label: t('mcp.addServer', 'Add Server'), icon: Plus },
+      { id: 'marketplace', label: t('integration.split.browseHub', 'Browse Marketplace'), icon: Store },
+    ]
+  }
+  return [
+    { id: 'hub', label: t('integration.split.browseHub', 'Browse Marketplace'), icon: Store },
+    { id: 'file', label: t('integration.split.fromFile', 'Install from File'), icon: FolderOpen },
+    { id: 'url', label: t('integration.split.fromUrl', 'Install from URL'), icon: Link },
+  ]
+})
+
+function onSplitMainClick() {
+  if (activeTab.value === 'skills') skillsViewRef.value?.switchToHub?.()
   else if (activeTab.value === 'mcp') mcpViewRef.value?.openAddServer?.()
+}
+
+function onSplitSelect(id: string) {
+  if (activeTab.value === 'skills') {
+    if (id === 'hub') skillsViewRef.value?.switchToHub?.()
+    else if (id === 'file' || id === 'url') skillsViewRef.value?.openInstallDialog?.()
+  } else if (activeTab.value === 'mcp') {
+    if (id === 'manual') mcpViewRef.value?.openAddServer?.()
+    else if (id === 'marketplace') mcpViewRef.value?.switchToMarketplace?.()
+  }
 }
 </script>
 
@@ -101,10 +132,14 @@ function onAddInstance() {
           <Download :size="14" />
           {{ t('integration.exportLogs', 'Export Logs') }}
         </button>
-        <button v-if="activeTab === 'skills' || activeTab === 'mcp'" class="hc-btn hc-btn-primary" @click="onAddInstance">
-          <Plus :size="14" />
-          {{ activeTab === 'mcp' ? t('mcp.addServer', 'Add Server') : t('integration.addInstance', 'Add Instance') }}
-        </button>
+        <SplitButton
+          v-if="activeTab === 'skills' || activeTab === 'mcp'"
+          :label="splitLabel"
+          :icon="Plus"
+          :items="splitItems"
+          @click="onSplitMainClick"
+          @select="onSplitSelect"
+        />
       </template>
     </PageToolbar>
     <PageHeader

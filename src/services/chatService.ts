@@ -2,14 +2,16 @@
  * 聊天发送编排服务
  *
  * 从 ChatStore 提取的 WebSocket/HTTP 发送逻辑。
- * 负责 WebSocket 优先 → HTTP 回退 → Outbox 持久化的完整发送管线。
+ * 负责 WebSocket 优先 → HTTP 回退的完整发送管线。
  * Store 调用本服务发送消息，不直接操作 WebSocket/HTTP。
+ *
+ * 数据库迁移后：Outbox 改为纯内存实现（sidecar 是本地进程，无需离线队列）。
  */
 
 import { sendChatViaBackend } from '@/api/chat'
 import { hexclawWS } from '@/api/websocket'
-import { dbOutboxInsert, dbOutboxMarkSending, dbOutboxMarkSent, dbOutboxMarkFailed, dbOutboxGetPending, dbOutboxCleanup } from '@/db/outbox'
 import { logger } from '@/utils/logger'
+import { USER_CANCELLED_MESSAGE } from '@/constants'
 import type { ChatMessage, ChatAttachment } from '@/types'
 
 const WS_FIRST_REPLY_TIMEOUT_MS = 120_000
@@ -39,7 +41,6 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: 
 export interface StreamCallbacks {
   onChunk: (content: string, reasoning?: string) => void
   onDone: (content: string, metadata?: Record<string, unknown>, toolCalls?: ChatMessage['tool_calls'], agentName?: string) => void
-  onError: (error: Error) => void
 }
 
 export function sendViaWebSocket(
@@ -52,11 +53,11 @@ export function sendViaWebSocket(
   metadata?: Record<string, string>,
 ): Promise<void> {
   return new Promise<void>((resolve, reject) => {
-    hexclawWS.clearCallbacks()
+    hexclawWS.clearStreamCallbacks()
 
     let settled = false
     let firstReplyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-      fail(new ChatRequestError('助手长时间未开始回复，已超时并停止等待。', false))
+      fail(new ChatRequestError('Assistant reply timed out — no response received.', false))
     }, WS_FIRST_REPLY_TIMEOUT_MS)
     let inactivityTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -69,7 +70,7 @@ export function sendViaWebSocket(
       if (firstReplyTimer) { clearTimeout(firstReplyTimer); firstReplyTimer = null }
       if (inactivityTimer) clearTimeout(inactivityTimer)
       inactivityTimer = setTimeout(() => {
-        fail(new ChatRequestError('助手回复长时间无新内容，已超时并停止等待。', false))
+        fail(new ChatRequestError('Assistant reply stalled — no new content received.', false))
       }, WS_INACTIVITY_TIMEOUT_MS)
     }
 
@@ -77,7 +78,7 @@ export function sendViaWebSocket(
       if (settled) return
       settled = true
       clearTimers()
-      hexclawWS.clearCallbacks()
+      hexclawWS.clearStreamCallbacks()
       reject(err)
     }
 
@@ -112,15 +113,15 @@ export function sendViaWebSocket(
     })
 
     hexclawWS.onError((errMsg: string) => {
-      // 用户主动取消不是错误，直接 resolve 避免 fallback 和错误提示
-      if (errMsg === '用户取消') {
+      // User-initiated cancellation should not trigger fallback or surface as an error.
+      if (errMsg === USER_CANCELLED_MESSAGE) {
         if (settled) return
         settled = true
         clearTimers()
         resolve()
         return
       }
-      fail(new ChatRequestError(errMsg || 'WebSocket 请求失败', true))
+      fail(new ChatRequestError(errMsg || 'WebSocket request failed', true))
     })
 
     const wsAttachments = attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data }))
@@ -148,7 +149,7 @@ export async function sendViaBackend(
       attachments: attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data })),
     }),
     BACKEND_REPLY_TIMEOUT_MS,
-    '后端长时间未返回结果，已超时并停止等待。',
+    'Backend request timed out — no response received.',
   )
 }
 
@@ -160,49 +161,11 @@ export async function ensureWebSocketConnected(): Promise<boolean> {
     await hexclawWS.connect()
     return true
   } catch (e) {
-    logger.warn('WebSocket 连接失败', e)
+    logger.warn('WebSocket connect failed', e)
     return false
   }
 }
 
 export function clearWebSocketCallbacks(): void {
-  hexclawWS.clearCallbacks()
-}
-
-// ─── Outbox 操作 ──────────────────────────────────────
-
-export async function outboxInsert(id: string, sessionId: string, content: string, attachments?: ChatAttachment[]): Promise<void> {
-  await dbOutboxInsert({ id, sessionId, content, attachments: attachments?.length ? JSON.stringify(attachments) : '[]' })
-}
-
-export async function outboxMarkSending(id: string): Promise<void> { await dbOutboxMarkSending(id) }
-export async function outboxMarkSent(id: string): Promise<void> { await dbOutboxMarkSent(id) }
-export async function outboxMarkFailed(id: string, error: string): Promise<void> { await dbOutboxMarkFailed(id, error) }
-
-export async function retryPendingOutbox(): Promise<void> {
-  try {
-    const pending = await dbOutboxGetPending()
-    if (pending.length === 0) return
-    logger.info(`[outbox] 发现 ${pending.length} 条待发送消息，尝试重试`)
-    for (const msg of pending) {
-      try {
-        await dbOutboxMarkSending(msg.id)
-        const result = await sendChatViaBackend(msg.content, { sessionId: msg.sessionId })
-        if (result) {
-          await dbOutboxMarkSent(msg.id)
-          logger.info(`[outbox] 重试成功: ${msg.id}`)
-        }
-      } catch (e) {
-        const errMsg = e instanceof Error ? e.message : 'retry failed'
-        dbOutboxMarkFailed(msg.id, errMsg).catch(() => {})
-        logger.warn(`[outbox] 重试失败: ${msg.id}`, e)
-      }
-    }
-  } catch {
-    // outbox 表可能不存在（首次运行）
-  }
-}
-
-export async function cleanupOutbox(): Promise<void> {
-  await dbOutboxCleanup().catch(() => {})
+  hexclawWS.clearStreamCallbacks()
 }

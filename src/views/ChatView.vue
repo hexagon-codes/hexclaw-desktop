@@ -30,8 +30,10 @@ import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useToast, useConversationAutomation, useChatSend, useChatActions } from '@/composables'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
+import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { openSanitizedArtifact } from '@/utils/safe-html'
 import { getSkills, type Skill } from '@/api/skills'
+import { setClipboard } from '@/api/desktop'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import crabLogo from '@/assets/logo-crab.png'
 
@@ -42,6 +44,9 @@ const chatStore = useChatStore()
 const agentsStore = useAgentsStore()
 const settingsStore = useSettingsStore()
 const toast = useToast()
+const QUERY_MODEL_RETRY_INTERVAL = 1000
+const QUERY_MODEL_RETRY_TIMES = 4
+let queryModelSelectionAbort: AbortController | null = null
 
 const messagesEndRef = ref<HTMLDivElement>()
 const thinkingContentRef = ref<HTMLDivElement>()
@@ -76,6 +81,7 @@ const availableSkills = ref<Skill[]>([])
 // Message context menu
 const msgCtxMenu = ref<InstanceType<typeof ContextMenu>>()
 const ctxMsgIndex = ref(-1)
+const ctxMsgId = ref<string | null>(null)
 const ctxMsgRole = ref<'user' | 'assistant'>('user')
 
 const msgContextItems = computed<ContextMenuItem[]>(() => {
@@ -94,17 +100,24 @@ const msgContextItems = computed<ContextMenuItem[]>(() => {
 
 function handleMsgContextMenu(e: MouseEvent, idx: number, role: 'user' | 'assistant') {
   ctxMsgIndex.value = idx
+  ctxMsgId.value = chatStore.messages[idx]?.id ?? null
   ctxMsgRole.value = role
   msgCtxMenu.value?.show(e)
 }
 
 async function handleMsgCtxAction(action: string) {
-  const idx = ctxMsgIndex.value
+  const idx = ctxMsgId.value
+    ? chatStore.messages.findIndex((item) => item.id === ctxMsgId.value)
+    : ctxMsgIndex.value
   const msg = chatStore.messages[idx]
   if (!msg) return
   switch (action) {
     case 'copy':
-      await navigator.clipboard.writeText(msg.content)
+      try {
+        await setClipboard(msg.content)
+      } catch {
+        // clipboard access can be unavailable in tests or restricted runtimes
+      }
       break
     case 'retry':
       handleRetry(idx)
@@ -136,6 +149,11 @@ function formatTokenCount(n: number): string {
   return (n / 1000).toFixed(1) + 'k'
 }
 
+const EMPTY_REPLY_PATTERN = /^模型未生成有效回复|^模型未返回有效内容|^\(空回复\)$/
+function isEmptyReply(content: string): boolean {
+  return !content.trim() || EMPTY_REPLY_PATTERN.test(content.trim())
+}
+
 function formatFullTime(ts: string): string {
   return new Date(ts).toLocaleString(locale.value, {
     year: 'numeric',
@@ -155,6 +173,7 @@ function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
 // Document parsing state
 const documentParsing = ref(false)
 const parsedDocument = ref<{ text: string; fileName: string; pageCount?: number } | null>(null)
+let documentParseGen = 0
 
 // 当前选中的模型
 const selectedModel = ref('')
@@ -244,6 +263,39 @@ function openArtifactInNewWindow() {
   openSanitizedArtifact(art.content, art.title || 'Artifact Preview')
 }
 
+function cancelQueryModelSelection() {
+  if (queryModelSelectionAbort) {
+    queryModelSelectionAbort.abort()
+    queryModelSelectionAbort = null
+  }
+}
+
+async function applyQueryModelSelection(modelQuery: string): Promise<boolean> {
+  const trySelect = () => {
+    // Ollama 模型名可能带 :latest 后缀（用户输入 "qwen3" → 存为 "qwen3:latest"）
+    const matched = settingsStore.availableModels.find(m =>
+      m.modelId === modelQuery ||
+      m.modelId === `${modelQuery}:latest` ||
+      m.modelId.replace(/:latest$/, '') === modelQuery,
+    )
+    if (!matched) return false
+    selectModel(matched.modelId, matched.providerId, matched.providerKey, matched.providerName)
+    return true
+  }
+
+  if (trySelect()) return true
+
+  cancelQueryModelSelection()
+  queryModelSelectionAbort = new AbortController()
+  return waitForOllamaModelVisibility({
+    sync: settingsStore.syncOllamaModels,
+    isVisible: trySelect,
+    intervalMs: QUERY_MODEL_RETRY_INTERVAL,
+    maxRetries: QUERY_MODEL_RETRY_TIMES,
+    signal: queryModelSelectionAbort.signal,
+  })
+}
+
 /** 初始化模型选择（路由守卫已保证 config 就绪，无需再调 loadConfig） */
 function loadLLMConfig() {
   const defaultModel = settingsStore.config?.llm?.defaultModel
@@ -270,7 +322,7 @@ function loadLLMConfig() {
 }
 
 onMounted(async () => {
-  chatStore.loadSessions()
+  await chatStore.loadSessions()
   chatStore.initApprovalListener()
   agentsStore.loadRoles()
   getSkills()
@@ -291,15 +343,28 @@ onMounted(async () => {
     } else {
       chatStore.newSession(roleTitle)
       await chatStore.ensureSession()
-      chatStore.loadSessions()
+      await chatStore.loadSessions()
     }
     chatStore.chatMode = 'agent'
     chatStore.agentRole = roleQuery
+    chatStore.hasCustomTitle = true
     router.replace({ path: '/chat' })
   }
 
+  // 先同步 Ollama 列表再初始化模型 —— 否则 loadLLMConfig 在 ollamaModelsCache 仍空时会把默认模型判空
+  await settingsStore.syncOllamaModels()
+
   // 初始化模型选择（config 由路由守卫保证已就绪）
   loadLLMConfig()
+
+  // 从设置页跳转：预选指定模型
+  const modelQuery = route.query.model as string | undefined
+  if (modelQuery) {
+    const selected = await applyQueryModelSelection(modelQuery)
+    if (selected) {
+      router.replace({ path: '/chat' })
+    }
+  }
 
   if (!roleQuery) {
     chatStore.agentRole = ''
@@ -310,6 +375,7 @@ onMounted(async () => {
     const { listen } = await import('@tauri-apps/api/event')
     const unlisten = await listen('sidecar-ready', async () => {
       await settingsStore.loadConfig({ force: true })
+      await settingsStore.syncOllamaModels()
       loadLLMConfig()
       unlisten()
     })
@@ -318,6 +384,14 @@ onMounted(async () => {
     // 非 Tauri 环境忽略
   }
 })
+
+async function toggleModelSelector() {
+  showModelSelector.value = !showModelSelector.value
+  if (showModelSelector.value) {
+    await settingsStore.loadConfig({ force: true })
+    await settingsStore.syncOllamaModels()
+  }
+}
 
 function selectModel(modelId: string, providerId = '', providerKey = '', providerName = '') {
   selectedModel.value = modelId
@@ -491,14 +565,19 @@ async function handleFileUpload(file: File) {
 
   // Parse document files to extract text
   if (isDocumentFile(file)) {
+    const parseGen = ++documentParseGen
     documentParsing.value = true
     parsedDocument.value = null
     try {
-      parsedDocument.value = await parseDocument(file)
+      const nextParsedDocument = await parseDocument(file)
+      if (parseGen !== documentParseGen) return
+      parsedDocument.value = nextParsedDocument
     } catch (err) {
+      if (parseGen !== documentParseGen) return
       console.error('Document parsing failed:', err)
       // Still allow sending as raw file attachment
     } finally {
+      if (parseGen !== documentParseGen) return
       documentParsing.value = false
     }
   }
@@ -520,6 +599,9 @@ function handleSearchShortcut(e: KeyboardEvent) {
 
 onMounted(() => document.addEventListener('keydown', handleSearchShortcut))
 onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
+onUnmounted(() => {
+  cancelQueryModelSelection()
+})
 </script>
 
 <template>
@@ -648,6 +730,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
                   <div class="hc-msg__bubble-wrap">
                     <div
                       class="hc-msg__bubble hc-msg__bubble--assistant"
+                      :class="{ 'hc-msg__bubble--empty': isEmptyReply(msg.content) }"
                       :title="formatFullTime(msg.timestamp)"
                     >
                       <MarkdownRenderer :content="msg.content" />
@@ -999,7 +1082,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
               <!-- 模型选择器 + 深度研究（ChatGPT 风格，在输入框内底部工具栏） -->
               <template #tools>
                 <div class="hc-model-selector hc-model-selector--inline">
-                  <button class="hc-model-selector__btn" @click="showModelSelector = !showModelSelector">
+                  <button class="hc-model-selector__btn" @click="toggleModelSelector">
                     <span class="hc-model-selector__name">{{ selectedModelDisplay }}</span>
                     <ChevronDown :size="12" />
                   </button>
@@ -1357,6 +1440,14 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   border-top-left-radius: 4px;
 }
 
+.hc-msg__bubble--empty {
+  background: color-mix(in srgb, var(--hc-text-secondary) 5%, var(--hc-bg-card));
+  border-style: dashed;
+  color: var(--hc-text-secondary);
+  font-style: italic;
+  font-size: 13px;
+}
+
 .hc-msg__bubble--user {
   background: color-mix(in srgb, var(--hc-accent) 8%, var(--hc-bg-card));
   color: var(--hc-text-primary);
@@ -1705,7 +1796,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.06);
   z-index: 100;
 }
@@ -1750,8 +1841,8 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   border-radius: var(--hc-radius-md);
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-elevated, var(--hc-bg-card, #fff));
-  backdrop-filter: blur(20px) saturate(1.2);
-  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
   z-index: var(--hc-z-dropdown);
   padding: 4px;
@@ -2225,7 +2316,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color 0.15s cubic-bezier(0.16, 1, 0.3, 1), color 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hc-msg__automation-btn:hover:not(:disabled) {
@@ -2602,7 +2693,7 @@ onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
   opacity: 0.4;
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-  transition: transform 0.2s ease;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hc-thinking__details[open] .hc-thinking__summary::after {

@@ -2,11 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 
 const searchKnowledge = vi.hoisted(() => vi.fn().mockResolvedValue({ result: [] }))
+const parseDocument = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ text: 'parsed', fileName: 'test.txt' }),
+)
 
 vi.mock('@/api/knowledge', () => ({ searchKnowledge }))
 vi.mock('@/utils/file-parser', () => ({
   isDocumentFile: vi.fn().mockReturnValue(false),
-  parseDocument: vi.fn().mockResolvedValue({ text: 'parsed', fileName: 'test.txt' }),
+  parseDocument,
 }))
 
 import { useChatSend } from '../useChatSend'
@@ -17,6 +20,7 @@ function makeDeps() {
       sendMessage: vi.fn().mockResolvedValue({ id: 'a1', role: 'assistant', content: 'reply', timestamp: '' }),
       chatMode: 'chat',
       agentRole: '',
+      chatParams: { model: 'test-model' },
     },
     parsedDocument: ref(null as { text: string; fileName: string; pageCount?: number } | null),
     attachmentPreview: ref(null as { url: string; name: string; type: 'image' | 'video' | 'file'; file: File } | null),
@@ -30,6 +34,7 @@ describe('useChatSend', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     searchKnowledge.mockResolvedValue({ result: [] })
+    parseDocument.mockResolvedValue({ text: 'parsed', fileName: 'test.txt' })
   })
 
   it('sends message through chatStore.sendMessage', async () => {
@@ -87,5 +92,35 @@ describe('useChatSend', () => {
     const { handleSend } = useChatSend(deps as any)
     await handleSend('test')
     expect(deps.scrollToBottom).toHaveBeenCalled()
+  })
+
+  it('clears stale researcher role when the user has exited research mode', async () => {
+    const deps = makeDeps()
+    deps.chatStore.chatMode = 'chat'
+    deps.chatStore.agentRole = 'researcher'
+
+    const { handleSend } = useChatSend(deps as any)
+    await handleSend('normal chat')
+
+    expect(deps.chatStore.agentRole).toBe('')
+  })
+
+  it('sends video attachments with type=video instead of downgrading them to generic files', async () => {
+    parseDocument.mockRejectedValueOnce(new Error('unsupported video parsing'))
+
+    const deps = makeDeps()
+    const { handleSend } = useChatSend(deps as any)
+    const video = new File(['video-bytes'], 'demo.mp4', { type: 'video/mp4' })
+
+    await handleSend('watch this', [video])
+
+    const call = deps.chatStore.sendMessage.mock.calls[0]!
+    expect(call[1]).toEqual([
+      expect.objectContaining({
+        type: 'video',
+        name: 'demo.mp4',
+        mime: 'video/mp4',
+      }),
+    ])
   })
 })

@@ -1,40 +1,43 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const {
-  dbGetSessions, dbCreateSession, dbUpdateSessionTitle, dbTouchSession,
-  dbDeleteSession, dbGetMessages, dbSaveMessage, dbDeleteMessage,
-  dbGetArtifacts, dbSaveArtifact, dbDeleteSessionArtifacts,
-  dbGetAppState, dbSetAppState,
+  listSessions,
+  listSessionMessages,
+  createSessionApi,
+  updateSessionTitleApi,
+  deleteSessionApi,
+  deleteMessageApi,
 } = vi.hoisted(() => ({
-  dbGetSessions: vi.fn().mockResolvedValue([]),
-  dbCreateSession: vi.fn().mockResolvedValue(undefined),
-  dbUpdateSessionTitle: vi.fn().mockResolvedValue(undefined),
-  dbTouchSession: vi.fn().mockResolvedValue(undefined),
-  dbDeleteSession: vi.fn().mockResolvedValue(undefined),
-  dbGetMessages: vi.fn().mockResolvedValue([]),
-  dbSaveMessage: vi.fn().mockResolvedValue(undefined),
-  dbDeleteMessage: vi.fn().mockResolvedValue(undefined),
-  dbGetArtifacts: vi.fn().mockResolvedValue([]),
-  dbSaveArtifact: vi.fn().mockResolvedValue(undefined),
-  dbDeleteSessionArtifacts: vi.fn().mockResolvedValue(undefined),
-  dbGetAppState: vi.fn().mockResolvedValue(null),
-  dbSetAppState: vi.fn().mockResolvedValue(undefined),
+  listSessions: vi.fn().mockResolvedValue({ sessions: [], total: 0 }),
+  listSessionMessages: vi.fn().mockResolvedValue({ messages: [], total: 0 }),
+  createSessionApi: vi.fn().mockResolvedValue({ id: 's1', title: '新对话', created_at: '2026-01-01' }),
+  updateSessionTitleApi: vi.fn().mockResolvedValue({ id: 's1', title: 'Updated', updated_at: '2026-01-02' }),
+  deleteSessionApi: vi.fn().mockResolvedValue({ message: 'ok' }),
+  deleteMessageApi: vi.fn().mockResolvedValue({ message: 'deleted' }),
 }))
 
-vi.mock('@/db/chat', () => ({
-  dbGetSessions, dbCreateSession, dbUpdateSessionTitle, dbTouchSession,
-  dbDeleteSession, dbGetMessages, dbSaveMessage, dbDeleteMessage,
+vi.mock('@/api/chat', () => ({
+  listSessions,
+  listSessionMessages,
+  createSession: createSessionApi,
+  updateSessionTitle: updateSessionTitleApi,
+  deleteSession: deleteSessionApi,
+  deleteMessage: deleteMessageApi,
 }))
-vi.mock('@/db/artifacts', () => ({ dbGetArtifacts, dbSaveArtifact, dbDeleteSessionArtifacts }))
-vi.mock('@/db/connection', () => ({ dbGetAppState, dbSetAppState, getDB: vi.fn() }))
 
 import {
   parseMessageMetadata, normalizeLoadedMessage, serializeMessageMetadata,
   loadAllSessions, deleteSession, persistMessage, loadMessages,
+  createSession, updateSessionTitle, touchSession,
+  getLastSessionId, setLastSessionId,
+  loadArtifacts, saveArtifact, removeMessage,
 } from '../messageService'
 
 describe('messageService', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+  })
 
   // ─── parseMessageMetadata ───
   it('returns undefined for null', () => {
@@ -86,49 +89,235 @@ describe('messageService', () => {
   })
 
   // ─── loadAllSessions ───
-  it('returns mapped sessions', async () => {
-    dbGetSessions.mockResolvedValueOnce([
-      { id: 's1', title: 'Test', created_at: '2026-01-01', updated_at: '2026-01-02' },
-    ])
+  it('returns mapped sessions from API', async () => {
+    listSessions.mockResolvedValueOnce({
+      sessions: [
+        { id: 's1', title: 'Test', created_at: '2026-01-01', updated_at: '2026-01-02', message_count: 5 },
+      ],
+      total: 1,
+    })
     const sessions = await loadAllSessions()
     expect(sessions).toHaveLength(1)
-    expect(sessions[0]!.message_count).toBe(0)
+    expect(sessions[0]!.title).toBe('Test')
+    expect(sessions[0]!.message_count).toBe(5)
+  })
+
+  it('returns empty array when API fails', async () => {
+    listSessions.mockRejectedValueOnce(new Error('API error'))
+    const sessions = await loadAllSessions()
+    expect(sessions).toEqual([])
+  })
+
+  // ─── createSession ───
+  it('calls createSession API', async () => {
+    await createSession('s1', 'Test')
+    expect(createSessionApi).toHaveBeenCalledWith('s1', 'Test')
+  })
+
+  // ─── updateSessionTitle ───
+  it('calls updateSessionTitle API', async () => {
+    await updateSessionTitle('s1', 'New Title')
+    expect(updateSessionTitleApi).toHaveBeenCalledWith('s1', 'New Title')
+  })
+
+  // ─── touchSession ───
+  it('touchSession is a no-op', async () => {
+    await touchSession('s1')
+    // Should not throw, backend handles timestamps
   })
 
   // ─── deleteSession ───
-  it('calls dbDeleteSessionArtifacts then dbDeleteSession', async () => {
+  it('calls deleteSession API', async () => {
     await deleteSession('s1')
-    expect(dbDeleteSessionArtifacts).toHaveBeenCalledWith('s1')
-    expect(dbDeleteSession).toHaveBeenCalledWith('s1')
-    // artifacts deleted BEFORE session
-    const artifactOrder = dbDeleteSessionArtifacts.mock.invocationCallOrder[0]
-    const sessionOrder = dbDeleteSession.mock.invocationCallOrder[0]
-    expect(artifactOrder).toBeLessThan(sessionOrder!)
-  })
-
-  // ─── persistMessage ───
-  it('calls dbSaveMessage with serialized metadata', async () => {
-    await persistMessage(
-      { id: 'm1', role: 'assistant', content: 'done', timestamp: '2026-01-01', agent_name: 'Bot' },
-      's1',
-    )
-    expect(dbSaveMessage).toHaveBeenCalledWith('m1', 's1', 'assistant', 'done', '2026-01-01', { agent_name: 'Bot' })
-  })
-
-  it('swallows error on persistence failure', async () => {
-    dbSaveMessage.mockRejectedValueOnce(new Error('DB error'))
-    await expect(persistMessage(
-      { id: 'm1', role: 'user', content: 'hi', timestamp: '' }, 's1',
-    )).resolves.toBeUndefined()
+    expect(deleteSessionApi).toHaveBeenCalledWith('s1')
   })
 
   // ─── loadMessages ───
-  it('normalizes loaded messages', async () => {
-    dbGetMessages.mockResolvedValueOnce([
-      { id: 'm1', session_id: 's1', role: 'user', content: 'hello', timestamp: '2026-01-01', metadata: null },
-    ])
+  it('returns messages from API', async () => {
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [
+        { id: 'm1', role: 'user', content: 'hello', timestamp: '2026-01-01' },
+      ],
+      total: 1,
+    })
     const msgs = await loadMessages('s1')
     expect(msgs).toHaveLength(1)
     expect(msgs[0]!.role).toBe('user')
+  })
+
+  it('returns empty array when API fails', async () => {
+    listSessionMessages.mockRejectedValueOnce(new Error('API error'))
+    const msgs = await loadMessages('s1')
+    expect(msgs).toEqual([])
+  })
+
+  // ─── Bug 复现: 第二次打开会话 reasoning 丢失 ───
+  // 后端 API 将 reasoning 存在 metadata 对象内，而非消息顶层字段。
+  // 修复前 loadMessages 直接 spread，顶层 reasoning 为 undefined。
+
+  describe('before/after fix contrast: reasoning lost on reload', () => {
+    // 模拟后端返回的消息——reasoning 只存在 metadata 中，顶层没有
+    const backendMessage = {
+      id: 'm-reload', role: 'assistant' as const, content: '回复内容',
+      timestamp: '2026-01-01',
+      metadata: { reasoning: '这是思考过程', thinking_duration: 5 },
+    }
+
+    // ── 旧代码（修复前）：直接 spread，不提取 metadata 内字段 ──
+    function loadMessages_OLD(messages: typeof backendMessage[]) {
+      return messages.map(m => ({
+        ...m,
+        timestamp: m.timestamp || new Date().toISOString(),
+      }))
+    }
+
+    it('[修复前] reasoning 丢失 — 旧逻辑直接 spread 不提取 metadata 内字段', () => {
+      const msgs = loadMessages_OLD([backendMessage])
+      // 旧代码：顶层没有 reasoning 字段，spread 后仍然没有
+      expect(msgs[0]).not.toHaveProperty('reasoning')
+      // metadata 中的 reasoning 存在但 UI 读取的是顶层字段，所以不显示
+      expect((msgs[0] as any).metadata.reasoning).toBe('这是思考过程')
+    })
+
+    it('[修复后] reasoning 正确提取 — loadMessages 从 metadata 中还原', async () => {
+      listSessionMessages.mockResolvedValueOnce({ messages: [backendMessage], total: 1 })
+      const msgs = await loadMessages('s1')
+      // 修复后：顶层 reasoning 被正确赋值
+      expect(msgs[0]!.reasoning).toBe('这是思考过程')
+    })
+  })
+
+  it('extracts reasoning from metadata object (bug fix: reasoning lost on reload)', async () => {
+    // 模拟后端返回：reasoning 存在 metadata.reasoning 中，顶层无 reasoning
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 'm1', role: 'assistant', content: '回复内容',
+        timestamp: '2026-01-01',
+        metadata: { reasoning: '这是思考过程', thinking_duration: 5 },
+      }],
+      total: 1,
+    })
+    const msgs = await loadMessages('s1')
+    expect(msgs[0]!.reasoning).toBe('这是思考过程')
+    expect(msgs[0]!.metadata?.thinking_duration).toBe(5)
+  })
+
+  it('extracts reasoning from metadata JSON string', async () => {
+    // 某些情况下后端可能返回 metadata 为 JSON 字符串
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 'm2', role: 'assistant', content: '回复',
+        timestamp: '2026-01-01',
+        metadata: JSON.stringify({ reasoning: '字符串形式的思考', agent_name: 'Coder' }),
+      }],
+      total: 1,
+    })
+    const msgs = await loadMessages('s1')
+    expect(msgs[0]!.reasoning).toBe('字符串形式的思考')
+    expect(msgs[0]!.agent_name).toBe('Coder')
+  })
+
+  it('extracts tool_calls and agent_name from metadata on reload', async () => {
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 'm3', role: 'assistant', content: '工具调用结果',
+        timestamp: '2026-01-01',
+        metadata: {
+          tool_calls: [{ id: 't1', name: 'web_search', arguments: '{"q":"test"}' }],
+          agent_name: 'Researcher',
+        },
+      }],
+      total: 1,
+    })
+    const msgs = await loadMessages('s1')
+    expect(msgs[0]!.tool_calls).toHaveLength(1)
+    expect(msgs[0]!.tool_calls![0]!.name).toBe('web_search')
+    expect(msgs[0]!.agent_name).toBe('Researcher')
+  })
+
+  it('preserves top-level reasoning when already present', async () => {
+    // 如果后端将来直接在顶层返回 reasoning，应优先使用
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 'm4', role: 'assistant', content: '回复',
+        reasoning: '顶层思考',
+        timestamp: '2026-01-01',
+        metadata: { reasoning: 'metadata 中的思考' },
+      }],
+      total: 1,
+    })
+    const msgs = await loadMessages('s1')
+    expect(msgs[0]!.reasoning).toBe('顶层思考')
+  })
+
+  it('reasoning is undefined when neither top-level nor metadata has it', async () => {
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 'm5', role: 'user', content: '普通消息',
+        timestamp: '2026-01-01',
+      }],
+      total: 1,
+    })
+    const msgs = await loadMessages('s1')
+    expect(msgs[0]!.reasoning).toBeUndefined()
+  })
+
+  it('removeMessage removes the message from subsequent loads', async () => {
+    const backendMessages = [
+      { id: 'm1', role: 'user', content: 'hello', timestamp: '2026-01-01' },
+      { id: 'm2', role: 'assistant', content: 'hi', timestamp: '2026-01-01' },
+    ]
+    listSessionMessages.mockImplementation(() =>
+      Promise.resolve({ messages: [...backendMessages], total: backendMessages.length }),
+    )
+
+    const before = await loadMessages('s1')
+    expect(before.map((msg) => msg.id)).toContain('m1')
+
+    // 删除后端消息后模拟后端不再返回该消息
+    deleteMessageApi.mockResolvedValueOnce({ message: 'deleted' })
+    await removeMessage('m1')
+    expect(deleteMessageApi).toHaveBeenCalledWith('m1')
+
+    // 模拟后端删除后返回的列表
+    listSessionMessages.mockImplementation(() =>
+      Promise.resolve({
+        messages: backendMessages.filter(m => m.id !== 'm1'),
+        total: 1,
+      }),
+    )
+    const after = await loadMessages('s1')
+    expect(after.map((msg) => msg.id)).not.toContain('m1')
+  })
+
+  // ─── persistMessage ───
+  it('persistMessage returns true (backend handles persistence)', async () => {
+    const result = await persistMessage(
+      { id: 'm1', role: 'assistant', content: 'done', timestamp: '2026-01-01', agent_name: 'Bot' },
+      's1',
+    )
+    expect(result).toBe(true)
+  })
+
+  // ─── loadArtifacts ───
+  it('loadArtifacts returns empty array (in-memory only)', async () => {
+    const artifacts = await loadArtifacts('s1')
+    expect(artifacts).toEqual([])
+  })
+
+  // ─── saveArtifact ───
+  it('saveArtifact is a no-op', async () => {
+    await saveArtifact('s1', { id: 'a1', type: 'code', title: 'Snippet', language: 'ts', content: 'test', messageId: 'm1', createdAt: '' })
+    // Should not throw
+  })
+
+  // ─── lastSessionId (localStorage) ───
+  it('getLastSessionId returns null when not set', () => {
+    expect(getLastSessionId()).toBeNull()
+  })
+
+  it('setLastSessionId and getLastSessionId round-trip', () => {
+    setLastSessionId('s1')
+    expect(getLastSessionId()).toBe('s1')
   })
 })

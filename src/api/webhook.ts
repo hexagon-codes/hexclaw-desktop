@@ -40,17 +40,6 @@ export function createWebhook(data: { name: string; type: WebhookType; url: stri
 }
 
 /** 删除 Webhook */
-export function deleteWebhook(name: string) {
-  return apiDelete<{ message: string }>(`/api/v1/webhooks/${name}`)
-}
-
-/** 旧版兼容 — registerWebhook */
-export function registerWebhook(name: string, prompt: string, type?: string, secret?: string) {
-  return apiPost<{ id: string; name: string; url: string }>('/api/v1/webhooks', {
-    name,
-    prompt,
-    type: type ?? 'custom',
-    secret: secret ?? '',
-    user_id: DESKTOP_USER_ID,
-  })
+export function deleteWebhook(id: string) {
+  return apiDelete<{ message: string }>(`/api/v1/webhooks/${encodeURIComponent(id)}`)
 }

@@ -6,6 +6,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 
 const {
   getDocuments,
+  getDocumentContent,
   addDocument,
   uploadDocument,
   searchKnowledge,
@@ -15,6 +16,7 @@ const {
   parseDocument,
 } = vi.hoisted(() => ({
   getDocuments: vi.fn(),
+  getDocumentContent: vi.fn(),
   addDocument: vi.fn(),
   uploadDocument: vi.fn(),
   searchKnowledge: vi.fn(),
@@ -26,6 +28,7 @@ const {
 
 vi.mock('@/api/knowledge', () => ({
   getDocuments,
+  getDocumentContent,
   addDocument,
   deleteDocument: vi.fn(),
   searchKnowledge,
@@ -80,6 +83,7 @@ describe('KnowledgeView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     getDocuments.mockResolvedValue({ documents: [], total: 0 })
+    getDocumentContent.mockResolvedValue('loaded content')
     addDocument.mockResolvedValue({
       id: 'doc-add',
       title: 'A',
@@ -294,5 +298,246 @@ describe('KnowledgeView', () => {
     expect(wrapper.text()).toContain('产品规范')
     expect(wrapper.text()).toContain('spec.md')
     expect(wrapper.text()).toContain('切片 2/4')
+  })
+
+  it('keeps the latest search results when an earlier knowledge search resolves later', async () => {
+    let resolveOld!: (value: { result: Array<Record<string, unknown>> }) => void
+    let resolveNew!: (value: { result: Array<Record<string, unknown>> }) => void
+
+    searchKnowledge
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNew = resolve
+          }),
+      )
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const searchTab = wrapper.findAll('button').find((btn) => btn.text().includes('搜索测试'))
+    expect(searchTab).toBeDefined()
+    await searchTab!.trigger('click')
+    await flushPromises()
+
+    const input = wrapper.find('input[type="text"]')
+    await input.setValue('旧查询')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    await input.setValue('新查询')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    resolveNew({
+      result: [
+        {
+          content: '新结果',
+          score: 0.91,
+          doc_title: '新文档',
+        },
+      ],
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('新结果')
+
+    resolveOld({
+      result: [
+        {
+          content: '旧结果',
+          score: 0.72,
+          doc_title: '旧文档',
+        },
+      ],
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('新结果')
+    expect(wrapper.text()).not.toContain('旧结果')
+  })
+
+  it('switching away from search should clear an old search error banner', async () => {
+    searchKnowledge.mockRejectedValueOnce(new Error('搜索失败'))
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const searchTab = wrapper.findAll('button').find((btn) => btn.text().includes('搜索测试'))
+    expect(searchTab).toBeDefined()
+    await searchTab!.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      searchQuery: string
+      handleSearch: () => Promise<void>
+    }
+    vm.searchQuery = 'query'
+    await vm.handleSearch()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('搜索失败')
+
+    const docsTab = wrapper.findAll('button').find((btn) => btn.text().includes('文档'))
+    expect(docsTab).toBeDefined()
+    await docsTab!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('搜索失败')
+  })
+
+  it('keeps the detail drawer in loading state until the latest document content request finishes', async () => {
+    let resolveFirst!: (value: string) => void
+    let resolveSecond!: (value: string) => void
+
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-1',
+          title: '文档一',
+          content: '',
+          chunk_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'doc-2',
+          title: '文档二',
+          content: '',
+          chunk_count: 1,
+          created_at: '2026-01-02T00:00:00Z',
+        },
+      ],
+      total: 2,
+    })
+
+    getDocumentContent
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve
+          }),
+      )
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const firstDocButton = wrapper.findAll('button').find((btn) => btn.text().includes('文档一'))
+    const secondDocButton = wrapper.findAll('button').find((btn) => btn.text().includes('文档二'))
+    expect(firstDocButton).toBeDefined()
+    expect(secondDocButton).toBeDefined()
+
+    await firstDocButton!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('加载中')
+
+    await secondDocButton!.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('加载中')
+
+    resolveFirst('旧请求内容')
+    await flushPromises()
+    expect(wrapper.text()).toContain('加载中')
+
+    resolveSecond('最新请求内容')
+    await flushPromises()
+    expect(wrapper.text()).toContain('最新请求内容')
+  })
+
+  it('resets the add-document dialog state when it is closed and reopened after a failure', async () => {
+    addDocument.mockRejectedValueOnce(new Error('新增失败'))
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { openUpload: () => void }
+    vm.openUpload()
+    await flushPromises()
+
+    const inputs = wrapper.findAll('input[type="text"]')
+    expect(inputs.length).toBeGreaterThanOrEqual(2)
+    await inputs[0].setValue('旧标题')
+    await wrapper.get('textarea').setValue('旧内容')
+    await inputs[1].setValue('旧来源')
+
+    const addBtn = wrapper.findAll('button').find((btn) => btn.text().includes('添加'))
+    expect(addBtn).toBeDefined()
+    await addBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('新增失败')
+
+    const cancelBtn = wrapper.findAll('button').find((btn) => btn.text().includes('取消'))
+    expect(cancelBtn).toBeDefined()
+    await cancelBtn!.trigger('click')
+    await flushPromises()
+
+    vm.openUpload()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('新增失败')
+    expect((wrapper.findAll('input[type="text"]')[0].element as HTMLInputElement).value).toBe('')
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('')
+    expect((wrapper.findAll('input[type="text"]')[1].element as HTMLInputElement).value).toBe('')
+  })
+
+  it('does not trigger duplicate reindex requests while the same document is already reindexing', async () => {
+    let resolveReindex!: () => void
+
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-1',
+          title: '设计文档',
+          content: '正文',
+          chunk_count: 2,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+      total: 1,
+    })
+
+    reindexDocument.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReindex = resolve
+        }),
+    )
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      handleReindex: (doc: { id: string; title: string; content: string; chunk_count: number; created_at: string }) => Promise<void>
+    }
+
+    const doc = {
+      id: 'doc-1',
+      title: '设计文档',
+      content: '正文',
+      chunk_count: 2,
+      created_at: '2026-01-01T00:00:00Z',
+    }
+
+    void vm.handleReindex(doc)
+    await flushPromises()
+    void vm.handleReindex(doc)
+    await flushPromises()
+
+    expect(reindexDocument).toHaveBeenCalledTimes(1)
+
+    resolveReindex()
+    await flushPromises()
   })
 })

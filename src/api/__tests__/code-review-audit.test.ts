@@ -483,9 +483,10 @@ describe('P0-P2 feature coverage: new API exports', () => {
     expect(typeof mod.listIMInstancesHealth).toBe('function')
   })
 
-  it('models.ts exports listModels', async () => {
+  it('models.ts exports LLMModel type', async () => {
     const mod = await import('../models')
-    expect(typeof mod.listModels).toBe('function')
+    // listModels function removed (was unused); only type export remains
+    expect(typeof mod.listModels).toBe('undefined')
   })
 
   it('index.ts re-exports voice, webhook, and models', () => {

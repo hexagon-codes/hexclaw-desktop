@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { checkMock, relaunchMock, downloadAndInstallMock } = vi.hoisted(() => ({
+const { checkMock, relaunchMock } = vi.hoisted(() => ({
   checkMock: vi.fn(),
   relaunchMock: vi.fn(),
-  downloadAndInstallMock: vi.fn(),
 }))
 
 vi.mock('@tauri-apps/plugin-updater', () => ({
@@ -14,68 +13,61 @@ vi.mock('@tauri-apps/plugin-process', () => ({
   relaunch: relaunchMock,
 }))
 
-async function loadComposable() {
-  return import('../useAutoUpdate')
-}
-
 describe('useAutoUpdate', () => {
   beforeEach(() => {
-    vi.resetModules()
     vi.clearAllMocks()
-    downloadAndInstallMock.mockResolvedValue(undefined)
-    relaunchMock.mockResolvedValue(undefined)
+    vi.resetModules()
   })
 
-  it('marks update available when updater returns a release', async () => {
+  it('shares the in-flight update check result instead of returning a stale up-to-date status', async () => {
+    let resolveCheck!: (value: { version: string; downloadAndInstall: () => Promise<void> } | null) => void
+    checkMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCheck = resolve
+        }),
+    )
+
+    const { useAutoUpdate } = await import('../useAutoUpdate')
+    const updater = useAutoUpdate()
+
+    const first = updater.checkForUpdate()
+    const second = updater.checkForUpdate()
+    await vi.waitFor(() => {
+      expect(checkMock).toHaveBeenCalledTimes(1)
+    })
+
+    resolveCheck({
+      version: '1.2.3',
+      downloadAndInstall: async () => {},
+    })
+
+    await expect(first).resolves.toEqual({ status: 'available', version: '1.2.3' })
+    await expect(second).resolves.toEqual({ status: 'available', version: '1.2.3' })
+  })
+
+  it('shares the in-flight install result instead of reporting no-update to concurrent callers', async () => {
+    let resolveInstall!: () => void
     checkMock.mockResolvedValue({
-      version: '0.0.3',
-      downloadAndInstall: downloadAndInstallMock,
+      version: '1.2.3',
+      downloadAndInstall: () =>
+        new Promise<void>((resolve) => {
+          resolveInstall = resolve
+        }),
     })
 
-    const { useAutoUpdate } = await loadComposable()
-    const autoUpdate = useAutoUpdate()
-    const result = await autoUpdate.checkForUpdate()
+    const { useAutoUpdate } = await import('../useAutoUpdate')
+    const updater = useAutoUpdate()
 
-    expect(result).toEqual({
-      status: 'available',
-      version: '0.0.3',
-    })
-    expect(autoUpdate.updateAvailable.value).toBe(true)
-    expect(autoUpdate.updateVersion.value).toBe('0.0.3')
-    expect(autoUpdate.lastCheckedAt.value).not.toBe('')
-  })
-
-  it('clears stale update state when no update is available', async () => {
-    checkMock
-      .mockResolvedValueOnce({
-        version: '0.0.3',
-        downloadAndInstall: downloadAndInstallMock,
-      })
-      .mockResolvedValueOnce(null)
-
-    const { useAutoUpdate } = await loadComposable()
-    const autoUpdate = useAutoUpdate()
-
-    await autoUpdate.checkForUpdate()
-    const result = await autoUpdate.checkForUpdate()
-
-    expect(result).toEqual({ status: 'up-to-date' })
-    expect(autoUpdate.updateAvailable.value).toBe(false)
-    expect(autoUpdate.updateVersion.value).toBe('')
-  })
-
-  it('downloads and relaunches when installing an available update', async () => {
-    checkMock.mockResolvedValue({
-      version: '0.0.3',
-      downloadAndInstall: downloadAndInstallMock,
+    const first = updater.installUpdate()
+    const second = updater.installUpdate()
+    await vi.waitFor(() => {
+      expect(checkMock).toHaveBeenCalledTimes(1)
     })
 
-    const { useAutoUpdate } = await loadComposable()
-    const autoUpdate = useAutoUpdate()
-    const result = await autoUpdate.installUpdate()
+    resolveInstall()
 
-    expect(result).toEqual({ status: 'installed' })
-    expect(downloadAndInstallMock).toHaveBeenCalledTimes(1)
-    expect(relaunchMock).toHaveBeenCalledTimes(1)
+    await expect(first).resolves.toEqual({ status: 'installed' })
+    await expect(second).resolves.toEqual({ status: 'installed' })
   })
 })

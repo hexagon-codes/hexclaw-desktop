@@ -1,4 +1,5 @@
 import { ref, onUnmounted } from 'vue'
+import { logger } from '@/utils/logger'
 
 interface UseWebSocketOptions {
   /** 自动重连间隔 (ms)，0 表示不重连 */
@@ -39,7 +40,7 @@ export function useWebSocket<T = unknown>(
           const data = JSON.parse(event.data) as T
           onMessage(data)
         } catch {
-          console.warn('[WS] 解析消息失败:', event.data)
+          logger.warn('[WS] Failed to parse message:', event.data)
         }
       }
 

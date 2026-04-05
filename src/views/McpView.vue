@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download } from 'lucide-vue-next'
 import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, getMcpMarketplace, searchMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
@@ -21,23 +21,37 @@ const activeTab = ref<'servers' | 'tools' | 'marketplace'>('servers')
 const marketplaceItems = ref<McpMarketplaceEntry[]>([])
 const marketplaceLoading = ref(false)
 const marketplaceSearch = ref('')
-const installingServer = ref<string | null>(null)
+const installingServers = ref<Set<string>>(new Set())
+let marketplaceRequestGen = 0
+let loadAllRequestGen = 0
+let statusRequestGen = 0
 
 async function loadMarketplace() {
+  const requestGen = ++marketplaceRequestGen
   marketplaceLoading.value = true
+  errorMsg.value = ''
   try {
     const q = marketplaceSearch.value.trim()
     const res = q ? await searchMcpMarketplace(q) : await getMcpMarketplace()
+    if (requestGen !== marketplaceRequestGen) return
     marketplaceItems.value = res.skills || []
   } catch (e) {
+    if (requestGen !== marketplaceRequestGen) return
     console.error('Failed to load MCP marketplace:', e)
+    errorMsg.value = e instanceof Error ? e.message : 'Failed to load marketplace'
     marketplaceItems.value = []
   }
-  finally { marketplaceLoading.value = false }
+  finally {
+    if (requestGen === marketplaceRequestGen) {
+      marketplaceLoading.value = false
+    }
+  }
 }
 
 async function installFromMarketplace(entry: McpMarketplaceEntry) {
-  installingServer.value = entry.name
+  if (installingServers.value.has(entry.name)) return
+  installingServers.value = new Set([...installingServers.value, entry.name])
+  errorMsg.value = ''
   try {
     // MCP 条目有 command/args → 直接添加为 MCP Server
     // Skill 条目 → 通过 Hub 安装
@@ -48,7 +62,11 @@ async function installFromMarketplace(entry: McpMarketplaceEntry) {
     }
     await loadAll()
   } catch (e) { errorMsg.value = e instanceof Error ? e.message : 'Install failed' }
-  finally { installingServer.value = null }
+  finally {
+    const nextInstalling = new Set(installingServers.value)
+    nextInstalling.delete(entry.name)
+    installingServers.value = nextInstalling
+  }
 }
 const expandedTool = ref<string | null>(null)
 const toolSearchQuery = ref('')
@@ -63,37 +81,60 @@ onMounted(async () => {
   await loadAll()
 })
 
+watch(activeTab, () => {
+  errorMsg.value = ''
+})
+
+function setOptimisticStatuses(nextServers: string[]) {
+  const statuses: Record<string, 'connected'> = {}
+  for (const server of nextServers) statuses[server] = 'connected'
+  serverStatuses.value = statuses
+}
+
+async function refreshServerStatuses(nextServers: string[], requestGen: number) {
+  const statusGen = ++statusRequestGen
+  try {
+    const statusRes = await getMcpServerStatus()
+    if (requestGen !== loadAllRequestGen || statusGen !== statusRequestGen) return
+    if (statusRes.statuses) {
+      serverStatuses.value = statusRes.statuses
+      return
+    }
+    if (Array.isArray(statusRes.servers)) {
+      const map: Record<string, 'connected' | 'disconnected'> = {}
+      for (const s of statusRes.servers as Array<{ name: string; connected: boolean }>) {
+        map[s.name] = s.connected ? 'connected' : 'disconnected'
+      }
+      serverStatuses.value = map
+      return
+    }
+  } catch {
+    // If status API not available, keep optimistic connected statuses.
+  }
+
+  if (requestGen !== loadAllRequestGen || statusGen !== statusRequestGen) return
+  setOptimisticStatuses(nextServers)
+}
+
 async function loadAll() {
+  const requestGen = ++loadAllRequestGen
   loading.value = true
   errorMsg.value = ''
   try {
     const [srvRes, toolRes] = await Promise.all([getMcpServers(), getMcpTools()])
+    if (requestGen !== loadAllRequestGen) return
     servers.value = srvRes.servers || []
     tools.value = toolRes.tools || []
-    // Try to load server statuses
-    try {
-      const statusRes = await getMcpServerStatus()
-      if (statusRes.statuses) {
-        serverStatuses.value = statusRes.statuses
-      } else if (Array.isArray(statusRes.servers)) {
-        // 后端返回 {servers: [{name, connected, tool_count}]} 格式
-        const map: Record<string, 'connected' | 'disconnected'> = {}
-        for (const s of statusRes.servers as Array<{ name: string; connected: boolean }>) {
-          map[s.name] = s.connected ? 'connected' : 'disconnected'
-        }
-        serverStatuses.value = map
-      }
-    } catch {
-      // If status API not available, mark all as connected (optimistic)
-      const statuses: Record<string, 'connected'> = {}
-      for (const s of servers.value) statuses[s] = 'connected'
-      serverStatuses.value = statuses
-    }
+    setOptimisticStatuses(servers.value)
+    void refreshServerStatuses(servers.value, requestGen)
   } catch (e) {
+    if (requestGen !== loadAllRequestGen) return
     errorMsg.value = e instanceof Error ? e.message : '加载 MCP 数据失败'
     console.error('加载 MCP 数据失败:', e)
   } finally {
-    loading.value = false
+    if (requestGen === loadAllRequestGen) {
+      loading.value = false
+    }
   }
 }
 
@@ -147,6 +188,7 @@ function isTestRunning(toolName: string): boolean {
 }
 
 async function executeTest(toolName: string) {
+  if (testRunningTools.value.has(toolName)) return
   testRunningTools.value = new Set([...testRunningTools.value, toolName])
   testResult.value = null
   try {
@@ -195,17 +237,29 @@ const newServerName = ref('')
 const newServerCommand = ref('')
 const newServerArgs = ref('')
 const addingServer = ref(false)
+const removingServers = ref<Set<string>>(new Set())
+
+function resetAddServerForm() {
+  newServerName.value = ''
+  newServerCommand.value = ''
+  newServerArgs.value = ''
+}
+
+function closeAddServer() {
+  showAddServer.value = false
+  errorMsg.value = ''
+  resetAddServerForm()
+}
 
 async function handleAddServer() {
+  if (addingServer.value) return
   if (!newServerName.value.trim() || !newServerCommand.value.trim()) return
   addingServer.value = true
+  errorMsg.value = ''
   try {
     const args = newServerArgs.value.trim() ? newServerArgs.value.trim().split(/\s+/) : undefined
     await addMcpServer(newServerName.value.trim(), newServerCommand.value.trim(), args)
-    showAddServer.value = false
-    newServerName.value = ''
-    newServerCommand.value = ''
-    newServerArgs.value = ''
+    closeAddServer()
     await loadAll()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : '添加服务器失败'
@@ -215,21 +269,37 @@ async function handleAddServer() {
 }
 
 async function handleRemoveServer(name: string) {
+  if (removingServers.value.has(name)) return
   if (!confirm(t('mcpManage.removeConfirm'))) return
+  const nextRemoving = new Set(removingServers.value)
+  nextRemoving.add(name)
+  removingServers.value = nextRemoving
+  errorMsg.value = ''
   try {
     await removeMcpServer(name)
     servers.value = servers.value.filter(s => s !== name)
     delete serverStatuses.value[name]
+    await loadAll()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : '移除服务器失败'
+  } finally {
+    const currentRemoving = new Set(removingServers.value)
+    currentRemoving.delete(name)
+    removingServers.value = currentRemoving
   }
 }
 
 function openAddServer() {
+  closeAddServer()
   showAddServer.value = true
 }
 
-defineExpose({ openAddServer })
+function switchToMarketplace() {
+  activeTab.value = 'marketplace'
+  loadMarketplace()
+}
+
+defineExpose({ openAddServer, switchToMarketplace })
 </script>
 
 <template>
@@ -279,15 +349,6 @@ defineExpose({ openAddServer })
         {{ t('mcp.marketplace', 'Marketplace') }}
       </button>
       </div>
-      <button
-        v-if="activeTab === 'servers'"
-        class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white -mb-px"
-        :style="{ background: 'var(--hc-accent)' }"
-        @click="openAddServer"
-      >
-        <Plus :size="13" />
-        {{ t('mcpManage.addServerTitle', 'Add Server') }}
-      </button>
     </div>
 
     <div class="flex-1 overflow-y-auto p-6">
@@ -321,6 +382,7 @@ defineExpose({ openAddServer })
             <span class="text-sm font-medium flex-1" :style="{ color: 'var(--hc-text-primary)' }">{{ name }}</span>
             <button
               class="p-1.5 rounded-md hover:bg-white/5 transition-colors flex-shrink-0"
+              :disabled="removingServers.has(name)"
               :style="{ color: 'var(--hc-text-muted)' }"
               :title="t('mcpManage.removeServer')"
               @click="handleRemoveServer(name)"
@@ -521,10 +583,10 @@ defineExpose({ openAddServer })
                 <button
                   class="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium text-white"
                   :style="{ background: servers.includes(item.name) ? 'var(--hc-text-tertiary)' : 'var(--hc-accent)' }"
-                  :disabled="servers.includes(item.name) || installingServer === item.name"
+                  :disabled="servers.includes(item.name) || installingServers.has(item.name)"
                   @click="installFromMarketplace(item)"
                 >
-                  <Loader2 v-if="installingServer === item.name" :size="12" class="animate-spin" />
+                  <Loader2 v-if="installingServers.has(item.name)" :size="12" class="animate-spin" />
                   <Download v-else :size="12" />
                   {{ servers.includes(item.name) ? t('mcp.installed', 'Installed') : t('mcp.install', 'Install') }}
                 </button>
@@ -538,11 +600,11 @@ defineExpose({ openAddServer })
 
     <!-- 添加 MCP 服务器对话框 -->
     <Teleport to="body">
-      <div v-if="showAddServer" class="fixed inset-0 z-50 flex items-center justify-center" style="background: rgba(0,0,0,0.45); backdrop-filter: blur(4px);" @click.self="showAddServer = false">
+      <div v-if="showAddServer" class="fixed inset-0 z-50 flex items-center justify-center" style="background: rgba(0,0,0,0.45); backdrop-filter: blur(4px);" @click.self="closeAddServer">
         <div class="w-full max-w-md rounded-xl border shadow-lg overflow-hidden" :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }">
           <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
             <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('mcpManage.addServerTitle') }}</h2>
-            <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="showAddServer = false">
+            <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="closeAddServer">
               <X :size="17" />
             </button>
           </div>
@@ -561,7 +623,7 @@ defineExpose({ openAddServer })
             </div>
           </div>
           <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
-            <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="showAddServer = false">{{ t('common.cancel') }}</button>
+            <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeAddServer">{{ t('common.cancel') }}</button>
             <button class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)', opacity: (!newServerName.trim() || !newServerCommand.trim()) ? 0.4 : 1 }" :disabled="!newServerName.trim() || !newServerCommand.trim() || addingServer" @click="handleAddServer">
               <Loader2 v-if="addingServer" :size="14" class="animate-spin" />
               <Plus v-else :size="14" />

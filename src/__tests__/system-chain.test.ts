@@ -32,13 +32,7 @@ const {
   sendViaWebSocket,
   sendViaBackend,
   clearWebSocketCallbacks,
-  outboxInsert,
-  outboxMarkSending,
-  outboxMarkSent,
-  outboxMarkFailed,
-  retryPendingOutbox,
-  cleanupOutbox,
-  // api/messages
+  // api/chat
   updateMessageFeedback,
   // api/knowledge
   mockSearchKnowledge,
@@ -97,12 +91,6 @@ const {
   sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
   sendViaBackend: vi.fn().mockResolvedValue({ reply: 'Hello!', session_id: 's1' }),
   clearWebSocketCallbacks: vi.fn(),
-  outboxInsert: vi.fn().mockResolvedValue(undefined),
-  outboxMarkSending: vi.fn().mockResolvedValue(undefined),
-  outboxMarkSent: vi.fn().mockResolvedValue(undefined),
-  outboxMarkFailed: vi.fn().mockResolvedValue(undefined),
-  retryPendingOutbox: vi.fn(),
-  cleanupOutbox: vi.fn(),
 
   updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
 
@@ -187,18 +175,12 @@ vi.mock('@/services/chatService', () => {
     sendViaWebSocket,
     sendViaBackend,
     clearWebSocketCallbacks,
-    outboxInsert,
-    outboxMarkSending,
-    outboxMarkSent,
-    outboxMarkFailed,
-    retryPendingOutbox,
-    cleanupOutbox,
     ChatRequestError,
     withTimeout: vi.fn((p: Promise<unknown>) => p),
   }
 })
 
-vi.mock('@/api/messages', () => ({
+vi.mock('@/api/chat', () => ({
   updateMessageFeedback,
 }))
 
@@ -273,37 +255,7 @@ vi.mock('@/api/client', () => ({
   getErrorMessage: vi.fn(),
 }))
 
-vi.mock('@/db/chat', () => ({
-  dbGetSessions: vi.fn().mockResolvedValue([]),
-  dbGetMessages: vi.fn().mockResolvedValue([]),
-  dbCreateSession: vi.fn(),
-  dbUpdateSessionTitle: vi.fn(),
-  dbTouchSession: vi.fn(),
-  dbDeleteSession: vi.fn(),
-  dbSaveMessage: vi.fn(),
-  dbDeleteMessage: vi.fn(),
-}))
-
-vi.mock('@/db/artifacts', () => ({
-  dbGetArtifacts: vi.fn().mockResolvedValue([]),
-  dbSaveArtifact: vi.fn(),
-  dbDeleteSessionArtifacts: vi.fn(),
-}))
-
-vi.mock('@/db/connection', () => ({
-  dbGetAppState: vi.fn().mockResolvedValue(null),
-  dbSetAppState: vi.fn(),
-  getDB: vi.fn(),
-}))
-
-vi.mock('@/db/outbox', () => ({
-  dbOutboxInsert: vi.fn(),
-  dbOutboxMarkSending: vi.fn(),
-  dbOutboxMarkSent: vi.fn(),
-  dbOutboxMarkFailed: vi.fn(),
-  dbOutboxGetPending: vi.fn().mockResolvedValue([]),
-  dbOutboxCleanup: vi.fn(),
-}))
+// DB layer removed — all data operations go through services/API
 
 vi.mock('@tauri-apps/plugin-store', () => {
   const store = new Map()

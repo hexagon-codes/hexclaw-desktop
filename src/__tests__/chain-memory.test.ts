@@ -104,6 +104,7 @@ describe('Chain C: Memory -> Search -> Display', () => {
 
     expect(mockApiPut).toHaveBeenCalledWith('/api/v1/memory', {
       content: 'Updated memory content',
+      type: 'memory',
     })
     expect(result.message).toBe('updated')
   })

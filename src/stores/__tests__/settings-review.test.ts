@@ -30,7 +30,11 @@ vi.mock('@tauri-apps/plugin-store', () => {
 describe('Settings Store — backendToProviders 类型映射逻辑', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    mockGetLLMConfig.mockClear()
+    mockGetLLMConfig.mockReset()
+    mockUpdateLLMConfig.mockReset()
+    mockUpdateLLMConfig.mockResolvedValue({})
+    mockUpdateConfig.mockReset()
+    mockUpdateConfig.mockResolvedValue({})
     ;(globalThis as Record<string, unknown>).isTauri = true
   })
 

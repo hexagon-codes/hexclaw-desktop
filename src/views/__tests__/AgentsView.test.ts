@@ -5,10 +5,16 @@ import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import zhCN from '@/i18n/locales/zh-CN'
 
-const { getRoles, getAgents, getRules } = vi.hoisted(() => ({
+const { getRoles, getAgents, getRules, addRule, deleteRule, setDefaultAgent, registerAgent, unregisterAgent, updateAgent } = vi.hoisted(() => ({
   getRoles: vi.fn(),
   getAgents: vi.fn(),
   getRules: vi.fn(),
+  addRule: vi.fn(),
+  deleteRule: vi.fn(),
+  setDefaultAgent: vi.fn(),
+  registerAgent: vi.fn(),
+  unregisterAgent: vi.fn(),
+  updateAgent: vi.fn(),
 }))
 
 vi.mock('@/api/config', () => ({
@@ -48,12 +54,12 @@ vi.mock('@/api/agents', () => ({
   getRoles,
   getAgents,
   getRules,
-  addRule: vi.fn(),
-  deleteRule: vi.fn(),
-  setDefaultAgent: vi.fn(),
-  registerAgent: vi.fn(),
-  unregisterAgent: vi.fn(),
-  updateAgent: vi.fn(),
+  addRule,
+  deleteRule,
+  setDefaultAgent,
+  registerAgent,
+  unregisterAgent,
+  updateAgent,
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -122,6 +128,12 @@ describe('AgentsView', () => {
     })
     getAgents.mockResolvedValue({ agents: [], total: 0, default: '' })
     getRules.mockResolvedValue({ rules: [], total: 0 })
+    addRule.mockResolvedValue(undefined)
+    deleteRule.mockResolvedValue(undefined)
+    setDefaultAgent.mockResolvedValue(undefined)
+    registerAgent.mockResolvedValue(undefined)
+    unregisterAgent.mockResolvedValue(undefined)
+    updateAgent.mockResolvedValue(undefined)
   })
 
   it('renders built-in role details when expanded', async () => {
@@ -167,5 +179,380 @@ describe('AgentsView', () => {
     await flushPromises()
 
     expect(selects[1]!.text()).toContain('glm-5')
+  })
+
+  it('does not start a second register request while the first one is still running', async () => {
+    let resolveRegister!: () => void
+    registerAgent.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRegister = resolve
+        }),
+    )
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      showAddAgent: boolean
+      newAgent: { name: string; display_name: string; provider: string; model: string }
+      handleRegisterAgent: () => Promise<void>
+    }
+
+    vm.activeTab = 'agents'
+    vm.showAddAgent = true
+    await flushPromises()
+    vm.newAgent = {
+      name: 'helper-1',
+      display_name: 'Helper',
+      provider: '智谱',
+      model: 'glm-5',
+    }
+
+    void vm.handleRegisterAgent()
+    await flushPromises()
+    void vm.handleRegisterAgent()
+    await flushPromises()
+
+    expect(registerAgent).toHaveBeenCalledTimes(1)
+
+    resolveRegister()
+    await flushPromises()
+  })
+
+  it('does not start a second add-rule request while the first one is still running', async () => {
+    let resolveAddRule!: () => void
+    addRule.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveAddRule = resolve
+        }),
+    )
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      showAddRule: boolean
+      newRule: { platform: string; instance_id: string; user_id: string; chat_id: string; agent_name: string; priority: number }
+      handleAddRule: () => Promise<void>
+    }
+
+    vm.activeTab = 'rules'
+    vm.showAddRule = true
+    vm.newRule = {
+      platform: 'api',
+      instance_id: '',
+      user_id: '',
+      chat_id: '',
+      agent_name: 'assistant-agent',
+      priority: 0,
+    }
+    await flushPromises()
+
+    void vm.handleAddRule()
+    await flushPromises()
+    void vm.handleAddRule()
+    await flushPromises()
+
+    expect(addRule).toHaveBeenCalledTimes(1)
+
+    resolveAddRule()
+    await flushPromises()
+  })
+
+  it('resets the add-rule dialog state when it is closed and reopened after a failure', async () => {
+    addRule.mockRejectedValueOnce(new Error('add rule failed'))
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      showAddRule: boolean
+      newRule: { platform: string; instance_id: string; user_id: string; chat_id: string; agent_name: string; priority: number }
+      errorMsg: string
+      handleAddRule: () => Promise<void>
+      openAddRuleDialog?: () => void
+      closeAddRuleDialog?: () => void
+    }
+
+    vm.activeTab = 'rules'
+    vm.showAddRule = true
+    vm.newRule = {
+      platform: 'discord',
+      instance_id: 'inst-1',
+      user_id: 'user-1',
+      chat_id: 'chat-1',
+      agent_name: 'assistant-agent',
+      priority: 7,
+    }
+    await flushPromises()
+
+    await vm.handleAddRule()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('add rule failed')
+
+    if (vm.closeAddRuleDialog) {
+      vm.closeAddRuleDialog()
+    } else {
+      vm.showAddRule = false
+    }
+    await flushPromises()
+
+    if (vm.openAddRuleDialog) {
+      vm.openAddRuleDialog()
+    } else {
+      vm.showAddRule = true
+    }
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('add rule failed')
+    expect(vm.newRule).toEqual({
+      platform: 'api',
+      instance_id: '',
+      user_id: '',
+      chat_id: '',
+      agent_name: '',
+      priority: 0,
+    })
+  })
+
+  it('does not start a second unregister request while the first one is still running', async () => {
+    getAgents.mockResolvedValueOnce({
+      agents: [{ name: 'helper-1', display_name: 'Helper', provider: '智谱', model: 'glm-5' }],
+      total: 1,
+      default: '',
+    })
+
+    let resolveUnregister!: () => void
+    unregisterAgent.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUnregister = resolve
+        }),
+    )
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      unregisteringName: string
+      handleUnregisterAgent: () => Promise<void>
+    }
+
+    vm.activeTab = 'agents'
+    vm.unregisteringName = 'helper-1'
+    await flushPromises()
+
+    void vm.handleUnregisterAgent()
+    await flushPromises()
+    void vm.handleUnregisterAgent()
+    await flushPromises()
+
+    expect(unregisterAgent).toHaveBeenCalledTimes(1)
+
+    resolveUnregister()
+    await flushPromises()
+  })
+
+  it('does not start a second delete-rule request while the first one is still running', async () => {
+    getRules.mockResolvedValueOnce({
+      rules: [{ id: 7, platform: 'api', instance_id: '', user_id: '', chat_id: '', agent_name: 'assistant-agent', priority: 0 }],
+      total: 1,
+    })
+
+    let resolveDeleteRule!: () => void
+    deleteRule.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDeleteRule = resolve
+        }),
+    )
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      handleDeleteRule: (id: number) => Promise<void>
+    }
+
+    vm.activeTab = 'rules'
+    await flushPromises()
+
+    void vm.handleDeleteRule(7)
+    await flushPromises()
+    void vm.handleDeleteRule(7)
+    await flushPromises()
+
+    expect(deleteRule).toHaveBeenCalledTimes(1)
+
+    resolveDeleteRule()
+    await flushPromises()
+  })
+
+  it('resets the register dialog state when it is closed and reopened after a failure', async () => {
+    registerAgent.mockRejectedValueOnce(new Error('register failed'))
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      showAddAgent: boolean
+      newAgent: { name: string; display_name: string; provider: string; model: string }
+      handleRegisterAgent: () => Promise<void>
+    }
+
+    vm.activeTab = 'agents'
+    vm.showAddAgent = true
+    await flushPromises()
+    vm.newAgent = {
+      name: 'helper-1',
+      display_name: 'Helper',
+      provider: '智谱',
+      model: 'glm-5',
+    }
+
+    await vm.handleRegisterAgent()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('register failed')
+
+    vm.showAddAgent = false
+    await flushPromises()
+    vm.showAddAgent = true
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('register failed')
+    expect(vm.newAgent).toEqual({
+      name: '',
+      display_name: '',
+      provider: '',
+      model: '',
+    })
+  })
+
+  it('does not start a second edit request while the first one is still running', async () => {
+    getAgents.mockResolvedValueOnce({
+      agents: [{ name: 'helper-1', display_name: 'Helper', provider: '智谱', model: 'glm-5' }],
+      total: 1,
+      default: '',
+    })
+
+    let resolveUpdate!: () => void
+    updateAgent.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveUpdate = resolve
+        }),
+    )
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      editingAgent: { name: string; display_name: string; provider: string; model: string }
+      showEditAgent: boolean
+      handleEditAgent: () => Promise<void>
+    }
+
+    vm.activeTab = 'agents'
+    vm.editingAgent = {
+      name: 'helper-1',
+      display_name: 'Helper Updated',
+      provider: '智谱',
+      model: 'glm-5',
+    }
+    vm.showEditAgent = true
+    await flushPromises()
+
+    void vm.handleEditAgent()
+    await flushPromises()
+    void vm.handleEditAgent()
+    await flushPromises()
+
+    expect(updateAgent).toHaveBeenCalledTimes(1)
+
+    resolveUpdate()
+    await flushPromises()
+  })
+
+  it('clears a stale rule error after switching away from the rules tab', async () => {
+    addRule.mockRejectedValueOnce(new Error('rule failed'))
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      showAddRule: boolean
+      newRule: { platform: string; instance_id: string; user_id: string; chat_id: string; agent_name: string; priority: number }
+      handleAddRule: () => Promise<void>
+    }
+
+    vm.activeTab = 'rules'
+    vm.showAddRule = true
+    await flushPromises()
+    vm.newRule = {
+      platform: 'api',
+      instance_id: '',
+      user_id: '',
+      chat_id: '',
+      agent_name: 'assistant-agent',
+      priority: 0,
+    }
+
+    await vm.handleAddRule()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('rule failed')
+
+    vm.activeTab = 'roles'
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('rule failed')
+  })
+
+  it('does not start a second set-default request while the first one is still running', async () => {
+    getAgents.mockResolvedValueOnce({
+      agents: [
+        { name: 'helper-1', display_name: 'Helper 1', provider: '智谱', model: 'glm-5' },
+        { name: 'helper-2', display_name: 'Helper 2', provider: '智谱', model: 'glm-5' },
+      ],
+      total: 2,
+      default: '',
+    })
+
+    let resolveSetDefault!: () => void
+    setDefaultAgent.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSetDefault = resolve
+        }),
+    )
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { activeTab: string; handleSetDefault: (name: string) => Promise<void> }
+    vm.activeTab = 'agents'
+    await flushPromises()
+
+    void vm.handleSetDefault('helper-1')
+    await flushPromises()
+    void vm.handleSetDefault('helper-1')
+    await flushPromises()
+
+    expect(setDefaultAgent).toHaveBeenCalledTimes(1)
+
+    resolveSetDefault()
+    await flushPromises()
   })
 })

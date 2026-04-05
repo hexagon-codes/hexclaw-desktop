@@ -39,5 +39,6 @@ export interface SkillStatusUpdateResult {
   effective_enabled?: boolean
   requires_restart?: boolean
   message?: string
+  warning?: string
   source: 'backend' | 'local-fallback'
 }

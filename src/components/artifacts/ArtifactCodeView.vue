@@ -3,6 +3,7 @@ import { ref, watch, onMounted } from 'vue'
 import { Copy, Check } from 'lucide-vue-next'
 import DOMPurify from 'dompurify'
 import type { Artifact } from '@/types'
+import { setClipboard } from '@/api/desktop'
 
 const props = defineProps<{
   artifact: Artifact
@@ -34,9 +35,13 @@ function escapeHtml(s: string) {
 }
 
 async function copyCode() {
-  await navigator.clipboard.writeText(props.artifact.content)
-  copied.value = true
-  setTimeout(() => { copied.value = false }, 1500)
+  try {
+    await setClipboard(props.artifact.content)
+    copied.value = true
+    setTimeout(() => { copied.value = false }, 1500)
+  } catch {
+    // clipboard access can be unavailable in tests or restricted runtimes
+  }
 }
 
 onMounted(highlight)

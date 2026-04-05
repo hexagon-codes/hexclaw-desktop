@@ -141,7 +141,7 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 /// macOS GUI 应用不继承用户 shell 的 PATH（不经过 .zshrc/.bashrc），
 /// 导致 sidecar 找不到 npx/node/python/docker 等命令。
 /// 将常用安装路径追加到当前 PATH。
-fn enrich_path() -> String {
+pub fn enrich_path() -> String {
     let current = std::env::var("PATH").unwrap_or_default();
     let extras: &[&str] = if cfg!(target_os = "macos") {
         &[

@@ -48,12 +48,10 @@ export async function textToSpeech(req: TTSRequest): Promise<Blob> {
   return res.blob()
 }
 
-/** 语音转文本 — 接受音频文件 FormData，language 通过 query param 传递 */
+/** 语音转文本 — 接受音频文件 FormData */
 export function speechToText(audioFile: File, language?: string) {
   const form = new FormData()
   form.append('audio', audioFile)
-  const params = new URLSearchParams()
-  if (language) params.set('language', language)
-  const qs = params.toString()
-  return apiPost<STTResponse>(`/api/v1/voice/transcribe${qs ? `?${qs}` : ''}`, form)
+  if (language) form.append('language', language)
+  return apiPost<STTResponse>('/api/v1/voice/transcribe', form)
 }

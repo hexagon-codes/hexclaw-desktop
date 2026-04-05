@@ -99,7 +99,6 @@ onMounted(async () => {
     await hexclawWS.connect()
     wsConnected.value = true
     useWebSocket.value = true
-    setupWsCallbacks()
   } catch {
     wsConnected.value = false
     useWebSocket.value = false
@@ -114,7 +113,6 @@ onMounted(async () => {
         await hexclawWS.connect()
         wsConnected.value = true
         useWebSocket.value = true
-        setupWsCallbacks()
       } catch {
         wsConnected.value = false
         useWebSocket.value = false
@@ -128,7 +126,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  hexclawWS.clearCallbacks()
+  hexclawWS.clearStreamCallbacks()
 })
 
 // Persist messages on change
@@ -160,11 +158,13 @@ watch(availableModels, () => {
 })
 
 let replySettled = false
+let responseRequestGen = 0
 
-function setupWsCallbacks() {
-  hexclawWS.clearCallbacks()
+function setupWsCallbacks(requestGen: number) {
+  hexclawWS.clearStreamCallbacks()
 
   hexclawWS.onChunk((chunk) => {
+    if (requestGen !== responseRequestGen) return
     streamingContent.value += chunk.content
     if (chunk.done && !replySettled) {
       replySettled = true
@@ -182,6 +182,7 @@ function setupWsCallbacks() {
   })
 
   hexclawWS.onReply((reply) => {
+    if (requestGen !== responseRequestGen) return
     if (replySettled) return
     replySettled = true
     messages.value.push({
@@ -194,6 +195,7 @@ function setupWsCallbacks() {
   })
 
   hexclawWS.onError((error) => {
+    if (requestGen !== responseRequestGen) return
     replySettled = true
     messages.value.push({
       id: Date.now().toString(),
@@ -206,7 +208,7 @@ function setupWsCallbacks() {
   })
 }
 
-async function handleSend(retryContent?: string) {
+async function handleSend(retryContent?: string, retryErrorId?: string) {
   const text = retryContent || inputText.value.trim()
   if (!text || streaming.value) return
 
@@ -215,12 +217,8 @@ async function handleSend(retryContent?: string) {
   }
 
   // Remove the failed message if retrying
-  if (retryContent) {
-    // Find and remove the last error message and its preceding user message with this content
-    const lastErrIdx = messages.value.reduce((acc, m, i) => (m.error ? i : acc), -1)
-    if (lastErrIdx >= 0) {
-      messages.value.splice(lastErrIdx, 1)
-    }
+  if (retryContent && retryErrorId) {
+    messages.value = messages.value.filter((m) => m.id !== retryErrorId)
   } else {
     messages.value.push({
       id: Date.now().toString(),
@@ -232,9 +230,11 @@ async function handleSend(retryContent?: string) {
   streaming.value = true
   streamingContent.value = ''
   replySettled = false
+  const requestGen = ++responseRequestGen
 
   if (useWebSocket.value && wsConnected.value && hexclawWS.isConnected()) {
     // WebSocket streaming mode
+    setupWsCallbacks(requestGen)
     hexclawWS.sendMessage(
       text,
       undefined,
@@ -251,12 +251,14 @@ async function handleSend(retryContent?: string) {
         provider: selectedProviderKey.value || undefined,
         model: selectedModel.value || undefined,
       })
+      if (requestGen !== responseRequestGen) return
       messages.value.push({
         id: Date.now().toString(),
         role: 'assistant',
         content: typeof resp.reply === 'string' ? resp.reply : t('chat.receivedReply'),
       })
     } catch (e) {
+      if (requestGen !== responseRequestGen) return
       console.error('发送失败:', e)
       messages.value.push({
         id: Date.now().toString(),
@@ -265,6 +267,7 @@ async function handleSend(retryContent?: string) {
         error: true,
       })
     } finally {
+      if (requestGen !== responseRequestGen) return
       streaming.value = false
     }
   }
@@ -276,7 +279,7 @@ function handleRetry(msg: Message) {
   if (idx > 0) {
     const prevMsg = messages.value[idx - 1]
     if (prevMsg && prevMsg.role === 'user') {
-      handleSend(prevMsg.content)
+      handleSend(prevMsg.content, msg.id)
       return
     }
   }
@@ -285,14 +288,19 @@ function handleRetry(msg: Message) {
 }
 
 function clearChat() {
+  responseRequestGen++
+  streaming.value = false
+  replySettled = true
+  hexclawWS.clearStreamCallbacks()
   messages.value = []
   streamingContent.value = ''
   localStorage.removeItem(STORAGE_KEY)
 }
 
 function handleStop() {
+  responseRequestGen++
   streaming.value = false
-  hexclawWS.clearCallbacks()
+  hexclawWS.clearStreamCallbacks()
   if (streamingContent.value) {
     messages.value.push({
       id: Date.now().toString(),
@@ -300,10 +308,6 @@ function handleStop() {
       content: streamingContent.value,
     })
     streamingContent.value = ''
-  }
-  // Re-setup callbacks for next message
-  if (wsConnected.value) {
-    setupWsCallbacks()
   }
 }
 

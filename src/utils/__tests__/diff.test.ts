@@ -85,4 +85,12 @@ describe('computeDiff', () => {
     // 不应有完整的 (m+1)*(n+1) 二维数组
     expect(raw).not.toContain('Array.from({ length: m + 1 }, () => new Array<number>(n + 1)')
   })
+
+  it('LCS 滚动行应使用 typed array 降低热路径开销', async () => {
+    const sourceCode = await import('../diff?raw')
+    const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
+
+    expect(raw).toContain('new Uint32Array')
+    expect(raw).not.toContain('new Array<number>(n + 1).fill(0)')
+  })
 })

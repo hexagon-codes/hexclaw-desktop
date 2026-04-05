@@ -154,11 +154,11 @@ describe('Chain 1: Session Lifecycle', () => {
     )
 
     // --- Step 5: forkSession -------------------------------------------------
-    mockFetch.mockResolvedValueOnce({ session_id: 's3', message: 'Forked from s1' })
+    mockFetch.mockResolvedValueOnce({ session: { id: 's3', title: 'Fork of First chat', user_id: 'desktop-user', created_at: '2025-01-01', updated_at: '2025-01-01' }, message: 'Forked from s1' })
 
     const fork = await chat.forkSession('s1', 'm1')
 
-    expect(fork.session_id).toBe('s3')
+    expect(fork.session.id).toBe('s3')
     fetchCallIdx++
     expect(mockFetch).toHaveBeenNthCalledWith(fetchCallIdx,
       '/api/v1/sessions/s1/fork',
@@ -171,14 +171,14 @@ describe('Chain 1: Session Lifecycle', () => {
     // --- Step 6: getSessionBranches ------------------------------------------
     mockFetch.mockResolvedValueOnce({
       branches: [
-        { id: 's3', title: 'Fork of First chat', user_id: 'desktop-user', parent_id: 's1' },
+        { id: 's3', title: 'Fork of First chat', user_id: 'desktop-user', parent_session_id: 's1' },
       ],
     })
 
     const branches = await chat.getSessionBranches('s1')
 
     expect(branches.branches).toHaveLength(1)
-    expect((branches.branches[0] as any).parent_id).toBe('s1')
+    expect((branches.branches[0] as any).parent_session_id).toBe('s1')
     fetchCallIdx++
     expect(mockFetch).toHaveBeenNthCalledWith(fetchCallIdx,
       '/api/v1/sessions/s1/branches',

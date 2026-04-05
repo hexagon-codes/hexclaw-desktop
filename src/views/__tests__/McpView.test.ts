@@ -145,6 +145,95 @@ describe('McpView — MCP 全链路', () => {
     expect(wrapper.text()).toMatch(/工具.*\(2\)/)
   })
 
+  it('市场加载失败时应保留错误提示，而不是伪装成空结果', async () => {
+    mockGetMcpMarketplace.mockRejectedValueOnce(new Error('marketplace offline'))
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { activeTab: string; loadMarketplace: () => Promise<void> }
+    vm.activeTab = 'marketplace'
+    await vm.loadMarketplace()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('marketplace offline')
+    expect(wrapper.text()).not.toContain('No MCP servers found')
+  })
+
+  it('does not block the whole page when server status polling hangs', async () => {
+    mockGetMcpServerStatus.mockReturnValue(new Promise(() => {}))
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    expect(wrapper.find('.loading-stub').exists()).toBe(false)
+    expect(wrapper.text()).toContain('filesystem')
+    expect(wrapper.text()).toContain('github')
+  })
+
+  it('keeps the newest server and tool lists when an earlier loadAll resolves later', async () => {
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    let resolveOldServers!: (value: { servers: string[]; total: number }) => void
+    let resolveNewServers!: (value: { servers: string[]; total: number }) => void
+    let resolveOldTools!: (value: { tools: Array<{ name: string; description?: string }>; total: number }) => void
+    let resolveNewTools!: (value: { tools: Array<{ name: string; description?: string }>; total: number }) => void
+
+    mockGetMcpServers.mockReset()
+    mockGetMcpTools.mockReset()
+    mockGetMcpServers
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOldServers = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNewServers = resolve
+          }),
+      )
+    mockGetMcpTools
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOldTools = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNewTools = resolve
+          }),
+      )
+
+    const vm = wrapper.vm as unknown as { loadAll: () => Promise<void>; servers: string[]; tools: Array<{ name: string }> }
+
+    const oldLoad = vm.loadAll()
+    await flushPromises()
+
+    const newLoad = vm.loadAll()
+    await flushPromises()
+
+    resolveNewServers({ servers: ['new-server'], total: 1 })
+    resolveNewTools({ tools: [{ name: 'new-tool', description: 'fresh' }], total: 1 })
+    await newLoad
+    await flushPromises()
+
+    expect(vm.servers).toEqual(['new-server'])
+    expect(vm.tools.map((tool) => tool.name)).toEqual(['new-tool'])
+
+    resolveOldServers({ servers: ['old-server'], total: 1 })
+    resolveOldTools({ tools: [{ name: 'old-tool', description: 'stale' }], total: 1 })
+    await oldLoad
+    await flushPromises()
+
+    expect(vm.servers).toEqual(['new-server'])
+    expect(vm.tools.map((tool) => tool.name)).toEqual(['new-tool'])
+  })
+
   // ─── 3. 添加服务器 ────────────────────────────────
 
   it('点击添加按钮打开对话框', async () => {
@@ -222,6 +311,110 @@ describe('McpView — MCP 全链路', () => {
     expect(mockAddMcpServer).toHaveBeenCalledWith('simple', '/usr/bin/mcp', undefined)
   })
 
+  it('添加服务器在一次失败后成功时应清掉旧错误提示', async () => {
+    mockAddMcpServer
+      .mockRejectedValueOnce(new Error('add failed'))
+      .mockResolvedValueOnce({ message: 'added' })
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      newServerName: string
+      newServerCommand: string
+      newServerArgs: string
+      showAddServer: boolean
+      handleAddServer: () => Promise<void>
+      errorMsg: string
+    }
+
+    vm.showAddServer = true
+    vm.newServerName = 'test-server'
+    vm.newServerCommand = 'npx'
+    vm.newServerArgs = ''
+    await vm.handleAddServer()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('add failed')
+
+    await vm.handleAddServer()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('add failed')
+    expect(vm.showAddServer).toBe(false)
+  })
+
+  it('添加服务器进行中时不应重复发送第二次添加请求', async () => {
+    let resolveAdd!: () => void
+    mockAddMcpServer.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveAdd = resolve
+        }),
+    )
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      newServerName: string
+      newServerCommand: string
+      newServerArgs: string
+      handleAddServer: () => Promise<void>
+    }
+
+    vm.newServerName = 'test-server'
+    vm.newServerCommand = 'npx'
+    vm.newServerArgs = '-y @test/server'
+
+    void vm.handleAddServer()
+    await flushPromises()
+    void vm.handleAddServer()
+    await flushPromises()
+
+    expect(mockAddMcpServer).toHaveBeenCalledTimes(1)
+
+    resolveAdd()
+    await flushPromises()
+  })
+
+  it('添加服务器失败后关闭再重开时应重置旧错误和表单内容', async () => {
+    mockAddMcpServer.mockRejectedValueOnce(new Error('add failed'))
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      newServerName: string
+      newServerCommand: string
+      newServerArgs: string
+      showAddServer: boolean
+      handleAddServer: () => Promise<void>
+      openAddServer: () => void
+    }
+
+    vm.openAddServer()
+    vm.newServerName = 'stale-server'
+    vm.newServerCommand = 'npx'
+    vm.newServerArgs = '-y stale'
+    await vm.handleAddServer()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('add failed')
+    expect(vm.newServerName).toBe('stale-server')
+
+    vm.showAddServer = false
+    await wrapper.vm.$nextTick()
+
+    vm.openAddServer()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('add failed')
+    expect(vm.newServerName).toBe('')
+    expect(vm.newServerCommand).toBe('')
+    expect(vm.newServerArgs).toBe('')
+  })
+
   // ─── 4. 移除服务器 ────────────────────────────────
 
   it('移除服务器后从列表中删除', async () => {
@@ -233,12 +426,17 @@ describe('McpView — MCP 全链路', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('filesystem')
 
-    const vm = wrapper.vm as unknown as { handleRemoveServer: (name: string) => Promise<void>; servers: string[] }
+    // 删除后 loadAll 重新拉取 — 返回已移除 filesystem 的数据
+    mockGetMcpServers.mockResolvedValueOnce({ servers: ['github'], total: 1 })
+    mockGetMcpTools.mockResolvedValueOnce({ tools: [{ name: 'search', description: 'Search the web' }], total: 1 })
+
+    const vm = wrapper.vm as unknown as { handleRemoveServer: (name: string) => Promise<void>; servers: string[]; tools: { name: string }[] }
     await vm.handleRemoveServer('filesystem')
     await flushPromises()
 
     expect(mockRemoveMcpServer).toHaveBeenCalledWith('filesystem')
     expect(vm.servers).not.toContain('filesystem')
+    expect(vm.tools.map((t: { name: string }) => t.name)).not.toContain('read_file')
   })
 
   it('取消确认则不移除', async () => {
@@ -250,6 +448,64 @@ describe('McpView — MCP 全链路', () => {
     const vm = wrapper.vm as unknown as { handleRemoveServer: (name: string) => Promise<void> }
     await vm.handleRemoveServer('filesystem')
     expect(mockRemoveMcpServer).not.toHaveBeenCalled()
+  })
+
+  it('移除服务器在一次失败后成功时应清掉旧错误提示', async () => {
+    mockRemoveMcpServer
+      .mockRejectedValueOnce(new Error('remove failed'))
+      .mockResolvedValueOnce({ message: 'removed' })
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      handleRemoveServer: (name: string) => Promise<void>
+      servers: string[]
+    }
+
+    await vm.handleRemoveServer('filesystem')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('remove failed')
+
+    // 第二次成功后 loadAll 重新拉取 — 返回已移除 filesystem 的数据
+    mockGetMcpServers.mockResolvedValueOnce({ servers: ['github'], total: 1 })
+    mockGetMcpTools.mockResolvedValueOnce({ tools: [{ name: 'search', description: 'Search the web' }], total: 1 })
+
+    await vm.handleRemoveServer('filesystem')
+    await flushPromises()
+
+    expect(vm.servers).not.toContain('filesystem')
+    expect(wrapper.text()).not.toContain('remove failed')
+  })
+
+  it('移除服务器进行中时不应重复发送第二次移除请求', async () => {
+    let resolveRemove!: () => void
+    mockRemoveMcpServer.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRemove = resolve
+        }),
+    )
+    vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      handleRemoveServer: (name: string) => Promise<void>
+    }
+
+    void vm.handleRemoveServer('filesystem')
+    await flushPromises()
+    void vm.handleRemoveServer('filesystem')
+    await flushPromises()
+
+    expect(mockRemoveMcpServer).toHaveBeenCalledTimes(1)
+
+    resolveRemove()
+    await flushPromises()
   })
 
   // ─── 5. 工具 Tab ──────────────────────────────────
@@ -436,6 +692,37 @@ describe('McpView — MCP 全链路', () => {
     expect(vm.isTestRunning('search')).toBe(false)
   })
 
+  it('同一个工具测试进行中时不应重复触发第二次执行', async () => {
+    let resolveTest!: (value: { result: string }) => void
+    mockCallMcpTool.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTest = resolve as typeof resolveTest
+        }),
+    )
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      openTestForm: (name: string) => void
+      executeTest: (name: string) => Promise<void>
+    }
+    vm.activeTab = 'tools'
+    vm.openTestForm('read_file')
+
+    void vm.executeTest('read_file')
+    await flushPromises()
+    void vm.executeTest('read_file')
+    await flushPromises()
+
+    expect(mockCallMcpTool).toHaveBeenCalledTimes(1)
+
+    resolveTest({ result: 'ok' })
+    await flushPromises()
+  })
+
   // ─── 7. Marketplace Tab ───────────────────────────
 
   it('切换到 Marketplace Tab 加载数据', async () => {
@@ -484,6 +771,119 @@ describe('McpView — MCP 全链路', () => {
     expect(wrapper.text()).toContain('Found')
   })
 
+  it('Marketplace 加载在一次失败后成功时应清掉旧错误提示', async () => {
+    mockGetMcpMarketplace
+      .mockRejectedValueOnce(new Error('marketplace offline'))
+      .mockResolvedValueOnce({
+        skills: [{ name: 'fs-server', display_name: 'Filesystem', description: 'File access', category: 'io', command: 'npx', args: ['-y', 'fs-server'], downloads: 1000, rating: 4.5 }],
+        total: 1,
+      })
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      loadMarketplace: () => Promise<void>
+    }
+    vm.activeTab = 'marketplace'
+    await vm.loadMarketplace()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('marketplace offline')
+
+    await vm.loadMarketplace()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Filesystem')
+    expect(wrapper.text()).not.toContain('marketplace offline')
+  })
+
+  it('切换离开 Marketplace 后不应继续显示 Marketplace 的旧错误提示', async () => {
+    mockGetMcpMarketplace.mockRejectedValueOnce(new Error('marketplace offline'))
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      loadMarketplace: () => Promise<void>
+    }
+    vm.activeTab = 'marketplace'
+    await vm.loadMarketplace()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('marketplace offline')
+
+    vm.activeTab = 'servers'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.text()).not.toContain('marketplace offline')
+    expect(wrapper.text()).toContain('filesystem')
+  })
+
+  it('keeps the newest marketplace search results when older requests resolve later', async () => {
+    let resolveOld!: (value: {
+      skills: Array<{ name: string; display_name: string; description: string; category: string; command: string; args: string[]; downloads: number; rating: number }>
+      total: number
+    }) => void
+    let resolveNew!: (value: {
+      skills: Array<{ name: string; display_name: string; description: string; category: string; command: string; args: string[]; downloads: number; rating: number }>
+      total: number
+    }) => void
+
+    mockSearchMcpMarketplace
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNew = resolve
+          }),
+      )
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      activeTab: string
+      marketplaceSearch: string
+      loadMarketplace: () => Promise<void>
+    }
+
+    vm.activeTab = 'marketplace'
+    vm.marketplaceSearch = 'old'
+    const oldRequest = vm.loadMarketplace()
+    await flushPromises()
+
+    vm.marketplaceSearch = 'new'
+    const newRequest = vm.loadMarketplace()
+    await flushPromises()
+
+    resolveNew({
+      skills: [{ name: 'new-server', display_name: 'New Server', description: 'fresh', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 }],
+      total: 1,
+    })
+    await newRequest
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('New Server')
+
+    resolveOld({
+      skills: [{ name: 'old-server', display_name: 'Old Server', description: 'stale', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 }],
+      total: 1,
+    })
+    await oldRequest
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('New Server')
+    expect(wrapper.text()).not.toContain('Old Server')
+  })
+
   it('Marketplace 安装成功后刷新', async () => {
     const entry = { name: 'new-skill', display_name: 'New', description: '', category: '', downloads: 0, rating: 0 }
     mockInstallFromHub.mockResolvedValue(undefined)
@@ -497,6 +897,114 @@ describe('McpView — MCP 全链路', () => {
 
     expect(mockInstallFromHub).toHaveBeenCalledWith('new-skill')
     expect(mockGetMcpServers).toHaveBeenCalled()
+  })
+
+  it('Marketplace 安装在一次失败后成功时应清掉旧错误提示', async () => {
+    const entry = { name: 'new-skill', display_name: 'New', description: '', category: '', downloads: 0, rating: 0 }
+    mockInstallFromHub
+      .mockRejectedValueOnce(new Error('install failed'))
+      .mockResolvedValueOnce(undefined)
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { installFromMarketplace: (e: typeof entry) => Promise<void> }
+    await vm.installFromMarketplace(entry)
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('install failed')
+
+    await vm.installFromMarketplace(entry)
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('install failed')
+  })
+
+  it('keeps the latest marketplace installing state when an earlier install finishes first', async () => {
+    let resolveFirstInstall!: () => void
+    let resolveSecondInstall!: () => void
+
+    mockInstallFromHub
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveFirstInstall = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveSecondInstall = resolve
+          }),
+      )
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      installFromMarketplace: (e: { name: string; display_name: string; description: string; category: string; downloads: number; rating: number }) => Promise<void>
+      installingServers: Set<string>
+    }
+
+    const firstEntry = { name: 'first-skill', display_name: 'First', description: '', category: '', downloads: 0, rating: 0 }
+    const secondEntry = { name: 'second-skill', display_name: 'Second', description: '', category: '', downloads: 0, rating: 0 }
+
+    const firstInstall = vm.installFromMarketplace(firstEntry)
+    await flushPromises()
+    const secondInstall = vm.installFromMarketplace(secondEntry)
+    await flushPromises()
+
+    expect(vm.installingServers.has('second-skill')).toBe(true)
+
+    resolveFirstInstall()
+    await firstInstall
+    await flushPromises()
+
+    expect(vm.installingServers.has('second-skill')).toBe(true)
+
+    resolveSecondInstall()
+    await secondInstall
+    await flushPromises()
+
+    expect(vm.installingServers.size).toBe(0)
+  })
+
+  it('同一个 Marketplace 条目安装进行中时不应重复触发第二次安装', async () => {
+    const entry = {
+      name: 'filesystem',
+      display_name: 'Filesystem',
+      description: 'Read local files',
+      category: 'storage',
+      downloads: 100,
+      rating: 4.8,
+      command: 'npx',
+      args: ['-y', '@modelcontextprotocol/server-filesystem'],
+    }
+
+    let resolveInstall!: () => void
+    mockAddMcpServer.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveInstall = resolve
+        }),
+    )
+
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      installFromMarketplace: (e: typeof entry) => Promise<void>
+    }
+
+    void vm.installFromMarketplace(entry)
+    await flushPromises()
+    void vm.installFromMarketplace(entry)
+    await flushPromises()
+
+    expect(mockAddMcpServer).toHaveBeenCalledTimes(1)
+
+    resolveInstall()
+    await flushPromises()
   })
 
   it('Marketplace 已安装的服务器按钮禁用', async () => {

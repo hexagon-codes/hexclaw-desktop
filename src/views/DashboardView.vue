@@ -118,10 +118,11 @@ async function fetchStats() {
       Object.assign(stats.value, res)
     }
 
-    const { dbGetSessions } = await import('@/db/chat')
-    const sessions = await safeFetch(() => dbGetSessions(), 'sessions')
-    stats.value.totalSessions = sessions?.length || 0
-    const recent = (sessions || []).slice(0, 3).map((s) => ({
+    const { listSessions } = await import('@/api/chat')
+    const sessionRes = await safeFetch(() => listSessions({ limit: 200 }), 'sessions')
+    const sessions = sessionRes?.sessions || []
+    stats.value.totalSessions = sessions.length
+    const recent = sessions.slice(0, 3).map((s) => ({
       id: s.id,
       title: s.title || t('chat.newSessionDefault'),
       type: 'chat' as const,

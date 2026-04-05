@@ -2,6 +2,7 @@
 import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { setClipboard } from '@/api/desktop'
 
 const { t } = useI18n()
 
@@ -25,7 +26,7 @@ const activeFeedback = computed(() => props.feedback ?? null)
 
 async function handleCopy() {
   try {
-    await navigator.clipboard.writeText(props.content)
+    await setClipboard(props.content)
     copied.value = true
     setTimeout(() => (copied.value = false), 1500)
   } catch {

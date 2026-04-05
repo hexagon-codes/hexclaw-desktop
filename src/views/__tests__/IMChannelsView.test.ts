@@ -4,9 +4,19 @@ import { createI18n } from 'vue-i18n'
 import IMChannelsView from '../IMChannelsView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
-const { getIMInstances, updateIMInstance } = vi.hoisted(() => ({
+const { getIMInstances, createIMInstance, updateIMInstance, deleteIMInstance, listIMInstancesHealth, testIMInstance, startIMInstance, stopIMInstance } = vi.hoisted(() => ({
   getIMInstances: vi.fn(),
+  createIMInstance: vi.fn(),
   updateIMInstance: vi.fn(),
+  deleteIMInstance: vi.fn(),
+  listIMInstancesHealth: vi.fn(),
+  testIMInstance: vi.fn(),
+  startIMInstance: vi.fn(),
+  stopIMInstance: vi.fn(),
+}))
+
+const { setClipboard } = vi.hoisted(() => ({
+  setClipboard: vi.fn(),
 }))
 
 vi.mock('@/api/im-channels', async () => {
@@ -14,12 +24,19 @@ vi.mock('@/api/im-channels', async () => {
   return {
     ...actual,
     getIMInstances,
-    createIMInstance: vi.fn(),
+    createIMInstance,
     updateIMInstance,
-    deleteIMInstance: vi.fn(),
-    testIMInstance: vi.fn(),
+    deleteIMInstance,
+    testIMInstance,
+    startIMInstance,
+    stopIMInstance,
+    listIMInstancesHealth,
   }
 })
+
+vi.mock('@/api/desktop', () => ({
+  setClipboard,
+}))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
@@ -70,6 +87,13 @@ describe('IMChannelsView', () => {
       },
     ])
     updateIMInstance.mockResolvedValue(true)
+    createIMInstance.mockResolvedValue(undefined)
+    deleteIMInstance.mockResolvedValue(undefined)
+    listIMInstancesHealth.mockResolvedValue([])
+    testIMInstance.mockResolvedValue({ success: true, message: 'ok' })
+    startIMInstance.mockResolvedValue(undefined)
+    stopIMInstance.mockResolvedValue(undefined)
+    setClipboard.mockResolvedValue(undefined)
   })
 
   it('edits a feishu instance and reloads the list after save', async () => {
@@ -96,5 +120,293 @@ describe('IMChannelsView', () => {
       enabled: false,
     }))
     expect(getIMInstances).toHaveBeenCalledTimes(2)
+  })
+
+  it('copies webhook url through the clipboard helper in edit mode', async () => {
+    const wrapper = mountIMChannelsView()
+    await flushPromises()
+
+    const configBtn = wrapper.findAll('button').find((btn) => btn.text().includes('配置'))
+    expect(configBtn).toBeDefined()
+    await configBtn!.trigger('click')
+    await flushPromises()
+
+    const copyBtn = wrapper.findAll('button').find((btn) => btn.text().includes('复制'))
+    expect(copyBtn).toBeDefined()
+    await copyBtn!.trigger('click')
+    await flushPromises()
+
+    expect(setClipboard).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not probe backend health or emit Tauri proxy warnings outside desktop runtime', async () => {
+    delete (globalThis as Record<string, unknown>).isTauri
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    mountIMChannelsView()
+    await flushPromises()
+
+    const imProxyWarnings = warnSpy.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('[IM] proxyApiRequest'),
+    )
+    expect(imProxyWarnings).toHaveLength(0)
+
+    warnSpy.mockRestore()
+  })
+
+  it('keeps the latest health snapshot when an older health request resolves later', async () => {
+    ;(globalThis as Record<string, unknown>).isTauri = true
+    getIMInstances.mockResolvedValueOnce([
+      {
+        id: 'feishu-1',
+        name: '飞书',
+        type: 'feishu',
+        enabled: true,
+        config: { app_id: 'cli_xxx', app_secret: 'secret' },
+        createdAt: 1,
+      },
+    ])
+
+    let resolveOld!: (value: Array<{ name: string; status: 'running' | 'stopped' | 'error'; last_error?: string }>) => void
+    let resolveNew!: (value: Array<{ name: string; status: 'running' | 'stopped' | 'error'; last_error?: string }>) => void
+
+    listIMInstancesHealth
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveOld = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveNew = resolve
+          }),
+      )
+
+    const wrapper = mountIMChannelsView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      loadHealth: () => Promise<void>
+    }
+
+    const refreshPromise = vm.loadHealth()
+    await flushPromises()
+
+    resolveNew([{ name: '飞书', status: 'stopped' }])
+    await refreshPromise
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已停止')
+
+    resolveOld([{ name: '飞书', status: 'running' }])
+    await flushPromises()
+
+    const runtimeText = wrapper.find('.hc-im-card__runtime-text')
+    expect(runtimeText.exists()).toBe(true)
+    expect(runtimeText.text()).toContain('已停止')
+    expect(runtimeText.text()).not.toContain('运行中')
+  })
+
+  it('does not start a second modal test while the first test is still running', async () => {
+    let resolveTest!: (value: { success: boolean; message: string }) => void
+    testIMInstance.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTest = resolve
+        }),
+    )
+
+    const wrapper = mountIMChannelsView()
+    await flushPromises()
+
+    const createBtn = wrapper.findAll('button').find((btn) => btn.text().includes('新建'))
+    expect(createBtn).toBeDefined()
+    await createBtn!.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      formName: string
+      formConfig: Record<string, string>
+      handleTestModal: () => Promise<void>
+    }
+    vm.formName = '飞书测试'
+    vm.formConfig = { app_id: 'cli_xxx', app_secret: 'secret' }
+
+    void vm.handleTestModal()
+    await flushPromises()
+    void vm.handleTestModal()
+    await flushPromises()
+
+    expect(testIMInstance).toHaveBeenCalledTimes(1)
+
+    resolveTest({ success: true, message: 'ok' })
+    await flushPromises()
+  })
+
+  it('does not start a second start request while the first toggle is still running', async () => {
+    ;(globalThis as Record<string, unknown>).isTauri = true
+    getIMInstances.mockResolvedValueOnce([
+      {
+        id: 'feishu-1',
+        name: '飞书',
+        type: 'feishu',
+        enabled: true,
+        config: { app_id: 'cli_xxx', app_secret: 'secret' },
+        createdAt: 1,
+      },
+    ])
+    listIMInstancesHealth.mockResolvedValueOnce([{ name: '飞书', status: 'stopped' }])
+
+    let resolveStart!: () => void
+    startIMInstance.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveStart = resolve
+        }),
+    )
+
+    const wrapper = mountIMChannelsView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      handleStartStop: (inst: {
+        id: string
+        name: string
+        type: string
+        enabled: boolean
+        config: Record<string, string>
+        createdAt: number
+      }) => Promise<void>
+    }
+
+    const inst = {
+      id: 'feishu-1',
+      name: '飞书',
+      type: 'feishu',
+      enabled: true,
+      config: { app_id: 'cli_xxx', app_secret: 'secret' },
+      createdAt: 1,
+    }
+
+    void vm.handleStartStop(inst)
+    await flushPromises()
+    void vm.handleStartStop(inst)
+    await flushPromises()
+
+    expect(startIMInstance).toHaveBeenCalledTimes(1)
+
+    resolveStart()
+    await flushPromises()
+  })
+
+  it('does not start a second create request while the first save is still running', async () => {
+    let resolveCreate!: () => void
+    createIMInstance.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveCreate = resolve
+        }),
+    )
+
+    const wrapper = mountIMChannelsView()
+    await flushPromises()
+
+    const createBtn = wrapper.findAll('button').find((btn) => btn.text().includes('新建'))
+    expect(createBtn).toBeDefined()
+    await createBtn!.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      formName: string
+      formType: string
+      formConfig: Record<string, string>
+      formEnabled: boolean
+      handleCreate: () => Promise<void>
+    }
+    vm.formName = '飞书新建'
+    vm.formType = 'feishu'
+    vm.formConfig = { app_id: 'cli_xxx', app_secret: 'secret' }
+    vm.formEnabled = false
+
+    void vm.handleCreate()
+    await flushPromises()
+    void vm.handleCreate()
+    await flushPromises()
+
+    expect(createIMInstance).toHaveBeenCalledTimes(1)
+
+    resolveCreate()
+    await flushPromises()
+  })
+
+  it('does not start a second delete request while the first delete is still running', async () => {
+    let resolveDelete!: () => void
+    deleteIMInstance.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve
+        }),
+    )
+
+    const wrapper = mountIMChannelsView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      confirmDelete: (id: string) => void
+      handleDelete: (id: string) => Promise<void>
+    }
+
+    // confirmDelete sets deletingId so handleDelete can proceed
+    vm.confirmDelete('feishu-1')
+    void vm.handleDelete('feishu-1')
+    await flushPromises()
+
+    // After handleDelete starts, deletingId is still set;
+    // resolve the first request so deletingId resets to null
+    resolveDelete()
+    await flushPromises()
+
+    // Second call without re-confirming is blocked (deletingId is null !== 'feishu-1')
+    void vm.handleDelete('feishu-1')
+    await flushPromises()
+
+    expect(deleteIMInstance).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears the old error banner after create succeeds following a previous failure', async () => {
+    createIMInstance
+      .mockRejectedValueOnce(new Error('create failed'))
+      .mockResolvedValueOnce(undefined)
+
+    const wrapper = mountIMChannelsView()
+    await flushPromises()
+
+    const createBtn = wrapper.findAll('button').find((btn) => btn.text().includes('新建'))
+    expect(createBtn).toBeDefined()
+    await createBtn!.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      formName: string
+      formType: string
+      formConfig: Record<string, string>
+      formEnabled: boolean
+      handleCreate: () => Promise<void>
+    }
+    vm.formName = '飞书新建'
+    vm.formType = 'feishu'
+    vm.formConfig = { app_id: 'cli_xxx', app_secret: 'secret' }
+    vm.formEnabled = false
+
+    await vm.handleCreate()
+    await flushPromises()
+    expect(wrapper.text()).toContain('create failed')
+
+    await vm.handleCreate()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('create failed')
   })
 })

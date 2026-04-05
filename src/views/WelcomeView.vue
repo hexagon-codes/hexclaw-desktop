@@ -19,6 +19,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { PROVIDER_PRESETS } from '@/config/providers'
 import type { ModelCapability, ModelOption, ProviderType } from '@/types'
 import { testLLMConnection } from '@/api/config'
+import { getOllamaStatus, type OllamaStatus } from '@/api/ollama'
 import { messageFromUnknownError } from '@/utils/errors'
 
 const router = useRouter()
@@ -47,8 +48,29 @@ const isCustomProvider = computed(() => provider.value === 'custom')
 const customBaseUrl = ref('')
 const customModelId = ref('')
 
+// ─── Ollama 检测 ──────────────────────────────────
+const ollamaStatus = ref<OllamaStatus | null>(null)
+const ollamaDetecting = ref(false)
+const isOllamaSelected = computed(() => provider.value === 'ollama')
+
+async function detectOllama() {
+  ollamaDetecting.value = true
+  try {
+    ollamaStatus.value = await getOllamaStatus()
+  } catch {
+    ollamaStatus.value = null
+  } finally {
+    ollamaDetecting.value = false
+  }
+}
+
+const ollamaModels = computed(() => ollamaStatus.value?.models ?? [])
+const ollamaReady = computed(() => ollamaStatus.value?.running === true)
+
 /** Validation: API key required for non-Ollama providers, custom needs base URL */
 const canProceedFromStep0 = computed(() => {
+  // Ollama：只需要 Ollama 运行中即可
+  if (isOllamaSelected.value) return ollamaReady.value
   if (requiresApiKey.value && apiKey.value.trim().length === 0) return false
   if (isCustomProvider.value && !customBaseUrl.value.trim()) return false
   const effectiveModel = isCustomProvider.value ? customModelId.value.trim() : model.value
@@ -63,6 +85,12 @@ watch(provider, (newProvider) => {
   apiKey.value = ''
   customBaseUrl.value = ''
   customModelId.value = ''
+  // Ollama 选中时自动检测状态
+  if (newProvider === 'ollama') {
+    detectOllama()
+  } else {
+    ollamaStatus.value = null
+  }
 })
 
 watch([provider, apiKey, model, customBaseUrl, customModelId], () => {
@@ -102,8 +130,11 @@ const selectedAgentTitle = computed(
 // ─── 连接测试 ──────────────────────────────────────
 const connectionTesting = ref(false)
 const connectionResult = ref<{ ok: boolean; msg: string } | null>(null)
+let connectionTestGen = 0
 
 async function testConnection() {
+  if (connectionTesting.value) return
+  const testGen = ++connectionTestGen
   connectionTesting.value = true
   connectionResult.value = null
   try {
@@ -134,6 +165,7 @@ async function testConnection() {
         model: effectiveModel,
       },
     })
+    if (testGen !== connectionTestGen) return
     connectionResult.value = {
       ok: result.ok,
       msg:
@@ -141,12 +173,14 @@ async function testConnection() {
         (result.ok ? t('welcome.connectionTestSuccess') : t('welcome.connectionTestFailed')),
     }
   } catch (e) {
+    if (testGen !== connectionTestGen) return
     const errMsg = messageFromUnknownError(e)
     connectionResult.value = {
       ok: false,
       msg: errMsg.includes('404') ? t('welcome.connectionTestUnavailable') : errMsg,
     }
   } finally {
+    if (testGen !== connectionTestGen) return
     connectionTesting.value = false
   }
 }
@@ -183,7 +217,11 @@ async function finishWizard() {
         : providerModels.value.length > 0
           ? [providerModels.value[0]!]
           : []
-    const createdProvider = settingsStore.addProvider({
+    // 避免重试时重复添加相同 provider（saveConfig 可能失败后用户再次点击）
+    const existingProvider = settingsStore.config?.llm.providers.find(
+      (p) => p.type === provider.value && p.baseUrl === effectiveBaseUrl,
+    )
+    const createdProvider = existingProvider ?? settingsStore.addProvider({
       name: isCustomProvider.value ? t('welcome.customProvider', '自定义') : preset.name,
       type: provider.value,
       enabled: true,
@@ -234,15 +272,21 @@ function prevStep() {
 }
 
 async function skip() {
+  if (finishing.value) return
+  finishing.value = true
   // Mark welcome as completed even when skipping
-  if (!settingsStore.config) {
-    await settingsStore.loadConfig()
+  try {
+    if (!settingsStore.config) {
+      await settingsStore.loadConfig()
+    }
+    if (settingsStore.config) {
+      settingsStore.config.general.welcomeCompleted = true
+      await settingsStore.saveConfig(settingsStore.config)
+    }
+    router.push('/chat')
+  } finally {
+    finishing.value = false
   }
-  if (settingsStore.config) {
-    settingsStore.config.general.welcomeCompleted = true
-    await settingsStore.saveConfig(settingsStore.config)
-  }
-  router.push('/chat')
 }
 </script>
 
@@ -297,94 +341,134 @@ async function skip() {
         <div v-if="step === 0" class="space-y-4">
           <div class="hc-settings__field">
             <label class="hc-settings__label">Provider</label>
-            <ProviderSelect v-model="provider" />
+            <ProviderSelect v-model="provider" :include-ollama="true" />
           </div>
-          <div class="hc-settings__field">
-            <label class="hc-settings__label">API Key</label>
-            <input
-              v-model="apiKey"
-              type="password"
-              class="hc-input"
-              :placeholder="PROVIDER_PRESETS[provider].placeholder"
-              :disabled="!requiresApiKey"
-            />
-            <p
-              v-if="!requiresApiKey"
-              class="text-xs mt-1"
-              :style="{ color: 'var(--hc-text-muted)' }"
-            >
-              {{ t('welcome.ollamaNoKey') }}
-            </p>
-            <p
-              v-else-if="apiKey.trim().length === 0"
-              class="text-xs mt-1"
-              :style="{ color: 'var(--hc-warning, #f59e0b)' }"
-            >
-              {{ t('welcome.enterApiKey') }}
-            </p>
-          </div>
-          <div v-if="isCustomProvider" class="hc-settings__field">
-            <label class="hc-settings__label">Base URL</label>
-            <input
-              v-model="customBaseUrl"
-              type="text"
-              class="hc-input"
-              placeholder="https://your-api.example.com/v1"
-            />
-          </div>
-          <div class="hc-settings__field">
-            <label class="hc-settings__label">Model</label>
-            <input
-              v-if="isCustomProvider"
-              v-model="customModelId"
-              type="text"
-              class="hc-input"
-              :placeholder="t('welcome.customModelPlaceholder')"
-            />
-            <select v-else v-model="model" class="hc-input">
-              <option v-for="m in providerModels" :key="m.id" :value="m.id">
-                {{ m.name }}
-              </option>
-            </select>
-          </div>
-          <div class="pt-1">
-            <button
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border"
-              :style="{
-                borderColor: connectionResult?.ok ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)' : 'var(--hc-border)',
-                color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-text-secondary)',
-                background: 'var(--hc-bg-main)',
-              }"
-              :disabled="
-                connectionTesting ||
-                (requiresApiKey && apiKey.trim().length === 0) ||
-                !(isCustomProvider ? customModelId.trim() : model) ||
-                (isCustomProvider && !customBaseUrl.trim())
-              "
-              @click="testConnection"
-            >
-              <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
-              <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: var(--hc-success)" />
-              <XCircle
-                v-else-if="connectionResult && !connectionResult.ok"
-                :size="12"
-                style="color: var(--hc-error)"
-              />
-              {{ connectionTesting ? t('welcome.testing') : t('welcome.testConnection') }}
-            </button>
 
-            <div v-if="connectionResult" class="mt-3">
-              <p
-                class="text-xs px-3 py-1.5 rounded-lg inline-block"
+          <!-- Ollama 专属：状态检测 + 模型选择 -->
+          <template v-if="isOllamaSelected">
+            <div class="hc-settings__field">
+              <div
+                class="flex items-center gap-2 px-3 py-2.5 rounded-lg border"
                 :style="{
-                  background: connectionResult.ok ? 'color-mix(in srgb, var(--hc-success) 8%, transparent)' : 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
-                  color: connectionResult.ok ? 'var(--hc-success)' : 'var(--hc-error)',
+                  borderColor: ollamaReady ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)' : 'var(--hc-border)',
+                  background: 'var(--hc-bg-main)',
                 }"
               >
-                {{ connectionResult.msg }}
+                <Loader2 v-if="ollamaDetecting" :size="14" class="animate-spin" :style="{ color: 'var(--hc-text-muted)' }" />
+                <CheckCircle v-else-if="ollamaReady" :size="14" style="color: var(--hc-success)" />
+                <XCircle v-else :size="14" style="color: var(--hc-error)" />
+                <span class="text-xs" :style="{ color: ollamaReady ? 'var(--hc-success)' : 'var(--hc-text-secondary)' }">
+                  {{ ollamaDetecting ? t('welcome.ollamaDetecting', '正在检测 Ollama...') :
+                     ollamaReady ? t('welcome.ollamaReady', 'Ollama 已就绪') + (ollamaStatus?.version ? ` (v${ollamaStatus.version})` : '') :
+                     t('welcome.ollamaNotRunning', 'Ollama 未运行 — HexClaw 将自动启动内置引擎') }}
+                </span>
+                <button
+                  v-if="!ollamaDetecting"
+                  class="ml-auto text-xs px-2 py-0.5 rounded border"
+                  :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)', background: 'transparent' }"
+                  @click="detectOllama"
+                >
+                  {{ t('common.refresh', '刷新') }}
+                </button>
+              </div>
+              <p class="text-xs mt-1" :style="{ color: 'var(--hc-text-muted)' }">
+                {{ t('welcome.ollamaHint', '无需 API Key，模型在本机运行，完全离线可用。') }}
               </p>
             </div>
-          </div>
+            <div v-if="ollamaModels.length > 0" class="hc-settings__field">
+              <label class="hc-settings__label">{{ t('welcome.ollamaSelectModel', '选择模型') }}</label>
+              <select v-model="model" class="hc-input">
+                <option v-for="m in ollamaModels" :key="m.name" :value="m.name">
+                  {{ m.name }}
+                </option>
+              </select>
+            </div>
+            <p v-else-if="ollamaReady" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+              {{ t('welcome.ollamaNoModels', '暂无已下载模型，完成引导后可在设置页下载。') }}
+            </p>
+          </template>
+
+          <!-- 云 Provider：API Key + Model + 连接测试 -->
+          <template v-else>
+            <div class="hc-settings__field">
+              <label class="hc-settings__label">API Key</label>
+              <input
+                v-model="apiKey"
+                type="password"
+                class="hc-input"
+                :placeholder="PROVIDER_PRESETS[provider].placeholder"
+              />
+              <p
+                v-if="apiKey.trim().length === 0"
+                class="text-xs mt-1"
+                :style="{ color: 'var(--hc-warning, #f59e0b)' }"
+              >
+                {{ t('welcome.enterApiKey') }}
+              </p>
+            </div>
+            <div v-if="isCustomProvider" class="hc-settings__field">
+              <label class="hc-settings__label">Base URL</label>
+              <input
+                v-model="customBaseUrl"
+                type="text"
+                class="hc-input"
+                placeholder="https://your-api.example.com/v1"
+              />
+            </div>
+            <div class="hc-settings__field">
+              <label class="hc-settings__label">Model</label>
+              <input
+                v-if="isCustomProvider"
+                v-model="customModelId"
+                type="text"
+                class="hc-input"
+                :placeholder="t('welcome.customModelPlaceholder')"
+              />
+              <select v-else v-model="model" class="hc-input">
+                <option v-for="m in providerModels" :key="m.id" :value="m.id">
+                  {{ m.name }}
+                </option>
+              </select>
+            </div>
+            <div class="pt-1">
+              <button
+                class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors border"
+                :style="{
+                  borderColor: connectionResult?.ok ? 'color-mix(in srgb, var(--hc-success) 33%, transparent)' : 'var(--hc-border)',
+                  color: connectionResult?.ok ? 'var(--hc-success)' : 'var(--hc-text-secondary)',
+                  background: 'var(--hc-bg-main)',
+                }"
+                :disabled="
+                  connectionTesting ||
+                  (requiresApiKey && apiKey.trim().length === 0) ||
+                  !(isCustomProvider ? customModelId.trim() : model) ||
+                  (isCustomProvider && !customBaseUrl.trim())
+                "
+                @click="testConnection"
+              >
+                <Loader2 v-if="connectionTesting" :size="12" class="animate-spin" />
+                <CheckCircle v-else-if="connectionResult?.ok" :size="12" style="color: var(--hc-success)" />
+                <XCircle
+                  v-else-if="connectionResult && !connectionResult.ok"
+                  :size="12"
+                  style="color: var(--hc-error)"
+                />
+                {{ connectionTesting ? t('welcome.testing') : t('welcome.testConnection') }}
+              </button>
+
+              <div v-if="connectionResult" class="mt-3">
+                <p
+                  class="text-xs px-3 py-1.5 rounded-lg inline-block"
+                  :style="{
+                    background: connectionResult.ok ? 'color-mix(in srgb, var(--hc-success) 8%, transparent)' : 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
+                    color: connectionResult.ok ? 'var(--hc-success)' : 'var(--hc-error)',
+                  }"
+                >
+                  {{ connectionResult.msg }}
+                </p>
+              </div>
+            </div>
+          </template>
         </div>
 
         <!-- Step 2: 选择 Agent -->
@@ -497,7 +581,12 @@ async function skip() {
         <button
           v-else
           class="px-3 py-2 text-sm transition-colors"
-          :style="{ color: 'var(--hc-text-muted)' }"
+          :style="{
+            color: 'var(--hc-text-muted)',
+            opacity: finishing ? 0.5 : 1,
+            cursor: finishing ? 'not-allowed' : 'pointer',
+          }"
+          :disabled="finishing"
           @click="skip"
         >
           {{ t('welcome.skip') }}

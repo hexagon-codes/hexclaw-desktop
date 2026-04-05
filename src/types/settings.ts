@@ -23,6 +23,10 @@ export interface ProviderConfig {
   models: ModelOption[]
   /** 当前 provider 在后端运行时默认使用的模型 */
   selectedModelId?: string
+  /** 是否启用工具注入（undefined/null=自动，true=强制开，false=强制关） */
+  toolsEnabled?: boolean | null
+  /** 最大注入工具数（0或undefined=不限制） */
+  maxTools?: number
 }
 
 /** 支持的 Provider 类型 */
@@ -57,11 +61,18 @@ export interface LLMRoutingSettings {
   strategy: string
 }
 
+/** 工具注入全局设置 */
+export interface ToolsInjectionSettings {
+  enabled: 'auto' | 'on' | 'off' // auto=按 provider 类型自动判断
+  maxTools: number                // 0=不限制
+}
+
 export interface LLMConfig {
   providers: ProviderConfig[]
   defaultModel: string
   defaultProviderId?: string
   routing?: LLMRoutingSettings
+  tools?: ToolsInjectionSettings
 }
 
 /** 对话级参数 */
@@ -124,6 +135,8 @@ export interface BackendLLMProvider {
   base_url: string
   model: string
   compatible: string
+  tools_enabled?: boolean | null // null=自动（本地关/云开），true=强制开，false=强制关
+  max_tools?: number             // 0=不限制
 }
 
 /** 后端 LLM 配置（匹配 GET/PUT /api/v1/config/llm） */

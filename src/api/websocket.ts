@@ -103,7 +103,11 @@ class HexClawWS {
 
       this.ws.onopen = () => {
         logger.info('WebSocket connected')
-        this.reconnectAttempts = 0
+        // Only reset reconnect counter after connection stays stable for 10s
+        // This prevents infinite reconnect loops when the server immediately closes
+        const stableTimer = setTimeout(() => { this.reconnectAttempts = 0 }, 10_000)
+        const origOnclose = this.ws!.onclose
+        this.ws!.addEventListener('close', () => clearTimeout(stableTimer), { once: true })
         this.lastPongTime = Date.now()
         this.startHeartbeat()
         this.connectResolved = true
@@ -217,7 +221,8 @@ class HexClawWS {
 
   /** Send tool approval response back to backend */
   sendApprovalResponse(requestId: string, approved: boolean, remember: boolean): void {
-    const content = remember ? 'approved_remember' : approved ? 'approved' : 'denied'
+    const base = approved ? 'approved' : 'denied'
+    const content = remember ? `${base}_remember` : base
     this.sendRaw({
       type: 'tool_approval_response',
       content,
@@ -236,7 +241,14 @@ class HexClawWS {
     this.errorCallbacks.forEach((cb) => cb(msg))
   }
 
-  /** Remove all registered callbacks (useful for re-registering) */
+  /** Remove only streaming callbacks (chunk/reply/error), preserve approval listeners */
+  clearStreamCallbacks(): void {
+    this.chunkCallbacks = []
+    this.replyCallbacks = []
+    this.errorCallbacks = []
+  }
+
+  /** Remove all registered callbacks including approval (used on disconnect/session reset) */
   clearCallbacks(): void {
     this.chunkCallbacks = []
     this.replyCallbacks = []

@@ -6,6 +6,11 @@
  */
 
 import { apiGet, apiPost, apiDelete } from './client'
+import {
+  TEAM_DEFAULT_MEMBER,
+  TEAM_FALLBACK_WARNINGS,
+  TEAM_PENDING_MEMBER_LAST_ACTIVE,
+} from '@/config/team-fallback'
 import { logger } from '@/utils/logger'
 
 // ─── 类型定义 ────────────────────────────────────────
@@ -56,13 +61,7 @@ function setLocal<T>(key: string, data: T) {
 // ─── 默认当前用户（桌面端单用户） ─────────────────────
 
 function defaultMember(): TeamMember {
-  return {
-    id: 'self',
-    name: '当前用户',
-    email: 'user@local',
-    role: 'admin',
-    last_active: '在线',
-  }
+  return { ...TEAM_DEFAULT_MEMBER }
 }
 
 // ─── 共享 Agent API ──────────────────────────────────
@@ -72,7 +71,7 @@ export async function getSharedAgents(): Promise<SharedAgent[]> {
     const res = await apiGet<{ agents: SharedAgent[] }>('/api/v1/team/agents')
     return res.agents ?? []
   } catch (e) {
-    logger.warn('Team API 不可用，降级到 localStorage', e)
+    logger.warn(TEAM_FALLBACK_WARNINGS.getSharedAgents, e)
     return getLocal<SharedAgent[]>(SHARED_AGENTS_KEY, [])
   }
 }
@@ -89,7 +88,7 @@ export async function shareAgent(agent: Omit<SharedAgent, 'id' | 'downloads' | '
   try {
     return await apiPost<SharedAgent>('/api/v1/team/agents', newAgent)
   } catch (e) {
-    logger.warn('shareAgent API 不可用，降级到 localStorage', e)
+    logger.warn(TEAM_FALLBACK_WARNINGS.shareAgent, e)
     const agents = getLocal<SharedAgent[]>(SHARED_AGENTS_KEY, [])
     agents.push(newAgent)
     setLocal(SHARED_AGENTS_KEY, agents)
@@ -101,7 +100,7 @@ export async function deleteSharedAgent(id: string): Promise<void> {
   try {
     await apiDelete(`/api/v1/team/agents/${encodeURIComponent(id)}`)
   } catch (e) {
-    logger.warn('deleteSharedAgent API 不可用，降级到 localStorage', e)
+    logger.warn(TEAM_FALLBACK_WARNINGS.deleteSharedAgent, e)
     const agents = getLocal<SharedAgent[]>(SHARED_AGENTS_KEY, []).filter(a => a.id !== id)
     setLocal(SHARED_AGENTS_KEY, agents)
   }
@@ -114,7 +113,7 @@ export async function getTeamMembers(): Promise<TeamMember[]> {
     const res = await apiGet<{ members: TeamMember[] }>('/api/v1/team/members')
     return res.members ?? []
   } catch (e) {
-    logger.warn('getTeamMembers API 不可用，降级到 localStorage', e)
+    logger.warn(TEAM_FALLBACK_WARNINGS.getTeamMembers, e)
     const local = getLocal<TeamMember[]>(TEAM_MEMBERS_KEY, [])
     if (local.length === 0) return [defaultMember()]
     return local
@@ -127,13 +126,13 @@ export async function inviteTeamMember(invite: TeamInvite): Promise<TeamMember> 
     name: invite.email.split('@')[0] || invite.email,
     email: invite.email,
     role: invite.role,
-    last_active: '待加入',
+    last_active: TEAM_PENDING_MEMBER_LAST_ACTIVE,
   }
 
   try {
     return await apiPost<TeamMember>('/api/v1/team/members', invite)
   } catch (e) {
-    logger.warn('inviteTeamMember API 不可用，降级到 localStorage', e)
+    logger.warn(TEAM_FALLBACK_WARNINGS.inviteTeamMember, e)
     const members = getLocal<TeamMember[]>(TEAM_MEMBERS_KEY, [defaultMember()])
     members.push(member)
     setLocal(TEAM_MEMBERS_KEY, members)
@@ -145,7 +144,7 @@ export async function removeTeamMember(id: string): Promise<void> {
   try {
     await apiDelete(`/api/v1/team/members/${encodeURIComponent(id)}`)
   } catch (e) {
-    logger.warn('removeTeamMember API 不可用，降级到 localStorage', e)
+    logger.warn(TEAM_FALLBACK_WARNINGS.removeTeamMember, e)
     const members = getLocal<TeamMember[]>(TEAM_MEMBERS_KEY, []).filter(m => m.id !== id)
     setLocal(TEAM_MEMBERS_KEY, members)
   }

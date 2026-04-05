@@ -48,6 +48,7 @@ vi.mock('@/api/websocket', () => {
         callbacks.error = []
         callbacks.approval = []
       }),
+      clearStreamCallbacks: vi.fn(),
       _callbacks: callbacks,
     },
   }
@@ -75,12 +76,6 @@ vi.mock('@/services/chatService', () => {
     sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
     sendViaBackend: vi.fn().mockResolvedValue({ reply: 'backend reply', metadata: {} }),
     clearWebSocketCallbacks: vi.fn(),
-    outboxInsert: vi.fn().mockResolvedValue(undefined),
-    outboxMarkSending: vi.fn().mockResolvedValue(undefined),
-    outboxMarkSent: vi.fn().mockResolvedValue(undefined),
-    outboxMarkFailed: vi.fn().mockResolvedValue(undefined),
-    retryPendingOutbox: vi.fn(),
-    cleanupOutbox: vi.fn(),
     ChatRequestError: class ChatRequestError extends Error {
       noFallback: boolean
       constructor(message: string, noFallback = false) {
@@ -113,14 +108,7 @@ vi.mock('@/utils/logger', () => ({
   },
 }))
 
-vi.mock('@/db/outbox', () => ({
-  dbOutboxInsert: vi.fn().mockResolvedValue(undefined),
-  dbOutboxMarkSending: vi.fn().mockResolvedValue(undefined),
-  dbOutboxMarkSent: vi.fn().mockResolvedValue(undefined),
-  dbOutboxMarkFailed: vi.fn().mockResolvedValue(undefined),
-  dbOutboxGetPending: vi.fn().mockResolvedValue([]),
-  dbOutboxCleanup: vi.fn().mockResolvedValue(undefined),
-}))
+// DB layer removed — outbox is now in-memory (no-op)
 
 describe('chat store edge cases', () => {
   let chatStore: ReturnType<typeof import('@/stores/chat').useChatStore>
@@ -282,23 +270,24 @@ describe('chat store edge cases', () => {
   // ─── Rate limiting / spam protection ───────────────
 
   describe('rate limiting', () => {
-    it('multiple rapid sends each create user messages', async () => {
+    it('concurrent sends are guarded — only the first goes through', async () => {
       vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValue(false)
       vi.mocked(chatSvc.sendViaBackend).mockResolvedValue({
         reply: 'reply',
         metadata: {},
       })
 
-      // Rapid fire 3 messages
+      // Rapid fire 3 messages concurrently — sending guard blocks the 2nd and 3rd
       const p1 = chatStore.sendMessage('msg1')
       const p2 = chatStore.sendMessage('msg2')
       const p3 = chatStore.sendMessage('msg3')
 
       await Promise.all([p1, p2, p3])
 
-      // Each should have created a user message + assistant message
+      // Only the first should have gone through due to the sending guard
       const userMsgs = chatStore.messages.filter(m => m.role === 'user')
-      expect(userMsgs.length).toBe(3)
+      expect(userMsgs.length).toBe(1)
+      expect(userMsgs[0]!.content).toBe('msg1')
     })
 
     it('sendMessage stops streaming before each new send', async () => {

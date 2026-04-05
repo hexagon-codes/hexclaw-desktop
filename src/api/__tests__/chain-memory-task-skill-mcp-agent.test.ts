@@ -82,7 +82,7 @@ describe('Chain 4: Memory Lifecycle', () => {
     const [updatePath, updateOpts] = callArgs(3)
     expect(updatePath).toBe('/api/v1/memory')
     expect(updateOpts.method).toBe('PUT')
-    expect(updateOpts.body).toEqual({ content: 'hello world v2' })
+    expect(updateOpts.body).toEqual({ content: 'hello world v2', type: 'memory' })
     expect(updateRes).toEqual({ message: 'updated' })
 
     // 5) deleteMemory → DELETE /api/v1/memory/:id
@@ -280,10 +280,11 @@ describe('Chain 6: Skill Lifecycle', () => {
     expect(skillsOpts.method).toBe('GET')
     expect(skills.total).toBe(1)
 
-    // 2) searchClawHub → GET /api/v1/clawhub/search?q=...&category=...
+    // 2) searchClawHub → GET /api/v1/clawhub/search with query params
     const [hubPath, hubOpts] = callArgs(1)
-    expect(hubPath).toBe('/api/v1/clawhub/search?q=code-review&category=coding')
+    expect(hubPath).toBe('/api/v1/clawhub/search')
     expect(hubOpts.method).toBe('GET')
+    expect(hubOpts.query).toEqual({ q: 'code-review', category: 'coding' })
     expect(hubResults).toHaveLength(1)
     expect(hubResults[0]!.name).toBe('code-review-pro')
 
@@ -323,8 +324,9 @@ describe('Chain 6: Skill Lifecycle', () => {
     const { setSkillEnabled } = await import('../skills')
     const result = await setSkillEnabled('broken-skill', true)
 
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
     expect(result.source).toBe('local-fallback')
+    expect(result.warning).toBeDefined()
     expect(result.enabled).toBe(true)
     expect(result.message).toBe('Network Error')
   })
@@ -401,7 +403,7 @@ describe('Chain 7: MCP Lifecycle', () => {
     expect(callPath).toBe('/api/v1/mcp/tools/call')
     expect(callOpts.method).toBe('POST')
     expect(callOpts.body).toEqual({
-      tool: 'read_file',
+      name: 'read_file',
       arguments: { path: '/tmp/test.txt' },
     })
     expect(callRes.result).toBe('file contents here')

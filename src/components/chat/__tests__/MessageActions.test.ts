@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -35,6 +35,10 @@ function mountMessageActions(feedback: 'like' | 'dislike' | null) {
 }
 
 describe('MessageActions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('replays persisted like state', () => {
     const wrapper = mountMessageActions('like')
     const buttons = wrapper.findAll('button')
@@ -46,5 +50,18 @@ describe('MessageActions', () => {
     const wrapper = mountMessageActions('dislike')
     const buttons = wrapper.findAll('button')
     expect(buttons[1]?.classes()).toContain('hc-msg-actions__btn--active-bad')
+  })
+
+  it('copy button degrades gracefully when clipboard API is unavailable', async () => {
+    const wrapper = mountMessageActions(null)
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    })
+
+    const copyButton = wrapper.findAll('button')[2]
+    await expect(copyButton?.trigger('click')).resolves.toBeUndefined()
+    expect(wrapper.emitted('copy')).toHaveLength(1)
   })
 })

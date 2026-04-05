@@ -56,6 +56,12 @@ export function useChatSend(deps: ChatSendDeps) {
   }
 
   async function handleSend(text: string, files?: File[]) {
+    // Validate model selection before sending
+    const model = chatStore.chatParams.model
+    if (!model || (model !== 'auto' && model.trim() === '')) {
+      return
+    }
+
     const attachmentAutomation =
       attachmentPreview.value?.type === 'file' && parsedDocument.value
         ? {
@@ -75,15 +81,20 @@ export function useChatSend(deps: ChatSendDeps) {
       clearAttachmentPreview()
     }
 
-    // 从新的多文件参数：图片作为 attachment，文档解析为文本
+    // 从新的多文件参数：图片/视频作为 attachment，文档解析为文本
     const docTexts: string[] = []
     if (files?.length) {
       for (const file of files) {
         const isImage = file.type.startsWith('image/')
+        const isVideo = file.type.startsWith('video/')
         if (isImage) {
           // 图片：作为 attachment 发送给支持 vision 的模型
           const data = await fileToBase64(file)
           attachments.push({ type: 'image', name: file.name, mime: file.type, data })
+        } else if (isVideo) {
+          // 视频：保留 video 类型
+          const data = await fileToBase64(file)
+          attachments.push({ type: 'video', name: file.name, mime: file.type, data })
         } else {
           // 文档（PDF/TXT/DOCX 等）：解析提取文本，拼入消息内容
           try {
@@ -131,9 +142,11 @@ export function useChatSend(deps: ChatSendDeps) {
       // 知识库搜索失败不阻塞聊天
     }
 
-    // Set agent role for research mode
+    // Set agent role for research mode; clear stale role when not in research
     if (chatStore.chatMode === 'research') {
       chatStore.agentRole = 'researcher'
+    } else if (chatStore.agentRole === 'researcher') {
+      chatStore.agentRole = ''
     }
 
     const assistantMessage = await chatStore.sendMessage(

@@ -1,41 +1,58 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const {
-  wsIsConnected, wsConnect, wsClearCallbacks, wsOnChunk, wsOnReply, wsOnError, wsSendMessage,
+  wsIsConnected,
+  wsConnect,
+  wsClearCallbacks,
+  wsOnChunk,
+  wsOnReply,
+  wsOnError,
+  wsOnApprovalRequest,
+  wsSendMessage,
   sendChatViaBackend,
-  dbOutboxInsert, dbOutboxMarkSending, dbOutboxMarkSent, dbOutboxMarkFailed, dbOutboxGetPending, dbOutboxCleanup,
+  approvalCallbacks,
 } = vi.hoisted(() => ({
   wsIsConnected: vi.fn().mockReturnValue(false),
   wsConnect: vi.fn().mockResolvedValue(undefined),
-  wsClearCallbacks: vi.fn(),
+  approvalCallbacks: [] as Array<(req: { requestId: string }) => void>,
+  wsClearCallbacks: vi.fn().mockImplementation(() => {
+    approvalCallbacks.length = 0
+  }),
   wsOnChunk: vi.fn().mockReturnValue(() => {}),
   wsOnReply: vi.fn().mockReturnValue(() => {}),
   wsOnError: vi.fn().mockReturnValue(() => {}),
+  wsOnApprovalRequest: vi.fn().mockImplementation((cb: (req: { requestId: string }) => void) => {
+    approvalCallbacks.push(cb)
+    return () => {
+      const idx = approvalCallbacks.indexOf(cb)
+      if (idx >= 0) approvalCallbacks.splice(idx, 1)
+    }
+  }),
   wsSendMessage: vi.fn(),
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 's1' }),
-  dbOutboxInsert: vi.fn().mockResolvedValue(undefined),
-  dbOutboxMarkSending: vi.fn().mockResolvedValue(undefined),
-  dbOutboxMarkSent: vi.fn().mockResolvedValue(undefined),
-  dbOutboxMarkFailed: vi.fn().mockResolvedValue(undefined),
-  dbOutboxGetPending: vi.fn().mockResolvedValue([]),
-  dbOutboxCleanup: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('@/api/websocket', () => ({
   hexclawWS: {
-    isConnected: wsIsConnected, connect: wsConnect, clearCallbacks: wsClearCallbacks,
-    onChunk: wsOnChunk, onReply: wsOnReply, onError: wsOnError, sendMessage: wsSendMessage,
+    isConnected: wsIsConnected, connect: wsConnect,
+    clearCallbacks: wsClearCallbacks, clearStreamCallbacks: vi.fn(),
+    onChunk: wsOnChunk,
+    onReply: wsOnReply,
+    onError: wsOnError,
+    onApprovalRequest: wsOnApprovalRequest,
+    sendMessage: wsSendMessage,
   },
 }))
 vi.mock('@/api/chat', () => ({ sendChatViaBackend }))
-vi.mock('@/db/outbox', () => ({
-  dbOutboxInsert, dbOutboxMarkSending, dbOutboxMarkSent, dbOutboxMarkFailed, dbOutboxGetPending, dbOutboxCleanup,
-}))
 
+import { hexclawWS } from '@/api/websocket'
 import { ensureWebSocketConnected, sendViaBackend, sendViaWebSocket, ChatRequestError } from '../chatService'
 
 describe('chatService', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    approvalCallbacks.length = 0
+  })
 
   // ─── ensureWebSocketConnected ───
   it('returns true when already connected', async () => {
@@ -103,6 +120,24 @@ describe('chatService', () => {
       onError: vi.fn(),
     })
     expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'glm-5', undefined, undefined, undefined, undefined, undefined, undefined)
+  })
+
+  it('keeps existing tool approval listeners while starting a chat request', async () => {
+    hexclawWS.onApprovalRequest(vi.fn())
+    expect(approvalCallbacks).toHaveLength(1)
+
+    wsOnReply.mockImplementation((cb: (msg: { content: string; type: string }) => void) => {
+      cb({ content: 'done', type: 'reply' })
+      return () => {}
+    })
+
+    await sendViaWebSocket('hi', 's1', { model: 'glm-5' }, '', undefined, {
+      onChunk: vi.fn(),
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    })
+
+    expect(approvalCallbacks).toHaveLength(1)
   })
 
   // ─── ChatRequestError ───

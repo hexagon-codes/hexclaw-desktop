@@ -221,9 +221,15 @@ body,
   border-radius: var(--hc-radius-md);
 }
 
-.hc-btn:active {
+.hc-btn:active:not(:disabled) {
   transform: scale(0.97);
   transition-duration: 0.1s;
+}
+
+.hc-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .hc-btn-primary {

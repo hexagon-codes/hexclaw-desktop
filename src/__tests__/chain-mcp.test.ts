@@ -133,22 +133,22 @@ describe('Chain G: MCP -> Servers -> Tools', () => {
     const result = await callMcpTool('get_weather', { location: 'Tokyo', units: 'metric' })
 
     expect(mockApiPost).toHaveBeenCalledWith('/api/v1/mcp/tools/call', {
-      tool: 'get_weather',
+      name: 'get_weather',
       arguments: { location: 'Tokyo', units: 'metric' },
     })
     expect(result.result).toEqual({ temperature: 22, unit: 'celsius', location: 'Tokyo' })
   })
 
-  it('G5b: callMcpTool handles error response', async () => {
+  it('G5b: callMcpTool throws on error response', async () => {
     mockApiPost.mockResolvedValueOnce({
       result: null,
       error: 'Tool execution failed: connection refused',
     })
 
     const { callMcpTool } = await import('@/api/mcp')
-    const result = await callMcpTool('broken_tool', { arg: 'value' })
-
-    expect(result.error).toBe('Tool execution failed: connection refused')
+    await expect(callMcpTool('broken_tool', { arg: 'value' })).rejects.toThrow(
+      'Tool execution failed: connection refused',
+    )
   })
 
   it('G6: getMcpServerStatus returns status map via GET /api/v1/mcp/status', async () => {

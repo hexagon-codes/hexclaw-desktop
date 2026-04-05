@@ -2,7 +2,58 @@
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { FileText, Pin, Plus } from 'lucide-vue-next'
-import { dbGetTemplates, dbSearchTemplates, dbTemplateIncrementUse, type PromptTemplate } from '@/db/templates'
+// Template storage migrated from SQLite to localStorage
+interface PromptTemplate {
+  id: string
+  title: string
+  content: string
+  category: string
+  useCount: number
+  pinned: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+const TEMPLATES_KEY = 'hexclaw_prompt_templates'
+
+function loadTemplatesFromStorage(): PromptTemplate[] {
+  try {
+    const raw = localStorage.getItem(TEMPLATES_KEY)
+    if (!raw) return []
+    return JSON.parse(raw) as PromptTemplate[]
+  } catch {
+    return []
+  }
+}
+
+function saveTemplatesToStorage(templates: PromptTemplate[]): void {
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates))
+}
+
+function dbGetTemplates(): PromptTemplate[] {
+  const all = loadTemplatesFromStorage()
+  return all.sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1
+    return b.useCount - a.useCount
+  })
+}
+
+function dbSearchTemplates(query: string): PromptTemplate[] {
+  const q = query.toLowerCase()
+  return dbGetTemplates().filter(
+    t => t.title.toLowerCase().includes(q) || t.content.toLowerCase().includes(q) || t.category.toLowerCase().includes(q),
+  )
+}
+
+function dbTemplateIncrementUse(id: string): void {
+  const all = loadTemplatesFromStorage()
+  const tpl = all.find(t => t.id === id)
+  if (tpl) {
+    tpl.useCount++
+    tpl.updatedAt = new Date().toISOString()
+    saveTemplatesToStorage(all)
+  }
+}
 
 const { t } = useI18n()
 

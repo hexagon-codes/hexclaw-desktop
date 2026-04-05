@@ -23,13 +23,13 @@ watchEffect(() => {
   document.title = t('about.title', '关于 河蟹 AI')
 })
 
-const appVersion = ref('v0.2.6')
+const appVersion = ref('v0.3.0')
 const appName = computed(() => t('about.brandAi', '河蟹 AI'))
 
 const techStack = computed(() => [
-  { name: 'Tauri v2', detail: 'Rust', color: '#f36b2a' },
-  { name: 'Vue 3', detail: 'TypeScript', color: '#42b883' },
+  { name: 'Tauri v2 · Vue 3', detail: 'Rust · TypeScript', color: '#f36b2a' },
   { name: 'Go Sidecar', detail: 'HexClaw Serve', color: '#00add8' },
+  { name: 'Ollama', detail: t('about.capLocalInference', '本地推理'), color: '#7c7c7c' },
   {
     name: t('about.securityGateway', '安全网关'),
     detail: `PII · ${t('about.injectionGuard', '注入检测')}`,

@@ -1,5 +1,6 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/logger'
 import type {
   DefineSetupStoreOptions,
   _ExtractActionsFromSetupStore,
@@ -64,7 +65,7 @@ const setup = () => {
         sidecarReady.value = ok
         return ok
       } catch (e) {
-        console.error('[AppStore] restart sidecar failed:', e)
+        logger.error('[AppStore] restart sidecar failed:', e)
         sidecarStatus.value = 'stopped'
         sidecarReady.value = false
         return false

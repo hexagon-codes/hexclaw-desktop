@@ -30,7 +30,7 @@ export const api = ofetch.create({
   onResponseError({ response }) {
     const serverMsg = (response._data as Record<string, unknown> | undefined)?.error as string | undefined
     const err = fromHttpStatus(response.status, serverMsg ?? response.statusText)
-    logger.error(`API 错误: [${err.code}] ${err.message}`)
+    logger.error(`API error: [${err.code}] ${err.message}`)
   },
 })
 
@@ -56,6 +56,11 @@ export function apiPost<T>(url: string, body?: Record<string, unknown> | FormDat
 /** PUT 请求 */
 export function apiPut<T>(url: string, body?: Record<string, unknown> | object) {
   return api<T>(url, { method: 'PUT', body: body as Record<string, unknown> })
+}
+
+/** PATCH 请求 */
+export function apiPatch<T>(url: string, body?: Record<string, unknown> | object) {
+  return api<T>(url, { method: 'PATCH', body: body as Record<string, unknown> })
 }
 
 /** DELETE 请求 */
@@ -86,10 +91,11 @@ export async function apiSSE(
   }
 
   if (!response.body) {
-    throw new Error('SSE 响应体为空')
+    throw new Error('SSE response body is empty')
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
+  let lineBuffer = ''
 
   return new ReadableStream<string>({
     async pull(controller) {
@@ -99,8 +105,9 @@ export async function apiSSE(
           controller.close()
           return
         }
-        const text = decoder.decode(value, { stream: true })
-        const lines = text.split('\n')
+        lineBuffer += decoder.decode(value, { stream: true })
+        const lines = lineBuffer.split('\n')
+        lineBuffer = lines.pop() || '' // 最后一段可能是不完整行，保留到下次
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6)
@@ -150,4 +157,3 @@ export async function checkHealth(): Promise<boolean> {
 
 export type { ApiError }
 export { fromNativeError, createApiError, isRetryable, getErrorMessage } from '@/utils/errors'
-

@@ -19,4 +19,22 @@ describe('im-channels.ts — 动态导入 Tauri API（修复后）', () => {
     expect(raw).toContain("await import('@tauri-apps/plugin-store')")
     expect(raw).toContain("await import('@tauri-apps/api/core')")
   })
+
+  it('im-channels.ts 不再内嵌平台元数据与文案配置', async () => {
+    const sourceCode = await import('../im-channels?raw')
+    const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
+
+    expect(raw).toContain("from '@/config/im-channels'")
+    expect(raw).not.toContain('export const CHANNEL_CONFIG_FIELDS')
+    expect(raw).not.toContain('export const CHANNEL_TYPES')
+    expect(raw).not.toContain('export const CHANNEL_HELP_TEXT')
+  })
+
+  it('im-channels.ts 不再内嵌重复名称错误文案', async () => {
+    const sourceCode = await import('../im-channels?raw')
+    const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
+
+    expect(raw).toContain("from '@/config/im-channel-errors'")
+    expect(raw).not.toContain('实例名称重复：')
+  })
 })

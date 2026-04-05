@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { BookOpen, Upload, Trash2, Search, FileText, X, FileUp, RefreshCw, AlertTriangle } from 'lucide-vue-next'
 import {
@@ -13,7 +13,7 @@ import {
   isKnowledgeUploadEndpointMissing,
   isKnowledgeUploadUnsupportedFormat,
 } from '@/api/knowledge'
-import { dbGetCachedKnowledgeDocs, dbReplaceKnowledgeDocsCache, dbGetKnowledgeCacheTimestamp } from '@/db/knowledge'
+// DB cache layer removed — data fetched directly from backend API
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -40,7 +40,7 @@ const loading = ref(true)
 const errorMsg = ref('')
 const errorSeverity = ref<'error' | 'warning' | null>(null)
 const revalidating = ref(false)
-const CACHE_TTL_MS = 5 * 60 * 1000 // 缓存 TTL: 5 分钟
+// CACHE_TTL_MS removed — DB cache layer eliminated
 const activeTab = ref<'documents' | 'search'>('documents')
 
 const showAddDialog = ref(false)
@@ -55,6 +55,7 @@ const deletingDoc = ref<KnowledgeDoc | null>(null)
 const searchQuery = ref('')
 const searchResults = ref<KnowledgeSearchResult[]>([])
 const searching = ref(false)
+let searchRequestGen = 0
 const selectedDoc = ref<KnowledgeDoc | null>(null)
 const showDocDetail = ref(false)
 const reindexingDocIds = ref<Set<string>>(new Set())
@@ -70,41 +71,18 @@ onMounted(async () => {
   await loadDocs()
 })
 
+watch(activeTab, () => {
+  errorMsg.value = ''
+})
+
 /**
- * Stale-While-Revalidate 加载策略：
- * 1. 先展示 SQLite 缓存（快速首屏）
- * 2. 后台从 Sidecar API 拉取最新数据
- * 3. API 成功 → 更新 UI + 刷新缓存；失败 → 保留缓存 + 提示
+ * 从后端 API 直接加载文档列表（DB 缓存层已移除）
  */
 async function loadDocs() {
   errorMsg.value = ''
   errorSeverity.value = null
-
-  // Phase 1: 从缓存快速展示（仅 TTL 内有效）
-  let hadCache = false
-  try {
-    const ts = await dbGetKnowledgeCacheTimestamp()
-    const isFresh = ts && Date.now() - new Date(ts).getTime() < CACHE_TTL_MS
-
-    if (isFresh) {
-      const cached = await dbGetCachedKnowledgeDocs()
-      if (cached.length > 0) {
-        docs.value = cached
-        totalDocs.value = cached.length
-        loading.value = false
-        hadCache = true
-      }
-    }
-  } catch (e) {
-    logger.debug('知识库缓存读取失败（首次运行或非 Tauri 环境）', e)
-  }
-
-  if (!hadCache) {
-    loading.value = true
-  }
-
-  // Phase 2: 从后端 API 刷新
-  await revalidateFromApi(hadCache)
+  loading.value = true
+  await revalidateFromApi(false)
 }
 
 async function revalidateFromApi(hadCache = docs.value.length > 0) {
@@ -117,10 +95,7 @@ async function revalidateFromApi(hadCache = docs.value.length > 0) {
     errorMsg.value = ''
     errorSeverity.value = null
 
-    // 更新本地缓存（fire-and-forget）
-    dbReplaceKnowledgeDocsCache(freshDocs).catch((e) =>
-      logger.warn('更新知识库缓存失败', e),
-    )
+    // DB cache layer removed — no local cache to update
   } catch (e) {
     if (hadCache) {
       // 有缓存兜底：软提示
@@ -155,10 +130,7 @@ async function handleAdd() {
       newContent.value.trim(),
       newSource.value.trim() || undefined,
     )
-    showAddDialog.value = false
-    newTitle.value = ''
-    newContent.value = ''
-    newSource.value = ''
+    closeAddDialog()
     await loadDocs()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('knowledge.addFailed')
@@ -197,6 +169,7 @@ function closeDeleteConfirm() {
 
 async function handleSearch() {
   if (!ensureKnowledgeEnabled()) return
+  const requestGen = ++searchRequestGen
   if (!searchQuery.value.trim()) {
     searchResults.value = []
     return
@@ -205,12 +178,16 @@ async function handleSearch() {
   errorMsg.value = ''
   try {
     const res = await searchKnowledge(searchQuery.value, 5)
+    if (requestGen !== searchRequestGen) return
     searchResults.value = res.result || []
   } catch (e) {
+    if (requestGen !== searchRequestGen) return
     errorMsg.value = e instanceof Error ? e.message : t('knowledge.searchFailed')
     console.error('[Knowledge] search failed:', e)
   } finally {
-    searching.value = false
+    if (requestGen === searchRequestGen) {
+      searching.value = false
+    }
   }
 }
 
@@ -248,17 +225,20 @@ function getDocStatusStyle(doc: KnowledgeDoc) {
 }
 
 const loadingDocContent = ref(false)
+let docContentRequestGen = 0
 
 async function openDocDetail(doc: KnowledgeDoc) {
+  const requestGen = ++docContentRequestGen
   selectedDoc.value = doc
   showDocDetail.value = true
+  loadingDocContent.value = false
 
   // 如果列表接口未返回正文，主动获取内容
   if (!doc.content?.trim()) {
     loadingDocContent.value = true
     try {
       const content = await getDocumentContent(doc)
-      if (content && selectedDoc.value?.id === doc.id) {
+      if (content && requestGen === docContentRequestGen && selectedDoc.value?.id === doc.id) {
         selectedDoc.value = { ...doc, content }
         // 同步更新列表中的文档对象，避免下次打开重复请求
         const idx = docs.value.findIndex((d) => d.id === doc.id)
@@ -267,27 +247,32 @@ async function openDocDetail(doc: KnowledgeDoc) {
     } catch {
       // 获取失败保持原提示
     } finally {
-      loadingDocContent.value = false
+      if (requestGen === docContentRequestGen) {
+        loadingDocContent.value = false
+      }
     }
   }
 }
 
 async function handleReindex(doc: KnowledgeDoc) {
   if (!ensureKnowledgeEnabled()) return
+  if (reindexingDocIds.value.has(doc.id)) return
   const next = new Set(reindexingDocIds.value)
   next.add(doc.id)
   reindexingDocIds.value = next
   errorMsg.value = ''
 
   try {
-    await reindexDocument(doc.id)
+    const result = await reindexDocument(doc.id)
+    // 用后端返回的真实状态更新（reindex 是同步的，返回时已完成）
     docs.value = docs.value.map((item) =>
       item.id === doc.id
         ? {
             ...item,
-            status: 'processing',
+            status: result.status || 'indexed',
+            chunk_count: result.chunk_count ?? item.chunk_count,
             error_message: undefined,
-            updated_at: new Date().toISOString(),
+            updated_at: result.updated_at || new Date().toISOString(),
           }
         : item,
     )
@@ -363,12 +348,34 @@ async function uploadDocumentThroughLegacyFallback(file: File, onProgress?: (pct
   onProgress?.(100)
 }
 
+const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB
+
 async function processFiles(files: FileList) {
   if (!ensureKnowledgeEnabled()) return
   const uploadTasks: Promise<void>[] = []
   let uploadedAny = false
 
   for (const file of Array.from(files)) {
+    if (file.size === 0) {
+      uploadingFiles.value.push({
+        name: file.name,
+        progress: 0,
+        status: 'error',
+        error: t('knowledge.fileEmpty', '文件为空'),
+      })
+      continue
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      uploadingFiles.value.push({
+        name: file.name,
+        progress: 0,
+        status: 'error',
+        error: t('knowledge.fileTooLarge', { max: '50 MB' }),
+      })
+      continue
+    }
+
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
     if (!ACCEPTED_TYPES.includes(ext)) {
       uploadingFiles.value.push({
@@ -380,27 +387,26 @@ async function processFiles(files: FileList) {
       continue
     }
 
-    const entry = { name: file.name, progress: 0, status: 'uploading' as const }
+    const entry: { name: string; progress: number; status: 'uploading' | 'done' | 'error'; error?: string } = { name: file.name, progress: 0, status: 'uploading' }
     uploadingFiles.value.push(entry)
-    const idx = uploadingFiles.value.length - 1
 
     uploadTasks.push(
       (async () => {
         const updateProgress = (pct: number) => {
-          uploadingFiles.value[idx]!.progress = pct
+          entry.progress = pct
         }
 
         try {
           await uploadDocument(file, updateProgress)
-          uploadingFiles.value[idx]!.status = 'done'
-          uploadingFiles.value[idx]!.progress = 100
+          entry.status = 'done'
+          entry.progress = 100
           uploadedAny = true
         } catch (e) {
           if (isKnowledgeUploadEndpointMissing(e) || isKnowledgeUploadUnsupportedFormat(e)) {
             try {
               await uploadDocumentThroughLegacyFallback(file, updateProgress)
-              uploadingFiles.value[idx]!.status = 'done'
-              uploadingFiles.value[idx]!.progress = 100
+              entry.status = 'done'
+              entry.progress = 100
               uploadedAny = true
               return
             } catch (fallbackError) {
@@ -408,9 +414,8 @@ async function processFiles(files: FileList) {
             }
           }
 
-          uploadingFiles.value[idx]!.status = 'error'
-          uploadingFiles.value[idx]!.error =
-            e instanceof Error ? e.message : t('knowledge.uploadFailed')
+          entry.status = 'error'
+          entry.error = e instanceof Error ? e.message : t('knowledge.uploadFailed')
         }
       })(),
     )
@@ -448,8 +453,21 @@ function rebuildAll() {
   }
 }
 
+function resetAddDialogForm() {
+  newTitle.value = ''
+  newContent.value = ''
+  newSource.value = ''
+}
+
+function closeAddDialog() {
+  showAddDialog.value = false
+  errorMsg.value = ''
+  resetAddDialogForm()
+}
+
 function openUpload() {
   if (!ensureKnowledgeEnabled()) return
+  closeAddDialog()
   showAddDialog.value = true
 }
 
@@ -592,7 +610,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
               :style="{ background: 'var(--hc-bg-hover)' }"
             >
               <div
-                class="h-full rounded-full transition-all"
+                class="h-full rounded-full transition-[width]"
                 :style="{ width: uf.progress + '%', background: 'var(--hc-accent)' }"
               />
             </div>
@@ -793,7 +811,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
         <div
           v-if="showAddDialog"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm"
-          @click.self="showAddDialog = false"
+          @click.self="closeAddDialog"
         >
           <div
             class="w-full max-w-lg rounded-2xl border flex flex-col overflow-hidden"
@@ -812,7 +830,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
               <button
                 class="p-1 rounded-md hover:bg-white/5"
                 :style="{ color: 'var(--hc-text-muted)' }"
-                @click="showAddDialog = false"
+                @click="closeAddDialog"
               >
                 <X :size="17" />
               </button>
@@ -899,7 +917,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
               <button
                 class="px-3 py-1.5 rounded-lg text-sm font-medium"
                 :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
-                @click="showAddDialog = false"
+                @click="closeAddDialog"
               >
                 {{ t('common.cancel') }}
               </button>

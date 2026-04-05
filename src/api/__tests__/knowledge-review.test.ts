@@ -50,6 +50,17 @@ describe('Knowledge API upload behavior', () => {
     await expect(addDocument('Spec', 'content')).rejects.toThrow('知识库暂不可用')
   })
 
+  it('knowledge.ts keeps zh keyword tables outside the API file', async () => {
+    const sourceCode = await import('../knowledge?raw')
+    const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
+
+    expect(raw).toContain("from '@/config/knowledge-errors'")
+    expect(raw).not.toContain('知识库暂不可用，请重启应用后重试')
+    expect(raw).not.toContain('当前后端未提供知识库上传接口，请检查 HexClaw 后端版本')
+    expect(raw).not.toContain("msg.includes('未提供知识库上传接口')")
+    expect(raw).not.toContain("message.includes('文件格式错误')")
+  })
+
   it('detects backend unsupported-format responses so the UI can fall back to local parsing', async () => {
     const { isKnowledgeUploadUnsupportedFormat } = await import('../knowledge')
 

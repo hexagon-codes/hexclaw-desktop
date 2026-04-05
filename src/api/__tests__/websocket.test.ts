@@ -20,8 +20,31 @@ class MockWebSocket {
   onerror: ((event: Event) => void) | null = null
   sentMessages: string[] = []
 
+  private _listeners: Record<string, Array<{ handler: EventListener; once: boolean }>> = {}
+
   constructor() {
     MockWebSocket.instances.push(this)
+  }
+
+  addEventListener(type: string, handler: EventListener, opts?: { once?: boolean } | boolean) {
+    const once = typeof opts === 'object' ? !!opts.once : false
+    if (!this._listeners[type]) this._listeners[type] = []
+    this._listeners[type].push({ handler, once })
+  }
+
+  removeEventListener(type: string, handler: EventListener) {
+    if (!this._listeners[type]) return
+    this._listeners[type] = this._listeners[type].filter((l) => l.handler !== handler)
+  }
+
+  private _dispatchListeners(type: string, event: Event) {
+    const list = this._listeners[type] || []
+    for (const entry of [...list]) {
+      entry.handler(event)
+      if (entry.once) {
+        this._listeners[type] = this._listeners[type].filter((l) => l !== entry)
+      }
+    }
   }
 
   send(data: string) {
@@ -30,6 +53,7 @@ class MockWebSocket {
 
   close() {
     this.readyState = MockWebSocket.CLOSED
+    this._dispatchListeners('close', new Event('close'))
     this.onclose?.()
   }
 

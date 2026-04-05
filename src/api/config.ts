@@ -6,7 +6,7 @@ function safeJsonParse<T>(text: string, context: string): T {
   try {
     return JSON.parse(text) as T
   } catch {
-    throw new Error(`${context}: 后端返回了非 JSON 数据`)
+    throw new Error(`${context}: backend returned a non-JSON payload`)
   }
 }
 
@@ -46,6 +46,7 @@ export async function updateLLMConfig(config: BackendLLMConfig): Promise<void> {
 export async function testLLMConnection(
   payload: LLMConnectionTestRequest,
 ): Promise<LLMConnectionTestResponse> {
+  try { new URL(payload.provider.base_url) } catch { throw new Error('Invalid URL format') }
   const text = await proxyApiRequestText('POST', '/api/v1/config/llm/test', JSON.stringify(payload))
   return safeJsonParse<LLMConnectionTestResponse>(text, 'testLLMConnection')
 }

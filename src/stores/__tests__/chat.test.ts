@@ -22,14 +22,10 @@ const {
   sendViaWebSocket,
   sendViaBackend,
   clearWebSocketCallbacks,
-  outboxInsert,
-  outboxMarkSending,
-  outboxMarkSent,
-  outboxMarkFailed,
-  retryPendingOutbox,
-  cleanupOutbox,
-  // api/messages
+  // api/chat
   updateMessageFeedback,
+  sendRaw,
+  triggerError,
 } = vi.hoisted(() => ({
   loadAllSessions: vi.fn().mockResolvedValue([
     { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01', message_count: 0 },
@@ -51,14 +47,10 @@ const {
   sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
   sendViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
   clearWebSocketCallbacks: vi.fn(),
-  outboxInsert: vi.fn().mockResolvedValue(undefined),
-  outboxMarkSending: vi.fn().mockResolvedValue(undefined),
-  outboxMarkSent: vi.fn().mockResolvedValue(undefined),
-  outboxMarkFailed: vi.fn().mockResolvedValue(undefined),
-  retryPendingOutbox: vi.fn(),
-  cleanupOutbox: vi.fn(),
 
   updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
+  sendRaw: vi.fn(),
+  triggerError: vi.fn(),
 }))
 
 vi.mock('@/services/messageService', () => ({
@@ -93,36 +85,36 @@ vi.mock('@/services/chatService', () => {
     sendViaWebSocket,
     sendViaBackend,
     clearWebSocketCallbacks,
-    outboxInsert,
-    outboxMarkSending,
-    outboxMarkSent,
-    outboxMarkFailed,
-    retryPendingOutbox,
-    cleanupOutbox,
     ChatRequestError,
   }
 })
 
-vi.mock('@/api/messages', () => ({
+vi.mock('@/api/chat', () => ({
   updateMessageFeedback,
 }))
 
-// chat.ts 也引用了这些，提供空 mock 防止 import 报错
-vi.mock('@/db/chat', () => ({
-  dbGetSessions: vi.fn().mockResolvedValue([]),
-  dbGetMessages: vi.fn().mockResolvedValue([]),
-  dbCreateSession: vi.fn(),
-  dbUpdateSessionTitle: vi.fn(),
-  dbTouchSession: vi.fn(),
-  dbDeleteSession: vi.fn(),
-  dbSaveMessage: vi.fn(),
-  dbDeleteMessage: vi.fn(),
+vi.mock('@/api/websocket', () => ({
+  hexclawWS: {
+    sendRaw,
+    triggerError,
+  },
 }))
+
+// DB layer removed — all data operations go through services which use the API
 
 describe('useChatStore', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    loadAllSessions.mockResolvedValue([
+      { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01', message_count: 0 },
+    ])
+    loadMessages.mockResolvedValue([
+      { id: 'm1', role: 'user', content: 'hello', timestamp: '2026-01-01' },
+      { id: 'm2', role: 'assistant', content: 'hi', timestamp: '2026-01-01' },
+    ])
+    loadArtifacts.mockResolvedValue([])
+    getLastSessionId.mockResolvedValue(null)
     sendViaBackend.mockResolvedValue({ reply: '你好！', session_id: 's1' })
     ensureWebSocketConnected.mockResolvedValue(false)
     updateMessageFeedback.mockResolvedValue({ message: 'ok' })
@@ -154,6 +146,82 @@ describe('useChatStore', () => {
     await store.selectSession('s1')
     expect(store.currentSessionId).toBe('s1')
     expect(store.messages).toHaveLength(2)
+  })
+
+  it('keeps the latest selected session messages when an earlier selectSession resolves later', async () => {
+    let resolveFirstMessages!: (value: Array<{ id: string; role: string; content: string; timestamp: string }>) => void
+    let resolveSecondMessages!: (value: Array<{ id: string; role: string; content: string; timestamp: string }>) => void
+    let resolveSecondArtifacts!: (value: unknown[]) => void
+
+    loadAllSessions.mockResolvedValueOnce([
+      { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01', message_count: 0 },
+      { id: 's2', title: 'Session 2', created_at: '2026-01-02', updated_at: '2026-01-02', message_count: 0 },
+    ])
+    loadMessages.mockImplementation((sessionId: string) => {
+      if (sessionId === 's1') {
+        return new Promise((resolve) => {
+          resolveFirstMessages = resolve as typeof resolveFirstMessages
+        })
+      }
+      if (sessionId === 's2') {
+        return new Promise((resolve) => {
+          resolveSecondMessages = resolve as typeof resolveSecondMessages
+        })
+      }
+      return Promise.resolve([])
+    })
+    loadArtifacts.mockImplementation((sessionId: string) => {
+      if (sessionId === 's2') {
+        return new Promise((resolve) => {
+          resolveSecondArtifacts = resolve as typeof resolveSecondArtifacts
+        })
+      }
+      return Promise.resolve([])
+    })
+
+    const store = useChatStore()
+    await store.loadSessions()
+
+    const firstSelect = store.selectSession('s1')
+    const secondSelect = store.selectSession('s2')
+
+    resolveSecondMessages([
+      { id: 'm-s2', role: 'assistant', content: 'session-2', timestamp: '2026-01-02' },
+    ])
+    await Promise.resolve()
+    await Promise.resolve()
+    resolveSecondArtifacts([])
+    await secondSelect
+
+    expect(store.currentSessionId).toBe('s2')
+    expect(store.messages.map((m) => m.content)).toEqual(['session-2'])
+
+    resolveFirstMessages([
+      { id: 'm-s1', role: 'assistant', content: 'session-1', timestamp: '2026-01-01' },
+    ])
+    await firstSelect
+
+    expect(store.currentSessionId).toBe('s2')
+    expect(store.messages.map((m) => m.content)).toEqual(['session-2'])
+  })
+
+  it('rebuilds artifacts from loaded messages when persisted artifact storage is empty', async () => {
+    loadMessages.mockResolvedValueOnce([
+      {
+        id: 'm1',
+        role: 'assistant',
+        content: '```ts\nconsole.log("artifact")\n```',
+        timestamp: '2026-01-01',
+      },
+    ])
+    loadArtifacts.mockResolvedValueOnce([])
+
+    const store = useChatStore()
+    await store.selectSession('s1')
+
+    expect(store.artifacts).toHaveLength(1)
+    expect(store.artifacts[0]!.language).toBe('ts')
+    expect(store.artifacts[0]!.content).toContain('console.log("artifact")')
   })
 
   it('creates new session', () => {
@@ -231,6 +299,21 @@ describe('useChatStore', () => {
     expect(store.streaming).toBe(false)
     expect(store.streamingSessionId).toBeNull()
     expect(store.streamingContent).toBe('')
+  })
+
+  it('deleteSession cancels an in-flight stream for the active session', async () => {
+    const store = useChatStore()
+    await store.loadSessions()
+    store.currentSessionId = 's1'
+    store.streaming = true
+    store.streamingSessionId = 's1'
+    store.streamingContent = 'partial'
+
+    await store.deleteSession('s1')
+
+    expect(sendRaw).toHaveBeenCalledWith({ type: 'cancel', session_id: 's1' })
+    expect(triggerError).toHaveBeenCalledWith('用户取消')
+    expect(clearWebSocketCallbacks).toHaveBeenCalled()
   })
 
   it('persists assistant metadata and tool calls from backend responses', async () => {

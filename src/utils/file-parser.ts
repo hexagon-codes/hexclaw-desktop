@@ -3,6 +3,7 @@
  */
 
 const MAX_TEXT_LENGTH = 50000
+const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
 type PdfJsModule = typeof import('pdfjs-dist')
 
 let pdfJsLoaderPromise: Promise<PdfJsModule> | null = null
@@ -26,6 +27,9 @@ export function isDocumentFile(file: File): boolean {
 
 /** Parse a document file and extract its text content */
 export async function parseDocument(file: File): Promise<ParsedDocument> {
+  if (file.size > MAX_FILE_SIZE) {
+    throw new Error(`File "${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(0)} MB, max ${MAX_FILE_SIZE / 1024 / 1024} MB)`)
+  }
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
   const fileName = file.name
 

@@ -1,6 +1,31 @@
 import { logger } from '@/utils/logger'
 import { DESKTOP_USER_ID } from '@/constants'
+import { apiPost, apiGet, apiPatch, apiPut, apiDelete } from './client'
 import type { ChatMessage, ChatSession, ChatRequest } from '@/types'
+
+// ─── 会话 API 辅助函数 ─────────────────────────────────
+//
+// 所有会话/消息相关的后端 API 必须携带 user_id，否则后端
+// 无法关联会话归属，导致 "不属于当前用户" 错误。
+//
+// 这组辅助函数自动注入 user_id，避免每个函数手动传参遗漏。
+// 新增会话 API 时请使用这些函数，不要直接调用 apiGet/apiPost。
+
+function sessionGet<T>(url: string, query?: Record<string, unknown>) {
+  return apiGet<T>(url, { ...query, user_id: DESKTOP_USER_ID })
+}
+
+function sessionPost<T>(url: string, body?: Record<string, unknown>) {
+  return apiPost<T>(url, { ...body, user_id: DESKTOP_USER_ID })
+}
+
+function sessionPatch<T>(url: string, body?: Record<string, unknown>) {
+  return apiPatch<T>(url, { ...body, user_id: DESKTOP_USER_ID })
+}
+
+function sessionPut<T>(url: string, body?: Record<string, unknown>) {
+  return apiPut<T>(url, { ...body, user_id: DESKTOP_USER_ID })
+}
 
 export type { ChatMessage, ChatSession, ChatRequest }
 export type { ToolCall } from '@/types'
@@ -11,6 +36,7 @@ export interface BackendChatResponse {
   session_id: string
   tool_calls?: import('@/types').ToolCall[]
   metadata?: Record<string, unknown>
+  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
 }
 
 /**
@@ -53,9 +79,9 @@ export async function sendChatViaBackend(
   try {
     result = JSON.parse(text)
   } catch {
-    throw new Error(`后端返回非 JSON 响应: ${text.slice(0, 200)}`)
+    throw new Error(`Backend returned a non-JSON response: ${text.slice(0, 200)}`)
   }
-  logger.debug(`← backend_chat: reply=${result.reply.slice(0, 50)}... session=${result.session_id}`)
+  logger.debug(`← backend_chat: reply=${(result?.reply ?? '').slice(0, 50)}... session=${result.session_id}`)
   return result
 }
 
@@ -65,94 +91,34 @@ export function sendChat(req: ChatRequest) {
     sessionId: req.session_id,
     provider: req.provider ?? req.provider_id,
     model: req.model,
+    temperature: req.temperature,
+    maxTokens: req.max_tokens,
   })
-}
-
-/**
- * 通过 Tauri Rust 端代理流式聊天请求（直连 LLM Provider，绕过 CORS）
- * 保留用于未来直连模式或后端不可用时的降级方案
- */
-export async function sendStreamViaTauri(
-  baseUrl: string,
-  apiKey: string,
-  model: string,
-  messages: { role: string; content: string }[],
-  params: { temperature?: number; max_tokens?: number },
-  onChunk: (data: string) => void,
-  onDone: () => void,
-  onError: (msg: string) => void,
-): Promise<{ requestId: string; unlisten: () => void }> {
-  const { invoke } = await import('@tauri-apps/api/core')
-  const { listen } = await import('@tauri-apps/api/event')
-  const { nanoid } = await import('nanoid')
-
-  const requestId = nanoid(12)
-
-  logger.debug(`→ stream_chat request_id=${requestId} model=${model}`)
-
-  const unlisten = await listen<{ request_id: string; event_type: string; data: string }>(
-    'chat-stream',
-    (event) => {
-      if (event.payload.request_id !== requestId) return
-
-      switch (event.payload.event_type) {
-        case 'chunk':
-          onChunk(event.payload.data)
-          break
-        case 'done':
-          onDone()
-          break
-        case 'error':
-          onError(event.payload.data)
-          break
-      }
-    },
-  )
-
-  invoke('stream_chat', {
-    params: {
-      base_url: baseUrl,
-      api_key: apiKey,
-      model,
-      messages,
-      temperature: params.temperature ?? 0.7,
-      max_tokens: params.max_tokens ?? 4096,
-      request_id: requestId,
-    },
-  }).catch((err) => {
-    onError(typeof err === 'string' ? err : (err instanceof Error ? err.message : '请求失败'))
-  })
-
-  return { requestId, unlisten }
 }
 
 // ============== Session Fork (D10) ==============
 
-import { apiPost, apiGet } from './client'
-
 /** 从指定消息处分支对话 */
 export function forkSession(sessionId: string, messageId?: string) {
-  return apiPost<{ session_id: string; message: string }>(`/api/v1/sessions/${sessionId}/fork`, {
+  return sessionPost<{ session: SessionSummary; message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`, {
     message_id: messageId,
   })
 }
 
 /** 获取会话的分支列表 */
 export function getSessionBranches(sessionId: string) {
-  return apiGet<{ branches: ChatSession[] }>(`/api/v1/sessions/${sessionId}/branches`)
+  return sessionGet<{ branches: ChatSession[] }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/branches`)
 }
 
 // ============== Session Management ==============
-
-import { apiDelete } from './client'
 
 /** 会话摘要（列表用） */
 export interface SessionSummary {
   id: string
   title: string
   user_id: string
-  parent_id?: string
-  fork_message_id?: string
+  parent_session_id?: string
+  branch_message_id?: string
   created_at: string
   updated_at: string
   message_count?: number
@@ -160,15 +126,15 @@ export interface SessionSummary {
 
 /** 获取会话列表 */
 export function listSessions(opts?: { limit?: number; offset?: number }) {
-  const q: Record<string, unknown> = { user_id: DESKTOP_USER_ID }
+  const q: Record<string, unknown> = {}
   if (opts?.limit) q.limit = opts.limit
   if (opts?.offset) q.offset = opts.offset
-  return apiGet<{ sessions: SessionSummary[]; total: number }>('/api/v1/sessions', q)
+  return sessionGet<{ sessions: SessionSummary[]; total: number }>('/api/v1/sessions', q)
 }
 
 /** 获取单个会话详情 */
 export function getSession(sessionId: string) {
-  return apiGet<SessionSummary>(`/api/v1/sessions/${sessionId}`)
+  return sessionGet<SessionSummary>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`)
 }
 
 /** 获取会话消息历史 */
@@ -176,25 +142,40 @@ export function listSessionMessages(sessionId: string, opts?: { limit?: number; 
   const q: Record<string, unknown> = {}
   if (opts?.limit) q.limit = opts.limit
   if (opts?.offset) q.offset = opts.offset
-  return apiGet<{ messages: ChatMessage[]; total: number }>(`/api/v1/sessions/${sessionId}/messages`, q)
+  return sessionGet<{ messages: ChatMessage[]; total: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, q)
+}
+
+/** 创建会话 */
+export function createSession(id: string, title: string) {
+  return sessionPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions', { id, title })
+}
+
+/** 更新会话标题 */
+export function updateSessionTitle(sessionId: string, title: string) {
+  return sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`, { title })
 }
 
 /** 删除会话 */
 export function deleteSession(sessionId: string) {
-  return apiDelete<{ message: string }>(`/api/v1/sessions/${sessionId}`)
+  return apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`)
 }
 
 /** 跨会话全文搜索消息 */
 export function searchMessages(query: string, opts?: { limit?: number; offset?: number }) {
-  const q: Record<string, unknown> = { q: query, user_id: DESKTOP_USER_ID }
+  const q: Record<string, unknown> = { q: query }
   if (opts?.limit) q.limit = opts.limit
   if (opts?.offset) q.offset = opts.offset
-  return apiGet<{ results: Array<ChatMessage & { session_id: string; score?: number }>; total: number; query: string }>('/api/v1/messages/search', q)
+  return sessionGet<{ results: Array<ChatMessage & { session_id: string; score?: number }>; total: number; query: string }>('/api/v1/messages/search', q)
 }
 
+/** 删除单条消息 */
+export function deleteMessage(messageId: string) {
+  return apiDelete<{ message: string }>(`/api/v1/messages/${encodeURIComponent(messageId)}`)
+}
+
+export type UserFeedback = '' | 'like' | 'dislike'
+
 /** 更新消息反馈 (like/dislike) */
-export function updateMessageFeedback(messageId: string, feedback: 'like' | 'dislike' | '') {
-  return import('./client').then(({ apiPut }) =>
-    apiPut<{ message: string }>(`/api/v1/messages/${messageId}/feedback`, { feedback }),
-  )
+export function updateMessageFeedback(messageId: string, feedback: UserFeedback) {
+  return sessionPut<{ message: string }>(`/api/v1/messages/${encodeURIComponent(messageId)}/feedback`, { feedback })
 }

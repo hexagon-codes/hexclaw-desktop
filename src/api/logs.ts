@@ -6,14 +6,13 @@ export type { LogEntry, LogQuery, LogStats }
 
 /** 查询历史日志 */
 export function getLogs(query?: LogQuery) {
-  const params = new URLSearchParams()
+  const q: Record<string, unknown> = {}
   if (query) {
-    Object.entries(query).forEach(([k, v]) => {
-      if (v !== undefined) params.set(k, String(v))
-    })
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined) q[k] = v
+    }
   }
-  const qs = params.toString()
-  return apiGet<{ logs: LogEntry[]; total: number }>(`/api/v1/logs${qs ? '?' + qs : ''}`)
+  return apiGet<{ logs: LogEntry[]; total: number }>('/api/v1/logs', Object.keys(q).length > 0 ? q : undefined)
 }
 
 /** 获取日志统计 */
@@ -33,12 +32,12 @@ export function connectLogStream(
       const entry = JSON.parse(event.data) as LogEntry
       onMessage(entry)
     } catch (e) {
-      logger.warn('日志流解析失败', e)
+      logger.warn('Failed to parse log stream payload', e)
     }
   }
 
   ws.onerror = (err) => {
-    logger.error('日志 WebSocket 连接错误')
+    logger.error('Log WebSocket connection error')
     onError?.(err)
   }
 

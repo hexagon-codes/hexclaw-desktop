@@ -82,4 +82,13 @@ describe('ClawHub 技能市场 — 功能修复验证', () => {
 
     await expect(searchClawHub()).rejects.toThrow('hub unavailable')
   })
+
+  it('skills.ts 不再内嵌 ClawHub mock 数据文案', async () => {
+    const sourceCode = await import('../skills?raw')
+    const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
+
+    expect(raw).toContain("from '@/config/skills-marketplace'")
+    expect(raw).not.toContain('const MOCK_SKILLS')
+    expect(raw).not.toContain('自动化代码审查')
+  })
 })

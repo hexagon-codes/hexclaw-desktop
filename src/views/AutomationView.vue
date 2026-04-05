@@ -20,30 +20,44 @@ const router = useRouter()
 const canvasStore = useCanvasStore()
 const toast = useToast()
 
-const activeTab = ref(
-  route.path.startsWith('/automation/canvas') ? 'canvas'
-    : route.path.startsWith('/automation/webhooks') ? 'webhooks'
-    : 'tasks'
-)
+function resolveTab(path: string): 'tasks' | 'canvas' | 'webhooks' {
+  if (path.startsWith('/automation/canvas')) return 'canvas'
+  if (path.startsWith('/automation/webhooks')) return 'webhooks'
+  return 'tasks'
+}
+
 const automationSearch = ref('')
+const tabKeyMap: Record<string, 'tasks' | 'canvas' | 'webhooks'> = {
+  'automation-tasks': 'tasks',
+  'automation-canvas': 'canvas',
+  'automation-webhooks': 'webhooks',
+}
+
+const pathMap: Record<'tasks' | 'canvas' | 'webhooks', string> = {
+  tasks: '/automation',
+  canvas: '/automation/canvas',
+  webhooks: '/automation/webhooks',
+}
 
 const segments = computed(() =>
   getNavigationChildren('automation').map((tab) => ({
-    key: tab.id === 'automation-canvas' ? 'canvas' : 'tasks',
+    key: tabKeyMap[tab.id] ?? 'tasks',
     label: t(tab.i18nKey),
   })),
 )
 
-watch(() => route.path, (p) => {
-  activeTab.value = p.startsWith('/automation/canvas') ? 'canvas' : 'tasks'
-})
-
-watch(activeTab, (tab) => {
-  const path = tab === 'canvas' ? '/automation/canvas' : '/automation'
-  if (route.path !== path) router.replace(path)
+const activeTab = computed<'tasks' | 'canvas' | 'webhooks'>({
+  get: () => resolveTab(route.path),
+  set(tab) {
+    const target = pathMap[tab]
+    if (route.path !== target) {
+      router.replace(target)
+    }
+  },
 })
 
 const tasksViewRef = ref<{ openCreateForm?: () => void; loadJobs?: () => void }>()
+const webhookPanelRef = ref<{ loadWebhooks?: () => void }>()
 
 async function onImportFlow() {
   const input = document.createElement('input')
@@ -87,6 +101,8 @@ async function onImportFlow() {
 async function onRefresh() {
   if (activeTab.value === 'tasks') {
     tasksViewRef.value?.loadJobs?.()
+  } else if (activeTab.value === 'webhooks') {
+    await webhookPanelRef.value?.loadWebhooks?.()
   } else {
     await canvasStore.loadWorkflows()
   }
@@ -129,7 +145,7 @@ async function onNewTask() {
     />
     <div class="hc-page-shell__content">
       <TasksView v-if="activeTab === 'tasks'" ref="tasksViewRef" />
-      <WebhookPanel v-else-if="activeTab === 'webhooks'" />
+      <WebhookPanel v-else-if="activeTab === 'webhooks'" ref="webhookPanelRef" />
       <CanvasView v-else />
     </div>
   </div>

@@ -63,8 +63,10 @@ const placeholder = computed(() => {
 const fileAccept = computed(() => {
   const types = [
     '.pdf', '.txt', '.md', '.doc', '.docx', '.xlsx', '.xls', '.csv', '.json',
-    '.png', '.jpg', '.jpeg', '.gif', '.webp',
   ]
+  if (props.allowImage !== false) {
+    types.push('.png', '.jpg', '.jpeg', '.gif', '.webp')
+  }
   if (props.allowVideo) types.push('.mp4', '.mov', '.avi', '.mkv', '.webm')
   return types.join(',')
 })

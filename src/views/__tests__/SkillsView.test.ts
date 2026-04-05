@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
+import { afterEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import SkillsView from '../SkillsView.vue'
@@ -82,9 +83,17 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
+enableAutoUnmount(afterEach)
+
 describe('SkillsView', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
+    vi.restoreAllMocks()
+    getSkills.mockReset()
+    setSkillEnabled.mockReset()
+    searchClawHub.mockReset()
+    installFromHub.mockReset()
+    uninstallSkill.mockReset()
+    installSkill.mockReset()
     localStorage.clear()
     localStorage.setItem('hexclaw_disabled_skills', JSON.stringify(['demo-skill']))
     getSkills.mockResolvedValue({
@@ -173,6 +182,39 @@ describe('SkillsView', () => {
 
     expect(setSkillEnabled).toHaveBeenCalledWith('runtime-skill', true)
     expect(wrapper.text()).toContain('已启用')
+  })
+
+  it('reverts optimistic toggle state when runtime enable request throws', async () => {
+    getSkills.mockResolvedValueOnce({
+      dir: '/tmp/skills',
+      skills: [
+        {
+          name: 'runtime-skill',
+          description: 'runtime',
+          version: '1.0.0',
+          triggers: [],
+          tags: [],
+          enabled: false,
+        },
+      ],
+    })
+    setSkillEnabled.mockRejectedValueOnce(new Error('toggle failed'))
+
+    const wrapper = mountSkillsView()
+    await flushPromises()
+
+    const titleBtn = wrapper.findAll('button').find((btn) => btn.text().includes('runtime-skill'))
+    expect(titleBtn).toBeDefined()
+    await titleBtn!.trigger('click')
+    await flushPromises()
+
+    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用技能')
+    expect(enableBtn).toBeDefined()
+    await expect(enableBtn!.trigger('click')).resolves.toBeUndefined()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已禁用')
+    expect(wrapper.text()).toContain('toggle failed')
   })
 
   it('restarts the engine after a runtime toggle that requires restart', async () => {
@@ -385,7 +427,63 @@ describe('SkillsView', () => {
     ).toBe(false)
   })
 
+  it('does not start a second hub install for the same skill while the first install is still running', async () => {
+    const installDeferred = deferred<void>()
+    getSkills.mockResolvedValueOnce({ dir: '/tmp/skills', skills: [] })
+    searchClawHub.mockResolvedValueOnce([
+      {
+        name: 'hub-skill',
+        description: 'from hub',
+        version: '1.0.0',
+        author: 'openclaw',
+        tags: [],
+        downloads: 2,
+        category: 'coding',
+      },
+    ])
+    installFromHub.mockImplementationOnce(() => installDeferred.promise)
+
+    const wrapper = mountSkillsView()
+    await flushPromises()
+
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('技能市场'))
+    await hubTab!.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      handleHubInstall: (skill: {
+        name: string
+        description: string
+        version: string
+        author: string
+        tags: string[]
+        downloads: number
+        category: string
+      }) => Promise<void>
+    }
+    const skill = {
+      name: 'hub-skill',
+      description: 'from hub',
+      version: '1.0.0',
+      author: 'openclaw',
+      tags: [],
+      downloads: 2,
+      category: 'coding',
+    }
+
+    void vm.handleHubInstall(skill)
+    await flushPromises()
+    void vm.handleHubInstall(skill)
+    await flushPromises()
+
+    expect(installFromHub).toHaveBeenCalledTimes(1)
+
+    installDeferred.resolve(undefined)
+    await flushPromises()
+  })
+
   it('restarts the engine after local skill install', async () => {
+    getSkills.mockReset()
     getSkills
       .mockResolvedValueOnce({ dir: '/tmp/skills', skills: [] })
       .mockResolvedValueOnce({
@@ -401,7 +499,21 @@ describe('SkillsView', () => {
           },
         ],
       })
+      .mockResolvedValue({
+        dir: '/tmp/skills',
+        skills: [
+          {
+            name: 'local-skill',
+            description: 'local',
+            version: '1.0.0',
+            author: 'openclaw',
+            triggers: [],
+            tags: [],
+          },
+        ],
+      })
 
+    installSkill.mockReset()
     installSkill.mockResolvedValueOnce({
       name: 'local-skill',
       description: 'local',
@@ -427,7 +539,122 @@ describe('SkillsView', () => {
     await flushPromises()
 
     expect(installSkill).toHaveBeenCalledWith('skills/local-skill')
+    expect(installSkill).toHaveBeenCalledTimes(1)
     expect(appStore.restartSidecar).toHaveBeenCalledTimes(1)
-    expect(wrapper.text()).toContain('local-skill')
+    await vi.waitFor(() => {
+      expect(wrapper.text()).toContain('local-skill')
+    })
+  })
+
+  it('does not start a second local install while the first install is still running', async () => {
+    const installDeferred = deferred<{
+      name: string
+      description: string
+      version: string
+      message: string
+    }>()
+    installSkill.mockImplementationOnce(() => installDeferred.promise)
+
+    const wrapper = mountSkillsView()
+    await flushPromises()
+
+    ;(wrapper.vm as { openInstallDialog: () => void }).openInstallDialog()
+    await flushPromises()
+
+    const input = wrapper.find('input[placeholder*="例如"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('skills/local-skill')
+
+    const vm = wrapper.vm as unknown as {
+      handleInstall: () => Promise<void>
+    }
+
+    void vm.handleInstall()
+    await flushPromises()
+    void vm.handleInstall()
+    await flushPromises()
+
+    expect(installSkill).toHaveBeenCalledTimes(1)
+
+    installDeferred.resolve({
+      name: 'local-skill',
+      description: 'local',
+      version: '1.0.0',
+      message: 'installed',
+    })
+    await flushPromises()
+  })
+
+  it('resets the local install dialog state when it is closed and reopened after a failure', async () => {
+    installSkill.mockRejectedValueOnce(new Error('install failed'))
+
+    const wrapper = mountSkillsView()
+    await flushPromises()
+
+    ;(wrapper.vm as { openInstallDialog: () => void }).openInstallDialog()
+    await flushPromises()
+
+    const input = wrapper.find('input[placeholder*="例如"]')
+    expect(input.exists()).toBe(true)
+    await input.setValue('skills/bad-skill')
+
+    const installBtn = wrapper.findAll('button').find((btn) => btn.text() === '安装')
+    expect(installBtn).toBeDefined()
+    await installBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('install failed')
+
+    const cancelBtn = wrapper.findAll('button').find((btn) => btn.text() === '取消')
+    expect(cancelBtn).toBeDefined()
+    await cancelBtn!.trigger('click')
+    await flushPromises()
+
+    ;(wrapper.vm as { openInstallDialog: () => void }).openInstallDialog()
+    await flushPromises()
+
+    const reopenedInput = wrapper.find('input[placeholder*="例如"]')
+    expect((reopenedInput.element as HTMLInputElement).value).toBe('')
+    expect(wrapper.text()).not.toContain('install failed')
+  })
+
+  it('clears a stale hub install error after switching away from the hub tab', async () => {
+    searchClawHub.mockResolvedValueOnce([
+      {
+        name: 'hub-skill',
+        description: 'from hub',
+        version: '1.0.0',
+        author: 'openclaw',
+        tags: [],
+        downloads: 2,
+        category: 'coding',
+      },
+    ])
+    installFromHub.mockRejectedValueOnce(new Error('install failed'))
+
+    const wrapper = mountSkillsView()
+    await flushPromises()
+
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('技能市场'))
+    expect(hubTab).toBeDefined()
+    await hubTab!.trigger('click')
+    await flushPromises()
+
+    const installBtn = wrapper.findAll('button').find((btn) => btn.text() === '安装')
+    expect(installBtn).toBeDefined()
+    await installBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('hub-skill: install failed')
+
+    const installedTab = wrapper.findAll('button').find((btn) => btn.text().includes('已安装'))
+    expect(installedTab).toBeDefined()
+    await installedTab!.trigger('click')
+    await flushPromises()
+
+    await hubTab!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('hub-skill: install failed')
   })
 })

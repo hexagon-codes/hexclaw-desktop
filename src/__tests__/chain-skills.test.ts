@@ -76,12 +76,9 @@ describe('Chain F: Skills -> Hub -> Install', () => {
     const results = await searchClawHub('git', 'coding')
 
     expect(mockApiGet).toHaveBeenCalledWith(
-      expect.stringContaining('/api/v1/clawhub/search'),
+      '/api/v1/clawhub/search',
+      { q: 'git', category: 'coding' },
     )
-    // Query params should include q and category
-    const calledUrl = mockApiGet.mock.calls[0]![0] as string
-    expect(calledUrl).toContain('q=git')
-    expect(calledUrl).toContain('category=coding')
 
     expect(results).toHaveLength(1)
     expect(results[0]!.name).toBe('git-commit-craft')
@@ -94,8 +91,7 @@ describe('Chain F: Skills -> Hub -> Install', () => {
     const { searchClawHub } = await import('@/api/skills')
     await searchClawHub()
 
-    const calledUrl = mockApiGet.mock.calls[0]![0] as string
-    expect(calledUrl).toBe('/api/v1/clawhub/search')
+    expect(mockApiGet).toHaveBeenCalledWith('/api/v1/clawhub/search', {})
   })
 
   it('F2c: searchClawHub skips category=all (does not send it)', async () => {
@@ -104,8 +100,8 @@ describe('Chain F: Skills -> Hub -> Install', () => {
     const { searchClawHub } = await import('@/api/skills')
     await searchClawHub('', 'all')
 
-    const calledUrl = mockApiGet.mock.calls[0]![0] as string
-    expect(calledUrl).not.toContain('category=')
+    const calledQuery = mockApiGet.mock.calls[0]![1] as Record<string, unknown>
+    expect(calledQuery).not.toHaveProperty('category')
   })
 
   it('F2d: searchClawHub propagates backend error', async () => {
@@ -176,9 +172,10 @@ describe('Chain F: Skills -> Hub -> Install', () => {
     const { setSkillEnabled } = await import('@/api/skills')
     const result = await setSkillEnabled('offline-skill', true)
 
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
     expect(result.enabled).toBe(true)
     expect(result.source).toBe('local-fallback')
+    expect(result.warning).toBeDefined()
     expect(result.message).toBe('Backend unavailable')
   })
 

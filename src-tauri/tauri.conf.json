@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/refs/heads/dev/crates/tauri-utils/schema.json",
   "productName": "HexClaw",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "identifier": "com.hexclaw.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' http://localhost:16060; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://localhost:16060; media-src 'self' data: blob:; connect-src 'self' http://localhost:16060 ws://localhost:16060; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+      "csp": "default-src 'self' http://localhost:16060; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://localhost:16060; media-src 'self' data: blob:; connect-src 'self' http://localhost:16060 ws://localhost:16060 http://localhost:11434; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
     }
   },
   "bundle": {
@@ -34,6 +34,7 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "externalBin": ["binaries/hexclaw"],
+    "resources": { "binaries/ollama-bundle/*": "ollama/" },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

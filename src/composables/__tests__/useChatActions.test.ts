@@ -12,6 +12,7 @@ function makeMockStore() {
       { id: 'u1', role: 'user', content: 'hello', timestamp: '' },
       { id: 'a1', role: 'assistant', content: 'hi there', timestamp: '', metadata: {} },
     ],
+    chatParams: { model: 'gpt-4' },
     setMessageFeedback: vi.fn().mockResolvedValue(null),
   }
 }
@@ -42,6 +43,18 @@ describe('useChatActions', () => {
     const { handleRetry } = useChatActions(store as any, makeMockToast() as any, mockSend)
     await handleRetry(0)
     expect(mockSend).not.toHaveBeenCalled()
+  })
+
+  it('handleRetry does nothing when the target message is no longer an assistant reply', async () => {
+    const store = makeMockStore()
+    store.messages = [
+      { id: 'u1', role: 'user', content: 'hello', timestamp: '' },
+      { id: 'u2', role: 'user', content: 'later question', timestamp: '' },
+    ]
+    const { handleRetry } = useChatActions(store as any, makeMockToast() as any, mockSend)
+    await handleRetry(1)
+    expect(mockSend).not.toHaveBeenCalled()
+    expect(store.messages).toHaveLength(2)
   })
 
   it('handleLike toggles like feedback', async () => {
@@ -106,6 +119,24 @@ describe('useChatActions', () => {
     handleEdit(0)
     editingText.value = '   '
     await confirmEdit('u1')
+    expect(mockSend).not.toHaveBeenCalled()
+    expect(editingMsgId.value).toBeNull()
+  })
+
+  it('confirmEdit does nothing when the edited message has already disappeared', async () => {
+    const store = makeMockStore()
+    const { handleEdit, confirmEdit, editingText, editingMsgId } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+    )
+
+    handleEdit(0)
+    editingText.value = 'updated question'
+    store.messages = []
+
+    await confirmEdit('u1')
+
     expect(mockSend).not.toHaveBeenCalled()
     expect(editingMsgId.value).toBeNull()
   })

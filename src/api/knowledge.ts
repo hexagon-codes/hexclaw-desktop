@@ -1,13 +1,17 @@
 import { apiGet, apiPost, apiDelete } from './client'
 import { fromHttpStatus, fromNativeError } from '@/utils/errors'
 import { env } from '@/config/env'
+import {
+  KNOWLEDGE_DISABLED_MESSAGE,
+  KNOWLEDGE_ENDPOINT_MISSING_KEYWORDS,
+  KNOWLEDGE_UNSUPPORTED_FORMAT_KEYWORDS,
+  KNOWLEDGE_UPLOAD_UNAVAILABLE_MESSAGE,
+} from '@/config/knowledge-errors'
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 
 export type { KnowledgeDoc, KnowledgeSearchResult }
 
 const KNOWLEDGE_UPLOAD_PATH = '/api/v1/knowledge/upload'
-const KNOWLEDGE_DISABLED_MESSAGE =
-  '知识库暂不可用，请重启应用后重试'
 
 type UploadResponse = { id: string; title: string; chunk_count: number; created_at: string }
 
@@ -68,8 +72,7 @@ export function isKnowledgeUploadEndpointMissing(error: unknown): boolean {
     msg === fromHttpStatus(405).message ||
     msg.includes('404') ||
     msg.includes('405') ||
-    msg.includes('未提供知识库上传接口') ||
-    msg.includes('未启用知识库')
+    KNOWLEDGE_ENDPOINT_MISSING_KEYWORDS.some((keyword) => msg.includes(keyword))
   )
 }
 
@@ -95,10 +98,7 @@ export function isKnowledgeUploadUnsupportedFormat(error: unknown): boolean {
     message.includes('not supported') ||
     message.includes('invalid file type') ||
     message.includes('invalid mime') ||
-    message.includes('不支持') ||
-    message.includes('格式错误') ||
-    message.includes('文件类型错误') ||
-    message.includes('文件格式错误')
+    KNOWLEDGE_UNSUPPORTED_FORMAT_KEYWORDS.some((keyword) => message.includes(keyword))
 
   return (
     rawStatus === 415 ||
@@ -209,7 +209,7 @@ export async function uploadDocument(
   } catch (error) {
     const normalized = error instanceof Error ? error : new Error(String(error))
     if (isKnowledgeUploadEndpointMissing(normalized)) {
-      throw new Error('当前后端未提供知识库上传接口，请检查 HexClaw 后端版本')
+      throw new Error(KNOWLEDGE_UPLOAD_UNAVAILABLE_MESSAGE)
     }
     throw normalized
   }
@@ -269,7 +269,7 @@ export async function searchKnowledge(query: string, topK?: number) {
 
 /** 触发单个知识文档重建索引 */
 export function reindexDocument(id: string) {
-  return apiPost<{ status?: string; message?: string }>(
+  return apiPost<{ status?: string; message?: string; chunk_count?: number; updated_at?: string }>(
     `/api/v1/knowledge/documents/${encodeURIComponent(id)}/reindex`,
   ).catch((error) => {
     throw normalizeKnowledgeEndpointError(error)

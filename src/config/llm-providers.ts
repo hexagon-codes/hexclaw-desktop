@@ -32,6 +32,6 @@ export const LLM_PROVIDERS: LLMProvider[] = [
   { key: 'qwen', name: '通义千问 (阿里)', logo: '/logos/qwen.svg', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-max', 'qwen-plus', 'qwen-turbo', 'qwq-32b'] },
 
   // === Local ===
-  { key: 'ollama', name: 'Ollama (本地)', logo: '/logos/ollama.svg', baseUrl: 'http://localhost:11434', models: [] },
+  // Ollama 由 OllamaCard 统一管理（内嵌引擎 + 自动检测），不在添加服务商列表中重复
   { key: 'custom', name: '自定义 (OpenAI 兼容)', logo: null, baseUrl: '', models: [] },
 ]

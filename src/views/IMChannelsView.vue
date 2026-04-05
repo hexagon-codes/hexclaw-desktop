@@ -105,10 +105,23 @@ const modalTesting = ref(false)
 
 const healthMap = ref<Record<string, IMInstanceHealth>>({})
 const togglingId = ref<string | null>(null)
+let healthRequestGen = 0
+
+function isDesktopRuntime() {
+  return !!(globalThis as Record<string, unknown>).isTauri
+}
 
 async function loadHealth() {
+  const requestGen = ++healthRequestGen
+  if (!isDesktopRuntime()) {
+    if (requestGen === healthRequestGen) {
+      healthMap.value = {}
+    }
+    return
+  }
   try {
     const list = await listIMInstancesHealth()
+    if (requestGen !== healthRequestGen) return
     const map: Record<string, IMInstanceHealth> = {}
     for (const h of list) map[h.name] = h
     healthMap.value = map
@@ -120,6 +133,7 @@ function getHealth(inst: IMInstance): IMInstanceHealth | undefined {
 }
 
 async function handleStartStop(inst: IMInstance) {
+  if (togglingId.value === inst.id) return
   const health = getHealth(inst)
   const isRunning = health?.status === 'running'
   togglingId.value = inst.id
@@ -189,6 +203,7 @@ function selectType(type: IMChannelType) {
 }
 
 async function handleCreate() {
+  if (formSaving.value) return
   formSaving.value = true
   try {
     await createIMInstance(
@@ -224,6 +239,7 @@ function openEdit(inst: IMInstance) {
 
 async function handleUpdate() {
   if (!editingId.value) return
+  if (formSaving.value) return
   formSaving.value = true
   try {
     const ok = await updateIMInstance(editingId.value, {
@@ -291,6 +307,7 @@ async function handleTestCard(inst: IMInstance) {
 }
 
 async function handleTestModal() {
+  if (modalTesting.value) return
   modalTesting.value = true
   modalTestResult.value = null
   const tempInstance: IMInstance = {
@@ -328,6 +345,7 @@ function cancelDelete() {
 }
 
 async function handleDelete(id: string) {
+  if (deletingId.value !== id) return
   try {
     await deleteIMInstance(id)
     deletingId.value = null
@@ -378,13 +396,9 @@ function getStatusText(inst: IMInstance) {
 async function copyWebhookUrl() {
   const text = getPlatformHookUrl({ name: formName.value, type: formType.value })
   try {
-    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text)
-    } else {
-      await setClipboard(text)
-    }
-  } catch {
     await setClipboard(text)
+  } catch {
+    // 剪贴板操作全部失败时静默处理，不向 UI 抛异常
   }
 }
 </script>

@@ -166,9 +166,9 @@ function formatTime(ts: string): string {
 function formatRelativeTime(ts: string): string {
   try {
     const diff = now.value - new Date(ts).getTime()
-    if (diff < 0) return '刚刚'
+    if (diff < 0) return t('logs.justNow', 'just now')
     const seconds = Math.floor(diff / 1000)
-    if (seconds < 5) return '刚刚'
+    if (seconds < 5) return t('logs.justNow', 'just now')
     if (seconds < 60) return `${seconds}s ago`
     const minutes = Math.floor(seconds / 60)
     if (minutes < 60) return `${minutes}m ago`

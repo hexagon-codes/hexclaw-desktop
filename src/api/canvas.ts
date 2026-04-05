@@ -5,6 +5,7 @@
  */
 
 import { apiGet, apiPost, apiDelete } from './client'
+import { logger } from '@/utils/logger'
 import type { Workflow, WorkflowRun } from '@/types'
 
 /** 面板概要 */
@@ -58,8 +59,8 @@ function setLocalWorkflows(workflows: Workflow[]) {
 export async function saveWorkflow(workflow: Omit<Workflow, 'created_at' | 'updated_at'>): Promise<Workflow> {
   try {
     return await apiPost<Workflow>('/api/v1/canvas/workflows', workflow)
-  } catch {
-    // 降级到 localStorage
+  } catch (e) {
+    logger.warn('Failed to save workflow to backend, falling back to localStorage', e)
     const workflows = getLocalWorkflows()
     const now = new Date().toISOString()
     const existing = workflows.findIndex((w) => w.id === workflow.id)
@@ -79,7 +80,8 @@ export async function getWorkflows(): Promise<Workflow[]> {
   try {
     const res = await apiGet<{ workflows: Workflow[] }>('/api/v1/canvas/workflows')
     return res.workflows || []
-  } catch {
+  } catch (e) {
+    logger.warn('Failed to load workflows from backend, falling back to localStorage', e)
     return getLocalWorkflows()
   }
 }
@@ -88,27 +90,16 @@ export async function getWorkflows(): Promise<Workflow[]> {
 export async function deleteWorkflow(id: string): Promise<void> {
   try {
     await apiDelete<{ message: string }>(`/api/v1/canvas/workflows/${encodeURIComponent(id)}`)
-  } catch {
+  } catch (e) {
+    logger.warn('Failed to delete workflow from backend, falling back to localStorage', e)
     const workflows = getLocalWorkflows().filter((w) => w.id !== id)
     setLocalWorkflows(workflows)
   }
 }
 
-/** 运行工作流 */
+/** 运行工作流 — 失败时抛出异常，由 store 层处理降级逻辑 */
 export async function runWorkflow(id: string): Promise<WorkflowRun> {
-  try {
-    return await apiPost<WorkflowRun>(`/api/v1/canvas/workflows/${encodeURIComponent(id)}/run`)
-  } catch {
-    // 模拟运行（后端不可用时）
-    return {
-      id: `run-${crypto.randomUUID().slice(0, 8)}`,
-      workflow_id: id,
-      status: 'completed',
-      output: '工作流模拟执行完成',
-      started_at: new Date().toISOString(),
-      finished_at: new Date().toISOString(),
-    }
-  }
+  return apiPost<WorkflowRun>(`/api/v1/canvas/workflows/${encodeURIComponent(id)}/run`)
 }
 
 /** 查询工作流运行状态 */

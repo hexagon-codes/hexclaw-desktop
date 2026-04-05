@@ -83,6 +83,7 @@ export const useCanvasStore = defineStore('canvas', () => {
   }
 
   function addEdge(edge: CanvasEdge) {
+    if (edge.from === edge.to) return // 禁止自环
     const exists = edges.value.some((e) => e.from === edge.from && e.to === edge.to)
     if (!exists) {
       edges.value.push(edge)
@@ -263,10 +264,11 @@ export const useCanvasStore = defineStore('canvas', () => {
       currentWorkflowId.value = id
     }
 
+    const existingName = savedWorkflows.value.find(w => w.id === id)?.name
     const [savedWf] = await trySafe(
       () => apiSaveWorkflow({
         id,
-        name: `Workflow ${id}`,
+        name: existingName || `Workflow ${id}`,
         nodes: JSON.parse(JSON.stringify(nodes.value)),
         edges: JSON.parse(JSON.stringify(edges.value)),
       }),
@@ -298,11 +300,9 @@ export const useCanvasStore = defineStore('canvas', () => {
         finishedAt: res.finished_at,
       }
     } else {
-      // 后端不可用 — 本地模拟执行（标记为 failed 以区分真实结果）
+      // 后端不可用 — 标记所有节点为 failed
       for (const nid of order) {
-        nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'running' }
-        await new Promise((r) => setTimeout(r, 300))
-        nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'completed' }
+        nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'failed' }
       }
       runStatus.value = 'failed'
       const simMsg = '⚠ 工作流仅在本地模拟执行（后端不可用），结果不可靠'

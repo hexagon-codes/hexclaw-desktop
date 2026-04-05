@@ -13,5 +13,5 @@ export function getStats() {
 
 /** 获取版本信息 */
 export function getVersion() {
-  return apiGet<{ version: string; build: string; go_version: string }>('/api/v1/version')
+  return apiGet<{ version: string; engine: string }>('/api/v1/version')
 }

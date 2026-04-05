@@ -14,8 +14,8 @@ export function saveMemory(content: string, type?: 'memory' | 'daily') {
 }
 
 /** 更新记忆内容 */
-export function updateMemory(content: string) {
-  return apiPut<{ message: string }>('/api/v1/memory', { content })
+export function updateMemory(content: string, type?: 'memory' | 'daily') {
+  return apiPut<{ message: string }>('/api/v1/memory', { content, type: type ?? 'memory' })
 }
 
 /** 删除单条记忆 */

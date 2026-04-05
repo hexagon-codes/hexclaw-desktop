@@ -4,9 +4,12 @@ import { ChevronDown } from 'lucide-vue-next'
 import { PROVIDER_LOGOS, getProviderTypes } from '@/config/providers'
 import type { ProviderType } from '@/types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   modelValue: ProviderType
-}>()
+  includeOllama?: boolean
+}>(), {
+  includeOllama: false,
+})
 
 const emit = defineEmits<{
   'update:modelValue': [value: ProviderType]
@@ -18,7 +21,7 @@ const dropdownRef = ref<HTMLUListElement | null>(null)
 const highlightIndex = ref(-1)
 const dropdownStyle = ref<Record<string, string>>({})
 
-const presets = getProviderTypes()
+const presets = getProviderTypes({ includeOllama: props.includeOllama })
 
 const selected = computed(() => presets.find((p) => p.type === props.modelValue) ?? presets[0]!)
 

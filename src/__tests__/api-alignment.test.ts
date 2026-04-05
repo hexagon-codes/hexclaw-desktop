@@ -166,19 +166,15 @@ describe('Frontend-Backend API Alignment', () => {
       console.warn(`Frontend API paths with no backend route:\n${details}`)
     }
 
-    // desktop/clipboard is a known frontend-only path (no backend route)
-    const hasBackend = matchesBackendRoute('/api/v1/desktop/clipboard', backendRoutes)
-    expect(hasBackend).toBeNull()
+    // desktop/clipboard was removed — frontend now uses browser Clipboard API directly
   })
 
-  it('desktop/clipboard path used in frontend does NOT exist in backend (known gap)', () => {
-    if (backendRoutes.size === 0) return
-    expect(backendRoutes.has('/api/v1/desktop/clipboard')).toBe(false)
-
-    // Verify frontend DOES reference it
-    const call = frontendCalls.find((c) => c.path === '/api/v1/desktop/clipboard')
-    expect(call).toBeDefined()
-    expect(call?.method).toBe('POST')
+  it('desktop/clipboard no longer calls backend API (uses browser Clipboard API)', () => {
+    const desktopSource = fs.readFileSync(path.join(API_DIR, 'desktop.ts'), 'utf-8')
+    // Should NOT reference /api/v1/desktop/clipboard anymore
+    expect(desktopSource).not.toContain('/api/v1/desktop/clipboard')
+    // Should use browser API instead
+    expect(desktopSource).toContain('navigator.clipboard')
   })
 
   it('wechatQRStream was removed — no EventSource or qr-stream reference remains in im-channels.ts', () => {

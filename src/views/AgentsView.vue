@@ -37,7 +37,10 @@ const expandedRole = ref<string | null>(null)
 // Agent 路由
 const agents = ref<AgentConfig[]>([])
 const defaultAgent = ref('')
+const settingDefaultAgent = ref<string | null>(null)
 const agentsLoading = ref(false)
+const registering = ref(false)
+const editing = ref(false)
 const showAddAgent = ref(false)
 const newAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
 
@@ -54,6 +57,7 @@ const rules = ref<AgentRule[]>([])
 const rulesLoading = ref(false)
 const ruleSaving = ref(false)
 const showAddRule = ref(false)
+const unregistering = ref(false)
 const newRule = ref<Omit<AgentRule, 'id'>>({
   platform: 'api',
   instance_id: '',
@@ -63,6 +67,7 @@ const newRule = ref<Omit<AgentRule, 'id'>>({
   priority: 0,
 })
 const deletingRuleId = ref<number | null>(null)
+const deletingRuleIds = ref<Set<number>>(new Set())
 
 const PLATFORM_OPTIONS = ['api', 'feishu', 'dingtalk', 'telegram', 'discord']
 
@@ -105,23 +110,29 @@ async function loadRules() {
 }
 
 async function handleSetDefault(name: string) {
+  if (settingDefaultAgent.value === name) return
   errorMsg.value = ''
+  settingDefaultAgent.value = name
   try {
     await setDefaultAgent(name)
     defaultAgent.value = name
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.setDefaultFailed')
+  } finally {
+    if (settingDefaultAgent.value === name) {
+      settingDefaultAgent.value = null
+    }
   }
 }
 
 async function handleAddRule() {
+  if (ruleSaving.value) return
   if (!newRule.value.agent_name.trim()) return
   ruleSaving.value = true
   errorMsg.value = ''
   try {
     await addRule(newRule.value)
-    showAddRule.value = false
-    newRule.value = { platform: 'api', instance_id: '', user_id: '', chat_id: '', agent_name: '', priority: 0 }
+    closeAddRuleDialog()
     await loadRules()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.loadRulesFailed')
@@ -131,6 +142,8 @@ async function handleAddRule() {
 }
 
 async function handleDeleteRule(id: number) {
+  if (deletingRuleIds.value.has(id)) return
+  deletingRuleIds.value = new Set(deletingRuleIds.value).add(id)
   errorMsg.value = ''
   try {
     await deleteRule(id)
@@ -138,8 +151,34 @@ async function handleDeleteRule(id: number) {
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.loadRulesFailed')
   } finally {
+    const nextDeletingRuleIds = new Set(deletingRuleIds.value)
+    nextDeletingRuleIds.delete(id)
+    deletingRuleIds.value = nextDeletingRuleIds
     deletingRuleId.value = null
   }
+}
+
+function resetAddRuleDialog() {
+  newRule.value = {
+    platform: 'api',
+    instance_id: '',
+    user_id: '',
+    chat_id: '',
+    agent_name: '',
+    priority: 0,
+  }
+}
+
+function openAddRuleDialog() {
+  errorMsg.value = ''
+  resetAddRuleDialog()
+  showAddRule.value = true
+}
+
+function closeAddRuleDialog() {
+  showAddRule.value = false
+  errorMsg.value = ''
+  resetAddRuleDialog()
 }
 
 function ruleSummary(rule: AgentRule): string {
@@ -160,25 +199,51 @@ function toggleRoleDetail(roleName: string) {
 }
 
 function openEditAgent(agent: AgentConfig) {
+  errorMsg.value = ''
   editingAgent.value = { ...agent }
   syncAgentModelSelection(editingAgent.value)
   showEditAgent.value = true
 }
 
+function resetAddAgentDialog() {
+  newAgent.value = { name: '', display_name: '', model: '', provider: '' }
+}
+
+function openAddAgentDialog() {
+  errorMsg.value = ''
+  resetAddAgentDialog()
+  showAddAgent.value = true
+}
+
+function closeAddAgentDialog() {
+  showAddAgent.value = false
+  errorMsg.value = ''
+  resetAddAgentDialog()
+}
+
+function closeEditAgentDialog() {
+  showEditAgent.value = false
+  errorMsg.value = ''
+}
+
 async function handleEditAgent() {
+  if (editing.value) return
   if (!editFormValid.value) return
   errorMsg.value = ''
+  editing.value = true
   try {
     await updateAgent(editingAgent.value.name, {
       display_name: editingAgent.value.display_name,
       provider: editingAgent.value.provider,
       model: editingAgent.value.model,
     })
-    showEditAgent.value = false
+    closeEditAgentDialog()
     await loadAgents()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.editAgentFailed')
     console.error('编辑 Agent 失败:', e)
+  } finally {
+    editing.value = false
   }
 }
 
@@ -232,6 +297,22 @@ watch(() => editingAgent.value.provider, () => {
   syncAgentModelSelection(editingAgent.value)
 })
 
+watch(showAddAgent, (isOpen, wasOpen) => {
+  if (isOpen || wasOpen) {
+    errorMsg.value = ''
+  }
+  if (!isOpen && wasOpen) {
+    resetAddAgentDialog()
+  }
+  if (isOpen && !wasOpen) {
+    resetAddAgentDialog()
+  }
+})
+
+watch(activeTab, () => {
+  errorMsg.value = ''
+})
+
 const registerFormValid = computed(() => {
   const models = modelsForProvider(newAgent.value.provider)
   return (
@@ -253,16 +334,26 @@ const editFormValid = computed(() => {
 })
 
 async function handleRegisterAgent() {
-  if (!registerFormValid.value) return
+  if (registering.value) return
+  if (!registerFormValid.value) {
+    errorMsg.value = t('agents.formIncomplete', '请完善必填字段')
+    return
+  }
   errorMsg.value = ''
+  if (agents.value.some((a) => a.name === newAgent.value.name.trim())) {
+    errorMsg.value = t('agents.duplicateName', { name: newAgent.value.name.trim() })
+    return
+  }
+  registering.value = true
   try {
     await registerAgent(newAgent.value)
-    showAddAgent.value = false
-    newAgent.value = { name: '', display_name: '', model: '', provider: '' }
+    closeAddAgentDialog()
     await loadAgents()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.registerAgentFailed')
     console.error('注册 Agent 失败:', e)
+  } finally {
+    registering.value = false
   }
 }
 
@@ -272,8 +363,16 @@ function confirmUnregister(name: string) {
 }
 
 async function handleUnregisterAgent() {
+  if (unregistering.value) return
   if (!unregisteringName.value) return
   errorMsg.value = ''
+  if (unregisteringName.value === defaultAgent.value) {
+    errorMsg.value = t('agents.cannotDeleteDefault', { name: unregisteringName.value })
+    showUnregisterConfirm.value = false
+    unregisteringName.value = ''
+    return
+  }
+  unregistering.value = true
   try {
     await unregisterAgent(unregisteringName.value)
     agents.value = agents.value.filter((a) => a.name !== unregisteringName.value)
@@ -281,6 +380,7 @@ async function handleUnregisterAgent() {
     errorMsg.value = e instanceof Error ? e.message : t('agents.unregisterAgentFailed')
     console.error('注销 Agent 失败:', e)
   } finally {
+    unregistering.value = false
     showUnregisterConfirm.value = false
     unregisteringName.value = ''
   }
@@ -297,7 +397,7 @@ async function handleUnregisterAgent() {
         <button
           v-if="activeTab === 'agents'"
           class="hc-btn hc-btn-primary"
-          @click="showAddAgent = true"
+          @click="openAddAgentDialog"
         >
           <Plus :size="14" />
           {{ t('agents.registerAgent') }}
@@ -479,9 +579,10 @@ async function handleUnregisterAgent() {
                 class="p-1.5 rounded-md hover:bg-white/5 transition-colors text-xs"
                 :style="{ color: 'var(--hc-text-secondary)' }"
                 :title="t('agents.setDefault')"
+                :disabled="settingDefaultAgent === agent.name"
                 @click="handleSetDefault(agent.name)"
               >
-                {{ t('agents.setDefault') }}
+                {{ settingDefaultAgent === agent.name ? t('common.loading') : t('agents.setDefault') }}
               </button>
               <button
                 class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
@@ -523,7 +624,7 @@ async function handleUnregisterAgent() {
             v-if="canAddRule"
             class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
             :style="{ background: 'var(--hc-accent)' }"
-            @click="showAddRule = true"
+            @click="openAddRuleDialog"
           >
             <Plus :size="14" />
             {{ t('agents.addRule') }}
@@ -536,7 +637,7 @@ async function handleUnregisterAgent() {
               :style="{ background: canAddRule ? 'var(--hc-accent)' : 'var(--hc-bg-hover)' }"
               :disabled="!canAddRule"
               :title="!canAddRule ? t('agents.registerAgentFirst') : undefined"
-              @click="canAddRule && (showAddRule = true)"
+              @click="canAddRule && openAddRuleDialog()"
             >
               <Plus :size="14" />
               {{ t('agents.addRule') }}
@@ -573,14 +674,14 @@ async function handleUnregisterAgent() {
     <!-- 注册 Agent 对话框 -->
     <Teleport to="body">
       <Transition name="modal">
-        <div v-if="showAddAgent" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="showAddAgent = false">
+        <div v-if="showAddAgent" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="closeAddAgentDialog">
           <div
             class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
               <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('agents.registerAgent') }}</h2>
-              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="showAddAgent = false">
+              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="closeAddAgentDialog">
                 <X :size="17" />
               </button>
             </div>
@@ -630,7 +731,7 @@ async function handleUnregisterAgent() {
               </div>
             </div>
             <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
-              <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="showAddAgent = false">
+              <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeAddAgentDialog">
                 {{ t('common.cancel') }}
               </button>
               <button
@@ -651,14 +752,14 @@ async function handleUnregisterAgent() {
     <!-- 编辑 Agent 路由对话框 -->
     <Teleport to="body">
       <Transition name="modal">
-        <div v-if="showEditAgent" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="showEditAgent = false">
+        <div v-if="showEditAgent" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="closeEditAgentDialog">
           <div
             class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
               <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('agents.editAgent') }}</h2>
-              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="showEditAgent = false">
+              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="closeEditAgentDialog">
                 <X :size="17" />
               </button>
             </div>
@@ -724,7 +825,7 @@ async function handleUnregisterAgent() {
               </div>
             </div>
             <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
-              <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="showEditAgent = false">
+              <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeEditAgentDialog">
                 {{ t('common.cancel') }}
               </button>
               <button
@@ -754,14 +855,14 @@ async function handleUnregisterAgent() {
     <!-- 添加路由规则对话框 -->
     <Teleport to="body">
       <Transition name="modal">
-        <div v-if="showAddRule" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="showAddRule = false">
+        <div v-if="showAddRule" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="closeAddRuleDialog">
           <div
             class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
               <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('agents.addRule') }}</h2>
-              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="showAddRule = false">
+              <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="closeAddRuleDialog">
                 <X :size="17" />
               </button>
             </div>
@@ -803,7 +904,7 @@ async function handleUnregisterAgent() {
               </div>
             </div>
             <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
-              <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="showAddRule = false">
+              <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeAddRuleDialog">
                 {{ t('common.cancel') }}
               </button>
               <button

@@ -24,28 +24,28 @@ export function createCronJob(input: CronJobInput) {
 
 /** 删除任务 */
 export function deleteCronJob(id: string) {
-  return apiDelete<{ message: string }>(`/api/v1/cron/jobs/${id}`)
+  return apiDelete<{ message: string }>(`/api/v1/cron/jobs/${encodeURIComponent(id)}`)
 }
 
 /** 暂停任务 */
 export function pauseCronJob(id: string) {
-  return apiPost<{ message: string }>(`/api/v1/cron/jobs/${id}/pause`)
+  return apiPost<{ message: string }>(`/api/v1/cron/jobs/${encodeURIComponent(id)}/pause`)
 }
 
 /** 恢复任务 */
 export function resumeCronJob(id: string) {
-  return apiPost<{ message: string }>(`/api/v1/cron/jobs/${id}/resume`)
+  return apiPost<{ message: string }>(`/api/v1/cron/jobs/${encodeURIComponent(id)}/resume`)
 }
 
 /** 立即触发任务 */
 export function triggerCronJob(id: string) {
-  return apiPost<{ message: string; run_id?: string }>(`/api/v1/cron/jobs/${id}/trigger`)
+  return apiPost<{ message: string; run_id?: string }>(`/api/v1/cron/jobs/${encodeURIComponent(id)}/trigger`)
 }
 
 /** 获取任务执行历史 */
 export async function getCronJobHistory(id: string, limit = 5): Promise<CronJobRun[]> {
   const res = await apiGet<{ history?: CronJobRunWire[]; runs?: CronJobRunWire[] }>(
-    `/api/v1/cron/jobs/${id}/history`,
+    `/api/v1/cron/jobs/${encodeURIComponent(id)}/history`,
     { limit },
   )
   const raw = res.history ?? res.runs ?? []

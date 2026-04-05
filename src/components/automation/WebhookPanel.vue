@@ -11,6 +11,10 @@ const toast = useToast()
 const webhooks = ref<Webhook[]>([])
 const loading = ref(false)
 const showCreate = ref(false)
+const creating = ref(false)
+const deletingIds = ref<Set<string>>(new Set())
+const loadError = ref('')
+let loadRequestGen = 0
 
 // Create form
 const form = ref({
@@ -19,6 +23,20 @@ const form = ref({
   url: '',
   events: ['task_complete'] as WebhookEvent[],
 })
+
+function resetCreateForm() {
+  form.value = { name: '', type: 'custom', url: '', events: ['task_complete'] }
+}
+
+function openCreateForm() {
+  resetCreateForm()
+  showCreate.value = true
+}
+
+function closeCreateForm() {
+  showCreate.value = false
+  resetCreateForm()
+}
 
 const webhookTypes: { key: WebhookType; label: string }[] = [
   { key: 'custom', label: 'Custom HTTP' },
@@ -34,40 +52,56 @@ const eventTypes: { key: WebhookEvent; label: string }[] = [
 ]
 
 async function loadWebhooks() {
+  const requestGen = ++loadRequestGen
   loading.value = true
+  loadError.value = ''
   try {
     const res = await getWebhooks()
+    if (requestGen !== loadRequestGen) return
     webhooks.value = res?.webhooks ?? []
   } catch (e) {
+    if (requestGen !== loadRequestGen) return
+    webhooks.value = []
+    loadError.value = (e as Error)?.message || 'Load failed'
     console.error('Failed to load webhooks:', e)
   } finally {
+    if (requestGen !== loadRequestGen) return
     loading.value = false
   }
 }
 
 async function onCreateWebhook() {
+  if (creating.value) return
   if (!form.value.name || !form.value.url) {
     toast.error('Name and URL are required')
     return
   }
+  creating.value = true
   try {
     await createWebhook(form.value)
     toast.success(`Webhook "${form.value.name}" created`)
-    showCreate.value = false
-    form.value = { name: '', type: 'custom', url: '', events: ['task_complete'] }
+    closeCreateForm()
     await loadWebhooks()
   } catch (e: unknown) {
     toast.error((e as Error)?.message || 'Create failed')
+  } finally {
+    creating.value = false
   }
 }
 
-async function onDeleteWebhook(name: string) {
+async function onDeleteWebhook(webhook: Webhook) {
+  if (deletingIds.value.has(webhook.id)) return
+  deletingIds.value = new Set([...deletingIds.value, webhook.id])
   try {
-    await deleteWebhook(name)
-    toast.success(`Webhook "${name}" deleted`)
+    await deleteWebhook(webhook.id)
+    toast.success(`Webhook "${webhook.name}" deleted`)
     await loadWebhooks()
   } catch (e: unknown) {
     toast.error((e as Error)?.message || 'Delete failed')
+  } finally {
+    const next = new Set(deletingIds.value)
+    next.delete(webhook.id)
+    deletingIds.value = next
   }
 }
 
@@ -90,7 +124,7 @@ defineExpose({ loadWebhooks })
     <!-- Header -->
     <div class="webhook-panel__header">
       <span class="webhook-panel__count">{{ webhooks.length }} webhooks</span>
-      <button class="hc-btn hc-btn-primary hc-btn-sm" @click="showCreate = !showCreate">
+      <button class="hc-btn hc-btn-primary hc-btn-sm" @click="showCreate ? closeCreateForm() : openCreateForm()">
         <Plus :size="14" />
         Add Webhook
       </button>
@@ -122,13 +156,17 @@ defineExpose({ loadWebhooks })
         </div>
       </div>
       <div class="webhook-panel__form-actions">
-        <button class="hc-btn hc-btn-ghost hc-btn-sm" @click="showCreate = false">Cancel</button>
-        <button class="hc-btn hc-btn-primary hc-btn-sm" @click="onCreateWebhook">Create</button>
+        <button class="hc-btn hc-btn-ghost hc-btn-sm" @click="closeCreateForm">Cancel</button>
+        <button class="hc-btn hc-btn-primary hc-btn-sm" :disabled="creating" @click="onCreateWebhook">Create</button>
       </div>
     </div>
 
     <!-- List -->
     <div v-if="loading" class="webhook-panel__loading">Loading...</div>
+    <div v-else-if="loadError" class="webhook-panel__error">
+      <AlertCircle :size="32" />
+      <p>{{ loadError }}</p>
+    </div>
     <div v-else-if="webhooks.length === 0" class="webhook-panel__empty">
       <AlertCircle :size="32" />
       <p>No webhooks configured</p>
@@ -144,7 +182,7 @@ defineExpose({ loadWebhooks })
         <div class="webhook-panel__item-events">
           <span v-for="ev in wh.events" :key="ev" class="webhook-panel__event-tag">{{ ev }}</span>
         </div>
-        <button class="hc-btn hc-btn-ghost hc-btn-sm webhook-panel__delete" @click="onDeleteWebhook(wh.name)">
+        <button class="hc-btn hc-btn-ghost hc-btn-sm webhook-panel__delete" :disabled="deletingIds.has(wh.id)" @click="onDeleteWebhook(wh)">
           <Trash2 :size="14" />
         </button>
       </div>
@@ -173,4 +211,5 @@ defineExpose({ loadWebhooks })
 .webhook-panel__delete { position: absolute; top: 8px; right: 8px; }
 .webhook-panel__empty { text-align: center; padding: 40px; color: var(--text-tertiary); }
 .webhook-panel__loading { text-align: center; padding: 40px; color: var(--text-tertiary); }
+.webhook-panel__error { text-align: center; padding: 40px; color: var(--hc-error, #dc2626); }
 </style>

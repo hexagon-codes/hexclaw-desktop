@@ -31,6 +31,8 @@ const saveName = ref('')
 const saveDescription = ref('')
 const showResultPanel = ref(false)
 const validationErrors = ref<string[]>([])
+const savingWorkflow = ref(false)
+const runningWorkflow = ref(false)
 
 // ─── 节点配置面板：新配置项输入 ─────────────────────────
 const newConfigKey = ref('')
@@ -119,7 +121,13 @@ function onDrag(e: MouseEvent) {
   }
 }
 
-function stopDrag() { draggingNode.value = null }
+function stopDrag() {
+  if (draggingNode.value) {
+    // Clear selection so the next click won't create an unintended edge
+    selectedNodeId.value = null
+  }
+  draggingNode.value = null
+}
 
 // ─── 连线 ─────────────────────────────────────────────
 function handleNodeClick(id: string) {
@@ -186,9 +194,15 @@ function openSaveDialog() {
 }
 
 async function handleSave() {
+  if (savingWorkflow.value) return
   if (!saveName.value.trim()) return
-  await store.saveWorkflow(saveName.value.trim(), saveDescription.value.trim() || undefined)
-  showSaveDialog.value = false
+  savingWorkflow.value = true
+  try {
+    await store.saveWorkflow(saveName.value.trim(), saveDescription.value.trim() || undefined)
+    showSaveDialog.value = false
+  } finally {
+    savingWorkflow.value = false
+  }
 }
 
 function handleLoadWorkflow(workflow: Workflow) {
@@ -202,16 +216,22 @@ async function handleDeleteWorkflow(id: string) {
 }
 
 async function handleRun() {
+  if (runningWorkflow.value) return
   // Validate before running
   const errors = store.validateWorkflow()
   validationErrors.value = errors
   if (errors.length > 0) return
 
   showResultPanel.value = false
-  await store.runWorkflow()
-  // Show result panel when done
-  if (store.runResult) {
-    showResultPanel.value = true
+  runningWorkflow.value = true
+  try {
+    await store.runWorkflow()
+    // Show result panel when done
+    if (store.runResult) {
+      showResultPanel.value = true
+    }
+  } finally {
+    runningWorkflow.value = false
   }
 }
 
@@ -308,8 +328,8 @@ function nodeRunBorder(nodeId: string): string {
 
           <button
             class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors hover:bg-white/5"
-            :style="{ color: store.nodes.length > 0 ? 'var(--hc-text-secondary)' : 'var(--hc-text-muted)' }"
-            :disabled="store.nodes.length === 0"
+            :style="{ color: store.nodes.length > 0 && !savingWorkflow ? 'var(--hc-text-secondary)' : 'var(--hc-text-muted)' }"
+            :disabled="store.nodes.length === 0 || savingWorkflow"
             :title="t('canvas.save')"
             @click="openSaveDialog"
           >
@@ -320,14 +340,14 @@ function nodeRunBorder(nodeId: string): string {
           <button
             class="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-white transition-colors"
             :style="{
-              background: store.nodes.length > 0 && store.runStatus !== 'running' ? 'var(--hc-accent)' : 'var(--hc-text-muted)',
-              opacity: store.nodes.length > 0 && store.runStatus !== 'running' ? 1 : 0.5,
+              background: store.nodes.length > 0 && store.runStatus !== 'running' && !runningWorkflow ? 'var(--hc-accent)' : 'var(--hc-text-muted)',
+              opacity: store.nodes.length > 0 && store.runStatus !== 'running' && !runningWorkflow ? 1 : 0.5,
             }"
-            :disabled="store.nodes.length === 0 || store.runStatus === 'running'"
+            :disabled="store.nodes.length === 0 || store.runStatus === 'running' || runningWorkflow"
             :title="t('canvas.run')"
             @click="handleRun"
           >
-            <Loader2 v-if="store.runStatus === 'running'" :size="14" class="animate-spin" />
+            <Loader2 v-if="store.runStatus === 'running' || runningWorkflow" :size="14" class="animate-spin" />
             <Play v-else :size="14" />
             {{ t('canvas.run') }}
           </button>
@@ -424,7 +444,7 @@ function nodeRunBorder(nodeId: string): string {
           <div
             v-for="node in store.nodes"
             :key="node.id"
-            class="absolute rounded-xl border-2 px-4 py-3 min-w-[160px] cursor-move select-none transition-all group"
+            class="absolute rounded-xl border-2 px-4 py-3 min-w-[160px] cursor-move select-none transition group"
             :style="{
               left: node.x + 'px',
               top: node.y + 'px',
@@ -445,7 +465,7 @@ function nodeRunBorder(nodeId: string): string {
                 <component v-else :is="nodeTypes.find(t => t.type === node.type)?.icon || Bot" :size="12" />
               </div>
               <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ node.label }}</span>
-              <button class="ml-auto p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-all" :style="{ color: 'var(--hc-text-muted)' }" @click.stop="removeNode(node.id)">
+              <button class="ml-auto p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-opacity" :style="{ color: 'var(--hc-text-muted)' }" @click.stop="removeNode(node.id)">
                 <Trash2 :size="10" />
               </button>
             </div>
@@ -612,7 +632,7 @@ function nodeRunBorder(nodeId: string): string {
               <div v-for="(val, key) in selectedNode.config" :key="String(key)" class="flex items-center gap-1 text-[10px] px-2 py-1 rounded group" :style="{ background: 'var(--hc-bg-main)', color: 'var(--hc-text-secondary)' }">
                 <span class="font-medium">{{ key }}:</span>
                 <span class="flex-1 truncate">{{ val }}</span>
-                <button class="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-all" :style="{ color: 'var(--hc-text-muted)' }" @click="removeNodeConfig(String(key))">
+                <button class="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/10 transition-opacity" :style="{ color: 'var(--hc-text-muted)' }" @click="removeNodeConfig(String(key))">
                   <X :size="8" />
                 </button>
               </div>
@@ -670,11 +690,11 @@ function nodeRunBorder(nodeId: string): string {
             </button>
             <button
               class="px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors"
-              :style="{ background: saveName.trim() ? 'var(--hc-accent)' : 'var(--hc-text-muted)', opacity: saveName.trim() ? 1 : 0.5 }"
-              :disabled="!saveName.trim()"
+              :style="{ background: saveName.trim() && !savingWorkflow ? 'var(--hc-accent)' : 'var(--hc-text-muted)', opacity: saveName.trim() && !savingWorkflow ? 1 : 0.5 }"
+              :disabled="!saveName.trim() || savingWorkflow"
               @click="handleSave"
             >
-              <Loader2 v-if="store.loading" :size="12" class="inline animate-spin mr-1" />
+              <Loader2 v-if="store.loading || savingWorkflow" :size="12" class="inline animate-spin mr-1" />
               {{ t('canvas.save') }}
             </button>
           </div>

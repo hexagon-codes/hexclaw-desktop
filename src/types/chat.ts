@@ -6,6 +6,14 @@ export interface ToolCall {
   result?: string
 }
 
+/** 消息内容块 — 强类型替代松散 JSON */
+export type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'thinking'; thinking: string; duration?: number }
+  | { type: 'tool_use'; id: string; name: string; input: string; status?: 'running' | 'success' | 'error' }
+  | { type: 'tool_result'; toolUseId: string; toolName: string; output: string; isError: boolean }
+  | { type: 'code'; language: string; content: string; title?: string }
+
 /** 聊天消息 */
 export interface ChatMessage {
   id: string
@@ -13,10 +21,13 @@ export interface ChatMessage {
   content: string
   reasoning?: string
   timestamp: string
+  created_at?: string
   agent_id?: string
   agent_name?: string
   tool_calls?: ToolCall[]
   metadata?: Record<string, unknown>
+  /** 结构化内容块（优先使用，fallback 到 content 字段） */
+  blocks?: ContentBlock[]
 }
 
 /** 聊天会话 */
@@ -67,6 +78,7 @@ export interface Artifact {
   content: string
   previousContent?: string
   messageId: string
+  blockIndex?: number
   createdAt: string
 }
 

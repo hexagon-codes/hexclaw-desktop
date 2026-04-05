@@ -18,12 +18,6 @@ function looksLikeHtmlDocument(content: string): boolean {
 }
 
 export function sanitizeArtifactHtml(content: string, title = 'Artifact Preview'): string {
-  const safeBody = DOMPurify.sanitize(content, {
-    WHOLE_DOCUMENT: false,
-    FORBID_TAGS,
-    FORBID_ATTR,
-  })
-
   if (looksLikeHtmlDocument(content)) {
     return DOMPurify.sanitize(content, {
       WHOLE_DOCUMENT: true,
@@ -31,6 +25,12 @@ export function sanitizeArtifactHtml(content: string, title = 'Artifact Preview'
       FORBID_ATTR,
     })
   }
+
+  const safeBody = DOMPurify.sanitize(content, {
+    WHOLE_DOCUMENT: false,
+    FORBID_TAGS,
+    FORBID_ATTR,
+  })
 
   return `<!doctype html>
 <html lang="en">

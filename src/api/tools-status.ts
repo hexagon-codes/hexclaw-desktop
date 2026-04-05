@@ -40,7 +40,7 @@ export interface ToolPermissionRule {
 }
 
 export interface ToolPermissions {
-  rules: ToolPermissionRule[]
+  rules: ToolPermissionRule[] | null
 }
 
 // ─── API ────────────────────────────────────────────

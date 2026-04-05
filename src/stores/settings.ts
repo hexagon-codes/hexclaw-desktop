@@ -1,381 +1,34 @@
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { logger } from '@/utils/logger'
 import { getLLMConfig, updateLLMConfig } from '@/api/config'
+import { getOllamaStatus } from '@/api/ollama'
 import { updateConfig } from '@/api/settings'
-import { loadSecureValue, removeSecureValue, saveSecureValue } from '@/utils/secure-store'
+import { isTauri } from '@/utils/platform'
 import type {
   AppConfig,
   ProviderConfig,
   ApiError,
   ModelCapability,
-  ModelOption,
-  BackendLLMConfig,
-  BackendLLMProvider,
 } from '@/types'
-
-/** Tauri Store 中配置的键名 */
-const CONFIG_STORE_KEY = 'app_config'
-
-/** Tauri Store 文件名 */
-const CONFIG_STORE_FILE = 'config.dat'
-
-/** 默认配置 */
-function defaultConfig(): AppConfig {
-  return {
-    llm: {
-      providers: [],
-      defaultModel: '',
-      defaultProviderId: '',
-      routing: {
-        enabled: false,
-        strategy: 'cost-aware',
-      },
-    },
-    security: {
-      gateway_enabled: true,
-      injection_detection: true,
-      pii_filter: false,
-      content_filter: true,
-      max_tokens_per_request: 8192,
-      rate_limit_rpm: 60,
-    },
-    general: {
-      language: 'zh-CN',
-      log_level: 'info',
-      data_dir: '',
-      auto_start: false,
-      defaultAgentRole: '',
-    },
-    notification: {
-      system_enabled: true,
-      sound_enabled: false,
-      agent_complete: true,
-    },
-    mcp: {
-      default_protocol: 'stdio',
-    },
-  }
-}
-
-/** 检测是否运行在 Tauri 桌面环境中（与 @tauri-apps/api/core 保持一致） */
-function isTauri(): boolean {
-  return !!(globalThis as Record<string, unknown>).isTauri
-}
-
-const KNOWN_PROVIDER_TYPES = [
-  'openai',
-  'anthropic',
-  'deepseek',
-  'qwen',
-  'gemini',
-  'ark',
-  'ollama',
-] as const
-type KnownProviderType = (typeof KNOWN_PROVIDER_TYPES)[number]
-
-function cloneModels(models: ModelOption[] = []): ModelOption[] {
-  return models.map((model) => ({
-    ...model,
-    capabilities: model.capabilities ?? ['text'],
-  }))
-}
-
-function cloneProviders(providers: ProviderConfig[] = []): ProviderConfig[] {
-  return providers.map((provider) => ({
-    ...provider,
-    models: cloneModels(provider.models),
-  }))
-}
-
-function resolveProviderSelectedModelId(
-  provider: Pick<ProviderConfig, 'models' | 'selectedModelId'>,
-  preferredModelId = '',
-): string {
-  const trimmedPreferredModelId = preferredModelId.trim()
-  if (
-    trimmedPreferredModelId &&
-    provider.models.some((model) => model.id === trimmedPreferredModelId)
-  ) {
-    return trimmedPreferredModelId
-  }
-
-  const currentSelectedModelId = provider.selectedModelId?.trim() ?? ''
-  if (currentSelectedModelId && provider.models.some((model) => model.id === currentSelectedModelId)) {
-    return currentSelectedModelId
-  }
-
-  return provider.models[0]?.id ?? ''
-}
-
-function secureApiKeyKey(providerId: string): string {
-  return `llm.provider.${providerId}.apiKey`
-}
-
-function normalizeProviderName(name: string | undefined | null): string {
-  return (name ?? '').trim().toLowerCase()
-}
-
-function ensureUniqueProviderName(baseName: string, providers: ProviderConfig[]): string {
-  const trimmedBaseName = baseName.trim() || 'Provider'
-  const usedNames = new Set(
-    providers.map((provider) => normalizeProviderName(provider.name)).filter(Boolean),
-  )
-
-  if (!usedNames.has(normalizeProviderName(trimmedBaseName))) {
-    return trimmedBaseName
-  }
-
-  let index = 2
-  while (usedNames.has(normalizeProviderName(`${trimmedBaseName} ${index}`))) {
-    index += 1
-  }
-  return `${trimmedBaseName} ${index}`
-}
-
-function assertUniqueProviderNames(providers: ProviderConfig[]) {
-  const seen = new Map<string, string>()
-
-  for (const provider of providers) {
-    const normalizedName = normalizeProviderName(provider.name)
-    if (!normalizedName) continue
-
-    const existingName = seen.get(normalizedName)
-    if (existingName) {
-      throw new Error(`LLM 服务商名称重复：${provider.name}。请为每个服务商使用唯一名称`)
-    }
-    seen.set(normalizedName, provider.name)
-  }
-}
-
-function isMaskedApiKey(value: string | undefined | null): boolean {
-  return (value ?? '').includes('*')
-}
-
-function providerMatchesBackendKey(provider: ProviderConfig, backendKey: string): boolean {
-  const normalizedBackendKey = backendKey.trim().toLowerCase()
-  return [provider.id, provider.backendKey, provider.name]
-    .filter((value): value is string => typeof value === 'string' && value.length > 0)
-    .some((value) => value.trim().toLowerCase() === normalizedBackendKey)
-}
-
-function mergeProviderModels(
-  localProvider: ProviderConfig | undefined,
-  backendModelId: string,
-): ModelOption[] {
-  const localModels = cloneModels(localProvider?.models ?? [])
-  const trimmedBackendModelId = backendModelId.trim()
-
-  if (!trimmedBackendModelId) return localModels
-  if (localModels.some((model) => model.id === trimmedBackendModelId)) return localModels
-
-  return [
-    {
-      id: trimmedBackendModelId,
-      name: trimmedBackendModelId,
-      capabilities: ['text'],
-    },
-    ...localModels,
-  ]
-}
-
-function resolveDefaultModelProviderId(
-  providers: ProviderConfig[],
-  modelId: string,
-  preferredProviderId = '',
-): string {
-  if (!modelId) return ''
-  if (preferredProviderId) {
-    const exact = providers.find(
-      (provider) =>
-        provider.id === preferredProviderId &&
-        provider.models.some((model) => model.id === modelId),
-    )
-    if (exact) return exact.id
-  }
-  return (
-    providers.find((provider) => provider.models.some((model) => model.id === modelId))?.id ?? ''
-  )
-}
-
-function reconcileDefaultSelection(llmConfig: AppConfig['llm']) {
-  llmConfig.routing = {
-    enabled: llmConfig.routing?.enabled ?? false,
-    strategy: llmConfig.routing?.strategy || 'cost-aware',
-  }
-
-  for (const provider of llmConfig.providers) {
-    provider.selectedModelId = resolveProviderSelectedModelId(
-      provider,
-      provider.id === llmConfig.defaultProviderId ? llmConfig.defaultModel : '',
-    )
-  }
-
-  const resolvedProviderId = resolveDefaultModelProviderId(
-    llmConfig.providers,
-    llmConfig.defaultModel,
-    llmConfig.defaultProviderId ?? '',
-  )
-  llmConfig.defaultProviderId = resolvedProviderId
-  if (!resolvedProviderId) {
-    llmConfig.defaultModel = ''
-    return
-  }
-
-  const defaultProvider = llmConfig.providers.find((provider) => provider.id === resolvedProviderId)
-  if (!defaultProvider) {
-    llmConfig.defaultModel = ''
-    llmConfig.defaultProviderId = ''
-    return
-  }
-
-  defaultProvider.selectedModelId = resolveProviderSelectedModelId(defaultProvider, llmConfig.defaultModel)
-  if (!defaultProvider.models.some((model) => model.id === llmConfig.defaultModel)) {
-    llmConfig.defaultModel = defaultProvider.selectedModelId
-  }
-}
-
-async function restoreProviderApiKeys(providers: ProviderConfig[]): Promise<ProviderConfig[]> {
-  const restoredProviders = cloneProviders(providers)
-
-  for (const provider of restoredProviders) {
-    const secureApiKey = await loadSecureValue(secureApiKeyKey(provider.id))
-    if (secureApiKey) {
-      provider.apiKey = secureApiKey
-    }
-  }
-
-  return restoredProviders
-}
-
-async function materializeProviderApiKeys(providers: ProviderConfig[]): Promise<ProviderConfig[]> {
-  const normalizedProviders = cloneProviders(providers)
-
-  for (const provider of normalizedProviders) {
-    const currentApiKey = provider.apiKey.trim()
-    if (!currentApiKey) continue
-    if (!isMaskedApiKey(currentApiKey)) continue
-
-    const secureApiKey = await loadSecureValue(secureApiKeyKey(provider.id))
-    if (!secureApiKey) {
-      if (provider.backendKey?.trim()) {
-        // 已存在于后端的 provider 可以继续回传脱敏值，让后端保留旧 Key。
-        continue
-      }
-      throw new Error(
-        `服务商 ${provider.name || provider.id} 的 API Key 只有脱敏值，请重新输入完整 Key 后再保存`,
-      )
-    }
-    provider.apiKey = secureApiKey
-  }
-
-  return normalizedProviders
-}
-
-async function syncProviderApiKeys(
-  providers: ProviderConfig[],
-  previousProviders: ProviderConfig[] = [],
-): Promise<void> {
-  const nextProviderIds = new Set(providers.map((provider) => provider.id))
-
-  for (const previousProvider of previousProviders) {
-    if (!nextProviderIds.has(previousProvider.id)) {
-      await removeSecureValue(secureApiKeyKey(previousProvider.id))
-    }
-  }
-
-  for (const provider of providers) {
-    const apiKey = provider.apiKey.trim()
-    if (!apiKey) {
-      await removeSecureValue(secureApiKeyKey(provider.id))
-      continue
-    }
-    if (isMaskedApiKey(apiKey)) continue
-    await saveSecureValue(secureApiKeyKey(provider.id), apiKey)
-  }
-}
-
-/** 后端格式 -> 桌面格式 */
-function backendToProviders(
-  backend: BackendLLMConfig,
-  localProviders: ProviderConfig[] = [],
-): ProviderConfig[] {
-  return Object.entries(backend.providers).map(([name, p]) => {
-    const localProvider = localProviders.find((provider) =>
-      providerMatchesBackendKey(provider, name),
-    )
-    const lowerName = name.toLowerCase()
-    const matchedType = KNOWN_PROVIDER_TYPES.find((t) => lowerName === t || lowerName.startsWith(t))
-    const nextProvider: ProviderConfig = {
-      id: localProvider?.id ?? name,
-      backendKey: name,
-      name: localProvider?.name ?? name,
-      type: (localProvider?.type ?? matchedType ?? 'custom') as ProviderConfig['type'],
-      enabled: true,
-      baseUrl: p.base_url || localProvider?.baseUrl || '',
-      apiKey: p.api_key || localProvider?.apiKey || '',
-      models: mergeProviderModels(localProvider, p.model),
-      selectedModelId: '',
-    }
-    nextProvider.selectedModelId = resolveProviderSelectedModelId(nextProvider, p.model)
-    return nextProvider
-  })
-}
-
-/** 桌面格式 -> 后端格式 */
-function providersToBackend(
-  providers: ProviderConfig[],
-  defaultModel: string,
-  defaultProviderId = '',
-  routing = { enabled: false, strategy: 'cost-aware' },
-): BackendLLMConfig {
-  const backendProviders: Record<string, BackendLLMProvider> = {}
-  for (const p of providers) {
-    if (!p.enabled) continue
-    const key = p.backendKey || p.name || p.id
-    const selectedModelId = resolveProviderSelectedModelId(
-      p,
-      p.id === defaultProviderId ? defaultModel : '',
-    )
-    backendProviders[key] = {
-      api_key: p.apiKey || '',
-      base_url: p.baseUrl || '',
-      model: selectedModelId,
-      compatible:
-        p.type === 'custom' || !KNOWN_PROVIDER_TYPES.includes(p.type as KnownProviderType)
-          ? 'openai'
-          : '',
-    }
-  }
-  // Find which provider the default model belongs to
-  let defaultProvider = Object.keys(backendProviders)[0] || ''
-  const exactDefaultProvider = providers.find(
-    (provider) =>
-      provider.id === defaultProviderId &&
-      provider.enabled &&
-      provider.models.some((model) => model.id === defaultModel),
-  )
-  if (exactDefaultProvider) {
-    defaultProvider = exactDefaultProvider.name || exactDefaultProvider.id
-  } else {
-    for (const [key, val] of Object.entries(backendProviders)) {
-      if (val.model === defaultModel) {
-        defaultProvider = key
-        break
-      }
-    }
-  }
-  return {
-    default: defaultProvider,
-    providers: backendProviders,
-    routing: {
-      enabled: routing.enabled,
-      strategy: routing.strategy || 'cost-aware',
-    },
-    cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
-  }
-}
+import {
+  cloneProviders,
+  mergeConfigProvidersWithRuntime,
+  resolveProviderSelectedModelId,
+  resolveDefaultModelProviderId,
+  ensureUniqueProviderName,
+  assertUniqueProviderNames,
+  reconcileDefaultSelection,
+  restoreProviderApiKeys,
+  materializeProviderApiKeys,
+  syncProviderApiKeys,
+  backendToProviders,
+  providersToBackend,
+  appendLocalProvidersMissingFromRuntime,
+  providerMatchesBackendKey,
+} from './settings-helpers'
+import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
 
 export const useSettingsStore = defineStore('settings', () => {
   const config = ref<AppConfig | null>(null)
@@ -383,12 +36,32 @@ export const useSettingsStore = defineStore('settings', () => {
   const error = ref<ApiError | null>(null)
   const runtimeProviders = ref<ProviderConfig[] | null>(null)
 
-  /** 所有已启用的 Provider */
-  const enabledProviders = computed(() =>
-    (runtimeProviders.value ?? config.value?.llm.providers ?? []).filter((p) => p.enabled),
-  )
+  /**
+   * Ollama 模型独立缓存 — 不存入 Provider.models，避免 save/reload/reactivity 链问题。
+   * 由 syncOllamaModels() 从 Ollama API 实时填充，availableModels 直接读取。
+   */
+  const ollamaModelsCache = ref<ModelOption[]>([])
 
-  /** 所有可用模型（来自已启用的 Provider） */
+  /**
+   * 已启用的 Provider 列表。
+   * - runtime 未加载（null）：用 config。
+   * - runtime 为空数组：用 config（后端失败等场景曾误写 []）。
+   * - runtime 非空：与 config 做并集且以 config 的 id/enabled 为准，避免后端快照少一行时丢掉 Ollama。
+   */
+  const enabledProviders = computed(() => {
+    const rp = runtimeProviders.value
+    const fromConfig = config.value?.llm.providers ?? []
+    if (rp == null) return fromConfig.filter((p) => p.enabled)
+    if (rp.length === 0) return fromConfig.filter((p) => p.enabled)
+    return mergeConfigProvidersWithRuntime(fromConfig, rp).filter((p) => p.enabled)
+  })
+
+  const isOllamaProvider = (p: ProviderConfig) =>
+    p.type === 'ollama' ||
+    p.backendKey?.toLowerCase().includes('ollama') ||
+    p.name?.toLowerCase().includes('ollama')
+
+  /** 所有可用模型（来自已启用的 Provider + Ollama 实时缓存） */
   const availableModels = computed(() => {
     const models: {
       providerId: string
@@ -399,7 +72,9 @@ export const useSettingsStore = defineStore('settings', () => {
       capabilities: ModelCapability[]
     }[] = []
     for (const p of enabledProviders.value) {
-      for (const m of p.models) {
+      // Ollama Provider 用独立缓存，不依赖 Provider.models
+      const modelList = isOllamaProvider(p) ? ollamaModelsCache.value : p.models
+      for (const m of modelList) {
         models.push({
           providerId: p.id,
           providerKey: p.backendKey || p.name || p.id,
@@ -415,6 +90,10 @@ export const useSettingsStore = defineStore('settings', () => {
 
   /** 并发锁：防止 loadConfig 被多次并发调用 */
   let loadConfigPromise: Promise<void> | null = null
+  /** 当前加载进行中时，force reload 会挂到这里，避免被静默吞掉 */
+  let forceReloadPromise: Promise<void> | null = null
+  /** 保存队列：保证并发 saveConfig 按调用顺序串行提交，避免旧保存覆盖新状态 */
+  let saveConfigQueue: Promise<void> = Promise.resolve()
 
   /** 加载配置 — 非 LLM 配置从 Tauri Store 读取，LLM 配置从后端 API 读取 */
   async function loadConfig({ force = false } = {}) {
@@ -424,7 +103,24 @@ export const useSettingsStore = defineStore('settings', () => {
     }
     // 如果已在加载中，复用已有 Promise
     if (loadConfigPromise) {
-      return loadConfigPromise
+      if (!force) {
+        return loadConfigPromise
+      }
+      if (!forceReloadPromise) {
+        forceReloadPromise = loadConfigPromise
+          .then(
+            async () => {
+              await loadConfig({ force: true })
+            },
+            async () => {
+              await loadConfig({ force: true })
+            },
+          )
+          .finally(() => {
+          forceReloadPromise = null
+          })
+      }
+      return forceReloadPromise
     }
     loadConfigPromise = doLoadConfig()
     try {
@@ -529,17 +225,7 @@ export const useSettingsStore = defineStore('settings', () => {
         const liveProviders = await restoreProviderApiKeys(
           backendToProviders(backendConfig, localProviders),
         )
-        runtimeProviders.value = cloneProviders(liveProviders)
-        const providers = cloneProviders(liveProviders)
-
-        for (const lp of localProviders) {
-          if (!providers.some((p) => p.id === lp.id || providerMatchesBackendKey(lp, p.name))) {
-            providers.push({
-              ...lp,
-              models: cloneModels(lp.models),
-            })
-          }
-        }
+        const providers = appendLocalProvidersMissingFromRuntime(liveProviders, localProviders)
 
         logger.debug('转换后的 providers', providers)
         runtimeProviders.value = cloneProviders(providers)
@@ -587,7 +273,8 @@ export const useSettingsStore = defineStore('settings', () => {
       }
     }
     logger.error('后端 LLM 配置加载最终失败，保留现有 providers')
-    runtimeProviders.value = []
+    // 用 null 而非 []：与 Tauri 初始态一致，enabledProviders 会回退到本地 config；[] 会阻断 ?? 回退导致全站无模型
+    runtimeProviders.value = null
     if ((config.value?.llm.providers.length ?? 0) === 0) {
       config.value!.llm.providers = []
       config.value!.llm.defaultModel = ''
@@ -621,65 +308,77 @@ export const useSettingsStore = defineStore('settings', () => {
     // 先更新本地状态，确保 UI 不会因为异步操作延迟而丢失响应性
     config.value = plainConfig
 
-    await syncProviderApiKeys(plainConfig.llm.providers, previousProviders)
+    const persistJob = async () => {
+      await syncProviderApiKeys(plainConfig.llm.providers, previousProviders)
 
-    // LLM 配置保存到后端 API
-    if (isTauri()) {
-      try {
-        const backendConfig = providersToBackend(
-          plainConfig.llm.providers,
-          plainConfig.llm.defaultModel,
-          plainConfig.llm.defaultProviderId ?? '',
-          plainConfig.llm.routing,
-        )
-        await updateLLMConfig(backendConfig)
-        logger.debug('LLM 配置已保存到后端', backendConfig)
-        runtimeProviders.value = await restoreProviderApiKeys(
-          backendToProviders(await getLLMConfig(), plainConfig.llm.providers),
-        )
-      } catch (e) {
-        logger.error('LLM 配置保存到后端失败', e)
-        throw e
+      // LLM 配置保存到后端 API
+      if (isTauri()) {
+        try {
+          const backendConfig = providersToBackend(
+            plainConfig.llm.providers,
+            plainConfig.llm.defaultModel,
+            plainConfig.llm.defaultProviderId ?? '',
+            plainConfig.llm.routing,
+          )
+          await updateLLMConfig(backendConfig)
+          logger.debug('LLM 配置已保存到后端', backendConfig)
+          const backendSnap = await getLLMConfig()
+          const liveAfterSave = await restoreProviderApiKeys(
+            backendToProviders(backendSnap, plainConfig.llm.providers),
+          )
+          const mergedAfterSave = appendLocalProvidersMissingFromRuntime(
+            liveAfterSave,
+            plainConfig.llm.providers,
+          )
+          runtimeProviders.value = cloneProviders(mergedAfterSave)
+        } catch (e) {
+          logger.error('LLM 配置保存到后端失败', e)
+          throw e
+        }
+
+        // 安全配置同步到后端
+        try {
+          await updateConfig({ security: plainConfig.security })
+          logger.debug('安全配置已同步到后端', plainConfig.security)
+        } catch (e) {
+          logger.warn('安全配置同步到后端失败（非致命）', e)
+        }
       }
 
-      // 安全配置同步到后端
-      try {
-        await updateConfig({ security: plainConfig.security })
-        logger.debug('安全配置已同步到后端', plainConfig.security)
-      } catch (e) {
-        logger.warn('安全配置同步到后端失败（非致命）', e)
+      // 非 LLM 配置保存到 Tauri Store
+      // API Key 统一走 secure-store，配置副本里不落明文
+      const configToSave: AppConfig = {
+        ...plainConfig,
+        llm: {
+          providers: plainConfig.llm.providers.map((p) => ({
+            ...p,
+            apiKey: '',
+          })),
+          defaultModel: plainConfig.llm.defaultModel,
+          defaultProviderId: plainConfig.llm.defaultProviderId ?? '',
+          routing: plainConfig.llm.routing,
+        },
       }
-    }
 
-    // 非 LLM 配置保存到 Tauri Store
-    // API Key 统一走 secure-store，配置副本里不落明文
-    const configToSave: AppConfig = {
-      ...plainConfig,
-      llm: {
-        providers: plainConfig.llm.providers.map((p) => ({
-          ...p,
-          apiKey: '',
-        })),
-        defaultModel: plainConfig.llm.defaultModel,
-        defaultProviderId: plainConfig.llm.defaultProviderId ?? '',
-        routing: plainConfig.llm.routing,
-      },
-    }
-
-    if (isTauri()) {
-      try {
-        const { LazyStore } = await import('@tauri-apps/plugin-store')
-        const store = new LazyStore(CONFIG_STORE_FILE)
-        await store.set(CONFIG_STORE_KEY, configToSave)
-        await store.save()
-        logger.debug('非 LLM 配置已保存到 Tauri Store', configToSave)
-      } catch (e) {
-        logger.warn('Tauri Store 保存失败，降级到 localStorage', e)
+      if (isTauri()) {
+        try {
+          const { LazyStore } = await import('@tauri-apps/plugin-store')
+          const store = new LazyStore(CONFIG_STORE_FILE)
+          await store.set(CONFIG_STORE_KEY, configToSave)
+          await store.save()
+          logger.debug('非 LLM 配置已保存到 Tauri Store', configToSave)
+        } catch (e) {
+          logger.warn('Tauri Store 保存失败，降级到 localStorage', e)
+          localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
+        }
+      } else {
         localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
       }
-    } else {
-      localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
     }
+
+    const queuedJob = saveConfigQueue.catch(() => undefined).then(persistJob)
+    saveConfigQueue = queuedJob
+    await queuedJob
   }
 
   /** 添加 Provider */
@@ -720,6 +419,41 @@ export const useSettingsStore = defineStore('settings', () => {
     reconcileDefaultSelection(config.value.llm)
   }
 
+  /**
+   * 同步 Ollama Provider 的模型列表与 Ollama 实际已下载模型
+   * 下载/删除模型后调用，确保 Provider 模型列表与 Ollama 一致
+   */
+  /**
+   * 从 Ollama 实际已安装模型同步到 Provider 模型列表（仅内存更新，不持久化）
+   *
+   * 不调 saveConfig — 避免 save→reload→reset 循环。
+   * 模型列表来自 Ollama 实时状态，每次 detect()/refreshModels() 都会刷新，无需持久化。
+   */
+  /**
+   * 从 Ollama 实时拉取已安装模型，更新独立缓存 ollamaModelsCache。
+   * availableModels computed 直接读取此缓存，完全绕开 Provider.models 的配置链。
+   * 每次调用都是一次 ref 赋值 → Vue 响应式 100% 可靠。
+   */
+  async function syncOllamaModels() {
+    try {
+      const status = await getOllamaStatus()
+      if (!status.running) return
+      ollamaModelsCache.value = (status.models || []).map(m => ({
+        id: m.name,
+        name: m.name,
+        capabilities: ['text'] as ModelCapability[],
+      }))
+    } catch { /* Ollama 可能未运行 */ }
+  }
+
+  // runtimeProviders 变化时（包括 loadConfig force reload），自动刷新 Ollama 模型缓存。
+  // 无论用户在哪个页面，缓存始终与 Ollama 实际状态同步。
+  watch(runtimeProviders, (providers) => {
+    if (providers?.some(isOllamaProvider)) {
+      syncOllamaModels()
+    }
+  })
+
   return {
     config,
     loading,
@@ -732,5 +466,6 @@ export const useSettingsStore = defineStore('settings', () => {
     addProvider,
     updateProvider,
     removeProvider,
+    syncOllamaModels,
   }
 })

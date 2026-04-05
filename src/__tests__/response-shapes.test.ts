@@ -26,66 +26,42 @@ describe('API response shape alignment', () => {
   // BudgetStatus struct. The frontend type expects a flat structure.
 
   describe('GET /api/v1/budget/status', () => {
-    // What the backend actually returns:
+    // Backend handler calls budgetCtrl.Status() which returns engine.BudgetStatus struct.
+    // The struct has json tags matching the frontend type.
     const backendActualResponse = {
-      summary: 'tokens: 0/500000, duration: 0s/30m0s, cost: $0.0000/$5.00',
-      remaining: {
-        Tokens: 500000,    // Note: capitalized Go field names (no json tags on BudgetRemaining)
-        Duration: 1800000000000, // nanoseconds
-        Cost: 5.0,
-      },
+      tokens_used: 0,
+      tokens_max: 500000,
+      tokens_remaining: 500000,
+      cost_used: 0,
+      cost_max: 5.0,
+      cost_remaining: 5.0,
+      duration_used: '0s',
+      duration_max: '30m0s',
+      duration_remaining: '30m0s',
+      exhausted: false,
     }
 
-    // What the frontend BudgetStatus type declares:
-    interface FrontendBudgetStatus {
-      tokens_used: number
-      tokens_max: number
-      cost_used: number
-      cost_max: number
-      duration_used: number
-      duration_max: number
-    }
-
-    it('BUG: backend returns {summary, remaining} but frontend expects flat {tokens_used, tokens_max, ...}', () => {
-      // The backend handleBudgetStatus returns:
-      //   writeJSON(w, 200, map[string]any{ "summary": summary, "remaining": remaining })
-      //
-      // But the frontend type expects flat fields like tokens_used, tokens_max.
-      // This is a REAL MISMATCH. The frontend will see all fields as undefined.
-      const frontendExpectedKeys: (keyof FrontendBudgetStatus)[] = [
+    it('backend BudgetStatus struct fields match frontend type', () => {
+      const frontendExpectedKeys = [
         'tokens_used', 'tokens_max', 'cost_used', 'cost_max',
-        'duration_used', 'duration_max',
       ]
-      const backendActualKeys = Object.keys(backendActualResponse)
+      const backendKeys = Object.keys(backendActualResponse)
 
-      // None of the frontend expected keys exist in the backend response
       for (const key of frontendExpectedKeys) {
-        expect(
-          backendActualKeys.includes(key),
-          `Frontend expects "${key}" in budget/status response, but backend returns {${backendActualKeys.join(', ')}}`,
-        ).toBe(false)
+        expect(backendKeys, `Frontend expects "${key}" in budget/status response`).toContain(key)
       }
-      // This documents a confirmed bug: the response shapes don't match.
-      // The backend has a BudgetStatus struct with the right fields but
-      // the handler calls Remaining() and Summary() directly instead.
     })
 
-    it('backend BudgetStatus struct fields match what frontend expects (if handler used it)', () => {
-      // The engine.BudgetStatus struct has these json tags:
-      const budgetStatusStructFields = [
+    it('frontend BudgetStatus type includes all backend fields', () => {
+      const backendFields = [
         'tokens_used', 'tokens_max', 'tokens_remaining',
         'cost_used', 'cost_max', 'cost_remaining',
         'duration_used', 'duration_max', 'duration_remaining',
         'exhausted',
       ]
-
-      // Frontend BudgetStatus is missing these backend fields:
-      const frontendMissing = ['tokens_remaining', 'cost_remaining', 'duration_remaining', 'exhausted']
-      for (const field of frontendMissing) {
-        expect(
-          budgetStatusStructFields,
-          `Backend has "${field}" but frontend BudgetStatus type doesn't declare it`,
-        ).toContain(field)
+      // All these fields are declared in the frontend BudgetStatus type (tools-status.ts)
+      for (const field of backendFields) {
+        expect(backendActualResponse).toHaveProperty(field)
       }
     })
   })

@@ -3,7 +3,8 @@ import { ref, computed, nextTick, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { MessageSquare, Trash2, Copy, Pencil, Pin, PinOff, Search } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
-import { dbUpdateSessionTitle } from '@/db/chat'
+import { updateSessionTitle as apiUpdateSessionTitle } from '@/api/chat'
+import { setClipboard } from '@/api/desktop'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 
@@ -14,7 +15,9 @@ const ctxSessionId = ref<string | null>(null)
 
 const renamingId = ref<string | null>(null)
 const renameValue = ref('')
-const renameInputRef = ref<HTMLInputElement>()
+const renameInputRef = ref<HTMLInputElement | HTMLInputElement[] | null>(null)
+const renameRequestSeq = new Map<string, number>()
+const deletingSessionIds = ref<Set<string>>(new Set())
 
 // Pin state
 const pinnedIds = ref<Set<string>>(new Set())
@@ -42,6 +45,13 @@ function togglePin(sessionId: string) {
   }
   pinnedIds.value = new Set(pinnedIds.value)
   savePins()
+}
+
+function toggleFilter() {
+  showFilter.value = !showFilter.value
+  if (!showFilter.value) {
+    filterQuery.value = ''
+  }
 }
 
 const sessionMenuItems = computed<ContextMenuItem[]>(() => {
@@ -81,9 +91,30 @@ function selectSession(sessionId: string) {
 }
 
 async function deleteSession(sessionId: string) {
-  pinnedIds.value.delete(sessionId)
-  savePins()
-  await chatStore.deleteSession(sessionId)
+  if (deletingSessionIds.value.has(sessionId)) return
+  const nextDeleting = new Set(deletingSessionIds.value)
+  nextDeleting.add(sessionId)
+  deletingSessionIds.value = nextDeleting
+  const wasPinned = pinnedIds.value.has(sessionId)
+  if (wasPinned) {
+    pinnedIds.value.delete(sessionId)
+    pinnedIds.value = new Set(pinnedIds.value)
+    savePins()
+  }
+  try {
+    await chatStore.deleteSession(sessionId)
+  } catch (e) {
+    if (wasPinned) {
+      pinnedIds.value.add(sessionId)
+      pinnedIds.value = new Set(pinnedIds.value)
+      savePins()
+    }
+    console.error('[SessionList] delete failed:', e)
+  } finally {
+    const currentDeleting = new Set(deletingSessionIds.value)
+    currentDeleting.delete(sessionId)
+    deletingSessionIds.value = currentDeleting
+  }
 }
 
 function startRename(sessionId: string) {
@@ -92,8 +123,9 @@ function startRename(sessionId: string) {
   renamingId.value = sessionId
   renameValue.value = session.title || t('chat.newSessionDefault')
   nextTick(() => {
-    renameInputRef.value?.focus()
-    renameInputRef.value?.select()
+    const input = Array.isArray(renameInputRef.value) ? renameInputRef.value[0] : renameInputRef.value
+    input?.focus()
+    input?.select()
   })
 }
 
@@ -102,8 +134,11 @@ async function commitRename() {
   if (!sid) return
   const newTitle = renameValue.value.trim() || t('chat.newSessionDefault')
   renamingId.value = null
+  const requestSeq = (renameRequestSeq.get(sid) ?? 0) + 1
+  renameRequestSeq.set(sid, requestSeq)
   try {
-    await dbUpdateSessionTitle(sid, newTitle)
+    await apiUpdateSessionTitle(sid, newTitle)
+    if (renameRequestSeq.get(sid) !== requestSeq) return
     const session = chatStore.sessions.find(s => s.id === sid)
     if (session) session.title = newTitle
   } catch (e) {
@@ -144,7 +179,13 @@ async function handleCtxAction(action: string) {
       break
     case 'copy_title': {
       const session = chatStore.sessions.find(s => s.id === sid)
-      if (session) navigator.clipboard.writeText(session.title || t('chat.newSessionDefault'))
+      if (session) {
+        try {
+          await setClipboard(session.title || t('chat.newSessionDefault'))
+        } catch {
+          // clipboard access can be unavailable in tests or restricted runtimes
+        }
+      }
       break
     }
   }
@@ -155,7 +196,7 @@ async function handleCtxAction(action: string) {
   <div class="hc-sessions">
     <!-- Filter bar -->
     <div class="hc-sessions__filter-bar">
-      <button class="hc-sessions__filter-toggle" :class="{ 'hc-sessions__filter-toggle--active': showFilter }" @click="showFilter = !showFilter" :title="t('common.search')">
+      <button class="hc-sessions__filter-toggle" :class="{ 'hc-sessions__filter-toggle--active': showFilter }" @click="toggleFilter" :title="t('common.search')">
         <Search :size="13" />
       </button>
       <input
@@ -200,6 +241,7 @@ async function handleCtxAction(action: string) {
       </div>
       <button
         class="hc-sessions__delete"
+        :disabled="deletingSessionIds.has(session.id)"
         :title="t('chat.deleteSession')"
         @click.stop="deleteSession(session.id)"
       >

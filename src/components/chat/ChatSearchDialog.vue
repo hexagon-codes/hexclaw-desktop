@@ -29,9 +29,9 @@ watch(query, () => {
 })
 
 watch(results, (r) => {
-  if (r.length > 0) {
-    emit('scrollTo', r[currentIndex.value]!.id)
-  }
+  if (r.length === 0) return
+  currentIndex.value = Math.min(currentIndex.value, r.length - 1)
+  emit('scrollTo', r[currentIndex.value]!.id)
 })
 
 function prev() {

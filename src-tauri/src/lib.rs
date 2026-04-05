@@ -3,163 +3,16 @@
 // 模块划分:
 //   commands  — 前端可调用的 Tauri commands
 //   sidecar   — hexclaw 进程生命周期管理
+//   ollama    — Ollama 本地推理引擎管理
 //   tray      — 系统托盘
 //   window    — 窗口管理 + 全局快捷键
 
 pub mod commands;
 pub mod menu;
+pub mod ollama;
 pub mod sidecar;
 pub mod tray;
 pub mod window;
-
-use tauri_plugin_sql::{Migration, MigrationKind};
-
-/// 数据库迁移脚本
-fn include_migrations() -> Vec<Migration> {
-    vec![
-        Migration {
-            version: 1,
-            description: "create chat tables",
-            sql: "
-                CREATE TABLE IF NOT EXISTS sessions (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL DEFAULT '新对话',
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-                CREATE TABLE IF NOT EXISTS messages (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    role TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    timestamp TEXT NOT NULL DEFAULT (datetime('now')),
-                    metadata TEXT,
-                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
-                CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
-            ",
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 2,
-            description: "create knowledge docs read-only cache",
-            sql: "
-                CREATE TABLE IF NOT EXISTS knowledge_docs_cache (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    source TEXT,
-                    chunk_count INTEGER NOT NULL DEFAULT 0,
-                    status TEXT,
-                    error_message TEXT,
-                    source_type TEXT,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT,
-                    cached_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-                CREATE TABLE IF NOT EXISTS knowledge_cache_meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-            ",
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 3,
-            description: "create artifacts table and app_state",
-            sql: "
-                CREATE TABLE IF NOT EXISTS artifacts (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    message_id TEXT NOT NULL,
-                    type TEXT NOT NULL DEFAULT 'code',
-                    title TEXT NOT NULL,
-                    language TEXT,
-                    content TEXT NOT NULL,
-                    previous_content TEXT,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-                );
-                CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id);
-                CREATE INDEX IF NOT EXISTS idx_artifacts_message ON artifacts(message_id);
-
-                CREATE TABLE IF NOT EXISTS app_state (
-                    key TEXT PRIMARY KEY,
-                    value TEXT NOT NULL
-                );
-            ",
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 4,
-            description: "production-grade session and message fields",
-            sql: "
-                -- sessions: 软删除 + 冗余统计 + 扩展元数据
-                ALTER TABLE sessions ADD COLUMN status INTEGER NOT NULL DEFAULT 1;
-                ALTER TABLE sessions ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE sessions ADD COLUMN total_prompt_tokens INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE sessions ADD COLUMN total_completion_tokens INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE sessions ADD COLUMN last_message_preview TEXT NOT NULL DEFAULT '';
-                ALTER TABLE sessions ADD COLUMN meta TEXT NOT NULL DEFAULT '{}';
-
-                -- messages: 模型/成本/性能追踪 + 幂等 + 多模态 + 扩展
-                ALTER TABLE messages ADD COLUMN content_type TEXT NOT NULL DEFAULT 'text';
-                ALTER TABLE messages ADD COLUMN model_name TEXT NOT NULL DEFAULT '';
-                ALTER TABLE messages ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE messages ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE messages ADD COLUMN finish_reason TEXT NOT NULL DEFAULT '';
-                ALTER TABLE messages ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0;
-                ALTER TABLE messages ADD COLUMN request_id TEXT NOT NULL DEFAULT '';
-                ALTER TABLE messages ADD COLUMN meta TEXT NOT NULL DEFAULT '{}';
-                ALTER TABLE messages ADD COLUMN parent_id TEXT NOT NULL DEFAULT '';
-                ALTER TABLE messages ADD COLUMN feedback TEXT NOT NULL DEFAULT '';
-
-                -- 索引
-                CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status, updated_at);
-                CREATE INDEX IF NOT EXISTS idx_messages_request_id ON messages(request_id);
-                CREATE INDEX IF NOT EXISTS idx_messages_parent_id ON messages(parent_id);
-            ",
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 5,
-            description: "message outbox for offline queue",
-            sql: "
-                CREATE TABLE IF NOT EXISTS message_outbox (
-                    id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    attachments TEXT NOT NULL DEFAULT '[]',
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    retry_count INTEGER NOT NULL DEFAULT 0,
-                    error TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-                CREATE INDEX IF NOT EXISTS idx_outbox_status ON message_outbox(status);
-            ",
-            kind: MigrationKind::Up,
-        },
-        Migration {
-            version: 6,
-            description: "prompt template library",
-            sql: "
-                CREATE TABLE IF NOT EXISTS prompt_templates (
-                    id TEXT PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    category TEXT NOT NULL DEFAULT '',
-                    use_count INTEGER NOT NULL DEFAULT 0,
-                    pinned INTEGER NOT NULL DEFAULT 0,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-                );
-                CREATE INDEX IF NOT EXISTS idx_templates_category ON prompt_templates(category);
-                CREATE INDEX IF NOT EXISTS idx_templates_pinned ON prompt_templates(pinned DESC, use_count DESC);
-            ",
-            kind: MigrationKind::Up,
-        },
-    ]
-}
 
 /// 运行 Tauri 应用
 ///
@@ -169,6 +22,12 @@ fn include_migrations() -> Vec<Migration> {
 ///   3. 注册 commands
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 收紧文件创建权限: 新文件默认 0600, 新目录默认 0700
+    #[cfg(unix)]
+    {
+        unsafe { libc::umask(0o077); }
+    }
+
     env_logger::init();
 
     let app = tauri::Builder::default()
@@ -183,26 +42,36 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_store::Builder::new().build())
-        .plugin(
-            tauri_plugin_sql::Builder::default()
-                .add_migrations("sqlite:hexclaw.db", include_migrations())
-                .build(),
-        )
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             // 已有实例运行时，聚焦主窗口
             crate::window::show_main_window(app);
         }))
         // 全局状态
         .manage(sidecar::SidecarState::default())
+        .manage(ollama::OllamaState::default())
         // 初始化
         .setup(|app| {
             eprintln!("[HexClaw] setup 开始...");
 
-            // macOS 原生菜单栏
             menu::setup(app)?;
 
             // 系统托盘
             tray::setup(app)?;
+
+            // 启动 Ollama 本地推理引擎（优先复用外部实例，否则启动内嵌二进制）
+            let ollama_started = match ollama::spawn_ollama(&app.handle()) {
+                Ok(()) => {
+                    log::info!("Ollama 进程就绪");
+                    eprintln!("[HexClaw] Ollama 进程就绪 (managed={})", ollama::is_managed());
+                    true
+                }
+                Err(e) => {
+                    log::warn!("Ollama 启动失败（可选依赖，不阻塞）: {}", e);
+                    eprintln!("[HexClaw] Ollama 启动失败: {}", e);
+                    false
+                }
+            };
 
             // 启动 hexclaw sidecar 进程
             let sidecar_started = match sidecar::spawn_sidecar(&app.handle()) {
@@ -218,11 +87,21 @@ pub fn run() {
                 }
             };
 
-            // 异步健康检查，等待 sidecar 就绪
-            if sidecar_started {
+            // 异步健康检查
+            {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    sidecar::wait_for_healthy(handle, 30).await;
+                    // Ollama 健康检查（不阻塞 sidecar，并行执行）
+                    if ollama_started {
+                        let h = handle.clone();
+                        tokio::spawn(async move {
+                            ollama::wait_for_healthy(h, 15).await;
+                        });
+                    }
+                    // sidecar 健康检查
+                    if sidecar_started {
+                        sidecar::wait_for_healthy(handle, 30).await;
+                    }
                 });
             }
 
@@ -244,10 +123,13 @@ pub fn run() {
             commands::stream_chat,
             commands::backend_chat,
             commands::restart_sidecar,
+            commands::get_ollama_status,
+            commands::restart_ollama,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if window.label() == "main" {
+                    ollama::stop_ollama();
                     sidecar::stop_sidecar();
                 }
             }

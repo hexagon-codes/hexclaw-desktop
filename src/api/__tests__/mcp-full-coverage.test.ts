@@ -75,7 +75,7 @@ describe('MCP API — full coverage', () => {
     await callMcpTool('read_file', { path: '/tmp/test.txt' })
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/mcp/tools/call', {
       method: 'POST',
-      body: { tool: 'read_file', arguments: { path: '/tmp/test.txt' } },
+      body: { name: 'read_file', arguments: { path: '/tmp/test.txt' } },
     })
   })
 
@@ -85,7 +85,7 @@ describe('MCP API — full coverage', () => {
     await callMcpTool('list_dir', {})
     expect(mockFetch).toHaveBeenCalledWith('/api/v1/mcp/tools/call', {
       method: 'POST',
-      body: { tool: 'list_dir', arguments: {} },
+      body: { name: 'list_dir', arguments: {} },
     })
   })
 

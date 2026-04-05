@@ -3,7 +3,6 @@ import { onMounted, onBeforeUnmount, ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Key,
-  Database,
   Palette,
   Eye,
   EyeOff,
@@ -18,11 +17,11 @@ import {
   XCircle,
   Zap,
   RotateCcw,
-  Save,
 } from 'lucide-vue-next'
 import { NTag, NSpace } from 'naive-ui'
 import { useSettingsStore } from '@/stores/settings'
 import { getRuntimeConfig } from '@/api/settings'
+import { getVersion } from '@/api/system'
 import { getLLMConfig, testLLMConnection } from '@/api/config'
 import {
   getBudgetStatus,
@@ -94,6 +93,7 @@ const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName:
 )
 const runtimeConfig = ref<BackendRuntimeConfig | null>(null)
 const runtimeLLMConfig = ref<BackendLLMConfig | null>(null)
+const appVersion = ref('—')
 const runtimeInfoLoading = ref(false)
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 let autoSavePromise: Promise<void> | null = null
@@ -103,8 +103,7 @@ let closingAfterFlush = false
 
 const sections = computed(() => [
   { key: 'llm', label: t('settings.llm.title'), icon: Key },
-  { key: 'appearance', label: t('settings.appearance.title'), icon: Palette },
-  { key: 'storage', label: t('settings.storage.title'), icon: Database },
+  { key: 'system', label: t('settings.system.title'), icon: Palette },
 ])
 
 function handleLocaleChange(locale: string) {
@@ -133,6 +132,28 @@ function handleRoutingStrategyChange() {
   }
   autoSave()
 }
+
+const isDirty = ref(false)
+
+const maxToolsDisplay = computed(() => {
+  const v = config.value?.llm.tools?.maxTools ?? 0
+  return v === 0 ? t('settings.llm.toolsNoLimit', '不限') : String(v)
+})
+
+function stepMaxTools(delta: number) {
+  if (!config.value) return
+  const current = config.value.llm.tools?.maxTools ?? 0
+  const next = Math.max(0, current + delta)
+  config.value.llm.tools = {
+    enabled: config.value.llm.tools?.enabled ?? 'auto',
+    maxTools: next,
+  }
+  autoSave()
+}
+
+const nonOllamaProviders = computed(() =>
+  config.value?.llm.providers.filter((p) => p.type !== 'ollama') ?? [],
+)
 
 function isDesktopRuntime() {
   return !!(globalThis as Record<string, unknown>).isTauri
@@ -222,11 +243,13 @@ async function flushAutoSave({
   }
 
   hasPendingAutoSave = false
+  isDirty.value = false
   autoSavePromise = persistSettings({ showSavedFeedback, refreshRuntimeInfo })
   try {
     await autoSavePromise
   } catch (e) {
     hasPendingAutoSave = true
+    isDirty.value = true
     throw e
   } finally {
     autoSavePromise = null
@@ -308,7 +331,7 @@ onBeforeUnmount(() => {
 })
 
 watch(activeSection, (val) => {
-  if (val === 'storage') {
+  if (val === 'system') {
     loadRuntimeInfo()
   }
   if (val === 'status' && statusExpanded.value && !budgetStatus.value && !statusError.value) {
@@ -325,16 +348,12 @@ watch(editingProviderId, () => {
 const config = computed(() => settingsStore.config)
 const editableProviders = computed(() => config.value?.llm.providers ?? [])
 const defaultModelOptions = computed(() =>
-  editableProviders.value
-    .filter((provider) => provider.enabled)
-    .flatMap((provider) =>
-      provider.models.map((model) => ({
-        value: `${provider.id}::${model.id}`,
-        providerId: provider.id,
-        modelId: model.id,
-        label: `${provider.name} / ${model.name}`,
-      })),
-    ),
+  settingsStore.availableModels.map((m) => ({
+    value: `${m.providerId}::${m.modelId}`,
+    providerId: m.providerId,
+    modelId: m.modelId,
+    label: `${m.providerName} / ${m.modelName}`,
+  })),
 )
 const selectedDefaultModelValue = computed({
   get() {
@@ -385,40 +404,35 @@ const runtimeDefaultModel = computed(() => {
   if (!defaultProvider) return '—'
   return runtimeLLMConfig.value?.providers[defaultProvider]?.model || '—'
 })
-const runtimeModeDisplay = computed(() => {
-  const rawMode = runtimeConfig.value?.server.mode?.trim()
-  if (!rawMode) return '—'
-
-  switch (rawMode.toLowerCase()) {
-    case 'production':
-      return `${t('settings.storage.modeProduction', '生产模式')} (${rawMode})`
-    case 'development':
-      return `${t('settings.storage.modeDevelopment', '开发模式')} (${rawMode})`
-    case 'desktop':
-      return `${t('settings.storage.modeDesktop', '桌面模式')} (${rawMode})`
-    default:
-      return rawMode
-  }
-})
 const runtimeApiEndpoint = computed(
   () => `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
 )
-const runtimeLocalStoreEngine = 'SQLite'
-const runtimeLocalStoreFile = 'hexclaw.db'
-const runtimeVectorDbIndexMode = 'FTS5 + 向量 BLOB'
+const runtimeLocalStoreFile = 'data.db'
+const runtimeModeShort = computed(() => {
+  const rawMode = runtimeConfig.value?.server.mode?.trim()?.toLowerCase()
+  if (!rawMode) return ''
+  switch (rawMode) {
+    case 'desktop': return t('settings.storage.modeDesktop', '桌面模式')
+    case 'production': return t('settings.storage.modeProduction', '生产模式')
+    case 'development': return t('settings.storage.modeDevelopment', '开发模式')
+    default: return rawMode
+  }
+})
 
 let runtimeInfoGen = 0
 async function loadRuntimeInfo() {
   const gen = ++runtimeInfoGen
   runtimeInfoLoading.value = true
   try {
-    const [nextRuntimeConfig, nextLLMConfig] = await Promise.all([
+    const [nextRuntimeConfig, nextLLMConfig, versionInfo] = await Promise.all([
       getRuntimeConfig(),
       getLLMConfig(),
+      getVersion().catch(() => null),
     ])
     if (gen !== runtimeInfoGen) return // stale response from earlier call, discard
     runtimeConfig.value = nextRuntimeConfig
     runtimeLLMConfig.value = nextLLMConfig
+    if (versionInfo?.version) appVersion.value = `v${versionInfo.version}`
   } catch (e) {
     if (gen !== runtimeInfoGen) return
     runtimeConfig.value = null
@@ -568,6 +582,15 @@ async function confirmDeleteProvider() {
 function toggleProvider(provider: ProviderConfig) {
   settingsStore.updateProvider(provider.id, { enabled: !provider.enabled })
   autoSave()
+}
+
+function handleToggleOllamaProvider() {
+  const ollamaProvider = config.value?.llm.providers.find(
+    (p) => p.type === 'ollama' || p.name?.toLowerCase().includes('ollama'),
+  )
+  if (ollamaProvider) {
+    toggleProvider(ollamaProvider)
+  }
 }
 
 /** 添加自定义模型到 Provider */
@@ -730,6 +753,7 @@ async function testProvider(provider: ProviderConfig) {
 /** 自动保存（防抖） */
 function autoSave() {
   hasPendingAutoSave = true
+  isDirty.value = true
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   autoSaveTimer = setTimeout(async () => {
     try {
@@ -755,7 +779,7 @@ async function saveConfig() {
     await flushAutoSave({
       force: true,
       showSavedFeedback: true,
-      refreshRuntimeInfo: activeSection.value === 'storage',
+      refreshRuntimeInfo: activeSection.value === 'system',
     })
   } catch (e) {
     console.error('保存配置失败:', e)
@@ -765,10 +789,7 @@ async function saveConfig() {
 
 <template>
   <div class="hc-settings">
-    <PageToolbar
-      :search-placeholder="t('settings.searchPlaceholder', 'Search settings...')"
-      @search="() => {}"
-    >
+    <PageToolbar>
       <template #tabs>
         <SegmentedControl
           v-model="activeSection"
@@ -783,11 +804,12 @@ async function saveConfig() {
         <button
           class="hc-btn hc-btn-primary"
           :class="{ 'hc-settings__btn--saved': saved }"
+          :disabled="!hasUnsavedChanges() && !saved"
           @click="saveConfig"
         >
           <CheckCircle v-if="saved" :size="14" />
-          <Save v-else :size="14" />
-          {{ saved ? t('common.saved') : t('settings.toolbar.saveSettings', 'Save Settings') }}
+          {{ saved ? t('common.saved') : t('settings.toolbar.saveSettings', '保存') }}
+          <span class="hc-settings__dirty" :class="{ 'hc-settings__dirty--on': isDirty }">· 未保存</span>
         </button>
       </template>
     </PageToolbar>
@@ -803,90 +825,109 @@ async function saveConfig() {
             class="hc-settings__section hc-settings__section--scroll"
             style="max-width: 600px"
           >
-            <div class="hc-provider__header">
-              <h3 class="hc-settings__section-title" style="margin: 0">
-                {{ t('settings.llm.title') }}
-              </h3>
-              <button class="hc-btn hc-btn-sm" @click="showAddProvider = !showAddProvider">
-                <Plus :size="14" />
-                {{ t('settings.llm.addProvider') }}
-              </button>
+            <!-- ── 默认行为 ── -->
+            <div class="hc-settings__sep">
+              <span class="hc-settings__sep-label">默认行为</span>
+              <span class="hc-settings__sep-line"></span>
             </div>
 
-            <div class="hc-card hc-settings__llm-controls">
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">
-                  {{ t('settings.llm.defaultModel') }}
-                </label>
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                {{ t('settings.llm.defaultModel') }}
+                <span class="hc-settings__info" data-info="新对话和快捷入口的默认模型。显式选模时不受影响。">?</span>
+              </span>
+              <div class="hc-settings__row-right">
                 <select
                   v-model="selectedDefaultModelValue"
                   data-testid="llm-default-model-select"
-                  class="hc-input"
+                  class="hc-settings__select"
                   :disabled="defaultModelOptions.length === 0"
                 >
-                  <option value="">
-                    {{ t('settings.llm.noEnabledModels', '请先启用至少一个模型') }}
-                  </option>
-                  <option
-                    v-for="option in defaultModelOptions"
-                    :key="option.value"
-                    :value="option.value"
-                  >
+                  <option value="">{{ t('settings.llm.noEnabledModels') }}</option>
+                  <option v-for="option in defaultModelOptions" :key="option.value" :value="option.value">
                     {{ option.label }}
                   </option>
                 </select>
-                <p class="hc-settings__hint">
-                  {{
-                    t(
-                      'settings.llm.defaultModelHint',
-                      '新对话、Quick Chat 和未显式选模的入口会优先使用这里的 provider / model。',
-                    )
-                  }}
-                </p>
               </div>
+            </div>
 
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">
-                  {{ t('settings.storage.routing', 'Routing') }}
-                </label>
-                <label class="hc-settings__toggle-row hc-settings__toggle-row--compact">
-                  <div>
-                    <span class="hc-settings__toggle-label">
-                      {{ t('settings.llm.routingEnabled', '启用路由策略') }}
-                    </span>
-                    <p class="hc-settings__toggle-desc">
-                      {{
-                        t(
-                          'settings.llm.routingHint',
-                          '只对未显式指定 provider / model 的请求生效；显式选模时严格按选择执行。',
-                        )
-                      }}
-                    </p>
-                  </div>
-                  <input
-                    v-model="config.llm.routing!.enabled"
-                    data-testid="llm-routing-toggle"
-                    type="checkbox"
-                    class="hc-toggle"
-                    @change="handleRoutingToggle"
-                  />
-                </label>
+            <!-- Routing: toggle + select on same row -->
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                {{ t('settings.llm.routingEnabled') }}
+                <span class="hc-settings__info" data-info="开启后，未指定模型的请求将根据偏好策略自动选择最优模型。">?</span>
+              </span>
+              <div class="hc-settings__row-right">
                 <select
                   v-model="config.llm.routing!.strategy"
                   data-testid="llm-routing-strategy-select"
-                  class="hc-input"
+                  class="hc-settings__select"
                   :disabled="!config.llm.routing?.enabled"
                   @change="handleRoutingStrategyChange"
                 >
-                  <option
-                    v-for="option in routingStrategyOptions"
-                    :key="option.value"
-                    :value="option.value"
-                  >
+                  <option v-for="option in routingStrategyOptions" :key="option.value" :value="option.value">
                     {{ option.label }}
                   </option>
                 </select>
+                <input
+                  v-model="config.llm.routing!.enabled"
+                  data-testid="llm-routing-toggle"
+                  type="checkbox"
+                  class="hc-toggle"
+                  @change="handleRoutingToggle"
+                />
               </div>
+            </div>
+
+            <!-- ── 工具能力 ── -->
+            <div class="hc-settings__sep">
+              <span class="hc-settings__sep-label">工具能力</span>
+              <span class="hc-settings__sep-line"></span>
+            </div>
+
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                {{ t('settings.llm.toolsToggle') }}
+                <span class="hc-settings__info" data-info="开启后模型可使用已安装的 Skill 和 MCP 工具完成搜索、计算等操作。本地小模型建议关闭。">?</span>
+              </span>
+              <div class="hc-settings__row-right">
+                <input
+                  type="checkbox"
+                  class="hc-toggle"
+                  :checked="(config.llm.tools?.enabled ?? 'auto') !== 'off'"
+                  @change="(e: Event) => {
+                    const on = (e.target as HTMLInputElement).checked
+                    config.llm.tools = { enabled: on ? 'auto' : 'off', maxTools: config.llm.tools?.maxTools ?? 0 }
+                    autoSave()
+                  }"
+                />
+              </div>
+            </div>
+
+            <div v-if="(config.llm.tools?.enabled ?? 'auto') !== 'off'" class="hc-settings__sub">
+              <div class="hc-settings__row">
+                <span class="hc-settings__row-label">
+                  {{ t('settings.llm.maxToolsLabel') }}
+                  <span class="hc-settings__info" data-info="限制单次对话注入的工具数量。0 表示不限制，小模型建议 3–5。">?</span>
+                </span>
+                <div class="hc-settings__row-right">
+                  <div class="hc-settings__stepper">
+                    <button @click="stepMaxTools(-1)">−</button>
+                    <input :value="maxToolsDisplay" readonly />
+                    <button @click="stepMaxTools(1)">+</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- ── 服务商 ── -->
+            <div class="hc-settings__sep">
+              <span class="hc-settings__sep-label">服务商</span>
+              <span class="hc-settings__sep-line"></span>
+              <button class="hc-btn hc-btn-sm hc-settings__sep-action" @click="showAddProvider = !showAddProvider">
+                <Plus :size="14" />
+                {{ t('settings.llm.addProvider') }}
+              </button>
             </div>
 
             <!-- 添加 Provider 面板 -->
@@ -904,11 +945,11 @@ async function saveConfig() {
             </div>
 
             <!-- 本地 LLM (Ollama) 卡片 -->
-            <OllamaCard @associate="handleAssociateOllama" />
+            <OllamaCard @associate="handleAssociateOllama" @toggle-provider="handleToggleOllamaProvider" />
 
             <!-- Provider 列表 -->
             <div
-              v-if="config.llm.providers.length === 0 && !showAddProvider"
+              v-if="nonOllamaProviders.length === 0 && !showAddProvider"
               class="hc-provider__empty"
             >
               <p class="hc-provider__empty-title">{{ t('settings.llm.noProviders') }}</p>
@@ -917,7 +958,7 @@ async function saveConfig() {
 
             <div class="hc-provider__list">
               <div
-                v-for="provider in config.llm.providers"
+                v-for="provider in nonOllamaProviders"
                 :key="provider.id"
                 class="hc-provider__card"
                 :class="{ 'hc-provider__card--disabled': !provider.enabled }"
@@ -1233,9 +1274,9 @@ async function saveConfig() {
             </div>
           </div>
 
-          <!-- Appearance (merged: theme + language + auto start) -->
-          <div v-else-if="activeSection === 'appearance'" class="hc-settings__section">
-            <h3 class="hc-settings__section-title">{{ t('settings.appearance.title') }}</h3>
+          <!-- System (merged: appearance + storage) -->
+          <div v-else-if="activeSection === 'system'" class="hc-settings__section">
+            <h3 class="hc-settings__section-title">{{ t('settings.system.title') }}</h3>
 
             <div class="hc-settings__form">
               <div class="hc-settings__field">
@@ -1297,183 +1338,56 @@ async function saveConfig() {
                 />
               </label>
             </div>
-          </div>
 
-          <!-- Storage -->
-          <div
-            v-else-if="activeSection === 'storage'"
-            class="hc-settings__section hc-settings__section--storage"
-          >
-            <h3 class="hc-settings__section-title">{{ t('settings.storage.title') }}</h3>
+            <!-- 系统信息 -->
+            <div class="hc-settings__sep" style="margin-top: 16px">
+              <span class="hc-settings__sep-label">{{ t('settings.system.info') }}</span>
+              <span class="hc-settings__sep-line"></span>
+            </div>
 
-            <div class="hc-settings__form hc-settings__form--storage">
-              <div class="hc-card hc-settings__info-card hc-settings__info-card--wide">
-                <div class="hc-settings__info-title">
-                  {{ t('settings.storage.runtime', '运行时状态') }}
+            <div class="hc-card hc-settings__info-card" style="margin-top: 10px">
+              <div class="hc-settings__info-grid">
+                <div>
+                  <span class="hc-settings__info-label">{{ t('settings.system.version') }}</span>
+                  <div class="hc-settings__info-value hc-settings__info-value--mono">{{ appVersion }}</div>
                 </div>
-                <div class="hc-settings__info-grid hc-settings__info-grid--runtime">
-                  <div>
-                    <span class="hc-settings__info-label">{{ t('settings.storage.status') }}</span>
-                    <div
-                      class="hc-settings__info-value"
-                      :style="{
-                        color: runtimeConfig ? 'var(--hc-success)' : 'var(--hc-text-muted)',
-                      }"
-                    >
-                      {{
-                        runtimeConfig
-                          ? t('settings.storage.running')
-                          : t('common.unavailable', 'Unavailable')
-                      }}
-                    </div>
+                <div>
+                  <span class="hc-settings__info-label">{{ t('settings.system.localStorage') }}</span>
+                  <div class="hc-settings__info-value">
+                    {{ runtimeLocalStoreFile }} ·
+                    <span :style="{ color: runtimeConfig ? 'var(--hc-success)' : 'var(--hc-text-muted)' }">
+                      {{ runtimeConfig ? t('settings.system.connected') : '—' }}
+                    </span>
                   </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.type', 'Mode')
-                    }}</span>
-                    <div class="hc-settings__info-value">{{ runtimeModeDisplay }}</div>
+                </div>
+                <div>
+                  <span class="hc-settings__info-label">{{ t('settings.system.knowledgeIndex') }}</span>
+                  <div
+                    class="hc-settings__info-value"
+                    :style="{
+                      color: runtimeConfig?.knowledge.enabled
+                        ? 'var(--hc-success)'
+                        : 'var(--hc-text-muted)',
+                    }"
+                  >
+                    {{
+                      runtimeConfig?.knowledge.enabled
+                        ? 'FTS5 · ' + t('settings.storage.enabled')
+                        : t('settings.storage.disabled', 'Disabled')
+                    }}
                   </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.apiEndpoint', 'API Endpoint')
-                    }}</span>
-                    <div class="hc-settings__info-value hc-settings__info-value--mono">
-                      {{ runtimeApiEndpoint }}
-                    </div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.loadedProviders', 'Loaded Providers')
-                    }}</span>
-                    <div class="hc-settings__info-value">{{ runtimeProviderCount }}</div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.defaultProvider', 'Default Provider')
-                    }}</span>
-                    <div class="hc-settings__info-value">{{ runtimeDefaultProvider }}</div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.defaultModel', 'Default Model')
-                    }}</span>
-                    <div class="hc-settings__info-value">{{ runtimeDefaultModel }}</div>
+                </div>
+                <div>
+                  <span class="hc-settings__info-label">{{ t('settings.system.apiEndpoint') }}</span>
+                  <div class="hc-settings__info-value hc-settings__info-value--mono">
+                    <template v-if="runtimeModeShort">{{ runtimeModeShort }} · </template>{{ runtimeApiEndpoint }}
                   </div>
                 </div>
               </div>
-
-              <div class="hc-card hc-settings__info-card">
-                <div class="hc-settings__info-title">
-                  {{ t('settings.storage.localDataStore', '本地数据存储') }}
-                </div>
-                <div class="hc-settings__info-grid">
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.engine', 'Engine')
-                    }}</span>
-                    <div class="hc-settings__info-value">{{ runtimeLocalStoreEngine }}</div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.databaseFile', 'Database File')
-                    }}</span>
-                    <div class="hc-settings__info-value hc-settings__info-value--mono">
-                      {{ runtimeLocalStoreFile }}
-                    </div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.sessionData')
-                    }}</span>
-                    <div class="hc-settings__info-value">
-                      {{ t('settings.storage.localDesktop', 'Local desktop only') }}
-                    </div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.vectorDb')
-                    }}</span>
-                    <div
-                      class="hc-settings__info-value"
-                      :style="{
-                        color: runtimeConfig?.knowledge.enabled
-                          ? 'var(--hc-success)'
-                          : 'var(--hc-text-muted)',
-                      }"
-                    >
-                      {{
-                        runtimeConfig?.knowledge.enabled
-                          ? t('settings.storage.enabled')
-                          : t('settings.storage.disabled', 'Disabled')
-                      }}
-                    </div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.indexMode', 'Index Mode')
-                    }}</span>
-                    <div class="hc-settings__info-value">{{ runtimeVectorDbIndexMode }}</div>
-                  </div>
-                </div>
-              </div>
-
-              <div class="hc-card hc-settings__info-card">
-                <div class="hc-settings__info-title">{{ t('settings.storage.cache') }}</div>
-                <div class="hc-settings__info-grid">
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.semanticCache')
-                    }}</span>
-                    <div
-                      class="hc-settings__info-value"
-                      :style="{
-                        color: runtimeLLMConfig?.cache.enabled
-                          ? 'var(--hc-success)'
-                          : 'var(--hc-text-muted)',
-                      }"
-                    >
-                      {{
-                        runtimeLLMConfig?.cache.enabled
-                          ? t('settings.storage.enabled')
-                          : t('settings.storage.disabled', 'Disabled')
-                      }}
-                    </div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.ttl', 'TTL')
-                    }}</span>
-                    <div class="hc-settings__info-value">
-                      {{ runtimeLLMConfig?.cache.ttl || '—' }}
-                    </div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.maxEntries', 'Max Entries')
-                    }}</span>
-                    <div class="hc-settings__info-value">
-                      {{ runtimeLLMConfig?.cache.max_entries ?? '—' }}
-                    </div>
-                  </div>
-                  <div>
-                    <span class="hc-settings__info-label">{{
-                      t('settings.storage.routing', 'Routing')
-                    }}</span>
-                    <div class="hc-settings__info-value">
-                      {{
-                        runtimeLLMConfig?.routing.enabled
-                          ? runtimeLLMConfig.routing.strategy
-                          : t('settings.storage.disabled', 'Disabled')
-                      }}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
               <p
                 v-if="runtimeInfoLoading"
                 class="text-xs"
-                :style="{ color: 'var(--hc-text-muted)' }"
+                :style="{ color: 'var(--hc-text-muted)', margin: '6px 0 0' }"
               >
                 {{ t('common.loading', 'Loading...') }}
               </p>
@@ -1820,12 +1734,6 @@ async function saveConfig() {
   margin-bottom: 12px;
 }
 
-.hc-settings__form--storage {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  align-content: start;
-}
 
 .hc-settings__field {
   display: flex;
@@ -1936,12 +1844,229 @@ async function saveConfig() {
   margin: 2px 0 0;
 }
 
-.hc-settings__llm-controls {
+/* ─── Row Layout (v2 redesign) ───── */
+.hc-settings__row {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px 16px;
-  margin-bottom: 12px;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 0;
+  gap: 16px;
+}
+
+.hc-settings__row + .hc-settings__row {
+  border-top: 1px solid var(--hc-border-subtle, var(--hc-border));
+}
+
+.hc-settings__row-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hc-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.hc-settings__row-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ─── Info Tooltip ───── */
+.hc-settings__info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  font-style: normal;
+  color: var(--hc-text-muted);
+  border: 1px solid var(--hc-border);
+  cursor: help;
+  position: relative;
+  flex-shrink: 0;
+  transition: color 0.18s, border-color 0.18s;
+}
+
+.hc-settings__info:hover {
+  color: var(--hc-text-secondary);
+  border-color: var(--hc-text-muted);
+}
+
+.hc-settings__info::before {
+  content: attr(data-info);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: max-content;
+  max-width: 240px;
+  padding: 8px 12px;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-text-primary);
+  color: var(--hc-text-inverse, #fff);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 100;
+  text-align: left;
+}
+
+.hc-settings__info::after {
+  content: '';
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 8px;
+  border: 5px solid transparent;
+  border-bottom-color: var(--hc-text-primary);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 100;
+}
+
+.hc-settings__info:hover::before,
+.hc-settings__info:hover::after {
+  opacity: 1;
+}
+
+/* ─── Sub-option ───── */
+.hc-settings__sub {
+  padding-left: 18px;
+  border-left: 2px solid var(--hc-accent-subtle);
+  margin-left: 4px;
+  margin-top: -1px;
+}
+
+.hc-settings__sub .hc-settings__row {
+  min-height: 40px;
+  border-top: none;
+}
+
+.hc-settings__sub .hc-settings__row-label {
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+  font-weight: 450;
+}
+
+/* ─── Section Divider ───── */
+.hc-settings__sep {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 24px 0 8px;
+}
+
+.hc-settings__sep:first-child {
+  margin-top: 0;
+}
+
+.hc-settings__sep-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--hc-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+}
+
+.hc-settings__sep-line {
+  flex: 1;
+  height: 1px;
+  background: var(--hc-border-subtle, var(--hc-border));
+}
+
+.hc-settings__sep-action {
+  margin-left: auto;
+}
+
+/* ─── Stepper ───── */
+.hc-settings__stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  overflow: hidden;
+  height: 28px;
+}
+
+.hc-settings__stepper input {
+  width: 44px;
+  height: 100%;
+  border: none;
+  text-align: center;
+  font-size: 12px;
+  color: var(--hc-text-primary);
+  background: transparent;
+  outline: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.hc-settings__stepper button {
+  width: 24px;
+  height: 100%;
+  border: none;
+  background: var(--hc-bg-hover);
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--hc-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.18s;
+}
+
+.hc-settings__stepper button:hover {
+  background: var(--hc-bg-active, var(--hc-bg-hover));
+  color: var(--hc-text-primary);
+}
+
+/* ─── Custom Select ───── */
+.hc-settings__select {
+  height: 32px;
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  padding: 0 30px 0 10px;
+  font-size: 13px;
+  color: var(--hc-text-primary);
+  appearance: none;
+  outline: none;
+  cursor: pointer;
+  background: var(--hc-bg-main, var(--hc-bg-card))
+    url("data:image/svg+xml,%3Csvg width='10' height='6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238b919a' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")
+    right 10px center no-repeat;
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+
+.hc-settings__select:focus {
+  border-color: var(--hc-accent);
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+
+.hc-settings__select:disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* ─── Dirty Indicator ───── */
+.hc-settings__dirty {
+  font-size: 11px;
+  color: var(--hc-accent);
+  font-weight: 500;
+  display: none;
+}
+
+.hc-settings__dirty--on {
+  display: inline;
 }
 
 /* ─── Theme Cards ───── */
@@ -2065,14 +2190,6 @@ async function saveConfig() {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-shrink: 0;
-}
-
-.hc-provider__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 10px;
   flex-shrink: 0;
 }
 
@@ -2463,12 +2580,13 @@ async function saveConfig() {
 }
 
 .hc-settings__btn--saved {
-  background: var(--hc-success) !important;
+  background: var(--hc-success, #10b981);
+  color: #fff;
 }
 
-.hc-settings :deep(.hc-toolbar__search) {
-  min-width: 160px;
-  max-width: 280px;
+.hc-settings__btn--saved:hover {
+  background: var(--hc-success, #10b981);
+  filter: brightness(1.1);
 }
 
 .hc-settings :deep(.hc-toolbar__right) {
@@ -2851,12 +2969,6 @@ async function saveConfig() {
   font-size: 16px;
 }
 
-@media (min-width: 1440px) {
-  .hc-settings :deep(.hc-toolbar__search) {
-    max-width: 360px;
-  }
-}
-
 @media (max-width: 1100px) {
   .hc-settings__content {
     padding: 14px 18px;
@@ -2871,11 +2983,6 @@ async function saveConfig() {
 
   .hc-settings :deep(.hc-toolbar__left) {
     gap: 8px;
-  }
-
-  .hc-settings :deep(.hc-toolbar__search) {
-    min-width: 0;
-    max-width: 220px;
   }
 
   .hc-settings :deep(.hc-toolbar__right) {

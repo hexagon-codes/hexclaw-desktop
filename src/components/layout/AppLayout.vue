@@ -18,6 +18,43 @@ async function syncIMInstancesWhenReady() {
   }
 }
 
+async function warmupOllamaModel() {
+  try {
+    const { getOllamaStatus, getOllamaRunning, loadOllamaModel } = await import('@/api/ollama')
+    const status = await getOllamaStatus()
+    if (!status?.running || !status.models?.length) return
+
+    const running = await getOllamaRunning()
+    if (running.length > 0) return // 已有模型在跑
+
+    const { useSettingsStore } = await import('@/stores/settings')
+    const settingsStore = useSettingsStore()
+    await settingsStore.loadLLMConfig()
+
+    const dpId = settingsStore.config?.llm.defaultProviderId
+    const dp = settingsStore.config?.llm.providers.find(p => p.id === dpId)
+    const isOllama = dp && (
+      dp.type === 'ollama' ||
+      dp.backendKey?.toLowerCase().includes('ollama') ||
+      dp.name?.toLowerCase().includes('ollama')
+    )
+    if (!isOllama) return
+
+    const downloadedNames = status.models.map(m => m.name)
+    const defaultModel = settingsStore.config?.llm.defaultModel
+    const modelToLoad = (defaultModel && downloadedNames.includes(defaultModel))
+      ? defaultModel
+      : downloadedNames[0]
+    if (modelToLoad) {
+      console.log('[AppLayout] Ollama 自动预热:', modelToLoad)
+      await loadOllamaModel(modelToLoad)
+      console.log('[AppLayout] Ollama 预热完成')
+    }
+  } catch (e) {
+    console.warn('[AppLayout] Ollama 预热失败:', e)
+  }
+}
+
 function dismissSplash() {
   const splash = document.getElementById('splash-screen')
   if (splash) {
@@ -37,6 +74,7 @@ onMounted(() => {
         clearTimeout(splashTimeout)
         dismissSplash()
         void syncIMInstancesWhenReady()
+        void warmupOllamaModel()
       }
     },
     { immediate: true },

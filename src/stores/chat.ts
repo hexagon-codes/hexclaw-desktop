@@ -10,7 +10,7 @@
 import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
-import { updateMessageFeedback as updateBackendMessageFeedback, type UserFeedback } from '@/api/messages'
+import { updateMessageFeedback as updateBackendMessageFeedback, type UserFeedback } from '@/api/chat'
 import { fromNativeError } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 import type { ChatMessage, ChatSession, ChatAttachment, Artifact, ChatMode, ExecMode, ApiError } from '@/types'
@@ -20,11 +20,7 @@ import * as chatSvc from '@/services/chatService'
 import { hexclawWS, type ToolApprovalRequest } from '@/api/websocket'
 
 function cloneMessage(message: ChatMessage): ChatMessage {
-  return {
-    ...message,
-    metadata: message.metadata ? { ...message.metadata } : undefined,
-    tool_calls: message.tool_calls ? [...message.tool_calls] : undefined,
-  }
+  return JSON.parse(JSON.stringify(message))
 }
 
 export const useChatStore = defineStore('chat', () => {
@@ -50,9 +46,11 @@ export const useChatStore = defineStore('chat', () => {
 
   const chatParams = ref<{ provider?: string; model?: string; temperature?: number; maxTokens?: number }>({})
   const thinkingEnabled = ref(false)
+  const sending = ref(false)
 
   // ─── 工具审批状态 ──────────────────────────────────
   const pendingApproval = ref<ToolApprovalRequest | null>(null)
+  let sessionSelectionGen = 0
 
   // 初始化 WS 审批监听 (全局，只注册一次)
   let approvalCleanup: (() => void) | null = null
@@ -81,27 +79,52 @@ export const useChatStore = defineStore('chat', () => {
           }
         } catch { /* 首次运行 */ }
       }
-      chatSvc.retryPendingOutbox()
-      chatSvc.cleanupOutbox()
     } catch (e) {
       logger.warn('加载会话列表失败（可能非 Tauri 环境）', e)
     }
   }
 
   async function selectSession(sessionId: string) {
+    const selectionGen = ++sessionSelectionGen
+    // Clean up state from previous session to prevent leaks
+    if (streaming.value && streamingSessionId.value && streamingSessionId.value !== sessionId) {
+      stopStreaming()
+    }
+    if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null }
+    chatMode.value = 'chat'
+    agentRole.value = ''
+    hasCustomTitle.value = false
+
     currentSessionId.value = sessionId
-    msgSvc.setLastSessionId(sessionId).catch(() => {})
+    msgSvc.setLastSessionId(sessionId)
     try {
-      messages.value = await msgSvc.loadMessages(sessionId)
+      const nextMessages = await msgSvc.loadMessages(sessionId)
+      if (selectionGen !== sessionSelectionGen) return
+      messages.value = nextMessages
     } catch (e) {
+      if (selectionGen !== sessionSelectionGen) return
       logger.warn('加载消息历史失败', e)
       messages.value = []
     }
     try {
-      artifacts.value = await msgSvc.loadArtifacts(sessionId)
+      const persisted = await msgSvc.loadArtifacts(sessionId)
+      if (selectionGen !== sessionSelectionGen) return
+      if (persisted.length > 0) {
+        artifacts.value = persisted
+      } else {
+        // 持久化为空时从消息内容重建 artifacts
+        artifacts.value = []
+        for (const msg of messages.value) {
+          if (msg.role === 'assistant' && msg.content) {
+            extractArtifacts(msg.content, msg.id)
+          }
+        }
+      }
     } catch {
+      if (selectionGen !== sessionSelectionGen) return
       artifacts.value = []
     }
+    if (selectionGen !== sessionSelectionGen) return
     selectedArtifactId.value = null
     showArtifacts.value = false
     error.value = null
@@ -198,22 +221,25 @@ export const useChatStore = defineStore('chat', () => {
   function extractArtifacts(content: string, messageId: string) {
     const codeBlockRegex = /```(\w+)?\n([\s\S]*?)```/g
     let match: RegExpExecArray | null
+    // Clear existing artifacts for this message to avoid dedup collisions
+    artifacts.value = artifacts.value.filter((a) => a.messageId !== messageId)
+    let blockIndex = 0
     while ((match = codeBlockRegex.exec(content)) !== null) {
       const language = match[1] || 'text'
       const code = match[2]!.trim()
       if (code.length < 5) continue
-      const existingIdx = artifacts.value.findIndex((a) => a.messageId === messageId && a.language === language)
       const artifact: Artifact = {
-        id: existingIdx >= 0 ? artifacts.value[existingIdx]!.id : nanoid(8),
+        id: nanoid(8),
         type: language === 'html' ? 'html' : 'code',
         title: `${language} snippet`,
         language,
         content: code,
-        previousContent: existingIdx >= 0 ? artifacts.value[existingIdx]!.content : undefined,
         messageId,
+        blockIndex,
         createdAt: new Date().toISOString(),
       }
-      if (existingIdx >= 0) { artifacts.value[existingIdx] = artifact } else { artifacts.value.push(artifact) }
+      blockIndex++
+      artifacts.value.push(artifact)
       if (currentSessionId.value) {
         msgSvc.saveArtifact(currentSessionId.value, artifact).catch((e) => logger.warn('持久化 artifact 失败', e))
       }
@@ -246,7 +272,7 @@ export const useChatStore = defineStore('chat', () => {
     const metadata = { ...params.metadata } as Record<string, unknown>
     if (thinkingDuration > 0) metadata.thinking_duration = thinkingDuration
     const assistantMsg: ChatMessage = {
-      id: nanoid(), role: 'assistant', content: params.content || (params.reasoning ? '' : '(空回复)'),
+      id: nanoid(), role: 'assistant', content: params.content || (params.reasoning ? '' : '模型未生成有效回复，可能是内容安全策略过滤所致，请尝试换个方式提问。'),
       timestamp: new Date().toISOString(),
       reasoning: params.reasoning || undefined,
       metadata, tool_calls: params.toolCalls, agent_name: params.agentName,
@@ -281,6 +307,9 @@ export const useChatStore = defineStore('chat', () => {
   async function sendMessage(
     text: string, attachments?: ChatAttachment[], options?: { backendText?: string },
   ): Promise<ChatMessage | null> {
+    if (sending.value) return null
+    sending.value = true
+    try {
     if (streaming.value) stopStreaming()
     const backendText = options?.backendText ?? text
     const userMsg: ChatMessage = {
@@ -290,9 +319,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value.push(userMsg)
     const sessionId = await ensureSession()
 
-    chatSvc.outboxInsert(userMsg.id, sessionId, text, attachments).catch((e) => logger.warn('outbox 写入失败', e))
     persistMessage(userMsg, sessionId)
-    chatSvc.outboxMarkSending(userMsg.id).catch(() => {})
 
     streaming.value = true
     streamingSessionId.value = sessionId
@@ -304,10 +331,8 @@ export const useChatStore = defineStore('chat', () => {
     if (!wsConnected) {
       try {
         const result = await chatSvc.sendViaBackend(backendText, sessionId, chatParams.value, agentRole.value, attachments)
-        chatSvc.outboxMarkSent(userMsg.id).catch(() => {})
         return finalizeAssistantMessage({ content: result.reply, sessionId, userText: text, metadata: result.metadata, toolCalls: result.tool_calls, agentName: typeof result.metadata?.agent_name === 'string' ? result.metadata.agent_name : undefined })
       } catch (httpError) {
-        chatSvc.outboxMarkFailed(userMsg.id, httpError instanceof Error ? httpError.message : 'HTTP 发送失败').catch(() => {})
         handleSendError(httpError)
         return null
       }
@@ -338,26 +363,24 @@ export const useChatStore = defineStore('chat', () => {
             reasoning: streamingReasoning.value || undefined,
           })
         },
-        onError: (err) => handleSendError(err),
       }, Object.keys(wsMeta).length > 0 ? wsMeta : undefined)
-      chatSvc.outboxMarkSent(userMsg.id).catch(() => {})
       return messages.value[messages.value.length - 1] ?? null
     } catch (wsError) {
       if (wsError instanceof chatSvc.ChatRequestError && wsError.noFallback) {
-        chatSvc.outboxMarkFailed(userMsg.id, (wsError as Error).message).catch(() => {})
         handleSendError(wsError)
         return null
       }
       logger.warn('WebSocket 发送失败，回退到 HTTP', wsError)
       try {
         const result = await chatSvc.sendViaBackend(backendText, sessionId, chatParams.value, agentRole.value, attachments)
-        chatSvc.outboxMarkSent(userMsg.id).catch(() => {})
         return finalizeAssistantMessage({ content: result.reply, sessionId, userText: text, metadata: result.metadata, toolCalls: result.tool_calls, agentName: typeof result.metadata?.agent_name === 'string' ? result.metadata.agent_name : undefined })
       } catch (httpError) {
-        chatSvc.outboxMarkFailed(userMsg.id, httpError instanceof Error ? httpError.message : 'HTTP 发送失败').catch(() => {})
         handleSendError(httpError)
         return null
       }
+    }
+    } finally {
+      sending.value = false
     }
   }
 
@@ -389,7 +412,10 @@ export const useChatStore = defineStore('chat', () => {
         currentSessionId.value = null; messages.value = []; artifacts.value = []
         selectedArtifactId.value = null; showArtifacts.value = false
         if (streamingSessionId.value === sessionId) {
+          hexclawWS.sendRaw({ type: 'cancel', session_id: streamingSessionId.value })
           streaming.value = false; streamingSessionId.value = null; streamingContent.value = ''
+          streamingReasoning.value = ''; streamingReasoningStartTime.value = 0
+          hexclawWS.triggerError('用户取消')
           chatSvc.clearWebSocketCallbacks()
         }
       }
@@ -421,11 +447,12 @@ export const useChatStore = defineStore('chat', () => {
   })
 
   return {
-    sessions, currentSessionId, messages, streaming, streamingSessionId, streamingContent,
+    sessions, currentSessionId, messages, streaming, streamingSessionId, streamingContent, streamingReasoningStartTime,
     isCurrentStreaming, isCurrentStreamingContent, isCurrentStreamingReasoning, streamingThinkingElapsed, error,
-    chatMode, execMode, agentRole, chatParams, thinkingEnabled,
+    chatMode, execMode, agentRole, chatParams, thinkingEnabled, sending,
     artifacts, selectedArtifactId, showArtifacts,
     pendingApproval,
+    hasCustomTitle,
     loadSessions, selectSession, newSession, ensureSession,
     sendMessage, updateMessage, setMessageFeedback,
     stopStreaming, deleteSession,

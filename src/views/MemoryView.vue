@@ -35,6 +35,7 @@ const searchQuery = ref('')
 const searchResults = ref<string[]>([])
 const vectorResults = ref<VectorSearchResult[]>([])
 const searching = ref(false)
+let searchRequestGen = 0
 
 onMounted(async () => {
   await loadMemory()
@@ -67,13 +68,14 @@ function cancelEditContent() {
 }
 
 async function saveEditContent() {
+  if (savingEdit.value) return
   if (!editContentValue.value.trim()) return
   savingEdit.value = true
   errorMsg.value = ''
   try {
     await updateMemory(editContentValue.value.trim())
-    memoryContent.value = editContentValue.value.trim()
     editingContent.value = false
+    await loadMemory()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('memory.saveFailed', 'Failed to save memory')
   } finally {
@@ -83,12 +85,13 @@ async function saveEditContent() {
 
 // 删除记忆内容
 async function handleDeleteContent() {
+  if (deleting.value) return
   deleting.value = true
   errorMsg.value = ''
   try {
     await updateMemory('')
-    memoryContent.value = ''
     showDeleteContentConfirm.value = false
+    await loadMemory()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('memory.deleteFailed', 'Failed to delete memory')
   } finally {
@@ -98,13 +101,13 @@ async function handleDeleteContent() {
 
 // 清空全部
 async function handleClearAll() {
+  if (deleting.value) return
   deleting.value = true
   errorMsg.value = ''
   try {
     await clearAllMemory()
-    memoryContent.value = ''
-    memoryContext.value = ''
     showClearAllConfirm.value = false
+    await loadMemory()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('memory.clearFailed', 'Failed to clear memory')
   } finally {
@@ -131,19 +134,27 @@ async function handleSave() {
 
 async function handleSearch() {
   if (!searchQuery.value.trim()) {
+    searchRequestGen++
     searchResults.value = []
+    vectorResults.value = []
+    searching.value = false
     return
   }
+  const requestGen = ++searchRequestGen
+  const query = searchQuery.value.trim()
   searching.value = true
   errorMsg.value = ''
   try {
-    const res = await searchMemory(searchQuery.value)
+    const res = await searchMemory(query)
+    if (requestGen !== searchRequestGen) return
     searchResults.value = res.results || []
     vectorResults.value = res.vector_results || []
   } catch (e) {
+    if (requestGen !== searchRequestGen) return
     errorMsg.value = e instanceof Error ? e.message : t('memory.searchFailed', 'Search failed')
     console.error('Failed to search memory:', e)
   } finally {
+    if (requestGen !== searchRequestGen) return
     searching.value = false
   }
 }

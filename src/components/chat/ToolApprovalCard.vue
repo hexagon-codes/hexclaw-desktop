@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import { ShieldAlert, ShieldCheck, X, Check } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 
@@ -37,6 +37,8 @@ const timer = setInterval(() => {
     }
   }
 }, 1000)
+
+onUnmounted(() => clearInterval(timer))
 
 const riskColor = computed(() => {
   switch (props.risk) {

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Users, Share2, Upload, Download, Globe, Lock,
   Copy, ExternalLink, Trash2, UserPlus, Loader2, RefreshCw,
 } from 'lucide-vue-next'
 import PageHeader from '@/components/common/PageHeader.vue'
+import { setClipboard } from '@/api/desktop'
 import {
   getSharedAgents,
   deleteSharedAgent,
@@ -19,39 +20,58 @@ import {
   type ExportBundle,
 } from '@/api/team'
 
-useI18n()
+const { t } = useI18n()
 
 const activeTab = ref<'shared' | 'team' | 'import'>('shared')
-const loading = ref(false)
+const pendingLoads = ref(0)
+const loading = computed(() => pendingLoads.value > 0)
 const errorMsg = ref('')
+let sharedAgentsLoadGen = 0
+let teamMembersLoadGen = 0
 
 // ─── 共享 Agent ──────────────────────────────────────
 const sharedAgents = ref<SharedAgent[]>([])
+const deletingSharedAgentIds = ref<Set<string>>(new Set())
 
 async function loadSharedAgents() {
-  loading.value = true
+  const loadGen = ++sharedAgentsLoadGen
+  pendingLoads.value++
   errorMsg.value = ''
   try {
-    sharedAgents.value = await getSharedAgents()
+    const nextSharedAgents = await getSharedAgents()
+    if (loadGen !== sharedAgentsLoadGen) return
+    sharedAgents.value = nextSharedAgents
   } catch (e) {
+    if (loadGen !== sharedAgentsLoadGen) return
     errorMsg.value = e instanceof Error ? e.message : '加载共享 Agent 失败'
   } finally {
-    loading.value = false
+    pendingLoads.value = Math.max(0, pendingLoads.value - 1)
   }
 }
 
 async function handleDeleteAgent(id: string) {
+  if (deletingSharedAgentIds.value.has(id)) return
   if (!confirm('确定删除该共享 Agent？')) return
+  const nextDeleting = new Set(deletingSharedAgentIds.value)
+  nextDeleting.add(id)
+  deletingSharedAgentIds.value = nextDeleting
+  errorMsg.value = ''
   try {
     await deleteSharedAgent(id)
     sharedAgents.value = sharedAgents.value.filter(a => a.id !== id)
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : '删除失败'
+  } finally {
+    const currentDeleting = new Set(deletingSharedAgentIds.value)
+    currentDeleting.delete(id)
+    deletingSharedAgentIds.value = currentDeleting
   }
 }
 
 function copyShareLink(agent: SharedAgent) {
-  navigator.clipboard.writeText(`hexclaw://agent/${agent.id}`)
+  setClipboard(`hexclaw://agent/${agent.id}`).catch(() => {
+    // clipboard access can be unavailable in tests or restricted runtimes
+  })
 }
 
 function exportAgent(agent: SharedAgent) {
@@ -71,26 +91,47 @@ const showInvite = ref(false)
 const inviteEmail = ref('')
 const inviteRole = ref<'member' | 'viewer'>('member')
 const inviting = ref(false)
+const removingMemberIds = ref<Set<string>>(new Set())
+
+function resetInviteForm() {
+  inviteEmail.value = ''
+  inviteRole.value = 'member'
+}
+
+function closeInviteModal() {
+  showInvite.value = false
+  errorMsg.value = ''
+  resetInviteForm()
+}
+
+function openInviteModal() {
+  closeInviteModal()
+  showInvite.value = true
+}
 
 async function loadTeamMembers() {
-  loading.value = true
+  const loadGen = ++teamMembersLoadGen
+  pendingLoads.value++
   try {
-    teamMembers.value = await getTeamMembers()
+    const nextTeamMembers = await getTeamMembers()
+    if (loadGen !== teamMembersLoadGen) return
+    teamMembers.value = nextTeamMembers
   } catch (e) {
+    if (loadGen !== teamMembersLoadGen) return
     errorMsg.value = e instanceof Error ? e.message : '加载团队成员失败'
   } finally {
-    loading.value = false
+    pendingLoads.value = Math.max(0, pendingLoads.value - 1)
   }
 }
 
 async function handleInvite() {
   if (!inviteEmail.value.trim()) return
   inviting.value = true
+  errorMsg.value = ''
   try {
     const member = await inviteTeamMember({ email: inviteEmail.value.trim(), role: inviteRole.value })
     teamMembers.value.push(member)
-    showInvite.value = false
-    inviteEmail.value = ''
+    closeInviteModal()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : '邀请失败'
   } finally {
@@ -99,13 +140,22 @@ async function handleInvite() {
 }
 
 async function handleRemoveMember(id: string) {
+  if (removingMemberIds.value.has(id)) return
   if (id === 'self') return
   if (!confirm('确定移除该成员？')) return
+  const nextRemoving = new Set(removingMemberIds.value)
+  nextRemoving.add(id)
+  removingMemberIds.value = nextRemoving
+  errorMsg.value = ''
   try {
     await removeTeamMember(id)
     teamMembers.value = teamMembers.value.filter(m => m.id !== id)
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : '移除失败'
+  } finally {
+    const currentRemoving = new Set(removingMemberIds.value)
+    currentRemoving.delete(id)
+    removingMemberIds.value = currentRemoving
   }
 }
 
@@ -114,7 +164,9 @@ const importing = ref(false)
 const exporting = ref(false)
 
 async function handleExportAll() {
+  if (exporting.value) return
   exporting.value = true
+  errorMsg.value = ''
   try {
     const bundle = await exportAllConfig()
     const data = JSON.stringify(bundle, null, 2)
@@ -133,6 +185,8 @@ async function handleExportAll() {
 }
 
 async function handleImportFile() {
+  if (importing.value) return
+  errorMsg.value = ''
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '.json'
@@ -167,6 +221,10 @@ const roleLabel: Record<string, string> = {
 onMounted(async () => {
   await Promise.all([loadSharedAgents(), loadTeamMembers()])
 })
+
+watch(activeTab, () => {
+  errorMsg.value = ''
+})
 </script>
 
 <template>
@@ -176,7 +234,7 @@ onMounted(async () => {
         <button class="hc-btn hc-btn-ghost" @click="loadSharedAgents(); loadTeamMembers()">
           <RefreshCw :size="14" />
         </button>
-        <button class="hc-btn hc-btn-primary" @click="showInvite = true">
+        <button class="hc-btn hc-btn-primary" @click="openInviteModal">
           <UserPlus :size="14" />
           邀请成员
         </button>
@@ -253,7 +311,11 @@ onMounted(async () => {
               <button class="hc-btn hc-btn-ghost" @click="exportAgent(agent)">
                 <Download :size="12" /> 导出
               </button>
-              <button class="hc-btn hc-btn-ghost hc-btn-danger" @click="handleDeleteAgent(agent.id)">
+              <button
+                class="hc-btn hc-btn-ghost hc-btn-danger"
+                :disabled="deletingSharedAgentIds.has(agent.id)"
+                @click="handleDeleteAgent(agent.id)"
+              >
                 <Trash2 :size="12" />
               </button>
             </div>
@@ -281,6 +343,7 @@ onMounted(async () => {
             <button
               v-if="member.id !== 'self'"
               class="hc-btn hc-btn-ghost hc-btn-sm hc-btn-danger"
+              :disabled="removingMemberIds.has(member.id)"
               @click="handleRemoveMember(member.id)"
             >
               <Trash2 :size="12" />
@@ -323,11 +386,11 @@ onMounted(async () => {
     <!-- Invite Modal -->
     <Teleport to="body">
       <Transition name="modal">
-        <div v-if="showInvite" class="hc-modal-overlay" @click.self="showInvite = false">
+        <div v-if="showInvite" class="hc-modal-overlay" @click.self="closeInviteModal">
           <div class="hc-modal" style="max-width: 400px;">
             <div class="hc-modal__header">
               <h2 class="hc-modal__title">邀请团队成员</h2>
-              <button class="hc-modal__close" @click="showInvite = false">✕</button>
+              <button class="hc-modal__close" @click="closeInviteModal">✕</button>
             </div>
             <div class="hc-modal__body">
               <div class="hc-field">
@@ -349,7 +412,7 @@ onMounted(async () => {
               </div>
             </div>
             <div class="hc-modal__footer">
-              <button class="hc-btn hc-btn-secondary" @click="showInvite = false">取消</button>
+              <button class="hc-btn hc-btn-secondary" @click="closeInviteModal">取消</button>
               <button
                 class="hc-btn hc-btn-primary"
                 :disabled="!inviteEmail.trim() || inviting"

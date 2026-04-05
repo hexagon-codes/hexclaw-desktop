@@ -41,7 +41,7 @@ describe('Critical Fixes', () => {
       const { getLLMConfig } = await import('@/api/config')
 
       // 修复后：safeJsonParse 包裹，错误消息更友好
-      await expect(getLLMConfig()).rejects.toThrow('getLLMConfig: 后端返回了非 JSON 数据')
+      await expect(getLLMConfig()).rejects.toThrow('getLLMConfig: backend returned a non-JSON payload')
 
       vi.restoreAllMocks()
     })

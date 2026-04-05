@@ -77,12 +77,12 @@ describe('ProviderSelect — 供应商下拉选择器', () => {
     expect(options.length).toBe(ALL_PRESETS.length)
   })
 
-  it('包含 Ollama 供应商选项', async () => {
+  it('不包含 Ollama（由 OllamaCard 统一管理）', async () => {
     const wrapper = await mountSelect()
     await wrapper.find('.hc-provider-select__trigger').trigger('click')
 
     const texts = wrapper.findAll('.hc-provider-select__option').map((o) => o.text())
-    expect(texts).toContain('Ollama (本地)')
+    expect(texts).not.toContain('Ollama (本地)')
   })
 
   it('包含所有新增的国内供应商', async () => {
@@ -104,12 +104,12 @@ describe('ProviderSelect — 供应商下拉选择器', () => {
     const wrapper = await mountSelect('openai')
     await wrapper.find('.hc-provider-select__trigger').trigger('click')
 
-    const ollamaOption = wrapper
+    const deepseekOption = wrapper
       .findAll('.hc-provider-select__option')
-      .find((o) => o.text() === 'Ollama (本地)')!
-    await ollamaOption.trigger('mousedown')
+      .find((o) => o.text() === 'DeepSeek')!
+    await deepseekOption.trigger('mousedown')
 
-    expect(wrapper.emitted('update:modelValue')).toEqual([['ollama']])
+    expect(wrapper.emitted('update:modelValue')).toEqual([['deepseek']])
   })
 
   it('选择后关闭下拉列表', async () => {

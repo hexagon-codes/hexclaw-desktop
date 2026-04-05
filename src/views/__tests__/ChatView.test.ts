@@ -6,6 +6,25 @@ import ChatView from '../ChatView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useSettingsStore } from '@/stores/settings'
 
+const { parseDocument, isDocumentFile } = vi.hoisted(() => ({
+  parseDocument: vi.fn(),
+  isDocumentFile: vi.fn(),
+}))
+
+const { setClipboard } = vi.hoisted(() => ({
+  setClipboard: vi.fn().mockResolvedValue(undefined),
+}))
+
+const { mockGetOllamaStatus } = vi.hoisted(() => ({
+  mockGetOllamaStatus: vi.fn(),
+}))
+
+const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
+  mockRoute: { query: {}, path: '/chat', params: {} as Record<string, string> },
+  mockRouterPush: vi.fn(),
+  mockRouterReplace: vi.fn(),
+}))
+
 // ─── Mock API 模块 ──────────────────────────────────────
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
@@ -16,7 +35,7 @@ vi.mock('@/api/websocket', () => ({
   hexclawWS: {
     isConnected: vi.fn().mockReturnValue(false),
     connect: vi.fn().mockRejectedValue(new Error('test')),
-    clearCallbacks: vi.fn(),
+    clearCallbacks: vi.fn(), clearStreamCallbacks: vi.fn(),
     onChunk: vi.fn().mockReturnValue(() => {}),
     onReply: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}),
@@ -28,16 +47,7 @@ vi.mock('@/api/websocket', () => ({
   },
 }))
 
-vi.mock('@/db/chat', () => ({
-  dbGetSessions: vi.fn().mockResolvedValue([]),
-  dbCreateSession: vi.fn().mockResolvedValue(undefined),
-  dbUpdateSessionTitle: vi.fn().mockResolvedValue(undefined),
-  dbTouchSession: vi.fn().mockResolvedValue(undefined),
-  dbDeleteSession: vi.fn().mockResolvedValue(undefined),
-  dbGetMessages: vi.fn().mockResolvedValue([]),
-  dbSaveMessage: vi.fn().mockResolvedValue(undefined),
-  dbDeleteMessage: vi.fn().mockResolvedValue(undefined),
-}))
+// DB layer removed — all data operations go through services/API
 
 vi.mock('@/api/agents', () => ({
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
@@ -67,10 +77,23 @@ vi.mock('@/api/config', () => ({
   updateLLMConfig: vi.fn(),
 }))
 
+vi.mock('@/api/ollama', () => ({
+  getOllamaStatus: () => mockGetOllamaStatus(),
+}))
+
 vi.mock('@/utils/secure-store', () => ({
   saveSecureValue: vi.fn().mockResolvedValue(undefined),
   loadSecureValue: vi.fn().mockResolvedValue(null),
   removeSecureValue: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/utils/file-parser', () => ({
+  parseDocument,
+  isDocumentFile,
+}))
+
+vi.mock('@/api/desktop', () => ({
+  setClipboard,
 }))
 
 // Mock Tauri Store
@@ -118,8 +141,8 @@ function createTestI18n() {
 
 // Mock vue-router
 vi.mock('vue-router', () => ({
-  useRoute: vi.fn().mockReturnValue({ query: {}, path: '/chat', params: {} }),
-  useRouter: vi.fn().mockReturnValue({ push: vi.fn(), replace: vi.fn() }),
+  useRoute: vi.fn(() => mockRoute),
+  useRouter: vi.fn(() => ({ push: mockRouterPush, replace: mockRouterReplace })),
 }))
 
 /**
@@ -174,6 +197,12 @@ describe('ChatView — E2E 关键路径', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
     ;(globalThis as Record<string, unknown>).isTauri = true
+    isDocumentFile.mockReturnValue(false)
+    parseDocument.mockResolvedValue({ text: '', fileName: '', pageCount: 0 })
+    mockRoute.query = {}
+    mockRoute.path = '/chat'
+    mockRoute.params = {}
+    mockGetOllamaStatus.mockResolvedValue({ running: false, associated: false, model_count: 0, models: [] })
   })
 
   afterEach(() => {
@@ -256,6 +285,11 @@ describe('ChatView — E2E 关键路径', () => {
   it('sends a message when user types and clicks send', async () => {
     const wrapper = mountChatView()
     await flushPromises()
+
+    // Set model to pass the model-selection guard in useChatSend
+    const { useChatStore } = await import('@/stores/chat')
+    const chatStore = useChatStore()
+    chatStore.chatParams.model = 'test-model'
 
     // 输入消息
     const textarea = wrapper.find('textarea')
@@ -405,5 +439,233 @@ describe('ChatView — E2E 关键路径', () => {
     // SessionList stub 应被渲染
     const sessionList = wrapper.find('[data-testid="session-list"]')
     expect(sessionList.exists()).toBe(true)
+  })
+
+  it('copying a message should fail gracefully when clipboard API is unavailable', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const { useChatStore } = await import('@/stores/chat')
+    const store = useChatStore()
+    store.messages.push({
+      id: 'u-copy',
+      role: 'user',
+      content: '复制这条消息',
+      timestamp: '2026-01-01T00:00:00Z',
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      ctxMsgIndex: number
+      handleMsgCtxAction: (action: string) => Promise<void> | void
+    }
+
+    vm.ctxMsgIndex = 0
+
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: undefined,
+    })
+
+    await expect(Promise.resolve(vm.handleMsgCtxAction('copy'))).resolves.toBeUndefined()
+  })
+
+  it('keeps message context-menu actions bound to the originally targeted message after list changes', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const { useChatStore } = await import('@/stores/chat')
+    const store = useChatStore()
+    store.messages.push(
+      { id: 'u1', role: 'user', content: '第一条', timestamp: '2026-01-01T00:00:00Z' },
+      { id: 'a1', role: 'assistant', content: '目标消息', timestamp: '2026-01-01T00:00:01Z' },
+    )
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      ctxMsgId: string | null
+      handleMsgCtxAction: (action: string) => Promise<void> | void
+    }
+
+    vm.ctxMsgId = 'a1'
+
+    store.messages.unshift({
+      id: 'u0',
+      role: 'user',
+      content: '新插入的消息',
+      timestamp: '2026-01-01T00:00:02Z',
+    })
+    await flushPromises()
+
+    await Promise.resolve(vm.handleMsgCtxAction('copy'))
+
+    expect(setClipboard).toHaveBeenCalledWith('目标消息')
+  })
+
+  it('keeps the latest parsed document when an earlier parse resolves later', async () => {
+    let resolveFirst!: (value: { text: string; fileName: string; pageCount?: number }) => void
+    let resolveSecond!: (value: { text: string; fileName: string; pageCount?: number }) => void
+
+    isDocumentFile.mockReturnValue(true)
+    parseDocument
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirst = resolve
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = resolve
+          }),
+      )
+
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      handleFileUpload: (file: File) => Promise<void>
+      parsedDocument: { text: string; fileName: string; pageCount?: number } | null
+      documentParsing: boolean
+    }
+
+    const firstFile = new File(['first'], 'old.pdf', { type: 'application/pdf' })
+    const secondFile = new File(['second'], 'new.pdf', { type: 'application/pdf' })
+
+    void vm.handleFileUpload(firstFile)
+    await flushPromises()
+    void vm.handleFileUpload(secondFile)
+    await flushPromises()
+
+    resolveSecond({ text: 'new text', fileName: 'new.pdf', pageCount: 2 })
+    await flushPromises()
+
+    expect(vm.parsedDocument).toEqual({ text: 'new text', fileName: 'new.pdf', pageCount: 2 })
+
+    resolveFirst({ text: 'old text', fileName: 'old.pdf', pageCount: 1 })
+    await flushPromises()
+
+    expect(vm.parsedDocument).toEqual({ text: 'new text', fileName: 'new.pdf', pageCount: 2 })
+    expect(vm.documentParsing).toBe(false)
+  })
+
+  it('retries route query model selection until the downloaded Ollama model becomes visible', async () => {
+    vi.useFakeTimers()
+    mockRoute.query = { model: 'qwen3:8b' }
+    mockGetOllamaStatus
+      .mockResolvedValueOnce({ running: true, associated: true, model_count: 0, models: [] })
+      .mockResolvedValueOnce({ running: true, associated: true, model_count: 0, models: [] })
+      .mockResolvedValueOnce({
+        running: true,
+        associated: true,
+        model_count: 1,
+        models: [{ name: 'qwen3:8b', size: 5_000_000_000 }],
+      })
+
+    mountChatView({
+      setup: () => {
+        const settingsStore = useSettingsStore()
+        settingsStore.config = {
+          llm: {
+            providers: [
+              {
+                id: 'ollama-local',
+                name: 'Ollama',
+                type: 'ollama',
+                enabled: true,
+                apiKey: '',
+                baseUrl: 'http://127.0.0.1:11434/v1',
+                backendKey: 'ollama',
+                models: [],
+                selectedModelId: '',
+              },
+            ],
+            defaultModel: '',
+            defaultProviderId: '',
+            routing: { enabled: false, strategy: 'cost-aware' },
+          },
+          security: {
+            gateway_enabled: true,
+            injection_detection: true,
+            pii_filter: false,
+            content_filter: true,
+            max_tokens_per_request: 8192,
+            rate_limit_rpm: 60,
+          },
+          general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+          notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
+          mcp: { default_protocol: 'stdio' },
+        }
+      },
+    })
+    await flushPromises()
+
+    const { useChatStore } = await import('@/stores/chat')
+    const chatStore = useChatStore()
+    expect(chatStore.chatParams.model).not.toBe('qwen3:8b')
+
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(chatStore.chatParams.model).toBe('qwen3:8b')
+    expect(mockRouterReplace).toHaveBeenCalledWith({ path: '/chat' })
+
+    vi.useRealTimers()
+  })
+
+  it('keeps the model query when the downloaded Ollama model is still not visible after retries', async () => {
+    vi.useFakeTimers()
+    mockRoute.query = { model: 'qwen3:8b' }
+    mockGetOllamaStatus
+      .mockResolvedValue({ running: true, associated: true, model_count: 0, models: [] })
+
+    mountChatView({
+      setup: () => {
+        const settingsStore = useSettingsStore()
+        settingsStore.config = {
+          llm: {
+            providers: [
+              {
+                id: 'ollama-local',
+                name: 'Ollama',
+                type: 'ollama',
+                enabled: true,
+                apiKey: '',
+                baseUrl: 'http://127.0.0.1:11434/v1',
+                backendKey: 'ollama',
+                models: [],
+                selectedModelId: '',
+              },
+            ],
+            defaultModel: '',
+            defaultProviderId: '',
+            routing: { enabled: false, strategy: 'cost-aware' },
+          },
+          security: {
+            gateway_enabled: true,
+            injection_detection: true,
+            pii_filter: false,
+            content_filter: true,
+            max_tokens_per_request: 8192,
+            rate_limit_rpm: 60,
+          },
+          general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+          notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
+          mcp: { default_protocol: 'stdio' },
+        }
+      },
+    })
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(5000)
+    await flushPromises()
+
+    const { useChatStore } = await import('@/stores/chat')
+    const chatStore = useChatStore()
+    expect(chatStore.chatParams.model).not.toBe('qwen3:8b')
+    expect(mockRouterReplace).not.toHaveBeenCalledWith({ path: '/chat' })
+
+    vi.useRealTimers()
   })
 })

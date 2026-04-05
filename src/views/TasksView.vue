@@ -35,6 +35,8 @@ const schedulePresets = computed(() => [
 
 const showPresets = ref(false)
 const triggeringJobs = ref<Set<string>>(new Set())
+const pausingJobs = ref<Set<string>>(new Set())
+const deletingJobs = ref<Set<string>>(new Set())
 const jobHistories = ref<Record<string, CronJobRun[]>>({})
 const expandedJobId = ref<string | null>(null)
 const expandedRunId = ref<string | null>(null)
@@ -86,6 +88,8 @@ async function handleCreate() {
 }
 
 async function handlePauseResume(job: CronJob) {
+  if (pausingJobs.value.has(job.id)) return
+  pausingJobs.value = new Set([...pausingJobs.value, job.id])
   try {
     if (job.status === 'active') {
       await pauseCronJob(job.id)
@@ -96,15 +100,26 @@ async function handlePauseResume(job: CronJob) {
     }
   } catch (e) {
     console.error('切换任务状态失败:', e)
+  } finally {
+    const next = new Set(pausingJobs.value)
+    next.delete(job.id)
+    pausingJobs.value = next
   }
 }
 
 async function handleDelete(job: CronJob) {
+  if (deletingJobs.value.has(job.id)) return
+  if (!confirm(t('tasks.confirmDelete', { name: job.name }))) return
+  deletingJobs.value = new Set([...deletingJobs.value, job.id])
   try {
     await deleteCronJob(job.id)
     jobs.value = jobs.value.filter((j) => j.id !== job.id)
   } catch (e) {
     console.error('删除任务失败:', e)
+  } finally {
+    const next = new Set(deletingJobs.value)
+    next.delete(job.id)
+    deletingJobs.value = next
   }
 }
 
@@ -174,6 +189,15 @@ function runStatusColor(status: string): string {
     case 'failed': return 'var(--hc-error)'
     case 'running': return 'var(--hc-accent)'
     default: return 'var(--hc-text-muted)'
+  }
+}
+
+function runStatusText(status: string): string {
+  switch (status) {
+    case 'success': return t('tasks.statusSuccess', '成功')
+    case 'failed': return t('tasks.statusFailed', '失败')
+    case 'running': return t('tasks.statusRunning', '运行中')
+    default: return status
   }
 }
 
@@ -294,11 +318,21 @@ defineExpose({ openCreateForm, loadJobs })
               class="task-card__action-btn"
               :style="{ color: job.status === 'active' ? 'var(--hc-warning)' : 'var(--hc-success)' }"
               :title="job.status === 'active' ? t('tasks.pauseTask') : t('tasks.resumeTask')"
+              :disabled="pausingJobs.has(job.id)"
               @click="handlePauseResume(job)"
             >
-              <Pause v-if="job.status === 'active'" :size="14" />
+              <Loader v-if="pausingJobs.has(job.id)" :size="14" class="animate-spin" />
+              <Pause v-else-if="job.status === 'active'" :size="14" />
               <Play v-else :size="14" />
-              <span>{{ job.status === 'active' ? t('tasks.pauseTask') : t('tasks.resumeTask') }}</span>
+              <span>
+                {{
+                  pausingJobs.has(job.id)
+                    ? t('common.loading', '处理中...')
+                    : job.status === 'active'
+                      ? t('tasks.pauseTask')
+                      : t('tasks.resumeTask')
+                }}
+              </span>
             </button>
             <button
               class="task-card__action-btn"
@@ -312,10 +346,12 @@ defineExpose({ openCreateForm, loadJobs })
             <button
               class="task-card__action-btn task-card__action-btn--danger"
               :title="t('common.delete')"
+              :disabled="deletingJobs.has(job.id)"
               @click="handleDelete(job)"
             >
-              <Trash2 :size="14" />
-              <span>{{ t('common.delete') }}</span>
+              <Loader v-if="deletingJobs.has(job.id)" :size="14" class="animate-spin" />
+              <Trash2 v-else :size="14" />
+              <span>{{ deletingJobs.has(job.id) ? t('common.loading', '处理中...') : t('common.delete') }}</span>
             </button>
           </div>
 
@@ -333,7 +369,7 @@ defineExpose({ openCreateForm, loadJobs })
                   <component :is="runStatusIcon(run.status)" :size="13" :style="{ color: runStatusColor(run.status), flexShrink: 0 }" />
                   <span class="task-card__history-time">{{ formatTime(run.started_at) }}</span>
                   <span v-if="run.duration_ms" class="task-card__history-duration">{{ formatDuration(run.duration_ms) }}</span>
-                  <span class="task-card__history-status" :style="{ color: runStatusColor(run.status) }">{{ run.status === 'success' ? t('tasks.statusSuccess', 'SUCCESS') : t('tasks.statusFailed', 'FAILED') }}</span>
+                  <span class="task-card__history-status" :style="{ color: runStatusColor(run.status) }">{{ runStatusText(run.status) }}</span>
                   <ChevronDown
                     v-if="run.result || run.error"
                     :size="12"

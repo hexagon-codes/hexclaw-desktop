@@ -23,13 +23,13 @@ const props = withDefaults(defineProps<Props>(), {
   usedCost: 0,
 })
 
-const tokenPct = computed(() => Math.min(100, (props.usedTokens / props.maxTokens) * 100))
+const tokenPct = computed(() => props.maxTokens > 0 ? Math.min(100, (props.usedTokens / props.maxTokens) * 100) : 0)
 const maxDurSeconds = computed(() => {
   const m = props.maxDuration.match(/^(\d+)m$/)
   return m ? parseInt(m[1]!) * 60 : 1800
 })
-const durationPct = computed(() => Math.min(100, (props.elapsedSeconds / maxDurSeconds.value) * 100))
-const costPct = computed(() => Math.min(100, (props.usedCost / props.maxCost) * 100))
+const durationPct = computed(() => maxDurSeconds.value > 0 ? Math.min(100, (props.elapsedSeconds / maxDurSeconds.value) * 100) : 0)
+const costPct = computed(() => props.maxCost > 0 ? Math.min(100, (props.usedCost / props.maxCost) * 100) : 0)
 
 function barColor(pct: number) {
   if (pct >= 90) return 'var(--hc-error, #ef4444)'

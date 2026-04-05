@@ -178,13 +178,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     name: 'Ollama (本地)',
     defaultBaseUrl: 'http://localhost:11434/v1',
     placeholder: '无需 API Key',
-    defaultModels: [
-      { id: 'llama3.1', name: 'Llama 3.1', capabilities: ['text'] },
-      { id: 'qwen2.5', name: 'Qwen 2.5', capabilities: ['text'] },
-      { id: 'mistral', name: 'Mistral', capabilities: ['text'] },
-      { id: 'deepseek-r1', name: 'DeepSeek R1', capabilities: ['text'] },
-      { id: 'llava', name: 'LLaVA', capabilities: ['text', 'vision'] },
-    ],
+    defaultModels: [], // 关联后由 syncOllamaModels 从 Ollama 实际模型列表同步
   },
   custom: {
     type: 'custom',
@@ -196,6 +190,9 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
 }
 
 /** 获取所有可添加的 Provider 类型列表 */
-export function getProviderTypes(): ProviderPreset[] {
-  return Object.values(PROVIDER_PRESETS)
+export function getProviderTypes(options?: { includeOllama?: boolean }): ProviderPreset[] {
+  // 默认情况下 Ollama 由 OllamaCard 统一管理，不在添加服务商选择器中重复
+  // 引导页等场景需要显示 Ollama 时传入 includeOllama: true
+  if (options?.includeOllama) return Object.values(PROVIDER_PRESETS)
+  return Object.values(PROVIDER_PRESETS).filter(p => p.type !== 'ollama')
 }
