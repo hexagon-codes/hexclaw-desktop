@@ -1225,7 +1225,7 @@ describe('Message Service', () => {
       const { serializeMessageMetadata } = await getRealMessageService()
       const msg = {
         id: 'm1', role: 'assistant' as const, content: 'answer', timestamp: '',
-        tool_calls: [{ id: 't1', name: 'fn', args: '{}', result: 'ok' }],
+        tool_calls: [{ id: 't1', name: 'fn', arguments: '{}', result: 'ok' }],
         agent_name: 'coder',
         reasoning: 'deep thought',
       }

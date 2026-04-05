@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 // ---------------------------------------------------------------------------
 
 vi.mock('ofetch', () => {
-  const fn = vi.fn()
+  const fn = vi.fn() as any
   fn.create = vi.fn(() => fn)
   return { ofetch: fn }
 })
@@ -140,7 +140,7 @@ class MockWebSocket {
     for (const entry of [...list]) {
       entry.handler(event)
       if (entry.once) {
-        this._listeners[type] = this._listeners[type].filter((l) => l !== entry)
+        this._listeners[type] = this._listeners[type]!.filter((l) => l !== entry)
       }
     }
   }
@@ -356,10 +356,10 @@ describe('ollama.ts', () => {
       await pullOllamaModel('llama3.1', (p) => progress.push(p))
 
       expect(progress).toHaveLength(3)
-      expect(progress[0].status).toBe('pulling manifest')
-      expect(progress[1].completed).toBe(50)
-      expect(progress[1].total).toBe(100)
-      expect(progress[2].status).toBe('success')
+      expect(progress[0]!.status).toBe('pulling manifest')
+      expect(progress[1]!.completed).toBe(50)
+      expect(progress[1]!.total).toBe(100)
+      expect(progress[2]!.status).toBe('success')
     })
 
     it('throws when progress contains error field', async () => {
@@ -420,12 +420,12 @@ describe('ollama.ts', () => {
 
       // Only the valid JSON line should have been parsed
       expect(progress).toHaveLength(1)
-      expect(progress[0].status).toBe('success')
+      expect(progress[0]!.status).toBe('success')
     })
 
     it('abort signal cancels fetch', async () => {
       const controller = new AbortController()
-      fetchSpy.mockImplementationOnce((_url, init) => {
+      fetchSpy.mockImplementationOnce((_url: string | URL | Request, init: RequestInit | undefined) => {
         // Verify signal is passed through
         expect((init as RequestInit).signal).toBe(controller.signal)
         return Promise.reject(new DOMException('Aborted', 'AbortError'))
@@ -479,9 +479,9 @@ describe('knowledge.ts', () => {
 
       const { result } = await searchKnowledge('test')
       expect(result).toHaveLength(2)
-      expect(result[0].content).toBe('hello')
-      expect(result[0].score).toBe(0.9)
-      expect(result[1].content).toBe('world')
+      expect(result[0]!.content).toBe('hello')
+      expect(result[0]!.score).toBe(0.9)
+      expect(result[1]!.content).toBe('world')
     })
 
     it('filters out items with missing content', async () => {
@@ -496,7 +496,7 @@ describe('knowledge.ts', () => {
       const { result } = await searchKnowledge('test')
       // Empty string content is falsy, so it gets filtered by .filter(item => item.content)
       expect(result).toHaveLength(1)
-      expect(result[0].content).toBe('valid')
+      expect(result[0]!.content).toBe('valid')
     })
 
     it('defaults score to 0 when non-number (BUG: should preserve or warn)', async () => {
@@ -509,7 +509,7 @@ describe('knowledge.ts', () => {
       const { result } = await searchKnowledge('test')
       expect(result).toHaveLength(1)
       // BUG: non-number score silently defaults to 0 instead of preserving or warning
-      expect(result[0].score).toBe(0)
+      expect(result[0]!.score).toBe(0)
     })
 
     it('treats string response as single result with score=1 (BUG: hardcoded score)', async () => {
@@ -519,10 +519,10 @@ describe('knowledge.ts', () => {
 
       const { result } = await searchKnowledge('test')
       expect(result).toHaveLength(1)
-      expect(result[0].content).toBe('This is a plain text result')
+      expect(result[0]!.content).toBe('This is a plain text result')
       // BUG: hardcoded score=1 regardless of actual relevance
-      expect(result[0].score).toBe(1)
-      expect(result[0].metadata).toEqual({ legacy: true })
+      expect(result[0]!.score).toBe(1)
+      expect(result[0]!.metadata).toEqual({ legacy: true })
     })
 
     it('returns empty array for empty string', async () => {
@@ -552,7 +552,7 @@ describe('knowledge.ts', () => {
 
       const { result } = await searchKnowledge('test')
       expect(result).toHaveLength(1)
-      expect(result[0].content).toBe('from-result')
+      expect(result[0]!.content).toBe('from-result')
     })
 
     it('falls back to results field when result is undefined', async () => {
@@ -562,7 +562,7 @@ describe('knowledge.ts', () => {
 
       const { result } = await searchKnowledge('test')
       expect(result).toHaveLength(1)
-      expect(result[0].content).toBe('fallback')
+      expect(result[0]!.content).toBe('fallback')
     })
   })
 
@@ -725,7 +725,7 @@ describe('skills.ts', () => {
       // null ?? '' evaluates to '', so String('') === ''
       // NOTE: If the code used `||` instead of `??`, this would also be ''
       // but if it used String(m.name) directly, null would become "null"
-      expect(results[0].name).toBe('')
+      expect(results[0]!.name).toBe('')
     })
 
     it('undefined name becomes empty string', async () => {
@@ -735,7 +735,7 @@ describe('skills.ts', () => {
 
       const results = await searchClawHub()
       // String(undefined ?? '') === ''  -- m.name is undefined, fallback is ''
-      expect(results[0].name).toBe('')
+      expect(results[0]!.name).toBe('')
     })
 
     it('tags that are not an array become empty array', async () => {
@@ -744,7 +744,7 @@ describe('skills.ts', () => {
       } as never)
 
       const results = await searchClawHub()
-      expect(results[0].tags).toEqual([])
+      expect(results[0]!.tags).toEqual([])
     })
 
     it('invalid category defaults to coding', async () => {
@@ -753,7 +753,7 @@ describe('skills.ts', () => {
       } as never)
 
       const results = await searchClawHub()
-      expect(results[0].category).toBe('coding')
+      expect(results[0]!.category).toBe('coding')
     })
   })
 
@@ -766,8 +766,8 @@ describe('skills.ts', () => {
 
       const results = await searchClawHub()
       expect(results).toHaveLength(1)
-      expect(results[0].name).toBe('skill-a')
-      expect(results[0].category).toBe('data')
+      expect(results[0]!.name).toBe('skill-a')
+      expect(results[0]!.category).toBe('data')
     })
 
     it('throws when response has error field', async () => {
@@ -943,7 +943,7 @@ describe('websocket.ts', () => {
       capturedWs.simulateMessage(msg)
 
       expect(approvalCb).toHaveBeenCalledTimes(1)
-      const req = approvalCb.mock.calls[0][0]
+      const req = approvalCb.mock.calls[0]![0]
       expect(req.requestId).toBe('')
       expect(req.toolName).toBe('')
       expect(req.risk).toBe('sensitive') // default
@@ -971,7 +971,7 @@ describe('websocket.ts', () => {
 
       hexclawWS.sendApprovalResponse('req-1', true, true)
 
-      const sent = JSON.parse(capturedWs.sent[capturedWs.sent.length - 1])
+      const sent = JSON.parse(capturedWs.sent[capturedWs.sent.length - 1]!)
       expect(sent.type).toBe('tool_approval_response')
       expect(sent.content).toBe('approved_remember')
       expect(sent.metadata.request_id).toBe('req-1')
@@ -982,7 +982,7 @@ describe('websocket.ts', () => {
 
       hexclawWS.sendApprovalResponse('req-2', false, false)
 
-      const sent = JSON.parse(capturedWs.sent[capturedWs.sent.length - 1])
+      const sent = JSON.parse(capturedWs.sent[capturedWs.sent.length - 1]!)
       expect(sent.type).toBe('tool_approval_response')
       expect(sent.content).toBe('denied')
       expect(sent.metadata.request_id).toBe('req-2')

@@ -269,7 +269,7 @@ async function handleReindex(doc: KnowledgeDoc) {
       item.id === doc.id
         ? {
             ...item,
-            status: result.status || 'indexed',
+            status: (result.status as KnowledgeDoc['status']) || 'indexed',
             chunk_count: result.chunk_count ?? item.chunk_count,
             error_message: undefined,
             updated_at: result.updated_at || new Date().toISOString(),

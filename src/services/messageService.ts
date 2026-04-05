@@ -104,8 +104,8 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
         ? parseMessageMetadata(m.metadata)
         : (m.metadata ?? undefined)
       // reasoning 存储在 meta 字段（扩展元数据）中
-      const metaExt = typeof (m as Record<string, unknown>).meta === 'string'
-        ? parseMessageMetadata((m as Record<string, unknown>).meta as string)
+      const metaExt = typeof (m as unknown as Record<string, unknown>).meta === 'string'
+        ? parseMessageMetadata((m as unknown as Record<string, unknown>).meta as string)
         : undefined
       const reasoning = m.reasoning
         || (typeof metaExt?.reasoning === 'string' ? metaExt.reasoning : undefined)

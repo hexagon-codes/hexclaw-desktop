@@ -29,7 +29,7 @@ async function warmupOllamaModel() {
 
     const { useSettingsStore } = await import('@/stores/settings')
     const settingsStore = useSettingsStore()
-    await settingsStore.loadLLMConfig()
+    await settingsStore.loadConfig()
 
     const dpId = settingsStore.config?.llm.defaultProviderId
     const dp = settingsStore.config?.llm.providers.find(p => p.id === dpId)

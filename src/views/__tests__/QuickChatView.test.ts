@@ -318,7 +318,7 @@ describe('QuickChatView', () => {
     await flushPromises()
 
     const textarea = wrapper.get('textarea')
-    const sendButton = () => wrapper.findAll('button').at(-1)!
+    const sendButton = () => { const btns = wrapper.findAll('button'); return btns[btns.length - 1]! }
 
     await textarea.setValue('第一条')
     await sendButton().trigger('click')
@@ -405,7 +405,7 @@ describe('QuickChatView', () => {
     await flushPromises()
 
     const textarea = wrapper.get('textarea')
-    const sendButton = () => wrapper.findAll('button').at(-1)!
+    const sendButton = () => { const btns = wrapper.findAll('button'); return btns[btns.length - 1]! }
 
     await textarea.setValue('需要停止')
     await sendButton().trigger('click')
@@ -485,7 +485,7 @@ describe('QuickChatView', () => {
     await flushPromises()
 
     const textarea = wrapper.get('textarea')
-    const sendButton = () => wrapper.findAll('button').at(-1)!
+    const sendButton = () => { const btns = wrapper.findAll('button'); return btns[btns.length - 1]! }
 
     await textarea.setValue('需要清空')
     await sendButton().trigger('click')
@@ -575,7 +575,7 @@ describe('QuickChatView', () => {
     await flushPromises()
 
     const textarea = wrapper.get('textarea')
-    const sendButton = () => wrapper.findAll('button').at(-1)!
+    const sendButton = () => { const btns = wrapper.findAll('button'); return btns[btns.length - 1]! }
 
     await textarea.setValue('HTTP 请求')
     await sendButton().trigger('click')

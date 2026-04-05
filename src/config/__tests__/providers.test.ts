@@ -65,7 +65,7 @@ describe('PROVIDER_PRESETS', () => {
         expect(typeof model.id).toBe('string')
         expect(typeof model.name).toBe('string')
         expect(Array.isArray(model.capabilities)).toBe(true)
-        expect(model.capabilities.length).toBeGreaterThan(0)
+        expect(model.capabilities!.length).toBeGreaterThan(0)
       }
     }
   })
@@ -84,9 +84,9 @@ describe('PROVIDER_PRESETS', () => {
 
   it('OpenAI models include both text and vision capabilities', () => {
     const openaiModels = PROVIDER_PRESETS.openai.defaultModels
-    const hasVision = openaiModels.some(m => m.capabilities.includes('vision'))
+    const hasVision = openaiModels.some(m => m.capabilities?.includes('vision'))
     const hasTextOnly = openaiModels.some(
-      m => m.capabilities.includes('text') && !m.capabilities.includes('vision'),
+      m => m.capabilities?.includes('text') && !m.capabilities?.includes('vision'),
     )
     expect(hasVision).toBe(true)
     expect(hasTextOnly).toBe(true)

@@ -35,7 +35,7 @@ import type { StreamCallbacks } from '../chatService'
 
 // ─── helpers ─────────────────────────────────────────────
 
-function makeCallbacks(overrides?: Partial<StreamCallbacks>): StreamCallbacks {
+function makeCallbacks(overrides?: Partial<StreamCallbacks & { onError: ReturnType<typeof vi.fn> }>): StreamCallbacks & { onError: ReturnType<typeof vi.fn> } {
   return {
     onChunk: vi.fn(),
     onDone: vi.fn(),
@@ -117,7 +117,7 @@ describe('sendViaWebSocket — extended', () => {
     const p = sendViaWebSocket('hello', 's1', defaultParams, '', undefined, cbs)
 
     // First chunk arrives — clears first-reply timer, starts inactivity timer
-    onChunkHandlers[0]({ content: 'partial', done: false })
+    onChunkHandlers[0]!({ content: 'partial', done: false })
 
     // Advance past inactivity timeout
     vi.advanceTimersByTime(120_001)
@@ -133,7 +133,7 @@ describe('sendViaWebSocket — extended', () => {
 
     const metadata = { tokens: 123, agent_name: 'coder' }
     const toolCalls = [{ id: 't1', name: 'search', arguments: '{}' }]
-    onChunkHandlers[0]({ content: 'final', done: true, metadata, tool_calls: toolCalls })
+    onChunkHandlers[0]!({ content: 'final', done: true, metadata, tool_calls: toolCalls })
 
     await expect(p).resolves.toBeUndefined()
     expect(cbs.onChunk).toHaveBeenCalledWith('final', undefined)
@@ -146,7 +146,7 @@ describe('sendViaWebSocket — extended', () => {
     const cbs = makeCallbacks()
     const p = sendViaWebSocket('hello', 's1', defaultParams, '', undefined, cbs)
 
-    onErrorHandlers[0]('用户取消')
+    onErrorHandlers[0]!('用户取消')
 
     await expect(p).resolves.toBeUndefined()
     // onError callback on StreamCallbacks should NOT be called
@@ -159,7 +159,7 @@ describe('sendViaWebSocket — extended', () => {
     const cbs = makeCallbacks()
     const p = sendViaWebSocket('hello', 's1', defaultParams, '', undefined, cbs)
 
-    onErrorHandlers[0]('connection lost')
+    onErrorHandlers[0]!('connection lost')
 
     await expect(p).rejects.toThrow('connection lost')
     const err = await p.catch((e: unknown) => e)
@@ -174,7 +174,7 @@ describe('sendViaWebSocket — extended', () => {
     const p = sendViaWebSocket('hello', 's1', defaultParams, '', undefined, cbs)
 
     // Settle via onReply
-    onReplyHandlers[0]({ content: 'done', metadata: {} })
+    onReplyHandlers[0]!({ content: 'done', metadata: {} })
     await p
 
     // Reset mock call counts
@@ -183,9 +183,9 @@ describe('sendViaWebSocket — extended', () => {
     cbs.onError = vi.fn()
 
     // Fire more callbacks — should be no-ops
-    onChunkHandlers[0]({ content: 'late chunk', done: false })
-    onChunkHandlers[0]({ content: 'late done', done: true, metadata: {} })
-    onErrorHandlers[0]('late error')
+    onChunkHandlers[0]!({ content: 'late chunk', done: false })
+    onChunkHandlers[0]!({ content: 'late done', done: true, metadata: {} })
+    onErrorHandlers[0]!('late error')
 
     // The original callbacks object inside the closure captured the original fns,
     // but the settled guard prevents resolve/reject from firing again.

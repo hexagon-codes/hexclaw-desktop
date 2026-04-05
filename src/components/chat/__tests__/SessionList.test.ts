@@ -125,7 +125,7 @@ describe('SessionList', () => {
     await flushPromises()
 
     const firstItem = wrapper.findAll('.hc-sessions__item')[0]
-    await firstItem.trigger('dblclick')
+    await firstItem!.trigger('dblclick')
     await flushPromises()
 
     let renameInput = wrapper.get('.hc-sessions__rename-input')
@@ -133,7 +133,7 @@ describe('SessionList', () => {
     await renameInput.trigger('keydown', { key: 'Enter' })
     await flushPromises()
 
-    await firstItem.trigger('dblclick')
+    await firstItem!.trigger('dblclick')
     await flushPromises()
 
     renameInput = wrapper.get('.hc-sessions__rename-input')

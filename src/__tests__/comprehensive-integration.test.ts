@@ -149,27 +149,27 @@ vi.mock('@/api/websocket', () => {
       disconnect: vi.fn(),
       isConnected: vi.fn(() => true),
       onChunk: vi.fn((cb: (...args: unknown[]) => void) => {
-        wsCallbacks.chunk.push(cb)
+        wsCallbacks.chunk!.push(cb)
         return () => {
-          wsCallbacks.chunk = wsCallbacks.chunk.filter((fn) => fn !== cb)
+          wsCallbacks.chunk = wsCallbacks.chunk!.filter((fn) => fn !== cb)
         }
       }),
       onReply: vi.fn((cb: (...args: unknown[]) => void) => {
-        wsCallbacks.reply.push(cb)
+        wsCallbacks.reply!.push(cb)
         return () => {
-          wsCallbacks.reply = wsCallbacks.reply.filter((fn) => fn !== cb)
+          wsCallbacks.reply = wsCallbacks.reply!.filter((fn) => fn !== cb)
         }
       }),
       onError: vi.fn((cb: (...args: unknown[]) => void) => {
-        wsCallbacks.error.push(cb)
+        wsCallbacks.error!.push(cb)
         return () => {
-          wsCallbacks.error = wsCallbacks.error.filter((fn) => fn !== cb)
+          wsCallbacks.error = wsCallbacks.error!.filter((fn) => fn !== cb)
         }
       }),
       onApprovalRequest: vi.fn((cb: (...args: unknown[]) => void) => {
-        wsCallbacks.approval.push(cb)
+        wsCallbacks.approval!.push(cb)
         return () => {
-          wsCallbacks.approval = wsCallbacks.approval.filter((fn) => fn !== cb)
+          wsCallbacks.approval = wsCallbacks.approval!.filter((fn) => fn !== cb)
         }
       }),
       sendMessage: vi.fn(),
@@ -187,7 +187,7 @@ vi.mock('@/api/websocket', () => {
         wsCallbacks.approval = []
       }),
       triggerError: vi.fn((msg: string) =>
-        wsCallbacks.error.forEach((cb) => cb(msg)),
+        wsCallbacks.error!.forEach((cb) => cb(msg)),
       ),
       _callbacks: wsCallbacks,
     },
@@ -461,7 +461,7 @@ describe('Scenario 3: Session switch interrupts streaming', () => {
         // Never call onDone -- streaming is ongoing
         // Register in wsCallbacks.error so triggerError('用���取消') can settle this promise
         return new Promise<void>((_resolve, reject) => {
-          wsCallbacks.error.push((msg: unknown) => {
+          wsCallbacks.error!.push((msg: unknown) => {
             reject(new MockChatRequestError(String(msg), true))
           })
         })
@@ -817,7 +817,7 @@ describe('Scenario 7: Tool approval chain', () => {
     }
 
     // Trigger the approval callback
-    wsCallbacks.approval.forEach((cb) => cb(approvalReq))
+    wsCallbacks.approval!.forEach((cb) => cb(approvalReq))
 
     // Pending approval should be set
     expect(store.pendingApproval).toEqual(approvalReq)
@@ -841,7 +841,7 @@ describe('Scenario 7: Tool approval chain', () => {
     const store = useChatStore()
 
     store.initApprovalListener()
-    wsCallbacks.approval.forEach((cb) =>
+    wsCallbacks.approval!.forEach((cb) =>
       cb({ requestId: 'req-002', toolName: 'file_write', risk: 'sensitive', reason: 'Writing to disk', sessionId: 's1' }),
     )
 

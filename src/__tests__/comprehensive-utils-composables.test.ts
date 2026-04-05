@@ -454,7 +454,7 @@ describe('utils/diff', () => {
       const result = computeDiff(old, nw)
       const adds = result.filter(l => l.type === 'add')
       expect(adds).toHaveLength(1)
-      expect(adds[0].content).toBe('line2')
+      expect(adds[0]!.content).toBe('line2')
     })
 
     it('single line removal', () => {
@@ -463,7 +463,7 @@ describe('utils/diff', () => {
       const result = computeDiff(old, nw)
       const removes = result.filter(l => l.type === 'remove')
       expect(removes).toHaveLength(1)
-      expect(removes[0].content).toBe('line2')
+      expect(removes[0]!.content).toBe('line2')
     })
 
     it('mixed add/remove/equal with correct line numbers', () => {
@@ -542,7 +542,7 @@ describe('utils/diff', () => {
       const sd = computeStructuredDiff(old, nw, 1)
       expect(sd.hunks.length).toBeGreaterThanOrEqual(1)
       // Hunk should contain the changed line plus context
-      const hunk = sd.hunks[0]
+      const hunk = sd.hunks[0]!
       expect(hunk.lines.some(l => l.type === 'remove' && l.content === 'C')).toBe(true)
       expect(hunk.lines.some(l => l.type === 'add' && l.content === 'X')).toBe(true)
     })
@@ -582,7 +582,7 @@ describe('utils/diff', () => {
       const nw = 'A\nX\nC'
       const sd = computeStructuredDiff(old, nw, 1)
       expect(sd.hunks).toHaveLength(1)
-      const header = sd.hunks[0].header
+      const header = sd.hunks[0]!.header
       expect(header).toMatch(/^@@ -\d+,\d+ \+\d+,\d+ @@$/)
     })
 
@@ -796,8 +796,8 @@ describe('utils/logger', () => {
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     logger.warn('test warning')
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0][0]).toContain('WARN')
-    expect(spy.mock.calls[0][0]).toContain('test warning')
+    expect(spy.mock.calls[0]![0]).toContain('WARN')
+    expect(spy.mock.calls[0]![0]).toContain('test warning')
     spy.mockRestore()
   })
 
@@ -805,7 +805,7 @@ describe('utils/logger', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     logger.error('test error')
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(spy.mock.calls[0][0]).toContain('ERROR')
+    expect(spy.mock.calls[0]![0]).toContain('ERROR')
     spy.mockRestore()
   })
 
@@ -826,7 +826,7 @@ describe('utils/logger', () => {
   it('log output contains timestamp pattern HH:mm:ss.SSS', () => {
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
     logger.warn('timestamp test')
-    expect(spy.mock.calls[0][0]).toMatch(/\[\d{2}:\d{2}:\d{2}\.\d{3}\]/)
+    expect(spy.mock.calls[0]![0]).toMatch(/\[\d{2}:\d{2}:\d{2}\.\d{3}\]/)
     spy.mockRestore()
   })
 
@@ -1063,7 +1063,7 @@ describe('services/messageService', () => {
       expect(msg.content).toBe('Hello')
       expect(msg.timestamp).toBe('2024-01-01T00:00:00Z')
       expect(msg.tool_calls).toHaveLength(1)
-      expect(msg.tool_calls![0].name).toBe('search')
+      expect(msg.tool_calls![0]!.name).toBe('search')
       expect(msg.agent_name).toBe('Agent007')
       expect(msg.reasoning).toBe('I thought about it')
       expect(msg.metadata?.extra_field).toBe('preserved')
@@ -1102,8 +1102,8 @@ describe('services/messageService', () => {
       }
       const msg = normalizeLoadedMessage(row)
       expect(msg.tool_calls).toHaveLength(2)
-      expect(msg.tool_calls![0].id).toBe('a')
-      expect(msg.tool_calls![1].result).toBe('done')
+      expect(msg.tool_calls![0]!.id).toBe('a')
+      expect(msg.tool_calls![1]!.result).toBe('done')
     })
 
     it('metadata with non-array tool_calls -> undefined', () => {

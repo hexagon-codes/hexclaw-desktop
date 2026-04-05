@@ -80,7 +80,7 @@ onMounted(async () => {
     } else if (event.payload.type === 'drop') {
       dragOver.value = false
       handleFileDrop(event.payload.paths)
-    } else if (event.payload.type === 'leave' || event.payload.type === 'cancelled') {
+    } else if (event.payload.type === 'leave') {
       dragOver.value = false
     }
   }).then((unlisten) => {

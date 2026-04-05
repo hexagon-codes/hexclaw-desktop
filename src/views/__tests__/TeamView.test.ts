@@ -161,7 +161,7 @@ describe('TeamView', () => {
     expect(refreshBtn).toBeDefined()
 
     const iconOnlyRefreshBtn = wrapper.findAll('button')[0]
-    await iconOnlyRefreshBtn.trigger('click')
+    await iconOnlyRefreshBtn!.trigger('click')
     await flushPromises()
 
     resolveRefreshShared([
@@ -223,7 +223,7 @@ describe('TeamView', () => {
     await flushPromises()
 
     const iconOnlyRefreshBtn = wrapper.findAll('button')[0]
-    await iconOnlyRefreshBtn.trigger('click')
+    await iconOnlyRefreshBtn!.trigger('click')
     await flushPromises()
 
     resolveRefreshMembers([

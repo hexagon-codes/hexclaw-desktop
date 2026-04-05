@@ -82,7 +82,7 @@ function extractSectionKeys(source: string, section: string): string[] {
     // Only extract keys at depth 0 (immediate children)
     if (innerDepth <= 0) {
       const km = trimmed.match(/^['"]?(\w+)['"]?\s*:/)
-      if (km) keys.push(km[1])
+      if (km) keys.push(km[1]!)
     }
     // Reset negative depth (closing braces of nested objects)
     if (innerDepth < 0) innerDepth = 0
@@ -173,7 +173,7 @@ describe('Section 3: Router path consistency', () => {
     const navPaths: string[] = []
     let npm
     while ((npm = navPathRegex.exec(navigationSource)) !== null) {
-      navPaths.push(npm[1])
+      navPaths.push(npm[1]!)
     }
 
     expect(navPaths.length).toBeGreaterThan(0)
@@ -192,8 +192,8 @@ describe('Section 3: Router path consistency', () => {
     let rm
     while ((rm = redirectRegex.exec(routerSource)) !== null) {
       // Skip the catch-all and root redirect
-      if (rm[1] === '/' || rm[1].includes(':pathMatch')) continue
-      redirects.push({ from: rm[1], to: rm[2] })
+      if (rm[1] === '/' || rm[1]!.includes(':pathMatch')) continue
+      redirects.push({ from: rm[1]!, to: rm[2]! })
     }
 
     expect(redirects.length).toBeGreaterThan(0)
@@ -203,7 +203,7 @@ describe('Section 3: Router path consistency', () => {
     const allPaths = new Set<string>()
     let np2
     while ((np2 = navPathRegex2.exec(navigationSource)) !== null) {
-      allPaths.add(np2[1])
+      allPaths.add(np2[1]!)
     }
     // Add paths that are in the router but not in navigation
     allPaths.add('/dashboard')

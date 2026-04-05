@@ -901,7 +901,7 @@ async function saveConfig() {
                   :checked="(config.llm.tools?.enabled ?? 'auto') !== 'off'"
                   @change="(e: Event) => {
                     const on = (e.target as HTMLInputElement).checked
-                    config.llm.tools = { enabled: on ? 'auto' : 'off', maxTools: config.llm.tools?.maxTools ?? 0 }
+                    config!.llm.tools = { enabled: on ? 'auto' : 'off', maxTools: config!.llm.tools?.maxTools ?? 0 }
                     autoSave()
                   }"
                 />
@@ -1546,7 +1546,7 @@ async function saveConfig() {
                 </div>
 
                 <!-- Tool Permissions -->
-                <div v-if="toolPermissions && toolPermissions.rules.length > 0" class="hc-card hc-settings__info-card">
+                <div v-if="toolPermissions && toolPermissions.rules && toolPermissions.rules.length > 0" class="hc-card hc-settings__info-card">
                   <div class="hc-settings__info-title">
                     {{ t('settings.status.toolPermissions', 'Tool Permissions') }}
                   </div>

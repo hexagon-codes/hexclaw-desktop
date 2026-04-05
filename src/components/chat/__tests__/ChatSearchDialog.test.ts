@@ -45,17 +45,19 @@ describe('ChatSearchDialog', () => {
     await input.setValue('alpha')
     await flushPromises()
 
-    const nextBtn = wrapper.findAll('button')[1]
+    const nextBtn = wrapper.findAll('button')[1]!
     await nextBtn.trigger('click')
     await flushPromises()
 
-    expect(wrapper.emitted('scrollTo')?.at(-1)).toEqual(['m2'])
+    const scrollTo1 = wrapper.emitted('scrollTo')!
+    expect(scrollTo1[scrollTo1.length - 1]).toEqual(['m2'])
 
     await wrapper.setProps({
       messages: [{ id: 'm2', role: 'assistant', content: 'alpha two', timestamp: '2026-01-02' }],
     })
     await flushPromises()
 
-    expect(wrapper.emitted('scrollTo')?.at(-1)).toEqual(['m2'])
+    const scrollTo2 = wrapper.emitted('scrollTo')!
+    expect(scrollTo2[scrollTo2.length - 1]).toEqual(['m2'])
   })
 })

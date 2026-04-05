@@ -61,7 +61,7 @@ describe('WebhookPanel CRUD', () => {
     await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-b')
     await wrapper.find('input[placeholder="https://..."]').setValue('https://b')
     const buttons = wrapper.findAll('.webhook-panel__form-actions button')
-    const createBtn = buttons[1]
+    const createBtn = buttons[1]!
     await createBtn.trigger('click')
     await flushPromises()
 
@@ -100,7 +100,7 @@ describe('WebhookPanel CRUD', () => {
     await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-a')
     await wrapper.find('input[placeholder="https://..."]').setValue('https://a')
 
-    const createBtn = wrapper.findAll('.webhook-panel__form-actions button')[1]
+    const createBtn = wrapper.findAll('.webhook-panel__form-actions button')[1]!
     await createBtn.trigger('click')
     await flushPromises()
     await createBtn.trigger('click')

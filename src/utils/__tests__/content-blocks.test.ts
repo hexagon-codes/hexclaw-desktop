@@ -92,7 +92,7 @@ describe('toContentBlocks', () => {
     )
 
     expect(blocks).toHaveLength(1)
-    expect(blocks[0].type).toBe('tool_use')
+    expect(blocks[0]!.type).toBe('tool_use')
   })
 
   it('message with blocks field → returns blocks directly (passthrough)', () => {

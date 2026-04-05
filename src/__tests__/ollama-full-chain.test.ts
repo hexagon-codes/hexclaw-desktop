@@ -10,6 +10,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
+import type { AppConfig, ProviderType } from '@/types'
 
 // ─── Mocks ──────────────────────────────────────────
 
@@ -58,10 +59,10 @@ describe('Store — Ollama 模型同步全场景', () => {
     return useSettingsStore()
   }
 
-  function makeConfig(providers: Record<string, unknown>[] = []) {
+  function makeConfig(providers: Record<string, unknown>[] = []): AppConfig {
     return {
       llm: {
-        providers: providers.map(p => ({ id: 'p1', name: 'Ollama', type: 'ollama', enabled: true, apiKey: '', baseUrl: '', models: [], ...p })),
+        providers: providers.map(p => ({ id: 'p1', name: 'Ollama', type: 'ollama' as ProviderType, enabled: true, apiKey: '', baseUrl: '', models: [], ...p })),
         defaultModel: '', defaultProviderId: '', routing: { enabled: false, strategy: 'cost-aware' },
       },
       security: {} as any, general: {} as any, notification: {} as any, mcp: {} as any,
@@ -71,7 +72,7 @@ describe('Store — Ollama 模型同步全场景', () => {
   it('场景: 首次同步 → 缓存从空到有', async () => {
     const store = await getStore()
     store.config = makeConfig([{}])
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
     mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9 }, { name: 'llama3.3', size: 4e9 }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(2)
@@ -81,7 +82,7 @@ describe('Store — Ollama 模型同步全场景', () => {
   it('场景: 模型列表变化 → 缓存完全替换', async () => {
     const store = await getStore()
     store.config = makeConfig([{}])
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
     mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(1)
@@ -95,7 +96,7 @@ describe('Store — Ollama 模型同步全场景', () => {
   it('场景: Ollama 未运行 → 不清空已有缓存', async () => {
     const store = await getStore()
     store.config = makeConfig([{}])
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
     mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
     await store.syncOllamaModels()
     expect(store.availableModels).toHaveLength(1)
@@ -108,7 +109,7 @@ describe('Store — Ollama 模型同步全场景', () => {
   it('场景: API 报错 → 不影响已有缓存', async () => {
     const store = await getStore()
     store.config = makeConfig([{}])
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
     mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
     await store.syncOllamaModels()
 
@@ -120,7 +121,7 @@ describe('Store — Ollama 模型同步全场景', () => {
   it('场景: Ollama disabled → 不出现在 availableModels', async () => {
     const store = await getStore()
     store.config = makeConfig([{ enabled: false }])
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
     expect(store.availableModels).toHaveLength(0)
   })
 
@@ -130,7 +131,7 @@ describe('Store — Ollama 模型同步全场景', () => {
       { id: 'p-oll', name: 'Ollama', type: 'ollama' },
       { id: 'p-oai', name: 'OpenAI', type: 'openai', models: [{ id: 'gpt-4o', name: 'GPT-4o', capabilities: ['text'] }] },
     ])
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
 
     mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
     await store.syncOllamaModels()
@@ -145,7 +146,7 @@ describe('Store — Ollama 模型同步全场景', () => {
   it('场景: type=custom + baseUrl=11434 → 不被误判为 Ollama', async () => {
     const store = await getStore()
     store.config = makeConfig([{ id: 'c1', name: 'Custom Local', type: 'custom', baseUrl: 'http://localhost:11434/v1', models: [{ id: 'local-m', name: 'Local', capabilities: ['text'] }] }])
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
     expect(store.availableModels).toHaveLength(1)
     expect(store.availableModels[0]!.modelId).toBe('local-m')
   })
@@ -329,7 +330,7 @@ describe('端到端 — 检测→关联→同步→选模型', () => {
     store.config = {
       llm: { providers: [], defaultModel: '', defaultProviderId: '', routing: { enabled: false, strategy: 'cost-aware' } },
       security: {} as any, general: {} as any, notification: {} as any, mcp: {} as any,
-    }
+    } as AppConfig
     store.runtimeProviders = []
 
     // Step 1: addProvider（模拟 handleAssociateOllama）
@@ -350,12 +351,12 @@ describe('端到端 — 检测→关联→同步→选模型', () => {
     const store = (await import('@/stores/settings')).useSettingsStore()
     store.config = {
       llm: {
-        providers: [{ id: 'oll', name: 'Ollama', type: 'ollama', enabled: true, apiKey: '', baseUrl: '', models: [] }],
+        providers: [{ id: 'oll', name: 'Ollama', type: 'ollama' as ProviderType, enabled: true, apiKey: '', baseUrl: '', models: [] }],
         defaultModel: '', defaultProviderId: '', routing: { enabled: false, strategy: 'cost-aware' },
       },
       security: {} as any, general: {} as any, notification: {} as any, mcp: {} as any,
     }
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
 
     // 下载前: 1 个模型
     mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }] })
@@ -373,12 +374,12 @@ describe('端到端 — 检测→关联→同步→选模型', () => {
     const store = (await import('@/stores/settings')).useSettingsStore()
     store.config = {
       llm: {
-        providers: [{ id: 'oll', name: 'Ollama', type: 'ollama', enabled: true, apiKey: '', baseUrl: '', models: [] }],
+        providers: [{ id: 'oll', name: 'Ollama', type: 'ollama' as ProviderType, enabled: true, apiKey: '', baseUrl: '', models: [] }],
         defaultModel: '', defaultProviderId: '', routing: { enabled: false, strategy: 'cost-aware' },
       },
       security: {} as any, general: {} as any, notification: {} as any, mcp: {} as any,
     }
-    store.runtimeProviders = store.config.llm.providers
+    store.runtimeProviders = store.config!.llm.providers
 
     // 删除前
     mockGetOllamaStatus.mockResolvedValue({ running: true, model_count: 2, models: [{ name: 'qwen3:8b', size: 5e9 }, { name: 'phi4', size: 3e9 }] })

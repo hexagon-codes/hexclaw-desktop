@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import type { ProviderConfig, ModelOption, BackendLLMConfig, AppConfig } from '@/types'
+import type { ProviderConfig, ModelOption, ModelCapability, BackendLLMConfig, AppConfig } from '@/types'
 
 /* ------------------------------------------------------------------ */
 /*  Mocks                                                              */
@@ -35,7 +35,7 @@ import { saveSecureValue, loadSecureValue, removeSecureValue } from '@/utils/sec
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
-function makeModel(id: string, name?: string, capabilities?: string[]): ModelOption {
+function makeModel(id: string, name?: string, capabilities?: ModelCapability[]): ModelOption {
   return { id, name: name ?? id, ...(capabilities ? { capabilities } : {}) }
 }
 
@@ -91,7 +91,7 @@ describe('cloneModels', () => {
 
   it("defaults capabilities to ['text'] when missing", () => {
     const result = cloneModels([{ id: 'x', name: 'X' }])
-    expect(result[0].capabilities).toEqual(['text'])
+    expect(result[0]!.capabilities).toEqual(['text'])
   })
 
   it('handles multiple models with mixed capabilities', () => {
@@ -101,9 +101,9 @@ describe('cloneModels', () => {
       { id: 'c', name: 'C', capabilities: ['vision', 'audio'] },
     ]
     const result = cloneModels(models)
-    expect(result[0].capabilities).toEqual(['code'])
-    expect(result[1].capabilities).toEqual(['text'])
-    expect(result[2].capabilities).toEqual(['vision', 'audio'])
+    expect(result[0]!.capabilities).toEqual(['code'])
+    expect(result[1]!.capabilities).toEqual(['text'])
+    expect(result[2]!.capabilities).toEqual(['vision', 'audio'])
   })
 })
 
@@ -119,15 +119,15 @@ describe('cloneProviders', () => {
     const result = cloneProviders(src)
 
     // Shallow fields cloned
-    expect(result[0].id).toBe('p1')
-    expect(result[0].name).toBe('Provider1')
+    expect(result[0]!.id).toBe('p1')
+    expect(result[0]!.name).toBe('Provider1')
 
     // Models are deep cloned
-    src[0].models.push(makeModel('extra'))
-    expect(result[0].models).toHaveLength(2)
+    src[0]!.models.push(makeModel('extra'))
+    expect(result[0]!.models).toHaveLength(2)
 
     // Capabilities defaulted for models without them
-    expect(result[0].models[0].capabilities).toEqual(['text'])
+    expect(result[0]!.models[0]!.capabilities).toEqual(['text'])
   })
 
   it('clones multiple providers independently', () => {
@@ -137,8 +137,8 @@ describe('cloneProviders', () => {
     ]
     const result = cloneProviders(providers)
     expect(result).toHaveLength(2)
-    expect(result[0].id).toBe('a')
-    expect(result[1].id).toBe('b')
+    expect(result[0]!.id).toBe('a')
+    expect(result[1]!.id).toBe('b')
   })
 })
 
@@ -322,7 +322,7 @@ describe('appendLocalProvidersMissingFromRuntime', () => {
     const runtime = [makeProvider({ id: 'r1' })]
     const result = appendLocalProvidersMissingFromRuntime(runtime, [])
     expect(result).toHaveLength(1)
-    expect(result[0].id).toBe('r1')
+    expect(result[0]!.id).toBe('r1')
   })
 
   it('appends local providers not present in runtime', () => {
@@ -330,7 +330,7 @@ describe('appendLocalProvidersMissingFromRuntime', () => {
     const local = [makeProvider({ id: 'l1', name: 'L1' })]
     const result = appendLocalProvidersMissingFromRuntime(runtime, local)
     expect(result).toHaveLength(2)
-    expect(result[1].id).toBe('l1')
+    expect(result[1]!.id).toBe('l1')
   })
 
   it('skips local providers already in runtime (matched by id)', () => {
@@ -338,7 +338,7 @@ describe('appendLocalProvidersMissingFromRuntime', () => {
     const local = [makeProvider({ id: 'same', name: 'Local' })]
     const result = appendLocalProvidersMissingFromRuntime(runtime, local)
     expect(result).toHaveLength(1)
-    expect(result[0].name).toBe('Runtime')
+    expect(result[0]!.name).toBe('Runtime')
   })
 
   it('skips local providers matched by name against runtime', () => {
@@ -351,8 +351,8 @@ describe('appendLocalProvidersMissingFromRuntime', () => {
   it('deep clones models in result', () => {
     const runtime = [makeProvider({ id: 'r1' })]
     const result = appendLocalProvidersMissingFromRuntime(runtime, [])
-    runtime[0].models.push(makeModel('new'))
-    expect(result[0].models).toHaveLength(2) // cloneProviders was applied to runtime
+    runtime[0]!.models.push(makeModel('new'))
+    expect(result[0]!.models).toHaveLength(2) // cloneProviders was applied to runtime
   })
 })
 
@@ -370,9 +370,9 @@ describe('mergeConfigProvidersWithRuntime', () => {
     const result = mergeConfigProvidersWithRuntime(config, runtime)
 
     expect(result).toHaveLength(1)
-    expect(result[0].id).toBe('c1')        // config id preserved
-    expect(result[0].enabled).toBe(false)   // config enabled preserved
-    expect(result[0].apiKey).toBe('runtime-key') // runtime data merged
+    expect(result[0]!.id).toBe('c1')        // config id preserved
+    expect(result[0]!.enabled).toBe(false)   // config enabled preserved
+    expect(result[0]!.apiKey).toBe('runtime-key') // runtime data merged
   })
 
   it('appends runtime-only providers', () => {
@@ -383,7 +383,7 @@ describe('mergeConfigProvidersWithRuntime', () => {
     ]
     const result = mergeConfigProvidersWithRuntime(config, runtime)
     expect(result).toHaveLength(2)
-    expect(result[1].id).toBe('r-only')
+    expect(result[1]!.id).toBe('r-only')
   })
 
   it('does not duplicate when matched by backendKey', () => {
@@ -472,7 +472,7 @@ describe('reconcileDefaultSelection', () => {
       defaultProviderId: 'p1',
     }
     reconcileDefaultSelection(llm)
-    expect(llm.providers[0].selectedModelId).toBe('m2')
+    expect(llm.providers[0]!.selectedModelId).toBe('m2')
   })
 
   it('clears defaultProviderId when no provider found after resolution', () => {
@@ -525,7 +525,7 @@ describe('backendToProviders', () => {
       },
     })
     const result = backendToProviders(backend)
-    expect(result[0].type).toBe('custom')
+    expect(result[0]!.type).toBe('custom')
   })
 
   it('merges with local provider data when matched', () => {
@@ -538,20 +538,20 @@ describe('backendToProviders', () => {
     const result = backendToProviders(backend, local)
 
     // Uses local id and name
-    expect(result[0].id).toBe('local-id')
-    expect(result[0].name).toBe('openai')
+    expect(result[0]!.id).toBe('local-id')
+    expect(result[0]!.name).toBe('openai')
     // Uses backend api_key and base_url
-    expect(result[0].apiKey).toBe('new-key')
-    expect(result[0].baseUrl).toBe('https://new-url')
+    expect(result[0]!.apiKey).toBe('new-key')
+    expect(result[0]!.baseUrl).toBe('https://new-url')
     // Merges models — backend model prepended if not in local
-    expect(result[0].models.some((m) => m.id === 'gpt-4')).toBe(true)
-    expect(result[0].models.some((m) => m.id === 'gpt-3.5')).toBe(true)
+    expect(result[0]!.models.some((m) => m.id === 'gpt-4')).toBe(true)
+    expect(result[0]!.models.some((m) => m.id === 'gpt-3.5')).toBe(true)
   })
 
   it('sets backendKey on each provider', () => {
     const backend = makeBackendConfig()
     const result = backendToProviders(backend)
-    expect(result[0].backendKey).toBe('openai')
+    expect(result[0]!.backendKey).toBe('openai')
   })
 
   it('resolves selectedModelId from backend model', () => {
@@ -561,7 +561,7 @@ describe('backendToProviders', () => {
       },
     })
     const result = backendToProviders(backend)
-    expect(result[0].selectedModelId).toBe('gpt-4o')
+    expect(result[0]!.selectedModelId).toBe('gpt-4o')
   })
 
   it('handles provider with startsWith match (e.g. "openai-custom" -> openai)', () => {
@@ -571,7 +571,7 @@ describe('backendToProviders', () => {
       },
     })
     const result = backendToProviders(backend)
-    expect(result[0].type).toBe('openai')
+    expect(result[0]!.type).toBe('openai')
   })
 })
 
@@ -599,13 +599,13 @@ describe('providersToBackend', () => {
   it('sets compatible=openai for custom type', () => {
     const providers = [makeProvider({ type: 'custom', name: 'Custom' })]
     const result = providersToBackend(providers, 'gpt-4')
-    expect(result.providers['Custom'].compatible).toBe('openai')
+    expect(result.providers['Custom']!.compatible).toBe('openai')
   })
 
   it('sets compatible="" for known types', () => {
     const providers = [makeProvider({ type: 'openai', name: 'OpenAI' })]
     const result = providersToBackend(providers, 'gpt-4')
-    expect(result.providers['OpenAI'].compatible).toBe('')
+    expect(result.providers['OpenAI']!.compatible).toBe('')
   })
 
   it('resolves default provider from defaultProviderId', () => {
@@ -651,7 +651,7 @@ describe('restoreProviderApiKeys', () => {
     const providers = [makeProvider({ id: 'p1', apiKey: '****mask' })]
 
     const result = await restoreProviderApiKeys(providers)
-    expect(result[0].apiKey).toBe('real-secret-key')
+    expect(result[0]!.apiKey).toBe('real-secret-key')
     expect(loadSecureValue).toHaveBeenCalledWith('llm.provider.p1.apiKey')
   })
 
@@ -660,7 +660,7 @@ describe('restoreProviderApiKeys', () => {
     const providers = [makeProvider({ id: 'p1', apiKey: 'original-key' })]
 
     const result = await restoreProviderApiKeys(providers)
-    expect(result[0].apiKey).toBe('original-key')
+    expect(result[0]!.apiKey).toBe('original-key')
   })
 
   it('returns deep cloned providers', async () => {
@@ -669,8 +669,8 @@ describe('restoreProviderApiKeys', () => {
     const result = await restoreProviderApiKeys(src)
 
     // Mutating source shouldn't affect result
-    src[0].apiKey = 'mutated'
-    expect(result[0].apiKey).toBe('sk-test-key')
+    src[0]!.apiKey = 'mutated'
+    expect(result[0]!.apiKey).toBe('sk-test-key')
   })
 })
 
@@ -679,14 +679,14 @@ describe('materializeProviderApiKeys', () => {
   it('does not touch non-masked key', async () => {
     const providers = [makeProvider({ id: 'p1', apiKey: 'sk-real-key' })]
     const result = await materializeProviderApiKeys(providers)
-    expect(result[0].apiKey).toBe('sk-real-key')
+    expect(result[0]!.apiKey).toBe('sk-real-key')
     expect(loadSecureValue).not.toHaveBeenCalled()
   })
 
   it('does not touch empty key', async () => {
     const providers = [makeProvider({ id: 'p1', apiKey: '' })]
     const result = await materializeProviderApiKeys(providers)
-    expect(result[0].apiKey).toBe('')
+    expect(result[0]!.apiKey).toBe('')
     expect(loadSecureValue).not.toHaveBeenCalled()
   })
 
@@ -695,7 +695,7 @@ describe('materializeProviderApiKeys', () => {
     const providers = [makeProvider({ id: 'p1', apiKey: '****mask' })]
 
     const result = await materializeProviderApiKeys(providers)
-    expect(result[0].apiKey).toBe('real-secret')
+    expect(result[0]!.apiKey).toBe('real-secret')
   })
 
   it('throws when masked key has no secure store AND no backendKey', async () => {
@@ -711,7 +711,7 @@ describe('materializeProviderApiKeys', () => {
 
     const result = await materializeProviderApiKeys(providers)
     // Key stays masked — backend will keep the old value
-    expect(result[0].apiKey).toBe('****mask')
+    expect(result[0]!.apiKey).toBe('****mask')
   })
 
   it('handles whitespace-only backendKey as missing', async () => {

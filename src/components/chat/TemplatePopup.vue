@@ -104,7 +104,7 @@ watch(() => props.query, async (q) => {
 })
 
 function handleSelect(tpl: PromptTemplate) {
-  dbTemplateIncrementUse(tpl.id).catch(() => {})
+  dbTemplateIncrementUse(tpl.id)
   emit('select', tpl.content)
 }
 

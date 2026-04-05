@@ -70,7 +70,7 @@ describe('WelcomeView onboarding', () => {
 
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as { apiKey: string; customBaseUrl: string; model: string; connectionTesting: boolean; connectionResult: { ok: boolean } | null; nextStep: () => Promise<void>; skip: () => void }
+    const vm = wrapper.vm as unknown as { apiKey: string; customBaseUrl: string; model: string; connectionTesting: boolean; connectionResult: { ok: boolean } | null; nextStep: () => Promise<void>; skip: () => void; testConnection: () => Promise<void> }
     vm.apiKey = 'sk-test'
     vm.customBaseUrl = ''
     vm.model = 'gpt-4o'
@@ -151,7 +151,7 @@ describe('WelcomeView onboarding', () => {
 
     expect(loadConfig).not.toHaveBeenCalled()
     expect(saveConfig).toHaveBeenCalledTimes(1)
-    expect(saveConfig.mock.calls[0]?.[0].general.welcomeCompleted).toBe(true)
+    expect((saveConfig.mock.calls[0] as unknown[])?.[0] as Record<string, Record<string, unknown>>).toHaveProperty('general.welcomeCompleted', true)
     expect(routerPush).toHaveBeenCalledWith('/chat')
   })
 

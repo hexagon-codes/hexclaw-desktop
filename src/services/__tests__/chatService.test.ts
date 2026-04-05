@@ -97,7 +97,6 @@ describe('chatService', () => {
     await sendViaWebSocket('hi', 's1', { model: 'glm-5', temperature: 0.5, maxTokens: 1024 }, 'coder', undefined, {
       onChunk: vi.fn(),
       onDone: vi.fn(),
-      onError: vi.fn(),
     })
     expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'glm-5', 'coder', undefined, undefined, 0.5, 1024, undefined)
   })
@@ -107,7 +106,6 @@ describe('chatService', () => {
     await sendViaWebSocket('hi', 's1', { model: 'qwen3:8b' }, '', undefined, {
       onChunk: vi.fn(),
       onDone: vi.fn(),
-      onError: vi.fn(),
     }, { thinking: 'on' })
     expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'qwen3:8b', undefined, undefined, undefined, undefined, undefined, { thinking: 'on' })
   })
@@ -117,7 +115,6 @@ describe('chatService', () => {
     await sendViaWebSocket('hi', 's1', { model: 'glm-5' }, '', undefined, {
       onChunk: vi.fn(),
       onDone: vi.fn(),
-      onError: vi.fn(),
     })
     expect(wsSendMessage).toHaveBeenCalledWith('hi', 's1', 'glm-5', undefined, undefined, undefined, undefined, undefined, undefined)
   })
@@ -134,7 +131,6 @@ describe('chatService', () => {
     await sendViaWebSocket('hi', 's1', { model: 'glm-5' }, '', undefined, {
       onChunk: vi.fn(),
       onDone: vi.fn(),
-      onError: vi.fn(),
     })
 
     expect(approvalCallbacks).toHaveLength(1)

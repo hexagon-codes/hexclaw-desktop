@@ -467,9 +467,9 @@ describe('KnowledgeView', () => {
 
     const inputs = wrapper.findAll('input[type="text"]')
     expect(inputs.length).toBeGreaterThanOrEqual(2)
-    await inputs[0].setValue('旧标题')
+    await inputs[0]!.setValue('旧标题')
     await wrapper.get('textarea').setValue('旧内容')
-    await inputs[1].setValue('旧来源')
+    await inputs[1]!.setValue('旧来源')
 
     const addBtn = wrapper.findAll('button').find((btn) => btn.text().includes('添加'))
     expect(addBtn).toBeDefined()
@@ -487,9 +487,9 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     expect(wrapper.text()).not.toContain('新增失败')
-    expect((wrapper.findAll('input[type="text"]')[0].element as HTMLInputElement).value).toBe('')
+    expect((wrapper.findAll('input[type="text"]')[0]!.element as HTMLInputElement).value).toBe('')
     expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('')
-    expect((wrapper.findAll('input[type="text"]')[1].element as HTMLInputElement).value).toBe('')
+    expect((wrapper.findAll('input[type="text"]')[1]!.element as HTMLInputElement).value).toBe('')
   })
 
   it('does not trigger duplicate reindex requests while the same document is already reindexing', async () => {

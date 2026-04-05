@@ -523,7 +523,7 @@ describe('ChatView — edge cases', () => {
     await flushPromises()
 
     const chatStore = useChatStore()
-    chatStore.isCurrentStreaming = true
+    ;(chatStore as unknown as Record<string, unknown>).isCurrentStreaming = true
     chatStore.messages = [
       { id: 'msg1', role: 'user', content: 'Hello', timestamp: new Date().toISOString() },
       { id: 'msg2', role: 'assistant', content: 'Streaming...', timestamp: new Date().toISOString() },

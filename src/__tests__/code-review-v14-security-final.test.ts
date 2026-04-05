@@ -119,7 +119,7 @@ describe('WebSocket reconnect loop prevention', () => {
     // The timer uses 10_000 (10 seconds)
     const timerMatch = ws.match(/setTimeout\(\s*\(\)\s*=>\s*\{[^}]*reconnectAttempts[^}]*\}\s*,\s*(\d[\d_]*)/)
     expect(timerMatch).toBeTruthy()
-    const delay = Number(timerMatch![1].replace(/_/g, ''))
+    const delay = Number(timerMatch![1]!.replace(/_/g, ''))
     expect(delay).toBeGreaterThanOrEqual(5000)
   })
 

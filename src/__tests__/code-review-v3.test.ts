@@ -276,7 +276,7 @@ describe('toContentBlocks — 消息转 ContentBlock 完整性', () => {
       id: 'm1', role: 'assistant', content: 'Done',
       timestamp: '2026-01-01',
       tool_calls: [
-        { id: 't1', name: 'search', arguments: { q: 'test' }, result: 'found 3' },
+        { id: 't1', name: 'search', arguments: JSON.stringify({ q: 'test' }), result: 'found 3' },
       ],
     })
     // text + tool_use + tool_result = 3

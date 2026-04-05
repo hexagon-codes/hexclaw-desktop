@@ -11,6 +11,7 @@ import type {
   ProviderConfig,
   ApiError,
   ModelCapability,
+  ModelOption,
 } from '@/types'
 import {
   cloneProviders,

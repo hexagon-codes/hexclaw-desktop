@@ -15,6 +15,7 @@ vi.mock('ofetch', () => ({
 }))
 
 import { listPanels, getPanel, sendCanvasEvent, saveWorkflow, getWorkflows, deleteWorkflow, runWorkflow, getWorkflowRun } from '../canvas'
+import type { Workflow } from '@/types/canvas'
 
 describe('Canvas API', () => {
   beforeEach(() => {
@@ -74,9 +75,9 @@ describe('Canvas API', () => {
 
   describe('saveWorkflow', () => {
     it('saves via API when available', async () => {
-      const wf = { id: 'wf1', name: 'Test', steps: [], created_at: '2024-01-01', updated_at: '2024-01-01' }
+      const wf = { id: 'wf1', name: 'Test', nodes: [], edges: [], created_at: '2024-01-01', updated_at: '2024-01-01' }
       mockFetch.mockResolvedValue(wf)
-      const result = await saveWorkflow({ id: 'wf1', name: 'Test', steps: [] })
+      const result = await saveWorkflow({ id: 'wf1', name: 'Test', nodes: [], edges: [] })
       expect(mockFetch).toHaveBeenCalledWith(
         '/api/v1/canvas/workflows',
         expect.objectContaining({ method: 'POST' }),
@@ -86,7 +87,7 @@ describe('Canvas API', () => {
 
     it('falls back to localStorage when API fails', async () => {
       mockFetch.mockRejectedValue(new Error('503'))
-      const result = await saveWorkflow({ id: 'wf-local', name: 'Fallback', steps: [] })
+      const result = await saveWorkflow({ id: 'wf-local', name: 'Fallback', nodes: [], edges: [] })
       expect(result.id).toBe('wf-local')
       expect(result.name).toBe('Fallback')
       expect(result.created_at).toBeTruthy()
@@ -101,10 +102,10 @@ describe('Canvas API', () => {
     it('updates existing workflow in localStorage', async () => {
       // First save
       mockFetch.mockRejectedValue(new Error('offline'))
-      await saveWorkflow({ id: 'wf1', name: 'V1', steps: [] })
+      await saveWorkflow({ id: 'wf1', name: 'V1', nodes: [], edges: [] })
 
       // Second save (update)
-      const result = await saveWorkflow({ id: 'wf1', name: 'V2', steps: [{ id: 's1' }] })
+      const result = await saveWorkflow({ id: 'wf1', name: 'V2', nodes: [{ id: 's1' }] as unknown as Workflow['nodes'], edges: [] })
       expect(result.name).toBe('V2')
 
       // Should still only have 1 workflow

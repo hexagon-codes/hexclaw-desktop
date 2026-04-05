@@ -244,7 +244,7 @@ describe('SettingsView — E2E 关键路径', () => {
       cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
     })
     vi.mocked(updateLLMConfig).mockReset()
-    vi.mocked(updateLLMConfig).mockImplementation((config) => Promise.resolve(config))
+    vi.mocked(updateLLMConfig).mockImplementation(() => Promise.resolve())
     mockGetBudgetStatus.mockResolvedValue({
       tokens_used: 10,
       tokens_max: 100,
@@ -436,7 +436,7 @@ describe('SettingsView — E2E 关键路径', () => {
       editingProviderId: string | null
       newModelId: string
       newModelName: string
-      handleAddCustomModel: (provider: NonNullable<typeof provider>) => void
+      handleAddCustomModel: (provider: unknown) => void
     }
 
     vm.editingProviderId = provider!.id
@@ -683,7 +683,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
-      testProvider: (provider: typeof provider) => Promise<void>
+      testProvider: (provider: unknown) => Promise<void>
     }
 
     void vm.testProvider(provider)
@@ -1074,10 +1074,10 @@ describe('SettingsView — E2E 关键路径', () => {
     const { updateLLMConfig } = await import('@/api/config')
     const mockedUpdateLLMConfig = vi.mocked(updateLLMConfig)
 
-    let resolveSave!: (value: unknown) => void
+    let resolveSave!: (value: void | PromiseLike<void>) => void
     mockedUpdateLLMConfig.mockImplementationOnce(
       () =>
-        new Promise((resolve) => {
+        new Promise<void>((resolve) => {
           resolveSave = resolve
         }),
     )
@@ -1102,7 +1102,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(mockedUpdateLLMConfig).toHaveBeenCalledTimes(1)
 
-    resolveSave({})
+    resolveSave()
     await flushPromises()
   })
 
@@ -1116,11 +1116,11 @@ describe('SettingsView — E2E 关键路径', () => {
 
     const baselineCalls = mockedGetConfig.mock.calls.length
 
-    let resolveReset!: (value: unknown) => void
+    let resolveReset!: (value: Record<string, unknown>) => void
     mockedGetConfig.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          resolveReset = resolve
+          resolveReset = resolve as unknown as typeof resolveReset
         }),
     )
 

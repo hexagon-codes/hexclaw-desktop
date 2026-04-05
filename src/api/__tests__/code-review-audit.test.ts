@@ -486,7 +486,7 @@ describe('P0-P2 feature coverage: new API exports', () => {
   it('models.ts exports LLMModel type', async () => {
     const mod = await import('../models')
     // listModels function removed (was unused); only type export remains
-    expect(typeof mod.listModels).toBe('undefined')
+    expect(typeof (mod as Record<string, unknown>).listModels).toBe('undefined')
   })
 
   it('index.ts re-exports voice, webhook, and models', () => {

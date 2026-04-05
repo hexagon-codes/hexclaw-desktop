@@ -12,7 +12,7 @@ import { mount } from '@vue/test-utils'
 const checkHealthMock = vi.fn<() => Promise<boolean>>()
 
 vi.mock('@/api/client', () => ({
-  checkHealth: (...args: unknown[]) => checkHealthMock(...args),
+  checkHealth: (...args: unknown[]) => checkHealthMock(...(args as [])),
 }))
 
 import { useHexclaw } from '../useHexclaw'

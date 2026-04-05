@@ -82,7 +82,7 @@ describe('getGroupedNavItems()', () => {
 
   it('system has 1 item (settings)', () => {
     expect(groups.system).toHaveLength(1)
-    expect(groups.system[0].id).toBe('settings')
+    expect(groups.system![0]!.id).toBe('settings')
   })
 })
 

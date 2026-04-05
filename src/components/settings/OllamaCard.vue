@@ -480,7 +480,7 @@ function onPullKeydown(e: KeyboardEvent) {
   } else if (e.key === 'Enter') {
     e.preventDefault()
     if (dropdownIndex.value >= 0) {
-      selectModel(filteredModels.value[dropdownIndex.value])
+      selectModel(filteredModels.value[dropdownIndex.value]!)
     } else {
       startPull()
     }

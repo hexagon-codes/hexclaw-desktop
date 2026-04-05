@@ -340,7 +340,7 @@ function makeMockToast() {
 }
 
 describe('useChatActions runtime: confirmEdit model guard', () => {
-  let mockHandleSend: ReturnType<typeof vi.fn>
+  let mockHandleSend: (text: string, files?: File[]) => Promise<void>
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -464,7 +464,7 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
 })
 
 describe('useChatActions runtime: handleRetry model guard', () => {
-  let mockHandleSend: ReturnType<typeof vi.fn>
+  let mockHandleSend: (text: string, files?: File[]) => Promise<void>
 
   beforeEach(() => {
     vi.clearAllMocks()
