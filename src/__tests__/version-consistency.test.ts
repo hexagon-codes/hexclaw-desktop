@@ -30,9 +30,9 @@ function findFilesRecursive(dir: string, ext: string): string[] {
 }
 
 describe('Version Consistency', () => {
-  it('tauri.conf.json version is "0.3.4"', () => {
+  it('tauri.conf.json version is "0.3.5"', () => {
     const tauriConf = JSON.parse(readFile(path.join(ROOT, 'src-tauri/tauri.conf.json')))
-    expect(tauriConf.version).toBe('0.3.4')
+    expect(tauriConf.version).toBe('0.3.5')
   })
 
   it('no hardcoded "v0.1.0-beta" anywhere in src/ directory', () => {

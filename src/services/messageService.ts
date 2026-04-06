@@ -14,6 +14,7 @@ import {
   deleteMessage as deleteMessageApi,
 } from '@/api/chat'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
+import { extractThinkTags } from '@/utils/think-tags'
 import type { ChatMessage, ChatSession, Artifact } from '@/types'
 
 // ─── 消息序列化（保留，供外部 normalize 使用） ───────
@@ -115,10 +116,24 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
       const agentName = m.agent_name
         || (typeof meta?.agent_name === 'string' ? meta.agent_name : undefined)
 
+      // 兜底解析：后端可能存储了带 <think> 标签的原始 content
+      let content = m.content || ''
+      let mergedReasoning = reasoning
+      if (m.role === 'assistant' && content) {
+        const parsed = extractThinkTags(content)
+        if (parsed.reasoning) {
+          content = parsed.content
+          mergedReasoning = mergedReasoning
+            ? mergedReasoning + '\n' + parsed.reasoning
+            : parsed.reasoning
+        }
+      }
+
       return {
         ...m,
+        content,
         timestamp: m.timestamp || m.created_at || new Date().toISOString(),
-        reasoning,
+        reasoning: mergedReasoning,
         tool_calls: toolCalls,
         agent_name: agentName,
         metadata: meta,

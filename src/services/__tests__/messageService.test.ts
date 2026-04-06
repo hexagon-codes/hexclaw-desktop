@@ -322,4 +322,99 @@ describe('messageService', () => {
     setLastSessionId('s1')
     expect(getLastSessionId()).toBe('s1')
   })
+
+  // ─── <think> 标签兜底解析：修复前后对比 ───
+  describe('loadMessages strips <think> tags from historical content', () => {
+    it('修复前: 后端存储的 <think> 标签原样返回到 content，用户看到原始标签', async () => {
+      // 模拟后端存储的历史消息（content 包含 <think> 标签）
+      const rawContent = '<think>这是模型的思考过程...</think>这是最终回复'
+      listSessionMessages.mockResolvedValueOnce({
+        messages: [{
+          id: 'm1', role: 'assistant', content: rawContent,
+          timestamp: '2026-04-06T15:26:00Z',
+        }],
+        total: 1,
+      })
+
+      const msgs = await loadMessages('sess-1')
+      // 修复后 content 不应包含 <think> 标签
+      expect(msgs[0]!.content).not.toContain('<think>')
+      expect(msgs[0]!.content).toBe('这是最终回复')
+    })
+
+    it('修复后: <think> 内容被提取到 reasoning 字段', async () => {
+      listSessionMessages.mockResolvedValueOnce({
+        messages: [{
+          id: 'm2', role: 'assistant',
+          content: '<think>用户问了去年买了什么，让我想想...</think>根据记忆，您去年买了一个表。',
+          timestamp: '2026-04-06T15:26:00Z',
+        }],
+        total: 1,
+      })
+
+      const msgs = await loadMessages('sess-2')
+      expect(msgs[0]!.content).toBe('根据记忆，您去年买了一个表。')
+      expect(msgs[0]!.reasoning).toBe('用户问了去年买了什么，让我想想...')
+    })
+
+    it('修复后: 已有 reasoning 时，<think> 内容追加而非覆盖', async () => {
+      listSessionMessages.mockResolvedValueOnce({
+        messages: [{
+          id: 'm3', role: 'assistant',
+          content: '<think>content 内嵌的思考</think>回复内容',
+          reasoning: '后端返回的 reasoning',
+          timestamp: '2026-04-06T15:26:00Z',
+        }],
+        total: 1,
+      })
+
+      const msgs = await loadMessages('sess-3')
+      expect(msgs[0]!.content).toBe('回复内容')
+      expect(msgs[0]!.reasoning).toContain('后端返回的 reasoning')
+      expect(msgs[0]!.reasoning).toContain('content 内嵌的思考')
+    })
+
+    it('修复后: 无 <think> 标签的消息不受影响', async () => {
+      listSessionMessages.mockResolvedValueOnce({
+        messages: [{
+          id: 'm4', role: 'assistant', content: '普通回复，没有思考标签。',
+          timestamp: '2026-04-06T15:26:00Z',
+        }],
+        total: 1,
+      })
+
+      const msgs = await loadMessages('sess-4')
+      expect(msgs[0]!.content).toBe('普通回复，没有思考标签。')
+      expect(msgs[0]!.reasoning).toBeUndefined()
+    })
+
+    it('修复后: user 消息的 <think> 不被处理（仅 assistant）', async () => {
+      listSessionMessages.mockResolvedValueOnce({
+        messages: [{
+          id: 'm5', role: 'user', content: '<think>用户消息不应被解析</think>正文',
+          timestamp: '2026-04-06T15:26:00Z',
+        }],
+        total: 1,
+      })
+
+      const msgs = await loadMessages('sess-5')
+      // user 消息原样保留
+      expect(msgs[0]!.content).toContain('<think>')
+    })
+
+    it('修复后: <thinking> 变体标签也能被解析', async () => {
+      listSessionMessages.mockResolvedValueOnce({
+        messages: [{
+          id: 'm6', role: 'assistant',
+          content: '<thinking>深度思考内容</thinking>最终答案',
+          timestamp: '2026-04-06T15:26:00Z',
+        }],
+        total: 1,
+      })
+
+      const msgs = await loadMessages('sess-6')
+      expect(msgs[0]!.content).toBe('最终答案')
+      expect(msgs[0]!.reasoning).toBe('深度思考内容')
+    })
+  })
 })
