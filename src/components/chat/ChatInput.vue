@@ -5,11 +5,9 @@ import { ArrowUp, Square, Paperclip, Mic } from 'lucide-vue-next'
 import MentionPopup from './MentionPopup.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import { useVoice } from '@/composables/useVoice'
-import { useChatStore } from '@/stores/chat'
 import type { Skill } from '@/types'
 
 const { t } = useI18n()
-const chatStore = useChatStore()
 const { isListening, transcript, isSupported: voiceSupported, toggleListening } = useVoice()
 
 // 语音识别结果 -> 输入框

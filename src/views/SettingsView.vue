@@ -12,13 +12,11 @@ import {
   ChevronUp,
   Power,
   Loader2,
-  Pencil,
   CheckCircle,
   XCircle,
   Zap,
   RotateCcw,
 } from 'lucide-vue-next'
-import { NTag, NSpace } from 'naive-ui'
 import { useSettingsStore } from '@/stores/settings'
 import { getRuntimeConfig } from '@/api/settings'
 import { getVersion } from '@/api/system'
@@ -636,14 +634,6 @@ function removeModel(provider: ProviderConfig, modelId: string) {
   autoSave()
 }
 
-function openDeleteModelConfirm(providerId: string, model: ModelOption) {
-  pendingDeleteModel.value = {
-    providerId,
-    modelId: model.id,
-    modelName: model.name,
-  }
-}
-
 function confirmDeleteModel() {
   const target = pendingDeleteModel.value
   pendingDeleteModel.value = null
@@ -653,23 +643,6 @@ function confirmDeleteModel() {
   if (!provider) return
 
   removeModel(provider, target.modelId)
-}
-
-/** 打开编辑模型 Modal */
-function openEditModel(provider: ProviderConfig, idx: number) {
-  const model = provider.models[idx]!
-  editingModel.value = { providerId: provider.id, idx, model }
-  editModelForm.value = {
-    name: model.name,
-    id: model.id,
-    caps: {
-      text: (model.capabilities || ['text']).includes('text'),
-      vision: (model.capabilities || []).includes('vision'),
-      video: (model.capabilities || []).includes('video'),
-      audio: (model.capabilities || []).includes('audio'),
-      code: (model.capabilities || []).includes('code'),
-    },
-  }
 }
 
 /** 保存编辑的模型 */
