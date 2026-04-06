@@ -134,6 +134,7 @@ export interface BackendLLMProvider {
   api_key: string
   base_url: string
   model: string
+  models?: string[]              // 已配置的模型列表（桌面端持久化用）
   compatible: string
   tools_enabled?: boolean | null // null=自动（本地关/云开），true=强制开，false=强制关
   max_tools?: number             // 0=不限制

@@ -10,6 +10,7 @@ import {
   Zap,
   BookOpen,
   ExternalLink,
+  Brain,
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { removeMessage } from '@/services/messageService'
@@ -238,7 +239,19 @@ const selectedModelCapabilities = computed(() => {
 const supportsVision = computed(() => selectedModelCapabilities.value.includes('vision'))
 const supportsVideo = computed(() => selectedModelCapabilities.value.includes('video'))
 
-// Research mode state
+// Deep thinking = research mode + thinking enabled (merged UX)
+const isDeepThinking = computed(() => chatStore.chatMode === 'research' && chatStore.thinkingEnabled)
+function toggleDeepThinking() {
+  if (isDeepThinking.value) {
+    chatStore.chatMode = 'chat'
+    chatStore.thinkingEnabled = false
+  } else {
+    chatStore.chatMode = 'research'
+    chatStore.thinkingEnabled = true
+  }
+}
+
+// Research mode state (kept for streaming display logic)
 const isResearchMode = computed(() => chatStore.chatMode === 'research')
 const researchStreamingContentLength = computed(() =>
   isResearchMode.value && chatStore.isCurrentStreaming
@@ -1111,11 +1124,11 @@ onUnmounted(() => {
                 </div>
                 <button
                   class="hc-chat__research-btn"
-                  :class="{ 'hc-chat__research-btn--active': chatStore.chatMode === 'research' }"
-                  @click="chatStore.chatMode = chatStore.chatMode === 'research' ? 'chat' : 'research'"
+                  :class="{ 'hc-chat__research-btn--active': isDeepThinking }"
+                  @click="toggleDeepThinking"
                 >
-                  <BookOpen :size="12" />
-                  {{ t('chat.research', 'Research') }}
+                  <Brain :size="12" />
+                  {{ t('chat.deepThink', '深度思考') }}
                 </button>
               </template>
             </ChatInput>
@@ -1311,7 +1324,7 @@ onUnmounted(() => {
 }
 
 .hc-chat__thread {
-  max-width: 720px;
+  max-width: min(90%, 960px);
   margin: 0 auto;
   display: flex;
   flex-direction: column;

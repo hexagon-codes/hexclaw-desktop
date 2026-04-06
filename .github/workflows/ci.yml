@@ -75,6 +75,8 @@ jobs:
         run: |
           mkdir -p src-tauri/binaries
           touch src-tauri/binaries/hexclaw-x86_64-unknown-linux-gnu
+          mkdir -p src-tauri/binaries/ollama-bundle
+          touch src-tauri/binaries/ollama-bundle/ollama
           mkdir -p dist
           echo '<html></html>' > dist/index.html
 

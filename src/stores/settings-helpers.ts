@@ -163,21 +163,27 @@ export function mergeConfigProvidersWithRuntime(
 function mergeProviderModels(
   localProvider: ProviderConfig | undefined,
   backendModelId: string,
+  backendModels?: string[],
 ): ModelOption[] {
   const localModels = cloneModels(localProvider?.models ?? [])
+
+  // 后端 models 列表优先 — 确保即使 Tauri Store 丢失也不丢模型
+  if (backendModels?.length) {
+    for (const modelId of backendModels) {
+      const id = modelId.trim()
+      if (id && !localModels.some((m) => m.id === id)) {
+        localModels.push({ id, name: id, capabilities: ['text'] })
+      }
+    }
+  }
+
+  // 确保当前选中模型也在列表中
   const trimmedBackendModelId = backendModelId.trim()
+  if (trimmedBackendModelId && !localModels.some((m) => m.id === trimmedBackendModelId)) {
+    localModels.unshift({ id: trimmedBackendModelId, name: trimmedBackendModelId, capabilities: ['text'] })
+  }
 
-  if (!trimmedBackendModelId) return localModels
-  if (localModels.some((model) => model.id === trimmedBackendModelId)) return localModels
-
-  return [
-    {
-      id: trimmedBackendModelId,
-      name: trimmedBackendModelId,
-      capabilities: ['text'],
-    },
-    ...localModels,
-  ]
+  return localModels
 }
 
 export function resolveDefaultModelProviderId(
@@ -324,7 +330,7 @@ export function backendToProviders(
       enabled: true,
       baseUrl: p.base_url || localProvider?.baseUrl || '',
       apiKey: p.api_key || localProvider?.apiKey || '',
-      models: mergeProviderModels(localProvider, p.model),
+      models: mergeProviderModels(localProvider, p.model, p.models),
       selectedModelId: '',
     }
     nextProvider.selectedModelId = resolveProviderSelectedModelId(nextProvider, p.model)
@@ -352,6 +358,7 @@ export function providersToBackend(
       api_key: p.apiKey || '',
       base_url: p.baseUrl || '',
       model: selectedModelId,
+      models: p.models.map((m) => m.id).filter(Boolean),
       compatible:
         p.type === 'custom' || !KNOWN_PROVIDER_TYPES.includes(p.type as KnownProviderType)
           ? 'openai'

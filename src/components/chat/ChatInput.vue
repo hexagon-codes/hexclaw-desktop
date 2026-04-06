@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowUp, Square, Paperclip, Mic, Brain } from 'lucide-vue-next'
+import { ArrowUp, Square, Paperclip, Mic } from 'lucide-vue-next'
 import MentionPopup from './MentionPopup.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import { useVoice } from '@/composables/useVoice'
@@ -241,14 +241,6 @@ defineExpose({ focus, setInput, triggerFileUpload })
             @click="toggleListening"
           >
             <Mic :size="18" />
-          </button>
-          <button
-            class="hc-composer__tool"
-            :class="{ 'hc-composer__tool--thinking': chatStore.thinkingEnabled }"
-            :title="chatStore.thinkingEnabled ? t('chat.thinkingOn') : t('chat.thinkingOff')"
-            @click="chatStore.thinkingEnabled = !chatStore.thinkingEnabled"
-          >
-            <Brain :size="18" />
           </button>
           <slot name="tools" />
         </div>

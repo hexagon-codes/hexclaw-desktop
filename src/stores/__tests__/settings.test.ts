@@ -6,6 +6,7 @@ import { useSettingsStore } from '../settings'
 vi.mock('@/api/config', () => ({
   getLLMConfig: vi.fn().mockRejectedValue(new Error('no backend')),
   updateLLMConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
+  fetchProviderModels: vi.fn().mockResolvedValue([]),
 }))
 
 describe('useSettingsStore', () => {

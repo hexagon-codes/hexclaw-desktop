@@ -2,7 +2,7 @@ import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { logger } from '@/utils/logger'
-import { getLLMConfig, updateLLMConfig } from '@/api/config'
+import { getLLMConfig, updateLLMConfig, fetchProviderModels } from '@/api/config'
 import { getOllamaStatus } from '@/api/ollama'
 import { updateConfig } from '@/api/settings'
 import { isTauri } from '@/utils/platform'
@@ -375,11 +375,37 @@ export const useSettingsStore = defineStore('settings', () => {
       } else {
         localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
       }
+
+      // 保存后异步拉取远程模型列表（不阻塞保存，失败静默）
+      syncAllProviderModels(plainConfig.llm.providers)
     }
 
     const queuedJob = saveConfigQueue.catch(() => undefined).then(persistJob)
     saveConfigQueue = queuedJob
     await queuedJob
+  }
+
+  /** 保存后异步拉取每个云端 Provider 的模型列表（fire-and-forget） */
+  function syncAllProviderModels(providers: ProviderConfig[]) {
+    for (const p of providers) {
+      if (!p.enabled || !p.apiKey?.trim() || p.type === 'ollama') continue
+      const baseUrl = p.baseUrl?.trim()
+      if (!baseUrl) continue
+      fetchProviderModels(baseUrl, p.apiKey).then((remoteModels) => {
+        if (!remoteModels.length || !config.value) return
+        const target = config.value.llm.providers.find((cp) => cp.id === p.id)
+        if (!target) return
+        const existingMap = new Map(target.models.map((m) => [m.id, m]))
+        for (const rm of remoteModels) {
+          if (!existingMap.has(rm.id)) {
+            target.models.push({ id: rm.id, name: rm.name || rm.id, capabilities: ['text'] })
+          }
+        }
+        logger.debug('自动拉取模型列表完成', p.name, remoteModels.length)
+      }).catch(() => {
+        // 静默失败，兜底模型已可用
+      })
+    }
   }
 
   /** 添加 Provider */

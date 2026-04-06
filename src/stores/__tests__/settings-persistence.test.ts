@@ -26,6 +26,7 @@ const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig } = vi.ho
 vi.mock('@/api/config', () => ({
   getLLMConfig: () => mockGetLLMConfig(),
   updateLLMConfig: (config: unknown) => mockUpdateLLMConfig(config),
+  fetchProviderModels: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/api/settings', () => ({

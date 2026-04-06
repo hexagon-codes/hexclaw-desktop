@@ -46,13 +46,12 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.openai.com/v1',
     placeholder: 'sk-...',
     defaultModels: [
-      { id: 'gpt-4o', name: 'GPT-4o', capabilities: ['text', 'vision'] },
-      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', capabilities: ['text', 'vision'] },
-      { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', capabilities: ['text', 'vision'] },
-      { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', capabilities: ['text'] },
-      { id: 'o1', name: 'o1', capabilities: ['text'] },
-      { id: 'o1-mini', name: 'o1 Mini', capabilities: ['text'] },
+      { id: 'gpt-4.1', name: 'GPT-4.1', capabilities: ['text', 'vision'] },
+      { id: 'gpt-4.1-mini', name: 'GPT-4.1 Mini', capabilities: ['text', 'vision'] },
+      { id: 'o3', name: 'o3', capabilities: ['text', 'vision'] },
       { id: 'o3-mini', name: 'o3 Mini', capabilities: ['text'] },
+      { id: 'o4-mini', name: 'o4 Mini', capabilities: ['text', 'vision'] },
+      { id: 'gpt-4o', name: 'GPT-4o', capabilities: ['text', 'vision'] },
     ],
   },
   deepseek: {
@@ -71,9 +70,10 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.anthropic.com/v1',
     placeholder: 'sk-ant-...',
     defaultModels: [
+      { id: 'claude-sonnet-4-5-20250514', name: 'Claude Sonnet 4.5', capabilities: ['text', 'vision'] },
       { id: 'claude-sonnet-4-20250514', name: 'Claude Sonnet 4', capabilities: ['text', 'vision'] },
-      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', capabilities: ['text', 'vision'] },
       { id: 'claude-opus-4-20250514', name: 'Claude Opus 4', capabilities: ['text', 'vision'] },
+      { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', capabilities: ['text', 'vision'] },
     ],
   },
   gemini: {
@@ -93,9 +93,9 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     placeholder: 'sk-...',
     defaultModels: [
+      { id: 'qwen3-235b-a22b', name: 'Qwen3 235B', capabilities: ['text'] },
       { id: 'qwen-max', name: 'Qwen Max', capabilities: ['text'] },
       { id: 'qwen-plus', name: 'Qwen Plus', capabilities: ['text'] },
-      { id: 'qwen-turbo', name: 'Qwen Turbo', capabilities: ['text'] },
       { id: 'qwen-vl-max', name: 'Qwen VL Max', capabilities: ['text', 'vision', 'video'] },
     ],
   },
@@ -116,8 +116,8 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     placeholder: 'sk-...',
     defaultModels: [
-      { id: 'glm-4-plus', name: 'GLM-4 Plus', capabilities: ['text'] },
-      { id: 'glm-4-flash', name: 'GLM-4 Flash', capabilities: ['text'] },
+      { id: 'glm-z1-flash', name: 'GLM-Z1 Flash', capabilities: ['text'] },
+      { id: 'glm-z1-airx', name: 'GLM-Z1 AirX', capabilities: ['text'] },
       { id: 'glm-4v-plus', name: 'GLM-4V Plus', capabilities: ['text', 'vision'] },
     ],
   },
@@ -127,6 +127,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.moonshot.cn/v1',
     placeholder: 'sk-...',
     defaultModels: [
+      { id: 'kimi-k2', name: 'Kimi K2', capabilities: ['text'] },
       { id: 'moonshot-v1-128k', name: 'Moonshot V1 128K', capabilities: ['text'] },
       { id: 'moonshot-v1-32k', name: 'Moonshot V1 32K', capabilities: ['text'] },
     ],
@@ -137,6 +138,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://qianfan.baidubce.com/v2',
     placeholder: 'bce-v3/...',
     defaultModels: [
+      { id: 'ernie-x1-turbo-32k', name: 'ERNIE X1 Turbo', capabilities: ['text'] },
       { id: 'ernie-4.5-8k', name: 'ERNIE 4.5 8K', capabilities: ['text'] },
       { id: 'ernie-4.0-8k', name: 'ERNIE 4.0 8K', capabilities: ['text'] },
     ],
@@ -147,8 +149,8 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.hunyuan.cloud.tencent.com/v1',
     placeholder: 'sk-...',
     defaultModels: [
+      { id: 'hunyuan-t1-latest', name: 'Hunyuan T1', capabilities: ['text'] },
       { id: 'hunyuan-pro', name: 'Hunyuan Pro', capabilities: ['text'] },
-      { id: 'hunyuan-standard', name: 'Hunyuan Standard', capabilities: ['text'] },
       { id: 'hunyuan-lite', name: 'Hunyuan Lite', capabilities: ['text'] },
     ],
   },
@@ -169,8 +171,8 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     defaultBaseUrl: 'https://api.minimax.chat/v1',
     placeholder: 'eyJ...',
     defaultModels: [
+      { id: 'MiniMax-M1-80k', name: 'MiniMax M1', capabilities: ['text'] },
       { id: 'abab6.5s-chat', name: 'ABAB 6.5s', capabilities: ['text'] },
-      { id: 'abab5.5-chat', name: 'ABAB 5.5', capabilities: ['text'] },
     ],
   },
   ollama: {

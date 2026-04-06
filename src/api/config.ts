@@ -50,3 +50,23 @@ export async function testLLMConnection(
   const text = await proxyApiRequestText('POST', '/api/v1/config/llm/test', JSON.stringify(payload))
   return safeJsonParse<LLMConnectionTestResponse>(text, 'testLLMConnection')
 }
+
+/**
+ * 从 Provider 的 /models 端点动态获取可用模型列表
+ *
+ * 大多数 Provider 兼容 OpenAI 格式：GET {base_url}/models → { data: [{ id, ... }] }
+ * Ollama 由 syncOllamaModels 单独处理，此函数用于云端 Provider。
+ */
+export async function fetchProviderModels(
+  baseUrl: string,
+  apiKey: string,
+): Promise<{ id: string; name?: string }[]> {
+  try { new URL(baseUrl) } catch { return [] }
+  const text = await proxyApiRequestText(
+    'POST',
+    '/api/v1/config/llm/models',
+    JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+  )
+  const result = safeJsonParse<{ models?: { id: string; name?: string }[] }>(text, 'fetchProviderModels')
+  return result.models ?? []
+}

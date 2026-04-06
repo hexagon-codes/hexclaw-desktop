@@ -638,6 +638,34 @@ Both follow the **local-first** principle: data is never uploaded to third-party
 
 ---
 
+## Changelog
+
+### v0.3.0
+
+**Bug Fixes**
+- Fixed Ollama model prewarming not working in desktop app (CSP missing port 11434)
+- Fixed prewarming triggering even when user selected a non-Ollama provider
+- Fixed agent session title not updating in sidebar after navigation
+- Fixed MCP server tools remaining visible after server deletion
+- Fixed empty AI replies displaying as regular message bubbles (now shows notice style)
+- Fixed streaming tool calls not executing (switched to full tool execution loop)
+- Fixed reasoning/thinking content lost after closing and reopening sessions (backend now persists reasoning in metadata)
+
+**New Features**
+- Dynamic model discovery: automatically fetches available models from provider API after successful connection test
+- Auto-test on API Key input: debounced 1.5s auto-validation when typing API Key
+- Chip-style model selector: replaced card list with compact clickable chips
+- MCP `~` path expansion: cross-platform home directory support in server args
+- Feishu thinking placeholder: shows "🤔 Thinking..." while AI processes, then replaces with final reply
+- Adaptive chat width: `min(90%, 960px)` for wider messages on large screens
+
+**UI Improvements**
+- Settings save button label changed to "Save Config"
+- Removed non-functional search box from settings toolbar
+- Model chips show "Dynamically fetched · just synced" hint below
+
+---
+
 ## More Help
 
 - **GitHub Issues**: [Submit a bug or feature request](https://github.com/hexagon-codes/hexclaw-desktop/issues)

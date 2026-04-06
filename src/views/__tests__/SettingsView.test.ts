@@ -57,6 +57,7 @@ vi.mock('@/api/config', () => ({
   }),
   testLLMConnection: mockTestLLMConnection,
   updateLLMConfig: vi.fn().mockImplementation((config) => Promise.resolve(config)),
+  fetchProviderModels: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/api/settings', () => ({
@@ -356,7 +357,7 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('LLM 服务商')
   })
 
-  it('does not mount edit model modal content until a model is being edited', async () => {
+  it('renders model chips for provider models', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
 
@@ -367,26 +368,24 @@ describe('SettingsView — E2E 关键路径', () => {
       enabled: true,
       apiKey: 'sk-test',
       baseUrl: 'https://api.openai.com/v1',
-      models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+      models: [
+        { id: 'gpt-4o', name: 'GPT-4o', capabilities: ['text', 'vision'] },
+        { id: 'gpt-4o-mini', name: 'GPT-4o Mini', capabilities: ['text'] },
+      ],
     })
     await flushPromises()
-
-    expect(document.body.textContent).not.toContain('编辑模型')
 
     const providerHead = wrapper.find('.hc-provider__card-head')
     expect(providerHead.exists()).toBe(true)
     await providerHead.trigger('click')
     await flushPromises()
 
-    const editModelBtn = wrapper.find('.hc-model-card__action')
-    expect(editModelBtn.exists()).toBe(true)
-    await editModelBtn.trigger('click')
-    await flushPromises()
-
-    expect(document.body.textContent).toContain('编辑模型')
+    const chips = wrapper.findAll('.hc-model-chip:not(.hc-model-chip--add)')
+    expect(chips.length).toBe(2)
+    expect(chips[0].text()).toContain('GPT-4o')
   })
 
-  it('opens add model form without rendering the edit model modal', async () => {
+  it('opens inline add model form when clicking custom chip', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
     await wrapper.vm.$nextTick()
@@ -408,16 +407,15 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
     await wrapper.vm.$nextTick()
 
-    let addModelBtn: ReturnType<typeof wrapper.findAll>[number] | undefined
+    let addChip: ReturnType<typeof wrapper.findAll>[number] | undefined
     await vi.waitFor(() => {
-      addModelBtn = wrapper.findAll('button').find((b) => b.text().includes('添加模型'))
-      expect(addModelBtn).toBeDefined()
+      addChip = wrapper.findAll('.hc-model-chip--add').at(0)
+      expect(addChip).toBeDefined()
     })
-    await addModelBtn!.trigger('click')
+    await addChip!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.hc-model-add-form').exists()).toBe(true)
-    expect(document.body.textContent).not.toContain('编辑模型')
+    expect(wrapper.find('.hc-model-add-inline').exists()).toBe(true)
   })
 
   it('does not add the same custom model twice when add-model is triggered twice quickly', async () => {

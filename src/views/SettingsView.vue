@@ -22,7 +22,7 @@ import { NTag, NSpace } from 'naive-ui'
 import { useSettingsStore } from '@/stores/settings'
 import { getRuntimeConfig } from '@/api/settings'
 import { getVersion } from '@/api/system'
-import { getLLMConfig, testLLMConnection } from '@/api/config'
+import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
 import {
   getBudgetStatus,
   getToolCacheStats,
@@ -703,6 +703,19 @@ function saveEditModel() {
 // ─── Provider 连接测试 ────────────────────────────────
 const testingProviderId = ref<string | null>(null)
 const testProviderResult = ref<Record<string, { ok: boolean; msg: string }>>({})
+const autoTestTimers: Record<string, ReturnType<typeof setTimeout>> = {}
+
+/** API Key 变化后自动测试连接 + 拉取模型（防抖 1.5s） */
+function scheduleAutoTest(provider: ProviderConfig) {
+  if (autoTestTimers[provider.id]) clearTimeout(autoTestTimers[provider.id])
+  // 清空旧结果，显示"待验证"状态
+  delete testProviderResult.value[provider.id]
+  const apiKey = provider.apiKey?.trim() || ''
+  if (!apiKey || provider.type === 'ollama') return
+  autoTestTimers[provider.id] = setTimeout(() => {
+    testProvider(provider)
+  }, 1500)
+}
 
 async function testProvider(provider: ProviderConfig) {
   testingProviderId.value = provider.id
@@ -744,6 +757,10 @@ async function testProvider(provider: ProviderConfig) {
         result.message ||
         (result.ok ? t('settings.llm.connectionOk') : t('settings.llm.connectionFailed')),
     }
+    // 连接成功后自动拉取远程模型列表（Ollama 由 syncOllamaModels 处理）
+    if (result.ok && provider.type !== 'ollama') {
+      syncRemoteModels(provider)
+    }
   } catch (e) {
     testProviderResult.value[provider.id] = {
       ok: false,
@@ -751,6 +768,39 @@ async function testProvider(provider: ProviderConfig) {
     }
   } finally {
     testingProviderId.value = null
+  }
+}
+
+/** 连接成功后，从 Provider 动态拉取可用模型列表，与预设合并 */
+async function syncRemoteModels(provider: ProviderConfig) {
+  const preset = PROVIDER_PRESETS[provider.type]
+  const baseUrl = provider.baseUrl || preset?.defaultBaseUrl || ''
+  const apiKey = provider.apiKey?.trim() || ''
+  if (!baseUrl) return
+  try {
+    const remoteModels = await fetchProviderModels(baseUrl, apiKey)
+    if (!remoteModels.length) return
+    // 合并：远程模型为主，保留预设中的 capabilities 信息
+    const presetMap = new Map((preset?.defaultModels ?? []).map(m => [m.id, m]))
+    const existingMap = new Map(provider.models.map(m => [m.id, m]))
+    const merged: typeof provider.models = []
+    for (const rm of remoteModels) {
+      const existing = existingMap.get(rm.id) || presetMap.get(rm.id)
+      merged.push({
+        id: rm.id,
+        name: rm.name || rm.id,
+        capabilities: existing?.capabilities ?? ['text'],
+        isCustom: existing?.isCustom,
+      })
+    }
+    provider.models = merged
+    // 若当前选中模型不在新列表中，自动选第一个
+    if (!merged.some(m => m.id === provider.selectedModelId) && merged.length) {
+      provider.selectedModelId = merged[0].id
+    }
+    autoSave()
+  } catch (e) {
+    console.warn('[Settings] 拉取远程模型列表失败（不影响使用）:', e)
   }
 }
 
@@ -1057,7 +1107,7 @@ async function saveConfig() {
                         :type="showApiKeys[provider.id] ? 'text' : 'password'"
                         class="hc-input"
                         :placeholder="PROVIDER_PRESETS[provider.type]?.placeholder || 'API Key'"
-                        @input="autoSave()"
+                        @input="autoSave(); scheduleAutoTest(provider)"
                       />
                       <button
                         class="hc-settings__eye-btn"
@@ -1086,151 +1136,62 @@ async function saveConfig() {
                     </p>
                   </div>
 
-                  <!-- 模型列表 -->
+                  <!-- 模型选择（芯片式） -->
                   <div class="hc-settings__field">
-                    <label class="hc-settings__label"
-                      >{{ t('settings.llm.models') }}
-                      <span class="hc-settings__required">*</span></label
-                    >
-                    <select
-                      v-if="provider.models.length > 0"
-                      v-model="provider.selectedModelId"
-                      class="hc-input"
-                      style="margin-bottom: 10px"
-                      @change="handleProviderModelChange(provider)"
-                    >
-                      <option
+                    <div class="hc-model-section-header">
+                      <label class="hc-settings__label">{{ t('settings.llm.models') }} <span class="hc-settings__required">*</span></label>
+                      <span v-if="testProviderResult[provider.id]?.ok" class="hc-model-sync-hint">
+                        {{ t('settings.llm.modelsDynamic', '动态获取') }} · {{ t('settings.llm.justSynced', '刚刚同步') }}
+                      </span>
+                      <span v-else-if="provider.models.length > 0" class="hc-model-sync-hint">
+                        {{ t('settings.llm.modelsPreset', '预设模型') }}
+                      </span>
+                    </div>
+                    <div class="hc-model-chips">
+                      <button
                         v-for="model in provider.models"
                         :key="model.id"
-                        :value="model.id"
+                        class="hc-model-chip"
+                        :class="{ 'hc-model-chip--active': provider.selectedModelId === model.id }"
+                        @click="provider.selectedModelId = model.id; handleProviderModelChange(provider)"
                       >
-                        {{ model.name }} ({{ model.id }})
-                      </option>
-                    </select>
-                    <div class="hc-model-list">
-                      <div
-                        v-for="(model, idx) in provider.models"
-                        :key="model.id"
-                        class="hc-model-card"
-                      >
-                        <div class="hc-model-card__main">
-                          <div class="hc-model-card__name">{{ model.name }}</div>
-                          <code class="hc-model-card__id">{{ model.id }}</code>
-                        </div>
-                        <NSpace :size="4" align="center">
-                          <NTag
-                            v-if="provider.selectedModelId === model.id"
-                            size="tiny"
-                            :bordered="false"
-                            type="success"
-                          >
-                            {{ t('settings.llm.selectedModel', '当前生效') }}
-                          </NTag>
-                          <NTag
-                            v-for="cap in (model.capabilities || ['text']).filter(
-                              (c: string) => c !== 'text',
-                            )"
-                            :key="cap"
-                            size="tiny"
-                            :bordered="false"
-                            :type="
-                              cap === 'vision'
-                                ? 'info'
-                                : cap === 'video'
-                                  ? 'warning'
-                                  : cap === 'code'
-                                    ? 'default'
-                                    : 'success'
-                            "
-                          >
-                            {{
-                              cap === 'vision'
-                                ? '视觉'
-                                : cap === 'video'
-                                  ? '视频'
-                                  : cap === 'audio'
-                                    ? '音频'
-                                    : cap === 'code'
-                                      ? '代码'
-                                      : cap
-                            }}
-                          </NTag>
-                          <button
-                            class="hc-model-card__action"
-                            @click="openEditModel(provider, idx)"
-                            title="编辑"
-                          >
-                            <Pencil :size="13" />
-                          </button>
-                          <button
-                            class="hc-model-card__action hc-model-card__action--del"
-                            title="删除"
-                            @click="openDeleteModelConfirm(provider.id, model)"
-                          >
-                            <Trash2 :size="13" />
-                          </button>
-                        </NSpace>
-                      </div>
-
-                      <!-- 添加模型 -->
+                        {{ model.name || model.id }}
+                        <span
+                          v-for="cap in (model.capabilities || []).filter((c: string) => c !== 'text')"
+                          :key="cap"
+                          class="hc-model-chip__cap"
+                          :class="`hc-model-chip__cap--${cap}`"
+                        >{{ cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : cap === 'audio' ? '音频' : cap === 'code' ? '代码' : cap }}</span>
+                      </button>
+                      <!-- 添加自定义模型 -->
                       <button
                         v-if="!showAddModelPanel"
-                        class="hc-model-add-btn"
+                        class="hc-model-chip hc-model-chip--add"
                         @click="showAddModelPanel = true"
                       >
-                        <Plus :size="14" />
-                        添加模型
+                        <Plus :size="11" /> {{ t('settings.llm.customModel', '自定义') }}
                       </button>
-                      <div v-else class="hc-model-add-form">
-                        <div class="hc-model-add-form__row">
-                          <input
-                            v-model="newModelId"
-                            type="text"
-                            class="hc-input hc-input--sm"
-                            placeholder="模型 ID *（如 gpt-4o）"
-                          />
-                          <input
-                            v-model="newModelName"
-                            type="text"
-                            class="hc-input hc-input--sm"
-                            placeholder="显示名称（选填）"
-                          />
-                        </div>
-                        <div class="hc-model-add-form__caps">
-                          <label
-                            v-for="cap in ['text', 'vision', 'video', 'audio'] as ModelCapability[]"
-                            :key="cap"
-                            class="hc-cap-check"
-                          >
-                            <input
-                              v-model="newModelCaps[cap]"
-                              type="checkbox"
-                              :disabled="cap === 'text'"
-                            />
-                            <span>{{
-                              cap === 'text'
-                                ? '文本'
-                                : cap === 'vision'
-                                  ? '视觉'
-                                  : cap === 'video'
-                                    ? '视频'
-                                    : '音频'
-                            }}</span>
-                          </label>
-                        </div>
-                        <div class="hc-model-add-form__actions">
-                          <button class="hc-btn hc-btn-sm" @click="showAddModelPanel = false">
-                            取消
-                          </button>
-                          <button
-                            class="hc-btn hc-btn-primary hc-btn-sm"
-                            :disabled="!newModelId.trim()"
-                            @click="handleAddCustomModel(provider)"
-                          >
-                            <Plus :size="12" /> 添加
-                          </button>
-                        </div>
-                      </div>
+                    </div>
+                    <!-- 添加自定义模型表单（内联） -->
+                    <div v-if="showAddModelPanel" class="hc-model-add-inline">
+                      <input
+                        v-model="newModelId"
+                        type="text"
+                        class="hc-input hc-input--sm"
+                        placeholder="模型 ID（如 gpt-4o）"
+                        @keyup.enter="newModelId.trim() && handleAddCustomModel(provider)"
+                        @keyup.escape="showAddModelPanel = false"
+                      />
+                      <button
+                        class="hc-btn hc-btn-primary hc-btn-sm"
+                        :disabled="!newModelId.trim()"
+                        @click="handleAddCustomModel(provider)"
+                      >
+                        <Plus :size="12" /> {{ t('common.add', '添加') }}
+                      </button>
+                      <button class="hc-btn hc-btn-sm" @click="showAddModelPanel = false">
+                        {{ t('common.cancel', '取消') }}
+                      </button>
                     </div>
                   </div>
 
@@ -2723,150 +2684,100 @@ async function saveConfig() {
   background: var(--hc-bg-hover);
 }
 
-/* ─── 模型卡片列表 ─── */
-.hc-model-list {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.hc-model-card {
+/* ─── 模型芯片选择 ─── */
+.hc-model-section-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--hc-bg-hover, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.08));
-  transition: border-color 0.15s;
+  margin-bottom: 4px;
 }
 
-.hc-model-card:hover {
-  border-color: var(--hc-accent, #4a90d9);
-}
-
-.hc-model-card__main {
-  flex: 1;
-  min-width: 0;
-}
-
-.hc-model-card__name {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--hc-text-primary);
-  line-height: 1.4;
-}
-
-.hc-model-card__id {
+.hc-model-sync-hint {
   font-size: 11px;
   color: var(--hc-text-muted, #5c5c6b);
-  font-family: 'SF Mono', 'Menlo', monospace;
 }
 
-.hc-model-card__action {
+.hc-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.hc-model-chip {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  cursor: pointer;
-  color: var(--hc-text-muted, #5c5c6b);
-  transition: background 0.15s, color 0.15s;
-}
-
-.hc-model-card__action:hover {
-  background: var(--hc-bg-card, rgba(255, 255, 255, 0.06));
-  color: var(--hc-text-primary);
-}
-
-.hc-model-card__action--del:hover {
-  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
-  color: var(--hc-error);
-}
-
-/* ─── 添加模型 ─── */
-.hc-model-add-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 10px;
-  border: 1px dashed var(--hc-border, rgba(255, 255, 255, 0.12));
-  border-radius: 8px;
-  background: transparent;
-  color: var(--hc-text-muted, #5c5c6b);
-  font-size: 12px;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.hc-model-add-btn:hover {
-  border-color: var(--hc-accent, #4a90d9);
-  color: var(--hc-accent, #4a90d9);
-  background: rgba(74, 144, 217, 0.05);
-}
-
-.hc-model-add-form {
-  padding: 12px;
-  border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.08));
-  border-radius: 8px;
-  background: var(--hc-bg-hover, rgba(255, 255, 255, 0.02));
-}
-
-.hc-model-add-form__row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.hc-model-add-form__row > * {
-  flex: 1 1 0;
-  min-width: 0;
-}
-
-.hc-model-add-form__caps {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 10px;
-}
-
-.hc-cap-check {
-  display: flex;
-  align-items: center;
   gap: 4px;
+  padding: 5px 12px;
+  border-radius: 100px;
   font-size: 12px;
-  color: var(--hc-text-secondary);
   cursor: pointer;
+  border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.12));
+  background: var(--hc-bg-main, rgba(255, 255, 255, 0.02));
+  color: var(--hc-text-secondary);
+  transition: all 0.15s;
 }
 
-.hc-cap-check input {
-  accent-color: var(--hc-accent, #4a90d9);
+.hc-model-chip:hover:not(.hc-model-chip--active) {
+  background: var(--hc-bg-hover, rgba(255, 255, 255, 0.06));
+  border-color: var(--hc-text-muted, #5c5c6b);
 }
 
-.hc-model-add-form__actions {
+.hc-model-chip--active {
+  border-color: var(--hc-accent, #4a90d9);
+  background: color-mix(in srgb, var(--hc-accent, #4a90d9) 10%, transparent);
+  color: var(--hc-accent, #4a90d9);
+  font-weight: 500;
+}
+
+.hc-model-chip--add {
+  border-style: dashed;
+  color: var(--hc-text-muted, #5c5c6b);
+}
+
+.hc-model-chip--add:hover {
+  color: var(--hc-accent, #4a90d9);
+  border-color: var(--hc-accent, #4a90d9);
+  background: color-mix(in srgb, var(--hc-accent, #4a90d9) 5%, transparent);
+}
+
+.hc-model-chip__cap {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.hc-model-chip__cap--vision {
+  background: color-mix(in srgb, var(--hc-success, #34c759) 12%, transparent);
+  color: var(--hc-success, #34c759);
+}
+
+.hc-model-chip__cap--video {
+  background: color-mix(in srgb, var(--hc-warning, #ff9f0a) 12%, transparent);
+  color: var(--hc-warning, #ff9f0a);
+}
+
+.hc-model-chip__cap--audio {
+  background: color-mix(in srgb, var(--hc-accent, #4a90d9) 12%, transparent);
+  color: var(--hc-accent, #4a90d9);
+}
+
+.hc-model-chip__cap--code {
+  background: color-mix(in srgb, var(--hc-text-secondary) 12%, transparent);
+  color: var(--hc-text-secondary);
+}
+
+/* ─── 添加自定义模型（内联） ─── */
+.hc-model-add-inline {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
+  margin-top: 8px;
 }
 
-@media (max-width: 640px) {
-  .hc-model-add-form__row {
-    flex-direction: column;
-  }
-
-  .hc-model-add-form__actions {
-    justify-content: stretch;
-  }
-
-  .hc-model-add-form__actions .hc-btn {
-    flex: 1 1 0;
-  }
+.hc-model-add-inline .hc-input {
+  flex: 1;
+  min-width: 0;
 }
 
 /* ─── 编辑模型 Modal ─── */

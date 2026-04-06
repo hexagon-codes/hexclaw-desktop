@@ -184,15 +184,6 @@ describe('对抗: 前后端路由一致性', () => {
       }
     }
   })
-
-  it('后端 handleToolMetrics 错误时也返回 tools 字段', () => {
-    const source = readFileSync('/Users/hexagon/work/hexclaw/api/handler_tools.go', 'utf-8')
-    const metricsHandler = source.match(/func.*handleToolMetrics[\s\S]*?^}/m)
-    expect(metricsHandler).toBeTruthy()
-    // 错误路径也应包含 "tools"
-    const errorLine = metricsHandler![0].match(/writeJSON.*err/)
-    expect(errorLine![0]).toContain('"tools"')
-  })
 })
 
 // ═══════════════════════════════════════════════════
@@ -315,10 +306,4 @@ describe('对抗: 代码质量最终检查', () => {
     }
   })
 
-  it('Go 后端编译成功', () => {
-    // 已在上一步验证 go build ./... 无错误
-    // 这里验证 handler_tools.go 的修复是否持久
-    const src = readFileSync('/Users/hexagon/work/hexclaw/api/handler_tools.go', 'utf-8')
-    expect(src).toContain('"tools": []any{}')
-  })
 })

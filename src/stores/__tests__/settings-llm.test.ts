@@ -25,6 +25,7 @@ const mockGetOllamaStatus = vi.fn()
 vi.mock('@/api/config', () => ({
   getLLMConfig: () => mockGetLLMConfig(),
   updateLLMConfig: (config: unknown) => mockUpdateLLMConfig(config),
+  fetchProviderModels: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock('@/api/ollama', () => ({
