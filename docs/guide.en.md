@@ -18,6 +18,7 @@
 - [Keyboard Shortcuts](#keyboard-shortcuts)
 - [System Tray](#system-tray)
 - [Troubleshooting](#troubleshooting)
+- [Changelog](#changelog)
 
 ---
 
