@@ -37,8 +37,14 @@ export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
   return data.models || []
 }
 
-export function loadOllamaModel(model: string): Promise<void> {
-  return apiPost('/api/v1/ollama/load', { model })
+export async function loadOllamaModel(model: string): Promise<void> {
+  // 直连 Ollama 原生 API 预热模型（Tauri webview 允许 localhost 跨域）
+  const res = await fetch('http://localhost:11434/api/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model, prompt: '', keep_alive: '5m' }),
+  })
+  if (!res.ok) throw new Error(`Ollama load failed: ${res.status}`)
 }
 
 export function unloadOllamaModel(model: string): Promise<void> {
