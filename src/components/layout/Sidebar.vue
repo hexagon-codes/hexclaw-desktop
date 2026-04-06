@@ -14,10 +14,15 @@ const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 
-const appVersion = ref('v0.3.2')
+const engineVersion = ref('')
 onMounted(() => {
-  import('@tauri-apps/api/app').then(({ getVersion }) =>
-    getVersion().then((v) => (appVersion.value = 'v' + v)),
+  import('@/api/system').then(({ getVersion }) =>
+    getVersion().then((info) => {
+      if (info?.engine_version) {
+        const v = info.engine_version
+        engineVersion.value = v.startsWith('v') ? v : `v${v}`
+      }
+    }),
   ).catch(() => {})
 })
 
@@ -34,9 +39,9 @@ const dotClass = computed(() => {
 
 const engineLabel = computed(() => {
   const s = appStore.sidecarStatus
-  if (s === 'running') return t('nav.engineRunning', 'Engine running')
-  if (s === 'starting') return t('nav.engineStarting', 'Engine starting…')
-  return t('nav.engineStopped', 'Engine stopped')
+  if (s === 'running') return engineVersion.value ? `Hexagon ${engineVersion.value}` : 'Hexagon'
+  if (s === 'starting') return 'Hexagon …'
+  return 'Hexagon'
 })
 
 function getGroupItems(group: NavGroup) {
@@ -93,7 +98,6 @@ function getGroupItems(group: NavGroup) {
           >
             <RotateCw :size="12" />
           </button>
-          <span class="hc-sidebar__version">{{ appVersion }}</span>
         </template>
       </div>
     </div>
@@ -290,13 +294,6 @@ function getGroupItems(group: NavGroup) {
 @keyframes hc-sidebar-spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-.hc-sidebar__version {
-  font-size: 10px;
-  color: var(--hc-text-muted);
-  font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
-  opacity: 0.6;
 }
 
 .hc-sidebar__dot {

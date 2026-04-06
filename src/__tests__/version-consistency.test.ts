@@ -30,9 +30,9 @@ function findFilesRecursive(dir: string, ext: string): string[] {
 }
 
 describe('Version Consistency', () => {
-  it('tauri.conf.json version is "0.3.2"', () => {
+  it('tauri.conf.json version is "0.3.3"', () => {
     const tauriConf = JSON.parse(readFile(path.join(ROOT, 'src-tauri/tauri.conf.json')))
-    expect(tauriConf.version).toBe('0.3.2')
+    expect(tauriConf.version).toBe('0.3.3')
   })
 
   it('no hardcoded "v0.1.0-beta" anywhere in src/ directory', () => {
@@ -54,15 +54,19 @@ describe('Version Consistency', () => {
     expect(staleVersionFiles).toEqual([])
   })
 
-  it('Sidebar uses dynamic appVersion ref (not hardcoded in template)', () => {
+  it('Sidebar uses dynamic engineVersion ref merged into engineLabel', () => {
     const sidebar = readFile(path.join(SRC, 'components/layout/Sidebar.vue'))
 
-    // Should have a ref for appVersion
-    expect(sidebar).toMatch(/const appVersion\s*=\s*ref/)
+    // Should have a ref for engineVersion
+    expect(sidebar).toMatch(/const engineVersion\s*=\s*ref/)
 
-    // Template should use {{ appVersion }} not a literal version string
+    // engineVersion should be used in engineLabel computed, not standalone in template
+    const scriptSection = sidebar.slice(0, sidebar.indexOf('<template>'))
+    expect(scriptSection).toContain('engineVersion.value')
+    expect(scriptSection).toContain('Hexagon')
+
+    // Template should not have hardcoded version strings
     const templateSection = sidebar.slice(sidebar.indexOf('<template>'))
-    expect(templateSection).toContain('{{ appVersion }}')
     expect(templateSection).not.toMatch(/v0\.\d+\.\d+(?!.*\{\{)/)
   })
 
@@ -94,19 +98,27 @@ describe('Version Consistency', () => {
     expect(templateSection).toContain('{{ appVersion }}')
   })
 
-  it('all version fallback defaults are v0.3.2', () => {
+  it('all appVersion fallback defaults are consistent (—)', () => {
     const filesToCheck = [
-      path.join(SRC, 'components/layout/Sidebar.vue'),
       path.join(SRC, 'components/common/AboutModal.vue'),
       path.join(SRC, 'views/AboutView.vue'),
+      path.join(SRC, 'views/SettingsView.vue'),
     ]
 
     for (const file of filesToCheck) {
       const content = readFile(file)
-      // The ref should default to 'v0.3.2'
+      // All components should use '—' as fallback, version loaded dynamically from Tauri
       const versionMatch = content.match(/appVersion\s*=\s*ref\(['"]([^'"]+)['"]\)/)
       expect(versionMatch).not.toBeNull()
-      expect(versionMatch![1]).toBe('v0.3.2')
+      expect(versionMatch![1]).toBe('—')
     }
+  })
+
+  it('Sidebar engineVersion fallback is empty string', () => {
+    const sidebar = readFile(path.join(SRC, 'components/layout/Sidebar.vue'))
+    // engineVersion starts empty, only shows when engine API responds
+    const versionMatch = sidebar.match(/engineVersion\s*=\s*ref\(['"]([^']*)['"]\)/)
+    expect(versionMatch).not.toBeNull()
+    expect(versionMatch![1]).toBe('')
   })
 })

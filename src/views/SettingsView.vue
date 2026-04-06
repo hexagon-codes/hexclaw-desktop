@@ -19,7 +19,6 @@ import {
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import { getRuntimeConfig } from '@/api/settings'
-import { getVersion } from '@/api/system'
 import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
 import {
   getBudgetStatus,
@@ -92,6 +91,13 @@ const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName:
 const runtimeConfig = ref<BackendRuntimeConfig | null>(null)
 const runtimeLLMConfig = ref<BackendLLMConfig | null>(null)
 const appVersion = ref('—')
+
+// Load desktop app version from Tauri
+onMounted(() => {
+  import('@tauri-apps/api/app').then(({ getVersion }) =>
+    getVersion().then((v) => (appVersion.value = 'v' + v)),
+  ).catch(() => {})
+})
 const runtimeInfoLoading = ref(false)
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 let autoSavePromise: Promise<void> | null = null
@@ -426,15 +432,13 @@ async function loadRuntimeInfo() {
   const gen = ++runtimeInfoGen
   runtimeInfoLoading.value = true
   try {
-    const [nextRuntimeConfig, nextLLMConfig, versionInfo] = await Promise.all([
+    const [nextRuntimeConfig, nextLLMConfig] = await Promise.all([
       getRuntimeConfig(),
       getLLMConfig(),
-      getVersion().catch(() => null),
     ])
     if (gen !== runtimeInfoGen) return // stale response from earlier call, discard
     runtimeConfig.value = nextRuntimeConfig
     runtimeLLMConfig.value = nextLLMConfig
-    if (versionInfo?.version) appVersion.value = `v${versionInfo.version}`
   } catch (e) {
     if (gen !== runtimeInfoGen) return
     runtimeConfig.value = null

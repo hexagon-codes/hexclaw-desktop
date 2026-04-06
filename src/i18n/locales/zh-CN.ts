@@ -810,7 +810,7 @@ export default {
     system: {
       title: '系统设置',
       info: '系统信息',
-      version: '版本',
+      version: 'HexClaw Desktop 版本',
       localStorage: '本地存储',
       knowledgeIndex: '知识索引',
       apiEndpoint: 'API 端点',

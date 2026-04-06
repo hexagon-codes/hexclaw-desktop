@@ -5,6 +5,8 @@ import logoUrl from '@/assets/logo.png'
 import hexagonLogoUrl from '@/assets/hexagon-engine-logo.png'
 import { useAutoUpdate } from '@/composables/useAutoUpdate'
 import { useToast } from '@/composables/useToast'
+import { getVersion } from '@/api/system'
+import { getOllamaStatus } from '@/api/ollama'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -23,13 +25,15 @@ watchEffect(() => {
   document.title = t('about.title', '关于 河蟹 AI')
 })
 
-const appVersion = ref('v0.3.2')
+const appVersion = ref('—')
+const engineVersion = ref('')
+const ollamaVersion = ref('')
 const appName = computed(() => t('about.brandAi', '河蟹 AI'))
 
 const techStack = computed(() => [
   { name: 'Tauri v2 · Vue 3', detail: 'Rust · TypeScript', color: '#f36b2a' },
-  { name: 'Go Sidecar', detail: 'HexClaw Serve', color: '#00add8' },
-  { name: 'Ollama', detail: t('about.capLocalInference', '本地推理'), color: '#7c7c7c' },
+  { name: `Hexagon Engine${engineVersion.value ? ' ' + engineVersion.value : ''}`, detail: 'Go Sidecar', color: '#00add8' },
+  { name: `Ollama${ollamaVersion.value ? ' ' + ollamaVersion.value : ''}`, detail: t('about.capLocalInference', '本地推理'), color: '#7c7c7c' },
   {
     name: t('about.securityGateway', '安全网关'),
     detail: `PII · ${t('about.injectionGuard', '注入检测')}`,
@@ -121,6 +125,17 @@ onMounted(() => {
   import('@tauri-apps/api/app').then(({ getVersion }) =>
     getVersion().then((v) => (appVersion.value = 'v' + v)),
   ).catch(() => {})
+
+  getVersion().then((info) => {
+    if (info?.engine_version) {
+      const v = info.engine_version
+      engineVersion.value = v.startsWith('v') ? v : `v${v}`
+    }
+  }).catch(() => {})
+
+  getOllamaStatus().then((status) => {
+    if (status?.version) ollamaVersion.value = `v${status.version}`
+  }).catch(() => {})
 })
 </script>
 

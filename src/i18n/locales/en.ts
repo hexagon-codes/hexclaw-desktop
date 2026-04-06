@@ -801,7 +801,7 @@ export default {
     system: {
       title: 'System',
       info: 'System Info',
-      version: 'Version',
+      version: 'HexClaw Desktop Version',
       localStorage: 'Local Storage',
       knowledgeIndex: 'Knowledge Index',
       apiEndpoint: 'API Endpoint',
