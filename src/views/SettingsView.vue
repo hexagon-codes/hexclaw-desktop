@@ -769,7 +769,7 @@ async function syncRemoteModels(provider: ProviderConfig) {
     provider.models = merged
     // 若当前选中模型不在新列表中，自动选第一个
     if (!merged.some(m => m.id === provider.selectedModelId) && merged.length) {
-      provider.selectedModelId = merged[0].id
+      provider.selectedModelId = merged[0]!.id
     }
     autoSave()
   } catch (e) {

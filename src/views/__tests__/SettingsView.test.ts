@@ -382,7 +382,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     const chips = wrapper.findAll('.hc-model-chip:not(.hc-model-chip--add)')
     expect(chips.length).toBe(2)
-    expect(chips[0].text()).toContain('GPT-4o')
+    expect(chips[0]!.text()).toContain('GPT-4o')
   })
 
   it('opens inline add model form when clicking custom chip', async () => {
@@ -409,7 +409,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     let addChip: ReturnType<typeof wrapper.findAll>[number] | undefined
     await vi.waitFor(() => {
-      addChip = wrapper.findAll('.hc-model-chip--add').at(0)
+      addChip = wrapper.findAll('.hc-model-chip--add')[0]
       expect(addChip).toBeDefined()
     })
     await addChip!.trigger('click')

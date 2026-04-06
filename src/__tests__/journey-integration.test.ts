@@ -664,16 +664,6 @@ describe('Journey 5: Settings save concurrent change protection', () => {
     // Initialize with default config
     store.config = defaultConfig()
 
-    // Track the order of localStorage writes
-    const writtenConfigs: string[] = []
-    const originalSetItem = localStorage.setItem.bind(localStorage)
-    vi.spyOn(localStorage, 'setItem').mockImplementation((key: string, value: string) => {
-      if (key === 'app_config') {
-        writtenConfigs.push(value)
-      }
-      return originalSetItem(key, value)
-    })
-
     // First save: change language to 'en'
     const config1 = JSON.parse(JSON.stringify(store.config!))
     config1.general.language = 'en'
@@ -688,11 +678,11 @@ describe('Journey 5: Settings save concurrent change protection', () => {
 
     await Promise.all([p1, p2])
 
-    // Both saves should complete. The save queue ensures they run in order.
     // The final config in localStorage should be from the second save (ja)
-    expect(writtenConfigs.length).toBeGreaterThanOrEqual(1)
-    const lastWritten = JSON.parse(writtenConfigs[writtenConfigs.length - 1]!)
-    expect(lastWritten.general.language).toBe('ja')
+    const stored = localStorage.getItem('app_config')
+    expect(stored).toBeTruthy()
+    const parsed = JSON.parse(stored!)
+    expect(parsed.general.language).toBe('ja')
 
     // The in-memory config should also reflect the last save
     expect(store.config!.general.language).toBe('ja')
