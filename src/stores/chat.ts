@@ -18,6 +18,7 @@ import type { ChatMessage, ChatSession, ChatAttachment, Artifact, ChatMode, Exec
 import * as msgSvc from '@/services/messageService'
 import * as chatSvc from '@/services/chatService'
 import { hexclawWS, type ToolApprovalRequest } from '@/api/websocket'
+import { extractThinkTags } from '@/utils/think-tags'
 
 function cloneMessage(message: ChatMessage): ChatMessage {
   return JSON.parse(JSON.stringify(message))
@@ -34,6 +35,8 @@ export const useChatStore = defineStore('chat', () => {
   const streamingContent = ref('')
   const streamingReasoning = ref('')
   const streamingReasoningStartTime = ref<number>(0)
+  /** 原始流式内容缓冲（含可能的 <think> 标签），用于实时解析 */
+  let _rawStreamBuf = ''
   const error = ref<ApiError | null>(null)
 
   const chatMode = ref<ChatMode>('chat')
@@ -266,15 +269,22 @@ export const useChatStore = defineStore('chat', () => {
     metadata?: Record<string, unknown>; toolCalls?: ChatMessage['tool_calls']; agentName?: string
     reasoning?: string
   }): ChatMessage {
+    // 兜底解析：从 content 中提取内嵌的 <think> 标签
+    const parsed = extractThinkTags(params.content || '')
+    const finalContent = parsed.content
+    const finalReasoning = parsed.reasoning
+      ? (params.reasoning ? params.reasoning + '\n' + parsed.reasoning : parsed.reasoning)
+      : (params.reasoning || undefined)
+
     const thinkingDuration = streamingReasoningStartTime.value
       ? Math.round((Date.now() - streamingReasoningStartTime.value) / 1000)
       : 0
     const metadata = { ...params.metadata } as Record<string, unknown>
     if (thinkingDuration > 0) metadata.thinking_duration = thinkingDuration
     const assistantMsg: ChatMessage = {
-      id: nanoid(), role: 'assistant', content: params.content || (params.reasoning ? '' : '模型未生成有效回复，可能是内容安全策略过滤所致，请尝试换个方式提问。'),
+      id: nanoid(), role: 'assistant', content: finalContent || (finalReasoning ? '' : '模型未生成有效回复，可能是内容安全策略过滤所致，请尝试换个方式提问。'),
       timestamp: new Date().toISOString(),
-      reasoning: params.reasoning || undefined,
+      reasoning: finalReasoning,
       metadata, tool_calls: params.toolCalls, agent_name: params.agentName,
     }
     messages.value.push(assistantMsg)
@@ -284,10 +294,11 @@ export const useChatStore = defineStore('chat', () => {
       msgSvc.updateSessionTitle(params.sessionId, title).catch(() => {})
     }
     msgSvc.touchSession(params.sessionId).catch(() => {})
-    extractArtifacts(params.content, assistantMsg.id)
+    extractArtifacts(finalContent, assistantMsg.id)
     streaming.value = false
     streamingContent.value = ''
     streamingReasoning.value = ''; streamingReasoningStartTime.value = 0
+    _rawStreamBuf = ''
     loadSessions()
     return assistantMsg
   }
@@ -297,7 +308,7 @@ export const useChatStore = defineStore('chat', () => {
     const apiErr = fromNativeError(e)
     error.value = apiErr
     if (streaming.value) { stopStreaming() } else {
-      streaming.value = false; streamingSessionId.value = null; streamingContent.value = ''; streamingReasoning.value = ''
+      streaming.value = false; streamingSessionId.value = null; streamingContent.value = ''; streamingReasoning.value = ''; _rawStreamBuf = ''
       chatSvc.clearWebSocketCallbacks()
     }
     messages.value.push({ id: nanoid(), role: 'assistant', content: apiErr.message || '发送失败，请检查 hexclaw 引擎是否运行', timestamp: new Date().toISOString() })
@@ -344,16 +355,19 @@ export const useChatStore = defineStore('chat', () => {
       await chatSvc.sendViaWebSocket(backendText, sessionId, chatParams.value, agentRole.value, attachments, {
         onChunk: (content, reasoning) => {
           if (streamingSessionId.value !== sessionId) return
-          if (content) {
-            // 正式回复开始时，清除之前的 thinking 内容
-            if (streamingReasoning.value && !streamingContent.value) {
-              streamingContent.value = ''
-            }
-            streamingContent.value += content
-          }
           if (reasoning) {
             if (!streamingReasoningStartTime.value) streamingReasoningStartTime.value = Date.now()
             streamingReasoning.value += reasoning
+          }
+          if (content) {
+            // 累积原始内容，解析可能内嵌的 <think> 标签
+            _rawStreamBuf += content
+            const parsed = extractThinkTags(_rawStreamBuf)
+            if (parsed.reasoning) {
+              if (!streamingReasoningStartTime.value) streamingReasoningStartTime.value = Date.now()
+              streamingReasoning.value = parsed.reasoning
+            }
+            streamingContent.value = parsed.content
           }
         },
         onDone: (content, metadata, toolCalls, agentName) => {
@@ -399,6 +413,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingSessionId.value = null
     streamingContent.value = ''
     streamingReasoning.value = ''; streamingReasoningStartTime.value = 0
+    _rawStreamBuf = ''
     // 先触发 error 回调来 settle 悬挂的 sendViaWebSocket promise，再清除回调
     hexclawWS.triggerError('用户取消')
     chatSvc.clearWebSocketCallbacks()

@@ -60,7 +60,13 @@ const setup = () => {
         const { invoke } = await import('@tauri-apps/api/core')
         await invoke<string>('restart_sidecar')
 
-        const ok = await checkHealth()
+        // Tauri 端已做 15s 健康检查轮询，这里带重试兜底瞬时波动
+        let ok = false
+        for (let i = 0; i < 3; i++) {
+          ok = await checkHealth()
+          if (ok) break
+          await new Promise(r => setTimeout(r, 1000))
+        }
         sidecarStatus.value = ok ? 'running' : 'stopped'
         sidecarReady.value = ok
         return ok

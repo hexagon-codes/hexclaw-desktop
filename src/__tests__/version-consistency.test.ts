@@ -30,9 +30,9 @@ function findFilesRecursive(dir: string, ext: string): string[] {
 }
 
 describe('Version Consistency', () => {
-  it('tauri.conf.json version is "0.3.1"', () => {
+  it('tauri.conf.json version is "0.3.2"', () => {
     const tauriConf = JSON.parse(readFile(path.join(ROOT, 'src-tauri/tauri.conf.json')))
-    expect(tauriConf.version).toBe('0.3.1')
+    expect(tauriConf.version).toBe('0.3.2')
   })
 
   it('no hardcoded "v0.1.0-beta" anywhere in src/ directory', () => {
@@ -94,7 +94,7 @@ describe('Version Consistency', () => {
     expect(templateSection).toContain('{{ appVersion }}')
   })
 
-  it('all version fallback defaults are v0.3.1', () => {
+  it('all version fallback defaults are v0.3.2', () => {
     const filesToCheck = [
       path.join(SRC, 'components/layout/Sidebar.vue'),
       path.join(SRC, 'components/common/AboutModal.vue'),
@@ -103,10 +103,10 @@ describe('Version Consistency', () => {
 
     for (const file of filesToCheck) {
       const content = readFile(file)
-      // The ref should default to 'v0.3.1'
+      // The ref should default to 'v0.3.2'
       const versionMatch = content.match(/appVersion\s*=\s*ref\(['"]([^'"]+)['"]\)/)
       expect(versionMatch).not.toBeNull()
-      expect(versionMatch![1]).toBe('v0.3.1')
+      expect(versionMatch![1]).toBe('v0.3.2')
     }
   })
 })

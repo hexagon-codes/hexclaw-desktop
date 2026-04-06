@@ -1380,7 +1380,7 @@ onUnmounted(() => {
 
 /* ─── Message body ───── */
 .hc-msg__body {
-  max-width: 70%;
+  max-width: 90%;
   min-width: 0;
 }
 
@@ -1388,6 +1388,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  max-width: 70%;
 }
 
 .hc-msg__name {
