@@ -28,7 +28,7 @@ async function warmupOllamaModel() {
     if (running.length > 0) return // 已有模型在跑
 
     // Ollama 运行中 + 有已下载模型 + 无模型在跑 → 预热第一个模型
-    const modelToLoad = status.models[0].name
+    const modelToLoad = status.models[0]!.name
     console.log('[AppLayout] Ollama 自动预热:', modelToLoad)
     await loadOllamaModel(modelToLoad)
     console.log('[AppLayout] Ollama 预热完成')
