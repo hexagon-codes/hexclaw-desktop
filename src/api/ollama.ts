@@ -37,14 +37,8 @@ export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
   return data.models || []
 }
 
-export async function loadOllamaModel(model: string): Promise<void> {
-  // 直接调 Ollama 原生 API 预热模型（后端无 /load 接口）
-  const res = await fetch('http://localhost:11434/api/generate', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, prompt: '', keep_alive: '5m' }),
-  })
-  if (!res.ok) throw new Error(`Ollama load failed: ${res.status}`)
+export function loadOllamaModel(model: string): Promise<void> {
+  return apiPost('/api/v1/ollama/load', { model })
 }
 
 export function unloadOllamaModel(model: string): Promise<void> {
