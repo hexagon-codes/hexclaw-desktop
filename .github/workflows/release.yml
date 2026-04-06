@@ -142,6 +142,11 @@ jobs:
           go build -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
             -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
 
+      - name: Create ollama-bundle stub
+        run: |
+          mkdir -p src-tauri/binaries/ollama-bundle
+          touch src-tauri/binaries/ollama-bundle/ollama
+
       # --- Frontend & Tauri build ---
       - uses: pnpm/action-setup@v4
 
