@@ -156,11 +156,9 @@ jobs:
               rm -f /tmp/ollama-darwin.tgz
               ;;
             x86_64-unknown-linux-gnu)
-              echo "Downloading Ollama v${OLLAMA_VERSION} for Linux amd64..."
-              curl -fSL "${OLLAMA_BASE}/ollama-linux-amd64.tar.zst" -o /tmp/ollama-linux.tar.zst
-              zstd -d /tmp/ollama-linux.tar.zst -o /tmp/ollama-linux.tar
-              tar xf /tmp/ollama-linux.tar -C src-tauri/binaries/ollama-bundle
-              rm -f /tmp/ollama-linux.tar.zst /tmp/ollama-linux.tar
+              echo "Linux: Ollama too large (~1.9GB with GPU libs) to embed, creating stub"
+              echo "Users should install Ollama separately: curl -fsSL https://ollama.com/install.sh | sh"
+              touch src-tauri/binaries/ollama-bundle/ollama
               ;;
             x86_64-pc-windows-msvc)
               echo "Downloading Ollama v${OLLAMA_VERSION} for Windows..."
