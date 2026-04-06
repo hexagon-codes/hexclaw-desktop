@@ -1,6 +1,6 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
@@ -15,7 +15,8 @@ const router = useRouter()
 const appStore = useAppStore()
 
 const engineVersion = ref('')
-onMounted(() => {
+
+function fetchEngineVersion() {
   import('@/api/system').then(({ getVersion }) =>
     getVersion().then((info) => {
       if (info?.engine_version) {
@@ -24,7 +25,12 @@ onMounted(() => {
       }
     }),
   ).catch(() => {})
-})
+}
+
+// Fetch version when sidecar becomes running
+watch(() => appStore.sidecarStatus, (s) => {
+  if (s === 'running' && !engineVersion.value) fetchEngineVersion()
+}, { immediate: true })
 
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
