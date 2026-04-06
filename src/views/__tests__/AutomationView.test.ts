@@ -109,14 +109,14 @@ describe('AutomationView', () => {
     expect(wrapper.find('[data-testid="tasks-view"]').exists()).toBe(false)
   })
 
-  it('renders a dedicated Webhooks segment in the automation tab switcher', async () => {
-    const { wrapper } = await mountAutomationView('/automation/webhooks')
+  it('renders the automation tab segments from navigation config', async () => {
+    const { wrapper } = await mountAutomationView('/automation')
     await flushPromises()
 
     const labels = wrapper.findAll('.segmented-item').map((node) => node.text())
     expect(labels).toContain('定时任务')
     expect(labels).toContain('工作流画布')
-    expect(labels).toContain('Webhooks')
+    expect(labels).toHaveLength(2)
   })
 
   it('refreshes webhooks instead of canvas workflows when the webhooks tab is active', async () => {

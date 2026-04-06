@@ -140,14 +140,17 @@ describe('Credential handling', () => {
     expect(commands).toMatch(/\.header\("Authorization",\s*format!\("Bearer \{\}",\s*params\.api_key\)/)
   })
 
-  it('save_secret uses keyring for OS-native storage', () => {
-    expect(commands).toContain('keyring::Entry::new(KEYRING_SERVICE')
-    expect(commands).toContain('entry.set_password(&value)')
+  it('secure storage is handled in TypeScript via Tauri LazyStore', () => {
+    // Secure storage moved from Rust keyring to TypeScript secure-store.ts
+    // using Tauri LazyStore with client-side encryption
+    expect(secureStore).toContain('LazyStore')
+    expect(secureStore).toContain('encrypt')
+    expect(secureStore).toContain('saveSecureValue')
   })
 
-  it('load_secret uses keyring for OS-native storage', () => {
-    expect(commands).toContain('entry.get_password()')
-    expect(commands).toContain('keyring::Error::NoEntry')
+  it('loadSecureValue decrypts stored values', () => {
+    expect(secureStore).toContain('loadSecureValue')
+    expect(secureStore).toContain('decrypt')
   })
 
   it('secure-store.ts never logs the actual key value', () => {

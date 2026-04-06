@@ -38,8 +38,8 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   const chatSource = readFrontendFile('chat.ts')
 
   it('createSession sends POST /api/v1/sessions with {id, title}', () => {
-    // Frontend: apiPost('/api/v1/sessions', { id, title })
-    expect(chatSource).toContain("apiPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions', { id, title })")
+    // Frontend: sessionPost('/api/v1/sessions', { id, title })
+    expect(chatSource).toContain("sessionPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions', { id, title })")
   })
 
   it('createSession response matches backend createSessionRequest struct', () => {
@@ -50,8 +50,8 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   })
 
   it('updateSessionTitle sends PATCH /api/v1/sessions/{id} with {title}', () => {
-    // Frontend: apiPatch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })
-    expect(chatSource).toContain("apiPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })")
+    // Frontend: sessionPatch(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`, { title })
+    expect(chatSource).toContain("sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`, { title })")
   })
 
   it('updateSessionTitle response matches backend updateSession handler', () => {
@@ -62,23 +62,23 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   })
 
   it('deleteSession sends DELETE /api/v1/sessions/{id}', () => {
-    expect(chatSource).toContain("apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`)")
+    expect(chatSource).toContain("apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`)")
   })
 
   it('listSessions sends GET /api/v1/sessions with user_id query', () => {
-    expect(chatSource).toContain("apiGet<{ sessions: SessionSummary[]; total: number }>('/api/v1/sessions'")
+    expect(chatSource).toContain("sessionGet<{ sessions: SessionSummary[]; total: number }>('/api/v1/sessions'")
   })
 
   it('getSession sends GET /api/v1/sessions/{id}', () => {
-    expect(chatSource).toContain("apiGet<SessionSummary>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`)")
+    expect(chatSource).toContain("sessionGet<SessionSummary>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`)")
   })
 
   it('listSessionMessages sends GET /api/v1/sessions/{id}/messages', () => {
-    expect(chatSource).toContain("apiGet<{ messages: ChatMessage[]; total: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`")
+    expect(chatSource).toContain("sessionGet<{ messages: ChatMessage[]; total: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`")
   })
 
   it('searchMessages sends GET /api/v1/messages/search', () => {
-    expect(chatSource).toContain("apiGet<{ results: Array<ChatMessage & { session_id: string; score?: number }>; total: number; query: string }>('/api/v1/messages/search'")
+    expect(chatSource).toContain("sessionGet<{ results: Array<ChatMessage & { session_id: string; score?: number }>; total: number; query: string }>('/api/v1/messages/search'")
   })
 })
 
@@ -121,7 +121,7 @@ describe('Fork Session API alignment', () => {
   it('ALIGNED: forkSession response expects session object matching backend', () => {
     const chatSource = readFrontendFile('chat.ts')
     // Frontend now correctly expects: { session: SessionSummary; message: string }
-    expect(chatSource).toContain("apiPost<{ session: SessionSummary; message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`")
+    expect(chatSource).toContain("sessionPost<{ session: SessionSummary; message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`")
   })
 })
 
@@ -270,9 +270,9 @@ describe('Skill API alignment: types/skill.ts vs handler_misc.go', () => {
 
   it('installSkill sends correct request body', () => {
     const skillsSource = readFrontendFile('skills.ts')
-    // Frontend: { source }
-    expect(skillsSource).toContain("{ source }")
-    // Backend InstallSkillRequest: Source string `json:"source"`
+    // Frontend: { source, type }
+    expect(skillsSource).toContain("{ source, type }")
+    // Backend InstallSkillRequest: Source string `json:"source"`, Type string `json:"type"`
     // ALIGNED
   })
 })

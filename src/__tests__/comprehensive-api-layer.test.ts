@@ -1085,7 +1085,7 @@ describe('chat.ts', () => {
       // messageId is now properly encoded in the URL
       expect(mockedApiPut).toHaveBeenCalledWith(
         `/api/v1/messages/${encodeURIComponent('msg/with/slashes')}/feedback`,
-        { feedback: 'like' },
+        { feedback: 'like', user_id: 'desktop-user' },
       )
     })
   })
@@ -1101,7 +1101,7 @@ describe('chat.ts', () => {
 
       expect(mockedApiPost).toHaveBeenCalledWith(
         `/api/v1/sessions/${encodeURIComponent('sess-1')}/fork`,
-        { message_id: 'msg-42' },
+        { message_id: 'msg-42', user_id: 'desktop-user' },
       )
     })
   })

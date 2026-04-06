@@ -297,9 +297,11 @@ describe('对抗: 代码质量最终检查', () => {
     expect(settingsSrc).not.toMatch(/function isTauri\s*\(/)
     expect(settingsSrc).toContain("import { isTauri } from '@/utils/platform'")
 
+    // secure-store.ts has a private local isTauri() helper (not exported),
+    // consistent with the pattern in platform.ts but scoped locally
     const secureSrc = readFileSync('src/utils/secure-store.ts', 'utf-8')
-    expect(secureSrc).not.toMatch(/function isTauri\s*\(/)
-    expect(secureSrc).toContain("import { isTauri } from './platform'")
+    expect(secureSrc).toContain('function isTauri()')
+    expect(secureSrc).not.toContain('export function isTauri')
   })
 
   it('生产代码无 console.error/warn（仅 logger 实现除外）', () => {

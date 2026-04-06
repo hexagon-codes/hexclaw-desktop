@@ -262,12 +262,13 @@ describe('BUG 16: SettingsView flushAutoSave re-saves after in-flight promise', 
     expect(fnBody).toContain('await autoSavePromise')
   })
 
-  it('re-saves after in-flight promise completes if hasPendingAutoSave or force', () => {
+  it('returns after awaiting in-flight promise to avoid double-save', () => {
     const fnStart = src.indexOf('async function flushAutoSave')
     const fnEnd = src.indexOf('\n}\n', fnStart)
     const fnBody = src.slice(fnStart, fnEnd)
-    // After awaiting in-flight, should check hasPendingAutoSave and persist again
-    expect(fnBody).toMatch(/await\s+autoSavePromise[\s\S]*hasPendingAutoSave\s*\|\|\s*force/)
+    // After awaiting in-flight promise, the function returns to prevent double-save.
+    // The next autoSave timer tick will pick up any pending changes.
+    expect(fnBody).toMatch(/await\s+autoSavePromise[\s\S]*return/)
   })
 
   it('sets hasPendingAutoSave = true on error to ensure retry', () => {

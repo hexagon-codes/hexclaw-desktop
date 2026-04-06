@@ -221,7 +221,7 @@ describe('全场景链路: user_id 传递验证', () => {
       await deleteSession('sess-to-delete')
 
       expect(mockFetch).toHaveBeenCalledWith(
-        `/api/v1/sessions/${encodeURIComponent('sess-to-delete')}`,
+        `/api/v1/sessions/${encodeURIComponent('sess-to-delete')}?user_id=desktop-user`,
         expect.objectContaining({ method: 'DELETE' }),
       )
     })

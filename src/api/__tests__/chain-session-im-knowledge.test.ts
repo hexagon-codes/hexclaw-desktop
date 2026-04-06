@@ -164,7 +164,7 @@ describe('Chain 1: Session Lifecycle', () => {
       '/api/v1/sessions/s1/fork',
       expect.objectContaining({
         method: 'POST',
-        body: { message_id: 'm1' },
+        body: { message_id: 'm1', user_id: 'desktop-user' },
       }),
     )
 
@@ -195,7 +195,7 @@ describe('Chain 1: Session Lifecycle', () => {
       '/api/v1/messages/m2/feedback',
       expect.objectContaining({
         method: 'PUT',
-        body: { feedback: 'like' },
+        body: { feedback: 'like', user_id: 'desktop-user' },
       }),
     )
 
@@ -207,7 +207,7 @@ describe('Chain 1: Session Lifecycle', () => {
     expect(del.message).toBe('Session deleted')
     fetchCallIdx++
     expect(mockFetch).toHaveBeenNthCalledWith(fetchCallIdx,
-      '/api/v1/sessions/s1',
+      '/api/v1/sessions/s1?user_id=desktop-user',
       expect.objectContaining({ method: 'DELETE' }),
     )
 
@@ -272,7 +272,7 @@ describe('Chain 1: Session Lifecycle', () => {
       '/api/v1/sessions/s1/fork',
       expect.objectContaining({
         method: 'POST',
-        body: { message_id: undefined },
+        body: { message_id: undefined, user_id: 'desktop-user' },
       }),
     )
   })
@@ -284,7 +284,7 @@ describe('Chain 1: Session Lifecycle', () => {
     await deleteSession('s-to-remove')
 
     expect(mockFetch).toHaveBeenCalledWith(
-      '/api/v1/sessions/s-to-remove',
+      '/api/v1/sessions/s-to-remove?user_id=desktop-user',
       expect.objectContaining({ method: 'DELETE' }),
     )
   })

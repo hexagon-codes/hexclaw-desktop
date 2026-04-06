@@ -399,9 +399,11 @@ describe('Issue #12 [DOCUMENTED]: TemplatePopup .catch() on synchronous function
     expect(src).toMatch(/function\s+dbTemplateIncrementUse\([^)]*\):\s*void/)
   })
 
-  it('[SMELL] handleSelect calls .catch() on synchronous void return', () => {
-    // dbTemplateIncrementUse returns void, .catch() is called on undefined
-    expect(src).toContain('dbTemplateIncrementUse(tpl.id).catch(() => {})')
+  it('[FIXED] handleSelect calls dbTemplateIncrementUse without .catch()', () => {
+    // Previously dbTemplateIncrementUse(tpl.id).catch(() => {}) was called on void return.
+    // Now fixed: .catch() removed, called directly.
+    expect(src).toContain('dbTemplateIncrementUse(tpl.id)')
+    expect(src).not.toContain('dbTemplateIncrementUse(tpl.id).catch')
   })
 
   it('watch on query calls dbSearchTemplates for server-side filtering', () => {

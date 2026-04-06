@@ -90,15 +90,16 @@ describe('Issue #1: Rust proxy_api_request HTTP method support', () => {
     expect(commandsRs).toContain('client.patch')
   })
 
-  it('apiPatch exists in client.ts and is used by updateSessionTitle', () => {
+  it('apiPatch exists in client.ts and is used by updateSessionTitle (via sessionPatch)', () => {
     const clientTs = readSrc('api/client.ts')
     expect(clientTs).toContain('export function apiPatch')
 
     const chatTs = readSrc('api/chat.ts')
+    // chat.ts imports apiPatch and wraps it in sessionPatch helper
     expect(chatTs).toContain('apiPatch')
-    // updateSessionTitle function body uses apiPatch
+    // updateSessionTitle uses sessionPatch (which internally calls apiPatch)
     const updateBlock = chatTs.slice(chatTs.indexOf('function updateSessionTitle'))
-    expect(updateBlock.slice(0, 200)).toContain('apiPatch')
+    expect(updateBlock.slice(0, 200)).toContain('sessionPatch')
   })
 
   it('config.ts uses proxyApiRequest only with GET/POST/PUT — no PATCH', () => {

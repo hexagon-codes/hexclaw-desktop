@@ -37,7 +37,7 @@ describe('router onboarding flow', () => {
     expect(router.currentRoute.value.path).toBe('/welcome')
   })
 
-  it('registers /automation/webhooks as a reachable automation route', async () => {
+  it('registers /automation/canvas as a reachable automation route', async () => {
     const store = {
       config: { llm: { providers: [{ id: 'openai' }] } },
       loadConfig: vi.fn(async () => undefined),
@@ -55,10 +55,10 @@ describe('router onboarding flow', () => {
 
     const router = (await import('../index')).default
 
-    await router.push('/automation/webhooks')
+    await router.push('/automation/canvas')
     await router.isReady()
 
-    expect(router.currentRoute.value.path).toBe('/automation/webhooks')
-    expect(router.currentRoute.value.name).toBe('automation-webhooks')
+    expect(router.currentRoute.value.path).toBe('/automation/canvas')
+    expect(router.currentRoute.value.name).toBe('automation-canvas')
   })
 })

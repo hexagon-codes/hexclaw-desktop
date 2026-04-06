@@ -219,11 +219,11 @@ describe('代码质量 — console.error 使用审计', () => {
 // ═══════════════════════════════════════════════════
 
 describe('SettingsView testProvider — Ollama 模型来源', () => {
-  it('testProvider 能从 availableModels 获取 Ollama 模型', () => {
+  it('testProvider 能从 provider.models 获取选中模型', () => {
     const source = readFileSync('src/views/SettingsView.vue', 'utf-8')
     const testFn = source.match(/async function testProvider[\s\S]*?^}/m)
     expect(testFn).toBeTruthy()
-    // 修复后应包含 ollamaModelsCache 或 availableModels 的查找
-    expect(testFn![0]).toContain('availableModels')
+    // testProvider now reads selectedModelId from provider config directly
+    expect(testFn![0]).toContain('selectedModelId')
   })
 })

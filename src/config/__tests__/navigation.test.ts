@@ -120,9 +120,9 @@ describe('getNavigationChildren(id)', () => {
     expect(children).toHaveLength(2)
   })
 
-  it('returns 3 children for "automation"', () => {
+  it('returns 2 children for "automation"', () => {
     const children = getNavigationChildren('automation')
-    expect(children).toHaveLength(3)
+    expect(children).toHaveLength(2)
   })
 
   it('returns empty array for "chat" (no children)', () => {

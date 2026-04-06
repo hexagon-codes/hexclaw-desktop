@@ -193,7 +193,7 @@ describe('chat store edge cases', () => {
       // The chat store finalizeAssistantMessage replaces empty content with '(空回复)'
       const assistantMsg = chatStore.messages.find(m => m.role === 'assistant')
       expect(assistantMsg).toBeDefined()
-      expect(assistantMsg!.content).toBe('(空回复)')
+      expect(assistantMsg!.content).toBe('模型未生成有效回复，可能是内容安全策略过滤所致，请尝试换个方式提问。')
     })
 
     it('handles whitespace-only reply from backend', async () => {

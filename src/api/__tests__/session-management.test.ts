@@ -119,7 +119,7 @@ describe('Session Management', () => {
       mockFetch.mockResolvedValue({ id: 's1', title: 'Updated', updated_at: '2024-01-01' })
       await updateSessionTitle('s1', 'Updated')
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/sessions/s1',
+        '/api/v1/sessions/s1?user_id=desktop-user',
         expect.objectContaining({ method: 'PATCH', body: { title: 'Updated', user_id: 'desktop-user' } }),
       )
     })
@@ -131,7 +131,7 @@ describe('Session Management', () => {
     it('calls DELETE /api/v1/sessions/:id', async () => {
       mockFetch.mockResolvedValue({ message: 'deleted' })
       await deleteSession('s1')
-      expect(mockFetch).toHaveBeenCalledWith('/api/v1/sessions/s1', expect.objectContaining({ method: 'DELETE' }))
+      expect(mockFetch).toHaveBeenCalledWith('/api/v1/sessions/s1?user_id=desktop-user', expect.objectContaining({ method: 'DELETE' }))
     })
 
     it('propagates 404 errors', async () => {

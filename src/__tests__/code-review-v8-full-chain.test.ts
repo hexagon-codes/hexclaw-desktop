@@ -155,14 +155,15 @@ describe('Session 管理链路', () => {
     expect(chatSrc).toContain("user_id: DESKTOP_USER_ID")
   })
 
-  it('searchMessages 传递 user_id 和 query', () => {
-    expect(chatSrc).toContain("q: query, user_id: DESKTOP_USER_ID")
+  it('searchMessages 传递 user_id 和 query (via sessionGet)', () => {
+    // searchMessages uses sessionGet which auto-injects user_id
+    expect(chatSrc).toContain("q: query")
+    expect(chatSrc).toContain("sessionGet")
   })
 
   it('createSession 参数与后端 POST /api/v1/sessions 对齐', () => {
-    // 前端: { id, title }
-    // 后端: handleCreateSession 接受什么？
-    expect(chatSrc).toContain("apiPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions'")
+    // createSession uses sessionPost helper (which auto-injects user_id)
+    expect(chatSrc).toContain("sessionPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions'")
   })
 
   it('getSessionBranches 路径与后端对齐', () => {
@@ -703,9 +704,12 @@ describe('安全审计', () => {
     expect(commandsSrc).toContain('scheme != "https" && scheme != "http"')
   })
 
-  it('secure store 使用 OS 原生凭证存储', () => {
-    expect(commandsSrc).toContain('keyring::Entry::new')
-    expect(commandsSrc).toContain('KEYRING_SERVICE')
+  it('secure store 使用 Tauri Store (前端加密)', () => {
+    // Secure storage is handled in TypeScript (secure-store.ts) using Tauri LazyStore,
+    // not via keyring in Rust commands. Verify commands.rs has no keyring dependency.
+    const secureStoreSrc = readSrc('utils/secure-store.ts')
+    expect(secureStoreSrc).toContain('LazyStore')
+    expect(secureStoreSrc).toContain('encrypt')
   })
 
   it('sidecar 端口冲突检测应区分 hexclaw 与非 hexclaw 进程', () => {

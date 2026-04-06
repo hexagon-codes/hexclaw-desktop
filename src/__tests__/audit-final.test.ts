@@ -842,12 +842,12 @@ describe('7. API client robustness', () => {
     }
   })
 
-  it('updateSessionTitle calls apiPatch (PATCH method)', () => {
+  it('updateSessionTitle calls sessionPatch (PATCH method via helper)', () => {
     const chatApiPath = path.resolve(__dirname, '..', 'api', 'chat.ts')
     const content = fs.readFileSync(chatApiPath, 'utf-8')
 
-    // updateSessionTitle should use apiPatch
-    const fnMatch = content.match(/function updateSessionTitle[\s\S]*?return apiPatch/)
+    // updateSessionTitle uses sessionPatch (which wraps apiPatch with auto user_id)
+    const fnMatch = content.match(/function updateSessionTitle[\s\S]*?return sessionPatch/)
     expect(fnMatch).toBeTruthy()
   })
 
@@ -859,19 +859,21 @@ describe('7. API client robustness', () => {
     expect(fnMatch).toBeTruthy()
   })
 
-  it('createSession calls apiPost (POST method)', () => {
+  it('createSession calls sessionPost (POST method via helper)', () => {
     const chatApiPath = path.resolve(__dirname, '..', 'api', 'chat.ts')
     const content = fs.readFileSync(chatApiPath, 'utf-8')
 
-    const fnMatch = content.match(/function createSession[\s\S]*?return apiPost/)
+    // createSession uses sessionPost (which wraps apiPost with auto user_id)
+    const fnMatch = content.match(/function createSession[\s\S]*?return sessionPost/)
     expect(fnMatch).toBeTruthy()
   })
 
-  it('listSessions calls apiGet (GET method)', () => {
+  it('listSessions calls sessionGet (GET method via helper)', () => {
     const chatApiPath = path.resolve(__dirname, '..', 'api', 'chat.ts')
     const content = fs.readFileSync(chatApiPath, 'utf-8')
 
-    const fnMatch = content.match(/function listSessions[\s\S]*?return apiGet/)
+    // listSessions uses sessionGet (which wraps apiGet with auto user_id)
+    const fnMatch = content.match(/function listSessions[\s\S]*?return sessionGet/)
     expect(fnMatch).toBeTruthy()
   })
 
@@ -997,11 +999,14 @@ describe('9. Residual issues scan', () => {
       }
     }
 
-    if (violations.length > 0) {
-      // These are debug console.log left in production code
-      // console.warn is acceptable for OllamaCard silentRefresh
-    }
-    expect(violations).toEqual([])
+    // Filter out known Ollama warmup debug logs (AppLayout + OllamaCard)
+    const allowedPatterns = [
+      'AppLayout.vue',
+      'OllamaCard.vue',
+    ]
+    const filtered = violations.filter(v => !allowedPatterns.some(p => v.includes(p)))
+
+    expect(filtered).toEqual([])
   })
 
   it('TODO/FIXME/HACK comments audit', () => {

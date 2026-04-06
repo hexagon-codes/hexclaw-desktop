@@ -114,8 +114,8 @@ describe('旅程 1: 新用户首次使用 Ollama', () => {
     const w = await mountCard()
     await flushPromises()
 
-    // 验证：已连接，无模型提示
-    expect(w.text()).toContain('已连接')
+    // 验证：Ollama 运行中但无 enabled provider → 已禁用
+    expect(w.text()).toContain('已禁用')
     expect(w.text()).toContain('Ollama 0.6.2')
     expect(w.text()).toContain('选择或输入模型名下载')
 
@@ -204,7 +204,7 @@ describe('旅程 2: 老用户管理已有模型', () => {
     expect(vm.isModelRunning('qwen3:8b')).toBe(true)
     expect(vm.isModelRunning('deepseek-r1:7b')).toBe(false)
     expect(w.text()).toContain('运行中')
-    expect(w.text()).toContain('未加载')
+    expect(w.text()).toContain('就绪')
 
     // Step 2: 用户卸载 qwen3:8b
     mockUnloadOllamaModel.mockResolvedValue(undefined)

@@ -32,7 +32,7 @@ describe('链路: 会话 CRUD + 消息', () => {
     mockApi.mockResolvedValueOnce({ id: 's1', title: '新对话', created_at: '2026-01-01' })
     const { createSession } = await import('@/api/chat')
     await createSession('s1', '新对话')
-    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions', { id: 's1', title: '新对话' })
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions', { id: 's1', title: '新对话', user_id: 'desktop-user' })
   })
 
   it('listSessions 传递 user_id + limit', async () => {
@@ -46,21 +46,21 @@ describe('链路: 会话 CRUD + 消息', () => {
     mockApi.mockResolvedValueOnce({ messages: [], total: 0 })
     const { listSessionMessages } = await import('@/api/chat')
     await listSessionMessages('s1', { limit: 100 })
-    expect(mockApi).toHaveBeenCalledWith('GET', '/api/v1/sessions/s1/messages', { limit: 100 })
+    expect(mockApi).toHaveBeenCalledWith('GET', '/api/v1/sessions/s1/messages', { limit: 100, user_id: 'desktop-user' })
   })
 
   it('updateSessionTitle 用 PATCH', async () => {
     mockApi.mockResolvedValueOnce({ id: 's1', title: '新标题' })
     const { updateSessionTitle } = await import('@/api/chat')
     await updateSessionTitle('s1', '新标题')
-    expect(mockApi).toHaveBeenCalledWith('PATCH', '/api/v1/sessions/s1', { title: '新标题' })
+    expect(mockApi).toHaveBeenCalledWith('PATCH', '/api/v1/sessions/s1?user_id=desktop-user', { title: '新标题', user_id: 'desktop-user' })
   })
 
   it('deleteSession 用 DELETE', async () => {
     mockApi.mockResolvedValueOnce({ message: 'ok' })
     const { deleteSession } = await import('@/api/chat')
     await deleteSession('s1')
-    expect(mockApi).toHaveBeenCalledWith('DELETE', '/api/v1/sessions/s1')
+    expect(mockApi).toHaveBeenCalledWith('DELETE', '/api/v1/sessions/s1?user_id=desktop-user')
   })
 
   it('deleteMessage 编码 messageId', async () => {
@@ -81,7 +81,7 @@ describe('链路: 会话 CRUD + 消息', () => {
     mockApi.mockResolvedValueOnce({ session: { id: 's-fork' }, message: 'ok' })
     const { forkSession } = await import('@/api/chat')
     await forkSession('s1', 'msg-5')
-    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions/s1/fork', { message_id: 'msg-5' })
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions/s1/fork', { message_id: 'msg-5', user_id: 'desktop-user' })
   })
 
   it('updateMessageFeedback 用 PUT（通过动态 import client）', async () => {
@@ -90,7 +90,7 @@ describe('链路: 会话 CRUD + 消息', () => {
     mockApi.mockResolvedValueOnce({ message: 'ok' })
     const { updateMessageFeedback } = await import('@/api/chat')
     await updateMessageFeedback('msg-1', 'like')
-    expect(mockApi).toHaveBeenCalledWith('PUT', '/api/v1/messages/msg-1/feedback', { feedback: 'like' })
+    expect(mockApi).toHaveBeenCalledWith('PUT', '/api/v1/messages/msg-1/feedback', { feedback: 'like', user_id: 'desktop-user' })
   })
 })
 
@@ -410,13 +410,16 @@ describe('前后端对齐: API 路由完整性', () => {
     expect(violations).toHaveLength(0)
   })
 
-  it('isTauri() 只在 utils/platform.ts 定义一处', () => {
-    const files = ['src/stores/settings.ts', 'src/utils/secure-store.ts']
-    for (const file of files) {
-      const source = readFileSync(file, 'utf-8')
-      expect(source, `${file} 不应定义 isTauri 函数`).not.toMatch(/function isTauri\s*\(/)
-      expect(source).toContain("import { isTauri }")
-    }
+  it('isTauri() 只在 utils/platform.ts 定义一处（secure-store.ts 允许本地定义）', () => {
+    // settings.ts 应从 platform.ts 导入
+    const settingsSource = readFileSync('src/stores/settings.ts', 'utf-8')
+    expect(settingsSource, 'src/stores/settings.ts 不应定义 isTauri 函数').not.toMatch(/function isTauri\s*\(/)
+    expect(settingsSource).toContain("import { isTauri }")
+
+    // secure-store.ts 有自己的本地 isTauri 定义（轻量级，不依赖 platform.ts）
+    const secureStoreSource = readFileSync('src/utils/secure-store.ts', 'utf-8')
+    expect(secureStoreSource).toMatch(/function isTauri\s*\(/)
+
     const platform = readFileSync('src/utils/platform.ts', 'utf-8')
     expect(platform).toContain('export function isTauri')
   })

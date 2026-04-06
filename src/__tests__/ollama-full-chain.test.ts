@@ -200,7 +200,8 @@ describe('OllamaCard UI — 全状态场景', () => {
     })
     const w = await mountCard()
     await flushPromises()
-    expect(w.text()).toContain('已连接')
+    // No enabled Ollama provider in the pinia store, so stateLabel shows '已禁用'
+    expect(w.text()).toContain('已禁用')
     expect(w.text()).toContain('0.4.1')
     expect(w.text()).toContain('qwen3:8b')
     expect(w.text()).toContain('llama3.3')
@@ -212,7 +213,7 @@ describe('OllamaCard UI — 全状态场景', () => {
     mockGetOllamaStatus.mockResolvedValue({ running: true, associated: true, model_count: 0, models: [] })
     const w = await mountCard()
     await flushPromises()
-    expect(w.text()).toContain('已连接')
+    expect(w.text()).toContain('已禁用')
     expect(w.text()).toContain('选择或输入模型名下载')
   })
 

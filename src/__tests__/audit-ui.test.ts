@@ -221,6 +221,12 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue('ok'),
 }))
 
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    onDragDropEvent: vi.fn().mockResolvedValue(() => {}),
+  }),
+}))
+
 // ─── jsdom polyfills ───────────────────────────────────
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()

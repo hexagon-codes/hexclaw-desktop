@@ -79,6 +79,7 @@ describe('OllamaCard integration', () => {
     })
 
     await flushPromises()
-    expect(wrapper.text()).toContain('已连接')
+    // No enabled Ollama provider in the mock store, so stateLabel shows '已禁用'
+    expect(wrapper.text()).toContain('已禁用')
   })
 })

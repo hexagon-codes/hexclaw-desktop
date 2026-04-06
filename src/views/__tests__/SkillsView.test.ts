@@ -30,6 +30,16 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue('ok'),
 }))
 
+vi.mock('@tauri-apps/api/window', () => ({
+  getCurrentWindow: () => ({
+    onDragDropEvent: vi.fn().mockResolvedValue(() => {}),
+  }),
+}))
+
+vi.mock('@tauri-apps/plugin-dialog', () => ({
+  open: vi.fn().mockResolvedValue(null),
+}))
+
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
   const stub = { template: '<span />' }
@@ -529,16 +539,16 @@ describe('SkillsView', () => {
     ;(wrapper.vm as { openInstallDialog: () => void }).openInstallDialog()
     await flushPromises()
 
-    const input = wrapper.find('input[placeholder*="例如"]')
+    const input = wrapper.find('input[type="text"][placeholder]')
     expect(input.exists()).toBe(true)
-    await input.setValue('skills/local-skill')
+    await input.setValue('https://example.com/skills/local-skill.md')
 
     const installBtn = wrapper.findAll('button').find((btn) => btn.text() === '安装')
     expect(installBtn).toBeDefined()
     await installBtn!.trigger('click')
     await flushPromises()
 
-    expect(installSkill).toHaveBeenCalledWith('skills/local-skill')
+    expect(installSkill).toHaveBeenCalledWith('https://example.com/skills/local-skill.md', 'url')
     expect(installSkill).toHaveBeenCalledTimes(1)
     expect(appStore.restartSidecar).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => {
@@ -561,17 +571,16 @@ describe('SkillsView', () => {
     ;(wrapper.vm as { openInstallDialog: () => void }).openInstallDialog()
     await flushPromises()
 
-    const input = wrapper.find('input[placeholder*="例如"]')
+    const input = wrapper.find('input[type="text"][placeholder]')
     expect(input.exists()).toBe(true)
-    await input.setValue('skills/local-skill')
+    await input.setValue('https://example.com/skills/local-skill.md')
 
-    const vm = wrapper.vm as unknown as {
-      handleInstall: () => Promise<void>
-    }
-
-    void vm.handleInstall()
+    // Click the install button twice quickly
+    const installBtn = wrapper.findAll('button').find((btn) => btn.text() === '安装')
+    expect(installBtn).toBeDefined()
+    await installBtn!.trigger('click')
     await flushPromises()
-    void vm.handleInstall()
+    await installBtn!.trigger('click')
     await flushPromises()
 
     expect(installSkill).toHaveBeenCalledTimes(1)
@@ -594,9 +603,9 @@ describe('SkillsView', () => {
     ;(wrapper.vm as { openInstallDialog: () => void }).openInstallDialog()
     await flushPromises()
 
-    const input = wrapper.find('input[placeholder*="例如"]')
+    const input = wrapper.find('input[type="text"][placeholder]')
     expect(input.exists()).toBe(true)
-    await input.setValue('skills/bad-skill')
+    await input.setValue('https://example.com/skills/bad-skill.md')
 
     const installBtn = wrapper.findAll('button').find((btn) => btn.text() === '安装')
     expect(installBtn).toBeDefined()
@@ -605,15 +614,17 @@ describe('SkillsView', () => {
 
     expect(wrapper.text()).toContain('install failed')
 
-    const cancelBtn = wrapper.findAll('button').find((btn) => btn.text() === '取消')
-    expect(cancelBtn).toBeDefined()
-    await cancelBtn!.trigger('click')
+    // Close the dialog via the X button (no explicit "取消" button exists)
+    // The close button is the one with an SVG that calls closeInstallDialog
+    const closeBtn = wrapper.findAll('button').find((btn) => btn.find('svg').exists() && !btn.text().trim())
+    expect(closeBtn).toBeDefined()
+    await closeBtn!.trigger('click')
     await flushPromises()
 
     ;(wrapper.vm as { openInstallDialog: () => void }).openInstallDialog()
     await flushPromises()
 
-    const reopenedInput = wrapper.find('input[placeholder*="例如"]')
+    const reopenedInput = wrapper.find('input[type="text"][placeholder]')
     expect((reopenedInput.element as HTMLInputElement).value).toBe('')
     expect(wrapper.text()).not.toContain('install failed')
   })
