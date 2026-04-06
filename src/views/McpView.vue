@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download } from 'lucide-vue-next'
 import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, getMcpMarketplace, searchMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
 import { installFromHub } from '@/api/skills'
+import { resolveUserHome } from '@/utils/platform'
 import type { McpTool } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -56,7 +57,16 @@ async function installFromMarketplace(entry: McpMarketplaceEntry) {
     // MCP 条目有 command/args → 直接添加为 MCP Server
     // Skill 条目 → 通过 Hub 安装
     if (entry.command?.trim()) {
-      await addMcpServer(entry.name, entry.command, entry.args || [])
+      let args = entry.args || []
+      // filesystem server 需要目录参数，动态追加用户 home 目录（兼容 Win/Linux/macOS）
+      if (args.some(a => a.includes('server-filesystem'))) {
+        const hasPath = args.some(a => a.startsWith('/') || a.startsWith('~') || /^[A-Z]:\\/i.test(a))
+        if (!hasPath) {
+          const home = await resolveUserHome()
+          if (home) args = [...args, home]
+        }
+      }
+      await addMcpServer(entry.name, entry.command, args)
     } else {
       await installFromHub(entry.name)
     }
