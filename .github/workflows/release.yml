@@ -142,10 +142,37 @@ jobs:
           go build -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
             -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
 
-      - name: Create ollama-bundle stub
+      - name: Download Ollama binary
+        shell: bash
         run: |
+          OLLAMA_VERSION=$(grep '^OLLAMA_VERSION' Makefile | head -1 | sed 's/.*?= *//')
+          OLLAMA_BASE="https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}"
           mkdir -p src-tauri/binaries/ollama-bundle
-          touch src-tauri/binaries/ollama-bundle/ollama
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin|x86_64-apple-darwin)
+              echo "Downloading Ollama v${OLLAMA_VERSION} for macOS..."
+              curl -fSL "${OLLAMA_BASE}/ollama-darwin.tgz" -o /tmp/ollama-darwin.tgz
+              tar xzf /tmp/ollama-darwin.tgz -C src-tauri/binaries/ollama-bundle
+              rm -f /tmp/ollama-darwin.tgz
+              ;;
+            x86_64-unknown-linux-gnu)
+              echo "Downloading Ollama v${OLLAMA_VERSION} for Linux amd64..."
+              curl -fSL "${OLLAMA_BASE}/ollama-linux-amd64.tgz" -o /tmp/ollama-linux.tgz
+              tar xzf /tmp/ollama-linux.tgz -C src-tauri/binaries/ollama-bundle
+              rm -f /tmp/ollama-linux.tgz
+              ;;
+            x86_64-pc-windows-msvc)
+              echo "Downloading Ollama v${OLLAMA_VERSION} for Windows..."
+              curl -fSL "${OLLAMA_BASE}/ollama-windows-amd64.zip" -o /tmp/ollama-windows.zip
+              unzip -o /tmp/ollama-windows.zip -d src-tauri/binaries/ollama-bundle
+              rm -f /tmp/ollama-windows.zip
+              ;;
+            *)
+              echo "Unknown target, creating stub"
+              touch src-tauri/binaries/ollama-bundle/ollama
+              ;;
+          esac
+          ls -lh src-tauri/binaries/ollama-bundle/
 
       # --- Frontend & Tauri build ---
       - uses: pnpm/action-setup@v4
