@@ -151,18 +151,18 @@ describe('链路: 知识库 CRUD + 搜索', () => {
 describe('链路: 记忆 CRUD + 搜索', () => {
   beforeEach(() => mockApi.mockReset())
 
-  it('saveMemory 传递 content + type', async () => {
-    mockApi.mockResolvedValueOnce({ message: 'ok' })
-    const { saveMemory } = await import('@/api/memory')
-    await saveMemory('内容', 'daily')
-    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/memory', { content: '内容', type: 'daily' })
+  it('createMemoryEntry 传递 content + type + source', async () => {
+    mockApi.mockResolvedValueOnce({ id: 'm-0', content: '内容', type: 'fact', source: 'manual', created_at: '', updated_at: '', hit_count: 0 })
+    const { createMemoryEntry } = await import('@/api/memory')
+    await createMemoryEntry('内容', 'fact')
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/memory', { content: '内容', type: 'fact', source: 'manual' })
   })
 
-  it('updateMemory 用 PUT', async () => {
-    mockApi.mockResolvedValueOnce({ message: 'ok' })
-    const { updateMemory } = await import('@/api/memory')
-    await updateMemory('新内容')
-    expect(mockApi).toHaveBeenCalledWith('PUT', '/api/v1/memory', { content: '新内容', type: 'memory' })
+  it('updateMemoryEntry 用 PUT + id', async () => {
+    mockApi.mockResolvedValueOnce({ id: 'm-0', content: '新内容', type: 'fact', source: 'manual', created_at: '', updated_at: '', hit_count: 0 })
+    const { updateMemoryEntry } = await import('@/api/memory')
+    await updateMemoryEntry('m-0', '新内容')
+    expect(mockApi).toHaveBeenCalledWith('PUT', `/api/v1/memory/${encodeURIComponent('m-0')}`, { content: '新内容' })
   })
 
   it('searchMemory 传递 q', async () => {
@@ -172,10 +172,10 @@ describe('链路: 记忆 CRUD + 搜索', () => {
     expect(mockApi).toHaveBeenCalledWith('GET', '/api/v1/memory/search', { q: '偏好' })
   })
 
-  it('deleteMemory 编码 id', async () => {
+  it('deleteMemoryEntry 编码 id', async () => {
     mockApi.mockResolvedValueOnce({ message: 'ok' })
-    const { deleteMemory } = await import('@/api/memory')
-    await deleteMemory('mem/特殊')
+    const { deleteMemoryEntry } = await import('@/api/memory')
+    await deleteMemoryEntry('mem/特殊')
     expect(mockApi).toHaveBeenCalledWith('DELETE', `/api/v1/memory/${encodeURIComponent('mem/特殊')}`)
   })
 
@@ -410,15 +410,16 @@ describe('前后端对齐: API 路由完整性', () => {
     expect(violations).toHaveLength(0)
   })
 
-  it('isTauri() 只在 utils/platform.ts 定义一处（secure-store.ts 允许本地定义）', () => {
+  it('isTauri() 只在 utils/platform.ts 定义一处（secure-store.ts 复用共享实现）', () => {
     // settings.ts 应从 platform.ts 导入
     const settingsSource = readFileSync('src/stores/settings.ts', 'utf-8')
     expect(settingsSource, 'src/stores/settings.ts 不应定义 isTauri 函数').not.toMatch(/function isTauri\s*\(/)
     expect(settingsSource).toContain("import { isTauri }")
 
-    // secure-store.ts 有自己的本地 isTauri 定义（轻量级，不依赖 platform.ts）
+    // secure-store.ts 也应复用共享实现，避免多处定义漂移
     const secureStoreSource = readFileSync('src/utils/secure-store.ts', 'utf-8')
-    expect(secureStoreSource).toMatch(/function isTauri\s*\(/)
+    expect(secureStoreSource).not.toMatch(/function isTauri\s*\(/)
+    expect(secureStoreSource).toContain("import { isTauri } from './platform'")
 
     const platform = readFileSync('src/utils/platform.ts', 'utf-8')
     expect(platform).toContain('export function isTauri')

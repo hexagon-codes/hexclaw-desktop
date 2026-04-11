@@ -7,7 +7,7 @@ const { apiGet, apiPost, apiDelete } = vi.hoisted(() => ({
 }))
 
 vi.mock('../client', () => ({ apiGet, apiPost, apiDelete }))
-vi.mock('@/config/env', () => ({ env: { apiBase: 'http://localhost:16060' } }))
+vi.mock('@/config/env', () => ({ OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://localhost:16060' } }))
 vi.mock('@/utils/errors', () => ({
   fromHttpStatus: vi.fn((s: number) => ({ message: `HTTP ${s}` })),
   fromNativeError: vi.fn((e: unknown) => ({ status: 500, message: String(e) })),

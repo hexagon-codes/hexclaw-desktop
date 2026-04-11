@@ -65,8 +65,9 @@ async function loadWebhooks() {
     loadError.value = (e as Error)?.message || 'Load failed'
     console.error('Failed to load webhooks:', e)
   } finally {
-    if (requestGen !== loadRequestGen) return
-    loading.value = false
+    if (requestGen === loadRequestGen) {
+      loading.value = false
+    }
   }
 }
 

@@ -10,7 +10,7 @@ SIDECAR_BIN_DIR := $(DESKTOP_ROOT)/src-tauri/binaries
 TARGET ?= aarch64-apple-darwin
 
 # Ollama 版本控制（更新版本只需改这一处）
-OLLAMA_VERSION ?= 0.19.0
+OLLAMA_VERSION ?= 0.20.3
 OLLAMA_RELEASE_BASE ?= https://github.com/ollama/ollama/releases/download/v$(OLLAMA_VERSION)
 
 # 开发模式 (前端 + Tauri 窗口)

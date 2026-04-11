@@ -20,6 +20,9 @@ import {
   reindexDocument,
   searchKnowledge,
 } from '@/api/knowledge'
+import { createMemoryEntry } from '@/api/memory'
+import type { MemoryType, MemorySource } from '@/types'
+import { emit } from '@/utils/eventBus'
 import {
   CHAT_AUTOMATION_METADATA_KEY,
   buildConversationAutomationActions,
@@ -92,19 +95,25 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
     const sourceMessage = findPreviousUserMessage(params.assistantMessage.id)
     if (!sourceMessage) return
 
-    const actions = buildConversationAutomationActions({
+    let actions = buildConversationAutomationActions({
       userText: params.userText,
       assistantContent: params.assistantMessage.content,
       sourceMessageId: sourceMessage.id,
       attachment: params.attachment,
     })
 
+    // Dedup: if the backend Agent already saved memory via metadata.memory_saved,
+    // drop the frontend-generated save_memory action to avoid double-saving.
+    if (params.assistantMessage.metadata?.memory_saved) {
+      actions = actions.filter((a) => a.kind !== 'save_memory')
+    }
+
     if (!actions.length) return
 
     await chatStore.updateMessage(params.assistantMessage.id, (current) => ({
       ...current,
       metadata: {
-        ...(current.metadata ?? {}),
+        ...current.metadata,
         [CHAT_AUTOMATION_METADATA_KEY]: mergeConversationActions(
           getConversationAutomationActions(current),
           actions,
@@ -136,6 +145,7 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
       case 'search_knowledge': return tr('chat.automationSearchKnowledge', '执行搜索')
       case 'reindex_document': return tr('chat.automationReindex', '重建索引')
       case 'delete_document': return tr('chat.automationDeleteDocument', '删除文档')
+      case 'save_memory': return tr('chat.automationSaveMemory', '保存到记忆')
     }
   }
 
@@ -149,7 +159,7 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
       return {
         ...current,
         metadata: {
-          ...(current.metadata ?? {}),
+          ...current.metadata,
           [CHAT_AUTOMATION_METADATA_KEY]: actions.map((action) =>
             action.id === actionId ? updater(action) : action,
           ),
@@ -306,6 +316,15 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
         const doc = await resolveDocumentByTitle(action.payload.targetTitle)
         await deleteDocument(doc.id)
         return { summary: `已删除知识文档「${doc.title}」` }
+      }
+      case 'save_memory': {
+        await createMemoryEntry(
+          action.payload.content,
+          (action.payload.type as MemoryType) || undefined,
+          (action.payload.source as MemorySource) || 'chat_extract',
+        )
+        emit('memory:updated')
+        return { summary: `已记住: ${clipAutomationText(action.payload.content, 60)}` }
       }
     }
   }

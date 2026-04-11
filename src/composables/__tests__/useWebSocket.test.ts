@@ -96,8 +96,9 @@ describe('useWebSocket', () => {
   it('maxRetries = 0 表示不重连（修复后语义）', () => {
     // 修复后：maxRetries = -1 表示无限，0 表示不重连
     // 条件改为: maxRetries >= 0 && retries >= maxRetries
-    // maxRetries=0 时，0 >= 0 && 0 >= 0 → true → 立即返回不重连
-    expect(0 >= 0 && 0 >= 0).toBe(true) // 证明条件满足，会阻止重连
+    const shouldStopReconnect = (retries: number, maxRetries: number) =>
+      maxRetries >= 0 && retries >= maxRetries
+    expect(shouldStopReconnect(0, 0)).toBe(true)
   })
 
   it('maxRetries = -1 表示无限重连', () => {

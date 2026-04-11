@@ -188,8 +188,9 @@ describe('API 层 — 路径参数 URI 编码覆盖率', () => {
 describe('chat.ts — searchMessages 类型安全', () => {
   it('searchMessages 返回带 session_id 的消息', () => {
     const source = readFileSync('src/api/chat.ts', 'utf-8')
-    // 返回类型应包含 session_id
-    expect(source).toContain('session_id: string; score?: number')
+    // 后端 search 返回 { message, session_title, rank }，session_id 在 message 上。
+    expect(source).toContain('message: ChatMessage & { session_id: string }')
+    expect(source).toContain('rank?: number')
   })
 
   it('searchMessages 传递 user_id 限制搜索范围', () => {

@@ -32,6 +32,8 @@ const {
   // chatService mocks
   ensureWebSocketConnected,
   sendViaWebSocket,
+  openWebSocketStream,
+  resumeWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
   // api/chat
@@ -74,6 +76,14 @@ const {
 
     ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
     sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+    openWebSocketStream: vi.fn().mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'Hello!' }),
+    })),
+    resumeWebSocketStream: vi.fn().mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'resumed reply' }),
+    })),
     sendViaBackend: vi.fn().mockResolvedValue({ reply: 'Hello!', session_id: 's1' }),
     clearWebSocketCallbacks: vi.fn(),
 
@@ -118,6 +128,8 @@ vi.mock('@/services/messageService', () => ({
 vi.mock('@/services/chatService', () => ({
   ensureWebSocketConnected,
   sendViaWebSocket,
+  openWebSocketStream,
+  resumeWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
   ChatRequestError: MockChatRequestError,
@@ -126,6 +138,7 @@ vi.mock('@/services/chatService', () => ({
 
 vi.mock('@/api/chat', () => ({
   updateMessageFeedback,
+  listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
 }))
 
 vi.mock('@/api/knowledge', () => ({
@@ -253,23 +266,20 @@ afterEach(() => {
 
 describe('Scenario 1: Full chat send chain (WebSocket path)', () => {
   it('creates session, sends via WebSocket, accumulates chunks, finalizes, and extracts artifacts', async () => {
-    // Simulate WS sendViaWebSocket that calls onChunk/onDone
-    sendViaWebSocket.mockImplementation(
+    openWebSocketStream.mockImplementation(
       (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks?: {
         onChunk: (c: string, r?: string) => void
-        onDone: (c: string, m?: Record<string, unknown>, t?: unknown, a?: string) => void
       }) => {
-        // Simulate streaming: 3 chunks then done
         callbacks?.onChunk('Hello ', undefined)
         callbacks?.onChunk('world! ', undefined)
         callbacks?.onChunk('```typescript\nconsole.log("artifact code line 1234567890")\n```', undefined)
-        callbacks?.onDone(
-          'Hello world! ```typescript\nconsole.log("artifact code line 1234567890")\n```',
-          { model: 'gpt-4o', backend_message_id: 'bm-1' },
-          undefined,
-          undefined,
-        )
-        return Promise.resolve()
+        return {
+          cancel: vi.fn(),
+          done: Promise.resolve({
+            content: 'Hello world! ```typescript\nconsole.log("artifact code line 1234567890")\n```',
+            metadata: { model: 'gpt-4o', backend_message_id: 'bm-1' },
+          }),
+        }
       },
     )
 
@@ -287,17 +297,15 @@ describe('Scenario 1: Full chat send chain (WebSocket path)', () => {
 
     // WebSocket path was chosen
     expect(ensureWebSocketConnected).toHaveBeenCalled()
-    expect(sendViaWebSocket).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       'Write me some code',
       expect.any(String),
       expect.any(Object),
       '',
       undefined,
-      expect.objectContaining({
-        onChunk: expect.any(Function),
-        onDone: expect.any(Function),
-      }),
+      expect.objectContaining({ onChunk: expect.any(Function) }),
       undefined,
+      expect.any(String),
     )
 
     // Messages finalized: user + assistant
@@ -324,35 +332,38 @@ describe('Scenario 1: Full chat send chain (WebSocket path)', () => {
 
   it('accumulates streaming content in streamingContent before finalization', async () => {
     let chunkCallback: ((c: string, r?: string) => void) | undefined
-    let doneCallback: ((c: string) => void) | undefined
+    let resolveDone!: (value: { content: string }) => void
 
-    sendViaWebSocket.mockImplementation(
+    openWebSocketStream.mockImplementation(
       (_t: string, _s: string, _p: unknown, _r: string, _a: unknown, callbacks?: {
         onChunk: (c: string, r?: string) => void
-        onDone: (c: string) => void
       }) => {
         chunkCallback = callbacks?.onChunk
-        doneCallback = callbacks?.onDone
-        // Don't resolve immediately -- let the test drive chunk-by-chunk
-        return new Promise<void>((resolve) => {
-          // Save resolve so we can call it after done
-          setTimeout(() => {
-            // Simulate chunks then done
-            chunkCallback?.('chunk1 ', undefined)
-            chunkCallback?.('chunk2 ', undefined)
-            doneCallback?.('chunk1 chunk2 ')
-            resolve()
-          }, 0)
-        })
+        return {
+          cancel: vi.fn(),
+          done: new Promise((resolve) => {
+            resolveDone = resolve as typeof resolveDone
+          }),
+        }
       },
     )
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
-    await store.sendMessage('Hi')
+    const sendPromise = store.sendMessage('Hi')
+    await new Promise((resolve) => setTimeout(resolve, 10))
 
-    // After finalization, streaming should be complete
+    chunkCallback?.('chunk1 ', undefined)
+    chunkCallback?.('chunk2 ', undefined)
+    await Promise.resolve()
+
+    expect(store.streaming).toBe(true)
+    expect(store.streamingContent).toBe('chunk1 chunk2 ')
+
+    resolveDone({ content: 'chunk1 chunk2 ' })
+    await sendPromise
+
     expect(store.streaming).toBe(false)
     expect(store.messages.length).toBe(2)
   })
@@ -386,6 +397,8 @@ describe('Scenario 2: WebSocket disconnect -> HTTP fallback', () => {
       expect.any(Object),
       '',
       undefined,
+      undefined,
+      expect.any(String),
     )
 
     // Response finalized
@@ -400,7 +413,10 @@ describe('Scenario 2: WebSocket disconnect -> HTTP fallback', () => {
 
     // Import ChatRequestError through the mock module
     const { ChatRequestError } = await import('@/services/chatService')
-    sendViaWebSocket.mockRejectedValue(new ChatRequestError('WS send failed', false))
+    openWebSocketStream.mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.reject(new ChatRequestError('WS send failed', false)),
+    }))
     sendViaBackend.mockResolvedValue({
       reply: 'Fallback after WS error',
       session_id: 's1',
@@ -412,7 +428,7 @@ describe('Scenario 2: WebSocket disconnect -> HTTP fallback', () => {
     const result = await store.sendMessage('Try WS then fallback')
 
     // WS was attempted first
-    expect(sendViaWebSocket).toHaveBeenCalled()
+    expect(openWebSocketStream).toHaveBeenCalled()
     // HTTP fallback was triggered
     expect(sendViaBackend).toHaveBeenCalled()
 
@@ -424,14 +440,17 @@ describe('Scenario 2: WebSocket disconnect -> HTTP fallback', () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
     const { ChatRequestError } = await import('@/services/chatService')
-    sendViaWebSocket.mockRejectedValue(new ChatRequestError('Backend error from WS', true))
+    openWebSocketStream.mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.reject(new ChatRequestError('Backend error from WS', true)),
+    }))
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
     const result = await store.sendMessage('Should not fallback')
 
-    expect(sendViaWebSocket).toHaveBeenCalled()
+    expect(openWebSocketStream).toHaveBeenCalled()
     // sendViaBackend should NOT be called because noFallback=true
     expect(sendViaBackend).not.toHaveBeenCalled()
 
@@ -445,26 +464,24 @@ describe('Scenario 2: WebSocket disconnect -> HTTP fallback', () => {
 })
 
 // ══════════════════════════════════════════════════════════════════
-// Scenario 3: Session Switch Interrupts Streaming
+// Scenario 3: Session switch keeps background streaming alive
 // ══════════════════════════════════════════════════════════════════
 
-describe('Scenario 3: Session switch interrupts streaming', () => {
-  it('stops streaming in session A when switching to session B', async () => {
-    // Keep WS send hanging to simulate ongoing streaming
-    sendViaWebSocket.mockImplementation(
+describe('Scenario 3: Session switch keeps background streaming alive', () => {
+  it('continues streaming in session A when switching to session B', async () => {
+    let resolveDone!: (value: { content: string }) => void
+
+    openWebSocketStream.mockImplementation(
       (_t: string, _sessionId: string, _p: unknown, _r: string, _a: unknown, callbacks?: {
         onChunk: (c: string) => void
-        onDone: (c: string) => void
       }) => {
-        // Simulate chunk arrival
         callbacks?.onChunk('partial content...')
-        // Never call onDone -- streaming is ongoing
-        // Register in wsCallbacks.error so triggerError('用���取消') can settle this promise
-        return new Promise<void>((_resolve, reject) => {
-          wsCallbacks.error!.push((msg: unknown) => {
-            reject(new MockChatRequestError(String(msg), true))
-          })
-        })
+        return {
+          cancel: vi.fn(),
+          done: new Promise((resolve) => {
+            resolveDone = resolve as typeof resolveDone
+          }),
+        }
       },
     )
 
@@ -478,13 +495,10 @@ describe('Scenario 3: Session switch interrupts streaming', () => {
       { id: 'session-B', title: 'B', created_at: '2026-01-02', updated_at: '2026-01-02', message_count: 0 },
     ]
 
-    // Start streaming (fire-and-forget, it won't resolve)
+    // Start streaming (fire-and-forget, it won't resolve yet)
     const sendPromise = store.sendMessage('Long message')
+    await new Promise((resolve) => setTimeout(resolve, 10))
 
-    // Give the event loop a tick for the streaming to start
-    await new Promise((r) => setTimeout(r, 10))
-
-    // Verify streaming started
     expect(store.streaming).toBe(true)
     expect(store.streamingSessionId).toBe('session-A')
 
@@ -494,15 +508,13 @@ describe('Scenario 3: Session switch interrupts streaming', () => {
     ])
     await store.selectSession('session-B')
 
-    // Wait for sendMessage to fully settle (error path runs during microtasks)
-    await sendPromise.catch(() => {})
-
-    // Streaming should have been stopped
-    expect(store.streamingSessionId).toBeNull()
+    expect(store.streamingSessionId).toBe('session-A')
     expect(store.currentSessionId).toBe('session-B')
-
-    // Session-B messages are loaded; handleSendError may also push an error message
     expect(store.messages.some((m) => m.content === 'old msg')).toBe(true)
+
+    resolveDone({ content: 'final reply' })
+    await sendPromise
+    expect(store.streaming).toBe(false)
   })
 })
 
@@ -769,16 +781,10 @@ describe('Scenario 6: Artifact extraction + selection chain', () => {
   })
 
   it('full send chain extracts artifacts from assistant reply', async () => {
-    sendViaWebSocket.mockImplementation(
-      (_t: string, _s: string, _p: unknown, _r: string, _a: unknown, callbacks?: {
-        onChunk: (c: string) => void
-        onDone: (c: string) => void
-      }) => {
-        const reply = 'Here is code:\n```rust\nfn main() { println!("hello"); }\n```'
-        callbacks?.onDone(reply)
-        return Promise.resolve()
-      },
-    )
+    openWebSocketStream.mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'Here is code:\n```rust\nfn main() { println!("hello"); }\n```' }),
+    }))
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
@@ -800,6 +806,7 @@ describe('Scenario 7: Tool approval chain', () => {
   it('initApprovalListener -> WS approval request -> respondApproval clears state', async () => {
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
+    store.currentSessionId = 'session-A' as string
 
     // Initially no pending approval
     expect(store.pendingApproval).toBeNull()
@@ -820,7 +827,7 @@ describe('Scenario 7: Tool approval chain', () => {
     wsCallbacks.approval!.forEach((cb) => cb(approvalReq))
 
     // Pending approval should be set
-    expect(store.pendingApproval).toEqual(approvalReq)
+    expect(store.pendingApproval).toEqual(expect.objectContaining(approvalReq))
     expect(store.pendingApproval?.requestId).toBe('req-001')
     expect(store.pendingApproval?.toolName).toBe('execute_code')
     expect(store.pendingApproval?.risk).toBe('high')
@@ -839,6 +846,7 @@ describe('Scenario 7: Tool approval chain', () => {
   it('respondApproval with deny sends denied response', async () => {
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
+    store.currentSessionId = 's1' as string
 
     store.initApprovalListener()
     wsCallbacks.approval!.forEach((cb) =>
@@ -928,7 +936,7 @@ describe('Scenario 8: Session management full chain', () => {
     expect(store.selectedArtifactId).toBeNull()
     expect(store.streaming).toBe(false)
     expect(store.error).toBeNull()
-    expect(clearWebSocketCallbacks).toHaveBeenCalled()
+    expect(clearWebSocketCallbacks).not.toHaveBeenCalled()
   })
 
   it('selectSession loads artifacts from persistence and falls back to extraction', async () => {
@@ -1025,7 +1033,10 @@ describe('Scenario 9: Error recovery chain', () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
     const { ChatRequestError } = await import('@/services/chatService')
-    sendViaWebSocket.mockRejectedValue(new ChatRequestError('WS disconnected', true))
+    openWebSocketStream.mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.reject(new ChatRequestError('WS disconnected', true)),
+    }))
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()

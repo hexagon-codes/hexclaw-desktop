@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@/config/env', () => ({
-  env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 5000 },
+  OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 5000 },
 }))
 
 class MockWebSocket {
@@ -45,7 +45,7 @@ class MockWebSocket {
 
   private _dispatchListeners(type: string, event: Event) {
     const list = this._listeners[type] || []
-    for (const entry of [...list]) {
+    for (const entry of list.slice()) {
       entry.handler(event)
       if (entry.once) {
         this._listeners[type] = this._listeners[type]!.filter((l) => l !== entry)

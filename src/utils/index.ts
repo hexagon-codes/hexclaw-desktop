@@ -1,5 +1,6 @@
 /** Utils 统一入口 */
 export { logger } from './logger'
+export { formatTime, formatLogTime, formatRelative } from './time'
 export {
   createApiError,
   fromHttpStatus,

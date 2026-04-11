@@ -46,6 +46,7 @@ vi.mock('@/api/websocket', () => ({
     clearCallbacks: vi.fn(), clearStreamCallbacks: vi.fn(),
     onChunk: vi.fn().mockReturnValue(() => {}), onReply: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}), onApprovalRequest: vi.fn().mockReturnValue(() => {}),
+    onMemorySaved: vi.fn().mockReturnValue(() => {}),
     sendMessage: vi.fn(), sendRaw: vi.fn(), triggerError: vi.fn(),
   },
 }))
@@ -207,8 +208,8 @@ describe('对抗: 安全 — 路径遍历输入', () => {
     const skillCall = mockApi.mock.calls[mockApi.mock.calls.length - 1]!
     expect(skillCall[1]).not.toContain('../')
 
-    const { deleteMemory } = await import('@/api/memory')
-    await deleteMemory(payload)
+    const { deleteMemoryEntry } = await import('@/api/memory')
+    await deleteMemoryEntry(payload)
     const memCall = mockApi.mock.calls[mockApi.mock.calls.length - 1]!
     expect(memCall[1]).not.toContain('../')
   })
@@ -288,11 +289,11 @@ describe('对抗: 代码质量最终检查', () => {
     expect(settingsSrc).not.toMatch(/function isTauri\s*\(/)
     expect(settingsSrc).toContain("import { isTauri } from '@/utils/platform'")
 
-    // secure-store.ts has a private local isTauri() helper (not exported),
-    // consistent with the pattern in platform.ts but scoped locally
+    // secure-store.ts should also consume the shared helper instead of
+    // maintaining a second local copy that can drift.
     const secureSrc = readFileSync('src/utils/secure-store.ts', 'utf-8')
-    expect(secureSrc).toContain('function isTauri()')
-    expect(secureSrc).not.toContain('export function isTauri')
+    expect(secureSrc).not.toMatch(/function isTauri\s*\(/)
+    expect(secureSrc).toContain("import { isTauri } from './platform'")
   })
 
   it('生产代码无 console.error/warn（仅 logger 实现除外）', () => {

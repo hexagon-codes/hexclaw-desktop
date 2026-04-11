@@ -3,6 +3,7 @@ import { ref, computed, nextTick } from 'vue'
 import { X, Play, Square, Users, Bot, Loader2 } from 'lucide-vue-next'
 import { sendChatViaBackend } from '@/api/chat'
 import { logger } from '@/utils/logger'
+import { getAssistantDisplayContent, getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 
 interface AgentRole {
   id: string
@@ -84,7 +85,11 @@ async function startConference() {
           role: agentId,
           sessionId: `conference-${Date.now()}`,
         })
-        messages.value.push({ agent: name, content: res.reply, round: r })
+        messages.value.push({
+          agent: name,
+          content: getAssistantDisplayContent(res.reply, getAssistantReasoningFromMetadata(res.metadata)),
+          round: r,
+        })
       } catch (e) {
         logger.warn(`Agent ${name} 回复失败，使用降级响应`, e)
         // 降级：生成有意义的占位内容

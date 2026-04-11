@@ -416,5 +416,22 @@ describe('messageService', () => {
       expect(msgs[0]!.content).toBe('最终答案')
       expect(msgs[0]!.reasoning).toBe('深度思考内容')
     })
+
+    it('修复后: 历史消息若只有 reasoning 没有正文，仍显示兜底提示', async () => {
+      listSessionMessages.mockResolvedValueOnce({
+        messages: [{
+          id: 'm7',
+          role: 'assistant',
+          content: '',
+          metadata: { reasoning: '只有思考过程，没有最终答案' },
+          timestamp: '2026-04-06T15:26:00Z',
+        }],
+        total: 1,
+      })
+
+      const msgs = await loadMessages('sess-7')
+      expect(msgs[0]!.content).toBe('模型只完成了思考，没有输出最终回答，请重试一次。')
+      expect(msgs[0]!.reasoning).toBe('只有思考过程，没有最终答案')
+    })
   })
 })

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { LogEntry } from '@/api/logs'
+import { formatLogTime } from '@/utils/time'
 
 defineProps<{
   entry: LogEntry
@@ -11,24 +12,11 @@ const levelColors: Record<string, string> = {
   warn: 'var(--hc-warning)',
   error: 'var(--hc-error)',
 }
-
-function formatTime(ts: string): string {
-  try {
-    const d = new Date(ts)
-    return (
-      d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }) +
-      '.' +
-      String(d.getMilliseconds()).padStart(3, '0')
-    )
-  } catch {
-    return ts
-  }
-}
 </script>
 
 <template>
   <div class="hc-log-entry">
-    <span class="hc-log-entry__time">{{ formatTime(entry.timestamp) }}</span>
+    <span class="hc-log-entry__time">{{ formatLogTime(entry.timestamp) }}</span>
     <span class="hc-log-entry__level" :style="{ color: levelColors[entry.level] || 'var(--hc-text-secondary)' }">
       {{ entry.level }}
     </span>

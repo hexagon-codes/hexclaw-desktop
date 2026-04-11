@@ -228,6 +228,7 @@ describe('sendViaWebSocket — extended', () => {
       undefined, // temperature
       undefined, // maxTokens
       undefined, // metadata
+      undefined, // requestId
     )
   })
 })

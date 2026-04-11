@@ -44,7 +44,7 @@ vi.mock('@/utils/errors', () => ({
 }))
 
 vi.mock('@/config/env', () => ({
-  env: { apiBase: 'http://localhost:9870' },
+  OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://localhost:9870' },
 }))
 
 // ── Setup ──────────────────────────────────────────────────────────

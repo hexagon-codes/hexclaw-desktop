@@ -109,7 +109,7 @@ describe('Skills Chain', () => {
       await searchClawHub('code-review', 'coding')
       const call = mockFetch.mock.calls[0]!
       expect(call[0]).toBe('/api/v1/clawhub/search')
-      expect(call[1]).toMatchObject({ method: 'GET', query: { q: 'code-review', category: 'coding' } })
+      expect(call[1]).toMatchObject({ method: 'GET', query: { q: 'code-review', category: 'coding', type: 'skill' } })
     })
 
     it('omits category "all" from query params', async () => {
@@ -126,7 +126,7 @@ describe('Skills Chain', () => {
       const call = mockFetch.mock.calls[0]!
       expect(call[0]).toBe('/api/v1/clawhub/search')
       const query = (call[1] as Record<string, unknown>)?.query as Record<string, unknown> | undefined
-      expect(query).toEqual({})
+      expect(query).toEqual({ type: 'skill' })
     })
 
     it('throws when backend returns error string', async () => {
@@ -156,6 +156,19 @@ describe('Skills Chain', () => {
       mockFetch.mockResolvedValue({ error: '  ', skills: [] })
       const result = await searchClawHub()
       expect(result).toEqual([])
+    })
+
+    it('filters out MCP entries even if backend returns a mixed catalog', async () => {
+      mockFetch.mockResolvedValue({
+        skills: [
+          { name: 'code-review-pro', description: 'skill', author: 'openclaw', version: '1.0.0', tags: [], downloads: 1, category: 'coding', type: 'skill' },
+          { name: 'filesystem', description: 'mcp', author: 'openclaw', version: '1.0.0', tags: [], downloads: 1, category: 'automation', type: 'mcp' },
+        ],
+      })
+
+      const result = await searchClawHub()
+      expect(result).toHaveLength(1)
+      expect(result[0]!.name).toBe('code-review-pro')
     })
   })
 

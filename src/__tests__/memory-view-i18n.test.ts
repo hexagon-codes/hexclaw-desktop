@@ -11,8 +11,26 @@ function getByPath(obj: unknown, path: string): unknown {
 
 const REQUIRED_MEMORY_KEYS = [
   'memory.readOnly',
+  'memory.activeMemory',
+  'memory.archivedMemory',
+  'memory.allMemory',
+  'memory.archived',
+  'memory.archivedCount',
+  'memory.loadedCount',
+  'memory.loadMore',
+  'memory.loadingMore',
+  'memory.archiveMemory',
+  'memory.restoreMemory',
+  'memory.allTypes',
+  'memory.allSources',
+  'memory.sourceType.manual',
+  'memory.sourceType.chat_explicit',
+  'memory.sourceType.chat_extract',
+  'memory.sourceType.system',
   'memory.deleteTitle',
   'memory.deleteMessage',
+  'memory.archiveFailed',
+  'memory.restoreFailed',
 ]
 
 describe('MemoryView i18n coverage', () => {

@@ -5,6 +5,7 @@ import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useSettingsStore } from '@/stores/settings'
+import { useChatStore } from '@/stores/chat'
 
 const { parseDocument, isDocumentFile } = vi.hoisted(() => ({
   parseDocument: vi.fn(),
@@ -29,6 +30,7 @@ const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
 vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
   sendChat: vi.fn(),
+  listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
 }))
 
 vi.mock('@/api/websocket', () => ({
@@ -40,6 +42,7 @@ vi.mock('@/api/websocket', () => ({
     onReply: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}),
     onApprovalRequest: vi.fn().mockReturnValue(() => {}),
+    onMemorySaved: vi.fn().mockReturnValue(() => {}),
     sendMessage: vi.fn(),
     sendRaw: vi.fn(),
     triggerError: vi.fn(),
@@ -295,14 +298,9 @@ describe('ChatView — E2E 关键路径', () => {
     const textarea = wrapper.find('textarea')
     await textarea.setValue('测试消息')
 
-    // 按 Enter 发送（模拟 ChatInput 的 @send 事件）
-    const chatInput = wrapper.findComponent({ name: 'ChatInput' })
-    if (chatInput.exists()) {
-      chatInput.vm.$emit('send', '测试消息')
-    } else {
-      // 直接触发 keydown
-      await textarea.trigger('keydown', { key: 'Enter', shiftKey: false })
-    }
+    // 直接点击发送按钮，走 ChatInput -> sendHandler -> useChatSend 完整链路
+    const sendButton = wrapper.find('.hc-composer__send')
+    await sendButton.trigger('click')
     await flushPromises()
 
     // 用户消息应出现在列表中
@@ -341,7 +339,9 @@ describe('ChatView — E2E 关键路径', () => {
     const store = useChatStore()
 
     // 模拟流式输出状态
+    store.currentSessionId = 'stream-session'
     store.streaming = true
+    store.streamingSessionId = 'stream-session'
     store.streamingContent = ''
     // 需要至少有条消息才不走空状态分支
     store.messages.push({ id: 'u1', role: 'user', content: '问题', timestamp: '' })
@@ -364,7 +364,9 @@ describe('ChatView — E2E 关键路径', () => {
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
 
+    store.currentSessionId = 'stream-session'
     store.streaming = true
+    store.streamingSessionId = 'stream-session'
     store.streamingContent = '正在生成的内容...'
     store.messages.push({ id: 'u1', role: 'user', content: '问题', timestamp: '' })
     await flushPromises()
@@ -439,6 +441,27 @@ describe('ChatView — E2E 关键路径', () => {
     // SessionList stub 应被渲染
     const sessionList = wrapper.find('[data-testid="session-list"]')
     expect(sessionList.exists()).toBe(true)
+  })
+
+  it('supports a draggable session sidebar width like ChatGPT', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const sidebar = wrapper.find('.hc-chat__sidebar')
+    const resizer = wrapper.find('[role="separator"]')
+    expect(sidebar.exists()).toBe(true)
+    expect(resizer.exists()).toBe(true)
+    expect(sidebar.attributes('style')).toContain('width: 260px;')
+
+    await resizer.trigger('mousedown', { button: 0, clientX: 260 })
+    document.dispatchEvent(new MouseEvent('mousemove', { clientX: 360 }))
+    await new Promise(resolve => requestAnimationFrame(resolve))
+    await flushPromises()
+
+    expect(wrapper.find('.hc-chat__sidebar').attributes('style')).toContain('width: 360px;')
+
+    document.dispatchEvent(new MouseEvent('mouseup'))
+    expect(localStorage.getItem('hexclaw_chat_sidebar_width')).toBe('360')
   })
 
   it('copying a message should fail gracefully when clipboard API is unavailable', async () => {
@@ -614,6 +637,23 @@ describe('ChatView — E2E 关键路径', () => {
     vi.useRealTimers()
   })
 
+  it('keeps an in-flight stream alive when the chat view unmounts', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const { useChatStore } = await import('@/stores/chat')
+    const chatStore = useChatStore()
+    chatStore.streaming = true
+    chatStore.streamingSessionId = 'session-background'
+    chatStore.streamingContent = 'still generating'
+
+    wrapper.unmount()
+
+    expect(chatStore.streaming).toBe(true)
+    expect(chatStore.streamingSessionId).toBe('session-background')
+    expect(chatStore.streamingContent).toBe('still generating')
+  })
+
   it('keeps the model query when the downloaded Ollama model is still not visible after retries', async () => {
     vi.useFakeTimers()
     mockRoute.query = { model: 'qwen3:8b' }
@@ -667,5 +707,63 @@ describe('ChatView — E2E 关键路径', () => {
     expect(mockRouterReplace).not.toHaveBeenCalledWith({ path: '/chat' })
 
     vi.useRealTimers()
+  })
+
+  it('initializes the default model before session loading settles so the first send is not dropped', async () => {
+    const pending = new Promise<void>(() => {})
+    let sendSpy: ReturnType<typeof vi.spyOn> | null = null
+
+    const wrapper = mountChatView({
+      setup: () => {
+        const chatStore = useChatStore()
+        vi.spyOn(chatStore, 'loadSessions').mockImplementation(() => pending)
+        vi.spyOn(chatStore, 'recoverActiveStreams').mockImplementation(() => pending)
+        sendSpy = vi.spyOn(chatStore, 'sendMessage').mockResolvedValue(null)
+
+        const settingsStore = useSettingsStore()
+        settingsStore.config = {
+          llm: {
+            providers: [
+              {
+                id: 'deepseek-provider',
+                name: 'DeepSeek',
+                type: 'deepseek',
+                enabled: true,
+                apiKey: '',
+                baseUrl: 'https://api.deepseek.com',
+                backendKey: 'deepseek',
+                models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', capabilities: ['text'] }],
+                selectedModelId: 'deepseek-chat',
+              },
+            ],
+            defaultModel: 'deepseek-chat',
+            defaultProviderId: 'deepseek-provider',
+            routing: { enabled: false, strategy: 'cost-aware' },
+          },
+          security: {
+            gateway_enabled: true,
+            injection_detection: true,
+            pii_filter: false,
+            content_filter: true,
+            max_tokens_per_request: 8192,
+            rate_limit_rpm: 60,
+          },
+          general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+          notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
+          mcp: { default_protocol: 'stdio' },
+          memory: { enabled: true },
+        }
+      },
+    })
+    await flushPromises()
+
+    const chatStore = useChatStore()
+    expect(chatStore.chatParams.model).toBe('deepseek-chat')
+
+    await wrapper.find('textarea').setValue('立即发送')
+    await wrapper.find('.hc-composer__send').trigger('click')
+    await flushPromises()
+
+    expect(sendSpy).toHaveBeenCalledWith('立即发送', undefined, undefined)
   })
 })

@@ -18,6 +18,7 @@ interface WsAttachment {
 interface WsMessage {
   type: 'message'
   content: string
+  request_id?: string
   session_id?: string
   user_id?: string
   provider?: string
@@ -39,7 +40,7 @@ interface WsUsage {
 }
 
 interface WsServerMessage {
-  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request'
+  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'memory_saved'
   content: string
   reasoning?: string
   done?: boolean
@@ -67,6 +68,7 @@ class HexClawWS {
   private replyCallbacks: ReplyCallback[] = []
   private errorCallbacks: ErrorCallback[] = []
   private approvalCallbacks: ApprovalCallback[] = []
+  private memorySavedCallbacks: ((content: string) => void)[] = []
 
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
@@ -166,6 +168,7 @@ class HexClawWS {
     temperature?: number,
     maxTokens?: number,
     metadata?: Record<string, string>,
+    requestId?: string,
   ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       this.errorCallbacks.forEach((cb) => cb('WebSocket is not connected'))
@@ -175,6 +178,7 @@ class HexClawWS {
     const msg: WsMessage = {
       type: 'message',
       content,
+      request_id: requestId,
       session_id: sessionId,
       user_id: DESKTOP_USER_ID,
       provider,
@@ -218,6 +222,12 @@ class HexClawWS {
     return () => { this.approvalCallbacks = this.approvalCallbacks.filter((cb) => cb !== callback) }
   }
 
+  /** Listen for backend auto-memory extraction notifications */
+  onMemorySaved(callback: (content: string) => void): () => void {
+    this.memorySavedCallbacks.push(callback)
+    return () => { this.memorySavedCallbacks = this.memorySavedCallbacks.filter((cb) => cb !== callback) }
+  }
+
   /** Send tool approval response back to backend */
   sendApprovalResponse(requestId: string, approved: boolean, remember: boolean): void {
     const base = approved ? 'approved' : 'denied'
@@ -253,6 +263,7 @@ class HexClawWS {
     this.replyCallbacks = []
     this.errorCallbacks = []
     this.approvalCallbacks = []
+    this.memorySavedCallbacks = []
   }
 
   private handleMessage(data: string): void {
@@ -285,6 +296,9 @@ class HexClawWS {
           reason: msg.content || '',
           sessionId: msg.session_id || '',
         }))
+        break
+      case 'memory_saved':
+        this.memorySavedCallbacks.forEach((cb) => cb(msg.content))
         break
       default:
         logger.warn('WebSocket unknown message type:', msg)

@@ -84,6 +84,11 @@ describe('Chat 会话链路', () => {
   const chatSrc = readSrc('api/chat.ts')
   const chatStoreSrc = readSrc('stores/chat.ts')
   const chatServiceSrc = readSrc('services/chatService.ts')
+  const chatStreamCancelSrc = readSrc('stores/chat-stream-cancel.ts')
+  const chatSendControllerSrc = readSrc('stores/chat-send-controller.ts')
+  const chatSendGuardsSrc = readSrc('stores/chat-send-guards.ts')
+  const chatSendAutoTitleSrc = readSrc('stores/chat-send-auto-title.ts')
+  const chatSessionControllerSrc = readSrc('stores/chat-session-controller.ts')
 
   it('sendChatViaBackend 应传递所有参数给 Tauri invoke', () => {
     // 确保 temperature、maxTokens、attachments 都正确传递
@@ -114,12 +119,14 @@ describe('Chat 会话链路', () => {
   })
 
   it('stopStreaming 应在取消后正确通知后端', () => {
-    expect(chatStoreSrc).toContain("type: 'cancel'")
-    expect(chatStoreSrc).toContain('session_id: streamingSessionId.value')
+    expect(chatStoreSrc).toContain('sendCancel: (sessionId) => hexclawWS.sendRaw({ type: \'cancel\', session_id: sessionId })')
+    expect(chatStreamCancelSrc).toContain('sendCancel(streamingSessionId.value)')
   })
 
-  it('会话标题仅在前2条消息且无自定义标题时自动生成', () => {
-    expect(chatStoreSrc).toContain('messages.value.length <= 2 && !hasCustomTitle.value')
+  it('会话标题仅在默认标题且无自定义标题时自动生成', () => {
+    expect(chatSendControllerSrc).toContain('DEFAULT_SESSION_TITLE')
+    expect(chatSendGuardsSrc).toContain('if (hasCustomTitle) return false')
+    expect(chatSendAutoTitleSrc).toContain('setPendingSuggestedTitleExpectation(sessionId, tempTitle)')
   })
 
   it('forkSession API 路径与后端对齐', () => {
@@ -138,9 +145,9 @@ describe('Chat 会话链路', () => {
     expect(hasDynamicImport).toBe(false)
   })
 
-  it('selectSession 切换会话时应正确清理前一会话的流式状态', () => {
-    expect(chatStoreSrc).toContain('streamingSessionId.value && streamingSessionId.value !== sessionId')
-    expect(chatStoreSrc).toContain('stopStreaming()')
+  it('selectSession 切换会话时不应中断其他会话后台流式状态', () => {
+    expect(chatStoreSrc).toContain('syncStreamingMirrors: boundStreamController.syncStreamingMirrors')
+    expect(chatSessionControllerSrc).toContain('createChatSessionLoadingController')
   })
 })
 
@@ -262,28 +269,29 @@ describe('Memory 记忆链路', () => {
   const memorySrc = readSrc('api/memory.ts')
   const memoryTypeSrc = readSrc('types/memory.ts')
 
-  it('MemoryData 类型应与后端 GET /api/v1/memory 响应对齐', () => {
-    // 后端返回 { content: string, context: string }
-    // 前端 MemoryData 应有这两个字段
+  it('MemoryEntry 类型应与后端 GET /api/v1/memory 响应对齐', () => {
+    // 后端返回 { entries: MemoryEntry[], summary, capacity }
+    // 前端 MemoryEntry 应有这些字段
     expect(memoryTypeSrc).toContain('content: string')
-    expect(memoryTypeSrc).toContain('context: string')
+    expect(memoryTypeSrc).toContain('type: MemoryType')
+    expect(memoryTypeSrc).toContain('source: MemorySource')
   })
 
-  it('saveMemory 应支持 type 参数（memory/daily）', () => {
-    expect(memorySrc).toContain("type: type ?? 'memory'")
+  it('createMemoryEntry 应支持 type 参数（默认 fact）', () => {
+    expect(memorySrc).toContain("type: type ?? 'fact'")
   })
 
-  it('deleteMemory 应 URL 编码 id（防止特殊字符）', () => {
+  it('deleteMemoryEntry 应 URL 编码 id（防止特殊字符）', () => {
     expect(memorySrc).toContain('encodeURIComponent(id)')
   })
 
   it('searchMemory 应同时返回关键词和向量搜索结果', () => {
-    expect(memorySrc).toContain('results: string[]')
+    expect(memorySrc).toContain('results: MemoryEntry[]')
     expect(memorySrc).toContain('vector_results: VectorSearchResult[] | null')
   })
 
-  it('updateMemory 使用 PUT 方法（后端允许空 content 清空记忆）', () => {
-    expect(memorySrc).toContain('apiPut<{ message: string }>(\'/api/v1/memory\'')
+  it('updateMemoryEntry 使用 PUT 方法更新单条记忆', () => {
+    expect(memorySrc).toContain('apiPut<MemoryEntry>(`/api/v1/memory/${encodeURIComponent(id)}`')
   })
 
   it('clearAllMemory 使用 DELETE /api/v1/memory', () => {
@@ -474,7 +482,7 @@ describe('LLM 配置链路', () => {
   })
 
   it('testLLMConnection 应校验 URL 格式', () => {
-    expect(configSrc).toContain('new URL(payload.provider.base_url)')
+    expect(configSrc).toContain('assertExternalBaseUrlAllowed(payload.provider.base_url, payload.provider.type)')
     expect(configSrc).toContain("throw new Error('Invalid URL format')")
   })
 
@@ -491,17 +499,19 @@ describe('Ollama 本地 LLM 链路', () => {
   const ollamaSrc = readSrc('api/ollama.ts')
 
   it('所有 Ollama API 端点路径与后端对齐', () => {
-    expect(ollamaSrc).toContain('/api/v1/ollama/status')
-    expect(ollamaSrc).toContain('/api/v1/ollama/running')
+    // status/running use OLLAMA_BASE constant (direct Ollama), others via backend
+    expect(ollamaSrc).toContain('OLLAMA_BASE')
+    expect(ollamaSrc).toContain('/api/tags')
+    expect(ollamaSrc).toContain('/api/ps')
     expect(ollamaSrc).toContain('/api/v1/ollama/unload')
     expect(ollamaSrc).toContain('/api/v1/ollama/models/')
     expect(ollamaSrc).toContain('/api/v1/ollama/restart')
     expect(ollamaSrc).toContain('/api/v1/ollama/pull')
   })
 
-  it('getOllamaStatus 使用 apiGet（由 ofetch 统一处理超时）', () => {
-    // 已从 raw fetch + AbortSignal.timeout 迁移到 apiGet，超时由 ofetch 统一处理
-    expect(ollamaSrc).toContain("apiGet<OllamaStatus>('/api/v1/ollama/status')")
+  it('getOllamaStatus 直连 Ollama 原生 API（不依赖 sidecar）', () => {
+    expect(ollamaSrc).toContain('OLLAMA_BASE')
+    expect(ollamaSrc).toContain('/api/tags')
   })
 
   it('restartOllama 使用 apiPost（由 ofetch 统一处理超时）', () => {
@@ -704,12 +714,12 @@ describe('安全审计', () => {
     expect(commandsSrc).toContain('scheme != "https" && scheme != "http"')
   })
 
-  it('secure store 使用 Tauri Store (前端加密)', () => {
-    // Secure storage is handled in TypeScript (secure-store.ts) using Tauri LazyStore,
-    // not via keyring in Rust commands. Verify commands.rs has no keyring dependency.
+  it('secure store 使用 Tauri Store，浏览器端不做持久化假加密', () => {
+    // Secure storage is handled in TypeScript (secure-store.ts) using Tauri LazyStore.
+    // Browser mode keeps secrets only in volatile memory.
     const secureStoreSrc = readSrc('utils/secure-store.ts')
     expect(secureStoreSrc).toContain('LazyStore')
-    expect(secureStoreSrc).toContain('encrypt')
+    expect(secureStoreSrc).toContain('volatileBrowserStore')
   })
 
   it('sidecar 端口冲突检测应区分 hexclaw 与非 hexclaw 进程', () => {
@@ -786,7 +796,7 @@ describe('前后端 API 对齐', () => {
       // Memory
       'GET /api/v1/memory',
       'POST /api/v1/memory',
-      'PUT /api/v1/memory',
+      'PUT /api/v1/memory/{id}',
       'DELETE /api/v1/memory',
       'DELETE /api/v1/memory/{id}',
       'GET /api/v1/memory/search',

@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   ChevronDown,
+  ChevronUp,
   FileCode,
   MessageSquarePlus,
   Wrench,
@@ -33,6 +34,7 @@ import { useToast, useConversationAutomation, useChatSend, useChatActions } from
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { openSanitizedArtifact } from '@/utils/safe-html'
+import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { getSkills, type Skill } from '@/api/skills'
 import { setClipboard } from '@/api/desktop'
 import type { ChatAttachment, ChatMessage } from '@/types'
@@ -48,13 +50,29 @@ const toast = useToast()
 const QUERY_MODEL_RETRY_INTERVAL = 1000
 const QUERY_MODEL_RETRY_TIMES = 4
 let queryModelSelectionAbort: AbortController | null = null
+const streamingReasoningDisplay = computed(() =>
+  normalizeAssistantReasoning(chatStore.isCurrentStreamingReasoning, { trim: false }),
+)
 
 const messagesEndRef = ref<HTMLDivElement>()
+const messagesContainerRef = ref<HTMLDivElement>()
 const thinkingContentRef = ref<HTMLDivElement>()
-const chatInputRef = ref<InstanceType<typeof ChatInput>>()
+const showScrollToBottom = ref(false)
+const showScrollToTop = ref(false)
 const showSessions = ref(true)
+const sidebarWidth = ref(260)
 const hoveredMsgId = ref<string | null>(null)
 let hoverTimer: ReturnType<typeof setTimeout> | null = null
+const SIDEBAR_WIDTH_STORAGE_KEY = 'hexclaw_chat_sidebar_width'
+const SIDEBAR_MIN_WIDTH = 260
+const SIDEBAR_MAX_WIDTH = 420
+const sidebarResizing = ref(false)
+let sidebarDragging = false
+let sidebarDragStartX = 0
+let sidebarDragStartWidth = 0
+let sidebarRafId = 0
+let bodyCursorBeforeDrag = ''
+let bodyUserSelectBeforeDrag = ''
 
 function delayedClearHover() {
   if (hoverTimer) clearTimeout(hoverTimer)
@@ -184,9 +202,21 @@ const selectedProviderName = ref('')
 const chatTemperature = ref(0.7)
 const chatMaxTokens = ref(4096)
 const showChatParams = ref(false)
+/** true when user explicitly picks a model via selectModel(), reset on agent/session switch */
+const userOverrodeModel = ref(false)
 
 // 当前模型的显示名
 const selectedModelDisplay = computed(() => {
+  if (!userOverrodeModel.value) {
+    // Show agent preference source when backend decides
+    const agentName = (chatStore.chatMode === 'agent' && chatStore.agentRole)
+      ? chatStore.agentRole
+      : agentsStore.defaultAgentName
+    if (agentName) {
+      const cfg = agentsStore.findAgent(agentName)
+      if (cfg?.model) return `${cfg.model} ⟵ Agent`
+    }
+  }
   if (selectedModel.value === 'auto') return 'Auto'
   if (!selectedModel.value) return 'Select Model'
   const found = settingsStore.availableModels.find(
@@ -259,16 +289,9 @@ const researchStreamingContentLength = computed(() =>
     : 0,
 )
 
-function formatTime(ts: string) {
-  const d = new Date(ts)
-  const now = new Date()
-  const h = d.getHours().toString().padStart(2, '0')
-  const m = d.getMinutes().toString().padStart(2, '0')
-  if (d.toDateString() === now.toDateString()) return `${h}:${m}`
-  const month = (d.getMonth() + 1).toString().padStart(2, '0')
-  const day = d.getDate().toString().padStart(2, '0')
-  return `${month}/${day} ${h}:${m}`
-}
+import { formatTime } from '@/utils/time'
+import { on } from '@/utils/eventBus'
+import { hexclawWS } from '@/api/websocket'
 
 function openArtifactInNewWindow() {
   const art = chatStore.artifacts.find((a) => a.id === chatStore.selectedArtifactId)
@@ -335,9 +358,25 @@ function loadLLMConfig() {
 }
 
 onMounted(async () => {
+  try {
+    const raw = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
+    const parsed = Number(raw)
+    if (Number.isFinite(parsed) && parsed >= SIDEBAR_MIN_WIDTH && parsed <= SIDEBAR_MAX_WIDTH) {
+      sidebarWidth.value = parsed
+    }
+  } catch {
+    // ignore localStorage failures
+  }
+
+  // 先用当前配置同步默认模型，避免首屏在会话/恢复请求未完成前出现
+  // “发送按钮可点但消息被静默吞掉”的初始化竞态。
+  loadLLMConfig()
+
   await chatStore.loadSessions()
+  await chatStore.recoverActiveStreams()
   chatStore.initApprovalListener()
   agentsStore.loadRoles()
+  await agentsStore.loadAgents()
   getSkills()
     .then((r) => {
       availableSkills.value = r.skills || []
@@ -412,14 +451,28 @@ function selectModel(modelId: string, providerId = '', providerKey = '', provide
   selectedProviderKey.value = modelId === 'auto' ? '' : providerKey
   selectedProviderName.value = modelId === 'auto' ? '' : providerName
   showModelSelector.value = false
+  userOverrodeModel.value = true
   syncChatParams()
 }
 
-/** 同步模型和参数到 chatStore */
+/** 同步模型和参数到 chatStore
+ *
+ * 当后端有 Agent 可决策模型（显式 agentRole 或默认 Agent 有模型偏好），
+ * 且用户没有主动选模型时，不发 provider/model，让后端决策。
+ */
 function syncChatParams() {
-  chatStore.chatParams.provider =
-    selectedModel.value === 'auto' ? undefined : selectedProviderKey.value || undefined
-  chatStore.chatParams.model = selectedModel.value === 'auto' ? 'auto' : selectedModel.value
+  const hasExplicitAgent = chatStore.chatMode === 'agent' && !!chatStore.agentRole
+  const defaultAgentHasModel = !hasExplicitAgent
+    && !!agentsStore.defaultAgentName
+    && !!agentsStore.findAgent(agentsStore.defaultAgentName)?.model
+  const letBackendDecide = (hasExplicitAgent || defaultAgentHasModel) && !userOverrodeModel.value
+
+  chatStore.chatParams.provider = letBackendDecide
+    ? undefined
+    : (selectedModel.value === 'auto' ? undefined : selectedProviderKey.value || undefined)
+  chatStore.chatParams.model = letBackendDecide
+    ? undefined
+    : (selectedModel.value === 'auto' ? 'auto' : selectedModel.value)
   chatStore.chatParams.temperature = chatTemperature.value
   chatStore.chatParams.maxTokens = chatMaxTokens.value
 }
@@ -436,6 +489,19 @@ function scrollToBottom() {
     messagesEndRef.value?.scrollIntoView({ behavior: 'smooth' })
     _scrollTimer = null
   }, 100)
+}
+
+function scrollToTop() {
+  messagesContainerRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+function handleMessagesScroll() {
+  const el = messagesContainerRef.value
+  if (!el) return
+  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+  const distanceFromTop = el.scrollTop
+  showScrollToBottom.value = distanceFromBottom > 200
+  showScrollToTop.value = distanceFromTop > 200 && distanceFromBottom < 100
 }
 
 function clearAttachmentPreview() {
@@ -508,14 +574,25 @@ watch(
 // 参数变更时同步到 chatStore
 watch([() => chatTemperature.value, () => chatMaxTokens.value], syncChatParams)
 
+// Agent 切换时重置模型覆盖标记，让后端决策模型
+watch(
+  () => chatStore.agentRole,
+  () => {
+    userOverrodeModel.value = false
+    syncChatParams()
+  },
+)
+
 function newSession() {
   if (chatStore.chatMode !== 'research') {
     chatStore.agentRole = ''
   }
+  userOverrodeModel.value = false
   chatStore.newSession()
 }
 
 function openHistorySession(sessionId: string) {
+  userOverrodeModel.value = false
   chatStore.selectSession(sessionId)
   chatViewTab.value = 'chat'
 }
@@ -590,8 +667,9 @@ async function handleFileUpload(file: File) {
       console.error('Document parsing failed:', err)
       // Still allow sending as raw file attachment
     } finally {
-      if (parseGen !== documentParseGen) return
-      documentParsing.value = false
+      if (parseGen === documentParseGen) {
+        documentParsing.value = false
+      }
     }
   }
 }
@@ -610,17 +688,84 @@ function handleSearchShortcut(e: KeyboardEvent) {
   }
 }
 
+// Memory update notification — shows a transient toast when memory is modified elsewhere
+const memoryJustUpdated = ref(false)
+let memoryToastTimer: ReturnType<typeof setTimeout> | null = null
+function showMemoryToast(content?: string) {
+  memoryToastContent.value = content || ''
+  memoryJustUpdated.value = true
+  if (memoryToastTimer) clearTimeout(memoryToastTimer)
+  memoryToastTimer = setTimeout(() => { memoryJustUpdated.value = false }, 4000)
+}
+
+const memoryToastContent = ref('')
+const offMemoryBus = on('memory:updated', () => showMemoryToast())
+const offMemoryWS = hexclawWS.onMemorySaved((content) => showMemoryToast(content))
+
 onMounted(() => document.addEventListener('keydown', handleSearchShortcut))
 onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 onUnmounted(() => {
+  stopSidebarResize()
   cancelQueryModelSelection()
+  offMemoryBus()
+  offMemoryWS()
+  if (memoryToastTimer) clearTimeout(memoryToastTimer)
 })
+
+function clampSidebarWidth(next: number) {
+  return Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, next))
+}
+
+function persistSidebarWidth() {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth.value))
+  } catch {
+    // ignore localStorage failures
+  }
+}
+
+function handleSidebarResizeMove(event: MouseEvent) {
+  if (!sidebarDragging) return
+  const delta = event.clientX - sidebarDragStartX
+  const next = clampSidebarWidth(sidebarDragStartWidth + delta)
+  if (next === sidebarWidth.value) return
+  cancelAnimationFrame(sidebarRafId)
+  sidebarRafId = requestAnimationFrame(() => {
+    sidebarWidth.value = next
+  })
+}
+
+function stopSidebarResize() {
+  if (!sidebarDragging) return
+  sidebarDragging = false
+  sidebarResizing.value = false
+  cancelAnimationFrame(sidebarRafId)
+  document.removeEventListener('mousemove', handleSidebarResizeMove)
+  document.removeEventListener('mouseup', stopSidebarResize)
+  document.body.style.cursor = bodyCursorBeforeDrag
+  document.body.style.userSelect = bodyUserSelectBeforeDrag
+  persistSidebarWidth()
+}
+
+function startSidebarResize(event: MouseEvent) {
+  if (event.button !== 0) return
+  sidebarDragging = true
+  sidebarResizing.value = true
+  sidebarDragStartX = event.clientX
+  sidebarDragStartWidth = sidebarWidth.value
+  bodyCursorBeforeDrag = document.body.style.cursor
+  bodyUserSelectBeforeDrag = document.body.style.userSelect
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', handleSidebarResizeMove)
+  document.addEventListener('mouseup', stopSidebarResize)
+}
 </script>
 
 <template>
   <div class="hc-chat">
     <!-- Session sidebar -->
-    <div v-show="showSessions" class="hc-chat__sidebar">
+    <div v-show="showSessions" class="hc-chat__sidebar" :class="{ 'hc-chat__sidebar--resizing': sidebarResizing }" :style="{ width: `${sidebarWidth}px` }">
       <div class="hc-chat__sidebar-header">
         <span class="hc-chat__sidebar-title">{{ t('chat.sessions') }}</span>
         <button class="hc-chat__new-btn" :title="t('chat.newSession')" @click="newSession">
@@ -629,6 +774,15 @@ onUnmounted(() => {
       </div>
       <SessionList />
     </div>
+    <div
+      v-show="showSessions"
+      class="hc-chat__sidebar-resizer"
+      :class="{ 'hc-chat__sidebar-resizer--active': sidebarResizing }"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sessions sidebar"
+      @mousedown="startSidebarResize"
+    />
 
     <!-- Main chat area -->
     <div
@@ -693,7 +847,7 @@ onUnmounted(() => {
       <!-- ═══ Chat Tab ═══ -->
       <template v-if="chatViewTab === 'chat'">
         <!-- Messages -->
-        <div class="hc-chat__messages">
+        <div ref="messagesContainerRef" class="hc-chat__messages" @scroll="handleMessagesScroll">
           <div
             v-if="chatStore.messages.length === 0 && !chatStore.isCurrentStreaming"
             class="hc-chat__empty"
@@ -731,13 +885,13 @@ onUnmounted(() => {
                     :is-handoff="idx > 0 && chatStore.messages[idx - 1]?.role === 'assistant' && chatStore.messages[idx - 1]?.agent_name !== msg.agent_name"
                   />
                   <!-- Thinking block for finalized messages -->
-                  <div v-if="msg.reasoning" class="hc-thinking">
+                  <div v-if="msg.reasoning && normalizeAssistantReasoning(msg.reasoning)" class="hc-thinking">
                     <details class="hc-thinking__details">
                       <summary class="hc-thinking__summary">
                         <span class="hc-thinking__label">{{ t('chat.thoughtProcess') }}</span>
                         <span v-if="msg.metadata?.thinking_duration" class="hc-thinking__time">{{ msg.metadata.thinking_duration }}s</span>
                       </summary>
-                      <div class="hc-thinking__content">{{ msg.reasoning }}</div>
+                      <div class="hc-thinking__content">{{ normalizeAssistantReasoning(msg.reasoning) }}</div>
                     </details>
                   </div>
                   <div class="hc-msg__bubble-wrap">
@@ -844,6 +998,14 @@ onUnmounted(() => {
                         {{ hit.source }}
                       </div>
                     </div>
+                  </div>
+                  <!-- Backend auto-extracted memory notification -->
+                  <div
+                    v-if="typeof msg.metadata?.memory_saved === 'string' && msg.metadata.memory_saved"
+                    class="hc-msg__memory-saved"
+                  >
+                    <Brain :size="12" />
+                    <span>{{ t('chat.memorySaved') }}: {{ msg.metadata.memory_saved }}</span>
                   </div>
 
                   <div v-if="msg.tool_calls?.length" class="hc-msg__tools">
@@ -993,28 +1155,28 @@ onUnmounted(() => {
               <div class="hc-msg__body">
                 <div class="hc-msg__name">{{ t('chat.botName') }}</div>
                 <!-- Thinking block: open while reasoning, collapse to <details> once reply starts -->
-                <div v-if="chatStore.isCurrentStreamingReasoning && !chatStore.isCurrentStreamingContent" class="hc-thinking">
+                <div v-if="streamingReasoningDisplay && !chatStore.isCurrentStreamingContent" class="hc-thinking">
                   <div class="hc-thinking__header">
                     <span class="hc-thinking__spinner" />
                     <span class="hc-thinking__label">{{ t('chat.thinking') }}</span>
                     <span v-if="chatStore.streamingThinkingElapsed > 0" class="hc-thinking__time">{{ chatStore.streamingThinkingElapsed }}s</span>
                   </div>
-                  <div ref="thinkingContentRef" class="hc-thinking__content">{{ chatStore.isCurrentStreamingReasoning }}</div>
+                  <div ref="thinkingContentRef" class="hc-thinking__content">{{ streamingReasoningDisplay }}</div>
                 </div>
-                <div v-else-if="chatStore.isCurrentStreamingReasoning && chatStore.isCurrentStreamingContent" class="hc-thinking">
+                <div v-else-if="streamingReasoningDisplay && chatStore.isCurrentStreamingContent" class="hc-thinking">
                   <details class="hc-thinking__details">
                     <summary class="hc-thinking__summary">
                       <span class="hc-thinking__label">{{ t('chat.thoughtProcess') }}</span>
                       <span v-if="chatStore.streamingThinkingElapsed > 0" class="hc-thinking__time">{{ chatStore.streamingThinkingElapsed }}s</span>
                     </summary>
-                    <div class="hc-thinking__content">{{ chatStore.isCurrentStreamingReasoning }}</div>
+                    <div class="hc-thinking__content">{{ streamingReasoningDisplay }}</div>
                   </details>
                 </div>
                 <!-- Main reply content -->
                 <div v-if="chatStore.isCurrentStreamingContent" class="hc-msg__bubble hc-msg__bubble--assistant">
                   <MarkdownRenderer :content="chatStore.isCurrentStreamingContent" />
                 </div>
-                <div v-else-if="!chatStore.isCurrentStreamingReasoning" class="hc-msg__bubble hc-msg__bubble--assistant">
+                <div v-else-if="!streamingReasoningDisplay" class="hc-msg__bubble hc-msg__bubble--assistant">
                   <span class="hc-typing-dots">
                     <span class="hc-typing-dots__dot" />
                     <span class="hc-typing-dots__dot" />
@@ -1037,6 +1199,35 @@ onUnmounted(() => {
             <div ref="messagesEndRef" />
           </div>
         </div>
+
+        <!-- Scroll navigation buttons (ChatGPT style) -->
+        <Transition name="hc-fade">
+          <button
+            v-if="showScrollToTop"
+            class="hc-chat__scroll-btn hc-chat__scroll-btn--top"
+            :title="t('chat.scrollToTop', 'Scroll to top')"
+            @click="scrollToTop"
+          >
+            <ChevronUp :size="18" />
+          </button>
+        </Transition>
+        <Transition name="hc-fade">
+          <button
+            v-if="showScrollToBottom"
+            class="hc-chat__scroll-btn hc-chat__scroll-btn--bottom"
+            @click="scrollToBottom"
+          >
+            <ChevronDown :size="18" />
+          </button>
+        </Transition>
+
+        <!-- Memory update toast -->
+        <Transition name="hc-fade">
+          <div v-if="memoryJustUpdated" class="hc-chat__memory-toast">
+            <Brain :size="13" />
+            {{ memoryToastContent ? `${t('chat.memorySaved')}: ${memoryToastContent}` : t('chat.memoryUpdated') }}
+          </div>
+        </Transition>
 
         <!-- Input area -->
         <div class="hc-chat__input-area">
@@ -1082,14 +1273,14 @@ onUnmounted(() => {
               <button class="hc-chat__attach-remove" @click="clearAttachmentPreview">×</button>
             </div>
             <ChatInput
-              ref="chatInputRef"
               :streaming="chatStore.isCurrentStreaming"
+              :disabled="chatStore.sending"
               :agents="agentsStore.roles"
               :skills="availableSkills"
               :allow-image="supportsVision"
               :allow-video="supportsVideo"
               :recipient-name="chatStore.agentRole || t('chat.defaultAgent', '小蟹')"
-              @send="handleSend"
+              :send-handler="handleSend"
               @stop="chatStore.stopStreaming()"
             >
               <!-- 模型选择器 + 深度研究（ChatGPT 风格，在输入框内底部工具栏） -->
@@ -1237,7 +1428,6 @@ onUnmounted(() => {
 
 /* ─── Sidebar ───── */
 .hc-chat__sidebar {
-  width: 220px;
   flex-shrink: 0;
   border-right: 1px solid var(--hc-border-subtle);
   background: var(--hc-bg-sidebar);
@@ -1245,6 +1435,32 @@ onUnmounted(() => {
   -webkit-backdrop-filter: saturate(180%) blur(var(--hc-blur));
   display: flex;
   flex-direction: column;
+}
+.hc-chat__sidebar--resizing {
+  will-change: width;
+  pointer-events: none;
+}
+
+.hc-chat__sidebar-resizer {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  position: relative;
+}
+
+.hc-chat__sidebar-resizer::before {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  border-radius: 999px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.hc-chat__sidebar-resizer:hover::before,
+.hc-chat__sidebar-resizer--active::before {
+  background: var(--hc-accent);
+  opacity: 0.45;
 }
 
 .hc-chat__sidebar-header {
@@ -1314,6 +1530,37 @@ onUnmounted(() => {
   flex: 1;
   overflow-y: auto;
   padding: 12px 16px 80px;
+}
+
+/* ─── Scroll navigation (ChatGPT style: 底部居中，输入框上方) ───── */
+.hc-chat__scroll-btn {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-elevated);
+  color: var(--hc-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0,0,0,.1);
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s, opacity 0.15s;
+}
+.hc-chat__scroll-btn:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+}
+.hc-chat__scroll-btn--top {
+  top: 56px;
+}
+.hc-chat__scroll-btn--bottom {
+  bottom: 90px;
 }
 
 .hc-chat__empty {
@@ -1467,6 +1714,53 @@ onUnmounted(() => {
   color: var(--hc-text-primary);
   border-bottom-right-radius: 4px;
   border: 1px solid color-mix(in srgb, var(--hc-accent) 10%, transparent);
+}
+
+/* ─── Tool call 参数/结果折叠 ───── */
+.hc-msg__tools {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.hc-msg__tool {
+  border-radius: 8px;
+  border: 1px solid var(--hc-border-subtle, var(--hc-border));
+  background: var(--hc-bg-sidebar);
+  overflow: hidden;
+}
+.hc-msg__tool-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--hc-text-secondary);
+}
+.hc-msg__tool-name {
+  color: var(--hc-accent);
+}
+.hc-msg__tool-detail {
+  border-top: 1px solid var(--hc-border-subtle, var(--hc-border));
+}
+.hc-msg__tool-detail > summary {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.hc-msg__tool-detail > pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--hc-text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 /* ─── DeepSeek 风格原位编辑卡片 ───── */
@@ -2428,6 +2722,43 @@ onUnmounted(() => {
   margin-top: 2px;
   font-size: 10px;
   color: var(--hc-text-muted);
+}
+
+.hc-msg__memory-saved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--hc-accent);
+  background: color-mix(in srgb, var(--hc-accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--hc-accent) 20%, transparent);
+}
+
+.hc-chat__memory-toast {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  margin: 0 auto 8px;
+  width: fit-content;
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--hc-accent);
+  background: color-mix(in srgb, var(--hc-accent) 10%, var(--hc-bg-card));
+  border: 1px solid color-mix(in srgb, var(--hc-accent) 20%, transparent);
+}
+
+.hc-fade-enter-active,
+.hc-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.hc-fade-enter-from,
+.hc-fade-leave-to {
+  opacity: 0;
 }
 
 /* ─── Composer Chips ───── */

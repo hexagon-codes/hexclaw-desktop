@@ -137,7 +137,7 @@ class MockWebSocket {
 
   private _dispatchListeners(type: string, event: Event) {
     const list = this._listeners[type] || []
-    for (const entry of [...list]) {
+    for (const entry of list.slice()) {
       entry.handler(event)
       if (entry.once) {
         this._listeners[type] = this._listeners[type]!.filter((l) => l !== entry)
@@ -444,7 +444,9 @@ describe('ollama.ts', () => {
 
   describe('getOllamaRunning()', () => {
     it('returns empty array when models field is missing', async () => {
-      mockedApiGet.mockResolvedValueOnce({} as never)
+      fetchSpy.mockResolvedValueOnce(
+        new Response(JSON.stringify({}), { status: 200 }) as Response,
+      )
 
       const result = await getOllamaRunning()
       expect(result).toEqual([])
@@ -758,6 +760,18 @@ describe('skills.ts', () => {
   })
 
   describe('searchClawHub()', () => {
+    it('always requests type=skill so MCP entries stay out of the skills marketplace', async () => {
+      mockedApiGet.mockResolvedValueOnce({ skills: [] } as never)
+
+      await searchClawHub('review', 'coding')
+
+      expect(mockedApiGet).toHaveBeenCalledWith('/api/v1/clawhub/search', {
+        q: 'review',
+        category: 'coding',
+        type: 'skill',
+      })
+    })
+
     it('handles response that is an array directly (edge case)', async () => {
       // When res is an array (no .skills), the code checks Array.isArray(res)
       mockedApiGet.mockResolvedValueOnce([
@@ -768,6 +782,20 @@ describe('skills.ts', () => {
       expect(results).toHaveLength(1)
       expect(results[0]!.name).toBe('skill-a')
       expect(results[0]!.category).toBe('data')
+    })
+
+    it('drops mixed MCP entries from the hub response defensively', async () => {
+      mockedApiGet.mockResolvedValueOnce({
+        skills: [
+          { name: 'skill-a', description: 'd', author: 'a', version: '1', tags: [], category: 'data', type: 'skill' },
+          { name: 'filesystem', description: 'mcp', author: 'a', version: '1', tags: [], category: 'automation', type: 'mcp' },
+        ],
+      } as never)
+
+      const results = await searchClawHub()
+
+      expect(results).toHaveLength(1)
+      expect(results[0]!.name).toBe('skill-a')
     })
 
     it('throws when response has error field', async () => {

@@ -30,6 +30,7 @@ const {
   // chatService mocks
   ensureWebSocketConnected,
   sendViaWebSocket,
+  openWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
   // api/chat
@@ -89,6 +90,10 @@ const {
 
   ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
   sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+  openWebSocketStream: vi.fn().mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+  }),
   sendViaBackend: vi.fn().mockResolvedValue({ reply: 'Hello!', session_id: 's1' }),
   clearWebSocketCallbacks: vi.fn(),
 
@@ -173,6 +178,7 @@ vi.mock('@/services/chatService', () => {
   return {
     ensureWebSocketConnected,
     sendViaWebSocket,
+    openWebSocketStream,
     sendViaBackend,
     clearWebSocketCallbacks,
     ChatRequestError,
@@ -296,6 +302,10 @@ beforeEach(() => {
 
   // Reset commonly used mocks to defaults
   ensureWebSocketConnected.mockResolvedValue(false)
+  openWebSocketStream.mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+  })
   sendViaBackend.mockResolvedValue({ reply: 'Hello!', session_id: 's1' })
   loadAllSessions.mockResolvedValue([
     { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01', message_count: 0 },
@@ -350,6 +360,8 @@ describe('Chain 1: Chat Message Flow', () => {
       expect.any(Object),
       '',
       undefined,
+      undefined,
+      expect.any(String),
     )
     expect(assistantMsg).not.toBeNull()
     expect(assistantMsg?.role).toBe('assistant')
@@ -388,6 +400,8 @@ describe('Chain 1: Chat Message Flow', () => {
       expect.any(Object),
       '',
       undefined,
+      undefined,
+      expect.any(String),
     )
   })
 
@@ -736,14 +750,21 @@ describe('Chain 5: WebSocket Lifecycle', () => {
       onError?: (error: Error) => void
     } = {}
 
-    sendViaWebSocket.mockImplementation(
+    openWebSocketStream.mockImplementation(
       (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: typeof capturedCallbacks) => {
         capturedCallbacks = callbacks ?? {}
         // Simulate streaming chunks
         capturedCallbacks.onChunk?.('Hello ')
         capturedCallbacks.onChunk?.('World')
-        capturedCallbacks.onDone?.('Hello World', { model: 'gpt-4o' }, undefined, undefined)
-        return Promise.resolve()
+        return {
+          cancel: vi.fn(),
+          done: Promise.resolve({
+            content: 'Hello World',
+            metadata: { model: 'gpt-4o' },
+            toolCalls: undefined,
+            agentName: undefined,
+          }),
+        }
       },
     )
 
@@ -753,7 +774,7 @@ describe('Chain 5: WebSocket Lifecycle', () => {
 
     const result = await store.sendMessage('test streaming')
 
-    expect(sendViaWebSocket).toHaveBeenCalled()
+    expect(openWebSocketStream).toHaveBeenCalled()
     expect(result).not.toBeNull()
     // The final assistant message should be in store
     const assistantMsg = store.messages.find((m) => m.role === 'assistant')
@@ -765,7 +786,10 @@ describe('Chain 5: WebSocket Lifecycle', () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
     await import('@/services/chatService')
-    sendViaWebSocket.mockRejectedValueOnce(new Error('Connection lost'))
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.reject(new Error('Connection lost')),
+    })
     sendViaBackend.mockResolvedValueOnce({
       reply: 'Fallback response',
       session_id: 's1',
@@ -786,9 +810,10 @@ describe('Chain 5: WebSocket Lifecycle', () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
     const { ChatRequestError } = await import('@/services/chatService')
-    sendViaWebSocket.mockRejectedValueOnce(
-      new ChatRequestError('助手长时间未开始回复，已超时并停止等待。', true),
-    )
+    openWebSocketStream.mockReturnValueOnce({
+      cancel: vi.fn(),
+      done: Promise.reject(new ChatRequestError('助手长时间未开始回复，已超时并停止等待。', true)),
+    })
 
     const { useChatStore } = await import('@/stores/chat')
     const store = useChatStore()
@@ -833,15 +858,19 @@ describe('Chain 6: Model Selection & Parameters', () => {
       { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5, maxTokens: 2048 },
       '',
       undefined,
+      undefined,
+      expect.any(String),
     )
   })
 
-  it('chatParams provider/model are passed through to sendViaWebSocket', async () => {
+  it('chatParams provider/model are passed through to openWebSocketStream', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
-    sendViaWebSocket.mockImplementation(
-      (_text, _sid, _params, _role, _att, callbacks) => {
-        callbacks?.onDone?.('done', undefined, undefined, undefined)
-        return Promise.resolve()
+    openWebSocketStream.mockImplementation(
+      () => {
+        return {
+          cancel: vi.fn(),
+          done: Promise.resolve({ content: 'done', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+        }
       },
     )
 
@@ -852,7 +881,7 @@ describe('Chain 6: Model Selection & Parameters', () => {
 
     await store.sendMessage('test ws params')
 
-    expect(sendViaWebSocket).toHaveBeenCalledWith(
+    expect(openWebSocketStream).toHaveBeenCalledWith(
       'test ws params',
       's1',
       { provider: 'anthropic', model: 'claude-3-opus', temperature: 0.7, maxTokens: 4096 },
@@ -860,6 +889,7 @@ describe('Chain 6: Model Selection & Parameters', () => {
       undefined,
       expect.any(Object),
       undefined,
+      expect.any(String),
     )
   })
 
@@ -879,6 +909,8 @@ describe('Chain 6: Model Selection & Parameters', () => {
       { model: 'gpt-4o' },
       'researcher',
       undefined,
+      undefined,
+      expect.any(String),
     )
   })
 })

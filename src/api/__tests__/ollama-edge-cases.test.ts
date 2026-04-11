@@ -4,7 +4,9 @@
  * getOllamaStatus / getOllamaRunning / unloadOllamaModel /
  * deleteOllamaModel / restartOllama + error paths
  *
- * 非流式函数走 ofetch（apiGet/apiPost/apiDelete），pullOllamaModel 仍用 raw fetch。
+ * getOllamaStatus/getOllamaRunning 直连 Ollama 原生 API（fetch）。
+ * unloadOllamaModel/deleteOllamaModel/restartOllama 走 ofetch（apiPost/apiDelete）。
+ * pullOllamaModel 仍用 raw fetch。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
@@ -20,6 +22,7 @@ vi.stubGlobal('fetch', mockFetchFn)
 
 vi.mock('@/config/env', () => ({
   env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 5000 },
+  OLLAMA_BASE: 'http://localhost:11434',
 }))
 
 import {
@@ -36,21 +39,27 @@ describe('Ollama API Edge Cases', () => {
 
   describe('getOllamaStatus', () => {
     it('returns status on success', async () => {
-      mockOfetch.mockResolvedValue({ running: true, version: '0.3.0', models: [], associated: true, model_count: 5 })
+      mockFetchFn
+        .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ name: 'm1', size: 100, modified_at: '2024-01-01' }] }), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ version: '0.3.0' }), { status: 200 }))
       const result = await getOllamaStatus()
       expect(result.running).toBe(true)
       expect(result.version).toBe('0.3.0')
     })
 
-    it('throws on non-ok response', async () => {
-      mockOfetch.mockRejectedValue(new Error('500'))
-      await expect(getOllamaStatus()).rejects.toThrow()
+    it('returns { running: false } on error (no longer throws)', async () => {
+      mockFetchFn.mockRejectedValue(new Error('500'))
+      const result = await getOllamaStatus()
+      expect(result.running).toBe(false)
     })
 
-    it('calls correct endpoint', async () => {
-      mockOfetch.mockResolvedValue({ running: false, associated: false, model_count: 0 })
+    it('calls Ollama native endpoints directly', async () => {
+      mockFetchFn
+        .mockResolvedValueOnce(new Response(JSON.stringify({ models: [] }), { status: 200 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ version: '0.5.0' }), { status: 200 }))
       await getOllamaStatus()
-      expect(mockOfetch).toHaveBeenCalledWith('/api/v1/ollama/status', expect.objectContaining({ method: 'GET' }))
+      expect(mockFetchFn).toHaveBeenCalledWith('http://localhost:11434/api/tags', expect.anything())
+      expect(mockFetchFn).toHaveBeenCalledWith('http://localhost:11434/api/version', expect.anything())
     })
   })
 
@@ -58,23 +67,24 @@ describe('Ollama API Edge Cases', () => {
 
   describe('getOllamaRunning', () => {
     it('returns running models', async () => {
-      mockOfetch.mockResolvedValue({
+      mockFetchFn.mockResolvedValue(new Response(JSON.stringify({
         models: [{ name: 'llama3.1', size: 4000000, size_vram: 3000000, expires_at: '2024-01-01', context_length: 8192 }],
-      })
+      }), { status: 200 }))
       const result = await getOllamaRunning()
       expect(result).toHaveLength(1)
       expect(result[0]!.name).toBe('llama3.1')
     })
 
     it('returns empty array when no models field', async () => {
-      mockOfetch.mockResolvedValue({})
+      mockFetchFn.mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }))
       const result = await getOllamaRunning()
       expect(result).toEqual([])
     })
 
-    it('throws on error status', async () => {
-      mockOfetch.mockRejectedValue(new Error('503'))
-      await expect(getOllamaRunning()).rejects.toThrow()
+    it('returns empty array on error (no longer throws)', async () => {
+      mockFetchFn.mockRejectedValue(new Error('503'))
+      const result = await getOllamaRunning()
+      expect(result).toEqual([])
     })
   })
 

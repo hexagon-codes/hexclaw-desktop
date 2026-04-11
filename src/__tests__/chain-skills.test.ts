@@ -77,7 +77,7 @@ describe('Chain F: Skills -> Hub -> Install', () => {
 
     expect(mockApiGet).toHaveBeenCalledWith(
       '/api/v1/clawhub/search',
-      { q: 'git', category: 'coding' },
+      { q: 'git', category: 'coding', type: 'skill' },
     )
 
     expect(results).toHaveLength(1)
@@ -91,7 +91,7 @@ describe('Chain F: Skills -> Hub -> Install', () => {
     const { searchClawHub } = await import('@/api/skills')
     await searchClawHub()
 
-    expect(mockApiGet).toHaveBeenCalledWith('/api/v1/clawhub/search', {})
+    expect(mockApiGet).toHaveBeenCalledWith('/api/v1/clawhub/search', { type: 'skill' })
   })
 
   it('F2c: searchClawHub skips category=all (does not send it)', async () => {

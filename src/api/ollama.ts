@@ -1,5 +1,5 @@
-import { env } from '@/config/env'
-import { apiGet, apiPost, apiDelete } from './client'
+import { env, OLLAMA_BASE } from '@/config/env'
+import { apiPost, apiDelete } from './client'
 
 export interface OllamaModel {
   name: string
@@ -28,18 +28,64 @@ export interface OllamaRunningModel {
   context_length: number
 }
 
-export function getOllamaStatus(): Promise<OllamaStatus> {
-  return apiGet<OllamaStatus>('/api/v1/ollama/status')
+/**
+ * 直连 Ollama 原生 API 获取状态（不依赖 hexclaw sidecar）
+ *
+ * Ollama 是独立进程，状态检测不应经过后端代理，
+ * 避免 sidecar 未启动时误报 Ollama 不可用。
+ */
+export async function getOllamaStatus(): Promise<OllamaStatus> {
+  try {
+    const [tagsRes, versionRes] = await Promise.all([
+      fetch(`${OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(3000) }),
+      fetch(`${OLLAMA_BASE}/api/version`, { signal: AbortSignal.timeout(3000) }),
+    ])
+    if (!tagsRes.ok) throw new Error(`tags: ${tagsRes.status}`)
+    const tags = await tagsRes.json() as { models?: Array<{ name: string; size: number; modified_at: string; details?: { family?: string; parameter_size?: string; quantization_level?: string } }> }
+    const version = versionRes.ok ? ((await versionRes.json()) as { version?: string }).version : undefined
+    const models: OllamaModel[] = (tags.models || []).map((m) => ({
+      name: m.name,
+      size: m.size,
+      modified: m.modified_at,
+      family: m.details?.family,
+      parameter_size: m.details?.parameter_size,
+      quantization_level: m.details?.quantization_level,
+    }))
+    return {
+      running: true,
+      version,
+      models,
+      associated: true,
+      model_count: models.length,
+    }
+  } catch {
+    return { running: false, models: [], associated: false, model_count: 0 }
+  }
 }
 
+/** 直连 Ollama /api/ps 获取运行中模型 */
 export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
-  const data = await apiGet<{ models?: OllamaRunningModel[] }>('/api/v1/ollama/running')
-  return data.models || []
+  try {
+    const res = await fetch(`${OLLAMA_BASE}/api/ps`, { signal: AbortSignal.timeout(3000) })
+    if (!res.ok) return []
+    const data = await res.json() as { models?: Array<{ name: string; size: number; size_vram: number; expires_at: string; details?: { parameter_size?: string; quantization_level?: string }; context_length?: number }> }
+    return (data.models || []).map((m) => ({
+      name: m.name,
+      size: m.size,
+      size_vram: m.size_vram,
+      expires_at: m.expires_at,
+      parameter_size: m.details?.parameter_size,
+      quantization_level: m.details?.quantization_level,
+      context_length: m.context_length ?? 0,
+    }))
+  } catch {
+    return []
+  }
 }
 
 export async function loadOllamaModel(model: string): Promise<void> {
   // 直连 Ollama 原生 API 预热模型（Tauri webview 允许 localhost 跨域）
-  const res = await fetch('http://localhost:11434/api/generate', {
+  const res = await fetch(`${OLLAMA_BASE}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, prompt: '', keep_alive: '5m' }),

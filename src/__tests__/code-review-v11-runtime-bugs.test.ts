@@ -56,7 +56,7 @@ describe('BUG 1: IMChannelsView handleDelete guard', () => {
 // ════════════════════════════════════════════════════════════
 
 describe('BUG 3: cloneMessage deep clone', () => {
-  const src = readSrc('stores/chat.ts')
+  const src = readSrc('stores/chat-stream-helpers.ts')
 
   it('uses JSON.parse(JSON.stringify(...)) for deep clone', () => {
     expect(src).toMatch(/function\s+cloneMessage/)
@@ -143,23 +143,27 @@ describe('BUG 5: WS inactivity timeout is 120s', () => {
 // ════════════════════════════════════════════════════════════
 
 describe('BUG 6: ensureSession does not push to sessions array', () => {
-  const src = readSrc('stores/chat.ts')
+  const facadeSrc = readSrc('stores/chat.ts')
+  const sessionLifecycleSrc = readSrc('stores/chat-session-lifecycle.ts')
+  const streamCompletionSrc = readSrc('stores/chat-stream-completion.ts')
 
   it('ensureSession creates session via msgSvc but does NOT push to sessions.value', () => {
-    // Extract ensureSession body
-    const fnStart = src.indexOf('async function ensureSession')
-    const fnEnd = src.indexOf('try { return await _ensureSessionPromise }')
-    const fnBody = src.slice(fnStart, fnEnd)
+    // ensureSession 逻辑已经下沉到 session controller
+    const fnStart = sessionLifecycleSrc.indexOf('async function ensureSession')
+    const fnEnd = sessionLifecycleSrc.indexOf('async function deleteSession')
+    const fnBody = sessionLifecycleSrc.slice(fnStart, fnEnd)
     // Should NOT contain sessions.value.push
     expect(fnBody).not.toContain('sessions.value.push')
+    expect(fnBody).toContain('upsertLocalSession')
   })
 
   it('session list is refreshed via loadSessions() after message send', () => {
-    // finalizeAssistantMessage calls loadSessions() to refresh the sidebar
-    const fnStart = src.indexOf('function finalizeAssistantMessage')
-    const fnEnd = src.indexOf('function handleSendError')
-    const fnBody = src.slice(fnStart, fnEnd)
+    // finalizeAssistantMessage 逻辑已经下沉到 stream completion controller
+    const fnStart = streamCompletionSrc.indexOf('function finalizeAssistantMessage')
+    const fnEnd = streamCompletionSrc.indexOf('return {')
+    const fnBody = streamCompletionSrc.slice(fnStart, fnEnd)
     expect(fnBody).toContain('loadSessions()')
+    expect(facadeSrc).toContain('finalizeAssistantMessage: boundStreamController.finalizeAssistantMessage')
   })
 })
 

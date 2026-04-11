@@ -125,6 +125,11 @@ function mapHubMetaToClawHubSkill(m: Record<string, unknown>): ClawHubSkill {
   }
 }
 
+function isSkillHubEntry(m: Record<string, unknown>): boolean {
+  const type = typeof m.type === 'string' ? m.type.toLowerCase().trim() : ''
+  return type === '' || type === 'skill'
+}
+
 /** 搜索 ClawHub 技能市场（仅在显式 FORCE_MOCK 时降级到内置 Mock） */
 export async function searchClawHub(
   query?: string,
@@ -137,6 +142,7 @@ export async function searchClawHub(
   const q: Record<string, unknown> = {}
   if (query) q.q = query
   if (category && category !== 'all') q.category = category
+  q.type = 'skill'
 
   // 共享 ClawHub 搜索端点（同 mcp.ts searchMcpMarketplace）
   const res = await apiGet<{
@@ -149,7 +155,9 @@ export async function searchClawHub(
   }
 
   const raw = Array.isArray(res) ? res : Array.isArray(res.skills) ? res.skills : []
-  return (raw as Record<string, unknown>[]).map(mapHubMetaToClawHubSkill)
+  return (raw as Record<string, unknown>[])
+    .filter(isSkillHubEntry)
+    .map(mapHubMetaToClawHubSkill)
 }
 
 /** 从 ClawHub 安装 Skill */

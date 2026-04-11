@@ -55,18 +55,21 @@ export function useChatSend(deps: ChatSendDeps) {
     })
   }
 
-  async function handleSend(text: string, files?: File[]) {
+  async function handleSend(text: string, files?: File[]): Promise<boolean> {
     // Validate model selection before sending
+    // model=undefined means "let backend decide" (Agent mode) — valid
     const model = chatStore.chatParams.model
-    if (!model || (model !== 'auto' && model.trim() === '')) {
-      return
+    if (model !== undefined && model.trim() === '') {
+      return false
     }
 
+    const legacyAttachment = attachmentPreview.value
+    const legacyParsedDocument = parsedDocument.value
     const attachmentAutomation =
-      attachmentPreview.value?.type === 'file' && parsedDocument.value
+      legacyAttachment?.type === 'file' && legacyParsedDocument
         ? {
-            fileName: attachmentPreview.value.name,
-            parsedText: parsedDocument.value.text,
+            fileName: legacyAttachment.name,
+            parsedText: legacyParsedDocument.text,
           }
         : null
 
@@ -74,11 +77,10 @@ export function useChatSend(deps: ChatSendDeps) {
     const attachments: ChatAttachment[] = []
 
     // 从旧的 attachmentPreview（兼容拖拽等路径）
-    if (attachmentPreview.value) {
-      const { file, type } = attachmentPreview.value
+    if (legacyAttachment) {
+      const { file, type } = legacyAttachment
       const data = await fileToBase64(file)
       attachments.push({ type, name: file.name, mime: file.type, data })
-      clearAttachmentPreview()
     }
 
     // 从新的多文件参数：图片/视频作为 attachment，文档解析为文本
@@ -114,11 +116,10 @@ export function useChatSend(deps: ChatSendDeps) {
 
     // 拼接文档文本到消息内容
     let finalText = text
-    if (parsedDocument.value) {
-      const doc = parsedDocument.value
+    if (legacyParsedDocument) {
+      const doc = legacyParsedDocument
       const pageInfo = doc.pageCount ? ` (${doc.pageCount}页)` : ''
       docTexts.unshift(`[文件: ${doc.fileName}${pageInfo}]\n\n${doc.text}`)
-      parsedDocument.value = null
     }
     if (docTexts.length > 0) {
       finalText = docTexts.join('\n\n---\n\n') + '\n\n---\n' + text
@@ -149,18 +150,38 @@ export function useChatSend(deps: ChatSendDeps) {
       chatStore.agentRole = ''
     }
 
-    const assistantMessage = await chatStore.sendMessage(
+    const previousMessageCount = Array.isArray(chatStore.messages) ? chatStore.messages.length : 0
+    const sendPromise = chatStore.sendMessage(
       finalText,
       attachments.length > 0 ? attachments : undefined,
       backendText ? { backendText } : undefined,
     )
-    await attachConversationAutomationActions({
-      userText: text,
-      assistantMessage,
-      attachment: attachmentAutomation,
-    })
+    const accepted = Array.isArray(chatStore.messages) && chatStore.messages.length > previousMessageCount
+    if (!accepted) {
+      const assistantMessage = await sendPromise
+      return !!assistantMessage
+    }
+
+    if (legacyAttachment || legacyParsedDocument) {
+      clearAttachmentPreview()
+    }
+
+    void sendPromise
+      .then(async (assistantMessage) => {
+        if (!assistantMessage) return
+        await attachConversationAutomationActions({
+          userText: text,
+          assistantMessage,
+          attachment: attachmentAutomation,
+        })
+        await nextTick()
+        scrollToBottom()
+      })
+      .catch(() => {})
+
     await nextTick()
     scrollToBottom()
+    return true
   }
 
   return {

@@ -32,6 +32,12 @@ describe('sendChatViaBackend', () => {
     expect(params.max_tokens).toBe(2048)
   })
 
+  it('passes metadata when provided', async () => {
+    await sendChatViaBackend('hi', { metadata: { thinking: 'off' } })
+    const params = invoke.mock.calls[0]![1].params
+    expect(params.metadata).toEqual({ thinking: 'off' })
+  })
+
   it('passes null for temperature/maxTokens when not provided', async () => {
     await sendChatViaBackend('hi')
     const params = invoke.mock.calls[0]![1].params

@@ -24,5 +24,4 @@ export { useChatActions } from './useChatActions'
 export { useVoice } from './useVoice'
 
 // ─── Tauri 桌面能力 ─────────────────────────────────
-export { useAutoStart } from './useAutoStart'
 export { useAutoUpdate } from './useAutoUpdate'

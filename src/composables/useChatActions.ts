@@ -15,7 +15,7 @@ type Toast = ReturnType<typeof useToast>
 export function useChatActions(
   chatStore: ChatStore,
   toast: Toast,
-  handleSend: (text: string, files?: File[]) => Promise<void>,
+  handleSend: (text: string, files?: File[]) => Promise<boolean>,
 ) {
   // ─── 原位编辑（DeepSeek 风格） ──────────────────────
   const editingMsgId = ref<string | null>(null)
@@ -31,8 +31,9 @@ export function useChatActions(
     if (!targetMsg || targetMsg.role !== 'assistant') return
 
     // 先检查模型是否可用，避免在 handleSend 静默返回前删除消息
+    // model=undefined means "let backend decide" (Agent mode) — valid
     const model = chatStore.chatParams.model
-    if (!model || (model !== 'auto' && model.trim() === '')) return
+    if (model !== undefined && model.trim() === '') return
 
     // 找到触发重试的 AI 消息之前的用户消息
     const msgs = chatStore.messages
@@ -103,8 +104,9 @@ export function useChatActions(
     }
 
     // 先检查模型是否可用，避免在 handleSend 静默返回前删除消息
+    // model=undefined means "let backend decide" (Agent mode) — valid
     const model = chatStore.chatParams.model
-    if (!model || (model !== 'auto' && model.trim() === '')) {
+    if (model !== undefined && model.trim() === '') {
       cancelEdit()
       return
     }

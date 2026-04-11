@@ -36,6 +36,7 @@ import { messageFromUnknownError } from '@/utils/errors'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
+import { OLLAMA_BASE } from '@/config/env'
 import type {
   ProviderConfig,
   ProviderType,
@@ -350,6 +351,13 @@ watch(editingProviderId, () => {
 })
 
 const config = computed(() => settingsStore.config)
+const memoryEnabled = computed({
+  get: () => config.value?.memory?.enabled ?? true,
+  set: (enabled: boolean) => {
+    if (!config.value) return
+    config.value.memory = { enabled }
+  },
+})
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 const editableProviders = computed(() => config.value?.llm.providers ?? [])
 const defaultModelOptions = computed(() =>
@@ -522,7 +530,7 @@ function handleAssociateOllama() {
       type: 'ollama' as ProviderType,
       enabled: true,
       apiKey: '',
-      baseUrl: ollamaPreset.defaultBaseUrl || 'http://localhost:11434',
+      baseUrl: ollamaPreset.defaultBaseUrl || OLLAMA_BASE,
       models: [...(ollamaPreset.defaultModels || [])],
     })
     autoSave()
@@ -1274,6 +1282,19 @@ async function saveConfig() {
                 </div>
                 <input
                   v-model="config.general.auto_start"
+                  type="checkbox"
+                  class="hc-toggle"
+                  @change="autoSave()"
+                />
+              </label>
+
+              <label class="hc-settings__toggle-row">
+                <div>
+                  <span class="hc-settings__toggle-label">{{ t('settings.memory.toggle') }}</span>
+                  <p class="hc-settings__toggle-desc">{{ t('settings.memory.toggleDesc') }}</p>
+                </div>
+                <input
+                  v-model="memoryEnabled"
                   type="checkbox"
                   class="hc-toggle"
                   @change="autoSave()"

@@ -6,6 +6,8 @@ import { sendChat } from '@/api/chat'
 import { hexclawWS } from '@/api/websocket'
 import { useSettingsStore } from '@/stores/settings'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import { getAssistantDisplayContent, getAssistantReasoningFromMetadata, normalizeAssistantReasoning } from '@/utils/assistant-reply'
+import { withModelReasoningDefaults } from '@/utils/model-reasoning'
 
 interface Message {
   id: string
@@ -24,6 +26,7 @@ const messages = ref<Message[]>([])
 const inputText = ref('')
 const streaming = ref(false)
 const streamingContent = ref('')
+const streamingReasoning = ref('')
 const messagesEnd = ref<HTMLDivElement>()
 const selectedModel = ref('')
 const selectedProviderId = ref('')
@@ -166,17 +169,22 @@ function setupWsCallbacks(requestGen: number) {
   hexclawWS.onChunk((chunk) => {
     if (requestGen !== responseRequestGen) return
     streamingContent.value += chunk.content
+    if (chunk.reasoning) {
+      streamingReasoning.value = normalizeAssistantReasoning(streamingReasoning.value + chunk.reasoning, { trim: false })
+    }
     if (chunk.done && !replySettled) {
       replySettled = true
       // Streaming complete - push final message
-      if (streamingContent.value) {
-        messages.value.push({
-          id: Date.now().toString(),
-          role: 'assistant',
-          content: streamingContent.value,
-        })
-        streamingContent.value = ''
-      }
+      messages.value.push({
+        id: Date.now().toString(),
+        role: 'assistant',
+        content: getAssistantDisplayContent(
+          streamingContent.value,
+          streamingReasoning.value || getAssistantReasoningFromMetadata(chunk.metadata),
+        ),
+      })
+      streamingContent.value = ''
+      streamingReasoning.value = ''
       streaming.value = false
     }
   })
@@ -188,10 +196,16 @@ function setupWsCallbacks(requestGen: number) {
     messages.value.push({
       id: Date.now().toString(),
       role: 'assistant',
-      content: reply.content,
+      content: getAssistantDisplayContent(
+        reply.content,
+        reply.reasoning
+          ? normalizeAssistantReasoning(reply.reasoning)
+          : getAssistantReasoningFromMetadata(reply.metadata),
+      ),
     })
     streaming.value = false
     streamingContent.value = ''
+    streamingReasoning.value = ''
   })
 
   hexclawWS.onError((error) => {
@@ -205,6 +219,7 @@ function setupWsCallbacks(requestGen: number) {
     })
     streaming.value = false
     streamingContent.value = ''
+    streamingReasoning.value = ''
   })
 }
 
@@ -229,8 +244,10 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
 
   streaming.value = true
   streamingContent.value = ''
+  streamingReasoning.value = ''
   replySettled = false
   const requestGen = ++responseRequestGen
+  const requestId = `quick-${Date.now()}-${requestGen}`
 
   if (useWebSocket.value && wsConnected.value && hexclawWS.isConnected()) {
     // WebSocket streaming mode
@@ -242,6 +259,10 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
       undefined,
       undefined,
       selectedProviderKey.value || undefined,
+      undefined,
+      undefined,
+      withModelReasoningDefaults(selectedModel.value),
+      requestId,
     )
   } else {
     // HTTP fallback
@@ -250,12 +271,17 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
         message: text,
         provider: selectedProviderKey.value || undefined,
         model: selectedModel.value || undefined,
+        request_id: requestId,
+        metadata: withModelReasoningDefaults(selectedModel.value),
       })
       if (requestGen !== responseRequestGen) return
       messages.value.push({
         id: Date.now().toString(),
         role: 'assistant',
-        content: typeof resp.reply === 'string' ? resp.reply : t('chat.receivedReply'),
+        content: getAssistantDisplayContent(
+          typeof resp.reply === 'string' ? resp.reply : '',
+          getAssistantReasoningFromMetadata(resp.metadata),
+        ),
       })
     } catch (e) {
       if (requestGen !== responseRequestGen) return
@@ -267,8 +293,9 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
         error: true,
       })
     } finally {
-      if (requestGen !== responseRequestGen) return
-      streaming.value = false
+      if (requestGen === responseRequestGen) {
+        streaming.value = false
+      }
     }
   }
 }
@@ -294,6 +321,7 @@ function clearChat() {
   hexclawWS.clearStreamCallbacks()
   messages.value = []
   streamingContent.value = ''
+  streamingReasoning.value = ''
   localStorage.removeItem(STORAGE_KEY)
 }
 
@@ -301,13 +329,17 @@ function handleStop() {
   responseRequestGen++
   streaming.value = false
   hexclawWS.clearStreamCallbacks()
-  if (streamingContent.value) {
+  if (streamingContent.value || streamingReasoning.value) {
+    const reasoning = streamingReasoning.value
+      ? normalizeAssistantReasoning(streamingReasoning.value)
+      : undefined
     messages.value.push({
       id: Date.now().toString(),
       role: 'assistant',
-      content: streamingContent.value,
+      content: getAssistantDisplayContent(streamingContent.value, reasoning),
     })
     streamingContent.value = ''
+    streamingReasoning.value = ''
   }
 }
 

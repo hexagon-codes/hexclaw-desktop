@@ -64,6 +64,14 @@ class MockChatRequestError extends Error {
 }
 const mockChatSvc = {
   sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+  openWebSocketStream: vi.fn().mockImplementation(() => ({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'ws-reply' }),
+  })),
+  resumeWebSocketStream: vi.fn().mockImplementation(() => ({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'resumed-reply' }),
+  })),
   sendViaBackend: vi.fn().mockResolvedValue({ reply: 'test-reply', metadata: {} }),
   ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
   clearWebSocketCallbacks: vi.fn(),
@@ -103,6 +111,7 @@ const mockApiChat = {
   deleteSession: vi.fn().mockResolvedValue({}),
   deleteMessage: vi.fn().mockResolvedValue({}),
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: 'ok', session_id: 'test' }),
+  listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
 }
 vi.mock('@/api/chat', () => mockApiChat)
 
@@ -146,11 +155,15 @@ vi.mock('@/api/client', () => ({
 
 // --- config/env ---
 vi.mock('@/config/env', () => ({
-  env: { apiBase: 'http://localhost:23517', wsBase: 'ws://localhost:23517', timeout: 10000 },
+  OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://localhost:23517', wsBase: 'ws://localhost:23517', timeout: 10000 },
 }))
 
 // --- constants ---
-vi.mock('@/constants', () => ({ DESKTOP_USER_ID: 'desktop-user', USER_CANCELLED_MESSAGE: '用户取消' }))
+vi.mock('@/constants', () => ({
+  DESKTOP_USER_ID: 'desktop-user',
+  USER_CANCELLED_MESSAGE: '用户取消',
+  DEFAULT_SESSION_TITLE: '新对话',
+}))
 
 // --- tauri core (for restartSidecar) ---
 vi.mock('@tauri-apps/api/core', () => ({
@@ -259,7 +272,10 @@ describe('Chat Store', () => {
   describe('sendMessage()', () => {
     it('concurrent sends blocked by sending flag', async () => {
       mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
-      mockChatSvc.sendViaWebSocket.mockImplementation(() => new Promise(() => {})) // never resolves
+      mockChatSvc.openWebSocketStream.mockImplementation(() => ({
+        cancel: vi.fn(),
+        done: new Promise(() => {}),
+      }))
 
       const store = await getChatStore()
       void store.sendMessage('hello')
@@ -270,12 +286,15 @@ describe('Chat Store', () => {
 
     it('WS connected -> sends via WebSocket', async () => {
       mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
-      mockChatSvc.sendViaWebSocket.mockResolvedValue(undefined)
+      mockChatSvc.openWebSocketStream.mockImplementation(() => ({
+        cancel: vi.fn(),
+        done: Promise.resolve({ content: 'ws-reply' }),
+      }))
 
       const store = await getChatStore()
       await store.sendMessage('hello')
 
-      expect(mockChatSvc.sendViaWebSocket).toHaveBeenCalled()
+      expect(mockChatSvc.openWebSocketStream).toHaveBeenCalled()
       expect(mockChatSvc.sendViaBackend).not.toHaveBeenCalled()
     })
 
@@ -292,7 +311,10 @@ describe('Chat Store', () => {
 
     it('WS fails -> falls back to HTTP backend', async () => {
       mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
-      mockChatSvc.sendViaWebSocket.mockRejectedValue(new Error('ws broken'))
+      mockChatSvc.openWebSocketStream.mockImplementation(() => ({
+        cancel: vi.fn(),
+        done: Promise.reject(new Error('ws broken')),
+      }))
       mockChatSvc.sendViaBackend.mockResolvedValue({ reply: 'fallback-reply', metadata: {} })
 
       const store = await getChatStore()
@@ -304,7 +326,10 @@ describe('Chat Store', () => {
 
     it('ChatRequestError with noFallback=true -> no HTTP fallback', async () => {
       mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
-      mockChatSvc.sendViaWebSocket.mockRejectedValue(new MockChatRequestError('backend error', true))
+      mockChatSvc.openWebSocketStream.mockImplementation(() => ({
+        cancel: vi.fn(),
+        done: Promise.reject(new MockChatRequestError('backend error', true)),
+      }))
 
       const store = await getChatStore()
       const msg = await store.sendMessage('hello')
@@ -359,26 +384,24 @@ describe('Chat Store', () => {
   // ── finalizeAssistantMessage ──
 
   describe('finalizeAssistantMessage()', () => {
-    it('empty content with reasoning -> shows empty string (not "(空回复)")', async () => {
-      // We need to call sendMessage and have the onDone callback invoked with empty content + reasoning
-      // Easier: test the store method directly through sendMessage flow via WS callback
-      mockChatSvc.ensureWebSocketConnected.mockResolvedValue(false)
-      mockChatSvc.sendViaBackend.mockResolvedValue({ reply: '', metadata: { reasoning: 'thought about it' } })
+    it('empty content with reasoning -> shows a non-empty fallback message', async () => {
+      mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
+      mockChatSvc.openWebSocketStream.mockImplementation(
+        (_text: string, _sessionId: string, _params: unknown, _role: string, _attachments: unknown, callbacks?: { onChunk?: (content: string, reasoning?: string) => void }) => {
+          callbacks?.onChunk?.('', 'thought about it')
+          return {
+            cancel: vi.fn(),
+            done: Promise.resolve({ content: '' }),
+          }
+        },
+      )
 
       const store = await getChatStore()
-      // The finalizeAssistantMessage is called internally. To test it directly,
-      // we simulate what happens when content is empty but reasoning exists.
-      // Since finalizeAssistantMessage is returned from the store's setup but not exported,
-      // we test through sendMessage behavior.
-
-      // Direct invocation: finalizeAssistantMessage uses the pattern:
-      //   content || (reasoning ? '' : '(空回复)')
-      // For empty content + reasoning present, content = ''
       const msg = await store.sendMessage('hello')
-      // The reply is '' from backend, reasoning isn't passed through sendViaBackend path
-      // but content is '' -> no reasoning in metadata -> '(空回复)'
-      // Let's test through WS path instead
+
       expect(msg).not.toBeNull()
+      expect(msg?.content).toBe('模型只完成了思考，没有输出最终回答，请重试一次。')
+      expect(msg?.reasoning).toBe('thought about it')
     })
 
     it('empty content without reasoning -> shows "(空回复)"', async () => {
@@ -391,7 +414,7 @@ describe('Chat Store', () => {
       // The finalizeAssistantMessage sets content = '' || (undefined ? '' : '(空回复)') = '(空回复)'
       expect(msg).not.toBeNull()
       const assistantMsg = store.messages.find(m => m.role === 'assistant')
-      expect(assistantMsg?.content).toBe('模型未生成有效回复，可能是内容安全策略过滤所致，请尝试换个方式提问。')
+      expect(assistantMsg?.content).toBe('这次没有生成可显示的回答，请重试或换个方式提问。')
     })
 
     it('auto-titles session from first user message', async () => {

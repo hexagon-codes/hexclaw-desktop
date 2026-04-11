@@ -26,6 +26,7 @@ const {
   setLastSessionId,
   ensureWebSocketConnected,
   sendViaWebSocket,
+  openWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
 } = vi.hoisted(() => ({
@@ -43,6 +44,10 @@ const {
   setLastSessionId: vi.fn().mockResolvedValue(undefined),
   ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
   sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+  openWebSocketStream: vi.fn().mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+  }),
   sendViaBackend: vi.fn().mockResolvedValue({ reply: 'Hello!', session_id: 's1' }),
   clearWebSocketCallbacks: vi.fn(),
 }))
@@ -79,6 +84,7 @@ vi.mock('@/services/chatService', () => {
   return {
     ensureWebSocketConnected,
     sendViaWebSocket,
+    openWebSocketStream,
     sendViaBackend,
     clearWebSocketCallbacks,
     ChatRequestError,
@@ -138,6 +144,10 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {})
 
   ensureWebSocketConnected.mockResolvedValue(false)
+  openWebSocketStream.mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+  })
   sendViaBackend.mockResolvedValue({ reply: 'Hello!', session_id: 's1' })
   loadAllSessions.mockResolvedValue([
     { id: 's1', title: 'Session 1', created_at: '2026-01-01', updated_at: '2026-01-01', message_count: 0 },
@@ -190,19 +200,28 @@ describe('Chain A: Chat -> Backend -> Response', () => {
       { provider: 'openai', model: 'gpt-4o', temperature: 0.8, maxTokens: 2048 },
       'coder',                // agentRole
       undefined,              // attachments
+      undefined,              // metadata
+      expect.any(String),     // requestId
     )
   })
 
   it('A3: streaming response chunks append to assistant message', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
 
-    sendViaWebSocket.mockImplementation(
+    openWebSocketStream.mockImplementation(
       (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: Record<string, (...args: unknown[]) => unknown>) => {
         callbacks.onChunk?.('Part 1 ')
         callbacks.onChunk?.('Part 2 ')
         callbacks.onChunk?.('Part 3')
-        callbacks.onDone?.('Part 1 Part 2 Part 3', { model: 'gpt-4o' })
-        return Promise.resolve()
+        return {
+          cancel: vi.fn(),
+          done: Promise.resolve({
+            content: 'Part 1 Part 2 Part 3',
+            metadata: { model: 'gpt-4o' },
+            toolCalls: undefined,
+            agentName: undefined,
+          }),
+        }
       },
     )
 
@@ -236,13 +255,17 @@ describe('Chain A: Chat -> Backend -> Response', () => {
 
   it('A5: stopStreaming aborts the current request', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
+    let resolveStream!: (value: null) => void
+    const cancel = vi.fn(() => resolveStream(null))
 
     // Simulate a WS send that never completes naturally
-    sendViaWebSocket.mockImplementation(
+    openWebSocketStream.mockImplementation(
       (_text: string, _sid: string, _params: unknown, _role: string, _att: unknown, callbacks: Record<string, (...args: unknown[]) => unknown>) => {
         callbacks.onChunk?.('Partial content')
-        // Never calls onDone - simulating long-running stream
-        return Promise.resolve()
+        return {
+          cancel,
+          done: new Promise<null>((resolve) => { resolveStream = resolve }),
+        }
       },
     )
 
@@ -250,19 +273,16 @@ describe('Chain A: Chat -> Backend -> Response', () => {
     const store = useChatStore()
     store.currentSessionId = 's1'
 
-    await store.sendMessage('Long stream')
-
-    // Now manually start streaming state and stop
-    store.streaming = true
-    store.streamingContent = 'Some partial content'
-    store.streamingSessionId = 's1'
+    const sendPromise = store.sendMessage('Long stream')
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     store.stopStreaming()
+    await sendPromise
 
     expect(store.streaming).toBe(false)
     expect(store.streamingContent).toBe('')
     expect(store.streamingSessionId).toBeNull()
-    expect(clearWebSocketCallbacks).toHaveBeenCalled()
+    expect(cancel).toHaveBeenCalled()
   })
 
   it('A6: chat history is loaded from backend on mount (loadSessions)', async () => {

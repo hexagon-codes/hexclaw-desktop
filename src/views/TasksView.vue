@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { formatTime } from '@/utils/time'
 import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader } from 'lucide-vue-next'
 import { getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory, type CronJob, type CronJobInput, type CronJobRun } from '@/api/tasks'
 import { useToast } from '@/composables'
@@ -201,10 +202,7 @@ function runStatusText(status: string): string {
   }
 }
 
-function formatTime(ts?: string): string {
-  if (!ts) return '-'
-  return new Date(ts).toLocaleString('zh-CN')
-}
+// formatTime imported from @/utils/time
 
 function scheduleLabel(schedule: string): string {
   const preset = schedulePresets.value.find((p) => p.value === schedule)

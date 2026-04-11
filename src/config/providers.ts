@@ -6,6 +6,7 @@
  */
 
 import type { ProviderPreset, ProviderType } from '@/types'
+import { OLLAMA_BASE } from '@/config/env'
 
 import openaiLogo from '@/assets/provider-logos/openai.svg'
 import deepseekLogo from '@/assets/provider-logos/deepseek.svg'
@@ -178,7 +179,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
   ollama: {
     type: 'ollama',
     name: 'Ollama (本地)',
-    defaultBaseUrl: 'http://localhost:11434/v1',
+    defaultBaseUrl: `${OLLAMA_BASE}/v1`,
     placeholder: '无需 API Key',
     defaultModels: [], // 关联后由 syncOllamaModels 从 Ollama 实际模型列表同步
   },

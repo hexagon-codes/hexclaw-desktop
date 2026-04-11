@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { MessageSquare, Trash2, Copy, Pencil, Pin, PinOff, Search } from 'lucide-vue-next'
+import { formatTime } from '@/utils/time'
+import { Trash2, Copy, Pencil, Pin, PinOff, Search } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
-import { updateSessionTitle as apiUpdateSessionTitle } from '@/api/chat'
+import { listSessions, searchMessages, updateSessionTitle as apiUpdateSessionTitle, type SessionMessageSearchResult } from '@/api/chat'
 import { setClipboard } from '@/api/desktop'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
+import type { ChatSession } from '@/types'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
@@ -18,6 +20,16 @@ const renameValue = ref('')
 const renameInputRef = ref<HTMLInputElement | HTMLInputElement[] | null>(null)
 const renameRequestSeq = new Map<string, number>()
 const deletingSessionIds = ref<Set<string>>(new Set())
+const extraSessions = ref<ChatSession[]>([])
+const hasMoreSessions = ref(true)
+const loadingMoreSessions = ref(false)
+const contentSearchResults = ref<SessionMessageSearchResult[]>([])
+const searchingHistory = ref(false)
+const showAllConversations = ref(false)
+const SESSION_PAGE_SIZE = 50
+let filterDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let filterRequestSeq = 0
+let filterAbortController: AbortController | null = null
 
 // Pin state
 const pinnedIds = ref<Set<string>>(new Set())
@@ -51,6 +63,7 @@ function toggleFilter() {
   showFilter.value = !showFilter.value
   if (!showFilter.value) {
     filterQuery.value = ''
+    contentSearchResults.value = []
   }
 }
 
@@ -65,24 +78,134 @@ const sessionMenuItems = computed<ContextMenuItem[]>(() => {
   ]
 })
 
-const sortedSessions = computed(() => {
-  const q = filterQuery.value.trim().toLowerCase()
-  let list = chatStore.sessions
-  if (q) {
-    list = list.filter(s => (s.title || '').toLowerCase().includes(q))
+const mergedSessions = computed<ChatSession[]>(() => {
+  const byId = new Map<string, ChatSession>()
+  for (const session of [...chatStore.sessions, ...extraSessions.value]) {
+    byId.set(session.id, session)
   }
+  return Array.from(byId.values())
+})
+
+const sortedSessions = computed(() => {
+  const list = mergedSessions.value
   const pinned = list.filter(s => pinnedIds.value.has(s.id))
   const unpinned = list.filter(s => !pinnedIds.value.has(s.id))
   return [...pinned, ...unpinned]
 })
 
-function formatDate(ts: string): string {
-  const d = new Date(ts)
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+type SearchSessionItem = {
+  session: ChatSession
+  snippet?: string
+}
+
+const searchSessionItems = computed<SearchSessionItem[]>(() => {
+  const q = filterQuery.value.trim().toLowerCase()
+  if (!q) return []
+
+  const sessionMap = new Map(mergedSessions.value.map((session) => [session.id, session]))
+  const results = new Map<string, SearchSessionItem>()
+
+  for (const session of mergedSessions.value) {
+    if ((session.title || '').toLowerCase().includes(q)) {
+      results.set(session.id, { session })
+    }
   }
-  return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })
+
+  for (const result of contentSearchResults.value) {
+    const sessionId = result.message.session_id
+    const existing = results.get(sessionId)
+    const session = sessionMap.get(sessionId) ?? {
+      id: sessionId,
+      title: result.session_title || t('chat.newSessionDefault'),
+      created_at: result.message.created_at || result.message.timestamp,
+      updated_at: result.message.created_at || result.message.timestamp,
+      message_count: 0,
+    }
+    if (!sessionMap.has(sessionId)) {
+      sessionMap.set(sessionId, session)
+    }
+    if (!existing) {
+      results.set(sessionId, {
+        session,
+        snippet: result.message.content,
+      })
+    }
+  }
+
+  return Array.from(results.values()).sort((a, b) => {
+    if (pinnedIds.value.has(a.session.id) !== pinnedIds.value.has(b.session.id)) {
+      return pinnedIds.value.has(a.session.id) ? -1 : 1
+    }
+    return new Date(b.session.updated_at).getTime() - new Date(a.session.updated_at).getTime()
+  })
+})
+
+type SessionSection = { key: string; label: string; sessions: ChatSession[] }
+type SearchSessionSection = { key: string; label: string; sessions: SearchSessionItem[] }
+
+function getSessionDateBucket(updatedAt: string) {
+  const date = new Date(updatedAt)
+  if (Number.isNaN(date.getTime())) return 'earlier'
+  const now = new Date()
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const yesterdayStart = new Date(todayStart)
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1)
+  if (date >= todayStart) return 'today'
+  if (date >= yesterdayStart) return 'yesterday'
+  return 'earlier'
+}
+
+const sessionSections = computed<SessionSection[]>(() => {
+  if (filterQuery.value.trim()) return []
+  const sections: SessionSection[] = []
+  const pinned = sortedSessions.value.filter((s) => pinnedIds.value.has(s.id))
+  const unpinned = sortedSessions.value.filter((s) => !pinnedIds.value.has(s.id))
+
+  if (pinned.length > 0) {
+    sections.push({ key: 'pinned', label: t('chat.pinnedSection'), sessions: pinned })
+  }
+
+  const buckets: Record<'today' | 'yesterday' | 'earlier', ChatSession[]> = {
+    today: [],
+    yesterday: [],
+    earlier: [],
+  }
+  for (const session of unpinned) {
+    buckets[getSessionDateBucket(session.updated_at) as 'today' | 'yesterday' | 'earlier'].push(session)
+  }
+
+  if (buckets.today.length > 0) sections.push({ key: 'today', label: t('chat.todaySection'), sessions: buckets.today })
+  if (buckets.yesterday.length > 0) sections.push({ key: 'yesterday', label: t('chat.yesterdaySection'), sessions: buckets.yesterday })
+  if (buckets.earlier.length > 0) sections.push({ key: 'earlier', label: t('chat.earlierSection'), sessions: buckets.earlier })
+
+  return sections
+})
+
+const searchSections = computed<SearchSessionSection[]>(() => {
+  if (!filterQuery.value.trim()) return []
+  return [{
+    key: 'search-results',
+    label: t('chat.searchResultsSection'),
+    sessions: searchSessionItems.value,
+  }]
+})
+
+const showEmptyState = computed(() => (
+  filterQuery.value.trim()
+    ? searchSessionItems.value.length === 0 && !searchingHistory.value
+    : sortedSessions.value.length === 0
+))
+
+function formatDate(ts: string): string {
+  return formatTime(ts, true)
+}
+
+function isSessionGenerating(sessionId: string) {
+  return chatStore.isSessionStreaming(sessionId)
+}
+
+function isSessionAwaitingApproval(sessionId: string) {
+  return chatStore.hasSessionPendingApproval(sessionId)
 }
 
 function selectSession(sessionId: string) {
@@ -190,6 +313,89 @@ async function handleCtxAction(action: string) {
     }
   }
 }
+
+async function loadMoreSessions() {
+  if (loadingMoreSessions.value || !hasMoreSessions.value) return
+  loadingMoreSessions.value = true
+  try {
+    const offset = mergedSessions.value.length
+    const result = await listSessions({ limit: SESSION_PAGE_SIZE, offset })
+    const loaded = (result.sessions || []).map((session) => ({
+      id: session.id,
+      title: session.title || t('chat.newSessionDefault'),
+      created_at: session.created_at,
+      updated_at: session.updated_at,
+      message_count: session.message_count ?? 0,
+    }))
+    if (loaded.length < SESSION_PAGE_SIZE) {
+      hasMoreSessions.value = false
+    }
+    if (loaded.length > 0) {
+      const next = new Map(extraSessions.value.map((session) => [session.id, session]))
+      for (const session of loaded) {
+        if (!chatStore.sessions.some((existing) => existing.id === session.id)) {
+          next.set(session.id, session)
+        }
+      }
+      extraSessions.value = Array.from(next.values())
+      showAllConversations.value = true
+    }
+  } catch (error) {
+    console.error('[SessionList] load more sessions failed:', error)
+  } finally {
+    loadingMoreSessions.value = false
+  }
+}
+
+function formatSearchSnippet(content?: string) {
+  if (!content) return ''
+  const normalized = content.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= 72) return normalized
+  return normalized.slice(0, 72) + '…'
+}
+
+watch(filterQuery, (value) => {
+  if (filterDebounceTimer) {
+    clearTimeout(filterDebounceTimer)
+    filterDebounceTimer = null
+  }
+  if (filterAbortController) {
+    filterAbortController.abort()
+    filterAbortController = null
+  }
+
+  const query = value.trim()
+  if (!query) {
+    contentSearchResults.value = []
+    searchingHistory.value = false
+    return
+  }
+
+  const seq = ++filterRequestSeq
+  searchingHistory.value = true
+  filterDebounceTimer = setTimeout(async () => {
+    const ac = new AbortController()
+    filterAbortController = ac
+    try {
+      const result = await searchMessages(query, { limit: 50 })
+      if (ac.signal.aborted || seq !== filterRequestSeq) return
+      contentSearchResults.value = result.results || []
+    } catch (error) {
+      if (ac.signal.aborted || seq !== filterRequestSeq) return
+      contentSearchResults.value = []
+      console.error('[SessionList] search messages failed:', error)
+    } finally {
+      if (seq === filterRequestSeq) {
+        searchingHistory.value = false
+      }
+    }
+  }, 220)
+})
+
+onUnmounted(() => {
+  if (filterDebounceTimer) clearTimeout(filterDebounceTimer)
+  if (filterAbortController) filterAbortController.abort()
+})
 </script>
 
 <template>
@@ -207,51 +413,135 @@ async function handleCtxAction(action: string) {
       />
     </div>
 
-    <!-- Pinned divider -->
-    <div v-if="sortedSessions.some(s => pinnedIds.has(s.id)) && sortedSessions.some(s => !pinnedIds.has(s.id))" class="hc-sessions__pin-divider" />
+    <template v-if="filterQuery.trim()">
+      <div v-if="searchingHistory" class="hc-sessions__searching">{{ t('chat.searchingHistory') }}</div>
+      <template v-for="section in searchSections" :key="section.key">
+        <div class="hc-sessions__section">
+          <div class="hc-sessions__section-label">{{ section.label }}</div>
+          <div
+            v-for="item in section.sessions"
+            :key="item.session.id"
+            :data-session-id="item.session.id"
+            class="hc-sessions__item"
+            :class="{
+              'hc-sessions__item--active': chatStore.currentSessionId === item.session.id,
+              'hc-sessions__item--pinned': pinnedIds.has(item.session.id),
+            }"
+            @click="selectSession(item.session.id)"
+            @dblclick.stop="startRename(item.session.id)"
+            @contextmenu="handleContextMenu($event, item.session.id)"
+          >
+            <span
+              v-if="isSessionGenerating(item.session.id)"
+              class="hc-sessions__spinner"
+              :title="t('chat.generatingInBackground')"
+              aria-hidden="true"
+            />
+            <div class="hc-sessions__content">
+              <input
+                v-if="renamingId === item.session.id"
+                ref="renameInputRef"
+                v-model="renameValue"
+                class="hc-sessions__rename-input"
+                @blur="commitRename"
+                @keydown="handleRenameKeydown"
+                @click.stop
+              />
+              <div v-else class="hc-sessions__title-row">
+                <div class="hc-sessions__title">{{ item.session.title || t('chat.newSessionDefault') }}</div>
+                <span
+                  v-if="isSessionAwaitingApproval(item.session.id)"
+                  class="hc-sessions__approval-dot"
+                  :title="t('chat.pendingApprovalInBackground')"
+                />
+              </div>
+              <div v-if="renamingId !== item.session.id" class="hc-sessions__meta">
+                <span v-if="item.snippet" class="hc-sessions__snippet">{{ formatSearchSnippet(item.snippet) }}</span>
+                <span v-else class="hc-sessions__time">{{ formatDate(item.session.updated_at) }}</span>
+              </div>
+            </div>
+            <button
+              class="hc-sessions__delete"
+              :disabled="deletingSessionIds.has(item.session.id)"
+              :title="t('chat.deleteSession')"
+              @click.stop="deleteSession(item.session.id)"
+            >
+              <Trash2 :size="12" />
+            </button>
+          </div>
+        </div>
+      </template>
+    </template>
 
-    <div
-      v-for="session in sortedSessions"
-      :key="session.id"
-      class="hc-sessions__item"
-      :class="{
-        'hc-sessions__item--active': chatStore.currentSessionId === session.id,
-        'hc-sessions__item--pinned': pinnedIds.has(session.id),
-      }"
-      @click="selectSession(session.id)"
-      @dblclick.stop="startRename(session.id)"
-      @contextmenu="handleContextMenu($event, session.id)"
-    >
-      <!-- Pin / message icon -->
-      <Pin v-if="pinnedIds.has(session.id)" :size="12" class="hc-sessions__pin-icon" />
-      <MessageSquare v-else :size="14" class="hc-sessions__icon" />
-
-      <div class="hc-sessions__content">
-        <input
-          v-if="renamingId === session.id"
-          ref="renameInputRef"
-          v-model="renameValue"
-          class="hc-sessions__rename-input"
-          @blur="commitRename"
-          @keydown="handleRenameKeydown"
-          @click.stop
-        />
-        <div v-else class="hc-sessions__title">{{ session.title || t('chat.newSessionDefault') }}</div>
-        <div v-if="renamingId !== session.id" class="hc-sessions__time">{{ formatDate(session.updated_at) }}</div>
+    <template v-else v-for="section in sessionSections" :key="section.key">
+      <div class="hc-sessions__section">
+        <div class="hc-sessions__section-label">{{ section.label }}</div>
+        <div
+          v-for="session in section.sessions"
+          :key="session.id"
+          :data-session-id="session.id"
+          class="hc-sessions__item"
+          :class="{
+            'hc-sessions__item--active': chatStore.currentSessionId === session.id,
+            'hc-sessions__item--pinned': pinnedIds.has(session.id),
+          }"
+          @click="selectSession(session.id)"
+          @dblclick.stop="startRename(session.id)"
+          @contextmenu="handleContextMenu($event, session.id)"
+        >
+          <span
+            v-if="isSessionGenerating(session.id)"
+            class="hc-sessions__spinner"
+            :title="t('chat.generatingInBackground')"
+            aria-hidden="true"
+          />
+          <div class="hc-sessions__content">
+            <input
+              v-if="renamingId === session.id"
+              ref="renameInputRef"
+              v-model="renameValue"
+              class="hc-sessions__rename-input"
+              @blur="commitRename"
+              @keydown="handleRenameKeydown"
+              @click.stop
+            />
+            <div v-else class="hc-sessions__title-row">
+              <div class="hc-sessions__title">{{ session.title || t('chat.newSessionDefault') }}</div>
+              <span
+                v-if="isSessionAwaitingApproval(session.id)"
+                class="hc-sessions__approval-dot"
+                :title="t('chat.pendingApprovalInBackground')"
+              />
+            </div>
+            <div v-if="renamingId !== session.id" class="hc-sessions__meta">
+              <span class="hc-sessions__time">{{ formatDate(session.updated_at) }}</span>
+              <span v-if="session.message_count > 0" class="hc-sessions__count">{{ session.message_count }}</span>
+            </div>
+          </div>
+          <button
+            class="hc-sessions__delete"
+            :disabled="deletingSessionIds.has(session.id)"
+            :title="t('chat.deleteSession')"
+            @click.stop="deleteSession(session.id)"
+          >
+            <Trash2 :size="12" />
+          </button>
+        </div>
       </div>
-      <button
-        class="hc-sessions__delete"
-        :disabled="deletingSessionIds.has(session.id)"
-        :title="t('chat.deleteSession')"
-        @click.stop="deleteSession(session.id)"
-      >
-        <Trash2 :size="12" />
-      </button>
-    </div>
+    </template>
 
-    <div v-if="sortedSessions.length === 0" class="hc-sessions__empty">
+    <div v-if="showEmptyState" class="hc-sessions__empty">
       {{ filterQuery ? t('chat.noFilterResults') : t('chat.noSessions') }}
     </div>
+
+    <button
+      v-if="hasMoreSessions && !filterQuery.trim()"
+      class="hc-sessions__load-more"
+      :disabled="loadingMoreSessions"
+      @click="loadMoreSessions"
+    >
+      {{ loadingMoreSessions ? t('common.loading') : (showAllConversations ? t('chat.loadMoreSessions') : t('chat.allConversations')) }}
+    </button>
 
     <ContextMenu ref="ctxMenu" :items="sessionMenuItems" @select="handleCtxAction" />
   </div>
@@ -270,7 +560,7 @@ async function handleCtxAction(action: string) {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 2px 6px;
+  padding: 6px 4px 10px;
   flex-shrink: 0;
 }
 
@@ -306,48 +596,44 @@ async function handleCtxAction(action: string) {
   border-color: var(--hc-accent);
 }
 
-.hc-sessions__pin-divider {
-  height: 1px;
-  background: var(--hc-border);
-  margin: 4px 8px;
-  flex-shrink: 0;
+.hc-sessions__section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 10px;
 }
 
-.hc-sessions__pin-icon {
-  flex-shrink: 0;
-  color: var(--hc-accent);
-  opacity: 0.7;
-  transform: rotate(-45deg);
+.hc-sessions__searching {
+  padding: 0 10px 8px;
+  font-size: 11px;
+  color: var(--hc-text-muted);
+}
+
+.hc-sessions__section-label {
+  padding: 0 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--hc-text-muted);
+  letter-spacing: 0.02em;
 }
 
 .hc-sessions__item {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  gap: 8px;
+  padding: 9px 10px;
   margin-bottom: 1px;
-  border-radius: var(--hc-radius-sm);
+  border-radius: 12px;
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
 .hc-sessions__item:hover {
-  background: var(--hc-bg-hover);
+  background: color-mix(in srgb, var(--hc-bg-hover) 88%, transparent);
 }
 
 .hc-sessions__item--active {
-  background: var(--hc-bg-active);
-}
-
-.hc-sessions__icon {
-  flex-shrink: 0;
-  color: var(--hc-text-muted);
-  opacity: 0.6;
-}
-
-.hc-sessions__item--active .hc-sessions__icon {
-  color: var(--hc-accent);
-  opacity: 1;
+  background: color-mix(in srgb, var(--hc-accent) 10%, transparent);
 }
 
 .hc-sessions__content {
@@ -355,30 +641,76 @@ async function handleCtxAction(action: string) {
   min-width: 0;
 }
 
+.hc-sessions__title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hc-sessions__spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  border-radius: 999px;
+  border: 1.5px solid color-mix(in srgb, var(--hc-text-muted) 28%, transparent);
+  border-top-color: var(--hc-accent);
+  animation: hc-session-spin 0.85s linear infinite;
+}
+
 .hc-sessions__title {
   font-size: 13px;
+  font-weight: 500;
   color: var(--hc-text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.hc-sessions__approval-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--hc-warning, #d97706) 82%, white 18%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--hc-warning, #d97706) 18%, transparent);
+}
+
+.hc-sessions__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+}
+
 .hc-sessions__time {
   font-size: 11px;
   color: var(--hc-text-muted);
-  margin-top: 1px;
+}
+
+.hc-sessions__count {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+}
+
+.hc-sessions__snippet {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hc-sessions__delete {
   opacity: 0;
   padding: 4px;
-  border-radius: var(--hc-radius-sm);
+  border-radius: 8px;
   border: none;
   background: transparent;
   color: var(--hc-text-muted);
   cursor: pointer;
   display: flex;
-  transition: opacity 0.15s, color 0.15s;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
 }
 
 .hc-sessions__item:hover .hc-sessions__delete {
@@ -387,6 +719,7 @@ async function handleCtxAction(action: string) {
 
 .hc-sessions__delete:hover {
   color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
 }
 
 .hc-sessions__rename-input {
@@ -401,7 +734,7 @@ async function handleCtxAction(action: string) {
 }
 
 .hc-sessions__item--pinned {
-  background: var(--hc-bg-hover);
+  background: color-mix(in srgb, var(--hc-bg-hover) 72%, transparent);
 }
 
 .hc-sessions__empty {
@@ -409,5 +742,33 @@ async function handleCtxAction(action: string) {
   text-align: center;
   font-size: 12px;
   color: var(--hc-text-muted);
+}
+
+.hc-sessions__load-more {
+  margin: 6px 6px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--hc-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.hc-sessions__load-more:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hc-bg-hover) 86%, transparent);
+  border-color: color-mix(in srgb, var(--hc-accent) 22%, var(--hc-border));
+}
+
+.hc-sessions__load-more:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+@keyframes hc-session-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 </style>

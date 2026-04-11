@@ -32,7 +32,7 @@ vi.mock('ofetch', () => ({
 // ─── Shared infrastructure mocks ─────────────────────────────────────────────
 
 vi.mock('@/config/env', () => ({
-  env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 30000, logLevel: 'warn' },
+  OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 30000, logLevel: 'warn' },
 }))
 
 vi.mock('@/utils/logger', () => ({
@@ -562,7 +562,7 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     await expect(mod.updateIMInstance('r1', { name: 'NewName' })).rejects.toThrow('backend refused delete')
 
     const rollbackDeleteCalls = invoke.mock.calls.filter(
-      (c) => c[1]?.method === 'DELETE' && (c[1]?.path as string).includes('NewName'),
+      (c) => c[1]?.method === 'DELETE' && typeof c[1]?.path === 'string' && c[1].path.includes('NewName'),
     )
     expect(rollbackDeleteCalls).toHaveLength(1)
   })

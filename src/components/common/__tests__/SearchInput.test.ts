@@ -13,7 +13,7 @@ function createTestI18n() {
   })
 }
 
-function mountSearchInput(props: { modelValue: string; placeholder?: string }) {
+function mountSearchInput(props: { modelValue: string; placeholder?: string; fluid?: boolean; inputTestId?: string; clearTestId?: string }) {
   return mount(SearchInput, {
     props,
     global: {
@@ -36,6 +36,16 @@ describe('SearchInput', () => {
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual(['test'])
   })
 
+  it('renders an embedded search icon before the input', () => {
+    const wrapper = mountSearchInput({ modelValue: '' })
+    const root = wrapper.get('.hc-search')
+    const icon = root.get('.hc-search__icon')
+    const input = root.get('input')
+
+    expect(wrapper.findAll('.hc-search__icon')).toHaveLength(1)
+    expect(icon.element.compareDocumentPosition(input.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
   it('shows clear button when has value', () => {
     const wrapper = mountSearchInput({ modelValue: 'hello' })
     expect(wrapper.findAll('button')).toHaveLength(1)
@@ -50,5 +60,26 @@ describe('SearchInput', () => {
     const wrapper = mountSearchInput({ modelValue: 'hello' })
     await wrapper.find('button').trigger('click')
     expect(wrapper.emitted('update:modelValue')?.[0]).toEqual([''])
+  })
+
+  it('uses a pill-shaped embedded clear button', () => {
+    const wrapper = mountSearchInput({ modelValue: 'hello', clearTestId: 'search-clear' })
+    const root = wrapper.get('.hc-search')
+    const clear = wrapper.get('[data-testid="search-clear"]')
+
+    expect(root.classes()).toContain('hc-search')
+    expect(clear.classes()).toContain('hc-search__clear')
+  })
+
+  it('supports fluid width without changing the embedded clear affordance', () => {
+    const wrapper = mountSearchInput({ modelValue: 'hello', fluid: true })
+    expect(wrapper.get('.hc-search').classes()).toContain('hc-search--fluid')
+    expect(wrapper.findAll('.hc-search__clear')).toHaveLength(1)
+  })
+
+  it('emits submit on Enter', async () => {
+    const wrapper = mountSearchInput({ modelValue: 'hello' })
+    await wrapper.find('input').trigger('keydown.enter')
+    expect(wrapper.emitted('submit')).toHaveLength(1)
   })
 })

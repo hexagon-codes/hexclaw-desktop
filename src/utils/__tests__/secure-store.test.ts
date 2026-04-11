@@ -10,25 +10,23 @@ describe('secure-store', () => {
     localStorage.clear()
   })
 
-  // ─── 安全改进验证: 设备专属随机 salt ────────────────
-  it('使用设备专属随机 salt（不再硬编码）', async () => {
+  // ─── 安全改进验证: 浏览器端 fail-closed ────────────────
+  it('浏览器模式不再把敏感值持久化到 localStorage', async () => {
     const sourceCode = await import('../secure-store?raw')
     const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
-    // 不应再包含旧的硬编码 salt
-    expect(raw).not.toContain("const APP_SALT = 'hexclaw-desktop-2026'")
-    expect(raw).not.toContain("enc.encode('hexclaw-salt')")
-    // 应使用 getDeviceSalt 生成随机 salt
-    expect(raw).toContain('getDeviceSalt')
-    expect(raw).toContain('crypto.getRandomValues')
+    expect(raw).toContain('volatileBrowserStore')
+    expect(raw).not.toContain("enc.encode('hexclaw-desktop')")
+    expect(raw).not.toContain('DEVICE_SALT_KEY')
   })
 
   // ─── 功能测试: saveSecureValue + loadSecureValue 对称性 ──
-  it('存储和读取应该对称（非 Tauri 环境，走 localStorage 降级）', async () => {
+  it('同一浏览器运行时内存储和读取应该对称', async () => {
     const { saveSecureValue, loadSecureValue } = await import('../secure-store')
 
     await saveSecureValue('test-key', 'my-secret-api-key')
     const value = await loadSecureValue('test-key')
     expect(value).toBe('my-secret-api-key')
+    expect(localStorage.getItem('hc-sec-test-key')).toBeNull()
   })
 
   // ─── 边界情况: 空值处理 ─────────────────────────────
@@ -55,6 +53,7 @@ describe('secure-store', () => {
     localStorage.setItem('hc-sec-corrupted', 'not-valid-base64!!!')
     const value = await loadSecureValue('corrupted')
     expect(value).toBeNull()
+    expect(localStorage.getItem('hc-sec-corrupted')).toBeNull()
   })
 
   // ─── 删除测试 ──────────────────────────────────────
@@ -77,20 +76,13 @@ describe('secure-store', () => {
     expect(value).toBe(specialValue)
   })
 
-  // ─── 设备 salt 持久化测试 ─────────────────────────
-  it('设备 salt 应只生成一次并持久化', async () => {
-    // 动态导入确保在当前 localStorage 状态下执行
-    // 注意：模块可能被缓存，salt 来自之前的 localStorage
-    const { saveSecureValue } = await import('../secure-store')
+  // ─── 旧版浏览器持久化清理 ─────────────────────────
+  it('检测到旧版 localStorage 持久化密文时会忽略并清理', async () => {
+    const { loadSecureValue } = await import('../secure-store')
 
-    // 存储后应该有 salt
-    await saveSecureValue('salt-test-key', 'value1')
-    const salt1 = localStorage.getItem('hc-device-salt')
-    expect(salt1).toBeTruthy()
-
-    // 同一模块实例内再次存储应使用相同 salt
-    await saveSecureValue('salt-test-key2', 'value2')
-    const salt2 = localStorage.getItem('hc-device-salt')
-    expect(salt2).toBe(salt1)
+    localStorage.setItem('hc-sec-legacy-key', 'legacy-secret')
+    const value = await loadSecureValue('legacy-key')
+    expect(value).toBeNull()
+    expect(localStorage.getItem('hc-sec-legacy-key')).toBeNull()
   })
 })

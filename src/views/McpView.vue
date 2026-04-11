@@ -8,6 +8,7 @@ import { resolveUserHome } from '@/utils/platform'
 import type { McpTool } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
 
 const { t } = useI18n()
 
@@ -416,24 +417,11 @@ defineExpose({ openAddServer, switchToMarketplace })
       <template v-else-if="activeTab === 'tools'">
         <!-- Tool search bar -->
         <div class="max-w-2xl mb-4">
-          <div class="relative">
-            <Search
-              :size="16"
-              class="absolute left-3 top-1/2 -translate-y-1/2"
-              :style="{ color: 'var(--hc-text-muted)' }"
-            />
-            <input
-              v-model="toolSearchQuery"
-              type="text"
-              :placeholder="t('mcp.searchTools')"
-              class="w-full pl-9 pr-3 py-2 rounded-lg border text-sm outline-none transition-colors"
-              :style="{
-                background: 'var(--hc-bg-primary)',
-                borderColor: 'var(--hc-border)',
-                color: 'var(--hc-text-primary)',
-              }"
-            />
-          </div>
+          <SearchInput
+            v-model="toolSearchQuery"
+            :fluid="true"
+            :placeholder="t('mcp.searchTools')"
+          />
         </div>
 
         <EmptyState
@@ -562,16 +550,13 @@ defineExpose({ openAddServer, switchToMarketplace })
       <template v-else-if="activeTab === 'marketplace'">
         <div class="p-4">
           <div class="flex gap-2 mb-4">
-            <div class="relative flex-1">
-              <Search :size="14" class="absolute left-3 top-1/2 -translate-y-1/2" style="color: var(--hc-text-tertiary)" />
-              <input
-                v-model="marketplaceSearch"
-                class="w-full pl-9 pr-3 py-2 rounded-lg text-sm border"
-                :style="{ background: 'var(--hc-bg-secondary)', borderColor: 'var(--hc-border)' }"
-                :placeholder="t('mcp.searchMarketplace', 'Search MCP servers...')"
-                @keydown.enter="loadMarketplace"
-              />
-            </div>
+            <SearchInput
+              v-model="marketplaceSearch"
+              class="flex-1"
+              :fluid="true"
+              :placeholder="t('mcp.searchMarketplace', 'Search MCP servers...')"
+              @submit="loadMarketplace"
+            />
             <button class="px-3 py-2 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)' }" @click="loadMarketplace">
               <Search :size="14" />
             </button>

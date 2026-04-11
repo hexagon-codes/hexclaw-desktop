@@ -78,7 +78,7 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   })
 
   it('searchMessages sends GET /api/v1/messages/search', () => {
-    expect(chatSource).toContain("sessionGet<{ results: Array<ChatMessage & { session_id: string; score?: number }>; total: number; query: string }>('/api/v1/messages/search'")
+    expect(chatSource).toContain("sessionGet<{ results: SessionMessageSearchResult[]; total: number; query: string }>('/api/v1/messages/search'")
   })
 })
 
@@ -209,30 +209,33 @@ describe('Knowledge API alignment: types/knowledge.ts vs handler_knowledge.go', 
 // ════════════════════════════════════════════════════════════════════
 
 describe('Memory API alignment: types/memory.ts vs handler_misc.go', () => {
-  it('MemoryData matches handleGetMemory response', () => {
-    // Backend handleGetMemory returns: { content, context }
-    // Frontend MemoryData: { content: string, context: string }
+  it('MemoryEntry and MemoryListResponse match handleGetMemory response', () => {
+    // Backend handleGetMemory returns: { entries: [...], summary, capacity: { used, max } }
+    // Frontend MemoryListResponse: { entries: MemoryEntry[], summary: string, capacity: MemoryCapacity }
     // ALIGNED
     const memoryTypes = readFrontendType('memory.ts')
     expect(memoryTypes).toContain('content: string')
-    expect(memoryTypes).toContain('context: string')
+    expect(memoryTypes).toContain('type: MemoryType')
+    expect(memoryTypes).toContain('source: MemorySource')
+    expect(memoryTypes).toContain('entries: MemoryEntry[]')
+    expect(memoryTypes).toContain('summary: string')
   })
 
-  it('saveMemory request body aligns with SaveMemoryRequest struct', () => {
+  it('createMemoryEntry request body aligns with backend struct', () => {
     const memorySource = readFrontendFile('memory.ts')
-    // Frontend: { content, type: type ?? 'memory' }
-    expect(memorySource).toContain("{ content, type: type ?? 'memory' }")
-    // Backend: Content, Type (json: content, type)
+    // Frontend: { content, type: type ?? 'fact', source: source ?? 'manual' }
+    expect(memorySource).toContain("type: type ?? 'fact'")
+    expect(memorySource).toContain("source: source ?? 'manual'")
+    // Backend: Content, Type, Source (json: content, type, source)
     // ALIGNED
   })
 
   it('searchMemory response aligns with handleSearchMemory response', () => {
     const memorySource = readFrontendFile('memory.ts')
-    // Frontend expects: { results: string[], vector_results: VectorSearchResult[] | null, total: number }
-    expect(memorySource).toContain('results: string[]')
+    // Frontend expects: { results: MemoryEntry[], vector_results: VectorSearchResult[] | null, total: number }
+    expect(memorySource).toContain('results: MemoryEntry[]')
     expect(memorySource).toContain('vector_results: VectorSearchResult[] | null')
-    // Backend returns: { results: fileResults, vector_results: vecResults, total: len(...) }
-    // Note: backend fileResults is []string (from FileMemory.Search), frontend expects string[]
+    // Backend returns: { results: entries, vector_results: vecResults, total: len(...) }
     // ALIGNED
   })
 })
@@ -530,15 +533,14 @@ describe('System Stats alignment: types/system.ts vs handler_extended.go', () =>
 // ════════════════════════════════════════════════════════════════════
 
 describe('Models API alignment: models.ts vs handler_extended.go', () => {
-  it('MISALIGNMENT: frontend LLMModel has fields backend does not return', () => {
+  it('ALIGNED: frontend LLMModel only declares fields the backend actually returns', () => {
     const modelsSource = readFrontendFile('models.ts')
-    // Frontend LLMModel: id, name, provider, context_length?, supports_vision?, supports_tools?
-    // Backend handleListModels returns: [{ id: "name/model", name: model, provider: name }]
-    // Backend does NOT return context_length, supports_vision, supports_tools
-    // These are optional in frontend so won't cause errors, but data is always missing
-    expect(modelsSource).toContain('context_length?: number')
-    expect(modelsSource).toContain('supports_vision?: boolean')
-    expect(modelsSource).toContain('supports_tools?: boolean')
+    expect(modelsSource).toContain('id: string')
+    expect(modelsSource).toContain('name: string')
+    expect(modelsSource).toContain('provider: string')
+    expect(modelsSource).not.toContain('context_length?: number')
+    expect(modelsSource).not.toContain('supports_vision?: boolean')
+    expect(modelsSource).not.toContain('supports_tools?: boolean')
   })
 })
 

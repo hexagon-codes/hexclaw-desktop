@@ -610,7 +610,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             title="ollama.com"
             @click.stop
           >{{ t('settings.ollama.title', '本地模型 (Ollama)') }}<ExternalLink :size="10" class="ollama-card__title-link" /></a>
-          <div v-if="status?.version" class="ollama-card__meta">Ollama {{ status.version }} · 已下载 {{ status.model_count }} 个模型</div>
+          <div v-if="status?.version" class="ollama-card__meta">
+            {{ t('settings.ollama.brand', 'Ollama') }} {{ status.version }} · {{ status.model_count }} {{ t('settings.ollama.modelsDownloaded', 'models downloaded') }}
+          </div>
         </div>
       </div>
 

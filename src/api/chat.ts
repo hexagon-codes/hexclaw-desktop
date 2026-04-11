@@ -39,6 +39,34 @@ export interface BackendChatResponse {
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
 }
 
+export interface ActiveStreamSnapshot {
+  request_id: string
+  session_id: string
+  user_id?: string
+  content?: string
+  reasoning?: string
+  done: boolean
+  status: 'pending' | 'streaming' | 'completed' | 'errored' | 'cancelled'
+  metadata?: Record<string, string>
+  usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; provider?: string; model?: string; cost?: number }
+  tool_calls?: import('@/types').ToolCall[]
+  started_at?: string
+  updated_at?: string
+}
+
+export interface SessionMessageSearchResult {
+  message: ChatMessage & { session_id: string }
+  session_title: string
+  rank?: number
+}
+
+export interface SessionTitleSuggestionResponse {
+  id: string
+  title: string
+  updated: boolean
+  updated_at: string
+}
+
 /**
  * 通过 hexclaw 后端发送聊天消息
  *
@@ -54,6 +82,8 @@ export async function sendChatViaBackend(
     model?: string
     temperature?: number
     maxTokens?: number
+    requestId?: string
+    metadata?: Record<string, string>
     attachments?: { type: string; name: string; mime: string; data: string }[]
   },
 ): Promise<BackendChatResponse> {
@@ -71,6 +101,8 @@ export async function sendChatViaBackend(
       model: options?.model || null,
       temperature: options?.temperature ?? null,
       max_tokens: options?.maxTokens ?? null,
+      request_id: options?.requestId ?? null,
+      metadata: options?.metadata || null,
       attachments: options?.attachments || null,
     },
   })
@@ -93,6 +125,8 @@ export function sendChat(req: ChatRequest) {
     model: req.model,
     temperature: req.temperature,
     maxTokens: req.max_tokens,
+    requestId: req.request_id,
+    metadata: req.metadata,
   })
 }
 
@@ -155,6 +189,13 @@ export function updateSessionTitle(sessionId: string, title: string) {
   return sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`, { title })
 }
 
+/** 建议更自然的会话标题；若标题已被手动改动，后端会返回 updated=false */
+export function suggestSessionTitle(sessionId: string, expectedTitle?: string) {
+  return sessionPost<SessionTitleSuggestionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/suggest-title`, {
+    expected_title: expectedTitle,
+  })
+}
+
 /** 删除会话 */
 export function deleteSession(sessionId: string) {
   return apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`)
@@ -165,7 +206,17 @@ export function searchMessages(query: string, opts?: { limit?: number; offset?: 
   const q: Record<string, unknown> = { q: query }
   if (opts?.limit) q.limit = opts.limit
   if (opts?.offset) q.offset = opts.offset
-  return sessionGet<{ results: Array<ChatMessage & { session_id: string; score?: number }>; total: number; query: string }>('/api/v1/messages/search', q)
+  return sessionGet<{ results: SessionMessageSearchResult[]; total: number; query: string }>('/api/v1/messages/search', q)
+}
+
+/** 获取当前仍在后台生成的流式请求 */
+export function listActiveStreams() {
+  return sessionGet<{ streams: ActiveStreamSnapshot[]; total: number }>('/api/v1/streams/active')
+}
+
+/** 获取某个流式请求的最新快照 */
+export function getActiveStreamSnapshot(requestId: string) {
+  return sessionGet<ActiveStreamSnapshot>(`/api/v1/streams/${encodeURIComponent(requestId)}`)
 }
 
 /** 删除单条消息 */

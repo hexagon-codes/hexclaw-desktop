@@ -38,5 +38,8 @@ export function defaultConfig(): AppConfig {
     mcp: {
       default_protocol: 'stdio',
     },
+    memory: {
+      enabled: true,
+    },
   }
 }

@@ -127,6 +127,7 @@ vi.mock('@/api/websocket', () => ({
     sendRaw: vi.fn(),
     triggerError: vi.fn(),
     sendApprovalResponse: vi.fn(),
+    onMemorySaved: vi.fn().mockReturnValue(() => {}),
   },
 }))
 
@@ -690,14 +691,17 @@ describe('AgentsView — edge cases', () => {
 
     const vm = wrapper.vm as any
 
-    // Set up editing state with invalid data (empty model/provider)
+    // Both empty → valid (uses global default model, same as register form)
     vm.editingAgent = { name: 'agent-1', display_name: 'Test', model: '', provider: '' }
     await wrapper.vm.$nextTick()
+    expect(vm.editFormValid).toBe(true)
 
-    // editFormValid should be false when model/provider empty
+    // Only one set → invalid (backend requires both or neither)
+    vm.editingAgent = { name: 'agent-1', display_name: 'Test', model: 'gpt-4', provider: '' }
+    await wrapper.vm.$nextTick()
     expect(vm.editFormValid).toBe(false)
 
-    // handleEditAgent should return early (not call API)
+    // handleEditAgent should return early when invalid
     await vm.handleEditAgent()
     expect(mockUpdateAgent).not.toHaveBeenCalled()
   })

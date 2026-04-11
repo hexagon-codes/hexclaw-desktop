@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -73,5 +73,53 @@ describe('ChatInput attachment capability gating', () => {
     const input = wrapper.find('input[type="file"]')
     expect(input.attributes('accept')).toContain('.mp4')
     expect(input.attributes('accept')).toContain('.webm')
+  })
+
+  it('keeps the draft when sendHandler rejects the send request', async () => {
+    const sendHandler = vi.fn().mockResolvedValue(false)
+    const wrapper = await mountChatInput({ sendHandler })
+
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('draft message')
+    await wrapper.get('.hc-composer__send').trigger('click')
+    await flushPromises()
+
+    expect(sendHandler).toHaveBeenCalledWith('draft message', [])
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('draft message')
+  })
+
+  it('clears the draft only after sendHandler accepts the send request', async () => {
+    const sendHandler = vi.fn().mockResolvedValue(true)
+    const wrapper = await mountChatInput({ sendHandler })
+
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('draft message')
+    await wrapper.get('.hc-composer__send').trigger('click')
+    await flushPromises()
+
+    expect(sendHandler).toHaveBeenCalledWith('draft message', [])
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('does not submit twice while an async sendHandler is still pending', async () => {
+    let resolveSend: ((value: boolean) => void) | null = null
+    const sendHandler = vi.fn().mockImplementation(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveSend = resolve
+        }),
+    )
+    const wrapper = await mountChatInput({ sendHandler })
+
+    const textarea = wrapper.get('textarea')
+    await textarea.setValue('draft message')
+    await wrapper.get('.hc-composer__send').trigger('click')
+    await wrapper.get('.hc-composer__send').trigger('click')
+
+    expect(sendHandler).toHaveBeenCalledTimes(1)
+
+    resolveSend?.(true)
+    await flushPromises()
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('')
   })
 })

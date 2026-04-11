@@ -156,15 +156,19 @@ describe('集成: 会话 fork + 消息搜索', () => {
   it('跨会话搜索消息', async () => {
     mockApi.mockResolvedValueOnce({
       results: [
-        { id: 'm1', role: 'assistant', content: 'Vue 3 的 Composition API...', session_id: 's1', score: 0.92, timestamp: '' },
+        {
+          message: { id: 'm1', role: 'assistant', content: 'Vue 3 的 Composition API...', session_id: 's1', timestamp: '' },
+          session_title: 'Vue 讨论',
+          rank: 0.92,
+        },
       ],
       total: 1, query: 'Vue 3',
     })
     const { searchMessages } = await import('@/api/chat')
     const res = await searchMessages('Vue 3', { limit: 10 })
     expect(res.results).toHaveLength(1)
-    expect(res.results[0]!.session_id).toBe('s1')
-    expect(res.results[0]!.score).toBe(0.92)
+    expect(res.results[0]!.message.session_id).toBe('s1')
+    expect(res.results[0]!.rank).toBe(0.92)
   })
 })
 

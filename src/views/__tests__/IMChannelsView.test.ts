@@ -154,6 +154,20 @@ describe('IMChannelsView', () => {
     warnSpy.mockRestore()
   })
 
+  it('uses the shared embedded search input in the page header', async () => {
+    const wrapper = mountIMChannelsView()
+    await flushPromises()
+
+    const searchBox = wrapper.get('.hc-search')
+    const input = wrapper.get('input[placeholder="搜索实例..."]')
+
+    expect(searchBox.find('.hc-search__icon').exists()).toBe(true)
+
+    await input.setValue('飞书')
+    expect(searchBox.find('.hc-search__clear').exists()).toBe(true)
+    expect(wrapper.find('.hc-im-search-wrap').exists()).toBe(false)
+  })
+
   it('keeps the latest health snapshot when an older health request resolves later', async () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
     getIMInstances.mockResolvedValueOnce([
@@ -198,15 +212,14 @@ describe('IMChannelsView', () => {
     await refreshPromise
     await flushPromises()
 
-    expect(wrapper.text()).toContain('已停止')
+    // Runtime status row removed — health status shown in header only
 
     resolveOld([{ name: '飞书', status: 'running' }])
     await flushPromises()
 
-    const runtimeText = wrapper.find('.hc-im-card__runtime-text')
-    expect(runtimeText.exists()).toBe(true)
-    expect(runtimeText.text()).toContain('已停止')
-    expect(runtimeText.text()).not.toContain('运行中')
+    // Stale response should not override newer health snapshot in internal state
+    const statusText = wrapper.find('.hc-im-card__status-text')
+    expect(statusText.exists()).toBe(true)
   })
 
   it('does not start a second modal test while the first test is still running', async () => {

@@ -10,10 +10,12 @@ import {
   listSessionMessages,
   createSession as createSessionApi,
   updateSessionTitle as updateSessionTitleApi,
+  suggestSessionTitle as suggestSessionTitleApi,
   deleteSession as deleteSessionApi,
   deleteMessage as deleteMessageApi,
 } from '@/api/chat'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
+import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
 import type { ChatMessage, ChatSession, Artifact } from '@/types'
 
@@ -38,7 +40,9 @@ export function normalizeLoadedMessage(row: {
   const metadata = parseMessageMetadata(row.metadata)
   const toolCalls = Array.isArray(metadata?.tool_calls) ? metadata.tool_calls : undefined
   const agentName = typeof metadata?.agent_name === 'string' ? metadata.agent_name : undefined
-  const reasoning = typeof metadata?.reasoning === 'string' ? metadata.reasoning : undefined
+  const reasoning = typeof metadata?.reasoning === 'string'
+    ? normalizeAssistantReasoning(metadata.reasoning) || undefined
+    : undefined
 
   return {
     id: row.id,
@@ -53,10 +57,13 @@ export function normalizeLoadedMessage(row: {
 }
 
 export function serializeMessageMetadata(msg: ChatMessage): Record<string, unknown> | undefined {
-  const metadata: Record<string, unknown> = { ...(msg.metadata ?? {}) }
+  const metadata: Record<string, unknown> = { ...msg.metadata }
   if (msg.tool_calls?.length) metadata.tool_calls = msg.tool_calls
   if (msg.agent_name) metadata.agent_name = msg.agent_name
-  if (msg.reasoning) metadata.reasoning = msg.reasoning
+  if (msg.reasoning) {
+    const reasoning = normalizeAssistantReasoning(msg.reasoning)
+    if (reasoning) metadata.reasoning = reasoning
+  }
   return Object.keys(metadata).length > 0 ? metadata : undefined
 }
 
@@ -85,6 +92,10 @@ export async function updateSessionTitle(id: string, title: string): Promise<voi
   await updateSessionTitleApi(id, title)
 }
 
+export async function suggestSessionTitle(id: string, expectedTitle?: string) {
+  return suggestSessionTitleApi(id, expectedTitle)
+}
+
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function touchSession(_id: string): Promise<void> {
   // Not needed — backend updates timestamps automatically
@@ -108,9 +119,10 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
       const metaExt = typeof (m as unknown as Record<string, unknown>).meta === 'string'
         ? parseMessageMetadata((m as unknown as Record<string, unknown>).meta as string)
         : undefined
-      const reasoning = m.reasoning
+      const rawReasoning = m.reasoning
         || (typeof metaExt?.reasoning === 'string' ? metaExt.reasoning : undefined)
         || (typeof meta?.reasoning === 'string' ? meta.reasoning : undefined)
+      const reasoning = rawReasoning ? normalizeAssistantReasoning(rawReasoning) || undefined : undefined
       const toolCalls = m.tool_calls
         || (Array.isArray(meta?.tool_calls) ? meta.tool_calls as ChatMessage['tool_calls'] : undefined)
       const agentName = m.agent_name
@@ -128,10 +140,14 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
             : parsed.reasoning
         }
       }
+      mergedReasoning = mergedReasoning ? normalizeAssistantReasoning(mergedReasoning) || undefined : undefined
+      const displayContent = m.role === 'assistant'
+        ? getAssistantDisplayContent(content, mergedReasoning)
+        : content
 
       return {
         ...m,
-        content,
+        content: displayContent,
         timestamp: m.timestamp || m.created_at || new Date().toISOString(),
         reasoning: mergedReasoning,
         tool_calls: toolCalls,

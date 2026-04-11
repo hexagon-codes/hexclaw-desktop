@@ -9,7 +9,6 @@ import {
   Tag,
   Store,
   CheckCircle2,
-  Search,
   ArrowDownCircle,
   Loader2,
   ChevronDown,
@@ -72,20 +71,24 @@ let unlistenDrop: (() => void) | null = null
 
 onMounted(async () => {
   await loadSkills()
-  // Tauri 原生拖拽监听
-  getCurrentWindow().onDragDropEvent((event) => {
-    if (!showInstallDialog.value) return
-    if (event.payload.type === 'over') {
-      dragOver.value = true
-    } else if (event.payload.type === 'drop') {
-      dragOver.value = false
-      handleFileDrop(event.payload.paths)
-    } else if (event.payload.type === 'leave') {
-      dragOver.value = false
-    }
-  }).then((unlisten) => {
-    unlistenDrop = unlisten
-  })
+  // Tauri 原生拖拽监听（浏览器 dev 模式下不可用）
+  try {
+    getCurrentWindow().onDragDropEvent((event) => {
+      if (!showInstallDialog.value) return
+      if (event.payload.type === 'over') {
+        dragOver.value = true
+      } else if (event.payload.type === 'drop') {
+        dragOver.value = false
+        handleFileDrop(event.payload.paths)
+      } else if (event.payload.type === 'leave') {
+        dragOver.value = false
+      }
+    }).then((unlisten) => {
+      unlistenDrop = unlisten
+    })
+  } catch {
+    // Non-Tauri environment (browser dev mode)
+  }
 })
 
 function readDisabledSkillsFromStorage(): Set<string> {
@@ -341,8 +344,9 @@ async function loadHubSkills() {
       e instanceof Error ? e.message : t('skills.hub.catalogLoadFailed', 'Failed to load skill catalog')
     console.error('加载技能目录失败:', e)
   } finally {
-    if (requestSeq !== hubRequestSeq) return
-    hubLoading.value = false
+    if (requestSeq === hubRequestSeq) {
+      hubLoading.value = false
+    }
   }
 }
 
@@ -732,25 +736,12 @@ defineExpose({ openInstallDialog, switchToHub })
     <div v-if="activeTab === 'hub'" class="flex-1 overflow-y-auto p-6">
       <!-- 搜索栏 -->
       <div class="max-w-4xl mb-4">
-        <div class="relative">
-          <Search
-            :size="16"
-            class="absolute left-3 top-1/2 -translate-y-1/2"
-            :style="{ color: 'var(--hc-text-muted)' }"
-          />
-          <input
-            v-model="hubSearchQuery"
-            type="text"
-            :placeholder="t('skills.hub.searchPlaceholder')"
-            class="w-full pl-9 pr-3 py-2 rounded-lg border text-sm"
-            :style="{
-              background: 'var(--hc-bg-primary)',
-              borderColor: 'var(--hc-border)',
-              color: 'var(--hc-text-primary)',
-            }"
-            @input="onHubSearchInput"
-          />
-        </div>
+        <SearchInput
+          v-model="hubSearchQuery"
+          :fluid="true"
+          :placeholder="t('skills.hub.searchPlaceholder')"
+          @update:model-value="onHubSearchInput"
+        />
       </div>
 
       <!-- 分类 Chips -->

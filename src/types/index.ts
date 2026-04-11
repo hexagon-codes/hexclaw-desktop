@@ -10,7 +10,15 @@
 export type { ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ExecMode } from './chat'
 export type { AgentRole, AgentConfig, AgentRule } from './agent'
 export type { LogEntry, LogQuery, LogStats } from './log'
-export type { MemoryData } from './memory'
+export type {
+  MemoryEntry,
+  MemoryType,
+  MemorySource,
+  MemoryStatus,
+  MemoryViewMode,
+  MemoryCapacity,
+  MemoryListResponse,
+} from './memory'
 export type { McpServer, McpTool } from './mcp'
 export type { Skill, ClawHubSkill, SkillStatusUpdateResult } from './skill'
 export type { CronJob, CronJobInput } from './task'

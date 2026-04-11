@@ -20,11 +20,14 @@ import {
   getSession,
   createSession,
   updateSessionTitle,
+  suggestSessionTitle,
   deleteSession,
   forkSession,
   getSessionBranches,
   listSessionMessages,
   searchMessages,
+  listActiveStreams,
+  getActiveStreamSnapshot,
   deleteMessage,
   updateMessageFeedback,
   sendChat,
@@ -125,6 +128,23 @@ describe('Session Management', () => {
     })
   })
 
+  describe('suggestSessionTitle', () => {
+    it('calls POST /api/v1/sessions/:id/suggest-title with expected_title and user_id', async () => {
+      mockFetch.mockResolvedValue({ id: 's1', title: '杭州周末露营计划', updated: true, updated_at: '2024-01-01' })
+      await suggestSessionTitle('s1', '帮我规划这个周末去杭州露营需要带什么')
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/v1/sessions/s1/suggest-title',
+        expect.objectContaining({
+          method: 'POST',
+          body: {
+            expected_title: '帮我规划这个周末去杭州露营需要带什么',
+            user_id: 'desktop-user',
+          },
+        }),
+      )
+    })
+  })
+
   // ─── deleteSession ───────────────────────────────
 
   describe('deleteSession', () => {
@@ -207,6 +227,30 @@ describe('Session Management', () => {
       mockFetch.mockResolvedValue({ results: [], total: 0, query: 'nonexistent' })
       const result = await searchMessages('nonexistent')
       expect(result.results).toEqual([])
+    })
+  })
+
+  // ─── stream recovery APIs ───────────────────────
+
+  describe('listActiveStreams', () => {
+    it('calls GET /api/v1/streams/active with user_id', async () => {
+      mockFetch.mockResolvedValue({ streams: [], total: 0 })
+      await listActiveStreams()
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/v1/streams/active',
+        expect.objectContaining({ method: 'GET', query: expect.objectContaining({ user_id: 'desktop-user' }) }),
+      )
+    })
+  })
+
+  describe('getActiveStreamSnapshot', () => {
+    it('calls GET /api/v1/streams/:requestId with user_id and URL encoding', async () => {
+      mockFetch.mockResolvedValue({ request_id: 'req/1', session_id: 's1', content: 'partial', done: false })
+      await getActiveStreamSnapshot('req/1')
+      expect(mockFetch).toHaveBeenCalledWith(
+        `/api/v1/streams/${encodeURIComponent('req/1')}`,
+        expect.objectContaining({ method: 'GET', query: expect.objectContaining({ user_id: 'desktop-user' }) }),
+      )
     })
   })
 

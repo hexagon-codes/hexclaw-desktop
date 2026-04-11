@@ -5,6 +5,7 @@
 
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::Emitter;
 
 use crate::ollama;
@@ -305,6 +306,8 @@ pub struct BackendChatParams {
     pub user_id: Option<String>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<i64>,
+    pub request_id: Option<String>,
+    pub metadata: Option<HashMap<String, String>>,
     pub attachments: Option<Vec<ChatAttachment>>,
 }
 
@@ -330,8 +333,19 @@ pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {
     if let Some(m) = params.max_tokens {
         body["max_tokens"] = serde_json::json!(m);
     }
+    if let Some(request_id) = params.request_id {
+        if !request_id.is_empty() {
+            body["request_id"] = serde_json::json!(request_id);
+        }
+    }
+    if let Some(metadata) = params.metadata {
+        if !metadata.is_empty() {
+            body["metadata"] = serde_json::json!(metadata);
+        }
+    }
     if let Some(attachments) = params.attachments {
-        body["attachments"] = serde_json::to_value(attachments).unwrap_or_default();
+        body["attachments"] = serde_json::to_value(&attachments)
+            .map_err(|e| format!("Failed to serialize attachments: {}", e))?;
     }
 
     let client = reqwest::Client::new();

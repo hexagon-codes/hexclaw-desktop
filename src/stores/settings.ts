@@ -189,6 +189,7 @@ export const useSettingsStore = defineStore('settings', () => {
           general: { ...defaults.general, ...savedConfig.general },
           notification: { ...defaults.notification, ...savedConfig.notification },
           mcp: { ...defaults.mcp, ...savedConfig.mcp },
+          memory: { enabled: savedConfig.memory?.enabled ?? defaults.memory?.enabled ?? true },
         }
       } else {
         config.value = { ...defaults, llm: persistedLlm }
@@ -204,10 +205,10 @@ export const useSettingsStore = defineStore('settings', () => {
         ? null
         : cloneProviders(config.value!.llm.providers.filter((provider) => provider.enabled))
 
-      // 从后端 API 加载 LLM 配置（带重试，等待 sidecar 就绪）
-      if (isTauri()) {
-        await loadLLMFromBackend()
-      }
+      // 从后端 API 加载 LLM 配置。
+      // 桌面端等待 sidecar，就绪前允许短暂重试；
+      // Web 开发模式只探测一次，避免首次加载被长时间阻塞。
+      await loadLLMFromBackend(isTauri() ? 3 : 1, isTauri() ? 2000 : 0)
     } catch (e) {
       logger.error('加载配置失败', e)
       config.value = defaultConfig()
@@ -313,37 +314,37 @@ export const useSettingsStore = defineStore('settings', () => {
       await syncProviderApiKeys(plainConfig.llm.providers, previousProviders)
 
       // LLM 配置保存到后端 API
-      if (isTauri()) {
-        try {
-          const backendConfig = providersToBackend(
-            plainConfig.llm.providers,
-            plainConfig.llm.defaultModel,
-            plainConfig.llm.defaultProviderId ?? '',
-            plainConfig.llm.routing,
-          )
-          await updateLLMConfig(backendConfig)
-          logger.debug('LLM 配置已保存到后端', backendConfig)
-          const backendSnap = await getLLMConfig()
-          const liveAfterSave = await restoreProviderApiKeys(
-            backendToProviders(backendSnap, plainConfig.llm.providers),
-          )
-          const mergedAfterSave = appendLocalProvidersMissingFromRuntime(
-            liveAfterSave,
-            plainConfig.llm.providers,
-          )
-          runtimeProviders.value = cloneProviders(mergedAfterSave)
-        } catch (e) {
-          logger.error('LLM 配置保存到后端失败', e)
+      try {
+        const backendConfig = providersToBackend(
+          plainConfig.llm.providers,
+          plainConfig.llm.defaultModel,
+          plainConfig.llm.defaultProviderId ?? '',
+          plainConfig.llm.routing,
+        )
+        await updateLLMConfig(backendConfig)
+        logger.debug('LLM 配置已保存到后端', backendConfig)
+        const backendSnap = await getLLMConfig()
+        const liveAfterSave = await restoreProviderApiKeys(
+          backendToProviders(backendSnap, plainConfig.llm.providers),
+        )
+        const mergedAfterSave = appendLocalProvidersMissingFromRuntime(
+          liveAfterSave,
+          plainConfig.llm.providers,
+        )
+        runtimeProviders.value = cloneProviders(mergedAfterSave)
+      } catch (e) {
+        logger.error('LLM 配置保存到后端失败', e)
+        if (isTauri()) {
           throw e
         }
+      }
 
-        // 安全配置同步到后端
-        try {
-          await updateConfig({ security: plainConfig.security })
-          logger.debug('安全配置已同步到后端', plainConfig.security)
-        } catch (e) {
-          logger.warn('安全配置同步到后端失败（非致命）', e)
-        }
+      // 安全配置同步到后端
+      try {
+        await updateConfig({ security: plainConfig.security })
+        logger.debug('安全配置已同步到后端', plainConfig.security)
+      } catch (e) {
+        logger.warn('安全配置同步到后端失败（非致命）', e)
       }
 
       // 非 LLM 配置保存到 Tauri Store

@@ -27,6 +27,18 @@ const { getRuntimeConfig } = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
 }))
 
+const {
+  openAddMemoryDialog,
+  setToolbarMemorySearch,
+  submitToolbarMemorySearch,
+  requestClearAllMemory,
+} = vi.hoisted(() => ({
+  openAddMemoryDialog: vi.fn(),
+  setToolbarMemorySearch: vi.fn(),
+  submitToolbarMemorySearch: vi.fn(),
+  requestClearAllMemory: vi.fn(),
+}))
+
 vi.mock('@/api/knowledge', () => ({
   getDocuments,
   addDocument: vi.fn(),
@@ -62,7 +74,18 @@ vi.mock('@/api/im-channels', async () => {
 })
 
 vi.mock('@/views/MemoryView.vue', () => ({
-  default: { template: '<div data-testid="memory-view">Memory View</div>' },
+  default: {
+    setup(_props: unknown, { expose }: { expose: (exposed: Record<string, unknown>) => void }) {
+      expose({
+        openAddDialog: openAddMemoryDialog,
+        setToolbarSearch: setToolbarMemorySearch,
+        submitToolbarSearch: submitToolbarMemorySearch,
+        requestClearAll: requestClearAllMemory,
+      })
+      return {}
+    },
+    template: '<div data-testid="memory-view">Memory View</div>',
+  },
 }))
 
 vi.mock('@/views/McpView.vue', () => ({
@@ -135,8 +158,8 @@ async function mountWithRouter(component: object, initialPath: string) {
         ConfirmDialog: { template: '<div />' },
         SearchInput: {
           props: ['modelValue', 'placeholder'],
-          emits: ['update:modelValue'],
-          template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          emits: ['update:modelValue', 'submit'],
+          template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" @keydown.enter="$emit(\'submit\')" />',
         },
         teleport: true,
         transition: false,
@@ -205,6 +228,47 @@ describe('Workspace flows', () => {
 
     expect(router.currentRoute.value.path).toBe('/knowledge/memory')
     expect(wrapper.find('[data-testid="memory-view"]').exists()).toBe(true)
+
+    const addMemoryButton = wrapper.findAll('button').find((btn) => btn.text().trim() === '添加记忆')
+    expect(addMemoryButton).toBeDefined()
+    await addMemoryButton!.trigger('click')
+    await flushPromises()
+
+    expect(openAddMemoryDialog).toHaveBeenCalledTimes(1)
+  })
+
+  it('puts memory search and clear-all actions in the Knowledge Center toolbar', async () => {
+    const { wrapper } = await mountWithRouter(KnowledgeCenterView, '/knowledge/memory')
+    await flushPromises()
+
+    const searchInput = wrapper.get('input[placeholder="搜索记忆..."]')
+    await searchInput.setValue('Rust')
+    await searchInput.trigger('keydown.enter')
+
+    expect(setToolbarMemorySearch).toHaveBeenCalledWith('Rust')
+    expect(submitToolbarMemorySearch).toHaveBeenCalledTimes(1)
+
+    expect(wrapper.find('[data-testid="memory-search-toolbar"]').exists()).toBe(false)
+
+    const clearAllButton = wrapper.get('[data-testid="knowledge-clear-memory"]')
+    await clearAllButton.trigger('click')
+
+    expect(requestClearAllMemory).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses distinct toolbar and retrieval-test search placeholders in Knowledge Center', async () => {
+    const { wrapper } = await mountWithRouter(KnowledgeCenterView, '/knowledge')
+    await flushPromises()
+
+    expect(wrapper.findAll('input[placeholder="搜索文档..."]')).toHaveLength(1)
+    expect(wrapper.find('input[placeholder="输入查询语句..."]').exists()).toBe(false)
+
+    const memoryTab = wrapper.findAll('button').find((btn) => btn.text().includes('记忆'))
+    expect(memoryTab).toBeDefined()
+    await memoryTab!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.findAll('input[placeholder="搜索记忆..."]')).toHaveLength(1)
   })
 
   it('switches to Skills tab in Integration and toggles a skill', async () => {

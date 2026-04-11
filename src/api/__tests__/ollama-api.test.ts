@@ -5,7 +5,8 @@
  * deleteOllamaModel, restartOllama, and pullOllamaModel (stream parsing,
  * error handling, AbortSignal).
  *
- * Non-streaming functions use ofetch (apiGet/apiPost/apiDelete),
+ * getOllamaStatus/getOllamaRunning use native fetch directly to Ollama.
+ * unloadOllamaModel/deleteOllamaModel/restartOllama use ofetch (apiPost/apiDelete).
  * pullOllamaModel uses raw fetch.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -17,7 +18,7 @@ vi.mock('ofetch', () => ({
 }))
 
 vi.mock('@/config/env', () => ({
-  env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 5000 },
+  OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://localhost:16060', wsBase: 'ws://localhost:16060', timeout: 5000 },
 }))
 
 import {
@@ -63,41 +64,42 @@ describe('Ollama API', () => {
     vi.unstubAllGlobals()
   })
 
-  // ─── 1. getOllamaStatus calls correct endpoint ────────
-  it('getOllamaStatus calls /api/v1/ollama/status', async () => {
-    const payload = { running: true, version: '0.5.1', models: [], associated: true, model_count: 3 }
-    mockOfetch.mockResolvedValue(payload)
+  // ─── 1. getOllamaStatus calls Ollama native API directly ────────
+  it('getOllamaStatus calls Ollama native endpoints and returns status', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ models: [{ name: 'm1', size: 100, modified_at: '2024-01-01' }] }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ version: '0.5.1' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
 
     const result = await getOllamaStatus()
 
-    expect(mockOfetch).toHaveBeenCalledWith(
-      '/api/v1/ollama/status',
-      expect.objectContaining({ method: 'GET' }),
-    )
-    expect(result).toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:11434/api/tags', expect.anything())
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:11434/api/version', expect.anything())
+    expect(result.running).toBe(true)
+    expect(result.version).toBe('0.5.1')
+    expect(result.model_count).toBe(1)
   })
 
-  // ─── 2. getOllamaRunning returns models array ─────────
-  it('getOllamaRunning returns models array from response', async () => {
+  // ─── 2. getOllamaRunning calls Ollama /api/ps directly ─────────
+  it('getOllamaRunning returns models array from native Ollama /api/ps', async () => {
     const models = [
       { name: 'llama3.1', size: 4_000_000, size_vram: 3_000_000, expires_at: '2024-12-01', context_length: 8192 },
     ]
-    mockOfetch.mockResolvedValue({ models })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ models }), { status: 200 }),
+    ))
 
     const result = await getOllamaRunning()
 
-    expect(mockOfetch).toHaveBeenCalledWith(
-      '/api/v1/ollama/running',
-      expect.objectContaining({ method: 'GET' }),
-    )
-    expect(result).toEqual(models)
     expect(result).toHaveLength(1)
     expect(result[0]!.name).toBe('llama3.1')
   })
 
   // ─── 3. getOllamaRunning returns [] when models undefined
   it('getOllamaRunning returns empty array when models is undefined', async () => {
-    mockOfetch.mockResolvedValue({})
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({}), { status: 200 }),
+    ))
 
     const result = await getOllamaRunning()
 
@@ -106,7 +108,9 @@ describe('Ollama API', () => {
 
   // ─── 4. getOllamaRunning returns [] when models null-ish
   it('getOllamaRunning returns empty array when models is null', async () => {
-    mockOfetch.mockResolvedValue({ models: null })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ models: null }), { status: 200 }),
+    ))
 
     const result = await getOllamaRunning()
 

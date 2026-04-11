@@ -120,6 +120,11 @@ export interface MCPConfig {
   auto_reconnect?: boolean
 }
 
+/** 记忆配置 */
+export interface MemoryConfig {
+  enabled: boolean
+}
+
 /** 应用配置 */
 export interface AppConfig {
   llm: LLMConfig
@@ -127,6 +132,8 @@ export interface AppConfig {
   general: GeneralConfig
   notification: NotificationConfig
   mcp: MCPConfig
+  /** Legacy configs created before the memory toggle existed may omit this field. */
+  memory?: MemoryConfig
 }
 
 /** 后端 LLM Provider 配置（匹配 hexclaw API） */

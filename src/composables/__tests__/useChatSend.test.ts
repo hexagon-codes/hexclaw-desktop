@@ -1,3 +1,4 @@
+import { flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { ref } from 'vue'
 
@@ -15,9 +16,16 @@ vi.mock('@/utils/file-parser', () => ({
 import { useChatSend } from '../useChatSend'
 
 function makeDeps() {
+  const messages: Array<{ id: string; role: string; content: string; timestamp: string }> = []
+  const sendMessage = vi.fn().mockImplementation(async (text: string) => {
+    messages.push({ id: 'u1', role: 'user', content: text, timestamp: '' })
+    return { id: 'a1', role: 'assistant', content: 'reply', timestamp: '' }
+  })
+
   return {
     chatStore: {
-      sendMessage: vi.fn().mockResolvedValue({ id: 'a1', role: 'assistant', content: 'reply', timestamp: '' }),
+      messages,
+      sendMessage,
       chatMode: 'chat',
       agentRole: '',
       chatParams: { model: 'test-model' },
@@ -41,6 +49,16 @@ describe('useChatSend', () => {
     const deps = makeDeps()
     const { handleSend } = useChatSend(deps as any)
     await handleSend('hello')
+    expect(deps.chatStore.sendMessage).toHaveBeenCalledWith('hello', undefined, undefined)
+  })
+
+  it('allows Agent mode sends when model is undefined', async () => {
+    const deps = makeDeps()
+    deps.chatStore.chatParams.model = undefined
+
+    const { handleSend } = useChatSend(deps as any)
+
+    await expect(handleSend('hello')).resolves.toBe(true)
     expect(deps.chatStore.sendMessage).toHaveBeenCalledWith('hello', undefined, undefined)
   })
 
@@ -92,6 +110,59 @@ describe('useChatSend', () => {
     const { handleSend } = useChatSend(deps as any)
     await handleSend('test')
     expect(deps.scrollToBottom).toHaveBeenCalled()
+  })
+
+  it('resolves true once the user message is accepted without waiting for the assistant reply', async () => {
+    const deps = makeDeps()
+    let resolveSend: ((value: { id: string; role: 'assistant'; content: string; timestamp: string }) => void) | null = null
+    deps.chatStore.sendMessage = vi.fn().mockImplementation(() => {
+      deps.chatStore.messages.push({
+        id: 'user-1',
+        role: 'user',
+        content: 'hello',
+        timestamp: '',
+      })
+      return new Promise((resolve) => {
+        resolveSend = resolve
+      })
+    })
+
+    const { handleSend } = useChatSend(deps as any)
+    const resultPromise = handleSend('hello')
+
+    let settled = false
+    let result: boolean | undefined
+    void resultPromise.then((value) => {
+      settled = true
+      result = value
+    })
+
+    await flushPromises()
+
+    expect(settled).toBe(true)
+    expect(result).toBe(true)
+
+    resolveSend?.({ id: 'a1', role: 'assistant', content: 'reply', timestamp: '' })
+    await resultPromise
+  })
+
+  it('returns false and preserves legacy attachment state when send is rejected', async () => {
+    const deps = makeDeps()
+    deps.chatStore.sendMessage = vi.fn().mockResolvedValue(null)
+    deps.attachmentPreview.value = {
+      url: 'blob:test',
+      name: 'draft.txt',
+      type: 'file',
+      file: new File(['draft'], 'draft.txt', { type: 'text/plain' }),
+    }
+    deps.parsedDocument.value = { text: 'draft text', fileName: 'draft.txt' }
+
+    const { handleSend } = useChatSend(deps as any)
+
+    await expect(handleSend('hello')).resolves.toBe(false)
+    expect(deps.clearAttachmentPreview).not.toHaveBeenCalled()
+    expect(deps.attachmentPreview.value?.name).toBe('draft.txt')
+    expect(deps.parsedDocument.value?.text).toBe('draft text')
   })
 
   it('clears stale researcher role when the user has exited research mode', async () => {

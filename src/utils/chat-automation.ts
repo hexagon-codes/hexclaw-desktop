@@ -79,6 +79,15 @@ export interface DocumentTargetAction extends ConversationAutomationActionBase {
   }
 }
 
+export interface SaveMemoryAction extends ConversationAutomationActionBase {
+  kind: 'save_memory'
+  payload: {
+    content: string
+    type?: string
+    source?: string
+  }
+}
+
 export type ConversationAutomationAction =
   | CreateTaskAction
   | TaskTargetAction
@@ -86,6 +95,7 @@ export type ConversationAutomationAction =
   | AddAttachmentToKnowledgeAction
   | SearchKnowledgeAction
   | DocumentTargetAction
+  | SaveMemoryAction
 
 export interface ConversationAutomationParseInput {
   userText: string
@@ -103,8 +113,8 @@ function collapseWhitespace(value: string): string {
 
 function trimEdgePunctuation(value: string): string {
   return value
-    .replace(/^[\s"'“”'‘’:：,，。.!！？；;()（）【】\[\]-]+/, '')
-    .replace(/[\s"'“”'‘’:：,，。.!！？；;()（）【】\[\]-]+$/, '')
+    .replace(/^[\s"'“”'‘’:：,，。.!！？；;()（）【】[-]+/, '')
+    .replace(/[\s"'“”'‘’:：,，。.!！？；;()（）【】[-]+$/, '')
     .trim()
 }
 
@@ -463,6 +473,81 @@ function maybeCreateDocumentTargetAction(text: string): DocumentTargetAction | n
   return null
 }
 
+// ─── Memory auto-extraction ──────────────────────────────
+
+/**
+ * Detect memory-worthy content in user messages.
+ *
+ * Two modes:
+ * 1. Explicit: user says "记住/remember" → extract the fact
+ * 2. Implicit: user states identity/preference patterns → extract concisely
+ */
+function maybeCreateSaveMemoryAction(
+  text: string,
+  assistantContent?: string,
+): SaveMemoryAction | null {
+  // Explicit: "记住 ..." / "请记住 ..." / "remember ..."
+  const explicit = text.match(
+    /(?:请?记住|帮我记住|记一下|remember(?:\s+that)?)\s*[：:,，]?\s*(.{2,120})/i,
+  )
+  if (explicit?.[1]) {
+    const content = trimEdgePunctuation(explicit[1])
+    if (content) {
+      return createAction<SaveMemoryAction>({
+        kind: 'save_memory',
+        title: '保存到记忆',
+        description: clipTitle(content, 42),
+        payload: { content, source: 'chat_explicit' },
+      })
+    }
+  }
+
+  // Implicit: identity / preference / fact patterns
+  const patterns: { re: RegExp; type: string; extract: (m: RegExpMatchArray) => string | null }[] = [
+    { re: /(?:^|[，,。.；;！!？?\s])我是(.{2,60})$/,      type: 'identity',   extract: (m) => `用户是${trimEdgePunctuation(m[1]!)}` },
+    { re: /我(?:偏好|喜欢|习惯)(.{2,60})$/,              type: 'preference', extract: (m) => `用户偏好${trimEdgePunctuation(m[1]!)}` },
+    { re: /i\s+prefer\s+(.{2,60})$/i,                   type: 'preference', extract: (m) => `User prefers ${m[1]!.trim()}` },
+    { re: /我(?:的名字|叫)(.{1,20})/,                    type: 'identity',   extract: (m) => `用户名字: ${trimEdgePunctuation(m[1]!)}` },
+    { re: /(?:my name is|i'm|i am)\s+([A-Z][\w\s]{1,20})/i, type: 'identity', extract: (m) => `User name: ${m[1]!.trim()}` },
+    { re: /我(?:在|用|使用)(.{2,40})(?:工作|开发|写代码|编程)/, type: 'fact',  extract: (m) => `用户${trimEdgePunctuation(m[0]!)}` },
+  ]
+
+  for (const { re, type, extract } of patterns) {
+    const match = text.match(re)
+    if (match) {
+      const content = extract(match)
+      if (content) {
+        return createAction<SaveMemoryAction>({
+          kind: 'save_memory',
+          title: '保存到记忆',
+          description: clipTitle(content, 42),
+          payload: { content, type, source: 'chat_extract' },
+        })
+      }
+    }
+  }
+
+  // AI-confirmed: if the assistant response indicates it will remember something
+  if (assistantContent) {
+    const aiConfirm = assistantContent.match(
+      /(?:我(?:已经)?记住了|好的.*?记住|I['']ll remember|noted|got it.*?remember)\s*[：:,，]?\s*(.{2,80})/i,
+    )
+    if (aiConfirm?.[1]) {
+      const content = trimEdgePunctuation(aiConfirm[1])
+      if (content) {
+        return createAction<SaveMemoryAction>({
+          kind: 'save_memory',
+          title: '保存到记忆',
+          description: clipTitle(content, 42),
+          payload: { content, source: 'chat_extract' },
+        })
+      }
+    }
+  }
+
+  return null
+}
+
 export function buildConversationAutomationActions(
   input: ConversationAutomationParseInput,
 ): ConversationAutomationAction[] {
@@ -486,6 +571,8 @@ export function buildConversationAutomationActions(
     add(maybeCreateAttachmentKnowledgeAction(text, input.sourceMessageId, input.attachment))
     add(maybeCreateAddKnowledgeAction(text, input.assistantContent || ''))
   }
+
+  add(maybeCreateSaveMemoryAction(text, input.assistantContent))
 
   return [...unique.values()]
 }

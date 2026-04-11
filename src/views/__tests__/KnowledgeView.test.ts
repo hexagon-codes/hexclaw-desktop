@@ -269,6 +269,91 @@ describe('KnowledgeView', () => {
     expect(wrapper.text()).toContain('完整正文')
   })
 
+  it('shows the document count in the tab without rendering a duplicate stats panel', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-1',
+          title: '设计文档',
+          content: '正文',
+          chunk_count: 2,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+      total: 1,
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const docsTab = wrapper.findAll('button').find((btn) => btn.text().includes('文档 (1)'))
+    expect(docsTab?.exists()).toBe(true)
+    expect(wrapper.find('[data-testid="knowledge-doc-stats"]').exists()).toBe(false)
+    expect(wrapper.get('[data-testid="knowledge-doc-list"]').classes()).toContain('max-w-2xl')
+  })
+
+  it('renders document cards with a compact action group instead of loose floating actions', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-1',
+          title: '设计文档',
+          content: '正文',
+          chunk_count: 2,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+      total: 1,
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const card = wrapper.get('[data-testid="knowledge-doc-card"]')
+    const actions = wrapper.get('[data-testid="knowledge-doc-actions"]')
+
+    expect(card.classes()).toContain('rounded-2xl')
+    expect(actions.classes()).toContain('shrink-0')
+    expect(actions.classes()).toContain('gap-1')
+    expect(card.element.contains(actions.element)).toBe(true)
+  })
+
+  it('filters the document list using the toolbar document search prop', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-1',
+          title: '杭帮菜的正确吃法',
+          source: 'food.md',
+          content: '正文',
+          chunk_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          id: 'doc-2',
+          title: '候选人简历',
+          source: 'resume.pdf',
+          content: '正文',
+          chunk_count: 1,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+      total: 2,
+    })
+
+    const wrapper = mountKnowledgeView({ documentSearch: '杭帮菜' })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('杭帮菜的正确吃法')
+    expect(wrapper.text()).not.toContain('候选人简历')
+
+    await wrapper.setProps({ documentSearch: 'resume' })
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('杭帮菜的正确吃法')
+    expect(wrapper.text()).toContain('候选人简历')
+  })
+
   it('renders structured search result source metadata', async () => {
     searchKnowledge.mockResolvedValueOnce({
       result: [
@@ -286,11 +371,12 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    const searchTab = wrapper.findAll('button').find((btn) => btn.text().includes('搜索测试'))
+    const searchTab = wrapper.findAll('button').find((btn) => btn.text().includes('检索测试'))
     await searchTab!.trigger('click')
     await flushPromises()
 
     const input = wrapper.find('input[type="text"]')
+    expect(input.attributes('placeholder')).toBe('输入查询语句，测试知识库检索...')
     await input.setValue('规范')
     await input.trigger('keydown.enter')
     await flushPromises()
@@ -321,7 +407,7 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    const searchTab = wrapper.findAll('button').find((btn) => btn.text().includes('搜索测试'))
+    const searchTab = wrapper.findAll('button').find((btn) => btn.text().includes('检索测试'))
     expect(searchTab).toBeDefined()
     await searchTab!.trigger('click')
     await flushPromises()
@@ -369,7 +455,7 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    const searchTab = wrapper.findAll('button').find((btn) => btn.text().includes('搜索测试'))
+    const searchTab = wrapper.findAll('button').find((btn) => btn.text().includes('检索测试'))
     expect(searchTab).toBeDefined()
     await searchTab!.trigger('click')
     await flushPromises()

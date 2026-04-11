@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   Plus,
@@ -34,10 +35,14 @@ import {
 } from '@/api/im-channels'
 import type { IMInstance, IMChannelType, IMInstanceHealth } from '@/api/im-channels'
 import { setClipboard } from '@/api/desktop'
+import { getAgents, getRules, addRule, deleteRule, registerAgent, getRoles } from '@/api/agents'
+import type { AgentConfig, AgentRole, AgentRule } from '@/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
 
 const { t, locale } = useI18n()
+const router = useRouter()
 
 const instances = ref<IMInstance[]>([])
 const loading = ref(true)
@@ -162,7 +167,125 @@ const restarting = ref(false)
 
 // ─── Lifecycle ───────────────────────────────────────
 
-onMounted(loadInstances)
+// ─── Agent binding (derived from routing rules) ────
+const agentsList = ref<AgentConfig[]>([])
+const rolesList = ref<AgentRole[]>([])
+const routingRules = ref<AgentRule[]>([])
+
+/** All selectable options: registered agents + unregistered roles */
+const agentOptions = computed(() => {
+  const registered = new Set(agentsList.value.map((a) => a.name))
+  const fromRoles: AgentConfig[] = rolesList.value
+    .filter((r) => !registered.has(r.name))
+    .map((r) => ({ name: r.name, display_name: r.title || r.name, model: '', provider: '' }))
+  return [...agentsList.value, ...fromRoles]
+})
+
+async function loadAgentData() {
+  try {
+    const [agentsRes, rulesRes, rolesRes] = await Promise.all([getAgents(), getRules(), getRoles()])
+    agentsList.value = agentsRes.agents || []
+    routingRules.value = rulesRes.rules || []
+    rolesList.value = rolesRes.roles || []
+  } catch { /* non-critical */ }
+}
+
+function getBoundAgent(inst: IMInstance): AgentConfig | undefined {
+  const rule = routingRules.value.find((r) => r.platform === inst.type && !r.user_id && !r.chat_id)
+  if (!rule) return undefined
+  return agentsList.value.find((a) => a.name === rule.agent_name)
+}
+
+async function bindAgentToInstance(inst: IMInstance, agentName: string) {
+  const existing = routingRules.value.find((r) => r.platform === inst.type && !r.user_id && !r.chat_id)
+  try {
+    if (agentName) {
+      // Auto-register role as agent if not already registered
+      const isRegistered = agentsList.value.some((a) => a.name === agentName)
+      if (!isRegistered) {
+        const role = rolesList.value.find((r) => r.name === agentName)
+        await registerAgent({
+          name: agentName,
+          display_name: role?.title || agentName,
+          model: '',
+          provider: '',
+          system_prompt: role?.goal || '',
+        } as AgentConfig)
+      }
+      await addRule({ platform: inst.type, agent_name: agentName, instance_id: '', user_id: '', chat_id: '', priority: 0 })
+    }
+    if (existing) {
+      await deleteRule(existing.id)
+    }
+  } catch {
+    // On failure, refresh to show actual backend state
+  }
+  await loadAgentData()
+}
+
+// ─── Agent combobox (searchable dropdown) ──────────
+const agentDropdownOpen = ref<string | null>(null)
+const agentDropdownFlip = ref(false)
+const agentSearchQuery = ref('')
+const agentSearchInputRef = ref<HTMLInputElement | null>(null)
+const agentComboTriggerRef = ref<HTMLButtonElement | null>(null)
+
+const filteredAgentOptions = computed(() => {
+  const q = agentSearchQuery.value.trim().toLowerCase()
+  if (!q) return agentOptions.value
+  return agentOptions.value.filter(
+    (a) =>
+      a.name.toLowerCase().includes(q) ||
+      (a.display_name ?? '').toLowerCase().includes(q),
+  )
+})
+
+function toggleAgentDropdown(instId: string, event?: MouseEvent) {
+  if (agentDropdownOpen.value === instId) {
+    agentDropdownOpen.value = null
+    agentSearchQuery.value = ''
+  } else {
+    agentDropdownOpen.value = instId
+    agentSearchQuery.value = ''
+    // Detect if dropdown should flip upward
+    const trigger = (event?.currentTarget as HTMLElement) ?? agentComboTriggerRef.value
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect()
+      const spaceBelow = window.innerHeight - rect.bottom
+      agentDropdownFlip.value = spaceBelow < 220
+    } else {
+      agentDropdownFlip.value = false
+    }
+    nextTick(() => agentSearchInputRef.value?.focus())
+  }
+}
+
+function closeAgentDropdown() {
+  agentDropdownOpen.value = null
+  agentSearchQuery.value = ''
+}
+
+async function selectAgent(inst: IMInstance, agentName: string) {
+  closeAgentDropdown()
+  await bindAgentToInstance(inst, agentName)
+}
+
+function navigateToEditAgent(agentName: string) {
+  router.push({ path: '/agents', query: { tab: 'agents', edit: agentName } })
+}
+
+function handleClickOutside() {
+  if (agentDropdownOpen.value) closeAgentDropdown()
+}
+
+onMounted(() => {
+  loadInstances()
+  loadAgentData()
+  document.addEventListener('click', handleClickOutside)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', handleClickOutside)
+})
 
 async function loadInstances() {
   loading.value = true
@@ -303,6 +426,9 @@ async function handleTestCard(inst: IMInstance) {
     }
   } finally {
     testingId.value = null
+    // Auto-clear result after 5 seconds
+    const id = inst.id
+    setTimeout(() => { delete testResults.value[id] }, 5000)
   }
 }
 
@@ -407,14 +533,10 @@ async function copyWebhookUrl() {
   <div class="h-full flex flex-col overflow-hidden">
     <PageHeader :title="t('imChannels.title')" :description="t('imChannels.description')">
       <template #actions>
-        <div class="hc-im-search-wrap">
-          <Search :size="14" class="hc-im-search-icon" />
-          <input
-            v-model="searchQuery"
-            class="hc-im-search"
-            :placeholder="t('imChannels.searchPlaceholder')"
-          />
-        </div>
+        <SearchInput
+          v-model="searchQuery"
+          :placeholder="t('imChannels.searchPlaceholder')"
+        />
         <button v-if="instances.length > 0" class="hc-im-btn hc-im-btn--accent" @click="openCreate">
           <Plus :size="14" />
           {{ t('imChannels.newInstance') }}
@@ -545,46 +667,64 @@ async function copyWebhookUrl() {
             </div>
           </div>
 
-          <!-- Details row: platform type badge -->
-          <div class="hc-im-card__details">
-            <span
-              class="hc-im-type-badge"
-              :style="{
-                background: getChannelMeta(inst.type).color + '20',
-                color: getChannelMeta(inst.type).color,
-              }"
-            >
-              <img
-                :src="getChannelMeta(inst.type).logo"
-                :alt="getChannelMeta(inst.type).name"
-                class="hc-im-badge__logo"
-              />
-              {{
-                locale === 'zh-CN'
-                  ? getChannelMeta(inst.type).name
-                  : getChannelMeta(inst.type).nameEn
-              }}
-            </span>
-          </div>
-
-          <!-- Runtime status row -->
-          <div v-if="inst.enabled && getHealth(inst)" class="hc-im-card__runtime">
-            <span
-              class="hc-im-card__runtime-dot"
-              :class="{
-                'hc-im-card__runtime-dot--running': getHealth(inst)?.status === 'running',
-                'hc-im-card__runtime-dot--error': getHealth(inst)?.status === 'error',
-              }"
-            />
-            <span class="hc-im-card__runtime-text">
-              {{ getHealth(inst)?.status === 'running' ? t('imChannels.statusRunning') : getHealth(inst)?.status === 'error' ? (getHealth(inst)?.last_error || t('imChannels.statusError')) : t('imChannels.statusStopped') }}
-            </span>
+          <!-- Agent binding row -->
+          <div class="hc-im-card__agent">
+            <span class="hc-im-card__agent-label">Agent:</span>
+            <div class="hc-agent-combo" @click.stop>
+              <button
+                class="hc-agent-combo__trigger hc-input"
+                @click="toggleAgentDropdown(inst.id, $event)"
+              >
+                <span class="hc-agent-combo__value">
+                  {{ getBoundAgent(inst)?.display_name || getBoundAgent(inst)?.name || t('agents.useGlobalDefault', 'Global default') }}
+                </span>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="flex-shrink:0;opacity:.5"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <Transition name="dropdown">
+                <div v-if="agentDropdownOpen === inst.id" class="hc-agent-combo__dropdown" :class="{ 'hc-agent-combo__dropdown--flip': agentDropdownFlip }">
+                  <div class="hc-agent-combo__search">
+                    <Search :size="12" style="flex-shrink:0;opacity:.45" />
+                    <input
+                      :ref="(el) => { if (agentDropdownOpen === inst.id) agentSearchInputRef = el as HTMLInputElement }"
+                      v-model="agentSearchQuery"
+                      type="text"
+                      class="hc-agent-combo__search-input"
+                      :placeholder="t('common.search', 'Search...')"
+                      @keydown.esc="closeAgentDropdown()"
+                    />
+                  </div>
+                  <div class="hc-agent-combo__list">
+                    <button
+                      class="hc-agent-combo__option"
+                      :class="{ 'hc-agent-combo__option--active': !getBoundAgent(inst) }"
+                      @click="selectAgent(inst, '')"
+                    >
+                      {{ t('agents.useGlobalDefault', 'Global default') }}
+                    </button>
+                    <button
+                      v-for="a in filteredAgentOptions"
+                      :key="a.name"
+                      class="hc-agent-combo__option"
+                      :class="{ 'hc-agent-combo__option--active': getBoundAgent(inst)?.name === a.name }"
+                      @click="selectAgent(inst, a.name)"
+                    >
+                      {{ a.display_name || a.name }}
+                      <span v-if="a.model" class="hc-agent-combo__model">{{ a.model }}</span>
+                    </button>
+                    <div v-if="filteredAgentOptions.length === 0 && agentSearchQuery" class="hc-agent-combo__empty">
+                      {{ t('common.noResults', 'No results') }}
+                    </div>
+                  </div>
+                </div>
+              </Transition>
+            </div>
             <button
-              class="hc-im-btn hc-im-btn--ghost hc-im-btn--xs"
-              :disabled="togglingId === inst.id"
-              @click="handleStartStop(inst)"
+              v-if="getBoundAgent(inst)"
+              class="hc-im-btn hc-im-btn--ghost hc-im-btn--sm"
+              :title="t('common.edit')"
+              @click="navigateToEditAgent(getBoundAgent(inst)!.name)"
             >
-              {{ togglingId === inst.id ? '...' : getHealth(inst)?.status === 'running' ? t('imChannels.stop') : t('imChannels.start') }}
+              <Pencil :size="12" />
             </button>
           </div>
 
@@ -595,6 +735,13 @@ async function copyWebhookUrl() {
               <span class="hc-im-toggle__slider" />
             </label>
             <div class="hc-im-card__btns">
+              <span
+                v-if="testResults[inst.id]"
+                class="hc-im-card__test-inline"
+                :style="{ color: testResults[inst.id]!.success ? 'var(--hc-success)' : 'var(--hc-error)', fontSize: '12px', fontWeight: 600 }"
+              >
+                {{ testResults[inst.id]!.success ? t('imChannels.testOk', '正常') : t('imChannels.testFail', '异常') }}
+              </span>
               <button
                 class="hc-im-btn hc-im-btn--ghost hc-im-btn--sm"
                 :disabled="testingId === inst.id"
@@ -617,18 +764,6 @@ async function copyWebhookUrl() {
             </div>
           </div>
 
-          <!-- Test result -->
-          <div
-            v-if="testResults[inst.id]"
-            class="hc-im-card__test-result"
-            :class="
-              testResults[inst.id]!.success
-                ? 'hc-im-card__test-result--ok'
-                : 'hc-im-card__test-result--err'
-            "
-          >
-            {{ testResults[inst.id]!.message }}
-          </div>
         </div>
       </div>
     </div>
@@ -823,44 +958,6 @@ async function copyWebhookUrl() {
 </template>
 
 <style scoped>
-/* ── Search ─────────────────────────────────────────── */
-
-.hc-im-search-wrap {
-  position: relative;
-  display: flex;
-  align-items: center;
-}
-
-.hc-im-search-icon {
-  position: absolute;
-  left: 10px;
-  color: var(--hc-text-muted);
-  pointer-events: none;
-}
-
-.hc-im-search {
-  padding: 6px 10px 6px 30px;
-  border-radius: 8px;
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-main);
-  color: var(--hc-text-primary);
-  font-size: 13px;
-  width: 200px;
-  outline: none;
-  transition:
-    border-color 0.15s,
-    width 0.2s;
-}
-
-.hc-im-search:focus {
-  border-color: var(--hc-accent);
-  width: 240px;
-}
-
-.hc-im-search::placeholder {
-  color: var(--hc-text-muted);
-}
-
 /* ── Empty state ────────────────────────────────────── */
 
 .hc-im-empty {
@@ -998,6 +1095,117 @@ async function copyWebhookUrl() {
   align-items: center;
   gap: 8px;
 }
+
+.hc-im-card__agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+.hc-im-card__agent-label {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  flex-shrink: 0;
+}
+/* ── Agent searchable combobox ── */
+.hc-agent-combo {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.hc-agent-combo__trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.hc-agent-combo__value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hc-agent-combo__dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  border-radius: 10px;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-elevated);
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  overflow: hidden;
+}
+.hc-agent-combo__dropdown--flip {
+  top: auto;
+  bottom: calc(100% + 4px);
+  box-shadow: 0 -8px 24px rgba(0,0,0,.18);
+}
+.hc-agent-combo__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hc-border);
+}
+.hc-agent-combo__search-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--hc-text-primary);
+}
+.hc-agent-combo__search-input::placeholder {
+  color: var(--hc-text-muted);
+}
+.hc-agent-combo__list {
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.hc-agent-combo__option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  color: var(--hc-text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+.hc-agent-combo__option:hover {
+  background: var(--hc-bg-hover);
+}
+.hc-agent-combo__option--active {
+  background: var(--hc-accent-subtle, rgba(99,102,241,0.1));
+  color: var(--hc-accent);
+  font-weight: 600;
+}
+.hc-agent-combo__model {
+  font-size: 10px;
+  color: var(--hc-text-muted);
+  margin-left: auto;
+}
+.hc-agent-combo__empty {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--hc-text-muted);
+  text-align: center;
+}
+.dropdown-enter-active { transition: opacity .15s, transform .15s; }
+.dropdown-leave-active { transition: opacity .1s, transform .1s; }
+.dropdown-enter-from, .dropdown-leave-to { opacity: 0; transform: translateY(-4px); }
 
 .hc-im-card__runtime {
   display: flex;

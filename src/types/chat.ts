@@ -67,6 +67,10 @@ export interface ChatRequest {
   temperature?: number
   /** 最大 token 数 */
   max_tokens?: number
+  /** 客户端生成的请求 ID，用于流式恢复/日志关联 */
+  request_id?: string
+  /** 请求级元数据，例如 thinking 开关 */
+  metadata?: Record<string, string>
 }
 
 /** 产物类型 */

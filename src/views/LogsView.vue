@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { formatLogTime, formatRelative } from '@/utils/time'
 import { ScrollText, Trash2, Download, ChevronDown, ChevronRight, Package, RefreshCw } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -85,7 +86,7 @@ function exportLogs() {
   const entries = logsStore.filteredEntries
   if (entries.length === 0) return
   const lines = entries.map(e => {
-    const ts = formatTime(e.timestamp)
+    const ts = formatLogTime(e.timestamp)
     return `[${ts}] [${e.level.toUpperCase().padEnd(5)}] [${e.source || '-'}] ${e.message}`
   })
   const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' })
@@ -155,27 +156,8 @@ function handleScroll() {
   autoScroll.value = scrollHeight - scrollTop - clientHeight < 50
 }
 
-function formatTime(ts: string): string {
-  try {
-    const d = new Date(ts)
-    return d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      + '.' + String(d.getMilliseconds()).padStart(3, '0')
-  } catch { return ts }
-}
-
 function formatRelativeTime(ts: string): string {
-  try {
-    const diff = now.value - new Date(ts).getTime()
-    if (diff < 0) return t('logs.justNow', 'just now')
-    const seconds = Math.floor(diff / 1000)
-    if (seconds < 5) return t('logs.justNow', 'just now')
-    if (seconds < 60) return `${seconds}s ago`
-    const minutes = Math.floor(seconds / 60)
-    if (minutes < 60) return `${minutes}m ago`
-    const hours = Math.floor(minutes / 60)
-    if (hours < 24) return `${hours}h ago`
-    return `${Math.floor(hours / 24)}d ago`
-  } catch { return ts }
+  return formatRelative(ts, now.value)
 }
 </script>
 
@@ -259,7 +241,7 @@ function formatRelativeTime(ts: string): string {
             :size="12"
             class="hc-logs__row-icon"
           />
-          <span class="hc-logs__row-time" :title="formatTime(entry.timestamp)">
+          <span class="hc-logs__row-time" :title="formatLogTime(entry.timestamp)">
             {{ formatRelativeTime(entry.timestamp) }}
           </span>
           <span class="hc-logs__row-level" :class="`hc-logs__row-level--${entry.level}`">

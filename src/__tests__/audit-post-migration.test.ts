@@ -174,14 +174,24 @@ describe('Category 1: messageService API migration', () => {
 // describe block with its own module-level mocks already set above.
 
 describe('Category 2: Chat store without DB', () => {
+  const chatStoreSource = fs.readFileSync(
+    path.resolve(__dirname, '..', 'stores', 'chat.ts'), 'utf-8',
+  )
+  const chatSessionLoadingSource = fs.readFileSync(
+    path.resolve(__dirname, '..', 'stores', 'chat-session-loading.ts'), 'utf-8',
+  )
+  const chatSessionLifecycleSource = fs.readFileSync(
+    path.resolve(__dirname, '..', 'stores', 'chat-session-lifecycle.ts'), 'utf-8',
+  )
+  const chatSessionFacadeSource = fs.readFileSync(
+    path.resolve(__dirname, '..', 'stores', 'chat-session-controller.ts'), 'utf-8',
+  )
+
   // The chat store is already mocked at module level via '@/api/chat',
   // so we can verify it delegates to API not DB.
 
   it('loadSessions: delegates to messageService.loadAllSessions (API)', async () => {
     // Verify the implementation source imports from API, not DB
-    const chatStoreSource = fs.readFileSync(
-      path.resolve(__dirname, '..', 'stores', 'chat.ts'), 'utf-8',
-    )
     expect(chatStoreSource).toContain("import * as msgSvc from '@/services/messageService'")
     expect(chatStoreSource).not.toContain("from '@/db/")
     expect(chatStoreSource).not.toContain('getDB')
@@ -189,25 +199,16 @@ describe('Category 2: Chat store without DB', () => {
   })
 
   it('selectSession: loads messages via messageService (API layer)', () => {
-    const chatStoreSource = fs.readFileSync(
-      path.resolve(__dirname, '..', 'stores', 'chat.ts'), 'utf-8',
-    )
-    expect(chatStoreSource).toContain('msgSvc.loadMessages(sessionId)')
+    expect(chatSessionLoadingSource).toContain('msgSvc.loadMessages(sessionId)')
   })
 
   it('newSession: creates session via messageService.createSession (API)', () => {
-    const chatStoreSource = fs.readFileSync(
-      path.resolve(__dirname, '..', 'stores', 'chat.ts'), 'utf-8',
-    )
-    expect(chatStoreSource).toContain('msgSvc.createSession(')
+    expect(chatSessionLifecycleSource).toContain('msgSvc.createSession(id, initialTitle)')
   })
 
   it('deleteSession: deletes via messageService.deleteSession (API) and updates local state', () => {
-    const chatStoreSource = fs.readFileSync(
-      path.resolve(__dirname, '..', 'stores', 'chat.ts'), 'utf-8',
-    )
-    expect(chatStoreSource).toContain('msgSvc.deleteSession(sessionId)')
-    expect(chatStoreSource).toContain('sessions.value = sessions.value.filter')
+    expect(chatSessionLifecycleSource).toContain('msgSvc.deleteSession(sessionId)')
+    expect(chatSessionFacadeSource).toContain('sessions.value = sessions.value.filter')
   })
 
   it('sendMessage: outbox functions have been removed from chatService', () => {
@@ -222,13 +223,10 @@ describe('Category 2: Chat store without DB', () => {
   })
 
   it('session switch: selectSession clears previous state', () => {
-    const chatStoreSource = fs.readFileSync(
-      path.resolve(__dirname, '..', 'stores', 'chat.ts'), 'utf-8',
-    )
     // selectSession should reset artifacts, error, selected artifact
-    expect(chatStoreSource).toContain('selectedArtifactId.value = null')
-    expect(chatStoreSource).toContain('showArtifacts.value = false')
-    expect(chatStoreSource).toContain('error.value = null')
+    expect(chatSessionLoadingSource).toContain('selectedArtifactId.value = null')
+    expect(chatSessionLoadingSource).toContain('showArtifacts.value = false')
+    expect(chatSessionLoadingSource).toContain('error.value = null')
   })
 })
 

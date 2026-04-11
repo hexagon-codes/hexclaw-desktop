@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 
-vi.mock('@/config/env', () => ({ env: { apiBase: 'http://test:9999' } }))
+vi.mock('@/config/env', () => ({ OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://test:9999' } }))
 
 function mockFetchWithChunks(chunks: string[]) {
   const encoder = new TextEncoder()

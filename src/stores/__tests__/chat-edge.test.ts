@@ -69,11 +69,17 @@ vi.mock('@/services/messageService', () => ({
 }))
 
 vi.mock('@/services/chatService', () => {
-  const originalModule = vi.importActual('@/services/chatService')
   return {
-    ...originalModule,
     ensureWebSocketConnected: vi.fn().mockResolvedValue(true),
     sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+    openWebSocketStream: vi.fn().mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'ws reply' }),
+    })),
+    resumeWebSocketStream: vi.fn().mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'resumed reply' }),
+    })),
     sendViaBackend: vi.fn().mockResolvedValue({ reply: 'backend reply', metadata: {} }),
     clearWebSocketCallbacks: vi.fn(),
     ChatRequestError: class ChatRequestError extends Error {
@@ -87,8 +93,9 @@ vi.mock('@/services/chatService', () => {
   }
 })
 
-vi.mock('@/api/messages', () => ({
-  updateMessageFeedback: vi.fn().mockResolvedValue(undefined),
+vi.mock('@/api/chat', () => ({
+  updateMessageFeedback: vi.fn().mockResolvedValue({ message: 'ok' }),
+  listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
 }))
 
 vi.mock('@/utils/errors', () => ({
@@ -121,6 +128,12 @@ describe('chat store edge cases', () => {
     chatSvc = await import('@/services/chatService')
     const { useChatStore } = await import('@/stores/chat')
     chatStore = useChatStore()
+    vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValue(true)
+    vi.mocked(chatSvc.openWebSocketStream).mockImplementation(() => ({
+      cancel: vi.fn(),
+      done: Promise.resolve({ content: 'ws reply' }),
+    }))
+    vi.mocked(chatSvc.sendViaBackend).mockResolvedValue({ reply: 'backend reply', metadata: {} })
   })
 
   afterEach(() => {
@@ -131,10 +144,10 @@ describe('chat store edge cases', () => {
 
   describe('WebSocket disconnect mid-stream', () => {
     it('falls back to HTTP when WebSocket send fails', async () => {
-      // Make WebSocket send throw an error
-      vi.mocked(chatSvc.sendViaWebSocket).mockRejectedValueOnce(
-        new Error('WebSocket connection lost'),
-      )
+      vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
+        cancel: vi.fn(),
+        done: Promise.reject(new Error('WebSocket connection lost')),
+      }))
       vi.mocked(chatSvc.sendViaBackend).mockResolvedValueOnce({
         reply: 'HTTP fallback reply',
         metadata: {},
@@ -150,9 +163,10 @@ describe('chat store edge cases', () => {
 
     it('does not fall back to HTTP when error has noFallback flag', async () => {
       const ChatRequestError = chatSvc.ChatRequestError as any
-      vi.mocked(chatSvc.sendViaWebSocket).mockRejectedValueOnce(
-        new ChatRequestError('Timeout', true),
-      )
+      vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
+        cancel: vi.fn(),
+        done: Promise.reject(new ChatRequestError('Timeout', true)),
+      }))
 
       await chatStore.sendMessage('test message')
 
@@ -163,9 +177,10 @@ describe('chat store edge cases', () => {
     })
 
     it('streaming state is reset after WebSocket error', async () => {
-      vi.mocked(chatSvc.sendViaWebSocket).mockRejectedValueOnce(
-        new Error('connection lost'),
-      )
+      vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
+        cancel: vi.fn(),
+        done: Promise.reject(new Error('connection lost')),
+      }))
       vi.mocked(chatSvc.sendViaBackend).mockResolvedValueOnce({
         reply: 'recovered',
         metadata: {},
@@ -190,10 +205,9 @@ describe('chat store edge cases', () => {
 
       await chatStore.sendMessage('hello')
 
-      // The chat store finalizeAssistantMessage replaces empty content with '(空回复)'
       const assistantMsg = chatStore.messages.find(m => m.role === 'assistant')
       expect(assistantMsg).toBeDefined()
-      expect(assistantMsg!.content).toBe('模型未生成有效回复，可能是内容安全策略过滤所致，请尝试换个方式提问。')
+      expect(assistantMsg!.content).toBe('这次没有生成可显示的回答，请重试或换个方式提问。')
     })
 
     it('handles whitespace-only reply from backend', async () => {
@@ -205,36 +219,26 @@ describe('chat store edge cases', () => {
 
       await chatStore.sendMessage('hello')
 
-      // Whitespace-only is not empty in the check: params.content || '(空回复)'
-      // Since '   ' is truthy, it will be used as-is. This is arguably a bug.
       const assistantMsg = chatStore.messages.find(m => m.role === 'assistant')
       expect(assistantMsg).toBeDefined()
-      // The || operator treats whitespace strings as truthy
-      expect(assistantMsg!.content).toBe('   ')
+      expect(assistantMsg!.content).toBe('这次没有生成可显示的回答，请重试或换个方式提问。')
     })
   })
 
   // ─── Sending while streaming ───────────────────────
 
   describe('sending while streaming', () => {
-    it('stops current stream before sending new message', async () => {
-      // Start first message — make it "streaming" by not resolving immediately
+    it('blocks sending another message into the same session while it is still streaming', async () => {
       chatStore.streaming = true
       chatStore.streamingSessionId = 'session-1'
       chatStore.streamingContent = 'partial content...'
+      chatStore.currentSessionId = 'session-1'
 
-      vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValue(false)
-      vi.mocked(chatSvc.sendViaBackend).mockResolvedValue({
-        reply: 'new reply',
-        metadata: {},
-      })
-
-      // Send a new message while streaming
-      await chatStore.sendMessage('new message')
-
-      // The streaming state should have been reset by sendMessage
-      // because it calls stopStreaming() at the start when streaming is true
-      expect(chatStore.streaming).toBe(false)
+      const result = await chatStore.sendMessage('new message')
+      expect(result).toBeNull()
+      expect(chatStore.streaming).toBe(true)
+      expect(chatStore.messages).toHaveLength(0)
+      expect(chatSvc.sendViaBackend).not.toHaveBeenCalled()
     })
 
     it('preserves partial content when stopping mid-stream', () => {
@@ -290,21 +294,33 @@ describe('chat store edge cases', () => {
       expect(userMsgs[0]!.content).toBe('msg1')
     })
 
-    it('sendMessage stops streaming before each new send', async () => {
-      vi.mocked(chatSvc.ensureWebSocketConnected).mockResolvedValue(false)
-      vi.mocked(chatSvc.sendViaBackend).mockResolvedValue({
-        reply: 'reply',
-        metadata: {},
-      })
+    it('sending from a new draft does not clear a different session that is already streaming', async () => {
+      let finishBackground!: () => void
+      vi.mocked(chatSvc.openWebSocketStream)
+        .mockImplementationOnce((_text, _sid, _params, _role, _att, callbacks) => ({
+          cancel: vi.fn(),
+          done: new Promise((resolve) => {
+            callbacks?.onChunk?.('background partial')
+            finishBackground = () => resolve({ content: 'background done' })
+          }),
+        }))
+        .mockImplementationOnce(() => ({
+          cancel: vi.fn(),
+          done: Promise.resolve({ content: 'reply' }),
+        }))
 
-      // First message sets streaming
-      chatStore.streaming = true
-      chatStore.streamingContent = ''
+      chatStore.currentSessionId = 'session-1'
+      void chatStore.sendMessage('background')
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
 
+      chatStore.newSession()
       await chatStore.sendMessage('test')
 
-      // After the call, streaming should be false
-      expect(chatStore.streaming).toBe(false)
+      expect(chatStore.streaming).toBe(true)
+      expect(chatStore.streamingSessionId).toBe('session-1')
+      finishBackground()
     })
   })
 
@@ -326,7 +342,10 @@ describe('chat store edge cases', () => {
     })
 
     it('error is set when both WS and HTTP fail', async () => {
-      vi.mocked(chatSvc.sendViaWebSocket).mockRejectedValueOnce(new Error('ws fail'))
+      vi.mocked(chatSvc.openWebSocketStream).mockImplementationOnce(() => ({
+        cancel: vi.fn(),
+        done: Promise.reject(new Error('ws fail')),
+      }))
       vi.mocked(chatSvc.sendViaBackend).mockRejectedValueOnce(new Error('http fail'))
 
       await chatStore.sendMessage('test')

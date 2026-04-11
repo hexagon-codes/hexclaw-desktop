@@ -26,6 +26,7 @@ const props = defineProps<{
   allowImage?: boolean
   allowVideo?: boolean
   recipientName?: string
+  sendHandler?: (text: string, files: File[]) => boolean | Promise<boolean>
 }>()
 
 const emit = defineEmits<{
@@ -48,9 +49,13 @@ const mentionPosition = ref({ bottom: 0, left: 0 })
 const showTemplate = ref(false)
 const templateQuery = ref('')
 const templatePosition = ref({ bottom: 0, left: 0 })
+const submitting = ref(false)
 
 const canSend = computed(() =>
-  (inputText.value.trim() || attachedFiles.value.length > 0) && !props.streaming && !props.disabled,
+  (inputText.value.trim() || attachedFiles.value.length > 0) &&
+  !props.streaming &&
+  !props.disabled &&
+  !submitting.value,
 )
 
 const placeholder = computed(() => {
@@ -71,17 +76,34 @@ const fileAccept = computed(() => {
 
 const MAX_HEIGHT = 160
 
-function handleSend() {
-  const text = inputText.value.trim()
-  const files = attachedFiles.value.map((a) => a.file)
-  if (!text && files.length === 0) return
-  if (props.streaming) return
-  closePopups()
-  emit('send', text, files)
+function clearDraft() {
   inputText.value = ''
   attachedFiles.value.forEach((a) => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl) })
   attachedFiles.value = []
   nextTick(() => { if (textareaRef.value) textareaRef.value.style.height = 'auto' })
+}
+
+async function handleSend() {
+  const text = inputText.value.trim()
+  const files = attachedFiles.value.map((a) => a.file)
+  if (!text && files.length === 0) return
+  if (props.streaming || props.disabled || submitting.value) return
+  closePopups()
+  if (!props.sendHandler) {
+    emit('send', text, files)
+    clearDraft()
+    return
+  }
+
+  submitting.value = true
+  try {
+    const accepted = await props.sendHandler(text, files)
+    if (accepted) clearDraft()
+  } catch {
+    // Parent send handler is responsible for surfacing errors.
+  } finally {
+    submitting.value = false
+  }
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -221,14 +243,19 @@ defineExpose({ focus, setInput, triggerFileUpload })
         rows="1"
         class="hc-composer__field"
         :placeholder="placeholder"
-        :disabled="disabled"
+        :disabled="disabled || submitting"
         @keydown="handleKeydown"
         @input="handleInput"
       />
 
       <div class="hc-composer__bar">
         <div class="hc-composer__tools">
-          <button class="hc-composer__tool" :title="t('chat.addFile', '添加文件')" @click="handleFileClick">
+          <button
+            class="hc-composer__tool"
+            :title="t('chat.addFile', '添加文件')"
+            :disabled="disabled || submitting"
+            @click="handleFileClick"
+          >
             <Paperclip :size="18" />
           </button>
           <button
@@ -236,6 +263,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
             class="hc-composer__tool"
             :class="{ 'hc-composer__tool--recording': isListening }"
             :title="isListening ? t('chat.voiceStop') : t('chat.voiceStart')"
+            :disabled="disabled || submitting"
             @click="toggleListening"
           >
             <Mic :size="18" />

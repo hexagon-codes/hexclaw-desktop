@@ -29,6 +29,10 @@ import { resolve, join } from 'path'
 
 const ROOT = resolve(__dirname, '../..')
 const SRC = resolve(__dirname, '..')
+const CHAT_THINKING_TIMER_TS = readSrc('stores/chat-thinking-timer.ts')
+const CHAT_STREAM_COMPLETION_TS = readSrc('stores/chat-stream-completion.ts')
+const CHAT_STREAM_CANCEL_TS = readSrc('stores/chat-stream-cancel.ts')
+const CHAT_SEND_WEBSOCKET_DELIVERY_TS = readSrc('stores/chat-send-websocket-delivery.ts')
 
 function readSrc(path: string): string {
   return readFileSync(resolve(SRC, path), 'utf-8')
@@ -311,26 +315,28 @@ describe('Issue #5: Canvas workflow functions silently catch ALL errors', () => 
 // 6. MEMORY API: updateMemory MISSING TYPE PARAMETER
 // ════════════════════════════════════════════════════════════
 
-describe('Issue #6: updateMemory missing type parameter vs saveMemory', () => {
+describe('Issue #6: updateMemoryEntry vs createMemoryEntry parameter design', () => {
   const memoryTs = readSrc('api/memory.ts')
 
-  it('saveMemory accepts optional type parameter', () => {
-    expect(memoryTs).toMatch(/function saveMemory\(content:\s*string,\s*type\?/)
+  it('createMemoryEntry accepts optional type and source parameters', () => {
+    expect(memoryTs).toMatch(/function createMemoryEntry\(/)
+    expect(memoryTs).toContain('type?: MemoryType')
+    expect(memoryTs).toContain('source?: MemorySource')
   })
 
-  it('saveMemory sends type in the request body', () => {
+  it('createMemoryEntry sends type and source in the request body', () => {
     expect(memoryTs).toMatch(/apiPost.*\{.*content.*type/)
   })
 
-  it('updateMemory accepts an optional type parameter (same as saveMemory)', () => {
-    const updateSig = memoryTs.match(/function updateMemory\([^)]+\)/)?.[0] || ''
+  it('updateMemoryEntry accepts id and content parameters', () => {
+    const updateSig = memoryTs.match(/function updateMemoryEntry\([^)]+\)/)?.[0] || ''
+    expect(updateSig).toContain('id: string')
     expect(updateSig).toContain('content: string')
-    expect(updateSig).toContain('type')
   })
 
-  it('updateMemory request body includes type field with default "memory"', () => {
-    const updateBlock = memoryTs.match(/function updateMemory[\s\S]*?^\}/m)?.[0] || ''
-    expect(updateBlock).toContain("type: type ?? 'memory'")
+  it('createMemoryEntry defaults type to "fact" and source to "manual"', () => {
+    expect(memoryTs).toContain("type: type ?? 'fact'")
+    expect(memoryTs).toContain("source: source ?? 'manual'")
   })
 })
 
@@ -368,13 +374,13 @@ describe('Issue #7: API functions exported but never imported in production code
     expect(callers.length).toBe(0)
   })
 
-  it('deleteMemory is exported from memory.ts — verify if used', () => {
+  it('deleteMemoryEntry is exported from memory.ts — verify if used', () => {
     const memoryFile = resolve(SRC, 'api/memory.ts')
     const callers = productionFiles.filter(({ file, content }) => {
       if (file === memoryFile || file.includes('api/index.ts')) return false
-      return content.includes('deleteMemory')
+      return content.includes('deleteMemoryEntry')
     })
-    // deleteMemory is likely used in KnowledgeView or MemoryView
+    // deleteMemoryEntry is likely used in MemoryView
     // This test documents whether it has callers
     expect(callers.length).toBeGreaterThanOrEqual(0)
   })
@@ -449,20 +455,20 @@ describe('Issue #9: searchMcpMarketplace and searchClawHub share /api/v1/clawhub
     expect(getMcpBlock).toContain("type: 'mcp'")
   })
 
-  it('searchClawHub calls /api/v1/clawhub/search (same endpoint, no type filter by default)', () => {
+  it('searchClawHub calls /api/v1/clawhub/search with type=skill', () => {
     expect(skillsTs).toContain("'/api/v1/clawhub/search'")
+    expect(skillsTs).toContain("q.type = 'skill'")
   })
 
   it('searchClawHub and searchMcpMarketplace both hit the same backend endpoint', () => {
     // This is by design: they share the hub search API but filter differently.
     // searchMcpMarketplace always passes type='mcp'
-    // searchClawHub passes category when provided, no forced type filter
+    // searchClawHub always passes type='skill'
     const mcpSearch = mcpTs.match(/function searchMcpMarketplace[\s\S]*?^}/m)?.[0] || ''
     const hubSearch = skillsTs.match(/function searchClawHub[\s\S]*?^}/m)?.[0] || ''
 
     expect(mcpSearch).toContain("type: 'mcp'")
-    // searchClawHub does not force a type parameter
-    expect(hubSearch).not.toContain("type: 'mcp'")
+    expect(hubSearch).toContain("q.type = 'skill'")
   })
 })
 
@@ -472,9 +478,11 @@ describe('Issue #9: searchMcpMarketplace and searchClawHub share /api/v1/clawhub
 
 describe('Issue #10: streamingReasoningStartTime in chat store return (FIXED)', () => {
   const chatStoreTs = readFileSync(resolve(SRC, 'stores/chat.ts'), 'utf-8')
+  const chatStoreStateTs = readFileSync(resolve(SRC, 'stores/chat-store-state.ts'), 'utf-8')
+  const chatStreamHelpersTs = readFileSync(resolve(SRC, 'stores/chat-stream-helpers.ts'), 'utf-8')
 
   it('streamingReasoningStartTime is declared as a ref in the store', () => {
-    expect(chatStoreTs).toMatch(/streamingReasoningStartTime\s*=\s*ref/)
+    expect(chatStoreStateTs).toMatch(/streamingReasoningStartTime:\s*ref\(0\)/)
   })
 
   it('streamingReasoningStartTime IS included in the store return object', () => {
@@ -486,14 +494,14 @@ describe('Issue #10: streamingReasoningStartTime in chat store return (FIXED)', 
   })
 
   it('streamingReasoningStartTime is used to calculate thinking duration', () => {
-    expect(chatStoreTs).toContain('streamingReasoningStartTime.value')
-    expect(chatStoreTs).toContain('Date.now() - streamingReasoningStartTime.value')
+    expect(CHAT_THINKING_TIMER_TS).toContain('streamingReasoningStartTime.value')
+    expect(CHAT_STREAM_COMPLETION_TS).toContain('Date.now() - streamState.reasoningStartTime')
   })
 
   it('streamingReasoningStartTime is reset to 0 on cancel/done', () => {
-    const resets = chatStoreTs.match(/streamingReasoningStartTime\.value\s*=\s*0/g) || []
-    // Should be reset in multiple places: finishAssistantMessage, cancelStream, etc.
-    expect(resets.length).toBeGreaterThanOrEqual(3)
+    expect(CHAT_STREAM_CANCEL_TS).toContain('streamingReasoningStartTime.value = 0')
+    expect(CHAT_SEND_WEBSOCKET_DELIVERY_TS).toContain('reasoningStartTime: 0')
+    expect(chatStreamHelpersTs).toContain('streamingReasoningStartTime: 0')
   })
 })
 
@@ -515,11 +523,12 @@ describe('Issue #11: Rust proxy DELETE does not forward body', () => {
   })
 
   it('TypeScript apiDelete does not accept a body parameter (consistent)', () => {
-    // apiDelete<T>(url: string) — no body param
+    // apiDelete<T>(url: string) — no body param (now async with waitForSidecar)
     const deleteFunc = clientTs.match(/function apiDelete[^}]+\}/s)?.[0] || ''
     expect(deleteFunc).toContain('url: string')
-    // Verify the function does NOT accept a body parameter
-    expect(deleteFunc).not.toContain('body')
+    // Verify the function does NOT accept a body parameter (body only appears in api() call, not params)
+    const signature = clientTs.match(/export async function apiDelete<T>\([^)]+\)/)?.[0] || ''
+    expect(signature).not.toContain('body')
   })
 
   it('Rust POST, PUT, and DELETE all forward body', () => {
@@ -831,16 +840,25 @@ describe('ollama.ts: pullOllamaModel uses raw fetch for streaming', () => {
     expect(pullBlock).not.toContain('apiPost')
   })
 
-  it('other ollama functions use apiGet/apiPost/apiDelete consistently', () => {
-    // Each function uses the expected HTTP method. We verify by extracting a block.
+  it('getOllamaStatus and getOllamaRunning use native fetch (direct Ollama connection)', () => {
+    const checkFnUsesFetch = (fnName: string) => {
+      const idx = ollamaTs.indexOf(`function ${fnName}`)
+      expect(idx, `${fnName} should exist`).toBeGreaterThan(-1)
+      const block = ollamaTs.slice(idx, idx + 300)
+      expect(block, `${fnName} should use fetch()`).toContain('fetch(')
+      expect(block, `${fnName} should use OLLAMA_BASE`).toContain('OLLAMA_BASE')
+    }
+    checkFnUsesFetch('getOllamaStatus')
+    checkFnUsesFetch('getOllamaRunning')
+  })
+
+  it('other ollama functions use apiPost/apiDelete consistently (via sidecar)', () => {
     const checkFn = (fnName: string, expected: string) => {
       const idx = ollamaTs.indexOf(`function ${fnName}`)
       expect(idx, `${fnName} should exist`).toBeGreaterThan(-1)
       const block = ollamaTs.slice(idx, idx + 200)
       expect(block, `${fnName} should use ${expected}`).toContain(expected)
     }
-    checkFn('getOllamaStatus', 'apiGet')
-    checkFn('getOllamaRunning', 'apiGet')
     checkFn('unloadOllamaModel', 'apiPost')
     checkFn('deleteOllamaModel', 'apiDelete')
     checkFn('restartOllama', 'apiPost')
@@ -1033,14 +1051,14 @@ describe('timeout configuration across the stack', () => {
 })
 
 // ════════════════════════════════════════════════════════════
-// 31. MEMORY.TS: clearAllMemory AND deleteMemory BOTH USE apiDelete
+// 31. MEMORY.TS: clearAllMemory AND deleteMemoryEntry BOTH USE apiDelete
 // ════════════════════════════════════════════════════════════
 
 describe('memory.ts: two delete operations with different semantics', () => {
   const memoryTs = readSrc('api/memory.ts')
 
-  it('deleteMemory deletes a single memory by id', () => {
-    expect(memoryTs).toMatch(/function deleteMemory\(id:\s*string\)/)
+  it('deleteMemoryEntry deletes a single memory by id', () => {
+    expect(memoryTs).toMatch(/function deleteMemoryEntry\(id:\s*string\)/)
     expect(memoryTs).toContain("apiDelete<{ message: string }>(`/api/v1/memory/${encodeURIComponent(id)}`)")
   })
 
@@ -1049,7 +1067,7 @@ describe('memory.ts: two delete operations with different semantics', () => {
     expect(memoryTs).toContain("apiDelete<{ message: string }>('/api/v1/memory')")
   })
 
-  it('deleteMemory uses encodeURIComponent (safe against path traversal)', () => {
+  it('deleteMemoryEntry uses encodeURIComponent (safe against path traversal)', () => {
     expect(memoryTs).toContain('encodeURIComponent(id)')
   })
 })

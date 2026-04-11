@@ -375,9 +375,10 @@ describe('SettingsView — E2E 关键路径', () => {
     })
     await flushPromises()
 
-    const providerHead = wrapper.find('.hc-provider__card-head')
-    expect(providerHead.exists()).toBe(true)
-    await providerHead.trigger('click')
+    const providerHeads = wrapper.findAll('.hc-provider__card-head')
+    const providerHead = providerHeads[providerHeads.length - 1]
+    expect(providerHead).toBeDefined()
+    await providerHead!.trigger('click')
     await flushPromises()
 
     const chips = wrapper.findAll('.hc-model-chip:not(.hc-model-chip--add)')
@@ -462,7 +463,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     const store = await getSettingsStore()
-    store.addProvider({
+    const provider = store.addProvider({
       name: 'OpenAI',
       type: 'openai',
       enabled: true,
@@ -470,13 +471,15 @@ describe('SettingsView — E2E 关键路径', () => {
       baseUrl: 'https://api.openai.com/v1',
       models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
     })
+    expect(provider).not.toBeNull()
     await flushPromises()
 
-    expect(store.config?.llm.providers).toHaveLength(1)
+    expect(store.config?.llm.providers).toHaveLength(2)
 
-    const providerHead = wrapper.find('.hc-provider__card-head')
-    expect(providerHead.exists()).toBe(true)
-    await providerHead.trigger('click')
+    const providerHeads = wrapper.findAll('.hc-provider__card-head')
+    const providerHead = providerHeads[providerHeads.length - 1]
+    expect(providerHead).toBeDefined()
+    await providerHead!.trigger('click')
     await flushPromises()
 
     const deleteBtn = wrapper.findAll('button').find((b) => b.text().includes('删除服务商'))
@@ -493,7 +496,8 @@ describe('SettingsView — E2E 关键路径', () => {
     confirmBtn!.click()
     await flushPromises()
 
-    expect(store.config?.llm.providers).toHaveLength(0)
+    expect(store.config?.llm.providers.find((p) => p.id === provider!.id)).toBeUndefined()
+    expect(store.config?.llm.providers).toHaveLength(1)
     wrapper.unmount()
   })
 

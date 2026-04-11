@@ -9,8 +9,8 @@ import { sendChat } from '@/api/chat'
 
 const { mockGetLLMConfig, mockListen, wsMock } = vi.hoisted(() => {
   let sidecarReadyHandler: (() => Promise<void> | void) | null = null
-  let chunkHandler: ((payload: { content: string; done?: boolean }) => void) | null = null
-  let replyHandler: ((payload: { content: string }) => void) | null = null
+  let chunkHandler: ((payload: { content: string; done?: boolean; reasoning?: string; metadata?: Record<string, unknown> }) => void) | null = null
+  let replyHandler: ((payload: { content: string; reasoning?: string; metadata?: Record<string, unknown> }) => void) | null = null
   let errorHandler: ((error: string) => void) | null = null
   return {
     mockGetLLMConfig: vi.fn(),
@@ -32,11 +32,11 @@ const { mockGetLLMConfig, mockListen, wsMock } = vi.hoisted(() => {
         replyHandler = null
         errorHandler = null
       }),
-      onChunk: vi.fn((callback: (payload: { content: string; done?: boolean }) => void) => {
+      onChunk: vi.fn((callback: (payload: { content: string; done?: boolean; reasoning?: string; metadata?: Record<string, unknown> }) => void) => {
         chunkHandler = callback
         return vi.fn()
       }),
-      onReply: vi.fn((callback: (payload: { content: string }) => void) => {
+      onReply: vi.fn((callback: (payload: { content: string; reasoning?: string; metadata?: Record<string, unknown> }) => void) => {
         replyHandler = callback
         return vi.fn()
       }),
@@ -49,10 +49,10 @@ const { mockGetLLMConfig, mockListen, wsMock } = vi.hoisted(() => {
       emitSidecarReady: async () => {
         await sidecarReadyHandler?.()
       },
-      emitChunk: (payload: { content: string; done?: boolean }) => {
+      emitChunk: (payload: { content: string; done?: boolean; reasoning?: string; metadata?: Record<string, unknown> }) => {
         chunkHandler?.(payload)
       },
-      emitReply: (payload: { content: string }) => {
+      emitReply: (payload: { content: string; reasoning?: string; metadata?: Record<string, unknown> }) => {
         replyHandler?.(payload)
       },
       emitError: (error: string) => {
@@ -591,5 +591,145 @@ describe('QuickChatView', () => {
 
     expect(wrapper.text()).not.toContain('HTTP 请求')
     expect(wrapper.text()).not.toContain('stale http reply')
+  })
+
+  it('shows a fallback instead of an empty HTTP reply', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useSettingsStore()
+    store.config = {
+      llm: {
+        providers: [
+          {
+            id: 'openai',
+            backendKey: 'openai',
+            name: 'OpenAI',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://api.openai.com/v1',
+            models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+          },
+        ],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'openai',
+      },
+      security: {
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
+      },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: 'assistant',
+      },
+      notification: {
+        system_enabled: true,
+        sound_enabled: false,
+        agent_complete: true,
+      },
+      mcp: {
+        default_protocol: 'stdio',
+      },
+      memory: { enabled: true },
+    }
+    store.runtimeProviders = store.config!.llm.providers
+    wsMock.connect.mockRejectedValueOnce(new Error('ws down'))
+    vi.mocked(sendChat).mockResolvedValueOnce({
+      reply: '',
+      session_id: 'sess-empty',
+      metadata: { reasoning: '只有思考过程，没有最终答案' },
+    })
+
+    const wrapper = mount(QuickChatView, {
+      global: {
+        plugins: [pinia, createTestI18n()],
+        stubs: {
+          MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('你在干什么？')
+    const btns = wrapper.findAll('button')
+    await btns[btns.length - 1]!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('模型只完成了思考，没有输出最终回答，请重试一次。')
+  })
+
+  it('shows a fallback when websocket completes without content', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useSettingsStore()
+    store.config = {
+      llm: {
+        providers: [
+          {
+            id: 'openai',
+            backendKey: 'openai',
+            name: 'OpenAI',
+            type: 'openai',
+            enabled: true,
+            apiKey: '',
+            baseUrl: 'https://api.openai.com/v1',
+            models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+          },
+        ],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'openai',
+      },
+      security: {
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
+      },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: 'assistant',
+      },
+      notification: {
+        system_enabled: true,
+        sound_enabled: false,
+        agent_complete: true,
+      },
+      mcp: {
+        default_protocol: 'stdio',
+      },
+      memory: { enabled: true },
+    }
+    store.runtimeProviders = store.config!.llm.providers
+
+    const wrapper = mount(QuickChatView, {
+      global: {
+        plugins: [pinia, createTestI18n()],
+        stubs: {
+          MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' },
+        },
+      },
+    })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('去年的今天我们在哪里？')
+    const btns = wrapper.findAll('button')
+    await btns[btns.length - 1]!.trigger('click')
+    await flushPromises()
+    wsMock.emitChunk({ content: '', reasoning: '只有思考过程，没有最终答案', done: true })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('模型只完成了思考，没有输出最终回答，请重试一次。')
   })
 })

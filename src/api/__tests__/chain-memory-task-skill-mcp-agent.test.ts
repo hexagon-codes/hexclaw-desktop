@@ -34,42 +34,43 @@ beforeEach(() => {
 // Chain 4 — Memory Lifecycle
 // =========================================================
 describe('Chain 4: Memory Lifecycle', () => {
-  it('saveMemory → getMemory → searchMemory → updateMemory → deleteMemory → clearAllMemory', async () => {
+  it('createMemoryEntry → getMemoryEntries → searchMemory → updateMemoryEntry → deleteMemoryEntry → clearAllMemory', async () => {
     // Arrange: six sequential responses
+    const entry1 = { id: 'm-1', content: 'hello world', type: 'fact', source: 'manual', created_at: '', updated_at: '', hit_count: 0 }
     mockFetch
-      .mockResolvedValueOnce({ message: 'saved' })            // saveMemory
-      .mockResolvedValueOnce({ content: 'hello world' })       // getMemory
-      .mockResolvedValueOnce({ results: ['hello'], vector_results: null, total: 1 }) // searchMemory
-      .mockResolvedValueOnce({ message: 'updated' })           // updateMemory
-      .mockResolvedValueOnce({ message: 'deleted' })           // deleteMemory
+      .mockResolvedValueOnce(entry1)                           // createMemoryEntry
+      .mockResolvedValueOnce({ entries: [entry1], summary: '', capacity: { used: 1, max: 50 } }) // getMemoryEntries
+      .mockResolvedValueOnce({ results: [entry1], vector_results: null, total: 1 }) // searchMemory
+      .mockResolvedValueOnce({ ...entry1, content: 'hello world v2' }) // updateMemoryEntry
+      .mockResolvedValueOnce({ message: 'deleted' })           // deleteMemoryEntry
       .mockResolvedValueOnce({ message: 'cleared' })           // clearAllMemory
 
-    const { saveMemory, getMemory, searchMemory, updateMemory, deleteMemory, clearAllMemory } =
+    const { createMemoryEntry, getMemoryEntries, searchMemory, updateMemoryEntry, deleteMemoryEntry, clearAllMemory } =
       await import('../memory')
 
     // Act
-    const saveRes = await saveMemory('hello world', 'memory')
-    const getRes = await getMemory()
+    const saveRes = await createMemoryEntry('hello world', 'fact')
+    const getRes = await getMemoryEntries()
     const searchRes = await searchMemory('hello')
-    const updateRes = await updateMemory('hello world v2')
-    const deleteRes = await deleteMemory('mem-1')
+    const updateRes = await updateMemoryEntry('m-1', 'hello world v2')
+    const deleteRes = await deleteMemoryEntry('mem-1')
     const clearRes = await clearAllMemory()
 
     // Assert — 6 calls total
     expect(mockFetch).toHaveBeenCalledTimes(6)
 
-    // 1) saveMemory → POST /api/v1/memory
+    // 1) createMemoryEntry → POST /api/v1/memory
     const [savePath, saveOpts] = callArgs(0)
     expect(savePath).toBe('/api/v1/memory')
     expect(saveOpts.method).toBe('POST')
-    expect(saveOpts.body).toEqual({ content: 'hello world', type: 'memory' })
-    expect(saveRes).toEqual({ message: 'saved' })
+    expect(saveOpts.body).toEqual({ content: 'hello world', type: 'fact', source: 'manual' })
+    expect(saveRes).toEqual(entry1)
 
-    // 2) getMemory → GET /api/v1/memory
+    // 2) getMemoryEntries → GET /api/v1/memory
     const [getPath, getOpts] = callArgs(1)
     expect(getPath).toBe('/api/v1/memory')
     expect(getOpts.method).toBe('GET')
-    expect(getRes).toEqual({ content: 'hello world' })
+    expect(getRes.entries).toHaveLength(1)
 
     // 3) searchMemory → GET /api/v1/memory/search?q=hello
     const [searchPath, searchOpts] = callArgs(2)
@@ -78,14 +79,14 @@ describe('Chain 4: Memory Lifecycle', () => {
     expect(searchOpts.query).toEqual({ q: 'hello' })
     expect(searchRes.total).toBe(1)
 
-    // 4) updateMemory → PUT /api/v1/memory
+    // 4) updateMemoryEntry → PUT /api/v1/memory/:id
     const [updatePath, updateOpts] = callArgs(3)
-    expect(updatePath).toBe('/api/v1/memory')
+    expect(updatePath).toBe(`/api/v1/memory/${encodeURIComponent('m-1')}`)
     expect(updateOpts.method).toBe('PUT')
-    expect(updateOpts.body).toEqual({ content: 'hello world v2', type: 'memory' })
-    expect(updateRes).toEqual({ message: 'updated' })
+    expect(updateOpts.body).toEqual({ content: 'hello world v2' })
+    expect(updateRes.content).toBe('hello world v2')
 
-    // 5) deleteMemory → DELETE /api/v1/memory/:id
+    // 5) deleteMemoryEntry → DELETE /api/v1/memory/:id
     const [deletePath, deleteOpts] = callArgs(4)
     expect(deletePath).toBe('/api/v1/memory/mem-1')
     expect(deleteOpts.method).toBe('DELETE')
@@ -98,21 +99,21 @@ describe('Chain 4: Memory Lifecycle', () => {
     expect(clearRes).toEqual({ message: 'cleared' })
   })
 
-  it('saveMemory defaults type to "memory" when omitted', async () => {
-    mockFetch.mockResolvedValueOnce({ message: 'saved' })
+  it('createMemoryEntry defaults type to "fact" and source to "manual" when omitted', async () => {
+    mockFetch.mockResolvedValueOnce({ id: 'm-0', content: 'note', type: 'fact', source: 'manual', created_at: '', updated_at: '', hit_count: 0 })
 
-    const { saveMemory } = await import('../memory')
-    await saveMemory('note')
+    const { createMemoryEntry } = await import('../memory')
+    await createMemoryEntry('note')
 
     const [, opts] = callArgs(0)
-    expect(opts.body).toEqual({ content: 'note', type: 'memory' })
+    expect(opts.body).toEqual({ content: 'note', type: 'fact', source: 'manual' })
   })
 
-  it('deleteMemory encodes special characters in the id', async () => {
+  it('deleteMemoryEntry encodes special characters in the id', async () => {
     mockFetch.mockResolvedValueOnce({ message: 'deleted' })
 
-    const { deleteMemory } = await import('../memory')
-    await deleteMemory('key/with spaces')
+    const { deleteMemoryEntry } = await import('../memory')
+    await deleteMemoryEntry('key/with spaces')
 
     const [path] = callArgs(0)
     expect(path).toBe(`/api/v1/memory/${encodeURIComponent('key/with spaces')}`)
@@ -284,7 +285,7 @@ describe('Chain 6: Skill Lifecycle', () => {
     const [hubPath, hubOpts] = callArgs(1)
     expect(hubPath).toBe('/api/v1/clawhub/search')
     expect(hubOpts.method).toBe('GET')
-    expect(hubOpts.query).toEqual({ q: 'code-review', category: 'coding' })
+    expect(hubOpts.query).toEqual({ q: 'code-review', category: 'coding', type: 'skill' })
     expect(hubResults).toHaveLength(1)
     expect(hubResults[0]!.name).toBe('code-review-pro')
 

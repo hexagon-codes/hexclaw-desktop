@@ -161,6 +161,11 @@ describe('1. API Request/Response Shape Validation', () => {
   describe('config.ts — getLLMConfig/updateLLMConfig', () => {
     beforeEach(() => {
       vi.resetModules()
+      ;(globalThis as Record<string, unknown>).isTauri = true
+    })
+
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).isTauri
     })
 
     it('getLLMConfig calls proxy with GET /api/v1/config/llm', async () => {
@@ -464,64 +469,61 @@ describe('1. API Request/Response Shape Validation', () => {
       globalThis.fetch = originalFetch
     })
 
-    it('getOllamaStatus calls apiGet /api/v1/ollama/status', async () => {
-      const mockApiGet = vi.fn().mockResolvedValue({
-        running: true,
-        version: '0.3.0',
-        models: [],
-        associated: true,
-        model_count: 0,
-      })
-      vi.doMock('@/api/client', () => ({
-        apiGet: mockApiGet,
-        apiPost: vi.fn(),
-        apiDelete: vi.fn(),
-      }))
+    it('getOllamaStatus directly fetches Ollama native API', async () => {
+      vi.resetModules()
+      const mockFetch = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ models: [{ name: 'qwen3', size: 1000, modified_at: '2024-01-01', details: {} }] }) })
+        .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ version: '0.3.0' }) })
+      vi.stubGlobal('fetch', mockFetch)
+      vi.doMock('@/config/env', () => ({ env: { apiBase: 'http://localhost:16060' }, OLLAMA_BASE: 'http://localhost:11434' }))
 
       const { getOllamaStatus } = await import('@/api/ollama')
       const status = await getOllamaStatus()
 
-      expect(mockApiGet).toHaveBeenCalledWith('/api/v1/ollama/status')
+      expect(mockFetch).toHaveBeenCalledWith('http://localhost:11434/api/tags', expect.anything())
       expect(status.running).toBe(true)
-      expect(status.associated).toBe(true)
+      expect(status.model_count).toBe(1)
+      vi.unstubAllGlobals()
     })
 
-    it('getOllamaStatus throws on error response', async () => {
-      vi.doMock('@/api/client', () => ({
-        apiGet: vi.fn().mockRejectedValue(new Error('Request failed')),
-        apiPost: vi.fn(),
-        apiDelete: vi.fn(),
-      }))
+    it('getOllamaStatus returns not running on error', async () => {
+      vi.resetModules()
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('connection refused')))
+      vi.doMock('@/config/env', () => ({ env: { apiBase: 'http://localhost:16060' }, OLLAMA_BASE: 'http://localhost:11434' }))
 
       const { getOllamaStatus } = await import('@/api/ollama')
-      await expect(getOllamaStatus()).rejects.toThrow()
+      const status = await getOllamaStatus()
+      expect(status.running).toBe(false)
+      vi.unstubAllGlobals()
     })
 
-    it('getOllamaRunning extracts models from data.models', async () => {
-      vi.doMock('@/api/client', () => ({
-        apiGet: vi.fn().mockResolvedValue({
+    it('getOllamaRunning extracts models from Ollama /api/ps', async () => {
+      vi.resetModules()
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({
           models: [{ name: 'llama3.1', size: 1000, size_vram: 500, expires_at: '', context_length: 4096 }],
         }),
-        apiPost: vi.fn(),
-        apiDelete: vi.fn(),
       }))
+      vi.doMock('@/config/env', () => ({ env: { apiBase: 'http://localhost:16060' }, OLLAMA_BASE: 'http://localhost:11434' }))
 
       const { getOllamaRunning } = await import('@/api/ollama')
       const models = await getOllamaRunning()
       expect(models).toHaveLength(1)
       expect(models[0]!.name).toBe('llama3.1')
+      vi.unstubAllGlobals()
     })
 
     it('getOllamaRunning returns empty array when data.models is missing', async () => {
-      vi.doMock('@/api/client', () => ({
-        apiGet: vi.fn().mockResolvedValue({}),
-        apiPost: vi.fn(),
-        apiDelete: vi.fn(),
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({}),
       }))
 
       const { getOllamaRunning } = await import('@/api/ollama')
       const models = await getOllamaRunning()
       expect(models).toEqual([])
+      vi.unstubAllGlobals()
     })
 
     it('pullOllamaModel parses NDJSON stream events (with and without data: prefix)', async () => {
@@ -615,8 +617,13 @@ describe('2. Security Tests', () => {
     // but the frontend config.ts passes the path directly without
     // any validation.
 
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).isTauri
+    })
+
     it('proxyApiRequestText does NOT validate path before sending (no frontend guard)', async () => {
       vi.resetModules()
+      ;(globalThis as Record<string, unknown>).isTauri = true
       const mockInvoke = vi.fn().mockResolvedValue('{}')
       vi.doMock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
 
@@ -724,8 +731,13 @@ describe('2. Security Tests', () => {
   })
 
   describe('URL validation for base_url (SSRF)', () => {
-    it('testLLMConnection sends base_url without validation — potential SSRF via proxy', async () => {
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).isTauri
+    })
+
+    it('testLLMConnection rejects private base_url before proxying to backend', async () => {
       vi.resetModules()
+      ;(globalThis as Record<string, unknown>).isTauri = true
       const mockInvoke = vi.fn().mockResolvedValue(JSON.stringify({
         ok: false,
         message: 'connection refused',
@@ -733,21 +745,16 @@ describe('2. Security Tests', () => {
       vi.doMock('@tauri-apps/api/core', () => ({ invoke: mockInvoke }))
 
       const { testLLMConnection } = await import('@/api/config')
-      await testLLMConnection({
+      await expect(testLLMConnection({
         provider: {
           type: 'custom',
           base_url: 'http://169.254.169.254/latest/meta-data',  // AWS metadata SSRF
           api_key: 'test',
           model: 'test',
         },
-      })
+      })).rejects.toThrow('Unsafe base_url')
 
-      // The base_url is sent directly to the backend proxy without any frontend validation.
-      // The backend could reach internal network resources.
-      const sentBody = JSON.parse(mockInvoke.mock.calls[0]![2] ?? mockInvoke.mock.calls[0]![1].body)
-      expect(sentBody.provider.base_url).toBe('http://169.254.169.254/latest/meta-data')
-      // NOTE: No frontend-side URL validation exists for base_url.
-      // Protection depends entirely on the backend.
+      expect(mockInvoke).not.toHaveBeenCalled()
     })
 
     it('sendStreamViaTauri has been removed (dead code cleanup)', async () => {

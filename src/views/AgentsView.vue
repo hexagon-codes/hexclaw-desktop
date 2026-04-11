@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Bot, MessageSquare, Plus, Trash2, X, Users, Pencil, ChevronDown, ChevronUp, Wrench, ShieldAlert } from 'lucide-vue-next'
 import { useAgentsStore } from '@/stores/agents'
@@ -17,6 +17,7 @@ import AgentConference from '@/components/agent/AgentConference.vue'
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 const agentsStore = useAgentsStore()
 const settingsStore = useSettingsStore()
 
@@ -42,6 +43,7 @@ const agentsLoading = ref(false)
 const registering = ref(false)
 const editing = ref(false)
 const showAddAgent = ref(false)
+const showAddAdvanced = ref(false)
 const newAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
 
 // Edit agent modal
@@ -69,16 +71,36 @@ const newRule = ref<Omit<AgentRule, 'id'>>({
 const deletingRuleId = ref<number | null>(null)
 const deletingRuleIds = ref<Set<number>>(new Set())
 
-const PLATFORM_OPTIONS = ['api', 'feishu', 'dingtalk', 'telegram', 'discord']
-
 const sortedRules = computed(() =>
   [...rules.value].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)),
 )
 
 const canAddRule = computed(() => agents.value.length > 0)
 
+/** Agent → deployed platform names (derived from existing routing rules) */
+function getAgentDeployedPlatforms(agentName: string): string[] {
+  return [...new Set(
+    rules.value
+      .filter((r) => r.agent_name === agentName && r.platform)
+      .map((r) => r.platform),
+  )]
+}
+
 onMounted(async () => {
   await Promise.all([agentsStore.loadRoles(), loadAgents(), loadRules(), settingsStore.loadConfig()])
+
+  // Handle query params from IM page navigation: ?tab=agents&edit=agentName
+  const tabQuery = route.query.tab as string | undefined
+  if (tabQuery === 'agents' || tabQuery === 'roles' || tabQuery === 'rules' || tabQuery === 'conference') {
+    activeTab.value = tabQuery
+  }
+  const editQuery = route.query.edit as string | undefined
+  if (editQuery) {
+    const agent = agents.value.find((a) => a.name === editQuery)
+    if (agent) openEditAgent(agent)
+    // Clean up query params
+    router.replace({ path: route.path })
+  }
 })
 
 async function loadAgents() {
@@ -194,6 +216,10 @@ function handleChat(role: AgentRole) {
   router.push({ path: '/chat', query: { role: role.name, roleTitle: role.title || role.name } })
 }
 
+function handleAgentChat(agent: AgentConfig) {
+  router.push({ path: '/chat', query: { role: agent.name, roleTitle: agent.display_name || agent.name } })
+}
+
 function toggleRoleDetail(roleName: string) {
   expandedRole.value = expandedRole.value === roleName ? null : roleName
 }
@@ -217,6 +243,7 @@ function openAddAgentDialog() {
 
 function closeAddAgentDialog() {
   showAddAgent.value = false
+  showAddAdvanced.value = false
   errorMsg.value = ''
   resetAddAgentDialog()
 }
@@ -266,16 +293,29 @@ const filteredAgents = computed(() => {
   )
 })
 
+const runtimeBackedProviders = computed(() =>
+  (settingsStore.runtimeProviders ?? []).filter((provider) => provider.enabled),
+)
+
 const runtimeProviderOptions = computed(() =>
-  settingsStore.enabledProviders.map((provider) => ({
+  runtimeBackedProviders.value.map((provider) => ({
     key: provider.backendKey || provider.name || provider.id,
     label: provider.name,
-    models: provider.models,
   })),
 )
 
 function modelsForProvider(providerKey: string) {
-  return runtimeProviderOptions.value.find((provider) => provider.key === providerKey)?.models ?? []
+  const modelMap = new Map<string, { id: string; name: string }>()
+  for (const model of settingsStore.availableModels) {
+    if (model.providerKey !== providerKey) continue
+    if (!modelMap.has(model.modelId)) {
+      modelMap.set(model.modelId, {
+        id: model.modelId,
+        name: model.modelName,
+      })
+    }
+  }
+  return [...modelMap.values()]
 }
 
 function syncAgentModelSelection(agent: AgentConfig) {
@@ -314,27 +354,36 @@ watch(activeTab, () => {
 })
 
 const registerFormValid = computed(() => {
-  const models = modelsForProvider(newAgent.value.provider)
-  return (
-    newAgent.value.name.trim() !== '' &&
-    newAgent.value.provider.trim() !== '' &&
-    newAgent.value.model.trim() !== '' &&
-    models.some((model) => model.id === newAgent.value.model)
-  )
+  if (newAgent.value.name.trim() === '') return false
+  const hasProvider = newAgent.value.provider.trim() !== ''
+  const hasModel = newAgent.value.model.trim() !== ''
+  // Both empty → use global default LLM (valid)
+  if (!hasProvider && !hasModel) return true
+  // Both set → validate model exists under provider
+  if (hasProvider && hasModel) {
+    return modelsForProvider(newAgent.value.provider).some((m) => m.id === newAgent.value.model)
+  }
+  // Only one set → invalid (backend requires both or neither)
+  return false
 })
 
 const editFormValid = computed(() => {
-  const models = modelsForProvider(editingAgent.value.provider)
-  return (
-    editingAgent.value.name.trim() !== '' &&
-    editingAgent.value.provider.trim() !== '' &&
-    editingAgent.value.model.trim() !== '' &&
-    models.some((model) => model.id === editingAgent.value.model)
-  )
+  if (editingAgent.value.name.trim() === '') return false
+  const hasProvider = editingAgent.value.provider.trim() !== ''
+  const hasModel = editingAgent.value.model.trim() !== ''
+  if (!hasProvider && !hasModel) return true
+  if (hasProvider && hasModel) {
+    return modelsForProvider(editingAgent.value.provider).some((m) => m.id === editingAgent.value.model)
+  }
+  return false
 })
 
 async function handleRegisterAgent() {
   if (registering.value) return
+  if (runtimeProviderOptions.value.length === 0) {
+    errorMsg.value = t('agents.noRuntimeProviders', '当前没有可用的运行时模型，请先在设置中应用至少一个服务商')
+    return
+  }
   if (!registerFormValid.value) {
     errorMsg.value = t('agents.formIncomplete', '请完善必填字段')
     return
@@ -570,10 +619,28 @@ async function handleUnregisterAgent() {
                   </span>
                 </div>
                 <div class="flex items-center gap-3 mt-1 text-xs" :style="{ color: 'var(--hc-text-muted)' }">
-                  <span>{{ agent.provider }}</span>
-                  <span>{{ agent.model }}</span>
+                  <span v-if="agent.provider && agent.model">{{ agent.provider }} · {{ agent.model }}</span>
+                  <span v-else>{{ t('agents.useGlobalDefault') }}</span>
+                </div>
+                <div v-if="getAgentDeployedPlatforms(agent.name).length > 0" class="flex items-center gap-1.5 mt-1.5">
+                  <span
+                    v-for="p in getAgentDeployedPlatforms(agent.name)"
+                    :key="p"
+                    class="px-1.5 py-0.5 rounded text-[10px] font-medium"
+                    :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
+                  >
+                    {{ p }}
+                  </span>
                 </div>
               </div>
+              <button
+                class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium"
+                :style="{ background: 'var(--hc-accent)', color: '#fff' }"
+                @click="handleAgentChat(agent)"
+              >
+                <MessageSquare :size="12" />
+                {{ t('agents.chat') }}
+              </button>
               <button
                 v-if="agent.name !== defaultAgent"
                 class="p-1.5 rounded-md hover:bg-white/5 transition-colors text-xs"
@@ -694,41 +761,34 @@ async function handleUnregisterAgent() {
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.displayName') }}</label>
                 <input v-model="newAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="My Agent" />
               </div>
-              <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.provider') }}</label>
-                <select
-                  v-model="newAgent.provider"
-                  class="rounded-lg border px-3 py-2 text-sm outline-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-                >
-                  <option value="">{{ t('settings.llm.selectProvider') }}</option>
-                  <option
-                    v-for="provider in runtimeProviderOptions"
-                    :key="provider.key"
-                    :value="provider.key"
-                  >
-                    {{ provider.label }}
-                  </option>
-                </select>
-              </div>
-              <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
-                <select
-                  v-model="newAgent.model"
-                  class="rounded-lg border px-3 py-2 text-sm outline-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-                  :disabled="!newAgent.provider"
-                >
-                  <option value="">{{ t('settings.llm.models') }}</option>
-                  <option
-                    v-for="model in modelsForProvider(newAgent.provider)"
-                    :key="model.id"
-                    :value="model.id"
-                  >
-                    {{ model.name }}
-                  </option>
-                </select>
-              </div>
+              <!-- Advanced: model preference (collapsed by default) -->
+              <button
+                type="button"
+                class="flex items-center gap-1.5 text-xs font-medium mt-1"
+                :style="{ color: 'var(--hc-text-muted)' }"
+                @click="showAddAdvanced = !showAddAdvanced"
+              >
+                <ChevronDown v-if="!showAddAdvanced" :size="12" />
+                <ChevronUp v-else :size="12" />
+                {{ t('agents.modelPreference', 'Model preference') }}
+                <span v-if="!newAgent.provider" class="font-normal">— {{ t('agents.useGlobalDefault') }}</span>
+                <span v-else class="font-normal">— {{ newAgent.provider }} / {{ newAgent.model || '...' }}</span>
+              </button>
+              <template v-if="showAddAdvanced">
+                <div class="flex flex-col gap-1.5">
+                  <label class="text-[12px]" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.modelPreferenceHint', 'When entering this agent conversation, auto-switch to this model. Leave empty to use the global default.') }}</label>
+                  <select v-model="newAgent.provider" class="hc-input">
+                    <option value="">{{ t('agents.useGlobalDefault') }}</option>
+                    <option v-for="provider in runtimeProviderOptions" :key="provider.key" :value="provider.key">{{ provider.label }}</option>
+                  </select>
+                </div>
+                <div v-if="newAgent.provider" class="flex flex-col gap-1.5">
+                  <select v-model="newAgent.model" class="hc-input">
+                    <option value="">{{ t('settings.llm.models') }}</option>
+                    <option v-for="model in modelsForProvider(newAgent.provider)" :key="model.id" :value="model.id">{{ model.name }}</option>
+                  </select>
+                </div>
+              </template>
             </div>
             <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
               <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeAddAgentDialog">
@@ -776,8 +836,7 @@ async function handleUnregisterAgent() {
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.provider') }}</label>
                 <select
                   v-model="editingAgent.provider"
-                  class="rounded-lg border px-3 py-2 text-sm outline-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  class="hc-input"
                 >
                   <option
                     v-if="
@@ -801,8 +860,7 @@ async function handleUnregisterAgent() {
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
                 <select
                   v-model="editingAgent.model"
-                  class="rounded-lg border px-3 py-2 text-sm outline-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  class="hc-input"
                   :disabled="!editingAgent.provider"
                 >
                   <option

@@ -53,6 +53,7 @@ vi.mock('@/api/websocket', () => ({
     clearCallbacks: vi.fn(), clearStreamCallbacks: vi.fn(),
     onChunk: vi.fn().mockReturnValue(() => {}), onReply: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}), onApprovalRequest: vi.fn().mockReturnValue(() => {}),
+    onMemorySaved: vi.fn().mockReturnValue(() => {}),
     sendMessage: vi.fn(), sendRaw: vi.fn(), triggerError: vi.fn(),
   },
 }))
@@ -118,7 +119,7 @@ describe('集成: 模型配置 → 模型选择 → 发消息', () => {
     expect(chatSvc.sendViaBackend).toHaveBeenCalledWith(
       '你好', expect.any(String),
       expect.objectContaining({ model: 'qwen3:8b', provider: expect.stringContaining('Ollama') }),
-      '', undefined,
+      '', undefined, undefined, expect.any(String),
     )
   })
 })
@@ -300,7 +301,7 @@ describe('集成: Agent 角色 → 对话', () => {
     // 验证 sendViaBackend 收到了 role
     expect(chatSvc.sendViaBackend).toHaveBeenCalledWith(
       expect.any(String), expect.any(String),
-      expect.any(Object), 'researcher', undefined,
+      expect.any(Object), 'researcher', undefined, undefined, expect.any(String),
     )
 
     // Step 2: 退出 research 模式
@@ -312,7 +313,7 @@ describe('集成: Agent 角色 → 对话', () => {
     expect(chat.agentRole).toBe('')
     expect(chatSvc.sendViaBackend).toHaveBeenLastCalledWith(
       expect.any(String), expect.any(String),
-      expect.any(Object), '', undefined,
+      expect.any(Object), '', undefined, undefined, expect.any(String),
     )
   })
 })
@@ -518,9 +519,9 @@ describe('系统: 路径参数安全', () => {
     await uninstallSkill(dangerous)
     expect(mockApi).toHaveBeenCalledWith('DELETE', `/api/v1/skills/${encodeURIComponent(dangerous)}`)
 
-    // deleteMemory
-    const { deleteMemory } = await import('@/api/memory')
-    await deleteMemory(dangerous)
+    // deleteMemoryEntry
+    const { deleteMemoryEntry } = await import('@/api/memory')
+    await deleteMemoryEntry(dangerous)
     expect(mockApi).toHaveBeenCalledWith('DELETE', `/api/v1/memory/${encodeURIComponent(dangerous)}`)
 
     // removeMcpServer

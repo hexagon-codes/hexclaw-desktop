@@ -207,8 +207,9 @@ describe('Issue #6: LogsView i18n — no hardcoded Chinese strings', () => {
     expect(src).not.toContain('"刚刚"')
   })
 
-  it('uses t("logs.justNow") for relative time', () => {
-    expect(src).toContain("t('logs.justNow'")
+  it('imports formatRelative from utils/time', () => {
+    expect(src).toContain("formatRelative")
+    expect(src).toContain("from '@/utils/time'")
   })
 
   it('en.ts has logs.justNow key', () => {
@@ -219,10 +220,10 @@ describe('Issue #6: LogsView i18n — no hardcoded Chinese strings', () => {
     expect(zhLocale).toMatch(/justNow:\s*['"]/)
   })
 
-  it('formatRelativeTime function uses i18n, not hardcoded strings', () => {
+  it('formatRelativeTime delegates to formatRelative from utils/time', () => {
     const fnStart = src.indexOf('function formatRelativeTime')
     const fnBody = src.slice(fnStart, fnStart + 400)
-    expect(fnBody).toContain("t('logs.justNow'")
+    expect(fnBody).toContain('formatRelative(ts, now.value)')
     // Should not contain literal Chinese characters
     expect(fnBody).not.toMatch(/[\u4e00-\u9fff]/)
   })

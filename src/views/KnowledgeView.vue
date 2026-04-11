@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { BookOpen, Upload, Trash2, Search, FileText, X, FileUp, RefreshCw, AlertTriangle } from 'lucide-vue-next'
+import { BookOpen, Upload, Trash2, Search, X, FileUp, RefreshCw, AlertTriangle } from 'lucide-vue-next'
 import {
   getDocuments,
   getDocumentContent,
@@ -18,6 +18,7 @@ import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
 import { parseDocument } from '@/utils/file-parser'
 import { logger } from '@/utils/logger'
 
@@ -25,9 +26,11 @@ const ACCEPTED_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.xlsx', '.xls',
 const props = withDefaults(
   defineProps<{
     knowledgeEnabled?: boolean
+    documentSearch?: string
   }>(),
   {
     knowledgeEnabled: true,
+    documentSearch: '',
   },
 )
 const knowledgeEnabled = computed(() => props.knowledgeEnabled)
@@ -59,6 +62,24 @@ let searchRequestGen = 0
 const selectedDoc = ref<KnowledgeDoc | null>(null)
 const showDocDetail = ref(false)
 const reindexingDocIds = ref<Set<string>>(new Set())
+const normalizedDocumentSearch = computed(() => props.documentSearch.trim().toLowerCase())
+const filteredDocs = computed(() => {
+  const query = normalizedDocumentSearch.value
+  if (!query) return docs.value
+  return docs.value.filter((doc) => {
+    const searchable = [
+      doc.title,
+      doc.source,
+      doc.content,
+      doc.status,
+      doc.error_message,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+    return searchable.includes(query)
+  })
+})
 
 // File upload state
 const isDragging = ref(false)
@@ -402,6 +423,7 @@ async function processFiles(files: FileList) {
           entry.progress = 100
           uploadedAny = true
         } catch (e) {
+          let uploadError = e
           if (isKnowledgeUploadEndpointMissing(e) || isKnowledgeUploadUnsupportedFormat(e)) {
             try {
               await uploadDocumentThroughLegacyFallback(file, updateProgress)
@@ -410,12 +432,12 @@ async function processFiles(files: FileList) {
               uploadedAny = true
               return
             } catch (fallbackError) {
-              e = fallbackError
+              uploadError = fallbackError
             }
           }
 
           entry.status = 'error'
-          entry.error = e instanceof Error ? e.message : t('knowledge.uploadFailed')
+          entry.error = uploadError instanceof Error ? uploadError.message : t('knowledge.uploadFailed')
         }
       })(),
     )
@@ -647,90 +669,91 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
         </EmptyState>
 
         <template v-else>
-          <!-- 统计栏 -->
           <div
-            class="flex items-center gap-6 mb-4 px-4 py-3 rounded-xl border"
-            :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
+            v-if="revalidating"
+            class="max-w-2xl mb-3 flex items-center gap-1.5 text-xs"
+            :style="{ color: 'var(--hc-text-muted)' }"
           >
-            <div class="flex items-center gap-2">
-              <FileText :size="14" :style="{ color: 'var(--hc-accent)' }" />
-              <span class="text-xs" :style="{ color: 'var(--hc-text-secondary)' }">{{
-                t('knowledge.docCount', { count: totalDocs })
-              }}</span>
-            </div>
-            <div v-if="revalidating" class="flex items-center gap-1.5">
-              <RefreshCw :size="12" class="animate-spin" :style="{ color: 'var(--hc-text-muted)' }" />
-              <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('knowledge.syncing') }}</span>
-            </div>
+            <RefreshCw :size="12" class="animate-spin" />
+            <span>{{ t('knowledge.syncing') }}</span>
           </div>
 
           <!-- 文档列表 -->
-          <div class="space-y-3 max-w-2xl">
-            <div
-              v-for="doc in docs"
-              :key="doc.id"
-              class="flex items-center gap-4 rounded-xl border p-4"
-              :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
-            >
-              <button class="flex-1 min-w-0 text-left" @click="openDocDetail(doc)">
-                <div class="flex items-center gap-2">
-                  <span
-                    class="text-sm font-medium truncate"
-                    :style="{ color: 'var(--hc-text-primary)' }"
-                  >
-                    {{ doc.title }}
-                  </span>
-                  <span
-                    class="text-[10px] px-2 py-0.5 rounded-full"
-                    :style="getDocStatusStyle(doc)"
-                  >
-                    {{ getDocStatusLabel(doc) }}
-                  </span>
-                </div>
-                <div
-                  class="flex items-center gap-3 mt-1 text-xs"
-                  :style="{ color: 'var(--hc-text-muted)' }"
-                >
-                  <span>{{ doc.chunk_count }} chunks</span>
-                  <span v-if="doc.source">{{ t('knowledge.source') }}: {{ doc.source }}</span>
-                  <span>{{
-                    new Date(doc.updated_at || doc.created_at).toLocaleDateString(locale)
-                  }}</span>
-                </div>
-                <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626">
-                  {{ doc.error_message }}
-                </p>
-              </button>
-              <button
-                class="px-2 py-1 rounded-md text-xs hover:bg-white/5 transition-colors"
-                :style="{ color: 'var(--hc-text-secondary)' }"
-                :disabled="!knowledgeEnabled || reindexingDocIds.has(doc.id)"
-                @click="handleReindex(doc)"
+          <div data-testid="knowledge-doc-list" class="space-y-3 max-w-2xl">
+            <template v-if="filteredDocs.length > 0">
+              <div
+                v-for="doc in filteredDocs"
+                :key="doc.id"
+                data-testid="knowledge-doc-card"
+                class="group flex items-center gap-3 rounded-2xl border px-4 py-3.5 transition-colors"
+                :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
               >
-                <span class="inline-flex items-center gap-1">
-                  <RefreshCw :size="12" :class="{ 'animate-spin': reindexingDocIds.has(doc.id) }" />
-                  {{
-                    getDocStatus(doc) === 'failed'
-                      ? t('knowledge.retryIndex')
-                      : t('knowledge.reindex')
-                  }}
-                </span>
-              </button>
-              <button
-                class="p-1.5 rounded-md hover:bg-white/5 transition-colors"
-                :style="{ color: 'var(--hc-error)' }"
-                :title="t('common.delete')"
-                :disabled="!knowledgeEnabled"
-                @click="confirmDelete(doc)"
-              >
-                <Trash2 :size="16" />
-              </button>
-            </div>
+                <button class="flex-1 min-w-0 text-left py-0.5" @click="openDocDetail(doc)">
+                  <div class="flex items-center gap-2">
+                    <span
+                      class="text-sm font-medium truncate"
+                      :style="{ color: 'var(--hc-text-primary)' }"
+                    >
+                      {{ doc.title }}
+                    </span>
+                    <span
+                      class="text-[10px] px-2 py-0.5 rounded-full"
+                      :style="getDocStatusStyle(doc)"
+                    >
+                      {{ getDocStatusLabel(doc) }}
+                    </span>
+                  </div>
+                  <div
+                    class="flex items-center gap-3 mt-1 text-xs"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                  >
+                    <span>{{ doc.chunk_count }} chunks</span>
+                    <span v-if="doc.source">{{ t('knowledge.source') }}: {{ doc.source }}</span>
+                    <span>{{
+                      new Date(doc.updated_at || doc.created_at).toLocaleDateString(locale)
+                    }}</span>
+                  </div>
+                  <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626">
+                    {{ doc.error_message }}
+                  </p>
+                </button>
+                <div data-testid="knowledge-doc-actions" class="shrink-0 flex items-center gap-1">
+                  <button
+                    class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
+                    :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
+                    :disabled="!knowledgeEnabled || reindexingDocIds.has(doc.id)"
+                    @click="handleReindex(doc)"
+                  >
+                    <RefreshCw :size="12" :class="{ 'animate-spin': reindexingDocIds.has(doc.id) }" />
+                    {{
+                      getDocStatus(doc) === 'failed'
+                        ? t('knowledge.retryIndex')
+                        : t('knowledge.reindex')
+                    }}
+                  </button>
+                  <button
+                    class="p-1.5 rounded-lg transition-colors"
+                    :style="{ color: 'var(--hc-error)', background: 'color-mix(in srgb, var(--hc-error) 8%, transparent)' }"
+                    :title="t('common.delete')"
+                    :disabled="!knowledgeEnabled"
+                    @click="confirmDelete(doc)"
+                  >
+                    <Trash2 :size="16" />
+                  </button>
+                </div>
+              </div>
+            </template>
+            <EmptyState
+              v-else
+              :icon="Search"
+              :title="t('knowledge.noResults')"
+              :description="t('knowledge.noResultsDesc')"
+            />
           </div>
         </template>
       </template>
 
-      <!-- 搜索测试标签 -->
+      <!-- 检索测试标签 -->
       <template v-else>
         <div class="max-w-2xl">
           <p class="text-sm mb-4" :style="{ color: 'var(--hc-text-secondary)' }">
@@ -738,18 +761,13 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
           </p>
 
           <div class="flex gap-2 mb-6">
-            <input
+            <SearchInput
               v-model="searchQuery"
-              type="text"
-              class="flex-1 rounded-lg border px-3 py-2 text-sm outline-none"
-              :style="{
-                background: 'var(--hc-bg-input)',
-                borderColor: 'var(--hc-border)',
-                color: 'var(--hc-text-primary)',
-              }"
+              class="flex-1"
+              :fluid="true"
               :disabled="!knowledgeEnabled"
               :placeholder="t('knowledge.searchPlaceholder')"
-              @keydown.enter="handleSearch"
+              @submit="handleSearch"
             />
             <button
               class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"

@@ -138,12 +138,10 @@ async function fetchStats() {
     const mcpRes = await safeFetch(() => getMcpServers(), 'mcp')
     stats.value.mcpServers = mcpRes?.servers?.length || 0
 
-    const { getMemory } = await import('@/api/memory')
-    const memRes = await safeFetch(() => getMemory(), 'memory')
+    const { getMemoryEntries } = await import('@/api/memory')
+    const memRes = await safeFetch(() => getMemoryEntries({ view: 'all', limit: 1 }), 'memory')
     if (memRes) {
-      stats.value.memoryEntries = typeof memRes.content === 'string'
-        ? (memRes.content.trim() ? 1 : 0)
-        : Object.keys(memRes.content || {}).length
+      stats.value.memoryEntries = memRes.total ?? memRes.entries.length
     }
 
     const { getDocuments } = await import('@/api/knowledge')

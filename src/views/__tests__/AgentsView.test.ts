@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -17,6 +18,10 @@ const { getRoles, getAgents, getRules, addRule, deleteRule, setDefaultAgent, reg
   updateAgent: vi.fn(),
 }))
 
+const { getOllamaStatus } = vi.hoisted(() => ({
+  getOllamaStatus: vi.fn(),
+}))
+
 vi.mock('@/api/config', () => ({
   getLLMConfig: vi.fn().mockResolvedValue({
     default: '智谱',
@@ -32,6 +37,10 @@ vi.mock('@/api/config', () => ({
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
   }),
   updateLLMConfig: vi.fn(),
+}))
+
+vi.mock('@/api/ollama', () => ({
+  getOllamaStatus,
 }))
 
 vi.mock('@/utils/secure-store', () => ({
@@ -113,6 +122,7 @@ describe('AgentsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     ;(globalThis as Record<string, unknown>).isTauri = true
+    getOllamaStatus.mockResolvedValue({ running: false, models: [] })
 
     getRoles.mockResolvedValue({
       roles: [
@@ -171,14 +181,133 @@ describe('AgentsView', () => {
     await registerButton!.trigger('click')
     await flushPromises()
 
+    // Model preference is collapsed by default — expand it
+    const advancedToggle = wrapper.findAll('button').find((b) => b.text().includes('模型偏好'))
+    expect(advancedToggle?.exists()).toBe(true)
+    await advancedToggle!.trigger('click')
+    await flushPromises()
+
     const selects = wrapper.findAll('select')
-    expect(selects).toHaveLength(2)
-    expect(selects[0]!.text()).toContain('智谱')
+    expect(selects.length).toBeGreaterThanOrEqual(1)
+    await vi.waitFor(async () => {
+      await nextTick()
+      expect(selects[0]!.text()).toContain('智谱')
+    })
 
     await selects[0]!.setValue('智谱')
     await flushPromises()
 
-    expect(selects[1]!.text()).toContain('glm-5')
+    const modelSelect = wrapper.findAll('select')[1]
+    expect(modelSelect!.text()).toContain('glm-5')
+  })
+
+  it('uses the shared hc-input select style in the register dialog', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const agentsTab = wrapper.findAll('button').find((button) => button.text().includes('注册的 Agent'))
+    await agentsTab!.trigger('click')
+    await flushPromises()
+
+    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('注册智能体'))
+    await registerButton!.trigger('click')
+    await flushPromises()
+
+    // Expand advanced section
+    const advancedToggle = wrapper.findAll('button').find((b) => b.text().includes('模型偏好'))
+    await advancedToggle!.trigger('click')
+    await flushPromises()
+
+    const selects = wrapper.findAll('select')
+    expect(selects.length).toBeGreaterThanOrEqual(1)
+    expect(selects[0]!.classes()).toContain('hc-input')
+  })
+
+  it('shows only runtime-backed providers in the register form', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const { useSettingsStore } = await import('@/stores/settings')
+    const settingsStore = useSettingsStore()
+    settingsStore.config!.llm.providers = [
+      {
+        id: 'local-ollama',
+        backendKey: 'ollama',
+        name: 'Ollama (本地)',
+        type: 'ollama',
+        enabled: true,
+        apiKey: '',
+        baseUrl: 'http://127.0.0.1:11434',
+        models: [{ id: 'qwen3.5:9b', name: 'qwen3.5:9b', capabilities: ['text'] }],
+      },
+      ...settingsStore.config!.llm.providers,
+    ]
+    settingsStore.runtimeProviders = [
+      {
+        id: 'runtime-zhipu',
+        backendKey: '智谱',
+        name: '智谱',
+        type: 'zhipu',
+        enabled: true,
+        apiKey: '****zhipu',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        models: [{ id: 'glm-5', name: 'glm-5', capabilities: ['text'] }],
+      },
+    ]
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { activeTab: string; showAddAgent: boolean; showAddAdvanced: boolean }
+    vm.activeTab = 'agents'
+    vm.showAddAgent = true
+    vm.showAddAdvanced = true
+    await flushPromises()
+
+    const providerSelect = wrapper.findAll('select')[0]
+    expect(providerSelect?.text()).toContain('智谱')
+    expect(providerSelect?.text()).not.toContain('Ollama (本地)')
+  })
+
+  it('uses available runtime models for Ollama providers when registering', async () => {
+    getOllamaStatus.mockResolvedValue({
+      running: true,
+      models: [{ name: 'qwen3.5:9b' }, { name: 'qwen3:0.6b' }],
+    })
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const { useSettingsStore } = await import('@/stores/settings')
+    const settingsStore = useSettingsStore()
+    settingsStore.runtimeProviders = [
+      {
+        id: 'runtime-ollama',
+        backendKey: 'ollama',
+        name: 'Ollama (本地)',
+        type: 'ollama',
+        enabled: true,
+        apiKey: '',
+        baseUrl: 'http://127.0.0.1:11434',
+        models: [],
+      },
+    ]
+    settingsStore.config!.llm.providers = [...settingsStore.runtimeProviders]
+    await settingsStore.syncOllamaModels()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { activeTab: string; showAddAgent: boolean; showAddAdvanced: boolean; newAgent: { provider: string } }
+    vm.activeTab = 'agents'
+    vm.showAddAgent = true
+    vm.showAddAdvanced = true
+    await flushPromises()
+
+    const providerSelect = wrapper.findAll('select')[0]
+    await providerSelect!.setValue('ollama')
+    await flushPromises()
+
+    // Model select appears after provider is set (v-if), re-query
+    const modelSelect = wrapper.findAll('select')[1]
+    expect(modelSelect!.text()).toContain('qwen3.5:9b')
+    expect(modelSelect!.text()).toContain('qwen3:0.6b')
   })
 
   it('does not start a second register request while the first one is still running', async () => {

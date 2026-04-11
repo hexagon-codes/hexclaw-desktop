@@ -28,6 +28,7 @@ const {
   setLastSessionId,
   ensureWebSocketConnected,
   sendViaWebSocket,
+  openWebSocketStream,
   sendViaBackend,
   clearWebSocketCallbacks,
   mockApiSaveWorkflow,
@@ -51,6 +52,10 @@ const {
   setLastSessionId: vi.fn(),
   ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
   sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
+  openWebSocketStream: vi.fn().mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+  }),
   sendViaBackend: vi.fn().mockResolvedValue({ reply: 'Hello!', session_id: 's1' }),
   clearWebSocketCallbacks: vi.fn(),
   mockApiSaveWorkflow: vi.fn(),
@@ -122,6 +127,7 @@ vi.mock('@/services/chatService', () => {
   return {
     ensureWebSocketConnected,
     sendViaWebSocket,
+    openWebSocketStream,
     sendViaBackend,
     clearWebSocketCallbacks,
     ChatRequestError,
@@ -182,6 +188,10 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
   localStorage.clear()
+  openWebSocketStream.mockReturnValue({
+    cancel: vi.fn(),
+    done: Promise.resolve({ content: 'Hello!', metadata: undefined, toolCalls: undefined, agentName: undefined }),
+  })
 })
 
 afterEach(() => {
@@ -340,21 +350,28 @@ describe('Journey 2: Chat message send chain with file attachment', () => {
     // Simulate: WS available
     ensureWebSocketConnected.mockResolvedValue(true)
 
-    // Mock sendViaWebSocket to synchronously invoke callbacks
-    sendViaWebSocket.mockImplementation(
-      async (
+    // Mock request-scoped WebSocket stream to synchronously invoke callbacks
+    openWebSocketStream.mockImplementation(
+      (
         _text: string,
         _sessionId: string,
         _chatParams: unknown,
         _agentRole: string,
         _attachments: unknown,
-        callbacks?: { onChunk: (...args: unknown[]) => void; onDone: (...args: unknown[]) => void },
+        callbacks?: { onChunk: (...args: unknown[]) => void },
       ) => {
         // Simulate streaming chunks
         callbacks?.onChunk('Hello ', undefined)
         callbacks?.onChunk('World!', undefined)
-        // Simulate done
-        callbacks?.onDone('Hello World!', { backend_message_id: 'msg-ws-1' })
+        return {
+          cancel: vi.fn(),
+          done: Promise.resolve({
+            content: 'Hello World!',
+            metadata: { backend_message_id: 'msg-ws-1' },
+            toolCalls: undefined,
+            agentName: undefined,
+          }),
+        }
       },
     )
 

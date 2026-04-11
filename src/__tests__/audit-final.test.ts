@@ -1064,20 +1064,19 @@ describe('9. Residual issues scan', () => {
     expect(envContent).toContain('VITE_API_BASE')
     expect(envContent).toContain('VITE_WS_BASE')
 
-    // Verify the default fallback is localhost:16060 (for dev)
+    // Verify the default fallback matches the local sidecar bind address
     expect(envContent).toContain('http://localhost:16060')
 
     // Verify env config is exported as frozen object
     expect(envContent).toContain('Object.freeze')
   })
 
-  it('Ollama localhost:11434 in providers.ts is correct (Ollama default port)', () => {
+  it('Ollama address uses OLLAMA_BASE constant from env.ts', () => {
     const providersPath = path.join(SRC, 'config', 'providers.ts')
     const content = fs.readFileSync(providersPath, 'utf-8')
 
-    // 11434 is the standard Ollama port — this is not a "hardcoded URL" problem
-    expect(content).toContain('http://localhost:11434')
-    // It should be in the Ollama provider preset
+    // Ollama URL should reference OLLAMA_BASE constant, not hardcoded
+    expect(content).toContain('OLLAMA_BASE')
     expect(content).toContain('ollama')
   })
 })

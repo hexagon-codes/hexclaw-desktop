@@ -39,7 +39,7 @@ class MockWebSocket {
 
   private _dispatchListeners(type: string, event: Event) {
     const list = this._listeners[type] || []
-    for (const entry of [...list]) {
+    for (const entry of list.slice()) {
       entry.handler(event)
       if (entry.once) {
         this._listeners[type] = this._listeners[type]!.filter((l) => l !== entry)

@@ -153,6 +153,7 @@ vi.mock('@/api/websocket', () => ({
     clearCallbacks: vi.fn(), clearStreamCallbacks: vi.fn(),
     onChunk: vi.fn().mockReturnValue(() => {}), onReply: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}), onApprovalRequest: vi.fn().mockReturnValue(() => {}),
+    onMemorySaved: vi.fn().mockReturnValue(() => {}),
     sendMessage: vi.fn(), sendRaw: vi.fn(), triggerError: vi.fn(),
   },
 }))
@@ -247,6 +248,8 @@ describe('旅程 E: 多模型切换', () => {
   beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks() })
 
   it('Ollama + OpenAI 并存 → 各自可选 → Auto 模式', async () => {
+    vi.resetModules()
+    setActivePinia(createPinia())
     vi.doMock('@/api/ollama', () => ({
       getOllamaStatus: vi.fn().mockResolvedValue({
         running: true, model_count: 1, models: [{ name: 'qwen3:8b', size: 5e9 }],
@@ -262,7 +265,7 @@ describe('旅程 E: 多模型切换', () => {
         ],
         defaultModel: 'gpt-4o', defaultProviderId: 'oai', routing: { enabled: false, strategy: 'cost-aware' },
       },
-      security: {} as any, general: {} as any, notification: {} as any, mcp: {} as any,
+      security: {} as any, general: {} as any, notification: {} as any, mcp: {} as any, memory: { enabled: true },
     }
     store.runtimeProviders = store.config.llm.providers
     await store.syncOllamaModels()
@@ -278,14 +281,14 @@ describe('旅程 F: 记忆系统', () => {
 
   it('保存 → 搜索 → 删除', async () => {
     // 保存
-    mockApiFetch.mockResolvedValueOnce({ message: 'saved' })
-    const { saveMemory } = await import('@/api/memory')
-    await saveMemory('用户偏好：中文回复')
-    expect(mockApiFetch).toHaveBeenCalledWith('POST', '/api/v1/memory', { content: '用户偏好：中文回复', type: 'memory' })
+    mockApiFetch.mockResolvedValueOnce({ id: 'm-0', content: '用户偏好：中文回复', type: 'fact', source: 'manual', created_at: '', updated_at: '', hit_count: 0 })
+    const { createMemoryEntry } = await import('@/api/memory')
+    await createMemoryEntry('用户偏好：中文回复')
+    expect(mockApiFetch).toHaveBeenCalledWith('POST', '/api/v1/memory', { content: '用户偏好：中文回复', type: 'fact', source: 'manual' })
 
     // 搜索
     mockApiFetch.mockResolvedValueOnce({
-      results: ['用户偏好：中文回复'], vector_results: [{ content: '用户偏好：中文回复', score: 0.95, source: 'memory' }], total: 1,
+      results: [{ id: 'm-0', content: '用户偏好：中文回复', type: 'fact', source: 'manual', created_at: '', updated_at: '', hit_count: 1 }], vector_results: [{ content: '用户偏好：中文回复', score: 0.95, source: 'manual' }], total: 1,
     })
     const { searchMemory } = await import('@/api/memory')
     const res = await searchMemory('偏好')
@@ -293,8 +296,8 @@ describe('旅程 F: 记忆系统', () => {
 
     // 删除（验证 URI 编码）
     mockApiFetch.mockResolvedValueOnce({ message: 'deleted' })
-    const { deleteMemory } = await import('@/api/memory')
-    await deleteMemory('mem-中文')
+    const { deleteMemoryEntry } = await import('@/api/memory')
+    await deleteMemoryEntry('mem-中文')
     expect(mockApiFetch).toHaveBeenLastCalledWith('DELETE', `/api/v1/memory/${encodeURIComponent('mem-中文')}`)
   })
 })

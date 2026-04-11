@@ -5,6 +5,43 @@
  * 构建时通过 VITE_ 前缀注入，运行时通过 import.meta.env 读取。
  */
 
+function isTauriRuntime(): boolean {
+  return !!(globalThis as Record<string, unknown>).isTauri
+}
+
+const LEGACY_LOCAL_API_BASES = new Set([
+  'http://localhost:16060',
+  'http://localhost:16060',
+])
+
+const LEGACY_LOCAL_WS_BASES = new Set([
+  'ws://localhost:16060',
+  'ws://127.0.0.1:16060',
+])
+
+function resolveDevProxyBase(): string | null {
+  if (import.meta.env.PROD || isTauriRuntime()) return null
+  if (typeof window === 'undefined') return null
+  const origin = window.location?.origin
+  if (!origin || !/^https?:\/\//.test(origin)) return null
+  return `${origin.replace(/\/+$/, '')}/_hexclaw`
+}
+
+function normalizeLocalApiBase(base: string): string {
+  const normalized = base.replace(/\/+$/, '')
+  if (!LEGACY_LOCAL_API_BASES.has(normalized)) return normalized
+  return resolveDevProxyBase() ?? 'http://localhost:16060'
+}
+
+function normalizeLocalWsBase(base: string): string {
+  const normalized = base.replace(/\/+$/, '')
+  if (!LEGACY_LOCAL_WS_BASES.has(normalized)) return normalized
+  return (resolveDevProxyBase() ?? 'http://localhost:16060').replace(/^http/, 'ws')
+}
+
+/** Ollama 本地服务地址（与 CSP connect-src 保持一致，统一用 localhost） */
+export const OLLAMA_BASE = 'http://localhost:11434'
+
 /** 环境配置 */
 export interface EnvConfig {
   /** hexclaw 后端 API 基础地址 */
@@ -21,13 +58,15 @@ export interface EnvConfig {
 
 function resolveApiBase(): string {
   const envVal = import.meta.env.VITE_API_BASE as string | undefined
-  if (envVal) return envVal.replace(/\/+$/, '')
+  if (envVal) return normalizeLocalApiBase(envVal)
+  const devProxyBase = resolveDevProxyBase()
+  if (devProxyBase) return devProxyBase
   return 'http://localhost:16060'
 }
 
 function resolveWsBase(apiBase: string): string {
   const envVal = import.meta.env.VITE_WS_BASE as string | undefined
-  if (envVal) return envVal.replace(/\/+$/, '')
+  if (envVal) return normalizeLocalWsBase(envVal)
   // 从 HTTP 地址自动推导 WS 地址
   return apiBase.replace(/^http/, 'ws')
 }

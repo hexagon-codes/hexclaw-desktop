@@ -180,11 +180,11 @@ describe('Security: v-html is sanitized', () => {
 // ─── Security: secure-store hardcoded passphrase ──────────
 
 describe('Security: secure-store browser fallback', () => {
-  it('uses hardcoded passphrase in browser fallback (documented limitation)', () => {
+  it('fails closed in browser mode instead of persisting secrets to localStorage', () => {
     const code = readSrc('utils/secure-store.ts')
-    expect(code).toContain("enc.encode('hexclaw-desktop')")
-    expect(code).toContain('crypto.getRandomValues')
-    expect(code).toContain('DEVICE_SALT_KEY')
+    expect(code).toContain('volatileBrowserStore')
+    expect(code).not.toContain("enc.encode('hexclaw-desktop')")
+    expect(code).not.toContain('DEVICE_SALT_KEY')
   })
 })
 
@@ -271,17 +271,8 @@ describe('Performance: main.ts global listeners', () => {
 // ─── useAutoStart never used in UI ────────────────────────
 
 describe('Dead code: useAutoStart composable', () => {
-  it('is exported from composables/index.ts but never imported by any view or component', () => {
-    const viewAndComponentFiles = [
-      ...walkDir(resolve(SRC, 'views'), ['.vue']),
-      ...walkDir(resolve(SRC, 'components'), ['.vue']),
-    ]
-
-    const importers = viewAndComponentFiles.filter((f) => {
-      const content = readFileSync(f, 'utf-8')
-      return content.includes('useAutoStart')
-    })
-
-    expect(importers).toEqual([])
+  it('is no longer exported from composables/index.ts', () => {
+    const content = readSrc('composables/index.ts')
+    expect(content).not.toContain('useAutoStart')
   })
 })

@@ -1,14 +1,31 @@
 <script setup lang="ts">
-defineProps<{
+import { ref, watch } from 'vue'
+import SearchInput from '@/components/common/SearchInput.vue'
+
+const props = defineProps<{
   searchPlaceholder?: string
+  searchValue?: string
 }>()
 
 const emit = defineEmits<{
   search: [value: string]
+  'search-submit': []
 }>()
 
-function onInput(e: Event) {
-  emit('search', (e.target as HTMLInputElement).value)
+const internalSearch = ref(props.searchValue ?? '')
+
+watch(
+  () => props.searchValue,
+  (value) => {
+    if (value !== undefined && value !== internalSearch.value) {
+      internalSearch.value = value
+    }
+  },
+)
+
+function onSearchInput(value: string) {
+  internalSearch.value = value
+  emit('search', value)
 }
 </script>
 
@@ -17,11 +34,13 @@ function onInput(e: Event) {
     <div class="hc-toolbar__left">
       <slot name="tabs" />
       <div v-if="searchPlaceholder" class="hc-toolbar__search">
-        <input
-          type="text"
-          class="hc-toolbar__search-input"
+        <SearchInput
+          class="hc-toolbar__search-control"
+          :model-value="internalSearch"
+          :fluid="true"
           :placeholder="searchPlaceholder"
-          @input="onInput"
+          @update:model-value="onSearchInput"
+          @submit="emit('search-submit')"
         />
       </div>
       <slot name="center" />
@@ -63,28 +82,5 @@ function onInput(e: Event) {
   min-width: 200px;
   max-width: 320px;
   flex: 1;
-}
-
-.hc-toolbar__search-input {
-  width: 100%;
-  height: 28px;
-  border-radius: 8px;
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-input);
-  color: var(--hc-text-primary);
-  padding: 0 12px;
-  font-size: 12px;
-  font-family: inherit;
-  outline: none;
-  transition: border-color 0.2s, box-shadow 0.2s;
-}
-
-.hc-toolbar__search-input:focus {
-  border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
-}
-
-.hc-toolbar__search-input::placeholder {
-  color: var(--hc-text-muted);
 }
 </style>

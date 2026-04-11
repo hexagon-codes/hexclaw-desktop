@@ -180,8 +180,9 @@ async function testConnection() {
       msg: errMsg.includes('404') ? t('welcome.connectionTestUnavailable') : errMsg,
     }
   } finally {
-    if (testGen !== connectionTestGen) return
-    connectionTesting.value = false
+    if (testGen === connectionTestGen) {
+      connectionTesting.value = false
+    }
   }
 }
 

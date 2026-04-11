@@ -21,6 +21,14 @@ export default defineConfig({
     strictPort: true,
     host: host || false,
     hmr: host ? { protocol: 'ws', host, port: 5174 } : undefined,
+    proxy: {
+      '/_hexclaw': {
+        target: 'http://127.0.0.1:16060',
+        changeOrigin: true,
+        ws: true,
+        rewrite: (path) => path.replace(/^\/_hexclaw/, ''),
+      },
+    },
     watch: {
       ignored: ['**/src-tauri/**'],
     },

@@ -110,13 +110,44 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     expect(store.config!.llm.providers[0]!.id).toBe('testprovider')
   })
 
-  it('无任何 Tauri 标识时不应加载后端 LLM 配置', async () => {
+  it('无任何 Tauri 标识时，web 模式也应加载后端 LLM 配置', async () => {
     const { useSettingsStore } = await import('../settings')
     const store = useSettingsStore()
     await store.loadConfig()
 
-    expect(mockGetLLMConfig).not.toHaveBeenCalled()
-    expect(store.config!.llm.providers).toEqual([])
+    expect(mockGetLLMConfig).toHaveBeenCalledTimes(1)
+    expect(store.config!.llm.providers).toHaveLength(1)
+    expect(store.config!.llm.providers[0]!.id).toBe('testprovider')
+  })
+
+  it('web 模式 saveConfig 也应同步后端 LLM 配置', async () => {
+    mockGetLLMConfig.mockResolvedValue({
+      default: '',
+      providers: {},
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+    })
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+
+    const created = store.addProvider({
+      name: 'OpenAI',
+      type: 'openai',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.openai.com/v1',
+      models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+    })
+
+    store.config!.llm.defaultProviderId = created!.id
+    store.config!.llm.defaultModel = 'gpt-4o'
+
+    await store.saveConfig(store.config!)
+
+    expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(1)
+    expect(mockGetLLMConfig).toHaveBeenCalledTimes(2)
   })
 
   it('backendToProviders 正确转换后端数据', async () => {

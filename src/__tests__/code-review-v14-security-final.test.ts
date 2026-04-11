@@ -141,16 +141,16 @@ describe('Credential handling', () => {
   })
 
   it('secure storage is handled in TypeScript via Tauri LazyStore', () => {
-    // Secure storage moved from Rust keyring to TypeScript secure-store.ts
-    // using Tauri LazyStore with client-side encryption
+    // Secure storage moved from Rust keyring to TypeScript secure-store.ts.
+    // Tauri 桌面端使用 LazyStore；浏览器端不再做假安全持久化。
     expect(secureStore).toContain('LazyStore')
-    expect(secureStore).toContain('encrypt')
+    expect(secureStore).toContain('volatileBrowserStore')
     expect(secureStore).toContain('saveSecureValue')
   })
 
   it('loadSecureValue decrypts stored values', () => {
     expect(secureStore).toContain('loadSecureValue')
-    expect(secureStore).toContain('decrypt')
+    expect(secureStore).not.toContain("enc.encode('hexclaw-desktop')")
   })
 
   it('secure-store.ts never logs the actual key value', () => {
@@ -162,8 +162,9 @@ describe('Credential handling', () => {
     }
   })
 
-  it('secure-store.ts uses crypto.getRandomValues for device salt', () => {
-    expect(secureStore).toContain('crypto.getRandomValues')
+  it('secure-store.ts does not persist browser secrets in localStorage', () => {
+    expect(secureStore).toContain('volatileBrowserStore')
+    expect(secureStore).not.toContain('DEVICE_SALT_KEY')
   })
 })
 
