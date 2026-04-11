@@ -160,6 +160,7 @@ describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
     }
     const { handleSend } = useChatSend(deps as any)
     await handleSend('年假怎么请')
+    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
 
     // 验证 sendViaBackend 收到了注入 RAG 的 backendText
     const backendCall = chatSvc.sendViaBackend.mock.calls[0]!
@@ -189,6 +190,7 @@ describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
     }
     const { handleSend } = useChatSend(deps as any)
     await handleSend('帮我查个东西')
+    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
 
     // 对话正常进行，backendText 没有 RAG 注入
     const backendText = chatSvc.sendViaBackend.mock.calls[0]![0] as string
@@ -295,6 +297,7 @@ describe('集成: Agent 角色 → 对话', () => {
     chat.chatMode = 'research'
     chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '正在研究...', metadata: {} })
     await handleSend('研究一下 Vue 4 的新特性')
+    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
 
     // 验证 agentRole 被设置
     expect(chat.agentRole).toBe('researcher')
@@ -351,6 +354,7 @@ describe('集成: 多类型附件处理', () => {
     const vidFile = new File(['vid'], 'demo.mp4', { type: 'video/mp4' })
 
     await handleSend('看看这些', [imgFile, vidFile])
+    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
 
     const sendCall = chatSvc.sendViaBackend.mock.calls[0]!
     // attachments 是第 5 个参数

@@ -114,7 +114,7 @@ describe('BUG 10: confirmEdit / handleRetry model guard ordering', () => {
     const fnEnd = src.indexOf('async function handleLike')
     const fnBody = src.slice(fnStart, fnEnd)
     // Should check model and return
-    expect(fnBody).toMatch(/if\s*\(!model/)
+    expect(fnBody).toMatch(/model\s*!==\s*undefined/)
     expect(fnBody).toContain('return')
   })
 })

@@ -59,6 +59,7 @@ const messagesContainerRef = ref<HTMLDivElement>()
 const thinkingContentRef = ref<HTMLDivElement>()
 const showScrollToBottom = ref(false)
 const showScrollToTop = ref(false)
+const userScrolledUp = ref(false)
 const showSessions = ref(true)
 const sidebarWidth = ref(260)
 const hoveredMsgId = ref<string | null>(null)
@@ -483,10 +484,12 @@ function getMessageArtifacts(messageId: string) {
 }
 
 let _scrollTimer: ReturnType<typeof setTimeout> | null = null
-function scrollToBottom() {
+function scrollToBottom(force = false) {
+  if (!force && userScrolledUp.value) return // 用户主动向上滚动时不自动跟随
   if (_scrollTimer) return // throttle: max 1 scroll per 100ms
   _scrollTimer = setTimeout(() => {
     messagesEndRef.value?.scrollIntoView({ behavior: 'smooth' })
+    userScrolledUp.value = false
     _scrollTimer = null
   }, 100)
 }
@@ -500,6 +503,8 @@ function handleMessagesScroll() {
   if (!el) return
   const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
   const distanceFromTop = el.scrollTop
+  // 用户向上滚动超过 100px → 标记为主动滚动，停止自动跟随
+  userScrolledUp.value = distanceFromBottom > 100
   showScrollToBottom.value = distanceFromBottom > 200
   showScrollToTop.value = distanceFromTop > 200 && distanceFromBottom < 100
 }
@@ -1215,7 +1220,7 @@ function startSidebarResize(event: MouseEvent) {
           <button
             v-if="showScrollToBottom"
             class="hc-chat__scroll-btn hc-chat__scroll-btn--bottom"
-            @click="scrollToBottom"
+            @click="scrollToBottom(true)"
           >
             <ChevronDown :size="18" />
           </button>
