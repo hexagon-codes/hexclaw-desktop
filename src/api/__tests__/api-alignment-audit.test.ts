@@ -441,14 +441,14 @@ describe('Webhook API alignment: webhook.ts vs handler_webhook.go', () => {
 describe('Config API alignment: settings.ts vs handler_extended.go', () => {
   it('updateConfig sends PUT /api/v1/config (partial update)', () => {
     const settingsSource = readFrontendFile('settings.ts')
-    // Frontend: apiPut<AppConfig>('/api/v1/config', config)
-    expect(settingsSource).toContain("apiPut<AppConfig>('/api/v1/config'")
-    // Backend handleUpdateFullConfig only handles security sub-object
-    // Frontend type AppConfig is broader than what backend actually processes
+    // Frontend: apiPut<ConfigUpdateResponse>('/api/v1/config', config)
+    expect(settingsSource).toContain("apiPut<ConfigUpdateResponse>('/api/v1/config'")
+    expect(settingsSource).toContain('RuntimeConfigUpdateRequest')
+    // Backend handleUpdateFullConfig handles security + sandbox sub-objects
   })
 
   it('BackendRuntimeConfig aligns with handleGetFullConfig response', () => {
-    // Backend returns: server, llm, knowledge, mcp, cron, webhook, canvas, voice, security
+    // Backend returns: server, llm, knowledge, mcp, cron, webhook, canvas, voice, sandbox, security
     // Frontend BackendRuntimeConfig has all these sections
     // ALIGNED
     const settingsTypes = readFrontendType('settings.ts')
@@ -460,7 +460,14 @@ describe('Config API alignment: settings.ts vs handler_extended.go', () => {
     expect(settingsTypes).toContain('webhook:')
     expect(settingsTypes).toContain('canvas:')
     expect(settingsTypes).toContain('voice:')
+    expect(settingsTypes).toContain('sandbox:')
     expect(settingsTypes).toContain('security:')
+  })
+
+  it('ConfigUpdateResponse aligns with backend PUT /api/v1/config success response', () => {
+    const settingsTypes = readFrontendType('settings.ts')
+    expect(settingsTypes).toContain('export interface ConfigUpdateResponse')
+    expect(settingsTypes).toContain('message: string')
   })
 })
 

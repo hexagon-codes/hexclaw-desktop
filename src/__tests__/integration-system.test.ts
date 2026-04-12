@@ -311,6 +311,7 @@ describe('集成: Agent 角色 → 对话', () => {
     chat.chatMode = 'chat'
     chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '普通回复', metadata: {} })
     await handleSend('普通聊天')
+    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalledTimes(2))
 
     // 验证 agentRole 被清除
     expect(chat.agentRole).toBe('')

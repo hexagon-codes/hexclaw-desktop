@@ -6,7 +6,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 
 const testLLMConnection = vi.hoisted(() => vi.fn())
 const addProvider = vi.hoisted(() => vi.fn())
-const saveConfig = vi.hoisted(() => vi.fn(async () => {}))
+const saveConfig = vi.hoisted(() => vi.fn(async () => ({ securitySyncFailed: false })))
 const loadConfig = vi.hoisted(() => vi.fn(async () => {}))
 const routerPush = vi.hoisted(() => vi.fn())
 
@@ -199,8 +199,8 @@ describe('WelcomeView onboarding', () => {
     let resolveSave!: () => void
     saveConfig.mockImplementationOnce(
       () =>
-        new Promise<void>((resolve) => {
-          resolveSave = resolve
+        new Promise<{ securitySyncFailed: boolean }>((resolve) => {
+          resolveSave = () => resolve({ securitySyncFailed: false })
         }),
     )
 
@@ -223,5 +223,35 @@ describe('WelcomeView onboarding', () => {
 
     resolveSave()
     await flushPromises()
+  })
+
+  it('shows error to user when skip() encounters a fatal saveConfig failure', async () => {
+    // Bug 1 回归: 修复前 skip() 无 catch，saveConfig throw 时流程中断且无用户可见错误
+    saveConfig.mockReset()
+    saveConfig.mockRejectedValueOnce(new Error('LLM config save failed'))
+
+    const wrapper = mount(WelcomeView, {
+      global: {
+        plugins: [createI18nInstance()],
+        stubs: { ProviderSelect: true },
+      },
+    })
+
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      skip: () => Promise<void>
+      finishError: string
+      finishing: boolean
+    }
+    await vm.skip()
+    await flushPromises()
+
+    // 修复后: 错误被 catch 并写入 finishError，用户可见
+    expect(vm.finishError).toContain('LLM config save failed')
+    // 不应导航到 chat（保存失败）
+    expect(routerPush).not.toHaveBeenCalled()
+    // finishing 标志已重置
+    expect(vm.finishing).toBe(false)
   })
 })

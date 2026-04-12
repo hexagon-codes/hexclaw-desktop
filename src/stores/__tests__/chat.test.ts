@@ -406,9 +406,10 @@ describe('useChatStore', () => {
       expect.any(String),
       '帮我规划这个周末去杭州露营需要带什么',
     )
+    // 简化后的标题流程：不再传 expectedTitle，后端直接生成
     expect(suggestSessionTitle).toHaveBeenCalledWith(
       expect.any(String),
-      '帮我规划这个周末去杭州露营需要带什么',
+      '',
     )
     expect(localSession?.title).toBe('周末露营装备准备')
   })

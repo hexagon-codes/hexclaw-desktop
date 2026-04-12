@@ -7,6 +7,7 @@ import { useAgentsStore } from '@/stores/agents'
 import { useSettingsStore } from '@/stores/settings'
 import { getAgents, getRules, addRule, deleteRule, setDefaultAgent, registerAgent, unregisterAgent, updateAgent } from '@/api/agents'
 import type { AgentRole, AgentConfig, AgentRule } from '@/types'
+import { logger } from '@/utils/logger'
 import PageHeader from '@/components/common/PageHeader.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
@@ -70,6 +71,7 @@ const newRule = ref<Omit<AgentRule, 'id'>>({
 })
 const deletingRuleId = ref<number | null>(null)
 const deletingRuleIds = ref<Set<number>>(new Set())
+const RULE_PLATFORM_OPTIONS = ['api', 'telegram', 'feishu', 'dingtalk', 'discord'] as const
 
 const sortedRules = computed(() =>
   [...rules.value].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)),
@@ -112,7 +114,7 @@ async function loadAgents() {
     defaultAgent.value = res.default || ''
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.loadAgentsFailed')
-    console.error('加载 Agents 失败:', e)
+    logger.error('加载 Agents 失败:', e)
   } finally {
     agentsLoading.value = false
   }
@@ -125,7 +127,7 @@ async function loadRules() {
     rules.value = res.rules || []
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.loadRulesFailed')
-    console.error('加载路由规则失败:', e)
+    logger.error('加载路由规则失败:', e)
   } finally {
     rulesLoading.value = false
   }
@@ -268,7 +270,7 @@ async function handleEditAgent() {
     await loadAgents()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.editAgentFailed')
-    console.error('编辑 Agent 失败:', e)
+    logger.error('编辑 Agent 失败:', e)
   } finally {
     editing.value = false
   }
@@ -400,7 +402,7 @@ async function handleRegisterAgent() {
     await loadAgents()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.registerAgentFailed')
-    console.error('注册 Agent 失败:', e)
+    logger.error('注册 Agent 失败:', e)
   } finally {
     registering.value = false
   }
@@ -427,7 +429,7 @@ async function handleUnregisterAgent() {
     agents.value = agents.value.filter((a) => a.name !== unregisteringName.value)
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.unregisterAgentFailed')
-    console.error('注销 Agent 失败:', e)
+    logger.error('注销 Agent 失败:', e)
   } finally {
     unregistering.value = false
     showUnregisterConfirm.value = false
@@ -931,7 +933,7 @@ async function handleUnregisterAgent() {
                   v-model="newRule.platform"
                   class="hc-input"
                 >
-                  <option v-for="p in PLATFORM_OPTIONS" :key="p" :value="p">{{ p }}</option>
+                  <option v-for="p in RULE_PLATFORM_OPTIONS" :key="p" :value="p">{{ p }}</option>
                 </select>
               </div>
               <div class="flex flex-col gap-1.5">

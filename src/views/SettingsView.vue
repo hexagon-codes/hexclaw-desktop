@@ -33,6 +33,7 @@ import type {
   ToolPermissions,
 } from '@/api/tools-status'
 import { messageFromUnknownError } from '@/utils/errors'
+import { logger } from '@/utils/logger'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
@@ -206,13 +207,13 @@ async function persistSettings({
   if (!settingsStore.config) return
 
   commitPendingModelDraft()
-  await settingsStore.saveConfig(settingsStore.config)
+  const result = await settingsStore.saveConfig(settingsStore.config)
 
   if (refreshRuntimeInfo) {
     await loadRuntimeInfo()
   }
 
-  if (showSavedFeedback) {
+  if (showSavedFeedback && !result.securitySyncFailed) {
     saved.value = true
     setTimeout(() => {
       saved.value = false
@@ -296,7 +297,7 @@ onMounted(async () => {
         try {
           await flushAutoSave({ force: true })
         } catch (e) {
-          console.error('[HexClaw] 关闭前保存设置失败:', e)
+          logger.error('[HexClaw] 关闭前保存设置失败:', e)
           return
         }
 
@@ -304,13 +305,13 @@ onMounted(async () => {
         try {
           await appWindow.close()
         } catch (e) {
-          console.error('[HexClaw] 自动关闭窗口失败:', e)
+          logger.error('[HexClaw] 自动关闭窗口失败:', e)
         } finally {
           closingAfterFlush = false
         }
       })
     } catch (e) {
-      console.warn('[HexClaw] 注册 close-requested 监听失败:', e)
+      logger.warn('[HexClaw] 注册 close-requested 监听失败:', e)
     }
   }
 })
@@ -356,6 +357,13 @@ const memoryEnabled = computed({
   set: (enabled: boolean) => {
     if (!config.value) return
     config.value.memory = { enabled }
+  },
+})
+const sandboxNetworkEnabled = computed({
+  get: () => config.value?.sandbox?.network_enabled ?? true,
+  set: (network_enabled: boolean) => {
+    if (!config.value) return
+    config.value.sandbox = { network_enabled }
   },
 })
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -451,7 +459,7 @@ async function loadRuntimeInfo() {
     if (gen !== runtimeInfoGen) return
     runtimeConfig.value = null
     runtimeLLMConfig.value = null
-    console.warn('[HexClaw] 运行时配置加载失败:', e)
+    logger.warn('[HexClaw] 运行时配置加载失败:', e)
   } finally {
     if (gen === runtimeInfoGen) runtimeInfoLoading.value = false
   }
@@ -568,15 +576,29 @@ function handleAddProvider() {
 
 /** 真正执行 Provider 删除 */
 async function handleDeleteProvider(id: string) {
+  // 保存删除前快照，以便失败时恢复
+  const snapshot = settingsStore.config
+    ? JSON.parse(JSON.stringify(settingsStore.config.llm.providers)) as typeof settingsStore.config.llm.providers
+    : null
+  const prevEditingId = editingProviderId.value
+
   settingsStore.removeProvider(id)
   if (editingProviderId.value === id) {
     editingProviderId.value = null
   }
   if (settingsStore.config) {
     try {
-      await settingsStore.saveConfig(settingsStore.config)
+      const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
+      if (securitySyncFailed) {
+        logger.warn('[HexClaw] 删除 Provider 后安全/沙箱配置同步失败')
+      }
     } catch (e) {
-      console.error('[HexClaw] 删除 Provider 后保存失败:', e)
+      logger.error('[HexClaw] 删除 Provider 后保存失败，已恢复:', e)
+      // 恢复 UI 到删除前状态
+      if (snapshot && settingsStore.config) {
+        settingsStore.config.llm.providers = snapshot
+        editingProviderId.value = prevEditingId
+      }
     }
   }
 }
@@ -785,7 +807,7 @@ async function syncRemoteModels(provider: ProviderConfig) {
     }
     autoSave()
   } catch (e) {
-    console.warn('[Settings] 拉取远程模型列表失败（不影响使用）:', e)
+    logger.warn('[Settings] 拉取远程模型列表失败（不影响使用）:', e)
   }
 }
 
@@ -798,7 +820,7 @@ function autoSave() {
     try {
       await flushAutoSave()
     } catch (e) {
-      console.error('[HexClaw] 自动保存失败:', e)
+      logger.error('[HexClaw] 自动保存失败:', e)
     }
   }, 500)
 }
@@ -809,7 +831,7 @@ async function onToolbarReset() {
     await settingsStore.loadConfig({ force: true })
     saved.value = false
   } catch (e) {
-    console.error('[HexClaw] Reset failed:', e)
+    logger.error('[HexClaw] Reset failed:', e)
   }
 }
 
@@ -821,7 +843,7 @@ async function saveConfig() {
       refreshRuntimeInfo: activeSection.value === 'system',
     })
   } catch (e) {
-    console.error('保存配置失败:', e)
+    logger.error('保存配置失败:', e)
   }
 }
 </script>
@@ -873,7 +895,7 @@ async function saveConfig() {
             <div class="hc-settings__row">
               <span class="hc-settings__row-label">
                 {{ t('settings.llm.defaultModel') }}
-                <span class="hc-settings__info" data-info="新对话和快捷入口的默认模型。显式选模时不受影响。">?</span>
+                <span class="hc-settings__info" :data-info="t('settings.llm.defaultModelHint')">?</span>
               </span>
               <div class="hc-settings__row-right">
                 <select
@@ -1295,6 +1317,19 @@ async function saveConfig() {
                 </div>
                 <input
                   v-model="memoryEnabled"
+                  type="checkbox"
+                  class="hc-toggle"
+                  @change="autoSave()"
+                />
+              </label>
+
+              <label class="hc-settings__toggle-row">
+                <div>
+                  <span class="hc-settings__toggle-label">{{ t('settings.sandbox.toggle') }}</span>
+                  <p class="hc-settings__toggle-desc">{{ t('settings.sandbox.toggleDesc') }}</p>
+                </div>
+                <input
+                  v-model="sandboxNetworkEnabled"
                   type="checkbox"
                   class="hc-toggle"
                   @change="autoSave()"

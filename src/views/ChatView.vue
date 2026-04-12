@@ -174,6 +174,17 @@ function isEmptyReply(content: string): boolean {
   return !content.trim() || EMPTY_REPLY_PATTERN.test(content.trim())
 }
 
+function formatThinkingDuration(seconds?: unknown): string {
+  const s = Number(seconds)
+  if (!s || s <= 0) return ''
+  if (s >= 60) {
+    const m = Math.floor(s / 60)
+    const r = s % 60
+    return r > 0 ? `${m}m ${r}s` : `${m}m`
+  }
+  return `${s}s`
+}
+
 function formatFullTime(ts: string): string {
   return new Date(ts).toLocaleString(locale.value, {
     year: 'numeric',
@@ -889,12 +900,12 @@ function startSidebarResize(event: MouseEvent) {
                     :agent-name="msg.agent_name || (msg.metadata?.agent_name as string) || ''"
                     :is-handoff="idx > 0 && chatStore.messages[idx - 1]?.role === 'assistant' && chatStore.messages[idx - 1]?.agent_name !== msg.agent_name"
                   />
-                  <!-- Thinking block for finalized messages -->
+                  <!-- Thinking block for finalized messages (ChatGPT style) -->
                   <div v-if="msg.reasoning && normalizeAssistantReasoning(msg.reasoning)" class="hc-thinking">
                     <details class="hc-thinking__details">
                       <summary class="hc-thinking__summary">
-                        <span class="hc-thinking__label">{{ t('chat.thoughtProcess') }}</span>
-                        <span v-if="msg.metadata?.thinking_duration" class="hc-thinking__time">{{ msg.metadata.thinking_duration }}s</span>
+                        <span class="hc-thinking__icon">●</span>
+                        <span class="hc-thinking__label">{{ formatThinkingDuration(msg.metadata?.thinking_duration) ? (t('chat.thoughtFor') + ' ' + formatThinkingDuration(msg.metadata?.thinking_duration)) : t('chat.thoughtProcess') }}</span>
                       </summary>
                       <div class="hc-thinking__content">{{ normalizeAssistantReasoning(msg.reasoning) }}</div>
                     </details>
@@ -932,25 +943,12 @@ function startSidebarResize(event: MouseEvent) {
                       <span>{{ art.title }}</span>
                     </button>
                   </div>
-                  <div
-                    v-if="
-                      metadataValue(msg, 'provider') ||
-                      metadataValue(msg, 'model')
-                    "
-                    class="hc-msg__meta"
-                  >
-                    <span v-if="metadataValue(msg, 'provider')" class="hc-msg__meta-tag">
-                      {{ t('chat.provider') }}: {{ metadataValue(msg, 'provider') }}
-                    </span>
-                    <span v-if="metadataValue(msg, 'model')" class="hc-msg__meta-tag">
-                      {{ t('chat.model') }}: {{ metadataValue(msg, 'model') }}
-                    </span>
-                  </div>
+                  <!-- Meta footer: 时间 · 模型 · Agent 合并一行 -->
+                  <!-- (moved to hc-msg__footer below) -->
                   <div
                     v-if="
                       msg.metadata?.knowledge_hits ||
-                      msg.metadata?.memory_hits ||
-                      msg.metadata?.routed_agent
+                      msg.metadata?.memory_hits
                     "
                     class="hc-msg__sources"
                   >
@@ -967,12 +965,6 @@ function startSidebarResize(event: MouseEvent) {
                       :title="t('chat.memoryHit')"
                     >
                       <Zap :size="11" /> {{ t('chat.memoryHit') }}
-                    </span>
-                    <span
-                      v-if="msg.metadata?.routed_agent"
-                      class="hc-msg__source-tag hc-msg__source-tag--agent"
-                    >
-                      {{ msg.metadata.routed_agent }}
                     </span>
                   </div>
                   <div v-if="getKnowledgeHits(msg).length > 0" class="hc-msg__hit-list">
@@ -1087,7 +1079,11 @@ function startSidebarResize(event: MouseEvent) {
                       </div>
                     </div>
                   </div>
-                  <div class="hc-msg__time">{{ formatTime(msg.timestamp) }}</div>
+                  <div class="hc-msg__meta">
+                    <span>{{ formatTime(msg.timestamp) }}</span>
+                    <span v-if="metadataValue(msg, 'provider') || metadataValue(msg, 'model')">{{ [metadataValue(msg, 'provider'), metadataValue(msg, 'model')].filter(Boolean).join(' · ') }}</span>
+                    <span v-if="msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent">{{ msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent }}</span>
+                  </div>
                 </div>
               </template>
 
@@ -1576,7 +1572,7 @@ function startSidebarResize(event: MouseEvent) {
 }
 
 .hc-chat__thread {
-  max-width: min(90%, 960px);
+  max-width: min(94%, 1200px);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
@@ -1632,8 +1628,9 @@ function startSidebarResize(event: MouseEvent) {
 
 /* ─── Message body ───── */
 .hc-msg__body {
-  max-width: 90%;
+  max-width: 100%;
   min-width: 0;
+  flex: 1;
 }
 
 .hc-msg__body--user {
@@ -1700,10 +1697,11 @@ function startSidebarResize(event: MouseEvent) {
 }
 
 .hc-msg__bubble--assistant {
-  background: var(--hc-bg-card);
+  background: transparent;
   color: var(--hc-text-primary);
-  border: 1px solid var(--hc-border-subtle, var(--hc-border));
-  border-top-left-radius: 4px;
+  border: none;
+  padding: 0;
+  border-radius: 0;
 }
 
 .hc-msg__bubble--empty {
@@ -2451,7 +2449,7 @@ function startSidebarResize(event: MouseEvent) {
 }
 
 .hc-chat__input-wrap {
-  max-width: 720px;
+  max-width: min(94%, 1200px);
   margin: 0 auto;
 }
 
@@ -2662,21 +2660,22 @@ function startSidebarResize(event: MouseEvent) {
 
 .hc-msg__meta {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
+  align-items: center;
+  gap: 0;
+  margin-top: 8px;
+  color: var(--hc-text-muted);
+  font-size: 11px;
+  opacity: 0.5;
+  transition: opacity 0.2s;
 }
 
-.hc-msg__meta-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 2px 6px;
-  border-radius: 6px;
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-secondary);
-  font-size: 10px;
-  font-weight: 500;
+.hc-msg:hover .hc-msg__meta {
+  opacity: 1;
+}
+
+.hc-msg__meta > span + span::before {
+  content: ' · ';
+  opacity: 0.5;
 }
 
 .hc-msg__source-tag {
@@ -3020,10 +3019,16 @@ function startSidebarResize(event: MouseEvent) {
   border: none;
 }
 
+.hc-thinking__icon {
+  font-size: 8px;
+  color: var(--hc-accent);
+  flex-shrink: 0;
+}
+
 .hc-thinking__summary {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 4px 0;
   cursor: pointer;
   font-size: 13px;
@@ -3081,14 +3086,20 @@ function startSidebarResize(event: MouseEvent) {
 }
 
 .hc-thinking__content {
-  padding: 6px 0 4px;
+  padding: 8px 0 4px 14px;
+  margin-left: 3px;
+  border-left: 2px solid var(--hc-border);
   font-size: 13px;
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--hc-text-secondary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 流式思考中限制高度防止页面跳动，展开后不限制 */
+.hc-thinking__header + .hc-thinking__content {
   max-height: 40vh;
   overflow-y: auto;
-  -webkit-font-smoothing: antialiased;
 }
 </style>

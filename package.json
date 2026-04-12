@@ -1,6 +1,6 @@
 {
   "name": "hexclaw-desktop",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "private": true,
   "author": "hexagon-codes <ai@hexclaw.net>",
   "license": "Apache-2.0",
@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "test:unit": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:live": "playwright test -c playwright.browser.live.config.ts",
     "test:bench": "vitest bench --run",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",

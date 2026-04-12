@@ -36,7 +36,11 @@ export interface BackendChatResponse {
   session_id: string
   tool_calls?: import('@/types').ToolCall[]
   metadata?: Record<string, unknown>
-  usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
+  usage?: {
+    /** 后端实际返回 input_tokens (非 OpenAI prompt_tokens)，同时兼容两种命名 */
+    input_tokens?: number; output_tokens?: number; total_tokens?: number
+    prompt_tokens?: number; completion_tokens?: number
+  }
 }
 
 export interface ActiveStreamSnapshot {

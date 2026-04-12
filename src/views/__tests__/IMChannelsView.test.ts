@@ -4,6 +4,10 @@ import { createI18n } from 'vue-i18n'
 import IMChannelsView from '../IMChannelsView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
+const { mockRouterPush } = vi.hoisted(() => ({
+  mockRouterPush: vi.fn(),
+}))
+
 const { getIMInstances, createIMInstance, updateIMInstance, deleteIMInstance, listIMInstancesHealth, testIMInstance, startIMInstance, stopIMInstance } = vi.hoisted(() => ({
   getIMInstances: vi.fn(),
   createIMInstance: vi.fn(),
@@ -36,6 +40,10 @@ vi.mock('@/api/im-channels', async () => {
 
 vi.mock('@/api/desktop', () => ({
   setClipboard,
+}))
+
+vi.mock('vue-router', () => ({
+  useRouter: vi.fn(() => ({ push: mockRouterPush })),
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {

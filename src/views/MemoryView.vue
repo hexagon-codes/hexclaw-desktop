@@ -224,7 +224,10 @@ async function saveEdit() {
   errorMsg.value = ''
   try {
     if (legacyMode.value && editingId.value.startsWith('legacy-')) {
-      await updateLegacyMemoryEntry(editingId.value, trimmed, legacyContent.value)
+      // 重新加载最新 legacyContent，避免 auto-extract 写入的条目被覆盖
+      const fresh = await getMemoryEntries()
+      const freshContent = fresh.legacy_content ?? legacyContent.value
+      await updateLegacyMemoryEntry(editingId.value, trimmed, freshContent)
     } else {
       await updateMemoryEntry(editingId.value, trimmed)
     }
@@ -245,7 +248,10 @@ async function handleDeleteEntry(id: string) {
   errorMsg.value = ''
   try {
     if (legacyMode.value && id.startsWith('legacy-')) {
-      await deleteLegacyMemoryEntry(id, legacyContent.value)
+      // 重新加载最新 legacyContent，避免 auto-extract 写入的条目被覆盖
+      const fresh = await getMemoryEntries()
+      const freshContent = fresh.legacy_content ?? legacyContent.value
+      await deleteLegacyMemoryEntry(id, freshContent)
     } else {
       await deleteMemoryEntry(id)
     }

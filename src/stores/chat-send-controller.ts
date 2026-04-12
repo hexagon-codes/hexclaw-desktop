@@ -167,7 +167,8 @@ export function createChatSendController(params: {
         autoTitleController.seedAutoTitle(sessionId, text)
       }
 
-      void persistMessage(userMessage, sessionId)
+      // 持久化与发送并行，失败不阻塞（persistMessage 内部已有日志）
+      void persistMessage(userMessage, sessionId).catch(() => {})
       return deliveryController.deliverMessage({
         backendText,
         sessionId,

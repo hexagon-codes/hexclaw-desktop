@@ -92,6 +92,14 @@ function makeConfig(overrides?: AppConfigOverrides): AppConfig {
       default_protocol: 'stdio',
       ...overrides?.mcp,
     },
+    memory: {
+      enabled: true,
+      ...overrides?.memory,
+    },
+    sandbox: {
+      network_enabled: true,
+      ...overrides?.sandbox,
+    },
   }
 }
 
@@ -300,7 +308,7 @@ describe('Settings Store persistence', () => {
 
     store.config!.general.language = 'en'
 
-    await expect(store.saveConfig(store.config!)).resolves.toBeUndefined()
+    await store.saveConfig(store.config!)
 
     const backendConfig = mockUpdateLLMConfig.mock.calls[0]![0] as BackendLLMConfig
     expect(backendConfig.providers['API Mart']!.api_key).toBe('****key')
@@ -351,5 +359,35 @@ describe('Settings Store persistence', () => {
 
     expect(store.config!.llm.defaultProviderId).toBe('')
     expect(store.config!.llm.defaultModel).toBe('')
+  })
+
+  it('安全和 sandbox 同步失败时应同时回滚内存状态和本地持久化', async () => {
+    state.savedConfig = makeConfig({
+      security: {
+        content_filter: true,
+      },
+      sandbox: {
+        network_enabled: true,
+      },
+    })
+    mockGetLLMConfig.mockResolvedValue(makeBackendConfig())
+    mockUpdateConfig.mockRejectedValueOnce(new Error('sandbox update failed'))
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+
+    expect(store.config!.sandbox!.network_enabled).toBe(true)
+    expect(store.config!.security.content_filter).toBe(true)
+
+    store.config!.security.content_filter = false
+    store.config!.sandbox!.network_enabled = false
+    const result = await store.saveConfig(store.config!)
+    expect(result.securitySyncFailed).toBe(true)
+
+    expect(store.config!.sandbox!.network_enabled).toBe(true)
+    expect(store.config!.security.content_filter).toBe(true)
+    expect(state.savedConfig!.sandbox!.network_enabled).toBe(true)
+    expect(state.savedConfig!.security.content_filter).toBe(true)
   })
 })

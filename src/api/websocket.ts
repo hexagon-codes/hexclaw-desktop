@@ -69,6 +69,7 @@ class HexClawWS {
   private errorCallbacks: ErrorCallback[] = []
   private approvalCallbacks: ApprovalCallback[] = []
   private memorySavedCallbacks: ((content: string) => void)[] = []
+  private reconnectCallbacks: (() => void)[] = []
 
   private reconnectAttempts = 0
   private maxReconnectAttempts = 5
@@ -122,11 +123,9 @@ class HexClawWS {
       this.ws.onclose = () => {
         logger.info('WebSocket disconnected')
         this.stopHeartbeat()
-        // Notify active streaming callbacks so they don't wait for the inactivity timeout
-        if (!this.intentionalClose && this.errorCallbacks.length > 0) {
-          this.errorCallbacks.forEach((cb) => cb('WebSocket connection lost'))
-        }
         if (!this.intentionalClose) {
+          // 先尝试重连 + 恢复流，不立即触发 errorCallbacks
+          // 避免产生"错误助手消息" + "恢复助手消息"重复
           this.attemptReconnect()
         }
       }
@@ -228,6 +227,12 @@ class HexClawWS {
     return () => { this.memorySavedCallbacks = this.memorySavedCallbacks.filter((cb) => cb !== callback) }
   }
 
+  /** Listen for successful reconnection (not initial connect) */
+  onReconnect(callback: () => void): () => void {
+    this.reconnectCallbacks.push(callback)
+    return () => { this.reconnectCallbacks = this.reconnectCallbacks.filter((cb) => cb !== callback) }
+  }
+
   /** Send tool approval response back to backend */
   sendApprovalResponse(requestId: string, approved: boolean, remember: boolean): void {
     const base = approved ? 'approved' : 'denied'
@@ -257,7 +262,8 @@ class HexClawWS {
     this.errorCallbacks = []
   }
 
-  /** Remove all registered callbacks including approval (used on disconnect/session reset) */
+  /** Remove all registered callbacks including approval (used on disconnect/session reset).
+   *  reconnectCallbacks are preserved — they are structural listeners, not per-stream. */
   clearCallbacks(): void {
     this.chunkCallbacks = []
     this.replyCallbacks = []
@@ -338,9 +344,14 @@ class HexClawWS {
     logger.info(`WebSocket reconnecting... attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`)
 
     this.reconnectTimer = setTimeout(() => {
-      this.connect().catch((err) => {
-        logger.warn('WebSocket reconnect failed', err)
-      })
+      this.connect()
+        .then(() => {
+          logger.info('WebSocket reconnected, notifying listeners')
+          this.reconnectCallbacks.forEach((cb) => cb())
+        })
+        .catch((err) => {
+          logger.warn('WebSocket reconnect failed', err)
+        })
     }, this.reconnectInterval)
   }
 

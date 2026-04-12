@@ -20,7 +20,6 @@ export function defaultConfig(): AppConfig {
       injection_detection: true,
       pii_filter: false,
       content_filter: true,
-      max_tokens_per_request: 8192,
       rate_limit_rpm: 60,
     },
     general: {
@@ -40,6 +39,9 @@ export function defaultConfig(): AppConfig {
     },
     memory: {
       enabled: true,
+    },
+    sandbox: {
+      network_enabled: true,
     },
   }
 }

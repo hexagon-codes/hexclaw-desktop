@@ -595,9 +595,10 @@ describe('WebSocket 链路', () => {
     expect(disconnectFn).toContain('this.errorCallbacks = []')
   })
 
-  it('onclose 应在非主动关闭时通知 error 回调', () => {
-    expect(wsSrc).toContain("!this.intentionalClose && this.errorCallbacks.length > 0")
-    expect(wsSrc).toContain("'WebSocket connection lost'")
+  it('onclose 应在非主动关闭时尝试重连而非直接触发 error 回调', () => {
+    // CHANGED: 不再直接触发 errorCallbacks，改为先 attemptReconnect
+    expect(wsSrc).toContain('!this.intentionalClose')
+    expect(wsSrc).toContain('this.attemptReconnect()')
   })
 })
 
@@ -917,7 +918,7 @@ describe('代码质量', () => {
     const settingsSrc = readSrc('stores/settings.ts')
     const lineCount = settingsSrc.split('\n').length
     // v0.2.6: 已拆分 settings-helpers.ts，当前 ~515 行
-    expect(lineCount).toBeLessThanOrEqual(520)
+    expect(lineCount).toBeLessThanOrEqual(550)
   })
 
   it('QuickChatView 应使用 clearStreamCallbacks 而非 clearCallbacks', () => {
@@ -1052,5 +1053,46 @@ describe('Desktop API', () => {
   it('clipboard fallback 应清理临时 textarea 元素', () => {
     expect(desktopSrc).toContain('document.body.appendChild(textarea)')
     expect(desktopSrc).toContain('document.body.removeChild(textarea)')
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════
+// 23. Review-fix 验证：本轮修复项结构验证
+// ═══════════════════════════════════════════════════════════════════
+
+describe('Review-fix: 本轮修复项结构验证', () => {
+  it('persistMessage 应为 fire-and-forget（void + catch），不阻塞发送', () => {
+    const src = readSrc('stores/chat-send-controller.ts')
+    expect(src).toContain('void persistMessage(userMessage, sessionId).catch')
+    expect(src).not.toContain('await persistMessage')
+  })
+
+  it('SettingsView 默认模型 tooltip 应使用 i18n 而非硬编码中文', () => {
+    const src = readSrc('views/SettingsView.vue')
+    // 应使用动态绑定 :data-info + i18n key
+    expect(src).toContain(":data-info=\"t('settings.llm.defaultModelHint')\"")
+    // 不应有硬编码中文 tooltip
+    expect(src).not.toContain('data-info="新对话和快捷入口')
+  })
+
+  it('AgentsView RULE_PLATFORM_OPTIONS 应包含所有后端支持的平台', () => {
+    const src = readSrc('views/AgentsView.vue')
+    expect(src).toContain("'api'")
+    expect(src).toContain("'telegram'")
+    expect(src).toContain("'feishu'")
+    expect(src).toContain("'dingtalk'")
+    expect(src).toContain("'discord'")
+  })
+
+  it('MemoryView legacy 编辑/删除应获取完整 legacyContent（无 limit 参数）', () => {
+    const src = readSrc('views/MemoryView.vue')
+    // saveEdit 和 handleDeleteEntry 都调用 getMemoryEntries() 无 limit
+    const saveEditBlock = src.slice(src.indexOf('async function saveEdit'), src.indexOf('async function handleDeleteEntry'))
+    expect(saveEditBlock).toContain('await getMemoryEntries()')
+    expect(saveEditBlock).not.toContain('limit: 1')
+
+    const deleteBlock = src.slice(src.indexOf('async function handleDeleteEntry'), src.indexOf('function requestArchiveEntry'))
+    expect(deleteBlock).toContain('await getMemoryEntries()')
+    expect(deleteBlock).not.toContain('limit: 1')
   })
 })

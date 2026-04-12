@@ -155,7 +155,7 @@ async function handleAdd() {
     await loadDocs()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('knowledge.addFailed')
-    console.error('[Knowledge] add failed:', e)
+    logger.error('[Knowledge] add failed:', e)
   } finally {
     adding.value = false
   }
@@ -176,7 +176,7 @@ async function handleDelete() {
     totalDocs.value = Math.max(0, totalDocs.value - 1)
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('knowledge.deleteFailed')
-    console.error('[Knowledge] delete failed:', e)
+    logger.error('[Knowledge] delete failed:', e)
   } finally {
     showDeleteConfirm.value = false
     deletingDoc.value = null
@@ -204,7 +204,7 @@ async function handleSearch() {
   } catch (e) {
     if (requestGen !== searchRequestGen) return
     errorMsg.value = e instanceof Error ? e.message : t('knowledge.searchFailed')
-    console.error('[Knowledge] search failed:', e)
+    logger.error('[Knowledge] search failed:', e)
   } finally {
     if (requestGen === searchRequestGen) {
       searching.value = false
@@ -468,10 +468,11 @@ onUnmounted(() => {
   document.removeEventListener('drop', preventDefaultDrag)
 })
 
-function rebuildAll() {
+async function rebuildAll() {
   if (!ensureKnowledgeEnabled()) return
+  // 串行重建，避免并发轰炸 embedding API 和 SQLite 写锁
   for (const doc of docs.value) {
-    handleReindex(doc)
+    await handleReindex(doc)
   }
 }
 

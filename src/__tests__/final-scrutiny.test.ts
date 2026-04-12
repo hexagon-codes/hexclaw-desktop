@@ -29,10 +29,10 @@ describe('链路: 会话 CRUD + 消息', () => {
   beforeEach(() => mockApi.mockReset())
 
   it('createSession 传递 id + title', async () => {
-    mockApi.mockResolvedValueOnce({ id: 's1', title: '新对话', created_at: '2026-01-01' })
+    mockApi.mockResolvedValueOnce({ id: 's1', title: 'New Chat', created_at: '2026-01-01' })
     const { createSession } = await import('@/api/chat')
-    await createSession('s1', '新对话')
-    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions', { id: 's1', title: '新对话', user_id: 'desktop-user' })
+    await createSession('s1', 'New Chat')
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions', { id: 's1', title: 'New Chat', user_id: 'desktop-user' })
   })
 
   it('listSessions 传递 user_id + limit', async () => {

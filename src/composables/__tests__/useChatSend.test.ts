@@ -28,7 +28,7 @@ function makeDeps() {
       sendMessage,
       chatMode: 'chat',
       agentRole: '',
-      chatParams: { model: 'test-model' },
+      chatParams: { model: 'test-model' as string | undefined },
     },
     parsedDocument: ref(null as { text: string; fileName: string; pageCount?: number } | null),
     attachmentPreview: ref(null as { url: string; name: string; type: 'image' | 'video' | 'file'; file: File } | null),
@@ -142,7 +142,8 @@ describe('useChatSend', () => {
     expect(settled).toBe(true)
     expect(result).toBe(true)
 
-    resolveSend?.({ id: 'a1', role: 'assistant', content: 'reply', timestamp: '' })
+    expect(resolveSend).not.toBeNull()
+    resolveSend!({ id: 'a1', role: 'assistant', content: 'reply', timestamp: '' })
     await resultPromise
   })
 

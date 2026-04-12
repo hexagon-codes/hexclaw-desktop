@@ -118,7 +118,8 @@ describe('ChatInput attachment capability gating', () => {
 
     expect(sendHandler).toHaveBeenCalledTimes(1)
 
-    resolveSend?.(true)
+    expect(resolveSend).not.toBeNull()
+    resolveSend!(true)
     await flushPromises()
     expect((textarea.element as HTMLTextAreaElement).value).toBe('')
   })

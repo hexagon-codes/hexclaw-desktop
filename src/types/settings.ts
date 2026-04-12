@@ -88,8 +88,9 @@ export interface SecurityConfig {
   injection_detection: boolean
   pii_filter: boolean
   content_filter: boolean
-  max_tokens_per_request: number
   rate_limit_rpm: number
+  /** @deprecated 后端不消费此字段，仅为兼容旧配置保留 */
+  max_tokens_per_request?: number
   conversation_encrypt?: boolean
   secure_storage?: boolean
   key_rotation?: boolean
@@ -125,6 +126,11 @@ export interface MemoryConfig {
   enabled: boolean
 }
 
+/** 沙箱配置 */
+export interface SandboxConfig {
+  network_enabled: boolean
+}
+
 /** 应用配置 */
 export interface AppConfig {
   llm: LLMConfig
@@ -134,6 +140,8 @@ export interface AppConfig {
   mcp: MCPConfig
   /** Legacy configs created before the memory toggle existed may omit this field. */
   memory?: MemoryConfig
+  /** Sandbox configuration for code execution. */
+  sandbox?: SandboxConfig
 }
 
 /** 后端 LLM Provider 配置（匹配 hexclaw API） */
@@ -178,14 +186,23 @@ export interface BackendRuntimeConfig {
   webhook: { enabled: boolean }
   canvas: { enabled: boolean }
   voice: { enabled: boolean }
+  sandbox: { network_enabled: boolean }
   security: {
     gateway_enabled: boolean
     injection_detection: boolean
     pii_filter: boolean
     content_filter: boolean
     rate_limit_rpm: number
-    max_tokens_per_request: number
   }
+}
+
+export interface RuntimeConfigUpdateRequest {
+  security?: SecurityConfig
+  sandbox?: SandboxConfig
+}
+
+export interface ConfigUpdateResponse {
+  message: string
 }
 
 /** 单个 Provider 的连接测试请求 */

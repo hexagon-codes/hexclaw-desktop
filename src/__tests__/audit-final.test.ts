@@ -147,7 +147,7 @@ describe('1. messageService edge cases after DB removal', () => {
     })
     const result = await loadAllSessions()
     expect(result).toHaveLength(1)
-    expect(result[0]!.title).toBe('新对话')
+    expect(result[0]!.title).toBe('New Chat')
   })
 
   it('loadAllSessions: undefined title defaults to "新对话"', async () => {
@@ -156,7 +156,7 @@ describe('1. messageService edge cases after DB removal', () => {
       total: 1,
     })
     const result = await loadAllSessions()
-    expect(result[0]!.title).toBe('新对话')
+    expect(result[0]!.title).toBe('New Chat')
   })
 
   it('loadAllSessions: empty string title defaults to "新对话"', async () => {
@@ -165,7 +165,7 @@ describe('1. messageService edge cases after DB removal', () => {
       total: 1,
     })
     const result = await loadAllSessions()
-    expect(result[0]!.title).toBe('新对话')
+    expect(result[0]!.title).toBe('New Chat')
   })
 
   it('loadMessages: created_at mapped to timestamp when timestamp absent', async () => {

@@ -114,6 +114,10 @@ export function createChatSessionLifecycleController(params: {
         showArtifacts.value = false
       }
       error.value = null
+      // 删除成功后清除取消标记（会话已不存在，不会有新流）
+      if (cancelMarkerSet) {
+        cancelledSessions.delete(sessionId)
+      }
       syncStreamingMirrors()
       return true
     } catch (errorValue) {
@@ -123,8 +127,6 @@ export function createChatSessionLifecycleController(params: {
       logger.error('删除会话失败', errorValue)
       error.value = { code: 'SERVER_ERROR', status: 500, message: '删除会话失败' }
       return false
-    } finally {
-      cancelledSessions.delete(sessionId)
     }
   }
 

@@ -69,7 +69,7 @@ describe('Category 1: messageService API migration', () => {
     })
     const result = await loadAllSessions()
     expect(result).toHaveLength(1)
-    expect(result[0]!.title).toBe('新对话')
+    expect(result[0]!.title).toBe('New Chat')
     expect(result[0]!.message_count).toBe(0)
     expect(result[0]!.created_at).toBeTruthy()
     expect(result[0]!.updated_at).toBeTruthy()

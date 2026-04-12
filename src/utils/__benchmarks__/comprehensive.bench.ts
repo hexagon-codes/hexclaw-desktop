@@ -4,7 +4,10 @@
  * Covers: diff.ts, content-blocks.ts, errors.ts, chat-automation.ts
  */
 
-import { bench, describe } from 'vitest'
+import { bench as rawBench, describe } from 'vitest'
+
+// 增加迭代次数以降低 RME（相对误差），默认太低导致噪声 >100%
+const bench = (name: string, fn: () => void) => rawBench(name, fn, { iterations: 100, warmupIterations: 10 })
 import { computeDiff, computeStructuredDiff } from '../diff'
 import { toContentBlocks } from '../content-blocks'
 import { fromNativeError, fromHttpStatus } from '../errors'

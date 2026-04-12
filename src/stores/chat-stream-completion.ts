@@ -77,29 +77,31 @@ export function createChatStreamCompletionController(params: {
     }
 
     appendMessageToSession(args.sessionId, assistantMessage)
-    const expectedTitle = pendingSuggestedTitleExpectation.value[args.sessionId]
     bumpLocalSession(args.sessionId)
 
-    if (expectedTitle) {
-      const titleSync = pendingAutoTitleSync.get(args.sessionId) ?? Promise.resolve()
-      void (async () => {
-        try {
-          await titleSync
-          const result = await msgSvc.suggestSessionTitle?.(args.sessionId, expectedTitle)
+    // 简化标题流程：直接调 suggest-title（不传 expectedTitle），后端无条件生成并写入
+    const shouldSuggestTitle = !!pendingSuggestedTitleExpectation.value[args.sessionId]
+    setPendingSuggestedTitleExpectation(args.sessionId, null)
+
+    void (async () => {
+      try {
+        if (shouldSuggestTitle) {
+          // 等待临时标题 PATCH 完成
+          const titleSync = pendingAutoTitleSync.get(args.sessionId)
+          if (titleSync) await titleSync
+
+          // 调用后端生成标题（不传 expectedTitle，让后端直接覆盖）
+          const result = await msgSvc.suggestSessionTitle?.(args.sessionId, '')
           if (result?.updated && result.title) {
             setLocalSessionTitle(args.sessionId, result.title)
           }
-        } catch {
-          // keep temporary title on failure
-        } finally {
-          setPendingSuggestedTitleExpectation(args.sessionId, null)
-          void loadSessions()
         }
-      })()
-    } else {
-      setPendingSuggestedTitleExpectation(args.sessionId, null)
-      void loadSessions()
-    }
+      } catch {
+        // best-effort，失败保留临时标题
+      } finally {
+        void loadSessions()
+      }
+    })()
 
     msgSvc.touchSession(args.sessionId).catch(() => {})
     if (currentSessionId.value === args.sessionId) {

@@ -135,6 +135,7 @@ export default {
     botName: '小蟹',
     thinking: '正在思考...',
     thoughtProcess: '思考过程',
+    thoughtFor: '思考了',
     thinkingOn: '深度思考已开启（模型会先推理再回答，较慢）',
     thinkingOff: '深度思考已关闭（直接回答，更快）',
     toolParams: '参数',
@@ -867,6 +868,10 @@ export default {
     memory: {
       toggle: '记忆功能',
       toggleDesc: '自动从对话中提取和使用记忆，关闭后不检索也不提取',
+    },
+    sandbox: {
+      toggle: '沙箱网络',
+      toggleDesc: '允许代码执行沙箱访问网络，关闭后代码仅能进行本地计算',
     },
     system: {
       title: '系统设置',

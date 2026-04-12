@@ -229,6 +229,13 @@ export const useChatStore = defineStore('chat', () => {
 
   thinkingTimerController.bindThinkingTimer()
 
+  // WebSocket 重连成功后自动恢复活跃流，避免 UI 流状态悬挂
+  hexclawWS.onReconnect?.(() => {
+    boundStreamController.recoverActiveStreams().catch((e) => {
+      logger.warn('重连后恢复活跃流失败', e)
+    })
+  })
+
   return {
     sessions,
     currentSessionId,

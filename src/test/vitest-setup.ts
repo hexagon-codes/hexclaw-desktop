@@ -82,18 +82,30 @@ if (typeof globalThis.removeEventListener !== 'function' && typeof window !== 'u
   })
 }
 
-// Suppress Vue async DOM teardown errors (insertBefore/removeChild on null).
+// Log (not swallow) Vue async DOM teardown errors (insertBefore/removeChild on null).
 // These occur when component updates are queued after unmount in jsdom.
 // Must be registered at process level because vitest catches unhandledRejection
 // before window event handlers run.
+const domTeardownWarnings: string[] = []
+const nonDomRejections: string[] = []
 process.on('unhandledRejection', (reason: unknown) => {
   const msg = reason instanceof Error ? reason.message : String(reason)
   if (msg.includes('insertBefore') || msg.includes('removeChild') || msg.includes('parentNode')) {
-    // Swallow — this is a known jsdom + Vue teardown race condition
+    domTeardownWarnings.push(msg)
+    console.warn('[vitest-setup] DOM teardown warning (jsdom + Vue race):', msg.slice(0, 120))
     return
   }
+  // 记录非 DOM 异步异常而非静默吞掉
+  nonDomRejections.push(msg)
   // Re-throw anything else so vitest still catches real errors
   throw reason
+})
+
+// 进程退出前报告累积的 DOM teardown 警告数量
+process.on('beforeExit', () => {
+  if (domTeardownWarnings.length > 0) {
+    console.warn(`[vitest-setup] Total DOM teardown warnings this run: ${domTeardownWarnings.length}`)
+  }
 })
 
 beforeEach(() => {

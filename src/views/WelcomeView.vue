@@ -237,7 +237,10 @@ async function finishWizard() {
       settingsStore.config.llm.defaultProviderId = createdProvider?.id ?? ''
       settingsStore.config.general.welcomeCompleted = true
       settingsStore.config.general.defaultAgentRole = ''
-      await settingsStore.saveConfig(settingsStore.config)
+      const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
+      if (securitySyncFailed) {
+        console.warn('[WelcomeView] 安全/沙箱配置同步后端失败，不影响欢迎流程')
+      }
     }
 
     if (selectedAgentRole.value) {
@@ -282,9 +285,14 @@ async function skip() {
     }
     if (settingsStore.config) {
       settingsStore.config.general.welcomeCompleted = true
-      await settingsStore.saveConfig(settingsStore.config)
+      const { securitySyncFailed } = await settingsStore.saveConfig(settingsStore.config)
+      if (securitySyncFailed) {
+        console.warn('[WelcomeView] 安全/沙箱配置同步后端失败，不影响跳过流程')
+      }
     }
     router.push('/chat')
+  } catch (e) {
+    finishError.value = messageFromUnknownError(e)
   } finally {
     finishing.value = false
   }

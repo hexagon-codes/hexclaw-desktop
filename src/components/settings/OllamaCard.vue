@@ -5,31 +5,26 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 interface ModelEntry { name: string; ram: number }
 
 const OLLAMA_MODEL_CATALOG: ModelEntry[] = [
-  // Qwen3.5（阿里最新，支持图文）
-  { name: 'qwen3.5:9b', ram: 6 }, { name: 'qwen3.5:4b', ram: 3 }, { name: 'qwen3.5:2b', ram: 2 }, { name: 'qwen3.5:0.8b', ram: 1 },
+  // Qwen3.5（阿里最新，支持图文，全面取代 Qwen3/2.5）
+  { name: 'qwen3.5:0.8b', ram: 1 }, { name: 'qwen3.5:2b', ram: 2 }, { name: 'qwen3.5:4b', ram: 3 }, { name: 'qwen3.5:9b', ram: 6 },
   { name: 'qwen3.5:27b', ram: 17 }, { name: 'qwen3.5:35b', ram: 22 }, { name: 'qwen3.5:122b', ram: 75 },
-  // Qwen3（阿里，国内首选）
-  { name: 'qwen3:8b', ram: 5 }, { name: 'qwen3:14b', ram: 9 }, { name: 'qwen3:32b', ram: 20 }, { name: 'qwen3:4b', ram: 3 },
-  { name: 'qwen3:1.7b', ram: 1.5 }, { name: 'qwen3:0.6b', ram: 0.5 }, { name: 'qwen3:30b', ram: 19 },
-  { name: 'qwen3-coder:8b', ram: 5 }, { name: 'qwen3-coder:14b', ram: 9 }, { name: 'qwen3-coder:30b', ram: 19 }, { name: 'qwen3-coder:4b', ram: 3 },
-  { name: 'qwen3-vl:8b', ram: 6 }, { name: 'qwen3-vl:30b', ram: 20 }, { name: 'qwen3-vl:4b', ram: 3 },
-  // Qwen2.5
-  { name: 'qwen2.5:7b', ram: 5 }, { name: 'qwen2.5:14b', ram: 9 }, { name: 'qwen2.5:32b', ram: 20 }, { name: 'qwen2.5:72b', ram: 44 }, { name: 'qwen2.5:3b', ram: 2 },
-  { name: 'qwen2.5-coder:7b', ram: 5 }, { name: 'qwen2.5-coder:14b', ram: 9 }, { name: 'qwen2.5-coder:32b', ram: 20 }, { name: 'qwen2.5-coder:3b', ram: 2 },
+  // Qwen3 专项（Qwen3.5 暂无对应替代）
+  { name: 'qwen3-coder:4b', ram: 3 }, { name: 'qwen3-coder:8b', ram: 5 }, { name: 'qwen3-coder:14b', ram: 9 }, { name: 'qwen3-coder:30b', ram: 19 },
+  { name: 'qwen3-vl:4b', ram: 3 }, { name: 'qwen3-vl:8b', ram: 6 }, { name: 'qwen3-vl:30b', ram: 20 },
   // DeepSeek
-  { name: 'deepseek-r1:7b', ram: 5 }, { name: 'deepseek-r1:14b', ram: 9 }, { name: 'deepseek-r1:32b', ram: 20 }, { name: 'deepseek-r1:8b', ram: 5 },
-  { name: 'deepseek-r1:1.5b', ram: 1.5 }, { name: 'deepseek-r1:70b', ram: 43 },
-  { name: 'deepseek-v3', ram: 400 }, { name: 'deepseek-v3:671b', ram: 400 }, { name: 'deepseek-coder-v2', ram: 9 }, { name: 'deepseek-r1', ram: 400 },
-  // Llama
-  { name: 'llama3.3', ram: 43 }, { name: 'llama3.3:70b', ram: 43 }, { name: 'llama3.2', ram: 2 }, { name: 'llama3.2:3b', ram: 2 }, { name: 'llama3.2:1b', ram: 1 },
-  { name: 'llama3.1', ram: 5 }, { name: 'llama3.1:70b', ram: 43 },
-  // Gemma
-  { name: 'gemma3:4b', ram: 3 }, { name: 'gemma3:12b', ram: 8 }, { name: 'gemma3:27b', ram: 17 }, { name: 'gemma3:1b', ram: 1 },
-  { name: 'gemma2:9b', ram: 6 }, { name: 'gemma2:27b', ram: 17 },
-  // Phi
-  { name: 'phi4', ram: 9 }, { name: 'phi4-mini', ram: 3 }, { name: 'phi4-reasoning', ram: 9 }, { name: 'phi3.5', ram: 3 },
-  // Mistral
-  { name: 'mistral', ram: 5 }, { name: 'mistral-nemo', ram: 8 }, { name: 'mistral-small', ram: 14 },
+  { name: 'deepseek-r1:1.5b', ram: 1.5 }, { name: 'deepseek-r1:7b', ram: 5 }, { name: 'deepseek-r1:8b', ram: 5 },
+  { name: 'deepseek-r1:14b', ram: 9 }, { name: 'deepseek-r1:32b', ram: 20 }, { name: 'deepseek-r1:70b', ram: 43 },
+  { name: 'deepseek-v3', ram: 400 }, { name: 'deepseek-v3:671b', ram: 400 }, { name: 'deepseek-r1', ram: 400 },
+  // Gemma 4（Google 最新，多模态，MoE）
+  { name: 'gemma4:e2b', ram: 4 }, { name: 'gemma4:e4b', ram: 6 }, { name: 'gemma4:26b', ram: 10 }, { name: 'gemma4:31b', ram: 12 },
+  // Gemma 3
+  { name: 'gemma3:1b', ram: 1 }, { name: 'gemma3:4b', ram: 3 }, { name: 'gemma3:12b', ram: 8 }, { name: 'gemma3:27b', ram: 17 },
+  // Llama（3.2 有独特小尺寸，3.3 是 70B 旗舰）
+  { name: 'llama3.2:1b', ram: 1 }, { name: 'llama3.2:3b', ram: 2 }, { name: 'llama3.3', ram: 43 }, { name: 'llama3.3:70b', ram: 43 },
+  // Phi 4（微软）
+  { name: 'phi4-mini', ram: 3 }, { name: 'phi4', ram: 9 }, { name: 'phi4-reasoning', ram: 9 },
+  // Mistral / Devstral
+  { name: 'devstral', ram: 15 }, { name: 'mistral', ram: 5 }, { name: 'mistral-nemo', ram: 8 }, { name: 'mistral-small', ram: 14 },
   // 其他
   { name: 'command-r', ram: 21 }, { name: 'command-r-plus', ram: 63 }, { name: 'smollm2', ram: 1 }, { name: 'starcoder2', ram: 2 },
   // Embedding
@@ -42,12 +37,19 @@ const OLLAMA_MODEL_LIST = OLLAMA_MODEL_CATALOG.map(m => m.name)
 // RAM 查找表
 const MODEL_RAM_MAP = new Map(OLLAMA_MODEL_CATALOG.map(m => [m.name, m.ram]))
 
-// 空输入时展示的精选列表（跨系列代表作）
+// 空输入时展示的精选列表
+// 排序原则：大众电脑（8-16GB 内存）能跑的优先，同尺寸选质量最高的
 const OLLAMA_FEATURED = [
-  'qwen3.5:9b', 'qwen3.5:4b',
-  'qwen3:14b', 'qwen3:8b',
-  'deepseek-r1:7b', 'deepseek-r1:14b', 'deepseek-v3',
-  'llama3.3', 'gemma3:12b', 'phi4',
+  'qwen3.5:9b',        // 6GB — 最新最强，16GB 轻松跑
+  'gemma4:e4b',        // 6GB — Google 多模态，vision+tools+thinking
+  'gemma4:26b',        // 10GB — Google MoE，3.8B 激活，速度快质量高
+  'deepseek-r1:14b',   // 9GB — 推理/数学最强
+  'phi4',               // 9GB — 微软，小模型之王
+  'qwen3.5:27b',       // 17GB — 质量天花板，32GB 舒适
+  'gemma4:31b',        // 12GB — Google Dense 旗舰
+  'deepseek-r1:32b',   // 20GB — 32GB 内存推理最优
+  'devstral',           // 15GB — Mistral 编码专项，SWE-bench 68%
+  'qwen3-coder:8b',    // 5GB — 阿里编码专项，16GB 轻松跑
 ]
 
 // 本机总内存（GB）
@@ -101,6 +103,7 @@ import {
   loadOllamaModel, unloadOllamaModel, deleteOllamaModel, restartOllama,
   type OllamaStatus, type OllamaRunningModel,
 } from '@/api/ollama'
+import { logger } from '@/utils/logger'
 import { useSettingsStore } from '@/stores/settings'
 import { useRouter } from 'vue-router'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
@@ -204,12 +207,10 @@ async function detect() {
         const modelToLoad = defaultInLocal ? defaultModel : downloadedNames[0]
         if (modelToLoad) {
           try {
-            console.log('[OllamaCard] 自动预热模型:', modelToLoad)
             await loadOllamaModel(modelToLoad)
             await refreshRunning()
-            console.log('[OllamaCard] 预热完成, runningModels:', runningModels.value.length)
           } catch (e) {
-            console.warn('[OllamaCard] 预热失败:', e)
+            logger.warn('[OllamaCard] 预热失败:', e)
           }
         }
       }

@@ -226,10 +226,11 @@ describe('BUG 13: ChatView handleDrop only processes first file', () => {
 describe('BUG 15: WebSocket reconnect does not re-register callbacks', () => {
   const src = readSrc('api/websocket.ts')
 
-  it('onclose fires error callbacks when not intentional close', () => {
-    // The onclose handler should fire error callbacks
+  it('onclose delegates to attemptReconnect instead of firing error callbacks directly', () => {
+    // CHANGED: onclose 不再直接触发 errorCallbacks，而是先重连
+    // errorCallbacks 在 attemptReconnect 达到最大重试次数时才触发
     expect(src).toMatch(/this\.ws\.onclose\s*=\s*\(\)\s*=>/)
-    expect(src).toMatch(/errorCallbacks\.forEach\(\(cb\)\s*=>\s*cb\(['"]WebSocket connection lost['"]\)/)
+    expect(src).toContain('this.attemptReconnect()')
   })
 
   it('clearStreamCallbacks empties chunk, reply, and error callbacks', () => {
@@ -248,6 +249,27 @@ describe('BUG 15: WebSocket reconnect does not re-register callbacks', () => {
     expect(fnBody).not.toContain('onChunk')
     expect(fnBody).not.toContain('onReply')
     expect(fnBody).not.toContain('onError')
+  })
+
+  it('onReconnect callback mechanism exists and is invoked after successful reconnect', () => {
+    // websocket.ts must have reconnectCallbacks array + onReconnect method
+    expect(src).toContain('private reconnectCallbacks')
+    expect(src).toContain('onReconnect(callback')
+    // attemptReconnect triggers reconnectCallbacks after connect() resolves
+    const attemptFn = src.slice(src.indexOf('private attemptReconnect'))
+    expect(attemptFn).toContain('this.reconnectCallbacks.forEach')
+  })
+
+  it('clearCallbacks preserves reconnectCallbacks (structural listeners)', () => {
+    const clearFn = src.slice(src.indexOf('clearCallbacks():'), src.indexOf('}', src.indexOf('clearCallbacks():') + 50) + 1)
+    // reconnectCallbacks should NOT be cleared by clearCallbacks
+    expect(clearFn).not.toContain('reconnectCallbacks')
+  })
+
+  it('chat store registers onReconnect to auto-recover streams', () => {
+    const chatSrc = readSrc('stores/chat.ts')
+    expect(chatSrc).toContain('hexclawWS.onReconnect')
+    expect(chatSrc).toContain('recoverActiveStreams')
   })
 })
 
@@ -345,11 +367,11 @@ function makeMockToast() {
 }
 
 describe('useChatActions runtime: confirmEdit model guard', () => {
-  let mockHandleSend: (text: string, files?: File[]) => Promise<void>
+  let mockHandleSend: (text: string, files?: File[]) => Promise<boolean>
 
   beforeEach(() => {
     vi.clearAllMocks()
-    mockHandleSend = vi.fn().mockResolvedValue(undefined)
+    mockHandleSend = vi.fn().mockResolvedValue(true)
   })
 
   it('confirmEdit with no model -> messages NOT spliced, edit cancelled', async () => {
@@ -469,11 +491,11 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
 })
 
 describe('useChatActions runtime: handleRetry model guard', () => {
-  let mockHandleSend: (text: string, files?: File[]) => Promise<void>
+  let mockHandleSend: (text: string, files?: File[]) => Promise<boolean>
 
   beforeEach(() => {
     vi.clearAllMocks()
-    mockHandleSend = vi.fn().mockResolvedValue(undefined)
+    mockHandleSend = vi.fn().mockResolvedValue(true)
   })
 
   it('handleRetry with no model -> messages NOT spliced, returns early', async () => {

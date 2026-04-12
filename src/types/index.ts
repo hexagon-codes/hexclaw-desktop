@@ -35,6 +35,7 @@ export type {
   AppConfig,
   LLMConfig,
   SecurityConfig,
+  SandboxConfig,
   GeneralConfig,
   NotificationConfig,
   MCPConfig,
@@ -47,6 +48,8 @@ export type {
   BackendLLMProvider,
   BackendLLMConfig,
   BackendRuntimeConfig,
+  RuntimeConfigUpdateRequest,
+  ConfigUpdateResponse,
   LLMConnectionTestRequest,
   LLMConnectionTestResponse,
 } from './settings'

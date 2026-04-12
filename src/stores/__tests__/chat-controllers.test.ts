@@ -749,7 +749,7 @@ describe('chat controller modules', () => {
       messages: [],
       sessions: [{
         id: 's1',
-        title: '新对话',
+        title: 'New Chat',
         created_at: '2026-01-01',
         updated_at: '2026-01-01',
         message_count: 0,

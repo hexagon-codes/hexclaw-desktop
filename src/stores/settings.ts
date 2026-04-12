@@ -12,6 +12,8 @@ import type {
   ApiError,
   ModelCapability,
   ModelOption,
+  SecurityConfig,
+  SandboxConfig,
 } from '@/types'
 import {
   cloneProviders,
@@ -32,10 +34,15 @@ import {
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
 
 export const useSettingsStore = defineStore('settings', () => {
+  const fallbackSandbox = (): SandboxConfig => ({
+    network_enabled: defaultConfig().sandbox?.network_enabled ?? true,
+  })
   const config = ref<AppConfig | null>(null)
   const loading = ref(false)
   const error = ref<ApiError | null>(null)
   const runtimeProviders = ref<ProviderConfig[] | null>(null)
+  const syncedSecurity = ref<SecurityConfig>({ ...defaultConfig().security })
+  const syncedSandbox = ref<SandboxConfig>(fallbackSandbox())
 
   /**
    * Ollama 模型独立缓存 — 不存入 Provider.models，避免 save/reload/reactivity 链问题。
@@ -61,6 +68,9 @@ export const useSettingsStore = defineStore('settings', () => {
     p.type === 'ollama' ||
     p.backendKey?.toLowerCase().includes('ollama') ||
     p.name?.toLowerCase().includes('ollama')
+
+  const cloneSecurity = (security: SecurityConfig): SecurityConfig => ({ ...security })
+  const cloneSandbox = (sandbox: SandboxConfig): SandboxConfig => ({ ...sandbox })
 
   /** 所有可用模型（来自已启用的 Provider + Ollama 实时缓存） */
   const availableModels = computed(() => {
@@ -190,6 +200,7 @@ export const useSettingsStore = defineStore('settings', () => {
           notification: { ...defaults.notification, ...savedConfig.notification },
           mcp: { ...defaults.mcp, ...savedConfig.mcp },
           memory: { enabled: savedConfig.memory?.enabled ?? defaults.memory?.enabled ?? true },
+          sandbox: { network_enabled: savedConfig.sandbox?.network_enabled ?? true },
         }
       } else {
         config.value = { ...defaults, llm: persistedLlm }
@@ -201,6 +212,8 @@ export const useSettingsStore = defineStore('settings', () => {
         config.value!.llm.defaultModel,
         config.value!.llm.defaultProviderId ?? '',
       )
+      syncedSecurity.value = cloneSecurity(config.value!.security)
+      syncedSandbox.value = cloneSandbox(config.value!.sandbox ?? fallbackSandbox())
       runtimeProviders.value = isTauri()
         ? null
         : cloneProviders(config.value!.llm.providers.filter((provider) => provider.enabled))
@@ -212,6 +225,8 @@ export const useSettingsStore = defineStore('settings', () => {
     } catch (e) {
       logger.error('加载配置失败', e)
       config.value = defaultConfig()
+      syncedSecurity.value = cloneSecurity(config.value.security)
+      syncedSandbox.value = cloneSandbox(config.value.sandbox ?? fallbackSandbox())
     }
 
     loading.value = false
@@ -289,10 +304,13 @@ export const useSettingsStore = defineStore('settings', () => {
   }
 
   /** 保存配置 — LLM 配置保存到后端 API，其余保存到 Tauri Store */
-  async function saveConfig(newConfig: AppConfig) {
+  async function saveConfig(newConfig: AppConfig): Promise<{ securitySyncFailed: boolean }> {
     // 深拷贝去掉 Vue 响应式代理，确保序列化正确
     const plainConfig: AppConfig = JSON.parse(JSON.stringify(newConfig))
     const previousProviders = cloneProviders(config.value?.llm.providers ?? [])
+    const previousSecurity = cloneSecurity(syncedSecurity.value)
+    const previousSandbox = cloneSandbox(syncedSandbox.value)
+    let securitySyncFailed = false
 
     assertUniqueProviderNames(plainConfig.llm.providers)
     plainConfig.llm.providers = await materializeProviderApiKeys(plainConfig.llm.providers)
@@ -339,18 +357,35 @@ export const useSettingsStore = defineStore('settings', () => {
         }
       }
 
-      // 安全配置同步到后端
+      let liveConfigForPersistence = plainConfig
+
+      // 安全配置 + 沙箱配置同步到后端
       try {
-        await updateConfig({ security: plainConfig.security })
-        logger.debug('安全配置已同步到后端', plainConfig.security)
+        await updateConfig({
+          security: plainConfig.security,
+          sandbox: plainConfig.sandbox,
+        })
+        logger.debug('安全/沙箱配置已同步到后端', plainConfig.security, plainConfig.sandbox)
+        syncedSecurity.value = cloneSecurity(plainConfig.security)
+        syncedSandbox.value = cloneSandbox(plainConfig.sandbox ?? fallbackSandbox())
       } catch (e) {
-        logger.warn('安全配置同步到后端失败（非致命）', e)
+        securitySyncFailed = true
+        logger.warn('安全/沙箱配置同步到后端失败，已回滚本地状态', e)
+        liveConfigForPersistence = {
+          ...plainConfig,
+          security: cloneSecurity(previousSecurity),
+          sandbox: cloneSandbox(previousSandbox),
+        }
+        if (config.value) {
+          config.value.security = cloneSecurity(previousSecurity)
+          config.value.sandbox = cloneSandbox(previousSandbox)
+        }
       }
 
       // 非 LLM 配置保存到 Tauri Store
       // API Key 统一走 secure-store，配置副本里不落明文
       const configToSave: AppConfig = {
-        ...plainConfig,
+        ...liveConfigForPersistence,
         llm: {
           providers: plainConfig.llm.providers.map((p) => ({
             ...p,
@@ -384,6 +419,7 @@ export const useSettingsStore = defineStore('settings', () => {
     const queuedJob = saveConfigQueue.catch(() => undefined).then(persistJob)
     saveConfigQueue = queuedJob
     await queuedJob
+    return { securitySyncFailed }
   }
 
   /** 保存后异步拉取每个云端 Provider 的模型列表（fire-and-forget） */
@@ -447,21 +483,7 @@ export const useSettingsStore = defineStore('settings', () => {
     reconcileDefaultSelection(config.value.llm)
   }
 
-  /**
-   * 同步 Ollama Provider 的模型列表与 Ollama 实际已下载模型
-   * 下载/删除模型后调用，确保 Provider 模型列表与 Ollama 一致
-   */
-  /**
-   * 从 Ollama 实际已安装模型同步到 Provider 模型列表（仅内存更新，不持久化）
-   *
-   * 不调 saveConfig — 避免 save→reload→reset 循环。
-   * 模型列表来自 Ollama 实时状态，每次 detect()/refreshModels() 都会刷新，无需持久化。
-   */
-  /**
-   * 从 Ollama 实时拉取已安装模型，更新独立缓存 ollamaModelsCache。
-   * availableModels computed 直接读取此缓存，完全绕开 Provider.models 的配置链。
-   * 每次调用都是一次 ref 赋值 → Vue 响应式 100% 可靠。
-   */
+  /** 从 Ollama 实时拉取已安装模型，更新 ollamaModelsCache（不持久化，不触发 saveConfig）。 */
   async function syncOllamaModels() {
     try {
       const status = await getOllamaStatus()

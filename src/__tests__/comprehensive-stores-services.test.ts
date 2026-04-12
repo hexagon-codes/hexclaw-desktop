@@ -162,7 +162,7 @@ vi.mock('@/config/env', () => ({
 vi.mock('@/constants', () => ({
   DESKTOP_USER_ID: 'desktop-user',
   USER_CANCELLED_MESSAGE: '用户取消',
-  DEFAULT_SESSION_TITLE: '新对话',
+  DEFAULT_SESSION_TITLE: 'New Chat',
 }))
 
 // --- tauri core (for restartSidecar) ---

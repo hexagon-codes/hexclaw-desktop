@@ -129,6 +129,7 @@ export default {
     botName: 'HexClaw',
     thinking: 'Thinking...',
     thoughtProcess: 'Thought process',
+    thoughtFor: 'Thought for',
     thinkingOn: 'Deep thinking enabled (model reasons before answering, slower)',
     thinkingOff: 'Deep thinking disabled (direct answers, faster)',
     toolParams: 'Params',
@@ -858,6 +859,10 @@ export default {
     memory: {
       toggle: 'Memory',
       toggleDesc: 'Auto-extract and recall memories from conversations',
+    },
+    sandbox: {
+      toggle: 'Sandbox Network',
+      toggleDesc: 'Allow code execution sandbox to access the network',
     },
     system: {
       title: 'System',

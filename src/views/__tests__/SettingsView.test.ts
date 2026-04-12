@@ -1298,4 +1298,38 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(store.config).not.toBeNull()
     expect(store.config?.llm.providers).toBeDefined()
   })
+
+  it('restores provider list when delete-then-save fails (Bug 2 regression)', async () => {
+    // Bug 2 回归: 修复前 handleDeleteProvider 先删 provider，保存失败只记日志不恢复 UI
+    // 结果: provider 从界面消失但未持久化
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    await store.loadConfig()
+    await flushPromises()
+
+    // 确认初始有 provider
+    const providersBefore = store.config?.llm.providers.length ?? 0
+    expect(providersBefore).toBeGreaterThan(0)
+
+    const firstProviderId = store.config!.llm.providers[0]!.id
+
+    // 直接 mock store.saveConfig 抛出致命错误（模拟 Tauri 桌面端 LLM 保存失败）
+    const originalSave = store.saveConfig
+    store.saveConfig = vi.fn().mockRejectedValueOnce(new Error('Disk full')) as typeof store.saveConfig
+
+    // 通过 SettingsView 暴露的方法执行删除
+    const vm = wrapper.vm as unknown as {
+      handleDeleteProvider: (id: string) => Promise<void>
+    }
+    await vm.handleDeleteProvider(firstProviderId)
+    await flushPromises()
+
+    // 修复后: 保存失败时 provider 被恢复
+    expect(store.config?.llm.providers.length).toBe(providersBefore)
+
+    // 清理
+    store.saveConfig = originalSave
+  })
 })
