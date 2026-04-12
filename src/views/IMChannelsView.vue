@@ -23,8 +23,6 @@ import {
   deleteIMInstance,
   testIMInstance,
   testSavedIMInstanceRuntime,
-  startIMInstance,
-  stopIMInstance,
   listIMInstancesHealth,
   getChannelMeta,
   getChannelHelpText,
@@ -109,7 +107,6 @@ const modalTesting = ref(false)
 // ─── Instance health ────────────────────────────────
 
 const healthMap = ref<Record<string, IMInstanceHealth>>({})
-const togglingId = ref<string | null>(null)
 let healthRequestGen = 0
 
 function isDesktopRuntime() {
@@ -133,28 +130,6 @@ async function loadHealth() {
   } catch { /* non-critical */ }
 }
 
-function getHealth(inst: IMInstance): IMInstanceHealth | undefined {
-  return healthMap.value[inst.name]
-}
-
-async function handleStartStop(inst: IMInstance) {
-  if (togglingId.value === inst.id) return
-  const health = getHealth(inst)
-  const isRunning = health?.status === 'running'
-  togglingId.value = inst.id
-  try {
-    if (isRunning) {
-      await stopIMInstance(inst.name)
-    } else {
-      await startIMInstance(inst.name)
-    }
-    await loadHealth()
-  } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('imChannels.updateFailed')
-  } finally {
-    togglingId.value = null
-  }
-}
 
 // ─── Delete confirmation ─────────────────────────────
 

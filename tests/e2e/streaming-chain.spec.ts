@@ -16,7 +16,7 @@ import type { ChatResult } from './helpers'
 // 0. 环境探测（所有测试共享）
 // ---------------------------------------------------------------------------
 
-let availableSkills: string[] = []
+let _availableSkills: string[] = []
 let availableProviders: Record<string, { model: string; has_key: boolean }> = {}
 let defaultProvider = ''
 let hasCloudProvider = false
@@ -25,7 +25,7 @@ test.beforeAll(async () => {
   // 探测可用 skills
   try {
     const { data } = await api('GET', '/api/v1/skills')
-    availableSkills = ((data as any).skills ?? []).map((s: any) => s.name ?? '')
+    _availableSkills = ((data as any).skills ?? []).map((s: any) => s.name ?? '')
   } catch { /* sidecar 未启动时跳过 */ }
 
   // 探测可用 providers

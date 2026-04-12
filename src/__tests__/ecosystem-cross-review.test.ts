@@ -1,3 +1,4 @@
+/* eslint-disable */
 /**
  * Ecosystem Cross-Review Audit (2026-04-11)
  *

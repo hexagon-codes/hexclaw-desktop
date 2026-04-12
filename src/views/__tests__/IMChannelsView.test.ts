@@ -266,61 +266,6 @@ describe('IMChannelsView', () => {
     await flushPromises()
   })
 
-  it('does not start a second start request while the first toggle is still running', async () => {
-    ;(globalThis as Record<string, unknown>).isTauri = true
-    getIMInstances.mockResolvedValueOnce([
-      {
-        id: 'feishu-1',
-        name: '飞书',
-        type: 'feishu',
-        enabled: true,
-        config: { app_id: 'cli_xxx', app_secret: 'secret' },
-        createdAt: 1,
-      },
-    ])
-    listIMInstancesHealth.mockResolvedValueOnce([{ name: '飞书', status: 'stopped' }])
-
-    let resolveStart!: () => void
-    startIMInstance.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveStart = resolve
-        }),
-    )
-
-    const wrapper = mountIMChannelsView()
-    await flushPromises()
-
-    const vm = wrapper.vm as unknown as {
-      handleStartStop: (inst: {
-        id: string
-        name: string
-        type: string
-        enabled: boolean
-        config: Record<string, string>
-        createdAt: number
-      }) => Promise<void>
-    }
-
-    const inst = {
-      id: 'feishu-1',
-      name: '飞书',
-      type: 'feishu',
-      enabled: true,
-      config: { app_id: 'cli_xxx', app_secret: 'secret' },
-      createdAt: 1,
-    }
-
-    void vm.handleStartStop(inst)
-    await flushPromises()
-    void vm.handleStartStop(inst)
-    await flushPromises()
-
-    expect(startIMInstance).toHaveBeenCalledTimes(1)
-
-    resolveStart()
-    await flushPromises()
-  })
 
   it('does not start a second create request while the first save is still running', async () => {
     let resolveCreate!: () => void
