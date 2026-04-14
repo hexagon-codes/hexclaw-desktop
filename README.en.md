@@ -45,7 +45,8 @@ Native macOS / Windows / Linux · Sidecar local deployment · Zero cloud depende
 
 | Feature | Description |
 |---------|-------------|
-| **AI Chat** | Multi-model support: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama, streaming output, Markdown rendering, syntax highlighting |
+| **AI Chat** | Multi-model support: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama, streaming output, Markdown rendering, syntax highlighting, deep thinking |
+| **Image/Video Generation** | ZhipuAI CogView-4 image generation + CogVideoX-2 video generation, images embedded as data URI (never expire), inline video playback, metadata-driven capability detection |
 | **Agent Orchestration** | Custom Agent roles/goals/backstory, multi-Agent collaboration, Agent conference mode, role template library |
 | **Skill System** | Skill marketplace + custom skills, tool registration and permission management |
 | **Workflow Canvas** | Visual drag-and-drop Agent workflow orchestration, DAG execution engine |
