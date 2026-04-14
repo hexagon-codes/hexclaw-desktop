@@ -252,6 +252,14 @@ const rendered = computed(() => {
 .markdown-body :deep(h2) { font-size: 1.2em; }
 .markdown-body :deep(h3) { font-size: 1.1em; }
 
+.markdown-body :deep(img) {
+  max-width: 100%;
+  max-height: 512px;
+  border-radius: var(--hc-radius-md);
+  margin: 0.5em 0;
+  cursor: pointer;
+}
+
 /* ─── Code Blocks ───── */
 .markdown-body :deep(.code-block-wrapper) {
   margin: 0.5em 0;

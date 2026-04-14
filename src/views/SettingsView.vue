@@ -74,6 +74,8 @@ const newModelCaps = ref<Record<ModelCapability, boolean>>({
   video: false,
   audio: false,
   code: false,
+  image_generation: false,
+  video_generation: false,
 })
 const showAddModelPanel = ref(false)
 
@@ -84,7 +86,7 @@ watch(editingModel, (v) => { if (v) nextTick(() => editModelOverlayRef.value?.fo
 const editModelForm = ref<{ name: string; id: string; caps: Record<ModelCapability, boolean> }>({
   name: '',
   id: '',
-  caps: { text: true, vision: false, video: false, audio: false, code: false },
+  caps: { text: true, vision: false, video: false, audio: false, code: false, image_generation: false, video_generation: false },
 })
 const pendingDeleteProviderId = ref<string | null>(null)
 const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName: string } | null>(
@@ -912,7 +914,7 @@ async function saveConfig() {
               </div>
             </div>
 
-            <!-- Routing: toggle + select on same row -->
+            <!-- Routing: toggle + select (策略仅在开启时显示) -->
             <div class="hc-settings__row">
               <span class="hc-settings__row-label">
                 {{ t('settings.llm.routingEnabled') }}
@@ -920,10 +922,10 @@ async function saveConfig() {
               </span>
               <div class="hc-settings__row-right">
                 <select
+                  v-if="config.llm.routing?.enabled"
                   v-model="config.llm.routing!.strategy"
                   data-testid="llm-routing-strategy-select"
                   class="hc-settings__select"
-                  :disabled="!config.llm.routing?.enabled"
                   @change="handleRoutingStrategyChange"
                 >
                   <option v-for="option in routingStrategyOptions" :key="option.value" :value="option.value">
@@ -1168,7 +1170,7 @@ async function saveConfig() {
                           :key="cap"
                           class="hc-model-chip__cap"
                           :class="`hc-model-chip__cap--${cap}`"
-                        >{{ cap === 'vision' ? '视觉' : cap === 'video' ? '视频' : cap === 'audio' ? '音频' : cap === 'code' ? '代码' : cap }}</span>
+                        >{{ { vision: '视觉', video: '视频', audio: '音频', code: '代码', image_generation: '绘图', video_generation: '视频生成' }[cap] || cap }}</span>
                       </button>
                       <!-- 添加自定义模型 -->
                       <button
@@ -1615,22 +1617,16 @@ async function saveConfig() {
               <label>模型能力</label>
               <div class="hc-edit-model__caps">
                 <label
-                  v-for="cap in ['text', 'vision', 'video', 'audio'] as ModelCapability[]"
+                  v-for="cap in ['text', 'vision', 'video', 'audio', 'image_generation', 'video_generation'] as ModelCapability[]"
                   :key="cap"
                   class="hc-edit-model__cap-item"
                 >
                   <input v-model="editModelForm.caps[cap]" type="checkbox" :disabled="cap === 'text'" />
                   <span class="hc-edit-model__cap-icon">{{
-                    cap === 'text' ? '💬' : cap === 'vision' ? '👁' : cap === 'video' ? '🎬' : '🎤'
+                    { text: '💬', vision: '👁', video: '🎬', audio: '🎤', image_generation: '🎨', video_generation: '📹' }[cap]
                   }}</span>
                   <span>{{
-                    cap === 'text'
-                      ? '文本'
-                      : cap === 'vision'
-                        ? '视觉'
-                        : cap === 'video'
-                          ? '视频'
-                          : '音频'
+                    { text: '文本', vision: '视觉', video: '视频', audio: '音频', image_generation: '绘图', video_generation: '视频生成' }[cap]
                   }}</span>
                 </label>
               </div>

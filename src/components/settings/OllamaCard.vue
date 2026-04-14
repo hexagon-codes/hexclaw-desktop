@@ -496,6 +496,18 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1e9).toFixed(2)} GB`
 }
 
+/** 将 Ollama 原始 status 映射为用户友好的提示 */
+function mapPullStatus(raw: string): string {
+  if (!raw) return ''
+  const lower = raw.toLowerCase()
+  if (lower.includes('pulling manifest')) return t('settings.ollama.pullManifest', '获取模型信息...')
+  if (lower.includes('downloading')) return t('settings.ollama.downloading', '下载中...')
+  if (lower.includes('verifying')) return t('settings.ollama.verifyingModel', '校验文件完整性...')
+  if (lower.includes('writing')) return t('settings.ollama.writingModel', '写入模型文件...')
+  if (lower === 'success') return t('common.done', '完成')
+  return raw
+}
+
 function resetStallTimer() {
   if (stallTimer) clearTimeout(stallTimer)
   stallTimer = setTimeout(() => {
@@ -528,7 +540,13 @@ async function startPull() {
   pullAbort = new AbortController()
   try {
     await pullOllamaModel(model, (p) => {
-      pullStatus.value = p.status || ''
+      pullStatus.value = mapPullStatus(p.status || '')
+      // 非下载阶段（校验/写入）清空速度详情，避免残留 "0 KB"
+      const statusLower = (p.status || '').toLowerCase()
+      if (statusLower.includes('verifying') || statusLower.includes('writing')) {
+        pullDetail.value = ''
+        pullProgress.value = 100
+      }
       if (p.total && p.total > 0 && p.completed !== undefined) {
         pullProgress.value = Math.round((p.completed / p.total) * 100)
         // Layer 切换检测：completed 重置时同步重置基准值

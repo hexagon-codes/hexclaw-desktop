@@ -62,10 +62,17 @@ export function createChatSendDeliveryController(params: {
   } = params
 
   function buildRequestMetadata(): Record<string, string> | undefined {
-    const memoryEnabled = getSettingsStore().config?.memory?.enabled ?? true
+    const settingsStore = getSettingsStore()
+    const memoryEnabled = settingsStore.config?.memory?.enabled ?? true
+    const model = chatParams.value.model
+    const modelCaps = model
+      ? settingsStore.availableModels.find((m) => m.modelId === model)?.capabilities ?? []
+      : []
     return buildChatRequestMetadata({
       thinkingEnabled: thinkingEnabled.value,
       memoryEnabled,
+      imageGeneration: modelCaps.includes('image_generation'),
+      videoGeneration: modelCaps.includes('video_generation'),
     })
   }
 

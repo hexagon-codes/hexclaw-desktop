@@ -3,7 +3,7 @@
 .PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 lint lint-fix format prepare-sidecar-src
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
-HEXCLAW_REF ?= refs/tags/v0.3.10
+HEXCLAW_REF ?= refs/tags/v0.3.11
 HEXCLAW_SRC_DIR ?= /tmp/hexclaw-gith-src
 DESKTOP_ROOT := $(CURDIR)
 SIDECAR_BIN_DIR := $(DESKTOP_ROOT)/src-tauri/binaries

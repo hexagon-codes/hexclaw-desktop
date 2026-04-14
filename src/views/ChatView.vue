@@ -219,14 +219,12 @@ const userOverrodeModel = ref(false)
 
 // 当前模型的显示名
 const selectedModelDisplay = computed(() => {
-  if (!userOverrodeModel.value) {
-    // Show agent preference source when backend decides
-    const agentName = (chatStore.chatMode === 'agent' && chatStore.agentRole)
-      ? chatStore.agentRole
-      : agentsStore.defaultAgentName
-    if (agentName) {
-      const cfg = agentsStore.findAgent(agentName)
-      if (cfg?.model) return `${cfg.model} ⟵ Agent`
+  // 仅在显式 Agent 模式下，且用户未手动选模型时，显示 Agent 偏好模型
+  if (!userOverrodeModel.value && chatStore.chatMode === 'agent' && chatStore.agentRole) {
+    const cfg = agentsStore.findAgent(chatStore.agentRole)
+    if (cfg?.model) {
+      const agentLabel = cfg.display_name || cfg.name || chatStore.agentRole
+      return `${cfg.model} · ${agentLabel}`
     }
   }
   if (selectedModel.value === 'auto') return 'Auto'
@@ -469,15 +467,12 @@ function selectModel(modelId: string, providerId = '', providerKey = '', provide
 
 /** 同步模型和参数到 chatStore
  *
- * 当后端有 Agent 可决策模型（显式 agentRole 或默认 Agent 有模型偏好），
- * 且用户没有主动选模型时，不发 provider/model，让后端决策。
+ * 仅在显式 Agent 模式（chatMode=agent + agentRole）且用户没有手动选模型时，
+ * 不发 provider/model，让后端根据 Agent 配置决策。
+ * 普通聊天始终使用用户设置的默认模型。
  */
 function syncChatParams() {
-  const hasExplicitAgent = chatStore.chatMode === 'agent' && !!chatStore.agentRole
-  const defaultAgentHasModel = !hasExplicitAgent
-    && !!agentsStore.defaultAgentName
-    && !!agentsStore.findAgent(agentsStore.defaultAgentName)?.model
-  const letBackendDecide = (hasExplicitAgent || defaultAgentHasModel) && !userOverrodeModel.value
+  const letBackendDecide = chatStore.chatMode === 'agent' && !!chatStore.agentRole && !userOverrodeModel.value
 
   chatStore.chatParams.provider = letBackendDecide
     ? undefined
@@ -917,6 +912,14 @@ function startSidebarResize(event: MouseEvent) {
                       :title="formatFullTime(msg.timestamp)"
                     >
                       <MarkdownRenderer :content="msg.content" />
+                      <!-- 视频生成：内联播放器 -->
+                      <video
+                        v-if="msg.metadata?.source === 'video_generation' && msg.metadata?.video_url"
+                        controls
+                        preload="metadata"
+                        class="hc-msg__video"
+                        :src="String(msg.metadata.video_url)"
+                      />
                     </div>
                     <div
                       v-show="hoveredMsgId === msg.id"
@@ -1009,7 +1012,7 @@ function startSidebarResize(event: MouseEvent) {
                     <div v-for="tc in msg.tool_calls" :key="tc.id" class="hc-msg__tool">
                       <div class="hc-msg__tool-head">
                         <Wrench :size="14" />
-                        <span class="hc-msg__tool-name">{{ tc.name }}</span>
+                        <span class="hc-msg__tool-name">{{ t('chat.toolName.' + tc.name, tc.name) }}</span>
                       </div>
                       <details v-if="tc.arguments" class="hc-msg__tool-detail">
                         <summary>{{ t('chat.toolParams') }}</summary>
@@ -1702,6 +1705,13 @@ function startSidebarResize(event: MouseEvent) {
   border: none;
   padding: 0;
   border-radius: 0;
+}
+
+.hc-msg__video {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: var(--hc-radius-md);
+  margin-top: 0.5em;
 }
 
 .hc-msg__bubble--empty {

@@ -1,5 +1,5 @@
 /** 模型能力标记 */
-export type ModelCapability = 'text' | 'vision' | 'video' | 'audio' | 'code'
+export type ModelCapability = 'text' | 'vision' | 'video' | 'audio' | 'code' | 'image_generation' | 'video_generation'
 
 /** 模型选项 */
 export interface ModelOption {

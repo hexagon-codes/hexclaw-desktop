@@ -120,6 +120,8 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
       { id: 'glm-z1-flash', name: 'GLM-Z1 Flash', capabilities: ['text'] },
       { id: 'glm-z1-airx', name: 'GLM-Z1 AirX', capabilities: ['text'] },
       { id: 'glm-4v-plus', name: 'GLM-4V Plus', capabilities: ['text', 'vision'] },
+      { id: 'cogview-4', name: 'CogView-4', capabilities: ['image_generation'] },
+      { id: 'cogvideox-2', name: 'CogVideoX-2', capabilities: ['video_generation'] },
     ],
   },
   kimi: {
