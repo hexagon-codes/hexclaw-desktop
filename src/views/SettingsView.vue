@@ -174,7 +174,7 @@ function hasUnsavedChanges() {
 function resetPendingModelDraft() {
   newModelId.value = ''
   newModelName.value = ''
-  newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false }
+  newModelCaps.value = { text: true, vision: false, video: false, audio: false, code: false, image_generation: false, video_generation: false }
 }
 
 function commitPendingModelDraft() {
@@ -1170,7 +1170,7 @@ async function saveConfig() {
                           :key="cap"
                           class="hc-model-chip__cap"
                           :class="`hc-model-chip__cap--${cap}`"
-                        >{{ { vision: '视觉', video: '视频', audio: '音频', code: '代码', image_generation: '绘图', video_generation: '视频生成' }[cap] || cap }}</span>
+                        >{{ { text: '文本', vision: '视觉', video: '视频', audio: '音频', code: '代码', image_generation: '绘图', video_generation: '视频生成' }[cap] || cap }}</span>
                       </button>
                       <!-- 添加自定义模型 -->
                       <button
@@ -1623,10 +1623,10 @@ async function saveConfig() {
                 >
                   <input v-model="editModelForm.caps[cap]" type="checkbox" :disabled="cap === 'text'" />
                   <span class="hc-edit-model__cap-icon">{{
-                    { text: '💬', vision: '👁', video: '🎬', audio: '🎤', image_generation: '🎨', video_generation: '📹' }[cap]
+                    { text: '💬', vision: '👁', video: '🎬', audio: '🎤', code: '💻', image_generation: '🎨', video_generation: '📹' }[cap]
                   }}</span>
                   <span>{{
-                    { text: '文本', vision: '视觉', video: '视频', audio: '音频', image_generation: '绘图', video_generation: '视频生成' }[cap]
+                    { text: '文本', vision: '视觉', video: '视频', audio: '音频', code: '代码', image_generation: '绘图', video_generation: '视频生成' }[cap]
                   }}</span>
                 </label>
               </div>

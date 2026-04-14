@@ -1036,7 +1036,6 @@ export default {
       downloadDirect: 'Download directly',
       fitsMemory: 'Fits this machine',
       exceedsMemory: 'Exceeds available memory',
-      downloading: 'Downloading',
       downloadModel: 'Download',
       goChat: 'Go to Chat',
       otherLocal: 'Other local LLMs (LM Studio, llama.cpp, vLLM) can be added as OpenAI-compatible providers.',

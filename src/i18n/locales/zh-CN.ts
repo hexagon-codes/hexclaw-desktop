@@ -1045,7 +1045,6 @@ export default {
       downloadDirect: '直接下载',
       fitsMemory: '适合本机运行',
       exceedsMemory: '超出本机内存',
-      downloading: '下载中',
       downloadModel: '下载',
       goChat: '去对话',
       otherLocal: '其他本地模型（LM Studio、llama.cpp、vLLM）可通过 OpenAI 兼容接口接入。',
