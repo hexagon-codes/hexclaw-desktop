@@ -155,9 +155,9 @@ describe('旅程 1: 新用户首次使用 Ollama', () => {
     await flushPromises()
 
     // 验证：下载过程
-    expect(statusValues).toContain('pulling manifest')
-    expect(statusValues).toContain('verifying sha256 digest')
-    expect(statusValues).toContain('success')
+    expect(statusValues).toContain('获取模型信息...')
+    expect(statusValues).toContain('校验文件完整性...')
+    expect(statusValues).toContain('完成')
     expect(vm.pullProgress).toBe(100)
     expect(vm.pullStatus).toBe('__pull_done__') // PULL_DONE sentinel
     expect(vm.lastDownloaded).toBe('qwen3:8b')
