@@ -66,7 +66,7 @@ export function createChatSendDeliveryController(params: {
     const memoryEnabled = settingsStore.config?.memory?.enabled ?? true
     const model = chatParams.value.model
     const modelCaps = model
-      ? settingsStore.availableModels.find((m) => m.modelId === model)?.capabilities ?? []
+      ? (settingsStore.availableModels ?? []).find((m) => m.modelId === model)?.capabilities ?? []
       : []
     return buildChatRequestMetadata({
       thinkingEnabled: thinkingEnabled.value,

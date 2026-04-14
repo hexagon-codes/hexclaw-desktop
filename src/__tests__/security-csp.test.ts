@@ -173,8 +173,11 @@ describe('CSP security policy', () => {
       }
     })
 
-    it('no directive allows http:// or https:// broadly', () => {
+    it('no directive allows http:// or https:// broadly (except media-src for video playback)', () => {
+      // media-src 需要 https: 加载外部视频（视频生成模型返回 CDN URL）
+      const exempted = new Set(['media-src'])
       for (const [directive, values] of allDirectives) {
+        if (exempted.has(directive)) continue
         expect(
           values.includes('http:') || values.includes('https:'),
           `${directive} contains overly broad http:/https: source`,
