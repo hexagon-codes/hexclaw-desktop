@@ -78,6 +78,7 @@ export function createChatSendWebSocketDeliveryController(params: {
       explicitReasoning: '',
       reasoning: '',
       reasoningStartTime: 0,
+      reasoningEndTime: 0,
     })
     setSessionPending(sessionId, false, sending, draftSending)
 

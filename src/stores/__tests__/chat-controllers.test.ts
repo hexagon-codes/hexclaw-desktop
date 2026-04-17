@@ -358,6 +358,7 @@ describe('chat controller modules', () => {
           explicitReasoning: '',
           reasoning: '思考过程',
           reasoningStartTime: Date.now() - 2000,
+          reasoningEndTime: 0,
         },
       }),
       pendingSuggestedTitleExpectation: ref({ s1: '临时标题' }),
@@ -416,6 +417,7 @@ describe('chat controller modules', () => {
           explicitReasoning: '',
           reasoning: '半截思考',
           reasoningStartTime: 0,
+          reasoningEndTime: 0,
         },
       }),
       currentSessionId: ref('s1'),
@@ -425,6 +427,7 @@ describe('chat controller modules', () => {
       streamingContent: ref(''),
       streamingReasoning: ref(''),
       streamingReasoningStartTime: ref(0),
+      streamingReasoningEndTime: ref(0),
       streamHandles: new Map([['s1', { cancel } as any]]),
       msgSvc: { persistMessage: vi.fn() } as any,
       createId: () => 'partial-1',
@@ -513,6 +516,7 @@ describe('chat controller modules', () => {
     const streamingContent = ref('')
     const streamingReasoning = ref('')
     const streamingReasoningStartTime = ref(0)
+    const streamingReasoningEndTime = ref(0)
 
     const controller = createChatStreamStateController({
       activeStreams,
@@ -524,6 +528,7 @@ describe('chat controller modules', () => {
       streamingContent,
       streamingReasoning,
       streamingReasoningStartTime,
+      streamingReasoningEndTime,
       msgSvc: { persistMessage: vi.fn() } as any,
       streamHandles: new Map([['s1', { cancel: vi.fn() } as any]]),
     })
@@ -537,6 +542,7 @@ describe('chat controller modules', () => {
       explicitReasoning: '',
       reasoning: '推理中',
       reasoningStartTime: 123,
+      reasoningEndTime: 0,
     })
 
     expect(streaming.value).toBe(true)
@@ -600,6 +606,7 @@ describe('chat controller modules', () => {
           explicitReasoning: '',
           reasoning: '流式思考',
           reasoningStartTime: 1,
+          reasoningEndTime: 0,
         },
       }),
       currentSessionId: ref<string | null>('s1'),
@@ -638,8 +645,10 @@ describe('chat controller modules', () => {
     const streamingReasoningStartTime = ref(0)
     const streamingThinkingElapsed = ref(0)
     const thinkingTimer = ref<ReturnType<typeof setInterval> | null>(null)
+    const streamingReasoningEndTime = ref(0)
     const controller = createChatThinkingTimerController({
       streamingReasoningStartTime,
+      streamingReasoningEndTime,
       streamingThinkingElapsed,
       thinkingTimer,
     })

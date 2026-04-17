@@ -232,9 +232,9 @@ describe('死代码审计 — 已清理项确认', () => {
     expect(source).not.toContain('export function registerWebhook')
   })
 
-  it('desktop.ts 不再调用后端 API', () => {
+  it('desktop.ts 使用 Tauri invoke 调用后端剪贴板 API', () => {
     const source = readFileSync('src/api/desktop.ts', 'utf-8')
     expect(source).not.toContain('apiPost')
-    expect(source).not.toContain('/api/v1/')
+    expect(source).toContain('/api/v1/desktop/clipboard')
   })
 })

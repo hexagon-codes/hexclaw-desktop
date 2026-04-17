@@ -171,11 +171,11 @@ describe('Frontend-Backend API Alignment', () => {
     // desktop/clipboard was removed — frontend now uses browser Clipboard API directly
   })
 
-  it('desktop/clipboard no longer calls backend API (uses browser Clipboard API)', () => {
+  it('desktop/clipboard uses Tauri invoke as primary, browser API as fallback', () => {
     const desktopSource = fs.readFileSync(path.join(API_DIR, 'desktop.ts'), 'utf-8')
-    // Should NOT reference /api/v1/desktop/clipboard anymore
-    expect(desktopSource).not.toContain('/api/v1/desktop/clipboard')
-    // Should use browser API instead
+    // Tauri 桌面端通过后端 API 写入系统剪贴板
+    expect(desktopSource).toContain('/api/v1/desktop/clipboard')
+    // 浏览器环境回退到 navigator.clipboard
     expect(desktopSource).toContain('navigator.clipboard')
   })
 

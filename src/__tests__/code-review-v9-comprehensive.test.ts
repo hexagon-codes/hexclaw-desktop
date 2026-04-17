@@ -495,7 +495,7 @@ describe('Issue #10: streamingReasoningStartTime in chat store return (FIXED)', 
 
   it('streamingReasoningStartTime is used to calculate thinking duration', () => {
     expect(CHAT_THINKING_TIMER_TS).toContain('streamingReasoningStartTime.value')
-    expect(CHAT_STREAM_COMPLETION_TS).toContain('Date.now() - streamState.reasoningStartTime')
+    expect(CHAT_STREAM_COMPLETION_TS).toContain('endTime - streamState.reasoningStartTime')
   })
 
   it('streamingReasoningStartTime is reset to 0 on cancel/done', () => {

@@ -23,10 +23,10 @@ describe('问题 1: copyWebhookUrl 兜底链路异常处理', () => {
     expect(hasNestedTryCatch).toBe(true)
   })
 
-  it('setClipboard 不再调用后端 API', () => {
+  it('setClipboard 在 Tauri 桌面端通过后端 API 写入剪贴板', () => {
     const source = readFileSync('src/api/desktop.ts', 'utf-8')
-    expect(source).not.toContain('/api/v1/')
-    expect(source).not.toContain('apiPost')
+    expect(source).toContain('/api/v1/desktop/clipboard')
+    expect(source).toContain('navigator.clipboard')
   })
 })
 
