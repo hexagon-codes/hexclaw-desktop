@@ -14,6 +14,7 @@ export function createChatStreamCancelController(params: {
   streamingContent: Ref<string>
   streamingReasoning: Ref<string>
   streamingReasoningStartTime: Ref<number>
+  streamingReasoningEndTime: Ref<number>
   streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
   msgSvc: MessageServiceModule
   createId: () => string
@@ -36,6 +37,7 @@ export function createChatStreamCancelController(params: {
     streamingContent,
     streamingReasoning,
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     streamHandles,
     msgSvc,
     createId,
@@ -113,6 +115,7 @@ export function createChatStreamCancelController(params: {
     streamingContent.value = ''
     streamingReasoning.value = ''
     streamingReasoningStartTime.value = 0
+    streamingReasoningEndTime.value = 0
     triggerSocketError('用户取消')
     clearSocketCallbacks()
   }

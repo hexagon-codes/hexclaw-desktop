@@ -59,8 +59,9 @@ export function createChatStreamCompletionController(params: {
     const finalReasoning = rawReasoning ? normalizeAssistantReasoning(rawReasoning) || undefined : undefined
 
     const streamState = activeStreams.value[args.sessionId]
+    const endTime = streamState?.reasoningEndTime || Date.now()
     const thinkingDuration = streamState?.reasoningStartTime
-      ? Math.round((Date.now() - streamState.reasoningStartTime) / 1000)
+      ? Math.round((endTime - streamState.reasoningStartTime) / 1000)
       : 0
     const metadata = { ...args.metadata } as Record<string, unknown>
     if (thinkingDuration > 0) metadata.thinking_duration = thinkingDuration

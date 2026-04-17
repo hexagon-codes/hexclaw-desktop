@@ -42,6 +42,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingContent,
     streamingReasoning,
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     error,
     activeStreams,
     pendingSessionIds,
@@ -101,6 +102,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingContent,
     streamingReasoning,
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     error,
     pendingSuggestedTitleExpectation,
     streamHandles: runtime.streamHandles,
@@ -146,6 +148,7 @@ export const useChatStore = defineStore('chat', () => {
 
   const thinkingTimerController = createChatThinkingTimerController({
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     streamingThinkingElapsed,
     thinkingTimer: runtime.thinkingTimer,
   })
@@ -244,6 +247,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingSessionId,
     streamingContent,
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     isCurrentStreaming: selectors.isCurrentStreaming,
     isCurrentStreamingContent: selectors.isCurrentStreamingContent,
     isCurrentStreamingReasoning: selectors.isCurrentStreamingReasoning,

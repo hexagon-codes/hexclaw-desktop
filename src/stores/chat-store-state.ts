@@ -26,6 +26,7 @@ export interface ChatStoreState {
   streamingContent: Ref<string>
   streamingReasoning: Ref<string>
   streamingReasoningStartTime: Ref<number>
+  streamingReasoningEndTime: Ref<number>
   error: Ref<ApiError | null>
   activeStreams: Ref<Record<string, SessionStreamState>>
   pendingSessionIds: Ref<Record<string, boolean>>
@@ -66,6 +67,7 @@ export function createChatStoreState(): ChatStoreState {
     streamingContent: ref(''),
     streamingReasoning: ref(''),
     streamingReasoningStartTime: ref(0),
+    streamingReasoningEndTime: ref(0),
     error: ref<ApiError | null>(null),
     activeStreams: ref<Record<string, SessionStreamState>>({}),
     pendingSessionIds: ref<Record<string, boolean>>({}),

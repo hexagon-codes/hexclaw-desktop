@@ -12,6 +12,7 @@ export type SessionStreamState = {
   explicitReasoning: string
   reasoning: string
   reasoningStartTime: number
+  reasoningEndTime: number
 }
 
 export type PendingToolApproval = ToolApprovalRequest & {
@@ -91,6 +92,7 @@ export function buildStreamingMirrorState(
       streamingContent: '',
       streamingReasoning: '',
       streamingReasoningStartTime: 0,
+      streamingReasoningEndTime: 0,
     }
   }
 
@@ -100,6 +102,7 @@ export function buildStreamingMirrorState(
     streamingContent: fallback.content,
     streamingReasoning: fallback.reasoning,
     streamingReasoningStartTime: fallback.reasoningStartTime,
+    streamingReasoningEndTime: fallback.reasoningEndTime,
   }
 }
 
@@ -134,6 +137,11 @@ export function mergeStreamChunkState(
     .filter((value) => value && value.trim())
     .join(explicitReasoning && extractedReasoning ? '\n' : '')
 
+  let reasoningEndTime = current.reasoningEndTime
+  if (reasoningStartTime && !reasoningEndTime && content && !reasoning) {
+    reasoningEndTime = Date.now()
+  }
+
   return {
     ...current,
     rawContent,
@@ -141,6 +149,7 @@ export function mergeStreamChunkState(
     explicitReasoning,
     reasoning: normalizeAssistantReasoning(combinedReasoning, { trim: false }),
     reasoningStartTime,
+    reasoningEndTime,
   }
 }
 
@@ -158,5 +167,6 @@ export function buildRecoveredStreamState(
     explicitReasoning: snapshotReasoning,
     reasoning: snapshotReasoning,
     reasoningStartTime: snapshotReasoning ? Date.now() : 0,
+    reasoningEndTime: 0,
   }
 }

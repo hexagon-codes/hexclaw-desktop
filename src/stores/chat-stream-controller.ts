@@ -21,6 +21,7 @@ export function createChatStreamController(params: {
   streamingContent: Ref<string>
   streamingReasoning: Ref<string>
   streamingReasoningStartTime: Ref<number>
+  streamingReasoningEndTime: Ref<number>
   error: Ref<import('@/types').ApiError | null>
   pendingSuggestedTitleExpectation: Ref<Record<string, string>>
   streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
@@ -51,6 +52,7 @@ export function createChatStreamController(params: {
     streamingContent,
     streamingReasoning,
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     error,
     pendingSuggestedTitleExpectation,
     streamHandles,
@@ -82,6 +84,7 @@ export function createChatStreamController(params: {
     streamingContent,
     streamingReasoning,
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     msgSvc,
     streamHandles,
   })
@@ -123,6 +126,7 @@ export function createChatStreamController(params: {
     streamingContent,
     streamingReasoning,
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     streamHandles,
     msgSvc,
     createId,

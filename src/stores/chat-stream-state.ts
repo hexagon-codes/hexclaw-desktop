@@ -19,6 +19,7 @@ export function createChatStreamStateController(params: {
   streamingContent: Ref<string>
   streamingReasoning: Ref<string>
   streamingReasoningStartTime: Ref<number>
+  streamingReasoningEndTime: Ref<number>
   msgSvc: MessageServiceModule
   streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
 }) {
@@ -32,6 +33,7 @@ export function createChatStreamStateController(params: {
     streamingContent,
     streamingReasoning,
     streamingReasoningStartTime,
+    streamingReasoningEndTime,
     msgSvc,
     streamHandles,
   } = params
@@ -47,6 +49,7 @@ export function createChatStreamStateController(params: {
     streamingContent.value = next.streamingContent
     streamingReasoning.value = next.streamingReasoning
     streamingReasoningStartTime.value = next.streamingReasoningStartTime
+    streamingReasoningEndTime.value = next.streamingReasoningEndTime
   }
 
   function setSessionPending(sessionId: string, value: boolean, sending: Ref<boolean>, draftSending: Ref<boolean>) {
