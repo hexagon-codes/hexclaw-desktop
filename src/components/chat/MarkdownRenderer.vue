@@ -96,11 +96,21 @@ async function highlightCodeBlocks(content: string) {
 
 function handleCopyClick(e: MouseEvent) {
   const btn = (e.target as HTMLElement).closest('.copy-btn') as HTMLElement | null
-  if (btn?.dataset.code) {
-    setClipboard(btn.dataset.code).catch(() => {
-      // clipboard access can be unavailable in tests or restricted runtimes
+  if (!btn?.dataset.code) return
+  const originalText = btn.textContent || ''
+  setClipboard(btn.dataset.code)
+    .then(() => {
+      btn.textContent = '✓ ' + (originalText.includes('复制') ? '已复制' : 'Copied')
+      btn.classList.add('copy-btn--success')
+      setTimeout(() => {
+        btn.textContent = originalText
+        btn.classList.remove('copy-btn--success')
+      }, 1500)
     })
-  }
+    .catch(() => {
+      btn.textContent = '✗ ' + (originalText.includes('复制') ? '失败' : 'Failed')
+      setTimeout(() => { btn.textContent = originalText }, 1500)
+    })
 }
 
 onMounted(() => {
@@ -299,6 +309,10 @@ const rendered = computed(() => {
 .markdown-body :deep(.copy-btn:hover) {
   color: var(--hc-text-primary);
   background: var(--hc-bg-active);
+}
+
+.markdown-body :deep(.copy-btn--success) {
+  color: var(--hc-success);
 }
 
 .markdown-body :deep(.code-block) {
