@@ -193,6 +193,22 @@ function handleFileChange(e: Event) {
   input.value = ''
 }
 
+function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items
+  if (!items) return
+  const imageFiles: File[] = []
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) imageFiles.push(file)
+    }
+  }
+  if (imageFiles.length > 0) {
+    e.preventDefault()
+    addFiles(imageFiles)
+  }
+}
+
 function addFiles(files: File[]) {
   for (const file of files) {
     const isImage = file.type.startsWith('image/')
@@ -246,6 +262,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
         :disabled="disabled || submitting"
         @keydown="handleKeydown"
         @input="handleInput"
+        @paste="handlePaste"
       />
 
       <div class="hc-composer__bar">
