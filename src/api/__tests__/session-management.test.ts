@@ -257,11 +257,13 @@ describe('Session Management', () => {
   // ─── deleteMessage ───────────────────────────────
 
   describe('deleteMessage', () => {
-    it('calls DELETE /api/v1/messages/:id with URL encoding', async () => {
+    it('calls DELETE /api/v1/messages/:id with URL encoding + user_id', async () => {
       mockFetch.mockResolvedValue({ message: 'deleted' })
       await deleteMessage('msg/123')
+      // 必须带 user_id — 后端 sessionUserIDFromRequest 读 query param，
+      // 缺失时 fallback "api-user" ≠ "desktop-user"，getOwnedSession 必然 403
       expect(mockFetch).toHaveBeenCalledWith(
-        `/api/v1/messages/${encodeURIComponent('msg/123')}`,
+        expect.stringMatching(/\/api\/v1\/messages\/msg%2F123\?user_id=desktop-user$/),
         expect.objectContaining({ method: 'DELETE' }),
       )
     })

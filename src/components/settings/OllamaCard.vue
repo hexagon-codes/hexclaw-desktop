@@ -107,6 +107,23 @@ import { logger } from '@/utils/logger'
 import { useSettingsStore } from '@/stores/settings'
 import { useRouter } from 'vue-router'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
+import { resolveOllamaCapabilities } from '@/config/providers'
+
+// 能力标签 emoji + 文案（与 SettingsView 云 Provider 保持一致）
+const CAP_EMOJI: Record<string, string> = {
+  text: '💬', vision: '👁', video: '🎬', audio: '🎤', code: '💻',
+  image_generation: '🎨', video_generation: '📹',
+}
+const CAP_LABEL: Record<string, string> = {
+  text: '文本', vision: '视觉', video: '视频', audio: '音频', code: '代码',
+  image_generation: '绘图', video_generation: '视频生成',
+}
+
+// 显式标出全部能力（含 text），与 HuggingFace pipeline-tag 风格一致，
+// 避免"什么徽章都没有 = 不知道支持什么"的误解。
+function modelCaps(name: string): string[] {
+  return resolveOllamaCapabilities(name)
+}
 
 const settingsStore = useSettingsStore()
 const router = useRouter()
@@ -200,11 +217,28 @@ async function detect() {
       )
       if (isOllamaDefault && runningModels.value.length === 0 && status.value?.models?.length) {
         const downloadedNames = status.value.models.map(m => m.name)
-        // 优先：默认模型在已下载列表中 → 加载它
         const defaultModel = settingsStore.config?.llm.defaultModel
-        const defaultInLocal = defaultModel && downloadedNames.includes(defaultModel)
-        // 回退：加载第一个已下载的模型
-        const modelToLoad = defaultInLocal ? defaultModel : downloadedNames[0]
+        // 匹配规则（按优先级）：
+        //   1. 精确命中（含 tag，如 "qwen3.5:9b"）
+        //   2. base 命中（去掉 :tag 后在 downloaded 中找同 base，如 "qwen3.5" → "qwen3.5:latest"）
+        //   3. 回退默认 provider 自己的 selectedModelId（用户在 Provider 卡片里明确选的）
+        //   4. 最后才是 downloaded[0]（Ollama API 返回顺序，可能是最近 pull 的任意模型）
+        let modelToLoad: string | undefined
+        if (defaultModel) {
+          if (downloadedNames.includes(defaultModel)) {
+            modelToLoad = defaultModel
+          } else {
+            const base = defaultModel.split(':')[0]
+            modelToLoad = downloadedNames.find(n => n === base || n.split(':')[0] === base)
+          }
+        }
+        if (!modelToLoad && dp?.selectedModelId) {
+          const sel = dp.selectedModelId
+          modelToLoad = downloadedNames.includes(sel)
+            ? sel
+            : downloadedNames.find(n => n.split(':')[0] === sel.split(':')[0])
+        }
+        if (!modelToLoad) modelToLoad = downloadedNames[0]
         if (modelToLoad) {
           try {
             await loadOllamaModel(modelToLoad)
@@ -732,6 +766,13 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
           <div v-for="m in status.models" :key="m.name" class="ollama-card__model">
             <div class="ollama-card__model-left">
               <span class="ollama-card__model-name">{{ m.name }}</span>
+              <span
+                v-for="cap in modelCaps(m.name)"
+                :key="cap"
+                class="ollama-card__cap"
+                :class="`ollama-card__cap--${cap}`"
+                :title="CAP_LABEL[cap]"
+              >{{ CAP_EMOJI[cap] }} {{ CAP_LABEL[cap] }}</span>
             </div>
             <div class="ollama-card__model-right">
               <span class="ollama-card__model-meta">
@@ -1236,6 +1277,26 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   font-weight: 500;
   color: var(--hc-text-primary);
 }
+
+.ollama-card__cap {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+.ollama-card__cap--text           { color: var(--hc-text-secondary); background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent); }
+.ollama-card__cap--vision         { color: #80b8ff; background: color-mix(in srgb, #80b8ff 14%, transparent); }
+.ollama-card__cap--video          { color: #d89aff; background: color-mix(in srgb, #d89aff 14%, transparent); }
+.ollama-card__cap--audio          { color: #ffb878; background: color-mix(in srgb, #ffb878 14%, transparent); }
+.ollama-card__cap--code           { color: #8cf0a8; background: color-mix(in srgb, #8cf0a8 14%, transparent); }
+.ollama-card__cap--image_generation { color: #ff9ecd; background: color-mix(in srgb, #ff9ecd 14%, transparent); }
+.ollama-card__cap--video_generation { color: #ffc878; background: color-mix(in srgb, #ffc878 14%, transparent); }
 
 .ollama-card__model-status {
   display: inline-flex;

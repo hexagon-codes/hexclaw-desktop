@@ -425,3 +425,82 @@ pub async fn restart_ollama(app: tauri::AppHandle) -> Result<String, String> {
     ollama::wait_for_healthy(app, 15).await;
     Ok("ollama restarted".to_string())
 }
+
+
+// ─── 文件保存（Tauri WKWebView 绕过）─────────────────────────────
+//
+// Web 下载 <a download> 在 Tauri WKWebView 里不可靠；用 dialog.save() 让用户选择
+// 路径后，调用下列命令由 Rust 侧写盘，获得系统原生 UX。
+
+/// 校验目标路径：必须绝对 + 不含 `..` + 父目录存在
+fn validate_save_path(path: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::PathBuf::from(path);
+    if !p.is_absolute() {
+        return Err("path must be absolute".into());
+    }
+    if path.contains("..") {
+        return Err("path must not contain '..'".into());
+    }
+    let parent = p.parent().ok_or("path has no parent")?;
+    if !parent.is_dir() {
+        return Err(format!("parent directory does not exist: {}", parent.display()));
+    }
+    Ok(p)
+}
+
+/// 从 URL 下载并写入用户选择的路径
+///
+/// 允许 http/https；不允许 cloud metadata。支持 sidecar localhost（要下载 hexclaw
+/// 后端 file server 的生成物）。10 MiB 上限避免内存爆炸。
+#[tauri::command]
+pub async fn save_file_from_url(url: String, path: String) -> Result<u64, String> {
+    let p = validate_save_path(&path)?;
+
+    // URL 校验
+    let parsed = url.parse::<url::Url>().map_err(|e| format!("invalid URL: {}", e))?;
+    let scheme = parsed.scheme();
+    if scheme != "http" && scheme != "https" {
+        return Err(format!("unsupported scheme: {}", scheme));
+    }
+    if let Some(host) = parsed.host_str() {
+        if host == "169.254.169.254" || host == "metadata.google.internal" {
+            return Err("blocked: cloud metadata endpoint".into());
+        }
+    }
+
+    let resp = reqwest::Client::new()
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status().as_u16()));
+    }
+
+    const MAX_BYTES: usize = 100 * 1024 * 1024;
+    let bytes = resp.bytes().await.map_err(|e| format!("读取响应失败: {}", e))?;
+    if bytes.len() > MAX_BYTES {
+        return Err(format!("文件过大 {} > {} 字节", bytes.len(), MAX_BYTES));
+    }
+
+    std::fs::write(&p, &bytes).map_err(|e| format!("写入失败: {}", e))?;
+    Ok(bytes.len() as u64)
+}
+
+/// 将前端提供的 base64 字节写入用户选择的路径（用于 data: URL）
+#[tauri::command]
+pub fn save_bytes_to_path(base64_data: String, path: String) -> Result<u64, String> {
+    use base64::Engine as _;
+    let p = validate_save_path(&path)?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(base64_data.as_bytes())
+        .map_err(|e| format!("base64 解码失败: {}", e))?;
+    const MAX_BYTES: usize = 100 * 1024 * 1024;
+    if bytes.len() > MAX_BYTES {
+        return Err(format!("文件过大 {} > {} 字节", bytes.len(), MAX_BYTES));
+    }
+    std::fs::write(&p, &bytes).map_err(|e| format!("写入失败: {}", e))?;
+    Ok(bytes.len() as u64)
+}

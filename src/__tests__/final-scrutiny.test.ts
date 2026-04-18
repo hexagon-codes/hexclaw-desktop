@@ -63,11 +63,14 @@ describe('链路: 会话 CRUD + 消息', () => {
     expect(mockApi).toHaveBeenCalledWith('DELETE', '/api/v1/sessions/s1?user_id=desktop-user')
   })
 
-  it('deleteMessage 编码 messageId', async () => {
+  it('deleteMessage 编码 messageId + 带 user_id 让后端 getOwnedSession 可校验归属', async () => {
     mockApi.mockResolvedValueOnce({ message: 'ok' })
     const { deleteMessage } = await import('@/api/chat')
     await deleteMessage('msg/special')
-    expect(mockApi).toHaveBeenCalledWith('DELETE', `/api/v1/messages/${encodeURIComponent('msg/special')}`)
+    expect(mockApi).toHaveBeenCalledWith(
+      'DELETE',
+      `/api/v1/messages/${encodeURIComponent('msg/special')}?user_id=desktop-user`,
+    )
   })
 
   it('searchMessages 传递 q + user_id', async () => {

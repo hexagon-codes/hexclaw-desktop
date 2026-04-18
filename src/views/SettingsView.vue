@@ -36,7 +36,7 @@ import { messageFromUnknownError } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { setLocale } from '@/i18n'
-import { PROVIDER_PRESETS, PROVIDER_LOGOS } from '@/config/providers'
+import { PROVIDER_PRESETS, PROVIDER_LOGOS, inferCapabilitiesFromId } from '@/config/providers'
 import { OLLAMA_BASE } from '@/config/env'
 import type {
   ProviderConfig,
@@ -631,6 +631,17 @@ function handleToggleOllamaProvider() {
   }
 }
 
+/** 从 Provider 模型列表移除（自定义或已同步都可，同步拉的下次 test 会重来） */
+function removeProviderModel(provider: ProviderConfig, modelId: string) {
+  const idx = provider.models.findIndex(m => m.id === modelId)
+  if (idx < 0) return
+  provider.models.splice(idx, 1)
+  if (provider.selectedModelId === modelId) {
+    provider.selectedModelId = provider.models[0]?.id || ''
+  }
+  autoSave()
+}
+
 /** 添加自定义模型到 Provider */
 function addCustomModel(provider: ProviderConfig) {
   if (!newModelId.value.trim()) return
@@ -730,7 +741,22 @@ async function testProvider(provider: ProviderConfig) {
   testingProviderId.value = provider.id
   delete testProviderResult.value[provider.id]
 
-  const selectedModelId = (provider.selectedModelId || provider.models?.[0]?.id || '').trim()
+  // 测试连接走 chat completions 协议；cogview / cogvideox / dall-e 等纯生成模型不支持，
+  // 必须选一个 chat 模型测（content 为 string），否则后端 json.Unmarshal 会报
+  // "cannot unmarshal array into Go struct field .choices.message.content of type string"
+  const isChatCap = (m: ModelOption): boolean => {
+    const caps = displayCapabilities(m)
+    // displayCapabilities 过滤掉 text 仅返回 extras，需要回查 model.capabilities
+    const raw = (m.capabilities ?? ['text']) as ModelCapability[]
+    const effective = raw.length === 1 && raw[0] === 'text'
+      ? inferCapabilitiesFromId(m.id)
+      : raw
+    return effective.includes('text') && !caps.includes('image_generation') && !caps.includes('video_generation')
+  }
+  const preferred = provider.models?.find(m => m.id === provider.selectedModelId && isChatCap(m))
+    || provider.models?.find(isChatCap)
+    || provider.models?.[0]
+  const selectedModelId = (preferred?.id || '').trim()
   if (!selectedModelId) {
     testProviderResult.value[provider.id] = {
       ok: false,
@@ -789,18 +815,33 @@ async function syncRemoteModels(provider: ProviderConfig) {
   try {
     const remoteModels = await fetchProviderModels(baseUrl, apiKey)
     if (!remoteModels.length) return
-    // 合并：远程模型为主，保留预设中的 capabilities 信息
     const presetMap = new Map((preset?.defaultModels ?? []).map(m => [m.id, m]))
     const existingMap = new Map(provider.models.map(m => [m.id, m]))
     const merged: typeof provider.models = []
+    const seen = new Set<string>()
+    // 1) 远程返回的：按远程顺序合并（含 capabilities 回填）
     for (const rm of remoteModels) {
       const existing = existingMap.get(rm.id) || presetMap.get(rm.id)
+      const capabilities = existing?.capabilities ?? inferCapabilitiesFromId(rm.id)
       merged.push({
         id: rm.id,
         name: rm.name || rm.id,
-        capabilities: existing?.capabilities ?? ['text'],
+        capabilities,
         isCustom: existing?.isCustom,
       })
+      seen.add(rm.id)
+    }
+    // 2) 保留两类远程未返回但应该继续存在的模型：
+    //    - 用户自定义（isCustom: true）— 明确用户意愿，不能被覆盖
+    //    - 图像/视频生成 preset（cogview-4 / cogvideox-2 等）— 这些走 /images 或 /videos endpoint，
+    //      智谱等 /models 接口不返回；若清掉会影响生成模式可用性
+    for (const m of provider.models) {
+      if (seen.has(m.id)) continue
+      const isGenOnly = !!m.capabilities?.some(c => c === 'image_generation' || c === 'video_generation')
+      if (m.isCustom || isGenOnly) {
+        merged.push(m)
+        seen.add(m.id)
+      }
     }
     provider.models = merged
     // 若当前选中模型不在新列表中，自动选第一个
@@ -847,6 +888,21 @@ async function saveConfig() {
   } catch (e) {
     logger.error('保存配置失败:', e)
   }
+}
+
+/**
+ * 渲染时计算模型可用 capability badge。
+ * 兼容历史：升级前保存的模型 capabilities=['text']，渲染时按 ID 重新推断
+ * （glm-4v / qwen-vl-max / cogview-4 等会自动补回 vision/image_generation）。
+ * 若已有非 text 标记则尊重保存值，避免覆盖用户自定义。
+ *
+ * 参照 HuggingFace pipeline-tag 风格：所有能力都显式标出（包含 text），
+ * 避免"什么都没有 = 不知道支持什么"的误解。
+ */
+function displayCapabilities(model: ModelOption): ModelCapability[] {
+  const stored = (model.capabilities ?? ['text']) as ModelCapability[]
+  const isTextOnly = stored.length === 1 && stored[0] === 'text'
+  return (isTextOnly ? inferCapabilitiesFromId(model.id) : stored) as ModelCapability[]
 }
 </script>
 
@@ -1166,11 +1222,18 @@ async function saveConfig() {
                       >
                         {{ model.name || model.id }}
                         <span
-                          v-for="cap in (model.capabilities || []).filter((c: string) => c !== 'text')"
+                          v-for="cap in displayCapabilities(model)"
                           :key="cap"
                           class="hc-model-chip__cap"
                           :class="`hc-model-chip__cap--${cap}`"
-                        >{{ { text: '文本', vision: '视觉', video: '视频', audio: '音频', code: '代码', image_generation: '绘图', video_generation: '视频生成' }[cap] || cap }}</span>
+                          :title="{ text: '文本对话', vision: '视觉理解', video: '视频理解', audio: '音频处理', code: '代码专项', image_generation: '图像生成', video_generation: '视频生成' }[cap] || cap"
+                        >{{ { text: '💬', vision: '👁', video: '🎬', audio: '🎤', code: '💻', image_generation: '🎨', video_generation: '📹' }[cap] }} {{ { text: '文本', vision: '视觉', video: '视频', audio: '音频', code: '代码', image_generation: '绘图', video_generation: '视频生成' }[cap] || cap }}</span>
+                        <!-- 删除：hover 显示 × — 同步拉的下次 test 会重新拉回来 -->
+                        <span
+                          class="hc-model-chip__remove"
+                          :title="model.isCustom ? '删除自定义模型' : '从当前列表移除（下次测试连接会重新拉取）'"
+                          @click.stop="removeProviderModel(provider, model.id)"
+                        >×</span>
                       </button>
                       <!-- 添加自定义模型 -->
                       <button
@@ -2492,18 +2555,34 @@ async function saveConfig() {
 
 .hc-provider__test-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start; /* 错误长文本时按钮不被拉高 */
   gap: 10px;
   padding: 8px 0 4px;
 }
 
+/* 按钮不被长错误消息挤压变形 */
+.hc-provider__test-row > .hc-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .hc-provider__test-badge {
   display: inline-flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 4px;
   font-size: 12px;
-  padding: 2px 8px;
+  padding: 4px 8px;
   border-radius: 6px;
+  /* 错误消息可能很长，允许换行避免溢出 */
+  min-width: 0;
+  flex: 1 1 auto;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.hc-provider__test-badge > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
 }
 .hc-provider__test-badge--ok {
   background: color-mix(in srgb, var(--hc-success) 8%, transparent);
@@ -2751,6 +2830,33 @@ async function saveConfig() {
   border-color: var(--hc-text-muted, #5c5c6b);
 }
 
+/* 删除按钮：默认隐藏，hover chip 时出现 */
+.hc-model-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--hc-text-muted, #5c5c6b);
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, color 0.15s;
+}
+
+.hc-model-chip:hover .hc-model-chip__remove,
+.hc-model-chip--active .hc-model-chip__remove {
+  opacity: 0.6;
+}
+
+.hc-model-chip__remove:hover {
+  opacity: 1 !important;
+  background: color-mix(in srgb, var(--hc-error, #ff453a) 15%, transparent);
+  color: var(--hc-error, #ff453a);
+}
+
 .hc-model-chip--active {
   border-color: var(--hc-accent, #4a90d9);
   background: color-mix(in srgb, var(--hc-accent, #4a90d9) 10%, transparent);
@@ -2794,6 +2900,21 @@ async function saveConfig() {
 .hc-model-chip__cap--code {
   background: color-mix(in srgb, var(--hc-text-secondary) 12%, transparent);
   color: var(--hc-text-secondary);
+}
+
+.hc-model-chip__cap--text {
+  background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent);
+  color: var(--hc-text-secondary);
+}
+
+.hc-model-chip__cap--image_generation {
+  background: color-mix(in srgb, #ec4899 14%, transparent);
+  color: #ec4899;
+}
+
+.hc-model-chip__cap--video_generation {
+  background: color-mix(in srgb, #f59e0b 14%, transparent);
+  color: #f59e0b;
 }
 
 /* ─── 添加自定义模型（内联） ─── */

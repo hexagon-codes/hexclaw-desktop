@@ -5,7 +5,7 @@
  * 用户添加 Provider 时自动填充这些预设值。
  */
 
-import type { ProviderPreset, ProviderType } from '@/types'
+import type { ModelCapability, ProviderPreset, ProviderType } from '@/types'
 import { OLLAMA_BASE } from '@/config/env'
 
 import openaiLogo from '@/assets/provider-logos/openai.svg'
@@ -183,7 +183,30 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     name: 'Ollama (本地)',
     defaultBaseUrl: `${OLLAMA_BASE}/v1`,
     placeholder: '无需 API Key',
-    defaultModels: [], // 关联后由 syncOllamaModels 从 Ollama 实际模型列表同步
+    // 关联后由 syncOllamaModels 从 Ollama 实际拉取，ID 带 tag（如 qwen2.5-vl:7b）。
+    // 这里的白名单用作能力识别字典：syncOllamaModels 会按 base ID（去掉 :tag）匹配，
+    // 命中则沿用这里的 capabilities，否则回退 inferCapabilitiesFromId 正则推断。
+    defaultModels: [
+      { id: 'qwen2.5-vl', name: 'Qwen 2.5 VL', capabilities: ['text', 'vision'] },
+      { id: 'qwen2-vl', name: 'Qwen 2 VL', capabilities: ['text', 'vision'] },
+      { id: 'llava', name: 'LLaVA', capabilities: ['text', 'vision'] },
+      { id: 'llava-llama3', name: 'LLaVA Llama3', capabilities: ['text', 'vision'] },
+      { id: 'llava-phi3', name: 'LLaVA Phi3', capabilities: ['text', 'vision'] },
+      { id: 'llama3.2-vision', name: 'Llama 3.2 Vision', capabilities: ['text', 'vision'] },
+      { id: 'minicpm-v', name: 'MiniCPM-V', capabilities: ['text', 'vision'] },
+      { id: 'moondream', name: 'Moondream', capabilities: ['text', 'vision'] },
+      { id: 'bakllava', name: 'BakLLaVA', capabilities: ['text', 'vision'] },
+      { id: 'gemma4', name: 'Gemma 4', capabilities: ['text', 'vision'] },
+      // 代码专项（同 chat 协议，区别在模型权重）
+      { id: 'qwen3-coder', name: 'Qwen3 Coder', capabilities: ['text', 'code'] },
+      { id: 'deepseek-coder', name: 'DeepSeek Coder', capabilities: ['text', 'code'] },
+      { id: 'deepseek-coder-v2', name: 'DeepSeek Coder V2', capabilities: ['text', 'code'] },
+      { id: 'codellama', name: 'Code Llama', capabilities: ['text', 'code'] },
+      { id: 'codegemma', name: 'CodeGemma', capabilities: ['text', 'code'] },
+      { id: 'starcoder2', name: 'StarCoder 2', capabilities: ['text', 'code'] },
+      { id: 'granite-code', name: 'Granite Code', capabilities: ['text', 'code'] },
+      { id: 'devstral', name: 'Devstral', capabilities: ['text', 'code'] },
+    ],
   },
   custom: {
     type: 'custom',
@@ -200,4 +223,78 @@ export function getProviderTypes(options?: { includeOllama?: boolean }): Provide
   // 引导页等场景需要显示 Ollama 时传入 includeOllama: true
   if (options?.includeOllama) return Object.values(PROVIDER_PRESETS)
   return Object.values(PROVIDER_PRESETS).filter(p => p.type !== 'ollama')
+}
+
+/**
+ * 从模型 ID 推断能力（名称兜底）。
+ * 用于 Ollama 本地模型 / 云端 Provider 拉取到预设白名单外的模型时，
+ * 基于常见模型命名约定自动标记多模态能力。
+ *
+ * 纯生成类（image_generation / video_generation）单独返回，不带 text。
+ */
+export function inferCapabilitiesFromId(id: string): ModelCapability[] {
+  // 纯图像生成（不做对话）
+  if (/cogview|dall-?e|\bflux\b|sdxl|stable-?diffusion|midjourney|imagen|recraft|ideogram|janus/i.test(id)) {
+    return ['image_generation']
+  }
+  // 纯视频生成
+  if (/cogvideo|\bsora\b|runway|kling|\bpika\b|hailuo|\bveo\b|vidu/i.test(id)) {
+    return ['video_generation']
+  }
+  const caps: ModelCapability[] = ['text']
+  // 视觉理解（vision-language）
+  // - Ollama: qwen-vl/qwen2-vl/qwen2.5-vl/qwen3-vl/llava/moondream/minicpm-v/bakllava/gemma4/llama3.2-vision
+  // - 云端: glm-4v/glm-4.5v/qwen-vl-max/gpt-4o/gpt-4-vision/claude-3+/gemini-*/internvl/pixtral/molmo/cogvlm/qvq
+  if (
+    /\bvl\b|vision|llava|moondream|minicpm-v|bakllava|gemma4|pixtral|molmo|internvl|cogvlm|\bqvq\b|glm-?\d+\.?\d*v|gpt-?4o|gpt-?4-?vision|claude-3|claude-sonnet-4|claude-opus-4|claude-haiku-4|gemini-/i.test(id)
+  ) {
+    caps.push('vision')
+  }
+  // 音频（TTS / ASR / 语音模型）
+  if (/whisper|\btts\b|\basr\b|glm-4-voice|qwen.?audio|gpt-4o-audio/i.test(id)) {
+    caps.push('audio')
+  }
+  // 代码专项（编码强化模型 — 标识用，功能上和普通 chat 同链路，区别只在模型权重）
+  // Ollama: qwen3-coder / qwen-coder / deepseek-coder / codellama / codegemma / starcoder / granite-code / devstral
+  // 云端: 大多数 Provider 没有专门 code 端点，但 deepseek-coder-v2 / qwen-coder-plus 等也是同名约定
+  if (/coder|codellama|codegemma|starcoder|granite-code|devstral|phi-coder|wizardcoder|magicoder/i.test(id)) {
+    caps.push('code')
+  }
+  return caps
+}
+
+/**
+ * 匹配 Ollama 模型 ID（可带 :tag）到预设白名单的 base ID。
+ * 命中则返回预设 capabilities，未命中回退 inferCapabilitiesFromId。
+ */
+export function resolveOllamaCapabilities(id: string): ModelCapability[] {
+  const baseId = id.split(':')[0] ?? id
+  const preset = PROVIDER_PRESETS.ollama.defaultModels.find(m => m.id === baseId)
+  return preset?.capabilities ?? inferCapabilitiesFromId(id)
+}
+
+/**
+ * 判断模型能否在聊天页对话使用。
+ *
+ * 排除两类不可对话的模型：
+ *  - 纯生成（image_generation / video_generation）：没有 text 输出
+ *  - 纯语音工具（仅 audio，无 text）：whisper / tts-1 等 STT/TTS 服务
+ *
+ * 多模态对话模型（text + vision / video / audio）= 可对话。
+ */
+export function isChatModel(capabilities: ModelCapability[] | undefined): boolean {
+  const caps = capabilities ?? ['text']
+  return caps.includes('text')
+}
+
+/** 模型主类型（用于 UI 决定渲染哪种 composer / 是否过滤） */
+export type ModelKind = 'chat' | 'image_generator' | 'video_generator' | 'audio_tool'
+
+export function classifyModel(capabilities: ModelCapability[] | undefined): ModelKind {
+  const caps = capabilities ?? ['text']
+  if (caps.includes('text')) return 'chat'
+  if (caps.includes('image_generation')) return 'image_generator'
+  if (caps.includes('video_generation')) return 'video_generator'
+  if (caps.includes('audio')) return 'audio_tool'
+  return 'chat'
 }

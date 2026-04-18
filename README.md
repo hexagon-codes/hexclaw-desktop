@@ -128,6 +128,30 @@ HexClaw.app
 
 > Go Sidecar 默认监听 `localhost:16060`，可通过 hexclaw 配置文件修改端口。
 
+## Claude Code 开发实战 SOP
+
+这个仓库同时是"**用 Claude Code 做出一个能跑的产品**"的工作流实录。业余时间 × 一个人 × 6 核心仓库 × 68 万行代码背后的完整 SOP，已全部开源。
+
+- 📝 **公众号文章**：[《河蟹 AI 背后的 Claude Code SOP：设计驱动 × 测试闭环 × 多 Agent 协作》](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA) — 完整叙事 + 三条主线的具体做法
+- 📂 **开源 SOP 包**：[`docs/claude-code-practices/`](docs/claude-code-practices/) — 4 份实战手册 + 7 个可直接复制的 Claude Code 命令 + 3 个开箱即用 Hooks + DevTestOps Skill + CLAUDE.md 模板
+
+三条主线：
+
+| 主线 | 核心做法 |
+|------|---------|
+| ✏️ **设计驱动** | Plan 模式 → 多方案对比 → ADR 决策，不做"一句话 + 秒出代码" |
+| ✅ **测试闭环** | 不接受 "should pass" / "probably OK"——测试跑过、grep 扫过残留才算完成 |
+| 🤖 **多 Agent 协作** | Claude 写代码 / Codex 审代码 / 人类决策，交叉审查消除单模型盲区 |
+
+```bash
+# 一次性把整套 SOP 装进 Claude Code
+mkdir -p ~/.claude/commands ~/.claude/data ~/.claude/skills ~/.claude/hooks
+cp docs/claude-code-practices/command/*.md ~/.claude/commands/
+cp docs/claude-code-practices/data/*.md ~/.claude/data/
+cp -r docs/claude-code-practices/skill/devtestops ~/.claude/skills/
+cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/hooks/*.sh
+```
+
 ## 技术栈
 
 | 层 | 技术 | 版本 |
@@ -365,7 +389,8 @@ hexclaw-desktop/
 │   ├── updates.md                # 自动更新发布说明 (中文)
 │   ├── updates.en.md             # 自动更新发布说明 (英文)
 │   ├── overview.md               # 产品总览 (中文)
-│   └── overview.en.md            # 产品总览 (英文)
+│   ├── overview.en.md            # 产品总览 (英文)
+│   └── claude-code-practices/    # Claude Code 实战 SOP (4 手册 + 7 命令 + Hooks + DevTestOps Skill + 模板)
 ├── homebrew/                     # Homebrew Cask 定义 + 更新脚本
 ├── install.sh                    # macOS 一键安装脚本
 ├── scripts/                      # CI/构建脚本
@@ -513,6 +538,7 @@ chore: 构建/工具链
 - 📖 中文文档: [hexclaw.net/zh/docs](https://hexclaw.net/zh/docs/)
 - 📖 English Docs: [hexclaw.net/en/docs](https://hexclaw.net/en/docs/)
 - 🐙 GitHub: [hexagon-codes/hexclaw-desktop](https://github.com/hexagon-codes/hexclaw-desktop)
+- 📝 Claude Code SOP: [《河蟹 AI 背后的 Claude Code SOP》](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA) · [开源 SOP 包](docs/claude-code-practices/)
 
 ## 联系我们
 

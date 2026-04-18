@@ -37,6 +37,16 @@ import { openSanitizedArtifact } from '@/utils/safe-html'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { getSkills, type Skill } from '@/api/skills'
 import { setClipboard } from '@/api/desktop'
+import { appendSessionMessagesBatch } from '@/api/chat'
+import { inferCapabilitiesFromId } from '@/config/providers'
+import { logger } from '@/utils/logger'
+import ImageGenComposer from '@/components/chat/ImageGenComposer.vue'
+import VideoGenComposer from '@/components/chat/VideoGenComposer.vue'
+import VoiceChatComposer from '@/components/chat/VoiceChatComposer.vue'
+import { getImageGenStatus, imageToSrc, type ImageGenResult } from '@/api/imagegen'
+import { getVideoGenStatus, videoToSrc, type VideoTaskStatus } from '@/api/videogen'
+import { getVoiceChatStatus, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
+import { nanoid } from 'nanoid'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import crabLogo from '@/assets/logo-crab.png'
 
@@ -238,6 +248,41 @@ const selectedModelDisplay = computed(() => {
 })
 
 // 按 Provider 分组的模型列表
+/**
+ * 渲染时计算模型有效能力（render-time inference 兜底，兼容存量 ['text']）。
+ * 与 SettingsView.displayCapabilities 同源逻辑。
+ */
+function effectiveCaps(modelId: string, stored?: import('@/types').ModelCapability[]): import('@/types').ModelCapability[] {
+  const arr = stored ?? ['text']
+  const isTextOnly = arr.length === 1 && arr[0] === 'text'
+  return isTextOnly ? inferCapabilitiesFromId(modelId) : arr
+}
+
+/**
+ * 模型下拉显示的单个 emoji 前缀 — 一眼识别"选中会切换 composer 吗"。
+ * 优先级：纯生成 > 语音对话 > 视觉 > 音频工具 > 文本
+ */
+function modelKindEmoji(modelId: string, caps: import('@/types').ModelCapability[]): string {
+  if (caps.includes('image_generation') && !caps.includes('text')) return '🎨'
+  if (caps.includes('video_generation') && !caps.includes('text')) return '📹'
+  if (backendVoiceChatModels.value.has(modelId)) return '🎤'
+  if (caps.includes('vision')) return '👁'
+  if (caps.includes('audio')) return '🎤'
+  if (caps.includes('code')) return '💻'
+  return '💬'
+}
+
+/** emoji 对应的可读文案 — 用作 title 提示，辅助屏阅读器 + 无 emoji 字体环境 */
+function modelKindLabel(modelId: string, caps: import('@/types').ModelCapability[]): string {
+  if (caps.includes('image_generation') && !caps.includes('text')) return '图像生成模型'
+  if (caps.includes('video_generation') && !caps.includes('text')) return '视频生成模型'
+  if (backendVoiceChatModels.value.has(modelId)) return '语音对话模型'
+  if (caps.includes('vision')) return '视觉对话模型'
+  if (caps.includes('audio')) return '音频工具模型'
+  if (caps.includes('code')) return '代码专项模型'
+  return '文本对话模型'
+}
+
 const groupedModels = computed(() => {
   const groups: Record<
     string,
@@ -251,7 +296,10 @@ const groupedModels = computed(() => {
       }[]
     }
   > = {}
+  // 全模型可见 — 选中后由 ChatView 按 capability 切换 composer
+  // （chat / image-gen / video-gen 三种模式共用同一个会话流）。
   for (const m of settingsStore.availableModels) {
+    const caps = effectiveCaps(m.modelId, m.capabilities)
     if (!groups[m.providerId]) {
       groups[m.providerId] = { providerName: m.providerName, models: [] }
     }
@@ -259,11 +307,133 @@ const groupedModels = computed(() => {
       providerKey: m.providerKey,
       modelId: m.modelId,
       modelName: m.modelName,
-      capabilities: m.capabilities,
+      capabilities: caps,
     })
   }
   return groups
 })
+
+// 当前选中的模型类别。voice_chat 优先级高于 chat — 一旦后端注册了语音对话 Provider
+// 且当前模型在白名单（gpt-4o-audio-preview 等），即使有 text 能力也走 voice_chat 模式。
+const selectedModelKind = computed<'chat' | 'image_gen' | 'video_gen' | 'voice_chat' | 'audio_tool'>(() => {
+  const caps = selectedModelCapabilities.value
+  const id = selectedModel.value || ''
+  if (caps.includes('image_generation') && !caps.includes('text')) return 'image_gen'
+  if (caps.includes('video_generation') && !caps.includes('text')) return 'video_gen'
+  if (backendVoiceChatModels.value.has(id)) return 'voice_chat'
+  if (caps.includes('text')) return 'chat'
+  if (caps.includes('audio')) return 'audio_tool'
+  return 'chat'
+})
+
+const isImageGenModel = computed(() => selectedModelKind.value === 'image_gen')
+const isVideoGenModel = computed(() => selectedModelKind.value === 'video_gen')
+const isVoiceChatModel = computed(() => selectedModelKind.value === 'voice_chat')
+
+// 后端注册的生成模型集合 — 不在这里面的生成模型选了会失败，UI 灰掉。
+// onMounted 时通过 /api/v1/{images,videos,voicechat}/status 一次性拉取。
+/** 当前预览图（in-app modal）— Tauri WKWebView 不支持 window.open，必须走内嵌 */
+const previewImageSrc = ref('')
+function openImagePreview(src: string) {
+  previewImageSrc.value = src
+}
+function closeImagePreview() {
+  previewImageSrc.value = ''
+}
+
+/**
+ * 为下载生成唯一文件名：`HexClaw-{ISO时间}-{4位随机}.{ext}`
+ *
+ * 避免 name 来自 content hash 导致多张图同名（同一 prompt 生成的相同内容会复用文件），
+ * 也避免 Date.now() 在同秒内冲突。
+ */
+function makeUniqueDownloadName(hintName: string, src: string): string {
+  const now = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const ts =
+    now.getFullYear() +
+    pad(now.getMonth() + 1) +
+    pad(now.getDate()) +
+    '-' +
+    pad(now.getHours()) +
+    pad(now.getMinutes()) +
+    pad(now.getSeconds())
+  const rand = Math.random().toString(36).slice(2, 6)
+
+  // 推断扩展名：hintName > URL 路径 > 默认 png
+  let ext = 'png'
+  const fromHint = hintName?.match(/\.([a-zA-Z0-9]{2,5})$/)?.[1]
+  if (fromHint) ext = fromHint.toLowerCase()
+  else {
+    const fromSrc = src.match(/\.([a-zA-Z0-9]{2,5})(?:\?|$)/)?.[1]
+    if (fromSrc) ext = fromSrc.toLowerCase()
+    else if (src.startsWith('data:image/')) {
+      ext = src.slice(11, src.indexOf(';')) || 'png'
+    }
+  }
+
+  return `HexClaw-${ts}-${rand}.${ext}`
+}
+
+/**
+ * 下载图片 — Tauri WKWebView 下 <a download> / blob URL 不可靠，走原生 Save 对话框。
+ * 用户选择保存路径后，由 Rust 侧写盘（http/s 走 save_file_from_url，data: 走
+ * save_bytes_to_path）。
+ */
+async function downloadImage(src: string, name: string) {
+  const filename = makeUniqueDownloadName(name, src)
+  try {
+    const { save } = await import('@tauri-apps/plugin-dialog')
+    const { invoke } = await import('@tauri-apps/api/core')
+
+    const chosen = await save({ defaultPath: filename })
+    if (!chosen) return // 用户取消
+
+    if (src.startsWith('http')) {
+      await invoke<number>('save_file_from_url', { url: src, path: chosen })
+    } else if (src.startsWith('data:')) {
+      const commaIdx = src.indexOf(',')
+      if (commaIdx < 0) throw new Error('invalid data URL')
+      const base64 = src.slice(commaIdx + 1)
+      await invoke<number>('save_bytes_to_path', { base64Data: base64, path: chosen })
+    } else {
+      throw new Error(`unsupported src: ${src.slice(0, 32)}`)
+    }
+    toast.success?.('已保存到 ' + chosen)
+  } catch (e) {
+    console.error('[ChatView] download failed', e)
+    toast.error?.('下载失败：' + (e instanceof Error ? e.message : String(e)))
+  }
+}
+
+/** 重新探测后端 gen Provider 状态 — 用户更新 API Key 后可立即解除灰显 */
+async function refreshBackendGenStatus() {
+  await Promise.all([
+    getImageGenStatus().then(s => { backendImageModels.value = new Set(s.models) }).catch(() => {}),
+    getVideoGenStatus().then(s => { backendVideoModels.value = new Set(s.models) }).catch(() => {}),
+    getVoiceChatStatus().then(s => { backendVoiceChatModels.value = new Set(s.models) }).catch(() => {}),
+  ])
+}
+
+const backendImageModels = ref<Set<string>>(new Set())
+const backendVideoModels = ref<Set<string>>(new Set())
+const backendVoiceChatModels = ref<Set<string>>(new Set())
+
+/**
+ * 模型在当前会话能否真正使用。
+ * - voice_chat 模型（gpt-4o-audio）: 后端注册即可用
+ * - text 模型: 永远 true（chat handler 兜底走 OpenAI 兼容协议）
+ * - image_gen / video_gen: 必须在后端注册的模型集合里
+ * - 纯 audio_tool（whisper / tts-1）: 不可用 — 不是 chat 入口
+ */
+function isModelUsable(modelId: string, caps: import('@/types').ModelCapability[]): boolean {
+  if (backendVoiceChatModels.value.has(modelId)) return true
+  if (caps.includes('text')) return true
+  if (caps.includes('image_generation')) return backendImageModels.value.has(modelId)
+  if (caps.includes('video_generation')) return backendVideoModels.value.has(modelId)
+  if (caps.includes('audio')) return false
+  return true
+}
 
 // 当前选中模型的能力
 const selectedModelCapabilities = computed(() => {
@@ -272,7 +442,7 @@ const selectedModelCapabilities = computed(() => {
       m.modelId === selectedModel.value &&
       (!selectedProviderId.value || m.providerId === selectedProviderId.value),
   )
-  return found?.capabilities ?? ['text']
+  return effectiveCaps(selectedModel.value || '', found?.capabilities)
 })
 
 // 当前模型是否支持视觉/视频上传
@@ -382,6 +552,10 @@ onMounted(async () => {
   // “发送按钮可点但消息被静默吞掉”的初始化竞态。
   loadLLMConfig()
 
+  refreshBackendGenStatus()
+  // 窗口聚焦时重查（用户可能在 Settings 更新了 API Key 切回来）
+  window.addEventListener('focus', refreshBackendGenStatus)
+
   await chatStore.loadSessions()
   await chatStore.recoverActiveStreams()
   chatStore.initApprovalListener()
@@ -452,6 +626,9 @@ async function toggleModelSelector() {
   if (showModelSelector.value) {
     await settingsStore.loadConfig({ force: true })
     await settingsStore.syncOllamaModels()
+    // 同时重新探测后端 gen Provider 状态 — 用户在设置里加了 API Key 后
+    // 回到聊天页打开下拉时应立即解除绘图/视频生成模型的灰显
+    refreshBackendGenStatus()
   }
 }
 
@@ -562,6 +739,203 @@ watch(
     nextTick(scrollToBottom)
   },
 )
+
+/**
+ * 持久化生成模式消息 — 走 batch 接口单事务落库，避免 user 写成功但 assistant 失败的不一致。
+ * 失败时 toast 通知用户（UI 保留消息不阻断），引导其在下次刷新前知晓可能丢失。
+ */
+async function persistGenMessages(userMsg: ChatMessage, assistantMsg: ChatMessage) {
+  const sid = chatStore.currentSessionId
+  if (!sid) {
+    logger.warn('[ChatView] no currentSessionId, skipping persist')
+    return
+  }
+  try {
+    await appendSessionMessagesBatch(sid, [
+      {
+        id: userMsg.id,
+        role: 'user',
+        content: userMsg.content,
+        metadata: userMsg.metadata,
+        model_name: (userMsg.metadata?.model as string) || undefined,
+      },
+      {
+        id: assistantMsg.id,
+        role: 'assistant',
+        content: assistantMsg.content,
+        metadata: assistantMsg.metadata,
+        model_name: (assistantMsg.metadata?.model as string) || undefined,
+        parent_id: userMsg.id,
+      },
+    ])
+  } catch (e) {
+    logger.error('[ChatView] persist gen messages failed', e)
+    toast.error?.(t('chat.persistFailed', '消息已生成但保存失败，刷新会话后可能丢失'))
+  }
+}
+
+/**
+ * 图像生成完成回调 — 把 prompt + 生成图像拼成 user/assistant 消息插入会话。
+ *
+ * 与 chat 流的差异：图像生成不走 WebSocket / 不走 LLM router，所以不进入 chatStore
+ * 的 sending / streaming 状态机；直接 push 到 messages ref 即可。
+ *
+ * 持久化：push 后显式调 appendSessionMessage 落库，确保 reload 会话仍能看到。
+ */
+async function handleImageGenerated(result: ImageGenResult, prompt: string) {
+  // 确保有会话 ID（首次点击生成时用户可能还在欢迎页面）
+  if (!chatStore.currentSessionId) {
+    await chatStore.ensureSession()
+  }
+  const ts = new Date().toISOString()
+  const userMsg: ChatMessage = {
+    id: nanoid(12),
+    role: 'user',
+    content: prompt,
+    timestamp: ts,
+    metadata: { mode: 'image_gen', model: result.model },
+  }
+  const attachments: ChatAttachment[] = result.images.map((img, idx) => {
+    const src = imageToSrc(img)
+    // src 形如 "data:image/png;base64,xxx" 或 "https://..."
+    const isBase64 = src.startsWith('data:')
+    return {
+      type: 'image',
+      name: `generated-${result.model}-${idx + 1}.png`,
+      mime: 'image/png',
+      data: isBase64 ? src.split(',')[1] || '' : src,
+    }
+  })
+  const revisedPrompt = result.images.find(i => i.revised_prompt)?.revised_prompt
+  const assistantMsg: ChatMessage = {
+    id: nanoid(12),
+    role: 'assistant',
+    // DALL-E 3 会返回 revised_prompt（自动改写），优先展示给用户看
+    content: revisedPrompt
+      ? `已生成 ${result.images.length} 张图像（提示词已优化为：${revisedPrompt}）`
+      : `已生成 ${result.images.length} 张图像`,
+    timestamp: new Date().toISOString(),
+    // ChatView.getMessageAttachments() 从 metadata.attachments 读取
+    metadata: {
+      mode: 'image_gen',
+      provider: result.provider,
+      model: result.model,
+      usage_ms: result.usage_ms,
+      attachments,
+    },
+  }
+  chatStore.messages.push(userMsg, assistantMsg)
+  void persistGenMessages(userMsg, assistantMsg)
+  await nextTick(scrollToBottom)
+}
+
+function handleImageGenError(message: string) {
+  toast.error?.(`图像生成失败：${message}`)
+}
+
+/**
+ * 视频生成完成回调 — 与 image_gen 同模式：user prompt + assistant video。
+ * VideoTaskStatus 的 video_url 是 Provider 给的临时 URL（CogVideoX 24h 有效），
+ * 当前直接以 URL 形式存入 attachment.data，由前端 <video src> 直接加载；
+ * URL 失效后旧消息播放失败 — 后续可加"生成时下载 + 持久化到本地"流程。
+ */
+async function handleVideoGenerated(status: VideoTaskStatus, prompt: string) {
+  if (!chatStore.currentSessionId) {
+    await chatStore.ensureSession()
+  }
+  const ts = new Date().toISOString()
+  const userMsg: ChatMessage = {
+    id: nanoid(12),
+    role: 'user',
+    content: prompt,
+    timestamp: ts,
+    metadata: { mode: 'video_gen', model: status.model },
+  }
+  const attachments: ChatAttachment[] = []
+  const videoSrc = videoToSrc(status)
+  if (videoSrc) {
+    attachments.push({
+      type: 'video',
+      name: `generated-${status.model}.mp4`,
+      mime: 'video/mp4',
+      // 优先后端持久化 URL（永不过期），回退到 Provider 临时 URL
+      data: videoSrc,
+    })
+  }
+  const assistantMsg: ChatMessage = {
+    id: nanoid(12),
+    role: 'assistant',
+    content: status.cover_url
+      ? `视频已生成（封面：${status.cover_url}）`
+      : '视频已生成',
+    timestamp: new Date().toISOString(),
+    metadata: {
+      mode: 'video_gen',
+      provider: status.provider,
+      model: status.model,
+      usage_ms: status.usage_ms,
+      video_url: status.video_url,
+      cover_url: status.cover_url,
+      attachments,
+    },
+  }
+  chatStore.messages.push(userMsg, assistantMsg)
+  void persistGenMessages(userMsg, assistantMsg)
+  await nextTick(scrollToBottom)
+}
+
+function handleVideoGenError(message: string) {
+  toast.error?.(`视频生成失败：${message}`)
+}
+
+/**
+ * 语音对话回合完成 — user 输入（语音转写 or 文字） + assistant 音频/转写。
+ * 音频走 file_path 持久化（同 image/video gen），24h 后旧消息仍能播放。
+ */
+async function handleVoiceChatExchanged(result: VoiceChatResult, userPrompt: string) {
+  if (!chatStore.currentSessionId) {
+    await chatStore.ensureSession()
+  }
+  const ts = new Date().toISOString()
+  const userMsg: ChatMessage = {
+    id: nanoid(12),
+    role: 'user',
+    content: userPrompt,
+    timestamp: ts,
+    metadata: { mode: 'voice_chat', model: result.model },
+  }
+  const attachments: ChatAttachment[] = []
+  const audioSrc = audioToSrc(result)
+  if (audioSrc) {
+    attachments.push({
+      type: 'audio',
+      name: `response.${result.format || 'wav'}`,
+      mime: result.format === 'mp3' ? 'audio/mpeg' : 'audio/wav',
+      data: audioSrc,
+    })
+  }
+  const assistantMsg: ChatMessage = {
+    id: nanoid(12),
+    role: 'assistant',
+    content: result.transcript || '[语音回应]',
+    timestamp: new Date().toISOString(),
+    metadata: {
+      mode: 'voice_chat',
+      provider: result.provider,
+      model: result.model,
+      usage_ms: result.usage_ms,
+      audio_src: audioSrc,
+      attachments,
+    },
+  }
+  chatStore.messages.push(userMsg, assistantMsg)
+  void persistGenMessages(userMsg, assistantMsg)
+  await nextTick(scrollToBottom)
+}
+
+function handleVoiceChatError(message: string) {
+  toast.error?.(`语音对话失败：${message}`)
+}
 
 watch(
   () => chatStore.isCurrentStreamingContent,
@@ -911,10 +1285,43 @@ function startSidebarResize(event: MouseEvent) {
                       :class="{ 'hc-msg__bubble--empty': isEmptyReply(msg.content) }"
                       :title="formatFullTime(msg.timestamp)"
                     >
+                      <!-- 图像 / 视频 / 音频附件 -->
+                      <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
+                        <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
+                          <span v-if="att.type === 'image'" class="hc-msg__img-wrap">
+                            <img
+                              class="hc-msg__attachment-img"
+                              :src="att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data"
+                              :alt="att.name"
+                              @click="openImagePreview(att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data)"
+                            />
+                            <button
+                              class="hc-msg__img-download"
+                              title="下载图片"
+                              @click.stop="downloadImage(att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data, att.name)"
+                            >⬇</button>
+                          </span>
+                          <video
+                            v-else-if="att.type === 'video'"
+                            controls
+                            preload="metadata"
+                            class="hc-msg__video"
+                            :src="att.data.startsWith('http') ? att.data : 'data:' + att.mime + ';base64,' + att.data"
+                          />
+                          <audio
+                            v-else-if="att.type === 'audio' || att.mime?.startsWith('audio/')"
+                            controls
+                            preload="metadata"
+                            class="hc-msg__audio"
+                            :src="att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data"
+                          />
+                          <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
+                        </template>
+                      </div>
                       <MarkdownRenderer :content="msg.content" />
-                      <!-- 视频生成：内联播放器 -->
+                      <!-- 旧版兼容：metadata.source = 'video_generation' + metadata.video_url -->
                       <video
-                        v-if="msg.metadata?.source === 'video_generation' && msg.metadata?.video_url"
+                        v-if="msg.metadata?.source === 'video_generation' && msg.metadata?.video_url && !getMessageAttachments(msg).some(a => a.type === 'video')"
                         controls
                         preload="metadata"
                         class="hc-msg__video"
@@ -1276,7 +1683,88 @@ function startSidebarResize(event: MouseEvent) {
               </div>
               <button class="hc-chat__attach-remove" @click="clearAttachmentPreview">×</button>
             </div>
+            <!-- 生成模式下的模型切换条 — 保证用户能从 cogview/cogvideox/gpt-4o-audio 切回 chat 模型 -->
+            <div
+              v-if="isImageGenModel || isVideoGenModel || isVoiceChatModel"
+              class="hc-gen-modebar"
+            >
+              <div class="hc-model-selector hc-model-selector--inline">
+                <button class="hc-model-selector__btn" @click="toggleModelSelector">
+                  <span class="hc-model-selector__name">{{ selectedModelDisplay }}</span>
+                  <ChevronDown :size="12" />
+                </button>
+                <div
+                  v-if="showModelSelector"
+                  class="hc-model-selector__dropdown hc-model-selector__dropdown--up"
+                  @mouseleave="showModelSelector = false"
+                >
+                  <button
+                    class="hc-model-selector__item hc-model-selector__item--auto"
+                    :class="{ 'hc-model-selector__item--active': selectedModel === 'auto' }"
+                    @click="selectModel('auto')"
+                  >
+                    <Zap :size="12" style="color: var(--hc-accent); margin-right: 4px" />
+                    <span class="hc-model-selector__item-name">Auto</span>
+                  </button>
+                  <div class="hc-model-selector__divider" />
+                  <template v-if="Object.keys(groupedModels).length > 0">
+                    <div v-for="(group, pid) in groupedModels" :key="pid" class="hc-model-selector__group">
+                      <div class="hc-model-selector__group-label">{{ group.providerName }}</div>
+                      <button
+                        v-for="m in group.models"
+                        :key="m.modelId"
+                        class="hc-model-selector__item"
+                        :class="{
+                          'hc-model-selector__item--active': selectedModel === m.modelId && selectedProviderId === pid,
+                          'hc-model-selector__item--disabled': !isModelUsable(m.modelId, m.capabilities),
+                        }"
+                        :disabled="!isModelUsable(m.modelId, m.capabilities)"
+                        :title="!isModelUsable(m.modelId, m.capabilities) ? '该生成模型暂未接入后端 Provider' : modelKindLabel(m.modelId, m.capabilities)"
+                        @click="isModelUsable(m.modelId, m.capabilities) && selectModel(m.modelId, String(pid), m.providerKey, group.providerName)"
+                      >
+                        <span
+                          class="hc-model-selector__item-kind"
+                          role="img"
+                          :aria-label="modelKindLabel(m.modelId, m.capabilities)"
+                        >{{ modelKindEmoji(m.modelId, m.capabilities) }}</span>
+                        <span class="hc-model-selector__item-name">{{ m.modelName }}</span>
+                        <span v-if="!isModelUsable(m.modelId, m.capabilities)" class="hc-model-selector__item-tag">暂未支持</span>
+                        <span v-else-if="selectedModel === m.modelId && selectedProviderId === pid" style="color: var(--hc-accent); margin-left: auto;">✓</span>
+                      </button>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </div>
+
+            <!-- 图像生成模式 -->
+            <ImageGenComposer
+              v-if="isImageGenModel"
+              :model-id="selectedModel"
+              :model-name="selectedModelDisplay"
+              :provider-key="selectedProviderKey"
+              @generated="handleImageGenerated"
+              @error="handleImageGenError"
+            />
+            <!-- 视频生成模式 -->
+            <VideoGenComposer
+              v-else-if="isVideoGenModel"
+              :model-id="selectedModel"
+              :model-name="selectedModelDisplay"
+              :provider-key="selectedProviderKey"
+              @generated="handleVideoGenerated"
+              @error="handleVideoGenError"
+            />
+            <!-- 语音对话模式（audio-to-audio） -->
+            <VoiceChatComposer
+              v-else-if="isVoiceChatModel"
+              :model-id="selectedModel"
+              :model-name="selectedModelDisplay"
+              @exchanged="handleVoiceChatExchanged"
+              @error="handleVoiceChatError"
+            />
             <ChatInput
+              v-else
               :streaming="chatStore.isCurrentStreaming"
               :disabled="chatStore.sending"
               :agents="agentsStore.roles"
@@ -1303,9 +1791,26 @@ function startSidebarResize(event: MouseEvent) {
                     <template v-if="Object.keys(groupedModels).length > 0">
                       <div v-for="(group, pid) in groupedModels" :key="pid" class="hc-model-selector__group">
                         <div class="hc-model-selector__group-label">{{ group.providerName }}</div>
-                        <button v-for="m in group.models" :key="m.modelId" class="hc-model-selector__item" :class="{ 'hc-model-selector__item--active': selectedModel === m.modelId && selectedProviderId === pid }" @click="selectModel(m.modelId, String(pid), m.providerKey, group.providerName)">
+                        <button
+                          v-for="m in group.models"
+                          :key="m.modelId"
+                          class="hc-model-selector__item"
+                          :class="{
+                            'hc-model-selector__item--active': selectedModel === m.modelId && selectedProviderId === pid,
+                            'hc-model-selector__item--disabled': !isModelUsable(m.modelId, m.capabilities),
+                          }"
+                          :disabled="!isModelUsable(m.modelId, m.capabilities)"
+                          :title="!isModelUsable(m.modelId, m.capabilities) ? '该生成模型暂未接入后端 Provider' : modelKindLabel(m.modelId, m.capabilities)"
+                          @click="isModelUsable(m.modelId, m.capabilities) && selectModel(m.modelId, String(pid), m.providerKey, group.providerName)"
+                        >
+                          <span
+                            class="hc-model-selector__item-kind"
+                            role="img"
+                            :aria-label="modelKindLabel(m.modelId, m.capabilities)"
+                          >{{ modelKindEmoji(m.modelId, m.capabilities) }}</span>
                           <span class="hc-model-selector__item-name">{{ m.modelName }}</span>
-                          <span v-if="selectedModel === m.modelId && selectedProviderId === pid" style="color: var(--hc-accent); margin-left: auto;">✓</span>
+                          <span v-if="!isModelUsable(m.modelId, m.capabilities)" class="hc-model-selector__item-tag">暂未支持</span>
+                          <span v-else-if="selectedModel === m.modelId && selectedProviderId === pid" style="color: var(--hc-accent); margin-left: auto;">✓</span>
                         </button>
                       </div>
                     </template>
@@ -1421,6 +1926,18 @@ function startSidebarResize(event: MouseEvent) {
       @close="chatStore.showArtifacts = false"
       @select="chatStore.selectArtifact($event)"
     />
+
+    <!-- 图片预览 Modal — Apple HIG: 毛玻璃覆盖 + 居中大图 + 点击外部关闭 -->
+    <Transition name="hc-preview">
+      <div
+        v-if="previewImageSrc"
+        class="hc-img-preview__backdrop"
+        @click="closeImagePreview"
+      >
+        <img class="hc-img-preview__img" :src="previewImageSrc" @click.stop />
+        <button class="hc-img-preview__close" @click="closeImagePreview">×</button>
+      </div>
+    </Transition>
   </div>
 </template>
 
@@ -2251,6 +2768,34 @@ function startSidebarResize(event: MouseEvent) {
   font-weight: 500;
 }
 
+.hc-model-selector__item--disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.hc-model-selector__item--disabled:hover {
+  background: transparent;
+  color: var(--hc-text-secondary);
+}
+
+.hc-model-selector__item-kind {
+  flex-shrink: 0;
+  width: 18px;
+  font-size: 12px;
+  line-height: 1;
+  margin-right: 6px;
+  opacity: 0.85;
+}
+
+.hc-model-selector__item-tag {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--hc-warning, #f59e0b) 14%, transparent);
+  color: var(--hc-warning, #f59e0b);
+}
+
 .hc-model-selector__item--auto {
   display: flex;
   align-items: center;
@@ -2997,6 +3542,113 @@ function startSidebarResize(event: MouseEvent) {
   margin-bottom: 6px;
 }
 
+.hc-msg__img-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.hc-msg__img-download {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s, transform 0.12s;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* ── Apple HIG 图片预览 Modal ── */
+.hc-img-preview__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  cursor: zoom-out;
+}
+.hc-img-preview__img {
+  max-width: 92vw;
+  max-height: 92vh;
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(0,0,0,0.4), 0 8px 16px rgba(0,0,0,0.2);
+  cursor: default;
+}
+.hc-img-preview__close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 0.5px solid rgba(255,255,255,0.3);
+  background: rgba(28,28,30,0.72);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.12s;
+}
+.hc-img-preview__close:hover {
+  background: rgba(60,60,67,0.85);
+  transform: scale(1.05);
+}
+.hc-preview-enter-active, .hc-preview-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hc-preview-enter-from, .hc-preview-leave-to { opacity: 0; }
+
+/* 生成模式模型切换条 — 右对齐贴在 Composer 顶边，text-only 极简 chip */
+.hc-gen-modebar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 8px 6px;
+  position: relative;
+}
+.hc-gen-modebar .hc-model-selector__btn {
+  background: transparent;
+  border: 0;
+  padding: 4px 8px;
+  color: var(--hc-text-secondary, #6E6E73);
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.hc-gen-modebar .hc-model-selector__btn:hover {
+  color: var(--hc-accent, #007AFF);
+  background: rgba(0, 122, 255, 0.06);
+}
+.hc-gen-modebar .hc-model-selector__dropdown {
+  right: 0;
+  left: auto;
+}
+
+.hc-msg__img-wrap:hover .hc-msg__img-download {
+  opacity: 1;
+}
+
+.hc-msg__img-download:hover {
+  background: rgba(0, 0, 0, 0.75);
+  transform: scale(1.08);
+}
+
 .hc-msg__attachment-img {
   max-width: 240px;
   max-height: 180px;
@@ -3010,6 +3662,21 @@ function startSidebarResize(event: MouseEvent) {
   padding: 4px 8px;
   border-radius: var(--hc-radius-sm, 6px);
   background: rgba(255, 255, 255, 0.15);
+}
+
+.hc-msg__video {
+  max-width: 480px;
+  max-height: 360px;
+  width: 100%;
+  border-radius: var(--hc-radius-sm, 6px);
+  background: #000;
+}
+
+.hc-msg__audio {
+  display: block;
+  width: 320px;
+  max-width: 100%;
+  height: 36px;
 }
 
 /* ── Thinking / Reasoning block ──────────────────── */

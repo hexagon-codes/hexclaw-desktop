@@ -1,12 +1,14 @@
 /**
  * useVoice — 语音输入/输出 composable
  *
- * STT: 优先使用浏览器 Web Speech API，可回退到后端 /api/v1/voice/transcribe
+ * STT 双通道：
+ *   - 浏览器 Web Speech API（实时识别，无网络往返）
+ *   - MediaRecorder + 后端 /api/v1/voice/transcribe（Tauri WKWebView 兜底）
  * TTS: 调用后端 /api/v1/voice/synthesize
  */
 
 import { ref, computed, onUnmounted, getCurrentInstance } from 'vue'
-import { textToSpeech } from '@/api/voice'
+import { speechToText, textToSpeech } from '@/api/voice'
 import { logger } from '@/utils/logger'
 
 /* Web Speech API type shims (not in all TS libs) */
@@ -66,16 +68,14 @@ export function useVoice() {
   const transcript = ref('')
   const error = ref<string | null>(null)
 
-  // Tauri 的 WKWebView 有 webkitSpeechRecognition 构造函数但实际不可用，
-  // 需要尝试实例化来检测真实可用性
-  const isSupported = computed(() => {
+  // 检测 Web Speech API 是否真正可用（Tauri WKWebView 有构造函数但运行时失败）
+  const hasWebSpeech = computed(() => {
     if (typeof window === 'undefined') return false
     try {
       const Ctor =
         (window as unknown as Record<string, unknown>).SpeechRecognition as typeof SpeechRecognition | undefined
         ?? (window as unknown as Record<string, unknown>).webkitSpeechRecognition as typeof SpeechRecognition | undefined
       if (!Ctor) return false
-      // 检查是否在 Tauri 环境（WKWebView 不支持实际语音识别）
       if ((globalThis as unknown as Record<string, unknown>).isTauri) return false
       return true
     } catch {
@@ -83,9 +83,25 @@ export function useVoice() {
     }
   })
 
+  // MediaRecorder + 后端 STT 兜底：Tauri / 不支持 Web Speech 的浏览器都能用
+  const hasMediaRecorder = computed(() => {
+    if (typeof window === 'undefined') return false
+    return typeof window.MediaRecorder !== 'undefined'
+      && typeof navigator !== 'undefined'
+      && !!navigator.mediaDevices
+      && typeof navigator.mediaDevices.getUserMedia === 'function'
+  })
+
+  // 任一通道可用即视为支持
+  const isSupported = computed(() => hasWebSpeech.value || hasMediaRecorder.value)
+
   let recognition: SpeechRecognition | null = null
   let audioElement: HTMLAudioElement | null = null
   let audioUrl: string | null = null
+  // MediaRecorder fallback 状态
+  let mediaRecorder: MediaRecorder | null = null
+  let recordedChunks: Blob[] = []
+  let activeStream: MediaStream | null = null
 
   // ─── STT (Speech-to-Text) ────────────────────────────
 
@@ -107,12 +123,20 @@ export function useVoice() {
     error.value = null
     transcript.value = ''
 
-    if (!isSupported.value) {
-      error.value = 'Speech recognition is not supported in this browser'
-      logger.warn('[useVoice] SpeechRecognition not supported')
+    // 优先 Web Speech（实时识别），不可用则走 MediaRecorder + 后端
+    if (hasWebSpeech.value) {
+      startWebSpeech()
       return
     }
+    if (hasMediaRecorder.value) {
+      void startMediaRecorder()
+      return
+    }
+    error.value = 'Speech recognition is not supported on this device'
+    logger.warn('[useVoice] no STT channel available (no Web Speech, no MediaRecorder)')
+  }
 
+  function startWebSpeech() {
     recognition = createRecognition()
     if (!recognition) {
       error.value = 'Failed to create speech recognition instance'
@@ -154,10 +178,79 @@ export function useVoice() {
     }
   }
 
+  /**
+   * MediaRecorder 兜底：录音 → blob → POST 后端 transcribe → 写入 transcript。
+   * 在 Tauri WKWebView 下是唯一可用的 STT 路径。
+   */
+  async function startMediaRecorder() {
+    try {
+      activeStream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      recordedChunks = []
+      // 优先 webm/opus（Chrome/Tauri 默认），回退 mp4
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/mp4')
+          ? 'audio/mp4'
+          : ''
+      mediaRecorder = mimeType
+        ? new MediaRecorder(activeStream, { mimeType })
+        : new MediaRecorder(activeStream)
+
+      mediaRecorder.ondataavailable = (ev: BlobEvent) => {
+        if (ev.data && ev.data.size > 0) recordedChunks.push(ev.data)
+      }
+      mediaRecorder.onstop = async () => {
+        const stoppedRecorder = mediaRecorder
+        const stoppedStream = activeStream
+        mediaRecorder = null
+        activeStream = null
+        // 释放麦克风
+        stoppedStream?.getTracks().forEach(t => t.stop())
+
+        if (!recordedChunks.length) {
+          isListening.value = false
+          return
+        }
+        const usedMime = stoppedRecorder?.mimeType || 'audio/webm'
+        const ext = usedMime.includes('mp4') ? 'mp4' : 'webm'
+        const blob = new Blob(recordedChunks, { type: usedMime })
+        recordedChunks = []
+        try {
+          const file = new File([blob], `recording.${ext}`, { type: usedMime })
+          const result = await speechToText(file)
+          if (result?.text) transcript.value = result.text
+        } catch (e) {
+          error.value = e instanceof Error ? e.message : 'Transcribe failed'
+          logger.error('[useVoice] backend transcribe failed', e)
+        } finally {
+          isListening.value = false
+        }
+      }
+      mediaRecorder.onerror = (ev: Event) => {
+        error.value = `MediaRecorder error: ${(ev as ErrorEvent).message ?? 'unknown'}`
+        logger.warn('[useVoice] MediaRecorder error', ev)
+        isListening.value = false
+      }
+
+      // timeslice=1000ms：每秒切一次数据块，长录音避免单块过大；stop 时拼回整段 Blob。
+      mediaRecorder.start(1000)
+      isListening.value = true
+    } catch (e) {
+      error.value = e instanceof Error ? e.message : 'Microphone access denied'
+      logger.error('[useVoice] getUserMedia failed', e)
+      isListening.value = false
+    }
+  }
+
   function stopListening() {
     if (recognition) {
       try { recognition.stop() } catch { /* already stopped */ }
       recognition = null
+    }
+    if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+      try { mediaRecorder.stop() } catch { /* already stopped */ }
+      // isListening 在 onstop 后端 transcribe 完成后置 false
+      return
     }
     isListening.value = false
   }

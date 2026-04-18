@@ -32,6 +32,11 @@ import {
   providerMatchesBackendKey,
 } from './settings-helpers'
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
+import {
+  PROVIDER_PRESETS,
+  inferCapabilitiesFromId,
+  resolveOllamaCapabilities,
+} from '@/config/providers'
 
 export const useSettingsStore = defineStore('settings', () => {
   const fallbackSandbox = (): SandboxConfig => ({
@@ -433,9 +438,13 @@ export const useSettingsStore = defineStore('settings', () => {
         const target = config.value.llm.providers.find((cp) => cp.id === p.id)
         if (!target) return
         const existingMap = new Map(target.models.map((m) => [m.id, m]))
+        const presetMap = new Map(
+          (PROVIDER_PRESETS[p.type]?.defaultModels ?? []).map(m => [m.id, m.capabilities]),
+        )
         for (const rm of remoteModels) {
           if (!existingMap.has(rm.id)) {
-            target.models.push({ id: rm.id, name: rm.name || rm.id, capabilities: ['text'] })
+            const caps = presetMap.get(rm.id) ?? inferCapabilitiesFromId(rm.id)
+            target.models.push({ id: rm.id, name: rm.name || rm.id, capabilities: caps })
           }
         }
         logger.debug('自动拉取模型列表完成', p.name, remoteModels.length)
@@ -491,7 +500,8 @@ export const useSettingsStore = defineStore('settings', () => {
       ollamaModelsCache.value = (status.models || []).map(m => ({
         id: m.name,
         name: m.name,
-        capabilities: ['text'] as ModelCapability[],
+        // 先查 Ollama preset 白名单（按 base ID 去 tag 匹配），未命中走名称正则推断 vision
+        capabilities: resolveOllamaCapabilities(m.name) as ModelCapability[],
       }))
     } catch { /* Ollama 可能未运行 */ }
   }

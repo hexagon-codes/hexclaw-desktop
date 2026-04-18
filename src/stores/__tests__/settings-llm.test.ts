@@ -690,4 +690,36 @@ describe('syncOllamaModels — Ollama Provider 模型列表同步', () => {
 
     expect(store.availableModels.length).toBe(modelsBefore)
   })
+
+  // Regression: v0.3.12 修复 — Ollama 本地多模态模型应自动带 vision capability
+  // 用户场景：拉取 qwen2.5-vl:7b 后，聊天输入框图片按钮应可用（supportsVision=true）
+  it('Ollama 多模态模型 capabilities 自动含 vision（预设白名单 + 正则兜底）', async () => {
+    const store = await setupStoreWithOllama()
+
+    mockGetOllamaStatus.mockResolvedValue({
+      running: true, associated: true, model_count: 4,
+      models: [
+        { name: 'qwen2.5-vl:7b', size: 5_000_000_000 },       // 命中 preset 白名单
+        { name: 'llava:13b', size: 7_400_000_000 },           // 命中 preset 白名单
+        { name: 'qwen3:8b', size: 5_200_000_000 },            // 纯文本
+        { name: 'my-custom-vision-tune:latest', size: 4_000_000_000 }, // 走正则兜底
+      ],
+    })
+
+    await store.syncOllamaModels()
+
+    const byId = new Map(
+      store.availableModels
+        .filter(m => m.providerKey === 'ollama')
+        .map(m => [m.modelId, m.capabilities]),
+    )
+
+    // 预设白名单命中 → vision
+    expect(byId.get('qwen2.5-vl:7b')).toContain('vision')
+    expect(byId.get('llava:13b')).toContain('vision')
+    // 正则兜底（name 含 vision）→ vision
+    expect(byId.get('my-custom-vision-tune:latest')).toContain('vision')
+    // 纯文本模型 → 仅 text
+    expect(byId.get('qwen3:8b')).toEqual(['text'])
+  })
 })

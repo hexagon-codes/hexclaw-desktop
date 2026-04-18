@@ -43,10 +43,17 @@ export interface ChatSession {
 
 /** 聊天附件 */
 export interface ChatAttachment {
-  type: 'image' | 'video' | 'file'
+  type: 'image' | 'video' | 'audio' | 'file'
   name: string
   mime: string
-  /** Base64 encoded data */
+  /**
+   * 附件数据。可能是：
+   * - base64（历史数据 / 上传时），形如 "xxxxxx"
+   * - data URL（图像生成 base64 包装后），形如 "data:image/png;base64,xxx"
+   * - HTTP(S) URL（video gen / voice chat 的持久化路径或 Provider 临时 URL）
+   *
+   * 渲染处按 data.startsWith('http') / 'data:' 自动判别。
+   */
   data: string
 }
 

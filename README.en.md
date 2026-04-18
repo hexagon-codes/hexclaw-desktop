@@ -125,6 +125,30 @@ Frontend and backend communicate via **Tauri IPC proxy** (resolving WebView CORS
 
 > The Go Sidecar listens on `localhost:16060` by default. Port can be changed in the hexclaw config file.
 
+## Claude Code Engineering SOP
+
+This repo is also a working log of "**how to build a shipping product with Claude Code**". The complete SOP behind *one developer × spare time × 6 core repos × 680K lines of code* is fully open-sourced.
+
+- 📝 **Article (Chinese)**: [河蟹 AI 背后的 Claude Code SOP](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA) — full narrative + concrete practices for each of the three pillars
+- 📂 **Open-source SOP pack**: [`docs/claude-code-practices/`](docs/claude-code-practices/) — 4 playbooks + 7 copy-paste Claude Code commands + 3 ready-to-use Hooks + DevTestOps Skill + CLAUDE.md templates
+
+Three pillars:
+
+| Pillar | Core practice |
+|--------|---------------|
+| ✏️ **Design-driven** | Plan mode → multi-option comparison → ADR; no "one-liner prompt → instant code" |
+| ✅ **Test closed-loop** | No "should pass" / "probably OK" — only passing tests + grep-verified residuals count |
+| 🤖 **Multi-agent collaboration** | Claude writes / Codex reviews / human decides — cross-review eliminates single-model blind spots |
+
+```bash
+# Install the full SOP into Claude Code in one go
+mkdir -p ~/.claude/commands ~/.claude/data ~/.claude/skills ~/.claude/hooks
+cp docs/claude-code-practices/command/*.md ~/.claude/commands/
+cp docs/claude-code-practices/data/*.md ~/.claude/data/
+cp -r docs/claude-code-practices/skill/devtestops ~/.claude/skills/
+cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/hooks/*.sh
+```
+
 ## Tech Stack
 
 | Layer | Technology | Version |
@@ -361,7 +385,8 @@ hexclaw-desktop/
 │   ├── updates.md                # Auto-update release guide (Chinese)
 │   ├── updates.en.md             # Auto-update release guide (English)
 │   ├── overview.md               # Product overview (Chinese)
-│   └── overview.en.md            # Product overview (English)
+│   ├── overview.en.md            # Product overview (English)
+│   └── claude-code-practices/    # Claude Code engineering SOP (4 playbooks + 7 commands + Hooks + DevTestOps Skill + templates)
 ├── homebrew/                     # Homebrew Cask definition + update script
 ├── install.sh                    # macOS one-line install script
 ├── scripts/                      # CI/build scripts
@@ -509,6 +534,7 @@ chore: build/toolchain changes
 - 📖 Chinese Docs: [hexclaw.net/zh/docs](https://hexclaw.net/zh/docs/)
 - 📖 English Docs: [hexclaw.net/en/docs](https://hexclaw.net/en/docs/)
 - 🐙 GitHub: [hexagon-codes/hexclaw-desktop](https://github.com/hexagon-codes/hexclaw-desktop)
+- 📝 Claude Code SOP: [Article (Chinese)](https://mp.weixin.qq.com/s/1rza-Ye3NF89KNAJp_PttA) · [Open-source SOP pack](docs/claude-code-practices/)
 
 ## Contact
 

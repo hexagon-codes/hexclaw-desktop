@@ -223,9 +223,44 @@ export function getActiveStreamSnapshot(requestId: string) {
   return sessionGet<ActiveStreamSnapshot>(`/api/v1/streams/${encodeURIComponent(requestId)}`)
 }
 
-/** 删除单条消息 */
+/** 删除单条消息 — 必须传 user_id 让后端 getOwnedSession 校验归属，否则 403 */
 export function deleteMessage(messageId: string) {
-  return apiDelete<{ message: string }>(`/api/v1/messages/${encodeURIComponent(messageId)}`)
+  return apiDelete<{ message: string }>(
+    `/api/v1/messages/${encodeURIComponent(messageId)}?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`,
+  )
+}
+
+/** 追加单条消息到会话（用于图像/视频/语音对话生成模式绕过 chat handler 持久化） */
+export interface AppendMessageRequest {
+  id?: string
+  role: 'user' | 'assistant' | 'system'
+  content: string
+  /** 附件等结构化信息直接放在 metadata，后端存 metadata 列；传对象即可 */
+  metadata?: Record<string, unknown>
+  model_name?: string
+  parent_id?: string
+  request_id?: string
+  finish_reason?: string
+}
+
+export function appendSessionMessage(sessionId: string, msg: AppendMessageRequest) {
+  // user_id 必须放 URL query — 后端 sessionUserIDFromRequest 读 query param；body 里的同名字段是
+  // sessionPost 自动注入的兼容字段（不影响后端）。URL query 不能省略。
+  return sessionPost<{ id: string; session_id: string }>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`,
+    msg as unknown as Record<string, unknown>,
+  )
+}
+
+/**
+ * 批量追加消息到会话，后端同一事务内写入。
+ * 任一失败整批回滚，避免 user 写入成功但 assistant 失败的数据不一致。
+ */
+export function appendSessionMessagesBatch(sessionId: string, messages: AppendMessageRequest[]) {
+  return sessionPost<{ ids: string[]; session_id: string }>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/batch?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`,
+    { messages } as unknown as Record<string, unknown>,
+  )
 }
 
 export type UserFeedback = '' | 'like' | 'dislike'

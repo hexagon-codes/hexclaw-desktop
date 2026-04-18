@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown } from 'lucide-vue-next'
+import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown, Volume2, Square } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setClipboard } from '@/api/desktop'
+import { useVoice } from '@/composables/useVoice'
 
 const { t } = useI18n()
 
@@ -24,6 +25,10 @@ const emit = defineEmits<{
 const copied = ref(false)
 const activeFeedback = computed(() => props.feedback ?? null)
 
+// 朗读：每个 MessageActions 实例独立 useVoice，互不干扰；
+// 切换消息播报时手动 stopSpeaking 以释放 audio 资源
+const { isSpeaking, speak, stopSpeaking } = useVoice()
+
 async function handleCopy() {
   try {
     await setClipboard(props.content)
@@ -33,6 +38,28 @@ async function handleCopy() {
     // clipboard write can fail in certain environments
   }
   emit('copy')
+}
+
+/** 朗读消息内容 — Markdown 转纯文本，避免读出 ``` # * 等符号 */
+function plainText(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, '')           // 代码块整段去掉
+    .replace(/`[^`]*`/g, '')                  // 行内代码
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')     // 图片
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')  // 链接保留 anchor
+    .replace(/[#*_~>|]/g, '')                 // 标记符号
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+async function toggleSpeak() {
+  if (isSpeaking.value) {
+    stopSpeaking()
+    return
+  }
+  const text = plainText(props.content)
+  if (!text) return
+  await speak(text)
 }
 </script>
 
@@ -49,6 +76,15 @@ async function handleCopy() {
       <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
         <Check v-if="copied" :size="13" />
         <Copy v-else :size="13" />
+      </button>
+      <button
+        class="hc-msg-actions__btn"
+        :class="{ 'hc-msg-actions__btn--speaking': isSpeaking }"
+        :title="isSpeaking ? t('chat.stopSpeaking', '停止朗读') : t('chat.speakMessage', '朗读')"
+        @click="toggleSpeak"
+      >
+        <Square v-if="isSpeaking" :size="13" />
+        <Volume2 v-else :size="13" />
       </button>
       <button class="hc-msg-actions__btn" :title="t('chat.regenerate')" @click="emit('retry')">
         <RotateCcw :size="13" />
@@ -113,6 +149,17 @@ async function handleCopy() {
 }
 
 .hc-msg-actions__btn--copied { color: #34C759 !important; }
+
+.hc-msg-actions__btn--speaking {
+  color: var(--hc-accent, #007AFF);
+  background: rgba(0, 122, 255, 0.1);
+  animation: hc-speak-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes hc-speak-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
 
 .hc-msg-actions__btn--active {
   color: var(--hc-accent, #007AFF);

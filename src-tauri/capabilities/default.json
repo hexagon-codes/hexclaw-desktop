@@ -33,6 +33,7 @@
     "store:default",
     "dialog:default",
     "dialog:allow-open",
+    "dialog:allow-save",
     "core:event:default",
     "core:event:allow-emit",
     "core:event:allow-listen"

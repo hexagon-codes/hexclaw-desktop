@@ -5,7 +5,7 @@
  * Bug #2: 复制代码按钮在 Tauri WebView 中静默失败
  * Bug #3: 聊天输入框不支持粘贴图片
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { ref, nextTick } from 'vue'
 import { mergeStreamChunkState, type SessionStreamState } from '@/stores/chat-stream-helpers'
 import { createChatThinkingTimerController } from '@/stores/chat-thinking-timer'

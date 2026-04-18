@@ -45,9 +45,9 @@ const dotClass = computed(() => {
 
 const engineLabel = computed(() => {
   const s = appStore.sidecarStatus
-  if (s === 'running') return engineVersion.value ? `Hexagon ${engineVersion.value}` : 'Hexagon'
-  if (s === 'starting') return 'Hexagon …'
-  return 'Hexagon'
+  if (s === 'running') return 'Hexagon engine'
+  if (s === 'starting') return 'Hexagon engine …'
+  return 'Hexagon engine'
 })
 
 function getGroupItems(group: NavGroup) {
