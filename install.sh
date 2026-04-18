@@ -96,6 +96,16 @@ ok "Copied to ${INSTALL_DIR}/${APP_NAME}.app"
 xattr -cr "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || true
 ok "Removed quarantine flag (Gatekeeper bypass)"
 
+# ─── Re-sign ad-hoc (修复 CI 打包后的 resource 签名丢失) ─
+# 未通过 Apple Developer 签名的构建在 macOS 26+ 上默认被
+# Gatekeeper 拒绝启动 GUI，报错 "code has no resources but
+# signature indicates they must be present"。本地重新 ad-hoc 签
+# 名即可修复，不影响未签名的二进制用途。
+if command -v codesign >/dev/null 2>&1; then
+  codesign --force --deep --sign - "${INSTALL_DIR}/${APP_NAME}.app" 2>/dev/null || warn "Re-sign failed (app may still launch if macOS < 26)"
+  ok "Re-signed ad-hoc"
+fi
+
 # ─── Cleanup ─────────────────────────────────────────
 hdiutil detach "$MOUNT_POINT" -quiet 2>/dev/null || true
 rm -rf "$TMP_DIR"
