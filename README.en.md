@@ -46,7 +46,7 @@ Native macOS / Windows / Linux · Sidecar local deployment · Zero cloud depende
 | Feature | Description |
 |---------|-------------|
 | **AI Chat** | Multi-model support: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama, streaming output, Markdown rendering, syntax highlighting, deep thinking |
-| **Image/Video Generation** | ZhipuAI CogView-4 image generation + CogVideoX-2 video generation, images embedded as data URI (never expire), inline video playback, metadata-driven capability detection |
+| **Image/Video Generation** | ZhipuAI CogView-4 image generation + CogVideoX-2 video generation, unified text-input entry (no separate mode buttons), results persisted to `{DataDir}/generated/` and referenced via `/api/v1/files/generated/...` URLs (never expire, won't bloat SQLite), inline preview + always-visible download button |
 | **Agent Orchestration** | Custom Agent roles/goals/backstory, multi-Agent collaboration, Agent conference mode, role template library |
 | **Skill System** | Skill marketplace + custom skills, tool registration and permission management |
 | **Workflow Canvas** | Visual drag-and-drop Agent workflow orchestration, DAG execution engine |
@@ -245,7 +245,7 @@ cd hexclaw-desktop
 make install
 # Equivalent to: pnpm install && cd src-tauri && cargo fetch
 
-# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.1.0-beta by default)
+# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.4.0 by default)
 make sidecar
 
 # 4. Start development mode
@@ -253,7 +253,7 @@ make dev
 ```
 
 > **Note**:
-> - `make sidecar` pulls `refs/tags/v0.1.0-beta` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
+> - `make sidecar` pulls `refs/tags/v0.4.0` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
 > - To build another backend version, pass it explicitly: `make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.2` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
 
@@ -483,7 +483,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` compilation fails
 
 1. Verify Go >= 1.23 is installed: `go version`
-2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.1.0-beta`
+2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.4.0`
 3. Verify Rust toolchain is installed (needed for platform triple detection): `rustc -vV`
 
 ### `make dev` starts but shows white screen
