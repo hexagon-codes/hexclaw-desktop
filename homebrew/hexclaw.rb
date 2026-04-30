@@ -14,7 +14,7 @@
 #   brew install --cask hexclaw
 
 cask "hexclaw" do
-  version "0.2.1"
+  version "0.4.0"
 
   on_arm do
     url "https://github.com/hexagon-codes/hexclaw-desktop/releases/download/v#{version}/HexClaw_#{version}_aarch64.dmg"

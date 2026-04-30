@@ -87,7 +87,7 @@ function getGroupItems(group: NavGroup) {
       </template>
     </nav>
 
-    <!-- Footer: engine status -->
+    <!-- Footer: engine status + version -->
     <div class="hc-sidebar__footer">
       <div class="hc-sidebar__engine-row" :title="env.apiBase">
         <span class="hc-sidebar__dot" :class="dotClass" />

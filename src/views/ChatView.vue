@@ -26,6 +26,7 @@ import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import AgentBadge from '@/components/chat/AgentBadge.vue'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
+import InteractiveBlock from '@/components/chat/InteractiveBlock.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
@@ -40,8 +41,6 @@ import { setClipboard } from '@/api/desktop'
 import { appendSessionMessagesBatch } from '@/api/chat'
 import { inferCapabilitiesFromId } from '@/config/providers'
 import { logger } from '@/utils/logger'
-import ImageGenComposer from '@/components/chat/ImageGenComposer.vue'
-import VideoGenComposer from '@/components/chat/VideoGenComposer.vue'
 import VoiceChatComposer from '@/components/chat/VoiceChatComposer.vue'
 import { getImageGenStatus, imageToSrc, type ImageGenResult } from '@/api/imagegen'
 import { getVideoGenStatus, videoToSrc, type VideoTaskStatus } from '@/api/videogen'
@@ -184,6 +183,24 @@ function isEmptyReply(content: string): boolean {
   return !content.trim() || EMPTY_REPLY_PATTERN.test(content.trim())
 }
 
+/**
+ * 清理历史脏数据：旧版本曾把图像 base64 写进 content 字段，导致气泡渲染整条
+ * base64 长串。检测连续无空白 / 长度异常的 base64-like 内容并替换为占位符。
+ * 新版生成消息 content 永远是短文本（"已生成 N 张图像"），不会触发此分支。
+ */
+function sanitizeMessageContent(content: string): string {
+  if (!content) return ''
+  // base64 特征：长度 > 800 + 主体无空白 + 大量 [A-Za-z0-9+/=] 字符
+  if (content.length > 800) {
+    const noWs = content.replace(/\s/g, '')
+    const b64Like = noWs.match(/[A-Za-z0-9+/=]/g)?.length ?? 0
+    if (b64Like / noWs.length > 0.92) {
+      return '[图像数据 · 历史消息已截断]'
+    }
+  }
+  return content
+}
+
 function formatThinkingDuration(seconds?: unknown): string {
   const s = Number(seconds)
   if (!s || s <= 0) return ''
@@ -209,6 +226,103 @@ function formatFullTime(ts: string): string {
 function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   const attachments = message.metadata?.attachments
   return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
+}
+
+/** D2 交互按钮：从 message.metadata.interactive_buttons 解析。
+ *
+ * 后端协议（K12 识题确认场景）：
+ *   metadata.interactive_buttons = {
+ *     prompt?: string,
+ *     buttons: [{ label, action, variant?, payload? }],
+ *     resolved?: { action, label }   // 用户已点击后由前端写回
+ *   }
+ */
+interface InteractiveButtonsBlock {
+  prompt?: string
+  buttons: Array<{ label: string; action: string; variant?: 'primary' | 'secondary'; payload?: string }>
+  resolved?: { action: string; label: string }
+}
+function getInteractiveButtons(message: ChatMessage): InteractiveButtonsBlock | null {
+  const raw = message.metadata?.interactive_buttons
+  if (!raw) return null
+  // 后端 reply.Metadata 是 map[string]string，所以 buttons 通常是 JSON 字符串；
+  // 前端写回 resolved 时直接保存 object —— 这里同时兼容两种类型
+  let block: InteractiveButtonsBlock | null = null
+  if (typeof raw === 'string') {
+    try {
+      block = JSON.parse(raw) as InteractiveButtonsBlock
+    } catch {
+      return null
+    }
+  } else if (typeof raw === 'object') {
+    block = raw as InteractiveButtonsBlock
+  }
+  if (!block || !Array.isArray(block.buttons) || block.buttons.length === 0) return null
+  return block
+}
+
+/**
+ * v0.4.0 G3/E6: 统一交互载荷读取入口。
+ *  - 优先 message.interactive（新协议，4 type 支持）
+ *  - fallback 到 metadata.interactive_buttons（老 JSON 字符串/对象，仅 buttons 类型）
+ *
+ * 老路径会被透明适配为 InteractivePayload 喂给 InteractiveBlock。
+ */
+function getInteractivePayload(message: ChatMessage): import('@/types').InteractivePayload | null {
+  if (message.interactive) return message.interactive
+  const legacy = getInteractiveButtons(message)
+  if (!legacy) return null
+  return {
+    type: 'buttons',
+    prompt: legacy.prompt,
+    buttons: legacy.buttons,
+    resolved: legacy.resolved
+      ? { action: legacy.resolved.action, label: legacy.resolved.label }
+      : undefined,
+  }
+}
+
+async function handleInteractiveSelect(
+  message: ChatMessage,
+  payload: { action: string; label: string; value?: string; payload?: string; approved?: boolean },
+) {
+  // 1) 把 resolved 写回，禁用其余选项；优先写入新协议字段，否则回写老 metadata
+  if (message.interactive) {
+    message.interactive = {
+      ...message.interactive,
+      resolved: {
+        action: payload.action,
+        label: payload.label,
+        value: payload.value,
+        approved: payload.approved,
+        timestamp: new Date().toISOString(),
+      },
+    }
+  } else {
+    const block = getInteractiveButtons(message)
+    if (block) {
+      block.resolved = { action: payload.action, label: payload.label }
+      if (!message.metadata) message.metadata = {}
+      message.metadata.interactive_buttons = block
+    }
+  }
+  // 2) 用用户身份把选择回传到对话流，后端可从 metadata.interactive_action 路由处理
+  // 文本格式：approval 类→直接 label；select 类→label (value)；其他→label (payload?)
+  let text = payload.label
+  if (typeof payload.approved === 'boolean') {
+    text = payload.label
+  } else if (payload.value) {
+    text = `${payload.label} (${payload.value})`
+  } else if (payload.payload) {
+    text = `${payload.label} (${payload.payload})`
+  }
+  try {
+    await chatStore.sendMessage(text, undefined, {
+      backendText: text,
+    })
+  } catch (e) {
+    logger.warn('[HexClaw] G3 交互回传失败:', e)
+  }
 }
 
 // Document parsing state
@@ -829,8 +943,9 @@ async function handleImageGenerated(result: ImageGenResult, prompt: string) {
   await nextTick(scrollToBottom)
 }
 
+// 通用生成错误（图像/视频共用 — ChatInput 统一 emit 'generation:error'）
 function handleImageGenError(message: string) {
-  toast.error?.(`图像生成失败：${message}`)
+  toast.error?.(`生成失败：${message}`)
 }
 
 /**
@@ -882,10 +997,6 @@ async function handleVideoGenerated(status: VideoTaskStatus, prompt: string) {
   chatStore.messages.push(userMsg, assistantMsg)
   void persistGenMessages(userMsg, assistantMsg)
   await nextTick(scrollToBottom)
-}
-
-function handleVideoGenError(message: string) {
-  toast.error?.(`视频生成失败：${message}`)
 }
 
 /**
@@ -1296,18 +1407,24 @@ function startSidebarResize(event: MouseEvent) {
                               @click="openImagePreview(att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data)"
                             />
                             <button
-                              class="hc-msg__img-download"
-                              title="下载图片"
+                              class="hc-msg__media-download"
+                              :title="t('chat.downloadImage', '下载图片')"
                               @click.stop="downloadImage(att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data, att.name)"
                             >⬇</button>
                           </span>
-                          <video
-                            v-else-if="att.type === 'video'"
-                            controls
-                            preload="metadata"
-                            class="hc-msg__video"
-                            :src="att.data.startsWith('http') ? att.data : 'data:' + att.mime + ';base64,' + att.data"
-                          />
+                          <span v-else-if="att.type === 'video'" class="hc-msg__video-wrap">
+                            <video
+                              controls
+                              preload="metadata"
+                              class="hc-msg__video"
+                              :src="att.data.startsWith('http') ? att.data : 'data:' + att.mime + ';base64,' + att.data"
+                            />
+                            <button
+                              class="hc-msg__media-download"
+                              :title="t('chat.downloadVideo', '下载视频')"
+                              @click.stop="downloadImage(att.data.startsWith('http') ? att.data : 'data:' + att.mime + ';base64,' + att.data, att.name)"
+                            >⬇</button>
+                          </span>
                           <audio
                             v-else-if="att.type === 'audio' || att.mime?.startsWith('audio/')"
                             controls
@@ -1318,7 +1435,14 @@ function startSidebarResize(event: MouseEvent) {
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
                       </div>
-                      <MarkdownRenderer :content="msg.content" />
+                      <MarkdownRenderer :content="sanitizeMessageContent(msg.content)" />
+                      <!-- v0.4.0 G3/E6 通用交互块（buttons/select/approval/card 4 type）；
+                           优先 message.interactive 新协议，fallback 到 metadata.interactive_buttons 老路径 -->
+                      <InteractiveBlock
+                        v-if="getInteractivePayload(msg)"
+                        :payload="getInteractivePayload(msg)!"
+                        @select="(p) => handleInteractiveSelect(msg, p)"
+                      />
                       <!-- 旧版兼容：metadata.source = 'video_generation' + metadata.video_url -->
                       <video
                         v-if="msg.metadata?.source === 'video_generation' && msg.metadata?.video_url && !getMessageAttachments(msg).some(a => a.type === 'video')"
@@ -1683,86 +1807,18 @@ function startSidebarResize(event: MouseEvent) {
               </div>
               <button class="hc-chat__attach-remove" @click="clearAttachmentPreview">×</button>
             </div>
-            <!-- 生成模式下的模型切换条 — 保证用户能从 cogview/cogvideox/gpt-4o-audio 切回 chat 模型 -->
-            <div
-              v-if="isImageGenModel || isVideoGenModel || isVoiceChatModel"
-              class="hc-gen-modebar"
-            >
-              <div class="hc-model-selector hc-model-selector--inline">
-                <button class="hc-model-selector__btn" @click="toggleModelSelector">
-                  <span class="hc-model-selector__name">{{ selectedModelDisplay }}</span>
-                  <ChevronDown :size="12" />
-                </button>
-                <div
-                  v-if="showModelSelector"
-                  class="hc-model-selector__dropdown hc-model-selector__dropdown--up"
-                  @mouseleave="showModelSelector = false"
-                >
-                  <button
-                    class="hc-model-selector__item hc-model-selector__item--auto"
-                    :class="{ 'hc-model-selector__item--active': selectedModel === 'auto' }"
-                    @click="selectModel('auto')"
-                  >
-                    <Zap :size="12" style="color: var(--hc-accent); margin-right: 4px" />
-                    <span class="hc-model-selector__item-name">Auto</span>
-                  </button>
-                  <div class="hc-model-selector__divider" />
-                  <template v-if="Object.keys(groupedModels).length > 0">
-                    <div v-for="(group, pid) in groupedModels" :key="pid" class="hc-model-selector__group">
-                      <div class="hc-model-selector__group-label">{{ group.providerName }}</div>
-                      <button
-                        v-for="m in group.models"
-                        :key="m.modelId"
-                        class="hc-model-selector__item"
-                        :class="{
-                          'hc-model-selector__item--active': selectedModel === m.modelId && selectedProviderId === pid,
-                          'hc-model-selector__item--disabled': !isModelUsable(m.modelId, m.capabilities),
-                        }"
-                        :disabled="!isModelUsable(m.modelId, m.capabilities)"
-                        :title="!isModelUsable(m.modelId, m.capabilities) ? '该生成模型暂未接入后端 Provider' : modelKindLabel(m.modelId, m.capabilities)"
-                        @click="isModelUsable(m.modelId, m.capabilities) && selectModel(m.modelId, String(pid), m.providerKey, group.providerName)"
-                      >
-                        <span
-                          class="hc-model-selector__item-kind"
-                          role="img"
-                          :aria-label="modelKindLabel(m.modelId, m.capabilities)"
-                        >{{ modelKindEmoji(m.modelId, m.capabilities) }}</span>
-                        <span class="hc-model-selector__item-name">{{ m.modelName }}</span>
-                        <span v-if="!isModelUsable(m.modelId, m.capabilities)" class="hc-model-selector__item-tag">暂未支持</span>
-                        <span v-else-if="selectedModel === m.modelId && selectedProviderId === pid" style="color: var(--hc-accent); margin-left: auto;">✓</span>
-                      </button>
-                    </div>
-                  </template>
-                </div>
-              </div>
-            </div>
-
-            <!-- 图像生成模式 -->
-            <ImageGenComposer
-              v-if="isImageGenModel"
-              :model-id="selectedModel"
-              :model-name="selectedModelDisplay"
-              :provider-key="selectedProviderKey"
-              @generated="handleImageGenerated"
-              @error="handleImageGenError"
-            />
-            <!-- 视频生成模式 -->
-            <VideoGenComposer
-              v-else-if="isVideoGenModel"
-              :model-id="selectedModel"
-              :model-name="selectedModelDisplay"
-              :provider-key="selectedProviderKey"
-              @generated="handleVideoGenerated"
-              @error="handleVideoGenError"
-            />
-            <!-- 语音对话模式（audio-to-audio） -->
+            <!-- 语音对话模式（audio-to-audio）— 独立媒介，不属于 composer mode 切换范畴 -->
             <VoiceChatComposer
-              v-else-if="isVoiceChatModel"
+              v-if="isVoiceChatModel"
               :model-id="selectedModel"
               :model-name="selectedModelDisplay"
               @exchanged="handleVoiceChatExchanged"
               @error="handleVoiceChatError"
             />
+            <!--
+              统一文本对话框（image_generate / video_generate / vision 由 ChatInput 内部
+              的 ComposerMode 状态机显式区分；不依赖关键词推断，K12 友好。
+            -->
             <ChatInput
               v-else
               :streaming="chatStore.isCurrentStreaming"
@@ -1773,7 +1829,15 @@ function startSidebarResize(event: MouseEvent) {
               :allow-video="supportsVideo"
               :recipient-name="chatStore.agentRole || t('chat.defaultAgent', '小蟹')"
               :send-handler="handleSend"
+              :gen-model-id="selectedModel"
+              :gen-model-name="selectedModelDisplay"
+              :gen-provider-key="selectedProviderKey"
+              :supports-image-gen="isImageGenModel"
+              :supports-video-gen="isVideoGenModel"
               @stop="chatStore.stopStreaming()"
+              @generated:image="handleImageGenerated"
+              @generated:video="handleVideoGenerated"
+              @generation:error="handleImageGenError"
             >
               <!-- 模型选择器 + 深度研究（ChatGPT 风格，在输入框内底部工具栏） -->
               <template #tools>
@@ -2037,7 +2101,8 @@ function startSidebarResize(event: MouseEvent) {
 .hc-chat__drop-hint {
   padding: 16px 32px;
   border-radius: 12px;
-  border: 2px dashed var(--hc-accent);
+  /* HIG: 1.5px dashed 仍清晰可见，避免 2px 粗边框 */
+  border: 1.5px dashed var(--hc-accent);
   background: var(--hc-bg-elevated);
   color: var(--hc-accent);
   font-size: 14px;
@@ -2142,7 +2207,8 @@ function startSidebarResize(event: MouseEvent) {
   height: 10px;
   border-radius: 50%;
   background: var(--hc-success);
-  border: 2px solid var(--hc-bg-card, #fff);
+  /* HIG: 1.5px halo 保持视觉分离，避免 2px 粗边框 */
+  border: 1.5px solid var(--hc-bg-card, #fff);
   box-sizing: border-box;
 }
 
@@ -2364,7 +2430,8 @@ function startSidebarResize(event: MouseEvent) {
 }
 
 .hc-msg__edit-btn--send:hover {
-  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+  /* HIG accent glow: alpha ≤ 0.18，柔和发光 */
+  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.18);
 }
 
 @keyframes fadeScaleIn {
@@ -3542,15 +3609,17 @@ function startSidebarResize(event: MouseEvent) {
   margin-bottom: 6px;
 }
 
-.hc-msg__img-wrap {
+.hc-msg__img-wrap,
+.hc-msg__video-wrap {
   position: relative;
   display: inline-block;
 }
 
-.hc-msg__img-download {
+/* 媒体下载按钮（图片/视频统一）— 始终可见 0.85，hover 1.0；RTL 安全用 inset-inline-end */
+.hc-msg__media-download {
   position: absolute;
   top: 6px;
-  right: 6px;
+  inset-inline-end: 6px;
   width: 28px;
   height: 28px;
   display: flex;
@@ -3562,10 +3631,13 @@ function startSidebarResize(event: MouseEvent) {
   color: #fff;
   font-size: 14px;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s, background 0.15s, transform 0.12s;
+  opacity: 0.85;
+  transition: opacity 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.12s cubic-bezier(0.16, 1, 0.3, 1);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
+  z-index: 2;
 }
 
 /* ── Apple HIG 图片预览 Modal ── */
@@ -3585,7 +3657,8 @@ function startSidebarResize(event: MouseEvent) {
   max-width: 92vw;
   max-height: 92vh;
   border-radius: 12px;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.4), 0 8px 16px rgba(0,0,0,0.2);
+  /* HIG --shadow-lg: 柔和多层阴影，alpha ≤ 0.12 */
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.06);
   cursor: default;
 }
 .hc-img-preview__close {
@@ -3614,37 +3687,8 @@ function startSidebarResize(event: MouseEvent) {
 }
 .hc-preview-enter-from, .hc-preview-leave-to { opacity: 0; }
 
-/* 生成模式模型切换条 — 右对齐贴在 Composer 顶边，text-only 极简 chip */
-.hc-gen-modebar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 0 8px 6px;
-  position: relative;
-}
-.hc-gen-modebar .hc-model-selector__btn {
-  background: transparent;
-  border: 0;
-  padding: 4px 8px;
-  color: var(--hc-text-secondary, #6E6E73);
-  font-size: 12px;
-  font-weight: 500;
-  border-radius: 6px;
-  transition: color 0.15s ease, background-color 0.15s ease;
-}
-.hc-gen-modebar .hc-model-selector__btn:hover {
-  color: var(--hc-accent, #007AFF);
-  background: rgba(0, 122, 255, 0.06);
-}
-.hc-gen-modebar .hc-model-selector__dropdown {
-  right: 0;
-  left: auto;
-}
-
-.hc-msg__img-wrap:hover .hc-msg__img-download {
+.hc-msg__media-download:hover {
   opacity: 1;
-}
-
-.hc-msg__img-download:hover {
   background: rgba(0, 0, 0, 0.75);
   transform: scale(1.08);
 }
@@ -3755,7 +3799,8 @@ function startSidebarResize(event: MouseEvent) {
 .hc-thinking__spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid var(--hc-border);
+  /* HIG: 1.5px spinner 仍清晰，避免 2px 粗边框 */
+  border: 1.5px solid var(--hc-border);
   border-top-color: var(--hc-accent);
   border-radius: 50%;
   animation: hc-spin 0.7s linear infinite;
@@ -3763,9 +3808,13 @@ function startSidebarResize(event: MouseEvent) {
 }
 
 .hc-thinking__content {
-  padding: 8px 0 4px 14px;
-  margin-left: 3px;
-  border-left: 2px solid var(--hc-border);
+  /* logical properties：RTL 时浏览器自动把 inline-start/end 镜像到正确侧 */
+  padding-block: 8px 4px;
+  padding-inline-start: 14px;
+  padding-inline-end: 14px; /* 两侧对称，防 LTR 内容（中文）贴边 */
+  margin-inline-start: 3px;
+  /* HIG: 1px 细边框形成 quote 视觉，避免 2px 粗边框 */
+  border-inline-start: 1px solid var(--hc-border);
   font-size: 13px;
   line-height: 1.7;
   white-space: pre-wrap;

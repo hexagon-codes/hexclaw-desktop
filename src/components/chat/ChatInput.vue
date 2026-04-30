@@ -6,6 +6,26 @@ import MentionPopup from './MentionPopup.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import { useVoice } from '@/composables/useVoice'
 import type { Skill } from '@/types'
+import { generateImage, type ImageGenResult } from '@/api/imagegen'
+import { submitVideoGeneration, pollUntilDone, videoToSrc, type VideoTaskStatus } from '@/api/videogen'
+import { logger } from '@/utils/logger'
+
+/**
+ * ComposerMode — 由模型 capability 决定，无任何 UI 按钮（统一对话框，K12 友好）。
+ * 用户感知：永远只有一个文本输入框；选了图像/视频模型后 send 自动调对应 API（默认参数）。
+ *
+ * - chat:           普通文字问答（含附图时即 vision 语义）
+ * - image_generate: 当前模型支持图像生成 → send 调 generateImage（默认 1024×1024 / 1 张）
+ * - video_generate: 当前模型支持视频生成 → send 调 submitVideoGeneration（默认 1280×720 / 5s / 含音轨）
+ */
+type ComposerMode = 'chat' | 'image_generate' | 'video_generate'
+
+// 生成默认参数 — 用户不需要感知这些细节
+const DEFAULT_IMAGE_SIZE = '1024x1024'
+const DEFAULT_IMAGE_COUNT = 1
+const DEFAULT_VIDEO_SIZE = '1280x720'
+const DEFAULT_VIDEO_DURATION = 5
+const DEFAULT_VIDEO_WITH_AUDIO = true
 
 const { t } = useI18n()
 const { isListening, transcript, isSupported: voiceSupported, toggleListening } = useVoice()
@@ -27,12 +47,23 @@ const props = defineProps<{
   allowVideo?: boolean
   recipientName?: string
   sendHandler?: (text: string, files: File[]) => boolean | Promise<boolean>
+  /** 当前选中的生成模型 ID（仅在 image_generate / video_generate 模式下使用） */
+  genModelId?: string
+  genModelName?: string
+  genProviderKey?: string
+  /** 模型是否支持图像生成 / 视频生成（决定相应按钮启用） */
+  supportsImageGen?: boolean
+  supportsVideoGen?: boolean
 }>()
 
 const emit = defineEmits<{
   send: [text: string, files: File[]]
   stop: []
   createTemplate: []
+  'generated:image': [result: ImageGenResult, prompt: string]
+  'generated:video': [status: VideoTaskStatus, prompt: string]
+  'generation:error': [message: string]
+  'mode:changed': [mode: ComposerMode]
 }>()
 
 const inputText = ref('')
@@ -40,6 +71,8 @@ const textareaRef = ref<HTMLTextAreaElement>()
 const fileInputRef = ref<HTMLInputElement>()
 const mentionRef = ref<InstanceType<typeof MentionPopup>>()
 const templateRef = ref<InstanceType<typeof TemplatePopup>>()
+const generating = ref(false)
+let videoAbort: AbortController | null = null
 
 const attachedFiles = ref<{ file: File; previewUrl?: string }[]>([])
 
@@ -51,14 +84,39 @@ const templateQuery = ref('')
 const templatePosition = ref({ bottom: 0, left: 0 })
 const submitting = ref(false)
 
-const canSend = computed(() =>
-  (inputText.value.trim() || attachedFiles.value.length > 0) &&
-  !props.streaming &&
-  !props.disabled &&
-  !submitting.value,
-)
+// ── ComposerMode：完全由模型 capability 决定（无独立 mode 按钮，对齐其他通用 Agent）。
+// 选了图像/视频模型 → 自动切到对应模式；否则 chat。
+const composerMode = computed<ComposerMode>(() => {
+  if (props.supportsImageGen) return 'image_generate'
+  if (props.supportsVideoGen) return 'video_generate'
+  return 'chat'
+})
+const isGenMode = computed(() => composerMode.value !== 'chat')
+
+// 含图附件 → vision 语义（chat mode 下的派生状态，仅影响 placeholder）
+const hasImageAttachment = computed(() => attachedFiles.value.some(a => a.file.type.startsWith('image/')))
+
+watch(composerMode, (mode) => emit('mode:changed', mode), { immediate: true })
+
+const canSend = computed(() => {
+  if (props.streaming || props.disabled || submitting.value || generating.value) return false
+  if (isGenMode.value) {
+    // 生成 mode 必须有 prompt（不允许仅附件）
+    return !!inputText.value.trim()
+  }
+  return !!(inputText.value.trim() || attachedFiles.value.length > 0)
+})
 
 const placeholder = computed(() => {
+  if (composerMode.value === 'image_generate') {
+    return t('chat.composer.placeholder.imageGen', '描述你想生成的图像，例如「写实风格的橘猫站在月球」')
+  }
+  if (composerMode.value === 'video_generate') {
+    return t('chat.composer.placeholder.videoGen', '描述视频内容，例如「橘猫在月球跳跃，电影感」')
+  }
+  if (hasImageAttachment.value) {
+    return t('chat.composer.placeholder.vision', '已附图：可问解题、批改、识字…')
+  }
   if (props.recipientName) return t('chat.sendTo', { name: props.recipientName })
   return t('chat.inputPlaceholder')
 })
@@ -86,15 +144,74 @@ function clearDraft() {
 async function handleSend() {
   const text = inputText.value.trim()
   const files = attachedFiles.value.map((a) => a.file)
-  if (!text && files.length === 0) return
-  if (props.streaming || props.disabled || submitting.value) return
+  if (props.streaming || props.disabled || submitting.value || generating.value) return
   closePopups()
+
+  // 图像生成：直接调 API（默认参数），无 UI 参数面板
+  if (composerMode.value === 'image_generate') {
+    if (!text || !props.genModelId) return
+    generating.value = true
+    try {
+      const result = await generateImage({
+        model: props.genModelId,
+        prompt: text,
+        size: DEFAULT_IMAGE_SIZE,
+        n: DEFAULT_IMAGE_COUNT,
+      })
+      emit('generated:image', result, text)
+      clearDraft()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : t('chat.generate.failedDefault', '生成失败')
+      logger.error('[ChatInput] image generate failed', e)
+      emit('generation:error', msg)
+    } finally {
+      generating.value = false
+    }
+    return
+  }
+
+  // 视频生成：submit + poll，默认参数
+  if (composerMode.value === 'video_generate') {
+    if (!text || !props.genModelId) return
+    generating.value = true
+    videoAbort = new AbortController()
+    try {
+      const { task_id } = await submitVideoGeneration({
+        model: props.genModelId,
+        prompt: text,
+        size: DEFAULT_VIDEO_SIZE,
+        with_audio: DEFAULT_VIDEO_WITH_AUDIO,
+        duration: DEFAULT_VIDEO_DURATION,
+      })
+      const final = await pollUntilDone(task_id, { signal: videoAbort.signal })
+      if (final.status === 'success' && videoToSrc(final)) {
+        emit('generated:video', final, text)
+        clearDraft()
+      } else {
+        emit('generation:error', final.error || t('chat.generate.failedDefault', '生成失败'))
+      }
+    } catch (e) {
+      if ((e as DOMException)?.name === 'AbortError') {
+        emit('generation:error', t('chat.generate.cancelled', '已取消'))
+      } else {
+        const msg = e instanceof Error ? e.message : t('chat.generate.failedDefault', '生成失败')
+        logger.error('[ChatInput] video generate failed', e)
+        emit('generation:error', msg)
+      }
+    } finally {
+      generating.value = false
+      videoAbort = null
+    }
+    return
+  }
+
+  // 普通 chat / vision（含附图）
+  if (!text && files.length === 0) return
   if (!props.sendHandler) {
     emit('send', text, files)
     clearDraft()
     return
   }
-
   submitting.value = true
   try {
     const accepted = await props.sendHandler(text, files)
@@ -270,7 +387,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
           <button
             class="hc-composer__tool"
             :title="t('chat.addFile', '添加文件')"
-            :disabled="disabled || submitting"
+            :disabled="disabled || submitting || isGenMode"
             @click="handleFileClick"
           >
             <Paperclip :size="18" />
@@ -280,7 +397,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
             class="hc-composer__tool"
             :class="{ 'hc-composer__tool--recording': isListening }"
             :title="isListening ? t('chat.voiceStop') : t('chat.voiceStart')"
-            :disabled="disabled || submitting"
+            :disabled="disabled || submitting || isGenMode"
             @click="toggleListening"
           >
             <Mic :size="18" />

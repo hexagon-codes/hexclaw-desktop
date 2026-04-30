@@ -64,15 +64,21 @@ export function createChatSendDeliveryController(params: {
   function buildRequestMetadata(): Record<string, string> | undefined {
     const settingsStore = getSettingsStore()
     const memoryEnabled = settingsStore.config?.memory?.enabled ?? true
+    const agentMode = settingsStore.config?.llm?.agentMode ?? 'auto'
     const model = chatParams.value.model
     const modelCaps = model
       ? (settingsStore.availableModels ?? []).find((m) => m.modelId === model)?.capabilities ?? []
       : []
+    // v0.4.0 9.5：把当前 i18n locale 透传给后端 system prompt
+    const userLocale =
+      (typeof localStorage !== 'undefined' && localStorage.getItem('hc-locale')) || 'zh-CN'
     return buildChatRequestMetadata({
       thinkingEnabled: thinkingEnabled.value,
       memoryEnabled,
       imageGeneration: modelCaps.includes('image_generation'),
       videoGeneration: modelCaps.includes('video_generation'),
+      agentMode,
+      userLocale,
     })
   }
 

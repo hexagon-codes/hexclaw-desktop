@@ -343,7 +343,8 @@ select.hc-input:focus {
   height: 16px;
   border-radius: 50%;
   background: var(--hc-text-inverse);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  /* HIG --shadow-sm: toggle thumb 轻微浮起，alpha ≤ 0.06 */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
   transition: transform 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
 }
 
@@ -757,7 +758,8 @@ select.hc-input:focus {
   justify-content: center;
   font-size: 36px;
   color: var(--hc-text-inverse);
-  box-shadow: 0 12px 32px rgba(74, 144, 217, 0.3);
+  /* HIG accent glow: alpha ≤ 0.18，柔和发光 */
+  box-shadow: 0 12px 32px rgba(74, 144, 217, 0.18);
 }
 
 .hc-about__name {
@@ -800,3 +802,140 @@ select.hc-input:focus {
   border-color: var(--hc-accent-subtle);
   color: var(--hc-text-primary);
 }
+
+/* ─── v0.4.0 维吾尔语 (ug-CN) 字体 + RTL 支持 ─────────────────────
+   仅作用于 lang=ug 元素 + RTL 全局规则；不影响 zh / en 默认渲染。
+   字体策略：用系统自带阿拉伯字符字体兜底，**不打包商用字体**避免许可问题。
+   - macOS: Geeza Pro (系统自带)
+   - Windows: Tahoma / Microsoft Uighur (Win 7+ 自带)
+   - Linux: Noto Naskh Arabic / 系统字体
+   ────────────────────────────────────────────────────────────── */
+[lang='ug'],
+[lang='ug-CN'] {
+  font-family:
+    'Geeza Pro',
+    'Microsoft Uighur',
+    'Noto Naskh Arabic',
+    'Tahoma',
+    system-ui,
+    sans-serif;
+}
+
+/* RTL 方向下输入框 / textarea / 文本对齐自动镜像（不影响代码块）。
+   v0.4.0 RTL bug 修复：补漏 — 之前只设 text-align:right，导致中文用户切到维语界面后
+   输入中文/数字/数学公式时，bidi 算法把整段重排成 RTL 视觉（如"1/3+1/2=?"显示成
+   "?=1/3+1/2"位置颠倒）。补 unicode-bidi: plaintext 让浏览器按输入内容首字符自适应：
+   中文/数字 → LTR（数学公式正常）；维语 → RTL（阿拉伯字母正常）。 */
+[dir='rtl'] input[type='text'],
+[dir='rtl'] input[type='search'],
+[dir='rtl'] textarea {
+  text-align: right;
+  unicode-bidi: plaintext;
+}
+
+/* code/pre 永远 LTR（编程符号 / 命令行 RTL 会破坏可读性）。 */
+[dir='rtl'] code,
+[dir='rtl'] pre,
+[dir='rtl'] kbd {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: embed;
+}
+
+/* 消息气泡 + Markdown 内容：按内容首字符自动判断方向。
+   修复 RTL 容器下中文/数字/数学公式被强制重排的视觉问题
+   （`40 - 30 = 10` 在 RTL 下显示成 `10 = 30 - 40`）。
+   - 维语首字符 → bubble 走 RTL（自然）
+   - 中文 / 英文首字符 → bubble 走 LTR（数字 + 数学正常显示）
+   `unicode-bidi: plaintext` 是 CSS 等价于 HTML `dir="auto"`，
+   让浏览器对每个块独立判断方向，不继承父容器。 */
+[dir='rtl'] .hc-msg__bubble,
+[dir='rtl'] .hc-msg__name,
+[dir='rtl'] .hc-thinking__content,
+[dir='rtl'] .hc-msg__bubble p,
+[dir='rtl'] .hc-msg__bubble li {
+  unicode-bidi: plaintext;
+}
+
+/* RTL 下中文/英文标题在 ellipsis 容器中省略号位置错误的修复。
+   场景：会话列表项标题是中文（"一堂数学课上，学生..."），但容器是 RTL，
+   `text-overflow: ellipsis` 默认跟随容器方向 → 省略号出现在标题"开头"
+   而不是用户预期的"结尾"。`unicode-bidi: plaintext` 让每条标题按
+   自身内容判断方向，中文标题正确截断。 */
+[dir='rtl'] .hc-sessions__title,
+[dir='rtl'] .hc-sessions__snippet,
+[dir='rtl'] .hc-sessions__time,
+[dir='rtl'] .hc-sessions__meta,
+[dir='rtl'] .hc-chat__stat-pill,
+[dir='rtl'] .hc-titlebar__section,
+[dir='rtl'] .hc-sidebar__brand-name,
+[dir='rtl'] .hc-sidebar__engine-label {
+  unicode-bidi: plaintext;
+}
+
+/* RTL 下 padding 物理属性需要镜像。
+   `.hc-msg__name` 原 padding-left: 2px 在 RTL 下应该镜像到右侧才视觉对齐。
+   用 logical property 替代物理属性。 */
+[dir='rtl'] .hc-msg__name {
+  padding-left: 0;
+  padding-inline-start: 2px;
+}
+
+/* RTL 下头像在线 badge 的位置：badge 是图标，不应跟随容器方向，
+   永远在头像右下角（绿点表示"在线"是通用约定）。 */
+[dir='rtl'] .hc-msg__avatar-badge {
+  right: auto;
+  left: 0;
+}
+
+/* RTL 高频组件 padding 镜像批量补丁（v0.4.x bug 修复）。
+   原 CSS 大量用 padding-left/right 物理属性，RTL 下不会自动镜像。
+   这里针对最高频可见组件覆盖；其它组件等 v0.5.x logical properties 重构。 */
+[dir='rtl'] .hc-sessions__item {
+  padding-left: 12px;
+  padding-right: 12px;
+}
+[dir='rtl'] .hc-sidebar__item {
+  flex-direction: row-reverse;
+}
+[dir='rtl'] .hc-sidebar__item .hc-sidebar__icon {
+  margin-left: 8px;
+  margin-right: 0;
+}
+[dir='rtl'] .hc-msg__avatar {
+  margin-left: 10px;
+  margin-right: 0;
+}
+[dir='rtl'] .hc-msg__bubble {
+  padding: 10px 14px;
+}
+
+/* RTL 全局内容容器 bidi 兜底（W3C 标准做法，等价 HTML dir="auto"）。
+   Bug-2026-05-01：维语界面下日志页（.hc-logs__row / .hc-logs__row-msg / .hc-logs__entry 等）
+   中文/英文/数字/emoji 混排被 bidi 算法整体重排（emoji + 版本号被推到行末），之前的
+   修复只覆盖了具名 class（消息气泡 / 会话列表 / titlebar），日志组件等漏覆盖。
+   这里在 [dir='rtl'] 下对常见内容容器统一加 unicode-bidi: plaintext，让浏览器
+   按内容首字符自适应方向（中文 → LTR、维语 → RTL），无需逐 class 修补。
+   注意：code/pre/kbd 已在前面的规则里设 direction:ltr + unicode-bidi:embed，
+   优先级靠位置判断，本规则放在后面会覆盖 pre 的 embed → 用 :where 降权也不解决，
+   故从兜底列表中排除 pre 同辈、保留交给前面专门的 code/pre/kbd 规则。
+   WhatsApp / Telegram / Wikipedia 维语版同样实现。 */
+[dir='rtl'] :is(
+  p, div, span, li, td, dt, dd,
+  h1, h2, h3, h4, h5, h6,
+  pre, code, blockquote, summary,
+  textarea, input, select, option,
+  button, label, [role='button']
+) {
+  unicode-bidi: plaintext;
+}
+
+/* 兜底之后再次覆盖 code/pre/kbd —— 编程符号 / 命令行永远 LTR，不能受 plaintext 影响。 */
+[dir='rtl'] code,
+[dir='rtl'] pre,
+[dir='rtl'] kbd {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: embed;
+}
+

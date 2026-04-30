@@ -103,7 +103,8 @@ defineExpose({ handleKeydown })
   border-radius: var(--hc-radius-md);
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-card);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  /* HIG --shadow-md: popup 弹出层柔和阴影 */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
   z-index: var(--hc-z-popover);
   padding: 4px;
 }

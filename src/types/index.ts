@@ -7,7 +7,11 @@
 
 // ─── 领域模型 ───────────────────────────────────────
 
-export type { ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ExecMode } from './chat'
+export type {
+  ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ExecMode, ContentBlock,
+  InteractiveButton, InteractiveType, InteractiveOption, InteractiveApproval, CardField, InteractiveCard,
+  InteractiveResolved, InteractivePayload,
+} from './chat'
 export type { AgentRole, AgentConfig, AgentRule } from './agent'
 export type { LogEntry, LogQuery, LogStats } from './log'
 export type {
@@ -44,6 +48,7 @@ export type {
   ProviderPreset,
   ModelOption,
   ModelCapability,
+  AgentMode,
   ChatParams,
   BackendLLMProvider,
   BackendLLMConfig,

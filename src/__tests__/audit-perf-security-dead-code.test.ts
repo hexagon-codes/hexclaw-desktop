@@ -48,7 +48,7 @@ describe('Dead code: orphaned components have been removed', () => {
     'components/agent/AgentStatus.vue',
     'components/common/ErrorState.vue',
     'components/common/StatusBadge.vue',
-    'components/layout/ContextBar.vue',
+    // ContextBar.vue 在 v0.4.0 重新引入（PLAN-D4 #21 真实落地），不再视为死代码
     'components/logs/LogFilter.vue',
     'components/chat/ToolCallBubble.vue',
   ]

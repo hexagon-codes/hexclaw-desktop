@@ -991,8 +991,8 @@ async function copyWebhookUrl() {
 .hc-im-card {
   position: relative;
   border-radius: var(--hc-radius-lg, 12px);
+  /* HIG: 统一 1px 细边框，移除冗余 2px border-left（同色重叠无视觉差异） */
   border: 1px solid var(--hc-border);
-  border-left: 2px solid var(--hc-border);
   background: var(--hc-bg-card);
   padding: 16px;
   display: flex;
@@ -1382,7 +1382,8 @@ async function copyWebhookUrl() {
   background: var(--hc-text-inverse);
   border-radius: 50%;
   transition: transform 0.2s;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+  /* HIG --shadow-sm: toggle thumb 轻微浮起 */
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
 .hc-im-toggle input:checked + .hc-im-toggle__slider {
@@ -1432,7 +1433,8 @@ async function copyWebhookUrl() {
   border-radius: 16px;
   background: var(--hc-bg-main, #fff);
   border: 1px solid var(--hc-border);
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  /* HIG --shadow-lg: 柔和多层阴影，alpha ≤ 0.12 */
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
   overflow: hidden;

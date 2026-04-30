@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, watch } from 'vue'
 import TitleBar from './TitleBar.vue'
 import Sidebar from './Sidebar.vue'
 import DetailPanel from './DetailPanel.vue'
+// v0.4.0 UI 优化：删除 ContextBar 引用，参见 <template> 中的注释
 import InspectorContext from '@/components/inspector/InspectorContext.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
 import { useAppStore } from '@/stores/app'
@@ -80,6 +81,11 @@ onUnmounted(() => {
         <InspectorContext />
       </DetailPanel>
     </div>
+    <!-- v0.4.0 UI 优化：移除 ContextBar 整条
+         理由：5 个 chip 全部是只读重复信息（引擎状态与 Sidebar 重复 / model
+         与输入框 selector 重复 / Agent 与 sidebar 入口重复 / Provider 可推断），
+         违反 Apple HIG "Clarity" + "Deference" 原则。释放 32px 屏幕高度。
+         相关功能（Agent 切换 / model 切换）下沉到输入框旁的"操作密集区"。 -->
     <CommandPalette />
   </div>
 </template>

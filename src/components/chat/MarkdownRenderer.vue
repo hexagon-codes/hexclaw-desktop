@@ -212,8 +212,9 @@ const rendered = computed(() => {
 }
 
 .markdown-body :deep(blockquote) {
-  border-left: 2px solid var(--hc-accent);
-  padding-left: 1em;
+  /* HIG: 0.5-1px 细边框；用 1px accent 条 + padding 形成 quote 视觉，不破粗边框规则 */
+  border-left: 1px solid var(--hc-accent);
+  padding-left: 12px;
   margin: 0.5em 0;
   color: var(--hc-text-secondary);
 }

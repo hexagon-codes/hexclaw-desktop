@@ -202,7 +202,8 @@ const ecosystem = [
   border: 1px solid var(--hc-border);
   border-radius: var(--hc-radius-xl, 16px);
   overflow: hidden;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.2);
+  /* HIG --shadow-lg: 模态框柔和阴影，alpha ≤ 0.12 */
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12), 0 8px 16px rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
 }
@@ -256,7 +257,8 @@ const ecosystem = [
   width: 68px;
   height: 68px;
   border-radius: 18px;
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  /* HIG --shadow-md: logo 卡片阴影，alpha ≤ 0.08 */
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
 }
 .hc-about-modal__name {
   margin-top: 10px;

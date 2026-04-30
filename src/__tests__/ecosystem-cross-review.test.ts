@@ -298,12 +298,14 @@ describe('[memory] Memory System', () => {
     }
   })
 
-  it('HIGH: [hexclaw] autoExtractMemoryForRole 用 context.Background() → 关机时 orphan goroutine', () => {
-    // engine/auto_memory.go:37 — 没有继承 parent context
-    // 关机期间可能写入文件 / 发 LLM 请求
+  it('HIGH→FIXED: [hexclaw] autoExtractMemoryForRole 已改用 trace.Detach(parentCtx)', () => {
+    // 原问题：engine/auto_memory.go 用 context.Background() 丢失 session/trace_id
+    // H7 修复（v0.4.0）：函数签名改为 (parentCtx, ...) + trace.Detach(parentCtx) + 30s 超时
+    // 本用例锁定修复不回退
     const am = readBackend('engine/auto_memory.go')
     if (am) {
-      expect(am).toContain('context.Background()')
+      expect(am).toContain('trace.Detach(parentCtx)')
+      expect(am).toContain('autoExtractMemoryForRole(parentCtx context.Context')
     }
   })
 

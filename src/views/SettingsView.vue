@@ -20,6 +20,7 @@ import {
 import { useSettingsStore } from '@/stores/settings'
 import { getRuntimeConfig } from '@/api/settings'
 import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
+import { fetchCapabilities, probeCapability } from '@/api/capabilities'
 import {
   getBudgetStatus,
   getToolCacheStats,
@@ -114,8 +115,11 @@ const sections = computed(() => [
   { key: 'system', label: t('settings.system.title'), icon: Palette },
 ])
 
+// v0.4.0 Features 面板已删（Apple HIG 不适合 alpha 技术 flag 列表给最终用户）。
+// flag 完整清单见仓库 CHANGELOG.md + ~/.hexclaw/hexclaw.yaml 的 features 段示例。
+
 function handleLocaleChange(locale: string) {
-  setLocale(locale as 'zh-CN' | 'en')
+  setLocale(locale as 'zh-CN' | 'en' | 'ug-CN')
 }
 
 function handleThemeSelect(mode: ThemeMode) {
@@ -279,10 +283,75 @@ function handleLanguageChange() {
   autoSave()
 }
 
+// ─── A7 模型 tool_call 能力探测 ──────────────────────────
+
+/** 正在探测中的 model，格式 "providerId:modelId" */
+const probingKey = ref<string | null>(null)
+
+/** 从后端拉取所有能力缓存并合并到对应 provider.models[*].toolReliability */
+async function loadCapabilities() {
+  if (!config.value?.llm) return
+  try {
+    const records = await fetchCapabilities()
+    if (records.length === 0) return
+    // 后端按 provider_name 存储，前端 provider 可能用中文名（比如"智谱"），按 name 匹配
+    const byKey = new Map<string, (typeof records)[number]>()
+    for (const r of records) byKey.set(`${r.providerName}:${r.modelName}`, r)
+
+    for (const provider of config.value.llm.providers) {
+      const pName = provider.backendKey || provider.name
+      for (const model of provider.models) {
+        const key = `${pName}:${model.id}`
+        const rec = byKey.get(key)
+        if (rec) model.toolReliability = rec.reliability
+      }
+    }
+  } catch (e) {
+    logger.warn('[HexClaw] A7 能力探测缓存加载失败:', e)
+  }
+}
+
+/** 手动刷新单个模型的 tool_call 能力探测 */
+async function refreshCapability(provider: ProviderConfig, model: ModelOption) {
+  const key = `${provider.id}:${model.id}`
+  if (probingKey.value === key) return
+  probingKey.value = key
+  try {
+    const pName = provider.backendKey || provider.name
+    const rec = await probeCapability(pName, model.id)
+    model.toolReliability = rec.reliability
+  } catch (e) {
+    logger.warn('[HexClaw] A7 能力探测失败:', e)
+  } finally {
+    probingKey.value = null
+  }
+}
+
+function reliabilityIcon(level: string): string {
+  return { good: '✅', partial: '⚠️', bad: '❌' }[level] ?? '❔'
+}
+
+function reliabilityTooltip(r: { level: string; lastProbe?: string; probeError?: string }): string {
+  const label = { good: '工具调用可靠', partial: '工具调用部分可靠', bad: '工具调用不可靠', unknown: '未检测' }[r.level] ?? r.level
+  const parts = [label]
+  if (r.lastProbe) {
+    const d = new Date(r.lastProbe)
+    parts.push(`上次检测：${d.toLocaleDateString()}`)
+  }
+  if (r.probeError) parts.push(`错误：${r.probeError}`)
+  return parts.join(' · ')
+}
+
+function probingModel(providerId: string, modelId: string): boolean {
+  return probingKey.value === `${providerId}:${modelId}`
+}
+
 
 onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
   await settingsStore.loadConfig()
+  // A7: 页面打开后异步拉一次能力缓存（不 block UI，失败降级为 unknown badge）
+  void loadCapabilities()
 
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', handleBeforeUnload)
@@ -401,6 +470,17 @@ const selectedDefaultModelValue = computed({
     config.value.llm.defaultProviderId = providerId
     config.value.llm.defaultModel = modelId
     autoSave()
+  },
+})
+
+// B1: Agent 策略模式（默认 auto 走启发式路由）
+const agentModeValue = computed({
+  get() {
+    return config.value?.llm?.agentMode ?? 'auto'
+  },
+  set(value: string) {
+    if (!config.value?.llm) return
+    config.value.llm.agentMode = value as import('@/types').AgentMode
   },
 })
 const routingStrategyOptions = computed(() => [
@@ -998,6 +1078,31 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               </div>
             </div>
 
+            <!-- B1 Agent 策略模式：默认 auto 按问题启发式路由（7 模式 + auto）-->
+            <div class="hc-settings__row">
+              <span class="hc-settings__row-label">
+                Agent 模式
+                <span class="hc-settings__info" data-info="auto 按问题自动选；ReAct 工具循环；Plan-Execute 先规划再执行；Reflection 答后自查；ToT 多解择优；Self-Reflect 每步反思；Memory-Augmented 个性化档案；Debate 双视角辩论。">?</span>
+              </span>
+              <div class="hc-settings__row-right">
+                <select
+                  v-model="agentModeValue"
+                  data-testid="llm-agent-mode-select"
+                  class="hc-settings__select"
+                  @change="autoSave"
+                >
+                  <option value="auto">自动（推荐）</option>
+                  <option value="react">ReAct — 通用工具循环</option>
+                  <option value="plan-execute">Plan-Execute — 先规划再执行</option>
+                  <option value="reflection">Reflection — 答后自查</option>
+                  <option value="tot">ToT — 多解择优</option>
+                  <option value="self-reflect">Self-Reflect — 每步反思</option>
+                  <option value="mem-augmented">Memory-Augmented — 个性化档案</option>
+                  <option value="debate">Debate — 双视角辩论</option>
+                </select>
+              </div>
+            </div>
+
             <!-- ── 工具能力 ── -->
             <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">工具能力</span>
@@ -1228,6 +1333,22 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                           :class="`hc-model-chip__cap--${cap}`"
                           :title="{ text: '文本对话', vision: '视觉理解', video: '视频理解', audio: '音频处理', code: '代码专项', image_generation: '图像生成', video_generation: '视频生成' }[cap] || cap"
                         >{{ { text: '💬', vision: '👁', video: '🎬', audio: '🎤', code: '💻', image_generation: '🎨', video_generation: '📹' }[cap] }} {{ { text: '文本', vision: '视觉', video: '视频', audio: '音频', code: '代码', image_generation: '绘图', video_generation: '视频生成' }[cap] || cap }}</span>
+                        <!-- A7 工具调用可靠度 badge（已探测才显示） -->
+                        <span
+                          v-if="model.toolReliability && model.toolReliability.level !== 'unknown'"
+                          class="hc-model-chip__reliability"
+                          :class="`hc-model-chip__reliability--${model.toolReliability.level}`"
+                          :title="reliabilityTooltip(model.toolReliability)"
+                        >{{ reliabilityIcon(model.toolReliability.level) }}</span>
+                        <!-- A7 手动触发能力探测 -->
+                        <span
+                          class="hc-model-chip__probe"
+                          :title="probingModel(provider.id, model.id) ? '探测中…' : '重新检测工具调用可靠度'"
+                          @click.stop="refreshCapability(provider, model)"
+                        >
+                          <Loader2 v-if="probingModel(provider.id, model.id)" :size="10" class="animate-spin" />
+                          <RotateCcw v-else :size="10" />
+                        </span>
                         <!-- 删除：hover 显示 × — 同步拉的下次 test 会重新拉回来 -->
                         <span
                           class="hc-model-chip__remove"
@@ -1357,6 +1478,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 >
                   <option value="zh-CN">中文</option>
                   <option value="en">English</option>
+                  <option value="ug-CN">维吾尔语</option>
                 </select>
               </div>
 
@@ -1999,7 +2121,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 /* ─── Sub-option ───── */
 .hc-settings__sub {
   padding-left: 18px;
-  border-left: 2px solid var(--hc-accent-subtle);
+  /* HIG: 1px 细边框形成 sub-option 缩进视觉 */
+  border-left: 1px solid var(--hc-accent-subtle);
   margin-left: 4px;
   margin-top: -1px;
 }
@@ -2822,7 +2945,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   border: 1px solid var(--hc-border, rgba(255, 255, 255, 0.12));
   background: var(--hc-bg-main, rgba(255, 255, 255, 0.02));
   color: var(--hc-text-secondary);
-  transition: all 0.15s;
+  /* HIG: 显式列出过渡属性，禁用 transition: all（性能 + 可预期性） */
+  transition:
+    background-color 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+    border-color 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+    color 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hc-model-chip:hover:not(.hc-model-chip--active) {
@@ -2855,6 +2982,59 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   opacity: 1 !important;
   background: color-mix(in srgb, var(--hc-error, #ff453a) 15%, transparent);
   color: var(--hc-error, #ff453a);
+}
+
+/* A7 工具调用可靠度 badge（emoji 本身自带颜色，给一个柔和着色背景）
+   HIG：圆角 var(--hc-radius-sm)、字号 10、letter-spacing 微负、不用硬编码 fallback */
+.hc-model-chip__reliability {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: var(--hc-radius-sm);
+  line-height: 1;
+  letter-spacing: -0.005em;
+  background: color-mix(in srgb, var(--hc-text-muted) 10%, transparent);
+}
+.hc-model-chip__reliability--good {
+  background: color-mix(in srgb, var(--hc-success) 16%, transparent);
+}
+.hc-model-chip__reliability--partial {
+  background: color-mix(in srgb, var(--hc-warning) 20%, transparent);
+}
+.hc-model-chip__reliability--bad {
+  background: color-mix(in srgb, var(--hc-error) 16%, transparent);
+}
+
+/* A7 手动触发探测按钮（和 remove 同构，hover 才显形）
+   HIG：弹性曲线、显式 transition、按下微缩放反馈 */
+.hc-model-chip__probe {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--hc-text-muted);
+  opacity: 0;
+  cursor: pointer;
+  transition:
+    opacity 140ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    background 140ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    color 140ms cubic-bezier(0.25, 0.1, 0.25, 1),
+    transform 140ms cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+.hc-model-chip:hover .hc-model-chip__probe,
+.hc-model-chip--active .hc-model-chip__probe {
+  opacity: 0.6;
+}
+.hc-model-chip__probe:hover {
+  opacity: 1 !important;
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  transform: scale(1.08);
+}
+.hc-model-chip__probe:active {
+  transform: scale(0.92);
 }
 
 .hc-model-chip--active {

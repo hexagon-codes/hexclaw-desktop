@@ -6,6 +6,73 @@ export interface ToolCall {
   result?: string
 }
 
+/** v0.4.0 G3 通用交互式消息协议（与后端 adapter/interactive.go 对齐） */
+export type InteractiveType = 'buttons' | 'select' | 'approval' | 'card'
+
+export interface InteractiveButton {
+  /** 按钮显示文案 */
+  label: string
+  /** 点击后回传给后端的 action 标识 */
+  action: string
+  /** 可选 payload，原样回传 */
+  payload?: string
+  /** 可视化样式：primary 醒目 / secondary 次要 / danger 危险 */
+  variant?: 'primary' | 'secondary' | 'danger'
+}
+
+/** select 类型的选项 */
+export interface InteractiveOption {
+  label: string
+  value: string
+  description?: string
+}
+
+/** approval 类型的审批载荷 */
+export interface InteractiveApproval {
+  subject: string
+  summary?: string
+  approve_label?: string
+  reject_label?: string
+  approve_action?: string
+  reject_action?: string
+}
+
+/** 卡片字段（key-value） */
+export interface CardField {
+  label: string
+  value: string
+  short?: boolean
+}
+
+/** card 类型的富信息卡片 */
+export interface InteractiveCard {
+  title: string
+  fields?: CardField[]
+  buttons?: InteractiveButton[]
+  image?: string
+  footer?: string
+}
+
+/** 用户已交互的结果 */
+export interface InteractiveResolved {
+  action: string
+  label?: string
+  value?: string
+  approved?: boolean
+  timestamp?: string
+}
+
+/** 通用交互载荷 — 4 种 type 对应不同子字段 */
+export interface InteractivePayload {
+  type: InteractiveType
+  prompt?: string
+  buttons?: InteractiveButton[]
+  options?: InteractiveOption[]
+  approval?: InteractiveApproval
+  card?: InteractiveCard
+  resolved?: InteractiveResolved
+}
+
 /** 消息内容块 — 强类型替代松散 JSON */
 export type ContentBlock =
   | { type: 'text'; text: string }
@@ -13,6 +80,7 @@ export type ContentBlock =
   | { type: 'tool_use'; id: string; name: string; input: string; status?: 'running' | 'success' | 'error' }
   | { type: 'tool_result'; toolUseId: string; toolName: string; output: string; isError: boolean }
   | { type: 'code'; language: string; content: string; title?: string }
+  | { type: 'buttons'; prompt?: string; buttons: InteractiveButton[]; resolved?: { action: string; label: string } }
 
 /** 聊天消息 */
 export interface ChatMessage {
@@ -28,6 +96,8 @@ export interface ChatMessage {
   metadata?: Record<string, unknown>
   /** 结构化内容块（优先使用，fallback 到 content 字段） */
   blocks?: ContentBlock[]
+  /** v0.4.0 G3 结构化交互载荷（替代 metadata.interactive_buttons JSON 字符串） */
+  interactive?: InteractivePayload
 }
 
 /** 聊天会话 */

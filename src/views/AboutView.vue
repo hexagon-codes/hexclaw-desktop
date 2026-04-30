@@ -256,7 +256,7 @@ onMounted(() => {
   user-select: none;
   background: linear-gradient(180deg, #f8fafe 0%, #eef3f9 100%);
   color: #1a3a5c;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', sans-serif;
   -webkit-font-smoothing: antialiased;
   -webkit-app-region: drag;
 }

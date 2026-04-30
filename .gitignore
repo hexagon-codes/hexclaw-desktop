@@ -38,3 +38,6 @@ playwright-report/
 
 # Claude Code
 .claude/
+
+# Runtime output (image generation cache)
+/output/

@@ -1,13 +1,27 @@
 /** 模型能力标记 */
 export type ModelCapability = 'text' | 'vision' | 'video' | 'audio' | 'code' | 'image_generation' | 'video_generation'
 
+/** A7 模型 tool_call 可靠度等级（后端 llmrouter.ReliabilityLevel 映射） */
+export type ToolCallReliability = 'unknown' | 'good' | 'partial' | 'bad'
+
+/** A7 能力探测结果（动态，30 天缓存，用户可手动刷新） */
+export interface ModelToolReliability {
+  level: ToolCallReliability
+  /** ISO 8601 时间；缺失表示未探测过 */
+  lastProbe?: string
+  /** 探测失败原因，用于 tooltip */
+  probeError?: string
+}
+
 /** 模型选项 */
 export interface ModelOption {
   id: string
   name: string
   isCustom?: boolean
-  /** 模型支持的能力，默认 ['text'] */
+  /** 模型支持的能力（静态声明），默认 ['text'] */
   capabilities?: ModelCapability[]
+  /** A7 tool_call 动态探测结果（运行时由后端 /api/v1/llm/capabilities 注入） */
+  toolReliability?: ModelToolReliability
 }
 
 /** Provider 配置 */
@@ -67,12 +81,36 @@ export interface ToolsInjectionSettings {
   maxTools: number                // 0=不限制
 }
 
+/** B1: Agent 策略模式（前端持久化，发消息时随 metadata.agent_mode 传后端）
+ *
+ * 与后端 engine/agent_mode.go 的 7+1 模式一致：
+ * - auto: 启发式路由
+ * - react: 默认工具循环
+ * - plan-execute: 先规划再执行（多步题）
+ * - reflection: 答后自查（判题）
+ * - tot: Tree-of-Thought 多解择优
+ * - self-reflect: 每步反思
+ * - mem-augmented: 个性化档案优先
+ * - debate: 双视角辩论
+ */
+export type AgentMode =
+  | 'auto'
+  | 'react'
+  | 'plan-execute'
+  | 'reflection'
+  | 'tot'
+  | 'self-reflect'
+  | 'mem-augmented'
+  | 'debate'
+
 export interface LLMConfig {
   providers: ProviderConfig[]
   defaultModel: string
   defaultProviderId?: string
   routing?: LLMRoutingSettings
   tools?: ToolsInjectionSettings
+  /** B1 Agent 模式；默认 'auto' */
+  agentMode?: AgentMode
 }
 
 /** 对话级参数 */
