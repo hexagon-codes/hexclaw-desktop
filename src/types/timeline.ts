@@ -49,6 +49,9 @@ export type RuntimeEventType =
   // ── Memory ──
   | 'memory.updated'
 
+  // ── Asset ──
+  | 'asset.invalidated'
+
 // ─── 事件载荷 ──────────────────────────────────────────
 
 /**

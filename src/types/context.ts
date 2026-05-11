@@ -10,6 +10,7 @@
 import type { CapabilityName } from './capability'
 import type { ExecutionState, ExecutionStage, ExecutionIntermediateState } from './execution'
 import type { TaskType, TaskStatus, TaskInput, TaskOutput, TaskError, TaskMetadata } from './task'
+import type { AssetCollection } from './asset'
 
 // ─── 层状态 ─────────────────────────────────────────────
 
@@ -143,7 +144,7 @@ export interface RuntimeContext {
   taskId: string
   taskType: TaskType
 
-  // 5 层（可能未完全加载）
+  // 5 Semantic Layers（可能未完全加载）
   system?: SystemLayer
   skill?: SkillLayer
   task?: TaskLayer
@@ -153,6 +154,11 @@ export interface RuntimeContext {
   // 层状态管理
   layerStates: Record<string, ContextLayerStatus>
   // key: 'system' | 'skill' | 'task' | 'execution' | 'memory'
+
+  // Resource References（非 Semantic Layer）
+  resources?: {
+    asset?: AssetCollection
+  }
 
   // 元数据
   createdAt: string

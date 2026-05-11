@@ -108,6 +108,18 @@ export class TimelineStore {
     this.events = []
   }
 
+  /**
+   * 批量导入事件（用于 Runtime 恢复）。
+   *
+   * 替换内部 events 数组，保留原始 id / timestamp。
+   * 不触发新事件，不生成新 id，不调用 writeTimelineEvent。
+   *
+   * TimelineProjection 为纯函数无缓存，无需 clear/rebuild。
+   */
+  importEvents(events: RuntimeEvent[]): void {
+    this.events = [...events]
+  }
+
   /** 当前事件数 */
   get size(): number {
     return this.events.length

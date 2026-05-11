@@ -23,6 +23,9 @@ import { taskTimeline, recentEvents } from '@/services/runtime/timelineProjectio
 import { DEFAULT_BUDGET } from '@/types/runtimeBudget'
 import { canTransition } from '@/types/execution'
 import { createContextAwareExecutor } from '@/services/taskExecutor'
+import { saveContext as persistContext, saveAll as persistAll, loadAll } from '@/services/runtime/persistenceRuntime'
+import { createAssetReference, resolveAsset, checkAssetHealth, markInvalidated, ensureAssetCollection, buildAssetSummary } from '@/services/runtime/assetService'
+import type { AssetReference, AssetMetadata, AssetCollection } from '@/types/asset'
 
 export const useRuntimeStore = defineStore('runtime', () => {
   const timelineStore = new TimelineStore()
@@ -372,6 +375,209 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return timelineStore.getByType(type)
   }
 
+  // ── Persistence ───────────────────────────────────────
+
+  /**
+   * 显式保存单个 Context 到磁盘。
+   * 不自动调用，由 UI / task 生命周期触发。
+   */
+  async function saveContextPersist(taskId: string): Promise<void> {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return
+    try {
+      await persistContext(ctx)
+    } catch (e) {
+      getRuntimeLogger().error(`saveContext(${taskId}) 失败: ${(e as Error).message}`)
+    }
+  }
+
+  /**
+   * 显式保存所有活跃 Context + Timeline + Manifest 到磁盘。
+   * 不自动调用。
+   *
+   * @returns true 全部保存成功，false 有失败
+   */
+  async function saveAllPersist(): Promise<boolean> {
+    const contexts = manager.getAllContexts()
+    const events = timelineStore.getAll()
+    return persistAll(contexts, events)
+  }
+
+  // ── Asset ────────────────────────────────────────────
+
+  /**
+   * 注册资产引用。
+   *
+   * 1. AssetService.createAssetReference() → ref (status='registered')
+   * 2. 注入 ctx.resources.asset.refs
+   * 3. revision.value++
+   *
+   * @throws 当 Context 不存在或 path 校验失败时
+   */
+  function registerAsset(
+    taskId: string,
+    path: string,
+    metadata: AssetMetadata,
+  ): AssetReference {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) throw new Error(`Context ${taskId} 不存在`)
+
+    const ref = createAssetReference(taskId, path, metadata)
+
+    if (!ctx.resources) {
+      ctx.resources = {}
+    }
+    if (!ctx.resources.asset) {
+      ctx.resources.asset = ensureAssetCollection(undefined)
+    }
+    ctx.resources.asset.refs.push(ref)
+    ctx.resources.asset.lastUpdated = new Date().toISOString()
+
+    revision.value++
+    return ref
+  }
+
+  /**
+   * 废弃资产引用。
+   *
+   * 1. 查找 ref → markInvalidated → 替换
+   * 2. append asset.invalidated Timeline Event
+   * 3. revision.value++
+   */
+  function invalidateAsset(taskId: string, assetId: string): void {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return
+    const collection = ctx.resources?.asset
+    if (!collection) return
+
+    const index = collection.refs.findIndex(r => r.assetId === assetId)
+    if (index === -1) return
+
+    const oldRef = collection.refs[index]
+    const newRef = markInvalidated(oldRef)
+    collection.refs[index] = newRef
+    collection.lastUpdated = new Date().toISOString()
+
+    writeTimelineEvent({
+      type: 'asset.invalidated',
+      taskId,
+      payload: {
+        summary: `Asset ${assetId} 已废弃`,
+        metadata: { assetType: newRef.type },
+      },
+    })
+
+    revision.value++
+  }
+
+  /**
+   * 资产健康验证 — 显式调用。
+   *
+   * 使用 Promise.allSettled 并行 exists() 检查。
+   * 不引入 scheduler / concurrency pool / retry queue。
+   *
+   * checkHealth / reconcile 不 append noisy observation events。
+   */
+  async function reconcileAssets(taskId: string): Promise<void> {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return
+    const collection = ctx.resources?.asset
+    if (!collection || collection.refs.length === 0) return
+
+    const results = await Promise.allSettled(
+      collection.refs.map(ref => checkAssetHealth(ref)),
+    )
+
+    results.forEach((result, i) => {
+      if (result.status === 'fulfilled') {
+        collection.refs[i].status = result.value
+      }
+      // rejected → 保持当前 status，不修改
+    })
+
+    collection.lastUpdated = new Date().toISOString()
+    revision.value++
+  }
+
+  /**
+   * 获取 Context 的 Asset 摘要（动态 rebuild，非持久化）。
+   */
+  function getAssetSummary(taskId: string) {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return null
+    const refs = ctx.resources?.asset?.refs ?? []
+    return buildAssetSummary(refs)
+  }
+
+  /**
+   * 从磁盘恢复 Runtime 状态。
+   *
+   * 显式调用，不做 auto restore。
+   * 通过 manager.updateLayer() 逐层恢复，不绕过 ContextManager layer invariant。
+   * null → undefined normalization 在此执行（非 deserializeContext）。
+   */
+  async function restoreRuntime(): Promise<void> {
+    const { contexts, events } = await loadAll()
+
+    for (const snapshot of contexts) {
+      // 跳过已存在的活跃 Context
+      if (manager.hasContext(snapshot.taskId)) continue
+
+      // 创建 Context（含默认 System Layer）
+      manager.createContext(snapshot.taskId, snapshot.taskType)
+
+      // 逐层恢复 — 通过 manager.updateLayer 保证 layer invariant
+      if (snapshot.system) {
+        manager.updateLayer(snapshot.taskId, 'system', normalizeLayer(snapshot.system))
+      }
+      if (snapshot.skill) {
+        manager.updateLayer(snapshot.taskId, 'skill', normalizeLayer(snapshot.skill))
+      }
+      if (snapshot.task) {
+        manager.updateLayer(snapshot.taskId, 'task', normalizeLayer(snapshot.task))
+      }
+      if (snapshot.execution) {
+        manager.updateLayer(snapshot.taskId, 'execution', normalizeLayer(snapshot.execution))
+      }
+      if (snapshot.memory) {
+        manager.updateLayer(snapshot.taskId, 'memory', normalizeLayer(snapshot.memory))
+      }
+
+      manager.recalcSize(snapshot.taskId)
+
+      // Asset 恢复 — 仅恢复 AssetCollection，不做 checkHealth
+      // Persistence Restore ≠ Resource Reconciliation
+      if (snapshot.resources?.asset) {
+        const ctx = manager.getContext(snapshot.taskId)
+        if (ctx) {
+          if (!ctx.resources) ctx.resources = {}
+          ctx.resources.asset = snapshot.resources.asset
+        }
+      }
+    }
+
+    // Timeline 恢复 — 使用 importEvents 保留原始 id/timestamp
+    if (events.length > 0) {
+      timelineStore.importEvents(events)
+    }
+
+    revision.value++
+  }
+
+  /**
+   * null → undefined normalization。
+   *
+   * Serializer boundary 不做此转换（保持 pure），
+   * Runtime 恢复时在此统一处理。
+   */
+  function normalizeLayer<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+    const result: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = value === null ? undefined : value
+    }
+    return result
+  }
+
   // ── 内部辅助 ─────────────────────────────────────────
 
   function toSummary(ctx: RuntimeContext): ContextSummary {
@@ -416,5 +622,14 @@ export const useRuntimeStore = defineStore('runtime', () => {
     getTaskTimeline,
     getRecentEvents,
     getEventsByType,
+    // Persistence
+    saveContext: saveContextPersist,
+    saveAll: saveAllPersist,
+    restoreRuntime,
+    // Asset
+    registerAsset,
+    invalidateAsset,
+    reconcileAssets,
+    getAssetSummary,
   }
 })
