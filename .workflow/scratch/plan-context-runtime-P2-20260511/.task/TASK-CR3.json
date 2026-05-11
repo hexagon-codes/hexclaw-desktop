@@ -1,0 +1,41 @@
+{
+  "id": "TASK-CR3",
+  "title": "ContextLoader — Progressive Context Layer 惰性加载",
+  "description": "创建 ContextLoader 服务类，接收 ContextManager 实例，实现各 Context 层的惰性加载和卸载策略。自动加载：Task 创建时 → System + Task Layer；按需加载：Execution/Skill/Memory → 显式调用；卸载：完成任务时保留 System + Task + Memory，卸载 Execution。",
+  "type": "create",
+  "files": ["src/services/contextLoader.ts"],
+  "read_first": [
+    "src/services/contextManager.ts",
+    "src/types/context.ts",
+    "src/stores/tasks.ts"
+  ],
+  "convergence": {
+    "criteria": [
+      "src/services/contextLoader.ts 导出 ContextLoader 类",
+      "ContextLoader 构造函数接收 ContextManager 实例",
+      "loadTaskLayer(context, task) 将 Task 数据投影到 context.task (TaskLayer)",
+      "loadSystemLayer(context) 初始化 context.system.policy.allowedCapabilities",
+      "prepareExecutionLayer(context) 初始化空 ExecutionLayer",
+      "prepareMemoryLayer(context) 初始化空 MemoryLayer",
+      "prepareSkillLayer(context) 初始化空 SkillLayer（为 Phase 3 预留）",
+      "unloadStaleLayers(context) 返回被卸载的层名列表",
+      "estimateLayerSize(layer) 返回 number（近似字节数）",
+      "所有方法均为同步（Phase 2 无异步加载源）"
+    ]
+  },
+  "action": "创建 src/services/contextLoader.ts，导出 ContextLoader 类，实现 Context 层的惰性加载/卸载和大小估算。",
+  "implementation": [
+    "创建 ContextLoader 类，构造函数接收 ContextManager 实例",
+    "loadTaskLayer(context, task): 从 Task 提取数据，构造 TaskLayer（投影而非引用拷贝）",
+    "loadSystemLayer(context): 用默认 policy（allowedCapabilities: ['llm','image_generation','filesystem.read']）初始化 system 层",
+    "prepareExecutionLayer(context): 初始化空 ExecutionLayer（toolResults: [], intermediateState: {}）",
+    "prepareMemoryLayer(context): 初始化空 MemoryLayer（userConfirmations: [], historicalResults: []）",
+    "prepareSkillLayer(context): 初始化空 SkillLayer（为 Phase 3 Skill Runtime 预留）",
+    "unloadStaleLayers(context): 根据当前执行阶段决定卸载 Execution 层（保留 System + Task + Memory），返回卸载列表",
+    "estimateLayerSize(layer): 递归估算 JSON 序列化近似字节数",
+    "所有方法同步，不涉及异步 IO"
+  ],
+  "dependencies": ["TASK-CR2"],
+  "estimated_hours": 1.5,
+  "wave": 2
+}

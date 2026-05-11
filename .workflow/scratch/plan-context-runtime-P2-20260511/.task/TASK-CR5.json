@@ -1,0 +1,47 @@
+{
+  "id": "TASK-CR5",
+  "title": "ContextAwareExecutor — Executor 接口 Context 增强",
+  "description": "在现有 TaskExecutor 接口基础上，新增 ContextAwareExecutor 子接口，添加 executeWithContext 方法。为 ChatTaskExecutor / AgentTaskExecutor / SkillTaskExecutor 增加桩实现（adapter shell 保持不变）。新增 createContextAwareExecutor 工厂函数。不做 UnifiedExecutor，不做自动加载/卸载编排。",
+  "type": "modify",
+  "files": ["src/services/taskExecutor.ts"],
+  "read_first": [
+    "src/services/taskExecutor.ts",
+    "src/types/context.ts",
+    "src/stores/runtime.ts"
+  ],
+  "convergence": {
+    "criteria": [
+      "src/services/taskExecutor.ts 导出 ContextAwareExecutor 接口",
+      "ContextAwareExecutor 继承 TaskExecutor 并新增 executeWithContext(task, context)",
+      "ChatTaskExecutor 实现 executeWithContext（桩实现，返回 { result: null }）",
+      "AgentTaskExecutor 实现 executeWithContext（桩实现）",
+      "SkillTaskExecutor 实现 executeWithContext（桩实现）",
+      "createContextAwareExecutor(type) 工厂函数返回 ContextAwareExecutor",
+      "现有 createExecutor 工厂函数未被修改（向后兼容）",
+      "所有 executors 保持 adapter shell 模式，不接入真实执行链路"
+    ]
+  },
+  "action": "在 src/services/taskExecutor.ts 中新增 ContextAwareExecutor 接口、桩实现和工厂函数，不接入真实执行链路。",
+  "implementation": [
+    "新增 ContextAwareExecutor 接口继承 TaskExecutor:",
+    "  executeWithContext(task: Task, context: RuntimeContext): Promise<TaskOutput>",
+    "",
+    "ChatTaskExecutor 增加 executeWithContext 桩方法:",
+    "  签名: async executeWithContext(task, context): Promise<TaskOutput>",
+    "  实现: 如果 this.executeChat 存在则调用，否则返回 { result: null }",
+    "  context 参数暂不使用",
+    "",
+    "AgentTaskExecutor 增加 executeWithContext 桩方法（同上模式）",
+    "SkillTaskExecutor 增加 executeWithContext 桩方法（同上模式）",
+    "",
+    "新增 createContextAwareExecutor(type: TaskType): ContextAwareExecutor:",
+    "  与 createExecutor 相同逻辑，但返回 ContextAwareExecutor 类型",
+    "",
+    "保持 createExecutor 工厂函数不变（向后兼容）",
+    "不新增 UnifiedExecutor 类",
+    "不自动加载/卸载 Context 层"
+  ],
+  "dependencies": ["TASK-CR1"],
+  "estimated_hours": 1,
+  "wave": 2
+}

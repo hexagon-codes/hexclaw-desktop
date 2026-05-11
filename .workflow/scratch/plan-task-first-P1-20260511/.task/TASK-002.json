@@ -1,0 +1,39 @@
+{
+  "id": "TASK-002",
+  "title": "创建 Task Store (Pinia)",
+  "description": "创建 src/stores/tasks.ts，实现 useTaskStore Pinia setup store，管理任务队列和生命周期。参考 src/stores/agents.ts 的简单 store 风格和 src/stores/chat-store-state.ts 的状态定义模式。",
+  "type": "create",
+  "files": ["src/stores/tasks.ts"],
+  "read_first": [
+    "src/types/task.ts",
+    "src/stores/agents.ts",
+    "src/stores/chat-store-state.ts",
+    "src/stores/index.ts"
+  ],
+  "convergence": {
+    "criteria": [
+      "src/stores/tasks.ts 包含 export const useTaskStore = defineStore('tasks', ...)",
+      "src/stores/tasks.ts 包含 enqueue 方法用于添加任务到队列",
+      "src/stores/tasks.ts 包含 startTask/completeTask/failTask/cancelTask 生命周期方法",
+      "src/stores/tasks.ts 包含 activeTasks 和 completedTasks 响应式状态",
+      "src/stores/index.ts 的 store 注册中包含 tasks"
+    ]
+  },
+  "action": "创建 Pinia setup store 管理 Task 生命周期。含: activeTasks (Ref<Task[]> 当前进行中), completedTasks (Ref<Task[]> 历史), taskHistory (Map<string, Task> ID 索引)。方法: enqueue(task) 加入队列, dequeue() 取下一个, startTask(id) 标记运行中, completeTask(id, output) 完成, failTask(id, error) 失败, cancelTask(id) 取消, getTask(id) 查找。",
+  "implementation": [
+    "在 src/stores/tasks.ts 中使用 defineStore('tasks', () => { ... }) setup 语法",
+    "定义响应式状态: activeTasks (Ref<Task[]>), completedTasks (Ref<Task[]>)",
+    "定义非响应式运行时: taskHistory (Map<string, Task>), taskQueue (Task[])",
+    "实现 enqueue(task): 添加到 taskQueue + taskHistory，状态设为 pending",
+    "实现 dequeue(): 从队列取第一个 pending 任务，标记 running",
+    "实现 startTask(id): 更新状态为 running，记录 startedAt",
+    "实现 completeTask(id, output): 状态->completed，从 activeTasks 移到 completedTasks",
+    "实现 failTask(id, error): 状态->failed，记录 error 信息",
+    "实现 cancelTask(id): 状态->cancelled",
+    "实现 getTask(id): 从 taskHistory 查找返回",
+    "导出 useTaskStore"
+  ],
+  "dependencies": ["TASK-001"],
+  "estimated_hours": 8,
+  "wave": 2
+}

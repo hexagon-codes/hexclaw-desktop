@@ -34,7 +34,10 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "externalBin": ["binaries/hexclaw"],
-    "resources": { "binaries/ollama-bundle/*": "ollama/" },
+    "resources": {
+      "binaries/ollama-bundle/*": "ollama/",
+      "skills/*": "skills/"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -62,6 +65,14 @@
     }
   },
   "plugins": {
+    "fs": {
+      "scope": {
+        "allow": [
+          { "path": "$APPDATA/skills/**" },
+          { "path": "$RESOURCE/skills/**" }
+        ]
+      }
+    },
     "shell": {
       "open": true
     },

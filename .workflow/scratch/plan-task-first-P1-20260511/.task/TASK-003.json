@@ -1,0 +1,35 @@
+{
+  "id": "TASK-003",
+  "title": "创建 Task Executor Service — Adapter Shell",
+  "description": "创建 src/services/taskExecutor.ts，定义 TaskExecutor 接口和 3 个具体实现类的 adapter shell（骨架+桩实现）：ChatTaskExecutor、AgentTaskExecutor、SkillTaskExecutor。提供 createExecutor(type) 工厂函数。注意：这是 adapter shell，不接入任何现有发送链路，不调用 chatService/API，所有 execute 方法使用构造函数注入的回调或返回桩数据。",
+  "type": "create",
+  "files": ["src/services/taskExecutor.ts"],
+  "read_first": [
+    "src/types/task.ts",
+    "src/services/chatService.ts",
+    "src/api/chat.ts",
+    "src/types/chat.ts"
+  ],
+  "convergence": {
+    "criteria": [
+      "src/services/taskExecutor.ts 包含 export interface TaskExecutor 且含有 execute/cancel/getStatus 方法签名",
+      "src/services/taskExecutor.ts 包含 export class ChatTaskExecutor implements TaskExecutor",
+      "src/services/taskExecutor.ts 包含 export class AgentTaskExecutor implements TaskExecutor",
+      "src/services/taskExecutor.ts 包含 export class SkillTaskExecutor implements TaskExecutor",
+      "ChatTaskExecutor 构造函数接收可选回调而非直接调用 chatService",
+      "src/services/taskExecutor.ts 包含 export function createExecutor(type: TaskType): TaskExecutor"
+    ]
+  },
+  "action": "定义 TaskExecutor 接口 (execute/cancel/getStatus) 和 3 个 adapter shell 类。ChatTaskExecutor 构造函数接收可选 adapter 回调参数，execute 方法调用回调或返回桩数据——不直接调用 chatService 或 API。AgentTaskExecutor/SkillTaskExecutor 同理。提供 createExecutor(type) 工厂函数。不修改任何现有文件。",
+  "implementation": [
+    "定义 export interface TaskExecutor { execute(task: Task): Promise<TaskOutput>; cancel(taskId: string): Promise<void>; getStatus(taskId: string): TaskStatus }",
+    "实现 ChatTaskExecutor implements TaskExecutor: 构造函数接收可选 executeChat 回调，execute 调用回调或 resolve 桩数据，不接触 chatService",
+    "实现 AgentTaskExecutor implements TaskExecutor: 同上模式，不调用 agents API",
+    "实现 SkillTaskExecutor implements TaskExecutor: 同上模式，不调用 skills API",
+    "提供 export function createExecutor(type: TaskType): TaskExecutor 工厂函数",
+    "导出所有类和工厂函数"
+  ],
+  "dependencies": ["TASK-001"],
+  "estimated_hours": 6,
+  "wave": 2
+}

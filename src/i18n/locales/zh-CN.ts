@@ -12,6 +12,7 @@ export default {
     automationTasks: '定时任务',
     automationCanvas: '工作流画布',
     automationWebhooks: 'Webhooks',
+    runtime: 'Runtime',
     integration: '集成',
     integrationSkills: '工具能力',
     integrationMcp: 'MCP 服务',

@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
+import { useTaskStore } from '@/stores/tasks'
 import { getGroupedNavItems, isNavActive, type NavGroup } from '@/config/navigation'
 import { env } from '@/config/env'
 import logoUrl from '@/assets/logo.png'
@@ -42,6 +43,9 @@ const dotClass = computed(() => {
   if (s === 'starting') return 'hc-sidebar__dot--starting'
   return 'hc-sidebar__dot--err'
 })
+
+const taskStore = useTaskStore()
+const activeTaskCount = computed(() => taskStore.activeCount)
 
 const engineLabel = computed(() => {
   const s = appStore.sidecarStatus
@@ -83,6 +87,10 @@ function getGroupItems(group: NavGroup) {
         >
           <component :is="item.icon" :size="17" class="hc-sidebar__icon" />
           <span v-if="!collapsed" class="hc-sidebar__label">{{ t(item.i18nKey) }}</span>
+          <span
+            v-if="item.id === 'runtime' && activeTaskCount > 0"
+            class="hc-sidebar__badge"
+          >{{ activeTaskCount > 99 ? '99+' : activeTaskCount }}</span>
         </router-link>
       </template>
     </nav>
@@ -226,6 +234,22 @@ function getGroupItems(group: NavGroup) {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.hc-sidebar__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 100px;
+  background: var(--hc-error, #e53e3e);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 /* ── Footer ── */

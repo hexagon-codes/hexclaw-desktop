@@ -1,6 +1,8 @@
 import type { Ref } from 'vue'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { ChatAttachment, ChatMessage } from '@/types'
+import type { Task } from '@/types'
+import { useTaskStore } from '@/stores/tasks'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
@@ -144,9 +146,21 @@ export function createChatSendController(params: {
     }
     draftSending.value = !initialSessionId
     refreshSendingState(sending, draftSending)
+
+    // ── Task 生命周期注册 ──────────────────────────────
+    const $taskId = createId()
+    const $taskStore = useTaskStore()
+    const $chatTask: Task = {
+      id: $taskId,
+      type: 'chat',
+      status: 'running',
+      input: { type: 'chat', payload: { text, backendText: options?.backendText, attachments } },
+    }
+    $taskStore.enqueue($chatTask)
+
     try {
       const backendText = options?.backendText ?? text
-      const requestId = createId()
+      const requestId = $taskId
       const userMessage: ChatMessage = {
         id: requestId,
         role: 'user',
@@ -160,6 +174,7 @@ export function createChatSendController(params: {
       draftSending.value = false
       refreshSendingState(sending, draftSending)
       if (pendingSessionIds.value[sessionId] || isSessionStreaming(sessionId)) {
+        $taskStore.cancelTask($taskId)
         return null
       }
 
@@ -169,7 +184,7 @@ export function createChatSendController(params: {
 
       // 持久化与发送并行，失败不阻塞（persistMessage 内部已有日志）
       void persistMessage(userMessage, sessionId).catch(() => {})
-      return deliveryController.deliverMessage({
+      const $result = await deliveryController.deliverMessage({
         backendText,
         sessionId,
         attachments,
@@ -177,6 +192,21 @@ export function createChatSendController(params: {
         sending,
         draftSending,
       })
+
+      // ── Task 完成回调 ──────────────────────────────────
+      if ($result) {
+        $taskStore.completeTask($taskId, {
+          result: $result,
+          artifacts: $result.tool_calls ? [$result.tool_calls] : undefined,
+        })
+      } else {
+        $taskStore.cancelTask($taskId)
+      }
+
+      return $result
+    } catch (e) {
+      $taskStore.failTask($taskId, { code: 'SEND_ERROR', message: String(e) })
+      throw e
     } finally {
       draftSending.value = false
       refreshSendingState(sending, draftSending)

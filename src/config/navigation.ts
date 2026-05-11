@@ -5,6 +5,7 @@ import {
   Radio,
   Bot,
   BookOpen,
+  Activity,
   Zap,
   Blocks,
   ScrollText,
@@ -90,6 +91,14 @@ export const navigationItems: NavItem[] = [
       { id: 'knowledge-docs', path: '/knowledge', i18nKey: 'nav.knowledgeDocs' },
       { id: 'knowledge-memory', path: '/knowledge/memory', i18nKey: 'nav.knowledgeMemory' },
     ],
+  },
+  {
+    id: 'runtime',
+    path: '/runtime',
+    i18nKey: 'nav.runtime',
+    icon: Activity,
+    keywords: 'runtime 任务 监控 task monitor',
+    group: 'core',
   },
   {
     id: 'automation',

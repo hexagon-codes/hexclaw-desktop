@@ -1,0 +1,40 @@
+{
+  "id": "TASK-005",
+  "title": "创建独立 Task 监控视图",
+  "description": "新增 src/components/runtime/TaskMonitorPanel.vue，作为独立的 Task Runtime 监控面板。展示进行中任务卡片（类型图标、状态标签、进度、耗时），支持展开详情和手动取消。引用 useTaskStore 和 EmptyState 组件。注意 src/views/TasksView.vue 已存在（定时任务 CronJob 管理），不做覆盖。",
+  "type": "create",
+  "files": [
+    "src/components/runtime/TaskMonitorPanel.vue"
+  ],
+  "read_first": [
+    "src/stores/tasks.ts",
+    "src/components/common/EmptyState.vue",
+    "src/types/task.ts",
+    "src/views/AutomationView.vue"
+  ],
+  "convergence": {
+    "criteria": [
+      "src/components/runtime/TaskMonitorPanel.vue 存在且包含 <template> 和 <script setup lang=\"ts\">",
+      "TaskMonitorPanel.vue 使用 useTaskStore().activeTasks 和 completedTasks 渲染列表",
+      "面板展示 activeTasks 列表，每项显示类型图标和状态标签",
+      "面板支持点击展开 Task 详情（input/output/error）",
+      "面板提供取消按钮调用 cancelTask()",
+      "无活跃任务时显示 EmptyState 组件，文案'暂无运行中的任务'"
+    ]
+  },
+  "action": "创建 src/components/runtime/TaskMonitorPanel.vue。使用 useTaskStore().activeTasks / completedTasks 渲染。卡片包含：类型图标 (MessageSquare/Bot/Puzzle)、状态标签 (颜色区分)、进度条 (0-100)、耗时。点击展开详情面板显示 input/output/error。取消按钮确认后调用 cancelTask(id)。无活跃任务时展示 EmptyState。",
+  "implementation": [
+    "创建 src/components/runtime/TaskMonitorPanel.vue",
+    "TaskMonitorPanel 使用 useTaskStore() 获取 activeTasks 和 completedTasks",
+    "TaskType→图标映射: chat→MessageSquare, agent→Bot, skill→Puzzle, tool→Wrench, workflow→GitBranch, automation→Zap",
+    "状态标签颜色: pending=gray, running=blue, completed=green, failed=red, cancelled=orange",
+    "使用 elapsedSince 计算属性显示运行耗时",
+    "点击卡片展开详情区域 (input.payload / output.result / error)",
+    "取消按钮确认弹窗 → cancelTask(id)",
+    "无活跃任务时显示 EmptyState 组件，文案'暂无运行中的任务'",
+    "不修改 AutomationView.vue，不覆盖 src/views/TasksView.vue"
+  ],
+  "dependencies": ["TASK-002"],
+  "estimated_hours": 4,
+  "wave": 3
+}

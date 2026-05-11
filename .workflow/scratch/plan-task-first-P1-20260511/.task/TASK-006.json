@@ -1,0 +1,48 @@
+{
+  "id": "TASK-006",
+  "title": "导航调整 — 新增 /runtime 路由 + 活性任务数指示器",
+  "description": "在导航配置中新增 /runtime 导航项指向 RuntimeView.vue，注册对应路由，在侧边栏 /runtime 导航项上添加活性任务数徽标。引用 useTaskStore().activeCount 显示小圆点数字。",
+  "type": "modify",
+  "files": [
+    "src/config/navigation.ts",
+    "src/router/index.ts",
+    "src/components/layout/Sidebar.vue",
+    "src/views/RuntimeView.vue",
+    "src/i18n/locales/zh-CN.ts",
+    "src/i18n/locales/en.ts",
+    "src/i18n/locales/ug-CN.ts"
+  ],
+  "read_first": [
+    "src/config/navigation.ts",
+    "src/components/layout/Sidebar.vue",
+    "src/stores/tasks.ts",
+    "src/router/index.ts"
+  ],
+  "convergence": {
+    "criteria": [
+      "src/config/navigation.ts 包含 /runtime 导航项，id='runtime', icon=Activity",
+      "src/router/index.ts 的 navRouteComponents 包含 runtime: () => import('@/views/RuntimeView.vue')",
+      "src/views/RuntimeView.vue 存在且引用 TaskMonitorPanel",
+      "src/i18n/locales/*.ts 包含 nav.runtime 翻译",
+      "Sidebar.vue 中 /runtime 导航项旁显示活性任务数 Badge（activeTaskCount）",
+      "Badge 绑定 useTaskStore().activeCount",
+      "活性任务数为 0 时不显示 Badge",
+      "任务状态变化时 Badge 自动更新"
+    ]
+  },
+  "action": "在 navigation.ts 新增 /runtime 导航项（Activity 图标）。在 router/index.ts 的 navRouteComponents 添加 runtime → RuntimeView.vue。创建 RuntimeView.vue 包装 TaskMonitorPanel。在 3 个语言文件中添加 nav.runtime 翻译。在 Sidebar.vue 导入 useTaskStore，在导航项的 /runtime 旁添加条件 Badge。",
+  "implementation": [
+    "src/config/navigation.ts 导入 Activity 图标，新增 /runtime 导航项，id='runtime', group='core'",
+    "src/router/index.ts 的 navRouteComponents 添加 runtime: () => import('@/views/RuntimeView.vue')",
+    "创建 src/views/RuntimeView.vue：PageHeader + TaskMonitorPanel",
+    "src/i18n/locales/zh-CN.ts: runtime: 'Runtime'",
+    "src/i18n/locales/en.ts: runtime: 'Runtime'",
+    "src/i18n/locales/ug-CN.ts: runtime: 'Runtime'",
+    "Sidebar.vue 导入 useTaskStore 并创建 activeTaskCount 计算属性",
+    "导航项模板中: v-if=\"item.id === 'runtime' && activeTaskCount > 0\" 渲染 Badge",
+    "Badge 样式: 红色圆角矩形，白色数字，99+ 截断"
+  ],
+  "dependencies": ["TASK-005"],
+  "estimated_hours": 2,
+  "wave": 4
+}

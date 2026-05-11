@@ -1,0 +1,54 @@
+{
+  "id": "TASK-CR4",
+  "title": "RuntimeStore + useContextRuntime Composable — 显式 Context 注册",
+  "description": "创建 Pinia Runtime Store 和 Vue Composable，包装 ContextManager + ContextLoader，提供显式方法注册/更新/完成/销毁 Task Context。不使用 watch 自动绑定，避免 Context 泄漏和隐式副作用。所有注册方法由外部调用方（如 chat-send-controller.ts 或后续集成层）显式触发。",
+  "type": "create",
+  "files": ["src/stores/runtime.ts", "src/composables/useContextRuntime.ts", "src/stores/index.ts"],
+  "read_first": [
+    "src/services/contextManager.ts",
+    "src/services/contextLoader.ts",
+    "src/stores/tasks.ts",
+    "src/stores/index.ts"
+  ],
+  "convergence": {
+    "criteria": [
+      "src/stores/runtime.ts 导出 useRuntimeStore（Pinia store）",
+      "registerContextForTask(task) 创建 Context 并加载 System + Task Layer",
+      "updateContextFromTask(task) 同步更新 Context 中的 Task Layer",
+      "completeContextForTask(taskId, output) 完成 Context（更新 output + 标记）",
+      "failContextForTask(taskId, error) 标记 Context 失败",
+      "destroyContext(taskId) 销毁并清理 Context",
+      "activeContexts Ref 响应式更新",
+      "contextSummaries ComputedRef 返回 ContextSummary[]",
+      "getContextSummary(taskId) 返回单个摘要",
+      "src/composables/useContextRuntime.ts 导出 useActiveContext / useContextSummaries",
+      "src/stores/index.ts 导出 useRuntimeStore"
+    ]
+  },
+  "action": "创建 src/stores/runtime.ts（Pinia store）和 src/composables/useContextRuntime.ts（Vue composable），提供显式 Context 注册/更新/完成/销毁方法。注册到 src/stores/index.ts。",
+  "implementation": [
+    "src/stores/runtime.ts:",
+    "创建 useRuntimeStore（defineStore, setup function）",
+    "内部实例化 ContextManager + ContextLoader 单例",
+    "activeContexts: Ref<Map<string, RuntimeContext>>",
+    "contextSummaries: ComputedRef<ContextSummary[]>",
+    "activeContextCount: ComputedRef<number>",
+    "registerContextForTask(task: Task): 调用 manager.createContext + loader.loadTaskLayer + loader.loadSystemLayer",
+    "updateContextFromTask(task: Task): 调用 loader.loadTaskLayer 刷新 Task Layer",
+    "completeContextForTask(taskId: string, output: TaskOutput): 读取 Context，更新 task 层 output/status，调用 loader.unloadStaleLayers",
+    "failContextForTask(taskId: string, error: TaskError): 读取 Context，标记 task 层 error/status",
+    "destroyContext(taskId: string): 调用 manager.destroyContext",
+    "getContextSummary(taskId): 构造 ContextSummary",
+    "getActiveContext(taskId): 返回原始 Context",
+    "",
+    "src/composables/useContextRuntime.ts:",
+    "useActiveContext(taskId): ComputedRef<RuntimeContext | undefined>",
+    "useContextSummaries(): ComputedRef<ContextSummary[]>",
+    "",
+    "src/stores/index.ts:",
+    "追加 export { useRuntimeStore } from './runtime'"
+  ],
+  "dependencies": ["TASK-CR2", "TASK-CR3"],
+  "estimated_hours": 2.5,
+  "wave": 3
+}

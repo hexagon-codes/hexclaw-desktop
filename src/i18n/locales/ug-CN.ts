@@ -23,6 +23,7 @@ export default {
     automation: 'ئاپتوماتلاشتۇرۇش',
     automationTasks: 'ۋاقىتلىق ۋەزىپە',
     automationCanvas: 'خىزمەت ئېقىمى رەسىمى',
+    runtime: 'Runtime',
     automationWebhooks: 'Webhooks',
     integration: 'بىرلەشتۈرۈش',
     integrationSkills: 'قورال ئىقتىدارى',

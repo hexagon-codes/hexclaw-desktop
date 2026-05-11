@@ -11,6 +11,7 @@ export default {
     automationTasks: 'Scheduled Tasks',
     automationCanvas: 'Workflow Canvas',
     automationWebhooks: 'Webhooks',
+    runtime: 'Runtime',
     integration: 'Integration',
     integrationSkills: 'Skills',
     integrationMcp: 'MCP Services',

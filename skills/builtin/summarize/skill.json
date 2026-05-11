@@ -1,0 +1,8 @@
+{
+  "name": "summarize",
+  "display_name": "Summarize",
+  "version": "0.1.0",
+  "description": "Summarize long content into concise, structured summaries",
+  "capabilities": ["llm"],
+  "entry": "SKILL.md"
+}

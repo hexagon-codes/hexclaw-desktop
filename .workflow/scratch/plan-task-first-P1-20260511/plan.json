@@ -1,0 +1,40 @@
+{
+  "summary": "Task-first Runtime Phase 1 — 基础设施搭建",
+  "approach": "增量式重构，零破坏原则。在现有 Chat 架构上层添加 Task 抽象层和独立监控视图，不修改任何现有文件。分 4 波次：类型定义 → Store + Executor Shell 并行 → ChatTask 封装 + 监控视图并行 → 导航+路由收尾。TASK-003 仅创建 adapter shell（接口+骨架+工厂），不接管现有发送链路。TASK-005 新建独立视图而非侵入 AutomationView。TASK-006 新增 /runtime 导航项 + 徽标。",
+  "phase": 1,
+  "milestone": "M1",
+  "task_ids": ["TASK-001", "TASK-002", "TASK-003", "TASK-004", "TASK-005", "TASK-006"],
+  "task_count": 6,
+  "complexity": "medium",
+  "risk_factors": ["R1-ChatView单体", "R2-ChatStore控制器耦合", "R3-useChatSend多职责"],
+  "waves": [
+    {
+      "id": "wave-1",
+      "phase_label": "P1.1",
+      "description": "核心类型定义 — 所有后续任务的基础依赖",
+      "task_ids": ["TASK-001"],
+      "dependencies": []
+    },
+    {
+      "id": "wave-2",
+      "phase_label": "P1.2+P1.3",
+      "description": "Store + Executor Shell 并行构建。TASK-003 仅定义接口和 adapter 骨架，不接入现有发送链路",
+      "task_ids": ["TASK-002", "TASK-003"],
+      "dependencies": ["wave-1"]
+    },
+    {
+      "id": "wave-3",
+      "phase_label": "P1.4+P1.5",
+      "description": "ChatTask 封装 + 独立 Task 监控视图并行",
+      "task_ids": ["TASK-004", "TASK-005"],
+      "dependencies": ["wave-2"]
+    },
+    {
+      "id": "wave-4",
+      "phase_label": "P1.6",
+      "description": "新增 /runtime 导航项 + 路由注册 + 活性任务徽标",
+      "task_ids": ["TASK-006"],
+      "dependencies": ["wave-3"]
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "id": "TASK-CR0",
+  "title": "修复 src/types/task.ts Task 接口缺失闭合括号",
+  "description": "Phase 1 在 task.ts 中追加 Task 类型时，替换操作在 dependencies?: string[] 处截断，导致 export interface Task { 缺少对应的 }。CronJob 接口紧接其后，TypeScript 会报语法错误。先修复此编译错误再进入 Phase 2 正式实施。",
+  "type": "fix",
+  "files": ["src/types/task.ts"],
+  "read_first": ["src/types/task.ts"],
+  "convergence": {
+    "criteria": [
+      "src/types/task.ts 中 export interface Task { ... } 语法正确闭合",
+      "dependencies?: string[] 之后存在对应的 }",
+      "export interface CronJob 与 Task 接口之间语法正确",
+      "编译不报错"
+    ]
+  },
+  "action": "在 src/types/task.ts 中，修复缺少的闭合括号，使 Task 接口语法正确。",
+  "implementation": [
+    "读取 src/types/task.ts 确认 Task 接口当前状态",
+    "在 dependencies?: string[] 之后添加 }，使 export interface Task 正确闭合",
+    "验证 CronJob 接口未被破坏"
+  ],
+  "dependencies": [],
+  "estimated_hours": 0.1,
+  "wave": 1
+}

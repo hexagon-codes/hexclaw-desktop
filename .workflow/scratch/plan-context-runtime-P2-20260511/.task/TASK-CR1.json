@@ -1,0 +1,40 @@
+{
+  "id": "TASK-CR1",
+  "title": "Context 类型系统 — 5 层接口 + RuntimeContext 聚合",
+  "description": "定义 Context Runtime 的完整类型体系，包括 5 层接口（System/Skill/Task/Execution/Memory）、聚合根 RuntimeContext、轻量摘要 ContextSummary，以及层状态枚举 ContextLayerStatus。Task Layer 是 Task 在 Context 中的投影，非替代。",
+  "type": "create",
+  "files": ["src/types/context.ts", "src/types/index.ts"],
+  "read_first": [
+    "src/types/task.ts",
+    "docs/agents-OS/Context-Contract.md",
+    "docs/agents-OS/Agent-OS-Runtime-Blueprint-P0.md"
+  ],
+  "convergence": {
+    "criteria": [
+      "src/types/context.ts 存在且包含 ContextLayerStatus 类型（'unloaded' | 'loading' | 'loaded' | 'error'）",
+      "src/types/context.ts 包含 SystemLayer 接口，含 policy.allowedCapabilities",
+      "src/types/context.ts 包含 SkillLayer 接口，含 skillId/skillName",
+      "src/types/context.ts 包含 TaskLayer 接口，含 taskId/taskType/status/input/output",
+      "src/types/context.ts 包含 ExecutionLayer 接口，含 toolResults[]/intermediateState",
+      "src/types/context.ts 包含 MemoryLayer 接口，含 userConfirmations[]/historicalResults[]/generatedAssets[]",
+      "src/types/context.ts 包含 RuntimeContext 聚合接口，含全部 5 层（可选）和 layerStates",
+      "src/types/context.ts 包含 ContextSummary 接口，含 loadedLayers/status",
+      "src/types/index.ts 导出所有 Context 类型"
+    ]
+  },
+  "action": "创建 src/types/context.ts 定义 5 层接口 + RuntimeContext + ContextSummary，注册到 src/types/index.ts。",
+  "implementation": [
+    "定义 ContextLayerStatus = 'unloaded' | 'loading' | 'loaded' | 'error'",
+    "定义 SystemLayer: policy (allowedCapabilities, maxExecutionSteps, timeout, deniedCapabilities), constraints[], runtimeVersion",
+    "定义 SkillLayer: skillId, skillName, skillVersion, workflow?, rules[], references[], capabilities[]",
+    "定义 TaskLayer: taskId, taskType, status, goal, input, output?, progress?, error?, metadata?, parentId?, dependencies[]",
+    "定义 ExecutionLayer: currentAction?, toolResults[], intermediateState, stepCount, startedAt?",
+    "定义 MemoryLayer: userConfirmations[], historicalResults[], generatedAssets[], custom",
+    "定义 RuntimeContext: taskId, taskType, 5 层可选字段, layerStates, createdAt, updatedAt, totalEstimatedSize",
+    "定义 ContextSummary: taskId, taskType, status, loadedLayers[], layerCount, totalSize, createdAt",
+    "在 src/types/index.ts 追加导出所有 Context 类型"
+  ],
+  "dependencies": ["TASK-CR0"],
+  "estimated_hours": 1.5,
+  "wave": 1
+}
