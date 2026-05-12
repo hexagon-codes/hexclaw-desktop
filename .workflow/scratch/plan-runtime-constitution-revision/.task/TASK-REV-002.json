@@ -1,0 +1,34 @@
+{
+  "task": {
+    "id": "TASK-REV-002",
+    "title": "ADR-002: composable names → generic",
+    "wave": 1,
+    "depends_on": [],
+    "affected_adr": "docs/adr/002-runtime-authority-ownership.md",
+    "principle_boundary": {
+      "principle": "Composable 层返回 patch，Store 执行 mutation。Revision 和 Timeline 在 Store 层统一管理。",
+      "implementation": "具体的 composable 名称（usePersistenceRuntime、useAssetRuntime、useRecoveryRuntime）",
+      "boundary_rule": "ADR 正文可以示例方式提及 1 个 composable 名称，但不应枚举全部。Constitution 只记录原则。"
+    },
+    "exact_wording_scope": {
+      "file": "docs/adr/002-runtime-authority-ownership.md",
+      "target_text": "`Composable 层（`usePersistenceRuntime`、`useAssetRuntime`、`useRecoveryRuntime`）只计算 patch 并返回给 Store，由 Store 执行实际 mutation`",
+      "location": "Decision 区域，第 24 行",
+      "principle_part": "Composable 层只计算 patch 并返回给 Store，由 Store 执行实际 mutation",
+      "impl_part": "（`usePersistenceRuntime`、`useAssetRuntime`、`useRecoveryRuntime`）",
+      "action": "删除 impl_part 括号内的具体 composable 名称，只保留原则表述",
+      "replacement": "Composable 层只计算 patch 并返回给 Store，由 Store 执行实际 mutation",
+      "note": "Composable 名称可以移入 References 区域作为代码锚点，但不应在 Decision 正文中出现。",
+      "cross_reference_impact": "无 — 其他 ADR 未引用这三个 composable 名称"
+    },
+    "compliance_impact": {
+      "before": "合规检查需要知道具体 composable 名称来验证",
+      "after": "合规检查改为验证 '是否有 composable 直接修改 ContextManager'（原则级），而非验证特定 composable"
+    },
+    "rollback": {
+      "strategy": "git restore docs/adr/002-runtime-authority-ownership.md",
+      "verification": "grep 'usePersistenceRuntime' docs/adr/002-runtime-authority-ownership.md → 应返回空",
+      "recovery": "从 git history 恢复被删除的名称"
+    }
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "plan": {
+    "id": "PLAN-runtime-adr-wave1",
+    "title": "Runtime ADR Consolidation — Wave 1 (Foundation + Bridge)",
+    "description": "将 runtime-kernel-v0.7 已稳定的 4 个核心架构边界固化为 ADR。Wave 1 覆盖 Foundation Layer (ADR-002, ADR-003) 和 Execution/Bridge Layer (ADR-004, ADR-001)。",
+    "source": "ANL-runtime-adr-consolidation-2026-05-13",
+    "date": "2026-05-13",
+    "waves": [
+      {
+        "wave": "1A",
+        "name": "Infrastructure",
+        "description": "创建 ADR 基础设施（目录、template、README）",
+        "parallel": ["TASK-ADR-INFRA"],
+        "depends_on": []
+      },
+      {
+        "wave": "1B",
+        "name": "Foundation",
+        "description": "写入两个无依赖的基础 ADR，依赖 INFRA 完成",
+        "parallel": ["TASK-ADR-002", "TASK-ADR-003"],
+        "depends_on": ["TASK-ADR-INFRA"]
+      },
+      {
+        "wave": 2,
+        "name": "Execution + Bridge",
+        "description": "写入依赖 ADR-002 的两个 ADR",
+        "parallel": ["TASK-ADR-004", "TASK-ADR-001"],
+        "depends_on": ["TASK-ADR-002"]
+      },
+      {
+        "wave": 3,
+        "name": "Integration + Cross-Reference",
+        "description": "更新 README.md，建立 cross-reference 链接，最终审查",
+        "parallel": ["TASK-ADR-FINALIZE"],
+        "depends_on": ["TASK-ADR-004", "TASK-ADR-001"]
+      }
+    ],
+    "tasks": [
+      { "id": "TASK-ADR-INFRA", "file": ".task/TASK-ADR-INFRA.json" },
+      { "id": "TASK-ADR-002", "file": ".task/TASK-ADR-002.json" },
+      { "id": "TASK-ADR-003", "file": ".task/TASK-ADR-003.json" },
+      { "id": "TASK-ADR-004", "file": ".task/TASK-ADR-004.json" },
+      { "id": "TASK-ADR-001", "file": ".task/TASK-ADR-001.json" },
+      { "id": "TASK-ADR-FINALIZE", "file": ".task/TASK-ADR-FINALIZE.json" }
+    ],
+    "execution_order": [
+      "Wave 1A: TASK-ADR-INFRA (solo，创建 ADR 基础设施)",
+      "Wave 1B: TASK-ADR-002 + TASK-ADR-003 (并行，依赖 INFRA 完成)",
+      "Wave 2: TASK-ADR-004 + TASK-ADR-001 (并行，依赖 ADR-002 完成)",
+      "Wave 3: TASK-ADR-FINALIZE (依赖全部完成)"
+    ],
+    "rollback": {
+      "strategy": "ADR 是纯文档文件，无代码耦合",
+      "steps": [
+        "1. 删除对应 ADR 文件：rm docs/adr/NNN-*.md",
+        "2. 从 docs/adr/README.md 移除条目",
+        "3. 如果 template.md 未被其他 ADR 引用，也可删除",
+        "4. 无代码回滚（ADR 不修改 src/）"
+      ],
+      "recovery": "重新创建 ADR 文件即可恢复，ADR 内容可从 git history 找回"
+    }
+  },
+  "adr_specification": {
+    "directory": "docs/adr/",
+    "naming_convention": {
+      "pattern": "{NNN}-{kebab-case-title}.md",
+      "examples": [
+        "001-chat-runtime-bridge.md",
+        "002-runtime-authority-ownership.md",
+        "003-projection-purity.md",
+        "004-execution-state-machine.md"
+      ],
+      "rules": [
+        "NNN 是三位数顺序号，从 001 开始，预留间隙便于插入",
+        "title 是英文 kebab-case，不超过 5 个单词",
+        "文件名全部小写"
+      ]
+    },
+    "template_sections": [
+      { "name": "Title", "required": true, "description": "ADR #NNN: 标题" },
+      { "name": "Status", "required": true, "description": "proposed | accepted | deprecated | superseded" },
+      { "name": "Date", "required": true, "description": "YYYY-MM-DD" },
+      { "name": "Context", "required": true, "description": "问题陈述 + 架构上下文" },
+      { "name": "Decision", "required": true, "description": "架构决策的精确描述" },
+      { "name": "Constraints", "required": false, "description": "决策附带的技术约束" },
+      { "name": "Rejected Alternatives", "required": true, "description": "考虑过的其他方案 + 未采纳原因" },
+      { "name": "Consequences", "required": true, "description": "正面 + 负面后果" },
+      { "name": "Compliance", "required": false, "description": "如何验证 ADR 是否被遵守" },
+      { "name": "References", "required": true, "description": "代码锚点（文件:行号）" },
+      { "name": "Cross-References", "required": false, "description": "关联的 ADR 编号" }
+    ],
+    "cross_reference_strategy": {
+      "mechanism": "在每个 ADR 的 Cross-References 节中引用关联 ADR",
+      "format": "ADR-NNN: 标题 (§Section)",
+      "examples": [
+        "ADR-002: Runtime Authority Ownership (§Decision)",
+        "ADR-004: Execution State Machine (§Constraints)"
+      ],
+      "rules": [
+        "ADR 正文中按需使用 See ADR-NNN 语法",
+        "README.md 维护完整的依赖关系矩阵",
+        "当 ADR 被 supersede 时，旧 ADR 标记 superseded 并指向新 ADR",
+        "Cross-References 是双向的：被引用方也应反向引用"
+      ]
+    },
+    "prerequisite_order": [
+      {
+        "rank": 1,
+        "adrs": ["ADR-002", "ADR-003"],
+        "reason": "Foundation 层，无外部依赖。ADR-002 是所有后续 ADR 的基础上下文"
+      },
+      {
+        "rank": 2,
+        "adrs": ["ADR-004"],
+        "reason": "依赖 ADR-002 的 Runtime Authority 概念"
+      },
+      {
+        "rank": 3,
+        "adrs": ["ADR-001"],
+        "reason": "依赖 ADR-002 的 Runtime Authority 概念。是 Bridge 层最关键的 ADR"
+      }
+    ]
+  }
+}

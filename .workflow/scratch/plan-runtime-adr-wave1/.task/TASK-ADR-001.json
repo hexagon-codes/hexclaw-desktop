@@ -1,0 +1,67 @@
+{
+  "task": {
+    "id": "TASK-ADR-001",
+    "title": "ADR-001: Chat↔Runtime Bridge Boundary",
+    "wave": 2,
+    "priority": "high",
+    "depends_on": ["TASK-ADR-002"],
+    "adr_number": "001",
+    "adr_file": "docs/adr/001-chat-runtime-bridge.md",
+    "description": "记录 Chat 层和 Runtime 层的严格边界：Chat 不导入 RuntimeStore，Runtime 不感知 Session，唯一边界是 runtimeBridge.ts",
+    "context": {
+      "problem": "Chat（UI/UX 领域）和 Runtime（执行引擎领域）是两个独立的子系统。如果 Chat 直接访问 RuntimeStore，会导致：1) 两个领域耦合无法独立演进 2) Session 概念泄漏到 Runtime 3) Chat 测试需要 RuntimeStore 环境。",
+      "solution": "runtimeBridge.ts 是 Chat 和 Runtime 之间的唯一边界。Chat 层不直接导入 useRuntimeStore 或 Runtime 类型。Bridge 封装 Task 生命周期同步（registerChatTask/completeChatTask/failChatTask）和执行协调（executeChatTask）。",
+      "consequences": [
+        "✅ Chat.ts 零 Runtime 导入（已验证 import 无 @/stores/runtime）",
+        "✅ Runtime 零 session 意识（taskId 在 bridge 层映射，未穿透到 Runtime）",
+        "✅ Chat 导出的 sendMessage 中 Runtime 和 WebSocket 两条路径共享相同接口",
+        "✅ Bridge 可作为 anti-corruption layer 隔离两个领域的类型",
+        "⚠️ Bridge 职责容易膨胀：当 Chat 需要新的 Runtime 功能时，bridge 可能变成"万能管道"",
+        "⚠️ executeChatTask 当前协调了 RuntimeStore + TaskStore，若协调逻辑复杂化，bridge 可能演变为"小服务层""
+      ],
+      "rejected_alternatives": [
+        "Chat 直接 import useRuntimeStore：明确拒绝。已由 chat.ts 的 import 语句验证",
+        "Runtime 直接感知 Session：拒绝。Session 是 Chat UX 概念，Runtime 不应知道",
+        "通过事件总线耦合：隐式耦合，调试困难，类型不安全",
+        "Adapter 模式（ChatRuntimeAdapter class）：过度设计，当前 bridge 的低级函数接口已足够"
+      ],
+      "references": [
+        "src/services/runtimeBridge.ts:1-3 (Bridge 设计原则声明)",
+        "src/services/runtimeBridge.ts:28-31 (registerChatTask)",
+        "src/services/runtimeBridge.ts:34-37 (completeChatTask)",
+        "src/services/runtimeBridge.ts:40-43 (failChatTask)",
+        "src/services/runtimeBridge.ts:56-82 (executeChatTask 执行协调)",
+        "src/stores/chat.ts import 语句（验证无 RuntimeStore 导入）",
+        "src/stores/chat-send-controller.ts:6 (runtimeBridge 是唯一边界)",
+        "src/stores/chat-send-controller.ts:204-222 (Runtime 执行分支)"
+      ],
+      "constraints": [
+        "chat.ts and any chat-domain code MUST NOT import useRuntimeStore or @/stores/runtime",
+        "Runtime domain MUST NOT import any chat types (ChatMessage, ChatSession, etc.)",
+        "All Chat↔Runtime communication MUST go through runtimeBridge.ts",
+        "Bridge functions MUST NOT accumulate state (they are coordination, not ownership)",
+        "New cross-domain operations: add to runtimeBridge.ts, NOT direct store access"
+      ],
+      "compliance_hint": "grep 检查 chat.ts 和相关文件是否有 @/stores/runtime import。检查 runtime 相关文件是否有 @/types/chat import（session/message 类型）。"
+    },
+    "implementation": {
+      "steps": [
+        "1. 读模板 docs/adr/template.md",
+        "2. 读 src/services/runtimeBridge.ts 全部 83 行",
+        "3. 确认 chat.ts 的 import 列表无 RuntimeStore",
+        "4. 读 chat-send-controller.ts Runtime 执行分支",
+        "5. 读 src/stores/chat.ts 装配逻辑验证 boundary",
+        "6. 写入 ADR-001 到 docs/adr/001-chat-runtime-bridge.md",
+        "7. Cross-Reference 到 ADR-002（Authority Ownership）"
+      ]
+    },
+    "verification": [
+      "ADR-001 包含 Chat 不导入 RuntimeStore 的精确约束",
+      "ADR-001 包含 runtimeBridge.ts 的 4 个函数说明",
+      "ADR-001 包含 Bridge 设计原则（anti-corruption layer）",
+      "ADR-001 包含 Consequences（Bridge 膨胀风险预警）",
+      "ADR-001 的 Cross-References 包含 ADR-002",
+      "ADR-001 包含明确的 Compliance 检查方法"
+    ]
+  }
+}

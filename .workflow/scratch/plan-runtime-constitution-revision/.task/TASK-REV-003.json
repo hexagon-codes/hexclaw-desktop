@@ -1,0 +1,31 @@
+{
+  "task": {
+    "id": "TASK-REV-003",
+    "title": "ADR-003: add import type clarification",
+    "wave": 1,
+    "depends_on": [],
+    "affected_adr": "docs/adr/003-projection-purity.md",
+    "principle_boundary": {
+      "principle": "workspaceProjector.ts 是纯函数层：零 store 导入、零副作用、零 async",
+      "implementation": "确定 'import type' 是否违反纯度约束",
+      "boundary_rule": "import type 在编译期被擦除，无运行时 impact，技术上不违反纯度。但最佳实践是用 import type 语法明确表示只导入类型。"
+    },
+    "exact_wording_scope": {
+      "file": "docs/adr/003-projection-purity.md",
+      "target_section": "Compliance 区域（第 52-66 行）",
+      "location": "Compliance 区域的代码示例区，在 '// ✅ 允许' 和 '// ❌ 禁止' 之间",
+      "action": "在 Compliance 的 '// ✅ 允许' 示例中添加 import type 的显式说明",
+      "wording": "在 '// ✅ 允许：pure types, pure utils' 示例下方添加注释：'import type 在编译期被擦除，不违反运行时纯度约束'",
+      "cross_reference_impact": "无 — 其他 ADR 不依赖此 wording"
+    },
+    "compliance_impact": {
+      "before": "Compliance 示例中允许 import type 但未明确说明",
+      "after": "import type 在 Compliance 中有显式位置，审查者可直接引用"
+    },
+    "rollback": {
+      "strategy": "git restore docs/adr/003-projection-purity.md",
+      "verification": "grep 'import type' docs/adr/003-projection-purity.md → 应存在于 Compliance 区域",
+      "recovery": "从 git history 恢复原始 Compliance 内容"
+    }
+  }
+}
