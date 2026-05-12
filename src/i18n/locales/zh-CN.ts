@@ -1679,6 +1679,15 @@ export default {
       showRaw: '显示原始事件',
       hideRaw: '隐藏原始事件',
     },
+    result: {
+      primaryGroup: '主结果',
+      filesGroup: '生成文件',
+      supportingGroup: '辅助输出',
+      pathLabel: '路径',
+      sizeLabel: '大小',
+      copyPath: '复制路径',
+      noResult: '暂无结果',
+    },
     field: {
       status: '状态',
       progress: '进度',

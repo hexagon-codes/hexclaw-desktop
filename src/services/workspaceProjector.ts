@@ -26,6 +26,8 @@ import type {
   WorkspaceContextProjection,
   TimelineItemProjection,
   TimelineNarrativeGroup,
+  TaskResultProjection,
+  ResultItemProjection,
   NarrativePhase,
   NarrativeSignificance,
   TimelineCategory,
@@ -456,5 +458,123 @@ function buildNarrativeGroup(items: NarrativeItem[], isCollapsed: boolean): Time
     eventCount: items.length,
     isCollapsed,
     children: items.map(it => it.projection),
+  }
+}
+
+// ─── Task Result Projection ───────────────────────
+
+/** 从 AssetReference.type 推断 ResultKind */
+function toResultKind(assetType: string): ResultItemProjection['kind'] {
+  const map: Record<string, ResultItemProjection['kind']> = {
+    image: 'image',
+    video: 'video',
+    audio: 'audio',
+    document: 'file',
+  }
+  return map[assetType] ?? 'file'
+}
+
+/**
+ * 将 Task + RuntimeContext 投影为 TaskResultProjection。
+ *
+ * 分组规则（UX 分组，非 Runtime topology）：
+ * - Primary result：TaskOutput.result 中的文本回复
+ * - Generated files：AssetCollection.refs
+ * - Supporting outputs：TaskOutput.artifacts
+ *
+ * 不做：
+ * - 深度 tool_calls 解析
+ * - image/audio/video thumbnail
+ * - Open External 行为
+ *
+ * 纯函数。零副作用。零 store import。零 async。
+ */
+export function projectTaskResult(
+  task: Task,
+  ctx?: RuntimeContext,
+): TaskResultProjection | null {
+  const items: ResultItemProjection[] = []
+
+  // ── Primary result：TaskOutput.result ──────────
+  const output = task.output
+  if (output) {
+    if (typeof output.result === 'string') {
+      items.push({
+        id: `${task.id}-primary`,
+        kind: 'text',
+        group: 'primary',
+        title: truncate(output.result, 80),
+        source: 'text',
+        status: task.status === 'completed' ? 'valid' : 'unknown',
+      })
+    } else if (output.result && typeof output.result === 'object') {
+      // 不做深度解析，fallback text summary
+      items.push({
+        id: `${task.id}-primary`,
+        kind: 'text',
+        group: 'primary',
+        title: '任务已完成',
+        description: truncate(JSON.stringify(output.result), 100),
+        source: 'text',
+        status: task.status === 'completed' ? 'valid' : 'unknown',
+      })
+    }
+
+    // ── Supporting outputs：artifacts ──────────────
+    if (output.artifacts && output.artifacts.length > 0) {
+      output.artifacts.forEach((a, i) => {
+        items.push({
+          id: `${task.id}-artifact-${i}`,
+          kind: 'tool_call',
+          group: 'supporting',
+          title: typeof a === 'object' && a !== null
+            ? truncate(JSON.stringify(a), 60)
+            : String(a),
+          source: 'artifact',
+          status: 'unknown',
+        })
+      })
+    }
+  }
+
+  // ── Generated files：AssetCollection.refs ──────
+  const refs = ctx?.resources?.asset?.refs
+  if (refs && refs.length > 0) {
+    refs.forEach((ref) => {
+      const invalidStatuses = new Set(['invalidated', 'orphaned'])
+      items.push({
+        id: ref.assetId,
+        kind: toResultKind(ref.type),
+        group: 'generated_files',
+        title: ref.metadata.originalName,
+        description: truncate(ref.path, 100),
+        source: 'asset',
+        sizeBytes: ref.metadata.sizeBytes,
+        mimeType: ref.metadata.mimeType,
+        path: ref.path,
+        dimensions: ref.metadata.dimensions,
+        status: invalidStatuses.has(ref.status) ? 'invalid' : 'valid',
+      })
+    })
+  }
+
+  if (items.length === 0) return null
+
+  // 摘要
+  const primaryCount = items.filter(i => i.group === 'primary').length
+  const fileCount = items.filter(i => i.group === 'generated_files').length
+  const supportCount = items.filter(i => i.group === 'supporting').length
+  const parts: string[] = []
+  if (primaryCount > 0) parts.push(`${primaryCount} 个主结果`)
+  if (fileCount > 0) parts.push(`${fileCount} 个生成文件`)
+  if (supportCount > 0) parts.push(`${supportCount} 个辅助输出`)
+
+  return {
+    taskId: task.id,
+    summary: parts.join(' · ') || `${items.length} 个结果`,
+    items,
+    totalItems: items.length,
+    hasError: items.some(i => i.status === 'invalid'),
+    navigation: task.sessionId ? { chatSessionId: task.sessionId } : undefined,
   }
 }

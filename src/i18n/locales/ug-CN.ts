@@ -1659,6 +1659,15 @@ export default {
       showRaw: 'ئەسلى ۋەقەلەرنى كۆرسەت',
       hideRaw: 'ئەسلى ۋەقەلەرنى يوشۇر',
     },
+    result: {
+      primaryGroup: 'ئاساسلىق نەتىجە',
+      filesGroup: 'ھاسىل قىلىنغان ھۆججەتلەر',
+      supportingGroup: 'ياردەمچى چىقىرىشلار',
+      pathLabel: 'يول',
+      sizeLabel: 'چوڭلۇقى',
+      copyPath: 'يولنى كۆچۈرۈش',
+      noResult: 'نەتىجە يوق',
+    },
     field: {
       status: 'ھالەت',
       progress: 'ئىلگىرىلەش',

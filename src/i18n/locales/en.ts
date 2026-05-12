@@ -1675,6 +1675,15 @@ export default {
       showRaw: 'Show raw events',
       hideRaw: 'Hide raw events',
     },
+    result: {
+      primaryGroup: 'Primary result',
+      filesGroup: 'Generated files',
+      supportingGroup: 'Supporting outputs',
+      pathLabel: 'Path',
+      sizeLabel: 'Size',
+      copyPath: 'Copy path',
+      noResult: 'No results',
+    },
     field: {
       status: 'Status',
       progress: 'Progress',

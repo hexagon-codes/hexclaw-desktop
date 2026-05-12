@@ -163,3 +163,55 @@ export interface TimelineNarrativeGroup {
   /** 子事件 — 展开可见 */
   children: TimelineItemProjection[]
 }
+
+// ─── Task Result 投影 ────────────────────────────
+
+/**
+ * Result 分组 — UX 分组，非 Runtime topology。
+ *
+ * 不按 toolName / execution step / AssetReference.type 分组。
+ */
+export type ResultGroup = 'primary' | 'generated_files' | 'supporting'
+
+/** Result 种类 */
+export type ResultKind = 'text' | 'code' | 'image' | 'audio' | 'video' | 'file' | 'tool_call'
+
+/** 单个 Result 条目投影 */
+export interface ResultItemProjection {
+  id: string
+  kind: ResultKind
+  group: ResultGroup
+
+  /** 可读标题 */
+  title: string
+  /** 简短描述（≤100 chars） */
+  description?: string
+
+  /** 溯源 */
+  source: 'text' | 'asset' | 'artifact'
+
+  /** 元数据（声明式传递，不做内容解析） */
+  sizeBytes?: number
+  mimeType?: string
+  /** 文件路径 — 仅显示/copy，不 open external */
+  path?: string
+  dimensions?: { width: number; height: number }
+
+  /** 健康状态 */
+  status: 'valid' | 'invalid' | 'unknown'
+}
+
+/** Task 完成后的结果投影 — ContextDetailPanel Outputs section 消费 */
+export interface TaskResultProjection {
+  taskId: string
+  /** 结果摘要（e.g. "1 个主结果 · 2 个生成文件"） */
+  summary: string
+  /** 结果条目列表 */
+  items: ResultItemProjection[]
+  totalItems: number
+  hasError: boolean
+  /** Navigation metadata */
+  navigation?: {
+    chatSessionId?: string
+  }
+}

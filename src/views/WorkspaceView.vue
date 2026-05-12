@@ -21,6 +21,7 @@ const {
   selectedContextProjection,
   selectedTimelineProjection,
   selectedNarrativeProjection,
+  selectedResultProjection,
   selectTask,
   activeCount,
 } = useWorkspace()
@@ -56,7 +57,10 @@ const {
 
       <!-- Center: Context Detail -->
       <main class="workspace-panel workspace-panel--center">
-        <ContextDetailPanel :projection="selectedContextProjection" />
+        <ContextDetailPanel
+          :projection="selectedContextProjection"
+          :result-projection="selectedResultProjection"
+        />
       </main>
 
       <!-- Right: Timeline -->

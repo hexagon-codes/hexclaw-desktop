@@ -16,8 +16,8 @@ import { ref, computed, onMounted } from 'vue'
 import { useRoute, onBeforeRouteUpdate } from 'vue-router'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useTaskStore } from '@/stores/tasks'
-import { projectTask, projectContext, projectTimeline, projectTimelineNarrative } from '@/services/workspaceProjector'
-import type { WorkspaceTaskProjection, WorkspaceContextProjection, TimelineItemProjection, TimelineNarrativeGroup } from '@/types/workspace'
+import { projectTask, projectContext, projectTimeline, projectTimelineNarrative, projectTaskResult } from '@/services/workspaceProjector'
+import type { WorkspaceTaskProjection, WorkspaceContextProjection, TimelineItemProjection, TimelineNarrativeGroup, TaskResultProjection } from '@/types/workspace'
 
 export function useWorkspace() {
   const runtimeStore = useRuntimeStore()
@@ -99,6 +99,15 @@ export function useWorkspace() {
     return projectTimelineNarrative(events)
   })
 
+  /** 选中 Task 的 Result 投影 */
+  const selectedResultProjection = computed<TaskResultProjection | null>(() => {
+    if (!selectedTaskId.value) return null
+    const task = taskStore.getTask(selectedTaskId.value)
+    if (!task) return null
+    const ctx = runtimeStore.getActiveContext(selectedTaskId.value)
+    return projectTaskResult(task, ctx ?? undefined)
+  })
+
   // ── Actions ───────────────────────────────────────
 
   function selectTask(taskId: string | null) {
@@ -115,6 +124,7 @@ export function useWorkspace() {
     selectedContextProjection,
     selectedTimelineProjection,
     selectedNarrativeProjection,
+    selectedResultProjection,
     // actions
     selectTask,
     // pass-through (read-only)
