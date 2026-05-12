@@ -23,12 +23,11 @@ import { taskTimeline, recentEvents } from '@/services/runtime/timelineProjectio
 import { DEFAULT_BUDGET } from '@/types/runtimeBudget'
 import { canTransition } from '@/types/execution'
 import { createContextAwareExecutor } from '@/services/taskExecutor'
-import { saveContext as persistContext, saveAll as persistAll, loadAll } from '@/services/runtime/persistenceRuntime'
-import { createAssetReference, resolveAsset, checkAssetHealth, markInvalidated, ensureAssetCollection, buildAssetSummary } from '@/services/runtime/assetService'
-import type { AssetReference, AssetMetadata, AssetCollection } from '@/types/asset'
-import { buildFailureRecord } from '@/services/runtime/recoveryClassifier'
-import { assessRecovery as assessRecoveryFn, detectCorruption as detectCorruptionFn, getRecoverySummary as getRecoverySummaryFn, getResolutionState as getResolutionStateFn } from '@/services/runtime/recoveryService'
-import type { RecoveryAssessment, CorruptionReport, RecoverySummary, FailureRecord } from '@/types/recovery'
+import { usePersistenceRuntime } from '@/composables/usePersistenceRuntime'
+import { useAssetRuntime } from '@/composables/useAssetRuntime'
+import { useRecoveryRuntime } from '@/composables/useRecoveryRuntime'
+import type { AssetReference, AssetMetadata } from '@/types/asset'
+import type { RecoveryAssessment, CorruptionReport, RecoverySummary } from '@/types/recovery'
 
 export const useRuntimeStore = defineStore('runtime', () => {
   const timelineStore = new TimelineStore()
@@ -38,6 +37,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
   })
   const loader = new ContextLoader()
   const skillLoader = new SkillLoader()
+
+  const persistence = usePersistenceRuntime()
+  const asset = useAssetRuntime()
+  const recovery = useRecoveryRuntime()
 
   // ── 响应式状态 ──────────────────────────────────────
 
@@ -387,11 +390,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
   async function saveContextPersist(taskId: string): Promise<void> {
     const ctx = manager.getContext(taskId)
     if (!ctx) return
-    try {
-      await persistContext(ctx)
-    } catch (e) {
-      getRuntimeLogger().error(`saveContext(${taskId}) 失败: ${(e as Error).message}`)
+    const ok = await persistence.saveContext(ctx)
+    if (!ok) {
+      getRuntimeLogger().error(`saveContext(${taskId}) 失败`)
     }
+    // 不 increment revision — persistence 是副作用，非 runtime mutation
   }
 
   /**
@@ -403,7 +406,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   async function saveAllPersist(): Promise<boolean> {
     const contexts = manager.getAllContexts()
     const events = timelineStore.getAll()
-    return persistAll(contexts, events)
+    return persistence.saveAll(contexts, events)
+    // 不 increment revision
   }
 
   // ── Asset ────────────────────────────────────────────
@@ -411,8 +415,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   /**
    * 注册资产引用。
    *
-   * 1. AssetService.createAssetReference() → ref (status='registered')
-   * 2. 注入 ctx.resources.asset.refs
+   * 1. composable.buildRegistration() → { ref, updated }（纯计算）
+   * 2. RuntimeStore 应用 mutation → ctx.resources.asset
    * 3. revision.value++
    *
    * @throws 当 Context 不存在或 path 校验失败时
@@ -425,16 +429,15 @@ export const useRuntimeStore = defineStore('runtime', () => {
     const ctx = manager.getContext(taskId)
     if (!ctx) throw new Error(`Context ${taskId} 不存在`)
 
-    const ref = createAssetReference(taskId, path, metadata)
+    const { ref, updated } = asset.buildRegistration(
+      ctx.resources?.asset,
+      taskId,
+      path,
+      metadata,
+    )
 
-    if (!ctx.resources) {
-      ctx.resources = {}
-    }
-    if (!ctx.resources.asset) {
-      ctx.resources.asset = ensureAssetCollection(undefined)
-    }
-    ctx.resources.asset.refs.push(ref)
-    ctx.resources.asset.lastUpdated = new Date().toISOString()
+    if (!ctx.resources) ctx.resources = {}
+    ctx.resources.asset = updated
 
     revision.value++
     return ref
@@ -443,9 +446,10 @@ export const useRuntimeStore = defineStore('runtime', () => {
   /**
    * 废弃资产引用。
    *
-   * 1. 查找 ref → markInvalidated → 替换
-   * 2. append asset.invalidated Timeline Event
-   * 3. revision.value++
+   * 1. composable.buildInvalidation() → { updated, assetType } | null（纯计算）
+   * 2. RuntimeStore 应用 mutation → ctx.resources.asset
+   * 3. append asset.invalidated Timeline Event
+   * 4. revision.value++
    */
   function invalidateAsset(taskId: string, assetId: string): void {
     const ctx = manager.getContext(taskId)
@@ -453,20 +457,17 @@ export const useRuntimeStore = defineStore('runtime', () => {
     const collection = ctx.resources?.asset
     if (!collection) return
 
-    const index = collection.refs.findIndex(r => r.assetId === assetId)
-    if (index === -1) return
+    const result = asset.buildInvalidation(collection, assetId)
+    if (!result) return
 
-    const oldRef = collection.refs[index]
-    const newRef = markInvalidated(oldRef)
-    collection.refs[index] = newRef
-    collection.lastUpdated = new Date().toISOString()
+    ctx.resources.asset = result.updated
 
     writeTimelineEvent({
       type: 'asset.invalidated',
       taskId,
       payload: {
         summary: `Asset ${assetId} 已废弃`,
-        metadata: { assetType: newRef.type },
+        metadata: { assetType: result.assetType },
       },
     })
 
@@ -476,10 +477,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
   /**
    * 资产健康验证 — 显式调用。
    *
-   * 使用 Promise.allSettled 并行 exists() 检查。
+   * composable.checkHealth() → { updated, changed }（observation）
+   * RuntimeStore 仅当 changed 时应用 mutation。
    * 不引入 scheduler / concurrency pool / retry queue。
-   *
-   * checkHealth / reconcile 不 append noisy observation events。
    */
   async function reconcileAssets(taskId: string): Promise<void> {
     const ctx = manager.getContext(taskId)
@@ -487,19 +487,13 @@ export const useRuntimeStore = defineStore('runtime', () => {
     const collection = ctx.resources?.asset
     if (!collection || collection.refs.length === 0) return
 
-    const results = await Promise.allSettled(
-      collection.refs.map(ref => checkAssetHealth(ref)),
-    )
+    const { updated, changed } = await asset.checkHealth(collection)
 
-    results.forEach((result, i) => {
-      if (result.status === 'fulfilled') {
-        collection.refs[i].status = result.value
-      }
-      // rejected → 保持当前 status，不修改
-    })
-
-    collection.lastUpdated = new Date().toISOString()
-    revision.value++
+    if (changed) {
+      ctx.resources.asset = updated
+      revision.value++
+    }
+    // reconcile 不 append timeline event（noisy observation）
   }
 
   /**
@@ -508,8 +502,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function getAssetSummary(taskId: string) {
     const ctx = manager.getContext(taskId)
     if (!ctx) return null
-    const refs = ctx.resources?.asset?.refs ?? []
-    return buildAssetSummary(refs)
+    return asset.buildSummary(ctx.resources?.asset)
   }
 
   // ── Recovery ──────────────────────────────────────────
@@ -517,8 +510,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
   /**
    * 应用失败记录 — 写入 ctx.resources.recovery。
    *
-   * 1. classifyFailure(code) + buildFailureRecord
-   * 2. 写入 RecoveryLayer（不持久化 FailureType）
+   * 1. composable.buildFailureApplication() → { patch, assessmentChanged, ... }（纯计算）
+   * 2. RuntimeStore 应用 mutation → ctx.resources.recovery
    * 3. 条件性 append recovery.assessed（仅 assessmentState 变化时）
    *
    * 不是 markRecovered / markRecoveryFailed — 属于 Execution Lifecycle。
@@ -527,32 +520,24 @@ export const useRuntimeStore = defineStore('runtime', () => {
     const ctx = manager.getContext(taskId)
     if (!ctx) return
 
-    const record = buildFailureRecord(
-      error.code,
-      error.message,
+    const result = recovery.buildFailureApplication(
+      ctx.resources?.recovery,
+      error,
       ctx.execution?.state ?? 'unknown',
       ctx.task?.status ?? 'unknown',
+      ctx,
     )
 
-    // 记录上一次评估状态，用于判断是否变化
-    const prevAssessment = ctx.resources?.recovery?.failure
-      ? assessRecoveryFn(ctx)?.assessmentState
-      : undefined
-
     if (!ctx.resources) ctx.resources = {}
-    ctx.resources.recovery = {
-      failure: record,
-      lastAssessment: new Date().toISOString(),
-    }
+    ctx.resources.recovery = result.patch
 
-    const newAssessment = assessRecoveryFn(ctx)?.assessmentState
-    if (prevAssessment !== newAssessment) {
+    if (result.assessmentChanged) {
       writeTimelineEvent({
         type: 'recovery.assessed',
         taskId,
         payload: {
-          summary: `Recovery assessment: ${newAssessment}`,
-          metadata: { failureCode: record.code, assessmentState: newAssessment ?? 'unknown' },
+          summary: `Recovery assessment: ${result.assessmentState}`,
+          metadata: { failureCode: result.failureCode, assessmentState: result.assessmentState },
         },
       })
     }
@@ -566,20 +551,20 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function assessRecovery(taskId: string): RecoveryAssessment | null {
     const ctx = manager.getContext(taskId)
     if (!ctx) return null
-    return assessRecoveryFn(ctx)
+    return recovery.assess(ctx)
   }
 
   /**
    * 检测 Context 状态损坏 — ctx self-consistency only。
    *
-   * 仅当 corrupted=true 时 append recovery.corruption_detected。
+   * 仅当 corrupted=true 时 append recovery.corruption_detected + revision++。
    * 不记录 noisy health check event。
    */
   function detectCorruption(taskId: string): CorruptionReport | null {
     const ctx = manager.getContext(taskId)
     if (!ctx) return null
 
-    const report = detectCorruptionFn(ctx)
+    const report = recovery.detect(ctx)
 
     if (report.corrupted) {
       writeTimelineEvent({
@@ -594,9 +579,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
           },
         },
       })
+      revision.value++
     }
 
-    revision.value++
     return report
   }
 
@@ -606,7 +591,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function getRecoverySummary(taskId: string): RecoverySummary | null {
     const ctx = manager.getContext(taskId)
     if (!ctx) return null
-    return getRecoverySummaryFn(ctx)
+    return recovery.getSummary(ctx)
   }
 
   /**
@@ -616,18 +601,20 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function getResolutionState(taskId: string): 'pending' | 'resolved' | 'failed' {
     const ctx = manager.getContext(taskId)
     if (!ctx) return 'pending'
-    return getResolutionStateFn(ctx)
+    return recovery.getResolution(ctx)
   }
 
   /**
    * 从磁盘恢复 Runtime 状态。
    *
    * 显式调用，不做 auto restore。
+   * composable.loadAll() → 返回原始快照数据。
+   * Reconstruction（createContext/updateLayer/recalcSize/resource restore）全部在 RuntimeStore。
    * 通过 manager.updateLayer() 逐层恢复，不绕过 ContextManager layer invariant。
    * null → undefined normalization 在此执行（非 deserializeContext）。
    */
   async function restoreRuntime(): Promise<void> {
-    const { contexts, events } = await loadAll()
+    const { contexts, events } = await persistence.loadAll()
 
     for (const snapshot of contexts) {
       // 跳过已存在的活跃 Context
