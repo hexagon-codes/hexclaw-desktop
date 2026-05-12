@@ -52,6 +52,10 @@ export type RuntimeEventType =
   // ── Asset ──
   | 'asset.invalidated'
 
+  // ── Recovery ──
+  | 'recovery.assessed'
+  | 'recovery.corruption_detected'
+
 // ─── 事件载荷 ──────────────────────────────────────────
 
 /**

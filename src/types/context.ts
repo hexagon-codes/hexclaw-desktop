@@ -158,6 +158,7 @@ export interface RuntimeContext {
   // Resource References（非 Semantic Layer）
   resources?: {
     asset?: AssetCollection
+    recovery?: RecoveryLayer
   }
 
   // 元数据

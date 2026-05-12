@@ -28,6 +28,7 @@ export function serializeContext(ctx: RuntimeContext): ContextSnapshot {
     execution: ctx.execution ?? null,
     memory: ctx.memory ?? null,
     asset: ctx.resources?.asset ?? null,
+    recovery: ctx.resources?.recovery ?? null,
     updatedAt: ctx.updatedAt,
   }
 }
@@ -55,7 +56,12 @@ export function deserializeContext(snapshot: ContextSnapshot): RuntimeContext {
       execution: snapshot.execution ? ('loaded' as const) : ('unloaded' as const),
       memory: snapshot.memory ? ('loaded' as const) : ('unloaded' as const),
     },
-    resources: snapshot.asset ? { asset: snapshot.asset } : undefined,
+    resources: (snapshot.asset || snapshot.recovery)
+      ? {
+          asset: snapshot.asset ?? undefined,
+          recovery: snapshot.recovery ?? undefined,
+        }
+      : undefined,
     createdAt: now,
     updatedAt: snapshot.updatedAt ?? now,
     totalEstimatedSize: 0, // 恢复后由 manager.recalcSize() 重新计算

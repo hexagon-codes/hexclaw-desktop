@@ -10,6 +10,7 @@
 import type { TaskType, SystemLayer, SkillLayer, TaskLayer, ExecutionLayer, MemoryLayer } from './context'
 import type { RuntimeEvent } from './timeline'
 import type { AssetCollection } from './asset'
+import type { RecoveryLayer } from './recovery'
 
 /** Context 快照 — RuntimeContext 的可持久化投影 */
 export interface ContextSnapshot {
@@ -23,6 +24,8 @@ export interface ContextSnapshot {
   memory: MemoryLayer | null
   /** Resource Reference（非 Semantic Layer） */
   asset: AssetCollection | null
+  /** Recovery 数据（非 Semantic Layer） */
+  recovery: RecoveryLayer | null
   updatedAt: string // ISO
 }
 

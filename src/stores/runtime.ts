@@ -26,6 +26,9 @@ import { createContextAwareExecutor } from '@/services/taskExecutor'
 import { saveContext as persistContext, saveAll as persistAll, loadAll } from '@/services/runtime/persistenceRuntime'
 import { createAssetReference, resolveAsset, checkAssetHealth, markInvalidated, ensureAssetCollection, buildAssetSummary } from '@/services/runtime/assetService'
 import type { AssetReference, AssetMetadata, AssetCollection } from '@/types/asset'
+import { buildFailureRecord } from '@/services/runtime/recoveryClassifier'
+import { assessRecovery as assessRecoveryFn, detectCorruption as detectCorruptionFn, getRecoverySummary as getRecoverySummaryFn, getResolutionState as getResolutionStateFn } from '@/services/runtime/recoveryService'
+import type { RecoveryAssessment, CorruptionReport, RecoverySummary, FailureRecord } from '@/types/recovery'
 
 export const useRuntimeStore = defineStore('runtime', () => {
   const timelineStore = new TimelineStore()
@@ -509,6 +512,113 @@ export const useRuntimeStore = defineStore('runtime', () => {
     return buildAssetSummary(refs)
   }
 
+  // ── Recovery ──────────────────────────────────────────
+
+  /**
+   * 应用失败记录 — 写入 ctx.resources.recovery。
+   *
+   * 1. classifyFailure(code) + buildFailureRecord
+   * 2. 写入 RecoveryLayer（不持久化 FailureType）
+   * 3. 条件性 append recovery.assessed（仅 assessmentState 变化时）
+   *
+   * 不是 markRecovered / markRecoveryFailed — 属于 Execution Lifecycle。
+   */
+  function applyFailureRecord(taskId: string, error: { code: string; message: string }): void {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return
+
+    const record = buildFailureRecord(
+      error.code,
+      error.message,
+      ctx.execution?.state ?? 'unknown',
+      ctx.task?.status ?? 'unknown',
+    )
+
+    // 记录上一次评估状态，用于判断是否变化
+    const prevAssessment = ctx.resources?.recovery?.failure
+      ? assessRecoveryFn(ctx)?.assessmentState
+      : undefined
+
+    if (!ctx.resources) ctx.resources = {}
+    ctx.resources.recovery = {
+      failure: record,
+      lastAssessment: new Date().toISOString(),
+    }
+
+    const newAssessment = assessRecoveryFn(ctx)?.assessmentState
+    if (prevAssessment !== newAssessment) {
+      writeTimelineEvent({
+        type: 'recovery.assessed',
+        taskId,
+        payload: {
+          summary: `Recovery assessment: ${newAssessment}`,
+          metadata: { failureCode: record.code, assessmentState: newAssessment ?? 'unknown' },
+        },
+      })
+    }
+
+    revision.value++
+  }
+
+  /**
+   * 评估恢复可行性 — computed，不持久化。
+   */
+  function assessRecovery(taskId: string): RecoveryAssessment | null {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return null
+    return assessRecoveryFn(ctx)
+  }
+
+  /**
+   * 检测 Context 状态损坏 — ctx self-consistency only。
+   *
+   * 仅当 corrupted=true 时 append recovery.corruption_detected。
+   * 不记录 noisy health check event。
+   */
+  function detectCorruption(taskId: string): CorruptionReport | null {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return null
+
+    const report = detectCorruptionFn(ctx)
+
+    if (report.corrupted) {
+      writeTimelineEvent({
+        type: 'recovery.corruption_detected',
+        taskId,
+        payload: {
+          summary: `Context corruption detected: ${report.details.join('; ')}`,
+          metadata: {
+            contextDataExists: report.checks.contextDataExists,
+            executionStateConsistent: report.checks.executionStateConsistent,
+            statusConsistent: report.checks.statusConsistent,
+          },
+        },
+      })
+    }
+
+    revision.value++
+    return report
+  }
+
+  /**
+   * 动态 rebuild Recovery Summary（不持久化）。
+   */
+  function getRecoverySummary(taskId: string): RecoverySummary | null {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return null
+    return getRecoverySummaryFn(ctx)
+  }
+
+  /**
+   * 推断恢复解决状态 — 来自 Execution Lifecycle Outcome。
+   * 不是 Recovery Domain 的持久化 type。
+   */
+  function getResolutionState(taskId: string): 'pending' | 'resolved' | 'failed' {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return 'pending'
+    return getResolutionStateFn(ctx)
+  }
+
   /**
    * 从磁盘恢复 Runtime 状态。
    *
@@ -552,6 +662,15 @@ export const useRuntimeStore = defineStore('runtime', () => {
         if (ctx) {
           if (!ctx.resources) ctx.resources = {}
           ctx.resources.asset = snapshot.resources.asset
+        }
+      }
+
+      // Recovery 恢复 — 仅恢复 RecoveryLayer，不做 auto assess/detect
+      if (snapshot.recovery) {
+        const ctx = manager.getContext(snapshot.taskId)
+        if (ctx) {
+          if (!ctx.resources) ctx.resources = {}
+          ctx.resources.recovery = snapshot.recovery
         }
       }
     }
@@ -631,5 +750,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
     invalidateAsset,
     reconcileAssets,
     getAssetSummary,
+    // Recovery
+    applyFailureRecord,
+    assessRecovery,
+    detectCorruption,
+    getRecoverySummary,
+    getResolutionState,
   }
 })
