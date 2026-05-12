@@ -8,6 +8,7 @@ import { buildAssistantMessage } from '@/utils/buildAssistantMessage'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
+import { tryExecuteSkill } from '@/services/skillBridge'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 type MessageServiceModule = typeof import('@/services/messageService')
@@ -150,6 +151,16 @@ export function createChatSendController(params: {
     }
     draftSending.value = !initialSessionId
     refreshSendingState(sending, draftSending)
+
+    // ── Skill Invocation 检测 ──────────────────────
+    const skillMsg = await tryExecuteSkill(text, {
+      createId,
+      messages,
+      sending,
+      draftSending,
+      handleSendError,
+    })
+    if (skillMsg !== undefined) return skillMsg
 
     // ── Task 生命周期注册 ──────────────────────────────
     const $taskId = createId()

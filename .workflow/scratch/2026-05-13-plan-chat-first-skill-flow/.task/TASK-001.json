@@ -1,0 +1,150 @@
+{
+  "id": "TASK-001",
+  "title": "实现 @mention Skill Invocation P0",
+  "description": "新增 src/services/skillBridge.ts，封装 @mention 检测、skill lookup、Runtime execute 流程。修改 src/stores/chat-send-controller.ts sendMessage() 入口处添加 @mention 检测 + 路由到 skill path。仅支持 @skillName 显式调用 + 内联参数 + TaskResult text 返回。不作 capability check、Param Card、NL trigger。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "feature",
+  "priority": "high",
+  "effort": "small",
+  "action": "新增 src/services/skillBridge.ts (~80 行) + 修改 src/stores/chat-send-controller.ts sendMessage() 入口加 @mention 检测路由 (~15 行)",
+  "status": "completed",
+  "completed_at": "2026-05-13T00:00:00.000Z",
+  "actual_duration": "2m",
+
+  "scope": "src/services/ + src/stores/",
+  "focus_paths": [
+    "src/services/",
+    "src/stores/"
+  ],
+
+  "read_first": [
+    "src/services/runtimeBridge.ts",
+    "src/services/skillRegistry.ts",
+    "src/services/capabilityValidator.ts",
+    "src/stores/chat-send-controller.ts",
+    "src/utils/buildAssistantMessage.ts",
+    "src/types/skill.ts"
+  ],
+
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "src/services/skillBridge.ts 文件存在",
+      "src/services/skillBridge.ts 包含 export function parseSkillInvocation(text: string): { skillName: string; skillInput: string } | null",
+      "src/services/skillBridge.ts 包含 export function resolveSkillByName(skillName: string, registry: SkillRegistry): Promise<SkillMeta | undefined>",
+      "src/services/skillBridge.ts 包含 export async function tryExecuteSkill(text: string, params: {...}): Promise<ChatMessage | null | undefined>",
+      "src/stores/chat-send-controller.ts sendMessage() 入口包含 tryExecuteSkill 调用",
+      "src/stores/chat-send-controller.ts 原始非-skill 流程未被修改",
+      "npx tsc --noEmit 编译通过"
+    ],
+    "verification": "grep -n 'parseSkillInvocation\\|resolveSkillByName\\|tryExecuteSkill' src/services/skillBridge.ts && grep -n 'tryExecuteSkill' src/stores/chat-send-controller.ts && npx tsc --noEmit 2>&1 | head -10",
+    "definition_of_done": "消息以 @skillName 开头时路由到 skill execute 路径；不以 @ 开头时走正常 chat 路径；两种路径互不干扰"
+  },
+
+  "files": [
+    {
+      "path": "src/services/skillBridge.ts",
+      "action": "create",
+      "target": "skillBridge module",
+      "change": "新建文件，export 3 个函数: parseSkillInvocation (regex 检测 @mention), resolveSkillByName (Registry 按 name/display_name 匹配), tryExecuteSkill (主入口，检测→lookup→execute→buildAssistantMessage)"
+    },
+    {
+      "path": "src/stores/chat-send-controller.ts",
+      "action": "modify",
+      "target": "sendMessage() entry",
+      "change": "在 sendMessage() 函数开头 initial guards 之后、Task 注册之前，添加 tryExecuteSkill 检测和路由。返回 undefined 时继续原有流程，返回 ChatMessage | null 时直接 return。"
+    }
+  ],
+
+  "implementation": [
+    "1. 创建 src/services/skillBridge.ts：",
+    "   a. parseSkillInvocation(text): 用 /^@(\\S+)\\s*(.*)/ 检测消息开头 @mention，返回 { skillName, skillInput } 或 null",
+    "   b. resolveSkillByName(skillName, registry): 调用 registry.getAllSkills()，按 skillId 或 displayName 精确匹配（忽略大小写）",
+    "   c. tryExecuteSkill(text, params): 主入口函数",
+    "      - 调用 parseSkillInvocation(text)，返回 null/undefined 则 return undefined（不是 skill invoke，继续正常流程）",
+    "      - 调用 resolveSkillByName(skillName, registry)，未找到则 return undefined（让正常 chat 处理）",
+    "      - 调用 params.createId() 生成 taskId",
+    "      - 调用 executeChatTask(taskId) → TaskResult",
+    "      - 调用 buildAssistantMessage(result.content, { id: params.createId() }) → ChatMessage",
+    "      - push 到 params.messages.value",
+    "      - return assistantMsg",
+    "      - catch error → params.handleSendError(e, ...) → return null",
+    "",
+    "2. 修改 src/stores/chat-send-controller.ts：",
+    "   a. import { tryExecuteSkill } from '@/services/skillBridge'",
+    "   b. 在 sendMessage() 函数中，draftSending 赋值之后、$taskId 创建之前，添加：",
+    "      const skillMsg = await tryExecuteSkill(text, { ... })",
+    "      if (skillMsg !== undefined) return skillMsg",
+    "   c. 传给 tryExecuteSkill 的 params 从 controller params 中提取：createId, msgSvc（仅用于类型兼容，暂不使用）, messages, sending, draftSending, handleSendError",
+    "",
+    "3. 运行 npx tsc --noEmit 验证编译",
+    "",
+    "4. 运行现有测试确认无回归"
+  ],
+
+  "test": {
+    "commands": [
+      "npx tsc --noEmit 2>&1 | head -10",
+      "npx vitest run --reporter=verbose 2>&1 | tail -20"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "TypeScript 编译通过",
+      "现有测试全部通过",
+      "grep 确认 3 个新 export 函数存在",
+      "grep 确认 sendMessage() 入口有 tryExecuteSkill 调用"
+    ]
+  },
+
+  "reference": {
+    "pattern": "runtimeBridge.ts — 纯函数 export，内部 useRuntimeStore() 获取 store 实例；chat-send-controller.ts — 依赖注入 + D1 auto-title 内联模式",
+    "files": [
+      "src/services/runtimeBridge.ts",
+      "src/stores/chat-send-controller.ts"
+    ],
+    "examples": [
+      "runtimeBridge.ts:77 — executeChatTask(taskId) 封装完整执行生命周期",
+      "chat-send-controller.ts:196-225 — execMode === 'runtime' 分支的 try-catch 错误处理模式"
+    ]
+  },
+
+  "rationale": {
+    "chosen_approach": "新增 skillBridge.ts 作为独立 bridge 层，与 runtimeBridge.ts 同级。tryExecuteSkill 返回 undefined（非 skill invoke）/ ChatMessage（成功）/ null（失败）三态，与 sendMessage 的 ChatMessage | null 返回类型兼容。sendMessage 只需加 ~5 行检测路由。",
+    "decision_factors": [
+      "最小改动：skillBridge.ts ~80 行 + controller ~5-10 行",
+      "零侵入：不改 Runtime Kernel、runtimeBridge、buildAssistantMessage、capabilityValidator",
+      "可测试：3 个纯函数 + 1 个主流程，依赖可 mock",
+      "可扩展：后续 capability check、Param Card 可加在 tryExecuteSkill 流程中"
+    ],
+    "tradeoffs": "P0 跳过 capability check — 安全性依赖 Runtime 自身错误处理。正式环境需补 capability check。"
+  },
+
+  "risks": [
+    "SkillRegistry 的 getAllSkills() 可能返回空（skills/ 目录不存在）— 缓解：resolveSkillByName 返回 undefined，tryExecuteSkill return undefined，回退到正常 chat",
+    "executeChatTask 返回的 TaskResult 可能不是 text kind — 缓解：当前 TaskResult 只有 { kind: 'text' }，未来扩展时 skillBridge 需加类型守卫"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["@mention skill invocation"],
+    "affected_components": ["skillBridge.ts (new)", "chat-send-controller.ts"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-001"]
+  },
+
+  "meta": {
+    "estimated_time": "30m",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}
