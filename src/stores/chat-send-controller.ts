@@ -201,6 +201,21 @@ export function createChatSendController(params: {
           })
           messages.value.push(assistantMsg)
           void persistMessage(assistantMsg, sessionId).catch(() => {})
+
+          // D1: Auto-title suggestion — 复用 WS path 的 suggestSessionTitle 机制
+          const shouldSuggestTitle = !!pendingSuggestedTitleExpectation.value[sessionId]
+          setPendingSuggestedTitleExpectation(sessionId, null)
+          void (async () => {
+            if (shouldSuggestTitle) {
+              const titleSync = pendingAutoTitleSync.get(sessionId)
+              if (titleSync) await titleSync
+              const result = await msgSvc.suggestSessionTitle?.(sessionId, '')
+              if (result?.updated && result.title) {
+                setLocalSessionTitle(sessionId, result.title)
+              }
+            }
+          })()
+
           return assistantMsg
         } catch (e) {
           // executeChatTask 内部已处理 TaskStore fail + Runtime timeline
