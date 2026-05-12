@@ -220,6 +220,7 @@ export const useChatStore = defineStore('chat', () => {
     storePendingApproval: approvalController.storePendingApproval,
     streamHandles: runtime.streamHandles,
     sending,
+    execMode,
   })
 
   const facadeActions = createChatFacadeActions({

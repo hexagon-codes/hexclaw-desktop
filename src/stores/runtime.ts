@@ -10,7 +10,7 @@
 
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import type { Task, TaskOutput, TaskError, RuntimeContext, ContextSummary } from '@/types'
+import type { Task, TaskOutput, TaskResult, TaskError, RuntimeContext, ContextSummary } from '@/types'
 import type { RuntimeEvent, RuntimeEventType } from '@/types/timeline'
 import type { ContextAwareExecutor } from '@/services/taskExecutor'
 import { ContextManager } from '@/services/contextManager'
@@ -335,6 +335,12 @@ export const useRuntimeStore = defineStore('runtime', () => {
   function getContextSummary(taskId: string): ContextSummary | undefined {
     const ctx = manager.getContext(taskId)
     return ctx ? toSummary(ctx) : undefined
+  }
+
+  /** 获取执行结果 — query getter，非 lifecycle operation */
+  function getExecutionResult(taskId: string): TaskResult | undefined {
+    const ctx = manager.getContext(taskId)
+    return ctx?.execution?.output
   }
 
   // ── 执行闭环 ────────────────────────────────────────
@@ -801,6 +807,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     executeTask,
     getActiveContext,
     getContextSummary,
+    getExecutionResult,
     getTaskTimeline,
     getRecentEvents,
     getEventsByType,

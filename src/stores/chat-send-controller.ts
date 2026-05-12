@@ -3,7 +3,8 @@ import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { Task } from '@/types'
 import { useTaskStore } from '@/stores/tasks'
-import { registerChatTask, completeChatTask, failChatTask } from '@/services/runtimeBridge'
+import { registerChatTask, completeChatTask, failChatTask, executeChatTask } from '@/services/runtimeBridge'
+import { buildAssistantMessage } from '@/utils/buildAssistantMessage'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
@@ -22,6 +23,7 @@ export function createChatSendController(params: {
   agentRole: Ref<string>
   thinkingEnabled: Ref<boolean>
   hasCustomTitle: Ref<boolean>
+  execMode: Ref<import('@/types').ExecMode>
   sessions: Ref<import('@/types').ChatSession[]>
   msgSvc: MessageServiceModule
   chatSvc: ChatServiceModule
@@ -71,6 +73,7 @@ export function createChatSendController(params: {
     agentRole,
     thinkingEnabled,
     hasCustomTitle,
+    execMode,
     sessions,
     msgSvc,
     chatSvc,
@@ -188,6 +191,24 @@ export function createChatSendController(params: {
 
       // 持久化与发送并行，失败不阻塞（persistMessage 内部已有日志）
       void persistMessage(userMessage, sessionId).catch(() => {})
+
+      // ── Runtime 执行分支 ──────────────────────────────
+      if (execMode.value === 'runtime') {
+        try {
+          const result = await executeChatTask($taskId)
+          const assistantMsg = buildAssistantMessage(result.content, {
+            id: createId(),
+          })
+          messages.value.push(assistantMsg)
+          void persistMessage(assistantMsg, sessionId).catch(() => {})
+          return assistantMsg
+        } catch (e) {
+          // executeChatTask 内部已处理 TaskStore fail + Runtime timeline
+          handleSendError(e, sessionId, sending, draftSending)
+          return null
+        }
+      }
+
       const $result = await deliveryController.deliverMessage({
         backendText,
         sessionId,

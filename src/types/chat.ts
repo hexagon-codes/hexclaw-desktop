@@ -167,4 +167,4 @@ export interface Artifact {
 export type ChatMode = 'chat' | 'agent' | 'research'
 
 /** 执行模式 */
-export type ExecMode = 'craft' | 'auto'
+export type ExecMode = 'craft' | 'auto' | 'runtime'

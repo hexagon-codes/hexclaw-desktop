@@ -1,7 +1,6 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
-import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
-import { extractThinkTags } from '@/utils/think-tags'
+import { buildAssistantMessage } from '@/utils/buildAssistantMessage'
 import type { SessionStreamState } from './chat-stream-helpers'
 
 type MessageServiceModule = typeof import('@/services/messageService')
@@ -51,32 +50,24 @@ export function createChatStreamCompletionController(params: {
     sending?: Ref<boolean>
     draftSending?: Ref<boolean>
   }): ChatMessage {
-    const parsed = extractThinkTags(args.content || '')
-    const finalContent = parsed.content
-    const rawReasoning = parsed.reasoning
-      ? (args.reasoning ? args.reasoning + '\n' + parsed.reasoning : parsed.reasoning)
-      : (args.reasoning || undefined)
-    const finalReasoning = rawReasoning ? normalizeAssistantReasoning(rawReasoning) || undefined : undefined
-
+    // ── 从 stream state 计算 thinking_duration（impure，留在 controller） ──
     const streamState = activeStreams.value[args.sessionId]
     const endTime = streamState?.reasoningEndTime || Date.now()
     const thinkingDuration = streamState?.reasoningStartTime
       ? Math.round((endTime - streamState.reasoningStartTime) / 1000)
       : 0
-    const metadata = { ...args.metadata } as Record<string, unknown>
-    if (thinkingDuration > 0) metadata.thinking_duration = thinkingDuration
 
-    const assistantMessage: ChatMessage = {
+    // ── 纯函数：构建 ChatMessage ──
+    const assistantMessage = buildAssistantMessage(args.content, {
       id: createId(),
-      role: 'assistant',
-      content: getAssistantDisplayContent(finalContent, finalReasoning),
-      timestamp: new Date().toISOString(),
-      reasoning: finalReasoning,
-      metadata,
-      tool_calls: args.toolCalls,
-      agent_name: args.agentName,
-    }
+      reasoning: args.reasoning,
+      metadata: args.metadata,
+      thinkingDuration,
+      toolCalls: args.toolCalls,
+      agentName: args.agentName,
+    })
 
+    // ── Side effects（impure） ──
     appendMessageToSession(args.sessionId, assistantMessage)
     bumpLocalSession(args.sessionId)
 
@@ -106,7 +97,7 @@ export function createChatStreamCompletionController(params: {
 
     msgSvc.touchSession(args.sessionId).catch(() => {})
     if (currentSessionId.value === args.sessionId) {
-      extractArtifacts(finalContent, assistantMessage.id)
+      extractArtifacts(assistantMessage.content, assistantMessage.id)
     }
     resetSessionStream(args.sessionId, args.sending, args.draftSending)
     return assistantMessage
