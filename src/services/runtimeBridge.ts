@@ -16,6 +16,27 @@
 import { useRuntimeStore } from '@/stores/runtime'
 import { useTaskStore } from '@/stores/tasks'
 import type { Task, TaskResult, TaskOutput, TaskError } from '@/types'
+import { createApiError } from '@/utils/errors'
+import type { ApiError } from '@/types/error'
+
+/** Bridge 层错误码 */
+export type BridgeErrorCode = 'EXECUTION_FAILED' | 'NO_OUTPUT'
+
+/** Bridge 层结构化错误 */
+export interface BridgeError {
+  code: BridgeErrorCode
+  message: string
+  cause?: unknown
+}
+
+/** BridgeError -> ApiError 映射 */
+export function bridgeErrorToApiError(err: BridgeError): ApiError {
+  const codeMap: Record<BridgeErrorCode, import('@/types/error').ApiErrorCode> = {
+    EXECUTION_FAILED: 'SERVER_ERROR',
+    NO_OUTPUT: 'SERVER_ERROR',
+  }
+  return createApiError(codeMap[err.code], err.message, undefined, err.cause)
+}
 
 /**
  * 为 chat task 注册 RuntimeContext。
@@ -63,7 +84,11 @@ export async function executeChatTask(taskId: string): Promise<TaskResult> {
 
     // Bridge responsibility: extract result
     const result = runtime.getExecutionResult(taskId)
-    if (!result) throw new Error('执行完成但无输出结果')
+    if (!result) {
+      const bridgeErr: BridgeError = { code: 'NO_OUTPUT', message: '执行完成但无输出结果' }
+      taskStore.failTask(taskId, { code: bridgeErr.code, message: bridgeErr.message })
+      throw bridgeErrorToApiError(bridgeErr)
+    }
 
     // Runtime-owned completion: bridge 代理 TaskStore
     taskStore.completeTask(taskId, {
@@ -75,8 +100,9 @@ export async function executeChatTask(taskId: string): Promise<TaskResult> {
   } catch (e) {
     const msg = (e as Error).message
     // Runtime 路径下，Runtime 已写入 execution.failed timeline
-    // Bridge 代理 TaskStore fail
-    taskStore.failTask(taskId, { code: 'EXECUTION_FAILED', message: msg })
-    throw e
+    // Bridge 代理 TaskStore fail（不重复 failChatTask，timeline 已写入）
+    const bridgeErr: BridgeError = { code: 'EXECUTION_FAILED', message: msg }
+    taskStore.failTask(taskId, { code: bridgeErr.code, message: bridgeErr.message })
+    throw bridgeErrorToApiError(bridgeErr)
   }
 }

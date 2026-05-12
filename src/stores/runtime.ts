@@ -431,9 +431,11 @@ export const useRuntimeStore = defineStore('runtime', () => {
         taskId,
         payload: { summary: message },
       })
-    }
 
-    revision.value++
+      throw e
+    } finally {
+      revision.value++
+    }
   }
 
   /** 根据 TaskType resolve ContextAwareExecutor */

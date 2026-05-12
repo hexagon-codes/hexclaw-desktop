@@ -48,7 +48,7 @@ vi.mock('@/stores/tasks', () => ({
 // Subject
 // ════════════════════════════════════════════════════════════
 
-import { executeChatTask } from '@/services/runtimeBridge'
+import { executeChatTask, bridgeErrorToApiError } from '@/services/runtimeBridge'
 
 describe('executeChatTask', () => {
   beforeEach(() => {
@@ -129,6 +129,15 @@ describe('executeChatTask', () => {
         message: '执行完成但无输出结果',
       })
     })
+
+    it('executeTask 失败时抛出 ApiError（code=SERVER_ERROR）', async () => {
+      mockExecuteTask.mockRejectedValue(new Error('LLM 服务不可用'))
+
+      await expect(executeChatTask('task-api-err')).rejects.toMatchObject({
+        code: 'SERVER_ERROR',
+        message: 'LLM 服务不可用',
+      })
+    })
   })
 
   describe('契约约束', () => {
@@ -140,5 +149,25 @@ describe('executeChatTask', () => {
 
       expect(mockTaskStoreEnqueue).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('bridgeErrorToApiError', () => {
+  it('maps EXECUTION_FAILED to SERVER_ERROR', () => {
+    const result = bridgeErrorToApiError({
+      code: 'EXECUTION_FAILED',
+      message: '执行器内部错误',
+    })
+    expect(result.code).toBe('SERVER_ERROR')
+    expect(result.message).toBe('执行器内部错误')
+  })
+
+  it('maps NO_OUTPUT to SERVER_ERROR', () => {
+    const result = bridgeErrorToApiError({
+      code: 'NO_OUTPUT',
+      message: '执行完成但无输出结果',
+    })
+    expect(result.code).toBe('SERVER_ERROR')
+    expect(result.message).toBe('执行完成但无输出结果')
   })
 })
