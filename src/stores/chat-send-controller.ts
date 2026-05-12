@@ -3,6 +3,7 @@ import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { Task } from '@/types'
 import { useTaskStore } from '@/stores/tasks'
+import { registerChatTask, completeChatTask, failChatTask } from '@/services/runtimeBridge'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
@@ -157,6 +158,7 @@ export function createChatSendController(params: {
       input: { type: 'chat', payload: { text, backendText: options?.backendText, attachments } },
     }
     $taskStore.enqueue($chatTask)
+    registerChatTask($chatTask)
 
     try {
       const backendText = options?.backendText ?? text
@@ -170,6 +172,8 @@ export function createChatSendController(params: {
       }
       messages.value.push(userMessage)
       const sessionId = await ensureSession()
+      $chatTask.sessionId = sessionId
+      $chatTask.metadata = { source: 'chat', createdAt: new Date().toISOString() }
       // ensureSession 完成后立即释放 draftSending，不再阻塞后续发送
       draftSending.value = false
       refreshSendingState(sending, draftSending)
@@ -199,6 +203,10 @@ export function createChatSendController(params: {
           result: $result,
           artifacts: $result.tool_calls ? [$result.tool_calls] : undefined,
         })
+        completeChatTask($taskId, {
+          result: $result,
+          artifacts: $result.tool_calls ? [$result.tool_calls] : undefined,
+        })
       } else {
         $taskStore.cancelTask($taskId)
       }
@@ -206,6 +214,7 @@ export function createChatSendController(params: {
       return $result
     } catch (e) {
       $taskStore.failTask($taskId, { code: 'SEND_ERROR', message: String(e) })
+      failChatTask($taskId, { code: 'SEND_ERROR', message: String(e) })
       throw e
     } finally {
       draftSending.value = false

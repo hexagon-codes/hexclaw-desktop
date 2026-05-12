@@ -27,6 +27,10 @@ export interface WorkspaceTaskProjection {
   activityState?: string   // 当无真实 progress 时使用："executing" / "waiting" / "finalizing"
   hasError: boolean
   hasOutputs: boolean
+  /** Navigation metadata — 非语义字段，仅供跨视图导航 */
+  navigation?: {
+    chatSessionId?: string
+  }
 }
 
 // ─── Context Detail 投影 ────────────────────────────
@@ -45,6 +49,10 @@ export interface WorkspaceContextProjection {
     outputSummary?: string    // ≤100 chars
     errorCode?: string
     errorMessage?: string
+    /** Navigation metadata — 非语义字段，仅供跨视图导航 */
+    navigation?: {
+      chatSessionId?: string
+    }
   }
 
   /** UX section — 注入的经验包 */

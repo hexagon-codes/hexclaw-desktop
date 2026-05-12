@@ -1585,6 +1585,7 @@ export default {
     emptyDesc: 'Send a message or trigger automation to see tasks here',
     noSelection: 'Select a Task to view details',
     taskEnded: 'This task has ended',
+    goToChat: 'Go to Chat',
     sections: {
       task: 'Task',
       skill: 'Skill',

@@ -16,11 +16,14 @@
  */
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
+import { MessageCircle } from 'lucide-vue-next'
 import type { WorkspaceContextProjection } from '@/types/workspace'
 import ContextCard from '@/components/inspector/ContextCard.vue'
 import KeyValueRow from '@/components/inspector/KeyValueRow.vue'
 
 const { t } = useI18n()
+const router = useRouter()
 
 const props = defineProps<{
   projection: WorkspaceContextProjection | null
@@ -84,6 +87,10 @@ function stateColor(state: string): string {
   }
   return map[state] || 'var(--hc-text-muted)'
 }
+
+function navigateToChat(sessionId: string) {
+  router.push({ path: '/chat', query: { sessionId } })
+}
 </script>
 
 <template>
@@ -96,6 +103,14 @@ function stateColor(state: string): string {
     <template v-else>
       <!-- Task section -->
       <ContextCard :eyebrow="t('workspace.sections.task')" :title="projection.task.goal || projection.taskId.slice(0, 8)">
+        <button
+          v-if="projection.task.navigation?.chatSessionId"
+          class="context-detail__nav-btn"
+          @click="navigateToChat(projection.task.navigation.chatSessionId)"
+        >
+          <MessageCircle :size="12" />
+          <span>{{ t('workspace.goToChat') }}</span>
+        </button>
         <KeyValueRow
           :label="t('workspace.field.status')"
           :value="projection.task.status"
@@ -249,6 +264,25 @@ function stateColor(state: string): string {
 .context-detail__empty-text {
   font-size: 13px;
   color: var(--hc-text-muted);
+}
+
+/* Nav button */
+.context-detail__nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--hc-accent);
+  border-radius: var(--hc-radius-sm, 6px);
+  background: transparent;
+  color: var(--hc-accent);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.context-detail__nav-btn:hover {
+  background: var(--hc-accent-subtle, rgba(0, 122, 255, 0.08));
 }
 
 /* Health toggle */

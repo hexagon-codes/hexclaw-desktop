@@ -12,7 +12,8 @@
  * - 不引入新 Pinia store
  */
 
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+import { useRoute, onBeforeRouteUpdate } from 'vue-router'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useTaskStore } from '@/stores/tasks'
 import { projectTask, projectContext, projectTimeline } from '@/services/workspaceProjector'
@@ -21,8 +22,25 @@ import type { WorkspaceTaskProjection, WorkspaceContextProjection, TimelineItemP
 export function useWorkspace() {
   const runtimeStore = useRuntimeStore()
   const taskStore = useTaskStore()
+  const route = useRoute()
 
   const selectedTaskId = ref<string | null>(null)
+
+  // ── Route sync（route query 仅作 navigation hint，非 runtime selection authority） ──
+  function syncSelectedTaskFromRoute() {
+    const taskId = route.query.taskId
+    if (typeof taskId === 'string' && taskId) {
+      selectTask(taskId)
+    }
+  }
+
+  onMounted(() => {
+    syncSelectedTaskFromRoute()
+  })
+
+  onBeforeRouteUpdate(() => {
+    syncSelectedTaskFromRoute()
+  })
 
   // ── Task Projections（主视图） ────────────────────
 
@@ -56,7 +74,13 @@ export function useWorkspace() {
     if (!selectedTaskId.value) return null
     const ctx = runtimeStore.getActiveContext(selectedTaskId.value)
     if (!ctx) return null
-    return projectContext(ctx)
+    const projection = projectContext(ctx)
+    // 从 TaskStore 注入 navigation metadata（projector 不接触 sessionId）
+    const task = taskStore.getTask(selectedTaskId.value)
+    if (task?.sessionId) {
+      projection.task.navigation = { chatSessionId: task.sessionId }
+    }
+    return projection
   })
 
   // ── Selected Timeline Projection（次级视图） ───────

@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { Search, Download, PanelRightOpen, MessageSquarePlus } from 'lucide-vue-next'
+import { useRouter } from 'vue-router'
+import { Search, Download, PanelRightOpen, MessageSquarePlus, Monitor } from 'lucide-vue-next'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import ChatExportMenu from '@/components/chat/ChatExportMenu.vue'
 import { useChatStore } from '@/stores/chat'
 import { useAppStore } from '@/stores/app'
+import { useTaskStore } from '@/stores/tasks'
 import { ref, computed } from 'vue'
 
 const { t } = useI18n()
+const router = useRouter()
 const chatStore = useChatStore()
 const appStore = useAppStore()
 
@@ -19,6 +22,21 @@ const showExport = ref(false)
 const emit = defineEmits<{
   search: []
 }>()
+
+function navigateToWorkspace() {
+  const taskStore = useTaskStore()
+  // 优先级：pending > running > 最近 completed/failed/cancelled
+  // 注：chat task 不走 dequeue → activeTasks 路径，因此需要从 pending 和 completed 中查找
+  const chatTask =
+    taskStore.pendingTasks.find(t => t.type === 'chat') ??
+    taskStore.activeTasks.find(t => t.type === 'chat') ??
+    [...taskStore.completedTasks].reverse().find(t => t.type === 'chat')
+  if (chatTask) {
+    router.push({ path: '/workspace', query: { taskId: chatTask.id } })
+  } else {
+    router.push('/workspace')
+  }
+}
 
 const segments = computed(() => [
   { key: 'chat' as const, label: t('chat.modeChat') },
@@ -62,6 +80,12 @@ defineProps<{
 
       <button class="hc-chat__toolbar-btn" :class="{ 'hc-chat__toolbar-btn--active': showSessions }" :title="t('chat.toggleSessions')" @click="showSessions = !showSessions">
         <MessageSquarePlus :size="14" />
+      </button>
+
+      <span class="hc-chat__toolbar-sep" />
+
+      <button class="hc-chat__toolbar-btn" :title="t('nav.workspace')" @click="navigateToWorkspace">
+        <Monitor :size="14" />
       </button>
 
       <button class="hc-chat__toolbar-btn" :title="t('chat.contextPanel')" @click="appStore.toggleDetailPanel">

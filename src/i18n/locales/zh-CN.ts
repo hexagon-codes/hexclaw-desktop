@@ -1589,6 +1589,7 @@ export default {
     emptyDesc: '发送消息或触发自动化后，任务将显示在此处',
     noSelection: '选择一个 Task 查看详情',
     taskEnded: '该任务已结束',
+    goToChat: '返回对话',
     sections: {
       task: '任务',
       skill: '技能',

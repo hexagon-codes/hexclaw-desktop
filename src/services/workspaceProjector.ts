@@ -79,6 +79,7 @@ export function projectTask(
     activityState: task.progress === undefined ? inferActivityState(task.status) : undefined,
     hasError: task.status === 'failed',
     hasOutputs: task.output !== undefined,
+    navigation: task.sessionId ? { chatSessionId: task.sessionId } : undefined,
   }
 }
 
