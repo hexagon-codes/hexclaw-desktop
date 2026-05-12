@@ -1,5 +1,6 @@
-import type { Task, TaskOutput, TaskStatus, TaskType } from '@/types'
-import type { RuntimeContext } from '@/types'
+import type { Task, TaskOutput, TaskStatus, TaskType, RuntimeContext } from '@/types'
+import { ChatAgentExecutor } from './agentAdapter'
+import { createChatProvider } from './providerAdapter'
 
 /**
  * Task 执行器接口
@@ -166,16 +167,16 @@ export function createExecutor(type: TaskType): TaskExecutor {
   }
 }
 
-/** 根据 TaskType 创建 Context-aware Executor 实例 */
+/** 根据 TaskType 创建对应的 Context-aware Executor 实例 */
 export function createContextAwareExecutor(type: TaskType): ContextAwareExecutor {
   switch (type) {
     case 'chat':
-      return new ChatTaskExecutor()
+      return new ChatAgentExecutor(createChatProvider())
     case 'agent':
       return new AgentTaskExecutor()
     case 'skill':
       return new SkillTaskExecutor()
     default:
-      return new ChatTaskExecutor()
+      return new ChatAgentExecutor(createChatProvider())
   }
 }

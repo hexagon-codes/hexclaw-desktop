@@ -25,7 +25,7 @@ export type {
 } from './memory'
 export type { McpServer, McpTool } from './mcp'
 export type { Skill, ClawHubSkill, SkillStatusUpdateResult } from './skill'
-export type { CronJob, CronJobInput, Task, TaskInput, TaskOutput, TaskStatus, TaskType, TaskMetadata, TaskError } from './task'
+export type { CronJob, CronJobInput, Task, TaskInput, TaskOutput, TaskResult, TaskStatus, TaskType, TaskMetadata, TaskError } from './task'
 export type {
   ContextLayerStatus, SystemLayer, SkillLayer, TaskLayer, ExecutionLayer, MemoryLayer,
   RuntimeContext, ContextSummary,

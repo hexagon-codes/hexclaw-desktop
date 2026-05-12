@@ -105,18 +105,20 @@ export const useRuntimeStore = defineStore('runtime', () => {
   }
 
   /**
-   * 完成 Task：更新 Task Layer output/status，卸载 Execution Layer。
+   * 完成 Task：更新 Execution Layer output/status，卸载 Execution Layer。
    * 不销毁 Context（保留 System + Task + Memory 供后续查询）。
+   *
+   * Execution Layer 负责 execution result，Task Layer 只负责 intent/identity/routing。
    */
   function completeContextForTask(taskId: string, output: TaskOutput): void {
     const ctx = manager.getContext(taskId)
     if (!ctx) return
-    if (ctx.task) {
-      ctx.task.output = JSON.parse(JSON.stringify(output))
-      ctx.task.status = 'completed'
-    }
     if (ctx.execution) {
+      ctx.execution.output = output.result
       ctx.execution.state = 'completed'
+    }
+    if (ctx.task) {
+      ctx.task.status = 'completed'
     }
     loader.unloadStaleLayers(ctx)
     manager.recalcSize(taskId)
@@ -369,7 +371,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     writeTimelineEvent({ type: 'execution.started', taskId })
 
     try {
-      // 4. execute（stub — 不接入真实 API）
+      // 4. execute
       const output = await executor.executeWithContext(
         { id: taskId, type: ctx.taskType } as Task,
         ctx,
@@ -383,8 +385,9 @@ export const useRuntimeStore = defineStore('runtime', () => {
       ctx.execution!.completedAt = new Date().toISOString()
       ctx.execution!.currentStage = 'finalizing'
 
+      // Execution Layer 负责 execution result，Task Layer 只负责 intent/identity/routing
+      ctx.execution!.output = output.result
       if (ctx.task) {
-        ctx.task.output = JSON.parse(JSON.stringify(output))
         ctx.task.status = 'completed'
       }
 

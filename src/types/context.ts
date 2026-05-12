@@ -9,7 +9,7 @@
 
 import type { CapabilityName } from './capability'
 import type { ExecutionState, ExecutionStage, ExecutionIntermediateState } from './execution'
-import type { TaskType, TaskStatus, TaskInput, TaskOutput, TaskError, TaskMetadata } from './task'
+import type { TaskType, TaskStatus, TaskInput, TaskResult, TaskError, TaskMetadata } from './task'
 import type { AssetCollection } from './asset'
 
 // ─── 层状态 ─────────────────────────────────────────────
@@ -84,7 +84,6 @@ export interface TaskLayer {
   status: TaskStatus
   goal?: string                     // 从 input 提炼的任务目标
   input: TaskInput
-  output?: TaskOutput
   progress?: number
   error?: TaskError
   metadata?: TaskMetadata
@@ -108,6 +107,8 @@ export interface ExecutionLayer {
   completedAt?: string
   /** 轻量中间状态（仅 progress + lastUpdate） */
   intermediateState: ExecutionIntermediateState
+  /** 执行输出结果 — Execution Layer 负责，Task Layer 只负责 intent/identity/routing */
+  output?: TaskResult
   /** 执行错误（仅 failed 时） */
   error?: {
     code: string

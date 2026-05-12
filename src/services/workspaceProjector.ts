@@ -133,8 +133,8 @@ function projectTaskSection(ctx: RuntimeContext): WorkspaceContextProjection['ta
     inputSummary: t?.input?.payload
       ? truncate(JSON.stringify(t.input.payload), 100)
       : undefined,
-    outputSummary: t?.output?.result !== undefined
-      ? truncate(JSON.stringify(t.output.result), 100)
+    outputSummary: ctx.execution?.output?.content
+      ? truncate(ctx.execution.output.content, 100)
       : undefined,
     errorCode: t?.error?.code,
     errorMessage: t?.error?.message,
@@ -495,34 +495,23 @@ export function projectTaskResult(
 ): TaskResultProjection | null {
   const items: ResultItemProjection[] = []
 
-  // ── Primary result：TaskOutput.result ──────────
-  const output = task.output
-  if (output) {
-    if (typeof output.result === 'string') {
+  // ── Primary result：execution.output or TaskOutput.result ──
+  const primaryResult = ctx?.execution?.output ?? task.output?.result
+  if (primaryResult) {
+    if (primaryResult.kind === 'text') {
       items.push({
         id: `${task.id}-primary`,
         kind: 'text',
         group: 'primary',
-        title: truncate(output.result, 80),
-        source: 'text',
-        status: task.status === 'completed' ? 'valid' : 'unknown',
-      })
-    } else if (output.result && typeof output.result === 'object') {
-      // 不做深度解析，fallback text summary
-      items.push({
-        id: `${task.id}-primary`,
-        kind: 'text',
-        group: 'primary',
-        title: '任务已完成',
-        description: truncate(JSON.stringify(output.result), 100),
+        title: truncate(primaryResult.content, 80),
         source: 'text',
         status: task.status === 'completed' ? 'valid' : 'unknown',
       })
     }
 
     // ── Supporting outputs：artifacts ──────────────
-    if (output.artifacts && output.artifacts.length > 0) {
-      output.artifacts.forEach((a, i) => {
+    if (task.output?.artifacts && task.output.artifacts.length > 0) {
+      task.output.artifacts.forEach((a, i) => {
         items.push({
           id: `${task.id}-artifact-${i}`,
           kind: 'tool_call',

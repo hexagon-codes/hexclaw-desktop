@@ -200,11 +200,11 @@ export function createChatSendController(params: {
       // ── Task 完成回调 ──────────────────────────────────
       if ($result) {
         $taskStore.completeTask($taskId, {
-          result: $result,
+          result: { kind: 'text', content: $result.content ?? '' },
           artifacts: $result.tool_calls ? [$result.tool_calls] : undefined,
         })
         completeChatTask($taskId, {
-          result: $result,
+          result: { kind: 'text', content: $result.content ?? '' },
           artifacts: $result.tool_calls ? [$result.tool_calls] : undefined,
         })
       } else {

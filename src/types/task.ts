@@ -34,9 +34,13 @@ export interface TaskInput {
   resources?: Record<string, unknown>
 }
 
+/** Task Result — 最小 discriminated union，当前仅允许 text */
+export type TaskResult =
+  | { kind: 'text'; content: string }
+
 /** Task 输出 */
 export interface TaskOutput {
-  result: unknown
+  result: TaskResult
   artifacts?: unknown[]
   usage?: Record<string, unknown>
 }

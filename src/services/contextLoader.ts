@@ -35,7 +35,6 @@ export class ContextLoader {
         ? String((task.input.payload as Record<string, unknown>).text ?? '')
         : undefined,
       input: JSON.parse(JSON.stringify(task.input)),
-      output: task.output ? JSON.parse(JSON.stringify(task.output)) : undefined,
       progress: task.progress,
       error: task.error ? { ...task.error } : undefined,
       metadata: task.metadata ? { ...task.metadata } : undefined,
