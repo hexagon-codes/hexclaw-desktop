@@ -179,6 +179,15 @@ export const useRuntimeStore = defineStore('runtime', () => {
     if (!ctx) return
     if (ctx.skill && ctx.layerStates['skill'] === 'loaded') return
 
+    // ── 设置 loading 状态 ──
+    if (!ctx.skill) {
+      ctx.skill = {
+        loadedSections: { markdown: 'unloaded', references: 'unloaded' },
+      }
+    }
+    ctx.skill.loadedSections.markdown = 'loading'
+    ctx.layerStates['skill'] = 'loading'
+
     let skillPkg
     try {
       skillPkg = await skillLoader.loadSkill(skillId, {
@@ -186,11 +195,19 @@ export const useRuntimeStore = defineStore('runtime', () => {
         loadReferences: false,
       })
     } catch (e) {
+      // ── Skill Package 加载失败 → error 状态 ──
+      if (ctx.skill) {
+        ctx.skill.loadedSections.markdown = 'error'
+      }
+      ctx.layerStates['skill'] = 'error'
+
       writeTimelineEvent({
         type: 'skill.loadFailed',
         taskId,
         payload: { summary: `Skill "${skillId}" 加载失败: ${(e as Error).message}` },
       })
+
+      revision.value++
       throw e
     }
 
@@ -225,6 +242,60 @@ export const useRuntimeStore = defineStore('runtime', () => {
     writeTimelineEvent({ type: 'skill.loaded', taskId })
 
     revision.value++
+  }
+
+  /**
+   * 卸载当前 Task 的 Skill Layer。
+   *
+   * 仅清理该 task 的 ctx.skill 和 layerStates['skill']。
+   * 不销毁 Context，不修改其他 Layer。
+   * 不做 watch / 自动触发。
+   */
+  function unloadSkillForTask(taskId: string): void {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return
+    if (!ctx.skill && ctx.layerStates['skill'] !== 'loaded') return
+
+    ctx.skill = undefined
+    ctx.layerStates['skill'] = 'unloaded'
+    manager.recalcSize(taskId)
+
+    writeTimelineEvent({
+      type: 'skill.unloaded',
+      taskId,
+      payload: { summary: 'Skill 已卸载' },
+    })
+
+    revision.value++
+  }
+
+  /**
+   * 重新加载 Skill。
+   *
+   * 静默清理 ctx.skill → 调用 loadSkillForTask。
+   * reload 是 single semantic operation：
+   * - 不 emit skill.unloaded（仅显式 unloadSkillForTask 记录）
+   * - 不单独 revision++
+   * - 成功后只产生 skill.loaded + 1 次 revision++
+   * - 失败时 ctx.skill 进入 error placeholder（loadedSections.markdown='error'），
+   *   layerStates['skill']='error'，产生 skill.loadFailed timeline event，revision++
+   * - 失败不会恢复旧 skill
+   *
+   * @throws 同 loadSkillForTask
+   */
+  async function reloadSkillForTask(taskId: string, skillId: string): Promise<void> {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return
+
+    // 静默清理（不 emit timeline / 不 revision++）
+    if (ctx.skill || ctx.layerStates['skill'] === 'loaded') {
+      ctx.skill = undefined
+      ctx.layerStates['skill'] = 'unloaded'
+      manager.recalcSize(taskId)
+    }
+
+    // guard 已失效（ctx.skill === undefined），正常调用
+    await loadSkillForTask(taskId, skillId)
   }
 
   // ── 层生命周期 ──────────────────────────────────────
@@ -720,6 +791,8 @@ export const useRuntimeStore = defineStore('runtime', () => {
     failContextForTask,
     destroyContext,
     loadSkillForTask,
+    unloadSkillForTask,
+    reloadSkillForTask,
     loadContextLayer,
     unloadContextLayer,
     executeTask,

@@ -21,6 +21,15 @@ import { BaseDirectory } from '@tauri-apps/api/path'
 import type { SkillMeta, SkillPackage, SkillReference } from '@/types'
 import { estimateSize } from '@/utils/sizeEstimator'
 
+// ─── Error Helper ─────────────────────────────────────
+
+/** 构造带 code 的结构化错误，供 Recovery classifyFailure 识别 */
+function skillError(code: string, message: string): Error & { code: string } {
+  const err = new Error(message) as Error & { code: string }
+  err.code = code
+  return err
+}
+
 // ─── Options ─────────────────────────────────────────
 
 export interface SkillLoadOptions {
@@ -57,10 +66,21 @@ export class SkillLoader {
 
     // ── 1. 读取 meta（必选） ──────────────────────────
 
-    const raw = await readTextFile(`skills/${safeId}/skill.json`, {
-      baseDir: this.baseDir,
-    })
-    const parsed = JSON.parse(raw)
+    let raw: string
+    try {
+      raw = await readTextFile(`skills/${safeId}/skill.json`, {
+        baseDir: this.baseDir,
+      })
+    } catch {
+      throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${safeId}`)
+    }
+
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(raw)
+    } catch {
+      throw skillError('SKILL_PARSE_ERROR', `skill.json JSON 解析失败: skills/${safeId}`)
+    }
 
     const meta: SkillMeta = {
       skillId: safeId,
@@ -126,39 +146,39 @@ export class SkillLoader {
    */
   private sanitizeSkillId(skillId: string): string {
     if (!skillId || skillId.trim().length === 0) {
-      throw new Error(`[SkillLoader] 非法 skillId: 空字符串`)
+      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 空字符串')
     }
 
     const normalized = skillId.trim().toLowerCase()
 
     // 禁止反斜杠（禁止 Windows 路径分隔符）
     if (normalized.includes('\\')) {
-      throw new Error(`[SkillLoader] 非法 skillId: 禁止反斜杠 "\\"`)
+      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止反斜杠 "\\"')
     }
 
     // 禁止路径穿越
     if (normalized.includes('..')) {
-      throw new Error(`[SkillLoader] 非法 skillId: 禁止路径穿越 ".."`)
+      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止路径穿越 ".."')
     }
 
     // 禁止连续斜杠
     if (normalized.includes('//')) {
-      throw new Error(`[SkillLoader] 非法 skillId: 禁止连续斜杠 "//"`)
+      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止连续斜杠 "//"')
     }
 
     // 禁止绝对路径（/ 开头）
     if (normalized.startsWith('/')) {
-      throw new Error(`[SkillLoader] 非法 skillId: 禁止绝对路径`)
+      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止绝对路径')
     }
 
     // 禁止 Windows 绝对路径（如 c:）
     if (/^[a-z]:/.test(normalized)) {
-      throw new Error(`[SkillLoader] 非法 skillId: 禁止 Windows 盘符路径`)
+      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止 Windows 盘符路径')
     }
 
     // 仅允许 a-z 0-9 - _ /
     if (!/^[a-z0-9_/-]+$/.test(normalized)) {
-      throw new Error(`[SkillLoader] 非法 skillId: 仅允许 a-z、0-9、-、_、/`)
+      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 仅允许 a-z、0-9、-、_、/')
     }
 
     return normalized

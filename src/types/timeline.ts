@@ -35,6 +35,7 @@ export type RuntimeEventType =
   // ── Skill ──
   | 'skill.loaded'
   | 'skill.loadFailed'
+  | 'skill.unloaded'
   | 'capability.validated'
 
   // ── Budget ──
