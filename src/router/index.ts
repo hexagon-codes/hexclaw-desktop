@@ -10,6 +10,7 @@ const navRouteComponents = {
   agents: () => import('@/views/AgentsView.vue'),
   knowledge: () => import('@/views/KnowledgeCenterView.vue'),
   runtime: () => import('@/views/RuntimeView.vue'),
+  workspace: () => import('@/views/WorkspaceView.vue'),
   automation: () => import('@/views/AutomationView.vue'),
   integration: () => import('@/views/IntegrationView.vue'),
   logs: () => import('@/views/LogsView.vue'),

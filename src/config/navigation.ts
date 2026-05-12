@@ -6,6 +6,7 @@ import {
   Bot,
   BookOpen,
   Activity,
+  Monitor,
   Zap,
   Blocks,
   ScrollText,
@@ -98,6 +99,14 @@ export const navigationItems: NavItem[] = [
     i18nKey: 'nav.runtime',
     icon: Activity,
     keywords: 'runtime 任务 监控 task monitor',
+    group: 'core',
+  },
+  {
+    id: 'workspace',
+    path: '/workspace',
+    i18nKey: 'nav.workspace',
+    icon: Monitor,
+    keywords: 'workspace 工作区 任务 状态 观察 task status observe',
     group: 'core',
   },
   {
