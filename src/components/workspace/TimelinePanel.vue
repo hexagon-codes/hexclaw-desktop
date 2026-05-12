@@ -1,52 +1,65 @@
 <script setup lang="ts">
 /**
- * TimelinePanel — Timeline 面板。
+ * TimelinePanel — AI Task Narrative Timeline 面板。
  *
- * 消费 TimelineItemProjection[]，不 import RuntimeEvent。
- * 5-category 过滤器 + category → color 映射在组件内部。
- * 复用 TimelineItem 组件。
+ * 默认显示 Narrative 视图（TimelineNarrativeGroup[]）。
+ * 保留 raw events 视图作为 toggle 备选。
+ * 消费 Projection DTO，不 import RuntimeEvent。
  */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { TimelineItemProjection, TimelineCategory } from '@/types/workspace'
+import type { TimelineItemProjection, TimelineNarrativeGroup, NarrativePhase } from '@/types/workspace'
 import TimelineItem from '@/components/inspector/TimelineItem.vue'
 
 const { t } = useI18n()
 
 const props = defineProps<{
   items: TimelineItemProjection[]
+  narrativeItems: TimelineNarrativeGroup[]
   taskId: string | null
 }>()
 
-// ── category → color（UI theme semantics，不在 projector 中） ──
+// ── 视图模式 ──────────────────────────────────────
 
-const CATEGORY_COLORS: Record<TimelineCategory, string> = {
-  task: 'var(--hc-accent)',
-  skill: '#f59e0b',
-  system: '#14b8a6',
-  warning: '#f97316',
-  output: '#22c55e',
+type ViewMode = 'narrative' | 'raw'
+const viewMode = ref<ViewMode>('narrative')
+
+// ── Phase → color ────────────────────────────────
+
+const PHASE_COLORS: Record<NarrativePhase, string> = {
+  creation: 'var(--hc-accent)',
+  preparation: '#a78bfa',
+  execution: '#f59e0b',
+  completion: 'var(--hc-success)',
+  failure: 'var(--hc-error)',
+  anomaly: '#f97316',
+  maintenance: 'var(--hc-text-muted)',
 }
 
-// ── filter ────────────────────────────────────────
+// ── 展开状态（折叠 group 的 expand/collapse） ────
 
-type FilterValue = TimelineCategory | 'all'
+const expandedGroups = ref<Set<string>>(new Set())
 
-const activeFilter = ref<FilterValue>('all')
+function toggleGroup(id: string) {
+  if (expandedGroups.value.has(id)) {
+    expandedGroups.value.delete(id)
+  } else {
+    expandedGroups.value.add(id)
+  }
+}
 
-const FILTERS: { value: FilterValue; labelKey: string }[] = [
-  { value: 'all', labelKey: 'workspace.timeline.filterAll' },
-  { value: 'task', labelKey: 'workspace.timeline.filterTask' },
-  { value: 'skill', labelKey: 'workspace.timeline.filterSkill' },
-  { value: 'system', labelKey: 'workspace.timeline.filterSystem' },
-  { value: 'warning', labelKey: 'workspace.timeline.filterWarning' },
-  { value: 'output', labelKey: 'workspace.timeline.filterOutput' },
-]
+function isExpanded(id: string): boolean {
+  return expandedGroups.value.has(id)
+}
 
-const filteredItems = computed(() => {
-  if (activeFilter.value === 'all') return props.items
-  return props.items.filter(e => e.typeCategory === activeFilter.value)
-})
+// ── duration format（UI 层负责 presentation） ────
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`
+  return `${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`
+}
 </script>
 
 <template>
@@ -54,19 +67,24 @@ const filteredItems = computed(() => {
     <!-- Header -->
     <div class="timeline-panel__header">
       <span class="timeline-panel__title">{{ t('workspace.timeline.title') }}</span>
-      <span v-if="items.length > 0" class="timeline-panel__count">{{ items.length }}</span>
+      <span v-if="narrativeItems.length > 0" class="timeline-panel__count">{{ narrativeItems.length }}</span>
     </div>
 
-    <!-- Filter chips -->
-    <div class="timeline-panel__filters">
+    <!-- View toggle -->
+    <div class="timeline-panel__toggle-row">
       <button
-        v-for="filter in FILTERS"
-        :key="filter.value"
-        class="timeline-panel__filter-chip"
-        :class="{ 'timeline-panel__filter-chip--active': activeFilter === filter.value }"
-        @click="activeFilter = filter.value"
+        class="timeline-panel__toggle-btn"
+        :class="{ 'timeline-panel__toggle-btn--active': viewMode === 'narrative' }"
+        @click="viewMode = 'narrative'"
       >
-        {{ t(filter.labelKey) }}
+        {{ t('workspace.timeline.filterAll') }}
+      </button>
+      <button
+        class="timeline-panel__toggle-btn"
+        :class="{ 'timeline-panel__toggle-btn--active': viewMode === 'raw' }"
+        @click="viewMode = 'raw'"
+      >
+        {{ t('workspace.narrative.showRaw') }}
       </button>
     </div>
 
@@ -74,18 +92,93 @@ const filteredItems = computed(() => {
     <div v-if="!taskId" class="timeline-panel__empty">
       <p>{{ t('workspace.timeline.emptyHint') }}</p>
     </div>
-    <div v-else-if="filteredItems.length === 0" class="timeline-panel__empty">
+    <div
+      v-else-if="viewMode === 'narrative' && narrativeItems.length === 0"
+      class="timeline-panel__empty"
+    >
+      <p>{{ t('workspace.timeline.empty') }}</p>
+    </div>
+    <div
+      v-else-if="viewMode === 'raw' && items.length === 0"
+      class="timeline-panel__empty"
+    >
       <p>{{ t('workspace.timeline.empty') }}</p>
     </div>
 
-    <!-- Timeline events -->
+    <!-- Narrative view -->
+    <div v-else-if="viewMode === 'narrative'" class="timeline-panel__narrative">
+      <div
+        v-for="group in narrativeItems"
+        :key="group.id"
+        class="narrative-group"
+        :class="{ 'narrative-group--collapsed': group.isCollapsed && !isExpanded(group.id) }"
+      >
+        <!-- Group header -->
+        <div class="narrative-group__header">
+          <span
+            class="narrative-group__dot"
+            :style="{ background: PHASE_COLORS[group.phase] }"
+            aria-hidden="true"
+          />
+          <div class="narrative-group__body">
+            <div class="narrative-group__title-row">
+              <span class="narrative-group__title">{{ t(group.title) }}</span>
+              <span
+                v-if="group.durationMs !== undefined"
+                class="narrative-group__duration"
+              >
+                {{ formatDuration(group.durationMs) }}
+              </span>
+            </div>
+            <p v-if="group.description" class="narrative-group__desc">
+              {{ group.description }}
+            </p>
+
+            <!-- Expanded children -->
+            <div
+              v-if="group.isCollapsed && isExpanded(group.id)"
+              class="narrative-group__children"
+            >
+              <TimelineItem
+                v-for="(child, idx) in group.children"
+                :key="idx"
+                :time="child.time"
+                :text="`${t(child.typeLabel)} · ${child.summary}`"
+                :dot-color="PHASE_COLORS[group.phase]"
+              />
+            </div>
+          </div>
+
+          <!-- Expand/collapse button for folded groups -->
+          <button
+            v-if="group.isCollapsed"
+            class="narrative-group__expand-btn"
+            @click="toggleGroup(group.id)"
+          >
+            <span class="narrative-group__expand-chevron" :class="{ 'narrative-group__expand-chevron--open': isExpanded(group.id) }">
+              ▶
+            </span>
+          </button>
+
+          <!-- Event count badge -->
+          <span
+            v-if="group.eventCount > 1"
+            class="narrative-group__badge"
+          >
+            {{ group.eventCount }}
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Raw events view -->
     <div v-else class="timeline-panel__events">
       <TimelineItem
-        v-for="(item, idx) in filteredItems"
+        v-for="(item, idx) in items"
         :key="idx"
         :time="item.time"
         :text="`${t(item.typeLabel)} · ${item.summary}`"
-        :dot-color="CATEGORY_COLORS[item.typeCategory]"
+        :dot-color="'var(--hc-accent)'"
       />
     </div>
   </div>
@@ -124,14 +217,13 @@ const filteredItems = computed(() => {
   line-height: 1.6;
 }
 
-.timeline-panel__filters {
+.timeline-panel__toggle-row {
   display: flex;
-  flex-wrap: wrap;
   gap: 4px;
   padding: 0 4px;
 }
 
-.timeline-panel__filter-chip {
+.timeline-panel__toggle-btn {
   font-size: 11px;
   padding: 2px 8px;
   border: 1px solid var(--hc-border);
@@ -142,11 +234,11 @@ const filteredItems = computed(() => {
   transition: background 0.1s, border-color 0.1s;
 }
 
-.timeline-panel__filter-chip:hover {
+.timeline-panel__toggle-btn:hover {
   border-color: var(--hc-accent-subtle);
 }
 
-.timeline-panel__filter-chip--active {
+.timeline-panel__toggle-btn--active {
   background: rgba(99, 102, 241, 0.1);
   border-color: var(--hc-accent);
   color: var(--hc-accent);
@@ -171,5 +263,121 @@ const filteredItems = computed(() => {
   flex-direction: column;
   gap: 12px;
   padding: 0 4px;
+}
+
+/* ── Narrative groups ───────────────────────────── */
+
+.timeline-panel__narrative {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.narrative-group {
+  border-radius: 8px;
+  padding: 8px 10px;
+  transition: background 0.15s;
+}
+
+.narrative-group:hover {
+  background: var(--hc-bg-hover);
+}
+
+.narrative-group--collapsed {
+  /* subtle indent hint that it's foldable */
+}
+
+.narrative-group__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.narrative-group__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 4px;
+  flex-shrink: 0;
+}
+
+.narrative-group__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.narrative-group__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.narrative-group__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--hc-text-primary);
+  line-height: 1.4;
+}
+
+.narrative-group__duration {
+  font-size: 10px;
+  color: var(--hc-text-muted);
+  white-space: nowrap;
+}
+
+.narrative-group__desc {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: var(--hc-text-secondary);
+  line-height: 1.4;
+}
+
+.narrative-group__children {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 0.5px solid var(--hc-divider);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.narrative-group__expand-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  margin-top: 1px;
+}
+
+.narrative-group__expand-btn:hover {
+  background: var(--hc-bg-active);
+}
+
+.narrative-group__expand-chevron {
+  font-size: 7px;
+  transition: transform 0.15s;
+}
+
+.narrative-group__expand-chevron--open {
+  transform: rotate(90deg);
+}
+
+.narrative-group__badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--hc-text-muted);
+  background: var(--hc-bg-active);
+  padding: 1px 6px;
+  border-radius: 100px;
+  margin-top: 1px;
 }
 </style>

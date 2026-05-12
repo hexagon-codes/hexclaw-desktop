@@ -20,6 +20,7 @@ const {
   selectedTaskId,
   selectedContextProjection,
   selectedTimelineProjection,
+  selectedNarrativeProjection,
   selectTask,
   activeCount,
 } = useWorkspace()
@@ -62,6 +63,7 @@ const {
       <aside class="workspace-panel workspace-panel--right">
         <TimelinePanel
           :items="selectedTimelineProjection"
+          :narrative-items="selectedNarrativeProjection"
           :task-id="selectedTaskId"
         />
       </aside>

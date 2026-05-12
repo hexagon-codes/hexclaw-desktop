@@ -25,6 +25,9 @@ import type {
   WorkspaceTaskProjection,
   WorkspaceContextProjection,
   TimelineItemProjection,
+  TimelineNarrativeGroup,
+  NarrativePhase,
+  NarrativeSignificance,
   TimelineCategory,
 } from '@/types/workspace'
 
@@ -275,4 +278,183 @@ function projectEvent(event: RuntimeEvent): TimelineItemProjection {
  */
 export function projectTimeline(events: RuntimeEvent[]): TimelineItemProjection[] {
   return events.map(projectEvent)
+}
+
+// ─── Narrative Timeline Projection ──────────────────
+
+/**
+ * RuntimeEventType → NarrativePhase 映射。
+ * 仅用于 storytelling grouping，非 RuntimeState。
+ */
+const PHASE_MAP: Record<string, NarrativePhase> = {
+  'task.created': 'creation',
+  'context.created': 'creation',
+  'layer.loaded': 'preparation',
+  'skill.loaded': 'preparation',
+  'capability.validated': 'preparation',
+  'execution.prepared': 'execution',
+  'execution.started': 'execution',
+  'execution.completed': 'execution',
+  'execution.failed': 'failure',
+  'skill.loadFailed': 'failure',
+  'task.completed': 'completion',
+  'task.failed': 'failure',
+  'task.destroyed': 'maintenance',
+  'layer.unloaded': 'maintenance',
+  'skill.unloaded': 'maintenance',
+  'memory.updated': 'maintenance',
+  'budget.warning': 'anomaly',
+  'recovery.assessed': 'anomaly',
+  'recovery.corruption_detected': 'anomaly',
+  'asset.invalidated': 'anomaly',
+}
+
+/** RuntimeEventType → NarrativeSignificance */
+const SIGNIFICANCE_MAP: Record<string, NarrativeSignificance> = {
+  'task.created': 'milestone',
+  'task.completed': 'milestone',
+  'task.failed': 'milestone',
+  'task.destroyed': 'major',
+  'context.created': 'minor',
+  'execution.prepared': 'minor',
+  'execution.started': 'major',
+  'execution.completed': 'major',
+  'execution.failed': 'major',
+  'skill.loaded': 'major',
+  'skill.loadFailed': 'major',
+  'skill.unloaded': 'minor',
+  'capability.validated': 'minor',
+  'layer.loaded': 'minor',
+  'layer.unloaded': 'minor',
+  'memory.updated': 'minor',
+  'budget.warning': 'major',
+  'recovery.assessed': 'major',
+  'recovery.corruption_detected': 'major',
+  'asset.invalidated': 'minor',
+}
+
+/** NarrativePhase → 叙事 title i18n key */
+const PHASE_TITLE_KEYS: Record<NarrativePhase, string> = {
+  creation: 'workspace.narrative.phaseCreation',
+  preparation: 'workspace.narrative.phasePreparation',
+  execution: 'workspace.narrative.phaseExecution',
+  completion: 'workspace.narrative.phaseCompletion',
+  failure: 'workspace.narrative.phaseFailure',
+  anomaly: 'workspace.narrative.phaseAnomaly',
+  maintenance: 'workspace.narrative.phaseMaintenance',
+}
+
+/** 与 failure 相关的 event type 集合 */
+const FAILURE_TYPES = new Set<string>([
+  'task.failed',
+  'execution.failed',
+  'skill.loadFailed',
+])
+
+interface NarrativeItem {
+  event: RuntimeEvent
+  projection: TimelineItemProjection
+  phase: NarrativePhase
+  significance: NarrativeSignificance
+  isFailureType: boolean
+}
+
+/**
+ * 将 RuntimeEvent[] 投影为 TimelineNarrativeGroup[]。
+ *
+ * 叙事规则：
+ * - milestone 事件 → 独立 group，永不折叠
+ * - failure 事件 → 独立 group，永不折叠
+ * - major 事件 → 独立 group，不折叠
+ * - minor 事件 → 同 phase 连续 minor 聚合；3+ → 折叠
+ * - title 为 i18n key，anchored to real RuntimeEvent
+ * - durationMs 由 UI 自行 format
+ *
+ * 纯函数。零副作用。零 store import。零 async。
+ * 保留 projectTimeline() 向后兼容，此函数为新增叙事路径。
+ */
+export function projectTimelineNarrative(events: RuntimeEvent[]): TimelineNarrativeGroup[] {
+  if (events.length === 0) return []
+
+  // 按时间正序
+  const sorted = [...events].sort((a, b) => a.timestamp.localeCompare(b.timestamp))
+
+  // Step 1: project to narrative items
+  const items: NarrativeItem[] = sorted.map(e => ({
+    event: e,
+    projection: projectEvent(e),
+    phase: PHASE_MAP[e.type] ?? 'execution',
+    significance: SIGNIFICANCE_MAP[e.type] ?? 'minor',
+    isFailureType: FAILURE_TYPES.has(e.type),
+  }))
+
+  // Step 2: group by significance-based rules
+  const groups: TimelineNarrativeGroup[] = []
+  let buffer: NarrativeItem[] = []
+
+  function flushBuffer(): void {
+    if (buffer.length === 0) return
+    const allMinor = buffer.every(it => it.significance === 'minor')
+    const hasFailure = buffer.some(it => it.isFailureType)
+    const isCollapsed = allMinor && !hasFailure && buffer.length >= 3
+    groups.push(buildNarrativeGroup(buffer, isCollapsed))
+    buffer = []
+  }
+
+  for (const item of items) {
+    // milestone / failure → flush buffer, then start solo group
+    if (item.significance === 'milestone' || item.isFailureType) {
+      flushBuffer()
+      groups.push(buildNarrativeGroup([item], false))
+      continue
+    }
+
+    // major → flush buffer, then start solo group
+    if (item.significance === 'major') {
+      flushBuffer()
+      groups.push(buildNarrativeGroup([item], false))
+      continue
+    }
+
+    // minor → check if same phase as buffer
+    if (buffer.length > 0 && buffer[0].phase !== item.phase) {
+      flushBuffer()
+    }
+    buffer.push(item)
+  }
+  flushBuffer()
+
+  return groups
+}
+
+function buildNarrativeGroup(items: NarrativeItem[], isCollapsed: boolean): TimelineNarrativeGroup {
+  const first = items[0]
+  const last = items[items.length - 1]
+  const startMs = new Date(first.event.timestamp).getTime()
+  const endMs = new Date(last.event.timestamp).getTime()
+  const durationMs = endMs - startMs
+
+  // title: milestone/major 用首事件 label，minor 组用 phase 标题
+  const anchorItem = items[0]
+  const usePhaseTitle = items.length > 1 && items.every(it => it.significance === 'minor')
+  const title = usePhaseTitle
+    ? PHASE_TITLE_KEYS[anchorItem.phase]
+    : anchorItem.projection.typeLabel
+
+  // description: 来自首个事件的 summary
+  const description = anchorItem.projection.summary || undefined
+
+  return {
+    id: `narrative-${first.event.id}`,
+    phase: first.phase,
+    significance: first.significance,
+    title,
+    description,
+    startTime: first.event.timestamp,
+    endTime: last.event.timestamp,
+    durationMs: durationMs > 0 ? durationMs : undefined,
+    eventCount: items.length,
+    isCollapsed,
+    children: items.map(it => it.projection),
+  }
 }

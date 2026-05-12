@@ -107,3 +107,59 @@ export interface TimelineItemProjection {
   typeLabel: string        // i18n key，由 UI 层 translate
   summary: string          // ≤200 chars
 }
+
+// ─── Narrative Timeline ───────────────────────────
+
+/**
+ * Narrative Phase — 仅用于 storytelling grouping。
+ *
+ * 不是 RuntimeState。不承担：
+ * - lifecycle authority
+ * - transition authority
+ * - execution semantics
+ */
+export type NarrativePhase =
+  | 'creation'      // task.created + context.created
+  | 'preparation'   // layer.* + skill.* + capability.*
+  | 'execution'     // execution.*
+  | 'completion'    // task.completed
+  | 'failure'       // task.failed + execution.failed + skill.loadFailed
+  | 'anomaly'       // budget.warning + recovery.* + asset.invalidated
+  | 'maintenance'   // layer.unloaded + skill.unloaded + memory.updated + task.destroyed
+
+/** 叙事权重 — 决定折叠/展开行为 */
+export type NarrativeSignificance = 'milestone' | 'major' | 'minor'
+
+/**
+ * Timeline Narrative Group — 将多条 RuntimeEvent 聚合为叙事 beat。
+ *
+ * 不存 presentation formatting（duration 用 ms，UI 自行 format）。
+ * title 必须 anchored to real RuntimeEvent，不得虚构 AI reasoning 叙事。
+ */
+export interface TimelineNarrativeGroup {
+  /** 唯一标识 */
+  id: string
+  /** 叙事阶段 */
+  phase: NarrativePhase
+  /** 叙事权重 */
+  significance: NarrativeSignificance
+
+  /** 叙事标题 — anchored to RuntimeEvent (e.g. "任务完成", "开始执行") */
+  title: string
+  /** 叙事描述 — 来自 payload.summary */
+  description?: string
+
+  /** 组内时间范围 */
+  startTime: string           // ISO 8601
+  endTime: string             // ISO 8601
+  /** 耗时（毫秒），UI 自行 format */
+  durationMs?: number
+
+  /** 组内原始事件数 */
+  eventCount: number
+  /** 默认折叠（minor 事件组默认折叠，milestone/failure 默认展开） */
+  isCollapsed: boolean
+
+  /** 子事件 — 展开可见 */
+  children: TimelineItemProjection[]
+}
