@@ -13,6 +13,8 @@ import type { ChatMessage, SkillMeta } from '@/types'
 import { SkillRegistry } from './skillRegistry'
 import { executeChatTask } from './runtimeBridge'
 import { buildAssistantMessage } from '@/utils/buildAssistantMessage'
+import { getRuntimeServices } from './runtime/runtimeServices'
+import { DEFAULT_ALLOWED_CAPABILITIES } from '@/types/capability'
 
 // ── 模块级单例（lazy） ────────────────────────────
 
@@ -26,6 +28,22 @@ function getRegistry(): SkillRegistry {
 // ── 正则 ─────────────────────────────────────────
 
 const SKILL_INVOCATION_RE = /^@(\S+)\s*(.*)/
+
+// ── 内部辅助 ─────────────────────────────────────
+
+/**
+ * 检查 skill 声明的 capabilities 是否在默认允许列表中。
+ * 验证失败会阻断执行，由调用方的 catch 处理。
+ */
+function checkSkillCapabilities(capabilities: string[]): boolean {
+  const { capabilityRegistry, capabilityValidator } = getRuntimeServices()
+  const result = capabilityValidator.validate(
+    capabilities,
+    { allowedCapabilities: DEFAULT_ALLOWED_CAPABILITIES, deniedCapabilities: [] },
+    capabilityRegistry,
+  )
+  return result.valid
+}
 
 // ── 导出函数 ─────────────────────────────────────
 
@@ -93,6 +111,11 @@ export async function tryExecuteSkill(
   const registry = getRegistry()
   const skillMeta = await resolveSkillByName(invocation.skillName, registry)
   if (!skillMeta) return undefined
+
+  // 2.1 Capability 预检
+  if (!checkSkillCapabilities(skillMeta.capabilities ?? [])) {
+    throw new Error(`Skill "${skillMeta.displayName}" 缺少所需权限`)
+  }
 
   // 3. 执行 Skill
   try {

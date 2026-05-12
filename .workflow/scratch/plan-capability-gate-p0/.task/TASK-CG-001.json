@@ -1,0 +1,148 @@
+{
+  "id": "TASK-CG-001",
+  "title": "skillBridge.ts 添加 Capability Gate pre-check",
+  "description": "在 skillBridge.ts 添加内部 helper function checkSkillCapabilities，在 tryExecuteSkill 中 resolveSkillByName 成功后、executeChatTask 前插入 capability 验证。使用 DEFAULT_ALLOWED_CAPABILITIES 作为 policy，不要求 skill.execute。验证失败 throw Error。checkSkillCapabilities 不导出，不创建新文件。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "feature",
+  "priority": "high",
+  "effort": "small",
+  "action": "修改 src/services/skillBridge.ts：新增 checkSkillCapabilities 内部 helper + tryExecuteSkill 中插入调用（约 15 行）",
+  "status": "completed",
+  "completed_at": "2026-05-13T00:00:00.000Z",
+  "actual_duration": null,
+
+  "scope": "src/services/skillBridge.ts",
+  "focus_paths": ["src/services/"],
+
+  "read_first": [
+    "src/services/skillBridge.ts",
+    "src/services/capabilityValidator.ts",
+    "src/services/capabilityRegistry.ts",
+    "src/services/runtime/runtimeServices.ts",
+    "src/types/capability.ts"
+  ],
+
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "src/services/skillBridge.ts 包含 function checkSkillCapabilities(",
+      "src/services/skillBridge.ts 包含 import { getRuntimeServices } from './runtime/runtimeServices'",
+      "src/services/skillBridge.ts 包含 import { DEFAULT_ALLOWED_CAPABILITIES } from '@/types/capability'",
+      "src/services/skillBridge.ts tryExecuteSkill 中 resolveSkillByName 后包含 checkSkillCapabilities 调用",
+      "src/services/skillBridge.ts 无 export checkSkillCapabilities",
+      "src/services/skillBridge.ts 无 export function 新增（仍为 3 个 export）",
+      "src/services/skillBridge.ts tryExecuteSkill 三态返回语义未改变：export async function tryExecuteSkill 返回类型仍为 Promise<ChatMessage | null | undefined>",
+      "npx tsc --noEmit 编译通过"
+    ],
+    "verification": "grep -n 'checkSkillCapabilities\\|getRuntimeServices\\|DEFAULT_ALLOWED_CAPABILITIES' src/services/skillBridge.ts && grep -c 'export function' src/services/skillBridge.ts && npx tsc --noEmit 2>&1 | head -10",
+    "definition_of_done": "skill @mention 调用时，若 skill 声明的 capabilities 不在 DEFAULT_ALLOWED_CAPABILITIES 中，则阻塞执行并返回错误"
+  },
+
+  "files": [
+    {
+      "path": "src/services/skillBridge.ts",
+      "action": "modify",
+      "target": "checkSkillCapabilities helper + tryExecuteSkill 插入调用",
+      "change": "新增 checkSkillCapabilities(capabilities) 内部函数，使用 getRuntimeServices() 获取 registry/validator，用 DEFAULT_ALLOWED_CAPABILITIES 验证。在 tryExecuteSkill 中 resolveSkillByName 成功后插入调用，失败时 throw Error。"
+    }
+  ],
+
+  "implementation": [
+    "1. 在 src/services/skillBridge.ts 文件头部新增 import：",
+    "   import { getRuntimeServices } from './runtime/runtimeServices'",
+    "   import { DEFAULT_ALLOWED_CAPABILITIES } from '@/types/capability'",
+    "",
+    "2. 在 tryExecuteSkill 函数之前（或模块末尾）新增内部 helper：",
+    "   function checkSkillCapabilities(capabilities: string[]): boolean {",
+    "     const { capabilityRegistry, capabilityValidator } = getRuntimeServices()",
+    "     const result = capabilityValidator.validate(capabilities,",
+    "       { allowedCapabilities: DEFAULT_ALLOWED_CAPABILITIES, deniedCapabilities: [] },",
+    "       capabilityRegistry,",
+    "     )",
+    "     return result.valid",
+    "   }",
+    "   不添加 export 关键字。",
+    "",
+    "3. 在 tryExecuteSkill 函数中，resolveSkillByName 成功后、try 块开始之前插入：",
+    "   if (!checkSkillCapabilities(skillMeta.capabilities ?? [])) {",
+    "     throw new Error(`Skill \"${skillMeta.displayName}\" 缺少所需权限`)",
+    "   }",
+    "   ",
+    "   注意：这个 throw 会被 tryExecuteSkill 中现有的 catch (e) 捕获，",
+    "   走 params.handleSendError(e, null, ...) → return null 路径。",
+    "   三态语义不变：undefined=非skill / null=失败 / ChatMessage=成功。",
+    "",
+    "4. 验证：",
+    "   - checkSkillCapabilities 无 export 关键字",
+    "   - skillBridge.ts 仍只有 3 个 export function",
+    "   - tryExecuteSkill 返回类型未变",
+    "   - npx tsc --noEmit 编译通过"
+  ],
+
+  "test": {
+    "commands": [
+      "grep -n 'function checkSkillCapabilities' src/services/skillBridge.ts",
+      "grep -n 'export function' src/services/skillBridge.ts",
+      "npx tsc --noEmit 2>&1 | head -10"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "checkSkillCapabilities 存在且无 export",
+      "仍只有 3 个 export function",
+      "tsc --noEmit 通过"
+    ]
+  },
+
+  "reference": {
+    "pattern": "runtime.ts:216-238 的 capability validation 模式 — validate(caps, { allowed, denied }, registry)",
+    "files": [
+      "src/stores/runtime.ts",
+      "src/services/capabilityValidator.ts",
+      "src/services/runtime/runtimeServices.ts"
+    ],
+    "examples": [
+      "runtime.ts:217-225 — getRuntimeServices() + capabilityValidator.validate() 调用模式",
+      "capabilityValidator.ts:49-95 — validate 方法实现（3-stage rule chain）"
+    ]
+  },
+
+  "rationale": {
+    "chosen_approach": "内部 helper + throw Error 模式。checkSkillCapabilities 不导出，不创建新文件。throw 被现有 catch 捕获，三态语义不变。getRuntimeServices() 是服务定位器，不违反 ADR-001。",
+    "decision_factors": [
+      "最小改动：~15 行，单文件",
+      "零侵入：不修改 Runtime Kernel、runtimeBridge、CapabilityRegistry、CapabilityValidator",
+      "三态不变：undefined/null/ChatMessage 语义不变",
+      "可扩展：后续 per-session policy 可加在 checkSkillCapabilities 中"
+    ],
+    "tradeoffs": "P0 使用 DEFAULT_ALLOWED_CAPABILITIES，非 per-session policy。所有 skill 共享同一 policy。"
+  },
+
+  "risks": [
+    "getRuntimeServices() 返回的 registry 可能未初始化 — 缓解：registry 是 lazy init，首次调用自动初始化",
+    "DEFAULT_ALLOWED_CAPABILITIES 不含 skill.execute — 有意行为：P0 不将 @mention 视为完整 Skill Runtime"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["Capability Gate"],
+    "affected_components": ["skillBridge.ts"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-001"]
+  },
+
+  "meta": {
+    "estimated_time": "10m",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}
