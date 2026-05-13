@@ -1,0 +1,117 @@
+{
+  "id": "TASK-ADR-005",
+  "title": "写入 ADR-005: Skill Registry Authority",
+  "description": "创建 ADR-005，记录 SkillRegistry 作为 Skill 元数据层唯一权威来源的架构决策。Registry 职责边界：discover (read-only) + cache + resolve，不延伸至 load markdown、match、execute、policy、watch、remote。SkillMeta.source 语义在此提及。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "doc",
+  "priority": "high",
+  "effort": "small",
+  "action": "创建 docs/adr/005-skill-registry-authority.md，使用 template.md 格式。Status: frozen baseline。Content: Context (单一权威来源需求)、Decision (discover+cache+resolve 三职责、不做的边界)、Constraints (禁止扩展为执行/policy 层)、Rejected Alternatives (Registry 做 policy / Registry 做 load / 多 Registry 实例)、Consequences (✅ 单一来源/零 skillBridge 变更、⚠️ 膨胀风险)、Compliance (grep 验证)、References (skillRegistry.ts:21-146)、Cross-References (ADR-002)",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+
+  "scope": "docs/adr/",
+  "focus_paths": ["docs/adr/"],
+
+  "read_first": [
+    "docs/adr/template.md",
+    "docs/adr/002-runtime-authority-ownership.md",
+    "src/services/skillRegistry.ts",
+    "docs/adr/README.md"
+  ],
+
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": "wave1",
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "docs/adr/005-skill-registry-authority.md exists",
+      "docs/adr/005-skill-registry-authority.md contains 'Status: frozen baseline'",
+      "docs/adr/005-skill-registry-authority.md contains 'discover' and 'cache' and 'resolve'",
+      "docs/adr/005-skill-registry-authority.md contains 'ADR-002'",
+      "docs/adr/005-skill-registry-authority.md contains '## Rejected Alternatives'",
+      "docs/adr/005-skill-registry-authority.md contains '## Constraints'"
+    ],
+    "verification": "grep -c 'frozen baseline' docs/adr/005-skill-registry-authority.md && grep -c 'discover' docs/adr/005-skill-registry-authority.md && grep -c 'ADR-002' docs/adr/005-skill-registry-authority.md",
+    "definition_of_done": "ADR-005 写入完成，包含完整 Context/Decision/Constraints/Rejected Alternatives/Consequences/Compliance/References/Cross-References，标记为 frozen baseline，引用 ADR-002"
+  },
+
+  "files": [
+    {
+      "path": "docs/adr/005-skill-registry-authority.md",
+      "action": "create",
+      "target": "ADR-005 document",
+      "change": "创建完整 ADR-005，按 template.md 格式，frozen baseline status"
+    }
+  ],
+
+  "implementation": [
+    "1. 读取 template.md，按格式创建 docs/adr/005-skill-registry-authority.md",
+    "2. Context: SkillRegistry 作为元数据层唯一权威，需要宪法级边界保护",
+    "3. Decision: discover(readDir+readTextFile) + cache(Map) + resolve(getAllSkills/resolveSkill)。明确不做的边界：不 load markdown、不 match、不 execute、不做 policy、不 watch 目录、不支持 remote",
+    "4. Constraints: Registry 不得导入 RuntimeStore/Pinia/skillBridge; Registry 方法必须是 read-only; 禁止在 Registry 中添加 policy/entitlement 逻辑",
+    "5. Rejected Alternatives: Registry+Policy 混合、Registry 直接 load markdown、多 Registry 实例、Registry 管理执行",
+    "6. Consequences: ✅ Chat/Runtime 零感知 Registry 变化; ✅ 单例查询接口统一; ⚠️ 膨胀风险需定期审查",
+    "7. Compliance: 代码审查检查 Registry 方法是否保持 read-only",
+    "8. References: skillRegistry.ts:21-146 (class SkillRegistry 完整实现), skillRegistry.ts:69-113 (discoverFromDir), skillRegistry.ts:120-135 (discoverSkills 双目录)",
+    "9. Cross-References: ADR-002 (Runtime Authority — Registry 的 authority 模型继承此概念)"
+  ],
+
+  "test": {
+    "commands": [
+      "grep -c 'frozen baseline' docs/adr/005-skill-registry-authority.md",
+      "grep -c 'discover' docs/adr/005-skill-registry-authority.md",
+      "grep -c 'ADR-002' docs/adr/005-skill-registry-authority.md",
+      "grep -c 'Rejected Alternatives' docs/adr/005-skill-registry-authority.md"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "ADR-005 包含所有 template.md section",
+      "frozen baseline 标记正确",
+      "Cross-References 引用 ADR-002"
+    ]
+  },
+
+  "reference": {
+    "pattern": "ADR-002 (frozen baseline) 的格式和结构",
+    "files": ["docs/adr/002-runtime-authority-ownership.md"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "独立 ADR 记录 Registry authority 边界，frozen baseline 保护职责不被侵蚀",
+    "decision_factors": [
+      "Registry 涉及安全边界（哪些 skill 可见/可用）",
+      "宪法级保护防止未来扩展为全能层",
+      "与 ADR-002 Authority 概念一致"
+    ],
+    "tradeoffs": "ADR 只能事后审查，无法编译期强制边界"
+  },
+
+  "risks": [
+    "Registry 职责膨胀 — 缓解：frozen baseline 使修改需新 ADR supersede"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["Official Skill Boundary", "Skill Registry"],
+    "affected_components": ["skillRegistry.ts"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-005"]
+  },
+
+  "meta": {
+    "estimated_time": "15min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

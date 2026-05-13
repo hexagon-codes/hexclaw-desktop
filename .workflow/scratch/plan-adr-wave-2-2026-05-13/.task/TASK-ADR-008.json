@@ -1,0 +1,120 @@
+{
+  "id": "TASK-ADR-008",
+  "title": "写入 ADR-008: Chat-first Skill Invocation",
+  "description": "创建 ADR-008，记录 Skill 当前唯一执行入口为 Chat @mention 的架构事实。调用路径: chat-send-controller.ts → tryExecuteSkill(skillBridge.ts) → executeChatTask(runtimeBridge.ts)。tryExecuteSkill 三态返回语义: undefined=非skill, null=执行失败, ChatMessage=成功。标记为 accepted 但 non-frozen，未来非 Chat 入口可 supersede。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "doc",
+  "priority": "low",
+  "effort": "small",
+  "action": "创建 docs/adr/008-chat-first-skill-invocation.md，使用 template.md 格式。Status: accepted。Content: Context (@mention 作为 Skill 入口的需求)、Decision (sendMessage→tryExecuteSkill→executeChatTask 路径; three-return 语义; RuntimeException 路径不使用 WebSocket)、Constraints (Skill 执行必须通过 runtimeBridge; tryExecuteSkill 返回语义不可改变)、Rejected Alternatives (skill 独立 UI 入口/context-triggered/Runtime-native invoke/WebSocket 路径)、Consequences (✅ 复用 Runtime 能力/zero breaking change; ⚠️ Chat 耦合)、Compliance (grep 验证 tryExecuteSkill 唯一调用点)、References (chat-send-controller.ts:156-163; skillBridge.ts:91-133; runtimeBridge.ts:77-108)、Cross-References (ADR-001, ADR-007)",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+
+  "scope": "docs/adr/",
+  "focus_paths": ["docs/adr/"],
+
+  "read_first": [
+    "docs/adr/template.md",
+    "docs/adr/001-chat-runtime-bridge.md",
+    "docs/adr/007-capability-gate.md",
+    "src/services/skillBridge.ts",
+    "src/stores/chat-send-controller.ts",
+    "src/services/runtimeBridge.ts"
+  ],
+
+  "depends_on": [],
+  "wave": 2,
+  "parallel_group": "wave2",
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "docs/adr/008-chat-first-skill-invocation.md exists",
+      "docs/adr/008-chat-first-skill-invocation.md contains 'Status: accepted'",
+      "docs/adr/008-chat-first-skill-invocation.md does not contain 'frozen'",
+      "docs/adr/008-chat-first-skill-invocation.md contains 'tryExecuteSkill'",
+      "docs/adr/008-chat-first-skill-invocation.md contains 'undefined' and 'null' and 'ChatMessage'",
+      "docs/adr/008-chat-first-skill-invocation.md contains 'ADR-001'",
+      "docs/adr/008-chat-first-skill-invocation.md contains 'ADR-007'"
+    ],
+    "verification": "grep -c 'accepted' docs/adr/008-chat-first-skill-invocation.md && grep -c 'tryExecuteSkill' docs/adr/008-chat-first-skill-invocation.md && grep -c 'ADR-001' docs/adr/008-chat-first-skill-invocation.md && grep -c 'ADR-007' docs/adr/008-chat-first-skill-invocation.md",
+    "definition_of_done": "ADR-008 写入完成，accepted 状态 non-frozen，三态语义明确，引用 ADR-001 和 ADR-007"
+  },
+
+  "files": [
+    {
+      "path": "docs/adr/008-chat-first-skill-invocation.md",
+      "action": "create",
+      "target": "ADR-008 document",
+      "change": "创建完整 ADR-008，accepted status，non-frozen，记录当前 Chat-only Skill 入口"
+    }
+  ],
+
+  "implementation": [
+    "1. 按 template.md 格式创建 docs/adr/008-chat-first-skill-invocation.md",
+    "2. Context: Skill 的执行入口需要形式化记录，@mention 是当前唯一路径",
+    "3. Decision: Chat sendMessage 中先调用 tryExecuteSkill。非 skill → undefined(继续 chat); 执行失败 → null(handleSendError); 成功 → ChatMessage。Runtime 路径通过 runtimeBridge.executeChatTask，不走 WebSocket。明确 non-frozen：未来可有其他入口 supersede",
+    "4. Constraints: tryExecuteSkill 的三态返回语义不可改变(chat-send-controller.ts:163 的 if(skillMsg !== undefined) 依赖此语义); Skill 执行必须通过 runtimeBridge 进入 Runtime，不得直连 RuntimeStore",
+    "5. Rejected Alternatives: Skill 独立 UI 入口(过度工程); context-triggered invocation(无场景); Runtime-native invoke(绕开 Chat 层); WebSocket 路径(与 Runtime 路径重复)",
+    "6. Consequences: ✅ 零 breaking change / 复用 executeChatTask / 路径清晰; ⚠️ Chat 耦合(未来非 chat 入口需 supersede)",
+    "7. Compliance: grep 验证 tryExecuteSkill 的唯一调用点(chat-send-controller.ts)，无其他 import skillBridge 的模块",
+    "8. References: chat-send-controller.ts:156-163 (sendMessage 中 skill invocation), skillBridge.ts:91-133 (tryExecuteSkill 完整实现), runtimeBridge.ts:77-108 (executeChatTask 执行入口)",
+    "9. Cross-References: ADR-001 (runtimeBridge 封装), ADR-007 (capability pre-check 在 skillBridge 中)"
+  ],
+
+  "test": {
+    "commands": [
+      "grep -c 'accepted' docs/adr/008-chat-first-skill-invocation.md",
+      "grep -c 'tryExecuteSkill' docs/adr/008-chat-first-skill-invocation.md",
+      "grep -c 'ADR-001' docs/adr/008-chat-first-skill-invocation.md",
+      "grep -c 'ADR-007' docs/adr/008-chat-first-skill-invocation.md"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "Status: accepted (not frozen)",
+      "Three-return 语义明确记录",
+      "Cross-References 引用 ADR-001 和 ADR-007"
+    ]
+  },
+
+  "reference": {
+    "pattern": "ADR-007 non-frozen 的 status 标注方式",
+    "files": ["docs/adr/007-capability-gate.md"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "记录当前架构事实而非架构约束，为未来演进预留空间",
+    "decision_factors": [
+      "当前唯一入口需要形式化记录",
+      "non-frozen 避免阻止未来演进",
+      "三态语义是 sendMessage 流程的关键 contract"
+    ],
+    "tradeoffs": "accepted 而非 frozen 意味着不是宪法级约束"
+  },
+
+  "risks": [
+    "非 frozen 状态可能导致开发者尝试绕过此路径 — 缓解：记录明确 rationale 和未来演进路径"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["Skill Invocation"],
+    "affected_components": ["skillBridge.ts", "chat-send-controller.ts", "runtimeBridge.ts"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-008"]
+  },
+
+  "meta": {
+    "estimated_time": "10min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

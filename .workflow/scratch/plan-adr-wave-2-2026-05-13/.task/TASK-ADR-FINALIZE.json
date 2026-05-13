@@ -1,0 +1,139 @@
+{
+  "id": "TASK-ADR-FINALIZE",
+  "title": "更新 ADR README.md 索引与依赖图 + 最终验证",
+  "description": "更新 docs/adr/README.md 添加 ADR-005~008 到索引表和依赖图。ADR-005/006 标记为 frozen baseline，ADR-007/008 标记为 accepted。更新 ADR 生命周期状态定义。运行 npx tsc --noEmit 最终验证。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "doc",
+  "priority": "high",
+  "effort": "small",
+  "action": "修改 docs/adr/README.md: (1) ADR Index 表添加 ADR-005~008 四行; (2) 依赖图添加 ADR-005→ADR-002, ADR-006→ADR-005, ADR-007→ADR-005, ADR-008→ADR-001/ADR-007; (3) 更新 Status Legend 和 Lifecycle (不变); (4) ADR-005/006 标记 frozen baseline, ADR-007/008 标记 accepted; (5) 更新 Constitution Baseline 版本为 v0.9 (Wave 1 + Wave 2); (6) 运行 npx tsc --noEmit 验证无编译错误",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+
+  "scope": "docs/adr/",
+  "focus_paths": ["docs/adr/"],
+
+  "read_first": [
+    "docs/adr/README.md",
+    "docs/adr/005-skill-registry-authority.md",
+    "docs/adr/006-official-vs-custom-boundary.md",
+    "docs/adr/007-capability-gate.md",
+    "docs/adr/008-chat-first-skill-invocation.md"
+  ],
+
+  "depends_on": ["TASK-ADR-005", "TASK-ADR-006", "TASK-ADR-007", "TASK-ADR-008"],
+  "wave": 3,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "docs/adr/README.md contains '005' and 'Skill Registry Authority'",
+      "docs/adr/README.md contains '006' and 'Official vs Custom'",
+      "docs/adr/README.md contains '007' and 'Capability Gate'",
+      "docs/adr/README.md contains '008' and 'Chat-first Skill Invocation'",
+      "docs/adr/README.md contains 'ADR-005' and 'ADR-002' in dependency graph section",
+      "docs/adr/README.md contains 'ADR-008' and 'ADR-001' in dependency graph section",
+      "ADR-005 row has status 'frozen baseline'",
+      "ADR-006 row has status 'frozen baseline'",
+      "ADR-007 row has status 'accepted'",
+      "ADR-008 row has status 'accepted'",
+      "npx tsc --noEmit exits 0"
+    ],
+    "verification": "grep -n '005' docs/adr/README.md | head -3 && grep -n '008' docs/adr/README.md | head -3 && npx tsc --noEmit 2>&1 | head -5",
+    "definition_of_done": "README.md 索引包含所有 4 个新 ADR，依赖图完整，ADR-005/006 frozen baseline，ADR-007/008 accepted，tsc --noEmit 通过"
+  },
+
+  "files": [
+    {
+      "path": "docs/adr/README.md",
+      "action": "modify",
+      "target": "ADR Index table + Dependency Graph + Constitution Baseline version",
+      "change": "添加 ADR-005~008 到索引表；更新 mermaid 依赖图添加 Wave 2 节点和连线；更新 Constitution Baseline 为 v0.9"
+    }
+  ],
+
+  "implementation": [
+    "1. ADR Index 表添加 4 行：",
+    "   | 005 | Skill Registry Authority | frozen baseline | 2026-05-13 | Depends on ADR-002 |",
+    "   | 006 | Official vs Custom Boundary | frozen baseline | 2026-05-13 | Depends on ADR-005 |",
+    "   | 007 | Capability Gate | accepted | 2026-05-13 | Depends on ADR-005 |",
+    "   | 008 | Chat-first Skill Invocation | accepted | 2026-05-13 | Depends on ADR-001, ADR-007 |",
+    "",
+    "2. 更新 mermaid 依赖图，添加 Wave 2 子图：",
+    "   subgraph 'Wave 2 ADR Wave 2'",
+    "     ADR005['ADR-005: Skill Registry Authority']",
+    "     ADR006['ADR-006: Official vs Custom Boundary']",
+    "     ADR007['ADR-007: Capability Gate']",
+    "     ADR008['ADR-008: Chat-first Skill Invocation']",
+    "   end",
+    "   ADR005 --> ADR002",
+    "   ADR006 --> ADR005",
+    "   ADR007 --> ADR005",
+    "   ADR008 --> ADR001",
+    "   ADR008 --> ADR007",
+    "",
+    "3. 更新 Constitution Baseline 版本: v0.8 → v0.9",
+    "4. 更新 Frozen ADRs 列表: ADR-001~004 → ADR-001~006",
+    "5. 更新 Freeze Date: 保持 2026-05-13",
+    "6. 运行 npx tsc --noEmit 验证无编译错误"
+  ],
+
+  "test": {
+    "commands": [
+      "grep -c '005' docs/adr/README.md",
+      "grep -c '008' docs/adr/README.md",
+      "grep -c 'frozen baseline' docs/adr/README.md",
+      "grep -c 'accepted' docs/adr/README.md",
+      "npx tsc --noEmit"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "README.md 包含全部 4 个新 ADR",
+      "dependency graph 中包含所有跨引用",
+      "frozen baseline 和 accepted 状态正确",
+      "tsc --noEmit 通过"
+    ]
+  },
+
+  "reference": {
+    "pattern": "README.md 现有格式和依赖图结构",
+    "files": ["docs/adr/README.md"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "最后一次任务统一更新 README，避免中间状态导致索引不一致",
+    "decision_factors": [
+      "各 ADR 写入时无需立即更新 README",
+      "最终统一更新减少冲突风险",
+      "Constitution Baseline 版本升级标志 Wave 2 完成"
+    ],
+    "tradeoffs": "ADR 写入到 README 更新之间有短暂不一致窗口（仅在 execute 期间）"
+  },
+
+  "risks": [
+    "README.md 手动编辑冲突 — 缓解：串行执行，finalize 在所有 ADR 之后"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["ADR Wave 2"],
+    "affected_components": ["docs/adr/README.md"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-005", "ADR-006", "ADR-007", "ADR-008"]
+  },
+
+  "meta": {
+    "estimated_time": "10min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

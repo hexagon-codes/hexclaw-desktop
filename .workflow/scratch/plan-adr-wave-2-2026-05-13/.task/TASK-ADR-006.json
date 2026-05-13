@@ -1,0 +1,122 @@
+{
+  "id": "TASK-ADR-006",
+  "title": "写入 ADR-006: Official vs Custom Boundary",
+  "description": "创建 ADR-006，记录 Official Skill 和 Custom Skill 的物理隔离架构决策。Official = BaseDirectory.Resource (tauri resource, readonly)，Custom = BaseDirectory.AppData (user data, writable)。Custom 不可覆盖 Official，冲突时保留 Official + warning。source 由 Registry/Loader 自动填充，非 skill.json 字段。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "doc",
+  "priority": "high",
+  "effort": "small",
+  "action": "创建 docs/adr/006-official-vs-custom-boundary.md，使用 template.md 格式。Status: frozen baseline。Content: Context (双目录隔离需求)、Decision (Official=Resource readonly + Custom=AppData writable + 冲突保留 Official + source 注入语义)、Constraints (Custom 不可覆盖 Official; source 不可来自 skill.json)、Rejected Alternatives (Custom 覆盖 Official; boolean official 字段代替 source 联合类型; 单目录+前缀区分)、Consequences (✅ 物理隔离/冲突安全/调用方透明、⚠️ tauri 平台依赖)、Compliance (grep 验证 source 注入)、References (skillRegistry.ts:27-33/120-135; context.ts:32; tauri.conf.json resources+fs scope)、Cross-References (ADR-005)",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+
+  "scope": "docs/adr/",
+  "focus_paths": ["docs/adr/"],
+
+  "read_first": [
+    "docs/adr/template.md",
+    "docs/adr/005-skill-registry-authority.md",
+    "src/services/skillRegistry.ts",
+    "src/types/context.ts",
+    "src-tauri/tauri.conf.json",
+    "src/services/skillLoader.ts"
+  ],
+
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": "wave1",
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "docs/adr/006-official-vs-custom-boundary.md exists",
+      "docs/adr/006-official-vs-custom-boundary.md contains 'Status: frozen baseline'",
+      "docs/adr/006-official-vs-custom-boundary.md contains 'BaseDirectory.Resource'",
+      "docs/adr/006-official-vs-custom-boundary.md contains 'BaseDirectory.AppData'",
+      "docs/adr/006-official-vs-custom-boundary.md contains 'Custom 不可覆盖 Official' or contains '冲突保留 Official'",
+      "docs/adr/006-official-vs-custom-boundary.md contains 'source' and 'official' and 'custom'",
+      "docs/adr/006-official-vs-custom-boundary.md contains 'ADR-005'"
+    ],
+    "verification": "grep -c 'frozen baseline' docs/adr/006-official-vs-custom-boundary.md && grep -c 'BaseDirectory\\.Resource' docs/adr/006-official-vs-custom-boundary.md && grep -c 'source' docs/adr/006-official-vs-custom-boundary.md",
+    "definition_of_done": "ADR-006 写入完成，包含完整双目录隔离策略、冲突规则、source 语义，frozen baseline，引用 ADR-005"
+  },
+
+  "files": [
+    {
+      "path": "docs/adr/006-official-vs-custom-boundary.md",
+      "action": "create",
+      "target": "ADR-006 document",
+      "change": "创建完整 ADR-006，按 template.md 格式，frozen baseline status"
+    }
+  ],
+
+  "implementation": [
+    "1. 按 template.md 格式创建 docs/adr/006-official-vs-custom-boundary.md",
+    "2. Context: 两棵 skills/ 目录需要物理隔离，Official 应天然只读不可被篡改",
+    "3. Decision: Official = BaseDirectory.Resource (tauri resources 只读), Custom = BaseDirectory.AppData (用户数据可写)。冲突规则: Registry 先扫 Official 再扫 Custom，冲突时 console.warn + continue。SkillMeta.source 联合类型 ('official'|'custom') 由 Registry/Loader 注入，skill.json 不可写此字段",
+    "4. Constraints: Custom 目录中同 id skill 不可覆盖 Official; source 字段禁止从 skill.json 解析; 调用方(chat/MentionPopup)无需感知 source 差异",
+    "5. Rejected Alternatives: Custom 覆盖 Official(安全漏洞); boolean official? 字段(不可扩展); 单目录+文件名前缀(混乱)",
+    "6. Consequences: ✅ 物理隔离 / 冲突安全 / 升级 Official 不破坏 Custom; ⚠️ 用户不知 Custom 被忽略(只有 warning log)",
+    "7. Compliance: grep 检查是否有代码从 skill.json 读取 source 字段; 审查 Registry constructor 是否使用两个 BaseDirectory",
+    "8. References: skillRegistry.ts:27-33 (双 BaseDirectory 构造器), skillRegistry.ts:120-135 (discoverSkills 冲突规则), context.ts:32 (SkillMeta.source 类型定义), skillLoader.ts:93 (Loader source:'custom'), tauri.conf.json (resources+fs scope)",
+    "9. Cross-References: ADR-005 (Registry 使用双 BaseDirectory 实现扫描)"
+  ],
+
+  "test": {
+    "commands": [
+      "grep -c 'frozen baseline' docs/adr/006-official-vs-custom-boundary.md",
+      "grep -c 'BaseDirectory' docs/adr/006-official-vs-custom-boundary.md",
+      "grep -c 'source' docs/adr/006-official-vs-custom-boundary.md",
+      "grep -c 'ADR-005' docs/adr/006-official-vs-custom-boundary.md"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "ADR-006 包含全部 template sections",
+      "BaseDirectory.Resource + BaseDirectory.AppData 双重提及",
+      "Conflict 规则明确: Official 优先",
+      "source 语义正确: 注入非 skill.json"
+    ]
+  },
+
+  "reference": {
+    "pattern": "ADR-005 的 frozen baseline 格式",
+    "files": ["docs/adr/005-skill-registry-authority.md"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "物理双目录隔离 + 冲突时 Official 优先，source 联合类型取代 boolean",
+    "decision_factors": [
+      "最小改动(2 文件 ~35 行)",
+      "零侵入调用方",
+      "tauri infra 已就绪(resources+fs scope)"
+    ],
+    "tradeoffs": "Official 只读依赖 tauri 平台机制，非应用层加密"
+  },
+
+  "risks": [
+    "tauri dev 模式路径映射 — 缓解: tauri 自动映射",
+    "用户不知 Custom 被静默忽略 — 缓解: console.warn"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["Official Skill Boundary"],
+    "affected_components": ["skillRegistry.ts", "types/context.ts", "skillLoader.ts"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-006"]
+  },
+
+  "meta": {
+    "estimated_time": "20min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "session": "ANL-adr-wave-2-2026-05-13",
+  "date": "2026-05-13",
+  "type": "adr_wave_2_analysis",
+  "verdict": "Go",
+  "overall_score": 4.58,
+  "recommendations": [
+    {
+      "id": "ADR-005",
+      "title": "Skill Registry Authority",
+      "priority": "P0",
+      "type": "constitution",
+      "frozen": true,
+      "dependencies": [],
+      "estimated_effort": "15min",
+      "rationale": "Registry 是 Skill 元数据层的单一权威来源。discover (read-only) + cache + resolve 的职责边界需要宪法级保护，防止未来被扩展为执行层或 policy 层。"
+    },
+    {
+      "id": "ADR-006",
+      "title": "Official vs Custom Boundary",
+      "priority": "P0",
+      "type": "constitution",
+      "frozen": true,
+      "dependencies": ["ADR-005"],
+      "estimated_effort": "20min",
+      "rationale": "双目录隔离 + Official 优先冲突规则是安全策略。Custom 不可覆盖 Official 是 trust 模型的核心约束。即使未来引入 entitlement，这个基本隔离不应被破坏。"
+    },
+    {
+      "id": "ADR-007",
+      "title": "Capability Gate Positioning",
+      "priority": "P1",
+      "type": "constitution",
+      "frozen": false,
+      "dependencies": ["ADR-005"],
+      "estimated_effort": "15min",
+      "rationale": "Capability pre-check 在 skillBridge（invocation 入口）执行，使用 DEFAULT_ALLOWED_CAPABILITIES 作为系统级默认 policy。ADR 冻结但有 supersede 可能（entitlement 系统）。"
+    },
+    {
+      "id": "ADR-008",
+      "title": "Chat-first Skill Invocation",
+      "priority": "P2",
+      "type": "current_state",
+      "frozen": false,
+      "dependencies": ["ADR-001", "ADR-007"],
+      "estimated_effort": "10min",
+      "rationale": "当前 Skill 的唯一执行入口是 chat @mention。记录这个架构事实及其 three-return 语义。accepted 但非 frozen，未来 Skill 可能有非 chat 入口。"
+    }
+  ],
+  "deferred_principles": [
+    {
+      "item": "Prompt 保护",
+      "reason": "Official Skill 的 SKILL.md 只读/防篡改保护。依赖 tauri resource 天然只读，应用层保护尚未实现。",
+      "future_adr": false
+    },
+    {
+      "item": "Category 过滤",
+      "reason": "Skill 按 category 分类/过滤/分组。当前无 category 字段。",
+      "future_adr": false
+    },
+    {
+      "item": "Entitlement",
+      "reason": "细粒度用户权限控制，可能 supersede ADR-007 的 DEFAULT_ALLOWED_CAPABILITIES。当前不实现。",
+      "future_adr": true
+    },
+    {
+      "item": "更新机制",
+      "reason": "Skill 热更新/版本管理。当前 discover 是一次性的 eager load。",
+      "future_adr": false
+    },
+    {
+      "item": "Directory watch",
+      "reason": "目录监听 / 热重载。当前无 watch 机制。",
+      "future_adr": false
+    },
+    {
+      "item": "Remote skill",
+      "reason": "远程/marketplace skill 支持。不在当前 scope。",
+      "future_adr": true
+    },
+    {
+      "item": "Skill 组合/编排",
+      "reason": "7 条 red lines 已禁止 DAG/Workflow Engine/Node Graph/BPMN/Visual Builder/Auto Agent Planner/Multi-Agent。",
+      "future_adr": true
+    }
+  ],
+  "implementation_scope": {
+    "waves": [
+      {
+        "wave": 1,
+        "adrs": ["ADR-005", "ADR-006"],
+        "description": "基础边界：Registry Authority + Official vs Custom 隔离",
+        "parallel": true
+      },
+      {
+        "wave": 2,
+        "adrs": ["ADR-007", "ADR-008"],
+        "description": "执行控制 + 入口：Capability Gate + Chat-first Invocation",
+        "parallel": true
+      }
+    ]
+  }
+}

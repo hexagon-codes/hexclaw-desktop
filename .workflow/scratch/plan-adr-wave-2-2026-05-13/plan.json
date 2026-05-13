@@ -1,0 +1,91 @@
+{
+  "summary": "ADR Wave 2 写入 — 4 个新 ADR + README 更新",
+  "approach": "Wave 1 并行写入 ADR-005 + ADR-006（基础边界），Wave 2 并行写入 ADR-007 + ADR-008（执行控制 + 入口），Wave 3 统一更新 README.md 索引与依赖图。所有任务为纯文档操作，不修改 src/。",
+
+  "task_ids": ["TASK-ADR-005", "TASK-ADR-006", "TASK-ADR-007", "TASK-ADR-008", "TASK-ADR-FINALIZE"],
+  "task_count": 5,
+  "complexity": "low",
+  "estimated_time": "70min",
+  "recommended_execution": "Agent",
+
+  "waves": [
+    {
+      "wave": 1,
+      "label": "基础边界",
+      "tasks": ["TASK-ADR-005", "TASK-ADR-006"],
+      "description": "Wave 1（可并行）：ADR-005 Skill Registry Authority + ADR-006 Official vs Custom Boundary",
+      "parallel": true
+    },
+    {
+      "wave": 2,
+      "label": "执行控制 + 入口",
+      "tasks": ["TASK-ADR-007", "TASK-ADR-008"],
+      "description": "Wave 2（可并行，概念依赖 Wave 1）：ADR-007 Capability Gate + ADR-008 Chat-first Skill Invocation",
+      "parallel": true
+    },
+    {
+      "wave": 3,
+      "label": "最终整合",
+      "tasks": ["TASK-ADR-FINALIZE"],
+      "description": "Wave 3（依赖全部 ADR 完成）：更新 README.md 索引 + 依赖图 + 版本升级 + tsc 验证",
+      "parallel": false
+    }
+  ],
+
+  "data_flow": {
+    "diagram": null,
+    "stages": [
+      { "stage": 1, "description": "ADR-005 + ADR-006 并行写入 docs/adr/" },
+      { "stage": 2, "description": "ADR-007 + ADR-008 并行写入 docs/adr/" },
+      { "stage": 3, "description": "更新 README.md 索引 + 依赖图" }
+    ]
+  },
+
+  "design_decisions": [
+    "ADR-005/006 标记 frozen baseline（宪法级保护）",
+    "ADR-007/008 标记 accepted non-frozen（允许未来 supersede）",
+    "Finalize 作为独立任务避免中间状态更新 README",
+    "所有 ADR 使用 docs/adr/template.md 格式"
+  ],
+
+  "shared_context": {
+    "patterns": [
+      "现有 frozen ADR (ADR-001~004) 的格式和结构",
+      "ADR README.md 的索引表 + mermaid 依赖图格式"
+    ],
+    "conventions": [
+      "ADR 只记录已实现的架构决策，不记录计划中的方案",
+      "frozen baseline 不得原地修改",
+      "Cross-References 在 ADR 末尾引用关联 ADR"
+    ],
+    "dependencies": [
+      "TASK-ADR-FINALIZE depends on all 4 ADR tasks"
+    ]
+  },
+
+  "confidence": {
+    "overall": 4.6,
+    "dimensions": {
+      "requirements_coverage": 5.0,
+      "task_quality": 4.5,
+      "dependency_correctness": 5.0,
+      "estimation_accuracy": 4.0,
+      "collision_safety": 5.0
+    },
+    "pressure_pass": {
+      "task": "TASK-ADR-006",
+      "read_first": "✅ docs/adr/template.md, docs/adr/005-skill-registry-authority.md, src/services/skillRegistry.ts, src/types/context.ts, src-tauri/tauri.conf.json, src/services/skillLoader.ts",
+      "convergence_criteria": "✅ All 7 criteria are grep-verifiable",
+      "action_concreteness": "✅ Contains exact values: BaseDirectory.Resource, BaseDirectory.AppData, source:'official'|'custom', console.warn + continue"
+    }
+  },
+
+  "_metadata": {
+    "timestamp": "2026-05-13T12:00:00.000Z",
+    "source": "maestro-plan",
+    "planning_mode": "full",
+    "plan_type": "doc",
+    "schema_version": "2.0",
+    "git_commit": null
+  }
+}

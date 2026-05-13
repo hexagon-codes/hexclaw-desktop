@@ -1,6 +1,6 @@
 ---
-Runtime Constitution Baseline: v0.8
-Frozen ADRs: ADR-001, ADR-002, ADR-003, ADR-004
+Runtime Constitution Baseline: v0.9
+Frozen ADRs: ADR-001, ADR-002, ADR-003, ADR-004, ADR-005, ADR-006
 Freeze Date: 2026-05-13
 ---
 
@@ -27,9 +27,9 @@ Freeze Date: 2026-05-13
 
 ADR 只记录已实现的架构决策，不记录计划中的方案。ADR 是 retrospective 的记录，不是 forward-looking 的 spec。
 
-## v0.8 Constitution Baseline
+## v0.9 Constitution Baseline
 
-**Runtime Constitution Baseline: v0.8** 表示 ADR-001 至 ADR-004 是当前 Runtime Kernel 的长期架构边界。这些边界已通过实际代码验证，并被冻结为 Constitution baseline。
+**Runtime Constitution Baseline: v0.9** 表示 ADR-001 至 ADR-006 是当前 Runtime Kernel 的长期架构边界。这些边界已通过实际代码验证，并被冻结为 Constitution baseline。
 
 规则：
 - **冻结后不得原地修改**已冻结的 ADR 正文
@@ -45,6 +45,10 @@ ADR 只记录已实现的架构决策，不记录计划中的方案。ADR 是 re
 | 002 | Runtime Authority Ownership | frozen baseline | 2026-05-13 | — |
 | 003 | Projection Purity | frozen baseline | 2026-05-13 | — |
 | 004 | Execution State Machine | frozen baseline | 2026-05-13 | Depends on ADR-002 |
+| 005 | Skill Registry Authority | frozen baseline | 2026-05-13 | Depends on ADR-002 |
+| 006 | Official vs Custom Boundary | frozen baseline | 2026-05-13 | Depends on ADR-005 |
+| 007 | Capability Gate | accepted | 2026-05-13 | Depends on ADR-005 |
+| 008 | Chat-first Skill Invocation | accepted | 2026-05-13 | Depends on ADR-001, ADR-007 |
 
 ## Dependency Map
 
@@ -60,9 +64,20 @@ graph RL
   subgraph "Bridge Layer"
     ADR001["ADR-001: Chat-Runtime Bridge"]
   end
+  subgraph "Skill Layer"
+    ADR005["ADR-005: Skill Registry Authority"]
+    ADR006["ADR-006: Official vs Custom Boundary"]
+    ADR007["ADR-007: Capability Gate"]
+    ADR008["ADR-008: Chat-first Skill Invocation"]
+  end
 
   ADR004 --> ADR002
   ADR001 --> ADR002
+  ADR005 --> ADR002
+  ADR006 --> ADR005
+  ADR007 --> ADR005
+  ADR008 --> ADR001
+  ADR008 --> ADR007
 ```
 
 ## Cross-Reference Format
