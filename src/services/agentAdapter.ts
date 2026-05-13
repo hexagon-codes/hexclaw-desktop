@@ -37,11 +37,17 @@ export interface PromptInput {
 export function buildPromptInput(context: RuntimeContext): PromptInput {
   const taskLayer = context.task
   const systemLayer = context.system
+  const skillLayer = context.skill
 
-  // system prompt 来自 System Layer 约束
-  const system = systemLayer?.constraints?.length
-    ? systemLayer.constraints.join('\n')
-    : undefined
+  // system prompt: Skill Layer markdown + System Layer 约束
+  const parts: string[] = []
+  if (skillLayer?.markdown) {
+    parts.push(skillLayer.markdown)
+  }
+  if (systemLayer?.constraints?.length) {
+    parts.push(systemLayer.constraints.join('\n'))
+  }
+  const system = parts.length > 0 ? parts.join('\n\n') : undefined
 
   // user message 来自 Task Layer input
   const payload = taskLayer?.input?.payload

@@ -9,12 +9,16 @@
  */
 
 import type { Ref } from 'vue'
-import type { ChatMessage, SkillMeta } from '@/types'
+import type { ChatMessage, SkillMeta, Task } from '@/types'
 import { SkillRegistry } from './skillRegistry'
-import { executeChatTask } from './runtimeBridge'
+import { SkillLoader } from './skillLoader'
+import { executeChatTask, registerChatTask } from './runtimeBridge'
 import { buildAssistantMessage } from '@/utils/buildAssistantMessage'
 import { getRuntimeServices } from './runtime/runtimeServices'
+import { useRuntimeStore } from '@/stores/runtime'
+import { useTaskStore } from '@/stores/tasks'
 import { DEFAULT_ALLOWED_CAPABILITIES } from '@/types/capability'
+import { BaseDirectory } from '@tauri-apps/api/path'
 
 // ── 模块级单例（lazy） ────────────────────────────
 
@@ -120,6 +124,31 @@ export async function tryExecuteSkill(
   // 3. 执行 Skill
   try {
     const taskId = params.createId()
+
+    // 3.1 创建 Task（携带 skill input text）
+    const task: Task = {
+      id: taskId,
+      type: 'chat',
+      status: 'running',
+      input: { type: 'chat', payload: { text: invocation.skillInput } },
+    }
+    const taskStore = useTaskStore()
+    taskStore.enqueue(task)
+    registerChatTask(task)
+
+    // 3.2 加载 SKILL.md → 注入 SkillLayer
+    const runtime = useRuntimeStore()
+    const baseDir = skillMeta.source === 'official'
+      ? BaseDirectory.Resource
+      : BaseDirectory.AppData
+    const skillLoader = new SkillLoader(baseDir)
+    const skillPkg = await skillLoader.loadSkill(skillMeta.skillId, {
+      loadMarkdown: true,
+      loadReferences: false,
+    })
+    await runtime.loadSkillLayerForTask(taskId, skillPkg)
+
+    // 3.3 执行
     const result = await executeChatTask(taskId)
     const assistantMsg = buildAssistantMessage(result.content, {
       id: params.createId(),

@@ -28,6 +28,7 @@ import { useAssetRuntime } from '@/composables/useAssetRuntime'
 import { useRecoveryRuntime } from '@/composables/useRecoveryRuntime'
 import type { AssetReference, AssetMetadata } from '@/types/asset'
 import type { RecoveryAssessment, CorruptionReport, RecoverySummary } from '@/types/recovery'
+import type { SkillPackage } from '@/types/context'
 
 export const useRuntimeStore = defineStore('runtime', () => {
   const timelineStore = new TimelineStore()
@@ -298,6 +299,28 @@ export const useRuntimeStore = defineStore('runtime', () => {
 
     // guard 已失效（ctx.skill === undefined），正常调用
     await loadSkillForTask(taskId, skillId)
+  }
+
+  /**
+   * 为 Task 注入已加载的 SkillPackage（跳过 SkillLoader 文件读取）。
+   *
+   * 与 loadSkillForTask 的区别：
+   * - loadSkillForTask 通过 SkillLoader 按 skillId 读取文件
+   * - loadSkillLayerForTask 接受外部已加载的 SkillPackage
+   *
+   * 用于 skillBridge 等外部调用方预加载 SKILL.md 后注入。
+   * 同 taskId 重复调用静默跳过。
+   */
+  async function loadSkillLayerForTask(taskId: string, skillPkg: SkillPackage): Promise<void> {
+    const ctx = manager.getContext(taskId)
+    if (!ctx) return
+    if (ctx.skill && ctx.layerStates['skill'] === 'loaded') return
+
+    loader.loadSkillLayer(ctx, skillPkg)
+    manager.recalcSize(taskId)
+
+    writeTimelineEvent({ type: 'skill.loaded', taskId })
+    revision.value++
   }
 
   // ── 层生命周期 ──────────────────────────────────────
@@ -802,6 +825,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
     failContextForTask,
     destroyContext,
     loadSkillForTask,
+    loadSkillLayerForTask,
     unloadSkillForTask,
     reloadSkillForTask,
     loadContextLayer,
