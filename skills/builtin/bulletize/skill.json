@@ -1,0 +1,8 @@
+{
+  "name": "bulletize",
+  "display_name": "Bulletize",
+  "version": "0.1.0",
+  "description": "Extract key facts as compact bullet points",
+  "capabilities": ["llm"],
+  "entry": "SKILL.md"
+}

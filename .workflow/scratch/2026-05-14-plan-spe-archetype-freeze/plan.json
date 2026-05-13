@@ -1,0 +1,21 @@
+{
+  "summary": "Freeze SPE Archetype v0.1 — document template + validation record",
+  "approach": "Single task: create docs/skill-archetypes/spe-v0.1.md. No Runtime changes, no new skills. Document existing validation results from summarize + bulletize.",
+  "task_ids": ["TASK-SPE-FREEZE-001"],
+  "task_count": 1,
+  "complexity": "low",
+  "waves": [
+    { "wave": 1, "tasks": ["TASK-SPE-FREEZE-001"] }
+  ],
+  "confidence": {
+    "overall": 0.92,
+    "dimensions": {
+      "requirements_coverage": 0.95,
+      "task_quality": 0.90,
+      "dependency_correctness": 1.0,
+      "estimation_accuracy": 0.90,
+      "collision_safety": 1.0
+    },
+    "pressure_pass": "N/A — single doc-only task, no code to pressure test"
+  }
+}

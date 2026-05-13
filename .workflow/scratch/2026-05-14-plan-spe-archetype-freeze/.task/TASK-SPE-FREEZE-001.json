@@ -1,0 +1,60 @@
+{
+  "id": "TASK-SPE-FREEZE-001",
+  "title": "Create SPE Archetype v0.1 freeze document",
+  "description": "Write docs/skill-archetypes/spe-v0.1.md documenting the Single-Pass Extraction (SPE) Archetype derived from summarize + bulletize validation. Covers: template structure (Role/Format/Rules/Bans/Example), validation evidence (both skills passing same Runtime path), boundary conditions (single-pass only, no workflow/tool/validator/multi-agent), and escalation rule (new patterns require Runtime re-assessment).",
+  "type": "docs",
+  "priority": "high",
+  "effort": "small",
+  "action": "Create docs/skill-archetypes/spe-v0.1.md with: SPE template parameters from summarize/bulletize, 7-point validation checklist with actual test results, Runtime-vs-Behavior boundary definition, escalation clause for non-SPE skills",
+  "status": "completed",
+  "completed_at": "2026-05-14T01:00:00+08:00",
+  "scope": "docs/skill-archetypes/spe-v0.1.md",
+  "focus_paths": ["docs/skill-archetypes/spe-v0.1.md"],
+  "read_first": [
+    "skills/builtin/summarize/SKILL.md (SPE template source)",
+    "skills/builtin/bulletize/SKILL.md (SPE template variant)",
+    "skills/builtin/summarize/skill.json (metadata pattern)",
+    "skills/builtin/bulletize/skill.json (metadata pattern)"
+  ],
+  "depends_on": [],
+  "wave": 1,
+  "convergence": {
+    "criteria": [
+      "docs/skill-archetypes/spe-v0.1.md 包含 'SPE Archetype' 标题",
+      "docs/skill-archetypes/spe-v0.1.md 包含 'Role' 或 '角色' 模板定义",
+      "docs/skill-archetypes/spe-v0.1.md 包含 'Format' 或 '格式' 模板参数",
+      "docs/skill-archetypes/spe-v0.1.md 包含 'single-pass' 或 '单遍' 适用范围说明",
+      "docs/skill-archetypes/spe-v0.1.md 包含 'no workflow' / 'no tool use' / 'no validator' / 'no multi-agent'",
+      "docs/skill-archetypes/spe-v0.1.md 包含 markdown 表格对比 summarize 与 bulletize",
+      "docs/skill-archetypes/spe-v0.1.md 包含 '超出 SPE 的 skill 必须重新做 Runtime 评估' 条款"
+    ],
+    "verification": "grep -c 'SPE Archetype\\|SPE Template\\|single-pass\\|超出 SPE' docs/skill-archetypes/spe-v0.1.md",
+    "definition_of_done": "SPE v0.1 模板冻结完成，文档包含模板参数、验证证据、适用范围和边界条款"
+  },
+  "files": [
+    {
+      "path": "docs/skill-archetypes/spe-v0.1.md",
+      "action": "create",
+      "target": "SPE Archetype v0.1 freeze document"
+    }
+  ],
+  "implementation": [
+    "创建 docs/skill-archetypes/ 目录（如果不存在）",
+    "编写 spe-v0.1.md，包含以下章节：",
+    "",
+    "1. SPE Archetype 概述 — 定义、目的、适用范围",
+    "2. SPE Template v0.1 — 完整模板（Role/Format/Rules/Bans/Example + 参数表）",
+    "3. 验证证据 — summarize + bulletize 对比表格（格式、行数、行上限、实体保留、Runtime 改动）",
+    "4. Runtime vs Behavior Layer 边界 — 明确哪些属于 Runtime，哪些属于 Skill Behavior",
+    "5. 适用范围 — single-pass extraction only，禁止 workflow/tool/validator/multi-agent",
+    "6. 边界条款 — 超出 SPE 的 skill 必须重新做 Runtime 评估",
+    "7. 建议 tag 标记",
+    "",
+    "直接写入文件，不修改任何代码。"
+  ],
+  "meta": {
+    "estimated_time": "10min",
+    "risk": "low",
+    "autonomous": true
+  }
+}
