@@ -71,7 +71,11 @@ export class BackendChatProvider implements ChatCompletionProvider {
 
   async execute(payload: ChatCompletionPayload): Promise<ChatCompletionResult> {
     // 1. 构造 transport 请求
-    const message = payload.messages.map(m => `${m.role}: ${m.content}`).join('\n')
+    // systemPrompt 已作为单独字段发送，message 中排除 system role 避免重复
+    const msgParts = payload.systemPrompt
+      ? payload.messages.filter(m => m.role !== 'system').map(m => `${m.role}: ${m.content}`)
+      : payload.messages.map(m => `${m.role}: ${m.content}`)
+    const message = msgParts.join('\n')
 
     // 2. transport — 只返回 raw string
     const raw = await this.client.send({

@@ -1,0 +1,112 @@
+{
+  "id": "TASK-TRB-004",
+  "title": "Desktop UAT — tauri dev 环境验证 @summarize 端到端链路",
+  "description": "在真实 Tauri webview 中端到端验证修复效果。使用 tauri dev 启动应用，@summarize 输入 525 字新闻文本，验证: (1) [§N] 格式命中率 > 0; (2) 无计划模板输出; (3) 长度比例 ≤ 30%; (4) 实体留存 ≥ 90%。同时回归验证普通 chat 不受影响。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "test",
+  "priority": "high",
+  "effort": "medium",
+  "action": "tauri dev 启动桌面应用，@summarize + 525 字输入，验证 [§N] 格式命中率、长度比例、计划模板消除",
+  "status": "completed",
+  "completed_at": "2026-05-13T18:45:00Z",
+  "actual_duration": "30min",
+
+  "scope": "端到端测试",
+  "focus_paths": [
+    "skills/builtin/summarize/SKILL.md",
+    "src/services/agentAdapter.ts",
+    "src/services/providerAdapter.ts",
+    "src-tauri/src/commands.rs"
+  ],
+
+  "read_first": [
+    "skills/builtin/summarize/SKILL.md (确认当前内容)",
+    "src/services/agentAdapter.ts:122-146 (executeWithContext skill 模式)",
+    ".workflow/scratch/2026-05-13-plan-skill-execution-mode-fix/UAT-REPORT.md (前次 UAT 参考)"
+  ],
+
+  "depends_on": ["TASK-TRB-001", "TASK-TRB-003"],
+  "wave": 2,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "[§N] count > 0（输出包含至少 1 个 [§N] 标记）",
+      "计划模板字段不存在: output 不包含 '步骤建议' / '首先' / '然后' / '第一步' / '第二步'",
+      "长度比例 ≤ 30%: output 长度 ≤ input 长度的 30%",
+      "实体留存 ≥ 90%: 必含实体'华为'、'鸿蒙'、'12亿'、'任正非'（4 个核心实体留存 ≥ 3 个）",
+      "普通 chat 不报错: 发送普通消息后收到正常回复"
+    ],
+    "verification": "手动 UAT: tauri dev → @summarize + 525 字输入 → 检查输出",
+    "definition_of_done": "skill-runtime-p0-usable = true。@summarize 在 Tauri desktop 上输出 [§N] 格式结构化摘要，无计划模板，长度 ≤ 30%。"
+  },
+
+  "files": [],
+
+  "implementation": [
+    "确保 TASK-TRB-001, TASK-TRB-002, TASK-TRB-003 已部署",
+    "运行 npm run tauri dev",
+    "在聊天输入框输入 @summarize + 525 字测试文本（2025 年华为 HDC 新闻）",
+    "等待模型回复（约 30-60s）",
+    "检查输出: [§N] 标记个数、是否含计划模板关键词、长度比例",
+    "发送普通 chat 消息确认非 skill 路径不受影响",
+    "记录结果到 UAT-REPORT.md"
+  ],
+
+  "test": {
+    "commands": [
+      "cd D:/Study2/hexclaw-desktop && npm run tauri dev 2>&1"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "[§N] count > 0",
+      "length ratio ≤ 30%",
+      "no planning template output",
+      "entity retention ≥ 90% (4 entities)",
+      "normal chat works"
+    ]
+  },
+
+  "reference": {
+    "pattern": "前次 UAT 报告中的 TEST 2/3 对比方法",
+    "files": [".workflow/scratch/2026-05-13-plan-skill-execution-mode-fix/UAT-REPORT.md"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "手动 tauri dev UAT（vs Playwright browser UAT）",
+    "decision_factors": [
+      "Playwright browser mode 测不到 Runtime 路径（需要真实 Tauri IPC）",
+      "tauri dev 提供热重载，迭代快",
+      "手动操作可即时调整 prompt"
+    ],
+    "tradeoffs": "手动测试不可重复自动化，建议 tauri-webdriver 后续补充"
+  },
+
+  "risks": [
+    "LLM 模型响应不稳定可能导致偶尔不符合格式要求",
+    "Tauri dev 首次构建耗时较长（cargo build）",
+    "Mimo 模型不支持 § 字符 → [§N] 格式可能需调整为 [N] 或 [要点N]"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["skill-execution", "uat"],
+    "affected_components": ["tauri-runtime", "uat"],
+    "affected_requirements": [],
+    "adr_ids": []
+  },
+
+  "meta": {
+    "estimated_time": "30min",
+    "risk": "medium",
+    "autonomous": false,
+    "checkpoint": true
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "summary": "Tauri Runtime Blockers 修复 — FS Schema + SystemPrompt 传递链",
+  "approach": "3 修复 + 1 UAT。Wave 1 并行修复 Tauri FS config、Go backend 接口契约、agentAdapter 使用真实 systemPrompt。Wave 2 桌面 UAT 验证端到端链路。不新增 SkillTask/SkillTaskExecutor/Workflow/Validator，不改 Runtime Constitution。",
+
+  "task_ids": ["TASK-TRB-001", "TASK-TRB-002", "TASK-TRB-003", "TASK-TRB-004"],
+  "task_count": 4,
+  "complexity": "low",
+
+  "waves": [
+    { "wave": 1, "tasks": ["TASK-TRB-001", "TASK-TRB-002", "TASK-TRB-003"] },
+    { "wave": 2, "tasks": ["TASK-TRB-004"] }
+  ],
+
+  "data_flow": {
+    "diagram": "Tauri app start → plugins.fs init (fix) → SkillRegistry → @summarize → ChatAgentExecutor.executeWithContext → buildPromptInput(systemPrompt: MODE:DIRECT + SKILL.md) → provider.execute({ systemPrompt, messages: [user] }) → backendLLMClient.send({ system_prompt, request_id }) → commands.rs system_prompt → Go backend (not prepend) → LLM → [§N]",
+    "stages": [
+      { "name": "Tauri 启动", "description": "plugins.fs scope 迁移到 capability 格式 → Tauri 可启动 → SkillRegistry 可读 FS" },
+      { "name": "LLM 请求", "description": "Go backend 将 system_prompt 作为 LLM API system message（不嵌入 message list）→ 模型接收权威指令" },
+      { "name": "Prompt 构造", "description": "agentAdapter skill 模式：systemPrompt 独立字段 + message 仅 user input（不含 SKILL.md 正文）" }
+    ]
+  },
+
+  "design_decisions": [
+    {
+      "decision": "TAURI-TRB-001: 从 plugins.fs.scope 迁移到 capability fs:allow-read",
+      "rationale": "tauri-plugin-fs v2.5.1 弃用了 plugins.fs.scope 格式，改用 capability 系统。迁移后 Tauri 可启动，SkillRegistry 可访问 RESOURCE/skills",
+      "alternatives": ["降级 tauri-plugin-fs 到 v2.4.x", "保留 scope 并添加 requireLiteralLeadingDot"]
+    },
+    {
+      "decision": "TAURI-TRB-002: 定义 Go backend system_prompt 接口契约",
+      "rationale": "Go backend 源码不在本仓库，需定义明确契约：system_prompt 应作为 LLM API 的 system message，不嵌入 message list，不缓存。不改前置拼接逻辑时，本修复方案仍能工作（providerAdapter 去重 + systemPrompt 独立字段）",
+      "alternatives": ["不修改 Go backend，保持前端 workaround"]
+    },
+    {
+      "decision": "TAURI-TRB-003: skill 模式使用真实 systemPrompt 独立字段",
+      "rationale": "TEST 2 证明 system_prompt + MODE:DIRECT 有效。将 SKILL.md 移出 message 字符串，放入 systemPrompt 字段。message 仅保留 user input。兼容 Go backend 前置拼接行为（providerAdapter 已过滤 system role）",
+      "alternatives": ["保持当前 message 嵌入方案（TEST 3 证明无效）"]
+    }
+  ],
+
+  "shared_context": {
+    "patterns": [
+      "agentAdapter.ts buildPromptInput: systemPrompt 存在时 messages 仅含 user role",
+      "providerAdapter.ts: systemPrompt 作为独立字段时过滤 system role message",
+      "commands.rs: BackendChatParams.system_prompt + POST body 转发（已实现）"
+    ],
+    "conventions": [
+      "tauri.conf.json plugins 配置 → capability 系统",
+      "TS camelCase, Rust snake_case"
+    ],
+    "dependencies": [
+      "Go backend binary: 不支持源码修改时将保持前瞻性"
+    ]
+  },
+
+  "confidence": {
+    "overall": 0.80,
+    "dimensions": {
+      "requirements_coverage": 0.90,
+      "task_quality": 0.85,
+      "dependency_correctness": 0.85,
+      "estimation_accuracy": 0.75,
+      "collision_safety": 0.70
+    },
+    "pressure_pass": {
+      "task": "TASK-TRB-003",
+      "verification": "agentAdapter.ts skill 分支: systemPrompt 传递 + messages 不含 SKILL.md",
+      "read_first": "✅",
+      "convergence_criteria": "✅",
+      "action": "✅"
+    }
+  }
+}

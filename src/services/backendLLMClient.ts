@@ -22,6 +22,7 @@ export interface LLMBackendRequest {
   temperature?: number
   maxTokens?: number
   metadata?: Record<string, string>
+  requestId?: string
 }
 
 export class BackendLLMClient {
@@ -36,6 +37,9 @@ export class BackendLLMClient {
   async send(req: LLMBackendRequest): Promise<string> {
     const { invoke } = await import('@tauri-apps/api/core')
 
+    // 生成唯一 request_id 避免 Go backend 消息缓存
+    const requestId = req.requestId ?? `llm-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+
     const text = await invoke<string>('backend_chat', {
       params: {
         message: req.message,
@@ -44,6 +48,7 @@ export class BackendLLMClient {
         provider: req.provider ?? null,
         temperature: req.temperature ?? null,
         max_tokens: req.maxTokens ?? null,
+        request_id: requestId,
         metadata: req.metadata ?? null,
       },
     })

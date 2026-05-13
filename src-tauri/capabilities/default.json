@@ -36,6 +36,28 @@
     "dialog:allow-save",
     "core:event:default",
     "core:event:allow-emit",
-    "core:event:allow-listen"
+    "core:event:allow-listen",
+    "fs:default",
+    {
+      "identifier": "fs:allow-read",
+      "allow": [
+        { "path": "$APPDATA/skills/**" },
+        { "path": "$RESOURCE/skills/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-exists",
+      "allow": [
+        { "path": "$APPDATA/skills/**" },
+        { "path": "$RESOURCE/skills/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [
+        { "path": "$APPDATA/skills/**" },
+        { "path": "$RESOURCE/skills/**" }
+      ]
+    }
   ]
 }

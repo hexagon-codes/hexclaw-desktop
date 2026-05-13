@@ -65,14 +65,6 @@
     }
   },
   "plugins": {
-    "fs": {
-      "scope": {
-        "allow": [
-          { "path": "$APPDATA/skills/**" },
-          { "path": "$RESOURCE/skills/**" }
-        ]
-      }
-    },
     "shell": {
       "open": true
     },
