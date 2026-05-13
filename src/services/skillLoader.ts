@@ -90,6 +90,7 @@ export class SkillLoader {
       capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
       entry: parsed.entry ?? 'SKILL.md',
       path: `skills/${safeId}`,
+      source: 'custom',
     }
 
     // ── 2. 读取 SKILL.md（可选） ──────────────────────

@@ -21,10 +21,15 @@ import type { SkillMeta } from '@/types'
 export class SkillRegistry {
   private cache: Map<string, SkillMeta> = new Map()
   private initialized = false
-  private baseDir: BaseDirectory
+  private officialBaseDir: BaseDirectory
+  private customBaseDir: BaseDirectory
 
-  constructor(baseDir: BaseDirectory = BaseDirectory.AppData) {
-    this.baseDir = baseDir
+  constructor(
+    officialBaseDir: BaseDirectory = BaseDirectory.Resource,
+    customBaseDir: BaseDirectory = BaseDirectory.AppData,
+  ) {
+    this.officialBaseDir = officialBaseDir
+    this.customBaseDir = customBaseDir
   }
 
   // ── Lazy Initialize ──────────────────────────────────
@@ -57,20 +62,23 @@ export class SkillRegistry {
   // ── 内部 ─────────────────────────────────────────────
 
   /**
-   * 扫描 skills/ 目录，读取所有 skill.json。
+   * 从指定目录扫描 skills/，读取所有 skill.json。
    * 单个 skill.json 损坏只 warn 跳过。
-   * skills/ 目录不存在时静默返回空列表。
+   * 目录不存在时静默返回空 Map。
    */
-  private async discoverSkills(): Promise<void> {
+  private async discoverFromDir(
+    baseDir: BaseDirectory,
+    source: 'official' | 'custom',
+  ): Promise<Map<string, SkillMeta>> {
+    const result = new Map<string, SkillMeta>()
     let entries: { name: string; isDirectory: boolean }[]
 
     try {
-      const dirEntries = await readDir('skills', { baseDir: this.baseDir })
+      const dirEntries = await readDir('skills', { baseDir })
       entries = dirEntries
     } catch {
       // skills/ 目录不存在
-      console.warn('[SkillRegistry] skills/ 目录不存在，返回空列表')
-      return
+      return result
     }
 
     for (const entry of entries) {
@@ -81,7 +89,7 @@ export class SkillRegistry {
 
       try {
         const raw = await readTextFile(`skills/${skillId}/skill.json`, {
-          baseDir: this.baseDir,
+          baseDir,
         })
         const parsed = JSON.parse(raw)
 
@@ -93,12 +101,37 @@ export class SkillRegistry {
           capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
           entry: parsed.entry ?? 'SKILL.md',
           path: `skills/${skillId}`,
+          source,
         }
 
-        this.cache.set(skillId, meta)
+        result.set(skillId, meta)
       } catch (e) {
         console.warn(`[SkillRegistry] 加载 skill "${skillId}" 失败:`, e)
       }
+    }
+
+    return result
+  }
+
+  /**
+   * 扫描两棵 skills/ 目录。
+   * 先扫 Official 再扫 Custom，冲突时保留 Official 跳过 Custom。
+   */
+  private async discoverSkills(): Promise<void> {
+    // 1. 扫描 Official
+    const officialSkills = await this.discoverFromDir(this.officialBaseDir, 'official')
+    for (const [id, meta] of officialSkills) {
+      this.cache.set(id, meta)
+    }
+
+    // 2. 扫描 Custom，冲突保留 Official
+    const customSkills = await this.discoverFromDir(this.customBaseDir, 'custom')
+    for (const [id, meta] of customSkills) {
+      if (this.cache.has(id)) {
+        console.warn(`[SkillRegistry] Custom skill "${id}" 与 Official 冲突，已忽略`)
+        continue
+      }
+      this.cache.set(id, meta)
     }
   }
 

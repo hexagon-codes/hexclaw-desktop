@@ -28,6 +28,8 @@ export interface SkillMeta {
   capabilities: CapabilityName[]
   entry: string
   path: string
+  /** 来源标记 — Registry 自动填充 */
+  source: 'official' | 'custom'
 }
 
 /** Skill 引用文件 */

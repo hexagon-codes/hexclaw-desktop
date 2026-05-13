@@ -1,0 +1,174 @@
+{
+  "id": "TASK-OSB-001",
+  "title": "SkillRegistry 双 BaseDirectory + SkillMeta.source 标记",
+  "description": "将 SkillRegistry 扩展为同时扫描 $RESOURCE/skills/（Official）和 $APPDATA/skills/（Custom）两棵独立目录。先扫描 Official 再扫描 Custom，冲突时保留 Official 跳过 Custom 并 warning log。SkillMeta 新增 source: 'official' | 'custom' 字段由 Registry 自动填充。tauri.conf.json 的 resources 和 fs scope 已配置，无需修改。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "feature",
+  "priority": "high",
+  "effort": "small",
+  "action": "修改 src/types/skill.ts (SkillMeta 新增 source: 'official' | 'custom') + src/services/skillRegistry.ts (双 BaseDirectory 扫描 + 冲突保留 Official + source 标记)",
+  "status": "completed",
+  "completed_at": "2026-05-13T00:00:00.000Z",
+  "actual_duration": "15m",
+
+  "scope": "src/services/skillRegistry.ts + src/types/skill.ts",
+  "focus_paths": ["src/services/", "src/types/"],
+
+  "read_first": [
+    "src/services/skillRegistry.ts",
+    "src/types/skill.ts",
+    "src-tauri/tauri.conf.json",
+    "src/services/runtime/runtimeServices.ts"
+  ],
+
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "src/types/skill.ts 包含 'source: 'official' | 'custom'' 或类似联合类型定义",
+      "src/services/skillRegistry.ts 包含 'BaseDirectory.Resource'",
+      "src/services/skillRegistry.ts 包含 'BaseDirectory.AppData'",
+      "src/services/skillRegistry.ts constructor 接受两个 BaseDirectory 参数",
+      "src/services/skillRegistry.ts discoverSkills() 先扫描 Official 再扫描 Custom",
+      "src/services/skillRegistry.ts 包含 console.warn 或类似警告（冲突时）",
+      "src/services/skillRegistry.ts 包含 'source:' 赋值（Official 或 Custom）",
+      "src/services/skillRegistry.ts 仍为 class 且导出 SkillRegistry",
+      "src/services/skillBridge.ts 未变动（零修改）",
+      "npx tsc --noEmit 编译通过"
+    ],
+    "verification": "grep -n 'source' src/types/skill.ts && grep -n 'BaseDirectory\\.' src/services/skillRegistry.ts && grep -c 'class SkillRegistry' src/services/skillRegistry.ts && grep -c 'export' src/services/skillBridge.ts && npx tsc --noEmit 2>&1 | head -5",
+    "definition_of_done": "SkillRegistry 先扫 RESOURCE 再扫 APPDATA，冲突时保留 Official 跳过 Custom，skillBridge 零修改，tsc 通过"
+  },
+
+  "files": [
+    {
+      "path": "src/types/skill.ts",
+      "action": "modify",
+      "target": "SkillMeta interface",
+      "change": "替换 official?: boolean 为 source: 'official' | 'custom'"
+    },
+    {
+      "path": "src/services/skillRegistry.ts",
+      "action": "modify",
+      "target": "class SkillRegistry",
+      "change": "双 BaseDirectory 构造器；discoverSkills 先扫 Official 再扫 Custom，冲突保留 Official 并 warning log；自动填充 source 字段"
+    }
+  ],
+
+  "implementation": [
+    "1. src/types/skill.ts — SkillMeta interface 新增字段：",
+    "     source: 'official' | 'custom'",
+    "   注意：source 不是可选字段（每次构建时必然知道来源），由 Registry 自动填充。",
+    "",
+    "2. src/services/skillRegistry.ts 构造器修改：",
+    "     当前：constructor(baseDir: BaseDirectory = BaseDirectory.AppData)",
+    "     改为：constructor(",
+    "       officialBaseDir: BaseDirectory = BaseDirectory.Resource,",
+    "       customBaseDir: BaseDirectory = BaseDirectory.AppData,",
+    "     )",
+    "     移除旧 baseDir 属性，新增 officialBaseDir + customBaseDir 属性。",
+    "",
+    "3. 新增 discoverFromDir(baseDir, source) 内部方法：",
+    "     从现有 discoverSkills() 提取公共扫描逻辑：",
+    "     - 扫描 {baseDir}/skills/ 目录",
+    "     - 读取每个 skill.json",
+    "     - 构建 SkillMeta，设置 meta.source = source",
+    "     - 存入 cache",
+    "     - 目录不存在时静默处理（console.warn）",
+    "",
+    "4. discoverSkills() 改为：",
+    "     private async discoverSkills(): Promise<void> {",
+    "       // 先扫描 Official",
+    "       const officialSkills = await this.discoverFromDir(this.officialBaseDir, 'official')",
+    "       for (const [id, meta] of officialSkills) {",
+    "         this.cache.set(id, meta)",
+    "       }",
+    "",
+    "       // 再扫描 Custom，冲突保留 Official",
+    "       const customSkills = await this.discoverFromDir(this.customBaseDir, 'custom')",
+    "       for (const [id, meta] of customSkills) {",
+    "         if (this.cache.has(id)) {",
+    "           console.warn(`[SkillRegistry] Custom skill \"${id}\" 与 Official 冲突，已忽略`)",
+    "           continue",
+    "         }",
+    "         this.cache.set(id, meta)",
+    "       }",
+    "     }",
+    "",
+    "5. 验证：",
+    "   - SkillMeta.source 为 'official' 或 'custom'（联合类型）",
+    "   - Registry 扫描 Official 时 source='official'，Custom 时 source='custom'",
+    "   - 冲突时 Custom 被跳过 + warning log",
+    "   - skillBridge.ts 零修改",
+    "   - MentionPopup 零修改",
+    "   - npx tsc --noEmit 编译通过"
+  ],
+
+  "test": {
+    "commands": [
+      "grep -n 'source' src/types/skill.ts",
+      "grep -n 'BaseDirectory\\.' src/services/skillRegistry.ts",
+      "grep -c 'class SkillRegistry' src/services/skillRegistry.ts",
+      "npx tsc --noEmit 2>&1 | head -5"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "SkillMeta 包含 source 联合类型",
+      "SkillRegistry 使用两个 BaseDirectory",
+      "冲突时 warning log",
+      "tsc --noEmit 通过"
+    ]
+  },
+
+  "reference": {
+    "pattern": "runtimeServices.ts:20 — 服务定位器模式，lazy singleton",
+    "files": [
+      "src/services/runtime/runtimeServices.ts",
+      "src-tauri/tauri.conf.json"
+    ],
+    "examples": [
+      "tauri.conf.json:71-72 — fs scope 已包含 $RESOURCE/skills/** 和 $APPDATA/skills/**",
+      "tauri.conf.json:40 — resources 已配置 skills/"
+    ]
+  },
+
+  "rationale": {
+    "chosen_approach": "单 Registry 双 BaseDirectory，先扫 Official 再扫 Custom，冲突保留 Official。source 联合类型取代 boolean，更清晰可扩展。",
+    "decision_factors": [
+      "最小改动：~35 行修改，2 文件",
+      "零侵入调用方：skillBridge 和 MentionPopup 无需感知变化",
+      "Official 优先是安全策略：不允许用户覆盖内置 skill",
+      "warning log 帮助调试",
+      "tauri infra 已就绪：resources + fs scope 已配置"
+    ],
+    "tradeoffs": "Official Skill 只读保护依赖 tauri resource 机制，非应用层加密。P0 足够。"
+  },
+
+  "risks": [
+    "$RESOURCE/skills/ 在 dev 模式下的路径问题 — 缓解：dev 时 skills/builtin/ 在项目根目录，tauri 自动映射",
+    "冲突时用户无感知 Custom 被忽略 — 缓解：输出 warning log"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["Official Skill Boundary"],
+    "affected_components": ["skillRegistry.ts", "types/skill.ts"],
+    "affected_requirements": [],
+    "adr_ids": []
+  },
+
+  "meta": {
+    "estimated_time": "20m",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}
