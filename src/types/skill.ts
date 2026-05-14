@@ -1,3 +1,5 @@
+import type { SkillMeta } from './context'
+
 /** 后端返回的 Skill（Markdown 技能） */
 export interface Skill {
   id?: string
@@ -41,4 +43,90 @@ export interface SkillStatusUpdateResult {
   message?: string
   warning?: string
   source: 'backend' | 'local-fallback'
+}
+
+// ── Skill Package Format (Module 007) ────────────────
+
+/** 层级声明（stable） */
+export interface SkillLayer {
+  id: string
+  file: string
+  trigger: string
+  description?: string
+  content?: string  // 加载后填充
+}
+
+/** 命令声明（stable，Claude Code 兼容） */
+export interface SkillCommand {
+  name: string
+  file: string
+  description?: string
+  args?: Record<string, { type: string; required?: boolean; description?: string }>
+}
+
+/** 依赖声明（stable） */
+export interface SkillDependencies {
+  skills?: string[]
+  runtime?: string[]
+  tools?: string[]
+}
+
+/** 信任元数据（stable） */
+export interface SkillTrust {
+  source: 'clawhub' | 'github' | 'local' | 'claude-code'
+  verified: boolean
+  risk: 'low' | 'medium' | 'high'
+}
+
+/** 交互声明（experimental → Chat Workspace Runtime 消费） */
+export interface SkillAction {
+  id: string
+  label: string
+  intent: string
+}
+
+/** 实验性子类型 */
+export interface SkillAgent {
+  name: string
+  file: string
+  description?: string
+  model?: string
+  tools?: string[]
+}
+
+export interface SkillHook {
+  name: string
+  file: string
+  event: 'pre-task' | 'post-task' | 'pre-invoke' | 'post-invoke'
+}
+
+/** 实验性扩展（experimental，不承诺兼容） */
+export interface SkillExperimental {
+  scripts?: Record<string, { file: string; sandbox: string }>
+  hooks?: SkillHook[]
+  agents?: SkillAgent[]
+  interaction?: {
+    actions?: SkillAction[]
+  }
+}
+
+/** Runtime 兼容性声明 */
+export interface SkillRuntimeCompat {
+  min_version?: string
+  engine?: string[]
+  platform?: string[]
+}
+
+/** 完整 Skill Package 元数据（extends SkillMeta） */
+export interface SkillPackageMeta extends SkillMeta {
+  schema_version: string
+  runtime?: SkillRuntimeCompat
+  layers: SkillLayer[]
+  commands?: SkillCommand[]
+  dependencies?: SkillDependencies
+  _trust?: SkillTrust
+  experimental?: SkillExperimental
+  author?: string
+  license?: string
+  tags?: string[]
 }

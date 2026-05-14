@@ -1,0 +1,126 @@
+{
+  "id": "TASK-004",
+  "title": "现有 Skill 回归验证 + schema_version 解析测试",
+  "description": "验证现有 summarize/bulletize skill.json 仍可正常解析，新建一个带 schema_version 的测试 Skill 验证新 schema 解析，确认 tsc 全量编译通过。",
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "test",
+  "priority": "medium",
+  "effort": "small",
+  "action": "创建 skills/test-schema-v1/skill.json（含 schema_version: '1.0', layers 等新字段），运行 SkillRegistry 扫描验证，确认 tsc 编译通过",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+
+  "scope": "skills/test-schema-v1/, src/services/skillRegistry.ts",
+  "focus_paths": ["skills/", "src/services/skillRegistry.ts"],
+
+  "read_first": [
+    "skills/summarize/skill.json",
+    "src/services/skillRegistry.ts",
+    "src/types/skill.ts",
+    "src/schemas/skill.schema.json"
+  ],
+
+  "depends_on": ["TASK-003"],
+  "wave": 2,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "skills/summarize/skill.json 仍可被 SkillRegistry 正确解析",
+      "skills/bulletize/skill.json 仍可被 SkillRegistry 正确解析",
+      "skills/test-schema-v1/skill.json 存在且含 schema_version: '1.0'",
+      "skills/test-schema-v1/skill.json 含 layers, commands, dependencies 字段",
+      "npx tsc --noEmit 编译通过",
+      "验证后删除 skills/test-schema-v1/ 目录（测试用）"
+    ],
+    "verification": "npx tsc --noEmit && echo 'tsc OK'",
+    "definition_of_done": "现有 Skill 无回归，新 schema 解析正确，tsc 全量通过"
+  },
+
+  "files": [
+    {
+      "path": "skills/test-schema-v1/skill.json",
+      "action": "create",
+      "target": "test skill.json",
+      "change": "新建测试用 skill.json，含 schema_version: '1.0' 和完整新字段"
+    },
+    {
+      "path": "skills/test-schema-v1/SKILL.md",
+      "action": "create",
+      "target": "test SKILL.md",
+      "change": "新建最小 SKILL.md 供 SkillRegistry fallback 测试"
+    }
+  ],
+
+  "implementation": [
+    "创建 skills/test-schema-v1/ 目录",
+    "创建 skills/test-schema-v1/skill.json，内容：",
+    "  { schema_version: '1.0', name: 'test-schema-v1', version: '0.1.0', entry: 'SKILL.md',",
+    "    layers: [{ id: 'base', file: 'SKILL.md', trigger: 'always' }],",
+    "    triggers: ['test'], capabilities: ['test'],",
+    "    commands: [{ name: 'test', file: 'commands/test.md', description: 'Test command' }],",
+    "    dependencies: { skills: [], runtime: [], tools: [] },",
+    "    _trust: { source: 'local', verified: false, risk: 'low' } }",
+    "创建 skills/test-schema-v1/SKILL.md，内容：'# Test Skill\\nThis is a test.'",
+    "运行 tsc 编译验证",
+    "检查 Console 日志确认 test-schema-v1 被发现",
+    "删除 skills/test-schema-v1/ 目录（清理测试数据）"
+  ],
+
+  "test": {
+    "commands": [
+      "npx tsc --noEmit"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "现有 summarize/bulletize 无回归",
+      "新 schema_version: '1.0' 可解析",
+      "tsc 全量编译通过",
+      "测试目录已清理"
+    ]
+  },
+
+  "reference": {
+    "pattern": "skills/summarize/skill.json",
+    "files": ["skills/summarize/skill.json", "skills/bulletize/skill.json"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "创建临时测试 Skill 验证新 schema 解析，验证后清理",
+    "decision_factors": [
+      "真实验证比单元测试更可靠（在 Tauri 文件系统环境中）",
+      "测试后清理避免污染项目结构",
+      "同时验证现有 Skill 的向后兼容性"
+    ],
+    "tradeoffs": null
+  },
+
+  "risks": [
+    {
+      "risk": "测试 Skill 残留未清理",
+      "mitigation": "implementation 步骤明确包含清理步骤"
+    }
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["Skill 发现回归验证"],
+    "affected_components": ["SkillRegistry"],
+    "affected_requirements": ["Module 007 Phase 1 验收标准: 现有 Skill 无回归 + schema_version 解析"],
+    "adr_ids": []
+  },
+
+  "meta": {
+    "estimated_time": "20min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

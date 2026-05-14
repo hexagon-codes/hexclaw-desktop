@@ -1,0 +1,113 @@
+{
+  "id": "TASK-001",
+  "title": "定义 skill.json schema + machine-readable JSON Schema",
+  "description": "创建 skill.schema.json 作为 HexClaw Skill Constitution v1 的 machine-readable contract，定义 schema_version, layers, triggers, commands, dependencies, _trust, experimental 等字段的结构约束。",
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "feature",
+  "priority": "high",
+  "effort": "medium",
+  "action": "创建 src/schemas/skill.schema.json，包含 schema_version (required, enum ['1.0']), name, display_name, version (semver), entry, layers (array of {id, file, trigger}), triggers, capabilities, commands, dependencies, runtime, _trust, experimental 等字段的完整 JSON Schema 定义",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+
+  "scope": "src/schemas/skill.schema.json",
+  "focus_paths": ["src/schemas/"],
+
+  "read_first": [
+    "docs/refactor/module-007-skill-package-format.md",
+    "skills/summarize/skill.json"
+  ],
+
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": "schema-types",
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "src/schemas/skill.schema.json 存在且为合法 JSON",
+      "schema 包含 $schema, type: 'object', properties, required 字段",
+      "required 包含 'schema_version', 'name', 'version', 'entry'",
+      "schema_version 的 enum 为 ['1.0']",
+      "layers.items.properties 包含 'id', 'file', 'trigger'",
+      "schema 可通过 JSON.parse 解析"
+    ],
+    "verification": "cat src/schemas/skill.schema.json | python3 -c \"import json,sys; d=json.load(sys.stdin); assert d['required']==['schema_version','name','version','entry']\"",
+    "definition_of_done": "skill.schema.json 创建完成，machine-readable contract 可用，所有 required 字段已定义"
+  },
+
+  "files": [
+    {
+      "path": "src/schemas/skill.schema.json",
+      "action": "create",
+      "target": "skill.schema.json",
+      "change": "新建 JSON Schema 文件，定义 Skill Package Format v1 的完整结构约束"
+    }
+  ],
+
+  "implementation": [
+    "创建 src/schemas/ 目录（如不存在）",
+    "创建 skill.schema.json，按照 module-007-skill-package-format.md §3.1 定义完整 schema",
+    "required 字段: schema_version, name, version, entry",
+    "layers 定义: type array, items 含 id(string), file(string), trigger(enum: always/user-deep-dive/explicit/on-error/on-continue)",
+    "commands 定义: type array, items 含 name(string), file(string), description(string optional)",
+    "dependencies 定义: type object, properties 含 skills(array), runtime(array), tools(array)",
+    "_trust 定义: type object, properties 含 source(enum), verified(boolean), risk(enum)",
+    "experimental 定义: type object, additionalProperties: true（允许 unknown 字段）"
+  ],
+
+  "test": {
+    "commands": [
+      "node -e \"const s=require('./src/schemas/skill.schema.json'); console.log('OK:', s.required)\""
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "JSON Schema 文件存在且合法",
+      "required 字段正确",
+      "layers/commands/dependencies/_trust/experimental 结构完整"
+    ]
+  },
+
+  "reference": {
+    "pattern": "docs/refactor/module-007-skill-package-format.md §3.1 skill.json Schema",
+    "files": ["docs/refactor/module-007-skill-package-format.md"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "直接创建 JSON Schema 文件，作为 TypeScript 类型定义的参考源和 runtime 验证基础",
+    "decision_factors": [
+      "JSON Schema 是行业标准，可被 IDE、CI、runtime 消费",
+      "先定义 schema 再定义 TypeScript 类型，保证一致性",
+      "machine-readable contract 便于后续自动化校验"
+    ],
+    "tradeoffs": null
+  },
+
+  "risks": [
+    {
+      "risk": "schema 与实际 TypeScript 类型不一致",
+      "mitigation": "TASK-002 基于同一份 schema 定义 TypeScript 类型，保持同步"
+    }
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["skill.json schema 定义"],
+    "affected_components": ["SkillRegistry"],
+    "affected_requirements": ["Module 007 Phase 1 Must Have: 定义 skill.json schema"],
+    "adr_ids": []
+  },
+
+  "meta": {
+    "estimated_time": "30min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

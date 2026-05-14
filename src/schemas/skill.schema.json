@@ -1,0 +1,213 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hexclaw.dev/schemas/skill.schema.json",
+  "title": "HexClaw Skill Package",
+  "description": "Skill Constitution v1 — machine-readable contract for skill.json",
+  "type": "object",
+  "required": ["schema_version", "name", "version", "entry"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "enum": ["1.0"],
+      "description": "Schema 自身版本，与 Skill 版本独立"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9_-]+$",
+      "description": "Skill 标识符，lowercase, no special chars"
+    },
+    "display_name": {
+      "type": "string",
+      "description": "UI 显示名"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "semver 格式 Skill 版本"
+    },
+    "description": {
+      "type": "string"
+    },
+    "author": {
+      "type": "string"
+    },
+    "license": {
+      "type": "string"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "entry": {
+      "type": "string",
+      "description": "基础指令文件路径"
+    },
+    "runtime": {
+      "type": "object",
+      "properties": {
+        "min_version": { "type": "string" },
+        "engine": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "platform": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "file", "trigger"],
+        "properties": {
+          "id": { "type": "string" },
+          "file": { "type": "string" },
+          "trigger": {
+            "type": "string",
+            "enum": ["always", "user-deep-dive", "explicit", "on-error", "on-continue"]
+          },
+          "description": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "triggers": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "file"],
+        "properties": {
+          "name": { "type": "string" },
+          "file": { "type": "string" },
+          "description": { "type": "string" },
+          "args": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "type": { "type": "string" },
+                "required": { "type": "boolean" },
+                "description": { "type": "string" }
+              },
+              "required": ["type"]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "properties": {
+        "skills": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "runtime": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tools": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "_trust": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": ["clawhub", "github", "local", "claude-code"]
+        },
+        "verified": { "type": "boolean" },
+        "risk": {
+          "type": "string",
+          "enum": ["low", "medium", "high"]
+        }
+      },
+      "required": ["source", "verified", "risk"],
+      "additionalProperties": false
+    },
+    "experimental": {
+      "type": "object",
+      "description": "实验性扩展，不承诺兼容",
+      "properties": {
+        "scripts": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "file": { "type": "string" },
+              "sandbox": { "type": "string" }
+            },
+            "required": ["file", "sandbox"]
+          }
+        },
+        "hooks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "file": { "type": "string" },
+              "event": {
+                "type": "string",
+                "enum": ["pre-task", "post-task", "pre-invoke", "post-invoke"]
+              }
+            },
+            "required": ["name", "file", "event"]
+          }
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "file": { "type": "string" },
+              "description": { "type": "string" },
+              "model": { "type": "string" },
+              "tools": {
+                "type": "array",
+                "items": { "type": "string" }
+              }
+            },
+            "required": ["name", "file"]
+          }
+        },
+        "interaction": {
+          "type": "object",
+          "properties": {
+            "actions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "label": { "type": "string" },
+                  "intent": { "type": "string" }
+                },
+                "required": ["id", "label", "intent"]
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

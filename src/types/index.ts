@@ -8,7 +8,7 @@
 // ─── 领域模型 ───────────────────────────────────────
 
 export type {
-  ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ExecMode, ContentBlock,
+  ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ContentBlock,
   InteractiveButton, InteractiveType, InteractiveOption, InteractiveApproval, CardField, InteractiveCard,
   InteractiveResolved, InteractivePayload,
 } from './chat'
@@ -24,7 +24,12 @@ export type {
   MemoryListResponse,
 } from './memory'
 export type { McpServer, McpTool } from './mcp'
-export type { Skill, ClawHubSkill, SkillStatusUpdateResult } from './skill'
+export type {
+  Skill, ClawHubSkill, SkillStatusUpdateResult,
+  SkillLayer, SkillCommand, SkillDependencies, SkillTrust,
+  SkillAction, SkillAgent, SkillHook, SkillExperimental,
+  SkillRuntimeCompat, SkillPackageMeta,
+} from './skill'
 export type { CronJob, CronJobInput, Task, TaskInput, TaskOutput, TaskResult, TaskStatus, TaskType, TaskMetadata, TaskError } from './task'
 export type {
   ContextLayerStatus, SystemLayer, SkillLayer, TaskLayer, ExecutionLayer, MemoryLayer,

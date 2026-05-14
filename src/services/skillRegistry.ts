@@ -15,7 +15,8 @@
  */
 
 import { readDir, readTextFile } from '@tauri-apps/plugin-fs'
-import { BaseDirectory } from '@tauri-apps/api/path'
+import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
+import { env } from '@/config/env'
 import type { SkillMeta } from '@/types'
 
 export class SkillRegistry {
@@ -23,6 +24,7 @@ export class SkillRegistry {
   private initialized = false
   private officialBaseDir: BaseDirectory
   private customBaseDir: BaseDirectory
+  private resolvedResourcePath: string | undefined
 
   constructor(
     officialBaseDir: BaseDirectory = BaseDirectory.Resource,
@@ -106,7 +108,25 @@ export class SkillRegistry {
 
         result.set(skillId, meta)
       } catch (e) {
-        console.warn(`[SkillRegistry] 加载 skill "${skillId}" 失败:`, e)
+        // skill.json 不存在或损坏 → 尝试从 SKILL.md 自动生成等效元数据
+        try {
+          await readTextFile(`skills/${skillId}/SKILL.md`, { baseDir })
+          const meta: SkillMeta = {
+            skillId,
+            displayName: skillId,
+            version: '0.0.0',
+            description: '',
+            capabilities: [],
+            entry: 'SKILL.md',
+            path: `skills/${skillId}`,
+            source,
+          }
+          result.set(skillId, meta)
+          console.info(`[SkillRegistry] skill "${skillId}" 无 skill.json，从 SKILL.md 自动生成元数据`)
+        } catch {
+          // SKILL.md 也不存在，跳过
+          console.warn(`[SkillRegistry] 加载 skill "${skillId}" 失败:`, e)
+        }
       }
     }
 
@@ -116,16 +136,58 @@ export class SkillRegistry {
   /**
    * 扫描两棵 skills/ 目录。
    * 先扫 Official 再扫 Custom，冲突时保留 Official 跳过 Custom。
+   *
+   * Fallback: 若 BaseDirectory.Resource 扫描结果为空，
+   * 尝试用 resourceDir() 解析的实际路径重新扫描（dev 模式兼容）。
    */
   private async discoverSkills(): Promise<void> {
     // 1. 扫描 Official
-    const officialSkills = await this.discoverFromDir(this.officialBaseDir, 'official')
+    let officialSkills = await this.discoverFromDir(this.officialBaseDir, 'official')
+
+    // 诊断：打印 BaseDirectory.Resource 扫描结果
+    console.info(`[SkillRegistry] BaseDirectory.Resource 扫描: ${officialSkills.size} 个 skill`)
+
+    // Fallback: BaseDirectory.Resource 在 dev 模式下可能不指向项目根
+    if (officialSkills.size === 0) {
+      try {
+        const actualResourceDir = await resourceDir()
+        if (actualResourceDir) {
+          this.resolvedResourcePath = actualResourceDir
+          console.info(`[SkillRegistry] resourceDir() 解析路径: ${actualResourceDir}`)
+          officialSkills = await this.discoverFromPath(actualResourceDir, 'official')
+          console.info(`[SkillRegistry] resourceDir fallback 扫描: ${officialSkills.size} 个 skill`)
+        }
+      } catch (e) {
+        console.warn(`[SkillRegistry] resourceDir() 不可用:`, e)
+      }
+    }
+
+    // Fallback: dev 模式下尝试从项目根目录加载 skills/
+    if (officialSkills.size === 0 && env.isDev) {
+      try {
+        // dev 模式下 resourceDir() 通常指向 src-tauri/target/debug
+        // 需要向上两级找到项目根目录
+        const actualResourceDir = await resourceDir()
+        if (actualResourceDir) {
+          const projectRoot = actualResourceDir
+            .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
+            .replace(/[/\\]target[/\\].*$/, '')
+          console.info(`[SkillRegistry] dev 模式回退项目根: ${projectRoot}`)
+          officialSkills = await this.discoverFromPath(projectRoot, 'official')
+          console.info(`[SkillRegistry] 项目根 fallback 扫描: ${officialSkills.size} 个 skill`)
+        }
+      } catch (e) {
+        console.warn(`[SkillRegistry] 项目根 fallback 失败:`, e)
+      }
+    }
+
     for (const [id, meta] of officialSkills) {
       this.cache.set(id, meta)
     }
 
     // 2. 扫描 Custom，冲突保留 Official
     const customSkills = await this.discoverFromDir(this.customBaseDir, 'custom')
+    console.info(`[SkillRegistry] AppData 扫描: ${customSkills.size} 个 skill`)
     for (const [id, meta] of customSkills) {
       if (this.cache.has(id)) {
         console.warn(`[SkillRegistry] Custom skill "${id}" 与 Official 冲突，已忽略`)
@@ -133,6 +195,71 @@ export class SkillRegistry {
       }
       this.cache.set(id, meta)
     }
+
+    console.info(`[SkillRegistry] 总计注册: ${this.cache.size} 个 skill`, Array.from(this.cache.keys()))
+  }
+
+  /**
+   * 从绝对路径扫描 skills/ 子目录（dev 模式 fallback）。
+   * 与 discoverFromDir 逻辑相同，但使用绝对路径而非 BaseDirectory。
+   */
+  private async discoverFromPath(
+    absolutePath: string,
+    source: 'official' | 'custom',
+  ): Promise<Map<string, SkillMeta>> {
+    const result = new Map<string, SkillMeta>()
+    let entries: { name: string; isDirectory: boolean }[]
+
+    try {
+      const dirEntries = await readDir(`${absolutePath}/skills`)
+      entries = dirEntries
+    } catch {
+      return result
+    }
+
+    for (const entry of entries) {
+      if (!entry.name || !entry.isDirectory) continue
+      const skillId = this.sanitizeSkillId(entry.name)
+      if (!skillId) continue
+
+      try {
+        const raw = await readTextFile(`${absolutePath}/skills/${skillId}/skill.json`)
+        const parsed = JSON.parse(raw)
+        const meta: SkillMeta = {
+          skillId,
+          displayName: parsed.display_name ?? parsed.name ?? skillId,
+          version: parsed.version ?? '0.0.0',
+          description: parsed.description ?? '',
+          capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
+          entry: parsed.entry ?? 'SKILL.md',
+          path: `skills/${skillId}`,
+          source,
+        }
+        result.set(skillId, meta)
+      } catch (e) {
+        // skill.json 不存在或损坏 → 尝试从 SKILL.md 自动生成等效元数据
+        try {
+          await readTextFile(`${absolutePath}/skills/${skillId}/SKILL.md`)
+          const meta: SkillMeta = {
+            skillId,
+            displayName: skillId,
+            version: '0.0.0',
+            description: '',
+            capabilities: [],
+            entry: 'SKILL.md',
+            path: `skills/${skillId}`,
+            source,
+          }
+          result.set(skillId, meta)
+          console.info(`[SkillRegistry] skill "${skillId}" 无 skill.json，从 SKILL.md 自动生成元数据`)
+        } catch {
+          // SKILL.md 也不存在，跳过
+          console.warn(`[SkillRegistry] 加载 skill "${skillId}" 失败:`, e)
+        }
+      }
+    }
+
+    return result
   }
 
   /** 净化 skillId：阻止路径穿越 */
