@@ -17,8 +17,9 @@
  */
 
 import { readDir, readTextFile } from '@tauri-apps/plugin-fs'
-import { BaseDirectory } from '@tauri-apps/api/path'
-import type { SkillMeta, SkillPackage, SkillReference } from '@/types'
+import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
+import { env } from '@/config/env'
+import type { SkillMeta, SkillPackage, SkillReference, SkillLayer } from '@/types'
 import { estimateSize } from '@/utils/sizeEstimator'
 
 // ─── Error Helper ─────────────────────────────────────
@@ -64,15 +65,37 @@ export class SkillLoader {
     const loadMarkdown = options?.loadMarkdown ?? false
     const loadReferences = options?.loadReferences ?? false
 
+    // 诊断：打印 baseDir
+    console.info(`[SkillLoader] loadSkill: skillId=${safeId}, baseDir=${this.baseDir}`)
+
     // ── 1. 读取 meta（必选） ──────────────────────────
 
     let raw: string
+    let resolvedBasePath: string | null = null
+
     try {
       raw = await readTextFile(`skills/${safeId}/skill.json`, {
         baseDir: this.baseDir,
       })
     } catch {
-      throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${safeId}`)
+      // Fallback: dev 模式下尝试从项目根目录加载
+      if (env.isDev) {
+        try {
+          const actualResourceDir = await resourceDir()
+          if (actualResourceDir) {
+            const projectRoot = actualResourceDir
+              .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
+              .replace(/[/\\]target[/\\].*$/, '')
+            console.info(`[SkillLoader] dev 模式回退项目根: ${projectRoot}`)
+            raw = await readTextFile(`${projectRoot}/skills/${safeId}/skill.json`)
+            resolvedBasePath = `${projectRoot}/skills/${safeId}`
+          }
+        } catch {
+          throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${safeId} (baseDir=${this.baseDir})`)
+        }
+      } else {
+        throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${safeId} (baseDir=${this.baseDir})`)
+      }
     }
 
     let parsed: Record<string, unknown>
@@ -97,13 +120,21 @@ export class SkillLoader {
 
     let markdown: string | undefined
     if (loadMarkdown) {
-      try {
-        markdown = await readTextFile(`skills/${safeId}/SKILL.md`, {
-          baseDir: this.baseDir,
-        })
-      } catch {
-        // SKILL.md 不存在或不可读 — 静默处理
-        markdown = undefined
+      if (resolvedBasePath) {
+        // 使用绝对路径加载
+        try {
+          markdown = await readTextFile(`${resolvedBasePath}/SKILL.md`)
+        } catch {
+          markdown = undefined
+        }
+      } else {
+        try {
+          markdown = await readTextFile(`skills/${safeId}/SKILL.md`, {
+            baseDir: this.baseDir,
+          })
+        } catch {
+          markdown = undefined
+        }
       }
     }
 
@@ -111,18 +142,32 @@ export class SkillLoader {
 
     let references: SkillReference[] = []
     if (loadReferences) {
-      try {
-        const refEntries = await readDir(`skills/${safeId}/references`, {
-          baseDir: this.baseDir,
-        })
-        references = refEntries
-          .filter((e) => e.isFile && e.name)
-          .map((e) => ({
-            relativePath: e.name!,
-            absolutePath: `skills/${safeId}/references/${e.name}`,
-          }))
-      } catch {
-        // references/ 目录不存在 — 静默处理
+      if (resolvedBasePath) {
+        try {
+          const refEntries = await readDir(`${resolvedBasePath}/references`)
+          references = refEntries
+            .filter((e) => e.isFile && e.name)
+            .map((e) => ({
+              relativePath: e.name!,
+              absolutePath: `${resolvedBasePath}/references/${e.name}`,
+            }))
+        } catch {
+          // references/ 目录不存在 — 静默处理
+        }
+      } else {
+        try {
+          const refEntries = await readDir(`skills/${safeId}/references`, {
+            baseDir: this.baseDir,
+          })
+          references = refEntries
+            .filter((e) => e.isFile && e.name)
+            .map((e) => ({
+              relativePath: e.name!,
+              absolutePath: `skills/${safeId}/references/${e.name}`,
+            }))
+        } catch {
+          // references/ 目录不存在 — 静默处理
+        }
       }
     }
 
@@ -133,7 +178,163 @@ export class SkillLoader {
     return { meta, markdown, references, estimatedSize }
   }
 
+  /**
+   * 加载指定层的 Skill 数据。
+   *
+   * 从 skill.json 的 layers 数组中找到匹配 layerId 的层，
+   * 读取该层的 file 内容作为 markdown。
+   * 无 layers 声明时回退到 loadSkill() 默认行为。
+   *
+   * @param skillId — 目录名
+   * @param layerId — 层 ID（如 'base', 'advanced'）
+   * @param options — 控制额外加载内容
+   */
+  async loadSkillLayer(skillId: string, layerId: string, options?: SkillLoadOptions): Promise<SkillPackage> {
+    const safeId = this.sanitizeSkillId(skillId)
+    const parsed = await this.loadSkillJson(safeId)
+    const layers = Array.isArray(parsed.layers) ? parsed.layers : []
+
+    // 无 layers 声明 → 回退到默认行为
+    if (layers.length === 0) {
+      return this.loadSkill(safeId, options)
+    }
+
+    const layer = layers.find((l: SkillLayer) => l.id === layerId)
+    if (!layer) {
+      throw skillError('SKILL_LAYER_NOT_FOUND', `layer "${layerId}" 不存在: skills/${safeId}`)
+    }
+
+    // 读取 layer 指定的文件内容
+    const layerFilePath = `skills/${safeId}/${layer.file}`
+    let markdown: string | undefined
+    if (options?.loadMarkdown !== false) {
+      try {
+        markdown = await readTextFile(layerFilePath, { baseDir: this.baseDir })
+      } catch {
+        // layer 文件不存在 → 尝试 dev 模式 fallback
+        if (env.isDev) {
+          try {
+            const actualResourceDir = await resourceDir()
+            if (actualResourceDir) {
+              const projectRoot = actualResourceDir
+                .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
+                .replace(/[/\\]target[/\\].*$/, '')
+              markdown = await readTextFile(`${projectRoot}/skills/${safeId}/${layer.file}`)
+            }
+          } catch {
+            markdown = undefined
+          }
+        }
+      }
+    }
+
+    const meta = this.buildMeta(safeId, parsed)
+    const references = options?.loadReferences ? await this.loadReferences(safeId) : []
+    const estimatedSize = estimateSize({ meta, markdown, references })
+
+    return { meta, markdown, references, estimatedSize }
+  }
+
+  /**
+   * 按 trigger 匹配加载 Skill 层。
+   *
+   * 遍历 skill.json 的 layers 数组，找到 trigger 匹配的层并加载。
+   * 无匹配时回退到 trigger='always' 的层，再无则回退到 loadSkill()。
+   *
+   * @param skillId — 目录名
+   * @param trigger — 触发词（如 'user-deep-dive'）
+   * @param options — 控制额外加载内容
+   */
+  async loadSkillByTrigger(skillId: string, trigger: string, options?: SkillLoadOptions): Promise<SkillPackage> {
+    const safeId = this.sanitizeSkillId(skillId)
+    const parsed = await this.loadSkillJson(safeId)
+    const layers = Array.isArray(parsed.layers) ? parsed.layers : []
+
+    // 无 layers 声明 → 回退到默认行为
+    if (layers.length === 0) {
+      return this.loadSkill(safeId, options)
+    }
+
+    // 精确匹配 trigger
+    const matchedLayer = layers.find((l: SkillLayer) => l.trigger === trigger)
+    if (matchedLayer) {
+      return this.loadSkillLayer(safeId, matchedLayer.id, options)
+    }
+
+    // 回退到 'always' 层
+    const alwaysLayer = layers.find((l: SkillLayer) => l.trigger === 'always')
+    if (alwaysLayer) {
+      return this.loadSkillLayer(safeId, alwaysLayer.id, options)
+    }
+
+    // 回退到 loadSkill()
+    return this.loadSkill(safeId, options)
+  }
+
   // ── 内部辅助 ─────────────────────────────────────────
+
+  /**
+   * 读取并解析 skill.json，返回 parsed 对象。
+   * 复用 loadSkill 中的读取逻辑（含 dev 模式 fallback）。
+   */
+  private async loadSkillJson(skillId: string): Promise<Record<string, unknown>> {
+    let raw: string
+    try {
+      raw = await readTextFile(`skills/${skillId}/skill.json`, { baseDir: this.baseDir })
+    } catch {
+      if (env.isDev) {
+        try {
+          const actualResourceDir = await resourceDir()
+          if (actualResourceDir) {
+            const projectRoot = actualResourceDir
+              .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
+              .replace(/[/\\]target[/\\].*$/, '')
+            raw = await readTextFile(`${projectRoot}/skills/${skillId}/skill.json`)
+          } else {
+            throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${skillId}`)
+          }
+        } catch {
+          throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${skillId}`)
+        }
+      } else {
+        throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${skillId}`)
+      }
+    }
+    try {
+      return JSON.parse(raw)
+    } catch {
+      throw skillError('SKILL_PARSE_ERROR', `skill.json JSON 解析失败: skills/${skillId}`)
+    }
+  }
+
+  /** 从 parsed skill.json 构建 SkillMeta */
+  private buildMeta(skillId: string, parsed: Record<string, unknown>): SkillMeta {
+    return {
+      skillId,
+      displayName: parsed.display_name ?? parsed.name ?? skillId,
+      version: parsed.version ?? '0.0.0',
+      description: parsed.description ?? '',
+      capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
+      entry: parsed.entry ?? 'SKILL.md',
+      path: `skills/${skillId}`,
+      source: 'custom',
+    }
+  }
+
+  /** 加载 references/ 目录索引 */
+  private async loadReferences(skillId: string): Promise<SkillReference[]> {
+    try {
+      const refEntries = await readDir(`skills/${skillId}/references`, { baseDir: this.baseDir })
+      return refEntries
+        .filter((e) => e.isFile && e.name)
+        .map((e) => ({
+          relativePath: e.name!,
+          absolutePath: `skills/${skillId}/references/${e.name}`,
+        }))
+    } catch {
+      return []
+    }
+  }
 
   /**
    * 校验并净化 skillId，阻止路径穿越。

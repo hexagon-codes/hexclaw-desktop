@@ -1,0 +1,58 @@
+{
+  "summary": "Module 007 Phase 2: SkillLoader 多层加载 — 新增 loadSkillLayer()/loadSkillByTrigger() 方法，SkillBridge 注入时支持按 trigger 选层，实现渐进式披露 MVP。",
+  "approach": "3 个任务串行执行：TASK-001 扩展 SkillLoader 新增多层加载方法，TASK-002 修改 SkillBridge 支持按 trigger 选层注入，TASK-003 创建测试 Skill 验证多层加载。",
+  "task_ids": ["TASK-001", "TASK-002", "TASK-003"],
+  "task_count": 3,
+  "complexity": "medium",
+  "estimated_time": "1.5h",
+  "recommended_execution": "agent",
+
+  "waves": [
+    {
+      "wave": 1,
+      "label": "SkillLoader Multi-layer",
+      "tasks": ["TASK-001"]
+    },
+    {
+      "wave": 2,
+      "label": "SkillBridge Trigger Integration",
+      "tasks": ["TASK-002"]
+    },
+    {
+      "wave": 3,
+      "label": "Validation",
+      "tasks": ["TASK-003"]
+    }
+  ],
+
+  "data_flow": {
+    "diagram": "skill.json (layers[]) → SkillLoader.loadSkillLayer() → SkillPackage.markdown → SkillBridge → RuntimeContext.skill.markdown",
+    "stages": [
+      "1. SkillLoader 新增 loadSkillLayer(skillId, layerId) 和 loadSkillByTrigger(skillId, trigger)",
+      "2. SkillBridge 调用 loadSkillByTrigger() 选层后注入 RuntimeContext",
+      "3. 测试 Skill 验证多层加载 + 渐进式披露"
+    ]
+  },
+
+  "design_decisions": [
+    {
+      "decision": "loadSkillLayer 返回 SkillPackage（复用现有接口），layers 信息填充到 markdown 字段",
+      "rationale": "不新增返回类型，保持与现有 SkillLoader.loadSkill() 的兼容性"
+    },
+    {
+      "decision": "trigger 匹配使用精确匹配，不做模糊推断",
+      "rationale": "Phase 2 只做 MVP，精确匹配足够；模糊推断留给后续 Module"
+    },
+    {
+      "decision": "默认加载 trigger='always' 的 base layer",
+      "rationale": "向后兼容：现有 Skill 没有 layers 字段时等效于单个 always layer"
+    }
+  ],
+
+  "_metadata": {
+    "timestamp": "2026-05-15T13:00:00.000Z",
+    "source": "maestro-quick",
+    "plan_type": "feature",
+    "schema_version": "2.0"
+  }
+}

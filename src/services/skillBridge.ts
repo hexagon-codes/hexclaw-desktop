@@ -18,7 +18,8 @@ import { getRuntimeServices } from './runtime/runtimeServices'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useTaskStore } from '@/stores/tasks'
 import { DEFAULT_ALLOWED_CAPABILITIES } from '@/types/capability'
-import { BaseDirectory } from '@tauri-apps/api/path'
+import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
+import { readTextFile } from '@tauri-apps/plugin-fs'
 
 // ── 模块级单例（lazy） ────────────────────────────
 
@@ -142,10 +143,48 @@ export async function tryExecuteSkill(
       ? BaseDirectory.Resource
       : BaseDirectory.AppData
     const skillLoader = new SkillLoader(baseDir)
-    const skillPkg = await skillLoader.loadSkill(skillMeta.skillId, {
+
+    // 推断 trigger：从用户输入文本提取关键词匹配 triggers 数组
+    const inferredTrigger = invocation.skillInput.trim().split(/\s+/)[0]?.toLowerCase() ?? 'always'
+
+    let skillPkg = await skillLoader.loadSkillByTrigger(skillMeta.skillId, inferredTrigger, {
       loadMarkdown: true,
       loadReferences: false,
     })
+    // Fallback: BaseDirectory.Resource 在 dev 模式下可能不指向项目根，
+    // 尝试用 resourceDir() 解析的实际路径重新加载
+    if (!skillPkg.markdown && baseDir === BaseDirectory.Resource) {
+      try {
+        const actualDir = await resourceDir()
+        const raw = await readTextFile(`${actualDir}/skills/${skillMeta.skillId}/skill.json`)
+        const meta = JSON.parse(raw)
+        const md = await readTextFile(`${actualDir}/skills/${skillMeta.skillId}/SKILL.md`).catch(() => undefined)
+        skillPkg = {
+          meta: {
+            skillId: skillMeta.skillId,
+            displayName: meta.display_name ?? meta.name ?? skillMeta.skillId,
+            version: meta.version ?? '0.0.0',
+            description: meta.description ?? '',
+            capabilities: Array.isArray(meta.capabilities) ? meta.capabilities : [],
+            entry: meta.entry ?? 'SKILL.md',
+            path: `skills/${skillMeta.skillId}`,
+            source: 'official',
+          },
+          markdown: md,
+          references: [],
+          estimatedSize: 0,
+        }
+        console.info(`[skillBridge] resourceDir fallback 成功: ${actualDir}/skills/${skillMeta.skillId}`)
+      } catch {
+        // resourceDir fallback 失败，尝试 AppData
+        console.warn(`[skillBridge] Resource dir SKILL.md 为空，回退 AppData: ${skillMeta.skillId}`)
+        const fallbackLoader = new SkillLoader(BaseDirectory.AppData)
+        skillPkg = await fallbackLoader.loadSkill(skillMeta.skillId, {
+          loadMarkdown: true,
+          loadReferences: false,
+        })
+      }
+    }
     await runtime.loadSkillLayerForTask(taskId, skillPkg)
 
     // 3.3 执行
