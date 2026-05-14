@@ -35,7 +35,7 @@
 | Module 001: Skill Directory Alignment | P0 | done (with limitation) | Move skills/builtin/* to skills/* so Registry can discover skills |
 | Module 002: Chat-Task Bridge UAT | P0 | done | Verify TaskBadge end-to-end in Tauri Desktop |
 | Module 003: Result Surface | P1 | **done** | SkillResultCard 组件，卡片化渲染 Skill 结果 |
-| Module 007: Skill Package Format | P2 | **in progress** | skill.json schema + Claude Code 兼容 + 向后兼容 |
+| Module 007: Skill Package Format | P2 | **Phase 1+2 done** | skill.json schema + SkillLoader 多层加载 + 向后兼容 |
 
 ### Module 001 Exit Criteria (Adjusted)
 
@@ -91,4 +91,4 @@ When resuming:
 5. Continue only the active module
 6. Module 001/002/003/004/005/006 done.
 7. Module 006 (execMode Convergence) 已完成：移除 execMode toggle，所有 chat 统一 Runtime 路径
-8. Module 007 (Skill Package Format) → in progress：Phase 1 已完成（skill.json schema + TypeScript 类型 + SkillRegistry 自动补全）。规划文档：`docs/refactor/module-007-skill-package-format.md`
+8. Module 007 (Skill Package Format) → in progress：Phase 1+2 已完成（skill.json schema + TypeScript 类型 + SkillRegistry 自动补全 + SkillLoader 多层加载）。规划文档：`docs/refactor/module-007-skill-package-format.md`
