@@ -1,5 +1,5 @@
 import type { Task, TaskOutput, TaskStatus, TaskType, RuntimeContext } from '@/types'
-import { ChatAgentExecutor } from './agentAdapter'
+import { RuntimeLLMExecutor } from './agentAdapter'
 import { createChatProvider } from './providerAdapter'
 
 /**
@@ -171,12 +171,11 @@ export function createExecutor(type: TaskType): TaskExecutor {
 export function createContextAwareExecutor(type: TaskType): ContextAwareExecutor {
   switch (type) {
     case 'chat':
-      return new ChatAgentExecutor(createChatProvider())
+    case 'skill':
+      return new RuntimeLLMExecutor(createChatProvider())
     case 'agent':
       return new AgentTaskExecutor()
-    case 'skill':
-      return new SkillTaskExecutor()
     default:
-      return new ChatAgentExecutor(createChatProvider())
+      return new RuntimeLLMExecutor(createChatProvider())
   }
 }

@@ -128,7 +128,7 @@ export async function tryExecuteSkill(
     // 3.1 创建 Task（携带 skill input text）
     const task: Task = {
       id: taskId,
-      type: 'chat',
+      type: 'skill',
       status: 'running',
       input: { type: 'chat', payload: { text: invocation.skillInput } },
     }

@@ -42,7 +42,12 @@ export function buildPromptInput(context: RuntimeContext): PromptInput {
   // system prompt: Skill Layer markdown + System Layer 约束
   const parts: string[] = []
   if (skillLayer?.markdown) {
-    parts.push(skillLayer.markdown)
+    // 替换 SKILL.md 中可能触发 model 内置 tool 调用的关键词（如 "summarize"）
+    const sanitized = skillLayer.markdown
+      .replace(/summarize/gi, '摘要')
+    parts.push(`[MODE: DIRECT]
+Output directly. No planning. No tool calls.`)
+    parts.push(sanitized)
   }
   if (systemLayer?.constraints?.length) {
     parts.push(systemLayer.constraints.join('\n'))
@@ -51,7 +56,7 @@ export function buildPromptInput(context: RuntimeContext): PromptInput {
 
   // user message 来自 Task Layer input
   const payload = taskLayer?.input?.payload
-  const user = typeof payload?.text === 'string'
+  let user = typeof payload?.text === 'string'
     ? payload.text
     : typeof payload?.message === 'string'
       ? payload.message
@@ -59,13 +64,18 @@ export function buildPromptInput(context: RuntimeContext): PromptInput {
         ? payload.goal
         : JSON.stringify(payload ?? {})
 
+  // skill 执行：user message 末尾追加 mode 指令（兼容 recency bias 模型）
+  if (skillLayer?.markdown) {
+    user = `${user}\n\n[MODE: DIRECT]\nOutput directly. No tool calls. No search. Output immediately.`
+  }
+
   return { system, user }
 }
 
 // ─── Agent Adapter — Chat 类型 ─────────────────────────
 
 /**
- * ChatAgentExecutor — 替换现有 stub 的真实执行器。
+ * RuntimeLLMExecutor — 替换现有 stub 的真实执行器。
  *
  * 执行流：
  *   buildPromptInput(context) → provider.execute(payload) → TaskOutput
@@ -74,7 +84,7 @@ export function buildPromptInput(context: RuntimeContext): PromptInput {
  * 不处理 streaming。
  * 不处理 toolCalls。
  */
-export class ChatAgentExecutor implements ContextAwareExecutor {
+export class RuntimeLLMExecutor implements ContextAwareExecutor {
   constructor(private provider: ChatCompletionProvider) {}
 
   async execute(task: Task): Promise<TaskOutput> {
@@ -122,10 +132,15 @@ export class ChatAgentExecutor implements ContextAwareExecutor {
     const model = task.input?.payload?.model as string ?? ''
     const provider = task.input?.payload?.provider as string ?? ''
 
+    // skill 执行：使用真实 systemPrompt 独立字段，不嵌入 message 字符串。
+    // providerAdapter.ts 在 systemPrompt truthy 时会自动过滤 system role，
+    // 避免 Go backend 前置拼接导致重复。
+    const isSkill = !!context.skill?.markdown
     const result = await this.provider.execute({
       messages,
       model,
       provider,
+      systemPrompt: isSkill ? prompt.system : undefined,
     })
 
     return {
