@@ -206,9 +206,15 @@ export function createChatSendController(params: {
       // ── Runtime 执行分支 ──────────────────────────────
       if (execMode.value === 'runtime') {
         try {
+          const runtimeStartedAt = Date.now()
           const result = await executeChatTask($taskId)
           const assistantMsg = buildAssistantMessage(result.content, {
             id: createId(),
+            metadata: {
+              taskId: $taskId,
+              runtimeStatus: 'completed',
+              elapsed: Date.now() - runtimeStartedAt,
+            },
           })
           messages.value.push(assistantMsg)
           void persistMessage(assistantMsg, sessionId).catch(() => {})

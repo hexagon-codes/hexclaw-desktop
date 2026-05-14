@@ -25,6 +25,7 @@ import ChatSearchDialog from '@/components/chat/ChatSearchDialog.vue'
 import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import AgentBadge from '@/components/chat/AgentBadge.vue'
+import TaskBadge from '@/components/chat/TaskBadge.vue'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
 import InteractiveBlock from '@/components/chat/InteractiveBlock.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
@@ -1617,6 +1618,13 @@ function startSidebarResize(event: MouseEvent) {
                     <span>{{ formatTime(msg.timestamp) }}</span>
                     <span v-if="metadataValue(msg, 'provider') || metadataValue(msg, 'model')">{{ [metadataValue(msg, 'provider'), metadataValue(msg, 'model')].filter(Boolean).join(' · ') }}</span>
                     <span v-if="msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent">{{ msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent }}</span>
+                    <TaskBadge
+                      v-if="msg.metadata?.taskId"
+                      :task-id="msg.metadata.taskId as string"
+                      :skill-name="msg.metadata.skillName as string"
+                      :status="msg.metadata.runtimeStatus as string"
+                      :elapsed="msg.metadata.elapsed as number"
+                    />
                   </div>
                 </div>
               </template>

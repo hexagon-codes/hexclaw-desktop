@@ -149,9 +149,17 @@ export async function tryExecuteSkill(
     await runtime.loadSkillLayerForTask(taskId, skillPkg)
 
     // 3.3 执行
+    const taskCreatedAt = Date.now()
     const result = await executeChatTask(taskId)
     const assistantMsg = buildAssistantMessage(result.content, {
       id: params.createId(),
+      metadata: {
+        taskId,
+        skillId: skillMeta.skillId,
+        skillName: skillMeta.displayName,
+        runtimeStatus: 'completed',
+        elapsed: Date.now() - taskCreatedAt,
+      },
     })
     params.messages.value.push(assistantMsg)
     return assistantMsg
