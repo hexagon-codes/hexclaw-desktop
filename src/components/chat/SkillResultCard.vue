@@ -28,7 +28,7 @@ function navigateToWorkspace() {
 <template>
   <div class="hc-skill-card" @click="navigateToWorkspace">
     <div class="hc-skill-card__header">
-      <span class="hc-skill-card__icon">&#x2699;</span>
+      <span class="hc-skill-card__icon">⚙</span>
       <span class="hc-skill-card__name">{{ skillName }}</span>
       <span v-if="status" class="hc-skill-card__status">{{ status }}</span>
       <span v-if="elapsed" class="hc-skill-card__elapsed">{{ (elapsed / 1000).toFixed(1) }}s</span>
