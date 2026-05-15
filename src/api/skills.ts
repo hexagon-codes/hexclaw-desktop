@@ -1,11 +1,12 @@
-import { apiGet, apiPost, apiPut, apiDelete } from './client'
+import { invoke } from '@tauri-apps/api/core'
 import { MOCK_SKILLS } from '@/config/skills-marketplace'
 import type { Skill, ClawHubSkill, SkillStatusUpdateResult } from '@/types'
 
 export type { Skill, ClawHubSkill, SkillStatusUpdateResult }
 
-/** 获取已安装 Skill 列表 */
-export function getSkills() {
+/** 获取已安装 Skill 列表（通过 Tauri 代理请求） */
+export async function getSkills() {
+  const { apiGet } = await import('./client')
   return apiGet<{ skills: Skill[]; total: number; dir: string }>('/api/v1/skills')
 }
 
@@ -18,26 +19,73 @@ interface SkillInstallResult {
   message: string
 }
 
-/** 安装 Skill — 支持本地文件、URL、ClawHub 三种来源 */
-export function installSkill(source: string, type?: SkillInstallType) {
-  return apiPost<SkillInstallResult>(
-    '/api/v1/skills/install',
-    { source, type },
-  )
+/** 安装 Skill — 支持本地文件、URL、ClawHub 三种来源（通过 Tauri command） */
+export async function installSkill(source: string, type?: SkillInstallType): Promise<SkillStatusUpdateResult> {
+  try {
+    const result = await invoke<{
+      success: boolean
+      enabled?: boolean
+      effective_enabled?: boolean
+      requires_restart?: boolean
+      message?: string
+      name?: string
+      description?: string
+      version?: string
+    }>('skill_install', { source, skillType: type })
+
+    return {
+      success: result.success,
+      enabled: result.enabled ?? true,
+      effective_enabled: result.effective_enabled,
+      requires_restart: result.requires_restart,
+      message: result.message ?? (result.name ? `${result.name} installed successfully` : undefined),
+      source: 'backend',
+    }
+  } catch (error) {
+    return {
+      success: false,
+      enabled: false,
+      message: error instanceof Error ? error.message : String(error),
+      source: 'backend',
+    }
+  }
 }
 
-/** 卸载 Skill */
-export function uninstallSkill(name: string) {
-  return apiDelete(`/api/v1/skills/${encodeURIComponent(name)}`)
+/** 卸载 Skill（通过 Tauri command） */
+export async function uninstallSkill(name: string): Promise<SkillStatusUpdateResult> {
+  try {
+    const result = await invoke<{
+      success: boolean
+      message?: string
+    }>('skill_uninstall', { name })
+
+    return {
+      success: result.success,
+      enabled: false,
+      message: result.message ?? `${name} uninstalled successfully`,
+      source: 'backend',
+    }
+  } catch (error) {
+    return {
+      success: false,
+      enabled: false,
+      message: error instanceof Error ? error.message : String(error),
+      source: 'backend',
+    }
+  }
 }
 
-/** 启用/禁用 Skill（优先以后端状态为准，缺失时降级到本地偏好） */
+/** 启用/禁用 Skill（通过 Tauri command，优先以后端状态为准） */
 export async function setSkillEnabled(name: string, enabled: boolean): Promise<SkillStatusUpdateResult> {
   try {
-    const result = await apiPut<Partial<SkillStatusUpdateResult>>(
-      `/api/v1/skills/${encodeURIComponent(name)}/status`,
-      { enabled },
-    )
+    const result = await invoke<{
+      success: boolean
+      enabled?: boolean
+      effective_enabled?: boolean
+      requires_restart?: boolean
+      message?: string
+    }>('skill_set_enabled', { name, enabled })
+
     return {
       success: true,
       enabled: typeof result.enabled === 'boolean' ? result.enabled : enabled,
@@ -94,43 +142,7 @@ function filterMockSkills(query?: string, category?: string): ClawHubSkill[] {
   return results.map((s) => ({ ...s, _mock: true }))
 }
 
-const HUB_CATEGORIES = [
-  'coding',
-  'research',
-  'writing',
-  'data',
-  'automation',
-  'productivity',
-] as const
-
-function normalizeHubCategory(raw: unknown): ClawHubSkill['category'] {
-  const s = typeof raw === 'string' ? raw.toLowerCase().trim() : ''
-  if (HUB_CATEGORIES.includes(s as (typeof HUB_CATEGORIES)[number])) {
-    return s as ClawHubSkill['category']
-  }
-  return 'coding'
-}
-
-function mapHubMetaToClawHubSkill(m: Record<string, unknown>): ClawHubSkill {
-  return {
-    name: String(m.name ?? ''),
-    display_name: typeof m.display_name === 'string' ? m.display_name : undefined,
-    description: String(m.description ?? ''),
-    author: String(m.author ?? ''),
-    version: String(m.version ?? ''),
-    tags: Array.isArray(m.tags) ? (m.tags as string[]) : [],
-    downloads: typeof m.downloads === 'number' ? m.downloads : 0,
-    rating: typeof m.rating === 'number' ? m.rating : undefined,
-    category: normalizeHubCategory(m.category),
-  }
-}
-
-function isSkillHubEntry(m: Record<string, unknown>): boolean {
-  const type = typeof m.type === 'string' ? m.type.toLowerCase().trim() : ''
-  return type === '' || type === 'skill'
-}
-
-/** 搜索 ClawHub 技能市场（仅在显式 FORCE_MOCK 时降级到内置 Mock） */
+/** 搜索 ClawHub 技能市场（通过 Tauri command） */
 export async function searchClawHub(
   query?: string,
   category?: string,
@@ -139,30 +151,39 @@ export async function searchClawHub(
     return filterMockSkills(query, category)
   }
 
-  const q: Record<string, unknown> = {}
-  if (query) q.q = query
-  if (category && category !== 'all') q.category = category
-  q.type = 'skill'
+  try {
+    const skills = await invoke<Array<{
+      name: string
+      display_name?: string
+      description: string
+      author: string
+      version: string
+      tags: string[]
+      downloads?: number
+      rating?: number
+      category: string
+    }>>('skill_search', { query, category })
 
-  // 共享 ClawHub 搜索端点（同 mcp.ts searchMcpMarketplace）
-  const res = await apiGet<{
-    skills?: unknown[]
-    error?: string
-  }>('/api/v1/clawhub/search', q)
-
-  if (typeof res.error === 'string' && res.error.trim() !== '') {
-    throw new Error(res.error.trim())
+    return skills.map((s) => ({
+      name: s.name,
+      display_name: s.display_name,
+      description: s.description,
+      author: s.author,
+      version: s.version,
+      tags: s.tags,
+      downloads: s.downloads ?? 0,
+      rating: s.rating,
+      category: s.category as ClawHubSkill['category'],
+    }))
+  } catch (error) {
+    throw error instanceof Error ? error : new Error(String(error))
   }
-
-  const raw = Array.isArray(res) ? res : Array.isArray(res.skills) ? res.skills : []
-  return (raw as Record<string, unknown>[])
-    .filter(isSkillHubEntry)
-    .map(mapHubMetaToClawHubSkill)
 }
 
-/** 从 ClawHub 安装 Skill */
+/** 从 ClawHub 安装 Skill（通过 Tauri command） */
 export async function installFromHub(skillName: string): Promise<void> {
-  await apiPost('/api/v1/skills/install', {
-    source: `clawhub://${skillName}`,
-  })
+  const result = await installSkill(`clawhub://${skillName}`, 'clawhub')
+  if (!result.success) {
+    throw new Error(result.message ?? `Failed to install ${skillName}`)
+  }
 }

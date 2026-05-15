@@ -307,6 +307,7 @@ pub struct BackendChatParams {
     pub system_prompt: Option<String>,
     pub temperature: Option<f64>,
     pub max_tokens: Option<i64>,
+    pub stop: Option<Vec<String>>,
     pub request_id: Option<String>,
     pub metadata: Option<HashMap<String, String>>,
     pub attachments: Option<Vec<ChatAttachment>>,
@@ -333,6 +334,11 @@ pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {
     }
     if let Some(m) = params.max_tokens {
         body["max_tokens"] = serde_json::json!(m);
+    }
+    if let Some(ref stop) = params.stop {
+        if !stop.is_empty() {
+            body["stop"] = serde_json::json!(stop);
+        }
     }
     if let Some(ref sp) = params.system_prompt {
         if !sp.is_empty() {
@@ -375,6 +381,273 @@ pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {
     }
 
     Ok(text)
+}
+
+// ─── Skill Management Commands ─────────────────────────
+
+/// Skill 操作结果（与前端 SkillStatusUpdateResult 对齐）
+#[derive(Serialize)]
+pub struct SkillOperationResult {
+    pub success: bool,
+    pub enabled: Option<bool>,
+    pub effective_enabled: Option<bool>,
+    pub requires_restart: Option<bool>,
+    pub message: Option<String>,
+    pub warning: Option<String>,
+    pub source: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub version: Option<String>,
+}
+
+/// ClawHub 技能元数据（与前端 ClawHubSkill 对齐）
+#[derive(Serialize, Deserialize)]
+pub struct ClawHubSkill {
+    pub name: String,
+    pub display_name: Option<String>,
+    pub description: String,
+    pub author: String,
+    pub version: String,
+    pub tags: Vec<String>,
+    pub downloads: Option<u64>,
+    pub rating: Option<f64>,
+    pub category: String,
+}
+
+/// 安装 Skill（本地文件/URL/ClawHub）
+#[tauri::command]
+pub async fn skill_install(source: String, skill_type: Option<String>) -> Result<SkillOperationResult, String> {
+    let url = format!("{}/api/v1/skills/install", sidecar::base_url());
+
+    let mut body = serde_json::json!({
+        "source": source,
+    });
+    if let Some(t) = skill_type {
+        body["type"] = serde_json::json!(t);
+    }
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(60))
+        .body(body.to_string())
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    let status = resp.status().as_u16();
+    let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+
+    if status >= 400 {
+        return Ok(SkillOperationResult {
+            success: false,
+            enabled: None,
+            effective_enabled: None,
+            requires_restart: None,
+            message: Some(format!("HTTP {}: {}", status, text)),
+            warning: None,
+            source: None,
+            name: None,
+            description: None,
+            version: None,
+        });
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|_| serde_json::json!({"message": text}));
+
+    Ok(SkillOperationResult {
+        success: true,
+        enabled: parsed.get("enabled").and_then(|v| v.as_bool()),
+        effective_enabled: parsed.get("effective_enabled").and_then(|v| v.as_bool()),
+        requires_restart: parsed.get("requires_restart").and_then(|v| v.as_bool()),
+        message: parsed.get("message").and_then(|v| v.as_str()).map(String::from),
+        warning: None,
+        source: Some("backend".to_string()),
+        name: parsed.get("name").and_then(|v| v.as_str()).map(String::from),
+        description: parsed.get("description").and_then(|v| v.as_str()).map(String::from),
+        version: parsed.get("version").and_then(|v| v.as_str()).map(String::from),
+    })
+}
+
+/// 卸载 Skill
+#[tauri::command]
+pub async fn skill_uninstall(name: String) -> Result<SkillOperationResult, String> {
+    let url = format!("{}/api/v1/skills/{}", sidecar::base_url(), name);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .delete(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    let status = resp.status().as_u16();
+    let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+
+    if status >= 400 {
+        return Ok(SkillOperationResult {
+            success: false,
+            enabled: None,
+            effective_enabled: None,
+            requires_restart: None,
+            message: Some(format!("HTTP {}: {}", status, text)),
+            warning: None,
+            source: None,
+            name: None,
+            description: None,
+            version: None,
+        });
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|_| serde_json::json!({"message": text}));
+
+    Ok(SkillOperationResult {
+        success: true,
+        enabled: None,
+        effective_enabled: None,
+        requires_restart: None,
+        message: parsed.get("message").and_then(|v| v.as_str()).map(String::from),
+        warning: None,
+        source: Some("backend".to_string()),
+        name: None,
+        description: None,
+        version: None,
+    })
+}
+
+/// 启用/禁用 Skill
+#[tauri::command]
+pub async fn skill_set_enabled(name: String, enabled: bool) -> Result<SkillOperationResult, String> {
+    let url = format!("{}/api/v1/skills/{}/status", sidecar::base_url(), name);
+
+    let body = serde_json::json!({
+        "enabled": enabled,
+    });
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .put(&url)
+        .header("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(30))
+        .body(body.to_string())
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    let status = resp.status().as_u16();
+    let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+
+    if status >= 400 {
+        return Ok(SkillOperationResult {
+            success: false,
+            enabled: Some(enabled),
+            effective_enabled: None,
+            requires_restart: None,
+            message: Some(format!("HTTP {}: {}", status, text)),
+            warning: None,
+            source: None,
+            name: None,
+            description: None,
+            version: None,
+        });
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|_| serde_json::json!({"message": text}));
+
+    Ok(SkillOperationResult {
+        success: true,
+        enabled: parsed.get("enabled").and_then(|v| v.as_bool()).or(Some(enabled)),
+        effective_enabled: parsed.get("effective_enabled").and_then(|v| v.as_bool()),
+        requires_restart: parsed.get("requires_restart").and_then(|v| v.as_bool()),
+        message: parsed.get("message").and_then(|v| v.as_str()).map(String::from),
+        warning: None,
+        source: Some("backend".to_string()),
+        name: None,
+        description: None,
+        version: None,
+    })
+}
+
+/// 搜索 ClawHub 技能市场
+#[tauri::command]
+pub async fn skill_search(query: Option<String>, category: Option<String>) -> Result<Vec<ClawHubSkill>, String> {
+    let mut q: Vec<String> = Vec::new();
+    if let Some(ref query) = query {
+        if !query.is_empty() {
+            q.push(format!("q={}", query));
+        }
+    }
+    if let Some(ref category) = category {
+        if !category.is_empty() && category != "all" {
+            q.push(format!("category={}", category));
+        }
+    }
+    q.push("type=skill".to_string());
+
+    let query_string = q.join("&");
+    let url = format!("{}/api/v1/clawhub/search?{}", sidecar::base_url(), query_string);
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .await
+        .map_err(|e| format!("请求失败: {}", e))?;
+
+    let status = resp.status().as_u16();
+    let text = resp.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+
+    if status >= 400 {
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("解析响应失败: {}", e))?;
+
+    // 处理可能的错误响应
+    if let Some(error) = parsed.get("error").and_then(|v| v.as_str()) {
+        if !error.is_empty() {
+            return Err(error.to_string());
+        }
+    }
+
+    let raw = if let Some(arr) = parsed.as_array() {
+        arr.clone()
+    } else if let Some(skills) = parsed.get("skills").and_then(|v| v.as_array()) {
+        skills.clone()
+    } else {
+        Vec::new()
+    };
+
+    let skills: Vec<ClawHubSkill> = raw
+        .iter()
+        .filter(|item| {
+            let type_str = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            type_str.is_empty() || type_str == "skill"
+        })
+        .map(|item| ClawHubSkill {
+            name: item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            display_name: item.get("display_name").and_then(|v| v.as_str()).map(String::from),
+            description: item.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            author: item.get("author").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            version: item.get("version").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            tags: item.get("tags")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+                .unwrap_or_default(),
+            downloads: item.get("downloads").and_then(|v| v.as_u64()),
+            rating: item.get("rating").and_then(|v| v.as_f64()),
+            category: item.get("category").and_then(|v| v.as_str()).unwrap_or("coding").to_string(),
+        })
+        .collect();
+
+    Ok(skills)
 }
 
 /// 获取平台信息

@@ -128,6 +128,10 @@ pub fn run() {
             commands::restart_ollama,
             commands::save_file_from_url,
             commands::save_bytes_to_path,
+            commands::skill_install,
+            commands::skill_uninstall,
+            commands::skill_set_enabled,
+            commands::skill_search,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
