@@ -12,10 +12,14 @@
  * 此函数剥离这些构建路径返回实际项目根。
  *
  * @param resourceDirPath — resourceDir() 返回的绝对路径
+ * @param hasSrcTauri — 路径是否包含 src/tauri 前缀（默认 true）
  * @returns 项目根目录绝对路径
  */
-export function deriveProjectRoot(resourceDirPath: string): string {
-  return resourceDirPath
-    .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
-    .replace(/[/\\]target[/\\].*$/, '')
+export function deriveProjectRoot(resourceDirPath: string, hasSrcTauri = true): string {
+  if (hasSrcTauri) {
+    return resourceDirPath
+      .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
+      .replace(/[/\\]target[/\\].*$/, '')
+  }
+  return resourceDirPath.replace(/[/\\]target[/\\].*$/, '')
 }
