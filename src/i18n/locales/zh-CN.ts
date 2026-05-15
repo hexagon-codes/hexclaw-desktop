@@ -1610,6 +1610,7 @@ export default {
       statusLoaded: '已加载',
       statusError: '加载失败',
       noSkill: '未加载技能',
+      viewInstructions: '查看使用说明',
     },
     execution: {
       stateIdle: '空闲',
@@ -1620,6 +1621,7 @@ export default {
       stagePreparing: '准备中',
       stageExecuting: '执行中',
       stageFinalizing: '收尾中',
+      viewOutput: '查看输出',
     },
     outputs: {
       generated: '{n} 个文件',

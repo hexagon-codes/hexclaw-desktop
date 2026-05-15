@@ -2,9 +2,11 @@
  * AgentAdapter — ContextAwareExecutor 真实实现
  *
  * 职责：
- * - buildPromptInput(context) → { system?, user: string }
  * - 调用 ChatCompletionProvider
  * - 映射 ProviderResult → TaskOutput
+ * - Skill 输出验证 + 单次重试
+ *
+ * Prompt 构建逻辑已提取至 runtime/llmContract.ts。
  *
  * 禁止：
  * - 写入 ctx.execution / timeline / store
@@ -17,60 +19,7 @@
 import type { Task, TaskStatus, RuntimeContext, TaskOutput } from '@/types'
 import type { ContextAwareExecutor } from './taskExecutor'
 import type { ChatCompletionProvider } from './providerAdapter'
-
-// ─── Prompt Input ───────────────────────────────────────
-
-/**
- * buildPromptInput — 从 RuntimeContext 提取 prompt 输入。
- *
- * Phase 1 保持极简：
- * { system?: string, user: string }
- *
- * 不是 Runtime canonical prompt format。
- * 避免 Chat payload structure 成为 Runtime 标准。
- */
-export interface PromptInput {
-  system?: string
-  user: string
-}
-
-export function buildPromptInput(context: RuntimeContext): PromptInput {
-  const taskLayer = context.task
-  const systemLayer = context.system
-  const skillLayer = context.skill
-
-  // system prompt: Skill Layer markdown + System Layer 约束
-  const parts: string[] = []
-  if (skillLayer?.markdown) {
-    // 替换 SKILL.md 中可能触发 model 内置 tool 调用的关键词（如 "summarize"）
-    const sanitized = skillLayer.markdown
-      .replace(/summarize/gi, '摘要')
-    parts.push(`[MODE: DIRECT]
-Output directly. No planning. No tool calls.`)
-    parts.push(sanitized)
-  }
-  if (systemLayer?.constraints?.length) {
-    parts.push(systemLayer.constraints.join('\n'))
-  }
-  const system = parts.length > 0 ? parts.join('\n\n') : undefined
-
-  // user message 来自 Task Layer input
-  const payload = taskLayer?.input?.payload
-  let user = typeof payload?.text === 'string'
-    ? payload.text
-    : typeof payload?.message === 'string'
-      ? payload.message
-      : typeof payload?.goal === 'string'
-        ? payload.goal
-        : JSON.stringify(payload ?? {})
-
-  // skill 执行：user message 末尾追加 mode 指令（兼容 recency bias 模型）
-  if (skillLayer?.markdown) {
-    user = `${user}\n\n[MODE: DIRECT]\nOutput directly. No tool calls. No search. Output immediately.`
-  }
-
-  return { system, user }
-}
+import { buildPromptInput, detectOutputFormat, validateSkillOutput } from './runtime/llmContract'
 
 // ─── Agent Adapter — Chat 类型 ─────────────────────────
 
@@ -128,20 +77,51 @@ export class RuntimeLLMExecutor implements ContextAwareExecutor {
     }
     messages.push({ role: 'user', content: prompt.user })
 
-    // 从 task 读取 model/provider 参数（由 Chat/user 指定，非 Runtime 固定）
     const model = task.input?.payload?.model as string ?? ''
     const provider = task.input?.payload?.provider as string ?? ''
-
-    // skill 执行：使用真实 systemPrompt 独立字段，不嵌入 message 字符串。
-    // providerAdapter.ts 在 systemPrompt truthy 时会自动过滤 system role，
-    // 避免 Go backend 前置拼接导致重复。
     const isSkill = !!context.skill?.markdown
+
     const result = await this.provider.execute({
       messages,
       model,
       provider,
       systemPrompt: isSkill ? prompt.system : undefined,
+      stop: isSkill ? ['\n\n'] : undefined,
     })
+
+    // 输出验证 + 单次重试（仅 skill 执行）
+    if (isSkill && context.skill?.markdown) {
+      const format = detectOutputFormat(context.skill.markdown)
+      const validation = validateSkillOutput(result.content, format)
+
+      if (!validation.valid) {
+        console.warn('[LLMExecutor] 输出格式验证失败，执行单次重试')
+        const retryMessages = [
+          ...messages,
+          { role: 'user' as const, content: '[CORRECTION] Output ONLY in the exact format specified. No extra text.' },
+        ]
+        const retryResult = await this.provider.execute({
+          messages: retryMessages,
+          model,
+          provider,
+          systemPrompt: prompt.system,
+          stop: ['\n\n'],
+        })
+        const retryValidation = validateSkillOutput(retryResult.content, format)
+        if (retryValidation.valid) {
+          return {
+            result: { kind: 'text', content: retryValidation.cleaned ?? retryResult.content },
+            usage: retryResult.usage,
+          }
+        }
+        console.warn('[LLMExecutor] 重试后格式仍不合规，返回原始输出')
+      } else if (validation.cleaned) {
+        return {
+          result: { kind: 'text', content: validation.cleaned },
+          usage: result.usage,
+        }
+      }
+    }
 
     return {
       result: { kind: 'text', content: result.content },

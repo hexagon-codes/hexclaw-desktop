@@ -26,6 +26,7 @@ export interface ChatCompletionPayload {
   temperature?: number
   maxTokens?: number
   systemPrompt?: string
+  stop?: string[]
 }
 
 /** Provider Result — 不含 toolCalls，不含 stream state */
@@ -85,6 +86,7 @@ export class BackendChatProvider implements ChatCompletionProvider {
       provider: payload.provider,
       temperature: payload.temperature,
       maxTokens: payload.maxTokens,
+      stop: payload.stop,
     })
 
     // 3. protocol parse（在此层，不在 transport 层）

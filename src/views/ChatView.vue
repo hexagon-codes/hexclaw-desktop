@@ -26,6 +26,7 @@ import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import AgentBadge from '@/components/chat/AgentBadge.vue'
 import TaskBadge from '@/components/chat/TaskBadge.vue'
+import SkillResultCard from '@/components/chat/SkillResultCard.vue'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
 import InteractiveBlock from '@/components/chat/InteractiveBlock.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
@@ -1391,7 +1392,17 @@ function startSidebarResize(event: MouseEvent) {
                       <div class="hc-thinking__content">{{ normalizeAssistantReasoning(msg.reasoning) }}</div>
                     </details>
                   </div>
-                  <div class="hc-msg__bubble-wrap">
+                  <!-- Skill 结果卡片（替代普通气泡） -->
+                  <SkillResultCard
+                    v-if="msg.metadata?.skillId"
+                    :skill-id="msg.metadata.skillId as string"
+                    :skill-name="(msg.metadata.skillName as string) || 'Skill'"
+                    :status="msg.metadata.runtimeStatus as string"
+                    :elapsed="msg.metadata.elapsed as number"
+                    :content="msg.content"
+                  />
+                  <!-- 普通消息气泡 -->
+                  <div v-else class="hc-msg__bubble-wrap">
                     <div
                       class="hc-msg__bubble hc-msg__bubble--assistant"
                       :class="{ 'hc-msg__bubble--empty': isEmptyReply(msg.content) }"

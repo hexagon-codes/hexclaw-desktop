@@ -21,6 +21,7 @@ export interface LLMBackendRequest {
   provider?: string
   temperature?: number
   maxTokens?: number
+  stop?: string[]
   metadata?: Record<string, string>
   requestId?: string
 }
@@ -48,6 +49,7 @@ export class BackendLLMClient {
         provider: req.provider ?? null,
         temperature: req.temperature ?? null,
         max_tokens: req.maxTokens ?? null,
+        stop: req.stop ?? null,
         request_id: requestId,
         metadata: req.metadata ?? null,
       },

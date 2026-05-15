@@ -5,7 +5,6 @@ import type {
   ChatMessage,
   ChatMode,
   ChatSession,
-  ExecMode,
 } from '@/types'
 import type { WebSocketStreamHandle } from '@/services/chatService'
 import type { PendingToolApproval, SessionStreamState } from './chat-stream-helpers'
@@ -32,7 +31,6 @@ export interface ChatStoreState {
   pendingSessionIds: Ref<Record<string, boolean>>
   draftSending: Ref<boolean>
   chatMode: Ref<ChatMode>
-  execMode: Ref<ExecMode>
   agentRole: Ref<string>
   artifacts: Ref<Artifact[]>
   selectedArtifactId: Ref<string | null>
@@ -73,7 +71,6 @@ export function createChatStoreState(): ChatStoreState {
     pendingSessionIds: ref<Record<string, boolean>>({}),
     draftSending: ref(false),
     chatMode: ref<ChatMode>('chat'),
-    execMode: ref<ExecMode>('craft'),
     agentRole: ref(''),
     artifacts: ref<Artifact[]>([]),
     selectedArtifactId: ref<string | null>(null),

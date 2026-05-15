@@ -27,7 +27,6 @@ describe('chat controller modules', () => {
     expect(state.sessions.value).toEqual([])
     expect(state.currentSessionId.value).toBeNull()
     expect(state.chatMode.value).toBe('chat')
-    expect(state.execMode.value).toBe('craft')
     expect(state.pendingApprovals.value).toEqual({})
     expect(runtime.streamHandles.size).toBe(0)
     expect(runtime.pendingAutoTitleSync.size).toBe(0)

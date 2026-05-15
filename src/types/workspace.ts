@@ -64,6 +64,7 @@ export interface WorkspaceContextProjection {
       references: boolean     // true = 已加载可用
     }
     status: string            // 'loading' | 'loaded' | 'error'
+    markdown?: string         // SKILL.md 原始内容（供 Workspace 展示）
   }
 
   /** UX section — 执行进度 */
@@ -72,6 +73,7 @@ export interface WorkspaceContextProjection {
     stage: string             // 'preparing' | 'executing' | 'finalizing'
     stepCount: number
     elapsed: string
+    outputContent?: string    // 执行输出文本（≤500 chars）
   }
 
   /** UX section — 任务产物 */

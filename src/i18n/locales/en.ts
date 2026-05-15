@@ -1606,6 +1606,7 @@ export default {
       statusLoaded: 'Loaded',
       statusError: 'Load failed',
       noSkill: 'No skill loaded',
+      viewInstructions: 'View Instructions',
     },
     execution: {
       stateIdle: 'Idle',
@@ -1616,6 +1617,7 @@ export default {
       stagePreparing: 'Preparing',
       stageExecuting: 'Executing',
       stageFinalizing: 'Finalizing',
+      viewOutput: 'View Output',
     },
     outputs: {
       generated: '{n} files',

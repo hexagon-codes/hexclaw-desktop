@@ -21,6 +21,7 @@ import { MessageCircle, Copy, FileText, Image, File, Code, Wrench } from 'lucide
 import type { WorkspaceContextProjection, TaskResultProjection, ResultItemProjection } from '@/types/workspace'
 import ContextCard from '@/components/inspector/ContextCard.vue'
 import KeyValueRow from '@/components/inspector/KeyValueRow.vue'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -32,6 +33,12 @@ const props = defineProps<{
 
 // Health section: 默认折叠，hasIssues 时自动展开
 const healthExpanded = ref(false)
+
+// Skill MD section: 默认折叠
+const skillExpanded = ref(false)
+
+// Execution output section: 默认折叠
+const execOutputExpanded = ref(false)
 
 watch(
   () => props.projection?.health?.hasIssues,
@@ -202,6 +209,19 @@ function getGroupLabel(group: string): string {
               ? 'var(--hc-error)'
               : 'var(--hc-text-muted)'"
         />
+        <!-- SKILL.md 内容（可折叠） -->
+        <div v-if="projection.skill.markdown" class="context-detail__skill-md">
+          <button
+            class="context-detail__skill-toggle"
+            @click="skillExpanded = !skillExpanded"
+          >
+            <span>{{ t('workspace.skill.viewInstructions') }}</span>
+            <span class="context-detail__skill-chevron" :class="{ 'open': skillExpanded }">▶</span>
+          </button>
+          <div v-if="skillExpanded" class="context-detail__skill-content">
+            <MarkdownRenderer :content="projection.skill.markdown" />
+          </div>
+        </div>
       </ContextCard>
 
       <!-- Execution section -->
@@ -227,6 +247,19 @@ function getGroupLabel(group: string): string {
           :label="t('workspace.field.elapsed')"
           :value="projection.execution.elapsed"
         />
+        <!-- 执行输出（可折叠） -->
+        <div v-if="projection.execution.outputContent" class="context-detail__exec-output">
+          <button
+            class="context-detail__exec-toggle"
+            @click="execOutputExpanded = !execOutputExpanded"
+          >
+            <span>{{ t('workspace.execution.viewOutput') }}</span>
+            <span class="context-detail__exec-chevron" :class="{ 'open': execOutputExpanded }">▶</span>
+          </button>
+          <div v-if="execOutputExpanded" class="context-detail__exec-content">
+            <MarkdownRenderer :content="projection.execution.outputContent" />
+          </div>
+        </div>
       </ContextCard>
 
       <!-- Result section（取代旧 Outputs section） -->
@@ -412,6 +445,45 @@ function getGroupLabel(group: string): string {
   gap: 8px;
   padding-top: 8px;
   border-top: 1px solid var(--hc-divider);
+}
+
+/* ── Skill MD toggle ──────────────────────────── */
+
+.context-detail__skill-toggle,
+.context-detail__exec-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 6px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--hc-accent);
+  margin-top: 8px;
+  border-top: 1px solid var(--hc-divider);
+}
+
+.context-detail__skill-chevron,
+.context-detail__exec-chevron {
+  font-size: 8px;
+  color: var(--hc-text-muted);
+  transition: transform 0.15s;
+}
+
+.context-detail__skill-chevron.open,
+.context-detail__exec-chevron.open {
+  transform: rotate(90deg);
+}
+
+.context-detail__skill-content,
+.context-detail__exec-content {
+  padding: 10px 0 4px;
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 /* ── Result items ──────────────────────────────── */

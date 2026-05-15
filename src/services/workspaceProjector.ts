@@ -155,6 +155,7 @@ function projectSkillSection(ctx: RuntimeContext): WorkspaceContextProjection['s
       references: loadedSections.references === 'loaded',
     },
     status: layerStatus ?? 'unloaded',
+    markdown: ctx.skill.markdown,
   }
 }
 
@@ -166,6 +167,9 @@ function projectExecutionSection(ctx: RuntimeContext): WorkspaceContextProjectio
     stage: ctx.execution.currentStage,
     stepCount: ctx.execution.stepCount,
     elapsed: formatElapsed(ctx.execution.startedAt),
+    outputContent: ctx.execution.output?.content
+      ? truncate(ctx.execution.output.content, 500)
+      : undefined,
   }
 }
 

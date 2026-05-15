@@ -3,65 +3,39 @@ import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { Task } from '@/types'
 import { useTaskStore } from '@/stores/tasks'
-import { registerChatTask, completeChatTask, failChatTask, executeChatTask } from '@/services/runtimeBridge'
+import { registerChatTask, executeChatTask } from '@/services/runtimeBridge'
 import { buildAssistantMessage } from '@/utils/buildAssistantMessage'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
-import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
 import { tryExecuteSkill } from '@/services/skillBridge'
 
-type ChatServiceModule = typeof import('@/services/chatService')
 type MessageServiceModule = typeof import('@/services/messageService')
-type SettingsStoreFactory = typeof import('./settings').useSettingsStore
 
 export function createChatSendController(params: {
   currentSessionId: Ref<string | null>
   messages: Ref<ChatMessage[]>
   pendingSessionIds: Ref<Record<string, boolean>>
   draftSending: Ref<boolean>
-  activeStreams: Ref<Record<string, import('./chat-stream-helpers').SessionStreamState>>
-  chatParams: Ref<{ provider?: string; model?: string; temperature?: number; maxTokens?: number }>
-  agentRole: Ref<string>
-  thinkingEnabled: Ref<boolean>
   hasCustomTitle: Ref<boolean>
-  execMode: Ref<import('@/types').ExecMode>
   sessions: Ref<import('@/types').ChatSession[]>
   msgSvc: MessageServiceModule
-  chatSvc: ChatServiceModule
   createId: () => string
   defaultSessionTitle?: string
-  getSettingsStore: SettingsStoreFactory
   ensureSession: () => Promise<string>
   clearSessionCancelled: (sessionId: string) => void
   isSessionCancelled: (sessionId: string) => boolean
   isSessionStreaming: (sessionId: string) => boolean
-  setSessionPending: (sessionId: string, value: boolean, sending: Ref<boolean>, draftSending: Ref<boolean>) => void
   refreshSendingState: (sending: Ref<boolean>, draftSending: Ref<boolean>) => void
   setLocalSessionTitle: (sessionId: string, title: string) => void
   setPendingSuggestedTitleExpectation: (sessionId: string, expectedTitle: string | null) => void
   pendingAutoTitleSync: Map<string, Promise<void>>
   persistMessage: (message: ChatMessage, sessionId: string) => Promise<boolean>
-  upsertStreamState: (sessionId: string, nextState: import('./chat-stream-helpers').SessionStreamState | null) => void
-  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => void
-  resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
-  finalizeAssistantMessage: (params: {
-    content: string
-    sessionId: string
-    metadata?: Record<string, unknown>
-    toolCalls?: ChatMessage['tool_calls']
-    agentName?: string
-    reasoning?: string
-    sending?: Ref<boolean>
-    draftSending?: Ref<boolean>
-  }) => ChatMessage
   handleSendError: (
     errorValue: unknown,
     sessionId: string | null | undefined,
     sending: Ref<boolean>,
     draftSending: Ref<boolean>,
   ) => void
-  storePendingApproval: (request: import('@/api/websocket').ToolApprovalRequest) => void
-  streamHandles: Map<string, import('@/services/chatService').WebSocketStreamHandle>
   sending: Ref<boolean>
 }) {
   const {
@@ -69,56 +43,23 @@ export function createChatSendController(params: {
     messages,
     pendingSessionIds,
     draftSending,
-    activeStreams,
-    chatParams,
-    agentRole,
-    thinkingEnabled,
     hasCustomTitle,
-    execMode,
     sessions,
     msgSvc,
-    chatSvc,
     createId,
     defaultSessionTitle = DEFAULT_SESSION_TITLE,
-    getSettingsStore,
     ensureSession,
     clearSessionCancelled,
     isSessionCancelled,
     isSessionStreaming,
-    setSessionPending,
     refreshSendingState,
     setLocalSessionTitle,
     setPendingSuggestedTitleExpectation,
     pendingAutoTitleSync,
     persistMessage,
-    upsertStreamState,
-    updateStreamChunk,
-    resetSessionStream,
-    finalizeAssistantMessage,
     handleSendError,
-    storePendingApproval,
-    streamHandles,
     sending,
   } = params
-
-  const deliveryController = createChatSendDeliveryController({
-    chatParams,
-    agentRole,
-    thinkingEnabled,
-    activeStreams,
-    chatSvc,
-    getSettingsStore,
-    clearSessionCancelled,
-    isSessionCancelled,
-    setSessionPending,
-    upsertStreamState,
-    updateStreamChunk,
-    resetSessionStream,
-    finalizeAssistantMessage,
-    handleSendError,
-    storePendingApproval,
-    streamHandles,
-  })
 
   const autoTitleController = createChatSendAutoTitleController({
     msgSvc,
@@ -203,72 +144,39 @@ export function createChatSendController(params: {
       // 持久化与发送并行，失败不阻塞（persistMessage 内部已有日志）
       void persistMessage(userMessage, sessionId).catch(() => {})
 
-      // ── Runtime 执行分支 ──────────────────────────────
-      if (execMode.value === 'runtime') {
-        try {
-          const runtimeStartedAt = Date.now()
-          const result = await executeChatTask($taskId)
-          const assistantMsg = buildAssistantMessage(result.content, {
-            id: createId(),
-            metadata: {
-              taskId: $taskId,
-              runtimeStatus: 'completed',
-              elapsed: Date.now() - runtimeStartedAt,
-            },
-          })
-          messages.value.push(assistantMsg)
-          void persistMessage(assistantMsg, sessionId).catch(() => {})
-
-          // D1: Auto-title suggestion — 复用 WS path 的 suggestSessionTitle 机制
-          const shouldSuggestTitle = !!pendingSuggestedTitleExpectation.value[sessionId]
-          setPendingSuggestedTitleExpectation(sessionId, null)
-          void (async () => {
-            if (shouldSuggestTitle) {
-              const titleSync = pendingAutoTitleSync.get(sessionId)
-              if (titleSync) await titleSync
-              const result = await msgSvc.suggestSessionTitle?.(sessionId, '')
-              if (result?.updated && result.title) {
-                setLocalSessionTitle(sessionId, result.title)
-              }
-            }
-          })()
-
-          return assistantMsg
-        } catch (e) {
-          // executeChatTask 内部已处理 TaskStore fail + Runtime timeline
-          handleSendError(e, sessionId, sending, draftSending)
-          return null
-        }
-      }
-
-      const $result = await deliveryController.deliverMessage({
-        backendText,
-        sessionId,
-        attachments,
-        requestId,
-        sending,
-        draftSending,
+      // ── Runtime 执行（唯一路径）──────────────────────
+      const runtimeStartedAt = Date.now()
+      const result = await executeChatTask($taskId)
+      const assistantMsg = buildAssistantMessage(result.content, {
+        id: createId(),
+        metadata: {
+          taskId: $taskId,
+          runtimeStatus: 'completed',
+          elapsed: Date.now() - runtimeStartedAt,
+        },
       })
+      messages.value.push(assistantMsg)
+      void persistMessage(assistantMsg, sessionId).catch(() => {})
 
-      // ── Task 完成回调 ──────────────────────────────────
-      if ($result) {
-        $taskStore.completeTask($taskId, {
-          result: { kind: 'text', content: $result.content ?? '' },
-          artifacts: $result.tool_calls ? [$result.tool_calls] : undefined,
-        })
-        completeChatTask($taskId, {
-          result: { kind: 'text', content: $result.content ?? '' },
-          artifacts: $result.tool_calls ? [$result.tool_calls] : undefined,
-        })
-      } else {
-        $taskStore.cancelTask($taskId)
-      }
+      // D1: Auto-title suggestion
+      const shouldSuggestTitle = !!pendingSuggestedTitleExpectation.value[sessionId]
+      setPendingSuggestedTitleExpectation(sessionId, null)
+      void (async () => {
+        if (shouldSuggestTitle) {
+          const titleSync = pendingAutoTitleSync.get(sessionId)
+          if (titleSync) await titleSync
+          const result = await msgSvc.suggestSessionTitle?.(sessionId, '')
+          if (result?.updated && result.title) {
+            setLocalSessionTitle(sessionId, result.title)
+          }
+        }
+      })()
 
-      return $result
+      return assistantMsg
     } catch (e) {
-      $taskStore.failTask($taskId, { code: 'SEND_ERROR', message: String(e) })
-      failChatTask($taskId, { code: 'SEND_ERROR', message: String(e) })
-      throw e
+      // executeChatTask 内部已处理 TaskStore fail + Runtime timeline
+      handleSendError(e, currentSessionId.value, sending, draftSending)
+      return null
     } finally {
       draftSending.value = false
       refreshSendingState(sending, draftSending)
@@ -276,7 +184,6 @@ export function createChatSendController(params: {
   }
 
   return {
-    buildRequestMetadata: deliveryController.buildRequestMetadata,
     sendMessage,
   }
 }

@@ -1590,6 +1590,7 @@ export default {
       statusLoaded: 'يۈكلەندى',
       statusError: 'يۈكلەش مەغلۇپ بولدى',
       noSkill: 'ماھارەت يۈكلەنمىدى',
+      viewInstructions: 'ئىشلىتىش بۇيرۇقىنى كۆرۈش',
     },
     execution: {
       stateIdle: 'بىكار',
@@ -1600,6 +1601,7 @@ export default {
       stagePreparing: 'تەييارلىق',
       stageExecuting: 'ئىجرا',
       stageFinalizing: 'ئاخىرلاشتۇرۇش',
+      viewOutput: 'چىقىشنى كۆرۈش',
     },
     outputs: {
       generated: '{n} ھۆججەت',
