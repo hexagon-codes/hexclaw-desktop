@@ -18,6 +18,7 @@ import { readDir, readTextFile } from '@tauri-apps/plugin-fs'
 import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
 import { env } from '@/config/env'
 import type { SkillMeta } from '@/types'
+import { deriveProjectRoot } from '@/utils/projectRoot'
 
 export class SkillRegistry {
   private cache: Map<string, SkillMeta> = new Map()
@@ -181,9 +182,7 @@ export class SkillRegistry {
         // 需要向上两级找到项目根目录
         const actualResourceDir = await resourceDir()
         if (actualResourceDir) {
-          const projectRoot = actualResourceDir
-            .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
-            .replace(/[/\\]target[/\\].*$/, '')
+          const projectRoot = deriveProjectRoot(actualResourceDir)
           console.info(`[SkillRegistry] dev 模式回退项目根: ${projectRoot}`)
           officialSkills = await this.discoverFromPath(projectRoot, 'official')
           console.info(`[SkillRegistry] 项目根 fallback 扫描: ${officialSkills.size} 个 skill`)

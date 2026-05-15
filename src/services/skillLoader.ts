@@ -21,6 +21,7 @@ import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
 import { env } from '@/config/env'
 import type { SkillMeta, SkillPackage, SkillReference, SkillLayer } from '@/types'
 import { estimateSize } from '@/utils/sizeEstimator'
+import { deriveProjectRoot } from '@/utils/projectRoot'
 
 // ─── Error Helper ─────────────────────────────────────
 
@@ -223,10 +224,7 @@ export class SkillLoader {
         try {
           const actualResourceDir = await resourceDir()
           if (actualResourceDir) {
-            const projectRoot = actualResourceDir
-              .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
-              .replace(/[/\\]target[/\\].*$/, '')
-            return await readTextFile(`${projectRoot}/skills/${skillId}/skill.json`)
+            return await readTextFile(`${deriveProjectRoot(actualResourceDir)}/skills/${skillId}/skill.json`)
           }
         } catch {
           // fallback 失败，下面统一抛错
@@ -254,10 +252,7 @@ export class SkillLoader {
         try {
           const actualResourceDir = await resourceDir()
           if (actualResourceDir) {
-            const projectRoot = actualResourceDir
-              .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
-              .replace(/[/\\]target[/\\].*$/, '')
-            return await readTextFile(`${projectRoot}/skills/${skillId}/${fileName}`)
+            return await readTextFile(`${deriveProjectRoot(actualResourceDir)}/skills/${skillId}/${fileName}`)
           }
         } catch {
           // fallback 失败

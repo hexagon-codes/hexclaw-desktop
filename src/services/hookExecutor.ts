@@ -16,6 +16,7 @@ import { readTextFile } from '@tauri-apps/plugin-fs'
 import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
 import { invoke } from '@tauri-apps/api/core'
 import { env } from '@/config/env'
+import { deriveProjectRoot } from '@/utils/projectRoot'
 import type { HookDefinition } from './hookRegistry'
 
 // ── Types ─────────────────────────────────────────
@@ -62,10 +63,7 @@ async function readHookScript(
       try {
         const actualDir = await resourceDir()
         if (actualDir) {
-          const projectRoot = actualDir
-            .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
-            .replace(/[/\\]target[/\\].*$/, '')
-          return await readTextFile(`${projectRoot}/skills/${skillId}/${scriptPath}`)
+          return await readTextFile(`${deriveProjectRoot(actualDir)}/skills/${skillId}/${scriptPath}`)
         }
       } catch {
         // fallback 失败
