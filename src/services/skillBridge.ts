@@ -203,8 +203,8 @@ async function fireHooks(
         console.warn(`[skillBridge] hook "${r.hookName}" 失败: ${r.error}`)
       }
     }
-  } catch {
-    // hook 执行异常 — 静默处理，不阻断主流程
+  } catch (e) {
+    console.warn(`[skillBridge] hook 执行异常 (event=${event}, skill=${skillId}):`, e)
   }
 }
 
@@ -232,7 +232,7 @@ function buildFallbackPackage(
   markdown: string | undefined,
 ) {
   return {
-    meta: buildSkillMeta(skillId, parsed, 'official'),
+    meta: buildSkillMeta(skillId, parsed, 'custom'),
     markdown,
     references: [],
     estimatedSize: 0,
