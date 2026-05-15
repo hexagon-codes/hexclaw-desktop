@@ -10,6 +10,7 @@
 // @see src/schemas/skill.schema.json → experimental.scripts
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
@@ -29,6 +30,8 @@ pub struct SandboxConfig {
     pub timeout_ms: u64,
     /// 允许的目录列表（skill 目录 + temp 目录）
     pub allowed_dirs: Vec<String>,
+    /// 自定义环境变量（JSON 对象格式 {"KEY": "VALUE", ...}）
+    pub env_vars: Option<HashMap<String, String>>,
     // NOTE: max_memory_mb 已移除 — Linux cgroup / Windows job object
     // 需要 platform-specific 实现，当前由操作系统 OOM 处理。
 }
@@ -39,6 +42,7 @@ impl Default for SandboxConfig {
             sandbox_mode: "restricted".into(),
             timeout_ms: 30_000,
             allowed_dirs: Vec::new(),
+            env_vars: None,
         }
     }
 }
@@ -155,7 +159,23 @@ pub async fn execute_in_sandbox(
                 .unwrap_or_default();
             cmd.env("PATH", path);
         }
+        // HOME: Unix 用 $HOME，Windows 用 $USERPROFILE（$HOME 通常未设置）
+        #[cfg(not(target_os = "windows"))]
         cmd.env("HOME", std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()));
+        #[cfg(target_os = "windows")]
+        cmd.env(
+            "HOME",
+            std::env::var("HOME")
+                .or_else(|_| std::env::var("USERPROFILE"))
+                .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned()),
+        );
+    }
+
+    // 应用自定义环境变量（覆盖默认值）
+    if let Some(ref env_vars) = config.env_vars {
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
     }
 
     let start = std::time::Instant::now();
@@ -362,7 +382,7 @@ mod tests {
     fn test_validate_script_path_accepts_relative() {
         let skill_dir = PathBuf::from("/tmp/test-skill");
         let script = validate_script_path(&skill_dir, "scripts/run.sh");
-        assert!(script.is_err());
-        assert!(!script.unwrap_err().contains("traversal"));
+        assert!(script.is_ok());
+        assert!(!script.unwrap().to_string_lossy().contains("traversal"));
     }
 }
