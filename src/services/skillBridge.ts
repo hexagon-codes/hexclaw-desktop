@@ -22,6 +22,8 @@ import { useTaskStore } from '@/stores/tasks'
 import { DEFAULT_ALLOWED_CAPABILITIES } from '@/types/capability'
 import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
 import { readTextFile } from '@tauri-apps/plugin-fs'
+import { getCommandRegistry } from './commandRegistry'
+import type { SkillCommand } from '@/types/skill'
 
 // ── 模块级单例（lazy） ────────────────────────────
 
@@ -35,8 +37,46 @@ function getRegistry(): SkillRegistry {
 // ── 正则 ─────────────────────────────────────────
 
 const SKILL_INVOCATION_RE = /^@(\S+)\s*(.*)/
+const COMMAND_TRIGGER_RE = /^\/(\S+)\s*(.*)/
 
 // ── 内部辅助 ─────────────────────────────────────
+
+/**
+ * 解析命令触发语法。
+ *
+ * @param text - 用户输入的原始消息
+ * @returns 解析成功返回 { trigger, commandInput }，否则返回 null
+ */
+function parseCommandTrigger(
+  text: string,
+): { trigger: string; commandInput: string } | null {
+  const match = text.match(COMMAND_TRIGGER_RE)
+  if (!match) return null
+  return { trigger: `/${match[1]}`, commandInput: match[2] }
+}
+
+/**
+ * 从 skill.json 读取 commands 数组并注册到 CommandRegistry。
+ *
+ * @param skillId — skill ID
+ * @param baseDir — 读取基础目录
+ */
+async function registerSkillCommands(
+  skillId: string,
+  baseDir: BaseDirectory,
+): Promise<void> {
+  try {
+    const raw = await readTextFile(`skills/${skillId}/skill.json`, { baseDir })
+    const parsed = JSON.parse(raw)
+    const commands: SkillCommand[] = Array.isArray(parsed.commands) ? parsed.commands : []
+    if (commands.length > 0) {
+      getCommandRegistry().registerCommands(skillId, commands)
+      console.info(`[skillBridge] 注册 ${commands.length} 个命令: ${skillId}`)
+    }
+  } catch {
+    // skill.json 读取失败 — 静默处理，命令注册是可选的
+  }
+}
 
 /**
  * 检查 skill 声明的 capabilities 是否在默认允许列表中。
@@ -136,7 +176,89 @@ export async function tryExecuteSkill(
     ) => void
   },
 ): Promise<ChatMessage | null | undefined> {
-  // 1. 检查是否为 skill invocation
+  // 1. 检查是否为命令触发（/command 语法）
+  const cmdTrigger = parseCommandTrigger(text)
+  if (cmdTrigger) {
+    const commandRegistry = getCommandRegistry()
+    const cmdDef = commandRegistry.findCommand(cmdTrigger.trigger)
+    if (cmdDef) {
+      try {
+        const taskId = params.createId()
+
+        // 1.1 创建 Task
+        const task: Task = {
+          id: taskId,
+          type: 'skill',
+          status: 'running',
+          input: { type: 'chat', payload: { text: cmdTrigger.commandInput } },
+        }
+        const taskStore = useTaskStore()
+        taskStore.enqueue(task)
+        registerChatTask(task)
+
+        // 1.2 加载命令 .md 文件
+        const baseDir = cmdDef.source === 'skill-package'
+          ? BaseDirectory.Resource
+          : BaseDirectory.AppData
+        const skillLoader = new SkillLoader(baseDir)
+
+        // 读取命令 .md 内容
+        const mdPath = `skills/${cmdDef.skillId}/${cmdDef.mdPath}`
+        let markdown: string | undefined
+        try {
+          markdown = await readTextFile(mdPath, { baseDir })
+        } catch {
+          // dev 模式 fallback
+          try {
+            const actualDir = await resourceDir()
+            markdown = await readTextFile(`${actualDir}/${mdPath}`)
+          } catch {
+            // fallback 失败
+          }
+        }
+
+        // 1.3 构建 SkillPackage 并注入
+        const runtime = useRuntimeStore()
+        const skillPkg = {
+          meta: {
+            skillId: cmdDef.skillId,
+            displayName: cmdDef.commandName,
+            version: '0.0.0',
+            description: cmdDef.description,
+            capabilities: [],
+            entry: cmdDef.mdPath,
+            path: `skills/${cmdDef.skillId}`,
+            source: 'custom' as const,
+          },
+          markdown,
+          references: [],
+          estimatedSize: 0,
+        }
+        await runtime.loadSkillLayerForTask(taskId, skillPkg)
+
+        // 1.4 执行
+        const taskCreatedAt = Date.now()
+        const result = await executeChatTask(taskId)
+        const assistantMsg = buildAssistantMessage(result.content, {
+          id: params.createId(),
+          metadata: {
+            taskId,
+            skillId: cmdDef.skillId,
+            skillName: cmdDef.commandName,
+            runtimeStatus: 'completed',
+            elapsed: Date.now() - taskCreatedAt,
+          },
+        })
+        params.messages.value.push(assistantMsg)
+        return assistantMsg
+      } catch (e) {
+        params.handleSendError(e, null, params.sending, params.draftSending)
+        return null
+      }
+    }
+  }
+
+  // 2. 检查是否为 skill invocation（@mention 语法）
   const invocation = parseSkillInvocation(text)
   if (!invocation) return undefined
 
@@ -200,6 +322,9 @@ export async function tryExecuteSkill(
       }
     }
     await runtime.loadSkillLayerForTask(taskId, skillPkg)
+
+    // 3.2.1 自动注册 skill 关联的命令
+    await registerSkillCommands(skillMeta.skillId, baseDir)
 
     // 3.3 执行
     const taskCreatedAt = Date.now()
