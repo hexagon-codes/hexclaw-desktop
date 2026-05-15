@@ -35,7 +35,7 @@
 | Module 001: Skill Directory Alignment | P0 | done (with limitation) | Move skills/builtin/* to skills/* so Registry can discover skills |
 | Module 002: Chat-Task Bridge UAT | P0 | done | Verify TaskBadge end-to-end in Tauri Desktop |
 | Module 003: Result Surface | P1 | **done** | SkillResultCard 组件，卡片化渲染 Skill 结果 |
-| Module 007: Skill Package Format | P2 | **Phase 1+2 done** | skill.json schema + SkillLoader 多层加载 + 向后兼容 |
+| Module 007: Skill Package Format | P2 | **ALL PHASES DONE** | skill.json schema + SkillLoader + Rust API + 沙箱 + Claude Code 导入 + command/hook/agent 运行时 |
 
 ### Module 001 Exit Criteria (Adjusted)
 
@@ -91,4 +91,16 @@ When resuming:
 5. Continue only the active module
 6. Module 001/002/003/004/005/006 done.
 7. Module 006 (execMode Convergence) 已完成：移除 execMode toggle，所有 chat 统一 Runtime 路径
-8. Module 007 (Skill Package Format) → in progress：Phase 1+2 已完成（skill.json schema + TypeScript 类型 + SkillRegistry 自动补全 + SkillLoader 多层加载）。规划文档：`docs/refactor/module-007-skill-package-format.md`
+8. Module 007 (Skill Package Format) → **ALL PHASES DONE** (2026-05-15)：
+   - Phase 1: skill.schema.json + 11 TypeScript 接口 + SkillRegistry SKILL.md fallback
+   - Phase 2: SkillLoader 多层加载 (loadSkillLayer/loadSkillByTrigger) + SkillBridge trigger 集成
+   - Phase 3: Rust Tauri commands (skill_install/uninstall/search) — commit `159b23f`
+   - Phase 4: SkillExecutor + Rust sandbox (脚本执行 + 沙箱隔离) — commits `c824030` `585a713`
+   - Phase 5A: Claude Code 格式导入 (claudeCodeImporter.ts) — commit `2783399`
+   - Phase 5B: command 运行时兼容 (commandRegistry.ts + /command 触发) — commit `e75bd9e`
+   - Phase 5C: hook 运行时兼容 (hookRegistry.ts + hookExecutor.ts) — commit `64b7420`
+   - Phase 5D: agent 委托兼容 (agentRegistry.ts + agentExecutor.ts) — commit `64b7420`
+   - Code Review: 12 issues fixed (3 HIGH + 5 MEDIUM + 4 LOW)
+   - Tests: 108 skill tests passing + 6 new test files
+   - 规划文档：`docs/refactor/module-007-skill-package-format.md`
+   - Module 007 已完成，无待办项
