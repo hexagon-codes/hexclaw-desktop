@@ -21,7 +21,6 @@
  */
 
 import type { CapabilityName } from '@/types/capability'
-import type { CapabilityRegistry } from '@/services/capabilityRegistry'
 
 export interface CapabilityValidationResult {
   /** 是否全部通过（无 unknown / unauthorized / denied） */
@@ -52,7 +51,7 @@ export class CapabilityValidator {
       allowedCapabilities: CapabilityName[]
       deniedCapabilities: CapabilityName[]
     },
-    registry: CapabilityRegistry,
+    hasCapability: (name: CapabilityName) => boolean,
   ): CapabilityValidationResult {
     const unknownCaps: CapabilityName[] = []
     const unauthorizedCaps: CapabilityName[] = []
@@ -63,7 +62,7 @@ export class CapabilityValidator {
 
     for (const cap of skillCaps) {
       // 1. 未知 cap 检查
-      if (!registry.hasCapability(cap)) {
+      if (!hasCapability(cap)) {
         unknownCaps.push(cap)
         warnings.push(`未知 capability "${cap}"，已从有效列表移除`)
         continue // 未知 cap 不进入 effective

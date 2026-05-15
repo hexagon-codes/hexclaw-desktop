@@ -28,6 +28,22 @@ import { invokeAgent, invokeAgentBySkill } from './agentExecutor'
 import type { SkillCommand, SkillAgent, SkillHook } from '@/types/skill'
 import { getHookRegistry, type HookDefinition, type HookEvent } from './hookRegistry'
 import { executeHooksForEvent } from './hookExecutor'
+import { buildSkillMeta } from '@/utils/skillMeta'
+
+// ── Types ────────────────────────────────────────
+
+interface SkillExecuteParams {
+  createId: () => string
+  messages: Ref<ChatMessage[]>
+  sending: Ref<boolean>
+  draftSending: Ref<boolean>
+  handleSendError: (
+    errorValue: unknown,
+    sessionId: string | null | undefined,
+    sending: Ref<boolean>,
+    draftSending: Ref<boolean>,
+  ) => void
+}
 
 // ── 模块级单例（lazy） ────────────────────────────
 
@@ -201,7 +217,7 @@ function checkSkillCapabilities(capabilities: string[]): boolean {
   const result = capabilityValidator.validate(
     capabilities,
     { allowedCapabilities: DEFAULT_ALLOWED_CAPABILITIES, deniedCapabilities: [] },
-    capabilityRegistry,
+    (cap) => capabilityRegistry.hasCapability(cap),
   )
   return result.valid
 }
@@ -216,16 +232,7 @@ function buildFallbackPackage(
   markdown: string | undefined,
 ) {
   return {
-    meta: {
-      skillId,
-      displayName: parsed.display_name ?? parsed.name ?? skillId,
-      version: parsed.version ?? '0.0.0',
-      description: parsed.description ?? '',
-      capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
-      entry: parsed.entry ?? 'SKILL.md',
-      path: `skills/${skillId}`,
-      source: 'official' as const,
-    },
+    meta: buildSkillMeta(skillId, parsed, 'official'),
     markdown,
     references: [],
     estimatedSize: 0,
@@ -267,158 +274,149 @@ export async function resolveSkillByName(
   )
 }
 
+// ── tryExecuteSkill 子函数 ──────────────────────
+
 /**
- * 主入口 -- 尝试将消息解析为 Skill invocation 并执行。
+ * 处理命令触发（/command 语法）。
  *
- * 返回值语义：
- * - undefined -> 不是 skill invocation，让正常 chat 流程继续
- * - null      -> skill invocation 执行失败（已调用 handleSendError）
- * - ChatMessage -> skill invocation 执行成功
+ * 返回值：ChatMessage 表示执行成功，null 表示执行失败，undefined 表示未匹配。
  */
-export async function tryExecuteSkill(
+async function handleCommandTrigger(
   text: string,
-  params: {
-    createId: () => string
-    messages: Ref<ChatMessage[]>
-    sending: Ref<boolean>
-    draftSending: Ref<boolean>
-    handleSendError: (
-      errorValue: unknown,
-      sessionId: string | null | undefined,
-      sending: Ref<boolean>,
-      draftSending: Ref<boolean>,
-    ) => void
-  },
+  params: SkillExecuteParams,
 ): Promise<ChatMessage | null | undefined> {
-  // 1. 检查是否为命令触发（/command 语法）
   const cmdTrigger = parseCommandTrigger(text)
-  if (cmdTrigger) {
-    const commandRegistry = getCommandRegistry()
-    const cmdDef = commandRegistry.findCommand(cmdTrigger.trigger)
-    if (cmdDef) {
-      try {
-        const taskId = params.createId()
+  if (!cmdTrigger) return undefined
 
-        // 1.1 创建 Task
-        const task: Task = {
-          id: taskId,
-          type: 'skill',
-          status: 'running',
-          input: { type: 'chat', payload: { text: cmdTrigger.commandInput } },
-        }
-        const taskStore = useTaskStore()
-        taskStore.enqueue(task)
-        registerChatTask(task)
+  const commandRegistry = getCommandRegistry()
+  const cmdDef = commandRegistry.findCommand(cmdTrigger.trigger)
+  if (!cmdDef) return undefined
 
-        // 1.2 加载命令 .md 文件
-        const baseDir = cmdDef.source === 'skill-package'
-          ? BaseDirectory.Resource
-          : BaseDirectory.AppData
-        const skillLoader = new SkillLoader(baseDir)
+  try {
+    const taskId = params.createId()
 
-        // 读取命令 .md 内容
-        const mdPath = `skills/${cmdDef.skillId}/${cmdDef.mdPath}`
-        let markdown: string | undefined
-        try {
-          markdown = await readTextFile(mdPath, { baseDir })
-        } catch {
-          // dev 模式 fallback
-          try {
-            const actualDir = await resourceDir()
-            markdown = await readTextFile(`${actualDir}/${mdPath}`)
-          } catch {
-            // fallback 失败
-          }
-        }
-
-        // 1.3 构建 SkillPackage 并注入
-        const runtime = useRuntimeStore()
-        const skillPkg = {
-          meta: {
-            skillId: cmdDef.skillId,
-            displayName: cmdDef.commandName,
-            version: '0.0.0',
-            description: cmdDef.description,
-            capabilities: [],
-            entry: cmdDef.mdPath,
-            path: `skills/${cmdDef.skillId}`,
-            source: 'custom' as const,
-          },
-          markdown,
-          references: [],
-          estimatedSize: 0,
-        }
-        await runtime.loadSkillLayerForTask(taskId, skillPkg)
-
-        // 1.4 执行
-        const taskCreatedAt = Date.now()
-        const result = await executeChatTask(taskId)
-        const assistantMsg = buildAssistantMessage(result.content, {
-          id: params.createId(),
-          metadata: {
-            taskId,
-            skillId: cmdDef.skillId,
-            skillName: cmdDef.commandName,
-            runtimeStatus: 'completed',
-            elapsed: Date.now() - taskCreatedAt,
-          },
-        })
-        params.messages.value.push(assistantMsg)
-        return assistantMsg
-      } catch (e) {
-        params.handleSendError(e, null, params.sending, params.draftSending)
-        return null
-      }
+    const task: Task = {
+      id: taskId,
+      type: 'skill',
+      status: 'running',
+      input: { type: 'chat', payload: { text: cmdTrigger.commandInput } },
     }
-  }
+    const taskStore = useTaskStore()
+    taskStore.enqueue(task)
+    registerChatTask(task)
 
-  // 1b. 检查是否为 agent 触发（@agent agentName input）
-  const agentTrigger = parseAgentTrigger(text)
-  if (agentTrigger) {
+    const baseDir = cmdDef.source === 'skill-package'
+      ? BaseDirectory.Resource
+      : BaseDirectory.AppData
+
+    // 读取命令 .md 内容
+    const mdPath = `skills/${cmdDef.skillId}/${cmdDef.mdPath}`
+    let markdown: string | undefined
     try {
-      const agentRegistry = getAgentRegistry()
-      const agent = agentRegistry.findAgent(agentTrigger.agentName)
-      if (agent) {
-        const result = await invokeAgent(agentTrigger.agentName, agentTrigger.agentInput, {
-          createId: params.createId,
-        })
-        const assistantMsg = buildAssistantMessage(result.content, {
-          id: params.createId(),
-          metadata: {
-            skillId: result.skillId,
-            skillName: result.agentName,
-            runtimeStatus: 'completed',
-            elapsed: result.elapsed,
-          },
-        })
-        params.messages.value.push(assistantMsg)
-        return assistantMsg
+      markdown = await readTextFile(mdPath, { baseDir })
+    } catch {
+      try {
+        const actualDir = await resourceDir()
+        markdown = await readTextFile(`${actualDir}/${mdPath}`)
+      } catch {
+        // fallback 失败
       }
-    } catch (e) {
-      params.handleSendError(e, null, params.sending, params.draftSending)
-      return null
     }
-  }
 
-  // 2. 检查是否为 skill invocation（@mention 语法）
+    const runtime = useRuntimeStore()
+    const skillPkg = {
+      meta: buildSkillMeta(cmdDef.skillId, {
+        display_name: cmdDef.commandName,
+        description: cmdDef.description,
+        entry: cmdDef.mdPath,
+      }),
+      markdown,
+      references: [],
+      estimatedSize: 0,
+    }
+    await runtime.loadSkillLayerForTask(taskId, skillPkg)
+
+    const taskCreatedAt = Date.now()
+    const result = await executeChatTask(taskId)
+    const assistantMsg = buildAssistantMessage(result.content, {
+      id: params.createId(),
+      metadata: {
+        taskId,
+        skillId: cmdDef.skillId,
+        skillName: cmdDef.commandName,
+        runtimeStatus: 'completed',
+        elapsed: Date.now() - taskCreatedAt,
+      },
+    })
+    params.messages.value.push(assistantMsg)
+    return assistantMsg
+  } catch (e) {
+    params.handleSendError(e, null, params.sending, params.draftSending)
+    return null
+  }
+}
+
+/**
+ * 处理 agent 触发（@agent agentName input）。
+ *
+ * 返回值：ChatMessage 表示执行成功，null 表示执行失败，undefined 表示未匹配。
+ */
+async function handleAgentTrigger(
+  text: string,
+  params: SkillExecuteParams,
+): Promise<ChatMessage | null | undefined> {
+  const agentTrigger = parseAgentTrigger(text)
+  if (!agentTrigger) return undefined
+
+  try {
+    const agentRegistry = getAgentRegistry()
+    const agent = agentRegistry.findAgent(agentTrigger.agentName)
+    if (!agent) return undefined
+
+    const result = await invokeAgent(agentTrigger.agentName, agentTrigger.agentInput, {
+      createId: params.createId,
+    })
+    const assistantMsg = buildAssistantMessage(result.content, {
+      id: params.createId(),
+      metadata: {
+        skillId: result.skillId,
+        skillName: result.agentName,
+        runtimeStatus: 'completed',
+        elapsed: result.elapsed,
+      },
+    })
+    params.messages.value.push(assistantMsg)
+    return assistantMsg
+  } catch (e) {
+    params.handleSendError(e, null, params.sending, params.draftSending)
+    return null
+  }
+}
+
+/**
+ * 处理 skill invocation（@skillName input）。
+ *
+ * 返回值：ChatMessage 表示执行成功，null 表示执行失败，undefined 表示未匹配。
+ */
+async function handleSkillInvocation(
+  text: string,
+  params: SkillExecuteParams,
+): Promise<ChatMessage | null | undefined> {
   const invocation = parseSkillInvocation(text)
   if (!invocation) return undefined
 
-  // 2. 按名称匹配 Skill
   const registry = getRegistry()
   const skillMeta = await resolveSkillByName(invocation.skillName, registry)
   if (!skillMeta) return undefined
 
-  // 2.1 Capability 预检
+  // Capability 预检
   if (!checkSkillCapabilities(skillMeta.capabilities ?? [])) {
     throw new Error(`Skill "${skillMeta.displayName}" 缺少所需权限`)
   }
 
-  // 3. 执行 Skill
   try {
     const taskId = params.createId()
 
-    // 3.1 创建 Task（携带 skill input text）
     const task: Task = {
       id: taskId,
       type: 'skill',
@@ -429,22 +427,20 @@ export async function tryExecuteSkill(
     taskStore.enqueue(task)
     registerChatTask(task)
 
-    // 3.2 加载 SKILL.md → 注入 SkillLayer
+    // 加载 SKILL.md → 注入 SkillLayer
     const runtime = useRuntimeStore()
     const baseDir = skillMeta.source === 'official'
       ? BaseDirectory.Resource
       : BaseDirectory.AppData
     const skillLoader = new SkillLoader(baseDir)
 
-    // 推断 trigger：从用户输入文本提取关键词匹配 triggers 数组
     const inferredTrigger = invocation.skillInput.trim().split(/\s+/)[0]?.toLowerCase() || 'always'
 
     let skillPkg = await skillLoader.loadSkillByTrigger(skillMeta.skillId, inferredTrigger, {
       loadMarkdown: true,
       loadReferences: false,
     })
-    // Fallback: BaseDirectory.Resource 在 dev 模式下可能不指向项目根，
-    // 尝试用 resourceDir() 解析的实际路径重新加载
+    // Fallback: BaseDirectory.Resource 在 dev 模式下可能不指向项目根
     if (!skillPkg.markdown && baseDir === BaseDirectory.Resource) {
       try {
         const actualDir = await resourceDir()
@@ -454,7 +450,6 @@ export async function tryExecuteSkill(
         skillPkg = buildFallbackPackage(skillMeta.skillId, parsed, md)
         console.info(`[skillBridge] resourceDir fallback 成功: ${actualDir}/skills/${skillMeta.skillId}`)
       } catch {
-        // resourceDir fallback 失败，尝试 AppData
         console.warn(`[skillBridge] Resource dir SKILL.md 为空，回退 AppData: ${skillMeta.skillId}`)
         const fallbackLoader = new SkillLoader(BaseDirectory.AppData)
         skillPkg = await fallbackLoader.loadSkill(skillMeta.skillId, {
@@ -465,20 +460,11 @@ export async function tryExecuteSkill(
     }
     await runtime.loadSkillLayerForTask(taskId, skillPkg)
 
-    // 3.2.1 自动注册 skill 关联的命令
     await registerSkillCommands(skillMeta.skillId, baseDir)
-
-    // 3.2.2 自动注册 skill 关联的子代理
     await registerSkillAgents(skillMeta.skillId, baseDir)
-
-    // 3.2.3 自动注册 skill 关联的 lifecycle hooks
     await registerSkillHooks(skillMeta.skillId, baseDir)
 
-    // 3.2.4 触发 on-load hooks（fire-and-forget）
     fireHooks('on-load', skillMeta.skillId, { TASK_ID: taskId })
-
-    // 3.3 执行
-    // 3.3.1 触发 on-execute hooks（fire-and-forget）
     fireHooks('on-execute', skillMeta.skillId, { TASK_ID: taskId })
 
     const taskCreatedAt = Date.now()
@@ -496,13 +482,31 @@ export async function tryExecuteSkill(
     params.messages.value.push(assistantMsg)
     return assistantMsg
   } catch (e) {
-    // 触发 on-error hooks（fire-and-forget）
     fireHooks('on-error', skillMeta.skillId, {
       ERROR: e instanceof Error ? e.message : String(e),
     })
     params.handleSendError(e, null, params.sending, params.draftSending)
     return null
   }
+}
+
+// ── 主入口 ──────────────────────────────────────
+
+/**
+ * 主入口 -- 尝试将消息解析为 Skill invocation 并执行。
+ *
+ * 返回值语义：
+ * - undefined -> 不是 skill invocation，让正常 chat 流程继续
+ * - null      -> skill invocation 执行失败（已调用 handleSendError）
+ * - ChatMessage -> skill invocation 执行成功
+ */
+export async function tryExecuteSkill(
+  text: string,
+  params: SkillExecuteParams,
+): Promise<ChatMessage | null | undefined> {
+  return handleCommandTrigger(text, params)
+    ?? handleAgentTrigger(text, params)
+    ?? handleSkillInvocation(text, params)
 }
 
 /**

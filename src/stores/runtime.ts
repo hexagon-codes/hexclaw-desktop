@@ -222,7 +222,7 @@ export const useRuntimeStore = defineStore('runtime', () => {
         allowedCapabilities: ctx.system?.policy.allowedCapabilities ?? [],
         deniedCapabilities: ctx.system?.policy.deniedCapabilities ?? [],
       },
-      capabilityRegistry,
+      (cap) => capabilityRegistry.hasCapability(cap),
     )
     if (!validation.valid) {
       getRuntimeLogger().warn(
