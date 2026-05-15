@@ -8,7 +8,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import type { SkillMeta } from '@/types'
+import type { SkillPackageMeta } from '@/types/skill'
 import type { SandboxMode } from '@/types/skill'
 
 // ── Types ─────────────────────────────────────────
@@ -41,8 +41,8 @@ const VALID_SANDBOX_MODES: ReadonlySet<string> = new Set(['restricted', 'full'])
  *
  * 校验失败时在 console.warn 输出告警并跳过该条目（不阻断其他脚本）。
  */
-export function parseSkillScripts(skillMeta: SkillMeta): ScriptEntry[] {
-  const scripts = (skillMeta as Record<string, unknown>).experimental
+export function parseSkillScripts(skillMeta: SkillPackageMeta): ScriptEntry[] {
+  const scripts = skillMeta.experimental
   if (!scripts || typeof scripts !== 'object') return []
 
   const scriptsObj = (scripts as Record<string, unknown>).scripts
