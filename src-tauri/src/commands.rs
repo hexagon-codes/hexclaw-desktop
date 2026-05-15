@@ -12,17 +12,23 @@ use crate::ollama;
 use crate::sidecar;
 
 /// 校验 skill 名称，防止 URL 路径注入
+///
+/// 与 JS 侧 `sanitizeSkillId` 保持一致：
+/// 1. 强制小写
+/// 2. 只允许 a-z, 0-9, -, _
+/// 3. 拒绝以 . 开头或包含 .. 的路径穿越
 fn sanitize_skill_name(name: &str) -> Result<String, String> {
+    let name = name.to_lowercase();
     if name.is_empty() {
         return Err("skill name cannot be empty".into());
     }
-    if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains(' ') {
-        return Err(format!("invalid skill name: {}", name));
+    if name.starts_with('.') || name.contains("..") {
+        return Err(format!("skill name contains path traversal: {}", name));
     }
     if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
         return Err(format!("skill name contains invalid characters: {}", name));
     }
-    Ok(name.to_string())
+    Ok(name)
 }
 
 /// Sidecar 状态信息
