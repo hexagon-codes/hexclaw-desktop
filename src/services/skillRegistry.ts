@@ -262,7 +262,13 @@ export class SkillRegistry {
     return result
   }
 
-  /** 净化 skillId：阻止路径穿越 */
+  /**
+   * 净化 skillId：阻止路径穿越。
+   *
+   * 设计决策：返回空字符串而非抛出错误（与 SkillLoader.sanitizeSkillId 不同）。
+   * - Registry 在目录迭代场景调用，非法输入应跳过继续（返回空 → if (!skillId) continue）。
+   * - Loader 在已知 skill ID 场景调用，非法输入说明存在 bug，应崩溃。
+   */
   private sanitizeSkillId(id: string): string {
     const sanitized = id.toLowerCase().replace(/[^a-z0-9_-]/g, '')
     if (!sanitized || sanitized.startsWith('.') || sanitized.includes('..')) {

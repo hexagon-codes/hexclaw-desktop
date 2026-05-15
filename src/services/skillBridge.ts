@@ -52,6 +52,32 @@ function checkSkillCapabilities(capabilities: string[]): boolean {
   return result.valid
 }
 
+/**
+ * 从已解析的 skill.json 构建 SkillPackage（仅用于 resourceDir fallback）。
+ * 复用 SkillLoader 相同的 meta 构建逻辑，避免内联重复。
+ */
+function buildFallbackPackage(
+  skillId: string,
+  parsed: Record<string, unknown>,
+  markdown: string | undefined,
+) {
+  return {
+    meta: {
+      skillId,
+      displayName: parsed.display_name ?? parsed.name ?? skillId,
+      version: parsed.version ?? '0.0.0',
+      description: parsed.description ?? '',
+      capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
+      entry: parsed.entry ?? 'SKILL.md',
+      path: `skills/${skillId}`,
+      source: 'official' as const,
+    },
+    markdown,
+    references: [],
+    estimatedSize: 0,
+  }
+}
+
 // ── 导出函数 ─────────────────────────────────────
 
 /**
@@ -159,23 +185,9 @@ export async function tryExecuteSkill(
       try {
         const actualDir = await resourceDir()
         const raw = await readTextFile(`${actualDir}/skills/${skillMeta.skillId}/skill.json`)
-        const meta = JSON.parse(raw)
+        const parsed = JSON.parse(raw)
         const md = await readTextFile(`${actualDir}/skills/${skillMeta.skillId}/SKILL.md`).catch(() => undefined)
-        skillPkg = {
-          meta: {
-            skillId: skillMeta.skillId,
-            displayName: meta.display_name ?? meta.name ?? skillMeta.skillId,
-            version: meta.version ?? '0.0.0',
-            description: meta.description ?? '',
-            capabilities: Array.isArray(meta.capabilities) ? meta.capabilities : [],
-            entry: meta.entry ?? 'SKILL.md',
-            path: `skills/${skillMeta.skillId}`,
-            source: 'official',
-          },
-          markdown: md,
-          references: [],
-          estimatedSize: 0,
-        }
+        skillPkg = buildFallbackPackage(skillMeta.skillId, parsed, md)
         console.info(`[skillBridge] resourceDir fallback 成功: ${actualDir}/skills/${skillMeta.skillId}`)
       } catch {
         // resourceDir fallback 失败，尝试 AppData

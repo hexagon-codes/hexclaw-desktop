@@ -239,8 +239,14 @@ export class SkillLoader {
   /**
    * 读取 skill 目录下的文件内容。
    * 先尝试 baseDir，dev 模式下回退到项目根目录。
+   *
+   * 安全：验证 fileName 防止路径穿越（如 '../../etc/passwd'）。
    */
   private async readSkillFile(skillId: string, fileName: string): Promise<string | undefined> {
+    if (fileName.includes('..') || fileName.startsWith('/') || fileName.startsWith('\\')) {
+      throw skillError('INVALID_PATH', `非法文件路径: skills/${skillId}/${fileName}`)
+    }
+
     try {
       return await readTextFile(`skills/${skillId}/${fileName}`, { baseDir: this.baseDir })
     } catch {
@@ -293,7 +299,11 @@ export class SkillLoader {
   /**
    * 校验并净化 skillId，阻止路径穿越。
    *
-   * 规则与 SkillRegistry.sanitizeSkillId 对齐：
+   * 设计决策：抛出错误（与 SkillRegistry.sanitizeSkillId 不同）。
+   * - Loader 在已知 skill ID 场景调用，非法输入说明存在 bug，应崩溃而非静默跳过。
+   * - Registry 在目录迭代场景调用，非法输入应跳过继续，返回空字符串。
+   *
+   * 规则：
    * - 仅允许：a-z、0-9、-、_
    * - 其余字符一律剥离
    * - 空字符串、. 开头、.. 包含 → 抛出错误
