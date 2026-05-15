@@ -1,0 +1,72 @@
+{
+  "session": "ANL-constitution-freeze-2026-05-13",
+  "mode": "auto",
+  "output_dir": ".workflow/scratch/analyze-constitution-freeze-2026-05-13",
+  "state": "completed",
+  "recommendation": {
+    "verdict": "Conditional Go",
+    "confidence": 0.85,
+    "summary": "建议有条件冻结：ADR-002/003/004 在 3 项 minor revision 后 freeze 为 Constitution baseline。ADR-001 需先分离原则层和 impl detail，延迟加入 Constitution。"
+  },
+  "scores": {
+    "constitution_stability": 7.5,
+    "adr_001_bridge": 6.8,
+    "adr_002_authority": 7.8,
+    "adr_003_purity": 8.8,
+    "adr_004_state_machine": 7.5,
+    "critical_risks": 3,
+    "ambiguities_found": 12
+  },
+  "decisions": [
+    {
+      "id": "DEC-001",
+      "title": "Constitution Freeze 范围",
+      "status": "locked",
+      "value": "Conditional: ADR-002/003/004 freeze after minor revision, ADR-001 deferred"
+    },
+    {
+      "id": "DEC-002",
+      "title": "ADR-001 修订方向",
+      "status": "locked",
+      "value": "删除 API 函数表，保留原则层"
+    },
+    {
+      "id": "DEC-003",
+      "title": "Freeze 修改规则",
+      "status": "locked",
+      "value": "新 ADR supersede，禁止原地修改"
+    },
+    {
+      "id": "DEC-004",
+      "title": "Minor wording fixes",
+      "status": "free",
+      "value": "12 处 ambiguity 由实施者决定优先级"
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": "high",
+      "action": "对 ADR-002/003/004 做 3 项 must-fix revision 后 freeze",
+      "rationale": "约 <10 分钟工作量，完成后即可建立 Constitution baseline",
+      "review_status": "accepted"
+    },
+    {
+      "priority": "high",
+      "action": "ADR-001 分离原则层和 impl detail",
+      "rationale": "原则部分 stable 可 freeze，API 表不应放在 Constitution 层",
+      "review_status": "accepted"
+    },
+    {
+      "priority": "medium",
+      "action": "处理 12 处 wording ambiguity",
+      "rationale": "部分 issue 可能引起未来误解",
+      "review_status": "accepted"
+    },
+    {
+      "priority": "low",
+      "action": "添加 ESLint rule / CI import check / Proxy 等自动化合规",
+      "rationale": "在团队扩张或出现违规时实施",
+      "review_status": "accepted"
+    }
+  ]
+}

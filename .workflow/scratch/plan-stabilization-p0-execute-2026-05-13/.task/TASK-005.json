@@ -1,0 +1,138 @@
+{
+  "id": "TASK-005",
+  "title": "TaskResult Type Hardening — Execute",
+  "description": "根据 TASK-002 的消费者调查报告，将 src/types/task.ts 中的 TaskResult 从 `{ kind: 'text'; content: string }` 扩展为完整的 discriminated union。至少支持 text、tool_calls、structured 三种 kind。更新所有消费者（workspaceProjector.ts、runtimeBridge.ts、runtime.ts、useWorkspace.ts、ContextDetailPanel.vue、测试文件），确保编译通过、测试通过。",
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "feature",
+  "priority": "high",
+  "effort": "medium",
+  "action": "Expand TaskResult discriminated union in task.ts, update all consumers to handle new kinds, verify compilation and tests",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+  "scope": "src/types/task.ts, src/services/workspaceProjector.ts, src/stores/runtime.ts, src/services/runtimeBridge.ts, src/composables/useWorkspace.ts, src/components/workspace/ContextDetailPanel.vue, src/__tests__/runtime-execute-path-pilot.test.ts",
+  "focus_paths": [
+    "src/types/",
+    "src/services/",
+    "src/stores/",
+    "src/composables/"
+  ],
+  "read_first": [
+    "src/types/task.ts",
+    "src/types/workspace.ts",
+    "src/services/workspaceProjector.ts",
+    "src/services/runtimeBridge.ts",
+    "src/stores/runtime.ts",
+    "src/composables/useWorkspace.ts",
+    "src/components/workspace/ContextDetailPanel.vue",
+    "src/__tests__/runtime-execute-path-pilot.test.ts",
+    ".workflow/scratch/plan-stabilization-p0-execute-2026-05-13/survey-taskresult.md"
+  ],
+  "depends_on": ["TASK-002"],
+  "wave": 2,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+  "convergence": {
+    "criteria": [
+      "src/types/task.ts 中 TaskResult 是 discriminated union，包含至少 text、tool_calls、structured 三种 kind，每种 kind 有对应的 payload 字段",
+      "workspaceProjector.ts 中 projectTaskResult 函数能匹配所有新增 kind（无 TypeScript 编译警告）",
+      "runtimeBridge.ts 和 runtime.ts 中所有引用 TaskResult 的代码兼容新类型",
+      "npm test -- --run src/__tests__/runtime-execute-path-pilot.test.ts 全部通过",
+      "tsc --noEmit 编译无错误",
+      "grep -rn 'TaskResult' src/ 确认所有引用均已更新"
+    ],
+    "verification": "npm test -- --run src/__tests__/runtime-execute-path-pilot.test.ts && npx tsc --noEmit 2>&1 | head -20",
+    "definition_of_done": "TaskResult 是完整的 discriminated union，所有消费者已适配，编译和测试全部通过"
+  },
+  "files": [
+    {
+      "path": "src/types/task.ts",
+      "action": "modify",
+      "target": "TaskResult 类型定义",
+      "change": "将 TaskResult 从单个 text kind 扩展为 discriminated union，至少包含 text/tool_calls/structured 三种 kind"
+    },
+    {
+      "path": "src/services/workspaceProjector.ts",
+      "action": "modify",
+      "target": "projectTaskResult 函数",
+      "change": "扩展 switch/match 处理新 kind，确保 text 路径不变，新增 tool_calls 和 structured 处理"
+    },
+    {
+      "path": "src/services/runtimeBridge.ts",
+      "action": "modify",
+      "target": "executeChatTask 结果处理",
+      "change": "验证 executeChatTask 返回值与新的 TaskResult 类型兼容"
+    },
+    {
+      "path": "src/stores/runtime.ts",
+      "action": "modify",
+      "target": "execution.output 类型适配",
+      "change": "确保 ExecutionLayer.output 使用新的 TaskResult 类型"
+    },
+    {
+      "path": "src/__tests__/runtime-execute-path-pilot.test.ts",
+      "action": "modify",
+      "target": "测试 mock 类型适配",
+      "change": "更新 mockGetExecutionResult 返回类型以匹配新的 TaskResult"
+    }
+  ],
+  "implementation": [
+    "扩展 TaskResult discriminated union，定义 TextResult/ToolCallsResult/StructuredResult 等变体",
+    "更新 workspaceProjector.ts 中的 projectTaskResult 和 projectTaskSection（outputSummary 从 result.content 获取的路径）",
+    "验证 runtime.ts:getExecutionResult 返回类型兼容",
+    "验证 runtimeBridge.ts:executeChatTask 返回类型兼容",
+    "更新测试文件中的 mock 类型签名",
+    "运行 tsc --noEmit 和全部测试"
+  ],
+  "test": {
+    "commands": [
+      "npm test -- --run src/__tests__/runtime-execute-path-pilot.test.ts",
+      "npx tsc --noEmit 2>&1"
+    ],
+    "unit": ["src/__tests__/runtime-execute-path-pilot.test.ts"],
+    "integration": [],
+    "success_metrics": [
+      "全部单元测试通过",
+      "零 TypeScript 编译错误",
+      "所有 consumer 文件已适配"
+    ]
+  },
+  "reference": {
+    "pattern": "Discriminated union type pattern (TypeScript)",
+    "files": [
+      "src/types/task.ts",
+      "src/services/workspaceProjector.ts",
+      "src/__tests__/runtime-execute-path-pilot.test.ts"
+    ],
+    "examples": null
+  },
+  "rationale": {
+    "chosen_approach": "使用 TypeScript discriminated union（可辨识联合），每种 kind 有自己的 payload 字段。text kind 保持 { kind: 'text', content: string } 向后兼容。tool_calls kind 包含 tool_calls 数组。structured kind 包含结构化 data 字段。",
+    "decision_factors": [
+      "Discriminated union 提供编译时类型安全",
+      "向后兼容 text kind 避免破坏现有 consumer",
+      "TASK-002 survey 结果决定具体 kinds",
+      "保持 TaskOutput 接口不变（result: TaskResult）"
+    ],
+    "tradeoffs": "所有 switch-on-kind 的代码需要处理 exhaustive check，增加少量样板代码但获得类型安全回报。"
+  },
+  "risks": [
+    "workspaceProjector.ts 中 projectTaskSection 硬编码 primaryResult.content 可能不兼容新 kind — 缓解：content 只在 text kind 可用，其他 kind 使用替代字段",
+    "部分消费者可能隐式依赖 TaskResult 的 { content: string } 形状 — 缓解：通过 tsc --noEmit 全面检测"
+  ],
+  "code_skeleton": null,
+  "doc_context": {
+    "affected_features": ["TaskResult type system", "Workspace projection"],
+    "affected_components": ["task.ts", "workspaceProjector", "useWorkspace", "ContextDetailPanel"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-007"]
+  },
+  "meta": {
+    "estimated_time": "60m",
+    "risk": "medium",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

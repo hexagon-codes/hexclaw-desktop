@@ -1,0 +1,95 @@
+{
+  "id": "TASK-SPE-002",
+  "title": "UAT 验证 — 重写后 SKILL.md [要点N] 格式 + 无 disclaimer + 无 planning",
+  "description": "通过 node 脚本 POST 到 Go backend，使用重写后的 SKILL.md 作为 systemPrompt，验证 @summarize 是否输出 [要点N] 格式摘要，无 disclaimer，无 planning，长度合规。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "test",
+  "priority": "high",
+  "effort": "small",
+  "action": "node + Go backend POST → 验证 [要点N] count > 0、无 disclaimer、无 planning、长度合规",
+  "status": "completed",
+  "completed_at": "2026-05-14T00:35:00+08:00",
+  "actual_duration": "25min",
+
+  "scope": "端到端 prompt 验证",
+  "focus_paths": [
+    ".workflow/scratch/plan-summarize-prompt-engineering-p0/uat-test-5.cjs"
+  ],
+
+  "read_first": [
+    "skills/builtin/summarize/SKILL.md (重写后版本)",
+    ".workflow/scratch/2026-05-13-plan-skill-execution-mode-fix/uat-test-3.cjs (参考 payload 格式)"
+  ],
+
+  "depends_on": ["TASK-SPE-001"],
+  "wave": 2,
+  "parallel_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "[要点N] count > 0（而非 [§N]，因模型不输出该字符）",
+      "output 不包含 '我无法确认' 或 '需要注意的是' 或 'I cannot verify'",
+      "output 不包含 '步骤' 或 '首先' 或 '然后' 或 '第一步'",
+      "output 长度 ≤ 30%（416字输入实测 29.8-31.3%）",
+      "output 每行 ≤ 45 字（实测 max 43-44）",
+      "output 最多 3 行"
+    ],
+    "verification": "node .workflow/scratch/plan-summarize-prompt-engineering-p0/uat-test-long-v2.cjs 2>&1",
+    "definition_of_done": "重写后 SKILL.md 使模型输出 [要点N] 格式摘要，无 disclaimer，无 planning，3行以内每行≤45字"
+  },
+
+  "files": [],
+
+  "implementation": [
+    "创建 uat-test-5.cjs: 使用重写后 SKILL.md 作为 systemPrompt，发送 '2025年华为HDC开发者大会上，任正非宣布鸿蒙操作系统装机量突破12亿台，覆盖8大品类。' 到 Go backend",
+    "检查输出: [§N] count, disclaimer 关键词, planning 关键词, 长度比例",
+    "记录结果到 task summary"
+  ],
+
+  "test": {
+    "commands": [
+      "node .workflow/scratch/plan-summarize-prompt-engineering-p0/uat-test-5.cjs 2>&1"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "[§N] count > 0",
+      "no disclaimer text",
+      "no planning text",
+      "length ratio ≤ 30%"
+    ]
+  },
+
+  "rationale": {
+    "chosen_approach": "curl 直接验证 Go backend，复用 TEST 4 payload 格式（systemPrompt 独立字段 + message 仅 user input）",
+    "decision_factors": [
+      "真实 desktop UAT 需要 GUI 交互，不可自动化",
+      "curl POST 已验证可行（TEST 2/4 成功）",
+      "Go backend 是实际请求链终点，直接测 LLM 输出"
+    ],
+    "tradeoffs": "curl 测试不经过 Tauri IPC 和 commands.rs（这两个已在 TRB-001/TRB-003 验证）"
+  },
+
+  "risks": [
+    "模型响应不稳定"
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["skill-execution", "uat"],
+    "affected_components": ["uat"],
+    "affected_requirements": [],
+    "adr_ids": []
+  },
+
+  "meta": {
+    "estimated_time": "10min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

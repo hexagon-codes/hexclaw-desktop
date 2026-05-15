@@ -1,0 +1,71 @@
+{
+  "summary": "summarize SKILL.md Prompt Rewrite — P0 constraint adherence fix",
+  "approach": "Restructure SKILL.md to put Constraints first with ALL CAPS emphasis, add output example with [§N] citations and ≤30% demonstration. Zero code changes.",
+  "task_ids": ["TASK-SKL-001"],
+  "task_count": 1,
+  "complexity": "low",
+  "estimated_time": "15 min",
+  "recommended_execution": "Agent",
+
+  "waves": [
+    {
+      "wave": 1,
+      "label": "SKILL.md Rewrite",
+      "task_ids": ["TASK-SKL-001"],
+      "parallel": false
+    }
+  ],
+
+  "data_flow": {
+    "diagram": null,
+    "stages": []
+  },
+
+  "design_decisions": [
+    {
+      "id": "DD-001",
+      "title": "Section ordering: Constraints → Purpose → Working Principles → Patterns → Quality Bar",
+      "rationale": "Primacy effect — LLMs weight earlier content more heavily. Constraints must be the first thing the model reads.",
+      "alternatives": ["Keep existing order (Purpose → Principles → Constraints → Patterns → Quality Bar)", "Constraints at both top and bottom"],
+      "chosen": "Constraints first, single placement at top"
+    },
+    {
+      "id": "DD-002",
+      "title": "Emphasis strategy: ALL CAPS + bold",
+      "rationale": "ALL CAPS and bold text in system prompts significantly increase LLM compliance with specific rules (well-documented prompt engineering practice).",
+      "alternatives": ["Repetition (repeat key rules 3x)", "XML tags (<rule>...</rule>)"],
+      "chosen": "ALL CAPS for critical constraints + bold for section headers",
+      "note": "Avoid XML tags — they may interfere with some model tokenizers"
+    },
+    {
+      "id": "DD-003",
+      "title": "[§N] citation — separate section + example",
+      "rationale": "[§N] is a custom format with zero model training data. It needs its own section AND a worked example to establish the pattern.",
+      "alternatives": ["Only mention in constraints list", "Only show in example"],
+      "chosen": "Both — dedicated rule section + example output"
+    }
+  ],
+
+  "shared_context": {
+    "patterns": [
+      "Content-only changes to skills/builtin/summarize/SKILL.md",
+      "No code changes to src/",
+      "Philosophy: Skill is a prompt package — SKILL.md is the executable instruction"
+    ],
+    "conventions": [
+      "ALL CAPS for MUST/MUST NOT rules",
+      "Example output uses real content to demonstrate format",
+      "Reference existing SKILL.md tone consistency"
+    ],
+    "dependencies": []
+  },
+
+  "_metadata": {
+    "timestamp": "2026-05-13T13:25:00Z",
+    "source": "workflow-planner",
+    "planning_mode": "full",
+    "plan_type": "rewrite",
+    "schema_version": "2.0",
+    "git_commit": null
+  }
+}

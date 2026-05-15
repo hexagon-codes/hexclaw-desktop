@@ -1,0 +1,121 @@
+{
+  "id": "TASK-ERR-002",
+  "title": "BridgeError 类型 + error mapping + executeChatTask 改造",
+  "description": "在 runtimeBridge.ts 中定义 BridgeErrorCode、BridgeError 类型、bridgeErrorToApiError 映射函数。重构 executeChatTask 的 catch 块：使用 BridgeError 代替裸 Error，通过 bridgeErrorToApiError 转换后抛出 ApiError。解决第二层丢失问题。",
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "fix",
+  "priority": "high",
+  "effort": "medium",
+  "action": "Add BridgeErrorCode type (EXECUTION_FAILED|NO_OUTPUT), BridgeError interface, bridgeErrorToApiError function in runtimeBridge.ts; refactor executeChatTask catch to use BridgeError and throw ApiError",
+  "status": "completed",
+  "completed_at": null,
+  "actual_duration": null,
+  "scope": "src/services/runtimeBridge.ts",
+  "focus_paths": ["src/services/"],
+  "read_first": [
+    "src/services/runtimeBridge.ts",
+    "src/types/error.ts",
+    "src/utils/errors.ts",
+    "src/stores/chat-stream-error.ts",
+    ".workflow/scratch/analyze-error-boundary-2026-05-13/analysis.md"
+  ],
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+  "convergence": {
+    "criteria": [
+      "BridgeErrorCode 定义在 runtimeBridge.ts 中，包含至少 'EXECUTION_FAILED' 和 'NO_OUTPUT' 两个代码",
+      "BridgeError 接口定义在 runtimeBridge.ts 中，包含 code: BridgeErrorCode、message: string、cause?: unknown 字段",
+      "bridgeErrorToApiError 函数定义在 runtimeBridge.ts 中，接收 BridgeError 返回 ApiError，映射表包含 EXECUTION_FAILED→SERVER_ERROR、NO_OUTPUT→SERVER_ERROR",
+      "executeChatTask catch 块使用 BridgeError（new Error('...') 替换为 { code: 'NO_OUTPUT', message: '...' } 等 BridgeError 字面量）",
+      "executeChatTask catch 块末尾通过 bridgeErrorToApiError 转换后 throw（throw bridgeErrorToApiError(bridgeErr)）",
+      "executeChatTask catch 中 taskStore.failTask 使用 BridgeError 的 code 和 message（不再使用硬编码 'EXECUTION_FAILED'）",
+      "npx tsc --noEmit 编译通过",
+      "不修改 src/types/error.ts（不扩展 ApiErrorCode）",
+      "不修改 src/utils/errors.ts（不修改 fromNativeError）",
+      "不修改 src/stores/chat-stream-error.ts（handleSendError 不变）"
+    ],
+    "verification": "grep -n 'BridgeError\\|BridgeErrorCode\\|bridgeErrorToApiError' src/services/runtimeBridge.ts",
+    "definition_of_done": "Runtime 路径错误从 TaskError 经过 BridgeError 映射到 ApiError 的完整链路已实现，所有文件保持不被修改的约束"
+  },
+  "files": [
+    {
+      "path": "src/services/runtimeBridge.ts",
+      "action": "modify",
+      "target": "新增 BridgeErrorCode/BridgeError/bridgeErrorToApiError，重构 executeChatTask catch",
+      "change": "在文件顶部（现有 import 之后，registerChatTask 之前）添加 BridgeErrorCode/BridgeError/bridgeErrorToApiError 定义。修改 executeChatTask catch 块：创建 BridgeError 而非 new Error，调用 bridgeErrorToApiError 后抛出 ApiError。"
+    }
+  ],
+  "implementation": [
+    "在 runtimeBridge.ts 的 import 之后、registerChatTask 之前添加：",
+    "  - type BridgeErrorCode = 'EXECUTION_FAILED' | 'NO_OUTPUT'",
+    "  - interface BridgeError { code: BridgeErrorCode; message: string; cause?: unknown }",
+    "  - import { createApiError } from '@/utils/errors' （用于 bridgeErrorToApiError 中构造 ApiError）",
+    "  - function bridgeErrorToApiError(err: BridgeError): ApiError { ... } 映射表",
+    "",
+    "修改 executeChatTask 的 catch 块（line 75-81）：",
+    "  - 保持 taskStore.failTask 调用（使用 BridgeError.code/message）",
+    "  - 将 throw e 改为创建 BridgeError 并抛出转换后的 ApiError：",
+    "    const bridgeErr: BridgeError = { code: 'EXECUTION_FAILED', message: msg }",
+    "    throw bridgeErrorToApiError(bridgeErr)",
+    "  - 将前一个 if(!result) 中的 throw new Error('执行完成但无输出结果') 替换为：",
+    "    const bridgeErr: BridgeError = { code: 'NO_OUTPUT', message: '执行完成但无输出结果' }",
+    "    taskStore.failTask(...)  // 已有",
+    "    throw bridgeErrorToApiError(bridgeErr)",
+    "",
+    "编译验证"
+  ],
+  "test": {
+    "commands": [
+      "npx tsc --noEmit",
+      "npm test -- --run src/__tests__/runtime-execute-path-pilot.test.ts"
+    ],
+    "unit": ["src/__tests__/runtime-execute-path-pilot.test.ts"],
+    "integration": [],
+    "success_metrics": [
+      "TypeScript 编译通过",
+      "现有测试通过",
+      "BridgeError 类型定义在 runtimeBridge.ts 中",
+      "不被修改的文件已验证"
+    ]
+  },
+  "reference": {
+    "pattern": "Bridge anti-corruption layer (ADR-001) + Error mapping layer",
+    "files": [
+      "src/services/runtimeBridge.ts",
+      "src/types/error.ts",
+      "src/utils/errors.ts"
+    ],
+    "examples": null
+  },
+  "rationale": {
+    "chosen_approach": "将 BridgeError 定义在 runtimeBridge.ts 中而非新文件，保持边界类型与边界函数同位置，符合 ADR-001 的 anti-corruption layer 模式。使用 bridgeErrorToApiError 映射而非扩展 ApiErrorCode，保持 Chat 侧类型纯净。仅映射为现有 ApiErrorCode（SERVER_ERROR），不新增枚举值。",
+    "decision_factors": [
+      "ADR-001 要求 Bridge 是 Chat 和 Runtime 的唯一通讯边界",
+      "不修改 ApiErrorCode 避免 Chat 侧被 Runtime 概念污染",
+      "抛出 ApiError 使 handleSendError（接收 unknown → fromNativeError）能正确处理",
+      "最小化修改：不调整 fromNativeError、不修改 Chat 侧错误处理"
+    ],
+    "tradeoffs": "ApiErrorCode 中没有 EXECUTION_ERROR，Runtime 错误被映射为 SERVER_ERROR，用户无法区分"执行错误"和"服务器错误"。如未来需要区分，可在 bridgeErrorToApiError 中扩展映射或新增 ApiErrorCode。"
+  },
+  "risks": [
+    "bridgeErrorToApiError 抛出 ApiError 后，handleSendError 的 fromNativeError 会再次处理它 — 缓解：fromNativeError 已有 ApiError 短路检测（line 49-52），检测到 'code' in err 且 code 为 string 后直接返回",
+    "taskStore.failTask 收到的 code 从 'EXECUTION_FAILED' 变为 BridgeErrorCode — 缓解：taskStore.failTask 的 error 参数类型为 TaskError { code: string }，string 类型兼容"
+  ],
+  "code_skeleton": null,
+  "doc_context": {
+    "affected_features": ["Runtime error handling pipeline", "Bridge error mapping"],
+    "affected_components": ["runtimeBridge.ts"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-001"]
+  },
+  "meta": {
+    "estimated_time": "60m",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

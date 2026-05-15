@@ -1,0 +1,68 @@
+{
+  "session": "ANL-first-official-skill-p0-2026-05-13",
+  "date": "2026-05-13",
+  "type": "first_official_skill_analysis",
+  "verdict": "Go",
+  "overall_score": 4.3,
+  "recommendations": [
+    {
+      "id": "REC-001",
+      "title": "修复 Skill Context 注入管道",
+      "priority": "P0",
+      "type": "infrastructure",
+      "dependencies": [],
+      "estimated_effort": "30min",
+      "action": "3 文件修改：(1) runtime.ts 新增 loadSkillLayerForTask (2) skillBridge.ts tryExecuteSkill 加载 SKILL.md + 注册 Context (3) agentAdapter.ts buildPromptInput 读取 skill.markdown",
+      "rationale": "所有 Official Skill 的前置依赖。ContextLoader.loadSkillLayer 已存在，只需串联。",
+      "files": ["src/services/skillBridge.ts", "src/services/agentAdapter.ts", "src/stores/runtime.ts"],
+      "acceptance_criteria": [
+        "@summarize <text> 成功执行并返回结构化摘要",
+        "SKILL.md 的约束（≤30% 长度、保留数字/日期/名称）被 LLM 遵循",
+        "npx tsc --noEmit 通过"
+      ]
+    },
+    {
+      "id": "REC-002",
+      "title": "用 summarize 验证端到端链路",
+      "priority": "P0",
+      "type": "validation",
+      "dependencies": ["REC-001"],
+      "estimated_effort": "5min",
+      "action": "确认 skills/builtin/summarize/skill.json + SKILL.md 正确；运行 @summarize 用户测试",
+      "rationale": "验证 Registry → Loader → Context → Executor 全链路。summarize 是唯一已存在的 builtin skill。",
+      "files": ["skills/builtin/summarize/skill.json", "skills/builtin/summarize/SKILL.md"]
+    }
+  ],
+  "deferred": [
+    {
+      "item": "references/ 目录加载",
+      "reason": "P0 只加载 SKILD.md，不加载 example-input.md、style-guide.md 等 reference 文件",
+      "trigger": "Skill 需要引用文件提供上下文"
+    },
+    {
+      "item": "SkillTaskExecutor 真实实现",
+      "reason": "保持 task type=chat 走 ChatAgentExecutor，绕过 SkillTaskExecutor stub。后续若需 skill-specific 行为再实现",
+      "trigger": "需要 skill 专属执行逻辑（如超时策略、重试策略）"
+    },
+    {
+      "item": "Result Surface 扩展",
+      "reason": "当前 text 输出足够 summarize 使用",
+      "trigger": "非 text 类型（结构化数据、图片、表格）Skill 需求"
+    },
+    {
+      "item": "新增 capability",
+      "reason": "summarize 只需要 llm，已在 DEFAULT_ALLOWED_CAPABILITIES",
+      "trigger": "需要联网/文件系统等能力的 Skill"
+    },
+    {
+      "item": "MentionPopup source 展示",
+      "reason": "不区分 Official/Custom skill 来源展示",
+      "trigger": "UI 需要展示 skill 来源标记"
+    },
+    {
+      "item": "Skill 组合/编排",
+      "reason": "7 条红线禁止",
+      "trigger": "永不"
+    }
+  ]
+}

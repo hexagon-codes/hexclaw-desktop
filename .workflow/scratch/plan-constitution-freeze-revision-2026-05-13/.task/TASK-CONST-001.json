@@ -1,0 +1,31 @@
+{
+  "task": {
+    "id": "TASK-CONST-001",
+    "title": "ADR-002/003/004 must-fix revision",
+    "description": "对 ADR-002/003/004 各做 1 处 must-fix revision，移除 temporal/impl-specific 内容，准备 freeze",
+    "action": "对 ADR-002/003/004 执行 targeted revision",
+    "depends_on": [],
+    "files": [
+      { "path": "docs/adr/002-runtime-authority-ownership.md", "target": "edit", "change": "composable 名称泛化" },
+      { "path": "docs/adr/003-projection-purity.md", "target": "edit", "change": "补充 import type 说明" },
+      { "path": "docs/adr/004-execution-state-machine.md", "target": "edit", "change": "移除 temporal caveat" }
+    ],
+    "read_first": [
+      "docs/adr/002-runtime-authority-ownership.md",
+      "docs/adr/003-projection-purity.md",
+      "docs/adr/004-execution-state-machine.md"
+    ],
+    "implementation": [
+      "ADR-002: 将 Decision 中 'Composable 层（`usePersistenceRuntime`、`useAssetRuntime`、`useRecoveryRuntime`）' 改为 'Composable 层返回 patch 并由 Store 应用' — 移除具体 composable 名称",
+      "ADR-003: 在 Constraints 中添加 'import type 不违反纯度约束，但应尽量避免' 或在 Compliance 区域添加 import type 的说明",
+      "ADR-004: 从 Consequences 中移除 '⚠️ 当前仅 chat type 有真实 executor：agent 和 skill 仍为 stub 实现' — 这个 caveat 会过时"
+    ],
+    "convergence": {
+      "criteria": [
+        "ADR-002 Decision 中不包含 usePersistenceRuntime/useAssetRuntime/useRecoveryRuntime 这三个具体名称",
+        "ADR-003 Constraints 或 Compliance 中包含 import type 的说明",
+        "ADR-004 不包含 '仅 chat type' 或 'stub' 字样的 temporal caveat"
+      ]
+    }
+  }
+}

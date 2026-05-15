@@ -1,0 +1,26 @@
+{
+  "summary": "Execution Semantics Alignment Phase B — Session Semantics Alignment",
+  "approach": "Runtime path 补齐 WebSocket path 已有的 session 侧效应：bumpLocalSession、touchSession、auto-title finalize。所有改动限定在 Chat 层（chat-send-controller.ts / chat-send-auto-title.ts / chat.ts），不触及 Runtime Kernel。Wave 1 补传参数，Wave 2 并行执行 B2（bump+touch）和 B3（auto-title）。",
+  "phase": "B",
+  "milestone": "M0",
+  "task_ids": ["TASK-B1", "TASK-B2", "TASK-B3"],
+  "task_count": 3,
+  "complexity": "low",
+  "risk_factors": ["R1-参数漏传导致 controller 不可用", "R2-auto-title 与 WS 路径时序竞争", "R3-bumpLocalSession 在错误 sessionId 上执行"],
+  "waves": [
+    {
+      "id": "wave-1",
+      "phase_label": "B.1",
+      "description": "参数桥接 — 将 bumpLocalSession/pendingSuggestedTitleExpectation/loadSessions 传入 chat-send-controller",
+      "task_ids": ["TASK-B1"],
+      "dependencies": []
+    },
+    {
+      "id": "wave-2",
+      "phase_label": "B.2+B.3",
+      "description": "Runtime 分支补齐 session 侧效应 — B2(bump+touch) 与 B3(auto-title) 无耦合，可并行",
+      "task_ids": ["TASK-B2", "TASK-B3"],
+      "dependencies": ["wave-1"]
+    }
+  ]
+}

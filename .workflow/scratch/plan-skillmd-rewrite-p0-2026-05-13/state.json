@@ -1,0 +1,24 @@
+{
+  "artifacts": [
+    {
+      "type": "PLN",
+      "path": "plan.json",
+      "scope": "phase",
+      "phase": "skillmd-rewrite-p0",
+      "milestone": "skill-optimization",
+      "status": "confirmed",
+      "registered_at": "2026-05-13T13:25:00Z",
+      "depends_on": ["ANL-analyze-skill-instruction-adherence-2026-05-13"]
+    },
+    {
+      "type": "EXC",
+      "path": ".task/TASK-SKL-001.json",
+      "scope": "phase",
+      "phase": "skillmd-rewrite-p0",
+      "milestone": "skill-optimization",
+      "status": "completed",
+      "registered_at": "2026-05-13T23:50:00Z",
+      "summary": "SKILL.md rewritten with constraint-first structure, ALL CAPS emphasis, [§N] citation section, and example output. All 11 convergence criteria pass. File size: 2985 bytes (< 3000). Build: tsc --noEmit passes."
+    }
+  ]
+}

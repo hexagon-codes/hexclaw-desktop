@@ -1,0 +1,130 @@
+{
+  "id": "TASK-006",
+  "title": "Execution Observability Implementation — Execute",
+  "description": "根据 TASK-003 的设计方案，实现 execution observability 基础设施。包括：在 RuntimeStore 中实现 execution state query API、在 taskExecutor.ts 中集成进度上报回调、在 timeline 中新增 execution.progress 事件类型（如设计方案决定）、更新 workspaceProjector 中的 execution 投影。",
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "feature",
+  "priority": "high",
+  "effort": "medium",
+  "action": "Implement execution state query API in RuntimeStore, integrate progress reporting in executor, add execution.progress timeline event type if needed, update workspace projector",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+  "scope": "src/stores/runtime.ts, src/services/taskExecutor.ts, src/types/timeline.ts, src/services/workspaceProjector.ts, src/types/workspace.ts",
+  "focus_paths": [
+    "src/stores/",
+    "src/services/",
+    "src/types/"
+  ],
+  "read_first": [
+    "src/stores/runtime.ts",
+    "src/services/taskExecutor.ts",
+    "src/types/timeline.ts",
+    "src/types/context.ts",
+    "src/types/execution.ts",
+    "src/services/workspaceProjector.ts",
+    "src/types/workspace.ts",
+    ".workflow/scratch/plan-stabilization-p0-execute-2026-05-13/design-observability.md"
+  ],
+  "depends_on": ["TASK-003"],
+  "wave": 2,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+  "convergence": {
+    "criteria": [
+      "RuntimeStore 中存在 getExecutionState(taskId) 方法（或等效），返回结构化的 execution 状态信息",
+      "executor 侧通过回调或注入方式上报执行进度（progress 0-100）",
+      "新增的 execution.progress timeline 事件类型（如设计方案推荐）在 RuntimeEventType 中定义",
+      "workspaceProjector 中 execution section 投影包含 progress 字段",
+      "tsc --noEmit 编译无错误",
+      "npm test 现有测试全部通过"
+    ],
+    "verification": "npx tsc --noEmit 2>&1 | head -20 && npm test -- --run 2>&1 | tail -10",
+    "definition_of_done": "Execution 过程状态可通过 API 查询，executor 进度可被观测，timeline 事件增加进度可见性，编译测试通过"
+  },
+  "files": [
+    {
+      "path": "src/stores/runtime.ts",
+      "action": "modify",
+      "target": "新增 execution state query API",
+      "change": "添加 getExecutionState(taskId) 方法返回结构化 execution 状态（state、stage、progress、stepCount、error、timeline）"
+    },
+    {
+      "path": "src/services/taskExecutor.ts",
+      "action": "modify",
+      "target": "集成进度上报回调",
+      "change": "在 ContextAwareExecutor 或 executeWithContext 中添加可选的进度回调参数 onProgress(progress: number)"
+    },
+    {
+      "path": "src/types/timeline.ts",
+      "action": "modify",
+      "target": "新增 execution.progress 事件类型",
+      "change": "在 RuntimeEventType 中添加 'execution.progress'，如设计方案推荐"
+    },
+    {
+      "path": "src/services/workspaceProjector.ts",
+      "action": "modify",
+      "target": "更新 execution section 投影",
+      "change": "在 projectExecutionSection 中添加 progress 字段投影"
+    }
+  ],
+  "implementation": [
+    "在 runtime.ts 中添加 getExecutionState(taskId) 方法，聚合 execution layer + timeline 信息",
+    "在 taskExecutor.ts 中添加 onProgress 回调参数到 executeWithContext 和/或 ContextAwareExecutor",
+    "在 timeline.ts 的 RuntimeEventType 中添加 execution.progress 类型（如设计决定）",
+    "在 runtime.ts:executeTask 的执行过程中调用 onProgress 回调",
+    "更新 workspaceProjector.ts 中 projectExecutionSection 增加 progress 字段",
+    "编译验证"
+  ],
+  "test": {
+    "commands": [
+      "npx tsc --noEmit 2>&1",
+      "npm test -- --run"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "零 TypeScript 编译错误",
+      "现有测试全部通过",
+      "新 API 可被 workspace 层消费"
+    ]
+  },
+  "reference": {
+    "pattern": "Queryable state API pattern + callback-based progress reporting",
+    "files": [
+      "src/stores/runtime.ts",
+      "src/services/taskExecutor.ts",
+      "src/types/timeline.ts"
+    ],
+    "examples": null
+  },
+  "rationale": {
+    "chosen_approach": "复用 RuntimeStore 现有的查询能力（getActiveContext、getTaskTimeline），在其上封装 getExecutionState。Executor 侧通过可选的 onProgress 回调上报进度，不强制所有 executor 实现进度上报。Timeline 事件类型扩展采用渐进方式。",
+    "decision_factors": [
+      "RuntimeStore 已是 execution state 的权威来源",
+      "可选回调保持向后兼容",
+      "timeline 事件提供持久化的进度历史"
+    ],
+    "tradeoffs": "在 timeline 中高频写入 execution.progress 事件可能超出 MAX_TIMELINE_EVENTS 限制，设计中加入采样（每秒最多 1 个进度事件）。"
+  },
+  "risks": [
+    "高频进度事件导致 timeline 快速膨胀 — 缓解：节流机制，每秒最多 1 个 progress 事件",
+    "Executor 进度上报增加 executor 实现复杂度 — 缓解：使用可选回调，不强制实现",
+    "getExecutionState 可能被高频轮询 — 缓解：computed 响应式绑定，非轮询"
+  ],
+  "code_skeleton": null,
+  "doc_context": {
+    "affected_features": ["Execution monitoring", "Progress visibility"],
+    "affected_components": ["RuntimeStore", "taskExecutor", "timeline", "workspaceProjector"],
+    "affected_requirements": [],
+    "adr_ids": []
+  },
+  "meta": {
+    "estimated_time": "90m",
+    "risk": "medium",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

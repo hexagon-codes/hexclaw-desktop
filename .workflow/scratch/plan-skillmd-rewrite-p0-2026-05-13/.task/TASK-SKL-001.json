@@ -1,0 +1,133 @@
+{
+  "id": "TASK-SKL-001",
+  "title": "summarize SKILL.md prompt rewrite — constraint-first structure + example output",
+  "description": "Restructure skills/builtin/summarize/SKILL.md to maximize constraint adherence: move Constraints to top, use ALL CAPS emphasis, add [§N] as dedicated section, include worked example showing ≤30% length and [§N] citation format.",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "rewrite",
+  "priority": "P0",
+  "effort": "small",
+  "action": "Rewrite skills/builtin/summarize/SKILL.md with: (1) Constraints section moved to position 1 (before Purpose); (2) ALL CAPS emphasis on MUST/MUST NOT rules; (3) [§N] citation rule as standalone subsection with format specification; (4) Example Output section demonstrating ≤30% length, [§N] citations, entity retention; (5) Preserve Working Principles, Common Patterns, Quality Bar sections in reordered form; (6) Keep 'Skill is a prompt package' philosophy — no code, no templates, no JSON schemas.",
+  "status": "completed",
+  "completed_at": "2026-05-13T23:50:00Z",
+  "actual_duration": "15 min",
+
+  "scope": "skills/builtin/summarize",
+  "focus_paths": ["skills/builtin/summarize/SKILL.md"],
+
+  "read_first": [
+    "skills/builtin/summarize/SKILL.md",
+    ".workflow/scratch/analyze-skill-instruction-adherence-2026-05-13/analysis.md",
+    "src/services/agentAdapter.ts",
+    "skills/builtin/summarize/skill.json"
+  ],
+
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "SKILL.md contains '## YOU MUST FOLLOW THESE RULES' as first section after title",
+      "SKILL.md contains 'OUTPUT LENGTH MUST BE ≤ 30% OF ORIGINAL' in ALL CAPS",
+      "SKILL.md contains 'CITATION FORMAT: [§N]' as standalone subsection",
+      "SKILL.md contains '## Example Output' section",
+      "SKILL.md example output contains '[§1]' pattern",
+      "SKILL.md example output contains a length ratio statement (e.g. 'X%')",
+      "SKILL.md contains 'MUST retain all numbers, dates, names' — retained from original",
+      "SKILL.md still contains ## Purpose section (preserved, not deleted)",
+      "SKILL.md still contains ## Working Principles section (preserved, not deleted)",
+      "npx tsc --noEmit exits 0 (no code changes, but verify build unaffected)",
+      "File size < 3000 bytes (kept concise)"
+    ],
+    "verification": "grep patterns from criteria + npx tsc --noEmit",
+    "definition_of_done": "SKILL.md rewritten with constraint-first structure, example output, ALL CAPS emphasis; no code changes; build passes."
+  },
+
+  "files": [
+    {
+      "path": "skills/builtin/summarize/SKILL.md",
+      "action": "modify",
+      "target": "entire file",
+      "change": "Full content restructure: reorder sections, add emphasis, add example output"
+    }
+  ],
+
+  "implementation": [
+    "1. Read current SKILL.md — preserve all existing content (Purpose, Working Principles, Constraints, Common Patterns, Quality Bar)",
+    "2. Apply section reorder: new order is (a) ALL CAPS Constraints, (b) [§N] Citation Format, (c) Purpose, (d) Working Principles, (e) Example Output, (f) Common Patterns, (g) Quality Bar",
+    "3. Rewrite Constraints with ALL CAPS: 'OUTPUT LENGTH MUST BE ≤ 30% OF ORIGINAL', 'YOU MUST RETAIN ALL numbers, dates, names, and quantitative claims', 'YOU MUST NOT introduce information absent from the source'",
+    "4. Add dedicated [§N] subsection: define format `[§{N}] {Claim} — {Evidence}`, explain that N=section number in source order",
+    "5. Add Example Output with concrete demonstration: show 3-4 [§1], [§2], [§3] lines, include length ratio line at end (e.g. 'Length: ~28% of original')",
+    "6. Preserve all original information — no deletions of meaningful content, only reorder and emphasize",
+    "7. Run npx tsc --noEmit to confirm zero build impact"
+  ],
+
+  "test": {
+    "commands": [
+      "grep -c 'YOU MUST FOLLOW THESE RULES' skills/builtin/summarize/SKILL.md",
+      "grep -c '\\[§' skills/builtin/summarize/SKILL.md",
+      "grep -c '≤ 30%' skills/builtin/summarize/SKILL.md",
+      "grep -c '## Example Output' skills/builtin/summarize/SKILL.md",
+      "npx tsc --noEmit"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "All 5 grep commands return count ≥ 1",
+      "npx tsc --noEmit exits 0"
+    ]
+  },
+
+  "reference": {
+    "pattern": "Content-only skill definition rewrite",
+    "files": ["skills/builtin/summarize/SKILL.md"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "Content-only restructure with constraint-first order + ALL CAPS emphasis + worked example",
+    "decision_factors": [
+      "Zero code change = zero risk to Runtime stability",
+      "Constraints-first leverages LLM primacy effect",
+      "ALL CAPS increases salience in system prompt processing",
+      "Example output demonstrates [§N] format concretely (examples > declarative rules)",
+      "Preserves all existing content — backward compatible in knowledge"
+    ],
+    "tradeoffs": "ALL CAPS may appear visually aggressive; acceptable tradeoff for increased compliance"
+  },
+
+  "risks": [
+    {
+      "risk": "ALL CAPS perceived as shouting by human readers of SKILL.md",
+      "likelihood": "low",
+      "impact": "low",
+      "mitigation": "Only used for 3-4 critical rules; rest of document in normal case"
+    },
+    {
+      "risk": "Section reorder confuses existing users familiar with old layout",
+      "likelihood": "low",
+      "impact": "low",
+      "mitigation": "SKILL.md is consumed by LLM, not directly read by users. Human audience is developers."
+    }
+  ],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["summarize skill constraint adherence"],
+    "affected_components": ["skills/builtin/summarize/SKILL.md"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-005 (Skill Registry Authority)", "ADR-008 (Chat-first Skill Invocation)"]
+  },
+
+  "meta": {
+    "estimated_time": "15 min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

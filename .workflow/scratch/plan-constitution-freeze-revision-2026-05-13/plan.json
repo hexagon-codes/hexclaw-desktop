@@ -1,0 +1,28 @@
+# Plan: Constitution Freeze Revision
+
+**Scope**: adhoc
+**Source**: ANL-constitution-freeze-2026-05-13 (.workflow/scratch/analyze-constitution-freeze-2026-05-13)
+**Date**: 2026-05-13
+
+## Summary
+
+对 4 个 ADR 文档做 targeted revision，完成后 freeze 为 v0.8 Constitution baseline。
+
+## Approach
+
+3 个 sequential tasks:
+1. ADR-002/003/004 must-fix revision（独立编辑，可并行但合并为一个 task 减少 agent 开销）
+2. ADR-001 原则/impl 分离（独立 task，结构变更）
+3. Constitution freeze（更新 README + freeze 标注）
+
+不包含 optional wording fixes（12 处 ambiguity 留给实施者判断优先级）。
+
+## Task IDs
+
+TASK-CONST-001 — ADR Foundation must-fix revision
+TASK-CONST-002 — ADR-001 restructure
+TASK-CONST-003 — Constitution freeze
+
+## Complexity
+
+Low — 3 个 ADR 级别的编辑任务，每个约 3-5 行变更。总估计 < 15 分钟。

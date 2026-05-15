@@ -1,0 +1,48 @@
+{
+  "phase": "first-official-skill-validation",
+  "status": "passed",
+  "verified_at": "2026-05-13",
+  "verifier": "workflow-verifier",
+  "must_haves": {
+    "truths": [
+      { "claim": "skills/builtin/summarize/skill.json 存在且包含 llm capability", "status": "VERIFIED", "evidence": "grep -c '\"llm\"' = 1" },
+      { "claim": "SKILL.md 包含 Target length: ≤ 30% 约束", "status": "VERIFIED", "evidence": "grep -q 'Target length' → found" },
+      { "claim": "SKILL.md 包含 [§N] 引用格式", "status": "VERIFIED", "evidence": "grep -q '§N' → found" },
+      { "claim": "TypeScript 编译零错误", "status": "VERIFIED", "evidence": "npx tsc --noEmit exit code 0" },
+      { "claim": "tryExecuteSkill 保持三态返回语义 Promise<ChatMessage | null | undefined>", "status": "VERIFIED", "evidence": "skillBridge.ts:109" },
+      { "claim": "buildPromptInput 读取 skillLayer?.markdown", "status": "VERIFIED", "evidence": "agentAdapter.ts:44" },
+      { "claim": "非 @mention 消息返回 undefined", "status": "VERIFIED", "evidence": "skillBridge.ts:112, 117" },
+      { "claim": "红线检查：无 DAG/Workflow/Node Graph/BPMN/Visual Builder/Auto Agent/Multi-Agent", "status": "VERIFIED", "evidence": "7 红线全部通过，task type='chat', 单步 LLM" },
+      { "claim": "约束检查：不新增 skill/不改 Runtime/不扩 TaskResult/不做 Workflow", "status": "VERIFIED", "evidence": "无 src/ 修改，validation-only plan" }
+    ],
+    "artifacts": [
+      { "path": "skills/builtin/summarize/skill.json", "status": "exists", "substantive": true, "size_bytes": 207 },
+      { "path": "skills/builtin/summarize/SKILL.md", "status": "exists", "substantive": true, "size_bytes": 1665 },
+      { "path": "src/services/skillBridge.ts", "status": "exists", "substantive": true, "size_lines": 162 },
+      { "path": "src/services/agentAdapter.ts", "status": "exists", "substantive": true, "size_lines": 144 },
+      { "path": "src/stores/runtime.ts", "status": "exists", "substantive": true, "size_lines": 856 }
+    ],
+    "key_links": [
+      { "from": "chat-send-controller → tryExecuteSkill", "status": "WIRED", "evidence": "chat-send-controller.ts:156 import + call" },
+      { "from": "skillBridge → SkillRegistry (resolve)", "status": "WIRED", "evidence": "skillBridge.ts:116 resolveSkillByName" },
+      { "from": "skillBridge → SkillLoader (load SKILL.md)", "status": "WIRED", "evidence": "skillBridge.ts:144 new SkillLoader(Resource)" },
+      { "from": "skillBridge → runtimeBridge (executeChatTask)", "status": "WIRED", "evidence": "skillBridge.ts:15 import, :152 call" },
+      { "from": "skillBridge → RuntimeStore (loadSkillLayerForTask)", "status": "WIRED", "evidence": "skillBridge.ts:149 runtime.loadSkillLayerForTask" },
+      { "from": "RuntimeStore → ContextLoader (loadSkillLayer)", "status": "WIRED", "evidence": "runtime.ts:319 loader.loadSkillLayer(ctx, skillPkg)" },
+      { "from": "ChatAgentExecutor → buildPromptInput (skill.markdown)", "status": "WIRED", "evidence": "agentAdapter.ts:44 context.skill, :113 buildPromptInput(context)" }
+    ]
+  },
+  "constraint_violations": [],
+  "antipatterns": [],
+  "gaps": [],
+  "fix_plans": [],
+  "human_verification": [
+    {
+      "item": "LLM 输出遵循 SKILL.md 约束",
+      "description": "需人工执行 @summarize <测试文本>，检查输出 ≤30%、保留数字/日期/名称、[§N] 引用、结构化摘要",
+      "command": "@summarize <long text with numbers, dates, and names>"
+    }
+  ],
+  "coverage_score": 1.0,
+  "summary": "全部 9 项 truth 通过，5 个 artifact 验证，7 条 key link 全部 WIRED。零 gap、零 anti-pattern、零 constraint violation。summarize 作为第一个 Official Skill 的完整注入链路已验证就绪。"
+}

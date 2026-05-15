@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "id": "TASK-SUM-001",
+    "title": "验证 summarize Official Skill 端到端链路",
+    "description": "执行 6 项验证，确认 summarize 作为第一个 Official Skill 的完整链路可用",
+    "type": "validation",
+    "wave": 1,
+    "priority": "P0",
+    "estimated_effort": "15min",
+    "depends_on": [],
+    "issue_id": null,
+    "status": "completed",
+    "completed_at": "2026-05-13",
+    "summary_path": ".summaries/TASK-SUM-001-summary.md"
+  },
+  "action": "执行 6 项验证检查，全部通过后记录结果到验证报告",
+  "implementation": [
+    "1. Registry 发现验证：确认 skills/builtin/summarize/skill.json 存在且内容正确",
+    "2. source 验证：确认 SkillRegistry 扫描后 skillMeta.source === 'official'",
+    "3. Capability Gate 验证：确认 capabilities 包含 'llm' 且在 DEFAULT_ALLOWED_CAPABILITIES 中",
+    "4. SKILL.md 注入验证：trace tryExecuteSkill → SkillLoader.loadSkill → loadSkillLayerForTask → buildPromptInput 路径",
+    "5. LLM 约束遵循验证：发送 @summarize <测试文本>，检查输出 ≤30%、保留数字/日期/名称、[§N] 引用、结构化摘要",
+    "6. 非 skill 路径不变验证：发送普通文本（无 @mention），确认直接走 chat 路径"
+  ],
+  "read_first": [
+    "skills/builtin/summarize/skill.json",
+    "skills/builtin/summarize/SKILL.md",
+    "src/services/skillBridge.ts",
+    "src/services/agentAdapter.ts",
+    "src/stores/runtime.ts"
+  ],
+  "convergence": {
+    "criteria": [
+      "skills/builtin/summarize/skill.json 文件中 capabilities 包含 \"llm\"",
+      "skills/builtin/summarize/SKILL.md 文件中包含 'Target length: ≤ 30%'",
+      "skills/builtin/summarize/SKILL.md 文件中包含 '[§N]'",
+      "npx tsc --noEmit 退出码为 0",
+      "skillBridge.ts 中 tryExecuteSkill 三态返回语义未变更（返回 Promise<ChatMessage | null | undefined>）",
+      "agentAdapter.ts 中 buildPromptInput 读取 skillLayer?.markdown",
+      "非 @mention 消息的 chat 路径不受影响（tryExecuteSkill 返回 undefined → 正常 chat）"
+    ],
+    "verification": "全部 7 条标准通过即验证成功"
+  },
+  "files": {
+    "read": [
+      "skills/builtin/summarize/skill.json",
+      "skills/builtin/summarize/SKILL.md"
+    ],
+    "verify": [],
+    "create": []
+  }
+}

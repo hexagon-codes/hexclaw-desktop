@@ -1,0 +1,43 @@
+{
+  "source": "stabilization-roadmap-analyze + error-boundary-analyze",
+  "exploration_skipped": true,
+  "upstream_analysis": {
+    "stabilization_roadmap": ".workflow/scratch/analyze-stabilization-roadmap-2026-05-13/",
+    "error_boundary": ".workflow/scratch/analyze-error-boundary-2026-05-13/"
+  },
+  "key_decisions": [
+    "P0 foundation stabilization (Week 1-2) before P1 surface stabilization (Week 3-4)",
+    "Analyze-before-execute: each P0 item must have prior analyze",
+    "No Tool/Streaming/Workflow/Browser Runtime, no Multi-Agent/Scheduler/Event Bus",
+    "ADR Wave 2 only drafted, not frozen within window",
+    "BridgeError type + bridgeErrorToApiError mapping (not extending ApiErrorCode)",
+    "executeTask must re-throw errors (revision.value++ into finally block)",
+    "Bridge only writes TaskStore.failTask once (no duplicate failChatTask)",
+    "handleSendError unchanged — error transformation happens at bridge layer"
+  ],
+  "phase_goal": "Execute P0 stabilization items: Error Boundary formalization, WS/RT semantic drift closure, TaskResult type hardening, Execution observability implementation",
+  "success_criteria": [
+    "Runtime errors produce typed BridgeError, mapped to ApiError at bridge boundary",
+    "TaskResult is a discriminated union supporting text/tool_calls/structured kinds",
+    "No semantic drift between WS and RT execution paths at user-facing level",
+    "Execution state visible via queryable API (not console.log)"
+  ],
+  "scope_boundary": {
+    "in_scope": [
+      "Error boundary formalization (BridgeError type + executeTask re-throw + executeChatTask refactor)",
+      "TaskResult type expansion (discriminated union with kind variants)",
+      "WS/RT semantic drift closure (auto-title, error shape, session side-effect timing)",
+      "Execution observability (execution progress/trace visibility)",
+      "ADR-005/006/007 draft (Bridge Responsibility, Session Ownership, TaskResult Semantics)"
+    ],
+    "out_of_scope": [
+      "Streaming in RT path",
+      "Tool calls in RT path",
+      "Workflow/Browser runtime",
+      "Multi-agent / Scheduler / Event Bus",
+      "Executor stub real implementation",
+      "Recovery layer activation",
+      "Asset management UI"
+    ]
+  }
+}

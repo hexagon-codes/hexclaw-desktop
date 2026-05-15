@@ -1,0 +1,105 @@
+{
+  "id": "TASK-004",
+  "title": "WS/RT Semantic Drift Analysis — Analyze",
+  "description": "对 WS（WebSocket）和 RT（Runtime）两条执行路径之间的语义差异进行全面分析。已知 drift 维度：auto-title 触发时机、error shape、session side-effect 时序。需要找出所有剩余的语义漂移项，评估每个 drift 的影响范围，给出修复建议。",
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "analyze",
+  "priority": "high",
+  "effort": "medium",
+  "action": "Analyze remaining WS/RT semantic drift items, document divergences, propose fixes for each drift item",
+  "status": "pending",
+  "completed_at": null,
+  "actual_duration": null,
+  "scope": "src/stores/chat-send-controller.ts, src/services/runtimeBridge.ts, src/stores/runtime.ts, src/stores/chat-send-auto-title.ts, src/services/chatService.ts (websocket 路径)",
+  "focus_paths": [
+    "src/stores/",
+    "src/services/"
+  ],
+  "read_first": [
+    "src/stores/chat-send-controller.ts",
+    "src/services/runtimeBridge.ts",
+    "src/stores/runtime.ts",
+    "src/stores/chat-send-auto-title.ts",
+    "src/stores/chat-stream-error.ts",
+    "src/services/chatService.ts",
+    ".workflow/scratch/analyze-stabilization-roadmap-2026-05-13/analysis.md"
+  ],
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+  "convergence": {
+    "criteria": [
+      "分析报告列出至少 3 个 WS/RT drift 维度（auto-title、error shape、session side-effect），每个维度给出 WS 和 RT 路径的具体行为描述",
+      "对于每个 drift 维度，给出是否需要在 Week 1-2 修复的建议及原因",
+      "对于确认为 bug 的 drift（如 session side-effect 异常路径），给出具体的修复步骤和涉及的文件",
+      "分析报告包含 grep 验证结果：确认 WS 路径和 RT 路径中 auto-title 和 session side-effect 的具体触发代码行"
+    ],
+    "verification": "test -f .workflow/scratch/plan-stabilization-p0-execute-2026-05-13/analysis-ws-rt-drift.md",
+    "definition_of_done": "所有 WS/RT 语义漂移已识别、分类、评估影响范围，修复建议可供 TASK-007 直接执行"
+  },
+  "files": [
+    {
+      "path": ".workflow/scratch/plan-stabilization-p0-execute-2026-05-13/analysis-ws-rt-drift.md",
+      "action": "create",
+      "target": "WS/RT 语义漂移分析报告",
+      "change": "创建分析报告，包含 drift 列表、影响评估、修复建议"
+    }
+  ],
+  "implementation": [
+    "追踪 WS 路径：sendMessage → deliveryController.deliverMessage → WebSocket → finalizeAssistantMessage → auto-title 触发",
+    "追踪 RT 路径：sendMessage(execMode=runtime) → executeChatTask → executeTask → completeChatTask → auto-title 触发",
+    "比较两条路径的 error 处理链路：WS 路径 error → handleSendError → fromNativeError，RT 路径 error → executeChatTask catch → handleSendError",
+    "检查 session side-effect 时序：WS 路径 bumpLocalSession 在 finalizeAssistantMessage，RT 路径在 sendMessage try block",
+    "识别其他潜在的 drift 维度（如 task.completed 时机、timeline 事件一致性）",
+    "汇总分析结果"
+  ],
+  "test": {
+    "commands": [],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "所有 drift 维度已覆盖",
+      "修复建议具体可操作",
+      "修复涉及的文件已明确"
+    ]
+  },
+  "reference": {
+    "pattern": "Cross-path comparison analysis",
+    "files": [
+      "src/stores/chat-send-controller.ts",
+      "src/stores/chat-send-auto-title.ts",
+      "src/stores/chat-stream-error.ts",
+      "src/services/runtimeBridge.ts"
+    ],
+    "examples": null
+  },
+  "rationale": {
+    "chosen_approach": "同时追踪 WS 和 RT 两条路径的完整执行链路，逐段比较行为差异。重点关注用户可见的行为（title、error message、session order），而非内部实现细节。已由 Error Boundary task 修复的 error shape drift 标记为\"正在修复中\"。",
+    "decision_factors": [
+      "Stabilization roadmap 已识别 3 个主要 drift 维度（auto-title, error shape, session side-effect）",
+      "error shape 的修复已由 TASK-001 覆盖，本分析聚焦剩余项",
+      "week 1-2 窗口内只修复 P0 级别的 drift"
+    ],
+    "tradeoffs": null
+  },
+  "risks": [
+    "WS 路径的 WebSocket 回调链路复杂（deliveryController → chatService → callback chain），可能遗漏隐含的语义差异 — 缓解：聚焦用户可见行为，不深入 WebSocket 连接细节",
+    "rt 路径中 executor stub 当前返回空结果，部分语义差异可能在 executor 真实实现后才显现 — 缓解：标注此类差异为 deferred"
+  ],
+  "code_skeleton": null,
+  "doc_context": {
+    "affected_features": ["Chat messaging (WS+RT paths)", "Auto-title", "Session management"],
+    "affected_components": ["chat-send-controller", "runtimeBridge", "RuntimeStore", "autoTitleController"],
+    "affected_requirements": [],
+    "adr_ids": [""]
+  },
+  "meta": {
+    "estimated_time": "60m",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

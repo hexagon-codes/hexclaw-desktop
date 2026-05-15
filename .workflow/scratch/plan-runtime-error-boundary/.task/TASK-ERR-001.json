@@ -1,0 +1,92 @@
+{
+  "id": "TASK-ERR-001",
+  "title": "executeTask re-throw + revision.value++ finally",
+  "description": "修复 runtime.ts:executeTask 的第一层错误丢失。当前 catch 块（line 406-434）不 re-throw 错误，导致调用者 executeChatTask 收不到异常详情。改为 re-throw 并将 revision.value++ 移入 finally 块，确保 revision 计数一致性。",
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "fix",
+  "priority": "high",
+  "effort": "small",
+  "action": "Modify runtime.ts:executeTask catch block to re-throw error and move revision.value++ into finally block",
+  "status": "completed",
+  "completed_at": null,
+  "actual_duration": null,
+  "scope": "src/stores/runtime.ts",
+  "focus_paths": ["src/stores/"],
+  "read_first": [
+    "src/stores/runtime.ts",
+    ".workflow/scratch/analyze-error-boundary-2026-05-13/analysis.md"
+  ],
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": null,
+  "execution_group": null,
+  "executor": "agent",
+  "convergence": {
+    "criteria": [
+      "src/stores/runtime.ts:executeTask 的 catch 块末尾存在 throw e 语句（re-throw 原错误）",
+      "src/stores/runtime.ts:executeTask 中存在 finally 块，且包含 revision.value++ 操作",
+      "src/stores/runtime.ts:executeTask 中 try-catch 块后不再有 revision.value++（已被移入 finally）",
+      "原有 catch 逻辑不变：execution state = failed、error/status 设置、timeline 事件写入都保留",
+      "npx tsc --noEmit 编译通过"
+    ],
+    "verification": "grep -n 'revision.value++' src/stores/runtime.ts && grep -n 'throw e' src/stores/runtime.ts",
+    "definition_of_done": "executeTask 的异常传播修复完成：错误被 re-throw，桥接器可感知执行失败，revision 计数在 finally 中保证一致性"
+  },
+  "files": [
+    {
+      "path": "src/stores/runtime.ts",
+      "action": "modify",
+      "target": "executeTask (line 361-437)",
+      "change": "将当前 try-catch (line 361-436) 重构为 try-catch-finally：catch 块末尾添加 throw e，将 line 436 的 revision.value++ 移入 finally 块"
+    }
+  ],
+  "implementation": [
+    "读取 runtime.ts 中 executeTask 方法的完整实现（line 361-437）",
+    "在当前 try-catch (line 361-434) 中添加 finally 块",
+    "在 catch 块末尾（当前 line 434 的右大括号前）添加 throw e",
+    "将当前在 catch 块之后的 revision.value++（line 436）移入 finally 块",
+    "保留 catch 块中所有现有逻辑：ctx.execution.state='failed'、ctx.execution.error/ctx.task.error 设置、loader.writeExecutionMemory、manager.recalcSize、timeline 事件写入",
+    "编译验证"
+  ],
+  "test": {
+    "commands": [
+      "npx tsc --noEmit",
+      "npm test -- --run src/__tests__/runtime-execute-path-pilot.test.ts"
+    ],
+    "unit": ["src/__tests__/runtime-execute-path-pilot.test.ts"],
+    "integration": [],
+    "success_metrics": ["TypeScript 编译通过", "现有测试全部通过"]
+  },
+  "reference": {
+    "pattern": "try-catch-finally 保证资源释放一致性",
+    "files": ["src/stores/runtime.ts:361-437"],
+    "examples": null
+  },
+  "rationale": {
+    "chosen_approach": "最小的结构性修改：将原 try-catch 变为 try-catch-finally，catch 末尾添加 throw e。不改变原有错误处理逻辑（state/status/error/timeline 写入），只确保错误向上传播 + revision 在 finally 中递增。",
+    "decision_factors": [
+      "最小化修改原则：不重构 executeTask 整体逻辑",
+      "finally 保证无论成功/失败都递增 revision",
+      "re-throw 使桥接器能感知失败而非收到合成错误"
+    ],
+    "tradeoffs": "throw e 改变了 executeTask 的隐式契约（之前不抛异常）。当前仅 runtimeBridge.ts:executeChatTask 调用 executeTask，影响可控。"
+  },
+  "risks": [
+    "未来直接调用 executeTask 的代码需要处理异常 — 缓解：当前仅 runtimeBridge.ts 调用，且调用者已有 catch",
+    "finally 中 revision.value++ 不能早于 state/error 写入 — 缓解：finally 在所有 mutation 之后执行，revision++ 是最后一步"
+  ],
+  "code_skeleton": null,
+  "doc_context": {
+    "affected_features": ["Runtime execution error propagation"],
+    "affected_components": ["RuntimeStore (runtime.ts)"],
+    "affected_requirements": [],
+    "adr_ids": ["ADR-001"]
+  },
+  "meta": {
+    "estimated_time": "30m",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}

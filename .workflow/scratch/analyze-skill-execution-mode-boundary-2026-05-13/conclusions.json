@@ -1,0 +1,136 @@
+{
+  "session_id": "ANL-skill-execution-mode-2026-05-13",
+  "topic": "Skill Execution Mode Boundary",
+  "date": "2026-05-13",
+  "mode": "full",
+  "rounds": 1,
+  "confidence": {
+    "overall": 85,
+    "dimensions": {
+      "feasibility": { "score": 4, "confidence": 90, "note": "最小修复仅涉及 2 个文件 ~11 行代码" },
+      "impact": { "score": 5, "confidence": 85, "note": "修复 system_prompt 是必要条件，直接影响技能行为" },
+      "risk": { "score": 2, "confidence": 90, "note": "纯新增字段，不改现有逻辑，风险极低" },
+      "complexity": { "score": 2, "confidence": 95, "note": "方案 B 仅 11 行，无新类型无新概念" },
+      "dependencies": { "score": 2, "confidence": 90, "note": "仅依赖 Go backend 已支持的 system_prompt" },
+      "alternatives": "对比 A/B/C 三方案，推荐 B。无需新 executor、新 task type、新 workflow"
+    },
+    "pressure_pass": "system_prompt 传递链完整验证通过。curl 直接调用 Go backend 确认 system_prompt 可影响 LLM 输出。"
+  },
+  "root_causes": [
+    {
+      "id": "RC-1",
+      "description": "system_prompt 在 Tauri 桥接层丢失 — BackendChatParams 无 system_prompt 字段",
+      "severity": "CRITICAL",
+      "evidence": "commands.rs:299-312",
+      "fix": "Scheme A — 新增字段 + 转发"
+    },
+    {
+      "id": "RC-2",
+      "description": "无执行模式约束 — LLM 默认 agentic planning 覆盖 skill 指令",
+      "severity": "HIGH",
+      "evidence": "agentAdapter.ts:112-135, UAT 验证长输入 LLM 输出计划模板",
+      "fix": "Scheme B — buildPromptInput 注入 mode prefix"
+    },
+    {
+      "id": "RC-3",
+      "description": "Skill task 使用 chat executor — SkillTaskExecutor 已定义但未使用",
+      "severity": "MEDIUM",
+      "evidence": "skillBridge.ts:131, taskExecutor.ts:106",
+      "fix": "无需修复 — Scheme B 的 prompt 层差异已足够，不引入新 executor"
+    }
+  ],
+  "recommendations": [
+    {
+      "id": "REC-1",
+      "priority": "HIGH",
+      "title": "修复 system_prompt 传递链",
+      "rationale": "当前 SKILL.md 通过 \"system: content\" 嵌入 message 字符串发送，Go backend 无法区分为独立系统指令。system_prompt 权威性是所有修复的前提。",
+      "scheme": "A",
+      "files": ["src-tauri/src/commands.rs"],
+      "action": "BackendChatParams 新增 system_prompt: Option<String> + POST body 转发",
+      "status": "recommended",
+      "acceptance": "构建通过后 curl 验证 POST body 包含 system_prompt 字段"
+    },
+    {
+      "id": "REC-2",
+      "priority": "HIGH",
+      "title": "注入 execution mode prompt prefix",
+      "rationale": "LLM 默认 agentic behavior 导致长输入触发 plan-then-execute。显式 mode 指令作为 system_prompt 发送，权威性大幅提升。",
+      "scheme": "B",
+      "files": ["src/services/agentAdapter.ts"],
+      "action": "buildPromptInput 检测 skillLayer.markdown 存在时，前置 [MODE: DIRECT] 指令",
+      "status": "recommended",
+      "acceptance": "UAT @summarize 长输入输出 [§N] 格式摘要，不再输出计划模板"
+    },
+    {
+      "id": "REC-3",
+      "priority": "LOW",
+      "title": "executeWithContext 传递 systemPrompt",
+      "rationale": "虽然 providerAdapter.ts 已实现 systemPrompt 透传，但 ChatAgentExecutor 从未设置该字段。修复后 ROOT CAUSE 1 完全消除。",
+      "scheme": "A",
+      "files": ["src/services/agentAdapter.ts"],
+      "action": "executeWithContext 提取 systemMsg.content 作为 systemPrompt 传递",
+      "status": "recommended",
+      "acceptance": "curl 验证 POST body 包含 system_prompt 字段且值为 SKILL.md"
+    },
+    {
+      "id": "REC-4",
+      "priority": "LOW",
+      "title": "UAT 验证",
+      "rationale": "修复后需验证 @summarize 长输入产生符合 SKILL.md 要求的 [§N] 格式摘要",
+      "scheme": "B",
+      "files": [],
+      "action": "使用现有 uat-run.mjs 脚本运行，验证 [§N] count > 0, length ratio ≤ 30%, entity retention ≥ 90%",
+      "status": "recommended",
+      "acceptance": "三项指标全部通过"
+    }
+  ],
+  "implementation_scope": [
+    {
+      "objective": "修复 system_prompt 传递链（Rust 侧）",
+      "rationale": "BackendChatParams 缺少 system_prompt 字段，SKILL.md 无法作为独立系统指令发送到 Go backend",
+      "priority": "HIGH",
+      "target_files": ["src-tauri/src/commands.rs"],
+      "acceptance_criteria": "构建通过，curl 验证 POST body 含 system_prompt",
+      "change_summary": "commands.rs: 新增 system_prompt: Option<String> 字段 + serde_json::json! 转发到 POST body"
+    },
+    {
+      "objective": "注入 execution mode + 传递 systemPrompt（TS 侧）",
+      "rationale": "buildPromptInput 无执行模式约束；executeWithContext 未传递 systemPrompt 给 provider",
+      "priority": "HIGH",
+      "target_files": ["src/services/agentAdapter.ts"],
+      "acceptance_criteria": "UAT 通过：@summarize 长输入输出 [§N] 格式",
+      "change_summary": "agentAdapter.ts: (1) buildPromptInput 对 skill 上下文注入 [MODE: DIRECT] 前缀 (2) executeWithContext 提取 systemMsg.content 作为 systemPrompt 传递"
+    },
+    {
+      "objective": "UAT 验证修复效果",
+      "rationale": "验证修复后 summarize skill 遵循 SKILL.md 指令",
+      "priority": "HIGH",
+      "acceptance_criteria": "[§N] count > 0, length ratio ≤ 30%, entity retention ≥ 90%",
+      "change_summary": "运行 uat-run.mjs，报告三项指标"
+    }
+  ],
+  "decision_trail": [
+    {
+      "round": 1,
+      "type": "root_cause_confirmed",
+      "content": "system_prompt 在 Tauri 桥接层丢失 — 根因确认",
+      "evidence": "commands.rs:299, agentAdapter.ts:125, UAT 验证"
+    },
+    {
+      "round": 1,
+      "type": "rejected_alternatives",
+      "content": "不新增 SkillTaskExecutor / 不新增 tool loop / 不修改 Runtime Constitution",
+      "evidence": "用户明确禁止"
+    },
+    {
+      "round": 1,
+      "type": "recommendation",
+      "content": "推荐 Scheme B — 修复 system_prompt 传递链 + execution mode prefix",
+      "evidence": "最小改动 (~11 行)，零架构风险，不引入新概念"
+    }
+  ],
+  "recommendation": "GO",
+  "recommendation_rationale": "方案 B 是 2 文件 ~11 行的最小修复，零 Runtime 污染风险，已验证 Go backend 支持 system_prompt",
+  "next_step": "plan"
+}
