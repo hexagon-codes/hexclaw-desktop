@@ -678,8 +678,10 @@ pub async fn skill_execute_script(
     skill_id: String,
     script_name: String,
     input: Option<String>,
+    env_vars: Option<String>,
 ) -> Result<crate::skill_sandbox::SandboxResult, String> {
     use crate::skill_sandbox;
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
     // 1. 构建 skill 目录路径
@@ -722,6 +724,13 @@ pub async fn skill_execute_script(
     let script_path = skill_sandbox::validate_script_path(&app_data, script_file)?;
 
     // 5. 构建沙箱配置
+    let parsed_env_vars: Option<HashMap<String, String>> = env_vars.and_then(|ev| {
+        serde_json::from_str(&ev).unwrap_or_else(|e| {
+            eprintln!("[skill_execute_script] envVars JSON 解析失败: {}", e);
+            None
+        })
+    });
+
     let config = skill_sandbox::SandboxConfig {
         sandbox_mode: sandbox_mode.to_string(),
         timeout_ms: 30_000,
@@ -729,6 +738,7 @@ pub async fn skill_execute_script(
             app_data.to_string_lossy().into_owned(),
             std::env::temp_dir().to_string_lossy().into_owned(),
         ],
+        env_vars: parsed_env_vars,
     };
 
     // 6. 在沙箱中执行
