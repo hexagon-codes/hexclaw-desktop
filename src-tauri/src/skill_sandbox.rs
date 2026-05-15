@@ -5,15 +5,20 @@
 //   - restricted 模式：清理环境变量，仅保留 PATH/HOME
 //   - full 模式：继承父进程环境
 //   - 强制超时，捕获 stdout/stderr
+//   - 输出大小上限 1 MiB，防止内存爆炸
 //
 // @see src/schemas/skill.schema.json → experimental.scripts
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 // ─── Types ────────────────────────────────────────────
+
+/// 单次脚本输出的字节上限（1 MiB）
+const MAX_OUTPUT_BYTES: u64 = 1024 * 1024;
 
 /// 沙箱配置（与 skill.json experimental.scripts.*.sandbox 对齐）
 #[derive(Debug, Clone)]
@@ -22,10 +27,10 @@ pub struct SandboxConfig {
     pub sandbox_mode: String,
     /// 超时毫秒（默认 30000）
     pub timeout_ms: u64,
-    /// 最大内存 MB（默认 256，reserved for future use）
-    pub max_memory_mb: u64,
     /// 允许的目录列表（skill 目录 + temp 目录）
     pub allowed_dirs: Vec<String>,
+    // NOTE: max_memory_mb 已移除 — Linux cgroup / Windows job object
+    // 需要 platform-specific 实现，当前由操作系统 OOM 处理。
 }
 
 impl Default for SandboxConfig {
@@ -33,7 +38,6 @@ impl Default for SandboxConfig {
         Self {
             sandbox_mode: "restricted".into(),
             timeout_ms: 30_000,
-            max_memory_mb: 256,
             allowed_dirs: Vec::new(),
         }
     }
@@ -117,6 +121,11 @@ pub async fn execute_in_sandbox(
             })
         });
 
+    // L4: 验证解释器存在
+    if interpreter != "npx" && interpreter != script_path.to_str().unwrap_or("") {
+        ensure_interpreter_available(&interpreter)?;
+    }
+
     let mut cmd = if interpreter == "npx" {
         let mut c = Command::new("npx");
         c.arg("tsx").arg(script_path);
@@ -129,12 +138,23 @@ pub async fn execute_in_sandbox(
         c
     };
 
+    // M2: restricted 模式下限制 PATH（含 Windows）
     if config.sandbox_mode == "restricted" {
         cmd.env_clear();
-        #[cfg(target_os = "windows")]
-        cmd.env("PATH", std::env::var("PATH").unwrap_or_default());
         #[cfg(not(target_os = "windows"))]
         cmd.env("PATH", "/usr/local/bin:/usr/bin:/bin");
+        #[cfg(target_os = "windows")]
+        {
+            let path = std::env::var("SystemRoot")
+                .map(|sr| {
+                    format!(
+                        "{}\\System32;{}\\System32\\WindowsPowerShell\\v1.0",
+                        sr, sr
+                    )
+                })
+                .unwrap_or_default();
+            cmd.env("PATH", path);
+        }
         cmd.env("HOME", std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()));
     }
 
@@ -160,15 +180,15 @@ pub async fn execute_in_sandbox(
             drop(stdin);
         }
 
-        // 拿走 stdout/stderr 的 ownership，然后用 wait() 而非 wait_with_output()
-        let child_stdout = child.stdout.take();
-        let child_stderr = child.stderr.take();
+        // M4: 在 wait 之前拿走 stdout/stderr ownership，确保超时后仍可读
+        let mut child_stdout = child.stdout.take();
+        let mut child_stderr = child.stderr.take();
 
         match timeout(duration, child.wait()).await {
             Ok(Ok(status)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                let stdout = read_string_from_option_stdout(child_stdout);
-                let stderr = read_string_from_option_stderr(child_stderr);
+                let stdout = read_limited_output(&mut child_stdout).await;
+                let stderr = read_limited_output(&mut child_stderr).await;
                 Ok(SandboxResult {
                     exit_code: status.code(),
                     stdout,
@@ -179,11 +199,20 @@ pub async fn execute_in_sandbox(
             }
             Ok(Err(e)) => Err(format!("process wait failed: {}", e)),
             Err(_) => {
+                // M4: kill 后仍能读取已缓冲的输出
                 let _ = child.kill().await;
+                let stdout = read_limited_output(&mut child_stdout).await;
+                let stderr = read_limited_output(&mut child_stderr).await;
+                let mut combined_stderr = stderr;
+                if combined_stderr.is_empty() {
+                    combined_stderr = "execution timed out".into();
+                } else {
+                    combined_stderr.push_str("\nexecution timed out");
+                }
                 Ok(SandboxResult {
                     exit_code: None,
-                    stdout: String::new(),
-                    stderr: "execution timed out".into(),
+                    stdout,
+                    stderr: combined_stderr,
                     timed_out: true,
                     duration_ms: config.timeout_ms,
                 })
@@ -197,14 +226,15 @@ pub async fn execute_in_sandbox(
             .spawn()
             .map_err(|e| format!("failed to spawn script: {}", e))?;
 
-        let child_stdout = child.stdout.take();
-        let child_stderr = child.stderr.take();
+        // M4: 在 wait 之前拿走 stdout/stderr ownership
+        let mut child_stdout = child.stdout.take();
+        let mut child_stderr = child.stderr.take();
 
         match timeout(duration, child.wait()).await {
             Ok(Ok(status)) => {
                 let duration_ms = start.elapsed().as_millis() as u64;
-                let stdout = read_string_from_option_stdout(child_stdout);
-                let stderr = read_string_from_option_stderr(child_stderr);
+                let stdout = read_limited_output(&mut child_stdout).await;
+                let stderr = read_limited_output(&mut child_stderr).await;
                 Ok(SandboxResult {
                     exit_code: status.code(),
                     stdout,
@@ -215,11 +245,20 @@ pub async fn execute_in_sandbox(
             }
             Ok(Err(e)) => Err(format!("process wait failed: {}", e)),
             Err(_) => {
+                // M4: kill 后仍能读取已缓冲的输出
                 let _ = child.kill().await;
+                let stdout = read_limited_output(&mut child_stdout).await;
+                let stderr = read_limited_output(&mut child_stderr).await;
+                let mut combined_stderr = stderr;
+                if combined_stderr.is_empty() {
+                    combined_stderr = "execution timed out".into();
+                } else {
+                    combined_stderr.push_str("\nexecution timed out");
+                }
                 Ok(SandboxResult {
                     exit_code: None,
-                    stdout: String::new(),
-                    stderr: "execution timed out".into(),
+                    stdout,
+                    stderr: combined_stderr,
                     timed_out: true,
                     duration_ms: config.timeout_ms,
                 })
@@ -228,40 +267,54 @@ pub async fn execute_in_sandbox(
     }
 }
 
-/// 从 Option<ChildStdout> 读取字符串
-fn read_string_from_option_stdout(
-    reader: Option<tokio::process::ChildStdout>,
-) -> String {
-    match reader {
+/// 从 child stdout/stderr 读取字符串，限制最大 1 MiB（M3）
+///
+/// 使用 `take()` 截断防止恶意脚本输出耗尽内存。
+/// 通过 trait object 统一处理 ChildStdout / ChildStderr。
+async fn read_limited_output(reader: &mut Option<impl AsyncReadExt + Unpin>) -> String {
+    match reader.take() {
         Some(r) => {
-            let mut buf = String::new();
-            use tokio::io::AsyncReadExt;
-            let mut async_r = r;
-            let _ = tokio::runtime::Handle::current().block_on(async {
-                async_r.read_to_string(&mut buf).await
-            });
-            buf
+            let mut buf = Vec::with_capacity(8192);
+            let mut limited = r.take(MAX_OUTPUT_BYTES);
+            let _ = limited.read_to_end(&mut buf).await;
+            String::from_utf8_lossy(&buf).to_string()
         }
         None => String::new(),
     }
 }
 
-/// 从 Option<ChildStderr> 读取字符串
-fn read_string_from_option_stderr(
-    reader: Option<tokio::process::ChildStderr>,
-) -> String {
-    match reader {
-        Some(r) => {
-            let mut buf = String::new();
-            use tokio::io::AsyncReadExt;
-            let mut async_r = r;
-            let _ = tokio::runtime::Handle::current().block_on(async {
-                async_r.read_to_string(&mut buf).await
-            });
-            buf
-        }
-        None => String::new(),
+/// L4: 验证解释器是否可用，不可用时返回明确错误
+fn ensure_interpreter_available(interpreter: &str) -> Result<(), String> {
+    // 直接路径检查
+    if Path::new(interpreter).exists() {
+        return Ok(());
     }
+
+    // 通过 PATH 查找
+    let paths = std::env::var("PATH").unwrap_or_default();
+    let separator = if cfg!(target_os = "windows") { ';' } else { ':' };
+
+    for dir in paths.split(separator) {
+        if dir.is_empty() {
+            continue;
+        }
+        let candidate = Path::new(dir).join(interpreter);
+        if candidate.exists() {
+            return Ok(());
+        }
+        // Windows: 尝试常见扩展名
+        #[cfg(target_os = "windows")]
+        for ext in &[".exe", ".cmd", ".bat"] {
+            if Path::new(dir).join(format!("{}{}", interpreter, ext)).exists() {
+                return Ok(());
+            }
+        }
+    }
+
+    Err(format!(
+        "interpreter not found: {} — install it or add to PATH",
+        interpreter
+    ))
 }
 
 /// 读取脚本文件的 shebang 行，返回解释器路径
