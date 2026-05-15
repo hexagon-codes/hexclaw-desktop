@@ -151,7 +151,10 @@
             "type": "object",
             "properties": {
               "file": { "type": "string" },
-              "sandbox": { "type": "string" }
+              "sandbox": {
+                "type": "string",
+                "enum": ["restricted", "full"]
+              }
             },
             "required": ["file", "sandbox"]
           }

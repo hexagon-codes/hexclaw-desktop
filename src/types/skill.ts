@@ -85,6 +85,9 @@ export interface SkillAction {
   intent: string
 }
 
+/** 沙盒模式 */
+export type SandboxMode = 'restricted' | 'full'
+
 /** 实验性子类型 */
 export interface SkillAgent {
   name: string
@@ -102,7 +105,7 @@ export interface SkillHook {
 
 /** 实验性扩展（experimental，不承诺兼容） */
 export interface SkillExperimental {
-  scripts?: Record<string, { file: string; sandbox: string }>
+  scripts?: Record<string, { file: string; sandbox: SandboxMode }>
   hooks?: SkillHook[]
   agents?: SkillAgent[]
   interaction?: {

@@ -11,6 +11,8 @@
 import type { Ref } from 'vue'
 import type { ChatMessage, SkillMeta, Task } from '@/types'
 import { SkillRegistry } from './skillRegistry'
+import { parseSkillScripts, executeScript } from './skillExecutor'
+import type { ScriptResult } from './skillExecutor'
 import { SkillLoader } from './skillLoader'
 import { executeChatTask, registerChatTask } from './runtimeBridge'
 import { buildAssistantMessage } from '@/utils/buildAssistantMessage'
@@ -206,4 +208,23 @@ export async function tryExecuteSkill(
     params.handleSendError(e, null, params.sending, params.draftSending)
     return null
   }
+}
+
+/**
+ * 执行指定 Skill 的命名脚本。
+ *
+ * 先从 SkillMeta 的 experimental.scripts 解析目标脚本，
+ * 若不存在则抛出错误。
+ */
+export async function executeSkillScript(
+  skillMeta: SkillMeta,
+  scriptName: string,
+  input?: string,
+): Promise<ScriptResult> {
+  const scripts = parseSkillScripts(skillMeta)
+  const target = scripts.find((s) => s.name === scriptName)
+  if (!target) {
+    throw new Error(`Script "${scriptName}" not found in skill "${skillMeta.skillId}"`)
+  }
+  return executeScript(skillMeta.skillId, scriptName, input)
 }
