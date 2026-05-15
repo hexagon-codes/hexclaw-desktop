@@ -23,7 +23,11 @@ import { DEFAULT_ALLOWED_CAPABILITIES } from '@/types/capability'
 import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
 import { readTextFile } from '@tauri-apps/plugin-fs'
 import { getCommandRegistry } from './commandRegistry'
-import type { SkillCommand } from '@/types/skill'
+import { getAgentRegistry, type AgentDefinition } from './agentRegistry'
+import { invokeAgent, invokeAgentBySkill } from './agentExecutor'
+import type { SkillCommand, SkillAgent, SkillHook } from '@/types/skill'
+import { getHookRegistry, type HookDefinition, type HookEvent } from './hookRegistry'
+import { executeHooksForEvent } from './hookExecutor'
 
 // ── 模块级单例（lazy） ────────────────────────────
 
@@ -38,6 +42,7 @@ function getRegistry(): SkillRegistry {
 
 const SKILL_INVOCATION_RE = /^@(\S+)\s*(.*)/
 const COMMAND_TRIGGER_RE = /^\/(\S+)\s*(.*)/
+const AGENT_TRIGGER_RE = /^@agent\s+(\S+)\s*(.*)/
 
 // ── 内部辅助 ─────────────────────────────────────
 
@@ -53,6 +58,20 @@ function parseCommandTrigger(
   const match = text.match(COMMAND_TRIGGER_RE)
   if (!match) return null
   return { trigger: `/${match[1]}`, commandInput: match[2] }
+}
+
+/**
+ * 解析 agent 触发语法（@agent agentName input）。
+ *
+ * @param text - 用户输入的原始消息
+ * @returns 解析成功返回 { agentName, agentInput }，否则返回 null
+ */
+function parseAgentTrigger(
+  text: string,
+): { agentName: string; agentInput: string } | null {
+  const match = text.match(AGENT_TRIGGER_RE)
+  if (!match) return null
+  return { agentName: match[1], agentInput: match[2] }
 }
 
 /**
@@ -75,6 +94,101 @@ async function registerSkillCommands(
     }
   } catch {
     // skill.json 读取失败 — 静默处理，命令注册是可选的
+  }
+}
+
+/**
+ * 从 skill.json 读取 agents 数组并注册到 AgentRegistry。
+ *
+ * @param skillId — skill ID
+ * @param baseDir — 读取基础目录
+ */
+async function registerSkillAgents(
+  skillId: string,
+  baseDir: BaseDirectory,
+): Promise<void> {
+  try {
+    const raw = await readTextFile(`skills/${skillId}/skill.json`, { baseDir })
+    const parsed = JSON.parse(raw)
+    const rawAgents: SkillAgent[] = Array.isArray(parsed.agents) ? parsed.agents : []
+    if (rawAgents.length > 0) {
+      const agents: AgentDefinition[] = rawAgents.map((a) => ({
+        skillId,
+        agentName: a.name,
+        description: a.description ?? '',
+        mdPath: a.file,
+        model: a.model,
+        tools: a.tools,
+      }))
+      getAgentRegistry().registerAgents(skillId, agents)
+      console.info(`[skillBridge] 注册 ${agents.length} 个代理: ${skillId}`)
+    }
+  } catch {
+    // skill.json 读取失败 — 静默处理，代理注册是可选的
+  }
+}
+
+/**
+ * 从 skill.json 读取 experimental.hooks 数组并注册到 HookRegistry。
+ *
+ * @param skillId — skill ID
+ * @param baseDir — 读取基础目录
+ */
+async function registerSkillHooks(
+  skillId: string,
+  baseDir: BaseDirectory,
+): Promise<void> {
+  try {
+    const raw = await readTextFile(`skills/${skillId}/skill.json`, { baseDir })
+    const parsed = JSON.parse(raw)
+    const experimental = parsed.experimental
+    if (!experimental || typeof experimental !== 'object') return
+
+    const rawHooks: SkillHook[] = Array.isArray(experimental.hooks) ? experimental.hooks : []
+    if (rawHooks.length === 0) return
+
+    const hooks: HookDefinition[] = rawHooks
+      .filter((h) => h.name && h.file && h.event)
+      .map((h) => ({
+        skillId,
+        hookName: h.name,
+        event: h.event as HookEvent,
+        scriptPath: h.file,
+        timeout: 5000,
+      }))
+
+    if (hooks.length > 0) {
+      getHookRegistry().registerHooks(skillId, hooks)
+      console.info(`[skillBridge] 注册 ${hooks.length} 个 hook: ${skillId}`)
+    }
+  } catch {
+    // skill.json 读取失败 — 静默处理，hook 注册是可选的
+  }
+}
+
+/**
+ * 触发指定事件的 hooks（fire-and-forget）。
+ *
+ * 非阻塞：仅 log 结果，不阻断主流程。
+ */
+async function fireHooks(
+  event: HookEvent,
+  skillId: string,
+  context?: Record<string, string>,
+): Promise<void> {
+  const hooks = getHookRegistry().getHooksForEvent(event)
+    .filter((h) => h.skillId === skillId)
+  if (!hooks.length) return
+
+  try {
+    const results = await executeHooksForEvent(hooks, context)
+    for (const r of results) {
+      if (!r.success) {
+        console.warn(`[skillBridge] hook "${r.hookName}" 失败: ${r.error}`)
+      }
+    }
+  } catch {
+    // hook 执行异常 — 静默处理，不阻断主流程
   }
 }
 
@@ -258,6 +372,34 @@ export async function tryExecuteSkill(
     }
   }
 
+  // 1b. 检查是否为 agent 触发（@agent agentName input）
+  const agentTrigger = parseAgentTrigger(text)
+  if (agentTrigger) {
+    try {
+      const agentRegistry = getAgentRegistry()
+      const agent = agentRegistry.findAgent(agentTrigger.agentName)
+      if (agent) {
+        const result = await invokeAgent(agentTrigger.agentName, agentTrigger.agentInput, {
+          createId: params.createId,
+        })
+        const assistantMsg = buildAssistantMessage(result.content, {
+          id: params.createId(),
+          metadata: {
+            skillId: result.skillId,
+            skillName: result.agentName,
+            runtimeStatus: 'completed',
+            elapsed: result.elapsed,
+          },
+        })
+        params.messages.value.push(assistantMsg)
+        return assistantMsg
+      }
+    } catch (e) {
+      params.handleSendError(e, null, params.sending, params.draftSending)
+      return null
+    }
+  }
+
   // 2. 检查是否为 skill invocation（@mention 语法）
   const invocation = parseSkillInvocation(text)
   if (!invocation) return undefined
@@ -326,7 +468,19 @@ export async function tryExecuteSkill(
     // 3.2.1 自动注册 skill 关联的命令
     await registerSkillCommands(skillMeta.skillId, baseDir)
 
+    // 3.2.2 自动注册 skill 关联的子代理
+    await registerSkillAgents(skillMeta.skillId, baseDir)
+
+    // 3.2.3 自动注册 skill 关联的 lifecycle hooks
+    await registerSkillHooks(skillMeta.skillId, baseDir)
+
+    // 3.2.4 触发 on-load hooks（fire-and-forget）
+    fireHooks('on-load', skillMeta.skillId, { TASK_ID: taskId })
+
     // 3.3 执行
+    // 3.3.1 触发 on-execute hooks（fire-and-forget）
+    fireHooks('on-execute', skillMeta.skillId, { TASK_ID: taskId })
+
     const taskCreatedAt = Date.now()
     const result = await executeChatTask(taskId)
     const assistantMsg = buildAssistantMessage(result.content, {
@@ -342,6 +496,10 @@ export async function tryExecuteSkill(
     params.messages.value.push(assistantMsg)
     return assistantMsg
   } catch (e) {
+    // 触发 on-error hooks（fire-and-forget）
+    fireHooks('on-error', skillMeta.skillId, {
+      ERROR: e instanceof Error ? e.message : String(e),
+    })
     params.handleSendError(e, null, params.sending, params.draftSending)
     return null
   }
