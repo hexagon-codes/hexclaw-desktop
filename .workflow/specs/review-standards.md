@@ -1,4 +1,0 @@
-# Review Standards
-
-## Entries
-

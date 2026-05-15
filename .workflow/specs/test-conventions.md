@@ -1,4 +1,0 @@
-# Test Conventions
-
-## Entries
-

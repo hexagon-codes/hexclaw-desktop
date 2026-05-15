@@ -1,4 +1,0 @@
-# Coding Conventions
-
-## Entries
-
