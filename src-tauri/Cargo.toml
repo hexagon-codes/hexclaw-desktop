@@ -37,6 +37,7 @@ url = "2"
 libc = "0.2"
 base64 = "0.22"
 dirs = "5"
+percent-encoding = "2"
 
 
 [features]

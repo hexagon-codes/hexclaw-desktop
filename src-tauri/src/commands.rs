@@ -11,6 +11,20 @@ use tauri::Emitter;
 use crate::ollama;
 use crate::sidecar;
 
+/// 校验 skill 名称，防止 URL 路径注入
+fn sanitize_skill_name(name: &str) -> Result<String, String> {
+    if name.is_empty() {
+        return Err("skill name cannot be empty".into());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") || name.contains(' ') {
+        return Err(format!("invalid skill name: {}", name));
+    }
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+        return Err(format!("skill name contains invalid characters: {}", name));
+    }
+    Ok(name.to_string())
+}
+
 /// Sidecar 状态信息
 #[derive(Serialize)]
 pub struct SidecarStatus {
@@ -474,6 +488,7 @@ pub async fn skill_install(source: String, skill_type: Option<String>) -> Result
 /// 卸载 Skill
 #[tauri::command]
 pub async fn skill_uninstall(name: String) -> Result<SkillOperationResult, String> {
+    let name = sanitize_skill_name(&name)?;
     let url = format!("{}/api/v1/skills/{}", sidecar::base_url(), name);
 
     let client = reqwest::Client::new();
@@ -522,6 +537,7 @@ pub async fn skill_uninstall(name: String) -> Result<SkillOperationResult, Strin
 /// 启用/禁用 Skill
 #[tauri::command]
 pub async fn skill_set_enabled(name: String, enabled: bool) -> Result<SkillOperationResult, String> {
+    let name = sanitize_skill_name(&name)?;
     let url = format!("{}/api/v1/skills/{}/status", sidecar::base_url(), name);
 
     let body = serde_json::json!({
@@ -576,10 +592,13 @@ pub async fn skill_set_enabled(name: String, enabled: bool) -> Result<SkillOpera
 /// 搜索 ClawHub 技能市场
 #[tauri::command]
 pub async fn skill_search(query: Option<String>, category: Option<String>) -> Result<Vec<ClawHubSkill>, String> {
+    use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+
     let mut q: Vec<String> = Vec::new();
     if let Some(ref query) = query {
         if !query.is_empty() {
-            q.push(format!("q={}", query));
+            let encoded = utf8_percent_encode(query, NON_ALPHANUMERIC).to_string();
+            q.push(format!("q={}", encoded));
         }
     }
     if let Some(ref category) = category {
@@ -706,7 +725,6 @@ pub async fn skill_execute_script(
     let config = skill_sandbox::SandboxConfig {
         sandbox_mode: sandbox_mode.to_string(),
         timeout_ms: 30_000,
-        max_memory_mb: 256,
         allowed_dirs: vec![
             app_data.to_string_lossy().into_owned(),
             std::env::temp_dir().to_string_lossy().into_owned(),
