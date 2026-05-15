@@ -1,0 +1,25 @@
+{
+  "summary": "Wave 1 P0: skill 路由语义修正 + ChatAgentExecutor 改名",
+  "approach": "3 文件 ~5 行改动，不改 Executor 实现，不改 skillBridge 执行流，不改 agentAdapter 的 buildPromptInput 逻辑。直接源码编辑 + UAT 验证。",
+  "task_ids": ["TASK-RT-P0-001"],
+  "task_count": 1,
+  "complexity": "low",
+  "waves": [
+    {
+      "wave": 1,
+      "label": "P0: Semantic Fix",
+      "tasks": ["TASK-RT-P0-001"]
+    }
+  ],
+  "confidence": {
+    "overall": 0.92,
+    "dimensions": {
+      "requirements_coverage": 0.95,
+      "task_quality": 0.90,
+      "dependency_correctness": 1.0,
+      "estimation_accuracy": 0.90,
+      "collision_safety": 1.0
+    },
+    "pressure_pass": "Wave 1 复杂度低（3 文件 ~5 行），压力测试验证过 M1 的 root cause 和 fix direction。最大风险是 rename 遗漏引用，但 grep 可覆盖。"
+  }
+}

@@ -1,0 +1,140 @@
+{
+  "session": "ANL-runtime-native-refactor-2026-05-14",
+  "generated_at": "2026-05-14T01:30:00.000Z",
+  "source": "direct code reading + cli-explore-agent",
+  "layers": {
+    "module_discovery": {
+      "chat_path": [
+        { "path": "src/stores/chat-send-controller.ts", "purpose": "Chat 发送编排 — RT/WS 双路径入口", "relevance": "critical — execMode 分支决定消息走 RT 还是 WS" },
+        { "path": "src/stores/chat-send-delivery-controller.ts", "purpose": "WS 优先→HTTP 回退的发送管线", "relevance": "high — WS path 的核心分发器" },
+        { "path": "src/stores/chat-send-websocket-delivery.ts", "purpose": "WebSocket 流式发送控制器", "relevance": "high — WS streaming 实现" },
+        { "path": "src/stores/chat-send-backend-delivery.ts", "purpose": "HTTP 后端发送控制器（fallback）", "relevance": "medium — WS 不可用时的降级" },
+        { "path": "src/stores/chat.ts", "purpose": "Chat Store（281 行）", "relevance": "low — 已解耦，不直接涉及 RT/WS 分歧" },
+        { "path": "src/services/chatService.ts", "purpose": "聊天发送服务（WebSocket/HTTP 发送）", "relevance": "critical — WS 原始路径的核心" },
+        { "path": "src/api/chat.ts", "purpose": "Chat API (sendChatViaBackend 等)", "relevance": "high — 后端 HTTP API 封装" },
+        { "path": "src/api/websocket.ts", "purpose": "WebSocket 客户端", "relevance": "high — WS 连接管理" }
+      ],
+      "runtime_path": [
+        { "path": "src/stores/runtime.ts", "purpose": "RuntimeStore（856 行）— Context 管理 + 执行引擎", "relevance": "critical — Runtime 核心" },
+        { "path": "src/services/runtimeBridge.ts", "purpose": "Chat↔Runtime anti-coupling shim", "relevance": "critical — ADR-001 指定唯一边界" },
+        { "path": "src/services/agentAdapter.ts", "purpose": "ChatAgentExecutor — 实际 LLM 调用执行器", "relevance": "critical — 当前 RT 路径的唯一真实 executor" },
+        { "path": "src/services/providerAdapter.ts", "purpose": "Provider Adapter（BackendChatProvider）", "relevance": "critical — protocol parse 层" },
+        { "path": "src/services/backendLLMClient.ts", "purpose": "BackendLLMClient — transport 层", "relevance": "critical — Tauri invoke 调用后端" },
+        { "path": "src/services/taskExecutor.ts", "purpose": "TaskExecutor 接口 + Adapter Shell 实现", "relevance": "critical — Executor 工厂 + 3 种实现" },
+        { "path": "src/services/contextManager.ts", "purpose": "ContextManager — Context 生命周期管理", "relevance": "high — Runtime 数据核心" },
+        { "path": "src/services/contextLoader.ts", "purpose": "ContextLoader — Layer 加载", "relevance": "medium — Layer 装配" },
+        { "path": "src/services/skillBridge.ts", "purpose": "@mention Skill 调用桥接层", "relevance": "critical — skill 执行入口" },
+        { "path": "src/services/skillRegistry.ts", "purpose": "Skill 元数据发现与缓存", "relevance": "high — skill 注册" },
+        { "path": "src/services/skillLoader.ts", "purpose": "Skill 文件加载器", "relevance": "high — SKILL.md 读取" },
+        { "path": "src/services/runtime/", "purpose": "Runtime 基础设施（timeline/persistence/recovery/asset）", "relevance": "medium — 执行支撑" }
+      ],
+      "tauri_layer": [
+        { "path": "src-tauri/src/commands.rs", "purpose": "Tauri 命令（backend_chat, stream_chat 等）", "relevance": "critical — RT 和 WS 都经过此层" }
+      ],
+      "config_layer": [
+        { "path": "docs/adr/001-chat-runtime-bridge.md", "purpose": "ADR-001: Chat-Runtime Bridge Boundary", "relevance": "critical — RT/WS 分离的架构基石" },
+        { "path": "docs/adr/002-runtime-authority-ownership.md", "purpose": "ADR-002: Runtime Authority Ownership", "relevance": "critical — RuntimeStore 唯一突变入口" },
+        { "path": "docs/adr/003-projection-purity.md", "purpose": "ADR-003: Projection Purity", "relevance": "medium — 投影层约束" },
+        { "path": "docs/adr/004-execution-state-machine.md", "purpose": "ADR-004: Execution State Machine", "relevance": "high — 执行状态机约束" },
+        { "path": "docs/skill-archetypes/spe-v0.1.md", "purpose": "SPE Archetype v0.1 冻结文档", "relevance": "high — 模板化 skill 开发" }
+      ]
+    },
+    "structure_tracing": {
+      "skill_execution_flow": [
+        "chat-send-controller.ts:156 → tryExecuteSkill(text)",
+        "  → skillBridge.ts:110 → parseSkillInvocation()",
+        "  → skillBridge.ts:116 → registry.getAllSkills() + resolveSkillByName()",
+        "  → skillBridge.ts:120 → checkSkillCapabilities() ← Capability 预检",
+        "  → skillBridge.ts:133 → Task { type: 'chat', ... }  ← 注意 type='chat' 而非 'skill'",
+        "  → skillBridge.ts:136 → taskStore.enqueue(task) + registerChatTask(task)",
+        "  → skillBridge.ts:144-149 → skillLoader.loadSkill() + runtime.loadSkillLayerForTask()",
+        "  → skillBridge.ts:152 → executeChatTask(taskId)",
+        "    → runtimeBridge.ts:83 → runtime.executeTask(taskId)",
+        "      → runtime.ts:384 → resolveExecutor(taskType) → createContextAwareExecutor('chat')",
+        "      → runtime.ts:404 → ChatAgentExecutor.executeWithContext()",
+        "        → agentAdapter.ts:123 → buildPromptInput(context)",
+        "          → agentAdapter.ts:37 → SKILL.md sanitization + MODE:DIRECT 注入",
+        "        → agentAdapter.ts:139 → provider.execute()",
+        "          → providerAdapter.ts:75 → systemPrompt 处理 + messages 组装",
+        "          → providerAdapter.ts:81 → backendLLMClient.send()",
+        "            → backendLLMClient.ts:43 → invoke('backend_chat') ← Tauri IPC",
+        "              → commands.rs:320 → HTTP POST hexclaw /api/v1/chat"
+      ],
+      "normal_chat_ws_flow": [
+        "chat-send-controller.ts:165 → $taskStore.enqueue() + registerChatTask()",
+        "  → execMode === 'runtime'? 或 fallback:",
+        "  → chat-send-controller.ts:207 → if execMode === 'runtime': executeChatTask($taskId)",
+        "  → chat-send-controller.ts:238 → deliveryController.deliverMessage()",
+        "    → chat-send-delivery-controller.ts:132 → chatSvc.ensureWebSocketConnected()",
+        "    → chat-send-delivery-controller.ts:151 → websocketDelivery.deliverViaWebSocket()",
+        "      → chatService.ts:86 → openWebSocketStream()",
+        "      → chatService.ts:375 → openRequestSocket() ← 新建 WebSocket 连接",
+        "      → hexclaw backend → streaming chunks/reply/error",
+        "    → fallback: backendDelivery.deliverViaBackend()",
+        "      → api/chat.ts:98 → invoke('backend_chat') ← 和 RT 路径终点相同！"
+      ]
+    },
+    "code_anchors": {
+      "skill_task_type_chat": {
+        "file": "src/services/skillBridge.ts",
+        "line": 133,
+        "snippet": "const task: Task = {\n  id: taskId,\n  type: 'chat',  // ← type='chat' 作为兼容层\n  status: 'running',\n  input: { type: 'chat', payload: { text: invocation.skillInput } },\n}",
+        "significance": "skill 任务使用 type='chat' 而非 'skill'，使 ChatAgentExecutor 接管执行。SkillTaskExecutor 永远不被使用。"
+      },
+      "dual_capability_check": {
+        "file": "src/services/skillBridge.ts",
+        "line": 42,
+        "snippet": "function checkSkillCapabilities(capabilities: string[]): boolean {\n  const { capabilityRegistry, capabilityValidator } = getRuntimeServices()\n  const result = capabilityValidator.validate(\n    capabilities,\n    { allowedCapabilities: DEFAULT_ALLOWED_CAPABILITIES, deniedCapabilities: [] },\n    capabilityRegistry,\n  )\n  return result.valid\n}",
+        "significance": "skillBridge.ts 做了一次 capability 预检，但 RuntimeStore.ts:217-240 在 loadSkillForTask 时又做了一次。重复检查但阈值不同（pre-check 用 DEFAULT_ALLOWED_CAPABILITIES，store 用 ctx.system.policy.allowedCapabilities）。"
+      },
+      "mode_direct_injection": {
+        "file": "src/services/agentAdapter.ts",
+        "line": 44,
+        "snippet": "const sanitized = skillLayer.markdown\n  .replace(/summarize/gi, '摘要')\nparts.push(`[MODE: DIRECT]\nOutput directly. No planning. No tool calls.`)\nparts.push(sanitized)\n[...]\nif (skillLayer?.markdown) {\n  user = `${user}\\n\\n[MODE: DIRECT]\\nOutput directly. No tool calls. No search. Output immediately.`\n}",
+        "significance": "MODE:DIRECT 和 skill markdown 的拼接逻辑硬编码在 agentAdapter.ts 中。没有统一的 Runtime LLM Contract。sanitization 也硬编码。"
+      },
+      "executor_dual_registry": {
+        "file": "src/services/taskExecutor.ts",
+        "line": 156,
+        "snippet": "export function createExecutor(type: TaskType): TaskExecutor {\n  switch (type) {\n    case 'chat': return new ChatTaskExecutor()\n    case 'agent': return new AgentTaskExecutor()\n    case 'skill': return new SkillTaskExecutor()\n    default: return new ChatTaskExecutor()\n  }\n}\n\nexport function createContextAwareExecutor(type: TaskType): ContextAwareExecutor {\n  switch (type) {\n    case 'chat': return new ChatAgentExecutor(createChatProvider())\n    case 'agent': return new AgentTaskExecutor()\n    case 'skill': return new SkillTaskExecutor()\n    default: return new ChatAgentExecutor(createChatProvider())\n  }\n}",
+        "significance": "两套 Executor 注册表。createExecutor 返回非 context-aware 实现（ChatTaskExecutor stub），但 Runtime path 只用 createContextAwareExecutor。createExecutor 是死代码。"
+      },
+      "stub_skill_executor": {
+        "file": "src/services/taskExecutor.ts",
+        "line": 103,
+        "snippet": "export class SkillTaskExecutor implements ContextAwareExecutor {\n  async executeWithContext(task: Task, context: RuntimeContext): Promise<TaskOutput> {\n    return stubExecuteWithContext(task, context)  // ← 永远返回 { result: null, artifacts: [] }\n  }\n}",
+        "significance": "SkillTaskExecutor 是桩实现。因为 skillBridge.ts 用 type='chat' 绕过了它，它从未被执行。这是应该修复的架构欠债。"
+      },
+      "ws_rt_dual_path": {
+        "file": "src/stores/chat-send-controller.ts",
+        "line": 207,
+        "snippet": "if (execMode.value === 'runtime') {\n  // RT path\n  const result = await executeChatTask($taskId)\n  const assistantMsg = buildAssistantMessage(result.content, { id: createId() })\n  messages.value.push(assistantMsg)\n  return assistantMsg\n}\n// WS path\nconst $result = await deliveryController.deliverMessage({...})",
+        "significance": "execMode toggle 控制 RT vs WS 路径。RT 路径返回简化版的 assistant message（无 reasoning/tool_calls/metadata）。"
+      },
+      "same_backend_endpoint": {
+        "file": "src-tauri/src/commands.rs",
+        "line": 320,
+        "snippet": "pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {\n    let url = format!(\"{}/api/v1/chat\", sidecar::base_url());\n    // ... POST with system_prompt, message, model, provider ...",
+        "significance": "RT 和 WS fallback 都通过 Tauri invoke('backend_chat') 到达同一个后端 endpoint /api/v1/chat。区别在于 RT 发送 system_prompt 字段，WS 只发送 message。"
+      },
+      "task_type_layers": {
+        "file": "src/types/index.ts",
+        "line": 73,
+        "snippet": "// TaskType 定义 — 影响 executor 路由\n// 'chat' | 'agent' | 'skill'\nexport type TaskType = 'chat' | 'agent' | 'skill'",
+        "significance": "TaskType 只有 3 种，但 WS path 创建 type='chat' 的 Task，RT skill path 也创建 type='chat' 的 Task。两种不同的语义路径共用同一个 type。"
+      }
+    }
+  },
+  "key_divergence_points": [
+    "1. skill 任务使用 type='chat' — skillBridge.ts:133 是核心架构欠债",
+    "2. SkillTaskExecutor 是 stub — 无人使用，永远返回 null",
+    "3. 两套 Executor 注册表 — createExecutor() 是死代码",
+    "4. Capability 检查重复 — skillBridge.ts 和 RuntimeStore.ts 各做一次",
+    "5. MODE:DIRECT 逻辑硬编码 — 没有统一的 Runtime LLM Contract",
+    "6. execMode toggle — RT path 仍然是实验性的并行路径",
+    "7. RT 和 WS 共享同一个后端端点但 payload 结构不同",
+    "8. ChatAgentExecutor 命名不当 — 它实际上是 Runtime 的执行器",
+    "9. 浏览器 dev 模式无法使用 RT path（需要 Tauri IPC）",
+    "10. WS path 有自己的 Task 生命周期管理（与 RT 重复）"
+  ]
+}

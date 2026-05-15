@@ -1,0 +1,101 @@
+{
+  "id": "TASK-001",
+  "title": "commands.rs — 新增 system_prompt 字段 + POST body 转发",
+  "description": "BackendChatParams 结构体新增 system_prompt: Option<String> 字段，backend_chat 函数中将 system_prompt 转发到 POST body。Go backend 已支持该字段。",
+
+  "issue_id": null,
+  "issue_refs": [],
+  "type": "fix",
+  "priority": "high",
+  "effort": "small",
+  "action": "BackendChatParams 新增 system_prompt: Option<String> 字段 + POST body 条件转发",
+  "status": "completed",
+  "completed_at": "2026-05-13T17:30:00Z",
+  "actual_duration": "5min",
+
+  "scope": "src-tauri/src/commands.rs",
+  "focus_paths": [
+    "src-tauri/src/commands.rs"
+  ],
+
+  "read_first": [
+    "src-tauri/src/commands.rs:299-312 (BackendChatParams struct)",
+    "src-tauri/src/commands.rs:319-372 (backend_chat function)"
+  ],
+
+  "depends_on": [],
+  "wave": 1,
+  "parallel_group": "A",
+  "execution_group": null,
+  "executor": "agent",
+
+  "convergence": {
+    "criteria": [
+      "src-tauri/src/commands.rs contains 'system_prompt: Option<String>'",
+      "src-tauri/src/commands.rs contains 'body[\"system_prompt\"] = serde_json::json!(sp)'",
+      "cargo build --package hexclaw-desktop exits 0"
+    ],
+    "verification": "cd src-tauri && cargo build --package hexclaw-desktop 2>&1",
+    "definition_of_done": "BackendChatParams 可接收 system_prompt 字段并转发到 Go backend POST body"
+  },
+
+  "files": [
+    {
+      "path": "src-tauri/src/commands.rs",
+      "action": "modify",
+      "target": "BackendChatParams + backend_chat",
+      "change": "BackendChatParams 新增 system_prompt: Option<String> (serde Deserialize)，backend_chat 在 POST body 添加 system_prompt 条件转发"
+    }
+  ],
+
+  "implementation": [
+    "在 BackendChatParams struct 的 message 字段后新增 system_prompt: Option<String> 字段",
+    "在 backend_chat 函数中，在 temperature/max_tokens 转发块之后添加 system_prompt 条件转发: if let Some(ref sp) = params.system_prompt { if !sp.is_empty() { body[\"system_prompt\"] = serde_json::json!(sp); } }",
+    "运行 cargo build --package hexclaw-desktop 验证编译通过"
+  ],
+
+  "test": {
+    "commands": [
+      "cd src-tauri && cargo build --package hexclaw-desktop 2>&1"
+    ],
+    "unit": [],
+    "integration": [],
+    "success_metrics": [
+      "cargo build exits 0"
+    ]
+  },
+
+  "reference": {
+    "pattern": "temperature/max_tokens 条件转发模式 (lines 330-335)",
+    "files": ["src-tauri/src/commands.rs"],
+    "examples": null
+  },
+
+  "rationale": {
+    "chosen_approach": "遵循现有 Option<T> + serde_json::json! 转发模式，与 temperature/max_tokens 处理一致",
+    "decision_factors": [
+      "最小改动: +3 行",
+      "零风险: 纯新增字段，不改现有逻辑",
+      "与现有 pattern 一致"
+    ],
+    "tradeoffs": null
+  },
+
+  "risks": [],
+
+  "code_skeleton": null,
+
+  "doc_context": {
+    "affected_features": ["skill-execution", "system-prompt"],
+    "affected_components": ["tauri-bridge", "backend-chat"],
+    "affected_requirements": [],
+    "adr_ids": []
+  },
+
+  "meta": {
+    "estimated_time": "5min",
+    "risk": "low",
+    "autonomous": true,
+    "checkpoint": false
+  }
+}
