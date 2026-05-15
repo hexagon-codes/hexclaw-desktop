@@ -339,10 +339,10 @@ export class SkillLoader {
   /**
    * 校验并净化 skillId，阻止路径穿越。
    *
-   * 规则：
-   * - 允许：a-z、0-9、-、_、/（支持嵌套路径如 builtin/summarize）
-   * - 禁止：空字符串、..、\、绝对路径（/ 开头）、连续 //
-   * - 自动转小写
+   * 规则与 SkillRegistry.sanitizeSkillId 对齐：
+   * - 仅允许：a-z、0-9、-、_
+   * - 其余字符一律剥离
+   * - 空字符串、. 开头、.. 包含 → 抛出错误
    *
    * @throws 当 skillId 非法时抛出明确错误
    */
@@ -351,36 +351,10 @@ export class SkillLoader {
       throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 空字符串')
     }
 
-    const normalized = skillId.trim().toLowerCase()
+    const normalized = skillId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')
 
-    // 禁止反斜杠（禁止 Windows 路径分隔符）
-    if (normalized.includes('\\')) {
-      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止反斜杠 "\\"')
-    }
-
-    // 禁止路径穿越
-    if (normalized.includes('..')) {
-      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止路径穿越 ".."')
-    }
-
-    // 禁止连续斜杠
-    if (normalized.includes('//')) {
-      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止连续斜杠 "//"')
-    }
-
-    // 禁止绝对路径（/ 开头）
-    if (normalized.startsWith('/')) {
-      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止绝对路径')
-    }
-
-    // 禁止 Windows 绝对路径（如 c:）
-    if (/^[a-z]:/.test(normalized)) {
-      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 禁止 Windows 盘符路径')
-    }
-
-    // 仅允许 a-z 0-9 - _ /
-    if (!/^[a-z0-9_/-]+$/.test(normalized)) {
-      throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 仅允许 a-z、0-9、-、_、/')
+    if (!normalized || normalized.startsWith('.') || normalized.includes('..')) {
+      throw skillError('SKILL_PATH_TRAVERSAL', `非法 skillId: "${skillId}"`)
     }
 
     return normalized

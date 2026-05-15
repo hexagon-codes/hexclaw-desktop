@@ -145,7 +145,7 @@ export async function tryExecuteSkill(
     const skillLoader = new SkillLoader(baseDir)
 
     // 推断 trigger：从用户输入文本提取关键词匹配 triggers 数组
-    const inferredTrigger = invocation.skillInput.trim().split(/\s+/)[0]?.toLowerCase() ?? 'always'
+    const inferredTrigger = invocation.skillInput.trim().split(/\s+/)[0]?.toLowerCase() || 'always'
 
     let skillPkg = await skillLoader.loadSkillByTrigger(skillMeta.skillId, inferredTrigger, {
       loadMarkdown: true,
