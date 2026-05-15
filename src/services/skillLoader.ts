@@ -21,7 +21,9 @@ import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
 import { env } from '@/config/env'
 import type { SkillMeta, SkillPackage, SkillReference, SkillLayer } from '@/types'
 import { estimateSize } from '@/utils/sizeEstimator'
+import { sanitizeSkillId as _sanitizeSkillId } from './skillRegistry'
 import { deriveProjectRoot } from '@/utils/projectRoot'
+import { buildSkillMeta } from '@/utils/skillMeta'
 
 // ─── Error Helper ─────────────────────────────────────
 
@@ -78,16 +80,7 @@ export class SkillLoader {
       throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${safeId} (baseDir=${this.baseDir})`)
     }
 
-    const meta: SkillMeta = {
-      skillId: safeId,
-      displayName: parsed.display_name ?? parsed.name ?? safeId,
-      version: parsed.version ?? '0.0.0',
-      description: parsed.description ?? '',
-      capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
-      entry: parsed.entry ?? 'SKILL.md',
-      path: `skills/${safeId}`,
-      source: 'custom',
-    }
+    const meta: SkillMeta = buildSkillMeta(safeId, parsed)
 
     // ── 2. 读取 SKILL.md（可选） ──────────────────────
 
@@ -264,16 +257,7 @@ export class SkillLoader {
 
   /** 从 parsed skill.json 构建 SkillMeta */
   private buildMeta(skillId: string, parsed: Record<string, unknown>): SkillMeta {
-    return {
-      skillId,
-      displayName: parsed.display_name ?? parsed.name ?? skillId,
-      version: parsed.version ?? '0.0.0',
-      description: parsed.description ?? '',
-      capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
-      entry: parsed.entry ?? 'SKILL.md',
-      path: `skills/${skillId}`,
-      source: 'custom',
-    }
+    return buildSkillMeta(skillId, parsed)
   }
 
   /** 加载 references/ 目录索引 */
@@ -310,9 +294,9 @@ export class SkillLoader {
       throw skillError('SKILL_PATH_TRAVERSAL', '非法 skillId: 空字符串')
     }
 
-    const normalized = skillId.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')
+    const normalized = _sanitizeSkillId(skillId.trim())
 
-    if (!normalized || normalized.startsWith('.') || normalized.includes('..')) {
+    if (!normalized) {
       throw skillError('SKILL_PATH_TRAVERSAL', `非法 skillId: "${skillId}"`)
     }
 

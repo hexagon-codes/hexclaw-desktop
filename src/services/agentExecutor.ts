@@ -14,6 +14,7 @@ import { executeChatTask, registerChatTask } from './runtimeBridge'
 import { useRuntimeStore } from '@/stores/runtime'
 import { useTaskStore } from '@/stores/tasks'
 import type { Task } from '@/types'
+import { buildSkillMeta } from '@/utils/skillMeta'
 
 // ─── Types ─────────────────────────────────────────────
 
@@ -161,16 +162,12 @@ async function invokeAgentWithDef(
   // 4. 注入 SkillPackage 到 Runtime
   const runtime = useRuntimeStore()
   const skillPkg = {
-    meta: {
-      skillId: agent.skillId,
-      displayName: agent.agentName,
-      version: '0.0.0',
+    meta: buildSkillMeta(agent.skillId, {
+      display_name: agent.agentName,
       description: agent.description,
-      capabilities: agent.tools ?? [],
+      capabilities: agent.tools,
       entry: agent.mdPath,
-      path: `skills/${agent.skillId}`,
-      source: 'official' as const,
-    },
+    }, 'official'),
     markdown,
     references: [],
     estimatedSize: 0,

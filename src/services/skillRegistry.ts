@@ -18,6 +18,7 @@ import { readDir, readTextFile } from '@tauri-apps/plugin-fs'
 import { BaseDirectory, resourceDir } from '@tauri-apps/api/path'
 import { env } from '@/config/env'
 import type { SkillMeta } from '@/types'
+import { buildSkillMeta } from '@/utils/skillMeta'
 import { deriveProjectRoot } from '@/utils/projectRoot'
 
 export class SkillRegistry {
@@ -120,16 +121,7 @@ export class SkillRegistry {
         })
         const parsed = JSON.parse(raw)
 
-        const meta: SkillMeta = {
-          skillId,
-          displayName: parsed.display_name ?? parsed.name ?? skillId,
-          version: parsed.version ?? '0.0.0',
-          description: parsed.description ?? '',
-          capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
-          entry: parsed.entry ?? 'SKILL.md',
-          path: `skills/${skillId}`,
-          source,
-        }
+        const meta = buildSkillMeta(skillId, parsed, source)
 
         result.set(skillId, meta)
       } catch (e) {
@@ -236,16 +228,7 @@ export class SkillRegistry {
       try {
         const raw = await readTextFile(`${absolutePath}/skills/${skillId}/skill.json`)
         const parsed = JSON.parse(raw)
-        const meta: SkillMeta = {
-          skillId,
-          displayName: parsed.display_name ?? parsed.name ?? skillId,
-          version: parsed.version ?? '0.0.0',
-          description: parsed.description ?? '',
-          capabilities: Array.isArray(parsed.capabilities) ? parsed.capabilities : [],
-          entry: parsed.entry ?? 'SKILL.md',
-          path: `skills/${skillId}`,
-          source,
-        }
+        const meta = buildSkillMeta(skillId, parsed, source)
         result.set(skillId, meta)
       } catch (e) {
         // skill.json 不存在或损坏 → 尝试从 SKILL.md 自动生成等效元数据
@@ -268,11 +251,28 @@ export class SkillRegistry {
    * - Registry 在目录迭代场景调用，非法输入应跳过继续（返回空 → if (!skillId) continue）。
    * - Loader 在已知 skill ID 场景调用，非法输入说明存在 bug，应崩溃。
    */
-  private sanitizeSkillId(id: string): string {
+  sanitizeSkillId(id: string): string {
     const sanitized = id.toLowerCase().replace(/[^a-z0-9_-]/g, '')
     if (!sanitized || sanitized.startsWith('.') || sanitized.includes('..')) {
       return ''
     }
     return sanitized
   }
+}
+
+/**
+ * 净化 skillId：阻止路径穿越。
+ *
+ * 规则：仅允许 a-z、0-9、-、_；空字符串、. 开头、.. 包含均视为非法。
+ * 返回净化后的字符串（小写），非法时返回空字符串。
+ *
+ * @see SkillRegistry.sanitizeSkillId — 目录迭代场景用
+ * @see SkillLoader.sanitizeSkillId — 已知 ID 场景用（抛错）
+ */
+export function sanitizeSkillId(id: string): string {
+  const sanitized = id.toLowerCase().replace(/[^a-z0-9_-]/g, '')
+  if (!sanitized || sanitized.startsWith('.') || sanitized.includes('..')) {
+    return ''
+  }
+  return sanitized
 }
