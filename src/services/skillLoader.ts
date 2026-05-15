@@ -70,39 +70,11 @@ export class SkillLoader {
 
     // ── 1. 读取 meta（必选） ──────────────────────────
 
-    let raw: string
-    let resolvedBasePath: string | null = null
-
-    try {
-      raw = await readTextFile(`skills/${safeId}/skill.json`, {
-        baseDir: this.baseDir,
-      })
-    } catch {
-      // Fallback: dev 模式下尝试从项目根目录加载
-      if (env.isDev) {
-        try {
-          const actualResourceDir = await resourceDir()
-          if (actualResourceDir) {
-            const projectRoot = actualResourceDir
-              .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
-              .replace(/[/\\]target[/\\].*$/, '')
-            console.info(`[SkillLoader] dev 模式回退项目根: ${projectRoot}`)
-            raw = await readTextFile(`${projectRoot}/skills/${safeId}/skill.json`)
-            resolvedBasePath = `${projectRoot}/skills/${safeId}`
-          }
-        } catch {
-          throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${safeId} (baseDir=${this.baseDir})`)
-        }
-      } else {
-        throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${safeId} (baseDir=${this.baseDir})`)
-      }
-    }
-
     let parsed: Record<string, unknown>
     try {
-      parsed = JSON.parse(raw)
-    } catch {
-      throw skillError('SKILL_PARSE_ERROR', `skill.json JSON 解析失败: skills/${safeId}`)
+      parsed = await this.loadSkillJson(safeId)
+    } catch (e) {
+      throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${safeId} (baseDir=${this.baseDir})`)
     }
 
     const meta: SkillMeta = {
@@ -120,54 +92,25 @@ export class SkillLoader {
 
     let markdown: string | undefined
     if (loadMarkdown) {
-      if (resolvedBasePath) {
-        // 使用绝对路径加载
-        try {
-          markdown = await readTextFile(`${resolvedBasePath}/SKILL.md`)
-        } catch {
-          markdown = undefined
-        }
-      } else {
-        try {
-          markdown = await readTextFile(`skills/${safeId}/SKILL.md`, {
-            baseDir: this.baseDir,
-          })
-        } catch {
-          markdown = undefined
-        }
-      }
+      markdown = await this.readSkillFile(safeId, 'SKILL.md')
     }
 
     // ── 3. 扫描 references/（可选，只索引路径不读内容） ──
 
     let references: SkillReference[] = []
     if (loadReferences) {
-      if (resolvedBasePath) {
-        try {
-          const refEntries = await readDir(`${resolvedBasePath}/references`)
-          references = refEntries
-            .filter((e) => e.isFile && e.name)
-            .map((e) => ({
-              relativePath: e.name!,
-              absolutePath: `${resolvedBasePath}/references/${e.name}`,
-            }))
-        } catch {
-          // references/ 目录不存在 — 静默处理
-        }
-      } else {
-        try {
-          const refEntries = await readDir(`skills/${safeId}/references`, {
-            baseDir: this.baseDir,
-          })
-          references = refEntries
-            .filter((e) => e.isFile && e.name)
-            .map((e) => ({
-              relativePath: e.name!,
-              absolutePath: `skills/${safeId}/references/${e.name}`,
-            }))
-        } catch {
-          // references/ 目录不存在 — 静默处理
-        }
+      try {
+        const refEntries = await readDir(`skills/${safeId}/references`, {
+          baseDir: this.baseDir,
+        })
+        references = refEntries
+          .filter((e) => e.isFile && e.name)
+          .map((e) => ({
+            relativePath: e.name!,
+            absolutePath: `skills/${safeId}/references/${e.name}`,
+          }))
+      } catch {
+        // references/ 目录不存在 — 静默处理
       }
     }
 
@@ -205,27 +148,9 @@ export class SkillLoader {
     }
 
     // 读取 layer 指定的文件内容
-    const layerFilePath = `skills/${safeId}/${layer.file}`
     let markdown: string | undefined
     if (options?.loadMarkdown !== false) {
-      try {
-        markdown = await readTextFile(layerFilePath, { baseDir: this.baseDir })
-      } catch {
-        // layer 文件不存在 → 尝试 dev 模式 fallback
-        if (env.isDev) {
-          try {
-            const actualResourceDir = await resourceDir()
-            if (actualResourceDir) {
-              const projectRoot = actualResourceDir
-                .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
-                .replace(/[/\\]target[/\\].*$/, '')
-              markdown = await readTextFile(`${projectRoot}/skills/${safeId}/${layer.file}`)
-            }
-          } catch {
-            markdown = undefined
-          }
-        }
-      }
+      markdown = await this.readSkillFile(safeId, layer.file)
     }
 
     const meta = this.buildMeta(safeId, parsed)
@@ -275,12 +200,24 @@ export class SkillLoader {
 
   /**
    * 读取并解析 skill.json，返回 parsed 对象。
-   * 复用 loadSkill 中的读取逻辑（含 dev 模式 fallback）。
+   * 先尝试 baseDir，dev 模式下回退到项目根目录。
    */
   private async loadSkillJson(skillId: string): Promise<Record<string, unknown>> {
-    let raw: string
+    const raw = await this.readSkillJson(skillId)
     try {
-      raw = await readTextFile(`skills/${skillId}/skill.json`, { baseDir: this.baseDir })
+      return JSON.parse(raw)
+    } catch {
+      throw skillError('SKILL_PARSE_ERROR', `skill.json JSON 解析失败: skills/${skillId}`)
+    }
+  }
+
+  /**
+   * 读取 skill.json 原始内容。
+   * 先尝试 baseDir，dev 模式下回退到项目根目录。
+   */
+  private async readSkillJson(skillId: string): Promise<string> {
+    try {
+      return await readTextFile(`skills/${skillId}/skill.json`, { baseDir: this.baseDir })
     } catch {
       if (env.isDev) {
         try {
@@ -289,21 +226,38 @@ export class SkillLoader {
             const projectRoot = actualResourceDir
               .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
               .replace(/[/\\]target[/\\].*$/, '')
-            raw = await readTextFile(`${projectRoot}/skills/${skillId}/skill.json`)
-          } else {
-            throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${skillId}`)
+            return await readTextFile(`${projectRoot}/skills/${skillId}/skill.json`)
           }
         } catch {
-          throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${skillId}`)
+          // fallback 失败，下面统一抛错
         }
-      } else {
-        throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${skillId}`)
       }
+      throw skillError('SKILL_NOT_FOUND', `skill.json 不存在: skills/${skillId}`)
     }
+  }
+
+  /**
+   * 读取 skill 目录下的文件内容。
+   * 先尝试 baseDir，dev 模式下回退到项目根目录。
+   */
+  private async readSkillFile(skillId: string, fileName: string): Promise<string | undefined> {
     try {
-      return JSON.parse(raw)
+      return await readTextFile(`skills/${skillId}/${fileName}`, { baseDir: this.baseDir })
     } catch {
-      throw skillError('SKILL_PARSE_ERROR', `skill.json JSON 解析失败: skills/${skillId}`)
+      if (env.isDev) {
+        try {
+          const actualResourceDir = await resourceDir()
+          if (actualResourceDir) {
+            const projectRoot = actualResourceDir
+              .replace(/[/\\]src[/\\]tauri[/\\]target[/\\].*$/, '')
+              .replace(/[/\\]target[/\\].*$/, '')
+            return await readTextFile(`${projectRoot}/skills/${skillId}/${fileName}`)
+          }
+        } catch {
+          // fallback 失败
+        }
+      }
+      return undefined
     }
   }
 

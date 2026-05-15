@@ -42,6 +42,30 @@ export class SkillRegistry {
     this.initialized = true
   }
 
+  /**
+   * 从 SKILL.md 自动生成等效元数据（skill.json 不存在或损坏时的 fallback）。
+   * SKILL.md 不存在时返回 null。
+   */
+  private async buildFallbackMeta(skillId: string, skillDir: string, source: 'official' | 'custom'): Promise<SkillMeta | null> {
+    try {
+      await readTextFile(`${skillDir}/SKILL.md`)
+      const meta: SkillMeta = {
+        skillId,
+        displayName: skillId,
+        version: '0.0.0',
+        description: '',
+        capabilities: [],
+        entry: 'SKILL.md',
+        path: `skills/${skillId}`,
+        source,
+      }
+      console.info(`[SkillRegistry] skill "${skillId}" 无 skill.json，从 SKILL.md 自动生成元数据`)
+      return meta
+    } catch {
+      return null
+    }
+  }
+
   // ── 查询接口 ─────────────────────────────────────────
 
   /** 按 skillId 查找 Skill（首次调用自动触发 discover） */
@@ -109,22 +133,10 @@ export class SkillRegistry {
         result.set(skillId, meta)
       } catch (e) {
         // skill.json 不存在或损坏 → 尝试从 SKILL.md 自动生成等效元数据
-        try {
-          await readTextFile(`skills/${skillId}/SKILL.md`, { baseDir })
-          const meta: SkillMeta = {
-            skillId,
-            displayName: skillId,
-            version: '0.0.0',
-            description: '',
-            capabilities: [],
-            entry: 'SKILL.md',
-            path: `skills/${skillId}`,
-            source,
-          }
-          result.set(skillId, meta)
-          console.info(`[SkillRegistry] skill "${skillId}" 无 skill.json，从 SKILL.md 自动生成元数据`)
-        } catch {
-          // SKILL.md 也不存在，跳过
+        const fallback = await this.buildFallbackMeta(skillId, `skills/${skillId}`, source)
+        if (fallback) {
+          result.set(skillId, fallback)
+        } else {
           console.warn(`[SkillRegistry] 加载 skill "${skillId}" 失败:`, e)
         }
       }
@@ -238,22 +250,10 @@ export class SkillRegistry {
         result.set(skillId, meta)
       } catch (e) {
         // skill.json 不存在或损坏 → 尝试从 SKILL.md 自动生成等效元数据
-        try {
-          await readTextFile(`${absolutePath}/skills/${skillId}/SKILL.md`)
-          const meta: SkillMeta = {
-            skillId,
-            displayName: skillId,
-            version: '0.0.0',
-            description: '',
-            capabilities: [],
-            entry: 'SKILL.md',
-            path: `skills/${skillId}`,
-            source,
-          }
-          result.set(skillId, meta)
-          console.info(`[SkillRegistry] skill "${skillId}" 无 skill.json，从 SKILL.md 自动生成元数据`)
-        } catch {
-          // SKILL.md 也不存在，跳过
+        const fallback = await this.buildFallbackMeta(skillId, `${absolutePath}/skills/${skillId}`, source)
+        if (fallback) {
+          result.set(skillId, fallback)
+        } else {
           console.warn(`[SkillRegistry] 加载 skill "${skillId}" 失败:`, e)
         }
       }
