@@ -650,6 +650,73 @@ pub async fn skill_search(query: Option<String>, category: Option<String>) -> Re
     Ok(skills)
 }
 
+/// 执行 Skill 脚本（沙箱化）
+///
+/// 通过 skill_id 找到 skill 目录，加载 skill.json 中的脚本配置，
+/// 验证路径后在沙箱中执行。
+#[tauri::command]
+pub async fn skill_execute_script(
+    skill_id: String,
+    script_name: String,
+    input: Option<String>,
+) -> Result<crate::skill_sandbox::SandboxResult, String> {
+    use crate::skill_sandbox;
+    use std::path::PathBuf;
+
+    // 1. 构建 skill 目录路径
+    //    skill 存储在 AppData/skills/<skill_id>/
+    let app_data = dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("hexclaw")
+        .join("skills")
+        .join(&skill_id);
+
+    if !app_data.is_dir() {
+        return Err(format!("skill not found: {}", skill_id));
+    }
+
+    // 2. 读取 skill.json
+    let skill_json_path = app_data.join("skill.json");
+    let skill_json_str = std::fs::read_to_string(&skill_json_path)
+        .map_err(|e| format!("failed to read skill.json: {}", e))?;
+    let skill_json: serde_json::Value = serde_json::from_str(&skill_json_str)
+        .map_err(|e| format!("invalid skill.json: {}", e))?;
+
+    // 3. 从 experimental.scripts 中查找脚本配置
+    let script_config = skill_json
+        .get("experimental")
+        .and_then(|e| e.get("scripts"))
+        .and_then(|s| s.get(&script_name))
+        .ok_or_else(|| format!("script '{}' not found in skill '{}'", script_name, skill_id))?;
+
+    let script_file = script_config
+        .get("file")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("script '{}' missing 'file' field", script_name))?;
+
+    let sandbox_mode = script_config
+        .get("sandbox")
+        .and_then(|v| v.as_str())
+        .unwrap_or("restricted");
+
+    // 4. 验证脚本路径
+    let script_path = skill_sandbox::validate_script_path(&app_data, script_file)?;
+
+    // 5. 构建沙箱配置
+    let config = skill_sandbox::SandboxConfig {
+        sandbox_mode: sandbox_mode.to_string(),
+        timeout_ms: 30_000,
+        max_memory_mb: 256,
+        allowed_dirs: vec![
+            app_data.to_string_lossy().into_owned(),
+            std::env::temp_dir().to_string_lossy().into_owned(),
+        ],
+    };
+
+    // 6. 在沙箱中执行
+    skill_sandbox::execute_in_sandbox(&config, &script_path, input).await
+}
+
 /// 获取平台信息
 #[tauri::command]
 pub fn get_platform_info() -> PlatformInfo {

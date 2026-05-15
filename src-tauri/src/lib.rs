@@ -11,6 +11,7 @@ pub mod commands;
 pub mod menu;
 pub mod ollama;
 pub mod sidecar;
+pub mod skill_sandbox;
 pub mod tray;
 pub mod window;
 
@@ -132,6 +133,7 @@ pub fn run() {
             commands::skill_uninstall,
             commands::skill_set_enabled,
             commands::skill_search,
+            commands::skill_execute_script,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
