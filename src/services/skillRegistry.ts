@@ -247,16 +247,11 @@ export class SkillRegistry {
   /**
    * 净化 skillId：阻止路径穿越。
    *
-   * 设计决策：返回空字符串而非抛出错误（与 SkillLoader.sanitizeSkillId 不同）。
-   * - Registry 在目录迭代场景调用，非法输入应跳过继续（返回空 → if (!skillId) continue）。
-   * - Loader 在已知 skill ID 场景调用，非法输入说明存在 bug，应崩溃。
+   * 委托给共享的 sanitizeSkillId 工具函数。
+   * 返回空字符串而非抛出错误（与 SkillLoader.sanitizeSkillId 不同）。
    */
   sanitizeSkillId(id: string): string {
-    const sanitized = id.toLowerCase().replace(/[^a-z0-9_-]/g, '')
-    if (!sanitized || sanitized.startsWith('.') || sanitized.includes('..')) {
-      return ''
-    }
-    return sanitized
+    return sanitizeSkillId(id)
   }
 }
 
@@ -266,8 +261,8 @@ export class SkillRegistry {
  * 规则：仅允许 a-z、0-9、-、_；空字符串、. 开头、.. 包含均视为非法。
  * 返回净化后的字符串（小写），非法时返回空字符串。
  *
- * @see SkillRegistry.sanitizeSkillId — 目录迭代场景用
- * @see SkillLoader.sanitizeSkillId — 已知 ID 场景用（抛错）
+ * @see SkillRegistry.sanitizeSkillId — 委托此函数，目录迭代场景用
+ * @see SkillLoader.sanitizeSkillId — 包装此函数，已知 ID 场景用（抛错）
  */
 export function sanitizeSkillId(id: string): string {
   const sanitized = id.toLowerCase().replace(/[^a-z0-9_-]/g, '')
