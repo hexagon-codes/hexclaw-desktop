@@ -245,7 +245,7 @@ cd hexclaw-desktop
 make install
 # Equivalent to: pnpm install && cd src-tauri && cargo fetch
 
-# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.4.0 by default)
+# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.4.1 by default)
 make sidecar
 
 # 4. Start development mode
@@ -253,7 +253,7 @@ make dev
 ```
 
 > **Note**:
-> - `make sidecar` pulls `refs/tags/v0.4.0` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
+> - `make sidecar` pulls `refs/tags/v0.4.1` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
 > - To build another backend version, pass it explicitly: `make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.2` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
 
@@ -483,7 +483,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` compilation fails
 
 1. Verify Go >= 1.23 is installed: `go version`
-2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.4.0`
+2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.4.1`
 3. Verify Rust toolchain is installed (needed for platform triple detection): `rustc -vV`
 
 ### `make dev` starts but shows white screen

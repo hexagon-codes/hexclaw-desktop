@@ -1,0 +1,45 @@
+{
+  "_doc": "渲染引擎二进制版本基线 + SHA256 校验和。详见 hexclaw/.claude/doc-generation-architecture.md §3.2 升级回归策略。CI 每周拉 latest 跑黄金回归通过后自动 PR 更新本文件。SHA256 来源：GitHub release 的 SHA256SUMS.txt 或 detached signatures。",
+  "pandoc": {
+    "version": "3.9.0.2",
+    "platforms": {
+      "darwin-arm64": {
+        "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-arm64-macOS.zip",
+        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+      },
+      "darwin-x86_64": {
+        "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-x86_64-macOS.zip",
+        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+      },
+      "linux-x86_64": {
+        "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-linux-amd64.tar.gz",
+        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+      },
+      "windows-x86_64": {
+        "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-windows-x86_64.zip",
+        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+      }
+    }
+  },
+  "typst": {
+    "version": "0.13.1",
+    "platforms": {
+      "darwin-arm64": {
+        "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-aarch64-apple-darwin.tar.xz",
+        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+      },
+      "darwin-x86_64": {
+        "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-apple-darwin.tar.xz",
+        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+      },
+      "linux-x86_64": {
+        "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-unknown-linux-musl.tar.xz",
+        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+      },
+      "windows-x86_64": {
+        "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-pc-windows-msvc.zip",
+        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+      }
+    }
+  }
+}

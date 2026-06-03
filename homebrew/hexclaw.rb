@@ -18,12 +18,13 @@ cask "hexclaw" do
 
   on_arm do
     url "https://github.com/hexagon-codes/hexclaw-desktop/releases/download/v#{version}/HexClaw_#{version}_aarch64.dmg"
-    sha256 :no_check # Replace with actual sha256 after release
+    sha256 "4152825fbdefa1af77a4b5f92db83843b161662fe5f338b639620261fe058018"
   end
 
   on_intel do
-    url "https://github.com/hexagon-codes/hexclaw-desktop/releases/download/v#{version}/HexClaw_#{version}_x86_64.dmg"
-    sha256 :no_check # Replace with actual sha256 after release
+    # 注意：Tauri 实际产物文件名是 _x64.dmg，不是 _x86_64.dmg。前者错过会导致 brew 404
+    url "https://github.com/hexagon-codes/hexclaw-desktop/releases/download/v#{version}/HexClaw_#{version}_x64.dmg"
+    sha256 "13289fc919e289f31bbd0886a1bed156847080e5e3a05c023eab0eb134edd0f0"
   end
 
   name "HexClaw"
