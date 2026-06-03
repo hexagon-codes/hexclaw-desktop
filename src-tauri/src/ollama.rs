@@ -211,7 +211,7 @@ pub fn spawn_ollama(app: &tauri::AppHandle) -> Result<(), String> {
 
 /// 启动 Ollama 子进程
 fn spawn_ollama_child(path: &std::path::Path) -> Result<(), String> {
-    let enriched_path = crate::sidecar::enrich_path();
+    let enriched_path = crate::sidecar::enrich_path(None);
     let lib_dir = path.parent().unwrap_or(Path::new(".")).to_string_lossy().to_string();
 
     let mut cmd = Command::new(path);

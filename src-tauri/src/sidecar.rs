@@ -115,12 +115,15 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
         .ok_or("无法获取程序所在目录")?
         .join(binary_name);
 
+    // 解析 Tauri 资源目录（捆绑的 render-bundle / assets 在此）。
+    // 失败不阻塞（开发模式或异常布局下 resource_dir 可能不可达），仅打 warn。
+    let resource_dir = app.path().resource_dir().ok();
+
     if !binary_path.exists() {
         // 开发模式回退：从 resource_dir/binaries 查找
-        let resource_path = app
-            .path()
-            .resource_dir()
-            .map_err(|e| format!("获取资源路径失败: {}", e))?;
+        let resource_path = resource_dir
+            .clone()
+            .ok_or_else(|| "获取资源路径失败".to_string())?;
         let fallback_path = resource_path.join("binaries").join(binary_name);
         if !fallback_path.exists() {
             return Err(format!(
@@ -129,11 +132,11 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
             ));
         }
         ensure_port_available(HEXCLAW_PORT)?;
-        return spawn_child(&fallback_path);
+        return spawn_child(&fallback_path, resource_dir.as_deref());
     }
 
     ensure_port_available(HEXCLAW_PORT)?;
-    spawn_child(&binary_path)
+    spawn_child(&binary_path, resource_dir.as_deref())
 }
 
 /// 构建包含常用工具路径的 PATH
@@ -141,7 +144,10 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 /// macOS GUI 应用不继承用户 shell 的 PATH（不经过 .zshrc/.bashrc），
 /// 导致 sidecar 找不到 npx/node/python/docker 等命令。
 /// 将常用安装路径追加到当前 PATH。
-pub fn enrich_path() -> String {
+///
+/// `bundled_render_dir` 若提供（指向捆绑的 pandoc/typst 目录），**前置**到 PATH，
+/// 优先于系统 pandoc 被使用，保证渲染产物在不同机器上一致。
+pub fn enrich_path(bundled_render_dir: Option<&Path>) -> String {
     let current = std::env::var("PATH").unwrap_or_default();
     let extras: &[&str] = if cfg!(target_os = "macos") {
         &[
@@ -165,23 +171,45 @@ pub fn enrich_path() -> String {
             &format!("{}/.cargo/bin", std::env::var("HOME").unwrap_or_default()),
         ]
     };
-    let mut parts: Vec<&str> = current.split(':').collect();
+    let mut parts: Vec<String> = Vec::new();
+    // 捆绑的 render-bundle 优先级最高（如果存在）
+    if let Some(dir) = bundled_render_dir {
+        if dir.exists() {
+            parts.push(dir.to_string_lossy().into_owned());
+        }
+    }
+    for p in current.split(':') {
+        if !p.is_empty() && !parts.iter().any(|x| x == p) {
+            parts.push(p.to_string());
+        }
+    }
     for extra in extras {
-        if !parts.contains(extra) {
-            parts.push(extra);
+        if !parts.iter().any(|x| x == extra) {
+            parts.push((*extra).to_string());
         }
     }
     parts.join(":")
 }
 
-/// 启动子进程并记录 PID
-fn spawn_child(path: &std::path::Path) -> Result<(), String> {
-    // macOS GUI app 不继承 shell PATH，需要注入常用路径让 sidecar 能找到 npx/node/python 等
-    let enriched_path = enrich_path();
+/// 启动子进程并记录 PID。
+///
+/// `resource_dir` 是 Tauri 资源根，捆绑的 render-bundle 在 `<resource_dir>/render-bundle/`，
+/// 资产在 `<resource_dir>/assets/render/`。两者经 PATH + 环境变量传给 sidecar。
+fn spawn_child(path: &std::path::Path, resource_dir: Option<&std::path::Path>) -> Result<(), String> {
+    // macOS GUI app 不继承 shell PATH；同时把捆绑的 pandoc/typst 目录前置到 PATH，
+    // sidecar 的 exec.LookPath("pandoc") / LookPath("typst") 优先命中捆绑版。
+    let render_bundle_dir = resource_dir.map(|d| d.join("render-bundle"));
+    let enriched_path = enrich_path(render_bundle_dir.as_deref());
 
-    let mut child = Command::new(path)
-        .args(["serve", "--desktop"])
-        .env("PATH", &enriched_path)
+    let mut cmd = Command::new(path);
+    cmd.args(["serve", "--desktop"]).env("PATH", &enriched_path);
+
+    // 把资源根透传给 sidecar，main.go.resolveRenderAssetPaths 第一优先级查这里。
+    if let Some(d) = resource_dir {
+        cmd.env("HEXCLAW_RESOURCE_DIR", d);
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败: {}", e))?;
 
