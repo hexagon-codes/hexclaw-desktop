@@ -31,6 +31,8 @@ function resetMocks() {
     id: 's1', title: 'T', created_at: '', updated_at: '',
     message: 'ok', results: [], query: '',
     jobs: [], webhooks: [], name: '', url: '', next_run_at: '',
+    // D1.2 unified endpoint 默认返回 — createCronJob 需要 resp.job
+    action: 'create', ok: true, job: { id: 's1', name: 'T', next_run_at: '' },
   })
   invoke.mockResolvedValue('{"reply":"ok","session_id":"s1"}')
 }
@@ -192,10 +194,10 @@ describe('chatService 层: sendViaBackend user_id', () => {
 describe('跨模块一致性: chat + tasks + webhook 使用相同 user_id', () => {
   beforeEach(resetMocks)
 
-  it('tasks.getCronJobs 使用 DESKTOP_USER_ID', async () => {
+  it('tasks.getCronJobs 使用 DESKTOP_USER_ID (D1.2 走 unified body)', async () => {
     const { getCronJobs } = await import('@/api/tasks')
     await getCronJobs()
-    expect(mockFetch.mock.calls[0]?.[1]?.query?.user_id).toBe(EXPECTED_USER_ID)
+    expect(mockFetch.mock.calls[0]?.[1]?.body?.user_id).toBe(EXPECTED_USER_ID)
   })
 
   it('tasks.createCronJob 使用 DESKTOP_USER_ID', async () => {

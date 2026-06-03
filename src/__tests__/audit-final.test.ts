@@ -834,10 +834,20 @@ describe('7. API client robustness', () => {
     ]
 
     for (const [fn, method] of methodMap) {
-      // Find the function body
+      // 找 function 关键字位置
       const fnStart = content.indexOf(`function ${fn}`)
       expect(fnStart).toBeGreaterThan(-1)
-      const fnBody = content.slice(fnStart, content.indexOf('}', fnStart + 1) + 1)
+      // 用 brace 平衡找完整函数体（不依赖第一个 `}`，避免误把 if 块/对象字面量
+      // 的内 `}` 当函数体末尾，丢掉 method 字符串）
+      const openBrace = content.indexOf('{', fnStart)
+      let depth = 1
+      let cursor = openBrace + 1
+      while (cursor < content.length && depth > 0) {
+        if (content[cursor] === '{') depth++
+        else if (content[cursor] === '}') depth--
+        cursor++
+      }
+      const fnBody = content.slice(fnStart, cursor)
       expect(fnBody).toContain(`method: '${method}'`)
     }
   })

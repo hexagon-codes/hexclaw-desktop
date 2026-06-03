@@ -593,11 +593,12 @@ describe('Issue #12: API functions that send user_id use DESKTOP_USER_ID constan
     expect(constantsTs).toContain("'desktop-user'")
   })
 
-  it('tasks.ts deleteCronJob does NOT URL-encode the job id', () => {
-    // Also verifying tasks.ts path parameter handling as part of the user_id review
+  it('tasks.ts deleteCronJob 走 unified endpoint，不再有 path-param 编码需求 (D1.2)', () => {
     const tasksTs = readSrc('api/tasks.ts')
     const deleteBlock = tasksTs.match(/function deleteCronJob[\s\S]*?^}/m)?.[0] || ''
-    expect(deleteBlock).toContain('encodeURIComponent(id)')
+    // job_id 现在在 body 里，不在 URL path，所以不再需要 encodeURIComponent
+    expect(deleteBlock).toContain('cronjobAction(')
+    expect(deleteBlock).toContain("action: 'remove'")
   })
 })
 
@@ -750,17 +751,24 @@ describe('team.ts silent error fallback pattern (same concern as canvas)', () =>
 // 19. TASKS.TS: CRON JOB PATH PARAMS NOT URL-ENCODED
 // ════════════════════════════════════════════════════════════
 
-describe('tasks.ts: cron job id URL-encoded in path params (FIXED)', () => {
+describe('tasks.ts: cron job id 走 unified endpoint body (D1.2)', () => {
   const tasksTs = readSrc('api/tasks.ts')
 
-  const functionsWithId = ['deleteCronJob', 'pauseCronJob', 'resumeCronJob', 'triggerCronJob', 'getCronJobHistory']
-
-  for (const fn of functionsWithId) {
-    it(`${fn} uses encodeURIComponent for id param`, () => {
+  // D1.2: pause/resume/remove/run 把 id 放进 body.job_id，不在 URL path，所以不再需要 encodeURIComponent
+  const unifiedFunctions = ['deleteCronJob', 'pauseCronJob', 'resumeCronJob', 'triggerCronJob']
+  for (const fn of unifiedFunctions) {
+    it(`${fn} 通过 cronjobAction 调 unified endpoint`, () => {
       const block = tasksTs.match(new RegExp(`function ${fn}[\\s\\S]*?^}`, 'm'))?.[0] || ''
-      expect(block).toContain('encodeURIComponent(id)')
+      expect(block).toContain('cronjobAction(')
+      expect(block).toContain('job_id: id')
     })
   }
+
+  // history 仍是 GET path，需要继续 URL-encode
+  it('getCronJobHistory 仍 URL-encode id（与 unified action 正交）', () => {
+    const block = tasksTs.match(/function getCronJobHistory[\s\S]*?^}/m)?.[0] || ''
+    expect(block).toContain('encodeURIComponent(id)')
+  })
 })
 
 // ════════════════════════════════════════════════════════════
@@ -1031,14 +1039,27 @@ describe('timeout configuration across the stack', () => {
     expect(commandsRs).toContain('timeout(std::time::Duration::from_secs(30))')
   })
 
-  it('Rust stream_chat has 120s timeout (matches backend Agent processing)', () => {
-    expect(commandsRs).toContain('timeout(std::time::Duration::from_secs(120))')
+  // BUG-20260523-v1: stream_chat timeout 升 120→600s（claude/thinking 模型不够 2min）
+  it('Rust stream_chat has >=600s timeout (BUG-20260523-v1 fix)', () => {
+    const streamChatBlock = commandsRs.match(/async fn stream_chat[\s\S]*?^}/m)?.[0] || ''
+    expect(streamChatBlock).toContain('from_secs(600)')
+    expect(streamChatBlock).not.toContain('from_secs(120)')
   })
 
-  it('Rust backend_chat has 120s timeout (matches stream_chat)', () => {
-    // backend_chat should also be 120s
+  // BUG-20260523-v2: backend_chat 改 SSE 流式架构。
+  // 总时长 timeout 仅保留为 zombie 兜底（>= 1800s）；真实卡死用 chunk-间 idle timeout 检测。
+  it('Rust backend_chat uses SSE streaming architecture (BUG-20260523-v2 fix)', () => {
     const backendChatBlock = commandsRs.match(/async fn backend_chat[\s\S]*?^}/m)?.[0] || ''
-    expect(backendChatBlock).toContain('from_secs(120)')
+    // 契约 1：必须显式 Accept SSE
+    expect(backendChatBlock).toContain('text/event-stream')
+    // 契约 2：必须流式消费 body
+    expect(backendChatBlock).toContain('bytes_stream')
+    // 契约 3：必须 emit 增量 chunk 事件
+    expect(backendChatBlock).toContain('backend-chat-stream')
+    // 契约 4：必须有 chunk 间 idle timeout 检测
+    expect(backendChatBlock).toMatch(/idle|CHUNK_IDLE/)
+    // 契约 5：禁止回退到固定短 timeout（120s 是触发原 bug 的反模式）
+    expect(backendChatBlock).not.toContain('from_secs(120)')
   })
 
   it('ofetch client uses env.timeout', () => {
@@ -1132,9 +1153,10 @@ describe('Cross-file encodeURIComponent audit: which API functions encode path p
     expect(encodeCount).toBeGreaterThanOrEqual(8)
   })
 
-  it('tasks.ts: all 5 functions with id path param now encode (FIXED)', () => {
+  it('tasks.ts: 至少 history endpoint 还需 encodeURIComponent (D1.2 后)', () => {
+    // D1.2: pause/resume/remove/run 走 body 不再 URL-encode；getCronJobHistory 仍 path-param
     const src = readSrc('api/tasks.ts')
     const encodeCount = (src.match(/encodeURIComponent/g) || []).length
-    expect(encodeCount).toBeGreaterThanOrEqual(5)
+    expect(encodeCount).toBeGreaterThanOrEqual(1)
   })
 })

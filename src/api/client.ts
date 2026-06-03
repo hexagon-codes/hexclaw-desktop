@@ -41,16 +41,63 @@ export function apiGet<T>(url: string, query?: Record<string, unknown>) {
   return api<T>(url, { method: 'GET', query })
 }
 
+/** apiPost 可选参数 — 主要给"会触发慢上游"的接口（cron 编译）放宽 timeout */
+export interface ApiPostOptions {
+  /** 覆盖 env.timeout 默认值，单位 ms */
+  timeout?: number
+}
+
 /** POST 请求 */
-export function apiPost<T>(url: string, body?: Record<string, unknown> | FormData | object) {
-  const opts: Record<string, unknown> = { method: 'POST' }
+export function apiPost<T>(
+  url: string,
+  body?: Record<string, unknown> | FormData | object,
+  options?: ApiPostOptions,
+): Promise<T> {
+  // FormData 上传必须让浏览器自动加 `Content-Type: multipart/form-data; boundary=xxx`，
+  // 不能用 ofetch 默认的 `Content-Type: application/json`（boundary 缺失 server 解析失败）。
+  // ofetch headers 是 merge 不是 override，无法可靠地"删除"默认 Content-Type，
+  // 故 FormData 分支直接用原生 fetch 绕开。
   if (body instanceof FormData) {
-    opts.body = body
-    opts.headers = {}
-  } else if (body) {
-    opts.body = body as Record<string, unknown>
+    // timeout <= 0 视为无效输入回退 env.timeout，与 JSON 路径行为一致
+    const tm = options?.timeout && options.timeout > 0 ? options.timeout : env.timeout
+    return uploadFormData<T>(url, body, tm)
   }
+  const opts: Record<string, unknown> = { method: 'POST' }
+  if (body) opts.body = body as Record<string, unknown>
+  if (options?.timeout && options.timeout > 0) opts.timeout = options.timeout
   return api<T>(url, opts)
+}
+
+async function uploadFormData<T>(url: string, body: FormData, timeoutMs: number): Promise<T> {
+  const fullUrl = `${env.apiBase}${url}`
+  logger.debug(`→ POST ${fullUrl} (multipart)`)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(fullUrl, {
+      method: 'POST',
+      body,
+      signal: controller.signal,
+    })
+    logger.debug(`← ${response.status} POST ${fullUrl}`)
+    if (!response.ok) {
+      // 与 ofetch onResponseError 对齐：优先抽取 server body.error 字段（不只 statusText）
+      let serverMsg = response.statusText
+      try {
+        const data = (await response.clone().json()) as Record<string, unknown>
+        const detail = (data?.error ?? data?.message) as string | undefined
+        if (typeof detail === 'string' && detail.length > 0) serverMsg = detail
+      } catch {
+        // 非 JSON body 时降级用 statusText（不让 SyntaxError 覆盖原 HTTP 状态）
+      }
+      const apiErr = fromHttpStatus(response.status, serverMsg)
+      logger.error(`upload error: [${apiErr.code}] ${apiErr.message}`)
+      throw new Error(apiErr.message)
+    }
+    return (await response.json()) as T
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 /** PUT 请求 */

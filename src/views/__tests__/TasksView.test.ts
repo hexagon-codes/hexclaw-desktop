@@ -110,12 +110,18 @@ describe('TasksView', () => {
     await createBtn!.trigger('click')
     await flushPromises()
 
-    expect(taskApis.createCronJob).toHaveBeenCalledWith({
-      name: '晚报生成',
-      schedule: '@daily',
-      prompt: '生成今晚总结',
-      type: 'cron',
-    })
+    expect(taskApis.createCronJob).toHaveBeenCalledWith(
+      {
+        name: '晚报生成',
+        schedule: '@daily',
+        prompt: '生成今晚总结',
+        type: 'cron',
+      },
+      expect.objectContaining({
+        onProgress: expect.any(Function),
+        signal: expect.any(AbortSignal),
+      }),
+    )
     expect(taskApis.getCronJobs).toHaveBeenCalledTimes(2)
     expect(toast.success).toHaveBeenCalled()
   })

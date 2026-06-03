@@ -72,10 +72,14 @@ export interface SessionTitleSuggestionResponse {
 }
 
 /**
- * 通过 hexclaw 后端发送聊天消息
+ * 通过 hexclaw 后端发送聊天消息（SSE 流式 — BUG-20260523-v2 架构修复）
  *
- * 走 Rust `backend_chat` 命令 → hexclaw 后端 POST /api/v1/chat
+ * 走 Rust `backend_chat` 命令 → hexclaw 后端 POST /api/v1/chat（Accept: text/event-stream）
  * 后端处理完整 ReAct Agent 循环（含工具调用、RAG、搜索等）
+ *
+ * Rust 端会通过 `backend-chat-stream` 事件实时推 chunk；
+ * 本函数维持原签名向后兼容（等到 [DONE] 拿到累积 reply 才 resolve），
+ * 同时把每个 chunk 输出到 logger 便于排查全链路。
  */
 export async function sendChatViaBackend(
   message: string,
@@ -93,32 +97,78 @@ export async function sendChatViaBackend(
 ): Promise<BackendChatResponse> {
   const { invoke } = await import('@tauri-apps/api/core')
 
-  logger.debug(`→ backend_chat: ${message.slice(0, 50)}...`)
+  const reqId = options?.requestId || ''
+  const t0 = performance.now()
+  let chunkCount = 0
+  let lastChunkTs = t0
 
-  const text = await invoke<string>('backend_chat', {
-    params: {
-      message,
-      session_id: options?.sessionId || null,
-      role: options?.role || null,
-      provider: options?.provider || null,
-      user_id: DESKTOP_USER_ID,
-      model: options?.model || null,
-      temperature: options?.temperature ?? null,
-      max_tokens: options?.maxTokens ?? null,
-      request_id: options?.requestId ?? null,
-      metadata: options?.metadata || null,
-      attachments: options?.attachments || null,
-    },
-  })
+  logger.debug(`→ backend_chat: ${message.slice(0, 50)}... request_id=${reqId} model=${options?.model || ''}`)
 
-  let result: BackendChatResponse
+  // 监听本次请求的流式事件（按 request_id 过滤；req_id 为空时收所有以便兜底）。
+  // vitest 等无 Tauri runtime 环境下 @tauri-apps/api/event 不可用，graceful 退化为"不监听"——
+  // 不影响 invoke 主流程，仅失去 chunk 级别日志。
+  let unlisten: undefined | (() => void)
   try {
-    result = JSON.parse(text)
-  } catch {
-    throw new Error(`Backend returned a non-JSON response: ${text.slice(0, 200)}`)
+    const { listen } = await import('@tauri-apps/api/event')
+    unlisten = await listen<{ request_id: string; event_type: string; data: string }>(
+      'backend-chat-stream',
+      (evt) => {
+        const p = evt.payload
+        if (reqId && p.request_id && p.request_id !== reqId && p.request_id !== '(unset)') return
+
+        const now = performance.now()
+        const gap = Math.round(now - lastChunkTs)
+        lastChunkTs = now
+
+        switch (p.event_type) {
+          case 'chunk':
+            chunkCount += 1
+            logger.debug(`[backend_chat] chunk #${chunkCount} +${gap}ms data_len=${p.data.length}`)
+            break
+          case 'done':
+            logger.debug(`[backend_chat] [DONE] chunks=${chunkCount} elapsed=${Math.round(now - t0)}ms`)
+            break
+          case 'error':
+            logger.error(`[backend_chat] STREAM ERROR chunks=${chunkCount} err=${p.data}`)
+            break
+        }
+      },
+    )
+  } catch (e) {
+    logger.debug(`[backend_chat] event listener 不可用（${(e as Error).message}）— 跳过 chunk 日志`)
   }
-  logger.debug(`← backend_chat: reply=${(result?.reply ?? '').slice(0, 50)}... session=${result.session_id}`)
-  return result
+
+  try {
+    const text = await invoke<string>('backend_chat', {
+      params: {
+        message,
+        session_id: options?.sessionId || null,
+        role: options?.role || null,
+        provider: options?.provider || null,
+        user_id: DESKTOP_USER_ID,
+        model: options?.model || null,
+        temperature: options?.temperature ?? null,
+        max_tokens: options?.maxTokens ?? null,
+        request_id: options?.requestId ?? null,
+        metadata: options?.metadata || null,
+        attachments: options?.attachments || null,
+      },
+    })
+
+    let result: BackendChatResponse
+    try {
+      result = JSON.parse(text)
+    } catch {
+      throw new Error(`Backend returned a non-JSON response: ${text.slice(0, 200)}`)
+    }
+    const elapsed = Math.round(performance.now() - t0)
+    logger.debug(
+      `← backend_chat: reply_len=${(result?.reply ?? '').length} session=${result.session_id} chunks=${chunkCount} elapsed=${elapsed}ms`,
+    )
+    return result
+  } finally {
+    unlisten?.()
+  }
 }
 
 /** 兼容旧接口: 发送聊天消息 */

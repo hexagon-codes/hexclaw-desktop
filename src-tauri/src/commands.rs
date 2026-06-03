@@ -197,7 +197,10 @@ pub async fn stream_chat(app: tauri::AppHandle, params: StreamChatParams) -> Res
         .post(&url)
         .header("Content-Type", "application/json")
         .header("Authorization", format!("Bearer {}", params.api_key))
-        .timeout(std::time::Duration::from_secs(120))
+        // BUG-20260523: 升 120 → 600 秒（10 分钟）。
+        // claude / thinking 模型 + 多工具 + 长 prompt 推理常超 2 分钟，
+        // 旧 120s 会导致前端报 "error sending request for url"。
+        .timeout(std::time::Duration::from_secs(600))
         .body(body.to_string())
         .send()
         .await
@@ -311,13 +314,46 @@ pub struct BackendChatParams {
     pub attachments: Option<Vec<ChatAttachment>>,
 }
 
-/// 通过 hexclaw 后端 Agent 聊天
+/// 通过 hexclaw 后端 Agent 聊天 — **SSE 流式版**（BUG-20260523-v2 架构修复）
 ///
-/// 后端处理完整 ReAct Agent 循环（含工具调用、RAG、搜索等）。
-/// 超时 120 秒，匹配后端 2 分钟处理上限。
+/// 旧设计（同步阻塞）：HTTP POST 阻塞等 sidecar 把整个 ReAct 循环跑完才返回。
+/// 这迫使前端给一个"时长不可预测"的 LLM 操作设固定 HTTP 总超时（曾经 120s / 600s），
+/// 触发 "error sending request for url" + "Assistant reply stalled" 假错误。
+///
+/// 新设计（端到端 SSE）：
+///   1. 请求 header 带 `Accept: text/event-stream`，sidecar 走 SSE 分支
+///   2. 用 `bytes_stream` 增量消费响应体
+///   3. 每 chunk 通过 Tauri event `backend-chat-stream` 推前端
+///   4. 卡死判定改用 **chunk 间空闲超时**（idle timeout, 60s）—— 真实卡死才报错
+///   5. 总时长 timeout 保留 30 分钟仅作 zombie 兜底
+///
+/// 返回值：最终累积的 reply 文本（向后兼容，前端不监听 chunk 也能用）。
 #[tauri::command]
-pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {
+pub async fn backend_chat(
+    app: tauri::AppHandle,
+    params: BackendChatParams,
+) -> Result<String, String> {
+    /// chunk 间空闲超时：sidecar 60s 没新 chunk 即判卡死。
+    /// 比"总时长 timeout"更符合 streaming 语义——chunk 持续到来证明系统还活着。
+    const CHUNK_IDLE_TIMEOUT_SECS: u64 = 60;
+    /// 总时长 timeout：仅作 zombie 连接兜底。
+    /// streaming 架构下不应作 LLM SLA 边界（LLM 复杂任务 30 min 也可能正常完成）。
+    const ZOMBIE_TIMEOUT_SECS: u64 = 1800;
+
     let url = format!("{}/api/v1/chat", sidecar::base_url());
+    let request_id_for_log = params
+        .request_id
+        .as_deref()
+        .unwrap_or("(unset)")
+        .to_string();
+
+    log::info!(
+        "[backend_chat] → 准备 SSE 请求 url={} session={:?} model={:?} request_id={}",
+        url,
+        params.session_id.as_deref().unwrap_or(""),
+        params.model.as_deref().unwrap_or(""),
+        request_id_for_log,
+    );
 
     let mut body = serde_json::json!({
         "message": params.message,
@@ -352,23 +388,160 @@ pub async fn backend_chat(params: BackendChatParams) -> Result<String, String> {
     let resp = client
         .post(&url)
         .header("Content-Type", "application/json")
-        .timeout(std::time::Duration::from_secs(120))
+        .header("Accept", "text/event-stream") // ★ 触发 sidecar SSE 分支
+        // 仅作 zombie 兜底（30 min）。真实卡死由 CHUNK_IDLE_TIMEOUT_SECS 检测。
+        .timeout(std::time::Duration::from_secs(ZOMBIE_TIMEOUT_SECS))
         .body(body.to_string())
         .send()
         .await
-        .map_err(|e| format!("请求失败: {}", e))?;
+        .map_err(|e| {
+            log::error!("[backend_chat] HTTP 请求失败 request_id={} err={}", request_id_for_log, e);
+            format!("请求失败: {}", e)
+        })?;
 
     let status = resp.status().as_u16();
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败: {}", e))?;
+    log::info!(
+        "[backend_chat] ← 收到 HTTP 响应 status={} request_id={} ct={:?}",
+        status,
+        request_id_for_log,
+        resp.headers().get("content-type").and_then(|v| v.to_str().ok()),
+    );
 
     if status >= 400 {
+        let text = resp.text().await.unwrap_or_default();
+        log::error!("[backend_chat] HTTP {} body={} request_id={}", status, text, request_id_for_log);
         return Err(format!("HTTP {}: {}", status, text));
     }
 
-    Ok(text)
+    // 增量消费 SSE 流；每 chunk emit 一次 event；按行解析 `data: ...`
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
+    let mut accumulated_reply = String::new();
+    let mut chunk_count: u64 = 0;
+    let idle = std::time::Duration::from_secs(CHUNK_IDLE_TIMEOUT_SECS);
+
+    loop {
+        // chunk 间 idle timeout：60s 没新 bytes 即判卡死。
+        match tokio::time::timeout(idle, stream.next()).await {
+            Err(_) => {
+                log::error!(
+                    "[backend_chat] CHUNK_IDLE_TIMEOUT 触发 — sidecar {}s 无新 chunk \
+                     已收 {} chunks request_id={}",
+                    CHUNK_IDLE_TIMEOUT_SECS,
+                    chunk_count,
+                    request_id_for_log,
+                );
+                let _ = app.emit(
+                    "backend-chat-stream",
+                    BackendChatStreamEvent {
+                        request_id: request_id_for_log.clone(),
+                        event_type: "error".into(),
+                        data: format!(
+                            "上游 {}s 无新数据，判定卡死（已收 {} chunks）",
+                            CHUNK_IDLE_TIMEOUT_SECS, chunk_count
+                        ),
+                    },
+                );
+                return Err(format!(
+                    "Sidecar {}s 无新 chunk，疑似卡死",
+                    CHUNK_IDLE_TIMEOUT_SECS
+                ));
+            }
+            Ok(None) => break, // 流自然结束
+            Ok(Some(Err(e))) => {
+                log::error!(
+                    "[backend_chat] 读 stream 失败 chunks_so_far={} request_id={} err={}",
+                    chunk_count, request_id_for_log, e
+                );
+                return Err(format!("读取流失败: {}", e));
+            }
+            Ok(Some(Ok(bytes))) => {
+                buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+                // SSE 按 `\n\n` 分事件，但 chunked 边界不对齐——逐行扫 `data: `
+                while let Some(pos) = buffer.find('\n') {
+                    let line = buffer[..pos].trim().to_string();
+                    buffer = buffer[pos + 1..].to_string();
+                    if !line.starts_with("data: ") {
+                        continue;
+                    }
+                    let payload = &line[6..];
+
+                    if payload == "[DONE]" {
+                        log::info!(
+                            "[backend_chat] [DONE] 收到 chunks={} reply_len={} request_id={}",
+                            chunk_count, accumulated_reply.len(), request_id_for_log
+                        );
+                        let _ = app.emit(
+                            "backend-chat-stream",
+                            BackendChatStreamEvent {
+                                request_id: request_id_for_log.clone(),
+                                event_type: "done".into(),
+                                data: String::new(),
+                            },
+                        );
+                        // 返回累积的 reply（向后兼容：前端不监听 event 也能拿到完整内容）
+                        return Ok(serde_json::json!({
+                            "reply": accumulated_reply,
+                            "session_id": "",
+                        })
+                        .to_string());
+                    }
+
+                    chunk_count += 1;
+
+                    // 解析 chunk JSON 累积 content（reasoning / metadata 仅 emit 不累积到 reply）
+                    if let Ok(j) = serde_json::from_str::<serde_json::Value>(payload) {
+                        if let Some(c) = j.get("content").and_then(|v| v.as_str()) {
+                            accumulated_reply.push_str(c);
+                        }
+                        if let Some(err_msg) = j.get("error").and_then(|v| v.as_str()) {
+                            log::error!(
+                                "[backend_chat] chunk 含 error chunk={} err={} request_id={}",
+                                chunk_count, err_msg, request_id_for_log
+                            );
+                            let _ = app.emit(
+                                "backend-chat-stream",
+                                BackendChatStreamEvent {
+                                    request_id: request_id_for_log.clone(),
+                                    event_type: "error".into(),
+                                    data: err_msg.to_string(),
+                                },
+                            );
+                            return Err(err_msg.to_string());
+                        }
+                    }
+
+                    let _ = app.emit(
+                        "backend-chat-stream",
+                        BackendChatStreamEvent {
+                            request_id: request_id_for_log.clone(),
+                            event_type: "chunk".into(),
+                            data: payload.to_string(),
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    log::warn!(
+        "[backend_chat] 流自然结束但未见 [DONE] chunks={} reply_len={} request_id={}",
+        chunk_count, accumulated_reply.len(), request_id_for_log
+    );
+    Ok(serde_json::json!({
+        "reply": accumulated_reply,
+        "session_id": "",
+    })
+    .to_string())
+}
+
+/// backend_chat 的流式事件载荷（向前端推 chunk / done / error）。
+#[derive(Clone, Serialize)]
+pub struct BackendChatStreamEvent {
+    pub request_id: String,
+    pub event_type: String, // "chunk" / "done" / "error"
+    pub data: String,
 }
 
 /// 获取平台信息
@@ -503,4 +676,108 @@ pub fn save_bytes_to_path(base64_data: String, path: String) -> Result<u64, Stri
     }
     std::fs::write(&p, &bytes).map_err(|e| format!("写入失败: {}", e))?;
     Ok(bytes.len() as u64)
+}
+
+// ─── 文档渲染（POST /api/v1/render → 流式直写文件）──────────────────
+//
+// markdown → docx/pdf/epub/odt/rtf/txt/html/md，由 sidecar 渲染层处理。
+//
+// 关键设计（详见 hexclaw/.claude/doc-generation-architecture.md）：
+//   - reqwest 流式下载 sidecar 响应 → tokio::fs::File 直写用户选定路径
+//   - **不经过 base64 / 不进 JS string**——避免 100 MB 输出在三处放大内存
+//   - 复用 validate_save_path 路径校验
+//   - 错误分支按 sidecar 返回的 RenderError JSON 透传
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct RenderOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    #[serde(rename = "AllowRawHTML", skip_serializing_if = "is_false_ref")]
+    pub allow_raw_html: bool,
+    #[serde(rename = "AllowRawTeX", skip_serializing_if = "is_false_ref")]
+    pub allow_raw_tex: bool,
+}
+
+fn is_false_ref(b: &bool) -> bool { !*b }
+
+#[derive(Debug, Serialize)]
+struct RenderRequest<'a> {
+    content: &'a str,
+    format: &'a str,
+    #[serde(skip_serializing_if = "str::is_empty")]
+    title: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    options: Option<&'a RenderOptions>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RenderErrorResponse {
+    error: RenderError,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct RenderError {
+    pub code: String,
+    #[serde(default)]
+    pub format: String,
+    #[serde(default)]
+    pub engine: String,
+    #[serde(default)]
+    pub detail: String,
+}
+
+/// 渲染 markdown artifact 并流式写入用户选定的本地路径。
+#[tauri::command]
+pub async fn render_artifact_to_path(
+    content: String,
+    format: String,
+    target_path: String,
+    title: Option<String>,
+    options: Option<RenderOptions>,
+) -> Result<u64, String> {
+    use tokio::io::AsyncWriteExt;
+
+    let p = validate_save_path(&target_path)?;
+
+    let title_str = title.unwrap_or_default();
+    let body = RenderRequest {
+        content: &content,
+        format: &format,
+        title: &title_str,
+        options: options.as_ref(),
+    };
+
+    let url = format!("{}/api/v1/render", sidecar::base_url());
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .json(&body)
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .map_err(|e| format!("sidecar 不可达: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        if let Ok(err_resp) = serde_json::from_str::<RenderErrorResponse>(&text) {
+            return Err(serde_json::to_string(&err_resp.error).unwrap_or(text));
+        }
+        return Err(format!("HTTP {}: {}", status.as_u16(), text));
+    }
+
+    let mut file = tokio::fs::File::create(&p)
+        .await
+        .map_err(|e| format!("创建文件失败: {}", e))?;
+
+    let mut stream = resp.bytes_stream();
+    let mut total: u64 = 0;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("读取响应流失败: {}", e))?;
+        file.write_all(&chunk)
+            .await
+            .map_err(|e| format!("写入失败: {}", e))?;
+        total += chunk.len() as u64;
+    }
+    file.flush().await.map_err(|e| format!("flush 失败: {}", e))?;
+    Ok(total)
 }

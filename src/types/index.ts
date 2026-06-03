@@ -25,7 +25,7 @@ export type {
 } from './memory'
 export type { McpServer, McpTool } from './mcp'
 export type { Skill, ClawHubSkill, SkillStatusUpdateResult } from './skill'
-export type { CronJob, CronJobInput } from './task'
+export type { CronJob, CronJobInput, JobSpec } from './task'
 export type { KnowledgeDoc, KnowledgeSearchResult } from './knowledge'
 export type {
   CanvasNode,

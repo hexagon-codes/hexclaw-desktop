@@ -225,12 +225,17 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
   ): Promise<ConversationAutomationResult> {
     switch (action.kind) {
       case 'create_task': {
-        const created = await createCronJob(action.payload)
+        // chat 自动化创建任务 — 走 SSE 流式编译，progress 透传到 action 卡片
+        const created = await createCronJob(action.payload, {
+          onProgress: (p) => {
+            action.progress = { stage: p.stage, message: p.message }
+          },
+        })
         return {
-          summary: `已创建任务「${created.name || action.payload.name}」`,
+          summary: `已创建任务「${created.job.name || action.payload.name}」`,
           items: [
             { title: '计划', content: action.payload.schedule },
-            { title: '下一次执行', content: created.next_run_at || '等待调度' },
+            { title: '下一次执行', content: created.job.next_run_at || '等待调度' },
           ],
         }
       }

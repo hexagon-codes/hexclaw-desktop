@@ -31,7 +31,7 @@ import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
-import { useToast, useConversationAutomation, useChatSend, useChatActions } from '@/composables'
+import { useToast, useConversationAutomation, useChatSend, useChatActions, useCronCompileLabel } from '@/composables'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { openSanitizedArtifact } from '@/utils/safe-html'
@@ -825,6 +825,8 @@ const {
   dismissConversationAction,
 } = useConversationAutomation(chatStore, toast, t)
 
+const { stageLabel: cronStageLabel } = useCronCompileLabel()
+
 const { handleSend } = useChatSend({
   chatStore,
   parsedDocument,
@@ -1574,6 +1576,19 @@ function startSidebarResize(event: MouseEvent) {
                           {{ automationStatusLabel(action.status) }}
                         </span>
                       </div>
+                      <div
+                        v-if="action.kind === 'create_task' && action.status === 'running'"
+                        class="hc-msg__automation-progress"
+                        data-testid="automation-progress"
+                      >
+                        <span class="hc-msg__automation-progress-dot" />
+                        <span class="hc-msg__automation-progress-text">
+                          {{ action.progress ? cronStageLabel(action.progress.stage) : t('chat.cronStageStarting', '准备编译脚本…') }}
+                        </span>
+                        <span class="hc-msg__automation-progress-hint">
+                          {{ t('chat.cronCompileHint', '本地模型推理约 30-90 秒，无需重复点击') }}
+                        </span>
+                      </div>
                       <div v-if="action.result" class="hc-msg__automation-result">
                         <div class="hc-msg__automation-summary">{{ action.result.summary }}</div>
                         <div v-if="action.result.items?.length" class="hc-msg__automation-items">
@@ -2297,12 +2312,56 @@ function startSidebarResize(event: MouseEvent) {
   margin-top: 0.5em;
 }
 
-.hc-msg__bubble--empty {
-  background: color-mix(in srgb, var(--hc-text-secondary) 5%, var(--hc-bg-card));
-  border-style: dashed;
+/* ─── 空回复 fallback（Apple HIG：温和系统提示卡片） ───
+ * 设计原则：
+ *   清晰 — 左侧 info 图标明确告知是"系统提示"而非对话内容
+ *   服从 — 弱化但不消失：次要色 + 轻量背景层级
+ *   深度 — 0.5px 细边框 + 极轻阴影替代 HIG 禁忌的粗 dashed 边框
+ * 用 `.hc-msg__bubble.hc-msg__bubble--empty` 双类提升 specificity，
+ * 覆盖 `.hc-msg__bubble--assistant` 的 padding=0 / border=none / border-radius=0。
+ */
+.hc-msg__bubble.hc-msg__bubble--empty {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: 100%;
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--hc-text-secondary) 6%, var(--hc-bg-card));
+  border: 0.5px solid color-mix(in srgb, var(--hc-text-secondary) 14%, transparent);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   color: var(--hc-text-secondary);
-  font-style: italic;
   font-size: 13px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.55;
+  letter-spacing: 0;
+  animation: hc-empty-reply-in 280ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* SF Symbols 风格 info.circle 图标（线性 2px stroke / 18×18 / mask 注入便于跟随文字色） */
+.hc-msg__bubble.hc-msg__bubble--empty::before {
+  content: '';
+  flex: 0 0 18px;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  background-color: currentColor;
+  opacity: 0.55;
+  -webkit-mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><line x1='12' y1='8' x2='12' y2='12'/><line x1='12' y1='16' x2='12.01' y2='16'/></svg>") center/contain no-repeat;
+          mask: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='9'/><line x1='12' y1='8' x2='12' y2='12'/><line x1='12' y1='16' x2='12.01' y2='16'/></svg>") center/contain no-repeat;
+}
+
+@keyframes hc-empty-reply-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* HIG 无障碍：尊重系统"减弱动效"偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .hc-msg__bubble.hc-msg__bubble--empty {
+    animation: none;
+  }
 }
 
 .hc-msg__bubble--user {
@@ -3180,6 +3239,46 @@ function startSidebarResize(event: MouseEvent) {
   color: var(--hc-text-muted);
   font-size: 10px;
   font-weight: 600;
+}
+
+.hc-msg__automation-progress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--hc-bg-hover);
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+}
+
+.hc-msg__automation-progress-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hc-accent);
+  animation: hc-automation-pulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes hc-automation-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.7); }
+  50%      { opacity: 1;    transform: scale(1.2); }
+}
+
+.hc-msg__automation-progress-text {
+  font-weight: 500;
+  color: var(--hc-text-primary);
+}
+
+.hc-msg__automation-progress-hint {
+  flex-basis: 100%;
+  margin-left: 16px;
+  font-size: 11px;
+  opacity: 0.72;
+  line-height: 1.4;
 }
 
 .hc-msg__automation-result,

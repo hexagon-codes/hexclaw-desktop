@@ -23,39 +23,54 @@ describe('Tasks (Cron) Edge Cases', () => {
   })
 
   // ─── getCronJobs ─────────────────────────────────
+  // D1.2: 改走 POST /api/v1/cronjob action=list
 
   describe('getCronJobs', () => {
-    it('calls GET /api/v1/cron/jobs with user_id', async () => {
+    it('calls POST /api/v1/cronjob action=list', async () => {
       mockFetch.mockResolvedValue({ jobs: [], total: 0 })
       await getCronJobs()
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/cron/jobs',
-        expect.objectContaining({ method: 'GET', query: expect.objectContaining({ user_id: expect.any(String) }) }),
+        '/api/v1/cronjob',
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.objectContaining({ action: 'list' }),
+        }),
       )
     })
   })
 
   // ─── createCronJob ───────────────────────────────
+  // D1.2: 走 unified endpoint action=create + draft 包装
 
   describe('createCronJob', () => {
     it('defaults type to "cron" when not provided', async () => {
-      mockFetch.mockResolvedValue({ id: 'j1', name: 'test', next_run_at: '2024-01-01' })
+      mockFetch.mockResolvedValue({ action: 'create', job: { id: 'j1', name: 'test', next_run_at: '2024-01-01' } })
       await createCronJob({ name: 'test', schedule: '0 * * * *', prompt: 'do something' })
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/cron/jobs',
+        '/api/v1/cronjob',
         expect.objectContaining({
-          body: expect.objectContaining({ type: 'cron' }),
+          body: expect.objectContaining({
+            action: 'create',
+            draft: expect.objectContaining({
+              name: 'test',
+              schedule: '0 * * * *',
+              prompt: 'do something',
+            }),
+          }),
         }),
       )
     })
 
-    it('uses provided type', async () => {
-      mockFetch.mockResolvedValue({ id: 'j1', name: 'test', next_run_at: '2024-01-01' })
-      await createCronJob({ name: 'test', schedule: '0 * * * *', prompt: 'do', type: 'once' })
+    it('passes through schedule and prompt', async () => {
+      mockFetch.mockResolvedValue({ action: 'create', job: { id: 'j1', name: 'x', next_run_at: '2024-01-01' } })
+      await createCronJob({ name: 'x', schedule: '@daily', prompt: 'p' })
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/cron/jobs',
+        '/api/v1/cronjob',
         expect.objectContaining({
-          body: expect.objectContaining({ type: 'once' }),
+          body: expect.objectContaining({
+            action: 'create',
+            draft: expect.objectContaining({ schedule: '@daily', prompt: 'p' }),
+          }),
         }),
       )
     })
@@ -64,38 +79,54 @@ describe('Tasks (Cron) Edge Cases', () => {
   // ─── deleteCronJob ───────────────────────────────
 
   describe('deleteCronJob', () => {
-    it('calls DELETE /api/v1/cron/jobs/:id', async () => {
-      mockFetch.mockResolvedValue({ message: 'deleted' })
+    it('calls POST /api/v1/cronjob action=remove', async () => {
+      mockFetch.mockResolvedValue({ action: 'remove', ok: true })
       await deleteCronJob('j1')
-      expect(mockFetch).toHaveBeenCalledWith('/api/v1/cron/jobs/j1', expect.objectContaining({ method: 'DELETE' }))
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/v1/cronjob',
+        expect.objectContaining({
+          body: expect.objectContaining({ action: 'remove', job_id: 'j1' }),
+        }),
+      )
     })
   })
 
   // ─── pauseCronJob / resumeCronJob ────────────────
 
   describe('pauseCronJob', () => {
-    it('calls POST /api/v1/cron/jobs/:id/pause', async () => {
-      mockFetch.mockResolvedValue({ message: 'paused' })
+    it('calls POST /api/v1/cronjob action=pause', async () => {
+      mockFetch.mockResolvedValue({ action: 'pause', ok: true })
       await pauseCronJob('j1')
-      expect(mockFetch).toHaveBeenCalledWith('/api/v1/cron/jobs/j1/pause', expect.objectContaining({ method: 'POST' }))
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/v1/cronjob',
+        expect.objectContaining({
+          body: expect.objectContaining({ action: 'pause', job_id: 'j1' }),
+        }),
+      )
     })
   })
 
   describe('resumeCronJob', () => {
-    it('calls POST /api/v1/cron/jobs/:id/resume', async () => {
-      mockFetch.mockResolvedValue({ message: 'resumed' })
+    it('calls POST /api/v1/cronjob action=resume', async () => {
+      mockFetch.mockResolvedValue({ action: 'resume', ok: true })
       await resumeCronJob('j1')
-      expect(mockFetch).toHaveBeenCalledWith('/api/v1/cron/jobs/j1/resume', expect.objectContaining({ method: 'POST' }))
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/v1/cronjob',
+        expect.objectContaining({
+          body: expect.objectContaining({ action: 'resume', job_id: 'j1' }),
+        }),
+      )
     })
   })
 
   // ─── triggerCronJob ──────────────────────────────
 
   describe('triggerCronJob', () => {
-    it('calls POST /api/v1/cron/jobs/:id/trigger', async () => {
-      mockFetch.mockResolvedValue({ message: 'triggered', run_id: 'run-1' })
+    it('calls POST /api/v1/cronjob action=run', async () => {
+      mockFetch.mockResolvedValue({ action: 'run', ok: true })
       const result = await triggerCronJob('j1')
-      expect(result.run_id).toBe('run-1')
+      // unified endpoint 不返 run_id，返 ok。客户端封装返默认 message。
+      expect(result.message).toBeTruthy()
     })
   })
 

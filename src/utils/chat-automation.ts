@@ -37,6 +37,11 @@ export interface CreateTaskAction extends ConversationAutomationActionBase {
     schedule: string
     prompt: string
   }
+  // cron 编译 SSE 4 阶段进度透传到 UI 自动化卡片
+  progress?: {
+    stage: 'analyzing' | 'calling_llm' | 'validating' | 'persisting'
+    message: string
+  }
 }
 
 export interface TaskTargetAction extends ConversationAutomationActionBase {

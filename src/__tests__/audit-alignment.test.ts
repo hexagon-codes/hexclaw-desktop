@@ -341,8 +341,11 @@ describe('1. API Request/Response Shape Validation', () => {
       vi.resetModules()
     })
 
-    it('createCronJob sends user_id and defaults type to "cron"', async () => {
-      const mockPost = vi.fn().mockResolvedValue({ id: 'j1', name: 'job', next_run_at: '' })
+    it('createCronJob sends action=create with draft (D1.2 unified)', async () => {
+      const mockPost = vi.fn().mockResolvedValue({
+        action: 'create',
+        job: { id: 'j1', name: 'daily', next_run_at: '' },
+      })
       vi.doMock('@/api/client', () => ({
         apiGet: vi.fn(),
         apiPost: mockPost,
@@ -352,13 +355,19 @@ describe('1. API Request/Response Shape Validation', () => {
       const { createCronJob } = await import('@/api/tasks')
       await createCronJob({ name: 'daily', schedule: '0 9 * * *', prompt: 'hello' })
 
-      expect(mockPost).toHaveBeenCalledWith('/api/v1/cron/jobs', {
-        name: 'daily',
-        schedule: '0 9 * * *',
-        prompt: 'hello',
-        type: 'cron',
-        user_id: 'desktop-user',
-      })
+      expect(mockPost).toHaveBeenCalledWith(
+        '/api/v1/cronjob',
+        expect.objectContaining({
+          action: 'create',
+          user_id: 'desktop-user',
+          draft: expect.objectContaining({
+            name: 'daily',
+            schedule: '0 9 * * *',
+            prompt: 'hello',
+          }),
+        }),
+        expect.objectContaining({ timeout: expect.any(Number) }),
+      )
     })
 
     it('getCronJobHistory normalizes both history and runs response keys', async () => {

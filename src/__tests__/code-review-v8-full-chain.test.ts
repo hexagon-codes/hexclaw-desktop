@@ -378,12 +378,17 @@ describe('Task/Cron 任务链路', () => {
     expect(tasksSrc).toContain("started_at: r.started_at || r.run_at || ''")
   })
 
-  it('所有 CRUD 操作路径与后端对齐（使用 encodeURIComponent）', () => {
-    expect(tasksSrc).toContain("'/api/v1/cron/jobs'")
-    expect(tasksSrc).toContain('`/api/v1/cron/jobs/${encodeURIComponent(id)}`')
-    expect(tasksSrc).toContain('`/api/v1/cron/jobs/${encodeURIComponent(id)}/pause`')
-    expect(tasksSrc).toContain('`/api/v1/cron/jobs/${encodeURIComponent(id)}/resume`')
-    expect(tasksSrc).toContain('`/api/v1/cron/jobs/${encodeURIComponent(id)}/trigger`')
+  it('所有 CRUD 走 unified endpoint /api/v1/cronjob (D1.2)', () => {
+    expect(tasksSrc).toContain("'/api/v1/cronjob'")
+    // 7 action 都通过 cronjobAction 包装路由到 unified endpoint
+    expect(tasksSrc).toContain('cronjobAction(')
+    expect(tasksSrc).toContain("action: 'create'")
+    expect(tasksSrc).toContain("action: 'remove'")
+    expect(tasksSrc).toContain("action: 'pause'")
+    expect(tasksSrc).toContain("action: 'resume'")
+    expect(tasksSrc).toContain("action: 'run'")
+    expect(tasksSrc).toContain("action: 'list'")
+    // history 仍是 GET（与 unified action 正交）
     expect(tasksSrc).toContain('`/api/v1/cron/jobs/${encodeURIComponent(id)}/history`')
   })
 })
@@ -741,8 +746,10 @@ describe('安全审计', () => {
   it('后端 chat 请求体应限制大小（MaxBytesReader）', () => {
     // 检查 handleSaveMemory 有 MaxBytesReader(1MB) 限制
     // 但 handleChat 有类似保护吗？
-    // backend_chat 通过 reqwest 120s 超时限制
-    expect(commandsSrc).toContain('timeout(std::time::Duration::from_secs(120))')
+    // BUG-20260523-v2: backend_chat 改 SSE 流式后，HTTP 总时长 timeout
+    // 仅作 zombie 兜底（>= 1800s）；用 chunk 间 idle timeout (60s) 检测真实卡死。
+    // commands.rs 整文件仍有 from_secs(120) 是 /api/v1/render 的 timeout（与 chat 无关）。
+    expect(commandsSrc).toMatch(/from_secs\((1800|3600|600)\)/)
   })
 })
 
@@ -786,13 +793,10 @@ describe('前后端 API 对齐', () => {
       'GET /api/v1/webhooks',
       'POST /api/v1/webhooks',
       'DELETE /api/v1/webhooks/{id}',
-      // Cron
-      'GET /api/v1/cron/jobs',
-      'POST /api/v1/cron/jobs',
-      'DELETE /api/v1/cron/jobs/{id}',
-      'POST /api/v1/cron/jobs/{id}/pause',
-      'POST /api/v1/cron/jobs/{id}/resume',
-      'POST /api/v1/cron/jobs/{id}/trigger',
+      // Cron (D1.2 统一 endpoint)
+      'POST /api/v1/cronjob',
+      'POST /api/v1/cron/parse',
+      'POST /api/v1/cron/jobs/stream',
       'GET /api/v1/cron/jobs/{id}/history',
       // Memory
       'GET /api/v1/memory',

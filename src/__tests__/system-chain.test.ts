@@ -106,7 +106,10 @@ const {
   mockDeleteDocument: vi.fn().mockResolvedValue({ message: 'deleted' }),
   mockReindexDocument: vi.fn().mockResolvedValue({ status: 'ok' }),
 
-  mockCreateCronJob: vi.fn().mockResolvedValue({ id: 'job-1', name: 'Daily Report', next_run_at: '2026-01-02T09:00:00Z' }),
+  mockCreateCronJob: vi.fn().mockResolvedValue({
+    job: { id: 'job-1', name: 'Daily Report', next_run_at: '2026-01-02T09:00:00Z' },
+    spec_preview: { runtime: 'python3', script: '', deps: [], timeout_s: 60, compiled: { model: '', at: '', tokens_in: 0, tokens_out: 0, hash: '' } },
+  }),
   mockGetCronJobs: vi.fn().mockResolvedValue({ jobs: [], total: 0 }),
   mockDeleteCronJob: vi.fn().mockResolvedValue({ message: 'deleted' }),
   mockPauseCronJob: vi.fn().mockResolvedValue({ message: 'paused' }),
@@ -680,15 +683,15 @@ describe('Chain 4: Conversation Automation', () => {
     store.currentSessionId = 's1'
 
     mockCreateCronJob.mockResolvedValueOnce({
-      id: 'job-1',
-      name: '检查邮件',
-      next_run_at: '2026-01-02T09:00:00Z',
+      job: { id: 'job-1', name: '检查邮件', next_run_at: '2026-01-02T09:00:00Z' },
+      spec_preview: { runtime: 'python3', script: '', deps: [], timeout_s: 60, compiled: { model: '', at: '', tokens_in: 0, tokens_out: 0, hash: '' } },
     })
 
     await automation.handleConversationAction('a1', 'act-1')
 
     expect(mockCreateCronJob).toHaveBeenCalledWith(
       expect.objectContaining({ name: '检查邮件', schedule: '0 9 * * *' }),
+      expect.objectContaining({ onProgress: expect.any(Function) }),
     )
     expect(toast.success).toHaveBeenCalled()
 

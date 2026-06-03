@@ -81,29 +81,31 @@ describe('旅程 A: 知识库全流程', () => {
 describe('旅程 B: 定时任务全流程', () => {
   beforeEach(() => { mockApiFetch.mockReset() })
 
-  it('创建 → 暂停 → 恢复 → 触发 → 查看历史', async () => {
-    // 创建
-    mockApiFetch.mockResolvedValueOnce({ id: 'job-1', name: '日报生成', next_run_at: '2026-04-04T09:00:00Z' })
+  it('创建 → 暂停 → 恢复 → 触发 → 查看历史（D1.2 unified endpoint）', async () => {
+    mockApiFetch.mockResolvedValueOnce({
+      action: 'create',
+      job: { id: 'job-1', name: '日报生成', next_run_at: '2026-04-04T09:00:00Z' },
+    })
     const { createCronJob } = await import('@/api/tasks')
-    const job = await createCronJob({ name: '日报生成', schedule: '0 9 * * *', prompt: '生成今天的日报', type: 'cron' })
-    expect(job.name).toBe('日报生成')
+    const result = await createCronJob({ name: '日报生成', schedule: '0 9 * * *', prompt: '生成今天的日报', type: 'cron' })
+    expect(result.job.name).toBe('日报生成')
+    const job = result.job
 
-    // 暂停
-    mockApiFetch.mockResolvedValueOnce({ message: 'paused' })
+    mockApiFetch.mockResolvedValueOnce({ action: 'pause', ok: true })
     const { pauseCronJob } = await import('@/api/tasks')
     await pauseCronJob(job.id)
-    expect(mockApiFetch).toHaveBeenLastCalledWith('POST', `/api/v1/cron/jobs/${job.id}/pause`)
+    expect(mockApiFetch).toHaveBeenLastCalledWith('POST', '/api/v1/cronjob', expect.objectContaining({
+      action: 'pause', job_id: job.id,
+    }))
 
-    // 恢复
-    mockApiFetch.mockResolvedValueOnce({ message: 'resumed' })
+    mockApiFetch.mockResolvedValueOnce({ action: 'resume', ok: true })
     const { resumeCronJob } = await import('@/api/tasks')
     await resumeCronJob(job.id)
 
-    // 触发
-    mockApiFetch.mockResolvedValueOnce({ message: 'triggered', run_id: 'run-001' })
+    mockApiFetch.mockResolvedValueOnce({ action: 'run', ok: true })
     const { triggerCronJob } = await import('@/api/tasks')
     const trig = await triggerCronJob(job.id)
-    expect(trig.run_id).toBe('run-001')
+    expect(trig.message).toBeTruthy()
 
     // 查看历史
     mockApiFetch.mockResolvedValueOnce({

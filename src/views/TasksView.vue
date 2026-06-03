@@ -2,8 +2,11 @@
 import { onMounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime } from '@/utils/time'
-import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader } from 'lucide-vue-next'
-import { getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory, type CronJob, type CronJobInput, type CronJobRun } from '@/api/tasks'
+import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader, Code, AlertTriangle, Clock3 } from 'lucide-vue-next'
+import {
+  getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory,
+  type CronJob, type CronJobInput, type CronJobRun, type CronCompileProgress, type CronCompileStage,
+} from '@/api/tasks'
 import { useToast } from '@/composables'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -41,6 +44,32 @@ const deletingJobs = ref<Set<string>>(new Set())
 const jobHistories = ref<Record<string, CronJobRun[]>>({})
 const expandedJobId = ref<string | null>(null)
 const expandedRunId = ref<string | null>(null)
+const scriptVisible = ref<Set<string>>(new Set())
+const expandedStdout = ref<Set<string>>(new Set())
+const expandedStderr = ref<Set<string>>(new Set())
+
+function toggleScript(jobId: string) {
+  const next = new Set(scriptVisible.value)
+  if (next.has(jobId)) next.delete(jobId)
+  else next.add(jobId)
+  scriptVisible.value = next
+}
+
+function toggleStdout(runId: string) {
+  const next = new Set(expandedStdout.value)
+  const key = runId
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedStdout.value = next
+}
+
+function toggleStderr(runId: string) {
+  const next = new Set(expandedStderr.value)
+  const key = runId
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedStderr.value = next
+}
 
 const formValid = computed(() => {
   return form.value.name.trim() !== '' && form.value.schedule.trim() !== '' && form.value.prompt.trim() !== ''
@@ -71,21 +100,61 @@ function selectPreset(value: string) {
   showPresets.value = false
 }
 
+// 创建任务进度状态（v2 SSE 流式编译）
+const createProgress = ref<CronCompileProgress | null>(null)
+const createAbort = ref<AbortController | null>(null)
+
+function stageLabel(stage: CronCompileStage): string {
+  switch (stage) {
+    case 'analyzing':   return t('tasks.stageAnalyzing',  '解析需求…')
+    case 'calling_llm': return t('tasks.stageCallingLLM', '调用 LLM 生成脚本…')
+    case 'validating':  return t('tasks.stageValidating', '校验脚本安全性…')
+    case 'persisting':  return t('tasks.stagePersisting', '保存任务…')
+    default: return stage
+  }
+}
+
+function stageProgress(stage: CronCompileStage): number {
+  switch (stage) {
+    case 'analyzing':   return 10
+    case 'calling_llm': return 60
+    case 'validating':  return 85
+    case 'persisting':  return 95
+    default: return 5
+  }
+}
+
 async function handleCreate() {
   if (!formValid.value || submitting.value) return
   submitting.value = true
+  createProgress.value = null
+  const ctrl = new AbortController()
+  createAbort.value = ctrl
   try {
-    await createCronJob(form.value)
+    await createCronJob(form.value, {
+      signal: ctrl.signal,
+      onProgress: (p) => { createProgress.value = p },
+    })
     showForm.value = false
     toast.success(t('tasks.createTaskSuccess'))
     await loadJobs()
   } catch (e) {
-    console.error('创建任务失败:', e)
-    const msg = e instanceof Error ? e.message : String(e)
-    toast.error(`${t('tasks.createTaskFailed')}: ${msg}`)
+    if (ctrl.signal.aborted) {
+      toast.info(t('tasks.createTaskCanceled', '已取消创建'))
+    } else {
+      console.error('创建任务失败:', e)
+      const msg = e instanceof Error ? e.message : String(e)
+      toast.error(`${t('tasks.createTaskFailed')}: ${msg}`)
+    }
   } finally {
     submitting.value = false
+    createProgress.value = null
+    createAbort.value = null
   }
+}
+
+function cancelCreate() {
+  createAbort.value?.abort()
 }
 
 async function handlePauseResume(job: CronJob) {
@@ -127,16 +196,24 @@ async function handleDelete(job: CronJob) {
 async function handleTrigger(job: CronJob) {
   if (triggeringJobs.value.has(job.id)) return
   triggeringJobs.value = new Set([...triggeringJobs.value, job.id])
+  const triggeredAt = Date.now()
   try {
     await triggerCronJob(job.id)
     job.run_count += 1
     job.last_run_at = new Date().toISOString()
-    // Refresh history if expanded
-    if (expandedJobId.value === job.id) {
+    // 自动展开历史并轮询直到看到新 entry（最多 10 秒）
+    expandedJobId.value = job.id
+    expandedRunId.value = null
+    for (let i = 0; i < 10; i++) {
+      await new Promise((r) => setTimeout(r, 1000))
       await loadJobHistory(job.id)
+      const latest = jobHistories.value[job.id]?.[0]
+      if (latest && new Date(latest.started_at).getTime() > triggeredAt - 5000) break
     }
+    toast.success(t('tasks.triggerSuccess', '任务已触发，见历史'))
   } catch (e) {
     console.error('手动触发任务失败:', e)
+    toast.error(t('tasks.triggerFailed', '触发失败'))
   } finally {
     const next = new Set(triggeringJobs.value)
     next.delete(job.id)
@@ -178,7 +255,9 @@ function formatDuration(ms?: number): string {
 function runStatusIcon(status: string) {
   switch (status) {
     case 'success': return CheckCircle
-    case 'failed': return XCircle
+    case 'failed':
+    case 'error': return XCircle
+    case 'timeout': return Clock3
     case 'running': return Loader
     default: return Clock
   }
@@ -187,7 +266,9 @@ function runStatusIcon(status: string) {
 function runStatusColor(status: string): string {
   switch (status) {
     case 'success': return 'var(--hc-success)'
-    case 'failed': return 'var(--hc-error)'
+    case 'failed':
+    case 'error': return 'var(--hc-error)'
+    case 'timeout': return 'var(--hc-warning)'
     case 'running': return 'var(--hc-accent)'
     default: return 'var(--hc-text-muted)'
   }
@@ -196,7 +277,9 @@ function runStatusColor(status: string): string {
 function runStatusText(status: string): string {
   switch (status) {
     case 'success': return t('tasks.statusSuccess', '成功')
-    case 'failed': return t('tasks.statusFailed', '失败')
+    case 'failed':
+    case 'error': return t('tasks.statusFailed', '失败')
+    case 'timeout': return t('tasks.statusTimeout', '超时')
     case 'running': return t('tasks.statusRunning', '运行中')
     default: return status
   }
@@ -269,7 +352,7 @@ defineExpose({ openCreateForm, loadJobs })
                 {{ statusText(job.status) }}
               </span>
             </div>
-            <p class="task-card__prompt">{{ job.prompt }}</p>
+            <p class="task-card__prompt">{{ job.source_prompt }}</p>
           </div>
 
           <!-- Card meta -->
@@ -342,6 +425,16 @@ defineExpose({ openCreateForm, loadJobs })
               <span>{{ t('tasks.history') }}</span>
             </button>
             <button
+              v-if="job.spec"
+              class="task-card__action-btn"
+              :style="{ color: scriptVisible.has(job.id) ? 'var(--hc-accent)' : 'var(--hc-text-secondary)' }"
+              :title="t('tasks.viewScript', '查看脚本')"
+              @click="toggleScript(job.id)"
+            >
+              <Code :size="14" />
+              <span>{{ scriptVisible.has(job.id) ? t('tasks.hideScript', '隐藏脚本') : t('tasks.viewScript', '查看脚本') }}</span>
+            </button>
+            <button
               class="task-card__action-btn task-card__action-btn--danger"
               :title="t('common.delete')"
               :disabled="deletingJobs.has(job.id)"
@@ -353,6 +446,22 @@ defineExpose({ openCreateForm, loadJobs })
             </button>
           </div>
 
+          <!-- Compiled script viewer -->
+          <div v-if="scriptVisible.has(job.id) && job.spec" class="task-card__script">
+            <div class="task-card__script-header">
+              <span class="task-card__script-meta">
+                Python · {{ job.spec.deps?.length || 0 }} deps · {{ job.spec.timeout_s }}s
+              </span>
+              <span class="task-card__script-meta task-card__script-meta--dim">
+                {{ t('tasks.compiledBy', '编译于') }} {{ formatTime(job.spec.compiled.at) }} · {{ job.spec.compiled.model }}
+              </span>
+            </div>
+            <pre class="task-card__script-code">{{ job.spec.script }}</pre>
+            <div v-if="job.spec.deps?.length" class="task-card__script-deps">
+              deps: {{ job.spec.deps.join(', ') }}
+            </div>
+          </div>
+
           <!-- Execution history -->
           <div v-if="expandedJobId === job.id" class="task-card__history">
             <div class="task-card__history-title">{{ t('tasks.recentExecHistory') }}</div>
@@ -361,15 +470,18 @@ defineExpose({ openCreateForm, loadJobs })
               <div v-for="run in jobHistories[job.id]" :key="run.id" class="task-card__history-entry">
                 <div
                   class="task-card__history-item"
-                  :class="{ 'task-card__history-item--clickable': !!(run.result || run.error) }"
-                  @click="run.result || run.error ? toggleRunDetail(run.id) : undefined"
+                  :class="{ 'task-card__history-item--clickable': !!(run.result || run.error || run.stdout || run.stderr) }"
+                  @click="(run.result || run.error || run.stdout || run.stderr) ? toggleRunDetail(run.id) : undefined"
                 >
                   <component :is="runStatusIcon(run.status)" :size="13" :style="{ color: runStatusColor(run.status), flexShrink: 0 }" />
                   <span class="task-card__history-time">{{ formatTime(run.started_at) }}</span>
                   <span v-if="run.duration_ms" class="task-card__history-duration">{{ formatDuration(run.duration_ms) }}</span>
                   <span class="task-card__history-status" :style="{ color: runStatusColor(run.status) }">{{ runStatusText(run.status) }}</span>
+                  <span v-if="typeof run.exit_code === 'number' && run.exit_code !== 0" class="task-card__history-exit">
+                    exit {{ run.exit_code }}
+                  </span>
                   <ChevronDown
-                    v-if="run.result || run.error"
+                    v-if="run.result || run.error || run.stdout || run.stderr"
                     :size="12"
                     class="task-card__history-chevron"
                     :class="{ 'task-card__history-chevron--open': expandedRunId === run.id }"
@@ -377,7 +489,25 @@ defineExpose({ openCreateForm, loadJobs })
                   />
                 </div>
                 <div v-if="expandedRunId === run.id" class="task-card__history-detail">
-                  <div v-if="run.error" class="task-card__history-error">{{ run.error }}</div>
+                  <div v-if="run.error" class="task-card__history-error">
+                    <AlertTriangle :size="12" /> {{ run.error }}
+                  </div>
+                  <div v-if="run.data !== undefined && run.data !== null" class="task-card__history-data">
+                    <strong>data:</strong>
+                    <pre>{{ typeof run.data === 'string' ? run.data : JSON.stringify(run.data, null, 2) }}</pre>
+                  </div>
+                  <div v-if="run.stdout" class="task-card__history-stdout">
+                    <button class="task-card__history-toggle" @click.stop="toggleStdout(run.id)">
+                      stdout {{ expandedStdout.has(run.id) ? '▾' : '▸' }}
+                    </button>
+                    <pre v-if="expandedStdout.has(run.id)">{{ run.stdout }}</pre>
+                  </div>
+                  <div v-if="run.stderr" class="task-card__history-stderr">
+                    <button class="task-card__history-toggle" @click.stop="toggleStderr(run.id)">
+                      stderr {{ expandedStderr.has(run.id) ? '▾' : '▸' }}
+                    </button>
+                    <pre v-if="expandedStderr.has(run.id)">{{ run.stderr }}</pre>
+                  </div>
                   <div v-if="run.result" class="task-card__history-result">{{ run.result }}</div>
                 </div>
               </div>
@@ -480,15 +610,33 @@ defineExpose({ openCreateForm, loadJobs })
                 </div>
               </div>
             </div>
+            <!-- 编译进度（SSE 流式） -->
+            <div v-if="submitting && createProgress" class="hc-compile-progress">
+              <div class="hc-compile-progress__header">
+                <Loader :size="14" class="animate-spin" />
+                <span>{{ stageLabel(createProgress.stage) }}</span>
+                <span class="hc-compile-progress__pct">{{ stageProgress(createProgress.stage) }}%</span>
+              </div>
+              <div class="hc-compile-progress__bar">
+                <div class="hc-compile-progress__fill" :style="{ width: stageProgress(createProgress.stage) + '%' }"></div>
+              </div>
+              <div v-if="createProgress.message" class="hc-compile-progress__msg">{{ createProgress.message }}</div>
+            </div>
             <div class="hc-modal__footer">
-              <button class="hc-btn hc-btn-secondary" @click="showForm = false">{{ t('common.cancel') }}</button>
+              <button
+                class="hc-btn hc-btn-secondary"
+                @click="submitting ? cancelCreate() : (showForm = false)"
+              >
+                {{ submitting ? t('common.cancel') : t('common.cancel') }}
+              </button>
               <button
                 class="hc-btn hc-btn-primary"
                 :disabled="!formValid || submitting"
                 @click="handleCreate"
               >
-                <Save :size="14" />
-                {{ t('common.create') }}
+                <Loader v-if="submitting" :size="14" class="animate-spin" />
+                <Save v-else :size="14" />
+                {{ submitting ? t('tasks.creating', '编译中…') : t('common.create') }}
               </button>
             </div>
           </div>
@@ -757,11 +905,108 @@ defineExpose({ openCreateForm, loadJobs })
 }
 
 .task-card__history-error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   color: var(--hc-danger);
+  margin-bottom: 4px;
 }
 
 .task-card__history-result {
   color: var(--hc-text-primary);
+}
+
+.task-card__history-data {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--hc-text-primary);
+}
+.task-card__history-data pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: var(--hc-bg-subtle, rgba(0,0,0,0.04));
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.task-card__history-stdout,
+.task-card__history-stderr {
+  margin-top: 4px;
+}
+.task-card__history-stderr pre,
+.task-card__history-stdout pre {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: var(--hc-bg-subtle, rgba(0,0,0,0.04));
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.task-card__history-stderr pre {
+  color: var(--hc-danger);
+}
+.task-card__history-toggle {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--hc-accent);
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+}
+.task-card__history-exit {
+  font-size: 10px;
+  color: var(--hc-warning);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  padding: 1px 4px;
+  background: rgba(255,165,0,0.1);
+  border-radius: 3px;
+}
+
+/* Compiled script viewer */
+.task-card__script {
+  margin: 8px 4px 0;
+  padding: 10px 12px;
+  background: var(--hc-bg-subtle, rgba(0,0,0,0.04));
+  border-radius: 8px;
+  font-size: 12px;
+}
+.task-card__script-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--hc-text-secondary);
+}
+.task-card__script-meta--dim {
+  color: var(--hc-text-muted);
+  font-size: 10px;
+}
+.task-card__script-code {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--hc-bg);
+  border: 1px solid var(--hc-border, rgba(0,0,0,0.08));
+  border-radius: 6px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.task-card__script-deps {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--hc-text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 /* ── Modal ── */
@@ -841,6 +1086,47 @@ defineExpose({ openCreateForm, loadJobs })
   gap: 8px;
   padding: 14px 20px;
   border-top: 1px solid var(--hc-divider);
+}
+
+/* ── SSE 编译进度条（cron 创建任务）─────── */
+.hc-compile-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--hc-divider);
+  background: var(--hc-bg-subtle, rgba(0,0,0,0.02));
+}
+.hc-compile-progress__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--hc-text-primary);
+}
+.hc-compile-progress__pct {
+  margin-left: auto;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--hc-accent);
+  font-weight: 500;
+}
+.hc-compile-progress__bar {
+  height: 4px;
+  background: var(--hc-divider);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.hc-compile-progress__fill {
+  height: 100%;
+  background: var(--hc-accent);
+  border-radius: 2px;
+  transition: width 280ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.hc-compile-progress__msg {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
 }
 
 .hc-field {

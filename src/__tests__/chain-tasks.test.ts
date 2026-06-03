@@ -47,31 +47,33 @@ afterEach(() => {
 // ── Tests ──────────────────────────────────────────────────────────
 
 describe('Chain E: Tasks/Cron -> Backend', () => {
-  it('E1: getCronJobs lists jobs via GET /api/v1/cron/jobs with user_id', async () => {
-    const jobs = {
+  // ── D1.2: 所有 cron CRUD 都走 POST /api/v1/cronjob unified endpoint ──
+
+  it('E1: getCronJobs lists jobs via POST /api/v1/cronjob action=list', async () => {
+    mockApiPost.mockResolvedValueOnce({
+      action: 'list',
       jobs: [
         { id: 'job-1', name: 'Daily Report', schedule: '0 9 * * *', status: 'active' },
         { id: 'job-2', name: 'Weekly Backup', schedule: '0 0 * * 0', status: 'paused' },
       ],
       total: 2,
-    }
-    mockApiGet.mockResolvedValueOnce(jobs)
+    })
 
     const { getCronJobs } = await import('@/api/tasks')
     const result = await getCronJobs()
 
-    expect(mockApiGet).toHaveBeenCalledWith('/api/v1/cron/jobs', {
-      user_id: 'desktop-user',
-    })
+    expect(mockApiPost).toHaveBeenCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'list', user_id: 'desktop-user' }),
+    )
     expect(result.jobs).toHaveLength(2)
     expect(result.total).toBe(2)
   })
 
-  it('E2: createCronJob sends POST /api/v1/cron/jobs with correct payload', async () => {
+  it('E2: createCronJob sends POST /api/v1/cronjob action=create with draft', async () => {
     mockApiPost.mockResolvedValueOnce({
-      id: 'job-new',
-      name: 'Check Email',
-      next_run_at: '2026-01-02T09:00:00Z',
+      action: 'create',
+      job: { id: 'job-new', name: 'Check Email', next_run_at: '2026-01-02T09:00:00Z' },
     })
 
     const { createCronJob } = await import('@/api/tasks')
@@ -82,22 +84,27 @@ describe('Chain E: Tasks/Cron -> Backend', () => {
       type: 'cron',
     })
 
-    expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs', {
-      name: 'Check Email',
-      schedule: '0 9 * * *',
-      prompt: 'Check my inbox for important emails',
-      type: 'cron',
-      user_id: 'desktop-user',
-    })
-    expect(result.id).toBe('job-new')
-    expect(result.name).toBe('Check Email')
+    expect(mockApiPost).toHaveBeenCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({
+        action: 'create',
+        user_id: 'desktop-user',
+        draft: expect.objectContaining({
+          name: 'Check Email',
+          schedule: '0 9 * * *',
+          prompt: 'Check my inbox for important emails',
+        }),
+      }),
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
+    expect(result.job.id).toBe('job-new')
+    expect(result.job.name).toBe('Check Email')
   })
 
-  it('E2b: createCronJob defaults type to "cron" when not specified', async () => {
+  it('E2b: createCronJob always wraps draft regardless of input type field', async () => {
     mockApiPost.mockResolvedValueOnce({
-      id: 'job-2',
-      name: 'Task',
-      next_run_at: '2026-01-02T00:00:00Z',
+      action: 'create',
+      job: { id: 'job-2', name: 'Task', next_run_at: '2026-01-02T00:00:00Z' },
     })
 
     const { createCronJob } = await import('@/api/tasks')
@@ -105,52 +112,68 @@ describe('Chain E: Tasks/Cron -> Backend', () => {
       name: 'Task',
       schedule: '0 0 * * *',
       prompt: 'Do something',
-    }) // type is optional in input
+    })
 
-    expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs', expect.objectContaining({
-      type: 'cron',
-    }))
+    expect(mockApiPost).toHaveBeenCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({
+        action: 'create',
+        draft: expect.objectContaining({ name: 'Task' }),
+      }),
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
   })
 
-  it('E3: deleteCronJob calls DELETE /api/v1/cron/jobs/:id', async () => {
-    mockApiDelete.mockResolvedValueOnce({ message: 'deleted' })
+  it('E3: deleteCronJob calls POST /api/v1/cronjob action=remove', async () => {
+    mockApiPost.mockResolvedValueOnce({ action: 'remove', ok: true })
 
     const { deleteCronJob } = await import('@/api/tasks')
     const result = await deleteCronJob('job-1')
 
-    expect(mockApiDelete).toHaveBeenCalledWith('/api/v1/cron/jobs/job-1')
-    expect(result.message).toBe('deleted')
+    expect(mockApiPost).toHaveBeenCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'remove', job_id: 'job-1' }),
+    )
+    expect(result.message).toBe('任务已删除')
   })
 
-  it('E4: pauseCronJob calls POST /api/v1/cron/jobs/:id/pause', async () => {
-    mockApiPost.mockResolvedValueOnce({ message: 'paused' })
+  it('E4: pauseCronJob calls POST /api/v1/cronjob action=pause', async () => {
+    mockApiPost.mockResolvedValueOnce({ action: 'pause', ok: true })
 
     const { pauseCronJob } = await import('@/api/tasks')
     const result = await pauseCronJob('job-1')
 
-    expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs/job-1/pause')
-    expect(result.message).toBe('paused')
+    expect(mockApiPost).toHaveBeenCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'pause', job_id: 'job-1' }),
+    )
+    expect(result.message).toBe('任务已暂停')
   })
 
-  it('E5: resumeCronJob calls POST /api/v1/cron/jobs/:id/resume', async () => {
-    mockApiPost.mockResolvedValueOnce({ message: 'resumed' })
+  it('E5: resumeCronJob calls POST /api/v1/cronjob action=resume', async () => {
+    mockApiPost.mockResolvedValueOnce({ action: 'resume', ok: true })
 
     const { resumeCronJob } = await import('@/api/tasks')
     const result = await resumeCronJob('job-1')
 
-    expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs/job-1/resume')
-    expect(result.message).toBe('resumed')
+    expect(mockApiPost).toHaveBeenCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'resume', job_id: 'job-1' }),
+    )
+    expect(result.message).toBe('任务已恢复')
   })
 
-  it('E6: triggerCronJob calls POST /api/v1/cron/jobs/:id/trigger', async () => {
-    mockApiPost.mockResolvedValueOnce({ message: 'triggered', run_id: 'run-1' })
+  it('E6: triggerCronJob calls POST /api/v1/cronjob action=run', async () => {
+    mockApiPost.mockResolvedValueOnce({ action: 'run', ok: true })
 
     const { triggerCronJob } = await import('@/api/tasks')
     const result = await triggerCronJob('job-1')
 
-    expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs/job-1/trigger')
-    expect(result.message).toBe('triggered')
-    expect(result.run_id).toBe('run-1')
+    expect(mockApiPost).toHaveBeenCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'run', job_id: 'job-1' }),
+    )
+    expect(result.message).toBe('已触发')
   })
 
   it('E7: getCronJobHistory retrieves job run history via GET', async () => {
@@ -196,32 +219,42 @@ describe('Chain E: Tasks/Cron -> Backend', () => {
     })).rejects.toThrow('Rate limit exceeded')
   })
 
-  it('E9: full lifecycle: create -> pause -> resume -> trigger -> delete', async () => {
-    // Create
-    mockApiPost.mockResolvedValueOnce({ id: 'job-lc', name: 'LC Job', next_run_at: '2026-01-02T00:00:00Z' })
+  it('E9: full lifecycle: create -> pause -> resume -> trigger -> delete (D1.2 unified)', async () => {
+    mockApiPost.mockResolvedValueOnce({
+      action: 'create',
+      job: { id: 'job-lc', name: 'LC Job', next_run_at: '2026-01-02T00:00:00Z' },
+    })
     const { createCronJob, pauseCronJob, resumeCronJob, triggerCronJob, deleteCronJob } = await import('@/api/tasks')
 
-    const job = await createCronJob({ name: 'LC Job', schedule: '0 0 * * *', prompt: 'test' })
-    expect(job.id).toBe('job-lc')
+    const result = await createCronJob({ name: 'LC Job', schedule: '0 0 * * *', prompt: 'test' })
+    expect(result.job.id).toBe('job-lc')
 
-    // Pause
-    mockApiPost.mockResolvedValueOnce({ message: 'paused' })
+    mockApiPost.mockResolvedValueOnce({ action: 'pause', ok: true })
     await pauseCronJob('job-lc')
-    expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs/job-lc/pause')
+    expect(mockApiPost).toHaveBeenLastCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'pause', job_id: 'job-lc' }),
+    )
 
-    // Resume
-    mockApiPost.mockResolvedValueOnce({ message: 'resumed' })
+    mockApiPost.mockResolvedValueOnce({ action: 'resume', ok: true })
     await resumeCronJob('job-lc')
-    expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs/job-lc/resume')
+    expect(mockApiPost).toHaveBeenLastCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'resume', job_id: 'job-lc' }),
+    )
 
-    // Trigger
-    mockApiPost.mockResolvedValueOnce({ message: 'triggered' })
+    mockApiPost.mockResolvedValueOnce({ action: 'run', ok: true })
     await triggerCronJob('job-lc')
-    expect(mockApiPost).toHaveBeenCalledWith('/api/v1/cron/jobs/job-lc/trigger')
+    expect(mockApiPost).toHaveBeenLastCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'run', job_id: 'job-lc' }),
+    )
 
-    // Delete
-    mockApiDelete.mockResolvedValueOnce({ message: 'deleted' })
+    mockApiPost.mockResolvedValueOnce({ action: 'remove', ok: true })
     await deleteCronJob('job-lc')
-    expect(mockApiDelete).toHaveBeenCalledWith('/api/v1/cron/jobs/job-lc')
+    expect(mockApiPost).toHaveBeenLastCalledWith(
+      '/api/v1/cronjob',
+      expect.objectContaining({ action: 'remove', job_id: 'job-lc' }),
+    )
   })
 })

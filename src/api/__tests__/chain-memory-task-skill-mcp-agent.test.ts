@@ -126,89 +126,68 @@ describe('Chain 4: Memory Lifecycle', () => {
 describe('Chain 5: Task / Cron Lifecycle', () => {
   const DESKTOP_USER_ID = 'desktop-user'
 
-  it('createCronJob → getCronJobs → triggerCronJob → getCronJobHistory → pauseCronJob → resumeCronJob → deleteCronJob', async () => {
+  it('全 7 action 走 POST /api/v1/cronjob unified endpoint (D1.2)', async () => {
     mockFetch
-      .mockResolvedValueOnce({ id: 'job-1', name: 'daily-report', next_run_at: '2026-04-01T08:00:00Z' }) // create
-      .mockResolvedValueOnce({ jobs: [{ id: 'job-1', name: 'daily-report' }], total: 1 })                 // getCronJobs
-      .mockResolvedValueOnce({ message: 'triggered', run_id: 'run-1' })                                    // trigger
-      .mockResolvedValueOnce({                                                                              // history
+      .mockResolvedValueOnce({ action: 'create', job: { id: 'job-1', name: 'daily-report', next_run_at: '2026-04-01T08:00:00Z' } })
+      .mockResolvedValueOnce({ action: 'list', jobs: [{ id: 'job-1', name: 'daily-report' }], total: 1 })
+      .mockResolvedValueOnce({ action: 'run', ok: true })
+      .mockResolvedValueOnce({
         history: [{
-          id: 'run-1',
-          job_id: 'job-1',
-          status: 'success',
-          started_at: '2026-04-01T08:00:00Z',
-          result: 'ok',
+          id: 'run-1', job_id: 'job-1', status: 'success',
+          started_at: '2026-04-01T08:00:00Z', result: 'ok',
         }],
       })
-      .mockResolvedValueOnce({ message: 'paused' })   // pause
-      .mockResolvedValueOnce({ message: 'resumed' })   // resume
-      .mockResolvedValueOnce({ message: 'deleted' })   // delete
+      .mockResolvedValueOnce({ action: 'pause', ok: true })
+      .mockResolvedValueOnce({ action: 'resume', ok: true })
+      .mockResolvedValueOnce({ action: 'remove', ok: true })
 
     const { createCronJob, getCronJobs, triggerCronJob, getCronJobHistory, pauseCronJob, resumeCronJob, deleteCronJob } =
       await import('../tasks')
 
-    // Act
     const createRes = await createCronJob({ name: 'daily-report', schedule: '0 8 * * *', prompt: 'generate report' })
     const listRes = await getCronJobs()
-    const triggerRes = await triggerCronJob('job-1')
+    await triggerCronJob('job-1')
     const historyRes = await getCronJobHistory('job-1', 5)
-    const pauseRes = await pauseCronJob('job-1')
-    const resumeRes = await resumeCronJob('job-1')
-    const deleteRes = await deleteCronJob('job-1')
+    await pauseCronJob('job-1')
+    await resumeCronJob('job-1')
+    await deleteCronJob('job-1')
 
     expect(mockFetch).toHaveBeenCalledTimes(7)
 
-    // 1) createCronJob → POST /api/v1/cron/jobs
+    // 1) create → action=create + draft
     const [createPath, createOpts] = callArgs(0)
-    expect(createPath).toBe('/api/v1/cron/jobs')
-    expect(createOpts.method).toBe('POST')
-    expect(createOpts.body).toEqual({
-      name: 'daily-report',
-      schedule: '0 8 * * *',
-      prompt: 'generate report',
-      type: 'cron',
+    expect(createPath).toBe('/api/v1/cronjob')
+    expect(createOpts.body).toEqual(expect.objectContaining({
+      action: 'create',
       user_id: DESKTOP_USER_ID,
-    })
-    expect(createRes.id).toBe('job-1')
+      draft: expect.objectContaining({
+        name: 'daily-report',
+        schedule: '0 8 * * *',
+        prompt: 'generate report',
+      }),
+    }))
+    expect(createRes.job.id).toBe('job-1')
 
-    // 2) getCronJobs → GET /api/v1/cron/jobs
+    // 2) list
     const [listPath, listOpts] = callArgs(1)
-    expect(listPath).toBe('/api/v1/cron/jobs')
-    expect(listOpts.method).toBe('GET')
-    expect(listOpts.query).toEqual({ user_id: DESKTOP_USER_ID })
+    expect(listPath).toBe('/api/v1/cronjob')
+    expect(listOpts.body).toEqual(expect.objectContaining({ action: 'list' }))
     expect(listRes.total).toBe(1)
 
-    // 3) triggerCronJob → POST /api/v1/cron/jobs/:id/trigger
-    const [triggerPath, triggerOpts] = callArgs(2)
-    expect(triggerPath).toBe('/api/v1/cron/jobs/job-1/trigger')
-    expect(triggerOpts.method).toBe('POST')
-    expect(triggerRes.run_id).toBe('run-1')
+    // 3) trigger → run
+    const [trigPath, trigOpts] = callArgs(2)
+    expect(trigPath).toBe('/api/v1/cronjob')
+    expect(trigOpts.body).toEqual(expect.objectContaining({ action: 'run', job_id: 'job-1' }))
 
-    // 4) getCronJobHistory → GET /api/v1/cron/jobs/:id/history
-    const [historyPath, historyOpts] = callArgs(3)
+    // 4) history 仍 GET（与 unified action 正交）
+    const [historyPath] = callArgs(3)
     expect(historyPath).toBe('/api/v1/cron/jobs/job-1/history')
-    expect(historyOpts.method).toBe('GET')
-    expect(historyOpts.query).toEqual({ limit: 5 })
     expect(historyRes).toHaveLength(1)
-    expect(historyRes[0]!.status).toBe('success')
 
-    // 5) pauseCronJob → POST /api/v1/cron/jobs/:id/pause
-    const [pausePath, pauseOpts] = callArgs(4)
-    expect(pausePath).toBe('/api/v1/cron/jobs/job-1/pause')
-    expect(pauseOpts.method).toBe('POST')
-    expect(pauseRes).toEqual({ message: 'paused' })
-
-    // 6) resumeCronJob → POST /api/v1/cron/jobs/:id/resume
-    const [resumePath, resumeOpts] = callArgs(5)
-    expect(resumePath).toBe('/api/v1/cron/jobs/job-1/resume')
-    expect(resumeOpts.method).toBe('POST')
-    expect(resumeRes).toEqual({ message: 'resumed' })
-
-    // 7) deleteCronJob → DELETE /api/v1/cron/jobs/:id
-    const [deletePath, deleteOpts] = callArgs(6)
-    expect(deletePath).toBe('/api/v1/cron/jobs/job-1')
-    expect(deleteOpts.method).toBe('DELETE')
-    expect(deleteRes).toEqual({ message: 'deleted' })
+    // 5/6/7
+    expect(callArgs(4)[1].body).toEqual(expect.objectContaining({ action: 'pause', job_id: 'job-1' }))
+    expect(callArgs(5)[1].body).toEqual(expect.objectContaining({ action: 'resume', job_id: 'job-1' }))
+    expect(callArgs(6)[1].body).toEqual(expect.objectContaining({ action: 'remove', job_id: 'job-1' }))
   })
 
   it('getCronJobHistory normalises the "runs" alias to CronJobRun[]', async () => {
@@ -228,14 +207,16 @@ describe('Chain 5: Task / Cron Lifecycle', () => {
     expect(history[0]!.started_at).toBe('2026-04-02T09:00:00Z')
   })
 
-  it('createCronJob defaults type to "cron" when input.type is undefined', async () => {
-    mockFetch.mockResolvedValueOnce({ id: 'j2', name: 'x', next_run_at: '' })
+  it('createCronJob 通过 unified endpoint action=create + draft 包装 (D1.2)', async () => {
+    mockFetch.mockResolvedValueOnce({ action: 'create', job: { id: 'j2', name: 'x', next_run_at: '' } })
 
     const { createCronJob } = await import('../tasks')
     await createCronJob({ name: 'x', schedule: '* * * * *', prompt: 'y' })
 
-    const [, opts] = callArgs(0)
-    expect((opts.body as Record<string, unknown>).type).toBe('cron')
+    const [path, opts] = callArgs(0)
+    expect(path).toBe('/api/v1/cronjob')
+    expect((opts.body as Record<string, unknown>).action).toBe('create')
+    expect((opts.body as { draft: { name: string } }).draft.name).toBe('x')
   })
 })
 

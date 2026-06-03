@@ -56,11 +56,11 @@ describe('Cron + Webhook Error Paths', () => {
       ).rejects.toThrow('invalid cron expression')
     })
 
-    it('still sends empty prompt to backend (backend validates)', async () => {
-      mockFetch.mockResolvedValue({ id: 'j1', name: 'x', next_run_at: '' })
+    it('still sends empty prompt to backend (backend validates) — D1.2 unified', async () => {
+      mockFetch.mockResolvedValue({ action: 'create', job: { id: 'j1', name: 'x', next_run_at: '' } })
       await createCronJob({ name: 'x', schedule: '* * * * *', prompt: '' })
-      const body = mockFetch.mock.calls[0]![1].body
-      expect(body.prompt).toBe('')
+      const body = mockFetch.mock.calls[0]![1].body as { draft: { prompt: string }; user_id: string }
+      expect(body.draft.prompt).toBe('')
       expect(body.user_id).toBeDefined()
     })
 
@@ -74,33 +74,39 @@ describe('Cron + Webhook Error Paths', () => {
 
   // ─── State transitions ──────────────────────────
 
-  describe('pause → resume transition', () => {
+  describe('pause → resume transition (D1.2 unified endpoint)', () => {
     it('sends pause then resume in sequence', async () => {
       mockFetch
-        .mockResolvedValueOnce({ message: 'paused' })
-        .mockResolvedValueOnce({ message: 'resumed' })
+        .mockResolvedValueOnce({ action: 'pause', ok: true })
+        .mockResolvedValueOnce({ action: 'resume', ok: true })
       const paused = await pauseCronJob('j1')
       const resumed = await resumeCronJob('j1')
-      expect(paused.message).toBe('paused')
-      expect(resumed.message).toBe('resumed')
+      expect(paused.message).toBe('任务已暂停')
+      expect(resumed.message).toBe('任务已恢复')
       expect(mockFetch).toHaveBeenNthCalledWith(
         1,
-        '/api/v1/cron/jobs/j1/pause',
-        expect.objectContaining({ method: 'POST' }),
+        '/api/v1/cronjob',
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.objectContaining({ action: 'pause', job_id: 'j1' }),
+        }),
       )
       expect(mockFetch).toHaveBeenNthCalledWith(
         2,
-        '/api/v1/cron/jobs/j1/resume',
-        expect.objectContaining({ method: 'POST' }),
+        '/api/v1/cronjob',
+        expect.objectContaining({
+          method: 'POST',
+          body: expect.objectContaining({ action: 'resume', job_id: 'j1' }),
+        }),
       )
     })
 
     it('idempotent pause — second call returns same message without throwing', async () => {
-      mockFetch.mockResolvedValue({ message: 'already paused' })
+      mockFetch.mockResolvedValue({ action: 'pause', ok: true })
       const a = await pauseCronJob('j1')
       const b = await pauseCronJob('j1')
-      expect(a.message).toBe('already paused')
-      expect(b.message).toBe('already paused')
+      expect(a.message).toBe('任务已暂停')
+      expect(b.message).toBe('任务已暂停')
       expect(mockFetch).toHaveBeenCalledTimes(2)
     })
 
@@ -116,21 +122,22 @@ describe('Cron + Webhook Error Paths', () => {
       await expect(triggerCronJob('j1')).rejects.toThrow('job already running')
     })
 
-    it('encodes special characters in job id for trigger', async () => {
-      mockFetch.mockResolvedValue({ message: 'triggered' })
+    it('特殊字符 job id 走 body 不需要 URL 编码 (D1.2)', async () => {
+      mockFetch.mockResolvedValue({ action: 'run', ok: true })
       await triggerCronJob('job with spaces')
-      const [url] = mockFetch.mock.calls[0]!
-      expect(url).toContain('job%20with%20spaces')
+      const [url, opts] = mockFetch.mock.calls[0]!
+      expect(url).toBe('/api/v1/cronjob')
+      expect((opts.body as { job_id: string }).job_id).toBe('job with spaces')
     })
   })
 
   describe('deleteCronJob — special ids', () => {
-    it('encodes slash and unicode characters in id', async () => {
-      mockFetch.mockResolvedValue({ message: 'deleted' })
+    it('斜杠和 unicode 在 body 里原样保留（D1.2 unified endpoint）', async () => {
+      mockFetch.mockResolvedValue({ action: 'remove', ok: true })
       await deleteCronJob('jobs/中文/id')
-      const [url] = mockFetch.mock.calls[0]!
-      expect(url).toContain('%2F')
-      expect(url).toContain('%E4%B8%AD')
+      const [url, opts] = mockFetch.mock.calls[0]!
+      expect(url).toBe('/api/v1/cronjob')
+      expect((opts.body as { job_id: string }).job_id).toBe('jobs/中文/id')
     })
 
     it('propagates 404 when deleting missing job', async () => {

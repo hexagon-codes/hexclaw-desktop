@@ -3,6 +3,14 @@
  *
  * Extracts the main send handler (with Auto-RAG) and file-to-base64 conversion
  * from ChatView.
+ *
+ * 入口 4 层路由（Confidence-Tiered Routing）：
+ *   tier 0: slash command（/cron add ...）        → 直接解析（暂未实施）
+ *   tier 1: 正则 fast-path（OpenClaw 模式）        → 0 token，跳过 LLM
+ *   tier 2: LLM JSON 解析（response_format=json）  → ~500 token，绕开 tool_call
+ *   tier 3: LLM 反问澄清（tools=nil）              → 多轮文字，绕开 tool_call
+ *
+ * 全程不让 LLM 走 tool_call 创建 cron，从协议层根除 tool_use_id 链路 400 bug。
  */
 
 import { nextTick, type Ref } from 'vue'
@@ -10,6 +18,12 @@ import { searchKnowledge } from '@/api/knowledge'
 import { parseDocument } from '@/utils/file-parser'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { useChatStore } from '@/stores/chat'
+import {
+  buildConversationAutomationActions,
+  CHAT_AUTOMATION_METADATA_KEY,
+  type CreateTaskAction,
+} from '@/utils/chat-automation'
+import { parseCronSlashCommand } from './useCronSlashParser'
 
 type ChatStore = ReturnType<typeof useChatStore>
 
@@ -29,6 +43,129 @@ export interface ChatSendDeps {
     assistantMessage: ChatMessage | null
     attachment?: { fileName: string; parsedText?: string } | null
   }) => Promise<void>
+}
+
+/**
+ * 4 层路由的分类结果。
+ * tier=1 含完整 payload，可直接走 fast-path 跳过 LLM。
+ * tier=2 关键字命中但参数缺，需走 Layer 2 LLM JSON 解析。
+ * tier=3 完全无 cron 意图（或意图极弱），走 Layer 3 反问澄清或原 LLM 路径。
+ */
+export interface CronIntentResult {
+  tier: 1 | 2 | 3
+  confidence: number
+  payload?: CreateTaskAction['payload']
+  raw?: CreateTaskAction
+}
+
+/**
+ * 用户输入意图分类。完全 deterministic 不调任何外部依赖，<50ms。
+ *
+ * 高置信契约（tier=1）：
+ *   - chat-automation 的 maybeCreateTaskAction 能识别（trigger 词 + schedule 表达）
+ *   - 提取的 payload 三个字段（name/schedule/prompt）非空
+ *   - confidence >= 0.85
+ */
+export function classifyCronIntent(text: string): CronIntentResult {
+  const actions = buildConversationAutomationActions({ userText: text, sourceMessageId: 'cron-intent-probe' })
+  const create = actions.find((a): a is CreateTaskAction => a.kind === 'create_task')
+
+  if (create) {
+    const p = create.payload
+    const complete = !!(p.name && p.schedule && p.prompt && p.prompt.trim().length > 2)
+    if (complete) {
+      return { tier: 1, confidence: 0.95, payload: p, raw: create }
+    }
+    return { tier: 2, confidence: 0.6, payload: p, raw: create }
+  }
+
+  // 弱意图词（无 schedule）— 后续 Layer 2/3 处理
+  const hasCronHint = /(?:提醒|定时|每天|每周|每月|每隔|每次|每年|^cron\b)/i.test(text)
+  if (hasCronHint) {
+    return { tier: 2, confidence: 0.4 }
+  }
+  return { tier: 3, confidence: 0 }
+}
+
+/**
+ * tier=1 fast-path 时构造的 assistant 提示 message，含可点击的 CreateTaskAction 卡片。
+ *
+ * 关键契约：
+ *   - role='assistant'
+ *   - metadata 含 CHAT_AUTOMATION_METADATA_KEY → CreateTaskAction[]
+ *   - content 是 K12 家长友好中文，永不含技术词
+ */
+export function buildFastPathAssistantMessage(userText: string): ChatMessage | null {
+  const intent = classifyCronIntent(userText)
+  if (intent.tier !== 1 || !intent.raw) return null
+
+  const action = intent.raw
+  return {
+    id: `fastpath-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+    role: 'assistant',
+    content: `已识别到「创建定时任务」的意图，下方卡片可直接确认或修改后创建。`,
+    timestamp: new Date().toISOString(),
+    metadata: {
+      [CHAT_AUTOMATION_METADATA_KEY]: [action],
+      source_tier: '1',
+    },
+  } as ChatMessage
+}
+
+/**
+ * 把 slash 命令分发结果翻译成 assistant 提示 message。
+ *
+ * - kind=add + intent.tier=1：附 CreateTaskAction 卡片（fast-path）
+ * - kind=add + intent.tier!=1：让用户补全（不直接调 LLM 避开 tool_use_id 风险）
+ * - kind=list/pause/resume/remove/run：未来调 /api/v1/cronjob unified endpoint
+ */
+function buildSlashAssistantMessage(
+  slash: ReturnType<typeof import('./useCronSlashParser').parseCronSlashCommand> & object,
+): ChatMessage {
+  const baseId = `slash-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
+  const ts = new Date().toISOString()
+
+  if (slash.kind === 'add') {
+    if (slash.intent.tier === 1 && slash.intent.raw) {
+      return {
+        id: baseId,
+        role: 'assistant',
+        content: '已识别 slash 命令，下方卡片可直接确认或修改后创建。',
+        timestamp: ts,
+        metadata: {
+          [CHAT_AUTOMATION_METADATA_KEY]: [slash.intent.raw],
+          source_tier: '0',
+        },
+      } as ChatMessage
+    }
+    return {
+      id: baseId,
+      role: 'assistant',
+      content:
+        'slash 命令需要更多信息。例：/cron add 每天 8 点 "采集新闻头条"，或 /cron add 30m "检查汇率"',
+      timestamp: ts,
+      metadata: { source_tier: '0' },
+    } as ChatMessage
+  }
+
+  if (slash.kind === 'unknown') {
+    return {
+      id: baseId,
+      role: 'assistant',
+      content: slash.suggestion,
+      timestamp: ts,
+      metadata: { source_tier: '0' },
+    } as ChatMessage
+  }
+
+  // list / pause / resume / remove / run
+  return {
+    id: baseId,
+    role: 'assistant',
+    content: `已收到 slash 命令：${slash.kind}${'jobId' in slash ? ` ${slash.jobId}` : ''}。请到「任务」页面操作或稍后会自动执行。`,
+    timestamp: ts,
+    metadata: { source_tier: '0', slash_kind: slash.kind },
+  } as ChatMessage
 }
 
 export function useChatSend(deps: ChatSendDeps) {
@@ -61,6 +198,48 @@ export function useChatSend(deps: ChatSendDeps) {
     const model = chatStore.chatParams.model
     if (model !== undefined && model.trim() === '') {
       return false
+    }
+
+    // ✦ Layer 0 — slash command (`/cron add 30m "..."` / `/cron list` / 等)
+    //   (D3.2：附件路径不走 slash，与 fast-path 同等约束)
+    if (!files?.length && !attachmentPreview.value && !parsedDocument.value) {
+      const slash = parseCronSlashCommand(text)
+      if (slash) {
+        // 不论 kind，都先把 user 原始输入 push 到 chat，符合用户预期
+        chatStore.messages.push({
+          id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          role: 'user',
+          content: text,
+          timestamp: new Date().toISOString(),
+        } as ChatMessage)
+        const slashReply = buildSlashAssistantMessage(slash)
+        chatStore.messages.push(slashReply)
+        await nextTick()
+        scrollToBottom()
+        return true
+      }
+    }
+
+    // ✦ 4 层 Intent Resolver — tier=1 fast-path 跳过 LLM，避开 tool_use_id 链路 bug
+    //   (附件路径不走 fast-path：用户带文件的意图通常超出"纯创建任务"，留给 LLM)
+    if (!files?.length && !attachmentPreview.value && !parsedDocument.value) {
+      const intent = classifyCronIntent(text)
+      if (intent.tier === 1) {
+        const fastMessage = buildFastPathAssistantMessage(text)
+        if (fastMessage) {
+          // 不调 chatStore.sendMessage —— 直接 push user + assistant
+          chatStore.messages.push({
+            id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+            role: 'user',
+            content: text,
+            timestamp: new Date().toISOString(),
+          } as ChatMessage)
+          chatStore.messages.push(fastMessage)
+          await nextTick()
+          scrollToBottom()
+          return true
+        }
+      }
     }
 
     const legacyAttachment = attachmentPreview.value

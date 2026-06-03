@@ -197,22 +197,36 @@ describe('链路: 记忆 CRUD + 搜索', () => {
 describe('链路: 任务全生命周期', () => {
   beforeEach(() => mockApi.mockReset())
 
-  it('createCronJob 传递完整参数', async () => {
-    mockApi.mockResolvedValueOnce({ id: 'j1', name: '日报', next_run_at: '' })
+  it('createCronJob 传递完整参数（D1.2 unified）', async () => {
+    mockApi.mockResolvedValueOnce({ action: 'create', job: { id: 'j1', name: '日报', next_run_at: '' } })
     const { createCronJob } = await import('@/api/tasks')
     await createCronJob({ name: '日报', schedule: '0 9 * * *', prompt: '生成日报', type: 'cron' })
-    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/cron/jobs', expect.objectContaining({ name: '日报', schedule: '0 9 * * *' }))
+    expect(mockApi).toHaveBeenCalledWith(
+      'POST',
+      '/api/v1/cronjob',
+      expect.objectContaining({
+        action: 'create',
+        draft: expect.objectContaining({ name: '日报', schedule: '0 9 * * *' }),
+      }),
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    )
   })
 
-  it('pause/resume/trigger 路径正确', async () => {
-    mockApi.mockResolvedValue({ message: 'ok' })
+  it('pause/resume/trigger 路径正确（D1.2 unified action）', async () => {
+    mockApi.mockResolvedValue({ ok: true })
     const { pauseCronJob, resumeCronJob, triggerCronJob } = await import('@/api/tasks')
     await pauseCronJob('j1')
-    expect(mockApi).toHaveBeenCalledWith('POST', `/api/v1/cron/jobs/${encodeURIComponent('j1')}/pause`)
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/cronjob', expect.objectContaining({
+      action: 'pause', job_id: 'j1',
+    }))
     await resumeCronJob('j1')
-    expect(mockApi).toHaveBeenCalledWith('POST', `/api/v1/cron/jobs/${encodeURIComponent('j1')}/resume`)
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/cronjob', expect.objectContaining({
+      action: 'resume', job_id: 'j1',
+    }))
     await triggerCronJob('j1')
-    expect(mockApi).toHaveBeenCalledWith('POST', `/api/v1/cron/jobs/${encodeURIComponent('j1')}/trigger`)
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/cronjob', expect.objectContaining({
+      action: 'run', job_id: 'j1',
+    }))
   })
 
   it('getCronJobHistory 兼容 history 和 runs 字段', async () => {
@@ -222,11 +236,13 @@ describe('链路: 任务全生命周期', () => {
     expect(history[0]!.started_at).toBe('2026-01-01') // run_at → started_at 归一化
   })
 
-  it('deleteCronJob 路径正确', async () => {
-    mockApi.mockResolvedValueOnce({ message: 'ok' })
+  it('deleteCronJob 路径正确（D1.2 unified action=remove）', async () => {
+    mockApi.mockResolvedValueOnce({ ok: true })
     const { deleteCronJob } = await import('@/api/tasks')
     await deleteCronJob('j1')
-    expect(mockApi).toHaveBeenCalledWith('DELETE', `/api/v1/cron/jobs/${encodeURIComponent('j1')}`)
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/cronjob', expect.objectContaining({
+      action: 'remove', job_id: 'j1',
+    }))
   })
 })
 
