@@ -24,6 +24,38 @@ export interface ModelOption {
   toolReliability?: ModelToolReliability
 }
 
+/** 模型目录条目（从 Provider /models 同步的全量可用模型 + 可选元数据）
+ *
+ * 目录（catalog）≠ 启用（provider.models）：目录是"上游有什么"，只存本地缓存；
+ * 启用是用户策展的子集，进配置持久化。聚合商（OpenRouter 339 模型）靠这层分离避免污染全应用模型选择器。
+ *
+ * 元数据字段来自 OpenRouter 等聚合商扩展格式，标准 OpenAI /models 只有裸 id 时缺省。
+ */
+export interface CatalogModel {
+  id: string
+  name: string
+  /** 上下文窗口（token） */
+  contextLength?: number
+  /** 每 token 输入价（字符串，"0" = 免费侧条件之一） */
+  promptPrice?: string
+  /** 每 token 输出价 */
+  completionPrice?: string
+  /** 输入模态：text / image / file / audio … */
+  inputModalities?: string[]
+  /** 是否支持 tool calling */
+  supportsTools?: boolean
+}
+
+/** 判断目录条目是否免费（prompt 和 completion 价格都为 0） */
+export function isCatalogModelFree(m: CatalogModel): boolean {
+  return m.promptPrice === '0' && m.completionPrice === '0'
+}
+
+/** 目录条目是否带元数据（决定管理器里能否显示徽章/筛选） */
+export function catalogModelHasMetadata(m: CatalogModel): boolean {
+  return m.promptPrice !== undefined || m.contextLength !== undefined || m.inputModalities !== undefined
+}
+
 /** Provider 配置 */
 export interface ProviderConfig {
   id: string

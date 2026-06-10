@@ -45,7 +45,7 @@ export async function syncJobsOnce(): Promise<{ ok: boolean; quota?: { used: num
       jobCache.set(j.id, { job: j, lastSyncAt: now, syncError: null })
     }
     return { ok: true, quota: resp.quota }
-  } catch (e) {
+  } catch {
     return { ok: false }
   }
 }

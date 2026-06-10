@@ -48,6 +48,7 @@ export type {
   ProviderPreset,
   ModelOption,
   ModelCapability,
+  CatalogModel,
   AgentMode,
   ChatParams,
   BackendLLMProvider,
@@ -58,6 +59,7 @@ export type {
   LLMConnectionTestRequest,
   LLMConnectionTestResponse,
 } from './settings'
+export { isCatalogModelFree, catalogModelHasMetadata } from './settings'
 export type { SystemStats, PlatformInfo } from './system'
 
 // ─── UI 类型 ─────────────────────────────────────────

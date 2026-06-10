@@ -53,20 +53,8 @@ describe('Issue 1: ChatView loadSessions must be awaited', () => {
 })
 
 // ════════════════════════════════════════════════════════════
-// Issue 2 (FIXED): TeamView i18n destructuring
+// Issue 2 (OBSOLETE): TeamView 已删除，对应断言移除
 // ════════════════════════════════════════════════════════════
-
-describe('Issue 2: TeamView i18n destructuring', () => {
-  const src = readSrc('views/TeamView.vue')
-
-  it('destructures { t } from useI18n()', () => {
-    expect(src).toMatch(/const\s*\{\s*t\s*\}\s*=\s*useI18n\(\)/)
-  })
-
-  it('imports useI18n from vue-i18n', () => {
-    expect(src).toContain("import { useI18n } from 'vue-i18n'")
-  })
-})
 
 // ════════════════════════════════════════════════════════════
 // Issue 3 (FIXED): TasksView delete confirmation
@@ -165,32 +153,8 @@ describe('Issue 5: deleteIMInstance wraps deleteBackendInstance in try/catch', (
 })
 
 // ════════════════════════════════════════════════════════════
-// Issue 6 (DOCUMENTED): TeamView hardcoded Chinese strings
+// Issue 6 (OBSOLETE): TeamView 已删除，对应断言移除
 // ════════════════════════════════════════════════════════════
-
-describe('Issue 6: TeamView still has hardcoded Chinese in template', () => {
-  const src = readSrc('views/TeamView.vue')
-  const templateStart = src.indexOf('<template>')
-  const template = src.slice(templateStart)
-
-  it('PageHeader title contains hardcoded Chinese "团队协作"', () => {
-    expect(template).toContain('团队协作')
-  })
-
-  it('PageHeader description contains hardcoded Chinese "共享智能体"', () => {
-    expect(template).toContain('共享智能体')
-  })
-
-  it('tab buttons contain hardcoded Chinese strings', () => {
-    expect(template).toContain('共享智能体')
-    expect(template).toContain('团队成员')
-    expect(template).toContain('导入/导出')
-  })
-
-  it('invite button has hardcoded "邀请成员"', () => {
-    expect(template).toContain('邀请成员')
-  })
-})
 
 // ════════════════════════════════════════════════════════════
 // Issue 7 (DOCUMENTED): TasksView missing error toast

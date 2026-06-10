@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 
-import { Plus, Trash2, Globe, AlertCircle } from 'lucide-vue-next'
+import { Plus, Trash2, Globe, AlertCircle, PowerOff } from 'lucide-vue-next'
 import { getWebhooks, createWebhook, deleteWebhook } from '@/api/webhook'
 import type { Webhook, WebhookType, WebhookEvent } from '@/api/webhook'
 import { useToast } from '@/composables/useToast'
 
+const { t } = useI18n()
 const toast = useToast()
 
 const webhooks = ref<Webhook[]>([])
@@ -14,6 +16,8 @@ const showCreate = ref(false)
 const creating = ref(false)
 const deletingIds = ref<Set<string>>(new Set())
 const loadError = ref('')
+/** 后端 webhook.enabled=false 时 /api/v1/webhooks 路由不注册（404），按"功能未启用"处理 */
+const featureDisabled = ref(false)
 let loadRequestGen = 0
 
 // Create form

@@ -38,6 +38,8 @@ import type { AgentConfig, AgentRole, AgentRule } from '@/types'
 import PageHeader from '@/components/common/PageHeader.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
+import SegmentedControl from '@/components/common/SegmentedControl.vue'
+import AgentRoutingRules from '@/components/channels/AgentRoutingRules.vue'
 
 const { t, locale } = useI18n()
 const router = useRouter()
@@ -46,6 +48,13 @@ const instances = ref<IMInstance[]>([])
 const loading = ref(true)
 const errorMsg = ref('')
 const searchQuery = ref('')
+
+// 页内 tab：通道实例 / 路由规则（消息按规则分派给 Agent）
+const activeTab = ref<'instances' | 'rules'>('instances')
+const channelTabs = computed(() => [
+  { key: 'instances', label: t('imChannels.tabInstances', '通道实例') },
+  { key: 'rules', label: t('agents.rulesDesc', '路由规则') },
+])
 
 const filteredInstances = computed(() => {
   const q = searchQuery.value.trim().toLowerCase()
@@ -508,14 +517,17 @@ async function copyWebhookUrl() {
   <div class="h-full flex flex-col overflow-hidden">
     <PageHeader :title="t('imChannels.title')" :description="t('imChannels.description')">
       <template #actions>
-        <SearchInput
-          v-model="searchQuery"
-          :placeholder="t('imChannels.searchPlaceholder')"
-        />
-        <button v-if="instances.length > 0" class="hc-im-btn hc-im-btn--accent" @click="openCreate">
-          <Plus :size="14" />
-          {{ t('imChannels.newInstance') }}
-        </button>
+        <SegmentedControl v-model="activeTab" :segments="channelTabs" />
+        <template v-if="activeTab === 'instances'">
+          <SearchInput
+            v-model="searchQuery"
+            :placeholder="t('imChannels.searchPlaceholder')"
+          />
+          <button v-if="instances.length > 0" class="hc-im-btn hc-im-btn--accent" @click="openCreate">
+            <Plus :size="14" />
+            {{ t('imChannels.newInstance') }}
+          </button>
+        </template>
       </template>
     </PageHeader>
 
@@ -555,7 +567,11 @@ async function copyWebhookUrl() {
       </button>
     </div>
 
-    <div class="flex-1 overflow-y-auto p-6">
+    <div v-if="activeTab === 'rules'" class="flex-1 overflow-y-auto p-6">
+      <AgentRoutingRules />
+    </div>
+
+    <div v-else class="flex-1 overflow-y-auto p-6">
       <LoadingState v-if="loading" />
 
       <!-- Empty state -->

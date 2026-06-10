@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiDelete } from './client'
+import { apiGet, apiPost } from './client'
 import { env } from '@/config/env'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { CronJob, CronJobInput, JobSpec } from '@/types'

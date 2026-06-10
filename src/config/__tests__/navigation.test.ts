@@ -46,15 +46,16 @@ describe('navigationItems data integrity', () => {
     }
   })
 
-  it('total count is 9', () => {
-    expect(navigationItems).toHaveLength(9)
+  it('total count is 8', () => {
+    expect(navigationItems).toHaveLength(8)
     const ids = navigationItems.map((n) => n.id)
     expect(ids).toEqual(
       expect.arrayContaining([
         'dashboard', 'chat', 'channels', 'agents',
-        'knowledge', 'automation', 'integration', 'logs', 'settings',
+        'knowledge', 'automation', 'integration', 'settings',
       ]),
     )
+    expect(ids).not.toContain('logs')
   })
 })
 
@@ -73,11 +74,12 @@ describe('getGroupedNavItems()', () => {
     expect(groups.core).toHaveLength(6)
   })
 
-  it('integration has 2 items (integration + logs)', () => {
-    expect(groups.integration).toHaveLength(2)
+  it('integration has 1 item, logs 为其子 tab', () => {
+    expect(groups.integration).toHaveLength(1)
     const ids = groups.integration.map((n) => n.id)
     expect(ids).toContain('integration')
-    expect(ids).toContain('logs')
+    const integrationChildren = groups.integration[0]!.children!.map((c) => c.id)
+    expect(integrationChildren).toContain('integration-logs')
   })
 
   it('system has 1 item (settings)', () => {
@@ -120,9 +122,11 @@ describe('getNavigationChildren(id)', () => {
     expect(children).toHaveLength(2)
   })
 
-  it('returns 2 children for "automation"', () => {
+  it('returns 2 children for "automation": tasks + webhooks', () => {
     const children = getNavigationChildren('automation')
     expect(children).toHaveLength(2)
+    const ids = children.map((c) => c.id)
+    expect(ids).toEqual(['automation-tasks', 'automation-webhooks'])
   })
 
   it('returns empty array for "chat" (no children)', () => {

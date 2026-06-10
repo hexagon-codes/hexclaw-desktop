@@ -37,7 +37,7 @@ describe('router onboarding flow', () => {
     expect(router.currentRoute.value.path).toBe('/welcome')
   })
 
-  it('registers /automation/canvas as a reachable automation route', async () => {
+  it('redirects legacy /automation/canvas to /automation', async () => {
     const store = {
       config: { llm: { providers: [{ id: 'openai' }] } },
       loadConfig: vi.fn(async () => undefined),
@@ -58,7 +58,8 @@ describe('router onboarding flow', () => {
     await router.push('/automation/canvas')
     await router.isReady()
 
-    expect(router.currentRoute.value.path).toBe('/automation/canvas')
-    expect(router.currentRoute.value.name).toBe('automation-canvas')
+    // canvas 已无独立路由，旧地址重定向到自动化首页
+    expect(router.currentRoute.value.path).toBe('/automation')
+    expect(router.currentRoute.value.name).toBe('automation')
   })
 })

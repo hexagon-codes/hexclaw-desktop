@@ -6,7 +6,7 @@ import { navigationItems } from '@/config/navigation'
 const navRouteComponents = {
   dashboard: () => import('@/views/DashboardView.vue'),
   chat: () => import('@/views/ChatView.vue'),
-  channels: () => import('@/views/ChannelsView.vue'),
+  channels: () => import('@/views/IMChannelsView.vue'),
   agents: () => import('@/views/AgentsView.vue'),
   knowledge: () => import('@/views/KnowledgeCenterView.vue'),
   automation: () => import('@/views/AutomationView.vue'),
@@ -60,16 +60,14 @@ const router = createRouter({
     // 旧路由重定向（兼容书签/收藏）
     { path: '/memory', redirect: '/knowledge/memory' },
     { path: '/tasks', redirect: '/automation' },
-    { path: '/canvas', redirect: '/automation/canvas' },
+    { path: '/canvas', redirect: '/automation' },
+    { path: '/automation/canvas', redirect: '/automation' },
+    { path: '/logs', redirect: '/integration/logs' },
+    { path: '/team', redirect: '/settings' },
     { path: '/skills', redirect: '/integration' },
     { path: '/mcp', redirect: '/integration/mcp' },
     { path: '/im-channels', redirect: '/channels' },
     { path: '/integration/im', redirect: '/channels' },
-    {
-      path: '/team',
-      name: 'team',
-      component: () => import('@/views/TeamView.vue'),
-    },
     // 独立窗口页面
     {
       path: '/quick-chat',

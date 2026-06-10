@@ -1079,8 +1079,8 @@ describe('Review-fix: 本轮修复项结构验证', () => {
     expect(src).not.toContain('data-info="新对话和快捷入口')
   })
 
-  it('AgentsView RULE_PLATFORM_OPTIONS 应包含所有后端支持的平台', () => {
-    const src = readSrc('views/AgentsView.vue')
+  it('AgentRoutingRules RULE_PLATFORM_OPTIONS 应包含所有后端支持的平台', () => {
+    const src = readSrc('components/channels/AgentRoutingRules.vue')
     expect(src).toContain("'api'")
     expect(src).toContain("'telegram'")
     expect(src).toContain("'feishu'")

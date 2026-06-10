@@ -12,6 +12,8 @@ import {
   Loader2,
   CheckCircle,
   XCircle,
+  Radio,
+  Zap,
 } from 'lucide-vue-next'
 import hexagonLogo from '@/assets/logo.png'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
@@ -188,7 +190,7 @@ async function testConnection() {
 
 const finishError = ref('')
 
-async function finishWizard() {
+async function finishWizard(targetPath?: string) {
   if (finishing.value) return
   finishing.value = true
   finishError.value = ''
@@ -243,7 +245,9 @@ async function finishWizard() {
       }
     }
 
-    if (selectedAgentRole.value) {
+    if (targetPath) {
+      router.push(targetPath)
+    } else if (selectedAgentRole.value) {
       router.push({
         path: '/chat',
         query: {
@@ -572,6 +576,34 @@ async function skip() {
                 }}
               </span>
             </div>
+          </div>
+
+          <!-- 下一步引导：聊天之外的两个核心场景入口 -->
+          <div class="mx-auto mt-4 max-w-sm flex flex-col gap-2">
+            <button
+              class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:border-[var(--hc-accent)]"
+              :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
+              :disabled="finishing"
+              @click="finishWizard('/channels')"
+            >
+              <Radio :size="18" :style="{ color: 'var(--hc-accent)' }" class="shrink-0" />
+              <span class="flex-1">
+                <span class="block text-xs font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ t('welcome.quickChannels', '接入 IM 通道') }}</span>
+                <span class="block text-[11px] mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.quickChannelsDesc', '让 AI 出现在你的微信 / 飞书 / Telegram 里') }}</span>
+              </span>
+            </button>
+            <button
+              class="flex items-center gap-3 rounded-xl border p-3 text-left transition-colors hover:border-[var(--hc-accent)]"
+              :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
+              :disabled="finishing"
+              @click="finishWizard('/automation')"
+            >
+              <Zap :size="18" :style="{ color: 'var(--hc-accent)' }" class="shrink-0" />
+              <span class="flex-1">
+                <span class="block text-xs font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ t('welcome.quickAutomation', '创建第一个定时任务') }}</span>
+                <span class="block text-[11px] mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">{{ t('welcome.quickAutomationDesc', '每天早上让 AI 主动给你发简报') }}</span>
+              </span>
+            </button>
           </div>
         </div>
       </div>

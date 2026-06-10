@@ -5,7 +5,7 @@ import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import KnowledgeCenterView from '../KnowledgeCenterView.vue'
 import IntegrationView from '../IntegrationView.vue'
-import ChannelsView from '../ChannelsView.vue'
+import ChannelsView from '../IMChannelsView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
 const { getDocuments, uploadDocument } = vi.hoisted(() => ({

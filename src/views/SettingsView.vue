@@ -16,10 +16,13 @@ import {
   XCircle,
   Zap,
   RotateCcw,
+  SlidersHorizontal,
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
+import { useModelCatalogStore } from '@/stores/model-catalog'
 import { getRuntimeConfig } from '@/api/settings'
 import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
+import { exportAllConfig, importConfig, type ExportBundle } from '@/api/team'
 import { fetchCapabilities, probeCapability } from '@/api/capabilities'
 import {
   getBudgetStatus,
@@ -51,11 +54,13 @@ import PageToolbar from '@/components/common/PageToolbar.vue'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import OllamaCard from '@/components/settings/OllamaCard.vue'
+import ModelManagerModal from '@/components/settings/ModelManagerModal.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
+const catalogStore = useModelCatalogStore()
 const { themeMode, setTheme } = useTheme()
 const activeSection = ref('llm')
 const saved = ref(false)
@@ -665,6 +670,7 @@ async function handleDeleteProvider(id: string) {
   const prevEditingId = editingProviderId.value
 
   settingsStore.removeProvider(id)
+  catalogStore.removeCatalog(id)
   if (editingProviderId.value === id) {
     editingProviderId.value = null
   }
@@ -886,7 +892,14 @@ async function testProvider(provider: ProviderConfig) {
   }
 }
 
-/** 连接成功后，从 Provider 动态拉取可用模型列表，与预设合并 */
+/**
+ * 小目录（官方直连服务商，如智谱 8 个模型）阈值：
+ * ≤ 此值维持"全量同步进启用列表"的原行为；
+ * > 此值视为聚合中转站（OpenRouter 339 个），目录与启用分层，避免污染全应用模型选择器。
+ */
+const AUTO_ENABLE_CATALOG_LIMIT = 20
+
+/** 连接成功后，从 Provider 动态拉取可用模型目录 */
 async function syncRemoteModels(provider: ProviderConfig) {
   const preset = PROVIDER_PRESETS[provider.type]
   const baseUrl = provider.baseUrl || preset?.defaultBaseUrl || ''
@@ -895,6 +908,30 @@ async function syncRemoteModels(provider: ProviderConfig) {
   try {
     const remoteModels = await fetchProviderModels(baseUrl, apiKey)
     if (!remoteModels.length) return
+    // 目录层：全量 + 元数据存本地缓存（含"新增"diff），供模型管理器浏览
+    catalogStore.setCatalog(provider.id, remoteModels)
+
+    if (remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT) {
+      // 聚合商大目录：不自动灌入启用层，只回填已启用模型的展示名。
+      // 启用/停用由模型管理器负责；上游已下架的模型由 isStaleModel 标记，不静默删除。
+      const catalogMap = new Map(remoteModels.map(m => [m.id, m]))
+      let changed = false
+      const refreshed = provider.models.map(m => {
+        const cm = catalogMap.get(m.id)
+        if (cm?.name && cm.name !== m.name && !m.isCustom) {
+          changed = true
+          return { ...m, name: cm.name }
+        }
+        return m
+      })
+      if (changed) {
+        provider.models = refreshed
+        autoSave()
+      }
+      return
+    }
+
+    // 小目录：维持原行为，与预设合并后全量进启用列表
     const presetMap = new Map((preset?.defaultModels ?? []).map(m => [m.id, m]))
     const existingMap = new Map(provider.models.map(m => [m.id, m]))
     const merged: typeof provider.models = []
@@ -932,6 +969,100 @@ async function syncRemoteModels(provider: ProviderConfig) {
   } catch (e) {
     logger.warn('[Settings] 拉取远程模型列表失败（不影响使用）:', e)
   }
+}
+
+// ─── 模型管理器（目录/启用两层架构的管理入口） ─────────────
+const modelManagerProviderId = ref<string | null>(null)
+const managerSyncing = ref(false)
+const modelManagerProvider = computed(
+  () => config.value?.llm.providers.find(p => p.id === modelManagerProviderId.value) ?? null,
+)
+
+function providerCatalogCount(providerId: string): number {
+  return catalogStore.getCatalog(providerId)?.models.length ?? 0
+}
+
+function providerHasNewModels(providerId: string): boolean {
+  return (catalogStore.getCatalog(providerId)?.newIds.length ?? 0) > 0
+}
+
+/**
+ * 已启用模型是否已被上游下架（同步过目录、目录里没有它）。
+ * 自定义模型和图像/视频生成模型不参与判断（/models 本就不返回它们）。
+ */
+function isStaleModel(provider: ProviderConfig, model: ModelOption): boolean {
+  const catalog = catalogStore.getCatalog(provider.id)
+  if (!catalog || catalog.models.length === 0) return false
+  if (model.isCustom) return false
+  if (model.capabilities?.some(c => c === 'image_generation' || c === 'video_generation')) return false
+  return !catalog.models.some(m => m.id === model.id)
+}
+
+async function handleManagerResync() {
+  const provider = modelManagerProvider.value
+  if (!provider || managerSyncing.value) return
+  managerSyncing.value = true
+  try {
+    await syncRemoteModels(provider)
+  } finally {
+    managerSyncing.value = false
+  }
+}
+
+// ─── 配置导入导出 ──────────────────────────────────────
+const exportingBundle = ref(false)
+const importingBundle = ref(false)
+const bundleResultMsg = ref('')
+const bundleResultIsError = ref(false)
+
+async function handleExportConfigBundle() {
+  if (exportingBundle.value) return
+  exportingBundle.value = true
+  bundleResultMsg.value = ''
+  try {
+    const bundle = await exportAllConfig()
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `hexclaw-export-${new Date().toISOString().slice(0, 10)}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    bundleResultIsError.value = false
+    bundleResultMsg.value = t('settings.configBundle.exportDone', '已导出')
+  } catch (e) {
+    bundleResultIsError.value = true
+    bundleResultMsg.value = messageFromUnknownError(e)
+  } finally {
+    exportingBundle.value = false
+  }
+}
+
+function handleImportConfigBundle() {
+  if (importingBundle.value) return
+  bundleResultMsg.value = ''
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = '.json'
+  input.onchange = async () => {
+    const file = input.files?.[0]
+    if (!file) return
+    importingBundle.value = true
+    try {
+      const text = await file.text()
+      const bundle = JSON.parse(text) as ExportBundle
+      const result = await importConfig(bundle)
+      await settingsStore.loadConfig()
+      bundleResultIsError.value = false
+      bundleResultMsg.value = t('settings.configBundle.importDone', { n: result.imported }, `成功导入 ${result.imported} 项配置`)
+    } catch (e) {
+      bundleResultIsError.value = true
+      bundleResultMsg.value = messageFromUnknownError(e)
+    } finally {
+      importingBundle.value = false
+    }
+  }
+  input.click()
 }
 
 /** 自动保存（防抖） */
@@ -1310,10 +1441,15 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   <div class="hc-settings__field">
                     <div class="hc-model-section-header">
                       <label class="hc-settings__label">{{ t('settings.llm.models') }} <span class="hc-settings__required">*</span></label>
+                      <span v-if="providerCatalogCount(provider.id)" class="hc-model-enabled-summary">
+                        {{ t('settings.llm.modelsEnabledSummary', '已启用') }}
+                        <b>{{ provider.models.length }}</b> / {{ providerCatalogCount(provider.id) }}
+                        {{ t('settings.llm.modelsAvailable', '可用') }}
+                      </span>
                       <span v-if="testProviderResult[provider.id]?.ok" class="hc-model-sync-hint">
                         {{ t('settings.llm.modelsDynamic', '动态获取') }} · {{ t('settings.llm.justSynced', '刚刚同步') }}
                       </span>
-                      <span v-else-if="provider.models.length > 0" class="hc-model-sync-hint">
+                      <span v-else-if="provider.models.length > 0 && !providerCatalogCount(provider.id)" class="hc-model-sync-hint">
                         {{ t('settings.llm.modelsPreset', '预设模型') }}
                       </span>
                     </div>
@@ -1322,10 +1458,17 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         v-for="model in provider.models"
                         :key="model.id"
                         class="hc-model-chip"
-                        :class="{ 'hc-model-chip--active': provider.selectedModelId === model.id }"
+                        :class="{
+                          'hc-model-chip--active': provider.selectedModelId === model.id,
+                          'hc-model-chip--stale': isStaleModel(provider, model),
+                        }"
+                        :title="isStaleModel(provider, model) ? t('settings.llm.modelStale', '上游已下架：该模型在最近一次同步的目录中不存在') : undefined"
                         @click="provider.selectedModelId = model.id; handleProviderModelChange(provider)"
                       >
                         {{ model.name || model.id }}
+                        <span v-if="isStaleModel(provider, model)" class="hc-model-chip__stale-label">
+                          {{ t('settings.llm.modelStaleLabel', '已下架') }}
+                        </span>
                         <span
                           v-for="cap in displayCapabilities(model)"
                           :key="cap"
@@ -1355,6 +1498,20 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                           :title="model.isCustom ? '删除自定义模型' : '从当前列表移除（下次测试连接会重新拉取）'"
                           @click.stop="removeProviderModel(provider, model.id)"
                         >×</span>
+                      </button>
+                      <!-- 管理模型：浏览/启用目录中的全量模型（聚合商数百个时的主入口） -->
+                      <button
+                        v-if="providerCatalogCount(provider.id)"
+                        class="hc-model-chip hc-model-chip--manage"
+                        @click="modelManagerProviderId = provider.id"
+                      >
+                        <SlidersHorizontal :size="11" />
+                        {{ t('settings.llm.manageModels', '管理模型') }}
+                        <span
+                          v-if="providerHasNewModels(provider.id)"
+                          class="hc-model-chip__new-dot"
+                          :title="t('settings.llm.newModelsFound', '本次同步发现新模型')"
+                        />
                       </button>
                       <!-- 添加自定义模型 -->
                       <button
@@ -1522,6 +1679,27 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   @change="autoSave()"
                 />
               </label>
+
+              <!-- 配置导入导出 -->
+              <div class="hc-settings__field">
+                <label class="hc-settings__label">{{ t('settings.configBundle.title', '配置导入导出') }}</label>
+                <p class="hc-settings__hint">
+                  {{ t('settings.configBundle.desc', '导出当前全部配置为 JSON 文件，可在其他设备导入复用。') }}
+                </p>
+                <div class="hc-settings__bundle-actions">
+                  <button class="hc-btn hc-btn-sm" :disabled="exportingBundle" @click="handleExportConfigBundle">
+                    {{ exportingBundle ? t('common.loading', 'Loading...') : t('settings.configBundle.export', '导出配置') }}
+                  </button>
+                  <button class="hc-btn hc-btn-sm" :disabled="importingBundle" @click="handleImportConfigBundle">
+                    {{ importingBundle ? t('common.loading', 'Loading...') : t('settings.configBundle.import', '导入配置') }}
+                  </button>
+                  <span
+                    v-if="bundleResultMsg"
+                    class="hc-settings__bundle-result"
+                    :class="{ 'hc-settings__bundle-result--err': bundleResultIsError }"
+                  >{{ bundleResultMsg }}</span>
+                </div>
+              </div>
             </div>
 
             <!-- 系统信息 -->
@@ -1854,6 +2032,16 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
     :cancel-text="t('common.cancel')"
     @confirm="confirmDeleteModel"
     @cancel="pendingDeleteModel = null"
+  />
+
+  <ModelManagerModal
+    v-if="modelManagerProvider"
+    :open="!!modelManagerProvider"
+    :provider="modelManagerProvider"
+    :syncing="managerSyncing"
+    @close="modelManagerProviderId = null"
+    @change="autoSave()"
+    @resync="handleManagerResync"
   />
 </template>
 
@@ -3053,6 +3241,74 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   color: var(--hc-accent, #4a90d9);
   border-color: var(--hc-accent, #4a90d9);
   background: color-mix(in srgb, var(--hc-accent, #4a90d9) 5%, transparent);
+}
+
+/* 管理模型入口：目录/启用两层架构的主入口（聚合商数百模型场景） */
+.hc-model-chip--manage {
+  position: relative;
+  border-style: dashed;
+  border-color: var(--hc-accent, #4a90d9);
+  color: var(--hc-accent, #4a90d9);
+}
+
+.hc-model-chip--manage:hover {
+  background: var(--hc-accent-subtle);
+  border-color: var(--hc-accent, #4a90d9);
+}
+
+/* 新增模型提示点：信息性提示用品牌色，警示色留给异常 */
+.hc-model-chip__new-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hc-accent, #4a90d9);
+  border: 2px solid var(--hc-bg-main, #161722);
+}
+
+/* 已启用摘要（目录存在时显示"已启用 N / M 可用"） */
+.hc-model-enabled-summary {
+  font-size: 11px;
+  color: var(--hc-text-secondary, #9d9da7);
+}
+
+.hc-model-enabled-summary b {
+  color: var(--hc-text-primary, #f0f0f3);
+  font-weight: 600;
+}
+
+/* 配置导入导出 */
+.hc-settings__bundle-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.hc-settings__bundle-result {
+  font-size: 12px;
+  color: var(--hc-success, #32d583);
+}
+
+.hc-settings__bundle-result--err {
+  color: var(--hc-error, #f56565);
+}
+
+/* 上游已下架：橙色警示，不静默删除，由用户处置 */
+.hc-model-chip--stale {
+  border-color: var(--hc-warning, #f0b429);
+  background: color-mix(in srgb, var(--hc-warning, #f0b429) 8%, transparent);
+}
+
+.hc-model-chip__stale-label {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--hc-warning, #f0b429) 16%, transparent);
+  color: var(--hc-warning, #f0b429);
 }
 
 .hc-model-chip__cap {

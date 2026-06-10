@@ -605,7 +605,6 @@ describe('AgentsView — edge cases', () => {
                 @click="$emit('update:modelValue', s.key)">{{ s.label }}</button>
             </div>`,
           },
-          AgentConference: { template: '<div />' },
           teleport: true,
           transition: false,
         },

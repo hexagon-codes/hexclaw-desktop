@@ -17,7 +17,15 @@ import { describe, it, expect } from 'vitest'
 import {
   parseCronSlashCommand,
   naturalizeSchedule,
+  type CronSlashCommand,
 } from '@/composables/useCronSlashParser'
+
+/** 断言收窄到 add 分支，避免条件 expect（vitest/no-conditional-expect） */
+function assertAdd(
+  r: CronSlashCommand | null,
+): asserts r is Extract<CronSlashCommand, { kind: 'add' }> {
+  expect(r?.kind).toBe('add')
+}
 
 describe('parseCronSlashCommand — D3.2', () => {
   it('未以 /cron 开头 → 返 null（让 LLM 路径接管）', () => {
@@ -69,29 +77,23 @@ describe('parseCronSlashCommand — D3.2', () => {
 
   it('/cron add 30m "..." → kind=add，rawDescription 已 naturalize', () => {
     const r = parseCronSlashCommand('/cron add 30m "采集新闻"')
-    expect(r?.kind).toBe('add')
-    if (r && r.kind === 'add') {
-      expect(r.rawDescription).toContain('每 30 分钟')
-      expect(r.rawDescription).toContain('采集新闻')
-    }
+    assertAdd(r)
+    expect(r.rawDescription).toContain('每 30 分钟')
+    expect(r.rawDescription).toContain('采集新闻')
   })
 
   it('/cron add @daily "摘要" → 每天 摘要', () => {
     const r = parseCronSlashCommand('/cron add @daily "摘要"')
-    expect(r?.kind).toBe('add')
-    if (r && r.kind === 'add') {
-      expect(r.rawDescription).toContain('每天')
-      expect(r.rawDescription).toContain('摘要')
-    }
+    assertAdd(r)
+    expect(r.rawDescription).toContain('每天')
+    expect(r.rawDescription).toContain('摘要')
   })
 
   it('/cron 每天 10 点 采集网易新闻 → kind=add（无显式子命令）', () => {
     const r = parseCronSlashCommand('/cron 每天 10 点 采集网易新闻')
-    expect(r?.kind).toBe('add')
-    if (r && r.kind === 'add') {
-      // intent 至少 tier=2（有 cron hint），具体提取依赖 classifyCronIntent
-      expect([1, 2, 3]).toContain(r.intent.tier)
-    }
+    assertAdd(r)
+    // intent 至少 tier=2（有 cron hint），具体提取依赖 classifyCronIntent
+    expect([1, 2, 3]).toContain(r.intent.tier)
   })
 
   it('/cron add（无 tail）→ unknown', () => {

@@ -115,7 +115,7 @@ describe('AutomationView', () => {
 
     const labels = wrapper.findAll('.segmented-item').map((node) => node.text())
     expect(labels).toContain('定时任务')
-    expect(labels).toContain('工作流画布')
+    expect(labels).toContain('Webhooks')
     expect(labels).toHaveLength(2)
   })
 

@@ -2,7 +2,7 @@ import { logger } from '@/utils/logger'
 import { messageFromUnknownError } from '@/utils/errors'
 import { env } from '@/config/env'
 import { isTauri } from '@/utils/platform'
-import type { BackendLLMConfig, LLMConnectionTestRequest, LLMConnectionTestResponse } from '@/types/settings'
+import type { BackendLLMConfig, CatalogModel, LLMConnectionTestRequest, LLMConnectionTestResponse } from '@/types/settings'
 
 function safeJsonParse<T>(text: string, context: string): T {
   try {
@@ -122,16 +122,28 @@ export async function testLLMConnection(
   return safeJsonParse<LLMConnectionTestResponse>(text, 'testLLMConnection')
 }
 
+/** 后端 /api/v1/config/llm/models 返回的模型条目（snake_case） */
+interface BackendProviderModel {
+  id: string
+  name?: string
+  context_length?: number
+  prompt_price?: string
+  completion_price?: string
+  input_modalities?: string[]
+  supports_tools?: boolean
+}
+
 /**
- * 从 Provider 的 /models 端点动态获取可用模型列表
+ * 从 Provider 的 /models 端点动态获取可用模型目录
  *
  * 大多数 Provider 兼容 OpenAI 格式：GET {base_url}/models → { data: [{ id, ... }] }
+ * OpenRouter 等聚合商额外返回 pricing / modalities / tools 元数据，由后端透传。
  * Ollama 由 syncOllamaModels 单独处理，此函数用于云端 Provider。
  */
 export async function fetchProviderModels(
   baseUrl: string,
   apiKey: string,
-): Promise<{ id: string; name?: string }[]> {
+): Promise<CatalogModel[]> {
   try {
     assertExternalBaseUrlAllowed(baseUrl)
   } catch (e) {
@@ -143,6 +155,14 @@ export async function fetchProviderModels(
     '/api/v1/config/llm/models',
     JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
   )
-  const result = safeJsonParse<{ models?: { id: string; name?: string }[] }>(text, 'fetchProviderModels')
-  return result.models ?? []
+  const result = safeJsonParse<{ models?: BackendProviderModel[] }>(text, 'fetchProviderModels')
+  return (result.models ?? []).map((m) => ({
+    id: m.id,
+    name: m.name || m.id,
+    contextLength: m.context_length,
+    promptPrice: m.prompt_price,
+    completionPrice: m.completion_price,
+    inputModalities: m.input_modalities,
+    supportsTools: m.supports_tools,
+  }))
 }
