@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useI18n } from 'vue-i18n'
 
 import { Plus, Trash2, Globe, AlertCircle, PowerOff } from 'lucide-vue-next'
 import { getWebhooks, createWebhook, deleteWebhook } from '@/api/webhook'
 import type { Webhook, WebhookType, WebhookEvent } from '@/api/webhook'
 import { useToast } from '@/composables/useToast'
 
-const { t } = useI18n()
 const toast = useToast()
 
 const webhooks = ref<Webhook[]>([])
@@ -59,6 +57,7 @@ async function loadWebhooks() {
   const requestGen = ++loadRequestGen
   loading.value = true
   loadError.value = ''
+  featureDisabled.value = false
   try {
     const res = await getWebhooks()
     if (requestGen !== loadRequestGen) return
@@ -66,8 +65,13 @@ async function loadWebhooks() {
   } catch (e) {
     if (requestGen !== loadRequestGen) return
     webhooks.value = []
-    loadError.value = (e as Error)?.message || 'Load failed'
-    console.error('Failed to load webhooks:', e)
+    const status = (e as { status?: number })?.status
+    if (status === 404) {
+      featureDisabled.value = true
+    } else {
+      loadError.value = (e as Error)?.message || 'Load failed'
+      console.error('Failed to load webhooks:', e)
+    }
   } finally {
     if (requestGen === loadRequestGen) {
       loading.value = false
@@ -126,8 +130,8 @@ defineExpose({ loadWebhooks })
 
 <template>
   <div class="webhook-panel">
-    <!-- Header -->
-    <div class="webhook-panel__header">
+    <!-- Header（功能未启用时不提供入口） -->
+    <div v-if="!featureDisabled" class="webhook-panel__header">
       <span class="webhook-panel__count">{{ webhooks.length }} webhooks</span>
       <button class="hc-btn hc-btn-primary hc-btn-sm" @click="showCreate ? closeCreateForm() : openCreateForm()">
         <Plus :size="14" />
@@ -168,6 +172,12 @@ defineExpose({ loadWebhooks })
 
     <!-- List -->
     <div v-if="loading" class="webhook-panel__loading">Loading...</div>
+    <div v-else-if="featureDisabled" class="webhook-panel__disabled">
+      <PowerOff :size="32" />
+      <p class="webhook-panel__disabled-title">Webhook 接收未启用</p>
+      <p class="webhook-panel__disabled-desc">在配置文件中将 webhook.enabled 设为 true 并重启引擎后即可使用。</p>
+      <code class="webhook-panel__disabled-code">~/.hexclaw/hexclaw.yaml → webhook.enabled: true</code>
+    </div>
     <div v-else-if="loadError" class="webhook-panel__error">
       <AlertCircle :size="32" />
       <p>{{ loadError }}</p>
@@ -215,6 +225,14 @@ defineExpose({ loadWebhooks })
 .webhook-panel__event-tag { font-size: 11px; padding: 1px 6px; background: var(--accent-muted); border-radius: 4px; }
 .webhook-panel__delete { position: absolute; top: 8px; right: 8px; }
 .webhook-panel__empty { text-align: center; padding: 40px; color: var(--text-tertiary); }
+.webhook-panel__disabled { text-align: center; padding: 40px; color: var(--hc-text-secondary); }
+.webhook-panel__disabled-title { margin-top: 12px; font-size: 14px; font-weight: 600; color: var(--hc-text-primary); }
+.webhook-panel__disabled-desc { margin-top: 4px; font-size: 12.5px; color: var(--hc-text-muted); }
+.webhook-panel__disabled-code {
+  display: inline-block; margin-top: 10px; padding: 4px 10px;
+  border-radius: 6px; background: var(--hc-bg-input); border: 0.5px solid var(--hc-border);
+  font-size: 11.5px; font-family: ui-monospace, 'SF Mono', monospace; color: var(--hc-text-secondary);
+}
 .webhook-panel__loading { text-align: center; padding: 40px; color: var(--text-tertiary); }
 .webhook-panel__error { text-align: center; padding: 40px; color: var(--hc-error, #dc2626); }
 </style>

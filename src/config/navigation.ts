@@ -7,6 +7,7 @@ import {
   BookOpen,
   Zap,
   Blocks,
+  ScrollText,
   Settings,
 
 } from 'lucide-vue-next'
@@ -109,14 +110,21 @@ export const navigationItems: NavItem[] = [
     path: '/integration',
     i18nKey: 'nav.integration',
     icon: Blocks,
-    keywords: 'integration 集成 skill 技能 mcp 工具 im 通道 channel logs 日志 诊断 diagnosis',
+    keywords: 'integration 集成 skill 技能 mcp 工具 im 通道 channel 诊断 diagnosis',
     group: 'integration',
     children: [
       { id: 'integration-skills', path: '/integration', i18nKey: 'nav.integrationSkills' },
       { id: 'integration-mcp', path: '/integration/mcp', i18nKey: 'nav.integrationMcp' },
-      { id: 'integration-logs', path: '/integration/logs', i18nKey: 'nav.logs' },
       { id: 'integration-diagnostics', path: '/integration/diagnostics', i18nKey: 'nav.integrationDiagnostics' },
     ],
+  },
+  {
+    id: 'logs',
+    path: '/logs',
+    i18nKey: 'nav.logs',
+    icon: ScrollText,
+    keywords: 'logs 日志 诊断 diagnosis 观测 observability',
+    group: 'integration',
   },
 
   // ─── 系统 ───

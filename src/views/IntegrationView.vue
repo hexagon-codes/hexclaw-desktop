@@ -6,7 +6,6 @@ import { Download, Plus, Store, FolderOpen, Link } from 'lucide-vue-next'
 import { useLogsStore } from '@/stores/logs'
 import SkillsView from '@/views/SkillsView.vue'
 import McpView from '@/views/McpView.vue'
-import LogsView from '@/views/LogsView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
@@ -19,7 +18,6 @@ const router = useRouter()
 
 function resolveTab(path: string): string {
   if (path.startsWith('/integration/mcp')) return 'mcp'
-  if (path.startsWith('/integration/logs')) return 'logs'
   if (path.startsWith('/integration/diagnostics')) return 'diagnostics'
   return 'skills'
 }
@@ -29,7 +27,6 @@ const integrationSearch = ref('')
 const tabKeyMap: Record<string, string> = {
   'integration-skills': 'skills',
   'integration-mcp': 'mcp',
-  'integration-logs': 'logs',
   'integration-diagnostics': 'diagnostics',
 }
 
@@ -45,7 +42,7 @@ watch(() => route.path, (p) => {
 })
 
 watch(activeTab, (tab) => {
-  const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp', logs: '/integration/logs', diagnostics: '/integration/diagnostics' }
+  const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp', diagnostics: '/integration/diagnostics' }
   const target = pathMap[tab] || '/integration'
   if (route.path !== target) router.replace(target)
 })
@@ -158,7 +155,6 @@ function onSplitSelect(id: string) {
         :hide-installed-search="true"
       />
       <McpView v-else-if="activeTab === 'mcp'" ref="mcpViewRef" />
-      <LogsView v-else-if="activeTab === 'logs'" />
       <div v-else-if="activeTab === 'diagnostics'" class="hc-diagnostics">
         <div class="hc-diagnostics__card">
           <div class="hc-diagnostics__title">{{ t('integration.recentFailures', 'Recent Failures') }}</div>

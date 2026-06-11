@@ -62,7 +62,7 @@ const router = createRouter({
     { path: '/tasks', redirect: '/automation' },
     { path: '/canvas', redirect: '/automation' },
     { path: '/automation/canvas', redirect: '/automation' },
-    { path: '/logs', redirect: '/integration/logs' },
+    { path: '/integration/logs', redirect: '/logs' },
     { path: '/team', redirect: '/settings' },
     { path: '/skills', redirect: '/integration' },
     { path: '/mcp', redirect: '/integration/mcp' },

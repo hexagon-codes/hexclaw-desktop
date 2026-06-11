@@ -46,16 +46,15 @@ describe('navigationItems data integrity', () => {
     }
   })
 
-  it('total count is 8', () => {
-    expect(navigationItems).toHaveLength(8)
+  it('total count is 9', () => {
+    expect(navigationItems).toHaveLength(9)
     const ids = navigationItems.map((n) => n.id)
     expect(ids).toEqual(
       expect.arrayContaining([
         'dashboard', 'chat', 'channels', 'agents',
-        'knowledge', 'automation', 'integration', 'settings',
+        'knowledge', 'automation', 'integration', 'logs', 'settings',
       ]),
     )
-    expect(ids).not.toContain('logs')
   })
 })
 
@@ -74,12 +73,11 @@ describe('getGroupedNavItems()', () => {
     expect(groups.core).toHaveLength(6)
   })
 
-  it('integration has 1 item, logs 为其子 tab', () => {
-    expect(groups.integration).toHaveLength(1)
+  it('integration has 2 items (integration + logs)', () => {
+    expect(groups.integration).toHaveLength(2)
     const ids = groups.integration.map((n) => n.id)
     expect(ids).toContain('integration')
-    const integrationChildren = groups.integration[0]!.children!.map((c) => c.id)
-    expect(integrationChildren).toContain('integration-logs')
+    expect(ids).toContain('logs')
   })
 
   it('system has 1 item (settings)', () => {
