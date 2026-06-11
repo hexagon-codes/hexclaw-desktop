@@ -336,7 +336,9 @@ describe('边界条件', () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(3)
     for (const call of mockFetch.mock.calls) {
-      expect((call[1] as Record<string, unknown>).body).toHaveProperty('user_id', EXPECTED_USER_ID)
+      // user_id lives in the URL query (backend feedback handler reads query
+      // only — BUG-20260611), not the body.
+      expect(call[0] as string).toContain(`user_id=${EXPECTED_USER_ID}`)
     }
   })
 
@@ -369,14 +371,23 @@ describe('静态分析: 跨文件 user_id 完整性', () => {
     expect(source).toContain("DESKTOP_USER_ID")
   })
 
-  it('chat.ts 会话区域无裸 apiGet/apiPost 调用', async () => {
+  it('chat.ts 会话区每个裸 api* 调用都带 user_id= query（BUG-20260611）', async () => {
     const fs = await import('node:fs')
     const path = await import('node:path')
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/api/chat.ts'), 'utf-8')
 
     const sessionSection = source.slice(source.indexOf('// ============== Session Fork'))
-    const bareApiCalls = sessionSection.match(/\bapiGet\b|\bapiPost\b|\bapiPatch\b|\bapiPut\b/g) || []
-    expect(bareApiCalls, `会话区域发现直接调用: ${bareApiCalls.join(', ')}`).toEqual([])
+    // 正确不变量：裸 api* 调用允许，但必须在调用内显式带 user_id= query —
+    // session* 包装器把 user_id 注入 body，对只读 query 的后端 handler 是 bug 源头。
+    const offenders: string[] = []
+    const re = /\bapi(Get|Post|Put|Patch)\b/g
+    let m: RegExpExecArray | null
+    while ((m = re.exec(sessionSection)) !== null) {
+      if (!sessionSection.slice(m.index, m.index + 300).includes('user_id=')) {
+        offenders.push(sessionSection.slice(m.index, m.index + 60).split('\n')[0].trim())
+      }
+    }
+    expect(offenders, `这些裸 api* 调用未带 user_id= query: ${offenders.join(', ')}`).toEqual([])
   })
 
   it('chat.ts sessionGet/Post/Patch/Put 辅助函数全部注入 DESKTOP_USER_ID', async () => {
@@ -387,6 +398,20 @@ describe('静态分析: 跨文件 user_id 完整性', () => {
     for (const fn of ['sessionGet', 'sessionPost', 'sessionPatch', 'sessionPut']) {
       const regex = new RegExp(`function ${fn}[^}]+user_id:\\s*DESKTOP_USER_ID`)
       expect(regex.test(source), `${fn} 必须包含 user_id: DESKTOP_USER_ID`).toBe(true)
+    }
+  })
+
+  it('chat.ts session 写包装器同时注入 URL query user_id=（M11：覆盖 query-only 后端 reader）', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const source = fs.readFileSync(path.resolve(process.cwd(), 'src/api/chat.ts'), 'utf-8')
+
+    // Wrappers inject user_id into the body (covers body-only readers like
+    // handleForkSession) AND route the URL through withUserIdQuery (covers
+    // query-only readers) — both halves are required.
+    for (const fn of ['sessionPost', 'sessionPatch', 'sessionPut']) {
+      const re = new RegExp(`function ${fn}<T>\\([^)]*\\)\\s*\\{\\s*return api(Post|Patch|Put)<T>\\(withUserIdQuery\\(url\\)`)
+      expect(re.test(source), `${fn} 必须经 withUserIdQuery(url) 注入 query user_id`).toBe(true)
     }
   })
 

@@ -50,8 +50,9 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   })
 
   it('updateSessionTitle sends PATCH /api/v1/sessions/{id} with {title}', () => {
-    // Frontend: sessionPatch(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`, { title })
-    expect(chatSource).toContain("sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`, { title })")
+    // Frontend: sessionPatch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })
+    // — the sessionPatch wrapper appends the encoded user_id= query itself (M11).
+    expect(chatSource).toContain("sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })")
   })
 
   it('updateSessionTitle response matches backend updateSession handler', () => {
@@ -62,7 +63,8 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   })
 
   it('deleteSession sends DELETE /api/v1/sessions/{id}', () => {
-    expect(chatSource).toContain("apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`)")
+    // user_id is encoded like every other query param (review L2 consistency).
+    expect(chatSource).toContain("apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`)")
   })
 
   it('listSessions sends GET /api/v1/sessions with user_id query', () => {

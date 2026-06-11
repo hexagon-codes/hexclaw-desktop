@@ -711,7 +711,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
                     <span>{{ doc.chunk_count }} chunks</span>
                     <span v-if="doc.source">{{ t('knowledge.source') }}: {{ doc.source }}</span>
                     <span>{{
-                      new Date(doc.updated_at || doc.created_at).toLocaleDateString(locale)
+                      new Date(doc.updated_at || doc.created_at).toLocaleString(locale)
                     }}</span>
                   </div>
                   <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626">

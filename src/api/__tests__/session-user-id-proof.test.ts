@@ -38,10 +38,16 @@ const sessionsDB: Map<string, { id: string; user_id: string | null; title: strin
 
 /** 模拟后端行为: 创建会话时存储 user_id，查询时校验 */
 function simulateBackend(req: BackendRequest): unknown {
+  // Real backends route on the path; the query string rides separately
+  // (the M11 wrapper appends ?user_id= to session write URLs).
+  const [path, queryString] = req.url.split('?')
+  const urlQuery = Object.fromEntries(new URLSearchParams(queryString ?? ''))
+
   // POST /api/v1/sessions → 创建会话
-  if (req.method === 'POST' && req.url === '/api/v1/sessions') {
+  if (req.method === 'POST' && path === '/api/v1/sessions') {
     const { id, title, user_id } = req.body as { id: string; title: string; user_id?: string }
-    sessionsDB.set(id, { id, title, user_id: user_id ?? null })
+    // query-or-body — mirrors the real handleCreateSession reader
+    sessionsDB.set(id!, { id: id!, title: title!, user_id: user_id ?? urlQuery.user_id ?? null })
     return { id, title, created_at: new Date().toISOString() }
   }
 
@@ -150,7 +156,7 @@ describe('证明: createSession user_id 修复', () => {
       await createSessionOld('NwukSmk6yuiX', '翻译助手')
 
       // 验证请求中没有 user_id
-      const createReq = requests.find((r) => r.url === '/api/v1/sessions')!
+      const createReq = requests.find((r) => r.url.split('?')[0] === '/api/v1/sessions')!
       expect(createReq.body!.user_id).toBeUndefined()
 
       // 验证数据库中会话的 user_id 为 null
@@ -194,7 +200,7 @@ describe('证明: createSession user_id 修复', () => {
       await createSession('NwukSmk6yuiX', '翻译助手')
 
       // 验证请求中包含 user_id
-      const createReq = requests.find((r) => r.url === '/api/v1/sessions')!
+      const createReq = requests.find((r) => r.url.split('?')[0] === '/api/v1/sessions')!
       expect(createReq.body!.user_id).toBe('desktop-user')
 
       // 验证数据库中会话归属正确
@@ -235,7 +241,7 @@ describe('证明: createSession user_id 修复', () => {
       await listSessionMessages('sess-abc')
 
       // 验证两个请求都携带了相同的 user_id
-      const createReq = requests.find((r) => r.url === '/api/v1/sessions')!
+      const createReq = requests.find((r) => r.url.split('?')[0] === '/api/v1/sessions')!
       const loadReq = requests.find((r) => r.url.includes('/messages'))!
 
       expect(createReq.body!.user_id).toBe('desktop-user')

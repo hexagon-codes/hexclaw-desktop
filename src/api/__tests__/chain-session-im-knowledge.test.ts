@@ -161,7 +161,7 @@ describe('Chain 1: Session Lifecycle', () => {
     expect(fork.session.id).toBe('s3')
     fetchCallIdx++
     expect(mockFetch).toHaveBeenNthCalledWith(fetchCallIdx,
-      '/api/v1/sessions/s1/fork',
+      '/api/v1/sessions/s1/fork?user_id=desktop-user',
       expect.objectContaining({
         method: 'POST',
         body: { message_id: 'm1', user_id: 'desktop-user' },
@@ -192,10 +192,11 @@ describe('Chain 1: Session Lifecycle', () => {
 
     fetchCallIdx++
     expect(mockFetch).toHaveBeenNthCalledWith(fetchCallIdx,
-      '/api/v1/messages/m2/feedback',
+      // user_id in URL query — backend feedback handler reads query only (BUG-20260611).
+      '/api/v1/messages/m2/feedback?user_id=desktop-user',
       expect.objectContaining({
         method: 'PUT',
-        body: { feedback: 'like', user_id: 'desktop-user' },
+        body: { feedback: 'like' },
       }),
     )
 
@@ -269,7 +270,7 @@ describe('Chain 1: Session Lifecycle', () => {
     await forkSession('s1')
 
     expect(mockFetch).toHaveBeenCalledWith(
-      '/api/v1/sessions/s1/fork',
+      '/api/v1/sessions/s1/fork?user_id=desktop-user',
       expect.objectContaining({
         method: 'POST',
         body: { message_id: undefined, user_id: 'desktop-user' },

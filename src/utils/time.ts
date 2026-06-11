@@ -81,6 +81,17 @@ export function formatLogTime(ts: string): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${d.getMilliseconds().toString().padStart(3, '0')}`
 }
 
+/**
+ * Elapsed-time label for running progress indicators.
+ * Under a minute: "42s". From 60s on: "m:ss" (e.g. 183 → "3:03"),
+ * so long-running compiles read as minutes instead of raw seconds.
+ */
+export function formatElapsedSeconds(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds))
+  if (s < 60) return `${s}s`
+  return `${Math.floor(s / 60)}:${pad2(s % 60)}`
+}
+
 /** Short relative time for streaming contexts: "3s ago", "2m ago" */
 export function formatRelative(ts: string, now: number): string {
   const d = new Date(ts)

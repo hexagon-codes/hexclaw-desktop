@@ -583,7 +583,7 @@ const researchStreamingContentLength = computed(() =>
     : 0,
 )
 
-import { formatTime } from '@/utils/time'
+import { formatTime, formatElapsedSeconds } from '@/utils/time'
 import { on } from '@/utils/eventBus'
 import { hexclawWS } from '@/api/websocket'
 
@@ -826,6 +826,32 @@ const {
 } = useConversationAutomation(chatStore, toast, t)
 
 const { stageLabel: cronStageLabel } = useCronCompileLabel()
+
+// 1Hz tick driving the elapsed-time label on running automation cards.
+const automationNowTick = ref(Date.now())
+let automationTickTimer: ReturnType<typeof setInterval> | undefined
+onMounted(() => {
+  automationTickTimer = setInterval(() => {
+    automationNowTick.value = Date.now()
+  }, 1000)
+})
+onUnmounted(() => {
+  if (automationTickTimer) clearInterval(automationTickTimer)
+  // Matches the addEventListener in onMounted — without this the handler
+  // leaks and keeps firing backend probes after the view is gone.
+  window.removeEventListener('focus', refreshBackendGenStatus)
+})
+
+function automationElapsedSeconds(startedAt?: number): number | null {
+  if (!startedAt) return null
+  return Math.max(0, Math.floor((automationNowTick.value - startedAt) / 1000))
+}
+
+/** "42s" under a minute, "3:03" past it — raw seconds read poorly on long compiles. */
+function automationElapsedLabel(startedAt?: number): string | null {
+  const seconds = automationElapsedSeconds(startedAt)
+  return seconds === null ? null : formatElapsedSeconds(seconds)
+}
 
 const { handleSend } = useChatSend({
   chatStore,
@@ -1585,8 +1611,16 @@ function startSidebarResize(event: MouseEvent) {
                         <span class="hc-msg__automation-progress-text">
                           {{ action.progress ? cronStageLabel(action.progress.stage) : t('chat.cronStageStarting', '准备编译脚本…') }}
                         </span>
+                        <span
+                          v-if="automationElapsedLabel(action.startedAt) !== null"
+                          class="hc-msg__automation-progress-elapsed"
+                        >
+                          {{ automationElapsedLabel(action.startedAt) }}
+                        </span>
                         <span class="hc-msg__automation-progress-hint">
-                          {{ t('chat.cronCompileHint', '本地模型推理约 30-90 秒，无需重复点击') }}
+                          <!-- Server progress messages carry richer detail than the
+                               stage label (e.g. the self-correction retry notice). -->
+                          {{ action.progress?.message || t('chat.cronCompileHint', '正在编译，无需重复点击') }}
                         </span>
                       </div>
                       <div v-if="action.result" class="hc-msg__automation-result">
@@ -3271,6 +3305,12 @@ function startSidebarResize(event: MouseEvent) {
 .hc-msg__automation-progress-text {
   font-weight: 500;
   color: var(--hc-text-primary);
+}
+
+.hc-msg__automation-progress-elapsed {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
 }
 
 .hc-msg__automation-progress-hint {

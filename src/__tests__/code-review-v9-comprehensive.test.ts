@@ -166,7 +166,9 @@ describe('Issue #3: Session API functions missing encodeURIComponent', () => {
 
   it('forkSession URL-encodes sessionId', () => {
     const idx = chatTs.indexOf('function forkSession')
-    const block = chatTs.slice(idx, idx + 300)
+    // 500-char window: the function body now carries a comment documenting the
+    // backend body-only user_id reader (handler_session.go:547).
+    const block = chatTs.slice(idx, idx + 500)
     expect(block).toContain('encodeURIComponent(sessionId)')
   })
 
@@ -190,7 +192,7 @@ describe('Issue #3: Session API functions missing encodeURIComponent', () => {
 
   it('updateSessionTitle URL-encodes sessionId', () => {
     const idx = chatTs.indexOf('function updateSessionTitle')
-    const block = chatTs.slice(idx, idx + 250)
+    const block = chatTs.slice(idx, idx + 500)
     expect(block).toContain('encodeURIComponent(sessionId)')
   })
 
@@ -202,7 +204,8 @@ describe('Issue #3: Session API functions missing encodeURIComponent', () => {
 
   it('updateMessageFeedback URL-encodes messageId', () => {
     const idx = chatTs.indexOf('function updateMessageFeedback')
-    const block = chatTs.slice(idx, idx + 250)
+    // Window widened past the BUG-20260611 comment block that now precedes the URL.
+    const block = chatTs.slice(idx, idx + 400)
     expect(block).toContain('encodeURIComponent(messageId)')
   })
 

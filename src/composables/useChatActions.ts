@@ -6,6 +6,8 @@
 
 import { ref, nextTick } from 'vue'
 import { removeMessage } from '@/services/messageService'
+import { i18n } from '@/i18n'
+import { logger } from '@/utils/logger'
 import type { useChatStore } from '@/stores/chat'
 import type { useToast } from './useToast'
 
@@ -24,6 +26,16 @@ export function useChatActions(
 
   function setEditTextareaEl(el: HTMLTextAreaElement | null) {
     editTextareaEl = el
+  }
+
+  // Backend delete failures must be surfaced: the message stays in the DB and
+  // reappears on the next session load, contradicting what the user just saw.
+  function removeMessageWithFeedback(messageId: string) {
+    removeMessage(messageId).catch((error) => {
+      // logger (not console) — production code keeps the no-console invariant.
+      logger.error(`[useChatActions] removeMessage(${messageId}) failed: ${error instanceof Error ? error.message : String(error)}`)
+      toast.error(i18n.global.t('chat.deleteMessageFailed'))
+    })
   }
 
   async function handleRetry(msgIndex: number) {
@@ -51,7 +63,7 @@ export function useChatActions(
     // 从用户消息开始全部删除（用户消息 + AI 回复），然后重新发送
     const toRemove = chatStore.messages.splice(userMsgIdx)
     for (const m of toRemove) {
-      removeMessage(m.id).catch(() => {})
+      removeMessageWithFeedback(m.id)
     }
 
     await handleSend(userText)
@@ -121,7 +133,7 @@ export function useChatActions(
     // 删除原消息及其之后的所有回复（DeepSeek 风格：编辑即替换）
     const toRemove = chatStore.messages.splice(idx)
     for (const m of toRemove) {
-      removeMessage(m.id).catch(() => {})
+      removeMessageWithFeedback(m.id)
     }
 
     // 重新发送（会创建新用户消息 + 获取 AI 回复）

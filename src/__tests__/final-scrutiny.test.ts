@@ -32,7 +32,7 @@ describe('链路: 会话 CRUD + 消息', () => {
     mockApi.mockResolvedValueOnce({ id: 's1', title: 'New Chat', created_at: '2026-01-01' })
     const { createSession } = await import('@/api/chat')
     await createSession('s1', 'New Chat')
-    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions', { id: 's1', title: 'New Chat', user_id: 'desktop-user' })
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions?user_id=desktop-user', { id: 's1', title: 'New Chat', user_id: 'desktop-user' })
   })
 
   it('listSessions 传递 user_id + limit', async () => {
@@ -84,7 +84,7 @@ describe('链路: 会话 CRUD + 消息', () => {
     mockApi.mockResolvedValueOnce({ session: { id: 's-fork' }, message: 'ok' })
     const { forkSession } = await import('@/api/chat')
     await forkSession('s1', 'msg-5')
-    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions/s1/fork', { message_id: 'msg-5', user_id: 'desktop-user' })
+    expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/sessions/s1/fork?user_id=desktop-user', { message_id: 'msg-5', user_id: 'desktop-user' })
   })
 
   it('updateMessageFeedback 用 PUT（通过动态 import client）', async () => {
@@ -93,7 +93,8 @@ describe('链路: 会话 CRUD + 消息', () => {
     mockApi.mockResolvedValueOnce({ message: 'ok' })
     const { updateMessageFeedback } = await import('@/api/chat')
     await updateMessageFeedback('msg-1', 'like')
-    expect(mockApi).toHaveBeenCalledWith('PUT', '/api/v1/messages/msg-1/feedback', { feedback: 'like', user_id: 'desktop-user' })
+    // user_id rides the URL query — backend feedback handler reads query only (BUG-20260611).
+    expect(mockApi).toHaveBeenCalledWith('PUT', '/api/v1/messages/msg-1/feedback?user_id=desktop-user', { feedback: 'like' })
   })
 })
 

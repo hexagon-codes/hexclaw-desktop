@@ -1,6 +1,7 @@
 /** Utils 统一入口 */
 export { logger } from './logger'
-export { formatTime, formatLogTime, formatRelative } from './time'
+export { formatTime, formatLogTime, formatRelative, formatElapsedSeconds } from './time'
+export { outputPreview, hasOutput } from './output-preview'
 export {
   createApiError,
   fromHttpStatus,

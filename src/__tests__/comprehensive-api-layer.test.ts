@@ -1110,10 +1110,11 @@ describe('chat.ts', () => {
 
       await updateMessageFeedback('msg/with/slashes', 'like')
 
-      // messageId is now properly encoded in the URL
+      // messageId encoded in URL; user_id rides the query (backend reads query
+      // only — BUG-20260611), not the body.
       expect(mockedApiPut).toHaveBeenCalledWith(
-        `/api/v1/messages/${encodeURIComponent('msg/with/slashes')}/feedback`,
-        { feedback: 'like', user_id: 'desktop-user' },
+        `/api/v1/messages/${encodeURIComponent('msg/with/slashes')}/feedback?user_id=desktop-user`,
+        { feedback: 'like' },
       )
     })
   })
@@ -1128,7 +1129,9 @@ describe('chat.ts', () => {
       await forkSession('sess-1', 'msg-42')
 
       expect(mockedApiPost).toHaveBeenCalledWith(
-        `/api/v1/sessions/${encodeURIComponent('sess-1')}/fork`,
+        // M11: the wrapper also appends user_id to the URL query — body keeps
+        // user_id because backend handleForkSession reads the body only.
+        `/api/v1/sessions/${encodeURIComponent('sess-1')}/fork?user_id=desktop-user`,
         { message_id: 'msg-42', user_id: 'desktop-user' },
       )
     })

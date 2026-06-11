@@ -30,6 +30,7 @@ import {
   getParsedDocumentContentFromMessage,
   type ConversationAutomationAction,
   type ConversationAutomationResult,
+  type CreateTaskAction,
 } from '@/utils/chat-automation'
 import type { ChatMessage, CronJob, KnowledgeDoc } from '@/types'
 import type { useChatStore } from '@/stores/chat'
@@ -222,15 +223,14 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
 
   async function executeConversationAction(
     action: ConversationAutomationAction,
+    onProgress?: (p: NonNullable<CreateTaskAction['progress']>) => void,
   ): Promise<ConversationAutomationResult> {
     switch (action.kind) {
       case 'create_task': {
-        // chat 自动化创建任务 — 走 SSE 流式编译，progress 透传到 action 卡片
-        const created = await createCronJob(action.payload, {
-          onProgress: (p) => {
-            action.progress = { stage: p.stage, message: p.message }
-          },
-        })
+        // SSE compile progress must flow through the immutable store update
+        // path — mutating `action` here writes to a stale reference that was
+        // replaced when the status flipped to 'running' (BUG-20260611).
+        const created = await createCronJob(action.payload, { onProgress })
         return {
           summary: `已创建任务「${created.job.name || action.payload.name}」`,
           items: [
@@ -344,11 +344,20 @@ export function useConversationAutomation(chatStore: ChatStore, toast: Toast, t?
     await updateConversationAction(messageId, actionId, (current) => ({
       ...current,
       status: 'running',
+      startedAt: Date.now(),
       error: undefined,
     }))
 
+    // Progress flows through the immutable update path: the `action` ref we
+    // hold was replaced by the status flip above (BUG-20260611).
+    const reportProgress = (p: NonNullable<CreateTaskAction['progress']>) => {
+      void updateConversationAction(messageId, actionId, (current) =>
+        current.kind === 'create_task' ? { ...current, progress: p } : current,
+      )
+    }
+
     try {
-      const result = await executeConversationAction(action)
+      const result = await executeConversationAction(action, reportProgress)
       await updateConversationAction(messageId, actionId, (current) => ({
         ...current,
         status: 'completed',

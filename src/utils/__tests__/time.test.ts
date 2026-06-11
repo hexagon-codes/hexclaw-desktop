@@ -5,7 +5,7 @@ vi.mock('@/i18n', () => ({
   i18n: { global: { locale: { value: 'zh-CN' } } },
 }))
 
-import { formatTime, formatLogTime, formatRelative } from '../time'
+import { formatTime, formatLogTime, formatRelative, formatElapsedSeconds } from '../time'
 import { i18n } from '@/i18n'
 
 function setLocale(loc: string) {
@@ -224,5 +224,28 @@ describe('formatRelative', () => {
 
   it('returns raw string for invalid input', () => {
     expect(formatRelative('bad', now)).toBe('bad')
+  })
+})
+
+// Review L4: running-progress elapsed labels read poorly as raw seconds
+// ("183s") — switch to m:ss from one minute onward.
+describe('formatElapsedSeconds', () => {
+  it('renders raw seconds under a minute', () => {
+    expect(formatElapsedSeconds(0)).toBe('0s')
+    expect(formatElapsedSeconds(42)).toBe('42s')
+    expect(formatElapsedSeconds(59)).toBe('59s')
+  })
+
+  it('renders m:ss with zero-padded seconds from 60s on', () => {
+    expect(formatElapsedSeconds(60)).toBe('1:00')
+    expect(formatElapsedSeconds(61)).toBe('1:01')
+    expect(formatElapsedSeconds(183)).toBe('3:03')
+    expect(formatElapsedSeconds(3599)).toBe('59:59')
+    expect(formatElapsedSeconds(3600)).toBe('60:00')
+  })
+
+  it('clamps negatives and floors fractions', () => {
+    expect(formatElapsedSeconds(-5)).toBe('0s')
+    expect(formatElapsedSeconds(61.9)).toBe('1:01')
   })
 })

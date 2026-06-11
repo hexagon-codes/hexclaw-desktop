@@ -180,18 +180,27 @@ describe('BUG 9: handleRetry UI splice before backend delete', () => {
     const fnBody = src.slice(fnStart, fnEnd)
 
     const splicePos = fnBody.indexOf('.splice(')
-    const removePos = fnBody.indexOf('removeMessage(')
+    const removePos = fnBody.indexOf('removeMessageWithFeedback(')
     expect(splicePos).toBeGreaterThan(-1)
     expect(removePos).toBeGreaterThan(-1)
-    // Splice happens before removeMessage
+    // Splice happens before the backend delete (optimistic UI update)
     expect(splicePos).toBeLessThan(removePos)
   })
 
-  it('removeMessage errors are silently swallowed with .catch(() => {})', () => {
+  it('removeMessage errors are surfaced (toast + logger), no longer swallowed', () => {
+    // Review backlog fix: the old `.catch(() => {})` hid backend delete
+    // failures — the message silently reappeared on the next session load.
     const fnStart = src.indexOf('async function handleRetry')
     const fnEnd = src.indexOf('async function handleLike')
     const fnBody = src.slice(fnStart, fnEnd)
-    expect(fnBody).toMatch(/removeMessage\([^)]+\)\.catch\(\(\)\s*=>\s*\{\s*\}\)/)
+    expect(fnBody).not.toMatch(/removeMessage\([^)]+\)\.catch\(\(\)\s*=>\s*\{\s*\}\)/)
+    expect(fnBody).toContain('removeMessageWithFeedback(')
+
+    const helperStart = src.indexOf('function removeMessageWithFeedback')
+    expect(helperStart).toBeGreaterThan(-1)
+    const helperBody = src.slice(helperStart, src.indexOf('async function handleRetry'))
+    expect(helperBody).toContain('toast.error(')
+    expect(helperBody).toContain('logger.error(')
   })
 })
 

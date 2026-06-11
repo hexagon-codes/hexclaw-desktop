@@ -103,7 +103,8 @@ describe('Session Management', () => {
       mockFetch.mockResolvedValue({ id: 's1', title: 'New Chat', created_at: '2024-01-01' })
       await createSession('s1', 'New Chat')
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/sessions',
+        // user_id also rides the URL query (M11 belt-and-suspenders wrapper).
+        '/api/v1/sessions?user_id=desktop-user',
         expect.objectContaining({ method: 'POST', body: { id: 's1', title: 'New Chat', user_id: 'desktop-user' } }),
       )
     })
@@ -129,17 +130,14 @@ describe('Session Management', () => {
   })
 
   describe('suggestSessionTitle', () => {
-    it('calls POST /api/v1/sessions/:id/suggest-title with expected_title and user_id', async () => {
+    it('calls POST /api/v1/sessions/:id/suggest-title with user_id in query (backend reads query only — BUG-20260611)', async () => {
       mockFetch.mockResolvedValue({ id: 's1', title: '杭州周末露营计划', updated: true, updated_at: '2024-01-01' })
       await suggestSessionTitle('s1', '帮我规划这个周末去杭州露营需要带什么')
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/sessions/s1/suggest-title',
+        '/api/v1/sessions/s1/suggest-title?user_id=desktop-user',
         expect.objectContaining({
           method: 'POST',
-          body: {
-            expected_title: '帮我规划这个周末去杭州露营需要带什么',
-            user_id: 'desktop-user',
-          },
+          body: { expected_title: '帮我规划这个周末去杭州露营需要带什么' },
         }),
       )
     })
@@ -167,7 +165,9 @@ describe('Session Management', () => {
       mockFetch.mockResolvedValue({ session: { id: 's2' }, message: 'forked' })
       await forkSession('s1', 'msg-123')
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/sessions/s1/fork',
+        // URL gains user_id= via the M11 belt-and-suspenders wrapper (query
+        // covers query-only backend readers; the body covers handleForkSession).
+        '/api/v1/sessions/s1/fork?user_id=desktop-user',
         expect.objectContaining({ method: 'POST', body: { message_id: 'msg-123', user_id: 'desktop-user' } }),
       )
     })
@@ -176,7 +176,7 @@ describe('Session Management', () => {
       mockFetch.mockResolvedValue({ session: { id: 's2' }, message: 'forked' })
       await forkSession('s1')
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/sessions/s1/fork',
+        '/api/v1/sessions/s1/fork?user_id=desktop-user',
         expect.objectContaining({ body: { message_id: undefined, user_id: 'desktop-user' } }),
       )
     })
@@ -276,17 +276,17 @@ describe('Session Management', () => {
       mockFetch.mockResolvedValue({ message: 'ok' })
       await updateMessageFeedback('msg-1', 'like')
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/messages/msg-1/feedback',
-        expect.objectContaining({ method: 'PUT', body: { feedback: 'like', user_id: 'desktop-user' } }),
+        '/api/v1/messages/msg-1/feedback?user_id=desktop-user',
+        expect.objectContaining({ method: 'PUT', body: { feedback: 'like' } }),
       )
     })
 
-    it('accepts empty string to clear feedback, still includes user_id', async () => {
+    it('accepts empty string to clear feedback, user_id stays in query (BUG-20260611)', async () => {
       mockFetch.mockResolvedValue({ message: 'ok' })
       await updateMessageFeedback('msg-1', '')
       expect(mockFetch).toHaveBeenCalledWith(
-        '/api/v1/messages/msg-1/feedback',
-        expect.objectContaining({ body: { feedback: '', user_id: 'desktop-user' } }),
+        '/api/v1/messages/msg-1/feedback?user_id=desktop-user',
+        expect.objectContaining({ body: { feedback: '' } }),
       )
     })
   })

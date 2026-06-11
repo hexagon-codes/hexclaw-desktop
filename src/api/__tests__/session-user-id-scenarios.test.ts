@@ -37,10 +37,15 @@ function collectUserIds(): { url: string; user_id: unknown; source: string }[] {
     const opts = call[1] as Record<string, unknown>
     const query = opts.query as Record<string, unknown> | undefined
     const body = opts.body as Record<string, unknown> | undefined
+    // user_id may be embedded directly in the URL query string (the codebase's
+    // dominant pattern for query-only backend handlers — BUG-20260611), in
+    // ofetch's query option, or in the body.
+    const urlUserId = url.match(/[?&]user_id=([^&]+)/)?.[1]
+    const decodedUrlUserId = urlUserId ? decodeURIComponent(urlUserId) : undefined
     return {
       url,
-      user_id: query?.user_id ?? body?.user_id,
-      source: query?.user_id ? 'query' : body?.user_id ? 'body' : 'missing',
+      user_id: decodedUrlUserId ?? query?.user_id ?? body?.user_id,
+      source: decodedUrlUserId ? 'query' : query?.user_id ? 'query' : body?.user_id ? 'body' : 'missing',
     }
   })
 }
@@ -255,24 +260,21 @@ describe('全场景链路: user_id 传递验证', () => {
   describe('场景 10: 消息反馈', () => {
     it('updateMessageFeedback like 携带 user_id', async () => {
       await updateMessageFeedback('msg-001', 'like')
-
+      // backend reads query only (BUG-20260611)
+      expect(mockFetch.mock.calls[0]![0] as string).toContain(`user_id=${EXPECTED_USER_ID}`)
       const body = (mockFetch.mock.calls[0]![1] as Record<string, unknown>).body as Record<string, unknown>
-      expect(body.user_id).toBe(EXPECTED_USER_ID)
       expect(body.feedback).toBe('like')
     })
 
     it('updateMessageFeedback dislike 携带 user_id', async () => {
       await updateMessageFeedback('msg-002', 'dislike')
-
-      const body = (mockFetch.mock.calls[0]![1] as Record<string, unknown>).body as Record<string, unknown>
-      expect(body.user_id).toBe(EXPECTED_USER_ID)
+      // backend reads query only (BUG-20260611)
+      expect(mockFetch.mock.calls[0]![0] as string).toContain(`user_id=${EXPECTED_USER_ID}`)
     })
 
     it('updateMessageFeedback 清除反馈也携带 user_id', async () => {
       await updateMessageFeedback('msg-003', '')
-
-      const body = (mockFetch.mock.calls[0]![1] as Record<string, unknown>).body as Record<string, unknown>
-      expect(body.user_id).toBe(EXPECTED_USER_ID)
+      expect(mockFetch.mock.calls[0]![0] as string).toContain(`user_id=${EXPECTED_USER_ID}`)
     })
   })
 
@@ -365,15 +367,13 @@ describe('全场景链路: user_id 传递验证', () => {
       // 验证: 所有需要 user_id 的请求都正确携带
       const ids = collectUserIds()
       // createSession + updateSessionTitle*2 + listSessionMessages + updateMessageFeedback + deleteSession
-      // = 6 次 mockFetch 调用
-      // deleteSession 用 apiDelete 无 user_id 注入，其余 5 次都有
+      // = 6 次 mockFetch 调用。deleteSession 用 apiDelete 但在 URL 带 ?user_id=，
+      // 现在 collectUserIds URL-aware 后能正确识别 → 全部 6 次都带 user_id（BUG-20260611）。
       const withUserId = ids.filter((e) => e.user_id === EXPECTED_USER_ID)
       const withoutUserId = ids.filter((e) => e.source === 'missing')
 
-      // deleteSession 是唯一不注入 user_id 的（使用 apiDelete）
-      expect(withUserId.length).toBe(5)
-      expect(withoutUserId.length).toBe(1)
-      expect(withoutUserId[0]!.url).toContain('/api/v1/sessions/lifecycle-sess')
+      expect(withUserId.length).toBe(6)
+      expect(withoutUserId.length).toBe(0)
 
       // invoke 调用（sendChatViaBackend）也都有 user_id
       for (const call of invoke.mock.calls) {

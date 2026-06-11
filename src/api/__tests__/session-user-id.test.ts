@@ -172,10 +172,10 @@ describe('Session user_id 一致性', () => {
   })
 
   describe('updateMessageFeedback', () => {
-    it('body 包含 user_id', async () => {
+    it('URL query 含 user_id（后端只读 query — BUG-20260611）', async () => {
       mockFetch.mockResolvedValue({ message: 'ok' })
       await updateMessageFeedback('msg-1', 'like')
-      expect(getBodyArg()!.user_id).toBe(EXPECTED_USER_ID)
+      expect(mockFetch.mock.calls[0]?.[0] as string).toContain(`user_id=${EXPECTED_USER_ID}`)
     })
   })
 
@@ -248,7 +248,7 @@ describe('Session user_id 一致性', () => {
       { name: 'getSessionBranches', call: () => getSessionBranches('s1'), check: 'query' },
       { name: 'forkSession', call: () => forkSession('s1'), check: 'body' },
       { name: 'searchMessages', call: () => searchMessages('q'), check: 'query' },
-      { name: 'updateMessageFeedback', call: () => updateMessageFeedback('m1', 'like'), check: 'body' },
+      { name: 'updateMessageFeedback', call: () => updateMessageFeedback('m1', 'like'), check: 'url' },
     ] as const
 
     for (const { name, call, check } of sessionApis) {
@@ -256,6 +256,12 @@ describe('Session user_id 一致性', () => {
         mockFetch.mockResolvedValue({ sessions: [], total: 0, messages: [], branches: [], results: [], message: 'ok', query: 'q', id: 's1', title: 'T', created_at: '', updated_at: '' })
         await call()
 
+        if (check === 'url') {
+          // user_id lives in the URL query string (backend reads query only).
+          const url = mockFetch.mock.calls[0]?.[0] as string
+          expect(url, `${name}() URL 应含 user_id`).toContain(`user_id=${EXPECTED_USER_ID}`)
+          return
+        }
         const arg = check === 'query' ? getQueryArg() : getBodyArg()
         expect(arg, `${name}() 的 ${check} 参数不应为 undefined`).toBeDefined()
         expect(arg!.user_id, `${name}() 缺少 user_id`).toBe(EXPECTED_USER_ID)
@@ -265,8 +271,8 @@ describe('Session user_id 一致性', () => {
 
   // ── 静态分析: 防止绕过 sessionGet/sessionPost 直接调用 apiGet/apiPost ──
 
-  describe('结构性防护 — chat.ts 会话区不应直接调用裸 apiGet/apiPost', () => {
-    it('Session Management 区域使用 sessionGet/sessionPost 而非 apiGet/apiPost', async () => {
+  describe('结构性防护 — 会话区每个调用都必须携带 user_id', () => {
+    it('Session Management 区域：裸 apiGet/apiPost/apiPut/apiPatch 必须在同一调用内显式带 user_id= query（BUG-20260611）', async () => {
       const fs = await import('node:fs')
       const path = await import('node:path')
       const source = fs.readFileSync(path.resolve(process.cwd(), 'src/api/chat.ts'), 'utf-8')
@@ -274,12 +280,56 @@ describe('Session user_id 一致性', () => {
       // 提取 "Session Fork" 之后的所有代码（即会话管理区域）
       const sessionSection = source.slice(source.indexOf('// ============== Session Fork'))
 
-      // 在会话区域中，不应直接使用 apiGet/apiPost/apiPatch/apiPut（apiDelete 除外，因为不需要 body/query）
-      const bareApiCalls = sessionSection.match(/\bapiGet\b|\bapiPost\b|\bapiPatch\b|\bapiPut\b/g) || []
+      // 真正的不变量不是"必须用 session* 包装器"——包装器把 user_id 注入 body，
+      // 对只读 query 的后端 handler（suggest-title / feedback）反而是 bug 根源。
+      // 正确不变量：每个裸 api* 调用都必须在调用参数里显式带上 user_id=（URL query）。
+      const offenders: string[] = []
+      const re = /\bapi(Get|Post|Put|Patch)\b/g
+      let m: RegExpExecArray | null
+      while ((m = re.exec(sessionSection)) !== null) {
+        // Inspect a fixed window covering the URL arg + options of this call.
+        const window = sessionSection.slice(m.index, m.index + 300)
+        if (!window.includes('user_id=')) {
+          offenders.push(window.split('\n')[0].trim())
+        }
+      }
       expect(
-        bareApiCalls,
-        `会话 API 区域发现直接调用 ${bareApiCalls.join(', ')}，应改用 sessionGet/sessionPost/sessionPatch/sessionPut 以自动注入 user_id`,
+        offenders,
+        `这些裸 api* 调用未在 URL query 带 user_id=（会被后端读成 api-user）：\n${offenders.join('\n')}`,
       ).toEqual([])
+    })
+
+    it('session* 写包装器必须经 withUserIdQuery 保证 URL query 带 user_id=（M11 belt-and-suspenders）', async () => {
+      // A sessionPost against a query-only backend endpoint must still carry
+      // user_id in the URL — the wrapper implementation itself guarantees it,
+      // so individual call sites cannot reintroduce the bug.
+      const fs = await import('node:fs')
+      const path = await import('node:path')
+      const source = fs.readFileSync(path.resolve(process.cwd(), 'src/api/chat.ts'), 'utf-8')
+
+      for (const fn of ['sessionPost', 'sessionPatch', 'sessionPut']) {
+        const re = new RegExp(`function ${fn}<T>\\([^)]*\\)\\s*\\{\\s*return api(Post|Patch|Put)<T>\\(withUserIdQuery\\(url\\)`)
+        expect(re.test(source), `${fn} 必须用 withUserIdQuery(url) 注入 URL query user_id`).toBe(true)
+      }
+      expect(
+        /function withUserIdQuery[\s\S]{0,400}user_id=\$\{encodeURIComponent\(DESKTOP_USER_ID\)\}/.test(source),
+        'withUserIdQuery 必须 append encodeURIComponent 过的 user_id=',
+      ).toBe(true)
+    })
+
+    it('runtime: 每个 session* 写包装器调用产生的 URL 都含 user_id=', async () => {
+      mockFetch.mockResolvedValue({ session: { id: 's2' }, message: 'ok', id: 's1', title: 'T', created_at: '', updated_at: '' })
+      const wrapperCalls = [
+        () => createSession('s1', 'T'),
+        () => forkSession('s1', 'm1'),
+        () => updateSessionTitle('s1', 'T2'),
+      ]
+      for (const call of wrapperCalls) {
+        mockFetch.mockClear()
+        await call()
+        const url = mockFetch.mock.calls[0]?.[0] as string
+        expect(url, `wrapper 调用 URL 应含 user_id=：${url}`).toContain(`user_id=${EXPECTED_USER_ID}`)
+      }
     })
   })
 })

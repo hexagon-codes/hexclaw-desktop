@@ -28,6 +28,8 @@ interface ConversationAutomationActionBase {
   status: ConversationAutomationActionStatus
   result?: ConversationAutomationResult
   error?: string
+  // Stamped when the action enters 'running' so cards can render elapsed time.
+  startedAt?: number
 }
 
 export interface CreateTaskAction extends ConversationAutomationActionBase {

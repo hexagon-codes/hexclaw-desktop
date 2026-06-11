@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime } from '@/utils/time'
+import { outputPreview, hasOutput } from '@/utils/output-preview'
 import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader, Code, AlertTriangle, Clock3 } from 'lucide-vue-next'
 import {
   getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory,
@@ -88,6 +89,24 @@ async function loadJobs() {
 }
 
 onMounted(loadJobs)
+
+// Click outside any task card collapses the expanded history (and its
+// nested expansions) — the panel otherwise stayed open indefinitely.
+// Exemptions: the create/edit form modal (teleported to body) and the page
+// toolbar/header actions — interacting with those must not silently close
+// the history the user is looking at. Clicking truly outside still collapses.
+const OUTSIDE_CLICK_EXEMPT_SELECTOR = '.task-card, .hc-modal-overlay, .hc-toolbar'
+function collapseOnOutsideClick(event: MouseEvent) {
+  if (!expandedJobId.value) return
+  const target = event.target as HTMLElement | null
+  if (target?.closest(OUTSIDE_CLICK_EXEMPT_SELECTOR)) return
+  expandedJobId.value = null
+  expandedRunId.value = null
+  expandedStdout.value = new Set()
+  expandedStderr.value = new Set()
+}
+onMounted(() => document.addEventListener('click', collapseOnOutsideClick))
+onUnmounted(() => document.removeEventListener('click', collapseOnOutsideClick))
 
 function openCreateForm() {
   form.value = { name: '', schedule: '', prompt: '', type: 'cron' }
@@ -259,6 +278,8 @@ function runStatusIcon(status: string) {
     case 'error': return XCircle
     case 'timeout': return Clock3
     case 'running': return Loader
+    case 'healed': return CheckCircle
+    case 'heal_failed': return XCircle
     default: return Clock
   }
 }
@@ -270,6 +291,8 @@ function runStatusColor(status: string): string {
     case 'error': return 'var(--hc-error)'
     case 'timeout': return 'var(--hc-warning)'
     case 'running': return 'var(--hc-accent)'
+    case 'healed': return 'var(--hc-accent)'
+    case 'heal_failed': return 'var(--hc-warning)'
     default: return 'var(--hc-text-muted)'
   }
 }
@@ -281,6 +304,8 @@ function runStatusText(status: string): string {
     case 'error': return t('tasks.statusFailed', '失败')
     case 'timeout': return t('tasks.statusTimeout', '超时')
     case 'running': return t('tasks.statusRunning', '运行中')
+    case 'healed': return t('tasks.statusHealed', '已自愈')
+    case 'heal_failed': return t('tasks.statusHealFailed', '自愈失败')
     default: return status
   }
 }
@@ -422,7 +447,7 @@ defineExpose({ openCreateForm, loadJobs })
               @click="toggleHistory(job.id)"
             >
               <History :size="14" />
-              <span>{{ t('tasks.history') }}</span>
+              <span>{{ expandedJobId === job.id ? t('tasks.hideHistory', '收起历史') : t('tasks.history') }}</span>
             </button>
             <button
               v-if="job.spec"
@@ -470,8 +495,8 @@ defineExpose({ openCreateForm, loadJobs })
               <div v-for="run in jobHistories[job.id]" :key="run.id" class="task-card__history-entry">
                 <div
                   class="task-card__history-item"
-                  :class="{ 'task-card__history-item--clickable': !!(run.result || run.error || run.stdout || run.stderr) }"
-                  @click="(run.result || run.error || run.stdout || run.stderr) ? toggleRunDetail(run.id) : undefined"
+                  :class="{ 'task-card__history-item--clickable': !!(run.result || run.error || hasOutput(run.stdout) || hasOutput(run.stderr)) }"
+                  @click="(run.result || run.error || hasOutput(run.stdout) || hasOutput(run.stderr)) ? toggleRunDetail(run.id) : undefined"
                 >
                   <component :is="runStatusIcon(run.status)" :size="13" :style="{ color: runStatusColor(run.status), flexShrink: 0 }" />
                   <span class="task-card__history-time">{{ formatTime(run.started_at) }}</span>
@@ -481,7 +506,7 @@ defineExpose({ openCreateForm, loadJobs })
                     exit {{ run.exit_code }}
                   </span>
                   <ChevronDown
-                    v-if="run.result || run.error || run.stdout || run.stderr"
+                    v-if="run.result || run.error || hasOutput(run.stdout) || hasOutput(run.stderr)"
                     :size="12"
                     class="task-card__history-chevron"
                     :class="{ 'task-card__history-chevron--open': expandedRunId === run.id }"
@@ -496,16 +521,18 @@ defineExpose({ openCreateForm, loadJobs })
                     <strong>data:</strong>
                     <pre>{{ typeof run.data === 'string' ? run.data : JSON.stringify(run.data, null, 2) }}</pre>
                   </div>
-                  <div v-if="run.stdout" class="task-card__history-stdout">
+                  <div v-if="hasOutput(run.stdout)" class="task-card__history-stdout">
                     <button class="task-card__history-toggle" @click.stop="toggleStdout(run.id)">
-                      stdout {{ expandedStdout.has(run.id) ? '▾' : '▸' }}
+                      {{ t('tasks.runOutput') }} {{ expandedStdout.has(run.id) ? '▾' : '▸' }}
                     </button>
+                    <span v-if="!expandedStdout.has(run.id)" class="task-card__history-preview">{{ outputPreview(run.stdout) }}</span>
                     <pre v-if="expandedStdout.has(run.id)">{{ run.stdout }}</pre>
                   </div>
-                  <div v-if="run.stderr" class="task-card__history-stderr">
+                  <div v-if="hasOutput(run.stderr)" class="task-card__history-stderr">
                     <button class="task-card__history-toggle" @click.stop="toggleStderr(run.id)">
-                      stderr {{ expandedStderr.has(run.id) ? '▾' : '▸' }}
+                      {{ t('tasks.runErrorOutput') }} {{ expandedStderr.has(run.id) ? '▾' : '▸' }}
                     </button>
+                    <span v-if="!expandedStderr.has(run.id)" class="task-card__history-preview">{{ outputPreview(run.stderr) }}</span>
                     <pre v-if="expandedStderr.has(run.id)">{{ run.stderr }}</pre>
                   </div>
                   <div v-if="run.result" class="task-card__history-result">{{ run.result }}</div>
@@ -653,6 +680,9 @@ defineExpose({ openCreateForm, loadJobs })
   grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   gap: 16px;
   max-width: 1200px;
+  /* Cards in the same row must not stretch to the tallest sibling — an
+     expanded history on one card used to open a blank area on its neighbor. */
+  align-items: start;
 }
 
 /* ── Task card ── */
@@ -722,6 +752,9 @@ defineExpose({ openCreateForm, loadJobs })
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  /* Always reserve two lines so collapsed cards in a row are equal height
+     (cards no longer stretch to siblings since align-items: start). */
+  min-height: 3em;
 }
 
 /* ── Card meta ── */
@@ -958,6 +991,15 @@ defineExpose({ openCreateForm, loadJobs })
   cursor: pointer;
   font-size: 11px;
   font-family: inherit;
+}
+
+.task-card__history-preview {
+  margin-left: 8px;
+  color: var(--hc-text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .task-card__history-exit {
   font-size: 10px;

@@ -11,20 +11,39 @@ import type { ChatMessage, ChatSession, ChatRequest } from '@/types'
 // 这组辅助函数自动注入 user_id，避免每个函数手动传参遗漏。
 // 新增会话 API 时请使用这些函数，不要直接调用 apiGet/apiPost。
 
+/**
+ * Append `user_id=` to the URL query string unless it is already present.
+ *
+ * Belt-and-suspenders for the three backend reader categories
+ * (api/handler_session.go):
+ *   1. query-only   — suggestSessionTitle / updateMessageFeedback handlers
+ *   2. query-or-body — handleCreateSession
+ *   3. body-only    — handleForkSession (line 547 falls back to "api-user"
+ *      when the body lacks user_id)
+ * The session* write wrappers therefore inject user_id into BOTH the URL
+ * query (covers 1 and 2) and the JSON body (covers 2 and 3), so a future
+ * sessionPost against any handler category cannot lose the user identity.
+ */
+function withUserIdQuery(url: string): string {
+  if (/[?&]user_id=/.test(url)) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}user_id=${encodeURIComponent(DESKTOP_USER_ID)}`
+}
+
 function sessionGet<T>(url: string, query?: Record<string, unknown>) {
   return apiGet<T>(url, { ...query, user_id: DESKTOP_USER_ID })
 }
 
 function sessionPost<T>(url: string, body?: Record<string, unknown>) {
-  return apiPost<T>(url, { ...body, user_id: DESKTOP_USER_ID })
+  return apiPost<T>(withUserIdQuery(url), { ...body, user_id: DESKTOP_USER_ID })
 }
 
 function sessionPatch<T>(url: string, body?: Record<string, unknown>) {
-  return apiPatch<T>(url, { ...body, user_id: DESKTOP_USER_ID })
+  return apiPatch<T>(withUserIdQuery(url), { ...body, user_id: DESKTOP_USER_ID })
 }
 
 function sessionPut<T>(url: string, body?: Record<string, unknown>) {
-  return apiPut<T>(url, { ...body, user_id: DESKTOP_USER_ID })
+  return apiPut<T>(withUserIdQuery(url), { ...body, user_id: DESKTOP_USER_ID })
 }
 
 export type { ChatMessage, ChatSession, ChatRequest }
@@ -188,6 +207,9 @@ export function sendChat(req: ChatRequest) {
 
 /** 从指定消息处分支对话 */
 export function forkSession(sessionId: string, messageId?: string) {
+  // user_id must reach the BODY: backend handleForkSession (handler_session.go:547)
+  // reads the body only and falls back to "api-user" when it is absent.
+  // sessionPost injects user_id into both the body and the URL query.
   return sessionPost<{ session: SessionSummary; message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`, {
     message_id: messageId,
   })
@@ -240,19 +262,24 @@ export function createSession(id: string, title: string) {
 
 /** 更新会话标题 */
 export function updateSessionTitle(sessionId: string, title: string) {
-  return sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`, { title })
+  // sessionPatch appends an encoded user_id= to the URL query and injects it
+  // into the body, covering every backend reader category.
+  return sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })
 }
 
 /** 建议更自然的会话标题；若标题已被手动改动，后端会返回 updated=false */
 export function suggestSessionTitle(sessionId: string, expectedTitle?: string) {
-  return sessionPost<SessionTitleSuggestionResponse>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/suggest-title`, {
-    expected_title: expectedTitle,
-  })
+  // user_id 必须放 URL query — 后端 handleSuggestSessionTitle 用 sessionUserIDFromRequest
+  // 只读 query；body 里的同名字段不会被消费（BUG-20260611）。
+  return apiPost<SessionTitleSuggestionResponse>(
+    `/api/v1/sessions/${encodeURIComponent(sessionId)}/suggest-title?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`,
+    { expected_title: expectedTitle },
+  )
 }
 
 /** 删除会话 */
 export function deleteSession(sessionId: string) {
-  return apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${DESKTOP_USER_ID}`)
+  return apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`)
 }
 
 /** 跨会话全文搜索消息 */
@@ -317,5 +344,10 @@ export type UserFeedback = '' | 'like' | 'dislike'
 
 /** 更新消息反馈 (like/dislike) */
 export function updateMessageFeedback(messageId: string, feedback: UserFeedback) {
-  return sessionPut<{ message: string }>(`/api/v1/messages/${encodeURIComponent(messageId)}/feedback`, { feedback })
+  // user_id 必须放 URL query — 后端 feedback handler 用 sessionUserIDFromRequest
+  // 只读 query；body 里的同名字段不会被消费（BUG-20260611）。
+  return apiPut<{ message: string }>(
+    `/api/v1/messages/${encodeURIComponent(messageId)}/feedback?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`,
+    { feedback },
+  )
 }

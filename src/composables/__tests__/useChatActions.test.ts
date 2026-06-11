@@ -140,4 +140,61 @@ describe('useChatActions', () => {
     expect(mockSend).not.toHaveBeenCalled()
     expect(editingMsgId.value).toBeNull()
   })
+
+  // Review backlog: removeMessage failures were swallowed with .catch(() => {})
+  // — the message silently survived in the backend and reappeared on reload.
+  describe('removeMessage error surfacing', () => {
+    async function flushMicrotasks() {
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+
+    it('handleRetry surfaces backend delete failures via toast + logger.error', async () => {
+      const { removeMessage } = await import('@/services/messageService')
+      const { logger } = await import('@/utils/logger')
+      vi.mocked(removeMessage).mockRejectedValue(new Error('delete failed'))
+      const loggerSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+
+      const store = makeMockStore()
+      const toast = makeMockToast()
+      const { handleRetry } = useChatActions(store as any, toast as any, mockSend)
+      await handleRetry(1)
+      await flushMicrotasks()
+
+      expect(toast.error).toHaveBeenCalled()
+      expect(loggerSpy).toHaveBeenCalledWith(expect.stringContaining('removeMessage'))
+      // The retry flow itself still proceeds (UI already updated optimistically).
+      expect(mockSend).toHaveBeenCalledWith('hello')
+      loggerSpy.mockRestore()
+      vi.mocked(removeMessage).mockResolvedValue(undefined)
+    })
+
+    it('confirmEdit surfaces backend delete failures via toast', async () => {
+      const { removeMessage } = await import('@/services/messageService')
+      const { logger } = await import('@/utils/logger')
+      vi.mocked(removeMessage).mockRejectedValue(new Error('delete failed'))
+      vi.spyOn(logger, 'error').mockImplementation(() => {})
+
+      const store = makeMockStore()
+      const toast = makeMockToast()
+      const { handleEdit, confirmEdit, editingText } = useChatActions(store as any, toast as any, mockSend)
+      handleEdit(0)
+      editingText.value = 'updated question'
+      await confirmEdit('u1')
+      await flushMicrotasks()
+
+      expect(toast.error).toHaveBeenCalled()
+      vi.mocked(removeMessage).mockResolvedValue(undefined)
+    })
+
+    it('does not toast when deletes succeed', async () => {
+      const store = makeMockStore()
+      const toast = makeMockToast()
+      const { handleRetry } = useChatActions(store as any, toast as any, mockSend)
+      await handleRetry(1)
+      await flushMicrotasks()
+
+      expect(toast.error).not.toHaveBeenCalled()
+    })
+  })
 })

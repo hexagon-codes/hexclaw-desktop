@@ -196,6 +196,117 @@ describe('TasksView', () => {
     await flushPromises()
   })
 
+  // Review L5: whitespace-only stdout/stderr must not render an empty toggle.
+  it('does not render stdout/stderr toggles for whitespace-only output', async () => {
+    taskApis.getCronJobHistory.mockResolvedValueOnce([
+      {
+        id: 'run-ws',
+        job_id: 'job-1',
+        status: 'success',
+        started_at: '2026-04-03T09:00:00Z',
+        result: 'done',
+        stdout: '   \n\t  ',
+        stderr: '\n',
+      },
+    ])
+
+    const wrapper = mountTasksView()
+    await flushPromises()
+
+    await wrapper.findAll('button').find((btn) => btn.text().includes('历史'))!.trigger('click')
+    await flushPromises()
+
+    // Expand the run detail (result is present so the row stays clickable).
+    await wrapper.find('.task-card__history-item--clickable').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.task-card__history-toggle').exists()).toBe(false)
+    expect(wrapper.find('.task-card__history-stdout').exists()).toBe(false)
+    expect(wrapper.find('.task-card__history-stderr').exists()).toBe(false)
+    expect(wrapper.find('.task-card__history-result').text()).toBe('done')
+    wrapper.unmount()
+  })
+
+  it('renders stdout toggle with a code-point-safe preview for real output', async () => {
+    taskApis.getCronJobHistory.mockResolvedValueOnce([
+      {
+        id: 'run-out',
+        job_id: 'job-1',
+        status: 'success',
+        started_at: '2026-04-03T09:00:00Z',
+        stdout: 'a'.repeat(39) + '😀 and more beyond the cutoff',
+      },
+    ])
+
+    const wrapper = mountTasksView()
+    await flushPromises()
+
+    await wrapper.findAll('button').find((btn) => btn.text().includes('历史'))!.trigger('click')
+    await flushPromises()
+    await wrapper.find('.task-card__history-item--clickable').trigger('click')
+    await flushPromises()
+
+    const preview = wrapper.find('.task-card__history-preview')
+    expect(preview.exists()).toBe(true)
+    // Truncated at 40 code points — the emoji survives whole, no U+FFFD.
+    expect(preview.text()).toBe('a'.repeat(39) + '😀…')
+    wrapper.unmount()
+  })
+
+  // Review L3: outside-click collapse must not fire for toolbar / form modal
+  // clicks, but a click truly outside any card still collapses the history.
+  describe('outside-click collapse exemptions', () => {
+    async function mountWithExpandedHistory() {
+      const wrapper = mountTasksView()
+      await flushPromises()
+      await wrapper.findAll('button').find((btn) => btn.text().includes('历史'))!.trigger('click')
+      await flushPromises()
+      expect(wrapper.find('.task-card__history').exists()).toBe(true)
+      return wrapper
+    }
+
+    it('keeps history open when clicking the page toolbar', async () => {
+      const wrapper = await mountWithExpandedHistory()
+
+      // AutomationView renders its action buttons inside .hc-toolbar.
+      const toolbar = document.createElement('div')
+      toolbar.className = 'hc-toolbar'
+      const toolbarBtn = document.createElement('button')
+      toolbar.appendChild(toolbarBtn)
+      document.body.appendChild(toolbar)
+      toolbarBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+
+      expect(wrapper.find('.task-card__history').exists()).toBe(true)
+      toolbar.remove()
+      wrapper.unmount()
+    })
+
+    it('keeps history open while interacting with the create form modal', async () => {
+      const wrapper = await mountWithExpandedHistory()
+
+      ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
+      await wrapper.vm.$nextTick()
+      const nameInput = wrapper.find('.hc-modal input')
+      expect(nameInput.exists()).toBe(true)
+      await nameInput.trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('.task-card__history').exists()).toBe(true)
+      wrapper.unmount()
+    })
+
+    it('still collapses when clicking truly outside any card', async () => {
+      const wrapper = await mountWithExpandedHistory()
+
+      document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await flushPromises()
+
+      expect(wrapper.find('.task-card__history').exists()).toBe(false)
+      wrapper.unmount()
+    })
+  })
+
   it('does not start a second delete request while the first one is still running', async () => {
     vi.stubGlobal('confirm', vi.fn(() => true))
 

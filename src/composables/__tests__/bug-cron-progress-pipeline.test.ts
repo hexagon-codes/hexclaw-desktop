@@ -34,17 +34,22 @@ describe('BUG-cron-progress-pipeline', () => {
     expect(action.progress?.message).toBe('starting')
   })
 
-  it('useConversationAutomation source 不应含错误的 progress type guard', () => {
-    // RED: 修复前 source 含 `if (action.progress !== undefined)` —— 永远 false 的死分支
-    // GREEN: 修复后应直接赋值 `action.progress = ...`，不带误用的 guard
+  it('useConversationAutomation source 不应含错误的 progress 写入方式', () => {
+    // History of this contract:
+    //   v1 bug: dead type guard `if (action.progress !== undefined)` — progress never written
+    //   v2 bug (BUG-20260611): direct mutation `action.progress = …` wrote to a STALE
+    //   reference (the action object is replaced by the immutable 'running' update),
+    //   so progress still never reached the store.
+    // Current contract: progress flows through updateConversationAction with an
+    // immutable spread. Behavioral proof lives in
+    // bug-20260611-cron-progress-stale-ref.test.ts; this is the source-level lock.
     const src = readFileSync(
       resolve(__dirname, '../useConversationAutomation.ts'),
       'utf-8',
     )
-    // 强契约：source 不能含这个误用的 guard
     expect(src).not.toMatch(/if\s*\(\s*action\.progress\s*!==\s*undefined\s*\)/)
-    // 同时必须含真实的 progress 写入语句（不能整段被删）
-    expect(src).toMatch(/action\.progress\s*=\s*\{/)
+    expect(src).not.toMatch(/action\.progress\s*=\s*\{/)
+    expect(src).toMatch(/\.\.\.current,\s*progress:\s*p\s*\}/)
   })
 
   it('progress 多次回调按顺序覆盖（语义验证）', () => {
