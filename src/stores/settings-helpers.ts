@@ -3,8 +3,10 @@
  */
 
 import { loadSecureValue, removeSecureValue, saveSecureValue } from '@/utils/secure-store'
+import { inferCapabilitiesFromId } from '@/config/providers'
 import type {
   AppConfig,
+  CatalogModel,
   ProviderConfig,
   ModelOption,
   BackendLLMConfig,
@@ -393,5 +395,23 @@ export function providersToBackend(
       strategy: routing.strategy || 'cost-aware',
     },
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+  }
+}
+
+/** 把远程目录中尚未启用的模型合并进 Provider 启用列表（小目录全量启用路径） */
+export function mergeRemoteModelsIntoProvider(
+  target: ProviderConfig,
+  remoteModels: CatalogModel[],
+  presetDefaults: ModelOption[],
+): void {
+  const existing = new Set(target.models.map((m) => m.id))
+  const presetCaps = new Map(presetDefaults.map((m) => [m.id, m.capabilities]))
+  for (const rm of remoteModels) {
+    if (existing.has(rm.id)) continue
+    target.models.push({
+      id: rm.id,
+      name: rm.name || rm.id,
+      capabilities: presetCaps.get(rm.id) ?? inferCapabilitiesFromId(rm.id),
+    })
   }
 }

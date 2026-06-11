@@ -3,7 +3,7 @@ import { computed, ref, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Search, X, RefreshCw, Sparkles } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
-import { useModelCatalogStore } from '@/stores/model-catalog'
+import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT } from '@/stores/model-catalog'
 import { inferCapabilitiesFromId } from '@/config/providers'
 import { isCatalogModelFree, catalogModelHasMetadata } from '@/types'
 import type { CatalogModel, ModelCapability, ModelOption, ProviderConfig } from '@/types'
@@ -159,10 +159,9 @@ const groupedModels = computed(() => {
 })
 
 // ─── 推荐（聚合商首次接入引导） ─────────────────────────
-const RECOMMEND_MIN_CATALOG = 20
 const recommended = computed<CatalogModel[]>(() => {
   if (recDismissed.value || !hasMetadata.value) return []
-  if (catalogModels.value.length <= RECOMMEND_MIN_CATALOG) return []
+  if (catalogModels.value.length <= AUTO_ENABLE_CATALOG_LIMIT) return []
   if (enabledIds.value.size >= 3) return []
   return catalogModels.value
     .filter((m) => isCatalogModelFree(m) && m.supportsTools && !enabledIds.value.has(m.id))

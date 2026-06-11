@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { logger } from '@/utils/logger'
-import type { CatalogModel } from '@/types'
+import type { CatalogModel, ModelOption } from '@/types'
 
 /**
  * 模型目录 store — "目录 / 启用"两层架构的目录层。
@@ -14,6 +14,13 @@ import type { CatalogModel } from '@/types'
  */
 
 const STORAGE_KEY = 'hexclaw.model-catalog.v1'
+
+/**
+ * 小目录（官方直连服务商，如智谱 8 个模型）阈值：
+ * ≤ 此值时维持简单形态——同步直接全量进启用列表（provider.models），卡片平铺展示；
+ * > 此值视为聚合中转站（OpenRouter 数百模型），只进目录，由模型管理器按需启用。
+ */
+export const AUTO_ENABLE_CATALOG_LIMIT = 10
 
 export interface ProviderCatalog {
   models: CatalogModel[]
@@ -85,3 +92,34 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
 
   return { catalogs, setCatalog, getCatalog, removeCatalog, markNewSeen }
 })
+
+/**
+ * 识别并清理"全量灌入"污染的启用列表。
+ *
+ * 灌入特征：启用列表超过阈值，且其中来自目录的非自定义模型覆盖了目录的绝大部分
+ * （≥90%）——没有用户会手动启用整个目录，这只可能是旧版同步逻辑灌进去的。
+ * 清理后保留：自定义模型、图像/视频生成模型、当前选中模型。
+ *
+ * 返回 null 表示不是灌入污染（如用户手动启用了几十个），不做任何修改。
+ */
+export function trimFloodedModels(
+  models: ModelOption[],
+  catalog: CatalogModel[],
+  selectedModelId: string | undefined,
+): ModelOption[] | null {
+  if (models.length <= AUTO_ENABLE_CATALOG_LIMIT) return null
+  // 只对聚合商规模的目录做灌入识别：中等目录（如 15 个模型的官方直连商）
+  // 用户通过"全选该组"主动启用全部是合法操作，不能命中灌入特征被误杀
+  if (catalog.length < AUTO_ENABLE_CATALOG_LIMIT * 5) return null
+
+  const catalogIds = new Set(catalog.map((m) => m.id))
+  const isKeep = (m: ModelOption) =>
+    m.isCustom ||
+    m.id === selectedModelId ||
+    !!m.capabilities?.some((c) => c === 'image_generation' || c === 'video_generation')
+
+  const fromCatalog = models.filter((m) => !isKeep(m) && catalogIds.has(m.id))
+  if (fromCatalog.length < catalog.length * 0.9) return null
+
+  return models.filter(isKeep)
+}

@@ -19,7 +19,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
-import { useModelCatalogStore } from '@/stores/model-catalog'
+import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from '@/stores/model-catalog'
 import { getRuntimeConfig } from '@/api/settings'
 import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
 import { exportAllConfig, importConfig, type ExportBundle } from '@/api/team'
@@ -42,6 +42,7 @@ import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS, inferCapabilitiesFromId } from '@/config/providers'
 import { OLLAMA_BASE } from '@/config/env'
+import { isCatalogModelFree } from '@/types'
 import type {
   ProviderConfig,
   ProviderType,
@@ -892,13 +893,6 @@ async function testProvider(provider: ProviderConfig) {
   }
 }
 
-/**
- * 小目录（官方直连服务商，如智谱 8 个模型）阈值：
- * ≤ 此值维持"全量同步进启用列表"的原行为；
- * > 此值视为聚合中转站（OpenRouter 339 个），目录与启用分层，避免污染全应用模型选择器。
- */
-const AUTO_ENABLE_CATALOG_LIMIT = 20
-
 /** 连接成功后，从 Provider 动态拉取可用模型目录 */
 async function syncRemoteModels(provider: ProviderConfig) {
   const preset = PROVIDER_PRESETS[provider.type]
@@ -914,6 +908,10 @@ async function syncRemoteModels(provider: ProviderConfig) {
     if (remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT) {
       // 聚合商大目录：不自动灌入启用层，只回填已启用模型的展示名。
       // 启用/停用由模型管理器负责；上游已下架的模型由 isStaleModel 标记，不静默删除。
+      const trimmed = trimFloodedModels(provider.models, remoteModels, provider.selectedModelId)
+      if (trimmed) {
+        provider.models = trimmed
+      }
       const catalogMap = new Map(remoteModels.map(m => [m.id, m]))
       let changed = false
       const refreshed = provider.models.map(m => {
@@ -980,6 +978,17 @@ const modelManagerProvider = computed(
 
 function providerCatalogCount(providerId: string): number {
   return catalogStore.getCatalog(providerId)?.models.length ?? 0
+}
+
+/** 目录超过阈值才进入"摘要 + 管理器"形态；小目录维持平铺 chips 的简单形态 */
+function isManagedCatalog(providerId: string): boolean {
+  return providerCatalogCount(providerId) > AUTO_ENABLE_CATALOG_LIMIT
+}
+
+/** 模型是否免费（仅当目录带价格元数据时返回 true，宁缺勿错） */
+function isModelFree(providerId: string, modelId: string): boolean {
+  const entry = catalogStore.getCatalog(providerId)?.models.find((m) => m.id === modelId)
+  return !!entry && isCatalogModelFree(entry)
 }
 
 function providerHasNewModels(providerId: string): boolean {
@@ -1441,7 +1450,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   <div class="hc-settings__field">
                     <div class="hc-model-section-header">
                       <label class="hc-settings__label">{{ t('settings.llm.models') }} <span class="hc-settings__required">*</span></label>
-                      <span v-if="providerCatalogCount(provider.id)" class="hc-model-enabled-summary">
+                      <span v-if="isManagedCatalog(provider.id)" class="hc-model-enabled-summary">
                         {{ t('settings.llm.modelsEnabledSummary', '已启用') }}
                         <b>{{ provider.models.length }}</b> / {{ providerCatalogCount(provider.id) }}
                         {{ t('settings.llm.modelsAvailable', '可用') }}
@@ -1449,7 +1458,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       <span v-if="testProviderResult[provider.id]?.ok" class="hc-model-sync-hint">
                         {{ t('settings.llm.modelsDynamic', '动态获取') }} · {{ t('settings.llm.justSynced', '刚刚同步') }}
                       </span>
-                      <span v-else-if="provider.models.length > 0 && !providerCatalogCount(provider.id)" class="hc-model-sync-hint">
+                      <span v-else-if="provider.models.length > 0 && !isManagedCatalog(provider.id)" class="hc-model-sync-hint">
                         {{ t('settings.llm.modelsPreset', '预设模型') }}
                       </span>
                     </div>
@@ -1466,6 +1475,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         @click="provider.selectedModelId = model.id; handleProviderModelChange(provider)"
                       >
                         {{ model.name || model.id }}
+                        <span v-if="isModelFree(provider.id, model.id)" class="hc-model-chip__free-label">
+                          {{ t('settings.llm.modelFreeLabel', '免费') }}
+                        </span>
                         <span v-if="isStaleModel(provider, model)" class="hc-model-chip__stale-label">
                           {{ t('settings.llm.modelStaleLabel', '已下架') }}
                         </span>
@@ -1501,7 +1513,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       </button>
                       <!-- 管理模型：浏览/启用目录中的全量模型（聚合商数百个时的主入口） -->
                       <button
-                        v-if="providerCatalogCount(provider.id)"
+                        v-if="isManagedCatalog(provider.id)"
                         class="hc-model-chip hc-model-chip--manage"
                         @click="modelManagerProviderId = provider.id"
                       >
@@ -3294,6 +3306,16 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-settings__bundle-result--err {
   color: var(--hc-error, #f56565);
+}
+
+/* 免费模型：目录价格元数据为 0 时显示 */
+.hc-model-chip__free-label {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-weight: 500;
+  background: color-mix(in srgb, var(--hc-success, #32d583) 14%, transparent);
+  color: var(--hc-success, #32d583);
 }
 
 /* 上游已下架：橙色警示，不静默删除，由用户处置 */

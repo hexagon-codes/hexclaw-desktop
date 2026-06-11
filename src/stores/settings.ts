@@ -30,13 +30,11 @@ import {
   providersToBackend,
   appendLocalProvidersMissingFromRuntime,
   providerMatchesBackendKey,
+  mergeRemoteModelsIntoProvider,
 } from './settings-helpers'
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
-import {
-  PROVIDER_PRESETS,
-  inferCapabilitiesFromId,
-  resolveOllamaCapabilities,
-} from '@/config/providers'
+import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from './model-catalog'
+import { PROVIDER_PRESETS, resolveOllamaCapabilities } from '@/config/providers'
 
 export const useSettingsStore = defineStore('settings', () => {
   const fallbackSandbox = (): SandboxConfig => ({
@@ -427,8 +425,12 @@ export const useSettingsStore = defineStore('settings', () => {
     return { securitySyncFailed }
   }
 
-  /** 保存后异步拉取每个云端 Provider 的模型列表（fire-and-forget） */
+  /**
+   * 保存后异步拉取每个云端 Provider 的模型目录（fire-and-forget）。
+   * 全量目录进 catalog store；仅小目录（≤ AUTO_ENABLE_CATALOG_LIMIT）合并进启用列表。
+   */
   function syncAllProviderModels(providers: ProviderConfig[]) {
+    const catalogStore = useModelCatalogStore()
     for (const p of providers) {
       if (!p.enabled || !p.apiKey?.trim() || p.type === 'ollama') continue
       const baseUrl = p.baseUrl?.trim()
@@ -437,16 +439,17 @@ export const useSettingsStore = defineStore('settings', () => {
         if (!remoteModels.length || !config.value) return
         const target = config.value.llm.providers.find((cp) => cp.id === p.id)
         if (!target) return
-        const existingMap = new Map(target.models.map((m) => [m.id, m]))
-        const presetMap = new Map(
-          (PROVIDER_PRESETS[p.type]?.defaultModels ?? []).map(m => [m.id, m.capabilities]),
-        )
-        for (const rm of remoteModels) {
-          if (!existingMap.has(rm.id)) {
-            const caps = presetMap.get(rm.id) ?? inferCapabilitiesFromId(rm.id)
-            target.models.push({ id: rm.id, name: rm.name || rm.id, capabilities: caps })
+        catalogStore.setCatalog(target.id, remoteModels)
+        if (remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT) {
+          const trimmed = trimFloodedModels(target.models, remoteModels, target.selectedModelId)
+          if (trimmed) {
+            target.models = trimmed
+            logger.info('启用列表为历史全量灌入，已收缩为策展子集', p.name, trimmed.length)
           }
+          logger.debug('目录已同步（大目录，不自动启用）', p.name, remoteModels.length)
+          return
         }
+        mergeRemoteModelsIntoProvider(target, remoteModels, PROVIDER_PRESETS[p.type]?.defaultModels ?? [])
         logger.debug('自动拉取模型列表完成', p.name, remoteModels.length)
       }).catch(() => {
         // 静默失败，兜底模型已可用
@@ -477,10 +480,20 @@ export const useSettingsStore = defineStore('settings', () => {
     if (!config.value) return
     const idx = config.value.llm.providers.findIndex((p) => p.id === id)
     if (idx !== -1) {
-      config.value.llm.providers[idx] = {
+      const merged = {
         ...config.value.llm.providers[idx]!,
         ...updates,
       } as ProviderConfig
+      config.value.llm.providers[idx] = merged
+      // 切换默认 Provider 的当前模型 = 切换全局默认模型。
+      // 不同步的话 reconcileDefaultSelection 会用旧的 defaultModel 把选择改回去。
+      if (
+        updates.selectedModelId &&
+        id === config.value.llm.defaultProviderId &&
+        merged.models.some((m) => m.id === updates.selectedModelId)
+      ) {
+        config.value.llm.defaultModel = updates.selectedModelId
+      }
       reconcileDefaultSelection(config.value.llm)
     }
   }
