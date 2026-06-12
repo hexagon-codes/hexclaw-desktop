@@ -78,6 +78,7 @@ export interface ProviderConfig {
 /** 支持的 Provider 类型 */
 export type ProviderType =
   | 'openai'
+  | 'evolink'
   | 'deepseek'
   | 'anthropic'
   | 'gemini'

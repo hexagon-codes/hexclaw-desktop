@@ -25,6 +25,7 @@ import customLogo from '@/assets/provider-logos/custom.svg'
 
 export const PROVIDER_LOGOS: Record<ProviderType, string> = {
   openai: openaiLogo,
+  evolink: customLogo,
   deepseek: deepseekLogo,
   anthropic: anthropicLogo,
   gemini: geminiLogo,
@@ -53,6 +54,18 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
       { id: 'o3-mini', name: 'o3 Mini', capabilities: ['text'] },
       { id: 'o4-mini', name: 'o4 Mini', capabilities: ['text', 'vision'] },
       { id: 'gpt-4o', name: 'GPT-4o', capabilities: ['text', 'vision'] },
+    ],
+  },
+  evolink: {
+    type: 'evolink',
+    name: 'EvoLink',
+    defaultBaseUrl: 'https://direct.evolink.ai/v1',
+    placeholder: 'sk-...',
+    defaultModels: [
+      { id: 'gpt-5.2', name: 'GPT-5.2', capabilities: ['text', 'vision'] },
+      { id: 'gpt-5.1', name: 'GPT-5.1', capabilities: ['text', 'vision'] },
+      { id: 'gemini-3.1-flash-lite-preview', name: 'Gemini 3.1 Flash Lite Preview', capabilities: ['text', 'vision'] },
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', capabilities: ['text'] },
     ],
   },
   deepseek: {

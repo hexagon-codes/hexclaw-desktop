@@ -26,14 +26,14 @@ import {
 import type { ModelCapability, ProviderType } from '@/types'
 
 const ALL_PROVIDER_KEYS: ProviderType[] = [
-  'openai', 'deepseek', 'anthropic', 'gemini', 'qwen', 'ark',
+  'openai', 'evolink', 'deepseek', 'anthropic', 'gemini', 'qwen', 'ark',
   'zhipu', 'kimi', 'ernie', 'hunyuan', 'spark', 'minimax',
   'ollama', 'custom',
 ]
 
 describe('PROVIDER_PRESETS', () => {
-  it('has exactly 14 entries', () => {
-    expect(Object.keys(PROVIDER_PRESETS)).toHaveLength(14)
+  it('has exactly 15 entries', () => {
+    expect(Object.keys(PROVIDER_PRESETS)).toHaveLength(15)
   })
 
   it('each preset has required fields: type, name, defaultBaseUrl, placeholder', () => {
@@ -113,6 +113,16 @@ describe('PROVIDER_PRESETS', () => {
     expect(hasTextOnly).toBe(true)
   })
 
+  it('EvoLink preset uses OpenAI-compatible chat defaults', () => {
+    expect(PROVIDER_PRESETS.evolink.defaultBaseUrl).toBe('https://direct.evolink.ai/v1')
+    expect(PROVIDER_PRESETS.evolink.defaultModels.map(m => m.id)).toEqual([
+      'gpt-5.2',
+      'gpt-5.1',
+      'gemini-3.1-flash-lite-preview',
+      'deepseek-v4-flash',
+    ])
+  })
+
   it('all non-custom defaultBaseUrl values are valid URLs', () => {
     const nonCustomKeys = ALL_PROVIDER_KEYS.filter(k => k !== 'custom')
     for (const key of nonCustomKeys) {
@@ -123,7 +133,7 @@ describe('PROVIDER_PRESETS', () => {
 })
 
 describe('PROVIDER_LOGOS', () => {
-  it('has exactly 14 entries matching PRESETS keys', () => {
+  it('has entries matching PRESETS keys', () => {
     const logoKeys = Object.keys(PROVIDER_LOGOS).sort()
     const presetKeys = Object.keys(PROVIDER_PRESETS).sort()
     expect(logoKeys).toEqual(presetKeys)
@@ -277,8 +287,8 @@ describe('getProviderTypes()', () => {
     expect(ollamaEntry).toBeUndefined()
   })
 
-  it('returns 13 entries (14 total minus ollama)', () => {
-    expect(getProviderTypes()).toHaveLength(13)
+  it('returns 14 entries (15 total minus ollama)', () => {
+    expect(getProviderTypes()).toHaveLength(14)
   })
 
   it('includes all non-ollama types', () => {
