@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { formatTime } from '@/utils/time'
+import { formatTime, formatElapsedSeconds, formatDurationMs } from '@/utils/time'
 import { outputPreview, hasOutput } from '@/utils/output-preview'
-import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader, Code, AlertTriangle, Clock3 } from 'lucide-vue-next'
+import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader, Code, AlertTriangle, Clock3, Sparkles } from 'lucide-vue-next'
 import {
   getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory,
   type CronJob, type CronJobInput, type CronJobRun, type CronCompileProgress, type CronCompileStage,
 } from '@/api/tasks'
+import type { JobSpec } from '@/types'
 import { useToast } from '@/composables'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -76,6 +77,21 @@ const formValid = computed(() => {
   return form.value.name.trim() !== '' && form.value.schedule.trim() !== '' && form.value.prompt.trim() !== ''
 })
 
+/** Agent-runtime jobs reason per run: no compiled script to display. */
+function isAgentJob(job: CronJob): boolean {
+  return job.spec?.runtime === 'agent'
+}
+
+/**
+ * Backend uses the Go zero time ("0001-01-01T00:00:00Z") for never-compiled
+ * specs (agent jobs). Treat anything before year 2000 as "not compiled".
+ */
+function hasRealCompiledAt(spec: JobSpec | null): boolean {
+  if (!spec?.compiled?.at) return false
+  const d = new Date(spec.compiled.at)
+  return !isNaN(d.getTime()) && d.getFullYear() >= 2000
+}
+
 async function loadJobs() {
   loading.value = true
   try {
@@ -100,6 +116,9 @@ function collapseOnOutsideClick(event: MouseEvent) {
   if (!expandedJobId.value) return
   const target = event.target as HTMLElement | null
   if (target?.closest(OUTSIDE_CLICK_EXEMPT_SELECTOR)) return
+  // Collapsing hides the history panel, so its 3s poll has nothing to update —
+  // stop every watch instead of leaking intervals against now-hidden jobs.
+  stopAllRunWatches()
   expandedJobId.value = null
   expandedRunId.value = null
   expandedStdout.value = new Set()
@@ -203,6 +222,12 @@ async function handleDelete(job: CronJob) {
   try {
     await deleteCronJob(job.id)
     jobs.value = jobs.value.filter((j) => j.id !== job.id)
+    stopRunWatch(job.id)
+    delete jobHistories.value[job.id]
+    if (expandedJobId.value === job.id) {
+      expandedJobId.value = null
+      expandedRunId.value = null
+    }
   } catch (e) {
     console.error('删除任务失败:', e)
   } finally {
@@ -215,21 +240,14 @@ async function handleDelete(job: CronJob) {
 async function handleTrigger(job: CronJob) {
   if (triggeringJobs.value.has(job.id)) return
   triggeringJobs.value = new Set([...triggeringJobs.value, job.id])
-  const triggeredAt = Date.now()
   try {
     await triggerCronJob(job.id)
     job.run_count += 1
     job.last_run_at = new Date().toISOString()
-    // 自动展开历史并轮询直到看到新 entry（最多 10 秒）
-    expandedJobId.value = job.id
-    expandedRunId.value = null
-    for (let i = 0; i < 10; i++) {
-      await new Promise((r) => setTimeout(r, 1000))
-      await loadJobHistory(job.id)
-      const latest = jobHistories.value[job.id]?.[0]
-      if (latest && new Date(latest.started_at).getTime() > triggeredAt - 5000) break
-    }
     toast.success(t('tasks.triggerSuccess', '任务已触发，见历史'))
+    // Run executes async on the backend (agent runs can take minutes):
+    // show an optimistic running row and poll until a terminal row appears.
+    startRunWatch(job.id)
   } catch (e) {
     console.error('手动触发任务失败:', e)
     toast.error(t('tasks.triggerFailed', '触发失败'))
@@ -240,17 +258,132 @@ async function handleTrigger(job: CronJob) {
   }
 }
 
+// ── Run watch: optimistic running row + history polling (Issue: stale history
+//    after manual trigger) ────────────────────────────────────────────────
+const RUN_WATCH_POLL_MS = 3000
+const RUN_WATCH_TIMEOUT_MS = 8 * 60 * 1000
+/** Statuses that mean the run finished — stop polling when one shows up. */
+const TERMINAL_RUN_STATUSES = new Set(['success', 'failed', 'error', 'timeout', 'healed', 'heal_failed'])
+/**
+ * Forward-only match tolerance (ms). A row counts as "this trigger's row" only
+ * if it started at/after the local trigger time, minus a tiny clock-skew
+ * allowance. Kept small on purpose: a wide window let a scheduled run that
+ * fired seconds *before* the click be mistaken for the manual run — if that
+ * older row was already terminal, the watch stopped and the optimistic running
+ * row vanished before the real manual run appeared.
+ */
+const RUN_MATCH_SLACK_MS = 3_000
+
+const runWatches = new Map<string, { triggeredAt: number; timer: ReturnType<typeof setInterval> }>()
+/** Reactive clock driving the live elapsed label of running rows. */
+const nowMs = ref(Date.now())
+let elapsedTicker: ReturnType<typeof setInterval> | null = null
+
+function optimisticRunId(jobId: string): string {
+  return `optimistic-${jobId}`
+}
+
+function makeOptimisticRun(jobId: string, triggeredAt: number): CronJobRun {
+  return {
+    id: optimisticRunId(jobId),
+    job_id: jobId,
+    status: 'running',
+    started_at: new Date(triggeredAt).toISOString(),
+  }
+}
+
+/**
+ * Merge fetched history with the in-flight watch: keep the optimistic row on
+ * top until the server reports a row for this trigger, and tell the caller
+ * whether that row is terminal (so polling can stop).
+ */
+function mergeHistoryWithWatch(jobId: string, runs: CronJobRun[]): { runs: CronJobRun[]; terminal: boolean } {
+  const watch = runWatches.get(jobId)
+  if (!watch) return { runs, terminal: false }
+  const fresh = runs.find((r) => {
+    const startedAt = new Date(r.started_at).getTime()
+    return !isNaN(startedAt) && startedAt >= watch.triggeredAt - RUN_MATCH_SLACK_MS
+  })
+  if (fresh) {
+    // Real row arrived — it replaces the optimistic placeholder.
+    return { runs, terminal: TERMINAL_RUN_STATUSES.has(fresh.status) }
+  }
+  return { runs: [makeOptimisticRun(jobId, watch.triggeredAt), ...runs], terminal: false }
+}
+
+function startRunWatch(jobId: string) {
+  stopRunWatch(jobId)
+  const triggeredAt = Date.now()
+  // Auto-expand this job's history so the new run is visible immediately.
+  expandedJobId.value = jobId
+  expandedRunId.value = null
+  const existing = (jobHistories.value[jobId] ?? []).filter((r) => r.id !== optimisticRunId(jobId))
+  jobHistories.value[jobId] = [makeOptimisticRun(jobId, triggeredAt), ...existing]
+
+  if (!elapsedTicker) {
+    elapsedTicker = setInterval(() => { nowMs.value = Date.now() }, 1000)
+  }
+  const timer = setInterval(() => {
+    if (Date.now() - triggeredAt >= RUN_WATCH_TIMEOUT_MS) {
+      // Give up after 8 minutes: drop the optimistic row via a final reload.
+      stopRunWatch(jobId)
+      void loadJobHistory(jobId)
+      return
+    }
+    void loadJobHistory(jobId)
+  }, RUN_WATCH_POLL_MS)
+  runWatches.set(jobId, { triggeredAt, timer })
+}
+
+function stopRunWatch(jobId: string) {
+  const watch = runWatches.get(jobId)
+  if (!watch) return
+  clearInterval(watch.timer)
+  runWatches.delete(jobId)
+  if (runWatches.size === 0 && elapsedTicker) {
+    clearInterval(elapsedTicker)
+    elapsedTicker = null
+  }
+}
+
+function stopAllRunWatches() {
+  for (const jobId of [...runWatches.keys()]) stopRunWatch(jobId)
+}
+onUnmounted(stopAllRunWatches)
+
+/** Live elapsed label for a running row ("42s", then "2:06" past a minute). */
+function runningElapsed(run: CronJobRun): string {
+  const startedAt = new Date(run.started_at).getTime()
+  if (isNaN(startedAt)) return ''
+  return formatElapsedSeconds((nowMs.value - startedAt) / 1000)
+}
+
+const historyLoading = new Set<string>()
+
 async function loadJobHistory(jobId: string) {
+  if (historyLoading.has(jobId)) return
+  historyLoading.add(jobId)
   try {
-    jobHistories.value[jobId] = await getCronJobHistory(jobId, 5)
+    const runs = await getCronJobHistory(jobId, 5)
+    const { runs: merged, terminal } = mergeHistoryWithWatch(jobId, runs)
+    jobHistories.value[jobId] = merged
+    // Refresh the clock so running rows fetched outside a watch (scheduled
+    // runs) still show a sensible elapsed value.
+    nowMs.value = Date.now()
+    if (terminal) stopRunWatch(jobId)
   } catch (e) {
     console.error('加载执行历史失败:', e)
-    jobHistories.value[jobId] = []
+    if (!jobHistories.value[jobId]) jobHistories.value[jobId] = []
+  } finally {
+    historyLoading.delete(jobId)
   }
 }
 
 async function toggleHistory(jobId: string) {
   if (expandedJobId.value === jobId) {
+    // Manual collapse hides this job's history — stop its poll so it does not
+    // keep hitting the backend (and mutating jobHistories) for up to 8 minutes.
+    stopRunWatch(jobId)
     expandedJobId.value = null
     expandedRunId.value = null
   } else {
@@ -262,13 +395,6 @@ async function toggleHistory(jobId: string) {
 
 function toggleRunDetail(runId: string) {
   expandedRunId.value = expandedRunId.value === runId ? null : runId
-}
-
-function formatDuration(ms?: number): string {
-  if (!ms) return '-'
-  if (ms < 1000) return `${ms}ms`
-  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`
-  return `${(ms / 60000).toFixed(1)}min`
 }
 
 function runStatusIcon(status: string) {
@@ -450,7 +576,7 @@ defineExpose({ openCreateForm, loadJobs })
               <span>{{ expandedJobId === job.id ? t('tasks.hideHistory', '收起历史') : t('tasks.history') }}</span>
             </button>
             <button
-              v-if="job.spec"
+              v-if="job.spec && !isAgentJob(job)"
               class="task-card__action-btn"
               :style="{ color: scriptVisible.has(job.id) ? 'var(--hc-accent)' : 'var(--hc-text-secondary)' }"
               :title="t('tasks.viewScript', '查看脚本')"
@@ -471,13 +597,19 @@ defineExpose({ openCreateForm, loadJobs })
             </button>
           </div>
 
-          <!-- Compiled script viewer -->
-          <div v-if="scriptVisible.has(job.id) && job.spec" class="task-card__script">
+          <!-- Agent runtime badge: agent jobs reason per run, no script panel -->
+          <div v-if="isAgentJob(job)" class="task-card__agent-badge">
+            <Sparkles :size="12" />
+            <span>{{ t('tasks.agentRuntime', 'Agent · 每次执行由 AI 推理完成') }}<template v-if="job.spec?.timeout_s"> · {{ job.spec.timeout_s }}s</template></span>
+          </div>
+
+          <!-- Compiled script viewer (script jobs only) -->
+          <div v-if="scriptVisible.has(job.id) && job.spec && !isAgentJob(job)" class="task-card__script">
             <div class="task-card__script-header">
               <span class="task-card__script-meta">
                 Python · {{ job.spec.deps?.length || 0 }} deps · {{ job.spec.timeout_s }}s
               </span>
-              <span class="task-card__script-meta task-card__script-meta--dim">
+              <span v-if="hasRealCompiledAt(job.spec)" class="task-card__script-meta task-card__script-meta--dim">
                 {{ t('tasks.compiledBy', '编译于') }} {{ formatTime(job.spec.compiled.at) }} · {{ job.spec.compiled.model }}
               </span>
             </div>
@@ -500,7 +632,8 @@ defineExpose({ openCreateForm, loadJobs })
                 >
                   <component :is="runStatusIcon(run.status)" :size="13" :style="{ color: runStatusColor(run.status), flexShrink: 0 }" />
                   <span class="task-card__history-time">{{ formatTime(run.started_at) }}</span>
-                  <span v-if="run.duration_ms" class="task-card__history-duration">{{ formatDuration(run.duration_ms) }}</span>
+                  <span v-if="run.status === 'running'" class="task-card__history-duration">{{ runningElapsed(run) }}</span>
+                  <span v-else-if="run.duration_ms" class="task-card__history-duration">{{ formatDurationMs(run.duration_ms) }}</span>
                   <span class="task-card__history-status" :style="{ color: runStatusColor(run.status) }">{{ runStatusText(run.status) }}</span>
                   <span v-if="typeof run.exit_code === 'number' && run.exit_code !== 0" class="task-card__history-exit">
                     exit {{ run.exit_code }}
@@ -1008,6 +1141,21 @@ defineExpose({ openCreateForm, loadJobs })
   padding: 1px 4px;
   background: rgba(255,165,0,0.1);
   border-radius: 3px;
+}
+
+/* Agent runtime badge (agent jobs have no compiled script panel) */
+.task-card__agent-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: 100px;
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
 }
 
 /* Compiled script viewer */

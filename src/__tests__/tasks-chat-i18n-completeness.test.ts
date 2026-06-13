@@ -23,6 +23,16 @@ const REQUIRED_KEYS = [
   'tasks.history',
   'tasks.viewScript',
   'tasks.hideScript',
+  // Agent-runtime jobs + manual trigger feedback (2026-06 UX fixes)
+  'tasks.agentRuntime',
+  'tasks.compiledBy',
+  'tasks.triggerSuccess',
+  'tasks.triggerFailed',
+  // Run-status labels for self-healing cron runs (TasksView runStatusText)
+  'tasks.statusHealed',
+  'tasks.statusHealFailed',
+  // Knowledge/memory refresh button tooltip
+  'common.refresh',
   // ChatView cron compile progress card
   'chat.cronStageStarting',
   'chat.cronCompileHint',

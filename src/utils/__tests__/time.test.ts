@@ -5,7 +5,7 @@ vi.mock('@/i18n', () => ({
   i18n: { global: { locale: { value: 'zh-CN' } } },
 }))
 
-import { formatTime, formatLogTime, formatRelative, formatElapsedSeconds } from '../time'
+import { formatTime, formatLogTime, formatRelative, formatElapsedSeconds, formatDurationMs } from '../time'
 import { i18n } from '@/i18n'
 
 function setLocale(loc: string) {
@@ -247,5 +247,32 @@ describe('formatElapsedSeconds', () => {
   it('clamps negatives and floors fractions', () => {
     expect(formatElapsedSeconds(-5)).toBe('0s')
     expect(formatElapsedSeconds(61.9)).toBe('1:01')
+  })
+})
+
+// Task history durations: "17.1s" / "2.1min" read poorly — show whole
+// seconds under a minute and m:ss from one minute on.
+describe('formatDurationMs', () => {
+  it('returns a dash for missing or invalid input', () => {
+    expect(formatDurationMs(undefined)).toBe('-')
+    expect(formatDurationMs(0)).toBe('-')
+    expect(formatDurationMs(-100)).toBe('-')
+  })
+
+  it('keeps millisecond precision below one second', () => {
+    expect(formatDurationMs(300)).toBe('300ms')
+    expect(formatDurationMs(999)).toBe('999ms')
+  })
+
+  it('renders whole seconds under a minute', () => {
+    expect(formatDurationMs(1000)).toBe('1s')
+    expect(formatDurationMs(17_100)).toBe('17s')
+    expect(formatDurationMs(59_900)).toBe('59s')
+  })
+
+  it('renders m:ss from one minute on', () => {
+    expect(formatDurationMs(60_000)).toBe('1:00')
+    expect(formatDurationMs(126_000)).toBe('2:06')
+    expect(formatDurationMs(6 * 60_000 + 5_000)).toBe('6:05')
   })
 })

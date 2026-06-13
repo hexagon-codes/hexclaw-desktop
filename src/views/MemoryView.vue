@@ -347,7 +347,7 @@ function requestClearAll() {
   showClearAllConfirm.value = true
 }
 
-defineExpose({ openAddDialog, setToolbarSearch, submitToolbarSearch, requestClearAll })
+defineExpose({ openAddDialog, setToolbarSearch, submitToolbarSearch, requestClearAll, refreshMemoryList })
 
 async function handleSave() {
   if (!newContent.value.trim()) return

@@ -1,6 +1,11 @@
 /** 编译后的可执行规约（hexclaw 后端 v2 架构产物） */
 export interface JobSpec {
-  runtime: 'python3'
+  /**
+   * 'python3': compiled script executed in sandbox.
+   * 'agent': AI reasoning per run — script is empty and compiled.at is the
+   * zero time ("0001-01-01T00:00:00Z"), so the UI must not render script info.
+   */
+  runtime: 'python3' | 'agent'
   script: string
   deps: string[]
   inputs?: Record<string, unknown>

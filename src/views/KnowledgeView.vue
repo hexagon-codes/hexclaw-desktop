@@ -494,7 +494,7 @@ function openUpload() {
   showAddDialog.value = true
 }
 
-defineExpose({ rebuildAll, openUpload, openFilePicker, docs })
+defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 </script>
 
 <template>

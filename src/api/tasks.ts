@@ -347,7 +347,7 @@ export async function getCronJobHistory(id: string, limit = 5): Promise<CronJobR
 export interface CronJobRun {
   id: string
   job_id: string
-  status: 'success' | 'failed' | 'error' | 'timeout' | 'running'
+  status: 'success' | 'failed' | 'error' | 'timeout' | 'running' | 'healed' | 'heal_failed'
   result?: string
   started_at: string
   finished_at?: string

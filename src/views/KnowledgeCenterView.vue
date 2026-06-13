@@ -2,7 +2,7 @@
 import { onMounted, ref, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Brain, Eraser, FileText } from 'lucide-vue-next'
+import { Brain, Eraser, FileText, RefreshCw } from 'lucide-vue-next'
 import KnowledgeView from '@/views/KnowledgeView.vue'
 import MemoryView from '@/views/MemoryView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
@@ -10,8 +10,10 @@ import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import PageHeader from '@/components/common/PageHeader.vue'
 import { getNavigationChildren } from '@/config/navigation'
 import { getRuntimeConfig } from '@/api/settings'
+import { useToast } from '@/composables'
 
 const { t } = useI18n()
+const toast = useToast()
 const route = useRoute()
 const router = useRouter()
 
@@ -45,6 +47,7 @@ type MemoryViewExpose = {
   setToolbarSearch?: (value: string) => void
   submitToolbarSearch?: () => Promise<void> | void
   requestClearAll?: () => void
+  refreshMemoryList?: () => Promise<void> | void
 }
 
 const memoryViewRef = ref<MemoryViewExpose>()
@@ -93,6 +96,28 @@ function onToolbarSearchSubmit() {
 function onClearMemory() {
   memoryViewRef.value?.requestClearAll?.()
 }
+
+// Background agent/cron jobs write KB documents and memory entries; both
+// lists otherwise load only on mount, so expose a manual refresh.
+const refreshing = ref(false)
+async function onRefresh() {
+  if (refreshing.value) return
+  refreshing.value = true
+  try {
+    if (activeTab.value === 'memory') {
+      await memoryViewRef.value?.refreshMemoryList?.()
+    } else {
+      await knowledgeViewRef.value?.loadDocs?.()
+    }
+  } catch (e) {
+    // Surface the failure instead of silently clearing the spinner — an
+    // unhandled rejection here would leave the user thinking the refresh worked.
+    const msg = e instanceof Error ? e.message : t('common.refreshFailed', 'Refresh failed')
+    toast.error(msg)
+  } finally {
+    refreshing.value = false
+  }
+}
 </script>
 
 <template>
@@ -107,6 +132,15 @@ function onClearMemory() {
         <SegmentedControl v-model="activeTab" :segments="segments" />
       </template>
       <template #actions>
+        <button
+          data-testid="knowledge-refresh"
+          class="hc-btn hc-btn-ghost"
+          :title="t('common.refresh', 'Refresh')"
+          :disabled="refreshing"
+          @click="onRefresh"
+        >
+          <RefreshCw :size="14" :class="{ 'animate-spin': refreshing }" />
+        </button>
         <template v-if="activeTab === 'docs'">
           <button
             class="hc-btn hc-btn-primary"

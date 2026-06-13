@@ -92,6 +92,17 @@ export function formatElapsedSeconds(seconds: number): string {
   return `${Math.floor(s / 60)}:${pad2(s % 60)}`
 }
 
+/**
+ * Run-duration label from milliseconds (task history rows).
+ * Sub-second: "300ms". Under a minute: "17s". From 60s on: "m:ss" ("2:06") —
+ * same scale as formatElapsedSeconds so running/finished rows read alike.
+ */
+export function formatDurationMs(ms?: number): string {
+  if (!ms || ms < 0) return '-'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  return formatElapsedSeconds(ms / 1000)
+}
+
 /** Short relative time for streaming contexts: "3s ago", "2m ago" */
 export function formatRelative(ts: string, now: number): string {
   const d = new Date(ts)
