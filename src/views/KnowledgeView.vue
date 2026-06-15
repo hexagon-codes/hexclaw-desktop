@@ -19,6 +19,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { parseDocument } from '@/utils/file-parser'
 import { logger } from '@/utils/logger'
 
@@ -1029,7 +1030,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 {{ selectedDoc.error_message }}
               </div>
               <div
-                class="rounded-xl border p-4 whitespace-pre-wrap break-words text-sm leading-6"
+                class="rounded-xl border p-4 text-sm leading-6"
                 :style="{
                   background: 'var(--hc-bg-main)',
                   borderColor: 'var(--hc-border)',
@@ -1037,7 +1038,8 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 }"
               >
                 <template v-if="loadingDocContent">{{ t('common.loading', '加载中...') }}</template>
-                <template v-else>{{ selectedDoc.content || t('knowledge.noContentDetail') }}</template>
+                <MarkdownRenderer v-else-if="selectedDoc.content" :content="selectedDoc.content" />
+                <template v-else>{{ t('knowledge.noContentDetail') }}</template>
               </div>
             </div>
           </div>
