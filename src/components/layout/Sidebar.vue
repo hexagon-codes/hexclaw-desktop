@@ -45,7 +45,7 @@ const dotClass = computed(() => {
 
 const engineLabel = computed(() => {
   const s = appStore.sidecarStatus
-  if (s === 'running') return 'Hexagon engine'
+  if (s === 'running') return engineVersion.value ? `Hexagon engine ${engineVersion.value}` : 'Hexagon engine'
   if (s === 'starting') return 'Hexagon engine …'
   return 'Hexagon engine'
 })
