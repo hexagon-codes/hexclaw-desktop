@@ -13,7 +13,7 @@ export default {
     automationCanvas: '工作流画布',
     automationWebhooks: 'Webhooks',
     integration: '集成',
-    integrationSkills: '工具能力',
+    integrationSkills: '技能',
     integrationMcp: 'MCP 服务',
     integrationIm: '外部通道',
     integrationDiagnostics: '诊断',
@@ -33,7 +33,7 @@ export default {
     collapse: '收起',
     // 旧 key 兼容（子页面内部仍可能引用）
     tasks: '定时任务',
-    skills: '工具能力',
+    skills: '技能',
     memory: '记忆',
     mcp: 'MCP',
     imChannels: '外部通道',
@@ -483,7 +483,7 @@ export default {
 
   // 技能页
   skills: {
-    title: '工具能力',
+    title: '技能',
     description: '管理已安装的技能和浏览市场',
     installed: '已安装',
     marketplace: '市场',

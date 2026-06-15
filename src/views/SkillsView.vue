@@ -16,9 +16,11 @@ import {
   User,
   Zap,
   Info,
+  FileText,
 } from 'lucide-vue-next'
 import {
   getSkills,
+  getSkillContent,
   installSkill,
   uninstallSkill,
   setSkillEnabled,
@@ -35,6 +37,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { useAppStore } from '@/stores/app'
 
 const { t } = useI18n()
@@ -290,6 +293,29 @@ function isSkillEnabled(skillOrName: Skill | string): boolean {
 function toggleSkillDetail(name: string) {
   expandedSkill.value = expandedSkill.value === name ? null : name
 }
+
+// ─── SKILL.md 只读查看（市场技能不支持就地编辑） ───
+const skillMdContent = ref('')
+const skillMdLoading = ref(false)
+const skillMdError = ref('')
+
+async function loadSkillContent(name: string) {
+  skillMdContent.value = ''
+  skillMdError.value = ''
+  skillMdLoading.value = true
+  try {
+    const res = await getSkillContent(name)
+    skillMdContent.value = res.content || ''
+  } catch (e) {
+    skillMdError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    skillMdLoading.value = false
+  }
+}
+
+watch(expandedSkill, (name) => {
+  if (name) loadSkillContent(name)
+})
 
 const filteredSkills = computed(() => {
   const q = (props.embeddedSearch ?? searchQuery.value).toLowerCase()
@@ -726,6 +752,27 @@ defineExpose({ openInstallDialog, switchToHub })
               <span class="text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
                 · {{ getSkillScope(skill) === 'runtime' ? t('skills.runtimeState') : t('skills.localPreference') }}
               </span>
+            </div>
+
+            <!-- SKILL.md（只读查看；市场技能不支持就地编辑） -->
+            <div class="mt-3">
+              <div class="flex items-center gap-1.5 mb-1.5">
+                <FileText :size="12" :style="{ color: 'var(--hc-text-muted)' }" />
+                <span class="text-[10px] font-medium" :style="{ color: 'var(--hc-text-muted)' }">SKILL.md</span>
+              </div>
+              <div v-if="skillMdLoading" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+                {{ t('common.loading', '加载中...') }}
+              </div>
+              <div v-else-if="skillMdError" class="text-xs" :style="{ color: '#dc2626' }">
+                {{ skillMdError }}
+              </div>
+              <div
+                v-else-if="skillMdContent"
+                class="rounded-lg border p-3 max-h-96 overflow-y-auto text-sm"
+                :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
+              >
+                <MarkdownRenderer :content="skillMdContent" />
+              </div>
             </div>
           </div>
         </div>

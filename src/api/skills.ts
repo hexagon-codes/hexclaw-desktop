@@ -166,3 +166,10 @@ export async function installFromHub(skillName: string): Promise<void> {
     source: `clawhub://${skillName}`,
   })
 }
+
+/** 读取某个 Skill 的 SKILL.md 原文（只读查看；市场技能不支持就地编辑） */
+export function getSkillContent(name: string) {
+  return apiGet<{ name: string; path: string; content: string }>(
+    `/api/v1/skills/${encodeURIComponent(name)}/content`,
+  )
+}
