@@ -56,9 +56,13 @@ function createMarkdownRenderer(copyLabel: string) {
       ? highlighted
       : `<pre class="code-block"><code class="language-${lang}">${instance.utils.escapeHtml(code)}</code></pre>`
 
-    return `<div class="code-block-wrapper">
+    // Language-less fences are usually LLM-wrapped prose/flows, not code, so
+    // they get minimal chrome (no language tag, lighter header). All blocks
+    // soft-wrap via CSS so nothing hides behind a horizontal scrollbar.
+    const plainClass = lang ? '' : ' code-block-wrapper--plain'
+    return `<div class="code-block-wrapper${plainClass}">
       <div class="code-block-header">
-        <span class="code-lang">${lang || 'text'}</span>
+        <span class="code-lang">${instance.utils.escapeHtml(lang || 'text')}</span>
         <button class="copy-btn" data-code="${instance.utils.escapeHtml(code)}">${instance.utils.escapeHtml(copyLabel)}</button>
       </div>
       ${codeHtml}
@@ -303,7 +307,8 @@ const rendered = computed(() => {
   font-size: 11px;
   padding: var(--hc-space-1) var(--hc-space-2);
   border-radius: var(--hc-space-1);
-  transition: color 0.15s, background 0.15s;
+  opacity: 0;
+  transition: color 0.15s, background 0.15s, opacity 0.15s;
   font-weight: 500;
 }
 
@@ -320,7 +325,8 @@ const rendered = computed(() => {
   margin: 0;
   padding: var(--hc-space-3) var(--hc-space-4);
   background: var(--hc-bg-input);
-  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.6;
 }
@@ -333,7 +339,8 @@ const rendered = computed(() => {
 .markdown-body :deep(.code-block-wrapper .shiki) {
   margin: 0;
   padding: var(--hc-space-3) var(--hc-space-4);
-  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.6;
   border-radius: 0;
@@ -341,5 +348,22 @@ const rendered = computed(() => {
 
 .markdown-body :deep(.code-block-wrapper .shiki code) {
   font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+}
+
+/* Copy reveals on hover (ChatGPT / Open WebUI pattern), not permanently shown. */
+.markdown-body :deep(.code-block-wrapper:hover .copy-btn),
+.markdown-body :deep(.copy-btn:focus-visible),
+.markdown-body :deep(.copy-btn--success) {
+  opacity: 1;
+}
+
+/* Language-less fences: neutral wrapped monospace box, no code-header chrome. */
+.markdown-body :deep(.code-block-wrapper--plain .code-lang) {
+  display: none;
+}
+
+.markdown-body :deep(.code-block-wrapper--plain .code-block-header) {
+  background: transparent;
+  padding-bottom: 0;
 }
 </style>
