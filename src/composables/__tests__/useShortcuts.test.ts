@@ -22,9 +22,9 @@ vi.mock('@/stores/chat', () => ({
 
 vi.mock('@/config/navigation', () => ({
   navigationItems: [
-    { id: 'dashboard', path: '/dashboard', i18nKey: 'nav.dashboard', icon: {}, group: 'core' },
-    { id: 'chat', path: '/chat', i18nKey: 'nav.chat', icon: {}, group: 'core' },
-    { id: 'agents', path: '/agents', i18nKey: 'nav.agents', icon: {}, group: 'core' },
+    { id: 'chat', path: '/chat', i18nKey: 'nav.chat', icon: {}, group: 'home' },
+    { id: 'agents', path: '/agents', i18nKey: 'nav.agents', icon: {}, group: 'build' },
+    { id: 'knowledge', path: '/knowledge', i18nKey: 'nav.knowledge', icon: {}, group: 'build' },
   ],
 }))
 
@@ -61,30 +61,30 @@ describe('useShortcuts', () => {
     vi.clearAllMocks()
   })
 
-  it('Cmd+1 navigates to first nav item (/dashboard)', () => {
+  it('Cmd+1 navigates to first nav item (/chat)', () => {
     const wrapper = mountComposable()
 
     fireKeydown('1', { metaKey: true })
-
-    expect(mockPush).toHaveBeenCalledWith('/dashboard')
-    wrapper.unmount()
-  })
-
-  it('Cmd+2 navigates to second nav item (/chat)', () => {
-    const wrapper = mountComposable()
-
-    fireKeydown('2', { metaKey: true })
 
     expect(mockPush).toHaveBeenCalledWith('/chat')
     wrapper.unmount()
   })
 
-  it('Cmd+3 navigates to third nav item (/agents)', () => {
+  it('Cmd+2 navigates to second nav item (/agents)', () => {
+    const wrapper = mountComposable()
+
+    fireKeydown('2', { metaKey: true })
+
+    expect(mockPush).toHaveBeenCalledWith('/agents')
+    wrapper.unmount()
+  })
+
+  it('Cmd+3 navigates to third nav item (/knowledge)', () => {
     const wrapper = mountComposable()
 
     fireKeydown('3', { metaKey: true })
 
-    expect(mockPush).toHaveBeenCalledWith('/agents')
+    expect(mockPush).toHaveBeenCalledWith('/knowledge')
     wrapper.unmount()
   })
 
@@ -93,7 +93,7 @@ describe('useShortcuts', () => {
 
     fireKeydown('1', { ctrlKey: true })
 
-    expect(mockPush).toHaveBeenCalledWith('/dashboard')
+    expect(mockPush).toHaveBeenCalledWith('/chat')
     wrapper.unmount()
   })
 

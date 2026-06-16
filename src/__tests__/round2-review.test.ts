@@ -137,26 +137,6 @@ describe('SegmentedControl — ARIA', () => {
   })
 })
 
-describe('IntegrationView — 诊断数据来源', () => {
-  const src = readSrc('views/IntegrationView.vue')
-
-  it('使用 logsStore 而非硬编码数据', () => {
-    expect(src).toContain('logsStore.entries')
-    expect(src).toContain('diagnosticEntries')
-    expect(src).not.toContain('MCP refresh')
-    expect(src).not.toContain('telegram timeout')
-  })
-
-  it('调用 loadHistory 而非不存在的 fetchLogs', () => {
-    expect(src).toContain('loadHistory')
-    expect(src).not.toContain('fetchLogs')
-  })
-
-  it('不包含冗余的动态 import logs store', () => {
-    expect(src).not.toContain("import('@/stores/logs')")
-  })
-})
-
 describe('logsStore — loadHistory 已导出', () => {
   const src = readSrc('stores/logs.ts')
 

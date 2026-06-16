@@ -1,6 +1,5 @@
 import type { Component } from 'vue'
 import {
-  LayoutDashboard,
   MessageSquare,
   Radio,
   Bot,
@@ -28,11 +27,16 @@ export interface NavChild {
   i18nKey: string
 }
 
-export type NavGroup = 'core' | 'integration' | 'system'
+export type NavGroup = 'home' | 'build' | 'connections' | 'system'
 
+/**
+ * 分组标题（侧栏分区头）。home 无标题：Chat 作为 runtime 独立置顶。
+ * ug 等其它语言回退英文。
+ */
 export const NAV_GROUP_LABELS: Record<NavGroup, { zh: string; en: string }> = {
-  core: { zh: '核心工作区', en: 'Workspace' },
-  integration: { zh: '集成与运维', en: 'Integration' },
+  home: { zh: '', en: '' },
+  build: { zh: '构建', en: 'Build' },
+  connections: { zh: '连接', en: 'Connections' },
   system: { zh: '系统', en: 'System' },
 }
 
@@ -41,43 +45,30 @@ export const NAV_GROUP_LABELS: Record<NavGroup, { zh: string; en: string }> = {
  *
  * Sidebar、CommandPalette、路由都从这里派生。
  * 设计原则：
- *   - 一级导航 8 项（方案要求 6-8）
- *   - 三层分组：核心工作区 / 集成与运维 / 系统
+ *   - Chat 独立置顶（home 组，无标题）：runtime「用」与 authoring「搭」分离
+ *   - 三层分组：构建 / 连接 / 系统
+ *   - 数组顺序即侧栏与 Cmd+数字快捷键顺序
  *   - 合并后的页面用 children 定义页内 Tab
  */
 export const navigationItems: NavItem[] = [
-  // ─── 核心工作区 ───
-  {
-    id: 'dashboard',
-    path: '/dashboard',
-    i18nKey: 'nav.dashboard',
-    icon: LayoutDashboard,
-    keywords: 'dashboard 概览 首页 overview',
-    group: 'core',
-  },
+  // ─── Chat（独立置顶 · runtime）───
   {
     id: 'chat',
     path: '/chat',
     i18nKey: 'nav.chat',
     icon: MessageSquare,
     keywords: 'chat 聊天 对话 conversation',
-    group: 'core',
+    group: 'home',
   },
-  {
-    id: 'channels',
-    path: '/channels',
-    i18nKey: 'nav.channels',
-    icon: Radio,
-    keywords: 'channels 通道 IM 飞书 钉钉 discord telegram feishu dingtalk',
-    group: 'core',
-  },
+
+  // ─── 构建 ───
   {
     id: 'agents',
     path: '/agents',
     i18nKey: 'nav.agents',
     icon: Bot,
     keywords: 'agents 智能体 角色 role agent',
-    group: 'core',
+    group: 'build',
   },
   {
     id: 'knowledge',
@@ -85,7 +76,7 @@ export const navigationItems: NavItem[] = [
     i18nKey: 'nav.knowledge',
     icon: BookOpen,
     keywords: 'knowledge 知识库 文档 记忆 memory',
-    group: 'core',
+    group: 'build',
     children: [
       { id: 'knowledge-docs', path: '/knowledge', i18nKey: 'nav.knowledgeDocs' },
       { id: 'knowledge-memory', path: '/knowledge/memory', i18nKey: 'nav.knowledgeMemory' },
@@ -97,37 +88,44 @@ export const navigationItems: NavItem[] = [
     i18nKey: 'nav.automation',
     icon: Zap,
     keywords: 'automation 自动化 任务 定时 cron webhook 触发器 trigger',
-    group: 'core',
+    group: 'build',
     children: [
       { id: 'automation-tasks', path: '/automation', i18nKey: 'nav.automationTasks' },
       { id: 'automation-webhooks', path: '/automation/webhooks', i18nKey: 'nav.automationWebhooks' },
     ],
   },
 
-  // ─── 集成与运维 ───
+  // ─── 连接 ───
+  {
+    id: 'channels',
+    path: '/channels',
+    i18nKey: 'nav.channels',
+    icon: Radio,
+    keywords: 'channels 通道 IM 飞书 钉钉 discord telegram feishu dingtalk',
+    group: 'connections',
+  },
   {
     id: 'integration',
     path: '/integration',
     i18nKey: 'nav.integration',
     icon: Blocks,
-    keywords: 'integration 集成 skill 技能 mcp 工具 im 通道 channel 诊断 diagnosis',
-    group: 'integration',
+    keywords: 'integration 集成 skill 技能 mcp 工具 connection 连接',
+    group: 'connections',
     children: [
       { id: 'integration-skills', path: '/integration', i18nKey: 'nav.integrationSkills' },
       { id: 'integration-mcp', path: '/integration/mcp', i18nKey: 'nav.integrationMcp' },
-      { id: 'integration-diagnostics', path: '/integration/diagnostics', i18nKey: 'nav.integrationDiagnostics' },
     ],
   },
+
+  // ─── 系统 ───
   {
     id: 'logs',
     path: '/logs',
     i18nKey: 'nav.logs',
     icon: ScrollText,
-    keywords: 'logs 日志 诊断 diagnosis 观测 observability',
-    group: 'integration',
+    keywords: 'logs 日志 诊断 diagnosis 观测 observability 运维 ops',
+    group: 'system',
   },
-
-  // ─── 系统 ───
   {
     id: 'settings',
     path: '/settings',
@@ -142,7 +140,7 @@ export const navigationItems: NavItem[] = [
  * 获取分组后的导航项
  */
 export function getGroupedNavItems(): Record<NavGroup, NavItem[]> {
-  const groups: Record<NavGroup, NavItem[]> = { core: [], integration: [], system: [] }
+  const groups: Record<NavGroup, NavItem[]> = { home: [], build: [], connections: [], system: [] }
   for (const item of navigationItems) {
     groups[item.group].push(item)
   }
@@ -167,6 +165,5 @@ export function getNavigationChildren(id: string): NavChild[] {
  * 判断路由是否匹配某个导航项（支持子路由）
  */
 export function isNavActive(itemPath: string, currentPath: string): boolean {
-  if (itemPath === '/dashboard') return currentPath === '/dashboard'
   return currentPath === itemPath || currentPath.startsWith(itemPath + '/')
 }

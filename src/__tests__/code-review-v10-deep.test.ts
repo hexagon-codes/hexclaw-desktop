@@ -230,36 +230,6 @@ describe('Issue #6: LogsView i18n — no hardcoded Chinese strings', () => {
 })
 
 // ════════════════════════════════════════════════════════════
-// 7. DashboardView dashTab dead code (DOCUMENTED)
-// ════════════════════════════════════════════════════════════
-
-describe('Issue #7 [DOCUMENTED]: DashboardView dashTab ref is bound but has no conditional rendering', () => {
-  const src = readSrc('views/DashboardView.vue')
-
-  it('dashTab ref is declared', () => {
-    expect(src).toMatch(/const\s+dashTab\s*=\s*ref\s*\(\s*['"]today['"]\s*\)/)
-  })
-
-  it('dashTabs segments are defined for today/week/system', () => {
-    expect(src).toContain("key: 'today'")
-    expect(src).toContain("key: 'week'")
-    expect(src).toContain("key: 'system'")
-  })
-
-  it('SegmentedControl is bound to dashTab via v-model', () => {
-    expect(src).toContain('v-model="dashTab"')
-  })
-
-  it('[SMELL] template does NOT use dashTab for conditional content rendering', () => {
-    // The <template> section should not contain v-if/v-show based on dashTab
-    const templateStart = src.indexOf('<template>')
-    const templateSection = src.slice(templateStart)
-    expect(templateSection).not.toMatch(/v-if\s*=\s*["']dashTab/)
-    expect(templateSection).not.toMatch(/v-show\s*=\s*["']dashTab/)
-  })
-})
-
-// ════════════════════════════════════════════════════════════
 // 8. ResearchProgress doneLabelKey same as labelKey (DOCUMENTED)
 // ════════════════════════════════════════════════════════════
 

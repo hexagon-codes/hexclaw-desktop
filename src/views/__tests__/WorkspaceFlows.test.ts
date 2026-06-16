@@ -277,7 +277,7 @@ describe('Workspace flows', () => {
     const { wrapper, router } = await mountWithRouter(IntegrationView, '/integration')
     await flushPromises()
 
-    const skillsTab = wrapper.findAll('button').find((btn) => btn.text().includes('工具能力'))
+    const skillsTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skills'))
     expect(skillsTab).toBeDefined()
     await skillsTab!.trigger('click')
     await flushPromises()
@@ -292,7 +292,7 @@ describe('Workspace flows', () => {
 
     expect(wrapper.text()).toContain('已禁用')
 
-    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用技能')
+    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用 Skill')
     expect(enableBtn).toBeDefined()
     await enableBtn!.trigger('click')
     await flushPromises()

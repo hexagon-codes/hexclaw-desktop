@@ -25,13 +25,13 @@ describe('router onboarding flow', () => {
     }))
     vi.doMock('@/config/navigation', () => ({
       navigationItems: [
-        { id: 'dashboard', path: '/dashboard' },
+        { id: 'chat', path: '/chat' },
       ],
     }))
 
     const router = (await import('../index')).default
 
-    await router.push('/dashboard')
+    await router.push('/chat')
     await router.isReady()
 
     expect(router.currentRoute.value.path).toBe('/welcome')

@@ -4,7 +4,6 @@ import { logger } from '@/utils/logger'
 import { navigationItems } from '@/config/navigation'
 
 const navRouteComponents = {
-  dashboard: () => import('@/views/DashboardView.vue'),
   chat: () => import('@/views/ChatView.vue'),
   channels: () => import('@/views/IMChannelsView.vue'),
   agents: () => import('@/views/AgentsView.vue'),
@@ -48,7 +47,7 @@ const router = createRouter({
   routes: [
     {
       path: '/',
-      redirect: '/dashboard',
+      redirect: '/chat',
     },
     {
       path: '/welcome',
@@ -58,6 +57,7 @@ const router = createRouter({
     },
     ...buildNavigationRoutes(),
     // 旧路由重定向（兼容书签/收藏）
+    { path: '/dashboard', redirect: '/chat' },
     { path: '/memory', redirect: '/knowledge/memory' },
     { path: '/tasks', redirect: '/automation' },
     { path: '/canvas', redirect: '/automation' },
@@ -81,7 +81,7 @@ const router = createRouter({
       component: () => import('@/views/AboutView.vue'),
       meta: { layout: 'blank' },
     },
-    { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
+    { path: '/:pathMatch(.*)*', redirect: '/chat' },
   ],
 })
 

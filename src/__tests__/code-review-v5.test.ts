@@ -49,42 +49,6 @@ describe('KnowledgeView 上传 — 索引稳定性', () => {
 })
 
 // ═══════════════════════════════════════════════════
-// 3. DashboardView 数据加载健壮性
-// ═══════════════════════════════════════════════════
-
-describe('DashboardView — safeFetch 防错 + 定时器清理', () => {
-  it('所有 API 调用都经过 safeFetch 包裹', () => {
-    const source = readFileSync('src/views/DashboardView.vue', 'utf-8')
-    const fetchStats = source.match(/async function fetchStats[\s\S]*?^}/m)
-    expect(fetchStats).toBeTruthy()
-    const fn = fetchStats![0]
-
-    // 每个外部调用都应经过 safeFetch
-    const directApiCalls = fn.match(/await\s+(?!safeFetch)[a-zA-Z]+\(/g)
-    // 只有 import() 和 safeFetch 内部的调用是允许的
-    const nonSafeCalls = (directApiCalls || []).filter(
-      call => !call.includes('import') && !call.includes('safeFetch'),
-    )
-    expect(nonSafeCalls).toHaveLength(0)
-  })
-
-  it('onUnmounted 清理定时器', () => {
-    const source = readFileSync('src/views/DashboardView.vue', 'utf-8')
-    expect(source).toContain('onUnmounted')
-    expect(source).toContain('stopAutoRefresh')
-  })
-
-  it('handleManualRefresh 重新启动定时器', () => {
-    const source = readFileSync('src/views/DashboardView.vue', 'utf-8')
-    // handleManualRefresh 应先 fetch 再 restart timer
-    const fn = source.match(/function handleManualRefresh[\s\S]*?^}/m)
-    expect(fn).toBeTruthy()
-    expect(fn![0]).toContain('fetchStats')
-    expect(fn![0]).toContain('startAutoRefresh')
-  })
-})
-
-// ═══════════════════════════════════════════════════
 // 4. useAutoUpdate — 并发检查保护
 // ═══════════════════════════════════════════════════
 

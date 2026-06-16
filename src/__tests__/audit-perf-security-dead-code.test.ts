@@ -221,13 +221,6 @@ describe('Performance: event listener cleanup', () => {
 // ─── Performance: timer cleanup ───────────────────────────
 
 describe('Performance: timer cleanup on unmount', () => {
-  it('DashboardView clears both intervals on unmount', () => {
-    const code = readSrc('views/DashboardView.vue')
-    expect(code).toContain('onUnmounted(() => stopAutoRefresh())')
-    expect(code).toContain('clearInterval(refreshTimer)')
-    expect(code).toContain('clearInterval(countdownTimer)')
-  })
-
   it('OllamaCard clears poll timer and aborts pull on unmount', () => {
     const code = readSrc('components/settings/OllamaCard.vue')
     expect(code).toContain('onBeforeUnmount')

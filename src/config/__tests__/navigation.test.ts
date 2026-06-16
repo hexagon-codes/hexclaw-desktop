@@ -46,12 +46,12 @@ describe('navigationItems data integrity', () => {
     }
   })
 
-  it('total count is 9', () => {
-    expect(navigationItems).toHaveLength(9)
+  it('total count is 8', () => {
+    expect(navigationItems).toHaveLength(8)
     const ids = navigationItems.map((n) => n.id)
     expect(ids).toEqual(
       expect.arrayContaining([
-        'dashboard', 'chat', 'channels', 'agents',
+        'chat', 'channels', 'agents',
         'knowledge', 'automation', 'integration', 'logs', 'settings',
       ]),
     )
@@ -65,24 +65,33 @@ describe('navigationItems data integrity', () => {
 describe('getGroupedNavItems()', () => {
   const groups = getGroupedNavItems()
 
-  it('returns 3 groups: core, integration, system', () => {
-    expect(Object.keys(groups).sort()).toEqual(['core', 'integration', 'system'])
+  it('returns 4 groups: home, build, connections, system', () => {
+    expect(Object.keys(groups).sort()).toEqual(['build', 'connections', 'home', 'system'])
   })
 
-  it('core has 6 items', () => {
-    expect(groups.core).toHaveLength(6)
+  it('home has 1 item (chat)', () => {
+    expect(groups.home).toHaveLength(1)
+    expect(groups.home![0]!.id).toBe('chat')
   })
 
-  it('integration has 2 items (integration + logs)', () => {
-    expect(groups.integration).toHaveLength(2)
-    const ids = groups.integration.map((n) => n.id)
+  it('build has 3 items (agents, knowledge, automation)', () => {
+    expect(groups.build).toHaveLength(3)
+    const ids = groups.build.map((n) => n.id)
+    expect(ids).toEqual(['agents', 'knowledge', 'automation'])
+  })
+
+  it('connections has 2 items (channels + integration)', () => {
+    expect(groups.connections).toHaveLength(2)
+    const ids = groups.connections.map((n) => n.id)
+    expect(ids).toContain('channels')
     expect(ids).toContain('integration')
-    expect(ids).toContain('logs')
   })
 
-  it('system has 1 item (settings)', () => {
-    expect(groups.system).toHaveLength(1)
-    expect(groups.system![0]!.id).toBe('settings')
+  it('system has 2 items (logs + settings)', () => {
+    expect(groups.system).toHaveLength(2)
+    const ids = groups.system.map((n) => n.id)
+    expect(ids).toContain('logs')
+    expect(ids).toContain('settings')
   })
 })
 
@@ -141,14 +150,6 @@ describe('getNavigationChildren(id)', () => {
 // ═══════════════════════════════════════════════════════════
 
 describe('isNavActive(itemPath, currentPath)', () => {
-  it('dashboard exact match', () => {
-    expect(isNavActive('/dashboard', '/dashboard')).toBe(true)
-  })
-
-  it('dashboard rejects sub-routes', () => {
-    expect(isNavActive('/dashboard', '/dashboard/x')).toBe(false)
-  })
-
   it('normal exact match', () => {
     expect(isNavActive('/chat', '/chat')).toBe(true)
   })

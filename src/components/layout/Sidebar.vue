@@ -5,11 +5,11 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
-import { getGroupedNavItems, isNavActive, type NavGroup } from '@/config/navigation'
+import { getGroupedNavItems, isNavActive, NAV_GROUP_LABELS, type NavGroup } from '@/config/navigation'
 import { env } from '@/config/env'
 import logoUrl from '@/assets/logo.png'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
@@ -34,7 +34,13 @@ watch(() => appStore.sidecarStatus, (s) => {
 
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
-const groupOrder: NavGroup[] = ['core', 'integration', 'system']
+const groupOrder: NavGroup[] = ['home', 'build', 'connections', 'system']
+
+// Localized group header; empty for the home group (Chat stands alone).
+function groupLabel(group: NavGroup): string {
+  const label = NAV_GROUP_LABELS[group]
+  return locale.value === 'zh-CN' ? label.zh : label.en
+}
 
 const dotClass = computed(() => {
   const s = appStore.sidecarStatus
@@ -71,7 +77,18 @@ function getGroupItems(group: NavGroup) {
     <!-- Navigation -->
     <nav class="hc-sidebar__nav" role="navigation">
       <template v-for="(group, gi) in groupOrder">
-        <div v-if="gi > 0" :key="`div-${group}`" class="hc-sidebar__divider" />
+        <div
+          v-if="collapsed ? gi > 0 : gi === 1"
+          :key="`div-${group}`"
+          class="hc-sidebar__divider"
+        />
+        <div
+          v-if="!collapsed && groupLabel(group)"
+          :key="`lbl-${group}`"
+          class="hc-sidebar__group-label"
+        >
+          {{ groupLabel(group) }}
+        </div>
 
         <router-link
           v-for="item in getGroupItems(group)"
@@ -134,7 +151,7 @@ function getGroupItems(group: NavGroup) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 4px 10px;
+  padding: 4px 10px 14px;
   flex-shrink: 0;
 }
 
@@ -164,7 +181,7 @@ function getGroupItems(group: NavGroup) {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 3px;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -174,11 +191,23 @@ function getGroupItems(group: NavGroup) {
   border-top: 1px solid var(--hc-divider);
 }
 
+.hc-sidebar__group-label {
+  padding: 0 12px;
+  margin: 16px 0 6px;
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--hc-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .hc-sidebar__item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 7px 12px;
+  padding: 8px 12px;
   border-radius: 10px;
   font-size: 13px;
   color: var(--hc-text-secondary);

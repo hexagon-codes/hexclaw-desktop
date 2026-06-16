@@ -19,11 +19,11 @@ const { t } = useI18n()
 const resolvedTitle = computed(() => {
   if (props.title) return props.title
   const p = route.path
-  if (p === '/' || p === '/dashboard' || p.startsWith('/chat')) return t('inspector.titles.context')
+  if (p === '/' || p.startsWith('/chat')) return t('inspector.titles.context')
   if (p.startsWith('/agents')) return t('inspector.titles.agent')
   if (p.startsWith('/knowledge')) return t('inspector.titles.document')
   if (p.startsWith('/automation')) return t('inspector.titles.automation')
-  if (p.startsWith('/integration')) return t('inspector.titles.diagnostic')
+  if (p.startsWith('/integration')) return t('inspector.titles.integration')
   if (p.startsWith('/logs')) return t('inspector.titles.log')
   if (p.startsWith('/settings')) return t('inspector.titles.settings')
   return t('inspector.titles.generic')
