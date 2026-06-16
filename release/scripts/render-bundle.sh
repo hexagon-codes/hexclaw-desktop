@@ -4,7 +4,8 @@
 # 用法：
 #   ./release/scripts/render-bundle.sh [<dest-dir>]
 #
-# 默认 dest-dir = src-tauri/binaries/render-bundle。
+# 默认 dest-dir = src-tauri/binaries（externalBin 根目录）。
+# 产出 externalBin 命名：<dest>/pandoc-<rust-triple>、<dest>/typst-<rust-triple>。
 # 平台从 uname 自动探测；交叉打包时通过 RENDER_BUNDLE_TARGET 覆盖：
 #   RENDER_BUNDLE_TARGET=windows-x86_64 ./release/scripts/render-bundle.sh
 #
@@ -16,7 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VERSIONS_JSON="$SCRIPT_DIR/versions.json"
-DEST_DIR="${1:-$REPO_ROOT/src-tauri/binaries/render-bundle}"
+DEST_DIR="${1:-$REPO_ROOT/src-tauri/binaries}"
 
 if [ ! -f "$VERSIONS_JSON" ]; then
   echo "FATAL: versions.json not found at $VERSIONS_JSON" >&2
@@ -36,6 +37,15 @@ if [ -z "$target" ]; then
       ;;
   esac
 fi
+
+# Rust target triple（externalBin 命名用）
+case "$target" in
+  darwin-arm64)    triple="aarch64-apple-darwin" ;;
+  darwin-x86_64)   triple="x86_64-apple-darwin" ;;
+  linux-x86_64)    triple="x86_64-unknown-linux-gnu" ;;
+  windows-x86_64)  triple="x86_64-pc-windows-msvc" ;;
+  *) echo "ERROR: no rust triple mapping for target=$target" >&2; exit 1 ;;
+esac
 
 mkdir -p "$DEST_DIR"
 
@@ -86,8 +96,9 @@ download_engine() {
   # 解包到 staging，再 find 出二进制移到 DEST_DIR — 避开 BSD/GNU tar 的 --wildcards 差异
   local staging
   staging="$(mktemp -d "/tmp/render-bundle-stage-$name-XXXXXX")"
+  # zip 用 tar -xf（bsdtar 原生支持 zip，macOS / Windows git-bash 通用，免 unzip 依赖）
   case "$archive" in
-    *.zip)    unzip -q -o "$archive" -d "$staging" ;;
+    *.zip)    tar -xf "$archive" -C "$staging" ;;
     *.tar.gz) tar xzf "$archive" -C "$staging" ;;
     *.tar.xz) tar xJf "$archive" -C "$staging" ;;
   esac
@@ -102,15 +113,17 @@ download_engine() {
     exit 1
   fi
 
-  case "$found" in
-    *.exe) cp "$found" "$DEST_DIR/$name.exe" ;;
-    *)     cp "$found" "$DEST_DIR/$name" && chmod +x "$DEST_DIR/$name" ;;
-  esac
+  # externalBin 命名：<name>-<triple>（Windows 加 .exe）
+  if [ "$target" = "windows-x86_64" ]; then
+    cp "$found" "$DEST_DIR/$name-$triple.exe"
+  else
+    cp "$found" "$DEST_DIR/$name-$triple" && chmod +x "$DEST_DIR/$name-$triple"
+  fi
   rm -rf "$staging"
 }
 
 download_engine pandoc
 download_engine typst
 
-echo "render-bundle 完成: $DEST_DIR (target=$target)"
-ls -la "$DEST_DIR"
+echo "render engines staged: $DEST_DIR (target=$target, triple=$triple)"
+ls -la "$DEST_DIR"/pandoc-* "$DEST_DIR"/typst-* 2>/dev/null || true

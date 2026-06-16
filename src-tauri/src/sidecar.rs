@@ -115,7 +115,7 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
         .ok_or("无法获取程序所在目录")?
         .join(binary_name);
 
-    // 解析 Tauri 资源目录（捆绑的 render-bundle / assets 在此）。
+    // 解析 Tauri 资源目录（reference.docx 资产在此 assets/render/）。
     // 失败不阻塞（开发模式或异常布局下 resource_dir 可能不可达），仅打 warn。
     let resource_dir = app.path().resource_dir().ok();
 
@@ -145,9 +145,9 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
 /// 导致 sidecar 找不到 npx/node/python/docker 等命令。
 /// 将常用安装路径追加到当前 PATH。
 ///
-/// `bundled_render_dir` 若提供（指向捆绑的 pandoc/typst 目录），**前置**到 PATH，
-/// 优先于系统 pandoc 被使用，保证渲染产物在不同机器上一致。
-pub fn enrich_path(bundled_render_dir: Option<&Path>) -> String {
+/// `sidecar_dir` 若提供（externalBin 的 pandoc/typst 与 hexclaw sidecar 同处此目录），
+/// **前置**到 PATH，sidecar 优先命中签名捆绑版而非系统 pandoc，保证渲染产物跨机器一致。
+pub fn enrich_path(sidecar_dir: Option<&Path>) -> String {
     let current = std::env::var("PATH").unwrap_or_default();
     let extras: &[&str] = if cfg!(target_os = "macos") {
         &[
@@ -172,8 +172,8 @@ pub fn enrich_path(bundled_render_dir: Option<&Path>) -> String {
         ]
     };
     let mut parts: Vec<String> = Vec::new();
-    // 捆绑的 render-bundle 优先级最高（如果存在）
-    if let Some(dir) = bundled_render_dir {
+    // 捆绑的 sidecar 目录（pandoc/typst）优先级最高（如果存在）
+    if let Some(dir) = sidecar_dir {
         if dir.exists() {
             parts.push(dir.to_string_lossy().into_owned());
         }
@@ -193,13 +193,14 @@ pub fn enrich_path(bundled_render_dir: Option<&Path>) -> String {
 
 /// 启动子进程并记录 PID。
 ///
-/// `resource_dir` 是 Tauri 资源根，捆绑的 render-bundle 在 `<resource_dir>/render-bundle/`，
-/// 资产在 `<resource_dir>/assets/render/`。两者经 PATH + 环境变量传给 sidecar。
+/// externalBin 的 pandoc/typst 与 `path`(hexclaw sidecar) 同处 Contents/MacOS/，故把 sidecar
+/// 目录前置到 PATH；reference.docx 资产在 `<resource_dir>/assets/render/`，经
+/// HEXCLAW_RESOURCE_DIR 传给 sidecar。
 fn spawn_child(path: &std::path::Path, resource_dir: Option<&std::path::Path>) -> Result<(), String> {
-    // macOS GUI app 不继承 shell PATH；同时把捆绑的 pandoc/typst 目录前置到 PATH，
-    // sidecar 的 exec.LookPath("pandoc") / LookPath("typst") 优先命中捆绑版。
-    let render_bundle_dir = resource_dir.map(|d| d.join("render-bundle"));
-    let enriched_path = enrich_path(render_bundle_dir.as_deref());
+    // macOS GUI app 不继承 shell PATH；把 sidecar 所在目录（与捆绑的 pandoc/typst 同处）前置到
+    // PATH，sidecar 的 exec.LookPath("pandoc") / LookPath("typst") 优先命中签名捆绑版。
+    let sidecar_dir = path.parent();
+    let enriched_path = enrich_path(sidecar_dir);
 
     let mut cmd = Command::new(path);
     cmd.args(["serve", "--desktop"]).env("PATH", &enriched_path);

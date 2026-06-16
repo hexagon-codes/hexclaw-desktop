@@ -5,19 +5,19 @@
     "platforms": {
       "darwin-arm64": {
         "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-arm64-macOS.zip",
-        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+        "sha256": "6e9eca844076bcbb599bbeebbba78a70f93b5307782b85c2c272872812c88875"
       },
       "darwin-x86_64": {
         "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-x86_64-macOS.zip",
-        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+        "sha256": "b9fbceabccbc8f34ac021a50483fc32f8160568d0b4b2c22d81bb29e3054fd82"
       },
       "linux-x86_64": {
         "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-linux-amd64.tar.gz",
-        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+        "sha256": "a69abfababda8a56969a254b09f9553a7be89ddec00d4e0fe9fd585d71a67508"
       },
       "windows-x86_64": {
         "url": "https://github.com/jgm/pandoc/releases/download/3.9.0.2/pandoc-3.9.0.2-windows-x86_64.zip",
-        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+        "sha256": "c97542f2800f446e788d9f74237856d995421ad1bb3cc8324286840c5f272d3a"
       }
     }
   },
@@ -26,19 +26,19 @@
     "platforms": {
       "darwin-arm64": {
         "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-aarch64-apple-darwin.tar.xz",
-        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+        "sha256": "541e4f9eaca3f34ee865f81fc663e4839cb84d6253f71a372cd855b0a7283213"
       },
       "darwin-x86_64": {
         "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-apple-darwin.tar.xz",
-        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+        "sha256": "4dabfe647f7f01ed9cc13ad8196a6c7f5e16f0732821b522d50740d3a9f5207b"
       },
       "linux-x86_64": {
         "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-unknown-linux-musl.tar.xz",
-        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+        "sha256": "7d214bfeffc2e585dc422d1a09d2b144969421281e8c7f5d784b65fc69b5673f"
       },
       "windows-x86_64": {
         "url": "https://github.com/typst/typst/releases/download/v0.13.1/typst-x86_64-pc-windows-msvc.zip",
-        "sha256": "FILL_ON_NEXT_RELEASE_AUDIT"
+        "sha256": "44170d0632298ba68cbabc43dbfb6908b17ca9236859e0767b0e5d54b2d19f48"
       }
     }
   }

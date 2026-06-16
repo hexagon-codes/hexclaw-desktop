@@ -177,23 +177,15 @@ jobs:
           esac
           ls -lh src-tauri/binaries/ollama-bundle/
 
-      - name: Stage render assets (reference.docx)
-        run: |
-          mkdir -p src-tauri/binaries/assets/render
-          if [ -f hexclaw/render/assets/reference.docx ]; then
-            cp hexclaw/render/assets/reference.docx src-tauri/binaries/assets/render/
-            echo "staged reference.docx"
-          else
-            echo "::error::reference.docx not found under backend checkout hexclaw/render/assets/"
-            exit 1
-          fi
-
-      - name: Download render-bundle (pandoc + typst)
+      # pandoc/typst as Tauri externalBin sidecars: download + SHA256-verify,
+      # named binaries/{pandoc,typst}-<triple> so tauri-action bundles & signs them.
+      # reference.docx is a tracked resource (src-tauri/render-assets), no staging needed.
+      - name: Stage render engines (pandoc + typst)
         env:
           RENDER_BUNDLE_TARGET: ${{ matrix.render_target }}
         run: |
-          ./release/scripts/render-bundle.sh src-tauri/binaries/render-bundle
-          ls -lh src-tauri/binaries/render-bundle/
+          ./release/scripts/render-bundle.sh src-tauri/binaries
+          ls -lh src-tauri/binaries/pandoc-* src-tauri/binaries/typst-*
 
       # --- Frontend & Tauri build ---
       - uses: pnpm/action-setup@v4

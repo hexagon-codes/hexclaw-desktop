@@ -33,11 +33,10 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/hexclaw"],
+    "externalBin": ["binaries/hexclaw", "binaries/pandoc", "binaries/typst"],
     "resources": {
       "binaries/ollama-bundle/*": "ollama/",
-      "binaries/render-bundle/*": "render-bundle/",
-      "binaries/assets/render/*": "assets/render/"
+      "render-assets/*": "assets/render/"
     },
     "icon": [
       "icons/32x32.png",

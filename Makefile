@@ -36,20 +36,18 @@ prepare-sidecar-src:
 	git -C "$(HEXCLAW_SRC_DIR)" fetch origin
 	git -C "$(HEXCLAW_SRC_DIR)" checkout --detach "$(HEXCLAW_REF)"
 
-# 把 sidecar 运行期资产（reference.docx 等）拷到 binaries/assets/，
-# 与可执行文件同目录——main.go.resolveRenderAssetPaths 第一优先级在此查找。
-# HEXCLAW_REF 尚未含资产时静默跳过，sidecar 启动会回退到 cwd / ~/.hexclaw 候选。
+# 同步 reference.docx 到已跟踪资产 src-tauri/render-assets/（tauri.conf resources 从此处打包）。
+# 资产已纳入 git，是打包真源；仅在后端更新了 reference.docx 时手动跑此目标刷新。
 sidecar-assets: prepare-sidecar-src
-	@mkdir -p $(SIDECAR_BIN_DIR)/assets/render
 	@if [ -f "$(HEXCLAW_SRC_DIR)/render/assets/reference.docx" ]; then \
-		cp "$(HEXCLAW_SRC_DIR)/render/assets/reference.docx" $(SIDECAR_BIN_DIR)/assets/render/; \
-		echo "  ✓ render assets: reference.docx"; \
+		cp "$(HEXCLAW_SRC_DIR)/render/assets/reference.docx" $(DESKTOP_ROOT)/src-tauri/render-assets/reference.docx; \
+		echo "  ✓ synced render-assets/reference.docx"; \
 	else \
-		echo "  ⚠️  reference.docx 不在 HEXCLAW_REF=$(HEXCLAW_REF) 中（跳过；sidecar 仍可启动，回退到 ~/.hexclaw）"; \
+		echo "  ⚠️  reference.docx 不在 HEXCLAW_REF=$(HEXCLAW_REF) 中（保留已跟踪副本）"; \
 	fi
 
 # 编译 hexclaw sidecar 并放入 binaries 目录 (自动检测当前平台)
-sidecar: prepare-sidecar-src sidecar-assets
+sidecar: prepare-sidecar-src
 	@echo "编译 hexclaw sidecar..."
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_SRC_DIR)" && \
@@ -63,7 +61,7 @@ sidecar: prepare-sidecar-src sidecar-assets
 # Cross-compile sidecar for all platforms
 sidecar-all: sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64
 
-sidecar-darwin-arm64: prepare-sidecar-src sidecar-assets
+sidecar-darwin-arm64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_SRC_DIR)" && \
 		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
@@ -73,7 +71,7 @@ sidecar-darwin-arm64: prepare-sidecar-src sidecar-assets
 			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-aarch64-apple-darwin" ./cmd/hexclaw
 
-sidecar-darwin-amd64: prepare-sidecar-src sidecar-assets
+sidecar-darwin-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_SRC_DIR)" && \
 		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
@@ -83,7 +81,7 @@ sidecar-darwin-amd64: prepare-sidecar-src sidecar-assets
 			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-apple-darwin" ./cmd/hexclaw
 
-sidecar-linux-amd64: prepare-sidecar-src sidecar-assets
+sidecar-linux-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_SRC_DIR)" && \
 		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
@@ -93,7 +91,7 @@ sidecar-linux-amd64: prepare-sidecar-src sidecar-assets
 			-ldflags="-s -w -X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-x86_64-unknown-linux-gnu" ./cmd/hexclaw
 
-sidecar-windows-amd64: prepare-sidecar-src sidecar-assets
+sidecar-windows-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_SRC_DIR)" && \
 		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
@@ -110,14 +108,12 @@ sidecar-windows-amd64: prepare-sidecar-src sidecar-assets
 # 本期最小可用版本：固定当前测试通过的最新版，校验 SHA256，下载到 sidecar binaries 目录。
 # CI 每周拉 latest 跑黄金回归，patch 版本自动滚 PR。
 
-RENDER_BUNDLE_DIR := $(SIDECAR_BIN_DIR)/render-bundle
-
-# 下载当前平台的 pandoc + typst 到 render-bundle 目录。
-# 版本号 + SHA256 维护在 release/scripts/versions.json；脚本支持
-# 通过 RENDER_BUNDLE_TARGET={darwin-arm64|darwin-x86_64|linux-x86_64|windows-x86_64}
-# 交叉打包。
+# 下载当前平台的 pandoc + typst，按 externalBin 命名落到 binaries/ 根目录
+# （pandoc-<triple> / typst-<triple>，与 hexclaw sidecar 同目录，tauri 自动签名）。
+# 版本号 + SHA256 维护在 release/scripts/versions.json；脚本支持通过
+# RENDER_BUNDLE_TARGET={darwin-arm64|darwin-x86_64|linux-x86_64|windows-x86_64} 交叉打包。
 render-bundle:
-	./release/scripts/render-bundle.sh $(RENDER_BUNDLE_DIR)
+	./release/scripts/render-bundle.sh $(SIDECAR_BIN_DIR)
 
 # ─── Ollama 二进制下载 ──────────────────────────────────
 # 从 GitHub Releases 下载预编译 Ollama 二进制，重命名为 Rust target triple
