@@ -42,6 +42,9 @@ function sessionPatch<T>(url: string, body?: Record<string, unknown>) {
   return apiPatch<T>(withUserIdQuery(url), { ...body, user_id: DESKTOP_USER_ID })
 }
 
+// Completes the write-wrapper family; the structural-guard tests in __tests__
+// regex-assert its presence and shape, so it is kept even with no runtime caller yet.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function sessionPut<T>(url: string, body?: Record<string, unknown>) {
   return apiPut<T>(withUserIdQuery(url), { ...body, user_id: DESKTOP_USER_ID })
 }

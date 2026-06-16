@@ -248,7 +248,6 @@ describe('Session user_id 一致性', () => {
       { name: 'getSessionBranches', call: () => getSessionBranches('s1'), check: 'query' },
       { name: 'forkSession', call: () => forkSession('s1'), check: 'body' },
       { name: 'searchMessages', call: () => searchMessages('q'), check: 'query' },
-      { name: 'updateMessageFeedback', call: () => updateMessageFeedback('m1', 'like'), check: 'url' },
     ] as const
 
     for (const { name, call, check } of sessionApis) {
@@ -256,17 +255,21 @@ describe('Session user_id 一致性', () => {
         mockFetch.mockResolvedValue({ sessions: [], total: 0, messages: [], branches: [], results: [], message: 'ok', query: 'q', id: 's1', title: 'T', created_at: '', updated_at: '' })
         await call()
 
-        if (check === 'url') {
-          // user_id lives in the URL query string (backend reads query only).
-          const url = mockFetch.mock.calls[0]?.[0] as string
-          expect(url, `${name}() URL 应含 user_id`).toContain(`user_id=${EXPECTED_USER_ID}`)
-          return
-        }
         const arg = check === 'query' ? getQueryArg() : getBodyArg()
         expect(arg, `${name}() 的 ${check} 参数不应为 undefined`).toBeDefined()
         expect(arg!.user_id, `${name}() 缺少 user_id`).toBe(EXPECTED_USER_ID)
       })
     }
+
+    // updateMessageFeedback reads user_id from the URL query only (query-only
+    // backend handler), asserted in its own test so expect stays unconditional
+    // (vitest/no-conditional-expect).
+    it(`updateMessageFeedback() 的 URL 包含 user_id = '${EXPECTED_USER_ID}'`, async () => {
+      mockFetch.mockResolvedValue({ sessions: [], total: 0, messages: [], branches: [], results: [], message: 'ok', query: 'q', id: 's1', title: 'T', created_at: '', updated_at: '' })
+      await updateMessageFeedback('m1', 'like')
+      const url = mockFetch.mock.calls[0]?.[0] as string
+      expect(url, `updateMessageFeedback() URL 应含 user_id`).toContain(`user_id=${EXPECTED_USER_ID}`)
+    })
   })
 
   // ── 静态分析: 防止绕过 sessionGet/sessionPost 直接调用 apiGet/apiPost ──
