@@ -276,11 +276,18 @@ jobs:
           VERSION="${TAG#v}"
           REPO="hexagon-codes/hexclaw-desktop"
 
+          # Output keys stay sha_aarch64 / sha_x86_64 (consumed by Update Cask), but the
+          # release DMG filenames use aarch64 / x64 — map the Intel suffix to x64 so the
+          # download hits the real asset (HexClaw_<ver>_x64.dmg) and the Intel sha updates.
           for ARCH in aarch64 x86_64; do
-            DMG="HexClaw_${VERSION}_${ARCH}.dmg"
+            case "$ARCH" in
+              x86_64) DMG_ARCH="x64" ;;
+              *)      DMG_ARCH="$ARCH" ;;
+            esac
+            DMG="HexClaw_${VERSION}_${DMG_ARCH}.dmg"
             URL="https://github.com/${REPO}/releases/download/${TAG}/${DMG}"
             echo "Downloading ${DMG}..."
-            curl -fSL -o "/tmp/${DMG}" "$URL" || { echo "::warning::DMG not found: ${DMG}, using :no_check"; continue; }
+            curl -fSL -o "/tmp/${DMG}" "$URL" || { echo "::warning::DMG not found: ${DMG}"; continue; }
             SHA=$(sha256sum "/tmp/${DMG}" | awk '{print $1}')
             echo "SHA256 (${ARCH}): ${SHA}"
             echo "sha_${ARCH}=${SHA}" >> "$GITHUB_OUTPUT"
