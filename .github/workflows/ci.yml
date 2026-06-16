@@ -74,9 +74,14 @@ jobs:
       - name: Create build stubs
         run: |
           mkdir -p src-tauri/binaries
+          # externalBin sidecars (hexclaw + render engines) — empty stubs satisfy the
+          # tauri build-script existence check; cargo check never executes them.
           touch src-tauri/binaries/hexclaw-x86_64-unknown-linux-gnu
+          touch src-tauri/binaries/pandoc-x86_64-unknown-linux-gnu
+          touch src-tauri/binaries/typst-x86_64-unknown-linux-gnu
           mkdir -p src-tauri/binaries/ollama-bundle
           touch src-tauri/binaries/ollama-bundle/ollama
+          # reference.docx is a tracked resource (src-tauri/render-assets), no stub needed.
           mkdir -p dist
           echo '<html></html>' > dist/index.html
 
