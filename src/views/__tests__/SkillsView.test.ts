@@ -145,7 +145,7 @@ describe('SkillsView', () => {
 
     expect(wrapper.text()).toContain('已禁用')
 
-    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用技能')
+    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用 Skill')
     expect(enableBtn).toBeDefined()
     await enableBtn!.trigger('click')
     await flushPromises()
@@ -186,7 +186,7 @@ describe('SkillsView', () => {
 
     expect(wrapper.text()).toContain('运行时状态')
 
-    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用技能')
+    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用 Skill')
     await enableBtn!.trigger('click')
     await flushPromises()
 
@@ -218,7 +218,7 @@ describe('SkillsView', () => {
     await titleBtn!.trigger('click')
     await flushPromises()
 
-    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用技能')
+    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用 Skill')
     expect(enableBtn).toBeDefined()
     await expect(enableBtn!.trigger('click')).resolves.toBeUndefined()
     await flushPromises()
@@ -274,7 +274,7 @@ describe('SkillsView', () => {
     await titleBtn!.trigger('click')
     await flushPromises()
 
-    const disableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '禁用技能')
+    const disableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '禁用 Skill')
     await disableBtn!.trigger('click')
     await flushPromises()
 
@@ -288,7 +288,7 @@ describe('SkillsView', () => {
 
     expect(searchClawHub).not.toHaveBeenCalled()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('技能市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
     expect(hubTab).toBeDefined()
     await hubTab!.trigger('click')
     await flushPromises()
@@ -302,7 +302,7 @@ describe('SkillsView', () => {
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('技能市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
     await hubTab!.trigger('click')
     await flushPromises()
 
@@ -321,7 +321,7 @@ describe('SkillsView', () => {
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('技能市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
     await hubTab!.trigger('click')
     await flushPromises()
 
@@ -396,7 +396,7 @@ describe('SkillsView', () => {
     vi.spyOn(appStore, 'restartSidecar').mockResolvedValue(true)
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('技能市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
     await hubTab!.trigger('click')
     await flushPromises()
 
@@ -456,7 +456,7 @@ describe('SkillsView', () => {
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('技能市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
     await hubTab!.trigger('click')
     await flushPromises()
 
@@ -646,7 +646,7 @@ describe('SkillsView', () => {
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('技能市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
     expect(hubTab).toBeDefined()
     await hubTab!.trigger('click')
     await flushPromises()

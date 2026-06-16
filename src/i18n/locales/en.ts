@@ -13,9 +13,8 @@ export default {
     automationWebhooks: 'Webhooks',
     integration: 'Integration',
     integrationSkills: 'Skills',
-    integrationMcp: 'MCP Services',
+    integrationMcp: 'MCP',
     integrationIm: 'IM Channels',
-    integrationDiagnostics: 'Diagnostics',
     logs: 'Logs',
     settings: 'Settings',
     groupCore: 'Workspace',
@@ -453,10 +452,9 @@ export default {
 
   integration: {
     title: 'Integrations',
-    description: 'Manage skills, MCP servers, and diagnostics.',
+    description: 'Manage skills and MCP servers.',
     eyebrow: 'Integration',
     searchPlaceholder: 'Search skills, MCP servers...',
-    exportLogs: 'Export Logs',
     addInstance: 'Add Instance',
     installSkill: 'Install Skill',
     split: {
@@ -464,12 +462,6 @@ export default {
       fromFile: 'Install from File',
       fromUrl: 'Install from URL',
     },
-    recentFailures: 'Recent Failures',
-    warning: 'Warning',
-    recovered: 'Auto-retried and recovered',
-    recoveredBadge: 'Recovered',
-    healthTimeout: 'Health check timed out, recovered',
-    noDiagnostics: 'No diagnostics',
   },
 
   skills: {
@@ -1045,7 +1037,7 @@ export default {
       refresh: 'Refresh',
     },
     mcp: {
-      title: 'MCP Service Config',
+      title: 'MCP Config',
       desc: 'Model Context Protocol service management. For detailed config, go to',
       mcpPage: 'MCP Management',
       defaultProtocol: 'Default Transport',
@@ -1505,7 +1497,7 @@ export default {
       agent: 'Agent Inspector',
       document: 'Document Inspector',
       automation: 'Automation Inspector',
-      diagnostic: 'Diagnostic Inspector',
+      integration: 'Integration Inspector',
       log: 'Log Inspector',
       settings: 'Settings Inspector',
       generic: 'Inspector',
@@ -1545,7 +1537,7 @@ export default {
       nodeCount: 'Nodes',
       skills: 'Skills enabled',
       mcpServers: 'MCP servers',
-      channels: 'Channels',
+      channels: 'IM Channels',
       level: 'Level',
       buffer: 'Buffer',
       theme: 'Theme',

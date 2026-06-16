@@ -336,7 +336,7 @@ describe('TasksView', () => {
 
       const badge = wrapper.find('.task-card__agent-badge')
       expect(badge.exists()).toBe(true)
-      expect(badge.text()).toContain('Agent · 每次执行由 AI 推理完成')
+      expect(badge.text()).toContain('智能体 · 每次执行由 AI 推理完成')
       expect(badge.text()).toContain('300s')
 
       // No script toggle, no script panel, no compiled line for agent jobs

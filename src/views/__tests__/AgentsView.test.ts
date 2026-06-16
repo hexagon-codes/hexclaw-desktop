@@ -171,7 +171,7 @@ describe('AgentsView', () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    const agentsTab = wrapper.findAll('button').find((button) => button.text().includes('注册的 Agent'))
+    const agentsTab = wrapper.findAll('button').find((button) => button.text().includes('注册的智能体'))
     expect(agentsTab?.exists()).toBe(true)
     await agentsTab!.trigger('click')
     await flushPromises()
@@ -205,7 +205,7 @@ describe('AgentsView', () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    const agentsTab = wrapper.findAll('button').find((button) => button.text().includes('注册的 Agent'))
+    const agentsTab = wrapper.findAll('button').find((button) => button.text().includes('注册的智能体'))
     await agentsTab!.trigger('click')
     await flushPromises()
 

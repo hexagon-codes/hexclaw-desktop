@@ -134,8 +134,6 @@ describe('Section 2: 14 previously-missing i18n keys now exist', () => {
     { key: 'openInNewWindow', section: 'common' },
     // mcp.*
     { key: 'addServer', section: 'mcp' },
-    // integration.*
-    { key: 'noDiagnostics', section: 'integration' },
     // knowledge.*
     { key: 'fileEmpty', section: 'knowledge' },
     // memory.*

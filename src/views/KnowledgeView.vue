@@ -709,7 +709,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                     class="flex items-center gap-3 mt-1 text-xs"
                     :style="{ color: 'var(--hc-text-muted)' }"
                   >
-                    <span>{{ doc.chunk_count }} chunks</span>
+                    <span>{{ doc.chunk_count }} chunk{{ doc.chunk_count === 1 ? '' : 's' }}</span>
                     <span v-if="doc.source">{{ t('knowledge.source') }}: {{ doc.source }}</span>
                     <span>{{
                       new Date(doc.updated_at || doc.created_at).toLocaleString(locale)
@@ -1011,7 +1011,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 :style="{ color: 'var(--hc-text-secondary)' }"
               >
                 <div>
-                  {{ t('knowledge.docCount', { count: 1 }) }} · {{ selectedDoc.chunk_count }} chunks
+                  {{ t('knowledge.docCount', { count: 1 }) }} · {{ selectedDoc.chunk_count }} chunk{{ selectedDoc.chunk_count === 1 ? '' : 's' }}
                 </div>
                 <div>
                   {{ t('knowledge.updatedAt') }}:
