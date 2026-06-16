@@ -290,7 +290,7 @@ describe('Session user_id 一致性', () => {
         // Inspect a fixed window covering the URL arg + options of this call.
         const window = sessionSection.slice(m.index, m.index + 300)
         if (!window.includes('user_id=')) {
-          offenders.push(window.split('\n')[0].trim())
+          offenders.push(window.split('\n')[0]!.trim())
         }
       }
       expect(

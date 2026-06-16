@@ -384,7 +384,7 @@ describe('静态分析: 跨文件 user_id 完整性', () => {
     let m: RegExpExecArray | null
     while ((m = re.exec(sessionSection)) !== null) {
       if (!sessionSection.slice(m.index, m.index + 300).includes('user_id=')) {
-        offenders.push(sessionSection.slice(m.index, m.index + 60).split('\n')[0].trim())
+        offenders.push(sessionSection.slice(m.index, m.index + 60).split('\n')[0]!.trim())
       }
     }
     expect(offenders, `这些裸 api* 调用未带 user_id= query: ${offenders.join(', ')}`).toEqual([])
