@@ -50,8 +50,10 @@ esac
 mkdir -p "$DEST_DIR"
 
 read_json() {
-  # read_json <key-path>  — 用 python3 读 JSON，避免依赖 jq
-  python3 -c "import json,sys; j=json.load(open('$VERSIONS_JSON')); print(j$1)"
+  # read_json <key-path>  — python3 读 JSON，经 stdin 喂文件：bash 负责打开（认得 Windows
+  # git-bash 的 MSYS 路径），python 只读 stdin，避开 Windows python 解析不了 /d/a/... 的问题。
+  # 不依赖 jq（CI runner 不保证有）。
+  python3 -c "import json,sys; j=json.load(sys.stdin); print(j$1)" < "$VERSIONS_JSON"
 }
 
 verify_sha256() {
@@ -96,9 +98,19 @@ download_engine() {
   # 解包到 staging，再 find 出二进制移到 DEST_DIR — 避开 BSD/GNU tar 的 --wildcards 差异
   local staging
   staging="$(mktemp -d "/tmp/render-bundle-stage-$name-XXXXXX")"
-  # zip 用 tar -xf（bsdtar 原生支持 zip，macOS / Windows git-bash 通用，免 unzip 依赖）
+  # 解包：tar.gz/tar.xz 用 tar；zip 在 Windows(git-bash 的 GNU tar 不支持 zip)用 python
+  # zipfile（路径经 cygpath 转 native 喂 Windows python），其余平台用 bsdtar(tar -xf)。
+  local zsrc zdst
   case "$archive" in
-    *.zip)    tar -xf "$archive" -C "$staging" ;;
+    *.zip)
+      if [ "$target" = "windows-x86_64" ]; then
+        zsrc="$(command -v cygpath >/dev/null 2>&1 && cygpath -w "$archive" || printf '%s' "$archive")"
+        zdst="$(command -v cygpath >/dev/null 2>&1 && cygpath -w "$staging" || printf '%s' "$staging")"
+        python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$zsrc" "$zdst"
+      else
+        tar -xf "$archive" -C "$staging"
+      fi
+      ;;
     *.tar.gz) tar xzf "$archive" -C "$staging" ;;
     *.tar.xz) tar xJf "$archive" -C "$staging" ;;
   esac
