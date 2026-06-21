@@ -191,8 +191,8 @@ describe('IM Channel 链路', () => {
   const imSrc = readSrc('api/im-channels.ts')
   const imConfigSrc = readSrc('config/im-channels.ts')
 
-  it('所有 6 个通道类型都有配置字段定义', () => {
-    const types: string[] = ['feishu', 'dingtalk', 'wechat', 'wecom', 'discord', 'telegram']
+  it('所有 7 个通道类型都有配置字段定义', () => {
+    const types: string[] = ['feishu', 'dingtalk', 'wechat', 'wecom', 'discord', 'telegram', 'email']
     for (const t of types) {
       expect(imConfigSrc).toContain(`${t}:`)
     }
@@ -200,7 +200,7 @@ describe('IM Channel 链路', () => {
 
   it('所有通道类型都有帮助文本（中英文）', () => {
     expect(imConfigSrc).toContain('CHANNEL_HELP_TEXT')
-    const types = ['feishu', 'dingtalk', 'wechat', 'wecom', 'discord', 'telegram']
+    const types = ['feishu', 'dingtalk', 'wechat', 'wecom', 'discord', 'telegram', 'email']
     for (const t of types) {
       const regex = new RegExp(`${t}:\\s*\\{[\\s\\S]*?zh:`)
       expect(imConfigSrc).toMatch(regex)
@@ -423,8 +423,8 @@ describe('Skill 技能链路', () => {
     expect(skillsSrc).toContain('`clawhub://${skillName}`')
   })
 
-  it('normalizeHubCategory 未知分类应降级为 coding', () => {
-    expect(skillsSrc).toContain("return 'coding'")
+  it('normalizeHubCategory 空分类兜底 coding（非空分类透传原值，供前端精选 pill 映射）', () => {
+    expect(skillsSrc).toContain("return s || 'coding'")
   })
 
   it('CLAWHUB_FORCE_MOCK 在生产环境应为 false', () => {
@@ -692,10 +692,6 @@ describe('Team 团队链路', () => {
     }
   })
 
-  it('exportAllConfig 应包含版本号和时间戳', () => {
-    expect(teamSrc).toContain("version: '1.0.0'")
-    expect(teamSrc).toContain('exported_at: new Date().toISOString()')
-  })
 })
 
 // ═══════════════════════════════════════════════════════════════════

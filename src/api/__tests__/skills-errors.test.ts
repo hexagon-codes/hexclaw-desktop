@@ -167,14 +167,14 @@ describe('Skills API Error Paths', () => {
       expect(r[0]!.name).toBe('skill-a')
     })
 
-    it('normalizes unknown category to coding', async () => {
+    it('preserves raw hub category (不再强制归一为 coding，供前端精选 pill 映射)', async () => {
       mockFetch.mockResolvedValue({
         skills: [
           { name: 'x', description: 'd', author: 'o', version: '1', tags: [], downloads: 0, category: 'weird-category' },
         ],
       })
       const r = await searchClawHub()
-      expect(r[0]!.category).toBe('coding')
+      expect(r[0]!.category).toBe('weird-category')
     })
 
     it('propagates network error', async () => {

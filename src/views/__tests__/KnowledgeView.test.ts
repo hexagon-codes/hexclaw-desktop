@@ -286,7 +286,8 @@ describe('KnowledgeView', () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
-    const docsTab = wrapper.findAll('button').find((btn) => btn.text().includes('文档 (1)'))
+    // 统一 UnderlineTabs 后计数为徽标式（label + 数字，无括号）：全部1
+    const docsTab = wrapper.findAll('button').find((btn) => /全部\s*1/.test(btn.text()))
     expect(docsTab?.exists()).toBe(true)
     expect(wrapper.find('[data-testid="knowledge-doc-stats"]').exists()).toBe(false)
     expect(wrapper.get('[data-testid="knowledge-doc-list"]').classes()).toContain('max-w-2xl')
@@ -470,7 +471,7 @@ describe('KnowledgeView', () => {
 
     expect(wrapper.text()).toContain('搜索失败')
 
-    const docsTab = wrapper.findAll('button').find((btn) => btn.text().includes('文档'))
+    const docsTab = wrapper.findAll('button').find((btn) => btn.text().includes('全部'))
     expect(docsTab).toBeDefined()
     await docsTab!.trigger('click')
     await flushPromises()

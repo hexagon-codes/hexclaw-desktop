@@ -207,9 +207,12 @@ describe('Issue #6: LogsView i18n — no hardcoded Chinese strings', () => {
     expect(src).not.toContain('"刚刚"')
   })
 
-  it('imports formatRelative from utils/time', () => {
-    expect(src).toContain("formatRelative")
+  it('uses locale-neutral absolute time (formatLogTime), no relative-time strings to translate', () => {
+    // P0 重构：相对时间（每秒刷新）改为绝对时间 HH:MM:SS.mmm —— 与语言无关、无中文、去掉 1Hz 全量重渲
+    expect(src).toContain('formatLogTime')
     expect(src).toContain("from '@/utils/time'")
+    expect(src).not.toContain('formatRelativeTime')
+    expect(src).not.toContain('setInterval')
   })
 
   it('en.ts has logs.justNow key', () => {
@@ -220,12 +223,10 @@ describe('Issue #6: LogsView i18n — no hardcoded Chinese strings', () => {
     expect(zhLocale).toMatch(/justNow:\s*['"]/)
   })
 
-  it('formatRelativeTime delegates to formatRelative from utils/time', () => {
-    const fnStart = src.indexOf('function formatRelativeTime')
-    const fnBody = src.slice(fnStart, fnStart + 400)
-    expect(fnBody).toContain('formatRelative(ts, now.value)')
-    // Should not contain literal Chinese characters
-    expect(fnBody).not.toMatch(/[\u4e00-\u9fff]/)
+  it('renders row timestamps via formatLogTime (absolute, no 1Hz now.value timer)', () => {
+    // \u65f6\u95f4\u6233\u76f4\u63a5 formatLogTime(entry.timestamp) \u6e32\u67d3\uff0c\u65e0 now.value \u5b9a\u65f6\u5668\uff08\u907f\u514d\u6bcf\u79d2\u6574\u5217\u91cd\u6e32\uff09
+    expect(src).toContain('formatLogTime(entry.timestamp)')
+    expect(src).not.toContain('now.value')
   })
 })
 
@@ -371,30 +372,33 @@ describe('Issue #12 [DOCUMENTED]: TemplatePopup .catch() on synchronous function
   })
 
   it('[FIXED] handleSelect calls dbTemplateIncrementUse without .catch()', () => {
-    // Previously dbTemplateIncrementUse(tpl.id).catch(() => {}) was called on void return.
-    // Now fixed: .catch() removed, called directly.
-    expect(src).toContain('dbTemplateIncrementUse(tpl.id)')
-    expect(src).not.toContain('dbTemplateIncrementUse(tpl.id).catch')
+    // 统一命令面板重构后入参为 PaletteItem（item.id）；仍是同步调用，无 .catch。
+    expect(src).toContain('dbTemplateIncrementUse(item.id)')
+    expect(src).not.toMatch(/dbTemplateIncrementUse\([^)]*\)\.catch/)
   })
 
-  it('watch on query calls dbSearchTemplates for server-side filtering', () => {
+  it('watch on query reloads via reload()→loadMerged (server prompts + local templates)', () => {
+    // query 变化时经 reload() → loadMerged 合并服务端 Prompt 库 + 本地模板（内部仍调 dbSearchTemplates）。
     const queryWatch = src.slice(src.indexOf("watch(() => props.query"))
-    expect(queryWatch).toContain('dbSearchTemplates(q)')
+    expect(queryWatch).toContain('reload(q)')
+    expect(src).toContain('loadMerged(query)') // reload 内部合并服务端 + 本地
+    expect(src).toContain('dbSearchTemplates') // 本地过滤仍在 loadMerged 内部
   })
 
-  it('computed "filtered" also does client-side filtering on templates', () => {
+  it('client-side filtering lives in promptItems/skillItems computeds (not inline in filtered)', () => {
+    // 重构后 filtered = [...skillItems, ...promptItems]，过滤下沉到各自 computed，更清晰。
     expect(src).toMatch(/const\s+filtered\s*=\s*computed/)
-    const filteredComputed = src.slice(src.indexOf('const filtered = computed'))
-    expect(filteredComputed).toContain('t.title.toLowerCase().includes(q)')
+    const promptItems = src.slice(src.indexOf('const promptItems = computed'))
+    expect(promptItems).toContain('tpl.title.toLowerCase().includes(q)')
   })
 
-  it('[SMELL] both watch+dbSearch and computed filter run on query change (redundant filtering)', () => {
-    // watch reloads templates from storage on query change
+  it('[SMELL] query change still triggers both server reload and client-side filter', () => {
+    // watch reload (loadMerged → 服务端 + 本地) on query change
     const watchBlock = src.slice(src.indexOf("watch(() => props.query"))
-    expect(watchBlock).toContain('dbSearchTemplates')
-    // computed also filters templates.value by query
-    const computedBlock = src.slice(src.indexOf('const filtered = computed'), src.indexOf('const filtered = computed') + 300)
-    expect(computedBlock).toContain('props.query.toLowerCase()')
+    expect(watchBlock).toContain('reload')
+    // promptItems computed 仍按 query 客户端过滤（服务端已按 query 拉取 → 仍有冗余，保留文档）
+    const promptItemsBlock = src.slice(src.indexOf('const promptItems = computed'), src.indexOf('const promptItems = computed') + 400)
+    expect(promptItemsBlock).toContain('props.query.toLowerCase()')
   })
 })
 

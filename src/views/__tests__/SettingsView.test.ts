@@ -201,6 +201,30 @@ async function getSettingsStore() {
   return useSettingsStore()
 }
 
+/**
+ * 驱动 HcSelect（自定义下拉，替代原生 <select>）：
+ * 点击触发器展开 → 在 Teleport 到 body 的 <li> 选项里按 label 命中并 mousedown 选中。
+ * resetModules 会破坏组件标识，故走真实 DOM 交互而非 findComponent。
+ */
+async function selectHcOption(
+  wrapper: Awaited<ReturnType<typeof mountSettingsView>>,
+  testid: string,
+  optionLabel: string,
+) {
+  const trigger = wrapper.get(`[data-testid="${testid}"] .hc-select__trigger`)
+  await trigger.trigger('click')
+  await flushPromises()
+  await wrapper.vm.$nextTick()
+
+  const option = Array.from(
+    document.body.querySelectorAll<HTMLLIElement>('.hc-select__option'),
+  ).find((li) => li.textContent?.trim() === optionLabel)
+  expect(option, `option "${optionLabel}" for ${testid}`).toBeTruthy()
+  option!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+  await flushPromises()
+  await wrapper.vm.$nextTick()
+}
+
 // jsdom 不提供 matchMedia，useTheme composable 依赖它
 beforeAll(() => {
   Object.defineProperty(window, 'matchMedia', {
@@ -537,8 +561,7 @@ describe('SettingsView — E2E 关键路径', () => {
       await wrapper.vm.$nextTick()
     }
 
-    const defaultModelSelect = wrapper.get('[data-testid="llm-default-model-select"]')
-    await defaultModelSelect.setValue(`${added!.id}::glm-5`)
+    await selectHcOption(wrapper, 'llm-default-model-select', `智谱 / glm-5`)
     await flushPromises()
 
     expect(store.config?.llm.defaultProviderId).toBe(added!.id)
@@ -548,8 +571,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await routingToggle.setValue(true)
     await flushPromises()
 
-    const routingStrategySelect = wrapper.get('[data-testid="llm-routing-strategy-select"]')
-    await routingStrategySelect.setValue('quality-first')
+    await selectHcOption(wrapper, 'llm-routing-strategy-select', '质量优先')
     await flushPromises()
 
     expect(store.config?.llm.routing).toEqual({

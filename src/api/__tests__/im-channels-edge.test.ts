@@ -18,8 +18,8 @@ import {
 } from '../im-channels'
 
 describe('CHANNEL_TYPES completeness', () => {
-  it('has exactly 6 entries (feishu, dingtalk, wechat, wecom, discord, telegram)', () => {
-    expect(CHANNEL_TYPES).toHaveLength(6)
+  it('has exactly 7 entries (feishu, dingtalk, wechat, wecom, discord, telegram, email)', () => {
+    expect(CHANNEL_TYPES).toHaveLength(7)
   })
 
   it('contains no empty objects or missing type fields', () => {
@@ -39,7 +39,7 @@ describe('CHANNEL_TYPES completeness', () => {
     expect(new Set(types).size).toBe(types.length)
   })
 
-  const expectedTypes: IMChannelType[] = ['feishu', 'dingtalk', 'wechat', 'wecom', 'discord', 'telegram']
+  const expectedTypes: IMChannelType[] = ['feishu', 'dingtalk', 'wechat', 'wecom', 'discord', 'telegram', 'email']
 
   it('contains exactly the expected channel types', () => {
     const actualTypes = CHANNEL_TYPES.map((c) => c.type).sort()

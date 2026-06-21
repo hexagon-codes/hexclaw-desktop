@@ -9,6 +9,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 const canvasStore = vi.hoisted(() => ({
   loadWorkflows: vi.fn(),
   loadWorkflowToCanvas: vi.fn(),
+  savedWorkflows: [],
 }))
 
 const tasksViewApi = vi.hoisted(() => ({
@@ -57,6 +58,7 @@ async function mountAutomationView(initialPath = '/automation') {
       { path: '/automation', component: AutomationView },
       { path: '/automation/canvas', component: AutomationView },
       { path: '/automation/webhooks', component: AutomationView },
+      { path: '/automation/workflows', component: AutomationView },
     ],
   })
   await router.push(initialPath)
@@ -79,7 +81,13 @@ async function mountAutomationView(initialPath = '/automation') {
           },
           template: '<div data-testid="tasks-view">tasks-view</div>',
         }),
-        CanvasView: { template: '<div data-testid="canvas-view">canvas-view</div>' },
+        WorkflowPanel: defineComponent({
+          setup(_, { expose }) {
+            expose({ loadWorkflows: canvasStore.loadWorkflows })
+            return {}
+          },
+          template: '<div data-testid="workflow-panel">workflow-panel</div>',
+        }),
         WebhookPanel: defineComponent({
           setup(_, { expose }) {
             expose(webhookPanelApi)
@@ -116,7 +124,32 @@ describe('AutomationView', () => {
     const labels = wrapper.findAll('.segmented-item').map((node) => node.text())
     expect(labels).toContain('定时任务')
     expect(labels).toContain('Webhooks')
-    expect(labels).toHaveLength(2)
+    expect(labels).toContain('工作流')
+    expect(labels).toHaveLength(3)
+  })
+
+  it('renders the workflow panel on the workflows tab', async () => {
+    const { wrapper } = await mountAutomationView('/automation/workflows')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="workflow-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="tasks-view"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="webhook-panel"]').exists()).toBe(false)
+  })
+
+  it('refreshes workflows when the workflows tab is active', async () => {
+    const { wrapper } = await mountAutomationView('/automation/workflows')
+    await flushPromises()
+    canvasStore.loadWorkflows.mockClear()
+
+    const refreshBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '刷新')
+    expect(refreshBtn).toBeDefined()
+    await refreshBtn!.trigger('click')
+    await flushPromises()
+
+    expect(canvasStore.loadWorkflows).toHaveBeenCalledTimes(1)
+    expect(webhookPanelApi.loadWebhooks).not.toHaveBeenCalled()
+    expect(tasksViewApi.loadJobs).not.toHaveBeenCalled()
   })
 
   it('refreshes webhooks instead of canvas workflows when the webhooks tab is active', async () => {

@@ -288,12 +288,13 @@ describe('SkillsView', () => {
 
     expect(searchClawHub).not.toHaveBeenCalled()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
     expect(hubTab).toBeDefined()
     await hubTab!.trigger('click')
     await flushPromises()
 
-    expect(searchClawHub).toHaveBeenCalledWith(undefined, 'all')
+    // 改为一次拉全量（无参），分类/搜索改客户端过滤
+    expect(searchClawHub).toHaveBeenCalledWith()
   })
 
   it('surfaces hub search errors instead of masking them with mock data', async () => {
@@ -302,7 +303,7 @@ describe('SkillsView', () => {
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
     await hubTab!.trigger('click')
     await flushPromises()
 
@@ -310,56 +311,32 @@ describe('SkillsView', () => {
     expect(wrapper.text()).not.toContain('即将上线')
   })
 
-  it('keeps the latest hub results when an earlier request resolves later', async () => {
-    const first = deferred<Array<Record<string, unknown>>>()
-    const second = deferred<Array<Record<string, unknown>>>()
-
-    searchClawHub
-      .mockImplementationOnce(() => first.promise)
-      .mockImplementationOnce(() => second.promise)
+  it('filters hub skills client-side by category pill without re-fetching', async () => {
+    searchClawHub.mockResolvedValueOnce([
+      { name: 'research-skill', description: 'r', author: 'openclaw', version: '1.0.0', tags: [], downloads: 1, category: 'research' },
+      { name: 'coding-skill', description: 'c', author: 'openclaw', version: '1.0.0', tags: [], downloads: 1, category: 'coding' },
+    ])
 
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
     await hubTab!.trigger('click')
     await flushPromises()
 
-    const researchChip = wrapper.findAll('button').find((btn) => btn.text().includes('研究'))
+    // 「全部」下两类都在
+    expect(wrapper.text()).toContain('research-skill')
+    expect(wrapper.text()).toContain('coding-skill')
+
+    // 点「研究」pill：仅客户端过滤出 research 分类，不再发起请求
+    const researchChip = wrapper.findAll('button').find((btn) => btn.text().trim() === '研究')
     expect(researchChip).toBeDefined()
     await researchChip!.trigger('click')
     await flushPromises()
 
-    second.resolve([
-      {
-        name: 'fresh-skill',
-        description: 'fresh',
-        author: 'openclaw',
-        version: '1.0.0',
-        tags: [],
-        downloads: 1,
-        category: 'research',
-      },
-    ])
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('fresh-skill')
-
-    first.resolve([
-      {
-        name: 'stale-skill',
-        description: 'stale',
-        author: 'openclaw',
-        version: '1.0.0',
-        tags: [],
-        downloads: 1,
-        category: 'coding',
-      },
-    ])
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('fresh-skill')
-    expect(wrapper.text()).not.toContain('stale-skill')
+    expect(searchClawHub).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('research-skill')
+    expect(wrapper.text()).not.toContain('coding-skill')
   })
 
   it('updates hub install state after install and uninstall in the same session', async () => {
@@ -396,7 +373,7 @@ describe('SkillsView', () => {
     vi.spyOn(appStore, 'restartSidecar').mockResolvedValue(true)
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
     await hubTab!.trigger('click')
     await flushPromises()
 
@@ -456,7 +433,7 @@ describe('SkillsView', () => {
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
     await hubTab!.trigger('click')
     await flushPromises()
 
@@ -646,7 +623,7 @@ describe('SkillsView', () => {
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('Skill 市场'))
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
     expect(hubTab).toBeDefined()
     await hubTab!.trigger('click')
     await flushPromises()

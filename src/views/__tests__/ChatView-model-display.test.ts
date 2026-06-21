@@ -35,8 +35,9 @@ function selectedModelDisplay(params: {
       return `${cfg.model} · ${agentLabel}`
     }
   }
-  if (selectedModel === 'auto') return 'Auto'
-  if (!selectedModel) return 'Select Model'
+  // 与真实组件一致：'auto' / 空选择走 i18n（zh-CN 默认值）
+  if (selectedModel === 'auto') return '自动'
+  if (!selectedModel) return '选择模型'
   const found = availableModels.find(
     (m) => m.modelId === selectedModel && (!selectedProviderId || m.providerId === selectedProviderId),
   )
@@ -227,7 +228,7 @@ describe('Agent 无模型偏好时回退到用户默认', () => {
 })
 
 describe('边界情况', () => {
-  it('无模型选中：显示 Select Model', () => {
+  it('无模型选中：显示 选择模型', () => {
     const display = selectedModelDisplay({
       userOverrodeModel: false,
       chatMode: 'chat',
@@ -237,10 +238,10 @@ describe('边界情况', () => {
       selectedProviderId: '',
       availableModels,
     })
-    expect(display).toBe('Select Model')
+    expect(display).toBe('选择模型')
   })
 
-  it('auto 模式：显示 Auto', () => {
+  it('auto 模式：显示 自动', () => {
     const display = selectedModelDisplay({
       userOverrodeModel: false,
       chatMode: 'chat',
@@ -250,7 +251,7 @@ describe('边界情况', () => {
       selectedProviderId: '',
       availableModels,
     })
-    expect(display).toBe('Auto')
+    expect(display).toBe('自动')
   })
 
   it('模型不在 availableModels 中：显示原始 ID', () => {

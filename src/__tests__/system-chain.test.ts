@@ -933,7 +933,8 @@ describe('Chain 7: IM Channel API Alignment', () => {
     expect(types).toContain('wecom')
     expect(types).toContain('discord')
     expect(types).toContain('telegram')
-    expect(types).toHaveLength(6)
+    expect(types).toContain('email')
+    expect(types).toHaveLength(7)
   })
 
   it('CHANNEL_CONFIG_FIELDS has required fields for each platform', async () => {

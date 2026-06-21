@@ -45,14 +45,20 @@ const BACKEND_JSON_TAGS: Record<IMChannelType, {
     configFields: ['corp_id', 'agent_id', 'secret', 'token', 'aes_key'],
     commonFields: ['name', 'enabled', 'webhook_port'],
   },
+  // Email connection (SMTP / IMAP). Field contract for the connection-center
+  // backend; keys must match the Go email connection struct JSON tags.
+  email: {
+    configFields: ['email', 'password', 'from', 'smtp_host', 'smtp_port', 'imap_host', 'imap_port'],
+    commonFields: ['name', 'enabled'],
+  },
 }
 
 describe('IM channel field alignment: frontend keys vs backend JSON tags', () => {
   const platforms = Object.keys(CHANNEL_CONFIG_FIELDS) as IMChannelType[]
 
-  it('frontend covers all 6 platforms', () => {
+  it('frontend covers all 7 connection types', () => {
     expect(platforms.sort()).toEqual(
-      ['dingtalk', 'discord', 'feishu', 'telegram', 'wechat', 'wecom'].sort(),
+      ['dingtalk', 'discord', 'email', 'feishu', 'telegram', 'wechat', 'wecom'].sort(),
     )
   })
 

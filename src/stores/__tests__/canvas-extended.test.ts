@@ -18,6 +18,7 @@ const saveWorkflowMock = vi.fn()
 const getWorkflowsMock = vi.fn()
 const deleteWorkflowMock = vi.fn()
 const runWorkflowMock = vi.fn()
+const getWorkflowRunMock = vi.fn()
 
 vi.mock('@/api/canvas', () => ({
   listPanels: (...args: unknown[]) => listPanelsMock(...args),
@@ -27,6 +28,7 @@ vi.mock('@/api/canvas', () => ({
   getWorkflows: (...args: unknown[]) => getWorkflowsMock(...args),
   deleteWorkflow: (...args: unknown[]) => deleteWorkflowMock(...args),
   runWorkflow: (...args: unknown[]) => runWorkflowMock(...args),
+  getWorkflowRun: (...args: unknown[]) => getWorkflowRunMock(...args),
 }))
 
 vi.mock('@/utils/logger', () => ({
@@ -323,29 +325,60 @@ describe('useCanvasStore — extended', () => {
       expect(runWorkflowMock).not.toHaveBeenCalled()
     })
 
-    it('marks nodes completed in sequence on success', async () => {
+    it('marks nodes completed from backend node_results on success', async () => {
       saveWorkflowMock.mockResolvedValue({ id: 'wf-run-1' })
-      runWorkflowMock.mockResolvedValue({ status: 'completed', output: 'all done' })
+      // 后端同步返回 completed（含逐节点结果）→ 跳过轮询，直接回填真实节点状态
+      runWorkflowMock.mockResolvedValue({
+        id: 'run-1',
+        status: 'completed',
+        output: 'all done',
+        node_results: [
+          { node_id: 'a', type: 'agent', status: 'completed', output: 'a out' },
+          { node_id: 'b', type: 'output', status: 'completed', output: 'b out' },
+        ],
+      })
 
       const store = useCanvasStore()
       store.addNode(makeNode('a'))
       store.addNode(makeNode('b'))
       store.addEdge(makeEdge('e1', 'a', 'b'))
 
-      const runPromise = store.runWorkflow()
+      await store.runWorkflow()
 
-      // Advance through all the 250ms setTimeout delays
-      // Two nodes => two 250ms delays
-      await vi.advanceTimersByTimeAsync(250)
-      await vi.advanceTimersByTimeAsync(250)
-      await runPromise
-
+      // 节点状态来自后端 node_results（非前端模拟动画）
       expect(store.nodeRunStatus['a']).toBe('completed')
       expect(store.nodeRunStatus['b']).toBe('completed')
       expect(store.runStatus).toBe('completed')
       expect(store.runOutput).toBe('all done')
       expect(store.runResult).not.toBeNull()
       expect(store.runResult!.output).toBe('all done')
+      expect(store.runResult!.nodeResults).toHaveLength(2)
+    })
+
+    it('polls getWorkflowRun until completion when backend returns running', async () => {
+      saveWorkflowMock.mockResolvedValue({ id: 'wf-run-poll' })
+      // 后端异步：先返回 running（无产物），轮询后才拿到 completed + node_results
+      runWorkflowMock.mockResolvedValue({ id: 'run-poll', status: 'running' })
+      getWorkflowRunMock
+        .mockResolvedValueOnce({ id: 'run-poll', status: 'running' })
+        .mockResolvedValueOnce({
+          id: 'run-poll', status: 'completed', output: 'polled done',
+          node_results: [{ node_id: 'a', type: 'agent', status: 'completed' }],
+        })
+
+      const store = useCanvasStore()
+      store.addNode(makeNode('a'))
+
+      const runPromise = store.runWorkflow()
+      // 推进两个 600ms 轮询周期
+      await vi.advanceTimersByTimeAsync(600)
+      await vi.advanceTimersByTimeAsync(600)
+      await runPromise
+
+      expect(getWorkflowRunMock).toHaveBeenCalledWith('run-poll')
+      expect(store.runStatus).toBe('completed')
+      expect(store.runOutput).toBe('polled done')
+      expect(store.nodeRunStatus['a']).toBe('completed')
     })
 
     it('marks nodes failed when backend call fails', async () => {

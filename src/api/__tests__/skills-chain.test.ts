@@ -144,12 +144,12 @@ describe('Skills Chain', () => {
       expect(result[0]!.name).toBe('skill1')
     })
 
-    it('normalizes unknown categories to coding', async () => {
+    it('preserves raw hub category (education/media/automotive 等需透传给前端 pill 映射)', async () => {
       mockFetch.mockResolvedValue({
         skills: [{ name: 'test', description: '', author: '', version: '', tags: [], downloads: 0, category: 'unknown-cat' }],
       })
       const result = await searchClawHub()
-      expect(result[0]!.category).toBe('coding')
+      expect(result[0]!.category).toBe('unknown-cat')
     })
 
     it('handles empty error string as non-error', async () => {

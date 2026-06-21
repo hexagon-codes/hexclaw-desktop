@@ -141,8 +141,9 @@ describe('McpView — MCP 全链路', () => {
     const wrapper = await mountMcpView()
     await flushPromises()
 
-    expect(wrapper.text()).toMatch(/服务器.*\(2\)/)
-    expect(wrapper.text()).toMatch(/工具.*\(2\)/)
+    // 统一 UnderlineTabs 后计数为徽标式（label + 数字，无括号）
+    expect(wrapper.text()).toMatch(/服务器\s*2/)
+    expect(wrapper.text()).toMatch(/工具\s*2/)
   })
 
   it('市场加载失败时应保留错误提示，而不是伪装成空结果', async () => {
@@ -749,10 +750,13 @@ describe('McpView — MCP 全链路', () => {
     expect(wrapper.text()).toContain('Filesystem')
   })
 
-  it('Marketplace 搜索', async () => {
-    mockSearchMcpMarketplace.mockResolvedValue({
-      skills: [{ name: 'found', display_name: 'Found', description: 'Test', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 }],
-      total: 1,
+  it('Marketplace 搜索（客户端过滤，不再调后端 search）', async () => {
+    mockGetMcpMarketplace.mockResolvedValue({
+      skills: [
+        { name: 'found', display_name: 'Found', description: 'Test', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 },
+        { name: 'other', display_name: 'Other', description: 'nope', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 },
+      ],
+      total: 2,
     })
     const wrapper = await mountMcpView()
     await flushPromises()
@@ -763,12 +767,15 @@ describe('McpView — MCP 全链路', () => {
       loadMarketplace: () => Promise<void>
     }
     vm.activeTab = 'marketplace'
-    vm.marketplaceSearch = 'test query'
     await vm.loadMarketplace()
     await flushPromises()
 
-    expect(mockSearchMcpMarketplace).toHaveBeenCalledWith('test query')
+    // 搜索词改为对已拉取列表做客户端过滤
+    vm.marketplaceSearch = 'found'
+    await flushPromises()
+
     expect(wrapper.text()).toContain('Found')
+    expect(wrapper.text()).not.toContain('Other')
   })
 
   it('Marketplace 加载在一次失败后成功时应清掉旧错误提示', async () => {
@@ -832,7 +839,7 @@ describe('McpView — MCP 全链路', () => {
       total: number
     }) => void
 
-    mockSearchMcpMarketplace
+    mockGetMcpMarketplace
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {

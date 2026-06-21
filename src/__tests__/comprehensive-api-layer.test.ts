@@ -749,13 +749,13 @@ describe('skills.ts', () => {
       expect(results[0]!.tags).toEqual([])
     })
 
-    it('invalid category defaults to coding', async () => {
+    it('preserves raw hub category (透传原值供前端精选 pill 映射；空值才兜底 coding)', async () => {
       mockedApiGet.mockResolvedValueOnce({
         skills: [{ name: 'x', category: 'invalid-cat', description: '', author: '', version: '' }],
       } as never)
 
       const results = await searchClawHub()
-      expect(results[0]!.category).toBe('coding')
+      expect(results[0]!.category).toBe('invalid-cat')
     })
   })
 

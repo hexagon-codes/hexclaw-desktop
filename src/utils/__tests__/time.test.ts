@@ -206,20 +206,25 @@ describe('formatRelative', () => {
     expect(formatRelative(new Date(now - 2000).toISOString(), now)).toBe('just now')
   })
 
-  it('seconds → Ns ago', () => {
+  // beforeEach 设 zh-CN：相对时间应输出中文（不泄漏英文 "ago"，对齐 i18n 修复）。
+  it('seconds → N 秒前 (zh)', () => {
+    expect(formatRelative(new Date(now - 30_000).toISOString(), now)).toBe('30 秒前')
+  })
+  it('seconds → Ns ago (en)', () => {
+    setLocale('en')
     expect(formatRelative(new Date(now - 30_000).toISOString(), now)).toBe('30s ago')
   })
 
-  it('minutes → Nm ago', () => {
-    expect(formatRelative(new Date(now - 5 * MINUTE).toISOString(), now)).toBe('5m ago')
+  it('minutes → N 分钟前 (zh)', () => {
+    expect(formatRelative(new Date(now - 5 * MINUTE).toISOString(), now)).toBe('5 分钟前')
   })
 
-  it('hours → Nh ago', () => {
-    expect(formatRelative(new Date(now - 3 * HOUR).toISOString(), now)).toBe('3h ago')
+  it('hours → N 小时前 (zh)', () => {
+    expect(formatRelative(new Date(now - 3 * HOUR).toISOString(), now)).toBe('3 小时前')
   })
 
-  it('days → Nd ago', () => {
-    expect(formatRelative(new Date(now - 2 * DAY).toISOString(), now)).toBe('2d ago')
+  it('days → N 天前 (zh)', () => {
+    expect(formatRelative(new Date(now - 2 * DAY).toISOString(), now)).toBe('2 天前')
   })
 
   it('returns raw string for invalid input', () => {
@@ -255,8 +260,11 @@ describe('formatElapsedSeconds', () => {
 describe('formatDurationMs', () => {
   it('returns a dash for missing or invalid input', () => {
     expect(formatDurationMs(undefined)).toBe('-')
-    expect(formatDurationMs(0)).toBe('-')
     expect(formatDurationMs(-100)).toBe('-')
+  })
+
+  it('0 is a valid duration → "0ms" (not a dash)', () => {
+    expect(formatDurationMs(0)).toBe('0ms')
   })
 
   it('keeps millisecond precision below one second', () => {

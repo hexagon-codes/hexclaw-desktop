@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import { createI18n } from 'vue-i18n'
 import MemoryView from '../MemoryView.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import type { MemoryEntry } from '@/types'
 
@@ -331,7 +332,12 @@ describe('MemoryView', () => {
 
     await openAddMemoryDialog(wrapper)
 
-    await wrapper.get('[data-testid="memory-add-type-select"]').setValue('preference')
+    const typeSelect = wrapper
+      .findAllComponents(HcSelect)
+      .find((c) => c.attributes('data-testid') === 'memory-add-type-select')
+    expect(typeSelect).toBeDefined()
+    typeSelect!.vm.$emit('update:modelValue', 'preference')
+    await nextTick()
 
     await wrapper.get('textarea').setValue('用户偏好中文回复')
 
@@ -635,9 +641,10 @@ describe('MemoryView', () => {
       has_more: false,
     })
 
-    const selects = wrapper.findAll('select')
+    const selects = wrapper.findAllComponents(HcSelect)
     expect(selects).toHaveLength(2)
-    await selects[0]!.setValue('preference')
+    selects[0]!.vm.$emit('update:modelValue', 'preference')
+    await nextTick()
     await flushPromises()
 
     expect(getMemoryEntries).toHaveBeenLastCalledWith({ view: 'active', limit: 50, type: 'preference' })
@@ -650,7 +657,10 @@ describe('MemoryView', () => {
       has_more: false,
     })
 
-    await selects[1]!.setValue('chat_extract')
+    // Re-query after re-render so the source filter wrapper is not stale
+    const sourceSelect = wrapper.findAllComponents(HcSelect)[1]
+    sourceSelect!.vm.$emit('update:modelValue', 'chat_extract')
+    await nextTick()
     await flushPromises()
 
     expect(getMemoryEntries).toHaveBeenLastCalledWith({
