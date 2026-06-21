@@ -1,6 +1,25 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { createI18n } from 'vue-i18n'
+import zhCN from '@/i18n/locales/zh-CN'
 import WebhookPanel from '../WebhookPanel.vue'
+
+function createTestI18n() {
+  return createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: { 'zh-CN': zhCN, zh: zhCN },
+  })
+}
+
+function mountPanel() {
+  return mount(WebhookPanel, {
+    attachTo: document.body,
+    // 新建表单已改为 Teleport 弹窗：stub teleport 使其内联渲染，便于在 wrapper 内查询。
+    global: { plugins: [createTestI18n()], stubs: { teleport: true } },
+  })
+}
 
 const getWebhooks = vi.hoisted(() => vi.fn())
 const createWebhook = vi.hoisted(() => vi.fn())
@@ -47,20 +66,19 @@ describe('WebhookPanel CRUD', () => {
       if (idx >= 0) hooks.splice(idx, 1)
     })
 
-    const wrapper = mount(WebhookPanel, { attachTo: document.body })
+    const wrapper = mountPanel()
     await flushPromises()
 
     expect(getWebhooks).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('hook-a')
 
-    const addBtn = wrapper.findAll('button').find((btn) => btn.text().includes('Add Webhook'))
-    expect(addBtn).toBeDefined()
-    await addBtn!.trigger('click')
+    // 创建入口已上移到工具栏（对齐原型）；面板通过 openCreateForm 暴露该入口
+    ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
     await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-b')
     await wrapper.find('input[placeholder="https://..."]').setValue('https://b')
-    const buttons = wrapper.findAll('.webhook-panel__form-actions button')
+    const buttons = wrapper.findAll('.webhook-modal__actions button')
     const createBtn = buttons[1]!
     await createBtn.trigger('click')
     await flushPromises()
@@ -90,17 +108,16 @@ describe('WebhookPanel CRUD', () => {
     )
     getWebhooks.mockResolvedValue({ webhooks: [] })
 
-    const wrapper = mount(WebhookPanel, { attachTo: document.body })
+    const wrapper = mountPanel()
     await flushPromises()
 
-    const addBtn = wrapper.findAll('button').find((btn) => btn.text().includes('Add Webhook'))
-    await addBtn!.trigger('click')
+    ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
     await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-a')
     await wrapper.find('input[placeholder="https://..."]').setValue('https://a')
 
-    const createBtn = wrapper.findAll('.webhook-panel__form-actions button')[1]!
+    const createBtn = wrapper.findAll('.webhook-modal__actions button')[1]!
     await createBtn.trigger('click')
     await flushPromises()
     await createBtn.trigger('click')
@@ -116,17 +133,16 @@ describe('WebhookPanel CRUD', () => {
     getWebhooks.mockResolvedValue({ webhooks: [] })
     createWebhook.mockRejectedValueOnce(new Error('create failed'))
 
-    const wrapper = mount(WebhookPanel, { attachTo: document.body })
+    const wrapper = mountPanel()
     await flushPromises()
 
-    const addBtn = wrapper.findAll('button').find((btn) => btn.text().includes('Add Webhook'))
-    await addBtn!.trigger('click')
+    ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
     await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-a')
     await wrapper.find('input[placeholder="https://..."]').setValue('https://a')
 
-    const formButtons = wrapper.findAll('.webhook-panel__form-actions button')
+    const formButtons = wrapper.findAll('.webhook-modal__actions button')
     await formButtons[1]!.trigger('click')
     await flushPromises()
 
@@ -135,7 +151,7 @@ describe('WebhookPanel CRUD', () => {
     await formButtons[0]!.trigger('click')
     await flushPromises()
 
-    await addBtn!.trigger('click')
+    ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
     expect((wrapper.find('input[placeholder="my-webhook"]').element as HTMLInputElement).value).toBe('')
@@ -154,7 +170,7 @@ describe('WebhookPanel CRUD', () => {
         }),
     )
 
-    const wrapper = mount(WebhookPanel, { attachTo: document.body })
+    const wrapper = mountPanel()
     await flushPromises()
 
     const deleteBtn = wrapper.find('.webhook-panel__delete')
@@ -172,11 +188,11 @@ describe('WebhookPanel CRUD', () => {
   it('surfaces webhook load failures instead of masking them as an empty list', async () => {
     getWebhooks.mockRejectedValueOnce(new Error('webhooks offline'))
 
-    const wrapper = mount(WebhookPanel, { attachTo: document.body })
+    const wrapper = mountPanel()
     await flushPromises()
 
     expect(wrapper.text()).toContain('webhooks offline')
-    expect(wrapper.text()).not.toContain('No webhooks configured')
+    expect(wrapper.text()).not.toContain('暂无 Webhook')
   })
 
   it('keeps the latest webhook list when an earlier reload resolves later', async () => {
@@ -195,7 +211,7 @@ describe('WebhookPanel CRUD', () => {
         }),
       )
 
-    const wrapper = mount(WebhookPanel, { attachTo: document.body })
+    const wrapper = mountPanel()
     const vm = wrapper.vm as unknown as { loadWebhooks: () => Promise<void> }
     await flushPromises()
 

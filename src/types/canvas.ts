@@ -7,7 +7,8 @@
 /** 画布节点 */
 export interface CanvasNode {
   id: string
-  type: 'agent' | 'tool' | 'condition' | 'output'
+  // input=触发/起点(注入运行输入)·agent=模型·tool=工具/Skill·condition=条件·output=输出
+  type: 'input' | 'agent' | 'tool' | 'condition' | 'output'
   label: string
   x: number
   y: number

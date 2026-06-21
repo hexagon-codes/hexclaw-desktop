@@ -75,7 +75,7 @@ describe('BUG-20260610: webhook 后端未启用（404）应渲染引导而非报
     const wrapper = await mountPanel()
     await flushPromises()
 
-    expect(wrapper.text()).not.toContain('Add Webhook')
+    expect(wrapper.text()).not.toContain('添加 Webhook')
   })
 
   it('非 404 错误（如 500）仍走错误展示', async () => {

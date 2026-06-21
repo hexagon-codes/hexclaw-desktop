@@ -14,10 +14,11 @@ import {
   getWorkflows as apiGetWorkflows,
   deleteWorkflow as apiDeleteWorkflow,
   runWorkflow as apiRunWorkflow,
+  getWorkflowRun as apiGetWorkflowRun,
   type PanelSummary,
 } from '@/api/canvas'
 import { trySafe } from '@/utils/errors'
-import type { CanvasNode, CanvasEdge, Workflow, WorkflowRunStatus, ApiError } from '@/types'
+import type { CanvasNode, CanvasEdge, Workflow, WorkflowRun, WorkflowNodeRun, WorkflowRunStatus, ApiError } from '@/types'
 
 export const useCanvasStore = defineStore('canvas', () => {
   // ─── State ───────────────────────────────────────────
@@ -34,7 +35,7 @@ export const useCanvasStore = defineStore('canvas', () => {
   const runOutput = ref<string>('')
   const currentWorkflowId = ref<string | null>(null)
   const nodeRunStatus = ref<Record<string, 'idle' | 'running' | 'completed' | 'failed'>>({})
-  const runResult = ref<{ output?: string; error?: string; startedAt?: string; finishedAt?: string } | null>(null)
+  const runResult = ref<{ output?: string; error?: string; startedAt?: string; finishedAt?: string; nodeResults?: WorkflowNodeRun[] } | null>(null)
 
   // ─── Actions ─────────────────────────────────────────
 
@@ -278,43 +279,98 @@ export const useCanvasStore = defineStore('canvas', () => {
 
     const order = topologicalOrder()
 
-    // 2. 提交后端执行
+    // 2. 提交后端执行（异步：后端立即返回 run id + status=running，真正执行在 goroutine 里跑）
     const [res, err] = await trySafe(
       () => apiRunWorkflow(savedWf?.id || id),
       '运行工作流',
     )
 
     if (res) {
-      // 后端返回成功 — 按拓扑顺序播放节点动画
+      // 3. 后端已受理执行 — 先标记所有节点为 running（驱动节点动画），
+      //    随后用真实 node_results / 轮询结果回填逐节点最终态。
       for (const nid of order) {
         nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'running' }
-        await new Promise((r) => setTimeout(r, 250))
-        nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'completed' }
       }
-      runStatus.value = res.status
-      runOutput.value = res.output || res.error || ''
+      applyNodeResults(res)
+      let final: WorkflowRun = res
+      if ((res.status === 'running' || res.status === 'pending') && res.id) {
+        final = await pollWorkflowRun(res.id)
+      }
+
+      // 4. 用真实 node_results 回填逐节点状态与产物
+      applyNodeResults(final)
+      // 后端未返回逐节点结果时，按整体执行结果兜底逐节点状态：
+      // 整体成功 → 全部 completed；整体失败 → 全部 failed。
+      const fallbackNodeStatus = final.status === 'failed' ? 'failed' : 'completed'
+      if (!final.node_results || final.node_results.length === 0) {
+        for (const nid of order) {
+          nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: fallbackNodeStatus }
+        }
+      }
+      runStatus.value = final.status
+      runOutput.value = final.output || final.error || ''
       runResult.value = {
-        output: res.output,
-        error: res.error,
-        startedAt: res.started_at,
-        finishedAt: res.finished_at,
+        output: final.output,
+        error: final.error,
+        startedAt: final.started_at,
+        finishedAt: final.finished_at,
+        nodeResults: final.node_results,
       }
+      error.value = null
     } else {
-      // 后端不可用 — 标记所有节点为 failed
+      // 后端不可用 — 标记所有节点为 failed，明确告知非模拟
       for (const nid of order) {
         nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'failed' }
       }
       runStatus.value = 'failed'
-      const simMsg = '⚠ 工作流仅在本地模拟执行（后端不可用），结果不可靠'
-      runOutput.value = simMsg
+      const msg = '⚠ 工作流未能提交后端执行（引擎不可用）'
+      runOutput.value = msg
       runResult.value = {
-        output: simMsg,
+        output: msg,
         error: err?.message ?? 'Backend unavailable',
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
       }
+      error.value = err
     }
-    error.value = err
+  }
+
+  /** 把后端 node_results 的状态回填到 nodeRunStatus（实时驱动节点动画）。 */
+  function applyNodeResults(run: WorkflowRun) {
+    if (!run.node_results || run.node_results.length === 0) return
+    const map = { ...nodeRunStatus.value }
+    for (const nr of run.node_results) {
+      map[nr.node_id] =
+        nr.status === 'completed' || nr.status === 'skipped' ? 'completed'
+        : nr.status === 'failed' ? 'failed'
+        : nr.status === 'running' ? 'running'
+        : 'idle'
+    }
+    nodeRunStatus.value = map
+  }
+
+  /** 轮询后端运行记录直到完成/失败（前端 2min 兜底；后端单 run 上限 10min）。 */
+  async function pollWorkflowRun(runId: string): Promise<WorkflowRun> {
+    const deadline = Date.now() + 120_000
+    let last: WorkflowRun | null = null
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 600))
+      const [snap] = await trySafe(() => apiGetWorkflowRun(runId), '查询运行状态')
+      if (snap) {
+        last = snap
+        applyNodeResults(snap)
+        if (snap.status !== 'running' && snap.status !== 'pending') return snap
+      }
+    }
+    return (
+      last ?? {
+        id: runId,
+        workflow_id: currentWorkflowId.value ?? '',
+        status: 'failed',
+        error: '运行超时（前端轮询 2 分钟未完成）',
+        started_at: new Date().toISOString(),
+      }
+    )
   }
 
   return {
