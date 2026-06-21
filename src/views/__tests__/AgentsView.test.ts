@@ -4,6 +4,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import HcSelect from '@/components/common/HcSelect.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
 const { getRoles, getAgents, getRules, addRule, deleteRule, setDefaultAgent, registerAgent, unregisterAgent, updateAgent } = vi.hoisted(() => ({
@@ -16,6 +17,11 @@ const { getRoles, getAgents, getRules, addRule, deleteRule, setDefaultAgent, reg
   registerAgent: vi.fn(),
   unregisterAgent: vi.fn(),
   updateAgent: vi.fn(),
+}))
+
+const { getAssistantSoul, updateAssistantSoul } = vi.hoisted(() => ({
+  getAssistantSoul: vi.fn(),
+  updateAssistantSoul: vi.fn(),
 }))
 
 const { getOllamaStatus } = vi.hoisted(() => ({
@@ -71,6 +77,11 @@ vi.mock('@/api/agents', () => ({
   updateAgent,
 }))
 
+vi.mock('@/api/assistant', () => ({
+  getAssistantSoul,
+  updateAssistantSoul,
+}))
+
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
   const stub = { template: '<span />' }
@@ -124,6 +135,13 @@ describe('AgentsView', () => {
     ;(globalThis as Record<string, unknown>).isTauri = true
     getOllamaStatus.mockResolvedValue({ running: false, models: [] })
 
+    getAssistantSoul.mockResolvedValue({ system_prompt: '', is_custom: false, default_prompt: '你是小蟹，一个友好的助手。' })
+    updateAssistantSoul.mockImplementation((prompt: string) => Promise.resolve({
+      system_prompt: prompt.trim(),
+      is_custom: prompt.trim() !== '',
+      default_prompt: '你是小蟹，一个友好的助手。',
+    }))
+
     getRoles.mockResolvedValue({
       roles: [
         {
@@ -146,39 +164,134 @@ describe('AgentsView', () => {
     updateAgent.mockResolvedValue(undefined)
   })
 
-  it('renders built-in role details when expanded', async () => {
+  it('shows 我的智能体 / 模板库 sub tabs and defaults to My Agents', async () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('智能助手')
-    expect(wrapper.text()).toContain('帮助用户完成任务')
+    // 顶部二级 tab（我的智能体 / 模板库）存在
+    const tabs = wrapper.findAll('.hc-segmented__btn')
+    expect(tabs.some((b) => b.text().includes('我的智能体'))).toBe(true)
+    expect(tabs.some((b) => b.text().includes('模板库'))).toBe(true)
+    // 默认进入「我的智能体」：hero + 专属智能体
+    expect(wrapper.text()).toContain('小蟹 · 默认助理')
+    expect(wrapper.text()).toContain('专属智能体')
+  })
 
-    const roleCardHeader = wrapper.find('.cursor-pointer')
-    expect(roleCardHeader.exists()).toBe(true)
-    await roleCardHeader.trigger('click')
+  it('模板库 tab lists 10 common templates', async () => {
+    const wrapper = await mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('背景')
-    expect(wrapper.text()).toContain('负责通用问答')
-    expect(wrapper.text()).toContain('专长')
-    expect(wrapper.text()).toContain('通用问答')
-    expect(wrapper.text()).toContain('任务规划')
-    expect(wrapper.text()).toContain('约束条件')
-    expect(wrapper.text()).toContain('不编造不确定信息')
+    const tplTab = wrapper.findAll('.hc-segmented__btn').find((b) => b.text().includes('模板库'))
+    expect(tplTab?.exists()).toBe(true)
+    await tplTab!.trigger('click')
+    await flushPromises()
+
+    const cards = wrapper.findAll('.hc-tplcard')
+    expect(cards.length).toBe(10)
+    expect(wrapper.text()).toContain('客服助手')
+    expect(wrapper.text()).toContain('研究助理')
+  })
+
+  it('clicking a 模板库 card prefills the new-agent form and advances to step 2', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const tplTab = wrapper.findAll('.hc-segmented__btn').find((b) => b.text().includes('模板库'))
+    await tplTab!.trigger('click')
+    await flushPromises()
+
+    const card = wrapper.findAll('.hc-tplcard').find((c) => c.text().includes('客服助手'))
+    expect(card?.exists()).toBe(true)
+    await card!.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      addStep: number
+      showAddAgent: boolean
+      newAgent: { name: string; display_name: string; description?: string; system_prompt?: string }
+    }
+    expect(vm.showAddAgent).toBe(true)
+    expect(vm.addStep).toBe(2)
+    expect(vm.newAgent.name).toBe('support-agent')
+    expect(vm.newAgent.display_name).toBe('客服助手')
+    expect(vm.newAgent.system_prompt).toContain('客服助手')
+  })
+
+  it('shows the "choose start" step (空白新建 + template cards) when opening the new-agent dialog', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const newButton = wrapper.findAll('button').find((b) => b.text().includes('新建智能体'))
+    expect(newButton?.exists()).toBe(true)
+    await newButton!.trigger('click')
+    await flushPromises()
+
+    // 第一步：空白新建卡 + 模板卡（title + goal）
+    const startCards = wrapper.findAll('.hc-startcard')
+    expect(startCards.length).toBe(2) // 1 空白 + 1 模板（mock 仅 1 个 role）
+    expect(wrapper.text()).toContain('空白新建')
+    expect(wrapper.text()).toContain('智能助手')
+    expect(wrapper.text()).toContain('帮助用户完成任务')
+    // 第一步还未进入表单
+    const vm = wrapper.vm as unknown as { addStep: number }
+    expect(vm.addStep).toBe(1)
+  })
+
+  it('selecting 空白新建 advances to step 2 with an empty form', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const newButton = wrapper.findAll('button').find((b) => b.text().includes('新建智能体'))
+    await newButton!.trigger('click')
+    await flushPromises()
+
+    const blankCard = wrapper.findAll('.hc-startcard').find((el) => el.text().includes('空白新建'))
+    expect(blankCard?.exists()).toBe(true)
+    await blankCard!.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { addStep: number; newAgent: { name: string } }
+    expect(vm.addStep).toBe(2)
+    expect(vm.newAgent.name).toBe('')
+  })
+
+  it('selecting a template advances to step 2 with prefilled fields', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const newButton = wrapper.findAll('button').find((b) => b.text().includes('新建智能体'))
+    await newButton!.trigger('click')
+    await flushPromises()
+
+    const templateCard = wrapper.findAll('.hc-startcard').find((el) => el.text().includes('智能助手'))
+    expect(templateCard?.exists()).toBe(true)
+    await templateCard!.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      addStep: number
+      newAgent: { name: string; display_name: string; description?: string; system_prompt?: string }
+    }
+    expect(vm.addStep).toBe(2)
+    expect(vm.newAgent.name).toBe('assistant')
+    expect(vm.newAgent.display_name).toBe('智能助手')
+    expect(vm.newAgent.description).toBe('帮助用户完成任务')
+    expect(vm.newAgent.system_prompt).toBe('负责通用问答')
   })
 
   it('uses runtime provider and model options in the register form', async () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    const agentsTab = wrapper.findAll('button').find((button) => button.text().includes('注册的智能体'))
-    expect(agentsTab?.exists()).toBe(true)
-    await agentsTab!.trigger('click')
-    await flushPromises()
-
-    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('注册智能体'))
+    // 工具栏「新建智能体」按钮打开两步弹窗
+    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('新建智能体'))
     expect(registerButton?.exists()).toBe(true)
     await registerButton!.trigger('click')
+    await flushPromises()
+
+    // 第一步选「空白新建」进入表单
+    const vm = wrapper.vm as unknown as { startFromBlank: () => void }
+    vm.startFromBlank()
     await flushPromises()
 
     // Model preference is collapsed by default — expand it
@@ -187,30 +300,34 @@ describe('AgentsView', () => {
     await advancedToggle!.trigger('click')
     await flushPromises()
 
-    const selects = wrapper.findAll('select')
+    const selects = wrapper.findAllComponents(HcSelect)
     expect(selects.length).toBeGreaterThanOrEqual(1)
     await vi.waitFor(async () => {
       await nextTick()
-      expect(selects[0]!.text()).toContain('智谱')
+      const labels = (selects[0]!.props('options') as Array<{ label: string }>).map((o) => o.label)
+      expect(labels).toContain('智谱')
     })
 
-    await selects[0]!.setValue('智谱')
+    selects[0]!.vm.$emit('update:modelValue', '智谱')
+    await nextTick()
     await flushPromises()
 
-    const modelSelect = wrapper.findAll('select')[1]
-    expect(modelSelect!.text()).toContain('glm-5')
+    const modelSelect = wrapper.findAllComponents(HcSelect)[1]
+    const modelLabels = (modelSelect!.props('options') as Array<{ label: string }>).map((o) => o.label)
+    expect(modelLabels).toContain('glm-5')
   })
 
   it('uses the shared hc-input select style in the register dialog', async () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    const agentsTab = wrapper.findAll('button').find((button) => button.text().includes('注册的智能体'))
-    await agentsTab!.trigger('click')
+    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('新建智能体'))
+    await registerButton!.trigger('click')
     await flushPromises()
 
-    const registerButton = wrapper.findAll('button').find((button) => button.text().includes('注册智能体'))
-    await registerButton!.trigger('click')
+    // 第一步选「空白新建」进入表单
+    const vm = wrapper.vm as unknown as { startFromBlank: () => void }
+    vm.startFromBlank()
     await flushPromises()
 
     // Expand advanced section
@@ -218,9 +335,11 @@ describe('AgentsView', () => {
     await advancedToggle!.trigger('click')
     await flushPromises()
 
-    const selects = wrapper.findAll('select')
+    const selects = wrapper.findAllComponents(HcSelect)
     expect(selects.length).toBeGreaterThanOrEqual(1)
-    expect(selects[0]!.classes()).toContain('hc-input')
+    const trigger = selects[0]!.find('.hc-select__trigger')
+    expect(trigger.exists()).toBe(true)
+    expect(trigger.classes()).toContain('hc-input')
   })
 
   it('shows only runtime-backed providers in the register form', async () => {
@@ -256,15 +375,17 @@ describe('AgentsView', () => {
     ]
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as { activeTab: string; showAddAgent: boolean; showAddAdvanced: boolean }
-    vm.activeTab = 'agents'
+    const vm = wrapper.vm as unknown as { showAddAgent: boolean; showAddAdvanced: boolean; addStep: number }
     vm.showAddAgent = true
+    await flushPromises()
+    vm.addStep = 2
     vm.showAddAdvanced = true
     await flushPromises()
 
-    const providerSelect = wrapper.findAll('select')[0]
-    expect(providerSelect?.text()).toContain('智谱')
-    expect(providerSelect?.text()).not.toContain('Ollama (本地)')
+    const providerSelect = wrapper.findAllComponents(HcSelect)[0]
+    const providerLabels = (providerSelect!.props('options') as Array<{ label: string }>).map((o) => o.label)
+    expect(providerLabels).toContain('智谱')
+    expect(providerLabels).not.toContain('Ollama (本地)')
   })
 
   it('uses available runtime models for Ollama providers when registering', async () => {
@@ -294,20 +415,23 @@ describe('AgentsView', () => {
     await settingsStore.syncOllamaModels()
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as { activeTab: string; showAddAgent: boolean; showAddAdvanced: boolean; newAgent: { provider: string } }
-    vm.activeTab = 'agents'
+    const vm = wrapper.vm as unknown as { showAddAgent: boolean; showAddAdvanced: boolean; addStep: number; newAgent: { provider: string } }
     vm.showAddAgent = true
+    await flushPromises()
+    vm.addStep = 2
     vm.showAddAdvanced = true
     await flushPromises()
 
-    const providerSelect = wrapper.findAll('select')[0]
-    await providerSelect!.setValue('ollama')
+    const providerSelect = wrapper.findAllComponents(HcSelect)[0]
+    providerSelect!.vm.$emit('update:modelValue', 'ollama')
+    await nextTick()
     await flushPromises()
 
     // Model select appears after provider is set (v-if), re-query
-    const modelSelect = wrapper.findAll('select')[1]
-    expect(modelSelect!.text()).toContain('qwen3.5:9b')
-    expect(modelSelect!.text()).toContain('qwen3:0.6b')
+    const modelSelect = wrapper.findAllComponents(HcSelect)[1]
+    const modelLabels = (modelSelect!.props('options') as Array<{ label: string }>).map((o) => o.label)
+    expect(modelLabels).toContain('qwen3.5:9b')
+    expect(modelLabels).toContain('qwen3:0.6b')
   })
 
   it('does not start a second register request while the first one is still running', async () => {
@@ -323,13 +447,10 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
-      activeTab: string
       showAddAgent: boolean
       newAgent: { name: string; display_name: string; provider: string; model: string }
       handleRegisterAgent: () => Promise<void>
     }
-
-    vm.activeTab = 'agents'
     vm.showAddAgent = true
     await flushPromises()
     vm.newAgent = {
@@ -369,12 +490,9 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
-      activeTab: string
       unregisteringName: string
       handleUnregisterAgent: () => Promise<void>
     }
-
-    vm.activeTab = 'agents'
     vm.unregisteringName = 'helper-1'
     await flushPromises()
 
@@ -396,13 +514,10 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
-      activeTab: string
       showAddAgent: boolean
       newAgent: { name: string; display_name: string; provider: string; model: string }
       handleRegisterAgent: () => Promise<void>
     }
-
-    vm.activeTab = 'agents'
     vm.showAddAgent = true
     await flushPromises()
     vm.newAgent = {
@@ -450,13 +565,10 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
-      activeTab: string
       editingAgent: { name: string; display_name: string; provider: string; model: string }
       showEditAgent: boolean
       handleEditAgent: () => Promise<void>
     }
-
-    vm.activeTab = 'agents'
     vm.editingAgent = {
       name: 'helper-1',
       display_name: 'Helper Updated',
@@ -477,39 +589,86 @@ describe('AgentsView', () => {
     await flushPromises()
   })
 
-  it('does not start a second set-default request while the first one is still running', async () => {
+  it('renders the 小蟹 default-assistant hero card on the My Agents tab', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    // 默认进入「我的智能体」，hero 卡常驻
+    expect(wrapper.text()).toContain('小蟹 · 默认助理')
+    expect(wrapper.text()).toContain('默认 · 不可删')
+    expect(wrapper.text()).toContain('编辑人设(SOUL)')
+    expect(wrapper.text()).toContain('模型：跟随设置 · 智能路由')
+    expect(wrapper.text()).toContain('专属智能体')
+  })
+
+  it('SOUL editor: opens hero editor, loads current persona, saves trimmed SOUL via API', async () => {
+    getAssistantSoul.mockResolvedValueOnce({ system_prompt: '原始人设', is_custom: true, default_prompt: '内置默认人设' })
+    const wrapper = await mountView()
+    await flushPromises()
+
+    // 点 hero 卡「编辑人设(SOUL)」打开弹层
+    const editBtn = wrapper.findAll('button').find((b) => b.text().includes('编辑人设(SOUL)'))
+    expect(editBtn).toBeTruthy()
+    await editBtn!.trigger('click')
+    await flushPromises()
+
+    expect(getAssistantSoul).toHaveBeenCalled()
+    // 弹层回填当前自定义人设
+    const textarea = wrapper.find('textarea')
+    expect(textarea.exists()).toBe(true)
+    expect((textarea.element as HTMLTextAreaElement).value).toBe('原始人设')
+
+    // 改写后保存：trim 后写入 PUT
+    updateAssistantSoul.mockResolvedValueOnce({ system_prompt: '新的人设内容', is_custom: true, default_prompt: '内置默认人设' })
+    await textarea.setValue('  新的人设内容  ')
+    const saveBtn = wrapper.findAll('button').find((b) => b.text() === '保存')
+    expect(saveBtn).toBeTruthy()
+    await saveBtn!.trigger('click')
+    await flushPromises()
+
+    // 核心行为：trim 后经 PUT /api/v1/assistant/soul 写入 ~/.hexclaw/SOUL.md
+    expect(updateAssistantSoul).toHaveBeenCalledWith('新的人设内容')
+  })
+
+  it('SOUL editor: engine offline → degrades gracefully (still opens, shows load error)', async () => {
+    getAssistantSoul.mockRejectedValueOnce(new Error('engine offline'))
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const editBtn = wrapper.findAll('button').find((b) => b.text().includes('编辑人设(SOUL)'))
+    await editBtn!.trigger('click')
+    await flushPromises()
+
+    // 引擎降级：弹层仍打开（textarea 存在），不抛错
+    expect(wrapper.find('textarea').exists()).toBe(true)
+    expect(wrapper.text()).toContain('引擎未连接')
+  })
+
+  it('roster card shows name + description only, no SOUL summary or model override tag (对齐原型)', async () => {
     getAgents.mockResolvedValueOnce({
       agents: [
-        { name: 'helper-1', display_name: 'Helper 1', provider: '智谱', model: 'glm-5' },
-        { name: 'helper-2', display_name: 'Helper 2', provider: '智谱', model: 'glm-5' },
+        {
+          name: 'helper-1',
+          display_name: 'Helper',
+          description: '收发邮件',
+          system_prompt: '正式礼貌的邮件助理',
+          provider: '智谱',
+          model: 'glm-5',
+        },
       ],
-      total: 2,
+      total: 1,
       default: '',
     })
-
-    let resolveSetDefault!: () => void
-    setDefaultAgent.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveSetDefault = resolve
-        }),
-    )
 
     const wrapper = await mountView()
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as { activeTab: string; handleSetDefault: (name: string) => Promise<void> }
-    vm.activeTab = 'agents'
-    await flushPromises()
-
-    void vm.handleSetDefault('helper-1')
-    await flushPromises()
-    void vm.handleSetDefault('helper-1')
-    await flushPromises()
-
-    expect(setDefaultAgent).toHaveBeenCalledTimes(1)
-
-    resolveSetDefault()
-    await flushPromises()
+    expect(wrapper.text()).toContain('Helper')
+    expect(wrapper.text()).toContain('收发邮件')
+    // 对齐原型：专属卡不再渲染 SOUL 摘要块（人设(SOUL) 摘要）
+    expect(wrapper.text()).not.toContain('人设（SOUL）')
+    expect(wrapper.text()).not.toContain('正式礼貌的邮件助理')
+    // 对齐原型：专属卡不再渲染「provider · model」覆盖标签
+    expect(wrapper.text()).not.toContain('智谱 · glm-5')
   })
 })
