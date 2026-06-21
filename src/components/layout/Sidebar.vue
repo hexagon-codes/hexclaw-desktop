@@ -50,9 +50,9 @@ const dotClass = computed(() => {
 })
 
 const engineLabel = computed(() => {
-  const s = appStore.sidecarStatus
-  if (s === 'running') return engineVersion.value ? `Hexagon engine ${engineVersion.value}` : 'Hexagon engine'
-  if (s === 'starting') return 'Hexagon engine …'
+  // 一旦取到版本号就常显（非运行/重启瞬间也保留版本，不再退化成无版本文案）
+  if (engineVersion.value) return `Hexagon engine ${engineVersion.value}`
+  if (appStore.sidecarStatus === 'starting') return 'Hexagon engine …'
   return 'Hexagon engine'
 })
 
@@ -71,7 +71,7 @@ function getGroupItems(group: NavGroup) {
     <!-- Brand -->
     <div class="hc-sidebar__brand">
       <img :src="logoUrl" alt="HexClaw" class="hc-sidebar__logo" />
-      <span v-if="!collapsed" class="hc-sidebar__brand-name">HexClaw</span>
+      <span v-if="!collapsed" class="hc-sidebar__brand-name">{{ t('nav.brandName', 'HexClaw') }}</span>
     </div>
 
     <!-- Navigation -->
@@ -304,12 +304,9 @@ function getGroupItems(group: NavGroup) {
   cursor: pointer;
   flex-shrink: 0;
   padding: 0;
-  opacity: 0;
-  transition: opacity 0.15s, color 0.15s, background 0.15s;
-}
-
-.hc-sidebar__engine-row:hover .hc-sidebar__restart-btn {
+  /* 常驻可见（对齐原型 .sb-foot .restart：始终显示，hover 高亮） */
   opacity: 1;
+  transition: opacity 0.15s, color 0.15s, background 0.15s;
 }
 
 .hc-sidebar__restart-btn:hover {

@@ -9,6 +9,7 @@ vi.mock('lucide-vue-next', () => ({
   LayoutDashboard: 'LayoutDashboard',
   MessageSquare: 'MessageSquare',
   Radio: 'Radio',
+  Plug: 'Plug',
   Bot: 'Bot',
   BookOpen: 'BookOpen',
   Zap: 'Zap',
@@ -129,11 +130,11 @@ describe('getNavigationChildren(id)', () => {
     expect(children).toHaveLength(2)
   })
 
-  it('returns 2 children for "automation": tasks + webhooks', () => {
+  it('returns 3 children for "automation": tasks + webhooks + workflows', () => {
     const children = getNavigationChildren('automation')
-    expect(children).toHaveLength(2)
+    expect(children).toHaveLength(3)
     const ids = children.map((c) => c.id)
-    expect(ids).toEqual(['automation-tasks', 'automation-webhooks'])
+    expect(ids).toEqual(['automation-tasks', 'automation-webhooks', 'automation-workflows'])
   })
 
   it('returns empty array for "chat" (no children)', () => {

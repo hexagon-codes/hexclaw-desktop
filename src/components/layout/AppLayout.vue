@@ -3,6 +3,7 @@ import { onMounted, onUnmounted, watch } from 'vue'
 import TitleBar from './TitleBar.vue'
 import Sidebar from './Sidebar.vue'
 import DetailPanel from './DetailPanel.vue'
+import EngineBanner from './EngineBanner.vue'
 // v0.4.0 UI 优化：删除 ContextBar 引用，参见 <template> 中的注释
 import InspectorContext from '@/components/inspector/InspectorContext.vue'
 import CommandPalette from '@/components/common/CommandPalette.vue'
@@ -75,7 +76,11 @@ onUnmounted(() => {
     <div class="hc-app__body">
       <Sidebar />
       <main class="hc-app__content">
-        <slot />
+        <!-- 引擎降级 banner：引擎未连接时顶部常驻（锚点 prototype #engineBanner） -->
+        <EngineBanner />
+        <div class="hc-app__view">
+          <slot />
+        </div>
       </main>
       <DetailPanel :open="appStore.detailPanelOpen" @close="appStore.toggleDetailPanel">
         <InspectorContext />
@@ -112,5 +117,14 @@ onUnmounted(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* 视图包裹：banner 占自然高度后，视图填满剩余高度（每个视图自带 height:100%/flex） */
+.hc-app__view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 </style>

@@ -1,7 +1,7 @@
 import type { Component } from 'vue'
 import {
   MessageSquare,
-  Radio,
+  Plug,
   Bot,
   BookOpen,
   Zap,
@@ -92,6 +92,7 @@ export const navigationItems: NavItem[] = [
     children: [
       { id: 'automation-tasks', path: '/automation', i18nKey: 'nav.automationTasks' },
       { id: 'automation-webhooks', path: '/automation/webhooks', i18nKey: 'nav.automationWebhooks' },
+      { id: 'automation-workflows', path: '/automation/workflows', i18nKey: 'nav.automationWorkflows' },
     ],
   },
 
@@ -100,8 +101,8 @@ export const navigationItems: NavItem[] = [
     id: 'channels',
     path: '/channels',
     i18nKey: 'nav.channels',
-    icon: Radio,
-    keywords: 'channels 通道 IM 飞书 钉钉 discord telegram feishu dingtalk',
+    icon: Plug, // 锚点 prototype 侧栏「连接」插头图标（正名后图标改插头）
+    keywords: 'channels connections 连接 通道与账号 数据连接器 IM 邮箱 email 飞书 钉钉 discord telegram feishu dingtalk notion github connectors',
     group: 'connections',
   },
   {
@@ -114,6 +115,7 @@ export const navigationItems: NavItem[] = [
     children: [
       { id: 'integration-skills', path: '/integration', i18nKey: 'nav.integrationSkills' },
       { id: 'integration-mcp', path: '/integration/mcp', i18nKey: 'nav.integrationMcp' },
+      { id: 'integration-prompts', path: '/integration/prompts', i18nKey: 'nav.integrationPrompts' },
     ],
   },
 

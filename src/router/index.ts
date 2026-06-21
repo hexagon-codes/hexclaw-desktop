@@ -5,7 +5,7 @@ import { navigationItems } from '@/config/navigation'
 
 const navRouteComponents = {
   chat: () => import('@/views/ChatView.vue'),
-  channels: () => import('@/views/IMChannelsView.vue'),
+  channels: () => import('@/views/ConnectionsView.vue'),
   agents: () => import('@/views/AgentsView.vue'),
   knowledge: () => import('@/views/KnowledgeCenterView.vue'),
   automation: () => import('@/views/AutomationView.vue'),

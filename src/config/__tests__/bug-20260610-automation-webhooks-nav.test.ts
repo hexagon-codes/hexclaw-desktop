@@ -16,6 +16,7 @@ vi.mock('lucide-vue-next', () => ({
   LayoutDashboard: 'LayoutDashboard',
   MessageSquare: 'MessageSquare',
   Radio: 'Radio',
+  Plug: 'Plug',
   Bot: 'Bot',
   BookOpen: 'BookOpen',
   Zap: 'Zap',

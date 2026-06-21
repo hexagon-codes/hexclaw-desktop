@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Wrench, BrainCircuit, Hexagon, Server, Monitor, BarChart3 } from 'lucide-vue-next'
 import logoUrl from '@/assets/logo.png'
 import hexagonLogoUrl from '@/assets/hexagon-engine-logo.png'
 
@@ -36,37 +37,37 @@ const ecosystem = [
   {
     name: 'toolkit',
     sub: t('about.ecoInfra', '基础设施'),
-    emoji: '🛠',
+    icon: Wrench,
     url: 'https://github.com/hexagon-codes/toolkit',
   },
   {
     name: 'ai-core',
     sub: t('about.ecoLlm', 'LLM 适配'),
-    emoji: '🧠',
+    icon: BrainCircuit,
     url: 'https://github.com/hexagon-codes/ai-core',
   },
   {
     name: 'hexagon',
     sub: t('about.ecoAgent', 'Agent 框架'),
-    emoji: '🔷',
+    icon: Hexagon,
     url: 'https://github.com/hexagon-codes/hexagon',
   },
   {
     name: 'hexclaw',
     sub: t('about.ecoBackend', '后端服务'),
-    emoji: '🦀',
+    icon: Server,
     url: 'https://github.com/everyday-items/hexclaw',
   },
   {
     name: 'hexclaw-desktop',
     sub: t('about.ecoDesktop', '桌面客户端'),
-    emoji: '🖥',
+    icon: Monitor,
     url: 'https://github.com/hexagon-codes/hexclaw-desktop',
   },
   {
     name: 'hexagon-ui',
     sub: t('about.ecoConsole', 'Agent 观测台'),
-    emoji: '📊',
+    icon: BarChart3,
     url: 'https://github.com/hexagon-codes/hexagon-ui',
   },
 ]
@@ -145,7 +146,7 @@ const ecosystem = [
                   rel="noreferrer"
                   class="hc-about-modal__eco-node"
                 >
-                  <span class="hc-about-modal__eco-emoji">{{ item.emoji }}</span>
+                  <component :is="item.icon" :size="16" class="hc-about-modal__eco-emoji" />
                   <span class="hc-about-modal__eco-name">{{ item.name }}</span>
                   <span class="hc-about-modal__eco-sub">{{ item.sub }}</span>
                 </a>
@@ -412,7 +413,7 @@ const ecosystem = [
   background: rgba(90, 159, 212, 0.06);
 }
 .hc-about-modal__eco-emoji {
-  font-size: 14px;
+  color: var(--hc-text-primary);
 }
 .hc-about-modal__eco-name {
   font-size: 10px;

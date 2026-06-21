@@ -7,36 +7,52 @@
 /* ─── Dark Theme (Default) ──────────────────────────────── */
 :root,
 [data-theme='dark'] {
-  --hc-bg-sidebar: rgba(30, 31, 46, 0.82);
-  --hc-bg-sidebar-solid: #1e1f2e;
-  --hc-bg-main: #161722;
-  --hc-bg-panel: rgba(30, 31, 46, 0.82);
-  --hc-bg-card: rgba(255, 255, 255, 0.04);
-  --hc-bg-input: rgba(255, 255, 255, 0.06);
-  --hc-bg-hover: rgba(255, 255, 255, 0.07);
-  --hc-bg-active: rgba(255, 255, 255, 0.1);
-  --hc-bg-elevated: rgba(40, 42, 58, 0.95);
+  /* 配色对齐 hexclaw.net 官网（暗色 · 深海蓝）— 原型 app.html 为设计真源 */
+  --hc-bg-sidebar: rgba(11, 21, 37, 0.82);
+  --hc-bg-sidebar-solid: #0b1525;
+  --hc-bg-main: #0e1b2e;
+  --hc-bg-panel: rgba(11, 21, 37, 0.82);
+  --hc-bg-card: rgba(255, 255, 255, 0.06);
+  --hc-bg-input: rgba(255, 255, 255, 0.05);
+  --hc-bg-hover: rgba(95, 179, 234, 0.1);
+  --hc-bg-active: rgba(95, 179, 234, 0.16);
+  --hc-bg-elevated: rgba(18, 30, 50, 0.96);
+  --hc-bg-gradient: linear-gradient(180deg, #0b1525 0%, #0e1b2e 30%, #112240 62%, #0b1525 100%);
 
-  --hc-text-primary: #f0f0f3;
-  --hc-text-secondary: #9d9da7;
-  --hc-text-muted: #5c5c6b;
+  --hc-text-primary: #e8ecf0;
+  --hc-text-secondary: #8b95a2;
+  --hc-text-muted: #5a6470;
   --hc-text-inverse: #ffffff;
 
   --hc-border: rgba(255, 255, 255, 0.08);
-  --hc-border-subtle: rgba(255, 255, 255, 0.04);
+  --hc-border-subtle: rgba(255, 255, 255, 0.05);
   --hc-divider: rgba(255, 255, 255, 0.06);
+  --hc-border-hl: rgba(95, 179, 234, 0.24);
 
-  --hc-accent: #4a90d9;
-  --hc-accent-hover: #5a9ee5;
-  --hc-accent-subtle: rgba(74, 144, 217, 0.12);
+  --hc-accent: #5fb3ea;
+  --hc-accent-hover: #7cc4f0;
+  --hc-accent-subtle: rgba(95, 179, 234, 0.14);
+  --hc-accent-deep: #7cc4f0;
+  --hc-amber: #f0b429;
+  --hc-amber-light: #f5c84c;
   --hc-success: #32d583;
   --hc-warning: #f0b429;
   --hc-error: #f56565;
+  /* 连接能力 chip「读取」靛蓝（锚点 prototype .cap.read） */
+  --hc-cap-read: #7d7bf0;
+  /* 品牌 logo tile：固定浅底 + 浅边框，单色官方 logo（Simple Icons）在双主题下都清晰 */
+  --hc-brand-tile: #f4f6f9;
+  --hc-brand-tile-border: rgba(15, 23, 42, 0.06);
 
-  --hc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --hc-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
-  --hc-shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.35);
-  --hc-shadow-float: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+  --hc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2), 0 1px 3px rgba(0, 0, 0, 0.24);
+  --hc-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.24), 0 8px 24px rgba(0, 0, 0, 0.3);
+  --hc-shadow-lg: 0 10px 24px rgba(0, 0, 0, 0.32), 0 24px 50px rgba(0, 0, 0, 0.4);
+  --hc-shadow-float: 0 10px 24px rgba(0, 0, 0, 0.34), 0 28px 56px rgba(0, 0, 0, 0.46), 0 0 0 0.5px rgba(95, 179, 234, 0.12);
+
+  /* 动效曲线（Apple HIG）— 主题无关默认值 */
+  --hc-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --hc-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --hc-ease-smooth: cubic-bezier(0.25, 0.1, 0.25, 1);
 
   --hc-radius-sm: 6px;
   --hc-radius-md: 10px;
@@ -75,36 +91,47 @@
 
 /* ─── Light Theme ───────────────────────────────────────── */
 [data-theme='light'] {
-  --hc-bg-sidebar: rgba(244, 245, 247, 0.82);
-  --hc-bg-sidebar-solid: #f4f5f7;
-  --hc-bg-main: #ffffff;
-  --hc-bg-panel: rgba(244, 245, 247, 0.82);
-  --hc-bg-card: rgba(0, 0, 0, 0.025);
-  --hc-bg-input: rgba(0, 0, 0, 0.04);
-  --hc-bg-hover: rgba(0, 0, 0, 0.04);
-  --hc-bg-active: rgba(0, 0, 0, 0.07);
+  /* 对齐 hexclaw.net 官网品牌色，画布取中性近白（内容区跟随官网"文档"逻辑，蓝色做点缀） */
+  --hc-bg-sidebar: rgba(247, 250, 253, 0.7);
+  --hc-bg-sidebar-solid: #f3f6fb;
+  --hc-bg-main: #fbfcfe;
+  --hc-bg-panel: rgba(247, 250, 253, 0.7);
+  --hc-bg-card: rgba(255, 255, 255, 0.8);
+  --hc-bg-input: rgba(63, 143, 212, 0.05);
+  --hc-bg-hover: rgba(63, 143, 212, 0.06);
+  --hc-bg-active: rgba(63, 143, 212, 0.1);
   --hc-bg-elevated: rgba(255, 255, 255, 0.96);
+  --hc-bg-gradient: linear-gradient(180deg, #ffffff 0%, #fbfcfe 52%, #f4f8fc 100%);
 
-  --hc-text-primary: #1d1d1f;
-  --hc-text-secondary: #6e6e73;
-  --hc-text-muted: #aeaeb2;
+  --hc-text-primary: #12324c;
+  --hc-text-secondary: #3f5f7b;
+  --hc-text-muted: #5f7b95;
   --hc-text-inverse: #ffffff;
 
-  --hc-border: rgba(0, 0, 0, 0.08);
-  --hc-border-subtle: rgba(0, 0, 0, 0.04);
-  --hc-divider: rgba(0, 0, 0, 0.06);
+  --hc-border: rgba(63, 143, 212, 0.12);
+  --hc-border-subtle: rgba(63, 143, 212, 0.07);
+  --hc-divider: rgba(63, 143, 212, 0.1);
+  --hc-border-hl: rgba(95, 179, 234, 0.32);
 
-  --hc-accent: #4a90d9;
-  --hc-accent-hover: #5a9ee5;
-  --hc-accent-subtle: rgba(74, 144, 217, 0.08);
+  --hc-accent: #3f8fd4;
+  --hc-accent-hover: #4a9de0;
+  --hc-accent-subtle: rgba(95, 179, 234, 0.14);
+  --hc-accent-deep: #3f8fd4;
+  --hc-amber: #f0b429;
+  --hc-amber-light: #f5c84c;
   --hc-success: #28a745;
   --hc-warning: #e69500;
   --hc-error: #ff3b30;
+  /* 连接能力 chip「读取」靛蓝（锚点 prototype .cap.read） */
+  --hc-cap-read: #6c63d9;
+  /* 品牌 logo tile：固定浅底 + 浅边框，单色官方 logo（Simple Icons）在双主题下都清晰 */
+  --hc-brand-tile: #f4f6f9;
+  --hc-brand-tile-border: rgba(15, 23, 42, 0.06);
 
-  --hc-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --hc-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --hc-shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.12);
-  --hc-shadow-float: 0 12px 40px rgba(0, 0, 0, 0.15), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --hc-shadow-sm: 0 1px 2px rgba(95, 179, 234, 0.1), 0 1px 3px rgba(95, 179, 234, 0.1);
+  --hc-shadow-md: 0 2px 8px rgba(95, 179, 234, 0.1), 0 8px 24px rgba(95, 179, 234, 0.12);
+  --hc-shadow-lg: 0 8px 24px rgba(95, 179, 234, 0.12), 0 20px 44px rgba(95, 179, 234, 0.14);
+  --hc-shadow-float: 0 8px 24px rgba(95, 179, 234, 0.14), 0 24px 56px rgba(95, 179, 234, 0.18), 0 0 0 0.5px rgba(63, 143, 212, 0.08);
 
   color-scheme: light;
 }
@@ -117,7 +144,7 @@ body,
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: var(--hc-bg-main);
+  background: var(--hc-bg-gradient);
   color: var(--hc-text-primary);
   font-family:
     -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
@@ -233,15 +260,18 @@ body,
 }
 
 .hc-btn-primary {
-  background: var(--hc-accent);
-  color: var(--hc-text-inverse);
+  /* 官网品牌蓝渐变 + 蓝调柔光（原型 app.html .btn-primary） */
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
+  color: #fff;
   padding: var(--hc-space-2) var(--hc-space-4);
   font-size: 13px;
   border-radius: var(--hc-radius-md);
+  box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
 }
 
 .hc-btn-primary:hover {
-  background: var(--hc-accent-hover);
+  filter: brightness(1.04);
+  box-shadow: 0 8px 22px rgba(95, 179, 234, 0.34);
 }
 
 .hc-btn-secondary {
@@ -315,10 +345,18 @@ select.hc-input:focus {
   transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
+/* 网格卡通用 hover 抬升工具（自包含；锚点 prototype .cxcard：静置柔阴影 → hover 蓝调抬升） */
+.hc-card-interactive {
+  box-shadow: var(--hc-shadow-sm);
+  transition:
+    border-color 0.2s var(--hc-ease-out),
+    box-shadow 0.28s var(--hc-ease-out),
+    transform 0.28s var(--hc-ease-out);
+}
 .hc-card-interactive:hover {
-  border-color: var(--hc-accent-subtle);
+  border-color: var(--hc-border-hl);
   box-shadow: var(--hc-shadow-md);
-  transform: translateY(-1px);
+  transform: translateY(-2px);
 }
 
 /* ─── Toggle Switch — macOS style ───────────────────────── */
@@ -399,7 +437,7 @@ select.hc-input:focus {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52'%3E%3Cpath d='M30 0l26 15v30L30 60 4 45V15z' fill='none' stroke='%234a90d9' stroke-width='0.45' opacity='0.06'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52'%3E%3Cpath d='M30 0l26 15v30L30 60 4 45V15z' fill='none' stroke='%235fb3ea' stroke-width='0.45' opacity='0.06'/%3E%3C/svg%3E");
   background-size: 60px 52px;
   mix-blend-mode: soft-light;
   z-index: 0;
@@ -412,7 +450,7 @@ select.hc-input:focus {
   right: 0;
   top: 0;
   height: 220px;
-  background: radial-gradient(circle at top center, rgba(74,144,217,0.12) 0%, rgba(74,144,217,0.03) 36%, rgba(74,144,217,0) 72%);
+  background: radial-gradient(circle at top center, rgba(95,179,234,0.12) 0%, rgba(95,179,234,0.03) 36%, rgba(95,179,234,0) 72%);
   pointer-events: none;
   z-index: 0;
 }
@@ -645,7 +683,7 @@ select.hc-input:focus {
   justify-content: center;
   font-size: 44px;
   color: var(--hc-text-inverse);
-  box-shadow: 0 8px 24px rgba(74, 144, 217, 0.22);
+  box-shadow: 0 8px 24px rgba(95, 179, 234, 0.22);
 }
 
 .hc-onboarding__title {
@@ -759,7 +797,7 @@ select.hc-input:focus {
   font-size: 36px;
   color: var(--hc-text-inverse);
   /* HIG accent glow: alpha ≤ 0.18，柔和发光 */
-  box-shadow: 0 12px 32px rgba(74, 144, 217, 0.18);
+  box-shadow: 0 12px 32px rgba(95, 179, 234, 0.18);
 }
 
 .hc-about__name {

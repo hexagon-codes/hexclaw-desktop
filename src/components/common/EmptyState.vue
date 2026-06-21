@@ -51,7 +51,7 @@ const emit = defineEmits<{
   align-items: center;
   justify-content: center;
   margin-bottom: 16px;
-  background: linear-gradient(135deg, rgba(74,144,217,0.08), rgba(74,144,217,0.02));
+  background: linear-gradient(135deg, rgba(95, 179, 234, 0.08), rgba(95, 179, 234, 0.02));
   border: 1px solid var(--hc-border);
 }
 
