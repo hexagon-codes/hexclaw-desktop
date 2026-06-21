@@ -34,9 +34,8 @@ let filterAbortController: AbortController | null = null
 // Pin state
 const pinnedIds = ref<Set<string>>(new Set())
 
-// Filter state
+// Filter state（搜索框常驻，无需展开/收起开关）
 const filterQuery = ref('')
-const showFilter = ref(false)
 
 onMounted(() => {
   try {
@@ -59,13 +58,6 @@ function togglePin(sessionId: string) {
   savePins()
 }
 
-function toggleFilter() {
-  showFilter.value = !showFilter.value
-  if (!showFilter.value) {
-    filterQuery.value = ''
-    contentSearchResults.value = []
-  }
-}
 
 const sessionMenuItems = computed<ContextMenuItem[]>(() => {
   const isPinned = ctxSessionId.value ? pinnedIds.value.has(ctxSessionId.value) : false
@@ -241,7 +233,9 @@ async function deleteSession(sessionId: string) {
 }
 
 function startRename(sessionId: string) {
-  const session = chatStore.sessions.find(s => s.id === sessionId)
+  // 分页加载的会话只在 extraSessions 里、不在 chatStore.sessions，需走 mergedSessions 兜底，
+  // 否则「加载更多」得到的旧会话双击/右键重命名时 startRename 直接 return（输入框不弹）。
+  const session = chatStore.sessions.find(s => s.id === sessionId) ?? mergedSessions.value.find(s => s.id === sessionId)
   if (!session) return
   renamingId.value = sessionId
   renameValue.value = session.title || t('chat.newSessionDefault')
@@ -262,7 +256,8 @@ async function commitRename() {
   try {
     await apiUpdateSessionTitle(sid, newTitle)
     if (renameRequestSeq.get(sid) !== requestSeq) return
-    const session = chatStore.sessions.find(s => s.id === sid)
+    // 同 startRename：extraSessions（分页加载）的标题也要本地刷新，否则改名成功但 UI 不变。
+    const session = chatStore.sessions.find(s => s.id === sid) ?? mergedSessions.value.find(s => s.id === sid)
     if (session) session.title = newTitle
   } catch (e) {
     console.error('[SessionList] rename failed:', e)
@@ -400,15 +395,12 @@ onUnmounted(() => {
 
 <template>
   <div class="hc-sessions">
-    <!-- Filter bar -->
-    <div class="hc-sessions__filter-bar">
-      <button class="hc-sessions__filter-toggle" :class="{ 'hc-sessions__filter-toggle--active': showFilter }" @click="toggleFilter" :title="t('common.search')">
-        <Search :size="13" />
-      </button>
+    <!-- 常驻搜索框（对齐原型 .srch：放大镜图标 + 输入框始终可见） -->
+    <div class="hc-sessions__search">
+      <Search :size="14" class="hc-sessions__search-icon" />
       <input
-        v-if="showFilter"
         v-model="filterQuery"
-        class="hc-sessions__filter-input"
+        class="hc-sessions__search-input"
         :placeholder="t('chat.filterSessions')"
       />
     </div>
@@ -556,44 +548,42 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-.hc-sessions__filter-bar {
+/* 常驻搜索框（对齐原型 .srch） */
+.hc-sessions__search {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 6px 4px 10px;
+  gap: 8px;
+  flex-shrink: 0;
+  margin: 6px 4px 12px;
+  padding: 8px 12px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-input, var(--hc-bg-hover));
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.hc-sessions__search:focus-within {
+  border-color: var(--hc-accent);
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+
+.hc-sessions__search-icon {
+  color: var(--hc-text-muted);
   flex-shrink: 0;
 }
 
-.hc-sessions__filter-toggle {
-  padding: 4px;
+.hc-sessions__search-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
   border: none;
   background: transparent;
-  color: var(--hc-text-muted);
-  border-radius: var(--hc-radius-sm);
-  cursor: pointer;
-  display: flex;
-  transition: background 0.15s;
-}
-
-.hc-sessions__filter-toggle:hover,
-.hc-sessions__filter-toggle--active {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-secondary);
-}
-
-.hc-sessions__filter-input {
-  flex: 1;
-  font-size: 12px;
-  padding: 3px 8px;
-  border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-sm);
-  background: var(--hc-bg-input, var(--hc-bg-hover));
   color: var(--hc-text-primary);
   outline: none;
 }
 
-.hc-sessions__filter-input:focus {
-  border-color: var(--hc-accent);
+.hc-sessions__search-input::placeholder {
+  color: var(--hc-text-muted);
 }
 
 .hc-sessions__section {
@@ -738,6 +728,11 @@ onUnmounted(() => {
 }
 
 .hc-sessions__empty {
+  /* 对齐原型：空态文案在会话列表区域内垂直居中（占满剩余空间） */
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 32px 16px;
   text-align: center;
   font-size: 12px;
@@ -745,7 +740,8 @@ onUnmounted(() => {
 }
 
 .hc-sessions__load-more {
-  margin: 6px 6px 10px;
+  /* 对齐原型：「所有会话」入口固定在列表底部 */
+  margin: auto 6px 10px;
   padding: 8px 10px;
   border: 1px solid var(--hc-border);
   border-radius: 12px;

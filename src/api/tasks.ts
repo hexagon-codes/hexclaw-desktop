@@ -146,6 +146,7 @@ export async function createCronJobSSE(
     prompt: input.prompt,
     type: input.type ?? 'cron',
     user_id: DESKTOP_USER_ID,
+    ...(input.deliver && input.deliver.length ? { deliver: input.deliver } : {}),
   })
 
   // BUG-A 超时兜底：组合内部 timeout + 外部 signal 到统一 AbortController。
@@ -279,6 +280,7 @@ export async function createCronJobJSON(input: CronJobInput): Promise<CreateCron
         name: input.name,
         schedule: input.schedule,
         prompt: input.prompt,
+        ...(input.deliver && input.deliver.length ? { deliver: input.deliver } : {}),
       },
     },
     { timeout: CRON_CREATE_TIMEOUT_MS },

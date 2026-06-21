@@ -19,6 +19,10 @@ const toast = vi.hoisted(() => ({
   error: vi.fn(),
 }))
 
+const connApis = vi.hoisted(() => ({
+  getConnections: vi.fn(),
+}))
+
 vi.mock('@/api/tasks', () => ({
   getCronJobs: taskApis.getCronJobs,
   createCronJob: taskApis.createCronJob,
@@ -31,6 +35,11 @@ vi.mock('@/api/tasks', () => ({
 
 vi.mock('@/composables', () => ({
   useToast: () => toast,
+}))
+
+// 投递目标连接库：默认空（仅通用渠道类型可见）。具体用例可 mockResolvedValueOnce 注入连接。
+vi.mock('@/api/im-channels', () => ({
+  getConnections: connApis.getConnections,
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -109,6 +118,7 @@ describe('TasksView', () => {
     taskApis.resumeCronJob.mockResolvedValue({ message: 'resumed' })
     taskApis.triggerCronJob.mockResolvedValue({ message: 'triggered', run_id: 'run-1' })
     taskApis.getCronJobHistory.mockResolvedValue([])
+    connApis.getConnections.mockResolvedValue([])
   })
 
   it('creates a task through the modal and reloads the list', async () => {
@@ -135,6 +145,7 @@ describe('TasksView', () => {
         schedule: '@daily',
         prompt: '生成今晚总结',
         type: 'cron',
+        deliver: [],
       },
       expect.objectContaining({
         onProgress: expect.any(Function),
@@ -143,6 +154,39 @@ describe('TasksView', () => {
     )
     expect(taskApis.getCronJobs).toHaveBeenCalledTimes(2)
     expect(toast.success).toHaveBeenCalled()
+  })
+
+  it('deliver target: selecting a generic channel + a configured connection passes both via deliver (§5 一处存处处引)', async () => {
+    connApis.getConnections.mockResolvedValue([
+      { id: 'pi-feishu-1', provider: 'feishu', name: '研发群机器人', capabilities: ['receive', 'send'], status: 'connected', enabled: true },
+    ])
+    const wrapper = mountTasksView()
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
+    await flushPromises()
+
+    const inputs = wrapper.findAll('input')
+    await inputs[0]!.setValue('日报')
+    await inputs[1]!.setValue('@daily')
+    await wrapper.find('textarea').setValue('生成日报')
+
+    // 选通用渠道 feishu + 连接库实例（按 id 引用）
+    const feishuChip = wrapper.findAll('.deliver-chip').find((c) => c.text().includes('飞书'))
+    expect(feishuChip).toBeDefined()
+    await feishuChip!.trigger('click')
+    const connChip = wrapper.findAll('.deliver-chip').find((c) => c.text().includes('研发群机器人'))
+    expect(connChip).toBeDefined()
+    await connChip!.trigger('click')
+
+    const createBtn = wrapper.findAll('button').find((btn) => btn.text().includes('创建'))
+    await createBtn!.trigger('click')
+    await flushPromises()
+
+    expect(taskApis.createCronJob).toHaveBeenCalledWith(
+      expect.objectContaining({ deliver: ['feishu', 'pi-feishu-1'] }),
+      expect.anything(),
+    )
   })
 
   it('pauses and resumes an active job from the card actions', async () => {

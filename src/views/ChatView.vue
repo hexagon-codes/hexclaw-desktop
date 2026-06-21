@@ -5,8 +5,11 @@ import { useI18n } from 'vue-i18n'
 import {
   ChevronDown,
   ChevronUp,
+  Clock,
   FileCode,
   MessageSquarePlus,
+  Plus,
+  Settings,
   Wrench,
   Zap,
   BookOpen,
@@ -43,7 +46,7 @@ import { inferCapabilitiesFromId } from '@/config/providers'
 import { logger } from '@/utils/logger'
 import VoiceChatComposer from '@/components/chat/VoiceChatComposer.vue'
 import { getImageGenStatus, imageToSrc, type ImageGenResult } from '@/api/imagegen'
-import { getVideoGenStatus, videoToSrc, type VideoTaskStatus } from '@/api/videogen'
+import { getVideoGenStatus, videoToSrc, coverToSrc, type VideoTaskStatus } from '@/api/videogen'
 import { getVoiceChatStatus, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
 import { nanoid } from 'nanoid'
 import type { ChatAttachment, ChatMessage } from '@/types'
@@ -351,8 +354,8 @@ const selectedModelDisplay = computed(() => {
       return `${cfg.model} · ${agentLabel}`
     }
   }
-  if (selectedModel.value === 'auto') return 'Auto'
-  if (!selectedModel.value) return 'Select Model'
+  if (selectedModel.value === 'auto') return t('chat.modelAuto')
+  if (!selectedModel.value) return t('chat.selectModel')
   const found = settingsStore.availableModels.find(
     (m) =>
       m.modelId === selectedModel.value &&
@@ -937,16 +940,20 @@ async function handleImageGenerated(result: ImageGenResult, prompt: string) {
     timestamp: ts,
     metadata: { mode: 'image_gen', model: result.model },
   }
-  const attachments: ChatAttachment[] = result.images.map((img, idx) => {
+  const attachments: ChatAttachment[] = []
+  result.images.forEach((img, idx) => {
     const src = imageToSrc(img)
+    // imageToSrc 三字段全空时返回 ''（Provider 占位项 / 后端落盘失败留下的空壳）。
+    // 跳过空壳，避免渲染 <img src=''> 破图。
+    if (!src) return
     // src 形如 "data:image/png;base64,xxx" 或 "https://..."
     const isBase64 = src.startsWith('data:')
-    return {
+    attachments.push({
       type: 'image',
       name: `generated-${result.model}-${idx + 1}.png`,
       mime: 'image/png',
       data: isBase64 ? src.split(',')[1] || '' : src,
-    }
+    })
   })
   const revisedPrompt = result.images.find(i => i.revised_prompt)?.revised_prompt
   const assistantMsg: ChatMessage = {
@@ -1005,12 +1012,13 @@ async function handleVideoGenerated(status: VideoTaskStatus, prompt: string) {
       data: videoSrc,
     })
   }
+  // 封面优先用后端持久化路径（永不过期）；cover_url 是 Provider 临时 URL（24h 过期），
+  // 不内联进消息正文文本（否则失效后正文残留死链文本）。封面只放 metadata 供 <video poster> 消费。
+  const coverSrc = coverToSrc(status)
   const assistantMsg: ChatMessage = {
     id: nanoid(12),
     role: 'assistant',
-    content: status.cover_url
-      ? `视频已生成（封面：${status.cover_url}）`
-      : '视频已生成',
+    content: '视频已生成',
     timestamp: new Date().toISOString(),
     metadata: {
       mode: 'video_gen',
@@ -1019,6 +1027,8 @@ async function handleVideoGenerated(status: VideoTaskStatus, prompt: string) {
       usage_ms: status.usage_ms,
       video_url: status.video_url,
       cover_url: status.cover_url,
+      cover_file_path: status.cover_file_path,
+      poster: coverSrc || undefined,
       attachments,
     },
   }
@@ -1113,6 +1123,13 @@ function newSession() {
   }
   userOverrodeModel.value = false
   chatStore.newSession()
+  // 若当前在「产物 / 历史」tab，新建会话后切回「对话」tab（否则会停在原 tab 看不到新会话）
+  chatViewTab.value = 'chat'
+}
+
+/** 会话框 ✨「PROMPT 模板 → 新建模板」：跳到 Prompt 库 并自动打开新建表单（带 new=1 query）。 */
+function handleCreateTemplate() {
+  router.push({ path: '/integration/prompts', query: { new: '1' } })
 }
 
 function openHistorySession(sessionId: string) {
@@ -1290,10 +1307,11 @@ function startSidebarResize(event: MouseEvent) {
   <div class="hc-chat">
     <!-- Session sidebar -->
     <div v-show="showSessions" class="hc-chat__sidebar" :class="{ 'hc-chat__sidebar--resizing': sidebarResizing }" :style="{ width: `${sidebarWidth}px` }">
+      <!-- 品牌化「新建会话」主操作（对齐原型 .newconv，去掉冗余「会话」标题头） -->
       <div class="hc-chat__sidebar-header">
-        <span class="hc-chat__sidebar-title">{{ t('chat.sessions') }}</span>
-        <button class="hc-chat__new-btn" :title="t('chat.newSession')" @click="newSession">
-          <MessageSquarePlus :size="16" />
+        <button class="hc-chat__newconv" :title="t('chat.newSession')" @click="newSession">
+          <Plus :size="16" />
+          {{ t('chat.newSession') }}
         </button>
       </div>
       <SessionList />
@@ -1380,7 +1398,13 @@ function startSidebarResize(event: MouseEvent) {
               :icon="MessageSquarePlus"
               :title="t('chat.startChat')"
               :description="t('chat.startChatDesc')"
-            />
+            >
+              <!-- 还没配置好？运行首次配置向导（对齐原型 .btnlink） -->
+              <button class="hc-chat__setup-link" @click="router.push('/welcome')">
+                <Settings :size="13" />
+                {{ t('chat.runSetupWizard') }}
+              </button>
+            </EmptyState>
           </div>
 
           <div v-else class="hc-chat__thread">
@@ -1887,6 +1911,7 @@ function startSidebarResize(event: MouseEvent) {
               @generated:image="handleImageGenerated"
               @generated:video="handleVideoGenerated"
               @generation:error="handleImageGenError"
+              @create-template="handleCreateTemplate"
             >
               <!-- 模型选择器 + 深度研究（ChatGPT 风格，在输入框内底部工具栏） -->
               <template #tools>
@@ -1952,7 +1977,14 @@ function startSidebarResize(event: MouseEvent) {
       <!-- ═══ Artifacts Tab ═══ -->
       <template v-else-if="chatViewTab === 'artifacts'">
         <div class="hc-chat__tab-content">
-          <div class="hc-chat__artifacts-view">
+          <div v-if="chatStore.artifacts.length === 0" class="hc-chat__tab-empty">
+            <EmptyState
+              :icon="FileCode"
+              :title="t('chat.noArtifacts', '暂无产物')"
+              :description="t('chat.noArtifactsHint', '对话生成的文件、图片、代码会出现在这里')"
+            />
+          </div>
+          <div v-else class="hc-chat__artifacts-view">
             <div class="hc-chat__artifacts-list">
               <div class="hc-chat__artifacts-heading">
                 {{ t('chat.currentArtifacts', '当前产物') }}
@@ -1974,9 +2006,6 @@ function startSidebarResize(event: MouseEvent) {
                   </div>
                 </div>
               </template>
-              <div v-else class="hc-chat__artifacts-empty">
-                {{ t('chat.noArtifacts', '暂无产物') }}
-              </div>
             </div>
             <div v-if="chatStore.selectedArtifactId" class="hc-chat__artifact-detail">
               <div class="hc-chat__artifact-detail-bar">
@@ -2002,7 +2031,14 @@ function startSidebarResize(event: MouseEvent) {
       <!-- ═══ History Tab ═══ -->
       <template v-else-if="chatViewTab === 'history'">
         <div class="hc-chat__tab-content">
-          <div class="hc-chat__history-view">
+          <div v-if="chatStore.sessions.length === 0" class="hc-chat__tab-empty">
+            <EmptyState
+              :icon="Clock"
+              :title="t('chat.historyEmptyTitle', '暂无历史')"
+              :description="t('chat.historyEmptyHint', '历史对话会在这里归档')"
+            />
+          </div>
+          <div v-else class="hc-chat__history-view">
             <div class="hc-chat__history-heading">{{ t('chat.history', 'History') }}</div>
             <template v-if="chatStore.sessions.length > 0">
               <div
@@ -2020,9 +2056,6 @@ function startSidebarResize(event: MouseEvent) {
                 <div class="hc-chat__history-row-meta">{{ formatTime(session.updated_at) }}</div>
               </div>
             </template>
-            <div v-else class="hc-chat__history-empty">
-              {{ t('chat.noSessions', '暂无历史会话') }}
-            </div>
           </div>
         </div>
       </template>
@@ -2098,31 +2131,57 @@ function startSidebarResize(event: MouseEvent) {
 }
 
 .hc-chat__sidebar-header {
-  padding: 10px 12px 6px;
+  padding: 14px 12px 2px;
+}
+
+/* 品牌化「新建会话」主操作（对齐原型 .newconv） */
+.hc-chat__newconv {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-}
-
-.hc-chat__sidebar-title {
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 0.5px solid transparent;
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  font: inherit;
   font-size: 13px;
   font-weight: 600;
-  color: var(--hc-text-secondary);
-}
-
-.hc-chat__new-btn {
-  padding: 5px;
-  border-radius: var(--hc-radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--hc-text-secondary);
+  letter-spacing: -0.01em;
   cursor: pointer;
-  display: flex;
-  transition: background 0.15s;
+  transition: background 0.15s var(--hc-ease-out, ease-out),
+              border-color 0.15s var(--hc-ease-out, ease-out),
+              transform 0.12s var(--hc-ease-out, ease-out);
 }
 
-.hc-chat__new-btn:hover {
-  background: var(--hc-bg-hover);
+.hc-chat__newconv:hover {
+  border-color: var(--hc-border-hl);
+  transform: translateY(-1px);
+}
+
+.hc-chat__newconv:active {
+  transform: scale(0.98);
+}
+
+/* 空态「运行首次配置向导」链接（对齐原型 .btnlink） */
+.hc-chat__setup-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  color: var(--hc-accent);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 2px 0;
+  margin-top: 2px;
+}
+
+.hc-chat__setup-link:hover {
+  text-decoration: underline;
 }
 
 /* ─── Main ───── */
@@ -2727,70 +2786,73 @@ function startSidebarResize(event: MouseEvent) {
 /* ─── Model Selector ───── */
 /* 胶囊按钮（Apple + DeepSeek 融合风格） */
 /* Apple HIG 胶囊按钮: 0.5px 边框, 10px 圆角, 禁止 transition: all */
+/* 深度思考：Claude 式轻量 ghost（无常驻底，hover 浮起；开启 → 主色药丸） */
 .hc-chat__research-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 7px 16px;
-  border: 0.5px solid rgba(0, 0, 0, 0.1);
-  background: var(--hc-bg-card, #F5F5F7);
-  color: var(--hc-text-secondary, #6E6E73);
-  font-size: 14px;
+  gap: 6px;
+  padding: 0 9px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font-size: 13px;
   font-weight: 500;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   cursor: pointer;
-  border-radius: 10px;
-  transition: border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-              color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-              background-color 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  border-radius: 9px;
+  transition: color 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 0.15s cubic-bezier(0.16, 1, 0.3, 1),
+              transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
   white-space: nowrap;
 }
 
 .hc-chat__research-btn:hover {
-  border-color: rgba(0, 122, 255, 0.3);
-  color: var(--hc-accent, #007AFF);
-  background: rgba(0, 122, 255, 0.06);
+  color: var(--hc-text-primary);
+  background: var(--hc-bg-hover);
 }
 
-.hc-chat__research-btn:active { transform: scale(0.97); }
+.hc-chat__research-btn:active { transform: scale(0.96); }
 
 .hc-chat__research-btn--active {
-  border-color: rgba(0, 122, 255, 0.3);
-  background: rgba(0, 122, 255, 0.08);
-  color: var(--hc-accent, #007AFF);
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  font-weight: 600;
 }
 
-/* 模型选择胶囊 */
+/* 模型选择器：Claude 式轻量 ghost（纯文字 + 浅 caret，无常驻边框） */
 .hc-model-selector--inline .hc-model-selector__btn {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 7px 16px;
-  border: 0.5px solid rgba(0, 0, 0, 0.1);
-  background: var(--hc-bg-card, #F5F5F7);
-  border-radius: 10px;
-  font-size: 14px;
+  gap: 5px;
+  padding: 0 9px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  border-radius: 9px;
+  font-size: 13px;
   font-weight: 500;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
-  color: var(--hc-text-secondary, #6E6E73);
+  color: var(--hc-text-primary);
   cursor: pointer;
-  transition: border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-              color 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: color 0.15s, background-color 0.15s,
+              transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
   white-space: nowrap;
 }
 
 .hc-model-selector--inline .hc-model-selector__btn:hover {
-  border-color: rgba(0, 122, 255, 0.3);
-  color: var(--hc-accent, #007AFF);
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
 }
 
-.hc-model-selector--inline .hc-model-selector__btn:active { transform: scale(0.97); }
+.hc-model-selector--inline .hc-model-selector__btn:active { transform: scale(0.96); }
 
 .hc-model-selector--inline .hc-model-selector__dropdown {
   bottom: 100%;
   top: auto;
   margin-bottom: 8px;
-  left: 0;
+  right: 0;
+  left: auto;
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.72);
   backdrop-filter: blur(20px) saturate(180%);
@@ -3637,12 +3699,15 @@ function startSidebarResize(event: MouseEvent) {
   margin-top: 2px;
 }
 
-.hc-chat__artifacts-empty,
-.hc-chat__history-empty {
-  padding: 24px;
+/* 产物 / 历史 tab 空态：整面板居中（复用 EmptyState，与「对话」空态完全一致） */
+.hc-chat__tab-empty {
+  height: 100%;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  color: var(--hc-text-muted);
-  font-size: 13px;
 }
 
 .hc-chat__artifact-detail {

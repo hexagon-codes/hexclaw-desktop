@@ -5,10 +5,11 @@
  * 流程：按住 🎤 录音 → 松开 → 上传 → 模型返回音频 + 文字 → 自动播放。
  * 也支持文字输入（用户没法说话时兜底）。
  */
-import { ref, onBeforeUnmount } from 'vue'
+import { ref, computed, onBeforeUnmount } from 'vue'
 import { Mic, Loader2, Send, MessageCircle } from 'lucide-vue-next'
 import { voiceChat, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
 import { logger } from '@/utils/logger'
+import HcSelect from '@/components/common/HcSelect.vue'
 
 const props = defineProps<{
   modelId: string
@@ -24,11 +25,30 @@ const recording = ref(false)
 const sending = ref(false)
 const text = ref('')
 const lastError = ref('')
-const voice = ref<'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer'>('alloy')
+type Voice = 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer'
+const voice = ref<Voice>('alloy')
+
+// HcSelect 选项投影（value 一律 string）
+const voiceOptions: { value: string; label: string }[] = [
+  { value: 'alloy', label: 'Alloy（中性）' },
+  { value: 'echo', label: 'Echo（男）' },
+  { value: 'fable', label: 'Fable（英式）' },
+  { value: 'onyx', label: 'Onyx（深沉）' },
+  { value: 'nova', label: 'Nova（女）' },
+  { value: 'shimmer', label: 'Shimmer（轻柔）' },
+]
+// HcSelect v-model 包装：string 写回时收窄为 Voice
+const voiceModel = computed<string>({
+  get: () => voice.value,
+  set: (v) => {
+    voice.value = v as Voice
+  },
+})
 
 let mediaRecorder: MediaRecorder | null = null
 let recordedChunks: Blob[] = []
 let activeStream: MediaStream | null = null
+let canceling = false
 
 async function startRecording() {
   if (recording.value || sending.value) return
@@ -55,6 +75,11 @@ async function startRecording() {
       const blob = new Blob(recordedChunks, { type: mediaRecorder?.mimeType || 'audio/webm' })
       recordedChunks = []
       mediaRecorder = null
+      // 取消语义（touchcancel）：丢弃本段录音，不发送
+      if (canceling) {
+        canceling = false
+        return
+      }
       await sendAudio(blob)
     }
     // timeslice=1000ms 每秒切一次数据块（长录音不积压单块）
@@ -69,6 +94,14 @@ async function startRecording() {
 function stopRecording() {
   if (!recording.value || !mediaRecorder) return
   recording.value = false
+  try { mediaRecorder.stop() } catch { /* ignore */ }
+}
+
+/** 取消录音：停止并丢弃，不上送（touchcancel / 中断场景） */
+function cancelRecording() {
+  if (!recording.value || !mediaRecorder) return
+  recording.value = false
+  canceling = true
   try { mediaRecorder.stop() } catch { /* ignore */ }
 }
 
@@ -180,14 +213,11 @@ onBeforeUnmount(() => {
     <div class="hc-voicechat__bar">
       <label class="hc-voicechat__opt">
         <span>音色</span>
-        <select v-model="voice" :disabled="sending || recording">
-          <option value="alloy">Alloy（中性）</option>
-          <option value="echo">Echo（男）</option>
-          <option value="fable">Fable（英式）</option>
-          <option value="onyx">Onyx（深沉）</option>
-          <option value="nova">Nova（女）</option>
-          <option value="shimmer">Shimmer（轻柔）</option>
-        </select>
+        <HcSelect
+          v-model="voiceModel"
+          :options="voiceOptions"
+          :disabled="sending || recording"
+        />
       </label>
 
       <button
@@ -209,10 +239,9 @@ onBeforeUnmount(() => {
         :disabled="sending"
         @mousedown="startRecording"
         @mouseup="stopRecording"
-        @mouseleave="recording && stopRecording()"
         @touchstart.prevent="startRecording"
         @touchend.prevent="stopRecording"
-        @touchcancel.prevent="stopRecording"
+        @touchcancel.prevent="cancelRecording"
       >
         <Loader2 v-if="sending" :size="14" class="hc-voicechat__spin" />
         <Mic v-else :size="14" />
@@ -282,24 +311,16 @@ onBeforeUnmount(() => {
   color: var(--hc-text-secondary);
 }
 
-.hc-voicechat__opt select {
-  appearance: none;
-  -webkit-appearance: none;
-  padding: 7px 28px 7px 12px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 8px;
-  background: var(--hc-bg-input);
-  color: var(--hc-text-primary);
-  font-size: 13px;
-  outline: none;
-  cursor: pointer;
-  transition: border-color 0.15s ease;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238b95a5' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 9px center;
+/* 音色 HcSelect：约束宽度（label 是 inline-flex，HcSelect 默认 width:100%），外观沿用 hc-input */
+.hc-voicechat__opt :deep(.hc-select) {
+  width: auto;
+  min-width: 150px;
 }
-.hc-voicechat__opt select:hover { border-color: var(--hc-text-muted); }
-.hc-voicechat__opt select:focus { border-color: var(--hc-accent); }
+.hc-voicechat__opt :deep(.hc-select__trigger) {
+  padding-top: 7px;
+  padding-bottom: 7px;
+  font-size: 13px;
+}
 
 .hc-voicechat__btn,
 .hc-voicechat__mic {

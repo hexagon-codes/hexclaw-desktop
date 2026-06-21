@@ -324,9 +324,7 @@ describe('SessionList', () => {
     const { wrapper } = mountSessionList()
     await flushPromises()
 
-    await wrapper.get('.hc-sessions__filter-toggle').trigger('click')
-    await flushPromises()
-    await wrapper.get('.hc-sessions__filter-input').setValue('命中')
+    await wrapper.get('.hc-sessions__search-input').setValue('命中')
     await new Promise((resolve) => setTimeout(resolve, 260))
     await flushPromises()
 
@@ -335,25 +333,23 @@ describe('SessionList', () => {
     expect(wrapper.text()).toContain('这是命中的消息内容片段')
   })
 
-  it('clears the hidden filter query when closing the filter bar', async () => {
+  it('restores the full session list when the always-on search input is cleared', async () => {
     const { wrapper } = mountSessionList()
     await flushPromises()
 
-    const toggle = wrapper.get('.hc-sessions__filter-toggle')
-    await toggle.trigger('click')
-    await flushPromises()
-
-    const input = wrapper.get('.hc-sessions__filter-input')
+    // 搜索框常驻：直接输入即可过滤，无需先点开
+    const input = wrapper.get('.hc-sessions__search-input')
     await input.setValue('不存在的会话')
     await new Promise((resolve) => setTimeout(resolve, 260))
     await flushPromises()
 
     expect(wrapper.text()).toContain('无匹配会话')
 
-    await toggle.trigger('click')
+    // 清空查询恢复完整列表
+    await input.setValue('')
     await flushPromises()
 
-    expect(wrapper.find('.hc-sessions__filter-input').exists()).toBe(false)
+    expect(wrapper.find('.hc-sessions__search-input').exists()).toBe(true)
     expect(wrapper.text()).toContain('第一个会话')
     expect(wrapper.text()).toContain('第二个会话')
   })

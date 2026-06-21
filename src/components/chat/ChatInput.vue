@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ArrowUp, Square, Paperclip, Mic } from 'lucide-vue-next'
+import { ArrowUp, Square, Paperclip, Mic, Sparkles, Puzzle, Plus, Upload } from 'lucide-vue-next'
 import MentionPopup from './MentionPopup.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import { useVoice } from '@/composables/useVoice'
@@ -80,9 +80,14 @@ const showMention = ref(false)
 const mentionQuery = ref('')
 const mentionPosition = ref({ bottom: 0, left: 0 })
 const showTemplate = ref(false)
+// 统一命令面板范围：all=斜杠 / 召回(Skill+Prompt) / skills=🔧按钮 / prompts=✨按钮
+const paletteScope = ref<'all' | 'skills' | 'prompts'>('all')
 const templateQuery = ref('')
 const templatePosition = ref({ bottom: 0, left: 0 })
 const submitting = ref(false)
+// 拖拽上传：用计数器消除拖过子元素时的 dragleave 闪烁；>0 即高亮。
+const dragDepth = ref(0)
+const isDragging = computed(() => dragDepth.value > 0)
 
 // ── ComposerMode：完全由模型 capability 决定（无独立 mode 按钮，对齐其他通用 Agent）。
 // 选了图像/视频模型 → 自动切到对应模式；否则 chat。
@@ -117,8 +122,8 @@ const placeholder = computed(() => {
   if (hasImageAttachment.value) {
     return t('chat.composer.placeholder.vision', '已附图：可问解题、批改、识字…')
   }
-  if (props.recipientName) return t('chat.sendTo', { name: props.recipientName })
-  return t('chat.inputPlaceholder')
+  if (props.recipientName) return t('chat.sendTo', { name: props.recipientName }) + t('chat.composerHint')
+  return t('chat.inputPlaceholder') + t('chat.composerHint')
 })
 
 const fileAccept = computed(() => {
@@ -253,6 +258,7 @@ function detectPopups() {
   const slashMatch = beforeCursor.match(/(?:^|\n)\/([^\n/]{0,20})$/)
   if (slashMatch) {
     templateQuery.value = slashMatch[1] ?? ''
+    paletteScope.value = 'all' // 斜杠召回：Skill + Prompt 一起列
     showTemplate.value = true; showMention.value = false
     const rect = el.getBoundingClientRect()
     templatePosition.value = { bottom: window.innerHeight - rect.top + 8, left: Math.min(rect.left + 14, window.innerWidth - 356) }
@@ -276,16 +282,56 @@ function detectPopups() {
   showMention.value = false
 }
 
-function handleTemplateSelect(content: string) {
+// 若光标前是斜杠召回 token（行首 /xxx）则返回其范围，供选中后剥离；否则 null（按钮召回=光标处插入）。
+function slashStripRange(): { start: number; end: number } | null {
+  const el = textareaRef.value
+  if (!el) return null
+  const cursorPos = el.selectionStart
+  const before = el.value.slice(0, cursorPos)
+  const m = before.match(/(?:^|\n)(\/[^\n/]{0,20})$/)
+  if (!m) return null
+  return { start: cursorPos - m[1]!.length, end: cursorPos }
+}
+
+// 统一命令面板选中：skill → 插 @name；prompt → 插正文（含 $ARGUMENTS snippet 填参）。
+// 斜杠召回会剥掉 /query；按钮召回在光标处插入。
+function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string; name?: string }) {
   const el = textareaRef.value
   if (!el) return
   const cursorPos = el.selectionStart
   const text = el.value
-  const beforeCursor = text.slice(0, cursorPos)
-  const slashIdx = beforeCursor.lastIndexOf('/')
-  inputText.value = slashIdx >= 0 ? text.slice(0, slashIdx) + content + text.slice(cursorPos) : content
+  const strip = slashStripRange()
+  const start = strip ? strip.start : cursorPos
+  const end = strip ? strip.end : cursorPos
+  const before = text.slice(0, start)
   showTemplate.value = false
-  nextTick(() => { handleInput(); focus() })
+
+  if (item.kind === 'skill') {
+    const name = item.name ?? ''
+    if (!name) return
+    const needSpace = before.length > 0 && !/\s/.test(before[before.length - 1] ?? '')
+    const insert = (needSpace ? ' ' : '') + `@${name} `
+    inputText.value = before + insert + text.slice(end)
+    nextTick(() => {
+      const p = before.length + insert.length
+      el.setSelectionRange(p, p); handleInput(); focus()
+    })
+    return
+  }
+
+  // prompt
+  const content = item.content ?? ''
+  inputText.value = before + content + text.slice(end)
+  const ARG = '$ARGUMENTS'
+  const argIdx = content.indexOf(ARG)
+  nextTick(() => {
+    handleInput(); focus()
+    // command 闭环：选中第一个 $ARGUMENTS 占位，用户直接键入即替换填参（避免字面量被发给模型）。
+    if (argIdx >= 0) {
+      const s = before.length + argIdx
+      el.setSelectionRange(s, s + ARG.length)
+    }
+  })
 }
 
 function handleMentionSelect(item: { type: string; id: string; name: string }) {
@@ -326,6 +372,30 @@ function handlePaste(e: ClipboardEvent) {
   }
 }
 
+// 拖拽上传：与 handlePaste 同源，把拖入的文件交给 addFiles（image 会经后端
+// BuildMultimodalUserMessage 路由 vision 模型；后端零改动）。健壮化：只认含 Files 的拖拽、
+// 生成模式/禁用态不接收、用 dragDepth 计数避免拖过子元素闪烁。
+function dragHasFiles(e: DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files')
+}
+function canAcceptFiles(): boolean {
+  return !props.disabled && !submitting.value && !isGenMode.value
+}
+function handleDragEnter(e: DragEvent) {
+  if (!canAcceptFiles() || !dragHasFiles(e)) return
+  dragDepth.value++
+}
+function handleDragLeave() {
+  if (dragDepth.value > 0) dragDepth.value--
+}
+function handleDrop(e: DragEvent) {
+  dragDepth.value = 0
+  if (!canAcceptFiles()) return
+  const files = e.dataTransfer?.files
+  if (!files || files.length === 0) return
+  addFiles(Array.from(files))
+}
+
 function addFiles(files: File[]) {
   for (const file of files) {
     const isImage = file.type.startsWith('image/')
@@ -345,6 +415,21 @@ function formatFileSize(bytes: number): string {
   return (bytes / (1024 * 1024)).toFixed(1) + 'MB'
 }
 
+// 统一命令面板入口：与输入「/」等效，更可发现。scope 决定列 Skill / Prompt / 全部。
+function openPalette(scope: 'all' | 'skills' | 'prompts') {
+  const el = textareaRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  templateQuery.value = ''
+  paletteScope.value = scope
+  showMention.value = false
+  showTemplate.value = true
+  templatePosition.value = { bottom: window.innerHeight - rect.top + 8, left: Math.min(rect.left + 14, window.innerWidth - 356) }
+  el.focus()
+}
+function openPromptPicker() { openPalette('prompts') } // ✨ 按钮
+function openSkillPicker() { openPalette('skills') }   // 🔧 按钮
+
 function focus() { textareaRef.value?.focus() }
 function setInput(text: string) { inputText.value = text; nextTick(() => { handleInput(); focus() }) }
 function triggerFileUpload() { handleFileClick() }
@@ -354,7 +439,20 @@ defineExpose({ focus, setInput, triggerFileUpload })
 
 <template>
   <div class="hc-composer">
-    <div class="hc-composer__box">
+    <div
+      class="hc-composer__box"
+      :class="{ 'hc-composer__box--dragging': isDragging }"
+      @dragenter.prevent="handleDragEnter"
+      @dragover.prevent
+      @dragleave.prevent="handleDragLeave"
+      @drop.prevent="handleDrop"
+    >
+      <!-- 拖放文件遮罩 -->
+      <div v-if="isDragging" class="hc-composer__dropzone">
+        <Upload :size="22" />
+        <span>{{ t('chat.dropToUpload', '松开以上传文件') }}</span>
+      </div>
+
       <!-- 附件预览 -->
       <div v-if="attachedFiles.length > 0" class="hc-composer__files">
         <div v-for="(item, idx) in attachedFiles" :key="idx" class="hc-composer__file">
@@ -383,14 +481,31 @@ defineExpose({ focus, setInput, triggerFileUpload })
       />
 
       <div class="hc-composer__bar">
+        <!-- 左：输入动作（+ 添加 · 🧩 skill · ✨ prompt · 🎤 语音听写） -->
         <div class="hc-composer__tools">
           <button
             class="hc-composer__tool"
-            :title="t('chat.addFile', '添加文件')"
+            :title="t('chat.addFile', '添加 · 上传文件')"
             :disabled="disabled || submitting || isGenMode"
             @click="handleFileClick"
           >
-            <Paperclip :size="18" />
+            <Plus :size="20" />
+          </button>
+          <button
+            class="hc-composer__tool"
+            :title="t('chat.skillLibrary', '🧩 调用 skill（或输入 /）')"
+            :disabled="disabled || submitting || !(skills && skills.length)"
+            @click="openSkillPicker"
+          >
+            <Puzzle :size="18" />
+          </button>
+          <button
+            class="hc-composer__tool"
+            :title="t('chat.promptLibrary', '✨ prompt / 命令（或输入 /）')"
+            :disabled="disabled || submitting"
+            @click="openPromptPicker"
+          >
+            <Sparkles :size="18" />
           </button>
           <button
             v-if="voiceSupported"
@@ -402,9 +517,10 @@ defineExpose({ focus, setInput, triggerFileUpload })
           >
             <Mic :size="18" />
           </button>
-          <slot name="tools" />
         </div>
+        <!-- 右：模型 · 模式（slot）· 发送 -->
         <div class="hc-composer__actions">
+          <slot name="tools" />
           <button
             v-if="streaming"
             class="hc-composer__send hc-composer__send--stop"
@@ -421,21 +537,22 @@ defineExpose({ focus, setInput, triggerFileUpload })
             :title="t('chat.sendTitle')"
             @click="handleSend"
           >
-            <ArrowUp :size="16" stroke-width="2.5" />
+            <ArrowUp :size="17" stroke-width="2.5" />
           </button>
         </div>
       </div>
     </div>
 
     <input ref="fileInputRef" type="file" multiple class="hidden" :accept="fileAccept" @change="handleFileChange" />
-    <MentionPopup ref="mentionRef" :visible="showMention" :query="mentionQuery" :agents="agents || []" :skills="skills || []" :position="mentionPosition" @select="handleMentionSelect" @close="showMention = false" />
-    <TemplatePopup ref="templateRef" :visible="showTemplate" :query="templateQuery" :position="templatePosition" @select="handleTemplateSelect" @close="showTemplate = false" @create="emit('createTemplate')" />
+    <MentionPopup ref="mentionRef" :visible="showMention" :query="mentionQuery" :agents="agents || []" :skills="[]" :position="mentionPosition" @select="handleMentionSelect" @close="showMention = false" />
+    <TemplatePopup ref="templateRef" :visible="showTemplate" :query="templateQuery" :position="templatePosition" :skills="skills || []" :scope="paletteScope" @select="handleTemplateSelect" @close="showTemplate = false" @create="emit('createTemplate')" />
   </div>
 </template>
 
 <style scoped>
 /* ─── Apple HIG 规范变量 ───── */
 .hc-composer__box {
+  position: relative;
   display: flex;
   flex-direction: column;
   background: var(--hc-bg-input);
@@ -448,9 +565,35 @@ defineExpose({ focus, setInput, triggerFileUpload })
 }
 
 .hc-composer__box:focus-within {
-  border-color: var(--hc-accent, #007AFF);
-  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12),
+  border-color: var(--hc-accent);
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle),
               0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+/* 拖拽文件高亮 */
+.hc-composer__box--dragging {
+  border-color: var(--hc-accent);
+  border-style: dashed;
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+
+/* 拖放文件遮罩：覆盖整个 composer，提示「松开以上传」 */
+.hc-composer__dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--hc-accent, #007AFF) 10%, var(--hc-bg-input));
+  color: var(--hc-accent, #007AFF);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
 }
 
 /* Textarea */
@@ -567,25 +710,30 @@ defineExpose({ focus, setInput, triggerFileUpload })
   flex-shrink: 0;
 }
 
-/* 工具按钮 28x28 (macOS toolbar icon) */
+/* 工具按钮 32x32（输入动作：+ / skill / prompt / 语音） */
 .hc-composer__tool {
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   border: none;
   background: transparent;
-  color: var(--hc-text-secondary, #6E6E73);
+  color: var(--hc-text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.15s, color 0.15s;
+  transition: background-color 0.15s, color 0.15s,
+              transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 .hc-composer__tool:hover {
-  color: var(--hc-text-primary, #1D1D1F);
-  background: rgba(0, 0, 0, 0.05);
+  color: var(--hc-accent);
+  background: var(--hc-bg-hover);
 }
+
+.hc-composer__tool:active { transform: scale(0.9); }
+.hc-composer__tool:disabled { opacity: 0.4; cursor: default; }
+.hc-composer__tool:disabled:hover { color: var(--hc-text-secondary); background: transparent; }
 
 /* Thinking 开启 — 紫色高亮 */
 .hc-composer__tool--thinking {
@@ -604,38 +752,42 @@ defineExpose({ focus, setInput, triggerFileUpload })
   50% { opacity: 0.4; }
 }
 
-/* 发送按钮 */
+/* 发送按钮：克制描边圆（空态清晰可见，非幽灵）；有草稿 → 主色渐变焦点 */
 .hc-composer__send {
-  width: 32px;
-  height: 32px;
+  width: 33px;
+  height: 33px;
   border-radius: 50%;
-  border: none;
-  background: var(--hc-bg-active, #EBEBED);
-  color: var(--hc-text-secondary, #6E6E73);
+  border: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-              color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+  transition: background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+              color 0.2s, border-color 0.2s,
+              box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1),
               transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.hc-composer__send:disabled { cursor: default; opacity: 0.3; }
+.hc-composer__send:disabled { cursor: default; }
+.hc-composer__send:not(:disabled):hover { color: var(--hc-text-primary); border-color: var(--hc-border-hl); }
 
 .hc-composer__send--active {
-  background: var(--hc-accent, #007AFF);
+  background: linear-gradient(180deg, var(--hc-accent) 0%, var(--hc-accent-hover) 100%);
+  border-color: transparent;
   color: var(--hc-text-inverse);
-  box-shadow: 0 2px 8px rgba(0, 122, 255, 0.25);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--hc-accent) 34%, transparent);
 }
 
 .hc-composer__send--active:hover {
   transform: scale(1.06);
+  box-shadow: 0 8px 22px color-mix(in srgb, var(--hc-accent) 40%, transparent);
 }
 
 .hc-composer__send--active:active {
-  transform: scale(0.94);
+  transform: scale(0.92);
 }
 
 .hc-composer__send--stop {

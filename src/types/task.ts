@@ -36,6 +36,13 @@ export interface CronJob {
   source_prompt: string
   /** v2: 编译后的可执行规约；null 表示旧任务被清理（理论上不应出现） */
   spec: JobSpec | null
+
+  /**
+   * 投递目标列表（后端 Job.Deliver，meta JSON 持久化）。
+   * 每项是 "chat"（桌面 chat 流）或一个连接引用——按 Manager.Send 解析顺序
+   * 匹配 IM 实例 id → name → provider(type)。空/缺省时后端回退 ["chat"]。
+   */
+  deliver?: string[]
 }
 
 /** 创建任务请求 */
@@ -44,4 +51,9 @@ export interface CronJobInput {
   schedule: string
   prompt: string
   type?: 'cron' | 'once'
+  /**
+   * 显式投递目标（通用渠道类型 chat/push/feishu/discord/wechat，或已配置连接实例 id/name）。
+   * 留空 → 后端按 prompt 由 LLM 推导（默认 ["chat"]）；非空 → 直接覆盖（§5 一处存处处引）。
+   */
+  deliver?: string[]
 }

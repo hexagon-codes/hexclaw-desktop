@@ -8,6 +8,7 @@ import {
   getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory,
   type CronJob, type CronJobInput, type CronJobRun, type CronCompileProgress, type CronCompileStage,
 } from '@/api/tasks'
+import { getConnections, type ConnectionSummary } from '@/api/im-channels'
 import type { JobSpec } from '@/types'
 import { useToast } from '@/composables'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -40,6 +41,35 @@ const schedulePresets = computed(() => [
 ])
 
 const showPresets = ref(false)
+
+// ── 投递目标（§5 一处存处处引）─────────────────────────────────
+// 通用渠道类型（始终可选）+ 已配置连接实例（从连接库下拉，按稳定 id 引用）。
+// 留空 = 后端按 prompt 由 LLM 推导（默认 chat）；选了即覆盖。
+const GENERIC_DELIVER_CHANNELS = ['chat', 'push', 'feishu', 'discord', 'wechat'] as const
+const connections = ref<ConnectionSummary[]>([])
+
+/** 可投递的已配置连接（启用 + 具备发送能力；email/IM 均可作投递目标）。 */
+const deliverableConnections = computed(() =>
+  connections.value.filter((c) => c.enabled !== false),
+)
+
+function isDeliverSelected(target: string): boolean {
+  return (form.value.deliver ?? []).includes(target)
+}
+
+function toggleDeliver(target: string) {
+  const list = form.value.deliver ? [...form.value.deliver] : []
+  const idx = list.indexOf(target)
+  if (idx >= 0) list.splice(idx, 1)
+  else list.push(target)
+  form.value.deliver = list
+}
+
+async function loadConnections() {
+  // 优雅降级：引擎未连接 / 端点未上线 → 空列表，仅显示通用渠道类型。
+  connections.value = await getConnections()
+}
+
 const triggeringJobs = ref<Set<string>>(new Set())
 const pausingJobs = ref<Set<string>>(new Set())
 const deletingJobs = ref<Set<string>>(new Set())
@@ -128,7 +158,8 @@ onMounted(() => document.addEventListener('click', collapseOnOutsideClick))
 onUnmounted(() => document.removeEventListener('click', collapseOnOutsideClick))
 
 function openCreateForm() {
-  form.value = { name: '', schedule: '', prompt: '', type: 'cron' }
+  form.value = { name: '', schedule: '', prompt: '', type: 'cron', deliver: [] }
+  loadConnections() // 打开即拉取连接库（已缓存则瞬时返回；失败优雅降级）
   showForm.value = true
   showPresets.value = false
 }
@@ -768,6 +799,40 @@ defineExpose({ openCreateForm, loadJobs })
                     {{ t('tasks.once') }}
                   </button>
                 </div>
+              </div>
+
+              <!-- 投递目标（§5 一处存处处引）：通用渠道类型 + 从连接库选已配置实例 -->
+              <div class="hc-field">
+                <label class="hc-field__label">{{ t('tasks.deliverTo', '通知到') }}</label>
+                <div class="deliver-chips">
+                  <button
+                    v-for="ch in GENERIC_DELIVER_CHANNELS"
+                    :key="ch"
+                    type="button"
+                    class="deliver-chip"
+                    :class="{ 'deliver-chip--on': isDeliverSelected(ch) }"
+                    @click="toggleDeliver(ch)"
+                  >
+                    {{ t(`tasks.deliverChannel.${ch}`) }}
+                  </button>
+                </div>
+                <template v-if="deliverableConnections.length">
+                  <div class="deliver-sublabel">{{ t('tasks.deliverFromConnections', '或从连接库选择') }}</div>
+                  <div class="deliver-chips">
+                    <button
+                      v-for="conn in deliverableConnections"
+                      :key="conn.id"
+                      type="button"
+                      class="deliver-chip deliver-chip--connection"
+                      :class="{ 'deliver-chip--on': isDeliverSelected(conn.id) }"
+                      @click="toggleDeliver(conn.id)"
+                    >
+                      {{ conn.name || conn.provider }}
+                      <span class="deliver-chip__provider">{{ conn.provider }}</span>
+                    </button>
+                  </div>
+                </template>
+                <p class="deliver-hint">{{ t('tasks.deliverHint', '留空 = 自动（默认发到当前会话）') }}</p>
               </div>
             </div>
             <!-- 编译进度（SSE 流式） -->
@@ -1439,6 +1504,50 @@ defineExpose({ openCreateForm, loadJobs })
 
 .type-toggle__btn:hover:not(.type-toggle__btn--active) {
   background: var(--hc-bg-hover);
+}
+
+/* ── 投递目标 chips（§5 一处存处处引）── */
+.deliver-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.deliver-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 11px;
+  border-radius: 100px;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.deliver-chip:hover {
+  border-color: var(--hc-accent);
+}
+.deliver-chip--on {
+  background: var(--hc-accent-subtle);
+  border-color: var(--hc-accent);
+  color: var(--hc-accent);
+}
+.deliver-chip__provider {
+  font-size: 10px;
+  opacity: 0.65;
+  text-transform: uppercase;
+}
+.deliver-sublabel {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  margin: 8px 0 6px;
+}
+.deliver-hint {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  margin: 8px 0 0;
 }
 
 /* ── Transitions ── */
