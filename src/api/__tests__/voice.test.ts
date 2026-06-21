@@ -167,7 +167,7 @@ describe('textToSpeech', () => {
 
 // ─── speechToText ──────────────────────────────────────
 describe('speechToText', () => {
-  it('正常路径：POST FormData 到 transcribe endpoint，含 audio 文件 + language', async () => {
+  it('正常路径：POST FormData 到 transcribe endpoint；format/language 走 URL query（后端从 query 读）', async () => {
     const stt: STTResponse = { text: '识别结果', confidence: 0.95, language: 'zh', duration: 3.2 }
     apiPost.mockResolvedValueOnce(stt)
     const file = new File(['audio-bytes'], 'clip.wav', { type: 'audio/wav' })
@@ -176,37 +176,46 @@ describe('speechToText', () => {
 
     expect(apiPost).toHaveBeenCalledTimes(1)
     const [url, body] = apiPost.mock.calls[0]!
-    expect(url).toBe('/api/v1/voice/transcribe')
+    // format/language 现作为 URL query 传递（后端 handler_misc.go 从 r.URL.Query() 读取）
+    const parsed = new URL(url as string, 'http://x')
+    expect(parsed.pathname).toBe('/api/v1/voice/transcribe')
+    expect(parsed.searchParams.get('format')).toBe('wav') // clip.wav → format=wav
+    expect(parsed.searchParams.get('language')).toBe('zh')
     expect(body).toBeInstanceOf(FormData)
     const form = body as FormData
-    // 字段名是 'audio'（注意：不是 'file'）
+    // 音频仍走 FormData，字段名是 'audio'（注意：不是 'file'）
     const audio = form.get('audio')
     expect(audio).toBeInstanceOf(File)
     expect((audio as File).name).toBe('clip.wav')
-    expect(form.get('language')).toBe('zh')
+    // language 不再放进 FormData body
+    expect(form.has('language')).toBe(false)
     expect(result).toEqual(stt)
   })
 
-  it('language 缺省时 FormData 不含 language 字段', async () => {
+  it('language 缺省时 URL query 不含 language（format 仍由音频容器推断）', async () => {
     apiPost.mockResolvedValueOnce({ text: '', confidence: 0, language: '', duration: 0 })
     const file = new File(['x'], 'a.mp3', { type: 'audio/mpeg' })
 
     await speechToText(file)
 
-    const form = apiPost.mock.calls[0]![1] as FormData
-    expect(form.get('audio')).toBeInstanceOf(File)
-    expect(form.has('language')).toBe(false)
-    expect(form.get('language')).toBeNull()
+    const [url, body] = apiPost.mock.calls[0]!
+    const parsed = new URL(url as string, 'http://x')
+    expect((body as FormData).get('audio')).toBeInstanceOf(File)
+    expect((body as FormData).has('language')).toBe(false)
+    expect(parsed.searchParams.has('language')).toBe(false)
+    // audio/mpeg → format=mp3
+    expect(parsed.searchParams.get('format')).toBe('mp3')
   })
 
-  it('language 为空字符串视为缺省（falsy），不写入 FormData', async () => {
+  it('language 为空字符串视为缺省（falsy），不写入 query/FormData', async () => {
     apiPost.mockResolvedValueOnce({ text: '', confidence: 0, language: '', duration: 0 })
     const file = new File(['x'], 'a.mp3', { type: 'audio/mpeg' })
 
     await speechToText(file, '')
 
-    const form = apiPost.mock.calls[0]![1] as FormData
-    expect(form.has('language')).toBe(false)
+    const [url, body] = apiPost.mock.calls[0]!
+    expect((body as FormData).has('language')).toBe(false)
+    expect(new URL(url as string, 'http://x').searchParams.has('language')).toBe(false)
   })
 
   it('原样返回后端识别结果', async () => {
@@ -236,9 +245,11 @@ describe('speechToText', () => {
 
     await speechToText(file, 'zh-CN')
 
-    const form = apiPost.mock.calls[0]![1] as FormData
+    const [url, body] = apiPost.mock.calls[0]!
+    const form = body as FormData
     expect((form.get('audio') as File).name).toBe(weirdName)
-    expect(form.get('language')).toBe('zh-CN')
+    // language 现走 URL query（被 URLSearchParams 安全编码后解析回原值）
+    expect(new URL(url as string, 'http://x').searchParams.get('language')).toBe('zh-CN')
   })
 
   it('边界：空文件（0 字节）仍照常构造 FormData 并发送', async () => {

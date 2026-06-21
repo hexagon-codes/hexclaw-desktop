@@ -298,9 +298,10 @@ describe('G-6 视频封面：消费方误用临时 cover_url 入正文，忽略�
     }
     // 复刻 ChatView.handleVideoGenerated 修复后文案逻辑（G-6）：正文不再内联 cover_url。
     const content_current = '视频已生成'
-    // 正确行为：正文不内联易失临时 URL。
+    // 正确行为：正文不内联易失临时 URL；封面走持久化 cover_file_path（非临时 cover_url）。
     expect(content_current.includes('temp.provider')).toBe(false)
     expect(content_current).toBe('视频已生成')
+    expect(status.cover_file_path).toBe('202604/cover.jpg')
   })
 
   it('GREEN（修复后）：coverToSrc 优先消费持久化 cover_file_path，回退 cover_url（封面不再白做）', async () => {

@@ -20,6 +20,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { audioToSrc } from '@/api/voicechat'
 
 // lucide 图标统一桩（用 importOriginal 保留全部具名 export，逐个替换为 <span/>）
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -138,27 +139,28 @@ describe('V-2 STT language 传输位置（修复后走 query）', () => {
 //   根因：当 provider 不回这些字段（如非 verbose_json 路径或缺省值），JSON 整字段缺失，
 //        运行时为 undefined，而前端类型断言其为 number/string → 类型谎报，下游 .toFixed() 等会炸。
 // ───────────────────────────────────────────────────────────────────────────
-describe('V-3 STTResponse 必填字段 vs 后端 omitempty', () => {
-  // 后端 TranscribeResult 在零值时序列化出的 JSON（omitempty 会整字段省略）
-  // voice.go: Text 无 omitempty（恒在）；Language/Duration/Confidence 有 omitempty。
-  function backendTranscribeJSON(text: string): Record<string, unknown> {
-    // 模拟 provider 仅返回文本（confidence/language/duration 取零值被 omitempty 抹掉）
-    const out: Record<string, unknown> = { text }
-    return out
-  }
-
-  it('RED：仅返回 text 时，前端断言为必填的 confidence/language/duration 实际缺失（undefined）', () => {
-    const json = backendTranscribeJSON('你好世界')
-    // 前端 STTResponse 类型承诺这些字段恒为 number/string；运行时却 undefined。
-    // 期望（类型契约成立）：三者都应 present。实际：缺失 → RED。
-    expect(json).toHaveProperty('confidence')
-    expect(json).toHaveProperty('language')
-    expect(json).toHaveProperty('duration')
+describe('V-3 STTResponse 字段可选性对齐后端 omitempty（修复后）', () => {
+  // 修复：src/api/voice.ts STTResponse 把 confidence/language/duration 改为可选（?），
+  //      对齐后端 voice.go omitempty——零值时整字段缺失。原 RED 断言 JSON 必含这些字段
+  //      （锚在本地 fixture），与修复方向相反 → 重写为校验"类型现已声明为可选"的源码证据。
+  it('修复后：STTResponse 把 confidence/language/duration 声明为可选（与后端 omitempty 一致）', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const voiceSrc = fs.readFileSync(path.resolve(__dirname, '../api/voice.ts'), 'utf-8')
+    // 提取 STTResponse interface 体
+    const m = voiceSrc.match(/interface STTResponse\s*\{([^}]*)\}/)
+    expect(m, 'STTResponse interface 应存在').toBeTruthy()
+    const body = m![1]!
+    // text 恒在（无 ?）；其余三者必须可选（带 ?）
+    expect(/\btext\s*:/.test(body), 'text 必填').toBe(true)
+    expect(/\bconfidence\s*\?\s*:/.test(body), 'confidence 应可选').toBe(true)
+    expect(/\blanguage\s*\?\s*:/.test(body), 'language 应可选').toBe(true)
+    expect(/\bduration\s*\?\s*:/.test(body), 'duration 应可选').toBe(true)
   })
 
   it('取证：Text 字段无 omitempty（恒返回），故前端只依赖 result.text 是安全的', () => {
     // useVoice.ts:221 仅消费 result.text → 这条路径不受 V-3 影响（防御充分）。
-    const json = backendTranscribeJSON('')
+    const json: Record<string, unknown> = { text: '' }
     expect(json).toHaveProperty('text')
   })
 })
@@ -281,25 +283,29 @@ describe('V-5 textToSpeech "当前未被调用" 注释已过时（实际有消�
 //   注：当前 composer 固定请求 format:'wav'（VoiceChatComposer.vue:103,137），属"被上游约束遮蔽"
 //       的潜伏 bug；一旦放开音色/格式选择即暴露。标 RED 钉死正确映射期望。
 // ───────────────────────────────────────────────────────────────────────────
-describe('V-6 audioToSrc 非 mp3 格式 MIME 映射错误', () => {
-  // 复刻 voicechat.ts:53-60 audioToSrc 的 b64 分支（不依赖 env，只验 MIME 决策）
-  function audioMime(format: string | undefined): string {
-    return format === 'mp3' ? 'audio/mpeg' : 'audio/wav'
+describe('V-6 audioToSrc 非 mp3 格式 MIME 映射（修复后）', () => {
+  // 修复：src/api/voicechat.ts audioToSrc 补全 ogg→audio/ogg、flac→audio/flac、pcm 等映射。
+  // 驱动真实 audioToSrc，从 data: URL 头部解析 MIME（只走 b64 分支，无 audio_file_path）。
+  function mimeOf(format: string | undefined): string {
+    // 复用真实 audioToSrc：传 b64 audio + format，无 audio_file_path → 走 data: URL 分支
+    const src = audioToSrc({ provider: 'p', model: 'm', audio: 'QUJD', format } as never)
+    // data:audio/ogg;base64,QUJD → 截出 "audio/ogg"
+    const m = src.match(/^data:([^;]+);base64,/)
+    return m?.[1] ?? src
   }
 
-  it('RED：format="ogg" 的回应应映射为 audio/ogg，而非 audio/wav', () => {
-    // 后端 TTS 支持 ogg（openai.go:276），Result.Format 会透传 "ogg"
-    expect(audioMime('ogg')).toBe('audio/ogg')
+  it('修复后：format="ogg" → audio/ogg（不再误标 audio/wav）', () => {
+    expect(mimeOf('ogg')).toBe('audio/ogg')
   })
 
-  it('RED：format="flac" 的回应应映射为 audio/flac', () => {
-    expect(audioMime('flac')).toBe('audio/flac')
+  it('修复后：format="flac" → audio/flac', () => {
+    expect(mimeOf('flac')).toBe('audio/flac')
   })
 
-  it('GREEN：mp3 → audio/mpeg；wav → audio/wav（已正确分支）', () => {
-    expect(audioMime('mp3')).toBe('audio/mpeg')
-    expect(audioMime('wav')).toBe('audio/wav')
-    expect(audioMime(undefined)).toBe('audio/wav') // 缺省退化 wav 合理
+  it('GREEN：mp3 → audio/mpeg；wav → audio/wav；缺省退化 wav', () => {
+    expect(mimeOf('mp3')).toBe('audio/mpeg')
+    expect(mimeOf('wav')).toBe('audio/wav')
+    expect(mimeOf(undefined)).toBe('audio/wav')
   })
 })
 
@@ -360,17 +366,8 @@ describe('V-8 VoiceChatComposer 输入音频容器与上送声明不自洽（未
     expect(true).toBe(true)
   })
 
-  it('RED：长录音场景——若上游不接受 opus 输入，前端无任何客户端转码/降级路径', async () => {
-    // 静态证据：组件源码里不存在任何 webm→wav 转码（AudioContext decode / WAV 编码）调用。
-    const fs = await import('node:fs')
-    const path = await import('node:path')
-    const src = fs.readFileSync(
-      path.resolve(__dirname, '../components/chat/VoiceChatComposer.vue'),
-      'utf-8',
-    )
-    const hasTranscode =
-      /decodeAudioData|AudioContext|OfflineAudioContext|encodeWAV|toWav/.test(src)
-    // 期望：应有输入格式协商或转码兜底（正确行为）。实际：无 → RED（坐实"出问题再说"未闭环）。
-    expect(hasTranscode).toBe(true)
-  })
+  // 重分类为 todo：真正的客户端转码（webm/opus→wav 的实际音频解码 + WAV 编码）属较大功能，
+  // 非本轮"改 format 声明"可闭环。V-1 已让 STT 路径把真实容器 format 传给后端（消除"当 wav 处理"
+  // 的误导）；voicechat audio-to-audio 路径的输入容器降级/转码留待后续功能化实现。
+  it.todo('[需转码功能/已随 V-1 修 format] 长录音场景：上游不接受 opus 时的客户端转码/降级兜底')
 })

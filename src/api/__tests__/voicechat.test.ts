@@ -208,9 +208,19 @@ describe('Voice Chat API', () => {
       expect(audioToSrc(r)).toBe('data:audio/wav;base64,NOFMT')
     })
 
-    it('branch[audio+mime-default]: any non-mp3 format (e.g. ogg) falls back to audio/wav', () => {
+    it('branch[audio+ogg]: format === ogg maps to audio/ogg (V-6 修复：不再误退化为 wav)', () => {
       const r = { provider: 'p', model: 'm', audio: 'OGGDATA', format: 'ogg' } as VoiceChatResult
-      expect(audioToSrc(r)).toBe('data:audio/wav;base64,OGGDATA')
+      expect(audioToSrc(r)).toBe('data:audio/ogg;base64,OGGDATA')
+    })
+
+    it('branch[audio+flac]: format === flac maps to audio/flac (V-6 修复)', () => {
+      const r = { provider: 'p', model: 'm', audio: 'FLACDATA', format: 'flac' } as VoiceChatResult
+      expect(audioToSrc(r)).toBe('data:audio/flac;base64,FLACDATA')
+    })
+
+    it('branch[audio+unknown]: 未知 format 仍兜底 audio/wav', () => {
+      const r = { provider: 'p', model: 'm', audio: 'XDATA', format: 'xyz' } as VoiceChatResult
+      expect(audioToSrc(r)).toBe('data:audio/wav;base64,XDATA')
     })
 
     it('branch[empty]: returns empty string when neither file_path nor audio present', () => {
