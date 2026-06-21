@@ -5,8 +5,11 @@ import {
   CHANNEL_CONFIG_FIELDS,
   CHANNEL_HELP_TEXT,
   CHANNEL_TYPES,
+  EMAIL_PRESETS,
+  detectEmailProvider,
   getChannelHelpText,
   getChannelMeta,
+  type EmailProviderPreset,
   type IMChannelConfigField,
   type IMChannelMeta,
   type IMChannelType,
@@ -16,10 +19,12 @@ export {
   CHANNEL_CONFIG_FIELDS,
   CHANNEL_HELP_TEXT,
   CHANNEL_TYPES,
+  EMAIL_PRESETS,
+  detectEmailProvider,
   getChannelHelpText,
   getChannelMeta,
 }
-export type { IMChannelConfigField, IMChannelMeta, IMChannelType }
+export type { EmailProviderPreset, IMChannelConfigField, IMChannelMeta, IMChannelType }
 
 // ─── 类型定义 ────────────────────────────────────────
 
@@ -370,6 +375,69 @@ export async function testIMInstance(
   } catch (e) {
     const { messageFromUnknownError } = await import('@/utils/errors')
     return { success: false, message: `Connection test failed: ${messageFromUnknownError(e)}` }
+  }
+}
+
+/**
+ * 通用「测试连接」：POST /api/v1/connections/test。
+ *
+ * 连接中心统一测试入口（邮箱 / IM 通道），后端实现独立于平台实例 lifecycle。
+ * 后端端点不可用（404 / 网络不通）时优雅降级，返回 ok=false + 友好提示，绝不抛异常。
+ */
+export async function testConnection(
+  payload: { type: IMChannelType; config: Record<string, string> },
+): Promise<{ ok: boolean; detail: string }> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  try {
+    const res = await invoke<string>('proxy_api_request', {
+      method: 'POST',
+      path: '/api/v1/connections/test',
+      body: JSON.stringify({ type: payload.type, config: payload.config }),
+    })
+    const parsed = res ? (JSON.parse(res) as { ok?: boolean; success?: boolean; detail?: string; message?: string }) : null
+    if (!parsed) {
+      return { ok: false, detail: 'Test endpoint unavailable' }
+    }
+    return {
+      ok: parsed.ok ?? parsed.success ?? false,
+      detail: parsed.detail ?? parsed.message ?? (parsed.ok ?? parsed.success ? 'Connection OK' : 'Connection test failed'),
+    }
+  } catch (e) {
+    const { messageFromUnknownError } = await import('@/utils/errors')
+    const msg = messageFromUnknownError(e)
+    // 端点未上线（404 / not found / unreachable）时降级提示，不视为崩溃
+    if (/404|not found|unreachable|connection refused|failed to fetch/i.test(msg)) {
+      return { ok: false, detail: 'Test endpoint unavailable' }
+    }
+    return { ok: false, detail: msg }
+  }
+}
+
+/**
+ * 连接摘要（脱敏只读，GET /api/v1/connections 返回项）。
+ * 绝不含凭据；capabilities 由 provider 派生（收件 / 发送 / 读取 / 发布）。
+ */
+export interface ConnectionSummary {
+  id: string
+  provider: string
+  name: string
+  capabilities: string[]
+  status: string
+  enabled: boolean
+}
+
+/**
+ * 连接中心脱敏只读列表：GET /api/v1/connections（一处存）。
+ *
+ * 供 cron 投递目标「从连接库下拉选」按稳定 id 引用（§5 一处存处处引）。
+ * 端点未上线 / 引擎降级时优雅返回空列表，绝不抛异常（调用方退回通用渠道类型）。
+ */
+export async function getConnections(): Promise<ConnectionSummary[]> {
+  try {
+    const res = await proxyApiRequest<{ connections?: ConnectionSummary[]; total?: number }>('GET', '/api/v1/connections')
+    return res?.connections ?? []
+  } catch {
+    return []
   }
 }
 

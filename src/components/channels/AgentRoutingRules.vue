@@ -11,6 +11,7 @@ import type { AgentConfig, AgentRule } from '@/types'
 import LoadingState from '@/components/common/LoadingState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 
 const { t } = useI18n()
 
@@ -36,6 +37,14 @@ const sortedRules = computed(() =>
   [...rules.value].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0)),
 )
 const canAddRule = computed(() => agents.value.length > 0)
+
+// HcSelect 选项投影
+const platformOptions = computed(() =>
+  RULE_PLATFORM_OPTIONS.map((p) => ({ value: p, label: p })),
+)
+const agentNameOptions = computed(() =>
+  agents.value.map((a) => ({ value: a.name, label: a.display_name || a.name })),
+)
 
 async function loadAll() {
   rulesLoading.value = true
@@ -204,9 +213,7 @@ defineExpose({ loadAll })
             <div class="p-5 flex flex-col gap-3.5">
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.rulePlatform') }} *</label>
-                <select v-model="newRule.platform" class="hc-input">
-                  <option v-for="p in RULE_PLATFORM_OPTIONS" :key="p" :value="p">{{ p }}</option>
-                </select>
+                <HcSelect v-model="newRule.platform" :options="platformOptions" />
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.ruleInstanceId') }}</label>
@@ -222,10 +229,11 @@ defineExpose({ loadAll })
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.ruleAgentName') }} *</label>
-                <select v-model="newRule.agent_name" class="hc-input">
-                  <option value="">— {{ t('agents.ruleAgentName') }} —</option>
-                  <option v-for="a in agents" :key="a.name" :value="a.name">{{ a.display_name || a.name }}</option>
-                </select>
+                <HcSelect
+                  v-model="newRule.agent_name"
+                  :options="agentNameOptions"
+                  :placeholder="`— ${t('agents.ruleAgentName')} —`"
+                />
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.rulePriority') }}</label>

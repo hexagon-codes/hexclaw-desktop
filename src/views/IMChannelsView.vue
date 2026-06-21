@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, computed, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, computed, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -23,11 +23,13 @@ import {
   deleteIMInstance,
   testIMInstance,
   testSavedIMInstanceRuntime,
+  testConnection,
   listIMInstancesHealth,
   getChannelMeta,
   getChannelHelpText,
   getRequiredFieldLabels,
   getPlatformHookUrl,
+  detectEmailProvider,
   CHANNEL_TYPES,
   CHANNEL_CONFIG_FIELDS,
 } from '@/api/im-channels'
@@ -85,6 +87,47 @@ const showSecrets = ref<Record<string, boolean>>({})
 
 const configFields = computed(() => CHANNEL_CONFIG_FIELDS[formType.value] || [])
 const currentMeta = computed(() => getChannelMeta(formType.value))
+
+// ─── Email provider auto-detect (mirrors prototype emailDetect) ──
+// 邮箱类型：输入账号后按域名自动识别服务商并填充 SMTP / IMAP。
+const emailDetected = computed(() => {
+  if (formType.value !== 'email') return null
+  return detectEmailProvider(formConfig.value.email || '')
+})
+
+const emailDetectHint = computed(() => {
+  if (formType.value !== 'email') return null
+  const email = (formConfig.value.email || '').trim()
+  if (!email || !email.includes('@')) {
+    return { kind: 'idle' as const, text: t('connections.email.detectIdle') }
+  }
+  const p = emailDetected.value
+  if (p) {
+    return {
+      kind: 'ok' as const,
+      text: t('connections.email.detectOk', {
+        name: p.name,
+        smtp: `${p.smtp[0]}:${p.smtp[1]}`,
+        imap: `${p.imap[0]}:${p.imap[1]}`,
+      }),
+    }
+  }
+  return { kind: 'warn' as const, text: t('connections.email.detectWarn') }
+})
+
+// 识别到服务商时自动填充 SMTP / IMAP（用户已手填的非空值不覆盖）
+watch(
+  () => formConfig.value.email,
+  () => {
+    if (formType.value !== 'email') return
+    const p = emailDetected.value
+    if (!p) return
+    if (!formConfig.value.smtp_host?.trim()) formConfig.value.smtp_host = p.smtp[0]
+    if (!formConfig.value.smtp_port?.trim()) formConfig.value.smtp_port = String(p.smtp[1])
+    if (!formConfig.value.imap_host?.trim()) formConfig.value.imap_host = p.imap[0]
+    if (!formConfig.value.imap_port?.trim()) formConfig.value.imap_port = String(p.imap[1])
+  },
+)
 
 function normalizeInstanceName(name: string): string {
   return name.trim().toLowerCase()
@@ -429,7 +472,14 @@ async function handleTestModal() {
     createdAt: Date.now(),
   }
   try {
-    if (modalMode.value === 'edit' && editingId.value) {
+    if (formType.value === 'email') {
+      // 邮箱走连接中心统一测试端点；端点未上线时优雅降级
+      const res = await testConnection({ type: formType.value, config: formConfig.value })
+      modalTestResult.value = {
+        success: res.ok,
+        message: res.detail === 'Test endpoint unavailable' ? t('connections.test.unavailable') : res.detail,
+      }
+    } else if (modalMode.value === 'edit' && editingId.value) {
       modalTestResult.value = await testSavedIMInstanceRuntime(tempInstance)
     } else {
       modalTestResult.value = await testIMInstance(tempInstance)
@@ -850,26 +900,37 @@ async function copyWebhookUrl() {
                 </div>
 
                 <!-- Config fields -->
-                <div v-for="field in configFields" :key="field.key" class="hc-im-field">
-                  <label class="hc-im-field__label">
-                    {{ locale === 'zh-CN' ? field.label : field.labelEn }}
-                  </label>
-                  <div class="hc-im-input-wrap">
-                    <input
-                      v-model="formConfig[field.key]"
-                      :type="field.secret && !showSecrets[field.key] ? 'password' : 'text'"
-                      class="hc-im-input"
-                      :placeholder="field.placeholder"
-                    />
-                    <button
-                      v-if="field.secret"
-                      class="hc-im-input-eye"
-                      @click="toggleSecret(field.key)"
-                    >
-                      <component :is="showSecrets[field.key] ? EyeOff : Eye" :size="14" />
-                    </button>
+                <template v-for="field in configFields" :key="field.key">
+                  <div class="hc-im-field">
+                    <label class="hc-im-field__label">
+                      {{ locale === 'zh-CN' ? field.label : field.labelEn }}
+                    </label>
+                    <div class="hc-im-input-wrap">
+                      <input
+                        v-model="formConfig[field.key]"
+                        :type="field.secret && !showSecrets[field.key] ? 'password' : 'text'"
+                        class="hc-im-input"
+                        :placeholder="field.placeholder"
+                      />
+                      <button
+                        v-if="field.secret"
+                        class="hc-im-input-eye"
+                        @click="toggleSecret(field.key)"
+                      >
+                        <component :is="showSecrets[field.key] ? EyeOff : Eye" :size="14" />
+                      </button>
+                    </div>
                   </div>
-                </div>
+
+                  <!-- Email provider auto-detect hint (rendered right after the email account field) -->
+                  <div
+                    v-if="formType === 'email' && field.key === 'email' && emailDetectHint"
+                    class="hc-im-email-detect"
+                    :class="`hc-im-email-detect--${emailDetectHint.kind}`"
+                  >
+                    {{ emailDetectHint.text }}
+                  </div>
+                </template>
 
                 <!-- Enable toggle -->
                 <div class="hc-im-field hc-im-field--row">
@@ -1445,7 +1506,8 @@ async function copyWebhookUrl() {
 
 .hc-im-modal {
   width: 520px;
-  max-height: 95vh;
+  max-width: calc(100vw - 48px);
+  max-height: 86vh;
   border-radius: 16px;
   background: var(--hc-bg-main, #fff);
   border: 1px solid var(--hc-border);
@@ -1594,6 +1656,31 @@ async function copyWebhookUrl() {
   color: var(--hc-text-secondary);
   line-height: 1.6;
   margin: 0;
+}
+
+/* ── Email provider auto-detect hint ──────────────────── */
+
+.hc-im-email-detect {
+  margin: -4px 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hc-im-email-detect--idle {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-muted);
+}
+
+.hc-im-email-detect--ok {
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+  color: var(--hc-success);
+}
+
+.hc-im-email-detect--warn {
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+  color: var(--hc-warning);
 }
 
 /* ── Form fields ────────────────────────────────────── */

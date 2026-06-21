@@ -4,6 +4,7 @@ import wechatLogo from '@/assets/im-logos/wechat.svg'
 import wecomLogo from '@/assets/im-logos/wecom.svg'
 import discordLogo from '@/assets/im-logos/discord.svg'
 import telegramLogo from '@/assets/im-logos/telegram.svg'
+import emailLogo from '@/assets/im-logos/email.svg'
 
 export type IMChannelType =
   | 'feishu'
@@ -12,6 +13,7 @@ export type IMChannelType =
   | 'wecom'
   | 'discord'
   | 'telegram'
+  | 'email'
 
 export interface IMChannelConfigField {
   key: string
@@ -97,6 +99,81 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
     { key: 'token', label: '回调 Token', labelEn: 'Callback Token', placeholder: 'Enter Token', secret: true },
     { key: 'aes_key', label: '回调 EncodingAESKey', labelEn: 'Callback EncodingAESKey', placeholder: '43 characters', secret: true },
   ],
+  email: [
+    { key: 'email', label: '邮箱账号', labelEn: 'Email Account', placeholder: 'you@example.com' },
+    {
+      key: 'password',
+      label: '密码 / 应用专用密码',
+      labelEn: 'Password / App-specific Password',
+      placeholder: '部分邮箱需在邮箱设置里生成应用专用密码',
+      secret: true,
+    },
+    {
+      key: 'from',
+      label: '发件人 From（选填）',
+      labelEn: 'From (optional)',
+      placeholder: '河蟹 助理 <you@example.com>',
+      optional: true,
+    },
+    { key: 'smtp_host', label: 'SMTP 服务器', labelEn: 'SMTP Host', placeholder: 'smtp.example.com' },
+    { key: 'smtp_port', label: 'SMTP 端口', labelEn: 'SMTP Port', placeholder: '465 / 587' },
+    {
+      key: 'imap_host',
+      label: 'IMAP 服务器（收件·选填）',
+      labelEn: 'IMAP Host (receive, optional)',
+      placeholder: 'imap.example.com',
+      optional: true,
+    },
+    {
+      key: 'imap_port',
+      label: 'IMAP 端口（选填）',
+      labelEn: 'IMAP Port (optional)',
+      placeholder: '993',
+      optional: true,
+    },
+  ],
+}
+
+/**
+ * 邮箱服务商预设：按域名自动配置 SMTP / IMAP（对齐原型 EMAIL_PRESETS）。
+ * smtp / imap 元组为 [host, port]。
+ */
+export interface EmailProviderPreset {
+  name: string
+  smtp: [string, number]
+  imap: [string, number]
+}
+
+export const EMAIL_PRESETS: Record<string, EmailProviderPreset> = {
+  'gmail.com': { name: 'Gmail', smtp: ['smtp.gmail.com', 587], imap: ['imap.gmail.com', 993] },
+  'googlemail.com': { name: 'Gmail', smtp: ['smtp.gmail.com', 587], imap: ['imap.gmail.com', 993] },
+  'outlook.com': { name: 'Outlook', smtp: ['smtp.office365.com', 587], imap: ['outlook.office365.com', 993] },
+  'hotmail.com': { name: 'Outlook', smtp: ['smtp.office365.com', 587], imap: ['outlook.office365.com', 993] },
+  'live.com': { name: 'Outlook', smtp: ['smtp.office365.com', 587], imap: ['outlook.office365.com', 993] },
+  'qq.com': { name: 'QQ 邮箱', smtp: ['smtp.qq.com', 465], imap: ['imap.qq.com', 993] },
+  'foxmail.com': { name: 'Foxmail', smtp: ['smtp.qq.com', 465], imap: ['imap.qq.com', 993] },
+  '163.com': { name: '网易 163', smtp: ['smtp.163.com', 465], imap: ['imap.163.com', 993] },
+  '126.com': { name: '网易 126', smtp: ['smtp.126.com', 465], imap: ['imap.126.com', 993] },
+  'icloud.com': { name: 'iCloud', smtp: ['smtp.mail.me.com', 587], imap: ['imap.mail.me.com', 993] },
+  'me.com': { name: 'iCloud', smtp: ['smtp.mail.me.com', 587], imap: ['imap.mail.me.com', 993] },
+  'yahoo.com': { name: 'Yahoo', smtp: ['smtp.mail.yahoo.com', 465], imap: ['imap.mail.yahoo.com', 993] },
+  'sina.com': { name: '新浪邮箱', smtp: ['smtp.sina.com', 465], imap: ['imap.sina.com', 993] },
+  'aliyun.com': { name: '阿里云邮箱', smtp: ['smtp.aliyun.com', 465], imap: ['imap.aliyun.com', 993] },
+}
+
+/**
+ * 根据邮箱地址自动识别服务商并返回 SMTP / IMAP 预设。
+ * 无法识别（未知域名 / 非法输入）时返回 null。
+ */
+export function detectEmailProvider(email: string): EmailProviderPreset | null {
+  if (typeof email !== 'string') return null
+  const value = email.trim().toLowerCase()
+  const at = value.indexOf('@')
+  // 必须有本地部分（@ 不在首位）且域名含「.」
+  if (at < 1) return null
+  const domain = value.slice(at + 1)
+  if (!domain.includes('.') || domain.startsWith('.') || domain.endsWith('.')) return null
+  return EMAIL_PRESETS[domain] ?? null
 }
 
 export const CHANNEL_TYPES: IMChannelMeta[] = [
@@ -148,6 +225,14 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
     color: '#0088cc',
     helpUrl: 'https://core.telegram.org/bots/api',
   },
+  {
+    type: 'email',
+    name: '邮箱',
+    nameEn: 'Email',
+    logo: emailLogo,
+    color: '#3f8fd4',
+    helpUrl: 'https://support.google.com/mail/answer/7126229',
+  },
 ]
 
 export const CHANNEL_HELP_TEXT: Record<IMChannelType, { zh: string; en: string }> = {
@@ -174,6 +259,10 @@ export const CHANNEL_HELP_TEXT: Record<IMChannelType, { zh: string; en: string }
   wecom: {
     zh: '在企业微信管理后台创建自建应用，获取 Corp ID、Agent ID 和 Secret。在"接收消息"中配置回调 URL、Token 和 EncodingAESKey。',
     en: 'Create an internal app in WeCom admin console. Get Corp ID, Agent ID & Secret. Configure callback URL, Token and EncodingAESKey.',
+  },
+  email: {
+    zh: '填入邮箱账号后自动识别服务商并配置 SMTP / IMAP。部分邮箱（QQ / Gmail 等）需在邮箱设置里生成「应用专用密码」，而非登录密码。',
+    en: 'Enter your email and the provider is auto-detected with SMTP / IMAP filled in. Some providers (QQ / Gmail, etc.) require an app-specific password generated in mailbox settings instead of the login password.',
   },
 }
 
