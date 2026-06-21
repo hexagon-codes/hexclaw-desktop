@@ -72,17 +72,29 @@ export interface McpMarketplaceEntry {
   // 前端扩展：从 Hub YAML 提取的安装命令
   command?: string
   args?: string[]
+  /** 安装后需用户自行配置的提示（如所需环境变量 / 本地依赖），来自 hub config_hint */
+  config_hint?: string
 }
 
 /** 共享 ClawHub 搜索端点（同 skills.ts searchClawHub，通过 type='mcp' 过滤） */
 const CLAWHUB_SEARCH_ENDPOINT = '/api/v1/clawhub/search'
 
+/** 后端 clawhub/search 在目录拉取失败时返回 200 + {skills:[], error:'...'}，
+ *  必须如实抛错（对齐 skills.ts searchClawHub），否则 UI 把"加载失败"静默当成"无结果"。 */
+function throwIfHubError(res: { error?: string }): void {
+  if (res.error) throw new Error(res.error)
+}
+
 /** 搜索 MCP 市场 */
-export function searchMcpMarketplace(query: string) {
-  return apiGet<{ skills: McpMarketplaceEntry[]; total: number }>(CLAWHUB_SEARCH_ENDPOINT, { q: query, type: 'mcp' })
+export async function searchMcpMarketplace(query: string) {
+  const res = await apiGet<{ skills: McpMarketplaceEntry[]; total: number; error?: string }>(CLAWHUB_SEARCH_ENDPOINT, { q: query, type: 'mcp' })
+  throwIfHubError(res)
+  return res
 }
 
 /** 获取 MCP 市场全部条目 */
-export function getMcpMarketplace() {
-  return apiGet<{ skills: McpMarketplaceEntry[]; total: number }>(CLAWHUB_SEARCH_ENDPOINT, { type: 'mcp' })
+export async function getMcpMarketplace() {
+  const res = await apiGet<{ skills: McpMarketplaceEntry[]; total: number; error?: string }>(CLAWHUB_SEARCH_ENDPOINT, { type: 'mcp' })
+  throwIfHubError(res)
+  return res
 }

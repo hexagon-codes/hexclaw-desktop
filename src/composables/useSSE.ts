@@ -37,9 +37,19 @@ export function useSSE() {
 
         try {
           const parsed = JSON.parse(value)
-          const chunk = typeof parsed.content === 'string' ? parsed.content
-            : typeof parsed.text === 'string' ? parsed.text
-            : parsed.choices?.[0]?.delta?.content ?? value
+          // 从已知字段提取增量；content/text 允许数字（如 {"content":123} → "123"）。
+          // 未命中任何字段（心跳 / 元数据帧，如 {"event":"ping"}）则忽略该帧，
+          // 不要把原始 JSON 串回灌进正文。
+          let chunk: unknown
+          if (parsed != null && typeof parsed === 'object') {
+            if (parsed.content != null && typeof parsed.content !== 'object') chunk = parsed.content
+            else if (parsed.text != null && typeof parsed.text !== 'object') chunk = parsed.text
+            else chunk = parsed.choices?.[0]?.delta?.content
+          } else {
+            // JSON 解析出的标量（数字 / 字符串字面量），原样作为正文。
+            chunk = parsed
+          }
+          if (chunk == null) continue
           const text = typeof chunk === 'string' ? chunk : String(chunk)
           content.value += text
           onChunk?.(text)

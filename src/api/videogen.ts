@@ -50,6 +50,15 @@ export function videoToSrc(st: VideoTaskStatus): string {
   return st.video_url || ''
 }
 
+/**
+ * 封面图来源：优先后端持久化路径（永不过期），回退到 Provider 临时 cover_url（24h 过期）。
+ * 用作 <video poster>；不应把临时 cover_url 内联进消息正文文本（失效后残留死链）。
+ */
+export function coverToSrc(st: VideoTaskStatus): string {
+  if (st.cover_file_path) return `${env.apiBase}/api/v1/files/generated/${st.cover_file_path}`
+  return st.cover_url || ''
+}
+
 export function getVideoGenStatus() {
   return apiGet<VideoGenStatus>('/api/v1/videos/status')
 }

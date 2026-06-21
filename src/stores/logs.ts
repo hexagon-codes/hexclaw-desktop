@@ -3,7 +3,7 @@ import { defineStore } from 'pinia'
 import { connectLogStream, getLogs, getLogStats } from '@/api/logs'
 import { trySafe } from '@/utils/errors'
 import { logger } from '@/utils/logger'
-import type { LogEntry, LogStats, ApiError } from '@/types'
+import type { LogEntry, LogStats, LogQuery, ApiError } from '@/types'
 
 const MAX_ENTRIES = 1000
 
@@ -122,6 +122,50 @@ export const useLogsStore = defineStore('logs', () => {
     entries.value = []
   }
 
+  // ─── 派生级别计数（集中维护，Vue 缓存：仅 entries 变化时重算）───
+  const levelCounts = computed(() => {
+    const c: Record<string, number> = { debug: 0, info: 0, warn: 0, error: 0 }
+    for (const e of entries.value) {
+      if (c[e.level] !== undefined) c[e.level]!++
+    }
+    return c
+  })
+
+  // ─── 派生子系统（domain）计数。domain 由后端 inferLogDomain(source) 派生为固定 5 桶，
+  //     选项列表静态（见 LogsView DOMAINS），这里只统计实时缓冲里各桶的条数供徽标用。───
+  const domainCounts = computed(() => {
+    const c: Record<string, number> = {}
+    for (const e of entries.value) {
+      if (e.domain) c[e.domain] = (c[e.domain] || 0) + 1
+    }
+    return c
+  })
+
+  // ─── 历史检索：实时缓冲只保留最近 MAX_ENTRIES 条，查更早 / 全量走服务端 getLogs ───
+  const mode = ref<'live' | 'history'>('live')
+  const historyEntries = ref<LogEntry[]>([])
+  const historyLoading = ref(false)
+
+  /** 展示用条目：history 模式用服务端查询结果（newest-first），live 模式用本地过滤缓冲 */
+  const displayedEntries = computed(() =>
+    mode.value === 'history' ? historyEntries.value : filteredEntries.value,
+  )
+
+  /** 在全部历史中检索（服务端过滤），切到 history 模式 */
+  async function searchHistory(query: LogQuery = {}) {
+    historyLoading.value = true
+    const [res] = await trySafe(() => getLogs({ limit: 500, ...query }), '搜索历史日志')
+    historyEntries.value = res?.logs ?? []
+    mode.value = 'history'
+    historyLoading.value = false
+  }
+
+  /** 退出历史检索，回到实时流 */
+  function exitHistory() {
+    mode.value = 'live'
+    historyEntries.value = []
+  }
+
   return {
     entries,
     connected,
@@ -129,11 +173,19 @@ export const useLogsStore = defineStore('logs', () => {
     stats,
     error,
     filteredEntries,
+    levelCounts,
+    domainCounts,
+    mode,
+    historyEntries,
+    historyLoading,
+    displayedEntries,
     connect,
     disconnect,
     loadHistory,
     loadStats,
     setFilter,
     clear,
+    searchHistory,
+    exitHistory,
   }
 })

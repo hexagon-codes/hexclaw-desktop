@@ -2,7 +2,8 @@
 import { onMounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download } from 'lucide-vue-next'
-import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, getMcpMarketplace, searchMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
+import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, getMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
+import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import { installFromHub } from '@/api/skills'
 import { resolveUserHome } from '@/utils/platform'
 import type { McpTool } from '@/types'
@@ -12,12 +13,73 @@ import SearchInput from '@/components/common/SearchInput.vue'
 
 const { t } = useI18n()
 
+const props = withDefaults(defineProps<{
+  embeddedSearch?: string
+}>(), {
+  embeddedSearch: undefined,
+})
+
 const servers = ref<string[]>([])
 const serverStatuses = ref<Record<string, 'connected' | 'disconnected' | 'error'>>({})
 const tools = ref<McpTool[]>([])
 const loading = ref(true)
 const errorMsg = ref('')
 const activeTab = ref<'servers' | 'tools' | 'marketplace'>('servers')
+
+// 二级 tab（统一 UnderlineTabs）：服务器 / 工具 / 市场（带计数）
+const mcpSubTabs = computed(() => [
+  { key: 'servers', label: t('mcp.servers'), count: servers.value.length },
+  { key: 'tools', label: t('mcp.tools'), count: tools.value.length },
+  // 市场计数 = 已加载的市场条目数（懒加载，未进入市场 tab 前为 0，0 时 UnderlineTabs 自动隐藏，
+  // 与 Skills 市场 tab 一致）。
+  { key: 'marketplace', label: t('mcp.marketplace', 'Marketplace'), count: marketplaceItems.value.length },
+])
+function onMcpTabChange(key: string) {
+  activeTab.value = key as 'servers' | 'tools' | 'marketplace'
+  if (key === 'marketplace') loadMarketplace()
+}
+
+// ─── 市场分类 pill（精选 pill → hub 分类集合 的展示映射；统一渲染后端 hub 市场，客户端过滤）──
+interface McpPill {
+  key: string
+  label: string
+  /** 命中的 hub 分类集合；null = 全部 */
+  cats: string[] | null
+}
+const MCP_PILLS: McpPill[] = [
+  { key: 'all', label: t('mcp.cat.all', '全部'), cats: null },
+  { key: 'finance', label: t('mcp.cat.finance', '金融'), cats: ['finance'] },
+  { key: 'dev', label: t('mcp.cat.dev', '开发'), cats: ['development', 'system', 'devops', 'cloud', 'monitoring'] },
+  { key: 'data', label: t('mcp.cat.data', '数据'), cats: ['database', 'memory', 'reasoning'] },
+  { key: 'search', label: t('mcp.cat.search', '搜索'), cats: ['search', 'web'] },
+  { key: 'browser', label: t('mcp.cat.browser', '浏览器'), cats: ['automation'] },
+  { key: 'collab', label: t('mcp.cat.collab', '协作'), cats: ['communication'] },
+  { key: 'docs', label: t('mcp.cat.docs', '文档'), cats: ['documentation', 'office'] },
+  { key: 'productivity', label: t('mcp.cat.productivity', '效率'), cats: ['productivity'] },
+  { key: 'edu', label: t('mcp.cat.edu', '教育'), cats: ['education'] },
+  { key: 'media', label: t('mcp.cat.media', '媒体'), cats: ['media', 'video'] },
+  { key: 'utility', label: t('mcp.cat.utility', '工具'), cats: ['utility', 'geo', 'automotive'] },
+]
+const marketplaceCategory = ref<string>('all')
+
+// 选中 pill 命中的 hub 分类集合（null=全部）
+const activeMcpCats = computed(() => MCP_PILLS.find((p) => p.key === marketplaceCategory.value)?.cats ?? null)
+
+// 统一后的市场列表：原硬编码"推荐区"已删除，直接按 pill 分类 + 搜索词客户端过滤后端 hub 列表
+const filteredMarketplace = computed(() => {
+  const cats = activeMcpCats.value
+  const q = marketplaceSearch.value.trim().toLowerCase()
+  return marketplaceItems.value.filter((item) => {
+    if (cats && !cats.includes((item.category || '').toLowerCase())) return false
+    if (!q) return true
+    return (
+      (item.display_name || item.name).toLowerCase().includes(q) ||
+      item.name.toLowerCase().includes(q) ||
+      (item.description || '').toLowerCase().includes(q) ||
+      (item.tags || []).some((tg) => tg.toLowerCase().includes(q))
+    )
+  })
+})
 
 // ─── MCP Marketplace state ──────────────────────────────
 const marketplaceItems = ref<McpMarketplaceEntry[]>([])
@@ -33,8 +95,8 @@ async function loadMarketplace() {
   marketplaceLoading.value = true
   errorMsg.value = ''
   try {
-    const q = marketplaceSearch.value.trim()
-    const res = q ? await searchMcpMarketplace(q) : await getMcpMarketplace()
+    // 一次拉全量 hub 列表，分类 pill + 搜索词改为 filteredMarketplace 客户端过滤
+    const res = await getMcpMarketplace()
     if (requestGen !== marketplaceRequestGen) return
     marketplaceItems.value = res.skills || []
   } catch (e) {
@@ -158,9 +220,21 @@ function toggleTool(name: string) {
   }
 }
 
+// ─── 顶栏统一搜索（IntegrationView 注入）；本地 toolSearchQuery 作为兜底 ───
+const activeQuery = computed(() =>
+  ((props.embeddedSearch ?? '') || toolSearchQuery.value).toLowerCase().trim(),
+)
+
+// 服务器列表过滤（按名称）
+const filteredServers = computed(() => {
+  const q = activeQuery.value
+  if (!q) return servers.value
+  return servers.value.filter((name) => name.toLowerCase().includes(q))
+})
+
 // ─── Tool search ─────────────────────────────────────
 const filteredTools = computed(() => {
-  const q = toolSearchQuery.value.toLowerCase().trim()
+  const q = activeQuery.value
   if (!q) return tools.value
   return tools.value.filter(
     (tool) =>
@@ -326,40 +400,13 @@ defineExpose({ openAddServer, switchToMarketplace })
       <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
     </div>
 
-    <!-- 标签页 -->
-    <div class="flex items-center gap-0 px-6 pt-3 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-      <div class="flex-1 flex items-center gap-0">
-      <button
-        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
-        :style="{
-          borderColor: activeTab === 'servers' ? 'var(--hc-accent)' : 'transparent',
-          color: activeTab === 'servers' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
-        }"
-        @click="activeTab = 'servers'"
-      >
-        {{ t('mcp.servers') }} ({{ servers.length }})
-      </button>
-      <button
-        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
-        :style="{
-          borderColor: activeTab === 'tools' ? 'var(--hc-accent)' : 'transparent',
-          color: activeTab === 'tools' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
-        }"
-        @click="activeTab = 'tools'"
-      >
-        {{ t('mcp.tools') }} ({{ tools.length }})
-      </button>
-      <button
-        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
-        :style="{
-          borderColor: activeTab === 'marketplace' ? 'var(--hc-accent)' : 'transparent',
-          color: activeTab === 'marketplace' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
-        }"
-        @click="activeTab = 'marketplace'; loadMarketplace()"
-      >
-        {{ t('mcp.marketplace', 'Marketplace') }}
-      </button>
-      </div>
+    <!-- 二级 tab：服务器 / 工具 / 市场（统一 UnderlineTabs，滑动下划线） -->
+    <div class="px-6 pt-3">
+      <UnderlineTabs
+        :tabs="mcpSubTabs"
+        :model-value="activeTab"
+        @update:model-value="onMcpTabChange"
+      />
     </div>
 
     <div class="flex-1 overflow-y-auto p-6">
@@ -368,7 +415,7 @@ defineExpose({ openAddServer, switchToMarketplace })
       <!-- 服务器列表 -->
       <template v-else-if="activeTab === 'servers'">
         <EmptyState
-          v-if="servers.length === 0"
+          v-if="filteredServers.length === 0"
           :icon="Server"
           :title="t('common.noData')"
           :description="t('mcp.emptyDesc')"
@@ -376,7 +423,7 @@ defineExpose({ openAddServer, switchToMarketplace })
 
         <div v-else class="space-y-3 max-w-2xl">
           <div
-            v-for="name in servers"
+            v-for="name in filteredServers"
             :key="name"
             class="flex items-center gap-3 rounded-xl border p-4"
             :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
@@ -413,17 +460,8 @@ defineExpose({ openAddServer, switchToMarketplace })
         </div>
       </template>
 
-      <!-- 工具列表 -->
+      <!-- 工具列表（搜索统一由顶栏搜索框驱动） -->
       <template v-else-if="activeTab === 'tools'">
-        <!-- Tool search bar -->
-        <div class="max-w-2xl mb-4">
-          <SearchInput
-            v-model="toolSearchQuery"
-            :fluid="true"
-            :placeholder="t('mcp.searchTools')"
-          />
-        </div>
-
         <EmptyState
           v-if="filteredTools.length === 0"
           :icon="Wrench"
@@ -549,7 +587,8 @@ defineExpose({ openAddServer, switchToMarketplace })
       <!-- Marketplace Tab -->
       <template v-else-if="activeTab === 'marketplace'">
         <div class="p-4">
-          <div class="flex gap-2 mb-4">
+          <!-- 搜索框（对齐 Skill 市场：顶部一个 ClawHub 搜索框；同时过滤推荐区 + 后端市场）-->
+          <div class="flex gap-2 mb-4 max-w-4xl">
             <SearchInput
               v-model="marketplaceSearch"
               class="flex-1"
@@ -561,14 +600,31 @@ defineExpose({ openAddServer, switchToMarketplace })
               <Search :size="14" />
             </button>
           </div>
+
+          <!-- 分类 pill（视觉/交互照搬 Skill 市场分类 pill）-->
+          <div class="flex flex-wrap gap-2 mb-5 max-w-4xl">
+            <button
+              v-for="pill in MCP_PILLS"
+              :key="pill.key"
+              class="px-3 py-1 rounded-full text-xs font-medium transition-colors"
+              :style="{
+                background: marketplaceCategory === pill.key ? 'var(--hc-accent)' : 'var(--hc-bg-hover)',
+                color: marketplaceCategory === pill.key ? '#fff' : 'var(--hc-text-secondary)',
+              }"
+              @click="marketplaceCategory = pill.key"
+            >
+              {{ pill.label }}
+            </button>
+          </div>
+
           <div v-if="marketplaceLoading" class="text-center py-8">
             <Loader2 :size="20" class="animate-spin mx-auto" style="color: var(--hc-accent)" />
           </div>
-          <div v-else-if="marketplaceItems.length === 0" class="text-center py-8" style="color: var(--hc-text-secondary)">
+          <div v-else-if="filteredMarketplace.length === 0" class="text-center py-8" style="color: var(--hc-text-secondary)">
             {{ t('mcp.noMarketplaceResults', 'No MCP servers found. Try a different search.') }}
           </div>
           <div v-else class="space-y-3">
-            <div v-for="item in marketplaceItems" :key="item.name" class="p-3 rounded-lg border" :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-secondary)' }">
+            <div v-for="item in filteredMarketplace" :key="item.name" class="p-3 rounded-lg border" :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-secondary)' }">
               <div class="flex items-center justify-between mb-1">
                 <div class="flex items-center gap-2">
                   <Server :size="14" style="color: var(--hc-accent)" />
@@ -587,6 +643,9 @@ defineExpose({ openAddServer, switchToMarketplace })
                 </button>
               </div>
               <p class="text-xs mb-1" style="color: var(--hc-text-secondary)">{{ item.description }}</p>
+              <p v-if="item.config_hint" class="text-[11px]" style="color: var(--hc-text-tertiary)">
+                {{ t('mcp.needsConfig', '需配置') }}: {{ item.config_hint }}
+              </p>
             </div>
           </div>
         </div>

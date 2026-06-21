@@ -23,6 +23,11 @@ export const rules = {
 
   range: (min: number, max: number, msg?: string): ValidationRule => ({
     validate: (v) => {
+      // 空输入不是有效数字：避免 Number('') / Number('  ') / Number(null) /
+      // Number([]) === 0 的陷阱（对跨 0 区间会误判通过）。
+      if (v === null || v === undefined) return false
+      if (typeof v === 'string' && v.trim() === '') return false
+      if (Array.isArray(v)) return false
       const n = Number(v)
       return !isNaN(n) && n >= min && n <= max
     },

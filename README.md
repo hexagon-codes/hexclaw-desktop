@@ -67,7 +67,7 @@ macOS / Windows / Linux 原生运行 · Sidecar 架构本地部署 · 零云端�
 | **ClawHub 技能市场** | 浏览、语义搜索 (TF-IDF)、安装社区 Skill/MCP，Hub 依赖自动解析 |
 | **首次引导** | 3 步 Welcome 向导（选 Provider → 选模型 → 测试连接），零配置门槛 |
 | **实时日志** | WebSocket 流式日志，Agent 执行链路全程追踪 |
-| **多语言** | 中文 / English，vue-i18n 国际化 |
+| **多语言** | 中文 / English / 维吾尔语 (ug-CN，含 RTL 从右到左排版)，vue-i18n 国际化 |
 | **系统托盘** | 最小化到托盘，托盘菜单快捷操作 |
 | **全局快捷键** | `⌘+Shift+H` 随时唤起 Quick Chat 窗口 |
 | **自动更新** | Tauri Updater，应用内一键升级 |
@@ -102,9 +102,9 @@ HexClaw.app
 ├───────────────────────────────────────────────────────────────────┤
 │  Vue 3 前端 (WebView)                                             │
 │  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
-│  │Overview│  Chat  │ Agents │知识中心 │ 自动化 │  集成   │  日志 │ │
-│  │        │        │        │文档|记忆│任务|画布│技能|MCP │       │ │
-│  │        │        │        │        │        │IM|诊断  │       │ │
+│  │  Chat  │ Agents │知识中心 │ 自动化 │ IM通道 │  集成   │  日志 │ │
+│  │ (默认) │        │文档|记忆│任务|Web │        │技能|MCP │       │ │
+│  │        │        │        │ hook    │        │         │ 设置  │ │
 │  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
 │      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
 ├──────┴─────────────────┴──────────────────┴───────────────────────┤
@@ -127,6 +127,8 @@ HexClaw.app
 前后端通过 **Tauri IPC 代理**通信（解决 WebView CORS 限制），完全解耦。
 
 > Go Sidecar 默认监听 `localhost:16060`，可通过 hexclaw 配置文件修改端口。
+
+> 安装包内还内嵌了若干随包二进制：**Ollama**（本地模型推理）、**Pandoc + Typst**（文档渲染：Markdown → docx/pdf 等）。它们作为独立子进程被调用，对应 `src-tauri/binaries/` 下的 `ollama-bundle/`、`pandoc-*`、`typst-*`，许可证见 [THIRD_PARTY.md](THIRD_PARTY.md)。
 
 ## Claude Code 开发实战 SOP
 
@@ -163,11 +165,11 @@ cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/
 | UI 组件库 | Naive UI + 自定义设计系统 | - |
 | 样式 | Tailwind CSS | 4.x |
 | 路由 | Vue Router | 5.x |
-| 国际化 | vue-i18n | 11.x |
+| 国际化 | vue-i18n (中文 / English / 维吾尔语 RTL) | 11.x |
 | 图标 | Lucide Vue | - |
 | Markdown | markdown-it + Shiki (代码高亮) | - |
 | 文档解析 | pdfjs-dist + mammoth + xlsx | - |
-| 数据存储 | SQLite (tauri-plugin-sql) + Tauri Store | - |
+| 数据存储 | Tauri Store (plugin-store) + localStorage (Pinia 持久化插件)；会话/消息由后端 sidecar 持久化 | - |
 | HTTP 客户端 | ofetch (前端) / reqwest (Rust 代理) | - |
 | 构建工具 | Vite | 7.x |
 | 测试 | Vitest + @vue/test-utils | - |
@@ -233,7 +235,7 @@ brew install --cask hexclaw
 | 工具 | 版本要求 | 说明 |
 |------|---------|------|
 | Node.js | >= 20.19 或 >= 22.12 | JavaScript 运行时 |
-| pnpm | >= 9 | 包管理器 |
+| pnpm | 10.x (仓库锁定 pnpm@10.30.3) | 包管理器 |
 | Rust | stable (2021 edition) | Tauri 编译 |
 | Go | >= 1.25 | Sidecar 编译 |
 
@@ -248,7 +250,7 @@ cd hexclaw-desktop
 make install
 # 等价于: pnpm install && cd src-tauri && cargo fetch
 
-# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.4.1)
+# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.4.3)
 make sidecar
 
 # 4. 启动开发模式
@@ -256,7 +258,7 @@ make dev
 ```
 
 > **注意**:
-> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.4.1` 到 `/tmp/hexclaw-gith-src` 并编译
+> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.4.3` 到 `/tmp/hexclaw-gith-src` 并编译
 > - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - 技能市场默认读取 `https://github.com/hexagon-codes/hexclaw-hub` 的 `v0.0.2` 标签；运行时可在 `~/.hexclaw/hexclaw.yaml` 的 `skills.hub` 覆盖
 
@@ -304,27 +306,26 @@ hexclaw-desktop/
 │   │   └── system.ts             # 系统信息 API
 │   ├── components/               # 组件
 │   │   ├── layout/               # 布局 (AppLayout/Sidebar/TitleBar/ContextBar/DetailPanel)
-│   │   ├── chat/                 # 聊天 (ChatInput/SessionList/MarkdownRenderer/ToolApprovalCard/BudgetPanel/ToolCallBubble/AgentBadge 等)
-│   │   ├── settings/            # 设置组件 (OllamaCard 本地 LLM 管理)
-│   │   ├── agent/                # Agent (AgentCard/AgentForm/AgentStatus/AgentConference)
-│   │   ├── agents/               # 多 Agent 协作 (AgentConference)
+│   │   ├── chat/                 # 聊天 (ChatInput/SessionList/MarkdownRenderer/ToolApprovalCard/BudgetPanel/AgentBadge/Interactive* 等)
+│   │   ├── settings/             # 设置 (OllamaCard/ModelManagerModal/SettingsNotification/SettingsSecurity)
 │   │   ├── artifacts/            # 产物 (ArtifactsPanel/ArtifactPreview/ArtifactCodeView/ArtifactDiffView)
 │   │   ├── inspector/            # 右侧详情 (InspectorContext/ContextCard/KeyValueRow/TimelineItem)
 │   │   ├── canvas/               # 画布 (TemplateGallery)
-│   │   ├── settings/             # 设置 (SettingsNotification/SettingsSecurity)
-│   │   ├── logs/                 # 日志 (LogEntry/LogFilter/LogStats)
-│   │   └── common/               # 通用 (CommandPalette/ConfirmDialog/Toast/ErrorBoundary 等)
+│   │   ├── channels/             # IM 通道 (AgentRoutingRules)
+│   │   ├── automation/           # 自动化 (WebhookPanel)
+│   │   ├── cron/                 # 定时任务 (CronJobConfirmCard)
+│   │   ├── logs/                 # 日志 (LogEntry/LogStats)
+│   │   └── common/               # 通用 (CommandPalette/ConfirmDialog/ToastProvider/ErrorBoundary 等)
 │   ├── views/                    # 页面视图
-│   │   ├── DashboardView.vue     # 仪表板 (概览统计 + 最近活动)
-│   │   ├── ChatView.vue          # AI 对话 (会话/附件/Artifacts/模型切换)
+│   │   ├── ChatView.vue          # AI 对话 (默认首页 · 会话/附件/Artifacts/模型切换)
 │   │   ├── AgentsView.vue        # Agent 管理 (模板/运行中/规则/会议)
 │   │   ├── KnowledgeCenterView.vue # 知识中心 (文档 + 记忆 Tab)
 │   │   ├── KnowledgeView.vue     # 知识库 (文档 CRUD/上传/搜索)
 │   │   ├── MemoryView.vue        # 记忆管理 (编辑/搜索/清空)
-│   │   ├── AutomationView.vue    # 自动化 (任务 + 画布 Tab)
+│   │   ├── AutomationView.vue    # 自动化 (任务 + Webhook Tab)
 │   │   ├── TasksView.vue         # 定时任务 (Cron 管理)
 │   │   ├── CanvasView.vue        # 工作流画布 (DAG 编排)
-│   │   ├── IntegrationView.vue   # 集成 (技能 + MCP + IM + 诊断 Tab)
+│   │   ├── IntegrationView.vue   # 集成 (技能 + MCP Tab)
 │   │   ├── SkillsView.vue        # Skill 管理 + ClawHub 市场
 │   │   ├── McpView.vue           # MCP 管理 (服务器/工具/测试)
 │   │   ├── IMChannelsView.vue    # IM 通道管理 (飞书/钉钉/企微等)
@@ -333,51 +334,55 @@ hexclaw-desktop/
 │   │   ├── AboutView.vue         # 关于 (独立窗口)
 │   │   ├── QuickChatView.vue     # 快捷聊天 (独立窗口)
 │   │   └── WelcomeView.vue       # 首次引导 (Provider → 模型 → 测试)
-│   ├── stores/                   # Pinia 状态管理 (thin store，业务逻辑委托 services/)
+│   ├── stores/                   # Pinia 状态管理 (thin store，业务逻辑委托 services/controllers)
 │   │   ├── app.ts                # 全局状态 (连接/侧边栏/详情面板)
-│   │   ├── chat.ts               # 聊天 (会话/消息/流式/Artifacts, SQLite 持久化)
+│   │   ├── chat.ts               # 聊天 (会话/消息/流式/Artifacts；消息由后端 sidecar 持久化)
 │   │   ├── agents.ts             # Agent 角色
 │   │   ├── canvas.ts             # 画布 (节点/边/工作流/运行)
 │   │   ├── logs.ts               # 日志 (WebSocket 流/过滤/统计)
-│   │   └── settings.ts           # 设置 (LLM + 安全 + 通知, Tauri Store 持久化)
+│   │   ├── settings.ts           # 设置 (LLM + 安全 + 通知, Tauri Store 持久化)
+│   │   └── plugins/persist.ts    # Pinia 持久化插件 (localStorage + 版本迁移)
 │   ├── composables/              # 组合式函数
 │   │   ├── useHexclaw.ts         # hexclaw 连接状态 + 健康检查轮询
 │   │   ├── useWebSocket.ts       # WebSocket 封装 (自动重连)
 │   │   ├── useSSE.ts             # SSE 流式请求
-│   │   ├── useShortcuts.ts       # 应用内快捷键 (⌘1~7 切页面)
+│   │   ├── useShortcuts.ts       # 应用内快捷键 (⌘1~N 切页面)
 │   │   ├── useTheme.ts           # 主题 (深色/浅色/跟随系统)
-│   │   ├── useAutoStart.ts       # 开机自启 (Tauri autostart)
 │   │   ├── useAutoUpdate.ts      # 自动更新 (Tauri updater)
+│   │   ├── useVoice.ts           # 语音 (TTS/STT/语音对话)
 │   │   ├── useValidation.ts      # 表单校验
 │   │   ├── useKeyboardNav.ts     # 键盘导航 + 焦点陷阱
 │   │   ├── usePlatform.ts        # 平台检测 (macOS/Windows/Linux)
 │   │   ├── useChatSend.ts        # 发送消息 + Auto-RAG 知识库检索
 │   │   ├── useChatActions.ts     # 聊天操作 (重发/编辑/删除等)
+│   │   ├── useCron*.ts           # Cron 解析/编译/常驻挂件
 │   │   └── useConversationAutomation.ts # 会话自动化 (自动标题等)
 │   ├── services/                 # 业务逻辑服务层
 │   │   ├── chatService.ts        # 聊天服务 (WebSocket/HTTP 发送)
-│   │   └── messageService.ts     # 消息服务 (消息构建/持久化)
-│   ├── i18n/                     # 国际化 (中文/英文)
-│   ├── router/                   # 路由 (基于 navigation.ts 动态生成)
+│   │   └── messageService.ts     # 消息服务 (消息构建/后端持久化)
+│   ├── i18n/                     # 国际化 (中文 zh-CN / 英文 en / 维吾尔语 ug-CN RTL)
+│   ├── router/                   # 路由 (基于 navigation.ts 动态生成，默认重定向 /chat)
 │   ├── types/                    # TypeScript 类型定义
 │   ├── utils/                    # 工具函数
 │   │   └── file-parser.ts        # 文档解析器 (PDF/Word/Excel/CSV)
-│   ├── db/                       # 本地数据库 (SQLite: chat/artifacts/knowledge/templates/outbox)
 │   ├── config/                   # 前端配置
 │   │   ├── env.ts                # 环境配置
-│   │   ├── navigation.ts         # 导航注册表 (三层分组: 核心/集成/系统)
-│   │   └── providers.ts          # LLM Provider 配置
+│   │   ├── navigation.ts         # 导航注册表 (四组: home/build/connections/system)
+│   │   ├── llm-providers.ts      # LLM Provider 配置
+│   │   └── providers.ts          # Provider 元数据
 │   └── assets/                   # 静态资源 (Logo/图标/IM Logo)
 ├── src-tauri/                    # Tauri (Rust) 层
 │   ├── src/
 │   │   ├── main.rs               # 入口
 │   │   ├── lib.rs                # 应用初始化 & 插件注册
-│   │   ├── commands.rs           # Tauri IPC 命令 (健康检查/API 代理/流式聊天)
+│   │   ├── commands.rs           # Tauri IPC 命令 (健康检查/API 代理/流式聊天/文件保存)
 │   │   ├── sidecar.rs            # Go Sidecar 进程管理
+│   │   ├── ollama.rs             # 内嵌 Ollama 进程管理
 │   │   ├── tray.rs               # 系统托盘
 │   │   ├── menu.rs               # macOS 原生菜单
-│   │   └── window.rs             # 窗口管理 & 全局快捷键
-│   ├── binaries/                 # Go sidecar 二进制 (编译生成)
+│   │   └── window.rs             # 窗口管理 & 全局快捷键 (⌘⇧H Quick Chat)
+│   ├── binaries/                 # 内嵌二进制 (hexclaw sidecar + pandoc + typst + ollama-bundle)
+│   ├── render-assets/            # 文档渲染资产 (reference.docx，随包打入)
 │   ├── icons/                    # 应用图标
 │   ├── capabilities/             # Tauri v2 权限配置
 │   ├── tauri.conf.json           # Tauri 配置
@@ -486,8 +491,8 @@ xattr -cr /Applications/HexClaw.app
 
 ### `make sidecar` 编译失败
 
-1. 确认 Go >= 1.23 已安装: `go version`
-2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.4.1`
+1. 确认 Go >= 1.25 已安装: `go version`
+2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.4.3`
 3. 确认 Rust 工具链已安装 (用于检测平台 triple): `rustc -vV`
 
 ### `make dev` 启动后白屏

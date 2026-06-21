@@ -53,8 +53,13 @@ export function fromNativeError(err: unknown): ApiError {
   if (err instanceof TypeError && err.message.includes('fetch')) {
     return createApiError('NETWORK_ERROR', 'HexClaw 服务未启动或网络不可达', undefined, err)
   }
-  if (err instanceof DOMException && err.name === 'AbortError') {
-    return createApiError('TIMEOUT', '请求超时', undefined, err)
+  if (err instanceof DOMException) {
+    if (err.name === 'AbortError') {
+      return createApiError('TIMEOUT', '请求超时', undefined, err)
+    }
+    // 其它 DOMException（QuotaExceededError / DataError 等）保留原始 message，
+    // 不要覆盖成「未知错误」（DOMException 在 renderer 里不一定 instanceof Error）。
+    return createApiError('UNKNOWN', err.message || '未知错误', undefined, err)
   }
   if (err instanceof Error) {
     // ofetch 的 FetchError 包含 status

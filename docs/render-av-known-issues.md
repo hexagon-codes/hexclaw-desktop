@@ -36,7 +36,7 @@ HexClaw 桌面端为了支持 markdown → docx/pdf/epub 等导出，捆绑了�
    对比 `release/scripts/versions.json` 中对应平台的 sha256。一致 = 来源可信。
 
 2. **临时白名单**：
-   - macOS：默认 Gatekeeper 不会拦（HexClaw 整包已 notarize）
+   - macOS：当前发布为未签名 DMG（未做 Apple 签名 / notarization），Gatekeeper 可能拦截整包或内嵌二进制，需手动放行（如 `xattr -dr com.apple.quarantine <HexClaw.app 路径>`）
    - Windows：把 `<HexClaw 安装目录>\sidecar\render-bundle\` 加入 Windows Defender 白名单
    - 360/火绒：右键二进制选"信任此文件"
 

@@ -49,11 +49,20 @@ export function voiceChat(req: VoiceChatRequest) {
   return apiPost<VoiceChatResult>('/api/v1/voicechat/chat', req)
 }
 
+/** 后端 TTS 支持的输出格式 → 对应 data: URL MIME 映射（openai.go TTS SupportedFormats: mp3/ogg/flac/wav/pcm） */
+const AUDIO_MIME: Record<string, string> = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  flac: 'audio/flac',
+  pcm: 'audio/L16', // 裸 PCM（16-bit 线性），无容器
+}
+
 /** 优先用持久化路径，其次 b64 data URL */
 export function audioToSrc(r: VoiceChatResult): string {
   if (r.audio_file_path) return `${env.apiBase}/api/v1/files/generated/${r.audio_file_path}`
   if (r.audio) {
-    const mime = r.format === 'mp3' ? 'audio/mpeg' : 'audio/wav'
+    const mime = AUDIO_MIME[r.format ?? ''] ?? 'audio/wav'
     return `data:${mime};base64,${r.audio}`
   }
   return ''

@@ -21,6 +21,7 @@ import { emit } from '@/utils/eventBus'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 
 const { t } = useI18n()
 
@@ -90,6 +91,44 @@ const TYPE_COLORS: Record<string, string> = {
 
 const MEMORY_TYPES: MemoryType[] = ['identity', 'preference', 'fact', 'instruction', 'context']
 const MEMORY_SOURCES: MemorySource[] = ['manual', 'chat_explicit', 'chat_extract', 'system']
+
+// ── HcSelect 投影（替代原生 <select>，value 一律 string）──
+const typeFilterOptions = computed(() => [
+  { value: 'all', label: t('memory.allTypes') },
+  ...MEMORY_TYPES.map((type) => ({ value: type, label: t(`memory.type.${type}`, type) })),
+])
+const sourceFilterOptions = computed(() => [
+  { value: 'all', label: t('memory.allSources') },
+  ...MEMORY_SOURCES.map((source) => ({ value: source, label: t(`memory.sourceType.${source}`, source) })),
+])
+// 过滤器 select 原本带 @change="refreshMemoryList"，HcSelect 走 v-model，
+// 副作用在 setter 内触发（值变化才刷新，等价原 @change 语义）。
+const typeFilterModel = computed<string>({
+  get: () => typeFilter.value,
+  set: (v) => {
+    if (typeFilter.value === (v as 'all' | MemoryType)) return
+    typeFilter.value = v as 'all' | MemoryType
+    refreshMemoryList()
+  },
+})
+const sourceFilterModel = computed<string>({
+  get: () => sourceFilter.value,
+  set: (v) => {
+    if (sourceFilter.value === (v as 'all' | MemorySource)) return
+    sourceFilter.value = v as 'all' | MemorySource
+    refreshMemoryList()
+  },
+})
+// 新增记忆弹窗的「类型」下拉（替代原生 <select>，value 一律 string）
+const addTypeOptions = computed(() =>
+  MEMORY_TYPES.map((type) => ({ value: type, label: t(`memory.type.${type}`, type) })),
+)
+const newTypeModel = computed<string>({
+  get: () => newType.value,
+  set: (v) => {
+    newType.value = v as MemoryType
+  },
+})
 
 function normalizeMemoryText(text: string): string {
   return text
@@ -216,7 +255,9 @@ function cancelEdit() {
   editValue.value = ''
 }
 
-async function saveEdit() {
+async function saveEdit(e?: KeyboardEvent) {
+  // IME 守卫：中文/维语等输入法回车确认候选词时 isComposing 为真，不应触发提交
+  if (e?.isComposing) return
   if (savingEdit.value || !editingId.value) return
   const trimmed = editValue.value.trim()
   if (!trimmed) return
@@ -464,28 +505,16 @@ async function handleSearch() {
                     {{ view.label }}
                   </button>
                 </div>
-                <select
-                  v-model="typeFilter"
-                  class="hc-input"
-                  style="width: auto; font-size: 12px;"
-                  @change="refreshMemoryList"
-                >
-                  <option value="all">{{ t('memory.allTypes') }}</option>
-                  <option v-for="type in MEMORY_TYPES" :key="type" :value="type">
-                    {{ t(`memory.type.${type}`, type) }}
-                  </option>
-                </select>
-                <select
-                  v-model="sourceFilter"
-                  class="hc-input"
-                  style="width: auto; font-size: 12px;"
-                  @change="refreshMemoryList"
-                >
-                  <option value="all">{{ t('memory.allSources') }}</option>
-                  <option v-for="source in MEMORY_SOURCES" :key="source" :value="source">
-                    {{ t(`memory.sourceType.${source}`, source) }}
-                  </option>
-                </select>
+                <HcSelect
+                  v-model="typeFilterModel"
+                  :options="typeFilterOptions"
+                  class="hc-memory-filter-select"
+                />
+                <HcSelect
+                  v-model="sourceFilterModel"
+                  :options="sourceFilterOptions"
+                  class="hc-memory-filter-select"
+                />
               </template>
             </div>
           </div>
@@ -572,7 +601,7 @@ async function handleSearch() {
             v-if="entries.length === 0 && !hasVisibleSummary"
             :icon="Brain"
             :title="t('common.noData')"
-            :description="t('memory.description')"
+            :description="t('memory.longTermDesc')"
           />
 
           <div v-else class="max-w-2xl space-y-3">
@@ -592,14 +621,14 @@ async function handleSearch() {
                   data-testid="memory-edit-input"
                   class="flex-1 rounded-lg border px-2 py-1 text-sm outline-none"
                   :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-                  @keydown.enter="saveEdit"
+                  @keydown.enter.exact.prevent="saveEdit"
                   @keydown.escape="cancelEdit"
                 />
                 <button
                   class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                   :style="{ color: 'var(--hc-success, #10b981)' }"
                   :disabled="savingEdit"
-                  @click="saveEdit"
+                  @click="saveEdit()"
                 >
                   <Check :size="14" />
                 </button>
@@ -762,17 +791,13 @@ async function handleSearch() {
               :style="{ borderColor: 'var(--hc-border)' }"
             >
               <div data-testid="memory-add-actions" class="flex flex-wrap items-center gap-2">
-                <select
+                <HcSelect
                   id="memory-type"
                   data-testid="memory-add-type-select"
-                  v-model="newType"
-                  class="w-[150px] rounded-lg border px-3 py-1.5 text-sm outline-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-                >
-                  <option v-for="type in MEMORY_TYPES" :key="type" :value="type">
-                    {{ t(`memory.type.${type}`, type) }}
-                  </option>
-                </select>
+                  v-model="newTypeModel"
+                  class="hc-memory-add-type-select w-[150px]"
+                  :options="addTypeOptions"
+                />
                 <button
                   data-testid="memory-add-save"
                   class="w-[96px] flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
@@ -818,3 +843,17 @@ async function handleSearch() {
     />
   </div>
 </template>
+
+<style scoped>
+/* 新建记忆弹窗淡入淡出（对齐 AgentsView showAddAgent 弹窗的 modal 过渡） */
+.modal-enter-active { transition: opacity 0.2s ease-out; }
+.modal-leave-active { transition: opacity 0.15s ease-in; }
+.modal-enter-from, .modal-leave-to { opacity: 0; }
+
+/* 过滤器下拉：紧凑、随内容自适应宽（对齐原生 select 的 width:auto/font-size:12px） */
+.hc-memory-filter-select {
+  width: auto;
+  min-width: 110px;
+  font-size: 12px;
+}
+</style>

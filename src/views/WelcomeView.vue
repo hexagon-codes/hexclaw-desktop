@@ -17,6 +17,7 @@ import {
 } from 'lucide-vue-next'
 import hexagonLogo from '@/assets/logo.png'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 import { useSettingsStore } from '@/stores/settings'
 import { PROVIDER_PRESETS } from '@/config/providers'
 import type { ModelCapability, ModelOption, ProviderType } from '@/types'
@@ -68,6 +69,14 @@ async function detectOllama() {
 
 const ollamaModels = computed(() => ollamaStatus.value?.models ?? [])
 const ollamaReady = computed(() => ollamaStatus.value?.running === true)
+
+// HcSelect 选项投影（value 一律 string）
+const ollamaModelOptions = computed(() =>
+  ollamaModels.value.map((m) => ({ value: m.name, label: m.name })),
+)
+const providerModelOptions = computed(() =>
+  providerModels.value.map((m) => ({ value: m.id, label: m.name })),
+)
 
 /** Validation: API key required for non-Ollama providers, custom needs base URL */
 const canProceedFromStep0 = computed(() => {
@@ -390,11 +399,7 @@ async function skip() {
             </div>
             <div v-if="ollamaModels.length > 0" class="hc-settings__field">
               <label class="hc-settings__label">{{ t('welcome.ollamaSelectModel', '选择模型') }}</label>
-              <select v-model="model" class="hc-input">
-                <option v-for="m in ollamaModels" :key="m.name" :value="m.name">
-                  {{ m.name }}
-                </option>
-              </select>
+              <HcSelect v-model="model" :options="ollamaModelOptions" />
             </div>
             <p v-else-if="ollamaReady" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
               {{ t('welcome.ollamaNoModels', '暂无已下载模型，完成引导后可在设置页下载。') }}
@@ -437,11 +442,7 @@ async function skip() {
                 class="hc-input"
                 :placeholder="t('welcome.customModelPlaceholder')"
               />
-              <select v-else v-model="model" class="hc-input">
-                <option v-for="m in providerModels" :key="m.id" :value="m.id">
-                  {{ m.name }}
-                </option>
-              </select>
+              <HcSelect v-else v-model="model" :options="providerModelOptions" />
             </div>
             <div class="pt-1">
               <button

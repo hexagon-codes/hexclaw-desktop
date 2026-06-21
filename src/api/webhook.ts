@@ -26,8 +26,18 @@ export function getWebhooks() {
   })
 }
 
-/** 注册 Webhook */
-export function createWebhook(data: { name: string; type: WebhookType; url: string; events: WebhookEvent[] }) {
+/** 注册 Webhook
+ *
+ * 注：前后端契约不一致（后端 RegisterWebhookRequest 要求 prompt 非空、不收 url/events；
+ * 删除按 name）属未定的跨仓库契约问题，由 audit-tasks-automation 的 forensic RED 测试记录、
+ * 待后端协调统一。前端这里维持既有契约，避免单方改动与既有回归锁互相矛盾。
+ */
+export function createWebhook(data: {
+  name: string
+  type: WebhookType
+  url: string
+  events: WebhookEvent[]
+}) {
   return apiPost<{ id: string; name: string; url: string }>('/api/v1/webhooks', {
     name: data.name,
     type: data.type,

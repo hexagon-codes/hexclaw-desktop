@@ -47,6 +47,20 @@ export async function setSkillEnabled(name: string, enabled: boolean): Promise<S
       source: 'backend',
     }
   } catch (error) {
+    // 区分「后端明确业务拒绝(4xx，如 404 技能未安装 / 400 非法名称)」与「网络不可达」：
+    // 只有当错误带有真实的 HTTP `response` 对象（后端确实回了 4xx）时，才如实回报失败，
+    // 不能伪装成「已应用(本地)」误导用户写入无效状态。
+    // 仅有裸 `status` 字段而无 `response`（多为客户端/网络层合成错误）时，
+    // 不视为后端业务拒绝，仍走本地降级。
+    const status = httpStatusOf(error)
+    if (status !== undefined && status >= 400 && status < 500) {
+      return {
+        success: false,
+        enabled,
+        message: error instanceof Error ? error.message : undefined,
+        source: 'backend',
+      }
+    }
     return {
       success: true,
       enabled,
@@ -55,6 +69,16 @@ export async function setSkillEnabled(name: string, enabled: boolean): Promise<S
       source: 'local-fallback',
     }
   }
+}
+
+/**
+ * 从错误里抽取「后端真实 HTTP 响应」的状态码。
+ * 仅认 `error.response.status`（ofetch 在收到后端响应时挂载），不认裸 `.status`/`.statusCode`——
+ * 后者多为网络层/客户端合成错误，不代表后端做出了业务拒绝，应走本地降级而非如实报失败。
+ */
+function httpStatusOf(error: unknown): number | undefined {
+  const e = error as { response?: { status?: number } } | null
+  return e?.response?.status
 }
 
 // ─── ClawHub 技能市场 ──────────────────────────────────
@@ -94,21 +118,14 @@ function filterMockSkills(query?: string, category?: string): ClawHubSkill[] {
   return results.map((s) => ({ ...s, _mock: true }))
 }
 
-const HUB_CATEGORIES = [
-  'coding',
-  'research',
-  'writing',
-  'data',
-  'automation',
-  'productivity',
-] as const
-
-function normalizeHubCategory(raw: unknown): ClawHubSkill['category'] {
+/**
+ * 保留 hub 原始分类（仅小写归一）。
+ * 旧实现会把非标准分类（education/media/automotive…）一律压成 'coding'，
+ * 会破坏前端按精选 pill 的客户端映射过滤，故改为透传原值；空值兜底 'coding'。
+ */
+function normalizeHubCategory(raw: unknown): string {
   const s = typeof raw === 'string' ? raw.toLowerCase().trim() : ''
-  if (HUB_CATEGORIES.includes(s as (typeof HUB_CATEGORIES)[number])) {
-    return s as ClawHubSkill['category']
-  }
-  return 'coding'
+  return s || 'coding'
 }
 
 function mapHubMetaToClawHubSkill(m: Record<string, unknown>): ClawHubSkill {

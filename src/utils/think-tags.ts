@@ -13,15 +13,18 @@ export function extractThinkTags(text: string): { content: string; reasoning: st
 
   const tag = match[1] // "think" 或 "thinking"
   const openTag = `<${tag}>`
-  const closeTag = `</${tag}>`
   const startIdx = text.indexOf(openTag)
-  const endIdx = text.indexOf(closeTag, startIdx)
 
-  if (endIdx === -1) {
+  // 优先匹配同名闭合标签；若模型输出开/闭不一致（如 <think>...</thinking>），
+  // 退而匹配任意 </think> 或 </thinking>，避免把正文吞进 reasoning。
+  const after = text.slice(startIdx + openTag.length)
+  const closeMatch = after.match(/<\/think(?:ing)?>/)
+
+  if (!closeMatch || closeMatch.index === undefined) {
     // 尚未收到闭合标签（流式中），全部视为 reasoning
-    return { content: '', reasoning: text.slice(startIdx + openTag.length) }
+    return { content: '', reasoning: after }
   }
-  const reasoning = text.slice(startIdx + openTag.length, endIdx).trim()
-  const content = text.slice(endIdx + closeTag.length).trim()
+  const reasoning = after.slice(0, closeMatch.index).trim()
+  const content = after.slice(closeMatch.index + closeMatch[0].length).trim()
   return { content, reasoning }
 }

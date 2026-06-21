@@ -5,9 +5,9 @@ import { useI18n } from 'vue-i18n'
 import { Plus, Store, FolderOpen, Link } from 'lucide-vue-next'
 import SkillsView from '@/views/SkillsView.vue'
 import McpView from '@/views/McpView.vue'
+import PromptsView from '@/views/PromptsView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
-import PageHeader from '@/components/common/PageHeader.vue'
 import SplitButton, { type SplitButtonItem } from '@/components/common/SplitButton.vue'
 import { getNavigationChildren } from '@/config/navigation'
 
@@ -17,6 +17,7 @@ const router = useRouter()
 
 function resolveTab(path: string): string {
   if (path.startsWith('/integration/mcp')) return 'mcp'
+  if (path.startsWith('/integration/prompts')) return 'prompts'
   return 'skills'
 }
 
@@ -25,6 +26,7 @@ const integrationSearch = ref('')
 const tabKeyMap: Record<string, string> = {
   'integration-skills': 'skills',
   'integration-mcp': 'mcp',
+  'integration-prompts': 'prompts',
 }
 
 const segments = computed(() =>
@@ -39,13 +41,26 @@ watch(() => route.path, (p) => {
 })
 
 watch(activeTab, (tab) => {
-  const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp' }
+  const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp', prompts: '/integration/prompts' }
   const target = pathMap[tab] || '/integration'
   if (route.path !== target) router.replace(target)
 })
 
 const skillsViewRef = ref<{ openInstallDialog?: () => void; switchToHub?: () => void }>()
 const mcpViewRef = ref<{ openAddServer?: () => void; switchToMarketplace?: () => void }>()
+const promptsViewRef = ref<{ newPrompt?: () => void; addMemory?: () => void }>()
+// 跟踪 PromptsView 内当前子 tab（由事件驱动，保证响应性）
+const promptsSection = ref<'prompts' | 'memories'>('prompts')
+watch(activeTab, (tab) => {
+  if (tab === 'prompts') promptsSection.value = 'prompts'
+})
+
+// 顶栏搜索框 placeholder：3 个子 tab 都显示搜索框，文案按子 tab 区分
+const searchPlaceholder = computed(() => {
+  if (activeTab.value === 'mcp') return t('integration.searchMcp', '搜索 MCP…')
+  if (activeTab.value === 'prompts') return t('integration.searchPrompts', '搜索 Prompt…')
+  return t('integration.searchSkills', '搜索 Skill…')
+})
 
 const splitLabel = computed(() =>
   activeTab.value === 'mcp'
@@ -86,7 +101,7 @@ function onSplitSelect(id: string) {
 <template>
   <div class="hc-page-shell">
     <PageToolbar
-      :search-placeholder="activeTab === 'skills' ? t('integration.searchPlaceholder', 'Search skills, MCP servers...') : undefined"
+      :search-placeholder="searchPlaceholder"
       @search="integrationSearch = $event"
     >
       <template #tabs>
@@ -101,13 +116,19 @@ function onSplitSelect(id: string) {
           @click="onSplitMainClick"
           @select="onSplitSelect"
         />
+        <!-- Prompt 库 tab：主操作随子 tab 切换（全部=新建 Prompt / 记忆=添加记忆，对齐原型 tbar in-2） -->
+        <button
+          v-else-if="activeTab === 'prompts'"
+          class="hc-btn hc-btn-primary"
+          @click="promptsSection === 'memories' ? promptsViewRef?.addMemory?.() : promptsViewRef?.newPrompt?.()"
+        >
+          <Plus :size="14" />
+          {{ promptsSection === 'memories'
+            ? t('memories.addMemory', '添加记忆')
+            : t('integration.newPrompt', '新建 Prompt') }}
+        </button>
       </template>
     </PageToolbar>
-    <PageHeader
-      :eyebrow="t('integration.eyebrow', 'integration')"
-      :title="t('integration.title', 'Integrations')"
-      :description="t('integration.description', 'Manage skills and MCP servers.')"
-    />
     <div class="hc-page-shell__content">
       <SkillsView
         v-if="activeTab === 'skills'"
@@ -115,7 +136,17 @@ function onSplitSelect(id: string) {
         :embedded-search="integrationSearch"
         :hide-installed-search="true"
       />
-      <McpView v-else-if="activeTab === 'mcp'" ref="mcpViewRef" />
+      <McpView
+        v-else-if="activeTab === 'mcp'"
+        ref="mcpViewRef"
+        :embedded-search="integrationSearch"
+      />
+      <PromptsView
+        v-else-if="activeTab === 'prompts'"
+        ref="promptsViewRef"
+        :filter="integrationSearch"
+        @section-change="promptsSection = $event"
+      />
     </div>
   </div>
 </template>

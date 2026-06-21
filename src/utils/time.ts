@@ -87,7 +87,9 @@ export function formatLogTime(ts: string): string {
  * so long-running compiles read as minutes instead of raw seconds.
  */
 export function formatElapsedSeconds(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds))
+  // NaN / Infinity / 负数（脏数据：未来时间、解析失败、undefined）兜底为 0s，
+  // 避免渲染出 "NaN:NaN" / "Infinity:NaN" 给用户。
+  const s = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0
   if (s < 60) return `${s}s`
   return `${Math.floor(s / 60)}:${pad2(s % 60)}`
 }
@@ -98,22 +100,25 @@ export function formatElapsedSeconds(seconds: number): string {
  * same scale as formatElapsedSeconds so running/finished rows read alike.
  */
 export function formatDurationMs(ms?: number): string {
-  if (!ms || ms < 0) return '-'
+  // 0 是合法耗时（不是缺失）→ 显示 "0ms"；仅 undefined/null 或负数才当「无数据」显示 "-"。
+  if (ms == null || ms < 0) return '-'
   if (ms < 1000) return `${Math.round(ms)}ms`
   return formatElapsedSeconds(ms / 1000)
 }
 
-/** Short relative time for streaming contexts: "3s ago", "2m ago" */
+/** Short relative time for streaming contexts: "3s ago" / "3 秒前"（跟随 locale）。 */
 export function formatRelative(ts: string, now: number): string {
   const d = new Date(ts)
   if (isNaN(d.getTime())) return ts
   const diff = now - d.getTime()
-  if (diff < 5000) return isZh() ? '刚刚' : 'just now'
+  const zh = isZh()
+  if (diff < 5000) return zh ? '刚刚' : 'just now'
   const s = Math.floor(diff / 1000)
-  if (s < 60) return `${s}s ago`
+  if (s < 60) return zh ? `${s} 秒前` : `${s}s ago`
   const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m ago`
+  if (m < 60) return zh ? `${m} 分钟前` : `${m}m ago`
   const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
+  if (h < 24) return zh ? `${h} 小时前` : `${h}h ago`
+  const dd = Math.floor(h / 24)
+  return zh ? `${dd} 天前` : `${dd}d ago`
 }

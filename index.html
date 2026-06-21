@@ -68,11 +68,23 @@
       <div class="splash-logo">
         <img src="/logo.png" alt="HexClaw" />
       </div>
-      <div class="splash-title">HexClaw</div>
+      <div class="splash-title" id="splash-title">河蟹</div>
       <div class="splash-spinner"></div>
     </div>
 
     <div id="app"></div>
+    <!-- 启动闪屏品牌名：中文界面显示「河蟹」，其它语言显示「HexClaw」（与侧栏 nav.brandName 一致） -->
+    <script>
+      (function () {
+        try {
+          var locale = localStorage.getItem('hc-locale') || 'zh-CN'
+          if (locale !== 'zh-CN') {
+            var el = document.getElementById('splash-title')
+            if (el) el.textContent = 'HexClaw'
+          }
+        } catch (e) {}
+      })()
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

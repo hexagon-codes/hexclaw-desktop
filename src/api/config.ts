@@ -66,10 +66,18 @@ function isPrivateHostname(hostname: string): boolean {
     )
   }
 
-  return host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80:')
+  // fc00::/7 (ULA) 与 fe80::/10 (link-local) 仅对 IPv6 字面量成立；纯域名（无 ':'）
+  // 不能用 'fc'/'fd' 前缀粗判，否则 fcdn.example.com / fd-cdn.net 等合法公网域名被误杀。
+  if (host.includes(':')) {
+    return host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80:')
+  }
+  return false
 }
 
 function assertExternalBaseUrlAllowed(baseUrl: string, providerType?: string): void {
+  // 空 base_url：后端 validateExternalProviderBaseURL 直接放行（走 SDK 默认 endpoint），
+  // 前端不应强拦——否则只填 api_key+model 的云 provider 连「测试连接」都发不出去。
+  if (baseUrl.trim() === '') return
   let parsed: URL
   try {
     parsed = new URL(baseUrl)

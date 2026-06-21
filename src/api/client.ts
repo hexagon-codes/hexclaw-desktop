@@ -144,26 +144,49 @@ export async function apiSSE(
   const decoder = new TextDecoder()
   let lineBuffer = ''
 
+  // 解析单行 SSE：剥除 CRLF 的尾随 \r（SSE 规范允许 \r\n），匹配 data: / [DONE]。
+  const handleLine = (
+    raw: string,
+    controller: ReadableStreamDefaultController<string>,
+  ): 'done' | 'enqueued' | 'skip' => {
+    const line = raw.endsWith('\r') ? raw.slice(0, -1) : raw
+    if (!line.startsWith('data: ')) return 'skip'
+    const data = line.slice(6)
+    if (data === '[DONE]') return 'done'
+    controller.enqueue(data)
+    return 'enqueued'
+  }
+
   return new ReadableStream<string>({
     async pull(controller) {
       try {
-        const { done, value } = await reader.read()
-        if (done) {
-          controller.close()
-          return
-        }
-        lineBuffer += decoder.decode(value, { stream: true })
-        const lines = lineBuffer.split('\n')
-        lineBuffer = lines.pop() || '' // 最后一段可能是不完整行，保留到下次
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6)
-            if (data === '[DONE]') {
+        // 单次 pull 内持续读，直到产出 ≥1 条 data、遇 [DONE] 或 done 收尾。
+        // 不能在「只读到半行、无产出」时直接 return —— 那会依赖 stream 再次 pull 的语义，
+        // 部分实现（jsdom）下消费者 read() 会永久挂起。
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) {
+            // flush 末行：最后一条 data 可能未以 \n 结尾，done 时残留在 lineBuffer，
+            // 不补处理会被静默丢弃。
+            const tail = lineBuffer
+            lineBuffer = ''
+            if (tail) handleLine(tail, controller)
+            controller.close()
+            return
+          }
+          lineBuffer += decoder.decode(value, { stream: true })
+          const lines = lineBuffer.split('\n')
+          lineBuffer = lines.pop() || '' // 最后一段可能是不完整行，保留到下次
+          let produced = false
+          for (const line of lines) {
+            const r = handleLine(line, controller)
+            if (r === 'done') {
               controller.close()
               return
             }
-            controller.enqueue(data)
+            if (r === 'enqueued') produced = true
           }
+          if (produced) return // 有产出即交还消费者；下次 read() 触发新的 pull
         }
       } catch (err) {
         const apiErr = fromNativeError(err)

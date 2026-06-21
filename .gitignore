@@ -41,3 +41,7 @@ playwright-report/
 
 # Runtime output (image generation cache)
 /output/
+
+# 对比/诊断截图与 Playwright 临时产物（不入库）
+.playwright-mcp/
+/*.png

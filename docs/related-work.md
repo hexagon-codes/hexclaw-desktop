@@ -48,5 +48,5 @@ The goal is to solve local desktop Agent workflows with transparent execution, r
 ## Attribution Policy
 
 - Use `Related Work` when discussing public projects that address similar problems.
-- Use `THIRD_PARTY_NOTICES.md`, source-file headers, or license-preserving notices when third-party code, documentation, prompts, or assets are copied or adapted.
+- Use `THIRD_PARTY.md`, source-file headers, or license-preserving notices when third-party code, documentation, prompts, or assets are copied or adapted.
 - Do not describe HexClaw as "based on", "derived from", or "built on top of" another project unless that is technically true and the dependency/license notices are present.

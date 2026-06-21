@@ -26,10 +26,8 @@ import {
   setSkillEnabled,
   searchClawHub,
   installFromHub,
-  CLAWHUB_CATEGORIES,
   type Skill,
   type ClawHubSkill,
-  type ClawHubCategory,
   type SkillInstallType,
 } from '@/api/skills'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
@@ -39,6 +37,7 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { useAppStore } from '@/stores/app'
+import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -53,6 +52,12 @@ const props = withDefaults(defineProps<{
 
 // ─── Tab 切换 ─────────────────────────────────────────
 const activeTab = ref<'installed' | 'hub'>('installed')
+
+// 二级 tab（统一 UnderlineTabs）：已安装（带计数）/ 市场 —— 纯文字，无图标（与 MCP/Prompt 一致）
+const skillSubTabs = computed(() => [
+  { key: 'installed', label: t('skills.installed'), count: skills.value.length },
+  { key: 'hub', label: t('skills.marketplace'), count: hubSkills.value.length },
+])
 
 // ─── 已安装 Skill ─────────────────────────────────────
 const skills = ref<Skill[]>([])
@@ -336,33 +341,60 @@ const hasLocalOnlySkills = computed(() =>
 const hubSkills = ref<ClawHubSkill[]>([])
 const hubLoading = ref(false)
 const hubSearchQuery = ref('')
-const hubCategory = ref<ClawHubCategory>('all')
+const hubCategory = ref<string>('all')
 const hubInstallingSet = ref<Set<string>>(new Set())
 const hubInstallError = ref('')
 const hubSearchError = ref('')
 let hubRequestSeq = 0
 
-const categoryLabels: Record<ClawHubCategory, string> = {
-  all: 'skills.hub.catAll',
-  coding: 'skills.hub.catCoding',
-  research: 'skills.hub.catResearch',
-  writing: 'skills.hub.catWriting',
-  data: 'skills.hub.catData',
-  automation: 'skills.hub.catAutomation',
-  productivity: 'skills.hub.catProductivity',
+// ─── 市场分类 pill（精选 pill → hub 技能分类集合 的展示映射；统一渲染后端 hub，客户端过滤）──
+interface SkillPill {
+  key: string
+  label: string
+  /** 命中的 hub 分类集合；null = 全部 */
+  cats: string[] | null
 }
+const SKILL_PILLS: SkillPill[] = [
+  { key: 'all', label: t('skills.hub.catAll', '全部'), cats: null },
+  { key: 'coding', label: t('skills.hub.catCoding', '编程'), cats: ['coding'] },
+  { key: 'research', label: t('skills.hub.catResearch', '研究'), cats: ['research'] },
+  { key: 'writing', label: t('skills.hub.catWriting', '写作'), cats: ['writing'] },
+  { key: 'data', label: t('skills.hub.catData', '数据'), cats: ['data'] },
+  { key: 'automation', label: t('skills.hub.catAutomation', '自动化'), cats: ['automation'] },
+  { key: 'productivity', label: t('skills.hub.catProductivity', '生产力'), cats: ['productivity'] },
+  { key: 'education', label: t('skills.hub.catEducation', '教育'), cats: ['education'] },
+  { key: 'media', label: t('skills.hub.catMedia', '创作'), cats: ['media'] },
+  { key: 'life', label: t('skills.hub.catLife', '生活'), cats: ['automotive'] },
+]
+
+const activeSkillCats = computed(() => SKILL_PILLS.find((p) => p.key === hubCategory.value)?.cats ?? null)
+
+// 原硬编码"热门推荐"已删除：统一按 pill 分类 + 搜索词客户端过滤后端 hub 列表
+const filteredHubSkills = computed(() => {
+  const cats = activeSkillCats.value
+  const q = hubSearchQuery.value.trim().toLowerCase()
+  return hubSkills.value.filter((s) => {
+    if (cats && !cats.includes((s.category || '').toLowerCase())) return false
+    if (!q) return true
+    return (
+      (s.display_name || s.name).toLowerCase().includes(q) ||
+      s.name.toLowerCase().includes(q) ||
+      (s.description || '').toLowerCase().includes(q) ||
+      (s.author || '').toLowerCase().includes(q) ||
+      (s.tags || []).some((tg) => tg.toLowerCase().includes(q))
+    )
+  })
+})
 
 async function loadHubSkills() {
   const requestSeq = ++hubRequestSeq
   hubLoading.value = true
   hubSearchError.value = ''
   try {
-    const nextSkills = await searchClawHub(
-      hubSearchQuery.value || undefined,
-      hubCategory.value,
-    )
+    // 一次拉全量 hub 技能；分类 pill + 搜索词改为 filteredHubSkills 客户端过滤
+    const nextSkills = await searchClawHub()
     if (requestSeq !== hubRequestSeq) return
-    hubSkills.value = nextSkills
+    hubSkills.value = Array.isArray(nextSkills) ? nextSkills : []
   } catch (e) {
     if (requestSeq !== hubRequestSeq) return
     hubSkills.value = []
@@ -384,20 +416,7 @@ watch(activeTab, (tab) => {
   }
 })
 
-watch(hubCategory, () => {
-  loadHubSkills()
-})
-
-let hubSearchTimer: ReturnType<typeof setTimeout> | null = null
-function onHubSearchInput() {
-  if (hubSearchTimer) clearTimeout(hubSearchTimer)
-  hubSearchTimer = setTimeout(() => {
-    loadHubSkills()
-  }, 300)
-}
-
 onBeforeUnmount(() => {
-  if (hubSearchTimer) clearTimeout(hubSearchTimer)
   unlistenDrop?.()
 })
 
@@ -478,45 +497,13 @@ defineExpose({ openInstallDialog, switchToHub })
       />
     </div>
 
-    <!-- Tab 切换栏 -->
-    <div
-      class="flex items-center gap-1 px-6 pt-2 pb-0"
-    >
-      <button
-        class="px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors"
-        :style="{
-          color: activeTab === 'installed' ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
-          borderColor: activeTab === 'installed' ? 'var(--hc-accent)' : 'transparent',
-          background: activeTab === 'installed' ? 'var(--hc-bg-hover)' : 'transparent',
-        }"
-        @click="activeTab = 'installed'"
-      >
-        <span class="flex items-center gap-1.5">
-          <Puzzle :size="14" />
-          {{ t('skills.installed') }}
-          <span
-            v-if="skills.length"
-            class="text-xs px-1.5 py-0.5 rounded-full"
-            :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
-          >
-            {{ skills.length }}
-          </span>
-        </span>
-      </button>
-      <button
-        class="px-4 py-2 text-sm font-medium rounded-t-lg border-b-2 transition-colors"
-        :style="{
-          color: activeTab === 'hub' ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
-          borderColor: activeTab === 'hub' ? 'var(--hc-accent)' : 'transparent',
-          background: activeTab === 'hub' ? 'var(--hc-bg-hover)' : 'transparent',
-        }"
-        @click="activeTab = 'hub'"
-      >
-        <span class="flex items-center gap-1.5">
-          <Store :size="14" />
-          {{ t('skills.hub.title') }}
-        </span>
-      </button>
+    <!-- 二级 tab：已安装 / 市场（统一 UnderlineTabs，滑动下划线） -->
+    <div class="px-6 pt-2">
+      <UnderlineTabs
+        :tabs="skillSubTabs"
+        :model-value="activeTab"
+        @update:model-value="activeTab = $event as 'installed' | 'hub'"
+      />
     </div>
 
     <div
@@ -570,7 +557,7 @@ defineExpose({ openInstallDialog, switchToHub })
         <div
           v-for="skill in filteredSkills"
           :key="skill.name"
-          class="rounded-xl border overflow-hidden transition"
+          class="hc-card-interactive rounded-xl border overflow-hidden"
           :style="{
             background: 'var(--hc-bg-card)',
             borderColor: 'var(--hc-border)',
@@ -787,23 +774,22 @@ defineExpose({ openInstallDialog, switchToHub })
           v-model="hubSearchQuery"
           :fluid="true"
           :placeholder="t('skills.hub.searchPlaceholder')"
-          @update:model-value="onHubSearchInput"
         />
       </div>
 
       <!-- 分类 Chips -->
       <div class="flex flex-wrap gap-2 mb-5 max-w-4xl">
         <button
-          v-for="cat in CLAWHUB_CATEGORIES"
-          :key="cat"
+          v-for="pill in SKILL_PILLS"
+          :key="pill.key"
           class="px-3 py-1 rounded-full text-xs font-medium transition-colors"
           :style="{
-            background: hubCategory === cat ? 'var(--hc-accent)' : 'var(--hc-bg-hover)',
-            color: hubCategory === cat ? '#fff' : 'var(--hc-text-secondary)',
+            background: hubCategory === pill.key ? 'var(--hc-accent)' : 'var(--hc-bg-hover)',
+            color: hubCategory === pill.key ? '#fff' : 'var(--hc-text-secondary)',
           }"
-          @click="hubCategory = cat"
+          @click="hubCategory = pill.key"
         >
-          {{ t(categoryLabels[cat]) }}
+          {{ pill.label }}
         </button>
       </div>
 
@@ -829,7 +815,7 @@ defineExpose({ openInstallDialog, switchToHub })
         </div>
 
         <EmptyState
-          v-else-if="hubSkills.length === 0"
+          v-else-if="filteredHubSkills.length === 0"
           :icon="Store"
           :title="t('skills.hub.noResults')"
           :description="t('skills.hub.noResultsDesc')"
@@ -838,7 +824,7 @@ defineExpose({ openInstallDialog, switchToHub })
         <!-- 技能卡片网格 -->
         <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl">
         <div
-          v-for="skill in hubSkills"
+          v-for="skill in filteredHubSkills"
           :key="skill.name"
           class="rounded-xl border p-4 flex flex-col"
           :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"

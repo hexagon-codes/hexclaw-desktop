@@ -122,29 +122,34 @@ HexClaw uses a classic three-column layout:
 
 ### Sidebar Navigation
 
-The navigation uses a three-tier grouping design with 8 top-level entries:
+The navigation uses a grouped design with 8 top-level entries. The app opens to `Chat` by default.
 
-**Workspace (Core)**
+**Chat** (pinned on top, no group header)
 
 | Page | Description | Sub-tabs |
 |------|-------------|----------|
-| Dashboard | System overview, statistics, and recent activity | — |
-| Chat | AI multi-turn conversation, session management, Artifacts | — |
+| Chat | AI multi-turn conversation, session management, Artifacts, research mode (default landing) | — |
+
+**Build**
+
+| Page | Description | Sub-tabs |
+|------|-------------|----------|
 | Agents | Agent templates, running instances, routing rules, conference mode | — |
-| Knowledge | Knowledge and memory management | Documents · Memory |
-| Automation | Scheduled tasks and workflow orchestration | Tasks · Canvas |
+| Knowledge | Knowledge and memory management | Knowledge · Memory |
+| Automation | Scheduled tasks and Webhook notifications | Tasks · Webhooks |
 
-**Integration & Ops**
+**Connections**
 
 | Page | Description | Sub-tabs |
 |------|-------------|----------|
-| Integration | External tools and channel integration | Skills · MCP · IM Channels · Diagnostics |
-| Logs | Real-time runtime log viewing and filtering | — |
+| IM Channels | Feishu / DingTalk / WeCom / Discord / Telegram remote task entries | — |
+| Integration | External tools and service integration | Skills · MCP |
 
 **System**
 
 | Page | Description |
 |------|-------------|
+| Logs | Real-time runtime log viewing and filtering |
 | Settings | LLM providers, security, notifications, webhooks, theme, locale, etc. |
 
 ### Engine Status Indicator
@@ -419,11 +424,12 @@ Each component shows runtime status (green/red), version, and key info. Click th
 |----------|--------|
 | `⌘+1` | Switch to Chat page |
 | `⌘+2` | Switch to Agents page |
-| `⌘+3` | Switch to Automation page |
-| `⌘+4` | Switch to Integration page |
-| `⌘+5` | Switch to Logs page |
-| `⌘+6` | Switch to Knowledge Center |
-| `⌘+7` | Switch to Settings page |
+| `⌘+3` | Switch to Knowledge page |
+| `⌘+4` | Switch to Automation page |
+| `⌘+5` | Switch to IM Channels page |
+| `⌘+6` | Switch to Integration page |
+| `⌘+7` | Switch to Logs page |
+| `⌘+8` | Switch to Settings page |
 | `⌘+N` | New conversation |
 | `⌘+,` | Open Settings |
 | `⌘+K` | Open Command Palette |

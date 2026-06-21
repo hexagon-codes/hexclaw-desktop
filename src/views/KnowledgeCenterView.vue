@@ -7,7 +7,6 @@ import KnowledgeView from '@/views/KnowledgeView.vue'
 import MemoryView from '@/views/MemoryView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
-import PageHeader from '@/components/common/PageHeader.vue'
 import { getNavigationChildren } from '@/config/navigation'
 import { getRuntimeConfig } from '@/api/settings'
 import { useToast } from '@/composables'
@@ -172,13 +171,6 @@ async function onRefresh() {
         </template>
       </template>
     </PageToolbar>
-    <PageHeader
-      :eyebrow="t('knowledge.eyebrow', 'knowledge base')"
-      :title="t('knowledge.title', 'Knowledge')"
-      :description="
-        t('knowledge.description', 'Manage documents and memory for contextual AI responses.')
-      "
-    />
     <div class="hc-page-shell__content">
       <KnowledgeView
         v-if="activeTab === 'docs'"

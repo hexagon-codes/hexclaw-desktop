@@ -12,7 +12,7 @@ import { useI18n } from 'vue-i18n'
 import { X, Eye, EyeOff, Link2, CheckCircle2, AlertCircle, Loader2 } from 'lucide-vue-next'
 import { useConnectorInstances, type ConnectorInstance } from '@/composables/useConnectorInstances'
 import { useToast } from '@/composables/useToast'
-import { createConnector, testConnector as apiTestConnector, type ConnectorProvider } from '@/api/connectors'
+import { createConnector, testConnector as apiTestConnector } from '@/api/connectors'
 
 /** 类型选择器单源：父级从 CONNECTOR_TYPES 投影而来（含 logo / monogram 命中）。 */
 export interface ConnectorTypeItem {
@@ -72,7 +72,7 @@ async function runTokenTest() {
   testing.value = true
   testState.value = 'idle'
   try {
-    const res = await apiTestConnector(formType.value as ConnectorProvider, formToken.value.trim())
+    const res = await apiTestConnector(formType.value, formToken.value.trim())
     testState.value = res.ok ? 'ok' : 'fail'
     testDetail.value = res.detail
   } catch (e) {
@@ -205,7 +205,7 @@ async function handleSave() {
     }
     saving.value = true
     try {
-      const created = await createConnector(formType.value as ConnectorProvider, name, formToken.value.trim())
+      const created = await createConnector(formType.value, name, formToken.value.trim())
       addInstance({
         type: formType.value,
         name: created.name || name,

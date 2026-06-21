@@ -22,7 +22,6 @@ import { useSettingsStore } from '@/stores/settings'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from '@/stores/model-catalog'
 import { getRuntimeConfig } from '@/api/settings'
 import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
-import { exportAllConfig, importConfig, type ExportBundle } from '@/api/team'
 import { fetchCapabilities, probeCapability } from '@/api/capabilities'
 import {
   getBudgetStatus,
@@ -54,6 +53,7 @@ import type {
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import ProviderSelect from '@/components/common/ProviderSelect.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 import OllamaCard from '@/components/settings/OllamaCard.vue'
 import ModelManagerModal from '@/components/settings/ModelManagerModal.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -134,15 +134,6 @@ function handleThemeSelect(mode: ThemeMode) {
 }
 
 function handleRoutingToggle() {
-  if (!config.value) return
-  config.value.llm.routing = {
-    enabled: config.value.llm.routing?.enabled ?? false,
-    strategy: config.value.llm.routing?.strategy || 'cost-aware',
-  }
-  autoSave()
-}
-
-function handleRoutingStrategyChange() {
   if (!config.value) return
   config.value.llm.routing = {
     enabled: config.value.llm.routing?.enabled ?? false,
@@ -288,6 +279,21 @@ function handleLanguageChange() {
   handleLocaleChange(config.value.general.language)
   autoSave()
 }
+
+// 语言下拉（替代原生 <select class="hc-input">，原 @change=handleLanguageChange 改由 setter 触发）
+const languageOptions = [
+  { value: 'zh-CN', label: '中文' },
+  { value: 'en', label: 'English' },
+  { value: 'ug-CN', label: '维吾尔语' },
+]
+const languageModel = computed<string>({
+  get: () => config.value?.general.language ?? 'zh-CN',
+  set: (v) => {
+    if (!config.value || config.value.general.language === v) return
+    config.value.general.language = v
+    handleLanguageChange()
+  },
+})
 
 // ─── A7 模型 tool_call 能力探测 ──────────────────────────
 
@@ -453,6 +459,11 @@ const defaultModelOptions = computed(() =>
     label: `${m.providerName} / ${m.modelName}`,
   })),
 )
+// HcSelect 投影：默认模型下拉，首项为「无可用模型」空值占位（替代原生空 <option>）
+const defaultModelSelectOptions = computed(() => [
+  { value: '', label: t('settings.llm.noEnabledModels') },
+  ...defaultModelOptions.value.map((option) => ({ value: option.value, label: option.label })),
+])
 const selectedDefaultModelValue = computed({
   get() {
     const llmConfig = config.value?.llm
@@ -487,6 +498,33 @@ const agentModeValue = computed({
   set(value: string) {
     if (!config.value?.llm) return
     config.value.llm.agentMode = value as import('@/types').AgentMode
+    // 原 <select @change="autoSave">，HcSelect 仅 emit update:modelValue，副作用移入 setter
+    autoSave()
+  },
+})
+const agentModeOptions = [
+  { value: 'auto', label: '自动（推荐）' },
+  { value: 'react', label: 'ReAct — 通用工具循环' },
+  { value: 'plan-execute', label: 'Plan-Execute — 先规划再执行' },
+  { value: 'reflection', label: 'Reflection — 答后自查' },
+  { value: 'tot', label: 'ToT — 多解择优' },
+  { value: 'self-reflect', label: 'Self-Reflect — 每步反思' },
+  { value: 'mem-augmented', label: 'Memory-Augmented — 个性化档案' },
+  { value: 'debate', label: 'Debate — 双视角辩论' },
+]
+// HcSelect 投影：路由策略下拉。原 <select @change="handleRoutingStrategyChange">，
+// HcSelect 仅 emit update:modelValue，故把写值 + 副作用收进 setter。
+const routingStrategyValue = computed({
+  get() {
+    return config.value?.llm.routing?.strategy ?? 'cost-aware'
+  },
+  set(value: string) {
+    if (!config.value) return
+    config.value.llm.routing = {
+      enabled: config.value.llm.routing?.enabled ?? false,
+      strategy: value,
+    }
+    autoSave()
   },
 })
 const routingStrategyOptions = computed(() => [
@@ -1018,62 +1056,6 @@ async function handleManagerResync() {
   }
 }
 
-// ─── 配置导入导出 ──────────────────────────────────────
-const exportingBundle = ref(false)
-const importingBundle = ref(false)
-const bundleResultMsg = ref('')
-const bundleResultIsError = ref(false)
-
-async function handleExportConfigBundle() {
-  if (exportingBundle.value) return
-  exportingBundle.value = true
-  bundleResultMsg.value = ''
-  try {
-    const bundle = await exportAllConfig()
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `hexclaw-export-${new Date().toISOString().slice(0, 10)}.json`
-    a.click()
-    URL.revokeObjectURL(url)
-    bundleResultIsError.value = false
-    bundleResultMsg.value = t('settings.configBundle.exportDone', '已导出')
-  } catch (e) {
-    bundleResultIsError.value = true
-    bundleResultMsg.value = messageFromUnknownError(e)
-  } finally {
-    exportingBundle.value = false
-  }
-}
-
-function handleImportConfigBundle() {
-  if (importingBundle.value) return
-  bundleResultMsg.value = ''
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = '.json'
-  input.onchange = async () => {
-    const file = input.files?.[0]
-    if (!file) return
-    importingBundle.value = true
-    try {
-      const text = await file.text()
-      const bundle = JSON.parse(text) as ExportBundle
-      const result = await importConfig(bundle)
-      await settingsStore.loadConfig()
-      bundleResultIsError.value = false
-      bundleResultMsg.value = t('settings.configBundle.importDone', { n: result.imported }, `成功导入 ${result.imported} 项配置`)
-    } catch (e) {
-      bundleResultIsError.value = true
-      bundleResultMsg.value = messageFromUnknownError(e)
-    } finally {
-      importingBundle.value = false
-    }
-  }
-  input.click()
-}
-
 /** 自动保存（防抖） */
 function autoSave() {
   hasPendingAutoSave = true
@@ -1176,17 +1158,13 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 <span class="hc-settings__info" :data-info="t('settings.llm.defaultModelHint')">?</span>
               </span>
               <div class="hc-settings__row-right">
-                <select
+                <HcSelect
                   v-model="selectedDefaultModelValue"
                   data-testid="llm-default-model-select"
                   class="hc-settings__select"
+                  :options="defaultModelSelectOptions"
                   :disabled="defaultModelOptions.length === 0"
-                >
-                  <option value="">{{ t('settings.llm.noEnabledModels') }}</option>
-                  <option v-for="option in defaultModelOptions" :key="option.value" :value="option.value">
-                    {{ option.label }}
-                  </option>
-                </select>
+                />
               </div>
             </div>
 
@@ -1197,17 +1175,13 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 <span class="hc-settings__info" data-info="开启后，未指定模型的请求将根据偏好策略自动选择最优模型。">?</span>
               </span>
               <div class="hc-settings__row-right">
-                <select
+                <HcSelect
                   v-if="config.llm.routing?.enabled"
-                  v-model="config.llm.routing!.strategy"
+                  v-model="routingStrategyValue"
                   data-testid="llm-routing-strategy-select"
                   class="hc-settings__select"
-                  @change="handleRoutingStrategyChange"
-                >
-                  <option v-for="option in routingStrategyOptions" :key="option.value" :value="option.value">
-                    {{ option.label }}
-                  </option>
-                </select>
+                  :options="routingStrategyOptions"
+                />
                 <input
                   v-model="config.llm.routing!.enabled"
                   data-testid="llm-routing-toggle"
@@ -1225,21 +1199,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 <span class="hc-settings__info" data-info="auto 按问题自动选；ReAct 工具循环；Plan-Execute 先规划再执行；Reflection 答后自查；ToT 多解择优；Self-Reflect 每步反思；Memory-Augmented 个性化档案；Debate 双视角辩论。">?</span>
               </span>
               <div class="hc-settings__row-right">
-                <select
+                <HcSelect
                   v-model="agentModeValue"
                   data-testid="llm-agent-mode-select"
                   class="hc-settings__select"
-                  @change="autoSave"
-                >
-                  <option value="auto">自动（推荐）</option>
-                  <option value="react">ReAct — 通用工具循环</option>
-                  <option value="plan-execute">Plan-Execute — 先规划再执行</option>
-                  <option value="reflection">Reflection — 答后自查</option>
-                  <option value="tot">ToT — 多解择优</option>
-                  <option value="self-reflect">Self-Reflect — 每步反思</option>
-                  <option value="mem-augmented">Memory-Augmented — 个性化档案</option>
-                  <option value="debate">Debate — 双视角辩论</option>
-                </select>
+                  :options="agentModeOptions"
+                />
               </div>
             </div>
 
@@ -1311,15 +1276,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             <!-- 本地 LLM (Ollama) 卡片 -->
             <OllamaCard @associate="handleAssociateOllama" @toggle-provider="handleToggleOllamaProvider" />
 
-            <!-- Provider 列表 -->
-            <div
-              v-if="nonOllamaProviders.length === 0 && !showAddProvider"
-              class="hc-provider__empty"
-            >
-              <p class="hc-provider__empty-title">{{ t('settings.llm.noProviders') }}</p>
-              <p class="hc-provider__empty-desc">{{ t('settings.llm.noProvidersDesc') }}</p>
-            </div>
-
+            <!-- Provider 列表（本地 Ollama 常驻，故不再额外渲染「尚未添加服务商」空态；对齐原型） -->
             <div class="hc-provider__list">
               <div
                 v-for="provider in nonOllamaProviders"
@@ -1640,15 +1597,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
               <div class="hc-settings__field">
                 <label class="hc-settings__label">{{ t('settings.general.language') }}</label>
-                <select
-                  v-model="config.general.language"
-                  class="hc-input"
-                  @change="handleLanguageChange"
-                >
-                  <option value="zh-CN">中文</option>
-                  <option value="en">English</option>
-                  <option value="ug-CN">维吾尔语</option>
-                </select>
+                <HcSelect
+                  v-model="languageModel"
+                  :options="languageOptions"
+                />
               </div>
 
               <label class="hc-settings__toggle-row">
@@ -1691,27 +1643,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   @change="autoSave()"
                 />
               </label>
-
-              <!-- 配置导入导出 -->
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.configBundle.title', '配置导入导出') }}</label>
-                <p class="hc-settings__hint">
-                  {{ t('settings.configBundle.desc', '导出当前全部配置为 JSON 文件，可在其他设备导入复用。') }}
-                </p>
-                <div class="hc-settings__bundle-actions">
-                  <button class="hc-btn hc-btn-sm" :disabled="exportingBundle" @click="handleExportConfigBundle">
-                    {{ exportingBundle ? t('common.loading', 'Loading...') : t('settings.configBundle.export', '导出配置') }}
-                  </button>
-                  <button class="hc-btn hc-btn-sm" :disabled="importingBundle" @click="handleImportConfigBundle">
-                    {{ importingBundle ? t('common.loading', 'Loading...') : t('settings.configBundle.import', '导入配置') }}
-                  </button>
-                  <span
-                    v-if="bundleResultMsg"
-                    class="hc-settings__bundle-result"
-                    :class="{ 'hc-settings__bundle-result--err': bundleResultIsError }"
-                  >{{ bundleResultMsg }}</span>
-                </div>
-              </div>
             </div>
 
             <!-- 系统信息 -->
@@ -2281,7 +2212,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-settings__info::before {
   content: attr(data-info);
   position: absolute;
-  top: calc(100% + 8px);
+  /* 向上展开：避免滚动容器(.hc-settings__section--scroll overflow-y:auto)
+     在靠近 section 底部时把向下的 tooltip 裁切。 */
+  bottom: calc(100% + 8px);
   left: 0;
   width: max-content;
   max-width: 240px;
@@ -2303,10 +2236,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-settings__info::after {
   content: '';
   position: absolute;
-  top: calc(100% + 4px);
+  /* 三角随 tooltip 改为向上，指向下方的 `?` 图标 */
+  bottom: calc(100% + 4px);
   left: 8px;
   border: 5px solid transparent;
-  border-bottom-color: var(--hc-text-primary);
+  border-top-color: var(--hc-text-primary);
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s;
@@ -2411,30 +2345,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 /* ─── Custom Select ───── */
+/* HcSelect 外层尺寸 wrapper —— 边框/圆角/chevron/聚焦态全部由 HcSelect 自渲染，
+   这里只约束宽度（旧原生 <select> 的盒样式+背景 chevron 会与 HcSelect 自带 chevron 叠成双层，已移除）。 */
 .hc-settings__select {
-  height: 32px;
-  border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  padding: 0 30px 0 10px;
-  font-size: 13px;
-  color: var(--hc-text-primary);
-  appearance: none;
-  outline: none;
-  cursor: pointer;
-  background: var(--hc-bg-main, var(--hc-bg-card))
-    url("data:image/svg+xml,%3Csvg width='10' height='6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238b919a' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")
-    right 10px center no-repeat;
-  transition: border-color 0.18s, box-shadow 0.18s;
-}
-
-.hc-settings__select:focus {
-  border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
-}
-
-.hc-settings__select:disabled {
-  opacity: 0.35;
-  pointer-events: none;
+  width: 240px;
+  max-width: 100%;
 }
 
 /* ─── Dirty Indicator ───── */
@@ -2589,24 +2504,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.hc-provider__empty {
-  padding: 32px 16px;
-  text-align: center;
-}
-
-.hc-provider__empty-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--hc-text-secondary);
-  margin: 0 0 4px;
-}
-
-.hc-provider__empty-desc {
-  font-size: 12px;
-  color: var(--hc-text-muted);
-  margin: 0;
 }
 
 .hc-provider__list {
@@ -3238,9 +3135,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-model-chip--active {
-  border-color: var(--hc-accent, #4a90d9);
-  background: color-mix(in srgb, var(--hc-accent, #4a90d9) 10%, transparent);
-  color: var(--hc-accent, #4a90d9);
+  border-color: var(--hc-accent, #5fb3ea);
+  background: color-mix(in srgb, var(--hc-accent, #5fb3ea) 10%, transparent);
+  color: var(--hc-accent, #5fb3ea);
   font-weight: 500;
 }
 
@@ -3250,22 +3147,22 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-model-chip--add:hover {
-  color: var(--hc-accent, #4a90d9);
-  border-color: var(--hc-accent, #4a90d9);
-  background: color-mix(in srgb, var(--hc-accent, #4a90d9) 5%, transparent);
+  color: var(--hc-accent, #5fb3ea);
+  border-color: var(--hc-accent, #5fb3ea);
+  background: color-mix(in srgb, var(--hc-accent, #5fb3ea) 5%, transparent);
 }
 
 /* 管理模型入口：目录/启用两层架构的主入口（聚合商数百模型场景） */
 .hc-model-chip--manage {
   position: relative;
   border-style: dashed;
-  border-color: var(--hc-accent, #4a90d9);
-  color: var(--hc-accent, #4a90d9);
+  border-color: var(--hc-accent, #5fb3ea);
+  color: var(--hc-accent, #5fb3ea);
 }
 
 .hc-model-chip--manage:hover {
   background: var(--hc-accent-subtle);
-  border-color: var(--hc-accent, #4a90d9);
+  border-color: var(--hc-accent, #5fb3ea);
 }
 
 /* 新增模型提示点：信息性提示用品牌色，警示色留给异常 */
@@ -3276,36 +3173,19 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--hc-accent, #4a90d9);
-  border: 2px solid var(--hc-bg-main, #161722);
+  background: var(--hc-accent, #5fb3ea);
+  border: 2px solid var(--hc-bg-main, #0e1b2e);
 }
 
 /* 已启用摘要（目录存在时显示"已启用 N / M 可用"） */
 .hc-model-enabled-summary {
   font-size: 11px;
-  color: var(--hc-text-secondary, #9d9da7);
+  color: var(--hc-text-secondary, #8b95a2);
 }
 
 .hc-model-enabled-summary b {
-  color: var(--hc-text-primary, #f0f0f3);
+  color: var(--hc-text-primary, #e8ecf0);
   font-weight: 600;
-}
-
-/* 配置导入导出 */
-.hc-settings__bundle-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-.hc-settings__bundle-result {
-  font-size: 12px;
-  color: var(--hc-success, #32d583);
-}
-
-.hc-settings__bundle-result--err {
-  color: var(--hc-error, #f56565);
 }
 
 /* 免费模型：目录价格元数据为 0 时显示 */
@@ -3351,8 +3231,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-model-chip__cap--audio {
-  background: color-mix(in srgb, var(--hc-accent, #4a90d9) 12%, transparent);
-  color: var(--hc-accent, #4a90d9);
+  background: color-mix(in srgb, var(--hc-accent, #5fb3ea) 12%, transparent);
+  color: var(--hc-accent, #5fb3ea);
 }
 
 .hc-model-chip__cap--code {
@@ -3485,7 +3365,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-edit-model__cap-item input {
-  accent-color: var(--hc-accent, #4a90d9);
+  accent-color: var(--hc-accent, #5fb3ea);
 }
 
 .hc-edit-model__cap-icon {

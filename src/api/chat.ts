@@ -218,9 +218,10 @@ export function forkSession(sessionId: string, messageId?: string) {
   })
 }
 
-/** 获取会话的分支列表 */
+/** 获取会话的分支列表
+ *  后端 handleListBranches 返回 { branches: []*storage.Session, total }，故声明 total。 */
 export function getSessionBranches(sessionId: string) {
-  return sessionGet<{ branches: ChatSession[] }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/branches`)
+  return sessionGet<{ branches: ChatSession[]; total: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/branches`)
 }
 
 // ============== Session Management ==============

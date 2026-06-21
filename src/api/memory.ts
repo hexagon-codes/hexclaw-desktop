@@ -173,11 +173,39 @@ export interface VectorSearchResult {
   source: string
 }
 
-/** 搜索记忆 (关键词 + 语义) */
-export function searchMemory(query: string) {
-  return apiGet<{
-    results: MemoryEntry[]
+/** 后端 /memory/search 的关键词命中是行级 SearchResult（file_memory.go）：
+ *  { file, line, content, score } —— 不含 id / type / created_at。 */
+interface MemorySearchHit {
+  file: string
+  line: number
+  content: string
+  score: number
+}
+
+/** 搜索记忆 (关键词 + 语义)
+ *  后端关键词命中是行级 {file,line,content,score}，缺 id/type/时间戳；这里投影成 MemoryEntry：
+ *  仅为缺失字段补合成默认值（id=file:line、type=fact、created_at=检索时刻），
+ *  已是完整条目的命中（带 id/type）则展开置后原样透传。
+ *  修复 MemoryView 渲染：:key=undefined 重复警告 / TYPE_COLORS[undefined] / formatTime(undefined)。 */
+export async function searchMemory(query: string): Promise<{
+  results: MemoryEntry[]
+  vector_results: VectorSearchResult[] | null
+  total: number
+}> {
+  const raw = await apiGet<{
+    results: MemorySearchHit[] | null
     vector_results: VectorSearchResult[] | null
     total: number
   }>('/api/v1/memory/search', { q: query })
+  const stampedAt = new Date().toISOString() // 行级命中无时间戳，落检索时刻供 formatTime 展示
+  const results: MemoryEntry[] = (raw.results ?? []).map((hit) => ({
+    type: 'fact' as const,
+    source: 'system' as const,
+    hit_count: 0,
+    created_at: stampedAt,
+    updated_at: stampedAt,
+    id: `${hit.file}:${hit.line}`,
+    ...hit,
+  }))
+  return { results, vector_results: raw.vector_results, total: raw.total }
 }

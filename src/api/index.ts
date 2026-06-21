@@ -2,6 +2,7 @@
 export { api, apiGet, apiPost, apiPut, apiPatch, apiDelete, apiSSE, apiWebSocket, checkHealth } from './client'
 export * from './chat'
 export * from './agents'
+export * from './assistant'
 export * from './logs'
 export * from './memory'
 export * from './mcp'

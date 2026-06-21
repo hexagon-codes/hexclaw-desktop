@@ -20,6 +20,7 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import { parseDocument } from '@/utils/file-parser'
 import { logger } from '@/utils/logger'
 
@@ -46,6 +47,12 @@ const errorSeverity = ref<'error' | 'warning' | null>(null)
 const revalidating = ref(false)
 // CACHE_TTL_MS removed — DB cache layer eliminated
 const activeTab = ref<'documents' | 'search'>('documents')
+
+// 二级 tab（统一 UnderlineTabs）：全部 (N) / 检索测试
+const knowledgeTabs = computed(() => [
+  { key: 'documents', label: t('knowledge.allTab', '全部'), count: docs.value.length },
+  { key: 'search', label: t('knowledge.searchTest', '检索测试') },
+])
 
 const showAddDialog = ref(false)
 const newTitle = ref('')
@@ -545,31 +552,13 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
       </div>
     </div>
 
-    <!-- 标签页 -->
-    <div
-      class="flex items-center gap-0 px-6 pt-3 border-b"
-      :style="{ borderColor: 'var(--hc-border)' }"
-    >
-      <button
-        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
-        :style="{
-          borderColor: activeTab === 'documents' ? 'var(--hc-accent)' : 'transparent',
-          color: activeTab === 'documents' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
-        }"
-        @click="activeTab = 'documents'"
-      >
-        {{ t('knowledge.documents') }} ({{ docs.length }})
-      </button>
-      <button
-        class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
-        :style="{
-          borderColor: activeTab === 'search' ? 'var(--hc-accent)' : 'transparent',
-          color: activeTab === 'search' ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
-        }"
-        @click="activeTab = 'search'"
-      >
-        {{ t('knowledge.searchTest') }}
-      </button>
+    <!-- 标签页（统一 UnderlineTabs，滑动下划线） -->
+    <div class="px-6 pt-3">
+      <UnderlineTabs
+        :tabs="knowledgeTabs"
+        :model-value="activeTab"
+        @update:model-value="activeTab = $event as 'documents' | 'search'"
+      />
     </div>
 
     <div
@@ -687,7 +676,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 v-for="doc in filteredDocs"
                 :key="doc.id"
                 data-testid="knowledge-doc-card"
-                class="group flex items-center gap-3 rounded-2xl border px-4 py-3.5 transition-colors"
+                class="hc-card-interactive group flex items-center gap-3 rounded-2xl border px-4 py-3.5"
                 :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
               >
                 <button class="flex-1 min-w-0 text-left py-0.5" @click="openDocDetail(doc)">

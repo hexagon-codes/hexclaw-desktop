@@ -20,7 +20,7 @@
 [![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vuedotjs&logoColor=white)](https://vuejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Rust](https://img.shields.io/badge/Rust-2021-DEA584?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Go](https://img.shields.io/badge/Go-1.23-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![Go](https://img.shields.io/badge/Go-1.25-00ADD8?logo=go&logoColor=white)](https://go.dev)
 
 **Powered by**
 
@@ -63,7 +63,7 @@ Native macOS / Windows / Linux · Sidecar local deployment · Zero cloud depende
 | **ClawHub Skill Market** | Browse, search, and install OpenClaw community Skills, filter by category (coding/research/writing/data/automation) |
 | **Onboarding Wizard** | 3-step Welcome guide (choose Provider → choose model → test connection), zero-config barrier |
 | **Real-time Logs** | WebSocket streaming logs, full Agent execution chain tracing |
-| **Internationalization** | Chinese / English, vue-i18n |
+| **Internationalization** | Chinese / English / Uyghur (ug-CN, with RTL right-to-left layout), vue-i18n |
 | **System Tray** | Minimize to tray, tray menu quick actions |
 | **Global Shortcut** | `⌘+Shift+H` to summon Quick Chat window anytime |
 | **Auto Update** | Tauri Updater, one-click in-app upgrade |
@@ -99,9 +99,9 @@ HexClaw.app
 ├───────────────────────────────────────────────────────────────────┤
 │  Vue 3 Frontend (WebView)                                         │
 │  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
-│  │Overview│  Chat  │ Agents │Knowledg│Automati│Integrat│  Logs │ │
-│  │        │        │        │Doc|Mem │Task|Can│Skl|MCP │       │ │
-│  │        │        │        │        │        │IM|Diag │       │ │
+│  │  Chat  │ Agents │Knowledg│Automati│Channels│Integrat│  Logs │ │
+│  │(default)│       │Doc|Mem │Task|Web│ (IM)   │Skl|MCP │       │ │
+│  │        │        │        │ hook   │        │        │Setting│ │
 │  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
 │      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
 ├──────┴─────────────────┴──────────────────┴───────────────────────┤
@@ -124,6 +124,8 @@ Same design pattern as **Docker Desktop managing Docker Engine** — the Tauri s
 Frontend and backend communicate via **Tauri IPC proxy** (resolving WebView CORS limitations), fully decoupled.
 
 > The Go Sidecar listens on `localhost:16060` by default. Port can be changed in the hexclaw config file.
+
+> The installer also embeds a few bundled binaries: **Ollama** (local model inference) and **Pandoc + Typst** (document rendering: Markdown → docx/pdf, etc.). They run as standalone subprocesses, corresponding to `ollama-bundle/`, `pandoc-*`, and `typst-*` under `src-tauri/binaries/`. See [THIRD_PARTY.md](THIRD_PARTY.md) for licenses.
 
 ## Claude Code Engineering SOP
 
@@ -160,16 +162,16 @@ cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/
 | UI component library | Naive UI + Custom design system | - |
 | Styling | Tailwind CSS | 4.x |
 | Routing | Vue Router | 5.x |
-| Internationalization | vue-i18n | 11.x |
+| Internationalization | vue-i18n (Chinese / English / Uyghur RTL) | 11.x |
 | Icons | Lucide Vue | - |
 | Markdown | markdown-it + Shiki (syntax highlighting) | - |
 | Document parsing | pdfjs-dist + mammoth + xlsx | - |
-| Data storage | SQLite (tauri-plugin-sql) + Tauri Store | - |
+| Data storage | Tauri Store (plugin-store) + localStorage (Pinia persist plugin); sessions/messages persisted by the backend sidecar | - |
 | HTTP client | ofetch (frontend) / reqwest (Rust proxy) | - |
 | Build tool | Vite | 7.x |
 | Testing | Vitest + @vue/test-utils | - |
 | Lint | ESLint + oxlint + Prettier | - |
-| Backend Sidecar | hexclaw serve (Go) | Go 1.23+ |
+| Backend Sidecar | hexclaw serve (Go) | Go 1.25+ |
 | Agent framework | Hexagon | - |
 | Rust layer | Tauri Shell + plugin ecosystem | Rust 2021 edition |
 
@@ -230,9 +232,9 @@ See the [User Guide](docs/guide.en.md) for detailed instructions.
 | Tool | Version | Notes |
 |------|---------|-------|
 | Node.js | >= 20.19 or >= 22.12 | JavaScript runtime |
-| pnpm | >= 9 | Package manager |
+| pnpm | 10.x (repo pins pnpm@10.30.3) | Package manager |
 | Rust | stable (2021 edition) | Required for Tauri compilation |
-| Go | >= 1.23 | Required for Sidecar compilation |
+| Go | >= 1.25 | Required for Sidecar compilation |
 
 ### Quick Start
 
@@ -245,7 +247,7 @@ cd hexclaw-desktop
 make install
 # Equivalent to: pnpm install && cd src-tauri && cargo fetch
 
-# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.4.1 by default)
+# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.4.3 by default)
 make sidecar
 
 # 4. Start development mode
@@ -253,7 +255,7 @@ make dev
 ```
 
 > **Note**:
-> - `make sidecar` pulls `refs/tags/v0.4.1` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
+> - `make sidecar` pulls `refs/tags/v0.4.3` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
 > - To build another backend version, pass it explicitly: `make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.2` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
 
@@ -301,26 +303,26 @@ hexclaw-desktop/
 │   │   └── system.ts             # System info API
 │   ├── components/               # Components
 │   │   ├── layout/               # Layout (AppLayout/Sidebar/TitleBar/ContextBar/DetailPanel)
-│   │   ├── chat/                 # Chat (ChatInput/SessionList/MarkdownRenderer/TemplatePopup/ResearchProgress etc.)
-│   │   ├── agent/                # Agent (AgentCard/AgentForm/AgentStatus/AgentConference)
-│   │   ├── agents/               # Multi-Agent collaboration (AgentConference)
+│   │   ├── chat/                 # Chat (ChatInput/SessionList/MarkdownRenderer/ToolApprovalCard/Interactive* etc.)
+│   │   ├── settings/             # Settings (OllamaCard/ModelManagerModal/SettingsNotification/SettingsSecurity)
 │   │   ├── artifacts/            # Artifacts (ArtifactsPanel/ArtifactPreview/CodeView/DiffView)
 │   │   ├── inspector/            # Inspector (InspectorContext/ContextCard/KeyValueRow/TimelineItem)
 │   │   ├── canvas/               # Canvas (TemplateGallery)
-│   │   ├── settings/             # Settings (SettingsNotification/SettingsSecurity)
-│   │   ├── logs/                 # Logs (LogEntry/LogFilter/LogStats)
-│   │   └── common/               # Shared (CommandPalette/ConfirmDialog/Toast/ErrorBoundary etc.)
+│   │   ├── channels/             # IM channels (AgentRoutingRules)
+│   │   ├── automation/           # Automation (WebhookPanel)
+│   │   ├── cron/                 # Scheduled tasks (CronJobConfirmCard)
+│   │   ├── logs/                 # Logs (LogEntry/LogStats)
+│   │   └── common/               # Shared (CommandPalette/ConfirmDialog/ToastProvider/ErrorBoundary etc.)
 │   ├── views/                    # Page views
-│   │   ├── DashboardView.vue     # Dashboard (stats overview + recent activity)
-│   │   ├── ChatView.vue          # AI chat (sessions/attachments/Artifacts/model switching)
+│   │   ├── ChatView.vue          # AI chat (default landing · sessions/attachments/Artifacts/model switching)
 │   │   ├── AgentsView.vue        # Agent management (templates/running/rules/conference)
 │   │   ├── KnowledgeCenterView.vue # Knowledge center (Documents + Memory tabs)
 │   │   ├── KnowledgeView.vue     # Knowledge base (document CRUD/upload/search)
 │   │   ├── MemoryView.vue        # Memory management (edit/search/clear)
-│   │   ├── AutomationView.vue    # Automation (Tasks + Canvas tabs)
+│   │   ├── AutomationView.vue    # Automation (Tasks + Webhook tabs)
 │   │   ├── TasksView.vue         # Scheduled tasks (Cron management)
 │   │   ├── CanvasView.vue        # Workflow canvas (DAG orchestration)
-│   │   ├── IntegrationView.vue   # Integration (Skills + MCP + IM + Diagnostics tabs)
+│   │   ├── IntegrationView.vue   # Integration (Skills + MCP tabs)
 │   │   ├── SkillsView.vue        # Skill management + ClawHub marketplace
 │   │   ├── McpView.vue           # MCP management (servers/tools/testing)
 │   │   ├── IMChannelsView.vue    # IM channel management (Lark/DingTalk/WeCom etc.)
@@ -329,51 +331,55 @@ hexclaw-desktop/
 │   │   ├── AboutView.vue         # About (separate window)
 │   │   ├── QuickChatView.vue     # Quick chat (separate window)
 │   │   └── WelcomeView.vue       # Onboarding wizard (Provider → model → test)
-│   ├── stores/                   # Pinia state management (thin store, business logic delegated to services/)
+│   ├── stores/                   # Pinia state management (thin store, business logic delegated to services/controllers)
 │   │   ├── app.ts                # Global state (connection/sidebar/detail panel)
-│   │   ├── chat.ts               # Chat (sessions/messages/streaming/Artifacts, SQLite persistence)
+│   │   ├── chat.ts               # Chat (sessions/messages/streaming/Artifacts; messages persisted by backend sidecar)
 │   │   ├── agents.ts             # Agent roles
 │   │   ├── canvas.ts             # Canvas (nodes/edges/workflows/run)
 │   │   ├── logs.ts               # Logs (WebSocket stream/filter/stats)
-│   │   └── settings.ts           # Settings (LLM + security + notification, Tauri Store persistence)
+│   │   ├── settings.ts           # Settings (LLM + security + notification, Tauri Store persistence)
+│   │   └── plugins/persist.ts    # Pinia persist plugin (localStorage + version migration)
 │   ├── composables/              # Composable functions
 │   │   ├── useHexclaw.ts         # hexclaw connection status + health check polling
 │   │   ├── useWebSocket.ts       # WebSocket wrapper (auto-reconnect)
 │   │   ├── useSSE.ts             # SSE streaming requests
-│   │   ├── useShortcuts.ts       # In-app shortcuts (⌘1~7 page switching)
+│   │   ├── useShortcuts.ts       # In-app shortcuts (⌘1~N page switching)
 │   │   ├── useTheme.ts           # Theme (dark/light/follow system)
-│   │   ├── useAutoStart.ts       # Auto-start (Tauri autostart)
 │   │   ├── useAutoUpdate.ts      # Auto-update (Tauri updater)
+│   │   ├── useVoice.ts           # Voice (TTS/STT/voice chat)
 │   │   ├── useValidation.ts      # Form validation
 │   │   ├── useKeyboardNav.ts     # Keyboard navigation + focus trap
 │   │   ├── usePlatform.ts        # Platform detection (macOS/Windows/Linux)
 │   │   ├── useChatSend.ts        # Send message + Auto-RAG knowledge retrieval
 │   │   ├── useChatActions.ts     # Chat actions (resend/edit/delete etc.)
+│   │   ├── useCron*.ts           # Cron parsing/compilation/persistent widget
 │   │   └── useConversationAutomation.ts # Conversation automation (auto-title etc.)
 │   ├── services/                 # Business logic service layer
 │   │   ├── chatService.ts        # Chat service (WebSocket/HTTP send)
-│   │   └── messageService.ts     # Message service (build/persist messages)
-│   ├── i18n/                     # Internationalization (Chinese/English)
-│   ├── router/                   # Router (dynamically built from navigation.ts)
+│   │   └── messageService.ts     # Message service (build messages/backend persistence)
+│   ├── i18n/                     # Internationalization (Chinese zh-CN / English en / Uyghur ug-CN RTL)
+│   ├── router/                   # Router (dynamically built from navigation.ts, defaults to /chat)
 │   ├── types/                    # TypeScript type definitions
 │   ├── utils/                    # Utility functions
 │   │   └── file-parser.ts        # Document parser (PDF/Word/Excel/CSV)
-│   ├── db/                       # Local database (SQLite: chat/artifacts/knowledge/templates/outbox)
 │   ├── config/                   # Frontend config
 │   │   ├── env.ts                # Environment config
-│   │   ├── navigation.ts         # Navigation registry (3-tier groups: core/integration/system)
-│   │   └── providers.ts          # LLM Provider config
+│   │   ├── navigation.ts         # Navigation registry (4 groups: home/build/connections/system)
+│   │   ├── llm-providers.ts      # LLM Provider config
+│   │   └── providers.ts          # Provider metadata
 │   └── assets/                   # Static assets (Logo/icons/IM logos)
 ├── src-tauri/                    # Tauri (Rust) layer
 │   ├── src/
 │   │   ├── main.rs               # Entry point
 │   │   ├── lib.rs                # App initialization & plugin registration
-│   │   ├── commands.rs           # Tauri IPC commands (health check/API proxy/streaming chat)
+│   │   ├── commands.rs           # Tauri IPC commands (health check/API proxy/streaming chat/file save)
 │   │   ├── sidecar.rs            # Go Sidecar process management
+│   │   ├── ollama.rs             # Embedded Ollama process management
 │   │   ├── tray.rs               # System tray
 │   │   ├── menu.rs               # macOS native menu
-│   │   └── window.rs             # Window management & global shortcuts
-│   ├── binaries/                 # Go sidecar binaries (compiled output)
+│   │   └── window.rs             # Window management & global shortcuts (⌘⇧H Quick Chat)
+│   ├── binaries/                 # Embedded binaries (hexclaw sidecar + pandoc + typst + ollama-bundle)
+│   ├── render-assets/            # Document render assets (reference.docx, bundled into the app)
 │   ├── icons/                    # App icons
 │   ├── capabilities/             # Tauri v2 permission config
 │   ├── tauri.conf.json           # Tauri config
@@ -482,8 +488,8 @@ xattr -cr /Applications/HexClaw.app
 
 ### `make sidecar` compilation fails
 
-1. Verify Go >= 1.23 is installed: `go version`
-2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.4.1`
+1. Verify Go >= 1.25 is installed: `go version`
+2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.4.3`
 3. Verify Rust toolchain is installed (needed for platform triple detection): `rustc -vV`
 
 ### `make dev` starts but shows white screen

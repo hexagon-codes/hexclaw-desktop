@@ -114,9 +114,10 @@ export async function getTeamMembers(): Promise<TeamMember[]> {
     return res.members ?? []
   } catch (e) {
     logger.warn(TEAM_FALLBACK_WARNINGS.getTeamMembers, e)
-    const local = getLocal<TeamMember[]>(TEAM_MEMBERS_KEY, [])
-    if (local.length === 0) return [defaultMember()]
-    return local
+    // 空团队语义两条路径必须一致：在线后端空团队返 []（res.members ?? []），
+    // 离线降级对空团队同样返 []，否则 UI 成员数随引擎连通性在 0/1 间跳变（H-5）。
+    // defaultMember 仅在邀请降级（inviteTeamMember）时作为本地成员集合的基底。
+    return getLocal<TeamMember[]>(TEAM_MEMBERS_KEY, [])
   }
 }
 
@@ -152,36 +153,3 @@ export async function removeTeamMember(id: string): Promise<void> {
 
 // ─── 导入导出 ────────────────────────────────────────
 
-export interface ExportBundle {
-  version: string
-  exported_at: string
-  agents: SharedAgent[]
-  workflows?: unknown[]
-  skills?: unknown[]
-}
-
-/** 导出全部配置 */
-export async function exportAllConfig(): Promise<ExportBundle> {
-  const agents = await getSharedAgents()
-  return {
-    version: '1.0.0',
-    exported_at: new Date().toISOString(),
-    agents,
-  }
-}
-
-/** 导入配置 */
-export async function importConfig(bundle: ExportBundle): Promise<{ imported: number }> {
-  let imported = 0
-  for (const agent of bundle.agents || []) {
-    await shareAgent({
-      name: agent.name,
-      author: agent.author,
-      description: agent.description,
-      visibility: agent.visibility,
-      config: agent.config,
-    })
-    imported++
-  }
-  return { imported }
-}

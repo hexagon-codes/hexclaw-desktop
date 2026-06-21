@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watchEffect } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { Wrench, BrainCircuit, Hexagon, Server, Monitor, BarChart3 } from 'lucide-vue-next'
 import logoUrl from '@/assets/logo.png'
 import hexagonLogoUrl from '@/assets/hexagon-engine-logo.png'
 import { useAutoUpdate } from '@/composables/useAutoUpdate'
@@ -42,12 +43,12 @@ const techStack = computed(() => [
 ])
 
 const ecosystem = computed(() => [
-  { name: 'toolkit', sub: t('about.ecoInfra', '基础设施'), emoji: '🛠', url: 'https://github.com/hexagon-codes/toolkit' },
-  { name: 'ai-core', sub: t('about.ecoLlm', 'LLM 适配'), emoji: '🧠', url: 'https://github.com/hexagon-codes/ai-core' },
-  { name: 'hexagon', sub: t('about.ecoAgent', 'Agent 框架'), emoji: '🔷', url: 'https://github.com/hexagon-codes/hexagon' },
-  { name: 'hexclaw', sub: t('about.ecoBackend', '后端服务'), emoji: '🦀', url: 'https://github.com/everyday-items/hexclaw' },
-  { name: 'hexclaw-desktop', sub: t('about.ecoDesktop', '桌面客户端'), emoji: '🖥', url: 'https://github.com/hexagon-codes/hexclaw-desktop' },
-  { name: 'hexagon-ui', sub: t('about.ecoConsole', 'Agent 观测台'), emoji: '📊', url: 'https://github.com/hexagon-codes/hexagon-ui' },
+  { name: 'toolkit', sub: t('about.ecoInfra', '基础设施'), icon: Wrench, url: 'https://github.com/hexagon-codes/toolkit' },
+  { name: 'ai-core', sub: t('about.ecoLlm', 'LLM 适配'), icon: BrainCircuit, url: 'https://github.com/hexagon-codes/ai-core' },
+  { name: 'hexagon', sub: t('about.ecoAgent', 'Agent 框架'), icon: Hexagon, url: 'https://github.com/hexagon-codes/hexagon' },
+  { name: 'hexclaw', sub: t('about.ecoBackend', '后端服务'), icon: Server, url: 'https://github.com/everyday-items/hexclaw' },
+  { name: 'hexclaw-desktop', sub: t('about.ecoDesktop', '桌面客户端'), icon: Monitor, url: 'https://github.com/hexagon-codes/hexclaw-desktop' },
+  { name: 'hexagon-ui', sub: t('about.ecoConsole', 'Agent 观测台'), icon: BarChart3, url: 'https://github.com/hexagon-codes/hexagon-ui' },
 ])
 
 function formatUpdaterErrorMessage(message: string, install = false) {
@@ -223,7 +224,7 @@ onMounted(() => {
             rel="noreferrer"
             class="hc-about-page__eco-card"
           >
-            <span class="hc-about-page__eco-emoji">{{ item.emoji }}</span>
+            <component :is="item.icon" :size="18" class="hc-about-page__eco-emoji" />
             <span class="hc-about-page__eco-name">{{ item.name }}</span>
             <span class="hc-about-page__eco-sub">{{ item.sub }}</span>
           </a>
@@ -583,8 +584,7 @@ onMounted(() => {
 }
 
 .hc-about-page__eco-emoji {
-  font-size: 17px;
-  line-height: 1;
+  color: #2a4562;
 }
 
 .hc-about-page__eco-name {

@@ -28,7 +28,8 @@ export interface ClawHubSkill {
   tags: string[]
   downloads: number
   rating?: number
-  category: 'coding' | 'research' | 'writing' | 'data' | 'automation' | 'productivity'
+  /** Hub 原始分类（coding/research/.../education/media/automotive 等，保持后端原值，前端按精选 pill 映射过滤） */
+  category: string
   /** 仅开发：CLAWHUB_FORCE_MOCK 时使用内置数据 */
   _mock?: boolean
 }

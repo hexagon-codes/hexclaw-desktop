@@ -31,13 +31,9 @@ Everything else in the product depends on this base path being healthy.
 
 ## What Each Main Module Does
 
-### Dashboard
-
-Use `Dashboard` to check system status, model count, knowledge status, channels, and task overview.
-
 ### Chat
 
-`Chat` is the main desktop task entry point. It handles multi-turn conversations, file input, document parsing, Artifacts, and research-style tasks.
+`Chat` is the default landing page when the app opens, and the main task entry point. It handles multi-turn conversations, file input, document parsing, Artifacts, and research-style tasks.
 
 ### IM Channels
 
