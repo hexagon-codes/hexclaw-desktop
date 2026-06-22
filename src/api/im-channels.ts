@@ -384,8 +384,41 @@ export async function testIMInstance(
  * 连接中心统一测试入口（邮箱 / IM 通道），后端实现独立于平台实例 lifecycle。
  * 后端端点不可用（404 / 网络不通）时优雅降级，返回 ok=false + 友好提示，绝不抛异常。
  */
+/** 邮箱 nested 测试配置 — 对齐后端 emailTestConfig（config.smtp / config.imap）。 */
+export interface EmailTestConfig {
+  smtp: { host: string; port: number; username: string; password: string; from: string }
+  imap?: { host: string; port: number; username: string; password: string }
+}
+
+/** 把邮箱连接的扁平表单字段转成后端 /connections/test 期望的 nested smtp/imap 结构。
+ *  后端 emailTestConfig 从 config.smtp.{host,port,username,password,from} 读取；
+ *  bug 2026-06-22：前端此前直接发扁平字段（smtp_host 等），后端读 config.smtp.* 全空 → 邮箱测试 100% 失败。 */
+export function buildEmailTestConfig(flat: Record<string, string>): EmailTestConfig {
+  const account = (flat.email || '').trim()
+  const password = flat.password || ''
+  const cfg: EmailTestConfig = {
+    smtp: {
+      host: (flat.smtp_host || '').trim(),
+      port: Number.parseInt(flat.smtp_port || '0', 10) || 0,
+      username: account,
+      password,
+      from: (flat.from || '').trim() || account,
+    },
+  }
+  const imapHost = (flat.imap_host || '').trim()
+  if (imapHost) {
+    cfg.imap = {
+      host: imapHost,
+      port: Number.parseInt(flat.imap_port || '0', 10) || 0,
+      username: account,
+      password,
+    }
+  }
+  return cfg
+}
+
 export async function testConnection(
-  payload: { type: IMChannelType; config: Record<string, string> },
+  payload: { type: IMChannelType; config: EmailTestConfig | Record<string, unknown> },
 ): Promise<{ ok: boolean; detail: string }> {
   const { invoke } = await import('@tauri-apps/api/core')
   try {

@@ -174,26 +174,22 @@ describe('Cron + Webhook Error Paths', () => {
       await expect(getWebhooks()).rejects.toThrow('network down')
     })
 
-    it('createWebhook sends fixed empty prompt/secret', async () => {
+    it('createWebhook 对齐后端 RegisterWebhookRequest：不发 url/events，prompt 非空', async () => {
       mockFetch.mockResolvedValue({ id: 'w1', name: 'n', url: 'https://example.com' })
-      await createWebhook({ name: 'n', type: 'feishu', url: 'https://example.com', events: ['task_complete'] })
+      await createWebhook({ name: 'n', type: 'generic', prompt: '处理事件' })
       const body = mockFetch.mock.calls[0]![1].body
-      expect(body).toMatchObject({
-        name: 'n',
-        type: 'feishu',
-        url: 'https://example.com',
-        events: ['task_complete'],
-        prompt: '',
-        secret: '',
-      })
+      expect(body).toMatchObject({ name: 'n', type: 'generic', secret: '' })
+      expect(body).not.toHaveProperty('url')
+      expect(body).not.toHaveProperty('events')
+      expect(body.prompt).not.toBe('')
       expect(body.user_id).toBeDefined()
     })
 
-    it('createWebhook propagates 400 when URL invalid', async () => {
-      mockFetch.mockRejectedValue(Object.assign(new Error('invalid URL'), { status: 400 }))
+    it('createWebhook propagates 400 backend error', async () => {
+      mockFetch.mockRejectedValue(Object.assign(new Error('invalid request'), { status: 400 }))
       await expect(
-        createWebhook({ name: 'bad', type: 'custom', url: 'ftp://nope', events: [] }),
-      ).rejects.toThrow('invalid URL')
+        createWebhook({ name: 'bad', type: 'generic', prompt: '' }),
+      ).rejects.toThrow('invalid request')
     })
 
     it('deleteWebhook encodes special chars in id', async () => {

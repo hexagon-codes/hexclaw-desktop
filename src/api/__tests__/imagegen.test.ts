@@ -175,12 +175,11 @@ describe('imagegen API', () => {
       expect(imageToSrc(img)).toBe('data:image/png;base64,QUJDREVG')
     })
 
-    it('b64_json branch: MIME is hardcoded to image/png regardless of actual format', () => {
-      // 即便底层数据是 JPEG，前端也固定输出 image/png（mime 未做推断）
+    it('b64_json branch: MIME 按 magic bytes 推断（BUG-20260622-A1 修复后，jpeg 不再标 png）', () => {
+      // JPEG magic（/9j/）→ image/jpeg；png/未知才兜底 image/png
       const img: GeneratedImage = { b64_json: '/9j/4AAQSkZJRg' }
       const src = imageToSrc(img)
-      expect(src).toBe('data:image/png;base64,/9j/4AAQSkZJRg')
-      expect(src.startsWith('data:image/png;base64,')).toBe(true)
+      expect(src).toBe('data:image/jpeg;base64,/9j/4AAQSkZJRg')
     })
 
     // 兜底：什么都没有 → 空串
@@ -212,7 +211,8 @@ describe('imagegen API', () => {
     // 边界：file_path 带前导斜杠会产生双斜杠（原样拼接，不做规范化）
     it('file_path with leading slash is concatenated verbatim (double slash, no normalization)', () => {
       const img: GeneratedImage = { file_path: '/202604/abc.png' }
-      expect(imageToSrc(img)).toBe(`${API_BASE}/api/v1/files/generated//202604/abc.png`)
+      // BUG-20260622-A2 修复后：前导斜杠被规范化，不再产生双斜杠
+      expect(imageToSrc(img)).toBe(`${API_BASE}/api/v1/files/generated/202604/abc.png`)
     })
 
     // 纯函数：不触碰 client（无副作用）

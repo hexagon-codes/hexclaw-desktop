@@ -176,10 +176,9 @@ describe('Voice Chat API', () => {
       expect(audioToSrc(r)).toBe('http://api.test/api/v1/files/generated/voice/abc.wav')
     })
 
-    it('branch[file_path]: prepends apiBase even when path already looks absolute (current behavior, no passthrough)', () => {
-      // 注：docstring 称"或返回 http url"，但实现总是拼 apiBase 前缀，并未对绝对/http 路径做透传判断。
+    it('branch[file_path]: 完整 http URL 直接透传（BUG-20260622-D 修复后，不再错误拼 apiBase 前缀）', () => {
       const r = { provider: 'p', model: 'm', audio_file_path: 'https://cdn.x/a.wav' } as VoiceChatResult
-      expect(audioToSrc(r)).toBe('http://api.test/api/v1/files/generated/https://cdn.x/a.wav')
+      expect(audioToSrc(r)).toBe('https://cdn.x/a.wav')
     })
 
     it('branch[file_path]: file_path takes priority over inline audio (audio ignored)', () => {

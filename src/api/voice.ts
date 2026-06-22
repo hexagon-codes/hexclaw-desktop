@@ -4,8 +4,7 @@
  * 语音服务 — STT（语音识别）和 TTS（语音合成）。
  */
 
-import { apiGet, apiPost } from './client'
-import { env } from '@/config/env'
+import { api, apiGet, apiPost } from './client'
 
 /** 语音服务状态 */
 export interface VoiceStatus {
@@ -35,18 +34,18 @@ export function getVoiceStatus() {
   return apiGet<VoiceStatus>('/api/v1/voice/status')
 }
 
+
 /**
- * 文本转语音 — 注意：后端返回音频二进制流（audio/mpeg 等），
- * 不是 JSON，需要用 fetch + blob 接收。
+ * 文本转语音 — 后端返回音频二进制流（audio/mpeg 等），用 responseType:'blob' 接收。
+ * 走统一 client `api`（ofetch 实例）：继承 env.timeout + onResponseError→fromHttpStatus(ApiError)，
+ * 错误文案与错误码分类与全站一致，不再裸 fetch 吞成 generic "TTS failed"。
  */
 export async function textToSpeech(req: TTSRequest): Promise<Blob> {
-  const res = await fetch(`${env.apiBase}/api/v1/voice/synthesize`, {
+  return api<Blob, 'blob'>('/api/v1/voice/synthesize', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
+    body: req,
+    responseType: 'blob',
   })
-  if (!res.ok) throw new Error(`TTS failed: ${res.status}`)
-  return res.blob()
 }
 
 /** 从 File 的 MIME / 文件名推断真实音频容器格式（webm / mp4 / mp3 / wav / ogg / flac）。

@@ -47,9 +47,23 @@ export function getMcpServerStatus() {
   }>('/api/v1/mcp/status')
 }
 
-/** 添加 MCP 服务器（运行时动态添加，无需重启） */
-export function addMcpServer(name: string, command: string, args?: string[]) {
-  return apiPost<{ message: string }>('/api/v1/mcp/servers', { name, command, args })
+/**
+ * 添加 MCP 服务器（运行时动态添加，无需重启）。
+ *
+ * transport: 'stdio'（默认，需 command）| 'sse' | 'streamable'（后两者需 endpoint）。
+ * 对齐后端 handler（handler_misc.go）：stdio 走 command+args，sse/streamable 走 endpoint。
+ * 不传 opts 时 body 与旧版完全一致（向后兼容市场一键安装等调用方）。
+ */
+export function addMcpServer(
+  name: string,
+  command: string,
+  args?: string[],
+  opts?: { transport?: string; endpoint?: string },
+) {
+  const body: Record<string, unknown> = { name, command, args }
+  if (opts?.transport) body.transport = opts.transport
+  if (opts?.endpoint) body.endpoint = opts.endpoint
+  return apiPost<{ message: string }>('/api/v1/mcp/servers', body)
 }
 
 /** 移除 MCP 服务器 */

@@ -147,7 +147,7 @@ describe('Webhook API', () => {
     })
 
     it('returns webhook list', async () => {
-      const hooks = [{ id: 'w1', name: 'test', type: 'custom', url: 'https://example.com', events: ['error'], secret: '', prompt: '', user_id: 'u1' }]
+      const hooks = [{ id: 'w1', name: 'test', type: 'generic', has_secret: false, prompt: 'p', user_id: 'u1', enabled: true, event_count: 0, created_at: '' }]
       mockFetch.mockResolvedValue({ webhooks: hooks, total: 1 })
       const result = await getWebhooks()
       expect(result.total).toBe(1)
@@ -156,18 +156,16 @@ describe('Webhook API', () => {
 
   describe('createWebhook', () => {
     it('calls POST /api/v1/webhooks with data', async () => {
-      mockFetch.mockResolvedValue({ id: 'w1', name: 'test', url: 'https://example.com' })
-      await createWebhook({ name: 'test', type: 'custom', url: 'https://example.com', events: ['error'] })
+      mockFetch.mockResolvedValue({ id: 'w1', name: 'test', url: '/api/v1/webhooks/test' })
+      await createWebhook({ name: 'test', type: 'generic', prompt: '汇总事件' })
       expect(mockFetch).toHaveBeenCalledWith(
         '/api/v1/webhooks',
         expect.objectContaining({
           method: 'POST',
           body: expect.objectContaining({
             name: 'test',
-            type: 'custom',
-            url: 'https://example.com',
-            events: ['error'],
-            prompt: '',
+            type: 'generic',
+            prompt: '汇总事件',
             secret: '',
           }),
         }),

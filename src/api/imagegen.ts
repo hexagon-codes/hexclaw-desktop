@@ -57,15 +57,26 @@ export function generateImage(req: ImageGenRequest) {
   return apiPost<ImageGenResult>('/api/v1/images/generate', req)
 }
 
+/** 从 base64 magic-byte 前缀推断图像 MIME（避免对 jpeg/gif/webp 一律标成 image/png）。 */
+function b64ImageMime(b64: string): string {
+  if (b64.startsWith('/9j/')) return 'image/jpeg'        // FF D8 FF
+  if (b64.startsWith('R0lGOD')) return 'image/gif'        // GIF8
+  if (b64.startsWith('UklGR')) return 'image/webp'        // RIFF（图像场景即 WebP）
+  if (b64.startsWith('iVBORw0KGgo')) return 'image/png'   // 89 50 4E 47
+  return 'image/png'                                      // 未知兜底
+}
+
 /**
  * 把后端返回的图像（持久化路径 / URL / b64）统一为可放进 <img src> 的字符串。
  * 优先级：file_path（最稳定，不会过期/不撑爆 SQLite）→ url（Provider 临时链接）→ b64
  */
 export function imageToSrc(img: GeneratedImage): string {
   if (img.file_path) {
-    return `${env.apiBase}/api/v1/files/generated/${img.file_path}`
+    // 已是完整 URL 直接用；否则去掉前导斜杠再拼，避免 `.../generated//x` 双斜杠
+    if (/^https?:\/\//i.test(img.file_path)) return img.file_path
+    return `${env.apiBase}/api/v1/files/generated/${img.file_path.replace(/^\/+/, '')}`
   }
   if (img.url) return img.url
-  if (img.b64_json) return `data:image/png;base64,${img.b64_json}`
+  if (img.b64_json) return `data:${b64ImageMime(img.b64_json)};base64,${img.b64_json}`
   return ''
 }

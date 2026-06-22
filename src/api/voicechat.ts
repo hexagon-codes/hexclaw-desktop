@@ -60,7 +60,11 @@ const AUDIO_MIME: Record<string, string> = {
 
 /** 优先用持久化路径，其次 b64 data URL */
 export function audioToSrc(r: VoiceChatResult): string {
-  if (r.audio_file_path) return `${env.apiBase}/api/v1/files/generated/${r.audio_file_path}`
+  if (r.audio_file_path) {
+    // 已是完整 URL 直接透传；否则去前导斜杠再拼，避免双斜杠
+    if (/^https?:\/\//i.test(r.audio_file_path)) return r.audio_file_path
+    return `${env.apiBase}/api/v1/files/generated/${r.audio_file_path.replace(/^\/+/, '')}`
+  }
   if (r.audio) {
     const mime = AUDIO_MIME[r.format ?? ''] ?? 'audio/wav'
     return `data:${mime};base64,${r.audio}`

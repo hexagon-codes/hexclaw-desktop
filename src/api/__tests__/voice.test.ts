@@ -13,35 +13,21 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { apiGet, apiPost } = vi.hoisted(() => ({
+const { apiGet, apiPost, api } = vi.hoisted(() => ({
   apiGet: vi.fn(),
   apiPost: vi.fn(),
+  api: vi.fn(),
 }))
 
-vi.mock('../client', () => ({ apiGet, apiPost }))
+vi.mock('../client', () => ({ apiGet, apiPost, api }))
 vi.mock('@/config/env', () => ({ env: { apiBase: 'http://localhost:16060' } }))
 
 import { getVoiceStatus, textToSpeech, speechToText } from '../voice'
 import type { VoiceStatus, STTResponse } from '../voice'
 
-const API_BASE = 'http://localhost:16060'
-
-// ─── fetch stub helper（仅 textToSpeech 用）────────────
-const mockFetch = vi.fn()
-
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.stubGlobal('fetch', mockFetch)
 })
-
-/** 构造一个最小可用的 Response-like 对象（textToSpeech 只用 ok/status/blob） */
-function makeResponse(opts: { ok: boolean; status: number; blob?: Blob }) {
-  return {
-    ok: opts.ok,
-    status: opts.status,
-    blob: vi.fn().mockResolvedValue(opts.blob ?? new Blob([], { type: 'audio/mpeg' })),
-  }
-}
 
 // ─── getVoiceStatus ────────────────────────────────────
 describe('getVoiceStatus', () => {
@@ -92,76 +78,58 @@ describe('getVoiceStatus', () => {
 
 // ─── textToSpeech ──────────────────────────────────────
 describe('textToSpeech', () => {
-  it('正常路径：POST 到 synthesize endpoint，JSON header + 序列化 body，返回 blob', async () => {
+  it('正常路径：委托 client.api（POST /api/v1/voice/synthesize + responseType blob），返回 blob', async () => {
     const audioBlob = new Blob(['fake-audio'], { type: 'audio/mpeg' })
-    const res = makeResponse({ ok: true, status: 200, blob: audioBlob })
-    mockFetch.mockResolvedValueOnce(res)
+    api.mockResolvedValueOnce(audioBlob)
 
     const result = await textToSpeech({ text: 'hello world', voice: 'zh-CN-XiaoxiaoNeural' })
 
-    expect(mockFetch).toHaveBeenCalledTimes(1)
-    const [url, init] = mockFetch.mock.calls[0]!
-    expect(url).toBe(`${API_BASE}/api/v1/voice/synthesize`)
-    expect(init.method).toBe('POST')
-    expect(init.headers).toEqual({ 'Content-Type': 'application/json' })
-    // body 必须是 JSON 字符串，且含 text + voice
-    expect(typeof init.body).toBe('string')
-    expect(JSON.parse(init.body)).toEqual({ text: 'hello world', voice: 'zh-CN-XiaoxiaoNeural' })
-    // 返回值就是 res.blob() 的结果
+    expect(api).toHaveBeenCalledTimes(1)
+    const [url, opts] = api.mock.calls[0]! as [string, Record<string, unknown>]
+    expect(url).toBe('/api/v1/voice/synthesize')
+    expect(opts).toMatchObject({ method: 'POST', responseType: 'blob' })
+    // body 作为对象交给 ofetch 序列化，含 text + voice
+    expect(opts.body).toEqual({ text: 'hello world', voice: 'zh-CN-XiaoxiaoNeural' })
     expect(result).toBe(audioBlob)
-    expect(res.blob).toHaveBeenCalledTimes(1)
   })
 
-  it('voice 缺省时 body 只含 text（voice 字段为 undefined，序列化后省略）', async () => {
-    mockFetch.mockResolvedValueOnce(makeResponse({ ok: true, status: 200 }))
+  it('voice 缺省时 body 只含 text', async () => {
+    api.mockResolvedValueOnce(new Blob())
     await textToSpeech({ text: 'no voice given' })
-    const init = mockFetch.mock.calls[0]![1]
-    const parsed = JSON.parse(init.body)
-    expect(parsed.text).toBe('no voice given')
-    expect('voice' in parsed).toBe(false)
+    const body = (api.mock.calls[0]![1] as { body: Record<string, unknown> }).body
+    expect(body.text).toBe('no voice given')
+    expect('voice' in body).toBe(false)
   })
 
-  it('!res.ok 时抛出包含状态码的错误，且不调用 blob()', async () => {
-    const res = makeResponse({ ok: false, status: 500 })
-    mockFetch.mockResolvedValueOnce(res)
-    await expect(textToSpeech({ text: 'boom' })).rejects.toThrow('TTS failed: 500')
-    expect(res.blob).not.toHaveBeenCalled()
+  it('后端错误（ApiError）经统一 client 向上传播，不再吞成 generic "TTS failed"', async () => {
+    const apiErr = Object.assign(new Error('voice synth failed'), { code: 'SERVER_ERROR', status: 500 })
+    api.mockRejectedValueOnce(apiErr)
+    await expect(textToSpeech({ text: 'boom' })).rejects.toBe(apiErr)
   })
 
-  it('404 也按 !res.ok 抛出对应状态码', async () => {
-    mockFetch.mockResolvedValueOnce(makeResponse({ ok: false, status: 404 }))
-    await expect(textToSpeech({ text: 'x' })).rejects.toThrow('TTS failed: 404')
-  })
-
-  it('fetch 本身 reject（网络断开）向上传播原始错误', async () => {
-    mockFetch.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+  it('网络层 reject 向上传播原始错误', async () => {
+    api.mockRejectedValueOnce(new TypeError('Failed to fetch'))
     await expect(textToSpeech({ text: 'x' })).rejects.toThrow('Failed to fetch')
   })
 
-  it('边界：空 text 仍会照常发请求（当前实现无前端校验）', async () => {
-    mockFetch.mockResolvedValueOnce(makeResponse({ ok: true, status: 200 }))
+  it('边界：空 text 仍照常委托 api（当前无前端校验）', async () => {
+    api.mockResolvedValueOnce(new Blob())
     await textToSpeech({ text: '' })
-    const parsed = JSON.parse(mockFetch.mock.calls[0]![1].body)
-    expect(parsed.text).toBe('')
+    expect((api.mock.calls[0]![1] as { body: { text: string } }).body.text).toBe('')
   })
 
   it('边界：超长 text 完整进入 body，不被截断', async () => {
     const longText = 'a'.repeat(50_000)
-    mockFetch.mockResolvedValueOnce(makeResponse({ ok: true, status: 200 }))
+    api.mockResolvedValueOnce(new Blob())
     await textToSpeech({ text: longText })
-    const parsed = JSON.parse(mockFetch.mock.calls[0]![1].body)
-    expect(parsed.text).toHaveLength(50_000)
-    expect(parsed.text).toBe(longText)
+    expect((api.mock.calls[0]![1] as { body: { text: string } }).body.text).toHaveLength(50_000)
   })
 
-  it('边界：含引号/换行/中文/emoji 的 text 经 JSON.stringify 正确转义且可往返还原', async () => {
+  it('边界：含引号/换行/中文/emoji 的 text 原样进入 body（由 ofetch 序列化）', async () => {
     const tricky = '他说："你好\n世界" 🎤 \\backslash'
-    mockFetch.mockResolvedValueOnce(makeResponse({ ok: true, status: 200 }))
+    api.mockResolvedValueOnce(new Blob())
     await textToSpeech({ text: tricky })
-    const rawBody = mockFetch.mock.calls[0]![1].body as string
-    // 原始 body 中换行被转义为字面 \n（不应出现真实换行破坏 JSON）
-    expect(rawBody).not.toContain('\n')
-    expect(JSON.parse(rawBody).text).toBe(tricky)
+    expect((api.mock.calls[0]![1] as { body: { text: string } }).body.text).toBe(tricky)
   })
 })
 

@@ -214,7 +214,7 @@ describe('跨模块一致性: chat + tasks + webhook 使用相同 user_id', () =
 
   it('webhook.createWebhook 使用 DESKTOP_USER_ID', async () => {
     const { createWebhook } = await import('@/api/webhook')
-    await createWebhook({ name: 'test', type: 'custom', url: 'https://example.com', events: ['task_complete'] })
+    await createWebhook({ name: 'test', type: 'generic', prompt: '处理' })
     expect(mockFetch.mock.calls[0]?.[1]?.body?.user_id).toBe(EXPECTED_USER_ID)
   })
 

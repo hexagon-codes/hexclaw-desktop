@@ -35,7 +35,8 @@ function toRecord(c: BackendCapability): CapabilityRecord {
     modelName: c.model_name,
     reliability: {
       level: c.tool_call_text ?? 'unknown',
-      lastProbe: c.last_probe,
+      // 后端未探测时序列化成零时间 "0001-01-01T..."，归一化为 undefined（缺失=未探测）。
+      lastProbe: c.last_probe && !c.last_probe.startsWith('0001-01-01') ? c.last_probe : undefined,
       probeError: c.probe_error,
     },
   }

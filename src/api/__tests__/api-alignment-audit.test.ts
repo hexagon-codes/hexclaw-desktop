@@ -420,19 +420,20 @@ describe('Webhook API alignment: webhook.ts vs handler_webhook.go', () => {
     // MISALIGNMENT: frontend sends "url" and "events" fields that backend does NOT parse.
     // Backend ignores url (it generates URL from name) and ignores events.
     const webhookSource = readFrontendFile('webhook.ts')
-    expect(webhookSource).toContain("url: data.url")
-    expect(webhookSource).toContain("events: data.events")
-    // Backend handler does NOT have url or events in RegisterWebhookRequest struct
+    // 已修（2026-06-22）：createWebhook 不再向后端发 url/events（后端 RegisterWebhookRequest 不收）。
+    expect(webhookSource).not.toContain("url: data.url")
+    expect(webhookSource).not.toContain("events: data.events")
   })
 
-  it('Webhook interface has url and events fields not returned by backend', () => {
+  it('Webhook interface aligned with backend (no url/events; real URL derived from name)', () => {
     const webhookSource = readFrontendFile('webhook.ts')
-    // Frontend Webhook interface includes url, events
-    // Backend handleRegisterWebhook returns: { id, name, url }
-    // Backend handleListWebhooks returns webhook.Webhook which may not have events field
-    // The url in response is backend-generated ("/api/v1/webhooks/{name}")
-    expect(webhookSource).toContain('url: string')
-    expect(webhookSource).toContain('events: WebhookEvent[]')
+    // 已修（AUD-3）：后端 webhook.Webhook 无 url/events；前端接口对齐后端字段，
+    // 真实 URL 由 webhookUrlFor(name) 据 name 派生（/api/v1/webhooks/{name}）。
+    // Webhook 接口不再含 events/WebhookEvent；create 响应里的 url:string 是后端实有字段，保留。
+    expect(webhookSource).not.toContain('WebhookEvent')
+    expect(webhookSource).not.toContain('events:')
+    expect(webhookSource).toContain('webhookUrlFor')
+    expect(webhookSource).toContain("'generic' | 'github' | 'gitlab'")
   })
 })
 

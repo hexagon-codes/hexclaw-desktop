@@ -31,6 +31,17 @@ export function uninstallSkill(name: string) {
   return apiDelete(`/api/v1/skills/${encodeURIComponent(name)}`)
 }
 
+/** 与 AI 对话生成一份 SKILL.md 草稿（仅生成，不落盘；预览/编辑后再 installSkillContent） */
+export async function generateSkill(description: string): Promise<string> {
+  const res = await apiPost<{ content: string }>('/api/v1/skills/generate', { description })
+  return res.content ?? ''
+}
+
+/** 把（AI 生成或就地编辑后的）完整 SKILL.md 原文安装落盘 */
+export function installSkillContent(content: string) {
+  return apiPost<SkillInstallResult>('/api/v1/skills/install', { type: 'content', content })
+}
+
 /** 启用/禁用 Skill（优先以后端状态为准，缺失时降级到本地偏好） */
 export async function setSkillEnabled(name: string, enabled: boolean): Promise<SkillStatusUpdateResult> {
   try {
@@ -139,6 +150,7 @@ function mapHubMetaToClawHubSkill(m: Record<string, unknown>): ClawHubSkill {
     downloads: typeof m.downloads === 'number' ? m.downloads : 0,
     rating: typeof m.rating === 'number' ? m.rating : undefined,
     category: normalizeHubCategory(m.category),
+    icon: typeof m.icon === 'string' ? m.icon : undefined,
   }
 }
 
@@ -182,6 +194,13 @@ export async function installFromHub(skillName: string): Promise<void> {
   await apiPost('/api/v1/skills/install', {
     source: `clawhub://${skillName}`,
   })
+}
+
+/** 读取 ClawHub 某技能的 SKILL.md 原文（安装前预览，不落盘） */
+export function getHubSkillContent(name: string) {
+  return apiGet<{ name: string; content: string }>(
+    `/api/v1/clawhub/skills/${encodeURIComponent(name)}/content`,
+  )
 }
 
 /** 读取某个 Skill 的 SKILL.md 原文（只读查看；市场技能不支持就地编辑） */

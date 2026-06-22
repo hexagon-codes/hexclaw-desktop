@@ -252,6 +252,8 @@ function normalizeKnowledgeSearchResults(payload: unknown): KnowledgeSearchResul
 
 /** 搜索知识库 */
 export async function searchKnowledge(query: string, topK?: number) {
+  // 防御性双兼容：后端 Fix 16 返回 "results"（复数），但保留对历史 "result"（单数）的兜底，
+  // 既有回归锁断言两字段都要兼容（code-review-v8 / comprehensive-api-layer）。
   const response = await apiPost<{
     result?: KnowledgeSearchResult[] | string
     results?: KnowledgeSearchResult[] | string

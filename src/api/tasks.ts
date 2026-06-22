@@ -147,6 +147,7 @@ export async function createCronJobSSE(
     type: input.type ?? 'cron',
     user_id: DESKTOP_USER_ID,
     ...(input.deliver && input.deliver.length ? { deliver: input.deliver } : {}),
+    ...(input.chat_id ? { chat_id: input.chat_id } : {}),
   })
 
   // BUG-A 超时兜底：组合内部 timeout + 外部 signal 到统一 AbortController。
@@ -281,6 +282,7 @@ export async function createCronJobJSON(input: CronJobInput): Promise<CreateCron
         schedule: input.schedule,
         prompt: input.prompt,
         ...(input.deliver && input.deliver.length ? { deliver: input.deliver } : {}),
+        ...(input.chat_id ? { chat_id: input.chat_id } : {}),
       },
     },
     { timeout: CRON_CREATE_TIMEOUT_MS },
@@ -326,8 +328,8 @@ export async function resumeCronJob(id: string): Promise<{ message: string }> {
   return { message: '任务已恢复' }
 }
 
-/** 立即触发任务（路由到 unified endpoint，D1.2） */
-export async function triggerCronJob(id: string): Promise<{ message: string; run_id?: string }> {
+/** 立即触发任务（路由到 unified endpoint，D1.2）。后端 run action 不返回 run_id，故不声明。 */
+export async function triggerCronJob(id: string): Promise<{ message: string }> {
   await cronjobAction({ action: 'run', job_id: id, idempotency_key: genIdempotencyKey() })
   return { message: '已触发' }
 }

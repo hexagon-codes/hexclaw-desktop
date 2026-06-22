@@ -47,14 +47,6 @@ export function deletePrompt(id: string) {
   return apiDelete<{ deleted: string }>(`/api/v1/prompts/${encodeURIComponent(id)}`)
 }
 
-/**
- * renderCommand 把 command 型 Prompt 的 $ARGUMENTS 占位替换为用户填入的参数
- * （纯文本替换，与后端 library.Render 同口径；前端组装后整段发送）。
- */
-export function renderCommand(p: Prompt, args: string): string {
-  return p.body_md.split('$ARGUMENTS').join(args)
-}
-
 // ─── 记忆薄版（standing 每轮全量注入 / fact 命中注入） ───
 
 /** 记忆类型。 */

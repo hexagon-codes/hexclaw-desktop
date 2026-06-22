@@ -24,6 +24,7 @@ import {
   setSkillEnabled,
   searchClawHub,
   installFromHub,
+  getHubSkillContent,
 } from '../skills'
 
 describe('Skills API Error Paths', () => {
@@ -196,6 +197,29 @@ describe('Skills API Error Paths', () => {
     it('propagates 404 when hub skill does not exist', async () => {
       mockFetch.mockRejectedValue(Object.assign(new Error('hub skill not found'), { status: 404 }))
       await expect(installFromHub('ghost')).rejects.toThrow('hub skill not found')
+    })
+  })
+
+  // ─── getHubSkillContent（安装前预览） ─────────────
+
+  describe('getHubSkillContent', () => {
+    it('GETs the clawhub content endpoint with the encoded skill name', async () => {
+      mockFetch.mockResolvedValue({ name: 'demo', content: '---\nname: demo\n---\n# Demo' })
+      const res = await getHubSkillContent('demo')
+      expect(res.content).toContain('# Demo')
+      const url = mockFetch.mock.calls[0]![0]
+      expect(url).toBe('/api/v1/clawhub/skills/demo/content')
+    })
+
+    it('encodes special characters in the skill name', async () => {
+      mockFetch.mockResolvedValue({ name: 'a b', content: 'x' })
+      await getHubSkillContent('a b')
+      expect(mockFetch.mock.calls[0]![0]).toBe('/api/v1/clawhub/skills/a%20b/content')
+    })
+
+    it('propagates backend errors (e.g. MCP entry / not found)', async () => {
+      mockFetch.mockRejectedValue(new Error('MCP 条目没有 SKILL.md 可预览'))
+      await expect(getHubSkillContent('some-mcp')).rejects.toThrow('SKILL.md')
     })
   })
 })
