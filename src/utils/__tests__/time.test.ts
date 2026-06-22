@@ -38,12 +38,22 @@ describe('formatTime', () => {
   // ── Today ──────────────────────────────────────────────────────
 
   it('today → HH:mm (both compact & full)', () => {
-    const ts = ago(5 * MINUTE)
-    const result = formatTime(ts)
-    // Should be HH:mm format
-    expect(result).toMatch(/^\d{2}:\d{2}$/)
-    // compact should be the same for today
-    expect(formatTime(ts, true)).toBe(result)
+    // Pin "now" to noon so "5 minutes ago" never crosses the midnight
+    // boundary into the previous day (which would render as 昨天 HH:mm).
+    const fakeNow = new Date()
+    fakeNow.setHours(12, 0, 0, 0)
+    vi.useFakeTimers()
+    vi.setSystemTime(fakeNow)
+    try {
+      const ts = ago(5 * MINUTE)
+      const result = formatTime(ts)
+      // Should be HH:mm format
+      expect(result).toMatch(/^\d{2}:\d{2}$/)
+      // compact should be the same for today
+      expect(formatTime(ts, true)).toBe(result)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   // ── Yesterday ──────────────────────────────────────────────────

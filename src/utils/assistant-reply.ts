@@ -23,7 +23,13 @@ export function normalizeAssistantContent(content: string, reasoning?: string): 
   if (reasoning?.trim()) {
     const leakedCloseTag = content.match(/<\/think(?:ing)?>/i)
     if (leakedCloseTag?.index !== undefined) {
-      return content.slice(leakedCloseTag.index + leakedCloseTag[0].length).trimStart()
+      // 仅当 </think> 之前没有配对的 <think> 开标签时，才视为「泄漏的思考」整段剥离。
+      // 否则正文是在合法地使用 / 讲解 think 标签（如贴含该标签的代码、说明写法），
+      // 砍掉前半段会腰斩用户的真实回答（bug 2026-06-22 A）。
+      const before = content.slice(0, leakedCloseTag.index)
+      if (!/<think(?:ing)?>/i.test(before)) {
+        return content.slice(leakedCloseTag.index + leakedCloseTag[0].length).trimStart()
+      }
     }
   }
   return content

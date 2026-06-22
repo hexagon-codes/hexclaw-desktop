@@ -187,6 +187,7 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
     // 这里的白名单用作能力识别字典：syncOllamaModels 会按 base ID（去掉 :tag）匹配，
     // 命中则沿用这里的 capabilities，否则回退 inferCapabilitiesFromId 正则推断。
     defaultModels: [
+      { id: 'qwen3-vl', name: 'Qwen3 VL', capabilities: ['text', 'vision'] },
       { id: 'qwen2.5-vl', name: 'Qwen 2.5 VL', capabilities: ['text', 'vision'] },
       { id: 'qwen2-vl', name: 'Qwen 2 VL', capabilities: ['text', 'vision'] },
       { id: 'llava', name: 'LLaVA', capabilities: ['text', 'vision'] },
@@ -205,7 +206,6 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
       { id: 'codegemma', name: 'CodeGemma', capabilities: ['text', 'code'] },
       { id: 'starcoder2', name: 'StarCoder 2', capabilities: ['text', 'code'] },
       { id: 'granite-code', name: 'Granite Code', capabilities: ['text', 'code'] },
-      { id: 'devstral', name: 'Devstral', capabilities: ['text', 'code'] },
     ],
   },
   custom: {

@@ -140,6 +140,27 @@ function extractQuotedText(text: string): string | null {
   return match ? trimEdgePunctuation(match[1] || '') : null
 }
 
+/** 校验 5 字段 cron 各字段是否落在合法区间，过滤散文里的数字误匹配（bug 2026-06-22 C）。
+ *  含 cron 特殊符号（* / , -）的字段直接放行，仅对纯数字字段做范围校验。 */
+function isPlausibleCron(expr: string): boolean {
+  const fields = expr.trim().split(/\s+/)
+  if (fields.length !== 5) return false
+  const ranges: [number, number][] = [
+    [0, 59],
+    [0, 23],
+    [1, 31],
+    [1, 12],
+    [0, 7],
+  ]
+  return fields.every((f, i) => {
+    const r = ranges[i]
+    if (!r) return false
+    if (/[*/,-]/.test(f)) return true
+    const n = Number(f)
+    return Number.isInteger(n) && n >= r[0] && n <= r[1]
+  })
+}
+
 function scheduleFromPhrase(text: string): { schedule: string; fragment: string } | null {
   const explicitInterval = text.match(/@every\s*\d+\s*[smhd]/i)
   if (explicitInterval?.[0]) {
@@ -151,12 +172,18 @@ function scheduleFromPhrase(text: string): { schedule: string; fragment: string 
     return { schedule: preset[0].toLowerCase(), fragment: preset[0] }
   }
 
-  const cron = text.match(/\b(?:[\d*/,?-]+\s+){4}[\d*/,?-]+\b/)
-  if (cron?.[0]) {
-    return { schedule: cron[0], fragment: cron[0] }
+  // 不要用 `\b` 锚定 cron——首/末字段常为 `*`（非单词字符），`\b` 要求 \w 边界，
+  // 会让任意以 `*` 结尾的标准 cron（DOW 几乎恒为 *）全部漏匹配（bug 2026-06-22-K）。
+  // 改用空白/串首尾锚定，isPlausibleCron 仍兜底过滤散文数字（如 minute>59）。
+  const cron = text.match(/(?:^|\s)((?:[\d*/,?-]+\s+){4}[\d*/,?-]+)(?:\s|$)/)
+  if (cron?.[1] && isPlausibleCron(cron[1])) {
+    return { schedule: cron[1], fragment: cron[1] }
   }
 
-  const everyMinute = text.match(/每\s*(\d+)\s*(分钟|分)\b/)
+  // 注意：不要在 CJK（分钟/小时）后用 `\b`——无 `u` 标志时 CJK 不算 \w，
+  // CJK↔CJK/行尾间不存在单词边界，`\b` 会让整条分支变成死代码（bug 2026-06-22-H）。
+  // 支持「每隔N分钟」前缀；`分钟?` 兼容「每30分」简写。
+  const everyMinute = text.match(/每\s*隔?\s*(\d+)\s*分钟?/)
   if (everyMinute?.[1]) {
     return {
       schedule: `@every ${everyMinute[1]}m`,
@@ -164,7 +191,7 @@ function scheduleFromPhrase(text: string): { schedule: string; fragment: string 
     }
   }
 
-  const everyHour = text.match(/每\s*(\d+)\s*(小时|时)\b/)
+  const everyHour = text.match(/每\s*隔?\s*(\d+)\s*(?:小时|时)/)
   if (everyHour?.[1]) {
     return {
       schedule: `@every ${everyHour[1]}h`,
@@ -230,7 +257,13 @@ function toCronSchedule(
   let hour = Number.parseInt(hourRaw, 10)
   const minute = Number.parseInt(minuteRaw || '0', 10)
   if (Number.isNaN(hour) || Number.isNaN(minute)) return '0 0 * * *'
-  if ((period === '下午' || period === '晚上' || period === '夜里' || period === '傍晚') && hour < 12) {
+  // 12 小时制「12 点」边界（bug 2026-06-22-I）：
+  //   晚上/夜里/凌晨 12 点 = 午夜 0 点；下午/中午 12 点 = 正午 12 点（保持不变）。
+  if ((period === '晚上' || period === '夜里' || period === '凌晨') && hour === 12) {
+    hour = 0
+  }
+  // hour=0（午夜「晚上/夜里0点」）不应 +12 推成中午（bug 2026-06-22 B）。
+  if ((period === '下午' || period === '晚上' || period === '夜里' || period === '傍晚') && hour > 0 && hour < 12) {
     hour += 12
   }
   if (period === '中午' && hour < 11) {
