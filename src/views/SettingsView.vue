@@ -23,21 +23,11 @@ import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } fr
 import { getRuntimeConfig } from '@/api/settings'
 import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
 import { fetchCapabilities, probeCapability } from '@/api/capabilities'
-import {
-  getBudgetStatus,
-  getToolCacheStats,
-  getToolMetrics,
-  getToolPermissions,
-} from '@/api/tools-status'
-import type {
-  BudgetStatus,
-  ToolCacheStats,
-  ToolMetrics,
-  ToolPermissions,
-} from '@/api/tools-status'
 import { messageFromUnknownError } from '@/utils/errors'
 import { logger } from '@/utils/logger'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
+import { useAboutWindow } from '@/composables/useAboutWindow'
+import { useToast } from '@/composables'
 import { setLocale } from '@/i18n'
 import { PROVIDER_PRESETS, PROVIDER_LOGOS, inferCapabilitiesFromId } from '@/config/providers'
 import { OLLAMA_BASE } from '@/config/env'
@@ -60,11 +50,13 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
+const toast = useToast()
 const settingsStore = useSettingsStore()
 const catalogStore = useModelCatalogStore()
 const { themeMode, setTheme } = useTheme()
 const activeSection = ref('llm')
 const saved = ref(false)
+const saveFailed = ref(false)
 
 // Provider 编辑状态
 const editingProviderId = ref<string | null>(null)
@@ -102,6 +94,7 @@ const pendingDeleteModel = ref<{ providerId: string; modelId: string; modelName:
 const runtimeConfig = ref<BackendRuntimeConfig | null>(null)
 const runtimeLLMConfig = ref<BackendLLMConfig | null>(null)
 const appVersion = ref('—')
+const openAbout = useAboutWindow()
 
 // Load desktop app version from Tauri
 onMounted(() => {
@@ -282,7 +275,7 @@ function handleLanguageChange() {
 
 // 语言下拉（替代原生 <select class="hc-input">，原 @change=handleLanguageChange 改由 setter 触发）
 const languageOptions = [
-  { value: 'zh-CN', label: '中文' },
+  { value: 'zh-CN', label: '简体中文' },
   { value: 'en', label: 'English' },
   { value: 'ug-CN', label: '维吾尔语' },
 ]
@@ -334,6 +327,8 @@ async function refreshCapability(provider: ProviderConfig, model: ModelOption) {
     model.toolReliability = rec.reliability
   } catch (e) {
     logger.warn('[HexClaw] A7 能力探测失败:', e)
+    // 手动点击探测按钮失败不能静默——告知用户重试
+    toast.error(t('settings.llm.probeFailed', '能力探测失败，请重试'))
   } finally {
     probingKey.value = null
   }
@@ -422,9 +417,6 @@ onBeforeUnmount(() => {
 watch(activeSection, (val) => {
   if (val === 'system') {
     loadRuntimeInfo()
-  }
-  if (val === 'status' && statusExpanded.value && !budgetStatus.value && !statusError.value) {
-    loadSystemStatus()
   }
 })
 
@@ -591,66 +583,6 @@ async function loadRuntimeInfo() {
   }
 }
 
-// ─── 系统状态 (Status) ────────────────────────────────
-const statusExpanded = ref(false)
-const statusLoading = ref(false)
-const budgetStatus = ref<BudgetStatus | null>(null)
-const toolCacheStats = ref<ToolCacheStats | null>(null)
-const toolMetrics = ref<ToolMetrics | null>(null)
-const toolPermissions = ref<ToolPermissions | null>(null)
-const statusError = ref('')
-
-async function loadSystemStatus() {
-  if (statusLoading.value) return
-  statusLoading.value = true
-  statusError.value = ''
-  try {
-    const [budget, cache, metrics, permissions] = await Promise.all([
-      getBudgetStatus(),
-      getToolCacheStats(),
-      getToolMetrics(),
-      getToolPermissions(),
-    ])
-    budgetStatus.value = budget
-    toolCacheStats.value = cache
-    toolMetrics.value = metrics
-    toolPermissions.value = permissions
-  } catch (e) {
-    statusError.value = messageFromUnknownError(e)
-  } finally {
-    statusLoading.value = false
-  }
-}
-
-function toggleStatusSection() {
-  statusExpanded.value = !statusExpanded.value
-  if (statusExpanded.value && !budgetStatus.value && !statusError.value) {
-    loadSystemStatus()
-  }
-}
-
-function formatPercent(value: number): string {
-  return `${(value * 100).toFixed(1)}%`
-}
-
-function formatDuration(value: string | number): string {
-  if (typeof value === 'string') return value
-  if (value < 60) return `${value.toFixed(0)}s`
-  if (value < 3600) return `${(value / 60).toFixed(1)}m`
-  return `${(value / 3600).toFixed(1)}h`
-}
-
-function formatCost(value: number): string {
-  return `$${value.toFixed(4)}`
-}
-
-const topToolsByUsage = computed(() => {
-  if (!toolMetrics.value?.tools) return []
-  return [...toolMetrics.value.tools]
-    .sort((a, b) => b.call_count - a.call_count)
-    .slice(0, 10)
-})
-
 /** 添加一个新 Provider */
 function handleAssociateOllama() {
   // 防止重复添加 Ollama
@@ -726,6 +658,7 @@ async function handleDeleteProvider(id: string) {
         settingsStore.config.llm.providers = snapshot
         editingProviderId.value = prevEditingId
       }
+      toast.error(t('settings.llm.deleteProviderFailed', '删除失败，已恢复'))
     }
   }
 }
@@ -932,14 +865,14 @@ async function testProvider(provider: ProviderConfig) {
 }
 
 /** 连接成功后，从 Provider 动态拉取可用模型目录 */
-async function syncRemoteModels(provider: ProviderConfig) {
+async function syncRemoteModels(provider: ProviderConfig): Promise<boolean> {
   const preset = PROVIDER_PRESETS[provider.type]
   const baseUrl = provider.baseUrl || preset?.defaultBaseUrl || ''
   const apiKey = provider.apiKey?.trim() || ''
-  if (!baseUrl) return
+  if (!baseUrl) return true
   try {
     const remoteModels = await fetchProviderModels(baseUrl, apiKey)
-    if (!remoteModels.length) return
+    if (!remoteModels.length) return true
     // 目录层：全量 + 元数据存本地缓存（含"新增"diff），供模型管理器浏览
     catalogStore.setCatalog(provider.id, remoteModels)
 
@@ -964,7 +897,7 @@ async function syncRemoteModels(provider: ProviderConfig) {
         provider.models = refreshed
         autoSave()
       }
-      return
+      return true
     }
 
     // 小目录：维持原行为，与预设合并后全量进启用列表
@@ -1002,8 +935,12 @@ async function syncRemoteModels(provider: ProviderConfig) {
       provider.selectedModelId = merged[0]!.id
     }
     autoSave()
+    return true
   } catch (e) {
+    // 自动后台同步（testProvider 成功后触发）忽略返回值 → 静默；
+    // 手动重同步（handleManagerResync）按返回值 surface。
     logger.warn('[Settings] 拉取远程模型列表失败（不影响使用）:', e)
+    return false
   }
 }
 
@@ -1050,7 +987,8 @@ async function handleManagerResync() {
   if (!provider || managerSyncing.value) return
   managerSyncing.value = true
   try {
-    await syncRemoteModels(provider)
+    const ok = await syncRemoteModels(provider)
+    if (!ok) toast.error(t('settings.llm.syncModelsFailed', '同步模型列表失败，请检查连接'))
   } finally {
     managerSyncing.value = false
   }
@@ -1077,10 +1015,12 @@ async function onToolbarReset() {
     saved.value = false
   } catch (e) {
     logger.error('[HexClaw] Reset failed:', e)
+    toast.error(t('settings.toolbar.resetFailed', '重置失败，请重试'))
   }
 }
 
 async function saveConfig() {
+  saveFailed.value = false
   try {
     await flushAutoSave({
       force: true,
@@ -1089,6 +1029,10 @@ async function saveConfig() {
     })
   } catch (e) {
     logger.error('保存配置失败:', e)
+    // 保存失败不能静默：清成功态 + 置失败态，按钮显示「保存失败，请重试」（4s 后复位）
+    saved.value = false
+    saveFailed.value = true
+    setTimeout(() => { saveFailed.value = false }, 4000)
   }
 }
 
@@ -1124,12 +1068,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
         </button>
         <button
           class="hc-btn hc-btn-primary"
-          :class="{ 'hc-settings__btn--saved': saved }"
+          :class="{ 'hc-settings__btn--saved': saved, 'hc-settings__btn--failed': saveFailed }"
           :disabled="!hasUnsavedChanges() && !saved"
           @click="saveConfig"
         >
           <CheckCircle v-if="saved" :size="14" />
-          {{ saved ? t('common.saved') : t('settings.toolbar.saveSettings', '保存') }}
+          {{ saved ? t('common.saved') : saveFailed ? t('settings.toolbar.saveFailed', '保存失败，请重试') : t('settings.toolbar.saveSettings', '保存') }}
           <span class="hc-settings__dirty" :class="{ 'hc-settings__dirty--on': isDirty }">· 未保存</span>
         </button>
       </template>
@@ -1560,11 +1504,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
           <!-- System (merged: appearance + storage) -->
           <div v-else-if="activeSection === 'system'" class="hc-settings__section">
-            <h3 class="hc-settings__section-title">{{ t('settings.system.title') }}</h3>
-
             <div class="hc-settings__form">
+              <div class="hc-settings__sep" style="margin-top: 4px">
+                <span class="hc-settings__sep-label">{{ t('settings.appearance.title') }}</span>
+                <span class="hc-settings__sep-line"></span>
+              </div>
               <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.appearance.themeMode') }}</label>
                 <div class="hc-settings__theme-grid">
                   <button
                     v-for="opt in [
@@ -1595,12 +1540,20 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 </div>
               </div>
 
-              <div class="hc-settings__field">
-                <label class="hc-settings__label">{{ t('settings.general.language') }}</label>
-                <HcSelect
-                  v-model="languageModel"
-                  :options="languageOptions"
-                />
+              <div class="hc-settings__row">
+                <span class="hc-settings__row-label">{{ t('settings.general.language') }}</span>
+                <div class="hc-settings__row-right">
+                  <HcSelect
+                    class="hc-settings__select"
+                    v-model="languageModel"
+                    :options="languageOptions"
+                  />
+                </div>
+              </div>
+
+              <div class="hc-settings__sep" style="margin-top: 16px">
+                <span class="hc-settings__sep-label">{{ t('settings.general.title') }}</span>
+                <span class="hc-settings__sep-line"></span>
               </div>
 
               <label class="hc-settings__toggle-row">
@@ -1698,187 +1651,22 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 {{ t('common.loading', 'Loading...') }}
               </p>
             </div>
-          </div>
 
-          <!-- System Status -->
-          <div
-            v-else-if="activeSection === 'status'"
-            class="hc-settings__section hc-settings__section--scroll hc-settings__section--storage"
-          >
-            <h3 class="hc-settings__section-title">
-              {{ t('settings.status.title', '系统状态') }}
-            </h3>
-
-            <!-- Collapsible trigger -->
-            <button class="hc-status__trigger" @click="toggleStatusSection">
-              <span class="hc-status__trigger-label">
-                {{ t('settings.status.loadData', '加载运行时状态') }}
-              </span>
-              <component :is="statusExpanded ? ChevronUp : ChevronDown" :size="14" />
-            </button>
-
-            <template v-if="statusExpanded">
-              <!-- Loading -->
-              <p v-if="statusLoading" class="hc-status__loading">
-                <Loader2 :size="14" class="animate-spin" />
-                {{ t('common.loading', 'Loading...') }}
+            <!-- 关于河蟹（身份入口，与「系统信息」分区风格一致） -->
+            <div class="hc-settings__sep" style="margin-top: 16px">
+              <span class="hc-settings__sep-label">{{ t('settings.system.aboutLabel', '关于河蟹') }}</span>
+              <span class="hc-settings__sep-line"></span>
+            </div>
+            <div class="hc-settings__about">
+              <p class="hc-settings__about-intro">
+                <span class="hc-settings__about-emoji" aria-hidden="true">🦀</span>
+                {{ t('about.subtitle', '一只横行本地的 AI 螃蟹 —— 钳得住活，守得住数据，长得出本事') }}
               </p>
-
-              <!-- Error -->
-              <p v-else-if="statusError" class="hc-settings__error">
-                {{ statusError }}
-              </p>
-
-              <template v-else-if="budgetStatus">
-                <!-- Budget -->
-                <div class="hc-card hc-settings__info-card hc-settings__info-card--wide">
-                  <div class="hc-settings__info-title">
-                    {{ t('settings.status.budget', 'Budget') }}
-                  </div>
-
-                  <div class="hc-status__progress-list">
-                    <!-- Tokens -->
-                    <div class="hc-status__progress-item">
-                      <div class="hc-status__progress-header">
-                        <span class="hc-settings__info-label">Tokens</span>
-                        <span class="hc-status__progress-value">
-                          {{ budgetStatus.tokens_used.toLocaleString() }} / {{ budgetStatus.tokens_max.toLocaleString() }}
-                        </span>
-                      </div>
-                      <div class="hc-status__progress-bar">
-                        <div
-                          class="hc-status__progress-fill"
-                          :style="{ width: budgetStatus.tokens_max > 0 ? `${Math.min((budgetStatus.tokens_used / budgetStatus.tokens_max) * 100, 100)}%` : '0%' }"
-                          :class="{ 'hc-status__progress-fill--warn': budgetStatus.tokens_max > 0 && budgetStatus.tokens_used / budgetStatus.tokens_max > 0.8 }"
-                        />
-                      </div>
-                    </div>
-
-                    <!-- Cost -->
-                    <div class="hc-status__progress-item">
-                      <div class="hc-status__progress-header">
-                        <span class="hc-settings__info-label">Cost</span>
-                        <span class="hc-status__progress-value">
-                          {{ formatCost(budgetStatus.cost_used) }} / {{ formatCost(budgetStatus.cost_max) }}
-                        </span>
-                      </div>
-                      <div class="hc-status__progress-bar">
-                        <div
-                          class="hc-status__progress-fill"
-                          :style="{ width: budgetStatus.cost_max > 0 ? `${Math.min((budgetStatus.cost_used / budgetStatus.cost_max) * 100, 100)}%` : '0%' }"
-                          :class="{ 'hc-status__progress-fill--warn': budgetStatus.cost_max > 0 && budgetStatus.cost_used / budgetStatus.cost_max > 0.8 }"
-                        />
-                      </div>
-                    </div>
-
-                    <!-- Duration -->
-                    <div class="hc-status__progress-item">
-                      <div class="hc-status__progress-header">
-                        <span class="hc-settings__info-label">Duration</span>
-                        <span class="hc-status__progress-value">
-                          {{ formatDuration(budgetStatus.duration_used) }} / {{ formatDuration(budgetStatus.duration_max) }}
-                        </span>
-                      </div>
-                      <div class="hc-status__progress-bar">
-                        <div
-                          class="hc-status__progress-fill"
-                          :style="{ width: budgetStatus.exhausted ? '100%' : '0%' }"
-                          :class="{ 'hc-status__progress-fill--warn': budgetStatus.exhausted }"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Tool Cache -->
-                <div v-if="toolCacheStats" class="hc-card hc-settings__info-card">
-                  <div class="hc-settings__info-title">
-                    {{ t('settings.status.toolCache', 'Tool Cache') }}
-                  </div>
-                  <div class="hc-settings__info-grid">
-                    <div>
-                      <span class="hc-settings__info-label">Entries</span>
-                      <div class="hc-settings__info-value">{{ toolCacheStats.entries }}</div>
-                    </div>
-                    <div>
-                      <span class="hc-settings__info-label">Hit Rate</span>
-                      <div
-                        class="hc-settings__info-value"
-                        :style="{ color: toolCacheStats.hit_rate > 0.5 ? 'var(--hc-success)' : 'var(--hc-text-primary)' }"
-                      >
-                        {{ formatPercent(toolCacheStats.hit_rate) }}
-                      </div>
-                    </div>
-                    <div>
-                      <span class="hc-settings__info-label">Hits</span>
-                      <div class="hc-settings__info-value">{{ toolCacheStats.hits }}</div>
-                    </div>
-                    <div>
-                      <span class="hc-settings__info-label">Misses</span>
-                      <div class="hc-settings__info-value">{{ toolCacheStats.misses }}</div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Tool Metrics -->
-                <div v-if="topToolsByUsage.length > 0" class="hc-card hc-settings__info-card hc-settings__info-card--wide">
-                  <div class="hc-settings__info-title">
-                    {{ t('settings.status.toolMetrics', 'Tool Metrics') }}
-                  </div>
-                  <table class="hc-status__table">
-                    <thead>
-                      <tr>
-                        <th>{{ t('settings.status.toolName', 'Tool') }}</th>
-                        <th>{{ t('settings.status.toolCalls', 'Calls') }}</th>
-                        <th>{{ t('settings.status.toolSuccessRate', 'Success') }}</th>
-                        <th>{{ t('settings.status.toolLatency', 'Avg Latency') }}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr v-for="tool in topToolsByUsage" :key="tool.tool">
-                        <td class="hc-status__table-name">{{ tool.tool }}</td>
-                        <td>{{ tool.call_count }}</td>
-                        <td :style="{ color: tool.success_rate >= 0.95 ? 'var(--hc-success)' : tool.success_rate < 0.8 ? 'var(--hc-error)' : 'var(--hc-text-primary)' }">
-                          {{ formatPercent(tool.success_rate) }}
-                        </td>
-                        <td>{{ tool.avg_latency_ms.toFixed(0) }}ms</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                <!-- Tool Permissions -->
-                <div v-if="toolPermissions && toolPermissions.rules && toolPermissions.rules.length > 0" class="hc-card hc-settings__info-card">
-                  <div class="hc-settings__info-title">
-                    {{ t('settings.status.toolPermissions', 'Tool Permissions') }}
-                  </div>
-                  <div class="hc-status__permissions">
-                    <div
-                      v-for="(rule, idx) in toolPermissions.rules"
-                      :key="idx"
-                      class="hc-status__permission-row"
-                    >
-                      <code class="hc-status__permission-pattern">{{ rule.pattern }}</code>
-                      <span
-                        class="hc-status__permission-action"
-                        :class="{
-                          'hc-status__permission-action--allow': rule.action === 'allow',
-                          'hc-status__permission-action--deny': rule.action === 'deny',
-                        }"
-                      >
-                        {{ rule.action }}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Refresh button -->
-                <button class="hc-btn hc-btn-ghost hc-btn-sm" @click="loadSystemStatus">
-                  <RotateCcw :size="12" />
-                  {{ t('settings.status.refresh', 'Refresh') }}
-                </button>
-              </template>
-            </template>
+              <button type="button" class="hc-settings__about-link" @click="openAbout">
+                {{ t('about.learnMore', '了解更多') }}
+                <span aria-hidden="true">→</span>
+              </button>
+            </div>
           </div>
         </template>
       </div>
@@ -2455,6 +2243,43 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 关于分区：身份入口（一行介绍 + 蓝色链接），复用单一 /about。 */
+.hc-settings__about {
+  margin-top: 10px;
+}
+.hc-settings__about-intro {
+  margin: 0 0 6px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--hc-text-secondary);
+}
+.hc-settings__about-emoji {
+  margin-right: 4px;
+}
+.hc-settings__about-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--hc-accent);
+}
+.hc-settings__about-link span {
+  transition: transform 0.15s ease;
+}
+.hc-settings__about-link:hover {
+  text-decoration: underline;
+}
+.hc-settings__about-link:hover span {
+  transform: translateX(2px);
+}
+.hc-settings__about-link:active {
+  opacity: 0.8;
 }
 
 /* ─── Engine ───── */
@@ -3406,154 +3231,4 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   }
 }
 
-/* ─── System Status ───── */
-.hc-status__trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  padding: 10px 14px;
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card);
-  border: 1px solid var(--hc-border);
-  color: var(--hc-text-primary);
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-  margin-bottom: 10px;
-}
-
-.hc-status__trigger:hover {
-  border-color: var(--hc-accent-subtle);
-}
-
-.hc-status__trigger-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.hc-status__loading {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--hc-text-muted);
-  margin: 8px 0;
-}
-
-.hc-status__progress-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.hc-status__progress-item {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.hc-status__progress-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.hc-status__progress-value {
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-  color: var(--hc-text-muted);
-}
-
-.hc-status__progress-bar {
-  height: 6px;
-  border-radius: 3px;
-  background: var(--hc-bg-hover);
-  overflow: hidden;
-}
-
-.hc-status__progress-fill {
-  height: 100%;
-  border-radius: 3px;
-  background: var(--hc-accent);
-  transition: width 0.4s ease;
-  min-width: 0;
-}
-
-.hc-status__progress-fill--warn {
-  background: var(--hc-warning, #f5a623);
-}
-
-.hc-status__table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
-
-.hc-status__table th {
-  text-align: left;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--hc-text-muted);
-  padding: 4px 8px 6px 0;
-  border-bottom: 1px solid var(--hc-divider);
-}
-
-.hc-status__table td {
-  padding: 5px 8px 5px 0;
-  color: var(--hc-text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.hc-status__table-name {
-  font-weight: 500;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-}
-
-.hc-status__table tbody tr {
-  border-bottom: 1px solid var(--hc-divider);
-}
-
-.hc-status__table tbody tr:last-child {
-  border-bottom: none;
-}
-
-.hc-status__permissions {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.hc-status__permission-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0;
-}
-
-.hc-status__permission-pattern {
-  font-size: 11px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  color: var(--hc-text-secondary);
-}
-
-.hc-status__permission-action {
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 3px;
-}
-
-.hc-status__permission-action--allow {
-  color: var(--hc-success);
-  background: color-mix(in srgb, var(--hc-success) 12%, transparent);
-}
-
-.hc-status__permission-action--deny {
-  color: var(--hc-error);
-  background: color-mix(in srgb, var(--hc-error) 12%, transparent);
-}
 </style>

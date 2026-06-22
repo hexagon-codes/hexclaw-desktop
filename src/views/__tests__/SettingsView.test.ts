@@ -15,18 +15,6 @@ const closeRequestState = vi.hoisted(() => ({
   close: vi.fn().mockResolvedValue(undefined),
 }))
 
-const {
-  mockGetBudgetStatus,
-  mockGetToolCacheStats,
-  mockGetToolMetrics,
-  mockGetToolPermissions,
-} = vi.hoisted(() => ({
-  mockGetBudgetStatus: vi.fn(),
-  mockGetToolCacheStats: vi.fn(),
-  mockGetToolMetrics: vi.fn(),
-  mockGetToolPermissions: vi.fn(),
-}))
-
 const ollamaApi = vi.hoisted(() => ({
   getOllamaStatus: vi.fn(),
   getOllamaRunning: vi.fn(),
@@ -90,13 +78,6 @@ vi.mock('@/api/settings', () => ({
 vi.mock('@/api/system', () => ({
   getVersion: vi.fn().mockResolvedValue({ version: '0.2.6', engine: 'hexagon' }),
   getStats: vi.fn().mockResolvedValue({}),
-}))
-
-vi.mock('@/api/tools-status', () => ({
-  getBudgetStatus: mockGetBudgetStatus,
-  getToolCacheStats: mockGetToolCacheStats,
-  getToolMetrics: mockGetToolMetrics,
-  getToolPermissions: mockGetToolPermissions,
 }))
 
 // Mock Ollama API
@@ -270,36 +251,6 @@ describe('SettingsView — E2E 关键路径', () => {
     })
     vi.mocked(updateLLMConfig).mockReset()
     vi.mocked(updateLLMConfig).mockImplementation(() => Promise.resolve())
-    mockGetBudgetStatus.mockResolvedValue({
-      tokens_used: 10,
-      tokens_max: 100,
-      tokens_remaining: 90,
-      cost_used: 0.1,
-      cost_max: 5,
-      cost_remaining: 4.9,
-      duration_used: '10s',
-      duration_max: '30m',
-      duration_remaining: '29m50s',
-      exhausted: false,
-    })
-    mockGetToolCacheStats.mockResolvedValue({
-      entries: 1,
-      hits: 1,
-      misses: 0,
-      hit_rate: 1,
-    })
-    mockGetToolMetrics.mockResolvedValue({
-      tools: [{
-        tool: 'web.search',
-        call_count: 1,
-        success_rate: 1,
-        avg_latency_ms: 42,
-        cached_count: 0,
-      }],
-    })
-    mockGetToolPermissions.mockResolvedValue({
-      rules: [{ pattern: 'web.*', action: 'allow' }],
-    })
     ollamaApi.getOllamaStatus.mockResolvedValue({
       running: false,
       associated: false,
@@ -338,16 +289,6 @@ describe('SettingsView — E2E 关键路径', () => {
     }
   })
 
-  it('exposes the system status section when activeSection is set to status', async () => {
-    const wrapper = await mountSettingsView()
-    await flushPromises()
-
-    ;(wrapper.vm as unknown as { activeSection: string }).activeSection = 'status'
-    await wrapper.vm.$nextTick()
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('系统状态')
-  })
 
   // ────────────────────────────────────────────────────
   // 2. 挂载时加载配置
@@ -807,237 +748,6 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(ollamaCount2).toBe(1)
   })
 
-  it('renders System Status with the backend budget/status payload shape documented by tests', async () => {
-    mockGetBudgetStatus.mockResolvedValueOnce({
-      tokens_used: 0,
-      tokens_max: 500000,
-      tokens_remaining: 500000,
-      cost_used: 0,
-      cost_max: 5.0,
-      cost_remaining: 5.0,
-      duration_used: '0s',
-      duration_max: '30m0s',
-      duration_remaining: '30m0s',
-      exhausted: false,
-    })
-
-    const wrapper = await mountSettingsView()
-    await flushPromises()
-
-    ;(wrapper.vm as unknown as { activeSection: string }).activeSection = 'status'
-    await wrapper.vm.$nextTick()
-    await flushPromises()
-
-    const trigger = wrapper.find('.hc-status__trigger')
-    expect(trigger.exists()).toBe(true)
-    await trigger.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('500,000')
-  })
-
-  it('renders backend percentage fields in System Status without multiplying them twice', async () => {
-    mockGetToolCacheStats.mockResolvedValueOnce({
-      entries: 20,
-      hits: 15,
-      misses: 5,
-      hit_rate: 0.75,
-    })
-    mockGetToolMetrics.mockResolvedValueOnce({
-      tools: [{
-        tool: 'web.search',
-        call_count: 3,
-        success_rate: 0.667,
-        avg_latency_ms: 120,
-        cached_count: 1,
-      }],
-    })
-
-    const wrapper = await mountSettingsView()
-    await flushPromises()
-
-    ;(wrapper.vm as unknown as { activeSection: string }).activeSection = 'status'
-    await wrapper.vm.$nextTick()
-    await flushPromises()
-
-    const trigger = wrapper.find('.hc-status__trigger')
-    expect(trigger.exists()).toBe(true)
-    await trigger.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('75.0%')
-    expect(wrapper.text()).toContain('66.7%')
-  })
-
-  it('tolerates null tool permission rules from backend without crashing the Status page', async () => {
-    mockGetToolPermissions.mockResolvedValueOnce({
-      rules: null,
-    })
-
-    const wrapper = await mountSettingsView()
-    await flushPromises()
-
-    ;(wrapper.vm as unknown as { activeSection: string }).activeSection = 'status'
-    await wrapper.vm.$nextTick()
-    await flushPromises()
-
-    const trigger = wrapper.find('.hc-status__trigger')
-    expect(trigger.exists()).toBe(true)
-    await trigger.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('工具缓存')
-  })
-
-  it('shows the error message when one status endpoint fails (Promise.all rejects entirely)', async () => {
-    mockGetToolPermissions.mockRejectedValueOnce(new Error('permissions offline'))
-
-    const wrapper = await mountSettingsView()
-    await flushPromises()
-
-    ;(wrapper.vm as unknown as { activeSection: string }).activeSection = 'status'
-    await wrapper.vm.$nextTick()
-    await flushPromises()
-
-    const trigger = wrapper.find('.hc-status__trigger')
-    expect(trigger.exists()).toBe(true)
-    await trigger.trigger('click')
-    await flushPromises()
-
-    // Promise.all rejects when any endpoint fails, so no partial data is shown
-    expect(wrapper.text()).toContain('permissions offline')
-  })
-
-  it('keeps showing the error after collapse and reopen because statusError prevents auto-retry', async () => {
-    mockGetBudgetStatus.mockRejectedValueOnce(new Error('budget offline'))
-    mockGetToolCacheStats.mockRejectedValueOnce(new Error('cache offline'))
-    mockGetToolMetrics.mockRejectedValueOnce(new Error('metrics offline'))
-    mockGetToolPermissions.mockRejectedValueOnce(new Error('permissions offline'))
-
-    const wrapper = await mountSettingsView()
-    await flushPromises()
-
-    ;(wrapper.vm as unknown as { activeSection: string }).activeSection = 'status'
-    await wrapper.vm.$nextTick()
-    await flushPromises()
-
-    const trigger = wrapper.find('.hc-status__trigger')
-    expect(trigger.exists()).toBe(true)
-
-    await trigger.trigger('click')
-    await flushPromises()
-
-    expect(wrapper.text()).toContain('budget offline')
-
-    // Collapse and reopen — statusError is still set, so toggleStatusSection
-    // does NOT call loadSystemStatus again (condition: !statusError.value is false)
-    await trigger.trigger('click')
-    await flushPromises()
-    await trigger.trigger('click')
-    await flushPromises()
-
-    // Error persists because auto-retry is blocked by the existing error
-    expect(wrapper.text()).toContain('budget offline')
-  })
-
-  it('does not emit Vue update warnings when status requests resolve after the page unmounts', async () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    let resolveBudget!: (value: {
-      tokens_used: number
-      tokens_max: number
-      tokens_remaining: number
-      cost_used: number
-      cost_max: number
-      cost_remaining: number
-      duration_used: string
-      duration_max: string
-      duration_remaining: string
-      exhausted: boolean
-    }) => void
-    let resolveCache!: (value: { entries: number; hits: number; misses: number; hit_rate: number }) => void
-    let resolveMetrics!: (value: {
-      tools: Array<{
-        tool: string
-        call_count: number
-        success_rate: number
-        avg_latency_ms: number
-        cached_count: number
-      }>
-    }) => void
-    let resolvePermissions!: (value: { rules: Array<{ pattern: string; action: string }> }) => void
-
-    mockGetBudgetStatus.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveBudget = resolve
-      }),
-    )
-    mockGetToolCacheStats.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveCache = resolve
-      }),
-    )
-    mockGetToolMetrics.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveMetrics = resolve
-      }),
-    )
-    mockGetToolPermissions.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolvePermissions = resolve
-      }),
-    )
-
-    try {
-      const wrapper = await mountSettingsView()
-      await flushPromises()
-
-      ;(wrapper.vm as unknown as { activeSection: string }).activeSection = 'status'
-      await wrapper.vm.$nextTick()
-      await flushPromises()
-
-      const trigger = wrapper.find('.hc-status__trigger')
-      expect(trigger.exists()).toBe(true)
-      await trigger.trigger('click')
-      await flushPromises()
-
-      wrapper.unmount()
-
-      resolveBudget({
-        tokens_used: 1,
-        tokens_max: 100,
-        tokens_remaining: 99,
-        cost_used: 0.1,
-        cost_max: 5,
-        cost_remaining: 4.9,
-        duration_used: '1s',
-        duration_max: '30m',
-        duration_remaining: '29m59s',
-        exhausted: false,
-      })
-      resolveCache({ entries: 1, hits: 1, misses: 0, hit_rate: 100 })
-      resolveMetrics({
-        tools: [{
-          tool: 'web.search',
-          call_count: 1,
-          success_rate: 100,
-          avg_latency_ms: 12,
-          cached_count: 0,
-        }],
-      })
-      resolvePermissions({ rules: [{ pattern: 'web.*', action: 'allow' }] })
-      await flushPromises()
-
-      const vueWarnings = warnSpy.mock.calls.filter(
-        (call) =>
-          typeof call[0] === 'string' &&
-          call[0].includes('Unhandled error during execution of component update'),
-      )
-      expect(vueWarnings).toHaveLength(0)
-    } finally {
-      warnSpy.mockRestore()
-    }
-  })
 
   // ────────────────────────────────────────────────────
   // 5. 工具栏保存配置并显示确认

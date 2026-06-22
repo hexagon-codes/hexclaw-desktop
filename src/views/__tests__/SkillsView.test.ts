@@ -7,13 +7,14 @@ import SkillsView from '../SkillsView.vue'
 import { useAppStore } from '@/stores/app'
 import zhCN from '@/i18n/locales/zh-CN'
 
-const { getSkills, setSkillEnabled, searchClawHub, installFromHub, uninstallSkill, installSkill } = vi.hoisted(() => ({
+const { getSkills, setSkillEnabled, searchClawHub, installFromHub, uninstallSkill, installSkill, getHubSkillContent } = vi.hoisted(() => ({
   getSkills: vi.fn(),
   setSkillEnabled: vi.fn(),
   searchClawHub: vi.fn(),
   installFromHub: vi.fn(),
   uninstallSkill: vi.fn(),
   installSkill: vi.fn(),
+  getHubSkillContent: vi.fn(),
 }))
 
 vi.mock('@/api/skills', () => ({
@@ -23,6 +24,7 @@ vi.mock('@/api/skills', () => ({
   setSkillEnabled,
   searchClawHub,
   installFromHub,
+  getHubSkillContent,
   CLAWHUB_CATEGORIES: ['all', 'coding', 'research', 'writing', 'data', 'automation', 'productivity'],
 }))
 
@@ -75,6 +77,10 @@ function mountSkillsView() {
           props: ['modelValue', 'placeholder'],
           emits: ['update:modelValue'],
           template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+        },
+        SkillMarkdownPreview: {
+          props: ['content', 'collapsible', 'showFrontmatter', 'allowRawToggle'],
+          template: '<div class="smp-stub">{{ content }}</div>',
         },
         teleport: true,
         transition: false,
@@ -282,23 +288,31 @@ describe('SkillsView', () => {
     expect(wrapper.text()).toContain('已禁用')
   })
 
-  it('loads hub catalog only after switching to the hub tab', async () => {
+  it('preloads hub catalog on mount so the 市场 tab count shows without clicking it', async () => {
+    searchClawHub.mockResolvedValue([
+      { name: 'a', display_name: 'A', description: '', category: 'coding' },
+      { name: 'b', display_name: 'B', description: '', category: 'research' },
+    ])
     const wrapper = mountSkillsView()
     await flushPromises()
 
-    expect(searchClawHub).not.toHaveBeenCalled()
-
+    // 进入页面即后台预读（无需点击市场 tab）；一次拉全量（无参），分类/搜索改客户端过滤。
+    expect(searchClawHub).toHaveBeenCalledWith()
+    // 「市场」tab 标签直接带上总条数
     const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
     expect(hubTab).toBeDefined()
+    expect(hubTab!.text()).toContain('2')
+
+    // 再点市场 tab 不重复拉取（已预读）
+    searchClawHub.mockClear()
     await hubTab!.trigger('click')
     await flushPromises()
-
-    // 改为一次拉全量（无参），分类/搜索改客户端过滤
-    expect(searchClawHub).toHaveBeenCalledWith()
+    expect(searchClawHub).not.toHaveBeenCalled()
   })
 
   it('surfaces hub search errors instead of masking them with mock data', async () => {
-    searchClawHub.mockRejectedValueOnce(new Error('hub unavailable'))
+    // 持续失败：mount 预读失败 + 切到市场 tab 仍失败，错误提示保留（不伪装成"即将上线"）。
+    searchClawHub.mockRejectedValue(new Error('hub unavailable'))
 
     const wrapper = mountSkillsView()
     await flushPromises()
@@ -337,6 +351,77 @@ describe('SkillsView', () => {
     expect(searchClawHub).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('research-skill')
     expect(wrapper.text()).not.toContain('coding-skill')
+  })
+
+  it('previews a hub skill SKILL.md before install, then installs from the preview modal', async () => {
+    getSkills.mockResolvedValue({ dir: '/tmp/skills', skills: [] })
+    searchClawHub.mockResolvedValue([
+      { name: 'demo', description: 'a hub skill', version: '1.0.0', author: 'hex', tags: [], downloads: 3, category: 'coding' },
+    ])
+    getHubSkillContent.mockResolvedValue({ name: 'demo', content: '---\nname: demo\n---\n# Demo body' })
+
+    const wrapper = mountSkillsView()
+    const appStore = useAppStore()
+    vi.spyOn(appStore, 'restartSidecar').mockResolvedValue(true)
+    await flushPromises()
+
+    const hubTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
+    await hubTab!.trigger('click')
+    await flushPromises()
+
+    // 打开「安装前预览」
+    const previewBtn = wrapper.findAll('button').find((btn) => btn.text() === '预览')
+    expect(previewBtn).toBeDefined()
+    await previewBtn!.trigger('click')
+    await flushPromises()
+
+    expect(getHubSkillContent).toHaveBeenCalledWith('demo')
+    // 弹层把拉到的 SKILL.md 交给 SkillMarkdownPreview（stub 透出 content）
+    expect(wrapper.find('.smp-stub').exists()).toBe(true)
+    expect(wrapper.find('.smp-stub').text()).toContain('# Demo body')
+
+    // 从预览弹层底部「安装」——取最后一个，定位到弹层内（非卡片）按钮
+    const installBtns = wrapper.findAll('button').filter((btn) => btn.text() === '安装')
+    expect(installBtns.length).toBeGreaterThan(0)
+    await installBtns[installBtns.length - 1]!.trigger('click')
+    await flushPromises()
+
+    expect(installFromHub).toHaveBeenCalledWith('demo')
+    // 安装即关闭预览弹层
+    expect(wrapper.find('.smp-stub').exists()).toBe(false)
+  })
+
+  it('discards a stale preview response when the user quickly switches to another skill', async () => {
+    getSkills.mockResolvedValue({ dir: '/tmp/skills', skills: [] })
+    searchClawHub.mockResolvedValue([
+      { name: 'aaa', description: 'A', version: '1', author: 'x', tags: [], downloads: 0, category: 'coding' },
+      { name: 'bbb', description: 'B', version: '1', author: 'x', tags: [], downloads: 0, category: 'coding' },
+    ])
+    const dA = deferred<{ name: string; content: string }>()
+    getHubSkillContent.mockImplementation((name: string) =>
+      name === 'aaa' ? dA.promise : Promise.resolve({ name, content: '# BBB body' }),
+    )
+
+    const wrapper = mountSkillsView()
+    await flushPromises()
+    const hubTab = wrapper.findAll('button').find((b) => b.text().includes('市场'))
+    await hubTab!.trigger('click')
+    await flushPromises()
+
+    const previewBtns = wrapper.findAll('button').filter((b) => b.text() === '预览')
+    expect(previewBtns.length).toBe(2)
+
+    // 先点 aaa（响应挂起未决），再点 bbb（立即返回）
+    await previewBtns[0]!.trigger('click')
+    await previewBtns[1]!.trigger('click')
+    await flushPromises()
+    expect(wrapper.find('.smp-stub').text()).toContain('# BBB body')
+
+    // aaa 的过期响应迟到 —— 守卫必须丢弃，不得覆盖 bbb
+    dA.resolve({ name: 'aaa', content: '# AAA body' })
+    await flushPromises()
+    expect(wrapper.find('.smp-stub').text()).toContain('# BBB body')
+    expect(wrapper.find('.smp-stub').text()).not.toContain('# AAA body')
   })
 
   it('updates hub install state after install and uninstall in the same session', async () => {

@@ -26,6 +26,7 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import { useSettingsStore } from '@/stores/settings'
+import { renderPromptPreview } from '@/utils/prompt-preview'
 
 const { t } = useI18n()
 
@@ -98,27 +99,40 @@ defineExpose({ newPrompt, addMemory })
 function editPrompt(p: Prompt) {
   editing.value = { ...p }
 }
+/** 增删改失败提示（PromptsView 原无错误反馈，失败会静默吞掉）。 */
+const actionError = ref('')
+
 async function savePrompt() {
   const e = editing.value
   if (!e || !e.title?.trim()) return
-  await upsertPrompt({
-    id: e.id,
-    type: (e.type as PromptType) ?? 'prompt',
-    title: e.title,
-    body_md: e.body_md ?? '',
-    category: e.category ?? '',
-    model: e.model ?? '',
-    tool_scope: e.tool_scope ?? '',
-    args_json: e.args_json ?? '',
-    enabled: e.enabled ?? true,
-  })
-  editing.value = null
-  await loadPrompts()
+  actionError.value = ''
+  try {
+    await upsertPrompt({
+      id: e.id,
+      type: (e.type as PromptType) ?? 'prompt',
+      title: e.title,
+      body_md: e.body_md ?? '',
+      category: e.category ?? '',
+      model: e.model ?? '',
+      tool_scope: e.tool_scope ?? '',
+      args_json: e.args_json ?? '',
+      enabled: e.enabled ?? true,
+    })
+    editing.value = null
+    await loadPrompts()
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('prompts.saveFailed', '保存失败，请重试')
+  }
 }
 async function removePrompt(id: string) {
   if (!confirm(t('prompts.deleteConfirm', '确定删除该 Prompt？此操作不可恢复。'))) return
-  await deletePrompt(id)
-  await loadPrompts()
+  actionError.value = ''
+  try {
+    await deletePrompt(id)
+    await loadPrompts()
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('prompts.deleteFailed', '删除失败，请重试')
+  }
 }
 async function toggleEnabled(p: Prompt) {
   await upsertPrompt({ ...p, enabled: !p.enabled })
@@ -126,6 +140,17 @@ async function toggleEnabled(p: Prompt) {
 }
 
 const isCommand = computed(() => editing.value?.type === 'command')
+
+// P1：正文「编辑 / 预览」切换 + Markdown 渲染（$ARGUMENTS 高亮）。预览仅供阅读，模型读原文。
+const bodyTab = ref<'edit' | 'preview'>('edit')
+const bodyPreviewHtml = computed(() => {
+  const html = renderPromptPreview(editing.value?.body_md ?? '')
+  return html || `<p class="hc-prev-empty">${t('prompts.previewEmpty', '（空）')}</p>`
+})
+// 打开/切换编辑对象时回到「编辑」态（监听 ref 身份，typing 不重置）
+watch(editing, () => {
+  bodyTab.value = 'edit'
+})
 
 // ── HcSelect 投影（替代原生 <select>，value 一律 string）──
 const promptTypeOptions = [
@@ -202,20 +227,30 @@ const editingMemKindModel = computed<string>({
 async function saveMemory() {
   const e = editingMem.value
   if (!e || !e.content?.trim()) return
-  await upsertMemory({
-    id: e.id,
-    kind: (e.kind as MemoryKind) ?? 'fact',
-    content: e.content.trim(),
-  })
-  editingMem.value = null
-  await loadMemories()
+  actionError.value = ''
+  try {
+    await upsertMemory({
+      id: e.id,
+      kind: (e.kind as MemoryKind) ?? 'fact',
+      content: e.content.trim(),
+    })
+    editingMem.value = null
+    await loadMemories()
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('memories.saveFailed', '保存失败，请重试')
+  }
 }
 
 async function removeMemory(id: string) {
   // 记忆删除不可逆：先确认再删（后端暂无 enabled 字段，无"停用"软态，删除即永久）。
   if (!confirm(t('memories.deleteConfirm', '确定删除该记忆？此操作不可恢复。'))) return
-  await deleteMemory(id)
-  await loadMemories()
+  actionError.value = ''
+  try {
+    await deleteMemory(id)
+    await loadMemories()
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('memories.deleteFailed', '删除失败，请重试')
+  }
 }
 
 const route = useRoute()
@@ -235,6 +270,7 @@ onMounted(() => {
 
 <template>
   <div class="hc-prompts">
+    <p v-if="actionError" role="alert" style="color: var(--hc-error); font-size: 12.5px; margin: 0 0 8px;">{{ actionError }}</p>
     <!-- 子分段：全部 / 记忆（统一 UnderlineTabs，滑动下划线） -->
     <UnderlineTabs
       :tabs="promptSectionTabs"
@@ -374,10 +410,34 @@ onMounted(() => {
                 </div>
               </div>
               <div class="hc-field">
-                <label>{{ t('prompts.fBody', '正文') }}</label>
+                <div class="hc-body-head">
+                  <label>{{ t('prompts.fBody', '正文') }}</label>
+                  <div class="hc-body-tabs" role="tablist">
+                    <button
+                      type="button"
+                      role="tab"
+                      :aria-selected="bodyTab === 'edit'"
+                      :class="{ on: bodyTab === 'edit' }"
+                      @click="bodyTab = 'edit'"
+                    >
+                      {{ t('prompts.tabEdit', '编辑') }}
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      :aria-selected="bodyTab === 'preview'"
+                      :class="{ on: bodyTab === 'preview' }"
+                      @click="bodyTab = 'preview'"
+                    >
+                      {{ t('prompts.tabPreview', '预览') }}
+                    </button>
+                  </div>
+                </div>
                 <textarea
+                  v-show="bodyTab === 'edit'"
                   v-model="editing.body_md"
-                  rows="5"
+                  rows="6"
+                  class="hc-body-edit"
                   :placeholder="
                     isCommand
                       ? t(
@@ -387,12 +447,18 @@ onMounted(() => {
                       : t('prompts.fBodyPh', 'Prompt 正文（Markdown）')
                   "
                 />
-                <small v-if="isCommand" class="hc-prompts__hint">{{
-                  t(
-                    'prompts.cmdHint',
-                    'command 召唤时，$ARGUMENTS 会被替换为用户填入的文本（纯文本替换）。',
-                  )
-                }}</small>
+                <!-- 预览已经 renderPromptPreview→DOMPurify 消毒，v-html 安全 -->
+                <!-- eslint-disable-next-line vue/no-v-html -->
+                <div v-show="bodyTab === 'preview'" class="hc-body-prev" v-html="bodyPreviewHtml" />
+                <small class="hc-prompts__hint">{{
+                  isCommand
+                    ? t(
+                        'prompts.cmdHint',
+                        'command 召唤时，$ARGUMENTS 会被替换为用户填入的文本（纯文本替换）。',
+                      )
+                    : t('prompts.mdHint', '支持 Markdown。')
+                }}
+                  {{ t('prompts.previewNote', '预览仅供阅读，模型看到的是上方原文。') }}</small>
               </div>
               <div class="hc-field hc-field--row">
                 <div>
@@ -745,6 +811,93 @@ onMounted(() => {
 }
 .hc-field textarea {
   resize: vertical;
+}
+/* P1：正文 编辑/预览 切换 */
+.hc-body-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.hc-body-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-input);
+}
+.hc-body-tabs button {
+  padding: 3px 11px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--hc-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.hc-body-tabs button.on {
+  background: var(--hc-bg-elevated);
+  color: var(--hc-accent);
+  font-weight: 600;
+  box-shadow: var(--hc-shadow-sm);
+}
+.hc-body-edit {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.hc-body-prev {
+  min-height: 132px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 13px;
+  border-radius: var(--hc-radius-md);
+  border: 1px solid var(--hc-border);
+  background: var(--hc-bg-main);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--hc-text-primary);
+}
+.hc-body-prev :deep(h1),
+.hc-body-prev :deep(h2),
+.hc-body-prev :deep(h3) {
+  font-weight: 700;
+  margin: 10px 0 5px;
+}
+.hc-body-prev :deep(h1) {
+  font-size: 15px;
+}
+.hc-body-prev :deep(h2) {
+  font-size: 14px;
+}
+.hc-body-prev :deep(p) {
+  margin: 5px 0;
+}
+.hc-body-prev :deep(ul),
+.hc-body-prev :deep(ol) {
+  margin: 5px 0;
+  padding-left: 18px;
+}
+.hc-body-prev :deep(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  background: var(--hc-bg-active);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+.hc-body-prev :deep(.hc-arg) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 16%, transparent);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+.hc-body-prev :deep(.hc-prev-empty) {
+  color: var(--hc-text-muted);
 }
 /* 弹窗淡入/淡出（对齐 AgentsView showAddAgent） */
 .modal-enter-active {

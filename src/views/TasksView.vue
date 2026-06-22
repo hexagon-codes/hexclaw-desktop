@@ -27,6 +27,7 @@ const form = ref<CronJobInput>({
   schedule: '',
   prompt: '',
   type: 'cron',
+  chat_id: '',
 })
 
 const schedulePresets = computed(() => [
@@ -103,8 +104,18 @@ function toggleStderr(runId: string) {
   expandedStderr.value = next
 }
 
+/**
+ * IM/连接投递目标需要 chat_id：deliver 含任何非 chat/push 目标时，后端 Deliverer
+ * （cmd/hexclaw/main.go:1341）要求 job.ChatID 非空，否则硬失败。chat/push 走 notifier 不需要。
+ */
+const needsChatId = computed(() =>
+  (form.value.deliver ?? []).some((t) => t !== 'chat' && t !== 'push'),
+)
+
 const formValid = computed(() => {
-  return form.value.name.trim() !== '' && form.value.schedule.trim() !== '' && form.value.prompt.trim() !== ''
+  const base = form.value.name.trim() !== '' && form.value.schedule.trim() !== '' && form.value.prompt.trim() !== ''
+  // 选了 IM/连接投递目标却没填 chat_id → 必然投递失败，阻止提交。
+  return base && (!needsChatId.value || (form.value.chat_id ?? '').trim() !== '')
 })
 
 /** Agent-runtime jobs reason per run: no compiled script to display. */
@@ -129,6 +140,7 @@ async function loadJobs() {
     jobs.value = res.jobs || []
   } catch (e) {
     console.error('加载定时任务失败:', e)
+    toast.error(t('tasks.loadJobsFailed', '加载定时任务失败'))
   } finally {
     loading.value = false
   }
@@ -158,7 +170,7 @@ onMounted(() => document.addEventListener('click', collapseOnOutsideClick))
 onUnmounted(() => document.removeEventListener('click', collapseOnOutsideClick))
 
 function openCreateForm() {
-  form.value = { name: '', schedule: '', prompt: '', type: 'cron', deliver: [] }
+  form.value = { name: '', schedule: '', prompt: '', type: 'cron', deliver: [], chat_id: '' }
   loadConnections() // 打开即拉取连接库（已缓存则瞬时返回；失败优雅降级）
   showForm.value = true
   showPresets.value = false
@@ -239,6 +251,7 @@ async function handlePauseResume(job: CronJob) {
     }
   } catch (e) {
     console.error('切换任务状态失败:', e)
+    toast.error(t('tasks.toggleStatusFailed', '切换任务状态失败'))
   } finally {
     const next = new Set(pausingJobs.value)
     next.delete(job.id)
@@ -261,6 +274,7 @@ async function handleDelete(job: CronJob) {
     }
   } catch (e) {
     console.error('删除任务失败:', e)
+    toast.error(t('tasks.deleteTaskFailed', '删除任务失败'))
   } finally {
     const next = new Set(deletingJobs.value)
     next.delete(job.id)
@@ -833,6 +847,16 @@ defineExpose({ openCreateForm, loadJobs })
                   </div>
                 </template>
                 <p class="deliver-hint">{{ t('tasks.deliverHint', '留空 = 自动（默认发到当前会话）') }}</p>
+                <!-- IM/连接投递目标需指定会话/群组 ID（后端 Deliverer 必需，否则投递失败） -->
+                <div v-if="needsChatId" class="hc-field" style="margin-top: 10px;">
+                  <label class="hc-field__label">{{ t('tasks.chatIdLabel', '会话/群组 ID') }}</label>
+                  <input
+                    v-model="form.chat_id"
+                    class="hc-input"
+                    :placeholder="t('tasks.chatIdPlaceholder', '如飞书 chat_id / 群 ID')"
+                  />
+                  <p class="deliver-hint">{{ t('tasks.chatIdHint', 'IM/连接投递必填——指定要发送到的会话或群组') }}</p>
+                </div>
               </div>
             </div>
             <!-- 编译进度（SSE 流式） -->

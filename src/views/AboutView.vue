@@ -22,18 +22,33 @@ const {
   installUpdate,
 } = useAutoUpdate()
 
+// 关于窗口标题跟随设置语言：document.title + Tauri 原生标题栏（后者不随 document.title 自动变）。
+// 放在 watchEffect 内，切换语言时实时更新；非 Tauri(浏览器 dev) 静默跳过。
 watchEffect(() => {
-  document.title = t('about.title', '关于 河蟹 AI')
+  const title = t('about.title', '关于河蟹')
+  document.title = title
+  import('@tauri-apps/api/window')
+    .then(({ getCurrentWindow }) => getCurrentWindow().setTitle(title))
+    .catch(() => {})
 })
 
 const appVersion = ref('—')
 const engineVersion = ref('')
+// HexClaw 后端（Go sidecar = hexclaw 二进制）展示版本：优先取 sidecar 上报的 engine_version；
+// 开发构建上报「(devel)」（未注入版本 ldflag）或为空时，回退到随包发布的桌面端版本（生态锁步发版）。
+const hexclawVersion = computed(() => {
+  const v = engineVersion.value
+  if (v && !v.toLowerCase().includes('devel')) return v
+  return appVersion.value !== '—' ? appVersion.value : ''
+})
+// Ollama 版本运行时由 getOllamaStatus() 上报真实 bundle 版本（与 engineVersion 同套路）；
+// 不在前端硬编码——版本唯一源头是 Makefile OLLAMA_VERSION → bundle 二进制自报。
 const ollamaVersion = ref('')
 const appName = computed(() => t('about.brandAi', '河蟹 AI'))
 
 const techStack = computed(() => [
   { name: 'Tauri v2 · Vue 3', detail: 'Rust · TypeScript', color: '#f36b2a' },
-  { name: `Hexagon Engine${engineVersion.value ? ' ' + engineVersion.value : ''}`, detail: 'Go Sidecar', color: '#00add8' },
+  { name: `HexClaw${hexclawVersion.value ? ' ' + hexclawVersion.value : ''}`, detail: 'Go Sidecar', color: '#00add8' },
   { name: `Ollama${ollamaVersion.value ? ' ' + ollamaVersion.value : ''}`, detail: t('about.capLocalInference', '本地推理'), color: '#7c7c7c' },
   {
     name: t('about.securityGateway', '安全网关'),
@@ -153,9 +168,6 @@ onMounted(() => {
       <p class="hc-about-page__tagline">
         {{ t('about.fullStack', '全栈开源') }} · Apache-2.0 {{ t('about.license', '协议') }}
       </p>
-      <p class="hc-about-page__subtitle">
-        {{ t('about.subtitle', '企业级安全的个人 AI Agent 桌面客户端') }}
-      </p>
 
       <div class="hc-about-page__meta">
         <span class="hc-about-page__meta-pill">{{ appVersion }}</span>
@@ -176,7 +188,6 @@ onMounted(() => {
         >
           {{ downloading ? t('about.updateInstalling', '正在安装更新') : t('about.installUpdate', '下载并安装') }}
         </button>
-        <span class="hc-about-page__meta-text">Apache-2.0</span>
       </div>
       <p
         v-if="showUpdateStatus"
@@ -197,7 +208,7 @@ onMounted(() => {
         />
         <div class="hc-about-page__engine-info">
           <span class="hc-about-page__engine-kicker">POWERED BY</span>
-          <span class="hc-about-page__engine-name">Hexagon AI Agent Engine</span>
+          <span class="hc-about-page__engine-name">Hexagon AI Agent</span>
         </div>
         <span class="hc-about-page__engine-caps">
           ReAct · Tool {{ t('about.dispatch', '调度') }} · {{ t('about.declarative', '声明式编排') }}
@@ -255,7 +266,11 @@ onMounted(() => {
   justify-content: flex-start;
   overflow: hidden;
   user-select: none;
-  background: linear-gradient(180deg, #f8fafe 0%, #eef3f9 100%);
+  /* 对齐官网 hexclaw.net hero：顶部中心放射柔光（近白→浅蓝渐隐，取官网同款蓝 #aadbf8/#80c4f0）
+     叠在浅近白蓝基底（官网 body 渐变）上，上部一抹蓝 glow、下部回到近白。 */
+  background:
+    radial-gradient(ellipse 100% 44% at 50% 0%, rgba(223, 242, 254, 0.95) 0%, rgba(170, 219, 248, 0.55) 34%, rgba(128, 196, 240, 0.3) 54%, rgba(232, 246, 255, 0) 82%),
+    linear-gradient(180deg, #f4fbff 0%, #edf7ff 18%, #e8f6ff 100%);
   color: #1a3a5c;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display', sans-serif;
   -webkit-font-smoothing: antialiased;
@@ -269,25 +284,22 @@ onMounted(() => {
   overflow: hidden;
   padding: 24px 24px 16px;
   text-align: center;
-  background:
-    radial-gradient(ellipse at 50% -20%, rgba(255, 255, 255, 0.18) 0%, transparent 60%),
-    linear-gradient(160deg, #1a5580 0%, #3a7ab5 40%, #4a9ad0 100%);
-  border-bottom: 1px solid rgba(76, 130, 181, 0.12);
+  /* 透明融入整页，与官网一体化（不再是独立蓝块、不再有硬分隔线） */
+  background: transparent;
 }
 
 .hc-about-page__hero-pattern {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  opacity: 0.08;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='104' viewBox='0 0 120 104'%3E%3Cpath d='M30 1h60l29 51-29 51H30L1 52 30 1z' fill='none' stroke='white' stroke-width='0.9'/%3E%3C/svg%3E");
+  opacity: 0.28;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='104' viewBox='0 0 120 104'%3E%3Cpath d='M30 1h60l29 51-29 51H30L1 52 30 1z' fill='none' stroke='%234a9dd0' stroke-width='0.9' stroke-opacity='0.18'/%3E%3C/svg%3E");
   background-size: 120px 104px;
 }
 
 .hc-about-page__hero-mark,
 .hc-about-page__name,
 .hc-about-page__tagline,
-.hc-about-page__subtitle,
 .hc-about-page__meta,
 .hc-about-page__update-note {
   position: relative;
@@ -302,11 +314,11 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   border-radius: 24px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.08));
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.72));
+  border: 1px solid rgba(95, 179, 234, 0.22);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.12),
-    0 16px 34px rgba(22, 77, 126, 0.2);
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    0 16px 34px rgba(22, 77, 126, 0.12);
   backdrop-filter: blur(10px);
 }
 
@@ -321,7 +333,7 @@ onMounted(() => {
   font-size: 20px;
   line-height: 1.2;
   font-weight: 800;
-  color: #ffffff;
+  color: #12324c;
   letter-spacing: -0.01em;
 }
 
@@ -330,15 +342,9 @@ onMounted(() => {
   font-size: 12px;
   line-height: 1.4;
   font-weight: 500;
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(18, 50, 76, 0.78);
 }
 
-.hc-about-page__subtitle {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.5);
-}
 
 .hc-about-page__meta {
   margin-top: 12px;
@@ -354,23 +360,23 @@ onMounted(() => {
   border-radius: 999px;
   font-size: 11px;
   font-weight: 700;
-  color: #ffffff;
-  background: rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  color: #12324c;
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(95, 179, 234, 0.22);
 }
 
 .hc-about-page__meta-text {
   font-size: 11px;
-  color: rgba(255, 255, 255, 0.55);
+  color: rgba(18, 50, 76, 0.55);
 }
 
 .hc-about-page__meta-action {
   height: 28px;
   padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.12);
-  color: #ffffff;
+  border: 1px solid rgba(95, 179, 234, 0.28);
+  background: rgba(255, 255, 255, 0.7);
+  color: #1f5a86;
   font-size: 11px;
   font-weight: 700;
   cursor: pointer;
@@ -388,16 +394,18 @@ onMounted(() => {
 }
 
 .hc-about-page__meta-action--secondary:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(95, 179, 234, 0.4);
 }
 
 .hc-about-page__meta-action--primary {
-  background: rgba(87, 213, 140, 0.2);
-  border-color: rgba(87, 213, 140, 0.34);
+  background: rgba(16, 168, 100, 0.12);
+  border-color: rgba(16, 168, 100, 0.34);
+  color: #0f8f57;
 }
 
 .hc-about-page__meta-action--primary:hover:not(:disabled) {
-  background: rgba(87, 213, 140, 0.28);
+  background: rgba(16, 168, 100, 0.2);
 }
 
 .hc-about-page__update-note {
@@ -410,19 +418,19 @@ onMounted(() => {
 }
 
 .hc-about-page__update-note--available {
-  color: rgba(220, 255, 230, 0.92);
+  color: #0f8f57;
 }
 
 .hc-about-page__update-note--success {
-  color: rgba(255, 255, 255, 0.72);
+  color: rgba(18, 50, 76, 0.72);
 }
 
 .hc-about-page__update-note--error {
-  color: rgba(255, 226, 226, 0.92);
+  color: #c0392b;
 }
 
 .hc-about-page__update-note--idle {
-  color: rgba(255, 255, 255, 0.62);
+  color: rgba(18, 50, 76, 0.62);
 }
 
 /* ── Body ── */

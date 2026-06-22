@@ -136,6 +136,13 @@ const showAddAdvanced = ref(false)
 const addStep = ref<1 | 2>(1)
 const selectedTemplateName = ref('')
 const newAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
+// 新建 Agent 的人设(SOUL)：纯文本，写回 system_prompt。
+const newAgentSoul = computed({
+  get: () => newAgent.value.system_prompt ?? '',
+  set: (v: string) => {
+    newAgent.value.system_prompt = v
+  },
+})
 
 // Edit agent modal
 const showEditAgent = ref(false)
@@ -363,20 +370,29 @@ const newAgentModelOptions = computed(() => [
   ...modelsForProvider(newAgent.value.provider).map((m) => ({ value: m.id, label: m.name })),
 ])
 const editAgentProviderOptions = computed(() => {
-  const opts = runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label }))
+  // 始终带「使用全局默认」(value:'') 占位——否则走全局默认(provider='')的 agent 编辑时
+  // HcSelect 的 v-model='' 无匹配项 → 下拉空白显示异常（bug 2026-06-22）。
+  const opts = [
+    { value: '', label: t('agents.useGlobalDefault') },
+    ...runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label })),
+  ]
   const cur = editingAgent.value.provider
   // 当前 provider 不在 runtime 列表时，补一个 "(invalid)" 选项保持选中态
   if (cur && !runtimeProviderOptions.value.some((p) => p.key === cur)) {
-    return [{ value: cur, label: `${cur} (invalid)` }, ...opts]
+    opts.push({ value: cur, label: `${cur} (invalid)` })
   }
   return opts
 })
 const editAgentModelOptions = computed(() => {
   const models = modelsForProvider(editingAgent.value.provider)
-  const opts = models.map((m) => ({ value: m.id, label: m.name }))
+  // 同理始终带 value:'' 占位，空 model 才有可匹配项（不空白）。
+  const opts = [
+    { value: '', label: t('settings.llm.models') },
+    ...models.map((m) => ({ value: m.id, label: m.name })),
+  ]
   const cur = editingAgent.value.model
   if (cur && !models.some((m) => m.id === cur)) {
-    return [{ value: cur, label: `${cur} (invalid)` }, ...opts]
+    opts.push({ value: cur, label: `${cur} (invalid)` })
   }
   return opts
 })
@@ -640,7 +656,7 @@ async function handleUnregisterAgent() {
       <Transition name="modal">
         <div v-if="showAddAgent" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="closeAddAgentDialog">
           <div
-            class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden"
+            class="w-full rounded-2xl border flex flex-col overflow-hidden max-h-[88vh] max-w-md"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
@@ -686,7 +702,7 @@ async function handleUnregisterAgent() {
               </div>
             </template>
 
-            <!-- 第二步：表单（名称/显示名/高级模型偏好） -->
+            <!-- 第二步：表单（名称/显示名/人设(SOUL)/高级模型偏好） -->
             <template v-else>
               <div class="p-5 flex flex-col gap-3.5">
                 <div class="flex flex-col gap-1.5">
@@ -696,6 +712,18 @@ async function handleUnregisterAgent() {
                 <div class="flex flex-col gap-1.5">
                   <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.displayName') }}</label>
                   <input v-model="newAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="My Agent" />
+                </div>
+                <!-- 人设(SOUL)：纯文本，写回 newAgent.system_prompt（注册时随 AgentConfig 持久化） -->
+                <div class="flex flex-col gap-1.5">
+                  <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.soulField', '人设（SOUL）') }}</label>
+                  <textarea
+                    v-model="newAgentSoul"
+                    rows="4"
+                    :placeholder="t('agents.soulFieldPh', '描述该智能体的身份、语气、专长与边界。留空 = 使用全局默认人设。')"
+                    class="rounded-lg border px-3 py-2 text-sm outline-none resize-y font-mono leading-relaxed"
+                    :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  ></textarea>
+                  <p class="text-xs m-0" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulFieldHint', '留空 = 使用全局默认人设；建议写清身份、语气、专长与边界。') }}</p>
                 </div>
                 <!-- Advanced: model preference (collapsed by default) -->
                 <button
@@ -807,7 +835,7 @@ async function handleUnregisterAgent() {
       <Transition name="modal">
         <div v-if="showSoulEditor" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm p-4" @click.self="closeSoulEditor">
           <div
-            class="w-full max-w-lg rounded-2xl border flex flex-col overflow-hidden"
+            class="w-full rounded-2xl border flex flex-col overflow-hidden max-w-lg"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
@@ -823,8 +851,7 @@ async function handleUnregisterAgent() {
               <div v-if="soulLoadError" class="rounded-lg border px-3 py-2 text-xs" :style="{ borderColor: 'var(--hc-amber)', color: 'var(--hc-amber)', background: 'var(--hc-bg-hover)' }">
                 {{ t('agents.soul.loadError', '引擎未连接，无法读取当前人设；保存将在引擎恢复后生效。') }}
               </div>
-              <div class="flex items-center justify-between">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.soul.label', '自定义人设') }}</label>
+              <div class="flex items-center justify-end">
                 <span class="hc-tag" :class="soulIsCustom ? 'hc-tag--accent' : ''">
                   {{ soulIsCustom ? t('agents.soul.stateCustom', '已自定义') : t('agents.soul.stateDefault', '内置默认') }}
                 </span>

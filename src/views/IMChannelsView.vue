@@ -24,6 +24,7 @@ import {
   testIMInstance,
   testSavedIMInstanceRuntime,
   testConnection,
+  buildEmailTestConfig,
   listIMInstancesHealth,
   getChannelMeta,
   getChannelHelpText,
@@ -42,9 +43,11 @@ import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import AgentRoutingRules from '@/components/channels/AgentRoutingRules.vue'
+import { useToast } from '@/composables'
 
 const { t, locale } = useI18n()
 const router = useRouter()
+const toast = useToast()
 
 const instances = ref<IMInstance[]>([])
 const loading = ref(true)
@@ -244,8 +247,9 @@ async function bindAgentToInstance(inst: IMInstance, agentName: string) {
     if (existing) {
       await deleteRule(existing.id)
     }
-  } catch {
-    // On failure, refresh to show actual backend state
+  } catch (e) {
+    // 绑定/解绑失败：surface 给用户（不静默吞错），随后 loadAgentData 刷回真实后端态
+    errorMsg.value = e instanceof Error ? e.message : t('imChannels.bindFailed', '绑定 Agent 失败')
   }
   await loadAgentData()
 }
@@ -473,8 +477,8 @@ async function handleTestModal() {
   }
   try {
     if (formType.value === 'email') {
-      // 邮箱走连接中心统一测试端点；端点未上线时优雅降级
-      const res = await testConnection({ type: formType.value, config: formConfig.value })
+      // 邮箱走连接中心统一测试端点；扁平表单字段转 nested smtp/imap（后端读 config.smtp.*）
+      const res = await testConnection({ type: formType.value, config: buildEmailTestConfig(formConfig.value) })
       modalTestResult.value = {
         success: res.ok,
         message: res.detail === 'Test endpoint unavailable' ? t('connections.test.unavailable') : res.detail,
@@ -527,6 +531,7 @@ async function restartEngine() {
     await useAppStore().restartSidecar()
   } catch (e) {
     console.warn('重启 sidecar:', e)
+    errorMsg.value = e instanceof Error ? e.message : t('imChannels.restartFailed', '重启引擎失败')
   }
   showRestartBanner.value = false
   restarting.value = false
@@ -557,8 +562,10 @@ async function copyWebhookUrl() {
   const text = getPlatformHookUrl({ name: formName.value, type: formType.value })
   try {
     await setClipboard(text)
+    toast.success(t('imChannels.copied', '已复制到剪贴板'))
   } catch {
-    // 剪贴板操作全部失败时静默处理，不向 UI 抛异常
+    // 剪贴板不可用时不再静默——告知用户手动复制
+    toast.error(t('imChannels.copyFailed', '复制失败，请手动复制'))
   }
 }
 </script>

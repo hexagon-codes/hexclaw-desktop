@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Plus, Store, FolderOpen, Link } from 'lucide-vue-next'
@@ -46,7 +46,23 @@ watch(activeTab, (tab) => {
   if (route.path !== target) router.replace(target)
 })
 
-const skillsViewRef = ref<{ openInstallDialog?: () => void; switchToHub?: () => void }>()
+const skillsViewRef = ref<{ openInstallDialog?: () => void; switchToHub?: () => void; openCreateDialog?: () => void }>()
+
+// 处理来自会话页扣子式技能子菜单的导航意图（?action=skill-install / skill-hub / skill-create）
+function handleSkillQueryAction() {
+  const action = route.query.action
+  if (action !== 'skill-install' && action !== 'skill-hub' && action !== 'skill-create') return
+  activeTab.value = 'skills'
+  nextTick(() => {
+    if (action === 'skill-install') skillsViewRef.value?.openInstallDialog?.()
+    else if (action === 'skill-hub') skillsViewRef.value?.switchToHub?.()
+    else if (action === 'skill-create') skillsViewRef.value?.openCreateDialog?.()
+    // 清除 query，避免刷新/返回时重复触发
+    if (route.query.action) router.replace({ path: '/integration' })
+  })
+}
+onMounted(handleSkillQueryAction)
+watch(() => route.query.action, () => handleSkillQueryAction())
 const mcpViewRef = ref<{ openAddServer?: () => void; switchToMarketplace?: () => void }>()
 const promptsViewRef = ref<{ newPrompt?: () => void; addMemory?: () => void }>()
 // 跟踪 PromptsView 内当前子 tab（由事件驱动，保证响应性）

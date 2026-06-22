@@ -147,7 +147,8 @@ describe('McpView — MCP 全链路', () => {
   })
 
   it('市场加载失败时应保留错误提示，而不是伪装成空结果', async () => {
-    mockGetMcpMarketplace.mockRejectedValueOnce(new Error('marketplace offline'))
+    // 持续失败：mount 预读失败 + 手动 loadMarketplace 仍失败，错误提示保留（不伪装成空）。
+    mockGetMcpMarketplace.mockRejectedValue(new Error('marketplace offline'))
 
     const wrapper = await mountMcpView()
     await flushPromises()
@@ -779,15 +780,17 @@ describe('McpView — MCP 全链路', () => {
   })
 
   it('Marketplace 加载在一次失败后成功时应清掉旧错误提示', async () => {
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    // mount 已 silent 预读一次；重置后单独验证「手动加载失败→成功」序列。
+    mockGetMcpMarketplace.mockReset()
     mockGetMcpMarketplace
       .mockRejectedValueOnce(new Error('marketplace offline'))
       .mockResolvedValueOnce({
         skills: [{ name: 'fs-server', display_name: 'Filesystem', description: 'File access', category: 'io', command: 'npx', args: ['-y', 'fs-server'], downloads: 1000, rating: 4.5 }],
         total: 1,
       })
-
-    const wrapper = await mountMcpView()
-    await flushPromises()
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
@@ -807,10 +810,12 @@ describe('McpView — MCP 全链路', () => {
   })
 
   it('切换离开 Marketplace 后不应继续显示 Marketplace 的旧错误提示', async () => {
-    mockGetMcpMarketplace.mockRejectedValueOnce(new Error('marketplace offline'))
-
     const wrapper = await mountMcpView()
     await flushPromises()
+
+    // mount 已 silent 预读一次；重置后让手动加载失败，验证切走后清错误。
+    mockGetMcpMarketplace.mockReset()
+    mockGetMcpMarketplace.mockRejectedValueOnce(new Error('marketplace offline'))
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
@@ -839,6 +844,11 @@ describe('McpView — MCP 全链路', () => {
       total: number
     }) => void
 
+    const wrapper = await mountMcpView()
+    await flushPromises()
+
+    // mount 已 silent 预读一次；重置后设置 old/new 两个延迟请求验证乱序到达。
+    mockGetMcpMarketplace.mockReset()
     mockGetMcpMarketplace
       .mockImplementationOnce(
         () =>
@@ -852,9 +862,6 @@ describe('McpView — MCP 全链路', () => {
             resolveNew = resolve
           }),
       )
-
-    const wrapper = await mountMcpView()
-    await flushPromises()
 
     const vm = wrapper.vm as unknown as {
       activeTab: string

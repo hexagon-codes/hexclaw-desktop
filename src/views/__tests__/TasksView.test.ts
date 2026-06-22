@@ -146,6 +146,7 @@ describe('TasksView', () => {
         prompt: '生成今晚总结',
         type: 'cron',
         deliver: [],
+        chat_id: '',
       },
       expect.objectContaining({
         onProgress: expect.any(Function),
@@ -178,13 +179,19 @@ describe('TasksView', () => {
     const connChip = wrapper.findAll('.deliver-chip').find((c) => c.text().includes('研发群机器人'))
     expect(connChip).toBeDefined()
     await connChip!.trigger('click')
+    await wrapper.vm.$nextTick()
+
+    // IM/连接投递目标需指定 chat_id（适配器无默认会话；不填则后端 Deliverer 硬失败）。
+    const chatIdInput = wrapper.findAll('input').find((i) => (i.attributes('placeholder') ?? '').includes('chat_id'))
+    expect(chatIdInput, '选 IM 投递目标后应出现 chat_id 输入').toBeDefined()
+    await chatIdInput!.setValue('oc_group_1')
 
     const createBtn = wrapper.findAll('button').find((btn) => btn.text().includes('创建'))
     await createBtn!.trigger('click')
     await flushPromises()
 
     expect(taskApis.createCronJob).toHaveBeenCalledWith(
-      expect.objectContaining({ deliver: ['feishu', 'pi-feishu-1'] }),
+      expect.objectContaining({ deliver: ['feishu', 'pi-feishu-1'], chat_id: 'oc_group_1' }),
       expect.anything(),
     )
   })

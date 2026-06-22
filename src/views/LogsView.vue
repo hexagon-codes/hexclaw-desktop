@@ -372,7 +372,7 @@ onUnmounted(() => {
         <pre class="hc-logs__drawer-msg">{{ selected.message }}</pre>
 
         <div v-if="selected.trace_id" class="hc-logs__trace">
-          <span class="hc-logs__kv-key">trace_id</span>
+          <span class="hc-logs__trace-key">trace_id</span>
           <code class="hc-logs__trace-id">{{ selected.trace_id }}</code>
           <button class="hc-logs__trace-btn" @click="searchByTrace(selected.trace_id)">{{ t('logs.filterByTrace', '按此 trace 检索') }}</button>
           <button class="hc-logs__trace-btn" @click="copy(selected.trace_id)">{{ t('logs.copyTrace', '复制') }}</button>
@@ -680,6 +680,13 @@ onUnmounted(() => {
   gap: 8px;
   flex-wrap: wrap;
   margin-bottom: 10px;
+}
+/* trace_id 标签：flex 行内独立样式，不复用表格用的 .hc-logs__kv-key（其 width:1% 会在 flex 里塌缩导致与值重叠） */
+.hc-logs__trace-key {
+  flex: none;
+  color: var(--hc-text-muted);
+  font-weight: 600;
+  white-space: nowrap;
 }
 .hc-logs__trace-id {
   font-size: 11px;

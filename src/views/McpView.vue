@@ -36,7 +36,8 @@ const mcpSubTabs = computed(() => [
 ])
 function onMcpTabChange(key: string) {
   activeTab.value = key as 'servers' | 'tools' | 'marketplace'
-  if (key === 'marketplace') loadMarketplace()
+  // 市场已在 onMounted 预读（tab 标签即显总条数）；仅在尚未加载时才补拉，避免重复请求。
+  if (key === 'marketplace' && marketplaceItems.value.length === 0 && !marketplaceLoading.value) loadMarketplace()
 }
 
 // ─── 市场分类 pill（精选 pill → hub 分类集合 的展示映射；统一渲染后端 hub 市场，客户端过滤）──
@@ -90,10 +91,13 @@ let marketplaceRequestGen = 0
 let loadAllRequestGen = 0
 let statusRequestGen = 0
 
-async function loadMarketplace() {
+async function loadMarketplace(opts?: { silent?: boolean }) {
+  // silent=true（onMounted 预读总条数）：只填充列表/计数，不动共享 errorMsg，
+  // 避免在「服务器」tab 上把市场加载错误误显，也不清掉服务器/工具的加载错误。
+  const silent = opts?.silent === true
   const requestGen = ++marketplaceRequestGen
   marketplaceLoading.value = true
-  errorMsg.value = ''
+  if (!silent) errorMsg.value = ''
   try {
     // 一次拉全量 hub 列表，分类 pill + 搜索词改为 filteredMarketplace 客户端过滤
     const res = await getMcpMarketplace()
@@ -102,7 +106,7 @@ async function loadMarketplace() {
   } catch (e) {
     if (requestGen !== marketplaceRequestGen) return
     console.error('Failed to load MCP marketplace:', e)
-    errorMsg.value = e instanceof Error ? e.message : 'Failed to load marketplace'
+    if (!silent) errorMsg.value = e instanceof Error ? e.message : 'Failed to load marketplace'
     marketplaceItems.value = []
   }
   finally {
@@ -152,6 +156,9 @@ const testResult = ref<{ output?: unknown; error?: string } | null>(null)
 
 onMounted(async () => {
   await loadAll()
+  // 进入页面即后台预读市场目录，使「市场」tab 标签直接显示总条数，无需点开市场 tab。
+  // silent：预读失败不污染共享 errorMsg（真正点开市场 tab 时才按需补拉并显错）。
+  void loadMarketplace({ silent: true })
 })
 
 watch(activeTab, () => {
@@ -321,13 +328,25 @@ const showAddServer = ref(false)
 const newServerName = ref('')
 const newServerCommand = ref('')
 const newServerArgs = ref('')
+const newServerTransport = ref<'stdio' | 'sse' | 'streamable'>('stdio')
+const newServerEndpoint = ref('')
 const addingServer = ref(false)
 const removingServers = ref<Set<string>>(new Set())
+
+// stdio 需要 command；sse/streamable 需要 endpoint —— 与后端校验对齐。
+const addServerValid = computed(() => {
+  if (!newServerName.value.trim()) return false
+  return newServerTransport.value === 'stdio'
+    ? !!newServerCommand.value.trim()
+    : !!newServerEndpoint.value.trim()
+})
 
 function resetAddServerForm() {
   newServerName.value = ''
   newServerCommand.value = ''
   newServerArgs.value = ''
+  newServerTransport.value = 'stdio'
+  newServerEndpoint.value = ''
 }
 
 function closeAddServer() {
@@ -338,12 +357,22 @@ function closeAddServer() {
 
 async function handleAddServer() {
   if (addingServer.value) return
-  if (!newServerName.value.trim() || !newServerCommand.value.trim()) return
+  if (!addServerValid.value) return
   addingServer.value = true
   errorMsg.value = ''
   try {
-    const args = newServerArgs.value.trim() ? newServerArgs.value.trim().split(/\s+/) : undefined
-    await addMcpServer(newServerName.value.trim(), newServerCommand.value.trim(), args)
+    const isStdio = newServerTransport.value === 'stdio'
+    const args =
+      isStdio && newServerArgs.value.trim() ? newServerArgs.value.trim().split(/\s+/) : undefined
+    await addMcpServer(
+      newServerName.value.trim(),
+      isStdio ? newServerCommand.value.trim() : '',
+      args,
+      {
+        transport: newServerTransport.value,
+        endpoint: isStdio ? undefined : newServerEndpoint.value.trim(),
+      },
+    )
     closeAddServer()
     await loadAll()
   } catch (e) {
@@ -594,9 +623,9 @@ defineExpose({ openAddServer, switchToMarketplace })
               class="flex-1"
               :fluid="true"
               :placeholder="t('mcp.searchMarketplace', 'Search MCP servers...')"
-              @submit="loadMarketplace"
+              @submit="loadMarketplace()"
             />
-            <button class="px-3 py-2 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)' }" @click="loadMarketplace">
+            <button class="px-3 py-2 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)' }" @click="loadMarketplace()">
               <Search :size="14" />
             </button>
           </div>
@@ -668,17 +697,31 @@ defineExpose({ openAddServer, switchToMarketplace })
               <input v-model="newServerName" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverNamePlaceholder')" />
             </div>
             <div class="flex flex-col gap-1.5">
-              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverCommand') }}</label>
-              <input v-model="newServerCommand" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverCommandPlaceholder')" />
+              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.transport') }}</label>
+              <select v-model="newServerTransport" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }">
+                <option value="stdio">{{ t('mcpManage.transportStdio') }}</option>
+                <option value="sse">{{ t('mcpManage.transportSse') }}</option>
+                <option value="streamable">{{ t('mcpManage.transportStreamable') }}</option>
+              </select>
             </div>
-            <div class="flex flex-col gap-1.5">
-              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverArgs') }}</label>
-              <input v-model="newServerArgs" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverArgsPlaceholder')" />
+            <template v-if="newServerTransport === 'stdio'">
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverCommand') }}</label>
+                <input v-model="newServerCommand" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverCommandPlaceholder')" />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverArgs') }}</label>
+                <input v-model="newServerArgs" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverArgsPlaceholder')" />
+              </div>
+            </template>
+            <div v-else class="flex flex-col gap-1.5">
+              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverEndpoint') }}</label>
+              <input v-model="newServerEndpoint" type="url" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverEndpointPlaceholder')" />
             </div>
           </div>
           <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
             <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeAddServer">{{ t('common.cancel') }}</button>
-            <button class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)', opacity: (!newServerName.trim() || !newServerCommand.trim()) ? 0.4 : 1 }" :disabled="!newServerName.trim() || !newServerCommand.trim() || addingServer" @click="handleAddServer">
+            <button class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)', opacity: !addServerValid ? 0.4 : 1 }" :disabled="!addServerValid || addingServer" @click="handleAddServer">
               <Loader2 v-if="addingServer" :size="14" class="animate-spin" />
               <Plus v-else :size="14" />
               {{ t('common.create') }}

@@ -23,6 +23,8 @@ import { useSettingsStore } from '@/stores/settings'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
+import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
+import SkillIcon from '@/components/common/SkillIcon.vue'
 import SessionList from '@/components/chat/SessionList.vue'
 import ChatSearchDialog from '@/components/chat/ChatSearchDialog.vue'
 import ChatToolbar from '@/components/chat/ChatToolbar.vue'
@@ -40,6 +42,9 @@ import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { openSanitizedArtifact } from '@/utils/safe-html'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { getSkills, type Skill } from '@/api/skills'
+import { getDocuments } from '@/api/knowledge'
+import { getConnections, type ConnectionSummary } from '@/api/im-channels'
+import type { KnowledgeDoc } from '@/types'
 import { setClipboard } from '@/api/desktop'
 import { appendSessionMessagesBatch } from '@/api/chat'
 import { inferCapabilitiesFromId } from '@/config/providers'
@@ -109,6 +114,8 @@ const showModelSelector = ref(false)
 const isDragging = ref(false)
 const chatViewTab = ref<'chat' | 'artifacts' | 'history'>('chat')
 const availableSkills = ref<Skill[]>([])
+const knowledgeDocs = ref<KnowledgeDoc[]>([])
+const connections = ref<ConnectionSummary[]>([])
 
 // Message context menu
 const msgCtxMenu = ref<InstanceType<typeof ContextMenu>>()
@@ -229,6 +236,17 @@ function formatFullTime(ts: string): string {
 function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   const attachments = message.metadata?.attachments
   return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
+}
+
+/** 用户消息发送时挂载的 skill 名（BUG-20260622：气泡需显示这些 skill）。 */
+function getMessageSkills(message: ChatMessage): string[] {
+  const s = message.metadata?.skills
+  return Array.isArray(s) ? (s as string[]).filter((x) => typeof x === 'string') : []
+}
+/** 用 availableSkills 还原 skill 元信息供 SkillIcon 渲染；缺失则按名兜底。 */
+function skillForChip(name: string): { name: string; icon?: string; tags?: string[]; display_name?: string } {
+  const found = availableSkills.value.find((s) => s.name === name)
+  return found ?? { name }
 }
 
 /** D2 交互按钮：从 message.metadata.interactive_buttons 解析。
@@ -678,9 +696,23 @@ onMounted(async () => {
   chatStore.initApprovalListener()
   agentsStore.loadRoles()
   await agentsStore.loadAgents()
-  getSkills()
+  // best-effort 预载：用 Promise.resolve 兜底，避免 API 同步返回 undefined 时
+  // 在 .then 之前抛出未捕获 TypeError（'失败不阻塞会话' 的契约要落到实处）。
+  Promise.resolve(getSkills())
     .then((r) => {
-      availableSkills.value = r.skills || []
+      availableSkills.value = r?.skills || []
+    })
+    .catch(() => {})
+
+  // `@` 召唤上下文实体：知识库文档 + 连接（best-effort，失败不阻塞会话）
+  Promise.resolve(getDocuments())
+    .then((r) => {
+      knowledgeDocs.value = r?.documents || []
+    })
+    .catch(() => {})
+  Promise.resolve(getConnections())
+    .then((list) => {
+      connections.value = list || []
     })
     .catch(() => {})
 
@@ -1130,6 +1162,27 @@ function newSession() {
 /** 会话框 ✨「PROMPT 模板 → 新建模板」：跳到 Prompt 库 并自动打开新建表单（带 new=1 query）。 */
 function handleCreateTemplate() {
   router.push({ path: '/integration/prompts', query: { new: '1' } })
+}
+
+// 扣子式技能子菜单底部三入口：AI 创建走内联弹层；上传/市场跳转 Skill 管理页并自动打开对应面板。
+const showSkillCreate = ref(false)
+function handleSkillAction(action: 'ai-create' | 'upload-local' | 'add-market') {
+  if (action === 'ai-create') {
+    showSkillCreate.value = true
+  } else if (action === 'upload-local') {
+    router.push({ path: '/integration', query: { action: 'skill-install' } })
+  } else {
+    router.push({ path: '/integration', query: { action: 'skill-hub' } })
+  }
+}
+async function handleSkillCreated() {
+  // 新建成功后刷新会话可用 skill 列表
+  try {
+    const r = await getSkills()
+    availableSkills.value = r.skills || []
+  } catch {
+    /* 忽略：下次进入会话会重新拉取 */
+  }
 }
 
 function openHistorySession(sessionId: string) {
@@ -1714,6 +1767,20 @@ function startSidebarResize(event: MouseEvent) {
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
                       </div>
+                      <!-- BUG-20260622：发送时挂载的 skill 在气泡内显示 -->
+                      <div
+                        v-if="getMessageSkills(msg).length"
+                        style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px"
+                      >
+                        <span
+                          v-for="sn in getMessageSkills(msg)"
+                          :key="sn"
+                          style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:12px;background:rgba(255,255,255,0.2);font-size:12px;line-height:1.4"
+                        >
+                          <SkillIcon :skill="skillForChip(sn)" :size="13" />
+                          <span>{{ skillForChip(sn).display_name || sn }}</span>
+                        </span>
+                      </div>
                       {{ msg.content }}
                     </div>
                     <!-- DeepSeek 风格原位编辑框（独立圆角卡片） -->
@@ -1898,6 +1965,9 @@ function startSidebarResize(event: MouseEvent) {
               :disabled="chatStore.sending"
               :agents="agentsStore.roles"
               :skills="availableSkills"
+              :knowledge-docs="knowledgeDocs"
+              :connections="connections"
+              :sessions="chatStore.sessions"
               :allow-image="supportsVision"
               :allow-video="supportsVideo"
               :recipient-name="chatStore.agentRole || t('chat.defaultAgent', '小蟹')"
@@ -1912,11 +1982,12 @@ function startSidebarResize(event: MouseEvent) {
               @generated:video="handleVideoGenerated"
               @generation:error="handleImageGenError"
               @create-template="handleCreateTemplate"
+              @skill-action="handleSkillAction"
             >
               <!-- 模型选择器 + 深度研究（ChatGPT 风格，在输入框内底部工具栏） -->
               <template #tools>
                 <div class="hc-model-selector hc-model-selector--inline">
-                  <button class="hc-model-selector__btn" @click="toggleModelSelector">
+                  <button class="hc-model-selector__btn" :title="selectedModelDisplay" @click="toggleModelSelector">
                     <span class="hc-model-selector__name">{{ selectedModelDisplay }}</span>
                     <ChevronDown :size="12" />
                   </button>
@@ -2084,6 +2155,13 @@ function startSidebarResize(event: MouseEvent) {
         <button class="hc-img-preview__close" @click="closeImagePreview">×</button>
       </div>
     </Transition>
+
+    <!-- 与 AI 对话创建 Skill（扣子式技能子菜单入口） -->
+    <SkillCreateDialog
+      :visible="showSkillCreate"
+      @close="showSkillCreate = false"
+      @created="handleSkillCreated"
+    />
   </div>
 </template>
 

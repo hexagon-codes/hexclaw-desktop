@@ -671,4 +671,55 @@ describe('AgentsView', () => {
     // 对齐原型：专属卡不再渲染「provider · model」覆盖标签
     expect(wrapper.text()).not.toContain('智谱 · glm-5')
   })
+
+  // ──────────────────────────────────────────────────────────
+  // BUG-20260622-edit-agent-empty-provider：编辑「走全局默认」(provider/model 为空) 的 agent
+  // 时，编辑弹层的 模型服务商 / 模型 下拉完全空白（无任何可匹配选项）——其它有显式 provider
+  // 的 agent 正常。根因：editAgentProviderOptions/editAgentModelOptions 缺少 value:'' 占位项，
+  // HcSelect 的 v-model='' 找不到匹配选项 → 显示空白。
+  // ──────────────────────────────────────────────────────────
+  it('BUG-20260622: 编辑空 provider 的 agent，下拉应含 value:"" 全局默认占位（不空白）', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const { useSettingsStore } = await import('@/stores/settings')
+    const settingsStore = useSettingsStore()
+    settingsStore.runtimeProviders = [
+      {
+        id: 'runtime-zhipu',
+        backendKey: '智谱',
+        name: '智谱',
+        type: 'zhipu',
+        enabled: true,
+        apiKey: '****zhipu',
+        baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+        models: [{ id: 'glm-5', name: 'glm-5', capabilities: ['text'] }],
+      },
+    ]
+    await flushPromises()
+
+    // 打开「高级研究分析师」(researcher) 编辑：provider/model 为空（角色模板默认）
+    const vm = wrapper.vm as unknown as {
+      editingAgent: { name: string; display_name: string; provider: string; model: string }
+      showEditAgent: boolean
+    }
+    vm.editingAgent = { name: 'researcher', display_name: '高级研究分析师', provider: '', model: '' }
+    vm.showEditAgent = true
+    await flushPromises()
+
+    const selects = wrapper.findAllComponents(HcSelect)
+    expect(selects.length).toBe(2) // 编辑弹层仅 provider + model 两个下拉
+    const providerOpts = selects[0]!.props('options') as Array<{ value: string; label: string }>
+    const modelOpts = selects[1]!.props('options') as Array<{ value: string; label: string }>
+
+    // 空 provider/model 必须能匹配到一个 value==='' 的占位选项，否则 HcSelect 显示空白
+    expect(
+      providerOpts.some((o) => o.value === ''),
+      'provider 下拉缺少 value:"" 全局默认占位 → 空 provider 显示空白',
+    ).toBe(true)
+    expect(
+      modelOpts.some((o) => o.value === ''),
+      'model 下拉缺少 value:"" 占位 → 空 model 显示空白',
+    ).toBe(true)
+  })
 })

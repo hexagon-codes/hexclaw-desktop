@@ -17,6 +17,10 @@ import {
   Zap,
   Info,
   FileText,
+  Star,
+  Wand2,
+  Eye,
+  X,
 } from 'lucide-vue-next'
 import {
   getSkills,
@@ -26,16 +30,19 @@ import {
   setSkillEnabled,
   searchClawHub,
   installFromHub,
+  getHubSkillContent,
   type Skill,
   type ClawHubSkill,
   type SkillInstallType,
 } from '@/api/skills'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { getCurrentWindow } from '@tauri-apps/api/window'
+import SkillIcon from '@/components/common/SkillIcon.vue'
+import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
-import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import SkillMarkdownPreview from '@/components/skills/SkillMarkdownPreview.vue'
 import { useAppStore } from '@/stores/app'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 
@@ -79,6 +86,9 @@ let unlistenDrop: (() => void) | null = null
 
 onMounted(async () => {
   await loadSkills()
+  // 进入页面即后台预读市场目录，使「市场」tab 标签直接显示总条数，无需点开市场 tab。
+  // 非阻塞（不 await）：已安装列表照常先渲染；市场列表也随之就绪，点开即有内容。
+  void loadHubSkills()
   // Tauri 原生拖拽监听（浏览器 dev 模式下不可用）
   try {
     getCurrentWindow().onDragDropEvent((event) => {
@@ -172,6 +182,7 @@ async function confirmUninstall() {
     )
   } catch (e) {
     console.error('卸载 Skill 失败:', e)
+    statusNotice.value = { tone: 'warn', message: `卸载技能「${name}」失败：${e instanceof Error ? e.message : '请重试'}` }
   }
 }
 
@@ -440,6 +451,45 @@ async function handleHubInstall(skill: ClawHubSkill) {
   }
 }
 
+// ─── 市场技能「安装前预览」SKILL.md ───
+const previewSkill = ref<ClawHubSkill | null>(null)
+const previewContent = ref('')
+const previewLoading = ref(false)
+const previewError = ref('')
+
+async function openHubPreview(skill: ClawHubSkill) {
+  previewSkill.value = skill
+  previewContent.value = ''
+  previewError.value = ''
+  previewLoading.value = true
+  try {
+    const res = await getHubSkillContent(skill.name)
+    // 过期响应守卫：连点不同 skill 预览时，丢弃先发后到的旧响应，
+    // 避免弹层头显示 B 而正文却是 A 的不一致态。
+    if (previewSkill.value?.name !== skill.name) return
+    previewContent.value = res.content || ''
+  } catch (e) {
+    if (previewSkill.value?.name !== skill.name) return
+    previewError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (previewSkill.value?.name === skill.name) previewLoading.value = false
+  }
+}
+
+function closeHubPreview() {
+  previewSkill.value = null
+  previewContent.value = ''
+  previewError.value = ''
+  previewLoading.value = false
+}
+
+async function handlePreviewInstall() {
+  const skill = previewSkill.value
+  if (!skill) return
+  closeHubPreview()
+  await handleHubInstall(skill)
+}
+
 function formatDownloads(n: number): string {
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
   return String(n)
@@ -484,7 +534,18 @@ function switchToHub() {
   activeTab.value = 'hub'
 }
 
-defineExpose({ openInstallDialog, switchToHub })
+// 与 AI 对话创建 Skill（P1.3）
+const showCreateDialog = ref(false)
+function openCreateDialog() {
+  showInstallDialog.value = false
+  showCreateDialog.value = true
+}
+async function onSkillCreated() {
+  showCreateDialog.value = false
+  await loadSkills()
+}
+
+defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
 </script>
 
 <template>
@@ -570,7 +631,7 @@ defineExpose({ openInstallDialog, switchToHub })
               class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5"
               :style="{ background: 'var(--hc-bg-hover)' }"
             >
-              <Puzzle :size="20" :style="{ color: isSkillEnabled(skill) ? 'var(--hc-accent)' : 'var(--hc-text-muted)' }" />
+              <SkillIcon :skill="skill" :size="20" />
             </div>
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
@@ -755,10 +816,10 @@ defineExpose({ openInstallDialog, switchToHub })
               </div>
               <div
                 v-else-if="skillMdContent"
-                class="rounded-lg border p-3 max-h-96 overflow-y-auto text-sm"
+                class="rounded-lg border p-3 text-sm"
                 :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
               >
-                <MarkdownRenderer :content="skillMdContent" />
+                <SkillMarkdownPreview :content="skillMdContent" collapsible />
               </div>
             </div>
           </div>
@@ -829,22 +890,33 @@ defineExpose({ openInstallDialog, switchToHub })
           class="rounded-xl border p-4 flex flex-col"
           :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
         >
-          <!-- 头部: 名称 + 作者 -->
+          <!-- 头部: 图标 + 名称 + 作者 + 下载/评分 -->
           <div class="flex items-start justify-between gap-2 mb-2">
-            <div class="min-w-0">
-              <h4 class="text-sm font-medium truncate" :style="{ color: 'var(--hc-text-primary)' }">
-                {{ skill.display_name || skill.name }}
-              </h4>
-              <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
-                {{ skill.author }} &middot; v{{ skill.version }}
-              </p>
+            <div class="flex items-start gap-2.5 min-w-0">
+              <div
+                class="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+                :style="{ background: 'var(--hc-bg-hover)' }"
+              >
+                <SkillIcon :skill="skill" :size="18" />
+              </div>
+              <div class="min-w-0">
+                <h4 class="text-sm font-medium truncate" :style="{ color: 'var(--hc-text-primary)' }">
+                  {{ skill.display_name || skill.name }}
+                </h4>
+                <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
+                  {{ skill.author }} &middot; v{{ skill.version }}
+                </p>
+              </div>
             </div>
-            <div
-              class="flex items-center gap-1 text-xs flex-shrink-0"
-              :style="{ color: 'var(--hc-text-muted)' }"
-            >
-              <ArrowDownCircle :size="12" />
-              {{ formatDownloads(skill.downloads) }}
+            <div class="flex flex-col items-end gap-0.5 flex-shrink-0 text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+              <span class="flex items-center gap-1">
+                <ArrowDownCircle :size="12" />
+                {{ formatDownloads(skill.downloads) }}
+              </span>
+              <span v-if="skill.rating" class="flex items-center gap-0.5" :style="{ color: '#ff9f0a' }">
+                <Star :size="11" fill="currentColor" />
+                {{ skill.rating.toFixed(1) }}
+              </span>
             </div>
           </div>
 
@@ -868,42 +940,54 @@ defineExpose({ openInstallDialog, switchToHub })
             </span>
           </div>
 
-          <!-- 安装按钮 -->
-          <button
-            v-if="isHubSkillInstalled(skill.name)"
-            class="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
-            :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
-            disabled
-          >
-            <CheckCircle2 :size="14" />
-            {{ t('skills.hub.installed') }}
-          </button>
-          <button
-            v-else-if="skill._mock"
-            class="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
-            :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
-            disabled
-          >
-            {{ t('skills.hub.comingSoon', '即将上线') }}
-          </button>
-          <button
-            v-else-if="hubInstallingSet.has(skill.name)"
-            class="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white"
-            :style="{ background: 'var(--hc-text-muted)' }"
-            disabled
-          >
-            <Loader2 :size="14" class="animate-spin" />
-            {{ t('skills.hub.installing') }}
-          </button>
-          <button
-            v-else
-            class="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-opacity hover:opacity-90"
-            :style="{ background: 'var(--hc-accent)' }"
-            @click="handleHubInstall(skill)"
-          >
-            <Download :size="14" />
-            {{ t('skills.hub.install') }}
-          </button>
+          <!-- 操作区：预览（非 mock）+ 安装状态 -->
+          <div class="flex items-center gap-2">
+            <button
+              v-if="!skill._mock"
+              class="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border shrink-0 transition-colors hover:opacity-90"
+              :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }"
+              :title="t('skills.hub.preview', '预览')"
+              @click="openHubPreview(skill)"
+            >
+              <Eye :size="14" />
+              {{ t('skills.hub.preview', '预览') }}
+            </button>
+            <button
+              v-if="isHubSkillInstalled(skill.name)"
+              class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+              :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
+              disabled
+            >
+              <CheckCircle2 :size="14" />
+              {{ t('skills.hub.installed') }}
+            </button>
+            <button
+              v-else-if="skill._mock"
+              class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
+              :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
+              disabled
+            >
+              {{ t('skills.hub.comingSoon', '即将上线') }}
+            </button>
+            <button
+              v-else-if="hubInstallingSet.has(skill.name)"
+              class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white"
+              :style="{ background: 'var(--hc-text-muted)' }"
+              disabled
+            >
+              <Loader2 :size="14" class="animate-spin" />
+              {{ t('skills.hub.installing') }}
+            </button>
+            <button
+              v-else
+              class="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-opacity hover:opacity-90"
+              :style="{ background: 'var(--hc-accent)' }"
+              @click="handleHubInstall(skill)"
+            >
+              <Download :size="14" />
+              {{ t('skills.hub.install') }}
+            </button>
+          </div>
         </div>
         </div>
       </template>
@@ -993,8 +1077,24 @@ defineExpose({ openInstallDialog, switchToHub })
             </div>
           </div>
 
+          <!-- 与 AI 对话创建（零代码新建 Skill） -->
+          <div class="flex items-center gap-3 my-3">
+            <div class="flex-1 h-px" :style="{ background: 'var(--hc-divider)' }" />
+            <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('common.or', '或') }}</span>
+            <div class="flex-1 h-px" :style="{ background: 'var(--hc-divider)' }" />
+          </div>
+          <button
+            class="w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium border transition-colors hover:opacity-90"
+            :style="{ borderColor: 'var(--hc-accent)', color: 'var(--hc-accent)' }"
+            :disabled="installing"
+            @click="openCreateDialog"
+          >
+            <Wand2 :size="14" />
+            {{ t('skills.create.title', '与 AI 对话创建 Skill') }}
+          </button>
+
           <!-- Error -->
-          <p v-if="installError" class="text-xs px-1" style="color: var(--hc-error)">
+          <p v-if="installError" class="text-xs px-1 mt-3" style="color: var(--hc-error)">
             {{ installError }}
           </p>
 
@@ -1002,6 +1102,91 @@ defineExpose({ openInstallDialog, switchToHub })
           <div v-if="installing" class="flex items-center gap-2 mt-3 px-1">
             <Loader2 :size="14" class="animate-spin" :style="{ color: 'var(--hc-accent)' }" />
             <span class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('skills.installDialog.installing') }}</span>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 与 AI 对话创建 Skill -->
+    <SkillCreateDialog
+      :visible="showCreateDialog"
+      @close="showCreateDialog = false"
+      @created="onSkillCreated"
+    />
+
+    <!-- 市场技能「安装前预览」SKILL.md -->
+    <Teleport to="body">
+      <div
+        v-if="previewSkill"
+        class="fixed inset-0 z-50 flex items-center justify-center"
+        @click.self="closeHubPreview"
+      >
+        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @click="closeHubPreview" />
+        <div
+          class="relative z-10 w-[720px] max-w-[92vw] max-h-[85vh] flex flex-col rounded-xl border shadow-xl"
+          :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
+        >
+          <!-- 头部：图标 + 名称 + 作者/版本 -->
+          <div class="flex items-start justify-between gap-3 p-5 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+            <div class="flex items-start gap-3 min-w-0">
+              <div
+                class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
+                :style="{ background: 'var(--hc-bg-hover)' }"
+              >
+                <SkillIcon :skill="previewSkill" :size="20" />
+              </div>
+              <div class="min-w-0">
+                <h3 class="text-base font-semibold truncate" :style="{ color: 'var(--hc-text-primary)' }">
+                  {{ previewSkill.display_name || previewSkill.name }}
+                </h3>
+                <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
+                  {{ previewSkill.author }} · v{{ previewSkill.version }}
+                </p>
+              </div>
+            </div>
+            <button class="p-1 rounded-md shrink-0" :style="{ color: 'var(--hc-text-muted)' }" @click="closeHubPreview">
+              <X :size="16" />
+            </button>
+          </div>
+
+          <!-- 正文：SKILL.md 预览 -->
+          <div class="flex-1 overflow-y-auto p-5">
+            <div v-if="previewLoading" class="text-sm" :style="{ color: 'var(--hc-text-muted)' }">
+              {{ t('common.loading', '加载中...') }}
+            </div>
+            <div v-else-if="previewError" class="text-sm" :style="{ color: 'var(--hc-error)' }">
+              {{ previewError }}
+            </div>
+            <SkillMarkdownPreview v-else :content="previewContent" />
+          </div>
+
+          <!-- 底部：关闭 + 安装 -->
+          <div class="flex items-center justify-end gap-2 p-4 border-t" :style="{ borderColor: 'var(--hc-border)' }">
+            <button
+              class="px-4 py-1.5 rounded-lg text-sm border"
+              :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }"
+              @click="closeHubPreview"
+            >
+              {{ t('common.close', '关闭') }}
+            </button>
+            <button
+              v-if="isHubSkillInstalled(previewSkill.name)"
+              class="px-4 py-1.5 rounded-lg text-sm font-medium inline-flex items-center gap-1.5"
+              :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
+              disabled
+            >
+              <CheckCircle2 :size="14" />
+              {{ t('skills.hub.installed') }}
+            </button>
+            <button
+              v-else
+              class="px-4 py-1.5 rounded-lg text-sm font-medium text-white inline-flex items-center gap-1.5 transition-opacity hover:opacity-90"
+              :style="{ background: 'var(--hc-accent)' }"
+              @click="handlePreviewInstall"
+            >
+              <Download :size="14" />
+              {{ t('skills.hub.install') }}
+            </button>
           </div>
         </div>
       </div>

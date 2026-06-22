@@ -95,8 +95,6 @@ const activeTab = ref<ConnTab>('channels')
 // 通道 tab → 过滤通道卡；连接器 tab → 过滤目录条目。
 const searchQuery = ref('')
 
-// 通道与账号 tab 计数（由卡片流上抛，锚点 prototype .seg .segc）
-const channelCount = ref(0)
 // 通道卡片流引用：顶栏「添加」按钮委托其 openCreate（锚点 prototype addCurrentConn）
 const channelCardsRef = ref<{ openCreate?: () => void }>()
 
@@ -310,7 +308,7 @@ function toggleConnector(inst: ConnectorInstance) {
 
     <!-- 通道与账号：原型式 Connection 卡片流（锚点 prototype data-cx=0） -->
     <div v-if="activeTab === 'channels'" class="hc-conn-panel">
-      <ConnectionChannelCards ref="channelCardsRef" :filter="searchQuery" @count="channelCount = $event" />
+      <ConnectionChannelCards ref="channelCardsRef" :filter="searchQuery" />
     </div>
 
     <!-- 数据连接器：我已添加的连接器实例列表（支持同类型多个，顶栏「添加」开两步弹窗） -->
