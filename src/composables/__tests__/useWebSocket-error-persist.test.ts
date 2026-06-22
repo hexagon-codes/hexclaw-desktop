@@ -22,13 +22,14 @@ class MockWS {
   onerror: (() => void) | null = null
   constructor(url: string) {
     this.url = url
+    // eslint-disable-next-line @typescript-eslint/no-this-alias -- 测试 mock：把实例暴露给用例以触发 onerror/onclose
     lastWS = this
     setTimeout(() => {
       this.readyState = MockWS.OPEN
       this.onopen?.(new Event('open'))
     }, 0)
   }
-  send(_d: string) {}
+  send() {}
   close() {
     this.readyState = MockWS.CLOSED
     this.onclose?.()
