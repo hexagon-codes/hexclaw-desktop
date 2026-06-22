@@ -31,7 +31,7 @@ export function createChatFacadeActions(params: {
     async sendMessage(
       text: string,
       attachments?: ChatAttachment[],
-      options?: { backendText?: string },
+      options?: { backendText?: string; skillNames?: string[] },
     ) {
       error.value = null
       return sendController.sendMessage(text, attachments, options)

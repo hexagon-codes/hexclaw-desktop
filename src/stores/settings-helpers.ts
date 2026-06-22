@@ -194,19 +194,18 @@ export function resolveDefaultModelProviderId(
   preferredProviderId = '',
 ): string {
   if (!modelId) return ''
+  const isOllama = (p: ProviderConfig) =>
+    p.type === 'ollama' || (p.name?.toLowerCase().includes('ollama') ?? false)
+  const holdsModel = (p: ProviderConfig) => isOllama(p) || p.models.some((m) => m.id === modelId)
   if (preferredProviderId) {
     const preferred = providers.find((p) => p.id === preferredProviderId)
-    if (preferred) {
-      // Ollama 模型不在 provider.models 里，信任 preferredProviderId
-      const isOllama = preferred.type === 'ollama' || preferred.name?.toLowerCase().includes('ollama')
-      if (isOllama || preferred.models.some((model) => model.id === modelId)) {
-        return preferred.id
-      }
+    // 已禁用的 provider 不能成为默认（与后端 providersToBackend 跳过禁用一致，bug 2026-06-22-J）。
+    if (preferred && preferred.enabled !== false && holdsModel(preferred)) {
+      return preferred.id
     }
   }
-  return (
-    providers.find((provider) => provider.models.some((model) => model.id === modelId))?.id ?? ''
-  )
+  // 只在启用的 provider 中解析默认，禁用 provider 不参与。
+  return providers.find((p) => p.enabled !== false && holdsModel(p))?.id ?? ''
 }
 
 export function reconcileDefaultSelection(llmConfig: AppConfig['llm']) {
@@ -227,11 +226,32 @@ export function reconcileDefaultSelection(llmConfig: AppConfig['llm']) {
     llmConfig.defaultModel,
     llmConfig.defaultProviderId ?? '',
   )
-  llmConfig.defaultProviderId = resolvedProviderId
   if (!resolvedProviderId) {
-    llmConfig.defaultModel = ''
+    const isOllamaProvider = (p: ProviderConfig) =>
+      p.type === 'ollama' || (p.name?.toLowerCase().includes('ollama') ?? false)
+    // 仅当默认模型其实存在、只是落在「已禁用」provider 上时，迁移到首个启用 provider
+    // （刚禁用持有默认模型的 provider 的场景，bug 2026-06-22-J，与后端 providersToBackend fallback 一致）。
+    // 若模型在任何 provider 上都不存在（被删/改名），维持既有「清空」语义。
+    const existsOnDisabledOnly = llmConfig.providers.some(
+      (p) =>
+        p.enabled === false &&
+        (isOllamaProvider(p) || p.models.some((m) => m.id === llmConfig.defaultModel)),
+    )
+    const fallback = existsOnDisabledOnly
+      ? llmConfig.providers.find(
+          (p) => p.enabled !== false && (isOllamaProvider(p) || p.models.length > 0),
+        )
+      : undefined
+    if (fallback) {
+      llmConfig.defaultProviderId = fallback.id
+      llmConfig.defaultModel = fallback.selectedModelId || fallback.models[0]?.id || ''
+    } else {
+      llmConfig.defaultProviderId = ''
+      llmConfig.defaultModel = ''
+    }
     return
   }
+  llmConfig.defaultProviderId = resolvedProviderId
 
   const defaultProvider = llmConfig.providers.find((provider) => provider.id === resolvedProviderId)
   if (!defaultProvider) {
@@ -329,7 +349,8 @@ export function backendToProviders(
       backendKey: name,
       name: localProvider?.name ?? name,
       type: (localProvider?.type ?? matchedType ?? 'custom') as ProviderConfig['type'],
-      enabled: true,
+      // 后端 enabled 缺省/true=启用，false=禁用（还原禁用态，bug 2026-06-22）
+      enabled: p.enabled ?? true,
       baseUrl: p.base_url || localProvider?.baseUrl || '',
       apiKey: p.api_key || localProvider?.apiKey || '',
       models: mergeProviderModels(localProvider, p.model, p.models),
@@ -349,7 +370,8 @@ export function providersToBackend(
 ): BackendLLMConfig {
   const backendProviders: Record<string, BackendLLMProvider> = {}
   for (const p of providers) {
-    if (!p.enabled) continue
+    // 禁用 provider 不再被丢弃：随 enabled:false 上送，后端保留 Key/配置但不参与路由
+    // （bug 2026-06-22：此前 `if (!p.enabled) continue` 致禁用即从磁盘删 Key）。
     const key = p.backendKey || p.name || p.id
     // Ollama 模型不在 provider.models 里（来自独立缓存），直接用 defaultModel
     const isOllama = p.type === 'ollama' || p.name?.toLowerCase().includes('ollama')
@@ -367,10 +389,14 @@ export function providersToBackend(
           : '',
       tools_enabled: p.toolsEnabled ?? null,
       max_tools: p.maxTools ?? 0,
+      enabled: p.enabled,
     }
   }
-  // Find which provider the default model belongs to
-  let defaultProvider = Object.keys(backendProviders)[0] || ''
+  // Find which provider the default model belongs to（默认 provider 必须是启用的）
+  let defaultProvider =
+    Object.entries(backendProviders).find(([, v]) => v.enabled !== false)?.[0]
+    || Object.keys(backendProviders)[0]
+    || ''
   const exactDefaultProvider = providers.find(
     (provider) =>
       provider.id === defaultProviderId &&
@@ -378,9 +404,12 @@ export function providersToBackend(
       provider.models.some((model) => model.id === defaultModel),
   )
   if (exactDefaultProvider) {
-    defaultProvider = exactDefaultProvider.name || exactDefaultProvider.id
+    // 必须与上面 backendProviders 的键解析一致（backendKey 优先），否则 backendKey≠name 时
+    // default 指向 providers map 不存在的键（后端 router 自愈到首个，但前端是真错）。
+    defaultProvider = exactDefaultProvider.backendKey || exactDefaultProvider.name || exactDefaultProvider.id
   } else {
     for (const [key, val] of Object.entries(backendProviders)) {
+      if (val.enabled === false) continue // 默认 provider 不能落到禁用项
       if (val.model === defaultModel) {
         defaultProvider = key
         break

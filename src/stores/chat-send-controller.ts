@@ -124,7 +124,7 @@ export function createChatSendController(params: {
   async function sendMessage(
     text: string,
     attachments?: ChatAttachment[],
-    options?: { backendText?: string },
+    options?: { backendText?: string; skillNames?: string[] },
   ): Promise<ChatMessage | null> {
     const initialSessionId = currentSessionId.value
     const shouldSeedAutoTitle = shouldSeedChatAutoTitle({
@@ -147,12 +147,16 @@ export function createChatSendController(params: {
     try {
       const backendText = options?.backendText ?? text
       const requestId = createId()
+      const skillNames = options?.skillNames ?? []
+      const userMeta: Record<string, unknown> = {}
+      if (attachments?.length) userMeta.attachments = attachments
+      if (skillNames.length) userMeta.skills = skillNames
       const userMessage: ChatMessage = {
         id: requestId,
         role: 'user',
         content: text,
         timestamp: new Date().toISOString(),
-        metadata: attachments?.length ? { attachments } : undefined,
+        metadata: Object.keys(userMeta).length ? userMeta : undefined,
       }
       messages.value.push(userMessage)
       const sessionId = await ensureSession()

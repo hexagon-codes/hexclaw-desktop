@@ -15,6 +15,7 @@
 
 import { nextTick, type Ref } from 'vue'
 import { searchKnowledge } from '@/api/knowledge'
+import { formatContextBlock } from '@/utils/chat-context'
 import { parseDocument } from '@/utils/file-parser'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { useChatStore } from '@/stores/chat'
@@ -192,7 +193,11 @@ export function useChatSend(deps: ChatSendDeps) {
     })
   }
 
-  async function handleSend(text: string, files?: File[]): Promise<boolean> {
+  async function handleSend(
+    text: string,
+    files?: File[],
+    options?: { contextRefs?: import('@/types').ChatContextRef[]; skillNames?: string[] },
+  ): Promise<boolean> {
     // Validate model selection before sending
     // model=undefined means "let backend decide" (Agent mode) — valid
     const model = chatStore.chatParams.model
@@ -322,6 +327,17 @@ export function useChatSend(deps: ChatSendDeps) {
       // 知识库搜索失败不阻塞聊天
     }
 
+    // `@` 显式召唤的上下文（知识/连接/会话）：前置到 backendText，与 Auto-RAG 叠加，
+    // 只进后端文本、不污染用户气泡（显示仍为 finalText）。
+    const explicitContextBlock = formatContextBlock(options?.contextRefs ?? [])
+    if (explicitContextBlock) {
+      backendText = backendText
+        ? `${explicitContextBlock}\n\n${backendText}`
+        : `${explicitContextBlock}\n\n[用户问题]\n${finalText}`
+    }
+    // 注意：技能激活**不**经正文 @name 注入——`@skill` 会被后端当 mention/tool 致空回答。
+    // skillNames 作为前向兼容字段透传，由专用激活通道处理（不写进 backendText）。
+
     // Set agent role for research mode; clear stale role when not in research
     if (chatStore.chatMode === 'research') {
       chatStore.agentRole = 'researcher'
@@ -330,10 +346,11 @@ export function useChatSend(deps: ChatSendDeps) {
     }
 
     const previousMessageCount = Array.isArray(chatStore.messages) ? chatStore.messages.length : 0
+    const skillNames = options?.skillNames ?? []
     const sendPromise = chatStore.sendMessage(
       finalText,
       attachments.length > 0 ? attachments : undefined,
-      backendText ? { backendText } : undefined,
+      backendText || skillNames.length ? { backendText, skillNames } : undefined,
     )
     const accepted = Array.isArray(chatStore.messages) && chatStore.messages.length > previousMessageCount
     if (!accepted) {

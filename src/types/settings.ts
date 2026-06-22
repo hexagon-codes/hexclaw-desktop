@@ -223,6 +223,7 @@ export interface BackendLLMProvider {
   compatible: string
   tools_enabled?: boolean | null // null=自动（本地关/云开），true=强制开，false=强制关
   max_tools?: number             // 0=不限制
+  enabled?: boolean              // false=禁用（后端保留 Key/配置但不参与路由）；缺省/true=启用
 }
 
 /** 后端 LLM 配置（匹配 GET/PUT /api/v1/config/llm） */

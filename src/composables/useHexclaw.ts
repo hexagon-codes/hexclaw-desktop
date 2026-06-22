@@ -23,11 +23,15 @@ export function useHexclaw() {
         }
       } else {
         retryCount++
-        // 连续失败 5 次后降低轮询频率
-        if (retryCount === 6) {
-          currentInterval = Math.min(currentInterval * 2, 30000)
-          stopMonitor()
-          timer = setInterval(check, currentInterval)
+        // 连续失败 ≥6 次后逐步降低轮询频率，指数退避到 30s 上限
+        // （bug 2026-06-22 E：原 `=== 6` 只触发一次，30s 上限是死代码）
+        if (retryCount >= 6) {
+          const next = Math.min(currentInterval * 2, 30000)
+          if (next !== currentInterval) {
+            currentInterval = next
+            stopMonitor()
+            timer = setInterval(check, currentInterval)
+          }
         }
       }
     } finally {

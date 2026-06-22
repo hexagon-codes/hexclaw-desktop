@@ -94,6 +94,18 @@ export function createChatStreamCancelController(params: {
       return
     }
 
+    // 目标会话无活跃流：若 target 明确指向「另一个会话」（≠ 正在流式的镜像会话），
+    // 不得用镜像兜底取消，否则会停掉那个并发会话（F-01）。
+    // 仅当 target 就是镜像流本身、或没有具体 target/镜像 时，才走下面的 legacy 镜像兜底。
+    if (
+      targetSessionId &&
+      streamingSessionId.value &&
+      targetSessionId !== streamingSessionId.value
+    ) {
+      resetSessionStream(targetSessionId, sending, draftSending)
+      return
+    }
+
     if (streamingContent.value.trim() || streamingReasoning.value.trim()) {
       const reasoning = streamingReasoning.value
         ? normalizeAssistantReasoning(streamingReasoning.value) || undefined

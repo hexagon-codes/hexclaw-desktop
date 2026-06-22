@@ -16,6 +16,9 @@ export const useLogsStore = defineStore('logs', () => {
 
   let ws: WebSocket | null = null
   let reconnectDelay = 1000
+  // 主动关闭标志 + 重连定时器句柄（bug 2026-06-22 D：防 disconnect 后僵尸重连）
+  let closing = false
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
   /** 过滤后的日志条目 */
   const filteredEntries = computed(() => {
@@ -48,6 +51,7 @@ export const useLogsStore = defineStore('logs', () => {
   /** 建立 WebSocket 连接 */
   function connect() {
     if (ws) return
+    closing = false
 
     ws = connectLogStream(
       (entry) => {
@@ -74,10 +78,12 @@ export const useLogsStore = defineStore('logs', () => {
     ws.onclose = () => {
       connected.value = false
       ws = null
+      if (closing) return // 主动关闭，不重连
       if (!reconnecting) {
         reconnecting = true
-        setTimeout(() => {
+        reconnectTimer = setTimeout(() => {
           reconnecting = false
+          reconnectTimer = null
           connect()
         }, reconnectDelay)
         reconnectDelay = Math.min(reconnectDelay * 2, 30000)
@@ -87,7 +93,14 @@ export const useLogsStore = defineStore('logs', () => {
 
   /** 断开连接 */
   function disconnect() {
+    closing = true
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    reconnecting = false
     if (ws) {
+      ws.onclose = null // 解绑，防止 close() 触发的 onclose 调度重连
       ws.close()
       ws = null
     }

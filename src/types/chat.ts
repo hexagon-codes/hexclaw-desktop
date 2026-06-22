@@ -111,6 +111,18 @@ export interface ChatSession {
   message_count: number
 }
 
+/** `@` 召唤的上下文引用（知识库文档 / 连接 / 历史会话）。
+ *  仅注入到发送给后端的 backendText，不污染用户气泡显示。Agent 不走此结构（走 @name 路由）。 */
+export interface ChatContextRef {
+  type: 'knowledge' | 'connection' | 'session'
+  /** 实体唯一 id（doc id / connection id / session id） */
+  id: string
+  /** chip 显示名 */
+  label: string
+  /** 注入 backendText 的已解析内容（知识正文片段 / 连接说明 / 会话摘要） */
+  content: string
+}
+
 /** 聊天附件 */
 export interface ChatAttachment {
   type: 'image' | 'video' | 'audio' | 'file'

@@ -51,7 +51,8 @@ export function useWebSocket<T = unknown>(
       ws.onclose = () => {
         connected.value = false
         ws = null
-        error.value = null
+        // 不在此清空 error：onerror 设置的错误须保留给 UI；
+        // error 仅在成功重连的 onopen 中清空（C-03 修复）。
         scheduleReconnect()
       }
     } catch (e) {

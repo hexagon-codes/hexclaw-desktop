@@ -577,13 +577,18 @@ describe('backendToProviders', () => {
 
 /* ======================== providersToBackend ======================== */
 describe('providersToBackend', () => {
-  it('skips disabled providers', () => {
+  it('includes disabled providers with enabled:false（2026-06-22：禁用≠删除，随 enabled 上送）', () => {
     const providers = [
       makeProvider({ id: 'a', name: 'A', enabled: false }),
       makeProvider({ id: 'b', name: 'B', enabled: true }),
     ]
     const result = providersToBackend(providers, 'gpt-4')
-    expect(Object.keys(result.providers)).toEqual(['B'])
+    // 禁用 provider 仍上送（后端据此保留 Key 并跳过路由），不再被丢弃
+    expect(Object.keys(result.providers).sort()).toEqual(['A', 'B'])
+    expect(result.providers.A!.enabled).toBe(false)
+    expect(result.providers.B!.enabled).toBe(true)
+    // 默认 provider 不会落到禁用项 A
+    expect(result.default).toBe('B')
   })
 
   it('uses backendKey as key, falling back to name then id', () => {
@@ -763,5 +768,42 @@ describe('syncProviderApiKeys', () => {
     await syncProviderApiKeys(providers)
     // trimmed to empty → removeSecureValue path
     expect(removeSecureValue).toHaveBeenCalledWith('llm.provider.p1.apiKey')
+  })
+})
+
+// ════════════════════════════════════════════════════════════
+// BUG-PROVIDER-DISABLE（2026-06-22）：禁用 provider 不再被丢弃，随 enabled 上送/还原
+// ════════════════════════════════════════════════════════════
+describe('provider enabled 往返（禁用 ≠ 删除 Key）', () => {
+  it('providersToBackend 包含禁用 provider 并携带 enabled:false（不再 continue 丢弃）', () => {
+    const llm = providersToBackend(
+      [
+        makeProvider({ id: 'p1', name: 'openai', backendKey: 'openai', enabled: true }),
+        makeProvider({ id: 'p2', name: 'deepseek', backendKey: 'deepseek', enabled: false, apiKey: 'sk-deep' }),
+      ],
+      'gpt-4',
+      'p1',
+    )
+    // 禁用 provider 必须仍在 payload 里（否则后端整表替换删 Key）
+    expect(llm.providers.deepseek).toBeDefined()
+    expect(llm.providers.deepseek!.enabled).toBe(false)
+    expect(llm.providers.openai!.enabled).toBe(true)
+    // 默认 provider 不能落到禁用项
+    expect(llm.default).toBe('openai')
+  })
+
+  it('backendToProviders 还原 enabled:false（GET 回显禁用态）', () => {
+    const providers = backendToProviders(
+      makeBackendConfig({
+        providers: {
+          openai: { api_key: '****1234', base_url: '', model: 'gpt-4', compatible: '', enabled: false },
+          deepseek: { api_key: '****5678', base_url: '', model: 'deepseek-chat', compatible: '' },
+        },
+      }),
+    )
+    const openai = providers.find((p) => p.backendKey === 'openai')
+    const deepseek = providers.find((p) => p.backendKey === 'deepseek')
+    expect(openai?.enabled).toBe(false) // 后端 enabled:false → 还原禁用
+    expect(deepseek?.enabled).toBe(true) // 缺省 → 启用
   })
 })

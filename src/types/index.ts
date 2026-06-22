@@ -10,7 +10,7 @@
 export type {
   ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ExecMode, ContentBlock,
   InteractiveButton, InteractiveType, InteractiveOption, InteractiveApproval, CardField, InteractiveCard,
-  InteractiveResolved, InteractivePayload,
+  InteractiveResolved, InteractivePayload, ChatContextRef,
 } from './chat'
 export type { AgentRole, AgentConfig, AgentRule } from './agent'
 export type { LogEntry, LogQuery, LogStats } from './log'

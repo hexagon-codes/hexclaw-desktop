@@ -31,7 +31,8 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   // ─── 工作流状态 ─────────────────────────────────────
   const savedWorkflows = ref<Workflow[]>([])
-  const runStatus = ref<WorkflowRunStatus | 'idle'>('idle')
+  // 'unavailable' 为前端专属态：后端未提供/未启用工作流引擎（404），区别于真正的执行失败。
+  const runStatus = ref<WorkflowRunStatus | 'idle' | 'unavailable'>('idle')
   const runOutput = ref<string>('')
   const currentWorkflowId = ref<string | null>(null)
   const nodeRunStatus = ref<Record<string, 'idle' | 'running' | 'completed' | 'failed'>>({})
@@ -317,8 +318,21 @@ export const useCanvasStore = defineStore('canvas', () => {
         nodeResults: final.node_results,
       }
       error.value = null
+    } else if (err?.status === 404 || err?.code === 'NOT_FOUND') {
+      // 后端未提供/未启用工作流引擎（404）—— 不是「执行失败」。
+      // 节点从未运行，保持 idle（标 failed 会误导用户以为自己的工作流挂了）。
+      runStatus.value = 'unavailable'
+      const msg = '⚠ 工作流引擎未启用（当前后端未提供该功能）'
+      runOutput.value = msg
+      runResult.value = {
+        output: msg,
+        error: err?.message ?? 'Workflow engine not enabled',
+        startedAt: new Date().toISOString(),
+        finishedAt: new Date().toISOString(),
+      }
+      error.value = err
     } else {
-      // 后端不可用 — 标记所有节点为 failed，明确告知非模拟
+      // 后端不可用 / 执行失败 — 标记所有节点为 failed，明确告知非模拟
       for (const nid of order) {
         nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'failed' }
       }

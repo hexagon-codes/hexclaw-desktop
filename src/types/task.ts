@@ -56,4 +56,9 @@ export interface CronJobInput {
    * 留空 → 后端按 prompt 由 LLM 推导（默认 ["chat"]）；非空 → 直接覆盖（§5 一处存处处引）。
    */
   deliver?: string[]
+  /**
+   * IM/连接投递目标的会话/群组 ID。后端 Deliverer（cmd/hexclaw/main.go:1341）对 IM 目标
+   * 在 chat_id 为空时硬失败（"has no chat_id for IM target"）。chat/push 不需要。
+   */
+  chat_id?: string
 }
