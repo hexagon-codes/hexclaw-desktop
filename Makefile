@@ -3,14 +3,14 @@
 .PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
-HEXCLAW_REF ?= refs/tags/v0.4.4
+HEXCLAW_REF ?= refs/tags/v0.4.5
 HEXCLAW_SRC_DIR ?= /tmp/hexclaw-gith-src
 DESKTOP_ROOT := $(CURDIR)
 SIDECAR_BIN_DIR := $(DESKTOP_ROOT)/src-tauri/binaries
 TARGET ?= aarch64-apple-darwin
 
 # Ollama 版本控制（更新版本只需改这一处）
-OLLAMA_VERSION ?= 0.20.3
+OLLAMA_VERSION ?= 0.30.10
 OLLAMA_RELEASE_BASE ?= https://github.com/ollama/ollama/releases/download/v$(OLLAMA_VERSION)
 
 # 开发模式 (前端 + Tauri 窗口)

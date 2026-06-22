@@ -210,6 +210,16 @@ fn spawn_child(path: &std::path::Path, resource_dir: Option<&std::path::Path>) -
         cmd.env("HEXCLAW_RESOURCE_DIR", d);
     }
 
+    // 让 sidecar 与宿主机浏览器走同一代理出口：探测系统代理并注入 *_PROXY 环境变量，
+    // Go 端 http.ProxyFromEnvironment 自动读取。仅在用户未显式设置该变量时注入，不覆盖
+    // 手动配置；系统无手动代理（如 TUN/fake-ip 透明模式）时不注入，靠系统路由直连。
+    for (k, v) in host_proxy_env() {
+        if std::env::var(&k).is_err() {
+            log::info!("sidecar 代理注入: {}={}", k, v);
+            cmd.env(&k, &v);
+        }
+    }
+
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("启动 sidecar 失败: {}", e))?;
@@ -229,6 +239,72 @@ fn spawn_child(path: &std::path::Path, resource_dir: Option<&std::path::Path>) -
     }
 
     Ok(())
+}
+
+/// 探测宿主机系统代理（与浏览器同源），转成 `*_PROXY` 环境变量供 sidecar 使用，
+/// 使 Go 端 `http.ProxyFromEnvironment` 走与宿主机浏览器相同的代理出口。
+///
+/// 仅 macOS 经 `scutil --proxy` 探测系统网络代理；其余平台返回空，沿用进程继承的
+/// 环境变量（Go 自会读取 HTTP_PROXY/HTTPS_PROXY/ALL_PROXY）。
+fn host_proxy_env() -> Vec<(String, String)> {
+    #[cfg(target_os = "macos")]
+    {
+        match Command::new("scutil").arg("--proxy").output() {
+            Ok(o) if o.status.success() => parse_scutil_proxy(&String::from_utf8_lossy(&o.stdout)),
+            _ => Vec::new(),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Vec::new()
+    }
+}
+
+/// 解析 `scutil --proxy` 输出为 `*_PROXY` 环境变量键值对。纯函数，便于单测。
+///
+/// 仅采纳"手动代理"（HTTP/HTTPS/SOCKS 各自 Enable=1）；PAC 自动配置
+/// （ProxyAutoConfig）无法被 Go 直接消费，忽略。任一手动代理启用时追加 NO_PROXY，
+/// 保证本机/回环直连（sidecar 自身 127.0.0.1:16060、桌面↔sidecar 不应被代理）。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_scutil_proxy(output: &str) -> Vec<(String, String)> {
+    use std::collections::HashMap;
+    let mut kv: HashMap<&str, &str> = HashMap::new();
+    for line in output.lines() {
+        if let Some((k, v)) = line.split_once(" : ") {
+            kv.insert(k.trim(), v.trim());
+        }
+    }
+    let enabled = |k: &str| kv.get(k).map(|v| *v == "1").unwrap_or(false);
+    let host_port = |hk: &str, pk: &str| -> Option<(String, String)> {
+        match (kv.get(hk), kv.get(pk)) {
+            (Some(h), Some(p)) if !h.is_empty() && !p.is_empty() && *p != "0" => {
+                Some((h.to_string(), p.to_string()))
+            }
+            _ => None,
+        }
+    };
+
+    let mut env: Vec<(String, String)> = Vec::new();
+    if enabled("HTTPEnable") {
+        if let Some((h, p)) = host_port("HTTPProxy", "HTTPPort") {
+            env.push(("HTTP_PROXY".into(), format!("http://{}:{}", h, p)));
+        }
+    }
+    if enabled("HTTPSEnable") {
+        // HTTPS 代理走 HTTP CONNECT，URL scheme 仍是 http://。
+        if let Some((h, p)) = host_port("HTTPSProxy", "HTTPSPort") {
+            env.push(("HTTPS_PROXY".into(), format!("http://{}:{}", h, p)));
+        }
+    }
+    if enabled("SOCKSEnable") {
+        if let Some((h, p)) = host_port("SOCKSProxy", "SOCKSPort") {
+            env.push(("ALL_PROXY".into(), format!("socks5://{}:{}", h, p)));
+        }
+    }
+    if !env.is_empty() {
+        env.push(("NO_PROXY".into(), "localhost,127.0.0.1,::1".into()));
+    }
+    env
 }
 
 /// 停止 sidecar 进程
@@ -621,7 +697,7 @@ fn process_exists(pid: u32) -> Result<bool, String> {
 mod tests {
     use super::{
         ensure_knowledge_enabled_yaml, executable_basename, format_port_conflict_error,
-        is_hexclaw_sidecar_command, parse_pid_list,
+        is_hexclaw_sidecar_command, parse_pid_list, parse_scutil_proxy,
     };
 
     #[test]
@@ -684,5 +760,42 @@ mod tests {
         let (next, changed) = ensure_knowledge_enabled_yaml(input);
         assert!(!changed);
         assert_eq!(next, input);
+    }
+
+    #[test]
+    fn parse_scutil_proxy_manual_http_https() {
+        let out = "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n  HTTPSEnable : 1\n  HTTPSPort : 7890\n  HTTPSProxy : 127.0.0.1\n  SOCKSEnable : 0\n}";
+        let env = parse_scutil_proxy(out);
+        assert!(env
+            .iter()
+            .any(|(k, v)| k == "HTTP_PROXY" && v == "http://127.0.0.1:7890"));
+        assert!(env
+            .iter()
+            .any(|(k, v)| k == "HTTPS_PROXY" && v == "http://127.0.0.1:7890"));
+        assert!(env.iter().any(|(k, _)| k == "NO_PROXY"));
+        assert!(!env.iter().any(|(k, _)| k == "ALL_PROXY"));
+    }
+
+    #[test]
+    fn parse_scutil_proxy_socks() {
+        let out = "  SOCKSEnable : 1\n  SOCKSPort : 1080\n  SOCKSProxy : 192.168.1.2\n";
+        let env = parse_scutil_proxy(out);
+        assert!(env
+            .iter()
+            .any(|(k, v)| k == "ALL_PROXY" && v == "socks5://192.168.1.2:1080"));
+    }
+
+    #[test]
+    fn parse_scutil_proxy_tun_mode_yields_empty() {
+        // TUN/fake-ip 透明模式：系统无手动代理 → 不注入任何变量（靠系统路由直连）。
+        let out = "  HTTPEnable : 0\n  HTTPSEnable : 0\n  SOCKSEnable : 0\n  ProxyAutoConfigEnable : 0\n";
+        assert!(parse_scutil_proxy(out).is_empty());
+    }
+
+    #[test]
+    fn parse_scutil_proxy_ignores_disabled_with_stale_host() {
+        // Enable=0 但仍残留 HTTPProxy/Port（系统常见）→ 不应注入。
+        let out = "  HTTPEnable : 0\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n";
+        assert!(parse_scutil_proxy(out).is_empty());
     }
 }

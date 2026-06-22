@@ -112,6 +112,29 @@ pub fn open_quick_chat(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// 打开「关于」窗口
+///
+/// macOS 菜单 "About" 与应用内版本号入口共用此函数，保证只有一个关于窗口、一套窗口配置。
+/// 已存在则聚焦，否则新建。
+pub fn open_about(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(window) = app.get_webview_window("about") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    WebviewWindowBuilder::new(app, "about", WebviewUrl::App("/about".into()))
+        .title("关于河蟹")
+        .inner_size(520.0, 760.0)
+        .resizable(false)
+        .minimizable(false)
+        .maximizable(false)
+        .center()
+        .build()?;
+
+    Ok(())
+}
+
 /// 注册全局快捷键
 ///
 /// ⌘⇧H (macOS) / Ctrl+Shift+H (Windows/Linux) — 打开 Quick Chat

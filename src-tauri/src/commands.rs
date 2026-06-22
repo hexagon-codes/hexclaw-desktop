@@ -554,6 +554,12 @@ pub fn get_platform_info() -> PlatformInfo {
     }
 }
 
+/// 打开「关于」窗口（应用内版本号入口调用，与 macOS 菜单 About 共用同一窗口）。
+#[tauri::command]
+pub fn open_about(app: tauri::AppHandle) -> Result<(), String> {
+    crate::window::open_about(&app).map_err(|e| e.to_string())
+}
+
 /// 平台信息
 #[derive(Serialize)]
 pub struct PlatformInfo {
@@ -678,6 +684,63 @@ pub fn save_bytes_to_path(base64_data: String, path: String) -> Result<u64, Stri
     Ok(bytes.len() as u64)
 }
 
+/// 读取本地文件为 base64（会话框原生拖拽上传用：Tauri onDragDropEvent 只给路径）。
+#[derive(Serialize)]
+pub struct ReadFileResult {
+    pub base64: String,
+    pub name: String,
+    pub mime: String,
+}
+
+#[tauri::command]
+pub fn read_file_as_base64(path: String) -> Result<ReadFileResult, String> {
+    use base64::Engine as _;
+    let p = std::path::Path::new(&path);
+    let meta = std::fs::metadata(p).map_err(|e| format!("读取失败: {}", e))?;
+    if !meta.is_file() {
+        return Err("不是文件".to_string());
+    }
+    const MAX_BYTES: u64 = 100 * 1024 * 1024;
+    if meta.len() > MAX_BYTES {
+        return Err(format!("文件过大 {} > {} 字节", meta.len(), MAX_BYTES));
+    }
+    let bytes = std::fs::read(p).map_err(|e| format!("读取失败: {}", e))?;
+    let name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file")
+        .to_string();
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "pdf" => "application/pdf",
+        "txt" => "text/plain",
+        "md" => "text/markdown",
+        "csv" => "text/csv",
+        "json" => "application/json",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        _ => "application/octet-stream",
+    }
+    .to_string();
+    Ok(ReadFileResult {
+        base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        name,
+        mime,
+    })
+}
+
 // ─── 文档渲染（POST /api/v1/render → 流式直写文件）──────────────────
 //
 // markdown → docx/pdf/epub/odt/rtf/txt/html/md，由 sidecar 渲染层处理。
@@ -780,4 +843,45 @@ pub async fn render_artifact_to_path(
     }
     file.flush().await.map_err(|e| format!("flush 失败: {}", e))?;
     Ok(total)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // 真机 E2E（real fs）：read_file_as_base64 读真实磁盘文件 → 还原字节 + 推断 MIME。
+    // 对应会话框拖拽上传链路的「路径→字节」半段（BUG-20260622-CHATINPUT-DROP）。
+    #[test]
+    fn test_read_file_as_base64_real_image() {
+        use base64::Engine as _;
+
+        // 写一个真实 .png 文件到临时目录（PNG magic header + 任意载荷）
+        let payload: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG magic
+            0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE, 0xAB, 0xCD, // 任意字节
+        ];
+        let path = std::env::temp_dir().join(format!("hexclaw_e2e_drop_{}.png", std::process::id()));
+        std::fs::write(&path, &payload).expect("写临时图片失败");
+
+        let res = read_file_as_base64(path.to_string_lossy().to_string()).expect("读取应成功");
+
+        // 文件名 + MIME 推断
+        assert_eq!(res.name, path.file_name().unwrap().to_str().unwrap());
+        assert_eq!(res.mime, "image/png");
+        // base64 还原 == 原始字节（无损）
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(res.base64.as_bytes())
+            .expect("base64 解码失败");
+        assert_eq!(decoded, payload);
+
+        let _ = std::fs::remove_file(&path); // 清理
+    }
+
+    #[test]
+    fn test_read_file_as_base64_rejects_missing_and_dir() {
+        // 不存在的路径报错（不 panic）
+        assert!(read_file_as_base64("/no/such/hexclaw/file.png".into()).is_err());
+        // 目录不是文件
+        assert!(read_file_as_base64(std::env::temp_dir().to_string_lossy().to_string()).is_err());
+    }
 }

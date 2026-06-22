@@ -127,7 +127,9 @@ pub fn run() {
             commands::restart_ollama,
             commands::save_file_from_url,
             commands::save_bytes_to_path,
+            commands::read_file_as_base64,
             commands::render_artifact_to_path,
+            commands::open_about,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

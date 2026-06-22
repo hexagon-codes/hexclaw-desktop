@@ -5,7 +5,7 @@
 
 use tauri::{
     menu::{Menu, MenuItemBuilder, PredefinedMenuItem, Submenu},
-    Emitter, Manager, WebviewUrl, WebviewWindowBuilder,
+    Emitter, Manager,
 };
 
 /// 构建原生应用菜单栏
@@ -123,22 +123,8 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         let window = app.get_webview_window("main");
         match event.id().as_ref() {
             "about" => {
-                // 如果 about 窗口已存在，聚焦它
-                if let Some(w) = app.get_webview_window("about") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                } else {
-                    // 创建自定义 About 窗口
-                    let _ =
-                        WebviewWindowBuilder::new(app, "about", WebviewUrl::App("/about".into()))
-                            .title("关于 河蟹 AI")
-                            .inner_size(520.0, 760.0)
-                            .resizable(false)
-                            .minimizable(false)
-                            .maximizable(false)
-                            .center()
-                            .build();
-                }
+                // 与应用内版本号入口共用同一开窗逻辑（单一关于窗口 + 单套配置）
+                let _ = crate::window::open_about(app);
             }
             "preferences" => {
                 if let Some(w) = &window {
