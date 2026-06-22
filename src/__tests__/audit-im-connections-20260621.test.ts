@@ -45,8 +45,12 @@ import { CHANNEL_TYPES, CHANNEL_CONFIG_FIELDS } from '@/config/im-channels'
 
 // ── 后端 Go 源码作为契约权威 ─────────────────────────────────────────
 const HEXCLAW = '/Users/hexagon/work/hexclaw'
+// 前端-only CI 无此后端目录 → 跨仓审计套件整体跳过，避免 ENOENT。
+const describeBE = fs.existsSync(HEXCLAW) ? describe : describe.skip
 function goSrc(rel: string): string {
-  return fs.readFileSync(path.join(HEXCLAW, rel), 'utf-8')
+  const p = path.join(HEXCLAW, rel)
+  if (!fs.existsSync(p)) return '' // 后端缺席（前端-only CI）→ 返回空，配合 describeBE 跳过
+  return fs.readFileSync(p, 'utf-8')
 }
 const handlerConnections = (() => {
   try {
@@ -78,7 +82,7 @@ function lastProxyBody(): unknown {
 // ════════════════════════════════════════════════════════════════════
 // F-1【严重】[前后端对齐] 邮箱「测试连接」配置 flat vs nested 完全错位，邮箱测试 100% 失败
 // ════════════════════════════════════════════════════════════════════
-describe('F-1 邮箱 connections/test 字段形状错位（flat 前端 vs nested 后端）', () => {
+describeBE('F-1 邮箱 connections/test 字段形状错位（flat 前端 vs nested 后端）', () => {
   // 前端 ChannelConfigModal 邮箱表单产出的 flat config（键来自 CHANNEL_CONFIG_FIELDS.email
   // + EMAIL_PRESETS 自动填充的 smtp_host/smtp_port/imap_host/imap_port）。
   const frontendEmailConfig: Record<string, string> = {
@@ -149,7 +153,7 @@ describe('F-1 邮箱 connections/test 字段形状错位（flat 前端 vs nested
 // F-2【中】[对齐] testConnection 仅声明 IMChannelType，但邮箱才走它；email 不在 instanceMgr
 //   → GET /connections 永远不含邮箱（邮箱仅前端本地，后端 List 只返回 platform instances）
 // ════════════════════════════════════════════════════════════════════
-describe('F-2 getConnections 返回的连接列表不含邮箱（邮箱只在前端本地，后端列表来自 instanceMgr）', () => {
+describeBE('F-2 getConnections 返回的连接列表不含邮箱（邮箱只在前端本地，后端列表来自 instanceMgr）', () => {
   it('后端 handleListConnections 数据源是 instanceMgr.List（platform 实例），不含独立邮箱连接库', () => {
     expect(handlerConnections).toContain('s.instanceMgr.List')
     // connectionCapabilities 虽然把 email 列进 case，但 List 只迭代 instanceMgr 实例。
@@ -170,7 +174,7 @@ describe('F-2 getConnections 返回的连接列表不含邮箱（邮箱只在前
 // F-3【低】[对齐] provider 枚举不一致：后端 BuildAdapter 支持 slack/line/whatsapp/matrix，
 //   前端 CHANNEL_TYPES 只有 7 个（无这 4 个）；slack.svg 是孤儿资源
 // ════════════════════════════════════════════════════════════════════
-describe('F-3 provider 枚举前后端不一致 + slack.svg 孤儿资源', () => {
+describeBE('F-3 provider 枚举前后端不一致 + slack.svg 孤儿资源', () => {
   const buildAdapter = goSrc('instances/manager.go')
 
   it('后端 BuildAdapter 支持 slack/line/whatsapp/matrix，前端 CHANNEL_TYPES 不含它们', () => {
@@ -203,7 +207,7 @@ describe('F-3 provider 枚举前后端不一致 + slack.svg 孤儿资源', () =>
 // ════════════════════════════════════════════════════════════════════
 // F-4【低】[对齐] handleWecomGuide 字段名与真实 WecomConfig 不一致；前端不消费该 guide
 // ════════════════════════════════════════════════════════════════════
-describe('F-4 channels/wecom/guide 字段名与真实 config 不符 + 前端不消费', () => {
+describeBE('F-4 channels/wecom/guide 字段名与真实 config 不符 + 前端不消费', () => {
   const wechatHandler = goSrc('api/handler_wechat.go')
 
   it('wecom guide 用 callback_token / callback_aes_key，但真实 WecomConfig json tag 是 token / aes_key', () => {
@@ -242,7 +246,7 @@ describe('F-4 channels/wecom/guide 字段名与真实 config 不符 + 前端不�
 // ════════════════════════════════════════════════════════════════════
 // F-5【提示】[对齐 OK] wechat / wecom config 字段名前后端一致（反面验证，确认非 bug）
 // ════════════════════════════════════════════════════════════════════
-describe('F-5 wechat/wecom 实例配置字段对齐（确认无错位）', () => {
+describeBE('F-5 wechat/wecom 实例配置字段对齐（确认无错位）', () => {
   const cfg = goSrc('config/config.go')
 
   it('wechat: app_id/app_secret/token/aes_key 前后端一致', () => {
@@ -265,7 +269,7 @@ describe('F-5 wechat/wecom 实例配置字段对齐（确认无错位）', () =>
 // ════════════════════════════════════════════════════════════════════
 // F-6【对齐 OK】IM「测试连接」(非邮箱) 走 /im/channels/{type}/test，body=raw config（对齐）
 // ════════════════════════════════════════════════════════════════════
-describe('F-6 IM 测试入口对齐：testIMInstance → POST /im/channels/{type}/test，body 为裸 config', () => {
+describeBE('F-6 IM 测试入口对齐：testIMInstance → POST /im/channels/{type}/test，body 为裸 config', () => {
   it('testIMInstance POST 到 /im/channels/{type}/test，body 是裸 config（与 handleTestChannelConfig 收 raw 一致）', async () => {
     invoke.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
       invokeCalls.push({ cmd, args })
@@ -302,7 +306,7 @@ describe('F-6 IM 测试入口对齐：testIMInstance → POST /im/channels/{type
 // ════════════════════════════════════════════════════════════════════
 // F-7【中】[边界] 实例名含中文 / 特殊字符的 URL 编码一致性（"公众号" 测试）
 // ════════════════════════════════════════════════════════════════════
-describe('F-7 实例名中文/特殊字符 URL 编码（start/stop/health/delete 路径）', () => {
+describeBE('F-7 实例名中文/特殊字符 URL 编码（start/stop/health/delete 路径）', () => {
   it('startIMInstance 对中文实例名 encodeURIComponent（路径含 %E5%85%AC%E4%BC%97%E5%8F%B7）', async () => {
     const { startIMInstance } = await import('@/api/im-channels')
     invoke.mockImplementation(async (cmd: string, args: Record<string, unknown>) => {
@@ -328,7 +332,7 @@ describe('F-7 实例名中文/特殊字符 URL 编码（start/stop/health/delete
 // F-8【中】[边界] testConnection 降级判定漏 4xx/5xx：后端把业务失败返回 HTTP 200 + {ok:false}
 //   但「端点不可用」靠 message 正则匹配，覆盖面有限
 // ════════════════════════════════════════════════════════════════════
-describe('F-8 testConnection 端点降级判定（正则匹配 message，覆盖面边界）', () => {
+describeBE('F-8 testConnection 端点降级判定（正则匹配 message，覆盖面边界）', () => {
   it('错误信息含 404 / unreachable 时降级为 "Test endpoint unavailable"', async () => {
     invoke.mockImplementation(async () => {
       throw new Error('request failed: 404 not found')

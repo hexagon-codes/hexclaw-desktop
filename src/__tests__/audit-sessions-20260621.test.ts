@@ -10,13 +10,15 @@
  *   - 未闭环 → 证明"前端调用后端没有的路由" 或 "后端有路由但前端/UI 从不调用"。
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { execSync } from 'node:child_process'
 
 const FE = (rel: string) => resolve(__dirname, '..', rel)
 const BE = (rel: string) => resolve(__dirname, '../../../hexclaw', rel)
 const read = (p: string) => readFileSync(p, 'utf8')
+// hexclaw 后端仓库（本地兄弟目录）；前端-only CI 无此目录 → 跨仓审计套件整体跳过，避免 ENOENT。
+const describeBE = existsSync(resolve(__dirname, '../../../hexclaw')) ? describe : describe.skip
 
 // ════════════════════════════════════════════════════════════════════
 // Finding A1 [P1][边界] apiSSE 不处理 CRLF (\r\n) 行结尾
@@ -57,7 +59,7 @@ async function drainSSE(url = '/test'): Promise<string[]> {
   return out
 }
 
-describe('Finding A1 [P1][边界] apiSSE — CRLF (\\r\\n) 行结尾未处理', () => {
+describeBE('Finding A1 [P1][边界] apiSSE — CRLF (\\r\\n) 行结尾未处理', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.resetModules()
@@ -95,7 +97,7 @@ describe('Finding A1 [P1][边界] apiSSE — CRLF (\\r\\n) 行结尾未处理', 
 //   真实场景：服务端正常结束但最后一行未换行 / 网络分片刚好截在末行。
 // ════════════════════════════════════════════════════════════════════
 
-describe('Finding A2 [P1][边界] apiSSE — 末行无 \\n 时数据被丢弃', () => {
+describeBE('Finding A2 [P1][边界] apiSSE — 末行无 \\n 时数据被丢弃', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     vi.resetModules()
@@ -147,7 +149,7 @@ describe('Finding A2 [P1][边界] apiSSE — 末行无 \\n 时数据被丢弃', 
 //   => 会话分支/fork/检查点功能在桌面端从 UI 不可达（dead path）。
 // ════════════════════════════════════════════════════════════════════
 
-describe('Finding A3 [P2][未闭环] 会话分支/fork/checkpoints UI 不可达', () => {
+describeBE('Finding A3 [P2][未闭环] 会话分支/fork/checkpoints UI 不可达', () => {
   // 用源码静态扫描证明：除 api/chat.ts 与 __tests__ 外，无任何 .ts/.vue 引用这些 API。
   const SRC = resolve(__dirname, '..')
 
@@ -208,7 +210,7 @@ describe('Finding A3 [P2][未闭环] 会话分支/fork/checkpoints UI 不可达'
 //      即便 backend 改名成功本地 extraSessions 也不刷新。
 // ════════════════════════════════════════════════════════════════════
 
-describe('Finding A4 [P2][逻辑] SessionList 重命名对 extraSessions（分页加载）会话失效', () => {
+describeBE('Finding A4 [P2][逻辑] SessionList 重命名对 extraSessions（分页加载）会话失效', () => {
   const SRC = read(FE('components/chat/SessionList.vue'))
 
   it('loadMoreSessions 只把"不在 chatStore.sessions"的会话放进 extraSessions', () => {
@@ -242,7 +244,7 @@ describe('Finding A4 [P2][逻辑] SessionList 重命名对 extraSessions（分�
 //   ChatSession 缺 user_id/parent_session_id；类型契约与后端 JSON 不符。
 // ════════════════════════════════════════════════════════════════════
 
-describe('Finding A5 [P2][对齐] getSessionBranches 类型契约 vs 后端 JSON 不符', () => {
+describeBE('Finding A5 [P2][对齐] getSessionBranches 类型契约 vs 后端 JSON 不符', () => {
   it('后端 branches 元素是 storage.Session（带 user_id/parent_session_id），响应含 total', () => {
     const handler = read(BE('api/handler_session.go'))
     const block = handler.slice(handler.indexOf('func (s *Server) handleListBranches'))
