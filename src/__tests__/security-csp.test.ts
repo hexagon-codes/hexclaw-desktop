@@ -173,9 +173,12 @@ describe('CSP security policy', () => {
       }
     })
 
-    it('no directive allows http:// or https:// broadly (except media-src for video playback)', () => {
-      // media-src 需要 https: 加载外部视频（视频生成模型返回 CDN URL）
-      const exempted = new Set(['media-src'])
+    it('no directive allows http:// or https:// broadly (except img/media-src for remote generated media)', () => {
+      // 仅这两类豁免 https:（远程生成内容展示，且已去掉明文 http:）：
+      //   media-src — 视频生成模型返回远程 CDN URL（video_url / cover_url，24h 临时）
+      //   img-src   — 图像生成返回远程 URL（imageToSrc: img.url / 完整 https file_path）
+      // connect-src / font-src / style-src 已收紧为 localhost+self（本地优先，前端不直连外部）。
+      const exempted = new Set(['media-src', 'img-src'])
       for (const [directive, values] of allDirectives) {
         if (exempted.has(directive)) continue
         expect(

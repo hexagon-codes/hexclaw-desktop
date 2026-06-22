@@ -202,7 +202,8 @@ describe('集成验证: 修复后其他 API 函数的 URI 编码一致性', () =
     // 确认 webhook 和 knowledge 都使用了 encodeURIComponent
     const webhookSrc = readFileSync('src/api/webhook.ts', 'utf-8')
     const knowledgeSrc = readFileSync('src/api/knowledge.ts', 'utf-8')
-    expect(webhookSrc).toContain('encodeURIComponent(id)')
+    // deleteWebhook 2026-06-22 改按 name 删（仍 URI 编码）
+    expect(webhookSrc).toContain('encodeURIComponent(name)')
     expect(knowledgeSrc).toContain('encodeURIComponent(id)')
   })
 })

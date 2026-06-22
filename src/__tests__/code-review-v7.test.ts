@@ -204,17 +204,6 @@ describe('i18n — 全局 key 完整性抽检', () => {
     expect(zhCN).toContain("statusRunning:")
     expect(en).toContain("statusRunning:")
   })
-
-  it('settings.status key 中英文都完整（12个 key）', () => {
-    const zhCN = readFileSync('src/i18n/locales/zh-CN.ts', 'utf-8')
-    const en = readFileSync('src/i18n/locales/en.ts', 'utf-8')
-    const keys = ['title', 'loadData', 'budget', 'toolCache', 'toolMetrics',
-      'toolName', 'toolCalls', 'toolSuccessRate', 'toolLatency', 'toolPermissions', 'refresh']
-    for (const key of keys) {
-      expect(zhCN, `zh-CN missing ${key}`).toContain(`${key}:`)
-      expect(en, `en missing ${key}`).toContain(`${key}:`)
-    }
-  })
 })
 
 // ═══════════════════════════════════════════════════

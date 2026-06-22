@@ -336,7 +336,7 @@ describe('旅程 H: Webhook', () => {
   it('创建 → 列表 → 删除（URI 编码中文名）', async () => {
     mockApiFetch.mockResolvedValueOnce({ id: 'wh-1', name: '企微通知', url: 'https://hooks.example.com' })
     const { createWebhook, getWebhooks, deleteWebhook } = await import('@/api/webhook')
-    await createWebhook({ name: '企微通知', type: 'wecom', url: 'https://hooks.example.com', events: ['task_complete'] })
+    await createWebhook({ name: '企微通知', type: 'generic', prompt: '汇总并通知' })
 
     mockApiFetch.mockResolvedValueOnce({ webhooks: [{ id: 'wh-1', name: '企微通知' }], total: 1 })
     const list = await getWebhooks()

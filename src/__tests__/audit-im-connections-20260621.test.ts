@@ -123,25 +123,16 @@ describe('F-1 邮箱 connections/test 字段形状错位（flat 前端 vs nested
     expect(handlerConnections).not.toContain('json:"email"')
   })
 
-  // 重分类（2026-06-22）：真修复 = testConnection 对 email 把 flat(smtp_host/email/password)
-  // 序列化成后端期望的 nested smtp.{host,username,password} 再 POST（前端），或后端兼容 flat。
-  // 但本 RED 断言锚在静态 flat fixture 上、未走 testConnection 输出，改生产源码无法翻转此断言，
-  // 需连测试结构一起重写；标 todo，待邮箱测试连接专项一并处理。
-  it.todo('[需前后端对齐] 邮箱 test 应发 nested smtp.{host,username,password}（当前 flat→100% 失败）', () => {
-    // 模拟后端 json.Unmarshal(frontendEmailConfig, &emailTestConfig{})：
-    // 后端只读 config.smtp.host / config.smtp.username / config.smtp.password。
-    const asBackendSees = frontendEmailConfig as Record<string, unknown>
-    const smtp = (asBackendSees['smtp'] as Record<string, unknown>) ?? {}
-    const host = (smtp['host'] as string) ?? ''
-    const username = (smtp['username'] as string) ?? ''
-    const password = (smtp['password'] as string) ?? ''
-
-    // 后端 ProbeSMTP / testEmailConnection 要求三者非空，否则返回
-    // "SMTP host/username/password 不能为空（host 也无法从邮箱域名推导）"。
-    // 期望「正确行为」=三者非空；实际三者全空 → 这三个断言会 RED，坐实邮箱测试 100% 失败。
-    expect(host, 'backend reads config.smtp.host but frontend sent config.smtp_host').not.toBe('')
-    expect(username, 'backend reads config.smtp.username but frontend sent config.email').not.toBe('')
-    expect(password, 'backend reads config.smtp.password but frontend sent config.password (flat)').not.toBe('')
+  // ✅ 已修复（2026-06-22）：testConnection 对 email 先经 buildEmailTestConfig 把 flat 字段
+  //    （smtp_host/email/password/...）转成后端期望的 nested smtp/imap 再 POST。
+  it('邮箱 test 经 buildEmailTestConfig 产出 nested smtp.{host,username,password}（对齐后端）', async () => {
+    const { buildEmailTestConfig } = await import('@/api/im-channels')
+    const cfg = buildEmailTestConfig(frontendEmailConfig)
+    // 后端 emailTestConfig 只读 config.smtp.host / username / password —— 三者必须非空
+    expect(cfg.smtp.host, 'config.smtp.host 应来自 smtp_host').toBe('smtp.gmail.com')
+    expect(cfg.smtp.username, 'config.smtp.username 应来自账号 email').toBe('alice@gmail.com')
+    expect(cfg.smtp.password, 'config.smtp.password 应来自 password').toBe('app-specific-pw')
+    expect(cfg.smtp.port, 'port 应为数字').toBe(587)
   })
 
   it('字段名也对不上：账号键 frontend=email / backend=username；端口类型 frontend=string / backend=int', () => {

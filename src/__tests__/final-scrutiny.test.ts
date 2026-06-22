@@ -388,7 +388,7 @@ describe('链路: Webhook', () => {
   it('createWebhook + deleteWebhook 编码 id', async () => {
     mockApi.mockResolvedValueOnce({ id: 'wh-1', name: '通知', url: '' })
     const { createWebhook, deleteWebhook } = await import('@/api/webhook')
-    await createWebhook({ name: '通知', type: 'wecom', url: 'https://x.com', events: ['task_complete'] })
+    await createWebhook({ name: '通知', type: 'generic', prompt: '汇总并通知' })
     expect(mockApi).toHaveBeenCalledWith('POST', '/api/v1/webhooks', expect.objectContaining({ name: '通知' }))
 
     mockApi.mockResolvedValueOnce({ message: 'ok' })

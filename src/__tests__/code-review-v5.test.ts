@@ -83,13 +83,13 @@ describe('useAutoUpdate — 并发检查 + 安装保护', () => {
 // ═══════════════════════════════════════════════════
 
 describe('voice.ts — TTS/STT API 完整性', () => {
-  it('textToSpeech 使用 fetch 而非 ofetch（二进制流）', () => {
+  it('textToSpeech 走统一 api client + responseType:blob（二进制流，2026-06-22 改造）', () => {
     const source = readFileSync('src/api/voice.ts', 'utf-8')
     const ttsFn = source.match(/async function textToSpeech[\s\S]*?^}/m)
       || source.match(/export async function textToSpeech[\s\S]*?^}/m)
     expect(ttsFn).toBeTruthy()
-    // 返回 blob，不是 JSON
-    expect(ttsFn![0]).toContain('.blob()')
+    // 不再裸 fetch；走 ofetch api 实例并以 blob 接收音频
+    expect(ttsFn![0]).toContain("responseType: 'blob'")
   })
 
   it('speechToText 正确传递 FormData', () => {

@@ -235,12 +235,12 @@ describe('Issue #4: deleteWebhook uses name parameter, not id', () => {
     expect(webhookTs).toMatch(/interface Webhook[\s\S]*?name:\s*string/)
   })
 
-  it('deleteWebhook function parameter is named "id"', () => {
-    expect(webhookTs).toMatch(/function deleteWebhook\(id:\s*string\)/)
+  it('deleteWebhook function parameter is named "name"（2026-06-22 修复：按 name 删）', () => {
+    expect(webhookTs).toMatch(/function deleteWebhook\(name:\s*string\)/)
   })
 
-  it('deleteWebhook path uses the id parameter', () => {
-    expect(webhookTs).toMatch(/\/api\/v1\/webhooks\/\$\{encodeURIComponent\(id\)\}/)
+  it('deleteWebhook path uses the name parameter', () => {
+    expect(webhookTs).toMatch(/\/api\/v1\/webhooks\/\$\{encodeURIComponent\(name\)\}/)
   })
 
   it('other delete functions use id — agents, team, knowledge, mcp all use id/name consistently', () => {
@@ -678,16 +678,18 @@ describe('api/index.ts barrel export completeness', () => {
 // 15. VOICE.TS: speechToText MANUAL QUERY STRING (SAME PATTERN AS LOGS)
 // ════════════════════════════════════════════════════════════
 
-describe('voice.ts manual URLSearchParams (same inconsistency as logs.ts)', () => {
+describe('voice.ts STT format/language 经 URL query（已对齐后端 r.URL.Query()，消除不一致）', () => {
   const voiceTs = readSrc('api/voice.ts')
 
-  it('speechToText appends language to FormData instead of URLSearchParams', () => {
-    expect(voiceTs).not.toContain('new URLSearchParams()')
-    expect(voiceTs).toContain("form.append('language', language)")
+  it('speechToText 用 URLSearchParams 传 format/language（不再塞 FormData body）', () => {
+    // 修复（V-1/V-2 audit-v2-voice）：后端只从 query 读 format/language，旧实现塞 FormData 永远丢失。
+    expect(voiceTs).toContain('new URLSearchParams()')
+    expect(voiceTs).toContain("params.set('language', language)")
+    expect(voiceTs).not.toContain("form.append('language', language)")
   })
 
-  it('speechToText sends form directly to apiPost without query string in URL', () => {
-    expect(voiceTs).toContain("apiPost<STTResponse>('/api/v1/voice/transcribe', form)")
+  it('speechToText 把 query string 拼进 transcribe URL（query 非空时）', () => {
+    expect(voiceTs).toContain('/api/v1/voice/transcribe?')
   })
 })
 

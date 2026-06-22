@@ -53,10 +53,10 @@ describe('API 客户端架构审计', () => {
     expect(apiClientCount).toBeGreaterThan(0)  // EXPECTED TO FAIL: exposes bug
   })
 
-  it('voice.ts textToSpeech 使用 raw fetch 是合理的（二进制响应）', () => {
+  it('voice.ts textToSpeech 走统一 api client + responseType:blob（2026-06-22 改造）', () => {
     const voiceSrc = readSrc('api/voice.ts')
-    // textToSpeech 需要 blob() 接收音频，使用 raw fetch 是合理的
-    expect(voiceSrc).toContain('res.blob()')
+    // 不再裸 fetch；用 ofetch api 实例以 blob 接收音频
+    expect(voiceSrc).toContain("responseType: 'blob'")
     // 但 speechToText 应使用 apiPost（它返回 JSON）
     expect(voiceSrc).toContain('apiPost<STTResponse>')
   })
@@ -647,8 +647,8 @@ describe('Webhook 链路', () => {
     expect(webhookSrc).toContain('user_id: DESKTOP_USER_ID')
   })
 
-  it('deleteWebhook 应 URL 编码 id', () => {
-    expect(webhookSrc).toContain('encodeURIComponent(id)')
+  it('deleteWebhook 应 URL 编码 name（2026-06-22：按 name 删，对齐后端）', () => {
+    expect(webhookSrc).toContain('encodeURIComponent(name)')
   })
 
   it('getWebhooks 传递 user_id 进行过滤', () => {
@@ -1004,13 +1004,14 @@ describe('Voice 语音链路', () => {
     expect(voiceSrc).toContain('/api/v1/voice/status')
   })
 
-  it('STT 应支持 language 参数', () => {
-    expect(voiceSrc).toContain("form.append('language', language)")
+  it('STT 应支持 language 参数（经 URL query，对齐后端 r.URL.Query()）', () => {
+    // 修复后 language 走 query（旧实现塞 FormData body，后端从不读取 → 语言提示丢失）
+    expect(voiceSrc).toContain("params.set('language', language)")
   })
 
   it('TTS 返回类型为 Blob（音频二进制）', () => {
     expect(voiceSrc).toContain('Promise<Blob>')
-    expect(voiceSrc).toContain('res.blob()')
+    expect(voiceSrc).toContain("responseType: 'blob'")
   })
 })
 

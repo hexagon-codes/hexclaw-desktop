@@ -66,32 +66,8 @@ describe('Issue #1: ToolApprovalCard timer cleanup', () => {
 // 2. CanvasView drag-then-click edge prevention (FIXED)
 // ════════════════════════════════════════════════════════════
 
-describe('Issue #2: CanvasView drag-then-click edge prevention', () => {
-  const src = readSrc('views/CanvasView.vue')
-
-  it('defines stopDrag function', () => {
-    expect(src).toContain('function stopDrag()')
-  })
-
-  it('stopDrag clears selectedNodeId to prevent accidental edge creation', () => {
-    // Extract the stopDrag function body
-    const stopDragStart = src.indexOf('function stopDrag()')
-    const stopDragSection = src.slice(stopDragStart, stopDragStart + 200)
-    expect(stopDragSection).toContain('selectedNodeId.value = null')
-  })
-
-  it('stopDrag only clears selectedNodeId when a drag was in progress', () => {
-    const stopDragStart = src.indexOf('function stopDrag()')
-    const stopDragSection = src.slice(stopDragStart, stopDragStart + 200)
-    expect(stopDragSection).toContain('if (draggingNode.value)')
-  })
-
-  it('stopDrag resets draggingNode', () => {
-    const stopDragStart = src.indexOf('function stopDrag()')
-    const stopDragSection = src.slice(stopDragStart, stopDragStart + 200)
-    expect(stopDragSection).toContain('draggingNode.value = null')
-  })
-})
+// Issue #2 CanvasView：整页已于 2026-06-22 删除（路由双重定向走 + 零引用，被 WorkflowPanel 取代）。
+// 对应 stopDrag 扫描测试随之移除。回归锁见 audit-v2-ui-closure-20260622.test.ts（UI-4）。
 
 // ════════════════════════════════════════════════════════════
 // 3. Canvas store self-loop prevention (FIXED)
@@ -270,35 +246,8 @@ describe('Issue #8 [DOCUMENTED]: ResearchProgress doneLabelKey duplicates labelK
 // 9. SettingsSecurity ARIA attribute (DOCUMENTED)
 // ════════════════════════════════════════════════════════════
 
-describe('Issue #9 [DOCUMENTED]: SettingsSecurity aria-checked may receive non-boolean values', () => {
-  const src = readSrc('components/settings/SettingsSecurity.vue')
-
-  it('all toggle elements have role="switch"', () => {
-    const switchCount = (src.match(/role="switch"/g) || []).length
-    expect(switchCount).toBe(5)
-  })
-
-  it('all toggle elements have aria-checked attribute', () => {
-    const ariaCount = (src.match(/:aria-checked="/g) || []).length
-    expect(ariaCount).toBe(5)
-  })
-
-  it('[SMELL] pii_filter aria-checked is NOT wrapped with !! (may be undefined)', () => {
-    expect(src).toMatch(/:aria-checked="security\.pii_filter"/)
-  })
-
-  it('[SMELL] injection_detection aria-checked is NOT wrapped with !! (may be undefined)', () => {
-    expect(src).toMatch(/:aria-checked="security\.injection_detection"/)
-  })
-
-  it('conversation_encrypt aria-checked IS properly wrapped with !!', () => {
-    expect(src).toContain(':aria-checked="!!security.conversation_encrypt"')
-  })
-
-  it('key_rotation aria-checked IS properly wrapped with !!', () => {
-    expect(src).toContain(':aria-checked="!!security.key_rotation"')
-  })
-})
+// Issue #9 SettingsSecurity：组件已于 2026-06-22 作为孤儿死代码删除（10 toggle UI 不可达）。
+// 对应 aria 扫描测试随之移除。回归锁见 audit-v2-ui-closure-20260622.test.ts（UI-1/2）。
 
 // ════════════════════════════════════════════════════════════
 // 10. ChatExportMenu filename sanitization (DOCUMENTED)
@@ -406,27 +355,28 @@ describe('Issue #12 [DOCUMENTED]: TemplatePopup .catch() on synchronous function
 // 13. MentionPopup hardcoded limit (DOCUMENTED)
 // ════════════════════════════════════════════════════════════
 
-describe('Issue #13 [DOCUMENTED]: MentionPopup hardcoded .slice(0, 8) with no overflow indicator', () => {
+describe('MentionPopup 分栏多实体上下文召唤（2026-06-22 升级）', () => {
   const src = readSrc('components/chat/MentionPopup.vue')
 
-  it('filteredItems uses .slice(0, 8) to limit results', () => {
-    expect(src).toContain('.slice(0, 8)')
+  it('支持 Agent + 知识 + 连接 + 会话 四类实体', () => {
+    expect(src).toContain("'agent'")
+    expect(src).toContain("'knowledge'")
+    expect(src).toContain("'connection'")
+    expect(src).toContain("'session'")
   })
 
-  it('[SMELL] template has no overflow indicator when results exceed 8', () => {
-    const templateStart = src.indexOf('<template>')
-    const templateEnd = src.indexOf('</template>')
-    const template = src.slice(templateStart, templateEnd)
-    // No "more items" or "..." indicator exists in the template
-    expect(template).not.toContain('more')
-    expect(template).not.toMatch(/\+\s*\d+/)
-    expect(template).not.toContain('overflow')
+  it('采用分栏 tab（全部/各实体）而非单一扁平列表', () => {
+    expect(src).toContain('activeTab')
+    expect(src).toContain('hc-mention__tabs')
   })
 
-  it('items array combines agents and skills without deduplication', () => {
-    const computedBlock = src.slice(src.indexOf('const filteredItems = computed'), src.indexOf('.slice(0, 8)'))
-    expect(computedBlock).toContain("type: 'agent'")
-    expect(computedBlock).toContain("type: 'skill'")
+  it('按分类做条数限制（每类上限，避免单类刷屏）', () => {
+    expect(src).toMatch(/\.slice\(0,\s*\d+\)/)
+  })
+
+  it('不含 member 实体类型（单用户本地工作站定位，无多用户协作）', () => {
+    expect(src).not.toContain("'member'")
+    expect(src).not.toMatch(/type:\s*'member'/)
   })
 })
 

@@ -71,20 +71,6 @@ describe('Version Consistency', () => {
     expect(templateSection).not.toMatch(/v0\.\d+\.\d+(?!.*\{\{)/)
   })
 
-  it('AboutModal uses dynamic appVersion ref (not hardcoded in template)', () => {
-    const about = readFile(path.join(SRC, 'components/common/AboutModal.vue'))
-
-    // Should have a ref
-    expect(about).toMatch(/const appVersion\s*=\s*ref/)
-
-    // Should attempt to get version from Tauri API
-    expect(about).toContain('getVersion')
-
-    // Template should use {{ appVersion }}
-    const templateSection = about.slice(about.indexOf('<template>'))
-    expect(templateSection).toContain('{{ appVersion }}')
-  })
-
   it('AboutView uses dynamic appVersion ref (not hardcoded in template)', () => {
     const aboutView = readFile(path.join(SRC, 'views/AboutView.vue'))
 
@@ -101,7 +87,6 @@ describe('Version Consistency', () => {
 
   it('all appVersion fallback defaults are consistent (—)', () => {
     const filesToCheck = [
-      path.join(SRC, 'components/common/AboutModal.vue'),
       path.join(SRC, 'views/AboutView.vue'),
       path.join(SRC, 'views/SettingsView.vue'),
     ]

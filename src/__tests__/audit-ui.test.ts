@@ -194,11 +194,15 @@ vi.mock('@tauri-apps/plugin-store', () => {
 })
 
 vi.mock('markdown-it', () => ({
-  default: vi.fn().mockImplementation(() => ({
-    render: (s: string) => `<p>${s}</p>`,
-    renderer: { rules: { fence: null } },
-    utils: { escapeHtml: (s: string) => s },
-  })),
+  // 普通函数（非箭头）：markdown-it 既支持 `MarkdownIt()` 也支持 `new MarkdownIt()`。
+  // renderPromptPreview 用 `new MarkdownIt()`，箭头函数不可构造会抛错。
+  default: function MarkdownIt() {
+    return {
+      render: (s: string) => `<p>${s}</p>`,
+      renderer: { rules: { fence: null } },
+      utils: { escapeHtml: (s: string) => s },
+    }
+  },
 }))
 
 vi.mock('@/utils/file-parser', () => ({

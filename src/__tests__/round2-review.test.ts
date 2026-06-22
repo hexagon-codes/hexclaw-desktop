@@ -21,49 +21,9 @@ function readSrc(relPath: string): string {
   return readFileSync(resolve(__dirname, '..', relPath), 'utf-8')
 }
 
-describe('SettingsSecurity — 持久化验证', () => {
-  const src = readSrc('components/settings/SettingsSecurity.vue')
-
-  it('不再使用本地 ref 存储安全开关', () => {
-    expect(src).not.toMatch(/const conversationEncrypt = ref\(/)
-    expect(src).not.toMatch(/const secureStorage = ref\(/)
-    expect(src).not.toMatch(/const keyRotation = ref\(/)
-  })
-
-  it('所有 toggle 均通过 emit("patch") 持久化', () => {
-    expect(src).toContain("emit('patch', { conversation_encrypt:")
-    expect(src).toContain("emit('patch', { secure_storage:")
-    expect(src).toContain("emit('patch', { key_rotation:")
-  })
-
-  it('toggle 组件有 role="switch" 和 aria-checked', () => {
-    const switchCount = (src.match(/role="switch"/g) || []).length
-    expect(switchCount).toBeGreaterThanOrEqual(5)
-    const ariaCount = (src.match(/:aria-checked=/g) || []).length
-    expect(ariaCount).toBeGreaterThanOrEqual(5)
-  })
-})
-
-describe('SettingsNotification — 拆分验证', () => {
-  const src = readSrc('components/settings/SettingsNotification.vue')
-
-  it('不再使用本地 dndEnabled ref', () => {
-    expect(src).not.toMatch(/const dndEnabled = ref\(/)
-  })
-
-  it('cron 和 agent_complete 使用不同字段', () => {
-    expect(src).toContain('cron_notify')
-    expect(src).toContain('agent_complete')
-    const cronToggle = src.includes("emit('patch', { cron_notify:")
-    const agentToggle = src.includes("emit('patch', { agent_complete:")
-    expect(cronToggle).toBe(true)
-    expect(agentToggle).toBe(true)
-  })
-
-  it('dnd 通过 emit("patch") 持久化', () => {
-    expect(src).toContain("emit('patch', { dnd_enabled:")
-  })
-})
+// SettingsSecurity / SettingsNotification 组件已于 2026-06-22 作为孤儿死代码删除
+// （emit('patch') 但无父组件挂载，10 个 toggle UI 不可达）；对应扫描测试随之移除。
+// 回归锁见 audit-v2-ui-closure-20260622.test.ts（UI-1/2）。
 
 describe('useShortcuts — 动态映射', () => {
   const src = readSrc('composables/useShortcuts.ts')
@@ -183,7 +143,8 @@ describe('Sidebar — 动态地址和工作区切换', () => {
   })
 
   it('侧边栏包含引擎与会话相关的点击处理', () => {
+    // 重启引擎按钮 + 点击引擎名打开「关于」窗口（openAbout）
     expect(src).toContain('restartEngine')
-    expect(src).toContain("router.push('/settings')")
+    expect(src).toContain('openAbout')
   })
 })

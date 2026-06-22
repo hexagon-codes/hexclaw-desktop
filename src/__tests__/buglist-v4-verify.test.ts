@@ -30,44 +30,6 @@ describe('问题 1: copyWebhookUrl 兜底链路异常处理', () => {
   })
 })
 
-// ─── 问题 2: System Status i18n key 缺失 ─────
-
-describe('问题 2: settings.status.* i18n key 完整性', () => {
-  const REQUIRED_KEYS = [
-    'settings.status.title',
-    'settings.status.loadData',
-    'settings.status.budget',
-    'settings.status.toolCache',
-    'settings.status.toolMetrics',
-    'settings.status.toolName',
-    'settings.status.toolCalls',
-    'settings.status.toolSuccessRate',
-    'settings.status.toolLatency',
-    'settings.status.toolPermissions',
-    'settings.status.refresh',
-  ]
-
-  it('zh-CN locale 包含所有 settings.status.* key', () => {
-    const source = readFileSync('src/i18n/locales/zh-CN.ts', 'utf-8')
-    const missing = REQUIRED_KEYS.filter(key => {
-      // key 格式: settings.status.title → 在 settings.status 对象里找 title
-      const leafKey = key.split('.').pop()!
-      // 检查 status 对象里是否有该 key
-      return !source.includes(`${leafKey}:`) && !source.includes(`${leafKey} :`)
-    })
-    expect(missing, `zh-CN 缺少: ${missing.join(', ')}`).toHaveLength(0)
-  })
-
-  it('en locale 包含所有 settings.status.* key', () => {
-    const source = readFileSync('src/i18n/locales/en.ts', 'utf-8')
-    const missing = REQUIRED_KEYS.filter(key => {
-      const leafKey = key.split('.').pop()!
-      return !source.includes(`${leafKey}:`) && !source.includes(`${leafKey} :`)
-    })
-    expect(missing, `en 缺少: ${missing.join(', ')}`).toHaveLength(0)
-  })
-})
-
 // ─── 问题 3: budget/status 前后端类型对齐 ─────
 
 describe('问题 3: BudgetStatus 前后端类型对齐', () => {

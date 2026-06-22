@@ -48,36 +48,24 @@ beforeEach(() => {
 //   - handler_webhook.go:57 强制 `req.Prompt == "" → 400 "name 和 prompt 不能为空"`
 // WebhookPanel.vue:97-114 onCreateWebhook 永远传 prompt:''（form 里根本没有 prompt 输入框，
 //   见模板 154-180 只有 name/type/url/events）→ 后端永远 400 → 桌面端「创建 Webhook」必败。
-describe('C-1 createWebhook 契约：前端发的字段后端不收 + prompt 恒空必触发后端 400', () => {
-  // 重分类（2026-06-22）：后端 handler_webhook.go:57 要求 prompt 非空，但 WebhookPanel 表单根本
-  // 没有 prompt 输入框、createWebhook 恒发 prompt=''。真修复 = 加 prompt 输入(UI 功能) + 后端对齐，
-  // 属产品/UI 决策，非纯前端 bug 修复，标 todo。
-  it.todo('[需 UI 功能] createWebhook 应携带非空 prompt — Webhook 表单需补 prompt 输入框', async () => {
+describe('C-1 createWebhook 契约已对齐：prompt 非空 + 不发 url/events + type 后端可识别（已修 2026-06-22 R3）', () => {
+  // 修复（2026-06-22 R3，AUD-2/AUD-3）：WebhookPanel 补 prompt 输入框、type 对齐
+  // generic/github/gitlab、createWebhook 改签名 {name,type,prompt,secret}、列表展示真实 URL。
+  it('createWebhook 携带用户填写的非空 prompt（后端 handler_webhook.go:57 必填）', async () => {
     calls.post.mockResolvedValue({ id: 'w1', name: 'test', url: '/api/v1/webhooks/test' })
-    await createWebhook({ name: 'test', type: 'custom', url: 'https://example.com', events: ['error'] })
-
+    await createWebhook({ name: 'test', type: 'github', prompt: '汇总事件并通知我' })
     const [, body] = calls.post.mock.calls[0] as [string, Record<string, unknown>]
-
-    // 后端 prompt 必填(handler_webhook.go:57)，但前端恒传空串 → 必触发 400。
-    // 断言「期望的正确行为」：前端应当带上非空 prompt。当前实现做不到 → RED。
-    expect(
-      body.prompt,
-      '后端 handler_webhook.go:57 要求 prompt 非空，但前端 createWebhook 恒发 prompt=""，桌面端建 Webhook 必败',
-    ).not.toBe('')
+    expect(body.prompt, '后端要求 prompt 非空').not.toBe('')
   })
 
-  it('前端发 url/events 是后端结构里不存在的字段（说明 UI 收集的信息后端整套丢弃）', async () => {
+  it('createWebhook 不再发后端不存在的 url/events，且 type 后端可识别', async () => {
     calls.post.mockResolvedValue({ id: 'w1' })
-    await createWebhook({ name: 'test', type: 'custom', url: 'https://example.com', events: ['error', 'task_complete'] })
+    await createWebhook({ name: 'test', type: 'generic', prompt: 'p' })
     const [, body] = calls.post.mock.calls[0] as [string, Record<string, unknown>]
-
-    // 后端 RegisterWebhookRequest 无 url / events 字段 → 这俩被 json.Decode 静默忽略。
-    // 这两条断言记录「前端确实在发后端不认的字段」（契约错位证据，非行为断言）。
-    expect(body).toHaveProperty('url') // 后端无此字段
-    expect(body).toHaveProperty('events') // 后端无此字段
-    // type 也是错位：FE WebhookType = wecom|feishu|dingtalk|custom；
-    // BE webhook.WebhookType 只认 generic|github|gitlab（webhook.go:39-43）。
-    expect(['generic', 'github', 'gitlab']).not.toContain(body.type)
+    expect(body).not.toHaveProperty('url')
+    expect(body).not.toHaveProperty('events')
+    // 已修：FE WebhookType 已对齐 BE generic|github|gitlab（webhook.go:40-42）。
+    expect(['generic', 'github', 'gitlab']).toContain(body.type)
   })
 })
 
@@ -91,23 +79,15 @@ describe('C-1 createWebhook 契约：前端发的字段后端不收 + prompt 恒
 // webhook.go:163-170 Unregister: `DELETE FROM webhooks WHERE name = ?` + delete(m.webhooks, name)
 // 而 webhook.go:47/135 ID = "wh-"+ShortID() ≠ Name → 用 id 当 name 删 → WHERE name='wh-xxx' 命中 0 行
 //   → 后端返 200 "已删除" 但实际什么都没删（前端列表 reload 后该 webhook 仍在）。
-describe('C-2 deleteWebhook 用 id 而后端按 name 删 → 删不掉（静默 no-op）', () => {
-  // 重分类（2026-06-22）：真修复 = WebhookPanel 调用点改 deleteWebhook(webhook.name)（后端按 name 删）。
-  // 但本测试直接以 id 调 deleteWebhook 却断言 URL 含 name，结构上需连调用点+测试一起改；
-  // 待 Webhook 删除链路专项一并处理，标 todo。
-  it.todo('[调用点+测试] deleteWebhook 应按 name 删（WebhookPanel 当前传 id → 静默 no-op）', async () => {
+describe('C-2 deleteWebhook 按 name 删（已修复 2026-06-22，回归锁）', () => {
+  // ✅ 已修复：WebhookPanel.vue onDeleteWebhook 改调 deleteWebhook(webhook.name)，
+  //    webhook.ts deleteWebhook 参数语义改为 name → 命中后端 DELETE /webhooks/{name}。
+  it('deleteWebhook(name) 命中后端按 name 寻址的删除路由', async () => {
     calls.del.mockResolvedValue({ message: 'deleted' })
-    const webhookId = 'wh-abc123'
     const webhookName = 'my-hook'
-    await deleteWebhook(webhookId)
+    await deleteWebhook(webhookName)
     const [url] = calls.del.mock.calls[0] as [string]
-
-    // 正确行为：删除应按后端真正的删除键（name）定位。
-    // 当前传的是 id，后端 webhook.go:164 `WHERE name=?` 用 id 当 name 匹配 0 行 → 删不掉。
-    expect(
-      url.includes(encodeURIComponent(webhookName)),
-      '后端按 name 删(webhook.go:164)，前端却把 id 放进 {name} 路径段 → 静默删除失败',
-    ).toBe(true)
+    expect(url).toBe(`/api/v1/webhooks/${encodeURIComponent(webhookName)}`)
   })
 })
 

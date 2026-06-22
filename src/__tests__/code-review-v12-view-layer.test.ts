@@ -13,7 +13,7 @@
  *
  * DOCUMENTED issues (assert current state):
  *   6. TeamView hardcoded Chinese strings in template
- *   7. TasksView missing error toast (console.error only) in handleDelete/handlePauseResume
+ *   7. TasksView missing error toast — RESOLVED 2026-06-22 (handleDelete/handlePauseResume now surface toast.error)
  *   8. ChatView single-file drop — handleDrop uses files?.[0]
  *   9. im-channels.ts createIMInstance ghost instance risk — syncBackendInstance before writeInstances
  */
@@ -160,35 +160,37 @@ describe('Issue 5: deleteIMInstance wraps deleteBackendInstance in try/catch', (
 // Issue 7 (DOCUMENTED): TasksView missing error toast
 // ════════════════════════════════════════════════════════════
 
-describe('Issue 7: TasksView handleDelete/handlePauseResume use console.error, not toast', () => {
+// Issue 7 已修复（2026-06-22）：原仅 console.error 静默，现失败 surface 到 toast.error。
+// 详见 audit-silent-failure-closure-20260622.test.ts（SF-8/SF-9）。
+describe('Issue 7 (RESOLVED): TasksView handleDelete/handlePauseResume 失败已 surface 到 toast', () => {
   const src = readSrc('views/TasksView.vue')
 
-  it('handleDelete error handler uses console.error', () => {
+  it('handleDelete error handler 仍保留 console.error 开发日志', () => {
     const fnStart = src.indexOf('async function handleDelete')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
     expect(fnBody).toContain('console.error')
   })
 
-  it('handleDelete does NOT use toast.error', () => {
+  it('handleDelete 失败现 surface 到 toast.error（Issue 7 已修）', () => {
     const fnStart = src.indexOf('async function handleDelete')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
-    expect(fnBody).not.toContain('toast.error')
+    expect(fnBody).toContain('toast.error')
   })
 
-  it('handlePauseResume error handler uses console.error', () => {
+  it('handlePauseResume error handler 仍保留 console.error 开发日志', () => {
     const fnStart = src.indexOf('async function handlePauseResume')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
     expect(fnBody).toContain('console.error')
   })
 
-  it('handlePauseResume does NOT use toast.error', () => {
+  it('handlePauseResume 失败现 surface 到 toast.error（Issue 7 已修）', () => {
     const fnStart = src.indexOf('async function handlePauseResume')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
-    expect(fnBody).not.toContain('toast.error')
+    expect(fnBody).toContain('toast.error')
   })
 })
 
