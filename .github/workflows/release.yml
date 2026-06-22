@@ -223,7 +223,8 @@ jobs:
         shell: bash
         run: |
           args="${{ matrix.tauri_args }}"
-          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" && "${{ needs.validate.outputs.prerelease }}" == "true" ]]; then
+          # Windows 仅打 NSIS 安装器（.exe），跳过 WiX/MSI：light.exe 打包大体积 ollama 资源失败
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
             args="$args --bundles nsis"
           fi
           echo "args=$args" >> "$GITHUB_OUTPUT"
@@ -256,7 +257,6 @@ jobs:
             ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/appimage/*.AppImage' || '' }}
             ${{ matrix.target == 'x86_64-unknown-linux-gnu' && 'src-tauri/target/release/bundle/deb/*.deb' || '' }}
             ${{ matrix.target == 'x86_64-pc-windows-msvc' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe' || '' }}
-            ${{ matrix.target == 'x86_64-pc-windows-msvc' && needs.validate.outputs.prerelease != 'true' && 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi' || '' }}
 
   update-tap:
     name: Update Homebrew Tap
