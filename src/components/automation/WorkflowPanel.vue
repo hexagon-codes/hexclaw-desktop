@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Workflow as WorkflowIcon, Brain, Wrench, GitBranch, Send, Zap, Pencil, Trash2, ArrowUp, ArrowDown, Play, Save, X, Loader2, CheckCircle2, XCircle } from 'lucide-vue-next'
+import { Plus, Workflow as WorkflowIcon, Brain, Wrench, GitBranch, Send, Zap, Pencil, Trash2, ArrowUp, ArrowDown, Play, Save, X, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-vue-next'
 import { useCanvasStore } from '@/stores/canvas'
 import { useToast } from '@/composables'
 import type { CanvasNode } from '@/types'
@@ -188,12 +188,26 @@ async function onRun() {
   rebuildLinearEdges()
   await store.saveWorkflow(currentName.value.trim() || t('workflow.defaultName', '新工作流'))
   await store.runWorkflow()
-  if (store.runStatus === 'failed') {
+  if (store.runStatus === 'unavailable') {
+    toast.info(t('workflow.runUnavailable', '工作流引擎未启用，无法试运行'))
+  } else if (store.runStatus === 'failed') {
     toast.error(t('workflow.runFailed', '试运行失败'))
   } else if (store.runStatus === 'completed') {
     toast.success(t('workflow.runDone', '试运行完成'))
   }
 }
+
+/** 运行结果面板头部图标/文案（区分 完成 / 失败 / 引擎未启用）。 */
+const runHeadIcon = computed(() =>
+  store.runStatus === 'failed' ? XCircle
+  : store.runStatus === 'unavailable' ? AlertTriangle
+  : CheckCircle2,
+)
+const runHeadLabel = computed(() =>
+  store.runStatus === 'failed' ? t('workflow.runResultFailed', '运行失败')
+  : store.runStatus === 'unavailable' ? t('workflow.runResultUnavailable', '引擎未启用')
+  : t('workflow.runResultOk', '运行完成'),
+)
 
 defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
 </script>
@@ -294,8 +308,8 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
       <!-- 运行结果面板 -->
       <div v-if="store.runResult" class="wfp-run" :class="`wfp-run--${store.runStatus}`">
         <div class="wfp-run__head">
-          <component :is="store.runStatus === 'failed' ? XCircle : CheckCircle2" :size="14" />
-          {{ store.runStatus === 'failed' ? t('workflow.runResultFailed', '运行失败') : t('workflow.runResultOk', '运行完成') }}
+          <component :is="runHeadIcon" :size="14" />
+          {{ runHeadLabel }}
         </div>
         <pre class="wfp-run__out">{{ store.runOutput || t('workflow.noOutput', '（无输出）') }}</pre>
       </div>
@@ -427,8 +441,11 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
 /* 运行结果 */
 .wfp-run { max-width: 600px; margin-top: 18px; border-radius: 12px; border: 1px solid var(--hc-border); background: var(--hc-bg-card); overflow: hidden; }
 .wfp-run--failed { border-color: var(--hc-amber, #ef4444); }
+/* 引擎未启用 = 中性提示（非失败红），用 muted 文案告知功能不可用 */
+.wfp-run--unavailable { border-color: var(--hc-border); }
 .wfp-run__head { display: flex; align-items: center; gap: 7px; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--hc-text-primary); border-bottom: 1px solid var(--hc-border); }
 .wfp-run--failed .wfp-run__head { color: var(--hc-amber, #ef4444); }
+.wfp-run--unavailable .wfp-run__head { color: var(--hc-text-muted); }
 .wfp-run__out { margin: 0; padding: 12px 14px; font-size: 12.5px; line-height: 1.55; color: var(--hc-text-secondary); white-space: pre-wrap; word-break: break-word; max-height: 240px; overflow: auto; font-family: inherit; }
 
 .wfp-note { font-size: 12px; color: var(--hc-text-muted); margin-top: 22px; max-width: 600px; line-height: 1.6; }

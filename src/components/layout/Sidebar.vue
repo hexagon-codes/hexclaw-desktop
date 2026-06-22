@@ -1,28 +1,39 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
 import { useAppStore } from '@/stores/app'
+import { useAboutWindow } from '@/composables/useAboutWindow'
 import { getGroupedNavItems, isNavActive, NAV_GROUP_LABELS, type NavGroup } from '@/config/navigation'
 import { env } from '@/config/env'
 import logoUrl from '@/assets/logo.png'
 
 const { t, locale } = useI18n()
 const route = useRoute()
-const router = useRouter()
 const appStore = useAppStore()
+const openAbout = useAboutWindow()
 
 const engineVersion = ref('')
+
+/**
+ * 「Hexagon engine」版本号 = **hexagon 框架**版本（API 的 engine_version 字段 = hexagon.Version）。
+ * 注意：不是 hexclaw sidecar 自身的 version 字段——标签讲的是 Hexagon 引擎框架。
+ * 发布构建里 hexagon.Version 由 build info 的 hexagon 依赖版本解析（hexclaw go.mod pin v0.5.2 → "0.5.2"）；
+ * go.work 开发构建拿到 "(devel)" 占位，此处忽略，宁可不显示版本也不谎报 hexclaw 版本。
+ */
+function pickEngineVersion(info?: { engine_version?: string }): string {
+  const v = info?.engine_version?.trim()
+  if (v && v !== '(devel)' && v !== 'unknown') return v.startsWith('v') ? v : `v${v}`
+  return ''
+}
 
 function fetchEngineVersion() {
   import('@/api/system').then(({ getVersion }) =>
     getVersion().then((info) => {
-      if (info?.engine_version) {
-        const v = info.engine_version
-        engineVersion.value = v.startsWith('v') ? v : `v${v}`
-      }
+      const v = pickEngineVersion(info)
+      if (v) engineVersion.value = v
     }),
   ).catch(() => {})
 }
@@ -109,7 +120,12 @@ function getGroupItems(group: NavGroup) {
       <div class="hc-sidebar__engine-row" :title="env.apiBase">
         <span class="hc-sidebar__dot" :class="dotClass" />
         <template v-if="!collapsed">
-          <span class="hc-sidebar__engine-label" role="button" @click="router.push('/settings')">
+          <span
+            class="hc-sidebar__engine-label"
+            role="button"
+            :title="t('about.open', '关于河蟹')"
+            @click="openAbout"
+          >
             {{ engineLabel }}
           </span>
           <button

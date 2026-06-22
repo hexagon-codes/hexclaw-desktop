@@ -13,6 +13,7 @@ import {
   testIMInstance,
   testSavedIMInstanceRuntime,
   testConnection,
+  buildEmailTestConfig,
   getChannelMeta,
   getChannelHelpText,
   getPlatformHookUrl,
@@ -41,6 +42,9 @@ const emit = defineEmits<{
 const { t, locale } = useI18n()
 
 const mode = computed<'create' | 'edit'>(() => (props.instance ? 'edit' : 'create'))
+
+// 新建弹窗平台选择：暂不开放 Telegram（telegram 仍是合法类型、不影响已存在实例与路由，仅不在新建入口提供）。
+const creatableChannelTypes = computed(() => CHANNEL_TYPES.filter((c) => c.type !== 'telegram'))
 
 const step = ref<1 | 2>(1)
 const formType = ref<IMChannelType>('feishu')
@@ -170,7 +174,9 @@ async function handleTest() {
   }
   try {
     if (formType.value === 'email') {
-      const res = await testConnection({ type: formType.value, config: formConfig.value })
+      // 邮箱走连接中心统一测试端点；扁平表单字段转 nested smtp/imap（后端读 config.smtp.*）。
+      // 不转换会让后端 emailTestConfig 全空 → 邮箱测试 100% 失败（与 IMChannelsView 同款修法）。
+      const res = await testConnection({ type: formType.value, config: buildEmailTestConfig(formConfig.value) })
       testResult.value = {
         success: res.ok,
         message:
@@ -262,7 +268,7 @@ async function handleSave() {
             <p class="hc-im-modal__subtitle">{{ t('imChannels.selectPlatform') }}</p>
             <div class="hc-im-type-grid">
               <button
-                v-for="ch in CHANNEL_TYPES"
+                v-for="ch in creatableChannelTypes"
                 :key="ch.type"
                 class="hc-im-type-card"
                 @click="selectType(ch.type)"

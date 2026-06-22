@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { FileText, FileJson, X } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
 
@@ -7,11 +8,25 @@ const { t } = useI18n()
 const props = defineProps<{
   messages: { id: string; role: string; content: string; timestamp: string; agent_name?: string }[]
   sessionTitle?: string
+  /** 开关按钮元素：排除它，避免「开关按钮重开」死循环（mousedown 关→click 又切回开）。 */
+  triggerEl?: HTMLElement | null
 }>()
 
 const emit = defineEmits<{
   close: []
 }>()
+
+// 点击菜单外的空白区域 → 关闭（与 HcSelect/SplitButton 等下拉一致）。捕获阶段拦
+// mousedown；排除菜单本体 + 开关按钮（后者是 toggle，否则点它会关后又被 click 重开）。
+const rootEl = ref<HTMLElement>()
+function onClickOutside(e: MouseEvent) {
+  const target = e.target as Node
+  if (rootEl.value?.contains(target)) return
+  if (props.triggerEl?.contains(target)) return
+  emit('close')
+}
+onMounted(() => document.addEventListener('mousedown', onClickOutside, true))
+onBeforeUnmount(() => document.removeEventListener('mousedown', onClickOutside, true))
 
 function exportMarkdown() {
   const title = props.sessionTitle || t('chat.title')
@@ -55,7 +70,7 @@ function download(content: string, filename: string, type: string) {
 </script>
 
 <template>
-  <div class="hc-export-menu">
+  <div ref="rootEl" class="hc-export-menu">
     <div class="hc-export-menu__header">
       <span class="hc-export-menu__title">{{ t('common.download') }}</span>
       <button class="hc-export-menu__close" @click="emit('close')">

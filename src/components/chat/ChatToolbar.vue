@@ -15,6 +15,7 @@ const activeTab = defineModel<'chat' | 'artifacts' | 'history'>('activeTab', { r
 const showSessions = defineModel<boolean>('showSessions', { required: true })
 
 const showExport = ref(false)
+const exportBtn = ref<HTMLButtonElement>()
 
 const emit = defineEmits<{
   search: []
@@ -48,10 +49,10 @@ defineProps<{
       <button v-if="messageCount > 0" class="hc-chat__toolbar-btn" :title="t('common.search') + ' (⌘F)'" @click="emit('search')">
         <Search :size="14" />
       </button>
-      <button v-if="messageCount > 0" class="hc-chat__toolbar-btn" :title="t('common.download')" @click="showExport = !showExport">
+      <button v-if="messageCount > 0" ref="exportBtn" class="hc-chat__toolbar-btn" :title="t('common.download')" @click="showExport = !showExport">
         <Download :size="14" />
       </button>
-      <ChatExportMenu v-if="showExport" :messages="chatStore.messages" @close="showExport = false" />
+      <ChatExportMenu v-if="showExport" :messages="chatStore.messages" :trigger-el="exportBtn" @close="showExport = false" />
 
       <button class="hc-chat__toolbar-btn" :class="{ 'hc-chat__toolbar-btn--active': chatStore.showArtifacts }" :title="t('chat.artifacts')" @click="chatStore.showArtifacts = !chatStore.showArtifacts">
         <PanelRightOpen :size="14" />

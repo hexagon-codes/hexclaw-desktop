@@ -9,6 +9,7 @@ import { ref, computed, onBeforeUnmount } from 'vue'
 import { Mic, Loader2, Send, MessageCircle } from 'lucide-vue-next'
 import { voiceChat, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
 import { logger } from '@/utils/logger'
+import { audioBlobToWavBase64 } from '@/utils/audio-wav'
 import HcSelect from '@/components/common/HcSelect.vue'
 
 const props = defineProps<{
@@ -108,13 +109,19 @@ function cancelRecording() {
 async function sendAudio(blob: Blob) {
   sending.value = true
   try {
-    const b64 = await blobToBase64(blob)
-    // gpt-4o-audio 接受 wav/mp3，webm 需先转 — 但 b64 直传 OpenAI 实际能识别 opus，
-    // 出问题再加客户端解码。
+    // AUD-4：gpt-4o-audio 的 input_audio 只收 wav/mp3，而 MediaRecorder 产出 webm/opus。
+    // 先在前端解码转码为 WAV，使下面的 format:'wav' 与真实字节一致；转码不可用时回退原始字节。
+    let audioB64: string
+    try {
+      audioB64 = await audioBlobToWavBase64(blob)
+    } catch (convErr) {
+      logger.warn('[VoiceChatComposer] WAV 转码不可用，回退原始音频直传', convErr)
+      audioB64 = await blobToBase64(blob)
+    }
     const result = await voiceChat({
       model: props.modelId,
-      audio: b64,
-      format: 'wav', // 告诉模型期望输出 wav
+      audio: audioB64,
+      format: 'wav', // 输入已转码为 WAV + 期望输出 wav
       voice: voice.value,
     })
     const userPrompt = result.user_text || '[语音输入]'

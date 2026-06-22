@@ -23,8 +23,10 @@ const OLLAMA_MODEL_CATALOG: ModelEntry[] = [
   { name: 'llama3.2:1b', ram: 1 }, { name: 'llama3.2:3b', ram: 2 }, { name: 'llama3.3', ram: 43 }, { name: 'llama3.3:70b', ram: 43 },
   // Phi 4（微软）
   { name: 'phi4-mini', ram: 3 }, { name: 'phi4', ram: 9 }, { name: 'phi4-reasoning', ram: 9 },
-  // Mistral / Devstral
-  { name: 'devstral', ram: 15 }, { name: 'mistral', ram: 5 }, { name: 'mistral-nemo', ram: 8 }, { name: 'mistral-small', ram: 14 },
+  // GLM（智谱）：glm4 9B 本地可跑；最新旗舰 glm-5.x/4.7 在 Ollama 为云端模型，无本地权重
+  { name: 'glm4:9b', ram: 6 },
+  // Mistral
+  { name: 'mistral', ram: 5 }, { name: 'mistral-nemo', ram: 8 }, { name: 'mistral-small', ram: 14 },
   // 其他
   { name: 'command-r', ram: 21 }, { name: 'command-r-plus', ram: 63 }, { name: 'smollm2', ram: 1 }, { name: 'starcoder2', ram: 2 },
   // Embedding
@@ -48,7 +50,7 @@ const OLLAMA_FEATURED = [
   'qwen3.5:27b',       // 17GB — 质量天花板，32GB 舒适
   'gemma4:31b',        // 12GB — Google Dense 旗舰
   'deepseek-r1:32b',   // 20GB — 32GB 内存推理最优
-  'devstral',           // 15GB — Mistral 编码专项，SWE-bench 68%
+  'glm4:9b',           // 6GB — 智谱 GLM-4 9B，大众电脑可跑
   'qwen3-coder:8b',    // 5GB — 阿里编码专项，16GB 轻松跑
 ]
 

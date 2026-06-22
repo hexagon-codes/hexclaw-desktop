@@ -2,10 +2,11 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { Trash2, Globe, Webhook as WebhookIcon, PowerOff, X } from 'lucide-vue-next'
-import { getWebhooks, createWebhook, deleteWebhook } from '@/api/webhook'
-import type { Webhook, WebhookType, WebhookEvent } from '@/api/webhook'
+import { Trash2, Globe, Webhook as WebhookIcon, PowerOff, X, Copy } from 'lucide-vue-next'
+import { getWebhooks, createWebhook, deleteWebhook, webhookUrlFor } from '@/api/webhook'
+import type { Webhook, WebhookType } from '@/api/webhook'
 import { useToast } from '@/composables/useToast'
+import { setClipboard } from '@/api/desktop'
 import HcSelect from '@/components/common/HcSelect.vue'
 
 const { t } = useI18n()
@@ -21,16 +22,16 @@ const loadError = ref('')
 const featureDisabled = ref(false)
 let loadRequestGen = 0
 
-// Create form
+// Create form —— 对齐后端 RegisterWebhookRequest{name,type,prompt,secret}
 const form = ref({
   name: '',
-  type: 'custom' as WebhookType,
-  url: '',
-  events: ['task_complete'] as WebhookEvent[],
+  type: 'generic' as WebhookType,
+  prompt: '',
+  secret: '',
 })
 
 function resetCreateForm() {
-  form.value = { name: '', type: 'custom', url: '', events: ['task_complete'] }
+  form.value = { name: '', type: 'generic', prompt: '', secret: '' }
 }
 
 function openCreateForm() {
@@ -43,11 +44,11 @@ function closeCreateForm() {
   resetCreateForm()
 }
 
+// 类型与后端 webhook.go 一致：generic / github / gitlab（入站事件 webhook）
 const webhookTypes: { key: WebhookType; label: string }[] = [
-  { key: 'custom', label: 'Custom HTTP' },
-  { key: 'feishu', label: 'Feishu' },
-  { key: 'dingtalk', label: 'DingTalk' },
-  { key: 'wecom', label: 'WeCom' },
+  { key: 'generic', label: 'Generic JSON' },
+  { key: 'github', label: 'GitHub' },
+  { key: 'gitlab', label: 'GitLab' },
 ]
 
 // HcSelect 选项投影（value 一律 string，与 WebhookType 字面量一致）
@@ -62,11 +63,15 @@ const formType = computed<string>({
   },
 })
 
-const eventTypes: { key: WebhookEvent; labelKey: string }[] = [
-  { key: 'task_complete', labelKey: 'webhooks.eventTaskComplete' },
-  { key: 'agent_complete', labelKey: 'webhooks.eventAgentComplete' },
-  { key: 'error', labelKey: 'webhooks.eventError' },
-]
+/** 复制某个 webhook 的真实接收 URL（后端按 name 生成）。 */
+async function copyWebhookUrl(name: string) {
+  try {
+    await setClipboard(webhookUrlFor(name))
+    toast.success(t('webhooks.copied', '已复制 Webhook URL'))
+  } catch {
+    toast.error(t('webhooks.copyFailed', '复制失败，请手动复制'))
+  }
+}
 
 async function loadWebhooks() {
   const requestGen = ++loadRequestGen
@@ -96,8 +101,9 @@ async function loadWebhooks() {
 
 async function onCreateWebhook() {
   if (creating.value) return
-  if (!form.value.name || !form.value.url) {
-    toast.error(t('webhooks.nameUrlRequired'))
+  // 后端要求 name + prompt 非空（prompt = 事件到达时执行的 Agent 指令）；URL 由后端生成。
+  if (!form.value.name.trim() || !form.value.prompt.trim()) {
+    toast.error(t('webhooks.namePromptRequired', '名称和处理指令为必填'))
     return
   }
   creating.value = true
@@ -117,7 +123,8 @@ async function onDeleteWebhook(webhook: Webhook) {
   if (deletingIds.value.has(webhook.id)) return
   deletingIds.value = new Set([...deletingIds.value, webhook.id])
   try {
-    await deleteWebhook(webhook.id)
+    // 后端按 name 删（DELETE /api/v1/webhooks/{name}）；传 id 会静默 no-op（bug 2026-06-22）
+    await deleteWebhook(webhook.name)
     toast.success(t('webhooks.deleted', { name: webhook.name }))
     await loadWebhooks()
   } catch (e: unknown) {
@@ -126,15 +133,6 @@ async function onDeleteWebhook(webhook: Webhook) {
     const next = new Set(deletingIds.value)
     next.delete(webhook.id)
     deletingIds.value = next
-  }
-}
-
-function toggleEvent(event: WebhookEvent) {
-  const idx = form.value.events.indexOf(event)
-  if (idx >= 0) {
-    form.value.events.splice(idx, 1)
-  } else {
-    form.value.events.push(event)
   }
 }
 
@@ -188,18 +186,21 @@ defineExpose({ loadWebhooks, openCreateForm })
                 <HcSelect v-model="formType" :options="webhookTypeOptions" />
               </div>
               <div class="hc-form-group">
-                <label>{{ t('webhooks.url') }}</label>
-                <input v-model="form.url" class="hc-input" placeholder="https://..." />
+                <label>{{ t('webhooks.prompt', '处理指令') }}</label>
+                <textarea
+                  v-model="form.prompt"
+                  class="hc-input"
+                  rows="3"
+                  :placeholder="t('webhooks.promptPlaceholder', '事件到达时执行的 Agent 指令，如「把事件内容汇总并通知我」')"
+                ></textarea>
               </div>
               <div class="hc-form-group">
-                <label>{{ t('webhooks.events') }}</label>
-                <div class="webhook-panel__events">
-                  <label v-for="et in eventTypes" :key="et.key" class="webhook-panel__event-label">
-                    <input type="checkbox" :checked="form.events.includes(et.key)" @change="toggleEvent(et.key)" />
-                    {{ t(et.labelKey) }}
-                  </label>
-                </div>
+                <label>{{ t('webhooks.secret', '签名 Secret（可选）') }}</label>
+                <input v-model="form.secret" class="hc-input" :placeholder="t('webhooks.secretPlaceholder', '用于校验请求签名，可留空')" />
               </div>
+              <p class="webhook-panel__url-note">
+                {{ t('webhooks.urlAutoNote', '创建后系统会生成接收 URL，配置到外部服务即可触发。') }}
+              </p>
             </div>
 
             <div
@@ -240,10 +241,18 @@ defineExpose({ loadWebhooks, openCreateForm })
           <Globe :size="14" />
           <span class="webhook-panel__item-name">{{ wh.name }}</span>
           <span class="webhook-panel__item-type">{{ wh.type }}</span>
+          <span v-if="!wh.enabled" class="webhook-panel__item-disabled">{{ t('webhooks.itemDisabled', '已停用') }}</span>
         </div>
-        <div class="webhook-panel__item-url">{{ wh.url }}</div>
-        <div class="webhook-panel__item-events">
-          <span v-for="ev in wh.events" :key="ev" class="webhook-panel__event-tag">{{ ev }}</span>
+        <!-- 真实接收 URL（后端按 name 生成）+ 复制 -->
+        <div class="webhook-panel__item-url">
+          <code>{{ webhookUrlFor(wh.name) }}</code>
+          <button class="webhook-panel__copy" :title="t('webhooks.copyUrl', '复制 URL')" @click="copyWebhookUrl(wh.name)">
+            <Copy :size="13" />
+          </button>
+        </div>
+        <div class="webhook-panel__item-meta">
+          <span class="webhook-panel__item-prompt">{{ wh.prompt }}</span>
+          <span class="webhook-panel__item-count">{{ t('webhooks.eventCount', { count: wh.event_count ?? 0 }) }}</span>
         </div>
         <button class="hc-btn hc-btn-ghost hc-btn-sm webhook-panel__delete" :disabled="deletingIds.has(wh.id)" @click="onDeleteWebhook(wh)">
           <Trash2 :size="14" />
@@ -271,9 +280,15 @@ defineExpose({ loadWebhooks, openCreateForm })
 .webhook-panel__item-info { display: flex; align-items: center; gap: 8px; color: var(--hc-text-primary); }
 .webhook-panel__item-name { font-weight: 500; font-size: 14px; }
 .webhook-panel__item-type { font-size: 11px; padding: 2px 6px; background: var(--hc-bg-active); border-radius: 4px; color: var(--hc-text-secondary); }
-.webhook-panel__item-url { grid-column: 1 / -1; font-size: 12px; color: var(--hc-text-secondary); font-family: ui-monospace, 'SF Mono', monospace; overflow: hidden; text-overflow: ellipsis; }
-.webhook-panel__item-events { display: flex; gap: 4px; grid-column: 1 / -1; }
-.webhook-panel__event-tag { font-size: 11px; padding: 1px 6px; background: var(--hc-accent-subtle); color: var(--hc-accent); border-radius: 4px; }
+.webhook-panel__item-disabled { font-size: 11px; padding: 2px 6px; background: var(--hc-bg-input); border-radius: 4px; color: var(--hc-text-muted); }
+.webhook-panel__item-url { grid-column: 1 / -1; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.webhook-panel__item-url code { flex: 1; min-width: 0; font-size: 12px; color: var(--hc-text-secondary); font-family: ui-monospace, 'SF Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.webhook-panel__copy { flex-shrink: 0; display: inline-flex; padding: 3px; border: none; background: transparent; color: var(--hc-text-muted); cursor: pointer; border-radius: 4px; }
+.webhook-panel__copy:hover { color: var(--hc-accent); background: var(--hc-bg-hover); }
+.webhook-panel__item-meta { display: flex; align-items: center; gap: 8px; grid-column: 1 / -1; min-width: 0; }
+.webhook-panel__item-prompt { flex: 1; min-width: 0; font-size: 12px; color: var(--hc-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.webhook-panel__item-count { flex-shrink: 0; font-size: 11px; color: var(--hc-text-muted); }
+.webhook-panel__url-note { font-size: 12px; color: var(--hc-text-muted); margin: 2px 0 0; }
 .webhook-panel__delete { position: absolute; top: 8px; right: 8px; }
 .webhook-panel__empty {
   display: flex;

@@ -84,7 +84,7 @@ describe('ChatInput attachment capability gating', () => {
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
-    expect(sendHandler).toHaveBeenCalledWith('draft message', [])
+    expect(sendHandler).toHaveBeenCalledWith('draft message', [], undefined)
     expect((textarea.element as HTMLTextAreaElement).value).toBe('draft message')
   })
 
@@ -97,7 +97,7 @@ describe('ChatInput attachment capability gating', () => {
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
-    expect(sendHandler).toHaveBeenCalledWith('draft message', [])
+    expect(sendHandler).toHaveBeenCalledWith('draft message', [], undefined)
     expect((textarea.element as HTMLTextAreaElement).value).toBe('')
   })
 

@@ -33,6 +33,7 @@ vi.mock('@/api/webhook', () => ({
   getWebhooks,
   createWebhook,
   deleteWebhook,
+  webhookUrlFor: (name: string) => `http://localhost:16060/api/v1/webhooks/${name}`,
 }))
 
 vi.mock('@/composables/useToast', () => ({
@@ -53,16 +54,17 @@ describe('WebhookPanel CRUD', () => {
   })
 
   it('loads, creates, and deletes webhooks', async () => {
-    const hooks: { id: string; name: string; type: string; url: string; events: string[] }[] = [
-      { id: 'a', name: 'hook-a', type: 'custom', url: 'https://a', events: ['task_complete'] },
+    const hooks: { id: string; name: string; type: string; prompt: string; enabled: boolean; event_count: number }[] = [
+      { id: 'a', name: 'hook-a', type: 'generic', prompt: 'p-a', enabled: true, event_count: 0 },
     ]
     getWebhooks.mockImplementation(async () => ({ webhooks: [...hooks] }))
     createWebhook.mockImplementation(async (payload) => {
-      hooks.push({ id: 'new', name: payload.name, type: payload.type, url: payload.url, events: payload.events })
+      hooks.push({ id: 'new', name: payload.name, type: payload.type, prompt: payload.prompt, enabled: true, event_count: 0 })
       return {}
     })
-    deleteWebhook.mockImplementation(async (id) => {
-      const idx = hooks.findIndex((h) => h.id === id)
+    deleteWebhook.mockImplementation(async (name) => {
+      // 2026-06-22：按 name 删（对齐后端 DELETE /webhooks/{name}）
+      const idx = hooks.findIndex((h) => h.name === name)
       if (idx >= 0) hooks.splice(idx, 1)
     })
 
@@ -77,7 +79,7 @@ describe('WebhookPanel CRUD', () => {
     await flushPromises()
 
     await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-b')
-    await wrapper.find('input[placeholder="https://..."]').setValue('https://b')
+    await wrapper.find('textarea').setValue('汇总事件并通知我')
     const buttons = wrapper.findAll('.webhook-modal__actions button')
     const createBtn = buttons[1]!
     await createBtn.trigger('click')
@@ -94,7 +96,7 @@ describe('WebhookPanel CRUD', () => {
     await targetItem!.find('.webhook-panel__delete').trigger('click')
     await flushPromises()
 
-    expect(deleteWebhook).toHaveBeenCalledWith('new')
+    expect(deleteWebhook).toHaveBeenCalledWith('hook-b')
     expect(wrapper.text()).not.toContain('hook-b')
   })
 
@@ -115,7 +117,7 @@ describe('WebhookPanel CRUD', () => {
     await flushPromises()
 
     await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-a')
-    await wrapper.find('input[placeholder="https://..."]').setValue('https://a')
+    await wrapper.find('textarea').setValue('处理指令')
 
     const createBtn = wrapper.findAll('.webhook-modal__actions button')[1]!
     await createBtn.trigger('click')
@@ -140,7 +142,7 @@ describe('WebhookPanel CRUD', () => {
     await flushPromises()
 
     await wrapper.find('input[placeholder="my-webhook"]').setValue('hook-a')
-    await wrapper.find('input[placeholder="https://..."]').setValue('https://a')
+    await wrapper.find('textarea').setValue('处理指令')
 
     const formButtons = wrapper.findAll('.webhook-modal__actions button')
     await formButtons[1]!.trigger('click')
@@ -155,13 +157,13 @@ describe('WebhookPanel CRUD', () => {
     await flushPromises()
 
     expect((wrapper.find('input[placeholder="my-webhook"]').element as HTMLInputElement).value).toBe('')
-    expect((wrapper.find('input[placeholder="https://..."]').element as HTMLInputElement).value).toBe('')
+    expect((wrapper.find('textarea').element as HTMLTextAreaElement).value).toBe('')
   })
 
   it('does not start a second delete request for the same webhook while the first one is still running', async () => {
     let resolveDelete!: () => void
     getWebhooks.mockResolvedValue({
-      webhooks: [{ id: 'a', name: 'hook-a', type: 'custom', url: 'https://a', events: ['task_complete'] }],
+      webhooks: [{ id: 'a', name: 'hook-a', type: 'generic', prompt: 'p', enabled: true, event_count: 0 }],
     })
     deleteWebhook.mockImplementationOnce(
       () =>
@@ -196,8 +198,9 @@ describe('WebhookPanel CRUD', () => {
   })
 
   it('keeps the latest webhook list when an earlier reload resolves later', async () => {
-    let resolveFirst!: (value: { webhooks: Array<{ id: string; name: string; type: string; url: string; events: string[] }> }) => void
-    let resolveSecond!: (value: { webhooks: Array<{ id: string; name: string; type: string; url: string; events: string[] }> }) => void
+    type Wh = { id: string; name: string; type: string; prompt: string; enabled: boolean; event_count: number }
+    let resolveFirst!: (value: { webhooks: Wh[] }) => void
+    let resolveSecond!: (value: { webhooks: Wh[] }) => void
 
     getWebhooks
       .mockReturnValueOnce(
@@ -219,14 +222,14 @@ describe('WebhookPanel CRUD', () => {
     await flushPromises()
 
     resolveSecond({
-      webhooks: [{ id: 'new', name: 'hook-new', type: 'custom', url: 'https://new', events: ['task_complete'] }],
+      webhooks: [{ id: 'new', name: 'hook-new', type: 'generic', prompt: 'p', enabled: true, event_count: 0 }],
     })
     await flushPromises()
 
     expect(wrapper.text()).toContain('hook-new')
 
     resolveFirst({
-      webhooks: [{ id: 'old', name: 'hook-old', type: 'custom', url: 'https://old', events: ['task_complete'] }],
+      webhooks: [{ id: 'old', name: 'hook-old', type: 'generic', prompt: 'p', enabled: true, event_count: 0 }],
     })
     await flushPromises()
 
