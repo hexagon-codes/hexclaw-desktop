@@ -165,10 +165,9 @@ jobs:
               touch src-tauri/binaries/ollama-bundle/ollama
               ;;
             x86_64-pc-windows-msvc)
-              echo "Downloading Ollama v${OLLAMA_VERSION} for Windows..."
-              curl -fSL "${OLLAMA_BASE}/ollama-windows-amd64.zip" -o /tmp/ollama-windows.zip
-              unzip -o /tmp/ollama-windows.zip -d src-tauri/binaries/ollama-bundle
-              rm -f /tmp/ollama-windows.zip
+              echo "Windows: Ollama too large (~1.9GB with GPU libs) to embed in installer, creating stub"
+              echo "Users should install Ollama separately: https://ollama.com/download/windows"
+              touch src-tauri/binaries/ollama-bundle/ollama.exe
               ;;
             *)
               echo "Unknown target, creating stub"
