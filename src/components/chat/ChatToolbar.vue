@@ -1,17 +1,15 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { Search, Download, PanelRightOpen, MessageSquarePlus } from 'lucide-vue-next'
-import SegmentedControl from '@/components/common/SegmentedControl.vue'
+import { Search, Download, PanelLeft, PanelRight, Boxes } from 'lucide-vue-next'
 import ChatExportMenu from '@/components/chat/ChatExportMenu.vue'
 import { useChatStore } from '@/stores/chat'
 import { useAppStore } from '@/stores/app'
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
 const appStore = useAppStore()
 
-const activeTab = defineModel<'chat' | 'artifacts' | 'history'>('activeTab', { required: true })
 const showSessions = defineModel<boolean>('showSessions', { required: true })
 
 const showExport = ref(false)
@@ -20,12 +18,6 @@ const exportBtn = ref<HTMLButtonElement>()
 const emit = defineEmits<{
   search: []
 }>()
-
-const segments = computed(() => [
-  { key: 'chat' as const, label: t('chat.modeChat') },
-  { key: 'artifacts' as const, label: t('chat.artifacts') },
-  { key: 'history' as const, label: t('chat.history') },
-])
 
 defineProps<{
   messageCount: number
@@ -36,7 +28,15 @@ defineProps<{
 <template>
   <div class="hc-chat__toolbar">
     <div class="hc-chat__toolbar-row">
-      <SegmentedControl v-model="activeTab" :segments="segments" />
+      <!-- 左：控「左侧」会话列表（空间映射 — 控左栏的钮在左） -->
+      <button
+        class="hc-chat__toolbar-btn"
+        :class="{ 'hc-chat__toolbar-btn--active': showSessions }"
+        :title="t('chat.toggleSessions')"
+        @click="showSessions = !showSessions"
+      >
+        <PanelLeft :size="14" />
+      </button>
 
       <div class="hc-chat__stat-strip">
         <span v-if="messageCount > 0" class="hc-token-badge" :title="tokenBadge">
@@ -46,6 +46,7 @@ defineProps<{
 
       <div style="flex: 1" />
 
+      <!-- 右：会话操作 -->
       <button v-if="messageCount > 0" class="hc-chat__toolbar-btn" :title="t('common.search') + ' (⌘F)'" @click="emit('search')">
         <Search :size="14" />
       </button>
@@ -54,19 +55,27 @@ defineProps<{
       </button>
       <ChatExportMenu v-if="showExport" :messages="chatStore.messages" :trigger-el="exportBtn" @close="showExport = false" />
 
-      <button class="hc-chat__toolbar-btn" :class="{ 'hc-chat__toolbar-btn--active': chatStore.showArtifacts }" :title="t('chat.artifacts')" @click="chatStore.showArtifacts = !chatStore.showArtifacts">
-        <PanelRightOpen :size="14" />
+      <span class="hc-chat__toolbar-sep" />
+
+      <!-- 右：控「右侧」产物面板（唯一图标 Boxes + 计数） -->
+      <button
+        class="hc-chat__toolbar-btn"
+        :class="{ 'hc-chat__toolbar-btn--active': chatStore.showArtifacts }"
+        :title="t('chat.artifacts')"
+        @click="chatStore.showArtifacts = !chatStore.showArtifacts"
+      >
+        <Boxes :size="14" />
         <span v-if="chatStore.artifacts.length > 0" class="hc-chat__artifact-badge">{{ chatStore.artifacts.length }}</span>
       </button>
 
-      <span class="hc-chat__toolbar-sep" />
-
-      <button class="hc-chat__toolbar-btn" :class="{ 'hc-chat__toolbar-btn--active': showSessions }" :title="t('chat.toggleSessions')" @click="showSessions = !showSessions">
-        <MessageSquarePlus :size="14" />
-      </button>
-
-      <button class="hc-chat__toolbar-btn" :title="t('chat.contextPanel')" @click="appStore.toggleDetailPanel">
-        <PanelRightOpen :size="14" />
+      <!-- 右：控「右侧」上下文/详情面板（唯一图标 PanelRight，与产物明确区分） -->
+      <button
+        class="hc-chat__toolbar-btn"
+        :class="{ 'hc-chat__toolbar-btn--active': appStore.detailPanelOpen }"
+        :title="t('chat.contextPanel')"
+        @click="appStore.toggleDetailPanel"
+      >
+        <PanelRight :size="14" />
       </button>
     </div>
   </div>
@@ -91,7 +100,7 @@ defineProps<{
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: 4px;
+  margin-left: 2px;
 }
 
 .hc-token-badge {

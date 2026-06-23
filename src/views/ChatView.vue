@@ -5,7 +5,6 @@ import { useI18n } from 'vue-i18n'
 import {
   ChevronDown,
   ChevronUp,
-  Clock,
   FileCode,
   MessageSquarePlus,
   Plus,
@@ -13,14 +12,20 @@ import {
   Wrench,
   Zap,
   BookOpen,
-  ExternalLink,
   Brain,
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { removeMessage } from '@/services/messageService'
 import { useAgentsStore } from '@/stores/agents'
 import { useSettingsStore } from '@/stores/settings'
+import {
+  setSessionModel,
+  resolveSessionModel,
+  type SessionModelBinding,
+} from '@/stores/session-model-binding'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import MessageText from '@/components/chat/MessageText.vue'
+import { shouldAutoScroll } from '@/utils/chat-compose'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
@@ -39,7 +44,6 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import { useToast, useConversationAutomation, useChatSend, useChatActions, useCronCompileLabel } from '@/composables'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
-import { openSanitizedArtifact } from '@/utils/safe-html'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { getSkills, type Skill } from '@/api/skills'
 import { getDocuments } from '@/api/knowledge'
@@ -63,6 +67,17 @@ const router = useRouter()
 const chatStore = useChatStore()
 const agentsStore = useAgentsStore()
 const settingsStore = useSettingsStore()
+
+/**
+ * 是否已配置过模型 —— 与路由首屏守卫（router/index.ts）同款判定：有任一 provider，或已
+ * 走完欢迎向导（welcomeCompleted），即视为已过首次配置。已配置后空态不再提示「运行首次
+ * 配置向导」（按用户要求）。
+ */
+const hasConfiguredModel = computed(
+  () =>
+    (settingsStore.config?.llm.providers?.length ?? 0) > 0 ||
+    settingsStore.config?.general?.welcomeCompleted === true,
+)
 const toast = useToast()
 const QUERY_MODEL_RETRY_INTERVAL = 1000
 const QUERY_MODEL_RETRY_TIMES = 4
@@ -112,7 +127,6 @@ const attachmentPreview = ref<{
 } | null>(null)
 const showModelSelector = ref(false)
 const isDragging = ref(false)
-const chatViewTab = ref<'chat' | 'artifacts' | 'history'>('chat')
 const availableSkills = ref<Skill[]>([])
 const knowledgeDocs = ref<KnowledgeDoc[]>([])
 const connections = ref<ConnectionSummary[]>([])
@@ -608,12 +622,6 @@ import { formatTime, formatElapsedSeconds } from '@/utils/time'
 import { on } from '@/utils/eventBus'
 import { hexclawWS } from '@/api/websocket'
 
-function openArtifactInNewWindow() {
-  const art = chatStore.artifacts.find((a) => a.id === chatStore.selectedArtifactId)
-  if (!art) return
-  openSanitizedArtifact(art.content, art.title || 'Artifact Preview')
-}
-
 function cancelQueryModelSelection() {
   if (queryModelSelectionAbort) {
     queryModelSelectionAbort.abort()
@@ -789,6 +797,63 @@ function selectModel(modelId: string, providerId = '', providerKey = '', provide
   showModelSelector.value = false
   userOverrodeModel.value = true
   syncChatParams()
+  // 会话级模型绑定：用户在本会话显式选模型 → 持久化，切走再切回不被重置。
+  // 新会话尚无 id（首条消息发送前）时由 currentSessionId watcher 在会话创建后补绑。
+  if (chatStore.currentSessionId) {
+    setSessionModel(chatStore.currentSessionId, currentModelBinding())
+  }
+}
+
+/** 当前 UI 选中模型 → 绑定结构。 */
+function currentModelBinding(): SessionModelBinding {
+  return {
+    model: selectedModel.value,
+    providerId: selectedProviderId.value,
+    providerKey: selectedProviderKey.value,
+    providerName: selectedProviderName.value || undefined,
+  }
+}
+
+/**
+ * 进入某会话时按「会话绑定 > Agent > 默认」解析并落地模型选择。
+ * - restore/auto：恢复用户为该会话固定的模型（置 userOverrodeModel=true 使其生效且优先于 Agent）
+ * - unavailable：绑定的模型当前不在可用列表 → 仅 UI 回退默认，【不清绑定、不提示】。
+ *     绑定的模型可能是「真删了」也可能是「Ollama/provider 仍在异步同步」（启动期 loadSessions
+ *     先于 syncOllamaModels）。保守处理：列表补齐后由 availableModels watcher 自动复解析恢复，
+ *     避免误删有效绑定 / 启动期误报。
+ * - none：无绑定 → 保持默认/Agent 决策；若是「新会话首发」则把用户已选模型补绑到新 id
+ */
+function applySessionModel(newId: string, prevId: string | null) {
+  const res = resolveSessionModel(newId, settingsStore.availableModels)
+  switch (res.kind) {
+    case 'restore':
+      selectedModel.value = res.model.modelId
+      selectedProviderId.value = res.model.providerId
+      selectedProviderKey.value = res.model.providerKey
+      selectedProviderName.value = res.model.providerName
+      userOverrodeModel.value = true
+      syncChatParams()
+      break
+    case 'auto':
+      selectedModel.value = 'auto'
+      selectedProviderId.value = ''
+      selectedProviderKey.value = ''
+      selectedProviderName.value = ''
+      userOverrodeModel.value = true
+      syncChatParams()
+      break
+    case 'unavailable':
+      // 非破坏性回退：不清绑定，等模型列表补齐后复解析恢复（见 availableModels watcher）
+      userOverrodeModel.value = false
+      loadLLMConfig()
+      break
+    case 'none':
+      // 新会话首发（null → 真实 id）且用户已显式选过模型 → 把选择固定到这条新会话
+      if (!prevId && userOverrodeModel.value && selectedModel.value) {
+        setSessionModel(newId, currentModelBinding())
+      }
+      break
+  }
 }
 
 /** 同步模型和参数到 chatStore
@@ -817,12 +882,14 @@ function getMessageArtifacts(messageId: string) {
 
 let _scrollTimer: ReturnType<typeof setTimeout> | null = null
 function scrollToBottom(force = false) {
-  if (!force && userScrolledUp.value) return // 用户主动向上滚动时不自动跟随
+  if (!shouldAutoScroll(force, userScrolledUp.value)) return // 用户主动向上滚动时不自动跟随
   if (_scrollTimer) return // throttle: max 1 scroll per 100ms
   _scrollTimer = setTimeout(() => {
+    _scrollTimer = null
+    // #2 2026-06-23：节流窗口内用户可能刚上滚，到点必须再判一次，否则把用户从历史处拽回底部。
+    if (!shouldAutoScroll(force, userScrolledUp.value)) return
     messagesEndRef.value?.scrollIntoView({ behavior: 'smooth' })
     userScrolledUp.value = false
-    _scrollTimer = null
   }, 100)
 }
 
@@ -1149,14 +1216,33 @@ watch(
   },
 )
 
+// 会话切换 / 创建时按「会话绑定 > Agent > 默认」恢复模型选择（覆盖各入口的默认回退）。
+// 覆盖：openHistorySession、启动自动选中上次会话、ensureSession 创建新会话。
+watch(
+  () => chatStore.currentSessionId,
+  (newId, prevId) => {
+    if (!newId) return
+    applySessionModel(newId, prevId ?? null)
+  },
+)
+
+// 模型列表补齐（Ollama 异步同步完成 / provider 启用）后，对当前会话复解析绑定。
+// 解决启动竞态：loadSessions 先于 syncOllamaModels，本地模型绑定首解析会落空，此处恢复。
+// 传 prevId=sid（非 null）以跳过「新会话首发补绑」分支，仅做恢复，不写新绑定。
+watch(
+  () => settingsStore.availableModels,
+  () => {
+    const sid = chatStore.currentSessionId
+    if (sid) applySessionModel(sid, sid)
+  },
+)
+
 function newSession() {
   if (chatStore.chatMode !== 'research') {
     chatStore.agentRole = ''
   }
   userOverrodeModel.value = false
   chatStore.newSession()
-  // 若当前在「产物 / 历史」tab，新建会话后切回「对话」tab（否则会停在原 tab 看不到新会话）
-  chatViewTab.value = 'chat'
 }
 
 /** 会话框 ✨「PROMPT 模板 → 新建模板」：跳到 Prompt 库 并自动打开新建表单（带 new=1 query）。 */
@@ -1183,12 +1269,6 @@ async function handleSkillCreated() {
   } catch {
     /* 忽略：下次进入会话会重新拉取 */
   }
-}
-
-function openHistorySession(sessionId: string) {
-  userOverrodeModel.value = false
-  chatStore.selectSession(sessionId)
-  chatViewTab.value = 'chat'
 }
 
 function metadataValue(message: import('@/types').ChatMessage, key: string): string | null {
@@ -1396,7 +1476,6 @@ function startSidebarResize(event: MouseEvent) {
       </Transition>
       <!-- Compact toolbar -->
       <ChatToolbar
-        v-model:active-tab="chatViewTab"
         v-model:show-sessions="showSessions"
         :message-count="chatStore.messages.length"
         :token-badge="t('chat.aboutTokens', { n: formatTokenCount(estimatedTokens) })"
@@ -1439,8 +1518,6 @@ function startSidebarResize(event: MouseEvent) {
         @scroll-to="scrollToMessage"
       />
 
-      <!-- ═══ Chat Tab ═══ -->
-      <template v-if="chatViewTab === 'chat'">
         <!-- Messages -->
         <div ref="messagesContainerRef" class="hc-chat__messages" @scroll="handleMessagesScroll">
           <div
@@ -1452,8 +1529,12 @@ function startSidebarResize(event: MouseEvent) {
               :title="t('chat.startChat')"
               :description="t('chat.startChatDesc')"
             >
-              <!-- 还没配置好？运行首次配置向导（对齐原型 .btnlink） -->
-              <button class="hc-chat__setup-link" @click="router.push('/welcome')">
+              <!-- 还没配置好？运行首次配置向导（对齐原型 .btnlink）—— 已配置过模型则隐藏 -->
+              <button
+                v-if="!hasConfiguredModel"
+                class="hc-chat__setup-link"
+                @click="router.push('/welcome')"
+              >
                 <Settings :size="13" />
                 {{ t('chat.runSetupWizard') }}
               </button>
@@ -1781,7 +1862,7 @@ function startSidebarResize(event: MouseEvent) {
                           <span>{{ skillForChip(sn).display_name || sn }}</span>
                         </span>
                       </div>
-                      {{ msg.content }}
+                      <MessageText :content="msg.content" />
                     </div>
                     <!-- DeepSeek 风格原位编辑框（独立圆角卡片） -->
                     <div v-if="editingMsgId === msg.id" class="hc-msg__edit-card">
@@ -2043,93 +2124,6 @@ function startSidebarResize(event: MouseEvent) {
             </ChatInput>
           </div>
         </div>
-      </template>
-
-      <!-- ═══ Artifacts Tab ═══ -->
-      <template v-else-if="chatViewTab === 'artifacts'">
-        <div class="hc-chat__tab-content">
-          <div v-if="chatStore.artifacts.length === 0" class="hc-chat__tab-empty">
-            <EmptyState
-              :icon="FileCode"
-              :title="t('chat.noArtifacts', '暂无产物')"
-              :description="t('chat.noArtifactsHint', '对话生成的文件、图片、代码会出现在这里')"
-            />
-          </div>
-          <div v-else class="hc-chat__artifacts-view">
-            <div class="hc-chat__artifacts-list">
-              <div class="hc-chat__artifacts-heading">
-                {{ t('chat.currentArtifacts', '当前产物') }}
-              </div>
-              <template v-if="chatStore.artifacts.length > 0">
-                <div
-                  v-for="art in chatStore.artifacts"
-                  :key="art.id"
-                  class="hc-chat__artifact-row"
-                  :class="{
-                    'hc-chat__artifact-row--active': chatStore.selectedArtifactId === art.id,
-                  }"
-                  @click="chatStore.selectArtifact(art.id)"
-                >
-                  <FileCode :size="14" class="hc-chat__artifact-row-icon" />
-                  <div class="hc-chat__artifact-row-info">
-                    <div class="hc-chat__artifact-row-title">{{ art.title }}</div>
-                    <div class="hc-chat__artifact-row-lang">{{ art.language }}</div>
-                  </div>
-                </div>
-              </template>
-            </div>
-            <div v-if="chatStore.selectedArtifactId" class="hc-chat__artifact-detail">
-              <div class="hc-chat__artifact-detail-bar">
-                <span>{{
-                  chatStore.artifacts.find((a) => a.id === chatStore.selectedArtifactId)?.title
-                }}</span>
-                <button
-                  class="hc-chat__toolbar-btn"
-                  :title="t('common.openInNewWindow', '在新窗口打开')"
-                  @click="openArtifactInNewWindow"
-                >
-                  <ExternalLink :size="13" />
-                </button>
-              </div>
-              <pre class="hc-chat__artifact-detail-code">{{
-                chatStore.artifacts.find((a) => a.id === chatStore.selectedArtifactId)?.content
-              }}</pre>
-            </div>
-          </div>
-        </div>
-      </template>
-
-      <!-- ═══ History Tab ═══ -->
-      <template v-else-if="chatViewTab === 'history'">
-        <div class="hc-chat__tab-content">
-          <div v-if="chatStore.sessions.length === 0" class="hc-chat__tab-empty">
-            <EmptyState
-              :icon="Clock"
-              :title="t('chat.historyEmptyTitle', '暂无历史')"
-              :description="t('chat.historyEmptyHint', '历史对话会在这里归档')"
-            />
-          </div>
-          <div v-else class="hc-chat__history-view">
-            <div class="hc-chat__history-heading">{{ t('chat.history', 'History') }}</div>
-            <template v-if="chatStore.sessions.length > 0">
-              <div
-                v-for="session in chatStore.sessions"
-                :key="session.id"
-                class="hc-chat__history-row"
-                :class="{
-                  'hc-chat__history-row--active': chatStore.currentSessionId === session.id,
-                }"
-                @click="openHistorySession(session.id)"
-              >
-                <div class="hc-chat__history-row-title">
-                  {{ session.title || t('chat.newSession') }}
-                </div>
-                <div class="hc-chat__history-row-meta">{{ formatTime(session.updated_at) }}</div>
-              </div>
-            </template>
-          </div>
-        </div>
-      </template>
     </div>
 
     <!-- Message context menu -->
@@ -3699,174 +3693,6 @@ function startSidebarResize(event: MouseEvent) {
   color: var(--hc-text-muted);
   margin-top: 3px;
   opacity: 0.7;
-}
-
-/* ─── Tab Content (Artifacts / History) ───── */
-.hc-chat__tab-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 24px 16px;
-}
-
-.hc-chat__artifacts-view {
-  display: flex;
-  gap: 16px;
-  max-width: 900px;
-  margin: 0 auto;
-  height: 100%;
-}
-
-.hc-chat__artifacts-list {
-  width: 280px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.hc-chat__artifacts-heading,
-.hc-chat__history-heading {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--hc-text-primary);
-  margin-bottom: 12px;
-}
-
-.hc-chat__artifact-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  border-radius: var(--hc-radius-md);
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-card);
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.hc-chat__artifact-row:hover {
-  border-color: var(--hc-accent-subtle);
-}
-
-.hc-chat__artifact-row--active {
-  border-color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-}
-
-.hc-chat__artifact-row-icon {
-  color: var(--hc-accent);
-  flex-shrink: 0;
-}
-
-.hc-chat__artifact-row-info {
-  min-width: 0;
-}
-
-.hc-chat__artifact-row-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--hc-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.hc-chat__artifact-row-lang {
-  font-size: 11px;
-  color: var(--hc-text-muted);
-  margin-top: 2px;
-}
-
-/* 产物 / 历史 tab 空态：整面板居中（复用 EmptyState，与「对话」空态完全一致） */
-.hc-chat__tab-empty {
-  height: 100%;
-  min-height: 240px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-}
-
-.hc-chat__artifact-detail {
-  flex: 1;
-  min-width: 0;
-  border: 1px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.hc-chat__artifact-detail-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--hc-divider);
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--hc-text-primary);
-}
-
-.hc-chat__artifact-detail-code {
-  flex: 1;
-  overflow: auto;
-  padding: 12px;
-  margin: 0;
-  font-family: var(--hc-font-mono, 'SF Mono', monospace);
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--hc-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-/* ─── History View ───── */
-.hc-chat__history-view {
-  max-width: 600px;
-  margin: 0 auto;
-}
-
-.hc-chat__history-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px;
-  border-radius: var(--hc-radius-md);
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-card);
-  margin-bottom: 6px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.hc-chat__history-row:hover {
-  border-color: var(--hc-accent-subtle);
-}
-
-.hc-chat__history-row--active {
-  border-color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
-}
-
-.hc-chat__history-row-title {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--hc-text-primary);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.hc-chat__history-row-meta {
-  font-size: 11px;
-  color: var(--hc-text-muted);
-  white-space: nowrap;
-  flex-shrink: 0;
-  margin-left: 12px;
 }
 
 @media (max-width: 860px) {

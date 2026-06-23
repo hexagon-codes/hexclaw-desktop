@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import WorkflowPanel from '../WorkflowPanel.vue'
+import { useCanvasStore } from '@/stores/canvas'
 
 const saveWorkflowMock = vi.fn()
 const getWorkflowsMock = vi.fn()
@@ -97,9 +98,14 @@ describe('WorkflowPanel — 线性工作流真实编辑器', () => {
     expect(arg.edges).toHaveLength(2) // 线性链 input→agent→output
   })
 
-  it('试运行：点「试运行」先保存再调 runWorkflow，回填运行结果', async () => {
+  it('试运行：先配置模型指令，点「试运行」先保存再调 runWorkflow，回填运行结果', async () => {
     const wrapper = await mountPanel()
     ;(wrapper.vm as unknown as { createWorkflow: () => void }).createWorkflow()
+    await flushPromises()
+    // BUG-20260623: 默认模型步骤"未配置指令"，需先填指令才允许试运行 → 先给模型步骤配置 prompt
+    const store = useCanvasStore()
+    const agent = store.nodes.find((n) => n.type === 'agent')!
+    store.updateNode(agent.id, { config: { prompt: '总结输入' } })
     await flushPromises()
     const runBtn = wrapper.findAll('button').find((b) => b.text().includes('试运行'))
     await runBtn!.trigger('click')
@@ -107,6 +113,18 @@ describe('WorkflowPanel — 线性工作流真实编辑器', () => {
     expect(runWorkflowMock).toHaveBeenCalledTimes(1)
     // 运行结果面板出现
     expect(wrapper.text()).toContain('跑通了')
+  })
+
+  it('BUG-20260623 默认（模型未配置指令）工作流点「试运行」不提交后端执行', async () => {
+    const wrapper = await mountPanel()
+    ;(wrapper.vm as unknown as { createWorkflow: () => void }).createWorkflow()
+    await flushPromises()
+    // 不配置任何指令，直接点试运行 —— 模型步骤"未配置指令"应被拦截，不调后端
+    const runBtn = wrapper.findAll('button').find((b) => b.text().includes('试运行'))
+    await runBtn!.trigger('click')
+    await flushPromises()
+    expect(runWorkflowMock).not.toHaveBeenCalled()
+    expect(saveWorkflowMock).not.toHaveBeenCalled()
   })
 
   it('删除步骤：移除一个节点后重建线性边', async () => {

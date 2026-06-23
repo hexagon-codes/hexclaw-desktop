@@ -58,12 +58,16 @@ export function addMcpServer(
   name: string,
   command: string,
   args?: string[],
-  opts?: { transport?: string; endpoint?: string },
+  opts?: { transport?: string; endpoint?: string; env?: Record<string, string> },
 ) {
   const body: Record<string, unknown> = { name, command, args }
   if (opts?.transport) body.transport = opts.transport
   if (opts?.endpoint) body.endpoint = opts.endpoint
-  return apiPost<{ message: string }>('/api/v1/mcp/servers', body)
+  // 数据连接器走 MCP 的凭证注入：MySQL/Redis 等 stdio server 靠 env 配连接信息。
+  // 仅在有 env 时附带，保持市场一键安装等调用方的请求体不变（向后兼容）。
+  if (opts?.env && Object.keys(opts.env).length > 0) body.env = opts.env
+  // connected：后端 best-effort 注册——暖装秒连=true；冷装首次下载组件时转后台重连=false。
+  return apiPost<{ message: string; connected?: boolean }>('/api/v1/mcp/servers', body)
 }
 
 /** 移除 MCP 服务器 */

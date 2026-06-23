@@ -41,7 +41,7 @@ describe('工作流引擎未启用语义（404 ≠ 执行失败）', () => {
       status: 404,
     })
     const store = useCanvasStore()
-    store.addNode({ id: 'a', type: 'agent', label: 'A', x: 0, y: 0, config: {} })
+    store.addNode({ id: 'a', type: 'agent', label: 'A', x: 0, y: 0, config: { prompt: 'x' } })
 
     await store.runWorkflow()
 
@@ -59,7 +59,7 @@ describe('工作流引擎未启用语义（404 ≠ 执行失败）', () => {
       status: 500,
     })
     const store = useCanvasStore()
-    store.addNode({ id: 'a', type: 'agent', label: 'A', x: 0, y: 0, config: {} })
+    store.addNode({ id: 'a', type: 'agent', label: 'A', x: 0, y: 0, config: { prompt: 'x' } })
 
     await store.runWorkflow()
 
@@ -74,7 +74,7 @@ describe('工作流引擎未启用语义（404 ≠ 执行失败）', () => {
       message: 'HexClaw 服务未启动或网络不可达',
     })
     const store = useCanvasStore()
-    store.addNode({ id: 'a', type: 'agent', label: 'A', x: 0, y: 0, config: {} })
+    store.addNode({ id: 'a', type: 'agent', label: 'A', x: 0, y: 0, config: { prompt: 'x' } })
 
     await store.runWorkflow()
 

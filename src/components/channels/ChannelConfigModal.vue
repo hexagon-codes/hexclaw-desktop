@@ -43,8 +43,9 @@ const { t, locale } = useI18n()
 
 const mode = computed<'create' | 'edit'>(() => (props.instance ? 'edit' : 'create'))
 
-// 新建弹窗平台选择：暂不开放 Telegram（telegram 仍是合法类型、不影响已存在实例与路由，仅不在新建入口提供）。
-const creatableChannelTypes = computed(() => CHANNEL_TYPES.filter((c) => c.type !== 'telegram'))
+// 新建弹窗平台选择：全量开放（含 Telegram）。Telegram 全链路已就位——CHANNEL_TYPES + 配置字段(Bot Token)
+// + logo + 后端 adapter/telegram + instances 工厂(instances/manager.go) + /connections/test 校验。
+const creatableChannelTypes = computed(() => CHANNEL_TYPES)
 
 const step = ref<1 | 2>(1)
 const formType = ref<IMChannelType>('feishu')

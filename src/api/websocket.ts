@@ -40,7 +40,7 @@ interface WsUsage {
 }
 
 interface WsServerMessage {
-  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'memory_saved'
+  type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'memory_saved' | 'desktop_notification'
   content: string
   reasoning?: string
   done?: boolean
@@ -60,6 +60,19 @@ export interface ToolApprovalRequest {
 
 type ApprovalCallback = (req: ToolApprovalRequest) => void
 
+/** 后端 desktop.Service 推送的通知（cron 完成/失败、IM 入站、heal 等）。 */
+export interface DesktopNotificationEvent {
+  id: string
+  title: string
+  body: string
+  /** info | success | warning | error */
+  level: string
+  /** 来源标识："cron" | "im" | "" */
+  source: string
+}
+
+type DesktopNotificationCallback = (n: DesktopNotificationEvent) => void
+
 class HexClawWS {
   private ws: WebSocket | null = null
   private url = `${env.wsBase}/ws`
@@ -69,6 +82,7 @@ class HexClawWS {
   private errorCallbacks: ErrorCallback[] = []
   private approvalCallbacks: ApprovalCallback[] = []
   private memorySavedCallbacks: ((content: string) => void)[] = []
+  private desktopNotificationCallbacks: DesktopNotificationCallback[] = []
   private reconnectCallbacks: (() => void)[] = []
 
   private reconnectAttempts = 0
@@ -227,6 +241,13 @@ class HexClawWS {
     return () => { this.memorySavedCallbacks = this.memorySavedCallbacks.filter((cb) => cb !== callback) }
   }
 
+  /** Listen for backend desktop.Service notifications (cron / IM inbound / heal …).
+   *  Structural listener — preserved across stream resets, like onReconnect. */
+  onDesktopNotification(callback: DesktopNotificationCallback): () => void {
+    this.desktopNotificationCallbacks.push(callback)
+    return () => { this.desktopNotificationCallbacks = this.desktopNotificationCallbacks.filter((cb) => cb !== callback) }
+  }
+
   /** Listen for successful reconnection (not initial connect) */
   onReconnect(callback: () => void): () => void {
     this.reconnectCallbacks.push(callback)
@@ -305,6 +326,15 @@ class HexClawWS {
         break
       case 'memory_saved':
         this.memorySavedCallbacks.forEach((cb) => cb(msg.content))
+        break
+      case 'desktop_notification':
+        this.desktopNotificationCallbacks.forEach((cb) => cb({
+          id: (msg.metadata?.id as string) || '',
+          title: (msg.metadata?.title as string) || '',
+          body: msg.content || '',
+          level: (msg.metadata?.type as string) || 'info',
+          source: (msg.metadata?.source as string) || '',
+        }))
         break
       default:
         logger.warn('WebSocket unknown message type:', msg)

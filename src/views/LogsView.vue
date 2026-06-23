@@ -375,7 +375,7 @@ onUnmounted(() => {
           <span class="hc-logs__trace-key">trace_id</span>
           <code class="hc-logs__trace-id">{{ selected.trace_id }}</code>
           <button class="hc-logs__trace-btn" @click="searchByTrace(selected.trace_id)">{{ t('logs.filterByTrace', '按此 trace 检索') }}</button>
-          <button class="hc-logs__trace-btn" @click="copy(selected.trace_id)">{{ t('logs.copyTrace', '复制') }}</button>
+          <button class="hc-logs__trace-btn" @click="copy(logLine(selected))">{{ t('logs.copyWholeLine', '复制整条') }}</button>
         </div>
 
         <table v-if="selectedFields.length" class="hc-logs__kv">

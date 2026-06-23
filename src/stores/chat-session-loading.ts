@@ -2,6 +2,7 @@ import type { Ref } from 'vue'
 import type { Artifact, ChatMessage, ChatSession } from '@/types'
 import type { LoggerModule, MessageServiceModule } from './chat-session-types'
 import { upsertSession } from './chat-session-helpers'
+import { pruneSessionModels } from './session-model-binding'
 
 export function createChatSessionLoadingController(params: {
   sessions: Ref<ChatSession[]>
@@ -111,6 +112,8 @@ export function createChatSessionLoadingController(params: {
         }
       }
       sessions.value = nextSessions
+      // 防累积：丢弃已不存在会话的模型绑定，使 localStorage map 永远 ≤ 会话数
+      pruneSessionModels(sessions.value.map((session) => session.id))
       // Don't auto-select a session while a new session is being created (race condition fix)
       if (!currentSessionId.value && !ensureSessionPromise.value && sessions.value.length > 0) {
         try {

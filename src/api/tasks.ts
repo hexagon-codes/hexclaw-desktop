@@ -47,6 +47,9 @@ export interface CronJobUnifiedRequest {
     schedule: string
     prompt: string
     deliver?: string[]
+    /** IM 投递目标会话 id —— IM deliver 时必发，否则后端 Deliverer 对 IM 目标硬失败（修复 AP-034 类型债：
+     *  此前靠 createCronJobJSON 条件 spread 运行时下发但类型不可见，重构易丢、回退历史 P0）。 */
+    chat_id?: string
   }
   job_id?: string
   include_paused?: boolean

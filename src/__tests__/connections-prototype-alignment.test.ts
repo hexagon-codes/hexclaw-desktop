@@ -137,8 +137,9 @@ const EXPECTED_TYPES: Array<{ id: string; method: string }> = [
   // §15.1 真实只读接入(token 加密存后端)——置顶。
   { id: 'github', method: 'token' },
   { id: 'notion', method: 'token' },
-  { id: 'yuque', method: 'oauth' },
-  { id: 'feishuDoc', method: 'oauth' },
+  // 语雀/飞书：从 OAuth 占位改走 MCP（yuque-mcp-server / @larksuiteoapi/lark-mcp）真闭环
+  { id: 'yuque', method: 'mcp' },
+  { id: 'feishuDoc', method: 'mcp' },
   { id: 'postgres', method: 'mcp' },
   { id: 'mysql', method: 'mcp' },
   { id: 'sqlite', method: 'mcp' },

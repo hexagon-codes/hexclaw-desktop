@@ -40,7 +40,13 @@ import { useCanvasStore } from '../canvas'
 // ─── Helpers ─────────────────────────────────────────────
 
 function makeNode(id: string, type: CanvasNode['type'] = 'agent'): CanvasNode {
-  return { id, type, label: `Node ${id}`, x: 0, y: 0 }
+  // agent/tool 默认给出配置，使其为「已配置」可运行步骤（这些用例验证运行机制，不验证未配置拦截；
+  // 未配置拦截由 bug-workflow-unconfigured-run-20260623 专项覆盖）。
+  const config =
+    type === 'agent' ? { prompt: `prompt-${id}` }
+    : type === 'tool' ? { tool: `tool-${id}` }
+    : undefined
+  return { id, type, label: `Node ${id}`, x: 0, y: 0, config }
 }
 
 function makeEdge(id: string, from: string, to: string): CanvasEdge {

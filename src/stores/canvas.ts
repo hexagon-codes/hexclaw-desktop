@@ -4,7 +4,7 @@
  * 管理画布面板状态，对接后端 Panel API，工作流 CRUD 和执行。
  */
 
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import {
   listPanels,
@@ -37,6 +37,23 @@ export const useCanvasStore = defineStore('canvas', () => {
   const currentWorkflowId = ref<string | null>(null)
   const nodeRunStatus = ref<Record<string, 'idle' | 'running' | 'completed' | 'failed'>>({})
   const runResult = ref<{ output?: string; error?: string; startedAt?: string; finishedAt?: string; nodeResults?: WorkflowNodeRun[] } | null>(null)
+
+  // 试运行前置校验：返回拦截原因（null = 可运行）。未配置的步骤——模型步骤无指令(prompt 空，
+  // UI 显示"未配置指令")、工具步骤未选工具——不允许试运行。否则会把空指令提交后端执行、产出
+  // 无意义结果（BUG-20260623：空工作流点试运行仍输出通用问候）。供 runWorkflow 闸门 + UI 禁用按钮复用。
+  const runBlockReason = computed<string | null>(() => {
+    if (nodes.value.length === 0) return '请先添加步骤再试运行'
+    for (const n of nodes.value) {
+      const cfg = (n.config ?? {}) as Record<string, unknown>
+      if (n.type === 'agent' && !String(cfg.prompt ?? '').trim()) {
+        return `「${n.label || '模型'}」步骤未配置指令，请先填写指令再试运行`
+      }
+      if (n.type === 'tool' && !String(cfg.tool ?? '').trim()) {
+        return `「${n.label || '工具'}」步骤未选择工具，请先配置再试运行`
+      }
+    }
+    return null
+  })
 
   // ─── Actions ─────────────────────────────────────────
 
@@ -249,7 +266,8 @@ export const useCanvasStore = defineStore('canvas', () => {
 
   async function runWorkflow() {
     if (runStatus.value === 'running') return
-    if (nodes.value.length === 0) return
+    // 未配置/空工作流不提交后端执行（BUG-20260623）。保持 idle，原因由 UI 经 runBlockReason 提示。
+    if (runBlockReason.value) return
     runStatus.value = 'running'
     runOutput.value = ''
     runResult.value = null
@@ -418,5 +436,6 @@ export const useCanvasStore = defineStore('canvas', () => {
     validateWorkflow,
     topologicalOrder,
     runWorkflow,
+    runBlockReason,
   }
 })

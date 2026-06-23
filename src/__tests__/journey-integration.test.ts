@@ -427,8 +427,9 @@ describe('Journey 2: Chat message send chain with file attachment', () => {
 // =====================================================================
 
 describe('Journey 3: Canvas workflow save -> run -> backend failure', () => {
-  const nodeA = { id: 'n1', type: 'agent' as const, label: 'Summarizer', x: 0, y: 0 }
-  const nodeB = { id: 'n2', type: 'tool' as const, label: 'Formatter', x: 200, y: 0 }
+  // 配置好 prompt/tool —— 这些用例验证运行机制；未配置拦截见 bug-workflow-unconfigured-run-20260623。
+  const nodeA = { id: 'n1', type: 'agent' as const, label: 'Summarizer', x: 0, y: 0, config: { prompt: 'summarize' } }
+  const nodeB = { id: 'n2', type: 'tool' as const, label: 'Formatter', x: 200, y: 0, config: { tool: 'formatter' } }
   const edge = { id: 'e1', from: 'n1', to: 'n2' }
 
   it('adding nodes and edges works correctly', async () => {

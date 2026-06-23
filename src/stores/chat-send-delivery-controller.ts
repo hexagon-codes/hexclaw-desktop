@@ -115,6 +115,7 @@ export function createChatSendDeliveryController(params: {
     requestId: string
     sending: Ref<boolean>
     draftSending: Ref<boolean>
+    skillNames?: string[]
   }): Promise<ChatMessage | null> {
     const {
       backendText,
@@ -123,12 +124,19 @@ export function createChatSendDeliveryController(params: {
       requestId,
       sending,
       draftSending,
+      skillNames,
     } = args
 
     clearSessionCancelled(sessionId)
     setSessionPending(sessionId, true, sending, draftSending)
 
-    const requestMetadata = buildRequestMetadata()
+    // bug#2 2026-06-23：显式挂载/召唤的技能经 metadata.skills 透传给后端（逗号分隔）。
+    // 此前 skillNames 只进本地消息 metadata、从未发给后端 → 技能当轮不生效。
+    const baseMetadata = buildRequestMetadata()
+    const requestMetadata =
+      skillNames && skillNames.length
+        ? { ...(baseMetadata ?? {}), skills: skillNames.join(',') }
+        : baseMetadata
     const wsConnected = await chatSvc.ensureWebSocketConnected()
 
     if (isSessionCancelled(sessionId)) {

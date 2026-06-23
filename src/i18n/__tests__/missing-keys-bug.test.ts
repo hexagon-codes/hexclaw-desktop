@@ -21,10 +21,7 @@ const KEYS_REFERENCED_IN_CODE = [
   // —— 数据连接器（ConnectionsView / ConnectorConfigModal）——
   'connections.connectors.emptyTitle',
   'connections.connectors.emptyDesc',
-  'connections.connectors.testStub',
-  'connections.connectors.authStub',
-  'connections.connectors.authHint',
-  'connections.connectors.authorize',
+  // testStub/authStub/authHint/authorize 已随「连接测试占位」「OAuth 授权占位」删除（语雀/飞书改走 MCP），不再引用
   'connections.connectors.newInstance',
   'connections.connectors.selectType',
   'connections.connectors.form.name',

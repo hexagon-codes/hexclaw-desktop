@@ -184,7 +184,8 @@ async function onSave() {
 }
 
 async function onRun() {
-  if (store.nodes.length === 0) { toast.info(t('workflow.emptyRunHint', '请先添加步骤再试运行')); return }
+  // 未配置/空工作流不试运行（BUG-20260623）：模型步骤无指令 / 工具步骤未选 → 提示具体原因，不提交执行。
+  if (store.runBlockReason) { toast.info(store.runBlockReason); return }
   rebuildLinearEdges()
   await store.saveWorkflow(currentName.value.trim() || t('workflow.defaultName', '新工作流'))
   await store.runWorkflow()

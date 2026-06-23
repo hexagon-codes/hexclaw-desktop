@@ -2,6 +2,7 @@ import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { Ref } from 'vue'
 import type { Artifact, ChatMessage } from '@/types'
 import type { LoggerModule, MessageServiceModule } from './chat-session-types'
+import { clearSessionModel } from './session-model-binding'
 
 export function createChatSessionLifecycleController(params: {
   currentSessionId: Ref<string | null>
@@ -106,6 +107,7 @@ export function createChatSessionLifecycleController(params: {
         resetSessionStream(sessionId)
       }
       await msgSvc.deleteSession(sessionId)
+      clearSessionModel(sessionId) // 防孤儿：会话删除后清除其模型绑定
       if (currentSessionId.value === sessionId) {
         currentSessionId.value = null
         messages.value = []

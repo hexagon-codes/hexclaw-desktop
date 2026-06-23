@@ -180,6 +180,7 @@ export function createChatSendController(params: {
         requestId,
         sending,
         draftSending,
+        skillNames, // bug#2 2026-06-23：透传挂载技能给后端（此前在此被丢弃）
       })
     } finally {
       draftSending.value = false

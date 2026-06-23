@@ -20,6 +20,8 @@ import {
   type ConnectorInstance,
 } from '@/composables/useConnectorInstances'
 import { deleteConnector, getConnectorResources, type ConnectorResource } from '@/api/connectors'
+import { getMcpServerStatus, removeMcpServer } from '@/api/mcp'
+import { isMcpConnectorType } from '@/config/mcp-connectors'
 
 // 官方品牌 logo（Simple Icons 下载落盘，单色，浅底 tile 保证双主题清晰）。
 import postgresLogo from '@/assets/connection-logos/postgres.svg'
@@ -111,6 +113,13 @@ async function confirmDeleteConnector() {
   if (cid && typeMetaById.value[target.type]?.method === 'token') {
     try { await deleteConnector(cid) } catch { /* 引擎降级时仍清本地，避免 UI 卡死 */ }
   }
+  // MCP 类：摘除后端注册的 stdio MCP server（best-effort，引擎降级仍清本地）。
+  if (isMcpConnectorType(target.type)) {
+    const serverName = target.config?.mcp_server || target.name
+    if (serverName) {
+      try { await removeMcpServer(serverName) } catch { /* server 可能已不在，忽略 */ }
+    }
+  }
   removeInstance(target.id)
   deleteTarget.value = null
 }
@@ -155,8 +164,8 @@ const CONNECTOR_TYPES: ConnectorItem[] = [
   // §15.1 真实只读接入(token 加密存后端，真实 test/浏览资源)——置顶。
   { id: 'github', name: 'GitHub', method: 'token' },
   { id: 'notion', name: 'Notion', method: 'token' },
-  { id: 'yuque', name: '语雀', method: 'oauth' },
-  { id: 'feishuDoc', name: '飞书文档', method: 'oauth' },
+  { id: 'yuque', name: '语雀', method: 'mcp' },
+  { id: 'feishuDoc', name: '飞书文档', method: 'mcp' },
   { id: 'postgres', name: 'PostgreSQL', method: 'mcp' },
   { id: 'mysql', name: 'MySQL', method: 'mcp' },
   { id: 'sqlite', name: 'SQLite', method: 'mcp' },
@@ -230,18 +239,38 @@ function connectorIdOf(inst: ConnectorInstance): string | null {
   return inst.config?.connector_id || null
 }
 
-// 测试连接：token 类 → 真实复验（拉一次资源即验证 token 仍有效）；其余仍占位。
+// 仅 token(真实复验) / mcp(真实状态) 可测；native/oauth 无可测对象 → 不显示测试按钮（删死 stub）。
+function canTest(inst: ConnectorInstance): boolean {
+  const method = typeMetaById.value[inst.type]?.method
+  return method === 'token' || method === 'mcp'
+}
+
+// 启停切换仅对 native/oauth 本地实例有意义；mcp 注册即启用，停用 = 删除（不显示开关）。
+function canToggle(inst: ConnectorInstance): boolean {
+  return !isMcpConnectorType(inst.type) && !connectorIdOf(inst)
+}
+
+// 测试连接：token 类 → 真实复验（拉一次资源即验证 token 仍有效）；
+//           mcp 类 → 查后端 MCP 服务真实在线状态。
 const testingId = ref<string | null>(null)
 async function testConnector(inst: ConnectorInstance) {
-  const cid = connectorIdOf(inst)
-  if (!cid) {
-    toast.info(t('connections.connectors.testStub', '连接测试即将上线'))
-    return
-  }
   testingId.value = inst.id
   try {
-    const res = await getConnectorResources(cid)
-    toast.success(t('connections.connectors.testOk', { n: res.length }))
+    const cid = connectorIdOf(inst)
+    if (cid) {
+      const res = await getConnectorResources(cid)
+      toast.success(t('connections.connectors.testOk', { n: res.length }))
+      return
+    }
+    if (isMcpConnectorType(inst.type)) {
+      const serverName = inst.config?.mcp_server || inst.name
+      const status = await getMcpServerStatus()
+      const online =
+        status.statuses?.[serverName] === 'connected' ||
+        !!status.servers?.find((s) => s.name === serverName && s.connected)
+      if (online) toast.success(t('connections.connectors.mcpTestConnected', '已连接，MCP 服务在线'))
+      else toast.info(t('connections.connectors.mcpTestDisconnected', 'MCP 服务尚未就绪'))
+    }
   } catch (e) {
     const { messageFromUnknownError } = await import('@/utils/errors')
     toast.error(`${t('connections.connectors.testFail', '连接失败')}: ${messageFromUnknownError(e)}`)
@@ -349,21 +378,23 @@ function toggleConnector(inst: ConnectorInstance) {
             </span>
           </div>
           <div class="hc-conn-card__actions">
-            <button class="hc-conn-btn hc-conn-btn--ghost" :disabled="testingId === inst.id" @click="testConnector(inst)">
+            <!-- 测试：token(真实复验) / mcp(真实状态) 才显示；native/oauth 无可测对象 -->
+            <button v-if="canTest(inst)" class="hc-conn-btn hc-conn-btn--ghost" :disabled="testingId === inst.id" @click="testConnector(inst)">
               <Zap :size="13" />
               {{ testingId === inst.id ? t('connections.connectors.testing', '测试中…') : t('connections.channels.test') }}
             </button>
-            <!-- token 类(github/notion)：浏览真实资源；本地配置类：编辑 + 启停 -->
+            <!-- token 类(github/notion)：浏览真实资源 -->
             <button v-if="connectorIdOf(inst)" class="hc-conn-btn hc-conn-btn--ghost" @click="browseResources(inst)">
               <FolderOpen :size="13" />
               {{ t('connections.connectors.browse', '浏览资源') }}
             </button>
+            <!-- 非 token：可编辑（mcp 编辑=重注册）；启停仅对 native/oauth 本地实例 -->
             <template v-else>
               <button class="hc-conn-btn hc-conn-btn--ghost" @click="openConnectorEdit(inst)">
                 <Pencil :size="13" />
                 {{ t('common.edit') }}
               </button>
-              <button class="hc-conn-btn hc-conn-btn--ghost" @click="toggleConnector(inst)">
+              <button v-if="canToggle(inst)" class="hc-conn-btn hc-conn-btn--ghost" @click="toggleConnector(inst)">
                 {{ inst.enabled ? t('connections.channels.disable') : t('connections.channels.enable') }}
               </button>
             </template>

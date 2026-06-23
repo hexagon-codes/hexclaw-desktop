@@ -9,6 +9,7 @@ import { useShortcuts } from '@/composables/useShortcuts'
 import { useTheme } from '@/composables/useTheme'
 import { useAutoUpdate } from '@/composables/useAutoUpdate'
 import { useToast } from '@/composables/useToast'
+import { useNotificationCenter } from '@/composables/useNotificationCenter'
 
 const route = useRoute()
 const router = useRouter()
@@ -16,6 +17,7 @@ const isBlankLayout = computed(() => route.meta.layout === 'blank')
 const { t } = useI18n()
 const toast = useToast()
 const { checkForUpdate } = useAutoUpdate()
+const notificationCenter = useNotificationCenter()
 
 const toastRef = ref<InstanceType<typeof ToastProvider>>()
 
@@ -28,6 +30,9 @@ useTheme()
 if (typeof window !== 'undefined') {
   ;(window as unknown as Record<string, unknown>).__hcToast = toastRef
 }
+
+// 通知中心：订阅全局异步事件（审批 / 记忆 / 重连 / 引擎状态）→ 通知台账
+notificationCenter.start()
 
 // 监听 Tauri 托盘导航事件 (替代不安全的 window.eval)
 let unlistenNavigate: (() => void) | null = null
@@ -48,6 +53,7 @@ onMounted(async () => {
 })
 onUnmounted(() => {
   unlistenNavigate?.()
+  notificationCenter.stop()
 })
 </script>
 

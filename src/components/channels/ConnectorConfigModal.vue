@@ -5,14 +5,16 @@
  * 复用同一套设计令牌，避免重复实现弹层几何与交互。
  *   - 第 1 步（仅新建）：类型选择器——把 types 平铺渲染成扁平网格（无分组标题），点击进第 2 步。
  *   - 第 2 步：按连接方式 / 类型给字段（数据库类 → host/port/database/user/password；
- *     native → 路径/URL；oauth → 一个「授权连接」占位按钮）。实例名字段始终有。
+ *     native → 路径/URL）。语雀/飞书已改走 mcp（token/app 凭证 → MCP server），无 OAuth 占位。实例名字段始终有。
  */
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { X, Eye, EyeOff, Link2, CheckCircle2, AlertCircle, Loader2 } from 'lucide-vue-next'
+import { X, Eye, EyeOff, CheckCircle2, AlertCircle, Loader2 } from 'lucide-vue-next'
 import { useConnectorInstances, type ConnectorInstance } from '@/composables/useConnectorInstances'
 import { useToast } from '@/composables/useToast'
 import { createConnector, testConnector as apiTestConnector } from '@/api/connectors'
+import { addMcpServer, removeMcpServer } from '@/api/mcp'
+import { MCP_CONNECTOR_SPECS, buildMcpServerConfig } from '@/config/mcp-connectors'
 
 /** 类型选择器单源：父级从 CONNECTOR_TYPES 投影而来（含 logo / monogram 命中）。 */
 export interface ConnectorTypeItem {
@@ -85,24 +87,14 @@ async function runTokenTest() {
 }
 
 // 字段方案：按连接方式 / 类型决定第 2 步表单字段（实例名常驻，单独渲染）。
-//   - 数据库类（mcp：postgres/mysql/mongodb/redis）→ host/port/database/user/password
-//   - sqlite（mcp，单文件库）→ 仅一个本地路径
+//   - mcp 类（DB host/port/… · 语雀 token · 飞书 app_id/app_secret）→ 字段全来自 mcp-connectors.ts 声明式 schema
 //   - native（localFolder/webScrape/rss/fileImport）→ 路径 / URL 单字段
-//   - oauth → 无配置字段，仅一个授权占位按钮
 interface ConfigField {
   key: string
   label: string
   placeholder: string
   secret?: boolean
 }
-
-const DB_FIELDS: ConfigField[] = [
-  { key: 'host', label: t('connections.connectors.form.host', '主机 Host'), placeholder: 'localhost' },
-  { key: 'port', label: t('connections.connectors.form.port', '端口 Port'), placeholder: '5432' },
-  { key: 'database', label: t('connections.connectors.form.database', '数据库'), placeholder: 'mydb' },
-  { key: 'user', label: t('connections.connectors.form.user', '用户名'), placeholder: 'root' },
-  { key: 'password', label: t('connections.connectors.form.password', '密码'), placeholder: '••••••', secret: true },
-]
 
 // native 单字段：文件夹 / 文件导入给路径，网页抓取 / RSS 给 URL。
 function nativeField(type: string): ConfigField {
@@ -115,16 +107,19 @@ function nativeField(type: string): ConfigField {
 const configFields = computed<ConfigField[]>(() => {
   const type = formType.value
   if (currentMethod.value === 'mcp') {
-    // SQLite 是单文件库，只需要一个本地文件路径。
-    if (type === 'sqlite') {
-      return [{ key: 'path', label: t('connections.connectors.form.path', '路径'), placeholder: '/path/to/db.sqlite' }]
-    }
-    return DB_FIELDS
+    // 数据库类走声明式 MCP 连接器 schema（字段 → MYSQL_HOST/连接串 等，单源 mcp-connectors.ts）。
+    const spec = MCP_CONNECTOR_SPECS[type]
+    if (!spec) return []
+    return spec.fields.map((f) => ({
+      key: f.key,
+      label: t(f.labelKey, f.labelFallback),
+      placeholder: f.placeholder,
+      secret: f.secret,
+    }))
   }
   if (currentMethod.value === 'native') {
     return [nativeField(type)]
   }
-  // oauth：无表单字段（仅授权占位按钮）。
   return []
 })
 
@@ -187,14 +182,20 @@ function toggleSecret(key: string) {
   showSecrets.value[key] = !showSecrets.value[key]
 }
 
-// OAuth 授权：本期 stub（不接真实 OAuth），toast 占位。
-function authorize() {
-  toast.info(t('connections.connectors.authStub', '授权连接即将上线'))
-}
-
 async function handleSave() {
   if (saving.value) return
   const name = formName.value.trim() || currentName.value
+
+  // 连接名唯一性：MCP 类用 name 作后端 stdio server 的 key，重名会互相覆盖（删一个把另一个也摘了）；
+  // 其余类型重名也造成混淆。阻止与其它实例重名（编辑时排除自身）。新建时第一步已 suggestUniqueName，
+  // 但用户可手改成重名，故保存处再守一次。
+  const nameClash = list.value.some(
+    (i) => i.id !== props.instance?.id && normalizeName(i.name) === normalizeName(name),
+  )
+  if (nameClash) {
+    toast.error(t('connections.connectors.nameExists', '连接名称已存在，请改一个'))
+    return
+  }
 
   // token 类(GitHub/Notion)：走真实后端——后端验证 token、加密落盘；
   // 本地实例只存 connector_id 引用(绝不存 token，避免明文驻留)。
@@ -224,7 +225,60 @@ async function handleSave() {
     return
   }
 
-  // 本地配置类(数据库 / 文件 / OAuth stub)：保持既有 localStorage 行为。
+  // MCP 数据连接器(数据库)：保存即向后端注册/更新 stdio MCP server。
+  // 凭证经 env(MySQL/Mongo) 或连接串 arg(Postgres/Redis) 注入；密码字段同时由
+  // useConnectorInstances 改走 secure-store（绝不明文落 localStorage）。
+  if (currentMethod.value === 'mcp') {
+    const spec = MCP_CONNECTOR_SPECS[formType.value]
+    const built = spec ? buildMcpServerConfig(formType.value, formConfig.value) : null
+    if (!spec || !built) {
+      toast.error(t('connections.connectors.mcpUnsupported', '该数据源暂不支持'))
+      return
+    }
+    // 必填校验：无默认值且非选填的字段（如 SQLite 路径）必须填。
+    const missing = spec.fields.find(
+      (f) => !f.optional && !f.default && !(formConfig.value[f.key] || '').trim(),
+    )
+    if (missing) {
+      toast.error(t('connections.connectors.fieldRequired', { field: t(missing.labelKey, missing.labelFallback) }))
+      return
+    }
+    saving.value = true
+    try {
+      // ★add 先行：先以新名注册成功，再（编辑改名时）摘除旧 server。
+      // 若 add 失败 → 直接进 catch，旧 server 与实例都保持不变（一致），不会出现
+      // “旧的删了、新的没建起来”的死状态（先删后加的半失败窗口）。
+      const res = await addMcpServer(name, built.command, built.args, { env: built.env })
+      if (mode.value === 'edit' && props.instance) {
+        const oldName = props.instance.config?.mcp_server
+        if (oldName && oldName !== name) {
+          try { await removeMcpServer(oldName) } catch { /* 旧 server 可能已不在，忽略 */ }
+        }
+      }
+      const nextConfig = { ...formConfig.value, mcp_server: name }
+      if (mode.value === 'create') {
+        addInstance({ type: formType.value, name, config: nextConfig, enabled: true })
+      } else if (props.instance) {
+        updateInstance(props.instance.id, { name, config: nextConfig, enabled: true })
+      }
+      // 暖装秒连 → 已就绪；冷装首次下载组件 → 后端转后台重连，诚实提示"后台连接中"。
+      if (res?.connected === false) {
+        toast.info(t('connections.connectors.mcpConnecting', '已添加，正在后台连接（首次需下载组件，稍后可在卡片测试）'))
+      } else {
+        toast.success(t('connections.connectors.mcpConnected', '数据连接已就绪'))
+      }
+      emit('saved')
+      emit('close')
+    } catch (e) {
+      const { messageFromUnknownError } = await import('@/utils/errors')
+      toast.error(t('connections.connectors.mcpAddFailed', { msg: messageFromUnknownError(e) }))
+    } finally {
+      saving.value = false
+    }
+    return
+  }
+
+  // 本地配置类(文件 / OAuth stub)：保持既有 localStorage 行为。
   saving.value = true
   if (mode.value === 'create') {
     addInstance({
@@ -367,18 +421,7 @@ async function handleSave() {
               </div>
             </div>
 
-            <!-- OAuth：授权连接占位按钮（stub） -->
-            <div v-if="currentMethod === 'oauth'" class="hc-im-field">
-              <button class="hc-im-btn hc-im-btn--ghost hc-ck-authbtn" @click="authorize">
-                <Link2 :size="14" />
-                {{ t('connections.connectors.authorize', '授权连接') }}
-              </button>
-              <p class="hc-ck-authhint">
-                {{ t('connections.connectors.authHint', '授权后即可只读访问该数据源') }}
-              </p>
-            </div>
-
-            <div v-if="currentMethod !== 'token'" class="hc-im-field hc-im-field--row">
+            <div v-if="currentMethod !== 'token' && currentMethod !== 'mcp'" class="hc-im-field hc-im-field--row">
               <label class="hc-im-field__label">{{ t('common.enable') }}</label>
               <label class="hc-im-toggle">
                 <input v-model="formEnabled" type="checkbox" />

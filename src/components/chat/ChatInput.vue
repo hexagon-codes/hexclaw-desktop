@@ -15,6 +15,7 @@ import { listSessionMessages } from '@/api/chat'
 import { generateImage, type ImageGenResult } from '@/api/imagegen'
 import { submitVideoGeneration, pollUntilDone, videoToSrc, type VideoTaskStatus } from '@/api/videogen'
 import { logger } from '@/utils/logger'
+import { shouldSendOnEnter, normalizePastedText, hasWeirdLineBreaks } from '@/utils/chat-compose'
 
 /** `@` 召唤选中项（MentionPopup 抛出）。 */
 interface MentionSelectItem {
@@ -171,6 +172,8 @@ function removeContextRef(type: string, id: string) {
 }
 
 const inputText = ref('')
+const composing = ref(false) // IME 合成态（compositionstart→true / end→false）
+let lastCompositionEnd = 0 // 上次合成结束时间戳，兜底 WKWebView compositionend 早于确认键 keydown
 const textareaRef = ref<HTMLTextAreaElement>()
 const fileInputRef = ref<HTMLInputElement>()
 const mentionRef = ref<InstanceType<typeof MentionPopup>>()
@@ -353,8 +356,14 @@ function handleKeydown(e: KeyboardEvent) {
   if (showMention.value && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
     mentionRef.value?.handleKeydown(e); return
   }
-  if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.metaKey) { e.preventDefault(); handleSend() }
+  if (shouldSendOnEnter(e, { composing: composing.value, msSinceCompositionEnd: Date.now() - lastCompositionEnd })) {
+    e.preventDefault(); handleSend()
+  }
 }
+
+// IME 合成态手动跟踪（兜底 isComposing/keyCode 在 WKWebView 上的时序不可靠）。
+function handleCompositionStart() { composing.value = true }
+function handleCompositionEnd() { composing.value = false; lastCompositionEnd = Date.now() }
 
 function handleInput() {
   const el = textareaRef.value
@@ -505,6 +514,25 @@ function handlePaste(e: ClipboardEvent) {
   if (imageFiles.length > 0) {
     e.preventDefault()
     addFiles(imageFiles)
+    return
+  }
+  // #1 2026-06-23：粘贴文本若含「非标准换行」(\r / U+2028 / U+2029)，textarea 原生不折行 →
+  // markdown 渲染连成一行。手动规范化为 \n 再插入光标处，保留换行。
+  const text = e.clipboardData?.getData('text/plain') ?? ''
+  if (text && hasWeirdLineBreaks(text)) {
+    e.preventDefault()
+    const el = textareaRef.value
+    if (!el) return
+    const normalized = normalizePastedText(text)
+    const start = el.selectionStart ?? inputText.value.length
+    const end = el.selectionEnd ?? start
+    inputText.value = inputText.value.slice(0, start) + normalized + inputText.value.slice(end)
+    nextTick(() => {
+      const p = start + normalized.length
+      el.setSelectionRange(p, p)
+      el.focus()
+      handleInput()
+    })
   }
 }
 
@@ -681,6 +709,8 @@ defineExpose({ focus, setInput, triggerFileUpload })
         @keydown="handleKeydown"
         @input="handleInput"
         @paste="handlePaste"
+        @compositionstart="handleCompositionStart"
+        @compositionend="handleCompositionEnd"
       />
 
       <div class="hc-composer__bar">

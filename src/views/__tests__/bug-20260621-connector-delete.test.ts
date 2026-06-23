@@ -30,6 +30,14 @@ vi.mock('@/composables/useConnectorInstances', () => ({
   }),
 }))
 
+// 删除 mcp 连接器(mysql 等)现在会 best-effort 调 removeMcpServer 摘除后端 server。
+// mock 网络出口，避免真实 apiDelete 在 jsdom 里跑网络/拖慢 microtask 致 removeInstance 漏调。
+const { removeMcpServer, getMcpServerStatus } = vi.hoisted(() => ({
+  removeMcpServer: vi.fn(),
+  getMcpServerStatus: vi.fn(),
+}))
+vi.mock('@/api/mcp', () => ({ addMcpServer: vi.fn(), removeMcpServer, getMcpServerStatus }))
+
 // useToast：testConnector() 会调用 toast.info，提供哑实现避免真实 toast 依赖。
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({
@@ -81,6 +89,8 @@ function mountView() {
 describe('BUG-20260621 connector-delete: 数据连接器删除', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    removeMcpServer.mockResolvedValue({ message: 'ok' })
+    getMcpServerStatus.mockResolvedValue({ statuses: {}, servers: [] })
     // 单例 list 复位为含一个 enabled 实例。
     connectorList.value = [
       { id: 'c1', type: 'mysql', name: '生产库', config: { host: 'h' }, enabled: true },

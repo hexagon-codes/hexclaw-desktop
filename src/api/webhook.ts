@@ -42,12 +42,15 @@ export function createWebhook(data: {
   type: WebhookType
   prompt: string
   secret?: string
+  /** §13.3(1) 绑定 cron job：非空 → 事件触发该 job 而非跑 prompt（对齐后端 RegisterWebhookRequest.job_id）。 */
+  jobId?: string
 }) {
   return apiPost<{ id: string; name: string; url: string }>('/api/v1/webhooks', {
     name: data.name,
     type: data.type,
     prompt: data.prompt,
     secret: data.secret ?? '',
+    job_id: data.jobId ?? '',
     user_id: DESKTOP_USER_ID,
   })
 }
