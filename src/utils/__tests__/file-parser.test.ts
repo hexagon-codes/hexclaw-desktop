@@ -6,21 +6,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { isDocumentFile, parseDocument } from '../file-parser'
 
-const {
-  mockGetDocument,
-  mockGlobalWorkerOptions,
-} = vi.hoisted(() => ({
-  mockGetDocument: vi.fn(),
-  mockGlobalWorkerOptions: {} as { workerPort?: unknown; workerSrc?: string },
+// PDF 解析下沉后端：parsePDF 调 @/api/documents.extractDocument（前端不再用 pdfjs）。
+const { mockExtractDocument } = vi.hoisted(() => ({
+  mockExtractDocument: vi.fn(),
 }))
 
-vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
-  getDocument: mockGetDocument,
-  GlobalWorkerOptions: mockGlobalWorkerOptions,
-}))
-
-vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({
-  default: '/assets/pdf.worker.mock.js',
+vi.mock('@/api/documents', () => ({
+  extractDocument: mockExtractDocument,
 }))
 
 describe('isDocumentFile', () => {
@@ -76,9 +68,7 @@ describe('isDocumentFile', () => {
 
 describe('parseDocument', () => {
   beforeEach(() => {
-    mockGetDocument.mockReset()
-    delete mockGlobalWorkerOptions.workerPort
-    delete mockGlobalWorkerOptions.workerSrc
+    mockExtractDocument.mockReset()
   })
 
   it('解析纯文本文件', async () => {
@@ -123,31 +113,48 @@ describe('parseDocument', () => {
     expect(result.text).toBe('some content')
   })
 
-  it('解析 PDF 时应配置 workerSrc 并禁用直接 workerPort 注入', async () => {
-    mockGetDocument.mockReturnValue({
-      promise: Promise.resolve({
-        numPages: 1,
-        destroy: vi.fn().mockResolvedValue(undefined),
-        getPage: vi.fn().mockResolvedValue({
-          getTextContent: vi.fn().mockResolvedValue({
-            items: [{ str: 'PDF content' }],
-          }),
-        }),
-      }),
+  it('解析 PDF 下沉后端：调 extractDocument 上传文件，返回后端抽取的文本与页数', async () => {
+    mockExtractDocument.mockResolvedValue({
+      text: 'PDF content',
+      file_name: 'sample.pdf',
+      page_count: 3,
     })
 
     const file = new File(['%PDF'], 'sample.pdf', { type: 'application/pdf' })
     const result = await parseDocument(file)
 
+    // PDF 不在前端解析（WKWebView 无法建 Web Worker）→ 走后端 /documents/extract
+    expect(mockExtractDocument).toHaveBeenCalledTimes(1)
+    expect(mockExtractDocument).toHaveBeenCalledWith(file)
     expect(result.text).toBe('PDF content')
-    expect(mockGlobalWorkerOptions.workerPort).toBeNull()
-    expect(mockGlobalWorkerOptions.workerSrc).toBe('/assets/pdf.worker.mock.js')
-    expect(mockGetDocument).toHaveBeenCalledWith({
-      data: expect.any(Uint8Array),
-      useWorkerFetch: false,
-      isOffscreenCanvasSupported: false,
-      isImageDecoderSupported: false,
-      stopAtErrors: true,
-    })
+    expect(result.fileName).toBe('sample.pdf')
+    expect(result.pageCount).toBe(3)
+  })
+
+  it('后端 PDF 解析失败时向上抛错（由调用方弹错、绝不当二进制发）', async () => {
+    mockExtractDocument.mockRejectedValue(new Error('解析文档失败: bad pdf'))
+    const file = new File(['%PDF'], 'broken.pdf', { type: 'application/pdf' })
+    await expect(parseDocument(file)).rejects.toThrow(/broken\.pdf/)
+  })
+
+  it.each(['report.doc', 'report.docx', 'deck.pptx'])(
+    'Office 二进制 %s 也走后端统一解析（不在前端解析）',
+    async (name) => {
+      mockExtractDocument.mockResolvedValue({ text: 'office text', file_name: name })
+      const result = await parseDocument(new File(['x'], name))
+      expect(mockExtractDocument).toHaveBeenCalledTimes(1)
+      expect(result.text).toBe('office text')
+    },
+  )
+
+  it('表格 .xlsx 仍在前端解析（不走后端）', async () => {
+    // 仅用扩展名驱动路由；xlsx 走 SheetJS（此处不构造真 xlsx，断言不调后端即可）
+    mockExtractDocument.mockResolvedValue({ text: 'should-not-be-used', file_name: 'a.xlsx' })
+    await parseDocument(new File(['not-a-real-xlsx'], 'a.xlsx')).catch(() => {})
+    expect(mockExtractDocument).not.toHaveBeenCalled()
+  })
+
+  it('识别 PPTX 为文档', () => {
+    expect(isDocumentFile(new File([''], 'slides.pptx'))).toBe(true)
   })
 })

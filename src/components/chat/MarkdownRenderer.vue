@@ -239,7 +239,8 @@ const rendered = computed(() => {
 .markdown-body :deep(td) {
   border: 1px solid var(--hc-border);
   padding: 0.5em 0.8em;
-  text-align: left;
+  /* 逻辑方向：LTR=left、RTL(维语)=right 自动翻转，避免物理 left 让 RTL 表格列方向错（BUG-20260625 §3-9） */
+  text-align: start;
   font-size: 13px;
 }
 
