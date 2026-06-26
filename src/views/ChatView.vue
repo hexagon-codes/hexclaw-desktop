@@ -21,11 +21,12 @@ import { useSettingsStore } from '@/stores/settings'
 import {
   setSessionModel,
   resolveSessionModel,
+  decideSessionModelAction,
   type SessionModelBinding,
 } from '@/stores/session-model-binding'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
-import { shouldAutoScroll } from '@/utils/chat-compose'
+import { shouldAutoScroll, shouldSendOnEnter, imageSrc, scrollNavFlags } from '@/utils/chat-compose'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
@@ -58,7 +59,10 @@ import { getImageGenStatus, imageToSrc, type ImageGenResult } from '@/api/imageg
 import { getVideoGenStatus, videoToSrc, coverToSrc, type VideoTaskStatus } from '@/api/videogen'
 import { getVoiceChatStatus, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
 import { nanoid } from 'nanoid'
-import type { ChatAttachment, ChatMessage } from '@/types'
+import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
+import { getDocPreviewFile } from '@/utils/doc-preview'
+import { uploadDocumentPreview, documentPreviewUrl } from '@/api/documents'
+import { openOrDownloadDocument } from '@/utils/download'
 import crabLogo from '@/assets/logo-crab.png'
 
 const { t, locale } = useI18n()
@@ -250,6 +254,51 @@ function formatFullTime(ts: string): string {
 function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   const attachments = message.metadata?.attachments
   return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
+}
+
+// ─── 文档卡片（ChatGPT 风格：图标 + 名称 + 类型·大小 + 下载按钮；正文已进隐藏上下文）───
+function getMessageDocuments(message: ChatMessage): ChatDocumentRef[] {
+  const docs = message.metadata?.documents
+  return Array.isArray(docs) ? (docs as ChatDocumentRef[]) : []
+}
+function docExt(doc: ChatDocumentRef): string {
+  const i = doc.name.lastIndexOf('.')
+  return i >= 0 ? doc.name.slice(i + 1).toUpperCase() : 'FILE'
+}
+function formatDocSize(bytes: number): string {
+  if (!bytes) return ''
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+/** 原文件仍在本会话 → 可预览 / 下载（重载后失效，卡片仍展示）。 */
+function docActionable(doc: ChatDocumentRef): boolean {
+  return !!getDocPreviewFile(doc.id)
+}
+async function openDocViaSidecar(doc: ChatDocumentRef, download: boolean) {
+  // 预览走系统默认应用；下载走应用内 Save 对话框（绝不丢给系统浏览器，BUG-20260626）。
+  await openOrDownloadDocument({
+    file: getDocPreviewFile(doc.id) ?? null,
+    download,
+    filename: doc.name,
+    uploadPreview: uploadDocumentPreview,
+    previewUrl: documentPreviewUrl,
+    toast,
+    expiredMsg: t('chat.docPreviewExpired'),
+    failedMsg: t('chat.docPreviewFailed'),
+    savedMsg: (p) => '已保存到 ' + p,
+  })
+}
+function openDocumentPreview(doc: ChatDocumentRef) {
+  void openDocViaSidecar(doc, false)
+}
+function downloadDocument(doc: ChatDocumentRef) {
+  void openDocViaSidecar(doc, true)
+}
+
+/** 原位编辑卡片里要常驻显示的图片缩略图（编辑文字时图片不消失，BUG-20260625）。 */
+function editingImages(message: ChatMessage): ChatAttachment[] {
+  return getMessageAttachments(message).filter((a) => a.type === 'image')
 }
 
 /** 用户消息发送时挂载的 skill 名（BUG-20260622：气泡需显示这些 skill）。 */
@@ -816,21 +865,28 @@ function currentModelBinding(): SessionModelBinding {
 
 /**
  * 进入某会话时按「会话绑定 > Agent > 默认」解析并落地模型选择。
+ * 决策抽到纯函数 decideSessionModelAction（可单测，跨会话串模型 bug 落在这层）。
  * - restore/auto：恢复用户为该会话固定的模型（置 userOverrodeModel=true 使其生效且优先于 Agent）
- * - unavailable：绑定的模型当前不在可用列表 → 仅 UI 回退默认，【不清绑定、不提示】。
+ * - fallback：绑定的模型当前不在可用列表 → 仅 UI 回退默认，【不清绑定、不提示】。
  *     绑定的模型可能是「真删了」也可能是「Ollama/provider 仍在异步同步」（启动期 loadSessions
- *     先于 syncOllamaModels）。保守处理：列表补齐后由 availableModels watcher 自动复解析恢复，
- *     避免误删有效绑定 / 启动期误报。
- * - none：无绑定 → 保持默认/Agent 决策；若是「新会话首发」则把用户已选模型补绑到新 id
+ *     先于 syncOllamaModels）。保守处理：列表补齐后由 availableModels watcher 自动复解析恢复。
+ * - bind-current：新会话首发（null → 真实 id）且用户已选模型 → 把选择固定到这条新会话。
+ * - reset-default：无绑定会话 → 回退全局默认、清 override。【关键】从「绑定了模型的会话」
+ *     切到「无绑定会话」必须回退默认，不得静默沿用上一会话的模型（修复 BUG-20260625）。
  */
 function applySessionModel(newId: string, prevId: string | null) {
-  const res = resolveSessionModel(newId, settingsStore.availableModels)
-  switch (res.kind) {
+  const action = decideSessionModelAction({
+    resolution: resolveSessionModel(newId, settingsStore.availableModels),
+    prevId,
+    userOverrodeModel: userOverrodeModel.value,
+    hasSelectedModel: !!selectedModel.value,
+  })
+  switch (action.kind) {
     case 'restore':
-      selectedModel.value = res.model.modelId
-      selectedProviderId.value = res.model.providerId
-      selectedProviderKey.value = res.model.providerKey
-      selectedProviderName.value = res.model.providerName
+      selectedModel.value = action.model.modelId
+      selectedProviderId.value = action.model.providerId
+      selectedProviderKey.value = action.model.providerKey
+      selectedProviderName.value = action.model.providerName
       userOverrodeModel.value = true
       syncChatParams()
       break
@@ -842,16 +898,14 @@ function applySessionModel(newId: string, prevId: string | null) {
       userOverrodeModel.value = true
       syncChatParams()
       break
-    case 'unavailable':
-      // 非破坏性回退：不清绑定，等模型列表补齐后复解析恢复（见 availableModels watcher）
+    case 'fallback':
+    case 'reset-default':
+      // 回退全局默认（loadLLMConfig 内含 syncChatParams）。fallback 保留绑定等列表补齐复解析。
       userOverrodeModel.value = false
       loadLLMConfig()
       break
-    case 'none':
-      // 新会话首发（null → 真实 id）且用户已显式选过模型 → 把选择固定到这条新会话
-      if (!prevId && userOverrodeModel.value && selectedModel.value) {
-        setSessionModel(newId, currentModelBinding())
-      }
+    case 'bind-current':
+      setSessionModel(newId, currentModelBinding())
       break
   }
 }
@@ -900,12 +954,17 @@ function scrollToTop() {
 function handleMessagesScroll() {
   const el = messagesContainerRef.value
   if (!el) return
-  const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
-  const distanceFromTop = el.scrollTop
-  // 用户向上滚动超过 100px → 标记为主动滚动，停止自动跟随
-  userScrolledUp.value = distanceFromBottom > 100
-  showScrollToBottom.value = distanceFromBottom > 200
-  showScrollToTop.value = distanceFromTop > 200 && distanceFromBottom < 100
+  // BUG-20260626：导航箭头/已上滚标记交由 scrollNavFlags 统一判定——加"有消息 + 真实溢出够大"两道闸，
+  // 避免输入框变高压缩视口时，新/短会话误显下翻箭头、误停自动跟随。
+  const flags = scrollNavFlags({
+    scrollHeight: el.scrollHeight,
+    scrollTop: el.scrollTop,
+    clientHeight: el.clientHeight,
+    hasMessages: chatStore.messages.length > 0,
+  })
+  userScrolledUp.value = flags.userScrolledUp
+  showScrollToBottom.value = flags.showScrollToBottom
+  showScrollToTop.value = flags.showScrollToTop
 }
 
 function clearAttachmentPreview() {
@@ -976,6 +1035,27 @@ const {
   cancelEdit,
   autoResizeEditTextarea,
 } = useChatActions(chatStore, toast, handleSend)
+
+// 编辑卡回车的 IME 合成态守卫（与 ChatInput 同源 shouldSendOnEnter）：中文/日文 IME 回车是
+// 「确认候选词」，不能误当「提交编辑」。compositionstart/end 跟踪 + 兜底 WKWebView 早结束竞态。
+const editComposing = ref(false)
+let editLastCompositionEnd = 0
+function onEditCompositionStart() {
+  editComposing.value = true
+}
+function onEditCompositionEnd() {
+  editComposing.value = false
+  editLastCompositionEnd = Date.now()
+}
+function onEditEnter(e: KeyboardEvent, msgId: string) {
+  const ok = shouldSendOnEnter(e, {
+    composing: editComposing.value,
+    msSinceCompositionEnd: Date.now() - editLastCompositionEnd,
+  })
+  if (!ok) return // 合成态 → 让 IME 处理，不提交
+  e.preventDefault()
+  confirmEdit(msgId)
+}
 
 watch(
   () => chatStore.messages.length,
@@ -1221,7 +1301,14 @@ watch(
 watch(
   () => chatStore.currentSessionId,
   (newId, prevId) => {
-    if (!newId) return
+    if (!newId) {
+      // 离开当前会话（删除当前会话 / 进入新会话空白态）：清掉上一会话遗留的手动模型覆盖并回退全局默认。
+      // 否则下次选中「无绑定会话」时，残留的 userOverrodeModel 会被误判为「新会话首发」，
+      // 把上一会话的模型偷偷绑过去（BUG-20260625 跨会话串模型）。
+      userOverrodeModel.value = false
+      loadLLMConfig()
+      return
+    }
     applySessionModel(newId, prevId ?? null)
   },
 )
@@ -1588,14 +1675,14 @@ function startSidebarResize(event: MouseEvent) {
                           <span v-if="att.type === 'image'" class="hc-msg__img-wrap">
                             <img
                               class="hc-msg__attachment-img"
-                              :src="att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data"
+                              :src="imageSrc(att)"
                               :alt="att.name"
-                              @click="openImagePreview(att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data)"
+                              @click="openImagePreview(imageSrc(att))"
                             />
                             <button
                               class="hc-msg__media-download"
                               :title="t('chat.downloadImage', '下载图片')"
-                              @click.stop="downloadImage(att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data, att.name)"
+                              @click.stop="downloadImage(imageSrc(att), att.name)"
                             >⬇</button>
                           </span>
                           <span v-else-if="att.type === 'video'" class="hc-msg__video-wrap">
@@ -1603,12 +1690,12 @@ function startSidebarResize(event: MouseEvent) {
                               controls
                               preload="metadata"
                               class="hc-msg__video"
-                              :src="att.data.startsWith('http') ? att.data : 'data:' + att.mime + ';base64,' + att.data"
+                              :src="imageSrc(att)"
                             />
                             <button
                               class="hc-msg__media-download"
                               :title="t('chat.downloadVideo', '下载视频')"
-                              @click.stop="downloadImage(att.data.startsWith('http') ? att.data : 'data:' + att.mime + ';base64,' + att.data, att.name)"
+                              @click.stop="downloadImage(imageSrc(att), att.name)"
                             >⬇</button>
                           </span>
                           <audio
@@ -1616,7 +1703,7 @@ function startSidebarResize(event: MouseEvent) {
                             controls
                             preload="metadata"
                             class="hc-msg__audio"
-                            :src="att.data.startsWith('http') || att.data.startsWith('data:') ? att.data : 'data:' + att.mime + ';base64,' + att.data"
+                            :src="imageSrc(att)"
                           />
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
@@ -1842,11 +1929,45 @@ function startSidebarResize(event: MouseEvent) {
                           <img
                             v-if="att.type === 'image'"
                             class="hc-msg__attachment-img"
-                            :src="'data:' + att.mime + ';base64,' + att.data"
+                            :src="imageSrc(att)"
                             :alt="att.name"
                           />
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
+                      </div>
+                      <!-- 文档卡片（ChatGPT 风格）：彩色类型图标 + 名称 + 类型·大小 + 下载按钮；正文进隐藏上下文不灌气泡 -->
+                      <div v-if="getMessageDocuments(msg).length" class="hc-docfiles">
+                        <div
+                          v-for="(doc, di) in getMessageDocuments(msg)"
+                          :key="di"
+                          class="hc-docfile"
+                          :class="{ 'hc-docfile--actionable': docActionable(doc) }"
+                        >
+                          <button
+                            type="button"
+                            class="hc-docfile__open"
+                            :title="docActionable(doc) ? '点击打开原文件' : doc.name"
+                            @click="openDocumentPreview(doc)"
+                          >
+                            <span class="hc-docfile__icon" :data-ext="docExt(doc)">{{ docExt(doc) }}</span>
+                            <span class="hc-docfile__meta">
+                              <span class="hc-docfile__name">{{ doc.name }}</span>
+                              <span class="hc-docfile__sub">{{ docExt(doc) }} · {{ formatDocSize(doc.size) }}</span>
+                            </span>
+                          </button>
+                          <button
+                            v-if="docActionable(doc)"
+                            type="button"
+                            class="hc-docfile__dl"
+                            title="下载"
+                            @click.stop="downloadDocument(doc)"
+                          >
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                              <path d="M8 2.5v7m0 0L5.2 6.7M8 9.5l2.8-2.8M3 11.5v1A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-1"
+                                stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                            </svg>
+                          </button>
+                        </div>
                       </div>
                       <!-- BUG-20260622：发送时挂载的 skill 在气泡内显示 -->
                       <div
@@ -1866,13 +1987,25 @@ function startSidebarResize(event: MouseEvent) {
                     </div>
                     <!-- DeepSeek 风格原位编辑框（独立圆角卡片） -->
                     <div v-if="editingMsgId === msg.id" class="hc-msg__edit-card">
+                      <!-- 编辑时图片缩略图常驻顶部（编辑文字不丢图，BUG-20260625） -->
+                      <div v-if="editingImages(msg).length" class="hc-msg__edit-attachments">
+                        <img
+                          v-for="(att, ai) in editingImages(msg)"
+                          :key="ai"
+                          class="hc-msg__edit-att-img"
+                          :src="imageSrc(att)"
+                          :alt="att.name"
+                        />
+                      </div>
                       <textarea
                         :ref="(el) => { if (el) setEditTextareaEl(el as HTMLTextAreaElement) }"
                         v-model="editingText"
                         class="hc-msg__edit-textarea"
                         rows="1"
-                        @keydown.enter.exact.prevent="confirmEdit(msg.id)"
+                        @keydown.enter.exact="onEditEnter($event, msg.id)"
                         @keydown.escape="cancelEdit"
+                        @compositionstart="onEditCompositionStart"
+                        @compositionend="onEditCompositionEnd"
                         @input="autoResizeEditTextarea"
                       />
                       <div class="hc-msg__edit-actions">
@@ -2588,16 +2721,42 @@ function startSidebarResize(event: MouseEvent) {
 .hc-msg__edit-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin-top: 8px;
+  gap: 12px;
+  margin: 8px auto 0;
   padding: 20px;
   border: 0.5px solid var(--hc-accent, #007AFF);
   border-radius: 16px;
   background: var(--hc-bg-input);
   box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.12),
               0 4px 12px rgba(0, 0, 0, 0.08);
+  /* ChatGPT 风格：撑满会话区，与下方 composer 同宽（min(94%, 1200px)）并居中 */
+  width: min(94%, 1200px);
   max-width: 100%;
+  box-sizing: border-box;
   animation: fadeScaleIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+/* 编辑态：解除用户气泡 70% 宽度限制，让编辑卡片占满会话区（与 composer 一致） */
+.hc-msg__body--user:has(.hc-msg__edit-card),
+.hc-msg__bubble-wrap--user:has(.hc-msg__edit-card) {
+  max-width: 100%;
+  width: 100%;
+  align-items: stretch;
+}
+
+/* 编辑卡片内的图片缩略图行：编辑文字时图片常驻、可见、不丢失 */
+.hc-msg__edit-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.hc-msg__edit-att-img {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 0.5px solid var(--hc-border, rgba(0, 0, 0, 0.1));
 }
 
 .hc-msg__edit-textarea {
@@ -2612,7 +2771,8 @@ function startSidebarResize(event: MouseEvent) {
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   padding: 0;
   overflow-y: auto;
-  max-height: 200px;
+  min-height: 56px;
+  max-height: 320px;
 }
 
 .hc-msg__edit-textarea::placeholder { color: var(--hc-text-secondary, #6E6E73); }
@@ -3814,6 +3974,109 @@ function startSidebarResize(event: MouseEvent) {
   padding: 4px 8px;
   border-radius: var(--hc-radius-sm, 6px);
   background: rgba(255, 255, 255, 0.15);
+}
+
+/* ─── 文档文件卡片（ChatGPT 风格：彩色类型图标 + 名称 + 类型·大小 + 下载）─── */
+.hc-docfiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.hc-docfile {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 300px;
+  padding: 6px 6px 6px 8px;
+  background: var(--hc-bg-elevated, #fff);
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 6px 16px rgba(0, 0, 0, 0.06);
+  color: var(--hc-text-primary, #1d1d1f);
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+.hc-docfile--actionable:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.07), 0 10px 24px rgba(0, 0, 0, 0.1);
+}
+.hc-docfile__open {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 4px 4px 4px 2px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: inherit;
+  cursor: default;
+}
+.hc-docfile--actionable .hc-docfile__open { cursor: pointer; }
+/* 彩色"文档"图标（圆角方块 + 折角 + 类型缩写） */
+.hc-docfile__icon {
+  position: relative;
+  flex-shrink: 0;
+  width: 36px;
+  height: 44px;
+  border-radius: 8px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: #fff;
+  background: #8a8a8e;
+}
+.hc-docfile__icon::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 0 10px 10px;
+  border-color: transparent transparent rgba(255, 255, 255, 0.4) transparent;
+  border-top-right-radius: 8px;
+}
+.hc-docfile__icon[data-ext='PDF'] { background: #e5484d; }
+.hc-docfile__icon[data-ext='DOC'],
+.hc-docfile__icon[data-ext='DOCX'] { background: #2563eb; }
+.hc-docfile__icon[data-ext='XLS'],
+.hc-docfile__icon[data-ext='XLSX'],
+.hc-docfile__icon[data-ext='CSV'] { background: #16a34a; }
+.hc-docfile__icon[data-ext='PPT'],
+.hc-docfile__icon[data-ext='PPTX'] { background: #ea580c; }
+.hc-docfile__meta { display: flex; flex-direction: column; min-width: 0; gap: 2px; }
+.hc-docfile__name {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hc-docfile__sub { font-size: 11px; color: var(--hc-text-secondary, #8a8a8e); }
+.hc-docfile__dl {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--hc-text-secondary, #6e6e73);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.hc-docfile__dl:hover {
+  background: var(--hc-bg-card, #f1f1f3);
+  color: var(--hc-text-primary, #1d1d1f);
 }
 
 .hc-msg__video {

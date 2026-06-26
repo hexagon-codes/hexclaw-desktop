@@ -24,6 +24,11 @@
   --hc-text-muted: #5a6470;
   --hc-text-inverse: #ffffff;
 
+  /* 滚动条（ChatGPT/macOS 风格：默认隐形、悬停浮现、离开即隐的细圆条） */
+  --hc-scrollbar-thumb: rgba(184, 199, 219, 0.22);
+  --hc-scrollbar-thumb-hover: rgba(184, 199, 219, 0.42);
+  --hc-scrollbar-thumb-active: rgba(184, 199, 219, 0.58);
+
   --hc-border: rgba(255, 255, 255, 0.08);
   --hc-border-subtle: rgba(255, 255, 255, 0.05);
   --hc-divider: rgba(255, 255, 255, 0.06);
@@ -108,6 +113,11 @@
   --hc-text-muted: #5f7b95;
   --hc-text-inverse: #ffffff;
 
+  /* 滚动条（浅色：中性深蓝低透明，悬停浮现） */
+  --hc-scrollbar-thumb: rgba(36, 66, 97, 0.20);
+  --hc-scrollbar-thumb-hover: rgba(36, 66, 97, 0.34);
+  --hc-scrollbar-thumb-active: rgba(36, 66, 97, 0.48);
+
   --hc-border: rgba(63, 143, 212, 0.12);
   --hc-border-subtle: rgba(63, 143, 212, 0.07);
   --hc-divider: rgba(63, 143, 212, 0.1);
@@ -167,29 +177,56 @@ body,
   -webkit-app-region: no-drag;
 }
 
-/* ─── Scrollbar — macOS style thin scrollbar ────────────── */
+/* ─── Scrollbar — ChatGPT / macOS 风格：悬停浮现 · 离开即隐 · 细圆浮条 ───
+   交互：thumb 默认完全透明（不打扰阅读）；鼠标进入「滚动容器或其任意子孙」时淡入，
+        移开立即淡出（:hover 链精确命中，修掉旧 `*:hover > thumb` 子组合器对伪元素失效的 bug）。
+   视觉：track 永远透明；thumb 用「透明描边 + background-clip:padding-box」内缩，
+        10px 轨道里只画出 ~4px 细条，全圆角；min-height 保证短列表也可抓取。 */
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 10px;
+  height: 10px;
 }
 
-::-webkit-scrollbar-track {
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: transparent;
-  border-radius: 3px;
-  transition: background 0.3s;
+  background-color: transparent;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  min-height: 40px;
+  transition: background-color 0.25s var(--hc-ease-out);
 }
 
-*:hover > ::-webkit-scrollbar-thumb,
+/* 鼠标在滚动容器内（含其祖先链任一元素被 hover）→ thumb 浮现 */
+:hover::-webkit-scrollbar-thumb {
+  background-color: var(--hc-scrollbar-thumb);
+}
+
+/* 滚动中浮现：纯滚轮/键盘/惯性滚动（鼠标未必悬停）时也短暂可见，停下由 JS 移除 hc-scrolling 类即隐 */
+.hc-scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--hc-scrollbar-thumb);
+}
+
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--hc-text-muted);
+  background-color: var(--hc-scrollbar-thumb-hover);
 }
 
 ::-webkit-scrollbar-thumb:active {
-  background: var(--hc-text-secondary);
+  background-color: var(--hc-scrollbar-thumb-active);
+}
+
+/* Firefox / 标准属性兜底：默认隐形，悬停浮现 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: var(--hc-scrollbar-thumb) transparent;
 }
 
 /* ─── Selection ─────────────────────────────────────────── */

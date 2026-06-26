@@ -157,8 +157,11 @@ function statusLabel(inst: IMInstance): string {
   return t('connections.channels.disabled')
 }
 
-// 能力 chip：IM / 邮箱通道统一双向（收件 + 发送）
-const caps: Array<'receive' | 'send'> = ['receive', 'send']
+// 能力 chip：按 provider 派生，镜像后端 connectionCapabilities（email 只收 receive；IM 收+发）。
+// 不再对所有通道硬编码 ['receive','send']——否则 email 卡片谎报"发送"，与投递能力闸门不一致。
+function capsFor(inst: IMInstance): Array<'receive' | 'send'> {
+  return inst.type === 'email' ? ['receive'] : ['receive', 'send']
+}
 
 function metaSub(inst: IMInstance): string {
   const fields = CHANNEL_CONFIG_FIELDS[inst.type] || []
@@ -286,7 +289,7 @@ defineExpose({ openCreate })
 
         <div class="hc-cxcard__caps">
           <span
-            v-for="c in caps"
+            v-for="c in capsFor(inst)"
             :key="c"
             class="hc-cxcap"
             :class="`hc-cxcap--${c}`"

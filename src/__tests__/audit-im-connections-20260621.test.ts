@@ -158,7 +158,8 @@ describeBE('F-2 getConnections 返回的连接列表不含邮箱（邮箱只在�
     expect(handlerConnections).toContain('s.instanceMgr.List')
     // connectionCapabilities 虽然把 email 列进 case，但 List 只迭代 instanceMgr 实例。
     // 邮箱实例若从未 Upsert 到后端（前端纯本地保存），则永不出现在 GET /connections。
-    expect(handlerConnections).toMatch(/case "email",/)
+    // 2026-06-25 §3-5：email 已从「receive+send 分组」拆为独立 receive-only case（发件未接入 instances）。
+    expect(handlerConnections).toMatch(/case "email"/)
   })
 
   it('getConnections 在端点降级时返回空数组（不抛异常）', async () => {

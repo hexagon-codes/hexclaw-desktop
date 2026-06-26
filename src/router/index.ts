@@ -113,7 +113,9 @@ function markWelcomeDone(): void {
 }
 
 router.beforeEach(async (to) => {
-  if (to.meta?.layout === 'blank' || to.path === '/settings') {
+  // 用 startsWith 而非精确匹配：未来 /settings 子路由（如 /settings/account）也应在 config 未就绪时放行，
+  // 否则用户改配置的正常入口会被误重定向到 /welcome（BUG-20260625 §3-8 防御性加固）。
+  if (to.meta?.layout === 'blank' || to.path.startsWith('/settings')) {
     return true
   }
 

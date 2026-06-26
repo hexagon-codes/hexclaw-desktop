@@ -196,6 +196,23 @@ describe('TasksView', () => {
     )
   })
 
+  it('BUG-20260625 R3 H-2: receive-only email connection is NOT offered as a deliver target (capability-gated)', async () => {
+    // email 后端 capabilities=['receive']（无 send）；IM 有 send。只收的邮箱若被选作投递目标，运行期 instanceMgr.Send 必失败。
+    connApis.getConnections.mockResolvedValue([
+      { id: 'pi-email-1', provider: 'email', name: '我的邮箱', capabilities: ['receive'], status: 'connected', enabled: true },
+      { id: 'pi-feishu-1', provider: 'feishu', name: '研发群机器人', capabilities: ['receive', 'send'], status: 'connected', enabled: true },
+    ])
+    const wrapper = mountTasksView()
+    await flushPromises()
+
+    ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
+    await flushPromises()
+
+    const chipTexts = wrapper.findAll('.deliver-chip').map((c) => c.text())
+    expect(chipTexts.some((t) => t.includes('研发群机器人')), '可发送的 IM 连接应在投递目标').toBe(true)
+    expect(chipTexts.some((t) => t.includes('我的邮箱')), 'receive-only email 不应作为投递目标').toBe(false)
+  })
+
   it('pauses and resumes an active job from the card actions', async () => {
     const wrapper = mountTasksView()
     await flushPromises()
