@@ -163,6 +163,7 @@ export const useChatStore = defineStore('chat', () => {
     error,
     chatMode,
     agentRole,
+    thinkingEnabled,
     hasCustomTitle,
     pendingSessionTitle,
     pendingSessionIds,

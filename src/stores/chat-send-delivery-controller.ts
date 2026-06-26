@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { ChatAttachment, ChatMessage } from '@/types'
+import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import { buildChatRequestMetadata } from './chat-request-metadata'
 import { createChatSendBackendDeliveryController } from './chat-send-backend-delivery'
 import {
@@ -21,7 +21,7 @@ export function createChatSendDeliveryController(params: {
   isSessionCancelled: (sessionId: string) => boolean
   setSessionPending: (sessionId: string, value: boolean, sending: Ref<boolean>, draftSending: Ref<boolean>) => void
   upsertStreamState: (sessionId: string, nextState: import('./chat-stream-helpers').SessionStreamState | null) => void
-  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => void
+  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => boolean
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
     content: string
@@ -77,6 +77,8 @@ export function createChatSendDeliveryController(params: {
       memoryEnabled,
       imageGeneration: modelCaps.includes('image_generation'),
       videoGeneration: modelCaps.includes('video_generation'),
+      temperature: chatParams.value.temperature,
+      maxTokens: chatParams.value.maxTokens,
       agentMode,
       userLocale,
     })
@@ -116,6 +118,7 @@ export function createChatSendDeliveryController(params: {
     sending: Ref<boolean>
     draftSending: Ref<boolean>
     skillNames?: string[]
+    documents?: ChatDocumentRef[]
   }): Promise<ChatMessage | null> {
     const {
       backendText,
@@ -125,6 +128,7 @@ export function createChatSendDeliveryController(params: {
       sending,
       draftSending,
       skillNames,
+      documents,
     } = args
 
     clearSessionCancelled(sessionId)
@@ -132,11 +136,15 @@ export function createChatSendDeliveryController(params: {
 
     // bug#2 2026-06-23：显式挂载/召唤的技能经 metadata.skills 透传给后端（逗号分隔）。
     // 此前 skillNames 只进本地消息 metadata、从未发给后端 → 技能当轮不生效。
-    const baseMetadata = buildRequestMetadata()
-    const requestMetadata =
-      skillNames && skillNames.length
-        ? { ...(baseMetadata ?? {}), skills: skillNames.join(',') }
-        : baseMetadata
+    // BUG-20260626：文档卡片 ref 经 metadata.documents（JSON）透传给后端持久化，
+    // 否则切会话重载后文档退化成纯文本（卡片只在前端本地、不落库）。
+    let requestMetadata = buildRequestMetadata()
+    if (skillNames && skillNames.length) {
+      requestMetadata = { ...(requestMetadata ?? {}), skills: skillNames.join(',') }
+    }
+    if (documents && documents.length) {
+      requestMetadata = { ...(requestMetadata ?? {}), documents: JSON.stringify(documents) }
+    }
     const wsConnected = await chatSvc.ensureWebSocketConnected()
 
     if (isSessionCancelled(sessionId)) {

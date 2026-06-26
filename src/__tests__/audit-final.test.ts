@@ -1204,7 +1204,8 @@ describe('12. Router / navigation', () => {
     const routerPath = path.join(__dirname, '..', 'router', 'index.ts')
     const content = fs.readFileSync(routerPath, 'utf-8')
 
-    expect(content).toContain("to.path === '/settings'")
+    // 2026-06-25 §3-8：精确匹配改为 startsWith，覆盖未来 /settings 子路由也免守卫放行
+    expect(content).toContain("to.path.startsWith('/settings')")
     expect(content).toMatch(/layout.*blank.*settings.*return true/s)
   })
 })

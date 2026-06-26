@@ -113,6 +113,46 @@ describe('useChatActions', () => {
     expect(store.messages).toHaveLength(0)
   })
 
+  // ── BUG-20260625：会话上传图片→编辑→提交，图片丢失 ──
+  // 根因：confirmEdit/handleRetry 重发只带 text，丢掉原用户消息 metadata.attachments（图片）。
+  const IMG = { type: 'image', name: 'photo.png', mime: 'image/png', data: 'data:image/png;base64,AAAA' }
+
+  function makeStoreWithImage() {
+    return {
+      messages: [
+        { id: 'u1', role: 'user', content: '看这张图', timestamp: '', metadata: { attachments: [IMG] } },
+        { id: 'a1', role: 'assistant', content: '收到', timestamp: '', metadata: {} },
+      ],
+      chatParams: { model: 'gpt-4' },
+      setMessageFeedback: vi.fn().mockResolvedValue(null),
+    }
+  }
+
+  it('BUG-20260625 confirmEdit 重发携带原消息的图片附件（不丢图）', async () => {
+    const store = makeStoreWithImage()
+    const send = vi.fn().mockResolvedValue(true)
+    const { handleEdit, confirmEdit, editingText } = useChatActions(store as any, makeMockToast() as any, send as any)
+    handleEdit(0)
+    editingText.value = '看这张图（改）'
+    await confirmEdit('u1')
+
+    expect(send).toHaveBeenCalledTimes(1)
+    const [text, , options] = send.mock.calls[0]!
+    expect(text).toBe('看这张图（改）')
+    expect(options?.attachments).toEqual([IMG]) // ★图片必须随编辑重发
+  })
+
+  it('BUG-20260625 handleRetry 重发携带原用户消息的图片附件（不丢图）', async () => {
+    const store = makeStoreWithImage()
+    const send = vi.fn().mockResolvedValue(true)
+    const { handleRetry } = useChatActions(store as any, makeMockToast() as any, send as any)
+    await handleRetry(1) // 从 assistant 触发，回溯到 u1（带图）
+    expect(send).toHaveBeenCalledTimes(1)
+    const [text, , options] = send.mock.calls[0]!
+    expect(text).toBe('看这张图')
+    expect(options?.attachments).toEqual([IMG])
+  })
+
   it('confirmEdit with empty text calls cancelEdit instead', async () => {
     const store = makeMockStore()
     const { handleEdit, confirmEdit, editingText, editingMsgId } = useChatActions(store as any, makeMockToast() as any, mockSend)

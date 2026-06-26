@@ -151,6 +151,7 @@ describe('chat controller modules', () => {
       error,
       chatMode: ref('agent'),
       agentRole: ref('planner'),
+      thinkingEnabled: ref(false),
       hasCustomTitle: ref(true),
       pendingSessionIds: ref({}),
       pendingSuggestedTitleExpectation: ref({}),
@@ -203,6 +204,7 @@ describe('chat controller modules', () => {
       error: ref(null),
       chatMode: ref('chat'),
       agentRole: ref(''),
+      thinkingEnabled: ref(false),
       hasCustomTitle: ref(false),
       pendingSessionIds: ref({}),
       pendingSuggestedTitleExpectation,
@@ -578,6 +580,7 @@ describe('chat controller modules', () => {
       appendMessageToSession,
       resetSessionStream,
       loadSessions,
+      persistErrorReply: vi.fn(),
     })
 
     controller.handleSendError(new Error('network down'), 's1', ref(false), ref(false))
@@ -593,6 +596,29 @@ describe('chat controller modules', () => {
       }),
     )
     expect(loadSessions).toHaveBeenCalled()
+  })
+
+  // Bug 复现(2026-06-25): 报错气泡切会话回来就没了 —— 只写内存、persistMessage 是 no-op，从不落库。
+  it('persists the error reply to backend so it survives session reload', () => {
+    const persistErrorReply = vi.fn()
+    const controller = createChatStreamErrorController({
+      error: ref(null),
+      currentSessionId: ref('s1'),
+      streamingSessionId: ref<string | null>(null),
+      logger: { error: vi.fn() } as any,
+      createId: () => 'assistant-error-2',
+      appendMessageToSession: vi.fn(),
+      resetSessionStream: vi.fn(),
+      loadSessions: vi.fn(),
+      persistErrorReply,
+    })
+
+    controller.handleSendError(new Error('llm down'), 's1', ref(false), ref(false))
+
+    expect(persistErrorReply).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({ id: 'assistant-error-2', role: 'assistant', content: 'llm down' }),
+    )
   })
 
   it('derives current streaming selectors from active stream state and pending approvals', () => {

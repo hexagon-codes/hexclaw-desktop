@@ -123,3 +123,47 @@ export function resolveSessionModel(
   )
   return match ? { kind: 'restore', model: match } : { kind: 'unavailable' }
 }
+
+/**
+ * 进入某会话时应落地的具体 UI 动作（由 ChatView 执行）。把「解析结果 → 动作」的
+ * 决策抽成纯函数，是为了让切换编排可单测——跨会话串模型的 bug 正落在这层。
+ */
+export type SessionModelAction =
+  | { kind: 'restore'; model: AvailableModelLite } // 恢复会话绑定模型，置 override
+  | { kind: 'auto' } // 恢复为 'auto'，置 override
+  | { kind: 'fallback' } // 绑定存在但模型暂不可用 → UI 回退默认、保留绑定、清 override
+  | { kind: 'bind-current' } // 新会话首发（null → 新建 id）→ 把当前 UI 选择固定到新会话
+  | { kind: 'reset-default' } // 无绑定 → UI 回退全局默认、清 override（不沿用上一会话模型）
+
+/**
+ * 决定进入会话 newId 时该做什么。纯函数，无副作用。
+ *
+ * 关键不变量（修复 BUG-20260625 跨会话串模型）：
+ * - 「无绑定」会话（resolution=none）只在「新会话首发」这一种情形补绑当前选择；
+ *   其余一律 reset-default —— 从「绑定了模型的会话」切到「无绑定会话」必须回退全局默认，
+ *   不得静默沿用上一个会话的模型。
+ * - bind-current 仅当 prevId===null（null → 真实 id）且用户已显式选模型时触发。
+ *   调用方必须保证「离开会话(→null)时清掉 userOverrodeModel」，否则删除会话后残留的
+ *   覆盖标记会让选中下一个无绑定会话时被误判为「新会话首发」而把上一会话模型串过去。
+ */
+export function decideSessionModelAction(params: {
+  resolution: ModelBindingResolution
+  prevId: string | null
+  userOverrodeModel: boolean
+  hasSelectedModel: boolean
+}): SessionModelAction {
+  const { resolution, prevId, userOverrodeModel, hasSelectedModel } = params
+  switch (resolution.kind) {
+    case 'restore':
+      return { kind: 'restore', model: resolution.model }
+    case 'auto':
+      return { kind: 'auto' }
+    case 'unavailable':
+      return { kind: 'fallback' }
+    case 'none':
+      if (prevId === null && userOverrodeModel && hasSelectedModel) {
+        return { kind: 'bind-current' }
+      }
+      return { kind: 'reset-default' }
+  }
+}

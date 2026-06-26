@@ -14,10 +14,14 @@
  */
 
 import { nextTick, type Ref } from 'vue'
+import { i18n } from '@/i18n'
 import { searchKnowledge } from '@/api/knowledge'
 import { formatContextBlock } from '@/utils/chat-context'
 import { parseDocument } from '@/utils/file-parser'
-import type { ChatAttachment, ChatMessage } from '@/types'
+import { registerDocPreview } from '@/utils/doc-preview'
+import { logger } from '@/utils/logger'
+import { useToast } from './useToast'
+import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { useChatStore } from '@/stores/chat'
 import {
   buildConversationAutomationActions,
@@ -196,7 +200,12 @@ export function useChatSend(deps: ChatSendDeps) {
   async function handleSend(
     text: string,
     files?: File[],
-    options?: { contextRefs?: import('@/types').ChatContextRef[]; skillNames?: string[] },
+    options?: {
+      contextRefs?: import('@/types').ChatContextRef[]
+      skillNames?: string[]
+      // 预置附件（编辑/重试重发时带回原消息的图片等，BUG-20260625），与 files/preview 合并
+      attachments?: ChatAttachment[]
+    },
   ): Promise<boolean> {
     // Validate model selection before sending
     // model=undefined means "let backend decide" (Agent mode) — valid
@@ -207,7 +216,7 @@ export function useChatSend(deps: ChatSendDeps) {
 
     // ✦ Layer 0 — slash command (`/cron add 30m "..."` / `/cron list` / 等)
     //   (D3.2：附件路径不走 slash，与 fast-path 同等约束)
-    if (!files?.length && !attachmentPreview.value && !parsedDocument.value) {
+    if (!files?.length && !attachmentPreview.value && !parsedDocument.value && !options?.attachments?.length) {
       const slash = parseCronSlashCommand(text)
       if (slash) {
         // 不论 kind，都先把 user 原始输入 push 到 chat，符合用户预期
@@ -227,7 +236,7 @@ export function useChatSend(deps: ChatSendDeps) {
 
     // ✦ 4 层 Intent Resolver — tier=1 fast-path 跳过 LLM，避开 tool_use_id 链路 bug
     //   (附件路径不走 fast-path：用户带文件的意图通常超出"纯创建任务"，留给 LLM)
-    if (!files?.length && !attachmentPreview.value && !parsedDocument.value) {
+    if (!files?.length && !attachmentPreview.value && !parsedDocument.value && !options?.attachments?.length) {
       const intent = classifyCronIntent(text)
       if (intent.tier === 1) {
         const fastMessage = buildFastPathAssistantMessage(text)
@@ -257,18 +266,36 @@ export function useChatSend(deps: ChatSendDeps) {
           }
         : null
 
+    const toast = useToast()
+
     // 将附件转为 base64（支持多文件）
-    const attachments: ChatAttachment[] = []
+    // 预置附件（编辑/重试重发带回的原图片等，data 已是 base64/URL）置前，再叠加本次新上传。
+    const attachments: ChatAttachment[] = options?.attachments?.length ? [...options.attachments] : []
+    // 解析失败 / 无文本的文档名，循环后统一弹错。
+    // 后端只接受图片附件（adapter.ValidateAttachments），文档绝不以二进制下发——
+    // 否则必被后端拒绝并回「目前仅支持发送图片」的误导文案。
+    const failedDocs: string[] = []
+    const emptyDocs: string[] = []
 
     // 从旧的 attachmentPreview（兼容拖拽等路径）
     if (legacyAttachment) {
       const { file, type } = legacyAttachment
-      const data = await fileToBase64(file)
-      attachments.push({ type, name: file.name, mime: file.type, data })
+      if (type === 'image' || type === 'video') {
+        const data = await fileToBase64(file)
+        attachments.push({ type, name: file.name, mime: file.type, data })
+      } else if (!legacyParsedDocument) {
+        // 文档解析失败（handleFileUpload catch 后 parsedDocument 为 null）：绝不发二进制。
+        failedDocs.push(file.name)
+      } else if (!legacyParsedDocument.text.trim()) {
+        // 解析成功但无文本（扫描件 / 纯图片 PDF）。
+        emptyDocs.push(file.name)
+      }
+      // type==='file' 且已解析出文本：文本在下方 legacyParsedDocument 分支拼入正文。
     }
 
-    // 从新的多文件参数：图片/视频作为 attachment，文档解析为文本
+    // 从新的多文件参数：图片/视频作为 attachment，文档解析为文本（进隐藏上下文）+ 文件卡片
     const docTexts: string[] = []
+    const documentRefs: ChatDocumentRef[] = []
     if (files?.length) {
       for (const file of files) {
         const isImage = file.type.startsWith('image/')
@@ -282,35 +309,65 @@ export function useChatSend(deps: ChatSendDeps) {
           const data = await fileToBase64(file)
           attachments.push({ type: 'video', name: file.name, mime: file.type, data })
         } else {
-          // 文档（PDF/TXT/DOCX 等）：解析提取文本，拼入消息内容
+          // 文档（PDF/TXT/DOCX 等）：本地解析提取文本拼入正文。
+          // 解析失败/无文本一律记录后报错并跳过，绝不静默吞错降级成二进制附件
+          // （后端只收图片，二进制必被拒，用户只会看到误导性的「仅支持图片」）。
           try {
             const parsed = await parseDocument(file)
             if (parsed.text.trim()) {
               const pageInfo = parsed.pageCount ? ` (${parsed.pageCount}页)` : ''
               docTexts.push(`[文件: ${parsed.fileName}${pageInfo}]\n\n${parsed.text}`)
+              const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+              registerDocPreview(docId, file)
+              documentRefs.push({ name: file.name, mime: file.type, size: file.size, id: docId })
+            } else {
+              emptyDocs.push(file.name)
             }
-          } catch {
-            // 解析失败时作为普通附件发送
-            const data = await fileToBase64(file)
-            attachments.push({ type: 'file', name: file.name, mime: file.type, data })
+          } catch (err) {
+            logger.error(`[chat] 文档解析失败：${file.name}: ${err instanceof Error ? err.message : String(err)}`)
+            failedDocs.push(file.name)
           }
         }
       }
     }
 
-    // 拼接文档文本到消息内容
-    let finalText = text
-    if (legacyParsedDocument) {
+    // 旧拖拽路径的已解析文档：同样进隐藏上下文 + 文件卡片。
+    if (legacyParsedDocument && legacyParsedDocument.text.trim()) {
       const doc = legacyParsedDocument
       const pageInfo = doc.pageCount ? ` (${doc.pageCount}页)` : ''
       docTexts.unshift(`[文件: ${doc.fileName}${pageInfo}]\n\n${doc.text}`)
+      if (legacyAttachment) {
+        const docId = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+        registerDocPreview(docId, legacyAttachment.file)
+        documentRefs.unshift({ name: doc.fileName, mime: legacyAttachment.file.type, size: legacyAttachment.file.size, id: docId })
+      }
     }
-    if (docTexts.length > 0) {
-      finalText = docTexts.join('\n\n---\n\n') + '\n\n---\n' + text
+    // ★ 文档正文只进**隐藏上下文**（backendText），不灌进可见气泡/可编辑正文。
+    // 可见消息只保留用户文字 + 文件卡片（见下方 documents 透传）。
+    const docContextBlock = docTexts.length > 0 ? docTexts.join('\n\n---\n\n') : ''
+    const finalText = text
+
+    // 文档解析失败 / 无文本：明确弹给用户（取代「静默吞错 + 后端误导性拒绝」）。
+    for (const name of failedDocs) {
+      toast.error(i18n.global.t('chat.parseDocFailed', { name }))
+    }
+    for (const name of emptyDocs) {
+      toast.warning(i18n.global.t('chat.parseDocEmpty', { name }))
+    }
+    // 内容全部来自解析失败/无文本的文档（没有有效文本 / 图片 / 视频）→ 中止发送：
+    // 既不向模型发空洞消息，也不丢用户已输入的内容（返回 false 时 ChatInput 不清空草稿）。
+    const hasUsableContent = docTexts.length > 0 || attachments.length > 0
+    if (!hasUsableContent && (failedDocs.length > 0 || emptyDocs.length > 0)) {
+      return false
     }
 
-    // Auto-RAG: 自动检索知识库，将相关内容注入后端上下文
-    let backendText: string | undefined
+    // ★ 隐藏上下文（只进 backendText、不进可见气泡）：附件文档正文 + Auto-RAG + @显式上下文。
+    const contextParts: string[] = []
+    // 附件文档正文（PDF/DOCX/…）——气泡只显示文件卡片，正文走这里给模型。
+    if (docContextBlock) {
+      contextParts.push(`[附件文档内容 - 请基于以下文档回答用户问题]\n${docContextBlock}`)
+    }
+    // Auto-RAG: 自动检索知识库
     try {
       const { result: knowledgeHits } = await searchKnowledge(text, 3)
       const relevant = knowledgeHits.filter((hit) => hit.score >= 0.35 && hit.content)
@@ -321,20 +378,18 @@ export function useChatSend(deps: ChatSendDeps) {
             return `[来源: ${source}]\n${hit.content}`
           })
           .join('\n\n')
-        backendText = `[知识库参考信息 - 请优先参考以下内容回答用户问题]\n${contextBlock}\n\n[用户问题]\n${finalText}`
+        contextParts.push(`[知识库参考信息 - 请优先参考以下内容回答用户问题]\n${contextBlock}`)
       }
     } catch {
       // 知识库搜索失败不阻塞聊天
     }
-
-    // `@` 显式召唤的上下文（知识/连接/会话）：前置到 backendText，与 Auto-RAG 叠加，
-    // 只进后端文本、不污染用户气泡（显示仍为 finalText）。
+    // `@` 显式召唤的上下文（知识/连接/会话）：前置。技能激活不经正文 @name 注入（会被后端当 mention 致空回答）。
     const explicitContextBlock = formatContextBlock(options?.contextRefs ?? [])
     if (explicitContextBlock) {
-      backendText = backendText
-        ? `${explicitContextBlock}\n\n${backendText}`
-        : `${explicitContextBlock}\n\n[用户问题]\n${finalText}`
+      contextParts.unshift(explicitContextBlock)
     }
+    const backendText: string | undefined =
+      contextParts.length > 0 ? `${contextParts.join('\n\n')}\n\n[用户问题]\n${finalText}` : undefined
     // 注意：技能激活**不**经正文 @name 注入——`@skill` 会被后端当 mention/tool 致空回答。
     // skillNames 作为前向兼容字段透传，由专用激活通道处理（不写进 backendText）。
 
@@ -347,10 +402,14 @@ export function useChatSend(deps: ChatSendDeps) {
 
     const previousMessageCount = Array.isArray(chatStore.messages) ? chatStore.messages.length : 0
     const skillNames = options?.skillNames ?? []
+    const sendOptions =
+      backendText || skillNames.length || documentRefs.length
+        ? { backendText, skillNames, documents: documentRefs.length ? documentRefs : undefined }
+        : undefined
     const sendPromise = chatStore.sendMessage(
       finalText,
       attachments.length > 0 ? attachments : undefined,
-      backendText || skillNames.length ? { backendText, skillNames } : undefined,
+      sendOptions,
     )
     const accepted = Array.isArray(chatStore.messages) && chatStore.messages.length > previousMessageCount
     if (!accepted) {

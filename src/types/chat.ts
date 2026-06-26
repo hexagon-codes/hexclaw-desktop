@@ -123,6 +123,22 @@ export interface ChatContextRef {
   content: string
 }
 
+/**
+ * 文档引用（仅用于气泡展示文件卡片）。
+ *
+ * 文档（PDF/DOCX/…）的正文已解析进**隐藏上下文**（backendText）给模型，气泡里只显示这张卡片，
+ * 不把正文灌进可见消息。卡片 ref（name/mime/size）**不进 attachments**（后端只把图片当多模态送模型），
+ * 但 BUG-20260626 起经 metadata.documents 透传后端持久化，切会话/重启重载后卡片仍在（不再退化纯文本）。
+ */
+export interface ChatDocumentRef {
+  name: string
+  mime: string
+  /** 字节大小，用于卡片副标题 */
+  size: number
+  /** 会话内预览句柄：用于点击卡片预览原文件（仅本会话有效，重载后失效——优雅降级，卡片仍展示） */
+  id?: string
+}
+
 /** 聊天附件 */
 export interface ChatAttachment {
   type: 'image' | 'video' | 'audio' | 'file'

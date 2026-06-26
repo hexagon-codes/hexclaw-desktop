@@ -5,6 +5,7 @@ import {
   clearSessionModel,
   pruneSessionModels,
   resolveSessionModel,
+  decideSessionModelAction,
   SESSION_MODEL_STORAGE_KEY,
   type AvailableModelLite,
 } from '@/stores/session-model-binding'
@@ -109,5 +110,44 @@ describe('AUDIT session-model-binding — resolveSessionModel 解析决策', () 
     expect(resolveSessionModel('S-A', MODELS).kind).toBe('unavailable')
     setSessionModel('S-A', { model: 'gpt-strong', providerId: 'p-openai', providerKey: 'openai' })
     expect(resolveSessionModel('S-A', MODELS).kind).toBe('restore')
+  })
+})
+
+// BUG-20260625 切换会话编排决策（跨会话串模型）——把「解析结果 → UI 动作」的不变量钉死。
+// 端到端组件取证见 views/__tests__/bug-20260625-session-model-crosstalk.test.ts。
+describe('AUDIT session-model-binding — decideSessionModelAction 切换编排决策', () => {
+  const restoreRes = { kind: 'restore' as const, model: MODELS[0]! }
+
+  it('restore：绑定可用 → restore（恢复并 override）', () => {
+    expect(decideSessionModelAction({ resolution: restoreRes, prevId: 'S-prev', userOverrodeModel: true, hasSelectedModel: true }))
+      .toEqual({ kind: 'restore', model: MODELS[0] })
+  })
+
+  it('auto：绑定 auto → auto', () => {
+    expect(decideSessionModelAction({ resolution: { kind: 'auto' }, prevId: 'S-prev', userOverrodeModel: false, hasSelectedModel: true }).kind).toBe('auto')
+  })
+
+  it('unavailable → fallback（保留绑定、等列表补齐复解析）', () => {
+    expect(decideSessionModelAction({ resolution: { kind: 'unavailable' }, prevId: null, userOverrodeModel: true, hasSelectedModel: true }).kind).toBe('fallback')
+  })
+
+  it('★核心修复：从「有绑定会话」切到「无绑定会话」(prevId 非空) → reset-default，不沿用上一会话模型', () => {
+    expect(decideSessionModelAction({ resolution: { kind: 'none' }, prevId: 'S-A', userOverrodeModel: true, hasSelectedModel: true }).kind)
+      .toBe('reset-default')
+  })
+
+  it('★核心修复：删会话(→null)后选无绑定会话——override 已被清(false) → reset-default，不误绑', () => {
+    expect(decideSessionModelAction({ resolution: { kind: 'none' }, prevId: null, userOverrodeModel: false, hasSelectedModel: true }).kind)
+      .toBe('reset-default')
+  })
+
+  it('保留正路：新会话首发(null→真实 id)且用户已显式选模型 → bind-current（补绑到新会话）', () => {
+    expect(decideSessionModelAction({ resolution: { kind: 'none' }, prevId: null, userOverrodeModel: true, hasSelectedModel: true }).kind)
+      .toBe('bind-current')
+  })
+
+  it('新会话但用户没选过模型(override=false) → reset-default，不凭空绑定', () => {
+    expect(decideSessionModelAction({ resolution: { kind: 'none' }, prevId: null, userOverrodeModel: false, hasSelectedModel: false }).kind)
+      .toBe('reset-default')
   })
 })
