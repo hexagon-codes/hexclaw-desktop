@@ -196,7 +196,7 @@ export function addDocument(title: string, content: string, source?: string) {
   })
 }
 
-/** 上传文件到知识库（支持 PDF/TXT/MD/DOCX） */
+/** 上传文件到知识库（后端白名单：.txt/.md/.csv/.json/.docx；PDF 暂不支持，见 handler_knowledge.go） */
 export async function uploadDocument(
   file: File,
   onProgress?: (pct: number) => void,

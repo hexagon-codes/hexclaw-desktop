@@ -1,12 +1,12 @@
 /**
  * Document file parser — extracts text content from PDF, Word, Excel, and plain text files.
+ *
+ * PDF 解析下沉到后端（见 parsePDF）；docx/xlsx/纯文本仍在前端解析（纯 JS 库，无 Web Worker）。
  */
+import { extractDocument } from '@/api/documents'
 
 const MAX_TEXT_LENGTH = 50000
 const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100 MB
-type PdfJsModule = typeof import('pdfjs-dist')
-
-let pdfJsLoaderPromise: Promise<PdfJsModule> | null = null
 
 export interface ParsedDocument {
   text: string
@@ -15,7 +15,7 @@ export interface ParsedDocument {
 }
 
 /** Supported document extensions */
-const DOCUMENT_EXTENSIONS = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.txt', '.md', '.json']
+const DOCUMENT_EXTENSIONS = ['.pdf', '.docx', '.doc', '.pptx', '.xlsx', '.xls', '.csv', '.txt', '.md', '.json']
 
 /** Check if a file is a parseable document (not image/video) */
 export function isDocumentFile(file: File): boolean {
@@ -36,10 +36,11 @@ export async function parseDocument(file: File): Promise<ParsedDocument> {
   try {
     switch (ext) {
       case 'pdf':
-        return await parsePDF(file, fileName)
-      case 'docx':
       case 'doc':
-        return await parseWord(file, fileName)
+      case 'docx':
+      case 'pptx':
+        // Office 二进制 / PDF：下沉后端统一解析（见 parseViaBackend）。
+        return await parseViaBackend(file, fileName)
       case 'xlsx':
       case 'xls':
         return await parseExcel(file, fileName)
@@ -63,65 +64,14 @@ function truncateText(text: string): string {
   return text.slice(0, MAX_TEXT_LENGTH) + '\n\n[... content truncated, showing first 50000 characters ...]'
 }
 
-async function loadPdfJs() {
-  if (!pdfJsLoaderPromise) {
-    pdfJsLoaderPromise = Promise.all([
-      import('pdfjs-dist/legacy/build/pdf.mjs'),
-      import('pdfjs-dist/legacy/build/pdf.worker.mjs?url'),
-    ]).then(([pdfjsLib, workerUrl]) => {
-      // Let PDF.js manage the worker lifecycle so it can fall back to a fake
-      // worker in environments where spawning a real Worker fails.
-      pdfjsLib.GlobalWorkerOptions.workerPort = null
-      if (pdfjsLib.GlobalWorkerOptions.workerSrc !== workerUrl.default) {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl.default
-      }
-      return pdfjsLib as PdfJsModule
-    })
-  }
-
-  return pdfJsLoaderPromise
-}
-
-async function parsePDF(file: File, fileName: string): Promise<ParsedDocument> {
-  const pdfjsLib = await loadPdfJs()
-
-  const data = new Uint8Array(await file.arrayBuffer())
-  const loadingTask = pdfjsLib.getDocument({
-    data,
-    useWorkerFetch: false,
-    isOffscreenCanvasSupported: false,
-    isImageDecoderSupported: false,
-    stopAtErrors: true,
-  })
-  const pdf = await loadingTask.promise
-  const pageCount = pdf.numPages
-  const textParts: string[] = []
-
-  try {
-    for (let i = 1; i <= pageCount; i++) {
-      const page = await pdf.getPage(i)
-      const content = await page.getTextContent()
-      const pageText = content.items
-        .map((item) => ('str' in item ? item.str : ''))
-        .join(' ')
-      if (pageText.trim()) {
-        textParts.push(pageText)
-      }
-    }
-  } finally {
-    await pdf.destroy()
-  }
-
-  const text = truncateText(textParts.join('\n\n'))
-  return { text, fileName, pageCount }
-}
-
-async function parseWord(file: File, fileName: string): Promise<ParsedDocument> {
-  const mammoth = await import('mammoth')
-  const arrayBuffer = await file.arrayBuffer()
-  const result = await mammoth.extractRawText({ arrayBuffer })
-  const text = truncateText(result.value)
-  return { text, fileName }
+// PDF / DOC / DOCX / PPTX 下沉后端统一解析：
+//   - PDF：桌面 WKWebView 无法可靠跑 pdfjs（自定义协议建不了 Web Worker）→ 后端 poppler pdftotext；
+//   - 老 .doc(OLE)：需原生工具（macOS textutil）；
+//   - .docx/.pptx：复用 hexagon（OOXML，CJK 干净），顺带去掉前端 mammoth。
+// 表格 .xlsx/.xls 仍前端 SheetJS（唯一能解老 .xls 且更强）。
+async function parseViaBackend(file: File, fileName: string): Promise<ParsedDocument> {
+  const res = await extractDocument(file)
+  return { text: truncateText(res.text), fileName, pageCount: res.page_count }
 }
 
 async function parseExcel(file: File, fileName: string): Promise<ParsedDocument> {

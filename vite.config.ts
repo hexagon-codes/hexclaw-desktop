@@ -16,7 +16,8 @@ export default defineConfig({
   },
   build: {
     // 代码高亮语言包已按需懒加载，个别静态语言块天然偏大；
-    // 同时继续把 PDF/XLSX/Markdown 相关重依赖拆出，避免主包继续膨胀。
+    // 同时继续把 XLSX/Markdown 相关重依赖拆出，避免主包继续膨胀。
+    // （PDF 解析已下沉后端，前端不再打包 pdfjs。）
     chunkSizeWarningLimit: 800,
     rollupOptions: {
       output: {
@@ -25,7 +26,6 @@ export default defineConfig({
           if (id.includes('/vue/') || id.includes('/vue-router/') || id.includes('/pinia/') || id.includes('/vue-i18n/')) {
             return 'vendor-vue'
           }
-          if (id.includes('pdfjs-dist')) return 'vendor-pdfjs'
           if (id.includes('/xlsx/')) return 'vendor-xlsx'
           if (id.includes('/mammoth/')) return 'vendor-docx'
           if (id.includes('markdown-it') || id.includes('dompurify')) return 'vendor-markdown'

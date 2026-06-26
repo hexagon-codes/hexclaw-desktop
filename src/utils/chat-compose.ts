@@ -25,6 +25,14 @@ export function shouldSendOnEnter(
   return true
 }
 
+/** 附件图片 src：按 ChatAttachment.data 契约 auto-detect——已是 http(S)/data: URL 则原样，
+ *  否则视为裸 base64 加 `data:<mime>;base64,` 前缀。避免对 data-URL/http 图双重前缀致破图。 */
+export function imageSrc(att: { data: string; mime: string }): string {
+  const d = att.data
+  if (d.startsWith('http') || d.startsWith('data:')) return d
+  return `data:${att.mime};base64,${d}`
+}
+
 // 各种「非标准换行」→ \n：\r\n / \r（旧 Mac）/ U+2028 行分隔 / U+2029 段分隔。
 // textarea 原生 paste 不把 U+2028/U+2029 当换行 → markdown 折行丢失，需在此统一。
 const WEIRD_LINE_BREAKS = new RegExp('\\r\\n?|[\\u2028\\u2029]', 'g')
@@ -46,4 +54,31 @@ export function hasWeirdLineBreaks(text: string): boolean {
  *  关键：throttle 定时器到点时要用本判断「再确认一次」，避免节流窗口内用户上滚仍被拉回底部。 */
 export function shouldAutoScroll(force: boolean, userScrolledUp: boolean): boolean {
   return force || !userScrolledUp
+}
+
+/** 上/下翻导航箭头与"已上滚"标记的可见性判定（纯函数，便于单测）。
+ *
+ *  BUG-20260626：旧逻辑只看 distanceFromBottom>200，新会话里输入框变高会压缩消息视口
+ *  （flex:1 容器 clientHeight 变小）→ 空状态/单条短消息相对压缩后的视口"溢出" → 误显下翻箭头。
+ *  箭头本应只为"会话太长"服务，故加两道闸：
+ *   ① hasMessages：空会话一律无导航键（没有可导航的历史）；
+ *   ② overflow（真实可滚动距离 = scrollHeight - clientHeight）须 > NAV_MIN_OVERFLOW，
+ *      否则不显示、也不把"已上滚"置真（避免输入框压缩视口时误停自动跟随）。 */
+export const NAV_MIN_OVERFLOW = 200
+
+export function scrollNavFlags(p: {
+  scrollHeight: number
+  scrollTop: number
+  clientHeight: number
+  hasMessages: boolean
+}): { userScrolledUp: boolean; showScrollToBottom: boolean; showScrollToTop: boolean } {
+  const distanceFromBottom = p.scrollHeight - p.scrollTop - p.clientHeight
+  const distanceFromTop = p.scrollTop
+  const overflow = p.scrollHeight - p.clientHeight
+  const scrollable = p.hasMessages && overflow > NAV_MIN_OVERFLOW
+  return {
+    userScrolledUp: scrollable && distanceFromBottom > 100,
+    showScrollToBottom: scrollable && distanceFromBottom > 200,
+    showScrollToTop: scrollable && distanceFromTop > 200 && distanceFromBottom < 100,
+  }
 }
