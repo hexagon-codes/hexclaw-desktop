@@ -623,7 +623,8 @@ onUnmounted(() => {
 }
 
 .hc-sessions__item--active {
-  background: color-mix(in srgb, var(--hc-accent) 10%, transparent);
+  /* 选中态对齐原型 .cs-item.on 的精确 token（比旧 accent10% 略实，「你在此」更清晰） */
+  background: var(--hc-bg-active);
 }
 
 .hc-sessions__content {

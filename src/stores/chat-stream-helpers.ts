@@ -13,6 +13,8 @@ export type SessionStreamState = {
   reasoning: string
   reasoningStartTime: number
   reasoningEndTime: number
+  /** 已检测到失控复读退化并熔断（内容已冻结，丢弃后续复读 chunk）。 */
+  degenerated?: boolean
 }
 
 export type PendingToolApproval = ToolApprovalRequest & {

@@ -13,6 +13,7 @@ import {
   suggestSessionTitle as suggestSessionTitleApi,
   deleteSession as deleteSessionApi,
   deleteMessage as deleteMessageApi,
+  appendSessionMessage,
 } from '@/api/chat'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
 import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
@@ -145,6 +146,16 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
         ? getAssistantDisplayContent(content, mergedReasoning)
         : content
 
+      // 反馈与后端消息 id 还原：后端把 like/dislike 存独立 feedback 列、消息 id 即 m.id。
+      // 重载时回填到 metadata，让 UI 高亮（user_feedback）与重载后再点赞落库（backend_message_id）都生效。
+      const mergedMeta: Record<string, unknown> = { ...(meta ?? {}) }
+      const rawFeedback = (m as unknown as Record<string, unknown>).feedback
+      if (rawFeedback === 'like' || rawFeedback === 'dislike') {
+        mergedMeta.user_feedback = rawFeedback
+      }
+      if (m.id) mergedMeta.backend_message_id = m.id
+      const finalMeta = Object.keys(mergedMeta).length > 0 ? mergedMeta : undefined
+
       return {
         ...m,
         content: displayContent,
@@ -152,7 +163,7 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
         reasoning: mergedReasoning,
         tool_calls: toolCalls,
         agent_name: agentName,
-        metadata: meta,
+        metadata: finalMeta,
       }
     })
   } catch {
@@ -167,6 +178,24 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export async function persistMessage(_msg: ChatMessage, _sessionId: string): Promise<boolean> {
   return true
+}
+
+/**
+ * persistErrorReply: 失败回复（assistant 错误气泡）后端 chat handler 不会自动落库
+ * （LLM 调用已报错、没有正常 assistant 轮次可存）。显式追加一条，保证切会话重载后
+ * 错误仍可见、可重试。best-effort：落库失败不抛出，气泡已在内存中展示。
+ */
+export async function persistErrorReply(sessionId: string, message: ChatMessage): Promise<void> {
+  try {
+    await appendSessionMessage(sessionId, {
+      id: message.id,
+      role: 'assistant',
+      content: message.content,
+      metadata: { ...(message.metadata ?? {}), is_error: true },
+    })
+  } catch {
+    // 落库失败不阻塞 UI
+  }
 }
 
 export async function removeMessage(id: string): Promise<void> {

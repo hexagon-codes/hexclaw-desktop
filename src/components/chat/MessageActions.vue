@@ -4,8 +4,10 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setClipboard } from '@/api/desktop'
 import { useVoice } from '@/composables/useVoice'
+import { useToast } from '@/composables/useToast'
 
 const { t } = useI18n()
+const toast = useToast()
 
 const props = defineProps<{
   role: 'user' | 'assistant'
@@ -27,7 +29,7 @@ const activeFeedback = computed(() => props.feedback ?? null)
 
 // 朗读：每个 MessageActions 实例独立 useVoice，互不干扰；
 // 切换消息播报时手动 stopSpeaking 以释放 audio 资源
-const { isSpeaking, speak, stopSpeaking } = useVoice()
+const { isSpeaking, speak, stopSpeaking, error: voiceError } = useVoice()
 
 async function handleCopy() {
   try {
@@ -60,6 +62,11 @@ async function toggleSpeak() {
   const text = plainText(props.content)
   if (!text) return
   await speak(text)
+  // speak() 内部把失败（如后端 TTS 未配置返回 503）静默吞进 voiceError，
+  // 不上抛；这里显式 toast，避免"点了没反应"的无反馈体验。
+  if (voiceError.value) {
+    toast.error(t('chat.speakFailed', '语音播报失败，请检查语音合成服务是否已配置'))
+  }
 }
 </script>
 

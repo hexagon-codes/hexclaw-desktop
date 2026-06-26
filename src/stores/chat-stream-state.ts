@@ -6,6 +6,7 @@ import {
   mergeStreamChunkState,
   type SessionStreamState,
 } from './chat-stream-helpers'
+import { isDegenerateTail, trimDegenerateTail, DEGENERATION_NOTICE } from '@/utils/degeneration'
 
 type MessageServiceModule = typeof import('@/services/messageService')
 
@@ -100,10 +101,27 @@ export function createChatStreamStateController(params: {
     msgSvc.persistMessage(message, sessionId)
   }
 
-  function updateStreamChunk(sessionId: string, content?: string, reasoning?: string) {
+  /**
+   * 累积一个流式 chunk。返回值 = 本次是否「刚触发退化熔断」，调用方据此 cancel 后端流以省 token。
+   */
+  function updateStreamChunk(sessionId: string, content?: string, reasoning?: string): boolean {
     const current = activeStreams.value[sessionId]
-    if (!current) return
-    upsertStreamState(sessionId, mergeStreamChunkState(current, content, reasoning))
+    if (!current) return false
+    // 退化熔断：已判失控复读 → 冻结，丢弃后续复读 chunk，墙不再长（BUG-20260625 模型塌缩）。
+    if (current.degenerated) return false
+    const merged = mergeStreamChunkState(current, content, reasoning)
+    // 在原始流（含 reasoning）上检测；命中即裁掉复读尾、追加提示、置熔断位。
+    const probe = merged.content || merged.rawContent
+    if (isDegenerateTail(probe)) {
+      upsertStreamState(sessionId, {
+        ...merged,
+        content: trimDegenerateTail(probe) + DEGENERATION_NOTICE,
+        degenerated: true,
+      })
+      return true
+    }
+    upsertStreamState(sessionId, merged)
+    return false
   }
 
   function seedRecoveredStream(

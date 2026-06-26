@@ -146,6 +146,15 @@ export function createChatStreamController(params: {
     appendMessageToSession: stateController.appendMessageToSession,
     resetSessionStream: stateController.resetSessionStream,
     loadSessions,
+    // 延迟访问 + best-effort：失败回复落库失败不影响错误展示，
+    // 也容忍测试里 messageService 的部分 mock（缺该导出时静默跳过）。
+    persistErrorReply: (sessionId, message) => {
+      try {
+        void msgSvc.persistErrorReply(sessionId, message)
+      } catch {
+        /* messageService 部分 mock 或缺失：best-effort，忽略 */
+      }
+    },
   })
 
   const recoveryController = createChatStreamRecoveryController({

@@ -7,6 +7,7 @@ const {
   updateSessionTitleApi,
   deleteSessionApi,
   deleteMessageApi,
+  appendSessionMessageApi,
 } = vi.hoisted(() => ({
   listSessions: vi.fn().mockResolvedValue({ sessions: [], total: 0 }),
   listSessionMessages: vi.fn().mockResolvedValue({ messages: [], total: 0 }),
@@ -14,6 +15,7 @@ const {
   updateSessionTitleApi: vi.fn().mockResolvedValue({ id: 's1', title: 'Updated', updated_at: '2026-01-02' }),
   deleteSessionApi: vi.fn().mockResolvedValue({ message: 'ok' }),
   deleteMessageApi: vi.fn().mockResolvedValue({ message: 'deleted' }),
+  appendSessionMessageApi: vi.fn().mockResolvedValue({ id: 'm-err', session_id: 's1' }),
 }))
 
 vi.mock('@/api/chat', () => ({
@@ -23,6 +25,7 @@ vi.mock('@/api/chat', () => ({
   updateSessionTitle: updateSessionTitleApi,
   deleteSession: deleteSessionApi,
   deleteMessage: deleteMessageApi,
+  appendSessionMessage: appendSessionMessageApi,
 }))
 
 import {
@@ -30,7 +33,7 @@ import {
   loadAllSessions, deleteSession, persistMessage, loadMessages,
   createSession, updateSessionTitle, touchSession,
   getLastSessionId, setLastSessionId,
-  loadArtifacts, saveArtifact, removeMessage,
+  loadArtifacts, saveArtifact, removeMessage, persistErrorReply,
 } from '../messageService'
 
 describe('messageService', () => {
@@ -201,6 +204,58 @@ describe('messageService', () => {
     const msgs = await loadMessages('s1')
     expect(msgs[0]!.reasoning).toBe('这是思考过程')
     expect(msgs[0]!.metadata?.thinking_duration).toBe(5)
+  })
+
+  // ─── Bug 复现(2026-06-25): 点赞/踩切会话回来就消失 ───
+  // 后端把反馈存独立 feedback 列；重载时 loadMessages 只读 metadata.user_feedback，
+  // 没把顶层 feedback 映射回去 → UI 高亮丢失。
+  it('maps backend feedback column → metadata.user_feedback on reload', async () => {
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 'm-fb', role: 'assistant', content: '回复',
+        timestamp: '2026-01-01', feedback: 'like',
+      }],
+      total: 1,
+    })
+    const msgs = await loadMessages('s1')
+    expect(msgs[0]!.metadata?.user_feedback).toBe('like')
+    // 重载消息 id 即后端消息 id，回填 backend_message_id 让重载后再点赞/踩仍能落库
+    expect(msgs[0]!.metadata?.backend_message_id).toBe('m-fb')
+  })
+
+  it('does not set user_feedback when backend feedback column is empty', async () => {
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 'm-nofb', role: 'assistant', content: '回复',
+        timestamp: '2026-01-01', feedback: '',
+      }],
+      total: 1,
+    })
+    const msgs = await loadMessages('s1')
+    expect(msgs[0]!.metadata?.user_feedback).toBeUndefined()
+  })
+
+  // ─── persistErrorReply: 失败回复显式落库 ───
+  it('persistErrorReply appends the error message to backend with is_error flag', async () => {
+    await persistErrorReply('s1', {
+      id: 'err-1', role: 'assistant', content: '引擎调用失败', timestamp: '2026-01-01',
+    })
+    expect(appendSessionMessageApi).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        id: 'err-1',
+        role: 'assistant',
+        content: '引擎调用失败',
+        metadata: expect.objectContaining({ is_error: true }),
+      }),
+    )
+  })
+
+  it('persistErrorReply swallows backend errors (best-effort, never throws)', async () => {
+    appendSessionMessageApi.mockRejectedValueOnce(new Error('session not found'))
+    await expect(
+      persistErrorReply('s1', { id: 'err-2', role: 'assistant', content: 'x', timestamp: '2026-01-01' }),
+    ).resolves.toBeUndefined()
   })
 
   it('extracts reasoning from metadata JSON string', async () => {

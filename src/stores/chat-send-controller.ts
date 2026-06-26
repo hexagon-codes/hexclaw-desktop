@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
-import type { ChatAttachment, ChatMessage } from '@/types'
+import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
@@ -36,7 +36,7 @@ export function createChatSendController(params: {
   pendingAutoTitleSync: Map<string, Promise<void>>
   persistMessage: (message: ChatMessage, sessionId: string) => Promise<boolean>
   upsertStreamState: (sessionId: string, nextState: import('./chat-stream-helpers').SessionStreamState | null) => void
-  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => void
+  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => boolean
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
     content: string
@@ -124,7 +124,7 @@ export function createChatSendController(params: {
   async function sendMessage(
     text: string,
     attachments?: ChatAttachment[],
-    options?: { backendText?: string; skillNames?: string[] },
+    options?: { backendText?: string; skillNames?: string[]; documents?: ChatDocumentRef[] },
   ): Promise<ChatMessage | null> {
     const initialSessionId = currentSessionId.value
     const shouldSeedAutoTitle = shouldSeedChatAutoTitle({
@@ -151,6 +151,8 @@ export function createChatSendController(params: {
       const userMeta: Record<string, unknown> = {}
       if (attachments?.length) userMeta.attachments = attachments
       if (skillNames.length) userMeta.skills = skillNames
+      // 文档卡片仅展示，不入 attachments、不发后端（正文已在 backendText）。
+      if (options?.documents?.length) userMeta.documents = options.documents
       const userMessage: ChatMessage = {
         id: requestId,
         role: 'user',
@@ -181,6 +183,7 @@ export function createChatSendController(params: {
         sending,
         draftSending,
         skillNames, // bug#2 2026-06-23：透传挂载技能给后端（此前在此被丢弃）
+        documents: options?.documents, // BUG-20260626：透传文档卡片给后端持久化（否则重载丢失退化纯文本）
       })
     } finally {
       draftSending.value = false

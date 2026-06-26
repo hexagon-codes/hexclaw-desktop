@@ -861,7 +861,8 @@ describe('Chain 6: Model Selection & Parameters', () => {
       { provider: 'deepseek', model: 'deepseek-chat', temperature: 0.5, maxTokens: 2048 },
       '',
       undefined,
-      undefined,
+      // metadata：F-2 把温度/MaxTokens 映射为后端消费的 agent_temperature/agent_max_tokens
+      { agent_temperature: '0.5', agent_max_tokens: '2048' },
       expect.any(String),
     )
   })
@@ -891,7 +892,8 @@ describe('Chain 6: Model Selection & Parameters', () => {
       '',
       undefined,
       expect.any(Object),
-      undefined,
+      // metadata：F-2 把温度/MaxTokens 映射为后端消费的 agent_temperature/agent_max_tokens
+      { agent_temperature: '0.7', agent_max_tokens: '4096' },
       expect.any(String),
     )
   })

@@ -14,6 +14,7 @@ export interface ChatSessionControllerParams {
   error: Ref<import('@/types').ApiError | null>
   chatMode: Ref<import('@/types').ChatMode>
   agentRole: Ref<string>
+  thinkingEnabled: Ref<boolean>
   hasCustomTitle: Ref<boolean>
   pendingSessionTitle: Ref<string | null>
   pendingSessionIds: Ref<Record<string, boolean>>

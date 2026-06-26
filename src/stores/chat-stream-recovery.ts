@@ -17,7 +17,7 @@ export function createChatStreamRecoveryController(params: {
     sessionId: string,
     snapshot: Parameters<typeof import('./chat-stream-helpers').buildRecoveredStreamState>[1],
   ) => void
-  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => void
+  updateStreamChunk: (sessionId: string, content?: string, reasoning?: string) => boolean
   finalizeAssistantMessage: (args: {
     content: string
     sessionId: string
@@ -73,7 +73,12 @@ export function createChatStreamRecoveryController(params: {
               done: !!current.done,
             })
           },
-          onChunk: (content, reasoning) => updateStreamChunk(snapshot.session_id, content, reasoning),
+          onChunk: (content, reasoning) => {
+            // 退化熔断：恢复路径也要在判失控复读时 cancel 后端流（与 live 投递路径一致，省 token/停转圈）。
+            if (updateStreamChunk(snapshot.session_id, content, reasoning)) {
+              streamHandles.get(snapshot.session_id)?.cancel()
+            }
+          },
           onApprovalRequest: (request) => {
             storePendingApproval(request)
           },
@@ -92,6 +97,18 @@ export function createChatStreamRecoveryController(params: {
               return
             }
             const finalState = activeStreams.value[snapshot.session_id]
+            // 退化熔断：用冻结的「裁剪+提示」内容定稿，绝不用后端整堵复读墙（与 live 投递路径 chat-send-websocket-delivery 一致）。
+            if (finalState?.degenerated) {
+              finalizeAssistantMessage({
+                content: finalState.content,
+                sessionId: snapshot.session_id,
+                metadata: result.metadata,
+                reasoning: finalState.reasoning,
+                sending,
+                draftSending,
+              })
+              return
+            }
             finalizeAssistantMessage({
               content: result.content || finalState?.content || '',
               sessionId: snapshot.session_id,

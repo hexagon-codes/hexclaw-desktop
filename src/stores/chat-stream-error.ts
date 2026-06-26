@@ -17,6 +17,7 @@ export function createChatStreamErrorController(params: {
     draftSending?: Ref<boolean>,
   ) => void
   loadSessions: () => Promise<void>
+  persistErrorReply: (sessionId: string, message: ChatMessage) => void | Promise<void>
 }) {
   const {
     error,
@@ -27,6 +28,7 @@ export function createChatStreamErrorController(params: {
     appendMessageToSession,
     resetSessionStream,
     loadSessions,
+    persistErrorReply,
   } = params
 
   function handleSendError(
@@ -45,9 +47,12 @@ export function createChatStreamErrorController(params: {
       role: 'assistant',
       content: apiError.message || '发送失败，请检查 hexclaw 引擎是否运行',
       timestamp: new Date().toISOString(),
+      metadata: { is_error: true },
     }
     if (targetSessionId) {
       appendMessageToSession(targetSessionId, errorMessage)
+      // 显式落库：后端不会自动持久化失败回复，否则切会话重载即丢失。
+      void persistErrorReply(targetSessionId, errorMessage)
     }
     void loadSessions()
   }

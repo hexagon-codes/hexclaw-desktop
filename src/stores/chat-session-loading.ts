@@ -14,6 +14,7 @@ export function createChatSessionLoadingController(params: {
   error: Ref<import('@/types').ApiError | null>
   chatMode: Ref<import('@/types').ChatMode>
   agentRole: Ref<string>
+  thinkingEnabled: Ref<boolean>
   hasCustomTitle: Ref<boolean>
   pendingSessionIds: Ref<Record<string, boolean>>
   pendingSuggestedTitleExpectation: Ref<Record<string, string>>
@@ -35,6 +36,7 @@ export function createChatSessionLoadingController(params: {
     error,
     chatMode,
     agentRole,
+    thinkingEnabled,
     hasCustomTitle,
     pendingSessionIds,
     pendingSuggestedTitleExpectation,
@@ -51,6 +53,9 @@ export function createChatSessionLoadingController(params: {
     const selectionGen = ++sessionSelectionGen.value
     chatMode.value = 'chat'
     agentRole.value = ''
+    // 离开研究/深度思考模式时一并清零，否则 thinkingEnabled 残留 true 会让下个会话
+    // UI 显示「深度思考关」但请求仍发 thinking=on（跨会话状态泄漏，同模型串改根因）。
+    thinkingEnabled.value = false
     hasCustomTitle.value = false
 
     currentSessionId.value = sessionId

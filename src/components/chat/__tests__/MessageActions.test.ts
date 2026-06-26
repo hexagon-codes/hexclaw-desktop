@@ -1,8 +1,29 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import MessageActions from '../MessageActions.vue'
+
+const { speakMock, stopMock, toastError, voiceError, isSpeaking } = vi.hoisted(() => ({
+  speakMock: vi.fn(),
+  stopMock: vi.fn(),
+  toastError: vi.fn(),
+  voiceError: { value: null as string | null },
+  isSpeaking: { value: false },
+}))
+
+vi.mock('@/composables/useVoice', () => ({
+  useVoice: () => ({
+    isSpeaking,
+    error: voiceError,
+    speak: speakMock,
+    stopSpeaking: stopMock,
+  }),
+}))
+
+vi.mock('@/composables/useToast', () => ({
+  useToast: () => ({ error: toastError, success: vi.fn(), warning: vi.fn(), info: vi.fn() }),
+}))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
@@ -37,6 +58,8 @@ function mountMessageActions(feedback: 'like' | 'dislike' | null) {
 describe('MessageActions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    voiceError.value = null
+    isSpeaking.value = false
   })
 
   it('replays persisted like state', () => {
@@ -50,6 +73,27 @@ describe('MessageActions', () => {
     const wrapper = mountMessageActions('dislike')
     const buttons = wrapper.findAll('button')
     expect(buttons[1]?.classes()).toContain('hc-msg-actions__btn--active-bad')
+  })
+
+  // Bug 复现(2026-06-25): 喇叭点了没反应 —— speak() 把后端错误(如 TTS 未配置)静默吞掉、零反馈。
+  it('surfaces TTS failure via toast when speak fails', async () => {
+    speakMock.mockImplementation(async () => { voiceError.value = 'TTS 服务未配置' })
+    const wrapper = mountMessageActions(null)
+    // 顺序: like(0) dislike(1) copy(2) speak(3) retry(4)
+    const speakBtn = wrapper.findAll('button')[3]
+    await speakBtn?.trigger('click')
+    await flushPromises()
+    expect(speakMock).toHaveBeenCalled()
+    expect(toastError).toHaveBeenCalled()
+  })
+
+  it('does not toast when speak succeeds', async () => {
+    speakMock.mockImplementation(async () => { /* success: no error set */ })
+    const wrapper = mountMessageActions(null)
+    await wrapper.findAll('button')[3]?.trigger('click')
+    await flushPromises()
+    expect(speakMock).toHaveBeenCalled()
+    expect(toastError).not.toHaveBeenCalled()
   })
 
   it('copy button degrades gracefully when clipboard API is unavailable', async () => {

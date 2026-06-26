@@ -200,7 +200,8 @@ describe('Chain A: Chat -> Backend -> Response', () => {
       { provider: 'openai', model: 'gpt-4o', temperature: 0.8, maxTokens: 2048 },
       'coder',                // agentRole
       undefined,              // attachments
-      undefined,              // metadata
+      // metadata：温度/MaxTokens 经 F-2 映射为后端消费的 agent_temperature/agent_max_tokens
+      { agent_temperature: '0.8', agent_max_tokens: '2048' },
       expect.any(String),     // requestId
     )
   })

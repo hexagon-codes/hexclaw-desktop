@@ -8,7 +8,7 @@
 // ─── 领域模型 ───────────────────────────────────────
 
 export type {
-  ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, Artifact, ChatMode, ExecMode, ContentBlock,
+  ChatMessage, ToolCall, ChatSession, ChatRequest, ChatAttachment, ChatDocumentRef, Artifact, ChatMode, ExecMode, ContentBlock,
   InteractiveButton, InteractiveType, InteractiveOption, InteractiveApproval, CardField, InteractiveCard,
   InteractiveResolved, InteractivePayload, ChatContextRef,
 } from './chat'
