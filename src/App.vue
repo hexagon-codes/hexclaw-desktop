@@ -10,6 +10,7 @@ import { useTheme } from '@/composables/useTheme'
 import { useAutoUpdate } from '@/composables/useAutoUpdate'
 import { useToast } from '@/composables/useToast'
 import { useNotificationCenter } from '@/composables/useNotificationCenter'
+import { installScrollReveal } from '@/utils/scroll-reveal'
 
 const route = useRoute()
 const router = useRouter()
@@ -36,7 +37,11 @@ notificationCenter.start()
 
 // 监听 Tauri 托盘导航事件 (替代不安全的 window.eval)
 let unlistenNavigate: (() => void) | null = null
+let teardownScrollReveal: (() => void) | undefined
 onMounted(async () => {
+  // 滚动条「滚动中浮现」：一处捕获监听覆盖全应用滚动容器（见 utils/scroll-reveal）。
+  teardownScrollReveal = installScrollReveal()
+
   try {
     const { listen } = await import('@tauri-apps/api/event')
     unlistenNavigate = await listen<string>('navigate', (event) => {
@@ -54,6 +59,7 @@ onMounted(async () => {
 onUnmounted(() => {
   unlistenNavigate?.()
   notificationCenter.stop()
+  teardownScrollReveal?.()
 })
 </script>
 

@@ -235,7 +235,7 @@ const placeholder = computed(() => {
 
 const fileAccept = computed(() => {
   const types = [
-    '.pdf', '.txt', '.md', '.doc', '.docx', '.xlsx', '.xls', '.csv', '.json',
+    '.pdf', '.txt', '.md', '.doc', '.docx', '.pptx', '.xlsx', '.xls', '.csv', '.json',
   ]
   if (props.allowImage !== false) {
     types.push('.png', '.jpg', '.jpeg', '.gif', '.webp')
@@ -867,10 +867,21 @@ defineExpose({ focus, setInput, triggerFileUpload })
   font-weight: 400;
 }
 
-.hc-composer__field::-webkit-scrollbar { width: 3px; }
+/* 输入框滚动条：与全局一致的「悬停浮现·离开即隐」，仅更纤细（贴合小高度输入区） */
+.hc-composer__field::-webkit-scrollbar { width: 8px; }
 .hc-composer__field::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
-  border-radius: 2px;
+  background-color: transparent;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+  min-height: 24px;
+  transition: background-color 0.25s var(--hc-ease-out);
+}
+.hc-composer__field:hover::-webkit-scrollbar-thumb {
+  background-color: var(--hc-scrollbar-thumb);
+}
+.hc-composer__field::-webkit-scrollbar-thumb:hover {
+  background-color: var(--hc-scrollbar-thumb-hover);
 }
 
 /* ─── 附件预览 ───── */

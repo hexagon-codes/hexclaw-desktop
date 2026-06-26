@@ -49,9 +49,13 @@ const showPresets = ref(false)
 const GENERIC_DELIVER_CHANNELS = ['chat', 'push', 'feishu', 'discord', 'wechat'] as const
 const connections = ref<ConnectionSummary[]>([])
 
-/** 可投递的已配置连接（启用 + 具备发送能力；email/IM 均可作投递目标）。 */
+/**
+ * 可投递的已配置连接：启用 + **具备发送能力**。
+ * 后端 capabilities 派生自 provider：email 只收（['receive']），IM 可发（含 'send'）。
+ * 必须按 capabilities 闸门，否则只收的 email 被选作投递目标 → 运行期 instanceMgr.Send "no running adapter" 必失败。
+ */
 const deliverableConnections = computed(() =>
-  connections.value.filter((c) => c.enabled !== false),
+  connections.value.filter((c) => c.enabled !== false && (c.capabilities?.includes('send') ?? false)),
 )
 
 function isDeliverSelected(target: string): boolean {

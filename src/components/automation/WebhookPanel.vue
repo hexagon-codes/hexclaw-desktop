@@ -5,6 +5,8 @@ import { useI18n } from 'vue-i18n'
 import { Trash2, Globe, Webhook as WebhookIcon, PowerOff, X, Copy } from 'lucide-vue-next'
 import { getWebhooks, createWebhook, deleteWebhook, webhookUrlFor } from '@/api/webhook'
 import type { Webhook, WebhookType } from '@/api/webhook'
+import { getCronJobs } from '@/api/tasks'
+import type { CronJob } from '@/types/task'
 import { useToast } from '@/composables/useToast'
 import { setClipboard } from '@/api/desktop'
 import HcSelect from '@/components/common/HcSelect.vue'
@@ -22,17 +24,32 @@ const loadError = ref('')
 const featureDisabled = ref(false)
 let loadRequestGen = 0
 
-// Create form —— 对齐后端 RegisterWebhookRequest{name,type,prompt,secret}
+// Create form —— 对齐后端 RegisterWebhookRequest{name,type,prompt,secret,job_id}
 const form = ref({
   name: '',
   type: 'generic' as WebhookType,
   prompt: '',
   secret: '',
+  // §13.3(1) 绑定 cron job：非空 → 事件触发该 job 而非跑 prompt（jobId 经 createWebhook → job_id）。
+  jobId: '',
 })
 
 function resetCreateForm() {
-  form.value = { name: '', type: 'generic', prompt: '', secret: '' }
+  form.value = { name: '', type: 'generic', prompt: '', secret: '', jobId: '' }
 }
+
+// 可绑定的 cron job 列表（best-effort 载入，失败不阻塞建 webhook）。
+const cronJobs = ref<CronJob[]>([])
+const jobOptions = computed(() => [
+  { value: '', label: t('webhooks.jobNone', '不绑定任务（执行处理指令）') },
+  ...cronJobs.value.map((j) => ({ value: j.id, label: j.name })),
+])
+const formJobId = computed<string>({
+  get: () => form.value.jobId,
+  set: (v) => {
+    form.value.jobId = v
+  },
+})
 
 function openCreateForm() {
   resetCreateForm()
@@ -101,8 +118,12 @@ async function loadWebhooks() {
 
 async function onCreateWebhook() {
   if (creating.value) return
-  // 后端要求 name + prompt 非空（prompt = 事件到达时执行的 Agent 指令）；URL 由后端生成。
-  if (!form.value.name.trim() || !form.value.prompt.trim()) {
+  // name 必填；prompt 仅在「未绑定 cron job」时必填——绑定 job 时事件直接触发该 job，prompt 无意义。
+  if (!form.value.name.trim()) {
+    toast.error(t('webhooks.namePromptRequired', '名称和处理指令为必填'))
+    return
+  }
+  if (!form.value.jobId && !form.value.prompt.trim()) {
     toast.error(t('webhooks.namePromptRequired', '名称和处理指令为必填'))
     return
   }
@@ -136,9 +157,22 @@ async function onDeleteWebhook(webhook: Webhook) {
   }
 }
 
-onMounted(loadWebhooks)
+async function loadCronJobs() {
+  try {
+    const res = await getCronJobs()
+    cronJobs.value = res?.jobs ?? []
+  } catch {
+    // 取不到 cron 列表不阻塞建 webhook，仅「绑定任务」下拉为空
+    cronJobs.value = []
+  }
+}
 
-defineExpose({ loadWebhooks, openCreateForm })
+onMounted(() => {
+  loadWebhooks()
+  loadCronJobs()
+})
+
+defineExpose({ loadWebhooks, openCreateForm, form })
 </script>
 
 <template>
@@ -185,7 +219,14 @@ defineExpose({ loadWebhooks, openCreateForm })
                 <label>{{ t('webhooks.type') }}</label>
                 <HcSelect v-model="formType" :options="webhookTypeOptions" />
               </div>
-              <div class="hc-form-group">
+              <div class="hc-form-group" data-testid="webhook-job-select">
+                <label>{{ t('webhooks.bindJob', '绑定任务（可选）') }}</label>
+                <HcSelect v-model="formJobId" :options="jobOptions" />
+                <p v-if="form.jobId" class="webhook-panel__url-note" style="margin-top:6px">
+                  {{ t('webhooks.bindJobNote', '事件到达时将触发该定时任务，下方处理指令可留空。') }}
+                </p>
+              </div>
+              <div v-if="!form.jobId" class="hc-form-group">
                 <label>{{ t('webhooks.prompt', '处理指令') }}</label>
                 <textarea
                   v-model="form.prompt"

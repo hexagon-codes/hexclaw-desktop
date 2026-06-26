@@ -722,4 +722,30 @@ describe('AgentsView', () => {
       'model 下拉缺少 value:"" 占位 → 空 model 显示空白',
     ).toBe(true)
   })
+
+  // BUG-20260625 §3-1：编辑 Agent 死角——编辑弹窗不带 system_prompt(人设)，handleEditAgent 也不发送，
+  // 导致注册后人设无法二次编辑（后端 UpdateAgentRequest.SystemPrompt 指针字段本支持改）。
+  it('编辑 Agent 时 system_prompt(人设) 应可改并随 updateAgent 透传', async () => {
+    // provider/model 留空＝跟随全局默认（editFormValid 直接放行），聚焦验证 system_prompt 透传。
+    const agent = { name: 'coder', display_name: '程序员', provider: '', model: '', system_prompt: '原始人设' }
+    getAgents.mockResolvedValue({ agents: [agent], total: 1, default: '' })
+
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      openEditAgent: (a: typeof agent) => void
+      editingAgent: { system_prompt?: string }
+      handleEditAgent: () => Promise<void>
+    }
+    vm.openEditAgent({ ...agent })
+    await flushPromises()
+    vm.editingAgent.system_prompt = '更新后的人设'
+    await vm.handleEditAgent()
+
+    expect(updateAgent).toHaveBeenCalledWith(
+      'coder',
+      expect.objectContaining({ system_prompt: '更新后的人设' }),
+    )
+  })
 })

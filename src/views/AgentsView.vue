@@ -248,6 +248,8 @@ async function handleEditAgent() {
       display_name: editingAgent.value.display_name,
       provider: editingAgent.value.provider,
       model: editingAgent.value.model,
+      // 人设(SOUL)：编辑时一并透传，否则注册后无法二次修改（BUG-20260625 §3-1）。
+      system_prompt: editingAgent.value.system_prompt ?? '',
     })
     closeEditAgentDialog()
     await loadAgents()
@@ -810,6 +812,16 @@ async function handleUnregisterAgent() {
                   :options="editAgentModelOptions"
                   :disabled="!editingAgent.provider"
                 />
+              </div>
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.systemPrompt', '人设(SOUL)') }}</label>
+                <textarea
+                  v-model="editingAgent.system_prompt"
+                  rows="4"
+                  class="rounded-lg border px-3 py-2 text-sm outline-none resize-y"
+                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+                  :placeholder="t('agents.systemPromptPlaceholder', '定义该 Agent 的角色与行为，留空则用默认人设')"
+                ></textarea>
               </div>
             </div>
             <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
