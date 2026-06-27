@@ -1802,7 +1802,7 @@ export default {
   // 引导页（首次启动）
   onboarding: {
     welcome: '欢迎使用 HexClaw 河蟹 AI',
-    subtitle: '本地优先的 AI 智能体工作台',
+    subtitle: '住在本机、数据不出门的私人 AI 搭子',
     step1: '配置 LLM Provider\n添加 API Key 或连接兼容的模型服务',
     step2: '创建智能体\n选择预设模板或自定义智能体角色',
     step3: '开始对话\n发送消息开始智能体工作流',

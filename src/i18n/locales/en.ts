@@ -1783,7 +1783,7 @@ export default {
 
   onboarding: {
     welcome: 'Welcome to HexClaw Desktop',
-    subtitle: 'Local-first AI Agent Workstation',
+    subtitle: 'Your private AI companion — runs local, data stays home',
     step1: 'Configure LLM Provider\nAdd API Key or connect compatible model service',
     step2: 'Create an Agent\nChoose preset template or customize Agent role',
     step3: 'Start Chatting\nSend a message to start agent workflow',
