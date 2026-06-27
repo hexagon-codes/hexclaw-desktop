@@ -7,6 +7,7 @@ import router from './router'
 import { i18n } from './i18n'
 import { createPersistPlugin } from './stores/plugins/persist'
 import { logger } from './utils/logger'
+import { installInputAutofixOff } from './utils/input-autofix'
 
 import './assets/styles/global.css'
 
@@ -29,6 +30,11 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 app.mount('#app')
+
+// 全局关闭 WKWebView 原生「自动改写/自动纠正/首字母大写」：桌面端跑在 macOS WKWebView，
+// 文本框默认会把 SQL / 主机名 / token 等技术输入悄悄改写（如 selecy→Select、首字母强制大写）。
+// 统一对文本类 input/textarea 补 autocorrect=off/spellcheck=false/autocapitalize=off（bug-20260626）。
+installInputAutofixOff()
 
 // Open external links in system browser instead of the webview
 document.addEventListener('click', (e) => {
