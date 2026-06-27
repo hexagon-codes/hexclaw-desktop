@@ -105,6 +105,8 @@ describe('增量3 ConnectionsView mcp 连接器 测试/删除/启停', () => {
     getMcpServerStatus.mockResolvedValue({ statuses: { 生产库: 'connected' }, servers: [] })
     const wrapper = mountView()
     await switchToConnectors(wrapper)
+    // 卡片挂载时已为「真实状态徽章」拉过一次（bug-20260626 修复引入）；此处只断言「点测试」这一次。
+    getMcpServerStatus.mockClear()
 
     const testBtn = wrapper
       .findAll('.hc-conn-btn--ghost')

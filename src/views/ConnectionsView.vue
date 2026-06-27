@@ -5,7 +5,7 @@
  *   - 数据连接器 = GitHub / Notion 令牌只读接入（§15.1，真实后端：token 加密存、真 test、浏览资源）。
  * 锚点 = prototype/app.html 的 connections 屏（data-cx 0/1）。
  */
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Zap, Pencil, Trash2, Database, FolderOpen, X, ExternalLink } from 'lucide-vue-next'
 import ConnectionChannelCards from '@/components/channels/ConnectionChannelCards.vue'
@@ -250,8 +250,61 @@ function canToggle(inst: ConnectorInstance): boolean {
   return !isMcpConnectorType(inst.type) && !connectorIdOf(inst)
 }
 
+// ── MCP 服务真实在线态（卡片徽章 + 「测试」按钮共用同一真值，杜绝两套判定漂移）──
+// MCP 连接器「注册即启用」(enabled 恒 true，无启停开关)，故徽章不能绑 enabled——否则
+// 后端 stdio server 没真连上（首次冷装组件仍在后台下载）时仍谎报「已连接」，与「测试」结果矛盾。
+// 真值统一取自后端 getMcpServerStatus。
+type McpStatusResp = Awaited<ReturnType<typeof getMcpServerStatus>>
+const mcpStatus = ref<McpStatusResp | null>(null)
+const mcpStatusLoaded = ref(false)
+
+async function loadMcpStatus() {
+  try {
+    mcpStatus.value = await getMcpServerStatus()
+  } catch {
+    mcpStatus.value = null // 引擎降级 / 端点不可用 → 当作未就绪，不谎报已连接
+  } finally {
+    mcpStatusLoaded.value = true
+  }
+}
+onMounted(loadMcpStatus)
+
+// 单一真值：某 MCP server 名是否真实在线（测试按钮与卡片徽章共用）。
+function isMcpServerOnline(serverName: string): boolean {
+  const s = mcpStatus.value
+  if (!s) return false
+  return (
+    s.statuses?.[serverName] === 'connected' ||
+    !!s.servers?.find((x) => x.name === serverName && x.connected)
+  )
+}
+
+// 卡片连接态：MCP 类取后端真实在线状态；其它（native/token）沿用本地 enabled。
+// pending = MCP 状态尚未拉到（避免首帧闪现错误的绿点）。
+function connState(inst: ConnectorInstance): 'online' | 'offline' | 'pending' {
+  if (isMcpConnectorType(inst.type)) {
+    if (!mcpStatusLoaded.value) return 'pending'
+    return isMcpServerOnline(inst.config?.mcp_server || inst.name) ? 'online' : 'offline'
+  }
+  return inst.enabled ? 'online' : 'offline'
+}
+
+function connPillClass(inst: ConnectorInstance): string {
+  return connState(inst) === 'online' ? 'hc-conn-pill--green' : 'hc-conn-pill--grey'
+}
+
+function connPillText(inst: ConnectorInstance): string {
+  const st = connState(inst)
+  if (st === 'online') return t('connections.legend.connected')
+  if (st === 'pending') return t('connections.connectors.checking', '检测中…')
+  // offline：MCP 类 = 未就绪（server 未连上）；其它本地实例 = 已停用
+  return isMcpConnectorType(inst.type)
+    ? t('connections.connectors.notReady', '未就绪')
+    : t('connections.channels.disabled')
+}
+
 // 测试连接：token 类 → 真实复验（拉一次资源即验证 token 仍有效）；
-//           mcp 类 → 查后端 MCP 服务真实在线状态。
+//           mcp 类 → 查后端 MCP 服务真实在线状态（并同步徽章，二者结果一致）。
 const testingId = ref<string | null>(null)
 async function testConnector(inst: ConnectorInstance) {
   testingId.value = inst.id
@@ -264,11 +317,9 @@ async function testConnector(inst: ConnectorInstance) {
     }
     if (isMcpConnectorType(inst.type)) {
       const serverName = inst.config?.mcp_server || inst.name
-      const status = await getMcpServerStatus()
-      const online =
-        status.statuses?.[serverName] === 'connected' ||
-        !!status.servers?.find((s) => s.name === serverName && s.connected)
-      if (online) toast.success(t('connections.connectors.mcpTestConnected', '已连接，MCP 服务在线'))
+      mcpStatus.value = await getMcpServerStatus()
+      mcpStatusLoaded.value = true // ★同步卡片徽章，与本次测试结果同源
+      if (isMcpServerOnline(serverName)) toast.success(t('connections.connectors.mcpTestConnected', '已连接，MCP 服务在线'))
       else toast.info(t('connections.connectors.mcpTestDisconnected', 'MCP 服务尚未就绪'))
     }
   } catch (e) {
@@ -363,11 +414,8 @@ function toggleConnector(inst: ConnectorInstance) {
               <div class="hc-conn-card__name">{{ inst.name }}</div>
               <div class="hc-conn-card__desc">{{ instanceSub(inst) }}</div>
             </div>
-            <span
-              class="hc-conn-pill"
-              :class="inst.enabled ? 'hc-conn-pill--green' : 'hc-conn-pill--grey'"
-            >
-              {{ inst.enabled ? t('connections.legend.connected') : t('connections.channels.disabled') }}
+            <span class="hc-conn-pill" :class="connPillClass(inst)">
+              {{ connPillText(inst) }}
             </span>
           </div>
           <div class="hc-conn-card__caps">

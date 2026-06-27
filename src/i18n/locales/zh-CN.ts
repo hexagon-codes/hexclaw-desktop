@@ -1212,6 +1212,9 @@ export default {
       testOk: '连接成功，读到 {n} 项资源',
       testFail: '连接失败',
       connected: '已连接',
+      // MCP 卡片徽章真实在线态：未就绪（后端 server 未连上/首次组件下载中）/ 状态检测中
+      notReady: '未就绪',
+      checking: '检测中…',
       // 数据库走 MCP（addMcpServer）：注册成功 / 状态测试 / 失败提示 / 必填校验
       mcpConnected: '数据连接已就绪',
       mcpConnecting: '已添加，正在后台连接（首次需下载组件，稍后可在卡片「测试」查看状态）',

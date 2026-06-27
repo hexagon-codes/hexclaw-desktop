@@ -1196,6 +1196,9 @@ export default {
       testOk: 'Connected — {n} resources found',
       testFail: 'Connection failed',
       connected: 'Connected',
+      // MCP card badge real online state: not ready (backend server not connected / first-time component download) / checking
+      notReady: 'Not ready',
+      checking: 'Checking…',
       // Databases go through MCP (addMcpServer): register / status test / failure hint / required check
       mcpConnected: 'Data connection ready',
       mcpConnecting: 'Added — connecting in the background (the first add downloads components; check status via the card Test button shortly)',
