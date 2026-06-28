@@ -118,9 +118,12 @@ describe('useVoice — 资源清理', () => {
 
   it('TTS 清理 Audio 资源和 blob URL', () => {
     const source = readFileSync('src/composables/useVoice.ts', 'utf-8')
-    expect(source).toContain('URL.revokeObjectURL(audioUrl)')
-    // 防止 play 前有残留 URL
-    expect(source).toContain('audioUrl = null')
+    // AP-097：TTS 收敛为模块级单例 + AbortController；清理走 teardownActiveTTS/stopActiveTTS。
+    expect(source).toContain('URL.revokeObjectURL(activeAudioUrl)')
+    expect(source).toContain('activeAudioUrl = null')
+    // 取消令牌：停止/卸载能中断进行中的合成（防幽灵音频）
+    expect(source).toContain('AbortController')
+    expect(source).toContain('ac.signal.aborted')
   })
 
   it('Tauri WKWebView 环境下禁用 SpeechRecognition', () => {

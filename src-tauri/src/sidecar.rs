@@ -102,6 +102,10 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
         log::warn!("准备桌面知识库配置失败: {}", err);
     }
 
+    if let Err(err) = ensure_desktop_voice_enabled() {
+        log::warn!("准备桌面语音(TTS)配置失败: {}", err);
+    }
+
     let binary_name = if cfg!(target_os = "windows") {
         "hexclaw.exe"
     } else {
@@ -402,6 +406,168 @@ fn ensure_desktop_knowledge_enabled() -> Result<(), String> {
     Ok(())
 }
 
+/// 桌面模式默认启用语音合成（TTS），使用免费、无需 API Key 的 edge-tts。
+///
+/// 聊天气泡的「朗读」按钮（MessageActions）依赖后端 `/api/v1/voice/synthesize`，
+/// 而该路由仅在 `voice.enabled` 且配置了 TTS provider 时注册。`Voice.Enabled`
+/// 默认零值 false（DefaultConfig 不含 voice 段），桌面端又无语音设置 UI，导致朗读
+/// 按钮开箱即坏（404/503 → toast 失败）。这里仿照知识库的桌面默认，注入 edge-tts。
+/// edge-tts 免费、无 Key、仅在用户点击朗读时才请求微软 TTS（不自动外发数据）。
+fn ensure_desktop_voice_enabled() -> Result<(), String> {
+    let config_path = desktop_config_path()?;
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建配置目录失败 ({}): {}", parent.display(), e))?;
+    }
+
+    let existing = match std::fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(format!(
+                "读取配置文件失败 ({}): {}",
+                config_path.display(),
+                err
+            ))
+        }
+    };
+
+    let (next, changed) = ensure_voice_tts_enabled_yaml(&existing);
+    if !changed {
+        return Ok(());
+    }
+
+    std::fs::write(&config_path, next)
+        .map_err(|e| format!("写入配置文件失败 ({}): {}", config_path.display(), e))?;
+    log::info!("桌面模式已确保语音 TTS(edge-tts) 默认启用: {}", config_path.display());
+    Ok(())
+}
+
+/// 注入默认 voice/TTS 配置块，确保免费 edge-tts 始终可用。
+///
+/// - 空文件 / 无顶层 `voice:` → 写入完整 voice 块。
+/// - 已有 `voice:` 块但**缺有效 TTS provider** → 注入/补全 `tts.provider: edge-tts`
+///   （修"半截 voice 块朗读仍坏"：enabled 但无 provider 时后端 HasTTS=false→503）。
+/// - 已有非空 provider 或用户显式 `enabled: false` → **尊重不动**，保证幂等。
+fn ensure_voice_tts_enabled_yaml(content: &str) -> (String, bool) {
+    const VOICE_BLOCK: &str = "voice:\n  enabled: true\n  tts:\n    provider: edge-tts\n";
+
+    if content.trim().is_empty() {
+        return (VOICE_BLOCK.to_string(), true);
+    }
+
+    let normalized = content.replace("\r\n", "\n");
+    let lines: Vec<String> = normalized.lines().map(std::string::ToString::to_string).collect();
+
+    let Some(start) = lines.iter().position(|l| is_top_level_key(l, "voice")) else {
+        // 无 voice 块 → 追加完整块
+        let mut next = normalized.trim_end_matches('\n').to_string();
+        next.push_str("\n\n");
+        next.push_str(VOICE_BLOCK);
+        return (next, true);
+    };
+
+    let mut lines = lines;
+
+    // 定位 voice 块范围（到下一个顶层 key 为止）
+    let end = voice_block_end(&lines, start);
+
+    // 已配置**有效**的 tts.provider（去引号后非空真实值，如 azure）→ 用户刻意设好 TTS，
+    // 整块尊重不动（含 enabled）。注意：hexclaw 序列化默认写 `provider: ""`，是带引号的
+    // 空串，判空前必须先去引号，否则会被误当成"已配 provider"而放过。
+    if let Some((_, val)) = voice_subsection_provider(&lines, start, end, "tts:") {
+        if !provider_value_is_empty(&val) {
+            return (content.to_string(), false);
+        }
+    }
+
+    // 无有效 tts provider（hexclaw 默认零值块即此形）→ 强制开箱可用：
+    //   ① voice.enabled 强制 true：桌面端无 voice 设置 UI，enabled:false 只可能是 hexclaw
+    //      默认零值序列化，绝非用户刻意选择 → 语义同知识库(rewrite_enabled_line 强翻)。
+    //   ② tts.provider 设为免费 edge-tts：仅作用 tts 子段，**绝不碰 stt.provider**。
+    // ① 只翻 voice 块内第一处 enabled:（即 voice.enabled；stt/tts/wake 的 enabled 不动）。
+    if let Some(ei) = (start + 1..end).find(|&i| lines[i].trim_start().starts_with("enabled:")) {
+        if let Some(rewritten) = rewrite_enabled_line(&lines[ei]) {
+            lines[ei] = rewritten;
+        }
+    } else {
+        lines.insert(start + 1, "  enabled: true".to_string());
+    }
+
+    // ② tts.provider（基于可能已插入 enabled 行后的最新 lines 重新定位块范围）。
+    let end = voice_block_end(&lines, start);
+    match voice_subsection_provider(&lines, start, end, "tts:") {
+        Some((pi, _)) => {
+            // 空 provider → 原地补全（保留原缩进），不重复注入 tts 子段。
+            let indent = &lines[pi][..line_indent(&lines[pi])];
+            lines[pi] = format!("{indent}provider: edge-tts");
+        }
+        None => {
+            // 无 tts 子段 → 在 voice: 后注入。
+            lines.insert(start + 1, "  tts:\n    provider: edge-tts".to_string());
+        }
+    }
+
+    // 进入强启分支即必有改动（voice.enabled 强制 true + tts.provider 必被补全/注入）。
+    (join_yaml_lines(&lines), true)
+}
+
+/// 行首缩进字符数。
+fn line_indent(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// voice 顶层块的结束行（exclusive）：start 之后第一处顶层 key，或文件尾。
+fn voice_block_end(lines: &[String], start: usize) -> usize {
+    for (i, l) in lines.iter().enumerate().skip(start + 1) {
+        let t = l.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if !l.starts_with(' ') && !l.starts_with('\t') {
+            return i;
+        }
+    }
+    lines.len()
+}
+
+/// voice 块 [start,end) 内某子段（如 "tts:"）的 provider 行索引与原始值（未去引号）。
+/// 子段范围限定在该子段头之后、到缩进 ≤ 子段头缩进的下一行为止——因此 stt 子段的
+/// provider 绝不会被误当成 tts 的（修旧实现 `position(starts_with("provider:"))` 命中首个
+/// provider=stt 的 bug）。
+fn voice_subsection_provider(
+    lines: &[String],
+    start: usize,
+    end: usize,
+    sub: &str,
+) -> Option<(usize, String)> {
+    let sub_idx = (start + 1..end).find(|&i| lines[i].trim() == sub)?;
+    let sub_indent = line_indent(&lines[sub_idx]);
+    let mut sub_end = end;
+    for i in (sub_idx + 1)..end {
+        let t = lines[i].trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if line_indent(&lines[i]) <= sub_indent {
+            sub_end = i;
+            break;
+        }
+    }
+    let pi = (sub_idx + 1..sub_end).find(|&i| lines[i].trim_start().starts_with("provider:"))?;
+    let val = lines[pi].trim_start()["provider:".len()..].trim().to_string();
+    Some((pi, val))
+}
+
+/// provider 值是否"空"——去掉首尾引号与空白后为空（hexclaw 默认序列化为 `""`）。
+fn provider_value_is_empty(val: &str) -> bool {
+    val.trim()
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim()
+        .is_empty()
+}
+
 fn desktop_config_path() -> Result<std::path::PathBuf, String> {
     #[cfg(target_os = "windows")]
     let home = std::env::var_os("USERPROFILE")
@@ -696,8 +862,8 @@ fn process_exists(pid: u32) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ensure_knowledge_enabled_yaml, executable_basename, format_port_conflict_error,
-        is_hexclaw_sidecar_command, parse_pid_list, parse_scutil_proxy,
+        ensure_knowledge_enabled_yaml, ensure_voice_tts_enabled_yaml, executable_basename,
+        format_port_conflict_error, is_hexclaw_sidecar_command, parse_pid_list, parse_scutil_proxy,
     };
 
     #[test]
@@ -759,6 +925,112 @@ mod tests {
         let input = "knowledge:\n  enabled: true\n";
         let (next, changed) = ensure_knowledge_enabled_yaml(input);
         assert!(!changed);
+        assert_eq!(next, input);
+    }
+
+    // BUG 复现(2026-06-26): 桌面端有「朗读」按钮但 TTS 从未启用 → 朗读开箱即坏。
+    // 桌面默认应注入免费的 edge-tts，使 /api/v1/voice/synthesize 路由注册、按钮可用。
+    #[test]
+    fn ensure_voice_tts_enabled_yaml_creates_full_block_when_empty() {
+        let (next, changed) = ensure_voice_tts_enabled_yaml("");
+        assert!(changed);
+        assert_eq!(
+            next,
+            "voice:\n  enabled: true\n  tts:\n    provider: edge-tts\n"
+        );
+    }
+
+    #[test]
+    fn ensure_voice_tts_enabled_yaml_appends_block_when_missing() {
+        let (next, changed) =
+            ensure_voice_tts_enabled_yaml("knowledge:\n  enabled: true\n");
+        assert!(changed);
+        assert!(next.contains(
+            "knowledge:\n  enabled: true\n\nvoice:\n  enabled: true\n  tts:\n    provider: edge-tts\n"
+        ));
+    }
+
+    #[test]
+    fn ensure_voice_tts_enabled_yaml_keeps_existing_voice_block() {
+        // 幂等 + 尊重用户：已有非空 provider 的完整 voice 块原样不动。
+        let input = "voice:\n  enabled: true\n  tts:\n    provider: edge-tts\n";
+        let (next, changed) = ensure_voice_tts_enabled_yaml(input);
+        assert!(!changed);
+        assert_eq!(next, input);
+    }
+
+    // bug-20260626-⑤：voice 块存在但缺有效 TTS provider → 朗读仍坏(503)。应补全免费 edge-tts。
+    #[test]
+    fn ensure_voice_tts_block_without_tts_should_inject_provider() {
+        let (next, changed) = ensure_voice_tts_enabled_yaml("voice:\n  enabled: true\n");
+        assert!(changed);
+        assert!(next.contains("provider: edge-tts"), "应注入 provider: {next}");
+        assert!(next.contains("enabled: true"), "应保留 enabled: {next}");
+    }
+
+    #[test]
+    fn ensure_voice_tts_empty_provider_should_be_fixed() {
+        let (next, changed) =
+            ensure_voice_tts_enabled_yaml("voice:\n  enabled: true\n  tts:\n    provider:\n");
+        assert!(changed);
+        assert!(next.contains("provider: edge-tts"), "空 provider 应补全: {next}");
+        // 不得产生重复 tts 子段
+        assert_eq!(next.matches("tts:").count(), 1, "不应重复 tts: {next}");
+    }
+
+    #[test]
+    fn ensure_voice_tts_bare_disabled_without_provider_is_force_enabled() {
+        // 契约修正（bug-20260626-tts-A2）：桌面端无 voice 设置 UI，未配任何 tts.provider 的
+        // bare `enabled: false` 与 hexclaw 默认零值序列化无法区分，只可能是默认值，不是用户
+        // 刻意选择。旧实现"尊重 enabled:false 不动"会让 🔊 恒坏（路由不注册），故强制启用。
+        // 真正想尊重的是"已配非空 provider"那种刻意配置（见
+        // ensure_voice_tts_respects_deliberately_configured_provider）。
+        let input = "voice:\n  enabled: false\n";
+        let (next, changed) = ensure_voice_tts_enabled_yaml(input);
+        assert!(changed, "默认 disabled 且无 provider → 应强制启用: {next}");
+        assert!(next.contains("enabled: true"), "应翻 enabled: {next}");
+        assert!(next.contains("provider: edge-tts"), "应注入 edge-tts: {next}");
+    }
+
+    // bug-20260626-tts-A2：装机现场真实复现。hexclaw 把零值默认 voice 段整段序列化到
+    // ~/.hexclaw/hexclaw.yaml（enabled:false + stt/tts/wake 子段、provider 均为带引号空串
+    // `""`）。桌面端无 voice 设置 UI → enabled:false 只可能是默认零值，绝非用户刻意选择。
+    // 旧实现遇 enabled:false 直接 early-return 不动 → 装好的 app voice 路由不注册(/api/v1/
+    // voice/status 404) → 🔊 恒坏。本用例钉死：默认零值块必须被强制启用 edge-tts。
+    #[test]
+    fn ensure_voice_tts_force_enables_hexclaw_default_serialized_block() {
+        let input = concat!(
+            "voice:\n",
+            "    enabled: false\n",
+            "    stt:\n",
+            "        provider: \"\"\n",
+            "        model: \"\"\n",
+            "    tts:\n",
+            "        provider: \"\"\n",
+            "        voice: \"\"\n",
+            "    wake:\n",
+            "        enabled: false\n",
+        );
+        let (next, changed) = ensure_voice_tts_enabled_yaml(input);
+        assert!(changed, "默认零值 voice 块必须被强制启用: {next}");
+        // voice.enabled 翻 true（仅这一处；wake.enabled 保持 false 不动）
+        assert_eq!(next.matches("enabled: true").count(), 1, "只应翻 voice.enabled: {next}");
+        assert!(next.contains("enabled: false"), "wake.enabled 应保持不动: {next}");
+        // tts.provider 设为免费 edge-tts
+        assert!(next.contains("provider: edge-tts"), "tts.provider 应为 edge-tts: {next}");
+        // 绝不能把 edge-tts 注到 stt.provider（stt 段仍不含 edge-tts）
+        let stt_seg = &next[next.find("stt:").unwrap()..next.find("tts:").unwrap()];
+        assert!(!stt_seg.contains("edge-tts"), "不得污染 stt.provider: {stt_seg}");
+        // 不重复 tts 子段
+        assert_eq!(next.matches("tts:").count(), 1, "不应重复 tts 子段: {next}");
+    }
+
+    // 真正"刻意配置"才尊重：tts.provider 已是非空真实值（如 azure）→ 即便 enabled:false 也整块不动。
+    #[test]
+    fn ensure_voice_tts_respects_deliberately_configured_provider() {
+        let input = "voice:\n  enabled: false\n  tts:\n    provider: azure\n";
+        let (next, changed) = ensure_voice_tts_enabled_yaml(input);
+        assert!(!changed, "已配非空 provider 应整块尊重: {next}");
         assert_eq!(next, input);
     }
 

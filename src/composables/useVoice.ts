@@ -62,9 +62,39 @@ declare global {
   }
 }
 
+// ─── 模块级 TTS 单例（AP-097/叠音修复）──────────────────────
+// 全局同一时刻只播一段语音（跨所有 useVoice 实例互斥）；AbortController 让"停止/卸载"
+// 能中断进行中的合成 await——否则合成 resolve 后仍 new Audio().play() = 幽灵音频 + 状态脱节。
+let voiceSeq = 0
+const activeSpeakerId = ref<string | null>(null)
+let activeAudio: HTMLAudioElement | null = null
+let activeAudioUrl: string | null = null
+let activeAbort: AbortController | null = null
+
+function teardownActiveTTS() {
+  if (activeAudio) {
+    activeAudio.onended = null
+    activeAudio.onerror = null
+    try { activeAudio.pause() } catch { /* already stopped */ }
+    activeAudio = null
+  }
+  if (activeAudioUrl) {
+    URL.revokeObjectURL(activeAudioUrl)
+    activeAudioUrl = null
+  }
+}
+
+function stopActiveTTS() {
+  if (activeAbort) { activeAbort.abort(); activeAbort = null }
+  teardownActiveTTS()
+  activeSpeakerId.value = null
+}
+
 export function useVoice() {
   const isListening = ref(false)
-  const isSpeaking = ref(false)
+  const myVoiceId = `voice-${++voiceSeq}`
+  // 本实例是否正在朗读：由模块级单例决定 → 别的实例开播时本实例自动变 false（互斥）。
+  const isSpeaking = computed(() => activeSpeakerId.value === myVoiceId)
   const transcript = ref('')
   const error = ref<string | null>(null)
 
@@ -96,8 +126,6 @@ export function useVoice() {
   const isSupported = computed(() => hasWebSpeech.value || hasMediaRecorder.value)
 
   let recognition: SpeechRecognition | null = null
-  let audioElement: HTMLAudioElement | null = null
-  let audioUrl: string | null = null
   // MediaRecorder fallback 状态
   let mediaRecorder: MediaRecorder | null = null
   let recordedChunks: Blob[] = []
@@ -266,60 +294,39 @@ export function useVoice() {
   // ─── TTS (Text-to-Speech) ────────────────────────────
 
   async function speak(text: string, voice?: string) {
-    if (isSpeaking.value) stopSpeaking()
+    stopActiveTTS() // 互斥：停掉任何进行中/正在播放的语音（含其它实例）
     error.value = null
+    const ac = new AbortController()
+    activeAbort = ac
+    activeSpeakerId.value = myVoiceId
 
     try {
-      isSpeaking.value = true
       const blob = await textToSpeech({ text, voice })
+      if (ac.signal.aborted) return // 合成期间被停止/卸载 → 不再起播（防幽灵音频）
 
-      // Clean up previous audio URL
-      if (audioUrl) {
-        URL.revokeObjectURL(audioUrl)
-        audioUrl = null
-      }
+      const url = URL.createObjectURL(blob)
+      const audio = new Audio(url)
+      activeAudio = audio
+      activeAudioUrl = url
 
-      audioUrl = URL.createObjectURL(blob)
-      audioElement = new Audio(audioUrl)
-
-      audioElement.onended = () => {
-        isSpeaking.value = false
-        cleanupAudio()
-      }
-
-      audioElement.onerror = () => {
+      audio.onended = () => { if (activeAbort === ac) stopActiveTTS() }
+      audio.onerror = () => {
         error.value = 'Failed to play audio'
-        isSpeaking.value = false
-        cleanupAudio()
+        if (activeAbort === ac) stopActiveTTS()
       }
 
-      await audioElement.play()
+      await audio.play()
+      if (ac.signal.aborted) stopActiveTTS() // play() promise 期间被停止
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'TTS failed'
-      isSpeaking.value = false
+      if (activeAbort === ac) stopActiveTTS() // 失败也清理（含 revokeObjectURL，修 blob 泄漏）
       logger.error('[useVoice] TTS failed', e)
     }
   }
 
   function stopSpeaking() {
-    if (audioElement) {
-      audioElement.pause()
-      audioElement.currentTime = 0
-    }
-    isSpeaking.value = false
-    cleanupAudio()
-  }
-
-  function cleanupAudio() {
-    if (audioElement) {
-      audioElement.onended = null
-      audioElement.onerror = null
-      audioElement = null
-    }
-    if (audioUrl) {
-      URL.revokeObjectURL(audioUrl)
-      audioUrl = null
-    }
+    // 只停本实例当前的语音（合成中 activeSpeakerId 已是本实例）
+    if (activeSpeakerId.value === myVoiceId) stopActiveTTS()
   }
 
   // ─── Cleanup on unmount ──────────────────────────────
