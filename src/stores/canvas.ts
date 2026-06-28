@@ -15,6 +15,7 @@ import {
   deleteWorkflow as apiDeleteWorkflow,
   runWorkflow as apiRunWorkflow,
   getWorkflowRun as apiGetWorkflowRun,
+  resumeWorkflowRun as apiResumeWorkflowRun,
   type PanelSummary,
 } from '@/api/canvas'
 import { trySafe } from '@/utils/errors'
@@ -37,6 +38,8 @@ export const useCanvasStore = defineStore('canvas', () => {
   const currentWorkflowId = ref<string | null>(null)
   const nodeRunStatus = ref<Record<string, 'idle' | 'running' | 'completed' | 'failed'>>({})
   const runResult = ref<{ output?: string; error?: string; startedAt?: string; finishedAt?: string; nodeResults?: WorkflowNodeRun[] } | null>(null)
+  // 最近一次运行的 id（Ph5 续接用：失败后据此 resume，复用已完成节点）。
+  const lastRunId = ref<string | null>(null)
 
   // 试运行前置校验：返回拦截原因（null = 可运行）。未配置的步骤——模型步骤无指令(prompt 空，
   // UI 显示"未配置指令")、工具步骤未选工具——不允许试运行。否则会把空指令提交后端执行、产出
@@ -311,10 +314,12 @@ export const useCanvasStore = defineStore('canvas', () => {
         nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: 'running' }
       }
       applyNodeResults(res)
+      lastRunId.value = res.id ?? null
       let final: WorkflowRun = res
       if ((res.status === 'running' || res.status === 'pending') && res.id) {
         final = await pollWorkflowRun(res.id)
       }
+      if (final.id) lastRunId.value = final.id
 
       // 4. 用真实 node_results 回填逐节点状态与产物
       applyNodeResults(final)
@@ -363,6 +368,42 @@ export const useCanvasStore = defineStore('canvas', () => {
         startedAt: new Date().toISOString(),
         finishedAt: new Date().toISOString(),
       }
+      error.value = err
+    }
+  }
+
+  /** 续接最近一次失败/中断的运行（Ph5）：后端复用已完成节点输出，只重算失败/未达节点。 */
+  async function resumeRun() {
+    if (runStatus.value === 'running' || !lastRunId.value) return
+    runStatus.value = 'running'
+    error.value = null
+    const order = topologicalOrder()
+    const [res, err] = await trySafe(() => apiResumeWorkflowRun(lastRunId.value!), '续接工作流')
+    if (res) {
+      applyNodeResults(res)
+      let final: WorkflowRun = res
+      if ((res.status === 'running' || res.status === 'pending') && res.id) {
+        final = await pollWorkflowRun(res.id)
+      }
+      if (final.id) lastRunId.value = final.id
+      applyNodeResults(final)
+      const fallbackNodeStatus = final.status === 'failed' ? 'failed' : 'completed'
+      if (!final.node_results || final.node_results.length === 0) {
+        for (const nid of order) nodeRunStatus.value = { ...nodeRunStatus.value, [nid]: fallbackNodeStatus }
+      }
+      runStatus.value = final.status
+      runOutput.value = final.output || final.error || ''
+      runResult.value = {
+        output: final.output,
+        error: final.error,
+        startedAt: final.started_at,
+        finishedAt: final.finished_at,
+        nodeResults: final.node_results,
+      }
+      error.value = null
+    } else {
+      runStatus.value = 'failed'
+      runOutput.value = err?.message ?? '续接失败'
       error.value = err
     }
   }
@@ -419,6 +460,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     currentWorkflowId,
     nodeRunStatus,
     runResult,
+    lastRunId,
     // actions
     loadPanels,
     loadPanel,
@@ -436,6 +478,7 @@ export const useCanvasStore = defineStore('canvas', () => {
     validateWorkflow,
     topologicalOrder,
     runWorkflow,
+    resumeRun,
     runBlockReason,
   }
 })

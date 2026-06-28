@@ -106,3 +106,8 @@ export async function runWorkflow(id: string): Promise<WorkflowRun> {
 export async function getWorkflowRun(runId: string): Promise<WorkflowRun> {
   return apiGet<WorkflowRun>(`/api/v1/canvas/runs/${encodeURIComponent(runId)}`)
 }
+
+/** 续接一次失败/中断的运行（Ph5）：复用已完成节点输出，只重算失败/未达节点。返回新运行。 */
+export async function resumeWorkflowRun(runId: string): Promise<WorkflowRun> {
+  return apiPost<WorkflowRun>(`/api/v1/canvas/runs/${encodeURIComponent(runId)}/resume`)
+}
