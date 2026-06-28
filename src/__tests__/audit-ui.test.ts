@@ -158,6 +158,9 @@ vi.mock('@/api/knowledge', () => ({
   reindexDocument: vi.fn(),
   isKnowledgeUploadEndpointMissing: vi.fn().mockReturnValue(false),
   isKnowledgeUploadUnsupportedFormat: vi.fn().mockReturnValue(false),
+  getKnowledgeConfig: () =>
+    Promise.resolve({ rerank: true, rerank_model: '', query_expand: true, contextual: true, min_score: 0.55, candidate_k: 50 }),
+  putKnowledgeConfig: (c: Record<string, unknown>) => Promise.resolve({ ...c }),
 }))
 
 vi.mock('@/api/config', () => ({

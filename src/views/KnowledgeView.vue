@@ -1,7 +1,17 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { BookOpen, Upload, Trash2, Search, X, FileUp, RefreshCw, AlertTriangle } from 'lucide-vue-next'
+import {
+  BookOpen,
+  Upload,
+  Trash2,
+  Search,
+  X,
+  FileUp,
+  RefreshCw,
+  AlertTriangle,
+  ChevronDown,
+} from 'lucide-vue-next'
 import {
   getDocuments,
   getDocumentContent,
@@ -12,7 +22,10 @@ import {
   reindexDocument,
   isKnowledgeUploadEndpointMissing,
   isKnowledgeUploadUnsupportedFormat,
+  getKnowledgeConfig,
+  putKnowledgeConfig,
 } from '@/api/knowledge'
+import type { KnowledgeSearchFilter, KnowledgeConfig } from '@/api/knowledge'
 // DB cache layer removed — data fetched directly from backend API
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -21,10 +34,31 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
+import HcDateRangePicker from '@/components/common/HcDateRangePicker.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 import { parseDocument } from '@/utils/file-parser'
 import { logger } from '@/utils/logger'
 
-const ACCEPTED_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.json']
+// 图片格式走后端多模态入库（视觉模型转写 → 文本 RAG，source_type=image）。
+// 后端 /knowledge/upload 显式支持这些扩展（见 api/handler_knowledge.go），桌面也须放行，
+// 否则多模态入库能力在桌面端无入口。注意：图片无法本地解析（parseDocument 会把二进制当
+// 纯文本读成乱码），故上传失败时绝不回退到本地解析（见 processFiles）。
+const IMAGE_TYPES = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
+const DOCUMENT_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.json']
+const ACCEPTED_TYPES = [...DOCUMENT_TYPES, ...IMAGE_TYPES]
+
+// 图片入库由后端视觉模型（VLM）转写为文本后再走 RAG 管线。若用户配的模型不具备视觉能力，
+// 后端返回的错误带「视觉模型 / 图像转写」标记（见 knowledge/multimodal.go）。据此把底层技术
+// 细节翻译成本地化、可操作的引导。标记为后端中文文案，与 UI 语言无关，故可跨语言可靠匹配。
+function isVisionModelError(message: string): boolean {
+  const m = message.toLowerCase()
+  return (
+    message.includes('视觉模型') ||
+    message.includes('图像转写') ||
+    m.includes('vision model') ||
+    m.includes('does not support image')
+  )
+}
 const props = withDefaults(
   defineProps<{
     knowledgeEnabled?: boolean
@@ -67,26 +101,184 @@ const searchQuery = ref('')
 const searchResults = ref<KnowledgeSearchResult[]>([])
 const searching = ref(false)
 let searchRequestGen = 0
+
+// 检索测试的元数据过滤（source_type 多选 chip + 创建日期区间）
+// image：多模态入库的图片文档（source_type=image，后端 Filter 支持按此维度过滤）。
+const SOURCE_TYPES = ['manual', 'upload', 'url', 'file', 'agent', 'image'] as const
+const selectedTypes = ref<string[]>([])
+const filterAfter = ref('')
+const filterBefore = ref('')
+const hasActiveFilter = computed(
+  () => selectedTypes.value.length > 0 || !!filterAfter.value || !!filterBefore.value,
+)
+function toggleType(tp: string) {
+  selectedTypes.value = selectedTypes.value.includes(tp)
+    ? selectedTypes.value.filter((t) => t !== tp)
+    : [...selectedTypes.value, tp]
+}
+function clearFilters() {
+  selectedTypes.value = []
+  filterAfter.value = ''
+  filterBefore.value = ''
+}
+function buildSearchFilter(): KnowledgeSearchFilter | undefined {
+  const filter: KnowledgeSearchFilter = {}
+  if (selectedTypes.value.length) filter.sourceTypes = [...selectedTypes.value]
+  if (filterAfter.value) filter.createdAfter = filterAfter.value
+  if (filterBefore.value) filter.createdBefore = filterBefore.value
+  return Object.keys(filter).length ? filter : undefined
+}
+
+// ── 检索质量参数（高级）：全局持久化（写 yaml + 热更新 KB Manager），功能默认开启、面板默认展开 ──
+// 即时生效：rerank/query_expand/contextual 开关、min_score、candidate_k；rerank_model 换模型需重启 sidecar。
+const RAG_DEFAULTS: KnowledgeConfig = {
+  rerank: true,
+  rerank_model: '',
+  query_expand: true,
+  contextual: true,
+  min_score: 0.55,
+  candidate_k: 50,
+}
+// 常见 cross-encoder 重排模型（'' = 自动：SiliconFlow 自动启用 / 否则 LLM 重排）。
+const RERANK_MODEL_PRESETS = [
+  '',
+  'BAAI/bge-reranker-v2-m3',
+  'Qwen/Qwen3-Reranker-0.6B',
+  'Qwen/Qwen3-Reranker-4B',
+  'Qwen/Qwen3-Reranker-8B',
+]
+const CANDIDATE_K_PRESETS = [20, 30, 50, 80, 100]
+const ragConfig = ref<KnowledgeConfig>({ ...RAG_DEFAULTS })
+const ragLoaded = ref(false)
+const ragPanelOpen = ref(true) // 默认展开
+const ragSaving = ref(false)
+const ragRestartHint = ref(false) // rerank_model 变更需重启提示
+// 当前 rerank_model 不在预设里时，把它并入下拉（保留手填/历史值，避免下拉重置丢值）。
+const rerankModelOptions = computed(() => {
+  const m = ragConfig.value.rerank_model
+  return m && !RERANK_MODEL_PRESETS.includes(m) ? [m, ...RERANK_MODEL_PRESETS] : RERANK_MODEL_PRESETS
+})
+// 同理 candidate_k：手改 yaml / 后端默认变更导致的非预设值也要能回显，否则一改就被吸附到预设。
+const candidateKOptions = computed(() => {
+  const k = ragConfig.value.candidate_k
+  return k > 0 && !CANDIDATE_K_PRESETS.includes(k) ? [k, ...CANDIDATE_K_PRESETS] : CANDIDATE_K_PRESETS
+})
+
+async function loadRagConfig() {
+  if (!knowledgeEnabled.value) return
+  try {
+    const cfg = await getKnowledgeConfig()
+    ragConfig.value = { ...RAG_DEFAULTS, ...cfg }
+    ragLoaded.value = true
+  } catch (e) {
+    // 知识库未启用 / 旧后端无端点：面板退化为默认值，不打扰用户。
+    logger.warn('[Knowledge] 检索参数读取失败', e)
+  }
+}
+
+// 全量保存（即时生效 + 落盘）。在写入前夹紧到合法区间，与后端校验对齐。
+async function saveRagConfig() {
+  if (!knowledgeEnabled.value) return
+  const c = ragConfig.value
+  c.min_score = Math.min(1, Math.max(0, Number(c.min_score) || 0))
+  if (!(c.candidate_k > 0)) c.candidate_k = RAG_DEFAULTS.candidate_k
+  ragSaving.value = true
+  try {
+    const res = await putKnowledgeConfig({ ...c })
+    ragRestartHint.value = !!res.rerank_model_restart_required
+    ragConfig.value = {
+      rerank: res.rerank,
+      rerank_model: res.rerank_model,
+      query_expand: res.query_expand,
+      contextual: res.contextual,
+      min_score: res.min_score,
+      candidate_k: res.candidate_k,
+    }
+    ragLoaded.value = true
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : t('knowledge.ragSaveFailed', '保存检索参数失败')
+    errorSeverity.value = 'error'
+  } finally {
+    ragSaving.value = false
+  }
+}
+
+function toggleRagBool(key: 'rerank' | 'query_expand' | 'contextual') {
+  ragConfig.value[key] = !ragConfig.value[key]
+  void saveRagConfig()
+}
+function onMinScoreChange(e: Event) {
+  ragConfig.value.min_score = Number((e.target as HTMLInputElement).value)
+  void saveRagConfig()
+}
+function onCandidateKPick(v: string) {
+  ragConfig.value.candidate_k = Number(v) || RAG_DEFAULTS.candidate_k
+  void saveRagConfig()
+}
+function onRerankModelPick(v: string) {
+  ragConfig.value.rerank_model = v
+  void saveRagConfig()
+}
+// HcSelect 选项（取代原生 <select>/<option>：品牌一致弹层、Teleport 自渲染，
+// 避开 macOS WKWebView 原生 <select> 弹层字号巨大/不受 CSS 控制的老问题，同 HcSelect 设计初衷）。
+const rerankModelSelectOptions = computed(() =>
+  rerankModelOptions.value.map((m) => ({ value: m, label: m === '' ? t('knowledge.ragRerankAuto') : m })),
+)
+const candidateKSelectOptions = computed(() =>
+  candidateKOptions.value.map((k) => ({ value: String(k), label: String(k) })),
+)
+function resetRagConfig() {
+  ragConfig.value = { ...RAG_DEFAULTS }
+  void saveRagConfig()
+}
 const selectedDoc = ref<KnowledgeDoc | null>(null)
 const showDocDetail = ref(false)
 const reindexingDocIds = ref<Set<string>>(new Set())
 const normalizedDocumentSearch = computed(() => props.documentSearch.trim().toLowerCase())
+
+// 按 source 分组/过滤 + 渲染窗口（#5）：定时任务快照会按时间序累积上千条，
+// 既要能按来源折叠筛选，也要避免一次性把全部卡片塞进 DOM 拖垮列表页。
+const selectedSource = ref<string | null>(null)
+const DOC_PAGE_SIZE = 50
+const visibleDocCount = ref(DOC_PAGE_SIZE)
+
+// 来源 facet：每个 source 一颗 chip，附该来源的文档数。
+const sourceFacet = computed(() => {
+  const counts = new Map<string, number>()
+  for (const d of docs.value) {
+    if (!d.source) continue
+    counts.set(d.source, (counts.get(d.source) ?? 0) + 1)
+  }
+  return [...counts.entries()].map(([source, count]) => ({ source, count }))
+})
+
 const filteredDocs = computed(() => {
   const query = normalizedDocumentSearch.value
-  if (!query) return docs.value
+  const src = selectedSource.value
   return docs.value.filter((doc) => {
-    const searchable = [
-      doc.title,
-      doc.source,
-      doc.content,
-      doc.status,
-      doc.error_message,
-    ]
+    if (src && doc.source !== src) return false
+    if (!query) return true
+    const searchable = [doc.title, doc.source, doc.content, doc.status, doc.error_message]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
     return searchable.includes(query)
   })
+})
+
+// 当前页（窗口）内的文档；其余通过「加载更多」逐步追加。
+const windowedDocs = computed(() => filteredDocs.value.slice(0, visibleDocCount.value))
+const hasMoreDocs = computed(() => filteredDocs.value.length > visibleDocCount.value)
+function loadMoreDocs() {
+  visibleDocCount.value += DOC_PAGE_SIZE
+}
+function selectSource(src: string | null) {
+  selectedSource.value = selectedSource.value === src ? null : src
+  visibleDocCount.value = DOC_PAGE_SIZE
+}
+// 搜索词变化时把窗口重置回第一页，避免停留在被过滤掉的尾页。
+watch(normalizedDocumentSearch, () => {
+  visibleDocCount.value = DOC_PAGE_SIZE
 })
 
 // File upload state
@@ -98,6 +290,7 @@ const fileInputRef = ref<HTMLInputElement>()
 
 onMounted(async () => {
   await loadDocs()
+  void loadRagConfig()
 })
 
 watch(activeTab, () => {
@@ -206,7 +399,7 @@ async function handleSearch() {
   searching.value = true
   errorMsg.value = ''
   try {
-    const res = await searchKnowledge(searchQuery.value, 5)
+    const res = await searchKnowledge(searchQuery.value, 5, buildSearchFilter())
     if (requestGen !== searchRequestGen) return
     searchResults.value = res.result || []
   } catch (e) {
@@ -416,7 +609,12 @@ async function processFiles(files: FileList) {
       continue
     }
 
-    const entry: { name: string; progress: number; status: 'uploading' | 'done' | 'error'; error?: string } = { name: file.name, progress: 0, status: 'uploading' }
+    // reactive(): mutations to status/progress/error must trigger re-render. A plain object
+    // pushed into the reactive array is held as a separate proxy, so mutating the raw object
+    // (in the async upload task below) would not update the DOM — the upload progress / error
+    // line would only refresh incidentally on the next unrelated render (e.g. loadDocs on
+    // success). The failure path has no such re-render, so the error message would never show.
+    const entry: { name: string; progress: number; status: 'uploading' | 'done' | 'error'; error?: string } = reactive({ name: file.name, progress: 0, status: 'uploading' })
     uploadingFiles.value.push(entry)
 
     uploadTasks.push(
@@ -432,7 +630,9 @@ async function processFiles(files: FileList) {
           uploadedAny = true
         } catch (e) {
           let uploadError = e
-          if (isKnowledgeUploadEndpointMissing(e) || isKnowledgeUploadUnsupportedFormat(e)) {
+          // 图片只能由后端视觉模型转写，绝不本地解析回退（否则二进制会被当纯文本读成乱码入库）。
+          const isImage = IMAGE_TYPES.includes(ext)
+          if (!isImage && (isKnowledgeUploadEndpointMissing(e) || isKnowledgeUploadUnsupportedFormat(e))) {
             try {
               await uploadDocumentThroughLegacyFallback(file, updateProgress)
               entry.status = 'done'
@@ -445,7 +645,13 @@ async function processFiles(files: FileList) {
           }
 
           entry.status = 'error'
-          entry.error = uploadError instanceof Error ? uploadError.message : t('knowledge.uploadFailed')
+          const rawMessage = uploadError instanceof Error ? uploadError.message : ''
+          // 图片入库失败且根因是「缺少视觉模型」时，给出本地化、可操作的引导，
+          // 不把后端的底层技术细节（如 "model does not support image input"）甩给用户。
+          entry.error =
+            isImage && isVisionModelError(rawMessage)
+              ? t('knowledge.imageVisionRequired')
+              : rawMessage || t('knowledge.uploadFailed')
         }
       })(),
     )
@@ -669,11 +875,50 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             <span>{{ t('knowledge.syncing') }}</span>
           </div>
 
+          <!-- 来源分组过滤：每个 source 一颗 chip（#5），快照按来源折叠筛选 -->
+          <div
+            v-if="sourceFacet.length > 1"
+            data-testid="knowledge-source-filters"
+            class="max-w-2xl flex flex-wrap items-center gap-2 mb-3"
+          >
+            <button
+              type="button"
+              data-testid="kb-source-chip-all"
+              :aria-pressed="selectedSource === null"
+              class="text-xs px-2.5 py-1 rounded-full border transition-colors"
+              :style="
+                selectedSource === null
+                  ? { background: 'var(--hc-accent)', borderColor: 'var(--hc-accent)', color: '#fff' }
+                  : { background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }
+              "
+              @click="selectSource(null)"
+            >
+              {{ t('knowledge.allSources') }} ({{ docs.length }})
+            </button>
+            <button
+              v-for="f in sourceFacet"
+              :key="f.source"
+              type="button"
+              :data-testid="`kb-source-chip-${f.source}`"
+              :aria-pressed="selectedSource === f.source"
+              class="text-xs px-2.5 py-1 rounded-full border transition-colors max-w-[14rem] truncate"
+              :style="
+                selectedSource === f.source
+                  ? { background: 'var(--hc-accent)', borderColor: 'var(--hc-accent)', color: '#fff' }
+                  : { background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }
+              "
+              :title="f.source"
+              @click="selectSource(f.source)"
+            >
+              {{ f.source }} ({{ f.count }})
+            </button>
+          </div>
+
           <!-- 文档列表 -->
           <div data-testid="knowledge-doc-list" class="space-y-3 max-w-2xl">
             <template v-if="filteredDocs.length > 0">
               <div
-                v-for="doc in filteredDocs"
+                v-for="doc in windowedDocs"
                 :key="doc.id"
                 data-testid="knowledge-doc-card"
                 class="hc-card-interactive group flex items-center gap-3 rounded-2xl border px-4 py-3.5"
@@ -741,6 +986,25 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               :description="t('knowledge.noResultsDesc')"
             />
           </div>
+
+          <!-- 分页：渲染窗口未覆盖全部时显示「加载更多」(#5) -->
+          <div
+            v-if="hasMoreDocs"
+            data-testid="knowledge-load-more"
+            class="max-w-2xl mt-3 flex items-center justify-center gap-3 text-xs"
+          >
+            <button
+              type="button"
+              class="px-3 py-1.5 rounded-lg border transition-colors"
+              :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-card)' }"
+              @click="loadMoreDocs"
+            >
+              {{ t('knowledge.loadMore') }}
+            </button>
+            <span :style="{ color: 'var(--hc-text-muted)' }">
+              {{ t('knowledge.shownOfTotal', { shown: windowedDocs.length, total: filteredDocs.length }) }}
+            </span>
+          </div>
         </template>
       </template>
 
@@ -751,7 +1015,172 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             {{ t('knowledge.searchDesc') }}
           </p>
 
-          <div class="flex gap-2 mb-6">
+          <!-- 检索质量参数（高级）：折叠面板（默认展开），全局持久化（写 yaml + 热更新 KB Manager）。
+               即时生效：rerank/查询扩展/情境增强 开关、min_score、candidate_k；换 rerank 模型需重启 sidecar。 -->
+          <div
+            data-testid="kb-rag-panel"
+            class="mb-5 rounded-xl border"
+            :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-card)' }"
+          >
+            <div
+              data-testid="kb-rag-toggle"
+              class="flex items-center justify-between px-3.5 py-2.5 cursor-pointer select-none"
+              @click="ragPanelOpen = !ragPanelOpen"
+            >
+              <span class="text-[13px] font-semibold" :style="{ color: 'var(--hc-text-primary)' }">
+                {{ t('knowledge.ragTitle') }}
+              </span>
+              <span class="flex items-center gap-3.5">
+                <button
+                  type="button"
+                  data-testid="kb-rag-reset"
+                  class="text-xs"
+                  :style="{ color: 'var(--hc-text-muted)' }"
+                  :disabled="!knowledgeEnabled || ragSaving"
+                  @click.stop="resetRagConfig"
+                >
+                  {{ t('knowledge.ragReset') }}
+                </button>
+                <ChevronDown
+                  :size="15"
+                  :style="{
+                    color: 'var(--hc-text-muted)',
+                    transform: ragPanelOpen ? 'rotate(180deg)' : 'none',
+                    transition: 'transform .15s',
+                  }"
+                />
+              </span>
+            </div>
+
+            <div
+              v-show="ragPanelOpen"
+              class="px-4 pb-3.5 flex flex-col gap-3 border-t"
+              :style="{ borderColor: 'var(--hc-border)' }"
+            >
+              <!-- 重排 cross-encoder + 模型下拉 -->
+              <div class="flex items-center gap-2.5 pt-3 flex-wrap">
+                <span class="text-[13px] flex-1 min-w-0" :style="{ color: 'var(--hc-text-primary)' }">
+                  {{ t('knowledge.ragRerank') }}
+                </span>
+                <input
+                  type="checkbox"
+                  data-testid="kb-rag-rerank"
+                  class="hc-toggle"
+                  :checked="ragConfig.rerank"
+                  :disabled="!knowledgeEnabled || ragSaving"
+                  :aria-label="t('knowledge.ragRerank')"
+                  @change="toggleRagBool('rerank')"
+                />
+                <div class="w-[208px] shrink-0">
+                  <HcSelect
+                    data-testid="kb-rag-rerank-model"
+                    :model-value="ragConfig.rerank_model"
+                    :options="rerankModelSelectOptions"
+                    :disabled="!knowledgeEnabled || !ragConfig.rerank || ragSaving"
+                    @update:model-value="onRerankModelPick"
+                  />
+                </div>
+              </div>
+
+              <!-- 查询扩展 -->
+              <div class="flex items-center gap-2.5">
+                <span class="text-[13px] flex-1" :style="{ color: 'var(--hc-text-primary)' }">
+                  {{ t('knowledge.ragQueryExpand') }}
+                </span>
+                <input
+                  type="checkbox"
+                  data-testid="kb-rag-query-expand"
+                  class="hc-toggle"
+                  :checked="ragConfig.query_expand"
+                  :disabled="!knowledgeEnabled || ragSaving"
+                  :aria-label="t('knowledge.ragQueryExpand')"
+                  @change="toggleRagBool('query_expand')"
+                />
+              </div>
+
+              <!-- 入库情境增强 Contextual（改后需重建索引） -->
+              <div class="flex items-center gap-2.5">
+                <span class="text-[13px] flex-1" :style="{ color: 'var(--hc-text-primary)' }">
+                  {{ t('knowledge.ragContextual') }}
+                  <span
+                    class="text-[11px] ml-1"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                    :title="t('knowledge.ragNeedRebuild')"
+                  >
+                    ⓘ {{ t('knowledge.ragNeedRebuild') }}
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  data-testid="kb-rag-contextual"
+                  class="hc-toggle"
+                  :checked="ragConfig.contextual"
+                  :disabled="!knowledgeEnabled || ragSaving"
+                  :aria-label="t('knowledge.ragContextual')"
+                  @change="toggleRagBool('contextual')"
+                />
+              </div>
+
+              <!-- 相关度地板 min_score -->
+              <div class="flex items-center gap-2.5">
+                <span class="text-[13px] flex-1" :style="{ color: 'var(--hc-text-primary)' }">
+                  {{ t('knowledge.ragMinScore') }}
+                </span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  data-testid="kb-rag-min-score"
+                  :value="ragConfig.min_score"
+                  :disabled="!knowledgeEnabled || ragSaving"
+                  style="width: 170px; accent-color: var(--hc-accent)"
+                  :aria-label="t('knowledge.ragMinScore')"
+                  @input="ragConfig.min_score = Number(($event.target as HTMLInputElement).value)"
+                  @change="onMinScoreChange"
+                />
+                <span
+                  class="text-xs tabular-nums w-9 text-right"
+                  :style="{ color: 'var(--hc-text-secondary)' }"
+                >
+                  {{ Number(ragConfig.min_score).toFixed(2) }}
+                </span>
+              </div>
+
+              <!-- 宽召回候选池 candidate_k -->
+              <div class="flex items-center gap-2.5">
+                <span class="text-[13px] flex-1" :style="{ color: 'var(--hc-text-primary)' }">
+                  {{ t('knowledge.ragCandidateK') }}
+                </span>
+                <div class="w-[88px] shrink-0">
+                  <HcSelect
+                    data-testid="kb-rag-candidate-k"
+                    :model-value="String(ragConfig.candidate_k)"
+                    :options="candidateKSelectOptions"
+                    :disabled="!knowledgeEnabled || ragSaving"
+                    @update:model-value="onCandidateKPick"
+                  />
+                </div>
+              </div>
+
+              <p
+                class="text-[11px] border-t pt-2.5 m-0"
+                :style="{ color: 'var(--hc-text-muted)', borderColor: 'var(--hc-border)' }"
+              >
+                {{ t('knowledge.ragFootnote') }}
+              </p>
+              <p
+                v-if="ragRestartHint"
+                data-testid="kb-rag-restart-hint"
+                class="text-[11px] m-0"
+                style="color: #f59e0b"
+              >
+                {{ t('knowledge.ragRestartHint') }}
+              </p>
+            </div>
+          </div>
+
+          <div class="flex gap-2 mb-3">
             <SearchInput
               v-model="searchQuery"
               class="flex-1"
@@ -768,6 +1197,60 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             >
               <Search :size="14" />
               {{ searching ? t('knowledge.searching') : t('common.search') }}
+            </button>
+          </div>
+
+          <!-- 元数据过滤：源类型 chip（多选）+ 创建日期区间 -->
+          <div data-testid="knowledge-search-filters" class="flex flex-wrap items-center gap-2 mb-6">
+            <span class="text-xs shrink-0" :style="{ color: 'var(--hc-text-muted)' }">{{
+              t('knowledge.filterType')
+            }}</span>
+            <button
+              v-for="tp in SOURCE_TYPES"
+              :key="tp"
+              type="button"
+              :data-testid="`kb-type-chip-${tp}`"
+              :aria-pressed="selectedTypes.includes(tp)"
+              class="text-xs px-2.5 py-1 rounded-full border transition-colors"
+              :style="
+                selectedTypes.includes(tp)
+                  ? { background: 'var(--hc-accent)', borderColor: 'var(--hc-accent)', color: '#fff' }
+                  : {
+                      background: 'var(--hc-bg-card)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-secondary)',
+                    }
+              "
+              :disabled="!knowledgeEnabled"
+              @click="toggleType(tp)"
+            >
+              {{ t(`knowledge.sourceType.${tp}`) }}
+            </button>
+
+            <span class="w-px h-4 mx-1 shrink-0" :style="{ background: 'var(--hc-border)' }" />
+
+            <label class="text-xs shrink-0" :style="{ color: 'var(--hc-text-muted)' }">{{
+              t('knowledge.filterDate')
+            }}</label>
+            <HcDateRangePicker
+              v-model:from="filterAfter"
+              v-model:to="filterBefore"
+              :disabled="!knowledgeEnabled"
+              :from-label="t('knowledge.filterDateFrom')"
+              :to-label="t('knowledge.filterDateTo')"
+              from-testid="kb-filter-after"
+              to-testid="kb-filter-before"
+            />
+
+            <button
+              v-if="hasActiveFilter"
+              type="button"
+              data-testid="kb-filter-clear"
+              class="text-xs underline shrink-0"
+              :style="{ color: 'var(--hc-text-muted)' }"
+              @click="clearFilters"
+            >
+              {{ t('knowledge.clearFilter') }}
             </button>
           </div>
 

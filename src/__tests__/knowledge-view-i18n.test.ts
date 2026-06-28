@@ -15,6 +15,20 @@ const REQUIRED_KNOWLEDGE_KEYS = [
   'knowledge.orManualInput',
 ]
 
+// 检索测试的元数据过滤 UI（source_type chip + 日期区间 + 清除）三语必须齐备
+const REQUIRED_FILTER_KEYS = [
+  'knowledge.filterType',
+  'knowledge.filterDate',
+  'knowledge.filterDateFrom',
+  'knowledge.filterDateTo',
+  'knowledge.clearFilter',
+  'knowledge.sourceType.manual',
+  'knowledge.sourceType.upload',
+  'knowledge.sourceType.url',
+  'knowledge.sourceType.file',
+  'knowledge.sourceType.agent',
+]
+
 describe('KnowledgeView i18n coverage', () => {
   it('zh-CN locale defines every knowledge key used by the add-document dialog', () => {
     const missing = REQUIRED_KNOWLEDGE_KEYS.filter((path) => getByPath(zhCN, path) == null)
@@ -24,6 +38,13 @@ describe('KnowledgeView i18n coverage', () => {
   it('en locale defines every knowledge key used by the add-document dialog', () => {
     const missing = REQUIRED_KNOWLEDGE_KEYS.filter((path) => getByPath(en, path) == null)
     expect(missing).toEqual([])
+  })
+
+  it('all three locales define every KB search filter key (chips/date/clear)', () => {
+    for (const [name, loc] of [['zh-CN', zhCN], ['en', en], ['ug-CN', ugCN]] as const) {
+      const missing = REQUIRED_FILTER_KEYS.filter((path) => getByPath(loc, path) == null)
+      expect(missing, `${name} missing filter keys`).toEqual([])
+    }
   })
 
   // 对齐原型 app.html：知识库页第一个分段 tab 文案是「文档」而非顶层「知识库」，

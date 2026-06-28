@@ -343,12 +343,28 @@ describe('[memory] Memory System', () => {
 describe('[knowledge] Knowledge Base / RAG', () => {
   // ── HIGH ──────────────────────────────────────────────────
 
-  it('HIGH: [hexclaw] VectorSearch 全表扫描加载所有 embedding → OOM 风险 [FIXED]', () => {
-    // FIXED: 上限从 100000 降到 10000 (60MB 可控)
+  it('HIGH: [hexclaw] VectorSearch OOM 由 streaming-discard 化解 + 无静默截断召回 [FIXED v2]', () => {
+    // 设计演进（2026-06，RAG 召回优先）：
+    //   旧 "Fix 6" 用 maxVectorScanRows=10000 硬截断扫描行数来"省内存"，但大库下会
+    //   悄悄丢召回（silent recall drop）——这本身是召回质量 bug。现行设计已移除该硬上限：
+    //   ① streaming-discard：逐行解码 embedding blob → 算完 cosine 立即丢弃，all 切片只留
+    //      标量 {id,sim}（~40B/行），绝不保留 embedding 向量 → 内存 O(n) 仅数 MB，无 OOM；
+    //   ② 仅 topK 全量加载：排序取 topK 后才 getChunksByIDs 批量加载完整 chunk，而非全部；
+    //   ③ 非静默告警：扫描规模 > vectorScanWarnThreshold 时打 logger.Warn（不丢数据）。
+    // 本用例锁定新不变量，防回退到"靠硬截断省内存 / 静默丢召回"的旧反模式。
     const store = readBackend('knowledge/sqlite_store.go')
     if (store) {
-      expect(store).not.toContain('100000')
-      expect(store).toContain('10000')
+      // ③ 非静默 WARN 阈值：超阈值打日志而非静默截断
+      expect(store).toContain('vectorScanWarnThreshold')
+      expect(store).toMatch(/logger\.Warn\(/)
+      // ② OOM 真正的化解手段：只批量加载 topK 条完整 chunk
+      expect(store).toContain('getChunksByIDs')
+      // ① 向量扫描 SELECT 必须无 LIMIT —— 杜绝静默截断召回（精确提取该查询，避免被
+      //    kb_documents / TextSearch 的 LIMIT 或注释误伤）。
+      //    2026-06-27：元数据过滤把 kb_chunks 起了别名 c（无过滤快路径），无 LIMIT 不变量不变。
+      const scanQuery = store.match(/SELECT[^`]*FROM kb_chunks c WHERE c\.embedding IS NOT NULL[^`]*/)
+      expect(scanQuery?.[0]).toBeTruthy()
+      expect(scanQuery?.[0]).not.toMatch(/LIMIT/)
     }
   })
 
