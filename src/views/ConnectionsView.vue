@@ -5,7 +5,7 @@
  *   - 数据连接器 = GitHub / Notion 令牌只读接入（§15.1，真实后端：token 加密存、真 test、浏览资源）。
  * 锚点 = prototype/app.html 的 connections 屏（data-cx 0/1）。
  */
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Zap, Pencil, Trash2, Database, FolderOpen, X, ExternalLink } from 'lucide-vue-next'
 import ConnectionChannelCards from '@/components/channels/ConnectionChannelCards.vue'
@@ -20,8 +20,9 @@ import {
   type ConnectorInstance,
 } from '@/composables/useConnectorInstances'
 import { deleteConnector, getConnectorResources, type ConnectorResource } from '@/api/connectors'
+import { updateConfig } from '@/api/settings'
 import { getMcpServerStatus, removeMcpServer } from '@/api/mcp'
-import { isMcpConnectorType } from '@/config/mcp-connectors'
+import { isMcpConnectorType, MCP_CONNECTOR_SPECS } from '@/config/mcp-connectors'
 
 // 官方品牌 logo（Simple Icons 下载落盘，单色，浅底 tile 保证双主题清晰）。
 import postgresLogo from '@/assets/connection-logos/postgres.svg'
@@ -102,6 +103,43 @@ const channelCardsRef = ref<{ openCreate?: () => void }>()
 
 // 数据连接器：实例列表 store（模块级单例，localStorage 持久化）。
 const { list: connectorInstances, updateInstance, removeInstance } = useConnectorInstances()
+// 首帧标记：避免挂载即下发空 allowed_paths 清空他源配置（见下方 watch）。
+let allowedPathsFirstSync = true
+
+// BUG-20260626：把「启用的本地目录连接器」路径汇总，写进后端沙箱只读白名单
+// （skill.sandbox.filesystem.allowed_paths），让 code_exec 等能读到用户显式授权的目录——
+// 否则连接器只是前端 localStorage 书签，后端沙箱 deny-default 永远读不到。
+// 仅 enabled 的 localFolder 计入；停用/删除即从白名单移除。watch 一个稳定的 join key，
+// 仅在「路径集合」真正变化时才打后端（不被无关连接器编辑带动）。immediate：挂载即对齐一次，
+// 让上次会话加的连接器在打开连接页时补同步到后端（sidecar 重启后由 code_exec 读取生效）。
+const enabledLocalFolderPaths = computed<string[]>(() => {
+  const set = new Set<string>()
+  for (const inst of connectorInstances.value) {
+    if (inst.type === 'localFolder' && inst.enabled) {
+      const p = inst.config?.path?.trim()
+      if (p) set.add(p)
+    }
+  }
+  return Array.from(set).sort()
+})
+
+watch(
+  () => enabledLocalFolderPaths.value.join(''),
+  async () => {
+    const paths = enabledLocalFolderPaths.value
+    const wasFirst = allowedPathsFirstSync
+    allowedPathsFirstSync = false
+    // 首帧（挂载）若本就没有本地目录连接器，不下发空数组——否则会清空后端 allowed_paths 里手动/他源
+    // 配置的路径。仅当用户「停用/删掉最后一个连接器」(运行时变更，非首帧) 才下发空清单做清除。
+    if (wasFirst && paths.length === 0) return
+    try {
+      await updateConfig({ sandbox: { allowed_paths: paths } })
+    } catch {
+      /* 引擎降级/离线时静默；下次连接器变更或应用重启时再对齐 */
+    }
+  },
+  { immediate: true },
+)
 
 // 删除确认目标（非空 = 待删连接器实例）。removeInstance 会同时清理 secure-store 里的密钥残留。
 const deleteTarget = ref<ConnectorInstance | null>(null)
@@ -202,11 +240,40 @@ function instanceMono(inst: ConnectorInstance): string {
   return name.slice(0, 1).toUpperCase()
 }
 
-// 实例副标题：优先显示 host，其次 path / url，皆空则提示未配置。
-function instanceSub(inst: ConnectorInstance): string {
+// 连接展示串：优先 host / path / url；皆无时取该类型 spec 里首个非机密已填字段
+//（如飞书文档 app_id）——避免 token/app 类连接器副标恒显「尚未配置」。
+function connectorTarget(inst: ConnectorInstance): string {
   const c = inst.config || {}
-  const v = c.host?.trim() || c.path?.trim() || c.url?.trim()
-  return v || t('connections.channels.notConfigured')
+  const direct = c.host?.trim() || c.path?.trim() || c.url?.trim()
+  if (direct) return direct
+  const spec = MCP_CONNECTOR_SPECS[inst.type]
+  if (spec) {
+    for (const f of spec.fields) {
+      if (f.secret) continue
+      const v = (c[f.key] ?? '').trim()
+      if (v) return v
+    }
+  }
+  return ''
+}
+
+// 是否已配置（「测试」按钮 + 副标共用，杜绝判定漂移）：MCP 类型按其 spec 的 fields 是否被填——
+// 覆盖 host/path/url 之外的字段（语雀=token、飞书文档=app_id+app_secret），否则会把已配好 token 的
+// 连接器误判为未配置（弹「请先配置」/副标显「尚未配置」）。非 MCP 类型回退 host/path/url 展示串。
+function connectorConfigured(inst: ConnectorInstance): boolean {
+  const c = inst.config || {}
+  const spec = MCP_CONNECTOR_SPECS[inst.type]
+  if (spec) return spec.fields.some((f) => !!(c[f.key] ?? '').trim())
+  return !!connectorTarget(inst)
+}
+
+// 实例副标题：有展示串显之；否则已配置（仅机密字段，如语雀 token）显「已配置」，全空显「尚未配置」。
+function instanceSub(inst: ConnectorInstance): string {
+  const target = connectorTarget(inst)
+  if (target) return target
+  return connectorConfigured(inst)
+    ? t('connections.channels.configured', '已配置')
+    : t('connections.channels.notConfigured')
 }
 
 function instanceMethodLabel(inst: ConnectorInstance): string {
@@ -316,6 +383,14 @@ async function testConnector(inst: ConnectorInstance) {
       return
     }
     if (isMcpConnectorType(inst.type)) {
+      // 未配置（该类型 spec 字段全空）→ MCP server 永远不会起来，等待无用；引导去「编辑填写连接信息」，
+      // 而非误报「首次下载中、稍后再试」（那是已配置但 server 仍在启动的短暂过渡态，语义不同）。
+      // 用 connectorConfigured（按 spec 字段）而非 connectorTarget（仅 host/path/url）——后者会把
+      // 已配好 token 的语雀 / app_id 的飞书文档误判为未配置（bug-20260628）。
+      if (!connectorConfigured(inst)) {
+        toast.info(t('connections.connectors.mcpTestNotConfigured', '连接器尚未配置，请先编辑填写连接信息'))
+        return
+      }
       const serverName = inst.config?.mcp_server || inst.name
       mcpStatus.value = await getMcpServerStatus()
       mcpStatusLoaded.value = true // ★同步卡片徽章，与本次测试结果同源

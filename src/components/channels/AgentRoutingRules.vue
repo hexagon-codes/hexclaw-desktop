@@ -7,6 +7,7 @@ import { useI18n } from 'vue-i18n'
 import { Plus, Trash2, Users, X } from 'lucide-vue-next'
 import { getAgents, getRules, addRule, deleteRule } from '@/api/agents'
 import { logger } from '@/utils/logger'
+import { userVisibleAgents } from '@/utils/imChannelBinding'
 import type { AgentConfig, AgentRule } from '@/types'
 import LoadingState from '@/components/common/LoadingState.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -50,7 +51,8 @@ async function loadAll() {
   rulesLoading.value = true
   try {
     const [agentsRes, rulesRes] = await Promise.all([getAgents(), getRules()])
-    agents.value = agentsRes.agents || []
+    // 经单一可见性边界 userVisibleAgents 剔除匿名「频道默认模型」Agent（@im/*）——不作为可手动绑定的路由目标暴露给用户。
+    agents.value = userVisibleAgents(agentsRes.agents || [])
     rules.value = rulesRes.rules || []
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.loadRulesFailed')

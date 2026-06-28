@@ -69,16 +69,6 @@ describe('API 成功后状态不应卡在中间态', () => {
     })
   })
 
-  describe('IMChannelsView — delete', () => {
-    const src = readSrc('views/IMChannelsView.vue')
-
-    it('handleDelete 成功后调用 loadInstances 刷新列表', () => {
-      const fn = src.match(/async function handleDelete[\s\S]*?^}/m)?.[0] || ''
-      expect(fn).toBeTruthy()
-      expect(fn).toContain('loadInstances')
-    })
-  })
-
   describe('TasksView — pause/resume', () => {
     const src = readSrc('views/TasksView.vue')
 

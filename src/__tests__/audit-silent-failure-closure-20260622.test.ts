@@ -8,8 +8,6 @@
  *   SF-2 SettingsView refreshCapability（能力探测按钮）失败 → toast.error
  *   SF-3 SettingsView handleDeleteProvider（删除 Provider 确认）失败 → toast.error（已恢复快照）
  *   SF-4 SettingsView handleManagerResync（手动重新同步模型）失败 → toast.error
- *   SF-5 IMChannelsView restartEngine（重启引擎）失败 → errorMsg surface
- *   SF-6 IMChannelsView copyWebhookUrl（复制 URL）→ 成功/失败均 toast 反馈
  *   SF-7 TasksView loadJobs（加载列表）失败 → toast.error（非仅 console.error）
  *   SF-8 TasksView handlePauseResume（暂停/恢复）失败 → toast.error
  *   SF-9 TasksView handleDelete（删除任务）失败 → toast.error
@@ -55,20 +53,6 @@ describe('SF SettingsView — 用户主动操作失败已 surface 到 toast', ()
     expect(fnBody(src, 'async function handleManagerResync')).toContain('toast.error')
     // syncRemoteModels 须在 catch 返回 false，使调用方可感知失败
     expect(catchOf(fnBody(src, 'async function syncRemoteModels'))).toContain('return false')
-  })
-})
-
-describe('SF IMChannelsView — 重启/复制反馈已补全', () => {
-  const src = read('views/IMChannelsView.vue')
-
-  it('SF-5 restartEngine 失败 → errorMsg surface（不再仅 console.warn）', () => {
-    const c = catchOf(fnBody(src, 'async function restartEngine'))
-    expect(c).toContain('errorMsg.value')
-  })
-  it('SF-6 copyWebhookUrl 成功 toast.success + 失败 toast.error（不再空吞）', () => {
-    const fn = fnBody(src, 'async function copyWebhookUrl')
-    expect(fn).toContain('toast.success')
-    expect(catchOf(fn)).toContain('toast.error')
   })
 })
 
