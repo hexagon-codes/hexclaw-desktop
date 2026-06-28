@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiDelete } from './client'
+import { apiGet, apiPost, apiPut, apiDelete } from './client'
 import { fromHttpStatus, fromNativeError } from '@/utils/errors'
 import { env } from '@/config/env'
 import {
@@ -250,23 +250,68 @@ function normalizeKnowledgeSearchResults(payload: unknown): KnowledgeSearchResul
   return []
 }
 
-/** 搜索知识库 */
-export async function searchKnowledge(query: string, topK?: number) {
+/** 知识库检索的元数据过滤（可选）：维度间 AND、维度内 OR、留空=不过滤 */
+export interface KnowledgeSearchFilter {
+  sources?: string[] // 按文档来源精确匹配
+  sourceTypes?: string[] // manual / upload / url / file / agent
+  createdAfter?: string // 文档创建时间下界，RFC3339 或 YYYY-MM-DD
+  createdBefore?: string // 文档创建时间上界，RFC3339 或 YYYY-MM-DD
+}
+
+/** 搜索知识库（可选元数据过滤：源 / 源类型 / 创建日期，留空则全量检索） */
+export async function searchKnowledge(query: string, topK?: number, filter?: KnowledgeSearchFilter) {
+  const body: Record<string, unknown> = { query, top_k: topK ?? 3 }
+  if (filter) {
+    if (filter.sources?.length) body.sources = filter.sources
+    if (filter.sourceTypes?.length) body.source_types = filter.sourceTypes
+    if (filter.createdAfter) body.created_after = filter.createdAfter
+    if (filter.createdBefore) body.created_before = filter.createdBefore
+  }
+
   // 防御性双兼容：后端 Fix 16 返回 "results"（复数），但保留对历史 "result"（单数）的兜底，
   // 既有回归锁断言两字段都要兼容（code-review-v8 / comprehensive-api-layer）。
   const response = await apiPost<{
     result?: KnowledgeSearchResult[] | string
     results?: KnowledgeSearchResult[] | string
-  }>('/api/v1/knowledge/search', {
-    query,
-    top_k: topK ?? 3,
-  }).catch((error) => {
+  }>('/api/v1/knowledge/search', body).catch((error) => {
     throw normalizeKnowledgeEndpointError(error)
   })
 
   return {
     result: normalizeKnowledgeSearchResults(response.result ?? response.results),
   }
+}
+
+/**
+ * 检索质量参数（检索参数面板）。即时生效：rerank/query_expand/contextual 开关、min_score、
+ * candidate_k；rerank_model 换模型走「重启 sidecar 生效」（专用重排器在启动时注入）。
+ */
+export interface KnowledgeConfig {
+  rerank: boolean
+  rerank_model: string
+  query_expand: boolean
+  contextual: boolean
+  min_score: number
+  candidate_k: number
+}
+
+/** PUT 响应：在 KnowledgeConfig 基础上附带 rerank_model 是否变更需重启的标志。 */
+export interface KnowledgeConfigPutResult extends KnowledgeConfig {
+  rerank_model_restart_required?: boolean
+}
+
+/** 读取当前生效的检索质量参数 */
+export function getKnowledgeConfig(): Promise<KnowledgeConfig> {
+  return apiGet<KnowledgeConfig>('/api/v1/knowledge/config').catch((error) => {
+    throw normalizeKnowledgeEndpointError(error)
+  })
+}
+
+/** 保存检索质量参数（全量替换；即时热生效 + 落盘持久化） */
+export function putKnowledgeConfig(cfg: KnowledgeConfig): Promise<KnowledgeConfigPutResult> {
+  return apiPut<KnowledgeConfigPutResult>('/api/v1/knowledge/config', { ...cfg }).catch((error) => {
+    throw normalizeKnowledgeEndpointError(error)
+  })
 }
 
 /** 触发单个知识文档重建索引 */

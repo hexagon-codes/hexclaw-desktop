@@ -98,6 +98,36 @@ describe('knowledge API', () => {
     expect(result).toEqual([])
   })
 
+  it('omits filter fields when no filter given (backward compatible body)', async () => {
+    apiPost.mockResolvedValueOnce({ results: [] })
+    await searchKnowledge('query', 5)
+    expect(apiPost).toHaveBeenCalledWith('/api/v1/knowledge/search', { query: 'query', top_k: 5 })
+  })
+
+  it('passes metadata filter through to the request body', async () => {
+    apiPost.mockResolvedValueOnce({ results: [] })
+    await searchKnowledge('query', 5, {
+      sourceTypes: ['agent', 'upload'],
+      sources: ['https://x'],
+      createdAfter: '2026-06-15',
+      createdBefore: '2026-06-25',
+    })
+    expect(apiPost).toHaveBeenCalledWith('/api/v1/knowledge/search', {
+      query: 'query',
+      top_k: 5,
+      source_types: ['agent', 'upload'],
+      sources: ['https://x'],
+      created_after: '2026-06-15',
+      created_before: '2026-06-25',
+    })
+  })
+
+  it('drops empty filter arrays/strings (no spurious filter keys)', async () => {
+    apiPost.mockResolvedValueOnce({ results: [] })
+    await searchKnowledge('query', 3, { sourceTypes: [], createdAfter: '' })
+    expect(apiPost).toHaveBeenCalledWith('/api/v1/knowledge/search', { query: 'query', top_k: 3 })
+  })
+
   // ─── reindexDocument ───
   it('calls apiPost with correct path', async () => {
     apiPost.mockResolvedValueOnce({ status: 'ok' })

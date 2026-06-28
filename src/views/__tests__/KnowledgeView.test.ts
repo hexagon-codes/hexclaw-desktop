@@ -36,6 +36,9 @@ vi.mock('@/api/knowledge', () => ({
   reindexDocument,
   isKnowledgeUploadEndpointMissing,
   isKnowledgeUploadUnsupportedFormat,
+  getKnowledgeConfig: () =>
+    Promise.resolve({ rerank: true, rerank_model: '', query_expand: true, contextual: true, min_score: 0.55, candidate_k: 50 }),
+  putKnowledgeConfig: (c: Record<string, unknown>) => Promise.resolve({ ...c }),
 }))
 
 vi.mock('@/utils/file-parser', () => ({
@@ -196,7 +199,8 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     const fileInput = wrapper.find('input[type="file"]')
-    const files = [new File(['png'], 'diagram.png', { type: 'image/png' })]
+    // 用真正不支持的扩展名（.png 现已是受支持的多模态图片格式，见 ACCEPTED_TYPES）。
+    const files = [new File(['exe'], 'malware.exe', { type: 'application/octet-stream' })]
 
     Object.defineProperty(fileInput.element, 'files', {
       configurable: true,
@@ -208,7 +212,7 @@ describe('KnowledgeView', () => {
 
     expect(uploadDocument).not.toHaveBeenCalled()
     expect(wrapper.text()).toContain('不支持的文件类型')
-    expect(wrapper.text()).toContain('diagram.png')
+    expect(wrapper.text()).toContain('malware.exe')
   })
 
   it('blocks uploads and shows a clear hint when the backend knowledge feature is disabled', async () => {
