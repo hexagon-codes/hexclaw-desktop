@@ -28,6 +28,7 @@ const form = ref<CronJobInput>({
   prompt: '',
   type: 'cron',
   chat_id: '',
+  continuous: false,
 })
 
 const schedulePresets = computed(() => [
@@ -174,7 +175,7 @@ onMounted(() => document.addEventListener('click', collapseOnOutsideClick))
 onUnmounted(() => document.removeEventListener('click', collapseOnOutsideClick))
 
 function openCreateForm() {
-  form.value = { name: '', schedule: '', prompt: '', type: 'cron', deliver: [], chat_id: '' }
+  form.value = { name: '', schedule: '', prompt: '', type: 'cron', deliver: [], chat_id: '', continuous: false }
   loadConnections() // 打开即拉取连接库（已缓存则瞬时返回；失败优雅降级）
   showForm.value = true
   showPresets.value = false
@@ -861,6 +862,19 @@ defineExpose({ openCreateForm, loadJobs })
                   />
                   <p class="deliver-hint">{{ t('tasks.chatIdHint', 'IM/连接投递必填——指定要发送到的会话或群组') }}</p>
                 </div>
+              </div>
+
+              <!-- 持续型任务：长目标分多次累积推进 + 跨 tick 检查点 -->
+              <div class="hc-field">
+                <label class="continuous-toggle">
+                  <input v-model="form.continuous" type="checkbox" class="continuous-toggle__cb" />
+                  <span class="continuous-toggle__text">
+                    {{ t('tasks.continuousLabel', '持续型任务') }}
+                  </span>
+                </label>
+                <p class="deliver-hint">
+                  {{ t('tasks.continuousHint', '分多次累积推进长目标——每次只做下一个增量，带进度存档（重启可续），目标完成 / 卡住自动收工。') }}
+                </p>
               </div>
             </div>
             <!-- 编译进度（SSE 流式） -->
@@ -1576,6 +1590,21 @@ defineExpose({ openCreateForm, loadJobs })
   font-size: 11px;
   color: var(--hc-text-muted);
   margin: 8px 0 0;
+}
+
+.continuous-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--hc-text-secondary);
+}
+.continuous-toggle__cb {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--hc-primary, #4f46e5);
 }
 
 /* ── Transitions ── */

@@ -50,6 +50,8 @@ export interface CronJobUnifiedRequest {
     /** IM 投递目标会话 id —— IM deliver 时必发，否则后端 Deliverer 对 IM 目标硬失败（修复 AP-034 类型债：
      *  此前靠 createCronJobJSON 条件 spread 运行时下发但类型不可见，重构易丢、回退历史 P0）。 */
     chat_id?: string
+    /** 持续型任务 + 跨 tick 检查点（强制 agent 模式）。 */
+    continuous?: boolean
   }
   job_id?: string
   include_paused?: boolean
@@ -151,6 +153,7 @@ export async function createCronJobSSE(
     user_id: DESKTOP_USER_ID,
     ...(input.deliver && input.deliver.length ? { deliver: input.deliver } : {}),
     ...(input.chat_id ? { chat_id: input.chat_id } : {}),
+    ...(input.continuous ? { continuous: true } : {}),
   })
 
   // BUG-A 超时兜底：组合内部 timeout + 外部 signal 到统一 AbortController。
@@ -286,6 +289,7 @@ export async function createCronJobJSON(input: CronJobInput): Promise<CreateCron
         prompt: input.prompt,
         ...(input.deliver && input.deliver.length ? { deliver: input.deliver } : {}),
         ...(input.chat_id ? { chat_id: input.chat_id } : {}),
+        ...(input.continuous ? { continuous: true } : {}),
       },
     },
     { timeout: CRON_CREATE_TIMEOUT_MS },

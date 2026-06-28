@@ -147,6 +147,7 @@ describe('TasksView', () => {
         type: 'cron',
         deliver: [],
         chat_id: '',
+        continuous: false,
       },
       expect.objectContaining({
         onProgress: expect.any(Function),

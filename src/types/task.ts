@@ -61,4 +61,9 @@ export interface CronJobInput {
    * 在 chat_id 为空时硬失败（"has no chat_id for IM target"）。chat/push 不需要。
    */
   chat_id?: string
+  /**
+   * 持续型任务：长目标分多次累积推进，每 tick 只做下一个增量、带跨 tick 进度存档（重启可续），
+   * 目标完成 / 连续无进展 / 达上限自动收工。强制 agent 模式（每 tick 需推理"下一个增量"）。
+   */
+  continuous?: boolean
 }
