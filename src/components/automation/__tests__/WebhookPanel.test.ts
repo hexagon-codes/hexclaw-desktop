@@ -28,6 +28,7 @@ const toast = vi.hoisted(() => ({
   success: vi.fn(),
   error: vi.fn(),
 }))
+const setClipboard = vi.hoisted(() => vi.fn())
 
 vi.mock('@/api/webhook', () => ({
   getWebhooks,
@@ -38,6 +39,10 @@ vi.mock('@/api/webhook', () => ({
 
 vi.mock('@/composables/useToast', () => ({
   useToast: () => toast,
+}))
+
+vi.mock('@/api/desktop', () => ({
+  setClipboard,
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -235,5 +240,41 @@ describe('WebhookPanel CRUD', () => {
 
     expect(wrapper.text()).toContain('hook-new')
     expect(wrapper.text()).not.toContain('hook-old')
+  })
+})
+
+describe('WebhookPanel — 复制 Webhook URL 反馈（回归锁）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  async function mountWithOneHook() {
+    getWebhooks.mockResolvedValue({
+      webhooks: [{ id: 'a', name: 'hook-a', type: 'generic', prompt: 'p', enabled: true, event_count: 0 }],
+    })
+    const wrapper = mountPanel()
+    await flushPromises()
+    return wrapper
+  }
+
+  it('复制成功 → toast.success（写入后端生成的真实接收 URL）', async () => {
+    setClipboard.mockResolvedValue(undefined)
+    const wrapper = await mountWithOneHook()
+    const copyBtn = wrapper.find('.webhook-panel__copy')
+    expect(copyBtn.exists()).toBe(true)
+    await copyBtn.trigger('click')
+    await flushPromises()
+    expect(setClipboard).toHaveBeenCalledWith('http://localhost:16060/api/v1/webhooks/hook-a')
+    expect(toast.success).toHaveBeenCalledTimes(1)
+    expect(toast.error).not.toHaveBeenCalled()
+  })
+
+  it('复制失败（剪贴板抛错）→ toast.error（不静默吞错）', async () => {
+    setClipboard.mockRejectedValue(new Error('clipboard denied'))
+    const wrapper = await mountWithOneHook()
+    await wrapper.find('.webhook-panel__copy').trigger('click')
+    await flushPromises()
+    expect(toast.error).toHaveBeenCalledTimes(1)
+    expect(toast.success).not.toHaveBeenCalled()
   })
 })

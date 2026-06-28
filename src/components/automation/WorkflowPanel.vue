@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Plus, Workflow as WorkflowIcon, Brain, Wrench, GitBranch, Send, Zap, Pencil, Trash2, ArrowUp, ArrowDown, Play, Save, X, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-vue-next'
+import { Plus, Workflow as WorkflowIcon, Brain, Wrench, GitBranch, Layers, Send, Zap, Pencil, Trash2, ArrowUp, ArrowDown, Play, RotateCcw, Save, X, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-vue-next'
 import { useCanvasStore } from '@/stores/canvas'
 import { useToast } from '@/composables'
 import type { CanvasNode } from '@/types'
@@ -22,6 +22,7 @@ onMounted(async () => {
 const nodeMeta: Record<CanvasNode['type'], { icon: typeof Brain; key: string }> = {
   input: { icon: Zap, key: 'workflow.nodeTrigger' },
   agent: { icon: Brain, key: 'workflow.nodeAgent' },
+  parallel: { icon: Layers, key: 'workflow.nodeParallel' },
   tool: { icon: Wrench, key: 'workflow.nodeTool' },
   condition: { icon: GitBranch, key: 'workflow.nodeCondition' },
   output: { icon: Send, key: 'workflow.nodeOutput' },
@@ -36,6 +37,10 @@ function nodeConfigSummary(node: CanvasNode): string {
   switch (node.type) {
     case 'input': return String(c.value ?? '')
     case 'agent': return (c.role ? `@${c.role} · ` : '') + String(c.prompt || t('workflow.summaryNoPrompt', '（未配置指令）'))
+    case 'parallel': {
+      const roles = String(c.roles ?? '').trim()
+      return roles ? roles.split(/[,;\n]/).map((r) => r.trim()).filter(Boolean).map((r) => `@${r}`).join(' ‖ ') : t('workflow.summaryNoRoles', '（未配置并行角色）')
+    }
     case 'tool': return c.tool ? String(c.tool) : t('workflow.summaryNoTool', '（未选择工具）')
     case 'output': return t('workflow.summaryOutput', '透传最终输出')
     default: return node.type
@@ -83,6 +88,7 @@ function makeNode(type: CanvasNode['type']): CanvasNode {
   switch (type) {
     case 'input': return { ...base, label: t('workflow.nodeTrigger', '触发 / 输入'), config: { value: '{{input}}' } }
     case 'agent': return { ...base, label: t('workflow.nodeAgent', '模型处理'), config: { prompt: '' } }
+    case 'parallel': return { ...base, label: t('workflow.nodeParallel', '并行扇出'), config: { roles: '' } }
     case 'tool': return { ...base, label: t('workflow.nodeTool', '调用工具'), config: { tool: '' } }
     case 'output': return { ...base, label: t('workflow.nodeOutput', '输出'), config: {} }
     case 'condition': return { ...base, label: t('workflow.nodeCondition', '条件'), config: {} }
@@ -121,8 +127,8 @@ function moveStep(idx: number, dir: -1 | 1) {
 
 // ── 步骤编辑弹层 ──────────────────────────────────────────────
 const editingId = ref<string | null>(null)
-interface StepConfigForm { value: string; prompt: string; role: string; model: string; tool: string; args: string }
-const emptyConfigForm = (): StepConfigForm => ({ value: '', prompt: '', role: '', model: '', tool: '', args: '' })
+interface StepConfigForm { value: string; prompt: string; role: string; roles: string; model: string; tool: string; args: string }
+const emptyConfigForm = (): StepConfigForm => ({ value: '', prompt: '', role: '', roles: '', model: '', tool: '', args: '' })
 const editForm = ref<{ label: string; config: StepConfigForm }>({ label: '', config: emptyConfigForm() })
 const editingType = computed<CanvasNode['type'] | null>(() => {
   const n = store.nodes.find((x) => x.id === editingId.value)
@@ -138,6 +144,7 @@ function openEditStep(node: CanvasNode) {
       value: String(cfg.value ?? ''),
       prompt: String(cfg.prompt ?? ''),
       role: String(cfg.role ?? ''),
+      roles: Array.isArray(cfg.roles) ? (cfg.roles as unknown[]).join(', ') : String(cfg.roles ?? ''),
       model: String(cfg.model ?? ''),
       tool: String(cfg.tool ?? ''),
       args: typeof cfg.args === 'object' && cfg.args ? JSON.stringify(cfg.args, null, 2) : String(cfg.args ?? ''),
@@ -158,6 +165,11 @@ function saveStep() {
   if (type === 'agent') {
     config.prompt = f.config.prompt
     if (f.config.role.trim()) config.role = f.config.role.trim()
+    if (f.config.model.trim()) config.model = f.config.model.trim()
+  }
+  if (type === 'parallel') {
+    // 角色列表归一化为字符串数组（后端 parseParallelRoles 同时兼容数组/分隔字符串）。
+    config.roles = f.config.roles.split(/[,;\n]/).map((r) => r.trim()).filter(Boolean)
     if (f.config.model.trim()) config.model = f.config.model.trim()
   }
   if (type === 'tool') {
@@ -195,6 +207,16 @@ async function onRun() {
     toast.error(t('workflow.runFailed', '试运行失败'))
   } else if (store.runStatus === 'completed') {
     toast.success(t('workflow.runDone', '试运行完成'))
+  }
+}
+
+/** 续接：复用上次已完成节点，只重算失败/未达节点（Ph5）。 */
+async function onResume() {
+  await store.resumeRun()
+  if (store.runStatus === 'completed') {
+    toast.success(t('workflow.resumeDone', '续接完成'))
+  } else if (store.runStatus === 'failed') {
+    toast.error(t('workflow.resumeFailed', '续接失败'))
   }
 }
 
@@ -258,6 +280,9 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
             <Play v-else :size="14" />
             {{ isRunning ? t('workflow.running', '运行中…') : t('workflow.dryRun') }}
           </button>
+          <button v-if="store.runStatus === 'failed' && store.lastRunId" type="button" class="hc-btn" :disabled="isRunning" :title="t('workflow.resumeHint', '复用已完成节点，只重算失败/未达节点')" @click="onResume">
+            <RotateCcw :size="14" /> {{ t('workflow.resume', '续接') }}
+          </button>
           <button type="button" class="hc-btn hc-btn-primary" :disabled="store.loading" @click="onSave">
             <Save :size="14" /> {{ t('workflow.save') }}
           </button>
@@ -300,6 +325,7 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
           <div v-if="showAddMenu" class="wf-addmenu">
             <button type="button" @click="addStep('input')"><Zap :size="14" /> {{ t('workflow.nodeTrigger', '触发 / 输入') }}</button>
             <button type="button" @click="addStep('agent')"><Brain :size="14" /> {{ t('workflow.nodeAgent', '模型') }}</button>
+            <button type="button" @click="addStep('parallel')"><Layers :size="14" /> {{ t('workflow.nodeParallel', '并行扇出') }}</button>
             <button type="button" @click="addStep('tool')"><Wrench :size="14" /> {{ t('workflow.nodeTool', '工具') }}</button>
             <button type="button" @click="addStep('output')"><Send :size="14" /> {{ t('workflow.nodeOutput', '输出') }}</button>
           </div>
@@ -351,6 +377,18 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldRole', '智能体角色（可选）') }}</span>
                   <input v-model="editForm.config.role" class="wfp-input" :placeholder="t('workflow.fieldRoleHint', '如 researcher / writer，留空用默认助理') " />
+                </label>
+                <label class="wfp-field">
+                  <span class="wfp-field__label">{{ t('workflow.fieldModel', '模型覆盖（可选）') }}</span>
+                  <input v-model="editForm.config.model" class="wfp-input" :placeholder="t('workflow.fieldModelHint', '留空跟随智能路由')" />
+                </label>
+              </template>
+
+              <!-- parallel：并行扇出（多角色并发） -->
+              <template v-if="editingType === 'parallel'">
+                <label class="wfp-field">
+                  <span class="wfp-field__label">{{ t('workflow.fieldRoles', '并行角色（多个）') }}</span>
+                  <textarea v-model="editForm.config.roles" rows="3" class="wfp-input wfp-textarea" :placeholder="t('workflow.fieldRolesHint', '逗号 / 换行分隔，如 researcher, coder, analyst — 各角色对同一输入并发处理后合并')" />
                 </label>
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldModel', '模型覆盖（可选）') }}</span>
