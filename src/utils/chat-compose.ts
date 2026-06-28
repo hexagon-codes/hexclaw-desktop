@@ -56,7 +56,28 @@ export function shouldAutoScroll(force: boolean, userScrolledUp: boolean): boole
   return force || !userScrolledUp
 }
 
-/** 上/下翻导航箭头与"已上滚"标记的可见性判定（纯函数，便于单测）。
+/** 会话滚动决策（单一真相源，纯函数可测）。
+ *
+ *  两类场景分流（产品决策）：
+ *   - **会话级**（opening=true：打开/切换会话、重载历史）→ 瞬时到底（behavior='auto'，无动画）、
+ *     **无条件**（不受 userScrolledUp 闸门）。聊天的落点应在最新一轮+输入框，打开即贴底符合直觉，
+ *     且 'auto' 避免「唰」地滚一长段的突兀动画。
+ *   - **会话内**（opening=false：流式追加 / 新消息）→ 平滑（behavior='smooth'）、**尊重用户当前
+ *     滚动位置**（上滚阅读历史时 userScrolledUp=true 即不跟随，除非 force=点下翻浮标）。
+ */
+export function resolveChatScroll(p: {
+  opening: boolean
+  force: boolean
+  userScrolledUp: boolean
+}): { shouldScroll: boolean; behavior: 'auto' | 'smooth' } {
+  if (p.opening) return { shouldScroll: true, behavior: 'auto' }
+  return { shouldScroll: shouldAutoScroll(p.force, p.userScrolledUp), behavior: 'smooth' }
+}
+
+/** 「滚动到底部」下翻箭头与"已上滚"标记的可见性判定（纯函数，便于单测）。
+ *
+ *  对齐 ChatGPT：**只有一个下翻箭头**，且仅在"往上翻离开底部"时出现、贴底即隐藏——
+ *  没有"滚到顶部"的上翻箭头（2026-06-26 用户反馈：底部不该显示任何键，往上翻一点才显示下翻键）。
  *
  *  BUG-20260626：旧逻辑只看 distanceFromBottom>200，新会话里输入框变高会压缩消息视口
  *  （flex:1 容器 clientHeight 变小）→ 空状态/单条短消息相对压缩后的视口"溢出" → 误显下翻箭头。
@@ -71,14 +92,12 @@ export function scrollNavFlags(p: {
   scrollTop: number
   clientHeight: number
   hasMessages: boolean
-}): { userScrolledUp: boolean; showScrollToBottom: boolean; showScrollToTop: boolean } {
+}): { userScrolledUp: boolean; showScrollToBottom: boolean } {
   const distanceFromBottom = p.scrollHeight - p.scrollTop - p.clientHeight
-  const distanceFromTop = p.scrollTop
   const overflow = p.scrollHeight - p.clientHeight
   const scrollable = p.hasMessages && overflow > NAV_MIN_OVERFLOW
   return {
     userScrolledUp: scrollable && distanceFromBottom > 100,
-    showScrollToBottom: scrollable && distanceFromBottom > 200,
-    showScrollToTop: scrollable && distanceFromTop > 200 && distanceFromBottom < 100,
+    showScrollToBottom: scrollable && distanceFromBottom > 200, // 往上翻离开底部(>200px)才显示，贴底隐藏
   }
 }

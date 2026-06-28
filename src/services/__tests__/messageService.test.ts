@@ -206,6 +206,22 @@ describe('messageService', () => {
     expect(msgs[0]!.metadata?.thinking_duration).toBe(5)
   })
 
+  // ─── BUG-20260627 #4: 重开会话挂载的 skill chip 丢失 ───
+  // 后端（修复后）把用户消息的挂载技能以**数组**形态落进 metadata.skills；
+  // loadMessages 须原样保留该数组，前端 getMessageSkills(Array.isArray) 才能渲染 chip。
+  it('preserves metadata.skills array on reload (skill chip survives)', async () => {
+    listSessionMessages.mockResolvedValueOnce({
+      messages: [{
+        id: 'm-skill', role: 'user', content: '用这俩角色',
+        timestamp: '2026-01-01',
+        metadata: { skills: ['前leader', '前女友'] },
+      }],
+      total: 1,
+    })
+    const msgs = await loadMessages('s1')
+    expect(msgs[0]!.metadata?.skills).toEqual(['前leader', '前女友'])
+  })
+
   // ─── Bug 复现(2026-06-25): 点赞/踩切会话回来就消失 ───
   // 后端把反馈存独立 feedback 列；重载时 loadMessages 只读 metadata.user_feedback，
   // 没把顶层 feedback 映射回去 → UI 高亮丢失。

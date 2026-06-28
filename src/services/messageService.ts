@@ -40,6 +40,8 @@ export function normalizeLoadedMessage(row: {
 }): ChatMessage {
   const metadata = parseMessageMetadata(row.metadata)
   const toolCalls = Array.isArray(metadata?.tool_calls) ? metadata.tool_calls : undefined
+  // 重载有序内容块：多步 ReAct 切会话/重启后仍按真实交错序渲染（后端 meta.blocks 已落库）。
+  const blocks = Array.isArray(metadata?.blocks) ? metadata.blocks : undefined
   const agentName = typeof metadata?.agent_name === 'string' ? metadata.agent_name : undefined
   const reasoning = typeof metadata?.reasoning === 'string'
     ? normalizeAssistantReasoning(metadata.reasoning) || undefined
@@ -53,6 +55,7 @@ export function normalizeLoadedMessage(row: {
     reasoning,
     metadata,
     tool_calls: toolCalls as ChatMessage['tool_calls'],
+    blocks: blocks as ChatMessage['blocks'],
     agent_name: agentName,
   }
 }
@@ -60,6 +63,7 @@ export function normalizeLoadedMessage(row: {
 export function serializeMessageMetadata(msg: ChatMessage): Record<string, unknown> | undefined {
   const metadata: Record<string, unknown> = { ...msg.metadata }
   if (msg.tool_calls?.length) metadata.tool_calls = msg.tool_calls
+  if (msg.blocks?.length) metadata.blocks = msg.blocks
   if (msg.agent_name) metadata.agent_name = msg.agent_name
   if (msg.reasoning) {
     const reasoning = normalizeAssistantReasoning(msg.reasoning)
@@ -126,6 +130,10 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
       const reasoning = rawReasoning ? normalizeAssistantReasoning(rawReasoning) || undefined : undefined
       const toolCalls = m.tool_calls
         || (Array.isArray(meta?.tool_calls) ? meta.tool_calls as ChatMessage['tool_calls'] : undefined)
+      // 有序内容块：与 tool_calls 同存于 metadata（后端 SaveAssistantReply 同处落库）。
+      // 重载时必须一并还原，否则多步 ReAct 切会话/重启后交错序丢失、退回扁平渲染。
+      const blocks = (m as { blocks?: ChatMessage['blocks'] }).blocks
+        || (Array.isArray(meta?.blocks) ? meta.blocks as ChatMessage['blocks'] : undefined)
       const agentName = m.agent_name
         || (typeof meta?.agent_name === 'string' ? meta.agent_name : undefined)
 
@@ -162,6 +170,7 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
         timestamp: m.timestamp || m.created_at || new Date().toISOString(),
         reasoning: mergedReasoning,
         tool_calls: toolCalls,
+        blocks,
         agent_name: agentName,
         metadata: finalMeta,
       }

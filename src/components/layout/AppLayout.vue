@@ -20,6 +20,19 @@ async function syncIMInstancesWhenReady() {
   }
 }
 
+async function refreshChatSessionsWhenReady() {
+  // BUG（2026-06-28 用户反馈）：冷启动首屏就是会话页，但 ChatView 首挂载时 sidecar 往往尚未就绪，
+  // 其 onMounted 的 loadSessions 会静默失败（loadSessions 内部 try/catch 吞错）→ 会话列表空，
+  // 必须切到别的页再切回触发重挂载才加载。sidecar 就绪后在此（跨导航常驻的 AppLayout）补载一次，
+  // 让首屏会话列表自动出现，无需用户手动切页。loadSessions 幂等，与 ChatView 自身加载不冲突。
+  try {
+    const { useChatStore } = await import('@/stores/chat')
+    await useChatStore().loadSessions()
+  } catch (e) {
+    console.warn('[AppLayout] sidecar 就绪后补载会话列表失败:', e)
+  }
+}
+
 async function warmupOllamaModel() {
   try {
     const { getOllamaStatus, getOllamaRunning, loadOllamaModel } = await import('@/api/ollama')
@@ -57,6 +70,7 @@ onMounted(() => {
       if (ready && !wasReady) {
         clearTimeout(splashTimeout)
         dismissSplash()
+        void refreshChatSessionsWhenReady() // 冷启动补载会话列表（首屏会话页不再空）
         void syncIMInstancesWhenReady()
         void warmupOllamaModel()
       }

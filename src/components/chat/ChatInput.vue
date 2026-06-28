@@ -8,6 +8,7 @@ import MentionPopup from './MentionPopup.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import { useVoice } from '@/composables/useVoice'
+import { useToast } from '@/composables/useToast'
 import type { Skill, KnowledgeDoc, ChatSession, ChatContextRef } from '@/types'
 import type { ConnectionSummary } from '@/api/im-channels'
 import { getDocumentContent } from '@/api/knowledge'
@@ -49,7 +50,10 @@ const DEFAULT_VIDEO_DURATION = 5
 const DEFAULT_VIDEO_WITH_AUDIO = true
 
 const { t } = useI18n()
-const { isListening, transcript, isSupported: voiceSupported, toggleListening } = useVoice()
+const voiceToast = useToast()
+// ③ STT 错误不再静默吞掉（麦克风拒权/转写失败）——浮出 toast，避免"点了没反应"。
+const { isListening, transcript, isSupported: voiceSupported, toggleListening, error: voiceError } = useVoice()
+watch(voiceError, (msg) => { if (msg) voiceToast.error(msg) })
 
 // 语音识别结果 -> 输入框
 watch(transcript, (text) => {

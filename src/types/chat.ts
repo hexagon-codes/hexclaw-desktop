@@ -4,6 +4,12 @@ export interface ToolCall {
   name: string
   arguments: string
   result?: string
+  /** 后端 wire 字段（snake_case 对齐 hexagon ToolResult / adapter.ToolCall）：
+   *  status/duration_ms 由 hexagon 框架在工具执行点产出并透传，前端直接渲染；
+   *  is_error 为结构化错误信号的向后兼容钩子。未下发时优雅降级（前端诚实推导）。 */
+  status?: 'running' | 'success' | 'error'
+  is_error?: boolean
+  duration_ms?: number
 }
 
 /** v0.4.0 G3 通用交互式消息协议（与后端 adapter/interactive.go 对齐） */

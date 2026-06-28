@@ -96,6 +96,16 @@ describe('MessageActions', () => {
     expect(toastError).not.toHaveBeenCalled()
   })
 
+  // 重新生成（retry）按钮：对齐 ChatGPT/Claude/豆包/DeepSeek 的「重新生成」。
+  // 顺序: like(0) dislike(1) copy(2) speak(3) retry(4)
+  it('renders the regenerate (retry) button for assistant messages and emits retry', async () => {
+    const wrapper = mountMessageActions(null)
+    const retryBtn = wrapper.findAll('button')[4]
+    expect(retryBtn?.attributes('title')).toBe(zhCN.chat.regenerate)
+    await retryBtn?.trigger('click')
+    expect(wrapper.emitted('retry')).toHaveLength(1)
+  })
+
   it('copy button degrades gracefully when clipboard API is unavailable', async () => {
     const wrapper = mountMessageActions(null)
 

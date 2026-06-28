@@ -100,9 +100,10 @@ describe('AUDIT session-model-binding — resolveSessionModel 解析决策', () 
     expect(resolveSessionModel('S-A', MODELS)).toEqual({ kind: 'auto' })
   })
 
-  it('★绑定的模型已不可用（Ollama 删了 / provider 禁用）→ kind=unavailable（优雅回退，不静默用错模型/不崩）', () => {
-    setSessionModel('S-A', { model: 'deleted-local-model', providerId: 'p-ollama', providerKey: 'ollama' })
-    expect(resolveSessionModel('S-A', MODELS)).toEqual({ kind: 'unavailable' })
+  it('★绑定的模型此刻不在可用列表（Ollama 未同步 / provider 异步未加载）→ kind=unavailable 并带回 binding（供乐观恢复）', () => {
+    const binding = { model: 'deleted-local-model', providerId: 'p-ollama', providerKey: 'ollama' }
+    setSessionModel('S-A', binding)
+    expect(resolveSessionModel('S-A', MODELS)).toEqual({ kind: 'unavailable', binding })
   })
 
   it('同 modelId 多 provider：providerId 不匹配视为不可用，匹配才 restore', () => {
@@ -127,8 +128,10 @@ describe('AUDIT session-model-binding — decideSessionModelAction 切换编排�
     expect(decideSessionModelAction({ resolution: { kind: 'auto' }, prevId: 'S-prev', userOverrodeModel: false, hasSelectedModel: true }).kind).toBe('auto')
   })
 
-  it('unavailable → fallback（保留绑定、等列表补齐复解析）', () => {
-    expect(decideSessionModelAction({ resolution: { kind: 'unavailable' }, prevId: null, userOverrodeModel: true, hasSelectedModel: true }).kind).toBe('fallback')
+  it('★BUG-20260626：unavailable → restore-pending 乐观恢复绑定本身（不静默回退默认），带回 binding 供 UI 落地', () => {
+    const binding = { model: 'qwen3.5:9b', providerId: 'p-ollama', providerKey: 'ollama' }
+    const action = decideSessionModelAction({ resolution: { kind: 'unavailable', binding }, prevId: 'S-prev', userOverrodeModel: false, hasSelectedModel: false })
+    expect(action).toEqual({ kind: 'restore-pending', binding })
   })
 
   it('★核心修复：从「有绑定会话」切到「无绑定会话」(prevId 非空) → reset-default，不沿用上一会话模型', () => {

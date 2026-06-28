@@ -124,7 +124,13 @@ export function createChatSendController(params: {
   async function sendMessage(
     text: string,
     attachments?: ChatAttachment[],
-    options?: { backendText?: string; skillNames?: string[]; documents?: ChatDocumentRef[] },
+    options?: {
+      // backendText 支持惰性 thunk：含慢的 Auto-RAG searchKnowledge 时，由本函数在「用户气泡已
+      // 乐观上屏」之后再 await 解析，避免发送时「卡一下才上屏」(BUG-20260628)；string 形态向后兼容。
+      backendText?: string | (() => Promise<string | undefined>)
+      skillNames?: string[]
+      documents?: ChatDocumentRef[]
+    },
   ): Promise<ChatMessage | null> {
     const initialSessionId = currentSessionId.value
     const shouldSeedAutoTitle = shouldSeedChatAutoTitle({
@@ -145,7 +151,6 @@ export function createChatSendController(params: {
     draftSending.value = !initialSessionId
     refreshSendingState(sending, draftSending)
     try {
-      const backendText = options?.backendText ?? text
       const requestId = createId()
       const skillNames = options?.skillNames ?? []
       const userMeta: Record<string, unknown> = {}
@@ -160,7 +165,7 @@ export function createChatSendController(params: {
         timestamp: new Date().toISOString(),
         metadata: Object.keys(userMeta).length ? userMeta : undefined,
       }
-      messages.value.push(userMessage)
+      messages.value.push(userMessage) // ★ 乐观 push：用户气泡立即上屏，先于 ensureSession / Auto-RAG
       const sessionId = await ensureSession()
       // ensureSession 完成后立即释放 draftSending，不再阻塞后续发送
       draftSending.value = false
@@ -175,6 +180,11 @@ export function createChatSendController(params: {
 
       // 持久化与发送并行，失败不阻塞（persistMessage 内部已有日志）
       void persistMessage(userMessage, sessionId).catch(() => {})
+      // backendText 惰性解析：气泡已上屏，此处再 await 跑 Auto-RAG（BUG-20260628）；string 形态直用。
+      const backendText =
+        (typeof options?.backendText === 'function'
+          ? await options.backendText()
+          : options?.backendText) ?? text
       return deliveryController.deliverMessage({
         backendText,
         sessionId,

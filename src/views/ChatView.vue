@@ -4,12 +4,10 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
   ChevronDown,
-  ChevronUp,
   FileCode,
   MessageSquarePlus,
   Plus,
   Settings,
-  Wrench,
   Zap,
   BookOpen,
   Brain,
@@ -26,7 +24,7 @@ import {
 } from '@/stores/session-model-binding'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
-import { shouldAutoScroll, shouldSendOnEnter, imageSrc, scrollNavFlags } from '@/utils/chat-compose'
+import { shouldSendOnEnter, imageSrc, scrollNavFlags, resolveChatScroll } from '@/utils/chat-compose'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
@@ -37,6 +35,9 @@ import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import AgentBadge from '@/components/chat/AgentBadge.vue'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
+import SubAgentPanel from '@/components/chat/SubAgentPanel.vue'
+import ToolCallCard from '@/components/chat/ToolCallCard.vue'
+import MessageBlocks from '@/components/chat/MessageBlocks.vue'
 import InteractiveBlock from '@/components/chat/InteractiveBlock.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
 import ContextMenu from '@/components/common/ContextMenu.vue'
@@ -46,6 +47,7 @@ import { useToast, useConversationAutomation, useChatSend, useChatActions, useCr
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
+import { getSubAgentReports, isSubAgentToolCall, type SubAgentReport } from '@/utils/subagents'
 import { getSkills, type Skill } from '@/api/skills'
 import { getDocuments } from '@/api/knowledge'
 import { getConnections, type ConnectionSummary } from '@/api/im-channels'
@@ -94,7 +96,6 @@ const messagesEndRef = ref<HTMLDivElement>()
 const messagesContainerRef = ref<HTMLDivElement>()
 const thinkingContentRef = ref<HTMLDivElement>()
 const showScrollToBottom = ref(false)
-const showScrollToTop = ref(false)
 const userScrolledUp = ref(false)
 const showSessions = ref(true)
 const sidebarWidth = ref(260)
@@ -183,10 +184,16 @@ async function handleMsgCtxAction(action: string) {
       handleEdit(idx)
       break
     case 'delete': {
+      // AP-094 同类：旧实现 fire-and-forget 吞错→删除失败时后端残留、重载"复活"。
+      // 现：乐观移除 + await，失败回滚 UI + 提示；404/410=已不在后端视为删除达成。
       const removed = chatStore.messages.splice(idx, 1)
-      for (const m of removed) {
-        removeMessage(m.id).catch(() => {})
-      }
+      void Promise.all(removed.map((m) => removeMessage(m.id))).catch((error) => {
+        const status = (error as { status?: number })?.status
+        if (status === 404 || status === 410) return
+        chatStore.messages.splice(idx, 0, ...removed)
+        logger.error(`[ChatView] delete message failed, rolled back: ${error instanceof Error ? error.message : String(error)}`)
+        toast.error(t('chat.deleteMessageFailed'))
+      })
       break
     }
   }
@@ -254,6 +261,24 @@ function formatFullTime(ts: string): string {
 function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
   const attachments = message.metadata?.attachments
   return Array.isArray(attachments) ? (attachments as ChatAttachment[]) : []
+}
+
+// ─── 子 Agent 协作面板（orchestrate/spawn 工具结果尾部的 hexclaw-subagents 哨兵块）───
+// 一次性按消息 id 建 reports 映射（避免模板里逐帧重复 JSON.parse）；消息流变化时重算。
+const subAgentReportsByMsg = computed(() => {
+  const map = new Map<string, SubAgentReport[]>()
+  for (const m of chatStore.messages) {
+    if (m.role !== 'assistant') continue
+    const reports = getSubAgentReports(m)
+    if (reports.length) map.set(m.id, reports)
+  }
+  return map
+})
+// 协作面板已接管 orchestrate/spawn 的展示，故从原始 tool_calls 列表里隐藏它们，避免重复。
+function displayToolCalls(message: ChatMessage) {
+  const calls = message.tool_calls ?? []
+  if (!subAgentReportsByMsg.value.has(message.id)) return calls
+  return calls.filter((tc) => !isSubAgentToolCall(tc.name))
 }
 
 // ─── 文档卡片（ChatGPT 风格：图标 + 名称 + 类型·大小 + 下载按钮；正文已进隐藏上下文）───
@@ -424,6 +449,10 @@ const chatMaxTokens = ref(4096)
 const showChatParams = ref(false)
 /** true when user explicitly picks a model via selectModel(), reset on agent/session switch */
 const userOverrodeModel = ref(false)
+/** 绑定模型暂不在 availableModels 时的自足元信息（名/能力来自会话绑定）：让显示与能力门控
+ *  不依赖列表加载（修复 BUG-20260626）。模型一旦进入 availableModels，下面 computed 优先用列表
+ *  里的 found，本 ref 即被忽略；进入「列表里有」的选择/恢复路径时清空，避免残留。 */
+const pendingModelMeta = ref<{ name: string; capabilities: string[] } | null>(null)
 
 // 当前模型的显示名
 const selectedModelDisplay = computed(() => {
@@ -442,7 +471,8 @@ const selectedModelDisplay = computed(() => {
       m.modelId === selectedModel.value &&
       (!selectedProviderId.value || m.providerId === selectedProviderId.value),
   )
-  return found ? `${found.modelName}` : selectedModel.value
+  // 列表里有 → 用最新名；否则用绑定自带的显示名（自足），最后才退化到 modelId（绝不退化成"默认模型"）。
+  return found ? `${found.modelName}` : (pendingModelMeta.value?.name || selectedModel.value)
 })
 
 // 按 Provider 分组的模型列表
@@ -640,7 +670,9 @@ const selectedModelCapabilities = computed(() => {
       m.modelId === selectedModel.value &&
       (!selectedProviderId.value || m.providerId === selectedProviderId.value),
   )
-  return effectiveCaps(selectedModel.value || '', found?.capabilities)
+  // 列表里有 → 用列表能力；否则用绑定自带的能力（自足，pending 期也正确门控 vision/image）。
+  const caps = found?.capabilities ?? (pendingModelMeta.value?.capabilities as import('@/types').ModelCapability[] | undefined)
+  return effectiveCaps(selectedModel.value || '', caps)
 })
 
 // 当前模型是否支持视觉/视频上传
@@ -715,6 +747,7 @@ function loadLLMConfig() {
       ) ?? settingsStore.availableModels.find((m) => m.modelId === defaultModel))
     : settingsStore.availableModels[0]
 
+  pendingModelMeta.value = null // 回退默认走 availableModels（matched 在列表里），无 pending 元信息
   if (matched) {
     selectedModel.value = matched.modelId
     selectedProviderId.value = matched.providerId
@@ -729,6 +762,22 @@ function loadLLMConfig() {
   syncChatParams()
 }
 
+/**
+ * 初始化/重挂载时按「会话绑定 > Agent > 全局默认」确定性落地模型选择。
+ *
+ * ★为什么必要：ChatView 在 App.vue 里以 `:key="route.path"` 渲染、**无 keep-alive** —— 切到别的
+ *   页面（设置/记忆/知识库…）再返回会**完整重挂载**，onMounted 重跑。chatStore（Pinia 单例，含
+ *   currentSessionId）跨视图存活，但若此处只调 `loadLLMConfig()` 落全局默认，当前会话的绑定恢复就
+ *   只能寄望 `availableModels` watcher 偶发触发（列表无异步变化时根本不触发）→ 绑定被默认静默覆盖
+ *   （BUG-20260626-2）。改由本函数复用 applySessionModel 的同一优先级决策：有会话 → 按绑定恢复
+ *   （含 unavailable 乐观恢复），无会话 → 才回退全局默认。
+ */
+function initLLMModelForCurrentSession() {
+  const sid = chatStore.currentSessionId
+  if (sid) applySessionModel(sid, sid)
+  else loadLLMConfig()
+}
+
 onMounted(async () => {
   try {
     const raw = localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
@@ -740,9 +789,9 @@ onMounted(async () => {
     // ignore localStorage failures
   }
 
-  // 先用当前配置同步默认模型，避免首屏在会话/恢复请求未完成前出现
-  // “发送按钮可点但消息被静默吞掉”的初始化竞态。
-  loadLLMConfig()
+  // 先按优先级同步当前会话的模型（重挂载时恢复其绑定，冷启动落默认），避免首屏在会话/恢复请求
+  // 未完成前出现“发送按钮可点但消息被静默吞掉”的初始化竞态，同时消除返回会话时的默认模型闪现。
+  initLLMModelForCurrentSession()
 
   refreshBackendGenStatus()
   // 窗口聚焦时重查（用户可能在 Settings 更新了 API Key 切回来）
@@ -796,8 +845,9 @@ onMounted(async () => {
   // 先同步 Ollama 列表再初始化模型 —— 否则 loadLLMConfig 在 ollamaModelsCache 仍空时会把默认模型判空
   await settingsStore.syncOllamaModels()
 
-  // 初始化模型选择（config 由路由守卫保证已就绪）
-  loadLLMConfig()
+  // 初始化模型选择（config 由路由守卫保证已就绪）——按「会话绑定 > Agent > 默认」确定性恢复，
+  // 不再依赖 availableModels watcher 偶发触发（修复 BUG-20260626-2：切页面再返回模型被默认覆盖）。
+  initLLMModelForCurrentSession()
 
   // 从设置页跳转：预选指定模型
   const modelQuery = route.query.model as string | undefined
@@ -818,7 +868,8 @@ onMounted(async () => {
     const unlisten = await listen('sidecar-ready', async () => {
       await settingsStore.loadConfig({ force: true })
       await settingsStore.syncOllamaModels()
-      loadLLMConfig()
+      // 后端延迟就绪后同样按优先级恢复当前会话模型，避免覆盖会话绑定（同 BUG-20260626-2 根因）。
+      initLLMModelForCurrentSession()
       unlisten()
     })
     setTimeout(() => unlisten(), 30000)
@@ -843,6 +894,7 @@ function selectModel(modelId: string, providerId = '', providerKey = '', provide
   selectedProviderId.value = modelId === 'auto' ? '' : providerId
   selectedProviderKey.value = modelId === 'auto' ? '' : providerKey
   selectedProviderName.value = modelId === 'auto' ? '' : providerName
+  pendingModelMeta.value = null // 从下拉里选的，模型必在 availableModels
   showModelSelector.value = false
   userOverrodeModel.value = true
   syncChatParams()
@@ -853,13 +905,18 @@ function selectModel(modelId: string, providerId = '', providerKey = '', provide
   }
 }
 
-/** 当前 UI 选中模型 → 绑定结构。 */
+/** 当前 UI 选中模型 → 绑定结构。★捕获显示名 + 能力，使绑定自足（脱离 availableModels 也能正确显示/门控）。 */
 function currentModelBinding(): SessionModelBinding {
+  const found = settingsStore.availableModels.find(
+    (m) => m.modelId === selectedModel.value && (!selectedProviderId.value || m.providerId === selectedProviderId.value),
+  )
   return {
     model: selectedModel.value,
     providerId: selectedProviderId.value,
     providerKey: selectedProviderKey.value,
     providerName: selectedProviderName.value || undefined,
+    modelName: found?.modelName || pendingModelMeta.value?.name || undefined,
+    capabilities: found?.capabilities ?? pendingModelMeta.value?.capabilities ?? undefined,
   }
 }
 
@@ -887,6 +944,7 @@ function applySessionModel(newId: string, prevId: string | null) {
       selectedProviderId.value = action.model.providerId
       selectedProviderKey.value = action.model.providerKey
       selectedProviderName.value = action.model.providerName
+      pendingModelMeta.value = null // 列表里有 → 元信息走 availableModels
       userOverrodeModel.value = true
       syncChatParams()
       break
@@ -895,12 +953,27 @@ function applySessionModel(newId: string, prevId: string | null) {
       selectedProviderId.value = ''
       selectedProviderKey.value = ''
       selectedProviderName.value = ''
+      pendingModelMeta.value = null
       userOverrodeModel.value = true
       syncChatParams()
       break
-    case 'fallback':
+    case 'restore-pending':
+      // BUG-20260626：绑定模型此刻不在 availableModels（provider/Ollama 异步未加载）→ 乐观恢复
+      // 绑定本身，绝不静默回退默认。名/能力取自绑定（自足），列表补齐后 availableModels watcher
+      // 复解析为 restore，自动精修为列表里的最新元信息。
+      selectedModel.value = action.binding.model
+      selectedProviderId.value = action.binding.providerId
+      selectedProviderKey.value = action.binding.providerKey
+      selectedProviderName.value = action.binding.providerName ?? ''
+      pendingModelMeta.value = {
+        name: action.binding.modelName || action.binding.model,
+        capabilities: action.binding.capabilities ?? ['text'],
+      }
+      userOverrodeModel.value = true
+      syncChatParams()
+      break
     case 'reset-default':
-      // 回退全局默认（loadLLMConfig 内含 syncChatParams）。fallback 保留绑定等列表补齐复解析。
+      // 无绑定会话 → 回退全局默认（loadLLMConfig 内含 syncChatParams）+ 清 override。
       userOverrodeModel.value = false
       loadLLMConfig()
       break
@@ -934,21 +1007,46 @@ function getMessageArtifacts(messageId: string) {
   return chatStore.artifacts.filter((a) => a.messageId === messageId)
 }
 
+// 会话「刚打开/切换」标记：由 currentSessionId watcher 置真（早于消息异步落地），消息数组整体
+// 替换落地后由 messages 引用 watcher 消费成「瞬时跳底」，并让 length watcher 跳过该帧避免平滑重复。
+let sessionJustOpened = false
+
+// 会话级：打开/切换会话、重载历史时，瞬时无条件到底（behavior='auto'，不节流、不受上滚闸）。
+// 决策走 resolveChatScroll(opening:true) 单一真相源；落点即最新一轮+输入框，无「唰」地滚的动画。
+function jumpToBottomInstant() {
+  if (_scrollTimer) {
+    clearTimeout(_scrollTimer)
+    _scrollTimer = null
+  }
+  const { behavior } = resolveChatScroll({ opening: true, force: true, userScrolledUp: userScrolledUp.value })
+  messagesEndRef.value?.scrollIntoView({ behavior })
+  userScrolledUp.value = false
+  showScrollToBottom.value = false
+}
+
 let _scrollTimer: ReturnType<typeof setTimeout> | null = null
 function scrollToBottom(force = false) {
-  if (!shouldAutoScroll(force, userScrolledUp.value)) return // 用户主动向上滚动时不自动跟随
-  if (_scrollTimer) return // throttle: max 1 scroll per 100ms
+  // 会话内：平滑 + 尊重用户当前滚动位置（上滚阅读历史时不跟随，除非 force=点下翻浮标）。
+  if (!resolveChatScroll({ opening: false, force, userScrolledUp: userScrolledUp.value }).shouldScroll) return
+  if (_scrollTimer) {
+    // BUG-20260626：force（点下翻箭头）必须抢占挂起的非 force 节流定时器——否则点击被吞，
+    // 且那个旧定时器到点会用 force=false 复判、在「已上滚」态下 bail，导致点了箭头却纹丝不动。
+    if (!force) return // 非 force：节流合并，max 1 scroll / 100ms
+    clearTimeout(_scrollTimer)
+    _scrollTimer = null
+  }
   _scrollTimer = setTimeout(() => {
     _scrollTimer = null
     // #2 2026-06-23：节流窗口内用户可能刚上滚，到点必须再判一次，否则把用户从历史处拽回底部。
-    if (!shouldAutoScroll(force, userScrolledUp.value)) return
-    messagesEndRef.value?.scrollIntoView({ behavior: 'smooth' })
+    const decision = resolveChatScroll({ opening: false, force, userScrolledUp: userScrolledUp.value })
+    if (!decision.shouldScroll) return
+    messagesEndRef.value?.scrollIntoView({ behavior: decision.behavior })
     userScrolledUp.value = false
+    // BUG-20260626：既然已把视口对齐到最底，「跳到底部」的提示一定无意义——权威清空，
+    // 不再依赖一个不保证到来的终态 scroll 事件去纠正（头像图片/markdown 异步重排会吃掉它，
+    // 导致箭头卡在加载动画中途的残留几何上，默认打开会话即误显下翻箭头）。
+    showScrollToBottom.value = false
   }, 100)
-}
-
-function scrollToTop() {
-  messagesContainerRef.value?.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 function handleMessagesScroll() {
@@ -964,8 +1062,28 @@ function handleMessagesScroll() {
   })
   userScrolledUp.value = flags.userScrolledUp
   showScrollToBottom.value = flags.showScrollToBottom
-  showScrollToTop.value = flags.showScrollToTop
 }
+
+// BUG-20260626：消息容器内容重排（头像图片/markdown/代码块异步加载）不触发 scroll 事件，
+// 只靠 @scroll 重算会把导航箭头卡在加载动画中途的残留几何上。用 ResizeObserver 在每次重排后
+// 按真实几何重算；若处于「跟随态」（用户未主动上滚）则顺势贴底，行为对齐 ChatGPT。
+let _msgsResizeObserver: ResizeObserver | null = null
+function observeMessagesResize() {
+  if (typeof ResizeObserver === 'undefined') return // jsdom / 旧环境无该 API
+  _msgsResizeObserver?.disconnect()
+  const el = messagesContainerRef.value
+  if (!el) return
+  _msgsResizeObserver = new ResizeObserver(() => {
+    handleMessagesScroll()
+    if (!userScrolledUp.value) scrollToBottom()
+  })
+  _msgsResizeObserver.observe(el)
+}
+onMounted(observeMessagesResize)
+onUnmounted(() => {
+  _msgsResizeObserver?.disconnect()
+  _msgsResizeObserver = null
+})
 
 function clearAttachmentPreview() {
   if (attachmentPreview.value) {
@@ -1057,10 +1175,41 @@ function onEditEnter(e: KeyboardEvent, msgId: string) {
   confirmEdit(msgId)
 }
 
+// 会话内：消息条数变化（追加用户/助手消息，push 同引用）→ 平滑 + 尊重滚动位置。
+// 打开会话帧（sessionJustOpened）交给下方 messages 引用 watcher 瞬时跳底，这里跳过避免平滑重复。
 watch(
   () => chatStore.messages.length,
   () => {
+    if (sessionJustOpened) return
     nextTick(scrollToBottom)
+  },
+)
+
+// 会话级：消息数组被**整体替换**（打开/切换会话、重载历史时 store 的 `messages.value = nextMessages`）
+// → 瞬时无条件到底。区别于会话内的 push 追加（同引用、仅 length 变，不触发本 watcher）。
+// flush:'post' 确保在 DOM patch 后量到最新底部几何；仅在「刚打开」帧消费，普通替换不误触。
+watch(
+  () => chatStore.messages,
+  () => {
+    if (!sessionJustOpened) return
+    sessionJustOpened = false
+    nextTick(jumpToBottomInstant)
+  },
+  { flush: 'post' },
+)
+
+// currentSessionId 早于消息异步落地变化：在此置「刚打开」标记并重置上滚态，
+// 使随后整体替换的消息落地走「瞬时到底」，且不被上一会话遗留的 userScrolledUp 卡住。
+watch(
+  () => chatStore.currentSessionId,
+  (newId) => {
+    // 任何会话切换/新建：重置上滚态 + 下翻箭头。新空会话不产生 scroll 事件、handleMessagesScroll
+    // 不触发，若不在此重置，上个会话遗留的 showScrollToBottom=true 会残留到新会话（BUG-20260628）。
+    userScrolledUp.value = false
+    showScrollToBottom.value = false
+    if (newId) {
+      sessionJustOpened = true
+    }
   },
 )
 
@@ -1272,11 +1421,21 @@ watch(
   },
 )
 
+// 思考框「贴底才跟随」阈值：用户在思考框里上滚超过此距离即视为正在阅读上文，
+// 后续流式 reasoning chunk 不再把滚动条抢回底部（BUG-20260626：思考时无法上滚看上面的内容）。
+const THINKING_STICK_THRESHOLD_PX = 32
+
 watch(
   () => chatStore.isCurrentStreamingReasoning,
   () => {
+    // 必须在 DOM patch 前量「这次更新前」的几何：内容向下追加时 scrollTop 不变、scrollHeight 增大，
+    // 若在追加后再判距底，刚冒出的高度会被误当成「用户上滚」。flush:'pre' 的 watcher 同步段正是 patch 前。
+    const box = thinkingContentRef.value
+    const wasAtBottom =
+      !box || box.scrollHeight - box.scrollTop - box.clientHeight <= THINKING_STICK_THRESHOLD_PX
     nextTick(() => {
-      if (thinkingContentRef.value) {
+      // 仅在用户原本就贴底时才跟随贴底；上滚阅读时保持其滚动位置不被打扰。
+      if (thinkingContentRef.value && wasAtBottom) {
         thinkingContentRef.value.scrollTop = thinkingContentRef.value.scrollHeight
       }
       scrollToBottom()
@@ -1663,6 +1822,16 @@ function startSidebarResize(event: MouseEvent) {
                       <div class="hc-thinking__content">{{ normalizeAssistantReasoning(msg.reasoning) }}</div>
                     </details>
                   </div>
+                  <!-- 子 Agent 协作面板（orchestrate/spawn fan-out 完成后结构化展示） -->
+                  <SubAgentPanel
+                    v-if="subAgentReportsByMsg.get(msg.id)?.length"
+                    :reports="subAgentReportsByMsg.get(msg.id)!"
+                  />
+                  <!-- 工具调用卡：因果位 think → act → answer（P0-1）。
+                       有有序内容块时改由气泡内 MessageBlocks 按真实交错序渲染，这里不再单独堆叠（避免重复）。 -->
+                  <div v-if="!msg.blocks?.length && displayToolCalls(msg).length" class="hc-msg__tools">
+                    <ToolCallCard v-for="tc in displayToolCalls(msg)" :key="tc.id" :call="tc" />
+                  </div>
                   <div class="hc-msg__bubble-wrap">
                     <div
                       class="hc-msg__bubble hc-msg__bubble--assistant"
@@ -1708,7 +1877,14 @@ function startSidebarResize(event: MouseEvent) {
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
                       </div>
-                      <MarkdownRenderer :content="sanitizeMessageContent(msg.content)" />
+                      <!-- 有有序内容块 → 按真实执行序交错渲染 text↔工具卡（多步 ReAct 保真）；
+                           否则回退单串正文（兼容旧消息 / 重载 / 非流式）。 -->
+                      <MessageBlocks
+                        v-if="msg.blocks?.length"
+                        :blocks="msg.blocks"
+                        :tool-calls="msg.tool_calls"
+                      />
+                      <MarkdownRenderer v-else :content="sanitizeMessageContent(msg.content)" />
                       <!-- v0.4.0 G3/E6 通用交互块（buttons/select/approval/card 4 type）；
                            优先 message.interactive 新协议，fallback 到 metadata.interactive_buttons 老路径 -->
                       <InteractiveBlock
@@ -1812,22 +1988,6 @@ function startSidebarResize(event: MouseEvent) {
                     <span>{{ t('chat.memorySaved') }}: {{ msg.metadata.memory_saved }}</span>
                   </div>
 
-                  <div v-if="msg.tool_calls?.length" class="hc-msg__tools">
-                    <div v-for="tc in msg.tool_calls" :key="tc.id" class="hc-msg__tool">
-                      <div class="hc-msg__tool-head">
-                        <Wrench :size="14" />
-                        <span class="hc-msg__tool-name">{{ t('chat.toolName.' + tc.name, tc.name) }}</span>
-                      </div>
-                      <details v-if="tc.arguments" class="hc-msg__tool-detail">
-                        <summary>{{ t('chat.toolParams') }}</summary>
-                        <pre>{{ tc.arguments }}</pre>
-                      </details>
-                      <details v-if="tc.result" class="hc-msg__tool-detail">
-                        <summary>{{ t('chat.toolResult') }}</summary>
-                        <pre>{{ tc.result }}</pre>
-                      </details>
-                    </div>
-                  </div>
                   <div
                     v-if="getVisibleConversationActions(msg).length"
                     class="hc-msg__automation-list"
@@ -1997,6 +2157,17 @@ function startSidebarResize(event: MouseEvent) {
                           :alt="att.name"
                         />
                       </div>
+                      <!-- 编辑时挂载的 skill 同样常驻（编辑文字不丢技能，confirmEdit 已带回 carry）。 -->
+                      <div v-if="getMessageSkills(msg).length" class="hc-msg__edit-skills">
+                        <span
+                          v-for="sn in getMessageSkills(msg)"
+                          :key="sn"
+                          class="hc-msg__edit-skill-chip"
+                        >
+                          <SkillIcon :skill="skillForChip(sn)" :size="13" />
+                          <span>{{ skillForChip(sn).display_name || sn }}</span>
+                        </span>
+                      </div>
                       <textarea
                         :ref="(el) => { if (el) setEditTextareaEl(el as HTMLTextAreaElement) }"
                         v-model="editingText"
@@ -2089,27 +2260,6 @@ function startSidebarResize(event: MouseEvent) {
           </div>
         </div>
 
-        <!-- Scroll navigation buttons (ChatGPT style) -->
-        <Transition name="hc-fade">
-          <button
-            v-if="showScrollToTop"
-            class="hc-chat__scroll-btn hc-chat__scroll-btn--top"
-            :title="t('chat.scrollToTop', 'Scroll to top')"
-            @click="scrollToTop"
-          >
-            <ChevronUp :size="18" />
-          </button>
-        </Transition>
-        <Transition name="hc-fade">
-          <button
-            v-if="showScrollToBottom"
-            class="hc-chat__scroll-btn hc-chat__scroll-btn--bottom"
-            @click="scrollToBottom(true)"
-          >
-            <ChevronDown :size="18" />
-          </button>
-        </Transition>
-
         <!-- Memory update toast -->
         <Transition name="hc-fade">
           <div v-if="memoryJustUpdated" class="hc-chat__memory-toast">
@@ -2120,6 +2270,18 @@ function startSidebarResize(event: MouseEvent) {
 
         <!-- Input area -->
         <div class="hc-chat__input-area">
+          <!-- 滚动到底部箭头（ChatGPT 风格：锚定输入框正上方居中；仅在往上翻离开底部时出现，贴底隐藏） -->
+          <Transition name="hc-scrollbtn">
+            <button
+              v-if="showScrollToBottom"
+              class="hc-chat__scroll-btn hc-chat__scroll-btn--bottom"
+              :title="t('chat.scrollToBottom', 'Scroll to bottom')"
+              @click="scrollToBottom(true)"
+            >
+              <ChevronDown :size="18" :stroke-width="2.25" />
+            </button>
+          </Transition>
+
           <div class="hc-chat__input-wrap">
             <!-- Attachment preview -->
             <div v-if="attachmentPreview" class="hc-chat__attach-preview">
@@ -2431,35 +2593,81 @@ function startSidebarResize(event: MouseEvent) {
   padding: 12px 16px 80px;
 }
 
-/* ─── Scroll navigation (ChatGPT style: 底部居中，输入框上方) ───── */
+/* ─── Scroll-to-bottom 按钮（ChatGPT 风格 · 磨玻璃材质 · 输入框正上方居中） ─────
+   设计语言（HIG materials + 现代 glassmorphism）：
+   · 材质：半透明底 + backdrop blur + saturate(vibrancy)，背景内容透出并被柔化 → 玻璃感；
+   · 光：0.5px 发丝边 + 顶部内高光，模拟光打在玻璃上缘；底部内阴影收一点厚度；
+   · 影：贴近实影 + 远处扩散影 双层柔影 = 悬浮高级感（非一刀切硬阴影）；
+   · 动：进入弹入(回弹缓动)、hover 上浮、active 轻压，全程 transform 不与居中冲突。
+   居中改用 margin-left(半宽)，把 transform 留给交互动画。锚定 .hc-chat__input-area(relative)。 */
 .hc-chat__scroll-btn {
   position: absolute;
   left: 50%;
-  transform: translateX(-50%);
+  margin-left: -16px; /* 半宽居中；transform 让位给 hover/active/过渡 */
   z-index: 10;
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: 1px solid var(--hc-border);
-  background: var(--hc-bg-elevated);
-  color: var(--hc-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0,0,0,.1);
-  transition: background 0.15s, color 0.15s, box-shadow 0.15s, opacity 0.15s;
+  color: var(--hc-text-primary); /* chevron 取主色：磨玻璃半透下仍清晰可辨 */
+  /* 磨玻璃材质：58% 底=既有按钮"身"又够透糊出磨砂；blur+saturate+brightness=Apple vibrancy；
+     仅顶部 45% 一层淡高光渐变=玻璃上缘受光(不铺满，否则变实心玻璃白)；
+     0.5px 发丝边 + 外白环=繁忙文字背景上仍勾出清晰圆边；上缘内高光给厚度。 */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.35) 0%, rgba(255, 255, 255, 0) 45%),
+    color-mix(in srgb, var(--hc-bg-elevated) 58%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(180%) brightness(1.05);
+  backdrop-filter: blur(20px) saturate(180%) brightness(1.05);
+  border: 0.5px solid color-mix(in srgb, var(--hc-text-primary) 12%, transparent);
+  box-shadow:
+    0 4px 14px rgba(15, 23, 42, 0.16),
+    0 0 0 0.5px rgba(255, 255, 255, 0.45), /* 外白环：繁忙背景上勾出圆边 */
+    inset 0 1px 0 rgba(255, 255, 255, 0.65); /* 上缘内高光 */
+  transition:
+    transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1),
+    box-shadow 0.2s ease,
+    background 0.18s ease,
+    color 0.18s ease;
 }
 .hc-chat__scroll-btn:hover {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
-  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.42) 0%, rgba(255, 255, 255, 0) 45%),
+    color-mix(in srgb, var(--hc-bg-elevated) 70%, transparent);
+  transform: translateY(-2px);
+  box-shadow:
+    0 7px 22px rgba(15, 23, 42, 0.2),
+    0 0 0 0.5px rgba(255, 255, 255, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
 }
-.hc-chat__scroll-btn--top {
-  top: 56px;
+.hc-chat__scroll-btn:active {
+  transform: scale(0.9);
+  transition-duration: 0.09s;
 }
 .hc-chat__scroll-btn--bottom {
-  bottom: 90px;
+  bottom: calc(100% + 14px);
+}
+
+/* 进入/退出：弹入(回弹) + 轻微上移缩放，对齐 ChatGPT 那种"冒出来"的轻盈感 */
+.hc-scrollbtn-enter-active {
+  transition:
+    opacity 0.26s ease,
+    transform 0.26s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.hc-scrollbtn-leave-active {
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+.hc-scrollbtn-enter-from {
+  opacity: 0;
+  transform: translateY(10px) scale(0.8);
+}
+.hc-scrollbtn-leave-to {
+  opacity: 0;
+  transform: translateY(6px) scale(0.9);
 }
 
 .hc-chat__empty {
@@ -2669,51 +2877,13 @@ function startSidebarResize(event: MouseEvent) {
   border: 1px solid color-mix(in srgb, var(--hc-accent) 10%, transparent);
 }
 
-/* ─── Tool call 参数/结果折叠 ───── */
+/* ─── Tool call 卡片容器（因果位：thinking 之后、回答气泡之前）────
+   卡片本体样式见 ToolCallCard.vue（scoped）。 */
 .hc-msg__tools {
-  margin-top: 8px;
+  margin: 4px 0 8px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-}
-.hc-msg__tool {
-  border-radius: 8px;
-  border: 1px solid var(--hc-border-subtle, var(--hc-border));
-  background: var(--hc-bg-sidebar);
-  overflow: hidden;
-}
-.hc-msg__tool-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--hc-text-secondary);
-}
-.hc-msg__tool-name {
-  color: var(--hc-accent);
-}
-.hc-msg__tool-detail {
-  border-top: 1px solid var(--hc-border-subtle, var(--hc-border));
-}
-.hc-msg__tool-detail > summary {
-  padding: 4px 10px;
-  font-size: 11px;
-  color: var(--hc-text-muted);
-  cursor: pointer;
-  user-select: none;
-}
-.hc-msg__tool-detail > pre {
-  margin: 0;
-  padding: 8px 10px;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--hc-text-secondary);
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 200px;
-  overflow-y: auto;
 }
 
 /* ─── DeepSeek 风格原位编辑卡片 ───── */
@@ -2757,6 +2927,25 @@ function startSidebarResize(event: MouseEvent) {
   object-fit: cover;
   border-radius: 10px;
   border: 0.5px solid var(--hc-border, rgba(0, 0, 0, 0.1));
+}
+
+/* 编辑卡片内的 skill chip 行：编辑时挂载的技能可见、不丢失 */
+.hc-msg__edit-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.hc-msg__edit-skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  background: var(--hc-fill-secondary, rgba(0, 0, 0, 0.05));
+  color: var(--hc-text-secondary, #6E6E73);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .hc-msg__edit-textarea {
@@ -3455,6 +3644,8 @@ function startSidebarResize(event: MouseEvent) {
   padding: 8px 16px 10px;
   border-top: 1px solid var(--hc-divider);
   flex-shrink: 0;
+  /* 作为滚动导航箭头的定位锚点：箭头 bottom:100% 即悬于输入框正上方 */
+  position: relative;
 }
 
 .hc-chat__input-wrap {

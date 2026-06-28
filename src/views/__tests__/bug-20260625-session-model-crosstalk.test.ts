@@ -308,4 +308,66 @@ describe('BUG-20260625 切换会话后会话模型被错误改变（跨会话串
     // 用户首发前选的模型应被固定到新会话 C
     expect(getSessionModel('C')?.model, '新会话首发选的模型应补绑到新会话 id').toBe(OVERRIDE_MODEL)
   })
+
+  it('★BUG-20260626：切到「绑定模型暂不在 availableModels（异步未加载/Ollama 未同步）」的会话 → 必须保持会话绑定模型，不得静默回退默认', async () => {
+    // 用户复现：来回切 tab 显示的还是默认的；点开模型选择(loadConfig force+syncOllama)马上切到上次选的。
+    // 根因：绑定模型此刻不在 availableModels → resolveSessionModel=unavailable → 旧逻辑 fallback 静默回退默认。
+    // 会话绑定是「该会话用哪个模型」的唯一事实源：暂不在列表也要乐观恢复，列表补齐后由 watcher 复解析精修。
+    const wrapper = mountChatView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ChatViewVM
+    const chatStore = useChatStore()
+
+    const PENDING = 'qwen3.5:9b' // 不在 buildConfig 的 availableModels 里（模拟 Ollama 仍在异步同步）
+    setSessionModel('A', { model: PENDING, providerId: 'p-ollama', providerKey: 'ollama', providerName: 'Ollama' })
+
+    chatStore.currentSessionId = 'A'
+    await flushPromises()
+
+    expect(vm.selectedModel, '绑定模型暂不在列表时也必须保持会话绑定，不得静默回退默认').toBe(PENDING)
+    expect(vm.userOverrodeModel, '会话有显式绑定 → 视为用户覆盖，优先于 Agent/默认').toBe(true)
+  })
+
+  it('★BUG-20260626 续：列表补齐(availableModels 变化)后乐观恢复仍保持该模型（watcher 复解析不丢）', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ChatViewVM
+    const chatStore = useChatStore()
+    const settingsStore = useSettingsStore()
+
+    const PENDING = 'qwen3.5:9b'
+    setSessionModel('A', { model: PENDING, providerId: 'p-ollama', providerKey: 'ollama', providerName: 'Ollama' })
+    chatStore.currentSessionId = 'A'
+    await flushPromises()
+    expect(vm.selectedModel).toBe(PENDING) // 先乐观恢复
+
+    // 模拟 Ollama 同步完成：把 PENDING 模型加入可用列表 → availableModels watcher 复解析
+    settingsStore.config!.llm.providers.push({
+      id: 'p-ollama', name: 'Ollama', type: 'ollama', backendKey: 'ollama',
+      enabled: true, apiKey: '', baseUrl: 'http://127.0.0.1:11434/v1',
+      models: [{ id: PENDING, name: 'Qwen3.5 9B' }], selectedModelId: PENDING,
+    } as never)
+    await flushPromises()
+
+    expect(vm.selectedModel, '列表补齐后仍是该模型').toBe(PENDING)
+  })
+
+  it('★BUG-20260626 自足绑定：pending 模型也显示绑定自带友好名 + 正确门控 vision（名/能力来自绑定，不依赖 availableModels）', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ChatViewVM & { selectedModelDisplay: string; supportsVision: boolean }
+    const chatStore = useChatStore()
+
+    // 绑定一个不在列表里的 vision 模型，绑定自带 modelName + capabilities（自足）
+    setSessionModel('A', {
+      model: 'gemini-vision-pending', providerId: 'p-x', providerKey: 'x', providerName: 'X',
+      modelName: 'Gemini Vision', capabilities: ['text', 'vision'],
+    })
+    chatStore.currentSessionId = 'A'
+    await flushPromises()
+
+    expect(vm.selectedModel).toBe('gemini-vision-pending')
+    expect(vm.selectedModelDisplay, 'pending 也显示绑定自带的友好名，而非默认/裸 id').toBe('Gemini Vision')
+    expect(vm.supportsVision, 'pending vision 模型仍正确门控 vision（能力取自绑定，不退化 text-only）').toBe(true)
+  })
 })

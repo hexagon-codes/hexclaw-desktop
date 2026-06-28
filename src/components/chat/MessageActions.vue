@@ -26,6 +26,8 @@ const emit = defineEmits<{
 
 const copied = ref(false)
 const activeFeedback = computed(() => props.feedback ?? null)
+// F4：整条全是代码块/纯图片时 plainText 为空 → 朗读无意义。禁用喇叭而非"点了没反应"。
+const speakable = computed(() => plainText(props.content).length > 0)
 
 // 朗读：每个 MessageActions 实例独立 useVoice，互不干扰；
 // 切换消息播报时手动 stopSpeaking 以释放 audio 资源
@@ -87,6 +89,7 @@ async function toggleSpeak() {
       <button
         class="hc-msg-actions__btn"
         :class="{ 'hc-msg-actions__btn--speaking': isSpeaking }"
+        :disabled="!speakable && !isSpeaking"
         :title="isSpeaking ? t('chat.stopSpeaking', '停止朗读') : t('chat.speakMessage', '朗读')"
         @click="toggleSpeak"
       >

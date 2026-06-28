@@ -46,6 +46,7 @@ export function createChatStreamCompletionController(params: {
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
+    blocks?: ChatMessage['blocks']
     agentName?: string
     reasoning?: string
     sending?: Ref<boolean>
@@ -74,6 +75,7 @@ export function createChatStreamCompletionController(params: {
       reasoning: finalReasoning,
       metadata,
       tool_calls: args.toolCalls,
+      blocks: args.blocks,
       agent_name: args.agentName,
     }
 

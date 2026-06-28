@@ -32,6 +32,10 @@ import { parseCronSlashCommand } from './useCronSlashParser'
 
 type ChatStore = ReturnType<typeof useChatStore>
 
+// Auto-RAG（发送前自动检索知识库）的 best-effort 时间预算（BUG-20260628B）：
+// 嵌入器不可用/慢时（如默认本地 provider 未装）超此预算即放弃 KB 增强，不拖慢回复气泡。
+const AUTO_RAG_BUDGET_MS = 1200
+
 export interface ChatSendDeps {
   chatStore: ChatStore
   parsedDocument: Ref<{ text: string; fileName: string; pageCount?: number } | null>
@@ -42,7 +46,9 @@ export interface ChatSendDeps {
     file: File
   } | null>
   clearAttachmentPreview: () => void
-  scrollToBottom: () => void
+  // force=true：用户主动发送的瞬间必须无条件滚到底（即便之前上翻看历史）——发送是「我要看最新」
+  // 的明确动作；流式回复到达走非 force（尊重当前滚动位置）。BUG-20260627。
+  scrollToBottom: (force?: boolean) => void
   attachConversationAutomationActions: (params: {
     userText: string
     assistantMessage: ChatMessage | null
@@ -229,7 +235,7 @@ export function useChatSend(deps: ChatSendDeps) {
         const slashReply = buildSlashAssistantMessage(slash)
         chatStore.messages.push(slashReply)
         await nextTick()
-        scrollToBottom()
+        scrollToBottom(true) // 用户发送瞬间无条件到底
         return true
       }
     }
@@ -250,7 +256,7 @@ export function useChatSend(deps: ChatSendDeps) {
           } as ChatMessage)
           chatStore.messages.push(fastMessage)
           await nextTick()
-          scrollToBottom()
+          scrollToBottom(true) // 用户发送瞬间无条件到底
           return true
         }
       }
@@ -362,34 +368,43 @@ export function useChatSend(deps: ChatSendDeps) {
     }
 
     // ★ 隐藏上下文（只进 backendText、不进可见气泡）：附件文档正文 + Auto-RAG + @显式上下文。
-    const contextParts: string[] = []
-    // 附件文档正文（PDF/DOCX/…）——气泡只显示文件卡片，正文走这里给模型。
-    if (docContextBlock) {
-      contextParts.push(`[附件文档内容 - 请基于以下文档回答用户问题]\n${docContextBlock}`)
-    }
-    // Auto-RAG: 自动检索知识库
-    try {
-      const { result: knowledgeHits } = await searchKnowledge(text, 3)
-      const relevant = knowledgeHits.filter((hit) => hit.score >= 0.35 && hit.content)
-      if (relevant.length > 0) {
-        const contextBlock = relevant
-          .map((hit, i) => {
-            const source = hit.doc_title || hit.source || `片段${i + 1}`
-            return `[来源: ${source}]\n${hit.content}`
-          })
-          .join('\n\n')
-        contextParts.push(`[知识库参考信息 - 请优先参考以下内容回答用户问题]\n${contextBlock}`)
-      }
-    } catch {
-      // 知识库搜索失败不阻塞聊天
-    }
-    // `@` 显式召唤的上下文（知识/连接/会话）：前置。技能激活不经正文 @name 注入（会被后端当 mention 致空回答）。
+    // BUG-20260628：backendText 组装含慢的 Auto-RAG searchKnowledge 网络往返。把它做成**惰性 thunk**，
+    // 由 sendMessage 在「用户气泡已乐观上屏」之后再 await——避免发送时「卡一下才上屏」。
     const explicitContextBlock = formatContextBlock(options?.contextRefs ?? [])
-    if (explicitContextBlock) {
-      contextParts.unshift(explicitContextBlock)
+    const resolveBackendText = async (): Promise<string | undefined> => {
+      const contextParts: string[] = []
+      // 附件文档正文（PDF/DOCX/…）——气泡只显示文件卡片，正文走这里给模型。
+      if (docContextBlock) {
+        contextParts.push(`[附件文档内容 - 请基于以下文档回答用户问题]\n${docContextBlock}`)
+      }
+      // Auto-RAG: 自动检索知识库。**best-effort 限时**（BUG-20260628B）：嵌入器不可用/慢时
+      // （如默认本地 provider 未装）不该把回复气泡拖几秒——超预算即放弃 KB 增强，让模型请求尽快发出。
+      try {
+        const { result: knowledgeHits } = await Promise.race([
+          searchKnowledge(text, 3),
+          new Promise<Awaited<ReturnType<typeof searchKnowledge>>>((resolve) =>
+            setTimeout(() => resolve({ result: [] }), AUTO_RAG_BUDGET_MS),
+          ),
+        ])
+        const relevant = knowledgeHits.filter((hit) => hit.score >= 0.35 && hit.content)
+        if (relevant.length > 0) {
+          const contextBlock = relevant
+            .map((hit, i) => {
+              const source = hit.doc_title || hit.source || `片段${i + 1}`
+              return `[来源: ${source}]\n${hit.content}`
+            })
+            .join('\n\n')
+          contextParts.push(`[知识库参考信息 - 请优先参考以下内容回答用户问题]\n${contextBlock}`)
+        }
+      } catch {
+        // 知识库搜索失败不阻塞聊天
+      }
+      // `@` 显式召唤的上下文（知识/连接/会话）：前置。
+      if (explicitContextBlock) {
+        contextParts.unshift(explicitContextBlock)
+      }
+      return contextParts.length > 0 ? `${contextParts.join('\n\n')}\n\n[用户问题]\n${finalText}` : undefined
     }
-    const backendText: string | undefined =
-      contextParts.length > 0 ? `${contextParts.join('\n\n')}\n\n[用户问题]\n${finalText}` : undefined
     // 注意：技能激活**不**经正文 @name 注入——`@skill` 会被后端当 mention/tool 致空回答。
     // skillNames 作为前向兼容字段透传，由专用激活通道处理（不写进 backendText）。
 
@@ -402,10 +417,13 @@ export function useChatSend(deps: ChatSendDeps) {
 
     const previousMessageCount = Array.isArray(chatStore.messages) ? chatStore.messages.length : 0
     const skillNames = options?.skillNames ?? []
-    const sendOptions =
-      backendText || skillNames.length || documentRefs.length
-        ? { backendText, skillNames, documents: documentRefs.length ? documentRefs : undefined }
-        : undefined
+    // backendText 始终以 thunk 传入（Auto-RAG 始终尝试）；sendMessage 在乐观 push 后再 await 解析，
+    // 解析为空则后端用可见文本（thunk 内 contextParts 为空时返回 undefined）。
+    const sendOptions = {
+      backendText: resolveBackendText,
+      skillNames,
+      documents: documentRefs.length ? documentRefs : undefined,
+    }
     const sendPromise = chatStore.sendMessage(
       finalText,
       attachments.length > 0 ? attachments : undefined,
@@ -435,7 +453,7 @@ export function useChatSend(deps: ChatSendDeps) {
       .catch(() => {})
 
     await nextTick()
-    scrollToBottom()
+    scrollToBottom(true) // 用户发送瞬间无条件到底（即便此前上翻看历史）
     return true
   }
 

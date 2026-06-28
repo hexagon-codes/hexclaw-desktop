@@ -15,6 +15,7 @@ export function createChatSendBackendDeliveryController(params: {
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
+    blocks?: ChatMessage['blocks']
     agentName?: string
     reasoning?: string
     sending?: Ref<boolean>
@@ -75,6 +76,7 @@ export function createChatSendBackendDeliveryController(params: {
         sessionId,
         metadata: result.metadata,
         toolCalls: result.tool_calls,
+        blocks: result.blocks,
         agentName: typeof result.metadata?.agent_name === 'string' ? result.metadata.agent_name : undefined,
         reasoning: getAssistantReasoningFromMetadata(result.metadata),
         sending,

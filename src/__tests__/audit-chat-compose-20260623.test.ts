@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { shouldSendOnEnter, normalizePastedText, shouldAutoScroll, COMPOSE_GUARD_MS } from '@/utils/chat-compose'
+import { shouldSendOnEnter, normalizePastedText, shouldAutoScroll, resolveChatScroll, COMPOSE_GUARD_MS } from '@/utils/chat-compose'
 
 const LS = String.fromCharCode(0x2028) // U+2028 行分隔
 const PS = String.fromCharCode(0x2029) // U+2029 段分隔
@@ -54,5 +54,28 @@ describe('AUDIT #2 流式上滚不被拉回底部', () => {
   it('未上滚 → 自动跟随；强制 → 总滚', () => {
     expect(shouldAutoScroll(false, false)).toBe(true)
     expect(shouldAutoScroll(true, true)).toBe(true)
+  })
+})
+
+// 2026-06-27 会话滚动决策：会话级=瞬时无条件到底；会话内=平滑+尊重滚动位置。
+describe('会话滚动决策 resolveChatScroll', () => {
+  it('会话级(opening)：瞬时(behavior=auto) + 无条件滚动，即便用户上一会话曾上滚', () => {
+    const d = resolveChatScroll({ opening: true, force: false, userScrolledUp: true })
+    expect(d.shouldScroll).toBe(true) // 无条件——打开会话必到底
+    expect(d.behavior).toBe('auto') // 瞬时，无动画（不要「唰」地滚一长段）
+  })
+  it('会话级 opening 始终 auto，与 force 无关', () => {
+    expect(resolveChatScroll({ opening: true, force: true, userScrolledUp: false }).behavior).toBe('auto')
+    expect(resolveChatScroll({ opening: true, force: false, userScrolledUp: false }).behavior).toBe('auto')
+  })
+  it('会话内(opening=false)：平滑(behavior=smooth)', () => {
+    expect(resolveChatScroll({ opening: false, force: false, userScrolledUp: false }).behavior).toBe('smooth')
+  })
+  it('会话内：用户上滚阅读历史时不跟随(shouldScroll=false)——尊重当前位置', () => {
+    expect(resolveChatScroll({ opening: false, force: false, userScrolledUp: true }).shouldScroll).toBe(false)
+  })
+  it('会话内：贴底时自动跟随；点下翻浮标(force)强制到底', () => {
+    expect(resolveChatScroll({ opening: false, force: false, userScrolledUp: false }).shouldScroll).toBe(true)
+    expect(resolveChatScroll({ opening: false, force: true, userScrolledUp: true }).shouldScroll).toBe(true)
   })
 })

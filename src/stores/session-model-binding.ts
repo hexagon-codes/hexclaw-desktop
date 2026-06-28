@@ -16,12 +16,19 @@
 
 export const SESSION_MODEL_STORAGE_KEY = 'hexclaw_sessionModels'
 
-/** 单条会话绑定。model 可为具体 modelId 或 'auto'。 */
+/** 单条会话绑定。model 可为具体 modelId 或 'auto'。
+ *
+ *  ★自足性（best-practice，修复 BUG-20260626 的根上）：绑定不仅存「用哪个模型」，还存其
+ *  **显示名 + 能力**——这样会话的模型身份/标签/能力门控**完全由绑定决定，不依赖 availableModels
+ *  是否已加载**。provider/Ollama 异步未同步时，UI 仍能正确显示模型名并正确门控 vision/image，
+ *  绝不退化成默认模型或 text-only。availableModels 退化为纯「下拉填充 + 元信息精修」角色。 */
 export interface SessionModelBinding {
   model: string
   providerId: string
   providerKey: string
   providerName?: string
+  modelName?: string // 显示名（自足）
+  capabilities?: string[] // 能力（自足，门控 vision/image/video）
 }
 
 /** 解析所需的可用模型轻量视图（settingsStore.availableModels 的子集）。 */
@@ -36,8 +43,8 @@ export interface AvailableModelLite {
 export type ModelBindingResolution =
   | { kind: 'none' } // 无绑定 → 沿用默认 / Agent 决策
   | { kind: 'auto' } // 绑定到 'auto'
-  | { kind: 'restore'; model: AvailableModelLite } // 绑定且模型仍可用
-  | { kind: 'unavailable' } // 绑定的模型已不可用 → 调用方应清绑定 + 回退默认 + 提示
+  | { kind: 'restore'; model: AvailableModelLite } // 绑定且模型仍可用（带最新 provider 元信息）
+  | { kind: 'unavailable'; binding: SessionModelBinding } // 绑定的模型此刻不在可用列表（多为异步未加载/Ollama 未同步）→ 调用方乐观恢复绑定本身
 
 type BindingMap = Record<string, SessionModelBinding>
 
@@ -79,6 +86,8 @@ export function setSessionModel(sessionId: string, binding: SessionModelBinding)
     providerId: binding.providerId || '',
     providerKey: binding.providerKey || '',
     ...(binding.providerName ? { providerName: binding.providerName } : {}),
+    ...(binding.modelName ? { modelName: binding.modelName } : {}),
+    ...(binding.capabilities?.length ? { capabilities: binding.capabilities } : {}),
   }
   writeAll(map)
 }
@@ -121,7 +130,7 @@ export function resolveSessionModel(
   const match = available.find(
     (m) => m.modelId === bound.model && (!bound.providerId || m.providerId === bound.providerId),
   )
-  return match ? { kind: 'restore', model: match } : { kind: 'unavailable' }
+  return match ? { kind: 'restore', model: match } : { kind: 'unavailable', binding: bound }
 }
 
 /**
@@ -129,22 +138,24 @@ export function resolveSessionModel(
  * 决策抽成纯函数，是为了让切换编排可单测——跨会话串模型的 bug 正落在这层。
  */
 export type SessionModelAction =
-  | { kind: 'restore'; model: AvailableModelLite } // 恢复会话绑定模型，置 override
+  | { kind: 'restore'; model: AvailableModelLite } // 恢复会话绑定模型（列表里有，带最新元信息），置 override
   | { kind: 'auto' } // 恢复为 'auto'，置 override
-  | { kind: 'fallback' } // 绑定存在但模型暂不可用 → UI 回退默认、保留绑定、清 override
+  | { kind: 'restore-pending'; binding: SessionModelBinding } // 绑定存在但模型此刻不在列表 → 乐观恢复绑定本身，置 override；列表补齐后由 availableModels watcher 复解析精修为 restore
   | { kind: 'bind-current' } // 新会话首发（null → 新建 id）→ 把当前 UI 选择固定到新会话
   | { kind: 'reset-default' } // 无绑定 → UI 回退全局默认、清 override（不沿用上一会话模型）
 
 /**
  * 决定进入会话 newId 时该做什么。纯函数，无副作用。
  *
- * 关键不变量（修复 BUG-20260625 跨会话串模型）：
- * - 「无绑定」会话（resolution=none）只在「新会话首发」这一种情形补绑当前选择；
- *   其余一律 reset-default —— 从「绑定了模型的会话」切到「无绑定会话」必须回退全局默认，
- *   不得静默沿用上一个会话的模型。
- * - bind-current 仅当 prevId===null（null → 真实 id）且用户已显式选模型时触发。
- *   调用方必须保证「离开会话(→null)时清掉 userOverrodeModel」，否则删除会话后残留的
- *   覆盖标记会让选中下一个无绑定会话时被误判为「新会话首发」而把上一会话模型串过去。
+ * 关键不变量：
+ * - 会话**有绑定**（restore/auto/unavailable）→ 一律恢复该会话自己的模型。其中 unavailable
+ *   （绑定模型此刻不在 availableModels，多为 provider/Ollama 异步未加载）→ **restore-pending 乐观恢复**，
+ *   不得静默回退默认（修复 BUG-20260626：切 tab 显示默认、点开下拉才切回上次选的）。会话绑定是
+ *   「该会话用哪个模型」的唯一事实源，列表补齐后由 availableModels watcher 复解析精修。
+ * - 「无绑定」会话（resolution=none）只在「新会话首发」补绑当前选择；其余一律 reset-default
+ *   ——从「绑定了模型的会话」切到「无绑定会话」必须回退全局默认，不得静默沿用上一会话模型（修复 BUG-20260625）。
+ * - bind-current 仅当 prevId===null（null → 真实 id）且用户已显式选模型时触发。调用方必须保证
+ *   「离开会话(→null)时清掉 userOverrodeModel」，否则残留覆盖标记会把上一会话模型串过去。
  */
 export function decideSessionModelAction(params: {
   resolution: ModelBindingResolution
@@ -159,7 +170,7 @@ export function decideSessionModelAction(params: {
     case 'auto':
       return { kind: 'auto' }
     case 'unavailable':
-      return { kind: 'fallback' }
+      return { kind: 'restore-pending', binding: resolution.binding }
     case 'none':
       if (prevId === null && userOverrodeModel && hasSelectedModel) {
         return { kind: 'bind-current' }
