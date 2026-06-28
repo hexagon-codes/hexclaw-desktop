@@ -1087,7 +1087,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
           <!-- LLM Providers -->
           <div
             v-if="activeSection === 'llm'"
-            class="hc-settings__section hc-settings__section--scroll"
+            class="hc-settings__section"
             style="max-width: 600px"
           >
             <!-- ── 默认行为 ── -->
@@ -1608,12 +1608,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               <div class="hc-settings__info-grid">
                 <div>
                   <span class="hc-settings__info-label">{{ t('settings.system.version') }}</span>
-                  <div class="hc-settings__info-value hc-settings__info-value--mono">{{ appVersion }}</div>
+                  <div class="hc-settings__info-value hc-settings__info-value--mono" dir="ltr">{{ appVersion }}</div>
                 </div>
                 <div>
                   <span class="hc-settings__info-label">{{ t('settings.system.localStorage') }}</span>
                   <div class="hc-settings__info-value">
-                    {{ runtimeLocalStoreFile }} ·
+                    <bdi class="hc-settings__info-mono">{{ runtimeLocalStoreFile }}</bdi> ·
                     <span :style="{ color: runtimeConfig ? 'var(--hc-success)' : 'var(--hc-text-muted)' }">
                       {{ runtimeConfig ? t('settings.system.connected') : '—' }}
                     </span>
@@ -1629,17 +1629,18 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         : 'var(--hc-text-muted)',
                     }"
                   >
-                    {{
-                      runtimeConfig?.knowledge.enabled
-                        ? 'FTS5 · ' + t('settings.storage.enabled')
-                        : t('settings.storage.disabled', 'Disabled')
-                    }}
+                    <template v-if="runtimeConfig?.knowledge.enabled"
+                      ><bdi class="hc-settings__info-mono">FTS5</bdi> ·
+                      {{ t('settings.storage.enabled') }}</template
+                    >
+                    <template v-else>{{ t('settings.storage.disabled', 'Disabled') }}</template>
                   </div>
                 </div>
                 <div>
                   <span class="hc-settings__info-label">{{ t('settings.system.apiEndpoint') }}</span>
-                  <div class="hc-settings__info-value hc-settings__info-value--mono">
-                    <template v-if="runtimeModeShort">{{ runtimeModeShort }} · </template>{{ runtimeApiEndpoint }}
+                  <div class="hc-settings__info-value">
+                    <template v-if="runtimeModeShort">{{ runtimeModeShort }} · </template>
+                    <bdi class="hc-settings__info-mono">{{ runtimeApiEndpoint }}</bdi>
                   </div>
                 </div>
               </div>
@@ -1790,24 +1791,27 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   overflow: hidden;
 }
 
-/* ─── Content ───── */
+/* ─── Content ─────
+   滚动归属：滚动条挂在「全宽内容面板」.hc-settings__content，而非内部 max-width 受限的 section。
+   故 thumb 紧贴面板右缘（与顶栏「保存配置」对齐）——这是 macOS/桌面端的原生预期落点；
+   内层 section 仍以 max-width 维持易读列宽并左对齐，不再背负滚动（避免滚动条悬浮在宽窗口中部）。
+   scrollbar-gutter: stable 预留槽位，切换标签页时内容不因滚动条出现/隐藏而横向跳动。 */
 .hc-settings__content {
   flex: 1;
-  overflow: hidden;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
   padding: 16px 24px;
 }
 
 .hc-settings__section {
   max-width: 520px;
   width: 100%;
-  height: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   animation: hc-fade-in 0.25s ease-out;
-}
-
-.hc-settings__section--scroll {
-  overflow-y: auto;
 }
 
 .hc-settings__section--storage {
@@ -2000,8 +2004,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-settings__info::before {
   content: attr(data-info);
   position: absolute;
-  /* 向上展开：避免滚动容器(.hc-settings__section--scroll overflow-y:auto)
-     在靠近 section 底部时把向下的 tooltip 裁切。 */
+  /* 向上展开：避免滚动容器(.hc-settings__content overflow-y:auto)
+     在靠近面板底部时把向下的 tooltip 裁切。 */
   bottom: calc(100% + 8px);
   left: 0;
   width: max-content;
@@ -2243,6 +2247,26 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
+  /* 纯技术值（版本/IP）强制 LTR 并 bidi 隔离：RTL（维语）下不被重排、不跟翻译文本黏连 */
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* 内联技术 token（IP/版本/文件名等 ASCII）：等宽 + LTR 隔离，可安全嵌进 RTL 翻译文本里。
+   关键：等宽字体不含维吾尔/阿拉伯连写字形，绝不能套在翻译标签上（会断字、字距拉宽）。 */
+.hc-settings__info-mono {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    'Liberation Mono',
+    'Courier New',
+    monospace;
+  font-size: 12px;
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 /* 关于分区：身份入口（一行介绍 + 蓝色链接），复用单一 /about。 */
