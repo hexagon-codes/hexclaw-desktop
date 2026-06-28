@@ -3,7 +3,8 @@ import { defineConfig } from '@playwright/test'
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',
-  testIgnore: '**/browser-live-*.spec.ts',
+  // webkit-feel 走专用 playwright.webkit.config.ts（WebKit 引擎 + 自带 webServer），本默认配置不跑它
+  testIgnore: ['**/browser-live-*.spec.ts', '**/webkit-*.spec.ts'],
   timeout: 180_000,
   retries: 0,
   workers: 1, // 串行执行，共享 sidecar 状态

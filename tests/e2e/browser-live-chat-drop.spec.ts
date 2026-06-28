@@ -14,11 +14,13 @@ test.describe('拖拽图片到会话框（live sidecar）', () => {
   test.setTimeout(120_000)
 
   test('真实拖一张 PNG → 附件预览出现 → 发送按钮可用并能发送', async ({ page }) => {
-    await page.addInitScript(() => sessionStorage.removeItem('hexclaw:welcomeRedirectDone'))
-    await page.goto('/welcome')
+    // 本 spec 焦点＝拖图→预览→发送→草稿清空；welcome 流由 browser-live-welcome-settings 覆盖。
+    // 必须显式指定 model（与 browser-live-sidecar 同模式）：无模型时 handleSend 会按设计在
+    // model==='' 处 return false（拒绝发送、保留草稿），那会污染本 spec 的「发送后清空」断言。
+    await page.addInitScript(() => sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1'))
+    await page.goto('/chat?model=qwen3.5:9b')
     await page.waitForLoadState('networkidle')
-    await page.getByRole('button', { name: '跳过' }).click()
-    await expect(page).toHaveURL(/\/chat$/)
+    await expect(page).toHaveURL(/\/chat/)
 
     const box = page.locator('.hc-composer__box')
     await expect(box).toBeVisible()
