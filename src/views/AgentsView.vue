@@ -13,6 +13,7 @@ import { getAgents, getRules, registerAgent, unregisterAgent, updateAgent } from
 import { getAssistantSoul, updateAssistantSoul } from '@/api/assistant'
 import type { AgentRole, AgentConfig, AgentRule } from '@/types'
 import { logger } from '@/utils/logger'
+import { userVisibleAgents } from '@/utils/imChannelBinding'
 import { useToast } from '@/composables/useToast'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
@@ -177,6 +178,11 @@ onMounted(async () => {
     // Clean up query params
     router.replace({ path: route.path })
   }
+  // ?create=1 来自「通道与账号 →＋新建 Agent」快捷入口：直接打开既有新建弹窗（复用，不另造 UI）
+  if (route.query.create) {
+    openAddAgentDialog()
+    router.replace({ path: route.path })
+  }
 })
 
 async function loadAgents() {
@@ -184,7 +190,8 @@ async function loadAgents() {
   errorMsg.value = ''
   try {
     const res = await getAgents()
-    agents.value = res.agents || []
+    // 经单一可见性边界 userVisibleAgents 剔除匿名「频道默认模型」Agent（@im/*）——它们由 IM 频道绑定自动管理，非用户管理对象。
+    agents.value = userVisibleAgents(res.agents || [])
     defaultAgent.value = res.default || ''
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.loadAgentsFailed')
