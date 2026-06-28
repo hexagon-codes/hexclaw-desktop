@@ -322,6 +322,31 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('LLM 服务商')
   })
 
+  // 回归 bug-20260626：LLM 服务商页滚动条悬浮在窗口中部。
+  // 根因——overflow-y:auto 挂在 max-width 受限的内层 section 上，滚动条贴着「窄列」右缘，
+  //        在宽窗口里悬浮于中间，与顶栏右缘脱节，观感破碎。
+  // 不变量——滚动归属上移到「全宽内容面板」.hc-settings__content；内层 section 不再背负滚动，
+  //          仅以 max-width 维持易读列宽 → 滚动条回到面板右缘（macOS/桌面端原生预期位置）。
+  // 几何由 WebKit 真机手感门（tests/e2e/webkit-feel.spec.ts ⑤）取证；此处钉结构契约。
+  it('mounts the LLM scroll viewport on the full-width content panel, not the max-width section (bug-20260626)', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const content = wrapper.find('.hc-settings__content')
+    expect(content.exists()).toBe(true)
+
+    // LLM 段渲染在内容面板内部
+    const section = wrapper.find('.hc-settings__section')
+    expect(section.exists()).toBe(true)
+    expect(content.element.contains(section.element)).toBe(true)
+
+    // 内层 section 不再是滚动宿主（旧实现的 --scroll 标记已移除）
+    expect(section.classes()).not.toContain('hc-settings__section--scroll')
+
+    // section 仍以 max-width 维持易读窄列（左对齐），滚动条则归全宽面板
+    expect(section.attributes('style') || '').toMatch(/max-width/)
+  })
+
   it('renders model chips for provider models', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()

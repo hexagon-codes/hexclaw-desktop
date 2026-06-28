@@ -199,6 +199,14 @@ export interface MemoryConfig {
 /** 沙箱配置 */
 export interface SandboxConfig {
   network_enabled: boolean
+  /** 额外只读授权目录（用户经数据连接器授权的本地目录）。后端落 skill.sandbox.filesystem.allowed_paths。 */
+  allowed_paths?: string[]
+}
+
+/** 沙箱配置「部分更新」——字段均可选，便于只改 allowed_paths 而不动 network。 */
+export interface SandboxConfigUpdate {
+  network_enabled?: boolean
+  allowed_paths?: string[]
 }
 
 /** 应用配置 */
@@ -269,7 +277,7 @@ export interface BackendRuntimeConfig {
 
 export interface RuntimeConfigUpdateRequest {
   security?: SecurityConfig
-  sandbox?: SandboxConfig
+  sandbox?: SandboxConfigUpdate
 }
 
 export interface ConfigUpdateResponse {
