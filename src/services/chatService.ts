@@ -57,6 +57,7 @@ interface StreamWsServerMessage {
   request_id?: string
   usage?: unknown
   tool_calls?: ChatMessage['tool_calls']
+  blocks?: ChatMessage['blocks']
   metadata?: Record<string, unknown>
 }
 
@@ -64,6 +65,7 @@ export interface WebSocketStreamResult {
   content: string
   metadata?: Record<string, unknown>
   toolCalls?: ChatMessage['tool_calls']
+  blocks?: ChatMessage['blocks']
   agentName?: string
 }
 
@@ -276,6 +278,7 @@ function openRequestSocket(
             content: '',
             metadata: msg.metadata,
             toolCalls: msg.tool_calls,
+            blocks: msg.blocks,
             agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
           })
         }
@@ -411,7 +414,7 @@ export async function sendViaBackend(
   attachments?: ChatAttachment[],
   metadata?: Record<string, string>,
   requestId?: string,
-): Promise<{ reply: string; metadata?: Record<string, unknown>; tool_calls?: ChatMessage['tool_calls'] }> {
+): Promise<{ reply: string; metadata?: Record<string, unknown>; tool_calls?: ChatMessage['tool_calls']; blocks?: ChatMessage['blocks'] }> {
   return withTimeout(
     sendChatViaBackend(text, {
       sessionId,

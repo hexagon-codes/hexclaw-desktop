@@ -23,6 +23,7 @@ export function createChatStreamRecoveryController(params: {
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: import('@/types').ChatMessage['tool_calls']
+    blocks?: import('@/types').ChatMessage['blocks']
     agentName?: string
     reasoning?: string
     sending?: Ref<boolean>
@@ -114,6 +115,7 @@ export function createChatStreamRecoveryController(params: {
               sessionId: snapshot.session_id,
               metadata: result.metadata,
               toolCalls: result.toolCalls,
+              blocks: result.blocks,
               agentName: result.agentName,
               reasoning: finalState?.reasoning || getAssistantReasoningFromMetadata(result.metadata),
               sending,

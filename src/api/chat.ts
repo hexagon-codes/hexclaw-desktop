@@ -57,6 +57,7 @@ export interface BackendChatResponse {
   reply: string
   session_id: string
   tool_calls?: import('@/types').ToolCall[]
+  blocks?: import('@/types').ContentBlock[]
   metadata?: Record<string, unknown>
   usage?: {
     /** 后端实际返回 input_tokens (非 OpenAI prompt_tokens)，同时兼容两种命名 */
@@ -76,6 +77,7 @@ export interface ActiveStreamSnapshot {
   metadata?: Record<string, string>
   usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number; provider?: string; model?: string; cost?: number }
   tool_calls?: import('@/types').ToolCall[]
+  blocks?: import('@/types').ContentBlock[]
   started_at?: string
   updated_at?: string
 }

@@ -18,7 +18,6 @@ describe('BUG-20260626: 新会话/短会话不因高输入框误显下翻箭头'
     // 高输入框把消息视口压到 300；空状态高 600 → distanceFromBottom=300>200（旧逻辑会显示）
     const f = scrollNavFlags({ scrollHeight: 600, scrollTop: 0, clientHeight: 300, hasMessages: false })
     expect(f.showScrollToBottom).toBe(false)
-    expect(f.showScrollToTop).toBe(false)
     expect(f.userScrolledUp).toBe(false)
   })
 
@@ -40,8 +39,10 @@ describe('BUG-20260626: 新会话/短会话不因高输入框误显下翻箭头'
     expect(f.showScrollToBottom).toBe(false)
   })
 
-  it('长会话接近底部 → 显示上翻箭头', () => {
+  it('长会话接近底部（distanceFromBottom<200）→ 不显示任何箭头（对齐 ChatGPT，去掉上翻键）', () => {
+    // 2026-06-26 用户反馈：底部/接近底部不该显示任何键（旧逻辑这里会显示上翻箭头=弄反了）
     const f = scrollNavFlags({ scrollHeight: 2000, scrollTop: 1450, clientHeight: 500, hasMessages: true })
-    expect(f.showScrollToTop).toBe(true)
+    expect(f.showScrollToBottom).toBe(false)
+    expect('showScrollToTop' in f).toBe(false) // 上翻键概念已彻底移除
   })
 })

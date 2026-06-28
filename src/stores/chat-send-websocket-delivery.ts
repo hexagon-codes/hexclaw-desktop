@@ -21,6 +21,7 @@ export function createChatSendWebSocketDeliveryController(params: {
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
+    blocks?: ChatMessage['blocks']
     agentName?: string
     reasoning?: string
     sending?: Ref<boolean>
@@ -140,6 +141,7 @@ export function createChatSendWebSocketDeliveryController(params: {
         sessionId,
         metadata,
         toolCalls: result.toolCalls,
+        blocks: result.blocks,
         agentName: result.agentName,
         reasoning: finalState?.reasoning || getAssistantReasoningFromMetadata(result.metadata),
         sending,

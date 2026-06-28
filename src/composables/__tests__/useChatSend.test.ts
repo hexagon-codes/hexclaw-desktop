@@ -47,6 +47,8 @@ function makeDeps() {
 describe('useChatSend', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // mockReset 清掉上个用例残留的 mockImplementationOnce 队列（惰性 thunk 下未被消费的 Once 会泄漏到下个用例）
+    searchKnowledge.mockReset()
     searchKnowledge.mockResolvedValue({ result: [] })
     parseDocument.mockReset()
     parseDocument.mockResolvedValue({ text: 'parsed', fileName: 'test.txt' })
@@ -56,7 +58,12 @@ describe('useChatSend', () => {
     const deps = makeDeps()
     const { handleSend } = useChatSend(deps as any)
     await handleSend('hello')
-    expect(deps.chatStore.sendMessage).toHaveBeenCalledWith('hello', undefined, undefined)
+    // backendText 改为惰性 thunk（BUG-20260628），故 sendOptions 始终带 backendText 函数
+    expect(deps.chatStore.sendMessage).toHaveBeenCalledWith(
+      'hello',
+      undefined,
+      expect.objectContaining({ backendText: expect.any(Function) }),
+    )
   })
 
   it('allows Agent mode sends when model is undefined', async () => {
@@ -66,7 +73,11 @@ describe('useChatSend', () => {
     const { handleSend } = useChatSend(deps as any)
 
     await expect(handleSend('hello')).resolves.toBe(true)
-    expect(deps.chatStore.sendMessage).toHaveBeenCalledWith('hello', undefined, undefined)
+    expect(deps.chatStore.sendMessage).toHaveBeenCalledWith(
+      'hello',
+      undefined,
+      expect.objectContaining({ backendText: expect.any(Function) }),
+    )
   })
 
   it('injects knowledge context when RAG hits score >= 0.35', async () => {
@@ -77,9 +88,11 @@ describe('useChatSend', () => {
     const { handleSend } = useChatSend(deps as any)
     await handleSend('question')
     const call = deps.chatStore.sendMessage.mock.calls[0]!
-    expect(call[2]).toBeDefined() // backendText option
-    expect(call[2]!.backendText).toContain('[知识库参考信息')
-    expect(call[2]!.backendText).toContain('relevant info')
+    expect(call[2]).toBeDefined()
+    // backendText 现为惰性 thunk：解析它才跑 Auto-RAG 并组装隐藏上下文
+    const backendText = await call[2]!.backendText()
+    expect(backendText).toContain('[知识库参考信息')
+    expect(backendText).toContain('relevant info')
   })
 
   it('does not inject knowledge when scores are low', async () => {
@@ -90,7 +103,8 @@ describe('useChatSend', () => {
     const { handleSend } = useChatSend(deps as any)
     await handleSend('question')
     const call = deps.chatStore.sendMessage.mock.calls[0]!
-    expect(call[2]).toBeUndefined()
+    // thunk 解析为 undefined（低分不注入、无文档/显式上下文）→ 后端用可见文本
+    expect(await call[2]!.backendText()).toBeUndefined()
   })
 
   it('continues without knowledge when searchKnowledge throws', async () => {
@@ -99,6 +113,9 @@ describe('useChatSend', () => {
     const { handleSend } = useChatSend(deps as any)
     await handleSend('question')
     expect(deps.chatStore.sendMessage).toHaveBeenCalled()
+    // thunk 解析时 searchKnowledge throw 被 catch，不阻塞、backendText 退为 undefined
+    const call = deps.chatStore.sendMessage.mock.calls[0]!
+    await expect(call[2]!.backendText()).resolves.toBeUndefined()
   })
 
   it('文档正文进隐藏上下文(backendText)，可见消息只留用户文字 + 文件卡片', async () => {
@@ -112,8 +129,9 @@ describe('useChatSend', () => {
     await handleSend('summarize')
     const call = deps.chatStore.sendMessage.mock.calls[0]!
     expect(call[0]).toBe('summarize') // 可见消息 = 用户文字，不含文档正文
-    expect(call[2]!.backendText).toContain('doc content') // 正文进隐藏上下文
-    expect(call[2]!.backendText).toContain('[用户问题]')
+    const backendText = await call[2]!.backendText()
+    expect(backendText).toContain('doc content') // 正文进隐藏上下文
+    expect(backendText).toContain('[用户问题]')
     expect(call[2]!.documents).toEqual([expect.objectContaining({ name: 'report.pdf' })]) // 文件卡片
   })
 
@@ -122,6 +140,15 @@ describe('useChatSend', () => {
     const { handleSend } = useChatSend(deps as any)
     await handleSend('test')
     expect(deps.scrollToBottom).toHaveBeenCalled()
+  })
+
+  // BUG-20260627：用户发送新消息后必须**无条件**滚到最新（即便此前上翻看历史），故 force=true。
+  // 之前非 force 会被 userScrolledUp 闸挡住 → 发送后停在上次翻到的位置，看不到自己刚发的消息。
+  it('forces scroll to bottom on user send (scrollToBottom(true)), even if user had scrolled up', async () => {
+    const deps = makeDeps()
+    const { handleSend } = useChatSend(deps as any)
+    await handleSend('test')
+    expect(deps.scrollToBottom).toHaveBeenCalledWith(true)
   })
 
   it('resolves true once the user message is accepted without waiting for the assistant reply', async () => {
@@ -157,6 +184,62 @@ describe('useChatSend', () => {
     expect(resolveSend).not.toBeNull()
     resolveSend!({ id: 'a1', role: 'assistant', content: 'reply', timestamp: '' })
     await resultPromise
+  })
+
+  // BUG-20260628：发送消息「卡一下才提交到上面」。根因＝Auto-RAG 的 searchKnowledge 在乐观
+  // push（chatStore.sendMessage 内同步 push 用户气泡）之前被 await，用户气泡被知识检索往返阻塞，
+  // 直到 RAG 返回才上屏。修复后：用户气泡先立即上屏，RAG 在 push 之后再做（其结果仍进 backendText）。
+  it('BUG-20260628: 用户消息立即上屏，不被 Auto-RAG(searchKnowledge) 往返阻塞', async () => {
+    const deps = makeDeps()
+    // searchKnowledge 挂起（模拟知识检索慢/卡，尤其默认本地嵌入不可用时），先不 resolve
+    let releaseSearch: () => void = () => {}
+    searchKnowledge.mockImplementationOnce(
+      () =>
+        new Promise<{ result: never[] }>((resolve) => {
+          releaseSearch = () => resolve({ result: [] })
+        }),
+    )
+
+    const { handleSend } = useChatSend(deps as any)
+    const p = handleSend('hello') // 不 await
+    await flushPromises() // 跑完同步段 + 已就绪微任务（searchKnowledge 仍挂起）
+
+    // 修复前：handleSend 卡在 `await searchKnowledge`，从未走到 sendMessage → 气泡没上屏（RED）
+    expect(deps.chatStore.sendMessage).toHaveBeenCalled()
+    expect(
+      deps.chatStore.messages.some((m) => m.role === 'user' && m.content === 'hello'),
+    ).toBe(true)
+
+    releaseSearch()
+    await p
+  })
+
+  // BUG-20260628B：发送后「卡几秒才出现回复气泡」。根因＝Auto-RAG 的 searchKnowledge 走默认（本机为
+  // 不可用的本地）嵌入器，慢/卡几秒，而 backendText(thunk) 被 sendMessage await 后才投递 → 回复被拖住。
+  // 修复：Auto-RAG best-effort 限时，超预算即放弃 KB 增强，让模型请求尽快发出、回复气泡尽快出现。
+  it('BUG-20260628B: Auto-RAG 慢/卡时不拖慢回复——超时预算后 backendText thunk 必须 settle（不被 searchKnowledge 永久卡住）', async () => {
+    vi.useFakeTimers()
+    try {
+      searchKnowledge.mockImplementationOnce(() => new Promise(() => {})) // 永不返回（模拟嵌入器不可用）
+      const deps = makeDeps()
+      const { handleSend } = useChatSend(deps as any)
+      await handleSend('hello')
+      const resolveBackendText = deps.chatStore.sendMessage.mock.calls[0]![2]!.backendText as () => Promise<
+        string | undefined
+      >
+      let settled = false
+      const thunk = resolveBackendText().then((v) => {
+        settled = true
+        return v
+      })
+      // 推进假时钟越过 RAG 预算
+      await vi.advanceTimersByTimeAsync(2000)
+      // 修复前：thunk 永久 await searchKnowledge → 不 settle（RED）。修复后：超时放弃 RAG → settle、无隐藏上下文。
+      expect(settled).toBe(true)
+      await expect(thunk).resolves.toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('returns false and preserves legacy attachment state when send is rejected', async () => {
@@ -245,7 +328,7 @@ describe('useChatSend', () => {
 
     const call = deps.chatStore.sendMessage.mock.calls[0]!
     expect(call[0]).toBe('summarize') // 可见 = 用户文字
-    expect(call[2]!.backendText).toContain('PDF 正文') // 正文进隐藏上下文
+    expect(await call[2]!.backendText()).toContain('PDF 正文') // 正文进隐藏上下文
     expect(call[2]!.documents).toEqual([
       expect.objectContaining({ name: 'report.pdf', mime: 'application/pdf' }),
     ]) // 文件卡片

@@ -328,6 +328,49 @@ describe('ChatView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('你好！有什么可以帮你的？')
   })
 
+  // 2026-06-27 会话滚动行为：会话级=瞬时到底(auto)；会话内=平滑(smooth)+尊重滚动位置。
+  it('opening a conversation jumps to bottom INSTANTLY (scrollIntoView behavior=auto)', async () => {
+    mountChatView()
+    await flushPromises()
+    const { useChatStore } = await import('@/stores/chat')
+    const store = useChatStore()
+    const scrollSpy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+    scrollSpy.mockClear()
+
+    // 模拟「打开/切换会话」：currentSessionId 先变（早于消息异步落地），再整体替换 messages 数组。
+    store.currentSessionId = 'opened-session'
+    await flushPromises()
+    store.messages = [
+      { id: 'u1', role: 'user', content: '历史问题', timestamp: '2026-01-01T00:00:00Z' },
+      { id: 'a1', role: 'assistant', content: '历史回答', timestamp: '2026-01-01T00:00:01Z' },
+    ]
+    await flushPromises()
+
+    const behaviors = scrollSpy.mock.calls.map((c) => (c[0] as { behavior?: string } | undefined)?.behavior)
+    expect(behaviors).toContain('auto') // 会话级=瞬时到底（无动画）
+  }, 10000)
+
+  it('appending a message WITHIN a session scrolls smoothly (behavior=smooth), not instant', async () => {
+    mountChatView()
+    await flushPromises()
+    const { useChatStore } = await import('@/stores/chat')
+    const store = useChatStore()
+    store.currentSessionId = 'sess'
+    store.messages = [{ id: 'a1', role: 'assistant', content: 'hi', timestamp: '2026-01-01T00:00:00Z' }] // open
+    await flushPromises()
+
+    const scrollSpy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+    scrollSpy.mockClear()
+    // 会话内追加（push，同引用）→ 走 length watcher 平滑滚动
+    store.messages.push({ id: 'u2', role: 'user', content: '追问', timestamp: '2026-01-01T00:00:02Z' })
+    await flushPromises()
+    await new Promise((r) => setTimeout(r, 150)) // scrollToBottom 节流 100ms
+
+    const behaviors = scrollSpy.mock.calls.map((c) => (c[0] as { behavior?: string } | undefined)?.behavior)
+    expect(behaviors).toContain('smooth') // 会话内=平滑
+    expect(behaviors).not.toContain('auto') // 会话内不用瞬时
+  }, 10000)
+
   // ────────────────────────────────────────────────────
   // 5. 流式输出中显示 loading 状态
   // ────────────────────────────────────────────────────
@@ -523,6 +566,33 @@ describe('ChatView — E2E 关键路径', () => {
     await Promise.resolve(vm.handleMsgCtxAction('copy'))
 
     expect(setClipboard).toHaveBeenCalledWith('目标消息')
+  })
+
+  // BUG（用户反馈 2026-06-28）：编辑用户消息时，原本挂载的 skill 在编辑卡片里不显示，像是丢了。
+  it('编辑态下编辑卡片仍显示原消息挂载的 skill chip', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const { useChatStore } = await import('@/stores/chat')
+    const store = useChatStore()
+    store.messages.push({
+      id: 'u-skill',
+      role: 'user',
+      content: '你吃饭了吗?',
+      timestamp: '2026-01-01T00:00:00Z',
+      metadata: { skills: ['girlfriend'] },
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { editingMsgId: string | null }
+    vm.editingMsgId = 'u-skill'
+    await flushPromises()
+
+    const editCard = wrapper.find('.hc-msg__edit-card')
+    expect(editCard.exists()).toBe(true)
+    // 修复前：编辑卡片只渲染图片附件、漏了 skill → 此断言 RED。
+    expect(editCard.find('.hc-msg__edit-skills').exists()).toBe(true)
+    expect(editCard.text()).toContain('girlfriend')
   })
 
   it('keeps the latest parsed document when an earlier parse resolves later', async () => {
@@ -764,6 +834,11 @@ describe('ChatView — E2E 关键路径', () => {
     await wrapper.find('.hc-composer__send').trigger('click')
     await flushPromises()
 
-    expect(sendSpy).toHaveBeenCalledWith('立即发送', undefined, undefined)
+    // backendText 改为惰性 thunk（BUG-20260628：避免发送「卡一下才上屏」），sendOptions 始终带 backendText 函数
+    expect(sendSpy).toHaveBeenCalledWith(
+      '立即发送',
+      undefined,
+      expect.objectContaining({ backendText: expect.any(Function) }),
+    )
   })
 })

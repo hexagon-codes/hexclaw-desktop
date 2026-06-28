@@ -730,6 +730,34 @@ describe('chat controller modules', () => {
     expect(messages.value[0]?.metadata?.user_feedback).toBe('like')
   })
 
+  it('点赞回退分支：消息确无 backend_message_id 时只本地点亮 + warn，不空调后端', async () => {
+    // 这是「真缺 id」时的正确防御行为（如复读熔断/落库失败等罕见边缘消息）：没有可同步的后端 id，
+    // 就乐观点亮 + warn，不拿不存在的 id 去空调 updateMessageFeedback。
+    // ⚠ 2026-06-26 复核更正：正常路径下 fresh 消息「会丢」是误判——后端流式 done chunk 经
+    // engine/react.go buildReplyMetadata/withAssistantMessageID 已携带 backend_message_id，前端
+    // finalize 时已接到该 fresh 消息上，点刚生成答案的赞会同步后端、不丢。端到端取证见
+    // chat.test.ts「★AUDIT-20260626 fresh WS reply carries backend_message_id」。
+    const updateMessageFeedback = vi.fn().mockResolvedValue({ message: 'ok' })
+    const logger = { warn: vi.fn() }
+    const messages = ref<ChatMessage[]>([
+      { id: 'fastpath-local-xyz', role: 'assistant' as const, content: 'hi', timestamp: '2026-01-01' }, // 无 backend_message_id（边缘消息）
+    ])
+    const controller = createChatMessageController({
+      currentSessionId: ref('s1'),
+      messages,
+      msgSvc: { persistMessage: vi.fn().mockResolvedValue(true), touchSession: vi.fn().mockResolvedValue(undefined) } as any,
+      chatApi: { updateMessageFeedback } as any,
+      logger: logger as any,
+    })
+
+    await controller.setMessageFeedback('fastpath-local-xyz', 'like')
+    // 乐观本地点亮
+    expect(messages.value[0]?.metadata?.user_feedback).toBe('like')
+    // 无后端 id 可同步 → 不空调后端，仅 warn
+    expect(updateMessageFeedback).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalled() // "仅保存在本地"
+  })
+
   it('builds request metadata from thinking and memory toggles', () => {
     const controller = createChatSendDeliveryController({
       chatParams: ref({}),

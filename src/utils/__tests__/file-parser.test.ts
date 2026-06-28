@@ -4,6 +4,7 @@
  * 验证文件解析器的边界情况和安全性
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as XLSX from 'xlsx'
 import { isDocumentFile, parseDocument } from '../file-parser'
 
 // PDF 解析下沉后端：parsePDF 调 @/api/documents.extractDocument（前端不再用 pdfjs）。
@@ -156,5 +157,51 @@ describe('parseDocument', () => {
 
   it('识别 PPTX 为文档', () => {
     expect(isDocumentFile(new File([''], 'slides.pptx'))).toBe(true)
+  })
+})
+
+// 真实 Excel / CSV 解析（SheetJS 前端解析，CJK 安全；构造真表格验证抽取）
+describe('parseDocument Excel/CSV (real content)', () => {
+  function buildWorkbookFile(bookType: 'xlsx' | 'xls', name: string): File {
+    const wb = XLSX.utils.book_new()
+    const cities = XLSX.utils.aoa_to_sheet([
+      ['城市', '人口万', '特色'],
+      ['杭州', 1200, '西湖与电子商务'],
+      ['成都', 2100, '大熊猫与火锅'],
+    ])
+    XLSX.utils.book_append_sheet(wb, cities, '城市表')
+    const en = XLSX.utils.aoa_to_sheet([
+      ['Product', 'Price'],
+      ['Widget', 9.99],
+    ])
+    XLSX.utils.book_append_sheet(wb, en, 'Products')
+    const buf = XLSX.write(wb, { bookType, type: 'array' }) as ArrayBuffer
+    return new File([buf], name)
+  }
+
+  it('解析真实 .xlsx：多 sheet + CJK 单元格不乱码（SheetJS sheet_to_csv）', async () => {
+    const res = await parseDocument(buildWorkbookFile('xlsx', 'cities.xlsx'))
+    expect(res.text).toContain('[Sheet: 城市表]')
+    expect(res.text).toContain('成都')
+    expect(res.text).toContain('大熊猫与火锅')
+    expect(res.text).toContain('1200')
+    // 第二个 sheet 也应抽取
+    expect(res.text).toContain('[Sheet: Products]')
+    expect(res.text).toContain('Widget')
+    expect(res.pageCount).toBe(2) // sheet 数
+  })
+
+  it('解析老版 .xls（BIFF）：同样走 SheetJS，CJK 安全', async () => {
+    const res = await parseDocument(buildWorkbookFile('xls', 'cities.xls'))
+    expect(res.text).toContain('成都')
+    expect(res.text).toContain('大熊猫与火锅')
+  })
+
+  it('解析真实 CSV：中文表格按原文逐行保留（parsePlainText）', async () => {
+    const csv = '城市,人口万,特色\n哈尔滨,1000,冰雪旅游与中央大街\n'
+    const res = await parseDocument(new File([csv], 'cities.csv', { type: 'text/csv' }))
+    expect(res.text).toBe(csv)
+    expect(res.text).toContain('哈尔滨')
+    expect(res.text).toContain('冰雪旅游与中央大街')
   })
 })

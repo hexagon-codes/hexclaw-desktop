@@ -51,6 +51,7 @@ export function createBoundChatStreamController(params: {
       sessionId: string
       metadata?: Record<string, unknown>
       toolCalls?: ChatMessage['tool_calls']
+      blocks?: ChatMessage['blocks']
       agentName?: string
       reasoning?: string
     }) {

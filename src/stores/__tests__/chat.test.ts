@@ -741,6 +741,36 @@ describe('useChatStore', () => {
     expect(store.messages[0]?.metadata?.user_feedback).toBe('like')
   })
 
+  it('★AUDIT-20260626 fresh WS reply carries backend_message_id → 点刚生成答案的赞同步后端(不丢)', async () => {
+    // 真实后端流式 done chunk 经 engine/react.go buildReplyMetadata/withAssistantMessageID
+    // 注入 backend_message_id；前端必须把它接到 fresh 消息上，否则「点刚收到答案的赞」走
+    // local-only 分支 → 重载即丢。这是「会话隔离/重载丢」缺口的流式层端到端取证。
+    ensureWebSocketConnected.mockResolvedValue(true)
+    openWebSocketStream.mockImplementationOnce(
+      (_text: unknown, _sid: unknown, _params: unknown, _role: unknown, _att: unknown, callbacks: any) => {
+        callbacks?.onChunk('你好！')
+        return {
+          cancel: vi.fn(),
+          done: Promise.resolve({
+            content: '你好！',
+            metadata: { backend_message_id: 'ws-fresh-1' },
+          }),
+        }
+      },
+    )
+
+    const store = useChatStore()
+    store.currentSessionId = 's1'
+    const assistantMsg = await store.sendMessage('hi')
+
+    // fresh 消息应已带 backend_message_id（来自流式 done chunk metadata）
+    expect(assistantMsg?.metadata?.backend_message_id).toBe('ws-fresh-1')
+
+    // 点刚生成答案的赞 → 必须同步后端（否则重载丢）
+    await store.setMessageFeedback(assistantMsg!.id, 'like')
+    expect(updateMessageFeedback).toHaveBeenCalledWith('ws-fresh-1', 'like')
+  })
+
   it('reverts local feedback when backend sync fails', async () => {
     updateMessageFeedback.mockRejectedValueOnce(new Error('sync failed'))
     loadMessages.mockResolvedValueOnce([

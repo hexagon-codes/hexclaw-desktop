@@ -1,7 +1,7 @@
 import { env } from '@/config/env'
 import { logger } from '@/utils/logger'
 import { DESKTOP_USER_ID } from '@/constants'
-import type { ToolCall } from '@/types'
+import type { ToolCall, ContentBlock } from '@/types'
 
 type ChunkCallback = (message: WsServerMessage) => void
 type ReplyCallback = (message: WsServerMessage) => void
@@ -47,6 +47,7 @@ interface WsServerMessage {
   session_id?: string
   usage?: WsUsage
   tool_calls?: ToolCall[]
+  blocks?: ContentBlock[]
   metadata?: Record<string, unknown>
 }
 
