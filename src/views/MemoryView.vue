@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Archive, ArchiveRestore, Brain, Search, Save, Pencil, Trash2, X, Check } from 'lucide-vue-next'
+import { Archive, ArchiveRestore, Brain, Search, Save, Pencil, Trash2, X, Check, Pin, PinOff } from 'lucide-vue-next'
 import {
   getMemoryEntries,
   createMemoryEntry,
@@ -11,6 +11,8 @@ import {
   deleteLegacyMemoryEntry,
   archiveMemoryEntry,
   restoreMemoryEntry,
+  pinMemoryEntry,
+  unpinMemoryEntry,
   clearAllMemory,
   searchMemory,
 } from '@/api/memory'
@@ -87,9 +89,10 @@ const TYPE_COLORS: Record<string, string> = {
   fact: '#06b6d4',
   instruction: '#f59e0b',
   context: 'var(--hc-text-muted)',
+  rule: '#ef4444',
 }
 
-const MEMORY_TYPES: MemoryType[] = ['identity', 'preference', 'fact', 'instruction', 'context']
+const MEMORY_TYPES: MemoryType[] = ['rule', 'identity', 'preference', 'instruction', 'fact', 'context']
 const MEMORY_SOURCES: MemorySource[] = ['manual', 'chat_explicit', 'chat_extract', 'system']
 
 // ── HcSelect 投影（替代原生 <select>，value 一律 string）──
@@ -336,6 +339,22 @@ async function handleRestoreEntry(entry: MemoryEntry) {
     await loadMemory()
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('memory.restoreFailed', 'Failed to restore memory')
+  } finally {
+    movingId.value = null
+  }
+}
+
+// U1：置顶 / 取消置顶（常驻逃生口，反思永不自动移动）。复用 movingId 串行化。
+async function handleTogglePin(entry: MemoryEntry) {
+  if (movingId.value) return
+  movingId.value = entry.id
+  errorMsg.value = ''
+  try {
+    await (entry.pinned ? unpinMemoryEntry(entry.id) : pinMemoryEntry(entry.id))
+    emit('memory:updated')
+    await loadMemory()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : t('memory.pinFailed', 'Failed to pin memory')
   } finally {
     movingId.value = null
   }
@@ -657,6 +676,14 @@ async function handleSearch() {
                     >
                       {{ t(`memory.type.${entry.type}`, entry.type) }}
                     </span>
+                    <span
+                      v-if="entry.pinned"
+                      data-testid="memory-pinned-badge"
+                      class="text-[10px] px-1.5 py-0.5 rounded font-medium inline-flex items-center gap-0.5"
+                      :style="{ background: 'color-mix(in srgb, var(--hc-accent) 14%, transparent)', color: 'var(--hc-accent)' }"
+                    >
+                      <Pin :size="9" /> {{ t('memory.pinned', '常驻') }}
+                    </span>
                     <span class="text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
                       {{ formatTime(entry.created_at, true) }}
                     </span>
@@ -693,6 +720,18 @@ async function handleSearch() {
                       @click="requestArchiveEntry(entry)"
                     >
                       <Archive :size="12" />
+                    </button>
+                    <button
+                      v-if="entry.status !== 'archived'"
+                      data-testid="memory-pin-toggle"
+                      class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                      :style="{ color: entry.pinned ? 'var(--hc-accent)' : 'var(--hc-text-muted)' }"
+                      :disabled="movingId === entry.id"
+                      :title="entry.pinned ? t('memory.unpinMemory', '取消置顶') : t('memory.pinMemory', '置顶（常驻）')"
+                      @click="handleTogglePin(entry)"
+                    >
+                      <PinOff v-if="entry.pinned" :size="12" />
+                      <Pin v-else :size="12" />
                     </button>
                   </template>
                   <button

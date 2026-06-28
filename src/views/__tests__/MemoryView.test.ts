@@ -16,6 +16,8 @@ const {
   deleteLegacyMemoryEntry,
   archiveMemoryEntry,
   restoreMemoryEntry,
+  pinMemoryEntry,
+  unpinMemoryEntry,
   clearAllMemory,
   searchMemory,
 } = vi.hoisted(() => ({
@@ -27,6 +29,8 @@ const {
   deleteLegacyMemoryEntry: vi.fn(),
   archiveMemoryEntry: vi.fn(),
   restoreMemoryEntry: vi.fn(),
+  pinMemoryEntry: vi.fn(),
+  unpinMemoryEntry: vi.fn(),
   clearAllMemory: vi.fn(),
   searchMemory: vi.fn(),
 }))
@@ -40,6 +44,8 @@ vi.mock('@/api/memory', () => ({
   deleteLegacyMemoryEntry,
   archiveMemoryEntry,
   restoreMemoryEntry,
+  pinMemoryEntry,
+  unpinMemoryEntry,
   clearAllMemory,
   searchMemory,
 }))
@@ -709,5 +715,56 @@ describe('MemoryView', () => {
     expect(wrapper.text()).not.toContain('全部类型')
     expect(wrapper.text()).not.toContain('全部来源')
     expect(wrapper.findAll('select')).toHaveLength(0)
+  })
+
+  // ── U1：rule 类型 + Pinned 展示/置顶 ──
+  it('renders the rule type and a pinned badge for pinned/rule entries', async () => {
+    getMemoryEntries.mockResolvedValue({
+      entries: [
+        { ...entry('m-1', '务必用简体中文', 'rule'), pinned: true },
+        entry('m-2', '普通事实', 'fact'),
+      ],
+      summary: '',
+      capacity: { used: 2, max: 200 },
+      total: 2,
+      has_more: false,
+    })
+    const wrapper = mountMemoryView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('规则') // memory.type.rule
+    expect(wrapper.findAll('[data-testid="memory-pinned-badge"]')).toHaveLength(1)
+  })
+
+  it('pins an unpinned entry and unpins a pinned one via the toggle', async () => {
+    getMemoryEntries.mockResolvedValue({
+      entries: [entry('m-1', '可置顶事实', 'fact')],
+      summary: '',
+      capacity: { used: 1, max: 200 },
+      total: 1,
+      has_more: false,
+    })
+    pinMemoryEntry.mockResolvedValue({ message: 'ok' })
+    const wrapper = mountMemoryView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="memory-pin-toggle"]').trigger('click')
+    await flushPromises()
+    expect(pinMemoryEntry).toHaveBeenCalledWith('m-1')
+
+    // 切到已置顶 → 再点应取消置顶。
+    getMemoryEntries.mockResolvedValue({
+      entries: [{ ...entry('m-1', '可置顶事实', 'fact'), pinned: true }],
+      summary: '',
+      capacity: { used: 1, max: 200 },
+      total: 1,
+      has_more: false,
+    })
+    unpinMemoryEntry.mockResolvedValue({ message: 'ok' })
+    const wrapper2 = mountMemoryView()
+    await flushPromises()
+    await wrapper2.find('[data-testid="memory-pin-toggle"]').trigger('click')
+    await flushPromises()
+    expect(unpinMemoryEntry).toHaveBeenCalledWith('m-1')
   })
 })

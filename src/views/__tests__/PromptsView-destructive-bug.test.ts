@@ -1,12 +1,8 @@
 /**
- * BUG PROOF (RED): PromptsView 两处破坏性操作缺保护。
+ * BUG PROOF (RED): PromptsView 删除 Prompt（垃圾桶按钮 → removePrompt）直接调 deletePrompt，
+ * 无任何 window.confirm。仓库其它页（McpView confirm / AgentsView ConfirmDialog）都有删除确认，本页缺。
  *
- *  1) 删除 Prompt（垃圾桶按钮 → removePrompt）直接调 deletePrompt，无任何 window.confirm。
- *     仓库其它页（McpView confirm / AgentsView ConfirmDialog）都有删除确认，本页缺。
- *  2) 记忆卡的「停用」按钮（toggleMemoryEnabled）实际调用 deleteMemory —— 把不可逆删除
- *     伪装成可逆开关，用户点「停用」即永久丢数据。
- *
- * 两个用例都断言「正确行为」，当前会 FAIL —— 失败即证明 bug 存在。
+ * 砍薄版（§5）：原「记忆卡删除被伪装成停用」一案随记忆薄版移除而下线（记忆管理已迁至 MemoryView）。
  */
 import { describe, it, expect, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -15,23 +11,17 @@ import { createI18n } from 'vue-i18n'
 import PromptsView from '@/views/PromptsView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
-const { getAllPrompts, getMemories, deletePrompt, deleteMemory, upsertPrompt, upsertMemory } =
+const { getAllPrompts, deletePrompt, upsertPrompt } =
   vi.hoisted(() => ({
     getAllPrompts: vi.fn(),
-    getMemories: vi.fn(),
     deletePrompt: vi.fn(),
-    deleteMemory: vi.fn(),
     upsertPrompt: vi.fn(),
-    upsertMemory: vi.fn(),
   }))
 
 vi.mock('@/api/prompts', () => ({
   getAllPrompts,
-  getMemories,
   deletePrompt,
-  deleteMemory,
   upsertPrompt,
-  upsertMemory,
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -86,12 +76,9 @@ const onePrompt = {
   enabled: true,
   updated_at: '',
 }
-const oneMemory = { id: 'm1', kind: 'fact' as const, content: '记住这条', updated_at: '' }
-
 describe('BUG: PromptsView destructive actions lack guards', () => {
   it('deleting a prompt must ask for confirmation, and cancel must abort the delete', async () => {
     getAllPrompts.mockResolvedValue({ prompts: [onePrompt], total: 1 })
-    getMemories.mockResolvedValue({ memories: [], total: 0 })
     deletePrompt.mockResolvedValue({ deleted: 'p1' })
     // 用户点「取消」：正确实现应中止删除。
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
@@ -110,37 +97,4 @@ describe('BUG: PromptsView destructive actions lack guards', () => {
     ).not.toHaveBeenCalled()
   })
 
-  it('a memory delete must be confirmed and must NOT be mislabeled as a reversible "停用"', async () => {
-    getAllPrompts.mockResolvedValue({ prompts: [], total: 0 })
-    getMemories.mockResolvedValue({ memories: [oneMemory], total: 1 })
-    deleteMemory.mockResolvedValue({ deleted: 'm1' })
-    // 用户点「取消」：正确实现应中止删除。
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
-
-    const wrapper = mountView()
-    await flushPromises()
-
-    // 切到「记忆」子 tab
-    await wrapper.find('[data-tab="memories"]').trigger('click')
-    await flushPromises()
-
-    const destructiveBtn = wrapper.find('.hc-mem-card__crow .hc-btn--ghost')
-    expect(destructiveBtn.exists(), 'expected the memory card destructive button').toBe(true)
-
-    // (a) 删除操作不得被伪装成可逆的「停用」——当前文案是「停用」→ FAIL。
-    expect(
-      destructiveBtn.text(),
-      'a button that deletes a memory must be labeled 删除, not the misleading 停用',
-    ).not.toContain('停用')
-
-    await destructiveBtn.trigger('click')
-    await flushPromises()
-
-    // (b) 当前实现：「停用」直接 deleteMemory、无 confirm → 两条断言都 FAIL。
-    expect(confirmSpy, 'deleting a memory must prompt for confirmation').toHaveBeenCalled()
-    expect(
-      deleteMemory,
-      'cancelling the confirmation must abort the delete — irreversible data loss must not happen on a misclick',
-    ).not.toHaveBeenCalled()
-  })
 })

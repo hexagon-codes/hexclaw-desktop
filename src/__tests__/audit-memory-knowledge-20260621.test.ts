@@ -51,7 +51,7 @@ import {
   restoreMemoryEntry,
 } from '@/api/memory'
 import { searchKnowledge, getDocument, reindexDocument } from '@/api/knowledge'
-import { getMemories } from '@/api/prompts'
+import * as promptsApi from '@/api/prompts'
 import type { MemoryEntry } from '@/types'
 
 beforeEach(() => {
@@ -148,23 +148,19 @@ describe('B-2 knowledge/search 包裹键与后端 Fix 16 对齐', () => {
 })
 
 // ════════════════════════════════════════════════════════════════════
-// B-3 [中][对齐/冗余] 两套独立"记忆"路由共存，语义与字段完全不同
-//
-// 后端同时注册：
-//   单数 /api/v1/memory*   → FileMemory（server.go:561-570，MEMORY.md 文件记忆，
-//                            字段 id/type/source/hit_count/status/archived_at）
-//   复数 /api/v1/memories  → library.MemoryStore §11.8（server.go:534-537，SQLite 记忆薄版，
-//                            字段 id/kind('standing'|'fact')/content/updated_at）
-// 前端两者都用，但走不同模块、不同 UI：
-//   - src/api/memory.ts（MemoryView）→ 单数
-//   - src/api/prompts.ts:71-84（UserMemory）→ 复数
-// 不是同一资源的两套命名冗余，而是两个独立功能；但命名极易混淆（memory vs memories），
-// 且字段无任何交集（type vs kind / source 无 / created_at vs 仅 updated_at）。
-// 取证：两条路径返回结构互不兼容，证明它们不可互换。
+// B-3 [已解决·砍薄版 §5] 旧「两套记忆系统」（单数 /memory FileMemory + 复数 /memories 薄版）
+// 的命名混淆已消除：记忆薄版（library.MemoryStore + /api/v1/memories + prompts.ts 的 UserMemory）
+// 整体移除并迁入统一文件记忆。本测试守住「不回归」：prompts.ts 不得再导出任何记忆 API，
+// 唯一记忆系统 = memory.ts（单数 /api/v1/memory，FileMemory 形状）。
 // ════════════════════════════════════════════════════════════════════
-describe('B-3 单数 /memory 与复数 /memories 是两个不同资源（命名混淆）', () => {
-  it('[证据] /memory 走 FileMemory 形状，/memories 走 library.Memory 形状，字段无交集', async () => {
-    // 单数：FileMemory（type/source/hit_count/status）
+describe('B-3 砍薄版后唯一记忆系统 = FileMemory（薄版命名混淆已消除）', () => {
+  it('[不回归] prompts.ts 不再导出记忆薄版 API（getMemories/upsertMemory/deleteMemory/UserMemory）', () => {
+    expect('getMemories' in promptsApi).toBe(false)
+    expect('upsertMemory' in promptsApi).toBe(false)
+    expect('deleteMemory' in promptsApi).toBe(false)
+  })
+
+  it('[证据] 唯一记忆路径 /api/v1/memory 走 FileMemory 形状（type/source/hit_count/status）', async () => {
     mockApiGet.mockResolvedValueOnce({
       entries: [
         { id: 'm-7', content: 'a', type: 'fact', source: 'manual', created_at: '', updated_at: '', hit_count: 0, status: 'active' },
@@ -177,19 +173,7 @@ describe('B-3 单数 /memory 与复数 /memories 是两个不同资源（命名�
     const fileMem = await getMemoryEntries()
     expect(fileMem.entries[0]).toHaveProperty('type')
     expect(fileMem.entries[0]).toHaveProperty('source')
-
-    // 复数：library.Memory（kind / 无 type / 无 source）
-    mockApiGet.mockResolvedValueOnce({
-      memories: [{ id: 'u1', kind: 'standing', content: 'b', updated_at: '2026-06-21' }],
-      total: 1,
-    })
-    const userMem = await getMemories()
-    expect(userMem.memories[0]).toHaveProperty('kind')
-    expect(userMem.memories[0]).not.toHaveProperty('type')
-    expect(userMem.memories[0]).not.toHaveProperty('source')
-    // 调用的是不同 endpoint
     expect(mockApiGet).toHaveBeenNthCalledWith(1, '/api/v1/memory')
-    expect(mockApiGet).toHaveBeenNthCalledWith(2, '/api/v1/memories')
   })
 })
 

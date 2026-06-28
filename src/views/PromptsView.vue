@@ -1,27 +1,22 @@
 <script setup lang="ts">
 /**
- * §11.8 交互层：Prompt 库 + 记忆薄版管理页（集成页内 Tab）。
- *   - Prompt：一库两 type（prompt 片段 / command 带参，body 用 $ARGUMENTS 占位）。
- *   - 记忆：standing（每轮全量注入）/ fact（命中注入），后端每轮组 prompt 时注入。
- * 全部走 src/api/prompts.ts 的服务端接口，运营增删不发版。
+ * §11.8 交互层：Prompt 库管理页（一库两 type）。
+ *   - Prompt：prompt 片段 / command 带参（body 用 $ARGUMENTS 占位）。
+ * 走 src/api/prompts.ts 服务端接口，运营增删不发版。
+ *
+ * 砍薄版（§5）+ U2 IA 重定位：旧记忆薄版 Tab 已移除，长期记忆统一在「长期记忆」(MemoryView) 管理。
  */
 import { ref, onMounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Trash2, Pencil, X, FileText, Brain } from 'lucide-vue-next'
+import { Trash2, Pencil, X, FileText } from 'lucide-vue-next'
 import {
   getAllPrompts,
   upsertPrompt,
   deletePrompt,
   type Prompt,
   type PromptType,
-  getMemories,
-  upsertMemory,
-  deleteMemory,
-  type UserMemory,
-  type MemoryKind,
 } from '@/api/prompts'
-import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
@@ -35,17 +30,6 @@ const props = withDefaults(defineProps<{
 }>(), {
   filter: '',
 })
-
-const emit = defineEmits<{ (e: 'section-change', section: 'prompts' | 'memories'): void }>()
-
-type Section = 'prompts' | 'memories'
-const section = ref<Section>('prompts')
-
-// 二级 tab（统一 UnderlineTabs）：传原始计数即可，0 时由 UnderlineTabs 统一隐藏徽标。
-const promptSectionTabs = computed(() => [
-  { key: 'prompts', label: t('prompts.tabAll', '全部'), count: prompts.value.length },
-  { key: 'memories', label: t('prompts.tabMemories', '记忆'), count: memories.value.length },
-])
 
 // ── 顶栏统一搜索（IntegrationView 注入）──
 const query = computed(() => (props.filter ?? '').toLowerCase().trim())
@@ -76,8 +60,6 @@ async function loadPrompts() {
 }
 
 function newPrompt() {
-  // 切到「全部」再打开新建表单（toolbar「新建 Prompt」在任意子 tab 都可触发）
-  section.value = 'prompts'
   editing.value = {
     type: 'prompt',
     title: '',
@@ -90,11 +72,8 @@ function newPrompt() {
   }
 }
 
-// 监听 section 变化，通知父级（用于工具栏按钮文字切换）
-watch(section, (s) => emit('section-change', s))
-
 // 暴露给父级 IntegrationView 工具栏调用
-defineExpose({ newPrompt, addMemory })
+defineExpose({ newPrompt })
 
 function editPrompt(p: Prompt) {
   editing.value = { ...p }
@@ -184,81 +163,11 @@ const editingModelModel = computed<string>({
   set: (v) => { if (editing.value) editing.value.model = v },
 })
 
-// ── 记忆薄版 ──
-const memories = ref<UserMemory[]>([])
-const loadingMem = ref(false)
-const editingMem = ref<Partial<UserMemory> | null>(null) // 非空 = 正在编辑记忆
-
-// 按正文过滤记忆列表
-const filteredMemories = computed(() => {
-  const q = query.value
-  if (!q) return memories.value
-  return memories.value.filter((m) => m.content.toLowerCase().includes(q))
-})
-
-async function loadMemories() {
-  loadingMem.value = true
-  try {
-    memories.value = (await getMemories()).memories ?? []
-  } finally {
-    loadingMem.value = false
-  }
-}
-
-// 新建记忆（由工具栏「添加记忆」按钮调用）
-function addMemory() {
-  section.value = 'memories'
-  editingMem.value = { kind: 'fact', content: '' }
-}
-
-function editMemory(m: UserMemory) {
-  editingMem.value = { ...m }
-}
-
-const memoryKindOptions = computed(() => [
-  { value: 'standing', label: t('memories.kindStanding', '常驻 · 每轮注入') },
-  { value: 'fact', label: t('memories.kindFact', '命中 · 关键词触发') },
-])
-const editingMemKindModel = computed<string>({
-  get: () => editingMem.value?.kind ?? 'fact',
-  set: (v) => { if (editingMem.value) editingMem.value.kind = v as MemoryKind },
-})
-
-async function saveMemory() {
-  const e = editingMem.value
-  if (!e || !e.content?.trim()) return
-  actionError.value = ''
-  try {
-    await upsertMemory({
-      id: e.id,
-      kind: (e.kind as MemoryKind) ?? 'fact',
-      content: e.content.trim(),
-    })
-    editingMem.value = null
-    await loadMemories()
-  } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('memories.saveFailed', '保存失败，请重试')
-  }
-}
-
-async function removeMemory(id: string) {
-  // 记忆删除不可逆：先确认再删（后端暂无 enabled 字段，无"停用"软态，删除即永久）。
-  if (!confirm(t('memories.deleteConfirm', '确定删除该记忆？此操作不可恢复。'))) return
-  actionError.value = ''
-  try {
-    await deleteMemory(id)
-    await loadMemories()
-  } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('memories.deleteFailed', '删除失败，请重试')
-  }
-}
-
 const route = useRoute()
 const router = useRouter()
 
 onMounted(() => {
   loadPrompts()
-  loadMemories()
   // 从会话框 ✨「新建模板」跳转过来（?new=1）→ 自动打开新建 Prompt 表单，并清掉 query。
   // 可选链：单测里不装 router 时 useRoute/useRouter 为 undefined，安全跳过。
   if (route?.query?.new === '1') {
@@ -271,15 +180,9 @@ onMounted(() => {
 <template>
   <div class="hc-prompts">
     <p v-if="actionError" role="alert" style="color: var(--hc-error); font-size: 12.5px; margin: 0 0 8px;">{{ actionError }}</p>
-    <!-- 子分段：全部 / 记忆（统一 UnderlineTabs，滑动下划线） -->
-    <UnderlineTabs
-      :tabs="promptSectionTabs"
-      :model-value="section"
-      @update:model-value="section = $event as Section"
-    />
 
     <!-- ── Prompt 库 ── -->
-    <section v-if="section === 'prompts'" class="hc-prompts__panel">
+    <section class="hc-prompts__panel">
 
       <LoadingState v-if="loadingPrompts" />
       <EmptyState
@@ -308,54 +211,6 @@ onMounted(() => {
           </div>
         </li>
       </ul>
-
-    </section>
-
-    <!-- ── 记忆薄版 ── -->
-    <section v-else class="hc-prompts__panel">
-      <!-- 高亮提示条（锚点 prototype .hl，常驻 / 命中 口径） -->
-      <div class="hc-prompts__hl">
-        <p>{{
-          t(
-            'memories.hint',
-            '用户手写、每轮自动注入的记忆。常驻=每轮全量带上；命中=含关键词才带上（省 token）。',
-          )
-        }}</p>
-      </div>
-
-      <LoadingState v-if="loadingMem" />
-      <EmptyState
-        v-else-if="filteredMemories.length === 0 && !editingMem"
-        :icon="Brain"
-        :title="t('memories.empty', '暂无记忆，添加第一条吧。')"
-      />
-
-      <!-- 记忆卡网格（对齐原型 .cxcards） -->
-      <div v-else-if="filteredMemories.length > 0" class="hc-mem-cards">
-        <div v-for="m in filteredMemories" :key="m.id" class="hc-mem-card">
-          <!-- 首行：tag + 触发词 meta（fact 型才有） -->
-          <div class="hc-mem-card__top">
-            <span
-              class="hc-tag"
-              :class="m.kind === 'standing' ? 'hc-tag--standing' : 'hc-tag--hit'"
-            >{{ m.kind === 'standing'
-              ? t('memories.kindStanding', '常驻 · 每轮注入')
-              : t('memories.kindFact', '命中 · 关键词触发')
-            }}</span>
-          </div>
-          <!-- 正文 -->
-          <div class="hc-mem-card__body">{{ m.content }}</div>
-          <!-- 操作行（对齐原型 .crow：编辑 / 停用） -->
-          <div class="hc-mem-card__crow">
-            <button class="hc-btn hc-btn--sm" @click="editMemory(m)">
-              {{ t('memories.edit', '编辑') }}
-            </button>
-            <button class="hc-btn hc-btn--sm hc-btn--ghost" @click="removeMemory(m.id)">
-              {{ t('memories.delete', '删除') }}
-            </button>
-          </div>
-        </div>
-      </div>
 
     </section>
 
@@ -500,66 +355,6 @@ onMounted(() => {
       </Transition>
     </Teleport>
 
-    <!-- 新建/编辑记忆弹窗（居中，同 Prompt 风格） -->
-    <Teleport to="body">
-      <Transition name="modal">
-        <div
-          v-if="editingMem"
-          class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm"
-          @click.self="editingMem = null"
-        >
-          <div
-            class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden"
-            :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
-          >
-            <div
-              class="flex items-center justify-between px-5 py-4 border-b"
-              :style="{ borderColor: 'var(--hc-border)' }"
-            >
-              <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">
-                {{ editingMem.id ? t('memories.editMemory', '编辑记忆') : t('memories.newMemory', '添加记忆') }}
-              </h2>
-              <button
-                class="p-1 rounded-md hover:bg-white/5"
-                :style="{ color: 'var(--hc-text-muted)' }"
-                @click="editingMem = null"
-              >
-                <X :size="17" />
-              </button>
-            </div>
-            <div class="px-5 py-4 hc-modal-body">
-              <div class="hc-field hc-field--row">
-                <div>
-                  <label>{{ t('prompts.fType', '类型') }}</label>
-                  <HcSelect v-model="editingMemKindModel" :options="memoryKindOptions" />
-                </div>
-              </div>
-              <div class="hc-field">
-                <label>{{ t('prompts.fBody', '正文') }}</label>
-                <textarea
-                  v-model="editingMem.content"
-                  rows="3"
-                  :placeholder="t('memories.ph', '记住一条…（如：用户偏好简洁回答）')"
-                />
-              </div>
-            </div>
-            <div
-              class="flex items-center justify-end gap-2 px-5 py-3.5 border-t"
-              :style="{ borderColor: 'var(--hc-border)' }"
-            >
-              <button class="hc-btn" @click="editingMem = null">{{ t('common.cancel', '取消') }}</button>
-              <button
-                class="hc-btn hc-btn--primary"
-                :disabled="!editingMem.content?.trim()"
-                @click="saveMemory"
-              >
-                {{ t('common.create', '创建') }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
   </div>
 </template>
 
