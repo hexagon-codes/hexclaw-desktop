@@ -1,6 +1,6 @@
 # HexClaw Desktop — 开发命令
 
-.PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src
+.PHONY: dev build clean sidecar sidecar-all sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src install test refresh-icon
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
 HEXCLAW_REF ?= refs/tags/v0.4.7
@@ -181,4 +181,19 @@ clean:
 install:
 	pnpm install
 	cd src-tauri && cargo fetch
+
+# macOS：刷新已安装 App 的图标缓存。
+# 现象：反复装机后 Finder/应用程序里 HexClaw.app 显示通用占位图标，但 Dock 里正常显示蟹图标。
+# 根因：bundle 的 Contents/Resources/icon.icns 完好（Dock 取的就是它，能正常渲染），是 macOS
+#   icon-services 缓存在「同路径 + 同 bundle id 反复覆盖安装」时未失效，残留旧占位图 —— 非构建缺陷。
+# 修复：用 Launch Services 强制重注册并重启 Dock/Finder 让其重读 bundle 图标。
+APP_INSTALL_PATH ?= /Applications/HexClaw.app
+LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+refresh-icon:
+	@test -d "$(APP_INSTALL_PATH)" || { echo "未找到 $(APP_INSTALL_PATH)（先装机：pnpm tauri build 后拷到 /Applications）"; exit 1; }
+	"$(LSREGISTER)" -f "$(APP_INSTALL_PATH)"
+	touch "$(APP_INSTALL_PATH)"
+	killall Dock Finder 2>/dev/null || true
+	@echo "✓ 已重注册并重启 Dock/Finder。若仍是占位图标（icon-services 缓存被深度污染），执行带 sudo 的彻底清缓存："
+	@echo "    sudo rm -rf /Library/Caches/com.apple.iconservices.store && sudo find /private/var/folders -name com.apple.dock.iconcache -delete; killall Dock Finder"
 

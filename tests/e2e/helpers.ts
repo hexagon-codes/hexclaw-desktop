@@ -45,9 +45,21 @@ export async function api(
     'X-User-ID': USER_ID,
   }
 
+  // 与 wsChat 同口径：HTTP /chat 默认 routing 走 app 的 llm.default（本机默认本地 provider，
+  // 未安装本地 runtime 即 400）。HEX_E2E_PROVIDER / HEX_E2E_MODEL 把真机链路定向到已配置的云端
+  // provider 及其模型（body 已显式给的字段优先，不覆盖）。
+  let finalBody = body
+  if (body !== undefined && path.startsWith('/api/v1/chat')) {
+    finalBody = {
+      ...(process.env.HEX_E2E_PROVIDER ? { provider: process.env.HEX_E2E_PROVIDER } : {}),
+      ...(process.env.HEX_E2E_MODEL ? { model: process.env.HEX_E2E_MODEL } : {}),
+      ...body,
+    }
+  }
+
   const init: RequestInit = { method, headers }
-  if (body !== undefined) {
-    init.body = JSON.stringify(body)
+  if (finalBody !== undefined) {
+    init.body = JSON.stringify(finalBody)
   }
 
   const res = await fetch(url, init)
@@ -103,10 +115,13 @@ export function wsChat(
   content: string,
   options: WsChatOptions = {},
 ): Promise<ChatResult> {
+  // 优先使用已配置的 provider/model：默认 routing 走 app 的 llm.default（本机默认是本地 provider，
+  // 未安装本地 runtime 时会 400）。HEX_E2E_PROVIDER / HEX_E2E_MODEL 可把真机链路定向到已配置的
+  // 云端 provider 及其模型，不改 app 默认配置；显式 options 仍最高优先。
   const {
     sessionId,
-    provider,
-    model,
+    provider = process.env.HEX_E2E_PROVIDER || undefined,
+    model = process.env.HEX_E2E_MODEL || undefined,
     metadata,
     timeoutMs = 120_000,
   } = options

@@ -23,7 +23,8 @@
     "lint:eslint": "eslint . --cache",
     "lint:eslint:fix": "eslint . --fix --cache",
     "format": "prettier --write --experimental-cli src/",
-    "release:check": "node ./scripts/ci/verify-release.mjs"
+    "release:check": "node ./scripts/ci/verify-release.mjs",
+    "test:webkit-feel": "playwright test -c playwright.webkit.config.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.10.1",
