@@ -6,7 +6,6 @@
  *   UI-1/2 孤儿组件（SettingsSecurity/SettingsNotification，10 toggle 不可达）→ 删除死代码
  *   UI-3   WebhookPanel 创建发后端不收的 url/events → createWebhook 去掉 url/events + 补非空 prompt
  *   UI-4   CanvasView 整页不可达死代码（被 WorkflowPanel 取代）→ 删除
- *   UI-5   IMChannels 绑定/解绑空 catch 吞错 → catch 写 errorMsg surface
  *   UI-6   SkillsView 卸载失败静默 → catch 写 statusNotice surface
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -60,20 +59,10 @@ describe('UI-4 CanvasView 不可达死代码已移除', () => {
   })
 })
 
-// UI-5 [中][已修] IMChannels 绑定/解绑失败不再静默——catch 写 errorMsg surface。
-describe('UI-5 IMChannelsView Agent 绑定/解绑失败已 surface（不再空 catch）', () => {
-  it('bindAgentToInstance 的 catch 把失败写入 errorMsg 提示用户', () => {
-    const src = read('views/IMChannelsView.vue')
-    const fn = src.slice(src.indexOf('async function bindAgentToInstance'), src.indexOf('async function bindAgentToInstance') + 1200)
-    const catchBlock = fn.slice(fn.lastIndexOf('} catch'))
-    expect(catchBlock).toContain('errorMsg.value')
-    expect(catchBlock, '不应再是 /* non-critical */ 空吞错').not.toMatch(/catch\s*\{\s*\/\/ On failure[^}]*\}\s*await loadAgentData/)
-  })
-})
-
 // UI-8 [中][已修] PromptsView 增删改不再无 try/catch——失败 surface 到 actionError。
+// 砍薄版（§5）：saveMemory/removeMemory 随记忆薄版 Tab 移除（记忆管理已迁至 MemoryView）。
 describe('UI-8 PromptsView 增删改失败已 surface（不再无 try/catch 静默）', () => {
-  const fns = ['savePrompt', 'removePrompt', 'saveMemory', 'removeMemory']
+  const fns = ['savePrompt', 'removePrompt']
   it.each(fns)('%s 有 try/catch 且失败写 actionError', (name) => {
     const src = read('views/PromptsView.vue')
     const fn = src.slice(src.indexOf(`async function ${name}`), src.indexOf(`async function ${name}`) + 700)

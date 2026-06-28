@@ -220,50 +220,6 @@ describe('wechat QR scan code removal (source-level verification)', () => {
   })
 })
 
-describe('IMChannelsView QR scan code removal', () => {
-  const viewSource = fs.readFileSync(
-    path.resolve(__dirname, '../../views/IMChannelsView.vue'),
-    'utf-8',
-  )
-
-  it('no wxQR reactive state variables', () => {
-    expect(viewSource).not.toContain('wxQRRunning')
-    expect(viewSource).not.toContain('wxQRDone')
-    expect(viewSource).not.toContain('wxQRText')
-    expect(viewSource).not.toContain('wxQRStatus')
-    expect(viewSource).not.toContain('wxQRError')
-  })
-
-  it('no startWxQRSetup or retryWxQR functions', () => {
-    expect(viewSource).not.toContain('startWxQRSetup')
-    expect(viewSource).not.toContain('retryWxQR')
-    expect(viewSource).not.toContain('resetWxQRState')
-    expect(viewSource).not.toContain('autoCreateAfterQR')
-  })
-
-  it('no qrSetup template conditionals', () => {
-    expect(viewSource).not.toContain('qrSetup')
-  })
-
-  it('no QR CSS classes', () => {
-    expect(viewSource).not.toContain('hc-wx-qr')
-  })
-
-  it('no wechatQRStream import', () => {
-    expect(viewSource).not.toContain('wechatQRStream')
-    expect(viewSource).not.toContain('WechatQREvent')
-  })
-
-  it('no unused QR-related icon imports (Loader2, CheckCircle, XCircle)', () => {
-    // These were only used by the QR setup UI — verify they are removed from imports
-    // (They may still exist if used elsewhere, but let's check they're not dangling)
-    const importBlock = viewSource.match(/import\s*\{[^}]*\}\s*from\s*'lucide-vue-next'/s)?.[0] || ''
-    expect(importBlock).not.toContain('Loader2')
-    expect(importBlock).not.toContain('CheckCircle')
-    expect(importBlock).not.toContain('XCircle')
-  })
-})
-
 // ────────────────────────────────────────────────────────
 // 7. CRUD 运行时 — 微信实例创建/更新/删除
 // ────────────────────────────────────────────────────────

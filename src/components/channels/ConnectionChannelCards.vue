@@ -23,6 +23,7 @@ import type { IMInstance, IMChannelType, IMInstanceHealth } from '@/api/im-chann
 import { getCronJobs } from '@/api/tasks'
 import type { CronJob } from '@/types'
 import ChannelConfigModal from '@/components/channels/ChannelConfigModal.vue'
+import ChannelAgentBinding from '@/components/channels/ChannelAgentBinding.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 
@@ -301,6 +302,9 @@ defineExpose({ openCreate })
             {{ t('connections.channels.refchip', { count: refCount(inst) }) }}
           </span>
         </div>
+
+        <!-- 接待 Agent 绑定（活页面入口）：通道绑 Agent，模型为 Agent 内聚属性；裸模型走折叠「高级」。 -->
+        <ChannelAgentBinding :instance="inst" />
 
         <div
           v-if="testResults[inst.id]"

@@ -4,25 +4,11 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync, existsSync } from 'fs'
 
-// ─── 问题 1: copyWebhookUrl 兜底异常未捕获 ─────
+// ─── 问题 1: setClipboard 桌面端剪贴板写入 ─────
+// 注：原「copyWebhookUrl catch 二次保护」断言读 src/views/IMChannelsView.vue（已退役孤儿视图）——
+// 随该文件统一清理一并移除；copyWebhookUrl 的活实现在 WebhookPanel.vue / ChannelConfigModal.vue。
 
-describe('问题 1: copyWebhookUrl 兜底链路异常处理', () => {
-  it('copyWebhookUrl 的 catch 块中调用 setClipboard 应被 try-catch 包裹', () => {
-    const source = readFileSync('src/views/IMChannelsView.vue', 'utf-8')
-    const fnMatch = source.match(/async function copyWebhookUrl[\s\S]*?^}/m)
-    expect(fnMatch).toBeTruthy()
-    const fn = fnMatch![0]
-
-    // catch 块里的 setClipboard 也可能抛异常，必须被捕获
-    // 修复前：catch { await setClipboard(text) } — 如果 setClipboard 也抛，异常泄漏到 UI
-    // 修复后：catch 块里也有 try-catch
-    const catchBlock = fn.slice(fn.indexOf('} catch'))
-    // 验证 catch 块中有二次错误保护
-    const hasNestedTryCatch = catchBlock.includes('try') || catchBlock.includes('catch')
-      || catchBlock.includes('?.') // 可选链也算保护
-    expect(hasNestedTryCatch).toBe(true)
-  })
-
+describe('问题 1: setClipboard 桌面端剪贴板写入', () => {
   it('setClipboard 在 Tauri 桌面端通过后端 API 写入剪贴板', () => {
     const source = readFileSync('src/api/desktop.ts', 'utf-8')
     expect(source).toContain('/api/v1/desktop/clipboard')

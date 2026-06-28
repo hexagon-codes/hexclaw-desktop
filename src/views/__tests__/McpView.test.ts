@@ -1121,4 +1121,48 @@ describe('McpView — MCP 全链路', () => {
     vm.toggleTool('read_file') // 折叠
     expect(vm.testingTool).toBeNull()
   })
+
+  // ─── BUG-20260626 前后端契约：市场装了 server「再点进去都没有了」──────────────
+  // 后端根因（已在 hexclaw mcp/api 修复+取证）：GET /mcp/servers 旧实现只回「已连接」server，冷装
+  // 未连上的从列表消失。修复后回「已配置」全集（未连=disconnected）。这里锁前端侧契约：列表必须
+  // 如实渲染后端返回的 server（即便不在状态表），且市场安装走对路径并落到列表。
+  describe('BUG-20260626 市场已装 server 不得从列表消失（前端契约）', () => {
+    it('★getMcpServers 返回的 server 即便不在状态表（已配置未连接）也必须渲染于列表，不消失', async () => {
+      mockGetMcpServers.mockResolvedValue({ servers: ['mysql', 'readfile'], total: 2 })
+      // 冷装未连上：状态表为空（mysql/readfile 尚未连接）—— 复现「都没有了」的后端真实形态。
+      mockGetMcpServerStatus.mockResolvedValue({ statuses: {} })
+      const wrapper = await mountMcpView()
+      await flushPromises()
+
+      expect(wrapper.text(), '已安装的 mysql 必须出现在列表').toContain('mysql')
+      expect(wrapper.text(), '已安装的 readfile 必须出现在列表').toContain('readfile')
+      const vm = wrapper.vm as unknown as { getServerStatus: (n: string) => string; servers: string[] }
+      expect(vm.servers).toEqual(['mysql', 'readfile'])
+      expect(vm.getServerStatus('mysql'), '未连接 server 显示 disconnected（灰徽章），而非从列表消失').toBe('disconnected')
+    })
+
+    it('★市场安装带 command 的条目 → 走 addMcpServer（非 Hub），安装后 server 落到列表', async () => {
+      mockGetMcpServers.mockResolvedValueOnce({ servers: [], total: 0 }) // 初始无 server
+      const wrapper = await mountMcpView()
+      await flushPromises()
+
+      // 安装后 loadAll 重新拉取 → 后端返回含 mysql（已配置，冷装未连接）。
+      mockGetMcpServers.mockResolvedValue({ servers: ['mysql'], total: 1 })
+      mockGetMcpServerStatus.mockResolvedValue({ statuses: {} })
+      mockAddMcpServer.mockResolvedValue({ message: 'ok', connected: false })
+
+      const vm = wrapper.vm as unknown as {
+        installFromMarketplace: (e: unknown) => Promise<void>
+        servers: string[]
+      }
+      await vm.installFromMarketplace({ name: 'mysql', command: 'npx', args: ['-y', '@benborla29/mcp-server-mysql'] })
+      await flushPromises()
+
+      // 带 command → MCP server 安装路径（非 Hub skill 安装）。
+      expect(mockAddMcpServer).toHaveBeenCalledWith('mysql', 'npx', ['-y', '@benborla29/mcp-server-mysql'])
+      expect(mockInstallFromHub).not.toHaveBeenCalled()
+      // 安装后 server 出现在列表（即便未连接），不会「点了没反应/装了又没了」。
+      expect(vm.servers).toContain('mysql')
+    })
+  })
 })

@@ -425,42 +425,6 @@ describe('config field security: secrets correctly marked', () => {
 })
 
 // ════════════════════════════════════════════════════════
-// 12. Vue 视图文件 — 无 unused import
-// ════════════════════════════════════════════════════════
-
-describe('IMChannelsView.vue: no dead imports after QR removal', () => {
-  const viewSource = fs.readFileSync(
-    path.resolve(__dirname, '../../views/IMChannelsView.vue'),
-    'utf-8',
-  )
-
-  it('no Loader2 import (was only used by QR UI)', () => {
-    expect(viewSource).not.toContain('Loader2')
-  })
-
-  it('no CheckCircle import (was only used by QR success)', () => {
-    expect(viewSource).not.toContain('CheckCircle')
-  })
-
-  it('no XCircle import (was only used by QR error)', () => {
-    expect(viewSource).not.toContain('XCircle')
-  })
-
-  it('no onBeforeUnmount import (was only used for QR cleanup)', () => {
-    expect(viewSource).not.toContain('onBeforeUnmount')
-  })
-
-  it('no env/apiBase import (was only used for QR image src)', () => {
-    expect(viewSource).not.toContain("from '@/config/env'")
-    expect(viewSource).not.toContain('apiBase')
-  })
-
-  it('no hc-wx-qr CSS classes', () => {
-    expect(viewSource).not.toContain('hc-wx-qr')
-  })
-})
-
-// ════════════════════════════════════════════════════════
 // 14. 功能覆盖率 — P0-P2 新增 API 函数验证
 // ════════════════════════════════════════════════════════
 

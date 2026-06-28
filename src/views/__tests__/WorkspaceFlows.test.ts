@@ -5,7 +5,7 @@ import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import KnowledgeCenterView from '../KnowledgeCenterView.vue'
 import IntegrationView from '../IntegrationView.vue'
-import ChannelsView from '../IMChannelsView.vue'
+import ChannelsView from '../ConnectionsView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
 const { getDocuments, uploadDocument } = vi.hoisted(() => ({
@@ -307,7 +307,9 @@ describe('Workspace flows', () => {
 
     expect(wrapper.text()).toContain('飞书')
 
-    const configBtn = wrapper.findAll('button').find((btn) => btn.text().includes('配置'))
+    // 活的 /channels（ConnectionsView → ConnectionChannelCards）编辑入口按钮文案为「编辑」(common.edit)，
+    // 非已退役孤儿 IMChannelsView 的「配置」。点它打开复用的 ChannelConfigModal（编辑直接进第二步表单）。
+    const configBtn = wrapper.findAll('button').find((btn) => btn.text().includes('编辑'))
     expect(configBtn).toBeDefined()
     await configBtn!.trigger('click')
     await flushPromises()

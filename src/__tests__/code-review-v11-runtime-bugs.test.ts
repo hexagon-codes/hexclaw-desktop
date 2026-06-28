@@ -5,7 +5,6 @@
  * for source-level checks, and real runtime tests for useChatActions composable.
  *
  * Bug matrix:
- *   BUG  1 (HIGH)   — IMChannelsView delete guard inverted      — FIXED
  *   BUG  3 (MEDIUM) — cloneMessage shallow metadata             — FIXED
  *   BUG 10 (HIGH)   — confirmEdit deletes before model check    — FIXED
  *   BUG  5 (MEDIUM) — WS inactivity timeout during tool calls   — DOCUMENTED
@@ -26,30 +25,6 @@ const SRC = resolve(__dirname, '..')
 function readSrc(path: string): string {
   return readFileSync(resolve(SRC, path), 'utf-8')
 }
-
-// ════════════════════════════════════════════════════════════
-// BUG 1 (HIGH): IMChannelsView delete guard inverted — FIXED
-// ════════════════════════════════════════════════════════════
-
-describe('BUG 1: IMChannelsView handleDelete guard', () => {
-  const src = readSrc('views/IMChannelsView.vue')
-
-  it('handleDelete checks deletingId.value !== id (correct guard)', () => {
-    // The guard must be `deletingId.value !== id` so we only proceed when
-    // the user has confirmed deletion for *this* specific instance.
-    expect(src).toMatch(/if\s*\(\s*deletingId\.value\s*!==\s*id\s*\)\s*return/)
-  })
-
-  it('does NOT use the inverted guard (=== id) which would block confirmed deletes', () => {
-    // Ensure we never have `if (deletingId.value === id) return`
-    expect(src).not.toMatch(/if\s*\(\s*deletingId\.value\s*===\s*id\s*\)\s*return/)
-  })
-
-  it('resets deletingId to null after successful delete', () => {
-    const deleteBlock = src.slice(src.indexOf('async function handleDelete'))
-    expect(deleteBlock).toContain('deletingId.value = null')
-  })
-})
 
 // ════════════════════════════════════════════════════════════
 // BUG 3 (MEDIUM): cloneMessage shallow metadata — FIXED
@@ -79,13 +54,14 @@ describe('BUG 3: cloneMessage deep clone', () => {
 describe('BUG 10: confirmEdit / handleRetry model guard ordering', () => {
   const src = readSrc('composables/useChatActions.ts')
 
-  it('confirmEdit checks chatStore.chatParams.model before splice', () => {
+  it('confirmEdit checks chatStore.chatParams.model before deleting', () => {
     const fnStart = src.indexOf('async function confirmEdit')
-    const splicePos = src.indexOf('.splice(', fnStart)
+    const delPos = src.indexOf('removeRangeAtomic(', fnStart)
     const modelCheckPos = src.indexOf('chatStore.chatParams.model', fnStart)
-    // Model check must appear before splice
+    // Model check must appear before the atomic delete
     expect(modelCheckPos).toBeGreaterThan(fnStart)
-    expect(modelCheckPos).toBeLessThan(splicePos)
+    expect(delPos).toBeGreaterThan(-1)
+    expect(modelCheckPos).toBeLessThan(delPos)
   })
 
   it('confirmEdit returns early (cancelEdit) when model is empty', () => {
@@ -97,16 +73,16 @@ describe('BUG 10: confirmEdit / handleRetry model guard ordering', () => {
     expect(fnBody).toContain('cancelEdit()')
   })
 
-  it('handleRetry checks chatStore.chatParams.model before splice', () => {
+  it('handleRetry checks chatStore.chatParams.model before deleting', () => {
     const fnStart = src.indexOf('async function handleRetry')
     const fnEnd = src.indexOf('async function handleLike')
     const fnBody = src.slice(fnStart, fnEnd)
-    const splicePos = fnBody.indexOf('.splice(')
+    const delPos = fnBody.indexOf('removeRangeAtomic(')
     const modelCheckPos = fnBody.indexOf('chatStore.chatParams.model')
-    // Model check must appear before splice
+    // Model check must appear before the atomic delete
     expect(modelCheckPos).toBeGreaterThan(-1)
-    expect(splicePos).toBeGreaterThan(-1)
-    expect(modelCheckPos).toBeLessThan(splicePos)
+    expect(delPos).toBeGreaterThan(-1)
+    expect(modelCheckPos).toBeLessThan(delPos)
   })
 
   it('handleRetry returns early when model is empty string', () => {
@@ -171,36 +147,44 @@ describe('BUG 6: ensureSession does not push to sessions array', () => {
 // BUG 9 (MEDIUM): handleRetry splices before backend delete — DOCUMENTED
 // ════════════════════════════════════════════════════════════
 
-describe('BUG 9: handleRetry UI splice before backend delete', () => {
+describe('BUG 9: handleRetry/confirmEdit atomic delete (AP-094)', () => {
   const src = readSrc('composables/useChatActions.ts')
 
-  it('splice is called before removeMessage (optimistic UI update)', () => {
-    const fnStart = src.indexOf('async function handleRetry')
-    const fnEnd = src.indexOf('async function handleLike')
-    const fnBody = src.slice(fnStart, fnEnd)
+  it('removeRangeAtomic splices UI before awaiting backend deletes (optimistic)', () => {
+    const fnStart = src.indexOf('async function removeRangeAtomic')
+    const fnEnd = src.indexOf('async function handleRetry')
+    const body = src.slice(fnStart, fnEnd)
 
-    const splicePos = fnBody.indexOf('.splice(')
-    const removePos = fnBody.indexOf('removeMessageWithFeedback(')
+    const splicePos = body.indexOf('.splice(')
+    const removePos = body.indexOf('removeMessage(')
     expect(splicePos).toBeGreaterThan(-1)
     expect(removePos).toBeGreaterThan(-1)
-    // Splice happens before the backend delete (optimistic UI update)
+    // Optimistic UI: splice first, then await the backend delete.
     expect(splicePos).toBeLessThan(removePos)
   })
 
-  it('removeMessage errors are surfaced (toast + logger), no longer swallowed', () => {
-    // Review backlog fix: the old `.catch(() => {})` hid backend delete
-    // failures — the message silently reappeared on the next session load.
-    const fnStart = src.indexOf('async function handleRetry')
-    const fnEnd = src.indexOf('async function handleLike')
-    const fnBody = src.slice(fnStart, fnEnd)
-    expect(fnBody).not.toMatch(/removeMessage\([^)]+\)\.catch\(\(\)\s*=>\s*\{\s*\}\)/)
-    expect(fnBody).toContain('removeMessageWithFeedback(')
+  it('delete failures roll back + surface (toast + logger) and abort resend, not swallowed', () => {
+    // AP-094: old fire-and-forget `.catch(() => {})` + unconditional resend hid backend
+    // delete failures → orphaned rows reappeared as duplicates on reload. Now the helper
+    // awaits deletes, rolls back the un-deleted messages, toasts, and returns false.
+    // 2026-06-28：删除从「逐条串行 await」改「并行 await Promise.allSettled」（编辑早期消息不再卡几秒），
+    // 仍是 awaited（非 fire-and-forget）+ 按结果精确回滚——意图不变，行为由 useChatActions 单测覆盖。
+    const fnStart = src.indexOf('async function removeRangeAtomic')
+    const fnEnd = src.indexOf('async function handleRetry')
+    const body = src.slice(fnStart, fnEnd)
+    expect(body).not.toMatch(/removeMessage\([^)]+\)\.catch\(\(\)\s*=>\s*\{\s*\}\)/)
+    // 删除被 await（并行批量等待或逐条等待皆可），不是 fire-and-forget。
+    expect(body).toMatch(/await Promise\.allSettled\([\s\S]*removeMessage\(|await removeMessage\(/)
+    expect(body).toContain('removeMessage(')
+    expect(body).toContain('toast.error(')
+    expect(body).toContain('logger.error(')
+    expect(body).toContain('return false') // 中止重发，杜绝重复
+  })
 
-    const helperStart = src.indexOf('function removeMessageWithFeedback')
-    expect(helperStart).toBeGreaterThan(-1)
-    const helperBody = src.slice(helperStart, src.indexOf('async function handleRetry'))
-    expect(helperBody).toContain('toast.error(')
-    expect(helperBody).toContain('logger.error(')
+  it('handleRetry/confirmEdit gate resend on the atomic delete result', () => {
+    // 两处都必须：if (!(await removeRangeAtomic(...))) return —— 删除失败即不重发。
+    expect(src).toContain('if (!(await removeRangeAtomic(userMsgIdx))) return')
+    expect(src).toContain('if (!(await removeRangeAtomic(idx))) return')
   })
 })
 
@@ -383,7 +367,8 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
     mockHandleSend = vi.fn().mockResolvedValue(true)
   })
 
-  it('confirmEdit with no model -> messages NOT spliced, edit cancelled', async () => {
+  // AP-096/F4 修正：无模型时不再静默 cancelEdit（丢编辑+无提示），改 toast 并**保留编辑内容**。
+  it('confirmEdit with no model -> messages NOT spliced, edit kept, toast shown', async () => {
     const messages = [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
       { id: 'a1', role: 'assistant', content: 'hi', timestamp: '2025-01-01T00:00:01Z' },
@@ -392,7 +377,6 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
     const toast = makeMockToast()
     const { confirmEdit, editingMsgId, editingText } = useChatActions(store as any, toast as any, mockHandleSend)
 
-    // Simulate editing
     editingMsgId.value = 'u1'
     editingText.value = 'updated text'
 
@@ -402,8 +386,11 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
     expect(messages).toHaveLength(2)
     // handleSend should NOT be called
     expect(mockHandleSend).not.toHaveBeenCalled()
-    // Edit should be cancelled
-    expect(editingMsgId.value).toBeNull()
+    // 提示而非静默
+    expect(toast.error).toHaveBeenCalled()
+    // 编辑内容保留（不丢用户已输入）
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('updated text')
   })
 
   it('confirmEdit with valid model -> messages spliced, handleSend called', async () => {
