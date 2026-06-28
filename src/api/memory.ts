@@ -161,6 +161,16 @@ export function restoreMemoryEntry(id: string) {
   return apiPost<{ message: string }>(`/api/v1/memory/${encodeURIComponent(id)}/restore`)
 }
 
+/** 置顶（常驻）单条记忆（U1：逃生口，反思永不自动移动）。 */
+export function pinMemoryEntry(id: string) {
+  return apiPost<{ message: string }>(`/api/v1/memory/${encodeURIComponent(id)}/pin`)
+}
+
+/** 取消置顶。 */
+export function unpinMemoryEntry(id: string) {
+  return apiPost<{ message: string }>(`/api/v1/memory/${encodeURIComponent(id)}/unpin`)
+}
+
 /** 清空所有记忆 */
 export function clearAllMemory() {
   return apiDelete<{ message: string }>('/api/v1/memory')

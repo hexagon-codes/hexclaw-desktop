@@ -1,5 +1,5 @@
-/** 记忆类型 */
-export type MemoryType = 'identity' | 'preference' | 'fact' | 'instruction' | 'context'
+/** 记忆类型（rule = 砍薄版后 standing 迁入的硬规则，常驻保证带） */
+export type MemoryType = 'identity' | 'preference' | 'fact' | 'instruction' | 'context' | 'rule'
 
 /** 记忆来源 */
 export type MemorySource = 'manual' | 'chat_explicit' | 'chat_extract' | 'system'
@@ -22,6 +22,8 @@ export interface MemoryEntry {
   last_hit_at?: string
   status?: MemoryStatus
   archived_at?: string
+  /** 常驻置顶（逃生口）：true = 强制常驻、反思永不自动移动（U1）。 */
+  pinned?: boolean
 }
 
 /** 容量信息 */

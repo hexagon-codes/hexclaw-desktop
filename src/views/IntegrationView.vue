@@ -64,12 +64,7 @@ function handleSkillQueryAction() {
 onMounted(handleSkillQueryAction)
 watch(() => route.query.action, () => handleSkillQueryAction())
 const mcpViewRef = ref<{ openAddServer?: () => void; switchToMarketplace?: () => void }>()
-const promptsViewRef = ref<{ newPrompt?: () => void; addMemory?: () => void }>()
-// 跟踪 PromptsView 内当前子 tab（由事件驱动，保证响应性）
-const promptsSection = ref<'prompts' | 'memories'>('prompts')
-watch(activeTab, (tab) => {
-  if (tab === 'prompts') promptsSection.value = 'prompts'
-})
+const promptsViewRef = ref<{ newPrompt?: () => void }>()
 
 // 顶栏搜索框 placeholder：3 个子 tab 都显示搜索框，文案按子 tab 区分
 const searchPlaceholder = computed(() => {
@@ -132,16 +127,14 @@ function onSplitSelect(id: string) {
           @click="onSplitMainClick"
           @select="onSplitSelect"
         />
-        <!-- Prompt 库 tab：主操作随子 tab 切换（全部=新建 Prompt / 记忆=添加记忆，对齐原型 tbar in-2） -->
+        <!-- Prompt 库 tab：新建 Prompt（砍薄版后记忆移至「长期记忆」页，此处不再有记忆子 tab）。 -->
         <button
           v-else-if="activeTab === 'prompts'"
           class="hc-btn hc-btn-primary"
-          @click="promptsSection === 'memories' ? promptsViewRef?.addMemory?.() : promptsViewRef?.newPrompt?.()"
+          @click="promptsViewRef?.newPrompt?.()"
         >
           <Plus :size="14" />
-          {{ promptsSection === 'memories'
-            ? t('memories.addMemory', '添加记忆')
-            : t('integration.newPrompt', '新建 Prompt') }}
+          {{ t('integration.newPrompt', '新建 Prompt') }}
         </button>
       </template>
     </PageToolbar>
@@ -161,7 +154,6 @@ function onSplitSelect(id: string) {
         v-else-if="activeTab === 'prompts'"
         ref="promptsViewRef"
         :filter="integrationSearch"
-        @section-change="promptsSection = $event"
       />
     </div>
   </div>
