@@ -234,12 +234,15 @@ export async function createCronJobSSE(
     ])
 
     if (!response.ok) {
-      // 失败但不是 SSE — 尝试以 JSON 读取后端错误
+      // 失败但不是 SSE — 尝试以 JSON 读取后端错误。
+      // BUG-20260703：与通用 client（normalizeApiError）契约对齐 error ?? message——
+      // 后端标准 APIError 以 message 为准，error 只是 legacy 兼容字段（omitempty）。
       let serverMsg = response.statusText
       try {
         const txt = await response.text()
-        const parsed = JSON.parse(txt) as { error?: string }
-        if (parsed?.error) serverMsg = parsed.error
+        const parsed = JSON.parse(txt) as { error?: string; message?: string }
+        const detail = parsed?.error ?? parsed?.message
+        if (detail) serverMsg = detail
       } catch {
         /* ignore */
       }
@@ -269,7 +272,8 @@ export async function createCronJobSSE(
         } else if (parsed.event === 'done') {
           return parsed.data as CreateCronJobResult
         } else if (parsed.event === 'error') {
-          const msg = (parsed.data as { error?: string })?.error ?? '后端返回错误'
+          const data = parsed.data as { error?: string; message?: string } | null
+          const msg = data?.error ?? data?.message ?? '后端返回错误'
           throw new Error(msg)
         }
       }
