@@ -3,7 +3,7 @@ import { onMounted, ref, computed, watch, nextTick, type Component } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  Bot, Plus, X, Pencil, Trash2, ChevronDown, ChevronUp,
+  Bot, Plus, X, Pencil, Trash2, ChevronDown, ChevronUp, LibraryBig,
   Headset, PenLine, Code, Languages, BarChart3, Mail, Database, BookOpen, FileText, Search,
 } from 'lucide-vue-next'
 import logoUrl from '@/assets/logo.png'
@@ -11,7 +11,7 @@ import { useAgentsStore } from '@/stores/agents'
 import { useSettingsStore } from '@/stores/settings'
 import { getAgents, getRules, registerAgent, unregisterAgent, updateAgent } from '@/api/agents'
 import { getAssistantSoul, updateAssistantSoul } from '@/api/assistant'
-import type { AgentRole, AgentConfig, AgentRule } from '@/types'
+import type { AgentConfig, AgentRule } from '@/types'
 import { logger } from '@/utils/logger'
 import { userVisibleAgents } from '@/utils/imChannelBinding'
 import { useToast } from '@/composables/useToast'
@@ -98,13 +98,6 @@ function clearSoulToDefault() {
   soulText.value = ''
 }
 
-/** 第一步「选择起点」→ 第二步：从模板预填并切到表单步骤 */
-function pickTemplate(role: AgentRole) {
-  applyRoleTemplate(role)
-  selectedTemplateName.value = role.title || role.name
-  addStep.value = 2
-}
-
 /** 第一步「空白新建」→ 第二步空表单 */
 function startFromBlank() {
   resetAddAgentDialog()
@@ -112,12 +105,11 @@ function startFromBlank() {
   addStep.value = 2
 }
 
-/** 把角色模板写入 newAgent（name/display_name/description/system_prompt） */
-function applyRoleTemplate(role: AgentRole) {
-  newAgent.value.name = role.name
-  newAgent.value.display_name = role.title || role.name
-  newAgent.value.description = role.goal
-  newAgent.value.system_prompt = role.backstory
+/** 第一步「从模板库开始」→ 关弹窗，交给唯一货架（模板库 tab）。
+ *  模板库卡片再经 useLibraryTemplate 重开弹窗到第二步——避免第一步内嵌第二份列表。 */
+function startFromLibrary() {
+  closeAddAgentDialog()
+  activeTab.value = 'templates'
 }
 
 /** Agent 绑定的「通道·任务」标签（通道来自路由规则，缺省回退说明） */
@@ -136,6 +128,8 @@ const showAddAdvanced = ref(false)
 // 新建弹窗两步：1=选择起点（空白/模板），2=填表单
 const addStep = ref<1 | 2>(1)
 const selectedTemplateName = ref('')
+// 套用模板时记住其「专长」，在第二步只读展示——厚数据可见，不静默蒸发
+const selectedTemplateExpertise = ref<string[]>([])
 const newAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
 // 新建 Agent 的人设(SOUL)：纯文本，写回 system_prompt。
 const newAgentSoul = computed({
@@ -225,6 +219,7 @@ function resetAddAgentDialog() {
   newAgent.value = { name: '', display_name: '', model: '', provider: '' }
   addStep.value = 1
   selectedTemplateName.value = ''
+  selectedTemplateExpertise.value = []
 }
 
 function openAddAgentDialog() {
@@ -283,7 +278,12 @@ const filteredAgents = computed(() => {
 type AgentTab = 'mine' | 'templates'
 const activeTab = ref<AgentTab>('mine')
 
-/** 模板库：10 个常用智能体预设（name/desc/soul 走 i18n 随语言切换；slug 作为新建时的 agent 名）。 */
+/**
+ * 模板库 = 唯一的智能体模板货架（单一真相源）。原后端 6 个 role（assistant/researcher/
+ * writer/coder/translator/analyst）在场景化命名下已被这批模板覆盖，其中「通用助手」即
+ * 原 assistant 角色的场景化落点；弹窗第一步不再另列一份角色货架（见 startFromLibrary）。
+ * name/desc/soul/exp 走 i18n；exp 用「·」分隔的专长串，第二步只读展示。
+ */
 interface AgentTemplate {
   key: string
   slug: string
@@ -291,18 +291,21 @@ interface AgentTemplate {
   name: string
   desc: string
   soul: string
+  expertise: string[]
 }
+const splitExp = (s: string): string[] => s.split('·').map((x) => x.trim()).filter(Boolean)
 const AGENT_TEMPLATES = computed<AgentTemplate[]>(() => [
-  { key: 'support', slug: 'support-agent', icon: Headset, name: t('agents.tpl.support.name', '客服助手'), desc: t('agents.tpl.support.desc', 'IM 群答疑 · 耐心专业'), soul: t('agents.tpl.support.soul', '你是 IM 群里的客服助手，耐心、专业地解答用户疑问，遇到不确定的问题先澄清再回答，不编造信息。') },
-  { key: 'content', slug: 'content-writer', icon: PenLine, name: t('agents.tpl.content.name', '内容创作'), desc: t('agents.tpl.content.desc', '社媒文案 · 活泼有网感'), soul: t('agents.tpl.content.soul', '你是内容创作助手，擅长写小红书、公众号等社媒文案，语气活泼、有网感、会用 emoji，并能给出标题与话题标签建议。') },
-  { key: 'code', slug: 'coding-buddy', icon: Code, name: t('agents.tpl.code.name', '编程搭子'), desc: t('agents.tpl.code.desc', '读写代码 · 简洁可运行'), soul: t('agents.tpl.code.soul', '你是编程搭子，能读写代码、解释实现、执行命令，回答简洁，优先给出可运行的最小方案。') },
-  { key: 'translate', slug: 'translator', icon: Languages, name: t('agents.tpl.translate.name', '翻译官'), desc: t('agents.tpl.translate.desc', '多语种互译 · 信达雅'), soul: t('agents.tpl.translate.soul', '你是专业翻译官，在中、英等多语种之间互译，做到信、达、雅，保留专有名词与代码不译，必要时附注解。') },
-  { key: 'report', slug: 'daily-report', icon: BarChart3, name: t('agents.tpl.report.name', '日报助理'), desc: t('agents.tpl.report.desc', '定时日报 · 简洁理性'), soul: t('agents.tpl.report.soul', '你是日报分析助理，把零散信息整理成结构清晰、简洁理性的日报，突出关键指标与异常，给出可执行建议。') },
-  { key: 'email', slug: 'email-assistant', icon: Mail, name: t('agents.tpl.email.name', '邮件助理'), desc: t('agents.tpl.email.desc', '邮件收发 · 正式礼貌'), soul: t('agents.tpl.email.soul', '你是邮件助理，帮用户起草、回复邮件，语气正式礼貌、条理清楚，按收件人身份调整措辞。') },
-  { key: 'data', slug: 'data-analyst', icon: Database, name: t('agents.tpl.data.name', '数据分析师'), desc: t('agents.tpl.data.desc', 'SQL · 报表 · 洞察'), soul: t('agents.tpl.data.soul', '你是数据分析师，能写 SQL、解读报表、发现趋势与异常，结论先行并用数据支撑，避免主观臆断。') },
-  { key: 'kb', slug: 'kb-qa', icon: BookOpen, name: t('agents.tpl.kb.name', '知识库问答'), desc: t('agents.tpl.kb.desc', '知识库检索 · 引用严谨'), soul: t('agents.tpl.kb.soul', '你是知识库问答助手，基于检索到的资料作答，严格引用来源，资料不足时明确说“未找到”，不编造。') },
-  { key: 'meeting', slug: 'meeting-notes', icon: FileText, name: t('agents.tpl.meeting.name', '会议纪要'), desc: t('agents.tpl.meeting.desc', '录音纪要 · 结构化'), soul: t('agents.tpl.meeting.soul', '你是会议纪要助手，把录音或讨论整理成结构化纪要：议题、结论、待办（含负责人与截止），措辞中立。') },
-  { key: 'research', slug: 'research-assistant', icon: Search, name: t('agents.tpl.research.name', '研究助理'), desc: t('agents.tpl.research.desc', '资料检索 · 综述引用'), soul: t('agents.tpl.research.soul', '你是研究助理，擅长检索资料、归纳综述、对比观点，给出带引用的结论，区分事实与推测。') },
+  { key: 'assistant', slug: 'general-assistant', icon: Bot, name: t('agents.tpl.assistant.name', '通用助手'), desc: t('agents.tpl.assistant.desc', '全能问答 · 友好简洁'), soul: t('agents.tpl.assistant.soul', '你是通用智能助手，全面、准确地帮助用户解决各种问题，善于理解意图、把复杂问题讲清楚，不编造不确定的信息。'), expertise: splitExp(t('agents.tpl.assistant.exp', '通用问答·任务规划·信息整理')) },
+  { key: 'support', slug: 'support-agent', icon: Headset, name: t('agents.tpl.support.name', '客服助手'), desc: t('agents.tpl.support.desc', 'IM 群答疑 · 耐心专业'), soul: t('agents.tpl.support.soul', '你是 IM 群里的客服助手，耐心、专业地解答用户疑问，遇到不确定的问题先澄清再回答，不编造信息。'), expertise: splitExp(t('agents.tpl.support.exp', '问题排查·话术应答·工单流转')) },
+  { key: 'content', slug: 'content-writer', icon: PenLine, name: t('agents.tpl.content.name', '内容创作'), desc: t('agents.tpl.content.desc', '社媒文案 · 活泼有网感'), soul: t('agents.tpl.content.soul', '你是内容创作助手，擅长写小红书、公众号等社媒文案，语气活泼、有网感、会用 emoji，并能给出标题与话题标签建议。'), expertise: splitExp(t('agents.tpl.content.exp', '社媒文案·标题优化·话题标签')) },
+  { key: 'code', slug: 'coding-buddy', icon: Code, name: t('agents.tpl.code.name', '编程搭子'), desc: t('agents.tpl.code.desc', '读写代码 · 简洁可运行'), soul: t('agents.tpl.code.soul', '你是编程搭子，能读写代码、解释实现、执行命令，回答简洁，优先给出可运行的最小方案。'), expertise: splitExp(t('agents.tpl.code.exp', '读写代码·调试排错·命令执行')) },
+  { key: 'translate', slug: 'translator', icon: Languages, name: t('agents.tpl.translate.name', '翻译官'), desc: t('agents.tpl.translate.desc', '多语种互译 · 信达雅'), soul: t('agents.tpl.translate.soul', '你是专业翻译官，在中、英等多语种之间互译，做到信、达、雅，保留专有名词与代码不译，必要时附注解。'), expertise: splitExp(t('agents.tpl.translate.exp', '多语种互译·术语保留·译注说明')) },
+  { key: 'report', slug: 'daily-report', icon: BarChart3, name: t('agents.tpl.report.name', '日报助理'), desc: t('agents.tpl.report.desc', '定时日报 · 简洁理性'), soul: t('agents.tpl.report.soul', '你是日报分析助理，把零散信息整理成结构清晰、简洁理性的日报，突出关键指标与异常，给出可执行建议。'), expertise: splitExp(t('agents.tpl.report.exp', '信息归纳·指标提炼·异常提示')) },
+  { key: 'email', slug: 'email-assistant', icon: Mail, name: t('agents.tpl.email.name', '邮件助理'), desc: t('agents.tpl.email.desc', '邮件收发 · 正式礼貌'), soul: t('agents.tpl.email.soul', '你是邮件助理，帮用户起草、回复邮件，语气正式礼貌、条理清楚，按收件人身份调整措辞。'), expertise: splitExp(t('agents.tpl.email.exp', '邮件起草·礼貌措辞·收发管理')) },
+  { key: 'data', slug: 'data-analyst', icon: Database, name: t('agents.tpl.data.name', '数据分析师'), desc: t('agents.tpl.data.desc', 'SQL · 报表 · 洞察'), soul: t('agents.tpl.data.soul', '你是数据分析师，能写 SQL、解读报表、发现趋势与异常，结论先行并用数据支撑，避免主观臆断。'), expertise: splitExp(t('agents.tpl.data.exp', 'SQL·报表解读·趋势洞察')) },
+  { key: 'kb', slug: 'kb-qa', icon: BookOpen, name: t('agents.tpl.kb.name', '知识库问答'), desc: t('agents.tpl.kb.desc', '知识库检索 · 引用严谨'), soul: t('agents.tpl.kb.soul', '你是知识库问答助手，基于检索到的资料作答，严格引用来源，资料不足时明确说“未找到”，不编造。'), expertise: splitExp(t('agents.tpl.kb.exp', '知识库检索·来源引用·严谨作答')) },
+  { key: 'meeting', slug: 'meeting-notes', icon: FileText, name: t('agents.tpl.meeting.name', '会议纪要'), desc: t('agents.tpl.meeting.desc', '录音纪要 · 结构化'), soul: t('agents.tpl.meeting.soul', '你是会议纪要助手，把录音或讨论整理成结构化纪要：议题、结论、待办（含负责人与截止），措辞中立。'), expertise: splitExp(t('agents.tpl.meeting.exp', '结构化纪要·待办提取·中立措辞')) },
+  { key: 'research', slug: 'research-assistant', icon: Search, name: t('agents.tpl.research.name', '研究助理'), desc: t('agents.tpl.research.desc', '资料检索 · 综述引用'), soul: t('agents.tpl.research.soul', '你是研究助理，擅长检索资料、归纳综述、对比观点，给出带引用的结论，区分事实与推测。'), expertise: splitExp(t('agents.tpl.research.exp', '资料检索·综述归纳·引用标注')) },
 ])
 
 // 二级 tab 进顶部栏（PageToolbar #tabs 槽），用 SegmentedControl，与其它页一致（对齐原型 tbar .seg）
@@ -330,6 +333,7 @@ async function useLibraryTemplate(tpl: AgentTemplate) {
   newAgent.value.description = tpl.desc
   newAgent.value.system_prompt = tpl.soul
   selectedTemplateName.value = tpl.name
+  selectedTemplateExpertise.value = tpl.expertise
   addStep.value = 2
 }
 
@@ -677,30 +681,24 @@ async function handleUnregisterAgent() {
               </button>
             </div>
 
-            <!-- 第一步：选择起点（空白新建 + 模板卡） -->
+            <!-- 第一步：选择起点（空白新建 / 从模板库开始）——不再内嵌第二份模板货架 -->
             <template v-if="addStep === 1">
               <div class="p-5 flex flex-col gap-3.5">
                 <div class="text-[13px]" :style="{ color: 'var(--hc-text-secondary)' }">
                   {{ t('agents.chooseStartTitle', '选择起点') }}
                 </div>
                 <div class="hc-startgrid">
-                  <!-- 空白新建卡 -->
-                  <button type="button" class="hc-startcard" @click="startFromBlank">
+                  <!-- 空白新建 -->
+                  <button type="button" class="hc-startcard" data-testid="start-blank" @click="startFromBlank">
                     <div class="hc-startcard__icon"><Plus :size="18" /></div>
                     <div class="hc-startcard__nm">{{ t('agents.startBlank', '空白新建') }}</div>
                     <div class="hc-startcard__meta">{{ t('agents.startBlankMeta', '从零开始配置') }}</div>
                   </button>
-                  <!-- 模板卡 -->
-                  <button
-                    v-for="role in agentsStore.roles"
-                    :key="role.name"
-                    type="button"
-                    class="hc-startcard"
-                    @click="pickTemplate(role)"
-                  >
-                    <div class="hc-startcard__icon"><Bot :size="18" /></div>
-                    <div class="hc-startcard__nm">{{ role.title || role.name }}</div>
-                    <div class="hc-startcard__meta">{{ role.goal || t('agents.noDesc') }}</div>
+                  <!-- 从模板库开始：唯一货架的入口，点击切到模板库 tab 挑模板 -->
+                  <button type="button" class="hc-startcard" data-testid="start-from-library" @click="startFromLibrary">
+                    <div class="hc-startcard__icon"><LibraryBig :size="18" /></div>
+                    <div class="hc-startcard__nm">{{ t('agents.startFromLibrary', '从模板库开始') }}</div>
+                    <div class="hc-startcard__meta">{{ t('agents.startFromLibraryMeta', '挑一个常用模板预填') }}</div>
                   </button>
                 </div>
               </div>
@@ -714,6 +712,11 @@ async function handleUnregisterAgent() {
             <!-- 第二步：表单（名称/显示名/人设(SOUL)/高级模型偏好） -->
             <template v-else>
               <div class="p-5 flex flex-col gap-3.5">
+                <!-- 套用模板时展示其专长：厚数据可见，不在进表单时静默蒸发 -->
+                <div v-if="selectedTemplateExpertise.length" class="hc-tplexp" data-testid="template-expertise">
+                  <span class="hc-tplexp__label">{{ t('agents.templateExpertiseLabel', '此模板擅长') }}</span>
+                  <span v-for="exp in selectedTemplateExpertise" :key="exp" class="hc-tplexp__chip">{{ exp }}</span>
+                </div>
                 <div class="flex flex-col gap-1.5">
                   <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.name') }}</label>
                   <input v-model="newAgent.name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="agent-name" />
@@ -1187,6 +1190,31 @@ button.hc-cxcard {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* 第二步「此模板擅长」只读专长 chips */
+.hc-tplexp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--hc-accent-subtle, rgba(95, 179, 234, 0.14));
+  border: 0.5px solid var(--hc-border-hl, rgba(95, 179, 234, 0.24));
+}
+.hc-tplexp__label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--hc-text-secondary);
+}
+.hc-tplexp__chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--hc-accent);
+  background: var(--hc-bg-elevated, rgba(255, 255, 255, 0.06));
+  border: 0.5px solid var(--hc-border);
 }
 
 .modal-enter-active { transition: opacity 0.2s ease-out; }
