@@ -27,8 +27,14 @@ export function registerAgent(agent: AgentConfig) {
   return apiPost<{ message: string; name: string }>('/api/v1/agents', agent)
 }
 
+/** 更新载荷（PUT patch 语义）。temperature 三态与后端 OptionalFloat 契约对齐
+ *  （BUG-20260703 P2-4）：字段缺席=不改 / null=清除回「未设跟随模型默认」/ 数值=设置。 */
+export interface AgentUpdatePayload extends Omit<Partial<AgentConfig>, 'temperature'> {
+  temperature?: number | null
+}
+
 /** 更新 Agent 路由配置 */
-export function updateAgent(name: string, updates: Partial<AgentConfig>) {
+export function updateAgent(name: string, updates: AgentUpdatePayload) {
   return apiPut<{ message: string }>(`/api/v1/agents/${encodeURIComponent(name)}`, updates)
 }
 

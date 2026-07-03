@@ -3,14 +3,17 @@ import { onMounted, ref, computed, watch, nextTick, type Component } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  Bot, Plus, X, Pencil, Trash2, ChevronDown, ChevronUp, LibraryBig,
+  Bot, Plus, X, Pencil, Trash2, ChevronDown, ChevronUp, LibraryBig, MessageSquare,
   Headset, PenLine, Code, Languages, BarChart3, Mail, Database, BookOpen, FileText, Search,
 } from 'lucide-vue-next'
 import logoUrl from '@/assets/logo.png'
 import { useAgentsStore } from '@/stores/agents'
 import { useSettingsStore } from '@/stores/settings'
 import { getAgents, getRules, registerAgent, unregisterAgent, updateAgent } from '@/api/agents'
+import { getSkills } from '@/api/skills'
 import { getAssistantSoul, updateAssistantSoul } from '@/api/assistant'
+import AgentSkillPicker from '@/components/agents/AgentSkillPicker.vue'
+import SoulStructuredEditor from '@/components/agents/SoulStructuredEditor.vue'
 import type { AgentConfig, AgentRule } from '@/types'
 import { logger } from '@/utils/logger'
 import { userVisibleAgents } from '@/utils/imChannelBinding'
@@ -142,6 +145,11 @@ const newAgentSoul = computed({
 // Edit agent modal
 const showEditAgent = ref(false)
 const editingAgent = ref<AgentConfig>({ name: '', display_name: '', model: '', provider: '' })
+// BUG-20260703 D3：打开弹窗时的 LLM 配置快照——editFormValid「未真改就不校验」的基准。
+const editingOriginal = ref<{ provider: string; model: string }>({ provider: '', model: '' })
+// 打开弹窗给 editingAgent 赋值会触发 provider watch；挡掉这一次 sync，防止失效
+// provider 的存量 model 在打开瞬间被清空。
+let suppressEditProviderSync = false
 
 // 注销确认
 const showUnregisterConfirm = ref(false)
@@ -208,18 +216,197 @@ async function loadRules() {
   }
 }
 
+/** 一键进入与该智能体的会话（BUG-20260703 问题1）：复用 ChatView 既有
+ *  `/chat?role=<name>` 机制——进入即把收件人锁定到该 Agent（pinned_agent 全链闭环）。
+ *  role 用内部 name 作后端收件人键；roleTitle 带显示名，让会话标题呈现人看得懂的
+ *  display_name 而非英文 name（BUG-20260704，对齐 WelcomeView）。 */
+function enterAgentChat(name: string) {
+  const cfg = agents.value.find((a) => a.name === name)
+  const roleTitle = cfg?.display_name?.trim() || name
+  router.push({ path: '/chat', query: { role: name, roleTitle } })
+}
+
+// ── 原型对齐批次（BUG-20260703 拍板落地）：头像 / 温度预设 / 模型真值 / SOUL 起草与
+//    专注编辑 / 创建弹窗高级区同构 / 创建并开始对话 ─────────────────────────────
+
+/** 头像候选（emoji，存 AgentConfig.metadata.avatar——后端 map[string]string 契约 B1 已锁） */
+const AVATAR_CHOICES = ['🦀', '🤖', '🎓', '📊', '✉️', '🌐', '✨']
+const newAgentAvatar = ref('🦀')
+const editAvatar = ref('')
+
+/** SOUL 快速起草骨架（创建/编辑共用；比结构化编辑器更轻的零白屏起点） */
+const SOUL_DRAFTS: Record<string, string> = {
+  expert: '你是〔领域〕的严谨专家。身份：〔一句话〕；语气：专业、克制、结论先行；专长：〔列 2-3 项〕；边界：不确定就说不确定，不编造，超出能力时明确说明。',
+  warm: '你是亲切的日常助手。身份：〔一句话〕；语气：温和友好、多用短句、适度 emoji；专长：〔列 2-3 项〕；边界：涉及健康、财务等重要决策时提醒用户核实。',
+  creative: '你是创意伙伴。身份：〔一句话〕；语气：活泼、有网感、敢发散；专长：头脑风暴、文案与标题；边界：事实性内容标注「需核实」。',
+}
+
+/** 温度预设锚点（0~2 对普通用户无意义；空串=跟随模型默认，保持 P2-4 三态语义） */
+const TEMP_PRESETS = [
+  { v: '', labelKey: 'agents.tempFollow' },
+  { v: '0.2', labelKey: 'agents.tempPrecise' },
+  { v: '0.7', labelKey: 'agents.tempBalanced' },
+  { v: '1.2', labelKey: 'agents.tempCreative' },
+] as const
+
+/** 全局默认模型真值（「跟随全局默认」的空态必须能回答"现在到底用什么模型"） */
+const resolvedGlobalDefaultModel = computed(() => {
+  const id = settingsStore.config?.llm?.defaultProviderId ?? ''
+  if (!id) return ''
+  const m = settingsStore.availableModels.find((mm) => mm.providerKey === id)
+  return m?.modelId ?? ''
+})
+
+// 创建弹窗高级区（与编辑弹窗同构；同一套三态/校验语义）
+const newAgentTemperature = ref<string | number>('')
+const newAgentMaxTokens = ref<string | number>('')
+const newAgentSkills = ref<string[]>([])
+
+const newAgentTemperatureValid = computed(() => {
+  const raw = advInputRaw(newAgentTemperature.value)
+  if (raw === '') return true
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 && n <= 2
+})
+
+const newAgentMaxTokensValid = computed(() => {
+  const raw = advInputRaw(newAgentMaxTokens.value)
+  if (raw === '') return true
+  const n = Number(raw)
+  return Number.isInteger(n) && n >= 0
+})
+
+/** skill 列表懒加载（两弹窗高级区共用） */
+async function ensureSkillsLoaded() {
+  if (skillsLoaded.value) return
+  try {
+    const res = await getSkills()
+    availableSkills.value = (res.skills ?? []).map((s) => ({ name: s.name, description: s.description }))
+    skillsLoaded.value = true
+  } catch {
+    availableSkills.value = [] // skill 列表拉不到只影响该选择器，不阻断其它高级项
+  }
+}
+
+async function toggleAddAdvanced() {
+  showAddAdvanced.value = !showAddAdvanced.value
+  if (showAddAdvanced.value) await ensureSkillsLoaded()
+}
+
+/** 高级区折叠摘要（收起时一眼看到关键配置，不必展开） */
+function advSummary(provider: string, model: string, temp: string | number, skills: string[]): string {
+  const modelPart = provider.trim()
+    ? `${provider}${model ? ' · ' + model : ''}`
+    : resolvedGlobalDefaultModel.value
+      ? t('agents.followGlobalWith', { model: resolvedGlobalDefaultModel.value })
+      : t('agents.useGlobalDefault')
+  const tempRaw = advInputRaw(temp)
+  const parts = [modelPart]
+  if (tempRaw !== '') parts.push(`T ${tempRaw}`)
+  if (skills.length) parts.push(t('agents.skillsMounted', { n: skills.length }))
+  return parts.join(' · ')
+}
+const addAdvSummary = computed(() =>
+  advSummary(newAgent.value.provider, newAgent.value.model, newAgentTemperature.value, newAgentSkills.value))
+const editAdvSummary = computed(() =>
+  advSummary(editingAgent.value.provider ?? '', editingAgent.value.model ?? '', editTemperature.value, editSkills.value))
+
+// SOUL 专注编辑（结构化编辑器）：从人设框 FLIP 放大，不关闭底层弹窗，完成回填
+const soulEditorOpen = ref(false)
+const soulEditorTarget = ref<'add' | 'edit'>('add')
+const soulEditorRect = ref<DOMRect | null>(null)
+const addSoulEl = ref<HTMLTextAreaElement | null>(null)
+const editSoulEl = ref<HTMLTextAreaElement | null>(null)
+
+function openSoulFocus(target: 'add' | 'edit') {
+  soulEditorTarget.value = target
+  const el = target === 'add' ? addSoulEl.value : editSoulEl.value
+  soulEditorRect.value = el ? el.getBoundingClientRect() : null
+  soulEditorOpen.value = true
+}
+
+const soulEditorSeed = computed(() =>
+  soulEditorTarget.value === 'add' ? (newAgent.value.system_prompt ?? '') : (editingAgent.value.system_prompt ?? ''))
+const soulEditorSkills = computed(() =>
+  soulEditorTarget.value === 'add' ? newAgentSkills.value : editSkills.value)
+const soulEditorAgentName = computed(() =>
+  soulEditorTarget.value === 'add'
+    ? (newAgent.value.display_name || newAgent.value.name || t('agents.newAgent'))
+    : (editingAgent.value.display_name || editingAgent.value.name))
+
+function onSoulApply(text: string) {
+  if (soulEditorTarget.value === 'add') newAgent.value.system_prompt = text
+  else editingAgent.value.system_prompt = text
+}
+
+function fillSoulDraft(target: 'add' | 'edit', key: string) {
+  const draft = SOUL_DRAFTS[key]
+  if (!draft) return
+  if (target === 'add') newAgent.value.system_prompt = draft
+  else editingAgent.value.system_prompt = draft
+}
+
 function openEditAgent(agent: AgentConfig) {
   errorMsg.value = ''
+  // BUG-20260703 D3：打开弹窗不再跑 syncAgentModelSelection——provider 失效时它会把
+  // 存量 model 当场清空（数据未保存就被动）。快照原 LLM 配置作「未真改就不校验」的
+  // 比较基准；赋值触发的 provider watch 用 suppress 挡掉这一次（用户真切 provider 时
+  // 联动同步照常）。
+  suppressEditProviderSync = true
   editingAgent.value = { ...agent }
-  syncAgentModelSelection(editingAgent.value)
+  editingOriginal.value = { provider: (agent.provider ?? '').trim(), model: (agent.model ?? '').trim() }
+  void nextTick(() => { suppressEditProviderSync = false })
+  // BUG-20260703 P2-4：高级参数种子——空串 = 未设（跟随模型默认），显式 0 是合法温度
+  editTemperature.value = agent.temperature === undefined || agent.temperature === null ? '' : String(agent.temperature)
+  editMaxTokens.value = agent.max_tokens ? String(agent.max_tokens) : ''
+  editSkills.value = [...(agent.skills ?? [])]
+  editAvatar.value = agent.metadata?.avatar ?? ''
+  showEditAdvanced.value = false
   showEditAgent.value = true
 }
+
+// ── 高级参数录入（BUG-20260703 P2-4：温度/max_tokens/skills 契约三方齐备但无 UI）──
+// type=number 的 v-model 会回写 number（runtime-dom looseToNumber），refs 按 string|number 收。
+const showEditAdvanced = ref(false)
+const editTemperature = ref<string | number>('') // '' = 未设；0 = 显式确定性采样（与后端指针三态对齐）
+const editMaxTokens = ref<string | number>('')   // '' = 未设（后端 int 契约 0=未设）
+
+/** 数字输入原文归一（number/string 双态 → trim 后字符串；空串 = 未设）。 */
+function advInputRaw(v: string | number): string {
+  return String(v ?? '').trim()
+}
+const editSkills = ref<string[]>([])
+const availableSkills = ref<{ name: string; description?: string }[]>([])
+const skillsLoaded = ref(false)
+
+async function toggleEditAdvanced() {
+  showEditAdvanced.value = !showEditAdvanced.value
+  if (showEditAdvanced.value) await ensureSkillsLoaded()
+}
+
+const editTemperatureValid = computed(() => {
+  const raw = advInputRaw(editTemperature.value)
+  if (raw === '') return true
+  const n = Number(raw)
+  return Number.isFinite(n) && n >= 0 && n <= 2
+})
+
+const editMaxTokensValid = computed(() => {
+  const raw = advInputRaw(editMaxTokens.value)
+  if (raw === '') return true
+  const n = Number(raw)
+  return Number.isInteger(n) && n >= 0
+})
 
 function resetAddAgentDialog() {
   newAgent.value = { name: '', display_name: '', model: '', provider: '' }
   addStep.value = 1
   selectedTemplateName.value = ''
   selectedTemplateExpertise.value = []
+  newAgentAvatar.value = '🦀'
+  newAgentTemperature.value = ''
+  newAgentMaxTokens.value = ''
+  newAgentSkills.value = []
 }
 
 function openAddAgentDialog() {
@@ -252,6 +439,15 @@ async function handleEditAgent() {
       model: editingAgent.value.model,
       // 人设(SOUL)：编辑时一并透传，否则注册后无法二次修改（BUG-20260625 §3-1）。
       system_prompt: editingAgent.value.system_prompt ?? '',
+      // 高级参数（BUG-20260703 P2-4）：温度三态——空输入=null 清除回「跟随模型默认」，
+      // 显式 0 如实下发（确定性采样）；max_tokens 空=0=未设（int 契约）；skills 全量覆盖。
+      temperature: advInputRaw(editTemperature.value) === '' ? null : Number(advInputRaw(editTemperature.value)),
+      max_tokens: advInputRaw(editMaxTokens.value) === '' ? 0 : Math.trunc(Number(advInputRaw(editMaxTokens.value))),
+      skills: [...editSkills.value],
+      // 头像（原型对齐批次）：合并进原 metadata（后端 map 整体覆盖语义），未选不动原值。
+      ...(editAvatar.value
+        ? { metadata: { ...(editingAgent.value.metadata ?? {}), avatar: editAvatar.value } }
+        : {}),
     })
     closeEditAgentDialog()
     await loadAgents()
@@ -415,6 +611,7 @@ watch(() => newAgent.value.provider, () => {
 })
 
 watch(() => editingAgent.value.provider, () => {
+  if (suppressEditProviderSync) return
   syncAgentModelSelection(editingAgent.value)
 })
 
@@ -446,22 +643,29 @@ const registerFormValid = computed(() => {
 
 const editFormValid = computed(() => {
   if (editingAgent.value.name.trim() === '') return false
-  const hasProvider = editingAgent.value.provider.trim() !== ''
-  const hasModel = editingAgent.value.model.trim() !== ''
+  // 高级参数合法域（BUG-20260703 P2-4）：温度 [0,2] / max_tokens 非负整数
+  if (!editTemperatureValid.value || !editMaxTokensValid.value) return false
+  const provider = editingAgent.value.provider.trim()
+  const model = editingAgent.value.model.trim()
+  // BUG-20260703 D3：LLM 配置与打开快照一致（未真改）→ 有效。失效 provider 不连坐
+  // 锁死人设编辑；后端对称放宽（handleUpdateAgent 未改不校验），真改时校验不放松。
+  if (provider === editingOriginal.value.provider && model === editingOriginal.value.model) return true
+  const hasProvider = provider !== ''
+  const hasModel = model !== ''
   if (!hasProvider && !hasModel) return true
   if (hasProvider && hasModel) {
-    return modelsForProvider(editingAgent.value.provider).some((m) => m.id === editingAgent.value.model)
+    return modelsForProvider(provider).some((m) => m.id === model)
   }
   return false
 })
 
-async function handleRegisterAgent() {
+async function handleRegisterAgent(andChat = false) {
   if (registering.value) return
   if (runtimeProviderOptions.value.length === 0) {
     errorMsg.value = t('agents.noRuntimeProviders', '当前没有可用的运行时模型，请先在设置中应用至少一个服务商')
     return
   }
-  if (!registerFormValid.value) {
+  if (!registerFormValid.value || !newAgentTemperatureValid.value || !newAgentMaxTokensValid.value) {
     errorMsg.value = t('agents.formIncomplete', '请完善必填字段')
     return
   }
@@ -472,9 +676,24 @@ async function handleRegisterAgent() {
   }
   registering.value = true
   try {
-    await registerAgent(newAgent.value)
+    // 原型对齐批次：创建与编辑同构——高级参数/挂载 Skill/头像 创建时即可配齐。
+    const tempRaw = advInputRaw(newAgentTemperature.value)
+    const tokenRaw = advInputRaw(newAgentMaxTokens.value)
+    const payload: AgentConfig = {
+      ...newAgent.value,
+      ...(tempRaw !== '' ? { temperature: Number(tempRaw) } : {}),
+      ...(tokenRaw !== '' ? { max_tokens: Math.trunc(Number(tokenRaw)) } : {}),
+      ...(newAgentSkills.value.length ? { skills: [...newAgentSkills.value] } : {}),
+      ...(newAgentAvatar.value
+        ? { metadata: { ...(newAgent.value.metadata ?? {}), avatar: newAgentAvatar.value } }
+        : {}),
+    }
+    const createdName = payload.name.trim()
+    await registerAgent(payload)
     closeAddAgentDialog()
     await loadAgents()
+    // 创建并开始对话（增长主动线）：直达与新智能体的第一句对话。
+    if (andChat && createdName) enterAgentChat(createdName)
   } catch (e) {
     errorMsg.value = e instanceof Error ? e.message : t('agents.registerAgentFailed')
     logger.error('注册 Agent 失败:', e)
@@ -588,12 +807,20 @@ async function handleUnregisterAgent() {
               >
                 <div class="hc-cxtop">
                   <div class="hc-cxlogo">
-                    <Bot :size="20" />
+                    <span v-if="agent.metadata?.avatar" class="text-[20px] leading-none">{{ agent.metadata.avatar }}</span>
+                    <Bot v-else :size="20" />
                   </div>
                   <div class="min-w-0 flex-1">
                     <div class="hc-cxnm flex items-center gap-2 flex-wrap">
                       {{ agent.display_name || agent.name }}
-                      <span v-if="agent.name === defaultAgent" class="hc-pill hc-pill--green">{{ t('agents.default') }}</span>
+                      <!-- BUG-20260703 问题4：router 自动兜底（第一个注册者）≠ 小蟹「默认助理」。
+                           徽章按真实语义命名，title 讲清桌面聊天不受它影响，消除双「默认」撞车。 -->
+                      <span
+                        v-if="agent.name === defaultAgent"
+                        class="hc-pill hc-pill--green"
+                        data-testid="agent-im-fallback-badge"
+                        :title="t('agents.imFallbackTitle')"
+                      >{{ t('agents.imFallback') }}</span>
                     </div>
                     <div class="hc-cxmeta truncate">{{ agent.description || t('agents.noDesc') }}</div>
                   </div>
@@ -610,8 +837,18 @@ async function handleUnregisterAgent() {
                   </span>
                 </div>
 
-                <!-- 操作行：编辑 + 停用（对齐原型；停用=注销，功能接线保留） -->
+                <!-- 操作行：进入对话 + 编辑 + 停用（对齐原型；停用=注销，功能接线保留） -->
                 <div class="hc-crow">
+                  <!-- BUG-20260703 问题1：每张卡一键进会话（复用 /chat?role= 的收件人锁定机制），
+                       不再只有 K12 卡能直达、其余智能体只能靠 @ 召唤。 -->
+                  <button
+                    class="hc-btn hc-btn-primary"
+                    :data-testid="`agent-enter-chat-${agent.name}`"
+                    @click="enterAgentChat(agent.name)"
+                  >
+                    <MessageSquare :size="13" />
+                    {{ t('agents.enterChat') }}
+                  </button>
                   <button class="hc-btn" @click="openEditAgent(agent)">
                     <Pencil :size="13" />
                     {{ t('common.edit') }}
@@ -709,73 +946,167 @@ async function handleUnregisterAgent() {
               </div>
             </template>
 
-            <!-- 第二步：表单（名称/显示名/人设(SOUL)/高级模型偏好） -->
+            <!-- 第二步：表单（原型对齐：基本信息展开 + 模型与参数/Skill 折叠，创建/编辑同构） -->
             <template v-else>
-              <div class="p-5 flex flex-col gap-3.5">
+              <div class="p-5 flex flex-col gap-3.5 overflow-y-auto min-h-0 flex-1">
                 <!-- 套用模板时展示其专长：厚数据可见，不在进表单时静默蒸发 -->
                 <div v-if="selectedTemplateExpertise.length" class="hc-tplexp" data-testid="template-expertise">
                   <span class="hc-tplexp__label">{{ t('agents.templateExpertiseLabel', '此模板擅长') }}</span>
                   <span v-for="exp in selectedTemplateExpertise" :key="exp" class="hc-tplexp__chip">{{ exp }}</span>
                 </div>
                 <div class="flex flex-col gap-1.5">
+                  <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.avatarLabel', '头像') }}</label>
+                  <div class="flex flex-wrap gap-2">
+                    <button
+                      v-for="e in AVATAR_CHOICES"
+                      :key="e"
+                      type="button"
+                      class="w-[34px] h-[34px] rounded-[10px] grid place-items-center text-[17px] border transition-transform hover:scale-105"
+                      :data-testid="`agent-avatar-pick-${e}`"
+                      :style="{
+                        cursor: 'pointer',
+                        background: newAgentAvatar === e ? 'var(--hc-accent-subtle)' : 'var(--hc-bg-input)',
+                        borderColor: newAgentAvatar === e ? 'var(--hc-accent)' : 'var(--hc-border)',
+                      }"
+                      @click="newAgentAvatar = e"
+                    >{{ e }}</button>
+                  </div>
+                </div>
+                <div class="flex flex-col gap-1.5">
                   <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.name') }}</label>
                   <input v-model="newAgent.name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="agent-name" />
+                  <span class="text-[11.5px] leading-snug" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.nameHint') }}</span>
                 </div>
                 <div class="flex flex-col gap-1.5">
                   <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.displayName') }}</label>
                   <input v-model="newAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="My Agent" />
+                  <span class="text-[11.5px] leading-snug" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.displayNameHint') }}</span>
                 </div>
-                <!-- 人设(SOUL)：纯文本，写回 newAgent.system_prompt（注册时随 AgentConfig 持久化） -->
+                <!-- 人设(SOUL)：自然语言（去 mono，RTL 铁律）+ 快速起草骨架 + 字数 + 专注编辑 -->
                 <div class="flex flex-col gap-1.5">
                   <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.soulField', '人设（SOUL）') }}</label>
                   <textarea
+                    ref="addSoulEl"
                     v-model="newAgentSoul"
-                    rows="4"
+                    rows="5"
                     :placeholder="t('agents.soulFieldPh', '描述该智能体的身份、语气、专长与边界。留空 = 使用全局默认人设。')"
-                    class="rounded-lg border px-3 py-2 text-sm outline-none resize-y font-mono leading-relaxed"
+                    class="rounded-lg border px-3 py-2 text-sm outline-none resize-y leading-relaxed"
                     :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
                   ></textarea>
-                  <p class="text-xs m-0" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulFieldHint', '留空 = 使用全局默认人设；建议写清身份、语气、专长与边界。') }}</p>
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="text-[11.5px]" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulQuickDraft', '快速起草：') }}</span>
+                    <button
+                      v-for="(_, key) in SOUL_DRAFTS"
+                      :key="key"
+                      type="button"
+                      class="text-[11.5px] px-2 py-1 rounded-lg border"
+                      :data-testid="`agent-soul-draft-${key}`"
+                      :style="{ cursor: 'pointer', background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }"
+                      @click="fillSoulDraft('add', key as string)"
+                    >{{ t(`agents.soulDraft.${key}`) }}</button>
+                    <button
+                      type="button"
+                      class="text-[11.5px] px-2 py-1 rounded-lg border inline-flex items-center gap-1"
+                      data-testid="agent-soul-focus-add"
+                      :style="{ cursor: 'pointer', background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }"
+                      @click="openSoulFocus('add')"
+                    >{{ t('agents.focusEdit', '专注编辑 ⤢') }}</button>
+                    <span class="text-[11px] ml-auto" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulCharCount', { n: (newAgentSoul || '').length }) }}</span>
+                  </div>
                 </div>
-                <!-- Advanced: model preference (collapsed by default) -->
+                <!-- 模型与参数 + 挂载 Skill：进阶折叠（有合理默认，多数人不必展开） -->
                 <button
                   type="button"
                   class="flex items-center gap-1.5 text-xs font-medium mt-1"
                   :style="{ color: 'var(--hc-text-muted)' }"
-                  @click="showAddAdvanced = !showAddAdvanced"
+                  data-testid="agent-add-adv-toggle"
+                  @click="toggleAddAdvanced"
                 >
                   <ChevronDown v-if="!showAddAdvanced" :size="12" />
                   <ChevronUp v-else :size="12" />
-                  {{ t('agents.modelPreference', 'Model preference') }}
-                  <span v-if="!newAgent.provider" class="font-normal">— {{ t('agents.useGlobalDefault') }}</span>
-                  <span v-else class="font-normal">— {{ newAgent.provider }} / {{ newAgent.model || '...' }}</span>
+                  {{ t('agents.advSection', '模型与参数 · Skill') }}
+                  <span class="font-normal" data-testid="agent-add-adv-summary">— {{ addAdvSummary }}</span>
                 </button>
                 <template v-if="showAddAdvanced">
                   <div class="flex flex-col gap-1.5">
-                    <label class="text-[12px]" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.modelPreferenceHint', 'When entering this agent conversation, auto-switch to this model. Leave empty to use the global default.') }}</label>
+                    <label class="text-[12px]" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.modelPreferenceHint', '进入该智能体会话时自动切换到此模型；留空跟随全局默认。') }}</label>
                     <HcSelect v-model="newAgent.provider" :options="newAgentProviderOptions" />
                   </div>
                   <div v-if="newAgent.provider" class="flex flex-col gap-1.5">
                     <HcSelect v-model="newAgent.model" :options="newAgentModelOptions" />
                   </div>
+                  <div v-else-if="resolvedGlobalDefaultModel" class="text-[12px]" data-testid="agent-add-model-follow" :style="{ color: 'var(--hc-text-muted)' }">
+                    {{ t('agents.followGlobalWith', { model: resolvedGlobalDefaultModel }) }} 🔒
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.temperature', '温度 (temperature)') }}</label>
+                    <div class="flex flex-wrap gap-1.5">
+                      <button
+                        v-for="p in TEMP_PRESETS"
+                        :key="p.v"
+                        type="button"
+                        class="px-2.5 py-1 rounded-lg text-[12px] border"
+                        :data-testid="`agent-add-temp-preset-${p.v || 'follow'}`"
+                        :style="{
+                          cursor: 'pointer',
+                          background: advInputRaw(newAgentTemperature) === p.v ? 'var(--hc-accent-subtle)' : 'var(--hc-bg-input)',
+                          borderColor: advInputRaw(newAgentTemperature) === p.v ? 'var(--hc-accent)' : 'var(--hc-border)',
+                          color: advInputRaw(newAgentTemperature) === p.v ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
+                        }"
+                        @click="newAgentTemperature = p.v"
+                      >{{ t(p.labelKey) }}{{ p.v ? ` ${p.v}` : '' }}</button>
+                    </div>
+                    <input
+                      v-model="newAgentTemperature"
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      class="rounded-lg border px-3 py-2 text-sm outline-none"
+                      :style="{ background: 'var(--hc-bg-input)', borderColor: newAgentTemperatureValid ? 'var(--hc-border)' : 'var(--hc-error)', color: 'var(--hc-text-primary)' }"
+                      :placeholder="t('agents.temperaturePlaceholder', '留空跟随模型默认；0 = 确定性')"
+                    />
+                    <span v-if="!newAgentTemperatureValid" class="text-[11px]" :style="{ color: 'var(--hc-error)' }">{{ t('agents.temperatureRange', '温度须在 0 ~ 2 之间') }}</span>
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.maxTokens', '最大输出 token') }}</label>
+                    <input
+                      v-model="newAgentMaxTokens"
+                      type="number"
+                      min="0"
+                      step="1"
+                      class="rounded-lg border px-3 py-2 text-sm outline-none"
+                      :style="{ background: 'var(--hc-bg-input)', borderColor: newAgentMaxTokensValid ? 'var(--hc-border)' : 'var(--hc-error)', color: 'var(--hc-text-primary)' }"
+                      :placeholder="t('agents.maxTokensPlaceholder', '留空跟随模型默认')"
+                    />
+                  </div>
+                  <AgentSkillPicker v-model="newAgentSkills" :available="availableSkills" />
                 </template>
               </div>
-              <div class="flex items-center justify-between gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
+              <div class="flex items-center justify-between gap-2 px-5 py-3.5 border-t flex-shrink-0" :style="{ borderColor: 'var(--hc-border)' }">
                 <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="addStep = 1">
                   {{ t('common.back', '上一步') }}
                 </button>
                 <div class="flex items-center gap-2">
-                  <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeAddAgentDialog">
-                    {{ t('common.cancel') }}
+                  <!-- 「仅创建」降级为次按钮；主 CTA=创建并开始对话（一个弹窗一个主行动） -->
+                  <button
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium"
+                    :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)', opacity: !registerFormValid ? 0.4 : 1 }"
+                    :disabled="!registerFormValid"
+                    data-testid="agent-create-only"
+                    @click="handleRegisterAgent(false)"
+                  >
+                    {{ t('agents.createOnly', '仅创建') }}
                   </button>
                   <button
                     class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
                     :style="{ background: 'var(--hc-accent)', opacity: !registerFormValid ? 0.4 : 1 }"
                     :disabled="!registerFormValid"
-                    @click="handleRegisterAgent"
+                    data-testid="agent-create-and-chat"
+                    @click="handleRegisterAgent(true)"
                   >
                     <Plus :size="14" />
-                    {{ t('common.create') }}
+                    {{ t('agents.createAndChat', '创建并开始对话') }}
                   </button>
                 </div>
               </div>
@@ -789,52 +1120,166 @@ async function handleUnregisterAgent() {
     <Teleport to="body">
       <Transition name="modal">
         <div v-if="showEditAgent" class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm" @click.self="closeEditAgentDialog">
+          <!-- 原型对齐：max-h + 头尾固定 + 中段独立滚动（修「保存按钮不可达」P0）；
+               基本信息展开，服务商/模型并入「模型与参数 · Skill」折叠区（与创建同构） -->
           <div
-            class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden"
+            class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden max-h-[85vh]"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
-            <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
+            <div class="flex items-center justify-between px-5 py-4 border-b flex-shrink-0" :style="{ borderColor: 'var(--hc-border)' }">
               <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('agents.editAgent') }}</h2>
               <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="closeEditAgentDialog">
                 <X :size="17" />
               </button>
             </div>
-            <div class="p-5 flex flex-col gap-3.5">
+            <div class="p-5 flex flex-col gap-3.5 overflow-y-auto min-h-0 flex-1">
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.avatarLabel', '头像') }}</label>
+                <div class="flex flex-wrap gap-2">
+                  <button
+                    v-for="e in AVATAR_CHOICES"
+                    :key="e"
+                    type="button"
+                    class="w-[34px] h-[34px] rounded-[10px] grid place-items-center text-[17px] border transition-transform hover:scale-105"
+                    :style="{
+                      cursor: 'pointer',
+                      background: editAvatar === e ? 'var(--hc-accent-subtle)' : 'var(--hc-bg-input)',
+                      borderColor: editAvatar === e ? 'var(--hc-accent)' : 'var(--hc-border)',
+                    }"
+                    @click="editAvatar = e"
+                  >{{ e }}</button>
+                </div>
+              </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.name') }}</label>
                 <input :value="editingAgent.name" type="text" disabled class="rounded-lg border px-3 py-2 text-sm outline-none opacity-60" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+                <span class="text-[11.5px] leading-snug" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.nameHint') }}</span>
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.displayName') }}</label>
                 <input v-model="editingAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
-              </div>
-              <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.provider') }}</label>
-                <HcSelect
-                  v-model="editingAgent.provider"
-                  :options="editAgentProviderOptions"
-                />
-              </div>
-              <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
-                <HcSelect
-                  v-model="editingAgent.model"
-                  :options="editAgentModelOptions"
-                  :disabled="!editingAgent.provider"
-                />
+                <span class="text-[11.5px] leading-snug" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.displayNameHint') }}</span>
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.systemPrompt', '人设(SOUL)') }}</label>
                 <textarea
+                  ref="editSoulEl"
                   v-model="editingAgent.system_prompt"
-                  rows="4"
-                  class="rounded-lg border px-3 py-2 text-sm outline-none resize-y"
+                  rows="5"
+                  class="rounded-lg border px-3 py-2 text-sm outline-none resize-y leading-relaxed"
                   :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
                   :placeholder="t('agents.systemPromptPlaceholder', '定义该 Agent 的角色与行为，留空则用默认人设')"
                 ></textarea>
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <span class="text-[11.5px]" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulQuickDraft', '快速起草：') }}</span>
+                  <button
+                    v-for="(_, key) in SOUL_DRAFTS"
+                    :key="key"
+                    type="button"
+                    class="text-[11.5px] px-2 py-1 rounded-lg border"
+                    :style="{ cursor: 'pointer', background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }"
+                    @click="fillSoulDraft('edit', key as string)"
+                  >{{ t(`agents.soulDraft.${key}`) }}</button>
+                  <button
+                    type="button"
+                    class="text-[11.5px] px-2 py-1 rounded-lg border inline-flex items-center gap-1"
+                    data-testid="agent-soul-focus-edit"
+                    :style="{ cursor: 'pointer', background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }"
+                    @click="openSoulFocus('edit')"
+                  >{{ t('agents.focusEdit', '专注编辑 ⤢') }}</button>
+                  <span class="text-[11px] ml-auto" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulCharCount', { n: (editingAgent.system_prompt || '').length }) }}</span>
+                </div>
+              </div>
+
+              <!-- 模型与参数 + 挂载 Skill（P2-4 契约保留：agent-adv-* testid 不变） -->
+              <div class="flex flex-col gap-2">
+                <button
+                  type="button"
+                  class="flex items-center gap-1.5 text-[12px] font-medium self-start"
+                  :style="{ color: 'var(--hc-text-muted)', background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }"
+                  :aria-expanded="showEditAdvanced"
+                  data-testid="agent-adv-toggle"
+                  @click="toggleEditAdvanced"
+                >
+                  <ChevronDown v-if="!showEditAdvanced" :size="12" />
+                  <ChevronUp v-else :size="12" />
+                  {{ t('agents.advSection', '模型与参数 · Skill') }}
+                  <span class="font-normal" data-testid="agent-adv-summary">— {{ editAdvSummary }}</span>
+                </button>
+                <div v-if="showEditAdvanced" class="flex flex-col gap-3 rounded-lg p-3" :style="{ background: 'var(--hc-bg-card)' }">
+                  <div class="flex flex-col gap-1.5">
+                    <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.provider') }}</label>
+                    <HcSelect
+                      v-model="editingAgent.provider"
+                      :options="editAgentProviderOptions"
+                    />
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.model') }}</label>
+                    <HcSelect
+                      v-model="editingAgent.model"
+                      :options="editAgentModelOptions"
+                      :disabled="!editingAgent.provider"
+                    />
+                    <span v-if="!editingAgent.provider && resolvedGlobalDefaultModel" class="text-[11.5px]" data-testid="agent-edit-model-follow" :style="{ color: 'var(--hc-text-muted)' }">
+                      {{ t('agents.followGlobalWith', { model: resolvedGlobalDefaultModel }) }} 🔒
+                    </span>
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">
+                      {{ t('agents.temperature', '温度 (temperature)') }}
+                    </label>
+                    <div class="flex flex-wrap gap-1.5">
+                      <button
+                        v-for="p in TEMP_PRESETS"
+                        :key="p.v"
+                        type="button"
+                        class="px-2.5 py-1 rounded-lg text-[12px] border"
+                        :data-testid="`agent-temp-preset-${p.v || 'follow'}`"
+                        :style="{
+                          cursor: 'pointer',
+                          background: advInputRaw(editTemperature) === p.v ? 'var(--hc-accent-subtle)' : 'var(--hc-bg-input)',
+                          borderColor: advInputRaw(editTemperature) === p.v ? 'var(--hc-accent)' : 'var(--hc-border)',
+                          color: advInputRaw(editTemperature) === p.v ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
+                        }"
+                        @click="editTemperature = p.v"
+                      >{{ t(p.labelKey) }}{{ p.v ? ` ${p.v}` : '' }}</button>
+                    </div>
+                    <input
+                      v-model="editTemperature"
+                      type="number"
+                      min="0"
+                      max="2"
+                      step="0.1"
+                      data-testid="agent-adv-temperature"
+                      class="rounded-lg border px-3 py-2 text-sm outline-none"
+                      :style="{ background: 'var(--hc-bg-input)', borderColor: editTemperatureValid ? 'var(--hc-border)' : 'var(--hc-error)', color: 'var(--hc-text-primary)' }"
+                      :placeholder="t('agents.temperaturePlaceholder', '留空跟随模型默认；0 = 确定性')"
+                    />
+                    <span v-if="!editTemperatureValid" class="text-[11px]" :style="{ color: 'var(--hc-error)' }">
+                      {{ t('agents.temperatureRange', '温度须在 0 ~ 2 之间') }}
+                    </span>
+                  </div>
+                  <div class="flex flex-col gap-1.5">
+                    <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">
+                      {{ t('agents.maxTokens', '最大输出 token') }}
+                    </label>
+                    <input
+                      v-model="editMaxTokens"
+                      type="number"
+                      min="0"
+                      step="1"
+                      data-testid="agent-adv-maxtokens"
+                      class="rounded-lg border px-3 py-2 text-sm outline-none"
+                      :style="{ background: 'var(--hc-bg-input)', borderColor: editMaxTokensValid ? 'var(--hc-border)' : 'var(--hc-error)', color: 'var(--hc-text-primary)' }"
+                      :placeholder="t('agents.maxTokensPlaceholder', '留空跟随模型默认')"
+                    />
+                  </div>
+                  <AgentSkillPicker v-model="editSkills" :available="availableSkills" />
+                </div>
               </div>
             </div>
-            <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
+            <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t flex-shrink-0" :style="{ borderColor: 'var(--hc-border)' }">
               <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeEditAgentDialog">
                 {{ t('common.cancel') }}
               </button>
@@ -850,6 +1295,19 @@ async function handleUnregisterAgent() {
           </div>
         </div>
       </Transition>
+    </Teleport>
+
+    <!-- SOUL 结构化编辑器（专注编辑 ⤢，创建/编辑共用；FLIP 放大、不关底层弹窗、完成回填） -->
+    <Teleport to="body">
+      <SoulStructuredEditor
+        v-if="soulEditorOpen"
+        :model-value="soulEditorSeed"
+        :agent-name="soulEditorAgentName"
+        :source-rect="soulEditorRect"
+        :skills="soulEditorSkills"
+        @apply="onSoulApply"
+        @close="soulEditorOpen = false"
+      />
     </Teleport>
 
     <!-- 默认助理「小蟹」人设(SOUL) 编辑弹层 -->

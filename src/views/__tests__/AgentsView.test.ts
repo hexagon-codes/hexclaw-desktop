@@ -329,8 +329,8 @@ describe('AgentsView', () => {
     vm.startFromBlank()
     await flushPromises()
 
-    // Model preference is collapsed by default — expand it
-    const advancedToggle = wrapper.findAll('button').find((b) => b.text().includes('模型偏好'))
+    // 模型与参数折叠区默认收起 — 展开(原型对齐后文案与位置更新)
+    const advancedToggle = wrapper.find('[data-testid="agent-add-adv-toggle"]')
     expect(advancedToggle?.exists()).toBe(true)
     await advancedToggle!.trigger('click')
     await flushPromises()
@@ -365,9 +365,9 @@ describe('AgentsView', () => {
     vm.startFromBlank()
     await flushPromises()
 
-    // Expand advanced section
-    const advancedToggle = wrapper.findAll('button').find((b) => b.text().includes('模型偏好'))
-    await advancedToggle!.trigger('click')
+    // Expand advanced section（原型对齐后：模型与参数折叠区）
+    const advancedToggle = wrapper.find('[data-testid="agent-add-adv-toggle"]')
+    await advancedToggle.trigger('click')
     await flushPromises()
 
     const selects = wrapper.findAllComponents(HcSelect)
@@ -741,6 +741,9 @@ describe('AgentsView', () => {
     vm.editingAgent = { name: 'researcher', display_name: '高级研究分析师', provider: '', model: '' }
     vm.showEditAgent = true
     await flushPromises()
+    // 原型对齐后 provider/model 位于「模型与参数」折叠区 — 展开再断言下拉占位
+    await wrapper.find('[data-testid="agent-adv-toggle"]').trigger('click')
+    await flushPromises()
 
     const selects = wrapper.findAllComponents(HcSelect)
     expect(selects.length).toBe(2) // 编辑弹层仅 provider + model 两个下拉
@@ -781,6 +784,50 @@ describe('AgentsView', () => {
     expect(updateAgent).toHaveBeenCalledWith(
       'coder',
       expect.objectContaining({ system_prompt: '更新后的人设' }),
+    )
+  })
+
+  // BUG-20260704：从智能体卡「进入对话」时只带 role=<name>，会话标题落到内部英文 name，
+  // 不是用户看得懂的显示名称。对齐 WelcomeView：必须同时带 roleTitle=display_name。
+  it('进入对话携带 display_name 作为 roleTitle（会话标题显示名而非内部 name）', async () => {
+    getAgents.mockResolvedValue({
+      agents: [{ name: 'k12-tutor', display_name: '作业辅导小蟹', provider: '', model: '' }],
+      total: 1,
+      default: '',
+    })
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const pushSpy = vi.spyOn(wrapper.vm.$router, 'push').mockResolvedValue(undefined as never)
+    const btn = wrapper.find('[data-testid="agent-enter-chat-k12-tutor"]')
+    expect(btn.exists(), '应有进入对话按钮').toBe(true)
+    await btn.trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/chat',
+        query: expect.objectContaining({ role: 'k12-tutor', roleTitle: '作业辅导小蟹' }),
+      }),
+    )
+  })
+
+  // display_name 缺省时 roleTitle 回退到 name（不产出空标题）。
+  it('display_name 为空时 roleTitle 回退到内部 name', async () => {
+    getAgents.mockResolvedValue({
+      agents: [{ name: 'bare-agent', display_name: '', provider: '', model: '' }],
+      total: 1,
+      default: '',
+    })
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const pushSpy = vi.spyOn(wrapper.vm.$router, 'push').mockResolvedValue(undefined as never)
+    await wrapper.find('[data-testid="agent-enter-chat-bare-agent"]').trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({ role: 'bare-agent', roleTitle: 'bare-agent' }),
+      }),
     )
   })
 })

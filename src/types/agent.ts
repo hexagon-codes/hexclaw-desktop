@@ -21,7 +21,9 @@ export interface AgentConfig {
   skills?: string[]
   max_tokens?: number
   temperature?: number
-  metadata?: Record<string, unknown>
+  // 与后端契约对齐：router/agent_router.go AgentConfig.Metadata 是 map[string]string，
+  // 非字符串值透传即 JSON decode 400（BUG-20260703 B1）。
+  metadata?: Record<string, string>
 }
 
 /** 路由规则（platform/instance/user/chat → agent_name） */
