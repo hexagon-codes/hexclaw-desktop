@@ -732,4 +732,81 @@ describe('QuickChatView', () => {
 
     expect(wrapper.text()).toContain('模型只完成了思考，没有输出最终回答，请重试一次。')
   })
+
+  // BUG-20260703 A1（hex-test 对抗审查暴露）：QuickChat 无 Agent 选择 UI = 恒对默认助理，
+  // 必须发 pinned_agent 锁定信号，否则 provider 解析为空时后端按内容路由被专属 Agent 抢答。
+  it('sends pinned_agent=default so QuickChat is never hijacked by content routing (WS)', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useSettingsStore()
+    store.config = {
+      llm: {
+        providers: [{
+          id: 'openai', backendKey: 'openai', name: 'OpenAI', type: 'openai',
+          enabled: true, apiKey: '', baseUrl: 'https://api.openai.com/v1',
+          models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+        }],
+        defaultModel: 'gpt-4o', defaultProviderId: 'openai',
+      },
+      security: { gateway_enabled: true, injection_detection: true, pii_filter: false, content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60 },
+      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: 'assistant' },
+      notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
+      mcp: { default_protocol: 'stdio' },
+    }
+    store.runtimeProviders = store.config.llm.providers
+
+    const wrapper = mount(QuickChatView, {
+      global: { plugins: [pinia, createTestI18n()], stubs: { MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' } } },
+    })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('帮我把这句话翻译成英文')
+    const btns = wrapper.findAll('button')
+    await btns[btns.length - 1]!.trigger('click')
+    await flushPromises()
+
+    expect(wsMock.sendMessage).toHaveBeenCalled()
+    // 第 9 个位置参数是 metadata（withModelReasoningDefaults 的返回）。
+    const metaArg = wsMock.sendMessage.mock.calls[0]?.[8] as Record<string, unknown> | undefined
+    expect(metaArg?.pinned_agent).toBe('default')
+  })
+
+  it('sends pinned_agent=default on the HTTP fallback path too', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useSettingsStore()
+    store.config = {
+      llm: {
+        providers: [{
+          id: 'openai', backendKey: 'openai', name: 'OpenAI', type: 'openai',
+          enabled: true, apiKey: '', baseUrl: 'https://api.openai.com/v1',
+          models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
+        }],
+        defaultModel: 'gpt-4o', defaultProviderId: 'openai',
+      },
+      security: { gateway_enabled: true, injection_detection: true, pii_filter: false, content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60 },
+      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: 'assistant' },
+      notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
+      mcp: { default_protocol: 'stdio' },
+    }
+    store.runtimeProviders = store.config.llm.providers
+    // 强制走 HTTP fallback：WS 未连接。
+    wsMock.isConnected.mockReturnValue(false)
+    vi.mocked(sendChat).mockResolvedValueOnce({ reply: 'ok' } as never)
+
+    const wrapper = mount(QuickChatView, {
+      global: { plugins: [pinia, createTestI18n()], stubs: { MarkdownRenderer: { props: ['content'], template: '<div>{{ content }}</div>' } } },
+    })
+    await flushPromises()
+
+    await wrapper.get('textarea').setValue('帮我把这句话翻译成英文')
+    const btns = wrapper.findAll('button')
+    await btns[btns.length - 1]!.trigger('click')
+    await flushPromises()
+
+    expect(sendChat).toHaveBeenCalled()
+    const arg = vi.mocked(sendChat).mock.calls[0]?.[0] as { metadata?: Record<string, unknown> }
+    expect(arg?.metadata?.pinned_agent).toBe('default')
+    wsMock.isConnected.mockReturnValue(true)
+  })
 })

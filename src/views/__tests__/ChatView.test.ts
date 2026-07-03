@@ -397,6 +397,23 @@ describe('ChatView — E2E 关键路径', () => {
     expect(typingIndicator.exists() || stopBtn.exists()).toBe(true)
   })
 
+  it('BUG-20260629 sending 但首个 token 未到时立即显示 assistant pending 气泡', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const { useChatStore } = await import('@/stores/chat')
+    const store = useChatStore()
+
+    store.currentSessionId = 'pending-session'
+    store.sending = true
+    store.streaming = false
+    store.streamingContent = ''
+    store.messages.push({ id: 'u1', role: 'user', content: '问题', timestamp: '' })
+    await flushPromises()
+
+    expect(wrapper.find('.hc-typing-dots').exists()).toBe(true)
+  })
+
   // ────────────────────────────────────────────────────
   // 6. 流式输出有内容时显示 MarkdownRenderer
   // ────────────────────────────────────────────────────

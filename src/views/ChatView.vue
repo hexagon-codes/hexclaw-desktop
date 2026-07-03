@@ -65,6 +65,7 @@ import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import { getDocPreviewFile } from '@/utils/doc-preview'
 import { uploadDocumentPreview, documentPreviewUrl } from '@/api/documents'
 import { openOrDownloadDocument } from '@/utils/download'
+import { backendDeletableMessageId } from '@/utils/chat-message-id'
 import crabLogo from '@/assets/logo-crab.png'
 
 const { t, locale } = useI18n()
@@ -91,6 +92,10 @@ let queryModelSelectionAbort: AbortController | null = null
 const streamingReasoningDisplay = computed(() =>
   normalizeAssistantReasoning(chatStore.isCurrentStreamingReasoning, { trim: false }),
 )
+const showAssistantPending = computed(() => {
+  if (chatStore.isCurrentStreaming || !chatStore.sending || chatStore.messages.length === 0) return false
+  return chatStore.messages[chatStore.messages.length - 1]?.role === 'user'
+})
 
 const messagesEndRef = ref<HTMLDivElement>()
 const messagesContainerRef = ref<HTMLDivElement>()
@@ -187,7 +192,7 @@ async function handleMsgCtxAction(action: string) {
       // AP-094 同类：旧实现 fire-and-forget 吞错→删除失败时后端残留、重载"复活"。
       // 现：乐观移除 + await，失败回滚 UI + 提示；404/410=已不在后端视为删除达成。
       const removed = chatStore.messages.splice(idx, 1)
-      void Promise.all(removed.map((m) => removeMessage(m.id))).catch((error) => {
+      void Promise.all(removed.map((m) => removeMessage(backendDeletableMessageId(m)))).catch((error) => {
         const status = (error as { status?: number })?.status
         if (status === 404 || status === 410) return
         chatStore.messages.splice(idx, 0, ...removed)
@@ -1795,6 +1800,7 @@ function startSidebarResize(event: MouseEvent) {
               :key="msg.id"
               class="hc-msg"
               :class="msg.role === 'user' ? 'hc-msg--user' : 'hc-msg--assistant'"
+              :data-testid="msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'"
               @mouseenter="setHoveredMsg(msg.id)"
               @mouseleave="delayedClearHover()"
               @contextmenu="handleMsgContextMenu($event, idx, msg.role as 'user' | 'assistant')"
@@ -1883,6 +1889,7 @@ function startSidebarResize(event: MouseEvent) {
                         v-if="msg.blocks?.length"
                         :blocks="msg.blocks"
                         :tool-calls="msg.tool_calls"
+                        :fallback-content="sanitizeMessageContent(msg.content)"
                       />
                       <MarkdownRenderer v-else :content="sanitizeMessageContent(msg.content)" />
                       <!-- v0.4.0 G3/E6 通用交互块（buttons/select/approval/card 4 type）；
@@ -2207,7 +2214,11 @@ function startSidebarResize(event: MouseEvent) {
             />
 
             <!-- Streaming / Typing indicator -->
-            <div v-if="chatStore.isCurrentStreaming" class="hc-msg hc-msg--assistant">
+            <div
+              v-if="chatStore.isCurrentStreaming || showAssistantPending"
+              class="hc-msg hc-msg--assistant"
+              data-testid="chat-assistant-pending"
+            >
               <div class="hc-msg__avatar">
                 <img :src="crabLogo" alt="HC" class="hc-msg__avatar-img" />
                 <span class="hc-msg__avatar-badge" />

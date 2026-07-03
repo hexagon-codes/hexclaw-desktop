@@ -119,7 +119,7 @@ describe('集成: 模型配置 → 模型选择 → 发消息', () => {
     expect(chatSvc.sendViaBackend).toHaveBeenCalledWith(
       '你好', expect.any(String),
       expect.objectContaining({ model: 'qwen3:8b', provider: expect.stringContaining('Ollama') }),
-      '', undefined, undefined, expect.any(String),
+      '', undefined, { pinned_agent: 'default' }, expect.any(String),
     )
   })
 })
@@ -304,7 +304,7 @@ describe('集成: Agent 角色 → 对话', () => {
     // 验证 sendViaBackend 收到了 role
     expect(chatSvc.sendViaBackend).toHaveBeenCalledWith(
       expect.any(String), expect.any(String),
-      expect.any(Object), 'researcher', undefined, undefined, expect.any(String),
+      expect.any(Object), 'researcher', undefined, { pinned_agent: 'researcher' }, expect.any(String),
     )
 
     // Step 2: 退出 research 模式
@@ -317,7 +317,7 @@ describe('集成: Agent 角色 → 对话', () => {
     expect(chat.agentRole).toBe('')
     expect(chatSvc.sendViaBackend).toHaveBeenLastCalledWith(
       expect.any(String), expect.any(String),
-      expect.any(Object), '', undefined, undefined, expect.any(String),
+      expect.any(Object), '', undefined, { pinned_agent: 'default' }, expect.any(String),
     )
   })
 })

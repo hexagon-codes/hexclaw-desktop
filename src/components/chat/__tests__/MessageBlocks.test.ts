@@ -8,8 +8,8 @@ const stubs = {
   ToolCallCard: { props: ['call'], template: '<div class="card" :data-id="call.id" :data-res="call.result" />' },
 }
 
-function mountBlocks(blocks: ContentBlock[], toolCalls?: ToolCall[]) {
-  return mount(MessageBlocks, { props: { blocks, toolCalls }, global: { stubs } })
+function mountBlocks(blocks: ContentBlock[], toolCalls?: ToolCall[], fallbackContent?: string) {
+  return mount(MessageBlocks, { props: { blocks, toolCalls, fallbackContent }, global: { stubs } })
 }
 
 describe('MessageBlocks —— 有序交错渲染（P4）', () => {
@@ -46,5 +46,16 @@ describe('MessageBlocks —— 有序交错渲染（P4）', () => {
     const blocks: ContentBlock[] = [{ type: 'tool_use', id: 'x', name: 'weather', input: '{"a":1}' }]
     const w = mountBlocks(blocks, [])
     expect(w.find('.card').attributes('data-id')).toBe('x')
+  })
+
+  it('BUG-20260629 blocks 只有工具块时，用消息正文兜底，避免最终答案被工具列表替换', () => {
+    const blocks: ContentBlock[] = [
+      { type: 'tool_use', id: 't1', name: 'session_search', input: '{"q":"知识库"}' },
+      { type: 'tool_use', id: 't2', name: 'app_query', input: '{}' },
+    ]
+    const w = mountBlocks(blocks, [], '知识库里有：API 规范、产品说明、部署手册。')
+
+    expect(w.findAll('.card')).toHaveLength(2)
+    expect(w.find('.md').attributes('data-c')).toBe('知识库里有：API 规范、产品说明、部署手册。')
   })
 })

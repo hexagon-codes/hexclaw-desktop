@@ -781,6 +781,8 @@ describe('chat controller modules', () => {
     expect(controller.buildRequestMetadata()).toEqual({
       thinking: 'on',
       memory: 'off',
+      // BUG-20260703：聊天路径恒带锁定信号，空 agentRole = 默认助理
+      pinned_agent: 'default',
     })
   })
 

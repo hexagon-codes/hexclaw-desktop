@@ -8,6 +8,7 @@ import { ref, nextTick } from 'vue'
 import { removeMessage } from '@/services/messageService'
 import { i18n } from '@/i18n'
 import { logger } from '@/utils/logger'
+import { backendDeletableMessageId } from '@/utils/chat-message-id'
 import type { useChatStore } from '@/stores/chat'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { useToast } from './useToast'
@@ -80,7 +81,7 @@ export function useChatActions(
     // BUG（2026-06-28 用户反馈）：编辑早期消息会删掉其后整条尾巴；旧实现**逐条串行 await** →
     // N 条 = N 个网络往返串起来 = 提交后"卡几秒"才出现"正在思考"。改**并行删除**（往返折叠为一批），
     // 再按结果精确回滚：删失败的（仍在后端）原序恢复、删成功的不恢复——仍满足 AP-094「只删少不删多」。
-    const results = await Promise.allSettled(snapshot.map((m) => removeMessage(m!.id)))
+    const results = await Promise.allSettled(snapshot.map((m) => removeMessage(backendDeletableMessageId(m!))))
     const failed: ChatMessage[] = []
     for (let i = 0; i < results.length; i++) {
       const r = results[i]!

@@ -304,7 +304,7 @@ describe('Scenario 1: Full chat send chain (WebSocket path)', () => {
       '',
       undefined,
       expect.objectContaining({ onChunk: expect.any(Function) }),
-      undefined,
+      { pinned_agent: 'default' },
       expect.any(String),
     )
 
@@ -397,7 +397,7 @@ describe('Scenario 2: WebSocket disconnect -> HTTP fallback', () => {
       expect.any(Object),
       '',
       undefined,
-      undefined,
+      { pinned_agent: 'default' },
       expect.any(String),
     )
 

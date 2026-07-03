@@ -16,9 +16,13 @@ import { withModelReasoningDefaults } from '@/utils/model-reasoning'
 import { DESKTOP_USER_ID, USER_CANCELLED_MESSAGE } from '@/constants'
 import type { ChatMessage, ChatAttachment } from '@/types'
 
-const WS_FIRST_REPLY_TIMEOUT_MS = 120_000
-const WS_INACTIVITY_TIMEOUT_MS = 120_000
-const BACKEND_REPLY_TIMEOUT_MS = 120_000
+// Real cloud models can spend more than two minutes in provider queueing before
+// the first chunk or tool approval arrives. Keep the request socket alive long
+// enough for that first observable event, otherwise tool approval becomes
+// impossible because the UI has already closed the stream.
+const WS_FIRST_REPLY_TIMEOUT_MS = 300_000
+const WS_INACTIVITY_TIMEOUT_MS = 300_000
+const BACKEND_REPLY_TIMEOUT_MS = 300_000
 
 export class ChatRequestError extends Error {
   noFallback: boolean
@@ -88,6 +92,7 @@ export function sendViaWebSocket(
     hexclawWS.clearStreamCallbacks()
 
     let settled = false
+    let accumulatedContent = ''
     let firstReplyTimer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
       fail(new ChatRequestError('Assistant reply timed out — no response received.', false))
     }, WS_FIRST_REPLY_TIMEOUT_MS)
@@ -116,12 +121,13 @@ export function sendViaWebSocket(
 
     hexclawWS.onChunk((chunk) => {
       markActivity()
+      if (chunk.content) accumulatedContent += chunk.content
       callbacks?.onChunk?.(chunk.content, chunk.reasoning)
       if (chunk.done && !settled) {
         settled = true
         clearTimers()
         callbacks?.onDone?.(
-          '', // content assembled by caller
+          accumulatedContent,
           chunk.metadata,
           chunk.tool_calls,
           typeof chunk.metadata?.agent_name === 'string' ? chunk.metadata.agent_name : undefined,
@@ -182,6 +188,7 @@ function openRequestSocket(
   const ws = new WebSocket(url)
 
   let settled = false
+  let accumulatedContent = ''
   let firstReplyTimer: ReturnType<typeof setTimeout> | null = null
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null
   let resolveDone!: (value: WebSocketStreamResult | null) => void
@@ -272,10 +279,11 @@ function openRequestSocket(
     switch (msg.type) {
       case 'chunk':
         markActivity()
+        if (msg.content) accumulatedContent += msg.content
         callbacks?.onChunk?.(msg.content, msg.reasoning)
         if (msg.done) {
           settleResolve({
-            content: '',
+            content: accumulatedContent,
             metadata: msg.metadata,
             toolCalls: msg.tool_calls,
             blocks: msg.blocks,

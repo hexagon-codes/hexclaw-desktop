@@ -157,6 +157,11 @@ export async function loadMessages(sessionId: string): Promise<ChatMessage[]> {
       // 反馈与后端消息 id 还原：后端把 like/dislike 存独立 feedback 列、消息 id 即 m.id。
       // 重载时回填到 metadata，让 UI 高亮（user_feedback）与重载后再点赞落库（backend_message_id）都生效。
       const mergedMeta: Record<string, unknown> = { ...(meta ?? {}) }
+      // 思考时长与 reasoning 同存于后端 meta 扩展列（SaveAssistantReply 落库）。
+      // 重载时必须一并还原，否则切会话后「已思考 N 秒」退化为无时长（BUG-20260703）。
+      if (mergedMeta.thinking_duration == null && metaExt?.thinking_duration != null) {
+        mergedMeta.thinking_duration = metaExt.thinking_duration
+      }
       const rawFeedback = (m as unknown as Record<string, unknown>).feedback
       if (rawFeedback === 'like' || rawFeedback === 'dislike') {
         mergedMeta.user_feedback = rawFeedback

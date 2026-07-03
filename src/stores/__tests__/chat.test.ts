@@ -581,7 +581,7 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      undefined,
+      { pinned_agent: 'default' },
       expect.any(String),
     )
     expect(openWebSocketStream).toHaveBeenNthCalledWith(
@@ -592,7 +592,7 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      undefined,
+      { pinned_agent: 'default' },
       expect.any(String),
     )
 
@@ -649,7 +649,7 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      undefined,
+      { pinned_agent: 'default' },
       expect.any(String),
     )
   })
@@ -675,7 +675,8 @@ describe('useChatStore', () => {
       'coder',
       undefined,
       expect.any(Object),
-      undefined,
+      // BUG-20260703：显式 Agent 同时作为 pinned_agent 锁定，后端跳过内容路由
+      { pinned_agent: 'coder' },
       expect.any(String),
     )
   })
@@ -829,7 +830,7 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      { thinking: 'on' },
+      { thinking: 'on', pinned_agent: 'default' },
       expect.any(String),
     )
   })
@@ -870,7 +871,7 @@ describe('useChatStore', () => {
     expect(msg?.reasoning).toBe('用户再次提问')
   })
 
-  it('sends undefined metadata when thinkingEnabled is off (default)', async () => {
+  it('sends only the pinned-agent lock when thinkingEnabled is off (default)', async () => {
     ensureWebSocketConnected.mockResolvedValue(true)
     openWebSocketStream.mockImplementation(
       () => ({ cancel: vi.fn(), done: Promise.resolve({ content: '已完成' }) }),
@@ -889,7 +890,8 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      undefined,
+      // BUG-20260703：聊天请求恒带 pinned_agent（默认助理=default），不再是 undefined
+      { pinned_agent: 'default' },
       expect.any(String),
     )
   })
@@ -909,7 +911,7 @@ describe('useChatStore', () => {
       expect.any(Object),
       '',
       undefined,
-      { thinking: 'on' },
+      { thinking: 'on', pinned_agent: 'default' },
       expect.any(String),
     )
   })
@@ -1025,7 +1027,7 @@ describe('useChatStore', () => {
       { provider: '智谱', model: 'glm-5' },
       '',
       undefined,
-      undefined,
+      { pinned_agent: 'default' },
       expect.any(String),
     )
   })

@@ -1,5 +1,5 @@
 export function isQwenThinkingModel(model?: string): boolean {
-  return /^qwen3(?:\.5)?(?::|$)/i.test(model?.trim() ?? '')
+  return /(?:^|[/_-])qwen3(?:[.:-]|\b)/i.test(model?.trim() ?? '')
 }
 
 export function withModelReasoningDefaults(
