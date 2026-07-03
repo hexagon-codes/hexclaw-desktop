@@ -96,7 +96,7 @@ async function toggleSpeak() {
         <Square v-if="isSpeaking" :size="13" />
         <Volume2 v-else :size="13" />
       </button>
-      <button class="hc-msg-actions__btn" :title="t('chat.regenerate')" @click="emit('retry')">
+      <button class="hc-msg-actions__btn" :title="t('chat.regenerate')" data-testid="message-regenerate" @click="emit('retry')">
         <RotateCcw :size="13" />
       </button>
     </template>

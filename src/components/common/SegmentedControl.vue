@@ -75,6 +75,7 @@ onBeforeUnmount(() => ro?.disconnect())
       type="button"
       role="tab"
       :aria-selected="modelValue === seg.key"
+      :data-testid="`segmented-${seg.key}`"
       class="hc-segmented__btn"
       :class="{ 'hc-segmented__btn--active': modelValue === seg.key }"
       @click="emit('update:modelValue', seg.key)"

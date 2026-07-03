@@ -250,16 +250,24 @@ cd hexclaw-desktop
 make install
 # 等价于: pnpm install && cd src-tauri && cargo fetch
 
-# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.4.3)
+# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.4.8)
 make sidecar
+
+# 本机全生态联调/装机测试：使用 ../hexclaw 和 ../go.work 中的本地最新代码
+make sidecar-local
+
+# 本机装机包：先校验本地 Go workspace，再重建 sidecar、生成 .app 和本地测试 DMG
+make package-local
 
 # 4. 启动开发模式
 make dev
 ```
 
 > **注意**:
-> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.4.3` 到 `/tmp/hexclaw-gith-src` 并编译
+> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.4.8` 到 `/tmp/hexclaw-gith-src` 并编译
 > - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
+> - 本机装机测试使用 `make sidecar-local`，等价于 `HEXCLAW_LOCAL_SRC=../hexclaw HEXCLAW_GOWORK=../go.work make sidecar`，会让 `ai-core`、`hexagon`、`toolkit` 走本地 Go workspace
+> - 本机完整打包使用 `make package-local`，会先运行 `verify-local-deps`，如果任一核心模块未解析到 `/Users/hexagon/work` 下会直接失败；macOS 本地 DMG 使用稳定的 `hdiutil create -srcfolder` 路径，避免 Finder/AppleScript 美化流程影响装机测试
 > - 技能市场默认读取 `https://github.com/hexagon-codes/hexclaw-hub` 的 `v0.0.2` 标签；运行时可在 `~/.hexclaw/hexclaw.yaml` 的 `skills.hub` 覆盖
 
 ### Make 命令
@@ -268,9 +276,13 @@ make dev
 |------|------|
 | `make dev` | 开发模式 (Vite HMR + Tauri 窗口) |
 | `make build` | 构建生产版本 |
+| `make package-local` | 校验本地 Go workspace、重建本地 sidecar、构建 `.app` 和本机测试 DMG |
 | `make build-web` | 仅构建前端 |
+| `make verify-local-deps` | 校验 `hexclaw/ai-core/hexagon/toolkit` 都解析到本地 workspace |
 | `make sidecar` | 编译 Go sidecar (当前平台) |
+| `make sidecar-local` | 使用本地 `../hexclaw` + `../go.work` 编译当前平台 sidecar |
 | `make sidecar-all` | 交叉编译所有平台 sidecar |
+| `make sidecar-all-local` | 使用本地全生态代码交叉编译所有平台 sidecar |
 | `make lint` | 代码检查 (oxlint + ESLint) |
 | `make lint-fix` | 代码检查并自动修复 |
 | `make format` | 代码格式化 (Prettier) |
@@ -444,6 +456,9 @@ make sidecar-darwin-arm64    # macOS Apple Silicon
 make sidecar-darwin-amd64    # macOS Intel
 make sidecar-linux-amd64     # Linux x86_64
 make sidecar-windows-amd64   # Windows x86_64
+
+# 本机装机测试/全生态联调，优先使用本地最新 hexclaw + ai-core + hexagon + toolkit
+make sidecar-all-local
 ```
 
 Sidecar 二进制输出到 `src-tauri/binaries/` 目录，Tauri 打包时会自动内嵌。构建时会注入真实的 tag / commit / built 时间，方便在已安装应用里核对后端版本。

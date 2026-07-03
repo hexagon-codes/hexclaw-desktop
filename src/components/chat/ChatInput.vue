@@ -708,6 +708,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
         v-model="inputText"
         rows="1"
         class="hc-composer__field"
+        data-testid="chat-input"
         :placeholder="placeholder"
         :disabled="disabled || submitting"
         @keydown="handleKeydown"
@@ -774,6 +775,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
             :class="{ 'hc-composer__send--active': canSend }"
             :disabled="!canSend"
             :title="t('chat.sendTitle')"
+            data-testid="chat-send"
             @click="handleSend"
           >
             <ArrowUp :size="17" stroke-width="2.5" />

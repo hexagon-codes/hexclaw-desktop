@@ -18,8 +18,7 @@ test.describe('拖拽图片到会话框（live sidecar）', () => {
     // 必须显式指定 model（与 browser-live-sidecar 同模式）：无模型时 handleSend 会按设计在
     // model==='' 处 return false（拒绝发送、保留草稿），那会污染本 spec 的「发送后清空」断言。
     await page.addInitScript(() => sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1'))
-    await page.goto('/chat?model=qwen3.5:9b')
-    await page.waitForLoadState('networkidle')
+    await page.goto('/chat?model=qwen3.5:9b', { waitUntil: 'domcontentloaded' })
     await expect(page).toHaveURL(/\/chat/)
 
     const box = page.locator('.hc-composer__box')
