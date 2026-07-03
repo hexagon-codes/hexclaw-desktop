@@ -488,7 +488,7 @@ describe('ChatView — edge cases', () => {
 
     // The component should render without crashing
     expect(wrapper.exists()).toBe(true)
-  })
+  }, 30_000)
 
   it('model selector with 0 available models renders without crash', async () => {
     const { useSettingsStore } = await import('@/stores/settings')

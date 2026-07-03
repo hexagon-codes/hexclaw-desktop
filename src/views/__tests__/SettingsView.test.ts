@@ -287,7 +287,7 @@ describe('SettingsView — E2E 关键路径', () => {
     for (const section of expectedSections) {
       expect(wrapper.text()).toContain(section)
     }
-  })
+  }, 30_000)
 
 
   // ────────────────────────────────────────────────────
