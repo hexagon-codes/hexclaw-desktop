@@ -89,6 +89,10 @@ function mountMemoryView() {
     global: {
       plugins: [createTestI18n()],
       stubs: {
+        // BUG-20260703 P2-2：设置面板有专属测试（bug-20260703-p2-2-memory-settings.test.ts）；
+        // 这里 stub 掉，避免它的 getMemoryConfig/getMemoryEntries 调用吃掉本文件的
+        // mockResolvedValueOnce 序列（双消费者错位）。
+        MemorySettingsPanel: { template: '<div class="memset-stub" />' },
         EmptyState: {
           props: ['title', 'description'],
           template: '<div class="empty-state-stub">{{ title }} {{ description }}</div>',
