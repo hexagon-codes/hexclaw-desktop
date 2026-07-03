@@ -142,8 +142,10 @@ async function confirmDeleteConnector() {
   deleteTarget.value = null
 }
 
+// bug-20260703 漂移三小修#1：接收 ConnectionChannelCards 的 count，tab 标签带计数徽标（对齐原型「通道与账号 2」）
+const channelCount = ref(0)
 const tabs = computed(() => [
-  { key: 'channels', label: t('connections.tabChannels') },
+  { key: 'channels', label: channelCount.value > 0 ? `${t('connections.tabChannels')} ${channelCount.value}` : t('connections.tabChannels') },
   { key: 'connectors', label: t('connections.tabConnectors') },
 ])
 
@@ -400,6 +402,10 @@ async function testConnector(inst: ConnectorInstance) {
       toast.success(t('connections.connectors.mcpTestConnected', '已连接，MCP 服务在线'))
     }
   } catch (e) {
+    // BUG-20260704：探针失败（典型：MCP 子进程已退出）后重新拉取状态真值——后端 CallTool
+    // 此时已把该 server 标记断连（30s 内自动重连自愈），徽章须立即从「已连接」翻「未就绪」，
+    // 不能与同屏的测试失败 toast 自相矛盾（loadMcpStatus 自带失败降级，不会二次抛错）。
+    if (isMcpConnectorType(inst.type)) void loadMcpStatus()
     if (e instanceof McpProbeError) {
       toast.error(`${t('connections.connectors.testFail', '连接失败')}: ${mcpProbeErrorText(e)}`)
       return
@@ -477,7 +483,7 @@ async function toggleConnector(inst: ConnectorInstance) {
 
     <!-- 通道与账号：原型式 Connection 卡片流（锚点 prototype data-cx=0） -->
     <div v-if="activeTab === 'channels'" class="hc-conn-panel">
-      <ConnectionChannelCards ref="channelCardsRef" :filter="searchQuery" />
+      <ConnectionChannelCards ref="channelCardsRef" :filter="searchQuery" @count="channelCount = $event" />
     </div>
 
     <!-- 数据连接器：我已添加的连接器实例列表（支持同类型多个，顶栏「添加」开两步弹窗） -->
