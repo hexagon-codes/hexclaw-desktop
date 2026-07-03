@@ -814,8 +814,9 @@ describe('7. API client robustness', () => {
     const clientPath = path.resolve(__dirname, '..', 'api', 'client.ts')
     const content = fs.readFileSync(clientPath, 'utf-8')
 
-    // Extract the apiPatch function
-    const patchFnMatch = content.match(/function apiPatch[\s\S]*?return api<T>\(url, \{ method: '(\w+)'/)
+    // Extract the apiPatch function — 容忍 withNormalizedError 包装（FS-5），
+    // 只要函数体里对 api<T> 的调用用 PATCH 方法即可。
+    const patchFnMatch = content.match(/function apiPatch[\s\S]*?api<T>\(url, \{ method: '(\w+)'/)
     expect(patchFnMatch).toBeTruthy()
     expect(patchFnMatch![1]).toBe('PATCH')
   })

@@ -36,9 +36,33 @@ export const api = ofetch.create({
 
 // ─── 封装方法 ────────────────────────────────────────
 
+/**
+ * normalizeApiError（FS-5）：ofetch 抛出的 FetchError.message 是
+ * `[POST] "url": 400 Bad Request`，组件用 e.message 弹 toast 就永远看不到后端
+ * 中文错误。这里把已解析的 body.error/body.message 提到 e.message（保留 status/
+ * data 等结构不变），让所有经封装方法的调用点拿到人话错误。
+ */
+function normalizeApiError(e: unknown): unknown {
+  const fe = e as { data?: Record<string, unknown> } | null
+  const body = fe?.data
+  const detail = (body?.error ?? body?.message) as unknown
+  if (typeof detail === 'string' && detail.length > 0 && e instanceof Error) {
+    e.message = detail
+  }
+  return e
+}
+
+async function withNormalizedError<T>(p: Promise<T>): Promise<T> {
+  try {
+    return await p
+  } catch (e) {
+    throw normalizeApiError(e)
+  }
+}
+
 /** GET 请求 */
 export function apiGet<T>(url: string, query?: Record<string, unknown>) {
-  return api<T>(url, { method: 'GET', query })
+  return withNormalizedError(api<T>(url, { method: 'GET', query }))
 }
 
 /** apiPost 可选参数 — 主要给"会触发慢上游"的接口（cron 编译）放宽 timeout */
@@ -65,7 +89,7 @@ export function apiPost<T>(
   const opts: Record<string, unknown> = { method: 'POST' }
   if (body) opts.body = body as Record<string, unknown>
   if (options?.timeout && options.timeout > 0) opts.timeout = options.timeout
-  return api<T>(url, opts)
+  return withNormalizedError(api<T>(url, opts))
 }
 
 async function uploadFormData<T>(url: string, body: FormData, timeoutMs: number): Promise<T> {
@@ -102,17 +126,17 @@ async function uploadFormData<T>(url: string, body: FormData, timeoutMs: number)
 
 /** PUT 请求 */
 export function apiPut<T>(url: string, body?: Record<string, unknown> | object) {
-  return api<T>(url, { method: 'PUT', body: body as Record<string, unknown> })
+  return withNormalizedError(api<T>(url, { method: 'PUT', body: body as Record<string, unknown> }))
 }
 
 /** PATCH 请求 */
 export function apiPatch<T>(url: string, body?: Record<string, unknown> | object) {
-  return api<T>(url, { method: 'PATCH', body: body as Record<string, unknown> })
+  return withNormalizedError(api<T>(url, { method: 'PATCH', body: body as Record<string, unknown> }))
 }
 
 /** DELETE 请求 */
 export function apiDelete<T>(url: string) {
-  return api<T>(url, { method: 'DELETE' })
+  return withNormalizedError(api<T>(url, { method: 'DELETE' }))
 }
 
 // ─── SSE 流式请求 ────────────────────────────────────
@@ -133,7 +157,17 @@ export async function apiSSE(
   })
 
   if (!response.ok) {
-    const apiErr = fromHttpStatus(response.status)
+    // FS-5 一致性：SSE 错误也优先抽后端 body.error（cron 创建走 SSE，429/400 时
+    // 用户应看到后端中文错误而非泛化状态串），与 apiPost/uploadFormData 对齐。
+    let serverMsg: string | undefined
+    try {
+      const data = (await response.clone().json()) as Record<string, unknown>
+      const detail = (data?.error ?? data?.message) as string | undefined
+      if (typeof detail === 'string' && detail.length > 0) serverMsg = detail
+    } catch {
+      // 非 JSON body（SSE 端点异常时可能返回纯文本）→ 降级用状态串
+    }
+    const apiErr = fromHttpStatus(response.status, serverMsg)
     throw new Error(apiErr.message)
   }
 
