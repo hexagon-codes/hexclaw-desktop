@@ -1083,13 +1083,12 @@ describe('Review-fix: 本轮修复项结构验证', () => {
     expect(src).not.toContain('data-info="新对话和快捷入口')
   })
 
-  it('AgentRoutingRules RULE_PLATFORM_OPTIONS 应包含所有后端支持的平台', () => {
-    const src = readSrc('components/channels/AgentRoutingRules.vue')
-    expect(src).toContain("'api'")
-    expect(src).toContain("'telegram'")
-    expect(src).toContain("'feishu'")
-    expect(src).toContain("'dingtalk'")
-    expect(src).toContain("'discord'")
+  it('AgentRoutingRules 已清退（BUG-20260703 P2-3）：纯接待模型定论下的整件死码不得回归', () => {
+    // 评审定论（project_im_binding_centralize_orphan_20260628）：渠道只绑 Agent、
+    // 规则唯一可达写入面是 ChannelAgentBinding（instance 级）。高级规则组件全仓
+    // 无引用且词表已烂（缺 wechat/slack/whatsapp）→ 按 IMChannelsView 清退先例删除。
+    expect(existsSync(resolve(__dirname, '..', 'components/channels/AgentRoutingRules.vue'))).toBe(false)
+    expect(existsSync(resolve(__dirname, '..', 'components/channels/__tests__/AgentRoutingRules.test.ts'))).toBe(false)
   })
 
   it('MemoryView legacy 编辑/删除应获取完整 legacyContent（无 limit 参数）', () => {
