@@ -1,7 +1,7 @@
 /**
  * 增量3：ConnectionsView 对 mcp 数据连接器的「测试 / 删除 / 启停」真实接线。
  *   - 删除 mcp 实例 → removeMcpServer(config.mcp_server) 被调用（摘后端 server）
- *   - 「测试」按钮 → 查 getMcpServerStatus 真实在线状态（替代旧 testStub 占位）
+ *   - 「测试」按钮 → 查 getMcpServerStatus，在线后执行真实 SQL 探针（替代旧 testStub 占位）
  *   - mcp 注册即启用：卡片不显示启停开关（停用 = 删除）
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -32,11 +32,14 @@ vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: toastSuccess, info: toastInfo, error: toastError, warning: vi.fn() }),
 }))
 
-const { removeMcpServer, getMcpServerStatus } = vi.hoisted(() => ({
+const { addMcpServer, callMcpTool, removeMcpServer, getMcpServerStatus, getMcpTools } = vi.hoisted(() => ({
+  addMcpServer: vi.fn(),
+  callMcpTool: vi.fn(),
   removeMcpServer: vi.fn(),
   getMcpServerStatus: vi.fn(),
+  getMcpTools: vi.fn(),
 }))
-vi.mock('@/api/mcp', () => ({ addMcpServer: vi.fn(), removeMcpServer, getMcpServerStatus }))
+vi.mock('@/api/mcp', () => ({ addMcpServer, callMcpTool, removeMcpServer, getMcpServerStatus, getMcpTools }))
 
 vi.mock('@/components/channels/ConnectorConfigModal.vue', () => ({
   default: { template: '<div class="connector-modal-stub" />' },
@@ -80,6 +83,9 @@ async function switchToConnectors(wrapper: ReturnType<typeof mountView>) {
 describe('增量3 ConnectionsView mcp 连接器 测试/删除/启停', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    addMcpServer.mockResolvedValue({ message: 'queued', connected: false })
+    callMcpTool.mockResolvedValue({ result: 'ok' })
+    getMcpTools.mockResolvedValue({ tools: [], total: 0 })
     removeMcpServer.mockResolvedValue({ message: 'ok' })
     getMcpServerStatus.mockResolvedValue({ statuses: {}, servers: [] })
     connectorList.value = [
@@ -101,8 +107,18 @@ describe('增量3 ConnectionsView mcp 连接器 测试/删除/启停', () => {
     expect(removeInstance).toHaveBeenCalledWith('m1')
   })
 
-  it('点「测试」→ 查 getMcpServerStatus；server 在线 → toast.success', async () => {
+  it('点「测试」→ 查 getMcpServerStatus；server 在线 → 执行 SQL 探针后 toast.success', async () => {
     getMcpServerStatus.mockResolvedValue({ statuses: { 生产库: 'connected' }, servers: [] })
+    getMcpTools.mockResolvedValue({
+      // BUG-20260702：探针入参改由工具真实 input_schema 决定（不再硬猜 {sql}）；真实 MySQL MCP 工具都带 schema。
+      tools: [{
+        name: 'mysql_query',
+        description: 'Run SQL query',
+        server_name: '生产库',
+        input_schema: { type: 'object', properties: { sql: { type: 'string' } }, required: ['sql'] },
+      }],
+      total: 1,
+    })
     const wrapper = mountView()
     await switchToConnectors(wrapper)
     // 卡片挂载时已为「真实状态徽章」拉过一次（bug-20260626 修复引入）；此处只断言「点测试」这一次。
@@ -116,6 +132,8 @@ describe('增量3 ConnectionsView mcp 连接器 测试/删除/启停', () => {
     await flushPromises()
 
     expect(getMcpServerStatus).toHaveBeenCalledTimes(1)
+    expect(addMcpServer).not.toHaveBeenCalled()
+    expect(callMcpTool).toHaveBeenCalledWith('mysql_query', { sql: 'SELECT 1 AS ok' })
     expect(toastSuccess).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestConnected)
   })
 

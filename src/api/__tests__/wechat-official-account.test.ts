@@ -242,8 +242,19 @@ describe('wechat instance CRUD', () => {
   })
 
   it('creates a wechat instance with all required fields', async () => {
-    storeGet.mockResolvedValue(undefined)
-    invoke.mockResolvedValue(JSON.stringify({ status: 'ok' }))
+    invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
+      if (payload.method === 'GET') return JSON.stringify({ instances: [] })
+      if (payload.method === 'POST') {
+        return JSON.stringify({
+          id: 'wx1',
+          provider: 'wechat',
+          name: '我的公众号',
+          enabled: false,
+          config: { app_id: 'wx1234567890', app_secret: 'mysecret', token: 'mytoken' },
+        })
+      }
+      return JSON.stringify({})
+    })
 
     const mod = await import('../im-channels')
     const instance = await mod.createIMInstance('我的公众号', 'wechat', {
@@ -255,21 +266,34 @@ describe('wechat instance CRUD', () => {
     expect(instance.name).toBe('我的公众号')
     expect(instance.type).toBe('wechat')
     expect(instance.config.app_id).toBe('wx1234567890')
-    expect(instance.id).toBeTruthy()
+    expect(instance.id).toBe('wx1')
 
     // Verify backend sync was called with correct provider
     expect(invoke).toHaveBeenCalledWith('proxy_api_request', expect.objectContaining({
       method: 'POST',
       path: '/api/v1/platforms/instances',
     }))
-    const body = JSON.parse(invoke.mock.calls[0]![1].body)
+    const postCall = invoke.mock.calls.find((c) => c[1]?.method === 'POST')!
+    const body = JSON.parse(postCall[1].body)
     expect(body.provider).toBe('wechat')
     expect(body.config.app_id).toBe('wx1234567890')
+    expect(load).not.toHaveBeenCalled()
   })
 
   it('creates a wechat instance with optional aes_key', async () => {
-    storeGet.mockResolvedValue(undefined)
-    invoke.mockResolvedValue(JSON.stringify({ status: 'ok' }))
+    invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
+      if (payload.method === 'GET') return JSON.stringify({ instances: [] })
+      if (payload.method === 'POST') {
+        return JSON.stringify({
+          id: 'wx2',
+          provider: 'wechat',
+          name: '公众号2',
+          enabled: false,
+          config: { app_id: 'wx0000000000', app_secret: 'secret2', token: 'token2', aes_key: 'a'.repeat(43) },
+        })
+      }
+      return JSON.stringify({})
+    })
 
     const mod = await import('../im-channels')
     const instance = await mod.createIMInstance('公众号2', 'wechat', {
@@ -283,7 +307,7 @@ describe('wechat instance CRUD', () => {
   })
 
   it('rejects creation when required field app_id is missing', async () => {
-    storeGet.mockResolvedValue(undefined)
+    invoke.mockResolvedValue(JSON.stringify({ instances: [] }))
 
     const mod = await import('../im-channels')
     await expect(
@@ -292,7 +316,7 @@ describe('wechat instance CRUD', () => {
   })
 
   it('rejects creation when required field app_secret is missing', async () => {
-    storeGet.mockResolvedValue(undefined)
+    invoke.mockResolvedValue(JSON.stringify({ instances: [] }))
 
     const mod = await import('../im-channels')
     await expect(
@@ -301,7 +325,7 @@ describe('wechat instance CRUD', () => {
   })
 
   it('rejects creation when required field token is missing', async () => {
-    storeGet.mockResolvedValue(undefined)
+    invoke.mockResolvedValue(JSON.stringify({ instances: [] }))
 
     const mod = await import('../im-channels')
     await expect(
@@ -310,8 +334,19 @@ describe('wechat instance CRUD', () => {
   })
 
   it('allows creation without optional aes_key', async () => {
-    storeGet.mockResolvedValue(undefined)
-    invoke.mockResolvedValue(JSON.stringify({ status: 'ok' }))
+    invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
+      if (payload.method === 'GET') return JSON.stringify({ instances: [] })
+      if (payload.method === 'POST') {
+        return JSON.stringify({
+          id: 'wx3',
+          provider: 'wechat',
+          name: 'test-wechat',
+          enabled: false,
+          config: { app_id: 'wx123', app_secret: 'secret', token: 'tok' },
+        })
+      }
+      return JSON.stringify({})
+    })
 
     const mod = await import('../im-channels')
     const instance = await mod.createIMInstance('test-wechat', 'wechat', {
@@ -323,16 +358,15 @@ describe('wechat instance CRUD', () => {
   })
 
   it('rejects duplicate wechat instance names (case-insensitive)', async () => {
-    storeGet.mockResolvedValue({
-      existing: {
+    invoke.mockResolvedValue(JSON.stringify({
+      instances: [{
         id: 'existing',
         name: '公众号',
-        type: 'wechat',
+        provider: 'wechat',
         enabled: true,
         config: { app_id: 'wx1', app_secret: 's', token: 't' },
-        createdAt: 1,
-      },
-    })
+      }],
+    }))
 
     const mod = await import('../im-channels')
     await expect(
@@ -341,16 +375,6 @@ describe('wechat instance CRUD', () => {
   })
 
   it('deletes a wechat instance and calls backend delete', async () => {
-    storeGet.mockResolvedValue({
-      wx1: {
-        id: 'wx1',
-        name: '公众号-test',
-        type: 'wechat',
-        enabled: true,
-        config: { app_id: 'wx1', app_secret: 's', token: 't' },
-        createdAt: 1,
-      },
-    })
     invoke.mockResolvedValue(JSON.stringify({ ok: true }))
 
     const mod = await import('../im-channels')
@@ -360,64 +384,30 @@ describe('wechat instance CRUD', () => {
     // Verify DELETE was called to backend
     expect(invoke).toHaveBeenCalledWith('proxy_api_request', expect.objectContaining({
       method: 'DELETE',
-      path: '/api/v1/platforms/instances/%E5%85%AC%E4%BC%97%E5%8F%B7-test',
+      path: '/api/v1/platforms/instances/by-id/wx1',
     }))
   })
 
-  it('syncs wechat instance to backend on startup', async () => {
-    storeGet.mockImplementation(async (key: string) => {
-      if (key === 'im-instances') {
-        return {
-          wx1: {
-            id: 'wx1',
-            name: 'WechatBot',
-            type: 'wechat',
-            enabled: true,
-            config: { app_id: 'wx999', app_secret: 'sec', token: 'tok' },
-            createdAt: 1,
-          },
-        }
-      }
-      return undefined
-    })
-
-    invoke
-      .mockResolvedValueOnce(JSON.stringify({ instances: [] })) // list backend instances
-      .mockResolvedValueOnce(JSON.stringify({ status: 'ok' })) // sync
+  it('probeIMChannelsBackend probes sidecar list only', async () => {
+    invoke.mockResolvedValueOnce(JSON.stringify({ instances: [] }))
 
     const mod = await import('../im-channels')
-    await mod.ensureIMInstancesSyncedToBackend()
+    await mod.probeIMChannelsBackend()
 
-    // Verify POST was called with wechat provider
-    const syncCall = invoke.mock.calls.find(
-      (c) => c[1]?.method === 'POST' && c[1]?.path === '/api/v1/platforms/instances',
-    )
-    expect(syncCall).toBeDefined()
-    const body = JSON.parse(syncCall![1].body)
-    expect(body.provider).toBe('wechat')
-    expect(body.config.app_id).toBe('wx999')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
+      method: 'GET',
+      path: '/api/v1/platforms/instances',
+      body: null,
+    })
+    expect(load).not.toHaveBeenCalled()
   })
 
-  it('skips sync when backend already has identical wechat instance', async () => {
+  it('getIMInstances reads existing wechat instance from sidecar', async () => {
     const config = { app_id: 'wx999', app_secret: 'sec', token: 'tok' }
-    storeGet.mockImplementation(async (key: string) => {
-      if (key === 'im-instances') {
-        return {
-          wx1: {
-            id: 'wx1',
-            name: 'WechatBot',
-            type: 'wechat',
-            enabled: true,
-            config,
-            createdAt: 1,
-          },
-        }
-      }
-      return undefined
-    })
-
     invoke.mockResolvedValueOnce(JSON.stringify({
       instances: [{
+        id: 'wx1',
         name: 'WechatBot',
         provider: 'wechat',
         enabled: true,
@@ -426,9 +416,11 @@ describe('wechat instance CRUD', () => {
     }))
 
     const mod = await import('../im-channels')
-    await mod.ensureIMInstancesSyncedToBackend()
+    const instances = await mod.getIMInstances()
 
-    // Only 1 call: GET list. No POST sync needed.
+    expect(instances).toHaveLength(1)
+    expect(instances[0]?.type).toBe('wechat')
+    expect(instances[0]?.config).toEqual(config)
     expect(invoke).toHaveBeenCalledTimes(1)
   })
 })

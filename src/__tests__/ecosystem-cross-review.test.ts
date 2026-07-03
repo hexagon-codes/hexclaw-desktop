@@ -143,11 +143,10 @@ describe('[alignment] Frontend ↔ Backend API Contract', () => {
     // 这些字段永远为 undefined → UI 中基于 session 级 agent 标识的逻辑失效
   })
 
-  it('LOW: MCP ToolInfo.server_name 前端 McpTool 未声明', () => {
+  it('FIXED: MCP ToolInfo.server_name 已在前端 McpTool 声明', () => {
     const mcpType = readType('mcp.ts')
-    // 前端 McpTool 缺少 server_name 字段
-    expect(mcpType).not.toContain('server_name')
-    // 后端返回 server_name 但前端忽略 → UI 无法显示工具所属服务器
+    // 后端返回 server_name，前端类型必须保留它用于按 server 精确选择工具。
+    expect(mcpType).toContain('server_name?: string')
   })
 
   it('LOW: Agent metadata 类型不匹配 — Go map[string]string vs TS Record<string, unknown>', () => {
@@ -821,7 +820,6 @@ describe('[summary] Issue Statistics', () => {
     ],
     LOW: [
       'ChatSession.agent_id never sent',
-      'McpTool missing server_name',
       'Agent metadata type mismatch',
       'handleListSessions total = len(sessions)',
       'shouldUseDirectCompletion dead code',
@@ -851,12 +849,12 @@ describe('[summary] Issue Statistics', () => {
   })
 
   it('should have all LOW issues documented', () => {
-    expect(issues.LOW).toHaveLength(15)
+    expect(issues.LOW).toHaveLength(14)
   })
 
-  it('total issues: 74', () => {
+  it('total issues: 73', () => {
     const total =
       issues.CRITICAL.length + issues.HIGH.length + issues.MEDIUM.length + issues.LOW.length
-    expect(total).toBe(74)
+    expect(total).toBe(73)
   })
 })

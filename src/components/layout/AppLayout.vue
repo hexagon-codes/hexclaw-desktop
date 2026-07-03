@@ -11,12 +11,12 @@ import { useAppStore } from '@/stores/app'
 
 const appStore = useAppStore()
 
-async function syncIMInstancesWhenReady() {
+async function probeIMChannelsBackendWhenReady() {
   try {
-    const { ensureIMInstancesSyncedToBackend } = await import('@/api/im-channels')
-    await ensureIMInstancesSyncedToBackend()
+    const { probeIMChannelsBackend } = await import('@/api/im-channels')
+    await probeIMChannelsBackend()
   } catch (e) {
-    console.warn('[IM] 启动同步实例失败:', e)
+    console.warn('[IM] 启动探活 IM 通道后端失败:', e)
   }
 }
 
@@ -71,7 +71,7 @@ onMounted(() => {
         clearTimeout(splashTimeout)
         dismissSplash()
         void refreshChatSessionsWhenReady() // 冷启动补载会话列表（首屏会话页不再空）
-        void syncIMInstancesWhenReady()
+        void probeIMChannelsBackendWhenReady()
         void warmupOllamaModel()
       }
     },

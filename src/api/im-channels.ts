@@ -1,4 +1,3 @@
-import { nanoid } from 'nanoid'
 import { env } from '@/config/env'
 import { buildDuplicateInstanceNameError } from '@/config/im-channel-errors'
 import {
@@ -42,10 +41,7 @@ export function getPlatformHookUrl(instance: Pick<IMInstance, 'name' | 'type'>):
   return `${env.apiBase}/api/v1/platforms/hooks/${instance.type}/${encodeURIComponent(instance.name)}`
 }
 
-// ─── Tauri Store 持久化 ──────────────────────────────
-
-const STORE_KEY = 'im-instances'
-let _store: Promise<unknown> | null = null
+// ─── Sidecar 持久化：Go instances.Manager 是唯一事实源 ─────────────
 
 function normalizeInstanceName(name: string): string {
   return name.trim().toLowerCase()
@@ -67,72 +63,6 @@ function assertUniqueInstanceName(
   }
 }
 
-async function getStore() {
-  if (!_store) {
-    const p = (async () => {
-      const { load } = await import('@tauri-apps/plugin-store')
-      return load('im-channels.json', {
-        defaults: {},
-        autoSave: true,
-      })
-    })()
-    _store = p
-    p.catch(() => { _store = null })
-  }
-  return _store as Promise<{
-    get: <T>(key: string) => Promise<T | undefined>
-    set: (key: string, value: unknown) => Promise<void>
-  }>
-}
-
-async function readAllInstances(): Promise<Record<string, IMInstance>> {
-  try {
-    const store = await getStore()
-    const data = await store.get<Record<string, IMInstance>>(STORE_KEY)
-    if (data) return data
-
-    // 兼容旧格式：迁移 type-keyed 配置到多实例格式
-    const legacy =
-      await store.get<Record<string, { enabled: boolean; config: Record<string, string> }>>(
-        'im-channels',
-      )
-    if (legacy && Object.keys(legacy).length > 0) {
-      const migrated: Record<string, IMInstance> = {}
-      for (const [type, cfg] of Object.entries(legacy)) {
-        if (!CHANNEL_TYPES.find((c) => c.type === type)) continue
-        const id = nanoid(10)
-        const meta = getChannelMeta(type as IMChannelType)
-        migrated[id] = {
-          id,
-          name: meta.name,
-          type: type as IMChannelType,
-          enabled: cfg.enabled,
-          config: cfg.config,
-          createdAt: Date.now(),
-        }
-      }
-      await store.set(STORE_KEY, migrated)
-      return migrated
-    }
-
-    return {}
-  } catch (e) {
-    console.warn('Failed to read IM instances:', e)
-    return {}
-  }
-}
-
-async function writeInstances(instances: Record<string, IMInstance>): Promise<boolean> {
-  try {
-    const store = await getStore()
-    await store.set(STORE_KEY, instances)
-    return true
-  } catch (e) {
-    console.warn('Failed to write IM instances:', e)
-    return false
-  }
-}
-
 async function proxyApiRequest<T = Record<string, unknown>>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
@@ -148,12 +78,31 @@ async function proxyApiRequest<T = Record<string, unknown>>(
     })
     return text ? (JSON.parse(text) as T) : null
   } catch (e) {
-    if (e instanceof TypeError || (e instanceof Error && e.message.includes('plugin'))) {
-      console.warn(`[IM] proxyApiRequest ${method} ${path} failed (non-fatal):`, e)
-      return null
-    }
     throw new Error(messageFromUnknownError(e))
   }
+}
+
+const RUNTIME_CONNECTING_RE =
+  /(stream\s*未连接|连接中|请稍候重试|connecting|not connected|please.*retry|please.*wait)/i
+const RUNTIME_TEST_RETRY_DELAYS_MS = [300, 900]
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function normalizeRuntimeTestResult(result: {
+  success?: boolean
+  message?: string
+  last_error?: string
+}): { success: boolean; message: string } {
+  return {
+    success: result.success ?? false,
+    message: result.message ?? result.last_error ?? 'Instance health check failed',
+  }
+}
+
+function isTransientRuntimeConnecting(result: { success: boolean; message: string }): boolean {
+  return !result.success && RUNTIME_CONNECTING_RE.test(result.message)
 }
 
 export function getRequiredFieldLabels(instance: Pick<IMInstance, 'type' | 'config'>): string[] {
@@ -161,110 +110,55 @@ export function getRequiredFieldLabels(instance: Pick<IMInstance, 'type' | 'conf
   return fields.filter((f) => !f.optional && !instance.config[f.key]?.trim()).map((f) => f.label)
 }
 
-async function syncBackendInstance(
-  instance: Pick<IMInstance, 'name' | 'type' | 'enabled' | 'config'>,
-) {
+function validateInstanceConfig(instance: Pick<IMInstance, 'type' | 'config'>) {
   const missingFields = getRequiredFieldLabels(instance)
   if (missingFields.length > 0) {
     throw new Error(`Missing required fields: ${missingFields.join(', ')}`)
   }
-
-  return proxyApiRequest('POST', '/api/v1/platforms/instances', {
-    provider: instance.type,
-    name: instance.name,
-    enabled: instance.enabled,
-    config: instance.config,
-  })
-}
-
-async function deleteBackendInstance(name: string) {
-  return proxyApiRequest('DELETE', `/api/v1/platforms/instances/${encodeURIComponent(name)}`)
 }
 
 interface BackendInstanceRecord {
+  id: string
   provider: string
   name: string
   enabled: boolean
+  status?: string
+  last_error?: string
   config?: Record<string, unknown>
+  created_at?: string
+  updated_at?: string
 }
 
-function stableConfigString(config: Record<string, unknown> | undefined): string {
-  if (!config) return '{}'
-  const sortedEntries = Object.entries(config).sort(([a], [b]) => a.localeCompare(b))
-  return JSON.stringify(Object.fromEntries(sortedEntries))
+function backendToIMInstance(item: BackendInstanceRecord): IMInstance {
+  const type = item.provider as IMChannelType
+  return {
+    id: item.id,
+    name: item.name,
+    type,
+    enabled: item.enabled,
+    config: Object.fromEntries(
+      Object.entries(item.config || {}).map(([key, value]) => [key, value == null ? '' : String(value)]),
+    ),
+    createdAt: Date.parse(item.created_at || item.updated_at || '') || 0,
+  }
 }
 
-function isBackendInstanceInSync(
-  local: Pick<IMInstance, 'name' | 'type' | 'enabled' | 'config'>,
-  backend: BackendInstanceRecord | undefined,
-): boolean {
-  if (!backend) return false
-  return (
-    backend.name === local.name &&
-    backend.provider === local.type &&
-    backend.enabled === local.enabled &&
-    stableConfigString(backend.config) === stableConfigString(local.config)
-  )
-}
-
-async function listBackendInstances(): Promise<Map<string, BackendInstanceRecord>> {
+async function listBackendInstances(): Promise<BackendInstanceRecord[]> {
   const result = await proxyApiRequest<{ instances?: BackendInstanceRecord[] }>('GET', '/api/v1/platforms/instances')
-  const items = result?.instances || []
-  return new Map(items.map((item) => [item.name, item]))
+  return result?.instances || []
 }
 
-async function syncExistingInstancesToBackend(instances: IMInstance[]) {
-  let backendByName = new Map<string, BackendInstanceRecord>()
-
-  try {
-    backendByName = await listBackendInstances()
-  } catch (e) {
-    console.warn('[IM] failed to list backend instances before sync, fallback to full sync:', e)
-  }
-
-  const results = await Promise.allSettled(
-    instances.map(async (instance) => {
-      if (isBackendInstanceInSync(instance, backendByName.get(instance.name))) {
-        return
-      }
-      try {
-        await syncBackendInstance(instance)
-      } catch (e) {
-        console.warn(`[IM] failed to sync instance "${instance.name}" to backend:`, e)
-      }
-    }),
-  )
-  const failures = results.filter((r) => r.status === 'rejected')
-  if (failures.length > 0) {
-    console.warn('[IM] sync failures:', failures.length)
-  }
-}
-
-async function listStoredInstances(): Promise<IMInstance[]> {
-  const all = await readAllInstances()
-  return Object.values(all).sort((a, b) => a.createdAt - b.createdAt)
-}
-
-let backendSyncPromise: Promise<void> | null = null
-
-export async function ensureIMInstancesSyncedToBackend(): Promise<void> {
-  if (!backendSyncPromise) {
-    backendSyncPromise = (async () => {
-      const instances = await listStoredInstances()
-      await syncExistingInstancesToBackend(instances)
-    })().finally(() => {
-      backendSyncPromise = null
-    })
-  }
-
-  await backendSyncPromise
+/** 启动期探活：GET 一次 sidecar 实例列表确认后端可达（sidecar 即唯一事实源，无本地→后端同步）。 */
+export async function probeIMChannelsBackend(): Promise<void> {
+  await listBackendInstances()
 }
 
 // ─── 公开 API ────────────────────────────────────────
 
 /** 获取所有实例列表 */
 export async function getIMInstances(): Promise<IMInstance[]> {
-  return listStoredInstances()
+  const items = await listBackendInstances()
+  return items.map(backendToIMInstance).sort((a, b) => a.createdAt - b.createdAt || a.name.localeCompare(b.name))
 }
 
 /** 创建实例 */
@@ -274,17 +168,20 @@ export async function createIMInstance(
   config: Record<string, string>,
   enabled = false,
 ): Promise<IMInstance> {
-  const all = await readAllInstances()
+  const existing = await getIMInstances()
+  const all = Object.fromEntries(existing.map((instance) => [instance.id, instance]))
   const finalName = name.trim()
   assertUniqueInstanceName(all, finalName)
+  validateInstanceConfig({ type, config })
 
-  const id = nanoid(10)
-  const instance: IMInstance = { id, name: finalName, type, enabled, config, createdAt: Date.now() }
-  await syncBackendInstance(instance)
-
-  all[id] = instance
-  await writeInstances(all)
-  return instance
+  const result = await proxyApiRequest<BackendInstanceRecord>('POST', '/api/v1/platforms/instances', {
+    provider: type,
+    name: finalName,
+    enabled,
+    config,
+  })
+  if (!result) throw new Error('Backend did not return saved instance')
+  return backendToIMInstance(result)
 }
 
 /** 更新实例 */
@@ -292,7 +189,8 @@ export async function updateIMInstance(
   id: string,
   updates: Partial<Pick<IMInstance, 'name' | 'enabled' | 'config'>>,
 ): Promise<boolean> {
-  const all = await readAllInstances()
+  const existing = await getIMInstances()
+  const all = Object.fromEntries(existing.map((instance) => [instance.id, instance]))
   const current = all[id]
   if (!current) return false
 
@@ -302,41 +200,32 @@ export async function updateIMInstance(
   }
   next.name = next.name.trim()
   assertUniqueInstanceName(all, next.name, id)
-
-  if (current.name !== next.name) {
-    await syncBackendInstance({ ...next, enabled: false })
-    try {
-      await deleteBackendInstance(current.name)
-    } catch (e) {
-      // Rollback: remove the newly created instance to avoid duplicates
-      await deleteBackendInstance(next.name).catch(() => {})
-      throw e
-    }
-    if (next.enabled) {
-      await syncBackendInstance(next)
-    }
-  } else {
-    await syncBackendInstance(next)
+  // BUG-20260702：仅当本次更新触碰 config 时才做必填校验。纯 enabled 启停/改名不应被
+  // 历史实例的配置完整性拦死（配置校验权威在后端，前端只在用户编辑配置时提前拦）。
+  if (updates.config !== undefined) {
+    validateInstanceConfig(next)
   }
 
-  all[id] = next
-  await writeInstances(all)
-  return true
+  const result = await proxyApiRequest<BackendInstanceRecord>(
+    'PUT',
+    `/api/v1/platforms/instances/by-id/${encodeURIComponent(id)}`,
+    {
+      provider: next.type,
+      name: next.name,
+      enabled: next.enabled,
+      config: next.config,
+    },
+  )
+  return !!result
 }
 
 /** 删除实例 */
 export async function deleteIMInstance(id: string): Promise<boolean> {
-  const all = await readAllInstances()
-  const current = all[id]
-  if (!current) return false
-  try {
-    await deleteBackendInstance(current.name)
-  } catch {
-    // 后端实例可能已被外部删除（404），仍需清理本地记录
-  }
-  delete all[id]
-  await writeInstances(all)
-  return true
+  const result = await proxyApiRequest<{ message?: string }>(
+    'DELETE',
+    `/api/v1/platforms/instances/by-id/${encodeURIComponent(id)}`,
+  )
+  return !!result
 }
 
 /** 测试实例连接 */
@@ -437,12 +326,7 @@ export async function testConnection(
     }
   } catch (e) {
     const { messageFromUnknownError } = await import('@/utils/errors')
-    const msg = messageFromUnknownError(e)
-    // 端点未上线（404 / not found / unreachable）时降级提示，不视为崩溃
-    if (/404|not found|unreachable|connection refused|failed to fetch/i.test(msg)) {
-      return { ok: false, detail: 'Test endpoint unavailable' }
-    }
-    return { ok: false, detail: msg }
+    return { ok: false, detail: messageFromUnknownError(e) }
   }
 }
 
@@ -501,18 +385,20 @@ export async function testSavedIMInstanceRuntime(
   }
 
   try {
-    await syncBackendInstance(instance)
-    const result = await proxyApiRequest<{
-      success?: boolean
-      message?: string
-      last_error?: string
-    }>('POST', `/api/v1/platforms/instances/${encodeURIComponent(instance.name)}/test`)
+    const path = `/api/v1/platforms/instances/by-id/${encodeURIComponent(instance.id)}/test`
+    for (let attempt = 0; attempt <= RUNTIME_TEST_RETRY_DELAYS_MS.length; attempt++) {
+      const result = await proxyApiRequest<{
+        success?: boolean
+        message?: string
+        last_error?: string
+      }>('POST', path)
 
-    if (result) {
-      return {
-        success: result.success ?? false,
-        message: result.message ?? result.last_error ?? 'Instance health check failed',
+      if (!result) break
+      const normalized = normalizeRuntimeTestResult(result)
+      if (!isTransientRuntimeConnecting(normalized) || attempt === RUNTIME_TEST_RETRY_DELAYS_MS.length) {
+        return normalized
       }
+      await sleep(RUNTIME_TEST_RETRY_DELAYS_MS[attempt]!)
     }
   } catch (e) {
     const { messageFromUnknownError } = await import('@/utils/errors')
@@ -522,7 +408,7 @@ export async function testSavedIMInstanceRuntime(
     }
   }
 
-  return testIMInstance(instance)
+  return { success: false, message: 'Instance runtime test did not return a result' }
 }
 
 // ─── 实例运行时控制 ─────────────────────────────────
@@ -539,23 +425,33 @@ export interface IMInstanceHealth {
 
 /** 启动实例 */
 export async function startIMInstance(name: string): Promise<{ success: boolean; message: string }> {
-  const result = await proxyApiRequest<{ message?: string; error?: string }>(
-    'POST', `/api/v1/platforms/instances/${encodeURIComponent(name)}/start`,
-  )
-  return {
-    success: result != null && !result.error,
-    message: result?.message || result?.error || (result == null ? 'Backend unreachable' : 'OK'),
+  try {
+    const result = await proxyApiRequest<{ message?: string; error?: string }>(
+      'POST', `/api/v1/platforms/instances/${encodeURIComponent(name)}/start`,
+    )
+    return {
+      success: result != null && !result.error,
+      message: result?.message || result?.error || (result == null ? 'Backend unreachable' : 'OK'),
+    }
+  } catch (e) {
+    const { messageFromUnknownError } = await import('@/utils/errors')
+    return { success: false, message: messageFromUnknownError(e) }
   }
 }
 
 /** 停止实例 */
 export async function stopIMInstance(name: string): Promise<{ success: boolean; message: string }> {
-  const result = await proxyApiRequest<{ message?: string; error?: string }>(
-    'POST', `/api/v1/platforms/instances/${encodeURIComponent(name)}/stop`,
-  )
-  return {
-    success: result != null && !result.error,
-    message: result?.message || result?.error || (result == null ? 'Backend unreachable' : 'OK'),
+  try {
+    const result = await proxyApiRequest<{ message?: string; error?: string }>(
+      'POST', `/api/v1/platforms/instances/${encodeURIComponent(name)}/stop`,
+    )
+    return {
+      success: result != null && !result.error,
+      message: result?.message || result?.error || (result == null ? 'Backend unreachable' : 'OK'),
+    }
+  } catch (e) {
+    const { messageFromUnknownError } = await import('@/utils/errors')
+    return { success: false, message: messageFromUnknownError(e) }
   }
 }
 

@@ -224,10 +224,10 @@ describe('旅程 C: 对话全流程', () => {
 })
 
 describe('旅程 D: IM 渠道配置', () => {
-  it('飞书/钉钉/Discord/Telegram/微信/企微/邮箱 — 7 渠道全覆盖', async () => {
+  it('飞书/钉钉/Discord/Telegram/微信/企微/Slack/LINE/WhatsApp/Matrix/邮箱 — 11 渠道全覆盖', async () => {
     const { CHANNEL_TYPES, CHANNEL_CONFIG_FIELDS, CHANNEL_HELP_TEXT, getRequiredFieldLabels, getPlatformHookUrl } = await import('@/api/im-channels')
 
-    expect(CHANNEL_TYPES).toHaveLength(7)
+    expect(CHANNEL_TYPES).toHaveLength(11)
     for (const ch of CHANNEL_TYPES) {
       const fields = CHANNEL_CONFIG_FIELDS[ch.type]
       expect(fields.length, `${ch.type} 无配置字段`).toBeGreaterThan(0)

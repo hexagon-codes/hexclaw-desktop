@@ -846,7 +846,7 @@ describe('5. IM Channel Edge Cases', () => {
     const { invoke } = await import('@tauri-apps/api/core')
     const mockInvoke = invoke as ReturnType<typeof vi.fn>
 
-    // The syncBackendInstance will be called via proxyApiRequest
+    // createIMInstance writes through proxyApiRequest to the sidecar source of truth.
     // For feishu, required fields are app_id and app_secret
     mockInvoke.mockResolvedValue(JSON.stringify({ message: 'ok' }))
 

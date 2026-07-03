@@ -10,6 +10,7 @@ import { useTheme } from '@/composables/useTheme'
 import { useAutoUpdate } from '@/composables/useAutoUpdate'
 import { useToast } from '@/composables/useToast'
 import { useNotificationCenter } from '@/composables/useNotificationCenter'
+import { useLocalFolderAllowedPathsSync } from '@/composables/useLocalFolderAllowedPathsSync'
 import { installScrollReveal } from '@/utils/scroll-reveal'
 
 const route = useRoute()
@@ -26,6 +27,8 @@ const toastRef = ref<InstanceType<typeof ToastProvider>>()
 useShortcuts()
 // 初始化主题
 useTheme()
+// 本地目录连接器授权需要在应用启动时同步到 HexClaw FileAccess，不能依赖用户打开连接页。
+useLocalFolderAllowedPathsSync()
 
 // 全局 toast
 if (typeof window !== 'undefined') {

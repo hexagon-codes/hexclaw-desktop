@@ -40,11 +40,14 @@ vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: toastSuccess, info: toastInfo, error: toastError, warning: vi.fn() }),
 }))
 
-const { getMcpServerStatus, removeMcpServer } = vi.hoisted(() => ({
+const { addMcpServer, callMcpTool, getMcpServerStatus, getMcpTools, removeMcpServer } = vi.hoisted(() => ({
+  addMcpServer: vi.fn(),
+  callMcpTool: vi.fn(),
   getMcpServerStatus: vi.fn(),
+  getMcpTools: vi.fn(),
   removeMcpServer: vi.fn(),
 }))
-vi.mock('@/api/mcp', () => ({ addMcpServer: vi.fn(), removeMcpServer, getMcpServerStatus }))
+vi.mock('@/api/mcp', () => ({ addMcpServer, callMcpTool, getMcpTools, removeMcpServer, getMcpServerStatus }))
 
 vi.mock('@/components/channels/ConnectorConfigModal.vue', () => ({
   default: { template: '<div class="connector-modal-stub" />' },
@@ -88,6 +91,9 @@ async function switchToConnectors(wrapper: ReturnType<typeof mountView>) {
 describe('bug-20260626 MCP 连接器状态徽章 = 真实在线状态（不再恒绿）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    addMcpServer.mockResolvedValue({ message: 'queued', connected: false })
+    getMcpTools.mockResolvedValue({ tools: [], total: 0 })
+    callMcpTool.mockResolvedValue({ result: 'ok' })
     removeMcpServer.mockResolvedValue({ message: 'ok' })
     // 一个「注册即启用」(enabled=true) 的 MCP 连接器实例（对齐截图：MySQL「测试会话数据库」）。
     connectorList.value = [
@@ -128,7 +134,7 @@ describe('bug-20260626 MCP 连接器状态徽章 = 真实在线状态（不再�
     expect(pill.classes()).toContain('hc-conn-pill--green')
   })
 
-  it('徽章状态与「测试」按钮结果同源（未就绪时两者一致报未就绪）', async () => {
+  it('测试按钮在 MCP 未就绪时主动按当前配置重放注册，交给 sidecar best-effort 拉起', async () => {
     getMcpServerStatus.mockResolvedValue({ statuses: {}, servers: [] })
     const wrapper = mountView()
     await switchToConnectors(wrapper)
@@ -143,7 +149,53 @@ describe('bug-20260626 MCP 连接器状态徽章 = 真实在线状态（不再�
       .find((b) => b.text().includes(zhCN.connections.channels.test))
     await testBtn!.trigger('click')
     await flushPromises()
-    expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestDisconnected)
+    expect(addMcpServer).toHaveBeenCalledWith(
+      '测试会话数据库',
+      'npx',
+      ['-y', '@benborla29/mcp-server-mysql'],
+      {
+        env: {
+          MYSQL_HOST: 'h',
+          MYSQL_PORT: '3306',
+          MYSQL_USER: 'root',
+        },
+      },
+    )
+    expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpConnecting)
     expect(toastSuccess).not.toHaveBeenCalled()
+  })
+
+  it('MySQL MCP 拉起后执行真实 SQL 探测工具，而不是只看 status', async () => {
+    getMcpServerStatus
+      .mockResolvedValueOnce({ statuses: {}, servers: [] }) // mounted
+      .mockResolvedValueOnce({ statuses: {}, servers: [] }) // test preflight
+      .mockResolvedValueOnce({ statuses: { 测试会话数据库: 'connected' }, servers: [] }) // after add
+    addMcpServer.mockResolvedValue({ message: 'ready', connected: true })
+    getMcpTools.mockResolvedValue({
+      tools: [
+        // BUG-20260702：探针入参改由工具真实 input_schema 决定（不再硬猜 {sql}）；真实工具都带 schema。
+        {
+          name: 'mysql_query',
+          description: 'Run SQL query',
+          server_name: '测试会话数据库',
+          input_schema: { type: 'object', properties: { sql: { type: 'string' } }, required: ['sql'] },
+        },
+      ],
+      total: 1,
+    })
+
+    const wrapper = mountView()
+    await switchToConnectors(wrapper)
+    await flushPromises()
+
+    const testBtn = wrapper
+      .findAll('.hc-conn-btn--ghost')
+      .find((b) => b.text().includes(zhCN.connections.channels.test))
+    await testBtn!.trigger('click')
+    await flushPromises()
+
+    expect(callMcpTool).toHaveBeenCalledWith('mysql_query', { sql: 'SELECT 1 AS ok' })
+    expect(toastSuccess).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestConnected)
+    expect(toastInfo).not.toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestDisconnected)
   })
 })

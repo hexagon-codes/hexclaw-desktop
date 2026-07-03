@@ -157,8 +157,8 @@ describeBE('F-2 getConnections 返回的连接列表不含邮箱（邮箱只在�
   it('后端 handleListConnections 数据源是 instanceMgr.List（platform 实例），不含独立邮箱连接库', () => {
     expect(handlerConnections).toContain('s.instanceMgr.List')
     // connectionCapabilities 虽然把 email 列进 case，但 List 只迭代 instanceMgr 实例。
-    // 邮箱实例若从未 Upsert 到后端（前端纯本地保存），则永不出现在 GET /connections。
-    // 2026-06-25 §3-5：email 已从「receive+send 分组」拆为独立 receive-only case（发件未接入 instances）。
+    // 邮箱实例必须由 sidecar instances.Manager 持久化；GET /connections 只返回 sidecar 里的脱敏摘要。
+    // 2026-06-29：email 已接入 BuildAdapter + modeForProvider，能力为 receive/send。
     expect(handlerConnections).toMatch(/case "email"/)
   })
 
@@ -172,36 +172,38 @@ describeBE('F-2 getConnections 返回的连接列表不含邮箱（邮箱只在�
 })
 
 // ════════════════════════════════════════════════════════════════════
-// F-3【低】[对齐] provider 枚举不一致：后端 BuildAdapter 支持 slack/line/whatsapp/matrix，
-//   前端 CHANNEL_TYPES 只有 7 个（无这 4 个）；slack.svg 是孤儿资源
+// F-3【已闭环】provider 枚举一致：后端 BuildAdapter 支持的平台必须全部在前端 CHANNEL_TYPES 暴露。
 // ════════════════════════════════════════════════════════════════════
-describeBE('F-3 provider 枚举前后端不一致 + slack.svg 孤儿资源', () => {
+describeBE('F-3 provider 枚举前后端一致 + logo 资源可达', () => {
   const buildAdapter = goSrc('instances/manager.go')
 
-  it('后端 BuildAdapter 支持 slack/line/whatsapp/matrix，前端 CHANNEL_TYPES 不含它们', () => {
+  it('后端 BuildAdapter 支持 slack/line/whatsapp/matrix，前端 CHANNEL_TYPES 同步暴露它们', () => {
     expect(buildAdapter).toMatch(/case "slack":/)
     expect(buildAdapter).toMatch(/case "line":/)
     expect(buildAdapter).toMatch(/case "whatsapp":/)
     expect(buildAdapter).toMatch(/case "matrix":/)
 
     const feTypes = new Set(CHANNEL_TYPES.map((c) => c.type as string))
-    expect(feTypes.has('slack')).toBe(false)
-    expect(feTypes.has('line')).toBe(false)
-    expect(feTypes.has('whatsapp')).toBe(false)
-    expect(feTypes.has('matrix')).toBe(false)
+    expect(feTypes.has('slack')).toBe(true)
+    expect(feTypes.has('line')).toBe(true)
+    expect(feTypes.has('whatsapp')).toBe(true)
+    expect(feTypes.has('matrix')).toBe(true)
   })
 
-  it('slack.svg 存在于 im-logos 目录，但前端 config/im-channels.ts 从不 import 它（孤儿资源）', () => {
-    const logoPath = path.resolve(__dirname, '../assets/im-logos/slack.svg')
-    expect(fs.existsSync(logoPath)).toBe(true)
+  it('slack/line/whatsapp/matrix logo 均存在且已被 config/im-channels.ts 引用', () => {
     const config = fs.readFileSync(path.resolve(__dirname, '../config/im-channels.ts'), 'utf-8')
-    expect(config).not.toContain('slack')
+    for (const type of ['slack', 'line', 'whatsapp', 'matrix']) {
+      const logoPath = path.resolve(__dirname, `../assets/im-logos/${type}.svg`)
+      expect(fs.existsSync(logoPath), `${type}.svg should exist`).toBe(true)
+      expect(config).toContain(`${type}Logo`)
+    }
   })
 
-  it('connectionCapabilities 后端未覆盖 slack（虽 BuildAdapter 支持）→ 若 slack 实例存在，能力为空 []', () => {
-    // 后端 connectionCapabilities 的 case 列表：email/feishu/dingtalk/discord/telegram/wecom/wechat
-    // 缺 slack/line/whatsapp/matrix → 这些实例在连接列表里 capabilities 退化为 []。
-    expect(handlerConnections).not.toMatch(/case[\s\S]{0,80}"slack"[\s\S]{0,40}return \[\]string\{"receive"/)
+  it('connectionCapabilities 后端覆盖 slack/line/whatsapp/matrix，实例存在时能力为 receive/send', () => {
+    for (const type of ['slack', 'line', 'whatsapp', 'matrix']) {
+      expect(handlerConnections).toContain(`"${type}"`)
+    }
+    expect(handlerConnections).toMatch(/return \[\]string\{"receive", "send"\}/)
   })
 })
 
@@ -330,28 +332,24 @@ describeBE('F-7 实例名中文/特殊字符 URL 编码（start/stop/health/dele
 })
 
 // ════════════════════════════════════════════════════════════════════
-// F-8【中】[边界] testConnection 降级判定漏 4xx/5xx：后端把业务失败返回 HTTP 200 + {ok:false}
-//   但「端点不可用」靠 message 正则匹配，覆盖面有限
+// F-8【已闭环】testConnection 不再凭错误文本降级；sidecar/proxy 错误应原样透出。
 // ════════════════════════════════════════════════════════════════════
-describeBE('F-8 testConnection 端点降级判定（正则匹配 message，覆盖面边界）', () => {
-  it('错误信息含 404 / unreachable 时降级为 "Test endpoint unavailable"', async () => {
+describeBE('F-8 testConnection 错误透传（无正则降级）', () => {
+  it('错误信息含 404 / unreachable 时原样透出，便于定位 sidecar 路由问题', async () => {
     invoke.mockImplementation(async () => {
       throw new Error('request failed: 404 not found')
     })
     const res = await testConnection({ type: 'email' as never, config: {} })
     expect(res.ok).toBe(false)
-    expect(res.detail).toBe('Test endpoint unavailable')
+    expect(res.detail).toBe('request failed: 404 not found')
   })
 
-  it('【边界暴露】HTTP 500 / "internal server error" 不匹配降级正则 → 原样透传给用户（非 unavailable）', async () => {
+  it('HTTP 500 / "internal server error" 同样原样透出', async () => {
     invoke.mockImplementation(async () => {
       throw new Error('500 internal server error')
     })
     const res = await testConnection({ type: 'email' as never, config: {} })
     expect(res.ok).toBe(false)
-    // 500 不在降级正则（/404|not found|unreachable|connection refused|failed to fetch/i）里，
-    // 故 detail 不是 "Test endpoint unavailable"，而是原始错误串。证明降级判定按 message 文本，脆弱。
-    expect(res.detail).not.toBe('Test endpoint unavailable')
-    expect(res.detail).toContain('500')
+    expect(res.detail).toBe('500 internal server error')
   })
 })

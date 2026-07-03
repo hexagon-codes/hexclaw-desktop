@@ -2,6 +2,7 @@
 export interface McpTool {
   name: string
   description: string
+  server_name?: string
   input_schema?: Record<string, unknown>
 }
 

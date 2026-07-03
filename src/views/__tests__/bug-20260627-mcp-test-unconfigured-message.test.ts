@@ -13,7 +13,7 @@
  *
  * 不变量：
  *   - 未配置的 MCP 连接器测试时**不得**弹 mcpTestDisconnected（「下载中稍后再试」），应弹「尚未配置」提示。
- *   - 已配置但离线的 MCP 连接器测试时**仍**弹 mcpTestDisconnected（保留合理的首次下载提示，不被本修复误伤）。
+ *   - 已配置但离线的 MCP 连接器测试时**不再只报未就绪**，而是按当前配置重放注册并提示后台连接中。
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -41,11 +41,14 @@ vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: toastSuccess, info: toastInfo, error: toastError, warning: vi.fn() }),
 }))
 
-const { getMcpServerStatus, removeMcpServer } = vi.hoisted(() => ({
+const { addMcpServer, callMcpTool, getMcpServerStatus, getMcpTools, removeMcpServer } = vi.hoisted(() => ({
+  addMcpServer: vi.fn(),
+  callMcpTool: vi.fn(),
   getMcpServerStatus: vi.fn(),
+  getMcpTools: vi.fn(),
   removeMcpServer: vi.fn(),
 }))
-vi.mock('@/api/mcp', () => ({ addMcpServer: vi.fn(), removeMcpServer, getMcpServerStatus }))
+vi.mock('@/api/mcp', () => ({ addMcpServer, callMcpTool, getMcpTools, removeMcpServer, getMcpServerStatus }))
 
 vi.mock('@/components/channels/ConnectorConfigModal.vue', () => ({
   default: { template: '<div class="connector-modal-stub" />' },
@@ -97,6 +100,9 @@ async function clickTest(wrapper: ReturnType<typeof mountView>) {
 describe('bug-20260627 MCP 连接器测试：未配置 vs 离线 文案分流', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    addMcpServer.mockResolvedValue({ message: 'queued', connected: false })
+    callMcpTool.mockResolvedValue({ result: 'ok' })
+    getMcpTools.mockResolvedValue({ tools: [], total: 0 })
     removeMcpServer.mockResolvedValue({ message: 'ok' })
     // 后端真实状态：无任何 MCP server 在线（对齐截图 servers:[]）。
     getMcpServerStatus.mockResolvedValue({ statuses: {}, servers: [] })
@@ -122,10 +128,11 @@ describe('bug-20260627 MCP 连接器测试：未配置 vs 离线 文案分流', 
     expect(toastInfo).not.toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestDisconnected)
     // 应弹「尚未配置，请先编辑配置」提示。
     expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestNotConfigured)
+    expect(addMcpServer).not.toHaveBeenCalled()
     expect(toastSuccess).not.toHaveBeenCalled()
   })
 
-  it('已配置但离线的 MCP 连接器点测试 → 仍弹「下载中稍后再试」(本修复不误伤合理过渡态)', async () => {
+  it('已配置但离线的 MCP 连接器点测试 → 主动按当前配置注册并提示后台连接中', async () => {
     connectorList.value = [
       {
         id: 'm2',
@@ -140,8 +147,20 @@ describe('bug-20260627 MCP 连接器测试：未配置 vs 离线 文案分流', 
     await flushPromises()
     await clickTest(wrapper)
 
-    // 已配置但 server 未上线 = 合理的首次下载/启动过渡态，保留原文案。
-    expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestDisconnected)
+    expect(addMcpServer).toHaveBeenCalledWith(
+      '会话库',
+      'npx',
+      ['-y', '@benborla29/mcp-server-mysql'],
+      {
+        env: {
+          MYSQL_HOST: '127.0.0.1',
+          MYSQL_PORT: '3306',
+          MYSQL_USER: 'root',
+        },
+      },
+    )
+    expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpConnecting)
+    expect(toastInfo).not.toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestDisconnected)
     expect(toastInfo).not.toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestNotConfigured)
   })
 })
