@@ -2,14 +2,19 @@
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { Trash2, Globe, Webhook as WebhookIcon, PowerOff, X, Copy } from 'lucide-vue-next'
-import { getWebhooks, createWebhook, deleteWebhook, webhookUrlFor } from '@/api/webhook'
+import { Trash2, Globe, Webhook as WebhookIcon, PowerOff, Power, X, Copy, ShieldAlert, ShieldCheck } from 'lucide-vue-next'
+import { getWebhooks, createWebhook, deleteWebhook, webhookUrlFor, updateWebhookEnabled } from '@/api/webhook'
 import type { Webhook, WebhookType } from '@/api/webhook'
 import { getCronJobs } from '@/api/tasks'
 import type { CronJob } from '@/types/task'
+import {
+  preflightAutonomy, createAutonomyGrant, getAutonomySummary,
+  type PreflightResult, type AutonomyTaskStatus,
+} from '@/api/autonomy'
 import { useToast } from '@/composables/useToast'
 import { setClipboard } from '@/api/desktop'
 import HcSelect from '@/components/common/HcSelect.vue'
+import PermissionBlockedModal from '@/components/automation/PermissionBlockedModal.vue'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -36,6 +41,106 @@ const form = ref({
 
 function resetCreateForm() {
   form.value = { name: '', type: 'generic', prompt: '', secret: '', jobId: '' }
+  createdResult.value = null
+  createdPreflight.value = null
+}
+
+// ── 创建结果态（原型「Webhook · 待启用端点」）────────────────────────
+// 创建即得端点、默认未启用：先复制 URL/Secret 配对端、验签，授权后一键启用。
+const createdResult = ref<{ id: string; name: string; url: string; enabled: boolean; secret?: string } | null>(null)
+const createdPreflight = ref<PreflightResult | null>(null)
+const enabling = ref(false)
+const togglingIds = ref<Set<string>>(new Set())
+// webhook id → 权限状态（!all_clear 的行显示待授权徽章）
+const permissionStatuses = ref<Map<string, AutonomyTaskStatus>>(new Map())
+const blockedOpen = ref(false)
+const blockedTask = ref<AutonomyTaskStatus | null>(null)
+
+async function loadPermissionStatuses() {
+  try {
+    const res = await getAutonomySummary()
+    const map = new Map<string, AutonomyTaskStatus>()
+    for (const status of res?.tasks ?? []) {
+      if (status.kind === 'webhook') map.set(status.task_ref.replace(/^webhook:/, ''), status)
+    }
+    permissionStatuses.value = map
+  } catch {
+    permissionStatuses.value = new Map()
+  }
+}
+
+function permissionPending(wh: Webhook): AutonomyTaskStatus | undefined {
+  const status = permissionStatuses.value.get(wh.id)
+  return status && !status.all_clear ? status : undefined
+}
+
+function openBlockedModal(wh: Webhook) {
+  blockedTask.value = permissionStatuses.value.get(wh.id) ?? null
+  blockedOpen.value = true
+}
+
+async function onBlockedResolved() {
+  blockedOpen.value = false
+  await loadWebhooks()
+}
+
+/** 创建结果态里被拦/需授权的能力条目。 */
+const createdNeeds = computed(() => createdPreflight.value?.needs_decision ?? [])
+
+/** 授权并启用：需授权条目写任务级授权（仅本 Webhook）→ PATCH enabled=true。 */
+async function grantAndEnableCreated() {
+  const res = createdResult.value
+  if (!res || enabling.value) return
+  enabling.value = true
+  try {
+    if (createdNeeds.value.length > 0) {
+      await createAutonomyGrant({
+        task_ref: `webhook:${res.id}`,
+        source: 'webhook',
+        entries: createdNeeds.value,
+        note: t('autonomy.approval.grantNote', '创建流任务级授权'),
+      })
+    }
+    await updateWebhookEnabled(res.name, true)
+    toast.success(t('autonomy.webhook.enabled', 'Webhook 已授权并启用'))
+    closeCreateForm()
+    await loadWebhooks()
+  } catch (e: unknown) {
+    toast.error((e as Error)?.message || t('autonomy.webhook.enableFailed', '启用失败'))
+  } finally {
+    enabling.value = false
+  }
+}
+
+/** 完成但保持未启用：端点已可验签，稍后从列表启用。 */
+async function finishKeepDisabled() {
+  closeCreateForm()
+  await loadWebhooks()
+}
+
+/** 列表行启停切换。 */
+async function toggleWebhookEnabled(wh: Webhook) {
+  if (togglingIds.value.has(wh.id)) return
+  togglingIds.value = new Set([...togglingIds.value, wh.id])
+  try {
+    await updateWebhookEnabled(wh.name, !wh.enabled)
+    await loadWebhooks()
+  } catch (e: unknown) {
+    toast.error((e as Error)?.message || t('autonomy.webhook.toggleFailed', '切换启用状态失败'))
+  } finally {
+    const next = new Set(togglingIds.value)
+    next.delete(wh.id)
+    togglingIds.value = next
+  }
+}
+
+async function copyText(text: string, okMsg: string) {
+  try {
+    await setClipboard(text)
+    toast.success(okMsg)
+  } catch {
+    toast.error(t('webhooks.copyFailed', '复制失败，请手动复制'))
+  }
 }
 
 // 可绑定的 cron job 列表（best-effort 载入，失败不阻塞建 webhook）。
@@ -99,6 +204,7 @@ async function loadWebhooks() {
     const res = await getWebhooks()
     if (requestGen !== loadRequestGen) return
     webhooks.value = res?.webhooks ?? []
+    void loadPermissionStatuses()
   } catch (e) {
     if (requestGen !== loadRequestGen) return
     webhooks.value = []
@@ -129,9 +235,27 @@ async function onCreateWebhook() {
   }
   creating.value = true
   try {
-    await createWebhook(form.value)
+    const res = await createWebhook(form.value)
     toast.success(t('webhooks.created', { name: form.value.name }))
-    closeCreateForm()
+    // 创建即得端点、默认未启用：进入结果态（URL/Secret/预检/启用），不直接关窗。
+    createdResult.value = {
+      id: res.id,
+      name: res.name,
+      url: webhookUrlFor(res.name),
+      enabled: res.enabled ?? false,
+      secret: res.secret,
+    }
+    try {
+      createdPreflight.value = await preflightAutonomy({
+        source: 'webhook',
+        task_ref: `webhook:${res.id}`,
+        // FS-4：绑 job 的 webhook 触发跑 job 的 SourcePrompt，让后端据 cron_job_id 解析真实能力面；
+        // 未绑 job 时仍发本表单 prompt。
+        ...(form.value.jobId ? { cron_job_id: form.value.jobId } : { prompt: form.value.prompt }),
+      })
+    } catch {
+      createdPreflight.value = null
+    }
     await loadWebhooks()
   } catch (e: unknown) {
     toast.error((e as Error)?.message || t('webhooks.createFailed'))
@@ -210,7 +334,48 @@ defineExpose({ loadWebhooks, openCreateForm, form })
               </button>
             </div>
 
-            <div class="px-5 py-4 webhook-modal__body">
+            <!-- 结果态：创建即得端点、默认未启用（原型「Webhook · 待启用端点」） -->
+            <div v-if="createdResult" class="px-5 py-4 webhook-modal__body" data-testid="webhook-created-result">
+              <div class="webhook-result__status">
+                <span class="webhook-result__pill">{{ t('autonomy.webhook.pendingEnable', '未启用 · 可验签 · 不派发') }}</span>
+              </div>
+              <div class="hc-form-group">
+                <label>{{ t('autonomy.webhook.endpoint', '接收端点（复制到对端服务）') }}</label>
+                <div class="webhook-result__copyrow">
+                  <code>{{ createdResult.url }}</code>
+                  <button class="webhook-panel__copy" @click="copyText(createdResult.url, t('webhooks.copied', '已复制 Webhook URL'))">
+                    <Copy :size="13" />
+                  </button>
+                </div>
+              </div>
+              <div v-if="createdResult.secret" class="hc-form-group">
+                <label>{{ t('autonomy.webhook.generatedSecret', '签名 Secret（仅本次显示，请立即复制）') }}</label>
+                <div class="webhook-result__copyrow">
+                  <code>{{ createdResult.secret }}</code>
+                  <button class="webhook-panel__copy" @click="copyText(createdResult.secret!, t('autonomy.webhook.secretCopied', '已复制 Secret'))">
+                    <Copy :size="13" />
+                  </button>
+                </div>
+              </div>
+              <p class="webhook-panel__url-note">
+                {{ t('autonomy.webhook.testNote', '真实事件返回 423 仅记录不派发；对端配置后可加 ?test=1 发测试事件验签。') }}
+              </p>
+              <div v-if="createdNeeds.length" class="webhook-result__needs">
+                <div class="webhook-result__needs-head">
+                  <ShieldAlert :size="13" />
+                  <span>{{ t('autonomy.webhook.needsTitle', '启用前需授权的能力') }}</span>
+                </div>
+                <div class="webhook-result__chips">
+                  <span v-for="c in createdNeeds" :key="c" class="webhook-result__chip">{{ t(`autonomy.category.${c}`, c) }}</span>
+                </div>
+              </div>
+              <div v-else class="webhook-result__needs webhook-result__needs--ok">
+                <ShieldCheck :size="13" />
+                <span>{{ t('autonomy.webhook.allClear', '预估能力全部自动放行，可直接启用') }}</span>
+              </div>
+            </div>
+
+            <div v-else class="px-5 py-4 webhook-modal__body">
               <div class="hc-form-group">
                 <label>{{ t('webhooks.name') }}</label>
                 <input v-model="form.name" class="hc-input" placeholder="my-webhook" />
@@ -248,10 +413,20 @@ defineExpose({ loadWebhooks, openCreateForm, form })
               class="flex items-center justify-end gap-2 px-5 py-3.5 border-t webhook-modal__actions"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
-              <button class="hc-btn hc-btn-ghost" @click="closeCreateForm">{{ t('webhooks.cancel') }}</button>
-              <button class="hc-btn hc-btn-primary" :disabled="creating" @click="onCreateWebhook">
-                {{ t('webhooks.create') }}
-              </button>
+              <template v-if="createdResult">
+                <button class="hc-btn hc-btn-ghost" data-testid="keep-disabled" :disabled="enabling" @click="finishKeepDisabled">
+                  {{ t('autonomy.webhook.keepDisabled', '完成（保持未启用）') }}
+                </button>
+                <button class="hc-btn hc-btn-primary" data-testid="grant-and-enable" :disabled="enabling" @click="grantAndEnableCreated">
+                  {{ t('autonomy.webhook.grantAndEnable', '授权并启用') }}
+                </button>
+              </template>
+              <template v-else>
+                <button class="hc-btn hc-btn-ghost" @click="closeCreateForm">{{ t('webhooks.cancel') }}</button>
+                <button class="hc-btn hc-btn-primary" :disabled="creating" @click="onCreateWebhook">
+                  {{ t('webhooks.create') }}
+                </button>
+              </template>
             </div>
           </div>
         </div>
@@ -282,7 +457,27 @@ defineExpose({ loadWebhooks, openCreateForm, form })
           <Globe :size="14" />
           <span class="webhook-panel__item-name">{{ wh.name }}</span>
           <span class="webhook-panel__item-type">{{ wh.type }}</span>
-          <span v-if="!wh.enabled" class="webhook-panel__item-disabled">{{ t('webhooks.itemDisabled', '已停用') }}</span>
+          <span v-if="!wh.enabled" class="webhook-panel__item-disabled">{{ t('autonomy.webhook.itemPending', '未启用') }}</span>
+          <button
+            v-if="permissionPending(wh)"
+            class="webhook-panel__perm-badge"
+            data-testid="perm-badge"
+            @click.stop="openBlockedModal(wh)"
+          >
+            <ShieldAlert :size="11" />
+            {{ t('autonomy.badge.pending', '待授权') }} · {{ t('autonomy.badge.open', '去开启') }}
+          </button>
+          <button
+            class="webhook-panel__toggle"
+            data-testid="toggle-enabled"
+            :disabled="togglingIds.has(wh.id)"
+            :title="wh.enabled ? t('autonomy.webhook.disable', '停用') : t('autonomy.webhook.enable', '启用')"
+            @click.stop="toggleWebhookEnabled(wh)"
+          >
+            <Power v-if="!wh.enabled" :size="13" />
+            <PowerOff v-else :size="13" />
+            {{ wh.enabled ? t('autonomy.webhook.disable', '停用') : t('autonomy.webhook.enable', '启用') }}
+          </button>
         </div>
         <!-- 真实接收 URL（后端按 name 生成）+ 复制 -->
         <div class="webhook-panel__item-url">
@@ -301,6 +496,12 @@ defineExpose({ loadWebhooks, openCreateForm, form })
       </div>
     </div>
   </div>
+  <PermissionBlockedModal
+    :open="blockedOpen"
+    :task="blockedTask"
+    @close="blockedOpen = false"
+    @resolved="onBlockedResolved"
+  />
 </template>
 
 <style scoped>
@@ -331,6 +532,44 @@ defineExpose({ loadWebhooks, openCreateForm, form })
 .webhook-panel__item-count { flex-shrink: 0; font-size: 11px; color: var(--hc-text-muted); }
 .webhook-panel__url-note { font-size: 12px; color: var(--hc-text-muted); margin: 2px 0 0; }
 .webhook-panel__delete { position: absolute; top: 8px; right: 8px; }
+.webhook-panel__toggle {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  font-size: 11px; padding: 2px 8px; border-radius: 6px;
+  border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-secondary);
+}
+.webhook-panel__toggle:hover { background: var(--hc-bg-hover); color: var(--hc-text-primary); }
+.webhook-panel__toggle:disabled { opacity: 0.6; cursor: default; }
+.webhook-panel__perm-badge {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  border: 0.5px solid rgba(240, 180, 41, 0.35);
+  background: rgba(240, 180, 41, 0.12); color: var(--hc-warning, #e69500);
+}
+.webhook-panel__perm-badge:hover { background: rgba(240, 180, 41, 0.2); }
+.webhook-result__status { display: flex; }
+.webhook-result__pill {
+  display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600;
+  padding: 3px 9px; border-radius: 7px;
+  background: rgba(240, 180, 41, 0.14); color: var(--hc-warning, #e69500);
+}
+.webhook-result__copyrow {
+  display: flex; align-items: center; gap: 6px; min-width: 0;
+  padding: 8px 10px; border: 1px dashed var(--hc-border-hl, rgba(95,179,234,0.32));
+  border-radius: 8px; background: var(--hc-bg-input);
+}
+.webhook-result__copyrow code {
+  flex: 1; min-width: 0; font-size: 12px; color: var(--hc-text-primary);
+  font-family: ui-monospace, 'SF Mono', monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.webhook-result__needs { display: flex; flex-direction: column; gap: 6px; }
+.webhook-result__needs--ok { flex-direction: row; align-items: center; gap: 6px; font-size: 12.5px; color: var(--hc-success, #28a745); }
+.webhook-result__needs-head { display: flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; color: var(--hc-warning, #e69500); }
+.webhook-result__chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.webhook-result__chip {
+  display: inline-flex; align-items: center; min-height: 22px; padding: 2px 8px;
+  border: 0.5px solid rgba(240, 180, 41, 0.35); border-radius: 7px;
+  background: rgba(240, 180, 41, 0.12); color: var(--hc-warning, #e69500); font-size: 11.5px;
+}
 .webhook-panel__empty {
   display: flex;
   flex-direction: column;

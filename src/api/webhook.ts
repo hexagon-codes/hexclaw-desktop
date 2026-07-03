@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiDelete } from './client'
+import { apiGet, apiPost, apiPatch, apiDelete } from './client'
 import { DESKTOP_USER_ID } from '@/constants'
 import { env } from '@/config/env'
 
@@ -35,8 +35,10 @@ export function getWebhooks() {
   })
 }
 
-/** 注册 Webhook —— 对齐后端 RegisterWebhookRequest{name,type,secret,prompt,user_id}。
- *  prompt 为事件到达时执行的 Agent 指令（后端必填非空）；URL 由后端按 name 生成并在响应返回。 */
+/** 注册 Webhook —— 对齐后端 RegisterWebhookRequest{name,type,secret,prompt,user_id,enabled}。
+ *  产品语义「创建即得端点、默认未启用」：不传 enabled 即 false —— 先把 URL/Secret
+ *  配到对端、跑通测试事件（?test=1 验签回显）、完成授权，再 PATCH 启用。
+ *  Secret 留空时后端自动生成，并只在本次创建响应回显一次（secret 字段）。 */
 export function createWebhook(data: {
   name: string
   type: WebhookType
@@ -44,15 +46,30 @@ export function createWebhook(data: {
   secret?: string
   /** §13.3(1) 绑定 cron job：非空 → 事件触发该 job 而非跑 prompt（对齐后端 RegisterWebhookRequest.job_id）。 */
   jobId?: string
+  /** 显式启用（默认 false：创建后先验签/授权再启用）。 */
+  enabled?: boolean
 }) {
-  return apiPost<{ id: string; name: string; url: string }>('/api/v1/webhooks', {
-    name: data.name,
-    type: data.type,
-    prompt: data.prompt,
-    secret: data.secret ?? '',
-    job_id: data.jobId ?? '',
-    user_id: DESKTOP_USER_ID,
-  })
+  return apiPost<{ id: string; name: string; url: string; enabled: boolean; secret?: string }>(
+    '/api/v1/webhooks',
+    {
+      name: data.name,
+      type: data.type,
+      prompt: data.prompt,
+      secret: data.secret ?? '',
+      job_id: data.jobId ?? '',
+      user_id: DESKTOP_USER_ID,
+      enabled: data.enabled ?? false,
+    },
+  )
+}
+
+/** 启用/停用 Webhook（PATCH /api/v1/webhooks/{name}）。
+ *  停用即回到「验签记录、423 不派发」态；授权完成后启用开始派发 Agent。 */
+export function updateWebhookEnabled(name: string, enabled: boolean) {
+  return apiPatch<{ name: string; enabled: boolean }>(
+    `/api/v1/webhooks/${encodeURIComponent(name)}`,
+    { enabled },
+  )
 }
 
 /** 删除 Webhook — 按 name 寻址（后端路由 DELETE /api/v1/webhooks/{name}，Unregister 按 name）。

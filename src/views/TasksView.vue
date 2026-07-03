@@ -3,16 +3,22 @@ import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime, formatElapsedSeconds, formatDurationMs } from '@/utils/time'
 import { outputPreview, hasOutput } from '@/utils/output-preview'
-import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader, Code, AlertTriangle, Clock3, Sparkles } from 'lucide-vue-next'
+import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader, Code, AlertTriangle, Clock3, Sparkles, ShieldAlert } from 'lucide-vue-next'
 import {
   getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory,
   type CronJob, type CronJobInput, type CronJobRun, type CronCompileProgress, type CronCompileStage,
 } from '@/api/tasks'
 import { getConnections, type ConnectionSummary } from '@/api/im-channels'
+import {
+  preflightAutonomy, createAutonomyGrant, getAutonomySummary,
+  type PreflightResult, type AutonomyTaskStatus,
+} from '@/api/autonomy'
 import type { JobSpec } from '@/types'
 import { useToast } from '@/composables'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import PermissionApprovalModal from '@/components/automation/PermissionApprovalModal.vue'
+import PermissionBlockedModal from '@/components/automation/PermissionBlockedModal.vue'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -143,12 +149,53 @@ async function loadJobs() {
   try {
     const res = await getCronJobs()
     jobs.value = res.jobs || []
+    // 权限状态刷新不阻塞任务列表（后端未开启治理时静默降级）。
+    void loadPermissionStatuses()
   } catch (e) {
     console.error('加载定时任务失败:', e)
     toast.error(t('tasks.loadJobsFailed', '加载定时任务失败'))
   } finally {
     loading.value = false
   }
+}
+
+// ── 自动化权限：静默预检（条件式向导）+ 任务卡阻断徽章 ─────────────
+// 全绿 → 一步创建即启用，不出现任何权限步骤；命中需审批能力才展开审批弹窗。
+const approvalOpen = ref(false)
+const approvalPreflight = ref<PreflightResult | null>(null)
+const approvalBusy = ref(false)
+// task_ref(去前缀 job.id) → 权限状态；!all_clear 的任务卡显示「待授权 · 去开启」。
+const permissionStatuses = ref<Map<string, AutonomyTaskStatus>>(new Map())
+const blockedOpen = ref(false)
+const blockedTask = ref<AutonomyTaskStatus | null>(null)
+
+async function loadPermissionStatuses() {
+  try {
+    const res = await getAutonomySummary()
+    const map = new Map<string, AutonomyTaskStatus>()
+    for (const status of res?.tasks ?? []) {
+      if (status.kind === 'cron') map.set(status.task_ref.replace(/^cron:/, ''), status)
+    }
+    permissionStatuses.value = map
+  } catch {
+    // 老后端/治理未启用：无徽章即可，不打扰
+    permissionStatuses.value = new Map()
+  }
+}
+
+function permissionPending(job: CronJob): AutonomyTaskStatus | undefined {
+  const status = permissionStatuses.value.get(job.id)
+  return status && !status.all_clear ? status : undefined
+}
+
+function openBlockedModal(job: CronJob) {
+  blockedTask.value = permissionStatuses.value.get(job.id) ?? null
+  blockedOpen.value = true
+}
+
+async function onBlockedResolved() {
+  blockedOpen.value = false
+  await loadJobs()
 }
 
 onMounted(loadJobs)
@@ -212,18 +259,45 @@ function stageProgress(stage: CronCompileStage): number {
 
 async function handleCreate() {
   if (!formValid.value || submitting.value) return
+  // 静默预检（条件式向导）：全绿一步创建；命中需审批能力才展开审批步骤。
+  // 预检不可用（老后端/离线）按全绿放行——运行时权限闸仍兜底，不会静默越权。
+  let pf: PreflightResult | null = null
+  try {
+    pf = await preflightAutonomy({
+      source: 'cron',
+      prompt: form.value.prompt,
+      deliver: !!(form.value.deliver && form.value.deliver.length),
+    })
+  } catch {
+    pf = null
+  }
+  if (pf && !pf.all_clear) {
+    approvalPreflight.value = pf
+    approvalOpen.value = true
+    return
+  }
+  await submitCreate()
+}
+
+/** 实际提交创建；返回创建成功的 job（授权流程需要 task_ref），失败返回 null。 */
+async function submitCreate(options: { paused?: boolean } = {}): Promise<CronJob | null> {
+  if (submitting.value) return null
   submitting.value = true
   createProgress.value = null
   const ctrl = new AbortController()
   createAbort.value = ctrl
   try {
-    await createCronJob(form.value, {
-      signal: ctrl.signal,
-      onProgress: (p) => { createProgress.value = p },
-    })
+    const result = await createCronJob(
+      { ...form.value, ...(options.paused ? { paused: true } : {}) },
+      {
+        signal: ctrl.signal,
+        onProgress: (p) => { createProgress.value = p },
+      },
+    )
     showForm.value = false
     toast.success(t('tasks.createTaskSuccess'))
     await loadJobs()
+    return result?.job ?? null
   } catch (e) {
     if (ctrl.signal.aborted) {
       toast.info(t('tasks.createTaskCanceled', '已取消创建'))
@@ -232,10 +306,60 @@ async function handleCreate() {
       const msg = e instanceof Error ? e.message : String(e)
       toast.error(`${t('tasks.createTaskFailed')}: ${msg}`)
     }
+    return null
   } finally {
     submitting.value = false
     createProgress.value = null
     createAbort.value = null
+  }
+}
+
+/** 审批三选一（从窄到宽）：任务级授权（推荐）/ 先创建不授权 / 保存为暂停。 */
+async function onApprovalChoose(mode: 'grant' | 'later' | 'paused') {
+  if (approvalBusy.value) return
+  approvalBusy.value = true
+  const needs = approvalPreflight.value?.needs_decision ?? []
+  try {
+    if (mode === 'later') {
+      approvalOpen.value = false
+      await submitCreate()
+      return
+    }
+    if (mode === 'paused') {
+      approvalOpen.value = false
+      await submitCreate({ paused: true })
+      return
+    }
+    // grant：暂停态创建冻结任务意图 → 写任务级授权 → resume 启用。
+    const job = await submitCreate({ paused: true })
+    if (job) {
+      // FS-6：授权与启用分两段，文案按真实落点区分——grant 已幂等落库后 resume
+      // 失败不应报「授权未完成」（会误导用户重复授权）。重试 grant 也安全（后端幂等）。
+      let granted = false
+      try {
+        await createAutonomyGrant({
+          task_ref: `cron:${job.id}`,
+          source: 'cron',
+          entries: needs,
+          note: t('autonomy.approval.grantNote', '创建流任务级授权'),
+        })
+        granted = true
+        await resumeCronJob(job.id)
+        toast.success(t('autonomy.approval.grantedAndEnabled', '已授权并启用'))
+      } catch (e) {
+        console.error('任务级授权/启用失败:', e)
+        if (granted) {
+          // 授权已落库，仅启用失败：任务保持暂停，提示在任务卡上直接启用（无需重新授权）。
+          toast.error(t('autonomy.approval.enableFailed', '授权已保存，但启用未成功，可在任务卡上直接启用'))
+        } else {
+          toast.error(t('autonomy.approval.grantFailed', '授权未完成，任务已保存为暂停，可在任务卡上重试'))
+        }
+      }
+      await loadJobs()
+    }
+    approvalOpen.value = false
+  } finally {
+    approvalBusy.value = false
   }
 }
 
@@ -552,6 +676,16 @@ defineExpose({ openCreateForm, loadJobs })
                 <span class="task-card__status-dot" :style="{ background: statusColor(job.status) }" />
                 {{ statusText(job.status) }}
               </span>
+              <button
+                v-if="permissionPending(job)"
+                class="task-card__perm-badge"
+                data-testid="perm-badge"
+                :title="t('autonomy.badge.openTitle', '权限待授权，点击处理')"
+                @click.stop="openBlockedModal(job)"
+              >
+                <ShieldAlert :size="12" />
+                {{ t('autonomy.badge.pending', '待授权') }} · {{ t('autonomy.badge.open', '去开启') }}
+              </button>
             </div>
             <p class="task-card__prompt">{{ job.source_prompt }}</p>
           </div>
@@ -911,6 +1045,21 @@ defineExpose({ openCreateForm, loadJobs })
       </Transition>
     </Teleport>
   </div>
+  <PermissionApprovalModal
+    :open="approvalOpen"
+    :task-name="form.name"
+    source="cron"
+    :preflight="approvalPreflight"
+    :busy="approvalBusy"
+    @close="approvalOpen = false"
+    @choose="onApprovalChoose"
+  />
+  <PermissionBlockedModal
+    :open="blockedOpen"
+    :task="blockedTask"
+    @close="blockedOpen = false"
+    @resolved="onBlockedResolved"
+  />
 </template>
 
 <style scoped>
@@ -976,6 +1125,13 @@ defineExpose({ openCreateForm, loadJobs })
   flex-shrink: 0;
 }
 
+.task-card__perm-badge {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  border: 0.5px solid rgba(240, 180, 41, 0.35);
+  background: rgba(240, 180, 41, 0.12); color: var(--hc-warning, #e69500);
+}
+.task-card__perm-badge:hover { background: rgba(240, 180, 41, 0.2); }
 .task-card__status-dot {
   width: 5px;
   height: 5px;
