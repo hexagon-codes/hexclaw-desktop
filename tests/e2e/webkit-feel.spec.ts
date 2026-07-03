@@ -263,3 +263,32 @@ test.describe('全路由悬浮滚动条巡检 @ WebKit（bug-20260626 防扩散�
     }
   })
 })
+
+/**
+ * 启动页 splash logo @ WebKit（BUG-20260703 B6 回归）
+ * 装机版曾出现空白 splash：logo 用运行时路径 `/logo.png`（全 App 唯一不走打包 import 的图），
+ * Tauri asset 协议 + 生产 CSP + splash 提前 dismiss 叠加导致这次异步 fetch 失败/来不及绘制。
+ * 修复后 logo 内联 data-URI（boot 前即在 DOM，零 fetch 依赖）。此处在真实 WebKit 里解码取证——
+ * 从服务端拿 index.html 原文断言内联契约，不受 splash 已被 dismiss 的时序影响。
+ */
+test.describe('真机手感 @ WebKit — 启动页 splash logo（BUG-20260703 B6）', () => {
+  test('⑧ splash logo 内联 data-URI 且在 WebKit 真解码（装机零运行时 fetch 依赖）', async ({ page }) => {
+    const resp = await page.goto('/')
+    const html = await resp!.text()
+    const m = html.match(/id="splash-screen"[\s\S]*?<img\s+[^>]*src="(data:image\/png;base64,[^"]+)"/)
+    expect(m, 'splash logo 必须内联 data-URI').toBeTruthy()
+    const decoded = await page.evaluate(async (src) => {
+      const img = new Image()
+      img.src = src
+      try {
+        await img.decode()
+      } catch {
+        return { ok: false, w: 0, h: 0 }
+      }
+      return { ok: true, w: img.naturalWidth, h: img.naturalHeight }
+    }, m![1])
+    expect(decoded.ok, 'splash logo data-URI 在 WebKit 解码失败').toBe(true)
+    expect(decoded.w).toBeGreaterThan(0)
+    expect(decoded.h).toBeGreaterThan(0)
+  })
+})
