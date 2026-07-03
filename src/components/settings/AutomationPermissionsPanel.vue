@@ -26,6 +26,11 @@ const matrix = ref<MatrixView | null>(null)
 const summary = ref<AutonomySummary | null>(null)
 const decisions = ref<AutonomyDecision[]>([])
 const grants = ref<AutonomyGrant[]>([])
+/** 审计区收敛（2026-07-04）：默认最近 3 条，展开看全部。 */
+const DECISIONS_COLLAPSED_COUNT = 3
+const decisionsExpanded = ref(false)
+const visibleDecisions = computed(() =>
+  decisionsExpanded.value ? decisions.value : decisions.value.slice(0, DECISIONS_COLLAPSED_COUNT))
 const revokingId = ref<string | null>(null)
 const loading = ref(false)
 const switching = ref(false)
@@ -68,11 +73,24 @@ const profileCards = computed(() => [
   },
 ])
 
-/** 当前态锚点：一句话回答「我现在处于什么保护态」。 */
-const currentGuard = computed(() =>
-  profileCards.value.find((c) => c.key === profile.value)?.guard ?? '')
-const currentTitle = computed(() =>
-  profileCards.value.find((c) => c.key === profile.value)?.title ?? profile.value)
+/**
+ * 当前态锚点：一句话回答「我现在处于什么保护态」。
+ * BUG-20260703 P2a：balanced 引擎接受但 UI 不设第 4 卡——被配置/API 设为 balanced 时
+ * 锚点须显示本地化名与准确 guard（对齐 balanced 矩阵：读/浏览/改文件/发消息自动跑，
+ * 一切执行类含沙箱转审批），不裸显英文串、不留空 guard。
+ */
+const currentCard = computed(() => profileCards.value.find((c) => c.key === profile.value))
+const currentIsCardless = computed(() => !currentCard.value)
+const currentGuard = computed(() => {
+  if (currentCard.value) return currentCard.value.guard
+  if (profile.value === 'balanced') return t('autonomy.profile.balancedGuard', '读取、浏览、改文件、发消息自动跑；一切执行类（含沙箱）都会先问你')
+  return ''
+})
+const currentTitle = computed(() => {
+  if (currentCard.value) return currentCard.value.title
+  if (profile.value === 'balanced') return t('autonomy.profile.balanced', '平衡')
+  return profile.value
+})
 
 /**
  * 指标条：3 格讲一个完整故事——待处理（行动主角，置顶）、可无人值守（就绪/总数分数）、
@@ -295,6 +313,10 @@ function formatTime(iso: string): string {
             </span>
           </button>
         </div>
+        <!-- BUG-20260703 P2a：当前档不在三卡中（balanced 等）时的兜底说明——不加第 4 卡 -->
+        <p v-if="currentIsCardless" class="auto-perm__cardless-note" data-testid="profile-fallback-note">
+          {{ t('autonomy.settings.cardlessNote', { name: currentTitle }) }}
+        </p>
       </section>
 
       <!-- 当前影响 -->
@@ -351,8 +373,10 @@ function formatTime(iso: string): string {
         <div v-if="decisions.length === 0" class="auto-perm__muted">
           {{ t('autonomy.settings.noLog', '还没有权限决策记录——自动化任务运行后这里会持续留档。') }}
         </div>
+        <!-- 收敛（2026-07-04 PM 评审）：家长用户默认只看最近 3 条（macOS「近期使用」同型），
+             治理闭环内容不减；>3 条时给「显示全部 (N)」展开。 -->
         <div v-else class="auto-perm__log">
-          <div v-for="d in decisions" :key="d.id" class="auto-perm__log-row" data-testid="decision-row">
+          <div v-for="d in visibleDecisions" :key="d.id" class="auto-perm__log-row" data-testid="decision-row">
             <span class="auto-perm__log-time">{{ formatTime(d.at) }}</span>
             <span class="auto-perm__log-text">
               {{ sourceLabel(d.source) }} / {{ d.tool }}<template v-if="d.capability"> · {{ categoryLabel(d.capability) }}</template>
@@ -366,6 +390,16 @@ function formatTime(iso: string): string {
               }"
             >{{ t(`autonomy.decision.${d.decision}`, d.decision) }}</span>
           </div>
+          <button
+            v-if="decisions.length > DECISIONS_COLLAPSED_COUNT"
+            class="auto-perm__showall"
+            data-testid="decisions-show-all"
+            @click="decisionsExpanded = !decisionsExpanded"
+          >
+            {{ decisionsExpanded
+              ? t('autonomy.settings.collapseLog', '收起')
+              : t('autonomy.settings.showAllLog', { n: decisions.length }) }}
+          </button>
         </div>
       </section>
 
@@ -586,6 +620,11 @@ function formatTime(iso: string): string {
   position: absolute; top: 12px; inset-inline-end: 12px;
   display: flex; color: var(--hc-text-muted); opacity: 0.55;
 }
+.auto-perm__cardless-note {
+  margin: 0; padding: 8px 12px; border-radius: var(--hc-radius-md);
+  font-size: 12px; line-height: 1.55; color: var(--hc-text-secondary);
+  background: var(--hc-bg-input); border: 0.5px dashed var(--hc-border);
+}
 .auto-perm__badge {
   flex-shrink: 0; padding: 1.5px 6px; border-radius: 999px;
   font-size: 10px; font-weight: 600; letter-spacing: 0.02em;
@@ -647,6 +686,11 @@ function formatTime(iso: string): string {
 
 /* ─── 决策日志 ─────────────────────────────────── */
 .auto-perm__muted { margin: 0; font-size: 12px; line-height: 1.55; color: var(--hc-text-muted); }
+.auto-perm__showall {
+  align-self: flex-start; margin-top: 4px; padding: 3px 8px; font-size: 11.5px;
+  color: var(--hc-accent); background: transparent; border: none; cursor: pointer; border-radius: 6px;
+}
+.auto-perm__showall:hover { background: var(--hc-bg-hover); }
 .auto-perm__log { display: flex; flex-direction: column; }
 .auto-perm__log-row {
   display: flex; align-items: center; gap: 8px; min-width: 0;

@@ -8,6 +8,9 @@ export interface OllamaModel {
   family?: string
   parameter_size?: string
   quantization_level?: string
+  /** Ollama /api/tags 上报的真实能力（completion / vision / tools / thinking …），
+   *  BUG-20260704：据此显示视觉徽章，替代按模型名猜的静态表。 */
+  capabilities?: string[]
 }
 
 export interface OllamaStatus {
@@ -41,7 +44,7 @@ export async function getOllamaStatus(): Promise<OllamaStatus> {
       fetch(`${OLLAMA_BASE}/api/version`, { signal: AbortSignal.timeout(3000) }),
     ])
     if (!tagsRes.ok) throw new Error(`tags: ${tagsRes.status}`)
-    const tags = await tagsRes.json() as { models?: Array<{ name: string; size: number; modified_at: string; details?: { family?: string; parameter_size?: string; quantization_level?: string } }> }
+    const tags = await tagsRes.json() as { models?: Array<{ name: string; size: number; modified_at: string; capabilities?: string[]; details?: { family?: string; parameter_size?: string; quantization_level?: string } }> }
     const version = versionRes.ok ? ((await versionRes.json()) as { version?: string }).version : undefined
     const models: OllamaModel[] = (tags.models || []).map((m) => ({
       name: m.name,
@@ -50,6 +53,8 @@ export async function getOllamaStatus(): Promise<OllamaStatus> {
       family: m.details?.family,
       parameter_size: m.details?.parameter_size,
       quantization_level: m.details?.quantization_level,
+      // BUG-20260704：透出真实能力，视觉模型（如 qwen3.5:9b）才能显示「视觉」徽章
+      capabilities: m.capabilities,
     }))
     return {
       running: true,
