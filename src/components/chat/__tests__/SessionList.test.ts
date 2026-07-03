@@ -7,11 +7,12 @@ import zhCN from '@/i18n/locales/zh-CN'
 import { useChatStore } from '@/stores/chat'
 import type { ChatSession } from '@/types'
 
-const { updateSessionTitle, listSessions, searchMessages, listActiveStreams } = vi.hoisted(() => ({
+const { updateSessionTitle, listSessions, searchMessages, listActiveStreams, getSessionBranches } = vi.hoisted(() => ({
   updateSessionTitle: vi.fn().mockResolvedValue({}),
   listSessions: vi.fn().mockResolvedValue({ sessions: [], total: 0 }),
   searchMessages: vi.fn().mockResolvedValue({ results: [], total: 0, query: '' }),
   listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
+  getSessionBranches: vi.fn().mockResolvedValue({ branches: [], total: 0 }),
 }))
 
 vi.mock('@/api/chat', () => ({
@@ -19,6 +20,7 @@ vi.mock('@/api/chat', () => ({
   listSessions,
   searchMessages,
   listActiveStreams,
+  getSessionBranches,
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -72,6 +74,15 @@ function mountSessionList(customSessions?: ChatSession[]) {
   })
 
   return { wrapper, store }
+}
+
+/** BUG-20260703 P2-5：删除走二次确认——点掉 Teleport 到 body 的确认层「删除」按钮。 */
+async function confirmPendingDelete() {
+  const buttons = Array.from(document.body.querySelectorAll('.hc-dialog-overlay button'))
+  const confirmBtn = buttons.find((b) => b.textContent?.trim() === '删除')
+  expect(confirmBtn, '应弹出删除确认层').toBeTruthy()
+  ;(confirmBtn as HTMLButtonElement).click()
+  await flushPromises()
 }
 
 describe('SessionList', () => {
@@ -228,10 +239,15 @@ describe('SessionList', () => {
     const deleteBtn = wrapper.findAll('.hc-sessions__delete')[0]
     expect(deleteBtn).toBeDefined()
 
+    // BUG-20260703 P2-5：删除先过二次确认，确认后才真删
     await deleteBtn!.trigger('click')
     await flushPromises()
+    await confirmPendingDelete()
+
+    // 删除在途中再点删除：直接短路（不再弹确认层、不发第二次请求）
     await deleteBtn!.trigger('click')
     await flushPromises()
+    expect(document.body.querySelector('.hc-dialog-overlay')).toBeFalsy()
 
     expect(store.deleteSession).toHaveBeenCalledTimes(1)
 
@@ -252,6 +268,7 @@ describe('SessionList', () => {
     expect(deleteBtn).toBeDefined()
     await deleteBtn!.trigger('click')
     await flushPromises()
+    await confirmPendingDelete() // BUG-20260703 P2-5：先过二次确认
 
     expect(store.deleteSession).toHaveBeenCalledWith('s-1')
     expect(wrapper.find('.hc-sessions__item--pinned').text()).toContain('第一个会话')

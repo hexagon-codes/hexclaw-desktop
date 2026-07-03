@@ -451,7 +451,6 @@ const selectedProviderKey = ref('')
 const selectedProviderName = ref('')
 const chatTemperature = ref(0.7)
 const chatMaxTokens = ref(4096)
-const showChatParams = ref(false)
 /** true when user explicitly picks a model via selectModel(), reset on agent/session switch */
 const userOverrodeModel = ref(false)
 /** 绑定模型暂不在 availableModels 时的自足元信息（名/能力来自会话绑定）：让显示与能力门控
@@ -478,6 +477,14 @@ const selectedModelDisplay = computed(() => {
   )
   // 列表里有 → 用最新名；否则用绑定自带的显示名（自足），最后才退化到 modelId（绝不退化成"默认模型"）。
   return found ? `${found.modelName}` : (pendingModelMeta.value?.name || selectedModel.value)
+})
+
+// 收件人显示名（BUG-20260704）：agentRole 存内部 name 作后端收件人键，展示时解析成
+// display_name，让收件人徽章呈现人看得懂的名字而非英文 name。
+const agentRoleDisplay = computed(() => {
+  if (!chatStore.agentRole) return ''
+  const cfg = agentsStore.findAgent(chatStore.agentRole)
+  return cfg?.display_name?.trim() || cfg?.name || chatStore.agentRole
 })
 
 // 按 Provider 分组的模型列表
@@ -1151,6 +1158,7 @@ const {
   editingText,
   setEditTextareaEl,
   handleRetry,
+  handleFork,
   handleLike,
   handleDislike,
   handleEdit,
@@ -1733,34 +1741,6 @@ function startSidebarResize(event: MouseEvent) {
         @search="showSearch = !showSearch"
       />
 
-      <!-- Chat params bar -->
-      <div v-if="showChatParams" class="hc-chat__params">
-        <div class="hc-chat__param">
-          <label>Temperature</label>
-          <input
-            v-model.number="chatTemperature"
-            type="range"
-            min="0"
-            max="2"
-            step="0.1"
-            class="hc-chat__param-range"
-          />
-          <span class="hc-chat__param-val">{{ chatTemperature }}</span>
-        </div>
-        <div class="hc-chat__param">
-          <label>Max Tokens</label>
-          <input
-            v-model.number="chatMaxTokens"
-            type="number"
-            min="256"
-            max="128000"
-            step="256"
-            class="hc-input hc-input--sm"
-            style="width: 90px"
-          />
-        </div>
-      </div>
-
       <!-- Search bar -->
       <ChatSearchDialog
         v-if="showSearch"
@@ -1917,6 +1897,7 @@ function startSidebarResize(event: MouseEvent) {
                         :content="msg.content"
                         :feedback="messageFeedbackValue(msg)"
                         @retry="handleRetry(idx)"
+                        @fork="handleFork(idx)"
                         @like="handleLike(msg.id)"
                         @dislike="handleDislike(msg.id)"
                       />
@@ -2350,14 +2331,14 @@ function startSidebarResize(event: MouseEvent) {
               v-else
               :streaming="chatStore.isCurrentStreaming"
               :disabled="chatStore.sending"
-              :agents="agentsStore.roles"
+              :agents="agentsStore.mentionableAgents"
               :skills="availableSkills"
               :knowledge-docs="knowledgeDocs"
               :connections="connections"
               :sessions="chatStore.sessions"
               :allow-image="supportsVision"
               :allow-video="supportsVideo"
-              :recipient-name="chatStore.agentRole || t('chat.defaultAgent', '小蟹')"
+              :recipient-name="agentRoleDisplay || t('chat.defaultAgent', '小蟹')"
               :send-handler="handleSend"
               :gen-model-id="selectedModel"
               :gen-model-name="selectedModelDisplay"

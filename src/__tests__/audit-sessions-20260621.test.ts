@@ -257,9 +257,11 @@ describeBE('Finding A5 [P2][对齐] getSessionBranches 类型契约 vs 后端 JS
     expect(fn).toContain('branches: ChatSession[]')
     const chatTypes = read(FE('types/chat.ts'))
     const sessIface = chatTypes.slice(chatTypes.indexOf('interface ChatSession'), chatTypes.indexOf('interface ChatSession') + 260)
-    // ChatSession 不含 user_id / parent_session_id → 与后端 storage.Session 字段集不符
+    // ChatSession 不含 user_id（单用户桌面无需暴露）→ 与后端 storage.Session 字段集仍有差
     expect(sessIface.includes('user_id')).toBe(false)
-    expect(sessIface.includes('parent_session_id')).toBe(false)
+    // BUG-20260703 P2-1：fork UI 落地后 ChatSession 已含 parent_session_id（分支徽标数据源，
+    // messageService.loadAllSessions 透传）——本 Finding 的字段缺口已收窄一半。
+    expect(sessIface.includes('parent_session_id')).toBe(true)
     // 正确行为：返回类型应使用含 user_id/parent_session_id 的 SessionSummary 且带 total。
     // 下面断言期望前端契约对齐后端，当前不对齐 → RED。
     expect(fn).toContain('total') // RED：getSessionBranches 未声明 total

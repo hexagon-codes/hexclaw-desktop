@@ -180,6 +180,12 @@ export function createChatSendController(params: {
 
       // 持久化与发送并行，失败不阻塞（persistMessage 内部已有日志）
       void persistMessage(userMessage, sessionId).catch(() => {})
+      // BUG-20260704：在 await Auto-RAG 之前就把本会话置为 pending，让 assistant 挂起气泡
+      // （ChatView showAssistantPending 依赖 sending）随用户气泡即时上屏；否则用户要等
+      // Auto-RAG(≤AUTO_RAG_BUDGET_MS 1.2s)+WS 连接完成、deliverMessage 才置 pending，
+      // 小蟹和回答气泡延迟 1-2s 才出现。deliverMessage 内会幂等再置 pending，流式起来后
+      // upsertStreamState 交棒给 isCurrentStreaming，pending 由收尾逻辑清除，无双清风险。
+      setSessionPending(sessionId, true, sending, draftSending)
       // backendText 惰性解析：气泡已上屏，此处再 await 跑 Auto-RAG（BUG-20260628）；string 形态直用。
       const backendText =
         (typeof options?.backendText === 'function'

@@ -96,6 +96,25 @@ describe('ChatInput 已挂载技能 chip', () => {
     })
   })
 
+  it('Prompt 模板选中后注入输入框并随发送正文进入 sendHandler', async () => {
+    const sendHandler = vi.fn().mockResolvedValue(true)
+    const w = await mountChatInput({ skills, sendHandler })
+
+    palette(w).vm.$emit('select', {
+      kind: 'prompt',
+      content: '请用三点总结：$ARGUMENTS',
+    })
+    await w.vm.$nextTick()
+
+    const ta = w.find('textarea').element as HTMLTextAreaElement
+    expect(ta.value).toBe('请用三点总结：$ARGUMENTS')
+
+    await w.get('.hc-composer__send').trigger('click')
+    await flushPromises()
+
+    expect(sendHandler).toHaveBeenCalledWith('请用三点总结：$ARGUMENTS', [], undefined)
+  })
+
   it('skillAction 从面板透传为 ChatInput 的 skillAction 事件', async () => {
     const w = await mountChatInput({ skills })
     palette(w).vm.$emit('skillAction', 'ai-create')

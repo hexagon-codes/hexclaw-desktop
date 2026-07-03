@@ -1031,4 +1031,42 @@ describe('useChatStore', () => {
       expect.any(String),
     )
   })
+
+  // BUG-20260704：消息提交后要等 1-2 秒才显示小蟹和回答气泡。
+  // 根因：assistant 挂起/流式气泡的渲染门是 `isCurrentStreaming || showAssistantPending`，
+  // 而 showAssistantPending 依赖 `chatStore.sending===true`。sendMessage 在乐观 push 用户气泡后
+  // 会先 `await backendText()`（Auto-RAG searchKnowledge 网络往返，最长 AUTO_RAG_BUDGET_MS=1200ms），
+  // 再进 deliverMessage 才 setSessionPending(true)/upsertStreamState。于是在 Auto-RAG 解析这段时间里
+  // sending 仍为 false、也无流式态 → 小蟹气泡迟迟不出现。修复=push 用户气泡后、await Auto-RAG 前就把
+  // 本会话置为 pending，让挂起气泡即时上屏。此测试钉死「Auto-RAG 在途时 sending 必须已为 true」。
+  it('bug-20260704: assistant 挂起气泡在 Auto-RAG(backendText thunk) 解析期间即就绪，不等 1-2 秒', async () => {
+    ensureWebSocketConnected.mockResolvedValue(true)
+    // 流式永不结束：本例只关心「挂起态是否及时出现」，不关心收尾。
+    openWebSocketStream.mockImplementation(() => ({ cancel: vi.fn(), done: new Promise<never>(() => {}) }))
+
+    const store = useChatStore()
+    await store.selectSession('s1') // 既有会话：draftSending 从一开始就是 false，sending 真从 false 起
+    await new Promise((r) => setTimeout(r))
+
+    // 受控的慢 backendText thunk：模拟 Auto-RAG searchKnowledge 网络往返/1.2s 预算，卡住不放。
+    let releaseRag!: () => void
+    const ragGate = new Promise<void>((r) => { releaseRag = r })
+    const backendText = vi.fn(async () => { await ragGate; return undefined })
+
+    void store.sendMessage('你好，帮我看看这个', undefined, { backendText })
+    // 让 push(userMessage) + ensureSession 沉淀；此刻执行应停在 `await backendText()`（ragGate 未放）。
+    await new Promise((r) => setTimeout(r))
+    await new Promise((r) => setTimeout(r))
+
+    // 用户气泡已乐观上屏，且 Auto-RAG 确已在途但未完成
+    expect(store.messages.some((m) => m.role === 'user')).toBe(true)
+    expect(store.messages[store.messages.length - 1]?.role).toBe('user')
+    expect(backendText).toHaveBeenCalled()
+    // 流式尚未开始（upsertStreamState 在 backendText 之后的 deliver 里）
+    expect(store.isCurrentStreaming).toBe(false)
+    // ★核心：Auto-RAG 在途时就应进入挂起态（sending=true），否则小蟹气泡要等 1-2s。
+    expect(store.sending, 'Auto-RAG 解析期间 sending 应已为 true（否则小蟹挂起气泡延迟 1-2s）').toBe(true)
+
+    releaseRag()
+  })
 })

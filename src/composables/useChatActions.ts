@@ -6,6 +6,7 @@
 
 import { ref, nextTick } from 'vue'
 import { removeMessage } from '@/services/messageService'
+import { forkSession } from '@/api/chat'
 import { i18n } from '@/i18n'
 import { logger } from '@/utils/logger'
 import { backendDeletableMessageId } from '@/utils/chat-message-id'
@@ -146,6 +147,31 @@ export function useChatActions(
     }
   }
 
+  /**
+   * 由此分叉（BUG-20260703 P2-1）：以该消息为分支点复制会话（后端 ForkSession 按
+   * rowid 截到该消息含自身），切到新分支继续聊——原会话原样保留。
+   * 消息 id 解析同删除：live 消息用 metadata.backend_message_id，重载消息本身就是后端 id。
+   */
+  async function handleFork(msgIndex: number) {
+    const targetMsg = chatStore.messages[msgIndex]
+    const sessionId = chatStore.currentSessionId
+    if (!targetMsg || !sessionId) return
+    // 流式中分叉：正在生成的回复尚未落库，分支会缺尾巴且易与写入竞争——先拦。
+    if (chatStore.streaming) {
+      toast.error(i18n.global.t('chat.forkWhileStreaming'))
+      return
+    }
+    try {
+      const res = await forkSession(sessionId, backendDeletableMessageId(targetMsg))
+      await chatStore.loadSessions()
+      await chatStore.selectSession(res.session.id)
+      toast.success(i18n.global.t('chat.forkCreated'))
+    } catch (error) {
+      logger.error('[useChatActions] fork session failed', error)
+      toast.error(error instanceof Error ? error.message : i18n.global.t('chat.forkFailed'))
+    }
+  }
+
   async function handleLike(msgId: string) {
     const message = chatStore.messages.find((item) => item.id === msgId)
     if (!message) return
@@ -243,6 +269,7 @@ export function useChatActions(
     editingText,
     setEditTextareaEl,
     handleRetry,
+    handleFork,
     handleLike,
     handleDislike,
     handleEdit,

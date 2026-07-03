@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown, Volume2, Square } from 'lucide-vue-next'
+import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown, Volume2, Square, GitBranch } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setClipboard } from '@/api/desktop'
@@ -22,6 +22,7 @@ const emit = defineEmits<{
   delete: []
   like: []
   dislike: []
+  fork: []
 }>()
 
 const copied = ref(false)
@@ -98,6 +99,10 @@ async function toggleSpeak() {
       </button>
       <button class="hc-msg-actions__btn" :title="t('chat.regenerate')" data-testid="message-regenerate" @click="emit('retry')">
         <RotateCcw :size="13" />
+      </button>
+      <!-- BUG-20260703 P2-1：由此分叉——以本条回复为分支点复制会话，原会话原样保留 -->
+      <button class="hc-msg-actions__btn" :title="t('chat.forkFromHere', '由此分叉')" data-testid="message-fork" @click="emit('fork')">
+        <GitBranch :size="13" />
       </button>
     </template>
 
