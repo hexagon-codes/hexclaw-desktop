@@ -11,7 +11,7 @@
  *    但 RegisterWebhookRequest(handler_webhook.go:39-45) 与前端 createWebhook(webhook.ts:46-52) 均不收 job_id。
  *  - cron chat_id：tasks.ts:285 运行时下发，但 draft 类型(tasks.ts:45-50) 缺声明（类型债）。
  *  - workflow save：canvas.ts:61 声明 Promise<Workflow>，后端 handler_extended.go:552 实际只回 {id,message}。
- *  - provider 枚举：后端 BuildAdapter(instances/manager.go:738-810) 支持 10 平台，前端 CHANNEL_TYPES 暴露 7。
+ *  - provider 枚举：后端 BuildAdapter 支持的 IM 平台必须与前端 CHANNEL_TYPES（email 除外）对齐。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { DESKTOP_USER_ID } from '@/constants'
@@ -83,12 +83,12 @@ describe('AUDIT cron 定时任务契约', () => {
 // 场景 2 — webhook 全链路契约
 // ──────────────────────────────────────────────────────────────
 describe('AUDIT webhook 契约', () => {
-  it('createWebhook 请求体 = {name,type,prompt,secret,job_id,user_id}（与后端 RegisterWebhookRequest 对齐）', async () => {
+  it('createWebhook 请求体 = {name,type,prompt,secret,job_id,user_id,enabled}（与后端 RegisterWebhookRequest 对齐；enabled 缺省 false=创建即得端点默认未启用）', async () => {
     apiPost.mockResolvedValue({ id: 'w1', name: 'gh', url: '/api/v1/webhooks/gh' })
     await createWebhook({ name: 'gh', type: 'github', prompt: '处理 PR' })
     const [path, body] = apiPost.mock.calls[0]!
     expect(path).toBe('/api/v1/webhooks')
-    expect(body).toEqual({ name: 'gh', type: 'github', prompt: '处理 PR', secret: '', job_id: '', user_id: DESKTOP_USER_ID })
+    expect(body).toEqual({ name: 'gh', type: 'github', prompt: '处理 PR', secret: '', job_id: '', user_id: DESKTOP_USER_ID, enabled: false })
   })
 
   it('★AP-031 已闭环：createWebhook 传 jobId → 请求体携 job_id（webhook 绑定 cron job §13.3 现 UI/HTTP 可达）', async () => {
@@ -148,10 +148,9 @@ describe('AUDIT 账号 IM provider 枚举对齐', () => {
     expect(orphans).toEqual([]) // 前端提供但后端不认 = 🔴 运行时失败方向
   })
 
-  it('★记录枚举缺口：后端支持但前端未暴露的平台（slack/line/whatsapp/matrix）—— 漂移检测器', () => {
+  it('后端支持的平台必须全部在前端暴露—— 漂移检测器', () => {
     const frontend = CHANNEL_TYPES.map((c) => c.type)
     const missing = BACKEND_IM.filter((t) => !(frontend as string[]).includes(t)).sort()
-    // 固定当前缺口；前端补齐任一平台后此断言失败 → 提醒同步 hex-test 覆盖项 + 评估是否产品化
-    expect(missing).toEqual(['line', 'matrix', 'slack', 'whatsapp'])
+    expect(missing).toEqual([])
   })
 })

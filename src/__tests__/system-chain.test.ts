@@ -363,7 +363,7 @@ describe('Chain 1: Chat Message Flow', () => {
       expect.any(Object),
       '',
       undefined,
-      undefined,
+      { pinned_agent: 'default' },
       expect.any(String),
     )
     expect(assistantMsg).not.toBeNull()
@@ -403,7 +403,7 @@ describe('Chain 1: Chat Message Flow', () => {
       expect.any(Object),
       '',
       undefined,
-      undefined,
+      { pinned_agent: 'default' },
       expect.any(String),
     )
   })
@@ -862,7 +862,7 @@ describe('Chain 6: Model Selection & Parameters', () => {
       '',
       undefined,
       // metadata：F-2 把温度/MaxTokens 映射为后端消费的 agent_temperature/agent_max_tokens
-      { agent_temperature: '0.5', agent_max_tokens: '2048' },
+      { agent_temperature: '0.5', agent_max_tokens: '2048', pinned_agent: 'default' },
       expect.any(String),
     )
   })
@@ -893,7 +893,7 @@ describe('Chain 6: Model Selection & Parameters', () => {
       undefined,
       expect.any(Object),
       // metadata：F-2 把温度/MaxTokens 映射为后端消费的 agent_temperature/agent_max_tokens
-      { agent_temperature: '0.7', agent_max_tokens: '4096' },
+      { agent_temperature: '0.7', agent_max_tokens: '4096', pinned_agent: 'default' },
       expect.any(String),
     )
   })
@@ -914,7 +914,7 @@ describe('Chain 6: Model Selection & Parameters', () => {
       { model: 'gpt-4o' },
       'researcher',
       undefined,
-      undefined,
+      { pinned_agent: 'researcher' },
       expect.any(String),
     )
   })
@@ -933,10 +933,14 @@ describe('Chain 7: IM Channel API Alignment', () => {
     expect(types).toContain('dingtalk')
     expect(types).toContain('wechat')
     expect(types).toContain('wecom')
+    expect(types).toContain('slack')
     expect(types).toContain('discord')
     expect(types).toContain('telegram')
+    expect(types).toContain('line')
+    expect(types).toContain('whatsapp')
+    expect(types).toContain('matrix')
     expect(types).toContain('email')
-    expect(types).toHaveLength(7)
+    expect(types).toHaveLength(11)
   })
 
   it('CHANNEL_CONFIG_FIELDS has required fields for each platform', async () => {

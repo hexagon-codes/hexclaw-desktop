@@ -9,13 +9,13 @@
  *   2. TeamView i18n destructuring — { t } = useI18n()
  *   3. TasksView delete confirmation — confirm(t('tasks.confirmDelete'...))
  *   4. KnowledgeView upload index corruption — uses entry.progress instead of uploadingFiles.value[idx]
- *   5. IMChannelsView deleteIMInstance 404 handling — try/catch around deleteBackendInstance
+ *   5. IMChannelsView deleteIMInstance — sidecar by-id delete
  *
  * DOCUMENTED issues (assert current state):
  *   6. TeamView hardcoded Chinese strings in template
  *   7. TasksView missing error toast — RESOLVED 2026-06-22 (handleDelete/handlePauseResume now surface toast.error)
  *   8. ChatView single-file drop — handleDrop uses files?.[0]
- *   9. im-channels.ts createIMInstance ghost instance risk — syncBackendInstance before writeInstances
+ *   9. im-channels.ts createIMInstance — sidecar-only persistence
  */
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
@@ -117,38 +117,43 @@ describe('Issue 4: KnowledgeView upload uses entry reference, not index', () => 
   it('entry is a direct object reference pushed into the array', () => {
     // The entry object must be created and pushed to uploadingFiles.value
     // so that mutations to entry reflect in the reactive array
-    expect(src).toMatch(/const\s+entry[\s\S]{0,200}uploadingFiles\.value\.push\(entry\)/)
+    const processFilesStart = src.indexOf('async function processFiles')
+    const entryIdx = src.indexOf('const entry', processFilesStart)
+    const pushIdx = src.indexOf('uploadingFiles.value.push(entry)', entryIdx)
+    const uploadTaskIdx = src.indexOf('uploadTasks.push', entryIdx)
+
+    expect(processFilesStart).toBeGreaterThan(0)
+    expect(entryIdx).toBeGreaterThan(processFilesStart)
+    expect(pushIdx).toBeGreaterThan(entryIdx)
+    expect(pushIdx).toBeLessThan(uploadTaskIdx)
   })
 })
 
 // ════════════════════════════════════════════════════════════
-// Issue 5 (FIXED): deleteIMInstance 404 handling
+// Issue 5 (UPDATED): deleteIMInstance sidecar by-id handling
 // ════════════════════════════════════════════════════════════
 
-describe('Issue 5: deleteIMInstance wraps deleteBackendInstance in try/catch', () => {
+describe('Issue 5: deleteIMInstance deletes sidecar record by id', () => {
   const src = readSrc('api/im-channels.ts')
 
   it('deleteIMInstance function exists', () => {
     expect(src).toMatch(/export\s+async\s+function\s+deleteIMInstance/)
   })
 
-  it('wraps deleteBackendInstance call in try/catch', () => {
+  it('calls the by-id sidecar endpoint', () => {
     const fnStart = src.indexOf('export async function deleteIMInstance')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
-    expect(fnBody).toContain('try')
-    expect(fnBody).toContain('deleteBackendInstance')
-    expect(fnBody).toMatch(/catch/)
+    expect(fnBody).toContain('/api/v1/platforms/instances/by-id/')
+    expect(fnBody).toContain("'DELETE'")
   })
 
-  it('still deletes the local record even if backend delete fails', () => {
+  it('does not reference local Store cleanup or name-based delete helpers', () => {
     const fnStart = src.indexOf('export async function deleteIMInstance')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
-    const catchIdx = fnBody.indexOf('catch')
-    const deleteAllIdx = fnBody.indexOf('delete all[id]')
-    // local cleanup happens after the try/catch block
-    expect(deleteAllIdx).toBeGreaterThan(catchIdx)
+    expect(fnBody).not.toContain('deleteBackendInstance')
+    expect(fnBody).not.toContain('delete all[id]')
   })
 })
 
@@ -221,41 +226,32 @@ describe('Issue 8: ChatView handleDrop only processes first file', () => {
 })
 
 // ════════════════════════════════════════════════════════════
-// Issue 9 (DOCUMENTED): createIMInstance ghost instance risk
+// Issue 9 (UPDATED): createIMInstance sidecar-only persistence
 // ════════════════════════════════════════════════════════════
 
-describe('Issue 9: createIMInstance calls syncBackendInstance before writeInstances', () => {
+describe('Issue 9: createIMInstance writes sidecar source of truth only', () => {
   const src = readSrc('api/im-channels.ts')
 
-  it('createIMInstance calls syncBackendInstance', () => {
+  it('createIMInstance calls sidecar POST /platforms/instances', () => {
     const fnStart = src.indexOf('export async function createIMInstance')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
-    expect(fnBody).toContain('syncBackendInstance')
+    expect(fnBody).toContain('/api/v1/platforms/instances')
+    expect(fnBody).toContain("'POST'")
   })
 
-  it('createIMInstance calls writeInstances', () => {
+  it('createIMInstance no longer writes local Store', () => {
     const fnStart = src.indexOf('export async function createIMInstance')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
-    expect(fnBody).toContain('writeInstances')
+    expect(fnBody).not.toContain('writeInstances')
+    expect(fnBody).not.toContain('syncBackendInstance')
   })
 
-  it('syncBackendInstance is called BEFORE writeInstances (prevents ghost instance)', () => {
+  it('createIMInstance awaits sidecar write so errors propagate', () => {
     const fnStart = src.indexOf('export async function createIMInstance')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
-    const syncIdx = fnBody.indexOf('syncBackendInstance')
-    const writeIdx = fnBody.indexOf('writeInstances')
-    // sync must come first — if it throws, no local record is written
-    expect(syncIdx).toBeGreaterThan(0)
-    expect(writeIdx).toBeGreaterThan(syncIdx)
-  })
-
-  it('syncBackendInstance uses await so errors propagate', () => {
-    const fnStart = src.indexOf('export async function createIMInstance')
-    const fnEnd = src.indexOf('\n}', fnStart + 50)
-    const fnBody = src.slice(fnStart, fnEnd + 2)
-    expect(fnBody).toMatch(/await\s+syncBackendInstance/)
+    expect(fnBody).toMatch(/await\s+proxyApiRequest/)
   })
 })

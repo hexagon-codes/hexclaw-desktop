@@ -190,7 +190,7 @@ describe('HcDateRangePicker · 网格正确性', () => {
   })
 
   it('点击后月的跨月日 → 发出后月的 ISO（非当前视图月）', async () => {
-    const w = mountPicker({ from: '', to: '' }, 'zh-CN') // zh 周一首日：2026-06-01 是周一 → 无前导，末尾溢出到 7 月
+    const w = mountPicker({ from: '2026-06-10', to: '2026-06-15' }, 'zh-CN') // zh 周一首日：2026-06-01 是周一 → 无前导，末尾溢出到 7 月
     await open(w)
     const cells = document.body.querySelectorAll('.hc-drp__pop .hc-drp__cell')
     ;(cells[cells.length - 1] as HTMLElement).click() // 最后一格必属下月

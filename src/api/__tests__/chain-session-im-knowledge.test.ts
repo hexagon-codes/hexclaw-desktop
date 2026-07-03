@@ -6,11 +6,11 @@
  * transport layer (Tauri invoke for chat/IM, ofetch for knowledge/session REST).
  *
  * Mocks are reset between chains via `vi.resetModules()` to guarantee fresh
- * module-level state (e.g. the singleton Tauri store cache in im-channels.ts).
+ * module-level state.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// ─── Tauri invoke + plugin-store mocks (IM channel chain) ────────────────────
+// ─── Tauri invoke mock (IM channel chain) ────────────────────────────────────
 
 const invoke = vi.hoisted(() => vi.fn())
 const storeGet = vi.hoisted(() => vi.fn())
@@ -304,19 +304,31 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     load.mockClear()
   })
 
-  /** Helper: set up an empty store, then return a fresh im-channels module. */
-  async function freshModule(initialInstances: Record<string, unknown> = {}) {
-    storeGet.mockImplementation(async (key: string) => {
-      if (key === 'im-instances') return { ...initialInstances }
-      return undefined
-    })
+  const telegramRecord = (overrides: Record<string, unknown> = {}) => ({
+    id: 'tg1',
+    provider: 'telegram',
+    name: 'My Telegram',
+    enabled: true,
+    config: { token: 'bot-123' },
+    created_at: '2026-06-29T00:00:00Z',
+    ...overrides,
+  })
+
+  async function freshModule() {
     return import('../im-channels')
   }
 
-  it('executes the full IM channel lifecycle in sequence', async () => {
+  it('executes the full IM channel lifecycle against sidecar source of truth', async () => {
     // --- Step 1: createIMInstance -------------------------------------------
-    // syncBackendInstance (POST) should succeed
-    invoke.mockResolvedValueOnce(JSON.stringify({ status: 'ok' }))
+    invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
+      if (payload.method === 'GET' && payload.path === '/api/v1/platforms/instances') {
+        return JSON.stringify({ instances: [] })
+      }
+      if (payload.method === 'POST' && payload.path === '/api/v1/platforms/instances') {
+        return JSON.stringify(telegramRecord())
+      }
+      return JSON.stringify({})
+    })
 
     const mod = await freshModule()
     const created = await mod.createIMInstance('My Telegram', 'telegram', { token: 'bot-123' }, true)
@@ -325,8 +337,7 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     expect(created.type).toBe('telegram')
     expect(created.enabled).toBe(true)
     expect(created.config.token).toBe('bot-123')
-    expect(created.id).toBeTruthy()
-    // Verify backend sync was called
+    expect(created.id).toBe('tg1')
     expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
       method: 'POST',
       path: '/api/v1/platforms/instances',
@@ -337,31 +348,16 @@ describe('Chain 2: IM Channel Lifecycle', () => {
         config: { token: 'bot-123' },
       }),
     })
-    // Verify store was written
-    expect(storeSet).toHaveBeenCalledWith(
-      'im-instances',
-      expect.objectContaining({
-        [created.id]: expect.objectContaining({ name: 'My Telegram' }),
-      }),
-    )
+    expect(load).not.toHaveBeenCalled()
+    expect(storeSet).not.toHaveBeenCalled()
 
     // --- Step 2: getIMInstances ----------------------------------------------
-    // Refresh module to simulate a new read cycle
     invoke.mockReset()
-    storeGet.mockImplementation(async (key: string) => {
-      if (key === 'im-instances') {
-        return {
-          [created.id]: {
-            id: created.id,
-            name: 'My Telegram',
-            type: 'telegram',
-            enabled: true,
-            config: { token: 'bot-123' },
-            createdAt: created.createdAt,
-          },
-        }
+    invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
+      if (payload.method === 'GET' && payload.path === '/api/v1/platforms/instances') {
+        return JSON.stringify({ instances: [telegramRecord()] })
       }
-      return undefined
+      return JSON.stringify({})
     })
 
     const mod2 = await import('../im-channels')
@@ -369,18 +365,19 @@ describe('Chain 2: IM Channel Lifecycle', () => {
 
     expect(instances).toHaveLength(1)
     expect(instances[0]!.name).toBe('My Telegram')
-    // getIMInstances only reads the store, no invoke calls
-    expect(invoke).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
+      method: 'GET',
+      path: '/api/v1/platforms/instances',
+      body: null,
+    })
 
     // --- Step 3: testSavedIMInstanceRuntime -----------------------------------
+    invoke.mockReset()
     invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
       if (payload.path === '/health') {
         return JSON.stringify({ status: 'healthy' })
       }
-      if (payload.path === '/api/v1/platforms/instances') {
-        return JSON.stringify({ message: 'synced' })
-      }
-      if (payload.path === `/api/v1/platforms/instances/${encodeURIComponent('My Telegram')}/test`) {
+      if (payload.path === '/api/v1/platforms/instances/by-id/tg1/test') {
         return JSON.stringify({ success: true, message: 'Telegram bot is alive' })
       }
       return JSON.stringify({})
@@ -393,7 +390,7 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     expect(testResult.message).toBe('Telegram bot is alive')
     expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
       method: 'POST',
-      path: `/api/v1/platforms/instances/${encodeURIComponent('My Telegram')}/test`,
+      path: '/api/v1/platforms/instances/by-id/tg1/test',
       body: null,
     })
 
@@ -429,26 +426,9 @@ describe('Chain 2: IM Channel Lifecycle', () => {
 
     // --- Step 6: updateIMInstance (rename) ------------------------------------
     invoke.mockReset()
-    storeGet.mockImplementation(async (key: string) => {
-      if (key === 'im-instances') {
-        return {
-          [created.id]: {
-            id: created.id,
-            name: 'My Telegram',
-            type: 'telegram' as const,
-            enabled: true,
-            config: { token: 'bot-123' },
-            createdAt: created.createdAt,
-          },
-        }
-      }
-      return undefined
-    })
-
-    // Rename triggers: POST new name (disabled) -> DELETE old name -> POST new name (enabled)
     invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
-      if (payload.method === 'POST') return JSON.stringify({ status: 'ok' })
-      if (payload.method === 'DELETE') return JSON.stringify({ ok: true })
+      if (payload.method === 'GET') return JSON.stringify({ instances: [telegramRecord()] })
+      if (payload.method === 'PUT') return JSON.stringify(telegramRecord({ name: 'Telegram Renamed' }))
       return JSON.stringify({})
     })
 
@@ -456,37 +436,14 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     const renamed = await mod6.updateIMInstance(created.id, { name: 'Telegram Renamed' })
 
     expect(renamed).toBe(true)
-    // Should have called: POST (create new disabled), DELETE (old name), POST (re-enable new)
-    const postCalls = invoke.mock.calls.filter((c) => c[1]?.method === 'POST')
+    const putCalls = invoke.mock.calls.filter((c) => c[1]?.method === 'PUT')
     const deleteCalls = invoke.mock.calls.filter((c) => c[1]?.method === 'DELETE')
-    expect(postCalls.length).toBe(2)
-    expect(deleteCalls.length).toBe(1)
-    expect(deleteCalls[0]![1].path).toContain(encodeURIComponent('My Telegram'))
-    // Store should be updated with new name
-    expect(storeSet).toHaveBeenCalledWith(
-      'im-instances',
-      expect.objectContaining({
-        [created.id]: expect.objectContaining({ name: 'Telegram Renamed' }),
-      }),
-    )
+    expect(putCalls).toHaveLength(1)
+    expect(putCalls[0]![1].path).toBe('/api/v1/platforms/instances/by-id/tg1')
+    expect(deleteCalls).toHaveLength(0)
 
     // --- Step 7: deleteIMInstance --------------------------------------------
     invoke.mockReset()
-    storeGet.mockImplementation(async (key: string) => {
-      if (key === 'im-instances') {
-        return {
-          [created.id]: {
-            id: created.id,
-            name: 'Telegram Renamed',
-            type: 'telegram' as const,
-            enabled: true,
-            config: { token: 'bot-123' },
-            createdAt: created.createdAt,
-          },
-        }
-      }
-      return undefined
-    })
     invoke.mockResolvedValueOnce(JSON.stringify({ ok: true }))
 
     const mod7 = await import('../im-channels')
@@ -496,76 +453,54 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     // DELETE backend call
     expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
       method: 'DELETE',
-      path: `/api/v1/platforms/instances/${encodeURIComponent('Telegram Renamed')}`,
+      path: '/api/v1/platforms/instances/by-id/tg1',
       body: null,
     })
-    // Store should be written without the deleted instance
-    const lastStoreWrite = storeSet.mock.calls[storeSet.mock.calls.length - 1]!
-    expect(lastStoreWrite[0]).toBe('im-instances')
-    expect(lastStoreWrite[1]).not.toHaveProperty(created.id)
+    expect(storeSet).not.toHaveBeenCalled()
   })
 
   it('createIMInstance validates required fields', async () => {
     // Telegram requires 'token' -- pass empty config
+    invoke.mockResolvedValue(JSON.stringify({ instances: [] }))
     const mod = await freshModule()
 
     await expect(
       mod.createIMInstance('Bad Bot', 'telegram', {}, true),
     ).rejects.toThrow('Missing required fields')
 
-    // No backend call should have been made
-    expect(invoke).not.toHaveBeenCalled()
+    const writeCalls = invoke.mock.calls.filter((c) => c[1]?.method !== 'GET')
+    expect(writeCalls).toHaveLength(0)
   })
 
   it('createIMInstance rejects duplicate names (case-insensitive)', async () => {
-    const mod = await freshModule({
-      existing: {
+    invoke.mockResolvedValue(JSON.stringify({
+      instances: [{
         id: 'existing',
         name: 'My Bot',
-        type: 'telegram',
+        provider: 'telegram',
         enabled: true,
         config: { token: 'tok' },
-        createdAt: 1,
-      },
-    })
+      }],
+    }))
+    const mod = await freshModule()
 
     await expect(
       mod.createIMInstance(' my bot ', 'telegram', { token: 'tok2' }),
     ).rejects.toThrow('实例名称重复')
   })
 
-  it('rename rollback cleans up new instance when old delete fails', async () => {
-    const existing = {
-      r1: {
-        id: 'r1',
-        name: 'OldName',
-        type: 'discord' as const,
-        enabled: true,
-        config: { token: 'discord-tok' },
-        createdAt: 1,
-      },
-    }
-
-    const mod = await freshModule(existing)
-
-    let callIdx = 0
+  it('rename failure is a single sidecar PUT failure with no rollback deletes', async () => {
     invoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
-      callIdx++
-      // 1st: POST new name -> success
-      if (callIdx === 1 && payload.method === 'POST') return JSON.stringify({ ok: true })
-      // 2nd: DELETE old name -> failure
-      if (callIdx === 2 && payload.method === 'DELETE') throw new Error('backend refused delete')
-      // 3rd: DELETE new name (rollback) -> success
-      if (callIdx === 3 && payload.method === 'DELETE') return JSON.stringify({ ok: true })
+      if (payload.method === 'GET') {
+        return JSON.stringify({ instances: [{ id: 'r1', name: 'OldName', provider: 'discord', enabled: true, config: { token: 'discord-tok' } }] })
+      }
+      if (payload.method === 'PUT') throw new Error('backend refused update')
       return JSON.stringify({})
     })
+    const mod = await freshModule()
 
-    await expect(mod.updateIMInstance('r1', { name: 'NewName' })).rejects.toThrow('backend refused delete')
-
-    const rollbackDeleteCalls = invoke.mock.calls.filter(
-      (c) => c[1]?.method === 'DELETE' && typeof c[1]?.path === 'string' && c[1].path.includes('NewName'),
-    )
-    expect(rollbackDeleteCalls).toHaveLength(1)
+    await expect(mod.updateIMInstance('r1', { name: 'NewName' })).rejects.toThrow('backend refused update')
+    expect(invoke.mock.calls.filter((c) => c[1]?.method === 'DELETE')).toHaveLength(0)
   })
 
   it('testSavedIMInstanceRuntime skips connectivity check for disabled instances', async () => {
@@ -588,19 +523,8 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     expect(result.message).toContain('disabled')
   })
 
-  it('deleteIMInstance removes from both backend and store', async () => {
-    const existing = {
-      del1: {
-        id: 'del1',
-        name: 'ToDelete',
-        type: 'telegram' as const,
-        enabled: true,
-        config: { token: 'tok' },
-        createdAt: 1,
-      },
-    }
-
-    const mod = await freshModule(existing)
+  it('deleteIMInstance deletes from sidecar by id only', async () => {
+    const mod = await freshModule()
     invoke.mockResolvedValueOnce(JSON.stringify({ ok: true }))
 
     const result = await mod.deleteIMInstance('del1')
@@ -609,13 +533,10 @@ describe('Chain 2: IM Channel Lifecycle', () => {
     // Backend DELETE
     expect(invoke).toHaveBeenCalledWith('proxy_api_request', {
       method: 'DELETE',
-      path: '/api/v1/platforms/instances/ToDelete',
+      path: '/api/v1/platforms/instances/by-id/del1',
       body: null,
     })
-    // Store written without the instance
-    const storeArg = storeSet.mock.calls.find((c) => c[0] === 'im-instances')
-    expect(storeArg).toBeTruthy()
-    expect(storeArg![1]).not.toHaveProperty('del1')
+    expect(storeSet).not.toHaveBeenCalled()
   })
 })
 

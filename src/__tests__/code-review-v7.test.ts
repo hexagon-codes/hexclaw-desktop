@@ -8,24 +8,22 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'fs'
 
 // ═══════════════════════════════════════════════════
-// 1. IM Channels — updateIMInstance 改名回滚逻辑
+// 1. IM Channels — updateIMInstance by-id 更新逻辑
 // ═══════════════════════════════════════════════════
 
-describe('IM Channels updateIMInstance — 改名事务回滚', () => {
-  it('改名时先创建新名后删旧名，删旧失败则回滚新名', () => {
+describe('IM Channels updateIMInstance — sidecar by-id update', () => {
+  it('改名时使用稳定 id PUT，不再 delete/recreate/rollback', () => {
     const source = readFileSync('src/api/im-channels.ts', 'utf-8')
     const updateFn = source.match(/export async function updateIMInstance[\s\S]*?^}/m)
     expect(updateFn).toBeTruthy()
     const fn = updateFn![0]
 
-    // 改名流程：1.sync(new, disabled) → 2.delete(old) → 3.sync(new, enabled)
-    expect(fn).toContain('current.name !== next.name')
-    expect(fn).toContain("syncBackendInstance({ ...next, enabled: false })")
-    expect(fn).toContain('deleteBackendInstance(current.name)')
-
-    // 回滚：deleteBackendInstance(current.name) 失败时清理新创建的
-    expect(fn).toContain('deleteBackendInstance(next.name).catch(() => {})')
-    expect(fn).toContain('throw e')
+    expect(fn).toContain('/api/v1/platforms/instances/by-id/')
+    expect(fn).toContain("'PUT'")
+    expect(fn).toContain('assertUniqueInstanceName')
+    expect(fn).not.toContain('syncBackendInstance')
+    expect(fn).not.toContain('deleteBackendInstance')
+    expect(fn).not.toContain('Rollback')
   })
 })
 
