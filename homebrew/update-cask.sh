@@ -18,7 +18,12 @@ TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 for ARCH in aarch64 x86_64; do
-  DMG="HexClaw_${VERSION}_${ARCH}.dmg"
+  DMG_ARCH="$ARCH"
+  if [[ "$ARCH" == "x86_64" ]]; then
+    DMG_ARCH="x64"
+  fi
+
+  DMG="HexClaw_${VERSION}_${DMG_ARCH}.dmg"
   URL="https://github.com/${REPO}/releases/download/${TAG}/${DMG}"
   echo "  Downloading ${DMG}..."
   curl -fSL -o "${TMP_DIR}/${DMG}" "$URL"
