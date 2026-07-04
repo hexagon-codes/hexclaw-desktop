@@ -29,12 +29,28 @@ const BACKEND_JSON_TAGS: Record<IMChannelType, {
     configFields: ['app_key', 'app_secret', 'robot_code'],
     commonFields: ['name', 'enabled', 'webhook_port'],
   },
+  slack: {
+    configFields: ['token', 'signing_secret'],
+    commonFields: ['name', 'enabled', 'webhook_port'],
+  },
   discord: {
     configFields: ['token'],
     commonFields: ['name', 'enabled'],
   },
   telegram: {
     configFields: ['token'],
+    commonFields: ['name', 'enabled'],
+  },
+  line: {
+    configFields: ['channel_secret', 'channel_token'],
+    commonFields: ['name', 'enabled'],
+  },
+  whatsapp: {
+    configFields: ['token', 'phone_id', 'verify_token', 'app_secret'],
+    commonFields: ['name', 'enabled'],
+  },
+  matrix: {
+    configFields: ['homeserver_url', 'access_token', 'user_id'],
     commonFields: ['name', 'enabled'],
   },
   wechat: {
@@ -56,9 +72,9 @@ const BACKEND_JSON_TAGS: Record<IMChannelType, {
 describe('IM channel field alignment: frontend keys vs backend JSON tags', () => {
   const platforms = Object.keys(CHANNEL_CONFIG_FIELDS) as IMChannelType[]
 
-  it('frontend covers all 7 connection types', () => {
+  it('frontend covers all 11 connection types', () => {
     expect(platforms.sort()).toEqual(
-      ['dingtalk', 'discord', 'email', 'feishu', 'telegram', 'wechat', 'wecom'].sort(),
+      ['dingtalk', 'discord', 'email', 'feishu', 'line', 'matrix', 'slack', 'telegram', 'wechat', 'wecom', 'whatsapp'].sort(),
     )
   })
 

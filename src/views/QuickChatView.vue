@@ -261,7 +261,9 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
       selectedProviderKey.value || undefined,
       undefined,
       undefined,
-      withModelReasoningDefaults(selectedModel.value),
+      // BUG-20260703 A1：QuickChat 无 Agent 选择 UI = 恒对默认助理，须发 pinned_agent
+      // 锁定信号，否则 provider 解析为空时后端会按内容路由被专属 Agent 抢答。
+      withModelReasoningDefaults(selectedModel.value, { pinned_agent: 'default' }),
       requestId,
     )
   } else {
@@ -272,7 +274,8 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
         provider: selectedProviderKey.value || undefined,
         model: selectedModel.value || undefined,
         request_id: requestId,
-        metadata: withModelReasoningDefaults(selectedModel.value),
+        // BUG-20260703 A1：同上，QuickChat 恒锁默认助理，防内容路由抢答。
+        metadata: withModelReasoningDefaults(selectedModel.value, { pinned_agent: 'default' }),
       })
       if (requestGen !== responseRequestGen) return
       messages.value.push({

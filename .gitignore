@@ -30,6 +30,9 @@ tests/e2e/screenshots/
 test-results/
 playwright-report/
 
+# 本地临时产物目录（脚本/调试输出，不入库）
+tmp/
+
 # Playwright MCP
 .playwright-mcp/
 

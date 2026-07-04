@@ -207,9 +207,12 @@ function scheduleFromPhrase(text: string): { schedule: string; fragment: string 
     /(每天|每日)(凌晨|早上|上午|中午|下午|晚上|夜里|傍晚)?\s*(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分)?/,
   )
   if (daily?.[0] && daily[3]) {
-    return {
-      schedule: toCronSchedule(daily[3], daily[4], daily[2], '*'),
-      fragment: daily[0],
+    // BUG-20260703 GAP-5：分钟捕获 \d{1,2} 可达 60-99（如「8点70分」），toCronSchedule 只
+    // 对小时取模、分钟不校验 → 产出语法非法 cron「70 8 * * *」逃到后端才报错。这里过
+    // isPlausibleCron（与直接 cron 表达式路径同一道闸）：非法时间不产 fast-path，让路 LLM 澄清。
+    const schedule = toCronSchedule(daily[3], daily[4], daily[2], '*')
+    if (isPlausibleCron(schedule)) {
+      return { schedule, fragment: daily[0] }
     }
   }
 
@@ -217,9 +220,9 @@ function scheduleFromPhrase(text: string): { schedule: string; fragment: string 
     /每周([一二三四五六日天])(凌晨|早上|上午|中午|下午|晚上|夜里|傍晚)?\s*(\d{1,2})\s*点(?:\s*(\d{1,2})\s*分)?/,
   )
   if (weekly?.[0] && weekly[1] && weekly[3]) {
-    return {
-      schedule: toCronSchedule(weekly[3], weekly[4], weekly[2], weekdayToCron(weekly[1])),
-      fragment: weekly[0],
+    const schedule = toCronSchedule(weekly[3], weekly[4], weekly[2], weekdayToCron(weekly[1]))
+    if (isPlausibleCron(schedule)) {
+      return { schedule, fragment: weekly[0] }
     }
   }
 

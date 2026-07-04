@@ -25,12 +25,14 @@ export function createApiError(
 
 /** 从 HTTP 响应状态码推断错误类型 */
 export function fromHttpStatus(status: number, serverMessage?: string): ApiError {
+  // BUG-20260703：所有条目一律 serverMessage 优先——此前 401/403/404/429 固定用
+  // 泛化文案，把 client.ts 已抽取的后端错误详情（如 429 配额说明）在最后一环吞掉。
   const map: Record<number, [ApiErrorCode, string]> = {
-    401: ['UNAUTHORIZED', '未授权，请检查认证配置'],
-    403: ['FORBIDDEN', '无权执行此操作'],
-    404: ['NOT_FOUND', '请求的资源不存在'],
+    401: ['UNAUTHORIZED', serverMessage || '未授权，请检查认证配置'],
+    403: ['FORBIDDEN', serverMessage || '无权执行此操作'],
+    404: ['NOT_FOUND', serverMessage || '请求的资源不存在'],
     422: ['VALIDATION_ERROR', serverMessage || '请求参数校验失败'],
-    429: ['RATE_LIMITED', '请求过于频繁，请稍后重试'],
+    429: ['RATE_LIMITED', serverMessage || '请求过于频繁，请稍后重试'],
   }
 
   const entry = map[status]

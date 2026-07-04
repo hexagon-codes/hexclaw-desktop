@@ -617,7 +617,7 @@ describe('Journey 4: IM channel start/stop false success prevention', () => {
     expect(result.message).toBe('Instance started')
   })
 
-  it('startIMInstance returns success=false when invoke throws (proxyApiRequest returns null)', async () => {
+  it('startIMInstance returns success=false with the real sidecar error when invoke throws', async () => {
     const { startIMInstance } = await import('@/api/im-channels')
 
     // Mock invoke to throw a TypeError (simulating plugin not available)
@@ -625,7 +625,7 @@ describe('Journey 4: IM channel start/stop false success prevention', () => {
 
     const result = await startIMInstance('my-bot')
     expect(result.success).toBe(false)
-    expect(result.message).toBe('Backend unreachable')
+    expect(result.message).toBe('Cannot read plugin')
   })
 
   it('stopIMInstance returns success when backend responds with message', async () => {
@@ -638,14 +638,14 @@ describe('Journey 4: IM channel start/stop false success prevention', () => {
     expect(result.message).toBe('Instance stopped')
   })
 
-  it('stopIMInstance returns success=false when invoke throws (proxyApiRequest returns null)', async () => {
+  it('stopIMInstance returns success=false with the real sidecar error when invoke throws', async () => {
     const { stopIMInstance } = await import('@/api/im-channels')
 
     mockInvoke.mockRejectedValueOnce(new TypeError('plugin unavailable'))
 
     const result = await stopIMInstance('my-bot')
     expect(result.success).toBe(false)
-    expect(result.message).toBe('Backend unreachable')
+    expect(result.message).toBe('plugin unavailable')
   })
 
   it('startIMInstance returns success=false when backend returns an error field', async () => {

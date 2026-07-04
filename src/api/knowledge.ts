@@ -13,7 +13,14 @@ export type { KnowledgeDoc, KnowledgeSearchResult }
 
 const KNOWLEDGE_UPLOAD_PATH = '/api/v1/knowledge/upload'
 
-type UploadResponse = { id: string; title: string; chunk_count: number; created_at: string }
+type UploadResponse = {
+  id: string
+  title: string
+  chunk_count: number
+  created_at: string
+  source_type?: string
+  warnings?: string[]
+}
 
 function createUploadFormData(file: File): FormData {
   const formData = new FormData()
@@ -196,7 +203,7 @@ export function addDocument(title: string, content: string, source?: string) {
   })
 }
 
-/** 上传文件到知识库（后端白名单：.txt/.md/.csv/.json/.docx；PDF 暂不支持，见 handler_knowledge.go） */
+/** 上传文件到知识库（后端白名单见 handler_knowledge.go：文本/Office/PDF/图片格式） */
 export async function uploadDocument(
   file: File,
   onProgress?: (pct: number) => void,

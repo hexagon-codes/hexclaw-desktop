@@ -219,3 +219,39 @@ export async function searchMemory(query: string): Promise<{
   }))
   return { results, vector_results: raw.vector_results, total: raw.total }
 }
+
+// ─── 记忆行为配置（BUG-20260703 P2-2：GET/PUT /api/v1/config/memory）──────────
+
+/** 记忆行为配置（后端 api.MemoryConfigResponse 契约） */
+export interface MemoryBehaviorConfig {
+  /** 文件记忆总开关（只读展示；关闭需改配置文件并重启） */
+  enabled: boolean
+  /** 对话自动进记忆方式：inline=主模型随手记 / extract=每轮后台抽取 / off=关闭（热生效） */
+  auto_memory: 'inline' | 'extract' | 'off'
+  /** 召回相关性地板 [0,1]，仅配 embedding 时生效（热生效） */
+  recall_min_score: number
+  /** 回复前主动会话召回（热生效） */
+  active_recall: boolean
+  /** 周期画像蒸馏（重启后生效） */
+  profile: boolean
+  /** 蒸馏间隔分钟（只读展示） */
+  profile_interval_mins: number
+}
+
+export interface MemoryBehaviorUpdate {
+  auto_memory?: MemoryBehaviorConfig['auto_memory']
+  recall_min_score?: number
+  active_recall?: boolean
+  profile?: boolean
+}
+
+export function getMemoryConfig() {
+  return apiGet<MemoryBehaviorConfig>('/api/v1/config/memory')
+}
+
+export function updateMemoryConfig(patch: MemoryBehaviorUpdate) {
+  return apiPut<{ status: string; config: MemoryBehaviorConfig; restart_required: string[] }>(
+    '/api/v1/config/memory',
+    patch as Record<string, unknown>,
+  )
+}

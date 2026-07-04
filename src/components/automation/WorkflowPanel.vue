@@ -5,6 +5,8 @@ import { Plus, Workflow as WorkflowIcon, Brain, Wrench, GitBranch, Layers, Send,
 import { useCanvasStore } from '@/stores/canvas'
 import { useToast } from '@/composables'
 import type { CanvasNode } from '@/types'
+import { preflightAutonomy, createAutonomyGrant, type PreflightResult } from '@/api/autonomy'
+import PermissionApprovalModal from '@/components/automation/PermissionApprovalModal.vue'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -190,8 +192,53 @@ async function onSave() {
   if (res) {
     toast.success(t('workflow.savedOk', '工作流已保存'))
     await store.loadWorkflows()
+    // 保存后静默预检（后端做节点静态分析——最准确的路径）：
+    // 全绿不打扰；命中高后果能力（如发布内容）才展开审批。
+    await runSavePreflight()
   } else {
     toast.error(t('workflow.saveFailed', '保存失败，请确认引擎已连接'))
+  }
+}
+
+// ── 自动化权限：保存后静默预检（条件式向导·workflow 形态） ──────────
+const approvalOpen = ref(false)
+const approvalPreflight = ref<PreflightResult | null>(null)
+const approvalBusy = ref(false)
+
+async function runSavePreflight() {
+  const id = store.currentWorkflowId
+  if (!id) return
+  try {
+    const pf = await preflightAutonomy({ source: 'workflow', workflow_id: id })
+    if (!pf.all_clear) {
+      approvalPreflight.value = pf
+      approvalOpen.value = true
+    }
+  } catch {
+    // 治理未启用/老后端：静默降级，运行时权限闸兜底
+  }
+}
+
+async function onApprovalChoose(mode: 'grant' | 'later' | 'paused') {
+  if (mode !== 'grant') {
+    approvalOpen.value = false
+    return
+  }
+  if (approvalBusy.value) return
+  approvalBusy.value = true
+  try {
+    await createAutonomyGrant({
+      task_ref: `workflow:${store.currentWorkflowId}`,
+      source: 'workflow',
+      entries: approvalPreflight.value?.needs_decision ?? [],
+      note: t('autonomy.approval.grantNote', '创建流任务级授权'),
+    })
+    toast.success(t('autonomy.approval.grantedWorkflow', '已授权本工作流，运行时自动放行'))
+    approvalOpen.value = false
+  } catch (e: unknown) {
+    toast.error((e as Error)?.message || t('autonomy.approval.grantFailed', '授权未完成，可稍后重试'))
+  } finally {
+    approvalBusy.value = false
   }
 }
 
@@ -418,6 +465,17 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
         </div>
       </Transition>
     </Teleport>
+
+    <PermissionApprovalModal
+      :open="approvalOpen"
+      :task-name="currentName"
+      source="workflow"
+      :preflight="approvalPreflight"
+      :busy="approvalBusy"
+      :modes="['grant', 'later']"
+      @close="approvalOpen = false"
+      @choose="onApprovalChoose"
+    />
   </div>
 </template>
 

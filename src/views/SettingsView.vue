@@ -17,6 +17,7 @@ import {
   Zap,
   RotateCcw,
   SlidersHorizontal,
+  ShieldCheck,
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from '@/stores/model-catalog'
@@ -46,6 +47,7 @@ import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import OllamaCard from '@/components/settings/OllamaCard.vue'
 import ModelManagerModal from '@/components/settings/ModelManagerModal.vue'
+import AutomationPermissionsPanel from '@/components/settings/AutomationPermissionsPanel.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
@@ -109,8 +111,10 @@ let hasPendingAutoSave = false
 let unlistenCloseRequested: (() => void) | null = null
 let closingAfterFlush = false
 
+// tab 序：AI 能力域配置（LLM/自动化权限）相邻靠前，平台工具类（系统设置）居尾。
 const sections = computed(() => [
   { key: 'llm', label: t('settings.llm.title'), icon: Key },
+  { key: 'automation', label: t('autonomy.settings.sectionTitle', '自动化权限'), icon: ShieldCheck },
   { key: 'system', label: t('settings.system.title'), icon: Palette },
 ])
 
@@ -1502,6 +1506,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             </div>
           </div>
 
+          <!-- Automation permissions（治理入口：级别/待处理/审计/矩阵） -->
+          <div v-else-if="activeSection === 'automation'" class="hc-settings__section hc-settings__section--automation">
+            <AutomationPermissionsPanel />
+          </div>
+
           <!-- System (merged: appearance + storage) -->
           <div v-else-if="activeSection === 'system'" class="hc-settings__section">
             <div class="hc-settings__form">
@@ -1818,6 +1827,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   max-width: 600px;
   margin: 0;
   padding-right: 4px;
+}
+
+/* 自动化权限：三档卡片 + 策略矩阵需要比表单列更宽的呼吸空间 */
+.hc-settings__section--automation {
+  max-width: 640px;
 }
 
 .hc-settings__section-title {

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### 后端
+- 桌面端版本升至 `0.4.9`，并与 hexclaw backend `refs/tags/v0.4.9` 对齐。
+- `HEXCLAW_REF` 默认后端版本升至 `refs/tags/v0.4.9`；`make sidecar` 文档与排障命令同步更新为 hexclaw backend v0.4.9。
+
 ## v0.4.5 (2026-06-23)
 
 ### 连接中心

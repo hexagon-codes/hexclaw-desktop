@@ -5,11 +5,13 @@ describe('model-reasoning', () => {
   it('detects qwen thinking models', () => {
     expect(isQwenThinkingModel('qwen3.5:9b')).toBe(true)
     expect(isQwenThinkingModel('qwen3:8b')).toBe(true)
+    expect(isQwenThinkingModel('Qwen/Qwen3.6-35B-A3B')).toBe(true)
     expect(isQwenThinkingModel('glm-5')).toBe(false)
   })
 
   it('requests thinking off for qwen thinking models by default', () => {
     expect(withModelReasoningDefaults('qwen3.5:9b')).toEqual({ thinking: 'off' })
+    expect(withModelReasoningDefaults('Qwen/Qwen3.6-35B-A3B')).toEqual({ thinking: 'off' })
   })
 
   it('does not override explicit thinking metadata', () => {

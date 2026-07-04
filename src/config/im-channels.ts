@@ -2,8 +2,12 @@ import feishuLogo from '@/assets/im-logos/feishu.svg'
 import dingtalkLogo from '@/assets/im-logos/dingtalk.svg'
 import wechatLogo from '@/assets/im-logos/wechat.svg'
 import wecomLogo from '@/assets/im-logos/wecom.svg'
+import slackLogo from '@/assets/im-logos/slack.svg'
 import discordLogo from '@/assets/im-logos/discord.svg'
 import telegramLogo from '@/assets/im-logos/telegram.svg'
+import lineLogo from '@/assets/im-logos/line.svg'
+import whatsappLogo from '@/assets/im-logos/whatsapp.svg'
+import matrixLogo from '@/assets/im-logos/matrix.svg'
 import emailLogo from '@/assets/im-logos/email.svg'
 
 export type IMChannelType =
@@ -11,8 +15,12 @@ export type IMChannelType =
   | 'dingtalk'
   | 'wechat'
   | 'wecom'
+  | 'slack'
   | 'discord'
   | 'telegram'
+  | 'line'
+  | 'whatsapp'
+  | 'matrix'
   | 'email'
 
 export interface IMChannelConfigField {
@@ -98,6 +106,74 @@ export const CHANNEL_CONFIG_FIELDS: Record<IMChannelType, IMChannelConfigField[]
     { key: 'secret', label: '应用 Secret', labelEn: 'App Secret', placeholder: 'Enter Secret', secret: true },
     { key: 'token', label: '回调 Token', labelEn: 'Callback Token', placeholder: 'Enter Token', secret: true },
     { key: 'aes_key', label: '回调 EncodingAESKey', labelEn: 'Callback EncodingAESKey', placeholder: '43 characters', secret: true },
+  ],
+  slack: [
+    { key: 'token', label: 'Bot Token', labelEn: 'Bot Token', placeholder: 'xoxb-...', secret: true },
+    {
+      key: 'signing_secret',
+      label: 'Signing Secret',
+      labelEn: 'Signing Secret',
+      placeholder: 'Slack Events API Signing Secret',
+      secret: true,
+    },
+  ],
+  line: [
+    {
+      key: 'channel_secret',
+      label: 'Channel Secret',
+      labelEn: 'Channel Secret',
+      placeholder: 'Enter LINE Channel Secret',
+      secret: true,
+    },
+    {
+      key: 'channel_token',
+      label: 'Channel Access Token',
+      labelEn: 'Channel Access Token',
+      placeholder: 'Enter LINE Channel Access Token',
+      secret: true,
+    },
+  ],
+  whatsapp: [
+    {
+      key: 'token',
+      label: 'Access Token',
+      labelEn: 'Access Token',
+      placeholder: 'Enter WhatsApp Business access token',
+      secret: true,
+    },
+    { key: 'phone_id', label: 'Phone Number ID', labelEn: 'Phone Number ID', placeholder: 'Enter phone number ID' },
+    {
+      key: 'verify_token',
+      label: 'Webhook Verify Token（选填）',
+      labelEn: 'Webhook Verify Token (optional)',
+      placeholder: 'Token used by Meta webhook verification',
+      secret: true,
+      optional: true,
+    },
+    {
+      key: 'app_secret',
+      label: 'App Secret（选填）',
+      labelEn: 'App Secret (optional)',
+      placeholder: 'Meta App Secret for webhook signature verification',
+      secret: true,
+      optional: true,
+    },
+  ],
+  matrix: [
+    {
+      key: 'homeserver_url',
+      label: 'Homeserver URL',
+      labelEn: 'Homeserver URL',
+      placeholder: 'https://matrix.org',
+    },
+    {
+      key: 'access_token',
+      label: 'Access Token',
+      labelEn: 'Access Token',
+      placeholder: 'Enter Matrix access token',
+      secret: true,
+    },
+    { key: 'user_id', label: 'User ID', labelEn: 'User ID', placeholder: '@bot:matrix.org' },
   ],
   email: [
     { key: 'email', label: '邮箱账号', labelEn: 'Email Account', placeholder: 'you@example.com' },
@@ -210,6 +286,14 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
     helpUrl: 'https://developer.work.weixin.qq.com/document/',
   },
   {
+    type: 'slack',
+    name: 'Slack',
+    nameEn: 'Slack',
+    logo: slackLogo,
+    color: '#4a154b',
+    helpUrl: 'https://api.slack.com/apis',
+  },
+  {
     type: 'discord',
     name: 'Discord',
     nameEn: 'Discord',
@@ -224,6 +308,30 @@ export const CHANNEL_TYPES: IMChannelMeta[] = [
     logo: telegramLogo,
     color: '#0088cc',
     helpUrl: 'https://core.telegram.org/bots/api',
+  },
+  {
+    type: 'line',
+    name: 'LINE',
+    nameEn: 'LINE',
+    logo: lineLogo,
+    color: '#06c755',
+    helpUrl: 'https://developers.line.biz/en/docs/messaging-api/',
+  },
+  {
+    type: 'whatsapp',
+    name: 'WhatsApp',
+    nameEn: 'WhatsApp',
+    logo: whatsappLogo,
+    color: '#25d366',
+    helpUrl: 'https://developers.facebook.com/docs/whatsapp/cloud-api/',
+  },
+  {
+    type: 'matrix',
+    name: 'Matrix',
+    nameEn: 'Matrix',
+    logo: matrixLogo,
+    color: '#111827',
+    helpUrl: 'https://spec.matrix.org/latest/client-server-api/',
   },
   {
     type: 'email',
@@ -259,6 +367,22 @@ export const CHANNEL_HELP_TEXT: Record<IMChannelType, { zh: string; en: string }
   wecom: {
     zh: '在企业微信管理后台创建自建应用，获取 Corp ID、Agent ID 和 Secret。在"接收消息"中配置回调 URL、Token 和 EncodingAESKey。',
     en: 'Create an internal app in WeCom admin console. Get Corp ID, Agent ID & Secret. Configure callback URL, Token and EncodingAESKey.',
+  },
+  slack: {
+    zh: '在 Slack API 创建 App，配置 Bot Token 和 Signing Secret。事件订阅与消息发送都由 Go sidecar 的 Slack adapter 统一处理。',
+    en: 'Create an app in Slack API and configure Bot Token plus Signing Secret. Events and message sending are handled by the Go sidecar Slack adapter.',
+  },
+  line: {
+    zh: '在 LINE Developers 创建 Messaging API Channel，配置 Channel Secret 和 Channel Access Token。Webhook 验签与消息发送优先使用 LINE 官方 SDK。',
+    en: 'Create a Messaging API Channel in LINE Developers and configure Channel Secret plus Channel Access Token. Webhook verification and messaging use the official LINE SDK first.',
+  },
+  whatsapp: {
+    zh: '在 Meta for Developers 配置 WhatsApp Business Cloud API，填写 Access Token 和 Phone Number ID；Webhook Verify Token / App Secret 用于接收消息安全校验。',
+    en: 'Configure WhatsApp Business Cloud API in Meta for Developers with Access Token and Phone Number ID. Webhook Verify Token / App Secret secure inbound messages.',
+  },
+  matrix: {
+    zh: '配置 Matrix Homeserver、Bot Access Token 和 User ID。sidecar 使用 Matrix Client-Server API 完成同步收件和发件。',
+    en: 'Configure Matrix Homeserver, Bot Access Token, and User ID. The sidecar uses the Matrix Client-Server API for syncing inbound events and sending messages.',
   },
   email: {
     zh: '填入邮箱账号后自动识别服务商并配置 SMTP / IMAP。部分邮箱（QQ / Gmail 等）需在邮箱设置里生成「应用专用密码」，而非登录密码。',

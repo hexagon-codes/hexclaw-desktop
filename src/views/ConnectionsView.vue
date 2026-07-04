@@ -5,7 +5,7 @@
  *   - 数据连接器 = GitHub / Notion 令牌只读接入（§15.1，真实后端：token 加密存、真 test、浏览资源）。
  * 锚点 = prototype/app.html 的 connections 屏（data-cx 0/1）。
  */
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Plus, Zap, Pencil, Trash2, Database, FolderOpen, X, ExternalLink } from 'lucide-vue-next'
 import ConnectionChannelCards from '@/components/channels/ConnectionChannelCards.vue'
@@ -19,9 +19,18 @@ import {
   useConnectorInstances,
   type ConnectorInstance,
 } from '@/composables/useConnectorInstances'
+import {
+  getEnabledLocalFolderAllowedPaths,
+  syncLocalFolderAllowedPaths,
+} from '@/composables/useLocalFolderAllowedPathsSync'
 import { deleteConnector, getConnectorResources, type ConnectorResource } from '@/api/connectors'
-import { updateConfig } from '@/api/settings'
 import { getMcpServerStatus, removeMcpServer } from '@/api/mcp'
+import {
+  ensureMcpConnectorOnline,
+  runMcpConnectorProbe,
+  McpProbeError,
+  type McpProbeFailureCode,
+} from '@/api/mcp-probe'
 import { isMcpConnectorType, MCP_CONNECTOR_SPECS } from '@/config/mcp-connectors'
 
 // 官方品牌 logo（Simple Icons 下载落盘，单色，浅底 tile 保证双主题清晰）。
@@ -103,43 +112,6 @@ const channelCardsRef = ref<{ openCreate?: () => void }>()
 
 // 数据连接器：实例列表 store（模块级单例，localStorage 持久化）。
 const { list: connectorInstances, updateInstance, removeInstance } = useConnectorInstances()
-// 首帧标记：避免挂载即下发空 allowed_paths 清空他源配置（见下方 watch）。
-let allowedPathsFirstSync = true
-
-// BUG-20260626：把「启用的本地目录连接器」路径汇总，写进后端沙箱只读白名单
-// （skill.sandbox.filesystem.allowed_paths），让 code_exec 等能读到用户显式授权的目录——
-// 否则连接器只是前端 localStorage 书签，后端沙箱 deny-default 永远读不到。
-// 仅 enabled 的 localFolder 计入；停用/删除即从白名单移除。watch 一个稳定的 join key，
-// 仅在「路径集合」真正变化时才打后端（不被无关连接器编辑带动）。immediate：挂载即对齐一次，
-// 让上次会话加的连接器在打开连接页时补同步到后端（sidecar 重启后由 code_exec 读取生效）。
-const enabledLocalFolderPaths = computed<string[]>(() => {
-  const set = new Set<string>()
-  for (const inst of connectorInstances.value) {
-    if (inst.type === 'localFolder' && inst.enabled) {
-      const p = inst.config?.path?.trim()
-      if (p) set.add(p)
-    }
-  }
-  return Array.from(set).sort()
-})
-
-watch(
-  () => enabledLocalFolderPaths.value.join(''),
-  async () => {
-    const paths = enabledLocalFolderPaths.value
-    const wasFirst = allowedPathsFirstSync
-    allowedPathsFirstSync = false
-    // 首帧（挂载）若本就没有本地目录连接器，不下发空数组——否则会清空后端 allowed_paths 里手动/他源
-    // 配置的路径。仅当用户「停用/删掉最后一个连接器」(运行时变更，非首帧) 才下发空清单做清除。
-    if (wasFirst && paths.length === 0) return
-    try {
-      await updateConfig({ sandbox: { allowed_paths: paths } })
-    } catch {
-      /* 引擎降级/离线时静默；下次连接器变更或应用重启时再对齐 */
-    }
-  },
-  { immediate: true },
-)
 
 // 删除确认目标（非空 = 待删连接器实例）。removeInstance 会同时清理 secure-store 里的密钥残留。
 const deleteTarget = ref<ConnectorInstance | null>(null)
@@ -159,11 +131,21 @@ async function confirmDeleteConnector() {
     }
   }
   removeInstance(target.id)
+  if (target.type === 'localFolder') {
+    try {
+      await syncLocalFolderAllowedPaths(getEnabledLocalFolderAllowedPaths(connectorInstances.value))
+    } catch (e) {
+      const { messageFromUnknownError } = await import('@/utils/errors')
+      toast.error(messageFromUnknownError(e))
+    }
+  }
   deleteTarget.value = null
 }
 
+// bug-20260703 漂移三小修#1：接收 ConnectionChannelCards 的 count，tab 标签带计数徽标（对齐原型「通道与账号 2」）
+const channelCount = ref(0)
 const tabs = computed(() => [
-  { key: 'channels', label: t('connections.tabChannels') },
+  { key: 'channels', label: channelCount.value > 0 ? `${t('connections.tabChannels')} ${channelCount.value}` : t('connections.tabChannels') },
   { key: 'connectors', label: t('connections.tabConnectors') },
 ])
 
@@ -336,6 +318,12 @@ async function loadMcpStatus() {
 }
 onMounted(loadMcpStatus)
 
+async function refreshMcpStatus(): Promise<McpStatusResp | null> {
+  mcpStatus.value = await getMcpServerStatus()
+  mcpStatusLoaded.value = true
+  return mcpStatus.value
+}
+
 // 单一真值：某 MCP server 名是否真实在线（测试按钮与卡片徽章共用）。
 function isMcpServerOnline(serverName: string): boolean {
   const s = mcpStatus.value
@@ -370,6 +358,16 @@ function connPillText(inst: ConnectorInstance): string {
     : t('connections.channels.disabled')
 }
 
+// MCP 探针失败 code → 本地化可读提示（探针编排已下沉 @/api/mcp-probe，i18n 隔离留在 view）。
+function mcpProbeErrorText(err: McpProbeError): string {
+  const key: Record<McpProbeFailureCode, string> = {
+    tool_missing: 'connections.connectors.mcpProbeToolMissing',
+    no_input_schema: 'connections.connectors.mcpProbeNoInputSchema',
+    no_sql_arg: 'connections.connectors.mcpProbeNoSqlArg',
+  }
+  return t(key[err.code], { tool: err.toolName ?? '' })
+}
+
 // 测试连接：token 类 → 真实复验（拉一次资源即验证 token 仍有效）；
 //           mcp 类 → 查后端 MCP 服务真实在线状态（并同步徽章，二者结果一致）。
 const testingId = ref<string | null>(null)
@@ -392,12 +390,26 @@ async function testConnector(inst: ConnectorInstance) {
         return
       }
       const serverName = inst.config?.mcp_server || inst.name
-      mcpStatus.value = await getMcpServerStatus()
-      mcpStatusLoaded.value = true // ★同步卡片徽章，与本次测试结果同源
-      if (isMcpServerOnline(serverName)) toast.success(t('connections.connectors.mcpTestConnected', '已连接，MCP 服务在线'))
-      else toast.info(t('connections.connectors.mcpTestDisconnected', 'MCP 服务尚未就绪'))
+      const online = await ensureMcpConnectorOnline(inst, serverName, {
+        refreshStatus: refreshMcpStatus,
+        isServerOnline: isMcpServerOnline,
+      })
+      if (!online) {
+        toast.info(t('connections.connectors.mcpConnecting', '已添加，正在后台连接（首次需下载组件，稍后可在卡片测试）'))
+        return
+      }
+      await runMcpConnectorProbe(inst, serverName)
+      toast.success(t('connections.connectors.mcpTestConnected', '已连接，MCP 服务在线'))
     }
   } catch (e) {
+    // BUG-20260704：探针失败（典型：MCP 子进程已退出）后重新拉取状态真值——后端 CallTool
+    // 此时已把该 server 标记断连（30s 内自动重连自愈），徽章须立即从「已连接」翻「未就绪」，
+    // 不能与同屏的测试失败 toast 自相矛盾（loadMcpStatus 自带失败降级，不会二次抛错）。
+    if (isMcpConnectorType(inst.type)) void loadMcpStatus()
+    if (e instanceof McpProbeError) {
+      toast.error(`${t('connections.connectors.testFail', '连接失败')}: ${mcpProbeErrorText(e)}`)
+      return
+    }
     const { messageFromUnknownError } = await import('@/utils/errors')
     toast.error(`${t('connections.connectors.testFail', '连接失败')}: ${messageFromUnknownError(e)}`)
   } finally {
@@ -433,8 +445,16 @@ function closeResources() {
 }
 
 // 停用 / 启用：直接改 store（本地态，立即持久化）。
-function toggleConnector(inst: ConnectorInstance) {
+async function toggleConnector(inst: ConnectorInstance) {
   updateInstance(inst.id, { enabled: !inst.enabled })
+  if (inst.type === 'localFolder') {
+    try {
+      await syncLocalFolderAllowedPaths(getEnabledLocalFolderAllowedPaths(connectorInstances.value))
+    } catch (e) {
+      const { messageFromUnknownError } = await import('@/utils/errors')
+      toast.error(messageFromUnknownError(e))
+    }
+  }
 }
 </script>
 
@@ -454,7 +474,7 @@ function toggleConnector(inst: ConnectorInstance) {
         />
       </template>
       <template #actions>
-        <button class="hc-btn hc-btn-primary" type="button" @click="addCurrent">
+        <button class="hc-btn hc-btn-primary" type="button" data-testid="connections-add" @click="addCurrent">
           <Plus :size="14" />
           {{ t('connections.add') }}
         </button>
@@ -463,7 +483,7 @@ function toggleConnector(inst: ConnectorInstance) {
 
     <!-- 通道与账号：原型式 Connection 卡片流（锚点 prototype data-cx=0） -->
     <div v-if="activeTab === 'channels'" class="hc-conn-panel">
-      <ConnectionChannelCards ref="channelCardsRef" :filter="searchQuery" />
+      <ConnectionChannelCards ref="channelCardsRef" :filter="searchQuery" @count="channelCount = $event" />
     </div>
 
     <!-- 数据连接器：我已添加的连接器实例列表（支持同类型多个，顶栏「添加」开两步弹窗） -->
@@ -478,7 +498,12 @@ function toggleConnector(inst: ConnectorInstance) {
 
       <!-- 实例卡列表 -->
       <div v-else class="hc-conn-grid">
-        <div v-for="inst in filteredConnectorInstances" :key="inst.id" class="hc-conn-card">
+        <div
+          v-for="inst in filteredConnectorInstances"
+          :key="inst.id"
+          class="hc-conn-card"
+          :data-testid="`connector-card-${inst.type}`"
+        >
           <div class="hc-conn-card__top">
             <div class="hc-conn-card__logo">
               <img v-if="instanceLogo(inst)" :src="instanceLogo(inst)!" :alt="inst.name" />
@@ -502,26 +527,46 @@ function toggleConnector(inst: ConnectorInstance) {
           </div>
           <div class="hc-conn-card__actions">
             <!-- 测试：token(真实复验) / mcp(真实状态) 才显示；native/oauth 无可测对象 -->
-            <button v-if="canTest(inst)" class="hc-conn-btn hc-conn-btn--ghost" :disabled="testingId === inst.id" @click="testConnector(inst)">
+            <button
+              v-if="canTest(inst)"
+              class="hc-conn-btn hc-conn-btn--ghost"
+              :disabled="testingId === inst.id"
+              :data-testid="`connector-test-${inst.type}`"
+              @click="testConnector(inst)"
+            >
               <Zap :size="13" />
               {{ testingId === inst.id ? t('connections.connectors.testing', '测试中…') : t('connections.channels.test') }}
             </button>
             <!-- token 类(github/notion)：浏览真实资源 -->
-            <button v-if="connectorIdOf(inst)" class="hc-conn-btn hc-conn-btn--ghost" @click="browseResources(inst)">
+            <button
+              v-if="connectorIdOf(inst)"
+              class="hc-conn-btn hc-conn-btn--ghost"
+              :data-testid="`connector-browse-${inst.type}`"
+              @click="browseResources(inst)"
+            >
               <FolderOpen :size="13" />
               {{ t('connections.connectors.browse', '浏览资源') }}
             </button>
             <!-- 非 token：可编辑（mcp 编辑=重注册）；启停仅对 native/oauth 本地实例 -->
             <template v-else>
-              <button class="hc-conn-btn hc-conn-btn--ghost" @click="openConnectorEdit(inst)">
+              <button
+                class="hc-conn-btn hc-conn-btn--ghost"
+                :data-testid="`connector-edit-${inst.type}`"
+                @click="openConnectorEdit(inst)"
+              >
                 <Pencil :size="13" />
                 {{ t('common.edit') }}
               </button>
-              <button v-if="canToggle(inst)" class="hc-conn-btn hc-conn-btn--ghost" @click="toggleConnector(inst)">
+              <button
+                v-if="canToggle(inst)"
+                class="hc-conn-btn hc-conn-btn--ghost"
+                :data-testid="`connector-toggle-${inst.type}`"
+                @click="toggleConnector(inst)"
+              >
                 {{ inst.enabled ? t('connections.channels.disable') : t('connections.channels.enable') }}
               </button>
             </template>
-            <button class="hc-conn-btn hc-conn-btn--danger" @click="deleteTarget = inst">
+            <button class="hc-conn-btn hc-conn-btn--danger" :data-testid="`connector-delete-${inst.type}`" @click="deleteTarget = inst">
               <Trash2 :size="13" />
               {{ t('connections.channels.delete', '删除') }}
             </button>

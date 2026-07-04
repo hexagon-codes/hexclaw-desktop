@@ -6,8 +6,10 @@
 
 import { ref, nextTick } from 'vue'
 import { removeMessage } from '@/services/messageService'
+import { forkSession } from '@/api/chat'
 import { i18n } from '@/i18n'
 import { logger } from '@/utils/logger'
+import { backendDeletableMessageId } from '@/utils/chat-message-id'
 import type { useChatStore } from '@/stores/chat'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { useToast } from './useToast'
@@ -80,7 +82,7 @@ export function useChatActions(
     // BUG（2026-06-28 用户反馈）：编辑早期消息会删掉其后整条尾巴；旧实现**逐条串行 await** →
     // N 条 = N 个网络往返串起来 = 提交后"卡几秒"才出现"正在思考"。改**并行删除**（往返折叠为一批），
     // 再按结果精确回滚：删失败的（仍在后端）原序恢复、删成功的不恢复——仍满足 AP-094「只删少不删多」。
-    const results = await Promise.allSettled(snapshot.map((m) => removeMessage(m!.id)))
+    const results = await Promise.allSettled(snapshot.map((m) => removeMessage(backendDeletableMessageId(m!))))
     const failed: ChatMessage[] = []
     for (let i = 0; i < results.length; i++) {
       const r = results[i]!
@@ -142,6 +144,31 @@ export function useChatActions(
     if (!ok) {
       chatStore.messages.splice(userMsgIdx, 0, ...snapshot)
       toast.error(i18n.global.t('chat.retryFailed'))
+    }
+  }
+
+  /**
+   * 由此分叉（BUG-20260703 P2-1）：以该消息为分支点复制会话（后端 ForkSession 按
+   * rowid 截到该消息含自身），切到新分支继续聊——原会话原样保留。
+   * 消息 id 解析同删除：live 消息用 metadata.backend_message_id，重载消息本身就是后端 id。
+   */
+  async function handleFork(msgIndex: number) {
+    const targetMsg = chatStore.messages[msgIndex]
+    const sessionId = chatStore.currentSessionId
+    if (!targetMsg || !sessionId) return
+    // 流式中分叉：正在生成的回复尚未落库，分支会缺尾巴且易与写入竞争——先拦。
+    if (chatStore.streaming) {
+      toast.error(i18n.global.t('chat.forkWhileStreaming'))
+      return
+    }
+    try {
+      const res = await forkSession(sessionId, backendDeletableMessageId(targetMsg))
+      await chatStore.loadSessions()
+      await chatStore.selectSession(res.session.id)
+      toast.success(i18n.global.t('chat.forkCreated'))
+    } catch (error) {
+      logger.error('[useChatActions] fork session failed', error)
+      toast.error(error instanceof Error ? error.message : i18n.global.t('chat.forkFailed'))
     }
   }
 
@@ -242,6 +269,7 @@ export function useChatActions(
     editingText,
     setEditTextareaEl,
     handleRetry,
+    handleFork,
     handleLike,
     handleDislike,
     handleEdit,

@@ -99,16 +99,18 @@ describe('BUG 10: confirmEdit / handleRetry model guard ordering', () => {
 // BUG 5 (MEDIUM): WS inactivity timeout during tool calls — DOCUMENTED
 // ════════════════════════════════════════════════════════════
 
-describe('BUG 5: WS inactivity timeout is 120s', () => {
+describe('BUG 5: WS inactivity timeout is 300s', () => {
   const src = readSrc('services/chatService.ts')
 
-  it('WS_INACTIVITY_TIMEOUT_MS is 120_000 (120 seconds)', () => {
-    expect(src).toMatch(/WS_INACTIVITY_TIMEOUT_MS\s*=\s*120[_]?000/)
+  // 2026-07：慢真模型/长工具链把首响应+静默上限从 120s 放宽到 300s（设计决策，
+  // chatService.test.ts「keeps the request socket alive past 120s」已锁定该契约）。
+  it('WS_INACTIVITY_TIMEOUT_MS is 300_000 (300 seconds)', () => {
+    expect(src).toMatch(/WS_INACTIVITY_TIMEOUT_MS\s*=\s*300[_]?000/)
   })
 
   it('DOCUMENTED: no mechanism to extend timeout during tool calls', () => {
     // The inactivity timer resets on any chunk, but long-running tool calls
-    // (e.g., code execution) may take >120s without sending chunks.
+    // (e.g., code execution) may take >300s without sending chunks.
     // There is no tool-call-specific timeout extension logic.
     expect(src).not.toMatch(/tool.*timeout|extend.*timeout|pause.*inactivity/i)
   })

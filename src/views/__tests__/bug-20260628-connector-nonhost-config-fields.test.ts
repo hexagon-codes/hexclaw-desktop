@@ -37,11 +37,14 @@ vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: toastSuccess, info: toastInfo, error: toastError, warning: vi.fn() }),
 }))
 
-const { getMcpServerStatus, removeMcpServer } = vi.hoisted(() => ({
+const { addMcpServer, callMcpTool, getMcpServerStatus, getMcpTools, removeMcpServer } = vi.hoisted(() => ({
+  addMcpServer: vi.fn(),
+  callMcpTool: vi.fn(),
   getMcpServerStatus: vi.fn(),
+  getMcpTools: vi.fn(),
   removeMcpServer: vi.fn(),
 }))
-vi.mock('@/api/mcp', () => ({ addMcpServer: vi.fn(), removeMcpServer, getMcpServerStatus }))
+vi.mock('@/api/mcp', () => ({ addMcpServer, callMcpTool, getMcpTools, removeMcpServer, getMcpServerStatus }))
 
 vi.mock('@/components/channels/ConnectorConfigModal.vue', () => ({
   default: { template: '<div class="connector-modal-stub" />' },
@@ -79,6 +82,9 @@ async function clickTest(wrapper: ReturnType<typeof mountView>) {
 describe('bug-20260628 非 host/path/url 字段的 MCP 连接器「已配置」判据', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    addMcpServer.mockResolvedValue({ message: 'queued', connected: false })
+    getMcpTools.mockResolvedValue({ tools: [], total: 0 })
+    callMcpTool.mockResolvedValue({ result: 'ok' })
     removeMcpServer.mockResolvedValue({ message: 'ok' })
     getMcpServerStatus.mockResolvedValue({ statuses: {}, servers: [] }) // 后端无 server 在线
   })
@@ -91,7 +97,8 @@ describe('bug-20260628 非 host/path/url 字段的 MCP 连接器「已配置」�
     await switchToConnectors(wrapper)
     await clickTest(wrapper)
     expect(toastInfo).not.toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestNotConfigured)
-    expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestDisconnected)
+    expect(addMcpServer).toHaveBeenCalledWith('我的语雀', 'npx', ['-y', 'yuque-mcp-server'], { env: { YUQUE_TOKEN: 'yq-secret-abc' } })
+    expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpConnecting)
   })
 
   it('已填 app_id 的飞书文档连接器测试 → 不得弹「请先配置」', async () => {
@@ -108,7 +115,13 @@ describe('bug-20260628 非 host/path/url 字段的 MCP 连接器「已配置」�
     await switchToConnectors(wrapper)
     await clickTest(wrapper)
     expect(toastInfo).not.toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestNotConfigured)
-    expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpTestDisconnected)
+    expect(addMcpServer).toHaveBeenCalledWith(
+      '飞书库',
+      'npx',
+      ['-y', '@larksuiteoapi/lark-mcp', 'mcp', '-a', 'cli_xxx', '-s', 'sec'],
+      { env: {} },
+    )
+    expect(toastInfo).toHaveBeenCalledWith(zhCN.connections.connectors.mcpConnecting)
   })
 
   it('字段全空的语雀连接器测试 → 仍判未配置（弹「请先配置」）', async () => {

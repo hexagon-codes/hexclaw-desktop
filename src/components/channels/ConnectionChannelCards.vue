@@ -271,7 +271,12 @@ defineExpose({ openCreate })
     <div v-else class="hc-cxstream__grid">
 
       <!-- 已存在实例卡（按顶栏搜索过滤） -->
-      <div v-for="inst in filteredInstances" :key="inst.id" class="hc-cxcard">
+      <div
+        v-for="inst in filteredInstances"
+        :key="inst.id"
+        class="hc-cxcard"
+        :data-testid="`channel-card-${inst.type}`"
+      >
         <div class="hc-cxcard__top">
           <div
             class="hc-cxcard__logo hc-cxcard__logo--brand"
@@ -310,6 +315,7 @@ defineExpose({ openCreate })
           v-if="testResults[inst.id]"
           class="hc-cxcard__testresult"
           :class="testResults[inst.id]!.success ? 'is-ok' : 'is-err'"
+          :data-testid="`channel-test-result-${inst.type}`"
         >
           {{ testResults[inst.id]!.message }}
         </div>
@@ -318,6 +324,7 @@ defineExpose({ openCreate })
           <button
             class="hc-cxbtn hc-cxbtn--ok"
             :disabled="busyId === inst.id"
+            :data-testid="`channel-test-${inst.type}`"
             @click="testInstance(inst)"
           >
             <Zap :size="13" />

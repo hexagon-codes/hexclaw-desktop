@@ -488,7 +488,7 @@ describe('ChatView — edge cases', () => {
 
     // The component should render without crashing
     expect(wrapper.exists()).toBe(true)
-  })
+  }, 30_000)
 
   it('model selector with 0 available models renders without crash', async () => {
     const { useSettingsStore } = await import('@/stores/settings')
@@ -972,5 +972,7 @@ describe('Dead code detection — unused API exports', () => {
 
     // Informational: report dead code but test always passes
     expect(true).toBe(true)
-  })
+    // 全仓文件扫描是 IO 密集：默认 5s testTimeout 在并行全量回归下会被挤爆
+    // （2026-07-03 负载 flaky 取证，空载 <1s）。显式放宽到 30s。
+  }, 30_000)
 })

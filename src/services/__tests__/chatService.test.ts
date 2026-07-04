@@ -240,6 +240,72 @@ describe('chatService', () => {
     })
   })
 
+  it('openWebSocketStream preserves accumulated text when the done chunk only carries tool blocks', async () => {
+    const onChunk = vi.fn()
+    const handle = openWebSocketStream('hello', 's1', { model: 'glm-5' }, '', undefined, { onChunk }, undefined, 'req-tool')
+    const socket = socketInstances[0]
+
+    socket!.readyState = MockRequestWebSocket.OPEN
+    socket!.onopen?.()
+
+    socket!.onmessage?.({
+      data: JSON.stringify({ type: 'chunk', content: '先查连接器。', done: false }),
+    })
+    socket!.onmessage?.({
+      data: JSON.stringify({ type: 'chunk', content: '最终结论不会消失。', done: false }),
+    })
+    socket!.onmessage?.({
+      data: JSON.stringify({
+        type: 'chunk',
+        content: '',
+        done: true,
+        metadata: { request_id: 'req-tool' },
+        blocks: [
+          { type: 'tool_use', id: 'tool-1', name: 'app_query', input: {} },
+          { type: 'tool_result', toolUseId: 'tool-1', toolName: 'app_query', output: '<app-data>...</app-data>', isError: false },
+        ],
+      }),
+    })
+
+    await expect(handle.done).resolves.toEqual({
+      content: '先查连接器。最终结论不会消失。',
+      metadata: { request_id: 'req-tool' },
+      toolCalls: undefined,
+      blocks: [
+        { type: 'tool_use', id: 'tool-1', name: 'app_query', input: {} },
+        { type: 'tool_result', toolUseId: 'tool-1', toolName: 'app_query', output: '<app-data>...</app-data>', isError: false },
+      ],
+      agentName: undefined,
+    })
+    expect(onChunk).toHaveBeenCalledWith('', undefined)
+  })
+
+  it('keeps the request socket alive past 120s for slow real-model first responses', async () => {
+    vi.useFakeTimers()
+    try {
+      const handle = openWebSocketStream('slow tool request', 's1', { model: 'Qwen/Qwen3.6-35B-A3B' }, '', undefined, undefined, undefined, 'req-slow')
+      const done = handle.done.catch((err: unknown) => err)
+      const socket = socketInstances[0]
+
+      socket!.readyState = MockRequestWebSocket.OPEN
+      socket!.onopen?.()
+
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(socket!.close).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(179_999)
+      expect(socket!.close).not.toHaveBeenCalled()
+
+      await vi.advanceTimersByTimeAsync(1)
+      expect(socket!.close).toHaveBeenCalled()
+      await expect(done).resolves.toMatchObject({
+        message: 'Assistant reply timed out — no response received.',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('openWebSocketStream cancel sends cancel on the dedicated socket and resolves without fallback', async () => {
     const handle = openWebSocketStream('hello', 's1', { model: 'glm-5' }, '', undefined, undefined, undefined, 'req-2')
     const socket = socketInstances[0]

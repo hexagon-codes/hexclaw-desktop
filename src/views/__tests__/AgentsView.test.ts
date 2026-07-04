@@ -177,7 +177,7 @@ describe('AgentsView', () => {
     expect(wrapper.text()).toContain('专属智能体')
   })
 
-  it('模板库 tab lists 10 common templates', async () => {
+  it('模板库 tab lists the canonical templates incl. the merged-in 通用助手（单一真相源）', async () => {
     const wrapper = await mountView()
     await flushPromises()
 
@@ -187,9 +187,11 @@ describe('AgentsView', () => {
     await flushPromises()
 
     const cards = wrapper.findAll('.hc-tplcard')
-    expect(cards.length).toBe(10)
+    expect(cards.length).toBe(11) // 10 场景模板 + 合并进来的通用助手（原后端 assistant 角色）
     expect(wrapper.text()).toContain('客服助手')
     expect(wrapper.text()).toContain('研究助理')
+    // 后端 assistant 角色被并入唯一货架，不再单独活在弹窗第一步
+    expect(wrapper.text()).toContain('通用助手')
   })
 
   it('clicking a 模板库 card prefills the new-agent form and advances to step 2', async () => {
@@ -217,7 +219,7 @@ describe('AgentsView', () => {
     expect(vm.newAgent.system_prompt).toContain('客服助手')
   })
 
-  it('shows the "choose start" step (空白新建 + template cards) when opening the new-agent dialog', async () => {
+  it('选择起点只有「空白新建」+「从模板库开始」，不再内嵌第二份角色货架', async () => {
     const wrapper = await mountView()
     await flushPromises()
 
@@ -226,15 +228,50 @@ describe('AgentsView', () => {
     await newButton!.trigger('click')
     await flushPromises()
 
-    // 第一步：空白新建卡 + 模板卡（title + goal）
+    // 第一步恰好两张卡：空白新建 + 从模板库开始
     const startCards = wrapper.findAll('.hc-startcard')
-    expect(startCards.length).toBe(2) // 1 空白 + 1 模板（mock 仅 1 个 role）
-    expect(wrapper.text()).toContain('空白新建')
-    expect(wrapper.text()).toContain('智能助手')
-    expect(wrapper.text()).toContain('帮助用户完成任务')
-    // 第一步还未进入表单
+    expect(startCards.length).toBe(2)
+    expect(wrapper.find('[data-testid="start-blank"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="start-from-library"]').exists()).toBe(true)
+    // 不再出现后端角色货架——其 goal 文案只属于被拆掉的第二份列表
+    expect(wrapper.text()).not.toContain('帮助用户完成任务')
     const vm = wrapper.vm as unknown as { addStep: number }
     expect(vm.addStep).toBe(1)
+  })
+
+  it('第一步「从模板库开始」路由到唯一货架（模板库 tab），不另开一份列表', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const newButton = wrapper.findAll('button').find((b) => b.text().includes('新建智能体'))
+    await newButton!.trigger('click')
+    await flushPromises()
+
+    const fromLib = wrapper.find('[data-testid="start-from-library"]')
+    expect(fromLib.exists()).toBe(true)
+    await fromLib.trigger('click')
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as { activeTab: string; showAddAgent: boolean; addStep: number }
+    expect(vm.activeTab).toBe('templates') // 交给唯一货架
+    expect(vm.showAddAgent).toBe(false) // 弹窗让位，避免两处并列
+  })
+
+  it('套用模板后第二步展示该模板的「专长」（厚数据可见，不静默蒸发）', async () => {
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const tplTab = wrapper.findAll('.hc-segmented__btn').find((b) => b.text().includes('模板库'))
+    await tplTab!.trigger('click')
+    await flushPromises()
+
+    const card = wrapper.findAll('.hc-tplcard').find((c) => c.text().includes('客服助手'))
+    await card!.trigger('click')
+    await flushPromises()
+
+    const expertise = wrapper.find('[data-testid="template-expertise"]')
+    expect(expertise.exists()).toBe(true)
+    expect(expertise.text().length).toBeGreaterThan(0)
   })
 
   it('selecting 空白新建 advances to step 2 with an empty form', async () => {
@@ -255,28 +292,26 @@ describe('AgentsView', () => {
     expect(vm.newAgent.name).toBe('')
   })
 
-  it('selecting a template advances to step 2 with prefilled fields', async () => {
+  it('从模板库套用「通用助手」→ 第二步预填（原后端 assistant 角色的场景化落点）', async () => {
     const wrapper = await mountView()
     await flushPromises()
 
-    const newButton = wrapper.findAll('button').find((b) => b.text().includes('新建智能体'))
-    await newButton!.trigger('click')
+    const tplTab = wrapper.findAll('.hc-segmented__btn').find((b) => b.text().includes('模板库'))
+    await tplTab!.trigger('click')
     await flushPromises()
 
-    const templateCard = wrapper.findAll('.hc-startcard').find((el) => el.text().includes('智能助手'))
-    expect(templateCard?.exists()).toBe(true)
-    await templateCard!.trigger('click')
+    const card = wrapper.findAll('.hc-tplcard').find((c) => c.text().includes('通用助手'))
+    expect(card?.exists()).toBe(true)
+    await card!.trigger('click')
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
       addStep: number
-      newAgent: { name: string; display_name: string; description?: string; system_prompt?: string }
+      newAgent: { name: string; display_name: string; system_prompt?: string }
     }
     expect(vm.addStep).toBe(2)
-    expect(vm.newAgent.name).toBe('assistant')
-    expect(vm.newAgent.display_name).toBe('智能助手')
-    expect(vm.newAgent.description).toBe('帮助用户完成任务')
-    expect(vm.newAgent.system_prompt).toBe('负责通用问答')
+    expect(vm.newAgent.display_name).toBe('通用助手')
+    expect(vm.newAgent.system_prompt).toBeTruthy()
   })
 
   it('uses runtime provider and model options in the register form', async () => {
@@ -294,8 +329,8 @@ describe('AgentsView', () => {
     vm.startFromBlank()
     await flushPromises()
 
-    // Model preference is collapsed by default — expand it
-    const advancedToggle = wrapper.findAll('button').find((b) => b.text().includes('模型偏好'))
+    // 模型与参数折叠区默认收起 — 展开(原型对齐后文案与位置更新)
+    const advancedToggle = wrapper.find('[data-testid="agent-add-adv-toggle"]')
     expect(advancedToggle?.exists()).toBe(true)
     await advancedToggle!.trigger('click')
     await flushPromises()
@@ -330,9 +365,9 @@ describe('AgentsView', () => {
     vm.startFromBlank()
     await flushPromises()
 
-    // Expand advanced section
-    const advancedToggle = wrapper.findAll('button').find((b) => b.text().includes('模型偏好'))
-    await advancedToggle!.trigger('click')
+    // Expand advanced section（原型对齐后：模型与参数折叠区）
+    const advancedToggle = wrapper.find('[data-testid="agent-add-adv-toggle"]')
+    await advancedToggle.trigger('click')
     await flushPromises()
 
     const selects = wrapper.findAllComponents(HcSelect)
@@ -706,6 +741,9 @@ describe('AgentsView', () => {
     vm.editingAgent = { name: 'researcher', display_name: '高级研究分析师', provider: '', model: '' }
     vm.showEditAgent = true
     await flushPromises()
+    // 原型对齐后 provider/model 位于「模型与参数」折叠区 — 展开再断言下拉占位
+    await wrapper.find('[data-testid="agent-adv-toggle"]').trigger('click')
+    await flushPromises()
 
     const selects = wrapper.findAllComponents(HcSelect)
     expect(selects.length).toBe(2) // 编辑弹层仅 provider + model 两个下拉
@@ -746,6 +784,50 @@ describe('AgentsView', () => {
     expect(updateAgent).toHaveBeenCalledWith(
       'coder',
       expect.objectContaining({ system_prompt: '更新后的人设' }),
+    )
+  })
+
+  // BUG-20260704：从智能体卡「进入对话」时只带 role=<name>，会话标题落到内部英文 name，
+  // 不是用户看得懂的显示名称。对齐 WelcomeView：必须同时带 roleTitle=display_name。
+  it('进入对话携带 display_name 作为 roleTitle（会话标题显示名而非内部 name）', async () => {
+    getAgents.mockResolvedValue({
+      agents: [{ name: 'k12-tutor', display_name: '作业辅导小蟹', provider: '', model: '' }],
+      total: 1,
+      default: '',
+    })
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const pushSpy = vi.spyOn(wrapper.vm.$router, 'push').mockResolvedValue(undefined as never)
+    const btn = wrapper.find('[data-testid="agent-enter-chat-k12-tutor"]')
+    expect(btn.exists(), '应有进入对话按钮').toBe(true)
+    await btn.trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: '/chat',
+        query: expect.objectContaining({ role: 'k12-tutor', roleTitle: '作业辅导小蟹' }),
+      }),
+    )
+  })
+
+  // display_name 缺省时 roleTitle 回退到 name（不产出空标题）。
+  it('display_name 为空时 roleTitle 回退到内部 name', async () => {
+    getAgents.mockResolvedValue({
+      agents: [{ name: 'bare-agent', display_name: '', provider: '', model: '' }],
+      total: 1,
+      default: '',
+    })
+    const wrapper = await mountView()
+    await flushPromises()
+
+    const pushSpy = vi.spyOn(wrapper.vm.$router, 'push').mockResolvedValue(undefined as never)
+    await wrapper.find('[data-testid="agent-enter-chat-bare-agent"]').trigger('click')
+
+    expect(pushSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: expect.objectContaining({ role: 'bare-agent', roleTitle: 'bare-agent' }),
+      }),
     )
   })
 })

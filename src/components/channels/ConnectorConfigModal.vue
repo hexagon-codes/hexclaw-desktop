@@ -11,6 +11,10 @@ import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { X, Eye, EyeOff, CheckCircle2, AlertCircle, Loader2 } from 'lucide-vue-next'
 import { useConnectorInstances, type ConnectorInstance } from '@/composables/useConnectorInstances'
+import {
+  getEnabledLocalFolderAllowedPaths,
+  syncLocalFolderAllowedPaths,
+} from '@/composables/useLocalFolderAllowedPathsSync'
 import { useToast } from '@/composables/useToast'
 import { createConnector, testConnector as apiTestConnector } from '@/api/connectors'
 import { addMcpServer, removeMcpServer } from '@/api/mcp'
@@ -280,22 +284,32 @@ async function handleSave() {
 
   // 本地配置类(文件 / OAuth stub)：保持既有 localStorage 行为。
   saving.value = true
-  if (mode.value === 'create') {
-    addInstance({
-      type: formType.value,
-      name,
-      config: { ...formConfig.value },
-      enabled: formEnabled.value,
-    })
-  } else if (props.instance) {
-    updateInstance(props.instance.id, {
-      name,
-      config: { ...formConfig.value },
-      enabled: formEnabled.value,
-    })
+  try {
+    if (mode.value === 'create') {
+      addInstance({
+        type: formType.value,
+        name,
+        config: { ...formConfig.value },
+        enabled: formEnabled.value,
+      })
+    } else if (props.instance) {
+      updateInstance(props.instance.id, {
+        name,
+        config: { ...formConfig.value },
+        enabled: formEnabled.value,
+      })
+    }
+    if (formType.value === 'localFolder') {
+      await syncLocalFolderAllowedPaths(getEnabledLocalFolderAllowedPaths(list.value))
+    }
+    emit('saved')
+    emit('close')
+  } catch (e) {
+    const { messageFromUnknownError } = await import('@/utils/errors')
+    toast.error(messageFromUnknownError(e))
+  } finally {
+    saving.value = false
   }
-  emit('saved')
-  emit('close')
 }
 </script>
 
@@ -334,6 +348,7 @@ async function handleSave() {
                 v-for="it in types"
                 :key="it.id"
                 class="hc-im-type-card"
+                :data-testid="`connector-type-${it.id}`"
                 @click="selectType(it)"
               >
                 <div class="hc-im-type-card__icon hc-ck-tile">
@@ -360,6 +375,7 @@ async function handleSave() {
               <input
                 v-model="formName"
                 class="hc-im-input"
+                data-testid="connector-name-input"
                 :placeholder="t('connections.connectors.form.namePlaceholder', '例如：生产库 / 分析库')"
               />
             </div>
@@ -372,6 +388,7 @@ async function handleSave() {
                   v-model="formConfig[field.key]"
                   :type="field.secret && !showSecrets[field.key] ? 'password' : 'text'"
                   class="hc-im-input"
+                  :data-testid="`connector-config-${field.key}`"
                   :placeholder="field.placeholder"
                 />
                 <button
@@ -423,8 +440,8 @@ async function handleSave() {
 
             <div v-if="currentMethod !== 'token' && currentMethod !== 'mcp'" class="hc-im-field hc-im-field--row">
               <label class="hc-im-field__label">{{ t('common.enable') }}</label>
-              <label class="hc-im-toggle">
-                <input v-model="formEnabled" type="checkbox" />
+              <label class="hc-im-toggle" data-testid="connector-enabled-toggle">
+                <input v-model="formEnabled" type="checkbox" data-testid="connector-enabled" />
                 <span class="hc-im-toggle__slider" />
               </label>
             </div>
@@ -444,7 +461,7 @@ async function handleSave() {
               <button class="hc-im-btn hc-im-btn--ghost" @click="emit('close')">
                 {{ t('common.cancel') }}
               </button>
-              <button class="hc-im-btn hc-im-btn--primary" :disabled="saving" @click="handleSave">
+              <button class="hc-im-btn hc-im-btn--primary" data-testid="connector-save" :disabled="saving" @click="handleSave">
                 {{ saving ? '...' : mode === 'create' ? t('common.create') : t('common.save') }}
               </button>
             </div>

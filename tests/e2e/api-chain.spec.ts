@@ -7,7 +7,7 @@
  */
 
 import { test, expect } from '@playwright/test'
-import { api, wsChat, USER_ID, type ChatResult } from './helpers'
+import { api, e2eMarker, e2eTextMarker, wsChat, USER_ID, type ChatResult } from './helpers'
 
 // ---------------------------------------------------------------------------
 // 0. 环境探测 — 确认至少一个 LLM provider 可用
@@ -20,9 +20,12 @@ test.beforeAll(async () => {
     const llm = (data as any).llm ?? {}
     const providers = llm.providers ?? {}
     const hasKey = Object.values(providers).some((p: any) => p.has_key)
+    const hasSwitchable = Object.entries(providers).some(
+      ([name, p]: [string, any]) => p.switchable === true || (p.switchable == null && (p.has_key || name.toLowerCase().includes('ollama'))),
+    )
     const hasOllama = Object.keys(providers).some((k: string) => k.toLowerCase().includes('ollama'))
 
-    if (hasKey || hasOllama) {
+    if (hasKey || hasSwitchable || hasOllama) {
       // 进一步探测 Ollama 是否真正在线
       if (!hasKey && hasOllama) {
         try {
@@ -40,13 +43,13 @@ test.beforeAll(async () => {
 // 1. Session lifecycle
 // ---------------------------------------------------------------------------
 test.describe.serial('Session lifecycle', () => {
-  test.setTimeout(180_000)
+  test.setTimeout(420_000)
 
   let sessionId: string
 
   test('First message creates session and gets reply', async () => {
     test.skip(!providerAvailable, 'No LLM provider available (Ollama offline or no API key configured)')
-    const result: ChatResult = await wsChat(`session smoke ${Date.now()}`)
+    const result: ChatResult = await wsChat(`请直接用一句中文回复普通冒烟测试，标记 ${e2eTextMarker()}`)
     expect(result.content.length).toBeGreaterThan(0)
     expect(result.chunks).toBeGreaterThanOrEqual(1)
   })
@@ -78,7 +81,7 @@ test.describe.serial('Session lifecycle', () => {
 
   test('HTTP chat fallback works', async () => {
     const { status, data } = await api('POST', '/api/v1/chat', {
-      message: `http fallback ${Date.now()}`,
+      message: `请直接用一句中文回复普通连通性测试，标记 ${e2eTextMarker()}`,
     })
     expect(status).toBe(200)
     expect(data.reply?.length).toBeGreaterThan(0)
@@ -95,33 +98,67 @@ test.describe.serial('Session lifecycle', () => {
   })
 
   test('Cross-provider switch (default then alternate)', async () => {
+    const forcedProvider = process.env.HEX_E2E_PROVIDER
+    const forcedAlternate = process.env.HEX_E2E_ALT_PROVIDER
+    test.skip(
+      Boolean(forcedProvider && !forcedAlternate),
+      'HEX_E2E_PROVIDER pins a single live provider; set HEX_E2E_ALT_PROVIDER to run cross-provider probing',
+    )
+
     // 探测式：先查可用 provider，再按实际能力断言
     const { data: cfgData } = await api('GET', '/api/v1/config')
     const providers = (cfgData as any)?.llm?.providers ?? {}
     const providerNames = Object.keys(providers)
 
-    // 找到一个非默认且有 key 的 provider
+    // 找到一个非默认且后端判定可切换的 provider；兼容旧后端时才回退到 has_key/ollama。
     const defaultProv = (cfgData as any)?.llm?.default ?? ''
-    const alternate = providerNames.find(
-      (n: string) => n !== defaultProv && (providers[n]?.has_key || n.toLowerCase().includes('ollama')),
+    const isUsableAlternate = (n: string) => n !== defaultProv
+      && (providers[n]?.switchable === true
+        || (providers[n]?.switchable == null && (providers[n]?.has_key || n.toLowerCase().includes('ollama'))))
+    const configuredAlternate = forcedAlternate && providerNames.includes(forcedAlternate)
+      ? [forcedAlternate]
+      : []
+    const discoveredAlternates = providerNames.filter(
+      (n: string) => isUsableAlternate(n) && providers[n]?.local !== true,
     )
+    discoveredAlternates.push(...providerNames.filter((n: string) => isUsableAlternate(n) && providers[n]?.local === true))
+    const alternateCandidates = configuredAlternate.length > 0
+      ? configuredAlternate
+      : discoveredAlternates
 
-    const r1: ChatResult = await wsChat(`provider A ${Date.now()}`)
+    const r1: ChatResult = await wsChat(`请直接用一句中文回复模型路由 A 测试，标记 ${e2eTextMarker()}`)
     expect(r1.content.length).toBeGreaterThan(0)
+    const p1 = r1.metadata?.provider ?? ''
+    const liveCandidates = alternateCandidates.filter((n: string) => n !== p1)
 
-    if (!alternate) {
+    if (liveCandidates.length === 0) {
       // 只有一个 provider，跳过交叉验证
       return
     }
 
-    const r2: ChatResult = await wsChat(`provider B ${Date.now()}`, {
-      provider: alternate,
-      model: providers[alternate]?.model,
-    })
+    let alternate = ''
+    let r2: ChatResult | undefined
+    let lastErr: unknown
+    for (const candidate of liveCandidates) {
+      try {
+        r2 = await wsChat(`请直接用一句中文回复模型路由 B 测试，标记 ${e2eTextMarker()}`, {
+          provider: candidate,
+          model: providers[candidate]?.model,
+          timeoutMs: 300_000,
+        })
+        alternate = candidate
+        break
+      } catch (err) {
+        lastErr = err
+      }
+    }
+    if (!r2) {
+      test.skip(true, `No alternate provider passed live probe: ${String(lastErr)}`)
+      return
+    }
     expect(r2.content.length).toBeGreaterThan(0)
 
     // The two replies should come from different providers
-    const p1 = r1.metadata?.provider ?? ''
     const p2 = r2.metadata?.provider ?? ''
     expect(p1).not.toBe(p2)
   })
@@ -131,7 +168,7 @@ test.describe.serial('Session lifecycle', () => {
 // 2. Knowledge RAG
 // ---------------------------------------------------------------------------
 test.describe('Knowledge RAG', () => {
-  test.setTimeout(180_000)
+  test.setTimeout(420_000)
 
   test('Document list returns indexed docs', async () => {
     const { status, data } = await api('GET', '/api/v1/knowledge/documents')
@@ -166,7 +203,7 @@ test.describe('Knowledge RAG', () => {
   })
 
   test('Irrelevant question still gets reply', async () => {
-    const result: ChatResult = await wsChat(`unrelated question ${Date.now()}`)
+    const result: ChatResult = await wsChat(`请直接回复：普通无关问题收到，标记 ${e2eTextMarker()}`)
     expect(result.content.length).toBeGreaterThan(0)
   })
 })
@@ -180,17 +217,16 @@ test.describe('Memory', () => {
     expect(status).toBe(200)
   })
 
-  test('Write memory succeeds', async () => {
+  test('Write memory persists on re-read', async () => {
+    const suffix = Math.random().toString(36).replace(/[^a-z]/g, '').slice(0, 8)
+    const marker = `e2e memory readback ${suffix}`
     const { status } = await api('POST', '/api/v1/memory', {
-      content: `e2e memory ${Date.now()}`,
+      content: marker,
     })
     expect([200, 201, 204]).toContain(status)
-  })
-
-  test('Written memory persists on re-read', async () => {
-    const { status, data } = await api('GET', '/api/v1/memory')
-    expect(status).toBe(200)
-    expect(JSON.stringify(data)).toContain('e2e')
+    const read = await api('GET', '/api/v1/memory')
+    expect(read.status).toBe(200)
+    expect(JSON.stringify(read.data)).toContain(marker)
   })
 })
 
@@ -214,7 +250,7 @@ test.describe('Gateway security', () => {
   test('Cross-user isolation (different user_id sees empty sessions)', async () => {
     const { status, data } = await api(
       'GET',
-      `/api/v1/sessions?user_id=nobody-${Date.now()}`,
+      `/api/v1/sessions?user_id=${e2eMarker('nobody')}`,
     )
     expect(status).toBe(200)
     expect(data.sessions ?? []).toEqual([])

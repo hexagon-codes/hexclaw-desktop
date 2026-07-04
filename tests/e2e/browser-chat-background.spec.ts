@@ -269,11 +269,11 @@ test('browser restores background stream, keeps session state isolated, and supp
   await page.locator('[data-session-id="s-bg"]').click()
   await expect(page.locator('.hc-chat__thread')).toContainText('后台生成完成')
 
-  await page.locator('.hc-sessions__filter-toggle').click()
-  await page.locator('.hc-sessions__filter-input').fill('命中')
+  const sessionSearch = page.locator('.hc-sessions__search-input')
+  await sessionSearch.fill('命中')
   await expect(page.locator('.hc-sessions__snippet')).toContainText('跨会话搜索命中的片段')
 
-  await page.locator('.hc-sessions__filter-toggle').click()
+  await sessionSearch.fill('')
   await page.locator('.hc-sessions__load-more').click()
   await expect(page.locator('[data-session-id="s-more"]')).toContainText('更早的会话')
 })

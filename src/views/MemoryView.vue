@@ -24,6 +24,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import MemorySettingsPanel from '@/components/memory/MemorySettingsPanel.vue'
 
 const { t } = useI18n()
 
@@ -494,6 +495,9 @@ async function handleSearch() {
     </div>
 
     <div data-testid="memory-content" class="flex-1 overflow-y-auto p-6">
+      <!-- BUG-20260703 P2-2：记忆行为设置 + 用户画像暴露面（此前只能手改 yaml/画像埋在列表里） -->
+      <MemorySettingsPanel v-if="supportsStructuredMemory" />
+
       <LoadingState v-if="loading" />
 
       <!-- View: structured entries -->
@@ -675,6 +679,14 @@ async function handleSearch() {
                       }"
                     >
                       {{ t(`memory.type.${entry.type}`, entry.type) }}
+                    </span>
+                    <!-- bug-20260703 漂移三小修#3：卡面展示来源（对齐原型「类型：X · 来源：Y」；来源由入库路径决定，不可编辑） -->
+                    <span
+                      data-testid="memory-source-badge"
+                      class="text-[10px]"
+                      :style="{ color: 'var(--hc-text-muted)' }"
+                    >
+                      {{ t('memory.source', '来源') }}：{{ t(`memory.sourceType.${entry.source}`, entry.source) }}
                     </span>
                     <span
                       v-if="entry.pinned"

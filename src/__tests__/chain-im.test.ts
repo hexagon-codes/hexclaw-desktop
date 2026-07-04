@@ -66,9 +66,21 @@ afterEach(() => {
 // ── Tests ──────────────────────────────────────────────────────────
 
 describe('Chain B: IM Channels -> Backend Sync', () => {
-  it('B1: createIMInstance saves to local store AND syncs to backend (proxyApiRequest POST)', async () => {
-    // proxyApiRequest for sync: POST to /api/v1/platforms/instances
-    mockInvoke.mockResolvedValue('{"message":"ok"}')
+  it('B1: createIMInstance persists to sidecar source of truth', async () => {
+    mockInvoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
+      if (payload.method === 'GET') return JSON.stringify({ instances: [] })
+      if (payload.method === 'POST') {
+        return JSON.stringify({
+          id: 'feishu-1',
+          provider: 'feishu',
+          name: 'My Feishu Bot',
+          enabled: true,
+          config: { app_id: 'cli_xxx', app_secret: 'secret123' },
+          created_at: '2026-06-29T00:00:00Z',
+        })
+      }
+      return JSON.stringify({})
+    })
 
     const { createIMInstance } = await import('@/api/im-channels')
 
@@ -82,9 +94,8 @@ describe('Chain B: IM Channels -> Backend Sync', () => {
     expect(instance.name).toBe('My Feishu Bot')
     expect(instance.type).toBe('feishu')
     expect(instance.enabled).toBe(true)
-    expect(instance.id).toBeDefined()
+    expect(instance.id).toBe('feishu-1')
 
-    // Verify backend sync was called via invoke('proxy_api_request')
     expect(mockInvoke).toHaveBeenCalledWith('proxy_api_request', expect.objectContaining({
       method: 'POST',
       path: '/api/v1/platforms/instances',
@@ -95,61 +106,57 @@ describe('Chain B: IM Channels -> Backend Sync', () => {
       (c) => c[0] === 'proxy_api_request' && JSON.parse(c[1]?.body || '{}').provider === 'feishu',
     )
     expect(syncCall).toBeDefined()
+    expect(mockLoad).not.toHaveBeenCalled()
   })
 
-  it('B2: updateIMInstance syncs changes to backend', async () => {
-    mockInvoke.mockResolvedValue('{"message":"ok"}')
+  it('B2: updateIMInstance uses stable by-id sidecar endpoint', async () => {
+    mockInvoke.mockImplementation(async (_cmd: string, payload: Record<string, string | null>) => {
+      if (payload.method === 'GET') {
+        return JSON.stringify({
+          instances: [{
+            id: 'ding-1',
+            provider: 'dingtalk',
+            name: 'DingTalk Bot',
+            enabled: false,
+            config: { app_key: 'key1', app_secret: 'sec1', robot_code: 'robot1' },
+          }],
+        })
+      }
+      if (payload.method === 'PUT') {
+        return JSON.stringify({
+          id: 'ding-1',
+          provider: 'dingtalk',
+          name: 'DingTalk Bot',
+          enabled: true,
+          config: { app_key: 'key1', app_secret: 'sec1', robot_code: 'robot1' },
+        })
+      }
+      return JSON.stringify({})
+    })
 
-    const { createIMInstance, updateIMInstance } = await import('@/api/im-channels')
-
-    const instance = await createIMInstance(
-      'DingTalk Bot',
-      'dingtalk',
-      { app_key: 'key1', app_secret: 'sec1', robot_code: 'robot1' },
-      false,
-    )
-
-    vi.clearAllMocks()
-    mockInvoke.mockResolvedValue('{"message":"ok"}')
-
-    const result = await updateIMInstance(instance.id, { enabled: true })
+    const { updateIMInstance } = await import('@/api/im-channels')
+    const result = await updateIMInstance('ding-1', { enabled: true })
 
     expect(result).toBe(true)
-    // Should have called proxy_api_request for sync
     expect(mockInvoke).toHaveBeenCalledWith('proxy_api_request', expect.objectContaining({
-      method: 'POST',
-      path: '/api/v1/platforms/instances',
+      method: 'PUT',
+      path: '/api/v1/platforms/instances/by-id/ding-1',
     }))
   })
 
-  it('B3: deleteIMInstance calls backend DELETE then removes from local store', async () => {
+  it('B3: deleteIMInstance calls sidecar DELETE by stable id', async () => {
     mockInvoke.mockResolvedValue('{"message":"ok"}')
 
-    const { createIMInstance, deleteIMInstance, getIMInstances } = await import('@/api/im-channels')
-
-    const instance = await createIMInstance(
-      'Discord Bot',
-      'discord',
-      { token: 'bot-token-123' },
-      true,
-    )
-
-    vi.clearAllMocks()
-    mockInvoke.mockResolvedValue('{"message":"ok"}')
-
-    const result = await deleteIMInstance(instance.id)
+    const { deleteIMInstance } = await import('@/api/im-channels')
+    const result = await deleteIMInstance('discord-1')
 
     expect(result).toBe(true)
 
-    // Verify backend DELETE was called with the instance name
     expect(mockInvoke).toHaveBeenCalledWith('proxy_api_request', expect.objectContaining({
       method: 'DELETE',
-      path: `/api/v1/platforms/instances/${encodeURIComponent('Discord Bot')}`,
+      path: '/api/v1/platforms/instances/by-id/discord-1',
     }))
-
-    // After delete, instance should not be in local store
-    const instances = await getIMInstances()
-    expect(instances.find((i) => i.id === instance.id)).toBeUndefined()
+    expect(mockLoad).not.toHaveBeenCalled()
   })
 
   it('B4: testIMInstance calls correct test endpoint per platform', async () => {
@@ -243,22 +250,17 @@ describe('Chain B: IM Channels -> Backend Sync', () => {
     expect(missingAll).not.toContain('消息加密密钥（选填）')
   })
 
-  it('B8: ensureIMInstancesSyncedToBackend deduplicates concurrent calls', async () => {
+  it('B8: probeIMChannelsBackend probes sidecar only and never opens local Store', async () => {
     mockInvoke.mockResolvedValue('{"instances":[]}')
 
-    const { ensureIMInstancesSyncedToBackend } = await import('@/api/im-channels')
+    const { probeIMChannelsBackend } = await import('@/api/im-channels')
 
-    // Call twice concurrently - should only trigger one sync
-    const p1 = ensureIMInstancesSyncedToBackend()
-    const p2 = ensureIMInstancesSyncedToBackend()
+    await probeIMChannelsBackend()
 
-    await Promise.all([p1, p2])
-
-    // The GET /api/v1/platforms/instances (list backend instances) should have been called
-    // only once due to dedup
     const listCalls = mockInvoke.mock.calls.filter(
       (c) => c[0] === 'proxy_api_request' && c[1]?.method === 'GET' && c[1]?.path === '/api/v1/platforms/instances',
     )
     expect(listCalls.length).toBe(1)
+    expect(mockLoad).not.toHaveBeenCalled()
   })
 })

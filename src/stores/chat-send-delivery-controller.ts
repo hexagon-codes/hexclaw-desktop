@@ -81,6 +81,9 @@ export function createChatSendDeliveryController(params: {
       maxTokens: chatParams.value.maxTokens,
       agentMode,
       userLocale,
+      // BUG-20260703：桌面聊天恒发锁定信号——收件人是显式契约，
+      // 空 agentRole = 用户在跟默认助理对话，后端不得按内容改派。
+      pinnedAgent: agentRole.value,
     })
   }
 

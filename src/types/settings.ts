@@ -265,7 +265,7 @@ export interface BackendRuntimeConfig {
   webhook: { enabled: boolean }
   canvas: { enabled: boolean }
   voice: { enabled: boolean }
-  sandbox: { network_enabled: boolean }
+  sandbox: { network_enabled: boolean; allowed_paths?: string[] }
   security: {
     gateway_enabled: boolean
     injection_detection: boolean

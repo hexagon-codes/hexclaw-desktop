@@ -86,10 +86,26 @@ async function reclaimOrphanChannelAgents() {
   }
 }
 
-function getBoundAgent(): AgentConfig | undefined {
-  const rule = routingRules.value.find(
-    (r) => r.platform === props.instance.type && !r.user_id && !r.chat_id,
+/**
+ * 绑定粒度=instance 级（BUG-20260703 D1）：本实例的 instance 级规则优先，遗留
+ * platform 级规则（instance_id=''，旧版恒写空串）兜底显示/生效——运行时 router 对
+ * instance 级匹配得分（35）也高于 platform 级（10），两端解析顺序一致。
+ */
+function instanceScopedRule(): AgentRule | undefined {
+  return routingRules.value.find(
+    (r) => r.platform === props.instance.type && r.instance_id === props.instance.name
+      && !r.user_id && !r.chat_id,
   )
+}
+
+function legacyPlatformRule(): AgentRule | undefined {
+  return routingRules.value.find(
+    (r) => r.platform === props.instance.type && !r.instance_id && !r.user_id && !r.chat_id,
+  )
+}
+
+function getBoundAgent(): AgentConfig | undefined {
+  const rule = instanceScopedRule() ?? legacyPlatformRule()
   if (!rule) return undefined
   return agentsList.value.find((a) => a.name === rule.agent_name)
 }
@@ -111,18 +127,31 @@ function effectiveModelSourceLabel(): string {
   if (eff.source === 'agent') return t('imChannels.modelSourceAgent', { name: eff.agentLabel ?? '' })
   // 绑了命名 Agent 但它没钉模型 → 保留 Agent 关联 + 明示跟随全局（不裸显「全局默认」）。
   if (eff.agentLabel) return `${eff.agentLabel} · ${t('imChannels.followGlobal', '跟随全局默认')}`
-  return t('imChannels.modelSourceGlobal', '全局默认')
+  // BUG-20260704 默认助理接待同理保留接待者身份（原型 app.html:1620「小蟹 · 跟随全局默认」）。
+  return `${t('chat.botName', '小蟹')} · ${t('imChannels.followGlobal', '跟随全局默认')}`
 }
 
-/** 切实例平台级路由规则到 agentName（空=解绑回默认助理）。先增后删，避免无规则空窗 + 回收旧匿名 Agent。 */
+/**
+ * 切本实例的 instance 级路由规则到 agentName（空=解绑回默认助理）。先增后删避免无规则
+ * 空窗；旧的 instance 级规则与遗留 platform 级规则一并清（重选即完成 platform→instance
+ * 迁移）+ 回收旧匿名 Agent。
+ *
+ * BUG-20260703 D2：目标已是本实例的 instance 级绑定且无遗留可迁移 → 无操作短路。
+ * 此前先 addRule（upsert 命中同一行，id 不变）再 deleteRule(existing.id)，等于把刚写的
+ * 绑定自己删掉——重选已绑 Agent 反而解绑。
+ */
 async function applyInstanceRule(agentName: string) {
-  const existing = routingRules.value.find(
-    (r) => r.platform === props.instance.type && !r.user_id && !r.chat_id,
-  )
+  const scoped = instanceScopedRule()
+  const legacy = legacyPlatformRule()
+  if (agentName && scoped?.agent_name === agentName && !legacy) return
+  if (!agentName && !scoped && !legacy) return
   if (agentName) {
-    await addRule({ platform: props.instance.type, agent_name: agentName, instance_id: '', user_id: '', chat_id: '', priority: 0 })
+    await addRule({ platform: props.instance.type, agent_name: agentName, instance_id: props.instance.name, user_id: '', chat_id: '', priority: 0 })
   }
-  if (existing) {
+  for (const existing of [scoped, legacy]) {
+    if (!existing) continue
+    // upsert 与新绑定同一行（platform+instance_id+agent 相同唯一键）→ 跳过，防自抵消。
+    if (agentName && existing.instance_id === props.instance.name && existing.agent_name === agentName) continue
     await deleteRule(existing.id)
     // 切走后旧的匿名「频道默认」Agent（历史遗留）不再被任何规则引用 → 注销，免堆积孤儿。
     if (isChannelDefaultAgent(existing.agent_name) && existing.agent_name !== agentName) {

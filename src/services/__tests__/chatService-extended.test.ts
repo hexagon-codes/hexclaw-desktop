@@ -100,19 +100,19 @@ describe('sendViaWebSocket — extended', () => {
 
   // ─── first-reply timeout ───────────────────────────────
 
-  it('rejects with "no response received" when no chunk or reply arrives within 120s', async () => {
+  it('rejects with "no response received" when no chunk or reply arrives within 300s', async () => {
     const cbs = makeCallbacks()
     const p = sendViaWebSocket('hello', 's1', defaultParams, '', undefined, cbs)
 
-    // Advance past the 120s first-reply timeout
-    vi.advanceTimersByTime(120_001)
+    // Advance past the 300s first-reply timeout
+    vi.advanceTimersByTime(300_001)
 
     await expect(p).rejects.toThrow('no response received')
   })
 
   // ─── inactivity timeout ────────────────────────────────
 
-  it('rejects with "no new content received" when chunks stop arriving for 120s', async () => {
+  it('rejects with "no new content received" when chunks stop arriving for 300s', async () => {
     const cbs = makeCallbacks()
     const p = sendViaWebSocket('hello', 's1', defaultParams, '', undefined, cbs)
 
@@ -120,7 +120,7 @@ describe('sendViaWebSocket — extended', () => {
     onChunkHandlers[0]!({ content: 'partial', done: false })
 
     // Advance past inactivity timeout
-    vi.advanceTimersByTime(120_001)
+    vi.advanceTimersByTime(300_001)
 
     await expect(p).rejects.toThrow('no new content received')
   })
@@ -137,7 +137,7 @@ describe('sendViaWebSocket — extended', () => {
 
     await expect(p).resolves.toBeUndefined()
     expect(cbs.onChunk).toHaveBeenCalledWith('final', undefined)
-    expect(cbs.onDone).toHaveBeenCalledWith('', metadata, toolCalls, 'coder')
+    expect(cbs.onDone).toHaveBeenCalledWith('final', metadata, toolCalls, 'coder')
   })
 
   // ─── user cancel ───────────────────────────────────────

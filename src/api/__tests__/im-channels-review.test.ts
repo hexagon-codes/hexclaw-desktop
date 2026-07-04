@@ -12,12 +12,12 @@ describe('im-channels.ts — 动态导入 Tauri API（修复后）', () => {
     expect(raw).not.toContain("import { load } from '@tauri-apps/plugin-store'")
   })
 
-  it('im-channels.ts 使用动态导入方式（与代码库惯例一致）', async () => {
+  it('im-channels.ts 仅动态导入 Tauri core，不再导入 plugin-store', async () => {
     const sourceCode = await import('../im-channels?raw')
     const raw = typeof sourceCode === 'string' ? sourceCode : sourceCode.default
 
-    expect(raw).toContain("await import('@tauri-apps/plugin-store')")
     expect(raw).toContain("await import('@tauri-apps/api/core')")
+    expect(raw).not.toContain("@tauri-apps/plugin-store")
   })
 
   it('im-channels.ts 不再内嵌平台元数据与文案配置', async () => {

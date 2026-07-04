@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { getRoles, getAgents } from '@/api/agents'
 import { trySafe } from '@/utils/errors'
@@ -40,10 +40,22 @@ export const useAgentsStore = defineStore('agents', () => {
     return registeredAgents.value.find((a) => a.name === name)
   }
 
+  /** @ 召唤面板的 Agent 数据源（BUG-20260703 问题2）：与「我的智能体」同源——
+   * registeredAgents（已经 userVisibleAgents 过滤）映射为 MentionPopup 形状。
+   * 此前误用内置角色工厂 roles，把用户根本没有的模板 Agent 全列进 @ 面板。 */
+  const mentionableAgents = computed(() =>
+    registeredAgents.value.map((a) => ({
+      name: a.name,
+      title: a.display_name || a.name,
+      goal: a.description || '',
+    })),
+  )
+
   return {
     roles,
     registeredAgents,
     defaultAgentName,
+    mentionableAgents,
     loading,
     error,
     loadRoles,

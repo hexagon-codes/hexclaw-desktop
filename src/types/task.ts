@@ -66,4 +66,9 @@ export interface CronJobInput {
    * 目标完成 / 连续无进展 / 达上限自动收工。强制 agent 模式（每 tick 需推理"下一个增量"）。
    */
   continuous?: boolean
+  /**
+   * 初始暂停态创建：权限预检命中「需审批」且用户选择任务级授权时，先以暂停态冻结任务意图
+   * （入库不入调度），授权写入后 resume 启用——避免「创建即跑」把未授权动作跑进拦截。
+   */
+  paused?: boolean
 }

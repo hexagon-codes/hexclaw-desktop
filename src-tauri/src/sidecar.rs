@@ -313,17 +313,61 @@ fn parse_scutil_proxy(output: &str) -> Vec<(String, String)> {
 
 /// 停止 sidecar 进程
 ///
-/// 向 sidecar 进程发送 kill 信号并等待退出。
+/// 优雅退出（BUG-20260703）：先发 TERM 让后端跑完 graceful shutdown
+/// （hexclaw 侧 signal.NotifyContext(SIGTERM) → http.Server.Shutdown →
+/// WS StatusGoingAway → 在飞回复落库），3 秒未退再升级 KILL 兜底——
+/// 与 ensure_port_available 清理残留进程的 terminate_process 同一语义。
+/// 此前直接 child.kill()（Unix 上是不可捕获的 SIGKILL），后端整套
+/// 优雅停机在正常退出路径上从未被触发。
 /// 应在应用退出时调用，确保子进程不会变成孤儿进程。
 pub fn stop_sidecar() {
     if let Ok(mut guard) = SIDECAR_PROCESS.lock() {
-        if let Some(mut child) = guard.take() {
+        if let Some(child) = guard.take() {
             log::info!("正在停止 sidecar...");
-            let _ = child.kill();
-            let _ = child.wait();
-            log::info!("sidecar 已停止");
+            let graceful = stop_child_gracefully(child, Duration::from_secs(3));
+            log::info!(
+                "sidecar 已停止（{}）",
+                if graceful { "优雅退出" } else { "KILL 兜底" }
+            );
         }
     }
+}
+
+/// TERM → 限时等待 → KILL 的子进程停止序列。返回是否在优雅窗口内退出。
+///
+/// 用 child.try_wait() 轮询而非按 pid 探活：直接收尸（无僵尸残留）且免疫
+/// pid 复用竞态。TERM 发送失败（进程已死等）时跳过等待直接走 KILL 收尸。
+#[cfg(unix)]
+fn stop_child_gracefully(mut child: Child, term_timeout: Duration) -> bool {
+    let pid = child.id();
+    if send_unix_signal(pid, "-TERM").is_ok() {
+        let deadline = std::time::Instant::now() + term_timeout;
+        while std::time::Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+                Err(_) => break,
+            }
+        }
+        log::warn!(
+            "sidecar PID {} 未在 TERM 后 {:?} 内退出，升级为 KILL。",
+            pid,
+            term_timeout
+        );
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    false
+}
+
+/// Windows 无 SIGTERM 等价物：sidecar 以无控制台方式运行，CTRL_BREAK 不可达，
+/// 维持 TerminateProcess 强杀（数据安全由后端 SQLite WAL 兜底，不会损坏库）。
+/// 若后续需要 Windows 优雅退出，应走后端本地回环 shutdown 端点，属跨仓变更。
+#[cfg(not(unix))]
+fn stop_child_gracefully(mut child: Child, _term_timeout: Duration) -> bool {
+    let _ = child.kill();
+    let _ = child.wait();
+    false
 }
 
 fn ensure_port_available(port: u16) -> Result<(), String> {
@@ -1069,5 +1113,73 @@ mod tests {
         // Enable=0 但仍残留 HTTPProxy/Port（系统常见）→ 不应注入。
         let out = "  HTTPEnable : 0\n  HTTPPort : 7890\n  HTTPProxy : 127.0.0.1\n";
         assert!(parse_scutil_proxy(out).is_empty());
+    }
+}
+
+/// stop_child_gracefully 语义锁（BUG-20260703 优雅退出）：
+/// TERM 响应型子进程必须在优雅窗口内退出（不升级 KILL）；
+/// 忽略 TERM 的子进程必须被 KILL 兜底且不拖满等待。
+/// 旧实现（直接 child.kill() = SIGKILL）在第一条上必然 false，构成 RED 判别。
+#[cfg(all(test, unix))]
+mod stop_gracefully_tests {
+    use super::{process_exists, stop_child_gracefully};
+    use std::path::PathBuf;
+    use std::process::{Child, Command};
+    use std::time::{Duration, Instant};
+
+    /// 启动测试子进程：先装 trap，再落标记文件宣告就绪，最后执行 body。
+    /// 若不同步就绪，TERM 可能赶在 trap 生效前送达——子进程按默认处置退出，
+    /// 被误判「优雅」（并发全量跑时曾真实复现）。
+    fn spawn_trapped_child(name: &str, trap_cmd: &str, body: &str) -> Child {
+        let marker: PathBuf = std::env::temp_dir().join(format!(
+            "hexclaw-stop-test-{}-{}",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let script = format!("{}; : > '{}'; {}", trap_cmd, marker.display(), body);
+        let child = Command::new("sh")
+            .args(["-c", &script])
+            .spawn()
+            .expect("spawn test child");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !marker.exists() {
+            assert!(Instant::now() < deadline, "测试子进程未在 5s 内就绪");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_file(&marker);
+        child
+    }
+
+    #[test]
+    fn term_compliant_child_exits_gracefully_without_kill() {
+        // 模拟能优雅退出的 sidecar：TERM 中断 wait → trap 触发 → exit 0。
+        // （POSIX sh 的 trap 在前台命令结束前不执行，故用 `sleep & wait` 让信号可中断。）
+        let child = spawn_trapped_child("compliant", "trap 'exit 0' TERM", "sleep 30 & wait $!");
+        let start = Instant::now();
+        let graceful = stop_child_gracefully(child, Duration::from_secs(3));
+        assert!(graceful, "TERM 响应型子进程应在优雅窗口内退出，不应升级 KILL");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "优雅退出不应耗满超时窗口"
+        );
+    }
+
+    #[test]
+    fn term_ignoring_child_is_killed_after_timeout() {
+        // 模拟卡死的 sidecar：忽略 TERM → 必须升级 KILL 兜底，且不等 sleep 自然结束。
+        let child = spawn_trapped_child("ignoring", "trap '' TERM", "sleep 30");
+        let pid = child.id();
+        let start = Instant::now();
+        let graceful = stop_child_gracefully(child, Duration::from_millis(500));
+        assert!(!graceful, "忽略 TERM 的子进程应报告非优雅退出");
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "KILL 兜底不应拖到 sleep 自然结束"
+        );
+        assert!(
+            !process_exists(pid).unwrap_or(true),
+            "升级 KILL 后进程必须已消失"
+        );
     }
 }

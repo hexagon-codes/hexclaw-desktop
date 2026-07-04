@@ -89,3 +89,52 @@ describe('chat automation parser', () => {
     })
   })
 })
+
+describe('BUG-20260703 GAP-5: 会话建任务生成的 cron 必须语法合法（分钟不越界）', () => {
+  // scheduleFromPhrase 的 daily/weekly 分支调 toCronSchedule 后不过 isPlausibleCron，
+  // "每天8点70分" → minute=70 → "70 8 * * *"（cron 分钟合法域 0-59，语法非法）逃到后端才报错。
+  // 契约：会话确定性 fast-path 产出的 schedule 绝不能是语法非法的 cron——非法时间应让路
+  //（不产 create_task 卡片），落 LLM 主路径澄清，而非把烂表达式塞给后端。
+  function cronMinuteValid(schedule: string): boolean {
+    const m = Number(schedule.trim().split(/\s+/)[0])
+    return Number.isInteger(m) && m >= 0 && m <= 59
+  }
+
+  it('每天8点70分（非法分钟）→ 不产出语法非法的 create_task schedule', () => {
+    const actions = buildConversationAutomationActions({
+      userText: '增加一个采集科技新闻的任务，每天8点70分执行一次，写进知识库',
+      assistantContent: '好的',
+      sourceMessageId: 'user-gap5',
+    })
+    const action = findAction(actions, 'create_task')
+    // action 为空（让路 LLM）也可接受——只要不产非法 schedule；
+    // 无条件断言写法以满足 vitest/no-conditional-expect。
+    expect(
+      action == null || cronMinuteValid(action.payload.schedule),
+      `GAP-5: 会话 fast-path 产出语法非法 cron: ${action?.payload.schedule}`,
+    ).toBe(true)
+  })
+
+  it('每天8点66分（非法分钟）同样不得产出非法 cron', () => {
+    const actions = buildConversationAutomationActions({
+      userText: '增加一个采集新闻的任务，每天8点66分执行一次',
+      assistantContent: '好的',
+      sourceMessageId: 'user-gap5c',
+    })
+    const action = findAction(actions, 'create_task')
+    expect(
+      action == null || cronMinuteValid(action.payload.schedule),
+      `GAP-5: ${action?.payload.schedule}`,
+    ).toBe(true)
+  })
+
+  it('每天9点30分（合法）→ 正常产出 30 9 * * *', () => {
+    const actions = buildConversationAutomationActions({
+      userText: '增加一个采集科技新闻的任务，每天9点30分执行一次，写进知识库',
+      assistantContent: '好的',
+      sourceMessageId: 'user-gap5b',
+    })
+    const action = findAction(actions, 'create_task')
+    expect(action?.payload.schedule).toBe('30 9 * * *')
+  })
+})

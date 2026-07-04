@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 
 // Tauri 开发时需要的配置
 const host = process.env.TAURI_DEV_HOST
+const sidecarProxyTarget = process.env.HEX_E2E_SIDECAR_URL || 'http://127.0.0.1:16060'
 
 export default defineConfig({
   plugins: [vue(), tailwindcss()],
@@ -43,7 +44,7 @@ export default defineConfig({
     hmr: host ? { protocol: 'ws', host, port: 5174 } : undefined,
     proxy: {
       '/_hexclaw': {
-        target: 'http://127.0.0.1:16060',
+        target: sidecarProxyTarget,
         changeOrigin: true,
         ws: true,
         rewrite: (path) => path.replace(/^\/_hexclaw/, ''),

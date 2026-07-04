@@ -2,12 +2,13 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime } from '@/utils/time'
-import { Trash2, Copy, Pencil, Pin, PinOff, Search } from 'lucide-vue-next'
+import { Trash2, Copy, Pencil, Pin, PinOff, Search, GitBranch } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
-import { listSessions, searchMessages, updateSessionTitle as apiUpdateSessionTitle, type SessionMessageSearchResult } from '@/api/chat'
+import { listSessions, searchMessages, getSessionBranches, updateSessionTitle as apiUpdateSessionTitle, type SessionMessageSearchResult } from '@/api/chat'
 import { setClipboard } from '@/api/desktop'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import type { ChatSession } from '@/types'
 
 const { t } = useI18n()
@@ -65,6 +66,7 @@ const sessionMenuItems = computed<ContextMenuItem[]>(() => {
     { id: 'pin', label: isPinned ? t('chat.unpin') : t('chat.pin'), icon: isPinned ? PinOff : Pin },
     { id: 'rename', label: t('chat.rename'), icon: Pencil },
     { id: 'copy_title', label: t('chat.copyTitle'), icon: Copy },
+    { id: 'branches', label: t('chat.viewBranches', '查看分支'), icon: GitBranch },
     { id: 'sep1', label: '', separator: true },
     { id: 'delete', label: t('chat.deleteSession'), icon: Trash2, danger: true, shortcut: '⌫' },
   ]
@@ -205,7 +207,56 @@ function selectSession(sessionId: string) {
   chatStore.selectSession(sessionId)
 }
 
-async function deleteSession(sessionId: string) {
+// 分支查看器（BUG-20260703 收尾）：fork 落地后「从父会话找回分支」的消费面——
+// 右键「查看分支」→ getSessionBranches → 弹层列分支 → 点击切换。
+const branchesFor = ref<string | null>(null)
+const branchesList = ref<ChatSession[]>([])
+const branchesLoading = ref(false)
+const branchesError = ref(false)
+
+async function openBranches(sessionId: string) {
+  branchesFor.value = sessionId
+  branchesLoading.value = true
+  branchesError.value = false
+  branchesList.value = []
+  try {
+    const res = await getSessionBranches(sessionId)
+    branchesList.value = res.branches ?? []
+  } catch (e) {
+    branchesError.value = true
+    console.error('[SessionList] load branches failed:', e)
+  } finally {
+    branchesLoading.value = false
+  }
+}
+
+function selectBranch(branchId: string) {
+  branchesFor.value = null
+  chatStore.selectSession(branchId)
+}
+
+// BUG-20260703 P2-5：删除必须过二次确认（此前删除按钮/右键/⌫ 直删，误触即丢整段
+// 对话历史）。三个入口统一走 deleteSession → 确认弹层 → performDeleteSession。
+const confirmDeleteId = ref<string | null>(null)
+const confirmDeleteTitle = computed(() => {
+  const sid = confirmDeleteId.value
+  if (!sid) return ''
+  const session = chatStore.sessions.find(s => s.id === sid) ?? mergedSessions.value.find(s => s.id === sid)
+  return session?.title || t('chat.newSessionDefault')
+})
+
+function deleteSession(sessionId: string) {
+  if (deletingSessionIds.value.has(sessionId)) return
+  confirmDeleteId.value = sessionId
+}
+
+async function confirmDeleteSession() {
+  const sid = confirmDeleteId.value
+  confirmDeleteId.value = null
+  if (sid) await performDeleteSession(sid)
+}
+
+async function performDeleteSession(sessionId: string) {
   if (deletingSessionIds.value.has(sessionId)) return
   const nextDeleting = new Set(deletingSessionIds.value)
   nextDeleting.add(sessionId)
@@ -289,6 +340,9 @@ async function handleCtxAction(action: string) {
     case 'delete':
       await deleteSession(sid)
       break
+    case 'branches':
+      await openBranches(sid)
+      break
     case 'rename':
       startRename(sid)
       break
@@ -318,6 +372,9 @@ async function loadMoreSessions() {
     const loaded = (result.sessions || []).map((session) => ({
       id: session.id,
       title: session.title || t('chat.newSessionDefault'),
+      // BUG-20260703：分支徽标依赖 parent_session_id，映射丢字段会让分页加载的
+      // 分支会话（P2-1 fork）在完整列表里不可辨识。
+      parent_session_id: session.parent_session_id,
       created_at: session.created_at,
       updated_at: session.updated_at,
       message_count: session.message_count ?? 0,
@@ -440,6 +497,14 @@ onUnmounted(() => {
                 @click.stop
               />
               <div v-else class="hc-sessions__title-row">
+                <!-- BUG-20260703 P2-1：分支会话可辨识（由「由此分叉」创建） -->
+                <GitBranch
+                  v-if="item.session.parent_session_id"
+                  :size="11"
+                  class="hc-sessions__branch-badge"
+                  :title="t('chat.branchSession', '分支会话')"
+                  aria-hidden="true"
+                />
                 <div class="hc-sessions__title">{{ item.session.title || t('chat.newSessionDefault') }}</div>
                 <span
                   v-if="isSessionAwaitingApproval(item.session.id)"
@@ -498,6 +563,14 @@ onUnmounted(() => {
               @click.stop
             />
             <div v-else class="hc-sessions__title-row">
+              <!-- BUG-20260703 P2-1：分支会话可辨识（由「由此分叉」创建） -->
+              <GitBranch
+                v-if="session.parent_session_id"
+                :size="11"
+                class="hc-sessions__branch-badge"
+                :title="t('chat.branchSession', '分支会话')"
+                aria-hidden="true"
+              />
               <div class="hc-sessions__title">{{ session.title || t('chat.newSessionDefault') }}</div>
               <span
                 v-if="isSessionAwaitingApproval(session.id)"
@@ -536,6 +609,54 @@ onUnmounted(() => {
     </button>
 
     <ContextMenu ref="ctxMenu" :items="sessionMenuItems" @select="handleCtxAction" />
+
+    <!-- 分支查看器：右键「查看分支」弹层，点分支即切换（getSessionBranches 消费面） -->
+    <Teleport to="body">
+      <div
+        v-if="branchesFor"
+        class="hc-branches__overlay"
+        data-testid="branches-dialog"
+        @click.self="branchesFor = null"
+      >
+        <div class="hc-branches__panel" role="dialog" :aria-label="t('chat.branchesTitle', '会话分支')">
+          <div class="hc-branches__head">
+            <GitBranch :size="14" />
+            <b>{{ t('chat.branchesTitle', '会话分支') }}</b>
+            <button class="hc-branches__close" :aria-label="t('common.close')" @click="branchesFor = null">✕</button>
+          </div>
+          <div v-if="branchesLoading" class="hc-branches__muted">{{ t('common.loading') }}</div>
+          <div v-else-if="branchesError" class="hc-branches__muted">{{ t('chat.branchesLoadFailed', '分支加载失败') }}</div>
+          <div v-else-if="branchesList.length === 0" class="hc-branches__muted" data-testid="branches-empty">
+            {{ t('chat.noBranches', '此会话还没有分支——在任意回复上点「由此分叉」即可创建') }}
+          </div>
+          <div v-else class="hc-branches__list">
+            <button
+              v-for="b in branchesList"
+              :key="b.id"
+              class="hc-branches__item"
+              :data-testid="`branch-item-${b.id}`"
+              @click="selectBranch(b.id)"
+            >
+              <GitBranch :size="11" class="hc-branches__item-icon" />
+              <span class="hc-branches__item-title">{{ b.title || t('chat.newSessionDefault') }}</span>
+              <span class="hc-branches__item-time">{{ formatDate(b.updated_at) }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- BUG-20260703 P2-5：删除会话二次确认（后端为软删，但 UI 无恢复入口=用户视角不可逆） -->
+    <ConfirmDialog
+      :open="!!confirmDeleteId"
+      :title="t('chat.deleteSessionConfirmTitle', '删除会话？')"
+      :message="t('chat.deleteSessionConfirmMessage', { title: confirmDeleteTitle })"
+      :confirm-text="t('agents.delete', '删除')"
+      :cancel-text="t('common.cancel', '取消')"
+      danger
+      @confirm="confirmDeleteSession"
+      @cancel="confirmDeleteId = null"
+    />
   </div>
 </template>
 
@@ -657,6 +778,49 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* 分支会话徽标（BUG-20260703 P2-1 fork）：小巧、随主题、不与生成中 spinner 抢位 */
+.hc-sessions__branch-badge {
+  flex: 0 0 auto;
+  color: var(--hc-text-muted);
+  opacity: 0.75;
+}
+
+/* ─── 分支查看器弹层 ─── */
+.hc-branches__overlay {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(2px);
+}
+.hc-branches__panel {
+  width: min(360px, 90vw); max-height: 60vh; overflow: auto;
+  border-radius: 14px; padding: 14px;
+  background: var(--hc-bg-elevated); border: 1px solid var(--hc-border);
+  box-shadow: var(--hc-shadow-lg, 0 12px 32px rgba(0,0,0,.22));
+}
+.hc-branches__head {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 10px;
+  color: var(--hc-text-primary); font-size: 13px;
+}
+.hc-branches__close {
+  margin-inline-start: auto; border: none; background: transparent; cursor: pointer;
+  color: var(--hc-text-muted); font-size: 13px; padding: 2px 6px; border-radius: 6px;
+}
+.hc-branches__close:hover { color: var(--hc-text-primary); background: var(--hc-bg-hover, rgba(127,127,127,.1)); }
+.hc-branches__muted { font-size: 12.5px; line-height: 1.6; color: var(--hc-text-muted); padding: 6px 2px; }
+.hc-branches__list { display: flex; flex-direction: column; gap: 4px; }
+.hc-branches__item {
+  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;
+  padding: 8px 10px; border: none; border-radius: 9px; background: transparent;
+  cursor: pointer; text-align: start;
+}
+.hc-branches__item:hover { background: var(--hc-bg-hover, rgba(127,127,127,.1)); }
+.hc-branches__item-icon { flex: 0 0 auto; color: var(--hc-text-muted); }
+.hc-branches__item-title {
+  flex: 1; min-width: 0; font-size: 13px; color: var(--hc-text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.hc-branches__item-time { flex: 0 0 auto; font-size: 11px; color: var(--hc-text-muted); }
 
 .hc-sessions__approval-dot {
   width: 7px;

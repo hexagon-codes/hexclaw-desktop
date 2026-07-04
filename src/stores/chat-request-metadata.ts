@@ -11,8 +11,17 @@ export function buildChatRequestMetadata(params: {
   agentMode?: string
   /** v0.4.0 9.5：用户当前桌面端语言；后端按此调整 system prompt 输出语言偏好 */
   userLocale?: string
+  /**
+   * 显式锁定的收件 Agent（BUG-20260703 抢答）：桌面聊天恒传——命名 Agent 用其名、
+   * 默认助理传空串（归一为 'default'）。undefined = 调用方非聊天路径，不透传，
+   * 后端内容路由保持现状。
+   */
+  pinnedAgent?: string
 }): Record<string, string> | undefined {
   const metadata: Record<string, string> = {}
+  if (params.pinnedAgent !== undefined) {
+    metadata.pinned_agent = params.pinnedAgent.trim() || 'default'
+  }
   if (params.thinkingEnabled) metadata.thinking = 'on'
   if (!params.memoryEnabled) metadata.memory = 'off'
   if (params.imageGeneration) metadata.image_generation = 'true'

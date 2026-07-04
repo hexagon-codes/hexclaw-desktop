@@ -52,6 +52,8 @@ export interface CronJobUnifiedRequest {
     chat_id?: string
     /** 持续型任务 + 跨 tick 检查点（强制 agent 模式）。 */
     continuous?: boolean
+    /** 初始暂停态：审批未决时先冻结任务意图，授权后 resume（对齐后端 CronJobDraft.paused）。 */
+    paused?: boolean
   }
   job_id?: string
   include_paused?: boolean
@@ -74,13 +76,26 @@ export function cronjobAction(req: CronJobUnifiedRequest): Promise<CronJobUnifie
 }
 
 /** D2.1 Layer 2 LLM 解析端点。 */
+/** 与后端 CronJobDraft 对齐（api/handler_cron_parse.go）。FS-9：此前只声明 4 字段，
+ *  漏了 script/runtime/no_agent/chat_id/enabled_toolsets/timeout_s/continuous/paused，
+ *  一旦有视图消费 draft 会丢字段。 */
+export interface CronJobDraft {
+  name: string
+  schedule: string
+  prompt: string
+  script?: string
+  runtime?: string
+  no_agent?: boolean
+  deliver?: string[]
+  chat_id?: string
+  enabled_toolsets?: string[]
+  timeout_s?: number
+  continuous?: boolean
+  paused?: boolean
+}
+
 export interface CronParseResponse {
-  draft?: {
-    name: string
-    schedule: string
-    prompt: string
-    deliver?: string[]
-  }
+  draft?: CronJobDraft
   needs_clarification?: boolean
   suggestion?: string
   tier: number
@@ -154,6 +169,7 @@ export async function createCronJobSSE(
     ...(input.deliver && input.deliver.length ? { deliver: input.deliver } : {}),
     ...(input.chat_id ? { chat_id: input.chat_id } : {}),
     ...(input.continuous ? { continuous: true } : {}),
+    ...(input.paused ? { paused: true } : {}),
   })
 
   // BUG-A 超时兜底：组合内部 timeout + 外部 signal 到统一 AbortController。
@@ -218,12 +234,15 @@ export async function createCronJobSSE(
     ])
 
     if (!response.ok) {
-      // 失败但不是 SSE — 尝试以 JSON 读取后端错误
+      // 失败但不是 SSE — 尝试以 JSON 读取后端错误。
+      // BUG-20260703：与通用 client（normalizeApiError）契约对齐 error ?? message——
+      // 后端标准 APIError 以 message 为准，error 只是 legacy 兼容字段（omitempty）。
       let serverMsg = response.statusText
       try {
         const txt = await response.text()
-        const parsed = JSON.parse(txt) as { error?: string }
-        if (parsed?.error) serverMsg = parsed.error
+        const parsed = JSON.parse(txt) as { error?: string; message?: string }
+        const detail = parsed?.error ?? parsed?.message
+        if (detail) serverMsg = detail
       } catch {
         /* ignore */
       }
@@ -253,7 +272,8 @@ export async function createCronJobSSE(
         } else if (parsed.event === 'done') {
           return parsed.data as CreateCronJobResult
         } else if (parsed.event === 'error') {
-          const msg = (parsed.data as { error?: string })?.error ?? '后端返回错误'
+          const data = parsed.data as { error?: string; message?: string } | null
+          const msg = data?.error ?? data?.message ?? '后端返回错误'
           throw new Error(msg)
         }
       }
@@ -290,6 +310,7 @@ export async function createCronJobJSON(input: CronJobInput): Promise<CreateCron
         ...(input.deliver && input.deliver.length ? { deliver: input.deliver } : {}),
         ...(input.chat_id ? { chat_id: input.chat_id } : {}),
         ...(input.continuous ? { continuous: true } : {}),
+        ...(input.paused ? { paused: true } : {}),
       },
     },
     { timeout: CRON_CREATE_TIMEOUT_MS },

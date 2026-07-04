@@ -1024,13 +1024,13 @@ describe('Chat Service', () => {
       return mod.sendViaWebSocket
     }
 
-    it('first reply timeout (120s) triggers rejection', async () => {
+    it('first reply timeout (300s) triggers rejection', async () => {
       const sendViaWebSocket = await getRealSendViaWebSocket()
       const callbacks = { onChunk: vi.fn(), onDone: vi.fn(), onError: vi.fn() }
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
-      // Advance past 120s timeout
-      vi.advanceTimersByTime(121_000)
+      // Advance past 300s timeout（2026-07 从 120s 放宽，契约见 chatService.test.ts）
+      vi.advanceTimersByTime(301_000)
 
       await expect(p).rejects.toThrow('timed out')
     })
@@ -1117,8 +1117,8 @@ describe('Chat Service', () => {
       const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as AnyFn
       chunkCb({ type: 'chunk', content: 'partial', done: false })
 
-      // Advance past inactivity timeout (120s)
-      vi.advanceTimersByTime(121_000)
+      // Advance past inactivity timeout (300s，2026-07 从 120s 放宽)
+      vi.advanceTimersByTime(301_000)
 
       await expect(p).rejects.toThrow('stalled')
     })

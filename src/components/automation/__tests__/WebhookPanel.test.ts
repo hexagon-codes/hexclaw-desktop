@@ -34,8 +34,31 @@ vi.mock('@/api/webhook', () => ({
   getWebhooks,
   createWebhook,
   deleteWebhook,
+  updateWebhookEnabled: vi.fn().mockResolvedValue({ name: 'x', enabled: true }),
   webhookUrlFor: (name: string) => `http://localhost:16060/api/v1/webhooks/${name}`,
 }))
+// 自动化权限治理 API：组件挂载即静默预检/总览，测试里一律 mock 成全绿空态。
+vi.mock('@/api/autonomy', () => ({
+  preflightAutonomy: vi.fn().mockResolvedValue({
+    source: 'webhook', profile: 'function_first',
+    capabilities: [], estimated: [], needs_decision: [], all_clear: true,
+  }),
+  createAutonomyGrant: vi.fn().mockResolvedValue({ grant: { id: 'g-1' } }),
+  getAutonomySummary: vi.fn().mockResolvedValue({
+    profile: 'function_first',
+    counts: { tasks: 0, ready: 0, pending: 0, grants: 0 },
+    pending: [], tasks: [],
+  }),
+  listAutonomyDecisions: vi.fn().mockResolvedValue({ decisions: [], total: 0 }),
+  listAutonomyGrants: vi.fn().mockResolvedValue({ grants: [], total: 0 }),
+  revokeAutonomyGrant: vi.fn().mockResolvedValue({ message: 'ok' }),
+  getAutonomyProfile: vi.fn().mockResolvedValue({
+    profile: 'function_first', profiles: [],
+    matrix: { profile: 'function_first', categories: [], rows: [] },
+  }),
+  updateAutonomyProfile: vi.fn(),
+}))
+
 
 vi.mock('@/composables/useToast', () => ({
   useToast: () => toast,

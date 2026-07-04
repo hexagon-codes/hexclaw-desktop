@@ -36,6 +36,28 @@ vi.mock('@/api/tasks', () => ({
 vi.mock('@/composables', () => ({
   useToast: () => toast,
 }))
+// 自动化权限治理 API：组件挂载即静默预检/总览，测试里一律 mock 成全绿空态。
+vi.mock('@/api/autonomy', () => ({
+  preflightAutonomy: vi.fn().mockResolvedValue({
+    source: 'cron', profile: 'function_first',
+    capabilities: [], estimated: [], needs_decision: [], all_clear: true,
+  }),
+  createAutonomyGrant: vi.fn().mockResolvedValue({ grant: { id: 'g-1' } }),
+  getAutonomySummary: vi.fn().mockResolvedValue({
+    profile: 'function_first',
+    counts: { tasks: 0, ready: 0, pending: 0, grants: 0 },
+    pending: [], tasks: [],
+  }),
+  listAutonomyDecisions: vi.fn().mockResolvedValue({ decisions: [], total: 0 }),
+  listAutonomyGrants: vi.fn().mockResolvedValue({ grants: [], total: 0 }),
+  revokeAutonomyGrant: vi.fn().mockResolvedValue({ message: 'ok' }),
+  getAutonomyProfile: vi.fn().mockResolvedValue({
+    profile: 'function_first', profiles: [],
+    matrix: { profile: 'function_first', categories: [], rows: [] },
+  }),
+  updateAutonomyProfile: vi.fn(),
+}))
+
 
 // 投递目标连接库：默认空（仅通用渠道类型可见）。具体用例可 mockResolvedValueOnce 注入连接。
 vi.mock('@/api/im-channels', () => ({
@@ -197,10 +219,10 @@ describe('TasksView', () => {
     )
   })
 
-  it('BUG-20260625 R3 H-2: receive-only email connection is NOT offered as a deliver target (capability-gated)', async () => {
-    // email 后端 capabilities=['receive']（无 send）；IM 有 send。只收的邮箱若被选作投递目标，运行期 instanceMgr.Send 必失败。
+  it('BUG-20260625 R3 H-2: only send-capable connections are offered as deliver targets', async () => {
     connApis.getConnections.mockResolvedValue([
-      { id: 'pi-email-1', provider: 'email', name: '我的邮箱', capabilities: ['receive'], status: 'connected', enabled: true },
+      { id: 'pi-email-1', provider: 'email', name: '我的邮箱', capabilities: ['receive', 'send'], status: 'connected', enabled: true },
+      { id: 'pi-email-legacy', provider: 'email', name: '历史只收邮箱', capabilities: ['receive'], status: 'connected', enabled: true },
       { id: 'pi-feishu-1', provider: 'feishu', name: '研发群机器人', capabilities: ['receive', 'send'], status: 'connected', enabled: true },
     ])
     const wrapper = mountTasksView()
@@ -211,7 +233,8 @@ describe('TasksView', () => {
 
     const chipTexts = wrapper.findAll('.deliver-chip').map((c) => c.text())
     expect(chipTexts.some((t) => t.includes('研发群机器人')), '可发送的 IM 连接应在投递目标').toBe(true)
-    expect(chipTexts.some((t) => t.includes('我的邮箱')), 'receive-only email 不应作为投递目标').toBe(false)
+    expect(chipTexts.some((t) => t.includes('我的邮箱')), '可发送的 email 连接应在投递目标').toBe(true)
+    expect(chipTexts.some((t) => t.includes('历史只收邮箱')), 'receive-only 连接不应作为投递目标').toBe(false)
   })
 
   it('pauses and resumes an active job from the card actions', async () => {

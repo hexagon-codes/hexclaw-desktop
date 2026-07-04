@@ -110,6 +110,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useRouter } from 'vue-router'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { resolveOllamaCapabilities } from '@/config/providers'
+import type { ModelCapability } from '@/types/settings'
 
 // 能力标签 emoji + 文案（与 SettingsView 云 Provider 保持一致）
 const CAP_EMOJI: Record<string, string> = {
@@ -121,10 +122,34 @@ const CAP_LABEL: Record<string, string> = {
   image_generation: '绘图', video_generation: '视频生成',
 }
 
+// Ollama 原生能力名 → 前端模态徽章（BUG-20260704）。只映射「模态」类；
+// tools/thinking/insert/embedding 不是模态徽章，不显示（能力真值另在别处用）。
+const OLLAMA_CAP_TO_MODALITY: Record<string, ModelCapability> = {
+  completion: 'text',
+  vision: 'vision',
+}
+
+function mapOllamaCapabilities(raw: string[]): ModelCapability[] {
+  const out: ModelCapability[] = []
+  for (const c of raw) {
+    const modality = OLLAMA_CAP_TO_MODALITY[c.trim().toLowerCase()]
+    if (modality && !out.includes(modality)) out.push(modality)
+  }
+  // 有能力数据但无可映射模态（如纯 embedding）→ 至少标 text 兜底，避免空徽章。
+  if (out.length === 0) out.push('text')
+  // text 固定排在最前（与静态表风格一致）。
+  return out.includes('text') ? ['text', ...out.filter((c) => c !== 'text')] : out
+}
+
 // 显式标出全部能力（含 text），与 HuggingFace pipeline-tag 风格一致，
 // 避免"什么徽章都没有 = 不知道支持什么"的误解。
-function modelCaps(name: string): string[] {
-  return resolveOllamaCapabilities(name)
+// BUG-20260704：优先用 Ollama /api/tags 上报的真实能力（qwen3.5:9b 等视觉模型才能显示
+// 「视觉」）；后端/旧版 Ollama 未上报时回退按模型名查静态表。
+function modelCaps(model: { name: string; capabilities?: string[] }): ModelCapability[] {
+  if (model.capabilities && model.capabilities.length > 0) {
+    return mapOllamaCapabilities(model.capabilities)
+  }
+  return resolveOllamaCapabilities(model.name)
 }
 
 const settingsStore = useSettingsStore()
@@ -769,7 +794,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
             <div class="ollama-card__model-left">
               <span class="ollama-card__model-name">{{ m.name }}</span>
               <span
-                v-for="cap in modelCaps(m.name)"
+                v-for="cap in modelCaps(m)"
                 :key="cap"
                 class="ollama-card__cap"
                 :class="`ollama-card__cap--${cap}`"

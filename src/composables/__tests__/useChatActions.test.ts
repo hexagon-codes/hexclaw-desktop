@@ -253,6 +253,19 @@ describe('useChatActions', () => {
       expect(toast.error).not.toHaveBeenCalled()
     })
 
+    it('BUG-20260629 handleRetry 删除后端真实 message id，避免旧回复重载后复活', async () => {
+      const { removeMessage } = await import('@/services/messageService')
+      const store = makeMockStore()
+      store.messages[1]!.metadata = { backend_message_id: 'backend-a1' }
+
+      const { handleRetry } = useChatActions(store as any, makeMockToast() as any, mockSend)
+      await handleRetry(1)
+
+      expect(vi.mocked(removeMessage)).toHaveBeenCalledWith('u1')
+      expect(vi.mocked(removeMessage)).toHaveBeenCalledWith('backend-a1')
+      expect(vi.mocked(removeMessage)).not.toHaveBeenCalledWith('a1')
+    })
+
     // BUG（2026-06-28 用户反馈）：编辑早期消息删整条尾巴时，旧实现逐条串行 await → 提交后卡几秒。
     // 改并行删除：所有 removeMessage 必须在任一 resolve 之前就全部发出（折叠为一批往返）。
     it('confirmEdit 删除整轮尾巴时并行发出全部删除请求（不再串行卡顿）', async () => {

@@ -12,9 +12,29 @@ import WebSocket from 'ws'
 // Constants
 // ---------------------------------------------------------------------------
 
-export const BASE_URL = 'http://localhost:16060'
-export const WS_URL = 'ws://localhost:16060/ws'
+export const BASE_URL = (process.env.HEX_E2E_SIDECAR_URL || 'http://localhost:16060').replace(/\/$/, '')
+export const WS_URL = process.env.HEX_E2E_SIDECAR_WS_URL
+  || `${BASE_URL.replace(/^http/, 'ws')}/ws`
 export const USER_ID = 'e2e-playwright'
+
+export function e2eMarker(prefix = 'marker'): string {
+  const suffix = Math.random().toString(36).replace(/[^a-z]/g, '').slice(0, 8).padEnd(8, 'x')
+  return `${prefix}-${suffix}`
+}
+
+export function e2eTextMarker(): string {
+  return e2eMarker('mark')
+}
+
+function isTransientLLMError(err: unknown): boolean {
+  const msg = String(err instanceof Error ? err.message : err).toLowerCase()
+  return /(?:unexpected\s+eof|\beof\b|tls handshake timeout|connection reset|connection refused|socket hang up|temporarily unavailable|timeout awaiting response headers)/.test(msg)
+    && /(siliconflow|api\.siliconflow|openai stream request failed|chat\/completions|llm complete|runtime stream)/.test(msg)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 // ---------------------------------------------------------------------------
 // HTTP helper
@@ -57,22 +77,32 @@ export async function api(
     }
   }
 
-  const init: RequestInit = { method, headers }
-  if (finalBody !== undefined) {
-    init.body = JSON.stringify(finalBody)
+  let last: ApiResponse | undefined
+  const attempts = path.startsWith('/api/v1/chat') ? 2 : 1
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const init: RequestInit = { method, headers }
+    if (finalBody !== undefined) {
+      init.body = JSON.stringify(finalBody)
+    }
+
+    const res = await fetch(url, init)
+    const text = await res.text()
+
+    let data: Record<string, unknown>
+    try {
+      data = JSON.parse(text) as Record<string, unknown>
+    } catch {
+      data = { raw: text }
+    }
+
+    last = { status: res.status, data }
+    if (res.status < 500 || attempt === attempts || !isTransientLLMError(JSON.stringify(data))) {
+      return last
+    }
+    await sleep(1_500 * attempt)
   }
 
-  const res = await fetch(url, init)
-  const text = await res.text()
-
-  let data: Record<string, unknown>
-  try {
-    data = JSON.parse(text) as Record<string, unknown>
-  } catch {
-    data = { raw: text }
-  }
-
-  return { status: res.status, data }
+  return last!
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +129,7 @@ interface WsChatOptions {
   provider?: string
   model?: string
   metadata?: Record<string, string>
-  /** Timeout in milliseconds (default 120 000) */
+  /** Timeout in milliseconds (default 300 000) */
   timeoutMs?: number
 }
 
@@ -118,12 +148,38 @@ export function wsChat(
   // 优先使用已配置的 provider/model：默认 routing 走 app 的 llm.default（本机默认是本地 provider，
   // 未安装本地 runtime 时会 400）。HEX_E2E_PROVIDER / HEX_E2E_MODEL 可把真机链路定向到已配置的
   // 云端 provider 及其模型，不改 app 默认配置；显式 options 仍最高优先。
+  return wsChatWithRetry(content, options)
+}
+
+async function wsChatWithRetry(
+  content: string,
+  options: WsChatOptions = {},
+): Promise<ChatResult> {
+  let lastErr: unknown
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await wsChatOnce(content, options)
+    } catch (err) {
+      lastErr = err
+      if (attempt === 2 || !isTransientLLMError(err)) {
+        throw err
+      }
+      await sleep(1_500 * attempt)
+    }
+  }
+  throw lastErr
+}
+
+function wsChatOnce(
+  content: string,
+  options: WsChatOptions = {},
+): Promise<ChatResult> {
   const {
     sessionId,
     provider = process.env.HEX_E2E_PROVIDER || undefined,
     model = process.env.HEX_E2E_MODEL || undefined,
     metadata,
-    timeoutMs = 120_000,
+    timeoutMs = 300_000,
   } = options
 
   return new Promise<ChatResult>((resolve, reject) => {

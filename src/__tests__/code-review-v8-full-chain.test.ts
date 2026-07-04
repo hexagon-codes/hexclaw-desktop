@@ -191,7 +191,7 @@ describe('IM Channel 链路', () => {
   const imSrc = readSrc('api/im-channels.ts')
   const imConfigSrc = readSrc('config/im-channels.ts')
 
-  it('所有 7 个通道类型都有配置字段定义', () => {
+  it('所有通道类型都有配置字段定义', () => {
     const types: string[] = ['feishu', 'dingtalk', 'wechat', 'wecom', 'discord', 'telegram', 'email']
     for (const t of types) {
       expect(imConfigSrc).toContain(`${t}:`)
@@ -200,38 +200,44 @@ describe('IM Channel 链路', () => {
 
   it('所有通道类型都有帮助文本（中英文）', () => {
     expect(imConfigSrc).toContain('CHANNEL_HELP_TEXT')
-    const types = ['feishu', 'dingtalk', 'wechat', 'wecom', 'discord', 'telegram', 'email']
+    const types = ['feishu', 'dingtalk', 'wechat', 'wecom', 'slack', 'discord', 'telegram', 'line', 'whatsapp', 'matrix', 'email']
     for (const t of types) {
       const regex = new RegExp(`${t}:\\s*\\{[\\s\\S]*?zh:`)
       expect(imConfigSrc).toMatch(regex)
     }
   })
 
-  it('createIMInstance 应先同步后端再写本地', () => {
+  it('createIMInstance 应直接写入 sidecar，不再写本地 Store', () => {
     const createFn = imSrc.slice(
       imSrc.indexOf('export async function createIMInstance'),
       imSrc.indexOf('export async function updateIMInstance'),
     )
-    const syncIdx = createFn.indexOf('syncBackendInstance')
-    const writeIdx = createFn.indexOf('writeInstances')
-    // 后端同步应在本地写入之前
-    expect(syncIdx).toBeLessThan(writeIdx)
-    expect(syncIdx).toBeGreaterThan(0)
+    expect(createFn).toContain("'/api/v1/platforms/instances'")
+    expect(createFn).toContain("'POST'")
+    expect(createFn).not.toContain('writeInstances')
+    expect(createFn).not.toContain('syncBackendInstance')
   })
 
-  it('deleteIMInstance 应先删后端再删本地', () => {
+  it('deleteIMInstance 应按稳定 id 删除 sidecar 记录', () => {
     const deleteFn = imSrc.slice(
       imSrc.indexOf('export async function deleteIMInstance'),
       imSrc.indexOf('/** 测试实例连接'),
     )
-    const backendIdx = deleteFn.indexOf('deleteBackendInstance')
-    const localIdx = deleteFn.indexOf("delete all[id]")
-    expect(backendIdx).toBeLessThan(localIdx)
+    expect(deleteFn).toContain('/api/v1/platforms/instances/by-id/')
+    expect(deleteFn).toContain("'DELETE'")
+    expect(deleteFn).not.toContain('deleteBackendInstance')
+    expect(deleteFn).not.toContain('delete all[id]')
   })
 
-  it('updateIMInstance 改名时应回滚：先创建新实例，删除旧实例失败则回滚', () => {
-    expect(imSrc).toContain('Rollback: remove the newly created instance')
-    expect(imSrc).toContain('deleteBackendInstance(next.name).catch(() => {})')
+  it('updateIMInstance 改名应使用 by-id PUT，不做 delete/recreate 回滚', () => {
+    const updateFn = imSrc.slice(
+      imSrc.indexOf('export async function updateIMInstance'),
+      imSrc.indexOf('/** 删除实例'),
+    )
+    expect(updateFn).toContain('/api/v1/platforms/instances/by-id/')
+    expect(updateFn).toContain("'PUT'")
+    expect(updateFn).not.toContain('Rollback')
+    expect(updateFn).not.toContain('deleteBackendInstance')
   })
 
   it('assertUniqueInstanceName 应忽略大小写', () => {
@@ -251,9 +257,10 @@ describe('IM Channel 链路', () => {
     expect(proxyFn).toContain("invoke<string>('proxy_api_request'")
   })
 
-  it('syncExistingInstancesToBackend 应增量同步（对比后端状态）', () => {
-    expect(imSrc).toContain('isBackendInstanceInSync')
+  it('probeIMChannelsBackend 应只探测 sidecar source of truth', () => {
+    expect(imSrc).toContain('probeIMChannelsBackend')
     expect(imSrc).toContain('listBackendInstances')
+    expect(imSrc).not.toContain('isBackendInstanceInSync')
   })
 
   it('getPlatformHookUrl 构造正确的 webhook URL', () => {
@@ -1076,13 +1083,12 @@ describe('Review-fix: 本轮修复项结构验证', () => {
     expect(src).not.toContain('data-info="新对话和快捷入口')
   })
 
-  it('AgentRoutingRules RULE_PLATFORM_OPTIONS 应包含所有后端支持的平台', () => {
-    const src = readSrc('components/channels/AgentRoutingRules.vue')
-    expect(src).toContain("'api'")
-    expect(src).toContain("'telegram'")
-    expect(src).toContain("'feishu'")
-    expect(src).toContain("'dingtalk'")
-    expect(src).toContain("'discord'")
+  it('AgentRoutingRules 已清退（BUG-20260703 P2-3）：纯接待模型定论下的整件死码不得回归', () => {
+    // 评审定论（project_im_binding_centralize_orphan_20260628）：渠道只绑 Agent、
+    // 规则唯一可达写入面是 ChannelAgentBinding（instance 级）。高级规则组件全仓
+    // 无引用且词表已烂（缺 wechat/slack/whatsapp）→ 按 IMChannelsView 清退先例删除。
+    expect(existsSync(resolve(__dirname, '..', 'components/channels/AgentRoutingRules.vue'))).toBe(false)
+    expect(existsSync(resolve(__dirname, '..', 'components/channels/__tests__/AgentRoutingRules.test.ts'))).toBe(false)
   })
 
   it('MemoryView legacy 编辑/删除应获取完整 legacyContent（无 limit 参数）', () => {

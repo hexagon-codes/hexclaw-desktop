@@ -284,7 +284,13 @@ watch(normalizedDocumentSearch, () => {
 // File upload state
 const isDragging = ref(false)
 const uploadingFiles = ref<
-  { name: string; progress: number; status: 'uploading' | 'done' | 'error'; error?: string }[]
+  {
+    name: string
+    progress: number
+    status: 'uploading' | 'done' | 'error'
+    error?: string
+    warning?: string
+  }[]
 >([])
 const fileInputRef = ref<HTMLInputElement>()
 
@@ -614,7 +620,13 @@ async function processFiles(files: FileList) {
     // (in the async upload task below) would not update the DOM — the upload progress / error
     // line would only refresh incidentally on the next unrelated render (e.g. loadDocs on
     // success). The failure path has no such re-render, so the error message would never show.
-    const entry: { name: string; progress: number; status: 'uploading' | 'done' | 'error'; error?: string } = reactive({ name: file.name, progress: 0, status: 'uploading' })
+    const entry: {
+      name: string
+      progress: number
+      status: 'uploading' | 'done' | 'error'
+      error?: string
+      warning?: string
+    } = reactive({ name: file.name, progress: 0, status: 'uploading' })
     uploadingFiles.value.push(entry)
 
     uploadTasks.push(
@@ -624,9 +636,10 @@ async function processFiles(files: FileList) {
         }
 
         try {
-          await uploadDocument(file, updateProgress)
+          const uploaded = await uploadDocument(file, updateProgress)
           entry.status = 'done'
           entry.progress = 100
+          entry.warning = uploaded.warnings?.join('；')
           uploadedAny = true
         } catch (e) {
           let uploadError = e
@@ -835,6 +848,9 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             </div>
             <div v-else-if="uf.status === 'error'" class="text-xs mt-0.5" style="color: #ef4444">
               {{ uf.error }}
+            </div>
+            <div v-else-if="uf.warning" class="text-xs mt-0.5" style="color: #f59e0b">
+              {{ uf.warning }}
             </div>
           </div>
           <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">

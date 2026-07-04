@@ -130,10 +130,15 @@ describe('frontend-backend config field alignment', () => {
   const backendFieldsByType: Record<string, string[]> = {
     feishu: ['app_id', 'app_secret', 'verification_token'],
     dingtalk: ['app_key', 'app_secret', 'robot_code'],
+    slack: ['token', 'signing_secret'],
     discord: ['token'],
     telegram: ['token'],
+    line: ['channel_secret', 'channel_token'],
+    whatsapp: ['token', 'phone_id', 'verify_token', 'app_secret'],
+    matrix: ['homeserver_url', 'access_token', 'user_id'],
     wechat: ['app_id', 'app_secret', 'token', 'aes_key'],
     wecom: ['corp_id', 'agent_id', 'secret', 'token', 'aes_key'],
+    email: ['email', 'password', 'from', 'smtp_host', 'smtp_port', 'imap_host', 'imap_port'],
   }
 
   for (const [type, expectedKeys] of Object.entries(backendFieldsByType)) {
