@@ -24,10 +24,12 @@
   --hc-text-muted: #5a6470;
   --hc-text-inverse: #ffffff;
 
-  /* 滚动条（ChatGPT/macOS 风格：默认隐形、悬停浮现、离开即隐的细圆条） */
-  --hc-scrollbar-thumb: rgba(184, 199, 219, 0.22);
-  --hc-scrollbar-thumb-hover: rgba(184, 199, 219, 0.42);
-  --hc-scrollbar-thumb-active: rgba(184, 199, 219, 0.58);
+  /* 滚动条（ChatGPT/macOS 风格：默认隐形、悬停浮现、离开即隐的细圆条）
+     —— 全应用 thumb 统一走此变量（会话列表 / 输入框 / 各页面滚动宿主），故此处即「唯一色源」。
+     刻意压浅：会话列表那种「几乎透明、轻轻一抹」的手感，不喧宾夺主（bug-20260704）。 */
+  --hc-scrollbar-thumb: rgba(184, 199, 219, 0.14);
+  --hc-scrollbar-thumb-hover: rgba(184, 199, 219, 0.24);
+  --hc-scrollbar-thumb-active: rgba(184, 199, 219, 0.36);
 
   --hc-border: rgba(255, 255, 255, 0.08);
   --hc-border-subtle: rgba(255, 255, 255, 0.05);
@@ -113,10 +115,10 @@
   --hc-text-muted: #5f7b95;
   --hc-text-inverse: #ffffff;
 
-  /* 滚动条（浅色：中性深蓝低透明，悬停浮现） */
-  --hc-scrollbar-thumb: rgba(36, 66, 97, 0.20);
-  --hc-scrollbar-thumb-hover: rgba(36, 66, 97, 0.34);
-  --hc-scrollbar-thumb-active: rgba(36, 66, 97, 0.48);
+  /* 滚动条（浅色：中性深蓝极低透明，悬停浮现）——压浅以贴合会话列表参照（bug-20260704） */
+  --hc-scrollbar-thumb: rgba(36, 66, 97, 0.12);
+  --hc-scrollbar-thumb-hover: rgba(36, 66, 97, 0.22);
+  --hc-scrollbar-thumb-active: rgba(36, 66, 97, 0.34);
 
   --hc-border: rgba(63, 143, 212, 0.12);
   --hc-border-subtle: rgba(63, 143, 212, 0.07);
@@ -217,6 +219,13 @@ body,
 
 ::-webkit-scrollbar-thumb:active {
   background-color: var(--hc-scrollbar-thumb-active);
+}
+
+/* 窗口失活即隐：WebKit 经典滚动条在窗口失焦时 :hover 态可能残留 → thumb 仍显形。
+   macOS 原生手感是「不是当前 key window 就不显示滚动条」；:window-inactive 精确命中该态，
+   强制透明（覆盖上面的 :hover / .hc-scrolling 浮现），全应用统一失焦即隐（bug-20260704）。 */
+::-webkit-scrollbar-thumb:window-inactive {
+  background-color: transparent;
 }
 
 /* Firefox / 标准属性兜底：默认隐形，悬停浮现 */

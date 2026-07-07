@@ -13,6 +13,8 @@ interface Option {
   value: string
   label: string
   disabled?: boolean
+  /** 可选：选项前的图标（图片 src，如服务商 logo）。缺省则纯文字（向后兼容）。 */
+  icon?: string
 }
 
 const props = withDefaults(
@@ -183,6 +185,13 @@ watch(
       @click="toggle"
       @keydown="onKeydown"
     >
+      <img
+        v-if="selected?.icon"
+        :src="selected.icon"
+        alt=""
+        aria-hidden="true"
+        class="hc-select__icon"
+      />
       <span class="hc-select__label" :class="{ 'hc-select__label--placeholder': !selected }">
         {{ displayLabel }}
       </span>
@@ -217,7 +226,14 @@ watch(
             @mousedown.prevent="pick(i)"
             @mouseenter="highlightIndex = i"
           >
-            {{ opt.label }}
+            <img
+              v-if="opt.icon"
+              :src="opt.icon"
+              alt=""
+              aria-hidden="true"
+              class="hc-select__icon"
+            />
+            <span class="hc-select__option-label">{{ opt.label }}</span>
           </li>
         </ul>
       </Transition>
@@ -292,15 +308,32 @@ watch(
 }
 
 .hc-select__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 7px 10px;
   border-radius: var(--hc-radius-sm, 6px);
   font-size: 13px;
   color: var(--hc-text-secondary);
   cursor: pointer;
-  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.hc-select__option-label {
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+
+/* 选项/触发器前的图标（服务商 logo 等）——全局块：同时命中作用域内的触发器与 Teleport 到 body 的选项 */
+.hc-select__icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  object-fit: contain;
+  border-radius: 4px;
 }
 
 .hc-select__option--highlighted {

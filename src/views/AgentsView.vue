@@ -20,6 +20,7 @@ import { userVisibleAgents } from '@/utils/imChannelBinding'
 import { useToast } from '@/composables/useToast'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import { PROVIDER_LOGOS } from '@/config/providers'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -541,6 +542,8 @@ const runtimeProviderOptions = computed(() =>
   runtimeBackedProviders.value.map((provider) => ({
     key: provider.backendKey || provider.name || provider.id,
     label: provider.name,
+    // 服务商 logo（对齐设置页选择器）：按 provider.type 取内置 logo，未知类型回退 custom。
+    icon: PROVIDER_LOGOS[provider.type] ?? PROVIDER_LOGOS.custom,
   })),
 )
 
@@ -572,7 +575,7 @@ function syncAgentModelSelection(agent: AgentConfig) {
 // HcSelect 选项投影（替代原生 <select>，value 一律 string）
 const newAgentProviderOptions = computed(() => [
   { value: '', label: t('agents.useGlobalDefault') },
-  ...runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label })),
+  ...runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label, icon: p.icon })),
 ])
 const newAgentModelOptions = computed(() => [
   { value: '', label: t('settings.llm.models') },
@@ -581,9 +584,9 @@ const newAgentModelOptions = computed(() => [
 const editAgentProviderOptions = computed(() => {
   // 始终带「使用全局默认」(value:'') 占位——否则走全局默认(provider='')的 agent 编辑时
   // HcSelect 的 v-model='' 无匹配项 → 下拉空白显示异常（bug 2026-06-22）。
-  const opts = [
+  const opts: { value: string; label: string; icon?: string }[] = [
     { value: '', label: t('agents.useGlobalDefault') },
-    ...runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label })),
+    ...runtimeProviderOptions.value.map((p) => ({ value: p.key, label: p.label, icon: p.icon })),
   ]
   const cur = editingAgent.value.provider
   // 当前 provider 不在 runtime 列表时，补一个 "(invalid)" 选项保持选中态
