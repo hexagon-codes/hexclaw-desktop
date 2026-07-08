@@ -136,7 +136,10 @@ const paperTotalOpts = computed(() => [
 ])
 function genCustomPaper() {
   customPaperOpen.value = false
-  doPrint()
+  // 客户端出卷=printWorksheet(当前错题)。`total` 客户端可兑现(切片限量);`perQ`(每题变式数)/
+  // `difficulty`(难度)需后端组卷端点按参数出变式题,当前客户端出卷无法变更,待后端 /paper 端点补齐(契约缺口)。
+  const limit = paperForm.value.total === 'all' ? currentItems().length : Number(paperForm.value.total)
+  printWorksheet(currentItems().slice(0, limit), worksheetMeta())
   toast.success(t('k12.customPaper.generated'))
 }
 
