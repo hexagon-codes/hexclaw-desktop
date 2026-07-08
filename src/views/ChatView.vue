@@ -13,8 +13,14 @@ import {
   Brain,
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
+import { bindSessionAgent, getSessionAgent } from '@/stores/session-agent-binding'
 import { removeMessage } from '@/services/messageService'
 import { useAgentsStore } from '@/stores/agents'
+import { scenarioRegistry } from '@/shell/scenario/registry'
+import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
+import RecordChip from '@/shell/chat/RecordChip.vue'
+import { parseRecordMeta } from '@/shell/chat/recordMeta'
+import type { VerifyResult, VerifyVerdict } from '@/contracts'
 import { useSettingsStore } from '@/stores/settings'
 import {
   setSessionModel,
@@ -487,6 +493,100 @@ const agentRoleDisplay = computed(() => {
   return cfg?.display_name?.trim() || cfg?.name || chatStore.agentRole
 })
 
+// 场景包会话增强（架构 §8.4）：由后端/registry 决定当前实例是否有增强视图，
+// chat shell 只解析描述符 + 渲染 registry 提供的组件，**不认识任何场景领域概念**（回归锁）。
+const chatEnhancement = scenarioRegistry.chatEnhancement
+const scenarioRecordsActive = ref(false)
+const scenarioCtx = computed(() => {
+  const name = chatStore.agentRole
+  if (!name) return null
+  const cfg = agentsStore.findAgent(name)
+  const descriptor = scenarioRegistry.resolveDescriptor({
+    agentId: name,
+    agentName: cfg?.display_name,
+    metadata: cfg?.metadata,
+  })
+  if (!descriptor.headerTabs.length) return null
+  return {
+    agentId: name,
+    agentName: cfg?.display_name || name,
+    // 透传通用 metadata，场景专属字段由场景增强组件自行解析（ChatView 零场景知识）
+    metadata: cfg?.metadata ?? {},
+    descriptor,
+  }
+})
+
+// 消息头/meta 里的 agent 名解析为可读 display_name（后端 msg.agent_name 常是内部 id，如
+// k12-tutor-KKE5v8zQ，家长看不懂）。命中注册 agent 显示 display_name，否则回退原值（BUG-20260708）。
+function msgAgentDisplay(raw?: string | null): string {
+  const name = (raw ?? '').trim()
+  if (!name) return ''
+  return agentsStore.findAgent(name)?.display_name?.trim() || name
+}
+
+// 场景化空态（P0-20260708 P0-3）：实例声明了 emptyState 则替换通用「选择一个智能体」引导。
+const scenarioEmptyState = computed(() => scenarioCtx.value?.descriptor.emptyState ?? null)
+
+// 会话→Agent 绑定的标题兜底恢复（BUG-20260708）：早于绑定机制创建的老会话没存 localStorage 绑定，
+// 但深链建会话时标题即被设为 agent 内部名（k12-tutor-xxx）。选中会话若无绑定，用标题解析出 Agent →
+// 恢复 role + 场景增强 + 正确辅导人设，并回写绑定（此后不再依赖标题、抗改名）。依赖 agents 已加载，
+// 故同时观察 registeredAgents 数量（异步加载完成后补触发）。
+watch(
+  // 字符串 key 形式（非裸 session-id getter）——避免与「滚动重置」watcher 的源码扫描锚点碰撞
+  // （bug-20260628-newsession-scroll-arrow 用 indexOf 首个裸 getter 定位那个 watcher）。
+  () => `${chatStore.currentSessionId ?? ''}|${agentsStore.registeredAgents.length}`,
+  () => {
+    const sid = chatStore.currentSessionId
+    if (!sid || chatStore.agentRole) return
+    if (getSessionAgent(sid)) return // 已有绑定，selectSession 已恢复
+    const session = chatStore.sessions.find((s) => s.id === sid)
+    const title = (session?.title ?? '').trim()
+    if (!title) return
+    const cfg = agentsStore.findAgent(title)
+    if (!cfg) return // 标题不是某 Agent 内部名 → 普通会话，不动
+    chatStore.agentRole = cfg.name
+    chatStore.chatMode = 'agent'
+    bindSessionAgent(sid, cfg.name)
+  },
+  { immediate: true },
+)
+
+// 验算徽章（M1-7 · AP-5）：优先读结构化 verify 值对象（契约先行）；
+// 回退把 solve 引擎的 solve_verdict 元数据映射成保守弱证据结论（不冒充"已程序验算"）。
+// shell 只认 VerifyResult 数据契约，本函数是通用消息装饰接线，零场景领域词。
+function messageVerify(msg: { metadata?: Record<string, unknown> | null }): VerifyResult | null {
+  const meta = msg.metadata
+  if (!meta) return null
+  const structured = meta.verify
+  if (structured && typeof structured === 'object') return structured as VerifyResult
+  const verdict = meta.solve_verdict
+  if (verdict === 'agree' || verdict === 'disagree' || verdict === 'unverifiable' || verdict === 'out_of_scope') {
+    return { verdict: verdict as VerifyVerdict, evidence: 'model_review' }
+  }
+  return null
+}
+
+// 入库徽章（record-chip）：判错入库时后端在 message.metadata.record 标注 { collection, fields, status }，
+// shell 据 registry schema 渲染集合名/字段 chip/状态名——零场景领域词（回归锁）。
+function messageRecordChip(
+  msg: { metadata?: Record<string, unknown> | null },
+): { collectionLabel: string; chips: string[]; statusLabel?: string } | null {
+  // BUG-1：record 由后端以 map[string]string 透传，通常是 JSON 字符串；parseRecordMeta
+  // 容忍字符串/对象两形态并校验 collection。
+  const rec = parseRecordMeta(msg.metadata)
+  if (!rec?.collection) return null
+  const schema = scenarioRegistry.getSchema(rec.collection)
+  if (!schema) return null
+  const fields = rec.fields ?? {}
+  const chips = schema.fields
+    .filter((f) => f.role === 'chip' || f.role === 'meta')
+    .map((f) => ({ label: t(f.labelKey), value: fields[f.key] }))
+    .filter((c) => c.value != null && c.value !== '')
+    .map((c) => `${c.label}【${String(c.value)}】`)
+  const state = schema.states?.find((s) => s.id === rec.status)
+  return { collectionLabel: t(schema.labelKey), chips, statusLabel: state ? t(state.labelKey) : undefined }
+}
+
 // 按 Provider 分组的模型列表
 /**
  * 渲染时计算模型有效能力（render-time inference 兜底，兼容存量 ['text']）。
@@ -851,6 +951,8 @@ onMounted(async () => {
     chatStore.chatMode = 'agent'
     chatStore.agentRole = roleQuery
     chatStore.hasCustomTitle = true
+    // 持久化会话→Agent 绑定：切走再切回该会话时确定性恢复辅导老师人设 + 场景增强（BUG-20260708）。
+    if (chatStore.currentSessionId) bindSessionAgent(chatStore.currentSessionId, roleQuery)
     router.replace({ path: '/chat' })
   }
 
@@ -1749,16 +1851,29 @@ function startSidebarResize(event: MouseEvent) {
         @scroll-to="scrollToMessage"
       />
 
+      <!-- 场景包会话增强（场景实例声明的头部 tab / 记录视图 / 侧栏产物）；shell 只渲染 registry 组件 -->
+      <component
+        :is="chatEnhancement"
+        v-if="scenarioCtx && chatEnhancement"
+        v-bind="scenarioCtx"
+        v-model:records-active="scenarioRecordsActive"
+      />
+
         <!-- Messages -->
-        <div ref="messagesContainerRef" class="hc-chat__messages" @scroll="handleMessagesScroll">
+        <div
+          v-show="!(scenarioCtx && scenarioRecordsActive)"
+          ref="messagesContainerRef"
+          class="hc-chat__messages"
+          @scroll="handleMessagesScroll"
+        >
           <div
             v-if="chatStore.messages.length === 0 && !chatStore.isCurrentStreaming"
             class="hc-chat__empty"
           >
             <EmptyState
               :icon="MessageSquarePlus"
-              :title="t('chat.startChat')"
-              :description="t('chat.startChatDesc')"
+              :title="scenarioEmptyState ? t(scenarioEmptyState.titleKey) : t('chat.startChat')"
+              :description="scenarioEmptyState ? t(scenarioEmptyState.subtitleKey) : t('chat.startChatDesc')"
             >
               <!-- 还没配置好？运行首次配置向导（对齐原型 .btnlink）—— 已配置过模型则隐藏 -->
               <button
@@ -1792,11 +1907,13 @@ function startSidebarResize(event: MouseEvent) {
                   <span class="hc-msg__avatar-badge" />
                 </div>
                 <div class="hc-msg__body">
-                  <div class="hc-msg__name">{{ msg.agent_name || t('chat.botName') }}</div>
+                  <div class="hc-msg__name">{{ msgAgentDisplay(msg.agent_name) || t('chat.botName') }}</div>
+                  <!-- AgentBadge 仅在多智能体 handoff（本条 agent ≠ 上一条）时显,标示「换人接管」；
+                       非 handoff 时与 hc-msg__name 重复,故隐藏（BUG-20260708 原型只一个名字）。名字解析 display_name。 -->
                   <AgentBadge
-                    v-if="msg.agent_name || (msg.metadata?.agent_name as string)"
-                    :agent-name="msg.agent_name || (msg.metadata?.agent_name as string) || ''"
-                    :is-handoff="idx > 0 && chatStore.messages[idx - 1]?.role === 'assistant' && chatStore.messages[idx - 1]?.agent_name !== msg.agent_name"
+                    v-if="idx > 0 && chatStore.messages[idx - 1]?.role === 'assistant' && chatStore.messages[idx - 1]?.agent_name !== msg.agent_name && (msg.agent_name || (msg.metadata?.agent_name as string))"
+                    :agent-name="msgAgentDisplay(msg.agent_name || (msg.metadata?.agent_name as string)) || ''"
+                    :is-handoff="true"
                   />
                   <!-- Thinking block for finalized messages (ChatGPT style) -->
                   <div v-if="msg.reasoning && normalizeAssistantReasoning(msg.reasoning)" class="hc-thinking">
@@ -1824,6 +1941,8 @@ function startSidebarResize(event: MouseEvent) {
                       :class="{ 'hc-msg__bubble--empty': isEmptyReply(msg.content) }"
                       :title="formatFullTime(msg.timestamp)"
                     >
+                      <!-- 验算徽章（solve 结论透传，三态诚实 · shell 通用组件） -->
+                      <VerifyBadge v-if="messageVerify(msg)" :result="messageVerify(msg)!" />
                       <!-- 图像 / 视频 / 音频附件 -->
                       <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
                         <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
@@ -1887,6 +2006,8 @@ function startSidebarResize(event: MouseEvent) {
                         class="hc-msg__video"
                         :src="String(msg.metadata.video_url)"
                       />
+                      <!-- 入库徽章（判错入库确认，schema 驱动 · shell 通用组件） -->
+                      <RecordChip v-if="messageRecordChip(msg)" v-bind="messageRecordChip(msg)!" />
                     </div>
                     <div
                       v-show="hoveredMsgId === msg.id"
@@ -2058,7 +2179,7 @@ function startSidebarResize(event: MouseEvent) {
                   <div class="hc-msg__meta">
                     <span>{{ formatTime(msg.timestamp) }}</span>
                     <span v-if="metadataValue(msg, 'provider') || metadataValue(msg, 'model')">{{ [metadataValue(msg, 'provider'), metadataValue(msg, 'model')].filter(Boolean).join(' · ') }}</span>
-                    <span v-if="msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent">{{ msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent }}</span>
+                    <span v-if="msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent">{{ msgAgentDisplay(msg.agent_name || (msg.metadata?.agent_name as string) || (msg.metadata?.routed_agent as string)) }}</span>
                   </div>
                 </div>
               </template>
@@ -2260,8 +2381,13 @@ function startSidebarResize(event: MouseEvent) {
           </div>
         </Transition>
 
+        <!-- 场景包会话页脚锚点（如辅导「扩展桥」Teleport 落点；通用空锚，无场景知识） -->
+        <div v-show="!(scenarioCtx && scenarioRecordsActive)" id="hc-chat-scenario-footer" />
+        <!-- composer 上方场景锚点（如 composer_chips 预设；从 descriptor 数据渲染，无场景硬编码） -->
+        <div v-show="!(scenarioCtx && scenarioRecordsActive)" id="hc-chat-scenario-composer-top" />
+
         <!-- Input area -->
-        <div class="hc-chat__input-area">
+        <div v-show="!(scenarioCtx && scenarioRecordsActive)" class="hc-chat__input-area">
           <!-- 滚动到底部箭头（ChatGPT 风格：锚定输入框正上方居中；仅在往上翻离开底部时出现，贴底隐藏） -->
           <Transition name="hc-scrollbtn">
             <button
@@ -2416,6 +2542,13 @@ function startSidebarResize(event: MouseEvent) {
     <!-- Message context menu -->
     <ContextMenu ref="msgCtxMenu" :items="msgContextItems" @select="handleMsgCtxAction" />
 
+    <!-- 场景侧栏锚点（`.hc-chat` 行级 flex 子，与 ArtifactsPanel 同层）：场景包侧栏（如 K12 备课卡）
+         Teleport 落此，作为右侧停靠面板挤压主区、而非在主区内 absolute 覆盖会话头部（BUG-20260708 B4）。
+         display:contents 让 teleport 进来的面板自身成为行级 flex 项。
+         与产物面板互斥（右侧只挂一个停靠面板）：产物开则隐藏场景侧栏，避免两个面板把主区挤成 0 宽
+         文字竖排崩坏（BUG-20260708）。v-show 保留锚点在 DOM,Teleport 目标始终有效。 -->
+    <div v-show="!chatStore.showArtifacts" id="hc-chat-scenario-sidepanel" class="hc-chat__scenario-sidepanel" />
+
     <!-- Artifacts Panel (right side) -->
     <ArtifactsPanel
       v-if="chatStore.showArtifacts"
@@ -2450,6 +2583,11 @@ function startSidebarResize(event: MouseEvent) {
 .hc-chat {
   display: flex;
   height: 100%;
+}
+
+/* 场景侧栏锚点：display:contents → teleport 进来的场景侧栏（K12 备课卡）自身成为 .hc-chat 行级 flex 项 */
+.hc-chat__scenario-sidepanel {
+  display: contents;
 }
 
 /* ─── Sidebar ───── */
@@ -2548,7 +2686,9 @@ function startSidebarResize(event: MouseEvent) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  /* 兜底最小宽：防止右侧同时挂两个停靠面板（备课卡侧栏 + 产物面板）时主区被挤成 0 宽、
+     消息文字竖排逐字换行（BUG-20260708）。内部子元素各自 min-width:0 保留 ellipsis。 */
+  min-width: 340px;
   position: relative;
 }
 

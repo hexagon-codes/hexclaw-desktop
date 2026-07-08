@@ -2581,6 +2581,32 @@ export default {
     },
   },
 
+  // 验算徽章（通用 verified-solving，AP-5 信任即架构）
+  verify: {
+    programVerified: '已程序验算',
+    checked: '已核对',
+    disagree: '两种算法结果不一致 · 建议复核',
+    disagreeHint: '两种独立算法结果对不上，我不装懂——建议再核对一遍，别急着照哪个答案讲。',
+    outOfScope: '超出当前范围 · 已用范围内方法重解',
+    unverifiable: '无法独立验证',
+    answersLabel: '并列答案',
+  },
+
+  // 通用记录本视图（schema 驱动，领域无关的记录本原语 §7.3）
+  records: {
+    reviewQueueTitle: '本周该练',
+    reviewQueueCount: '{count} 道待复习',
+    practiceAgain: '再练一道',
+    practice: '再练',
+    markMastered: '已掌握',
+    detail: '详情',
+    all: '全部',
+    empty: '暂无记录',
+    savedTo: '已记入',
+    statusColon: '状态：',
+  },
+
+
   // 确认对话框
   confirm: {
     title: '确认操作',

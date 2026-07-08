@@ -6,21 +6,13 @@ import {
   Trash2,
   Download,
   FolderOpen,
-  Tag,
   Store,
   CheckCircle2,
   ArrowDownCircle,
   Loader2,
-  ChevronDown,
-  ChevronRight,
-  User,
-  Zap,
-  Info,
-  FileText,
   Star,
   Wand2,
   Eye,
-  X,
 } from 'lucide-vue-next'
 import {
   getSkills,
@@ -42,7 +34,7 @@ import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
-import SkillMarkdownPreview from '@/components/skills/SkillMarkdownPreview.vue'
+import SkillPreviewModal from '@/components/skills/SkillPreviewModal.vue'
 import { useAppStore } from '@/stores/app'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 
@@ -78,7 +70,6 @@ const installing = ref(false)
 const installError = ref('')
 const dragOver = ref(false)
 const disabledSkills = ref<Set<string>>(readDisabledSkillsFromStorage())
-const expandedSkill = ref<string | null>(null)
 const statusNotice = ref<{ tone: 'info' | 'warn' | 'success'; message: string } | null>(null)
 const togglingSkills = ref<Set<string>>(new Set())
 
@@ -306,33 +297,6 @@ function isSkillEnabled(skillOrName: Skill | string): boolean {
   return typeof skill.enabled === 'boolean' ? skill.enabled : !disabledSkills.value.has(skill.name)
 }
 
-function toggleSkillDetail(name: string) {
-  expandedSkill.value = expandedSkill.value === name ? null : name
-}
-
-// ─── SKILL.md 只读查看（市场技能不支持就地编辑） ───
-const skillMdContent = ref('')
-const skillMdLoading = ref(false)
-const skillMdError = ref('')
-
-async function loadSkillContent(name: string) {
-  skillMdContent.value = ''
-  skillMdError.value = ''
-  skillMdLoading.value = true
-  try {
-    const res = await getSkillContent(name)
-    skillMdContent.value = res.content || ''
-  } catch (e) {
-    skillMdError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    skillMdLoading.value = false
-  }
-}
-
-watch(expandedSkill, (name) => {
-  if (name) loadSkillContent(name)
-})
-
 const filteredSkills = computed(() => {
   const q = (props.embeddedSearch ?? searchQuery.value).toLowerCase()
   if (!q) return skills.value
@@ -490,6 +454,44 @@ async function handlePreviewInstall() {
   await handleHubInstall(skill)
 }
 
+// ─── 已安装技能「预览」SKILL.md（共用 SkillPreviewModal · 方案 C，替代原内联手风琴展开）───
+const installedPreview = ref<Skill | null>(null)
+const installedPreviewContent = ref('')
+const installedPreviewLoading = ref(false)
+const installedPreviewError = ref('')
+
+async function openInstalledPreview(skill: Skill) {
+  installedPreview.value = skill
+  installedPreviewContent.value = ''
+  installedPreviewError.value = ''
+  installedPreviewLoading.value = true
+  try {
+    const res = await getSkillContent(skill.name)
+    // 过期响应守卫：连点不同技能时丢弃先发后到的旧响应
+    if (installedPreview.value?.name !== skill.name) return
+    installedPreviewContent.value = res.content || ''
+  } catch (e) {
+    if (installedPreview.value?.name !== skill.name) return
+    installedPreviewError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    if (installedPreview.value?.name === skill.name) installedPreviewLoading.value = false
+  }
+}
+
+function closeInstalledPreview() {
+  installedPreview.value = null
+  installedPreviewContent.value = ''
+  installedPreviewError.value = ''
+  installedPreviewLoading.value = false
+}
+
+// 弹窗内删除：先关弹窗再走既有卸载确认流
+function onInstalledPreviewDelete() {
+  const name = installedPreview.value?.name
+  closeInstalledPreview()
+  if (name) handleUninstall(name)
+}
+
 function formatDownloads(n: number): string {
   if (n >= 1000) return (n / 1000).toFixed(1) + 'k'
   return String(n)
@@ -635,21 +637,14 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
             </div>
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <!-- Clickable skill name to expand detail -->
+                <!-- 点技能名 → 预览弹窗（与市场同款 · 方案 C；卡片减负,详情/触发词/SKILL.md 全进弹窗） -->
                 <button
                   class="text-sm font-medium hover:underline text-left"
                   :style="{ color: 'var(--hc-text-primary)' }"
-                  @click="toggleSkillDetail(skill.name)"
+                  @click="openInstalledPreview(skill)"
                 >
                   {{ skill.name }}
                 </button>
-                <component
-                  :is="expandedSkill === skill.name ? ChevronDown : ChevronRight"
-                  :size="12"
-                  class="cursor-pointer"
-                  :style="{ color: 'var(--hc-text-muted)' }"
-                  @click="toggleSkillDetail(skill.name)"
-                />
                 <span
                   class="text-[10px] px-1.5 py-0.5 rounded-full"
                   :style="{
@@ -684,20 +679,6 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
               >
                 {{ skill.message || t('skills.restartRequired') }}
               </p>
-              <!-- 触发词 (compact in main view) -->
-              <div v-if="skill.triggers?.length && expandedSkill !== skill.name" class="flex flex-wrap gap-1.5 mt-2">
-                <span
-                  v-for="trigger in skill.triggers.slice(0, 3)"
-                  :key="trigger"
-                  class="text-xs px-1.5 py-0.5 rounded-md"
-                  :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-accent)' }"
-                >
-                  /{{ trigger }}
-                </span>
-                <span v-if="skill.triggers.length > 3" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
-                  +{{ skill.triggers.length - 3 }}
-                </span>
-              </div>
             </div>
 
             <!-- Enable/disable toggle -->
@@ -727,101 +708,6 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
             >
               <Trash2 :size="16" />
             </button>
-          </div>
-
-          <!-- Expanded detail section -->
-          <div
-            v-if="expandedSkill === skill.name"
-            class="px-4 pb-4 border-t"
-            :style="{ borderColor: 'var(--hc-border)' }"
-          >
-            <div class="grid grid-cols-2 gap-3 mt-3">
-              <!-- Version -->
-              <div class="flex items-center gap-2">
-                <Info :size="12" :style="{ color: 'var(--hc-text-muted)' }" />
-                <span class="text-[10px] font-medium" :style="{ color: 'var(--hc-text-muted)' }">{{ t('skills.version') }}</span>
-                <span class="text-xs" :style="{ color: 'var(--hc-text-primary)' }">{{ skill.version || '-' }}</span>
-              </div>
-              <!-- Author -->
-              <div class="flex items-center gap-2">
-                <User :size="12" :style="{ color: 'var(--hc-text-muted)' }" />
-                <span class="text-[10px] font-medium" :style="{ color: 'var(--hc-text-muted)' }">{{ t('skills.author') }}</span>
-                <span class="text-xs" :style="{ color: 'var(--hc-text-primary)' }">{{ skill.author || '-' }}</span>
-              </div>
-            </div>
-
-            <!-- Triggers -->
-            <div class="mt-3">
-              <div class="flex items-center gap-1.5 mb-1.5">
-                <Zap :size="12" :style="{ color: 'var(--hc-text-muted)' }" />
-                <span class="text-[10px] font-medium" :style="{ color: 'var(--hc-text-muted)' }">{{ t('skills.triggers') }}</span>
-              </div>
-              <div v-if="skill.triggers?.length" class="flex flex-wrap gap-1.5">
-                <span
-                  v-for="trigger in skill.triggers"
-                  :key="trigger"
-                  class="text-xs px-2 py-0.5 rounded-md"
-                  :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-accent)' }"
-                >
-                  /{{ trigger }}
-                </span>
-              </div>
-              <span v-else class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">{{ t('skills.noTriggers') }}</span>
-            </div>
-
-            <!-- Tags -->
-            <div v-if="skill.tags?.length" class="mt-3">
-              <div class="flex items-center gap-1.5 mb-1.5">
-                <Tag :size="12" :style="{ color: 'var(--hc-text-muted)' }" />
-                <span class="text-[10px] font-medium" :style="{ color: 'var(--hc-text-muted)' }">{{ t('skills.tags') }}</span>
-              </div>
-              <div class="flex flex-wrap gap-1.5">
-                <span
-                  v-for="tag in skill.tags"
-                  :key="tag"
-                  class="flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-md"
-                  :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
-                >
-                  <Tag :size="10" />
-                  {{ tag }}
-                </span>
-              </div>
-            </div>
-
-            <!-- Status -->
-            <div class="mt-3 flex items-center gap-2">
-              <div
-                class="w-2 h-2 rounded-full"
-                :style="{ background: isSkillEnabled(skill) ? '#10b981' : '#6b7280' }"
-              />
-              <span class="text-xs" :style="{ color: isSkillEnabled(skill) ? '#10b981' : 'var(--hc-text-muted)' }">
-                {{ isSkillEnabled(skill) ? t('skills.enabled') : t('skills.disabled') }}
-              </span>
-              <span class="text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
-                · {{ getSkillScope(skill) === 'runtime' ? t('skills.runtimeState') : t('skills.localPreference') }}
-              </span>
-            </div>
-
-            <!-- SKILL.md（只读查看；市场技能不支持就地编辑） -->
-            <div class="mt-3">
-              <div class="flex items-center gap-1.5 mb-1.5">
-                <FileText :size="12" :style="{ color: 'var(--hc-text-muted)' }" />
-                <span class="text-[10px] font-medium" :style="{ color: 'var(--hc-text-muted)' }">SKILL.md</span>
-              </div>
-              <div v-if="skillMdLoading" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
-                {{ t('common.loading', '加载中...') }}
-              </div>
-              <div v-else-if="skillMdError" class="text-xs" :style="{ color: '#dc2626' }">
-                {{ skillMdError }}
-              </div>
-              <div
-                v-else-if="skillMdContent"
-                class="rounded-lg border p-3 text-sm"
-                :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)' }"
-              >
-                <SkillMarkdownPreview :content="skillMdContent" collapsible />
-              </div>
-            </div>
           </div>
         </div>
       </div>
@@ -1115,82 +1001,32 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
     />
 
     <!-- 市场技能「安装前预览」SKILL.md -->
-    <Teleport to="body">
-      <div
-        v-if="previewSkill"
-        class="fixed inset-0 z-50 flex items-center justify-center"
-        @click.self="closeHubPreview"
-      >
-        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @click="closeHubPreview" />
-        <div
-          class="relative z-10 w-[720px] max-w-[92vw] max-h-[85vh] flex flex-col rounded-xl border shadow-xl"
-          :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
-        >
-          <!-- 头部：图标 + 名称 + 作者/版本 -->
-          <div class="flex items-start justify-between gap-3 p-5 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-            <div class="flex items-start gap-3 min-w-0">
-              <div
-                class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0"
-                :style="{ background: 'var(--hc-bg-hover)' }"
-              >
-                <SkillIcon :skill="previewSkill" :size="20" />
-              </div>
-              <div class="min-w-0">
-                <h3 class="text-base font-semibold truncate" :style="{ color: 'var(--hc-text-primary)' }">
-                  {{ previewSkill.display_name || previewSkill.name }}
-                </h3>
-                <p class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
-                  {{ previewSkill.author }} · v{{ previewSkill.version }}
-                </p>
-              </div>
-            </div>
-            <button class="p-1 rounded-md shrink-0" :style="{ color: 'var(--hc-text-muted)' }" @click="closeHubPreview">
-              <X :size="16" />
-            </button>
-          </div>
+    <!-- 市场技能「安装前预览」（共用 SkillPreviewModal · 方案 C） -->
+    <SkillPreviewModal
+      :skill="previewSkill"
+      :content="previewContent"
+      :loading="previewLoading"
+      :error="previewError"
+      mode="hub"
+      :installed="previewSkill ? isHubSkillInstalled(previewSkill.name) : false"
+      @close="closeHubPreview"
+      @install="handlePreviewInstall"
+    />
 
-          <!-- 正文：SKILL.md 预览 -->
-          <div class="flex-1 overflow-y-auto p-5">
-            <div v-if="previewLoading" class="text-sm" :style="{ color: 'var(--hc-text-muted)' }">
-              {{ t('common.loading', '加载中...') }}
-            </div>
-            <div v-else-if="previewError" class="text-sm" :style="{ color: 'var(--hc-error)' }">
-              {{ previewError }}
-            </div>
-            <SkillMarkdownPreview v-else :content="previewContent" />
-          </div>
-
-          <!-- 底部：关闭 + 安装 -->
-          <div class="flex items-center justify-end gap-2 p-4 border-t" :style="{ borderColor: 'var(--hc-border)' }">
-            <button
-              class="px-4 py-1.5 rounded-lg text-sm border"
-              :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }"
-              @click="closeHubPreview"
-            >
-              {{ t('common.close', '关闭') }}
-            </button>
-            <button
-              v-if="isHubSkillInstalled(previewSkill.name)"
-              class="px-4 py-1.5 rounded-lg text-sm font-medium inline-flex items-center gap-1.5"
-              :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
-              disabled
-            >
-              <CheckCircle2 :size="14" />
-              {{ t('skills.hub.installed') }}
-            </button>
-            <button
-              v-else
-              class="px-4 py-1.5 rounded-lg text-sm font-medium text-white inline-flex items-center gap-1.5 transition-opacity hover:opacity-90"
-              :style="{ background: 'var(--hc-accent)' }"
-              @click="handlePreviewInstall"
-            >
-              <Download :size="14" />
-              {{ t('skills.hub.install') }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Teleport>
+    <!-- 已安装技能预览（同款弹窗,footer 走 删除/启停/关闭 · 方案 C） -->
+    <SkillPreviewModal
+      :skill="installedPreview"
+      :content="installedPreviewContent"
+      :loading="installedPreviewLoading"
+      :error="installedPreviewError"
+      mode="installed"
+      :scope-label="installedPreview ? (getSkillScope(installedPreview) === 'runtime' ? t('skills.runtimeState') : t('skills.localPreference')) : ''"
+      :enabled="installedPreview ? isSkillEnabled(installedPreview) : true"
+      :busy="installedPreview ? togglingSkills.has(installedPreview.name) : false"
+      @close="closeInstalledPreview"
+      @toggle-enabled="installedPreview && toggleSkillEnabled(installedPreview.name)"
+      @delete="onInstalledPreviewDelete"
+    />
 
     <!-- 卸载确认对话框 -->
     <Teleport to="body">

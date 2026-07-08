@@ -755,6 +755,9 @@ defineExpose({ focus, setInput, triggerFileUpload })
           >
             <Mic :size="18" />
           </button>
+          <!-- 场景输入行动作锚点：场景包（如 K12 拍照识题）Teleport 一个输入行按钮到此,与 +/技能/prompt/麦
+               同排；ChatInput 本身零场景知识（BUG-20260708 对齐原型 composer 相机入口）。 -->
+          <span id="hc-chat-scenario-composer-actions" class="hc-composer__scenario-actions" />
         </div>
         <!-- 右：模型 · 模式（slot）· 发送 -->
         <div class="hc-composer__actions">
@@ -1022,6 +1025,10 @@ defineExpose({ focus, setInput, triggerFileUpload })
   gap: 6px;
   flex: 1;
   min-width: 0;
+}
+/* 场景输入行动作锚点：display:contents → Teleport 进来的按钮成为 tools 的行内 flex 项 */
+.hc-composer__scenario-actions {
+  display: contents;
 }
 
 .hc-composer__actions {

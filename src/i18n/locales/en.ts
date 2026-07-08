@@ -2570,6 +2570,33 @@ export default {
     },
   },
 
+  // Verification badge (generic verified-solving, AP-5 trust-as-architecture)
+  verify: {
+    programVerified: 'Program-verified',
+    checked: 'Checked',
+    disagree: 'Two methods disagree · please double-check',
+    disagreeHint: 'Two independent methods gave different results. I won\'t pretend to be sure—please re-check before trusting either answer.',
+    outOfScope: 'Beyond current scope · re-solved within scope',
+    unverifiable: 'Cannot verify independently',
+    answersLabel: 'Candidate answers',
+  },
+
+  // Generic record-book view (schema-driven, domain-neutral primitive §7.3)
+  records: {
+    reviewQueueTitle: 'To review',
+    reviewQueueCount: '{count} due',
+    practiceAgain: 'Practice again',
+    practice: 'Practice',
+    markMastered: 'Mastered',
+    detail: 'Details',
+    all: 'All',
+    empty: 'No records yet',
+    savedTo: 'Saved to',
+    statusColon: 'Status: ',
+  },
+
+  // View mode (generic view gating · three-mode skin §8.4)
+
   confirm: {
     title: 'Confirm',
     message: 'This action cannot be undone. Are you sure?',

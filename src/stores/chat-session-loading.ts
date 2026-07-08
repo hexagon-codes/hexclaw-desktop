@@ -3,6 +3,7 @@ import type { Artifact, ChatMessage, ChatSession } from '@/types'
 import type { LoggerModule, MessageServiceModule } from './chat-session-types'
 import { upsertSession } from './chat-session-helpers'
 import { pruneSessionModels } from './session-model-binding'
+import { getSessionAgent, pruneSessionAgents } from './session-agent-binding'
 
 export function createChatSessionLoadingController(params: {
   sessions: Ref<ChatSession[]>
@@ -51,8 +52,11 @@ export function createChatSessionLoadingController(params: {
 
   async function selectSession(sessionId: string) {
     const selectionGen = ++sessionSelectionGen.value
-    chatMode.value = 'chat'
-    agentRole.value = ''
+    // 会话级 Agent 绑定恢复（BUG-20260708）：切走再切回不再丢失该会话的辅导老师人设 / 场景增强。
+    // 无绑定（普通会话）→ agentRole 空、chat 模式，与旧行为一致；有绑定 → agent 模式 + 恢复收件人。
+    const boundAgent = getSessionAgent(sessionId)
+    chatMode.value = boundAgent ? 'agent' : 'chat'
+    agentRole.value = boundAgent
     // 离开研究/深度思考模式时一并清零，否则 thinkingEnabled 残留 true 会让下个会话
     // UI 显示「深度思考关」但请求仍发 thinking=on（跨会话状态泄漏，同模型串改根因）。
     thinkingEnabled.value = false
@@ -117,8 +121,9 @@ export function createChatSessionLoadingController(params: {
         }
       }
       sessions.value = nextSessions
-      // 防累积：丢弃已不存在会话的模型绑定，使 localStorage map 永远 ≤ 会话数
+      // 防累积：丢弃已不存在会话的模型 / Agent 绑定，使 localStorage map 永远 ≤ 会话数
       pruneSessionModels(sessions.value.map((session) => session.id))
+      pruneSessionAgents(sessions.value.map((session) => session.id))
       // Don't auto-select a session while a new session is being created (race condition fix)
       if (!currentSessionId.value && !ensureSessionPromise.value && sessions.value.length > 0) {
         try {

@@ -10,6 +10,7 @@ import type { McpTool } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import SearchInput from '@/components/common/SearchInput.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 
 const { t } = useI18n()
 
@@ -329,6 +330,12 @@ const newServerName = ref('')
 const newServerCommand = ref('')
 const newServerArgs = ref('')
 const newServerTransport = ref<'stdio' | 'sse' | 'streamable'>('stdio')
+// transport 下拉走 HcSelect（原生 select 在 WKWebView 显 macOS Aqua 样式 · BUG-20260708 B6）
+const transportOptions = computed(() => [
+  { value: 'stdio', label: t('mcpManage.transportStdio') },
+  { value: 'sse', label: t('mcpManage.transportSse') },
+  { value: 'streamable', label: t('mcpManage.transportStreamable') },
+])
 const newServerEndpoint = ref('')
 const addingServer = ref(false)
 const removingServers = ref<Set<string>>(new Set())
@@ -698,11 +705,11 @@ defineExpose({ openAddServer, switchToMarketplace })
             </div>
             <div class="flex flex-col gap-1.5">
               <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.transport') }}</label>
-              <select v-model="newServerTransport" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }">
-                <option value="stdio">{{ t('mcpManage.transportStdio') }}</option>
-                <option value="sse">{{ t('mcpManage.transportSse') }}</option>
-                <option value="streamable">{{ t('mcpManage.transportStreamable') }}</option>
-              </select>
+              <HcSelect
+                :model-value="newServerTransport"
+                :options="transportOptions"
+                @update:model-value="(v) => (newServerTransport = v as 'stdio' | 'sse' | 'streamable')"
+              />
             </div>
             <template v-if="newServerTransport === 'stdio'">
               <div class="flex flex-col gap-1.5">

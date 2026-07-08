@@ -5,6 +5,8 @@ import { createI18n } from 'vue-i18n'
 import SessionList from '../SessionList.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useChatStore } from '@/stores/chat'
+import { useAgentsStore } from '@/stores/agents'
+import { scenarioRegistry } from '@/shell/scenario/registry'
 import type { ChatSession } from '@/types'
 
 const { updateSessionTitle, listSessions, searchMessages, listActiveStreams, getSessionBranches } = vi.hoisted(() => ({
@@ -91,6 +93,25 @@ describe('SessionList', () => {
     localStorage.clear()
     listSessions.mockResolvedValue({ sessions: [], total: 0 })
     searchMessages.mockResolvedValue({ results: [], total: 0, query: '' })
+  })
+
+  it('场景实例会话自动置顶（agent 有场景描述符 → 常驻顶部，即便更旧）', async () => {
+    scenarioRegistry.reset()
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.agentId === 'k12-x'
+        ? { schemaVersion: '1', headerTabs: [{ id: 'chat', labelKey: 'x', kind: 'chat' }], messageBadges: [], recordCollections: [], sidePanels: [], actions: [] }
+        : null,
+    )
+    const { wrapper } = mountSessionList([
+      { id: 'normal', title: '普通会话', created_at: '2026-04-05T10:00:00Z', updated_at: '2026-04-05T10:00:00Z', message_count: 1 },
+      { id: 'tutor', title: '场景会话', agent_name: 'k12-x', created_at: '2026-04-01T10:00:00Z', updated_at: '2026-04-01T10:00:00Z', message_count: 1 },
+    ])
+    await flushPromises()
+    // 第一个 section = 置顶，含更旧的场景会话
+    const firstSection = wrapper.findAll('.hc-sessions__section')[0]!
+    expect(firstSection.text()).toContain('场景会话')
+    expect(wrapper.find('[data-session-id="tutor"]').classes()).toContain('hc-sessions__item--pinned')
+    scenarioRegistry.reset()
   })
 
   it('restores pinned sessions from localStorage and keeps them at the top', async () => {
@@ -348,6 +369,44 @@ describe('SessionList', () => {
     expect(wrapper.text()).toContain('搜索结果')
     expect(wrapper.text()).toContain('搜索命中的会话')
     expect(wrapper.text()).toContain('这是命中的消息内容片段')
+  })
+
+  it('会话列表对齐原型（app.html .cs-item）：专属智能体会话标题内联 emoji 前缀，meta 保留计数', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const chat = useChatStore()
+    chat.sessions = [
+      { id: 's-1', title: 'k12-tutor-abc', agent_name: 'k12-tutor-abc', created_at: '2026-07-08T10:00:00Z', updated_at: '2026-07-08T10:00:00Z', message_count: 6 },
+    ]
+    chat.currentSessionId = 's-1'
+    chat.selectSession = vi.fn()
+    // 该会话绑定的智能体带 display_name + metadata.avatar（🎓）
+    const agents = useAgentsStore()
+    agents.registeredAgents = [
+      { name: 'k12-tutor-abc', display_name: '小明的辅导老师 · 五年级', model: '', provider: '', metadata: { avatar: '🎓' } },
+    ]
+
+    const wrapper = mount(SessionList, {
+      global: { plugins: [pinia, createTestI18n()], stubs: { ContextMenu: { template: '<div />' } } },
+    })
+    await flushPromises()
+
+    const item = wrapper.find('[data-session-id="s-1"]')
+    // 原型做法：身份 = 标题内联 emoji 前缀「🎓 小明的辅导老师 · 五年级」（非独立头像框、非 meta 智能体名）
+    expect(item.find('.hc-sessions__title').text()).toBe('🎓 小明的辅导老师 · 五年级')
+    // 无独立头像框、无 meta 智能体名
+    expect(item.find('.hc-sessions__avatar').exists()).toBe(false)
+    // meta 保留计数（原型 .cs-cnt）
+    expect(item.find('.hc-sessions__count').text()).toBe('6')
+  })
+
+  it('通用会话（无专属 agent）：标题不加 emoji 前缀', async () => {
+    const { wrapper } = mountSessionList([
+      { id: 's-plain', title: '小数乘法讲解', created_at: '2026-07-08T10:00:00Z', updated_at: '2026-07-08T10:00:00Z', message_count: 2 },
+    ])
+    await flushPromises()
+    const item = wrapper.find('[data-session-id="s-plain"]')
+    expect(item.find('.hc-sessions__title').text()).toBe('小数乘法讲解')
   })
 
   it('restores the full session list when the always-on search input is cleared', async () => {

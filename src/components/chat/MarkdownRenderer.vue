@@ -4,6 +4,10 @@ import { useI18n } from 'vue-i18n'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { codeToHtml } from 'shiki'
+import { katex } from '@mdit/plugin-katex'
+import 'katex/dist/katex.min.css'
+// mhchem 化学式扩展：必须在 katex 加载后 import，patch 同一 katex 单例（\ce{...}）
+import 'katex/contrib/mhchem'
 import ArtifactRenderer from '@/components/chat/ArtifactRenderer.vue'
 import { setClipboard } from '@/api/desktop'
 
@@ -43,6 +47,13 @@ function createMarkdownRenderer(copyLabel: string) {
     linkify: true,
     breaks: true,
     typographer: true,
+  })
+
+  // KaTeX 数学公式：行内 $..$ / 块级 $$..$$，配 mhchem 化学式 \ce{}。
+  // 失败降级：throwOnError=false 让非法公式退回原文，errorColor 取正文色（不报红，见 §M1-1）。
+  instance.use(katex, {
+    throwOnError: false,
+    errorColor: 'var(--hc-text-primary)',
   })
 
   instance.renderer.rules.fence = (tokens, idx) => {
@@ -366,5 +377,18 @@ const rendered = computed(() => {
 .markdown-body :deep(.code-block-wrapper--plain .code-block-header) {
   background: transparent;
   padding-bottom: 0;
+}
+
+/* ─── KaTeX 数学公式 ─── */
+/* 块级公式在窄容器内自身横向滚动，绝不撑破消息气泡（页面 body 永不横滚） */
+.markdown-body :deep(.katex-display) {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 0;
+  margin: 0.5em 0;
+}
+/* 失败降级：非法公式退回原文用正文色呈现，不报红（§M1-1 DoD） */
+.markdown-body :deep(.katex-error) {
+  color: var(--hc-text-primary) !important;
 }
 </style>

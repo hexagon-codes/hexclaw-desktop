@@ -178,10 +178,11 @@ watch(
       ref="triggerRef"
       type="button"
       class="hc-select__trigger hc-input"
+      :class="{ 'hc-select__trigger--disabled': disabled }"
       role="combobox"
       :aria-expanded="open"
       aria-haspopup="listbox"
-      :disabled="disabled"
+      :aria-disabled="disabled || undefined"
       @click="toggle"
       @keydown="onKeydown"
     >
@@ -253,6 +254,11 @@ watch(
   align-items: center;
   gap: 8px;
   width: 100%;
+  /* 显式盒约束：锁死盒型不随 disabled/空态变，且压掉 macOS WKWebView 对 <button> 的 UA 外观
+     （push-button 高圆胶囊）——appearance:none 单独在禁用/空态下被引擎特异回归绕过（BUG-20260708 B1）。 */
+  box-sizing: border-box;
+  min-height: 36px;
+  border-radius: var(--hc-radius-md);
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
@@ -262,7 +268,10 @@ watch(
   background-image: none;
 }
 
-.hc-select__trigger:disabled {
+/* 禁用视觉走自有 class（不用原生 :disabled/disabled 属性）——避免 macOS WKWebView 对
+   <button disabled> 施加 UA 外观致下拉盒变形（BUG-20260708）。交互由 openDropdown 的
+   props.disabled 守卫拦截。 */
+.hc-select__trigger--disabled {
   cursor: not-allowed;
   opacity: 0.55;
 }
