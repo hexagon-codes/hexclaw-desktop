@@ -11,12 +11,12 @@ If this is your first time seeing HexClaw, start with the overview image below b
 HexClaw is not just a chat window. It is a local AI Agent workspace where:
 
 - `Chat` and `IM Channels` are task entry points
-- `Knowledge`, `Agents`, and `Integration` are capability layers
+- `Knowledge`, `Agents`, `Integration`, and scenario packs are capability layers
 - `Logs` are the final diagnostics and troubleshooting loop
 
 The shortest way to understand the product is this:
 
-**Configure the model first, start tasks from Chat or IM, connect Knowledge / Agents / Integration / Automation as needed, and use Logs as the final debugging loop.**
+**Configure the model first, start tasks from Chat or IM, connect Knowledge / Agents / Integration / scenario packs / Automation as needed, and use Logs as the final debugging loop.**
 
 ## Recommended First-Run Path
 
@@ -33,7 +33,7 @@ Everything else in the product depends on this base path being healthy.
 
 ### Chat
 
-`Chat` is the default landing page when the app opens, and the main task entry point. It handles multi-turn conversations, file input, document parsing, Artifacts, and research-style tasks.
+`Chat` is the default landing page when the app opens, and the main task entry point. It handles multi-turn conversations, file input, document parsing, Artifacts, research-style tasks, Markdown/math/chemistry rendering, and scenario-instance enhancements such as in-chat tabs, verification badges, and record chips.
 
 ### IM Channels
 
@@ -49,9 +49,17 @@ Auto-RAG automatically searches the knowledge base before each message is sent, 
 
 `Agents` manage role templates, registered agents, default agents, and routing rules.
 
+### Scenario Packs
+
+`Scenario packs` are not separate top-level pages. They are enhanced capabilities mounted onto Agent instances.
+
+The current built-in scenario pack is `Homework Tutor`. After you create it from the Agent template library, HexClaw creates a dedicated Agent instance (its display name reads like “{child}'s Study Assistant”). When you enter Chat with that instance, the chat page gains Tutor / Mistakes tabs, inline “Tutoring tips for this homework” (shown after you confirm recognized problems), mistake-record chips, and verification badges.
+
+This keeps the platform generic: Chat, Agents, and record views render descriptors declared by the scenario pack instead of hard-coding a K12-only UI mode.
+
 ### Integration
 
-`Integration` manages tools, MCP services, and diagnostics.
+`Integration` manages Skills, MCP services, and the Prompt Library.
 
 `MCP` means `Model Context Protocol`. In HexClaw it is used to expose external capabilities to AI, such as databases, browser automation, file systems, internal services, and command-line tools.
 
@@ -67,7 +75,7 @@ Auto-RAG automatically searches the knowledge base before each message is sent, 
 
 The easiest way to understand the system is as one main path:
 
-`Chat / IM Channels / Automation -> Execution Path -> Knowledge / Agents / Integration -> Logs`
+`Chat / IM Channels / Automation -> Execution Path -> Knowledge / Agents / Integration / Scenario Packs -> Logs`
 
 From a user perspective:
 
@@ -75,7 +83,7 @@ From a user perspective:
 - `IM Channels` are external task entry points
 - `Automation` triggers tasks proactively
 - all of them enter the same execution path
-- the execution path calls Knowledge, Agents, and Integration
+- the execution path calls Knowledge, Agents, Integration, and scenario-pack capabilities
 - the results and failures finally land in Logs
 
 ## Can Chat or IM “Control” Other Modules?
@@ -85,7 +93,7 @@ Yes, but only as execution entry points.
 The better mental model is:
 
 - `Chat / IM` start tasks
-- `Knowledge / Agents / Integration` provide capabilities
+- `Knowledge / Agents / Integration / scenario packs` provide capabilities
 - configuration pages are still where setup and management happen
 
 So HexClaw is not “chat directly manages everything”. It is “chat can trigger execution that uses other configured capabilities”.

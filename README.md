@@ -45,10 +45,11 @@ macOS / Windows / Linux 原生运行 · Sidecar 架构本地部署 · 零云端�
 
 | 功能 | 说明 |
 |------|------|
-| **AI 对话** | 多模型支持: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama，流式输出，Markdown 渲染，代码高亮，深度思考 |
+| **AI 对话** | 多模型支持: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama，流式输出，Markdown + KaTeX 数学公式 / mhchem 化学式渲染，代码高亮，深度思考 |
 | **图片/视频生成** | 智谱 CogView-4 图片生成 + CogVideoX-2 视频生成，统一文本对话框入口（无独立 mode 按钮），生成结果落盘到 `{DataDir}/generated/` 后以 `/api/v1/files/generated/...` URL 引用（永不过期、不撑爆 SQLite），气泡内联预览 + 一直可见的下载按钮 |
 | **本地模型 (Ollama)** | 一键检测/关联本地 Ollama，自动发现已下载模型，状态机管理（检测→运行→关联），LM Studio/llama.cpp 走 OpenAI 兼容接入 |
 | **Agent 编排** | 自定义 Agent 角色/目标/背景，多 Agent 协作 (Handoff + Orchestrate + Spawn)，Agent 会议模式，角色模板库 |
+| **场景包 / K12 作业辅导** | 通过通用 `scenarioRegistry` 挂载作业辅导助手模板：孩子档案、默认辅导技能、拍照识题、渐进提示、错题本/积累本/学情报告、家长备课卡、验算徽章与入库徽章；多孩按 Agent 实例隔离 |
 | **自主 Agent** | Budget 三维预算兜底 (token/时间/金额)，代码执行沙箱 (macOS Seatbelt/Linux Namespace/Windows 5 层隔离)，Checkpoint 长任务恢复 |
 | **工具审批** | 危险工具 WebSocket 实时审批 (ToolApprovalCard)，safe/sensitive/dangerous 三级风险分类，"始终允许"记忆 |
 | **Skill 系统** | 技能市场 + 自定义技能 + LLM 创建新 Skill (SkillWriter + 安全扫描)，Skill Chain 链式调用，依赖管理，Tool 注册与 Per-tool 权限 |
@@ -103,7 +104,7 @@ HexClaw.app
 │  Vue 3 前端 (WebView)                                             │
 │  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
 │  │  Chat  │ Agents │知识中心 │ 自动化 │ IM通道 │  集成   │  日志 │ │
-│  │ (默认) │        │文档|记忆│任务|Web │        │技能|MCP │       │ │
+│  │ (默认) │        │文档|记忆│任务|Web │        │技能|MCP|P│       │ │
 │  │        │        │        │ hook    │        │         │ 设置  │ │
 │  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
 │      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
@@ -167,7 +168,7 @@ cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/
 | 路由 | Vue Router | 5.x |
 | 国际化 | vue-i18n (中文 / English / 维吾尔语 RTL) | 11.x |
 | 图标 | Lucide Vue | - |
-| Markdown | markdown-it + Shiki (代码高亮) | - |
+| Markdown | markdown-it + @mdit/plugin-katex + KaTeX/mhchem + Shiki (代码高亮) | - |
 | 文档解析 | pdfjs-dist + mammoth + xlsx | - |
 | 数据存储 | Tauri Store (plugin-store) + localStorage (Pinia 持久化插件)；会话/消息由后端 sidecar 持久化 | - |
 | HTTP 客户端 | ofetch (前端) / reqwest (Rust 代理) | - |
@@ -309,6 +310,7 @@ hexclaw-desktop/
 │   │   ├── config.ts             # LLM 配置 API (Tauri 代理)
 │   │   ├── desktop.ts            # 桌面功能 API (通知/剪贴板)
 │   │   ├── im-channels.ts        # IM 通道 API (飞书/钉钉/企微等)
+│   │   ├── k12.ts                # K12 场景包 API 契约 (/api/k12/*)
 │   │   ├── team.ts               # 团队协作 API
 │   │   ├── voice.ts              # 语音 API (TTS/STT)
 │   │   ├── webhook.ts            # Webhook 通知 API
@@ -328,6 +330,10 @@ hexclaw-desktop/
 │   │   ├── cron/                 # 定时任务 (CronJobConfirmCard)
 │   │   ├── logs/                 # 日志 (LogEntry/LogStats)
 │   │   └── common/               # 通用 (CommandPalette/ConfirmDialog/ToastProvider/ErrorBoundary 等)
+│   ├── contracts/                # 场景扩展契约 (ViewDescriptor/RecordSchema/VerifyResult)
+│   ├── shell/                    # 领域无关 shell 扩展槽 (scenario registry/records/message badges)
+│   ├── features/                 # 场景包实现
+│   │   └── k12/                  # 作业辅导助手 (建档/辅导/错题本/备课卡/学情)
 │   ├── views/                    # 页面视图
 │   │   ├── ChatView.vue          # AI 对话 (默认首页 · 会话/附件/Artifacts/模型切换)
 │   │   ├── AgentsView.vue        # Agent 管理 (模板/运行中/规则/会议)
@@ -337,9 +343,10 @@ hexclaw-desktop/
 │   │   ├── AutomationView.vue    # 自动化 (任务 + Webhook Tab)
 │   │   ├── TasksView.vue         # 定时任务 (Cron 管理)
 │   │   ├── CanvasView.vue        # 工作流画布 (DAG 编排)
-│   │   ├── IntegrationView.vue   # 集成 (技能 + MCP Tab)
+│   │   ├── IntegrationView.vue   # 集成 (Skills + MCP + Prompts Tab)
 │   │   ├── SkillsView.vue        # Skill 管理 + ClawHub 市场
 │   │   ├── McpView.vue           # MCP 管理 (服务器/工具/测试)
+│   │   ├── PromptsView.vue       # Prompt 库 (模板/搜索/复用)
 │   │   ├── IMChannelsView.vue    # IM 通道管理 (飞书/钉钉/企微等)
 │   │   ├── LogsView.vue          # 日志查看 (实时流/过滤/统计)
 │   │   ├── SettingsView.vue      # 设置 (LLM/安全/通知/Webhook/主题/语言)
