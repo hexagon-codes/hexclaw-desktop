@@ -336,6 +336,11 @@ pub async fn backend_chat(
     /// chunk 间空闲超时：sidecar 60s 没新 chunk 即判卡死。
     /// 比"总时长 timeout"更符合 streaming 语义——chunk 持续到来证明系统还活着。
     const CHUNK_IDLE_TIMEOUT_SECS: u64 = 60;
+    /// 首 chunk 超时（独立且更长）：多 skill ReAct + 本地大模型（如 qwen3.5:9b 跑 CPU）在**首个内容
+    /// chunk 前**有很长的思考/工具阶段（真机实测 tutor 首 chunk ~214s，思考期无任何输出）。若沿用 60s
+    /// 空闲超时会把慢但活着的 agent 误判卡死 → 空回复（BUG-20260708 F3）。故首 chunk 前用长超时容忍思考期，
+    /// 收到首 chunk 后切回 60s 空闲超时防中途真卡死。
+    const FIRST_CHUNK_TIMEOUT_SECS: u64 = 300;
     /// 总时长 timeout：仅作 zombie 连接兜底。
     /// streaming 架构下不应作 LLM SLA 边界（LLM 复杂任务 30 min 也可能正常完成）。
     const ZOMBIE_TIMEOUT_SECS: u64 = 1800;
@@ -419,15 +424,19 @@ pub async fn backend_chat(
     let mut accumulated_reply = String::new();
     let mut chunk_count: u64 = 0;
     let idle = std::time::Duration::from_secs(CHUNK_IDLE_TIMEOUT_SECS);
+    let first_chunk = std::time::Duration::from_secs(FIRST_CHUNK_TIMEOUT_SECS);
 
     loop {
-        // chunk 间 idle timeout：60s 没新 bytes 即判卡死。
-        match tokio::time::timeout(idle, stream.next()).await {
+        // 首 chunk 前用长超时（容忍慢本地模型/多步 ReAct 思考期，无输出）；收到首 chunk 后切回 60s
+        // 空闲超时（防中途真卡死）。chunk_count==0 = 尚未收到任何内容 chunk（BUG-20260708 F3）。
+        let wait = if chunk_count == 0 { first_chunk } else { idle };
+        let waited_secs = wait.as_secs();
+        match tokio::time::timeout(wait, stream.next()).await {
             Err(_) => {
                 log::error!(
                     "[backend_chat] CHUNK_IDLE_TIMEOUT 触发 — sidecar {}s 无新 chunk \
                      已收 {} chunks request_id={}",
-                    CHUNK_IDLE_TIMEOUT_SECS,
+                    waited_secs,
                     chunk_count,
                     request_id_for_log,
                 );
@@ -438,13 +447,13 @@ pub async fn backend_chat(
                         event_type: "error".into(),
                         data: format!(
                             "上游 {}s 无新数据，判定卡死（已收 {} chunks）",
-                            CHUNK_IDLE_TIMEOUT_SECS, chunk_count
+                            waited_secs, chunk_count
                         ),
                     },
                 );
                 return Err(format!(
                     "Sidecar {}s 无新 chunk，疑似卡死",
-                    CHUNK_IDLE_TIMEOUT_SECS
+                    waited_secs
                 ));
             }
             Ok(None) => break, // 流自然结束
