@@ -8,7 +8,7 @@
  *
  * 本层只做识题回显 + 批改触发；题干正误由家长核对护栏兜底，答案对错由后端 solve 验算链裁决，不造答案。
  */
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useK12Store } from '../store'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
@@ -18,7 +18,9 @@ import type { VerifyResult } from '@/contracts'
 
 // 审计单-High-2（bug-20260709）：本组件全部 API 调用的 agent = agents.name（后端隔离键），
 // 故 prop 名就叫 agentId——曾命名 agentName 导致上游把 display_name 传进来，写错孩子作用域。
-const props = defineProps<{ agentId: string; grade?: string }>()
+// initialImage（BUG-20260709 拍照发题不解题）：composer 粘贴/上传改道进来的图片 dataURL，
+// 传入即预填并自动识题（原型契约「粘贴作业照片即自动 OCR 回显护栏」），家长零多余点击。
+const props = defineProps<{ agentId: string; grade?: string; initialImage?: string }>()
 
 const { t } = useI18n()
 const store = useK12Store()
@@ -59,6 +61,13 @@ function onFile(e: Event) {
   reader.onload = () => { imageB64.value = String(reader.result ?? '') }
   reader.readAsDataURL(file)
 }
+
+// composer 改道图片：预填 + 自动识题（家长粘贴/上传即进护栏，无需再点「识题」）
+watch(() => props.initialImage, (img) => {
+  if (!img || !img.trim()) return
+  imageB64.value = img
+  void run()
+}, { immediate: true })
 
 async function run() {
   if (!imageB64.value.trim() || recognizing.value) return

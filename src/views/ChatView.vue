@@ -497,6 +497,12 @@ const agentRoleDisplay = computed(() => {
 // chat shell 只解析描述符 + 渲染 registry 提供的组件，**不认识任何场景领域概念**（回归锁）。
 const chatEnhancement = scenarioRegistry.chatEnhancement
 const scenarioRecordsActive = ref(false)
+// 场景增强上交的 composer 预设 chips（BUG-20260709：数据流替代 Teleport 锚点，
+// shell 只透传 string[] 给 ChatInput 在对话框盒内渲染，零场景知识）
+const scenarioComposerChips = ref<string[]>([])
+// 场景会话下 composer 拦截的图片（BUG-20260709 拍照发题不解题）：ChatInput 把粘贴/上传图片
+// 以 dataURL 上交 → 透传给场景增强（K12=自动打开识题护栏）；增强消费后回写 '' 复位。零场景知识。
+const scenarioComposerImage = ref('')
 const scenarioCtx = computed(() => {
   const name = chatStore.agentRole
   if (!name) return null
@@ -972,7 +978,10 @@ onMounted(async () => {
     }
   }
 
-  if (!roleQuery) {
+  // 无 role 深链时回落默认助理——但**当前会话有 Agent 绑定时不得清**（审计单-20260709 High-1）：
+  // loadSessions→selectSession 刚按 session-agent-binding 恢复的辅导老师会被这里无条件清空，
+  // 且清空后标题兜底 watcher 因「已有绑定」early return 无法救回 → K12 场景增强永久消失。
+  if (!roleQuery && !getSessionAgent(chatStore.currentSessionId ?? '')) {
     chatStore.agentRole = ''
   }
 
@@ -1857,6 +1866,9 @@ function startSidebarResize(event: MouseEvent) {
         v-if="scenarioCtx && chatEnhancement"
         v-bind="scenarioCtx"
         v-model:records-active="scenarioRecordsActive"
+        :composer-image="scenarioComposerImage"
+        @update:composer-chips="scenarioComposerChips = $event"
+        @update:composer-image="scenarioComposerImage = $event"
       />
 
         <!-- Messages -->
@@ -2195,11 +2207,13 @@ function startSidebarResize(event: MouseEvent) {
                     >
                       <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
                         <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
+                          <!-- BUG-20260709：CSS zoom-in 承诺可放大，与助手气泡同走 openImagePreview -->
                           <img
                             v-if="att.type === 'image'"
                             class="hc-msg__attachment-img"
                             :src="imageSrc(att)"
                             :alt="att.name"
+                            @click="openImagePreview(imageSrc(att))"
                           />
                           <div v-else class="hc-msg__attachment-file">📎 {{ att.name }}</div>
                         </template>
@@ -2465,6 +2479,9 @@ function startSidebarResize(event: MouseEvent) {
               :allow-image="supportsVision"
               :allow-video="supportsVideo"
               :recipient-name="agentRoleDisplay || t('chat.defaultAgent', '小蟹')"
+              :preset-chips="scenarioCtx ? scenarioComposerChips : []"
+              :scenario-image-intercept="!!(scenarioCtx && chatEnhancement)"
+              @scenario-image="scenarioComposerImage = $event"
               :send-handler="handleSend"
               :gen-model-id="selectedModel"
               :gen-model-name="selectedModelDisplay"

@@ -23,6 +23,10 @@ const props = defineProps<{
   /** 通用 metadata（ChatView 透传）；年级由本组件解析后端 profile 键 k12.grade_term */
   metadata?: Record<string, string>
   descriptor: InstanceViewDescriptor
+  /** composer 改道进来的图片 dataURL（BUG-20260709 拍照发题不解题）：
+   *  外壳把 ChatInput 拦下的粘贴/上传图片经此传入 → 自动打开识题护栏并识题；
+   *  消费后 emit update:composerImage('') 复位，避免重复触发。通用 prop，零 shell 领域词。 */
+  composerImage?: string
 }>()
 
 // 年级 = agent metadata 的 k12.grade_term（后端 profile 契约）；K12 领域键只在 features/k12 解析
@@ -34,7 +38,14 @@ const headerName = computed(() =>
   childName.value ? t('k12.tutor.headerName', { child: childName.value }) : props.agentName,
 )
 
-const emit = defineEmits<{ (e: 'update:recordsActive', v: boolean): void }>()
+const emit = defineEmits<{
+  (e: 'update:recordsActive', v: boolean): void
+  /** composer 预设 chips 上交 shell（数据流，替代旧 Teleport-锚点方案·BUG-20260709）：
+   *  shell 透传给 ChatInput 在对话框盒内渲染，杜绝 defer/锚点顺序时序类反复回归。 */
+  (e: 'update:composerChips', v: string[]): void
+  /** composer 图片消费完复位（BUG-20260709 拍照发题不解题） */
+  (e: 'update:composerImage', v: string): void
+}>()
 
 const { t } = useI18n()
 const route = useRoute()
@@ -60,8 +71,23 @@ onMounted(async () => {
 })
 
 watch(tab, (v) => emit('update:recordsActive', v === 'records'), { immediate: true })
+// chips 数据流上交（辅导 tab 才显示；records tab 输入区本就隐藏，上交空数组保持状态干净）
+watch([composerChips, tab], () => {
+  emit('update:composerChips', tab.value === 'chat' ? composerChips.value : [])
+}, { immediate: true })
 // 切换实例（多孩）→ 回到辅导 tab，避免带着上一个孩子的记录视图（M3-9 结构隔离）
 watch(() => props.agentId, () => { tab.value = 'chat' })
+
+// composer 改道图片 → 自动打开识题护栏并识题（BUG-20260709 拍照发题不解题：
+// 原型契约「输入框上传/粘贴作业照片即自动 OCR 回显护栏」）。图片交给护栏后立刻上报复位。
+const pendingRecognizeImage = ref('')
+watch(() => props.composerImage, (img) => {
+  if (!img) return
+  tab.value = 'chat'
+  recognizeOpen.value = true
+  pendingRecognizeImage.value = img
+  emit('update:composerImage', '')
+}, { immediate: true })
 </script>
 
 <template>
@@ -88,10 +114,11 @@ watch(() => props.agentId, () => { tab.value = 'chat' })
     </div>
   </div>
 
-  <!-- 拍照识题回显护栏面板（辅导 tab，由下方 composer 拍照入口开合；识题走独立 OCR 管道不依赖聊天模型 vision） -->
+  <!-- 拍照识题回显护栏面板（辅导 tab，由下方 composer 拍照入口开合，或 composer 粘贴/上传图片自动改道进来；
+       识题走独立 OCR 管道不依赖聊天模型 vision） -->
   <div v-if="tab === 'chat' && recognizeOpen" class="k12enh-tutor">
     <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
-    <RecognizeGuardPanel :agent-id="agentId" :grade="grade" />
+    <RecognizeGuardPanel :agent-id="agentId" :grade="grade" :initial-image="pendingRecognizeImage" />
   </div>
 
   <!-- 20260709：删「先花 3 分钟备课」nudge 条。家长辅导是临场的，主动引导改为拍照识题（下方相机入口），
@@ -107,17 +134,9 @@ watch(() => props.agentId, () => { tab.value = 'chat' })
     <div class="k12enh-bridge">{{ t('k12.bridge.text') }}</div>
   </Teleport>
 
-  <!-- composer 上方槽（辅导 tab，Teleport 到 composer 上方锚点；同上 defer）：
-       ① 拍照识题入口——识题从头部移到输入框附近（识题=通用输入框上传作业照片的自然动作，走独立 OCR
-          管道，不依赖聊天模型 vision，故 qwen3.5:9b 也能用）；
-       ② 后端 descriptor 下发的预设 chips。 -->
-  <!-- composer 上方槽：仅后端 descriptor 下发的能力 chips（= 该助手默认加载的核心 skill 预览，informational，
-       对齐原型 3-chip）。识题入口不在此,已下沉到输入行相机按钮（见下方 Teleport），对齐原型 composer 拍照入口。 -->
-  <Teleport v-if="tab === 'chat' && composerChips.length" defer to="#hc-chat-scenario-composer-top">
-    <div class="k12enh-chips" data-testid="k12-composer-chips">
-      <span v-for="c in composerChips" :key="c" class="k12enh-chip">{{ c }}</span>
-    </div>
-  </Teleport>
+  <!-- composer 预设 chips（后端 descriptor 下发，对齐原型 .composer-chips）：
+       BUG-20260709 起不再 Teleport 到 composer 上方锚点（浮动行不在对话框内 + defer/锚点时序反复回归），
+       改为 update:composerChips 数据流上交 shell → ChatInput 在对话框盒内渲染（见 emits + watch）。 -->
 
   <!-- 拍照识题入口：Teleport 到输入行动作锚点,与 +/技能/prompt/麦 同排（原型 composer「上传作业照片」相机
        ci-btn）。点击开合识题回显护栏（走独立 OCR 管道，不依赖聊天模型 vision）。 -->
@@ -194,11 +213,8 @@ watch(() => props.agentId, () => { tab.value = 'chat' })
 }
 .k12enh-recbtn:hover { background: var(--hc-bg-hover); color: var(--hc-text-primary); }
 .k12enh-recbtn--on { background: var(--hc-accent-subtle); color: var(--hc-accent); }
-/* composer 能力预览（informational）：20260709 视觉评审——去 chip 描边/底色。它们不可点，
-   长着按钮样子=affordance 撒谎；改为安静的说明行（· 分隔），不再暗示可交互。 */
-.k12enh-chips { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 16px 8px; }
-.k12enh-chip { display: inline-flex; align-items: center; font-size: 11.5px; color: var(--hc-text-muted); }
-.k12enh-chip + .k12enh-chip::before { content: '·'; margin-right: 4px; color: var(--hc-text-muted); }
+/* composer 预设 chips 样式已随 Teleport 方案退役（BUG-20260709）：
+   胶囊渲染归 ChatInput（.hc-composer__skill-chip，对齐原型 .composer-chip），本组件只上交数据。 */
 /* 输入行相机图标（单色描边，与 ChatInput 工具按钮同规格） */
 .k12enh-ic { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* 渐进提示辅导面板（辅导 tab 内嵌，可开合） */

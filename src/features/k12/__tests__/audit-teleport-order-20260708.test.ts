@@ -65,8 +65,10 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
   afterEach(() => warnSpy.mockRestore())
 
   // 回归锁（BUG-20260708 修复后）：增强组件渲染在锚点之前，Teleport 加 defer 后，
-  // 桥接条 + composer chips 都能正确到达锚点、无 "Failed to locate Teleport target" 警告。
-  it('真实顺序下 defer Teleport：桥接与 chips 到达锚点、无定位失败警告', async () => {
+  // 仍在用的 Teleport（桥接条/识题按钮）能正确到达锚点、无 "Failed to locate Teleport target" 警告。
+  // BUG-20260709：composer chips 已放弃 Teleport 改数据流上交（update:composerChips → ChatInput
+  // 盒内渲染），此处锁「chips 不再落任何锚点」防旧方案回潮。
+  it('真实顺序下 defer Teleport：桥接到达锚点、chips 不再走 Teleport、无定位失败警告', async () => {
     const w = mount(ChatViewLike, { global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } }, attachTo: document.body })
     await flushPromises()
 
@@ -75,13 +77,16 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
     )
     const footer = document.getElementById('hc-chat-scenario-footer')
     const composerTop = document.getElementById('hc-chat-scenario-composer-top')
+    const actions = document.getElementById('hc-chat-scenario-composer-actions')
     const bridgeInFooter = !!footer?.querySelector('.k12enh-bridge')
+    const recognizeInActions = !!actions?.querySelector('[data-testid="k12-recognize-toggle"]')
     const chipsInComposer = !!composerTop?.querySelector('[data-testid="k12-composer-chips"]')
-    console.info('[audit] warned=%s bridgeInFooter=%s chipsInComposer=%s', warnedTeleport, bridgeInFooter, chipsInComposer)
+    console.info('[audit] warned=%s bridgeInFooter=%s recognizeInActions=%s chipsInComposer=%s', warnedTeleport, bridgeInFooter, recognizeInActions, chipsInComposer)
 
     expect(warnedTeleport).toBe(false) // defer 后不再"定位失败"
     expect(bridgeInFooter).toBe(true) // 桥接条到达页脚锚点
-    expect(chipsInComposer).toBe(true) // chips 到达 composer 锚点
+    expect(recognizeInActions).toBe(true) // 拍照识题按钮到达输入行动作锚点
+    expect(chipsInComposer).toBe(false) // chips 已改数据流上交，不得再落锚点（BUG-20260709）
     w.unmount()
   })
 })

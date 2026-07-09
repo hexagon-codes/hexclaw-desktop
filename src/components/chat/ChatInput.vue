@@ -75,6 +75,9 @@ const props = defineProps<{
   allowImage?: boolean
   allowVideo?: boolean
   recipientName?: string
+  /** 收件人（Agent/场景）声明的预设能力 chips——渲染在 composer 盒内首行（对齐原型 .composer-chip），
+   *  纯展示数据（string[]），可 × 关闭；来源由父级决定，本组件零场景知识。 */
+  presetChips?: string[]
   sendHandler?: (
     text: string,
     files: File[],
@@ -87,6 +90,10 @@ const props = defineProps<{
   /** 模型是否支持图像生成 / 视频生成（决定相应按钮启用） */
   supportsImageGen?: boolean
   supportsVideoGen?: boolean
+  /** 场景图片改道（BUG-20260709 拍照发题不解题）：为 true 时粘贴/选择/拖入的图片不进附件，
+   *  转为 emit('scenario-image', dataURL) 交场景管道（如 K12 拍照识题回显护栏）。
+   *  由父级按当前会话是否场景实例决定，本组件零场景知识（AP-1）。 */
+  scenarioImageIntercept?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -99,6 +106,8 @@ const emit = defineEmits<{
   'mode:changed': [mode: ComposerMode]
   /** 扣子式技能子菜单底部入口（由父级 ChatView 处理：打开 AI 创建弹层 / 跳转 Skill 管理） */
   skillAction: [action: 'ai-create' | 'upload-local' | 'add-market']
+  /** 场景图片改道（BUG-20260709）：scenarioImageIntercept 时图片以 dataURL 外发 */
+  'scenario-image': [dataUrl: string]
 }>()
 
 /** 本轮「已挂载技能」——选中 skill 后显示可移除 chip，让用户看得见在用什么。
@@ -112,6 +121,18 @@ function removeMountedSkill(name: string) {
 
 /** 本轮 `@` 召唤的上下文引用（知识/连接/会话）——只注入 backendText，不污染气泡。 */
 const contextChips = ref<ContextChip[]>([])
+
+/** 预设能力 chips 的本地关闭态；换一组 chips（切换收件人/实例）即复位 */
+const dismissedPresetChips = ref<Set<string>>(new Set())
+watch(() => props.presetChips, () => { dismissedPresetChips.value = new Set() })
+const presetChipList = computed(() =>
+  (props.presetChips ?? []).filter((c) => !dismissedPresetChips.value.has(c)),
+)
+function dismissPresetChip(chip: string) {
+  const next = new Set(dismissedPresetChips.value)
+  next.add(chip)
+  dismissedPresetChips.value = next
+}
 
 function contextIcon(type: ChatContextRef['type']) {
   return type === 'knowledge' ? BookOpen : type === 'connection' ? Plug : MessageSquare
@@ -611,6 +632,17 @@ onUnmounted(() => {
 function addFiles(files: File[]) {
   for (const file of files) {
     const isImage = file.type.startsWith('image/')
+    // 场景图片改道（BUG-20260709）：场景会话下图片不进附件（否则走 chat vision 被普通聊天吞掉），
+    // 读成 dataURL 外发给场景管道（K12=拍照识题回显护栏）。非图片文件不受影响。
+    if (isImage && props.scenarioImageIntercept) {
+      const reader = new FileReader()
+      reader.onload = () => {
+        const url = String(reader.result ?? '')
+        if (url) emit('scenario-image', url)
+      }
+      reader.readAsDataURL(file)
+      continue
+    }
     attachedFiles.value.push({ file, previewUrl: isImage ? URL.createObjectURL(file) : undefined })
   }
 }
@@ -665,8 +697,24 @@ defineExpose({ focus, setInput, triggerFileUpload })
         <span>{{ t('chat.dropToUpload', '松开以上传文件') }}</span>
       </div>
 
-      <!-- 已挂载技能 / @ 召唤上下文 chip（本轮生效，可移除） -->
-      <div v-if="mountedSkills.length > 0 || contextChips.length > 0" class="hc-composer__skills">
+      <!-- 预设能力 chips（收件人声明）/ 已挂载技能 / @ 召唤上下文 chip（盒内首行，对齐原型 .composer-chips） -->
+      <div
+        v-if="presetChipList.length > 0 || mountedSkills.length > 0 || contextChips.length > 0"
+        class="hc-composer__skills"
+      >
+        <span
+          v-for="c in presetChipList"
+          :key="'preset:' + c"
+          class="hc-composer__skill-chip"
+          data-testid="composer-preset-chip"
+        >
+          <span class="hc-composer__skill-name">{{ c }}</span>
+          <button
+            class="hc-composer__skill-remove"
+            :title="t('common.close', '关闭')"
+            @click="dismissPresetChip(c)"
+          >×</button>
+        </span>
         <span v-for="s in mountedSkills" :key="'skill:' + s.name" class="hc-composer__skill-chip">
           <SkillIcon :skill="s" :size="14" />
           <span class="hc-composer__skill-name">{{ s.display_name || s.name }}</span>

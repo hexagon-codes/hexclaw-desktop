@@ -81,14 +81,16 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
   // 20260709：删「点备课卡→侧栏」「备课提醒条可见且可关」两用例——备课卡侧栏/nudge 已退役，
   // 辅导要点改为识题确认后由 RecognizeGuardPanel 内联生成（见 PrepCardPanel.test / RecognizeGuardPanel）。
 
-  it('辅导 tab：composer 预设 chips 从后端 descriptor 渲染（Teleport）', async () => {
-    render()
+  it('辅导 tab：composer 预设 chips 经 update:composerChips 数据流上交（BUG-20260709 起不再 Teleport）', async () => {
+    const w = render()
     await flushPromises()
-    const anchor = document.getElementById('hc-chat-scenario-composer-top')!
-    const chips = anchor.querySelector('[data-testid="k12-composer-chips"]')
-    expect(chips).toBeTruthy()
-    expect(chips!.textContent).toContain('🧮 数学讲解')
-    expect(chips!.textContent).toContain('📷 识题校验')
+    // 新契约：chips 上交 shell → ChatInput 在对话框盒内渲染（见 bug-20260709-composer-chips-inside-input）
+    const ev = w.emitted('update:composerChips')
+    expect(ev).toBeTruthy()
+    expect(ev![ev!.length - 1]![0]).toEqual(['🧮 数学讲解', '💡 渐进提示', '📷 识题校验'])
+    // 旧 Teleport 锚点不得再收到 chips（浮动行=不在对话框内，方案退役）
+    const anchor = document.getElementById('hc-chat-scenario-composer-top')
+    expect(anchor?.querySelector('[data-testid="k12-composer-chips"]') ?? null).toBeNull()
   })
 
   it('辅导 tab：扩展桥 Teleport 到会话页脚', () => {
