@@ -2587,7 +2587,7 @@ export default {
     reviewQueueCount: '{count} due',
     practiceAgain: 'Practice again',
     practice: 'Practice',
-    markMastered: 'Mastered',
+    markMastered: 'Got it now',
     detail: 'Details',
     all: 'All',
     empty: 'No records yet',

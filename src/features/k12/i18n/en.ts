@@ -58,6 +58,8 @@ export default {
     retryTitle: 'One more to practice (same-concept variant)',
     retryLoading: 'Generating and verifying…',
     retryMaskHint: 'Answer is for the parent to check — keep it from the child until they finish on their own.',
+    retryReveal: 'Reveal answer (parent check)',
+    masteredToast: 'Mastered ✓ · removed from review queue',
     dividerRule: 'Wrong-and-fix → 「Mistakes」(math/phys/chem problems + CN/EN dictation/spelling/grammar fixes, cross-subject review by due date); worth-remembering → 「Notes」(good phrases/poems/collected, no review). CN/EN word practice = verbatim recall + exact string match; math/sci = solve verification. Essays are archived into reports only, not the review queue.',
   },
 
@@ -88,6 +90,7 @@ export default {
     prepCard: '📋 Tutoring tips',
     backup: 'Backup / Restore',
     export: 'Export',
+    more: 'Export / Backup',
     tutor: '💬 Tutor',
   },
 
@@ -196,9 +199,7 @@ export default {
   },
 
   bridge: {
-    text: "💬 I don't just tutor — parent notices, lookups, scheduling too",
-    link: 'See what else ›',
-    toast: 'Try "draft a parent-meeting notice" — I handle everyday tasks too',
+    text: '💬 I don\'t just tutor — parent notices, lookups, scheduling too. Try "draft a parent-meeting notice"',
   },
 
   prep: {

@@ -2598,7 +2598,8 @@ export default {
     reviewQueueCount: '{count} 道待复习',
     practiceAgain: '再练一道',
     practice: '再练',
-    markMastered: '已掌握',
+    // 20260709 文案评审：按原型定稿回「他会了」——家长口吻是本产品的品牌声音锚点
+    markMastered: '他会了',
     detail: '详情',
     all: '全部',
     empty: '暂无记录',

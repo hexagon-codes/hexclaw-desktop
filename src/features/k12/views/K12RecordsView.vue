@@ -166,37 +166,40 @@ async function onAction(payload: { id: 'practiceAgain' | 'markMastered' | 'detai
   if (id === 'markMastered') {
     try {
       await store.markMastered(props.agentId, record.recordId, record.version)
-      toast.success(t('records.markMastered'))
+      // 「他会了」是家长的情绪峰值时刻——toast 说清结果；真「撤销」待后端状态回退端点（原型 20260709 记档 P2）。
+      toast.success(t('k12.records.masteredToast'))
     } catch (e) {
       // 409 版本冲突：并发改动，刷新后重试
       toast.error(e instanceof Error ? e.message : String(e))
       await reload()
     }
   } else if (id === 'practiceAgain') {
-    // 「再练一道」：调 POST /review/retry 出同知识点相似题（过 solve 验算链），
-    // 结果给家长核对（守答案遮罩：先别给孩子看）。
-    retry.value = { open: true, loading: true, solution: '', badge: '' }
+    // 「再练一道」：调 POST /review/retry 出同知识点相似题（过 solve 验算链）。
+    // 原型终态=变式直接入本周复习卷不亮答案；当前后端 retry 无持久化且 solution 题答混排（P2 缺口），
+    // 过渡为「真遮罩弹层」：答案默认模糊不可选中，家长明确点「显示答案」才揭示——守答案承诺交互兑现。
+    retry.value = { open: true, loading: true, solution: '', badge: '', revealed: false }
     try {
       const res = await k12ReviewRetry({ agent: props.agentId, record_id: record.recordId, grade: props.grade })
-      retry.value = { open: true, loading: false, solution: res.solution, badge: res.badge }
+      retry.value = { open: true, loading: false, solution: res.solution, badge: res.badge, revealed: false }
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e))
-      retry.value = { open: false, loading: false, solution: '', badge: '' }
+      retry.value = { open: false, loading: false, solution: '', badge: '', revealed: false }
     }
   } else {
     toast.info(t('records.detail'))
   }
 }
 
-// 「再练一道」变式题结果弹层（守答案遮罩：答案供家长核对，先别给孩子看）。
-const retry = ref<{ open: boolean; loading: boolean; solution: string; badge: string }>({
+// 「再练一道」变式题结果弹层（守答案真遮罩：revealed=false 时答案模糊+禁选中，点按才揭示）。
+const retry = ref<{ open: boolean; loading: boolean; solution: string; badge: string; revealed: boolean }>({
   open: false,
   loading: false,
   solution: '',
   badge: '',
+  revealed: false,
 })
 function closeRetry() {
-  retry.value = { open: false, loading: false, solution: '', badge: '' }
+  retry.value = { open: false, loading: false, solution: '', badge: '', revealed: false }
 }
 
 // ── 打印 / 导出（M2-3 / M3-5）──
@@ -246,18 +249,23 @@ async function doExportMd() {
         <button :class="{ on: sub === 'insight' }" @click="sub = 'insight'">{{ t('k12.subTabs.insight') }}</button>
       </div>
       <span class="k12rec__sp" />
-      <template v-if="sub === 'mistakes'">
-        <button class="btn" data-testid="mistake-add-open" @click="mistakeAddOpen = !mistakeAddOpen">✏️ {{ t('k12.mistakeAdd.open') }}</button>
-        <div class="k12rec__export">
-          <button class="btn" @click="exportOpen = !exportOpen">{{ t('k12.actions.export') }} ▾</button>
-          <div v-if="exportOpen" class="k12rec__menu">
-            <button @click="doExport('pdf')">PDF</button>
-            <button @click="doExport('doc')">Word</button>
-            <button @click="doExportMd">Markdown</button>
-          </div>
+      <!-- 20260709 视觉评审（原型 c8a194e 定稿）：①功能位 emoji → 单色描边图标；②备份/恢复低频动作
+           不占常驻顶栏 → 与导出合并进「⋯」溢出菜单（导出项仅错题 tab，备份全 tab 可达）。 -->
+      <button v-if="sub === 'mistakes'" class="btn k12rec__addbtn" data-testid="mistake-add-open" @click="mistakeAddOpen = !mistakeAddOpen">
+        <svg class="k12ic" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
+        {{ t('k12.mistakeAdd.open') }}
+      </button>
+      <div class="k12rec__export">
+        <button class="btn" :title="t('k12.actions.more')" @click="exportOpen = !exportOpen">⋯</button>
+        <div v-if="exportOpen" class="k12rec__menu">
+          <template v-if="sub === 'mistakes'">
+            <button @click="doExport('pdf')">{{ t('k12.actions.export') }} PDF</button>
+            <button @click="doExport('doc')">{{ t('k12.actions.export') }} Word</button>
+            <button @click="doExportMd">{{ t('k12.actions.export') }} Markdown</button>
+          </template>
+          <button @click="exportOpen = false; emit('open-backup')">{{ t('k12.actions.backup') }}</button>
         </div>
-      </template>
-      <button class="btn" @click="emit('open-backup')">{{ t('k12.actions.backup') }}</button>
+      </div>
     </div>
 
     <div class="k12rec__body">
@@ -298,10 +306,12 @@ async function doExportMd() {
         <RecordList v-if="view" :schema="MISTAKE_SCHEMA" :view="view" @action="onAction">
           <template #review-actions>
             <button class="btn btn-primary" @click="doPrint">
-              🖨 {{ t('k12.records.genWorksheet') }}
+              <svg class="k12ic" viewBox="0 0 24 24"><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v8H6z" /></svg>
+              {{ t('k12.records.genWorksheet') }}
             </button>
             <button class="btn" data-testid="custom-paper-open" @click="customPaperOpen = !customPaperOpen">
-              ⚙ {{ t('k12.records.customPaper') }}
+              <svg class="k12ic" viewBox="0 0 24 24"><path d="M4 21v-7" /><path d="M4 10V3" /><path d="M12 21v-9" /><path d="M12 8V3" /><path d="M20 21v-5" /><path d="M20 12V3" /><path d="M2 14h4" /><path d="M10 8h4" /><path d="M18 16h4" /></svg>
+              {{ t('k12.records.customPaper') }}
             </button>
           </template>
         </RecordList>
@@ -429,7 +439,7 @@ async function doExportMd() {
     <div v-if="retry.open" class="k12retry" @click.self="closeRetry">
       <div class="k12retry__card">
         <div class="k12retry__head">
-          <b>✏️ {{ t('k12.records.retryTitle') }}</b>
+          <b>{{ t('k12.records.retryTitle') }}</b>
           <span v-if="retry.badge" class="pill pill-green">{{ retry.badge }}</span>
           <span class="k12rec__sp" />
           <button class="btn btn-ghost" @click="closeRetry">✕</button>
@@ -437,7 +447,16 @@ async function doExportMd() {
         <p v-if="retry.loading" class="k12rec__hint">{{ t('k12.records.retryLoading') }}</p>
         <template v-else>
           <p class="k12retry__mask">🔒 {{ t('k12.records.retryMaskHint') }}</p>
-          <pre class="k12retry__body">{{ retry.solution }}</pre>
+          <!-- 守答案真遮罩：未揭示时模糊 + 禁选中（防孩子凑近一眼看光），家长点按才显示 -->
+          <div class="k12retry__bodywrap" :class="{ 'k12retry__bodywrap--masked': !retry.revealed }">
+            <pre class="k12retry__body" :aria-hidden="!retry.revealed">{{ retry.solution }}</pre>
+            <button
+              v-if="!retry.revealed"
+              class="btn btn-primary k12retry__reveal"
+              data-testid="retry-reveal"
+              @click="retry.revealed = true"
+            >{{ t('k12.records.retryReveal') }}</button>
+          </div>
         </template>
       </div>
     </div>
@@ -525,10 +544,21 @@ async function doExportMd() {
 .btn:hover { background: var(--hc-bg-hover); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--hc-text-secondary); }
 .btn-primary { background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%); color: #fff; border-color: transparent; }
+/* 功能位单色描边图标（20260709 视觉评审：emoji 只留身份/语义徽章位；与原型 .ic-sm 同规格） */
+.k12ic { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+.k12rec__addbtn { display: inline-flex; align-items: center; gap: 5px; }
+/* 学科定色（原型 .kpill.chi/.eng 同源）：错题列表最高频扫读维度=哪科错得多。
+   RecordList 保持领域无关，经 data-chip 前缀选择器由本场景层上色（chip 文案「学科·知识点」）。 */
+:deep(.rl-chip[data-chip^='语文']) { background: color-mix(in srgb, #e8590c 12%, transparent); color: #e8590c; }
+:deep(.rl-chip[data-chip^='英语']) { background: color-mix(in srgb, #7048e8 10%, transparent); color: #7048e8; }
 /* 再练一道弹层 */
 .k12retry { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.32); padding: 24px; }
 .k12retry__card { width: min(560px, 100%); max-height: 80vh; overflow: auto; background: var(--hc-bg-elevated); border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-lg); box-shadow: var(--hc-shadow-lg); padding: 16px 18px; }
 .k12retry__head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
 .k12retry__mask { font-size: 11.5px; color: var(--hc-warning); margin-bottom: 8px; }
 .k12retry__body { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13px; line-height: 1.6; color: var(--hc-text-primary); margin: 0; }
+/* 守答案真遮罩：模糊 + 禁选中；揭示按钮悬浮居中 */
+.k12retry__bodywrap { position: relative; }
+.k12retry__bodywrap--masked .k12retry__body { filter: blur(7px); user-select: none; pointer-events: none; }
+.k12retry__reveal { position: absolute; inset: 0; margin: auto; width: fit-content; height: fit-content; }
 </style>

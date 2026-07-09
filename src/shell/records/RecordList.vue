@@ -60,14 +60,16 @@ const reviewItems = computed(() => {
     <!-- 复习队列（reviewable 集合才有；场景专属动作经 slot 注入） -->
     <section v-if="reviewItems.length" class="rl-review">
       <header class="rl-review__head">
-        <b>📌 {{ t('records.reviewQueueTitle') }} · {{ t('records.reviewQueueCount', { count: reviewItems.length }) }}</b>
+        <!-- 20260709 视觉评审：功能位 emoji → 单色描边图标（emoji 保留给身份/语义徽章位） -->
+        <b class="rl-review__title"><svg class="rl-ic" viewBox="0 0 24 24"><path d="M4 22V4c0-.6.4-1 1-1h9.5l-.8 3.2c-.1.5.2.8.7.8H20l-2 6h-7" /></svg>{{ t('records.reviewQueueTitle') }} · {{ t('records.reviewQueueCount', { count: reviewItems.length }) }}</b>
         <span class="rl-spacer" />
         <slot name="review-actions" :items="reviewItems" />
       </header>
       <div class="rl-rows">
         <div v-for="item in reviewItems" :key="item.recordId" class="rl-row">
           <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
-          <span v-for="f in chipFields" :key="f.key" class="rl-chip">{{ fieldValue(item, f) }}</span>
+          <!-- data-chip=chip 文本：领域无关的样式钩子，场景层可按值前缀定色（如 K12 学科色） -->
+          <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="fieldValue(item, f)">{{ fieldValue(item, f) }}</span>
           <span class="rl-meta rl-spacer">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
           <button class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
             {{ t('records.practiceAgain') }}
@@ -101,7 +103,7 @@ const reviewItems = computed(() => {
       <div v-for="item in filteredItems" :key="item.recordId" class="rl-row">
         <span v-if="dateField" class="rl-date">{{ fieldValue(item, dateField) }}</span>
         <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
-        <span v-for="f in chipFields" :key="f.key" class="rl-chip">{{ fieldValue(item, f) }}</span>
+        <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="fieldValue(item, f)">{{ fieldValue(item, f) }}</span>
         <span class="rl-meta rl-spacer">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
         <span v-if="stateOf(item)" class="rl-status" :class="`rl-status--${stateOf(item)!.tone ?? 'na'}`">
           {{ t(stateOf(item)!.labelKey) }}
@@ -139,6 +141,8 @@ const reviewItems = computed(() => {
   flex-wrap: wrap;
   color: var(--hc-text-primary);
 }
+.rl-review__title { display: inline-flex; align-items: center; gap: 6px; }
+.rl-ic { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .rl-rows {
   display: flex;
   flex-direction: column;

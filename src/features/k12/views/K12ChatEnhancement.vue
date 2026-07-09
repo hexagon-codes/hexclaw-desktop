@@ -11,7 +11,6 @@
 import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import { useToast } from '@/composables/useToast'
 import { k12GetViewDescriptor } from '@/api/k12'
 import type { InstanceViewDescriptor } from '@/contracts'
 import K12RecordsView from './K12RecordsView.vue'
@@ -38,7 +37,6 @@ const headerName = computed(() =>
 const emit = defineEmits<{ (e: 'update:recordsActive', v: boolean): void }>()
 
 const { t } = useI18n()
-const toast = useToast()
 const route = useRoute()
 
 const tab = ref<'chat' | 'records'>('chat')
@@ -92,7 +90,8 @@ watch(() => props.agentId, () => { tab.value = 'chat' })
 
   <!-- 拍照识题回显护栏面板（辅导 tab，由下方 composer 拍照入口开合；识题走独立 OCR 管道不依赖聊天模型 vision） -->
   <div v-if="tab === 'chat' && recognizeOpen" class="k12enh-tutor">
-    <RecognizeGuardPanel :agent-name="agentName" :grade="grade" />
+    <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
+    <RecognizeGuardPanel :agent-id="agentId" :grade="grade" />
   </div>
 
   <!-- 20260709：删「先花 3 分钟备课」nudge 条。家长辅导是临场的，主动引导改为拍照识题（下方相机入口），
@@ -102,11 +101,10 @@ watch(() => props.agentId, () => { tab.value = 'chat' })
        defer：本增强组件在 ChatView 里渲染在锚点 div 之前（ChatView ~1815 vs 锚点 2344），
        无 defer 时同步 Teleport 抢在锚点渲染前定位 → "Failed to locate Teleport target"、桥接丢失
        （BUG-20260708）。Vue 3.5 defer 把 target 解析延到父树挂载后，此时锚点已在 DOM。 -->
+  <!-- 20260709 视觉评审：删「看看还能做什么›」假链接（可点样式点了只弹 toast=placebo，信任微损）。
+       可操作示例并进正文一句话，无链接不撒谎。 -->
   <Teleport v-if="tab === 'chat'" defer to="#hc-chat-scenario-footer">
-    <div class="k12enh-bridge">
-      {{ t('k12.bridge.text') }}
-      <a class="k12enh-bridge__link" @click="toast.info(t('k12.bridge.toast'))">{{ t('k12.bridge.link') }}</a>
-    </div>
+    <div class="k12enh-bridge">{{ t('k12.bridge.text') }}</div>
   </Teleport>
 
   <!-- composer 上方槽（辅导 tab，Teleport 到 composer 上方锚点；同上 defer）：
@@ -130,7 +128,7 @@ watch(() => props.agentId, () => { tab.value = 'chat' })
       :class="{ 'k12enh-recbtn--on': recognizeOpen }"
       :title="t('k12.recognize.run')"
       @click="recognizeOpen = !recognizeOpen"
-    >📷</button>
+    ><svg class="k12enh-ic" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" /><circle cx="12" cy="13" r="3" /></svg></button>
   </Teleport>
 
   <!-- 记录视图（错题本 tab）：接管消息区（外壳据 recordsActive 隐藏原生消息/输入） -->
@@ -186,7 +184,6 @@ watch(() => props.agentId, () => { tab.value = 'chat' })
 .k12enh-bridge {
   text-align: center; margin: 0 16px 12px; font-size: 11.5px; color: var(--hc-text-muted);
 }
-.k12enh-bridge__link { color: var(--hc-accent); cursor: pointer; margin-left: 4px; }
 /* composer 上方槽：拍照识题入口 + 预设 chips（识题从头部移到输入框附近·D1） */
 /* 拍照识题：输入行图标工具按钮（与 ChatInput 的 .hc-composer__tool 同款尺寸/手感，行内一排）。 */
 .k12enh-recbtn {
@@ -197,12 +194,13 @@ watch(() => props.agentId, () => { tab.value = 'chat' })
 }
 .k12enh-recbtn:hover { background: var(--hc-bg-hover); color: var(--hc-text-primary); }
 .k12enh-recbtn--on { background: var(--hc-accent-subtle); color: var(--hc-accent); }
-/* composer 能力 chips（默认加载 skill 预览，informational，对齐原型 3-chip） */
-.k12enh-chips { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 16px 8px; }
-.k12enh-chip {
-  display: inline-flex; align-items: center; font-size: 12px; padding: 4px 12px; border-radius: 999px;
-  background: var(--hc-bg-input); border: 0.5px solid var(--hc-border); color: var(--hc-text-secondary);
-}
+/* composer 能力预览（informational）：20260709 视觉评审——去 chip 描边/底色。它们不可点，
+   长着按钮样子=affordance 撒谎；改为安静的说明行（· 分隔），不再暗示可交互。 */
+.k12enh-chips { display: flex; gap: 4px; flex-wrap: wrap; margin: 0 16px 8px; }
+.k12enh-chip { display: inline-flex; align-items: center; font-size: 11.5px; color: var(--hc-text-muted); }
+.k12enh-chip + .k12enh-chip::before { content: '·'; margin-right: 4px; color: var(--hc-text-muted); }
+/* 输入行相机图标（单色描边，与 ChatInput 工具按钮同规格） */
+.k12enh-ic { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* 渐进提示辅导面板（辅导 tab 内嵌，可开合） */
 .k12enh-tutor {
   margin: 0 16px 8px;

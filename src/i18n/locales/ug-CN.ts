@@ -2570,7 +2570,7 @@ export default {
     reviewQueueCount: '{count} تال تەكرارلاش',
     practiceAgain: 'يەنە بىر تال مەشىق',
     practice: 'مەشىق',
-    markMastered: 'ئىگىلىدى',
+    markMastered: 'ئۇ ئۆگىنىۋالدى',
     detail: 'تەپسىلاتى',
     all: 'ھەممىسى',
     empty: 'خاتىرە يوق',

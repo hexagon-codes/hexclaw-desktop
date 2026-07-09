@@ -12,8 +12,11 @@ function evidenceOf(t: EvidenceType): VerifyEvidence {
   return STRONG_EVIDENCE.includes(t) ? 'program_verified' : 'model_review'
 }
 
-/** mistakeDTO → 通用记录项（字段进 fields，与 MISTAKE_SCHEMA.fields 的 key 对齐） */
-export function mistakeToRecord(dto: MistakeDTO, agentId: string): RecordItem {
+/** mistakeDTO → 通用记录项（字段进 fields，与 MISTAKE_SCHEMA.fields 的 key 对齐）。
+ *  subject 已知时 chip 显示「学科·知识点」（原型 20260709 学科定色：数学蓝/语文橙/英语紫，
+ *  RecordList data-chip 前缀选择器上色）；/mistakes 列表暂不下发 subject（P2 缺口），队列行先亮。 */
+export function mistakeToRecord(dto: MistakeDTO, agentId: string, subject?: string): RecordItem {
+  const subj = dto.subject || subject
   return {
     recordId: dto.record_id,
     agentId,
@@ -22,7 +25,7 @@ export function mistakeToRecord(dto: MistakeDTO, agentId: string): RecordItem {
     status: dto.status,
     fields: {
       question: dto.question,
-      knowledge_point: dto.knowledge_point,
+      knowledge_point: subj ? `${subj}·${dto.knowledge_point}` : dto.knowledge_point,
       error_cause: dto.error_cause,
     },
     dueAt: dto.due_at ?? null,
@@ -36,7 +39,9 @@ export function mistakesToView(
   all: MistakeDTO[],
   due: MistakeDTO[],
 ): RecordCollectionView {
-  const items = all.map((d) => mistakeToRecord(d, agentId))
+  // review-queue 下发 subject（/mistakes 列表可缺省）：按 record_id 回填，让队列行 chip 有学科前缀
+  const subjectById = new Map(due.filter((d) => d.subject).map((d) => [d.record_id, d.subject!]))
+  const items = all.map((d) => mistakeToRecord(d, agentId, subjectById.get(d.record_id)))
   const statusCounts: Record<string, number> = {}
   for (const it of items) if (it.status) statusCounts[it.status] = (statusCounts[it.status] ?? 0) + 1
   return {

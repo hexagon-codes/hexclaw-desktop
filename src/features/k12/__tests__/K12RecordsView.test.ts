@@ -12,7 +12,11 @@ const h = vi.hoisted(() => {
     { record_id: 'b', question: '解方程 2x+15=43', knowledge_point: '简易方程', error_cause: '移项符号错', status: 'new', version: 1, due_at: 1710000000 },
     { record_id: 'c', question: '梯形果园的面积', knowledge_point: '简易方程', error_cause: '公式记错', status: 'mastered', version: 2 },
   ]
-  return { mistakes, markMasteredSpy: vi.fn().mockResolvedValue({ ok: true }) }
+  return {
+    mistakes,
+    markMasteredSpy: vi.fn().mockResolvedValue({ ok: true }),
+    retrySpy: vi.fn().mockResolvedValue({ solution: '变式题：4.2×3=? 解：12.6', verdict: 'agree', badge: '✅ 已程序验算' }),
+  }
 })
 const markMasteredSpy = h.markMasteredSpy
 
@@ -20,6 +24,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: h.mistakes }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [h.mistakes[0]] }),
   k12MarkMastered: (req: unknown) => h.markMasteredSpy(req),
+  k12ReviewRetry: (req: unknown) => h.retrySpy(req),
   k12PrepCard: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
@@ -72,11 +77,37 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
   it('「他会了」→ 调 mark-mastered 并带正确 record_id/version', async () => {
     const w = render()
     await flushPromises()
-    // 复习队列第一行的"他会了"按钮
-    const masteredBtn = w.findAll('.rl-btn').find((b) => b.text() === '已掌握')!
+    // 复习队列第一行的"他会了"按钮（20260709 文案评审：按原型回「他会了」，非「已掌握」）
+    const masteredBtn = w.findAll('.rl-btn').find((b) => b.text() === '他会了')!
     await masteredBtn.trigger('click')
     await flushPromises()
     expect(markMasteredSpy).toHaveBeenCalledWith({ record_id: 'a', version: 0 })
+  })
+
+  it('「再练一道」→ 守答案真遮罩：答案默认遮住，点「显示答案」才揭示（20260709 信任兑现）', async () => {
+    const w = render()
+    await flushPromises()
+    await w.findAll('.rl-btn').find((b) => b.text() === '再练一道')!.trigger('click')
+    await flushPromises()
+    // 弹层出现且默认遮罩（bodywrap 带 masked 类 + 揭示按钮在）
+    expect(w.find('.k12retry').exists()).toBe(true)
+    expect(w.find('.k12retry__bodywrap--masked').exists()).toBe(true)
+    const reveal = w.find('[data-testid="retry-reveal"]')
+    expect(reveal.exists()).toBe(true)
+    await reveal.trigger('click')
+    // 揭示后遮罩解除、答案可见
+    expect(w.find('.k12retry__bodywrap--masked').exists()).toBe(false)
+    expect(w.text()).toContain('12.6')
+  })
+
+  it('「⋯」溢出菜单：备份/恢复收进菜单（不占常驻顶栏），点击外发 open-backup', async () => {
+    const w = render()
+    await flushPromises()
+    await w.find('.k12rec__export button').trigger('click')
+    const backupBtn = w.findAll('.k12rec__menu button').find((b) => b.text().includes('备份'))
+    expect(backupBtn, '⋯ 菜单应含备份/恢复').toBeTruthy()
+    await backupBtn!.trigger('click')
+    expect(w.emitted('open-backup')).toBeTruthy()
   })
 
   it('学情 tab：真实 insight-report 驱动（薄弱 TOP3 + 连续挫败 + 建议）', async () => {

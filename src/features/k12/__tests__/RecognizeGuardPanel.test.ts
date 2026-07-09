@@ -39,7 +39,7 @@ function i18n() {
 }
 function render(props: Record<string, unknown> = {}) {
   return mount(RecognizeGuardPanel, {
-    props: { agentName: 'mingming', grade: '五年级上', ...props },
+    props: { agentId: 'mingming', grade: '五年级上', ...props },
     global: { plugins: [createPinia(), i18n()] },
   })
 }

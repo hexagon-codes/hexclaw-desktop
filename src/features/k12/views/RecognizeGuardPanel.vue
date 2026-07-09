@@ -16,7 +16,9 @@ import PrepCardPanel from './PrepCardPanel.vue'
 import type { RecognizedQuestion } from '@/api/k12'
 import type { VerifyResult } from '@/contracts'
 
-const props = defineProps<{ agentName: string; grade?: string }>()
+// 审计单-High-2（bug-20260709）：本组件全部 API 调用的 agent = agents.name（后端隔离键），
+// 故 prop 名就叫 agentId——曾命名 agentName 导致上游把 display_name 传进来，写错孩子作用域。
+const props = defineProps<{ agentId: string; grade?: string }>()
 
 const { t } = useI18n()
 const store = useK12Store()
@@ -88,7 +90,7 @@ async function grade(i: number) {
   errMsg.value = ''
   try {
     const res = await store.grade({
-      agent: props.agentName,
+      agent: props.agentId,
       grade: props.grade ?? '',
       problem: row.problem.trim(),
       student_answer: row.studentAnswer.trim() || undefined,
@@ -109,7 +111,7 @@ async function coldStart() {
   errMsg.value = ''
   try {
     const resp = await store.coldStart({
-      agent: props.agentName,
+      agent: props.agentId,
       knowledge_points: allKnowledgePoints.value,
     })
     coldStartResult.value = { grade: resp.grade_term, inferred: resp.inferred }
@@ -224,7 +226,7 @@ async function coldStart() {
          用识题识别出的真实知识点绑定当前作业，家长零主动动作、零"备课"心智。 -->
     <PrepCardPanel
       v-if="rows.length && allKnowledgePoints.length"
-      :agent-id="agentName"
+      :agent-id="agentId"
       :grade="props.grade || ''"
       :knowledge-points="allKnowledgePoints"
     />
