@@ -202,7 +202,7 @@ describe('Chain A: Chat -> Backend -> Response', () => {
       undefined,              // attachments
       // metadata：温度/MaxTokens 经 F-2 映射为后端消费的 agent_temperature/agent_max_tokens
       // BUG-20260703：显式 agentRole 同时作为 pinned_agent 锁定信号
-      { agent_temperature: '0.8', agent_max_tokens: '2048', pinned_agent: 'coder' },
+      { agent_temperature: '0.8', agent_max_tokens: '2048', pinned_agent: 'coder', user_locale: 'zh-CN' },
       expect.any(String),     // requestId
     )
   })
