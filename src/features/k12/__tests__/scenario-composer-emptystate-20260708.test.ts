@@ -40,8 +40,8 @@ describe('P0-20260708 场景空态契约', () => {
       const tr = i18n.global.t as (k: string) => string
       const title = tr(K12_VIEW_DESCRIPTOR.emptyState!.titleKey)
       const sub = tr(K12_VIEW_DESCRIPTOR.emptyState!.subtitleKey)
-      expect(title, loc).not.toBe(K12_VIEW_DESCRIPTOR.emptyState!.titleKey)
-      expect(sub, loc).not.toBe(K12_VIEW_DESCRIPTOR.emptyState!.subtitleKey)
+      expect(title, `${loc} title 应有翻译`).not.toBe(K12_VIEW_DESCRIPTOR.emptyState!.titleKey)
+      expect(sub, `${loc} subtitle 应有翻译`).not.toBe(K12_VIEW_DESCRIPTOR.emptyState!.subtitleKey)
     }
   })
 })

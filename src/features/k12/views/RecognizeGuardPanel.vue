@@ -83,7 +83,8 @@ async function run() {
   }
 }
 
-async function grade(i: number) {
+// 命名避开 props.grade（vue/no-dupe-keys：script 顶层标识符与 prop 同名会在模板里撞键）
+async function gradeRow(i: number) {
   const row = rows.value[i]
   if (!row || !row.problem.trim() || row.grading) return
   row.grading = true
@@ -213,7 +214,7 @@ async function coldStart() {
             class="rec-row__gradebtn"
             :data-testid="`rq-grade-${i}`"
             :disabled="!row.problem.trim() || row.grading"
-            @click="grade(i)"
+            @click="gradeRow(i)"
           >
             {{ row.grading ? t('k12.recognize.grading') : t('k12.recognize.grade') }}
           </button>

@@ -7,7 +7,7 @@
  * 修复：SessionList 据 session.agent_name 解析 agent 的 display_name，当 title 缺省或恰为原始 id 时
  * 显示 display_name（用户手动改名则保留）。回归锁：列表不得出现原始 id、应显示可读名。
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'

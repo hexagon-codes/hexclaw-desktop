@@ -7,7 +7,7 @@ import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
 
 const h = vi.hoisted(() => ({
-  printSpy: vi.fn((..._a: unknown[]) => true),
+  printSpy: vi.fn(() => true),
   mistakes: [
     { record_id: 'a', question: '苹果和梨的价钱', knowledge_point: '小数乘法', error_cause: '进位', status: 'new', version: 0, due_at: 1 },
   ],

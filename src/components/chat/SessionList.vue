@@ -40,10 +40,17 @@ let filterAbortController: AbortController | null = null
 const pinnedIds = ref<Set<string>>(new Set())
 
 // 场景实例会话自动置顶：据会话绑定的 agent 是否有场景描述符判定（registry，通用无领域词）。
+// 审计单-Medium-4（bug-20260709）：绑定用与 sessionTitle 同一套三路解析（localStorage 绑定 >
+// 后端 agent_name > 标题即内部名）——原来只认 s.agent_name，localStorage 绑定恢复的场景会话
+// 标题显示正常却拿不到常驻置顶。
 function isScenarioSession(s: ChatSession): boolean {
-  if (!s.agent_name) return false
-  const cfg = agentsStore.findAgent(s.agent_name)
-  return scenarioRegistry.isScenarioInstance({ agentId: s.agent_name, metadata: cfg?.metadata })
+  // 注意不能要求 findAgent 必中（boundAgentOf 返回 cfg 才算）：resolver 可仅凭 agentId 判定，
+  // agent 未注册到 store 时也要能置顶（SessionList.test「场景实例会话自动置顶」回归锁）。
+  const raw = (s.title ?? '').trim()
+  const boundName = getSessionAgent(s.id) || s.agent_name || raw
+  if (!boundName) return false
+  const cfg = agentsStore.findAgent(boundName)
+  return scenarioRegistry.isScenarioInstance({ agentId: boundName, metadata: cfg?.metadata })
 }
 // 有效置顶 = 手动置顶 或 场景实例（场景实例常驻顶部）
 function isPinnedSession(s: ChatSession): boolean {
@@ -65,7 +72,7 @@ function boundAgentOf(s: ChatSession) {
 function sessionTitle(s: ChatSession): string {
   const raw = (s.title ?? '').trim()
   const boundName = getSessionAgent(s.id) || s.agent_name || raw
-  const cfg = boundName ? agentsStore.findAgent(boundName) : undefined
+  const cfg = boundAgentOf(s)
   const avatar = (cfg?.metadata?.avatar ?? '').trim()
   const display = (cfg?.display_name ?? '').trim()
   // 标题为空 / 恰为 agent 内部名（未手动改名）→ 显示可读名；改过名则保留自定义标题

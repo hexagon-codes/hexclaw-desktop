@@ -41,7 +41,6 @@ describe('BUG-20260622 skill 显示在会话气泡', () => {
 
   it('handleSend 把 skillNames 透传给 chatStore.sendMessage（供写入 metadata.skills）', async () => {
     const deps = makeDeps()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { handleSend } = useChatSend(deps as any)
     await handleSend('你去哪里了?', undefined, { skillNames: ['前女友'] })
     const call = deps.chatStore.sendMessage.mock.calls[0]!
@@ -51,7 +50,6 @@ describe('BUG-20260622 skill 显示在会话气泡', () => {
 
   it('无挂载技能时不破坏既有调用（skillNames 不出现或为空）', async () => {
     const deps = makeDeps()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { handleSend } = useChatSend(deps as any)
     await handleSend('hello')
     const opts = deps.chatStore.sendMessage.mock.calls[0]![2] as { skillNames?: string[] } | undefined

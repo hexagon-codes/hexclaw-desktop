@@ -149,6 +149,9 @@ function updateSkill(name: string, patch: Partial<Skill>) {
     ...skills.value[idx]!,
     ...patch,
   }
+  // 整对象替换后同步预览弹窗引用——否则 installedPreview 仍指旧对象，
+  // 弹窗 :enabled 读到陈旧状态（启停后「已启用/已禁用」显示反态）。
+  if (installedPreview.value?.name === name) installedPreview.value = skills.value[idx]!
 }
 
 function getSkillScope(skill: Skill): 'runtime' | 'local' {

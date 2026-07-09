@@ -57,7 +57,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('显示名随称呼/年级自动生成「{称呼}的辅导老师 · {年级}」', async () => {
-    const w = render()
+    render()
     await B().find('.k12pf__input').setValue('小明')
     expect(B().find('.k12pf__intro').text()).toContain('小明的辅导助手 · 五年级')
   })
@@ -130,7 +130,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('卡片副标题：建档写派生 description「教材 · 年级 · 按年级边界讲解」（非写死，随档案跟随）', async () => {
-    const w = render()
+    render()
     await B().find('input.k12pf__input').setValue('小明')
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
@@ -159,7 +159,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('高级折叠：默认技能全挂好、P0 必备锁定、可微调（关掉 P1 不进绑定集）', async () => {
-    const w = render()
+    render()
     const rows = B().findAll('.k12pf__skillrow')
     expect(rows.length).toBe(9) // 模板声明的 9 个技能
     // P0（前 3 个）必备 → 锁定 disabled + 有「必备」标
