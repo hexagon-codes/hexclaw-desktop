@@ -34,8 +34,9 @@ export function buildChatRequestMetadata(params: {
   if (typeof params.maxTokens === 'number' && Number.isFinite(params.maxTokens) && params.maxTokens > 0) {
     metadata.agent_max_tokens = String(Math.round(params.maxTokens))
   }
-  // 仅在非默认 zh-CN 时透传 user_locale，减少冗余
-  if (params.userLocale && params.userLocale !== 'zh-CN') {
+  // BUG-20260709：系统语言**恒透传**（含默认 zh-CN）——旧版 zh-CN 不传+后端 zh 指令为空，
+  // 双双隐式导致英语倾向模型（nemotron omni 等）直接英文作答。后端按白名单拼显式指令。
+  if (params.userLocale) {
     metadata.user_locale = params.userLocale
   }
   // B1: 与后端 7+1 模式（engine/agent_mode.go）保持一致
