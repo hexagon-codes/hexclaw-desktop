@@ -6,7 +6,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import PrepCardPanel from '../views/PrepCardPanel.vue'
 
-const h = vi.hoisted(() => ({ printSpy: vi.fn(() => true) }))
+const h = vi.hoisted(() => ({ printSpy: vi.fn<(...args: unknown[]) => boolean>(() => true) }))
 vi.mock('../export', () => ({ printPrepCard: (...a: unknown[]) => h.printSpy(...a) }))
 vi.mock('@/api/k12', () => ({
   k12PrepCard: vi.fn().mockResolvedValue({
