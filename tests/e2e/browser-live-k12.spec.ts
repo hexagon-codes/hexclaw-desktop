@@ -18,6 +18,9 @@ test.describe('K12 全链路 UI 冒烟', () => {
   test('建档 → 进辅导 → 头部tab/chips → 错题本 → 学情 → 备课卡 → 改档', async ({ page }: { page: Page }) => {
     // 平台默认全功能全导航（三模式 / 首启模式选择器已下线 · 2026-07-08）；K12 = 作业辅导智能体，
     // 从 /agents 模板库建档进入，不再走首启模式门控。
+    // fresh-DB（无 provider）下路由守卫会重定向 /welcome：预置本 session 的完成标记跳过
+    //（建档/描述符/记录链路全部 LLM 无关，无需真配 provider）。
+    await page.addInitScript(() => sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1'))
     // 1) 建档：智能体 → 模板库 → 作业辅导助手 → 表单（welcome 若拦截先跳过）
     await page.goto('/agents', { waitUntil: 'domcontentloaded' })
     const skip = page.getByRole('button', { name: '跳过' })
@@ -37,18 +40,23 @@ test.describe('K12 全链路 UI 冒烟', () => {
     await page.getByText('我的智能体', { exact: false }).first().click()
     const card = page.locator('.hc-cxcard', { hasText: CHILD })
     await expect(card).toBeVisible({ timeout: 20_000 })
-    const cardName = `${CHILD}的辅导老师 · 六年级`
+    // 20260709 文案评审：对家长的呈现名统一「辅导助手」（原「辅导老师」）
+    const cardName = `${CHILD}的辅导助手 · 六年级`
     await expect(card).toContainText(cardName)
 
     // 4) 进入辅导（K12AgentCard 快捷入口，作用于该卡）
     await card.getByRole('button', { name: /进入辅导/ }).click()
     await expect(page).toHaveURL(/\/chat/, { timeout: 15_000 })
 
-    // 5) 会话即入口：头部 tab（辅导/错题本）+ composer 预设 chips（后端 descriptor 下发）+ 备课提醒
+    // 5) 会话即入口：头部 tab（辅导/错题本）+ composer 预设 chips（后端 descriptor 下发）。
+    //    BUG-20260709：chips 改数据流上交（update:composerChips → ChatInput presetChips），
+    //    必须渲染在对话框盒（.hc-composer__box）**内部**，不再是输入框上方 Teleport 浮动行。
+    //    （备课提醒 nudge 条已于 20260709 退役——辅导要点内联进识题流。）
     await expect(page.locator('.k12enh-seg')).toBeVisible({ timeout: 20_000 })
     await expect(page.locator('.k12enh-seg')).toContainText('错题本')
-    await expect(page.locator('[data-testid="k12-composer-chips"]')).toContainText('数学讲解', { timeout: 15_000 })
-    await expect(page.locator('.k12enh-nudge')).toBeVisible()
+    const presetChips = page.locator('.hc-composer__box [data-testid="composer-preset-chip"]')
+    await expect(presetChips.first()).toContainText('数学讲解', { timeout: 15_000 })
+    await expect(presetChips).toHaveCount(3)
 
     // 6) 错题本 tab → 记录视图接管消息区
     await page.locator('.k12enh-seg button', { hasText: '错题本' }).click()
@@ -56,15 +64,17 @@ test.describe('K12 全链路 UI 冒烟', () => {
     // 二级 tab：错题 / 积累 / 学情
     await expect(page.locator('.k12rec__tabs')).toContainText('学情')
 
-    // 7) 学情 tab → 真实 insight-report（趋势/建议 或空态，均属 UI 抵达）
+    // 7) 学情 tab → 真实 insight-report（有数据=趋势/学习时长；fresh-DB=空态文案。均属 UI 抵达）
     await page.locator('.k12rec__tabs .seg button', { hasText: '学情' }).click()
-    await expect(page.locator('.k12rec__insight')).toBeVisible({ timeout: 15_000 })
-    await expect(page.getByText('学习时长')).toBeVisible()
+    await expect(page.getByText(/学习时长|还没有错题记录/)).toBeVisible({ timeout: 15_000 })
 
-    // 8) 备课卡侧栏打开（内容依赖 LLM，仅验证侧栏抵达）。备课卡按钮由外层 k12enh 头唯一提供
-    //    （实例上下文头卡收归 k12enh-tabs，RecordsView 不再自绘 · BUG-20260708 B8）。
-    await page.locator('.k12enh-prepbtn').click()
-    await expect(page.locator('.prep-panel.on')).toBeVisible({ timeout: 15_000 })
+    // 8) 拍照识题入口（20260709：备课卡侧栏/头部按钮退役，辅导要点内联进识题流）：
+    //    相机按钮在 composer 输入行动作槽，点击开合识题回显护栏（不依赖 LLM，仅验证 UI 抵达）。
+    await page.locator('.k12enh-seg button', { hasText: '辅导' }).click()
+    const recognizeToggle = page.locator('[data-testid="k12-recognize-toggle"]')
+    await expect(recognizeToggle).toBeVisible({ timeout: 15_000 })
+    await recognizeToggle.click()
+    await expect(page.locator('[data-testid="recognize-guard"]')).toBeVisible({ timeout: 15_000 })
 
     // 9) 改档：该卡「编辑档案」→ 改档表单预填当前档案
     await page.goto('/agents', { waitUntil: 'domcontentloaded' })

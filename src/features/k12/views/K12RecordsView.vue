@@ -147,6 +147,36 @@ const view = computed(() => store.mistakeView)
 const accumView = computed(() => store.accumView)
 const report = computed(() => store.report)
 
+// 原型 c8a194e：「本周该练」标题带跨科分布（数学 2 · 语文 1 · 英语 1）。
+// 只统计队列里 subject 已知的行（chip=「学科·知识点」，review-queue 契约下发 subject）；
+// 全部未知 → 空串不显括号（诚实降级，/mistakes 列表 subject 是 P2 缺口）。
+const reviewSubjectDist = computed(() => {
+  const v = view.value
+  if (!v?.reviewQueue?.length) return ''
+  const byId = new Map(v.items.map((i) => [i.recordId, i]))
+  const counts = new Map<string, number>()
+  for (const id of v.reviewQueue) {
+    const kp = String(byId.get(id)?.fields.knowledge_point ?? '')
+    const dot = kp.indexOf('·')
+    if (dot > 0) {
+      const s = kp.slice(0, dot)
+      counts.set(s, (counts.get(s) ?? 0) + 1)
+    }
+  }
+  if (!counts.size) return ''
+  return [...counts.entries()].map(([s, n]) => `${s} ${n}`).join(' · ')
+})
+
+// 原型 c8a194e + PRD §3.5.7：趋势 pill 并入行动卡。语义=「仅确有进步才用绿系」——
+// 有已掌握沉淀（trend.mastered>0）→ 绿「趋势 ↑ 在进步」，否则琥珀「趋势 → 待巩固」（非成功绿）。
+const trendPill = computed(() => {
+  const tr = report.value?.trend
+  if (!tr || !tr.total) return null
+  return tr.mastered > 0
+    ? { label: t('k12.records.trendUp'), up: true }
+    : { label: t('k12.records.trendFlat'), up: false }
+})
+
 // 复习完成率：-1 哨兵（分母为 0）→ 显示「—」
 const reviewRateDisplay = computed(() => {
   const r = report.value?.review_completion_rate
@@ -273,37 +303,21 @@ async function doExportMd() {
       <section v-if="sub === 'mistakes'">
         <div v-if="store.error" class="k12rec__err">{{ store.error }}</div>
 
-        <!-- 手工录入错题（20260709）：课堂/学校/线下没经过 App 的错题也能进本子。走 store.grade 同一验算管道。 -->
-        <div v-if="mistakeAddOpen" class="k12accum__form" data-testid="mistake-add-form">
-          <div class="k12rec__addhint">{{ t('k12.mistakeAdd.hint') }}</div>
-          <input
-            v-model="mistakeForm.problem"
-            class="k12accum__content"
-            data-testid="mistake-problem"
-            :placeholder="t('k12.mistakeAdd.problemPh')"
-          />
-          <input
-            v-model="mistakeForm.studentAnswer"
-            class="k12accum__content"
-            :placeholder="t('k12.mistakeAdd.answerPh')"
-          />
-          <input
-            v-model="mistakeForm.knowledgePoints"
-            class="k12accum__content"
-            :placeholder="t('k12.mistakeAdd.kpPh')"
-          />
-          <div class="k12accum__actions">
-            <button class="btn btn-ghost" @click="mistakeAddOpen = false">{{ t('k12.accum.cancel') }}</button>
-            <button
-              class="btn btn-primary"
-              data-testid="mistake-submit"
-              :disabled="!mistakeForm.problem.trim() || mistakeSaving"
-              @click="submitMistake"
-            >{{ t('k12.mistakeAdd.submit') }}</button>
-          </div>
-        </div>
-
         <RecordList v-if="view" :schema="MISTAKE_SCHEMA" :view="view" @action="onAction">
+          <!-- 原型 c8a194e：分布括号紧贴标题 + 趋势 pill 并入行动卡（数据齐才显，诚实降级） -->
+          <template #review-meta>
+            <span v-if="reviewSubjectDist" class="k12dist">（{{ reviewSubjectDist }}）</span>
+            <span
+              v-if="trendPill"
+              class="k12trend"
+              :class="trendPill.up ? 'k12trend--up' : 'k12trend--flat'"
+              data-testid="trend-pill"
+            >{{ trendPill.label }}</span>
+          </template>
+          <!-- 原型 c8a194e：周五留存钩子独立成行（后端 cronspec 0 19 * * 5，建档 setupAutomation 已接线） -->
+          <template #review-foot>{{ t('k12.records.weeklyHook') }}</template>
+          <!-- 原型 c8a194e：档案区标题「全部错题 (N)」——summary 定稿文案，不带功能说明书 -->
+          <template #list-title="{ count }">{{ t('k12.records.allMistakes') }} ({{ count }})</template>
           <template #review-actions>
             <button class="btn btn-primary" @click="doPrint">
               <svg class="k12ic" viewBox="0 0 24 24"><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v8H6z" /></svg>
@@ -315,39 +329,6 @@ async function doExportMd() {
             </button>
           </template>
         </RecordList>
-
-        <!-- 自定义组卷次级面板（渐进披露；一键零配置仍是主动作） -->
-        <div v-if="customPaperOpen" class="k12accum__form" data-testid="custom-paper-form">
-          <div class="k12rec__addhint">{{ t('k12.customPaper.hint') }}</div>
-          <div class="k12paper__row">
-            <span class="k12paper__label">{{ t('k12.customPaper.perQ') }}</span>
-            <button
-              v-for="n in paperPerQOpts" :key="n"
-              class="chip" :class="{ on: paperForm.perQ === n }"
-              @click="paperForm.perQ = n"
-            >{{ n }}</button>
-          </div>
-          <div class="k12paper__row">
-            <span class="k12paper__label">{{ t('k12.customPaper.difficulty') }}</span>
-            <button
-              v-for="o in paperDiffOpts" :key="o.v"
-              class="chip" :class="{ on: paperForm.difficulty === o.v }"
-              @click="paperForm.difficulty = o.v"
-            >{{ o.label }}</button>
-          </div>
-          <div class="k12paper__row">
-            <span class="k12paper__label">{{ t('k12.customPaper.total') }}</span>
-            <button
-              v-for="o in paperTotalOpts" :key="o.v"
-              class="chip" :class="{ on: paperForm.total === o.v }"
-              @click="paperForm.total = o.v"
-            >{{ o.label }}</button>
-          </div>
-          <div class="k12accum__actions">
-            <button class="btn btn-ghost" @click="customPaperOpen = false">{{ t('k12.accum.cancel') }}</button>
-            <button class="btn btn-primary" data-testid="custom-paper-gen" @click="genCustomPaper">{{ t('k12.customPaper.generate') }}</button>
-          </div>
-        </div>
 
         <p class="k12rec__hint">{{ t('k12.records.stateMachineHint') }}</p>
       </section>
@@ -408,10 +389,17 @@ async function doExportMd() {
 
         <RecordList v-if="accumView && accumView.items.length" :schema="ACCUMULATION_SCHEMA" :view="accumView" />
         <p v-else class="k12rec__hint">{{ t('k12.accumulationEmpty') }}</p>
+        <!-- 分界规则脚注（原型 rc1 · 2026-07-08 口径）：错了要改→错题 / 好东西要记住→积累 -->
+        <p class="k12rec__hint">{{ t('k12.records.dividerRule') }}</p>
       </section>
 
       <!-- 学情：真实 /insight-report（趋势/薄弱/连续挫败/建议）+ /study-time（一维按日）-->
       <section v-else class="k12rec__insight">
+        <!-- 标题 + 月度生成 note（原型 rc2 cxsec；月报由 cron monthly-report 推送，见 cronspec）-->
+        <div class="k12rec__reporthead">
+          <h3 class="k12rec__h" style="margin: 0">{{ t('k12.report.title') }}</h3>
+          <span class="k12rec__hint" style="margin: 0">{{ t('k12.report.monthlyNote') }}</span>
+        </div>
         <template v-if="report && report.trend.total">
           <div class="k12rec__tiles">
             <div class="k12tile"><b>{{ report.month_new_mistakes }}</b>{{ t('k12.report.tiles.newMistakes') }}</div>
@@ -433,6 +421,89 @@ async function doExportMd() {
         </template>
         <p v-else class="k12rec__hint">{{ report?.suggestion || t('k12.report.empty') }}</p>
       </section>
+    </div>
+
+    <!-- 记一条错题 modal（原型 c8a194e openAddMistake=弹窗，非内联手风琴 · BUG-20260709）
+         手工录入：课堂/学校/线下没经过 App 的错题也能进本子。走 store.grade 同一验算管道。 -->
+    <div v-if="mistakeAddOpen" class="k12modal" @click.self="mistakeAddOpen = false">
+      <div class="k12modal__card">
+        <div class="k12modal__head">
+          <b>{{ t('k12.mistakeAdd.open') }}</b>
+          <span class="k12rec__sp" />
+          <button class="btn btn-ghost" @click="mistakeAddOpen = false">✕</button>
+        </div>
+        <div class="k12accum__form k12accum__form--modal" data-testid="mistake-add-form">
+          <div class="k12rec__addhint">{{ t('k12.mistakeAdd.hint') }}</div>
+          <input
+            v-model="mistakeForm.problem"
+            class="k12accum__content"
+            data-testid="mistake-problem"
+            :placeholder="t('k12.mistakeAdd.problemPh')"
+          />
+          <input
+            v-model="mistakeForm.studentAnswer"
+            class="k12accum__content"
+            :placeholder="t('k12.mistakeAdd.answerPh')"
+          />
+          <input
+            v-model="mistakeForm.knowledgePoints"
+            class="k12accum__content"
+            :placeholder="t('k12.mistakeAdd.kpPh')"
+          />
+          <div class="k12accum__actions">
+            <button class="btn btn-ghost" @click="mistakeAddOpen = false">{{ t('k12.accum.cancel') }}</button>
+            <button
+              class="btn btn-primary"
+              data-testid="mistake-submit"
+              :disabled="!mistakeForm.problem.trim() || mistakeSaving"
+              @click="submitMistake"
+            >{{ t('k12.mistakeAdd.submit') }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 自定义组卷 modal（原型 openCustomPaper=弹窗，同构位置 · BUG-20260709）
+         渐进披露：一键零配置仍是主动作，微调参数走此弹窗。 -->
+    <div v-if="customPaperOpen" class="k12modal" @click.self="customPaperOpen = false">
+      <div class="k12modal__card">
+        <div class="k12modal__head">
+          <b>{{ t('k12.records.customPaper') }}</b>
+          <span class="k12rec__sp" />
+          <button class="btn btn-ghost" @click="customPaperOpen = false">✕</button>
+        </div>
+        <div class="k12accum__form k12accum__form--modal" data-testid="custom-paper-form">
+          <div class="k12rec__addhint">{{ t('k12.customPaper.hint') }}</div>
+          <div class="k12paper__row">
+            <span class="k12paper__label">{{ t('k12.customPaper.perQ') }}</span>
+            <button
+              v-for="n in paperPerQOpts" :key="n"
+              class="chip" :class="{ on: paperForm.perQ === n }"
+              @click="paperForm.perQ = n"
+            >{{ n }}</button>
+          </div>
+          <div class="k12paper__row">
+            <span class="k12paper__label">{{ t('k12.customPaper.difficulty') }}</span>
+            <button
+              v-for="o in paperDiffOpts" :key="o.v"
+              class="chip" :class="{ on: paperForm.difficulty === o.v }"
+              @click="paperForm.difficulty = o.v"
+            >{{ o.label }}</button>
+          </div>
+          <div class="k12paper__row">
+            <span class="k12paper__label">{{ t('k12.customPaper.total') }}</span>
+            <button
+              v-for="o in paperTotalOpts" :key="o.v"
+              class="chip" :class="{ on: paperForm.total === o.v }"
+              @click="paperForm.total = o.v"
+            >{{ o.label }}</button>
+          </div>
+          <div class="k12accum__actions">
+            <button class="btn btn-ghost" @click="customPaperOpen = false">{{ t('k12.accum.cancel') }}</button>
+            <button class="btn btn-primary" data-testid="custom-paper-gen" @click="genCustomPaper">{{ t('k12.customPaper.generate') }}</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- 「再练一道」变式题结果弹层 -->
@@ -496,6 +567,7 @@ async function doExportMd() {
   font-size: 12.5px; color: var(--hc-text-secondary);
 }
 .k12rec__h { font-size: 13px; font-weight: 600; margin: 18px 0 4px; }
+.k12rec__reporthead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .k12rec__tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .k12tile {
   background: var(--hc-bg-card); border: 0.5px solid var(--hc-border);
@@ -530,6 +602,12 @@ async function doExportMd() {
   background: var(--hc-bg-input); color: var(--hc-text-primary);
 }
 .k12accum__actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* modal 内的表单去掉自带卡片边框（弹层卡片已提供容器） */
+.k12accum__form--modal { border: none; background: transparent; padding: 0; margin-bottom: 0; }
+/* 记一条错题 / 自定义组卷 弹窗（原型 modal 形态；与 .k12retry 同族样式） */
+.k12modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.32); padding: 24px; }
+.k12modal__card { width: min(520px, 100%); max-height: 80vh; overflow: auto; background: var(--hc-bg-elevated); border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-lg); box-shadow: var(--hc-shadow-lg); padding: 16px 18px; }
+.k12modal__head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; font-size: 13.5px; }
 /* 手工录入错题 / 自定义组卷 */
 .k12rec__addhint { font-size: 11.5px; color: var(--hc-text-muted); line-height: 1.5; }
 .k12paper__row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -544,9 +622,19 @@ async function doExportMd() {
 .btn:hover { background: var(--hc-bg-hover); }
 .btn-ghost { background: transparent; border-color: transparent; color: var(--hc-text-secondary); }
 .btn-primary { background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%); color: #fff; border-color: transparent; }
+/* BUG-20260709：必须配对 hover——否则 .btn:hover(0,2,0) 压过 .btn-primary(0,1,0) 的渐变，
+   浅色主题下 hover = 近白底 + color:#fff 白字看不见。渐变对齐原型 app.html:158（更亮一档）。 */
+.btn-primary:hover { background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%); }
 /* 功能位单色描边图标（20260709 视觉评审：emoji 只留身份/语义徽章位；与原型 .ic-sm 同规格） */
 .k12ic { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .k12rec__addbtn { display: inline-flex; align-items: center; gap: 5px; }
+/* 「本周该练」行动卡：跨科分布 + 趋势 pill（原型 stpill got/done 同源色） */
+.k12dist { font-size: 12.5px; color: var(--hc-text-secondary); margin-left: -4px; }
+.k12trend {
+  font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 700; white-space: nowrap;
+}
+.k12trend--up { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
+.k12trend--flat { color: var(--hc-warning); background: color-mix(in srgb, var(--hc-warning) 12%, transparent); }
 /* 学科定色（原型 .kpill.chi/.eng 同源）：错题列表最高频扫读维度=哪科错得多。
    RecordList 保持领域无关，经 data-chip 前缀选择器由本场景层上色（chip 文案「学科·知识点」）。 */
 :deep(.rl-chip[data-chip^='语文']) { background: color-mix(in srgb, #e8590c 12%, transparent); color: #e8590c; }

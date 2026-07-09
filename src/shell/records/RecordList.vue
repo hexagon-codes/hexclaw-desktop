@@ -62,6 +62,8 @@ const reviewItems = computed(() => {
       <header class="rl-review__head">
         <!-- 20260709 视觉评审：功能位 emoji → 单色描边图标（emoji 保留给身份/语义徽章位） -->
         <b class="rl-review__title"><svg class="rl-ic" viewBox="0 0 24 24"><path d="M4 22V4c0-.6.4-1 1-1h9.5l-.8 3.2c-.1.5.2.8.7.8H20l-2 6h-7" /></svg>{{ t('records.reviewQueueTitle') }} · {{ t('records.reviewQueueCount', { count: reviewItems.length }) }}</b>
+        <!-- 标题旁注入缝（原型 c8a194e：跨科分布括号 + 趋势 pill 并入行动卡）——场景层经 slot 提供，shell 零领域词 -->
+        <slot name="review-meta" :items="reviewItems" />
         <span class="rl-spacer" />
         <slot name="review-actions" :items="reviewItems" />
       </header>
@@ -79,7 +81,12 @@ const reviewItems = computed(() => {
           </button>
         </div>
       </div>
+      <!-- 卡内脚注注入缝（原型 c8a194e：留存钩子独立成行，如「每周五 19:00 自动出下一卷」） -->
+      <div v-if="$slots['review-foot']" class="rl-review__foot"><slot name="review-foot" /></div>
     </section>
+
+    <!-- 档案区标题注入缝（原型 c8a194e：「全部错题 (N)」——文案由场景层给，shell 零领域词） -->
+    <div v-if="$slots['list-title']" class="rl-list-title"><slot name="list-title" :count="view.items.length" /></div>
 
     <!-- 状态筛选 -->
     <div v-if="schema.states?.length" class="rl-filters">
@@ -150,6 +157,17 @@ const reviewItems = computed(() => {
 }
 .rl-review .rl-rows {
   margin-top: 10px;
+}
+.rl-review__foot {
+  margin-top: 9px;
+  font-size: 11.5px;
+  color: var(--hc-text-muted);
+}
+.rl-list-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--hc-text-primary);
+  margin-top: 4px;
 }
 .rl-row {
   display: flex;
