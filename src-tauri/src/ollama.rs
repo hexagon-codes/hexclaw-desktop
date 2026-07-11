@@ -129,6 +129,157 @@ fn is_ollama_healthy() -> bool {
     true
 }
 
+/// 探测系统安装的 ollama 二进制（macOS/Linux 常见安装路径 → which 兜底）
+///
+/// 系统 ollama（如 Homebrew / 官方安装包）自带完整 runtime，能真正推理；
+/// 而 app 内置 bundle 可能缺 llama-server 导致推理 500。因此优先系统运行时。
+fn find_system_ollama() -> Option<std::path::PathBuf> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        // 1. 常见安装路径，按序探测
+        for candidate in ["/usr/local/bin/ollama", "/opt/homebrew/bin/ollama", "/usr/bin/ollama"] {
+            let p = std::path::PathBuf::from(candidate);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        // 2. which ollama 兜底
+        if let Ok(out) = Command::new("which").arg("ollama").output() {
+            if out.status.success() {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if let Some(line) = stdout.lines().next() {
+                    let trimmed = line.trim();
+                    if !trimmed.is_empty() {
+                        let p = std::path::PathBuf::from(trimmed);
+                        if p.exists() {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // 本 bug 仅 macOS；Windows 暂不探测系统运行时，走内置回退
+        None
+    }
+}
+
+/// 发起一个简单的 HTTP/1.0 请求（原生 TcpStream，不引第三方），返回 (status_code, body)。
+///
+/// 与 is_ollama_healthy 同风格，用于功能性健康探针，避免为同步路径引入 async runtime。
+fn http_request(
+    method: &str,
+    path: &str,
+    json_body: Option<&str>,
+    read_timeout: Duration,
+) -> Option<(u16, String)> {
+    use std::io::{Read, Write};
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], OLLAMA_PORT));
+    let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)).ok()?;
+    let _ = stream.set_read_timeout(Some(read_timeout));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+
+    let req = match json_body {
+        Some(body) => format!(
+            "{method} {path} HTTP/1.0\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ),
+        None => format!("{method} {path} HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n"),
+    };
+    stream.write_all(req.as_bytes()).ok()?;
+
+    let mut raw = Vec::new();
+    // 读到 EOF 或超时（超时会返回已读到的部分）
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => raw.extend_from_slice(&chunk[..n]),
+            Err(_) => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&raw).into_owned();
+
+    // 解析状态码
+    let status = text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())?;
+
+    // 分离 body
+    let body = text
+        .split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default();
+
+    Some((status, body))
+}
+
+/// 取第一个可用模型名（GET /api/tags → models[0].name）；无模型或失败返回 None。
+fn first_available_model() -> Option<String> {
+    let (status, body) = http_request("GET", "/api/tags", None, Duration::from_secs(3))?;
+    if status != 200 {
+        return None;
+    }
+    let parsed: serde_json::Value = serde_json::from_str(&body).ok()?;
+    parsed
+        .get("models")?
+        .as_array()?
+        .first()?
+        .get("name")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
+/// 功能性健康检查（best practice）：健康 = 能真正推理，而非仅 API 200。
+///
+/// 坏的内置 bundle（缺 llama-server）能响应 /api/tags 200 却在推理时 500。
+/// 因此先 tags 200 过一遍，再发一个最小推理探针识破坏实例。
+fn is_ollama_functional() -> bool {
+    // 1. 基础 API + 僵尸进程检查
+    if !is_ollama_healthy() {
+        return false;
+    }
+
+    // 2. 取一个模型名做最小推理探针；取不到（tags 空）则退回 tags 200 的旧判定
+    let Some(model) = first_available_model() else {
+        log::info!("Ollama tags 为空，无法做推理探针，退回 API 健康判定");
+        return true;
+    };
+
+    // 3. 最小推理探针 POST /api/generate，短超时
+    let probe_body = format!(
+        r#"{{"model":{},"prompt":"hi","stream":false,"options":{{"num_predict":1}}}}"#,
+        serde_json::Value::String(model.clone())
+    );
+    match http_request("POST", "/api/generate", Some(&probe_body), Duration::from_secs(10)) {
+        Some((200, _)) => true,
+        Some((status, body)) => {
+            let lower = body.to_lowercase();
+            if status >= 500 || lower.contains("llama-server") || lower.contains("binary not found") {
+                log::warn!(
+                    "Ollama 推理探针失败（模型 {}，HTTP {}），判定坏实例（可能内置 bundle 缺 llama-server）",
+                    model, status
+                );
+                false
+            } else {
+                // 其它非 500 错误（如模型未就绪等）不武断判死，视为可用
+                log::info!("Ollama 推理探针返回 HTTP {}，非致命，视为可用", status);
+                true
+            }
+        }
+        // 无响应/超时：可能是好实例正在冷加载模型，避免误杀
+        None => {
+            log::info!("Ollama 推理探针超时，视为正在加载的真实例（保守放行）");
+            true
+        }
+    }
+}
+
 /// 清理占用 ollama 端口的僵尸进程
 fn kill_stale_ollama(port: u16) {
     #[cfg(unix)]
@@ -154,63 +305,80 @@ fn kill_stale_ollama(port: u16) {
 pub fn spawn_ollama(app: &tauri::AppHandle) -> Result<(), String> {
     set_ready(app, false);
 
-    // 1. 检测端口是否被占用
+    // 0. 优先探测系统安装的 ollama 运行时（自带完整 runtime，能真推理）
+    let system = find_system_ollama();
+    if let Some(ref p) = system {
+        log::info!("检测到系统 Ollama 运行时: {:?}（优先于内置 bundle）", p);
+    }
+
+    // 1. 检测端口是否被占用 — 用功能性健康检查识破坏 bundle（能列模型但推理 500）
     if is_port_in_use(OLLAMA_PORT) {
-        // 验证 ollama 是否真正健康（防止僵尸进程占端口但无法正常服务）
-        if is_ollama_healthy() {
-            log::info!("检测到外部 Ollama 已运行于端口 {}，直接复用", OLLAMA_PORT);
+        if is_ollama_functional() {
+            log::info!("检测到外部 Ollama 已运行于端口 {} 且可正常推理，直接复用", OLLAMA_PORT);
             set_ready(app, true);
             *OLLAMA_MANAGED.lock().unwrap_or_else(|e| e.into_inner()) = false;
             let _ = app.emit("ollama-ready", true);
             return Ok(());
         }
-        // 端口被占用但不健康 — 可能是僵尸 ollama 进程，尝试清理
-        log::warn!("端口 {} 被占用但 Ollama 不健康，尝试清理僵尸进程", OLLAMA_PORT);
+        // 端口被占用但推理起不来 — 可能是内置 bundle 缺 llama-server 的坏实例，清理后重启
+        log::warn!(
+            "端口 {} 被占用但 Ollama 无法正常推理（可能内置 bundle 缺 llama-server），清理后用优选运行时重启",
+            OLLAMA_PORT
+        );
         kill_stale_ollama(OLLAMA_PORT);
         // 等待端口释放
         std::thread::sleep(Duration::from_secs(1));
     }
 
-    // 2. 查找内嵌二进制（resources/ollama/ 目录，包含 binary + 动态库）
-    let binary_name = if cfg!(target_os = "windows") {
-        "ollama.exe"
-    } else {
-        "ollama"
-    };
+    // 2. 选型：系统运行时优先，否则回退内置 bundle
+    let (final_path, is_system) = match system {
+        Some(p) => (p, true),
+        None => {
+            // 查找内嵌二进制（resources/ollama/ 目录，包含 binary + 动态库）
+            let binary_name = if cfg!(target_os = "windows") {
+                "ollama.exe"
+            } else {
+                "ollama"
+            };
 
-    // 生产模式: Contents/Resources/ollama/
-    let resource_path = app
-        .path()
-        .resource_dir()
-        .map_err(|e| format!("获取资源路径失败: {}", e))?;
-    let ollama_dir = resource_path.join("ollama");
-    let binary_path = ollama_dir.join(binary_name);
+            // 生产模式: Contents/Resources/ollama/
+            let resource_path = app
+                .path()
+                .resource_dir()
+                .map_err(|e| format!("获取资源路径失败: {}", e))?;
+            let ollama_dir = resource_path.join("ollama");
+            let binary_path = ollama_dir.join(binary_name);
 
-    let final_path = if binary_path.exists() {
-        binary_path
-    } else {
-        // 开发模式回退: src-tauri/binaries/ollama-bundle/
-        let fallback_dir = resource_path.join("binaries").join("ollama-bundle");
-        let fallback = fallback_dir.join(binary_name);
-        if !fallback.exists() {
-            log::warn!(
-                "未找到内嵌 Ollama 二进制: {:?} / {:?}，跳过自动启动",
-                ollama_dir.join(binary_name),
-                fallback
-            );
-            return Ok(());
+            if binary_path.exists() {
+                (binary_path, false)
+            } else {
+                // 开发模式回退: src-tauri/binaries/ollama-bundle/
+                let fallback_dir = resource_path.join("binaries").join("ollama-bundle");
+                let fallback = fallback_dir.join(binary_name);
+                if !fallback.exists() {
+                    log::warn!(
+                        "未找到系统 Ollama，也未找到内嵌二进制: {:?} / {:?}，跳过自动启动",
+                        ollama_dir.join(binary_name),
+                        fallback
+                    );
+                    return Ok(());
+                }
+                (fallback, false)
+            }
         }
-        fallback
     };
 
-    // 3. 启动进程
-    spawn_ollama_child(&final_path)?;
+    // 3. 启动进程（系统运行时不覆盖 DYLD，用自己的 runtime）
+    spawn_ollama_child(&final_path, is_system)?;
     *OLLAMA_MANAGED.lock().unwrap_or_else(|e| e.into_inner()) = true;
     Ok(())
 }
 
 /// 启动 Ollama 子进程
-fn spawn_ollama_child(path: &std::path::Path) -> Result<(), String> {
+///
+/// `is_system` = true 表示系统安装的 ollama（自带 runtime，不覆盖动态库搜索路径）；
+/// false 表示内置 bundle（binary 同目录带 libggml/libmlx 等，需覆盖 DYLD/LD 路径）。
+fn spawn_ollama_child(path: &std::path::Path, is_system: bool) -> Result<(), String> {
     let enriched_path = crate::sidecar::enrich_path(None);
     let lib_dir = path.parent().unwrap_or(Path::new(".")).to_string_lossy().to_string();
 
@@ -219,11 +387,14 @@ fn spawn_ollama_child(path: &std::path::Path) -> Result<(), String> {
         .env("PATH", &enriched_path)
         .env("OLLAMA_HOST", format!("127.0.0.1:{}", OLLAMA_PORT));
 
-    // 动态库搜索路径：binary 所在目录（包含 libggml/libmlx 等）
-    if cfg!(target_os = "macos") {
-        cmd.env("DYLD_LIBRARY_PATH", &lib_dir);
-    } else if cfg!(target_os = "linux") {
-        cmd.env("LD_LIBRARY_PATH", &lib_dir);
+    // 仅内置 bundle 才覆盖动态库搜索路径：binary 所在目录（包含 libggml/libmlx 等）。
+    // 系统 ollama 用自己的 runtime，覆盖 DYLD 反而可能污染其查找。
+    if !is_system {
+        if cfg!(target_os = "macos") {
+            cmd.env("DYLD_LIBRARY_PATH", &lib_dir);
+        } else if cfg!(target_os = "linux") {
+            cmd.env("LD_LIBRARY_PATH", &lib_dir);
+        }
     }
 
     let mut child = cmd
@@ -299,4 +470,27 @@ pub fn stop_ollama() {
     }
 
     *OLLAMA_MANAGED.lock().unwrap_or_else(|e| e.into_inner()) = false;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// find_system_ollama 的核心不变量：要么返回 None，要么返回一个真实存在的文件。
+    /// 环境无关（无论测试机是否装了 ollama 都成立）。
+    #[test]
+    fn find_system_ollama_returns_existing_or_none() {
+        match find_system_ollama() {
+            Some(p) => assert!(p.exists(), "返回的系统 ollama 路径必须真实存在: {:?}", p),
+            None => {} // 未装系统 ollama，合法
+        }
+    }
+
+    /// first_available_model 返回 Some 时必须非空模型名。
+    #[test]
+    fn first_available_model_is_nonempty_when_present() {
+        if let Some(name) = first_available_model() {
+            assert!(!name.is_empty(), "模型名不应为空");
+        }
+    }
 }

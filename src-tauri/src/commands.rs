@@ -422,6 +422,9 @@ pub async fn backend_chat(
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
     let mut accumulated_reply = String::new();
+    // 捕获后端 SSE 最后那个 Done=true 的 ReplyChunk（带 metadata.session_id / usage /
+    // tool_calls / blocks）；[DONE] 与自然结束返回时用它构造完整响应（契约#1）。
+    let mut done_chunk: Option<serde_json::Value> = None;
     let mut chunk_count: u64 = 0;
     let idle = std::time::Duration::from_secs(CHUNK_IDLE_TIMEOUT_SECS);
     let first_chunk = std::time::Duration::from_secs(FIRST_CHUNK_TIMEOUT_SECS);
@@ -489,12 +492,12 @@ pub async fn backend_chat(
                                 data: String::new(),
                             },
                         );
-                        // 返回累积的 reply（向后兼容：前端不监听 event 也能拿到完整内容）
-                        return Ok(serde_json::json!({
-                            "reply": accumulated_reply,
-                            "session_id": "",
-                        })
-                        .to_string());
+                        // 返回累积的 reply + done chunk 捕获的 session_id/usage/tool_calls/blocks
+                        // （向后兼容：前端不监听 event 也能拿到完整内容与元数据）。
+                        return Ok(build_final_chat_response(
+                            &accumulated_reply,
+                            done_chunk.as_ref(),
+                        ));
                     }
 
                     chunk_count += 1;
@@ -503,6 +506,11 @@ pub async fn backend_chat(
                     if let Ok(j) = serde_json::from_str::<serde_json::Value>(payload) {
                         if let Some(c) = j.get("content").and_then(|v| v.as_str()) {
                             accumulated_reply.push_str(c);
+                        }
+                        // Done=true 的 chunk 带 metadata.session_id / usage / tool_calls / blocks，
+                        // 捕获到局部变量，供 [DONE] / 自然结束返回时透传前端（契约#1）。
+                        if j.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            done_chunk = Some(j.clone());
                         }
                         if let Some(err_msg) = j.get("error").and_then(|v| v.as_str()) {
                             log::error!(
@@ -538,11 +546,48 @@ pub async fn backend_chat(
         "[backend_chat] 流自然结束但未见 [DONE] chunks={} reply_len={} request_id={}",
         chunk_count, accumulated_reply.len(), request_id_for_log
     );
-    Ok(serde_json::json!({
+    Ok(build_final_chat_response(
+        &accumulated_reply,
+        done_chunk.as_ref(),
+    ))
+}
+
+/// 从累积文本 + 可选的 done chunk（后端 SSE 最后那个 `Done=true` 的 ReplyChunk JSON）构造
+/// backend_chat 的最终响应 JSON 字符串。
+///
+/// 契约#1：后端 `adapter.ReplyChunk` 在 `Done=true` 时才填充 `metadata`(含 `session_id`) /
+/// `usage` / `tool_calls` / `blocks`。旧实现只回 `{reply, session_id:""}`，把这些字段全丢了，
+/// 导致前端 `BackendChatResponse` 的 session_id/usage/tool_calls/blocks 恒空。此处一并透传。
+///
+/// 抽成纯函数以便脱离 tauri runtime 做单元测试。
+fn build_final_chat_response(
+    accumulated_reply: &str,
+    done_chunk: Option<&serde_json::Value>,
+) -> String {
+    let mut resp = serde_json::json!({
         "reply": accumulated_reply,
         "session_id": "",
-    })
-    .to_string())
+    });
+
+    if let Some(dc) = done_chunk {
+        if let Some(meta) = dc.get("metadata").filter(|v| !v.is_null()) {
+            if let Some(sid) = meta.get("session_id").and_then(|v| v.as_str()) {
+                resp["session_id"] = serde_json::json!(sid);
+            }
+            resp["metadata"] = meta.clone();
+        }
+        if let Some(usage) = dc.get("usage").filter(|v| !v.is_null()) {
+            resp["usage"] = usage.clone();
+        }
+        if let Some(tool_calls) = dc.get("tool_calls").filter(|v| !v.is_null()) {
+            resp["tool_calls"] = tool_calls.clone();
+        }
+        if let Some(blocks) = dc.get("blocks").filter(|v| !v.is_null()) {
+            resp["blocks"] = blocks.clone();
+        }
+    }
+
+    resp.to_string()
 }
 
 /// backend_chat 的流式事件载荷（向前端推 chunk / done / error）。
@@ -567,6 +612,31 @@ pub fn get_platform_info() -> PlatformInfo {
 #[tauri::command]
 pub fn open_about(app: tauri::AppHandle) -> Result<(), String> {
     crate::window::open_about(&app).map_err(|e| e.to_string())
+}
+
+/// 设置开机自启（U5）。
+///
+/// 之前前端「开机自启」开关只把布尔值落到 Tauri Store，从不调用 plugin-autostart，
+/// 于是开关是个假开关——系统层面永不注册 LaunchAgent。此 command 把开关桥接到
+/// `tauri_plugin_autostart` 的 enable()/disable()，让开关真正生效。
+#[tauri::command]
+pub fn set_autostart(app: tauri::AppHandle, enable: bool) -> Result<(), String> {
+    use tauri_plugin_autostart::ManagerExt;
+    let manager = app.autolaunch();
+    if enable {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
+/// 查询开机自启当前是否已在系统层面注册（U5）。
+///
+/// 前端启动时用它把 UI 开关与真实系统状态对齐（Store 里的布尔值可能与系统实际不一致）。
+#[tauri::command]
+pub fn is_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
+    use tauri_plugin_autostart::ManagerExt;
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
 /// 平台信息
@@ -892,5 +962,68 @@ mod tests {
         assert!(read_file_as_base64("/no/such/hexclaw/file.png".into()).is_err());
         // 目录不是文件
         assert!(read_file_as_base64(std::env::temp_dir().to_string_lossy().to_string()).is_err());
+    }
+
+    // ── 契约#1：backend_chat SSE done chunk 透传 ──
+    // 后端 SSE 最后发 Done=true 的 ReplyChunk（metadata.session_id / usage / tool_calls / blocks），
+    // 旧实现只回 {reply, session_id:""}，把这些字段全丢了。build_final_chat_response 负责透传。
+
+    // RED 基线：无 done chunk（旧行为）——只回 reply + 空 session_id，无 usage/tool_calls/blocks。
+    #[test]
+    fn test_build_final_chat_response_no_done_chunk_is_old_behavior() {
+        let out = build_final_chat_response("hello world", None);
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["reply"], "hello world");
+        assert_eq!(v["session_id"], "");
+        // 旧行为：这些字段缺失（不是被丢弃后填空，而是压根没有）
+        assert!(v.get("usage").is_none());
+        assert!(v.get("tool_calls").is_none());
+        assert!(v.get("blocks").is_none());
+    }
+
+    // GREEN：解析 done chunk 后返回带 session_id / usage / tool_calls / blocks / metadata 的完整 JSON。
+    #[test]
+    fn test_build_final_chat_response_extracts_done_chunk_fields() {
+        // 模拟后端 adapter.ReplyChunk（Done=true）序列化出的 JSON
+        let done = serde_json::json!({
+            "content": "",
+            "done": true,
+            "metadata": { "session_id": "sess-abc-123", "request_id": "req-9" },
+            "usage": {
+                "input_tokens": 12,
+                "output_tokens": 34,
+                "total_tokens": 46,
+                "provider": "openai",
+                "model": "gpt-4o"
+            },
+            "tool_calls": [ { "name": "search", "arguments": "{}" } ],
+            "blocks": [ { "type": "text", "text": "hi" } ]
+        });
+
+        let out = build_final_chat_response("final reply", Some(&done));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+
+        assert_eq!(v["reply"], "final reply");
+        // session_id 从 metadata.session_id 提取（不再恒空）
+        assert_eq!(v["session_id"], "sess-abc-123");
+        // usage 透传（含后端命名 input_tokens/output_tokens）
+        assert_eq!(v["usage"]["input_tokens"], 12);
+        assert_eq!(v["usage"]["output_tokens"], 34);
+        assert_eq!(v["usage"]["total_tokens"], 46);
+        // tool_calls / blocks 透传
+        assert_eq!(v["tool_calls"][0]["name"], "search");
+        assert_eq!(v["blocks"][0]["type"], "text");
+        // metadata 也透传（前端 BackendChatResponse 声明了 metadata）
+        assert_eq!(v["metadata"]["session_id"], "sess-abc-123");
+    }
+
+    // 边界：done chunk 存在但无 metadata（session_id 缺失）——降级回空串，不 panic。
+    #[test]
+    fn test_build_final_chat_response_done_chunk_without_metadata() {
+        let done = serde_json::json!({ "content": "", "done": true });
+        let out = build_final_chat_response("r", Some(&done));
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["session_id"], "");
+        assert!(v.get("usage").is_none());
     }
 }
