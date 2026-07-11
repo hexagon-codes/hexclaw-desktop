@@ -2,9 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+import type { Mock } from 'vitest'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12AgentCard from '../views/K12AgentCard.vue'
+import { k12ListMistakes, k12ReviewQueue } from '@/api/k12'
 
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [{}, {}, {}] }), // 3 错题
@@ -38,6 +40,8 @@ describe('K12AgentCard（原型同步·辅导老师卡计数 + 快捷入口）',
     setActivePinia(createPinia())
     document.body.innerHTML = '' // 清 teleport 残留（编辑弹窗 Teleport 到 body）
     pushSpy.mockClear()
+    ;(k12ListMistakes as unknown as Mock).mockResolvedValue({ items: [{}, {}, {}] })
+    ;(k12ReviewQueue as unknown as Mock).mockResolvedValue({ items: [{}, {}] })
   })
 
   it('挂载即拉取并渲染 错题/待复习 计数', async () => {
@@ -47,14 +51,23 @@ describe('K12AgentCard（原型同步·辅导老师卡计数 + 快捷入口）',
     expect(w.text()).toContain('待复习 2')
   })
 
-  it('快捷入口深链带 role + scenarioTab query（20260709：备课卡入口移除，辅导要点内联进识题流）', async () => {
+  it('计数不可用（引擎未就绪/接口失败）时不渲染徽章行（消空徽章行留白）', async () => {
+    ;(k12ListMistakes as unknown as Mock).mockRejectedValueOnce(new Error('offline'))
+    ;(k12ReviewQueue as unknown as Mock).mockRejectedValueOnce(new Error('offline'))
+    const w = render()
+    await flushPromises()
+    // 计数皆 null → chips 容器整行不渲染（原型对齐：无数据不留空行）
+    expect(w.find('.k12ac__chips').exists()).toBe(false)
+  })
+
+  it('快捷入口深链带 role + roleTitle + scenarioTab query（BUG-20260711：roleTitle 快照显示名进会话标题，agent 删除后不回退成内部 ID）', async () => {
     const w = render()
     await flushPromises()
     const btns = w.findAll('.k12ac__btn')
     await btns.find((b) => b.text().includes('进入辅导'))!.trigger('click')
-    expect(pushSpy).toHaveBeenLastCalledWith({ path: '/chat', query: { role: 'k12-tutor-abc' } })
+    expect(pushSpy).toHaveBeenLastCalledWith({ path: '/chat', query: { role: 'k12-tutor-abc', roleTitle: '小明的辅导老师 · 五年级' } })
     await btns.find((b) => b.text() === '错题本')!.trigger('click')
-    expect(pushSpy).toHaveBeenLastCalledWith({ path: '/chat', query: { role: 'k12-tutor-abc', scenarioTab: 'records' } })
+    expect(pushSpy).toHaveBeenLastCalledWith({ path: '/chat', query: { role: 'k12-tutor-abc', roleTitle: '小明的辅导老师 · 五年级', scenarioTab: 'records' } })
     // 备课卡快捷入口已移除：卡上不应再有「备课卡」按钮
     expect(btns.find((b) => b.text().includes('备课卡'))).toBeUndefined()
   })

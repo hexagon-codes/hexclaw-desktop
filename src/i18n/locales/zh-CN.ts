@@ -1,4 +1,14 @@
 export default {
+  contextbar: {
+    agentTip: 'Agent · 模式（点击切换）',
+    engineOffline: '引擎离线',
+    engineOnline: '引擎已连接',
+    engineRestarting: '重启中',
+    noAgent: '无 Agent',
+    noModel: '未选模型',
+    providerModelTip: 'Provider · Model（点击切换）',
+    restarting: '引擎重启中…',
+  },
   // 侧边栏导航
   nav: {
     dashboard: '概览',
@@ -67,6 +77,7 @@ export default {
 
   // 通用
   common: {
+    noResults: '无结果',
     save: '保存',
     saving: '保存中…',
     today: '今天',
@@ -111,6 +122,8 @@ export default {
 
   // 聊天页
   chat: {
+    orphanAgentCleared: '该智能体已删除，本会话回退为默认助理',
+    persistFailed: '消息已生成但保存失败，刷新会话后可能丢失',
     title: '聊天',
     sessions: '会话',
     newSession: '新建会话',
@@ -311,6 +324,7 @@ export default {
     fileVideo: '视频',
     fileGeneric: '文件',
     aboutTokens: '≈ {n} tokens',
+    showEarlier: '显示更早的 {n} 条消息',
     budget: '预算',
     knowledgeHit: '知识库命中',
     toolApproval: '工具审批',
@@ -392,6 +406,8 @@ export default {
 
   // 智能体页
   agents: {
+    systemPrompt: '人设(SOUL)',
+    systemPromptPlaceholder: '定义该 Agent 的角色与行为，留空则用默认人设',
     eyebrow: '智能体',
     title: '智能体管理',
     description: '管理智能体角色定义',
@@ -627,6 +643,7 @@ export default {
 
   // 任务页
   tasks: {
+    statusTimeout: '超时',
     title: '定时任务',
     description: '管理 Cron 定时任务和心跳检测',
     createTask: '创建任务',
@@ -959,6 +976,9 @@ export default {
 
   // 集成（聚合页工具栏等）
   integration: {
+    searchMcp: '搜索 MCP…',
+    searchPrompts: '搜索 Prompt…',
+    searchSkills: '搜索 Skill…',
     title: '能力',
     description: '管理 Skill 与 MCP',
     eyebrow: '能力',
@@ -975,6 +995,14 @@ export default {
 
   // Prompt 库（能力 · Prompt 库 / 全部）
   prompts: {
+    deleteFailed: '删除失败，请重试',
+    mdHint: '支持 Markdown。',
+    newPrompt: '新建 Prompt',
+    previewEmpty: '（空）',
+    previewNote: '预览仅供阅读，模型看到的是上方原文。',
+    saveFailed: '保存失败，请重试',
+    tabEdit: '编辑',
+    tabPreview: '预览',
     tabAll: '全部',
     tabMemories: '记忆',
     hint: '输入框输入 “/” 即可召唤启用的 Prompt；命令用 $ARGUMENTS 占位填参。',
@@ -1124,6 +1152,7 @@ export default {
 
   // 知识库页
   knowledge: {
+    indexing: '已上传 · 索引构建中，完成后出现在下方列表',
     title: '知识库',
     description: '管理文档和知识索引',
     eyebrow: '知识库',
@@ -1323,6 +1352,7 @@ export default {
 
   // MCP 页
   mcp: {
+    needsConfig: '需配置',
     title: 'MCP 管理',
     description: '管理 Model Context Protocol 服务',
     servers: '服务器',
@@ -1408,6 +1438,15 @@ export default {
 
   // IM 通道页
   imChannels: {
+    bindFailed: '绑定 Agent 失败',
+    chatRoute: {
+      title: '会话路由 · chat_id → 实例',
+      addOpen: '+ 绑定会话',
+      unbind: '解绑',
+      chatIdPlaceholder: '会话 chat_id（私聊/群）',
+      pickAgent: '选择接待智能体',
+      add: '绑定',
+    },
     title: 'IM 通道',
     description: '连接即时通讯平台，随时随地与 AI 对话',
     addChannel: '添加通道',
@@ -1828,16 +1867,64 @@ export default {
 
   // 设置页
   settings: {
+    modelManager: {
+      allVendors: '全部',
+      badgeFree: '免费',
+      badgeTools: '工具',
+      badgeVision: '视觉',
+      clear: '清空启用',
+      clearConfirm: '确认清空 {n} 个？',
+      deselectGroup: '取消全选',
+      empty: '没有匹配的模型，试试调整搜索词或筛选条件',
+      enabledSummary: '已启用',
+      enabledUnit: '个模型',
+      filterCtx: '≥128K 上下文',
+      filterFree: '免费',
+      filterLabel: '筛选',
+      filterTools: '工具调用',
+      filterVision: '视觉',
+      leanHint: '建议保持精简：只启用常用的几个',
+      newCount: '本次同步新增 {n} 个',
+      newTag: '新',
+      otherVendor: '其他',
+      recommendDismiss: '忽略',
+      recommendEnable: '一键启用',
+      recommendText: '根据「免费 + 支持工具调用 + 大上下文」为你推荐',
+      resync: '重新同步',
+      searchPlaceholder: '搜索模型 id 或名称…',
+      selectGroup: '全选该组',
+      title: '管理模型',
+      vendorSearch: '过滤厂商…',
+      viewAll: '全部',
+      viewEnabled: '已启用',
+      viewNew: '本次新增',
+    },
+    backup: {
+      title: '备份与恢复',
+      dataDir: '数据目录',
+      open: '打开',
+      openFailed: '无法打开数据目录',
+    },
     title: '设置',
     description: '配置模型、桌面行为与运行引擎',
     searchPlaceholder: '搜索设置...',
     toolbar: {
+      saveFailed: '保存失败，请重试',
       reset: '重置',
       testConnection: '连接测试',
       saveSettings: '保存配置',
       resetFailed: '重置失败，请重试',
     },
     llm: {
+      justSynced: '刚刚同步',
+      manageModels: '管理模型',
+      modelFreeLabel: '免费',
+      modelsAvailable: '可用',
+      modelsDynamic: '动态获取',
+      modelsEnabledSummary: '已启用',
+      modelStale: '上游已下架：该模型在最近一次同步的目录中不存在',
+      modelStaleLabel: '已下架',
+      newModelsFound: '本次同步发现新模型',
       title: 'LLM 服务商',
       probeFailed: '能力探测失败，请重试',
       deleteProviderFailed: '删除失败，已恢复',
@@ -2084,6 +2171,11 @@ export default {
       downloadModel: '下载',
       goChat: '去对话',
       otherLocal: '其他本地模型（LM Studio、llama.cpp、vLLM）可通过 OpenAI 兼容接口接入。',
+      keepAliveLabel: '模型驻留时长',
+      keepAliveDefault: '默认（30 分钟）',
+      keepAlive5m: '5 分钟（省内存）',
+      keepAlive15m: '15 分钟',
+      keepAlive60m: '60 分钟（常驻更久）',
       connecting: '正在连接...',
       verifying: '校验中...',
       pullManifest: '获取模型信息...',
@@ -2154,6 +2246,7 @@ export default {
 
   // 关于弹窗（顶层，与 settings.about 区分）
   about: {
+    capLocalInference: '本地推理',
     title: '关于河蟹',
     open: '关于河蟹',
     learnMore: '了解更多',
@@ -2196,6 +2289,16 @@ export default {
 
   // Welcome 页
   welcome: {
+    ollamaDetecting: '正在检测 Ollama...',
+    ollamaHint: '无需 API Key，模型在本机运行，完全离线可用。',
+    ollamaNoModels: '暂无已下载模型，完成引导后可在设置页下载。',
+    ollamaNotRunning: 'Ollama 未运行 — HexClaw 将自动启动内置引擎',
+    ollamaReady: 'Ollama 已就绪',
+    ollamaSelectModel: '选择模型',
+    quickAutomation: '创建第一个定时任务',
+    quickAutomationDesc: '每天早上让 AI 主动给你发简报',
+    quickChannels: '接入 IM 通道',
+    quickChannelsDesc: '让 AI 出现在你的微信 / 飞书 / Telegram 里',
     title: '欢迎使用 HexClaw 河蟹 AI',
     tagline: '企业级安全的个人 AI Agent',
     step1Title: '配置 LLM',
@@ -2424,6 +2527,9 @@ export default {
     addServer: '添加服务器',
     addServerTitle: '添加 MCP 服务器',
     removeServer: '移除',
+    restartServer: '重启',
+    restarted: '已重启 {name}',
+    restartFailed: '重启失败',
     removeConfirm: '确定移除此 MCP 服务器？',
     serverName: '服务器名称',
     serverNamePlaceholder: '输入服务器名称',

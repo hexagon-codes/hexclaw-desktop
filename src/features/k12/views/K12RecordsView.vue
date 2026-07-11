@@ -11,6 +11,7 @@ import RecordList from '@/shell/records/RecordList.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import { useToast } from '@/composables/useToast'
 import { useK12Store } from '../store'
+import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import { k12ReviewRetry, k12ExportMd, k12AddAccumulation } from '@/api/k12'
 import { MISTAKE_SCHEMA, ACCUMULATION_SCHEMA } from '../schemas'
 import { printWorksheet, exportPdf, exportWord, worksheetFilename, download } from '../export'
@@ -49,6 +50,7 @@ async function reload() {
   await Promise.all([
     store.loadMistakes(props.agentId),
     store.loadReport(props.agentId),
+    store.loadStudyTime(props.agentId), // M1：投入感块（本月辅导次数）数据源
     reloadAccum(),
   ])
 }
@@ -58,6 +60,29 @@ watch(() => props.agentId, () => { accumSubject.value = ''; accumAddOpen.value =
 
 // 手动记积累本（#4）：家长在会话里遇到好东西 → 直接记进积累本（PRD §3.13）。
 // entry_type 限积累型（好词好句/古诗/语法点/作文，镜像 store ACCUM_KEEP_TYPES）；纠错型走错题 tab。
+// ── M1（对齐原型 app.html:1611-1618）：投入感块 + 学期汇总 ──
+// 本月辅导次数 = study-time 当月各日 record_count 求和（每条记录≈一题一次，
+// 与后端 studytime.go「基于记录活跃估算」同源口径；跨月天不计）。
+const monthTutorCount = computed(() => {
+  // 用本地时区拼当月 YYYY-MM：toISOString() 是 UTC 年月，UTC+8 每月头 8 小时会错到上月，
+  // 与后端 studytime.go 的本地时区口径不一致。
+  const now = new Date()
+  const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  return (store.studyTime?.days ?? [])
+    .filter((d) => d.date.startsWith(ym))
+    .reduce((sum, d) => sum + d.record_count, 0)
+})
+// 学期分科计数：仅当 mistakes 下发 subject 时渲染（/mistakes subject 为已知 P2 后端缺口，不编造）
+const SUBJECT_ORDER = ['数学', '语文', '英语', '物理', '化学']
+const subjectCounts = computed(() => {
+  const byName = new Map<string, number>()
+  for (const it of store.mistakeView?.items ?? []) {
+    const subj = typeof it.fields?.subject === 'string' ? it.fields.subject : ''
+    if (subj) byName.set(subj, (byName.get(subj) ?? 0) + 1)
+  }
+  return SUBJECT_ORDER.filter((n) => byName.has(n)).map((n) => `${n} ${byName.get(n)}`)
+})
+
 const ACCUM_SUBJECTS = ['语文', '英语']
 const ACCUM_TYPES = ['好词好句', '古诗', '语法点', '作文']
 // HcSelect 选项（原生 select 在 WKWebView 显 macOS Aqua 样式 · BUG-20260708 D5/B2）
@@ -92,24 +117,29 @@ async function submitAccum() {
 // 设计=跳过拍照·直接给文本进**同一条验算管道**（复用 store.grade：题目 + 孩子答案 → 验算 → 入库），
 // 而非自由便签；来源在后端补 source 字段后标「🖊 家长记入」区别拍照/已验算（当前后端无 source 字段，先入库）。
 const mistakeAddOpen = ref(false)
-const mistakeForm = ref({ problem: '', studentAnswer: '', knowledgePoints: '' })
+const mistakeForm = ref({ subject: '', problem: '', studentAnswer: '', knowledgePoints: '' })
+const mistakeSubjectOptions = computed(() => K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
+  value,
+  label: t(labelKey),
+})))
 const mistakeSaving = ref(false)
 async function submitMistake() {
   const problem = mistakeForm.value.problem.trim()
-  if (!problem || mistakeSaving.value) return
+  if (!mistakeForm.value.subject || !problem || mistakeSaving.value) return
   mistakeSaving.value = true
   try {
     const kps = mistakeForm.value.knowledgePoints
       .split(/[·,，、/]/).map((s) => s.trim()).filter(Boolean)
     const res = await store.grade({
       agent: props.agentId,
+      subject: mistakeForm.value.subject,
       grade: props.grade,
       problem,
       student_answer: mistakeForm.value.studentAnswer.trim() || undefined,
       knowledge_points: kps.length ? kps : undefined,
     })
     toast.success(res.recordCreated ? t('k12.mistakeAdd.recorded') : t('k12.mistakeAdd.notWrong'))
-    mistakeForm.value = { problem: '', studentAnswer: '', knowledgePoints: '' }
+    mistakeForm.value = { subject: '', problem: '', studentAnswer: '', knowledgePoints: '' }
     mistakeAddOpen.value = false
     await store.loadMistakes(props.agentId)
   } catch (e) {
@@ -402,10 +432,15 @@ async function doExportMd() {
         </div>
         <template v-if="report && report.trend.total">
           <div class="k12rec__tiles">
+            <div class="k12tile"><b>{{ monthTutorCount }} 次</b>{{ t('k12.report.tiles.tutorCount') }}</div>
             <div class="k12tile"><b>{{ report.month_new_mistakes }}</b>{{ t('k12.report.tiles.newMistakes') }}</div>
             <div class="k12tile"><b>{{ reviewRateDisplay }}</b>{{ t('k12.report.tiles.reviewRate') }}</div>
             <div class="k12tile"><b>{{ report.trend.mastered }} · {{ report.trend.reviewing }}</b>{{ t('k12.report.tiles.masteredTodo') }}</div>
           </div>
+          <!-- 学期汇总（原型 1618）：分科段仅当 subject 数据可得时渲染 -->
+          <p class="k12rec__hint" data-testid="k12-semester-note" style="margin-top: 8px">
+            {{ t('k12.report.semesterTotal', { n: report.trend.total }) }}<template v-if="subjectCounts.length">（{{ subjectCounts.join(' · ') }}）</template> · {{ t('k12.report.semesterStatus', { m: report.trend.mastered, r: report.trend.reviewing, d: report.trend.retried }) }}
+          </p>
           <h3 class="k12rec__h">{{ t('k12.report.weakTop3') }}</h3>
           <div class="k12bars">
             <div v-for="w in weakBars" :key="w.name" class="k12bar">
@@ -434,6 +469,14 @@ async function doExportMd() {
         </div>
         <div class="k12accum__form k12accum__form--modal" data-testid="mistake-add-form">
           <div class="k12rec__addhint">{{ t('k12.mistakeAdd.hint') }}</div>
+          <div class="k12accum__field" data-testid="mistake-subject">
+            <span>{{ t('k12.accum.subject') }}</span>
+            <HcSelect
+              v-model="mistakeForm.subject"
+              :options="mistakeSubjectOptions"
+              :placeholder="t('k12.prep.pickHint')"
+            />
+          </div>
           <input
             v-model="mistakeForm.problem"
             class="k12accum__content"
@@ -455,7 +498,7 @@ async function doExportMd() {
             <button
               class="btn btn-primary"
               data-testid="mistake-submit"
-              :disabled="!mistakeForm.problem.trim() || mistakeSaving"
+              :disabled="!mistakeForm.subject || !mistakeForm.problem.trim() || mistakeSaving"
               @click="submitMistake"
             >{{ t('k12.mistakeAdd.submit') }}</button>
           </div>
@@ -553,6 +596,7 @@ async function doExportMd() {
 .k12rec__menu button {
   text-align: left; padding: 7px 10px; border: none; background: transparent;
   color: var(--hc-text-primary); font-size: 13px; border-radius: var(--hc-radius-sm); cursor: pointer;
+  white-space: nowrap; /* BUG-20260710 ②：「导出 Markdown」曾折成两行 */
 }
 .k12rec__menu button:hover { background: var(--hc-bg-hover); }
 .k12rec__hint { font-size: 11.5px; color: var(--hc-text-muted); margin-top: 12px; }
@@ -568,7 +612,7 @@ async function doExportMd() {
 }
 .k12rec__h { font-size: 13px; font-weight: 600; margin: 18px 0 4px; }
 .k12rec__reporthead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-.k12rec__tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.k12rec__tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; } /* M1：原型 mini-grid 4 块 */
 .k12tile {
   background: var(--hc-bg-card); border: 0.5px solid var(--hc-border);
   border-radius: var(--hc-radius-md); padding: 12px 14px; font-size: 12px; color: var(--hc-text-secondary);

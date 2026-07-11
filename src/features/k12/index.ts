@@ -6,4 +6,5 @@ export { registerK12Scenario, isK12Instance, __resetK12Registration } from './re
 export { K12_VIEW_DESCRIPTOR, K12_SCENARIO_ID } from './descriptor'
 export { MISTAKE_SCHEMA, ACCUMULATION_SCHEMA, MISTAKE_COLLECTION, K12_SCHEMAS } from './schemas'
 export { useK12Store } from './store'
-export { mistakeToRecord, mistakesToView, gradeToVerify } from './mappers'
+export { mistakeToRecord, mistakesToView, gradeToResult, gradeToVerify } from './mappers'
+export type { GradeViewResult } from './mappers'

@@ -11,6 +11,8 @@
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useK12Store } from '../store'
+import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
+import HcSelect from '@/components/common/HcSelect.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import PrepCardPanel from './PrepCardPanel.vue'
 import type { RecognizedQuestion } from '@/api/k12'
@@ -34,12 +36,23 @@ interface GuardRow {
   grading: boolean
   verify: VerifyResult | null
   recorded: boolean
+  recordDeduplicated: boolean
+  solution: string
+  wrongStep: string
+  errorCause: string
 }
 
 const imageB64 = ref('')
 const rows = ref<GuardRow[]>([])
 const recognizing = ref(false)
 const errMsg = ref('')
+const confirmed = ref(false)
+const selectedSubject = ref('')
+let agentGeneration = 0
+const subjectOptions = computed(() => K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
+  value,
+  label: t(labelKey),
+})))
 
 // 冷启动倒查建档（#3）：仅在无年级时可用（识题产出知识点后倒查推断）
 const coldStarting = ref(false)
@@ -62,6 +75,19 @@ function onFile(e: Event) {
   reader.readAsDataURL(file)
 }
 
+// 多孩切换是状态边界：立即清空本地识题态，并让旧 agent 的在途响应失效。
+watch(() => props.agentId, () => {
+  agentGeneration += 1
+  imageB64.value = ''
+  rows.value = []
+  recognizing.value = false
+  errMsg.value = ''
+  confirmed.value = false
+  selectedSubject.value = ''
+  coldStarting.value = false
+  coldStartResult.value = null
+})
+
 // composer 改道图片：预填 + 自动识题（家长粘贴/上传即进护栏，无需再点「识题」）
 watch(() => props.initialImage, (img) => {
   if (!img || !img.trim()) return
@@ -71,11 +97,14 @@ watch(() => props.initialImage, (img) => {
 
 async function run() {
   if (!imageB64.value.trim() || recognizing.value) return
+  const generation = agentGeneration
   recognizing.value = true
   errMsg.value = ''
+  confirmed.value = false
   coldStartResult.value = null
   try {
     const questions = await store.recognize(imageB64.value.trim())
+    if (generation !== agentGeneration) return
     rows.value = questions.map((q: RecognizedQuestion) => ({
       problem: q.question,
       knowledgePoints: q.knowledge_points ?? [],
@@ -84,12 +113,28 @@ async function run() {
       grading: false,
       verify: null,
       recorded: false,
+      recordDeduplicated: false,
+      solution: '',
+      wrongStep: '',
+      errorCause: '',
     }))
   } catch (e) {
+    if (generation !== agentGeneration) return
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
-    recognizing.value = false
+    if (generation === agentGeneration) recognizing.value = false
   }
+}
+
+function toggleEdit(row: GuardRow) {
+  row.editing = !row.editing
+  confirmed.value = false
+}
+
+function confirmAll() {
+  if (!rows.value.length || rows.value.some((row) => !row.problem.trim())) return
+  for (const row of rows.value) row.editing = false
+  confirmed.value = true
 }
 
 // 命名避开 props.grade（vue/no-dupe-keys：script 顶层标识符与 prop 同名会在模板里撞键）
@@ -101,6 +146,7 @@ async function gradeRow(i: number) {
   try {
     const res = await store.grade({
       agent: props.agentId,
+      subject: selectedSubject.value,
       grade: props.grade ?? '',
       problem: row.problem.trim(),
       student_answer: row.studentAnswer.trim() || undefined,
@@ -108,6 +154,10 @@ async function gradeRow(i: number) {
     })
     row.verify = res.verify
     row.recorded = res.recordCreated
+    row.recordDeduplicated = res.recordDeduplicated
+    row.solution = res.solution
+    row.wrongStep = res.wrongStep ?? ''
+    row.errorCause = res.errorCause ?? ''
   } catch (e) {
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -164,6 +214,15 @@ async function coldStart() {
 
     <div v-if="errMsg" class="rec-panel__err">{{ t('k12.recognize.err') }}：{{ errMsg }}</div>
 
+    <div class="rec-panel__subject" data-testid="recognize-subject">
+      <span>{{ t('k12.accum.subject') }}</span>
+      <HcSelect
+        v-model="selectedSubject"
+        :options="subjectOptions"
+        :placeholder="t('k12.prep.pickHint')"
+      />
+    </div>
+
     <!-- 冷启动倒查建档入口（#3，仅无年级 + 已识题时） -->
     <div v-if="canColdStart" class="rec-cold">
       <span class="rec-cold__hint">{{ t('k12.recognize.coldStartHint') }}</span>
@@ -200,7 +259,7 @@ async function coldStart() {
           <button
             class="rec-row__toggle"
             :data-testid="`rq-edit-${i}`"
-            @click="row.editing = !row.editing"
+            @click="toggleEdit(row)"
           >
             {{ row.editing ? t('k12.recognize.readOk') : t('k12.recognize.readWrong') }}
           </button>
@@ -210,9 +269,24 @@ async function coldStart() {
         </div>
 
         <VerifyBadge v-if="row.verify" :result="row.verify" />
-        <div v-if="row.verify && row.recorded" class="rec-row__recorded">🗂 {{ t('k12.recognize.recorded') }}</div>
+        <div
+          v-if="row.verify && (row.solution || row.wrongStep || row.errorCause)"
+          class="rec-row__details"
+          :data-testid="`rq-grade-details-${i}`"
+        >
+          <div v-if="row.solution"><b>{{ t('k12.recognize.solution') }}：</b>{{ row.solution }}</div>
+          <div v-if="row.wrongStep"><b>{{ t('k12.recognize.wrongStep') }}：</b>{{ row.wrongStep }}</div>
+          <div v-if="row.errorCause"><b>{{ t('k12.recognize.errorCause') }}：</b>{{ row.errorCause }}</div>
+        </div>
+        <div v-if="row.verify && row.recorded" class="rec-row__recorded">
+          🗂 {{ t('k12.recognize.recorded') }}
+          <span
+            v-if="row.recordDeduplicated"
+            :data-testid="`rq-record-deduplicated-${i}`"
+          > · {{ t('k12.recognize.recordDeduplicated') }}</span>
+        </div>
 
-        <div class="rec-row__grade">
+        <div v-if="confirmed" class="rec-row__grade">
           <input
             v-model="row.studentAnswer"
             class="rec-row__answer"
@@ -222,20 +296,28 @@ async function coldStart() {
           <button
             class="rec-row__gradebtn"
             :data-testid="`rq-grade-${i}`"
-            :disabled="!row.problem.trim() || row.grading"
+            :disabled="!row.problem.trim() || !selectedSubject || row.grading"
             @click="gradeRow(i)"
           >
             {{ row.grading ? t('k12.recognize.grading') : t('k12.recognize.grade') }}
           </button>
         </div>
       </div>
+      <button
+        v-if="!confirmed"
+        class="rec-guard__confirm"
+        data-testid="recognize-confirm-all"
+        :disabled="rows.some((row) => !row.problem.trim())"
+        @click="confirmAll"
+      >
+        {{ t('k12.recognize.confirmAll') }}
+      </button>
     </div>
     <p v-else-if="!recognizing" class="rec-panel__empty">{{ t('k12.recognize.empty') }}</p>
 
-    <!-- ★ 20260709 最优雅形态：识题出结果后**自动内联**「这份作业的辅导要点」（原备课卡去侧栏化），
-         用识题识别出的真实知识点绑定当前作业，家长零主动动作、零"备课"心智。 -->
+    <!-- 整体确认后才内联辅导要点：避免 OCR 尚未核对就把误识知识点送入备课链。 -->
     <PrepCardPanel
-      v-if="rows.length && allKnowledgePoints.length"
+      v-if="confirmed && rows.length && allKnowledgePoints.length"
       :agent-id="agentId"
       :grade="props.grade || ''"
       :knowledge-points="allKnowledgePoints"
@@ -265,25 +347,42 @@ async function coldStart() {
 }
 .rec-panel__run:disabled { opacity: 0.5; cursor: not-allowed; }
 .rec-panel__err { font-size: 12px; color: var(--hc-danger, #e05a5a); }
+.rec-panel__subject {
+  display: flex; flex-direction: column; gap: 5px; max-width: 260px;
+  font-size: 12.5px; color: var(--hc-text-secondary);
+}
+.rec-row__details {
+  display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; font-size: 12px;
+  line-height: 1.5; color: var(--hc-text-secondary); background: var(--hc-bg-elevated);
+  border-inline-start: 3px solid var(--hc-accent);
+  border-start-end-radius: var(--hc-radius-sm); border-end-end-radius: var(--hc-radius-sm);
+}
+.rec-row__details b { color: var(--hc-text-primary); }
 .rec-panel__empty { font-size: 12px; color: var(--hc-text-muted); text-align: center; padding: 8px; margin: 0; }
 /* 冷启动倒查建档 */
 .rec-cold {
   display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
-  border-left: 3px solid var(--hc-warn, #e0a03a); background: var(--hc-bg-elevated);
-  border-radius: 0 var(--hc-radius-md) var(--hc-radius-md) 0;
+  border-inline-start: 3px solid var(--hc-warn, #e0a03a); background: var(--hc-bg-elevated);
+  border-start-end-radius: var(--hc-radius-md); border-end-end-radius: var(--hc-radius-md);
 }
 .rec-cold__hint { font-size: 12px; color: var(--hc-text-secondary); line-height: 1.5; }
 .rec-cold__btn {
   align-self: flex-start; font-size: 12px; padding: 6px 12px; border: 0.5px solid var(--hc-border-hl);
   border-radius: var(--hc-radius-md); background: var(--hc-bg-input); color: var(--hc-text-primary); cursor: pointer;
 }
-.rec-cold--done { border-left-color: var(--hc-success); font-size: 12px; color: var(--hc-text-primary); }
+.rec-cold--done { border-inline-start-color: var(--hc-success); font-size: 12px; color: var(--hc-text-primary); }
 /* 识题回显护栏 */
 .rec-guard { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .rec-guard__title { font-size: 12.5px; font-weight: 700; color: var(--hc-text-primary); }
+.rec-guard__confirm {
+  align-self: flex-end; font-size: 12px; padding: 7px 14px; border: 0.5px solid var(--hc-border-hl);
+  border-radius: var(--hc-radius-md); background: var(--hc-accent-subtle); color: var(--hc-accent); cursor: pointer;
+}
+.rec-guard__confirm:disabled { opacity: 0.5; cursor: not-allowed; }
 .rec-row {
-  border-left: 3px solid var(--hc-accent); padding: 8px 10px;
-  background: var(--hc-bg-elevated); border-radius: 0 var(--hc-radius-md) var(--hc-radius-md) 0;
+  border-inline-start: 3px solid var(--hc-accent); padding: 8px 10px;
+  background: var(--hc-bg-elevated);
+  border-start-end-radius: var(--hc-radius-md); border-end-end-radius: var(--hc-radius-md);
   display: flex; flex-direction: column; gap: 6px;
 }
 .rec-row__q { display: flex; align-items: center; gap: 8px; }

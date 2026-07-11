@@ -27,6 +27,10 @@ export function mistakeToRecord(dto: MistakeDTO, agentId: string, subject?: stri
       question: dto.question,
       knowledge_point: subj ? `${subj}·${dto.knowledge_point}` : dto.knowledge_point,
       error_cause: dto.error_cause,
+      // 独立保留学科（M1 学期汇总分科计数用；schema 未声明该字段，不参与行渲染）
+      subject: subj,
+      // 复习队列可混入积累本纠错项；动作层据此区分验算变式与原词重现。
+      review_kind: dto.review_kind,
     },
     dueAt: dto.due_at ?? null,
     version: dto.version,
@@ -39,9 +43,24 @@ export function mistakesToView(
   all: MistakeDTO[],
   due: MistakeDTO[],
 ): RecordCollectionView {
-  // review-queue 下发 subject（/mistakes 列表可缺省）：按 record_id 回填，让队列行 chip 有学科前缀
-  const subjectById = new Map(due.filter((d) => d.subject).map((d) => [d.record_id, d.subject!]))
-  const items = all.map((d) => mistakeToRecord(d, agentId, subjectById.get(d.record_id)))
+  // review-queue 是跨 collection 的统一队列，可能含 /mistakes 不会返回的语英积累纠错项。
+  // 先按 record_id 合并：同 ID 用 queue 补 subject/review_kind，queue 独有项追加到 items，
+  // 否则通用 RecordList 会因找不到 ID 而静默丢掉这条到期记录。
+  const dueById = new Map(due.map((d) => [d.record_id, d]))
+  const merged = all.map((d) => {
+    const queued = dueById.get(d.record_id)
+    return queued
+      ? {
+          ...d,
+          subject: d.subject ?? queued.subject,
+          review_kind: d.review_kind ?? queued.review_kind,
+        }
+      : d
+  })
+  const allIDs = new Set(all.map((d) => d.record_id))
+  for (const queued of due) if (!allIDs.has(queued.record_id)) merged.push(queued)
+
+  const items = merged.map((d) => mistakeToRecord(d, agentId))
   const statusCounts: Record<string, number> = {}
   for (const it of items) if (it.status) statusCounts[it.status] = (statusCounts[it.status] ?? 0) + 1
   return {
@@ -76,6 +95,14 @@ export function accumToView(agentId: string, items: AccumDTO[]): RecordCollectio
 
 /** gradeResp → 验算徽章数据（三态诚实，徽章强弱取后端 badge/evidence_type） */
 export function gradeToVerify(resp: GradeResp): VerifyResult {
+  // out_of_scope 是后端的业务真值；兼容曾返回 badge=unverifiable 的旧响应。
+  if (resp.out_of_scope) {
+    return {
+      verdict: 'out_of_scope',
+      evidence: evidenceOf(resp.evidence_type),
+      outOfScope: { detected: resp.out_of_scope_kp || undefined },
+    }
+  }
   switch (resp.badge) {
     case 'verified-strong':
       return { verdict: 'agree', evidence: 'program_verified' }
@@ -91,5 +118,48 @@ export function gradeToVerify(resp: GradeResp): VerifyResult {
       }
     default:
       return { verdict: 'unverifiable', evidence: 'model_review' }
+  }
+}
+
+/**
+ * UI/store 使用的完整批改结果。recordCreated 为既有调用方的“已在错题本”语义；
+ * recordNewlyCreated 精确保留 wire record_created，二者共同区分新建、去重命中和未入本。
+ */
+export interface GradeViewResult {
+  verify: VerifyResult
+  solution: string
+  verdict: GradeResp['verdict']
+  evidenceType: GradeResp['evidence_type']
+  badge: GradeResp['badge']
+  correct: boolean
+  wrongStep?: string
+  errorCause?: string
+  outOfScope: boolean
+  outOfScopeKnowledgePoint?: string
+  recordCreated: boolean
+  recordNewlyCreated: boolean
+  recordDeduplicated: boolean
+  recordId?: string
+}
+
+/** grade wire DTO → 不丢字段的 store/view 契约。 */
+export function gradeToResult(resp: GradeResp): GradeViewResult {
+  const recorded = Boolean(resp.record_id)
+  return {
+    verify: gradeToVerify(resp),
+    solution: resp.solution,
+    verdict: resp.verdict,
+    evidenceType: resp.evidence_type,
+    badge: resp.badge,
+    correct: resp.correct,
+    wrongStep: resp.wrong_step,
+    errorCause: resp.error_cause,
+    outOfScope: resp.out_of_scope,
+    outOfScopeKnowledgePoint: resp.out_of_scope_kp,
+    // 兼容 RecognizeGuardPanel 等既有调用：去重命中已有 record_id 也应显示“已入本”。
+    recordCreated: resp.record_created || recorded,
+    recordNewlyCreated: resp.record_created,
+    recordDeduplicated: !resp.record_created && recorded,
+    recordId: resp.record_id,
   }
 }

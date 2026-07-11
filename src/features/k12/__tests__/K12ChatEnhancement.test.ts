@@ -136,4 +136,19 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     const ev = w.emitted('update:recordsActive')
     expect(ev?.[ev.length - 1]).toEqual([false])
   })
+
+  it('切换实例（agentId 变）→ 关闭上一个孩子的识题面板并清空待识别图片', async () => {
+    const w = render()
+    const toggle = document.querySelector('#hc-chat-scenario-composer-actions [data-testid="k12-recognize-toggle"]') as HTMLElement
+    toggle.click()
+    await flushPromises()
+    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(true)
+
+    await w.setProps({ agentId: 'hong' })
+    await flushPromises()
+
+    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(false)
+    const imageEvents = w.emitted('update:composerImage')
+    expect(imageEvents?.[imageEvents.length - 1]).toEqual([''])
+  })
 })

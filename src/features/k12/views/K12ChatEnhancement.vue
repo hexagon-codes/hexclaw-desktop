@@ -53,6 +53,7 @@ const route = useRoute()
 const tab = ref<'chat' | 'records'>('chat')
 const recognizeOpen = ref(false)
 const backupOpen = ref(false)
+const pendingRecognizeImage = ref('')
 
 // 头部零硬编码动作按钮（20260709）：备课卡已内联进识题流（识题确认后自动出「这份作业的辅导要点」），
 // 头部只留身份 + [辅导|错题本] tab；识题=composer 拍照入口、渐进提示=辅导默认行为，均非头部动作。
@@ -75,12 +76,17 @@ watch(tab, (v) => emit('update:recordsActive', v === 'records'), { immediate: tr
 watch([composerChips, tab], () => {
   emit('update:composerChips', tab.value === 'chat' ? composerChips.value : [])
 }, { immediate: true })
-// 切换实例（多孩）→ 回到辅导 tab，避免带着上一个孩子的记录视图（M3-9 结构隔离）
-watch(() => props.agentId, () => { tab.value = 'chat' })
+// 切换实例（多孩）→ 清掉上一个孩子的所有局部 UI 状态；子视图 key 负责同步重建。
+watch(() => props.agentId, () => {
+  tab.value = 'chat'
+  recognizeOpen.value = false
+  backupOpen.value = false
+  pendingRecognizeImage.value = ''
+  emit('update:composerImage', '')
+})
 
 // composer 改道图片 → 自动打开识题护栏并识题（BUG-20260709 拍照发题不解题：
 // 原型契约「输入框上传/粘贴作业照片即自动 OCR 回显护栏」）。图片交给护栏后立刻上报复位。
-const pendingRecognizeImage = ref('')
 watch(() => props.composerImage, (img) => {
   if (!img) return
   tab.value = 'chat'
@@ -118,7 +124,7 @@ watch(() => props.composerImage, (img) => {
        识题走独立 OCR 管道不依赖聊天模型 vision） -->
   <div v-if="tab === 'chat' && recognizeOpen" class="k12enh-tutor">
     <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
-    <RecognizeGuardPanel :agent-id="agentId" :grade="grade" :initial-image="pendingRecognizeImage" />
+    <RecognizeGuardPanel :key="agentId" :agent-id="agentId" :grade="grade" :initial-image="pendingRecognizeImage" />
   </div>
 
   <!-- 20260709：删「先花 3 分钟备课」nudge 条。家长辅导是临场的，主动引导改为拍照识题（下方相机入口），
@@ -153,6 +159,7 @@ watch(() => props.composerImage, (img) => {
   <!-- 记录视图（错题本 tab）：接管消息区（外壳据 recordsActive 隐藏原生消息/输入） -->
   <div v-show="tab === 'records'" class="k12enh-records">
     <K12RecordsView
+      :key="agentId"
       :agent-id="agentId"
       :agent-name="agentName"
       :grade="grade"

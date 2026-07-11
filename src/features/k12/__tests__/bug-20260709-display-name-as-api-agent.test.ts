@@ -17,6 +17,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
+import HcSelect from '@/components/common/HcSelect.vue'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 
@@ -92,6 +93,9 @@ describe('审计单-High-2：K12 grade/coldStart/prep 必须用 agents.name 作 
     const w = render({ 'k12.grade_term': '五年级上' })
     await recognizeOnce(w)
 
+    w.findComponent(HcSelect).vm.$emit('update:modelValue', '数学')
+    await flushPromises()
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
     await w.find('[data-testid="rq-answer-0"]').setValue('2')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
@@ -104,10 +108,13 @@ describe('审计单-High-2：K12 grade/coldStart/prep 必须用 agents.name 作 
     ).toBe(AGENT_ID)
   })
 
-  it('★prep（识题后内联辅导要点）：k12PrepCard 的 agent 必须是 agentId（内部名）', async () => {
+  it('★prep（整体确认后内联辅导要点）：k12PrepCard 的 agent 必须是 agentId（内部名）', async () => {
     const w = render({ 'k12.grade_term': '五年级上' })
     await recognizeOnce(w)
 
+    expect(k12PrepCard).not.toHaveBeenCalled()
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     expect(k12PrepCard).toHaveBeenCalledTimes(1)
     const req = k12PrepCard.mock.calls[0]![0] as { agent: string }
     expect(

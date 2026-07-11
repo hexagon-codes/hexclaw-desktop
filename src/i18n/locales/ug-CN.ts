@@ -12,6 +12,16 @@
 //
 // auto-translated, needs native review
 export default {
+  contextbar: {
+    agentTip: 'Agent · Mode (click to switch)', // TODO: verify ug
+    engineOffline: 'Engine offline', // TODO: verify ug
+    engineOnline: 'Engine connected', // TODO: verify ug
+    engineRestarting: 'Restarting', // TODO: verify ug
+    noAgent: 'No agent', // TODO: verify ug
+    noModel: 'No model selected', // TODO: verify ug
+    providerModelTip: 'Provider · Model (click to switch)', // TODO: verify ug
+    restarting: 'Engine restarting…', // TODO: verify ug
+  },
   nav: {
     dashboard: 'باش بەت',
     brandName: 'HexClaw',
@@ -75,6 +85,7 @@ export default {
   },
 
   common: {
+    noResults: 'No results', // TODO: verify ug
     save: 'ساقلاش',
     saving: 'ساقلىنىۋاتىدۇ…',
     today: 'بۈگۈن',
@@ -118,6 +129,8 @@ export default {
   },
 
   chat: {
+    orphanAgentCleared: 'This Agent was deleted; the session fell back to the default assistant', // ug 占位（保留术语 Agent），待母语校订
+    persistFailed: 'Message generated but not saved; it may be lost after refreshing the session', // TODO: verify ug
     title: 'سۆھبەت',
     sessions: 'سۆھبەتلەر',
     newSession: 'يېڭى سۆھبەت',
@@ -318,6 +331,7 @@ export default {
     fileVideo: 'سىن',
     fileGeneric: 'ھۆججەت',
     aboutTokens: '≈ {n} tokens',
+    showEarlier: 'بۇرۇنقى {n} ئۇچۇرنى كۆرسىتىش',
     budget: 'بۇجەت',
     knowledgeHit: 'بىلىم ئامبىرى ماس كەلدى',
     toolApproval: 'قورال تەستىقى',
@@ -398,6 +412,8 @@ export default {
   },
 
   agents: {
+    systemPrompt: 'Persona (SOUL)', // TODO: verify ug
+    systemPromptPlaceholder: 'Define the agent role and behavior; leave blank to use the default persona', // TODO: verify ug
     eyebrow: 'Agent',
     title: 'Agent باشقۇرۇش',
     description: 'Agent رول ئېنىقلىمىسىنى باشقۇرۇش',
@@ -632,6 +648,7 @@ export default {
   },
 
   tasks: {
+    statusTimeout: 'Timeout', // TODO: verify ug
     title: 'ۋاقىتلىق ۋەزىپە',
     description: 'Cron ۋاقىتلىق ۋەزىپە ۋە ئۈزلۈكسىز تەكشۈرۈشنى باشقۇرۇش',
     createTask: 'ۋەزىپە قۇرۇش',
@@ -961,6 +978,9 @@ export default {
   },
 
   integration: {
+    searchMcp: 'Search MCP…', // TODO: verify ug
+    searchPrompts: 'Search prompts…', // TODO: verify ug
+    searchSkills: 'Search skills…', // TODO: verify ug
     title: 'ئىقتىدار',
     description: 'Skill ۋە MCPنى باشقۇرۇش',
     eyebrow: 'ئىقتىدار',
@@ -977,6 +997,14 @@ export default {
 
   // Prompt ئامبىرى (ئىقتىدار · Prompt ئامبىرى / ھەممىسى)
   prompts: {
+    deleteFailed: 'Delete failed, please retry', // TODO: verify ug
+    mdHint: 'Markdown supported.', // TODO: verify ug
+    newPrompt: 'New prompt', // TODO: verify ug
+    previewEmpty: '(empty)', // TODO: verify ug
+    previewNote: 'Preview is read-only; the model sees the original text above.', // TODO: verify ug
+    saveFailed: 'Save failed, please retry', // TODO: verify ug
+    tabEdit: 'تەھرىرلەش',
+    tabPreview: 'ئالدىن كۆرۈش',
     tabAll: 'ھەممىسى',
     tabMemories: 'ئەسلىمە',
     hint: 'كىرگۈزۈش رامكىسىغا “/” كىرگۈزسىڭىز قوزغىتىلغان Prompt نى چاقىرالايسىز؛ بۇيرۇقتا $ARGUMENTS ئورۇن بەلگىسى بىلەن پارامېتىر تولدۇرۇلىدۇ.',
@@ -1124,6 +1152,7 @@ export default {
   },
 
   knowledge: {
+    indexing: 'يۈكلەندى · ئىندېكس قۇرۇلۇۋاتىدۇ، تاماملانغاندا تۆۋەندىكى تىزىملىكتە كۆرۈنىدۇ',
     title: 'بىلىم ئامبىرى',
     description: 'ھۆججەت ۋە بىلىم كۆرسەتكۈچىنى باشقۇرۇش',
     eyebrow: 'بىلىم ئامبىرى',
@@ -1322,6 +1351,7 @@ export default {
   },
 
   mcp: {
+    needsConfig: 'Needs config', // TODO: verify ug
     title: 'MCP باشقۇرۇش',
     description: 'Model Context Protocol مۇلازىمىتىنى باشقۇرۇش',
     servers: 'مۇلازىمېتىر',
@@ -1406,6 +1436,15 @@ export default {
   },
 
   imChannels: {
+    bindFailed: 'Failed to bind agent', // TODO: verify ug
+    chatRoute: {
+      title: 'سۆھبەت يوللانمىسى · chat_id → ئۈلگە',
+      addOpen: '+ سۆھبەت باغلاش',
+      unbind: 'يېشىش',
+      chatIdPlaceholder: 'chat_id (خۇسۇسىي/گۇرۇپپا)',
+      pickAgent: 'قوبۇل قىلغۇچى Agent نى تاللاڭ',
+      add: 'باغلاش',
+    },
     title: 'IM ئۇلىنىش',
     description: 'دەرھال ئۇچۇرلىشىش سۇپىلىرى ئۇلاش، ھەر يەردە AI بىلەن سۆھبەتلىشىش',
     addChannel: 'ئۇلىنىش قوشۇش',
@@ -1813,16 +1852,64 @@ export default {
   },
 
   settings: {
+    modelManager: {
+      allVendors: 'ھەممىسى',
+      badgeFree: 'ھەقسىز',
+      badgeTools: 'قورال',
+      badgeVision: 'كۆرۈش',
+      clear: 'Clear enabled', // TODO: verify ug
+      clearConfirm: 'Clear {n} enabled model(s)?', // TODO: verify ug
+      deselectGroup: 'Deselect all', // TODO: verify ug
+      empty: 'No matching models — try adjusting your search or filters', // TODO: verify ug
+      enabledSummary: 'قوزغىتىلدى',
+      enabledUnit: ' model(s)', // TODO: verify ug
+      filterCtx: '≥128K context', // TODO: verify ug
+      filterFree: 'ھەقسىز',
+      filterLabel: 'سۈزگۈچ',
+      filterTools: 'Tool calling', // TODO: verify ug
+      filterVision: 'كۆرۈش',
+      leanHint: 'Keep it lean — enable only the few you use often', // TODO: verify ug
+      newCount: '{n} new since last sync', // TODO: verify ug
+      newTag: 'يېڭى',
+      otherVendor: 'باشقا',
+      recommendDismiss: 'Dismiss', // TODO: verify ug
+      recommendEnable: 'Enable all', // TODO: verify ug
+      recommendText: 'Recommended by "free + tool calling + large context"', // TODO: verify ug
+      resync: 'Resync', // TODO: verify ug
+      searchPlaceholder: 'Search model id or name…', // TODO: verify ug
+      selectGroup: 'Select all in group', // TODO: verify ug
+      title: 'Manage models', // TODO: verify ug
+      vendorSearch: 'Filter vendors…', // TODO: verify ug
+      viewAll: 'ھەممىسى',
+      viewEnabled: 'قوزغىتىلدى',
+      viewNew: 'New this sync', // TODO: verify ug
+    },
+    backup: {
+      title: 'زاپاسلاش ۋە ئەسلىگە كەلتۈرۈش',
+      dataDir: 'سانلىق مەلۇمات مۇندەرىجىسى',
+      open: 'ئېچىش',
+      openFailed: 'سانلىق مەلۇمات مۇندەرىجىسىنى ئاچقىلى بولمىدى',
+    },
     title: 'تەڭشەك',
     description: 'مودېل، ئۈستەلئۈستى ھەرىكەت ۋە ئىجرا ماتورىنى تەڭشەش',
     searchPlaceholder: 'تەڭشەك ئىزدەش...',
     toolbar: {
+      saveFailed: 'Save failed, please retry', // TODO: verify ug
       reset: 'ئەسلىگە كەلتۈرۈش',
       testConnection: 'ئۇلىنىش سىنىقى',
       saveSettings: 'تەڭشەك ساقلاش',
       resetFailed: 'ئەسلىگە كەلتۈرۈش مەغلۇپ بولدى، قايتا سىناڭ',
     },
     llm: {
+      justSynced: 'Just synced', // TODO: verify ug
+      manageModels: 'Manage models', // TODO: verify ug
+      modelFreeLabel: 'ھەقسىز',
+      modelsAvailable: 'available', // TODO: verify ug
+      modelsDynamic: 'Dynamic', // TODO: verify ug
+      modelsEnabledSummary: 'قوزغىتىلدى',
+      modelStale: 'Removed upstream: this model is not in the latest synced catalog', // TODO: verify ug
+      modelStaleLabel: 'Removed', // TODO: verify ug
+      newModelsFound: 'New models found in this sync', // TODO: verify ug
       title: 'LLM Provider',
       probeFailed: 'ئىقتىدار ئىزدەش مەغلۇپ بولدى، قايتا سىناڭ',
       deleteProviderFailed: 'ئۆچۈرۈش مەغلۇپ بولدى، ئەسلىگە كەلتۈرۈلدى',
@@ -2069,6 +2156,11 @@ export default {
       downloadModel: 'چۈشۈرۈش',
       goChat: 'سۆھبەتكە',
       otherLocal: 'باشقا يەرلىك مودېل (LM Studio، llama.cpp، vLLM) OpenAI ماس كېلىدىغان ئېغىز ئارقىلىق ئۇلىنىدۇ.',
+      keepAliveLabel: 'مودېل تۇرغۇزۇش ۋاقتى',
+      keepAliveDefault: 'سۈكۈتتىكى (30 مىنۇت)',
+      keepAlive5m: '5 مىنۇت (ئەسلەك تېجەش)',
+      keepAlive15m: '15 مىنۇت',
+      keepAlive60m: '60 مىنۇت',
       connecting: 'ئۇلىنىۋاتىدۇ...',
       verifying: 'تەكشۈرۈلىۋاتىدۇ...',
       pullManifest: 'مودېل ئۇچۇرى ئېلىنىۋاتىدۇ...',
@@ -2137,6 +2229,7 @@ export default {
   },
 
   about: {
+    capLocalInference: 'Local inference', // TODO: verify ug
     title: 'HexClaw ھەققىدە',
     open: 'HexClaw ھەققىدە',
     learnMore: 'تەپسىلاتى',
@@ -2178,6 +2271,16 @@ export default {
   },
 
   welcome: {
+    ollamaDetecting: 'Detecting Ollama…', // TODO: verify ug
+    ollamaHint: 'No API key needed — models run locally and work fully offline.', // TODO: verify ug
+    ollamaNoModels: 'No downloaded models yet — you can download them from Settings after onboarding.', // TODO: verify ug
+    ollamaNotRunning: 'Ollama not running — HexClaw will start its built-in engine automatically', // TODO: verify ug
+    ollamaReady: 'Ollama is ready', // TODO: verify ug
+    ollamaSelectModel: 'مودېل تاللاش',
+    quickAutomation: 'Create your first scheduled task', // TODO: verify ug
+    quickAutomationDesc: 'Let AI send you a morning briefing every day', // TODO: verify ug
+    quickChannels: 'Connect an IM channel', // TODO: verify ug
+    quickChannelsDesc: 'Bring AI into your WeChat / Feishu / Telegram', // TODO: verify ug
     title: 'HexClaw AI غا خۇش كەلدىڭىز',
     tagline: 'كارخانا دەرىجىسى بىخەتەر شەخسىي AI Agent',
     step1Title: 'LLM تەڭشەش',
@@ -2400,6 +2503,9 @@ export default {
     addServer: 'مۇلازىمېتىر قوشۇش',
     addServerTitle: 'MCP مۇلازىمېتىر قوشۇش',
     removeServer: 'چىقىرىۋېتىش',
+    restartServer: 'قايتا قوزغىتىش',
+    restarted: '{name} قايتا قوزغىتىلدى',
+    restartFailed: 'قايتا قوزغىتىش مەغلۇپ بولدى',
     removeConfirm: 'بۇ MCP مۇلازىمېتىرنى راستىنلا چىقىرىۋېتەمسىز؟',
     serverName: 'مۇلازىمېتىر نامى',
     serverNamePlaceholder: 'مۇلازىمېتىر نامى كىرگۈزۈڭ',

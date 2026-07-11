@@ -1,4 +1,14 @@
 export default {
+  contextbar: {
+    agentTip: 'Agent · Mode (click to switch)',
+    engineOffline: 'Engine offline',
+    engineOnline: 'Engine connected',
+    engineRestarting: 'Restarting',
+    noAgent: 'No agent',
+    noModel: 'No model selected',
+    providerModelTip: 'Provider · Model (click to switch)',
+    restarting: 'Engine restarting…',
+  },
   nav: {
     dashboard: 'Dashboard',
     brandName: 'HexClaw',
@@ -62,6 +72,7 @@ export default {
   },
 
   common: {
+    noResults: 'No results',
     save: 'Save',
     saving: 'Saving…',
     today: 'Today',
@@ -105,6 +116,8 @@ export default {
   },
 
   chat: {
+    orphanAgentCleared: 'This agent was deleted; the session fell back to the default assistant',
+    persistFailed: 'Message generated but not saved; it may be lost after refreshing the session',
     title: 'Chat',
     sessions: 'Sessions',
     newSession: 'New Session',
@@ -305,6 +318,7 @@ export default {
     fileVideo: 'Video',
     fileGeneric: 'File',
     aboutTokens: '≈ {n} tokens',
+    showEarlier: 'Show {n} earlier messages',
     budget: 'Budget',
     knowledgeHit: 'Knowledge hit',
     toolApproval: 'Tool Approval Required',
@@ -385,6 +399,8 @@ export default {
   },
 
   agents: {
+    systemPrompt: 'Persona (SOUL)',
+    systemPromptPlaceholder: 'Define the agent role and behavior; leave blank to use the default persona',
     eyebrow: 'Agents',
     title: 'Agent Management',
     description: 'Manage Agent role definitions',
@@ -620,6 +636,7 @@ export default {
   },
 
   tasks: {
+    statusTimeout: 'Timeout',
     title: 'Scheduled Tasks',
     description: 'Manage Cron tasks and heartbeat monitoring',
     createTask: 'Create Task',
@@ -950,6 +967,9 @@ export default {
   },
 
   integration: {
+    searchMcp: 'Search MCP…',
+    searchPrompts: 'Search prompts…',
+    searchSkills: 'Search skills…',
     title: 'Capabilities',
     description: 'Manage skills and MCP servers.',
     eyebrow: 'Capabilities',
@@ -966,6 +986,14 @@ export default {
 
   // Prompt library (Capabilities · Prompt library / All)
   prompts: {
+    deleteFailed: 'Delete failed, please retry',
+    mdHint: 'Markdown supported.',
+    newPrompt: 'New prompt',
+    previewEmpty: '(empty)',
+    previewNote: 'Preview is read-only; the model sees the original text above.',
+    saveFailed: 'Save failed, please retry',
+    tabEdit: 'Edit',
+    tabPreview: 'Preview',
     tabAll: 'All',
     tabMemories: 'Memory',
     hint: 'Type “/” in the input to summon enabled prompts; use $ARGUMENTS as a placeholder for command arguments.',
@@ -1114,6 +1142,7 @@ export default {
   },
 
   knowledge: {
+    indexing: 'Uploaded · building index, it will appear in the list below',
     title: 'Knowledge Base',
     description: 'Manage documents and knowledge index',
     eyebrow: 'Knowledge base',
@@ -1317,6 +1346,7 @@ export default {
   },
 
   mcp: {
+    needsConfig: 'Needs config',
     title: 'MCP Management',
     description: 'Manage Model Context Protocol servers',
     serverName: 'Server Name',
@@ -1401,6 +1431,15 @@ export default {
   },
 
   imChannels: {
+    bindFailed: 'Failed to bind agent',
+    chatRoute: {
+      title: 'Chat routing · chat_id → instance',
+      addOpen: '+ Bind chat',
+      unbind: 'Unbind',
+      chatIdPlaceholder: 'chat_id (DM / group)',
+      pickAgent: 'Pick receptionist agent',
+      add: 'Bind',
+    },
     title: 'IM Channels',
     description: 'Connect instant messaging platforms to chat with AI anywhere',
     addChannel: 'Add Channel',
@@ -1809,16 +1848,64 @@ export default {
   },
 
   settings: {
+    modelManager: {
+      allVendors: 'All',
+      badgeFree: 'Free',
+      badgeTools: 'Tools',
+      badgeVision: 'Vision',
+      clear: 'Clear enabled',
+      clearConfirm: 'Clear {n} enabled model(s)?',
+      deselectGroup: 'Deselect all',
+      empty: 'No matching models — try adjusting your search or filters',
+      enabledSummary: 'Enabled',
+      enabledUnit: ' model(s)',
+      filterCtx: '≥128K context',
+      filterFree: 'Free',
+      filterLabel: 'Filter',
+      filterTools: 'Tool calling',
+      filterVision: 'Vision',
+      leanHint: 'Keep it lean — enable only the few you use often',
+      newCount: '{n} new since last sync',
+      newTag: 'New',
+      otherVendor: 'Other',
+      recommendDismiss: 'Dismiss',
+      recommendEnable: 'Enable all',
+      recommendText: 'Recommended by "free + tool calling + large context"',
+      resync: 'Resync',
+      searchPlaceholder: 'Search model id or name…',
+      selectGroup: 'Select all in group',
+      title: 'Manage models',
+      vendorSearch: 'Filter vendors…',
+      viewAll: 'All',
+      viewEnabled: 'Enabled',
+      viewNew: 'New this sync',
+    },
+    backup: {
+      title: 'Backup & Restore',
+      dataDir: 'Data directory',
+      open: 'Open',
+      openFailed: 'Could not open the data directory',
+    },
     title: 'Settings',
     description: 'Configure models, desktop behavior and runtime engine',
     searchPlaceholder: 'Search settings...',
     toolbar: {
+      saveFailed: 'Save failed, please retry',
       reset: 'Reset',
       testConnection: 'Test Connection',
       saveSettings: 'Save',
       resetFailed: 'Reset failed, please retry',
     },
     llm: {
+      justSynced: 'Just synced',
+      manageModels: 'Manage models',
+      modelFreeLabel: 'Free',
+      modelsAvailable: 'available',
+      modelsDynamic: 'Dynamic',
+      modelsEnabledSummary: 'Enabled',
+      modelStale: 'Removed upstream: this model is not in the latest synced catalog',
+      modelStaleLabel: 'Removed',
+      newModelsFound: 'New models found in this sync',
       title: 'LLM Providers',
       probeFailed: 'Capability probe failed, please retry',
       deleteProviderFailed: 'Delete failed, changes restored',
@@ -2068,6 +2155,11 @@ export default {
       downloadModel: 'Download',
       goChat: 'Go to Chat',
       otherLocal: 'Other local LLMs (LM Studio, llama.cpp, vLLM) can be added as OpenAI-compatible providers.',
+      keepAliveLabel: 'Model keep-alive',
+      keepAliveDefault: 'Default (30 min)',
+      keepAlive5m: '5 min (save RAM)',
+      keepAlive15m: '15 min',
+      keepAlive60m: '60 min',
       connecting: 'Connecting...',
       verifying: 'Verifying...',
       pullManifest: 'Fetching model info...',
@@ -2136,6 +2228,7 @@ export default {
   },
 
   about: {
+    capLocalInference: 'Local inference',
     title: 'About HexClaw',
     open: 'About HexClaw',
     learnMore: 'Learn more',
@@ -2177,6 +2270,16 @@ export default {
   },
 
   welcome: {
+    ollamaDetecting: 'Detecting Ollama…',
+    ollamaHint: 'No API key needed — models run locally and work fully offline.',
+    ollamaNoModels: 'No downloaded models yet — you can download them from Settings after onboarding.',
+    ollamaNotRunning: 'Ollama not running — HexClaw will start its built-in engine automatically',
+    ollamaReady: 'Ollama is ready',
+    ollamaSelectModel: 'Select model',
+    quickAutomation: 'Create your first scheduled task',
+    quickAutomationDesc: 'Let AI send you a morning briefing every day',
+    quickChannels: 'Connect an IM channel',
+    quickChannelsDesc: 'Bring AI into your WeChat / Feishu / Telegram',
     title: 'Welcome to HexClaw',
     tagline: 'Enterprise-grade secure personal AI Agent',
     step1Title: 'Configure LLM',
@@ -2417,6 +2520,9 @@ export default {
     addServer: 'Add Server',
     addServerTitle: 'Add MCP Server',
     removeServer: 'Remove',
+    restartServer: 'Restart',
+    restarted: 'Restarted {name}',
+    restartFailed: 'Restart failed',
     removeConfirm: 'Remove this MCP server?',
     serverName: 'Server Name',
     serverNamePlaceholder: 'Enter server name',

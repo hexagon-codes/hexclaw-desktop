@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
+import HcSelect from '@/components/common/HcSelect.vue'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 
 // #1/#2/#3（hex-test 闭环）：拍题识题回显护栏 + 逐题批改 + 冷启动倒查建档。
@@ -50,6 +51,17 @@ async function setImage(w: ReturnType<typeof render>, b64 = 'data:image/png;base
   await w.find('[data-testid="recognize-b64"]').setValue(b64)
 }
 
+async function chooseSubject(w: ReturnType<typeof render>, subject = '数学') {
+  w.findComponent(HcSelect).vm.$emit('update:modelValue', subject)
+  await flushPromises()
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
 describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷启动建档）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -79,6 +91,39 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(w.text()).toContain('乘法结合律')
   })
 
+  it('#1 总确认门：识题后先整体确认，确认前不得展示备课卡', async () => {
+    h.recognizeSpy.mockResolvedValue({
+      questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }],
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+
+    expect(w.find('[data-testid="recognize-confirm-all"]').exists()).toBe(true)
+    expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(false)
+    expect(w.find('[data-testid="rq-grade-0"]').exists()).toBe(false)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(true)
+    expect(w.find('[data-testid="rq-grade-0"]').exists()).toBe(true)
+  })
+
+  it('#1 多孩隔离：切换 agent 后忽略旧孩子尚未完成的识题响应', async () => {
+    const oldRequest = deferred<{ questions: { question: string; knowledge_points: string[] }[] }>()
+    h.recognizeSpy.mockReturnValueOnce(oldRequest.promise)
+    const w = render({ agentId: 'mingming' })
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+
+    await w.setProps({ agentId: 'honghong' })
+    oldRequest.resolve({ questions: [{ question: '小明的旧题', knowledge_points: ['旧知识点'] }] })
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="rq-item"]')).toHaveLength(0)
+    expect(w.text()).not.toContain('小明的旧题')
+  })
+
   it('#1 护栏：家长「读错了」可就地改题干，批改用改过的题干', async () => {
     h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8x3', knowledge_points: ['小数乘法'] }] })
     h.gradeSpy.mockResolvedValue({
@@ -93,6 +138,8 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     // 读错 → 编辑题干
     await w.find('[data-testid="rq-edit-0"]').trigger('click')
     await w.find('[data-testid="rq-problem-0"]').setValue('3.8×3=?')
+    await chooseSubject(w)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
     // 填孩子作答 → 批改
     await w.find('[data-testid="rq-answer-0"]').setValue('11.4')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
@@ -107,6 +154,31 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(req.knowledge_points).toEqual(['小数乘法'])
   })
 
+  it('#2 批改：把家长明确选择的非默认学科透传到 grade 契约', async () => {
+    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '“床前明月光”的下一句', knowledge_points: ['古诗背诵'] }] })
+    h.gradeSpy.mockResolvedValue({
+      solution: '疑是地上霜', verdict: 'disagree', evidence_type: 'heterogeneous_model',
+      badge: 'disagree', correct: false, out_of_scope: false, record_created: true, record_id: 'r-cn-1',
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+
+    const subjectSelect = w.findComponent(HcSelect)
+    expect(subjectSelect.exists(), '拍题批改前必须让家长明确选择学科').toBe(true)
+    await chooseSubject(w, '语文')
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await w.find('[data-testid="rq-grade-0"]').trigger('click')
+    await flushPromises()
+
+    expect(h.gradeSpy).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'mingming',
+      subject: '语文',
+      problem: '“床前明月光”的下一句',
+    }))
+  })
+
   it('#2 批改：渲染验算徽章', async () => {
     h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }] })
     h.gradeSpy.mockResolvedValue({
@@ -117,11 +189,38 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
     await flushPromises()
+    await chooseSubject(w)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
     await w.find('[data-testid="rq-answer-0"]').setValue('11.4')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
 
     expect(w.find('.verify-badge').exists()).toBe(true)
+  })
+
+  it('#2 批改：向家长展示完整解法、错步、错因，并诚实标识去重入本', async () => {
+    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }] })
+    h.gradeSpy.mockResolvedValue({
+      solution: '解：3.8×3=11.4', verdict: 'disagree', evidence_type: 'numeric_exec',
+      badge: 'disagree', correct: false, wrong_step: '小数点错位', error_cause: '小数乘法对位错误',
+      out_of_scope: false, record_created: false, record_id: 'existing-r1',
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+    await chooseSubject(w)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await w.find('[data-testid="rq-answer-0"]').setValue('10.4')
+    await w.find('[data-testid="rq-grade-0"]').trigger('click')
+    await flushPromises()
+
+    const details = w.find('[data-testid="rq-grade-details-0"]')
+    expect(details.exists()).toBe(true)
+    expect(details.text()).toContain('解：3.8×3=11.4')
+    expect(details.text()).toContain('小数点错位')
+    expect(details.text()).toContain('小数乘法对位错误')
+    expect(w.find('[data-testid="rq-record-deduplicated-0"]').exists()).toBe(true)
   })
 
   it('#3 冷启动：有年级时不显示推断建档入口', async () => {

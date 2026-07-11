@@ -9,7 +9,7 @@
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { nanoid } from 'nanoid'
-import { registerAgent, updateAgent } from '@/api/agents'
+import { registerAgent, updateAgent, unregisterAgent } from '@/api/agents'
 import { k12UpdateProfile } from '@/api/k12'
 import { useK12Store } from '../store'
 import { useAgentsStore } from '@/stores/agents'
@@ -24,7 +24,7 @@ const props = defineProps<{
   agent?: { name: string; display_name?: string; metadata?: Record<string, string>; skills?: string[]; system_prompt?: string }
 }>()
 
-const emit = defineEmits<{ (e: 'created', name: string): void; (e: 'close'): void }>()
+const emit = defineEmits<{ (e: 'created', name: string): void; (e: 'close'): void; (e: 'removed', name: string): void }>()
 
 const { t } = useI18n()
 const toast = useToast()
@@ -39,6 +39,26 @@ const grade = ref(props.agent?.metadata?.['k12.grade_term'] ?? '五年级上')
 const textbook = ref(props.agent?.metadata?.['k12.textbook_edition'] ?? '人教版')
 const submitting = ref(false)
 const error = ref('')
+
+// BUG-20260710 ①：删除档案下沉到编辑弹层（原型 K12 卡动作行无删除，卡面孤行删除是漂移）。
+// 两步确认防误触；成功后 emit removed 让宿主刷新列表。
+const deleteConfirming = ref(false)
+const deleting = ref(false)
+async function removeProfile() {
+  if (!props.agent || deleting.value) return
+  deleting.value = true
+  error.value = ''
+  try {
+    await unregisterAgent(props.agent.name)
+    toast.success(t('k12.profile.deleted', { name: displayName.value }))
+    emit('removed', props.agent.name)
+    emit('close')
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    deleting.value = false
+  }
+}
 
 // 默认 skill 从 manifest 全挂好（帮家长预选）；改档时从当前实例 skills 初始化（保留自定义）
 const enabledSkills = ref<Set<string>>(
@@ -136,12 +156,24 @@ async function submit() {
       skills: boundSkills(),
       metadata: { scenario: K12_SCENARIO_ID, avatar: '🎓' },
     })
-    await k12UpdateProfile({
-      agent: name,
-      child_name: childName.value.trim(),
-      grade_term: grade.value,
-      textbook_edition: textbook.value,
-    })
+    try {
+      await k12UpdateProfile({
+        agent: name,
+        child_name: childName.value.trim(),
+        grade_term: grade.value,
+        textbook_edition: textbook.value,
+      })
+    } catch (profileError) {
+      // register 已成功而档案写入失败时，补偿删除刚注册的半成品，避免卡片无年级/无孩子地残留。
+      try {
+        await unregisterAgent(name)
+      } catch (rollbackError) {
+        const original = profileError instanceof Error ? profileError.message : String(profileError)
+        const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+        throw new Error(`${original}; rollback failed: ${rollback}`)
+      }
+      throw profileError
+    }
     await agentsStore.loadAgents()
     // 随模板默认注册自动化任务（错题卷/提醒/月报/学期确认，投递桌面 chat）。
     // 最佳努力、不阻断建档：桌面未启用 cron 时后端 501，store 已静默降级。
@@ -238,6 +270,22 @@ async function submit() {
       </div>
 
       <div class="k12pf__foot">
+        <template v-if="isEdit">
+          <button
+            v-if="!deleteConfirming"
+            class="k12pf__btn k12pf__btn--danger"
+            data-testid="k12pf-delete"
+            @click="deleteConfirming = true"
+          >{{ t('k12.profile.delete') }}</button>
+          <button
+            v-else
+            class="k12pf__btn k12pf__btn--danger"
+            data-testid="k12pf-delete-confirm"
+            :disabled="deleting"
+            @click="removeProfile"
+          >{{ t('k12.profile.deleteConfirm') }}</button>
+        </template>
+        <span class="k12pf__footsp" />
         <button class="k12pf__btn" @click="emit('close')">{{ t('k12.profile.cancel') }}</button>
         <button class="k12pf__btn k12pf__btn--primary" :disabled="submitting" @click="submit">
           {{ isEdit ? t('k12.profile.save') : t('k12.profile.create') }}
@@ -322,7 +370,10 @@ async function submit() {
   background: var(--hc-bg-card); border: 0.5px solid var(--hc-border); border-radius: 10px; padding: 10px 12px;
 }
 .k12pf__err { margin: 0; font-size: 12.5px; color: var(--hc-error); }
-.k12pf__foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 18px; border-top: 0.5px solid var(--hc-border); }
+.k12pf__foot { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-top: 0.5px solid var(--hc-border); }
+.k12pf__footsp { flex: 1; }
+.k12pf__btn--danger { color: var(--hc-error); border-color: color-mix(in srgb, var(--hc-error) 35%, var(--hc-border)); }
+.k12pf__btn--danger:hover { background: color-mix(in srgb, var(--hc-error) 10%, transparent); }
 .k12pf__btn {
   padding: 8px 14px; border-radius: 10px; font-size: 13px; cursor: pointer;
   border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-primary);

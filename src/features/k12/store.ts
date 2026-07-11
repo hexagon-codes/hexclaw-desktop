@@ -31,8 +31,8 @@ import {
   type ProvisionCronReq,
   type ProvisionedJob,
 } from '@/api/k12'
-import type { RecordCollectionView, VerifyResult } from '@/contracts'
-import { mistakesToView, gradeToVerify, accumToView } from './mappers'
+import type { RecordCollectionView } from '@/contracts'
+import { mistakesToView, gradeToResult, accumToView, type GradeViewResult } from './mappers'
 
 export const useK12Store = defineStore('k12', () => {
   /** 当前实例（孩子）的错题本视图；多孩隔离 = 以 agent 拉取，切实例即换数据 */
@@ -43,41 +43,59 @@ export const useK12Store = defineStore('k12', () => {
   const prepCard = ref<PrepCardResp | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
+  let mistakesRequest = 0
+  let reportRequest = 0
+  let studyTimeRequest = 0
+  let accumulationRequest = 0
 
   /** 拉取某实例错题本 + 复习队列（合并为通用记录集视图） */
   async function loadMistakes(agent: string, status?: string): Promise<void> {
+    const request = ++mistakesRequest
     loading.value = true
     error.value = null
+    mistakeView.value = null
     try {
       const [all, due] = await Promise.all([k12ListMistakes(agent, status), k12ReviewQueue(agent)])
+      if (request !== mistakesRequest) return
       mistakeView.value = mistakesToView(agent, all.items, due.items)
     } catch (e) {
+      if (request !== mistakesRequest) return
       error.value = e instanceof Error ? e.message : String(e)
     } finally {
-      loading.value = false
+      if (request === mistakesRequest) loading.value = false
     }
   }
 
   /** 「他会了」→ mark-mastered（乐观锁）后局部刷新 */
   async function markMastered(agent: string, recordId: string, version: number): Promise<void> {
-    await k12MarkMastered({ record_id: recordId, version })
+    await k12MarkMastered({ agent, record_id: recordId, version })
     await loadMistakes(agent)
   }
 
   /** 学情报告（真实端点，替代客户端聚合） */
   async function loadReport(agent: string): Promise<void> {
+    const request = ++reportRequest
+    error.value = null
+    report.value = null
     try {
-      report.value = await k12InsightReport(agent)
+      const next = await k12InsightReport(agent)
+      if (request === reportRequest) report.value = next
     } catch (e) {
+      if (request !== reportRequest) return
       error.value = e instanceof Error ? e.message : String(e)
     }
   }
 
   /** 学习时长（一维按日） */
   async function loadStudyTime(agent: string): Promise<void> {
+    const request = ++studyTimeRequest
+    error.value = null
+    studyTime.value = null
     try {
-      studyTime.value = await k12StudyTime(agent)
+      const next = await k12StudyTime(agent)
+      if (request === studyTimeRequest) studyTime.value = next
     } catch (e) {
+      if (request !== studyTimeRequest) return
       error.value = e instanceof Error ? e.message : String(e)
     }
   }
@@ -88,12 +106,17 @@ export const useK12Store = defineStore('k12', () => {
   const ACCUM_KEEP_TYPES = new Set(['好词好句', '古诗', '语法点', '作文'])
 
   async function loadAccumulation(agent: string, subject?: string): Promise<void> {
+    const request = ++accumulationRequest
+    error.value = null
+    accumView.value = null
     try {
       const res = await k12ListAccumulation(agent, subject)
+      if (request !== accumulationRequest) return
       // 「积累」tab 只留积累型；纠错型（听写/默写/改错）已在「错题」tab 的跨科复习队列呈现。
       const keepOnly = res.items.filter((it) => ACCUM_KEEP_TYPES.has(it.entry_type))
       accumView.value = accumToView(agent, keepOnly)
     } catch (e) {
+      if (request !== accumulationRequest) return
       error.value = e instanceof Error ? e.message : String(e)
     }
   }
@@ -112,9 +135,9 @@ export const useK12Store = defineStore('k12', () => {
   }
 
   /** 批改一道题 → 验算徽章数据 + 是否入库 */
-  async function grade(req: GradeReq): Promise<{ verify: VerifyResult; recordCreated: boolean; recordId?: string }> {
+  async function grade(req: GradeReq): Promise<GradeViewResult> {
     const resp = await k12Grade(req)
-    return { verify: gradeToVerify(resp), recordCreated: resp.record_created, recordId: resp.record_id }
+    return gradeToResult(resp)
   }
 
   /** 拍题识题：作业图片 → 题目清单（识题回显护栏的第一步，需 LLM） */

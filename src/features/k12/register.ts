@@ -12,6 +12,7 @@ import { K12_VIEW_DESCRIPTOR, K12_SCENARIO_ID } from './descriptor'
 import K12ChatEnhancement from './views/K12ChatEnhancement.vue'
 import K12AgentCard from './views/K12AgentCard.vue'
 import K12ProfileForm from './views/K12ProfileForm.vue'
+import K12SettingsBackup from './views/K12SettingsBackup.vue'
 import k12ZhCN from './i18n/zh-CN'
 import k12En from './i18n/en'
 import k12UgCN from './i18n/ug-CN'
@@ -46,6 +47,8 @@ export function registerK12Scenario(): void {
   scenarioRegistry.registerChatEnhancement(K12ChatEnhancement)
   // 4b) 智能体卡扩展（错题/待复习计数 + 快捷入口）→ AgentsView 对场景实例渲染
   scenarioRegistry.registerAgentCardExtension(K12AgentCard)
+  // 4c) 设置页扩展（家庭学习档案 一键备份/恢复）→ SettingsView「备份与恢复」段渲染（M2-20260710）
+  scenarioRegistry.registerSettingsExtension(K12SettingsBackup)
 
   // 5) 建档模板（模板库露出「作业辅导助手」卡 + 建档表单）→ AgentsView 动态渲染，不 import 场景包
   scenarioRegistry.registerScenarioTemplate({

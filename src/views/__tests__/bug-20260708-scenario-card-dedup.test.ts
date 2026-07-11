@@ -3,10 +3,11 @@
  *   K12 辅导卡扩展已提供「🎓 进入辅导 / 错题本 / 📋 备课卡 / 编辑档案」入口，
  *   通用卡再叠加「进入对话 / 编辑」→「进入辅导」≈「进入对话」、「编辑档案」≈「编辑」两组重复。
  *
- * 修复：通用卡检测到场景实例（isScenarioAgent）时隐藏通用「进入对话 / 编辑」，
- *   仅由场景扩展提供入口；「删除」保留（场景扩展无删除入口）。
+ * 修复：通用卡检测到场景实例（isScenarioAgent）时，通用操作行整行不渲染
+ *   （原型回灌 20260711：`.hc-crow` 加 v-if="!isScenarioAgent"，消场景卡空动作行留白），
+ *   进入辅导/错题本/编辑档案 全由场景扩展提供；删除对场景卡不在卡面（下沉到编辑档案弹层）。
  *
- * 回归锁：场景实例卡不得渲染 `agent-enter-chat-<name>`（通用进入对话）；普通卡照常渲染。
+ * 回归锁：场景实例卡不得渲染 `agent-enter-chat-<name>`（通用进入对话）、也无卡面删除；普通卡照常渲染。
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -94,6 +95,9 @@ describe('BUG-20260708 B3 · 场景实例卡不叠加重复通用按钮', () => 
     expect(wrapper.find('.stub-ext').exists()).toBe(true)
     // 场景卡不得再有通用「进入对话」按钮
     expect(wrapper.find('[data-testid="agent-enter-chat-k12-tutor-abc"]').exists()).toBe(false)
+    // 场景卡（含 .stub-ext 的那张）整行通用操作不渲染 → 无卡面删除按钮（删除下沉到编辑档案弹层）
+    const scenarioCard = wrapper.findAll('.hc-cxcard').find((c) => c.find('.stub-ext').exists())
+    expect(scenarioCard?.find('.hc-btn--danger').exists()).toBe(false)
   })
 
   it('普通卡照常渲染通用「进入对话」（回归对照）', async () => {

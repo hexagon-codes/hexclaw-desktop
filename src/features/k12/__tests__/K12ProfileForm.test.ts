@@ -9,11 +9,13 @@ import HcSelect from '@/components/common/HcSelect.vue'
 
 const h = vi.hoisted(() => ({
   registerSpy: vi.fn().mockResolvedValue({}),
+  unregisterSpy: vi.fn().mockResolvedValue({}),
   updateSpy: vi.fn().mockResolvedValue({}),
   profileSpy: vi.fn().mockResolvedValue({}),
 }))
 vi.mock('@/api/agents', () => ({
   registerAgent: (a: unknown) => h.registerSpy(a),
+  unregisterAgent: (name: string) => h.unregisterSpy(name),
   updateAgent: (name: string, u: unknown) => h.updateSpy(name, u),
   getAgents: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
@@ -52,8 +54,9 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     setActivePinia(createPinia())
     document.body.innerHTML = '' // 清 teleport 残留，防跨测试累积
     h.registerSpy.mockClear()
+    h.unregisterSpy.mockReset().mockResolvedValue({})
     h.updateSpy.mockClear()
-    h.profileSpy.mockClear()
+    h.profileSpy.mockReset().mockResolvedValue({})
   })
 
   it('显示名随称呼/年级自动生成「{称呼}的辅导老师 · {年级}」', async () => {
@@ -94,6 +97,20 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(prof.grade_term).toBe('五年级上')
     expect(prof.textbook_edition).toBe('人教版')
     expect(w.emitted('created')).toBeTruthy()
+  })
+
+  it('建档第二步写档案失败 → 注销刚注册的 agent 作补偿，不留下半成品', async () => {
+    h.profileSpy.mockRejectedValueOnce(new Error('profile write failed'))
+    const w = render()
+    await B().find('input.k12pf__input').setValue('小明')
+    await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+
+    expect(h.registerSpy).toHaveBeenCalledTimes(1)
+    const registered = h.registerSpy.mock.calls[0]![0] as { name: string }
+    expect(h.unregisterSpy).toHaveBeenCalledExactlyOnceWith(registered.name)
+    expect(w.emitted('created')).toBeFalsy()
+    expect(B().text()).toContain('profile write failed')
   })
 
   it('改档模式：预填 k12.* + 改年级 → updateAgent(显示名) + PUT /profile(grade_term)', async () => {

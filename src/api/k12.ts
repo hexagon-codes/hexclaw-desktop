@@ -31,6 +31,7 @@ export function k12GetViewDescriptor(slot = 'tutor') {
 // ── grade（批改一道题，核心闭环）─────────────────────────────
 export interface GradeReq {
   agent: string
+  subject?: string
   grade: string
   source_session?: string
   problem: string
@@ -94,6 +95,7 @@ export function k12ReviewQueue(agent: string) {
 
 // ── mark-mastered（他会了，乐观锁）───────────────────────────
 export interface MarkMasteredReq {
+  agent: string
   record_id: string
   version: number
 }
@@ -260,16 +262,22 @@ export function k12AddAccumulation(req: AddAccumReq) {
 export interface HexbakArchive {
   version: number
   agent_name: string
-  exported_at: string
+  exported_at: number
+  profile?: ProfileDTO | null
   records: unknown[]
   checksum: string
+}
+export interface K12RestoreResp {
+  restored: number
+  /** 服务端在写入前生成的原状态快照；可下载用于回滚。 */
+  snapshot: HexbakArchive | null
 }
 export function k12Backup(agent: string) {
   return apiGet<HexbakArchive>(`${BASE}/backup`, { agent })
 }
 /** checksum 不符 → 后端 400 */
 export function k12Restore(archive: HexbakArchive) {
-  return apiPost<{ restored: number }>(`${BASE}/restore`, archive as unknown as Record<string, unknown>)
+  return apiPost<K12RestoreResp>(`${BASE}/restore`, archive as unknown as Record<string, unknown>)
 }
 
 // ── export / mistake-sheet（错题本导出 / 错题卷；md 返回 JSON，pdf/docx 二进制）──

@@ -1,10 +1,9 @@
 <script setup lang="ts">
 /**
  * 家庭学习档案备份/恢复（features/k12）· M4-1。
- * 导出：错题本记录 → .hexbak（版本头 + checksum）。恢复：解析 + 完整性校验 + 幂等合并预览。
- * 后端全量 .hexbak 端点未就绪 → 恢复先校验预览，合并落地待引擎支持（诚实标注）。
+ * 导出：错题本记录 → .hexbak（版本头 + checksum）。恢复：本地结构预览 → 明确确认 → 服务端校验并幂等合并。
  */
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import { k12Backup, k12Restore, type HexbakArchive } from '@/api/k12'
@@ -15,9 +14,12 @@ const emit = defineEmits<{ (e: 'close'): void }>()
 const { t } = useI18n()
 const toast = useToast()
 
-const preview = ref<{ count: number } | null>(null)
+const pendingArchive = ref<HexbakArchive | null>(null)
+const restoredCount = ref<number | null>(null)
+const restoreSnapshot = ref<HexbakArchive | null>(null)
 const importError = ref('')
 const busy = ref(false)
+const targetMatches = computed(() => pendingArchive.value?.agent_name === props.agentId)
 
 function download(filename: string, content: string): void {
   const blob = new Blob([content], { type: 'application/octet-stream' })
@@ -56,21 +58,66 @@ async function onDrop(e: DragEvent) {
   if (file) await handleFile(file)
 }
 
-// 恢复：解析 .hexbak → POST /api/k12/restore（checksum 不符后端 400）
+// 选文件只做客户端结构预览；checksum 的真实性由确认后的服务端 restore 校验。
 async function handleFile(file: File) {
   importError.value = ''
-  preview.value = null
+  pendingArchive.value = null
+  restoredCount.value = null
+  restoreSnapshot.value = null
   busy.value = true
   try {
-    const archive = JSON.parse(await file.text()) as HexbakArchive
-    const res = await k12Restore(archive)
-    preview.value = { count: res.restored }
-    toast.success(t('k12.backup.previewCount', { count: res.restored }))
+    const archive = parseArchive(JSON.parse(await file.text()))
+    pendingArchive.value = archive
+    // 当前服务端没有 target_agent。只改 header 会让 records 的 agent scope 与 checksum 不一致，
+    // 因此跨 agent 归档明确阻断，不伪装成可安全迁移。
+    if (archive.agent_name !== props.agentId) {
+      importError.value = t('k12.backup.targetMismatch', { source: archive.agent_name, target: props.agentId })
+    }
   } catch (e) {
     importError.value = e instanceof Error ? e.message : t('k12.backup.errorBadFile')
   } finally {
     busy.value = false
   }
+}
+
+function parseArchive(value: unknown): HexbakArchive {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(t('k12.backup.errorBadFile'))
+  const archive = value as Partial<HexbakArchive>
+  if (
+    !Number.isInteger(archive.version)
+    || typeof archive.exported_at !== 'number'
+    || !Number.isFinite(archive.exported_at)
+    || typeof archive.agent_name !== 'string'
+    || !archive.agent_name.trim()
+    || !Array.isArray(archive.records)
+    || typeof archive.checksum !== 'string'
+    || !archive.checksum.trim()
+  ) throw new Error(t('k12.backup.errorBadFile'))
+  return archive as HexbakArchive
+}
+
+async function confirmRestore() {
+  const archive = pendingArchive.value
+  if (!archive || !targetMatches.value || busy.value) return
+  busy.value = true
+  importError.value = ''
+  try {
+    // agent_name 已等于当前 agent，原样交给服务端以保留 records/checksum 一致性。
+    const res = await k12Restore(archive)
+    restoredCount.value = res.restored
+    restoreSnapshot.value = res.snapshot
+    pendingArchive.value = null
+    toast.success(t('k12.backup.restored', { count: res.restored }))
+  } catch (e) {
+    importError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+function saveSnapshot() {
+  if (!restoreSnapshot.value) return
+  download(`${props.agentName}_恢复前快照.hexbak`, JSON.stringify(restoreSnapshot.value, null, 2))
 }
 </script>
 
@@ -86,7 +133,7 @@ async function handleFile(file: File) {
 
         <div class="k12bk__field">
           <span>{{ t('k12.backup.exportLabel') }}</span>
-          <button class="k12bk__btn k12bk__btn--primary" @click="doExport">{{ t('k12.backup.exportBtn') }}</button>
+          <button class="k12bk__btn k12bk__btn--primary" :disabled="busy" @click="doExport">{{ t('k12.backup.exportBtn') }}</button>
         </div>
 
         <div class="k12bk__field">
@@ -95,14 +142,28 @@ async function handleFile(file: File) {
             {{ t('k12.backup.dropHint') }}
             <input type="file" accept=".hexbak,application/json" class="k12bk__file" @change="onFile" />
           </label>
-          <p v-if="preview" class="k12bk__preview">
-            {{ t('k12.backup.restored', { count: preview.count }) }}
+          <p v-if="pendingArchive" class="k12bk__preview" data-testid="backup-restore-preview">
+            {{ t('k12.backup.previewCount', { count: pendingArchive.records.length, source: pendingArchive.agent_name, target: agentId }) }}
           </p>
+          <p v-if="restoredCount !== null" class="k12bk__preview">{{ t('k12.backup.restored', { count: restoredCount }) }}</p>
+          <div v-if="restoreSnapshot" class="k12bk__snapshot" data-testid="backup-restore-snapshot">
+            <span>{{ t('k12.backup.snapshotReady') }}</span>
+            <button class="k12bk__btn" @click="saveSnapshot">{{ t('k12.backup.saveSnapshot') }}</button>
+          </div>
           <p v-if="importError" class="k12bk__err">{{ importError }}</p>
         </div>
       </div>
       <div class="k12bk__foot">
         <button class="k12bk__btn" @click="emit('close')">{{ t('k12.backup.close') }}</button>
+        <button
+          v-if="pendingArchive"
+          class="k12bk__btn k12bk__btn--primary"
+          data-testid="backup-restore-confirm"
+          :disabled="busy || !targetMatches"
+          @click="confirmRestore"
+        >
+          {{ busy ? t('k12.backup.restoring') : t('k12.backup.confirmRestore') }}
+        </button>
       </div>
     </div>
   </div>
@@ -136,12 +197,14 @@ async function handleFile(file: File) {
 }
 .k12bk__file { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .k12bk__preview { margin: 0; font-size: 12.5px; color: var(--hc-text-secondary); }
+.k12bk__snapshot { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--hc-text-secondary); }
 .k12bk__pending { color: var(--hc-text-muted); font-size: 11.5px; }
 .k12bk__err { margin: 0; font-size: 12.5px; color: var(--hc-error); }
-.k12bk__foot { display: flex; justify-content: flex-end; padding: 14px 18px; border-top: 0.5px solid var(--hc-border); }
+.k12bk__foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 0.5px solid var(--hc-border); }
 .k12bk__btn {
   padding: 8px 14px; border-radius: 10px; font-size: 13px; cursor: pointer;
   border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-primary);
 }
 .k12bk__btn--primary { background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%); color: #fff; border-color: transparent; align-self: flex-start; }
+.k12bk__btn:disabled { opacity: 0.5; cursor: not-allowed; }
 </style>

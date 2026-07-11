@@ -47,6 +47,8 @@ interface RegistryState {
   agentCardExtension: Component | null
   /** 场景建档模板（模板库露出 + 建档表单） */
   scenarioTemplates: ScenarioTemplate[]
+  /** 设置页扩展组件（场景专属备份/偏好等；SettingsView 只渲染，不认识场景 · M2-20260710） */
+  settingsExtension: Component | null
 }
 
 function createState(): RegistryState {
@@ -58,6 +60,7 @@ function createState(): RegistryState {
     chatEnhancement: null,
     agentCardExtension: null,
     scenarioTemplates: [],
+    settingsExtension: null,
   }
 }
 
@@ -106,8 +109,14 @@ export const scenarioRegistry = {
   registerAgentCardExtension(component: Component): void {
     state.agentCardExtension = component
   },
+  registerSettingsExtension(component: Component): void {
+    state.settingsExtension = component
+  },
   get agentCardExtension(): Component | null {
     return state.agentCardExtension
+  },
+  get settingsExtension(): Component | null {
+    return state.settingsExtension
   },
   /** 某实例是否为场景实例（有增强视图）——供通用视图判定是否渲染扩展 */
   isScenarioInstance(ctx: ScenarioContext): boolean {
