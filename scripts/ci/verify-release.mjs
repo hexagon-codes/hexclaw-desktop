@@ -19,6 +19,7 @@ if (!semverPattern.test(version)) {
 const packageJson = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8'))
 const tauriConfig = JSON.parse(await readFile(new URL('../../src-tauri/tauri.conf.json', import.meta.url), 'utf8'))
 const cargoToml = await readFile(new URL('../../src-tauri/Cargo.toml', import.meta.url), 'utf8')
+const makefile = await readFile(new URL('../../Makefile', import.meta.url), 'utf8')
 
 const errors = []
 
@@ -28,6 +29,14 @@ if (packageJson.version !== version) {
 
 if (tauriConfig.version !== version) {
   errors.push(`src-tauri/tauri.conf.json version (${tauriConfig.version}) must match tag ${tag}.`)
+}
+
+const backendRefMatch = makefile.match(/^HEXCLAW_REF\s*\?=\s*(\S+)\s*$/m)
+const expectedBackendRef = `refs/tags/v${version}`
+if (!backendRefMatch) {
+  errors.push('Could not find HEXCLAW_REF in Makefile.')
+} else if (backendRefMatch[1] !== expectedBackendRef) {
+  errors.push(`Makefile HEXCLAW_REF (${backendRefMatch[1]}) must match release tag via ${expectedBackendRef}.`)
 }
 
 const packageSection = cargoToml.match(/\[package\]([\s\S]*?)(?:\n\[|$)/)?.[1] ?? ''

@@ -31,7 +31,7 @@ cask "hexclaw" do
   desc "Enterprise-grade personal AI Agent desktop client"
   homepage "https://github.com/hexagon-codes/hexclaw-desktop"
 
-  depends_on macos: ">= :big_sur"
+  depends_on macos: :big_sur
 
   app "HexClaw.app"
 
