@@ -25,6 +25,7 @@ import {
 } from '@/api/agents'
 import type { AgentConfig, AgentRole, AgentRule } from '@/types'
 import type { IMInstance } from '@/api/im-channels'
+import HcSelect from '@/components/common/HcSelect.vue'
 import {
   isChannelDefaultAgent,
   resolveEffectiveModel,
@@ -68,6 +69,47 @@ async function loadAgentData() {
     routingRules.value = rulesRes.rules || []
     rolesList.value = rolesRes.roles || []
   } catch { /* non-critical */ }
+}
+
+// ── 会话路由 chat_id → 实例（M4-20260710，对齐原型 app.html:1849-1854）──
+// 后端 router 对 chat 级规则匹配得分最高；此处只做本实例 chat_id 维度规则的可视化绑定/解绑。
+const chatRoutes = computed(() =>
+  routingRules.value.filter(
+    (r) => r.platform === props.instance.type && r.instance_id === props.instance.name && !!r.chat_id,
+  ),
+)
+function chatRouteAgentLabel(agentName: string): string {
+  const hit = agentsList.value.find((a) => a.name === agentName)
+  return hit?.display_name || agentName
+}
+const chatRouteAgentOptions = computed(() =>
+  userVisibleAgents(agentsList.value).map((a) => ({ value: a.name, label: a.display_name || a.name })),
+)
+const chatRouteAddOpen = ref(false)
+const chatRouteChatId = ref('')
+const chatRouteAgent = ref('')
+async function addChatRoute() {
+  const chatId = chatRouteChatId.value.trim()
+  if (!chatId || !chatRouteAgent.value) return
+  try {
+    await addRule({
+      platform: props.instance.type, agent_name: chatRouteAgent.value,
+      instance_id: props.instance.name, user_id: '', chat_id: chatId, priority: 0,
+    })
+    chatRouteChatId.value = ''
+    chatRouteAddOpen.value = false
+    await loadAgentData()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  }
+}
+async function removeChatRoute(id: number) {
+  try {
+    await deleteRule(id)
+    await loadAgentData()
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : String(e)
+  }
 }
 
 /** AP-110 历史遗留回收：注销「无任何路由规则引用」的孤儿匿名 @im/* Agent（旧版渠道默认模型残留）；失败 warn 不静默。 */
@@ -346,6 +388,47 @@ onBeforeUnmount(() => {
       <span class="hc-cab__effmodel-source">{{ effectiveModelSourceLabel() }}</span>
     </div>
 
+    <!-- 会话路由 chat_id→实例（M4-20260710·原型 1849-1854）：chat 级规则可视化绑定/解绑 -->
+    <div class="hc-cab__routes">
+      <div class="hc-cab__routes-head">
+        <span>{{ t('imChannels.chatRoute.title', '会话路由 · chat_id → 实例') }}</span>
+        <button
+          class="hc-cab__routes-addopen"
+          data-testid="chat-route-add-open"
+          @click="chatRouteAddOpen = !chatRouteAddOpen"
+        >{{ t('imChannels.chatRoute.addOpen', '+ 绑定会话') }}</button>
+      </div>
+      <div v-for="r in chatRoutes" :key="r.id" class="hc-cab__route" data-testid="chat-route-row">
+        <span class="hc-cab__route-agent">{{ chatRouteAgentLabel(r.agent_name) }}</span>
+        <bdi class="hc-cab__route-cid" dir="ltr">{{ r.chat_id }}</bdi>
+        <span class="hc-cab__route-sp" />
+        <button
+          class="hc-cab__route-unbind"
+          data-testid="chat-route-unbind"
+          :title="t('imChannels.chatRoute.unbind', '解绑')"
+          @click="removeChatRoute(r.id)"
+        >×</button>
+      </div>
+      <div v-if="chatRouteAddOpen" class="hc-cab__route-add">
+        <input
+          v-model="chatRouteChatId"
+          class="hc-cab__route-input"
+          data-testid="chat-route-chatid"
+          :placeholder="t('imChannels.chatRoute.chatIdPlaceholder', '会话 chat_id（私聊/群）')"
+        />
+        <HcSelect
+          v-model="chatRouteAgent"
+          class="hc-cab__route-select"
+          data-testid="chat-route-agent"
+          :options="chatRouteAgentOptions"
+          :placeholder="t('imChannels.chatRoute.pickAgent', '选择接待智能体')"
+        />
+        <button class="hc-cab__route-confirm" data-testid="chat-route-add" @click="addChatRoute">
+          {{ t('imChannels.chatRoute.add', '绑定') }}
+        </button>
+      </div>
+    </div>
+
     <!-- 绑定失败提示：catch 写入 errorMsg 后 surface 给用户（不静默吞错，对齐 audit-silent-failure 纪律）。 -->
     <div v-if="errorMsg" class="hc-cab__error" role="alert">{{ errorMsg }}</div>
   </div>
@@ -399,4 +482,21 @@ onBeforeUnmount(() => {
 .hc-cab__effmodel-badge--global { color: var(--hc-text-muted); }
 .hc-cab__effmodel-source { font-size: 11px; color: var(--hc-text-muted); }
 .hc-cab__error { font-size: 12px; color: var(--hc-error); margin-top: 2px; }
+
+/* 会话路由块（M4）：虚线分隔,对齐原型 1849 */
+.hc-cab__routes { border-top: 1px dashed var(--hc-border); margin-top: 8px; padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.hc-cab__routes-head { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--hc-text-muted); }
+.hc-cab__routes-addopen { margin-inline-start: auto; font-size: 11.5px; border: none; background: transparent; color: var(--hc-accent); cursor: pointer; padding: 2px 4px; }
+.hc-cab__route { display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 6px 9px; background: var(--hc-bg-input); border-radius: 8px; }
+.hc-cab__route-cid { font-size: 10.5px; color: var(--hc-text-muted); font-family: ui-monospace, SFMono-Regular, monospace; }
+.hc-cab__route-sp { flex: 1; }
+.hc-cab__route-unbind { border: none; background: transparent; color: var(--hc-text-muted); cursor: pointer; font-size: 13px; padding: 0 4px; }
+.hc-cab__route-unbind:hover { color: var(--hc-error); }
+.hc-cab__route-add { display: flex; align-items: center; gap: 6px; }
+.hc-cab__route-input {
+  font-size: 12px; padding: 6px 8px; border-radius: 8px; min-width: 0;
+  border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-primary);
+}
+.hc-cab__route-input { flex: 1; }
+.hc-cab__route-confirm { font-size: 12px; padding: 6px 10px; border-radius: 8px; border: none; background: var(--hc-accent); color: #fff; cursor: pointer; }
 </style>

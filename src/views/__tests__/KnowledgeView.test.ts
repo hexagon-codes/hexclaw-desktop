@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import KnowledgeView from '../KnowledgeView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
@@ -66,7 +67,7 @@ function mountKnowledgeView(props: Record<string, unknown> = {}) {
   return mount(KnowledgeView, {
     props,
     global: {
-      plugins: [createTestI18n()],
+      plugins: [createPinia(), createTestI18n()],
       stubs: {
         PageHeader: {
           props: ['title', 'description'],
@@ -132,6 +133,60 @@ describe('KnowledgeView', () => {
 
     expect(uploadDocument).toHaveBeenCalledTimes(2)
     expect(getDocuments).toHaveBeenCalledTimes(2)
+  })
+
+  it('允许把后端已支持的 .pptx 文件送入上传链路', async () => {
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const fileInput = wrapper.find('input[type="file"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [new File(['slides'], 'lesson.pptx', {
+        type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      })],
+    })
+
+    await fileInput.trigger('change')
+    await flushPromises()
+
+    expect(uploadDocument).toHaveBeenCalledTimes(1)
+    expect(uploadDocument.mock.calls[0]?.[0]?.name).toBe('lesson.pptx')
+  })
+
+  it('does not start index polling when an upload finishes after unmount', async () => {
+    let resolveUpload!: (value: {
+      id: string
+      title: string
+      chunk_count: number
+      created_at: string
+    }) => void
+    uploadDocument.mockReturnValueOnce(new Promise((resolve) => { resolveUpload = resolve }))
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval').mockReturnValue(1 as unknown as ReturnType<typeof setInterval>)
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const fileInput = wrapper.find('input[type="file"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [new File(['alpha'], 'alpha.md', { type: 'text/markdown' })],
+    })
+    await fileInput.trigger('change')
+    await flushPromises()
+    expect(uploadDocument).toHaveBeenCalledTimes(1)
+
+    wrapper.unmount()
+    resolveUpload({
+      id: 'doc-1',
+      title: 'alpha',
+      chunk_count: 1,
+      created_at: '2026-01-01T00:00:00Z',
+    })
+    await flushPromises()
+
+    const pollCalls = setIntervalSpy.mock.calls.length
+    setIntervalSpy.mockRestore()
+    expect(pollCalls).toBe(0)
   })
 
   it('falls back to local parsing when the backend lacks a file upload endpoint', async () => {

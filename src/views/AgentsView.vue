@@ -8,6 +8,7 @@ import {
 } from 'lucide-vue-next'
 import logoUrl from '@/assets/logo.png'
 import { useAgentsStore } from '@/stores/agents'
+import { scenarioRegistry } from '@/shell/scenario/registry'
 import { useSettingsStore } from '@/stores/settings'
 import { getAgents, getRules, registerAgent, unregisterAgent, updateAgent } from '@/api/agents'
 import { getSkills } from '@/api/skills'
@@ -534,6 +535,21 @@ async function useLibraryTemplate(tpl: AgentTemplate) {
   addStep.value = 2
 }
 
+// 场景包建档模板（如 K12 作业辅导助手）：由 registry 提供卡片 + 专属建档表单；
+// 本视图零 K12 知识，用 <component :is> 动态渲染表单。
+const scenarioTemplates = scenarioRegistry.scenarioTemplates
+const activeScenarioForm = ref<Component | null>(null)
+function onScenarioCreated() {
+  activeScenarioForm.value = null
+  void loadAgents()
+}
+
+// 场景实例卡扩展（如 K12 辅导老师卡的计数/快捷入口）：本视图零场景知识，只对场景实例渲染 registry 组件
+const agentCardExtension = scenarioRegistry.agentCardExtension
+function isScenarioAgent(agent: AgentConfig): boolean {
+  return scenarioRegistry.isScenarioInstance({ agentId: agent.name, metadata: agent.metadata })
+}
+
 const runtimeBackedProviders = computed(() =>
   (settingsStore.runtimeProviders ?? []).filter((provider) => provider.enabled),
 )
@@ -840,11 +856,24 @@ async function handleUnregisterAgent() {
                   </span>
                 </div>
 
-                <!-- 操作行：进入对话 + 编辑 + 停用（对齐原型；停用=注销，功能接线保留） -->
-                <div class="hc-crow">
+                <!-- 场景实例卡扩展（如辅导老师卡：错题/待复习计数 + 快捷入口）；本视图零场景知识 -->
+                <component
+                  :is="agentCardExtension"
+                  v-if="agentCardExtension && isScenarioAgent(agent)"
+                  :agent="agent"
+                  @updated="loadAgents"
+                />
+
+                <!-- 操作行：进入对话 + 编辑 + 停用（对齐原型；停用=注销，功能接线保留）。
+                     场景实例卡（如 K12 辅导卡）由扩展提供全部入口（进入辅导/错题本/编辑档案），
+                     整行对场景卡不渲染——否则通用按钮全被 v-if 隐藏后留一个空 .hc-crow div，
+                     叠加卡 gap 12px 在扩展块下方悬空一段空白，并把等高网格里的普通卡撑出底部留白
+                     （原型回灌 20260711：场景卡不出现空动作行）。BUG-20260708 B3 -->
+                <div v-if="!isScenarioAgent(agent)" class="hc-crow">
                   <!-- BUG-20260703 问题1：每张卡一键进会话（复用 /chat?role= 的收件人锁定机制），
                        不再只有 K12 卡能直达、其余智能体只能靠 @ 召唤。 -->
                   <button
+                    v-if="!isScenarioAgent(agent)"
                     class="hc-btn hc-btn-primary"
                     :data-testid="`agent-enter-chat-${agent.name}`"
                     @click="enterAgentChat(agent.name)"
@@ -852,12 +881,14 @@ async function handleUnregisterAgent() {
                     <MessageSquare :size="13" />
                     {{ t('agents.enterChat') }}
                   </button>
-                  <button class="hc-btn" @click="openEditAgent(agent)">
+                  <button v-if="!isScenarioAgent(agent)" class="hc-btn" @click="openEditAgent(agent)">
                     <Pencil :size="13" />
                     {{ t('common.edit') }}
                   </button>
+                  <!-- BUG-20260710 ①：场景卡不再渲染孤行删除（原型 K12 卡动作行无删除）——
+                       删除作为低频动作下沉到「编辑档案」弹层（K12ProfileForm 编辑态）。 -->
                   <button
-                    v-if="agent.name !== defaultAgent"
+                    v-if="agent.name !== defaultAgent && !isScenarioAgent(agent)"
                     class="hc-btn hc-btn--danger"
                     @click="confirmUnregister(agent.name)"
                   >
@@ -881,6 +912,25 @@ async function handleUnregisterAgent() {
           {{ t('agents.noTemplateMatch', '没有匹配的模板') }}
         </div>
         <div v-else class="hc-cxcards">
+          <!-- 场景包建档模板（registry 提供，如 K12 作业辅导助手）：卡片 + 专属建档表单 -->
+          <button
+            v-for="stpl in scenarioTemplates"
+            :key="stpl.key"
+            type="button"
+            class="hc-cxcard hc-tplcard"
+            @click="activeScenarioForm = stpl.form"
+          >
+            <div class="hc-cxtop">
+              <div class="hc-cxlogo" style="font-size: 20px">{{ stpl.icon }}</div>
+              <div class="min-w-0 flex-1">
+                <div class="hc-cxnm">{{ t(stpl.nameKey) }}</div>
+                <div class="hc-cxmeta truncate">{{ t(stpl.descKey) }}</div>
+              </div>
+            </div>
+            <div class="hc-crow">
+              <span class="hc-tag hc-tag--accent">{{ t('agents.useTemplate', '使用此模板') }}</span>
+            </div>
+          </button>
           <button
             v-for="tpl in filteredTemplates"
             :key="tpl.key"
@@ -903,6 +953,15 @@ async function handleUnregisterAgent() {
       </template>
 
     </div>
+
+    <!-- 场景包建档表单（registry 提供，自带 overlay；本视图零场景知识） -->
+    <component
+      :is="activeScenarioForm"
+      v-if="activeScenarioForm"
+      @created="onScenarioCreated"
+      @removed="onScenarioCreated"
+      @close="activeScenarioForm = null"
+    />
 
     <!-- 注册 Agent 对话框 -->
     <Teleport to="body">
@@ -1421,6 +1480,9 @@ async function handleUnregisterAgent() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  /* 每张卡取自然高度，不被同行最高卡拉伸——否则较矮的普通卡（如翻译官）会被同行较高
+     的 K12 卡撑出一段底部空白（原型数据同构未暴露，真机混排才显）。原型回灌 20260711。 */
+  align-items: start;
 }
 
 .hc-cxcard {

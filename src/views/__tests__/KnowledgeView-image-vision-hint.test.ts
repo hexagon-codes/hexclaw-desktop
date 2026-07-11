@@ -8,6 +8,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import KnowledgeView from '../KnowledgeView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
@@ -57,7 +58,7 @@ async function mountView() {
   const i18n = createTestI18n()
   const wrapper = mount(KnowledgeView, {
     global: {
-      plugins: [i18n],
+      plugins: [createPinia(), i18n],
       stubs: {
         UnderlineTabs: { props: ['tabs', 'modelValue'], template: '<div />' },
         SearchInput: { props: ['modelValue'], template: '<input />' },

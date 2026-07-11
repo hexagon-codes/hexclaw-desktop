@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/refs/heads/dev/crates/tauri-utils/schema.json",
   "productName": "HexClaw",
-  "version": "0.4.9",
+  "version": "0.5.0",
   "identifier": "com.hexclaw.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -33,7 +33,11 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "externalBin": ["binaries/hexclaw", "binaries/pandoc", "binaries/typst"],
+    "externalBin": [
+      "binaries/hexclaw",
+      "binaries/pandoc",
+      "binaries/typst"
+    ],
     "resources": {
       "binaries/ollama-bundle": "ollama",
       "render-assets/*": "assets/render/"
@@ -52,7 +56,10 @@
       "nsis": {
         "installMode": "both",
         "displayLanguageSelector": true,
-        "languages": ["SimpChinese", "English"]
+        "languages": [
+          "SimpChinese",
+          "English"
+        ]
       }
     },
     "linux": {

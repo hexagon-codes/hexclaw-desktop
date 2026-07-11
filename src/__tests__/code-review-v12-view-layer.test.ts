@@ -114,18 +114,16 @@ describe('Issue 4: KnowledgeView upload uses entry reference, not index', () => 
     expect(src).toContain("entry.status = 'error'")
   })
 
-  it('entry is a direct object reference pushed into the array', () => {
-    // The entry object must be created and pushed to uploadingFiles.value
-    // so that mutations to entry reflect in the reactive array
+  it('entry is a direct reactive reference from the uploads store (BUG-20260710)', () => {
+    // entry 由 uploadsStore.track 返回（内部 reactive 并入池）——对 entry 的变更
+    // 直接反映到跨挂载存活的 store 列表；上传任务在其后闭包引用 entry
     const processFilesStart = src.indexOf('async function processFiles')
-    const entryIdx = src.indexOf('const entry', processFilesStart)
-    const pushIdx = src.indexOf('uploadingFiles.value.push(entry)', entryIdx)
+    const entryIdx = src.indexOf('const entry = uploadsStore.track', processFilesStart)
     const uploadTaskIdx = src.indexOf('uploadTasks.push', entryIdx)
 
     expect(processFilesStart).toBeGreaterThan(0)
     expect(entryIdx).toBeGreaterThan(processFilesStart)
-    expect(pushIdx).toBeGreaterThan(entryIdx)
-    expect(pushIdx).toBeLessThan(uploadTaskIdx)
+    expect(uploadTaskIdx).toBeGreaterThan(entryIdx)
   })
 })
 

@@ -23,7 +23,15 @@ import PermissionBlockedModal from '@/components/automation/PermissionBlockedMod
 const { t } = useI18n()
 const toast = useToast()
 
+// 顶栏搜索词（由 AutomationView 透传）：按任务名过滤可见任务卡。
+const props = withDefaults(defineProps<{ search?: string }>(), { search: '' })
+
 const jobs = ref<CronJob[]>([])
+const filteredJobs = computed(() => {
+  const q = props.search.trim().toLowerCase()
+  if (!q) return jobs.value
+  return jobs.value.filter((j) => (j.name ?? '').toLowerCase().includes(q))
+})
 const loading = ref(true)
 const showForm = ref(false)
 const submitting = ref(false)
@@ -653,7 +661,7 @@ defineExpose({ openCreateForm, loadJobs })
       <LoadingState v-if="loading" />
 
       <EmptyState
-        v-else-if="jobs.length === 0"
+        v-else-if="filteredJobs.length === 0"
         :icon="Clock"
         :title="t('tasks.noTasks')"
         :description="t('tasks.noTasksDesc')"
@@ -661,7 +669,7 @@ defineExpose({ openCreateForm, loadJobs })
 
       <div v-else class="tasks-grid">
         <div
-          v-for="job in jobs"
+          v-for="job in filteredJobs"
           :key="job.id"
           class="task-card"
         >

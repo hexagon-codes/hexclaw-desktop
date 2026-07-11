@@ -67,6 +67,7 @@ const engineLabel = computed(() => {
   return 'Hexagon engine'
 })
 
+// 平台默认全功能，导航不按模式门控（K12 只是「作业辅导」智能体，非独立 UI 模式）。
 function getGroupItems(group: NavGroup) {
   return groups.value[group] ?? []
 }
@@ -89,12 +90,12 @@ function getGroupItems(group: NavGroup) {
     <nav class="hc-sidebar__nav" role="navigation">
       <template v-for="(group, gi) in groupOrder">
         <div
-          v-if="collapsed ? gi > 0 : gi === 1"
+          v-if="(collapsed ? gi > 0 : gi === 1) && getGroupItems(group).length"
           :key="`div-${group}`"
           class="hc-sidebar__divider"
         />
         <div
-          v-if="!collapsed && groupLabel(group)"
+          v-if="!collapsed && groupLabel(group) && getGroupItems(group).length"
           :key="`lbl-${group}`"
           class="hc-sidebar__group-label"
         >

@@ -298,7 +298,9 @@ describe('Memory 记忆链路', () => {
   })
 
   it('updateMemoryEntry 使用 PUT 方法更新单条记忆', () => {
-    expect(memorySrc).toContain('apiPut<MemoryEntry>(`/api/v1/memory/${encodeURIComponent(id)}`')
+    // 后端 PUT /memory/:id 返回 { message }（非更新后的 entry）——前端返回类型从
+    // 撒谎的 <MemoryEntry> 纠正为 <{ message: string }>（BUG 修复）。契约仍是「PUT + 正确端点 + id 编码」。
+    expect(memorySrc).toContain('apiPut<{ message: string }>(`/api/v1/memory/${encodeURIComponent(id)}`')
   })
 
   it('clearAllMemory 使用 DELETE /api/v1/memory', () => {

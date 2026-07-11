@@ -7,7 +7,7 @@ import SkillsView from '../SkillsView.vue'
 import { useAppStore } from '@/stores/app'
 import zhCN from '@/i18n/locales/zh-CN'
 
-const { getSkills, setSkillEnabled, searchClawHub, installFromHub, uninstallSkill, installSkill, getHubSkillContent } = vi.hoisted(() => ({
+const { getSkills, setSkillEnabled, searchClawHub, installFromHub, uninstallSkill, installSkill, getHubSkillContent, getSkillContent } = vi.hoisted(() => ({
   getSkills: vi.fn(),
   setSkillEnabled: vi.fn(),
   searchClawHub: vi.fn(),
@@ -15,6 +15,9 @@ const { getSkills, setSkillEnabled, searchClawHub, installFromHub, uninstallSkil
   uninstallSkill: vi.fn(),
   installSkill: vi.fn(),
   getHubSkillContent: vi.fn(),
+  // SkillsView v0.5.0 重构新增依赖：mock 缺此导出时 vitest 报错文本渲染进组件文本、
+  // 连带运行时状态分支渲染反态（此前「已启用/已禁用」2 例失败的真根因，非组件 bug）
+  getSkillContent: vi.fn().mockResolvedValue({ name: 's', path: '/tmp/skills/s/SKILL.md', content: '# s' }),
 }))
 
 vi.mock('@/api/skills', () => ({
@@ -25,6 +28,7 @@ vi.mock('@/api/skills', () => ({
   searchClawHub,
   installFromHub,
   getHubSkillContent,
+  getSkillContent,
   CLAWHUB_CATEGORIES: ['all', 'coding', 'research', 'writing', 'data', 'automation', 'productivity'],
 }))
 

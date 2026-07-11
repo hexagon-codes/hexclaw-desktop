@@ -228,17 +228,8 @@ describe('Performance: timer cleanup on unmount', () => {
     expect(code).toContain('pullAbort.abort()')
   })
 
-  it('useHexclaw clears interval on unmount', () => {
-    const code = readSrc('composables/useHexclaw.ts')
-    expect(code).toContain('onUnmounted(() => stopMonitor())')
-    expect(code).toContain('clearInterval(timer)')
-  })
-
-  it('useWebSocket disconnects on unmount', () => {
-    const code = readSrc('composables/useWebSocket.ts')
-    expect(code).toContain('onUnmounted(() => disconnect())')
-    expect(code).toContain('clearTimeout(reconnectTimer)')
-  })
+  // 注：useHexclaw / useWebSocket 死 composable 已随 U7 死代码清理（20260711）删除，
+  // 原「clears interval / disconnects on unmount」两条源码级断言随之移除。
 })
 
 // ─── Redundant hexclaw.db reference ───────────────────────

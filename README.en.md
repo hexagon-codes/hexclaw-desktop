@@ -45,9 +45,10 @@ Native macOS / Windows / Linux · Sidecar local deployment · Zero cloud depende
 
 | Feature | Description |
 |---------|-------------|
-| **AI Chat** | Multi-model support: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama, streaming output, Markdown rendering, syntax highlighting, deep thinking |
+| **AI Chat** | Multi-model support: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama, streaming output, Markdown + KaTeX math / mhchem chemistry rendering, syntax highlighting, deep thinking |
 | **Image/Video Generation** | ZhipuAI CogView-4 image generation + CogVideoX-2 video generation, unified text-input entry (no separate mode buttons), results persisted to `{DataDir}/generated/` and referenced via `/api/v1/files/generated/...` URLs (never expire, won't bloat SQLite), inline preview + always-visible download button |
 | **Agent Orchestration** | Custom Agent roles/goals/backstory, multi-Agent collaboration, Agent conference mode, role template library |
+| **Scenario Packs / K12 Tutor** | Homework Tutor template mounted through the generic `scenarioRegistry`: child profile, default tutoring skills, photo problem recognition, progressive hints, Mistake Book / Notebook / insights, Lesson Prep Card, verification badges, and record chips; each child is isolated by Agent instance |
 | **Skill System** | Skill marketplace + custom skills, tool registration and permission management |
 | **Workflow Canvas** | Visual drag-and-drop Agent workflow orchestration, DAG execution engine |
 | **MCP Protocol** | Model Context Protocol tool integration, plug-and-play external tools |
@@ -100,7 +101,7 @@ HexClaw.app
 │  Vue 3 Frontend (WebView)                                         │
 │  ┌────────┬────────┬────────┬────────┬────────┬────────┬───────┐ │
 │  │  Chat  │ Agents │Knowledg│Automati│Channels│Integrat│  Logs │ │
-│  │(default)│       │Doc|Mem │Task|Web│ (IM)   │Skl|MCP │       │ │
+│  │(default)│       │Doc|Mem │Task|Web│ (IM)   │Skl|MCP|P│       │ │
 │  │        │        │        │ hook   │        │        │Setting│ │
 │  └───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───┬────┴───────┘ │
 │      │  Pinia Store    │  Vue Router      │  Tauri invoke (IPC)   │
@@ -164,7 +165,7 @@ cp docs/claude-code-practices/hooks/*.sh ~/.claude/hooks/ && chmod +x ~/.claude/
 | Routing | Vue Router | 5.x |
 | Internationalization | vue-i18n (Chinese / English / Uyghur RTL) | 11.x |
 | Icons | Lucide Vue | - |
-| Markdown | markdown-it + Shiki (syntax highlighting) | - |
+| Markdown | markdown-it + @mdit/plugin-katex + KaTeX/mhchem + Shiki (syntax highlighting) | - |
 | Document parsing | pdfjs-dist + mammoth + xlsx | - |
 | Data storage | Tauri Store (plugin-store) + localStorage (Pinia persist plugin); sessions/messages persisted by the backend sidecar | - |
 | HTTP client | ofetch (frontend) / reqwest (Rust proxy) | - |
@@ -247,7 +248,7 @@ cd hexclaw-desktop
 make install
 # Equivalent to: pnpm install && cd src-tauri && cargo fetch
 
-# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.4.9 by default)
+# 3. Compile Go sidecar (required on first setup, pulls remote GitHub hexclaw v0.5.0 by default)
 make sidecar
 
 # 4. Start development mode
@@ -255,7 +256,7 @@ make dev
 ```
 
 > **Note**:
-> - `make sidecar` pulls `refs/tags/v0.4.9` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
+> - `make sidecar` pulls `refs/tags/v0.5.0` from `https://github.com/hexagon-codes/hexclaw.git` into `/tmp/hexclaw-gith-src` by default
 > - To build another backend version, pass it explicitly: `make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - The Skill Marketplace uses `https://github.com/hexagon-codes/hexclaw-hub` at tag `v0.0.2` by default; override it at runtime via `skills.hub` in `~/.hexclaw/hexclaw.yaml`
 
@@ -294,6 +295,7 @@ hexclaw-desktop/
 │   │   ├── config.ts             # LLM config API (Tauri proxy)
 │   │   ├── desktop.ts            # Desktop features API (notifications/clipboard)
 │   │   ├── im-channels.ts        # IM channel API (Lark/DingTalk/WeCom etc.)
+│   │   ├── k12.ts                # K12 scenario API contract (/api/k12/*)
 │   │   ├── team.ts               # Team collaboration API
 │   │   ├── voice.ts              # Voice API (TTS/STT)
 │   │   ├── webhook.ts            # Webhook notification API
@@ -313,6 +315,10 @@ hexclaw-desktop/
 │   │   ├── cron/                 # Scheduled tasks (CronJobConfirmCard)
 │   │   ├── logs/                 # Logs (LogEntry/LogStats)
 │   │   └── common/               # Shared (CommandPalette/ConfirmDialog/ToastProvider/ErrorBoundary etc.)
+│   ├── contracts/                # Scenario extension contracts (ViewDescriptor/RecordSchema/VerifyResult)
+│   ├── shell/                    # Domain-neutral shell slots (scenario registry/records/message badges)
+│   ├── features/                 # Scenario-pack implementations
+│   │   └── k12/                  # Homework Tutor (profile/tutor/mistakes/prep/insights)
 │   ├── views/                    # Page views
 │   │   ├── ChatView.vue          # AI chat (default landing · sessions/attachments/Artifacts/model switching)
 │   │   ├── AgentsView.vue        # Agent management (templates/running/rules/conference)
@@ -322,9 +328,10 @@ hexclaw-desktop/
 │   │   ├── AutomationView.vue    # Automation (Tasks + Webhook tabs)
 │   │   ├── TasksView.vue         # Scheduled tasks (Cron management)
 │   │   ├── CanvasView.vue        # Workflow canvas (DAG orchestration)
-│   │   ├── IntegrationView.vue   # Integration (Skills + MCP tabs)
+│   │   ├── IntegrationView.vue   # Integration (Skills + MCP + Prompts tabs)
 │   │   ├── SkillsView.vue        # Skill management + ClawHub marketplace
 │   │   ├── McpView.vue           # MCP management (servers/tools/testing)
+│   │   ├── PromptsView.vue       # Prompt library (templates/search/reuse)
 │   │   ├── IMChannelsView.vue    # IM channel management (Lark/DingTalk/WeCom etc.)
 │   │   ├── LogsView.vue          # Log viewer (real-time stream/filter/stats)
 │   │   ├── SettingsView.vue      # Settings (LLM/security/notification/webhook/theme/locale)
@@ -489,7 +496,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` compilation fails
 
 1. Verify Go >= 1.25 is installed: `go version`
-2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.4.9`
+2. Verify GitHub access and the remote source tag: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0`
 3. Verify Rust toolchain is installed (needed for platform triple detection): `rustc -vV`
 
 ### `make dev` starts but shows white screen

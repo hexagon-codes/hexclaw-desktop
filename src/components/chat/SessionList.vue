@@ -4,6 +4,9 @@ import { useI18n } from 'vue-i18n'
 import { formatTime } from '@/utils/time'
 import { Trash2, Copy, Pencil, Pin, PinOff, Search, GitBranch } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
+import { useAgentsStore } from '@/stores/agents'
+import { getSessionAgent } from '@/stores/session-agent-binding'
+import { scenarioRegistry } from '@/shell/scenario/registry'
 import { listSessions, searchMessages, getSessionBranches, updateSessionTitle as apiUpdateSessionTitle, type SessionMessageSearchResult } from '@/api/chat'
 import { setClipboard } from '@/api/desktop'
 import ContextMenu from '@/components/common/ContextMenu.vue'
@@ -13,6 +16,7 @@ import type { ChatSession } from '@/types'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
+const agentsStore = useAgentsStore()
 const ctxMenu = ref<InstanceType<typeof ContextMenu>>()
 const ctxSessionId = ref<string | null>(null)
 
@@ -34,6 +38,50 @@ let filterAbortController: AbortController | null = null
 
 // Pin state
 const pinnedIds = ref<Set<string>>(new Set())
+
+// 场景实例会话自动置顶：据会话绑定的 agent 是否有场景描述符判定（registry，通用无领域词）。
+// 审计单-Medium-4（bug-20260709）：绑定用与 sessionTitle 同一套三路解析（localStorage 绑定 >
+// 后端 agent_name > 标题即内部名）——原来只认 s.agent_name，localStorage 绑定恢复的场景会话
+// 标题显示正常却拿不到常驻置顶。
+function isScenarioSession(s: ChatSession): boolean {
+  // 注意不能要求 findAgent 必中（boundAgentOf 返回 cfg 才算）：resolver 可仅凭 agentId 判定，
+  // agent 未注册到 store 时也要能置顶（SessionList.test「场景实例会话自动置顶」回归锁）。
+  const raw = (s.title ?? '').trim()
+  const boundName = getSessionAgent(s.id) || s.agent_name || raw
+  if (!boundName) return false
+  const cfg = agentsStore.findAgent(boundName)
+  return scenarioRegistry.isScenarioInstance({ agentId: boundName, metadata: cfg?.metadata })
+}
+// 有效置顶 = 手动置顶 或 场景实例（场景实例常驻顶部）
+function isPinnedSession(s: ChatSession): boolean {
+  return pinnedIds.value.has(s.id) || isScenarioSession(s)
+}
+
+// 会话可读标题：场景会话 title 默认 = 原始 agent id（如 k12-tutor-KKE5v8zQ），家长看不懂。
+// 该会话绑定的 Agent 三路解析：localStorage 绑定 > 后端 agent_name > 标题本身即 agent 内部名
+// （深链建会话时把标题设为 role=agent 名）。命中且标题未被手动改名时显示 display_name（P0-20260708）。
+// 会话绑定的 Agent 三路解析：localStorage 绑定 > 后端 agent_name > 标题即内部名。
+function boundAgentOf(s: ChatSession) {
+  const raw = (s.title ?? '').trim()
+  const boundName = getSessionAgent(s.id) || s.agent_name || raw
+  return boundName ? agentsStore.findAgent(boundName) : undefined
+}
+
+// 会话列表对齐原型（app.html .cs-item）：智能体会话的身份 = **标题内联 emoji 前缀**（如「🎓 小明的辅导老师
+// · 五年级」），而非独立头像框或 meta 里的智能体名。通用会话（无专属 agent avatar）不加前缀。
+function sessionTitle(s: ChatSession): string {
+  const raw = (s.title ?? '').trim()
+  const boundName = getSessionAgent(s.id) || s.agent_name || raw
+  const cfg = boundAgentOf(s)
+  const avatar = (cfg?.metadata?.avatar ?? '').trim()
+  const display = (cfg?.display_name ?? '').trim()
+  // 标题为空 / 恰为 agent 内部名（未手动改名）→ 显示可读名；改过名则保留自定义标题
+  const base = display && (!raw || raw === boundName || raw === cfg?.name)
+    ? display
+    : raw || t('chat.newSessionDefault')
+  // 专属智能体（带 avatar emoji）在标题前内联图标（原型做法）
+  return avatar ? `${avatar} ${base}` : base
+}
 
 // Filter state（搜索框常驻，无需展开/收起开关）
 const filterQuery = ref('')
@@ -82,8 +130,8 @@ const mergedSessions = computed<ChatSession[]>(() => {
 
 const sortedSessions = computed(() => {
   const list = mergedSessions.value
-  const pinned = list.filter(s => pinnedIds.value.has(s.id))
-  const unpinned = list.filter(s => !pinnedIds.value.has(s.id))
+  const pinned = list.filter(s => isPinnedSession(s))
+  const unpinned = list.filter(s => !isPinnedSession(s))
   return [...pinned, ...unpinned]
 })
 
@@ -127,8 +175,8 @@ const searchSessionItems = computed<SearchSessionItem[]>(() => {
   }
 
   return Array.from(results.values()).sort((a, b) => {
-    if (pinnedIds.value.has(a.session.id) !== pinnedIds.value.has(b.session.id)) {
-      return pinnedIds.value.has(a.session.id) ? -1 : 1
+    if (isPinnedSession(a.session) !== isPinnedSession(b.session)) {
+      return isPinnedSession(a.session) ? -1 : 1
     }
     return new Date(b.session.updated_at).getTime() - new Date(a.session.updated_at).getTime()
   })
@@ -152,8 +200,8 @@ function getSessionDateBucket(updatedAt: string) {
 const sessionSections = computed<SessionSection[]>(() => {
   if (filterQuery.value.trim()) return []
   const sections: SessionSection[] = []
-  const pinned = sortedSessions.value.filter((s) => pinnedIds.value.has(s.id))
-  const unpinned = sortedSessions.value.filter((s) => !pinnedIds.value.has(s.id))
+  const pinned = sortedSessions.value.filter((s) => isPinnedSession(s))
+  const unpinned = sortedSessions.value.filter((s) => !isPinnedSession(s))
 
   if (pinned.length > 0) {
     sections.push({ key: 'pinned', label: t('chat.pinnedSection'), sessions: pinned })
@@ -474,7 +522,7 @@ onUnmounted(() => {
             class="hc-sessions__item"
             :class="{
               'hc-sessions__item--active': chatStore.currentSessionId === item.session.id,
-              'hc-sessions__item--pinned': pinnedIds.has(item.session.id),
+              'hc-sessions__item--pinned': isPinnedSession(item.session),
             }"
             @click="selectSession(item.session.id)"
             @dblclick.stop="startRename(item.session.id)"
@@ -505,7 +553,7 @@ onUnmounted(() => {
                   :title="t('chat.branchSession', '分支会话')"
                   aria-hidden="true"
                 />
-                <div class="hc-sessions__title">{{ item.session.title || t('chat.newSessionDefault') }}</div>
+                <div class="hc-sessions__title">{{ sessionTitle(item.session) }}</div>
                 <span
                   v-if="isSessionAwaitingApproval(item.session.id)"
                   class="hc-sessions__approval-dot"
@@ -540,7 +588,7 @@ onUnmounted(() => {
           class="hc-sessions__item"
           :class="{
             'hc-sessions__item--active': chatStore.currentSessionId === session.id,
-            'hc-sessions__item--pinned': pinnedIds.has(session.id),
+            'hc-sessions__item--pinned': isPinnedSession(session),
           }"
           @click="selectSession(session.id)"
           @dblclick.stop="startRename(session.id)"
@@ -571,7 +619,7 @@ onUnmounted(() => {
                 :title="t('chat.branchSession', '分支会话')"
                 aria-hidden="true"
               />
-              <div class="hc-sessions__title">{{ session.title || t('chat.newSessionDefault') }}</div>
+              <div class="hc-sessions__title">{{ sessionTitle(session) }}</div>
               <span
                 v-if="isSessionAwaitingApproval(session.id)"
                 class="hc-sessions__approval-dot"

@@ -652,6 +652,30 @@ describe('SettingsView — E2E 关键路径', () => {
     warnSpy.mockRestore()
   })
 
+  it('cancels a pending API-key auto-test when Settings unmounts', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const providerHead = wrapper.find('.hc-provider__card-head')
+    expect(providerHead.exists()).toBe(true)
+    await providerHead.trigger('click')
+    await flushPromises()
+
+    const apiKeyInput = wrapper.find('input[type="password"]')
+    expect(apiKeyInput.exists()).toBe(true)
+    mockTestLLMConnection.mockClear()
+    vi.useFakeTimers()
+    try {
+      await apiKeyInput.setValue('sk-pending-auto-test')
+      wrapper.unmount()
+      await vi.advanceTimersByTimeAsync(1_600)
+
+      expect(mockTestLLMConnection, 'unmounted Settings must not fire its deferred provider test').not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('calls testLLMConnection for each testProvider invocation', async () => {
     let resolveTest!: (value: { ok: boolean; message: string }) => void
     mockTestLLMConnection.mockImplementation(

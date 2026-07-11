@@ -116,7 +116,12 @@ async function uploadFormData<T>(url: string, body: FormData, timeoutMs: number)
       }
       const apiErr = fromHttpStatus(response.status, serverMsg)
       logger.error(`upload error: [${apiErr.code}] ${apiErr.message}`)
-      throw new Error(apiErr.message)
+      // 保留 status/code：否则下游 isKnowledgeUploadEndpointMissing 拿不到 rawStatus，
+      // 非 JSON 404 的 message="Not Found" 又不匹配关键词 → 端点缺失检测 miss（契约#9）。
+      const err = new Error(apiErr.message) as Error & { status?: number; code?: string }
+      err.status = response.status
+      err.code = apiErr.code
+      throw err
     }
     return (await response.json()) as T
   } finally {

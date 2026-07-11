@@ -1,4 +1,3 @@
-/* eslint-disable */
 /**
  * BUG-20260628 IM 绑定 Agent「无活入口」+ ConnectionsView NUL 损坏 — 结构守卫
  *

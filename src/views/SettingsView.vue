@@ -20,6 +20,7 @@ import {
   ShieldCheck,
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
+import { scenarioRegistry } from '@/shell/scenario/registry'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from '@/stores/model-catalog'
 import { getRuntimeConfig } from '@/api/settings'
 import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
@@ -54,6 +55,23 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 const { t } = useI18n()
 const toast = useToast()
 const settingsStore = useSettingsStore()
+
+// ── 备份与恢复段（M2-20260710，对齐原型 app.html:2093-2095）──
+// 数据目录=通用行;场景专属备份经 settingsExtension 缝注入,本视图零场景知识（AP-1）。
+const settingsExtension = computed(() => scenarioRegistry.settingsExtension)
+const dataDirDisplay = computed(() => settingsStore.config?.general?.data_dir?.trim() || '~/.hexclaw/')
+async function openDataDir() {
+  try {
+    const dir = dataDirDisplay.value
+    const { homeDir, join } = await import('@tauri-apps/api/path')
+    const { open } = await import('@tauri-apps/plugin-shell')
+    const abs = dir.startsWith('~') ? await join(await homeDir(), dir.slice(1)) : dir
+    await open(abs)
+  } catch (e) {
+    logger.warn('打开数据目录失败', e)
+    toast.error(t('settings.backup.openFailed'))
+  }
+}
 const catalogStore = useModelCatalogStore()
 const { themeMode, setTheme } = useTheme()
 const activeSection = ref('llm')
@@ -106,6 +124,7 @@ onMounted(() => {
 })
 const runtimeInfoLoading = ref(false)
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
+const autoTestTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 let autoSavePromise: Promise<void> | null = null
 let hasPendingAutoSave = false
 let unlistenCloseRequested: (() => void) | null = null
@@ -128,6 +147,31 @@ function handleLocaleChange(locale: string) {
 function handleThemeSelect(mode: ThemeMode) {
   setTheme(mode)
   autoSave()
+}
+
+// U5: 开机自启开关——之前只落 Store（假开关），现桥接到 Rust set_autostart command，
+// 让 plugin-autostart 真正 enable()/disable() 系统 LaunchAgent。
+async function handleAutoStartChange() {
+  autoSave() // 保留原有 Store 持久化
+  if (!isDesktopRuntime() || !config.value) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('set_autostart', { enable: !!config.value.general.auto_start })
+  } catch (e) {
+    logger.error('[HexClaw] 设置开机自启失败:', e)
+  }
+}
+
+// U5: 启动时把 UI 开关与系统真实自启状态对齐（Store 值可能与系统层面不一致）。
+async function syncAutoStartState() {
+  if (!isDesktopRuntime() || !config.value) return
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    const enabled = await invoke<boolean>('is_autostart_enabled')
+    config.value.general.auto_start = enabled
+  } catch (e) {
+    logger.warn('[HexClaw] 同步开机自启状态失败:', e)
+  }
 }
 
 function handleRoutingToggle() {
@@ -363,6 +407,8 @@ onMounted(async () => {
   await settingsStore.loadConfig()
   // A7: 页面打开后异步拉一次能力缓存（不 block UI，失败降级为 unknown badge）
   void loadCapabilities()
+  // U5: 把开机自启开关与系统真实状态对齐
+  void syncAutoStartState()
 
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', handleBeforeUnload)
@@ -414,6 +460,10 @@ onBeforeUnmount(() => {
   if (autoSaveTimer) {
     clearTimeout(autoSaveTimer)
     autoSaveTimer = null
+  }
+  for (const providerId of Object.keys(autoTestTimers)) {
+    clearTimeout(autoTestTimers[providerId])
+    delete autoTestTimers[providerId]
   }
   editingProviderId.value = null
 })
@@ -785,8 +835,6 @@ function saveEditModel() {
 // ─── Provider 连接测试 ────────────────────────────────
 const testingProviderId = ref<string | null>(null)
 const testProviderResult = ref<Record<string, { ok: boolean; msg: string }>>({})
-const autoTestTimers: Record<string, ReturnType<typeof setTimeout>> = {}
-
 /** API Key 变化后自动测试连接 + 拉取模型（防抖 1.5s） */
 function scheduleAutoTest(provider: ProviderConfig) {
   if (autoTestTimers[provider.id]) clearTimeout(autoTestTimers[provider.id])
@@ -1576,7 +1624,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   v-model="config.general.auto_start"
                   type="checkbox"
                   class="hc-toggle"
-                  @change="autoSave()"
+                  data-testid="auto-start-toggle"
+                  @change="handleAutoStartChange()"
                 />
               </label>
 
@@ -1606,6 +1655,19 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 />
               </label>
             </div>
+
+            <!-- 备份与恢复（M2-20260710·原型 2093-2095）：通用数据目录 + 场景扩展缝 -->
+            <div class="hc-settings__sep" style="margin-top: 16px">
+              <span class="hc-settings__sep-label">{{ t('settings.backup.title') }}</span>
+              <span class="hc-settings__sep-line"></span>
+            </div>
+            <div class="hc-settings__backup-row" data-testid="settings-data-dir">
+              <span class="hc-settings__backup-label">{{ t('settings.backup.dataDir') }}</span>
+              <span class="hc-settings__backup-sp" />
+              <bdi class="hc-settings__backup-path" dir="ltr">{{ dataDirDisplay }}</bdi>
+              <button class="hc-settings__backup-btn" @click="openDataDir">{{ t('settings.backup.open') }}</button>
+            </div>
+            <component :is="settingsExtension" v-if="settingsExtension" />
 
             <!-- 系统信息 -->
             <div class="hc-settings__sep" style="margin-top: 16px">
@@ -2089,6 +2151,16 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-settings__sep:first-child {
   margin-top: 0;
 }
+
+.hc-settings__backup-row { display: flex; align-items: center; gap: 12px; min-height: 44px; }
+.hc-settings__backup-label { font-size: 13px; font-weight: 500; }
+.hc-settings__backup-sp { flex: 1; }
+.hc-settings__backup-path { font-size: 12px; color: var(--hc-text-muted); font-family: ui-monospace, SFMono-Regular, monospace; }
+.hc-settings__backup-btn {
+  font-size: 12.5px; padding: 6px 11px; border-radius: 8px; cursor: pointer;
+  border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-primary);
+}
+.hc-settings__backup-btn:hover { background: var(--hc-bg-hover); }
 
 .hc-settings__sep-label {
   font-size: 11px;

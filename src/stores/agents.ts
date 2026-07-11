@@ -8,6 +8,7 @@ import type { AgentRole, AgentConfig, ApiError } from '@/types'
 export const useAgentsStore = defineStore('agents', () => {
   const roles = ref<AgentRole[]>([])
   const registeredAgents = ref<AgentConfig[]>([])
+  const agentsLoaded = ref(false)
   const defaultAgentName = ref('')
   const loading = ref(false)
   const error = ref<ApiError | null>(null)
@@ -32,6 +33,7 @@ export const useAgentsStore = defineStore('agents', () => {
     if (res) {
       registeredAgents.value = userVisibleAgents(res.agents || [])
       defaultAgentName.value = res.default || ''
+      agentsLoaded.value = true
     }
   }
 
@@ -54,6 +56,7 @@ export const useAgentsStore = defineStore('agents', () => {
   return {
     roles,
     registeredAgents,
+    agentsLoaded,
     defaultAgentName,
     mentionableAgents,
     loading,

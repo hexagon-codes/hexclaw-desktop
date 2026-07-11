@@ -2,9 +2,58 @@
 
 ## Unreleased
 
-### 后端
-- 桌面端版本升至 `0.4.9`，并与 hexclaw backend `refs/tags/v0.4.9` 对齐。
-- `HEXCLAW_REF` 默认后端版本升至 `refs/tags/v0.4.9`；`make sidecar` 文档与排障命令同步更新为 hexclaw backend v0.4.9。
+### K12 家长辅导
+- 加固多孩实例隔离：切换孩子时清理识题面板和待处理图片，并忽略旧实例尚未完成的识题响应。
+- 识题流程增加整体确认门和学科选择，批改请求透传家长选择的学科；错题详情展示解法、错步、错因与去重入本状态。
+- 建档写档案失败时注销刚注册的辅导 Agent，避免留下半成品实例。
+- 完善错题本批改、标记已掌握、备份恢复和学情展示；备份恢复支持服务端快照回滚下载。
+- 场景入口使用辅导老师显示名生成会话标题，并补齐中英文与维吾尔语文案。
+
+### 通用能力与体验
+- 聊天完成响应透传会话 ID、用量、工具调用、结构化内容块及知识库 / 记忆命中信息。
+- 知识库文档列表支持服务端分页和来源筛选；上传错误保留 HTTP 状态与错误码，便于识别缺失端点。
+- 补齐 MCP Server 重启、开机自启真实系统注册、Ollama keep-alive 设置和本地模型功能性探针。
+- 优化搜索输入法组合态、技能编辑输入、聊天文本渲染、知识库上传队列和多处页面空态 / 交互细节。
+
+### 工程与验证
+- 默认 Go sidecar 引用升级到 `v0.5.0`，发版校验要求后端引用与桌面版本一致。
+- 清理已迁移的旧 composables，新增跨契约、运行时、性能、回归及浏览器现场测试覆盖。
+
+## v0.5.0 (2026-07-08)
+
+### K12 场景包
+- 新增内置 **作业辅导助手** 场景包：在智能体模板库中建档，采集孩子称呼、年级学期和教材版本，自动生成专属辅导老师 Agent 实例。
+- 作业辅导实例默认绑定辅导技能：教学法、拍照识题、数学 / 语文 / 英语辅导、知识点讲解、变式出题，并把年级边界、批改和复习工具作为基础设施技能挂载。
+- 聊天页按场景实例增强：辅导 / 错题本顶部 Tab、场景化空态、后端 descriptor 下发的 composer chips、家长备课卡右侧停靠面板，以及“作业辅导不等于独立 UI 模式”的通用 shell 接线。
+- 智能体卡新增场景扩展：错题数、待复习数、进入辅导、直达错题本、打开备课卡和编辑孩子档案。
+- 新增错题本 / 积累本 / 学情视图：错题状态机、到期复习队列、再练一道、他会了、错题卷打印 / PDF / Word 导出、薄弱知识点 TOP3、复习完成率、连续挫败提示和学习时长。
+- 新增家庭学习档案备份 / 恢复：`.hexbak` 归档带版本头和 checksum，恢复路径按幂等合并预留。
+- 新增事件驱动家长备课卡：按错题、学情和选定科目生成一页“怎么教”，每段显示课本 / 本地记录 / 程序验算 / AI 归纳等来源标注，支持打印和复制到手机 IM。
+
+### 场景扩展架构
+- 新增 `src/contracts/`：`InstanceViewDescriptor`、`RecordSchema`、`RecordItem`、`VerifyResult` 等前端契约，作为后端 JSON Schema codegen 前的手写兼容层。
+- 新增 `src/shell/scenario/registry.ts`：场景包通过 descriptor resolver、record schema、chat enhancement、agent-card extension 和 template registration 注入，不修改通用 shell 领域语义。
+- 新增通用消息装饰：`VerifyBadge` 和 `RecordChip` 只认契约数据，不内联 K12 领域词；聊天页从 `message.metadata.verify` / `solve_verdict` / `record` 渲染验证和入库状态。
+- 新增通用记录视图接线，K12 错题本和积累本复用同一 `RecordSchema` / `RecordCollectionView` 原语。
+
+### API 契约
+- 新增 `/api/k12/*` 前端客户端类型：view descriptor、识题、批改、错题列表、复习队列、mark-mastered、review retry、备课卡、学习时长、学情报告、孩子档案、cold-start、积累本、备份恢复、导出、tutor-turn、IM 绑定和 cron provision。
+- K12 API 隔离键统一为 `agent`，不依赖 `user_id`；多孩隔离按不可变 Agent 实例名完成。
+
+### 聊天与渲染
+- Markdown 渲染新增 KaTeX 数学公式和 mhchem 化学式支持，非法公式以正文色降级，不用红色错误样式；块级公式在消息气泡内横向滚动，不撑破页面。
+- 场景实例会话自动置顶；当会话标题仍是内部 Agent ID 时，列表优先展示 Agent 的 `display_name`。
+- 聊天页新增场景侧栏锚点、composer 上方锚点和页脚锚点，供场景包 Teleport 停靠面板、预设 chips 和扩展桥接内容。
+
+### UI / 修复
+- `HcSelect` 禁用态不再使用原生 `disabled` 按钮外观，避免 macOS WKWebView 下被 UA 样式撑成胶囊；MCP 新增服务器 transport 下拉改用 `HcSelect`。
+- 侧边栏分组只有存在导航项时才渲染分割线和组标题，避免空组留下视觉噪声。
+- 作业辅导相关多处 2026-07-08 现场问题补回归：建档弹窗 Teleport、备课卡停靠层级、错题本头部重复、composer chips 锚点、空态可操作科目选择、发送手机走真实剪贴板动作。
+
+### 工程
+- 桌面端版本升至 `0.5.0`（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` / lockfile）。
+- 新增依赖 `@mdit/plugin-katex`、`katex`，并将 `markdown-it` 升至 `14.3.0`。
+- 新增 K12、scenario shell、契约、Markdown KaTeX、HcSelect、SessionList、ChatView 和 WebKit 相关回归测试；新增浏览器现场 E2E 覆盖 K12 流程与 WebKit 下拉盒视觉问题。
 
 ## v0.4.5 (2026-06-23)
 

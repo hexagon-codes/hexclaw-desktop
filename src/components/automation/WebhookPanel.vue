@@ -19,7 +19,15 @@ import PermissionBlockedModal from '@/components/automation/PermissionBlockedMod
 const { t } = useI18n()
 const toast = useToast()
 
+// 顶栏搜索词（由 AutomationView 透传）：按 webhook 名过滤可见项。
+const props = withDefaults(defineProps<{ search?: string }>(), { search: '' })
+
 const webhooks = ref<Webhook[]>([])
+const filteredWebhooks = computed(() => {
+  const q = props.search.trim().toLowerCase()
+  if (!q) return webhooks.value
+  return webhooks.value.filter((wh) => (wh.name ?? '').toLowerCase().includes(q))
+})
 const loading = ref(false)
 const showCreate = ref(false)
 const creating = ref(false)
@@ -452,7 +460,7 @@ defineExpose({ loadWebhooks, openCreateForm, form })
       <p class="webhook-panel__empty-desc">{{ t('webhooks.emptyDesc') }}</p>
     </div>
     <div v-else class="webhook-panel__list">
-      <div v-for="wh in webhooks" :key="wh.id" class="webhook-panel__item">
+      <div v-for="wh in filteredWebhooks" :key="wh.id" class="webhook-panel__item">
         <div class="webhook-panel__item-info">
           <Globe :size="14" />
           <span class="webhook-panel__item-name">{{ wh.name }}</span>

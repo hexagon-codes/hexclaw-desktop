@@ -12,6 +12,14 @@ const { t } = useI18n()
 const toast = useToast()
 const store = useCanvasStore()
 
+// 顶栏搜索词（由 AutomationView 透传）：按工作流名过滤切换 chip。
+const props = withDefaults(defineProps<{ search?: string }>(), { search: '' })
+const filteredWorkflows = computed(() => {
+  const q = props.search.trim().toLowerCase()
+  if (!q) return store.savedWorkflows
+  return store.savedWorkflows.filter((w) => (w.name ?? '').toLowerCase().includes(q))
+})
+
 // 当前编辑工作流名（驱动 store canvas 作为唯一编辑面）
 const currentName = ref('')
 
@@ -298,7 +306,7 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
       <!-- 工作流切换（多个时显示） -->
       <div v-if="store.savedWorkflows.length > 1" class="wfp-switch">
         <button
-          v-for="wf in store.savedWorkflows"
+          v-for="wf in filteredWorkflows"
           :key="wf.id"
           type="button"
           class="wfp-chip"

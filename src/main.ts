@@ -8,6 +8,7 @@ import { i18n } from './i18n'
 import { createPersistPlugin } from './stores/plugins/persist'
 import { logger } from './utils/logger'
 import { installInputAutofixOff } from './utils/input-autofix'
+import { registerK12Scenario } from './features/k12'
 
 import './assets/styles/global.css'
 
@@ -20,6 +21,9 @@ app.use(pinia)
 
 app.use(router)
 app.use(i18n)
+
+// 装配 K12 场景包（声明式注册 i18n/schema/descriptor 进 registry；模式关掉即随皮肤消失，AP-1）
+registerK12Scenario()
 
 app.config.errorHandler = (err, _instance, info) => {
   logger.error(`Vue 未处理异常 [${info}]:`, err)

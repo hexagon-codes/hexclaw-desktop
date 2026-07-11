@@ -93,6 +93,25 @@
   --hc-space-10: 40px;
   --hc-space-12: 48px;
 
+  /* ─── 语义别名（BUG-20260710 ③）───
+     组件里散落着这些直觉命名（--hc-text / --hc-danger / --hc-bg-secondary…），此前全部未定义
+     → var() 解析为空 → 隐形按钮（如 MCP 市场「已安装」白字透明底）。别名用 var() 惰性求值，
+     自动跟随亮/暗主题的基础 token，无需在两个主题块重复定义。
+     回归锁：bug-20260710-style-live-triage 扫描 src/** 的每个 --hc-* 引用点必须有定义。 */
+  --hc-text: var(--hc-text-primary);
+  --hc-text-tertiary: var(--hc-text-muted);
+  --hc-primary: var(--hc-accent);
+  --hc-danger: var(--hc-error);
+  --hc-danger-soft: color-mix(in srgb, var(--hc-error) 14%, transparent);
+  --hc-accent-soft: var(--hc-accent-subtle);
+  --hc-surface: var(--hc-bg-elevated);
+  --hc-surface-2: var(--hc-bg-card);
+  --hc-bg-secondary: var(--hc-bg-panel);
+  --hc-bg-tertiary: var(--hc-bg-input);
+  --hc-bg: var(--hc-bg-main);
+  --hc-bg-primary: var(--hc-bg-main);
+  --hc-accent-border: var(--hc-border-hl);
+
   color-scheme: dark;
 }
 

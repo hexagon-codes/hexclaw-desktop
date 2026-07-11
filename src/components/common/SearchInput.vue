@@ -22,6 +22,13 @@ const emit = defineEmits<{
   'update:modelValue': [value: string]
   submit: []
 }>()
+
+// IME 守卫：中文/维语等输入法拼字回车选词时 isComposing 为真（部分环境 keyCode=229），
+// 此时回车用于确认候选词，不应触发搜索提交。参考 ChatView/MemoryView 已有写法。
+function onEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  emit('submit')
+}
 </script>
 
 <template>
@@ -35,7 +42,7 @@ const emit = defineEmits<{
       :disabled="disabled"
       :placeholder="placeholder || `${t('common.search')}...`"
       @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-      @keydown.enter="emit('submit')"
+      @keydown.enter="onEnter"
     />
     <button
       v-if="modelValue"

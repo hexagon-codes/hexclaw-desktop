@@ -355,6 +355,7 @@ export function backendToProviders(
       apiKey: p.api_key || localProvider?.apiKey || '',
       models: mergeProviderModels(localProvider, p.model, p.models),
       selectedModelId: '',
+      keepAlive: p.keep_alive || localProvider?.keepAlive || '',
     }
     nextProvider.selectedModelId = resolveProviderSelectedModelId(nextProvider, p.model)
     return nextProvider
@@ -390,6 +391,7 @@ export function providersToBackend(
       tools_enabled: p.toolsEnabled ?? null,
       max_tools: p.maxTools ?? 0,
       enabled: p.enabled,
+      keep_alive: p.keepAlive || '',
     }
   }
   // Find which provider the default model belongs to（默认 provider 必须是启用的）

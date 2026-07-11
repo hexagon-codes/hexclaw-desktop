@@ -34,17 +34,20 @@ describe('Canvas runWorkflow — 并发防护', () => {
 describe('KnowledgeView 上传 — 索引稳定性', () => {
   it('每个上传任务通过直接引用 entry 对象更新进度，不受数组索引漂移影响', () => {
     const source = readFileSync('src/views/KnowledgeView.vue', 'utf-8')
-    expect(source).toContain('uploadingFiles.value.push(entry)')
-    // 使用 entry 对象引用而非数组索引，并行上传时进度更新不会串位
+    // BUG-20260710 后 entry 由 uploads store 的 track 返回（响应式直接引用），语义不变：
+    // 并行上传时进度更新经对象引用而非数组索引，不会串位
+    expect(source).toContain('uploadsStore.track({ name: file.name')
     expect(source).toContain('entry.progress = pct')
     expect(source).toContain('entry.status =')
     expect(source).not.toContain('uploadingFiles.value[idx]')
   })
 
-  it('setTimeout 清理只移除非 uploading 状态的项，不影响进行中的上传', () => {
+  it('条目结算走 store.settleAgainstDocs（BUG-20260710：done 条目直到文档落地才移除，不再用定时器）', () => {
     const source = readFileSync('src/views/KnowledgeView.vue', 'utf-8')
-    // 清理逻辑在 Promise.all 之后
-    expect(source).toContain("uploadingFiles.value.filter((f) => f.status === 'uploading')")
+    // 旧机制：setTimeout 3 秒清除（与真实索引状态无关）——已退役
+    expect(source).not.toContain("setTimeout(() => {\n    uploadingFiles.value")
+    // 新机制：revalidate 成功后用文档列表结算
+    expect(source).toContain('uploadsStore.settleAgainstDocs(')
   })
 })
 

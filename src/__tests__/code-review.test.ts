@@ -54,18 +54,8 @@ describe('Critical Fixes', () => {
 // ─── High Fixes ───────────────────────────────────────
 
 describe('High Fixes', () => {
-  describe('#CR-5: useSSE 组件卸载自动清理', () => {
-    it('useSSE 在组件上下文中应注册 onUnmounted', async () => {
-      // 修复后 useSSE 内部使用 getCurrentInstance() 检测组件上下文
-      // 在组件中使用时会自动注册 onUnmounted(stop)
-      const { useSSE } = await import('@/composables/useSSE')
-
-      const sse = useSSE()
-      expect(typeof sse.stop).toBe('function')
-      expect(typeof sse.start).toBe('function')
-      // 非组件上下文下不会报错
-    })
-  })
+  // 注：#CR-5 / #CR-18（useSSE 卸载清理 / 并发防护）随 useSSE 死 composable 删除
+  // （U7 死代码清理 20260711）——composables/useSSE.ts 无任何生产引用，已移除。
 
   describe('#CR-6: handleSendError 设置 error.value', () => {
     it('fromNativeError 被正确导入并可用', async () => {
@@ -175,15 +165,6 @@ describe('Medium Fixes', () => {
     })
   })
 
-  describe('#CR-18: useSSE 并发防护', () => {
-    it('streaming 为 true 时 start 应直接返回', async () => {
-      const { useSSE } = await import('@/composables/useSSE')
-      const sse = useSSE()
-
-      // 修复后 start 函数开头检查 if (streaming.value) return
-      expect(sse.streaming.value).toBe(false)
-    })
-  })
 })
 
 // ─── Low Fixes ────────────────────────────────────────

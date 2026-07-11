@@ -130,6 +130,8 @@ pub fn run() {
             commands::read_file_as_base64,
             commands::render_artifact_to_path,
             commands::open_about,
+            commands::set_autostart,
+            commands::is_autostart_enabled,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

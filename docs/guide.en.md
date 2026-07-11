@@ -10,9 +10,11 @@
 - [Interface Overview](#interface-overview)
 - [AI Chat](#ai-chat)
 - [Agent Management](#agent-management)
+- [Scenario Packs & K12 Tutoring](#scenario-packs--k12-tutoring)
 - [Knowledge Center](#knowledge-center)
 - [Automation](#automation)
 - [Integration](#integration)
+- [IM Channels](#im-channels)
 - [Logs](#logs)
 - [Settings & Configuration](#settings--configuration)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
@@ -143,7 +145,7 @@ The navigation uses a grouped design with 8 top-level entries. The app opens to 
 | Page | Description | Sub-tabs |
 |------|-------------|----------|
 | IM Channels | Feishu / DingTalk / WeCom / Discord / Telegram remote task entries | — |
-| Integration | External tools and service integration | Skills · MCP |
+| Integration | External tools and service integration | Skills · MCP · Prompts |
 
 **System**
 
@@ -167,7 +169,7 @@ The sidebar bottom shows the HexClaw Engine runtime status:
 
 1. Click **Chat** in the sidebar
 2. Type your message in the input box at the bottom, press `Enter` to send
-3. AI responses support Markdown rendering and syntax highlighting
+3. AI responses support Markdown, syntax highlighting, KaTeX math, and mhchem chemistry rendering
 4. Use `Shift+Enter` to insert a newline for multi-line input
 
 ### Session Management
@@ -176,6 +178,16 @@ The sidebar bottom shows the HexClaw Engine runtime status:
 - **Switch session**: Click a history session in the session list
 - **Search sessions**: Use the search feature to find past conversations
 - **Export session**: Export chat history is supported
+- **Scenario sessions**: Scenario-instance sessions are pinned automatically. If the session title is still the internal Agent ID, the list shows the Agent display name instead.
+
+### Message Badges
+
+Chat messages support generic message decorations:
+
+- **Verification badge**: when the backend returns `metadata.verify` or a solve verdict, the message shows verified / disagree / out-of-scope / unverifiable state
+- **Record chip**: when the backend writes a result into a record collection, the message shows the target record book and key fields
+
+These badges are rendered from generic contracts, not from a K12-only component.
 
 ### Model Selection
 
@@ -227,6 +239,74 @@ Built-in preset roles:
 ### Multi-Agent Collaboration
 
 Supports multiple Agents collaborating in the same session. Use Agent conference mode to have multiple roles engage in cross-discussion.
+
+### Scenario Templates
+
+In addition to generic role templates, the template library can expose scenario-pack templates. The current built-in scenario template is **Homework Tutor**.
+
+Create a Homework Tutor:
+
+1. Go to the **Agents** page
+2. Choose **Homework Tutor** from the template library
+3. Fill in child name, grade term, and textbook edition
+4. Keep the default tutoring skills unless you need to adjust optional skills in the advanced section
+5. Create the instance. The display name uses the child name plus the selected grade term, for example “Ming's Study Assistant · 五年级” (a helper that guides parents as professionally as a teacher)
+
+Create one instance per child. Profile, Mistake Book, Notebook, insights, and memory are isolated by Agent instance.
+
+---
+
+## Scenario Packs & K12 Tutoring
+
+K12 Homework Tutor is the current built-in scenario pack. It is not a separate page; it is an enhanced view mounted on an Agent instance.
+
+### Entry Points
+
+After creating a Homework Tutor, you can enter it from:
+
+- **Agent card**: click “Tutor” to enter chat, or “Mistakes” to open the record view
+- **Chat page**: select the study assistant session, then use the top “Tutor / Mistakes” tabs
+
+### Tutoring Flow
+
+In the “Tutor” tab you can:
+
+- Type a problem or paste a homework photo
+- Use progressive hints: directional hint → specific hint → full explanation
+- Provide the child's answer so the system can tailor the next hint
+- Read verification badges that distinguish program verification, model review, out-of-scope handling, and unverifiable answers
+
+For homework photos, the frontend calls `/api/k12/recognize` to extract structured problems. After you confirm the recognized problems, each one can be graded separately. Once confirmed, the chat stream automatically inlines a “Tutoring tips for this homework” block that tells the parent how to teach it and where the pitfalls are, so there is no separate panel to open.
+
+### Mistake Book, Notebook, and Insights
+
+The “Mistakes” tab contains three subviews:
+
+- **Mistakes**: the first screen leads with the “Due this week” review queue, showing problems due for review with topic, error cause, and review status; supports “one more to practice” and “mark mastered”. “All mistakes” is a collapsible archive you expand when needed. You can also “Log a mistake” by hand to file offline homework and in-class mistakes
+- **Notes**: Chinese / English phrases, poems, grammar points, and writing materials
+- **Insights**: new mistakes, review completion, top weak topics, and repeated-setback alerts
+
+Mistake status moves through `To review → Explained → Redone → Mastered → Archived`. The due review queue is returned by the backend and rendered by the frontend through record schemas.
+
+### Tutoring Tips for This Homework
+
+After you confirm the recognized problems, the chat stream automatically inlines a “Tutoring tips for this homework” block. It combines this homework's problems, mistakes, and insights into a one-page “how to teach” card, so the parent never has to open a separate panel.
+
+Each section carries a source label, such as:
+
+- `📖 From textbook`
+- `🗂 Local records`
+- `✅ Program-verified`
+- `🤖 AI summary (for reference)`
+
+The inline tips support copying the text so you can paste it into phone IM.
+
+### Backup, Export, and Automation
+
+- The Mistake Book can generate a “Review paper”: use “One-tap review paper” (zero config, auto-built from the due review queue) or “Custom paper” (customize item count, topics, and other parameters), then print or export as PDF / Word
+- Family learning archives can be exported and restored as `.hexbak` files with version header and checksum
+- After profile creation, HexClaw attempts to register default automation jobs. If cron is not enabled in the current runtime, it degrades silently and does not block creation
+- When IM is bound, family-chat messages can be routed to the correct child's study assistant instance
 
 ---
 
@@ -300,7 +380,7 @@ Supports DAG (Directed Acyclic Graph) execution engine with automatic parallel p
 
 ## Integration
 
-The Integration page provides unified management for all external tools and channel integrations, with four sub-tabs.
+The Integration page manages external tool capabilities, with three sub-tabs: Skills, MCP, and Prompts.
 
 ### Skill System (Skills Tab)
 
@@ -323,11 +403,19 @@ Skills are external tool capabilities that Agents can invoke.
 4. Once connected, tools provided by the server are automatically registered to the Agent's available tool list
 5. View tool listings and test tools online
 
-### IM Channel Management (IM Channels Tab)
+### Prompt Library (Prompts Tab)
+
+The Prompt Library manages reusable prompt templates. You can create, search, and maintain common prompts, then reuse them from chat input.
+
+---
+
+## IM Channels
+
+IM Channels are a separate top-level entry for starting tasks remotely outside the desktop UI.
 
 Chat with AI remotely via IM channels:
 
-1. Go to the **Integration** page, select the **IM Channels** tab
+1. Go to the **IM Channels** page
 2. Click "Add Channel"
 3. Supported IM platforms:
    - **Lark** (飞书)
@@ -339,10 +427,6 @@ Chat with AI remotely via IM channels:
    - **WeChat** (微信)
 4. Enter the corresponding platform's Bot Token or Webhook URL
 5. Test channel connectivity online
-
-### Diagnostics (Diagnostics Tab)
-
-View recent integration failure records for troubleshooting connectivity issues.
 
 ---
 
@@ -646,6 +730,19 @@ Both follow the **local-first** principle: data is never uploaded to third-party
 ---
 
 ## Changelog
+
+### v0.5.0
+
+**New Features**
+- Built-in K12 Homework Tutor scenario pack: Homework Tutor template, child profile, default skill binding, and enhanced Tutor / Mistakes views.
+- Added Mistake Book (first screen leads with the “Due this week” review queue, a collapsible “All mistakes” archive, and manual “Log a mistake” entry), Notebook, insights, inline “Tutoring tips for this homework” (auto-shown after you confirm recognized problems), review-paper (one-tap / custom) print/export, and `.hexbak` family learning archive backup/restore.
+- (Finalized in the 2026-07-09 product review) The study assistant display name is unified as “{child}'s Study Assistant”; the lesson prep card becomes tutoring tips inlined after recognition is confirmed; paper generation is unified as “Review paper”; the Mistake Book first screen leads with the review queue and supports manual entry; the study-time metric is removed.
+- Chat messages now support verification badges and record chips, rendered from generic contracts for program verification, model review, out-of-scope, unverifiable, and record-save states.
+- Markdown rendering now supports KaTeX math and mhchem chemistry formulas.
+
+**Architecture**
+- Added `scenarioRegistry`, view descriptors, record schemas, VerifyResult, and scenario-extension contracts so scenario packs mount through descriptors without changing the generic shell.
+- Added frontend `/api/k12/*` type contracts covering recognition, grading, review queue, tutoring tips, insights, profile, backup, export, IM binding, and automation provisioning.
 
 ### v0.3.0
 

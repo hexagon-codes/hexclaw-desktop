@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useKnowledgeUploadsStore } from '@/stores/knowledge-uploads'
 import { useI18n } from 'vue-i18n'
 import {
   BookOpen,
@@ -25,6 +26,7 @@ import {
   getKnowledgeConfig,
   putKnowledgeConfig,
 } from '@/api/knowledge'
+import type { KnowledgeSourceCount } from '@/api/knowledge'
 import type { KnowledgeSearchFilter, KnowledgeConfig } from '@/api/knowledge'
 // DB cache layer removed — data fetched directly from backend API
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
@@ -44,7 +46,7 @@ import { logger } from '@/utils/logger'
 // 否则多模态入库能力在桌面端无入口。注意：图片无法本地解析（parseDocument 会把二进制当
 // 纯文本读成乱码），故上传失败时绝不回退到本地解析（见 processFiles）。
 const IMAGE_TYPES = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
-const DOCUMENT_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.xlsx', '.xls', '.csv', '.json']
+const DOCUMENT_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.pptx', '.xlsx', '.xls', '.csv', '.json']
 const ACCEPTED_TYPES = [...DOCUMENT_TYPES, ...IMAGE_TYPES]
 
 // 图片入库由后端视觉模型（VLM）转写为文本后再走 RAG 管线。若用户配的模型不具备视觉能力，
@@ -241,9 +243,12 @@ const normalizedDocumentSearch = computed(() => props.documentSearch.trim().toLo
 const selectedSource = ref<string | null>(null)
 const DOC_PAGE_SIZE = 50
 const visibleDocCount = ref(DOC_PAGE_SIZE)
+const sourceFacetFromApi = ref<KnowledgeSourceCount[]>([])
+let documentRequestGeneration = 0
 
 // 来源 facet：每个 source 一颗 chip，附该来源的文档数。
 const sourceFacet = computed(() => {
+  if (sourceFacetFromApi.value.length) return sourceFacetFromApi.value
   const counts = new Map<string, number>()
   for (const d of docs.value) {
     if (!d.source) continue
@@ -268,35 +273,73 @@ const filteredDocs = computed(() => {
 
 // 当前页（窗口）内的文档；其余通过「加载更多」逐步追加。
 const windowedDocs = computed(() => filteredDocs.value.slice(0, visibleDocCount.value))
-const hasMoreDocs = computed(() => filteredDocs.value.length > visibleDocCount.value)
-function loadMoreDocs() {
+const hasMoreDocs = computed(() => {
+  if (filteredDocs.value.length > visibleDocCount.value) return true
+  return !normalizedDocumentSearch.value && docs.value.length < totalDocs.value
+})
+const displayedTotalDocs = computed(() =>
+  normalizedDocumentSearch.value ? filteredDocs.value.length : totalDocs.value,
+)
+async function loadMoreDocs() {
+  // 兼容旧后端/测试一次返回超过一页的响应：先只扩 DOM 窗口，不重复请求。
+  if (filteredDocs.value.length > visibleDocCount.value) {
+    visibleDocCount.value += DOC_PAGE_SIZE
+    return
+  }
+  if (normalizedDocumentSearch.value || docs.value.length >= totalDocs.value) return
+  await revalidateFromApi(true, { append: true })
   visibleDocCount.value += DOC_PAGE_SIZE
 }
 function selectSource(src: string | null) {
   selectedSource.value = selectedSource.value === src ? null : src
   visibleDocCount.value = DOC_PAGE_SIZE
+  void revalidateFromApi(docs.value.length > 0)
 }
 // 搜索词变化时把窗口重置回第一页，避免停留在被过滤掉的尾页。
-watch(normalizedDocumentSearch, () => {
+watch(normalizedDocumentSearch, (query, previousQuery) => {
   visibleDocCount.value = DOC_PAGE_SIZE
+  // 列表端点暂不支持 q：有搜索词时省略 limit 拉取当前 source 全量，保证客户端搜索不漏页；
+  // 清空后立即恢复 50 条服务端分页，避免常态传输数千条快照。
+  // 非空搜索词之间切换时本地全量已齐，只需重新过滤，不重复打 API。
+  if (Boolean(query) !== Boolean(previousQuery)) {
+    void revalidateFromApi(docs.value.length > 0)
+  }
 })
 
 // File upload state
 const isDragging = ref(false)
-const uploadingFiles = ref<
-  {
-    name: string
-    progress: number
-    status: 'uploading' | 'done' | 'error'
-    error?: string
-    warning?: string
-  }[]
->([])
+// BUG-20260710：上传/索引进度提升为 store——上传→索引是跨页面生命周期的后台过程，
+// 组件本地 ref 在切页卸载时必丢（上传 100% 后切走再回来条目消失，用户以为上传丢了）。
+const uploadsStore = useKnowledgeUploadsStore()
+const uploadingFiles = computed(() => uploadsStore.items)
 const fileInputRef = ref<HTMLInputElement>()
 
+// done 条目在文档落地（出现在 getDocuments 结果）前保留；挂载期间轻量轮询直到全部落地。
+let indexPollTimer: ReturnType<typeof setInterval> | null = null
+let isMounted = false
+function ensureIndexPolling() {
+  if (!isMounted || indexPollTimer) return
+  indexPollTimer = setInterval(() => {
+    if (!uploadsStore.hasAwaitingIndex()) {
+      if (indexPollTimer) clearInterval(indexPollTimer)
+      indexPollTimer = null
+      return
+    }
+    void revalidateFromApi(true)
+  }, 4000)
+}
+onUnmounted(() => {
+  isMounted = false
+  if (indexPollTimer) clearInterval(indexPollTimer)
+  indexPollTimer = null
+})
+
 onMounted(async () => {
+  isMounted = true
   await loadDocs()
   void loadRagConfig()
+  // 切页回来时若仍有「索引中」条目，恢复轮询直到落地（BUG-20260710）
+  if (uploadsStore.hasAwaitingIndex()) ensureIndexPolling()
 })
 
 watch(activeTab, () => {
@@ -313,15 +356,34 @@ async function loadDocs() {
   await revalidateFromApi(false)
 }
 
-async function revalidateFromApi(hadCache = docs.value.length > 0) {
+async function revalidateFromApi(
+  hadCache = docs.value.length > 0,
+  options: { append?: boolean } = {},
+) {
+  const requestGeneration = ++documentRequestGeneration
   revalidating.value = true
   try {
-    const res = await getDocuments()
+    const query = selectedSource.value ? { source: selectedSource.value } : {}
+    const res = await getDocuments(
+      normalizedDocumentSearch.value
+        ? query
+        : { ...query, limit: DOC_PAGE_SIZE, offset: options.append ? docs.value.length : 0 },
+    )
+    if (requestGeneration !== documentRequestGeneration) return
     const freshDocs = res.documents || []
-    docs.value = freshDocs
-    totalDocs.value = res.total || freshDocs.length
+    if (options.append) {
+      const byID = new Map(docs.value.map((doc) => [doc.id, doc]))
+      for (const doc of freshDocs) byID.set(doc.id, doc)
+      docs.value = [...byID.values()]
+    } else {
+      docs.value = freshDocs
+    }
+    totalDocs.value = typeof res.total === 'number' ? res.total : docs.value.length
+    if (Array.isArray(res.sources)) sourceFacetFromApi.value = res.sources
     errorMsg.value = ''
     errorSeverity.value = null
+    // 上传条目结算：已在列表落地的 done 条目移除（挂载/轮询/手动刷新都会走到这里）
+    uploadsStore.settleAgainstDocs(docs.value)
 
     // DB cache layer removed — no local cache to update
   } catch (e) {
@@ -336,8 +398,10 @@ async function revalidateFromApi(hadCache = docs.value.length > 0) {
     }
     logger.warn('[Knowledge] API revalidation failed', e)
   } finally {
-    loading.value = false
-    revalidating.value = false
+    if (requestGeneration === documentRequestGeneration) {
+      loading.value = false
+      revalidating.value = false
+    }
   }
 }
 
@@ -580,12 +644,13 @@ const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB
 
 async function processFiles(files: FileList) {
   if (!ensureKnowledgeEnabled()) return
+  uploadsStore.clearErrors() // 新一轮上传前清掉旧错误条目
   const uploadTasks: Promise<void>[] = []
   let uploadedAny = false
 
   for (const file of Array.from(files)) {
     if (file.size === 0) {
-      uploadingFiles.value.push({
+      uploadsStore.track({
         name: file.name,
         progress: 0,
         status: 'error',
@@ -595,7 +660,7 @@ async function processFiles(files: FileList) {
     }
 
     if (file.size > MAX_FILE_SIZE) {
-      uploadingFiles.value.push({
+      uploadsStore.track({
         name: file.name,
         progress: 0,
         status: 'error',
@@ -606,7 +671,7 @@ async function processFiles(files: FileList) {
 
     const ext = '.' + file.name.split('.').pop()?.toLowerCase()
     if (!ACCEPTED_TYPES.includes(ext)) {
-      uploadingFiles.value.push({
+      uploadsStore.track({
         name: file.name,
         progress: 0,
         status: 'error',
@@ -615,19 +680,9 @@ async function processFiles(files: FileList) {
       continue
     }
 
-    // reactive(): mutations to status/progress/error must trigger re-render. A plain object
-    // pushed into the reactive array is held as a separate proxy, so mutating the raw object
-    // (in the async upload task below) would not update the DOM — the upload progress / error
-    // line would only refresh incidentally on the next unrelated render (e.g. loadDocs on
-    // success). The failure path has no such re-render, so the error message would never show.
-    const entry: {
-      name: string
-      progress: number
-      status: 'uploading' | 'done' | 'error'
-      error?: string
-      warning?: string
-    } = reactive({ name: file.name, progress: 0, status: 'uploading' })
-    uploadingFiles.value.push(entry)
+    // store.track 返回响应式 entry——上传任务改 entry.progress/status 即驱动 UI，
+    // 且条目挂在 store 上，跨组件卸载/重挂载存活（BUG-20260710）。
+    const entry = uploadsStore.track({ name: file.name, progress: 0, status: 'uploading' })
 
     uploadTasks.push(
       (async () => {
@@ -673,13 +728,11 @@ async function processFiles(files: FileList) {
   await Promise.all(uploadTasks)
 
   if (uploadedAny) {
+    // revalidateFromApi 成功后会 settleAgainstDocs：已落地的 done 条目移除；
+    // 索引未完成的保留并开启轻量轮询，直到文档真正出现在列表里（BUG-20260710）。
     await loadDocs()
+    ensureIndexPolling()
   }
-
-  // Auto-clear completed items after a delay
-  setTimeout(() => {
-    uploadingFiles.value = uploadingFiles.value.filter((f) => f.status === 'uploading')
-  }, 3000)
 }
 
 // Global drag prevention
@@ -852,6 +905,9 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             <div v-else-if="uf.warning" class="text-xs mt-0.5" style="color: #f59e0b">
               {{ uf.warning }}
             </div>
+            <div v-else-if="uf.status === 'done'" class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
+              {{ t('knowledge.indexing') }}
+            </div>
           </div>
           <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
             {{ uf.status === 'uploading' ? uf.progress + '%' : uf.status === 'done' ? '✓' : '✗' }}
@@ -909,7 +965,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               "
               @click="selectSource(null)"
             >
-              {{ t('knowledge.allSources') }} ({{ docs.length }})
+              {{ t('knowledge.allSources') }} ({{ sourceFacet.reduce((sum, item) => sum + item.count, 0) || totalDocs }})
             </button>
             <button
               v-for="f in sourceFacet"
@@ -1018,7 +1074,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               {{ t('knowledge.loadMore') }}
             </button>
             <span :style="{ color: 'var(--hc-text-muted)' }">
-              {{ t('knowledge.shownOfTotal', { shown: windowedDocs.length, total: filteredDocs.length }) }}
+              {{ t('knowledge.shownOfTotal', { shown: windowedDocs.length, total: displayedTotalDocs }) }}
             </span>
           </div>
         </template>

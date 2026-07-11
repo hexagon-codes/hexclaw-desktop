@@ -140,7 +140,8 @@ describe('BUG 6: ensureSession does not push to sessions array', () => {
     const fnStart = streamCompletionSrc.indexOf('function finalizeAssistantMessage')
     const fnEnd = streamCompletionSrc.indexOf('return {')
     const fnBody = streamCompletionSrc.slice(fnStart, fnEnd)
-    expect(fnBody).toContain('loadSessions()')
+    // 发送后经 loadSessions 刷新会话列表；容许带选项（suppressAutoSelect 等）—— 匹配调用而非固定无参形态。
+    expect(fnBody).toContain('loadSessions(')
     expect(facadeSrc).toContain('finalizeAssistantMessage: boundStreamController.finalizeAssistantMessage')
   })
 })

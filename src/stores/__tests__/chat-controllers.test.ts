@@ -252,6 +252,7 @@ describe('chat controller modules', () => {
       pendingSessionIds: ref({}),
       ensureSessionPromise: ref<Promise<string> | null>(null),
       cancelledSessions: new Set<string>(),
+      sessionSelectionGen: ref(0),
       msgSvc: {
         createSession,
       } as any,
@@ -311,6 +312,7 @@ describe('chat controller modules', () => {
       pendingSessionIds: ref({}),
       ensureSessionPromise: ref<Promise<string> | null>(null),
       cancelledSessions,
+      sessionSelectionGen: ref(0),
       msgSvc: {
         deleteSession: vi.fn().mockResolvedValue(undefined),
       } as any,
@@ -783,6 +785,8 @@ describe('chat controller modules', () => {
       memory: 'off',
       // BUG-20260703：聊天路径恒带锁定信号，空 agentRole = 默认助理
       pinned_agent: 'default',
+      // BUG-20260709：系统语言恒透传（含默认 zh-CN），后端拼显式输出语言指令
+      user_locale: 'zh-CN',
     })
   })
 

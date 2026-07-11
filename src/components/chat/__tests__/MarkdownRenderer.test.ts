@@ -9,6 +9,11 @@ vi.mock('markdown-it', () => ({
     renderer = { rules: {} as Record<string, unknown> }
     utils = { escapeHtml: (s: string) => s }
 
+    // 真实组件用 .use(katex) 注册公式插件；mock 需支持链式 no-op
+    use() {
+      return this
+    }
+
     render(content: string) {
       const match = content.match(/```(\w+)?\n([\s\S]*?)```/)
       if (!match) return `<p>${content}</p>`

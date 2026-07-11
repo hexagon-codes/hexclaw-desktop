@@ -23,6 +23,44 @@ export interface CanvasEdge {
   label?: string
 }
 
+/** condition 节点运算符（与后端 workflow_condition.go 对齐）。 */
+export type ConditionOperator =
+  | 'eq'
+  | 'ne'
+  | 'contains'
+  | 'not_contains'
+  | 'gt'
+  | 'lt'
+  | 'gte'
+  | 'lte'
+  | 'regex'
+  | 'empty'
+  | 'not_empty'
+
+export const CONDITION_OPERATORS: ConditionOperator[] = [
+  'eq', 'ne', 'contains', 'not_contains', 'gt', 'lt', 'gte', 'lte', 'regex', 'empty', 'not_empty',
+]
+
+/** condition 节点单条规则：命中则激活 target 出边分支。 */
+export interface ConditionRule {
+  op: ConditionOperator
+  value?: string
+  /** 命中时激活的下游 nodeID（必须是本 condition 节点的一条出边 target）。 */
+  target: string
+}
+
+/**
+ * condition 节点配置（对应后端 node.Data）。按序求值 conditions，首个命中的规则激活其
+ * target 分支；未命中激活 default；未选中的分支下游整枝跳过。
+ */
+export interface ConditionNodeConfig {
+  /** 取值来源：'input'=运行输入 · '<nodeID>'=该节点输出 · 空=上游合并输出。 */
+  source?: string
+  conditions: ConditionRule[]
+  /** 可选：无规则命中时激活的下游 nodeID。 */
+  default?: string
+}
+
 /** 工作流定义 */
 export interface Workflow {
   id: string

@@ -110,6 +110,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { useRouter } from 'vue-router'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { resolveOllamaCapabilities } from '@/config/providers'
+import HcSelect from '@/components/common/HcSelect.vue'
 import type { ModelCapability } from '@/types/settings'
 
 // 能力标签 emoji + 文案（与 SettingsView 云 Provider 保持一致）
@@ -663,6 +664,33 @@ onBeforeUnmount(() => {
   if (pullAbort) { pullAbort.abort(); pullAbort = null }
 })
 
+// ── 模型驻留时长(keep_alive)设置(BUG-20260710 P1)──
+// 9B 模型驻留 ≈7GB;16GB 机可调短换内存。写 provider.keepAlive 经 saveConfig 持久化,
+// 后端 llmrouter 透传 ollama.WithKeepAlive,下次请求生效。
+const KEEPALIVE_OPTIONS = [
+  { value: '', labelKey: 'settings.ollama.keepAliveDefault' },   // 空=后端默认 30m
+  { value: '5m', labelKey: 'settings.ollama.keepAlive5m' },
+  { value: '15m', labelKey: 'settings.ollama.keepAlive15m' },
+  { value: '60m', labelKey: 'settings.ollama.keepAlive60m' },
+]
+const ollamaProviderRef = computed(() =>
+  settingsStore.config?.llm.providers.find(
+    (p) => p.type === 'ollama' || (p.backendKey ?? p.name ?? '').toLowerCase().includes('ollama'),
+  ),
+)
+const keepAlive = computed({
+  get: () => ollamaProviderRef.value?.keepAlive ?? '',
+  set: (v: string) => {
+    const prov = ollamaProviderRef.value
+    if (!prov || !settingsStore.config) return
+    prov.keepAlive = v
+    void settingsStore.saveConfig(settingsStore.config)
+  },
+})
+const keepAliveOptions = computed(() =>
+  KEEPALIVE_OPTIONS.map((o) => ({ value: o.value, label: t(o.labelKey) })),
+)
+
 const emit = defineEmits<{
   associate: []
   toggleProvider: []
@@ -936,6 +964,13 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
         <p class="ollama-card__error-msg">{{ error }}</p>
       </div>
     </Transition>
+
+    <!-- 模型驻留时长(BUG-20260710 P1):16GB 机可调短换内存;空=后端默认 30m -->
+    <div class="ollama-card__keepalive" data-testid="ollama-keepalive">
+      <span class="ollama-card__keepalive-label">{{ t('settings.ollama.keepAliveLabel') }}</span>
+      <span class="ollama-card__keepalive-sp" />
+      <HcSelect v-model="keepAlive" :options="keepAliveOptions" class="ollama-card__keepalive-select" />
+    </div>
 
     <!-- Footer -->
     <div class="ollama-card__footer">
@@ -1655,4 +1690,8 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   opacity: 0;
   transform: translateY(4px);
 }
+.ollama-card__keepalive { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-top: 0.5px solid var(--hc-border); }
+.ollama-card__keepalive-label { font-size: 12.5px; font-weight: 500; color: var(--hc-text-primary); }
+.ollama-card__keepalive-sp { flex: 1; }
+.ollama-card__keepalive-select { width: 150px; }
 </style>
