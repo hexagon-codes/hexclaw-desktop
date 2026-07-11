@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import KnowledgeView from '../KnowledgeView.vue'
 import HcDateRangePicker from '@/components/common/HcDateRangePicker.vue'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -47,7 +48,7 @@ function createTestI18n() {
 async function mountView() {
   const wrapper = mount(KnowledgeView, {
     global: {
-      plugins: [createTestI18n()],
+      plugins: [createPinia(), createTestI18n()],
       stubs: {
         UnderlineTabs: {
           props: ['tabs', 'modelValue'],

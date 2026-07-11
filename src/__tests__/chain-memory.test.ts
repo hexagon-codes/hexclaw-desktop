@@ -159,13 +159,14 @@ describe('Chain C: Memory -> Search -> Display', () => {
   })
 
   it('C3a: updateMemoryEntry calls PUT /api/v1/memory/:id', async () => {
-    mockApiPut.mockResolvedValueOnce({ id: 'm1', content: 'Updated content' })
+    // 契约#10：后端 handler_extended.go 返回 {message} 确认信封，非 MemoryEntry。
+    mockApiPut.mockResolvedValueOnce({ message: '记忆已更新' })
 
     const { updateMemoryEntry } = await import('@/api/memory')
     const result = await updateMemoryEntry('m1', 'Updated content')
 
     expect(mockApiPut).toHaveBeenCalledWith('/api/v1/memory/m1', { content: 'Updated content' })
-    expect(result.content).toBe('Updated content')
+    expect(result.message).toBe('记忆已更新')
   })
 
   it('C3b: deleteMemoryEntry calls DELETE /api/v1/memory/:id', async () => {

@@ -125,35 +125,5 @@ describe('D [P1] logs store: disconnect() 后不应僵尸重连', () => {
   })
 })
 
-// ════════════════════════════════════════════════════════════
-// E. composables/useHexclaw.ts:27 — 退避 `if (retryCount === 6)` 一次性
-//    严格等号只在恰好第 6 次失败触发一次（5s→10s），之后永不再升；
-//    Math.min(currentInterval*2, 30000) 到 30s 的逻辑是死代码。
-//    注释承诺「连续失败后降低轮询频率」，实际只降一次。
-// ════════════════════════════════════════════════════════════
-describe('E [P2] useHexclaw: 持续失败应退避到 >10s（当前一次性封顶 10s）', () => {
-  beforeEach(() => {
-    vi.resetModules()
-  })
-  afterEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it('连续 15 次健康检查失败后，轮询间隔应能退避超过 10000ms', async () => {
-    vi.doMock('@/api/client', () => ({
-      checkHealth: vi.fn().mockResolvedValue(false),
-    }))
-    const setIntervalSpy = vi
-      .spyOn(globalThis, 'setInterval')
-      .mockReturnValue(0 as unknown as ReturnType<typeof setInterval>)
-    const { useHexclaw } = await import('@/composables/useHexclaw')
-    const { check } = useHexclaw()
-
-    for (let i = 0; i < 15; i++) await check()
-
-    const delays = setIntervalSpy.mock.calls.map((c) => Number(c[1] ?? 0))
-    const maxDelay = delays.length ? Math.max(...delays) : 0
-    // 当前实现只在 retryCount===6 设过一次 10000，永远到不了 30000
-    expect(maxDelay).toBeGreaterThan(10000)
-  })
-})
+// 注：原 describe「E [P2] useHexclaw 退避」随 useHexclaw 死 composable 一并删除
+// （U7 死代码清理 20260711）——composables/useHexclaw.ts 无任何生产引用，已移除。

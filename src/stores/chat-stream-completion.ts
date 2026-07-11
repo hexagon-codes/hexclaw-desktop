@@ -13,7 +13,7 @@ export function createChatStreamCompletionController(params: {
   currentSessionId: Ref<string | null>
   msgSvc: MessageServiceModule
   createId: () => string
-  loadSessions: () => Promise<void>
+  loadSessions: (opts?: { suppressAutoSelect?: boolean }) => Promise<void>
   setLocalSessionTitle: (sessionId: string, title: string) => void
   setPendingSuggestedTitleExpectation: (sessionId: string, expectedTitle: string | null) => void
   bumpLocalSession: (sessionId: string) => void
@@ -102,7 +102,7 @@ export function createChatStreamCompletionController(params: {
       } catch {
         // best-effort，失败保留临时标题
       } finally {
-        void loadSessions()
+        void loadSessions({ suppressAutoSelect: true })
       }
     })()
 

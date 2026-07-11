@@ -374,7 +374,7 @@ describe('MemoryView', () => {
     expect(wrapper.findAll('[data-testid="memory-add-input"]')).toHaveLength(1)
   })
 
-  it('keeps the type selector and save action together in the add-memory dialog footer', async () => {
+  it('add-memory footer 单行布局：类型在左、取消/保存并列在右、不折行（BUG-20260710 截图取证）', async () => {
     const wrapper = mountMemoryView()
     await flushPromises()
 
@@ -384,10 +384,19 @@ describe('MemoryView', () => {
     const actions = wrapper.get('[data-testid="memory-add-actions"]')
     const typeSelect = wrapper.get('[data-testid="memory-add-type-select"]')
     const saveButton = wrapper.get('[data-testid="memory-add-save"]')
+    const cancelButton = wrapper.get('[data-testid="memory-add-cancel"]')
 
-    expect(footer.element.contains(actions.element)).toBe(true)
-    expect(actions.element.contains(typeSelect.element)).toBe(true)
+    // 旧布局把「保存」和类型下拉绑在左组、flex-wrap 下保存折到下拉下面、取消孤悬右侧（截图）。
+    // 新布局：footer 不允许 flex-wrap；右侧动作组 = [取消, 保存]；类型下拉独立在左。
+    expect(footer.classes()).not.toContain('flex-wrap')
+    expect(footer.element.contains(typeSelect.element)).toBe(true)
+    expect(actions.element.contains(typeSelect.element)).toBe(false)
+    expect(actions.element.contains(cancelButton.element)).toBe(true)
     expect(actions.element.contains(saveButton.element)).toBe(true)
+    // 取消在保存之前（主操作靠右末位，Apple HIG）
+    expect(
+      cancelButton.element.compareDocumentPosition(saveButton.element) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
   })
 
   it('keeps add-memory save and cancel buttons the same size', async () => {

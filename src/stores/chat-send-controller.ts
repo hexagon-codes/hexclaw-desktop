@@ -185,6 +185,13 @@ export function createChatSendController(params: {
       // Auto-RAG(≤AUTO_RAG_BUDGET_MS 1.2s)+WS 连接完成、deliverMessage 才置 pending，
       // 小蟹和回答气泡延迟 1-2s 才出现。deliverMessage 内会幂等再置 pending，流式起来后
       // upsertStreamState 交棒给 isCurrentStreaming，pending 由收尾逻辑清除，无双清风险。
+      // U4：点击瞬间快照采样参数——buildRequestMetadata 在下方 Auto-RAG 之后才读，期间用户
+      // 切会话会改共享 ref，快照保证在途请求带的是本次发送时的 agent/model/thinking。
+      const samplingSnapshot = {
+        agentRole: agentRole.value,
+        chatParams: { ...chatParams.value },
+        thinkingEnabled: thinkingEnabled.value,
+      }
       setSessionPending(sessionId, true, sending, draftSending)
       // backendText 惰性解析：气泡已上屏，此处再 await 跑 Auto-RAG（BUG-20260628）；string 形态直用。
       const backendText =
@@ -200,6 +207,7 @@ export function createChatSendController(params: {
         draftSending,
         skillNames, // bug#2 2026-06-23：透传挂载技能给后端（此前在此被丢弃）
         documents: options?.documents, // BUG-20260626：透传文档卡片给后端持久化（否则重载丢失退化纯文本）
+        samplingSnapshot, // U4：点击瞬间快照，防 Auto-RAG 期间切会话带错 agent/model/thinking
       })
     } finally {
       draftSending.value = false

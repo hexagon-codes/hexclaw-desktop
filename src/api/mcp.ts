@@ -71,6 +71,11 @@ export function addMcpServer(
 }
 
 /** 移除 MCP 服务器 */
+/** 重启单个 MCP Server（M3-20260710，原型 1927「重启」；新连接成功才替换，失败保留原状） */
+export function restartMcpServer(name: string) {
+  return apiPost<{ message: string }>(`/api/v1/mcp/servers/${encodeURIComponent(name)}/restart`, {})
+}
+
 export function removeMcpServer(name: string) {
   return apiDelete<{ message: string }>(`/api/v1/mcp/servers/${encodeURIComponent(name)}`)
 }

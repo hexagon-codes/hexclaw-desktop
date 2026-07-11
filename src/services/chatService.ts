@@ -63,6 +63,27 @@ interface StreamWsServerMessage {
   tool_calls?: ChatMessage['tool_calls']
   blocks?: ChatMessage['blocks']
   metadata?: Record<string, unknown>
+  // U9：后端结构化 RAG/记忆命中（顶层字段，非 metadata 内——后端 Metadata 是 string map）。
+  knowledge_hits?: Record<string, unknown>[]
+  memory_hits?: Record<string, unknown>[]
+}
+
+// U9 契约对齐：后端把 RAG/记忆命中作为 done chunk / reply 的**顶层**结构化数组回传
+// （knowledge_hits / memory_hits），因为后端 Metadata 是 map[string]string、无法承载
+// 对象数组。前端 ChatView 从 msg.metadata.knowledge_hits 消费（normalizeHitList 要对象
+// 数组渲染标签+详情）。这里在 service 层把顶层命中折叠进 metadata，让既有 ChatView 与
+// chat-* store 无需改动即可透传——契约锚点：字段名/形状两端一致（doc_title/source/content）。
+function foldRetrievalHits(
+  metadata: Record<string, unknown> | undefined,
+  source: { knowledge_hits?: unknown; memory_hits?: unknown },
+): Record<string, unknown> | undefined {
+  const kh = Array.isArray(source.knowledge_hits) && source.knowledge_hits.length > 0 ? source.knowledge_hits : undefined
+  const mh = Array.isArray(source.memory_hits) && source.memory_hits.length > 0 ? source.memory_hits : undefined
+  if (!kh && !mh) return metadata
+  const merged: Record<string, unknown> = { ...(metadata ?? {}) }
+  if (kh) merged.knowledge_hits = kh
+  if (mh) merged.memory_hits = mh
+  return merged
 }
 
 export interface WebSocketStreamResult {
@@ -128,7 +149,7 @@ export function sendViaWebSocket(
         clearTimers()
         callbacks?.onDone?.(
           accumulatedContent,
-          chunk.metadata,
+          foldRetrievalHits(chunk.metadata, chunk),
           chunk.tool_calls,
           typeof chunk.metadata?.agent_name === 'string' ? chunk.metadata.agent_name : undefined,
         )
@@ -143,7 +164,7 @@ export function sendViaWebSocket(
       clearTimers()
       callbacks?.onDone?.(
         reply.content,
-        reply.metadata,
+        foldRetrievalHits(reply.metadata, reply),
         reply.tool_calls,
         typeof reply.metadata?.agent_name === 'string' ? reply.metadata.agent_name : undefined,
       )
@@ -284,7 +305,7 @@ function openRequestSocket(
         if (msg.done) {
           settleResolve({
             content: accumulatedContent,
-            metadata: msg.metadata,
+            metadata: foldRetrievalHits(msg.metadata, msg),
             toolCalls: msg.tool_calls,
             blocks: msg.blocks,
             agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
@@ -302,7 +323,7 @@ function openRequestSocket(
         if (msg.done) {
           settleResolve({
             content: msg.content,
-            metadata: msg.metadata,
+            metadata: foldRetrievalHits(msg.metadata, msg),
             toolCalls: msg.tool_calls,
             agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
           })
@@ -312,7 +333,7 @@ function openRequestSocket(
         markActivity()
         settleResolve({
           content: msg.content,
-          metadata: msg.metadata,
+          metadata: foldRetrievalHits(msg.metadata, msg),
           toolCalls: msg.tool_calls,
           agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
         })

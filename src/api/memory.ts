@@ -112,9 +112,13 @@ export function createMemoryEntry(
   return apiPost<MemoryEntry>('/api/v1/memory', { content, type: type ?? 'fact', source: source ?? 'manual' })
 }
 
-/** 更新单条记忆 */
+/** 更新单条记忆。
+ * 契约#10：后端 handler_extended.go 成功分支返回 `{"message":"记忆已更新"}` 确认信封，
+ * 而非更新后的 MemoryEntry。此前前端声明 `apiPut<MemoryEntry>` 是类型撒谎（运行时 .id/.content
+ * 全 undefined）；唯一消费方 MemoryView 丢弃返回值故无实害，但类型须对齐后端现实。
+ * 若后端未来改为返回完整 MemoryEntry，此处类型应同步回 MemoryEntry。 */
 export function updateMemoryEntry(id: string, content: string) {
-  return apiPut<MemoryEntry>(`/api/v1/memory/${encodeURIComponent(id)}`, { content })
+  return apiPut<{ message: string }>(`/api/v1/memory/${encodeURIComponent(id)}`, { content })
 }
 
 /** 兼容旧版 sidecar：通过重写整块 MEMORY 内容更新单条 legacy 记忆 */

@@ -41,7 +41,7 @@ describe('Chain 4: Memory Lifecycle', () => {
       .mockResolvedValueOnce(entry1)                           // createMemoryEntry
       .mockResolvedValueOnce({ entries: [entry1], summary: '', capacity: { used: 1, max: 50 } }) // getMemoryEntries
       .mockResolvedValueOnce({ results: [entry1], vector_results: null, total: 1 }) // searchMemory
-      .mockResolvedValueOnce({ ...entry1, content: 'hello world v2' }) // updateMemoryEntry
+      .mockResolvedValueOnce({ message: '记忆已更新' }) // updateMemoryEntry（契约#10：后端返 {message} 信封）
       .mockResolvedValueOnce({ message: 'deleted' })           // deleteMemoryEntry
       .mockResolvedValueOnce({ message: 'cleared' })           // clearAllMemory
 
@@ -84,7 +84,7 @@ describe('Chain 4: Memory Lifecycle', () => {
     expect(updatePath).toBe(`/api/v1/memory/${encodeURIComponent('m-1')}`)
     expect(updateOpts.method).toBe('PUT')
     expect(updateOpts.body).toEqual({ content: 'hello world v2' })
-    expect(updateRes.content).toBe('hello world v2')
+    expect(updateRes.message).toBe('记忆已更新')
 
     // 5) deleteMemoryEntry → DELETE /api/v1/memory/:id
     const [deletePath, deleteOpts] = callArgs(4)

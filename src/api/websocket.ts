@@ -49,6 +49,9 @@ interface WsServerMessage {
   tool_calls?: ToolCall[]
   blocks?: ContentBlock[]
   metadata?: Record<string, unknown>
+  // U9：后端结构化 RAG/记忆命中（顶层字段，Metadata 是 string map 无法承载对象数组）。
+  knowledge_hits?: Record<string, unknown>[]
+  memory_hits?: Record<string, unknown>[]
 }
 
 export interface ToolApprovalRequest {

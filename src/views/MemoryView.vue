@@ -836,19 +836,30 @@ async function handleSearch() {
                 :placeholder="t('memory.inputPlaceholder')"
               />
             </div>
+            <!-- BUG-20260710：footer 单行——类型在左、弹性占位、右侧 [取消][保存]（主操作末位，
+                 Apple HIG）。旧布局 select+保存 左组 + flex-wrap，窄宽下保存折到下拉下面、取消孤悬。 -->
             <div
               data-testid="memory-add-footer"
-              class="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 border-t"
+              class="flex items-center gap-3 px-5 py-3.5 border-t"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
-              <div data-testid="memory-add-actions" class="flex flex-wrap items-center gap-2">
-                <HcSelect
-                  id="memory-type"
-                  data-testid="memory-add-type-select"
-                  v-model="newTypeModel"
-                  class="hc-memory-add-type-select w-[150px]"
-                  :options="addTypeOptions"
-                />
+              <HcSelect
+                id="memory-type"
+                data-testid="memory-add-type-select"
+                v-model="newTypeModel"
+                class="hc-memory-add-type-select w-[150px]"
+                :options="addTypeOptions"
+              />
+              <span class="flex-1" />
+              <div data-testid="memory-add-actions" class="flex items-center gap-2">
+                <button
+                  data-testid="memory-add-cancel"
+                  class="w-[96px] flex items-center justify-center px-3 py-1.5 rounded-lg text-sm font-medium"
+                  :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
+                  @click="closeAddDialog"
+                >
+                  {{ t('common.cancel') }}
+                </button>
                 <button
                   data-testid="memory-add-save"
                   class="w-[96px] flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
@@ -860,14 +871,6 @@ async function handleSearch() {
                   {{ saving ? t('memory.saving') : t('common.save') }}
                 </button>
               </div>
-              <button
-                data-testid="memory-add-cancel"
-                class="w-[96px] flex items-center justify-center px-3 py-1.5 rounded-lg text-sm font-medium"
-                :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
-                @click="closeAddDialog"
-              >
-                {{ t('common.cancel') }}
-              </button>
             </div>
           </div>
         </div>

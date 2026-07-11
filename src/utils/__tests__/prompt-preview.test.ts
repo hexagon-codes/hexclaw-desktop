@@ -61,7 +61,7 @@ function probeUnsafe(html: string, probe: HTMLDivElement): boolean {
 }
 
 describe('prompt-preview · renderPromptPreview 安全不变量（property-based fuzz）', () => {
-  it('INV-SEC: 任意正文渲染后 DOM 无可执行注入（4000 次）', () => {
+  it('INV-SEC: 任意正文渲染后 DOM 无可执行注入（4000 次）', { timeout: 30_000 }, () => {
     const rnd = mulberry32(20260622)
     const probe = document.createElement('div')
     for (let i = 0; i < 600; i++) {
@@ -78,7 +78,7 @@ describe('prompt-preview · renderPromptPreview 安全不变量（property-based
 })
 
 describe('prompt-preview · renderPromptPreview 占位高亮不变量', () => {
-  it('INV-ARG: 每个去重占位都被 hc-arg 高亮包裹（2000 次，按 DOM 断言）', () => {
+  it('INV-ARG: 每个去重占位都被 hc-arg 高亮包裹（2000 次，按 DOM 断言）', { timeout: 30_000 }, () => {
     const rnd = mulberry32(123)
     const probe = document.createElement('div')
     for (let i = 0; i < 400; i++) {
@@ -89,7 +89,7 @@ describe('prompt-preview · renderPromptPreview 占位高亮不变量', () => {
         expect(marked).toContain(arg)
       }
     }
-  }, 30000) // property fuzz 2000 次，默认 5s 超时过紧
+  })
   it('无占位正文不产生 hc-arg', () => {
     expect(renderPromptPreview('就是一段普通文字，编号 42。')).not.toContain('hc-arg')
   })

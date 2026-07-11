@@ -161,8 +161,10 @@ describe('ChannelAgentBinding — 纯接待模型 行为', () => {
 describe('ChannelAgentBinding — 纯接待模型 结构守卫', () => {
   const SRC = readFileSync(resolve(__dirname, '../ChannelAgentBinding.vue'), 'utf8')
 
-  it('★渠道层不暴露任何模型选择器（无 advancedModelOptions/onAdvancedModelChange/bindChannelModel/showAdvanced/HcSelect/channelDefaultAgentName）', () => {
-    for (const banned of ['advancedModelOptions', 'onAdvancedModelChange', 'bindChannelModel', 'showAdvanced', '<HcSelect', 'channelDefaultAgentName', 'filteredModelOptions', 'selectChannelModel']) {
+  it('★渠道层不暴露任何模型选择器（模型 100% 跟随接待者;禁 advancedModelOptions 等渠道级模型机制）', () => {
+    // M4-20260710：会话路由用 HcSelect 选「接待智能体」（非模型）属合法——
+    // 锁从「出现 <HcSelect> 即违规」收敛为「模型选择相关标识符不得出现」。
+    for (const banned of ['advancedModelOptions', 'onAdvancedModelChange', 'bindChannelModel', 'showAdvanced', 'channelDefaultAgentName', 'filteredModelOptions', 'selectChannelModel', 'modelOptions']) {
       expect(SRC, `纯接待模型不应残留渠道级模型机制: ${banned}`).not.toContain(banned)
     }
   })

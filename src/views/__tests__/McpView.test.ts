@@ -10,6 +10,7 @@ const mockCallMcpTool = vi.fn()
 const mockGetMcpServerStatus = vi.fn()
 const mockAddMcpServer = vi.fn()
 const mockRemoveMcpServer = vi.fn()
+const mockRestartMcpServer = vi.fn()
 const mockGetMcpMarketplace = vi.fn()
 const mockSearchMcpMarketplace = vi.fn()
 
@@ -22,6 +23,7 @@ vi.mock('@/api/mcp', () => ({
   getMcpServerStatus: () => mockGetMcpServerStatus(),
   addMcpServer: (name: string, cmd: string, args?: string[]) => mockAddMcpServer(name, cmd, args),
   removeMcpServer: (name: string) => mockRemoveMcpServer(name),
+  restartMcpServer: (name: string) => mockRestartMcpServer(name),
   getMcpMarketplace: () => mockGetMcpMarketplace(),
   searchMcpMarketplace: (q: string) => mockSearchMcpMarketplace(q),
 }))
@@ -59,6 +61,7 @@ function setupDefaultMocks() {
     total: 2,
   })
   mockGetMcpServerStatus.mockResolvedValue({ statuses: { filesystem: 'connected', github: 'disconnected' } })
+  mockRestartMcpServer.mockResolvedValue({ message: 'restarted' })
   mockGetMcpMarketplace.mockResolvedValue({ skills: [], total: 0 })
 }
 
@@ -127,6 +130,23 @@ describe('McpView — MCP 全链路', () => {
     // filesystem = connected, github = disconnected
     const statusDots = wrapper.findAll('.w-2\\.5')
     expect(statusDots.length).toBe(2)
+  })
+
+  it('重启服务器成功后重新加载服务器与工具列表', async () => {
+    const wrapper = await mountMcpView()
+    await flushPromises()
+    mockGetMcpServers.mockClear()
+    mockGetMcpTools.mockClear()
+
+    const vm = wrapper.vm as unknown as {
+      handleRestartServer: (name: string) => Promise<void>
+    }
+    await vm.handleRestartServer('filesystem')
+    await flushPromises()
+
+    expect(mockRestartMcpServer).toHaveBeenCalledWith('filesystem')
+    expect(mockGetMcpServers).toHaveBeenCalledTimes(1)
+    expect(mockGetMcpTools).toHaveBeenCalledTimes(1)
   })
 
   it('无服务器时显示空状态', async () => {

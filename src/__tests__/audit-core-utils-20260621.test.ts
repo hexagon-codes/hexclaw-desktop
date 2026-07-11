@@ -9,7 +9,7 @@
  *
  * 运行：CI=true npx vitest run src/__tests__/audit-core-utils-20260621.test.ts
  */
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import zhCN from '@/i18n/locales/zh-CN'
 import en from '@/i18n/locales/en'
 import ugCN from '@/i18n/locales/ug-CN'
@@ -21,7 +21,8 @@ import {
 } from '@/utils/time'
 import { extractThinkTags } from '@/utils/think-tags'
 import { fromNativeError } from '@/utils/errors'
-import { rules } from '@/composables/useValidation'
+// 注：useValidation（含 rules）死 composable 已随 U7 死代码清理（20260711）删除，
+// 原 FINDING#4「rules.range 空值误判」describe 随之移除。
 
 // ─── i18n 工具 ────────────────────────────────────────
 function flatten(obj: unknown, prefix = '', out: Record<string, string> = {}): Record<string, string> {
@@ -145,31 +146,7 @@ describe('[FINDING#3][中][i18n] formatRelative 在 zh-CN 下泄漏英文', () =
   })
 })
 
-// ════════════════════════════════════════════════════════════════════
-// FINDING #4 [中][表单校验逻辑] rules.range 把空值/空白当作合法 0
-// useValidation.ts:24-31  Number('') / Number('  ') / Number(null) / Number([]) 都是 0；
-// 对任意跨越 0 的区间（如 range(-5,5)），空字段竟然通过校验 → 校验绕过。
-// （现仅 re-export、暂无视图直接使用，列为 latent；但这是「写了就坑」的复用陷阱。）
-// ════════════════════════════════════════════════════════════════════
-describe('[FINDING#4][中][校验] rules.range 空值被当成 0 误判通过', () => {
-  const r = rules.range(-5, 5)
-  it('空字符串不应通过 range(-5,5)（空输入不是有效数字）', () => {
-    expect(r.validate('')).toBe(false)
-  })
-  it('纯空白不应通过', () => {
-    expect(r.validate('   ')).toBe(false)
-  })
-  it('null 不应通过', () => {
-    expect(r.validate(null)).toBe(false)
-  })
-  it('空数组不应通过（Number([])===0 的陷阱）', () => {
-    expect(r.validate([])).toBe(false)
-  })
-  it('正常数字仍应通过（GREEN 对照）', () => {
-    expect(r.validate('3')).toBe(true)
-    expect(r.validate(-2)).toBe(true)
-  })
-})
+// （FINDING#4 rules.range 校验断言随 useValidation 死代码删除，见 U7 20260711）
 
 // ════════════════════════════════════════════════════════════════════
 // FINDING #5 [低][解析边界] extractThinkTags 对不匹配闭合标签吞掉正文
@@ -212,54 +189,5 @@ describe('[FINDING#6][低][错误] fromNativeError 丢弃 DOMException 原始消
   })
 })
 
-// ════════════════════════════════════════════════════════════════════
-// FINDING #7 [中][SSE 解析] useSSE 把无法识别的 JSON 帧 / 非字符串 content 原样回灌正文
-// useSSE.ts:38-49  对每个 chunk 先 JSON.parse，再尝试 content / text / choices[0].delta.content，
-// 任一不命中就 `?? value`（原始 JSON 字符串）。后果：
-//   (a) 合法的元数据/心跳帧 {"event":"ping"} 被当成正文显示给用户；
-//   (b) {"content":123}（数字）因 typeof !== 'string' 同样落到 `?? value`，
-//       String(chunk) 兜底形同虚设，原始 JSON 串被塞进正文。
-// 现无活跃调用方（聊天流走 WebSocket），列为 latent；但 useSSE 已 export 供复用。
-// ════════════════════════════════════════════════════════════════════
-function makeStream(chunks: string[]): ReadableStream<string> {
-  let i = 0
-  return {
-    getReader() {
-      return {
-        read: async () =>
-          i < chunks.length
-            ? { done: false, value: chunks[i++]! }
-            : { done: true, value: undefined },
-        cancel: async () => {},
-        releaseLock: () => {},
-      } as unknown as ReadableStreamDefaultReader<string>
-    },
-  } as unknown as ReadableStream<string>
-}
-
-describe('[FINDING#7][中][SSE] useSSE 泄漏未识别 JSON 帧 / 非字符串 content', () => {
-  it('无 content/text/choices 的 JSON 帧不应被回灌正文', async () => {
-    vi.resetModules()
-    vi.doMock('@/api/client', () => ({
-      apiSSE: vi.fn().mockResolvedValue(makeStream(['{"event":"ping","seq":1}'])),
-    }))
-    const { useSSE } = await import('@/composables/useSSE')
-    const { content, start } = useSSE()
-    await start('/x', {}, () => {})
-    // 期望心跳/元数据帧被忽略；当前实现把原始 JSON 串塞进 content
-    expect(content.value).not.toContain('"event"')
-    vi.doUnmock('@/api/client')
-  })
-
-  it('数字型 content 应渲染为 "123" 而非原始 JSON 串', async () => {
-    vi.resetModules()
-    vi.doMock('@/api/client', () => ({
-      apiSSE: vi.fn().mockResolvedValue(makeStream(['{"content":123}'])),
-    }))
-    const { useSSE } = await import('@/composables/useSSE')
-    const { content, start } = useSSE()
-    await start('/x', {}, () => {})
-    expect(content.value).not.toContain('{')
-    vi.doUnmock('@/api/client')
-  })
-})
+// 注：FINDING#7「useSSE 泄漏未识别 JSON 帧」随 useSSE 死 composable 一并删除
+// （U7 死代码清理 20260711）——composables/useSSE.ts 无任何生产引用，已移除。

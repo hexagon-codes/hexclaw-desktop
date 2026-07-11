@@ -97,7 +97,7 @@ export function createChatSessionLoadingController(params: {
     error.value = null
   }
 
-  async function loadSessions() {
+  async function loadSessions(opts?: { suppressAutoSelect?: boolean }) {
     try {
       const loadedSessions = await msgSvc.loadAllSessions()
       let nextSessions = loadedSessions
@@ -124,8 +124,15 @@ export function createChatSessionLoadingController(params: {
       // 防累积：丢弃已不存在会话的模型 / Agent 绑定，使 localStorage map 永远 ≤ 会话数
       pruneSessionModels(sessions.value.map((session) => session.id))
       pruneSessionAgents(sessions.value.map((session) => session.id))
-      // Don't auto-select a session while a new session is being created (race condition fix)
-      if (!currentSessionId.value && !ensureSessionPromise.value && sessions.value.length > 0) {
+      // Don't auto-select a session while a new session is being created (race condition fix).
+      // U1：后台流收尾刷新列表时 suppressAutoSelect——否则用户主动新建的空白态(currentSessionId=null)
+      // 会被自动 selectSession(lastId) 拽回旧会话，新建按钮等于没点。
+      if (
+        !opts?.suppressAutoSelect &&
+        !currentSessionId.value &&
+        !ensureSessionPromise.value &&
+        sessions.value.length > 0
+      ) {
         try {
           const lastId = await msgSvc.getLastSessionId()
           if (lastId && sessions.value.some((session) => session.id === lastId)) {

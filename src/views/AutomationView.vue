@@ -116,9 +116,9 @@ function onPrimaryAction() {
       </template>
     </PageToolbar>
     <div class="hc-page-shell__content">
-      <TasksView v-if="activeTab === 'tasks'" ref="tasksViewRef" />
-      <WorkflowPanel v-else-if="activeTab === 'workflows'" ref="workflowPanelRef" />
-      <WebhookPanel v-else ref="webhookPanelRef" />
+      <TasksView v-if="activeTab === 'tasks'" ref="tasksViewRef" :search="automationSearch" />
+      <WorkflowPanel v-else-if="activeTab === 'workflows'" ref="workflowPanelRef" :search="automationSearch" />
+      <WebhookPanel v-else ref="webhookPanelRef" :search="automationSearch" />
     </div>
   </div>
 </template>

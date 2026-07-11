@@ -16,7 +16,7 @@ export function createChatStreamErrorController(params: {
     sending?: Ref<boolean>,
     draftSending?: Ref<boolean>,
   ) => void
-  loadSessions: () => Promise<void>
+  loadSessions: (opts?: { suppressAutoSelect?: boolean }) => Promise<void>
   persistErrorReply: (sessionId: string, message: ChatMessage) => void | Promise<void>
 }) {
   const {
@@ -54,7 +54,7 @@ export function createChatStreamErrorController(params: {
       // 显式落库：后端不会自动持久化失败回复，否则切会话重载即丢失。
       void persistErrorReply(targetSessionId, errorMessage)
     }
-    void loadSessions()
+    void loadSessions({ suppressAutoSelect: true })
   }
 
   return {

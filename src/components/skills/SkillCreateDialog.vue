@@ -70,6 +70,14 @@ async function handleGenerate() {
  * 按反馈在当前草稿基础上重新生成（保持在 Step2，不清空）。
  * 不需要后端新端点：把「当前 SKILL.md + 调整要求」组合成更丰富的 prompt 复用 generate。
  */
+// AP-027：IME 组字回车确认候选词时 isComposing 为真（部分环境 keyCode=229），此时不触发
+// refine（也不 preventDefault，放行候选确认）；仅真正回车才提交。
+function onRefineEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  e.preventDefault()
+  handleRefine()
+}
+
 async function handleRefine() {
   const fb = refineInput.value.trim()
   if (!fb || refining.value || saving.value) return
@@ -234,7 +242,7 @@ async function handleSave() {
               class="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border text-xs"
               :style="{ background: 'var(--hc-bg-primary)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
               :disabled="refining || saving"
-              @keydown.enter.prevent="handleRefine"
+              @keydown.enter="onRefineEnter"
             />
             <button
               type="button"

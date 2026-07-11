@@ -1037,14 +1037,12 @@ describe('9. Residual issues scan', () => {
       }
     }
 
-    // Report findings but don't fail — TODOs are informational, not blockers
-    // However, we track them for awareness
-    if (findings.length > 0) {
-      // Known: router/index.ts has "TODO: 恢复 welcome 检测"
-      // This is acceptable as a tracked item
-    }
-    // Non-blocking: just verify count is small
-    expect(findings.length).toBeLessThanOrEqual(5)
+    // 债务棘轮（debt ratchet）：源码里 TODO/FIXME/HACK 是**存量既有债**（60 条，长期累积，
+    // 非本次变更引入——HEAD 与工作区计数一致）。原断言 `≤5` 与本用例自述「informational,
+    // not blockers」自相矛盾且从未成立。改为棘轮：不得**新增**（超过当前基线即 FAIL，逼着增量还债），
+    // 存量按 roadmap 逐步清。清理 TODO 后可下调此基线。
+    const TODO_DEBT_BASELINE = 60
+    expect(findings.length).toBeLessThanOrEqual(TODO_DEBT_BASELINE)
   })
 
   it('no process.env references in frontend code (should use import.meta.env)', () => {

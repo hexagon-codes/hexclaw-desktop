@@ -61,11 +61,20 @@ export function createChatSendDeliveryController(params: {
     streamHandles,
   } = params
 
-  function buildRequestMetadata(): Record<string, string> | undefined {
+  function buildRequestMetadata(snapshot?: {
+    agentRole: string
+    chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
+    thinkingEnabled: boolean
+  }): Record<string, string> | undefined {
     const settingsStore = getSettingsStore()
     const memoryEnabled = settingsStore.config?.memory?.enabled ?? true
     const agentMode = settingsStore.config?.llm?.agentMode ?? 'auto'
-    const model = chatParams.value.model
+    // U4：优先用发送点击瞬间的快照——否则 Auto-RAG(≤1.2s) 期间用户切会话会改共享 ref，
+    // 在途请求带上新会话的 agent/model/thinking（Agent 会话回答由默认助理/错误模型生成）。
+    const cp = snapshot?.chatParams ?? chatParams.value
+    const role = snapshot?.agentRole ?? agentRole.value
+    const thinking = snapshot?.thinkingEnabled ?? thinkingEnabled.value
+    const model = cp.model
     const modelCaps = model
       ? (settingsStore.availableModels ?? []).find((m) => m.modelId === model)?.capabilities ?? []
       : []
@@ -73,17 +82,17 @@ export function createChatSendDeliveryController(params: {
     const userLocale =
       (typeof localStorage !== 'undefined' && localStorage.getItem('hc-locale')) || 'zh-CN'
     return buildChatRequestMetadata({
-      thinkingEnabled: thinkingEnabled.value,
+      thinkingEnabled: thinking,
       memoryEnabled,
       imageGeneration: modelCaps.includes('image_generation'),
       videoGeneration: modelCaps.includes('video_generation'),
-      temperature: chatParams.value.temperature,
-      maxTokens: chatParams.value.maxTokens,
+      temperature: cp.temperature,
+      maxTokens: cp.maxTokens,
       agentMode,
       userLocale,
       // BUG-20260703：桌面聊天恒发锁定信号——收件人是显式契约，
       // 空 agentRole = 用户在跟默认助理对话，后端不得按内容改派。
-      pinnedAgent: agentRole.value,
+      pinnedAgent: role,
     })
   }
 
@@ -122,6 +131,11 @@ export function createChatSendDeliveryController(params: {
     draftSending: Ref<boolean>
     skillNames?: string[]
     documents?: ChatDocumentRef[]
+    samplingSnapshot?: {
+      agentRole: string
+      chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
+      thinkingEnabled: boolean
+    }
   }): Promise<ChatMessage | null> {
     const {
       backendText,
@@ -134,6 +148,13 @@ export function createChatSendDeliveryController(params: {
       documents,
     } = args
 
+    // U3：先检查 pre-delivery 窗口（send-controller 的 Auto-RAG + 下方 WS 连接）内会话是否
+    // 已被删除/取消——此前无条件 clearSessionCancelled 会抹掉删除时设的取消标记，导致
+    // 回复照常 openWebSocketStream 投递到已删会话。仅未取消时才清（清的是陈旧标记）。
+    if (isSessionCancelled(sessionId)) {
+      resetSessionStream(sessionId, sending, draftSending)
+      return null
+    }
     clearSessionCancelled(sessionId)
     setSessionPending(sessionId, true, sending, draftSending)
 
@@ -141,7 +162,7 @@ export function createChatSendDeliveryController(params: {
     // 此前 skillNames 只进本地消息 metadata、从未发给后端 → 技能当轮不生效。
     // BUG-20260626：文档卡片 ref 经 metadata.documents（JSON）透传给后端持久化，
     // 否则切会话重载后文档退化成纯文本（卡片只在前端本地、不落库）。
-    let requestMetadata = buildRequestMetadata()
+    let requestMetadata = buildRequestMetadata(args.samplingSnapshot)
     if (skillNames && skillNames.length) {
       requestMetadata = { ...(requestMetadata ?? {}), skills: skillNames.join(',') }
     }

@@ -252,6 +252,7 @@ describe('chat controller modules', () => {
       pendingSessionIds: ref({}),
       ensureSessionPromise: ref<Promise<string> | null>(null),
       cancelledSessions: new Set<string>(),
+      sessionSelectionGen: ref(0),
       msgSvc: {
         createSession,
       } as any,
@@ -311,6 +312,7 @@ describe('chat controller modules', () => {
       pendingSessionIds: ref({}),
       ensureSessionPromise: ref<Promise<string> | null>(null),
       cancelledSessions,
+      sessionSelectionGen: ref(0),
       msgSvc: {
         deleteSession: vi.fn().mockResolvedValue(undefined),
       } as any,

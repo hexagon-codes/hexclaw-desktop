@@ -3,6 +3,7 @@ import type { Ref } from 'vue'
 import type { Artifact, ChatMessage } from '@/types'
 import type { LoggerModule, MessageServiceModule } from './chat-session-types'
 import { clearSessionModel } from './session-model-binding'
+import { clearSessionAgent } from './session-agent-binding'
 
 export function createChatSessionLifecycleController(params: {
   currentSessionId: Ref<string | null>
@@ -16,6 +17,7 @@ export function createChatSessionLifecycleController(params: {
   pendingSessionIds: Ref<Record<string, boolean>>
   ensureSessionPromise: Ref<Promise<string> | null>
   cancelledSessions: Set<string>
+  sessionSelectionGen: Ref<number>
   msgSvc: MessageServiceModule
   logger: LoggerModule
   createId: () => string
@@ -39,6 +41,7 @@ export function createChatSessionLifecycleController(params: {
     pendingSessionIds,
     ensureSessionPromise,
     cancelledSessions,
+    sessionSelectionGen,
     msgSvc,
     logger,
     createId,
@@ -52,6 +55,9 @@ export function createChatSessionLifecycleController(params: {
   } = params
 
   function newSession(title?: string) {
+    // U2：bump 代际使任何在途 selectSession 失效——否则慢网下已发起的旧会话加载
+    // 晚到会把旧消息灌进这个空白新会话（currentSessionId 却为 null 的幽灵消息）。
+    sessionSelectionGen.value++
     currentSessionId.value = null
     messages.value = []
     artifacts.value = []
@@ -95,6 +101,8 @@ export function createChatSessionLifecycleController(params: {
   }
 
   async function deleteSession(sessionId: string) {
+    // U2：bump 代际使针对被删会话的在途 selectSession 失效（防旧消息晚到写回已删会话）。
+    sessionSelectionGen.value++
     let cancelMarkerSet = false
     try {
       if (pendingSessionIds.value[sessionId] || isSessionStreaming(sessionId)) {
@@ -108,6 +116,7 @@ export function createChatSessionLifecycleController(params: {
       }
       await msgSvc.deleteSession(sessionId)
       clearSessionModel(sessionId) // 防孤儿：会话删除后清除其模型绑定
+      clearSessionAgent(sessionId) // 防孤儿：同步清除 agent 绑定（session-agent-binding 契约）
       if (currentSessionId.value === sessionId) {
         currentSessionId.value = null
         messages.value = []

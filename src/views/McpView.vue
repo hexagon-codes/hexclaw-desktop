@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download } from 'lucide-vue-next'
-import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, getMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
+import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download, RefreshCw } from 'lucide-vue-next'
+import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, restartMcpServer, getMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
+import { useToast } from '@/composables/useToast'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import { installFromHub } from '@/api/skills'
 import { resolveUserHome } from '@/utils/platform'
@@ -339,6 +340,24 @@ const transportOptions = computed(() => [
 const newServerEndpoint = ref('')
 const addingServer = ref(false)
 const removingServers = ref<Set<string>>(new Set())
+// M3-20260710：单服务器重启（stdio 进程僵死/外部依赖变更后手动拉起）
+const toast = useToast()
+const restartingServers = ref<Set<string>>(new Set())
+async function handleRestartServer(name: string) {
+  if (restartingServers.value.has(name)) return
+  restartingServers.value = new Set(restartingServers.value).add(name)
+  try {
+    await restartMcpServer(name)
+    toast.success(t('mcpManage.restarted', { name }))
+    await loadAll()
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : t('mcpManage.restartFailed'))
+  } finally {
+    const next = new Set(restartingServers.value)
+    next.delete(name)
+    restartingServers.value = next
+  }
+}
 
 // stdio 需要 command；sse/streamable 需要 endpoint —— 与后端校验对齐。
 const addServerValid = computed(() => {
@@ -474,6 +493,17 @@ defineExpose({ openAddServer, switchToMarketplace })
             />
             <Server :size="16" :style="{ color: 'var(--hc-accent)' }" />
             <span class="text-sm font-medium flex-1" :style="{ color: 'var(--hc-text-primary)' }">{{ name }}</span>
+            <button
+              class="p-1.5 rounded-md hover:bg-white/5 transition-colors flex-shrink-0"
+              data-testid="mcp-server-restart"
+              :disabled="restartingServers.has(name)"
+              :style="{ color: 'var(--hc-text-muted)' }"
+              :title="t('mcpManage.restartServer', '重启')"
+              @click="handleRestartServer(name)"
+            >
+              <Loader2 v-if="restartingServers.has(name)" :size="14" class="animate-spin" />
+              <RefreshCw v-else :size="14" />
+            </button>
             <button
               class="p-1.5 rounded-md hover:bg-white/5 transition-colors flex-shrink-0"
               :disabled="removingServers.has(name)"

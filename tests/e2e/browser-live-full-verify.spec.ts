@@ -28,6 +28,20 @@ async function gotoMyAgents(page: Page) {
 test.describe('本轮改动 live 验证', () => {
   test.setTimeout(120_000)
 
+  // AP-197：夹具存在性门——本套依赖 live app + 后端预置的「小明」辅导卡。夹具缺失时
+  // 应 skip（区分「环境没备好」与「真回归」），而非让首个 toBeVisible 假失败。
+  test.beforeAll(async ({ browser }) => {
+    const page = await browser.newPage()
+    try {
+      await gotoMyAgents(page)
+      const card = page.locator('.hc-cxcard', { hasText: EXISTING_CHILD }).first()
+      const present = await card.isVisible({ timeout: 20_000 }).catch(() => false)
+      test.skip(!present, `live 夹具缺失：未找到预置「${EXISTING_CHILD}」辅导卡（需 live app :5173 + sidecar :16060 + 预置 k12-tutor）`)
+    } finally {
+      await page.close()
+    }
+  })
+
   test('#1 z-index：编辑档案年级下拉展开并能点中选项（遮罩不再盖住）', async ({ page }: { page: Page }) => {
     await gotoMyAgents(page)
     const card = page.locator('.hc-cxcard', { hasText: EXISTING_CHILD }).first()

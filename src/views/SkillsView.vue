@@ -206,6 +206,12 @@ async function handlePickFile() {
   if (path) doInstall(path, 'file')
 }
 
+// AP-027：IME 组字回车不触发安装（放行候选确认）；仅真正回车才提交 URL。
+function onUrlInstallEnter(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return
+  handleUrlInstall()
+}
+
 function handleUrlInstall() {
   const url = installUrl.value.trim()
   if (!url) return
@@ -953,7 +959,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
                   color: 'var(--hc-text-primary)',
                 }"
                 :disabled="installing"
-                @keydown.enter="handleUrlInstall"
+                @keydown.enter="onUrlInstallEnter"
               />
               <button
                 class="px-3 py-2 rounded-lg text-sm font-medium text-white flex-shrink-0 transition-opacity hover:opacity-90"

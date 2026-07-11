@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { createPinia } from 'pinia'
 import KnowledgeView from '../KnowledgeView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
@@ -63,6 +64,7 @@ function mountView(props: Record<string, unknown> = {}) {
     props,
     global: {
       plugins: [
+        createPinia(),
         createI18n({
           legacy: false,
           locale: 'zh-CN',
@@ -118,22 +120,63 @@ describe('KnowledgeView #5 — source grouping + pagination', () => {
   })
 
   it('windows the render to one page and reveals more on demand', async () => {
-    getDocuments.mockResolvedValue({
-      documents: Array.from({ length: 60 }, (_, i) => makeDoc(String(i), 'A')),
-      total: 60,
-    })
+    getDocuments
+      .mockResolvedValueOnce({
+        documents: Array.from({ length: 50 }, (_, i) => makeDoc(String(i), 'A')),
+        total: 60,
+        limit: 50,
+        offset: 0,
+        sources: [{ source: 'A', count: 60 }],
+      })
+      .mockResolvedValueOnce({
+        documents: Array.from({ length: 10 }, (_, i) => makeDoc(String(i + 50), 'A')),
+        total: 60,
+        limit: 50,
+        offset: 50,
+        sources: [{ source: 'A', count: 60 }],
+      })
     const w = mountView()
     await flushPromises()
 
+    expect(getDocuments).toHaveBeenNthCalledWith(1, { limit: 50, offset: 0 })
     // First page caps at 50 cards, with a "load more" control.
     expect(cards(w)).toHaveLength(50)
     const more = w.find('[data-testid="knowledge-load-more"]')
     expect(more.exists()).toBe(true)
 
     await more.find('button').trigger('click')
+    await flushPromises()
+    expect(getDocuments).toHaveBeenNthCalledWith(2, { limit: 50, offset: 50 })
     expect(cards(w)).toHaveLength(60)
     // Nothing left to load → control disappears.
     expect(w.find('[data-testid="knowledge-load-more"]').exists()).toBe(false)
+  })
+
+  it('切换 source 时由后端分页过滤，并使用全量 facet 计数', async () => {
+    getDocuments
+      .mockResolvedValueOnce({
+        documents: [makeDoc('a1', 'A'), makeDoc('b1', 'B')],
+        total: 2,
+        limit: 50,
+        offset: 0,
+        sources: [{ source: 'A', count: 1 }, { source: 'B', count: 3 }],
+      })
+      .mockResolvedValueOnce({
+        documents: [makeDoc('b1', 'B'), makeDoc('b2', 'B'), makeDoc('b3', 'B')],
+        total: 3,
+        limit: 50,
+        offset: 0,
+        sources: [{ source: 'A', count: 1 }, { source: 'B', count: 3 }],
+      })
+
+    const w = mountView()
+    await flushPromises()
+    await w.find('[data-testid="kb-source-chip-B"]').trigger('click')
+    await flushPromises()
+
+    expect(getDocuments).toHaveBeenNthCalledWith(2, { source: 'B', limit: 50, offset: 0 })
+    expect(cards(w)).toHaveLength(3)
+    expect(w.find('[data-testid="kb-source-chip-B"]').text()).toContain('3')
   })
 
   it('combines the source filter with the document-search prop (AND)', async () => {

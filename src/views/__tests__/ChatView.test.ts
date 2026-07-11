@@ -151,13 +151,14 @@ vi.mock('vue-router', () => ({
 /**
  * 挂载 ChatView 的辅助函数
  */
-function mountChatView(options?: { setup?: () => void }) {
+function mountChatView(options?: { setup?: () => void; attachTo?: HTMLElement }) {
   const pinia = createPinia()
   setActivePinia(pinia)
   options?.setup?.()
   const i18n = createTestI18n()
 
   return mount(ChatView, {
+    attachTo: options?.attachTo,
     global: {
       plugins: [pinia, i18n],
       stubs: {
@@ -370,6 +371,39 @@ describe('ChatView — E2E 关键路径', () => {
     expect(behaviors).toContain('smooth') // 会话内=平滑
     expect(behaviors).not.toContain('auto') // 会话内不用瞬时
   }, 10000)
+
+  it('searching a message outside the render window expands it before scrolling', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const wrapper = mountChatView({ attachTo: host })
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.messages = Array.from({ length: 70 }, (_, i) => ({
+        id: `history-${i}`,
+        role: 'user' as const,
+        content: `message ${i}`,
+        timestamp: '2026-01-01T00:00:00Z',
+      }))
+      await flushPromises()
+
+      expect(document.getElementById('msg-history-0')).toBeNull()
+      const scrollSpy = Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>
+      scrollSpy.mockClear()
+      const vm = wrapper.vm as unknown as {
+        scrollToMessage: (id: string) => void | Promise<void>
+      }
+
+      await vm.scrollToMessage('history-0')
+      await flushPromises()
+
+      expect(document.getElementById('msg-history-0')).not.toBeNull()
+      expect(scrollSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' })
+    } finally {
+      wrapper.unmount()
+      host.remove()
+    }
+  })
 
   // ────────────────────────────────────────────────────
   // 5. 流式输出中显示 loading 状态

@@ -151,9 +151,29 @@ function uploadViaXhr(
   })
 }
 
-/** 获取知识库文档列表 */
-export function getDocuments() {
-  return apiGet<{ documents: KnowledgeDoc[]; total: number }>('/api/v1/knowledge/documents')
+export interface KnowledgeSourceCount {
+  source: string
+  count: number
+}
+
+export interface KnowledgeDocumentListParams {
+  source?: string
+  limit?: number
+  offset?: number
+}
+
+export interface KnowledgeDocumentListResponse {
+  documents: KnowledgeDoc[]
+  total: number
+  limit?: number
+  offset?: number
+  sources?: KnowledgeSourceCount[]
+}
+
+/** 获取知识库文档列表；普通列表走服务端分页，省略 limit 时保留旧版全量语义。 */
+export function getDocuments(params?: KnowledgeDocumentListParams) {
+  if (!params) return apiGet<KnowledgeDocumentListResponse>('/api/v1/knowledge/documents')
+  return apiGet<KnowledgeDocumentListResponse>('/api/v1/knowledge/documents', { ...params })
 }
 
 /** 获取单个知识文档详情（含正文内容） */
