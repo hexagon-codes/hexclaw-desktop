@@ -1449,14 +1449,6 @@ export default {
   // IM 通道页
   imChannels: {
     bindFailed: '绑定 Agent 失败',
-    chatRoute: {
-      title: '会话路由 · chat_id → 实例',
-      addOpen: '+ 绑定会话',
-      unbind: '解绑',
-      chatIdPlaceholder: '会话 chat_id（私聊/群）',
-      pickAgent: '选择接待智能体',
-      add: '绑定',
-    },
     title: 'IM 通道',
     description: '连接即时通讯平台，随时随地与 AI 对话',
     addChannel: '添加通道',

@@ -1442,14 +1442,6 @@ export default {
 
   imChannels: {
     bindFailed: 'Failed to bind agent',
-    chatRoute: {
-      title: 'Chat routing · chat_id → instance',
-      addOpen: '+ Bind chat',
-      unbind: 'Unbind',
-      chatIdPlaceholder: 'chat_id (DM / group)',
-      pickAgent: 'Pick receptionist agent',
-      add: 'Bind',
-    },
     title: 'IM Channels',
     description: 'Connect instant messaging platforms to chat with AI anywhere',
     addChannel: 'Add Channel',

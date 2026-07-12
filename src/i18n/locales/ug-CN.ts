@@ -1447,14 +1447,6 @@ export default {
 
   imChannels: {
     bindFailed: 'Failed to bind agent', // TODO: verify ug
-    chatRoute: {
-      title: 'سۆھبەت يوللانمىسى · chat_id → ئۈلگە',
-      addOpen: '+ سۆھبەت باغلاش',
-      unbind: 'يېشىش',
-      chatIdPlaceholder: 'chat_id (خۇسۇسىي/گۇرۇپپا)',
-      pickAgent: 'قوبۇل قىلغۇچى Agent نى تاللاڭ',
-      add: 'باغلاش',
-    },
     title: 'IM ئۇلىنىش',
     description: 'دەرھال ئۇچۇرلىشىش سۇپىلىرى ئۇلاش، ھەر يەردە AI بىلەن سۆھبەتلىشىش',
     addChannel: 'ئۇلىنىش قوشۇش',
