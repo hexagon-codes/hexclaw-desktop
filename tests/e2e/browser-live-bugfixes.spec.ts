@@ -68,9 +68,10 @@ async function resolveLiveModel(request: APIRequestContext): Promise<string> {
   }>(request, 'GET', '/api/v1/config/llm')
 
   const provider = cfg.providers?.[PROVIDER_NAME]
-  expect(provider, `后端 LLM 配置应包含 ${PROVIDER_NAME}`).toBeTruthy()
-  expect(provider?.enabled, `${PROVIDER_NAME} provider 不应被禁用`).not.toBe(false)
-  expect((provider?.api_key || '').trim(), `${PROVIDER_NAME} API Key 不能缺失`).not.toBe('')
+  // 环境前置改显式 skip（20260712 套件卫生）：目标引擎没配 ${PROVIDER_NAME} 时这是
+  // 「环境缺前置」不是「产品失败」——skip 带原因，红绿灯报告不再被误染红。
+  test.skip(!provider || provider.enabled === false || !(provider.api_key || '').trim(),
+    `目标引擎未配置可用的 ${PROVIDER_NAME} provider（需 API Key），跳过依赖它的真模型用例`)
 
   const models = provider?.models || []
   if (models.includes(PREFERRED_MODEL)) return PREFERRED_MODEL

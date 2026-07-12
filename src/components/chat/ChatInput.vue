@@ -52,7 +52,8 @@ const DEFAULT_VIDEO_WITH_AUDIO = true
 const { t } = useI18n()
 const voiceToast = useToast()
 // ③ STT 错误不再静默吞掉（麦克风拒权/转写失败）——浮出 toast，避免"点了没反应"。
-const { isListening, transcript, isSupported: voiceSupported, toggleListening, error: voiceError } = useVoice()
+// isSupported 不再用于隐藏麦克风（BUG-20260711-E：按钮常驻对齐原型，不可用时点击走 error→toast）
+const { isListening, transcript, toggleListening, error: voiceError } = useVoice()
 watch(voiceError, (msg) => { if (msg) voiceToast.error(msg) })
 
 // 语音识别结果 -> 输入框
@@ -100,6 +101,9 @@ const emit = defineEmits<{
   send: [text: string, files: File[]]
   stop: []
   createTemplate: []
+  /** 乐观上屏信号（BUG-20260711-C）：发送即发出，父级据此立刻渲染用户气泡+「生成中」占位；
+   *  生成完成后 generated:image/video 原位替换占位，失败走 generation:error 置失败态。 */
+  'generation:start': [kind: 'image' | 'video', prompt: string]
   'generated:image': [result: ImageGenResult, prompt: string]
   'generated:video': [status: VideoTaskStatus, prompt: string]
   'generation:error': [message: string]
@@ -290,6 +294,10 @@ async function handleSend() {
   if (composerMode.value === 'image_generate') {
     if (!text || !props.genModelId) return
     generating.value = true
+    // 乐观上屏（BUG-20260711-C）：先通知父级渲染用户气泡+生成中占位、立刻清空输入框，
+    // 不让提示词滞留 composer 干等生成完成。
+    emit('generation:start', 'image', text)
+    clearDraft()
     try {
       const result = await generateImage({
         model: props.genModelId,
@@ -298,7 +306,6 @@ async function handleSend() {
         n: DEFAULT_IMAGE_COUNT,
       })
       emit('generated:image', result, text)
-      clearDraft()
     } catch (e) {
       const msg = e instanceof Error ? e.message : t('chat.generate.failedDefault', '生成失败')
       logger.error('[ChatInput] image generate failed', e)
@@ -314,6 +321,9 @@ async function handleSend() {
     if (!text || !props.genModelId) return
     generating.value = true
     videoAbort = new AbortController()
+    // 乐观上屏（BUG-20260711-C）：视频生成要轮询数分钟，占位/清空必须在 submit 前完成。
+    emit('generation:start', 'video', text)
+    clearDraft()
     try {
       const { task_id } = await submitVideoGeneration({
         model: props.genModelId,
@@ -325,7 +335,6 @@ async function handleSend() {
       const final = await pollUntilDone(task_id, { signal: videoAbort.signal })
       if (final.status === 'success' && videoToSrc(final)) {
         emit('generated:video', final, text)
-        clearDraft()
       } else {
         emit('generation:error', final.error || t('chat.generate.failedDefault', '生成失败'))
       }
@@ -793,8 +802,10 @@ defineExpose({ focus, setInput, triggerFileUpload })
           >
             <Sparkles :size="18" />
           </button>
+          <!-- 麦克风常驻（BUG-20260711-E 对齐原型 composer 固定动作行 app.html:1261-1264）：
+               通道不可用时不整颗消失——点击由 useVoice 置 error → toast 提示（不再 v-if 隐藏，
+               WKWebView 检测不到 STT 通道曾导致按钮凭空少一颗、与原型漂移）。 -->
           <button
-            v-if="voiceSupported"
             class="hc-composer__tool"
             :class="{ 'hc-composer__tool--recording': isListening }"
             :title="isListening ? t('chat.voiceStop') : t('chat.voiceStart')"
@@ -803,8 +814,8 @@ defineExpose({ focus, setInput, triggerFileUpload })
           >
             <Mic :size="18" />
           </button>
-          <!-- 场景输入行动作锚点：场景包（如 K12 拍照识题）Teleport 一个输入行按钮到此,与 +/技能/prompt/麦
-               同排；ChatInput 本身零场景知识（BUG-20260708 对齐原型 composer 相机入口）。 -->
+          <!-- 场景输入行动作锚点：场景包扩展位（ChatInput 零场景知识）。K12 手动识题按钮已删
+               （BUG-20260711-E：识题=图片自动改道，原型「零手动按钮」），锚点保留给后续场景。 -->
           <span id="hc-chat-scenario-composer-actions" class="hc-composer__scenario-actions" />
         </div>
         <!-- 右：模型 · 模式（slot）· 发送 -->
@@ -951,25 +962,31 @@ defineExpose({ focus, setInput, triggerFileUpload })
   border-bottom: 0.5px solid rgba(0, 0, 0, 0.08);
 }
 
-/* 已挂载技能 chip */
+/* Composer 盒内首行 chips（预设能力 / 已挂载技能 / @ 召唤上下文）——统一对齐原型
+ * `.composer-chips`（app.html:817）：仅 margin-bottom 拉开与输入行的间距，无自身 padding，
+ * chip 左缘落在盒 padding-left（= placeholder 左缘），三者同一垂直基线。
+ * 旧实现 padding-bottom:8px + margin-bottom:6px 叠出 14px 空档（原型仅 8px），
+ * 与输入行间距偏大——收回单一 margin-bottom:8px 对齐原型。 */
 .hc-composer__skills {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding-bottom: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
+/* chip 胶囊——对齐原型 `.composer-chip`（app.html:818）：全圆角药丸、中性 input 底、
+ * 次级文字色、0.5px 细描边。旧实现漂成 14px 圆角矩形 + bg-active(2× 蓝) + 主文字色 + 1px 边，
+ * 视觉过重、与原型不一致。 */
 .hc-composer__skill-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 6px 3px 7px;
-  border-radius: 14px;
-  background: var(--hc-bg-active);
-  border: 1px solid var(--hc-border);
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--hc-bg-input);
+  border: 0.5px solid var(--hc-border);
   font-size: 12px;
-  color: var(--hc-text-primary);
+  color: var(--hc-text-secondary);
   animation: fadeScaleIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 

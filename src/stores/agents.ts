@@ -42,6 +42,21 @@ export const useAgentsStore = defineStore('agents', () => {
     return registeredAgents.value.find((a) => a.name === name)
   }
 
+  /**
+   * 按**内部名或显示名**查找 Agent（BUG-20260712 #A）。
+   * 会话标题被 session-title-heal 自愈成 display_name 后，「据标题反查 agent」的兜底若只按内部名
+   * 匹配（findAgent）必然失败 → agentRole 不恢复 → 从「会话」列表打开 K12 会话不显示辅导 UI。
+   * 优先精确内部名，退而按显示名——让标题反查在自愈前/后都可靠。
+   */
+  function findAgentByNameOrDisplay(nameOrDisplay: string): AgentConfig | undefined {
+    const q = nameOrDisplay.trim()
+    if (!q) return undefined
+    return (
+      registeredAgents.value.find((a) => a.name === q) ??
+      registeredAgents.value.find((a) => (a.display_name ?? '').trim() === q)
+    )
+  }
+
   /** @ 召唤面板的 Agent 数据源（BUG-20260703 问题2）：与「我的智能体」同源——
    * registeredAgents（已经 userVisibleAgents 过滤）映射为 MentionPopup 形状。
    * 此前误用内置角色工厂 roles，把用户根本没有的模板 Agent 全列进 @ 面板。 */
@@ -64,5 +79,6 @@ export const useAgentsStore = defineStore('agents', () => {
     loadRoles,
     loadAgents,
     findAgent,
+    findAgentByNameOrDisplay,
   }
 })

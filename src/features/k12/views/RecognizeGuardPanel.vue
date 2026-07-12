@@ -15,7 +15,8 @@ import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import PrepCardPanel from './PrepCardPanel.vue'
-import type { RecognizedQuestion } from '@/api/k12'
+import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
+import type { RecognizedQuestion, BBox } from '@/api/k12'
 import type { VerifyResult } from '@/contracts'
 
 // 审计单-High-2（bug-20260709）：本组件全部 API 调用的 agent = agents.name（后端隔离键），
@@ -23,6 +24,9 @@ import type { VerifyResult } from '@/contracts'
 // initialImage（BUG-20260709 拍照发题不解题）：composer 粘贴/上传改道进来的图片 dataURL，
 // 传入即预填并自动识题（原型契约「粘贴作业照片即自动 OCR 回显护栏」），家长零多余点击。
 const props = defineProps<{ agentId: string; grade?: string; initialImage?: string }>()
+// close：面板自动打开（图片改道）后由头部 ✕ 收起——手动 toggle 已删（BUG-20260711-E），
+// 收起手段必须内聚在面板自身。
+const emit = defineEmits<{ (e: 'close'): void }>()
 
 const { t } = useI18n()
 const store = useK12Store()
@@ -34,15 +38,24 @@ interface GuardRow {
   editing: boolean
   studentAnswer: string
   grading: boolean
+  solving: boolean
   verify: VerifyResult | null
   recorded: boolean
   recordDeduplicated: boolean
   solution: string
   wrongStep: string
   errorCause: string
+  // 原图批改 Phase 1：识题回收的学生作答区域归一化边界框（缺失/非法=null → 该题降级纯文字批改，不叠加）。
+  bbox: BBox | null
+  // graded=true 表示本题走了「批改」（已答卷路径），供原图叠加只画已批改题的 ✓/✗；solve（空白题求解）不叠加。
+  graded: boolean
+  // correct 存后端批改结论（agree=对），叠加层据此画 ✓（绿）/✗（红）。
+  correct: boolean
 }
 
 const imageB64 = ref('')
+// BUG-20260712：选了文件/贴了图片 data URL 时显示缩略图预览，不再把 base64 原文糊在框里（UX 糙）。
+const isImageData = computed(() => imageB64.value.trim().startsWith('data:image'))
 const rows = ref<GuardRow[]>([])
 const recognizing = ref(false)
 const errMsg = ref('')
@@ -66,6 +79,22 @@ const allKnowledgePoints = computed(() => {
   for (const r of rows.value) for (const kp of r.knowledgePoints) if (!seen.has(kp)) { seen.add(kp); out.push(kp) }
   return out
 })
+
+// 原图批改叠加（Phase 1）：批改完成后，把已批改题的对/错 + bbox 投给 PhotoGradeOverlay。
+// bbox 合理性由叠加组件自己兜底（缺失/非法 → 降级文字批改，不错位），此处只喂数据不做几何判断。
+const overlayMarks = computed(() =>
+  rows.value
+    .filter((r) => r.graded && r.verify)
+    .map((r) => ({
+      correct: r.correct,
+      bbox: r.bbox,
+      question: r.problem,
+      correctAnswer: r.solution,
+      errorCause: r.errorCause,
+    })),
+)
+// 仅在有作业原图（data URL）且至少一题已批改时展示叠加图。
+const showOverlay = computed(() => isImageData.value && overlayMarks.value.length > 0)
 
 function onFile(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
@@ -103,20 +132,28 @@ async function run() {
   confirmed.value = false
   coldStartResult.value = null
   try {
-    const questions = await store.recognize(imageB64.value.trim())
+    const { questions, subject } = await store.recognize(imageB64.value.trim())
     if (generation !== agentGeneration) return
+    // Polish-2：识题自动判定整卷学科 → 预填学科下拉，家长不必手选（仍可手动覆盖）。
+    // 仅识题判出学科时预填；一科都判不出则保持空，此时 solve/批改按钮仍 gate 空学科需家长手选。
+    if (subject) selectedSubject.value = subject
     rows.value = questions.map((q: RecognizedQuestion) => ({
       problem: q.question,
       knowledgePoints: q.knowledge_points ?? [],
       editing: false,
-      studentAnswer: '',
+      // 预填识题回收的孩子作答（空白题=空串），家长可核对/修改；空=空白题走「求解」。
+      studentAnswer: q.student_answer ?? '',
       grading: false,
+      solving: false,
       verify: null,
       recorded: false,
       recordDeduplicated: false,
       solution: '',
       wrongStep: '',
       errorCause: '',
+      bbox: q.bbox ?? null,
+      graded: false,
+      correct: false,
     }))
   } catch (e) {
     if (generation !== agentGeneration) return
@@ -158,10 +195,44 @@ async function gradeRow(i: number) {
     row.solution = res.solution
     row.wrongStep = res.wrongStep ?? ''
     row.errorCause = res.errorCause ?? ''
+    // 已答卷路径：标记为已批改并记录对/错，供原图叠加画 ✓/✗（bbox 缺失时降级文字批改）。
+    row.graded = true
+    row.correct = res.correct
   } catch (e) {
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     row.grading = false
+  }
+}
+
+// 空白/未作答题「求解·怎么讲」：走 /solve 端点（不要求填答案），给完整解法与验算徽章，
+// 不批改、不入错题本。单一真相源分叉的前端落地——空白题不再被迫填答案或触发批改 502。
+async function solveRow(i: number) {
+  const row = rows.value[i]
+  if (!row || !row.problem.trim() || row.solving || row.grading) return
+  row.solving = true
+  errMsg.value = ''
+  try {
+    const res = await store.solve({
+      agent: props.agentId,
+      subject: selectedSubject.value,
+      grade: props.grade ?? '',
+      problem: row.problem.trim(),
+      knowledge_points: row.knowledgePoints,
+    })
+    row.verify = res.verify
+    row.solution = res.solution
+    // 解题分叉：无批改结论、不入库、不参与原图叠加（叠加只标已批改的已答题）。
+    row.wrongStep = ''
+    row.errorCause = ''
+    row.recorded = false
+    row.recordDeduplicated = false
+    row.graded = false
+    row.correct = false
+  } catch (e) {
+    errMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    row.solving = false
   }
 }
 
@@ -187,6 +258,12 @@ async function coldStart() {
   <div class="rec-panel" data-testid="recognize-guard">
     <div class="rec-panel__head">
       <span class="rec-panel__title">📷 {{ t('k12.recognize.title') }}</span>
+      <button
+        class="rec-panel__x"
+        data-testid="recognize-close"
+        :aria-label="t('common.close', '关闭')"
+        @click="emit('close')"
+      >✕</button>
     </div>
     <p class="rec-panel__intro">{{ t('k12.recognize.intro') }}</p>
 
@@ -195,7 +272,16 @@ async function coldStart() {
       <input type="file" accept="image/*" data-testid="recognize-file" @change="onFile" />
       <span>{{ t('k12.recognize.pickImage') }}</span>
     </label>
+    <!-- 选了图片 → 显示缩略图预览（不糊 base64 原文）；textarea 用 v-show 保留在 DOM 供粘贴回退。 -->
+    <img
+      v-if="isImageData"
+      :src="imageB64"
+      class="rec-panel__preview"
+      data-testid="recognize-preview"
+      alt="作业照片预览"
+    />
     <textarea
+      v-show="!isImageData"
       v-model="imageB64"
       class="rec-panel__b64"
       data-testid="recognize-b64"
@@ -293,15 +379,27 @@ async function coldStart() {
             :data-testid="`rq-answer-${i}`"
             :placeholder="t('k12.recognize.answerPlaceholder')"
           />
+          <!-- 空白题：走「求解·怎么讲」（不要求填答案）；已答题：批改按钮亮起。 -->
+          <button
+            class="rec-row__solvebtn"
+            :data-testid="`rq-solve-${i}`"
+            :disabled="!row.problem.trim() || !selectedSubject || row.solving || row.grading"
+            @click="solveRow(i)"
+          >
+            {{ row.solving ? t('k12.recognize.solving') : t('k12.recognize.solve') }}
+          </button>
           <button
             class="rec-row__gradebtn"
             :data-testid="`rq-grade-${i}`"
-            :disabled="!row.problem.trim() || !selectedSubject || row.grading"
+            :disabled="!row.problem.trim() || !selectedSubject || !row.studentAnswer.trim() || row.grading || row.solving"
             @click="gradeRow(i)"
           >
             {{ row.grading ? t('k12.recognize.grading') : t('k12.recognize.grade') }}
           </button>
         </div>
+        <p v-if="confirmed && !row.studentAnswer.trim()" class="rec-row__blankhint" :data-testid="`rq-blank-hint-${i}`">
+          {{ t('k12.recognize.blankHint') }}
+        </p>
       </div>
       <button
         v-if="!confirmed"
@@ -314,6 +412,13 @@ async function coldStart() {
       </button>
     </div>
     <p v-else-if="!recognizing" class="rec-panel__empty">{{ t('k12.recognize.empty') }}</p>
+
+    <!-- 原图批改叠加（Phase 1）：已批改题在作业原图上确定性画 ✓/✗（bbox 缺失/非法则降级文字批改）。 -->
+    <PhotoGradeOverlay
+      v-if="showOverlay"
+      :image="imageB64"
+      :marks="overlayMarks"
+    />
 
     <!-- 整体确认后才内联辅导要点：避免 OCR 尚未核对就把误识知识点送入备课链。 -->
     <PrepCardPanel
@@ -329,6 +434,11 @@ async function coldStart() {
 .rec-panel { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
 .rec-panel__head { display: flex; align-items: center; }
 .rec-panel__title { font-size: 13px; font-weight: 700; flex: 1; }
+.rec-panel__x {
+  border: none; background: transparent; color: var(--hc-text-muted); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 4px 6px; border-radius: 6px; flex-shrink: 0;
+}
+.rec-panel__x:hover { background: var(--hc-bg-hover); color: var(--hc-text-primary); }
 .rec-panel__intro { font-size: 12px; color: var(--hc-text-muted); line-height: 1.5; margin: 0; }
 .rec-panel__file {
   display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer;
@@ -340,6 +450,11 @@ async function coldStart() {
   width: 100%; box-sizing: border-box; font-size: 11px; padding: 6px 8px; resize: vertical;
   border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
   background: var(--hc-bg-input); color: var(--hc-text-muted);
+}
+/* BUG-20260712：作业照片缩略图预览（替代把 base64 原文糊在框里）。 */
+.rec-panel__preview {
+  max-width: 100%; max-height: 180px; object-fit: contain; border-radius: var(--hc-radius-md);
+  border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); align-self: flex-start;
 }
 .rec-panel__run {
   font-size: 12.5px; padding: 8px; border: 0.5px solid var(--hc-border-hl); border-radius: var(--hc-radius-md);

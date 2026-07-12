@@ -238,8 +238,10 @@ describe('BUG-20260711：role 深链会话标题快照 display_name（治本）'
     // 核心断言：createSession 落库标题 = 可读显示名（agent 删除后列表仍是「小明的辅导老师」）
     const calls = (createSession as unknown as Mock).mock.calls
     expect(calls.length, '前置：走了新建会话').toBeGreaterThan(0)
-    expect(calls[0][1]).toBe(K12_DISPLAY)
-    expect(calls[0][1]).not.toBe(K12_AGENT)
+    const firstCall = calls[0]
+    if (!firstCall) throw new Error('前置：createSession 首次调用缺失')
+    expect(firstCall[1]).toBe(K12_DISPLAY)
+    expect(firstCall[1]).not.toBe(K12_AGENT)
   })
 
   it('存量旧会话（标题 = 内部名）深链进入时复用，不重复建会话', async () => {

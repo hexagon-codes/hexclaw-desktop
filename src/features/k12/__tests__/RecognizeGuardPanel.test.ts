@@ -14,11 +14,13 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 const h = vi.hoisted(() => ({
   recognizeSpy: vi.fn(),
   gradeSpy: vi.fn(),
+  solveSpy: vi.fn(),
   coldStartSpy: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
   k12Recognize: (b: unknown) => h.recognizeSpy(b),
   k12Grade: (r: unknown) => h.gradeSpy(r),
+  k12Solve: (r: unknown) => h.solveSpy(r),
   k12ColdStart: (r: unknown) => h.coldStartSpy(r),
   k12TutorTurn: vi.fn(),
   k12BindIM: vi.fn().mockResolvedValue({}),
@@ -67,6 +69,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     setActivePinia(createPinia())
     h.recognizeSpy.mockReset()
     h.gradeSpy.mockReset()
+    h.solveSpy.mockReset()
     h.coldStartSpy.mockReset()
   })
 
@@ -169,6 +172,8 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(subjectSelect.exists(), '拍题批改前必须让家长明确选择学科').toBe(true)
     await chooseSubject(w, '语文')
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    // 批改需有孩子作答（空白题走「求解」而非批改）——填上作答再批改。
+    await w.find('[data-testid="rq-answer-0"]').setValue('疑是地上霜')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
 
@@ -177,6 +182,58 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
       subject: '语文',
       problem: '“床前明月光”的下一句',
     }))
+  })
+
+  it('Polish-2 识题自动判定学科：整卷 subject 预填学科下拉，solve/批改按钮不再 gate 空学科', async () => {
+    h.recognizeSpy.mockResolvedValue({
+      questions: [
+        { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
+        { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
+      ],
+      subject: '数学', // 识题整卷学科自动判定
+    })
+    h.gradeSpy.mockResolvedValue({
+      solution: '11.4', verdict: 'agree', evidence_type: 'numeric_exec',
+      badge: 'verified-strong', correct: true, out_of_scope: false, record_created: true, record_id: 'r1',
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+
+    // 学科下拉被识题结果自动预填（家长零手选）
+    expect(w.findComponent(HcSelect).props('modelValue')).toBe('数学')
+
+    // 未经 chooseSubject 手选，直接确认 → 按钮不因「未选学科」而禁用
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
+    // 空白题：solve 按钮可用（不再 gate 空学科）
+    expect(w.find('[data-testid="rq-solve-0"]').attributes('disabled')).toBeUndefined()
+    // 已答题：填作答后批改按钮可用
+    await w.find('[data-testid="rq-answer-0"]').setValue('11.4')
+    expect(w.find('[data-testid="rq-grade-0"]').attributes('disabled')).toBeUndefined()
+
+    // 批改契约携带自动判定的学科
+    await w.find('[data-testid="rq-grade-0"]').trigger('click')
+    await flushPromises()
+    expect(h.gradeSpy).toHaveBeenCalledWith(expect.objectContaining({ subject: '数学' }))
+  })
+
+  it('Polish-2 识题判不出学科：subject 为空则不预填，按钮仍 gate 空学科需家长手选', async () => {
+    h.recognizeSpy.mockResolvedValue({
+      questions: [{ question: '看图说话', knowledge_points: ['观察'] }],
+      subject: '', // 一科都判不出
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+
+    expect(w.findComponent(HcSelect).props('modelValue')).toBe('')
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
+    // 未判出学科 → solve 按钮仍禁用，直到家长手选
+    expect(w.find('[data-testid="rq-solve-0"]').attributes('disabled')).toBeDefined()
   })
 
   it('#2 批改：渲染验算徽章', async () => {
@@ -260,5 +317,86 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(req.knowledge_points).toEqual(['小数乘法', '乘法结合律'])
     // 回显推断年级
     expect(w.find('[data-testid="coldstart-result"]').text()).toContain('五年级上')
+  })
+
+  // ── 空白 vs 已答（单一真相源治本，前端落地）───────────────────────
+  it('识题回收作答预填：已答题预填 student_answer，空白题留空', async () => {
+    h.recognizeSpy.mockResolvedValue({
+      questions: [
+        { question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' },
+        { question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' },
+      ],
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+    await chooseSubject(w)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
+
+    expect((w.find('[data-testid="rq-answer-0"]').element as HTMLInputElement).value).toBe('10.4')
+    expect((w.find('[data-testid="rq-answer-1"]').element as HTMLInputElement).value).toBe('')
+  })
+
+  it('空白题走「求解」端点（不填答案、不触发批改）', async () => {
+    h.recognizeSpy.mockResolvedValue({
+      questions: [{ question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' }],
+    })
+    h.solveSpy.mockResolvedValue({
+      solution: '解：x=14', verdict: 'agree', evidence_type: 'numeric_exec',
+      badge: 'verified-strong', out_of_scope: false,
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+    await chooseSubject(w)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
+
+    // 空白题：批改按钮禁用（无作答），求解按钮可点。
+    expect((w.find('[data-testid="rq-grade-0"]').element as HTMLButtonElement).disabled).toBe(true)
+    expect(w.find('[data-testid="rq-blank-hint-0"]').exists()).toBe(true)
+
+    await w.find('[data-testid="rq-solve-0"]').trigger('click')
+    await flushPromises()
+
+    expect(h.solveSpy).toHaveBeenCalledTimes(1)
+    expect(h.gradeSpy).not.toHaveBeenCalled()
+    const req = h.solveSpy.mock.calls[0]![0]
+    expect(req.agent).toBe('mingming')
+    expect(req.problem).toBe('2x+15=43')
+    expect(req.grade).toBe('五年级上')
+    expect((req as { student_answer?: unknown }).student_answer).toBeUndefined()
+    // 渲染解法 + 验算徽章，不显入本
+    expect(w.find('[data-testid="rq-grade-details-0"]').text()).toContain('解：x=14')
+    expect(w.find('.verify-badge').exists()).toBe(true)
+  })
+
+  it('已答题：填了作答 → 批改按钮可点，走 grade 而非 solve', async () => {
+    h.recognizeSpy.mockResolvedValue({
+      questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' }],
+    })
+    h.gradeSpy.mockResolvedValue({
+      solution: '11.4', verdict: 'disagree', evidence_type: 'numeric_exec',
+      badge: 'disagree', correct: false, wrong_step: '错位', error_cause: '对位错误',
+      out_of_scope: false, record_created: true, record_id: 'r1',
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+    await chooseSubject(w)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
+
+    expect((w.find('[data-testid="rq-grade-0"]').element as HTMLButtonElement).disabled).toBe(false)
+    await w.find('[data-testid="rq-grade-0"]').trigger('click')
+    await flushPromises()
+
+    expect(h.gradeSpy).toHaveBeenCalledTimes(1)
+    expect(h.solveSpy).not.toHaveBeenCalled()
+    expect(h.gradeSpy.mock.calls[0]![0].student_answer).toBe('10.4')
   })
 })

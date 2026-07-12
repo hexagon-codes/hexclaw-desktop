@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown, Volume2, Square, GitBranch } from 'lucide-vue-next'
+import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown, Volume2, Square, GitBranch, Trash2 } from 'lucide-vue-next'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setClipboard } from '@/api/desktop'
@@ -104,6 +104,10 @@ async function toggleSpeak() {
       <button class="hc-msg-actions__btn" :title="t('chat.forkFromHere', '由此分叉')" data-testid="message-fork" @click="emit('fork')">
         <GitBranch :size="13" />
       </button>
+      <!-- 单条消息删除：原本只藏在右键菜单里(发现性差)，这里给悬浮工具条也加一个显式入口 -->
+      <button class="hc-msg-actions__btn hc-msg-actions__btn--danger" :title="t('chat.deleteMessage')" :aria-label="t('chat.deleteMessage')" data-testid="message-delete" @click="emit('delete')">
+        <Trash2 :size="13" />
+      </button>
     </template>
 
     <template v-else>
@@ -113,6 +117,9 @@ async function toggleSpeak() {
       </button>
       <button class="hc-msg-actions__btn" :title="t('chat.editMessage')" @click="emit('edit')">
         <Pencil :size="13" />
+      </button>
+      <button class="hc-msg-actions__btn hc-msg-actions__btn--danger" :title="t('chat.deleteMessage')" :aria-label="t('chat.deleteMessage')" data-testid="message-delete" @click="emit('delete')">
+        <Trash2 :size="13" />
       </button>
     </template>
   </div>
@@ -164,6 +171,11 @@ async function toggleSpeak() {
 }
 
 .hc-msg-actions__btn--copied { color: #34C759 !important; }
+
+.hc-msg-actions__btn--danger:hover {
+  background: rgba(255, 59, 48, 0.1);
+  color: var(--hc-error, #FF3B30);
+}
 
 .hc-msg-actions__btn--speaking {
   color: var(--hc-accent, #007AFF);

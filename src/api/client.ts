@@ -69,6 +69,8 @@ export function apiGet<T>(url: string, query?: Record<string, unknown>) {
 export interface ApiPostOptions {
   /** 覆盖 env.timeout 默认值，单位 ms */
   timeout?: number
+  /** 可取消：调用方 AbortController.signal，用于用户主动取消慢操作（如再练出题·BUG-20260712）。 */
+  signal?: AbortSignal
 }
 
 /** POST 请求 */
@@ -89,6 +91,7 @@ export function apiPost<T>(
   const opts: Record<string, unknown> = { method: 'POST' }
   if (body) opts.body = body as Record<string, unknown>
   if (options?.timeout && options.timeout > 0) opts.timeout = options.timeout
+  if (options?.signal) opts.signal = options.signal // 透传取消信号（ofetch 支持）
   return withNormalizedError(api<T>(url, opts))
 }
 

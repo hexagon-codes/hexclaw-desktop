@@ -349,3 +349,19 @@ export function reindexDocument(id: string) {
     throw normalizeKnowledgeEndpointError(error)
   })
 }
+
+// ── 嵌入接线状态（BUG-20260712-B1 嵌入开箱保证）─────────────────────────────
+// ready=false 时会话自动注入休眠（fail-closed）；local+未装 → 前端一键 pull `model` 激活。
+export interface KnowledgeEmbeddingStatus {
+  enabled: boolean
+  configured: boolean
+  provider?: string
+  model?: string
+  local: boolean
+  ready: boolean
+  pulling: boolean // 首启静默安装进行中（三态机制：此态前端零打扰仅轮询）
+}
+
+export function getKnowledgeEmbeddingStatus() {
+  return apiGet<KnowledgeEmbeddingStatus>('/api/v1/knowledge/embedding-status')
+}

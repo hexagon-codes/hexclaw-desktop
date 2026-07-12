@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import type { Artifact, ChatMessage, ChatSession } from '@/types'
 import type { LoggerModule, MessageServiceModule } from './chat-session-types'
-import { upsertSession } from './chat-session-helpers'
+import { mergeMessagesById, upsertSession } from './chat-session-helpers'
 import { pruneSessionModels } from './session-model-binding'
 import { getSessionAgent, pruneSessionAgents } from './session-agent-binding'
 
@@ -50,8 +50,17 @@ export function createChatSessionLoadingController(params: {
     extractArtifacts,
   } = params
 
+  // 按会话缓存内存中的消息快照（BUG-20260712 #F）：切走会话时存下其当前消息（含乐观/在途、
+  // 后端尚未落库的），切回时与后端历史按 id 合并，避免盲目覆盖抹掉刚发的消息。
+  const sessionMessageCache = new Map<string, ChatMessage[]>()
+
   async function selectSession(sessionId: string) {
     const selectionGen = ++sessionSelectionGen.value
+    // 切走前先把「当前会话」的内存消息快照存入缓存（含尚未落库的乐观消息）。
+    const prevId = currentSessionId.value
+    if (prevId && prevId !== sessionId) {
+      sessionMessageCache.set(prevId, messages.value.slice())
+    }
     // 会话级 Agent 绑定恢复（BUG-20260708）：切走再切回不再丢失该会话的辅导老师人设 / 场景增强。
     // 无绑定（普通会话）→ agentRole 空、chat 模式，与旧行为一致；有绑定 → agent 模式 + 恢复收件人。
     const boundAgent = getSessionAgent(sessionId)
@@ -68,11 +77,13 @@ export function createChatSessionLoadingController(params: {
     try {
       const nextMessages = await msgSvc.loadMessages(sessionId)
       if (selectionGen !== sessionSelectionGen.value) return
-      messages.value = nextMessages
+      // 后端历史 ∪ 本地快照（后端权威 + 保留后端尚无的乐观/在途消息），不盲目覆盖（#F）。
+      messages.value = mergeMessagesById(nextMessages, sessionMessageCache.get(sessionId) ?? [])
     } catch (errorValue) {
       if (selectionGen !== sessionSelectionGen.value) return
       logger.warn('加载消息历史失败', errorValue)
-      messages.value = []
+      // 加载失败也不清空：回退到本地缓存快照，避免刚发的消息因一次网络抖动消失。
+      messages.value = sessionMessageCache.get(sessionId) ?? []
     }
     try {
       const persisted = await msgSvc.loadArtifacts(sessionId)

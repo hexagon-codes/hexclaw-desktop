@@ -5,6 +5,9 @@
  * PDF = 浏览器打印对话框另存；Word = HTML 内容 .doc（Word 可直接打开，无需额外依赖，砍 CSV/JSON）。
  */
 import type { RecordItem } from '@/contracts'
+import { isTauri } from '@/utils/platform'
+import { downloadInApp } from '@/utils/download'
+import { renderDocument } from '@/api/k12'
 
 export interface WorksheetMeta {
   childName: string
@@ -57,9 +60,16 @@ export function buildWorksheetHtml(items: RecordItem[], meta: WorksheetMeta): st
 }
 
 /** 通过隐藏 iframe 打印（PDF = 打印对话框另存为 PDF）。返回是否成功发起。 */
-export function printWorksheet(items: RecordItem[], meta: WorksheetMeta): boolean {
+export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
   if (typeof document === 'undefined') return false
   const html = buildWorksheetHtml(items, meta)
+  // BUG-E：Tauri macOS WKWebView 里 iframe `window.print()` 是 no-op（同 BUG-20260712-#6 `<a download>` 失效）。
+  // 桌面端把 HTML 经原生 Save 对话框 + Rust 写盘存成文件，用户用系统预览/浏览器打开后打印。
+  if (isTauri()) {
+    const b64 = btoa(unescape(encodeURIComponent(html))) // UTF-8 安全 base64（中文题干）
+    await downloadInApp(`data:text/html;base64,${b64}`, `${meta.title}.html`)
+    return true
+  }
   const iframe = document.createElement('iframe')
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
   document.body.appendChild(iframe)
@@ -122,8 +132,16 @@ export function prepCardToText(card: PrepCard, meta: { title: string; gradeLabel
 }
 
 /** 打印备课卡（隐藏 iframe 打印，同 printWorksheet）。返回是否成功发起。 */
-export function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel: string }): boolean {
+export async function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel: string }): Promise<boolean> {
   if (typeof document === 'undefined') return false
+  // BUG-E：Tauri macOS WKWebView 里 iframe `window.print()` 是 no-op（同 printWorksheet）。
+  // 桌面端把 HTML 经原生 Save 对话框 + Rust 写盘存成文件，用户用系统预览/浏览器打开后打印。
+  if (isTauri()) {
+    const html = buildPrepCardHtml(card, meta)
+    const b64 = btoa(unescape(encodeURIComponent(html))) // UTF-8 安全 base64（中文内容）
+    await downloadInApp(`data:text/html;base64,${b64}`, `${meta.title}.html`)
+    return true
+  }
   const iframe = document.createElement('iframe')
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
   document.body.appendChild(iframe)
@@ -143,7 +161,14 @@ export function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel:
 }
 
 /** 触发浏览器下载一个文件 */
-export function download(filename: string, content: string, mime: string): void {
+export async function download(filename: string, content: string, mime: string): Promise<void> {
+  // BUG-20260712-#6：Tauri WKWebView 里 `<a download>` / blob URL 不触发下载（点了没反应）。
+  // 桌面端走原生 Save 对话框 + Rust 写盘（downloadInApp）；浏览器/dev 保留 blob 下载。
+  if (isTauri()) {
+    const b64 = btoa(unescape(encodeURIComponent(content))) // UTF-8 安全 base64（中文内容）
+    await downloadInApp(`data:${mime};base64,${b64}`, filename)
+    return
+  }
   const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -161,13 +186,52 @@ export function worksheetFilename(childName: string, kind: string, from: string,
 }
 
 /** 导出 Word（.doc）：HTML 内容，Word 可直接打开（无需 docx 依赖） */
-export function exportWord(items: RecordItem[], meta: WorksheetMeta, filename: string): void {
+export async function exportWord(items: RecordItem[], meta: WorksheetMeta, filename: string): Promise<void> {
   const html = buildWorksheetHtml(items, meta)
   // Word 识别带 MS Office 命名空间的 HTML；application/msword + .doc 后缀即可
-  download(filename, html, 'application/msword')
+  await download(filename, html, 'application/msword')
 }
 
-/** 导出 PDF：走打印对话框另存（WKWebView / 浏览器均支持打印为 PDF） */
-export function exportPdf(items: RecordItem[], meta: WorksheetMeta): boolean {
+/** 从错题记录生成错题卷 Markdown（供后端 pandoc 渲染真 PDF；pandoc 读 markdown，不认 raw HTML）。 */
+export function buildWorksheetMarkdown(items: RecordItem[], meta: WorksheetMeta): string {
+  const lines: string[] = [`# ${meta.title}`, '', `${meta.childName} · ${meta.dateLabel}`, '']
+  if (items.length === 0) {
+    lines.push('（暂无错题）')
+  } else {
+    items.forEach((it, i) => {
+      const q = String(it.fields.question ?? '')
+      const kp = String(it.fields.knowledge_point ?? '').replace(/[·・]\s*$/, '').trim()
+      lines.push(`${i + 1}. ${q}${kp ? `  【${kp}】` : ''}`)
+      lines.push('') // 作答留白（pandoc/typst 段间距）
+    })
+  }
+  return lines.join('\n')
+}
+
+/** Blob → base64（分块避免 String.fromCharCode 参数过多；供 downloadInApp 的 data: URL 用）。 */
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let bin = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(bin)
+}
+
+/**
+ * 导出 PDF。
+ * 项-7 治本：Tauri（桌面 WKWebView）下 iframe 打印失效——把错题卷 Markdown 发给后端
+ * `/api/v1/render`（pandoc + typst）生成**真 .pdf** 字节 → 原生 Save 对话框写盘（不再兜底 .html）。
+ * 非 Tauri（浏览器/dev）保留原逻辑：打印对话框另存为 PDF。
+ */
+export async function exportPdf(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
+  if (isTauri()) {
+    const md = buildWorksheetMarkdown(items, meta)
+    const blob = await renderDocument({ content: md, format: 'pdf', title: meta.title })
+    const b64 = await blobToBase64(blob)
+    await downloadInApp(`data:application/pdf;base64,${b64}`, `${meta.title}.pdf`)
+    return true
+  }
   return printWorksheet(items, meta)
 }

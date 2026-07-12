@@ -13,6 +13,7 @@ import { registerAgent, updateAgent, unregisterAgent } from '@/api/agents'
 import { k12UpdateProfile } from '@/api/k12'
 import { useK12Store } from '../store'
 import { useAgentsStore } from '@/stores/agents'
+import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import HcSelect from '@/components/common/HcSelect.vue'
 import { GRADES, TEXTBOOKS, gradeShort } from '../curriculum'
@@ -21,7 +22,7 @@ import { K12_TEMPLATE_SKILLS, K12_INFRA_SKILLS, isRequiredSkill, defaultBoundSki
 
 /** 建档/改档同构：传 agent 即进「改档」模式（预填 + updateAgent），否则「建档」（registerAgent） */
 const props = defineProps<{
-  agent?: { name: string; display_name?: string; metadata?: Record<string, string>; skills?: string[]; system_prompt?: string }
+  agent?: { name: string; display_name?: string; metadata?: Record<string, string>; skills?: string[]; system_prompt?: string; provider?: string; model?: string }
 }>()
 
 const emit = defineEmits<{ (e: 'created', name: string): void; (e: 'close'): void; (e: 'removed', name: string): void }>()
@@ -102,6 +103,30 @@ const cardDescription = computed(() =>
 const gradeOptions = computed(() => GRADES.map((g) => ({ value: g, label: g })))
 const textbookOptions = computed(() => TEXTBOOKS.map((tb) => ({ value: tb, label: tb })))
 
+// 模型选择（高级折叠·BUG-20260711-H，对齐原型 tutorForm「模型 · 默认已配好强推理模型，可不管」）：
+// ''=跟随全局默认强推理模型；与 AgentsView 同数据源（settingsStore.availableModels），
+// 服务商 → 模型 两级级联，切服务商即复位模型（防跨 provider 悬空 model）。
+const settingsStore = useSettingsStore()
+const provider = ref(props.agent?.provider ?? '')
+const model = ref(props.agent?.model ?? '')
+watch(provider, () => { model.value = '' })
+const providerOptions = computed(() => {
+  const seen = new Map<string, string>()
+  for (const m of settingsStore.availableModels) {
+    if (!seen.has(m.providerKey)) seen.set(m.providerKey, m.providerName)
+  }
+  return [
+    { value: '', label: t('agents.useGlobalDefault') },
+    ...[...seen].map(([value, label]) => ({ value, label })),
+  ]
+})
+const modelOptions = computed(() => [
+  { value: '', label: t('agents.useGlobalDefault') },
+  ...settingsStore.availableModels
+    .filter((m) => m.providerKey === provider.value)
+    .map((m) => ({ value: m.modelId, label: m.modelName })),
+])
+
 // 辅导助手人设(SOUL)：只挂 skill 不设 system_prompt → 身份回落默认助理「小蟹」（BUG-20260708 F2，真机
 // qwen3.5:9b 取证）。据档案派生身份 + 讲题边界，随年级/教材跟随；建档/改档均回写，使 tutor 自我认同为
 // 「{孩子}的辅导助手」而非小蟹。K12 领域文案，内联于 features/k12（AP-1 允许）。
@@ -113,7 +138,11 @@ const tutorSoul = computed(() => {
 // 「辅导语气」可编辑人设（D3·原型建档设计有此编辑框，app 曾漏实现→tutor 无人设回落小蟹）：
 // 预填派生人设、家长可微调。未编辑 → 随档案（年级/教材）跟随；编辑后 → 保留自定义。改档优先用实例已有
 // system_prompt。最终 soulText 回写 system_prompt（真正让 tutor 认同为辅导助手，见 F2/D3/D4 链）。
-const soulDirty = ref(!!props.agent?.system_prompt?.trim())
+// 「已有 system_prompt」不能当自定义信号——建档必写派生人设，那样判会让改档永远 dirty、
+// 改年级人设不重派生、tutor 自称旧年级（BUG-20260711-A）。只有 ≠ 按当前档案派生的模板才算家长自定义。
+const soulDirty = ref(
+  !!props.agent?.system_prompt?.trim() && props.agent.system_prompt.trim() !== tutorSoul.value,
+)
 const soulText = ref(props.agent?.system_prompt?.trim() || tutorSoul.value)
 watch(tutorSoul, (v) => { if (!soulDirty.value) soulText.value = v })
 function resetSoul() { soulDirty.value = false; soulText.value = tutorSoul.value }
@@ -129,6 +158,8 @@ async function submit() {
         display_name: displayName.value,
         description: cardDescription.value,
         system_prompt: soulText.value, // 改档回写人设（家长可编辑的「辅导语气」，未改则随档案派生，F2/D3）
+        provider: provider.value, // 模型高级折叠（BUG-20260711-H）：''=跟随全局默认
+        model: model.value,
         ...(skillsDirty.value ? { skills: boundSkills() } : {}),
       })
       await k12UpdateProfile({
@@ -150,8 +181,8 @@ async function submit() {
       display_name: displayName.value,
       description: cardDescription.value, // 卡片副标题派生（教材·年级·tagline），随档案跟随
       system_prompt: soulText.value, // 辅导助手人设（家长可编辑「辅导语气」，未改则派生）：身份+讲题边界（F2/D3）
-      model: '', // 空 provider/model = 跟随全局默认强推理模型
-      provider: '',
+      model: model.value, // ''=跟随全局默认强推理模型；高级折叠可指定（BUG-20260711-H）
+      provider: provider.value,
       // 默认 skill 从模板 manifest 全挂好（P0 必备 + P1 默认 + k12_grade 基础设施）
       skills: boundSkills(),
       metadata: { scenario: K12_SCENARIO_ID, avatar: '🎓' },
@@ -261,6 +292,22 @@ async function submit() {
               @input="soulDirty = true"
             />
             <button v-if="soulDirty" type="button" class="k12pf__soulreset" @click="resetSoul">恢复默认语气</button>
+          </div>
+        </details>
+
+        <!-- 模型（高级折叠·BUG-20260711-H，对齐原型 tutorForm）：默认跟随全局强推理模型，可不管；
+             极客/多 Provider 家庭可为辅导实例单独指定（服务商→模型级联，与通用智能体编辑同通道）。 -->
+        <details class="k12pf__adv" data-testid="k12pf-model">
+          <summary>{{ t('k12.profile.modelAdvanced', '模型 · 默认已配好强推理模型，可不管') }}</summary>
+          <div class="k12pf__row">
+            <div class="k12pf__field">
+              <span>{{ t('k12.profile.providerLabel', '服务商') }}</span>
+              <HcSelect v-model="provider" :options="providerOptions" data-testid="k12pf-provider" />
+            </div>
+            <div class="k12pf__field">
+              <span>{{ t('k12.profile.modelLabel', '模型') }}</span>
+              <HcSelect v-model="model" :options="modelOptions" data-testid="k12pf-model-select" />
+            </div>
           </div>
         </details>
 

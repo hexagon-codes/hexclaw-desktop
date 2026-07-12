@@ -80,7 +80,7 @@ describe('useChatSend', () => {
     )
   })
 
-  it('injects knowledge context when RAG hits score >= 0.35', async () => {
+  it('前端不再拼 Auto-RAG（BUG-20260712-M：知识注入单通道=引擎侧 fail-closed）', async () => {
     searchKnowledge.mockResolvedValueOnce({
       result: [{ content: 'relevant info', score: 0.8, doc_title: 'Doc1' }],
     })
@@ -89,22 +89,9 @@ describe('useChatSend', () => {
     await handleSend('question')
     const call = deps.chatStore.sendMessage.mock.calls[0]!
     expect(call[2]).toBeDefined()
-    // backendText 现为惰性 thunk：解析它才跑 Auto-RAG 并组装隐藏上下文
-    const backendText = await call[2]!.backendText()
-    expect(backendText).toContain('[知识库参考信息')
-    expect(backendText).toContain('relevant info')
-  })
-
-  it('does not inject knowledge when scores are low', async () => {
-    searchKnowledge.mockResolvedValueOnce({
-      result: [{ content: 'irrelevant', score: 0.1 }],
-    })
-    const deps = makeDeps()
-    const { handleSend } = useChatSend(deps as any)
-    await handleSend('question')
-    const call = deps.chatStore.sendMessage.mock.calls[0]!
-    // thunk 解析为 undefined（低分不注入、无文档/显式上下文）→ 后端用可见文本
+    // 客户端 Auto-RAG 通道已删（显式检索归一分上设门槛无效 + 与引擎注入重复）
     expect(await call[2]!.backendText()).toBeUndefined()
+    expect(searchKnowledge).not.toHaveBeenCalled()
   })
 
   it('continues without knowledge when searchKnowledge throws', async () => {

@@ -33,6 +33,20 @@ export function imageSrc(att: { data: string; mime: string }): string {
   return `data:${att.mime};base64,${d}`
 }
 
+/** 视频封面：读 message.metadata.poster（后端持久化 cover，handleVideoGenerated 写入）。
+ *  BUG-20260712-J：封面数据一直都在，只是 <video> 从未绑定 :poster → 黑矩形。 */
+export function videoPosterFromMetadata(metadata: Record<string, unknown> | undefined | null): string | undefined {
+  const p = metadata?.poster
+  return typeof p === 'string' && p.trim() ? p : undefined
+}
+
+/** 视频展示 src：无封面时追加媒体片段 #t=0.1——WebKit 在 preload="metadata" 下不渲染
+ *  首帧，强制 seek 0.1s 使其解码一帧作静态画面（标准兜底）。data:/已带 fragment 不追加。 */
+export function videoDisplaySrc(src: string, poster: string | undefined): string {
+  if (!src || poster || src.startsWith('data:') || src.includes('#')) return src
+  return `${src}#t=0.1`
+}
+
 // 各种「非标准换行」→ \n：\r\n / \r（旧 Mac）/ U+2028 行分隔 / U+2029 段分隔。
 // textarea 原生 paste 不把 U+2028/U+2029 当换行 → markdown 折行丢失，需在此统一。
 const WEIRD_LINE_BREAKS = new RegExp('\\r\\n?|[\\u2028\\u2029]', 'g')

@@ -182,6 +182,7 @@ describe('U5 — 开机自启开关桥接 set_autostart command', () => {
     delete (globalThis as Record<string, unknown>).isTauri
   })
 
+  // timeout 15s：SettingsView 全量挂载在全套并发满载时偶发超过默认 5s（20260712 flaky 定案，非产品问题）
   it('启动时用 is_autostart_enabled 同步开关状态', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
@@ -189,7 +190,7 @@ describe('U5 — 开机自启开关桥接 set_autostart command', () => {
       expect(invokeMock).toHaveBeenCalledWith('is_autostart_enabled')
     })
     wrapper.unmount()
-  })
+  }, 15_000)
 
   it('切换开关 @change 会 invoke set_autostart（enable=true）', async () => {
     const wrapper = await mountSettingsView()

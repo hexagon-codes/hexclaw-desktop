@@ -130,6 +130,7 @@ export default {
 
   chat: {
     orphanAgentCleared: 'This Agent was deleted; the session fell back to the default assistant', // ug 占位（保留术语 Agent），待母语校订
+    orphanAgentSession: 'ئۆچۈرۈلگەن Agent', // ug 占位，待母语校订
     persistFailed: 'Message generated but not saved; it may be lost after refreshing the session', // TODO: verify ug
     title: 'سۆھبەت',
     sessions: 'سۆھبەتلەر',
@@ -234,6 +235,8 @@ export default {
     editMessage: 'ئۇچۇرنى تەھرىرلەش',
     deleteMessage: 'ئۇچۇرنى ئۆچۈرۈش',
     deleteMessageFailed: 'ئۇچۇرنى ئۆچۈرۈش مەغلۇپ بولدى، يېڭىلىغاندا ئۇچۇر قايتا كۆرۈنۈشى مۇمكىن',
+    deleteMessageConfirmTitle: 'بۇ ئۇچۇرنى ئۆچۈرەمسىز؟',
+    deleteMessageConfirmMessage: 'بۇ ئۇچۇر سۆھبەتتىن ئۆچۈرۈلىدۇ، بۇ مەشغۇلاتنى قايتۇرغىلى بولمايدۇ.',
     retryFailed: 'قايتا ھاسىل قىلىش مەغلۇپ بولدى، ئۇچۇرىڭىز ساقلاندى، قايتا سىناڭ',
     retryWhileStreaming: 'نۆۋەتتىكى جاۋاب تاماملانغاندىن كېيىن قايتا ھاسىل قىلىڭ',
     selectModelFirst: 'ئالدى بىلەن مودېل تاللاڭ',
@@ -1152,6 +1155,13 @@ export default {
   },
 
   knowledge: {
+    embedding: { // ug 占位，待母语校订
+      inactiveTitle: 'Semantic retrieval inactive',
+      inactiveDesc: 'No local embedding model installed; automatic knowledge citations in chat are dormant.',
+      installCta: 'Install embedding model',
+      installing: 'Installing',
+    },
+    processing: 'يۈكلەندى · مۇلازىمېتىردا يېشىلىۋاتىدۇ ۋە ئىندېكس قۇرۇلۇۋاتىدۇ (سكانلانغان/چوڭ ھۆججەت ئاستىراق، سەل ساقلاڭ)',
     indexing: 'يۈكلەندى · ئىندېكس قۇرۇلۇۋاتىدۇ، تاماملانغاندا تۆۋەندىكى تىزىملىكتە كۆرۈنىدۇ',
     title: 'بىلىم ئامبىرى',
     description: 'ھۆججەت ۋە بىلىم كۆرسەتكۈچىنى باشقۇرۇش',
@@ -1437,14 +1447,6 @@ export default {
 
   imChannels: {
     bindFailed: 'Failed to bind agent', // TODO: verify ug
-    chatRoute: {
-      title: 'سۆھبەت يوللانمىسى · chat_id → ئۈلگە',
-      addOpen: '+ سۆھبەت باغلاش',
-      unbind: 'يېشىش',
-      chatIdPlaceholder: 'chat_id (خۇسۇسىي/گۇرۇپپا)',
-      pickAgent: 'قوبۇل قىلغۇچى Agent نى تاللاڭ',
-      add: 'باغلاش',
-    },
     title: 'IM ئۇلىنىش',
     description: 'دەرھال ئۇچۇرلىشىش سۇپىلىرى ئۇلاش، ھەر يەردە AI بىلەن سۆھبەتلىشىش',
     addChannel: 'ئۇلىنىش قوشۇش',

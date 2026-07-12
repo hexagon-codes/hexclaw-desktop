@@ -123,4 +123,24 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     const submit = w.find('[data-testid="accum-add-submit"]')
     expect(submit.attributes('disabled')).toBeDefined()
   })
+
+  // BUG-20260712-#2：积累行「详情」走真 handler → 打开详情弹层显内容/学科/类型（不再死按钮）。
+  it('积累行「详情」点击 → 打开详情弹层显内容/学科/类型', async () => {
+    h.listSpy.mockReset().mockResolvedValue({
+      items: [{ record_id: 'x1', subject: '英语', entry_type: '好词好句', content: 'a piece of cake', status: 'new' }],
+    })
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+    // 积累行只应有「详情」（无「再练」）
+    const rowBtns = w.findAll('.rl-row .rl-btn').map((b) => b.text())
+    expect(rowBtns).not.toContain('再练')
+    await w.findAll('.rl-row .rl-btn').find((b) => b.text() === '详情')!.trigger('click')
+    await flushPromises()
+    const modal = w.find('[data-testid="mistake-detail"]')
+    expect(modal.exists()).toBe(true)
+    expect(w.find('[data-testid="detail-content"]').text()).toContain('a piece of cake')
+    expect(w.find('[data-testid="detail-accum-subject"]').text()).toContain('英语')
+    expect(w.find('[data-testid="detail-accum-type"]').text()).toContain('好词好句')
+  })
 })

@@ -15,7 +15,6 @@
 
 import { nextTick, type Ref } from 'vue'
 import { i18n } from '@/i18n'
-import { searchKnowledge } from '@/api/knowledge'
 import { formatContextBlock } from '@/utils/chat-context'
 import { parseDocument } from '@/utils/file-parser'
 import { registerDocPreview } from '@/utils/doc-preview'
@@ -31,10 +30,6 @@ import {
 import { parseCronSlashCommand } from './useCronSlashParser'
 
 type ChatStore = ReturnType<typeof useChatStore>
-
-// Auto-RAG（发送前自动检索知识库）的 best-effort 时间预算（BUG-20260628B）：
-// 嵌入器不可用/慢时（如默认本地 provider 未装）超此预算即放弃 KB 增强，不拖慢回复气泡。
-const AUTO_RAG_BUDGET_MS = 1200
 
 export interface ChatSendDeps {
   chatStore: ChatStore
@@ -367,37 +362,17 @@ export function useChatSend(deps: ChatSendDeps) {
       return false
     }
 
-    // ★ 隐藏上下文（只进 backendText、不进可见气泡）：附件文档正文 + Auto-RAG + @显式上下文。
-    // BUG-20260628：backendText 组装含慢的 Auto-RAG searchKnowledge 网络往返。把它做成**惰性 thunk**，
-    // 由 sendMessage 在「用户气泡已乐观上屏」之后再 await——避免发送时「卡一下才上屏」。
+    // ★ 隐藏上下文（只进 backendText、不进可见气泡）：附件文档正文 + @显式上下文。
+    // ⚠️ 客户端 Auto-RAG 通道已删除（BUG-20260712-M，勿加回）：知识注入唯一来源=引擎侧
+    // QueryHits（fail-closed，B8 + 降级态扩展），并回传结构化 knowledge_hits 渲染命中卡。
+    // 此前这里用显式检索接口（宽召回）+ 0.35 门槛作用在组内 min-max 归一分上——最佳垃圾
+    // 恒 1.0 必过（真机取证：天气 query 注入《Go面试题》），且与引擎注入对同一 query 重复。
     const explicitContextBlock = formatContextBlock(options?.contextRefs ?? [])
     const resolveBackendText = async (): Promise<string | undefined> => {
       const contextParts: string[] = []
       // 附件文档正文（PDF/DOCX/…）——气泡只显示文件卡片，正文走这里给模型。
       if (docContextBlock) {
         contextParts.push(`[附件文档内容 - 请基于以下文档回答用户问题]\n${docContextBlock}`)
-      }
-      // Auto-RAG: 自动检索知识库。**best-effort 限时**（BUG-20260628B）：嵌入器不可用/慢时
-      // （如默认本地 provider 未装）不该把回复气泡拖几秒——超预算即放弃 KB 增强，让模型请求尽快发出。
-      try {
-        const { result: knowledgeHits } = await Promise.race([
-          searchKnowledge(text, 3),
-          new Promise<Awaited<ReturnType<typeof searchKnowledge>>>((resolve) =>
-            setTimeout(() => resolve({ result: [] }), AUTO_RAG_BUDGET_MS),
-          ),
-        ])
-        const relevant = knowledgeHits.filter((hit) => hit.score >= 0.35 && hit.content)
-        if (relevant.length > 0) {
-          const contextBlock = relevant
-            .map((hit, i) => {
-              const source = hit.doc_title || hit.source || `片段${i + 1}`
-              return `[来源: ${source}]\n${hit.content}`
-            })
-            .join('\n\n')
-          contextParts.push(`[知识库参考信息 - 请优先参考以下内容回答用户问题]\n${contextBlock}`)
-        }
-      } catch {
-        // 知识库搜索失败不阻塞聊天
       }
       // `@` 显式召唤的上下文（知识/连接/会话）：前置。
       if (explicitContextBlock) {

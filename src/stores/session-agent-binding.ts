@@ -53,10 +53,33 @@ export function bindSessionAgent(sessionId: string, agentName: string): void {
   writeAll(map)
 }
 
-/** 取某会话绑定的 Agent 名（无绑定返回空串） */
+// 墓碑前缀（BUG-20260712 治标）：agent 被删除后绑定不删除而是标记孤儿——
+// 活绑定语义（发送 role/selectSession 恢复）失效，但名字保留给显示层
+// （SessionList 据此显示「已删除的智能体」而非裸内部 ID）。'!' 不是合法 agent 名首字符。
+const TOMBSTONE_PREFIX = '!'
+
+/** 取某会话绑定的 Agent 名（无绑定/已墓碑返回空串——墓碑不得再作为活 role 恢复） */
 export function getSessionAgent(sessionId: string): string {
   if (!sessionId) return ''
-  return readAll()[sessionId] ?? ''
+  const v = readAll()[sessionId] ?? ''
+  return v.startsWith(TOMBSTONE_PREFIX) ? '' : v
+}
+
+/** 标记某会话的绑定为孤儿墓碑（agent 已删除；幂等，无活绑定时 no-op） */
+export function markSessionAgentOrphaned(sessionId: string): void {
+  if (!sessionId) return
+  const map = readAll()
+  const v = map[sessionId]
+  if (!v || v.startsWith(TOMBSTONE_PREFIX)) return
+  map[sessionId] = TOMBSTONE_PREFIX + v
+  writeAll(map)
+}
+
+/** 取墓碑上的原 agent 名（仅显示层用；无墓碑返回空串） */
+export function getSessionAgentTombstone(sessionId: string): string {
+  if (!sessionId) return ''
+  const v = readAll()[sessionId] ?? ''
+  return v.startsWith(TOMBSTONE_PREFIX) ? v.slice(TOMBSTONE_PREFIX.length) : ''
 }
 
 /** 删除单条绑定（删除会话时调用） */

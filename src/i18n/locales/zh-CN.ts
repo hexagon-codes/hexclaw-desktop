@@ -123,6 +123,7 @@ export default {
   // 聊天页
   chat: {
     orphanAgentCleared: '该智能体已删除，本会话回退为默认助理',
+    orphanAgentSession: '已删除的智能体',
     persistFailed: '消息已生成但保存失败，刷新会话后可能丢失',
     title: '聊天',
     sessions: '会话',
@@ -227,6 +228,8 @@ export default {
     editMessage: '编辑消息',
     deleteMessage: '删除消息',
     deleteMessageFailed: '删除消息失败，刷新后消息可能重新出现',
+    deleteMessageConfirmTitle: '删除这条消息？',
+    deleteMessageConfirmMessage: '将从会话中删除这条消息，此操作不可撤销。',
     retryFailed: '重新生成失败，你的消息已保留，请重试',
     retryWhileStreaming: '请等当前回复完成后再重新生成',
     selectModelFirst: '请先选择模型',
@@ -1152,6 +1155,13 @@ export default {
 
   // 知识库页
   knowledge: {
+    embedding: {
+      inactiveTitle: '语义检索未激活',
+      inactiveDesc: '本地嵌入模型未安装，会话里的知识库自动引用处于休眠（文档管理与手动搜索不受影响）。',
+      installCta: '一键安装嵌入模型',
+      installing: '安装中',
+    },
+    processing: '已上传 · 后端正在解析并建索引（扫描件/大文件较慢，请稍候）',
     indexing: '已上传 · 索引构建中，完成后出现在下方列表',
     title: '知识库',
     description: '管理文档和知识索引',
@@ -1439,14 +1449,6 @@ export default {
   // IM 通道页
   imChannels: {
     bindFailed: '绑定 Agent 失败',
-    chatRoute: {
-      title: '会话路由 · chat_id → 实例',
-      addOpen: '+ 绑定会话',
-      unbind: '解绑',
-      chatIdPlaceholder: '会话 chat_id（私聊/群）',
-      pickAgent: '选择接待智能体',
-      add: '绑定',
-    },
     title: 'IM 通道',
     description: '连接即时通讯平台，随时随地与 AI 对话',
     addChannel: '添加通道',

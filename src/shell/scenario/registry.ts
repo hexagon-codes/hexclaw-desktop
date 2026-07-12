@@ -49,6 +49,9 @@ interface RegistryState {
   scenarioTemplates: ScenarioTemplate[]
   /** 设置页扩展组件（场景专属备份/偏好等；SettingsView 只渲染，不认识场景 · M2-20260710） */
   settingsExtension: Component | null
+  /** 场景实例内部名模式（BUG-20260712：实例已删除时元数据不复存在，shell 靠名字形状
+   *  识别遗留孤儿会话——如标题恰为某场景实例内部名 → 显示「已删除的智能体」） */
+  instanceIdPatterns: RegExp[]
 }
 
 function createState(): RegistryState {
@@ -61,6 +64,7 @@ function createState(): RegistryState {
     agentCardExtension: null,
     scenarioTemplates: [],
     settingsExtension: null,
+    instanceIdPatterns: [],
   }
 }
 
@@ -121,6 +125,15 @@ export const scenarioRegistry = {
   /** 某实例是否为场景实例（有增强视图）——供通用视图判定是否渲染扩展 */
   isScenarioInstance(ctx: ScenarioContext): boolean {
     return this.resolveDescriptor(ctx).headerTabs.length > 0
+  },
+
+  /** 注册场景实例内部名模式（场景包装配时声明，如 K12 的 `k12-tutor-*`） */
+  registerInstanceIdPattern(pattern: RegExp): void {
+    state.instanceIdPatterns.push(pattern)
+  },
+  /** 某字符串是否形如某场景实例内部名（实例已删、无元数据可查时的孤儿识别兜底） */
+  matchesInstanceId(id: string): boolean {
+    return !!id && state.instanceIdPatterns.some((re) => re.test(id))
   },
 
   /** 注册场景建档模板（在通用模板库中露出） */

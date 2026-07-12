@@ -17,7 +17,7 @@ const h = vi.hoisted(() => {
     mistakes,
     markMasteredSpy: vi.fn().mockResolvedValue({ ok: true }),
     retrySpy: vi.fn().mockResolvedValue({ solution: '变式题：4.2×3=? 解：12.6', verdict: 'agree', badge: '✅ 已程序验算' }),
-    gradeSpy: vi.fn(),
+    recordMistakeSpy: vi.fn(),
   }
 })
 const markMasteredSpy = h.markMasteredSpy
@@ -28,7 +28,8 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: (req: unknown) => h.markMasteredSpy(req),
   k12ReviewRetry: (req: unknown) => h.retrySpy(req),
   k12PrepCard: vi.fn(),
-  k12Grade: (req: unknown) => h.gradeSpy(req),
+  k12Grade: vi.fn(),
+  k12RecordMistake: (req: unknown) => h.recordMistakeSpy(req),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { mastered: 5, reviewing: 2, retried: 1, archived: 0, total: 8 },
     weak_top3: [{ knowledge_point: '简易方程', count: 2 }, { knowledge_point: '小数乘法', count: 1 }],
@@ -64,10 +65,7 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     markMasteredSpy.mockClear()
-    h.gradeSpy.mockReset().mockResolvedValue({
-      solution: '疑是地上霜', verdict: 'disagree', evidence_type: 'heterogeneous_model',
-      badge: 'disagree', correct: false, out_of_scope: false, record_created: true, record_id: 'manual-cn-1',
-    })
+    h.recordMistakeSpy.mockReset().mockResolvedValue({ record_created: true, record_id: 'manual-cn-1', error_cause: '记错下一句' })
   })
 
   it('挂载即拉取错题本，按 schema 渲染错题 + 复习队列', async () => {
@@ -106,7 +104,7 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(w.text()).toContain('12.6')
   })
 
-  it('手录批改把家长明确选择的非默认学科透传到 grade 契约', async () => {
+  it('手录错题走轻量 record-mistake 端点（非 grade 验算链），透传家长选的非默认学科', async () => {
     const w = render()
     await flushPromises()
     await w.find('[data-testid="mistake-add-open"]').trigger('click')
@@ -118,7 +116,8 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     await w.find('[data-testid="mistake-submit"]').trigger('click')
     await flushPromises()
 
-    expect(h.gradeSpy).toHaveBeenCalledWith(expect.objectContaining({
+    // 治本：记一条错题=已知错题轻量直录，走 record-mistake（秒级）而非 grade 对抗验算链（1-2 分钟）。
+    expect(h.recordMistakeSpy).toHaveBeenCalledWith(expect.objectContaining({
       agent: 'mingming',
       subject: '语文',
       problem: '“床前明月光”的下一句',
@@ -151,10 +150,12 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(w.text()).not.toContain('2026-07-07')
   })
 
-  it('积累 tab：无后端 → 空态提示', async () => {
+  it('积累 tab：无后端 → 正向空态卡（项-5）', async () => {
     const w = render()
     await flushPromises()
     await w.findAll('.seg button').find((b) => b.text() === '积累')!.trigger('click')
-    expect(w.text()).toContain('积累本还没有内容')
+    // 项-5：裸文字悬空换成等款空态卡（📖 + 暖文案 + CTA）
+    expect(w.find('[data-testid="accum-empty-card"]').exists()).toBe(true)
+    expect(w.text()).toContain('积累本还空着')
   })
 })

@@ -32,12 +32,14 @@ describe('K12 store · 自动化/入站接线', () => {
     Object.values(h).forEach((s) => s.mockReset())
   })
 
-  it('recognize 透传题目清单', async () => {
-    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }] })
+  it('recognize 透传题目清单 + 整卷学科', async () => {
+    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }], subject: '数学' })
     const store = useK12Store()
-    const qs = await store.recognize('data:image/png;base64,AAAA')
+    const res = await store.recognize('data:image/png;base64,AAAA')
     expect(h.recognizeSpy).toHaveBeenCalledWith('data:image/png;base64,AAAA')
-    expect(qs[0]?.question).toBe('3.8×3')
+    expect(res.questions[0]?.question).toBe('3.8×3')
+    // Polish-2：整卷学科随识题响应回传（供护栏预填学科下拉）
+    expect(res.subject).toBe('数学')
   })
 
   it('tutorTurn 透传分阶段响应', async () => {

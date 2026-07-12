@@ -117,6 +117,7 @@ export default {
 
   chat: {
     orphanAgentCleared: 'This agent was deleted; the session fell back to the default assistant',
+    orphanAgentSession: 'Deleted agent',
     persistFailed: 'Message generated but not saved; it may be lost after refreshing the session',
     title: 'Chat',
     sessions: 'Sessions',
@@ -221,6 +222,8 @@ export default {
     editMessage: 'Edit Message',
     deleteMessage: 'Delete Message',
     deleteMessageFailed: 'Failed to delete message; it may reappear after a refresh',
+    deleteMessageConfirmTitle: 'Delete this message?',
+    deleteMessageConfirmMessage: 'This message will be removed from the conversation. This cannot be undone.',
     retryFailed: 'Failed to regenerate, your message is kept. Please try again.',
     retryWhileStreaming: 'Please wait for the current reply to finish before regenerating',
     selectModelFirst: 'Please select a model first',
@@ -1142,6 +1145,13 @@ export default {
   },
 
   knowledge: {
+    embedding: {
+      inactiveTitle: 'Semantic retrieval inactive',
+      inactiveDesc: 'No local embedding model installed; automatic knowledge citations in chat are dormant (document management and manual search are unaffected).',
+      installCta: 'Install embedding model',
+      installing: 'Installing',
+    },
+    processing: 'Uploaded · parsing & indexing on the server (scans/large files are slower, please wait)',
     indexing: 'Uploaded · building index, it will appear in the list below',
     title: 'Knowledge Base',
     description: 'Manage documents and knowledge index',
@@ -1432,14 +1442,6 @@ export default {
 
   imChannels: {
     bindFailed: 'Failed to bind agent',
-    chatRoute: {
-      title: 'Chat routing · chat_id → instance',
-      addOpen: '+ Bind chat',
-      unbind: 'Unbind',
-      chatIdPlaceholder: 'chat_id (DM / group)',
-      pickAgent: 'Pick receptionist agent',
-      add: 'Bind',
-    },
     title: 'IM Channels',
     description: 'Connect instant messaging platforms to chat with AI anywhere',
     addChannel: 'Add Channel',

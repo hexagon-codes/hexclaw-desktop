@@ -9,6 +9,7 @@ import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RecordList from '@/shell/records/RecordList.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { useK12Store } from '../store'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
@@ -34,6 +35,10 @@ const store = useK12Store()
 
 const sub = ref<'mistakes' | 'accumulation' | 'insight'>('mistakes')
 
+// 原型 app.html:1598 + 设计注 1001：全部错题=次级档案，默认折叠成 <details> 摘要，
+// 首屏让位给「本周该练」行动队列（Anki/墨墨/IXL 口径：到期优先、档案次之，点开才是全量+筛选）。
+const archiveOpen = ref(false)
+
 // 积累本分科过滤（#5）：''=全部 / '语文' / '英语'，触达后端 GET /accumulation?subject=（BUG-3）。
 const accumSubject = ref('')
 async function reloadAccum() {
@@ -56,7 +61,7 @@ async function reload() {
 }
 onMounted(reload)
 // 切实例（多孩）→ 重置分科过滤 + 收起记录表单，避免带上一个孩子的筛选态
-watch(() => props.agentId, () => { accumSubject.value = ''; accumAddOpen.value = false; reload() })
+watch(() => props.agentId, () => { accumSubject.value = ''; accumAddOpen.value = false; archiveOpen.value = false; reload() })
 
 // 手动记积累本（#4）：家长在会话里遇到好东西 → 直接记进积累本（PRD §3.13）。
 // entry_type 限积累型（好词好句/古诗/语法点/作文，镜像 store ACCUM_KEEP_TYPES）；纠错型走错题 tab。
@@ -113,9 +118,9 @@ async function submitAccum() {
   }
 }
 
-// 手工录入错题（20260709）：课堂/学校/线下没经过 App 的错题也能进本子（错题本价值=完整性）。
-// 设计=跳过拍照·直接给文本进**同一条验算管道**（复用 store.grade：题目 + 孩子答案 → 验算 → 入库），
-// 而非自由便签；来源在后端补 source 字段后标「🖊 家长记入」区别拍照/已验算（当前后端无 source 字段，先入库）。
+// 手工录入错题（20260709 / BUG-20260712 治本）：课堂/学校/线下没经过 App 的错题也能进本子（错题本价值=完整性）。
+// 家长手动记的是**已知错题**——直接走轻量 record-mistake 端点直录（题目+答案入库 + 单次轻量错因归纳），
+// 绝不复用 store.grade 的 solve+verify 对抗验算链（那是「不知道对不对」才要跑，真机 1-2 分钟）；秒级完成。
 const mistakeAddOpen = ref(false)
 const mistakeForm = ref({ subject: '', problem: '', studentAnswer: '', knowledgePoints: '' })
 const mistakeSubjectOptions = computed(() => K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
@@ -123,6 +128,13 @@ const mistakeSubjectOptions = computed(() => K12_GRADE_SUBJECT_OPTIONS.map(({ va
   label: t(labelKey),
 })))
 const mistakeSaving = ref(false)
+// textarea 内 Enter=换行；⌘/Ctrl+Enter 提交（20260712 视觉评审定案，与桌面输入习惯一致）
+function onMistakeKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault()
+    void submitMistake()
+  }
+}
 async function submitMistake() {
   const problem = mistakeForm.value.problem.trim()
   if (!mistakeForm.value.subject || !problem || mistakeSaving.value) return
@@ -130,7 +142,7 @@ async function submitMistake() {
   try {
     const kps = mistakeForm.value.knowledgePoints
       .split(/[·,，、/]/).map((s) => s.trim()).filter(Boolean)
-    const res = await store.grade({
+    const res = await store.recordMistake({
       agent: props.agentId,
       subject: mistakeForm.value.subject,
       grade: props.grade,
@@ -138,7 +150,7 @@ async function submitMistake() {
       student_answer: mistakeForm.value.studentAnswer.trim() || undefined,
       knowledge_points: kps.length ? kps : undefined,
     })
-    toast.success(res.recordCreated ? t('k12.mistakeAdd.recorded') : t('k12.mistakeAdd.notWrong'))
+    toast.success(res.record_created ? t('k12.mistakeAdd.recorded') : t('k12.mistakeAdd.exists'))
     mistakeForm.value = { subject: '', problem: '', studentAnswer: '', knowledgePoints: '' }
     mistakeAddOpen.value = false
     await store.loadMistakes(props.agentId)
@@ -164,18 +176,46 @@ const paperTotalOpts = computed(() => [
   { v: '5', label: '≤ 5' },
   { v: '10', label: '≤ 10' },
 ])
-function genCustomPaper() {
+async function genCustomPaper() {
   customPaperOpen.value = false
   // 客户端出卷=printWorksheet(当前错题)。`total` 客户端可兑现(切片限量);`perQ`(每题变式数)/
   // `difficulty`(难度)需后端组卷端点按参数出变式题,当前客户端出卷无法变更,待后端 /paper 端点补齐(契约缺口)。
   const limit = paperForm.value.total === 'all' ? currentItems().length : Number(paperForm.value.total)
-  printWorksheet(currentItems().slice(0, limit), worksheetMeta())
-  toast.success(t('k12.customPaper.generated'))
+  try {
+    await printWorksheet(currentItems().slice(0, limit), worksheetMeta())
+    toast.success(t('k12.customPaper.generated'))
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  }
 }
 
 const view = computed(() => store.mistakeView)
 const accumView = computed(() => store.accumView)
 const report = computed(() => store.report)
+
+// 项-5：空态设计——复习队列（本周该练）常空时不留尴尬空白。
+const hasReviewQueue = computed(() => (view.value?.reviewQueue?.length ?? 0) > 0)
+// 复习队列空 → 全部错题默认展开成主内容填满下方；有队列 → 维持原型「行动卡 + 折叠」。
+const archiveCollapsed = computed(() => hasReviewQueue.value && !archiveOpen.value)
+const archiveExpanded = computed(() => !archiveCollapsed.value)
+// 下次到期复习（未到期错题里最近一条）——空态卡给家长「都在计划里·稳步消化」的确定感。
+const nextReview = computed(() => {
+  const items = view.value?.items ?? []
+  const now = Date.now() / 1000
+  const first = items
+    .filter((i) => typeof i.dueAt === 'number' && (i.dueAt as number) > now)
+    .sort((a, b) => (a.dueAt as number) - (b.dueAt as number))[0]
+  if (!first) return null
+  const d = new Date((first.dueAt as number) * 1000)
+  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  const kp = String(first.fields.knowledge_point ?? '').replace(/[·・]\s*$/, '').trim()
+  return { record: first, date, kp }
+})
+// 温和次级 CTA「提前练一练」：复用最近到期（或第一条）错题触发再练弹层。
+function practiceEarly() {
+  const rec = nextReview.value?.record ?? view.value?.items?.[0]
+  if (rec) void doRetry(rec)
+}
 
 // 原型 c8a194e：「本周该练」标题带跨科分布（数学 2 · 语文 1 · 英语 1）。
 // 只统计队列里 subject 已知的行（chip=「学科·知识点」，review-queue 契约下发 subject）；
@@ -234,32 +274,127 @@ async function onAction(payload: { id: 'practiceAgain' | 'markMastered' | 'detai
       await reload()
     }
   } else if (id === 'practiceAgain') {
-    // 「再练一道」：调 POST /review/retry 出同知识点相似题（过 solve 验算链）。
-    // 原型终态=变式直接入本周复习卷不亮答案；当前后端 retry 无持久化且 solution 题答混排（P2 缺口），
-    // 过渡为「真遮罩弹层」：答案默认模糊不可选中，家长明确点「显示答案」才揭示——守答案承诺交互兑现。
-    retry.value = { open: true, loading: true, solution: '', badge: '', revealed: false }
-    try {
-      const res = await k12ReviewRetry({ agent: props.agentId, record_id: record.recordId, grade: props.grade })
-      retry.value = { open: true, loading: false, solution: res.solution, badge: res.badge, revealed: false }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : String(e))
-      retry.value = { open: false, loading: false, solution: '', badge: '', revealed: false }
-    }
-  } else {
-    toast.info(t('records.detail'))
+    void doRetry(record)
+  } else if (id === 'detail') {
+    openDetail(record)
   }
 }
 
 // 「再练一道」变式题结果弹层（守答案真遮罩：revealed=false 时答案模糊+禁选中，点按才揭示）。
-const retry = ref<{ open: boolean; loading: boolean; solution: string; badge: string; revealed: boolean }>({
+// UX-2：再练结果不含验算徽章（练习题非批改）——state 无 badge，弹层只题目 + 解答。
+const retry = ref<{ open: boolean; loading: boolean; error: boolean; solution: string; revealed: boolean }>({
   open: false,
   loading: false,
+  error: false,
   solution: '',
-  badge: '',
   revealed: false,
 })
+// BUG-20260712-#4：再练取消守卫——generation 使在途请求结果失效（防幽灵重开），AbortController 中止后台出题。
+let retryGen = 0
+let retryAbort: AbortController | null = null
+// BUG-20260712-#1：记住最近一次再练的错题，失败态「重试」按钮据此重发（不静默关弹层）。
+const retryRecord = ref<RecordItem | null>(null)
+
+// 「再练一道」：调 POST /review/retry 出同知识点相似题（过 solve 验算链，真机实测 ~68s）。
+// 原型终态=变式直接入本周复习卷不亮答案；当前后端 retry 无持久化且 solution 题答混排（P2 缺口），
+// 过渡为「真遮罩弹层」：答案默认模糊不可选中，家长明确点「显示答案」才揭示——守答案承诺交互兑现。
+// BUG-20260712-#4：关弹窗时 abort 中止后台 + generation 守卫丢弃过期结果（关了不空烧算力/不幽灵重开）。
+// BUG-20260712-#1：68s 长请求——loading 显明确进度文案；失败/超时保持弹层 open 给可重试提示，不静默关。
+async function doRetry(record: RecordItem) {
+  retryRecord.value = record
+  const gen = ++retryGen
+  retryAbort?.abort()
+  retryAbort = new AbortController()
+  retry.value = { open: true, loading: true, error: false, solution: '', revealed: false }
+  try {
+    const res = await k12ReviewRetry({ agent: props.agentId, record_id: record.recordId, grade: props.grade }, retryAbort.signal)
+    if (gen !== retryGen) return // 已被关闭/取代 → 丢弃，不重开弹窗
+    retry.value = { open: true, loading: false, error: false, solution: res.solution, revealed: false }
+  } catch {
+    if (gen !== retryGen) return // 主动取消/已过期 → 静默
+    // 失败/超时不静默关弹层：保留弹层 + 显友好可重试提示（原始技术串对家长无价值，故不透出）。
+    retry.value = { open: true, loading: false, error: true, solution: '', revealed: false }
+  }
+}
 function closeRetry() {
-  retry.value = { open: false, loading: false, solution: '', badge: '', revealed: false }
+  retryGen++
+  retryAbort?.abort()
+  retryAbort = null
+  retry.value = { open: false, loading: false, error: false, solution: '', revealed: false }
+}
+
+// 积累本行内动作（BUG-20260712-#2）：积累不复习/不再练（schema.reviewable=false → RecordList 不渲染再练），
+// 只走「详情」。@action 必须接线到真 handler，否则详情按钮点了无反应（死按钮）。
+function onAccumAction(payload: { id: 'practiceAgain' | 'markMastered' | 'detail'; record: RecordItem }) {
+  if (payload.id === 'detail') openDetail(payload.record, 'accum')
+}
+
+// ── 详情弹层（BUG-20260712-#2）──
+// 复用列表已有的 RecordItem 字段，不额外请求后端，弹层可关闭。kind 区分错题（题目/知识点/错因）
+// 与积累（内容/学科/类型），走各自 schema 状态机上色。
+const detail = ref<{ open: boolean; record: RecordItem | null; kind: 'mistake' | 'accum' }>({ open: false, record: null, kind: 'mistake' })
+function openDetail(record: RecordItem, kind: 'mistake' | 'accum' = 'mistake') {
+  detail.value = { open: true, record, kind }
+}
+function closeDetail() {
+  detail.value = { open: false, record: null, kind: 'mistake' }
+}
+const detailQuestion = computed(() => String(detail.value.record?.fields.question ?? ''))
+const detailKp = computed(() => String(detail.value.record?.fields.knowledge_point ?? ''))
+const detailError = computed(() => String(detail.value.record?.fields.error_cause ?? ''))
+// 积累本字段
+const detailContent = computed(() => String(detail.value.record?.fields.content ?? ''))
+const detailAccumSubject = computed(() => String(detail.value.record?.fields.subject ?? ''))
+const detailAccumType = computed(() => String(detail.value.record?.fields.entry_type ?? ''))
+const detailStatus = computed(() => {
+  const s = detail.value.record?.status
+  if (!s) return '—'
+  const schema = detail.value.kind === 'accum' ? ACCUMULATION_SCHEMA : MISTAKE_SCHEMA
+  const st = schema.states?.find((x) => x.id === s)
+  return st ? t(st.labelKey) : s
+})
+// 状态色调复用对应 schema 状态机声明（与 RecordList 行内状态徽章同源，零硬编码色映射）。
+const detailStatusTone = computed(() => {
+  const s = detail.value.record?.status
+  const schema = detail.value.kind === 'accum' ? ACCUMULATION_SCHEMA : MISTAKE_SCHEMA
+  return schema.states?.find((st) => st.id === s)?.tone ?? 'na'
+})
+// UX-1：详情弹层「他会了」——已掌握态不显该动作（幂等，与档案行同口径）。
+const detailMastered = computed(() => detail.value.record?.status === 'mastered')
+async function markMasteredFromDetail() {
+  const rec = detail.value.record
+  if (!rec) return
+  try {
+    await store.markMastered(props.agentId, rec.recordId, rec.version)
+    // 情绪峰值时刻：toast 说清结果；store.markMastered 内已 reload 列表。
+    toast.success(t('k12.records.masteredToast'))
+    closeDetail()
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e)) // 409 版本冲突：刷新后重试
+    await reload()
+  }
+}
+
+// UX-3：详情弹层内「删除这条错题」——克制入口（非首屏主按钮）+ 二次确认（复用 ConfirmDialog）。
+// 用于移除记错的 / 重复的条目（数据纠错，非逃避难题）。删成功 → 关弹层 + reload + toast。
+const confirmDelete = ref(false)
+const deleting = ref(false)
+function askDelete() { confirmDelete.value = true }
+async function doDelete() {
+  const rec = detail.value.record
+  if (!rec || deleting.value) return
+  deleting.value = true
+  try {
+    await store.deleteMistake(props.agentId, rec.recordId) // 内含 reload
+    toast.success(t('k12.detail.deleted'))
+    confirmDelete.value = false
+    closeDetail()
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+    confirmDelete.value = false
+  } finally {
+    deleting.value = false
+  }
 }
 
 // ── 打印 / 导出（M2-3 / M3-5）──
@@ -274,14 +409,22 @@ function worksheetMeta() {
 function currentItems(): RecordItem[] {
   return view.value?.items ?? []
 }
-function doPrint() {
-  printWorksheet(currentItems(), worksheetMeta())
+async function doPrint() {
+  try {
+    await printWorksheet(currentItems(), worksheetMeta())
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  }
 }
-function doExport(ext: 'pdf' | 'doc') {
+async function doExport(ext: 'pdf' | 'doc') {
   exportOpen.value = false
   const d = todayLabel().replace(/-/g, '').slice(4)
-  if (ext === 'pdf') exportPdf(currentItems(), worksheetMeta())
-  else exportWord(currentItems(), worksheetMeta(), worksheetFilename(props.agentName, t('k12.records.worksheetTitle'), d, d, 'doc'))
+  try {
+    if (ext === 'pdf') await exportPdf(currentItems(), worksheetMeta())
+    else await exportWord(currentItems(), worksheetMeta(), worksheetFilename(props.agentName, t('k12.records.worksheetTitle'), d, d, 'doc'))
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e)) // 导出失败 surface，不再静默无反应
+  }
 }
 // 导出完整错题本为 Markdown（后端 GET /export 直出 md，含全部记录/状态；补齐审计 #6 未闭环）。
 async function doExportMd() {
@@ -289,7 +432,7 @@ async function doExportMd() {
   try {
     const res = await k12ExportMd(props.agentId)
     const d = todayLabel().replace(/-/g, '').slice(4)
-    download(worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md'), res.content, 'text/markdown;charset=utf-8')
+    await download(worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md'), res.content, 'text/markdown;charset=utf-8')
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
   }
@@ -333,38 +476,75 @@ async function doExportMd() {
       <section v-if="sub === 'mistakes'">
         <div v-if="store.error" class="k12rec__err">{{ store.error }}</div>
 
-        <RecordList v-if="view" :schema="MISTAKE_SCHEMA" :view="view" @action="onAction">
-          <!-- 原型 c8a194e：分布括号紧贴标题 + 趋势 pill 并入行动卡（数据齐才显，诚实降级） -->
-          <template #review-meta>
-            <span v-if="reviewSubjectDist" class="k12dist">（{{ reviewSubjectDist }}）</span>
-            <span
-              v-if="trendPill"
-              class="k12trend"
-              :class="trendPill.up ? 'k12trend--up' : 'k12trend--flat'"
-              data-testid="trend-pill"
-            >{{ trendPill.label }}</span>
-          </template>
-          <!-- 原型 c8a194e：周五留存钩子独立成行（后端 cronspec 0 19 * * 5，建档 setupAutomation 已接线） -->
-          <template #review-foot>{{ t('k12.records.weeklyHook') }}</template>
-          <!-- 原型 c8a194e：档案区标题「全部错题 (N)」——summary 定稿文案，不带功能说明书 -->
-          <template #list-title="{ count }">{{ t('k12.records.allMistakes') }} ({{ count }})</template>
-          <template #review-actions>
-            <button class="btn btn-primary" @click="doPrint">
-              <svg class="k12ic" viewBox="0 0 24 24"><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v8H6z" /></svg>
-              {{ t('k12.records.genWorksheet') }}
-            </button>
-            <button class="btn" data-testid="custom-paper-open" @click="customPaperOpen = !customPaperOpen">
-              <svg class="k12ic" viewBox="0 0 24 24"><path d="M4 21v-7" /><path d="M4 10V3" /><path d="M12 21v-9" /><path d="M12 8V3" /><path d="M20 21v-5" /><path d="M20 12V3" /><path d="M2 14h4" /><path d="M10 8h4" /><path d="M18 16h4" /></svg>
-              {{ t('k12.records.customPaper') }}
-            </button>
-          </template>
-        </RecordList>
+        <!-- 项-5：复习队列空 → 在「本周该练」槽放等重的正向空态卡（不留空白）。 -->
+        <div v-if="view && !hasReviewQueue" class="k12empty" data-testid="review-empty-card">
+          <div class="k12empty__icon">✅</div>
+          <b class="k12empty__title">{{ t('k12.emptyReview.title') }}</b>
+          <p class="k12empty__sub">{{ t('k12.emptyReview.sub') }}</p>
+          <p v-if="nextReview" class="k12empty__next" data-testid="review-empty-next">
+            {{ t('k12.emptyReview.nextReview', { date: nextReview.date }) }}<template v-if="nextReview.kp">（{{ nextReview.kp }}）</template>
+          </p>
+          <button
+            v-if="view.items.length"
+            class="btn k12empty__cta"
+            data-testid="review-empty-cta"
+            @click="practiceEarly"
+          >{{ t('k12.emptyReview.practice') }}</button>
+        </div>
 
-        <p class="k12rec__hint">{{ t('k12.records.stateMachineHint') }}</p>
+        <!-- 原型 1598：全部错题=默认折叠的次级档案；折叠态经 :deep 隐藏筛选 + 档案行，仅留摘要开关，
+             「本周该练」行动卡（.rl-review）不受折叠影响常驻首屏。复习队列空时默认展开成主内容。 -->
+        <div v-if="view" class="k12mistakes" :class="{ 'k12mistakes--collapsed': archiveCollapsed }">
+          <RecordList :schema="MISTAKE_SCHEMA" :view="view" @action="onAction">
+            <!-- 原型 c8a194e：分布括号紧贴标题 + 趋势 pill 并入行动卡（数据齐才显，诚实降级） -->
+            <template #review-meta>
+              <span v-if="reviewSubjectDist" class="k12dist">（{{ reviewSubjectDist }}）</span>
+              <span
+                v-if="trendPill"
+                class="k12trend"
+                :class="trendPill.up ? 'k12trend--up' : 'k12trend--flat'"
+                data-testid="trend-pill"
+              >{{ trendPill.label }}</span>
+            </template>
+            <!-- 原型 c8a194e：周五留存钩子独立成行（后端 cronspec 0 19 * * 5，建档 setupAutomation 已接线） -->
+            <template #review-foot>{{ t('k12.records.weeklyHook') }}</template>
+            <!-- 原型 1598：档案区摘要「全部错题 (N) ›」——可点击折叠开关，点开才现筛选 + 全量 -->
+            <template #list-title="{ count }">
+              <button
+                class="k12arch__toggle"
+                data-testid="archive-toggle"
+                :aria-expanded="archiveExpanded"
+                @click="archiveOpen = !archiveOpen"
+              >
+                <span class="k12arch__caret" :class="{ 'k12arch__caret--open': archiveExpanded }">▸</span>
+                {{ t('k12.records.allMistakes') }} ({{ count }})
+              </button>
+            </template>
+            <template #review-actions>
+              <button class="btn btn-primary" @click="doPrint">
+                <svg class="k12ic" viewBox="0 0 24 24"><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v8H6z" /></svg>
+                {{ t('k12.records.genWorksheet') }}
+              </button>
+              <button class="btn" data-testid="custom-paper-open" @click="customPaperOpen = !customPaperOpen">
+                <svg class="k12ic" viewBox="0 0 24 24"><path d="M4 21v-7" /><path d="M4 10V3" /><path d="M12 21v-9" /><path d="M12 8V3" /><path d="M20 21v-5" /><path d="M20 12V3" /><path d="M2 14h4" /><path d="M10 8h4" /><path d="M18 16h4" /></svg>
+                {{ t('k12.records.customPaper') }}
+              </button>
+            </template>
+          </RecordList>
+        </div>
+
+        <!-- 原型 1599：归档规则脚注在展开的 details 内（折叠态不占位，走 v-if 真出/入 DOM）。 -->
+        <p v-if="view && archiveExpanded" class="k12rec__hint">{{ t('k12.records.stateMachineHint') }}</p>
       </section>
 
       <!-- 积累本：语/英沉淀（真实 /accumulation）——记录本原语第二场景 -->
       <section v-else-if="sub === 'accumulation'">
+        <!-- 原型 rc1（app.html:1618）：积累 tab 带 cxsec 标题 + 说明（错题 tab 无标题——顶栏已声明身份；
+             积累 / 学情 tab 各有 h2 标题，与学情 tab reporthead 同款）。 -->
+        <div class="k12rec__reporthead">
+          <h3 class="k12rec__h" style="margin: 0">{{ t('k12.accum.title') }}</h3>
+          <span class="k12rec__hint" style="margin: 0">{{ t('k12.accum.desc') }}</span>
+        </div>
         <!-- 分科过滤 chips（#5）+ 手动记录入口（#4）-->
         <div class="k12accum__bar">
           <div class="k12accum__filters">
@@ -417,8 +597,12 @@ async function doExportMd() {
           </div>
         </div>
 
-        <RecordList v-if="accumView && accumView.items.length" :schema="ACCUMULATION_SCHEMA" :view="accumView" />
-        <p v-else class="k12rec__hint">{{ t('k12.accumulationEmpty') }}</p>
+        <RecordList v-if="accumView && accumView.items.length" :schema="ACCUMULATION_SCHEMA" :view="accumView" @action="onAccumAction" />
+        <!-- 积累空态：对齐原型 rc1——原型积累区无「大居中卡」形态，只是列表区；空时给克制的
+             列表占位一行（记录入口常驻在上方 .k12accum__bar 的「＋记到积累本」，不再叠一个大 CTA 卡）。 -->
+        <p v-else class="k12accum__empty" data-testid="accum-empty-card">
+          {{ t('k12.emptyAccum.title') }} · {{ t('k12.emptyAccum.sub') }}
+        </p>
         <!-- 分界规则脚注（原型 rc1 · 2026-07-08 口径）：错了要改→错题 / 好东西要记住→积累 -->
         <p class="k12rec__hint">{{ t('k12.records.dividerRule') }}</p>
       </section>
@@ -469,6 +653,17 @@ async function doExportMd() {
         </div>
         <div class="k12accum__form k12accum__form--modal" data-testid="mistake-add-form">
           <div class="k12rec__addhint">{{ t('k12.mistakeAdd.hint') }}</div>
+          <!-- 20260712 视觉评审定案（原型 openAddMistake 同步）：题目=英雄字段置首、多行 textarea
+               （应用题/古诗/英语整句整段粘贴，单行 input=捕获时刻流失条目）；错处同多行；
+               textarea 内 Enter=换行，⌘/Ctrl+Enter 提交。实现不得回退单行 input。 -->
+          <textarea
+            v-model="mistakeForm.problem"
+            class="k12accum__content k12accum__content--area"
+            data-testid="mistake-problem"
+            rows="3"
+            :placeholder="t('k12.mistakeAdd.problemPh')"
+            @keydown="onMistakeKeydown"
+          />
           <div class="k12accum__field" data-testid="mistake-subject">
             <span>{{ t('k12.accum.subject') }}</span>
             <HcSelect
@@ -477,16 +672,13 @@ async function doExportMd() {
               :placeholder="t('k12.prep.pickHint')"
             />
           </div>
-          <input
-            v-model="mistakeForm.problem"
-            class="k12accum__content"
-            data-testid="mistake-problem"
-            :placeholder="t('k12.mistakeAdd.problemPh')"
-          />
-          <input
+          <textarea
             v-model="mistakeForm.studentAnswer"
-            class="k12accum__content"
+            class="k12accum__content k12accum__content--area"
+            data-testid="mistake-answer"
+            rows="2"
             :placeholder="t('k12.mistakeAdd.answerPh')"
+            @keydown="onMistakeKeydown"
           />
           <input
             v-model="mistakeForm.knowledgePoints"
@@ -500,7 +692,7 @@ async function doExportMd() {
               data-testid="mistake-submit"
               :disabled="!mistakeForm.subject || !mistakeForm.problem.trim() || mistakeSaving"
               @click="submitMistake"
-            >{{ t('k12.mistakeAdd.submit') }}</button>
+            >{{ mistakeSaving ? t('k12.mistakeAdd.submitting') : t('k12.mistakeAdd.submit') }}</button>
           </div>
         </div>
       </div>
@@ -553,12 +745,21 @@ async function doExportMd() {
     <div v-if="retry.open" class="k12retry" @click.self="closeRetry">
       <div class="k12retry__card">
         <div class="k12retry__head">
+          <!-- UX-2：再练是练习变式题、不是批改——不显验算徽章（badge/verdict），只题目 + 解答，
+               免家长把 unverifiable 误读成「验证失败」。验算徽章只用于「批改」结果。 -->
           <b>{{ t('k12.records.retryTitle') }}</b>
-          <span v-if="retry.badge" class="pill pill-green">{{ retry.badge }}</span>
           <span class="k12rec__sp" />
           <button class="btn btn-ghost" @click="closeRetry">✕</button>
         </div>
-        <p v-if="retry.loading" class="k12rec__hint">{{ t('k12.records.retryLoading') }}</p>
+        <p v-if="retry.loading" class="k12rec__hint" data-testid="retry-loading">{{ t('k12.records.retryLoading') }}</p>
+        <div v-else-if="retry.error" class="k12retry__err" data-testid="retry-error">
+          <p class="k12rec__hint">{{ t('k12.records.retryFailed') }}</p>
+          <button
+            class="btn btn-primary"
+            data-testid="retry-again"
+            @click="retryRecord && doRetry(retryRecord)"
+          >{{ t('k12.records.retryRetryBtn') }}</button>
+        </div>
         <template v-else>
           <p class="k12retry__mask">🔒 {{ t('k12.records.retryMaskHint') }}</p>
           <!-- 守答案真遮罩：未揭示时模糊 + 禁选中（防孩子凑近一眼看光），家长点按才显示 -->
@@ -574,6 +775,87 @@ async function doExportMd() {
         </template>
       </div>
     </div>
+
+    <!-- 错题详情弹层（BUG-20260712-#2）：复用列表已有 RecordItem 字段，不额外请求后端，可关闭。 -->
+    <div v-if="detail.open && detail.record" class="k12modal" data-testid="mistake-detail" @click.self="closeDetail">
+      <div class="k12modal__card">
+        <div class="k12modal__head">
+          <b>{{ t('k12.detail.title') }}</b>
+          <span
+            v-if="detailStatus"
+            class="k12detail__status" :class="`k12detail__status--${detailStatusTone}`"
+            data-testid="detail-status"
+          >{{ detailStatus }}</span>
+          <span class="k12rec__sp" />
+          <button class="btn btn-ghost" @click="closeDetail">✕</button>
+        </div>
+        <!-- 积累本详情：内容 / 学科 / 类型（积累不复习，无错因/再练语义） -->
+        <div v-if="detail.kind === 'accum'" class="k12detail">
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.detail.content') }}</span>
+            <p class="k12detail__val" data-testid="detail-content">{{ detailContent || '—' }}</p>
+          </div>
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.accum.subject') }}</span>
+            <p class="k12detail__val" data-testid="detail-accum-subject">{{ detailAccumSubject || '—' }}</p>
+          </div>
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.accum.type') }}</span>
+            <p class="k12detail__val" data-testid="detail-accum-type">{{ detailAccumType || '—' }}</p>
+          </div>
+        </div>
+        <!-- 错题详情：题目 / 知识点 / 错因 -->
+        <div v-else class="k12detail">
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.detail.question') }}</span>
+            <p class="k12detail__val" data-testid="detail-question">{{ detailQuestion || '—' }}</p>
+          </div>
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.detail.knowledgePoint') }}</span>
+            <p class="k12detail__val" data-testid="detail-kp">{{ detailKp || '—' }}</p>
+          </div>
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.detail.errorCause') }}</span>
+            <p class="k12detail__val" data-testid="detail-error">{{ detailError || t('k12.detail.noErrorCause') }}</p>
+          </div>
+        </div>
+        <p v-if="detail.kind !== 'accum'" class="k12rec__hint">{{ t('k12.detail.footnote') }}</p>
+        <!-- UX-1：详情弹层「他会了」（已掌握态改显只读徽标，幂等）。仅错题（积累不复习/无掌握语义）。 -->
+        <div v-if="detail.kind !== 'accum'" class="k12detail__actions">
+          <button
+            v-if="!detailMastered"
+            class="btn btn-primary"
+            data-testid="detail-mark-mastered"
+            @click="markMasteredFromDetail"
+          >{{ t('records.markMastered') }}</button>
+          <span
+            v-else
+            class="k12detail__status k12detail__status--got"
+            data-testid="detail-mastered-label"
+          >{{ t('k12.detail.alreadyMastered') }}</span>
+          <span class="k12rec__sp" />
+          <!-- UX-3：克制删除入口——ghost 次级样式（非首屏主按钮），二次确认后才删。 -->
+          <button
+            class="btn btn-ghost k12detail__del"
+            data-testid="detail-delete"
+            @click="askDelete"
+          >{{ t('k12.detail.delete') }}</button>
+        </div>
+        <p v-if="detail.kind !== 'accum'" class="k12detail__delhint">{{ t('k12.detail.deleteHint') }}</p>
+      </div>
+    </div>
+
+    <!-- UX-3：删除二次确认（复用平台 ConfirmDialog；副文案说明用途=移除记错/重复条目）。 -->
+    <ConfirmDialog
+      :open="confirmDelete"
+      :title="t('k12.detail.deleteConfirmTitle')"
+      :message="t('k12.detail.deleteConfirmMsg')"
+      :confirm-text="t('k12.detail.deleteConfirmOk')"
+      :cancel-text="t('k12.accum.cancel')"
+      :danger="true"
+      @confirm="doDelete"
+      @cancel="confirmDelete = false"
+    />
   </div>
 </template>
 
@@ -645,7 +927,13 @@ async function doExportMd() {
   border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
   background: var(--hc-bg-input); color: var(--hc-text-primary);
 }
+/* 多行捕获字段（20260712：题目/错处适配长内容——应用题/古诗/整句整段粘贴） */
+.k12accum__content--area {
+  font: inherit; font-size: 13px; line-height: 1.5; min-height: 44px; resize: vertical;
+}
 .k12accum__actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* 积累空态：克制列表占位（原型 rc1 无大居中卡；入口在上方 bar 常驻） */
+.k12accum__empty { color: var(--hc-text-muted); font-size: 13px; padding: 22px 4px; text-align: center; margin: 0; }
 /* modal 内的表单去掉自带卡片边框（弹层卡片已提供容器） */
 .k12accum__form--modal { border: none; background: transparent; padding: 0; margin-bottom: 0; }
 /* 记一条错题 / 自定义组卷 弹窗（原型 modal 形态；与 .k12retry 同族样式） */
@@ -672,6 +960,17 @@ async function doExportMd() {
 /* 功能位单色描边图标（20260709 视觉评审：emoji 只留身份/语义徽章位；与原型 .ic-sm 同规格） */
 .k12ic { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
 .k12rec__addbtn { display: inline-flex; align-items: center; gap: 5px; }
+/* 全部错题=默认折叠的次级档案（原型 1598 <details>）：折叠态隐藏筛选 + 档案行（.record-list 直接子 .rl-rows），
+   「本周该练」的 .rl-review .rl-rows 是嵌套子、不受 > 直接子选择器命中，故行动卡常驻。 */
+.k12arch__toggle {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: none; background: none;
+  font-size: 13px; font-weight: 700; color: var(--hc-text-primary); cursor: pointer;
+}
+.k12arch__caret { font-size: 10px; color: var(--hc-text-muted); transition: transform 0.15s ease; }
+.k12arch__caret--open { transform: rotate(90deg); }
+.k12mistakes--collapsed :deep(.rl-filters),
+.k12mistakes--collapsed :deep(.rl-empty),
+.k12mistakes--collapsed :deep(.record-list > .rl-rows) { display: none; }
 /* 「本周该练」行动卡：跨科分布 + 趋势 pill（原型 stpill got/done 同源色） */
 .k12dist { font-size: 12.5px; color: var(--hc-text-secondary); margin-left: -4px; }
 .k12trend {
@@ -693,4 +992,32 @@ async function doExportMd() {
 .k12retry__bodywrap { position: relative; }
 .k12retry__bodywrap--masked .k12retry__body { filter: blur(7px); user-select: none; pointer-events: none; }
 .k12retry__reveal { position: absolute; inset: 0; margin: auto; width: fit-content; height: fit-content; }
+/* 再练失败态：可重试提示（不静默关弹层 · BUG-20260712-#1） */
+.k12retry__err { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+/* 错题详情弹层（BUG-20260712-#2）：字段行 label + 值 */
+.k12detail { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 6px; }
+.k12detail__row { display: flex; flex-direction: column; gap: 3px; }
+.k12detail__label { font-size: 11.5px; color: var(--hc-text-muted); }
+.k12detail__val { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--hc-text-primary); white-space: pre-wrap; word-break: break-word; }
+.k12detail__status { font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 700; white-space: nowrap; }
+.k12detail__status--todo { color: var(--hc-error); background: color-mix(in srgb, var(--hc-error) 10%, transparent); }
+.k12detail__status--done { color: var(--hc-warning); background: color-mix(in srgb, var(--hc-warning) 12%, transparent); }
+.k12detail__status--got { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
+.k12detail__status--na { color: var(--hc-text-muted); background: var(--hc-bg-input); }
+/* UX-1/3：详情弹层动作行（他会了 = 主动作左；删除 = 克制 ghost，右侧，弱化） */
+.k12detail__actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.k12detail__del { color: var(--hc-error); }
+.k12detail__del:hover { background: color-mix(in srgb, var(--hc-error) 10%, transparent); }
+.k12detail__delhint { font-size: 11px; color: var(--hc-text-muted); margin-top: 6px; }
+/* 项-5：正向空态卡（与「本周该练」行动卡等视觉重量，填住空白，不留悬空） */
+.k12empty {
+  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px;
+  padding: 26px 18px; border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card); border: 0.5px solid var(--hc-border);
+}
+.k12empty__icon { font-size: 30px; line-height: 1; margin-bottom: 2px; }
+.k12empty__title { font-size: 14.5px; color: var(--hc-text-primary); }
+.k12empty__sub { font-size: 12.5px; color: var(--hc-text-secondary); margin: 0; }
+.k12empty__next { font-size: 12px; color: var(--hc-text-muted); margin: 2px 0 0; font-variant-numeric: tabular-nums; }
+.k12empty__cta { margin-top: 10px; }
 </style>

@@ -112,6 +112,74 @@ test.describe('真机手感 @ WebKit（Tauri WKWebView 同引擎）', () => {
     expect(s.autoTop).toBeGreaterThan(0)   // scrollIntoView auto 真滚了
     expect(s.smoothMax).toBeGreaterThan(0) // scrollIntoView smooth 真滚了
   })
+
+  /**
+   * ⑨ composer 盒内首行 chips 几何 + 药丸样式（对齐原型 .composer-chips/.composer-chip；防再漂移）
+   *
+   * 背景：K12 辅导会话 composer 首行渲染场景预设 chips（🧮数学讲解/💡渐进提示/📷识题校验），
+   * 曾漂成 bg-active(2× 蓝) + 14px 圆角矩形 + 主文字色 + 1px 边、且 chips 行 padding-bottom:8px
+   * + margin-bottom:6px 叠出 14px 空档（原型仅 margin-bottom:8px）。此处在真实 WebKit 里量几何取证：
+   *   ① chip 左缘 == placeholder 左缘 == 盒 padding-left（同一垂直基线，不贴边不错位）；
+   *   ② chip 为全圆角药丸（border-radius >= 半高），非圆角矩形；
+   *   ③ chips 行与输入行间距 ~8px（对齐原型，非旧 14px）。
+   * chips 只在场景会话出现，空态 /chat 无——故用原型同构的 scoped 元素注入真实盒内量真值
+   *（与本套件 ② 滚动箭头同法：借盒的 data-v- scope 让 scoped CSS 生效）。
+   */
+  test('⑨ composer chips 首行：左缘对齐 placeholder + 药丸样式 + 与输入行 ~8px（WebKit）', async ({ page }) => {
+    await page.waitForSelector('.hc-composer__box', { timeout: 20_000 })
+    const g = await page.evaluate(() => {
+      const box = document.querySelector('.hc-composer__box') as HTMLElement
+      const scopeAttr = box.getAttributeNames().find((n) => n.startsWith('data-v-'))!
+      const boxCS = getComputedStyle(box)
+      const ta = box.querySelector('textarea') as HTMLTextAreaElement
+      const taCS = getComputedStyle(ta)
+
+      const chips = document.createElement('div')
+      chips.className = 'hc-composer__skills'
+      chips.setAttribute(scopeAttr, '')
+      const chip = document.createElement('span')
+      chip.className = 'hc-composer__skill-chip'
+      chip.setAttribute(scopeAttr, '')
+      const name = document.createElement('span')
+      name.className = 'hc-composer__skill-name'
+      name.setAttribute(scopeAttr, '')
+      name.textContent = '🧮 数学讲解'
+      chip.appendChild(name)
+      chips.appendChild(chip)
+      // 关掉入场动效（fadeScaleIn 起始 translateY(8px)/scale）——否则量到动画中间帧偏移，非稳态几何
+      chip.style.animation = 'none'
+      box.insertBefore(chips, box.firstChild)
+
+      const boxRect = box.getBoundingClientRect()
+      const taRect = ta.getBoundingClientRect()
+      const chipRect = chip.getBoundingClientRect()
+      const chipCS = getComputedStyle(chip)
+      // 盒左内边距（content-left 相对盒左缘）
+      const boxPadLeft = parseFloat(boxCS.borderLeftWidth) + parseFloat(boxCS.paddingLeft)
+      // placeholder/文本 content-left（textarea 自身 padding:0，故 == 盒 padding-left）
+      const taContentLeft = (taRect.left - boxRect.left) + parseFloat(taCS.borderLeftWidth) + parseFloat(taCS.paddingLeft)
+      const chipLeft = chipRect.left - boxRect.left
+      const r = {
+        placeholderVsBoxPad: Math.round(taContentLeft - boxPadLeft),
+        chipVsPlaceholder: Math.round(chipLeft - taContentLeft),
+        chipRadius: parseFloat(chipCS.borderTopLeftRadius),
+        chipHalfHeight: chipRect.height / 2,
+        gapChipsToInput: Math.round(taRect.top - chipRect.bottom),
+      }
+      chips.remove()
+      return r
+    })
+    // ① placeholder 左缘 == 盒左内边距（不贴边不裁切；req: placeholder 左边界 == 输入区左内边距）
+    expect(Math.abs(g.placeholderVsBoxPad)).toBeLessThanOrEqual(1)
+    // ② chip 左缘与 placeholder 左缘同基线（有 chips 时左对齐一致）
+    expect(Math.abs(g.chipVsPlaceholder)).toBeLessThanOrEqual(2)
+    // ③ chip 为全圆角药丸（原型 999px；WebKit 计算值不裁剪返回 999px），非旧 14px 圆角矩形漂移。
+    //    既断言远大于半高（药丸语义），又用 >=100 明确拒绝 14px 漂移值。
+    expect(g.chipRadius).toBeGreaterThanOrEqual(100)
+    expect(g.chipRadius).toBeGreaterThan(g.chipHalfHeight)
+    // ④ chips 行与输入行间距对齐原型 ~8px（旧漂移为 14px），给 ±3px 容差
+    expect(Math.abs(g.gapChipsToInput - 8)).toBeLessThanOrEqual(3)
+  })
 })
 
 /**

@@ -70,14 +70,10 @@ function render(metadata: Record<string, string>) {
   })
 }
 
-/** 打开识题面板 → 填图 → 识题（公共前置动作） */
+/** 打开识题面板 → 识题（公共前置动作）。BUG-20260711-E：手动 toggle 已删，
+ *  入口=composer 图片自动改道（composerImage prop → 护栏自动 run）。 */
 async function recognizeOnce(w: ReturnType<typeof render>) {
-  const toggle = document.querySelector('#hc-chat-scenario-composer-actions [data-testid="k12-recognize-toggle"]') as HTMLElement
-  expect(toggle, '前置：composer 拍照识题入口存在').toBeTruthy()
-  toggle.click()
-  await flushPromises()
-  await w.find('[data-testid="recognize-b64"]').setValue('data:image/png;base64,Zm9v')
-  await w.find('[data-testid="recognize-run"]').trigger('click')
+  await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
   await flushPromises()
   expect(w.find('[data-testid="rq-item"]').exists(), '前置：识题回显护栏出题').toBe(true)
 }
