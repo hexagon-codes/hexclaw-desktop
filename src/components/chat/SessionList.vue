@@ -5,7 +5,7 @@ import { formatTime } from '@/utils/time'
 import { Trash2, Copy, Pencil, Pin, PinOff, Search, GitBranch } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
-import { getSessionAgent } from '@/stores/session-agent-binding'
+import { getSessionAgent, getSessionAgentTombstone } from '@/stores/session-agent-binding'
 import { scenarioRegistry } from '@/shell/scenario/registry'
 import { listSessions, searchMessages, getSessionBranches, updateSessionTitle as apiUpdateSessionTitle, type SessionMessageSearchResult } from '@/api/chat'
 import { setClipboard } from '@/api/desktop'
@@ -75,6 +75,15 @@ function sessionTitle(s: ChatSession): string {
   const cfg = boundAgentOf(s)
   const avatar = (cfg?.metadata?.avatar ?? '').trim()
   const display = (cfg?.display_name ?? '').trim()
+  // 孤儿态（BUG-20260712 治标）：agent 已删除且标题未被手动改名 → 显示「已删除的智能体」，
+  // 绝不裸显内部 ID（技术泄漏）。信号两路：①绑定墓碑/后端 agent_name 指向查无此人的 agent；
+  // ②遗留会话（绑定早被旧守卫清掉）标题恰为某场景实例内部名（registry 名模式，shell 零场景知识）。
+  if (!cfg && agentsStore.agentsLoaded) {
+    const assoc = getSessionAgent(s.id) || getSessionAgentTombstone(s.id) || (s.agent_name ?? '')
+    const orphanByAssoc = !!assoc && (!raw || raw === assoc)
+    const orphanByPattern = !!raw && scenarioRegistry.matchesInstanceId(raw)
+    if (orphanByAssoc || orphanByPattern) return t('chat.orphanAgentSession')
+  }
   // 标题为空 / 恰为 agent 内部名（未手动改名）→ 显示可读名；改过名则保留自定义标题
   const base = display && (!raw || raw === boundName || raw === cfg?.name)
     ? display
@@ -106,6 +115,24 @@ function togglePin(sessionId: string) {
   pinnedIds.value = new Set(pinnedIds.value)
   savePins()
 }
+
+// 活动会话永远可见（BUG-20260711-G）：点 agent 复用三天前的老会话时，条目按 updated_at
+// 排在「更早」分组视口外，用户视角=「列表里不显示」。选中变化即把活动条目滚进视口；
+// 不重排列表（保持按活跃时间分组的稳定心智），block:nearest 已可见时零跳动。
+watch(
+  () => chatStore.currentSessionId,
+  async (sid) => {
+    if (!sid) return
+    await nextTick()
+    // CSS.escape 兜底（jsdom 无该全局）：会话 id 只需转义引号/反斜杠即可安全进属性选择器
+    const escaped = typeof CSS !== 'undefined' && CSS.escape
+      ? CSS.escape(sid)
+      : sid.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const el = document.querySelector<HTMLElement>(`.hc-sessions__item[data-session-id="${escaped}"]`)
+    el?.scrollIntoView?.({ block: 'nearest' }) // 方法级可选：jsdom 元素无 scrollIntoView 实现
+  },
+  { immediate: true },
+)
 
 
 const sessionMenuItems = computed<ContextMenuItem[]>(() => {

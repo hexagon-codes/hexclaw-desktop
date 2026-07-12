@@ -1,16 +1,14 @@
 /**
- * BUG-20260711（治本）：`/chat?role=` 深链建会话时标题必须快照可读 display_name，
- * 绝不落 agent 内部名——标题落库后是会话自己的资产，智能体删除后列表不得回退成
- * `k12-tutor-2O99CPr_` 这类内部 ID（原型 app.html .cs-item 标准：🎓 小明的辅导助手 · 五年级）。
+ * BUG-20260711-G（复现→修复→锁定）：点智能体（翻译官）进入会话后，会话列表不显示该会话，
+ * 直到发消息收到回复列表才出现。
  *
- * 修复点：
- * 1. ChatView 汇点兜底——调用方漏传 roleTitle 时按已加载 agents 解析 display_name；
- * 2. 存量旧会话（修复前标题 = 内部名）深链进入时仍能复用，不重复建会话。
+ * 期望行为：`/chat?role=…` 深链挂载完成后，新会话立即出现在 chatStore.sessions
+ * （SessionList 直接渲染该数组），标题=显示名——不等首条回复。
+ * 本测试在未修复代码上若 FAIL 即钉死丢失点；修复后 PASS 永久回归锁。
  *
- * 挂载脚手架复用 bug-20260709-session-binding-cleared-on-mount.test.ts（已验证的最小集）。
+ * 脚手架复用 bug-20260709-session-binding-cleared-on-mount.test.ts（已验证的最小集）。
  */
 import { describe, it, expect, beforeEach, beforeAll, afterEach, vi } from 'vitest'
-import type { Mock } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -18,14 +16,14 @@ import ChatView from '../ChatView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useSettingsStore } from '@/stores/settings'
 import { useChatStore } from '@/stores/chat'
-import { createSession } from '@/api/chat'
 
-const K12_AGENT = 'k12-tutor-KKE5v8zQ'
-const K12_DISPLAY = '小明的辅导老师'
+const AGENT = 'translator-abc'
+const DISPLAY = '翻译官'
 
-const { mockGetOllamaStatus, mockListSessions } = vi.hoisted(() => ({
+const { mockGetOllamaStatus, mockListSessions, mockCreateSession } = vi.hoisted(() => ({
   mockGetOllamaStatus: vi.fn(),
   mockListSessions: vi.fn(),
+  mockCreateSession: vi.fn().mockResolvedValue({}),
 }))
 
 const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
@@ -42,7 +40,7 @@ vi.mock('@/api/chat', () => ({
   listSessions: (...args: unknown[]) => mockListSessions(...args),
   listSessionMessages: vi.fn().mockResolvedValue({ messages: [], total: 0 }),
   appendSessionMessage: vi.fn().mockResolvedValue({}),
-  createSession: vi.fn().mockResolvedValue({}),
+  createSession: (...args: unknown[]) => mockCreateSession(...args),
   updateSessionTitle: vi.fn().mockResolvedValue({}),
   suggestSessionTitle: vi.fn().mockResolvedValue({}),
   deleteSession: vi.fn().mockResolvedValue({}),
@@ -69,15 +67,7 @@ vi.mock('@/api/websocket', () => ({
 vi.mock('@/api/agents', () => ({
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
   getAgents: vi.fn().mockResolvedValue({
-    agents: [
-      {
-        name: 'k12-tutor-KKE5v8zQ',
-        display_name: '小明的辅导老师',
-        model: 'qwen3.5:9b',
-        provider: 'ollama',
-        metadata: { scenario: 'k12', 'k12.grade_term': '五年级上' },
-      },
-    ],
+    agents: [{ name: 'translator-abc', display_name: '翻译官', model: '', provider: '', metadata: {} }],
     default: '',
   }),
   createRole: vi.fn(), updateRole: vi.fn(), deleteRole: vi.fn(),
@@ -100,9 +90,7 @@ vi.mock('@/api/config', () => ({
   updateLLMConfig: vi.fn(),
 }))
 
-vi.mock('@/api/ollama', () => ({
-  getOllamaStatus: () => mockGetOllamaStatus(),
-}))
+vi.mock('@/api/ollama', () => ({ getOllamaStatus: () => mockGetOllamaStatus() }))
 
 vi.mock('@/utils/secure-store', () => ({
   saveSecureValue: vi.fn().mockResolvedValue(undefined),
@@ -161,20 +149,10 @@ function buildConfig() {
       gateway_enabled: true, injection_detection: true, pii_filter: false,
       content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60,
     },
-    general: {
-      language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false,
-      defaultAgentRole: '',
-    },
+    general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
     notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
     mcp: { default_protocol: 'stdio' },
   }
-}
-
-function createTestI18n() {
-  return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
-    messages: { 'zh-CN': zhCN, zh: zhCN },
-  })
 }
 
 function mountChatView() {
@@ -182,7 +160,7 @@ function mountChatView() {
   setActivePinia(pinia)
   const settingsStore = useSettingsStore()
   settingsStore.config = buildConfig() as unknown as typeof settingsStore.config
-  const i18n = createTestI18n()
+  const i18n = createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': zhCN, zh: zhCN } })
   return mount(ChatView, {
     global: {
       plugins: [pinia, i18n],
@@ -211,55 +189,54 @@ beforeAll(() => {
   })
 })
 
-describe('BUG-20260711：role 深链会话标题快照 display_name（治本）', () => {
+describe('BUG-20260711-G：深链进入 agent 会话后列表必须立即含该会话（不等首条回复）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
     ;(globalThis as Record<string, unknown>).isTauri = true
     localStorage.clear()
-    mockRoute.query = { role: K12_AGENT } // 关键：不带 roleTitle（K12AgentCard 修复前的调用形态）
+    mockRoute.query = { role: AGENT, roleTitle: DISPLAY }
     mockRoute.path = '/chat'
     mockRoute.params = {}
     mockGetOllamaStatus.mockResolvedValue({ running: false, associated: false, model_count: 0, models: [] })
+    mockCreateSession.mockResolvedValue({})
   })
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).isTauri
   })
 
-  it('★漏传 roleTitle 时新会话标题 = display_name（汇点兜底），绝不落 agent 内部名', async () => {
+  it('★空列表 + 深链进入 → 挂载完成后 sessions 立即含「翻译官」会话', async () => {
+    // 后端行为对齐真机取证：list 稳定返回「创建前」快照为空；新会话靠本地 upsert 立即上屏
     mockListSessions.mockResolvedValue({ sessions: [], total: 0 })
     mountChatView()
     await flushPromises()
     const chatStore = useChatStore()
 
-    expect(chatStore.currentSessionId, '前置：深链应已建会话').toBeTruthy()
-    // 核心断言：createSession 落库标题 = 可读显示名（agent 删除后列表仍是「小明的辅导老师」）
-    const calls = (createSession as unknown as Mock).mock.calls
-    expect(calls.length, '前置：走了新建会话').toBeGreaterThan(0)
-    expect(calls[0]![1]).toBe(K12_DISPLAY)
-    expect(calls[0]![1]).not.toBe(K12_AGENT)
+    expect(chatStore.currentSessionId, '前置：深链已建会话').toBeTruthy()
+    const found = chatStore.sessions.find((s) => s.id === chatStore.currentSessionId)
+    expect(found, '会话列表必须立即含新会话（不等首条回复）').toBeTruthy()
+    expect(found!.title).toBe(DISPLAY)
   })
 
-  it('存量旧会话（标题 = 内部名）深链进入时复用，不重复建会话', async () => {
-    mockListSessions.mockResolvedValue({
-      sessions: [
-        {
-          id: 's-legacy',
-          title: K12_AGENT, // 修复前落库的内部名标题
-          created_at: '2026-07-01T10:00:00Z',
-          updated_at: '2026-07-10T10:00:00Z',
-          message_count: 27,
-        },
-      ],
-      total: 1,
-    })
+  it('★后端 list 響應慢于建会话（竞态）：晚到的空列表不得把刚建的会话从列表冲掉', async () => {
+    // 模拟：createSession 已成功，但 loadSessions 的响应仍是创建前的空快照（后端读写窗口）
+    let resolveList!: (v: { sessions: unknown[]; total: number }) => void
+    mockListSessions
+      .mockResolvedValueOnce({ sessions: [], total: 0 }) // 挂载初次 loadSessions
+      .mockImplementationOnce(() => new Promise((r) => { resolveList = r })) // 深链后的刷新（挂起）
     mountChatView()
     await flushPromises()
     const chatStore = useChatStore()
+    const sid = chatStore.currentSessionId
+    expect(sid).toBeTruthy()
 
-    expect(chatStore.currentSessionId, '应复用存量内部名标题会话').toBe('s-legacy')
-    expect((createSession as unknown as Mock).mock.calls.length, '不得重复建会话').toBe(0)
+    resolveList({ sessions: [], total: 0 }) // 晚到的旧快照
+    await flushPromises()
+    expect(
+      chatStore.sessions.find((s) => s.id === sid),
+      '晚到的旧列表快照不得冲掉当前会话条目',
+    ).toBeTruthy()
   })
 })

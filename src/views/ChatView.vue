@@ -13,7 +13,8 @@ import {
   Brain,
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
-import { bindSessionAgent, getSessionAgent, clearSessionAgent } from '@/stores/session-agent-binding'
+import { bindSessionAgent, getSessionAgent, markSessionAgentOrphaned } from '@/stores/session-agent-binding'
+import { healLegacySessionTitles } from '@/stores/session-title-heal'
 import { useThrottledText } from '@/composables/useThrottledText'
 import { isChannelDefaultAgent } from '@/utils/imChannelBinding'
 import { removeMessage } from '@/services/messageService'
@@ -32,7 +33,7 @@ import {
 } from '@/stores/session-model-binding'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
-import { shouldSendOnEnter, imageSrc, scrollNavFlags, resolveChatScroll } from '@/utils/chat-compose'
+import { shouldSendOnEnter, imageSrc, scrollNavFlags, resolveChatScroll, videoPosterFromMetadata, videoDisplaySrc } from '@/utils/chat-compose'
 import { sanitizeMessageContent } from '@/utils/messageContent'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
@@ -56,6 +57,7 @@ import { useToast, useConversationAutomation, useChatSend, useChatActions, useCr
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
+import { knowledgeHitTitle, knowledgeHitSubtitle } from '@/utils/retrieval-hits'
 import { getSubAgentReports, isSubAgentToolCall, type SubAgentReport } from '@/utils/subagents'
 import { getSkills, type Skill } from '@/api/skills'
 import { getDocuments } from '@/api/knowledge'
@@ -580,7 +582,9 @@ watch(
     if (role && agentsStore.agentsLoaded && !isChannelDefaultAgent(role) && !agentsStore.findAgent(role)) {
       chatStore.agentRole = ''
       chatStore.chatMode = 'chat'
-      if (getSessionAgent(sid) === role) clearSessionAgent(sid)
+      // 墓碑化而非删除（BUG-20260712 治标）：活绑定语义失效（不再恢复死 role），
+      // 但名字留给 SessionList 显示「已删除的智能体」——删绑定会连孤儿信号一起丢。
+      if (getSessionAgent(sid) === role) markSessionAgentOrphaned(sid)
       toast.info(t('chat.orphanAgentCleared', '该智能体已删除，本会话回退为默认助理'))
       return
     }
@@ -594,6 +598,20 @@ watch(
     chatStore.agentRole = cfg.name
     chatStore.chatMode = 'agent'
     bindSessionAgent(sid, cfg.name)
+  },
+  { immediate: true },
+)
+
+// 存量标题自愈（BUG-20260712 治本终章）：趁 agent 还活着，把「标题=内部名」的旧会话落库为
+// 显示名 + 补绑定（运行时反查 → 持久快照；未来删除走墓碑链路）。
+// 触发是**数据就绪驱动**而非挂载时序驱动（BUG-20260712-K）：冷启动 sidecar 未就绪时
+// onMounted 一次性触发会对空列表空跑、永不生效——首启左侧栏仍显示内部 ID 的根因。
+// 自愈幂等（愈后标题不再命中），列表刷新多次触发零副作用。
+watch(
+  () => [chatStore.sessions.length, agentsStore.agentsLoaded] as const,
+  ([sessionCount, agentsLoaded]) => {
+    if (!sessionCount || !agentsLoaded) return
+    void healLegacySessionTitles(chatStore.sessions, agentsStore.findAgent)
   },
   { immediate: true },
 )
@@ -1035,6 +1053,10 @@ onMounted(async () => {
     const unlisten = await listen('sidecar-ready', async () => {
       await settingsStore.loadConfig({ force: true })
       await settingsStore.syncOllamaModels()
+      // 冷启动补拉（BUG-20260712-K 同类根因）：挂载时引擎未就绪 → 会话/agents 全空，
+      // 就绪后必须重拉，否则列表空白且标题自愈/孤儿文案层（数据就绪驱动）拿不到数据。
+      await chatStore.loadSessions()
+      await agentsStore.loadAgents()
       // 后端延迟就绪后同样按优先级恢复当前会话模型，避免覆盖会话绑定（同 BUG-20260626-2 根因）。
       initLLMModelForCurrentSession()
       unlisten()
@@ -1418,25 +1440,63 @@ async function persistGenMessages(userMsg: ChatMessage, assistantMsg: ChatMessag
 }
 
 /**
- * 图像生成完成回调 — 把 prompt + 生成图像拼成 user/assistant 消息插入会话。
- *
- * 与 chat 流的差异：图像生成不走 WebSocket / 不走 LLM router，所以不进入 chatStore
- * 的 sending / streaming 状态机；直接 push 到 messages ref 即可。
- *
- * 持久化：push 后显式调 appendSessionMessage 落库，确保 reload 会话仍能看到。
+ * 乐观占位（BUG-20260711-C）：generation:start 即上屏 用户气泡 + assistant「生成中」占位，
+ * 完成/失败原位替换。视频生成要轮询数分钟，此前全程零反馈，用户以为消息发不出去。
+ * 媒体生成不走 streaming 状态机（见 handleImageGenerated 注释），占位对由本地引用配对。
  */
-async function handleImageGenerated(result: ImageGenResult, prompt: string) {
-  // 确保有会话 ID（首次点击生成时用户可能还在欢迎页面）
+let pendingGen: { userMsg: ChatMessage; assistantMsg: ChatMessage } | null = null
+
+async function handleGenerationStart(kind: 'image' | 'video', prompt: string) {
   if (!chatStore.currentSessionId) {
     await chatStore.ensureSession()
   }
   const ts = new Date().toISOString()
+  const mode = kind === 'image' ? 'image_gen' : 'video_gen'
   const userMsg: ChatMessage = {
     id: nanoid(12),
     role: 'user',
     content: prompt,
     timestamp: ts,
-    metadata: { mode: 'image_gen', model: result.model },
+    metadata: { mode },
+  }
+  const assistantMsg: ChatMessage = {
+    id: nanoid(12),
+    role: 'assistant',
+    content: kind === 'image'
+      ? t('chat.generate.generatingImage', '正在生成图像…')
+      : t('chat.generate.generatingVideo', '正在生成视频，通常需要几分钟…'),
+    timestamp: ts,
+    metadata: { mode, generating: true },
+  }
+  chatStore.messages.push(userMsg, assistantMsg)
+  pendingGen = { userMsg, assistantMsg }
+  await nextTick(scrollToBottom)
+}
+
+/** 认领本轮占位对；start 事件缺失（防御）时按旧行为补插整对，保证完成回调永远有落点。 */
+function claimPendingGen(mode: 'image_gen' | 'video_gen', prompt: string): { userMsg: ChatMessage; assistantMsg: ChatMessage } {
+  const claimed = pendingGen
+  pendingGen = null
+  if (claimed) return claimed
+  const ts = new Date().toISOString()
+  const userMsg: ChatMessage = { id: nanoid(12), role: 'user', content: prompt, timestamp: ts, metadata: { mode } }
+  const assistantMsg: ChatMessage = { id: nanoid(12), role: 'assistant', content: '', timestamp: ts, metadata: { mode } }
+  chatStore.messages.push(userMsg, assistantMsg)
+  return { userMsg, assistantMsg }
+}
+
+/**
+ * 图像生成完成回调 — 原位替换占位（BUG-20260711-C 前为整对 push）。
+ *
+ * 与 chat 流的差异：图像生成不走 WebSocket / 不走 LLM router，所以不进入 chatStore
+ * 的 sending / streaming 状态机；直接操作 messages ref 即可。
+ *
+ * 持久化：替换后显式批量落库，确保 reload 会话仍能看到。
+ */
+async function handleImageGenerated(result: ImageGenResult, prompt: string) {
+  // 确保有会话 ID（首次点击生成时用户可能还在欢迎页面）
+  if (!chatStore.currentSessionId) {
+    await chatStore.ensureSession()
   }
   const attachments: ChatAttachment[] = []
   result.images.forEach((img, idx) => {
@@ -1454,30 +1514,34 @@ async function handleImageGenerated(result: ImageGenResult, prompt: string) {
     })
   })
   const revisedPrompt = result.images.find(i => i.revised_prompt)?.revised_prompt
-  const assistantMsg: ChatMessage = {
-    id: nanoid(12),
-    role: 'assistant',
-    // DALL-E 3 会返回 revised_prompt（自动改写），优先展示给用户看
-    content: revisedPrompt
-      ? `已生成 ${result.images.length} 张图像（提示词已优化为：${revisedPrompt}）`
-      : `已生成 ${result.images.length} 张图像`,
-    timestamp: new Date().toISOString(),
-    // ChatView.getMessageAttachments() 从 metadata.attachments 读取
-    metadata: {
-      mode: 'image_gen',
-      provider: result.provider,
-      model: result.model,
-      usage_ms: result.usage_ms,
-      attachments,
-    },
+  const { userMsg, assistantMsg } = claimPendingGen('image_gen', prompt)
+  userMsg.metadata = { ...userMsg.metadata, model: result.model }
+  // DALL-E 3 会返回 revised_prompt（自动改写），优先展示给用户看
+  assistantMsg.content = revisedPrompt
+    ? `已生成 ${result.images.length} 张图像（提示词已优化为：${revisedPrompt}）`
+    : `已生成 ${result.images.length} 张图像`
+  assistantMsg.timestamp = new Date().toISOString()
+  // ChatView.getMessageAttachments() 从 metadata.attachments 读取
+  assistantMsg.metadata = {
+    mode: 'image_gen',
+    provider: result.provider,
+    model: result.model,
+    usage_ms: result.usage_ms,
+    attachments,
   }
-  chatStore.messages.push(userMsg, assistantMsg)
   void persistGenMessages(userMsg, assistantMsg)
   await nextTick(scrollToBottom)
 }
 
-// 通用生成错误（图像/视频共用 — ChatInput 统一 emit 'generation:error'）
+// 通用生成错误（图像/视频共用 — ChatInput 统一 emit 'generation:error'）：
+// 占位对已上屏时原位置为失败态（用户气泡保留，assistant 占位改失败文案），另 toast 提示。
 function handleImageGenError(message: string) {
+  const claimed = pendingGen
+  pendingGen = null
+  if (claimed) {
+    claimed.assistantMsg.content = t('chat.generate.failedInline', '生成失败：{msg}').replace('{msg}', message)
+    claimed.assistantMsg.metadata = { ...claimed.assistantMsg.metadata, generating: undefined, error: message }
+  }
   toast.error?.(`生成失败：${message}`)
 }
 
@@ -1490,14 +1554,6 @@ function handleImageGenError(message: string) {
 async function handleVideoGenerated(status: VideoTaskStatus, prompt: string) {
   if (!chatStore.currentSessionId) {
     await chatStore.ensureSession()
-  }
-  const ts = new Date().toISOString()
-  const userMsg: ChatMessage = {
-    id: nanoid(12),
-    role: 'user',
-    content: prompt,
-    timestamp: ts,
-    metadata: { mode: 'video_gen', model: status.model },
   }
   const attachments: ChatAttachment[] = []
   const videoSrc = videoToSrc(status)
@@ -1513,24 +1569,21 @@ async function handleVideoGenerated(status: VideoTaskStatus, prompt: string) {
   // 封面优先用后端持久化路径（永不过期）；cover_url 是 Provider 临时 URL（24h 过期），
   // 不内联进消息正文文本（否则失效后正文残留死链文本）。封面只放 metadata 供 <video poster> 消费。
   const coverSrc = coverToSrc(status)
-  const assistantMsg: ChatMessage = {
-    id: nanoid(12),
-    role: 'assistant',
-    content: '视频已生成',
-    timestamp: new Date().toISOString(),
-    metadata: {
-      mode: 'video_gen',
-      provider: status.provider,
-      model: status.model,
-      usage_ms: status.usage_ms,
-      video_url: status.video_url,
-      cover_url: status.cover_url,
-      cover_file_path: status.cover_file_path,
-      poster: coverSrc || undefined,
-      attachments,
-    },
+  const { userMsg, assistantMsg } = claimPendingGen('video_gen', prompt)
+  userMsg.metadata = { ...userMsg.metadata, model: status.model }
+  assistantMsg.content = '视频已生成'
+  assistantMsg.timestamp = new Date().toISOString()
+  assistantMsg.metadata = {
+    mode: 'video_gen',
+    provider: status.provider,
+    model: status.model,
+    usage_ms: status.usage_ms,
+    video_url: status.video_url,
+    cover_url: status.cover_url,
+    cover_file_path: status.cover_file_path,
+    poster: coverSrc || undefined,
+    attachments,
   }
-  chatStore.messages.push(userMsg, assistantMsg)
   void persistGenMessages(userMsg, assistantMsg)
   await nextTick(scrollToBottom)
 }
@@ -1711,20 +1764,14 @@ function getMemoryHits(message: import('@/types').ChatMessage) {
   return normalizeHitList(message.metadata?.memory_hits)
 }
 
+// 命中卡展示走 utils/retrieval-hits（BUG-20260711-B：doc_title/source 皆空是后端合法形态，
+// 标题兜底链必须落到 content 摘要，不能整排渲染成「知识库命中」占位卡）。
 function getHitTitle(hit: Record<string, unknown>) {
-  const docTitle = typeof hit.doc_title === 'string' ? hit.doc_title : ''
-  const source = typeof hit.source === 'string' ? hit.source : ''
-  return docTitle || source || t('chat.knowledgeHit')
+  return knowledgeHitTitle(hit, t)
 }
 
 function getHitSubtitle(hit: Record<string, unknown>) {
-  const parts: string[] = []
-  if (typeof hit.source === 'string' && hit.source) parts.push(hit.source)
-  if (typeof hit.chunk_index === 'number') {
-    const chunkCount = typeof hit.chunk_count === 'number' ? `/${hit.chunk_count}` : ''
-    parts.push(`${t('knowledge.chunk')} ${hit.chunk_index + 1}${chunkCount}`)
-  }
-  return parts.join(' · ')
+  return knowledgeHitSubtitle(hit, t)
 }
 
 async function scrollToMessage(msgId: string) {
@@ -2028,11 +2075,14 @@ function startSidebarResize(event: MouseEvent) {
                             >⬇</button>
                           </span>
                           <span v-else-if="att.type === 'video'" class="hc-msg__video-wrap">
+                            <!-- poster=后端持久化封面（BUG-20260712-J：数据一直在，此前未绑定→黑矩形）；
+                                 无封面回退 #t=0.1 强制 WebKit 渲染首帧 -->
                             <video
                               controls
                               preload="metadata"
                               class="hc-msg__video"
-                              :src="imageSrc(att)"
+                              :poster="videoPosterFromMetadata(msg.metadata)"
+                              :src="videoDisplaySrc(imageSrc(att), videoPosterFromMetadata(msg.metadata))"
                             />
                             <button
                               class="hc-msg__media-download"
@@ -2072,7 +2122,8 @@ function startSidebarResize(event: MouseEvent) {
                         controls
                         preload="metadata"
                         class="hc-msg__video"
-                        :src="String(msg.metadata.video_url)"
+                        :poster="videoPosterFromMetadata(msg.metadata)"
+                        :src="videoDisplaySrc(String(msg.metadata.video_url), videoPosterFromMetadata(msg.metadata))"
                       />
                       <!-- 入库徽章（判错入库确认，schema 驱动 · shell 通用组件） -->
                       <RecordChip v-if="messageRecordChip(msg)" v-bind="messageRecordChip(msg)!" />
@@ -2545,6 +2596,7 @@ function startSidebarResize(event: MouseEvent) {
               :supports-image-gen="isImageGenModel"
               :supports-video-gen="isVideoGenModel"
               @stop="chatStore.stopStreaming()"
+              @generation:start="handleGenerationStart"
               @generated:image="handleImageGenerated"
               @generated:video="handleVideoGenerated"
               @generation:error="handleImageGenError"

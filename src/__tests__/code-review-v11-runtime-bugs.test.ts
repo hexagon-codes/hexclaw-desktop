@@ -306,29 +306,21 @@ describe('BUG 16: SettingsView flushAutoSave re-saves after in-flight promise', 
 // BUG 17 (LOW): useChatSend searches knowledge on every message — DOCUMENTED
 // ════════════════════════════════════════════════════════════
 
-describe('BUG 17: useChatSend always calls searchKnowledge', () => {
+// BUG 17 后续（BUG-20260712-M 根治）：当年「每条消息都打 searchKnowledge」的问题以
+// **删除客户端 Auto-RAG 通道**终结——知识注入唯一来源=引擎侧 QueryHits（fail-closed）。
+// 本锁反转为「禁止加回」：useChatSend 不得再 import/调用 searchKnowledge。
+describe('BUG 17 → BUG-20260712-M: useChatSend 不得再有客户端 Auto-RAG 通道', () => {
   const src = readSrc('composables/useChatSend.ts')
 
-  it('imports searchKnowledge from @/api/knowledge', () => {
-    expect(src).toMatch(/import\s*\{[^}]*searchKnowledge[^}]*\}\s*from\s*['"]@\/api\/knowledge['"]/)
+  it('不再 import searchKnowledge（注入单通道=引擎侧）', () => {
+    expect(src).not.toMatch(/import\s*\{[^}]*searchKnowledge[^}]*\}\s*from\s*['"]@\/api\/knowledge['"]/)
   })
 
-  it('calls searchKnowledge inside handleSend unconditionally', () => {
+  it('handleSend 内不再调用 searchKnowledge / 拼 [知识库参考信息]', () => {
     const fnStart = src.indexOf('async function handleSend')
     const fnBody = src.slice(fnStart)
-    expect(fnBody).toContain('searchKnowledge(text,')
-  })
-
-  it('DOCUMENTED: no guard to skip when knowledge base is empty or disabled', () => {
-    const fnStart = src.indexOf('async function handleSend')
-    const fnBody = src.slice(fnStart)
-    // searchKnowledge is called in a try-catch but without any pre-check
-    // for knowledge base being enabled or non-empty
-    const ragSection = fnBody.slice(
-      fnBody.indexOf('Auto-RAG'),
-      fnBody.indexOf('searchKnowledge') + 40,
-    )
-    expect(ragSection).not.toMatch(/knowledgeEnabled|hasKnowledge|knowledge.*length/)
+    expect(fnBody).not.toContain('searchKnowledge(')
+    expect(fnBody).not.toContain('[知识库参考信息')
   })
 })
 

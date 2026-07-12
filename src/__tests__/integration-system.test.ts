@@ -131,7 +131,7 @@ describe('集成: 模型配置 → 模型选择 → 发消息', () => {
 describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
   beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks(); mockApi.mockReset() })
 
-  it('searchKnowledge 结果被 useChatSend 注入到 sendMessage 的 backendText', async () => {
+  it('前端不再拼 Auto-RAG——知识注入单通道=引擎侧 fail-closed（BUG-20260712-M 契约更新）', async () => {
     const { useChatStore } = await import('@/stores/chat')
     const chat = useChatStore()
     chat.chatParams.model = 'qwen3:8b'
@@ -162,13 +162,12 @@ describe('集成: 知识库搜索 → Auto-RAG → 发消息', () => {
     await handleSend('年假怎么请')
     await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
 
-    // 验证 sendViaBackend 收到了注入 RAG 的 backendText
+    // 客户端 Auto-RAG 通道已删（BUG-20260712-M）：显式检索归一分设门槛无效（垃圾恒 1.0）
+    // 且与引擎注入重复；sendViaBackend 收到可见文本本体，知识注入由引擎 QueryHits 完成。
     const backendCall = chatSvc.sendViaBackend.mock.calls[0]!
     const backendText = backendCall[0] as string
-    expect(backendText).toContain('[知识库参考信息')
-    expect(backendText).toContain('[来源: 员工手册]')
-    expect(backendText).toContain('年假 15 天')
-    expect(backendText).toContain('[用户问题]\n年假怎么请')
+    expect(backendText).not.toContain('[知识库参考信息')
+    expect(backendText).toBe('年假怎么请')
   })
 
   it('知识库搜索失败时不阻塞对话', async () => {

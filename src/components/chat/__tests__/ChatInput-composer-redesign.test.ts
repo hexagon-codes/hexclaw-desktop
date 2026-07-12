@@ -143,10 +143,11 @@ describe('ChatInput · 🎤 语音听写闭环', () => {
     expect(toolByTitle(w, '语音')).toBeTruthy()
   })
 
-  it('不支持时不渲染麦克风按钮', async () => {
+  it('通道不可用时麦克风仍常驻（BUG-20260711-E 对齐原型固定动作行；点击由 useVoice error→toast 提示）', async () => {
     voiceRefs.api.isSupported = false
     const w = await mountChatInput()
-    expect(toolByTitle(w, '语音')).toBeFalsy()
+    // 旧契约「不支持时不渲染」已废弃：WKWebView 检测不到 STT 通道曾致按钮凭空消失、与原型漂移。
+    expect(toolByTitle(w, '语音')).toBeTruthy()
   })
 
   it('点击麦克风触发 toggleListening', async () => {
