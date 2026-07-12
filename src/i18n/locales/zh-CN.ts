@@ -123,6 +123,7 @@ export default {
   // 聊天页
   chat: {
     orphanAgentCleared: '该智能体已删除，本会话回退为默认助理',
+    orphanAgentSession: '已删除的智能体',
     persistFailed: '消息已生成但保存失败，刷新会话后可能丢失',
     title: '聊天',
     sessions: '会话',

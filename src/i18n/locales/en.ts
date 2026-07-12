@@ -117,6 +117,7 @@ export default {
 
   chat: {
     orphanAgentCleared: 'This agent was deleted; the session fell back to the default assistant',
+    orphanAgentSession: 'Deleted agent',
     persistFailed: 'Message generated but not saved; it may be lost after refreshing the session',
     title: 'Chat',
     sessions: 'Sessions',

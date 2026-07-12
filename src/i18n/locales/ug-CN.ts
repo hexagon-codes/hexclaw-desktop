@@ -130,6 +130,7 @@ export default {
 
   chat: {
     orphanAgentCleared: 'This Agent was deleted; the session fell back to the default assistant', // ug 占位（保留术语 Agent），待母语校订
+    orphanAgentSession: 'ئۆچۈرۈلگەن Agent', // ug 占位，待母语校订
     persistFailed: 'Message generated but not saved; it may be lost after refreshing the session', // TODO: verify ug
     title: 'سۆھبەت',
     sessions: 'سۆھبەتلەر',

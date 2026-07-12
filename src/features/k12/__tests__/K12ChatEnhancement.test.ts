@@ -116,14 +116,12 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(ev?.[ev.length - 1]).toEqual([true])
   })
 
-  it('#1 接入：拍照识题按钮在 composer 输入行（非头部/非 composer-top）→ 回显护栏面板开合（默认收起）', async () => {
+  it('#1 接入：识题**零手动按钮**（BUG-20260711-E 对齐原型 app.html:1316）——图片自动改道打开护栏（默认收起）', async () => {
     const w = render()
     expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(false)
-    // 识题入口下沉到输入行动作锚点（对齐原型 composer 相机入口）；composer-top 只留能力 chips,不含识题按钮
-    expect(document.querySelector('#hc-chat-scenario-composer-top [data-testid="k12-recognize-toggle"]')).toBeFalsy()
-    const toggle = document.querySelector('#hc-chat-scenario-composer-actions [data-testid="k12-recognize-toggle"]') as HTMLElement
-    expect(toggle, '识题入口应在 composer 输入行动作槽').toBeTruthy()
-    toggle.click()
+    // 手动识题 toggle 已删（唯一入口=composer 图片自动改道），任何位置都不得出现
+    expect(document.querySelector('[data-testid="k12-recognize-toggle"]')).toBeFalsy()
+    await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
     expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(true)
   })
@@ -139,8 +137,8 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
 
   it('切换实例（agentId 变）→ 关闭上一个孩子的识题面板并清空待识别图片', async () => {
     const w = render()
-    const toggle = document.querySelector('#hc-chat-scenario-composer-actions [data-testid="k12-recognize-toggle"]') as HTMLElement
-    toggle.click()
+    // 打开路径=图片自动改道（BUG-20260711-E：手动 toggle 已删）
+    await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
     expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(true)
 

@@ -23,6 +23,9 @@ import type { VerifyResult } from '@/contracts'
 // initialImage（BUG-20260709 拍照发题不解题）：composer 粘贴/上传改道进来的图片 dataURL，
 // 传入即预填并自动识题（原型契约「粘贴作业照片即自动 OCR 回显护栏」），家长零多余点击。
 const props = defineProps<{ agentId: string; grade?: string; initialImage?: string }>()
+// close：面板自动打开（图片改道）后由头部 ✕ 收起——手动 toggle 已删（BUG-20260711-E），
+// 收起手段必须内聚在面板自身。
+const emit = defineEmits<{ (e: 'close'): void }>()
 
 const { t } = useI18n()
 const store = useK12Store()
@@ -187,6 +190,12 @@ async function coldStart() {
   <div class="rec-panel" data-testid="recognize-guard">
     <div class="rec-panel__head">
       <span class="rec-panel__title">📷 {{ t('k12.recognize.title') }}</span>
+      <button
+        class="rec-panel__x"
+        data-testid="recognize-close"
+        :aria-label="t('common.close', '关闭')"
+        @click="emit('close')"
+      >✕</button>
     </div>
     <p class="rec-panel__intro">{{ t('k12.recognize.intro') }}</p>
 
@@ -329,6 +338,11 @@ async function coldStart() {
 .rec-panel { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
 .rec-panel__head { display: flex; align-items: center; }
 .rec-panel__title { font-size: 13px; font-weight: 700; flex: 1; }
+.rec-panel__x {
+  border: none; background: transparent; color: var(--hc-text-muted); cursor: pointer;
+  font-size: 13px; line-height: 1; padding: 4px 6px; border-radius: 6px; flex-shrink: 0;
+}
+.rec-panel__x:hover { background: var(--hc-bg-hover); color: var(--hc-text-primary); }
 .rec-panel__intro { font-size: 12px; color: var(--hc-text-muted); line-height: 1.5; margin: 0; }
 .rec-panel__file {
   display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer;

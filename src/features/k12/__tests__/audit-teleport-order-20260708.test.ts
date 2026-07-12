@@ -85,7 +85,7 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
 
     expect(warnedTeleport).toBe(false) // defer 后不再"定位失败"
     expect(bridgeInFooter).toBe(true) // 桥接条到达页脚锚点
-    expect(recognizeInActions).toBe(true) // 拍照识题按钮到达输入行动作锚点
+    expect(recognizeInActions).toBe(false) // 手动识题按钮已删（BUG-20260711-E：识题=图片自动改道，原型「零手动按钮」）
     expect(chipsInComposer).toBe(false) // chips 已改数据流上交，不得再落锚点（BUG-20260709）
     w.unmount()
   })

@@ -123,6 +123,13 @@ const mistakeSubjectOptions = computed(() => K12_GRADE_SUBJECT_OPTIONS.map(({ va
   label: t(labelKey),
 })))
 const mistakeSaving = ref(false)
+// textarea 内 Enter=换行；⌘/Ctrl+Enter 提交（20260712 视觉评审定案，与桌面输入习惯一致）
+function onMistakeKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault()
+    void submitMistake()
+  }
+}
 async function submitMistake() {
   const problem = mistakeForm.value.problem.trim()
   if (!mistakeForm.value.subject || !problem || mistakeSaving.value) return
@@ -469,6 +476,17 @@ async function doExportMd() {
         </div>
         <div class="k12accum__form k12accum__form--modal" data-testid="mistake-add-form">
           <div class="k12rec__addhint">{{ t('k12.mistakeAdd.hint') }}</div>
+          <!-- 20260712 视觉评审定案（原型 openAddMistake 同步）：题目=英雄字段置首、多行 textarea
+               （应用题/古诗/英语整句整段粘贴，单行 input=捕获时刻流失条目）；错处同多行；
+               textarea 内 Enter=换行，⌘/Ctrl+Enter 提交。实现不得回退单行 input。 -->
+          <textarea
+            v-model="mistakeForm.problem"
+            class="k12accum__content k12accum__content--area"
+            data-testid="mistake-problem"
+            rows="3"
+            :placeholder="t('k12.mistakeAdd.problemPh')"
+            @keydown="onMistakeKeydown"
+          />
           <div class="k12accum__field" data-testid="mistake-subject">
             <span>{{ t('k12.accum.subject') }}</span>
             <HcSelect
@@ -477,16 +495,13 @@ async function doExportMd() {
               :placeholder="t('k12.prep.pickHint')"
             />
           </div>
-          <input
-            v-model="mistakeForm.problem"
-            class="k12accum__content"
-            data-testid="mistake-problem"
-            :placeholder="t('k12.mistakeAdd.problemPh')"
-          />
-          <input
+          <textarea
             v-model="mistakeForm.studentAnswer"
-            class="k12accum__content"
+            class="k12accum__content k12accum__content--area"
+            data-testid="mistake-answer"
+            rows="2"
             :placeholder="t('k12.mistakeAdd.answerPh')"
+            @keydown="onMistakeKeydown"
           />
           <input
             v-model="mistakeForm.knowledgePoints"
@@ -644,6 +659,10 @@ async function doExportMd() {
   width: 100%; box-sizing: border-box; font-size: 13px; padding: 8px 10px; resize: vertical;
   border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
   background: var(--hc-bg-input); color: var(--hc-text-primary);
+}
+/* 多行捕获字段（20260712：题目/错处适配长内容——应用题/古诗/整句整段粘贴） */
+.k12accum__content--area {
+  font: inherit; font-size: 13px; line-height: 1.5; min-height: 44px; resize: vertical;
 }
 .k12accum__actions { display: flex; justify-content: flex-end; gap: 8px; }
 /* modal 内的表单去掉自带卡片边框（弹层卡片已提供容器） */

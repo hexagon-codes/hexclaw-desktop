@@ -120,11 +120,18 @@ watch(() => props.composerImage, (img) => {
     </div>
   </div>
 
-  <!-- 拍照识题回显护栏面板（辅导 tab，由下方 composer 拍照入口开合，或 composer 粘贴/上传图片自动改道进来；
-       识题走独立 OCR 管道不依赖聊天模型 vision） -->
+  <!-- 拍照识题回显护栏面板（辅导 tab）：**唯一入口=composer 粘贴/上传图片自动改道**
+       （原型 app.html:1316「零手动按钮」，BUG-20260711-E 删除了手动相机 toggle——禁止加回）。
+       识题走独立 OCR 管道不依赖聊天模型 vision；面板头部 ✕ 收起。 -->
   <div v-if="tab === 'chat' && recognizeOpen" class="k12enh-tutor">
     <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
-    <RecognizeGuardPanel :key="agentId" :agent-id="agentId" :grade="grade" :initial-image="pendingRecognizeImage" />
+    <RecognizeGuardPanel
+      :key="agentId"
+      :agent-id="agentId"
+      :grade="grade"
+      :initial-image="pendingRecognizeImage"
+      @close="recognizeOpen = false; pendingRecognizeImage = ''"
+    />
   </div>
 
   <!-- 20260709：删「先花 3 分钟备课」nudge 条。家长辅导是临场的，主动引导改为拍照识题（下方相机入口），
@@ -144,17 +151,10 @@ watch(() => props.composerImage, (img) => {
        BUG-20260709 起不再 Teleport 到 composer 上方锚点（浮动行不在对话框内 + defer/锚点时序反复回归），
        改为 update:composerChips 数据流上交 shell → ChatInput 在对话框盒内渲染（见 emits + watch）。 -->
 
-  <!-- 拍照识题入口：Teleport 到输入行动作锚点,与 +/技能/prompt/麦 同排（原型 composer「上传作业照片」相机
-       ci-btn）。点击开合识题回显护栏（走独立 OCR 管道，不依赖聊天模型 vision）。 -->
-  <Teleport v-if="tab === 'chat'" defer to="#hc-chat-scenario-composer-actions">
-    <button
-      class="k12enh-recbtn"
-      data-testid="k12-recognize-toggle"
-      :class="{ 'k12enh-recbtn--on': recognizeOpen }"
-      :title="t('k12.recognize.run')"
-      @click="recognizeOpen = !recognizeOpen"
-    ><svg class="k12enh-ic" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" /><circle cx="12" cy="13" r="3" /></svg></button>
-  </Teleport>
+  <!-- ⚠️ 识题**没有**手动按钮（BUG-20260711-E 删除，原型 app.html:1316「零手动按钮」拍板）：
+       识题唯一入口 = composer 粘贴/上传作业照片自动改道（scenarioImageIntercept → composerImage
+       watch → 护栏自动 run）。给未来维护者（含 AI）：不要因为看到护栏面板就往输入行加回
+       相机/识题 toggle——那是已定案删除的漂移，回归锁在 bug-20260711-composer-drift-lock.test.ts。 -->
 
   <!-- 记录视图（错题本 tab）：接管消息区（外壳据 recordsActive 隐藏原生消息/输入） -->
   <div v-show="tab === 'records'" class="k12enh-records">
@@ -210,20 +210,9 @@ watch(() => props.composerImage, (img) => {
 .k12enh-bridge {
   text-align: center; margin: 0 16px 12px; font-size: 11.5px; color: var(--hc-text-muted);
 }
-/* composer 上方槽：拍照识题入口 + 预设 chips（识题从头部移到输入框附近·D1） */
-/* 拍照识题：输入行图标工具按钮（与 ChatInput 的 .hc-composer__tool 同款尺寸/手感，行内一排）。 */
-.k12enh-recbtn {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 32px; height: 32px; border-radius: 8px; font-size: 16px; line-height: 1;
-  border: none; background: transparent; color: var(--hc-text-muted); cursor: pointer; flex-shrink: 0;
-  transition: background 0.15s, color 0.15s;
-}
-.k12enh-recbtn:hover { background: var(--hc-bg-hover); color: var(--hc-text-primary); }
-.k12enh-recbtn--on { background: var(--hc-accent-subtle); color: var(--hc-accent); }
+/* 手动识题按钮样式已随入口删除退役（BUG-20260711-E：识题唯一入口=图片自动改道）。 */
 /* composer 预设 chips 样式已随 Teleport 方案退役（BUG-20260709）：
    胶囊渲染归 ChatInput（.hc-composer__skill-chip，对齐原型 .composer-chip），本组件只上交数据。 */
-/* 输入行相机图标（单色描边，与 ChatInput 工具按钮同规格） */
-.k12enh-ic { width: 17px; height: 17px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 /* 渐进提示辅导面板（辅导 tab 内嵌，可开合） */
 .k12enh-tutor {
   margin: 0 16px 8px;
