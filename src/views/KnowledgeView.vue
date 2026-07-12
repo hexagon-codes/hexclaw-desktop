@@ -688,6 +688,8 @@ async function processFiles(files: FileList) {
       (async () => {
         const updateProgress = (pct: number) => {
           entry.progress = pct
+          // 字节传完(100%)后端仍在解析+嵌入：切「处理中」相，别让用户对着 100% 以为卡死（#8）
+          if (pct >= 100) uploadsStore.markProcessing(entry)
         }
 
         try {
@@ -875,7 +877,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
         >
           <Upload
             :size="14"
-            :class="{ 'animate-pulse': uf.status === 'uploading' }"
+            :class="{ 'animate-pulse': uf.status === 'uploading' || uf.status === 'processing' }"
             :style="{
               color:
                 uf.status === 'error'
@@ -899,6 +901,14 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 :style="{ width: uf.progress + '%', background: 'var(--hc-accent)' }"
               />
             </div>
+            <div
+              v-else-if="uf.status === 'processing'"
+              class="text-xs mt-0.5 animate-pulse"
+              :style="{ color: 'var(--hc-accent)' }"
+              data-testid="upload-processing"
+            >
+              {{ t('knowledge.processing') }}
+            </div>
             <div v-else-if="uf.status === 'error'" class="text-xs mt-0.5" style="color: #ef4444">
               {{ uf.error }}
             </div>
@@ -910,7 +920,15 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             </div>
           </div>
           <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
-            {{ uf.status === 'uploading' ? uf.progress + '%' : uf.status === 'done' ? '✓' : '✗' }}
+            {{
+              uf.status === 'uploading'
+                ? uf.progress + '%'
+                : uf.status === 'processing'
+                  ? '⋯'
+                  : uf.status === 'done'
+                    ? '✓'
+                    : '✗'
+            }}
           </span>
         </div>
       </div>
