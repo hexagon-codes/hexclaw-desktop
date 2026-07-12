@@ -52,6 +52,7 @@ import InteractiveBlock from '@/components/chat/InteractiveBlock.vue'
 import ArtifactsPanel from '@/components/artifacts/ArtifactsPanel.vue'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { useToast, useConversationAutomation, useChatSend, useChatActions, useCronCompileLabel } from '@/composables'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
@@ -200,19 +201,41 @@ async function handleMsgCtxAction(action: string) {
       handleEdit(idx)
       break
     case 'delete': {
-      // AP-094 同类：旧实现 fire-and-forget 吞错→删除失败时后端残留、重载"复活"。
-      // 现：乐观移除 + await，失败回滚 UI + 提示；404/410=已不在后端视为删除达成。
-      const removed = chatStore.messages.splice(idx, 1)
-      void Promise.all(removed.map((m) => removeMessage(backendDeletableMessageId(m)))).catch((error) => {
-        const status = (error as { status?: number })?.status
-        if (status === 404 || status === 410) return
-        chatStore.messages.splice(idx, 0, ...removed)
-        logger.error(`[ChatView] delete message failed, rolled back: ${error instanceof Error ? error.message : String(error)}`)
-        toast.error(t('chat.deleteMessageFailed'))
-      })
+      requestDeleteMessage(msg.id)
       break
     }
   }
+}
+
+// 单条消息删除——单一真相源：右键菜单与悬浮工具条「删除」按钮都走这里。
+// 删除会 DELETE 后端且 UI 无恢复入口=用户视角不可逆，故先弹二次确认(对齐 deleteSession)。
+const pendingDeleteMsgId = ref<string | null>(null)
+
+function requestDeleteMessage(msgId: string | null) {
+  if (!msgId) return
+  pendingDeleteMsgId.value = msgId
+}
+
+function confirmDeleteMessage() {
+  const id = pendingDeleteMsgId.value
+  pendingDeleteMsgId.value = null
+  if (!id) return
+  const idx = chatStore.messages.findIndex((item) => item.id === id)
+  if (idx >= 0) deleteMessageAt(idx)
+}
+
+function deleteMessageAt(idx: number) {
+  // AP-094 同类：旧实现 fire-and-forget 吞错→删除失败时后端残留、重载"复活"。
+  // 现：乐观移除 + await，失败回滚 UI + 提示；404/410=已不在后端视为删除达成。
+  const removed = chatStore.messages.splice(idx, 1)
+  if (removed.length === 0) return
+  void Promise.all(removed.map((m) => removeMessage(backendDeletableMessageId(m)))).catch((error) => {
+    const status = (error as { status?: number })?.status
+    if (status === 404 || status === 410) return
+    chatStore.messages.splice(idx, 0, ...removed)
+    logger.error(`[ChatView] delete message failed, rolled back: ${error instanceof Error ? error.message : String(error)}`)
+    toast.error(t('chat.deleteMessageFailed'))
+  })
 }
 
 // ── 消息区窗口化(BUG-20260710 P1)：长会话全量 DOM 是「hex 久用变卡」次因——
@@ -593,8 +616,11 @@ watch(
     const session = chatStore.sessions.find((s) => s.id === sid)
     const title = (session?.title ?? '').trim()
     if (!title) return
-    const cfg = agentsStore.findAgent(title)
-    if (!cfg) return // 标题不是某 Agent 内部名 → 普通会话，不动
+    // 据标题反查绑定 agent：标题可能是内部名（存量未自愈）或**显示名**（已被 session-title-heal
+    // 自愈）——必须两者都能反查，否则从「会话」列表打开已自愈的 K12 会话恢复不出 agentRole →
+    // 辅导 UI 不显示（BUG-20260712 #A）。
+    const cfg = agentsStore.findAgentByNameOrDisplay(title)
+    if (!cfg) return // 标题既非内部名也非显示名 → 普通会话，不动
     chatStore.agentRole = cfg.name
     chatStore.chatMode = 'agent'
     bindSessionAgent(sid, cfg.name)
@@ -2140,6 +2166,7 @@ function startSidebarResize(event: MouseEvent) {
                         @fork="handleFork(windowOffset + idx)"
                         @like="handleLike(msg.id)"
                         @dislike="handleDislike(msg.id)"
+                        @delete="requestDeleteMessage(msg.id)"
                       />
                     </div>
                   </div>
@@ -2419,7 +2446,7 @@ function startSidebarResize(event: MouseEvent) {
                       v-show="hoveredMsgId === msg.id"
                       class="hc-msg__actions-float hc-msg__actions-float--right"
                     >
-                      <MessageActions role="user" :content="msg.content" @edit="handleEdit(windowOffset + idx)" />
+                      <MessageActions role="user" :content="msg.content" @edit="handleEdit(windowOffset + idx)" @delete="requestDeleteMessage(msg.id)" />
                     </div>
                   </div>
                   <div class="hc-msg__time hc-msg__time--right">
@@ -2700,6 +2727,18 @@ function startSidebarResize(event: MouseEvent) {
       :visible="showSkillCreate"
       @close="showSkillCreate = false"
       @created="handleSkillCreated"
+    />
+
+    <!-- 单条消息删除二次确认（后端 DELETE 且 UI 无恢复入口=用户视角不可逆，对齐删除会话惯例） -->
+    <ConfirmDialog
+      :open="!!pendingDeleteMsgId"
+      :title="t('chat.deleteMessageConfirmTitle')"
+      :message="t('chat.deleteMessageConfirmMessage')"
+      :confirm-text="t('agents.delete', '删除')"
+      :cancel-text="t('common.cancel', '取消')"
+      danger
+      @confirm="confirmDeleteMessage"
+      @cancel="pendingDeleteMsgId = null"
     />
   </div>
 </template>

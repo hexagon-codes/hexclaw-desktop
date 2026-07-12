@@ -64,4 +64,37 @@ describe('useAgentsStore', () => {
     expect(names).not.toContain('@im/telegram')
     expect(store.registeredAgents).toHaveLength(1)
   })
+
+  // BUG-20260712 #A：会话标题被 session-title-heal 自愈成 display_name 后，「据标题反查 agent」
+  // 若只按内部名（findAgent）必失败 → 从「会话」列表打开 K12 会话恢复不出 agentRole → 辅导 UI 不显示。
+  it('findAgentByNameOrDisplay 按内部名 + 显示名都能反查（标题自愈后仍可恢复 agent）', async () => {
+    vi.mocked(getAgents).mockResolvedValue({
+      agents: [
+        {
+          name: 'k12-tutor-KKE5v8zQ',
+          display_name: '小王的辅导助手 · 五年级',
+          model: 'qwen3.5:9b',
+          provider: 'Ollama (本地)',
+          metadata: { scenario: 'k12-tutor' },
+        },
+      ],
+      total: 1,
+      default: 'k12-tutor-KKE5v8zQ',
+    } as Awaited<ReturnType<typeof getAgents>>)
+
+    const store = useAgentsStore()
+    await store.loadAgents()
+
+    // 旧 findAgent 只认内部名：显示名（=自愈后的标题）查不到 = bug 根因
+    expect(store.findAgent('小王的辅导助手 · 五年级')).toBeUndefined()
+    expect(store.findAgent('k12-tutor-KKE5v8zQ')).toBeDefined()
+
+    // 新方法：内部名 + 显示名都能反查（RED：修前无此方法 / 显示名恢复不出）
+    expect(store.findAgentByNameOrDisplay('小王的辅导助手 · 五年级')?.name).toBe('k12-tutor-KKE5v8zQ')
+    expect(store.findAgentByNameOrDisplay('k12-tutor-KKE5v8zQ')?.name).toBe('k12-tutor-KKE5v8zQ')
+    // 恢复出的 agent 带 scenario metadata → isK12Instance 成立 → 辅导 UI 显示
+    expect(store.findAgentByNameOrDisplay('小王的辅导助手 · 五年级')?.metadata?.scenario).toBe('k12-tutor')
+    // 无关字符串不误命中
+    expect(store.findAgentByNameOrDisplay('不存在的会话')).toBeUndefined()
+  })
 })

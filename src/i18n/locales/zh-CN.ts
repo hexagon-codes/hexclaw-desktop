@@ -228,6 +228,8 @@ export default {
     editMessage: '编辑消息',
     deleteMessage: '删除消息',
     deleteMessageFailed: '删除消息失败，刷新后消息可能重新出现',
+    deleteMessageConfirmTitle: '删除这条消息？',
+    deleteMessageConfirmMessage: '将从会话中删除这条消息，此操作不可撤销。',
     retryFailed: '重新生成失败，你的消息已保留，请重试',
     retryWhileStreaming: '请等当前回复完成后再重新生成',
     selectModelFirst: '请先选择模型',

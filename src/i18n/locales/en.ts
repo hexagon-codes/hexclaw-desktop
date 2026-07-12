@@ -222,6 +222,8 @@ export default {
     editMessage: 'Edit Message',
     deleteMessage: 'Delete Message',
     deleteMessageFailed: 'Failed to delete message; it may reappear after a refresh',
+    deleteMessageConfirmTitle: 'Delete this message?',
+    deleteMessageConfirmMessage: 'This message will be removed from the conversation. This cannot be undone.',
     retryFailed: 'Failed to regenerate, your message is kept. Please try again.',
     retryWhileStreaming: 'Please wait for the current reply to finish before regenerating',
     selectModelFirst: 'Please select a model first',

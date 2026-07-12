@@ -235,6 +235,8 @@ export default {
     editMessage: 'ئۇچۇرنى تەھرىرلەش',
     deleteMessage: 'ئۇچۇرنى ئۆچۈرۈش',
     deleteMessageFailed: 'ئۇچۇرنى ئۆچۈرۈش مەغلۇپ بولدى، يېڭىلىغاندا ئۇچۇر قايتا كۆرۈنۈشى مۇمكىن',
+    deleteMessageConfirmTitle: 'بۇ ئۇچۇرنى ئۆچۈرەمسىز؟',
+    deleteMessageConfirmMessage: 'بۇ ئۇچۇر سۆھبەتتىن ئۆچۈرۈلىدۇ، بۇ مەشغۇلاتنى قايتۇرغىلى بولمايدۇ.',
     retryFailed: 'قايتا ھاسىل قىلىش مەغلۇپ بولدى، ئۇچۇرىڭىز ساقلاندى، قايتا سىناڭ',
     retryWhileStreaming: 'نۆۋەتتىكى جاۋاب تاماملانغاندىن كېيىن قايتا ھاسىل قىلىڭ',
     selectModelFirst: 'ئالدى بىلەن مودېل تاللاڭ',
