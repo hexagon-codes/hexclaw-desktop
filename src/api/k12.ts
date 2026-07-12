@@ -5,7 +5,7 @@
  * 注意：K12 端点**不需要 user_id**，隔离键是 `agent`（= agents.name）。
  * 错误响应统一 {error: string}（语言不保证），由 client.ts normalizeApiError 提到 e.message。
  */
-import { apiGet, apiPost, apiPut } from './client'
+import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
 
 const BASE = '/api/k12'
 
@@ -67,6 +67,33 @@ export function k12Grade(req: GradeReq) {
   return apiPost<GradeResp>(`${BASE}/grade`, req, { timeout: 120_000 })
 }
 
+// ── record-mistake（记一条错题：家长手动录入的**已知错题**，轻量直录，不跑验算链）──────
+// 与 /grade 的分工：/grade 是「不知道对不对」→ 跑对抗验算链判对错（1-2 分钟）；
+// /record-mistake 是「已经知道错了」→ 直接入错题本 + 单次轻量错因归纳，秒级完成。
+export interface RecordMistakeReq {
+  agent: string
+  subject?: string
+  grade: string
+  source_session?: string
+  problem: string
+  /** 孩子的答案 / 错处（选填） */
+  student_answer?: string
+  /** 家长填的错因（选填，留空由后端单次轻量归纳） */
+  error_cause?: string
+  knowledge_points?: string[]
+}
+export interface RecordMistakeResp {
+  /** 是否新入库（false=幂等去重命中同题） */
+  record_created: boolean
+  record_id?: string
+  /** 最终落库错因（用户填 / 轻量归纳 / 空） */
+  error_cause?: string
+}
+/** 「记一条错题」：直接入错题本（不跑 solve+verify 对抗验算链）。轻量单次调用，30s 足够。 */
+export function k12RecordMistake(req: RecordMistakeReq) {
+  return apiPost<RecordMistakeResp>(`${BASE}/record-mistake`, req, { timeout: 30_000 })
+}
+
 // ── solve（空白/未作答题求解：给解法+答案+讲解，不批改、不入错题本）──────────
 // 单一真相源分叉的「空白卷」端点：识题回收的 student_answer 为空 → 走此端点求解，
 // 不要求家长填答案，绝不触发批改路径的 grade_correct 缺失 502（治本）。
@@ -118,6 +145,14 @@ export function k12ListMistakes(agent: string, status?: string) {
 /** 到期复习队列（due_at <= now，按 due_at 升序） */
 export function k12ReviewQueue(agent: string) {
   return apiGet<MistakesResp>(`${BASE}/review-queue`, { agent })
+}
+
+// ── delete mistake（UX-3 数据纠错：移除记错/重复条目，非逃避难题）────────────
+/** 删除一条错题（DELETE /mistakes/{record_id}?agent=）。后端按 agent 归属校验，越权/不存在 → 404。 */
+export function k12DeleteMistake(agent: string, recordId: string) {
+  return apiDelete<{ ok: boolean }>(
+    `${BASE}/mistakes/${encodeURIComponent(recordId)}?agent=${encodeURIComponent(agent)}`,
+  )
 }
 
 // ── mark-mastered（他会了，乐观锁）───────────────────────────
@@ -320,10 +355,37 @@ export interface ExportMdResp {
 export function k12ExportMd(agent: string) {
   return apiGet<ExportMdResp>(`${BASE}/export`, { agent, format: 'md' })
 }
+// ── render（平台 pandoc + typst 出真二进制文档：POST /api/v1/render）──────────
+// 项-7：桌面端 WKWebView 里 iframe 打印失效 → 之前 PDF 兜底存成 .html。改走后端 render 端点
+// 出真 .pdf。契约：请求 {content:<markdown>, format:'pdf', title?}，成功返回二进制文件流
+// （Content-Type=application/pdf），失败返回 JSON {error:{...}} + 非 2xx。pandoc 读 markdown。
+export interface RenderReq {
+  content: string
+  format: 'pdf' | 'docx' | 'html'
+  title?: string
+}
+/** 把 Markdown 发给平台 render 服务生成二进制文档，返回 Blob（pandoc 30s / +typst PDF 60s，给足 120s）。 */
+export function renderDocument(req: RenderReq): Promise<Blob> {
+  return api<Blob, 'blob'>('/api/v1/render', {
+    method: 'POST', body: req, responseType: 'blob', timeout: 120_000,
+  })
+}
+
 // 注：GET /mistake-sheet 的前端客户端已删除——前端错题卷由客户端 printWorksheet 生成（当前视图错题
 // → A4 iframe 打印），后端周错题卷 md 仅供 cron 投递用（审计 #7 冗余死绑定清理）。
 
 // ── recognize（拍题识题：作业图片 → 结构化题目清单，需 LLM）──────
+/**
+ * 学生作答区域的归一化边界框（0~1），随识题一次返回，供前端在原图上叠加确定性批改标记（✓/✗）。
+ * x,y=框左上角，w,h=框宽高，全部相对整图宽/高的比例（对标作业帮/小猿的「检测坐标 + 程序叠加」范式）。
+ * 缺失/null = 该题未定位（视觉模型未给/坐标非法）→ 前端降级为纯文字批改，绝不叠加错位红叉。
+ */
+export interface BBox {
+  x: number
+  y: number
+  w: number
+  h: number
+}
 export interface RecognizedQuestion {
   question: string
   knowledge_points: string[]
@@ -332,6 +394,8 @@ export interface RecognizedQuestion {
   student_answer?: string
   /** 识题自动判定的题目学科（数学/语文/英语/物理/化学，判不出=空/缺省）。 */
   subject?: string
+  /** 学生作答区域归一化边界框（0~1）；缺失/null=未定位（降级纯文字批改，不叠加）。 */
+  bbox?: BBox | null
 }
 /** 识题响应：题目清单 + 整卷学科（逐题判定取多数，供前端预填学科下拉，家长仍可手动覆盖）。 */
 export interface RecognizeResp {

@@ -17,7 +17,7 @@ import k12Zh from '../i18n/zh-CN'
 import HcSelect from '@/components/common/HcSelect.vue'
 import K12RecordsView from '../views/K12RecordsView.vue'
 
-const h = vi.hoisted(() => ({ gradeSpy: vi.fn() }))
+const h = vi.hoisted(() => ({ recordMistakeSpy: vi.fn() }))
 
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
@@ -25,7 +25,8 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: vi.fn(),
   k12ReviewRetry: vi.fn(),
   k12PrepCard: vi.fn(),
-  k12Grade: (req: unknown) => h.gradeSpy(req),
+  k12Grade: vi.fn(),
+  k12RecordMistake: (req: unknown) => h.recordMistakeSpy(req),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { mastered: 0, reviewing: 0, retried: 0, archived: 0, total: 0 },
     weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '',
@@ -56,10 +57,7 @@ const LONG_PROBLEM = '一个梯形果园，上底 120 米，下底 180 米，高
 describe('BUG-20260712-F：记一条错题弹窗必须适配长内容（原型 openAddMistake 定案）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    h.gradeSpy.mockReset().mockResolvedValue({
-      solution: 'x', verdict: 'agree', evidence_type: 'program', badge: 'ok',
-      correct: false, out_of_scope: false, record_created: true, record_id: 'm-1',
-    })
+    h.recordMistakeSpy.mockReset().mockResolvedValue({ record_created: true, record_id: 'm-1', error_cause: '' })
   })
 
   it('★题目=多行 textarea（rows≥3）、错处=多行 textarea（rows≥2），多行内容原样透传验算管道', async () => {
@@ -79,7 +77,7 @@ describe('BUG-20260712-F：记一条错题弹窗必须适配长内容（原型 o
     await w.find('[data-testid="mistake-submit"]').trigger('click')
     await flushPromises()
 
-    expect(h.gradeSpy).toHaveBeenCalledWith(expect.objectContaining({
+    expect(h.recordMistakeSpy).toHaveBeenCalledWith(expect.objectContaining({
       problem: LONG_PROBLEM, // 换行必须原样保留
     }))
   })
@@ -92,10 +90,10 @@ describe('BUG-20260712-F：记一条错题弹窗必须适配长内容（原型 o
 
     await problem.trigger('keydown', { key: 'Enter' }) // 裸 Enter：不提交
     await flushPromises()
-    expect(h.gradeSpy).not.toHaveBeenCalled()
+    expect(h.recordMistakeSpy).not.toHaveBeenCalled()
 
     await problem.trigger('keydown', { key: 'Enter', metaKey: true }) // ⌘Enter：提交
     await flushPromises()
-    expect(h.gradeSpy).toHaveBeenCalledTimes(1)
+    expect(h.recordMistakeSpy).toHaveBeenCalledTimes(1)
   })
 })

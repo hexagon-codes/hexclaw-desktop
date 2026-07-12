@@ -68,26 +68,47 @@ export default {
     dividerRule: '做错了要改 → 进「错题」（数理化题 + 语英听写/默写/语法改错，跨科按到期混排走复习）；遇到好东西要记住 → 进「积累」（好词好句/古诗/收藏，无复习）。语英字词再练走原词重现·确定性字符比对，数理化走 solve 验算链；作文只留档进报告、不进复习队列。',
   },
 
+  // 项-5：空态设计（正向、家长向——传递"井井有条/孩子跟上了"，不是"暂无数据"）
+  emptyReview: {
+    title: '本周暂无到期复习',
+    sub: '错题都在复习计划里，稳步消化中',
+    nextReview: '下次复习 · {date}',
+    practice: '提前练一练',
+  },
+  emptyAccum: {
+    title: '积累本还空着',
+    sub: '好词好句、古诗、易错词，随手记进来',
+    cta: '＋ 记到积累本',
+  },
+
   // 错题详情弹层（BUG-20260712-#2）
   detail: {
     title: '错题详情',
     question: '题目原文',
+    content: '内容',
     knowledgePoint: '知识点',
     errorCause: '错因',
     noErrorCause: '（暂无错因记录）',
     footnote: '在上方列表点「再练」出同知识点变式题；点「他会了」移出复习队列。',
+    alreadyMastered: '已掌握 ✓',
+    delete: '删除这条错题',
+    deleteHint: '用于移除记错的 / 重复的条目——不是为了跳过难题。',
+    deleteConfirmTitle: '删除这条错题？',
+    deleteConfirmMsg: '删除后不可恢复。仅用于移除记错的 / 重复的条目。',
+    deleteConfirmOk: '删除',
+    deleted: '已删除这条错题',
   },
 
   mistakeAdd: {
     open: '记一条错题',
-    hint: '课堂练习、学校做的、老师订正的——没经过 App 的错题也能记进来。填题目和孩子的答案，我来验算并入本子；能验算的自动出变式题进复习。',
+    hint: '课堂练习、学校做的、老师订正的——没经过 App 的错题也能记进来。填题目和孩子的错处，直接记入错题本并加入本周复习；错因留空我来帮你归纳。',
     problemPh: '题目 / 内容，例：3.8×3；或 believe；或古诗某句',
     answerPh: '孩子的答案 / 错处（选填），例：算成了 10.4',
     kpPh: '知识点 · 错因（选填，可留空由 AI 归纳）',
-    submit: '验算并记入',
-    submitting: '验算中…（约 1-2 分钟）',
+    submit: '记入错题本',
+    submitting: '记入中…（AI 归纳错因约几秒）',
     recorded: '已记入错题本 · 已加入本周复习队列',
-    notWrong: '验算通过（答案正确），未记入错题本',
+    exists: '这道题已在错题本中',
   },
   customPaper: {
     hint: '「一键出复习卷」已按智能默认组好（覆盖本周待复习 · 每题 1 道变式 · 连续错的自动 2 道）。想微调再用这里。',
@@ -286,6 +307,17 @@ export default {
     coldStartInferred: '已据知识点推断为「{grade}」并建档，可在档案里随时修改。',
     coldStartFallback: '知识点不足以推断年级，用了兜底「{grade}」——建议手动到档案确认。',
     err: '识题失败',
+  },
+  overlay: {
+    title: '原图批改',
+    showOriginal: '看原图',
+    showGraded: '看批改',
+    imageAlt: '作业原图批改叠加',
+    correct: '对',
+    wrong: '错',
+    degradedTitle: '以下题目未能在原图上定位作答区域，改为文字批改（不叠加，避免标错位置）：',
+    correctAnswer: '正确答案',
+    errorCause: '错因',
   },
   tutor: {
     title: '渐进提示辅导',

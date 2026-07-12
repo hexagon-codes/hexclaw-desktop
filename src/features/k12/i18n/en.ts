@@ -65,26 +65,47 @@ export default {
     dividerRule: 'Wrong-and-fix → 「Mistakes」(math/phys/chem problems + CN/EN dictation/spelling/grammar fixes, cross-subject review by due date); worth-remembering → 「Notes」(good phrases/poems/collected, no review). CN/EN word practice = verbatim recall + exact string match; math/sci = solve verification. Essays are archived into reports only, not the review queue.',
   },
 
+  // 项-5: empty states (positive, parent-facing — "all in order / your child is keeping up")
+  emptyReview: {
+    title: 'Nothing due for review this week',
+    sub: 'Every mistake is in the review plan, steadily being worked through',
+    nextReview: 'Next review · {date}',
+    practice: 'Practice ahead',
+  },
+  emptyAccum: {
+    title: 'Your notes are still empty',
+    sub: 'Good phrases, poems, tricky words — jot them down as you go',
+    cta: '＋ Add to notes',
+  },
+
   // Mistake detail dialog (BUG-20260712-#2)
   detail: {
     title: 'Mistake detail',
     question: 'Problem',
+    content: 'Content',
     knowledgePoint: 'Topic',
     errorCause: 'Cause',
     noErrorCause: '(no cause recorded yet)',
     footnote: 'Tap “Practice” in the list above for a same-concept variant; tap “Got it” to remove it from the review queue.',
+    alreadyMastered: 'Mastered ✓',
+    delete: 'Delete this mistake',
+    deleteHint: 'For removing mis-logged / duplicate entries — not for skipping hard problems.',
+    deleteConfirmTitle: 'Delete this mistake?',
+    deleteConfirmMsg: 'This cannot be undone. Only for removing mis-logged / duplicate entries.',
+    deleteConfirmOk: 'Delete',
+    deleted: 'Mistake deleted',
   },
 
   mistakeAdd: {
     open: 'Log a mistake',
-    hint: "Classroom work, work done at school, teacher corrections — mistakes that never went through the app can be logged too. Enter the problem and your child's answer; I'll verify and add it to the book, and auto-generate variant practice for anything verifiable.",
+    hint: "Classroom work, work done at school, teacher corrections — mistakes that never went through the app can be logged too. Enter the problem and your child's error; it goes straight into the mistake book and this week's review. Leave the cause blank and I'll summarize it for you.",
     problemPh: 'Problem / content, e.g. 3.8×3; or believe; or a poem line',
     answerPh: "Child's answer / error (optional), e.g. got 10.4",
     kpPh: 'Knowledge point · cause (optional, leave blank for AI)',
-    submit: 'Verify & log',
-    submitting: 'Verifying… (~1-2 min)',
+    submit: 'Log to mistake book',
+    submitting: 'Logging… (AI is summarizing the cause, a few seconds)',
     recorded: 'Logged to mistake book · added to this week’s review queue',
-    notWrong: 'Verification passed (answer correct) — not logged',
+    exists: 'This problem is already in the mistake book',
   },
   customPaper: {
     hint: "'Generate review paper' already uses smart defaults (this week's due · 1 variant each · 2 for repeated misses). Fine-tune here.",
@@ -282,6 +303,17 @@ export default {
     coldStartInferred: 'Inferred as "{grade}" from the knowledge points and created the profile; editable anytime.',
     coldStartFallback: 'Not enough points to infer a grade, fell back to "{grade}" — please confirm in the profile.',
     err: 'Recognition failed',
+  },
+  overlay: {
+    title: 'Grading on the photo',
+    showOriginal: 'Show original',
+    showGraded: 'Show grading',
+    imageAlt: 'Homework photo with grading overlay',
+    correct: 'Correct',
+    wrong: 'Wrong',
+    degradedTitle: 'These questions could not be located on the photo, graded as text instead (no overlay, to avoid mis-placed marks):',
+    correctAnswer: 'Correct answer',
+    errorCause: 'Error cause',
   },
   tutor: {
     title: 'Progressive hints',

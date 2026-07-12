@@ -36,8 +36,23 @@ function fieldValue(item: RecordItem, field?: RecordFieldSpec): string {
   return String(raw)
 }
 
+// 项-6a：芯片值末尾的分隔符「·」剥掉——知识点为空时场景层组合出的「数学·」会看着断了尾巴，
+// 只显「数学」。领域无关：任何芯片都不该以分隔符收尾。
+function chipText(item: RecordItem, field?: RecordFieldSpec): string {
+  return fieldValue(item, field).replace(/[·・]\s*$/, '').trimEnd()
+}
+
 function stateOf(item: RecordItem) {
   return props.schema.states?.find((s) => s.id === item.status)
+}
+
+// UX-1：「他会了」下放到全部档案行（此前只在到期复习队列块，该块常空 → 家长找不到入口）。
+// 领域无关判定：仅可复习集合（reviewable，如错题本）渲染；已到「达成」态（tone=got，如已掌握）
+// 或「归档」终态（tone=na）的行不再显示——幂等，且这两态点了后端状态机也会拒。
+function canMarkMastered(item: RecordItem): boolean {
+  if (!props.schema.reviewable) return false
+  const tone = stateOf(item)?.tone
+  return tone !== 'got' && tone !== 'na'
 }
 
 // 状态筛选（通用）：全部 + 各状态
@@ -71,7 +86,7 @@ const reviewItems = computed(() => {
         <div v-for="item in reviewItems" :key="item.recordId" class="rl-row">
           <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
           <!-- data-chip=chip 文本：领域无关的样式钩子，场景层可按值前缀定色（如 K12 学科色） -->
-          <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="fieldValue(item, f)">{{ fieldValue(item, f) }}</span>
+          <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{ chipText(item, f) }}</span>
           <span class="rl-meta rl-spacer">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
           <button class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
             {{ t('records.practiceAgain') }}
@@ -110,13 +125,19 @@ const reviewItems = computed(() => {
       <div v-for="item in filteredItems" :key="item.recordId" class="rl-row">
         <span v-if="dateField" class="rl-date">{{ fieldValue(item, dateField) }}</span>
         <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
-        <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="fieldValue(item, f)">{{ fieldValue(item, f) }}</span>
+        <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{ chipText(item, f) }}</span>
         <span class="rl-meta rl-spacer">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
         <span v-if="stateOf(item)" class="rl-status" :class="`rl-status--${stateOf(item)!.tone ?? 'na'}`">
           {{ t(stateOf(item)!.labelKey) }}
         </span>
-        <button class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
+        <!-- 「再练」是复习动作：仅可复习集合（schema.reviewable）才渲染——积累本不复习/不再练，
+             无条件渲染死按钮会点了无反应（BUG-20260712-#2 治本，schema 门控行内动作）。 -->
+        <button v-if="schema.reviewable" class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
           {{ t('records.practice') }}
+        </button>
+        <!-- UX-1：全部错题档案行也能「他会了」（未掌握/未归档时才显，幂等）。 -->
+        <button v-if="canMarkMastered(item)" class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
+          {{ t('records.markMastered') }}
         </button>
         <button class="rl-btn" @click="emit('action', { id: 'detail', record: item })">
           {{ t('records.detail') }}

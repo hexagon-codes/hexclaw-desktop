@@ -6,9 +6,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // 修：桌面端把 buildXxxHtml 生成的 HTML 经 downloadInApp(data:text/html;base64,…) 存成文件，
 // 用户用系统预览/浏览器打开后打印；浏览器/dev 保留 iframe win.print()。
 
-const h = vi.hoisted(() => ({ tauri: false, saveSpy: vi.fn<(src: string, fn: string) => void>() }))
+const h = vi.hoisted(() => ({
+  tauri: false,
+  saveSpy: vi.fn<(src: string, fn: string) => void>(),
+  renderSpy: vi.fn<(req: unknown) => Promise<Blob>>(),
+}))
 vi.mock('@/utils/platform', () => ({ isTauri: () => h.tauri }))
 vi.mock('@/utils/download', () => ({ downloadInApp: (src: string, fn: string) => h.saveSpy(src, fn) }))
+// 项-7：exportPdf 改走后端 render 端点出真 PDF（printWorksheet/printPrepCard 打印流仍存 .html 不变）。
+vi.mock('@/api/k12', () => ({ renderDocument: (req: unknown) => h.renderSpy(req) }))
 
 import { printPrepCard, printWorksheet, exportPdf } from '../export'
 import type { RecordItem } from '@/contracts'
@@ -58,12 +64,15 @@ describe('BUG-E K12 打印在 Tauri 桌面端走原生保存（iframe win.print(
     expect(html).toContain('一个长方体的体积是多少')
   })
 
-  it('Tauri 环境 → exportPdf（走 printWorksheet）同样落原生保存', async () => {
+  it('Tauri 环境 → exportPdf 走后端 render 端点存真 .pdf（不再兜底 .html · 项-7）', async () => {
     h.tauri = true
+    h.renderSpy.mockResolvedValue(new Blob([new Uint8Array([0x25, 0x50, 0x44, 0x46])], { type: 'application/pdf' }))
     const ok = await exportPdf(items, wsMeta)
     expect(ok).toBe(true)
+    expect(h.renderSpy).toHaveBeenCalledOnce()
     expect(h.saveSpy).toHaveBeenCalledOnce()
-    expect(h.saveSpy.mock.calls[0]![0]).toMatch(/^data:text\/html;base64,/)
+    expect(h.saveSpy.mock.calls[0]![0]).toMatch(/^data:application\/pdf;base64,/) // 真 pdf 字节，非 html
+    expect(h.saveSpy.mock.calls[0]![1]).toBe('错题卷.pdf')
   })
 
   it('浏览器/dev 环境（isTauri=false）→ 不调 downloadInApp（保留 iframe win.print()）', async () => {

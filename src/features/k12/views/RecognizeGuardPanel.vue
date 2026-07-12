@@ -15,7 +15,8 @@ import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import PrepCardPanel from './PrepCardPanel.vue'
-import type { RecognizedQuestion } from '@/api/k12'
+import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
+import type { RecognizedQuestion, BBox } from '@/api/k12'
 import type { VerifyResult } from '@/contracts'
 
 // 审计单-High-2（bug-20260709）：本组件全部 API 调用的 agent = agents.name（后端隔离键），
@@ -44,6 +45,12 @@ interface GuardRow {
   solution: string
   wrongStep: string
   errorCause: string
+  // 原图批改 Phase 1：识题回收的学生作答区域归一化边界框（缺失/非法=null → 该题降级纯文字批改，不叠加）。
+  bbox: BBox | null
+  // graded=true 表示本题走了「批改」（已答卷路径），供原图叠加只画已批改题的 ✓/✗；solve（空白题求解）不叠加。
+  graded: boolean
+  // correct 存后端批改结论（agree=对），叠加层据此画 ✓（绿）/✗（红）。
+  correct: boolean
 }
 
 const imageB64 = ref('')
@@ -72,6 +79,22 @@ const allKnowledgePoints = computed(() => {
   for (const r of rows.value) for (const kp of r.knowledgePoints) if (!seen.has(kp)) { seen.add(kp); out.push(kp) }
   return out
 })
+
+// 原图批改叠加（Phase 1）：批改完成后，把已批改题的对/错 + bbox 投给 PhotoGradeOverlay。
+// bbox 合理性由叠加组件自己兜底（缺失/非法 → 降级文字批改，不错位），此处只喂数据不做几何判断。
+const overlayMarks = computed(() =>
+  rows.value
+    .filter((r) => r.graded && r.verify)
+    .map((r) => ({
+      correct: r.correct,
+      bbox: r.bbox,
+      question: r.problem,
+      correctAnswer: r.solution,
+      errorCause: r.errorCause,
+    })),
+)
+// 仅在有作业原图（data URL）且至少一题已批改时展示叠加图。
+const showOverlay = computed(() => isImageData.value && overlayMarks.value.length > 0)
 
 function onFile(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
@@ -128,6 +151,9 @@ async function run() {
       solution: '',
       wrongStep: '',
       errorCause: '',
+      bbox: q.bbox ?? null,
+      graded: false,
+      correct: false,
     }))
   } catch (e) {
     if (generation !== agentGeneration) return
@@ -169,6 +195,9 @@ async function gradeRow(i: number) {
     row.solution = res.solution
     row.wrongStep = res.wrongStep ?? ''
     row.errorCause = res.errorCause ?? ''
+    // 已答卷路径：标记为已批改并记录对/错，供原图叠加画 ✓/✗（bbox 缺失时降级文字批改）。
+    row.graded = true
+    row.correct = res.correct
   } catch (e) {
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -193,11 +222,13 @@ async function solveRow(i: number) {
     })
     row.verify = res.verify
     row.solution = res.solution
-    // 解题分叉：无批改结论、不入库。
+    // 解题分叉：无批改结论、不入库、不参与原图叠加（叠加只标已批改的已答题）。
     row.wrongStep = ''
     row.errorCause = ''
     row.recorded = false
     row.recordDeduplicated = false
+    row.graded = false
+    row.correct = false
   } catch (e) {
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -381,6 +412,13 @@ async function coldStart() {
       </button>
     </div>
     <p v-else-if="!recognizing" class="rec-panel__empty">{{ t('k12.recognize.empty') }}</p>
+
+    <!-- 原图批改叠加（Phase 1）：已批改题在作业原图上确定性画 ✓/✗（bbox 缺失/非法则降级文字批改）。 -->
+    <PhotoGradeOverlay
+      v-if="showOverlay"
+      :image="imageB64"
+      :marks="overlayMarks"
+    />
 
     <!-- 整体确认后才内联辅导要点：避免 OCR 尚未核对就把误识知识点送入备课链。 -->
     <PrepCardPanel

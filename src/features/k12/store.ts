@@ -8,8 +8,10 @@ import {
   k12ListMistakes,
   k12ReviewQueue,
   k12MarkMastered,
+  k12DeleteMistake,
   k12PrepCard,
   k12Grade,
+  k12RecordMistake,
   k12Solve,
   k12InsightReport,
   k12StudyTime,
@@ -20,6 +22,8 @@ import {
   k12BindIM,
   k12ProvisionCron,
   type GradeReq,
+  type RecordMistakeReq,
+  type RecordMistakeResp,
   type SolveReq,
   type ColdStartReq,
   type ColdStartResp,
@@ -80,6 +84,12 @@ export const useK12Store = defineStore('k12', () => {
   /** 「他会了」→ mark-mastered（乐观锁）后局部刷新 */
   async function markMastered(agent: string, recordId: string, version: number): Promise<void> {
     await k12MarkMastered({ agent, record_id: recordId, version })
+    await loadMistakes(agent)
+  }
+
+  /** 「删除这条错题」→ delete-mistake（数据纠错）后重载列表 */
+  async function deleteMistake(agent: string, recordId: string): Promise<void> {
+    await k12DeleteMistake(agent, recordId)
     await loadMistakes(agent)
   }
 
@@ -158,6 +168,11 @@ export const useK12Store = defineStore('k12', () => {
     return gradeToResult(resp)
   }
 
+  /** 「记一条错题」→ 轻量直录错题本（已知错题，不跑对抗验算链，秒级完成）。 */
+  async function recordMistake(req: RecordMistakeReq): Promise<RecordMistakeResp> {
+    return await k12RecordMistake(req)
+  }
+
   /** 空白/未作答题求解（单一真相源分叉的「空白卷」路径）→ 解法 + 验算徽章，不批改、不入库。
    *  friendly 错误：慢本地模型/网络超时的裸技术串对家长无价值，统一翻成可操作提示（同 prep 口径）。 */
   async function solve(req: SolveReq): Promise<SolveViewResult> {
@@ -234,7 +249,7 @@ export const useK12Store = defineStore('k12', () => {
 
   return {
     mistakeView, accumView, report, studyTime, prepCard, prepLoading, prepError, loading, error,
-    loadMistakes, markMastered, loadPrepCard, loadReport, loadStudyTime, loadAccumulation, grade, solve,
+    loadMistakes, markMastered, deleteMistake, loadPrepCard, loadReport, loadStudyTime, loadAccumulation, grade, recordMistake, solve,
     recognize, coldStart, tutorTurn, setupAutomation,
   }
 })

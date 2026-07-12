@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
 import k12EnhSrc from '../views/K12ChatEnhancement.vue?raw'
-import channelBindSrc from '@/components/channels/ChannelAgentBinding.vue?raw'
 import recordsSrc from '../views/K12RecordsView.vue?raw'
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
@@ -12,7 +11,8 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 // BUG-20260712 桌面 K12 三处 UI bug 闭环：
 //  #1 拍照识题选图后把 base64 原文糊在框里（应显缩略图预览）
 //  #2 识题面板题目多时撑出视口且不能滚（.k12enh-tutor 缺 max-height+overflow-y）
-//  #3 频道「绑定会话」添加行在窄卡片里布局错乱（下拉无 flex 压扁输入框）——见 channels 侧测试
+//  #3 频道「绑定会话」添加行布局 bug —— 该 per-chat 会话路由功能经产品评审（方案 A）已彻底移除，
+//     原 CSS 断言随功能删除而废止；防复活回归锁见 channels/__tests__/removal-chat-route-session-routing.test.ts
 
 vi.mock('@/api/k12', () => ({
   k12Recognize: vi.fn().mockResolvedValue({ questions: [] }),
@@ -63,12 +63,8 @@ describe('BUG-20260712 #2 识题面板可滚动（题目多不撑出视口）', 
   })
 })
 
-describe('BUG-20260712 #3 绑定会话添加行窄卡片不再挤压错乱', () => {
-  it('route-add 换行 + route-select 有 flex（原下拉无 flex 压扁输入框）', () => {
-    expect(channelBindSrc).toMatch(/\.hc-cab__route-add\s*\{[^}]*flex-wrap:\s*wrap[^}]*\}/) // RED：无 flex-wrap
-    expect(channelBindSrc).toMatch(/\.hc-cab__route-select\s*\{[^}]*flex:/)                 // RED：route-select 无 CSS/flex
-  })
-})
+// BUG-20260712 #3（频道「绑定会话」添加行布局）已随 per-chat 会话路由功能整体移除（方案 A）——
+// 断言删除，改由 channels/__tests__/removal-chat-route-session-routing.test.ts 防止复活。
 
 describe('BUG-20260712 #7 验算并计入 60-120s 有进度反馈', () => {
   it('保存中按钮切换为「验算中…」文案（原恒显「验算并记入」像卡死）', () => {

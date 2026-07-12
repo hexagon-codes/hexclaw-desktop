@@ -7,6 +7,7 @@
 import type { RecordItem } from '@/contracts'
 import { isTauri } from '@/utils/platform'
 import { downloadInApp } from '@/utils/download'
+import { renderDocument } from '@/api/k12'
 
 export interface WorksheetMeta {
   childName: string
@@ -191,7 +192,46 @@ export async function exportWord(items: RecordItem[], meta: WorksheetMeta, filen
   await download(filename, html, 'application/msword')
 }
 
-/** 导出 PDF：走打印对话框另存（WKWebView / 浏览器均支持打印为 PDF） */
-export function exportPdf(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
+/** 从错题记录生成错题卷 Markdown（供后端 pandoc 渲染真 PDF；pandoc 读 markdown，不认 raw HTML）。 */
+export function buildWorksheetMarkdown(items: RecordItem[], meta: WorksheetMeta): string {
+  const lines: string[] = [`# ${meta.title}`, '', `${meta.childName} · ${meta.dateLabel}`, '']
+  if (items.length === 0) {
+    lines.push('（暂无错题）')
+  } else {
+    items.forEach((it, i) => {
+      const q = String(it.fields.question ?? '')
+      const kp = String(it.fields.knowledge_point ?? '').replace(/[·・]\s*$/, '').trim()
+      lines.push(`${i + 1}. ${q}${kp ? `  【${kp}】` : ''}`)
+      lines.push('') // 作答留白（pandoc/typst 段间距）
+    })
+  }
+  return lines.join('\n')
+}
+
+/** Blob → base64（分块避免 String.fromCharCode 参数过多；供 downloadInApp 的 data: URL 用）。 */
+async function blobToBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer())
+  let bin = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(bin)
+}
+
+/**
+ * 导出 PDF。
+ * 项-7 治本：Tauri（桌面 WKWebView）下 iframe 打印失效——把错题卷 Markdown 发给后端
+ * `/api/v1/render`（pandoc + typst）生成**真 .pdf** 字节 → 原生 Save 对话框写盘（不再兜底 .html）。
+ * 非 Tauri（浏览器/dev）保留原逻辑：打印对话框另存为 PDF。
+ */
+export async function exportPdf(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
+  if (isTauri()) {
+    const md = buildWorksheetMarkdown(items, meta)
+    const blob = await renderDocument({ content: md, format: 'pdf', title: meta.title })
+    const b64 = await blobToBase64(blob)
+    await downloadInApp(`data:application/pdf;base64,${b64}`, `${meta.title}.pdf`)
+    return true
+  }
   return printWorksheet(items, meta)
 }
