@@ -46,6 +46,8 @@ interface GuardRow {
 }
 
 const imageB64 = ref('')
+// BUG-20260712：选了文件/贴了图片 data URL 时显示缩略图预览，不再把 base64 原文糊在框里（UX 糙）。
+const isImageData = computed(() => imageB64.value.trim().startsWith('data:image'))
 const rows = ref<GuardRow[]>([])
 const recognizing = ref(false)
 const errMsg = ref('')
@@ -204,7 +206,16 @@ async function coldStart() {
       <input type="file" accept="image/*" data-testid="recognize-file" @change="onFile" />
       <span>{{ t('k12.recognize.pickImage') }}</span>
     </label>
+    <!-- 选了图片 → 显示缩略图预览（不糊 base64 原文）；textarea 用 v-show 保留在 DOM 供粘贴回退。 -->
+    <img
+      v-if="isImageData"
+      :src="imageB64"
+      class="rec-panel__preview"
+      data-testid="recognize-preview"
+      alt="作业照片预览"
+    />
     <textarea
+      v-show="!isImageData"
       v-model="imageB64"
       class="rec-panel__b64"
       data-testid="recognize-b64"
@@ -354,6 +365,11 @@ async function coldStart() {
   width: 100%; box-sizing: border-box; font-size: 11px; padding: 6px 8px; resize: vertical;
   border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
   background: var(--hc-bg-input); color: var(--hc-text-muted);
+}
+/* BUG-20260712：作业照片缩略图预览（替代把 base64 原文糊在框里）。 */
+.rec-panel__preview {
+  max-width: 100%; max-height: 180px; object-fit: contain; border-radius: var(--hc-radius-md);
+  border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); align-self: flex-start;
 }
 .rec-panel__run {
   font-size: 12.5px; padding: 8px; border: 0.5px solid var(--hc-border-hl); border-radius: var(--hc-radius-md);

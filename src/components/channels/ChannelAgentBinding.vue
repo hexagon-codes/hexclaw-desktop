@@ -492,11 +492,14 @@ onBeforeUnmount(() => {
 .hc-cab__route-sp { flex: 1; }
 .hc-cab__route-unbind { border: none; background: transparent; color: var(--hc-text-muted); cursor: pointer; font-size: 13px; padding: 0 4px; }
 .hc-cab__route-unbind:hover { color: var(--hc-error); }
-.hc-cab__route-add { display: flex; align-items: center; gap: 6px; }
+/* BUG-20260712：窄卡片里 chat_id 输入框 + 接待智能体下拉 + 绑定按钮挤一行 → 输入框被压成小空框、
+   下拉(无 flex)独占宽度、布局错乱。改：换行布局，chat_id 输入独占一行，下拉与按钮共下一行。 */
+.hc-cab__route-add { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .hc-cab__route-input {
   font-size: 12px; padding: 6px 8px; border-radius: 8px; min-width: 0;
   border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-primary);
 }
-.hc-cab__route-input { flex: 1; }
-.hc-cab__route-confirm { font-size: 12px; padding: 6px 10px; border-radius: 8px; border: none; background: var(--hc-accent); color: #fff; cursor: pointer; }
+.hc-cab__route-input { flex: 1 1 100%; } /* chat_id 独占整行(可读长 id) */
+.hc-cab__route-select { flex: 1 1 auto; min-width: 0; } /* 下拉填满剩余、可收缩 */
+.hc-cab__route-confirm { flex-shrink: 0; font-size: 12px; padding: 6px 10px; border-radius: 8px; border: none; background: var(--hc-accent); color: #fff; cursor: pointer; }
 </style>

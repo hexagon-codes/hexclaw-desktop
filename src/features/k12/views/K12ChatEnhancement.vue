@@ -220,6 +220,9 @@ watch(() => props.composerImage, (img) => {
   border-radius: var(--hc-radius-md);
   background: var(--hc-bg-elevated);
   flex-shrink: 0;
+  /* BUG-20260712：识题题目多时(如一整页口算)面板无限长撑出视口且不能滚 → 加高度上限 + 内部滚动。 */
+  max-height: 55vh;
+  overflow-y: auto;
 }
 /* 记录视图接管消息区（外壳隐藏原生消息区后，本层 flex:1 填满） */
 .k12enh-records {
