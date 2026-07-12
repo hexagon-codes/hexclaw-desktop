@@ -57,11 +57,37 @@ export interface GradeResp {
   out_of_scope_kp?: string
   record_created: boolean
   record_id?: string
+  /** true = student_answer 为空，后端内部转「解题」分叉（非批改）：只给 solution，
+   *  correct/record 无意义。前端应按解题口径呈现，不显对/错、不显入本。 */
+  solve_only?: boolean
 }
 
 export function k12Grade(req: GradeReq) {
   // LLM 验算链，默认 30s 会腰斩（BUG-20260712-T1）
   return apiPost<GradeResp>(`${BASE}/grade`, req, { timeout: 120_000 })
+}
+
+// ── solve（空白/未作答题求解：给解法+答案+讲解，不批改、不入错题本）──────────
+// 单一真相源分叉的「空白卷」端点：识题回收的 student_answer 为空 → 走此端点求解，
+// 不要求家长填答案，绝不触发批改路径的 grade_correct 缺失 502（治本）。
+export interface SolveReq {
+  agent: string
+  subject?: string
+  grade: string
+  problem: string
+  knowledge_points?: string[]
+}
+export interface SolveResp {
+  solution: string
+  verdict: GradeVerdict
+  evidence_type: EvidenceType
+  badge: GradeBadge
+  out_of_scope: boolean
+  out_of_scope_kp?: string
+}
+export function k12Solve(req: SolveReq) {
+  // 解题验算链同 grade，默认 30s 会腰斩（BUG-20260712-T1）
+  return apiPost<SolveResp>(`${BASE}/solve`, req, { timeout: 120_000 })
 }
 
 // ── mistakes / review-queue（错题本）─────────────────────────
@@ -299,6 +325,17 @@ export function k12ExportMd(agent: string) {
 export interface RecognizedQuestion {
   question: string
   knowledge_points: string[]
+  /** 识题回收的孩子手写作答（未作答=空串/缺省）。前端据此区分空白题(走 /solve 求解)与
+   *  已答题(走 /grade 批改)，并预填到作答框供家长核对/修改。 */
+  student_answer?: string
+  /** 识题自动判定的题目学科（数学/语文/英语/物理/化学，判不出=空/缺省）。 */
+  subject?: string
+}
+/** 识题响应：题目清单 + 整卷学科（逐题判定取多数，供前端预填学科下拉，家长仍可手动覆盖）。 */
+export interface RecognizeResp {
+  questions: RecognizedQuestion[]
+  /** 整卷学科（家长不必手选）；识题一科都判不出时为空/缺省。 */
+  subject?: string
 }
 /**
  * 作业图片 → 题目清单。image_base64 可带或不带 data:image/...;base64, 前缀（后端会剥）。
@@ -306,7 +343,7 @@ export interface RecognizedQuestion {
  */
 export function k12Recognize(imageBase64: string) {
   // 视觉识题（全量题目 JSON 生成），默认 30s 必被腰斩 abort（BUG-20260712-T1 真机取证「识题很慢/卡住」）
-  return apiPost<{ questions: RecognizedQuestion[] }>(`${BASE}/recognize`, { image_base64: imageBase64 }, { timeout: 180_000 })
+  return apiPost<RecognizeResp>(`${BASE}/recognize`, { image_base64: imageBase64 }, { timeout: 180_000 })
 }
 
 // ── tutor-turn（渐进提示三阶段 + 情绪守门）────────────────────

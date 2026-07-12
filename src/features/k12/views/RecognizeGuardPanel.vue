@@ -37,6 +37,7 @@ interface GuardRow {
   editing: boolean
   studentAnswer: string
   grading: boolean
+  solving: boolean
   verify: VerifyResult | null
   recorded: boolean
   recordDeduplicated: boolean
@@ -108,14 +109,19 @@ async function run() {
   confirmed.value = false
   coldStartResult.value = null
   try {
-    const questions = await store.recognize(imageB64.value.trim())
+    const { questions, subject } = await store.recognize(imageB64.value.trim())
     if (generation !== agentGeneration) return
+    // Polish-2：识题自动判定整卷学科 → 预填学科下拉，家长不必手选（仍可手动覆盖）。
+    // 仅识题判出学科时预填；一科都判不出则保持空，此时 solve/批改按钮仍 gate 空学科需家长手选。
+    if (subject) selectedSubject.value = subject
     rows.value = questions.map((q: RecognizedQuestion) => ({
       problem: q.question,
       knowledgePoints: q.knowledge_points ?? [],
       editing: false,
-      studentAnswer: '',
+      // 预填识题回收的孩子作答（空白题=空串），家长可核对/修改；空=空白题走「求解」。
+      studentAnswer: q.student_answer ?? '',
       grading: false,
+      solving: false,
       verify: null,
       recorded: false,
       recordDeduplicated: false,
@@ -167,6 +173,35 @@ async function gradeRow(i: number) {
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     row.grading = false
+  }
+}
+
+// 空白/未作答题「求解·怎么讲」：走 /solve 端点（不要求填答案），给完整解法与验算徽章，
+// 不批改、不入错题本。单一真相源分叉的前端落地——空白题不再被迫填答案或触发批改 502。
+async function solveRow(i: number) {
+  const row = rows.value[i]
+  if (!row || !row.problem.trim() || row.solving || row.grading) return
+  row.solving = true
+  errMsg.value = ''
+  try {
+    const res = await store.solve({
+      agent: props.agentId,
+      subject: selectedSubject.value,
+      grade: props.grade ?? '',
+      problem: row.problem.trim(),
+      knowledge_points: row.knowledgePoints,
+    })
+    row.verify = res.verify
+    row.solution = res.solution
+    // 解题分叉：无批改结论、不入库。
+    row.wrongStep = ''
+    row.errorCause = ''
+    row.recorded = false
+    row.recordDeduplicated = false
+  } catch (e) {
+    errMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    row.solving = false
   }
 }
 
@@ -313,15 +348,27 @@ async function coldStart() {
             :data-testid="`rq-answer-${i}`"
             :placeholder="t('k12.recognize.answerPlaceholder')"
           />
+          <!-- 空白题：走「求解·怎么讲」（不要求填答案）；已答题：批改按钮亮起。 -->
+          <button
+            class="rec-row__solvebtn"
+            :data-testid="`rq-solve-${i}`"
+            :disabled="!row.problem.trim() || !selectedSubject || row.solving || row.grading"
+            @click="solveRow(i)"
+          >
+            {{ row.solving ? t('k12.recognize.solving') : t('k12.recognize.solve') }}
+          </button>
           <button
             class="rec-row__gradebtn"
             :data-testid="`rq-grade-${i}`"
-            :disabled="!row.problem.trim() || !selectedSubject || row.grading"
+            :disabled="!row.problem.trim() || !selectedSubject || !row.studentAnswer.trim() || row.grading || row.solving"
             @click="gradeRow(i)"
           >
             {{ row.grading ? t('k12.recognize.grading') : t('k12.recognize.grade') }}
           </button>
         </div>
+        <p v-if="confirmed && !row.studentAnswer.trim()" class="rec-row__blankhint" :data-testid="`rq-blank-hint-${i}`">
+          {{ t('k12.recognize.blankHint') }}
+        </p>
       </div>
       <button
         v-if="!confirmed"

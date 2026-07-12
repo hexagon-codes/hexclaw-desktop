@@ -43,13 +43,17 @@ function isWeakSource(label: string): boolean {
 
 const prepMeta = () => ({ title: t('k12.prep.title'), gradeLabel: props.grade })
 
-// 打印辅导要点（真打印，隐藏 iframe → 打印对话框；无内容时提示先生成）
-function doPrint() {
+// 打印辅导要点（浏览器：隐藏 iframe → 打印对话框；Tauri 桌面：存 HTML 供系统预览打开打印）
+async function doPrint() {
   if (!store.prepCard) {
     toast.info(t('k12.prep.empty'))
     return
   }
-  printPrepCard(store.prepCard, prepMeta())
+  try {
+    await printPrepCard(store.prepCard, prepMeta())
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  }
 }
 
 // 发到手机：后端无出网推送端点，故用真实客户端动作——复制文本到剪贴板，家长粘贴发到手机 IM。

@@ -236,6 +236,7 @@ export default {
     startPrep: 'Start prep',
     copied: 'Prep card copied — paste to send to your phone',
     copyFailed: 'Copy failed, please retry',
+    generateFailed: 'Failed to generate tutoring tips: the model timed out or the network was interrupted. Please retry. Local models can be slow — switch to a faster cloud model in settings.',
   },
   recognize: {
     title: 'Photo capture · echo guard',
@@ -254,6 +255,10 @@ export default {
     answerPlaceholder: '(optional) the child\'s answer',
     grade: 'Grade this',
     grading: 'Verifying…',
+    solve: 'Solve · explain',
+    solving: 'Solving…',
+    solveFailed: 'Solving timed out or the network dropped — please retry; if a local model is slow, switch to a cloud model in settings.',
+    blankHint: 'Not answered yet — tap "Solve · explain" for the solution, or fill in the child\'s answer to grade it.',
     recorded: 'Saved to mistake book',
     recordDeduplicated: 'Matching record already exists; no duplicate added',
     solution: 'Reference solution',

@@ -171,13 +171,17 @@ const paperTotalOpts = computed(() => [
   { v: '5', label: '≤ 5' },
   { v: '10', label: '≤ 10' },
 ])
-function genCustomPaper() {
+async function genCustomPaper() {
   customPaperOpen.value = false
   // 客户端出卷=printWorksheet(当前错题)。`total` 客户端可兑现(切片限量);`perQ`(每题变式数)/
   // `difficulty`(难度)需后端组卷端点按参数出变式题,当前客户端出卷无法变更,待后端 /paper 端点补齐(契约缺口)。
   const limit = paperForm.value.total === 'all' ? currentItems().length : Number(paperForm.value.total)
-  printWorksheet(currentItems().slice(0, limit), worksheetMeta())
-  toast.success(t('k12.customPaper.generated'))
+  try {
+    await printWorksheet(currentItems().slice(0, limit), worksheetMeta())
+    toast.success(t('k12.customPaper.generated'))
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  }
 }
 
 const view = computed(() => store.mistakeView)
@@ -294,14 +298,18 @@ function worksheetMeta() {
 function currentItems(): RecordItem[] {
   return view.value?.items ?? []
 }
-function doPrint() {
-  printWorksheet(currentItems(), worksheetMeta())
+async function doPrint() {
+  try {
+    await printWorksheet(currentItems(), worksheetMeta())
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e))
+  }
 }
 async function doExport(ext: 'pdf' | 'doc') {
   exportOpen.value = false
   const d = todayLabel().replace(/-/g, '').slice(4)
   try {
-    if (ext === 'pdf') exportPdf(currentItems(), worksheetMeta())
+    if (ext === 'pdf') await exportPdf(currentItems(), worksheetMeta())
     else await exportWord(currentItems(), worksheetMeta(), worksheetFilename(props.agentName, t('k12.records.worksheetTitle'), d, d, 'doc'))
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e)) // 导出失败 surface，不再静默无反应

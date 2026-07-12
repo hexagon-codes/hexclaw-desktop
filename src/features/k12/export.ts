@@ -59,9 +59,16 @@ export function buildWorksheetHtml(items: RecordItem[], meta: WorksheetMeta): st
 }
 
 /** 通过隐藏 iframe 打印（PDF = 打印对话框另存为 PDF）。返回是否成功发起。 */
-export function printWorksheet(items: RecordItem[], meta: WorksheetMeta): boolean {
+export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
   if (typeof document === 'undefined') return false
   const html = buildWorksheetHtml(items, meta)
+  // BUG-E：Tauri macOS WKWebView 里 iframe `window.print()` 是 no-op（同 BUG-20260712-#6 `<a download>` 失效）。
+  // 桌面端把 HTML 经原生 Save 对话框 + Rust 写盘存成文件，用户用系统预览/浏览器打开后打印。
+  if (isTauri()) {
+    const b64 = btoa(unescape(encodeURIComponent(html))) // UTF-8 安全 base64（中文题干）
+    await downloadInApp(`data:text/html;base64,${b64}`, `${meta.title}.html`)
+    return true
+  }
   const iframe = document.createElement('iframe')
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
   document.body.appendChild(iframe)
@@ -124,8 +131,16 @@ export function prepCardToText(card: PrepCard, meta: { title: string; gradeLabel
 }
 
 /** 打印备课卡（隐藏 iframe 打印，同 printWorksheet）。返回是否成功发起。 */
-export function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel: string }): boolean {
+export async function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel: string }): Promise<boolean> {
   if (typeof document === 'undefined') return false
+  // BUG-E：Tauri macOS WKWebView 里 iframe `window.print()` 是 no-op（同 printWorksheet）。
+  // 桌面端把 HTML 经原生 Save 对话框 + Rust 写盘存成文件，用户用系统预览/浏览器打开后打印。
+  if (isTauri()) {
+    const html = buildPrepCardHtml(card, meta)
+    const b64 = btoa(unescape(encodeURIComponent(html))) // UTF-8 安全 base64（中文内容）
+    await downloadInApp(`data:text/html;base64,${b64}`, `${meta.title}.html`)
+    return true
+  }
   const iframe = document.createElement('iframe')
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
   document.body.appendChild(iframe)
@@ -177,6 +192,6 @@ export async function exportWord(items: RecordItem[], meta: WorksheetMeta, filen
 }
 
 /** 导出 PDF：走打印对话框另存（WKWebView / 浏览器均支持打印为 PDF） */
-export function exportPdf(items: RecordItem[], meta: WorksheetMeta): boolean {
+export function exportPdf(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
   return printWorksheet(items, meta)
 }

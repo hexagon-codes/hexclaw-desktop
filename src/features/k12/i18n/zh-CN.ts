@@ -240,6 +240,7 @@ export default {
     startPrep: '开始备课',
     copied: '已复制备课卡，粘贴即可发到手机',
     copyFailed: '复制失败，请重试',
+    generateFailed: '辅导要点生成失败：模型响应超时或网络中断，请重试。本地模型较慢，可在设置里切换到更快的云端模型。',
   },
   recognize: {
     title: '拍照识题 · 回显护栏',
@@ -258,6 +259,10 @@ export default {
     answerPlaceholder: '（可选）孩子的作答',
     grade: '批改这道',
     grading: '验算中…',
+    solve: '求解 · 怎么讲',
+    solving: '解题中…',
+    solveFailed: '解题超时或网络中断，请重试；若用本地模型较慢，可在设置切换云端模型。',
+    blankHint: '这道还没作答——点「求解 · 怎么讲」看解法，或填上孩子的作答再批改。',
     recorded: '已存入错题本',
     recordDeduplicated: '已有相同记录，本次未重复新增',
     solution: '参考解法',
