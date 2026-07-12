@@ -245,33 +245,17 @@ async function onAction(payload: { id: 'practiceAgain' | 'markMastered' | 'detai
       await reload()
     }
   } else if (id === 'practiceAgain') {
-    // 「再练一道」：调 POST /review/retry 出同知识点相似题（过 solve 验算链）。
-    // 原型终态=变式直接入本周复习卷不亮答案；当前后端 retry 无持久化且 solution 题答混排（P2 缺口），
-    // 过渡为「真遮罩弹层」：答案默认模糊不可选中，家长明确点「显示答案」才揭示——守答案承诺交互兑现。
-    // BUG-20260712-#4：出题是 60-120s 的 solve 验算链。关弹窗时 abort 中止后台 + generation
-    // 守卫丢弃过期结果，杜绝「关了还空烧算力 + 跑完幽灵重开弹窗」。
-    const gen = ++retryGen
-    retryAbort?.abort()
-    retryAbort = new AbortController()
-    retry.value = { open: true, loading: true, solution: '', badge: '', revealed: false }
-    try {
-      const res = await k12ReviewRetry({ agent: props.agentId, record_id: record.recordId, grade: props.grade }, retryAbort.signal)
-      if (gen !== retryGen) return // 已被关闭/取代 → 丢弃，不重开弹窗
-      retry.value = { open: true, loading: false, solution: res.solution, badge: res.badge, revealed: false }
-    } catch (e) {
-      if (gen !== retryGen) return // 主动取消/已过期 → 静默
-      toast.error(e instanceof Error ? e.message : String(e))
-      retry.value = { open: false, loading: false, solution: '', badge: '', revealed: false }
-    }
-  } else {
-    toast.info(t('records.detail'))
+    void doRetry(record)
+  } else if (id === 'detail') {
+    openDetail(record)
   }
 }
 
 // 「再练一道」变式题结果弹层（守答案真遮罩：revealed=false 时答案模糊+禁选中，点按才揭示）。
-const retry = ref<{ open: boolean; loading: boolean; solution: string; badge: string; revealed: boolean }>({
+const retry = ref<{ open: boolean; loading: boolean; error: boolean; solution: string; badge: string; revealed: boolean }>({
   open: false,
   loading: false,
+  error: false,
   solution: '',
   badge: '',
   revealed: false,
@@ -279,12 +263,58 @@ const retry = ref<{ open: boolean; loading: boolean; solution: string; badge: st
 // BUG-20260712-#4：再练取消守卫——generation 使在途请求结果失效（防幽灵重开），AbortController 中止后台出题。
 let retryGen = 0
 let retryAbort: AbortController | null = null
+// BUG-20260712-#1：记住最近一次再练的错题，失败态「重试」按钮据此重发（不静默关弹层）。
+const retryRecord = ref<RecordItem | null>(null)
+
+// 「再练一道」：调 POST /review/retry 出同知识点相似题（过 solve 验算链，真机实测 ~68s）。
+// 原型终态=变式直接入本周复习卷不亮答案；当前后端 retry 无持久化且 solution 题答混排（P2 缺口），
+// 过渡为「真遮罩弹层」：答案默认模糊不可选中，家长明确点「显示答案」才揭示——守答案承诺交互兑现。
+// BUG-20260712-#4：关弹窗时 abort 中止后台 + generation 守卫丢弃过期结果（关了不空烧算力/不幽灵重开）。
+// BUG-20260712-#1：68s 长请求——loading 显明确进度文案；失败/超时保持弹层 open 给可重试提示，不静默关。
+async function doRetry(record: RecordItem) {
+  retryRecord.value = record
+  const gen = ++retryGen
+  retryAbort?.abort()
+  retryAbort = new AbortController()
+  retry.value = { open: true, loading: true, error: false, solution: '', badge: '', revealed: false }
+  try {
+    const res = await k12ReviewRetry({ agent: props.agentId, record_id: record.recordId, grade: props.grade }, retryAbort.signal)
+    if (gen !== retryGen) return // 已被关闭/取代 → 丢弃，不重开弹窗
+    retry.value = { open: true, loading: false, error: false, solution: res.solution, badge: res.badge, revealed: false }
+  } catch {
+    if (gen !== retryGen) return // 主动取消/已过期 → 静默
+    // 失败/超时不静默关弹层：保留弹层 + 显友好可重试提示（原始技术串对家长无价值，故不透出）。
+    retry.value = { open: true, loading: false, error: true, solution: '', badge: '', revealed: false }
+  }
+}
 function closeRetry() {
   retryGen++
   retryAbort?.abort()
   retryAbort = null
-  retry.value = { open: false, loading: false, solution: '', badge: '', revealed: false }
+  retry.value = { open: false, loading: false, error: false, solution: '', badge: '', revealed: false }
 }
+
+// ── 错题详情弹层（BUG-20260712-#2）──
+// 复用列表已有的 RecordItem 字段（题目/知识点/错因/复习状态），不额外请求后端，弹层可关闭。
+const detail = ref<{ open: boolean; record: RecordItem | null }>({ open: false, record: null })
+function openDetail(record: RecordItem) {
+  detail.value = { open: true, record }
+}
+function closeDetail() {
+  detail.value = { open: false, record: null }
+}
+const detailQuestion = computed(() => String(detail.value.record?.fields.question ?? ''))
+const detailKp = computed(() => String(detail.value.record?.fields.knowledge_point ?? ''))
+const detailError = computed(() => String(detail.value.record?.fields.error_cause ?? ''))
+const detailStatus = computed(() => {
+  const s = detail.value.record?.status
+  return s ? t(`k12.mistakeStatus.${s}`) : '—'
+})
+// 状态色调复用 MISTAKE_SCHEMA 状态机声明（与 RecordList 行内状态徽章同源，零硬编码色映射）。
+const detailStatusTone = computed(() => {
+  const s = detail.value.record?.status
+  return MISTAKE_SCHEMA.states?.find((st) => st.id === s)?.tone ?? 'na'
+})
 
 // ── 打印 / 导出（M2-3 / M3-5）──
 const exportOpen = ref(false)
@@ -598,7 +628,15 @@ async function doExportMd() {
           <span class="k12rec__sp" />
           <button class="btn btn-ghost" @click="closeRetry">✕</button>
         </div>
-        <p v-if="retry.loading" class="k12rec__hint">{{ t('k12.records.retryLoading') }}</p>
+        <p v-if="retry.loading" class="k12rec__hint" data-testid="retry-loading">{{ t('k12.records.retryLoading') }}</p>
+        <div v-else-if="retry.error" class="k12retry__err" data-testid="retry-error">
+          <p class="k12rec__hint">{{ t('k12.records.retryFailed') }}</p>
+          <button
+            class="btn btn-primary"
+            data-testid="retry-again"
+            @click="retryRecord && doRetry(retryRecord)"
+          >{{ t('k12.records.retryRetryBtn') }}</button>
+        </div>
         <template v-else>
           <p class="k12retry__mask">🔒 {{ t('k12.records.retryMaskHint') }}</p>
           <!-- 守答案真遮罩：未揭示时模糊 + 禁选中（防孩子凑近一眼看光），家长点按才显示 -->
@@ -612,6 +650,37 @@ async function doExportMd() {
             >{{ t('k12.records.retryReveal') }}</button>
           </div>
         </template>
+      </div>
+    </div>
+
+    <!-- 错题详情弹层（BUG-20260712-#2）：复用列表已有 RecordItem 字段，不额外请求后端，可关闭。 -->
+    <div v-if="detail.open && detail.record" class="k12modal" data-testid="mistake-detail" @click.self="closeDetail">
+      <div class="k12modal__card">
+        <div class="k12modal__head">
+          <b>{{ t('k12.detail.title') }}</b>
+          <span
+            v-if="detailStatus"
+            class="k12detail__status" :class="`k12detail__status--${detailStatusTone}`"
+            data-testid="detail-status"
+          >{{ detailStatus }}</span>
+          <span class="k12rec__sp" />
+          <button class="btn btn-ghost" @click="closeDetail">✕</button>
+        </div>
+        <div class="k12detail">
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.detail.question') }}</span>
+            <p class="k12detail__val" data-testid="detail-question">{{ detailQuestion || '—' }}</p>
+          </div>
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.detail.knowledgePoint') }}</span>
+            <p class="k12detail__val" data-testid="detail-kp">{{ detailKp || '—' }}</p>
+          </div>
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.detail.errorCause') }}</span>
+            <p class="k12detail__val" data-testid="detail-error">{{ detailError || t('k12.detail.noErrorCause') }}</p>
+          </div>
+        </div>
+        <p class="k12rec__hint">{{ t('k12.detail.footnote') }}</p>
       </div>
     </div>
   </div>
@@ -737,4 +806,16 @@ async function doExportMd() {
 .k12retry__bodywrap { position: relative; }
 .k12retry__bodywrap--masked .k12retry__body { filter: blur(7px); user-select: none; pointer-events: none; }
 .k12retry__reveal { position: absolute; inset: 0; margin: auto; width: fit-content; height: fit-content; }
+/* 再练失败态：可重试提示（不静默关弹层 · BUG-20260712-#1） */
+.k12retry__err { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+/* 错题详情弹层（BUG-20260712-#2）：字段行 label + 值 */
+.k12detail { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 6px; }
+.k12detail__row { display: flex; flex-direction: column; gap: 3px; }
+.k12detail__label { font-size: 11.5px; color: var(--hc-text-muted); }
+.k12detail__val { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--hc-text-primary); white-space: pre-wrap; word-break: break-word; }
+.k12detail__status { font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 700; white-space: nowrap; }
+.k12detail__status--todo { color: var(--hc-error); background: color-mix(in srgb, var(--hc-error) 10%, transparent); }
+.k12detail__status--done { color: var(--hc-warning); background: color-mix(in srgb, var(--hc-warning) 12%, transparent); }
+.k12detail__status--got { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
+.k12detail__status--na { color: var(--hc-text-muted); background: var(--hc-bg-input); }
 </style>

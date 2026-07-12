@@ -59,11 +59,23 @@ export default {
     customPaper: '自定义组卷',
     stateMachineHint: '复习做对会自动升级状态，30 天没再练的会自动归档。',
     retryTitle: '再练一道（同知识点变式题）',
-    retryLoading: '正在出题并验算…',
+    retryLoading: '正在生成变式题并验算…（约 1 分钟）',
+    retryFailed: '生成变式题超时或网络中断——出题需程序验算约 1 分钟，请重试。若用本地模型较慢，可在设置切换到更快的云端模型。',
+    retryRetryBtn: '重试',
     retryMaskHint: '答案供家长核对，先别给孩子看——让他自己做完再对。',
     retryReveal: '显示答案（家长核对）',
     masteredToast: '已掌握 ✓ · 移出复习队列',
     dividerRule: '做错了要改 → 进「错题」（数理化题 + 语英听写/默写/语法改错，跨科按到期混排走复习）；遇到好东西要记住 → 进「积累」（好词好句/古诗/收藏，无复习）。语英字词再练走原词重现·确定性字符比对，数理化走 solve 验算链；作文只留档进报告、不进复习队列。',
+  },
+
+  // 错题详情弹层（BUG-20260712-#2）
+  detail: {
+    title: '错题详情',
+    question: '题目原文',
+    knowledgePoint: '知识点',
+    errorCause: '错因',
+    noErrorCause: '（暂无错因记录）',
+    footnote: '在上方列表点「再练」出同知识点变式题；点「他会了」移出复习队列。',
   },
 
   mistakeAdd: {

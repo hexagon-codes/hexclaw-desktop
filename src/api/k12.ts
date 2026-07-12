@@ -150,7 +150,9 @@ export interface ReviewRetryResp {
 /** 「再练一道」：基于某错题出一道同知识点相似题，必过 solve 验算链（POST /review/retry）。
  *  signal：用户关弹窗时中止在途请求，不再空烧算力（BUG-20260712-#4）。 */
 export function k12ReviewRetry(req: ReviewRetryReq, signal?: AbortSignal) {
-  return apiPost<ReviewRetryResp>(`${BASE}/review/retry`, req, { signal })
+  // 真机取证（BUG-20260712-#1）：retry = 生成变式题 + solve + code_exec 验算，实测 ~68s（正确性保证，
+  // 别让它变快）。默认 30s timeout 会腰斩 abort → 前端弹层被静默关，家长看着点了没反应。给足 120s。
+  return apiPost<ReviewRetryResp>(`${BASE}/review/retry`, req, { timeout: 120_000, signal })
 }
 
 // ── prep-card（备课卡，只读五段）─────────────────────────────

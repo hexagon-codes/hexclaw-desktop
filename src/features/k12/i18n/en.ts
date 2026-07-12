@@ -56,11 +56,23 @@ export default {
     customPaper: 'Custom paper',
     stateMachineHint: 'Correct reviews auto-promote status; items untouched for 30 days auto-archive.',
     retryTitle: 'One more to practice (same-concept variant)',
-    retryLoading: 'Generating and verifying…',
+    retryLoading: 'Generating variant and verifying… (about 1 minute)',
+    retryFailed: 'Variant generation timed out or the network dropped — creating it takes about a minute of program verification, please retry. If a local model is slow, switch to a faster cloud model in Settings.',
+    retryRetryBtn: 'Retry',
     retryMaskHint: 'Answer is for the parent to check — keep it from the child until they finish on their own.',
     retryReveal: 'Reveal answer (parent check)',
     masteredToast: 'Mastered ✓ · removed from review queue',
     dividerRule: 'Wrong-and-fix → 「Mistakes」(math/phys/chem problems + CN/EN dictation/spelling/grammar fixes, cross-subject review by due date); worth-remembering → 「Notes」(good phrases/poems/collected, no review). CN/EN word practice = verbatim recall + exact string match; math/sci = solve verification. Essays are archived into reports only, not the review queue.',
+  },
+
+  // Mistake detail dialog (BUG-20260712-#2)
+  detail: {
+    title: 'Mistake detail',
+    question: 'Problem',
+    knowledgePoint: 'Topic',
+    errorCause: 'Cause',
+    noErrorCause: '(no cause recorded yet)',
+    footnote: 'Tap “Practice” in the list above for a same-concept variant; tap “Got it” to remove it from the review queue.',
   },
 
   mistakeAdd: {
