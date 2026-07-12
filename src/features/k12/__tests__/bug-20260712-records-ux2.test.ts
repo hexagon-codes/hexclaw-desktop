@@ -80,21 +80,23 @@ describe('项-5 空态：无本周该练 → 正向空态卡 + 全部错题默�
   })
 })
 
-describe('项-5 积累空态卡', () => {
+describe('积累空态（Bug-20260713：对齐原型 rc1——克制列表占位，非大居中卡）', () => {
   beforeEach(() => { setActivePinia(createPinia()); h.retry = vi.fn(); h.mistakes = []; h.queue = []; h.accum = [] })
 
-  it('积累本为空 → 渲染带 CTA 的空态卡（非裸文字）', async () => {
+  it('积累本为空 → 克制列表占位（有文案），入口走上方常驻 bar 的「＋记到积累本」', async () => {
     const w = render()
     await flushPromises()
     await w.findAll('.seg button')[1]!.trigger('click') // 切到「积累」tab
     await flushPromises()
+    // 原型无大居中卡：空态是一行占位（非裸悬空、非 marketing 卡），且不再叠自带 CTA 按钮
     const card = w.find('[data-testid="accum-empty-card"]')
-    expect(card.exists()).toBe(true) // RED：修前是裸 <p> 悬空
+    expect(card.exists()).toBe(true)
     expect(card.text()).toContain('积累本还空着')
-    // CTA 打开手动记录表单
-    const cta = w.find('[data-testid="accum-empty-cta"]')
-    expect(cta.exists()).toBe(true)
-    await cta.trigger('click')
+    expect(w.find('[data-testid="accum-empty-cta"]').exists()).toBe(false)
+    // 记录入口=上方 bar 常驻按钮（空/非空都在），点开手动记录表单
+    const add = w.find('[data-testid="accum-add-open"]')
+    expect(add.exists()).toBe(true)
+    await add.trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="accum-add-content"]').exists()).toBe(true)
   })

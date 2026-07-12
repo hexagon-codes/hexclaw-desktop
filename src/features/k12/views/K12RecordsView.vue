@@ -539,6 +539,12 @@ async function doExportMd() {
 
       <!-- 积累本：语/英沉淀（真实 /accumulation）——记录本原语第二场景 -->
       <section v-else-if="sub === 'accumulation'">
+        <!-- 原型 rc1（app.html:1618）：积累 tab 带 cxsec 标题 + 说明（错题 tab 无标题——顶栏已声明身份；
+             积累 / 学情 tab 各有 h2 标题，与学情 tab reporthead 同款）。 -->
+        <div class="k12rec__reporthead">
+          <h3 class="k12rec__h" style="margin: 0">{{ t('k12.accum.title') }}</h3>
+          <span class="k12rec__hint" style="margin: 0">{{ t('k12.accum.desc') }}</span>
+        </div>
         <!-- 分科过滤 chips（#5）+ 手动记录入口（#4）-->
         <div class="k12accum__bar">
           <div class="k12accum__filters">
@@ -592,17 +598,11 @@ async function doExportMd() {
         </div>
 
         <RecordList v-if="accumView && accumView.items.length" :schema="ACCUMULATION_SCHEMA" :view="accumView" @action="onAccumAction" />
-        <!-- 项-5：积累空态卡（换掉裸文字悬空）——📖 + 暖文案 + 主 CTA「＋记到积累本」。 -->
-        <div v-else class="k12empty" data-testid="accum-empty-card">
-          <div class="k12empty__icon">📖</div>
-          <b class="k12empty__title">{{ t('k12.emptyAccum.title') }}</b>
-          <p class="k12empty__sub">{{ t('k12.emptyAccum.sub') }}</p>
-          <button
-            class="btn btn-primary k12empty__cta"
-            data-testid="accum-empty-cta"
-            @click="accumAddOpen = true"
-          >{{ t('k12.emptyAccum.cta') }}</button>
-        </div>
+        <!-- 积累空态：对齐原型 rc1——原型积累区无「大居中卡」形态，只是列表区；空时给克制的
+             列表占位一行（记录入口常驻在上方 .k12accum__bar 的「＋记到积累本」，不再叠一个大 CTA 卡）。 -->
+        <p v-else class="k12accum__empty" data-testid="accum-empty-card">
+          {{ t('k12.emptyAccum.title') }} · {{ t('k12.emptyAccum.sub') }}
+        </p>
         <!-- 分界规则脚注（原型 rc1 · 2026-07-08 口径）：错了要改→错题 / 好东西要记住→积累 -->
         <p class="k12rec__hint">{{ t('k12.records.dividerRule') }}</p>
       </section>
@@ -932,6 +932,8 @@ async function doExportMd() {
   font: inherit; font-size: 13px; line-height: 1.5; min-height: 44px; resize: vertical;
 }
 .k12accum__actions { display: flex; justify-content: flex-end; gap: 8px; }
+/* 积累空态：克制列表占位（原型 rc1 无大居中卡；入口在上方 bar 常驻） */
+.k12accum__empty { color: var(--hc-text-muted); font-size: 13px; padding: 22px 4px; text-align: center; margin: 0; }
 /* modal 内的表单去掉自带卡片边框（弹层卡片已提供容器） */
 .k12accum__form--modal { border: none; background: transparent; padding: 0; margin-bottom: 0; }
 /* 记一条错题 / 自定义组卷 弹窗（原型 modal 形态；与 .k12retry 同族样式） */

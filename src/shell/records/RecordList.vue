@@ -87,7 +87,7 @@ const reviewItems = computed(() => {
           <b class="rl-title">{{ fieldValue(item, titleField) }}</b>
           <!-- data-chip=chip 文本：领域无关的样式钩子，场景层可按值前缀定色（如 K12 学科色） -->
           <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{ chipText(item, f) }}</span>
-          <span class="rl-meta rl-spacer">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
+          <span class="rl-meta rl-spacer" :title="metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ')">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
           <button class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
             {{ t('records.practiceAgain') }}
           </button>
@@ -222,7 +222,15 @@ const reviewItems = computed(() => {
 .rl-meta {
   color: var(--hc-text-secondary);
   font-size: 12px;
+  /* 错因/元信息格：自带 flex:1 + min-width:0 + 单行省略号（对齐原型 .resource-row .sp）。
+     根因锁（Bug-20260713）：本格 flex-basis 为 0，当同行学科芯片 .rl-chip 是 nowrap 长文本
+     （如「数学·长方体的体积」）挤满整行时，本格被压成 ~1 字宽；若允许换行，CJK 错因会逐字竖排。
+     nowrap + ellipsis = 芯片长短都不逐字竖排，错因始终横排一行、超长截断。 */
+  flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .rl-status {
   font-size: 10.5px;

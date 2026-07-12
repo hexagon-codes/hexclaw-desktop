@@ -135,6 +135,8 @@ export default {
   },
   accumulationEmpty: 'Nothing here yet — Chinese/English good phrases and easy-to-miss words collect here.',
   accum: {
+    title: 'Collection book',
+    desc: 'Chinese / English keepsakes · good phrases / poems / favorites · collection-driven, no review cycle',
     filterAll: 'All',
     filterChinese: 'Chinese',
     filterEnglish: 'English',

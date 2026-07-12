@@ -138,6 +138,8 @@ export default {
   },
   accumulationEmpty: '积累本还没有内容——语文/英语的好词好句、易错词会沉淀在这里。',
   accum: {
+    title: '积累本',
+    desc: '语文 / 英语的沉淀 · 好词好句 / 古诗 / 主动收藏 · 收藏驱动，无复习状态',
     filterAll: '全部',
     filterChinese: '语文',
     filterEnglish: '英语',
