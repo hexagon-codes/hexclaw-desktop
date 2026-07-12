@@ -962,25 +962,31 @@ defineExpose({ focus, setInput, triggerFileUpload })
   border-bottom: 0.5px solid rgba(0, 0, 0, 0.08);
 }
 
-/* 已挂载技能 chip */
+/* Composer 盒内首行 chips（预设能力 / 已挂载技能 / @ 召唤上下文）——统一对齐原型
+ * `.composer-chips`（app.html:817）：仅 margin-bottom 拉开与输入行的间距，无自身 padding，
+ * chip 左缘落在盒 padding-left（= placeholder 左缘），三者同一垂直基线。
+ * 旧实现 padding-bottom:8px + margin-bottom:6px 叠出 14px 空档（原型仅 8px），
+ * 与输入行间距偏大——收回单一 margin-bottom:8px 对齐原型。 */
 .hc-composer__skills {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding-bottom: 8px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
+/* chip 胶囊——对齐原型 `.composer-chip`（app.html:818）：全圆角药丸、中性 input 底、
+ * 次级文字色、0.5px 细描边。旧实现漂成 14px 圆角矩形 + bg-active(2× 蓝) + 主文字色 + 1px 边，
+ * 视觉过重、与原型不一致。 */
 .hc-composer__skill-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 6px 3px 7px;
-  border-radius: 14px;
-  background: var(--hc-bg-active);
-  border: 1px solid var(--hc-border);
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--hc-bg-input);
+  border: 0.5px solid var(--hc-border);
   font-size: 12px;
-  color: var(--hc-text-primary);
+  color: var(--hc-text-secondary);
   animation: fadeScaleIn 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
 }
 
