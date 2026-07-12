@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import k12EnhSrc from '../views/K12ChatEnhancement.vue?raw'
+import channelBindSrc from '@/components/channels/ChannelAgentBinding.vue?raw'
+import recordsSrc from '../views/K12RecordsView.vue?raw'
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -58,5 +60,18 @@ describe('BUG-20260712 #2 识题面板可滚动（题目多不撑出视口）', 
     // 断言 .k12enh-tutor 规则块内同时含 max-height 与 overflow-y:auto（[^}]* 限定在规则内）
     expect(k12EnhSrc).toMatch(/\.k12enh-tutor\s*\{[^}]*max-height:[^}]*\}/)         // RED（修前）：无 max-height
     expect(k12EnhSrc).toMatch(/\.k12enh-tutor\s*\{[^}]*overflow-y:\s*auto[^}]*\}/)  // RED（修前）：无 overflow-y
+  })
+})
+
+describe('BUG-20260712 #3 绑定会话添加行窄卡片不再挤压错乱', () => {
+  it('route-add 换行 + route-select 有 flex（原下拉无 flex 压扁输入框）', () => {
+    expect(channelBindSrc).toMatch(/\.hc-cab__route-add\s*\{[^}]*flex-wrap:\s*wrap[^}]*\}/) // RED：无 flex-wrap
+    expect(channelBindSrc).toMatch(/\.hc-cab__route-select\s*\{[^}]*flex:/)                 // RED：route-select 无 CSS/flex
+  })
+})
+
+describe('BUG-20260712 #7 验算并计入 60-120s 有进度反馈', () => {
+  it('保存中按钮切换为「验算中…」文案（原恒显「验算并记入」像卡死）', () => {
+    expect(recordsSrc).toMatch(/mistakeSaving\s*\?\s*t\('k12\.mistakeAdd\.submitting'\)/) // RED：无切换
   })
 })

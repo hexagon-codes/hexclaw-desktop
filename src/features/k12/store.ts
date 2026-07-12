@@ -121,16 +121,20 @@ export const useK12Store = defineStore('k12', () => {
     }
   }
 
-  /** 备课卡（事件驱动生成，非每日 cron） */
+  /** 备课卡（事件驱动生成，非每日 cron）。
+   *  状态独立（BUG-20260712-S）：不写共享 loading/error——此前 prep-card 的失败/中止
+   *  （如切 tab 导致的 fetch abort）会把红字错误漏进错题本页（读共享 error 渲染）。 */
+  const prepLoading = ref(false)
+  const prepError = ref<string | null>(null)
   async function loadPrepCard(agent: string, grade: string, knowledgePoints?: string[]): Promise<void> {
-    loading.value = true
-    error.value = null
+    prepLoading.value = true
+    prepError.value = null
     try {
       prepCard.value = await k12PrepCard({ agent, grade, knowledge_points: knowledgePoints })
     } catch (e) {
-      error.value = e instanceof Error ? e.message : String(e)
+      prepError.value = e instanceof Error ? e.message : String(e)
     } finally {
-      loading.value = false
+      prepLoading.value = false
     }
   }
 
@@ -195,7 +199,7 @@ export const useK12Store = defineStore('k12', () => {
   }
 
   return {
-    mistakeView, accumView, report, studyTime, prepCard, loading, error,
+    mistakeView, accumView, report, studyTime, prepCard, prepLoading, prepError, loading, error,
     loadMistakes, markMastered, loadPrepCard, loadReport, loadStudyTime, loadAccumulation, grade,
     recognize, coldStart, tutorTurn, setupAutomation,
   }

@@ -5,6 +5,8 @@
  * PDF = 浏览器打印对话框另存；Word = HTML 内容 .doc（Word 可直接打开，无需额外依赖，砍 CSV/JSON）。
  */
 import type { RecordItem } from '@/contracts'
+import { isTauri } from '@/utils/platform'
+import { downloadInApp } from '@/utils/download'
 
 export interface WorksheetMeta {
   childName: string
@@ -143,7 +145,14 @@ export function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel:
 }
 
 /** 触发浏览器下载一个文件 */
-export function download(filename: string, content: string, mime: string): void {
+export async function download(filename: string, content: string, mime: string): Promise<void> {
+  // BUG-20260712-#6：Tauri WKWebView 里 `<a download>` / blob URL 不触发下载（点了没反应）。
+  // 桌面端走原生 Save 对话框 + Rust 写盘（downloadInApp）；浏览器/dev 保留 blob 下载。
+  if (isTauri()) {
+    const b64 = btoa(unescape(encodeURIComponent(content))) // UTF-8 安全 base64（中文内容）
+    await downloadInApp(`data:${mime};base64,${b64}`, filename)
+    return
+  }
   const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -161,10 +170,10 @@ export function worksheetFilename(childName: string, kind: string, from: string,
 }
 
 /** 导出 Word（.doc）：HTML 内容，Word 可直接打开（无需 docx 依赖） */
-export function exportWord(items: RecordItem[], meta: WorksheetMeta, filename: string): void {
+export async function exportWord(items: RecordItem[], meta: WorksheetMeta, filename: string): Promise<void> {
   const html = buildWorksheetHtml(items, meta)
   // Word 识别带 MS Office 命名空间的 HTML；application/msword + .doc 后缀即可
-  download(filename, html, 'application/msword')
+  await download(filename, html, 'application/msword')
 }
 
 /** 导出 PDF：走打印对话框另存（WKWebView / 浏览器均支持打印为 PDF） */

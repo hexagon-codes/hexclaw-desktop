@@ -70,6 +70,7 @@ export default {
     answerPh: "Child's answer / error (optional), e.g. got 10.4",
     kpPh: 'Knowledge point · cause (optional, leave blank for AI)',
     submit: 'Verify & log',
+    submitting: 'Verifying… (~1-2 min)',
     recorded: 'Logged to mistake book · added to this week’s review queue',
     notWrong: 'Verification passed (answer correct) — not logged',
   },

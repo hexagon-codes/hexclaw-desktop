@@ -122,8 +122,10 @@ watch(() => props.composerImage, (img) => {
 
   <!-- 拍照识题回显护栏面板（辅导 tab）：**唯一入口=composer 粘贴/上传图片自动改道**
        （原型 app.html:1316「零手动按钮」，BUG-20260711-E 删除了手动相机 toggle——禁止加回）。
-       识题走独立 OCR 管道不依赖聊天模型 vision；面板头部 ✕ 收起。 -->
-  <div v-if="tab === 'chat' && recognizeOpen" class="k12enh-tutor">
+       识题走独立 OCR 管道不依赖聊天模型 vision；面板头部 ✕ 收起。
+       tab 用 v-show 保活（BUG-20260712-S）：v-if 会在切错题本时销毁面板 → 切回重挂载
+       重新识题（丢已识结果+重复慢调用）+ 在途 prep-card fetch 被 abort 且错误漏到错题本页。 -->
+  <div v-if="recognizeOpen" v-show="tab === 'chat'" class="k12enh-tutor">
     <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
     <RecognizeGuardPanel
       :key="agentId"

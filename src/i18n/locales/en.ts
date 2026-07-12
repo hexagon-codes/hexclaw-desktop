@@ -1149,6 +1149,7 @@ export default {
       installCta: 'Install embedding model',
       installing: 'Installing',
     },
+    processing: 'Uploaded · parsing & indexing on the server (scans/large files are slower, please wait)',
     indexing: 'Uploaded · building index, it will appear in the list below',
     title: 'Knowledge Base',
     description: 'Manage documents and knowledge index',

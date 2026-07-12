@@ -60,7 +60,8 @@ export interface GradeResp {
 }
 
 export function k12Grade(req: GradeReq) {
-  return apiPost<GradeResp>(`${BASE}/grade`, req)
+  // LLM 验算链，默认 30s 会腰斩（BUG-20260712-T1）
+  return apiPost<GradeResp>(`${BASE}/grade`, req, { timeout: 120_000 })
 }
 
 // ── mistakes / review-queue（错题本）─────────────────────────
@@ -120,9 +121,10 @@ export interface ReviewRetryResp {
   badge: string
 }
 
-/** 「再练一道」：基于某错题出一道同知识点相似题，必过 solve 验算链（POST /review/retry）。 */
-export function k12ReviewRetry(req: ReviewRetryReq) {
-  return apiPost<ReviewRetryResp>(`${BASE}/review/retry`, req)
+/** 「再练一道」：基于某错题出一道同知识点相似题，必过 solve 验算链（POST /review/retry）。
+ *  signal：用户关弹窗时中止在途请求，不再空烧算力（BUG-20260712-#4）。 */
+export function k12ReviewRetry(req: ReviewRetryReq, signal?: AbortSignal) {
+  return apiPost<ReviewRetryResp>(`${BASE}/review/retry`, req, { signal })
 }
 
 // ── prep-card（备课卡，只读五段）─────────────────────────────
@@ -145,7 +147,8 @@ export interface PrepCardResp {
 }
 
 export function k12PrepCard(req: PrepCardReq) {
-  return apiPost<PrepCardResp>(`${BASE}/prep-card`, req)
+  // LLM 生成辅导要点，默认 30s 会腰斩→「Fetch is aborted」（BUG-20260712-T1 真机取证）
+  return apiPost<PrepCardResp>(`${BASE}/prep-card`, req, { timeout: 120_000 })
 }
 
 // ── study-time（学习时长，一维按日；无 period/学科维度）──────
@@ -231,7 +234,7 @@ export interface ColdStartResp {
 }
 /** 冷启动建档：前端应先把推断年级回显给家长确认，再调此端点落库（§3.1.4-4）。 */
 export function k12ColdStart(req: ColdStartReq) {
-  return apiPost<ColdStartResp>(`${BASE}/cold-start`, req)
+  return apiPost<ColdStartResp>(`${BASE}/cold-start`, req, { timeout: 60_000 })
 }
 
 // ── accumulation（语/英积累本，GET/POST）─────────────────────
@@ -302,7 +305,8 @@ export interface RecognizedQuestion {
  * 识题回显护栏：拿到 questions 后前端展示让家长核对/纠正，确认后再逐题 grade。
  */
 export function k12Recognize(imageBase64: string) {
-  return apiPost<{ questions: RecognizedQuestion[] }>(`${BASE}/recognize`, { image_base64: imageBase64 })
+  // 视觉识题（全量题目 JSON 生成），默认 30s 必被腰斩 abort（BUG-20260712-T1 真机取证「识题很慢/卡住」）
+  return apiPost<{ questions: RecognizedQuestion[] }>(`${BASE}/recognize`, { image_base64: imageBase64 }, { timeout: 180_000 })
 }
 
 // ── tutor-turn（渐进提示三阶段 + 情绪守门）────────────────────
@@ -333,7 +337,7 @@ export interface TutorTurnResp {
   badge?: string
 }
 export function k12TutorTurn(req: TutorTurnReq) {
-  return apiPost<TutorTurnResp>(`${BASE}/tutor-turn`, req)
+  return apiPost<TutorTurnResp>(`${BASE}/tutor-turn`, req, { timeout: 120_000 })
 }
 
 // ── bind-im（IM 群绑定：各绑各的群，写 agent_rules）───────────

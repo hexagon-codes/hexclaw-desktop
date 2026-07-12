@@ -78,7 +78,8 @@ async function doSendPhone() {
     </div>
 
     <div class="tutor-guide__body">
-      <p v-if="store.loading" class="tutor-guide__hint">{{ t('k12.prep.generating') }}</p>
+      <p v-if="store.prepLoading" class="tutor-guide__hint">{{ t('k12.prep.generating') }}</p>
+      <p v-else-if="store.prepError" class="tutor-guide__hint tutor-guide__hint--err">{{ store.prepError }}</p>
 
       <template v-else-if="store.prepCard">
         <div v-for="(s, i) in store.prepCard.sections" :key="i" class="tutor-section">
@@ -184,4 +185,5 @@ async function doSendPhone() {
   line-height: 1.6;
   color: var(--hc-text-muted);
 }
+.tutor-guide__hint--err { color: var(--hc-error); }
 </style>

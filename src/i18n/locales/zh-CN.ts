@@ -1159,6 +1159,7 @@ export default {
       installCta: '一键安装嵌入模型',
       installing: '安装中',
     },
+    processing: '已上传 · 后端正在解析并建索引（扫描件/大文件较慢，请稍候）',
     indexing: '已上传 · 索引构建中，完成后出现在下方列表',
     title: '知识库',
     description: '管理文档和知识索引',

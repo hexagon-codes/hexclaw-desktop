@@ -68,12 +68,12 @@ test.describe('K12 全链路 UI 冒烟', () => {
     await page.locator('.k12rec__tabs .seg button', { hasText: '学情' }).click()
     await expect(page.getByText(/学习时长|还没有错题记录/)).toBeVisible({ timeout: 15_000 })
 
-    // 8) 拍照识题入口（20260709：备课卡侧栏/头部按钮退役，辅导要点内联进识题流）：
-    //    相机按钮在 composer 输入行动作槽，点击开合识题回显护栏（不依赖 LLM，仅验证 UI 抵达）。
+    // 8) 识题唯一入口=composer 图片自动改道（BUG-20260711-E：手动相机 toggle 已删，勿加回）。
+    //    上传 1px 图片验证护栏自动打开（识题请求本身依赖 LLM，冒烟不等结果）。
     await page.locator('.k12enh-seg button', { hasText: '辅导' }).click()
-    const recognizeToggle = page.locator('[data-testid="k12-recognize-toggle"]')
-    await expect(recognizeToggle).toBeVisible({ timeout: 15_000 })
-    await recognizeToggle.click()
+    await expect(page.locator('[data-testid="k12-recognize-toggle"]')).toHaveCount(0) // 回归锁
+    const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
+    await page.locator('.hc-composer input[type="file"]').setInputFiles({ name: 'hw.png', mimeType: 'image/png', buffer: tinyPng })
     await expect(page.locator('[data-testid="recognize-guard"]')).toBeVisible({ timeout: 15_000 })
 
     // 9) 改档：该卡「编辑档案」→ 改档表单预填当前档案

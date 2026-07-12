@@ -244,11 +244,18 @@ async function onAction(payload: { id: 'practiceAgain' | 'markMastered' | 'detai
     // 「再练一道」：调 POST /review/retry 出同知识点相似题（过 solve 验算链）。
     // 原型终态=变式直接入本周复习卷不亮答案；当前后端 retry 无持久化且 solution 题答混排（P2 缺口），
     // 过渡为「真遮罩弹层」：答案默认模糊不可选中，家长明确点「显示答案」才揭示——守答案承诺交互兑现。
+    // BUG-20260712-#4：出题是 60-120s 的 solve 验算链。关弹窗时 abort 中止后台 + generation
+    // 守卫丢弃过期结果，杜绝「关了还空烧算力 + 跑完幽灵重开弹窗」。
+    const gen = ++retryGen
+    retryAbort?.abort()
+    retryAbort = new AbortController()
     retry.value = { open: true, loading: true, solution: '', badge: '', revealed: false }
     try {
-      const res = await k12ReviewRetry({ agent: props.agentId, record_id: record.recordId, grade: props.grade })
+      const res = await k12ReviewRetry({ agent: props.agentId, record_id: record.recordId, grade: props.grade }, retryAbort.signal)
+      if (gen !== retryGen) return // 已被关闭/取代 → 丢弃，不重开弹窗
       retry.value = { open: true, loading: false, solution: res.solution, badge: res.badge, revealed: false }
     } catch (e) {
+      if (gen !== retryGen) return // 主动取消/已过期 → 静默
       toast.error(e instanceof Error ? e.message : String(e))
       retry.value = { open: false, loading: false, solution: '', badge: '', revealed: false }
     }
@@ -265,7 +272,13 @@ const retry = ref<{ open: boolean; loading: boolean; solution: string; badge: st
   badge: '',
   revealed: false,
 })
+// BUG-20260712-#4：再练取消守卫——generation 使在途请求结果失效（防幽灵重开），AbortController 中止后台出题。
+let retryGen = 0
+let retryAbort: AbortController | null = null
 function closeRetry() {
+  retryGen++
+  retryAbort?.abort()
+  retryAbort = null
   retry.value = { open: false, loading: false, solution: '', badge: '', revealed: false }
 }
 
@@ -284,11 +297,15 @@ function currentItems(): RecordItem[] {
 function doPrint() {
   printWorksheet(currentItems(), worksheetMeta())
 }
-function doExport(ext: 'pdf' | 'doc') {
+async function doExport(ext: 'pdf' | 'doc') {
   exportOpen.value = false
   const d = todayLabel().replace(/-/g, '').slice(4)
-  if (ext === 'pdf') exportPdf(currentItems(), worksheetMeta())
-  else exportWord(currentItems(), worksheetMeta(), worksheetFilename(props.agentName, t('k12.records.worksheetTitle'), d, d, 'doc'))
+  try {
+    if (ext === 'pdf') exportPdf(currentItems(), worksheetMeta())
+    else await exportWord(currentItems(), worksheetMeta(), worksheetFilename(props.agentName, t('k12.records.worksheetTitle'), d, d, 'doc'))
+  } catch (e) {
+    toast.error(e instanceof Error ? e.message : String(e)) // 导出失败 surface，不再静默无反应
+  }
 }
 // 导出完整错题本为 Markdown（后端 GET /export 直出 md，含全部记录/状态；补齐审计 #6 未闭环）。
 async function doExportMd() {
@@ -296,7 +313,7 @@ async function doExportMd() {
   try {
     const res = await k12ExportMd(props.agentId)
     const d = todayLabel().replace(/-/g, '').slice(4)
-    download(worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md'), res.content, 'text/markdown;charset=utf-8')
+    await download(worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md'), res.content, 'text/markdown;charset=utf-8')
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
   }
@@ -515,7 +532,7 @@ async function doExportMd() {
               data-testid="mistake-submit"
               :disabled="!mistakeForm.subject || !mistakeForm.problem.trim() || mistakeSaving"
               @click="submitMistake"
-            >{{ t('k12.mistakeAdd.submit') }}</button>
+            >{{ mistakeSaving ? t('k12.mistakeAdd.submitting') : t('k12.mistakeAdd.submit') }}</button>
           </div>
         </div>
       </div>

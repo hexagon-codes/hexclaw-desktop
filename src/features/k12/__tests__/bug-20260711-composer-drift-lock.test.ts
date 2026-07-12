@@ -116,3 +116,34 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
     expect(mic, '麦克风按钮必须常驻（不可用时点击给出提示，而非整颗消失）').toBeTruthy()
   })
 })
+
+describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不得重新识题/丢结果）', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    routeQuery.q = {}
+    document.body.innerHTML = '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+  })
+
+  it('★识题后切 records 再切回 chat：结果仍在、k12Recognize 只调用一次（真机取证：曾重新「正在识题分题」）', async () => {
+    const { k12Recognize } = await import('@/api/k12')
+    const recognizeMock = k12Recognize as unknown as ReturnType<typeof vi.fn>
+    recognizeMock.mockClear()
+
+    const w = renderEnh()
+    await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
+    await flushPromises()
+    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(true)
+    expect(recognizeMock).toHaveBeenCalledTimes(1)
+
+    // 切错题本 tab → 面板隐藏但**不销毁**（v-show 保活；v-if 销毁会导致重挂载重识题 + prep-card fetch abort）
+    await w.findAll('.k12enh-seg button').find((b) => b.text() === '错题本')!.trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="recognize-guard"]').isVisible()).toBe(false)
+
+    // 切回辅导 tab → 结果原样恢复、零重复识题
+    await w.findAll('.k12enh-seg button').find((b) => b.text() === '辅导')!.trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="recognize-guard"]').isVisible()).toBe(true)
+    expect(recognizeMock, '切 tab 不得触发重新识题').toHaveBeenCalledTimes(1)
+  })
+})

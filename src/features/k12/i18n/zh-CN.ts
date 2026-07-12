@@ -73,6 +73,7 @@ export default {
     answerPh: '孩子的答案 / 错处（选填），例：算成了 10.4',
     kpPh: '知识点 · 错因（选填，可留空由 AI 归纳）',
     submit: '验算并记入',
+    submitting: '验算中…（约 1-2 分钟）',
     recorded: '已记入错题本 · 已加入本周复习队列',
     notWrong: '验算通过（答案正确），未记入错题本',
   },
