@@ -1153,6 +1153,12 @@ export default {
   },
 
   knowledge: {
+    embedding: { // ug 占位，待母语校订
+      inactiveTitle: 'Semantic retrieval inactive',
+      inactiveDesc: 'No local embedding model installed; automatic knowledge citations in chat are dormant.',
+      installCta: 'Install embedding model',
+      installing: 'Installing',
+    },
     indexing: 'يۈكلەندى · ئىندېكس قۇرۇلۇۋاتىدۇ، تاماملانغاندا تۆۋەندىكى تىزىملىكتە كۆرۈنىدۇ',
     title: 'بىلىم ئامبىرى',
     description: 'ھۆججەت ۋە بىلىم كۆرسەتكۈچىنى باشقۇرۇش',

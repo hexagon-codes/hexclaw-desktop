@@ -1153,6 +1153,12 @@ export default {
 
   // 知识库页
   knowledge: {
+    embedding: {
+      inactiveTitle: '语义检索未激活',
+      inactiveDesc: '本地嵌入模型未安装，会话里的知识库自动引用处于休眠（文档管理与手动搜索不受影响）。',
+      installCta: '一键安装嵌入模型',
+      installing: '安装中',
+    },
     indexing: '已上传 · 索引构建中，完成后出现在下方列表',
     title: '知识库',
     description: '管理文档和知识索引',

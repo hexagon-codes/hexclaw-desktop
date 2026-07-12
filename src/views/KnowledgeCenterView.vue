@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Brain, Eraser, FileText, RefreshCw } from 'lucide-vue-next'
 import KnowledgeView from '@/views/KnowledgeView.vue'
+import EmbeddingStatusBanner from '@/components/knowledge/EmbeddingStatusBanner.vue'
 import MemoryView from '@/views/MemoryView.vue'
 import PageToolbar from '@/components/common/PageToolbar.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
@@ -172,6 +173,8 @@ async function onRefresh() {
       </template>
     </PageToolbar>
     <div class="hc-page-shell__content">
+      <!-- 嵌入状态横幅（BUG-20260712-B1）：未装嵌入模型时可见化「自动注入休眠」+ 一键激活 -->
+      <EmbeddingStatusBanner v-if="activeTab === 'docs'" />
       <KnowledgeView
         v-if="activeTab === 'docs'"
         ref="knowledgeViewRef"

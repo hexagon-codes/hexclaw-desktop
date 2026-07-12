@@ -1143,6 +1143,12 @@ export default {
   },
 
   knowledge: {
+    embedding: {
+      inactiveTitle: 'Semantic retrieval inactive',
+      inactiveDesc: 'No local embedding model installed; automatic knowledge citations in chat are dormant (document management and manual search are unaffected).',
+      installCta: 'Install embedding model',
+      installing: 'Installing',
+    },
     indexing: 'Uploaded · building index, it will appear in the list below',
     title: 'Knowledge Base',
     description: 'Manage documents and knowledge index',
