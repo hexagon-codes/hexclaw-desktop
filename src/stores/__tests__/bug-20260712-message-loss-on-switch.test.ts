@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ref } from 'vue'
+import { ref, type Ref } from 'vue'
 import type { ChatMessage } from '@/types'
 import { createChatSessionLoadingController } from '../chat-session-loading'
 import { mergeMessagesById } from '../chat-session-helpers'
@@ -14,8 +14,8 @@ function msg(id: string, role: 'user' | 'assistant', content: string): ChatMessa
 }
 
 function makeController(
-  messages: ReturnType<typeof ref<ChatMessage[]>>,
-  currentSessionId: ReturnType<typeof ref<string | null>>,
+  messages: Ref<ChatMessage[]>,
+  currentSessionId: Ref<string | null>,
   loadMessages: (sid: string) => Promise<ChatMessage[]>,
 ) {
   return createChatSessionLoadingController({
