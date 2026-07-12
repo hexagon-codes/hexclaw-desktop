@@ -26,7 +26,6 @@ import {
   type PrepCardResp,
   type InsightReportResp,
   type StudyTimeResp,
-  type RecognizedQuestion,
   type RecognizeResp,
   type TutorTurnReq,
   type TutorTurnResp,

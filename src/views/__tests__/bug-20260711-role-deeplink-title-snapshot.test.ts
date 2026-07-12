@@ -239,8 +239,7 @@ describe('BUG-20260711：role 深链会话标题快照 display_name（治本）'
     const calls = (createSession as unknown as Mock).mock.calls
     expect(calls.length, '前置：走了新建会话').toBeGreaterThan(0)
     const firstCall = calls[0]
-    expect(firstCall).toBeDefined()
-    if (!firstCall) return
+    if (!firstCall) throw new Error('前置：createSession 首次调用缺失')
     expect(firstCall[1]).toBe(K12_DISPLAY)
     expect(firstCall[1]).not.toBe(K12_AGENT)
   })
