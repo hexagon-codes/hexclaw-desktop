@@ -9,6 +9,8 @@ const host = process.env.TAURI_DEV_HOST
 const sidecarProxyTarget = process.env.HEX_E2E_SIDECAR_URL || 'http://127.0.0.1:16060'
 
 export default defineConfig({
+  // Tauri 生产页由自定义 asset 协议加载，构建产物必须使用相对路径。
+  base: './',
   plugins: [vue(), tailwindcss()],
   resolve: {
     alias: {

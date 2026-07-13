@@ -33,14 +33,12 @@ watchEffect(() => {
 })
 
 const appVersion = ref('—')
+// Hexagon 引擎版本（= 后端 engine_version = hexagon.Version）。在下方「POWERED BY」区块展示，
+// 这是引擎版本的归宿——角落 Sidebar 只显 HexClaw 产品版本（产品评审 2026-07-13）。
 const engineVersion = ref('')
-// HexClaw 后端（Go sidecar = hexclaw 二进制）展示版本：优先取 sidecar 上报的 engine_version；
-// 开发构建上报「(devel)」（未注入版本 ldflag）或为空时，回退到随包发布的桌面端版本（生态锁步发版）。
-const hexclawVersion = computed(() => {
-  const v = engineVersion.value
-  if (v && !v.toLowerCase().includes('devel')) return v
-  return appVersion.value !== '—' ? appVersion.value : ''
-})
+// 技术栈里的 HexClaw 行展示产品版本（桌面端随包发布、生态锁步）。不再错绑 engine_version——
+// 那是 Hexagon 引擎的版本，会让 HexClaw 冒用引擎版本号（历史混淆）。
+const hexclawVersion = computed(() => (appVersion.value !== '—' ? appVersion.value : ''))
 // Ollama 版本运行时由 getOllamaStatus() 上报真实 bundle 版本（与 engineVersion 同套路）；
 // 不在前端硬编码——版本唯一源头是 Makefile OLLAMA_VERSION → bundle 二进制自报。
 const ollamaVersion = ref('')
@@ -208,7 +206,9 @@ onMounted(() => {
         />
         <div class="hc-about-page__engine-info">
           <span class="hc-about-page__engine-kicker">POWERED BY</span>
-          <span class="hc-about-page__engine-name">Hexagon AI Agent</span>
+          <span class="hc-about-page__engine-name">
+            Hexagon<span v-if="engineVersion" class="hc-about-page__engine-ver">{{ engineVersion }}</span>
+          </span>
         </div>
         <span class="hc-about-page__engine-caps">
           ReAct · Tool {{ t('about.dispatch', '调度') }} · {{ t('about.declarative', '声明式编排') }}
@@ -485,6 +485,17 @@ onMounted(() => {
   font-weight: 700;
   color: #1a3a5c;
   white-space: nowrap;
+}
+
+.hc-about-page__engine-ver {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #1a5580;
+  background: rgba(95, 179, 234, 0.16);
+  vertical-align: middle;
 }
 
 .hc-about-page__engine-caps {

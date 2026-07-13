@@ -1,6 +1,6 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
@@ -15,33 +15,17 @@ const route = useRoute()
 const appStore = useAppStore()
 const openAbout = useAboutWindow()
 
-const engineVersion = ref('')
+// 角落展示的是 **HexClaw 产品版本**（= Tauri app 版本，随包发布、客服锚点、更新基准），
+// 而非内部 Hexagon 引擎版本——后者已退到「关于」页展示（产品评审 2026-07-13）。
+// 空串起步，取到 Tauri app 版本后再显，避免占位符闪烁。
+const appVersion = ref('')
 
-/**
- * 「Hexagon engine」版本号 = **hexagon 框架**版本（API 的 engine_version 字段 = hexagon.Version）。
- * 注意：不是 hexclaw sidecar 自身的 version 字段——标签讲的是 Hexagon 引擎框架。
- * 发布构建里 hexagon.Version 由 build info 的 hexagon 依赖版本解析（hexclaw go.mod pin v0.5.2 → "0.5.2"）；
- * go.work 开发构建拿到 "(devel)" 占位，此处忽略，宁可不显示版本也不谎报 hexclaw 版本。
- */
-function pickEngineVersion(info?: { engine_version?: string }): string {
-  const v = info?.engine_version?.trim()
-  if (v && v !== '(devel)' && v !== 'unknown') return v.startsWith('v') ? v : `v${v}`
-  return ''
-}
-
-function fetchEngineVersion() {
-  import('@/api/system').then(({ getVersion }) =>
-    getVersion().then((info) => {
-      const v = pickEngineVersion(info)
-      if (v) engineVersion.value = v
-    }),
-  ).catch(() => {})
-}
-
-// Fetch version when sidecar becomes running
-watch(() => appStore.sidecarStatus, (s) => {
-  if (s === 'running' && !engineVersion.value) fetchEngineVersion()
-}, { immediate: true })
+onMounted(() => {
+  import('@tauri-apps/api/app')
+    .then(({ getVersion }) => getVersion())
+    .then((v) => { appVersion.value = 'v' + v })
+    .catch(() => {})
+})
 
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
@@ -60,12 +44,9 @@ const dotClass = computed(() => {
   return 'hc-sidebar__dot--err'
 })
 
-const engineLabel = computed(() => {
-  // 一旦取到版本号就常显（非运行/重启瞬间也保留版本，不再退化成无版本文案）
-  if (engineVersion.value) return `Hexagon engine ${engineVersion.value}`
-  if (appStore.sidecarStatus === 'starting') return 'Hexagon engine …'
-  return 'Hexagon engine'
-})
+const productLabel = computed(() =>
+  appVersion.value ? `HexClaw ${appVersion.value}` : 'HexClaw',
+)
 
 // 平台默认全功能，导航不按模式门控（K12 只是「作业辅导」智能体，非独立 UI 模式）。
 function getGroupItems(group: NavGroup) {
@@ -127,7 +108,7 @@ function getGroupItems(group: NavGroup) {
             :title="t('about.open', '关于河蟹')"
             @click="openAbout"
           >
-            {{ engineLabel }}
+            {{ productLabel }}
           </span>
           <button
             class="hc-sidebar__restart-btn"

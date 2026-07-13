@@ -55,16 +55,19 @@ describe('Version Consistency', () => {
     expect(staleVersionFiles).toEqual([])
   })
 
-  it('Sidebar uses dynamic engineVersion ref merged into engineLabel', () => {
+  // 产品评审结论（2026-07-13）：面向 K12 家长的消费级产品，角落版本号是「产品身份证」
+  // （客服锚点 / 更新基准），应显示 HexClaw 产品版本，而非内部引擎 Hexagon 的版本。
+  // Hexagon 引擎版本退到「关于」页展示。
+  it('Sidebar shows HexClaw product version, not the Hexagon engine version', () => {
     const sidebar = readFile(path.join(SRC, 'components/layout/Sidebar.vue'))
-
-    // Should have a ref for engineVersion
-    expect(sidebar).toMatch(/const engineVersion\s*=\s*ref/)
-
-    // engineVersion should be used in engineLabel computed, not standalone in template
     const scriptSection = sidebar.slice(0, sidebar.indexOf('<template>'))
-    expect(scriptSection).toContain('engineVersion.value')
-    expect(scriptSection).toContain('Hexagon')
+
+    // 产品版本来自 Tauri app 版本（与 AboutView 主版本同源），不再取 hexagon engine_version
+    expect(scriptSection).toMatch(/const appVersion\s*=\s*ref/)
+    expect(scriptSection).toContain('@tauri-apps/api/app')
+
+    // 底部标签展示产品名 HexClaw + 版本，不再出现 "Hexagon engine"
+    expect(sidebar).not.toContain('Hexagon engine')
 
     // Template should not have hardcoded version strings
     const templateSection = sidebar.slice(sidebar.indexOf('<template>'))
@@ -100,11 +103,20 @@ describe('Version Consistency', () => {
     }
   })
 
-  it('Sidebar engineVersion fallback is empty string', () => {
+  it('Sidebar appVersion fallback is empty string', () => {
     const sidebar = readFile(path.join(SRC, 'components/layout/Sidebar.vue'))
-    // engineVersion starts empty, only shows when engine API responds
-    const versionMatch = sidebar.match(/engineVersion\s*=\s*ref\(['"]([^']*)['"]\)/)
+    // appVersion starts empty, only shows once the Tauri app version resolves（避免 '—' 闪烁）
+    const versionMatch = sidebar.match(/appVersion\s*=\s*ref\(['"]([^']*)['"]\)/)
     expect(versionMatch).not.toBeNull()
     expect(versionMatch![1]).toBe('')
+  })
+
+  it('AboutView surfaces the Hexagon engine version (moved out of the sidebar)', () => {
+    const aboutView = readFile(path.join(SRC, 'views/AboutView.vue'))
+    // 引擎版本仍从后端解析
+    expect(aboutView).toMatch(/const engineVersion\s*=\s*ref/)
+    // 且必须在模板里真正渲染出来（Hexagon 版本的归宿 = 关于页，而非只 fetch 不显示）
+    const templateSection = aboutView.slice(aboutView.indexOf('<template>'))
+    expect(templateSection).toContain('engineVersion')
   })
 })
