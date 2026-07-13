@@ -56,6 +56,41 @@ function createMarkdownRenderer(copyLabel: string) {
     errorColor: 'var(--hc-text-primary)',
   })
 
+  // markdown-it 默认已支持 GFM 表格/删除线/linkify；补齐 GitHub 任务列表语义和类名。
+  instance.renderer.rules.s_open = () => '<del>'
+  instance.renderer.rules.s_close = () => '</del>'
+  instance.core?.ruler.after('inline', 'github-task-lists', (state) => {
+    state.tokens.forEach((token, index) => {
+      if (token.type !== 'inline' || !token.children?.length) return
+      const firstText = token.children[0]
+      if (firstText?.type !== 'text') return
+      const marker = /^\[([ xX])\]\s+/.exec(firstText.content)
+      if (!marker) return
+
+      const checkbox = new state.Token('html_inline', '', 0)
+      const checked = marker[1]?.toLowerCase() === 'x'
+      checkbox.content = `<input class="task-list-item-checkbox" type="checkbox" disabled${checked ? ' checked' : ''}>`
+      firstText.content = firstText.content.slice(marker[0].length)
+      token.children.unshift(checkbox)
+
+      let itemIndex = index - 1
+      while (itemIndex >= 0 && state.tokens[itemIndex]?.type !== 'list_item_open') itemIndex--
+      const item = state.tokens[itemIndex]
+      if (!item) return
+      item.attrJoin('class', 'task-list-item')
+
+      let listIndex = itemIndex - 1
+      while (listIndex >= 0) {
+        const list = state.tokens[listIndex]
+        if (list?.type.endsWith('_list_open') && list.level === item.level - 1) {
+          list.attrJoin('class', 'contains-task-list')
+          break
+        }
+        listIndex--
+      }
+    })
+  })
+
   instance.renderer.rules.fence = (tokens, idx) => {
     const token = tokens[idx]!
     const lang = token.info?.trim() || ''
@@ -204,6 +239,21 @@ const rendered = computed(() => {
   margin: 0.25em 0;
 }
 
+.markdown-body :deep(.contains-task-list) {
+  padding-left: 0.25em;
+  list-style: none;
+}
+
+.markdown-body :deep(.task-list-item) {
+  list-style: none;
+}
+
+.markdown-body :deep(.task-list-item-checkbox) {
+  margin: 0 0.5em 0.15em 0;
+  vertical-align: middle;
+  accent-color: var(--hc-accent);
+}
+
 .markdown-body :deep(a) {
   color: var(--hc-accent);
   text-decoration: none;
@@ -260,6 +310,10 @@ const rendered = computed(() => {
   font-weight: 600;
 }
 
+.markdown-body :deep(tbody tr:nth-child(2n)) {
+  background: var(--hc-bg-hover);
+}
+
 .markdown-body :deep(hr) {
   border: none;
   height: 1px;
@@ -278,6 +332,12 @@ const rendered = computed(() => {
 .markdown-body :deep(h1) { font-size: 1.4em; }
 .markdown-body :deep(h2) { font-size: 1.2em; }
 .markdown-body :deep(h3) { font-size: 1.1em; }
+
+.markdown-body :deep(h1),
+.markdown-body :deep(h2) {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--hc-border);
+}
 
 .markdown-body :deep(img) {
   max-width: 100%;
