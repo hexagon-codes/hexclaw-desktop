@@ -731,14 +731,18 @@ Both follow the **local-first** principle: data is never uploaded to third-party
 
 ## Changelog
 
-### v0.5.0
+### v0.5.0-beta
 
 **New Features**
 - Built-in K12 Homework Tutor scenario pack: Homework Tutor template, child profile, default skill binding, and enhanced Tutor / Mistakes views.
-- Added Mistake Book (first screen leads with the “Due this week” review queue, a collapsible “All mistakes” archive, and manual “Log a mistake” entry), Notebook, insights, inline “Tutoring tips for this homework” (auto-shown after you confirm recognized problems), review-paper (one-tap / custom) print/export, and `.hexbak` family learning archive backup/restore.
+- Added Mistake Book (first screen leads with the “Due this week” review queue, a collapsible “All mistakes” archive, and manual “Log a mistake” entry), Notebook (compact one-line records, low-frequency subject filters, details, and manual entries), insights, inline “Tutoring tips for this homework” (auto-shown after you confirm recognized problems), review-paper (one-tap / custom) print/export, and `.hexbak` family learning archive backup/restore.
 - (Finalized in the 2026-07-09 product review) The study assistant display name is unified as “{child}'s Study Assistant”; the lesson prep card becomes tutoring tips inlined after recognition is confirmed; paper generation is unified as “Review paper”; the Mistake Book first screen leads with the review queue and supports manual entry; the study-time metric is removed.
 - Chat messages now support verification badges and record chips, rendered from generic contracts for program verification, model review, out-of-scope, unverifiable, and record-save states.
-- Markdown rendering now supports KaTeX math and mhchem chemistry formulas.
+- Markdown rendering supports GitHub-style task lists, strikethrough, and tables, as well as KaTeX math and mhchem chemistry formulas. Tutoring explanations, grading details, retry problems, and record details use the same renderer.
+
+**Experience and Engineering**
+- The sidebar shows the HexClaw product version; the Hexagon engine version is shown separately on the About page.
+- The splash screen is shown for at least 700ms, and packaged Tauri assets use relative paths to reduce cold-start flashing and asset-loading failures.
 
 **Architecture**
 - Added `scenarioRegistry`, view descriptors, record schemas, VerifyResult, and scenario-extension contracts so scenario packs mount through descriptors without changing the generic shell.

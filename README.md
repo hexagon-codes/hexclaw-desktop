@@ -45,11 +45,11 @@ macOS / Windows / Linux 原生运行 · Sidecar 架构本地部署 · 零云端�
 
 | 功能 | 说明 |
 |------|------|
-| **AI 对话** | 多模型支持: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama，流式输出，Markdown + KaTeX 数学公式 / mhchem 化学式渲染，代码高亮，深度思考 |
+| **AI 对话** | 多模型支持: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama，流式输出，GitHub 风格 Markdown（任务清单、删除线、表格）+ KaTeX 数学公式 / mhchem 化学式渲染，代码高亮，深度思考 |
 | **图片/视频生成** | 智谱 CogView-4 图片生成 + CogVideoX-2 视频生成，统一文本对话框入口（无独立 mode 按钮），生成结果落盘到 `{DataDir}/generated/` 后以 `/api/v1/files/generated/...` URL 引用（永不过期、不撑爆 SQLite），气泡内联预览 + 一直可见的下载按钮 |
 | **本地模型 (Ollama)** | 一键检测/关联本地 Ollama，自动发现已下载模型，状态机管理（检测→运行→关联），LM Studio/llama.cpp 走 OpenAI 兼容接入 |
 | **Agent 编排** | 自定义 Agent 角色/目标/背景，多 Agent 协作 (Handoff + Orchestrate + Spawn)，Agent 会议模式，角色模板库 |
-| **场景包 / K12 作业辅导** | 通过通用 `scenarioRegistry` 挂载作业辅导助手模板：孩子档案、默认辅导技能、拍照识题、渐进提示、错题本/积累本/学情报告、家长备课卡、验算徽章与入库徽章；多孩按 Agent 实例隔离 |
+| **场景包 / K12 作业辅导** | 通过通用 `scenarioRegistry` 挂载作业辅导助手模板：孩子档案、默认辅导技能、拍照识题、渐进提示、错题本/积累本/学情报告、家长备课卡、验算徽章与入库徽章；讲解、批改和记录详情支持富文本 / 公式渲染，多孩按 Agent 实例隔离 |
 | **自主 Agent** | Budget 三维预算兜底 (token/时间/金额)，代码执行沙箱 (macOS Seatbelt/Linux Namespace/Windows 5 层隔离)，Checkpoint 长任务恢复 |
 | **工具审批** | 危险工具 WebSocket 实时审批 (ToolApprovalCard)，safe/sensitive/dangerous 三级风险分类，"始终允许"记忆 |
 | **Skill 系统** | 技能市场 + 自定义技能 + LLM 创建新 Skill (SkillWriter + 安全扫描)，Skill Chain 链式调用，依赖管理，Tool 注册与 Per-tool 权限 |
@@ -221,7 +221,8 @@ brew install --cask hexclaw
 
 正式发布前需要满足：
 
-- `package.json`、`src-tauri/tauri.conf.json` 与 `src-tauri/Cargo.toml` 的版本号和 tag 一致
+- `package.json`、`src-tauri/tauri.conf.json` 与 `src-tauri/Cargo.toml` 的版本号和 tag 一致（当前为 `v0.5.0-beta`）
+- `Makefile` 的 `HEXCLAW_REF` 为同一版本的 `refs/tags/v0.5.0-beta`
 - `src-tauri/tauri.conf.json` 中已写入 Tauri updater 公钥 `plugins.updater.pubkey`
 - GitHub Actions secrets 已配置 `TAURI_SIGNING_PRIVATE_KEY`（可选，用于 Tauri 自动更新签名）
 
@@ -251,7 +252,7 @@ cd hexclaw-desktop
 make install
 # 等价于: pnpm install && cd src-tauri && cargo fetch
 
-# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.5.0)
+# 3. 编译 Go sidecar (首次需要，默认拉取远程 GitHub hexclaw v0.5.0-beta)
 make sidecar
 
 # 本机全生态联调/装机测试：使用 ../hexclaw 和 ../go.work 中的本地最新代码
@@ -265,7 +266,7 @@ make dev
 ```
 
 > **注意**:
-> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.5.0` 到 `/tmp/hexclaw-gith-src` 并编译
+> - `make sidecar` 默认会从 `https://github.com/hexagon-codes/hexclaw.git` 拉取 `refs/tags/v0.5.0-beta` 到 `/tmp/hexclaw-gith-src` 并编译
 > - 如需切换后端版本，可显式指定：`make sidecar HEXCLAW_REF=refs/tags/<tag>`
 > - 本机装机测试使用 `make sidecar-local`，等价于 `HEXCLAW_LOCAL_SRC=../hexclaw HEXCLAW_GOWORK=../go.work make sidecar`，会让 `ai-core`、`hexagon`、`toolkit` 走本地 Go workspace
 > - 本机完整打包使用 `make package-local`，会先运行 `verify-local-deps`，如果任一核心模块未解析到 `/Users/hexagon/work` 下会直接失败；macOS 本地 DMG 使用稳定的 `hdiutil create -srcfolder` 路径，避免 Finder/AppleScript 美化流程影响装机测试
@@ -514,7 +515,7 @@ xattr -cr /Applications/HexClaw.app
 ### `make sidecar` 编译失败
 
 1. 确认 Go >= 1.25 已安装: `go version`
-2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0`
+2. 确认能访问 GitHub 并成功拉取远程源码: `git ls-remote --tags https://github.com/hexagon-codes/hexclaw.git v0.5.0-beta`
 3. 确认 Rust 工具链已安装 (用于检测平台 triple): `rustc -vV`
 
 ### `make dev` 启动后白屏

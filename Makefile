@@ -3,7 +3,7 @@
 .PHONY: dev build build-local package-local clean verify-local-deps sidecar sidecar-local sidecar-all sidecar-all-local sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src install test refresh-icon
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
-HEXCLAW_REF ?= refs/tags/v0.5.0
+HEXCLAW_REF ?= refs/tags/v0.5.0-beta
 HEXCLAW_SRC_DIR ?= /tmp/hexclaw-gith-src
 HEXCLAW_LOCAL_SRC ?=
 DESKTOP_ROOT := $(CURDIR)
@@ -12,6 +12,8 @@ TARGET ?= aarch64-apple-darwin
 HEXCLAW_DEFAULT_LOCAL_SRC := $(abspath $(DESKTOP_ROOT)/../hexclaw)
 HEXCLAW_DEFAULT_GOWORK := $(abspath $(DESKTOP_ROOT)/../go.work)
 HEXCLAW_WORK_ROOT := $(abspath $(DESKTOP_ROOT)/..)
+# 本机 go.work 构建时 hexagon 引擎源码位于 workspace 同级目录；用于注入 git 版本（方案 A）。
+HEXAGON_SRC_DIR := $(HEXCLAW_WORK_ROOT)/hexagon
 HEXCLAW_BUILD_SRC := $(if $(strip $(HEXCLAW_LOCAL_SRC)),$(abspath $(HEXCLAW_LOCAL_SRC)),$(HEXCLAW_SRC_DIR))
 HEXCLAW_GOWORK ?= $(if $(strip $(HEXCLAW_LOCAL_SRC)),$(HEXCLAW_DEFAULT_GOWORK),)
 HEXCLAW_GO_ENV := $(if $(strip $(HEXCLAW_GOWORK)),GOWORK=$(HEXCLAW_GOWORK),)
@@ -93,7 +95,8 @@ sidecar: prepare-sidecar-src
 		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
-		$(HEXCLAW_GO_ENV) go build -ldflags="-X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE" \
+		HEXAGON_VER="$$(git -C "$(HEXAGON_SRC_DIR)" describe --tags --dirty 2>/dev/null || true)" && \
+		$(HEXCLAW_GO_ENV) go build -ldflags="-X main.version=$$VERSION -X main.commit=$$COMMIT -X main.date=$$DATE -X github.com/hexagon-codes/hexagon.injectedVersion=$$HEXAGON_VER" \
 			-o "$(SIDECAR_BIN_DIR)/hexclaw-$$(rustc -vV | grep 'host:' | awk '{print $$2}')" ./cmd/hexclaw
 	@echo "sidecar 编译完成"
 

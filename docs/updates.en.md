@@ -70,6 +70,7 @@ If your private key has no password, the second secret can stay empty or be omit
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
+   - `HEXCLAW_REF` in `Makefile` (it must be `refs/tags/v<version>`)
 2. Commit and push your changes
 3. Create and push a tag, for example:
 
@@ -114,7 +115,7 @@ Because the current release is an unsigned DMG (no Apple code signing or notariz
 ### What does the workflow validate now?
 
 - When `TAURI_SIGNING_PRIVATE_KEY` is missing, it disables updater artifacts and produces an unsigned build instead.
-- It validates that the version across `package.json` / `tauri.conf.json` / `Cargo.toml` matches the tag.
+- It validates that the versions across `package.json` / `tauri.conf.json` / `Cargo.toml` and `HEXCLAW_REF` in `Makefile` match the tag.
 
 ### Do prereleases auto-update?
 

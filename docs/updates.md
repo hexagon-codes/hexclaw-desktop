@@ -70,6 +70,7 @@ pnpm tauri signer generate -w ~/.tauri/hexclaw-updater.key
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
+   - `Makefile` 中的 `HEXCLAW_REF`（应为 `refs/tags/v<版本号>`）
 2. 提交代码并推送
 3. 创建并推送 tag，例如：
 
@@ -114,7 +115,7 @@ Tauri updater 私钥不会。它影响的是自动更新制品签名，不影响
 ### workflow 现在会自动验证什么？
 
 - 缺少 `TAURI_SIGNING_PRIVATE_KEY` 时自动关闭 updater 制品生成，改出未签名包
-- 校验三平台版本号（`package.json` / `tauri.conf.json` / `Cargo.toml`）与 tag 一致
+- 校验三平台版本号（`package.json` / `tauri.conf.json` / `Cargo.toml`）及 `Makefile` 的 `HEXCLAW_REF` 与 tag 一致
 
 ### 预发布版本会自动更新吗？
 
