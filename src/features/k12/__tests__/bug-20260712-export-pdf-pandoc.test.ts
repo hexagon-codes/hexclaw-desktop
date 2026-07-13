@@ -36,7 +36,7 @@ describe('项-7 Tauri 导出 PDF 走 render 端点出真 .pdf', () => {
     expect(h.saveSpy).toHaveBeenCalledOnce()
     const [src, fn] = h.saveSpy.mock.calls[0]!
     expect(src).toMatch(/^data:application\/pdf;base64,/) // RED：修前是 text/html
-    expect(fn).toBe('复习卷.pdf') // RED：修前存 复习卷.html
+    expect(fn).toBe('小明_复习卷_0712_0712.pdf')
   })
 
   it('非 Tauri → 保留原逻辑（不调 render 端点）', async () => {
@@ -52,5 +52,10 @@ describe('项-7 Tauri 导出 PDF 走 render 端点出真 .pdf', () => {
     expect(md).toContain('1.')
     expect(md).toContain('3.8×3 = ?')
     expect(md).toContain('小数乘法')
+    expect(md).toContain('**答：**')
+    // 每条答题线用 Markdown thematic break，由 Pandoc/Typst 渲染为不可换行的矢量横线。
+    // 禁止再用 42 个全角下划线：窄版心下会折行为“长线 + 残余短线”。
+    expect(md).not.toContain('＿')
+    expect(md.match(/^---$/gm)).toHaveLength(3)
   })
 })

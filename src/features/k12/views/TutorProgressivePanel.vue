@@ -9,6 +9,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useK12Store } from '../store'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import type { TutorTurnResp } from '@/api/k12'
 
 const props = defineProps<{ agentName: string; grade?: string }>()
@@ -95,10 +96,12 @@ function stageLabel(s: number): string {
         <span class="tutor-turn__badge">{{ turnItem.comfort ? t('k12.tutor.comfort') : stageLabel(turnItem.stage) }}</span>
         <span v-if="turnItem.emotion_cue" class="tutor-turn__cue">{{ turnItem.emotion_cue }}</span>
       </div>
-      <div class="tutor-turn__hint">{{ turnItem.prompt_hint }}</div>
+      <!-- 渐进提示为模型生成，数学题提示含 LaTeX → md 渲染。 -->
+      <MarkdownRenderer class="tutor-turn__hint tutor-turn__md" :content="turnItem.prompt_hint" />
       <div v-if="turnItem.stage === 3 && turnItem.solution" class="tutor-turn__solution" data-testid="tutor-solution">
         <span v-if="turnItem.badge" class="tutor-turn__vbadge">✓ {{ turnItem.badge }}</span>
-        <pre>{{ turnItem.solution }}</pre>
+        <!-- 完整讲解为模型生成的富文本（**加粗** / 列表 / LaTeX 数学）→ md 渲染，勿裸显。 -->
+        <MarkdownRenderer class="tutor-turn__md" :content="turnItem.solution" />
       </div>
     </div>
 
@@ -153,7 +156,12 @@ function stageLabel(s: number): string {
 .tutor-turn__hint { font-size: 12.5px; color: var(--hc-text-primary); line-height: 1.5; }
 .tutor-turn__solution { margin-top: 6px; }
 .tutor-turn__vbadge { font-size: 11px; color: var(--hc-success); }
-.tutor-turn__solution pre { white-space: pre-wrap; font-size: 12.5px; margin: 4px 0 0; }
+.tutor-turn__solution { font-size: 12.5px; }
+/* md 容器:紧凑段距，让讲解/提示不因块级 p 的默认外边距而撑开。 */
+.tutor-turn__md { font-size: 12.5px; }
+.tutor-turn__md :deep(p) { margin: 4px 0; }
+.tutor-turn__md :deep(p:first-child) { margin-top: 0; }
+.tutor-turn__md :deep(p:last-child) { margin-bottom: 0; }
 .tutor-panel__err { font-size: 12px; color: var(--hc-danger, #e05a5a); }
 .tutor-panel__actions { display: flex; gap: 8px; }
 .tutor-panel__btn {

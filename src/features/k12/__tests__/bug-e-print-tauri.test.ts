@@ -58,7 +58,7 @@ describe('BUG-E K12 打印在 Tauri 桌面端走原生保存（iframe win.print(
     expect(h.saveSpy).toHaveBeenCalledOnce() // RED（修前无平台分支 → 不调 downloadInApp）
     const [src, fn] = h.saveSpy.mock.calls[0]!
     expect(src).toMatch(/^data:text\/html;base64,/)
-    expect(fn).toBe('错题卷.html')
+    expect(fn).toBe('小明_错题卷_0712_0712.html')
     const html = decode(src as string)
     expect(html).toContain('错题卷')
     expect(html).toContain('一个长方体的体积是多少')
@@ -72,7 +72,7 @@ describe('BUG-E K12 打印在 Tauri 桌面端走原生保存（iframe win.print(
     expect(h.renderSpy).toHaveBeenCalledOnce()
     expect(h.saveSpy).toHaveBeenCalledOnce()
     expect(h.saveSpy.mock.calls[0]![0]).toMatch(/^data:application\/pdf;base64,/) // 真 pdf 字节，非 html
-    expect(h.saveSpy.mock.calls[0]![1]).toBe('错题卷.pdf')
+    expect(h.saveSpy.mock.calls[0]![1]).toBe('小明_错题卷_0712_0712.pdf')
   })
 
   it('浏览器/dev 环境（isTauri=false）→ 不调 downloadInApp（保留 iframe win.print()）', async () => {

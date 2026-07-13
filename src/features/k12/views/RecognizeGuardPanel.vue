@@ -11,6 +11,7 @@
 import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useK12Store } from '../store'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
@@ -360,9 +361,10 @@ async function coldStart() {
           class="rec-row__details"
           :data-testid="`rq-grade-details-${i}`"
         >
-          <div v-if="row.solution"><b>{{ t('k12.recognize.solution') }}：</b>{{ row.solution }}</div>
-          <div v-if="row.wrongStep"><b>{{ t('k12.recognize.wrongStep') }}：</b>{{ row.wrongStep }}</div>
-          <div v-if="row.errorCause"><b>{{ t('k12.recognize.errorCause') }}：</b>{{ row.errorCause }}</div>
+          <!-- 解答/批改讲评/错因为模型生成的富文本（含公式/列表）→ 标签保留、值走 md 渲染。 -->
+          <div v-if="row.solution"><b>{{ t('k12.recognize.solution') }}：</b><MarkdownRenderer class="rec-row__md" :content="row.solution" /></div>
+          <div v-if="row.wrongStep"><b>{{ t('k12.recognize.wrongStep') }}：</b><MarkdownRenderer class="rec-row__md" :content="row.wrongStep" /></div>
+          <div v-if="row.errorCause"><b>{{ t('k12.recognize.errorCause') }}：</b><MarkdownRenderer class="rec-row__md" :content="row.errorCause" /></div>
         </div>
         <div v-if="row.verify && row.recorded" class="rec-row__recorded">
           🗂 {{ t('k12.recognize.recorded') }}
@@ -473,6 +475,10 @@ async function coldStart() {
   border-start-end-radius: var(--hc-radius-sm); border-end-end-radius: var(--hc-radius-sm);
 }
 .rec-row__details b { color: var(--hc-text-primary); }
+/* md 值容器:紧凑段距，避免块级 p 默认外边距撑开批改详情行。 */
+.rec-row__md :deep(p) { margin: 2px 0; }
+.rec-row__md :deep(p:first-child) { margin-top: 0; }
+.rec-row__md :deep(p:last-child) { margin-bottom: 0; }
 .rec-panel__empty { font-size: 12px; color: var(--hc-text-muted); text-align: center; padding: 8px; margin: 0; }
 /* 冷启动倒查建档 */
 .rec-cold {

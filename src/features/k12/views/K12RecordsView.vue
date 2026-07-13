@@ -8,14 +8,16 @@
 import { computed, ref, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RecordList from '@/shell/records/RecordList.vue'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
+import { setClipboard } from '@/api/desktop'
 import { useK12Store } from '../store'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import { k12ReviewRetry, k12ExportMd, k12AddAccumulation } from '@/api/k12'
 import { MISTAKE_SCHEMA, ACCUMULATION_SCHEMA } from '../schemas'
-import { printWorksheet, exportPdf, exportWord, worksheetFilename, download } from '../export'
+import { exportPdf, exportWord, worksheetFilename, download } from '../export'
 import type { RecordItem } from '@/contracts'
 
 const props = defineProps<{
@@ -162,7 +164,7 @@ async function submitMistake() {
 }
 
 // 自定义组卷（20260709）：「一键出复习卷」保持零配置智能默认（review 区主动作）；想微调的少数家长
-// 走此次级面板（每题几道 / 难度 / 总量），渐进披露不把主动作藏在参数后。生成走客户端 printWorksheet。
+// 走此次级面板（每题几道 / 难度 / 总量），渐进披露不把主动作藏在参数后。生成统一导出真 PDF。
 const customPaperOpen = ref(false)
 const paperForm = ref({ perQ: '1', difficulty: 'same', total: 'all' })
 const paperPerQOpts = ['1', '2', '3']
@@ -178,11 +180,11 @@ const paperTotalOpts = computed(() => [
 ])
 async function genCustomPaper() {
   customPaperOpen.value = false
-  // 客户端出卷=printWorksheet(当前错题)。`total` 客户端可兑现(切片限量);`perQ`(每题变式数)/
+  // 客户端出卷=exportPdf(当前错题)。`total` 客户端可兑现(切片限量);`perQ`(每题变式数)/
   // `difficulty`(难度)需后端组卷端点按参数出变式题,当前客户端出卷无法变更,待后端 /paper 端点补齐(契约缺口)。
   const limit = paperForm.value.total === 'all' ? currentItems().length : Number(paperForm.value.total)
   try {
-    await printWorksheet(currentItems().slice(0, limit), worksheetMeta())
+    await exportPdf(currentItems().slice(0, limit), worksheetMeta())
     toast.success(t('k12.customPaper.generated'))
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
@@ -323,10 +325,15 @@ function closeRetry() {
   retry.value = { open: false, loading: false, error: false, solution: '', revealed: false }
 }
 
-// 积累本行内动作（BUG-20260712-#2）：积累不复习/不再练（schema.reviewable=false → RecordList 不渲染再练），
-// 只走「详情」。@action 必须接线到真 handler，否则详情按钮点了无反应（死按钮）。
-function onAccumAction(payload: { id: 'practiceAgain' | 'markMastered' | 'detail'; record: RecordItem }) {
-  if (payload.id === 'detail') openDetail(payload.record, 'accum')
+async function copyRetrySolution() {
+  if (!retry.value.revealed || !retry.value.solution) return
+  try {
+    // 复制原始 Markdown，粘贴到钉钉/笔记时仍保留标题、列表和公式结构。
+    await setClipboard(retry.value.solution)
+    toast.success(t('k12.records.retryCopied'))
+  } catch {
+    toast.error(t('k12.records.retryCopyFailed'))
+  }
 }
 
 // ── 详情弹层（BUG-20260712-#2）──
@@ -346,6 +353,21 @@ const detailError = computed(() => String(detail.value.record?.fields.error_caus
 const detailContent = computed(() => String(detail.value.record?.fields.content ?? ''))
 const detailAccumSubject = computed(() => String(detail.value.record?.fields.subject ?? ''))
 const detailAccumType = computed(() => String(detail.value.record?.fields.entry_type ?? ''))
+function accumField(item: RecordItem, key: 'subject' | 'entry_type' | 'content' | 'source'): string {
+  return String(item.fields[key] ?? '')
+}
+function accumSourceLabel(item: RecordItem): string {
+  const source = accumField(item, 'source')
+  return source ? `${t('k12.accumulationFields.source')}：${source}` : ''
+}
+function accumStatusLabel(item: RecordItem): string {
+  return item.status === '已掌握' || item.status === 'mastered'
+    ? t('k12.mistakeStatus.mastered')
+    : t('k12.accumulationStatus.na')
+}
+function accumStatusTone(item: RecordItem): 'got' | 'na' {
+  return item.status === '已掌握' || item.status === 'mastered' ? 'got' : 'na'
+}
 const detailStatus = computed(() => {
   const s = detail.value.record?.status
   if (!s) return '—'
@@ -411,7 +433,8 @@ function currentItems(): RecordItem[] {
 }
 async function doPrint() {
   try {
-    await printWorksheet(currentItems(), worksheetMeta())
+    // 桌面 WebView 的 iframe print 是 no-op；“一键出卷”的产品产物应是真 PDF，而不是 HTML 兜底文件。
+    await exportPdf(currentItems(), worksheetMeta())
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
   }
@@ -458,6 +481,10 @@ async function doExportMd() {
         <svg class="k12ic" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
         {{ t('k12.mistakeAdd.open') }}
       </button>
+      <button v-else-if="sub === 'accumulation'" class="btn k12rec__addbtn" data-testid="accum-add-open" @click="accumAddOpen = true">
+        <svg class="k12ic" viewBox="0 0 24 24"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+        {{ t('k12.accum.addOpen') }}
+      </button>
       <div class="k12rec__export">
         <button class="btn" :title="t('k12.actions.more')" @click="exportOpen = !exportOpen">⋯</button>
         <div v-if="exportOpen" class="k12rec__menu">
@@ -465,6 +492,12 @@ async function doExportMd() {
             <button @click="doExport('pdf')">{{ t('k12.actions.export') }} PDF</button>
             <button @click="doExport('doc')">{{ t('k12.actions.export') }} Word</button>
             <button @click="doExportMd">{{ t('k12.actions.export') }} Markdown</button>
+          </template>
+          <!-- 原型正文不放筛选条；分科过滤保留为低频溢出动作，避免挤占积累内容层级。 -->
+          <template v-else-if="sub === 'accumulation'">
+            <button data-testid="accum-filter-all" @click="setAccumSubject(''); exportOpen = false">{{ t('k12.accum.filterAll') }}</button>
+            <button data-testid="accum-filter-chinese" @click="setAccumSubject('语文'); exportOpen = false">{{ t('k12.accum.filterChinese') }}</button>
+            <button data-testid="accum-filter-english" @click="setAccumSubject('英语'); exportOpen = false">{{ t('k12.accum.filterEnglish') }}</button>
           </template>
           <button @click="exportOpen = false; emit('open-backup')">{{ t('k12.actions.backup') }}</button>
         </div>
@@ -538,66 +571,24 @@ async function doExportMd() {
       </section>
 
       <!-- 积累本：语/英沉淀（真实 /accumulation）——记录本原语第二场景 -->
-      <section v-else-if="sub === 'accumulation'">
+      <section v-else-if="sub === 'accumulation'" class="k12accum" data-testid="accum-prototype">
         <!-- 原型 rc1（app.html:1618）：积累 tab 带 cxsec 标题 + 说明（错题 tab 无标题——顶栏已声明身份；
              积累 / 学情 tab 各有 h2 标题，与学情 tab reporthead 同款）。 -->
         <div class="k12rec__reporthead">
           <h3 class="k12rec__h" style="margin: 0">{{ t('k12.accum.title') }}</h3>
           <span class="k12rec__hint" style="margin: 0">{{ t('k12.accum.desc') }}</span>
         </div>
-        <!-- 分科过滤 chips（#5）+ 手动记录入口（#4）-->
-        <div class="k12accum__bar">
-          <div class="k12accum__filters">
-            <button
-              class="chip" :class="{ on: accumSubject === '' }"
-              data-testid="accum-filter-all" @click="setAccumSubject('')"
-            >{{ t('k12.accum.filterAll') }}</button>
-            <button
-              class="chip" :class="{ on: accumSubject === '语文' }"
-              data-testid="accum-filter-chinese" @click="setAccumSubject('语文')"
-            >{{ t('k12.accum.filterChinese') }}</button>
-            <button
-              class="chip" :class="{ on: accumSubject === '英语' }"
-              data-testid="accum-filter-english" @click="setAccumSubject('英语')"
-            >{{ t('k12.accum.filterEnglish') }}</button>
-          </div>
-          <span class="k12rec__sp" />
-          <button class="btn" data-testid="accum-add-open" @click="accumAddOpen = !accumAddOpen">
-            {{ t('k12.accum.addOpen') }}
-          </button>
-        </div>
-
-        <!-- 手动记录表单（#4）-->
-        <div v-if="accumAddOpen" class="k12accum__form">
-          <div class="k12accum__row">
-            <div class="k12accum__field" data-testid="accum-add-subject">
-              <span>{{ t('k12.accum.subject') }}</span>
-              <HcSelect v-model="accumForm.subject" :options="accumSubjectOptions" />
-            </div>
-            <div class="k12accum__field" data-testid="accum-add-type">
-              <span>{{ t('k12.accum.type') }}</span>
-              <HcSelect v-model="accumForm.entry_type" :options="accumTypeOptions" />
-            </div>
-          </div>
-          <textarea
-            v-model="accumForm.content"
-            class="k12accum__content"
-            data-testid="accum-add-content"
-            :placeholder="t('k12.accum.contentPlaceholder')"
-            rows="2"
-          />
-          <div class="k12accum__actions">
-            <button class="btn btn-ghost" @click="accumAddOpen = false">{{ t('k12.accum.cancel') }}</button>
-            <button
-              class="btn btn-primary"
-              data-testid="accum-add-submit"
-              :disabled="!accumForm.content.trim() || accumSaving"
-              @click="submitAccum"
-            >{{ t('k12.accum.submit') }}</button>
+        <!-- 原型 app.html:1619-1623：积累不是错题状态机，固定单行“学科→内容→类型→出处→状态→详情”。 -->
+        <div v-if="accumView && accumView.items.length" class="k12accum__list">
+          <div v-for="item in accumView.items" :key="item.recordId" class="k12accum__row">
+            <span class="k12accum__subject">{{ accumField(item, 'subject') }}</span>
+            <b class="k12accum__title" :title="accumField(item, 'content')">{{ accumField(item, 'content') }}</b>
+            <span class="k12accum__type">{{ accumField(item, 'entry_type') }}</span>
+            <span class="k12accum__source" :title="accumSourceLabel(item)">{{ accumSourceLabel(item) }}</span>
+            <span class="k12accum__status" :class="`k12accum__status--${accumStatusTone(item)}`">{{ accumStatusLabel(item) }}</span>
+            <button class="btn btn-ghost k12accum__detail" @click="openDetail(item, 'accum')">{{ t('records.detail') }}</button>
           </div>
         </div>
-
-        <RecordList v-if="accumView && accumView.items.length" :schema="ACCUMULATION_SCHEMA" :view="accumView" @action="onAccumAction" />
         <!-- 积累空态：对齐原型 rc1——原型积累区无「大居中卡」形态，只是列表区；空时给克制的
              列表占位一行（记录入口常驻在上方 .k12accum__bar 的「＋记到积累本」，不再叠一个大 CTA 卡）。 -->
         <p v-else class="k12accum__empty" data-testid="accum-empty-card">
@@ -698,6 +689,50 @@ async function doExportMd() {
       </div>
     </div>
 
+    <!-- 积累本手动记录：与「记一条错题」一致，使用模态表单，避免挤压列表。 -->
+    <div
+      v-if="accumAddOpen"
+      class="k12modal"
+      data-testid="accum-add-form"
+      @click.self="accumAddOpen = false"
+    >
+      <div class="k12modal__card">
+        <div class="k12modal__head">
+          <b>{{ t('k12.accum.addOpen') }}</b>
+          <span class="k12rec__sp" />
+          <button class="btn btn-ghost" @click="accumAddOpen = false">✕</button>
+        </div>
+        <div class="k12accum__form k12accum__form--modal">
+          <div class="k12accum__row">
+            <div class="k12accum__field" data-testid="accum-add-subject">
+              <span>{{ t('k12.accum.subject') }}</span>
+              <HcSelect v-model="accumForm.subject" :options="accumSubjectOptions" />
+            </div>
+            <div class="k12accum__field" data-testid="accum-add-type">
+              <span>{{ t('k12.accum.type') }}</span>
+              <HcSelect v-model="accumForm.entry_type" :options="accumTypeOptions" />
+            </div>
+          </div>
+          <textarea
+            v-model="accumForm.content"
+            class="k12accum__content"
+            data-testid="accum-add-content"
+            :placeholder="t('k12.accum.contentPlaceholder')"
+            rows="4"
+          />
+          <div class="k12accum__actions">
+            <button class="btn btn-ghost" @click="accumAddOpen = false">{{ t('k12.accum.cancel') }}</button>
+            <button
+              class="btn btn-primary"
+              data-testid="accum-add-submit"
+              :disabled="!accumForm.content.trim() || accumSaving"
+              @click="submitAccum"
+            >{{ t('k12.accum.submit') }}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 自定义组卷 modal（原型 openCustomPaper=弹窗，同构位置 · BUG-20260709）
          渐进披露：一键零配置仍是主动作，微调参数走此弹窗。 -->
     <div v-if="customPaperOpen" class="k12modal" @click.self="customPaperOpen = false">
@@ -764,13 +799,21 @@ async function doExportMd() {
           <p class="k12retry__mask">🔒 {{ t('k12.records.retryMaskHint') }}</p>
           <!-- 守答案真遮罩：未揭示时模糊 + 禁选中（防孩子凑近一眼看光），家长点按才显示 -->
           <div class="k12retry__bodywrap" :class="{ 'k12retry__bodywrap--masked': !retry.revealed }">
-            <pre class="k12retry__body" :aria-hidden="!retry.revealed">{{ retry.solution }}</pre>
+            <!-- 变式题为模型生成的富文本（**加粗** / 列表 / LaTeX 数学）→ md 渲染，勿裸显 markdown 标记。
+                 遮罩层与 aria-hidden 保留：未揭示时模糊 + 不可读屏。 -->
+            <MarkdownRenderer class="k12retry__body" :aria-hidden="!retry.revealed" :content="retry.solution" />
             <button
               v-if="!retry.revealed"
               class="btn btn-primary k12retry__reveal"
               data-testid="retry-reveal"
               @click="retry.revealed = true"
             >{{ t('k12.records.retryReveal') }}</button>
+          </div>
+          <div v-if="retry.revealed" class="k12retry__actions">
+            <button class="btn" data-testid="retry-copy" @click="copyRetrySolution">
+              <svg class="k12ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+              {{ t('k12.records.retryCopy') }}
+            </button>
           </div>
         </template>
       </div>
@@ -793,7 +836,7 @@ async function doExportMd() {
         <div v-if="detail.kind === 'accum'" class="k12detail">
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.detail.content') }}</span>
-            <p class="k12detail__val" data-testid="detail-content">{{ detailContent || '—' }}</p>
+            <MarkdownRenderer class="k12detail__val k12detail__val--md" data-testid="detail-content" :content="detailContent || '—'" />
           </div>
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.accum.subject') }}</span>
@@ -808,7 +851,7 @@ async function doExportMd() {
         <div v-else class="k12detail">
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.detail.question') }}</span>
-            <p class="k12detail__val" data-testid="detail-question">{{ detailQuestion || '—' }}</p>
+            <MarkdownRenderer class="k12detail__val k12detail__val--md" data-testid="detail-question" :content="detailQuestion || '—'" />
           </div>
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.detail.knowledgePoint') }}</span>
@@ -816,7 +859,7 @@ async function doExportMd() {
           </div>
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.detail.errorCause') }}</span>
-            <p class="k12detail__val" data-testid="detail-error">{{ detailError || t('k12.detail.noErrorCause') }}</p>
+            <MarkdownRenderer class="k12detail__val k12detail__val--md" data-testid="detail-error" :content="detailError || t('k12.detail.noErrorCause')" />
           </div>
         </div>
         <p v-if="detail.kind !== 'accum'" class="k12rec__hint">{{ t('k12.detail.footnote') }}</p>
@@ -908,8 +951,29 @@ async function doExportMd() {
 .k12bar__fill { display: block; height: 100%; background: var(--hc-accent); border-radius: 99px; }
 .k12bar b { width: 26px; text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
 /* 积累本分科过滤 + 手动记录 */
-.k12accum__bar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-.k12accum__filters { display: inline-flex; gap: 6px; }
+.k12accum__list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.k12accum__row {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px;
+  border: 0.5px solid var(--hc-border); border-radius: 10px; background: var(--hc-bg-card);
+  color: var(--hc-text-secondary); font-size: 12px;
+}
+.k12accum__subject {
+  flex: none; padding: 1px 7px; border-radius: 6px; font-size: 11px;
+  background: var(--hc-bg-active); color: var(--hc-text-secondary);
+}
+.k12accum__title {
+  flex: 0 1 auto; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--hc-text-primary);
+}
+.k12accum__type {
+  flex: none; padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+  background: var(--hc-accent-subtle); color: var(--hc-accent); font-size: 10.5px; font-weight: 650;
+}
+.k12accum__source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.k12accum__status { flex: none; padding: 2px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+.k12accum__status--na { color: var(--hc-text-muted); background: var(--hc-bg-input); }
+.k12accum__status--got { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
+.k12accum__detail { flex: none; }
 .chip {
   font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
   border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-secondary);
@@ -987,11 +1051,17 @@ async function doExportMd() {
 .k12retry__card { width: min(560px, 100%); max-height: 80vh; overflow: auto; background: var(--hc-bg-elevated); border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-lg); box-shadow: var(--hc-shadow-lg); padding: 16px 18px; }
 .k12retry__head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
 .k12retry__mask { font-size: 11.5px; color: var(--hc-warning); margin-bottom: 8px; }
-.k12retry__body { white-space: pre-wrap; word-break: break-word; font-family: inherit; font-size: 13px; line-height: 1.6; color: var(--hc-text-primary); margin: 0; }
+/* md 渲染:块级元素自带间距，勿用 pre-wrap（会多出空白）。保留字号/断词/色，遮罩 blur 作用于本容器。 */
+.k12retry__body {
+  word-break: break-word; font-size: 13px; line-height: 1.6; color: var(--hc-text-primary); margin: 0;
+  padding: 16px 20px; border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
+}
 /* 守答案真遮罩：模糊 + 禁选中；揭示按钮悬浮居中 */
 .k12retry__bodywrap { position: relative; }
 .k12retry__bodywrap--masked .k12retry__body { filter: blur(7px); user-select: none; pointer-events: none; }
 .k12retry__reveal { position: absolute; inset: 0; margin: auto; width: fit-content; height: fit-content; }
+.k12retry__actions { display: flex; justify-content: flex-end; margin-top: 10px; }
 /* 再练失败态：可重试提示（不静默关弹层 · BUG-20260712-#1） */
 .k12retry__err { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 /* 错题详情弹层（BUG-20260712-#2）：字段行 label + 值 */
@@ -999,6 +1069,8 @@ async function doExportMd() {
 .k12detail__row { display: flex; flex-direction: column; gap: 3px; }
 .k12detail__label { font-size: 11.5px; color: var(--hc-text-muted); }
 .k12detail__val { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--hc-text-primary); white-space: pre-wrap; word-break: break-word; }
+/* md 渲染变体:块级元素自带间距，取消 pre-wrap 避免多余空白（纯文本字段仍用基类的 pre-wrap）。 */
+.k12detail__val--md { white-space: normal; }
 .k12detail__status { font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 700; white-space: nowrap; }
 .k12detail__status--todo { color: var(--hc-error); background: color-mix(in srgb, var(--hc-error) 10%, transparent); }
 .k12detail__status--done { color: var(--hc-warning); background: color-mix(in srgb, var(--hc-warning) 12%, transparent); }

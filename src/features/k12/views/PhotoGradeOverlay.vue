@@ -11,6 +11,7 @@
  */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import type { BBox } from '@/api/k12'
 
 /** 一道题的叠加标记：批改结论 + 可选订正/错因，按题 id 对齐其 bbox。 */
@@ -120,12 +121,15 @@ function boxStyle(b: BBox) {
         <span class="pg-overlay__degraded-verdict" :class="m.correct ? 'is-correct' : 'is-wrong'">
           {{ m.correct ? '✓ ' + t('k12.overlay.correct') : '✗ ' + t('k12.overlay.wrong') }}
         </span>
-        <span v-if="m.question" class="pg-overlay__degraded-q">{{ m.question }}</span>
+        <!-- 降级文字批改的题干/正确答案/错因为模型生成，数学题含 LaTeX → 行内 md 渲染，保紧凑行内排布。 -->
+        <span v-if="m.question" class="pg-overlay__degraded-q">
+          <MarkdownRenderer class="pg-overlay__md-inline" :content="m.question" />
+        </span>
         <span v-if="!m.correct && m.correctAnswer" class="pg-overlay__degraded-fix">
-          {{ t('k12.overlay.correctAnswer') }}：{{ m.correctAnswer }}
+          {{ t('k12.overlay.correctAnswer') }}：<MarkdownRenderer class="pg-overlay__md-inline" :content="m.correctAnswer" />
         </span>
         <span v-if="!m.correct && m.errorCause" class="pg-overlay__degraded-cause">
-          {{ t('k12.overlay.errorCause') }}：{{ m.errorCause }}
+          {{ t('k12.overlay.errorCause') }}：<MarkdownRenderer class="pg-overlay__md-inline" :content="m.errorCause" />
         </span>
       </div>
     </div>
@@ -173,4 +177,7 @@ function boxStyle(b: BBox) {
 .pg-overlay__degraded-verdict.is-correct { color: var(--hc-success, #2ea86b); }
 .pg-overlay__degraded-verdict.is-wrong { color: var(--hc-danger, #e05a5a); }
 .pg-overlay__degraded-q { color: var(--hc-text-primary); }
+/* 行内 md:让短批改文本（含 LaTeX）在 flex-wrap 行内排布中不换行成块，保持紧凑。 */
+.pg-overlay__md-inline { display: inline; }
+.pg-overlay__md-inline :deep(p) { display: inline; margin: 0; }
 </style>

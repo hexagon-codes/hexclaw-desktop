@@ -54,12 +54,12 @@ export const ACCUMULATION_SCHEMA: RecordSchema = {
     { key: 'content', labelKey: 'k12.accumulationFields.content', type: 'string', role: 'title' },
     { key: 'subject', labelKey: 'k12.accumulationFields.subject', type: 'string', role: 'chip' },
     { key: 'entry_type', labelKey: 'k12.accumulationFields.type', type: 'string', role: 'chip' },
+    { key: 'source', labelKey: 'k12.accumulationFields.source', type: 'string', role: 'meta' },
   ],
   states: [
-    { id: 'new', labelKey: 'k12.mistakeStatus.new', tone: 'todo' },
-    { id: 'retried', labelKey: 'k12.mistakeStatus.retried', tone: 'done' },
-    { id: 'mastered', labelKey: 'k12.mistakeStatus.mastered', tone: 'got' },
-    { id: 'na', labelKey: 'k12.accumulationStatus.na', tone: 'na' },
+    // 后端积累状态是领域中文常量，不是错题本的 new/retried/mastered ID。
+    { id: '已积累', labelKey: 'k12.accumulationStatus.na', tone: 'na' },
+    { id: '已掌握', labelKey: 'k12.mistakeStatus.mastered', tone: 'got' },
   ],
 }
 

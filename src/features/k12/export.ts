@@ -17,6 +17,12 @@ export interface WorksheetMeta {
   dateLabel: string
 }
 
+function worksheetExportFilename(meta: WorksheetMeta, ext: string): string {
+  const digits = meta.dateLabel.replace(/\D/g, '')
+  const date = digits.slice(-4).padStart(4, '0')
+  return worksheetFilename(meta.childName, meta.title, date, date, ext)
+}
+
 /** HTML 转义，防题干里的尖括号破坏结构 */
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => (
@@ -67,7 +73,7 @@ export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): 
   // 桌面端把 HTML 经原生 Save 对话框 + Rust 写盘存成文件，用户用系统预览/浏览器打开后打印。
   if (isTauri()) {
     const b64 = btoa(unescape(encodeURIComponent(html))) // UTF-8 安全 base64（中文题干）
-    await downloadInApp(`data:text/html;base64,${b64}`, `${meta.title}.html`)
+    await downloadInApp(`data:text/html;base64,${b64}`, worksheetExportFilename(meta, 'html'))
     return true
   }
   const iframe = document.createElement('iframe')
@@ -202,7 +208,10 @@ export function buildWorksheetMarkdown(items: RecordItem[], meta: WorksheetMeta)
       const q = String(it.fields.question ?? '')
       const kp = String(it.fields.knowledge_point ?? '').replace(/[·・]\s*$/, '').trim()
       lines.push(`${i + 1}. ${q}${kp ? `  【${kp}】` : ''}`)
-      lines.push('') // 作答留白（pandoc/typst 段间距）
+      // Markdown thematic break 会被 Pandoc/Typst 渲染成不可换行的矢量横线。
+      // 禁用重复全角下划线：版心稍窄时文本会折成“长线 + 残余短线”。
+      const answerLine = '---'
+      lines.push('', '**答：**', '', answerLine, '', answerLine, '', answerLine, '')
     })
   }
   return lines.join('\n')
@@ -230,7 +239,7 @@ export async function exportPdf(items: RecordItem[], meta: WorksheetMeta): Promi
     const md = buildWorksheetMarkdown(items, meta)
     const blob = await renderDocument({ content: md, format: 'pdf', title: meta.title })
     const b64 = await blobToBase64(blob)
-    await downloadInApp(`data:application/pdf;base64,${b64}`, `${meta.title}.pdf`)
+    await downloadInApp(`data:application/pdf;base64,${b64}`, worksheetExportFilename(meta, 'pdf'))
     return true
   }
   return printWorksheet(items, meta)

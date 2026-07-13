@@ -49,6 +49,11 @@ async function gotoAccum(w: ReturnType<typeof render>) {
   await flushPromises()
 }
 
+async function openAccumMore(w: ReturnType<typeof render>) {
+  await w.find('.k12rec__export > button').trigger('click')
+  await flushPromises()
+}
+
 describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -62,6 +67,7 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await gotoAccum(w)
     h.listSpy.mockClear()
 
+    await openAccumMore(w)
     const chip = w.find('[data-testid="accum-filter-chinese"]')
     expect(chip.exists()).toBe(true)
     await chip.trigger('click')
@@ -77,9 +83,11 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await flushPromises()
     await gotoAccum(w)
     // 先切语文再切全部
+    await openAccumMore(w)
     await w.find('[data-testid="accum-filter-chinese"]').trigger('click')
     await flushPromises()
     h.listSpy.mockClear()
+    await openAccumMore(w)
     await w.find('[data-testid="accum-filter-all"]').trigger('click')
     await flushPromises()
 
@@ -94,6 +102,10 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
 
     await w.find('[data-testid="accum-add-open"]').trigger('click')
     await flushPromises()
+
+    const form = w.find('[data-testid="accum-add-form"]')
+    expect(form.exists()).toBe(true)
+    expect(form.classes()).toContain('k12modal')
 
     // 选学科英语、类型好词好句（学科/类型下拉走 HcSelect，D5：不再用原生 select）、填内容
     w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '英语')
@@ -133,9 +145,9 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await flushPromises()
     await gotoAccum(w)
     // 积累行只应有「详情」（无「再练」）
-    const rowBtns = w.findAll('.rl-row .rl-btn').map((b) => b.text())
+    const rowBtns = w.findAll('.k12accum__row .k12accum__detail').map((b) => b.text())
     expect(rowBtns).not.toContain('再练')
-    await w.findAll('.rl-row .rl-btn').find((b) => b.text() === '详情')!.trigger('click')
+    await w.findAll('.k12accum__row .k12accum__detail').find((b) => b.text() === '详情')!.trigger('click')
     await flushPromises()
     const modal = w.find('[data-testid="mistake-detail"]')
     expect(modal.exists()).toBe(true)

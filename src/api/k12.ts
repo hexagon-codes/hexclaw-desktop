@@ -306,6 +306,7 @@ export interface AccumDTO {
   subject: string
   entry_type: string
   content: string
+  source?: string
   status: string
 }
 export interface AddAccumReq {

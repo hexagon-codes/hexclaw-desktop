@@ -80,7 +80,7 @@ export function accumToRecord(dto: AccumDTO, agentId: string): RecordItem {
     collection: ACCUMULATION_COLLECTION,
     schemaVersion: '1',
     status: dto.status,
-    fields: { subject: dto.subject, entry_type: dto.entry_type, content: dto.content },
+    fields: { subject: dto.subject, entry_type: dto.entry_type, content: dto.content, source: dto.source ?? '' },
     version: 0,
   }
 }
