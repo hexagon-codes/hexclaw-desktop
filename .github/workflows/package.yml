@@ -57,24 +57,28 @@ jobs:
             go_os: darwin
             go_arch: arm64
             sidecar_name: hexclaw-aarch64-apple-darwin
+            render_target: darwin-arm64
             tauri_args: --target aarch64-apple-darwin
           - platform: macos-latest
             target: x86_64-apple-darwin
             go_os: darwin
             go_arch: amd64
             sidecar_name: hexclaw-x86_64-apple-darwin
+            render_target: darwin-x86_64
             tauri_args: --target x86_64-apple-darwin
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             go_os: linux
             go_arch: amd64
             sidecar_name: hexclaw-x86_64-unknown-linux-gnu
+            render_target: linux-x86_64
             tauri_args: ''
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             go_os: windows
             go_arch: amd64
             sidecar_name: hexclaw-x86_64-pc-windows-msvc.exe
+            render_target: windows-x86_64
             tauri_args: --target x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.platform }}
@@ -96,6 +100,7 @@ jobs:
           repository: hexagon-codes/hexclaw
           ref: ${{ steps.sidecar_ref.outputs.ref }}
           path: hexclaw
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -123,6 +128,33 @@ jobs:
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           go build -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
             -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
+
+      - name: Download Ollama binary
+        shell: bash
+        run: |
+          OLLAMA_VERSION=$(grep '^OLLAMA_VERSION' Makefile | head -1 | sed 's/.*?= *//')
+          OLLAMA_BASE="https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}"
+          mkdir -p src-tauri/binaries/ollama-bundle
+          case "${{ matrix.target }}" in
+            aarch64-apple-darwin|x86_64-apple-darwin)
+              curl -fSL "${OLLAMA_BASE}/ollama-darwin.tgz" -o /tmp/ollama-darwin.tgz
+              tar xzf /tmp/ollama-darwin.tgz -C src-tauri/binaries/ollama-bundle
+              rm -f /tmp/ollama-darwin.tgz
+              ;;
+            x86_64-unknown-linux-gnu)
+              touch src-tauri/binaries/ollama-bundle/ollama
+              ;;
+            x86_64-pc-windows-msvc)
+              touch src-tauri/binaries/ollama-bundle/ollama.exe
+              ;;
+          esac
+
+      - name: Stage render engines (pandoc + typst)
+        env:
+          RENDER_BUNDLE_TARGET: ${{ matrix.render_target }}
+        run: |
+          ./release/scripts/render-bundle.sh src-tauri/binaries
+          ls -lh src-tauri/binaries/pandoc-* src-tauri/binaries/typst-*
 
       - uses: pnpm/action-setup@v4
 

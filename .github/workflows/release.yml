@@ -118,6 +118,7 @@ jobs:
           repository: hexagon-codes/hexclaw
           ref: ${{ steps.sidecar_ref.outputs.ref }}
           path: hexclaw
+          token: ${{ secrets.PRIVATE_REPO_TOKEN || github.token }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
