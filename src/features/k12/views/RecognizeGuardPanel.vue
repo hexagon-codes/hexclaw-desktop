@@ -62,6 +62,7 @@ const recognizing = ref(false)
 const errMsg = ref('')
 const confirmed = ref(false)
 const selectedSubject = ref('')
+const batchWorking = ref(false)
 let agentGeneration = 0
 const subjectOptions = computed(() => K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
   value,
@@ -88,6 +89,8 @@ const overlayMarks = computed(() =>
     .filter((r) => r.graded && r.verify)
     .map((r) => ({
       correct: r.correct,
+	  // 超纲只表示“当前学段不应批改”，绝不是孩子答错；叠加层据此禁止画红叉。
+	  outOfScope: r.verify?.verdict === 'out_of_scope',
       bbox: r.bbox,
       question: r.problem,
       correctAnswer: r.solution,
@@ -96,6 +99,19 @@ const overlayMarks = computed(() =>
 )
 // 仅在有作业原图（data URL）且至少一题已批改时展示叠加图。
 const showOverlay = computed(() => isImageData.value && overlayMarks.value.length > 0)
+const answerPendingIndexes = computed(() => rows.value
+  .map((row, i) => ({ row, i }))
+  .filter(({ row }) => row.problem.trim() && row.studentAnswer.trim() && !row.graded)
+  .map(({ i }) => i))
+const blankPendingIndexes = computed(() => rows.value
+  .map((row, i) => ({ row, i }))
+  // bbox 表示模型看到了学生作答区域；此时答案为空是“没读清”，不是“没作答”。
+  // 只有 bbox 也缺失的真空白题才允许进入自动解题，避免已答卷被误当空白卷。
+  .filter(({ row }) => row.problem.trim() && !row.studentAnswer.trim() && !row.bbox && !row.solution)
+  .map(({ i }) => i))
+const unclearAnswerCount = computed(() => rows.value.filter((row) => (
+  row.problem.trim() && !row.studentAnswer.trim() && !!row.bbox
+)).length)
 
 function onFile(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
@@ -113,6 +129,7 @@ watch(() => props.agentId, () => {
   recognizing.value = false
   errMsg.value = ''
   confirmed.value = false
+  batchWorking.value = false
   selectedSubject.value = ''
   coldStarting.value = false
   coldStartResult.value = null
@@ -210,7 +227,7 @@ async function gradeRow(i: number) {
 // 不批改、不入错题本。单一真相源分叉的前端落地——空白题不再被迫填答案或触发批改 502。
 async function solveRow(i: number) {
   const row = rows.value[i]
-  if (!row || !row.problem.trim() || row.solving || row.grading) return
+  if (!row || !row.problem.trim() || row.studentAnswer.trim() || row.bbox || row.solving || row.grading) return
   row.solving = true
   errMsg.value = ''
   try {
@@ -234,6 +251,43 @@ async function solveRow(i: number) {
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     row.solving = false
+  }
+}
+
+// 云端真实模型连续整卷压测证实 3 路会触发上游 429；2 路在速度与稳定性间取平衡，
+// 同时避免无界 Promise.all。客户端为每题保留 240s，不能再靠缩短超时假装结束。
+async function runBounded(indexes: number[], worker: (i: number) => Promise<void>, concurrency = 2) {
+  let cursor = 0
+  const runners = Array.from({ length: Math.min(concurrency, indexes.length) }, async () => {
+    while (cursor < indexes.length) {
+      const index = indexes[cursor++]!
+      await worker(index)
+    }
+  })
+  await Promise.all(runners)
+}
+
+async function gradeAllAnswered() {
+  if (batchWorking.value || !selectedSubject.value || !answerPendingIndexes.value.length) return
+  batchWorking.value = true
+  errMsg.value = ''
+  const indexes = [...answerPendingIndexes.value]
+  try {
+    await runBounded(indexes, gradeRow)
+  } finally {
+    batchWorking.value = false
+  }
+}
+
+async function solveAllBlank() {
+  if (batchWorking.value || !selectedSubject.value || !blankPendingIndexes.value.length) return
+  batchWorking.value = true
+  errMsg.value = ''
+  const indexes = [...blankPendingIndexes.value]
+  try {
+    await runBounded(indexes, solveRow)
+  } finally {
+    batchWorking.value = false
   }
 }
 
@@ -385,7 +439,7 @@ async function coldStart() {
           <button
             class="rec-row__solvebtn"
             :data-testid="`rq-solve-${i}`"
-            :disabled="!row.problem.trim() || !selectedSubject || row.solving || row.grading"
+            :disabled="batchWorking || !row.problem.trim() || !selectedSubject || !!row.studentAnswer.trim() || !!row.bbox || row.solving || row.grading"
             @click="solveRow(i)"
           >
             {{ row.solving ? t('k12.recognize.solving') : t('k12.recognize.solve') }}
@@ -393,13 +447,16 @@ async function coldStart() {
           <button
             class="rec-row__gradebtn"
             :data-testid="`rq-grade-${i}`"
-            :disabled="!row.problem.trim() || !selectedSubject || !row.studentAnswer.trim() || row.grading || row.solving"
+            :disabled="batchWorking || !row.problem.trim() || !selectedSubject || !row.studentAnswer.trim() || row.grading || row.solving"
             @click="gradeRow(i)"
           >
             {{ row.grading ? t('k12.recognize.grading') : t('k12.recognize.grade') }}
           </button>
         </div>
-        <p v-if="confirmed && !row.studentAnswer.trim()" class="rec-row__blankhint" :data-testid="`rq-blank-hint-${i}`">
+        <p v-if="confirmed && !row.studentAnswer.trim() && row.bbox" class="rec-row__unclearhint" :data-testid="`rq-unclear-hint-${i}`">
+          {{ t('k12.recognize.unclearAnswerHint') }}
+        </p>
+        <p v-else-if="confirmed && !row.studentAnswer.trim()" class="rec-row__blankhint" :data-testid="`rq-blank-hint-${i}`">
           {{ t('k12.recognize.blankHint') }}
         </p>
       </div>
@@ -412,6 +469,29 @@ async function coldStart() {
       >
         {{ t('k12.recognize.confirmAll') }}
       </button>
+      <div v-else class="rec-guard__batch" data-testid="recognize-batch-actions">
+        <span v-if="unclearAnswerCount" class="rec-guard__unclear" data-testid="recognize-unclear-count">
+          {{ t('k12.recognize.unclearAnswerCount', { count: unclearAnswerCount }) }}
+        </span>
+        <button
+          v-if="answerPendingIndexes.length"
+          class="rec-guard__batchbtn rec-guard__batchbtn--primary"
+          data-testid="recognize-grade-all"
+          :disabled="batchWorking || !selectedSubject"
+          @click="gradeAllAnswered"
+        >
+          {{ batchWorking ? t('k12.recognize.batchWorking') : t('k12.recognize.gradeAll', { count: answerPendingIndexes.length }) }}
+        </button>
+        <button
+          v-if="blankPendingIndexes.length"
+          class="rec-guard__batchbtn"
+          data-testid="recognize-solve-all"
+          :disabled="batchWorking || !selectedSubject"
+          @click="solveAllBlank"
+        >
+          {{ batchWorking ? t('k12.recognize.batchWorking') : t('k12.recognize.solveAll', { count: blankPendingIndexes.length }) }}
+        </button>
+      </div>
     </div>
     <p v-else-if="!recognizing" class="rec-panel__empty">{{ t('k12.recognize.empty') }}</p>
 
@@ -500,6 +580,14 @@ async function coldStart() {
   border-radius: var(--hc-radius-md); background: var(--hc-accent-subtle); color: var(--hc-accent); cursor: pointer;
 }
 .rec-guard__confirm:disabled { opacity: 0.5; cursor: not-allowed; }
+.rec-guard__batch { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.rec-guard__unclear { flex: 1 1 100%; font-size: 11.5px; color: var(--hc-warn, #b7791f); text-align: end; }
+.rec-guard__batchbtn {
+  font-size: 12px; padding: 7px 14px; border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md); background: var(--hc-bg-input); color: var(--hc-text-primary); cursor: pointer;
+}
+.rec-guard__batchbtn--primary { border-color: var(--hc-border-hl); background: var(--hc-accent); color: white; }
+.rec-guard__batchbtn:disabled { opacity: 0.5; cursor: not-allowed; }
 .rec-row {
   border-inline-start: 3px solid var(--hc-accent); padding: 8px 10px;
   background: var(--hc-bg-elevated);
@@ -532,4 +620,13 @@ async function coldStart() {
   background: var(--hc-bg-input); color: var(--hc-text-primary); cursor: pointer; white-space: nowrap;
 }
 .rec-row__gradebtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rec-row__solvebtn {
+  font-size: 12px; padding: 6px 12px; border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-input); color: var(--hc-accent); cursor: pointer; white-space: nowrap;
+}
+.rec-row__solvebtn:disabled { opacity: 0.5; cursor: not-allowed; }
+.rec-row__blankhint,
+.rec-row__unclearhint { margin: 0; font-size: 11.5px; line-height: 1.5; }
+.rec-row__blankhint { color: var(--hc-text-muted); }
+.rec-row__unclearhint { color: var(--hc-warn, #b7791f); }
 </style>
