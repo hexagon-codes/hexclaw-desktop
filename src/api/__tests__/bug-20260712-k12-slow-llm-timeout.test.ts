@@ -12,7 +12,7 @@ vi.mock('../client', async (importOriginal) => ({
   apiPost: (...a: unknown[]) => postSpy(...a),
 }))
 
-import { k12Recognize, k12PrepCard, k12Grade, k12TutorTurn } from '../k12'
+import { k12Recognize, k12PrepCard, k12Grade, k12Solve, k12TutorTurn } from '../k12'
 
 describe('BUG-20260712-T1：K12 慢 LLM 端点超时预算', () => {
   beforeEach(() => postSpy.mockClear())
@@ -21,12 +21,19 @@ describe('BUG-20260712-T1：K12 慢 LLM 端点超时预算', () => {
     await k12Recognize('data:image/png;base64,x')
     await k12PrepCard({ agent: 'a', grade: 'g', knowledge_points: [] } as never)
     await k12Grade({ agent: 'a', subject: '数学', grade: 'g', problem: 'p' } as never)
+    await k12Solve({ agent: 'a', subject: '数学', grade: 'g', problem: 'p' } as never)
     await k12TutorTurn({ agent: 'a', prior_stage: 0 } as never)
 
-    const timeouts = postSpy.mock.calls.map((c) => (c[2] as { timeout?: number } | undefined)?.timeout ?? 0)
+    const timeouts = postSpy.mock.calls.map(
+      (c) => (c[2] as { timeout?: number } | undefined)?.timeout ?? 0,
+    )
     expect(timeouts[0], 'recognize 需 ≥120s').toBeGreaterThanOrEqual(120_000)
     for (const [i, tmo] of timeouts.entries()) {
       expect(tmo, `第 ${i} 个慢 LLM 端点缺放宽 timeout`).toBeGreaterThanOrEqual(60_000)
     }
+    expect(timeouts[2], 'grade 在整卷并发时实测可超过 120s').toBeGreaterThanOrEqual(180_000)
+    expect(timeouts[3], 'solve 与 grade 使用同一 solver+verifier 链').toBeGreaterThanOrEqual(
+      180_000,
+    )
   })
 })

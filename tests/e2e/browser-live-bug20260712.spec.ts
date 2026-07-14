@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { readFileSync } from 'node:fs'
 
 /**
  * BUG-20260712 批次 · 真实点击验证（live sidecar :16060 + vite :5173 + 真实视觉模型）。
@@ -7,24 +8,42 @@ import { test, expect, type Page } from '@playwright/test'
  *  ① composer 样式审计（「输入框样式错乱」）：结构/字号/工具行断言 + 截图取证；
  *  ② 识题链路真实上传作业照片：计时（「识题很慢」量化）+ 结果行出现；
  *  ③ Bug S 保活：切错题本→回辅导，结果仍在、不重新识题；错题本页无 prep-card 红字（abort 泄漏）；
- *  ④ 「这份作业的辅导要点」📱发送到手机（剪贴板真断言）+ 🖨打印（打印 iframe 真断言）。
+ *  ④ 「这份作业的辅导要点」📱发送到手机（剪贴板真断言）+ 🖨打印（打印 iframe 真断言）；
+ *  ⑤ 已答卷整张批改 → 原图全量叠加 → 保存的 PNG 真下载且魔数正确。
  *
- * 前置：pnpm dev + sidecar 在跑；HEX_E2E_HOMEWORK 指向作业照片（缺省用 scratchpad 暂存）。
+ * 前置：pnpm dev + sidecar 在跑；HEX_E2E_HOMEWORK 指向一张真实作业照片。
+ * 图片是外部真实夹具，不得回退到某次会话的临时 scratchpad 路径；夹具缺失应明确 skip。
  */
 
 const HOMEWORK = process.env.HEX_E2E_HOMEWORK
-  || '/private/tmp/claude-502/-Users-guoyanjun-work-hexclaw-desktop/276663ef-5727-43e2-879e-a580be504f87/scratchpad/homework.jpg'
+const GRADED_OUTPUT = process.env.HEX_E2E_GRADED_OUTPUT
 
 test.describe('BUG-20260712 真实点击验证', () => {
-  test.setTimeout(420_000)
+  test.setTimeout(600_000)
+  test.skip(
+    !HOMEWORK,
+    '缺少真实作业图片夹具：请设置 HEX_E2E_HOMEWORK=/absolute/path/to/homework.jpg',
+  )
 
-  test('composer 审计 → 上传识题 → tab 保活 → 辅导要点 📱/🖨', async ({ page, context }: { page: Page; context: import('@playwright/test').BrowserContext }) => {
+  test('composer 审计 → 上传识题 → tab 保活 → 辅导要点 📱/🖨', async ({
+    page,
+    context,
+  }: {
+    page: Page
+    context: import('@playwright/test').BrowserContext
+  }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.addInitScript(() => {
       sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
       // 打印取证：打印发生在隐藏 iframe 的 window 上，init script 注入每个 frame
       if (window !== window.top) {
-        try { (window as unknown as { print: () => void }).print = () => { (window.top as unknown as { __prepPrinted?: boolean }).__prepPrinted = true } } catch { /* cross-origin 忽略 */ }
+        try {
+          ;(window as unknown as { print: () => void }).print = () => {
+            ;(window.top as unknown as { __prepPrinted?: boolean }).__prepPrinted = true
+          }
+        } catch {
+          /* cross-origin 忽略 */
+        }
       }
     })
 
@@ -62,7 +81,7 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await box.screenshot({ path: 'test-results/bug20260712-composer.png' })
 
     // 3) 真实上传作业照片 → 自动改道识题（计时）
-    await page.locator('.hc-composer input[type="file"]').setInputFiles(HOMEWORK)
+    await page.locator('.hc-composer input[type="file"]').setInputFiles(HOMEWORK!)
     const guard = page.locator('[data-testid="recognize-guard"]')
     await expect(guard).toBeVisible({ timeout: 15_000 })
     const t0 = Date.now()
@@ -86,17 +105,60 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await expect(prep).toBeVisible({ timeout: 15_000 })
     await expect(prep.locator('.tutor-section').first()).toBeVisible({ timeout: 240_000 })
 
-    // 6) 📱 发送到手机 = 复制文本到剪贴板（真剪贴板断言）
+    // 6) 已答卷整张批改：只批改读出的 student_answer；有 bbox 但未读清的题必须提示补录，
+    // 不得混进“空白题求解”。真实模型批改结束后，每道成功结果都进入原图批改层。
+    const answeredCount = await guard
+      .locator('[data-testid^="rq-answer-"]')
+      .evaluateAll(
+        (inputs) =>
+          inputs.filter((input) => (input as HTMLInputElement).value.trim().length > 0).length,
+      )
+    expect(answeredCount, '真实已答卷至少应识出一题学生作答').toBeGreaterThan(0)
+    const gradeAll = guard.locator('[data-testid="recognize-grade-all"]')
+    await expect(gradeAll).toBeVisible()
+    await gradeAll.click()
+    await expect(gradeAll).toHaveCount(0, { timeout: 480_000 })
+    const overlay = guard.locator('[data-testid="photo-grade-overlay"]')
+    await expect(overlay).toBeVisible()
+    const renderedVerdicts =
+      (await overlay.locator('[data-testid^="overlay-mark-"]').count()) +
+      (await overlay.locator('[data-testid^="overlay-degraded-"]').count())
+    expect(renderedVerdicts, '每道已批改题都应有原图标记或诚实降级文字结论').toBe(answeredCount)
+
+    // 保存批改图不是临时 DOM 假动作：浏览器真实下载 PNG，并校验文件魔数。
+    const downloadPromise = page.waitForEvent('download')
+    await overlay.locator('[data-testid="overlay-save"]').click()
+    const gradedDownload = await downloadPromise
+    expect(gradedDownload.suggestedFilename()).toMatch(/^作业批改_.*\.png$/)
+    const gradedPath = await gradedDownload.path()
+    expect(gradedPath, '批改 PNG 应生成真实下载文件').toBeTruthy()
+    expect(readFileSync(gradedPath!).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    if (GRADED_OUTPUT) {
+      await gradedDownload.saveAs(GRADED_OUTPUT)
+      expect(readFileSync(GRADED_OUTPUT).subarray(0, 8).toString('hex')).toBe(
+        '89504e470d0a1a0a',
+      )
+    }
+    console.log(`[grade] 已答 ${answeredCount} 题全部批改并导出 PNG`)
+
+    // 7) 📱 发送到手机 = 复制文本到剪贴板（真剪贴板断言）
     await prep.locator('[data-testid="prep-send"]').click()
     const clip = await page.evaluate(() => navigator.clipboard.readText())
     expect(clip.length, '剪贴板应有辅导要点全文').toBeGreaterThan(20)
     console.log(`[clip] 剪贴板前 60 字: ${clip.slice(0, 60).replace(/\n/g, ' ')}`)
 
-    // 7) 🖨 打印 = 隐藏 iframe + window.print（frame 内 print 已打桩取证）
+    // 8) 🖨 打印 = 隐藏 iframe + window.print（frame 内 print 已打桩取证）
     await prep.locator('[data-testid="prep-print"]').click()
     await expect
-      .poll(async () => page.evaluate(() => (window as unknown as { __prepPrinted?: boolean }).__prepPrinted === true
-        || document.querySelectorAll('iframe').length > 0), { timeout: 3_000 })
+      .poll(
+        async () =>
+          page.evaluate(
+            () =>
+              (window as unknown as { __prepPrinted?: boolean }).__prepPrinted === true ||
+              document.querySelectorAll('iframe').length > 0,
+          ),
+        { timeout: 3_000 },
+      )
       .toBe(true)
     console.log('[print] 打印 iframe/print() 已发起')
   })

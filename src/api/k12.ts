@@ -42,8 +42,18 @@ export interface GradeReq {
 /** verdict：engine 只产 agree/disagree/unverifiable；out_of_scope 走独立布尔字段 */
 export type GradeVerdict = 'agree' | 'disagree' | 'unverifiable' | 'out_of_scope'
 /** 徽章枚举（后端 usecase/evidence.go Badge()） */
-export type GradeBadge = 'verified-strong' | 'verified-weak' | 'disagree' | 'out-of-scope' | 'unverifiable'
-export type EvidenceType = 'numeric_exec' | 'symbolic_exec' | 'heterogeneous_model' | 'heuristic' | 'none'
+export type GradeBadge =
+  | 'verified-strong'
+  | 'verified-weak'
+  | 'disagree'
+  | 'out-of-scope'
+  | 'unverifiable'
+export type EvidenceType =
+  | 'numeric_exec'
+  | 'symbolic_exec'
+  | 'heterogeneous_model'
+  | 'heuristic'
+  | 'none'
 
 export interface GradeResp {
   solution: string
@@ -63,8 +73,9 @@ export interface GradeResp {
 }
 
 export function k12Grade(req: GradeReq) {
-  // LLM 验算链，默认 30s 会腰斩（BUG-20260712-T1）
-  return apiPost<GradeResp>(`${BASE}/grade`, req, { timeout: 120_000 })
+  // 真实整卷 3 路并发时个别 solver+verifier 实测会略超 120s；留 240s 给排队与 grader，
+  // 避免后端已成功而桌面先 abort、整卷按钮永远残留（BUG-20260714）。
+  return apiPost<GradeResp>(`${BASE}/grade`, req, { timeout: 240_000 })
 }
 
 // ── record-mistake（记一条错题：家长手动录入的**已知错题**，轻量直录，不跑验算链）──────
@@ -113,8 +124,8 @@ export interface SolveResp {
   out_of_scope_kp?: string
 }
 export function k12Solve(req: SolveReq) {
-  // 解题验算链同 grade，默认 30s 会腰斩（BUG-20260712-T1）
-  return apiPost<SolveResp>(`${BASE}/solve`, req, { timeout: 120_000 })
+  // 解题与 grade 使用同一 solver+verifier 链，使用相同的并发排队预算。
+  return apiPost<SolveResp>(`${BASE}/solve`, req, { timeout: 240_000 })
 }
 
 // ── mistakes / review-queue（错题本）─────────────────────────
@@ -319,7 +330,10 @@ export interface AddAccumReq {
 }
 // subject 可选：给了则触达后端 GET /accumulation?subject= 过滤（语/英分科），不给取全量（BUG-3）。
 export function k12ListAccumulation(agent: string, subject?: string) {
-  return apiGet<{ items: AccumDTO[] }>(`${BASE}/accumulation`, subject ? { agent, subject } : { agent })
+  return apiGet<{ items: AccumDTO[] }>(
+    `${BASE}/accumulation`,
+    subject ? { agent, subject } : { agent },
+  )
 }
 export function k12AddAccumulation(req: AddAccumReq) {
   return apiPost<{ record_id: string; created: boolean }>(`${BASE}/accumulation`, req)
@@ -368,7 +382,10 @@ export interface RenderReq {
 /** 把 Markdown 发给平台 render 服务生成二进制文档，返回 Blob（pandoc 30s / +typst PDF 60s，给足 120s）。 */
 export function renderDocument(req: RenderReq): Promise<Blob> {
   return api<Blob, 'blob'>('/api/v1/render', {
-    method: 'POST', body: req, responseType: 'blob', timeout: 120_000,
+    method: 'POST',
+    body: req,
+    responseType: 'blob',
+    timeout: 120_000,
   })
 }
 
@@ -410,7 +427,11 @@ export interface RecognizeResp {
  */
 export function k12Recognize(imageBase64: string) {
   // 视觉识题（全量题目 JSON 生成），默认 30s 必被腰斩 abort（BUG-20260712-T1 真机取证「识题很慢/卡住」）
-  return apiPost<RecognizeResp>(`${BASE}/recognize`, { image_base64: imageBase64 }, { timeout: 180_000 })
+  return apiPost<RecognizeResp>(
+    `${BASE}/recognize`,
+    { image_base64: imageBase64 },
+    { timeout: 180_000 },
+  )
 }
 
 // ── tutor-turn（渐进提示三阶段 + 情绪守门）────────────────────
@@ -455,7 +476,10 @@ export interface BindIMReq {
 }
 /** 未注入 router（非桌面）→ 501；成功 → {bound:true,...} */
 export function k12BindIM(req: BindIMReq) {
-  return apiPost<{ bound: boolean; agent: string; platform: string; chat_id: string }>(`${BASE}/bind-im`, req)
+  return apiPost<{ bound: boolean; agent: string; platform: string; chat_id: string }>(
+    `${BASE}/bind-im`,
+    req,
+  )
 }
 
 // ── cron/provision（注册 5 个默认自动化任务）──────────────────
