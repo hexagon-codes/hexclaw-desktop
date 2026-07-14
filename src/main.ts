@@ -44,6 +44,9 @@ installInputAutofixOff()
 document.addEventListener('click', (e) => {
   const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null
   if (!anchor) return
+	// 带 download 的链接是应用主动生成的文件下载（导出、批改 PNG 等），不是外链。
+	// 若在这里 preventDefault + shellOpen，浏览器会打开 blob 图片新页，下载事件永远不发生。
+	if (anchor.hasAttribute('download')) return
   const href = anchor.getAttribute('href')
   if (!href || href.startsWith('#') || href.startsWith('/')) return
   e.preventDefault()

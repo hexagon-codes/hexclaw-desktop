@@ -11,13 +11,17 @@
  */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useToast } from '@/composables/useToast'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import type { BBox } from '@/api/k12'
+import { isValidGradingBBox, saveGradedPhoto } from '../graded-photo'
 
 /** 一道题的叠加标记：批改结论 + 可选订正/错因，按题 id 对齐其 bbox。 */
 interface OverlayMark {
   /** 批改是否正确（true→绿 ✓，false→红 ✗）。 */
   correct: boolean
+  /** 超出当前学习范围：不是答错，禁止在原图上画红叉。 */
+  outOfScope?: boolean
   /** 学生作答区域归一化边界框；缺失/非法 → 降级纯文字批改（不叠加）。 */
   bbox?: BBox | null
   /** 题干（降级文字批改时展示，供家长对位）。 */
@@ -31,32 +35,23 @@ interface OverlayMark {
 const props = defineProps<{ image: string; marks: OverlayMark[] }>()
 
 const { t } = useI18n()
+const toast = useToast()
 
 // 叠加层可开关：看原图 / 看批改（设计文档 §5 交互）。
 const showOverlay = ref(true)
+const saving = ref(false)
 
 /**
  * bbox 合理性校验（错位防护）——与后端 normalizeBBox 同口径：
  * 四值皆有限数、x/y∈[0,1]、w/h 严格 >0、右下角不越界（含极小浮点误差容忍）。
  * 任何一项不满足即判非法 → 该题不叠加（降级文字批改）。
  */
-const EDGE_EPS = 0.005
-function isValidBBox(b?: BBox | null): b is BBox {
-  if (!b) return false
-  const vals = [b.x, b.y, b.w, b.h]
-  if (vals.some((v) => typeof v !== 'number' || !Number.isFinite(v))) return false
-  if (b.w <= 0 || b.h <= 0) return false
-  if (b.x < 0 || b.y < 0 || b.x > 1 || b.y > 1) return false
-  if (b.x + b.w > 1 + EDGE_EPS || b.y + b.h > 1 + EDGE_EPS) return false
-  return true
-}
-
 interface IndexedMark extends OverlayMark {
   _i: number
   _valid: boolean
 }
 const indexed = computed<IndexedMark[]>(() =>
-  props.marks.map((m, i) => ({ ...m, _i: i, _valid: isValidBBox(m.bbox) })),
+  props.marks.map((m, i) => ({ ...m, _i: i, _valid: !m.outOfScope && isValidGradingBBox(m.bbox) })),
 )
 // 只有合法 bbox 才叠加；其余降级为下方文字批改（绝不错位）。
 const positioned = computed(() => indexed.value.filter((m) => m._valid))
@@ -71,6 +66,19 @@ function boxStyle(b: BBox) {
     height: `${b.h * 100}%`,
   }
 }
+
+async function saveImage() {
+  if (saving.value) return
+  saving.value = true
+  try {
+    const path = await saveGradedPhoto(props.image, props.marks)
+    if (path) toast.success(t('k12.overlay.saved'))
+  } catch (e) {
+    toast.error(`${t('k12.overlay.saveFailed')}：${e instanceof Error ? e.message : String(e)}`)
+  } finally {
+    saving.value = false
+  }
+}
 </script>
 
 <template>
@@ -83,6 +91,14 @@ function boxStyle(b: BBox) {
         @click="showOverlay = !showOverlay"
       >
         {{ showOverlay ? t('k12.overlay.showOriginal') : t('k12.overlay.showGraded') }}
+      </button>
+      <button
+        class="pg-overlay__save"
+        data-testid="overlay-save"
+        :disabled="saving || positioned.length === 0"
+        @click="saveImage"
+      >
+        {{ saving ? t('k12.overlay.saving') : t('k12.overlay.save') }}
       </button>
     </div>
 
@@ -118,8 +134,11 @@ function boxStyle(b: BBox) {
         class="pg-overlay__degraded-item"
         :data-testid="`overlay-degraded-${m._i}`"
       >
-        <span class="pg-overlay__degraded-verdict" :class="m.correct ? 'is-correct' : 'is-wrong'">
-          {{ m.correct ? '✓ ' + t('k12.overlay.correct') : '✗ ' + t('k12.overlay.wrong') }}
+        <span
+          class="pg-overlay__degraded-verdict"
+          :class="m.outOfScope ? 'is-scope' : (m.correct ? 'is-correct' : 'is-wrong')"
+        >
+          {{ m.outOfScope ? '⛔ ' + t('verify.outOfScope') : (m.correct ? '✓ ' + t('k12.overlay.correct') : '✗ ' + t('k12.overlay.wrong')) }}
         </span>
         <!-- 降级文字批改的题干/正确答案/错因为模型生成，数学题含 LaTeX → 行内 md 渲染，保紧凑行内排布。 -->
         <span v-if="m.question" class="pg-overlay__degraded-q">
@@ -140,10 +159,13 @@ function boxStyle(b: BBox) {
 .pg-overlay { display: flex; flex-direction: column; gap: 8px; }
 .pg-overlay__head { display: flex; align-items: center; gap: 8px; }
 .pg-overlay__title { font-size: 12.5px; font-weight: 700; color: var(--hc-text-primary); flex: 1; }
-.pg-overlay__toggle {
+.pg-overlay__toggle,
+.pg-overlay__save {
   font-size: 11.5px; padding: 4px 10px; border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
   background: var(--hc-bg-input); color: var(--hc-text-primary); cursor: pointer; white-space: nowrap;
 }
+.pg-overlay__save { border-color: var(--hc-border-hl); color: var(--hc-accent); }
+.pg-overlay__save:disabled { opacity: 0.5; cursor: not-allowed; }
 .pg-overlay__canvas {
   position: relative; display: inline-block; max-width: 100%; align-self: flex-start;
   border-radius: var(--hc-radius-md); overflow: hidden; border: 0.5px solid var(--hc-border);
@@ -176,6 +198,7 @@ function boxStyle(b: BBox) {
 .pg-overlay__degraded-verdict { font-weight: 700; }
 .pg-overlay__degraded-verdict.is-correct { color: var(--hc-success, #2ea86b); }
 .pg-overlay__degraded-verdict.is-wrong { color: var(--hc-danger, #e05a5a); }
+.pg-overlay__degraded-verdict.is-scope { color: var(--hc-warn, #b7791f); }
 .pg-overlay__degraded-q { color: var(--hc-text-primary); }
 /* 行内 md:让短批改文本（含 LaTeX）在 flex-wrap 行内排布中不换行成块，保持紧凑。 */
 .pg-overlay__md-inline { display: inline; }

@@ -18,6 +18,7 @@ function i18n() {
 
 interface Mark {
   correct: boolean
+  outOfScope?: boolean
   bbox?: BBox | null
   question?: string
   correctAnswer?: string
@@ -98,8 +99,24 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
     expect(w.find('[data-testid="overlay-mark-0"]').exists()).toBe(true)
   })
 
+  it('超出学习范围不是答错：即使有 bbox 也不画红叉，降级显示范围提示', () => {
+    const w = render([
+      { correct: false, outOfScope: true, bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 }, question: '超纲题' },
+    ])
+    expect(w.find('[data-testid="overlay-mark-0"]').exists()).toBe(false)
+    const degraded = w.find('[data-testid="overlay-degraded-0"]')
+    expect(degraded.exists()).toBe(true)
+    expect(degraded.text()).toContain('超出当前范围')
+    expect(degraded.text()).not.toContain('答错')
+  })
+
   it('原图始终为底（确定性绘制，非 AI 生成图）', () => {
     const w = render([{ correct: true, bbox: { x: 0.1, y: 0.2, w: 0.1, h: 0.05 } }], 'data:image/png;base64,ZZZ')
     expect(w.find('[data-testid="overlay-image"]').attributes('src')).toBe('data:image/png;base64,ZZZ')
+  })
+
+  it('提供保存批改图按钮，不能只有临时 DOM 叠层', () => {
+    const w = render([{ correct: true, bbox: { x: 0.1, y: 0.2, w: 0.1, h: 0.05 } }])
+    expect(w.find('[data-testid="overlay-save"]').exists()).toBe(true)
   })
 })

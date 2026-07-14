@@ -30,4 +30,9 @@ describe('K12 i18n 三语键结构对齐（features/k12 自守，中央完整性
       expect(zhKeys).toContain(`mistakeStatus.${s}`)
     }
   })
+  it('档案模型高级区不依赖组件内中文 fallback', () => {
+    for (const key of ['modelAdvanced', 'providerLabel', 'modelLabel']) {
+      expect(zhKeys).toContain(`profile.${key}`)
+    }
+  })
 })

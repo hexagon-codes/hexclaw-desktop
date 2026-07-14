@@ -250,6 +250,11 @@ describe('Performance: main.ts global listeners', () => {
     expect(code).toContain("document.addEventListener('click'")
     expect(code).not.toContain('removeEventListener')
   })
+
+  it('global external-link interceptor must not hijack anchors that intentionally download files', () => {
+    const code = readSrc('main.ts')
+    expect(code).toContain("anchor.hasAttribute('download')")
+  })
 })
 
 // ─── useAutoStart never used in UI ────────────────────────
