@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "contract_source_of_truth": "serializer-parser-owner",
+  "policy": {
+    "summary": "The repository that serializes or parses a provider protocol owns its normative wire contract. Desktop fixtures are non-normative engine smoke data only.",
+    "fallback_boundary": "Contracts and raw provider fixtures are portable; MockServer expectations and other engine configuration are replaceable implementation details.",
+    "cross_repository_rule": "Run each asset from the exact ai-core, hexclaw, and hexclaw-desktop revisions recorded in the run manifest; do not copy a second source of truth into desktop."
+  },
+  "repositories": {
+    "ai-core": {
+      "role": "provider-wire-owner",
+      "owns": [
+        "openai-compatible-provider-wire-contracts",
+        "ollama-provider-wire-contracts"
+      ],
+      "examples": [
+        "request serialization",
+        "response decoding",
+        "SSE and NDJSON parsing",
+        "embedding provider envelopes"
+      ]
+    },
+    "hexclaw": {
+      "role": "application-consumer-and-domain-owner",
+      "owns": [
+        "ai-core-consumer-contracts",
+        "dingtalk-adapter-contracts",
+        "knowledge-contracts",
+        "k12-contracts"
+      ],
+      "examples": [
+        "provider selection and fallback consumption",
+        "DingTalk outbound HTTP and inbound event mapping",
+        "knowledge ingestion and retrieval",
+        "K12 recognition, grading, rendering, and delivery orchestration"
+      ]
+    },
+    "hexclaw-desktop": {
+      "role": "desktop-test-orchestrator",
+      "owns": [
+        "mock-runtime-orchestration",
+        "browser-journeys",
+        "native-tauri-smoke",
+        "engine-smoke-fixtures"
+      ],
+      "fixture_authority": "non-normative-smoke-only",
+      "must_not_own": [
+        "provider-wire-contracts",
+        "dingtalk-adapter-contracts",
+        "knowledge-contracts",
+        "k12-contracts"
+      ],
+      "examples": [
+        "Docker Compose and lifecycle wrappers",
+        "Browser UI plus isolated real Sidecar journeys",
+        "native Tauri process and CSP smoke",
+        "minimal passive fixtures that admit the selected Mock engine"
+      ]
+    }
+  },
+  "test_lanes": {
+    "l2-provider-contract": {
+      "owner": "ai-core",
+      "docker": false
+    },
+    "l2-application-consumer": {
+      "owner": "hexclaw",
+      "docker": false
+    },
+    "l3-engine-smoke": {
+      "owner": "hexclaw-desktop",
+      "docker": true
+    },
+    "l4a-browser-sidecar": {
+      "owner": "hexclaw-desktop",
+      "docker": true
+    },
+    "l4b-native-tauri": {
+      "owner": "hexclaw-desktop",
+      "docker": true
+    },
+    "l5-live-canary": {
+      "owner": "cross-repository-explicit-canary",
+      "docker": false
+    }
+  }
+}

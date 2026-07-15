@@ -11,6 +11,7 @@ pub mod commands;
 pub mod menu;
 pub mod ollama;
 pub mod sidecar;
+pub mod test_runtime;
 pub mod tray;
 pub mod window;
 
@@ -60,17 +61,22 @@ pub fn run() {
             tray::setup(app)?;
 
             // 启动 Ollama 本地推理引擎（优先复用外部实例，否则启动内嵌二进制）
-            let ollama_started = match ollama::spawn_ollama(&app.handle()) {
-                Ok(()) => {
-                    log::info!("Ollama 进程就绪");
-                    eprintln!("[HexClaw] Ollama 进程就绪 (managed={})", ollama::is_managed());
-                    true
+            let ollama_started = if test_runtime::should_start_managed_ollama() {
+                match ollama::spawn_ollama(&app.handle()) {
+                    Ok(()) => {
+                        log::info!("Ollama 进程就绪");
+                        eprintln!("[HexClaw] Ollama 进程就绪 (managed={})", ollama::is_managed());
+                        true
+                    }
+                    Err(e) => {
+                        log::warn!("Ollama 启动失败（可选依赖，不阻塞）: {}", e);
+                        eprintln!("[HexClaw] Ollama 启动失败: {}", e);
+                        false
+                    }
                 }
-                Err(e) => {
-                    log::warn!("Ollama 启动失败（可选依赖，不阻塞）: {}", e);
-                    eprintln!("[HexClaw] Ollama 启动失败: {}", e);
-                    false
-                }
+            } else {
+                log::info!("测试沙箱模式：跳过用户 Ollama 探测与托管");
+                false
             };
 
             // 启动 hexclaw sidecar 进程

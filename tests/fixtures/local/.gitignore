@@ -1,0 +1,7 @@
+# The real manifest may contain a developer-local absolute path.
+manifest.json
+
+# Private, licensed, or large fixture payloads must never enter Git.
+files/
+*.pdf
+*.PDF

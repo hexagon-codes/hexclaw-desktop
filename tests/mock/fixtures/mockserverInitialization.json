@@ -1,0 +1,241 @@
+[
+  {
+    "id": "hexclaw-infrastructure-ping",
+    "priority": 0,
+    "httpRequest": {
+      "method": "GET",
+      "path": "/__hexclaw_mock__/ping"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"ok\":true,\"fixture\":\"hexclaw-infrastructure-ping\"}"
+    }
+  },
+  {
+    "id": "openai-chat-nonstream",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "JSON",
+        "json": "{\"stream\":false}",
+        "matchType": "ONLY_MATCHING_FIELDS"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_nonstream\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"HEXCLAW_MOCK_CHAT_OK\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":4,\"total_tokens\":8}}"
+    }
+  },
+  {
+    "id": "openai-chat-sse",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "JSON",
+        "json": "{\"stream\":true}",
+        "matchType": "ONLY_MATCHING_FIELDS"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["text/event-stream; charset=utf-8"],
+        "cache-control": ["no-cache"]
+      },
+      "body": "data: {\"id\":\"chatcmpl_mock_sse\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"HEXCLAW_MOCK_CHAT_OK\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"chatcmpl_mock_sse\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":4,\"completion_tokens\":4,\"total_tokens\":8}}\n\ndata: [DONE]\n\n"
+    }
+  },
+  {
+    "id": "ollama-tags",
+    "priority": 10,
+    "httpRequest": {
+      "method": "GET",
+      "path": "/api/tags"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"models\":[{\"name\":\"hexclaw-mock:latest\",\"model\":\"hexclaw-mock:latest\",\"modified_at\":\"2026-07-15T00:00:00Z\",\"size\":1024,\"digest\":\"sha256:synthetic\",\"details\":{\"format\":\"gguf\",\"family\":\"mock\",\"parameter_size\":\"1B\",\"quantization_level\":\"Q4_0\"}}]}"
+    }
+  },
+  {
+    "id": "ollama-embed",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/api/embed"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"model\":\"hexclaw-embed:latest\",\"embeddings\":[[0.125,0.25,0.5,1.0]],\"total_duration\":1000,\"load_duration\":100}"
+    }
+  },
+  {
+    "id": "ollama-chat-ndjson",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/api/chat"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/x-ndjson; charset=utf-8"]
+      },
+      "body": "{\"model\":\"hexclaw-mock:latest\",\"created_at\":\"2026-07-15T00:00:00Z\",\"message\":{\"role\":\"assistant\",\"content\":\"HEXCLAW_MOCK_CHAT_OK\"},\"done\":false}\n{\"model\":\"hexclaw-mock:latest\",\"created_at\":\"2026-07-15T00:00:01Z\",\"message\":{\"role\":\"assistant\",\"content\":\"\"},\"done\":true,\"done_reason\":\"stop\",\"total_duration\":1000}\n"
+    }
+  },
+  {
+    "id": "ollama-pull-ndjson",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/api/pull",
+      "body": {
+        "type": "JSON",
+        "json": "{\"model\":\"hexclaw-mock:latest\"}",
+        "matchType": "ONLY_MATCHING_FIELDS"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/x-ndjson; charset=utf-8"]
+      },
+      "body": "{\"status\":\"pulling manifest\"}\n{\"status\":\"success\"}\n"
+    }
+  },
+  {
+    "id": "ollama-delete",
+    "priority": 10,
+    "httpRequest": {
+      "method": "DELETE",
+      "path": "/api/delete",
+      "body": {
+        "type": "JSON",
+        "json": "{\"model\":\"hexclaw-mock:latest\"}",
+        "matchType": "ONLY_MATCHING_FIELDS"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"status\":\"success\"}"
+    }
+  },
+  {
+    "id": "dingtalk-access-token",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1.0/oauth2/accessToken"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"accessToken\":\"synthetic-dingtalk-token\",\"expireIn\":7200}"
+    }
+  },
+  {
+    "id": "dingtalk-media-upload",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/media/upload"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"errcode\":0,\"errmsg\":\"ok\",\"media_id\":\"synthetic-media-id\",\"type\":\"image\",\"created_at\":0}"
+    }
+  },
+  {
+    "id": "dingtalk-oto-send",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1.0/robot/oToMessages/batchSend"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"processQueryKey\":\"synthetic-process-query-key\"}"
+    }
+  },
+  {
+    "id": "dingtalk-oto-recall",
+    "priority": 10,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1.0/robot/otoMessages/batchRecall"
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"successResult\":[\"synthetic-user\"],\"failedResult\":[]}"
+    }
+  },
+  {
+    "id": "openai-k12-recognize-mixed-worksheet",
+    "priority": 100,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "REGEX",
+        "regex": "(?s).*识别这张作业图片里的所有题目.*"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_k12_recognize\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"question\\\":\\\"6×7=\\\",\\\"subject\\\":\\\"数学\\\",\\\"knowledge_points\\\":[\\\"整数乘法\\\"],\\\"student_answer\\\":\\\"\\\"},{\\\"question\\\":\\\"8×7=\\\",\\\"subject\\\":\\\"数学\\\",\\\"knowledge_points\\\":[\\\"整数乘法\\\"],\\\"student_answer\\\":\\\"54\\\",\\\"bbox\\\":{\\\"x\\\":0.42,\\\"y\\\":0.48,\\\"w\\\":0.24,\\\"h\\\":0.16}}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":32,\"total_tokens\":48}}"
+    }
+  },
+  {
+    "id": "openai-k12-bbox-semantic-verify",
+    "priority": 200,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "REGEX",
+        "regex": "(?s).*bbox 二次语义核验.*洋红色矩形.*"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_k12_bbox\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"index\\\":1,\\\"observed_question\\\":\\\"8×7=\\\",\\\"observed_student_answer\\\":\\\"54\\\"}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":12,\"total_tokens\":20}}"
+    }
+  }
+]

@@ -13,6 +13,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
 
+use crate::test_runtime::{self, TestRunContext};
+
 /// Sidecar 进程句柄，用于生命周期管理
 static SIDECAR_PROCESS: Mutex<Option<Child>> = Mutex::new(None);
 
@@ -33,9 +35,18 @@ impl Default for SidecarState {
 /// hexclaw serve 的端口
 pub const HEXCLAW_PORT: u16 = 16060;
 
+fn sidecar_port_for_context(ctx: Option<&TestRunContext>) -> u16 {
+    ctx.map_or(HEXCLAW_PORT, |ctx| ctx.sidecar_port)
+}
+
+pub fn sidecar_port() -> u16 {
+    let ctx = test_runtime::current().ok().flatten();
+    sidecar_port_for_context(ctx.as_ref())
+}
+
 /// hexclaw API 基础 URL
 pub fn base_url() -> String {
-    format!("http://localhost:{}", HEXCLAW_PORT)
+    format!("http://localhost:{}", sidecar_port())
 }
 
 /// 健康检查 URL
@@ -98,12 +109,22 @@ pub fn is_ready(app_handle: &tauri::AppHandle) -> bool {
 pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
     set_ready(app, false);
 
-    if let Err(err) = ensure_desktop_knowledge_enabled() {
-        log::warn!("准备桌面知识库配置失败: {}", err);
-    }
+    let test_ctx = test_runtime::current()?;
+    if let Some(ctx) = test_ctx.as_ref() {
+        test_runtime::write_test_config(ctx)?;
+        log::info!(
+            "sidecar 测试沙箱已启用: home={}, port={}",
+            ctx.home.display(),
+            ctx.sidecar_port
+        );
+    } else {
+        if let Err(err) = ensure_desktop_knowledge_enabled() {
+            log::warn!("准备桌面知识库配置失败: {}", err);
+        }
 
-    if let Err(err) = ensure_desktop_voice_enabled() {
-        log::warn!("准备桌面语音(TTS)配置失败: {}", err);
+        if let Err(err) = ensure_desktop_voice_enabled() {
+            log::warn!("准备桌面语音(TTS)配置失败: {}", err);
+        }
     }
 
     let binary_name = if cfg!(target_os = "windows") {
@@ -135,12 +156,12 @@ pub fn spawn_sidecar(app: &tauri::AppHandle) -> Result<(), String> {
                 binary_path, fallback_path
             ));
         }
-        ensure_port_available(HEXCLAW_PORT)?;
-        return spawn_child(&fallback_path, resource_dir.as_deref());
+        ensure_port_available(sidecar_port_for_context(test_ctx.as_ref()))?;
+        return spawn_child(&fallback_path, resource_dir.as_deref(), test_ctx.as_ref());
     }
 
-    ensure_port_available(HEXCLAW_PORT)?;
-    spawn_child(&binary_path, resource_dir.as_deref())
+    ensure_port_available(sidecar_port_for_context(test_ctx.as_ref()))?;
+    spawn_child(&binary_path, resource_dir.as_deref(), test_ctx.as_ref())
 }
 
 /// 构建包含常用工具路径的 PATH
@@ -200,14 +221,23 @@ pub fn enrich_path(sidecar_dir: Option<&Path>) -> String {
 /// externalBin 的 pandoc/typst 与 `path`(hexclaw sidecar) 同处 Contents/MacOS/，故把 sidecar
 /// 目录前置到 PATH；reference.docx 资产在 `<resource_dir>/assets/render/`，经
 /// HEXCLAW_RESOURCE_DIR 传给 sidecar。
-fn spawn_child(path: &std::path::Path, resource_dir: Option<&std::path::Path>) -> Result<(), String> {
+fn spawn_child(
+    path: &std::path::Path,
+    resource_dir: Option<&std::path::Path>,
+    test_ctx: Option<&TestRunContext>,
+) -> Result<(), String> {
     // macOS GUI app 不继承 shell PATH；把 sidecar 所在目录（与捆绑的 pandoc/typst 同处）前置到
     // PATH，sidecar 的 exec.LookPath("pandoc") / LookPath("typst") 优先命中签名捆绑版。
     let sidecar_dir = path.parent();
     let enriched_path = enrich_path(sidecar_dir);
 
     let mut cmd = Command::new(path);
-    cmd.args(["serve", "--desktop"]).env("PATH", &enriched_path);
+    cmd.args(["serve", "--desktop"]);
+
+    if let Some(ctx) = test_ctx {
+        test_runtime::configure_child_command(&mut cmd, ctx);
+    }
+    cmd.env("PATH", &enriched_path);
 
     // 把资源根透传给 sidecar，main.go.resolveRenderAssetPaths 第一优先级查这里。
     if let Some(d) = resource_dir {
@@ -217,10 +247,12 @@ fn spawn_child(path: &std::path::Path, resource_dir: Option<&std::path::Path>) -
     // 让 sidecar 与宿主机浏览器走同一代理出口：探测系统代理并注入 *_PROXY 环境变量，
     // Go 端 http.ProxyFromEnvironment 自动读取。仅在用户未显式设置该变量时注入，不覆盖
     // 手动配置；系统无手动代理（如 TUN/fake-ip 透明模式）时不注入，靠系统路由直连。
-    for (k, v) in host_proxy_env() {
-        if std::env::var(&k).is_err() {
-            log::info!("sidecar 代理注入: {}={}", k, v);
-            cmd.env(&k, &v);
+    if test_ctx.is_none() {
+        for (k, v) in host_proxy_env() {
+            if std::env::var(&k).is_err() {
+                log::info!("sidecar 代理注入: {}={}", k, v);
+                cmd.env(&k, &v);
+            }
         }
     }
 
@@ -613,6 +645,10 @@ fn provider_value_is_empty(val: &str) -> bool {
 }
 
 fn desktop_config_path() -> Result<std::path::PathBuf, String> {
+    if let Some(ctx) = test_runtime::current()? {
+        return Ok(ctx.config_path());
+    }
+
     #[cfg(target_os = "windows")]
     let home = std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
@@ -908,7 +944,20 @@ mod tests {
     use super::{
         ensure_knowledge_enabled_yaml, ensure_voice_tts_enabled_yaml, executable_basename,
         format_port_conflict_error, is_hexclaw_sidecar_command, parse_pid_list, parse_scutil_proxy,
+        sidecar_port_for_context,
     };
+    use crate::test_runtime::TestRunContext;
+    use std::path::PathBuf;
+
+    #[test]
+    fn sidecar_port_uses_the_test_run_context_only_when_present() {
+        assert_eq!(sidecar_port_for_context(None), 16060);
+        let ctx = TestRunContext {
+            home: PathBuf::from("/tmp/hexclaw-test/run-42"),
+            sidecar_port: 16061,
+        };
+        assert_eq!(sidecar_port_for_context(Some(&ctx)), 16061);
+    }
 
     #[test]
     fn parse_pid_list_ignores_invalid_lines() {

@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "description": "Non-normative, local-only synthetic engine-smoke fixtures. Provider wire contracts remain owned by ai-core and hexclaw.",
+  "fixtures": [
+    {
+      "id": "hexclaw-infrastructure-ping",
+      "provider": "infrastructure",
+      "method": "GET",
+      "path": "/__hexclaw_mock__/ping",
+      "expectation_index": 0,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-chat-nonstream",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 1,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-chat-sse",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 2,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "ollama-tags",
+      "provider": "ollama",
+      "method": "GET",
+      "path": "/api/tags",
+      "expectation_index": 3,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "ollama-embed",
+      "provider": "ollama",
+      "method": "POST",
+      "path": "/api/embed",
+      "expectation_index": 4,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "ollama-chat-ndjson",
+      "provider": "ollama",
+      "method": "POST",
+      "path": "/api/chat",
+      "expectation_index": 5,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "ollama-pull-ndjson",
+      "provider": "ollama",
+      "method": "POST",
+      "path": "/api/pull",
+      "expectation_index": 6,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "ollama-delete",
+      "provider": "ollama",
+      "method": "DELETE",
+      "path": "/api/delete",
+      "expectation_index": 7,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "dingtalk-access-token",
+      "provider": "dingtalk",
+      "method": "POST",
+      "path": "/v1.0/oauth2/accessToken",
+      "expectation_index": 8,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "dingtalk-media-upload",
+      "provider": "dingtalk",
+      "method": "POST",
+      "path": "/media/upload",
+      "expectation_index": 9,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "dingtalk-oto-send",
+      "provider": "dingtalk",
+      "method": "POST",
+      "path": "/v1.0/robot/oToMessages/batchSend",
+      "expectation_index": 10,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "dingtalk-oto-recall",
+      "provider": "dingtalk",
+      "method": "POST",
+      "path": "/v1.0/robot/otoMessages/batchRecall",
+      "expectation_index": 11,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-k12-recognize-mixed-worksheet",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 12,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-k12-bbox-semantic-verify",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 13,
+      "source": "synthetic",
+      "contains_personal_data": false
+    }
+  ]
+}

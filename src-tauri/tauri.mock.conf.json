@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/refs/heads/dev/crates/tauri-utils/schema.json",
+  "productName": "HexClaw Test",
+  "identifier": "com.hexclaw.desktop.mock",
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "HexClaw Test",
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' http://localhost:16061; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http://localhost:16061; media-src 'self' data: blob: http://localhost:16061; connect-src 'self' http://localhost:16061 ws://localhost:16061; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'"
+    }
+  },
+  "bundle": {
+    "targets": ["app"],
+    "createUpdaterArtifacts": false
+  }
+}

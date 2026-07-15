@@ -1,0 +1,65 @@
+services:
+  mockserver:
+    image: ${HEX_MOCKSERVER_IMAGE:-mockserver/mockserver:7.4.0@sha256:fed9b2089e021947f785d1f0bfda3723352bb2c1634ce7b0bcd42dfd1b0fd02f}
+    init: true
+    restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1024m
+    pids_limit: 256
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    environment:
+      MOCKSERVER_PROPERTY_FILE: /config/mockserver.properties
+      JAVA_TOOL_OPTIONS: -Xms64m -Xmx512m -XX:+ExitOnOutOfMemoryError
+    volumes:
+      - ./fixtures:/config:ro
+    ports:
+      - '127.0.0.1:${HEX_MOCK_PORT:-0}:1080'
+    labels:
+      com.hexclaw.test-stack: mock
+      com.hexclaw.test-run: ${HEX_MOCK_RUN_ID:-manual}
+      com.hexclaw.test-managed: 'true'
+    networks:
+      - mock_isolated
+
+  # Optional fault-injection shell. It is absent unless HEX_MOCK_CHAOS=1 makes
+  # the orchestrator activate the `chaos` profile. Configure proxies through
+  # its loopback-only control port; never point a proxy at a public endpoint.
+  toxiproxy:
+    image: ${HEX_TOXIPROXY_IMAGE:-ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e}
+    profiles: [chaos]
+    init: true
+    restart: 'no'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    ports:
+      - '127.0.0.1:${HEX_TOXI_CONTROL_PORT:-0}:8474'
+      - '127.0.0.1:${HEX_TOXI_PROXY_PORT:-0}:8666'
+    labels:
+      com.hexclaw.test-stack: mock
+      com.hexclaw.test-run: ${HEX_MOCK_RUN_ID:-manual}
+      com.hexclaw.test-managed: 'true'
+    networks:
+      - mock_isolated
+
+networks:
+  # `internal` removes container egress while published loopback ports remain
+  # reachable from the desktop host. Docker Desktop behaviour is verified by
+  # mock-stack.sh preflight/wait instead of assumed from Compose validation.
+  mock_isolated:
+    internal: true
+    labels:
+      com.hexclaw.test-stack: mock
+      com.hexclaw.test-run: ${HEX_MOCK_RUN_ID:-manual}
+      com.hexclaw.test-managed: 'true'

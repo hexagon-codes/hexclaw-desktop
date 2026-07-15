@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "id": "textbook_pdf",
+      "path": "files/textbook.pdf",
+      "sha256": "657e1547074668dbb50f2bf37f13c20f292127be64c26c5334190aa34d06de83",
+      "bytes": 14621452,
+      "pages": 131,
+      "source": "private-local",
+      "redistributable": false,
+      "description": "Canonical large textbook PDF used only for local ingestion regression tests"
+    }
+  ]
+}
