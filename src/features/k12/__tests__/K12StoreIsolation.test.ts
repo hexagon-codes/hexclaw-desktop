@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   insightReport: vi.fn(),
   studyTime: vi.fn(),
   accumulation: vi.fn(),
+  prepCard: vi.fn(),
 }))
 
 vi.mock('@/api/k12', () => ({
@@ -17,7 +18,7 @@ vi.mock('@/api/k12', () => ({
   k12StudyTime: (agent: string) => h.studyTime(agent),
   k12ListAccumulation: (agent: string) => h.accumulation(agent),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn(),
+  k12PrepCard: (req: { agent: string }) => h.prepCard(req),
   k12Grade: vi.fn(),
   k12Recognize: vi.fn(),
   k12ColdStart: vi.fn(),
@@ -58,6 +59,22 @@ describe('K12 records 多孩异步隔离', () => {
     await oldLoad
 
     expect(store.mistakeView?.items[0]?.fields.question).toBe('新题')
+  })
+
+  it('辅导要点乱序返回时，只保留最后切换到的孩子', async () => {
+    const oldPrep = deferred<any>()
+    const newPrep = deferred<any>()
+    h.prepCard.mockImplementation((req: { agent: string }) => req.agent === 'old-child' ? oldPrep.promise : newPrep.promise)
+    const store = useK12Store()
+
+    const oldLoad = store.loadPrepCard('old-child', '五年级上', ['整数乘法'])
+    const newLoad = store.loadPrepCard('new-child', '五年级上', ['小数乘法'])
+    newPrep.resolve({ knowledge_points: ['小数乘法'], sections: [{ title: '新孩子', content: '新内容', source_label: '📖 依据课本' }] })
+    await newLoad
+    oldPrep.resolve({ knowledge_points: ['整数乘法'], sections: [{ title: '旧孩子', content: '旧内容', source_label: '📖 依据课本' }] })
+    await oldLoad
+
+    expect(store.prepCard?.sections[0]?.title).toBe('新孩子')
   })
 
   it('报告、学习时长、积累本乱序返回时，也只保留最后切换到的孩子', async () => {

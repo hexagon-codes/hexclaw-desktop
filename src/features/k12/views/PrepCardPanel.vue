@@ -8,12 +8,13 @@
  * （📖 依据课本 / 🗂 本地记录 / ✅ 已程序验算 / 🧠 学情信号 / 🤖 AI 归纳·供参考）——无验算保护段落用来源
  * 徽章替代信任兜底（AP-5）。事件驱动生成（识题给出知识点即生成，非每日 cron）。
  */
-import { watch } from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { useToast } from '@/composables/useToast'
 import { useK12Store } from '../store'
 import { printPrepCard, prepCardToText } from '../export'
+import { parseDocument } from '@/utils/file-parser'
 
 const props = defineProps<{
   /** 隔离键 = agents.name（与 recognize/grade 同键） */
@@ -29,16 +30,77 @@ const store = useK12Store()
 
 // 识题给出知识点即生成辅导要点（绑定当前作业）；知识点变化重拉。
 watch(
-  () => props.knowledgePoints,
-  (kps) => {
-    if (props.agentId && kps && kps.length) store.loadPrepCard(props.agentId, props.grade, kps)
+  () => [props.agentId, props.grade, props.knowledgePoints] as const,
+  ([agentId, grade, kps]) => {
+    if (agentId && kps && kps.length) store.loadPrepCard(agentId, grade, kps)
   },
   { immediate: true, deep: true },
 )
 
 /** AI 归纳段落用告警色徽章（未校验），其余用 accent（本地记录/课本/验算） */
 function isWeakSource(label: string): boolean {
-  return label.includes('AI')
+  return label.includes('AI') || label.includes('⚠️')
+}
+
+const groundingInput = ref<HTMLInputElement | null>(null)
+const groundingBusy = ref(false)
+let groundingGeneration = 0
+let groundingAbort: AbortController | null = null
+
+function cancelGroundingUpload() {
+  groundingGeneration++
+  groundingAbort?.abort()
+  groundingAbort = null
+  groundingBusy.value = false
+}
+
+watch(() => props.agentId, cancelGroundingUpload)
+onBeforeUnmount(cancelGroundingUpload)
+
+function openGroundingPicker() {
+  if (!groundingBusy.value) groundingInput.value?.click()
+}
+
+async function onGroundingFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = '' // 同一文件修订后可再次选择。
+  if (!file || !props.agentId) return
+
+  groundingAbort?.abort()
+  const controller = new AbortController()
+  groundingAbort = controller
+  const generation = ++groundingGeneration
+  const agentId = props.agentId
+  groundingBusy.value = true
+  try {
+    const parsed = await parseDocument(file)
+    if (
+      generation !== groundingGeneration ||
+      controller.signal.aborted ||
+      props.agentId !== agentId
+    )
+      return
+    if (!parsed.text.trim()) throw new Error('empty grounding document')
+    await store.addGrounding(agentId, parsed.fileName || file.name, parsed.text, controller.signal)
+    if (
+      generation !== groundingGeneration ||
+      controller.signal.aborted ||
+      props.agentId !== agentId
+    )
+      return
+    await store.loadPrepCard(agentId, props.grade, props.knowledgePoints)
+    if (generation === groundingGeneration && props.agentId === agentId)
+      toast.success(t('k12.prep.groundingUploaded'))
+  } catch {
+    if (!controller.signal.aborted && generation === groundingGeneration)
+      toast.error(t('k12.prep.groundingFailed'))
+  } finally {
+    if (generation === groundingGeneration) {
+      groundingBusy.value = false
+      groundingAbort = null
+    }
+  }
 }
 
 const prepMeta = () => ({ title: t('k12.prep.title'), gradeLabel: props.grade })
@@ -76,14 +138,47 @@ async function doSendPhone() {
     <div class="tutor-guide__head">
       <b>📋 {{ t('k12.prep.title') }}</b>
       <div class="tutor-guide__actions">
-        <button class="icbtn" :title="t('k12.prep.sendPhone')" data-testid="prep-send" @click="doSendPhone">📱</button>
-        <button class="icbtn" :title="t('k12.prep.print')" data-testid="prep-print" @click="doPrint">🖨</button>
+        <input
+          ref="groundingInput"
+          class="grounding-file"
+          data-testid="prep-grounding-file"
+          type="file"
+          accept=".pdf,.doc,.docx,.pptx,.txt,.md,.csv,.xlsx,.xls,.json"
+          @change="onGroundingFile"
+        />
+        <button
+          class="icbtn"
+          :disabled="groundingBusy"
+          :title="t('k12.prep.uploadGrounding')"
+          data-testid="prep-grounding-open"
+          @click="openGroundingPicker"
+        >
+          {{ groundingBusy ? '…' : '📖' }}
+        </button>
+        <button
+          class="icbtn"
+          :title="t('k12.prep.sendPhone')"
+          data-testid="prep-send"
+          @click="doSendPhone"
+        >
+          📱
+        </button>
+        <button
+          class="icbtn"
+          :title="t('k12.prep.print')"
+          data-testid="prep-print"
+          @click="doPrint"
+        >
+          🖨
+        </button>
       </div>
     </div>
 
     <div class="tutor-guide__body">
       <p v-if="store.prepLoading" class="tutor-guide__hint">{{ t('k12.prep.generating') }}</p>
-      <p v-else-if="store.prepError" class="tutor-guide__hint tutor-guide__hint--err">{{ store.prepError }}</p>
+      <p v-else-if="store.prepError" class="tutor-guide__hint tutor-guide__hint--err">
+        {{ store.prepError }}
+      </p>
 
       <template v-else-if="store.prepCard">
         <div v-for="(s, i) in store.prepCard.sections" :key="i" class="tutor-section">
@@ -149,6 +244,13 @@ async function doSendPhone() {
   background: var(--hc-bg-hover);
   color: var(--hc-text-primary);
 }
+.icbtn:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.grounding-file {
+  display: none;
+}
 .tutor-guide__body {
   padding: 13px 15px;
 }
@@ -189,5 +291,7 @@ async function doSendPhone() {
   line-height: 1.6;
   color: var(--hc-text-muted);
 }
-.tutor-guide__hint--err { color: var(--hc-error); }
+.tutor-guide__hint--err {
+  color: var(--hc-error);
+}
 </style>

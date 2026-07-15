@@ -1,5 +1,5 @@
 /**
- * K12 家长备课助手后端契约（/api/k12/*）· 24 端点。
+ * K12 家长备课助手后端契约（/api/k12/*）。
  * DTO 与后端 scenarios/k12/apihttp/handler.go 的 json tag 1:1 对齐（前端类型即契约）。
  *
  * 注意：K12 端点**不需要 user_id**，隔离键是 `agent`（= agents.name）。
@@ -208,7 +208,7 @@ export interface PrepCardReq {
   knowledge_points?: string[]
 }
 
-/** source_label 是带 emoji 的中文串（📖 依据课本 / 🤖 AI 归纳·供参考（未校验）/ 🗂 本地记录 / ✅ 已程序验算 / 🧠 学情信号） */
+/** source_label 是带 emoji 的中文串（📖 依据课本 / 🤖 AI 归纳·供参考（未校验）/ ⚠️ 本次未生成·请核对 / 🗂 本地记录 / ✅ 已程序验算 / 🧠 学情信号） */
 export interface PrepSectionDTO {
   title: string
   content: string
@@ -223,6 +223,17 @@ export interface PrepCardResp {
 export function k12PrepCard(req: PrepCardReq) {
   // LLM 生成辅导要点，默认 30s 会腰斩→「Fetch is aborted」（BUG-20260712-T1 真机取证）
   return apiPost<PrepCardResp>(`${BASE}/prep-card`, req, { timeout: 120_000 })
+}
+
+// ── grounding（家长教材原文，按 agent scope 写入）──────────
+export interface GroundingReq {
+  agent: string
+  title: string
+  content: string
+}
+
+export function k12AddGrounding(req: GroundingReq, signal?: AbortSignal) {
+  return apiPost<{ ok: boolean }>(`${BASE}/grounding`, req, { signal })
 }
 
 // ── study-time（学习时长，一维按日；无 period/学科维度）──────

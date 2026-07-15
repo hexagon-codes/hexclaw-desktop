@@ -10,6 +10,7 @@ import {
   k12MarkMastered,
   k12DeleteMistake,
   k12PrepCard,
+  k12AddGrounding,
   k12Grade,
   k12RecordMistake,
   k12Solve,
@@ -39,7 +40,13 @@ import {
 } from '@/api/k12'
 import type { RecordCollectionView, VerifyResult } from '@/contracts'
 import { i18n } from '@/i18n'
-import { mistakesToView, gradeToResult, gradeToVerify, accumToView, type GradeViewResult } from './mappers'
+import {
+  mistakesToView,
+  gradeToResult,
+  gradeToVerify,
+  accumToView,
+  type GradeViewResult,
+} from './mappers'
 
 /** 空白题解题结果（不含批改/入库语义）。 */
 export interface SolveViewResult {
@@ -62,6 +69,7 @@ export const useK12Store = defineStore('k12', () => {
   let reportRequest = 0
   let studyTimeRequest = 0
   let accumulationRequest = 0
+  let prepRequest = 0
 
   /** 拉取某实例错题本 + 复习队列（合并为通用记录集视图） */
   async function loadMistakes(agent: string, status?: string): Promise<void> {
@@ -147,19 +155,37 @@ export const useK12Store = defineStore('k12', () => {
    *  （如切 tab 导致的 fetch abort）会把红字错误漏进错题本页（读共享 error 渲染）。 */
   const prepLoading = ref(false)
   const prepError = ref<string | null>(null)
-  async function loadPrepCard(agent: string, grade: string, knowledgePoints?: string[]): Promise<void> {
+  async function loadPrepCard(
+    agent: string,
+    grade: string,
+    knowledgePoints?: string[],
+  ): Promise<void> {
+    const request = ++prepRequest
     prepLoading.value = true
     prepError.value = null
+    prepCard.value = null
     try {
-      prepCard.value = await k12PrepCard({ agent, grade, knowledge_points: knowledgePoints })
+      const next = await k12PrepCard({ agent, grade, knowledge_points: knowledgePoints })
+      if (request === prepRequest) prepCard.value = next
     } catch {
+      if (request !== prepRequest) return
       // 治本（BUG-20260712）：k12PrepCard 失败时 e.message 是裸技术串（「[POST] … Load failed」/
       // 「Fetch is aborted」），家长看不懂且吓人。统一翻成可操作的本地化提示（超时/网络中断 → 请重试 +
       // 慢本地模型可切云端）。原始错误对家长无价值，故不透出裸串。
       prepError.value = i18n.global.t('k12.prep.generateFailed')
     } finally {
-      prepLoading.value = false
+      if (request === prepRequest) prepLoading.value = false
     }
+  }
+
+  /** 家长上传教材原文：按当前孩子 agent scope 入库；刷新由调用界面在确认仍是同一孩子后触发。 */
+  async function addGrounding(
+    agent: string,
+    title: string,
+    content: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    await k12AddGrounding({ agent, title, content }, signal)
   }
 
   /** 批改一道题 → 验算徽章数据 + 是否入库 */
@@ -248,9 +274,30 @@ export const useK12Store = defineStore('k12', () => {
   }
 
   return {
-    mistakeView, accumView, report, studyTime, prepCard, prepLoading, prepError, loading, error,
-    loadMistakes, markMastered, deleteMistake, loadPrepCard, loadReport, loadStudyTime, loadAccumulation, grade, recordMistake, solve,
-    recognize, coldStart, tutorTurn, setupAutomation,
+    mistakeView,
+    accumView,
+    report,
+    studyTime,
+    prepCard,
+    prepLoading,
+    prepError,
+    loading,
+    error,
+    loadMistakes,
+    markMastered,
+    deleteMistake,
+    loadPrepCard,
+    addGrounding,
+    loadReport,
+    loadStudyTime,
+    loadAccumulation,
+    grade,
+    recordMistake,
+    solve,
+    recognize,
+    coldStart,
+    tutorTurn,
+    setupAutomation,
   }
 })
 
