@@ -93,6 +93,30 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     expect(mark.attributes('style')).toContain('left: 10%')
   })
 
+  it('错题叠加只显示 solution Markdown 里的最终答案，不把整段解答贴到原图', async () => {
+    h.recognizeSpy.mockResolvedValue({
+      questions: [
+        { question: '4÷0.5=?', knowledge_points: ['小数除法'], student_answer: '6', bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 } },
+      ],
+    })
+    h.gradeSpy.mockResolvedValue({
+      solution: '## 解答\n先把除数化为整数，再计算。\n\n## 答案\n**8**',
+      verdict: 'disagree', evidence_type: 'numeric_exec', badge: 'disagree', correct: false,
+      out_of_scope: false, record_created: true, record_id: 'r-answer-only',
+    })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+    await chooseSubject(w)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await w.find('[data-testid="rq-grade-0"]').trigger('click')
+    await flushPromises()
+
+    expect(w.find('[data-testid="overlay-fix-0"]').text()).toBe('8')
+    expect(w.find('[data-testid="overlay-fix-0"]').text()).not.toContain('解答')
+  })
+
   it('已答题无 bbox：批改后叠加降级为文字批改（不画错位标记）', async () => {
     h.recognizeSpy.mockResolvedValue({
       questions: [

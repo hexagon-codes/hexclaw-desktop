@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { renderGradedPhotoDataUrl, saveGradedPhoto } from '../graded-photo'
+import { extractBriefFinalAnswer, renderGradedPhotoDataUrl, saveGradedPhoto } from '../graded-photo'
 
 const NativeImage = globalThis.Image
 const nativeCreateElement = document.createElement.bind(document)
@@ -47,6 +47,15 @@ afterEach(() => {
 })
 
 describe('批改图片像素级导出', () => {
+  it('从 Markdown 解题过程中只提取答案章节的简短最终答案', () => {
+    expect(extractBriefFinalAnswer('## 解答\n先算 4÷2=2。\n\n## 答案\n**8**')).toBe('8')
+    expect(extractBriefFinalAnswer('计算过程略\n\n答案：225千克')).toBe('225千克')
+  })
+
+  it('没有明确最终答案时不把整段解题 Markdown 当成订正文案', () => {
+    expect(extractBriefFinalAnswer('## 解答\n第一步先列式。\n\n第二步计算后再检查，这里是一段完整的过程说明。')).toBe('')
+  })
+
   it('把合法 bbox 的对错标记绘进原图 PNG，非法框不落笔', async () => {
     const { ctx, canvas } = installCanvas()
     const result = await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [
@@ -82,5 +91,17 @@ describe('批改图片像素级导出', () => {
     expect(click).toHaveBeenCalledOnce()
     expect(createObjectURL).toHaveBeenCalledOnce()
     expect(clickedHref).toBe('blob:http://localhost/graded-photo')
+  })
+
+  it('像素绘制前再清洗订正文案，长解题过程不会烧进图片', async () => {
+    const { ctx } = installCanvas()
+    await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [{
+      correct: false,
+      bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 },
+      correctAnswer: '## 解答\n第一步先列式。\n\n第二步计算后再检查，这里是一段完整的过程说明。',
+    }])
+
+    expect(ctx.fillText).toHaveBeenCalledWith('✗', expect.any(Number), expect.any(Number))
+    expect(ctx.fillText).not.toHaveBeenCalledWith(expect.stringContaining('订正：'), expect.anything(), expect.anything(), expect.anything())
   })
 })

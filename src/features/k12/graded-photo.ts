@@ -11,6 +11,75 @@ export interface GradedPhotoMark {
 }
 
 const EDGE_EPS = 0.005
+const MAX_OVERLAY_ANSWER_LENGTH = 40
+
+function cleanAnswerMarkdown(value: string): string {
+  return value
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\\boxed\{([^{}]+)\}/g, '$1')
+    .replace(/\\\((.*?)\\\)/g, '$1')
+    .replace(/\$([^$]+)\$/g, '$1')
+    .replace(/(?:\*\*|__|~~|`)/g, '')
+    .replace(/^\s*(?:[-+*]|\d+[.)])\s+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function acceptBriefAnswer(value: string): string {
+  const answer = cleanAnswerMarkdown(value)
+    .replace(/^[\s:：\-—]+/, '')
+    .replace(/[。；;]+$/, '')
+    .trim()
+  return answer && Array.from(answer).length <= MAX_OVERLAY_ANSWER_LENGTH ? answer : ''
+}
+
+/**
+ * 从后端返回的 solution Markdown 中提取适合写在原图上的短答案。
+ *
+ * 批改图只承载“订正结果”，不能把完整推导过程烧进学生原图；找不到明确
+ * 「答案」标签时，仅兼容历史接口返回的单行短答案。
+ */
+export function extractBriefFinalAnswer(solution?: string | null): string {
+  const source = solution?.replace(/\r\n?/g, '\n').trim() ?? ''
+  if (!source) return ''
+
+  const lines = source.split('\n')
+
+  // Markdown 的「答案」章节：只取该章节第一行非空正文。
+  for (let i = 0; i < lines.length; i += 1) {
+    const heading = lines[i]!.match(/^\s{0,3}#{1,6}\s*(.+?)\s*#*\s*$/)
+    if (!heading) continue
+    const title = cleanAnswerMarkdown(heading[1]!)
+    const inline = title.match(/^(?:最终)?答案\s*[:：]\s*(.+)$/)
+    if (inline) return acceptBriefAnswer(inline[1]!)
+    if (!/^(?:最终)?答案$/.test(title)) continue
+    for (let j = i + 1; j < lines.length && !/^\s{0,3}#{1,6}\s+/.test(lines[j]!); j += 1) {
+      if (!lines[j]!.trim()) continue
+      return acceptBriefAnswer(lines[j]!)
+    }
+    return ''
+  }
+
+  // 行内显式答案，兼容「答案：」「最终答案是」「答：」等常见模型输出。
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = cleanAnswerMarkdown(lines[i]!)
+    const explicit = line.match(/^(?:最终)?答案\s*(?:[:：]|为|是)\s*(.+)$/)
+      ?? line.match(/^答\s*[:：]\s*(.+)$/)
+    if (explicit) return acceptBriefAnswer(explicit[1]!)
+  }
+
+  const boxed = source.match(/\\boxed\{([^{}]+)\}/)
+  if (boxed) return acceptBriefAnswer(boxed[1]!)
+
+  // 旧接口会直接返回「11.4」或「解：x=14」；只放行单行短值，Markdown
+  // 章节、多段推导和长句一律留在界面文字区，不写入图片。
+  const nonEmpty = lines.filter((line) => line.trim())
+  if (nonEmpty.length !== 1 || /^\s{0,3}#/.test(nonEmpty[0]!)) return ''
+  const legacy = cleanAnswerMarkdown(nonEmpty[0]!).replace(/^解\s*[:：]\s*/, '')
+  return acceptBriefAnswer(legacy)
+}
 
 export function isValidGradingBBox(b?: BBox | null): b is BBox {
   if (!b) return false
@@ -68,8 +137,8 @@ export async function renderGradedPhotoDataUrl(imageSrc: string, marks: GradedPh
     ctx.fillStyle = color
     ctx.fillText(mark.correct ? '✓' : '✗', x + lineWidth * 1.5, y + lineWidth)
 
-    if (!mark.correct && mark.correctAnswer?.trim()) {
-      const answer = mark.correctAnswer.trim().replace(/\s+/g, ' ').slice(0, 48)
+    const answer = !mark.correct ? extractBriefFinalAnswer(mark.correctAnswer) : ''
+    if (answer) {
       const answerSize = Math.max(20, Math.min(42, Math.round(fontSize * 0.52)))
       ctx.font = `700 ${answerSize}px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif`
       const answerY = Math.min(canvas.height - answerSize - lineWidth, y + h + lineWidth * 2)

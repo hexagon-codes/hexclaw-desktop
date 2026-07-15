@@ -17,6 +17,7 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import PrepCardPanel from './PrepCardPanel.vue'
 import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
+import { extractBriefFinalAnswer } from '../graded-photo'
 import type { RecognizedQuestion, BBox } from '@/api/k12'
 import type { VerifyResult } from '@/contracts'
 
@@ -93,7 +94,8 @@ const overlayMarks = computed(() =>
 	  outOfScope: r.verify?.verdict === 'out_of_scope',
       bbox: r.bbox,
       question: r.problem,
-      correctAnswer: r.solution,
+      // solution 可能是整段 Markdown 推导；原图上只显示简短最终答案。
+      correctAnswer: extractBriefFinalAnswer(r.solution),
       errorCause: r.errorCause,
     })),
 )

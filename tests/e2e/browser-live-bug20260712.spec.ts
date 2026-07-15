@@ -56,6 +56,9 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await page.getByText('作业辅导助手', { exact: false }).first().click()
     await expect(page.getByText('创建「作业辅导助手」')).toBeVisible({ timeout: 15_000 })
     await page.locator('.k12pf__input').first().fill(CHILD)
+    // 真实夹具是五年级下册作业；明确选同年级学期，避免合法题目被误判为超纲。
+    await page.locator('.k12pf .hc-select__trigger').nth(0).click()
+    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '五年级下' }).click()
     await page.getByRole('button', { name: '创建' }).click()
     await expect(page.locator('.k12pf')).toHaveCount(0, { timeout: 20_000 })
     await page.getByText('我的智能体', { exact: false }).first().click()
@@ -120,26 +123,34 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await expect(gradeAll).toHaveCount(0, { timeout: 480_000 })
     const overlay = guard.locator('[data-testid="photo-grade-overlay"]')
     await expect(overlay).toBeVisible()
-    const renderedVerdicts =
-      (await overlay.locator('[data-testid^="overlay-mark-"]').count()) +
-      (await overlay.locator('[data-testid^="overlay-degraded-"]').count())
+    const positionedCount = await overlay.locator('[data-testid^="overlay-mark-"]').count()
+    const degradedCount = await overlay.locator('[data-testid^="overlay-degraded-"]').count()
+    const renderedVerdicts = positionedCount + degradedCount
     expect(renderedVerdicts, '每道已批改题都应有原图标记或诚实降级文字结论').toBe(answeredCount)
 
-    // 保存批改图不是临时 DOM 假动作：浏览器真实下载 PNG，并校验文件魔数。
-    const downloadPromise = page.waitForEvent('download')
-    await overlay.locator('[data-testid="overlay-save"]').click()
-    const gradedDownload = await downloadPromise
-    expect(gradedDownload.suggestedFilename()).toMatch(/^作业批改_.*\.png$/)
-    const gradedPath = await gradedDownload.path()
-    expect(gradedPath, '批改 PNG 应生成真实下载文件').toBeTruthy()
-    expect(readFileSync(gradedPath!).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
-    if (GRADED_OUTPUT) {
-      await gradedDownload.saveAs(GRADED_OUTPUT)
-      expect(readFileSync(GRADED_OUTPUT).subarray(0, 8).toString('hex')).toBe(
-        '89504e470d0a1a0a',
+    const save = overlay.locator('[data-testid="overlay-save"]')
+    if (positionedCount === 0) {
+      // 视觉模型未给出任何可信坐标时必须 fail closed：只展示文字批改，不伪造批改图。
+      await expect(save).toBeDisabled()
+      console.log(`[grade] 已答 ${answeredCount} 题全部文字降级，无可信坐标，保存按钮已安全禁用`)
+    } else {
+      // 保存批改图不是临时 DOM 假动作：浏览器真实下载 PNG，并校验文件魔数。
+      await expect(save).toBeEnabled()
+      const downloadPromise = page.waitForEvent('download')
+      await save.click()
+      const gradedDownload = await downloadPromise
+      expect(gradedDownload.suggestedFilename()).toMatch(/^作业批改_.*\.png$/)
+      const gradedPath = await gradedDownload.path()
+      expect(gradedPath, '批改 PNG 应生成真实下载文件').toBeTruthy()
+      expect(readFileSync(gradedPath!).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+      if (GRADED_OUTPUT) {
+        await gradedDownload.saveAs(GRADED_OUTPUT)
+        expect(readFileSync(GRADED_OUTPUT).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+      }
+      console.log(
+        `[grade] 已答 ${answeredCount} 题全部批改，${positionedCount} 题叠加并导出 PNG，${degradedCount} 题文字降级`,
       )
     }
-    console.log(`[grade] 已答 ${answeredCount} 题全部批改并导出 PNG`)
 
     // 7) 📱 发送到手机 = 复制文本到剪贴板（真剪贴板断言）
     await prep.locator('[data-testid="prep-send"]').click()
