@@ -15,8 +15,9 @@ import { useToast } from '@/composables/useToast'
 import { setClipboard } from '@/api/desktop'
 import HcSelect from '@/components/common/HcSelect.vue'
 import PermissionBlockedModal from '@/components/automation/PermissionBlockedModal.vue'
+import { translateOpenIdentifier } from '@/utils/open-i18n-label'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const toast = useToast()
 
 // 顶栏搜索词（由 AutomationView 透传）：按 webhook 名过滤可见项。
@@ -94,6 +95,10 @@ async function onBlockedResolved() {
 
 /** 创建结果态里被拦/需授权的能力条目。 */
 const createdNeeds = computed(() => createdPreflight.value?.needs_decision ?? [])
+
+function categoryLabel(key: string): string {
+  return translateOpenIdentifier(t, te, 'autonomy.category', key)
+}
 
 /** 授权并启用：需授权条目写任务级授权（仅本 Webhook）→ PATCH enabled=true。 */
 async function grantAndEnableCreated() {
@@ -374,7 +379,7 @@ defineExpose({ loadWebhooks, openCreateForm, form })
                   <span>{{ t('autonomy.webhook.needsTitle', '启用前需授权的能力') }}</span>
                 </div>
                 <div class="webhook-result__chips">
-                  <span v-for="c in createdNeeds" :key="c" class="webhook-result__chip">{{ t(`autonomy.category.${c}`, c) }}</span>
+                  <span v-for="c in createdNeeds" :key="c" class="webhook-result__chip">{{ categoryLabel(c) }}</span>
                 </div>
               </div>
               <div v-else class="webhook-result__needs webhook-result__needs--ok">

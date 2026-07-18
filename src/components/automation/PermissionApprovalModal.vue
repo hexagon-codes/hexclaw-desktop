@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { X, ShieldCheck, ShieldAlert } from 'lucide-vue-next'
 import type { PreflightResult } from '@/api/autonomy'
+import { translateOpenIdentifier } from '@/utils/open-i18n-label'
 
 /**
  * 创建流审批弹窗 —— 条件式向导的例外路径。
@@ -29,11 +30,11 @@ const emit = defineEmits<{
   choose: [mode: 'grant' | 'later' | 'paused']
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 /** 类别 → 本地化标签（未知类别/具体工具名原样显示）。 */
 function categoryLabel(key: string): string {
-  return t(`autonomy.category.${key}`, key)
+  return translateOpenIdentifier(t, te, 'autonomy.category', key)
 }
 
 /** 已自动放行的预估能力（绿色被动告知，不需要决定）。 */

@@ -11,6 +11,7 @@ import {
 import { resumeCronJob } from '@/api/tasks'
 import { updateWebhookEnabled } from '@/api/webhook'
 import { useToast } from '@/composables/useToast'
+import { translateOpenIdentifier } from '@/utils/open-i18n-label'
 
 /**
  * 阻断处理弹窗 —— 从任务卡「去开启」进入的定向修复路径。
@@ -29,7 +30,7 @@ const emit = defineEmits<{
   resolved: []
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const toast = useToast()
 
 const decisions = ref<AutonomyDecision[]>([])
@@ -37,7 +38,7 @@ const loadingDecisions = ref(false)
 const granting = ref(false)
 
 function categoryLabel(key: string): string {
-  return t(`autonomy.category.${key}`, key)
+  return translateOpenIdentifier(t, te, 'autonomy.category', key)
 }
 
 /** 需要授权的条目：预检需决定项 ∪ 决策日志里被拦的具体工具。 */

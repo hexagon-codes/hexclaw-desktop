@@ -9,6 +9,7 @@ import {
   type AutonomyProfile, type MatrixView, type AutonomySummary, type AutonomyDecision, type AutonomyGrant,
 } from '@/api/autonomy'
 import { useToast } from '@/composables/useToast'
+import { translateOpenIdentifier } from '@/utils/open-i18n-label'
 
 /**
  * 设置页「自动化权限」分区 —— 治理入口，非一线审批。
@@ -17,7 +18,7 @@ import { useToast } from '@/composables/useToast'
  * 一线审批发生在创建流和任务卡；任务粒度状态归「自动化」页，本页不重复陈列。
  * 单用户桌面定位：三档（功能优先/严格审批/全功能），无团队形态。
  */
-const { t } = useI18n()
+const { t, te } = useI18n()
 const toast = useToast()
 const router = useRouter()
 
@@ -147,11 +148,11 @@ const matrixT = computed(() => {
 })
 
 function categoryLabel(key: string): string {
-  return t(`autonomy.category.${key}`, key)
+  return translateOpenIdentifier(t, te, 'autonomy.category', key)
 }
 
 function sourceLabel(key: string): string {
-  return t(`autonomy.source.${key}`, key)
+  return translateOpenIdentifier(t, te, 'autonomy.source', key)
 }
 
 function cellTitle(source: string, category: string, state: string): string {
