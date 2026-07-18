@@ -11,8 +11,7 @@ import TutorProgressivePanel from '../views/TutorProgressivePanel.vue'
 const h = vi.hoisted(() => ({ tutorSpy: vi.fn() }))
 vi.mock('@/api/k12', () => ({
   k12TutorTurn: (r: unknown) => h.tutorSpy(r),
-  k12Recognize: vi.fn(),
-  k12BindIM: vi.fn().mockResolvedValue({}),
+    k12BindIM: vi.fn().mockResolvedValue({}),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),

@@ -69,14 +69,14 @@ describe('项-5 空态：无本周该练 → 正向空态卡 + 全部错题默�
     expect(w.find('.k12mistakes').classes()).not.toContain('k12mistakes--collapsed')
   })
 
-  it('复习队列有项 → 不渲染空态卡（维持行动卡 + 折叠）', async () => {
+  it('复习队列有项 → 不渲染空态卡（行动卡常驻；折叠机制已随 IA 退役）', async () => {
     const now = Math.floor(Date.now() / 1000)
     h.mistakes = [{ record_id: 'a', question: '3.8×3', knowledge_point: '小数乘法', error_cause: 'x', status: 'new', version: 0, due_at: now - 10 }]
     h.queue = [{ record_id: 'a', question: '3.8×3', knowledge_point: '小数乘法', error_cause: 'x', status: 'new', version: 0, due_at: now - 10, subject: '数学', review_kind: 'verify' }]
     const w = render()
     await flushPromises()
     expect(w.find('[data-testid="review-empty-card"]').exists()).toBe(false)
-    expect(w.find('.k12mistakes').classes()).toContain('k12mistakes--collapsed')
+    expect(w.find('.rl-review').exists(), '行动卡应常驻本周复习').toBe(true)
   })
 })
 
@@ -86,7 +86,8 @@ describe('积累空态（Bug-20260713：对齐原型 rc1——克制列表占位
   it('积累本为空 → 克制列表占位（有文案），入口走上方常驻 bar 的「＋记到积累本」', async () => {
     const w = render()
     await flushPromises()
-    await w.findAll('.seg button')[1]!.trigger('click') // 切到「积累」tab
+    // 切到「积累」tab（按文本选，不依赖索引——20260718 学习档案加了练习集/作品 tab 后索引变了）
+    await w.findAll('.seg button').find((b) => b.text() === '积累')!.trigger('click')
     await flushPromises()
     // 原型无大居中卡：空态是一行占位（非裸悬空、非 marketing 卡），且不再叠自带 CTA 按钮
     const card = w.find('[data-testid="accum-empty-card"]')

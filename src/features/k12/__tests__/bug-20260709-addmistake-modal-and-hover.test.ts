@@ -62,6 +62,8 @@ describe('BUG-20260709-A 记一条错题/自定义组卷应为 modal 弹窗（�
   it('★点「记一条错题」→ 表单出现在 fixed 遮罩弹层内（.k12modal），不内联挤在 tab 下方', async () => {
     const w = render()
     await flushPromises()
+    // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
     await w.find('[data-testid="mistake-add-open"]').trigger('click')
     const modal = w.find('.k12modal')
     expect(modal.exists(), '应出现 modal 遮罩层（原型 openAddMistake=modal）').toBe(true)
@@ -84,6 +86,8 @@ describe('BUG-20260709-A 记一条错题/自定义组卷应为 modal 弹窗（�
   it('弹层点遮罩/取消可关闭（modal 基本闭环）', async () => {
     const w = render()
     await flushPromises()
+    // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
     await w.find('[data-testid="mistake-add-open"]').trigger('click')
     expect(w.find('.k12modal').exists()).toBe(true)
     // 在遮罩自身上触发 click（target=self），命中 @click.self 关闭

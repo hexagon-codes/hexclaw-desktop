@@ -12,6 +12,12 @@ function installCanvas() {
     fillRect: vi.fn(),
     strokeRect: vi.fn(),
     fillText: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    stroke: vi.fn(),
+    lineCap: '',
+    lineJoin: '',
     lineWidth: 0,
     strokeStyle: '',
     fillStyle: '',
@@ -24,9 +30,8 @@ function installCanvas() {
     getContext: vi.fn(() => ctx),
     toDataURL: vi.fn(() => 'data:image/png;base64,R1JBREVE'),
   }
-  vi.spyOn(document, 'createElement').mockImplementation(((tag: string) => (
-    tag === 'canvas' ? canvas : nativeCreateElement(tag)
-  )) as typeof document.createElement)
+  vi.spyOn(document, 'createElement').mockImplementation(((tag: string) =>
+    tag === 'canvas' ? canvas : nativeCreateElement(tag)) as typeof document.createElement)
 
   class LoadedImage {
     naturalWidth = 1000
@@ -35,15 +40,25 @@ function installCanvas() {
     height = 2000
     onload: null | (() => void) = null
     onerror: null | (() => void) = null
-    set src(_value: string) { queueMicrotask(() => this.onload?.()) }
+    set src(_value: string) {
+      queueMicrotask(() => this.onload?.())
+    }
   }
-  Object.defineProperty(globalThis, 'Image', { configurable: true, writable: true, value: LoadedImage })
+  Object.defineProperty(globalThis, 'Image', {
+    configurable: true,
+    writable: true,
+    value: LoadedImage,
+  })
   return { ctx, canvas }
 }
 
 afterEach(() => {
   vi.restoreAllMocks()
-  Object.defineProperty(globalThis, 'Image', { configurable: true, writable: true, value: NativeImage })
+  Object.defineProperty(globalThis, 'Image', {
+    configurable: true,
+    writable: true,
+    value: NativeImage,
+  })
 })
 
 describe('批改图片像素级导出', () => {
@@ -53,7 +68,11 @@ describe('批改图片像素级导出', () => {
   })
 
   it('没有明确最终答案时不把整段解题 Markdown 当成订正文案', () => {
-    expect(extractBriefFinalAnswer('## 解答\n第一步先列式。\n\n第二步计算后再检查，这里是一段完整的过程说明。')).toBe('')
+    expect(
+      extractBriefFinalAnswer(
+        '## 解答\n第一步先列式。\n\n第二步计算后再检查，这里是一段完整的过程说明。',
+      ),
+    ).toBe('')
   })
 
   it('把合法 bbox 的对错标记绘进原图 PNG，非法框不落笔', async () => {
@@ -69,24 +88,37 @@ describe('批改图片像素级导出', () => {
     expect(canvas.width).toBe(1000)
     expect(canvas.height).toBe(2000)
     expect(ctx.drawImage).toHaveBeenCalledOnce()
-    expect(ctx.fillRect).toHaveBeenCalledOnce()
-    expect(ctx.strokeRect).toHaveBeenCalledWith(100, 400, 200, 100)
-    expect(ctx.fillText).toHaveBeenCalledWith('✓', expect.any(Number), expect.any(Number))
+    expect(ctx.fillRect).not.toHaveBeenCalled()
+    expect(ctx.strokeRect).not.toHaveBeenCalled()
+    expect(ctx.fillText).not.toHaveBeenCalled()
+    expect(ctx.beginPath).toHaveBeenCalledTimes(4) // white underlay + green stroke, two ✓ segments
+    expect(ctx.stroke).toHaveBeenCalledTimes(4)
+    expect(ctx.moveTo).toHaveBeenCalledWith(expect.any(Number), expect.any(Number))
   })
 
   it('浏览器环境生成带日期文件名并触发真实下载动作', async () => {
     installCanvas()
     let clickedHref = ''
-    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
       clickedHref = this.href
     })
     const originalCreateObjectURL = URL.createObjectURL
     const createObjectURL = vi.fn(() => 'blob:http://localhost/graded-photo')
-    Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: createObjectURL })
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: createObjectURL,
+    })
     const path = await saveGradedPhoto('data:image/jpeg;base64,ORIGINAL', [
       { correct: true, bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 } },
     ])
-    Object.defineProperty(URL, 'createObjectURL', { configurable: true, writable: true, value: originalCreateObjectURL })
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      writable: true,
+      value: originalCreateObjectURL,
+    })
     expect(path).toMatch(/^作业批改_\d{4}-\d{2}-\d{2}_\d{4}\.png$/)
     expect(click).toHaveBeenCalledOnce()
     expect(createObjectURL).toHaveBeenCalledOnce()
@@ -95,13 +127,15 @@ describe('批改图片像素级导出', () => {
 
   it('像素绘制前再清洗订正文案，长解题过程不会烧进图片', async () => {
     const { ctx } = installCanvas()
-    await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [{
-      correct: false,
-      bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 },
-      correctAnswer: '## 解答\n第一步先列式。\n\n第二步计算后再检查，这里是一段完整的过程说明。',
-    }])
+    await renderGradedPhotoDataUrl('data:image/jpeg;base64,ORIGINAL', [
+      {
+        correct: false,
+        bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 },
+        correctAnswer: '## 解答\n第一步先列式。\n\n第二步计算后再检查，这里是一段完整的过程说明。',
+      },
+    ])
 
-    expect(ctx.fillText).toHaveBeenCalledWith('✗', expect.any(Number), expect.any(Number))
-    expect(ctx.fillText).not.toHaveBeenCalledWith(expect.stringContaining('订正：'), expect.anything(), expect.anything(), expect.anything())
+    expect(ctx.stroke).toHaveBeenCalled()
+    expect(ctx.fillText).not.toHaveBeenCalled()
   })
 })

@@ -15,6 +15,7 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
+import K12InsightPanel from '../views/K12InsightPanel.vue'
 
 const h = vi.hoisted(() => {
   const mk = (id: string, q: string, kp: string, subject?: string) => ({
@@ -51,6 +52,8 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn().mockImplementation(() => Promise.resolve(h.report)),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
+  // 20260718 学情第四瓷片改练习集待打印：InsightPanel 自拉 draft 篮
+  k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
 }))
 
 function i18n() {
@@ -97,12 +100,12 @@ describe('原型 c8a194e 对齐 · 错题本行动卡与档案区（20260709 定
     expect(review.text()).not.toContain('在进步')
   })
 
-  it('③ 行动卡内脚注：每周五 19:00 自动出下一卷（后端 cronspec 0 19 * * 5 真实接线）', async () => {
+  it('③ 行动卡内脚注：每周五 19:00 自动加入练习集（20260718 术语快修：出卷=装篮 · 只有验证过的进打印）', async () => {
     const w = render()
     await flushPromises()
     const review = w.find('.rl-review')
-    expect(review.text(), '周五留存钩子应独立成行进行动卡').toContain('每周五 19:00 自动出下一卷')
-    expect(review.text()).toContain('做对会自动升级状态')
+    expect(review.text(), '周五留存钩子应独立成行进行动卡').toContain('每周五 19:00 自动加入练习集')
+    expect(review.text()).toContain('只有验证通过的题目会进入打印版本')
   })
 
   it('⑤ 积累 tab 底部有分界规则脚注（原型 rc1：错了要改→错题 / 好东西要记住→积累）', async () => {
@@ -113,18 +116,23 @@ describe('原型 c8a194e 对齐 · 错题本行动卡与档案区（20260709 定
     expect(w.text()).toContain('遇到好东西要记住')
   })
 
-  it('⑥ 学情 tab 有标题「学情报告」+ 月度生成 note（原型 rc2 cxsec）', async () => {
-    const w = render()
+  it('⑥ 学情（顶栏一等 Tab · K12InsightPanel）标题=学习概览 + 证据来源 note（原型 2613 月报口径退役）', async () => {
+    // IA 迁移（2026-07-18）：学情从二级 Tab 抽到 K12InsightPanel；
+    // 20260718 原型 2613：「学情报告·每月1日自动生成」→「学习概览 · 从真实批改与复练证据生成」
+    const w = mount(K12InsightPanel, { props: { agentId: 'mingming' }, global: { plugins: [createPinia(), i18n()] } })
     await flushPromises()
-    await w.findAll('.seg button').find((b) => b.text() === '学情')!.trigger('click')
-    expect(w.text(), '学情 tab 应有标题（i18n report.title 已备未接）').toContain('学情报告')
-    expect(w.text(), '学情 tab 应有月度生成 note（report.monthlyNote 已备未接）').toContain('每月 1 日自动生成')
+    expect(w.text(), '学情标题应为学习概览（无 grade 时通用文案）').toContain('学习概览')
+    expect(w.text(), '学情 note 应说明证据来源').toContain('从真实批改与复练证据生成')
+    expect(w.text()).not.toContain('学情报告')
+    expect(w.text()).not.toContain('每月 1 日自动生成')
   })
 
-  it('④ 全部记录区标题「全部错题 (N)」（原型 summary 定稿：无功能说明书文案）', async () => {
+  it('④ 全部错题=独立档案页（IA 迁移：list-title 摘要退役，Tab 即标题）', async () => {
     const w = render()
     await flushPromises()
-    expect(w.text(), '档案区应有「全部错题 (4)」区块标题').toContain('全部错题 (4)')
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    // 对象 Tab 是唯一标题（PRD §2）：档案页直接展开筛选+全量，无第二个「全部错题 (N)」标题
+    expect(w.find('.rl-filters').exists(), '档案页应直接显示筛选').toBe(true)
     // 定稿删除的说明书文案不得出现
     expect(w.text()).not.toContain('查看全部')
     expect(w.text()).not.toContain('可按科目')

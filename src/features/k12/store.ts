@@ -15,9 +15,11 @@ import {
   k12RecordMistake,
   k12Solve,
   k12InsightReport,
-  k12StudyTime,
   k12ListAccumulation,
-  k12Recognize,
+  k12CreateGradingJob,
+  k12GetGradingJob,
+  k12ConfirmGradingJob,
+  k12RetryGradingJob,
   k12ColdStart,
   k12TutorTurn,
   k12BindIM,
@@ -30,8 +32,10 @@ import {
   type ColdStartResp,
   type PrepCardResp,
   type InsightReportResp,
-  type StudyTimeResp,
-  type RecognizeResp,
+  type RecognizedQuestion,
+  type GradingJobStatusResp,
+  type GradingQuestionCorrection,
+  type PhotoJobResult,
   type TutorTurnReq,
   type TutorTurnResp,
   type BindIMReq,
@@ -61,13 +65,11 @@ export const useK12Store = defineStore('k12', () => {
   const mistakeView = ref<RecordCollectionView | null>(null)
   const accumView = ref<RecordCollectionView | null>(null)
   const report = ref<InsightReportResp | null>(null)
-  const studyTime = ref<StudyTimeResp | null>(null)
   const prepCard = ref<PrepCardResp | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   let mistakesRequest = 0
   let reportRequest = 0
-  let studyTimeRequest = 0
   let accumulationRequest = 0
   let prepRequest = 0
 
@@ -115,24 +117,12 @@ export const useK12Store = defineStore('k12', () => {
     }
   }
 
-  /** 学习时长（一维按日） */
-  async function loadStudyTime(agent: string): Promise<void> {
-    const request = ++studyTimeRequest
-    error.value = null
-    studyTime.value = null
-    try {
-      const next = await k12StudyTime(agent)
-      if (request === studyTimeRequest) studyTime.value = next
-    } catch (e) {
-      if (request !== studyTimeRequest) return
-      error.value = e instanceof Error ? e.message : String(e)
-    }
-  }
-
   /** 积累本（语/英）；subject 可选，触达后端分科过滤（BUG-3）。 */
   // 积累型 entry_type（镜像后端 accumKeepTypes）——「积累」tab 只显这些；纠错型（默写错/错词/语法改错）
   // 属客观错误、进「错题」tab 的复习队列（PRD §3.5.4 口径）。
-  const ACCUM_KEEP_TYPES = new Set(['好词好句', '古诗', '语法点', '作文'])
+  // 20260718 原型定案：类型按学科分化（语文：好词好句/古诗积累/写作素材；英语：表达积累/词汇积累）；
+  // 前四项为存量旧词汇，展示侧兼容保留，新录入走分化词汇（后端 accumKeepTypes 需同步扩集，缺口挂执行计划）。
+  const ACCUM_KEEP_TYPES = new Set(['好词好句', '古诗', '语法点', '作文', '古诗积累', '写作素材', '表达积累', '词汇积累'])
 
   async function loadAccumulation(agent: string, subject?: string): Promise<void> {
     const request = ++accumulationRequest
@@ -216,19 +206,114 @@ export const useK12Store = defineStore('k12', () => {
     }
   }
 
+  // ── 拍照批改编排（2026-07-18 桌面入口迁移到统一 GradingJob，§6.7/§6.15）──────
+  // 上传照片 → 创建 Job（后端异步推进识别+锚点）→ 轮询到 awaiting_confirmation 停点 →
+  // 护栏确认交互 → confirm → 轮询到 completed → 取逐题结果渲染。
+  // 旧两阶段直连编排（k12Recognize/k12RecognizeAnchors）已随一次切换删除（§6.14 链路①）；
+  // grade/solve 是甄别保留的单点能力（单题补批/空白题求解），不属旧编排链路。
+
+  /** 轮询节流：阶段耗时分钟级（识别 ~1-3 分钟、整卷批改可达数分钟）→ 2.5s 间隔 + 10 分钟上限。 */
+  const JOB_POLL_INTERVAL_MS = 2500
+  const JOB_POLL_MAX_ATTEMPTS = 240
+
+  /** 同一（agent, 照片）内容派生稳定幂等键（§4.10 desktop 来源键）：重复点击/失败重跑命中同一 Job。 */
+  function photoJobSourceKey(agent: string, imageBase64: string): string {
+    let hash = 5381
+    for (let i = 0; i < imageBase64.length; i++) {
+      hash = ((hash << 5) + hash + imageBase64.charCodeAt(i)) >>> 0
+    }
+    return `photo-${agent}-${hash.toString(16)}-${imageBase64.length}`
+  }
+
+  /** 轮询单个 Job 直到到达 stopStages 之一；失败态/超时抛家长向错误。 */
+  async function pollGradingJob(
+    agent: string,
+    jobId: string,
+    stopStages: string[],
+    intervalMs = JOB_POLL_INTERVAL_MS,
+  ): Promise<GradingJobStatusResp> {
+    for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt++) {
+      const status = await k12GetGradingJob(agent, jobId)
+      if (stopStages.includes(status.stage)) return status
+      if (
+        status.stage === 'failed_terminal' ||
+        status.stage === 'failed_retryable' ||
+        status.stage === 'cancelled'
+      ) {
+        // 裸 failure_kind 对家长无价值：统一翻成可操作提示（可重试失败由调用方触发 retry 端点）。
+        throw new Error(i18n.global.t('k12.recognize.jobFailed'))
+      }
+      if (attempt < JOB_POLL_MAX_ATTEMPTS - 1) {
+        await new Promise((resolve) => setTimeout(resolve, intervalMs))
+      }
+    }
+    throw new Error(i18n.global.t('k12.recognize.jobFailed'))
+  }
+
+  /** 护栏回显视图：Job 停点的识别产物 + 锚点态（degraded → 界面按无坐标文字降级提示）。 */
+  interface PhotoJobRecognitionView {
+    jobId: string
+    questions: RecognizedQuestion[]
+    subject: string
+    anchorState: string
+  }
+
   /**
-   * 拍题识题：作业图片 → 题目清单 + 整卷学科（识题回显护栏的第一步，需 LLM）。
-   * 返回整卷 subject 供护栏预填学科下拉（家长不必手选，仍可手动覆盖，Polish-2）。
+   * 拍照识题（Job 化）：创建照片批改 Job → 后端异步推进（识别 + 锚点并行增强）→
+   * 轮询到确认停点，返回识别产物供护栏回显。同图重投幂等命中既有 Job；
+   * 命中可重试失败任务时自动走 retry 端点从检查点续跑（识别失败可重试）。
    */
-  async function recognize(imageBase64: string): Promise<RecognizeResp> {
+  async function recognizePhotoJob(
+    agent: string,
+    imageBase64: string,
+  ): Promise<PhotoJobRecognitionView> {
     loading.value = true
     error.value = null
     try {
-      const resp = await k12Recognize(imageBase64)
-      return { questions: resp.questions, subject: resp.subject ?? '' }
+      const created = await k12CreateGradingJob({
+        agent,
+        source_key: photoJobSourceKey(agent, imageBase64),
+        source_kind: 'desktop',
+        image_base64: imageBase64,
+      })
+      const jobId = created.job.job_id
+      if (!created.created && created.job.stage === 'failed_retryable' && created.job.retryable) {
+        await k12RetryGradingJob(agent, jobId)
+      }
+      // completed 也是合法停点（同图重投命中已完成 Job）：识别产物仍可回显。
+      const status = await pollGradingJob(agent, jobId, ['awaiting_confirmation', 'completed'])
+      return {
+        jobId,
+        questions: status.recognition?.questions ?? [],
+        subject: status.recognition?.subject ?? '',
+        anchorState: status.anchor_state,
+      }
     } finally {
       loading.value = false
     }
+  }
+
+  /**
+   * 整卷批改（Job 化）：批量确认/修正识别结果（冻结 canonical 输入，§6.7 规则 1）→
+   * 后端异步续跑 assessing→rendering→projecting → 轮询到 completed → 返回逐题结果
+   * （PhotoGradeOverlay 数据源）。
+   */
+  async function gradePhotoJob(
+    agent: string,
+    jobId: string,
+    input: { subject?: string; grade?: string; corrections?: GradingQuestionCorrection[] },
+  ): Promise<PhotoJobResult> {
+    await k12ConfirmGradingJob(jobId, {
+      agent,
+      subject: input.subject,
+      grade: input.grade,
+      question_corrections: input.corrections,
+    })
+    const status = await pollGradingJob(agent, jobId, ['completed'])
+    if (!status.result) {
+      throw new Error(i18n.global.t('k12.recognize.jobFailed'))
+    }
+    return status.result
   }
 
   /** 渐进提示一轮：返回分阶段指令 + 守门标志（阶段三带验算解） */
@@ -277,7 +362,6 @@ export const useK12Store = defineStore('k12', () => {
     mistakeView,
     accumView,
     report,
-    studyTime,
     prepCard,
     prepLoading,
     prepError,
@@ -289,12 +373,12 @@ export const useK12Store = defineStore('k12', () => {
     loadPrepCard,
     addGrounding,
     loadReport,
-    loadStudyTime,
     loadAccumulation,
     grade,
     recordMistake,
     solve,
-    recognize,
+    recognizePhotoJob,
+    gradePhotoJob,
     coldStart,
     tutorTurn,
     setupAutomation,

@@ -57,13 +57,17 @@ const indexed = computed<IndexedMark[]>(() =>
 const positioned = computed(() => indexed.value.filter((m) => m._valid))
 const degraded = computed(() => indexed.value.filter((m) => !m._valid))
 
-/** 归一化 bbox → 百分比定位样式（适配任意渲染尺寸，无需像素分辨率）。 */
-function boxStyle(b: BBox) {
+/**
+ * 精确答案 bbox → 紧凑勾叉锚点。符号放在答案末端附近，不再用矩形覆盖整个答案；
+ * 靠近右边缘时向左展开，避免被画布裁掉。
+ */
+function markStyle(b: BBox) {
+  const rightEdge = b.x + b.w
+  const percent = (value: number) => `${Math.round(value * 10_000) / 100}%`
   return {
-    left: `${b.x * 100}%`,
-    top: `${b.y * 100}%`,
-    width: `${b.w * 100}%`,
-    height: `${b.h * 100}%`,
+    left: percent(rightEdge),
+    top: percent(b.y + b.h * 0.4),
+    transform: rightEdge > 0.94 ? 'translate(-100%, -50%)' : 'translate(-10%, -50%)',
   }
 }
 
@@ -104,23 +108,24 @@ async function saveImage() {
 
     <!-- 原图为底 + 绝对定位叠加层（确定性绘制，非 AI 生成） -->
     <div class="pg-overlay__canvas">
-      <img :src="image" class="pg-overlay__img" :alt="t('k12.overlay.imageAlt')" data-testid="overlay-image" />
+      <img
+        :src="image"
+        class="pg-overlay__img"
+        :alt="t('k12.overlay.imageAlt')"
+        data-testid="overlay-image"
+      />
       <template v-if="showOverlay">
         <div
           v-for="m in positioned"
           :key="m._i"
           class="pg-overlay__mark"
           :class="m.correct ? 'pg-overlay__mark--correct' : 'pg-overlay__mark--wrong'"
-          :style="boxStyle(m.bbox as BBox)"
+          :style="markStyle(m.bbox as BBox)"
           :data-testid="`overlay-mark-${m._i}`"
         >
-          <span class="pg-overlay__sym" :data-testid="`overlay-sym-${m._i}`">{{ m.correct ? '✓' : '✗' }}</span>
-          <!-- 错题订正贴框旁（Phase 1 轻量批注，仍是确定性文字，不改原图）。 -->
-          <span
-            v-if="!m.correct && m.correctAnswer"
-            class="pg-overlay__fix"
-            :data-testid="`overlay-fix-${m._i}`"
-          >{{ m.correctAnswer }}</span>
+          <span class="pg-overlay__sym" :data-testid="`overlay-sym-${m._i}`">{{
+            m.correct ? '✓' : '✗'
+          }}</span>
         </div>
       </template>
     </div>
@@ -136,19 +141,31 @@ async function saveImage() {
       >
         <span
           class="pg-overlay__degraded-verdict"
-          :class="m.outOfScope ? 'is-scope' : (m.correct ? 'is-correct' : 'is-wrong')"
+          :class="m.outOfScope ? 'is-scope' : m.correct ? 'is-correct' : 'is-wrong'"
         >
-          {{ m.outOfScope ? '⛔ ' + t('verify.outOfScope') : (m.correct ? '✓ ' + t('k12.overlay.correct') : '✗ ' + t('k12.overlay.wrong')) }}
+          {{
+            m.outOfScope
+              ? '⛔ ' + t('verify.outOfScope')
+              : m.correct
+                ? '✓ ' + t('k12.overlay.correct')
+                : '✗ ' + t('k12.overlay.wrong')
+          }}
         </span>
         <!-- 降级文字批改的题干/正确答案/错因为模型生成，数学题含 LaTeX → 行内 md 渲染，保紧凑行内排布。 -->
         <span v-if="m.question" class="pg-overlay__degraded-q">
           <MarkdownRenderer class="pg-overlay__md-inline" :content="m.question" />
         </span>
         <span v-if="!m.correct && m.correctAnswer" class="pg-overlay__degraded-fix">
-          {{ t('k12.overlay.correctAnswer') }}：<MarkdownRenderer class="pg-overlay__md-inline" :content="m.correctAnswer" />
+          {{ t('k12.overlay.correctAnswer') }}：<MarkdownRenderer
+            class="pg-overlay__md-inline"
+            :content="m.correctAnswer"
+          />
         </span>
         <span v-if="!m.correct && m.errorCause" class="pg-overlay__degraded-cause">
-          {{ t('k12.overlay.errorCause') }}：<MarkdownRenderer class="pg-overlay__md-inline" :content="m.errorCause" />
+          {{ t('k12.overlay.errorCause') }}：<MarkdownRenderer
+            class="pg-overlay__md-inline"
+            :content="m.errorCause"
+          />
         </span>
       </div>
     </div>
@@ -156,51 +173,122 @@ async function saveImage() {
 </template>
 
 <style scoped>
-.pg-overlay { display: flex; flex-direction: column; gap: 8px; }
-.pg-overlay__head { display: flex; align-items: center; gap: 8px; }
-.pg-overlay__title { font-size: 12.5px; font-weight: 700; color: var(--hc-text-primary); flex: 1; }
+.pg-overlay {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pg-overlay__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pg-overlay__title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--hc-text-primary);
+  flex: 1;
+}
 .pg-overlay__toggle,
 .pg-overlay__save {
-  font-size: 11.5px; padding: 4px 10px; border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-input); color: var(--hc-text-primary); cursor: pointer; white-space: nowrap;
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  cursor: pointer;
+  white-space: nowrap;
 }
-.pg-overlay__save { border-color: var(--hc-border-hl); color: var(--hc-accent); }
-.pg-overlay__save:disabled { opacity: 0.5; cursor: not-allowed; }
+.pg-overlay__save {
+  border-color: var(--hc-border-hl);
+  color: var(--hc-accent);
+}
+.pg-overlay__save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 .pg-overlay__canvas {
-  position: relative; display: inline-block; max-width: 100%; align-self: flex-start;
-  border-radius: var(--hc-radius-md); overflow: hidden; border: 0.5px solid var(--hc-border);
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  align-self: flex-start;
+  border-radius: var(--hc-radius-md);
+  overflow: hidden;
+  border: 0.5px solid var(--hc-border);
 }
-.pg-overlay__img { display: block; max-width: 100%; height: auto; }
-/* 绝对定位标记：按归一化 bbox 的百分比落到原图对应位置。 */
+.pg-overlay__img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+/* 绝对定位标记：只画紧凑勾叉，不画边框、底色或订正条，避免遮住孩子原笔迹。 */
 .pg-overlay__mark {
-  position: absolute; box-sizing: border-box; border-radius: 4px;
-  display: flex; align-items: flex-start; gap: 3px; pointer-events: none;
+  position: absolute;
+  pointer-events: none;
+  z-index: 1;
 }
-.pg-overlay__mark--correct { border: 2px solid var(--hc-success, #2ea86b); background: rgba(46, 168, 107, 0.12); }
-.pg-overlay__mark--wrong { border: 2px solid var(--hc-danger, #e05a5a); background: rgba(224, 90, 90, 0.12); }
 .pg-overlay__sym {
-  font-size: 14px; font-weight: 800; line-height: 1; padding: 1px 3px; border-radius: 3px;
-  color: #fff;
+  display: block;
+  font-size: clamp(16px, 2.4vw, 30px);
+  font-weight: 900;
+  line-height: 1;
+  -webkit-text-stroke: 1px #fff;
+  text-shadow:
+    -1px -1px 0 #fff,
+    1px -1px 0 #fff,
+    -1px 1px 0 #fff,
+    1px 1px 0 #fff;
 }
-.pg-overlay__mark--correct .pg-overlay__sym { background: var(--hc-success, #2ea86b); }
-.pg-overlay__mark--wrong .pg-overlay__sym { background: var(--hc-danger, #e05a5a); }
-.pg-overlay__fix {
-  font-size: 11px; font-weight: 700; padding: 1px 4px; border-radius: 3px;
-  background: var(--hc-danger, #e05a5a); color: #fff; white-space: nowrap;
+.pg-overlay__mark--correct .pg-overlay__sym {
+  color: var(--hc-success, #2ea86b);
+}
+.pg-overlay__mark--wrong .pg-overlay__sym {
+  color: var(--hc-danger, #e05a5a);
 }
 .pg-overlay__degraded {
-  display: flex; flex-direction: column; gap: 6px; padding: 8px 10px;
-  border-inline-start: 3px solid var(--hc-warn, #e0a03a); background: var(--hc-bg-elevated);
-  border-start-end-radius: var(--hc-radius-md); border-end-end-radius: var(--hc-radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-inline-start: 3px solid var(--hc-warn, #e0a03a);
+  background: var(--hc-bg-elevated);
+  border-start-end-radius: var(--hc-radius-md);
+  border-end-end-radius: var(--hc-radius-md);
 }
-.pg-overlay__degraded-title { font-size: 11.5px; color: var(--hc-text-secondary); line-height: 1.5; }
-.pg-overlay__degraded-item { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--hc-text-secondary); }
-.pg-overlay__degraded-verdict { font-weight: 700; }
-.pg-overlay__degraded-verdict.is-correct { color: var(--hc-success, #2ea86b); }
-.pg-overlay__degraded-verdict.is-wrong { color: var(--hc-danger, #e05a5a); }
-.pg-overlay__degraded-verdict.is-scope { color: var(--hc-warn, #b7791f); }
-.pg-overlay__degraded-q { color: var(--hc-text-primary); }
+.pg-overlay__degraded-title {
+  font-size: 11.5px;
+  color: var(--hc-text-secondary);
+  line-height: 1.5;
+}
+.pg-overlay__degraded-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+}
+.pg-overlay__degraded-verdict {
+  font-weight: 700;
+}
+.pg-overlay__degraded-verdict.is-correct {
+  color: var(--hc-success, #2ea86b);
+}
+.pg-overlay__degraded-verdict.is-wrong {
+  color: var(--hc-danger, #e05a5a);
+}
+.pg-overlay__degraded-verdict.is-scope {
+  color: var(--hc-warn, #b7791f);
+}
+.pg-overlay__degraded-q {
+  color: var(--hc-text-primary);
+}
 /* 行内 md:让短批改文本（含 LaTeX）在 flex-wrap 行内排布中不换行成块，保持紧凑。 */
-.pg-overlay__md-inline { display: inline; }
-.pg-overlay__md-inline :deep(p) { display: inline; margin: 0; }
+.pg-overlay__md-inline {
+  display: inline;
+}
+.pg-overlay__md-inline :deep(p) {
+  display: inline;
+  margin: 0;
+}
 </style>

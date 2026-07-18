@@ -28,7 +28,9 @@ export const api = ofetch.create({
     )
   },
   onResponseError({ response }) {
-    const serverMsg = (response._data as Record<string, unknown> | undefined)?.error as string | undefined
+    const serverMsg = (response._data as Record<string, unknown> | undefined)?.error as
+      | string
+      | undefined
     const err = fromHttpStatus(response.status, serverMsg ?? response.statusText)
     logger.error(`API error: [${err.code}] ${err.message}`)
   },
@@ -67,8 +69,8 @@ export function apiGet<T>(url: string, query?: Record<string, unknown>) {
 
 /** apiPost 可选参数 — 主要给"会触发慢上游"的接口（cron 编译）放宽 timeout */
 export interface ApiPostOptions {
-  /** 覆盖 env.timeout 默认值，单位 ms */
-  timeout?: number
+  /** 覆盖 env.timeout 默认值，单位 ms；false 表示由调用方 AbortSignal/请求生命周期负责取消。 */
+  timeout?: number | false
   /** 可取消：调用方 AbortController.signal，用于用户主动取消慢操作（如再练出题·BUG-20260712）。 */
   signal?: AbortSignal
 }
@@ -84,22 +86,31 @@ export function apiPost<T>(
   // ofetch headers 是 merge 不是 override，无法可靠地"删除"默认 Content-Type，
   // 故 FormData 分支直接用原生 fetch 绕开。
   if (body instanceof FormData) {
-    // timeout <= 0 视为无效输入回退 env.timeout，与 JSON 路径行为一致
-    const tm = options?.timeout && options.timeout > 0 ? options.timeout : env.timeout
+    const tm =
+      options?.timeout === false
+        ? false
+        : options?.timeout && options.timeout > 0
+          ? options.timeout
+          : env.timeout
     return uploadFormData<T>(url, body, tm)
   }
   const opts: Record<string, unknown> = { method: 'POST' }
   if (body) opts.body = body as Record<string, unknown>
-  if (options?.timeout && options.timeout > 0) opts.timeout = options.timeout
+  if (options?.timeout === false) opts.timeout = 0
+  else if (options?.timeout && options.timeout > 0) opts.timeout = options.timeout
   if (options?.signal) opts.signal = options.signal // 透传取消信号（ofetch 支持）
   return withNormalizedError(api<T>(url, opts))
 }
 
-async function uploadFormData<T>(url: string, body: FormData, timeoutMs: number): Promise<T> {
+async function uploadFormData<T>(
+  url: string,
+  body: FormData,
+  timeoutMs: number | false,
+): Promise<T> {
   const fullUrl = `${env.apiBase}${url}`
   logger.debug(`→ POST ${fullUrl} (multipart)`)
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const timer = timeoutMs === false ? null : setTimeout(() => controller.abort(), timeoutMs)
   try {
     const response = await fetch(fullUrl, {
       method: 'POST',
@@ -128,7 +139,7 @@ async function uploadFormData<T>(url: string, body: FormData, timeoutMs: number)
     }
     return (await response.json()) as T
   } finally {
-    clearTimeout(timer)
+    if (timer !== null) clearTimeout(timer)
   }
 }
 
@@ -139,7 +150,9 @@ export function apiPut<T>(url: string, body?: Record<string, unknown> | object) 
 
 /** PATCH 请求 */
 export function apiPatch<T>(url: string, body?: Record<string, unknown> | object) {
-  return withNormalizedError(api<T>(url, { method: 'PATCH', body: body as Record<string, unknown> }))
+  return withNormalizedError(
+    api<T>(url, { method: 'PATCH', body: body as Record<string, unknown> }),
+  )
 }
 
 /** DELETE 请求 */

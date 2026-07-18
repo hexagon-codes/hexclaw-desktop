@@ -19,7 +19,6 @@ const grade = (over: Partial<GradeResp> = {}): GradeResp => ({
   verdict: 'agree',
   evidence_type: 'numeric_exec',
   badge: 'verified-strong',
-  correct: false,
   out_of_scope: false,
   record_created: true,
   record_id: 'r9',
@@ -111,7 +110,6 @@ describe('K12 mappers · gradeResp → 完整批改结果', () => {
       verdict: 'disagree',
       evidence_type: 'numeric_exec',
       badge: 'disagree',
-      correct: false,
       wrong_step: '小数点错位',
       error_cause: '对位错误',
     }))
@@ -121,10 +119,15 @@ describe('K12 mappers · gradeResp → 完整批改结果', () => {
       verdict: 'disagree',
       evidenceType: 'numeric_exec',
       badge: 'disagree',
-      correct: false,
       wrongStep: '小数点错位',
       errorCause: '对位错误',
     })
+  })
+
+  it('反向契约（§4.5 布尔删除）：批改结果不再含布尔 correct 键，判定统一 verdict 五值', () => {
+    const result = gradeToResult(grade({ verdict: 'disagree' }))
+    expect('correct' in result).toBe(false)
+    expect(result.verdict).toBe('disagree')
   })
 
   it('record_created=false + record_id 表示命中去重：仍已入本，同时保留“非本次新建”语义', () => {

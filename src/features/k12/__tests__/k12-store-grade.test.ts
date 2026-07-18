@@ -12,8 +12,7 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
   k12ListAccumulation: vi.fn(),
-  k12Recognize: vi.fn(),
-  k12ColdStart: vi.fn(),
+    k12ColdStart: vi.fn(),
   k12TutorTurn: vi.fn(),
   k12BindIM: vi.fn(),
   k12ProvisionCron: vi.fn(),
@@ -27,13 +26,12 @@ describe('K12 store · grade 完整契约', () => {
     gradeSpy.mockReset()
   })
 
-  it('不在 store 边界丢 solution/correct/wrong_step/error_cause/evidence，并识别去重命中', async () => {
+  it('不在 store 边界丢 solution/verdict/wrong_step/error_cause/evidence，并识别去重命中', async () => {
     gradeSpy.mockResolvedValue({
       solution: '解：11.4',
       verdict: 'disagree',
       evidence_type: 'numeric_exec',
       badge: 'disagree',
-      correct: false,
       wrong_step: '小数点错位',
       error_cause: '对位错误',
       out_of_scope: false,
@@ -50,7 +48,7 @@ describe('K12 store · grade 完整契约', () => {
 
     expect(result).toMatchObject({
       solution: '解：11.4',
-      correct: false,
+      verdict: 'disagree',
       wrongStep: '小数点错位',
       errorCause: '对位错误',
       evidenceType: 'numeric_exec',

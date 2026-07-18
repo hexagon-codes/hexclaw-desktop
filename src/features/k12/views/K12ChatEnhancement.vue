@@ -14,6 +14,7 @@ import { useRoute } from 'vue-router'
 import { k12GetViewDescriptor } from '@/api/k12'
 import type { InstanceViewDescriptor } from '@/contracts'
 import K12RecordsView from './K12RecordsView.vue'
+import K12InsightPanel from './K12InsightPanel.vue'
 import K12BackupModal from './K12BackupModal.vue'
 import RecognizeGuardPanel from './RecognizeGuardPanel.vue'
 
@@ -50,7 +51,14 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const route = useRoute()
 
-const tab = ref<'chat' | 'records'>('chat')
+// IA 定稿（PRD §1.5，2026-07-18 迁移）：顶栏三段 辅导｜学习档案｜学情（学情=一等 Tab）。
+const tab = ref<'chat' | 'records' | 'insights'>('chat')
+// descriptor.headerTabs 的 kind → 本地 tab 值（report=学情）。
+function tabOfKind(kind: string): 'chat' | 'records' | 'insights' {
+  if (kind === 'records') return 'records'
+  if (kind === 'report') return 'insights'
+  return 'chat'
+}
 const recognizeOpen = ref(false)
 const backupOpen = ref(false)
 const pendingRecognizeImage = ref('')
@@ -60,9 +68,10 @@ const pendingRecognizeImage = ref('')
 // composer 预设 chips：从后端 view-descriptor 下发（AP-1：不在前端硬编码场景 chip）
 const composerChips = ref<string[]>([])
 
-// 深链（智能体卡快捷入口）：?scenarioTab=records → 直接进错题本（备课卡入口已取消，辅导要点内联进识题流）
+// 深链（智能体卡快捷入口）：?scenarioTab=records|insights → 直接进学习档案/学情
 onMounted(async () => {
   if (route.query.scenarioTab === 'records') tab.value = 'records'
+  if (route.query.scenarioTab === 'insights') tab.value = 'insights'
   try {
     const d = await k12GetViewDescriptor('tutor')
     composerChips.value = d.composer_chips ?? []
@@ -71,7 +80,8 @@ onMounted(async () => {
   }
 })
 
-watch(tab, (v) => emit('update:recordsActive', v === 'records'), { immediate: true })
+// 学习档案与学情都接管消息区（外壳据 recordsActive 隐藏原生消息/输入）。
+watch(tab, (v) => emit('update:recordsActive', v !== 'chat'), { immediate: true })
 // chips 数据流上交（辅导 tab 才显示；records tab 输入区本就隐藏，上交空数组保持状态干净）
 watch([composerChips, tab], () => {
   emit('update:composerChips', tab.value === 'chat' ? composerChips.value : [])
@@ -112,8 +122,8 @@ watch(() => props.composerImage, (img) => {
       <button
         v-for="ht in descriptor.headerTabs"
         :key="ht.id"
-        :class="{ on: tab === (ht.kind === 'records' ? 'records' : 'chat') }"
-        @click="tab = ht.kind === 'records' ? 'records' : 'chat'"
+        :class="{ on: tab === tabOfKind(ht.kind) }"
+        @click="tab = tabOfKind(ht.kind)"
       >
         {{ t(ht.labelKey) }}
       </button>
@@ -158,7 +168,7 @@ watch(() => props.composerImage, (img) => {
        watch → 护栏自动 run）。给未来维护者（含 AI）：不要因为看到护栏面板就往输入行加回
        相机/识题 toggle——那是已定案删除的漂移，回归锁在 bug-20260711-composer-drift-lock.test.ts。 -->
 
-  <!-- 记录视图（错题本 tab）：接管消息区（外壳据 recordsActive 隐藏原生消息/输入） -->
+  <!-- 学习档案视图（五对象：本周复习/全部错题/练习集/积累/作品）：接管消息区 -->
   <div v-show="tab === 'records'" class="k12enh-records">
     <K12RecordsView
       :key="agentId"
@@ -166,8 +176,16 @@ watch(() => props.composerImage, (img) => {
       :agent-name="agentName"
       :grade="grade"
       @go-tutor="tab = 'chat'"
+      @go-insights="tab = 'insights'"
       @open-backup="backupOpen = true"
     />
+  </div>
+
+  <!-- 学情视图（IA 定稿：顶栏一等 Tab，PRD §3.11）：接管消息区。
+       navigate=学情路由器出口（瓷片/薄弱条/挫败 CTA）→ 切学习档案；
+       TODO(子 Tab 直达)：RecordsView 归另一 agent，本轮不透传 target 指定子 Tab，后续接线。 -->
+  <div v-show="tab === 'insights'" class="k12enh-records">
+    <K12InsightPanel :key="agentId" :agent-id="agentId" :grade="grade || undefined" @navigate="tab = 'records'" />
   </div>
 
   <!-- 备份 / 恢复弹窗（M4-1） -->

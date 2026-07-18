@@ -24,14 +24,22 @@ import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 const AGENT_ID = 'k12-tutor-KKE5v8zQ' // agents.name（后端隔离键）
 const DISPLAY_NAME = '小明的辅导老师' // display_name（仅供展示）
 
-const { k12Grade, k12ColdStart, k12PrepCard, k12Recognize } = vi.hoisted(() => ({
+const { k12Grade, k12ColdStart, k12PrepCard, k12CreateGradingJob, k12GetGradingJob } = vi.hoisted(() => ({
   k12Grade: vi.fn().mockResolvedValue({
     badge: 'verified-strong', evidence_type: 'program', record_created: true, record_id: 'r1',
   }),
   k12ColdStart: vi.fn().mockResolvedValue({ grade_term: '五年级上', inferred: true }),
   k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: ['20以内加法'], sections: [] }),
-  k12Recognize: vi.fn().mockResolvedValue({
-    questions: [{ question: '1+1=?', knowledge_points: ['20以内加法'] }],
+  // 桌面入口迁移（§6.7）：识题编排走统一 GradingJob（创建 → 轮询到确认停点取识别产物）。
+  k12CreateGradingJob: vi.fn().mockResolvedValue({
+    created: true,
+    job: { job_id: 'job-1', stage: 'queued', retryable: false },
+  }),
+  k12GetGradingJob: vi.fn().mockResolvedValue({
+    job_id: 'job-1', stage: 'awaiting_confirmation',
+    confirmation_state: 'pending', anchor_state: 'located',
+    job: { job_id: 'job-1', stage: 'awaiting_confirmation' },
+    recognition: { questions: [{ question: '1+1=?', knowledge_points: ['20以内加法'] }], subject: '' },
   }),
 }))
 
@@ -41,7 +49,10 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: vi.fn(),
   k12PrepCard,
   k12Grade,
-  k12Recognize,
+  k12CreateGradingJob,
+  k12GetGradingJob,
+  k12ConfirmGradingJob: vi.fn(),
+  k12RetryGradingJob: vi.fn(),
   k12ColdStart,
   k12InsightReport: vi.fn().mockResolvedValue({ trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),

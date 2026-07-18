@@ -25,8 +25,7 @@ vi.mock('@/api/k12', () => ({
   // useK12Store 依赖（建档尾部 fire-and-forget setupAutomation，需可 resolve）
   k12BindIM: vi.fn().mockResolvedValue({}),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-  k12Recognize: vi.fn(),
-  k12TutorTurn: vi.fn(),
+    k12TutorTurn: vi.fn(),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),

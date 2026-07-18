@@ -12,13 +12,19 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 // 本测试钉死信任链：图片 → 识题分题回显（题干+知识点）→ 家长核对确认 → 逐题批改验算徽章；
 // 无年级时据识题知识点倒查推断年级建档。
 const h = vi.hoisted(() => ({
-  recognizeSpy: vi.fn(),
+  createJobSpy: vi.fn(),
+  getJobSpy: vi.fn(),
+  confirmJobSpy: vi.fn(),
+  retryJobSpy: vi.fn(),
   gradeSpy: vi.fn(),
   solveSpy: vi.fn(),
   coldStartSpy: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
-  k12Recognize: (b: unknown) => h.recognizeSpy(b),
+  k12CreateGradingJob: (r: unknown) => h.createJobSpy(r),
+  k12GetGradingJob: (...args: unknown[]) => h.getJobSpy(...args),
+  k12ConfirmGradingJob: (...args: unknown[]) => h.confirmJobSpy(...args),
+  k12RetryGradingJob: (...args: unknown[]) => h.retryJobSpy(...args),
   k12Grade: (r: unknown) => h.gradeSpy(r),
   k12Solve: (r: unknown) => h.solveSpy(r),
   k12ColdStart: (r: unknown) => h.coldStartSpy(r),
@@ -36,7 +42,9 @@ vi.mock('@/api/k12', () => ({
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
@@ -60,33 +68,61 @@ async function chooseSubject(w: ReturnType<typeof render>, subject = '数学') {
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => { resolve = done })
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
   return { promise, resolve }
+}
+
+// 桌面入口迁移（§6.7）：识题编排改走统一 GradingJob——创建 Job 后轮询到确认停点，
+// 识别产物（含锚点 bbox）随停点响应返回。以下 helper 等价替代旧 k12Recognize mock。
+function jobDTO(stage = 'awaiting_confirmation') {
+  return {
+    job_id: 'job-1', submission_id: 'photo-x', stage,
+    confirmation_state: 'pending', anchor_state: 'located', deadline: 0,
+    idempotency_key: 'desktop|k|v0', confirmed_version: 0,
+    attempt_count: 0, retryable: false, version: 1, created_at: 0, updated_at: 0,
+  }
+}
+function jobStatus(stage: string, extra: Record<string, unknown> = {}) {
+  return {
+    job_id: 'job-1', stage, confirmation_state: 'pending', anchor_state: 'located',
+    deadline: 0, confirmed_version: 0, job: jobDTO(stage), ...extra,
+  }
+}
+function mockJobRecognition(questions: Array<Record<string, unknown>>, subject = '') {
+  h.createJobSpy.mockResolvedValue({ created: true, job: jobDTO('queued') })
+  h.getJobSpy.mockResolvedValue(
+    jobStatus('awaiting_confirmation', { recognition: { questions, subject } }),
+  )
 }
 
 describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷启动建档）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    h.recognizeSpy.mockReset()
+    h.createJobSpy.mockReset()
+    h.getJobSpy.mockReset()
+    h.confirmJobSpy.mockReset()
+    h.retryJobSpy.mockReset()
     h.gradeSpy.mockReset()
     h.solveSpy.mockReset()
     h.coldStartSpy.mockReset()
   })
 
   it('#1 识题：图片 → 调 recognize → 逐题回显题干+知识点', async () => {
-    h.recognizeSpy.mockResolvedValue({
-      questions: [
+    mockJobRecognition([
         { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
         { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
-      ],
-    })
+      ])
     const w = render()
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
     await flushPromises()
 
-    expect(h.recognizeSpy).toHaveBeenCalledTimes(1)
-    expect(h.recognizeSpy.mock.calls[0]![0]).toContain('AAAA')
+    expect(h.createJobSpy).toHaveBeenCalledTimes(1)
+    expect(
+      (h.createJobSpy.mock.calls[0]![0] as { image_base64: string }).image_base64,
+    ).toContain('AAAA')
     const items = w.findAll('[data-testid="rq-item"]')
     expect(items.length).toBe(2)
     expect(w.text()).toContain('3.8×3=?')
@@ -95,9 +131,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#1 总确认门：识题后先整体确认，确认前不得展示备课卡', async () => {
-    h.recognizeSpy.mockResolvedValue({
-      questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }],
-    })
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }])
     const w = render()
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
@@ -113,14 +147,19 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#1 多孩隔离：切换 agent 后忽略旧孩子尚未完成的识题响应', async () => {
-    const oldRequest = deferred<{ questions: { question: string; knowledge_points: string[] }[] }>()
-    h.recognizeSpy.mockReturnValueOnce(oldRequest.promise)
+    const oldRequest = deferred<{ created: boolean; job: ReturnType<typeof jobDTO> }>()
+    h.createJobSpy.mockReturnValueOnce(oldRequest.promise)
+    h.getJobSpy.mockResolvedValue(
+      jobStatus('awaiting_confirmation', {
+        recognition: { questions: [{ question: '小明的旧题', knowledge_points: ['旧知识点'] }] },
+      }),
+    )
     const w = render({ agentId: 'mingming' })
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
 
     await w.setProps({ agentId: 'honghong' })
-    oldRequest.resolve({ questions: [{ question: '小明的旧题', knowledge_points: ['旧知识点'] }] })
+    oldRequest.resolve({ created: true, job: jobDTO('queued') })
     await flushPromises()
 
     expect(w.findAll('[data-testid="rq-item"]')).toHaveLength(0)
@@ -128,10 +167,15 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#1 护栏：家长「读错了」可就地改题干，批改用改过的题干', async () => {
-    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8x3', knowledge_points: ['小数乘法'] }] })
+    mockJobRecognition([{ question: '3.8x3', knowledge_points: ['小数乘法'] }])
     h.gradeSpy.mockResolvedValue({
-      solution: '11.4', verdict: 'agree', evidence_type: 'numeric_exec',
-      badge: 'verified-strong', correct: true, out_of_scope: false, record_created: true, record_id: 'r1',
+      solution: '11.4',
+      verdict: 'agree',
+      evidence_type: 'numeric_exec',
+      badge: 'verified-strong',
+      out_of_scope: false,
+      record_created: true,
+      record_id: 'r1',
     })
     const w = render()
     await setImage(w)
@@ -158,10 +202,15 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#2 批改：把家长明确选择的非默认学科透传到 grade 契约', async () => {
-    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '“床前明月光”的下一句', knowledge_points: ['古诗背诵'] }] })
+    mockJobRecognition([{ question: '“床前明月光”的下一句', knowledge_points: ['古诗背诵'] }])
     h.gradeSpy.mockResolvedValue({
-      solution: '疑是地上霜', verdict: 'disagree', evidence_type: 'heterogeneous_model',
-      badge: 'disagree', correct: false, out_of_scope: false, record_created: true, record_id: 'r-cn-1',
+      solution: '疑是地上霜',
+      verdict: 'disagree',
+      evidence_type: 'heterogeneous_model',
+      badge: 'disagree',
+      out_of_scope: false,
+      record_created: true,
+      record_id: 'r-cn-1',
     })
     const w = render()
     await setImage(w)
@@ -177,24 +226,28 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
 
-    expect(h.gradeSpy).toHaveBeenCalledWith(expect.objectContaining({
-      agent: 'mingming',
-      subject: '语文',
-      problem: '“床前明月光”的下一句',
-    }))
+    expect(h.gradeSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'mingming',
+        subject: '语文',
+        problem: '“床前明月光”的下一句',
+      }),
+    )
   })
 
   it('Polish-2 识题自动判定学科：整卷 subject 预填学科下拉，solve/批改按钮不再 gate 空学科', async () => {
-    h.recognizeSpy.mockResolvedValue({
-      questions: [
+    mockJobRecognition([
         { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
         { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
-      ],
-      subject: '数学', // 识题整卷学科自动判定
-    })
+      ], '数学')
     h.gradeSpy.mockResolvedValue({
-      solution: '11.4', verdict: 'agree', evidence_type: 'numeric_exec',
-      badge: 'verified-strong', correct: true, out_of_scope: false, record_created: true, record_id: 'r1',
+      solution: '11.4',
+      verdict: 'agree',
+      evidence_type: 'numeric_exec',
+      badge: 'verified-strong',
+      out_of_scope: false,
+      record_created: true,
+      record_id: 'r1',
     })
     const w = render()
     await setImage(w)
@@ -220,10 +273,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('Polish-2 识题判不出学科：subject 为空则不预填，按钮仍 gate 空学科需家长手选', async () => {
-    h.recognizeSpy.mockResolvedValue({
-      questions: [{ question: '看图说话', knowledge_points: ['观察'] }],
-      subject: '', // 一科都判不出
-    })
+    mockJobRecognition([{ question: '看图说话', knowledge_points: ['观察'] }], '')
     const w = render()
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
@@ -237,10 +287,15 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#2 批改：渲染验算徽章', async () => {
-    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }] })
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }])
     h.gradeSpy.mockResolvedValue({
-      solution: '11.4', verdict: 'agree', evidence_type: 'numeric_exec',
-      badge: 'verified-strong', correct: true, out_of_scope: false, record_created: true, record_id: 'r1',
+      solution: '11.4',
+      verdict: 'agree',
+      evidence_type: 'numeric_exec',
+      badge: 'verified-strong',
+      out_of_scope: false,
+      record_created: true,
+      record_id: 'r1',
     })
     const w = render()
     await setImage(w)
@@ -256,11 +311,17 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#2 批改：向家长展示完整解法、错步、错因，并诚实标识去重入本', async () => {
-    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }] })
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }])
     h.gradeSpy.mockResolvedValue({
-      solution: '解：3.8×3=11.4', verdict: 'disagree', evidence_type: 'numeric_exec',
-      badge: 'disagree', correct: false, wrong_step: '小数点错位', error_cause: '小数乘法对位错误',
-      out_of_scope: false, record_created: false, record_id: 'existing-r1',
+      solution: '解：3.8×3=11.4',
+      verdict: 'disagree',
+      evidence_type: 'numeric_exec',
+      badge: 'disagree',
+      wrong_step: '小数点错位',
+      error_cause: '小数乘法对位错误',
+      out_of_scope: false,
+      record_created: false,
+      record_id: 'existing-r1',
     })
     const w = render()
     await setImage(w)
@@ -281,7 +342,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#3 冷启动：有年级时不显示推断建档入口', async () => {
-    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }] })
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }])
     const w = render({ grade: '五年级上' })
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
@@ -290,14 +351,16 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#3 冷启动：无年级时据识题知识点倒查推断年级、回显建档结果', async () => {
-    h.recognizeSpy.mockResolvedValue({
-      questions: [
+    mockJobRecognition([
         { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
         { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
-      ],
-    })
+      ])
     h.coldStartSpy.mockResolvedValue({
-      child_name: '', grade_term: '五年级上', textbook_edition: '', inferred: true, created: true,
+      child_name: '',
+      grade_term: '五年级上',
+      textbook_edition: '',
+      inferred: true,
+      created: true,
     })
     const w = render({ grade: '' })
     await setImage(w)
@@ -321,12 +384,10 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
 
   // ── 空白 vs 已答（单一真相源治本，前端落地）───────────────────────
   it('识题回收作答预填：已答题预填 student_answer，空白题留空', async () => {
-    h.recognizeSpy.mockResolvedValue({
-      questions: [
+    mockJobRecognition([
         { question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' },
         { question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' },
-      ],
-    })
+      ])
     const w = render()
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
@@ -340,12 +401,13 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('空白题走「求解」端点（不填答案、不触发批改）', async () => {
-    h.recognizeSpy.mockResolvedValue({
-      questions: [{ question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' }],
-    })
+    mockJobRecognition([{ question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' }])
     h.solveSpy.mockResolvedValue({
-      solution: '解：x=14', verdict: 'agree', evidence_type: 'numeric_exec',
-      badge: 'verified-strong', out_of_scope: false,
+      solution: '解：x=14',
+      verdict: 'agree',
+      evidence_type: 'numeric_exec',
+      badge: 'verified-strong',
+      out_of_scope: false,
     })
     const w = render()
     await setImage(w)
@@ -375,13 +437,17 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('已答题：填了作答 → 批改按钮可点，走 grade 而非 solve', async () => {
-    h.recognizeSpy.mockResolvedValue({
-      questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' }],
-    })
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' }])
     h.gradeSpy.mockResolvedValue({
-      solution: '11.4', verdict: 'disagree', evidence_type: 'numeric_exec',
-      badge: 'disagree', correct: false, wrong_step: '错位', error_cause: '对位错误',
-      out_of_scope: false, record_created: true, record_id: 'r1',
+      solution: '11.4',
+      verdict: 'disagree',
+      evidence_type: 'numeric_exec',
+      badge: 'disagree',
+      wrong_step: '错位',
+      error_cause: '对位错误',
+      out_of_scope: false,
+      record_created: true,
+      record_id: 'r1',
     })
     const w = render()
     await setImage(w)

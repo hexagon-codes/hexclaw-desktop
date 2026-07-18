@@ -11,7 +11,9 @@ import type { BBox } from '@/api/k12'
 // ③非法 bbox（越界/零框）→ 不渲染（错位防护）④叠加层可开关。
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
@@ -35,7 +37,13 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
   it('①合法 bbox：对题画绿 ✓、错题画红 ✗，并按归一化坐标定位', async () => {
     const w = render([
       { correct: true, bbox: { x: 0.1, y: 0.2, w: 0.15, h: 0.05 }, question: '3.8×3=?' },
-      { correct: false, bbox: { x: 0.3, y: 0.5, w: 0.2, h: 0.06 }, question: '25×4', correctAnswer: '100', errorCause: '进位错误' },
+      {
+        correct: false,
+        bbox: { x: 0.3, y: 0.5, w: 0.2, h: 0.06 },
+        question: '25×4',
+        correctAnswer: '100',
+        errorCause: '进位错误',
+      },
     ])
     const m0 = w.find('[data-testid="overlay-mark-0"]')
     const m1 = w.find('[data-testid="overlay-mark-1"]')
@@ -47,20 +55,26 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
     // 对绿/错红（类名区分）
     expect(m0.classes()).toContain('pg-overlay__mark--correct')
     expect(m1.classes()).toContain('pg-overlay__mark--wrong')
-    // 归一化坐标 → 百分比定位（x*100% / y*100% / w*100% / h*100%）
-    expect(m0.attributes('style')).toContain('left: 10%')
-    expect(m0.attributes('style')).toContain('top: 20%')
-    expect(m0.attributes('style')).toContain('width: 15%')
-    expect(m1.attributes('style')).toContain('left: 30%')
-    // 错题订正贴框旁
-    expect(w.find('[data-testid="overlay-fix-1"]').text()).toBe('100')
+    // bbox 是精确答案框；符号放在答案右侧并略向下居中，不再画覆盖答案的大矩形。
+    expect(m0.attributes('style')).toContain('left: 25%')
+    expect(m0.attributes('style')).toContain('top: 22%')
+    expect(m0.attributes('style')).not.toContain('width:')
+    expect(m1.attributes('style')).toContain('left: 50%')
+    // 原图只承载紧凑勾叉，订正与错因留在文字讲评区。
+    expect(w.find('[data-testid="overlay-fix-1"]').exists()).toBe(false)
     // 无降级项
     expect(w.find('[data-testid="overlay-degraded"]').exists()).toBe(false)
   })
 
   it('②bbox 缺失：不叠加定位标记，降级为文字批改', async () => {
     const w = render([
-      { correct: false, bbox: null, question: '看图说话', correctAnswer: '参考答案', errorCause: '离题' },
+      {
+        correct: false,
+        bbox: null,
+        question: '看图说话',
+        correctAnswer: '参考答案',
+        errorCause: '离题',
+      },
     ])
     // 不画错位红叉
     expect(w.find('[data-testid="overlay-mark-0"]').exists()).toBe(false)
@@ -73,7 +87,7 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
   })
 
   it('③非法 bbox（错位防护）：越界/零框/负值一律不渲染，改走降级', async () => {
-    const illegal: (BBox)[] = [
+    const illegal: BBox[] = [
       { x: 0.9, y: 0.1, w: 0.5, h: 0.1 }, // 右越界
       { x: 0.1, y: 0.1, w: 0, h: 0 }, // 零框
       { x: -0.1, y: 0.1, w: 0.2, h: 0.1 }, // 负坐标
@@ -82,7 +96,9 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
     const w = render(illegal.map((bbox, i) => ({ correct: true, bbox, question: `q${i}` })))
     // 无一渲染为定位标记
     for (let i = 0; i < illegal.length; i++) {
-      expect(w.find(`[data-testid="overlay-mark-${i}"]`).exists(), `非法 bbox[${i}] 不得叠加`).toBe(false)
+      expect(w.find(`[data-testid="overlay-mark-${i}"]`).exists(), `非法 bbox[${i}] 不得叠加`).toBe(
+        false,
+      )
       expect(w.find(`[data-testid="overlay-degraded-${i}"]`).exists()).toBe(true)
     }
   })
@@ -101,7 +117,12 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
 
   it('超出学习范围不是答错：即使有 bbox 也不画红叉，降级显示范围提示', () => {
     const w = render([
-      { correct: false, outOfScope: true, bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 }, question: '超纲题' },
+      {
+        correct: false,
+        outOfScope: true,
+        bbox: { x: 0.1, y: 0.2, w: 0.2, h: 0.05 },
+        question: '超纲题',
+      },
     ])
     expect(w.find('[data-testid="overlay-mark-0"]').exists()).toBe(false)
     const degraded = w.find('[data-testid="overlay-degraded-0"]')
@@ -111,8 +132,13 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
   })
 
   it('原图始终为底（确定性绘制，非 AI 生成图）', () => {
-    const w = render([{ correct: true, bbox: { x: 0.1, y: 0.2, w: 0.1, h: 0.05 } }], 'data:image/png;base64,ZZZ')
-    expect(w.find('[data-testid="overlay-image"]').attributes('src')).toBe('data:image/png;base64,ZZZ')
+    const w = render(
+      [{ correct: true, bbox: { x: 0.1, y: 0.2, w: 0.1, h: 0.05 } }],
+      'data:image/png;base64,ZZZ',
+    )
+    expect(w.find('[data-testid="overlay-image"]').attributes('src')).toBe(
+      'data:image/png;base64,ZZZ',
+    )
   })
 
   it('提供保存批改图按钮，不能只有临时 DOM 叠层', () => {

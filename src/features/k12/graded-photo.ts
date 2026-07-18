@@ -65,8 +65,8 @@ export function extractBriefFinalAnswer(solution?: string | null): string {
   // 行内显式答案，兼容「答案：」「最终答案是」「答：」等常见模型输出。
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = cleanAnswerMarkdown(lines[i]!)
-    const explicit = line.match(/^(?:最终)?答案\s*(?:[:：]|为|是)\s*(.+)$/)
-      ?? line.match(/^答\s*[:：]\s*(.+)$/)
+    const explicit =
+      line.match(/^(?:最终)?答案\s*(?:[:：]|为|是)\s*(.+)$/) ?? line.match(/^答\s*[:：]\s*(.+)$/)
     if (explicit) return acceptBriefAnswer(explicit[1]!)
   }
 
@@ -103,7 +103,10 @@ function loadImage(src: string): Promise<HTMLImageElement> {
  * 把批改标记真正绘入原图像素，生成可保存的 PNG。
  * 只绘制通过几何诚实门的 bbox；缺框题继续留在界面文字批改，不冒险错位落叉。
  */
-export async function renderGradedPhotoDataUrl(imageSrc: string, marks: GradedPhotoMark[]): Promise<string> {
+export async function renderGradedPhotoDataUrl(
+  imageSrc: string,
+  marks: GradedPhotoMark[],
+): Promise<string> {
   const image = await loadImage(imageSrc)
   const canvas = document.createElement('canvas')
   canvas.width = image.naturalWidth || image.width
@@ -122,27 +125,36 @@ export async function renderGradedPhotoDataUrl(imageSrc: string, marks: GradedPh
     const y = b.y * canvas.height
     const w = b.w * canvas.width
     const h = b.h * canvas.height
-    const color = mark.correct ? '#24a866' : '#e44848'
+    const strokeColor = mark.correct ? '#24a866' : '#e44848'
+    const radius = Math.min(
+      42,
+      Math.max(18, Math.round(Math.min(canvas.width, canvas.height) / 45)),
+    )
+    const cx = Math.min(canvas.width - radius - 1, Math.max(radius + 1, x + w))
+    const cy = Math.min(canvas.height - radius - 1, Math.max(radius + 1, y + h * 0.4))
 
     ctx.save()
-    ctx.lineWidth = lineWidth
-    ctx.strokeStyle = color
-    ctx.fillStyle = mark.correct ? 'rgba(36,168,102,0.10)' : 'rgba(228,72,72,0.10)'
-    ctx.fillRect(x, y, w, h)
-    ctx.strokeRect(x, y, w, h)
-
-    const fontSize = Math.max(28, Math.min(72, Math.round(Math.max(h * 0.72, lineWidth * 7))))
-    ctx.font = `800 ${fontSize}px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif`
-    ctx.textBaseline = 'top'
-    ctx.fillStyle = color
-    ctx.fillText(mark.correct ? '✓' : '✗', x + lineWidth * 1.5, y + lineWidth)
-
-    const answer = !mark.correct ? extractBriefFinalAnswer(mark.correctAnswer) : ''
-    if (answer) {
-      const answerSize = Math.max(20, Math.min(42, Math.round(fontSize * 0.52)))
-      ctx.font = `700 ${answerSize}px -apple-system, BlinkMacSystemFont, "PingFang SC", sans-serif`
-      const answerY = Math.min(canvas.height - answerSize - lineWidth, y + h + lineWidth * 2)
-      ctx.fillText(`订正：${answer}`, x, answerY, Math.max(w * 2.5, canvas.width - x - lineWidth))
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    const drawSegment = (x0: number, y0: number, x1: number, y1: number) => {
+      for (const [color, width] of [
+        ['#ffffff', lineWidth + 4],
+        [strokeColor, lineWidth],
+      ] as const) {
+        ctx.beginPath()
+        ctx.moveTo(x0, y0)
+        ctx.lineTo(x1, y1)
+        ctx.strokeStyle = color
+        ctx.lineWidth = width
+        ctx.stroke()
+      }
+    }
+    if (mark.correct) {
+      drawSegment(cx - radius * 0.75, cy, cx - radius * 0.25, cy + radius * 0.5)
+      drawSegment(cx - radius * 0.25, cy + radius * 0.5, cx + radius, cy - radius * 0.67)
+    } else {
+      drawSegment(cx - radius * 0.67, cy - radius * 0.67, cx + radius * 0.67, cy + radius * 0.67)
+      drawSegment(cx + radius * 0.67, cy - radius * 0.67, cx - radius * 0.67, cy + radius * 0.67)
     }
     ctx.restore()
   }
@@ -167,7 +179,10 @@ function dataUrlToBlob(dataUrl: string): Blob {
 }
 
 /** 桌面端走原生保存对话框；浏览器/dev 走 download 链接，供真实 E2E 验证。 */
-export async function saveGradedPhoto(imageSrc: string, marks: GradedPhotoMark[]): Promise<string | null> {
+export async function saveGradedPhoto(
+  imageSrc: string,
+  marks: GradedPhotoMark[],
+): Promise<string | null> {
   const dataUrl = await renderGradedPhotoDataUrl(imageSrc, marks)
   const filename = gradedPhotoFilename()
   if (isTauri()) return await downloadInApp(dataUrl, filename)

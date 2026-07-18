@@ -40,6 +40,8 @@ describe('未闭环补齐: 错题本导出 Markdown', () => {
       global: { plugins: [createPinia(), i18n()] },
     })
     await flushPromises()
+    // IA 迁移（2026-07-18）：导出错题项在「全部错题」档案页
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
     await w.find('.k12rec__export button').trigger('click') // 展开导出菜单
     const mdBtn = w.findAll('.k12rec__menu button').find((b) => b.text().includes('Markdown'))
     expect(mdBtn, '导出菜单应有 Markdown 项').toBeTruthy()

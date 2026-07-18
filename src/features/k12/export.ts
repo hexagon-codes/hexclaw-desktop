@@ -95,6 +95,67 @@ export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): 
   return true
 }
 
+// ── 练习卷（题目卷/答案卷）打印（§4.13 呈现物真实渲染，2026-07-18）────────
+/**
+ * 把后端渲染的练习卷 Markdown（§4.13 受控文法：# 标题 / N. 题目 / **粗体** / --- 作答线 / 普通行）
+ * 转成 A4 可打印 HTML。只处理卷面文法，不是通用 Markdown 解析器——卷面由后端唯一渲染器产出，
+ * 前端打印通道与查看弹层同源（不做第二套排版）。
+ */
+export function buildPracticePaperHtml(markdown: string, title: string): string {
+  const body = markdown
+    .split('\n')
+    .map((line) => {
+      const t = line.trim()
+      if (!t) return ''
+      if (t.startsWith('# ')) return `<h1>${esc(t.slice(2))}</h1>`
+      if (t === '---') return '<div class="ansline"></div>'
+      const inline = esc(t).replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      if (/^\d+\.\s/.test(t)) return `<p class="q">${inline}</p>`
+      if (/^第 \d+\/\d+ 页/.test(t)) return `<p class="foot">${inline}</p>`
+      return `<p>${inline}</p>`
+    })
+    .join('\n')
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<title>${esc(title)}</title>
+<style>
+  @page { size: A4; margin: 18mm 16mm 20mm; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif; color: #111; font-size: 13px; line-height: 1.7; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  .q { font-weight: 600; margin: 14px 0 4px; break-inside: avoid; page-break-inside: avoid; }
+  .ansline { height: 26px; border-bottom: 1px solid #bbb; margin: 0 0 4px; }
+  .foot { color: #999; font-size: 10px; text-align: center; margin: 18px 0; page-break-after: always; }
+  .foot:last-child { page-break-after: auto; }
+</style></head><body>${body}</body></html>`
+}
+
+/** 打印练习卷（复用错题卷打印通道：Tauri 存 HTML 走系统打开，浏览器 iframe window.print）。 */
+export async function printPracticePaper(markdown: string, title: string): Promise<boolean> {
+  if (typeof document === 'undefined') return false
+  const html = buildPracticePaperHtml(markdown, title)
+  if (isTauri()) {
+    const b64 = btoa(unescape(encodeURIComponent(html)))
+    await downloadInApp(`data:text/html;base64,${b64}`, `${title}.html`)
+    return true
+  }
+  const iframe = document.createElement('iframe')
+  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
+  document.body.appendChild(iframe)
+  const doc = iframe.contentWindow?.document
+  if (!doc) {
+    iframe.remove()
+    return false
+  }
+  doc.open()
+  doc.write(html)
+  doc.close()
+  const win = iframe.contentWindow!
+  win.focus()
+  win.print()
+  setTimeout(() => iframe.remove(), 1000)
+  return true
+}
+
 // ── 备课卡打印 ──────────────────────────────────────────────
 export interface PrepSection { title: string; content: string; source_label: string }
 export interface PrepCard { knowledge_points: string[]; sections: PrepSection[] }

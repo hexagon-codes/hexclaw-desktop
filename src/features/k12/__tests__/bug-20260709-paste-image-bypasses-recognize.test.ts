@@ -10,7 +10,7 @@
  *   ① ChatInput 新增通用 prop scenarioImageIntercept：为 true 时粘贴的图片不进附件，
  *      转为 emit('scenario-image', dataURL)（AP-1：ChatInput 零 K12 词，通用场景缝）；
  *   ② K12ChatEnhancement 新增通用 prop composerImage：收到图片 → 自动打开识题护栏
- *      并触发识题（k12Recognize 收到该图），随后 emit 清空事件供外壳复位；
+ *      并触发识题（GradingJob 创建收到该图），随后 emit 清空事件供外壳复位；
  *   ③ ChatView 把 ①② 接起来（源码接线锁：防「有 setter 无 consumer」装饰性参数，AP-194 同族）。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -26,14 +26,25 @@ import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 
 const PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgo='
 
-const { k12Recognize } = vi.hoisted(() => ({
-  k12Recognize: vi.fn().mockResolvedValue({
-    questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }],
+// 桌面入口迁移（§6.7）：composer 图片改道后触发的是统一 GradingJob 创建（携带该图）。
+const { k12CreateGradingJob, k12GetGradingJob } = vi.hoisted(() => ({
+  k12CreateGradingJob: vi.fn().mockResolvedValue({
+    created: true,
+    job: { job_id: 'job-1', stage: 'queued', retryable: false },
+  }),
+  k12GetGradingJob: vi.fn().mockResolvedValue({
+    job_id: 'job-1', stage: 'awaiting_confirmation',
+    confirmation_state: 'pending', anchor_state: 'located',
+    job: { job_id: 'job-1', stage: 'awaiting_confirmation' },
+    recognition: { questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }], subject: '' },
   }),
 }))
 
 vi.mock('@/api/k12', () => ({
-  k12Recognize,
+  k12CreateGradingJob,
+  k12GetGradingJob,
+  k12ConfirmGradingJob: vi.fn(),
+  k12RetryGradingJob: vi.fn(),
   k12Grade: vi.fn(),
   k12ColdStart: vi.fn(),
   k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
@@ -122,7 +133,7 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
       '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div>'
   })
 
-  it('★传入 composerImage → RecognizeGuardPanel 打开、k12Recognize 收到该图、emit 清空', async () => {
+  it('★传入 composerImage → RecognizeGuardPanel 打开、GradingJob 创建收到该图、emit 清空', async () => {
     const w = mount(K12ChatEnhancement, {
       props: {
         agentId: 'k12-tutor-x', agentName: '小明的辅导老师',
@@ -135,7 +146,9 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     })
     await flushPromises()
     // 识题护栏应自动打开并用该图跑识题（回显护栏出题）
-    expect(k12Recognize, 'composerImage 应触发自动识题（当前 prop 不存在/被忽略=bug）').toHaveBeenCalledWith(PNG_DATA_URL)
+    expect(k12CreateGradingJob, 'composerImage 应触发自动识题（当前 prop 不存在/被忽略=bug）').toHaveBeenCalledWith(
+      expect.objectContaining({ image_base64: PNG_DATA_URL }),
+    )
     await flushPromises()
     expect(w.find('[data-testid="rq-item"]').exists(), '识题结果应渲染回显护栏').toBe(true)
     // 消费后通知外壳清空，避免重复触发

@@ -118,7 +118,8 @@ describe('RecordList（schema 驱动通用记录视图）', () => {
   it('reviewable + reviewQueue → 渲染复习队列区', () => {
     const w = render()
     expect(w.find('.rl-review').exists()).toBe(true)
-    expect(w.text()).toContain('本周该练')
+    // 20260718 §4.11 术语统一：records.reviewQueueTitle「本周该练」→「本周复习」
+    expect(w.text()).toContain('本周复习')
   })
 
   it('状态筛选：点"完成"只显 got 记录（作用于全部列表，不影响复习队列）', async () => {

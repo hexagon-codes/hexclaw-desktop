@@ -1,10 +1,7 @@
 /**
- * 原型对齐（app.html:1598 + 设计注 1001）：全部错题 = 次级档案，默认折叠成 `<details>` 摘要，
- * 首屏让位给「本周该练」行动队列（对齐 Anki/墨墨/IXL：到期优先、档案次之）。
- *
- * 桌面端此前把 RecordList 的筛选 + 全量档案行常驻展开——与原型「点开才是全量+筛选」相悖。
- * 本文件 RED 锁：①「全部错题 (N)」是可点击折叠入口；②默认折叠（归档规则脚注 archnote 不在 DOM）；
- * ③展开后 archnote 出现、折叠 class 撤除；④「本周该练」行动卡在折叠/展开两态都常驻（不受档案折叠影响）。
+ * IA 定稿（PRD §1.5，2026-07-18 迁移）：折叠机制随旧两段 IA 退役——
+ * 「本周复习」= 行动页（只有复习行动卡，无档案行）；「全部错题」= 档案页（直接展开筛选 + 全量 + 归档脚注）。
+ * 本文件从旧「档案折叠在行动卡下方」断言改写为新五对象 Tab 拆分语义（原 bug-20260712 折叠锁已被 IA 取代）。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -62,39 +59,45 @@ function render() {
   })
 }
 
-describe('原型 app.html:1598 对齐 · 全部错题=默认折叠的次级档案', () => {
+describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠机制退役）', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('①「全部错题 (N)」是可点击折叠入口（非纯标题）', async () => {
+  it('① 默认落在「本周复习」：行动卡在、档案行不在', async () => {
     const w = render()
     await flushPromises()
-    const toggle = w.find('[data-testid="archive-toggle"]')
-    expect(toggle.exists(), '全部错题应是折叠开关按钮').toBe(true)
-    expect(toggle.text()).toContain('全部错题 (3)')
+    expect(w.find('[data-testid="week-section"]').exists()).toBe(true)
+    expect(w.find('.rl-review').exists(), '行动卡应在').toBe(true)
+    // hide-list：档案筛选与全量行不渲染
+    expect(w.find('.rl-filters').exists(), '本周复习不应有档案筛选').toBe(false)
+    expect(w.text()).not.toContain('未掌握题不会因久未练习被自动隐藏')
   })
 
-  it('② 默认折叠：归档规则脚注(archnote)不在 DOM + 折叠 class 生效', async () => {
+  it('② 切「全部错题」→ 档案页直接展开：筛选 + 全量 + 归档脚注，且无行动卡', async () => {
     const w = render()
     await flushPromises()
-    // archnote 走 v-if archiveOpen → 折叠态真不在 DOM（非仅 CSS 隐藏）
-    expect(w.text()).not.toContain('30 天没再练的会自动归档')
-    expect(w.find('.k12mistakes--collapsed').exists(), '默认应带折叠 class').toBe(true)
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    expect(w.find('[data-testid="mistakes-section"]').exists()).toBe(true)
+    expect(w.find('.rl-filters').exists(), '档案页应直接显示筛选').toBe(true)
+    // 20260718 术语快修：原型 2527 口径——未掌握题不因久未练习被自动隐藏（旧「30 天自动归档」退役）
+    expect(w.text(), '归档规则脚注应直接可见').toContain('未掌握题不会因久未练习被自动隐藏')
+    expect(w.find('.rl-review').exists(), '档案页不应有复习行动卡（hide-review）').toBe(false)
   })
 
-  it('③ 点开 → archnote 出现 + 折叠 class 撤除（点开才是全量+筛选）', async () => {
+  it('③ 旧折叠开关不复存在（archive-toggle 已随 IA 退役）', async () => {
     const w = render()
     await flushPromises()
-    await w.find('[data-testid="archive-toggle"]').trigger('click')
-    expect(w.text(), '展开后应显归档规则脚注').toContain('30 天没再练的会自动归档')
-    expect(w.find('.k12mistakes--collapsed').exists(), '展开后折叠 class 应撤除').toBe(false)
+    expect(w.find('[data-testid="archive-toggle"]').exists()).toBe(false)
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    expect(w.find('[data-testid="archive-toggle"]').exists()).toBe(false)
   })
 
-  it('④「本周该练」行动卡在折叠/展开两态都常驻（档案折叠不影响首屏行动队列）', async () => {
+  it('④ 行动卡含趋势 pill 与「查看学情」入口（学情=顶栏一等 Tab）', async () => {
     const w = render()
     await flushPromises()
-    expect(w.find('.rl-review').exists(), '折叠态行动卡应在').toBe(true)
-    expect(w.find('.rl-review').text()).toContain('本周该练')
-    await w.find('[data-testid="archive-toggle"]').trigger('click')
-    expect(w.find('.rl-review').exists(), '展开态行动卡仍应在').toBe(true)
+    expect(w.find('.rl-review').text()).toContain('本周复习')
+    const link = w.find('[data-testid="go-insights"]')
+    expect(link.exists(), '行动卡脚注应有查看学情入口').toBe(true)
+    await link.trigger('click')
+    expect(w.emitted('go-insights'), '点击应上抛 go-insights').toBeTruthy()
   })
 })

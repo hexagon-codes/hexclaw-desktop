@@ -6,6 +6,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import HcSelect from '@/components/common/HcSelect.vue'
 import K12RecordsView from '../views/K12RecordsView.vue'
+import K12InsightPanel from '../views/K12InsightPanel.vue'
 
 const h = vi.hoisted(() => {
   const mistakes = [
@@ -43,6 +44,8 @@ vi.mock('@/api/k12', () => ({
     total_records: 3, total_minutes: 45, note: '近似值',
   }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
+  // 20260718 学情第四瓷片改练习集待打印：InsightPanel 自拉 draft 篮
+  k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
 }))
 
 function i18n() {
@@ -75,14 +78,14 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(w.text()).toContain('小数乘法')
     // 复习队列（due 列表含 record a）
     expect(w.find('.rl-review').exists()).toBe(true)
-    expect(w.text()).toContain('本周该练')
+    expect(w.text()).toContain('本周复习')
   })
 
-  it('「他会了」→ 调 mark-mastered 并带正确 record_id/version', async () => {
+  it('「家长确认已会」→ 调 mark-mastered 并带正确 record_id/version', async () => {
     const w = render()
     await flushPromises()
-    // 复习队列第一行的"他会了"按钮（20260709 文案评审：按原型回「他会了」，非「已掌握」）
-    const masteredBtn = w.findAll('.rl-btn').find((b) => b.text() === '他会了')!
+    // 复习队列第一行的按钮（20260718 §4.11 信任链纠偏：家长确认 ≠ 系统已掌握，文案「家长确认已会」）
+    const masteredBtn = w.findAll('.rl-btn').find((b) => b.text() === '家长确认已会')!
     await masteredBtn.trigger('click')
     await flushPromises()
     expect(markMasteredSpy).toHaveBeenCalledWith({ agent: 'mingming', record_id: 'a', version: 0 })
@@ -107,6 +110,8 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
   it('手录错题走轻量 record-mistake 端点（非 grade 验算链），透传家长选的非默认学科', async () => {
     const w = render()
     await flushPromises()
+    // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
     await w.find('[data-testid="mistake-add-open"]').trigger('click')
 
     const subjectField = w.find('[data-testid="mistake-subject"]')
@@ -134,13 +139,13 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(w.emitted('open-backup')).toBeTruthy()
   })
 
-  it('学情 tab：真实 insight-report 驱动（薄弱 TOP3 + 连续挫败 + 建议）', async () => {
-    const w = render()
+  it('学情（顶栏一等 Tab · K12InsightPanel）：真实 insight-report 驱动（薄弱 TOP3 + 连续挫败 + 建议）', async () => {
+    // IA 迁移（2026-07-18）：学情从 RecordsView 二级 Tab 抽到 K12InsightPanel（顶栏一等）
+    const w = mount(K12InsightPanel, { props: { agentId: 'mingming' }, global: { plugins: [createPinia(), i18n()] } })
     await flushPromises()
-    await w.findAll('.seg button').find((b) => b.text() === '学情')!.trigger('click')
     expect(w.text()).toContain('薄弱知识点 TOP3')
     // 薄弱 bar 来自后端 weak_top3
-    const bars = w.findAll('.k12bar')
+    const bars = w.findAll('.k12ins__bar')
     expect(bars[0]!.text()).toContain('简易方程')
     expect(bars[0]!.text()).toContain('2')
     // 连续挫败 + 本月建议（后端派生）

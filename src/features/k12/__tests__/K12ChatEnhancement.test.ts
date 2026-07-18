@@ -13,13 +13,12 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: vi.fn(),
   k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(),
-  k12Recognize: vi.fn().mockResolvedValue({ questions: [] }),
-  k12ColdStart: vi.fn(),
+    k12ColdStart: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({ trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12GetViewDescriptor: vi.fn().mockResolvedValue({
-    header_tabs: ['辅导', '错题本'], message_badges: [], composer_placeholder: '',
+    header_tabs: ['辅导', '学习档案', '学情'], message_badges: [], composer_placeholder: '',
     composer_chips: ['🧮 数学讲解', '💡 渐进提示', '📷 识题校验'],
     record_collections: [], side_panels: [], actions: [], i18n_keys: [], schema_version: 1,
   }),
@@ -52,10 +51,10 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     document.body.innerHTML = '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
-  it('据描述符渲染头部 tab（辅导/错题本）· 头部零动作按钮（20260709：备课卡内联进识题流）', () => {
+  it('据描述符渲染头部 tab（辅导/学习档案/学情）· 头部零动作按钮（20260709：备课卡内联进识题流）', () => {
     const w = render()
     expect(w.text()).toContain('辅导')
-    expect(w.text()).toContain('错题本')
+    expect(w.text()).toContain('学习档案')
     expect(w.text()).toContain('小明的辅导老师')
     // 头部不再有「备课卡」按钮（辅导要点已内联进识题流）
     expect(w.find('.k12enh-prepbtn').exists()).toBe(false)
@@ -68,9 +67,9 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(w.find('.k12enh-records').isVisible()).toBe(false)
   })
 
-  it('切错题本 tab → emit recordsActive=true + 记录视图可见', async () => {
+  it('切学习档案 tab → emit recordsActive=true + 记录视图可见', async () => {
     const w = render()
-    const recordsTab = w.findAll('.k12enh-seg button').find((b) => b.text() === '错题本')!
+    const recordsTab = w.findAll('.k12enh-seg button').find((b) => b.text() === '学习档案')!
     await recordsTab.trigger('click')
     await flushPromises()
     const ev = w.emitted('update:recordsActive')
@@ -100,15 +99,15 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(footer.textContent).toContain('我不只会辅导')
   })
 
-  it('切错题本 tab → 备课提醒条 + 扩展桥消失', async () => {
+  it('切学习档案 tab → 备课提醒条 + 扩展桥消失', async () => {
     const w = render()
-    await w.findAll('.k12enh-seg button').find((b) => b.text() === '错题本')!.trigger('click')
+    await w.findAll('.k12enh-seg button').find((b) => b.text() === '学习档案')!.trigger('click')
     await flushPromises()
     expect(w.find('.k12enh-nudge').exists()).toBe(false)
     expect(document.getElementById('hc-chat-scenario-footer')!.querySelector('.k12enh-bridge')).toBeFalsy()
   })
 
-  it('深链 ?scenarioTab=records → 挂载即进错题本 tab', async () => {
+  it('深链 ?scenarioTab=records → 挂载即进学习档案 tab', async () => {
     routeQuery.q = { scenarioTab: 'records' }
     const w = render()
     await flushPromises()
@@ -128,7 +127,7 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
 
   it('切换实例（agentId 变）→ 回到辅导 tab（多孩结构隔离）', async () => {
     const w = render()
-    await w.findAll('.k12enh-seg button').find((b) => b.text() === '错题本')!.trigger('click')
+    await w.findAll('.k12enh-seg button').find((b) => b.text() === '学习档案')!.trigger('click')
     await w.setProps({ agentId: 'hong' })
     await flushPromises()
     const ev = w.emitted('update:recordsActive')

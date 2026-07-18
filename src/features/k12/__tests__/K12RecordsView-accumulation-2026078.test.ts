@@ -107,9 +107,10 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(form.exists()).toBe(true)
     expect(form.classes()).toContain('k12modal')
 
-    // 选学科英语、类型好词好句（学科/类型下拉走 HcSelect，D5：不再用原生 select）、填内容
+    // 选学科英语（20260718 原型定案：类型按学科分化，切英语后类型 sync 重置为「表达积累」），
+    // 再显式选「词汇积累」（学科/类型下拉走 HcSelect，D5：不再用原生 select）、填内容
     w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '英语')
-    w.findAllComponents(HcSelect)[1]!.vm.$emit('update:modelValue', '好词好句')
+    w.findAllComponents(HcSelect)[1]!.vm.$emit('update:modelValue', '词汇积累')
     await flushPromises()
     await w.find('[data-testid="accum-add-content"]').setValue('a piece of cake')
     h.listSpy.mockClear()
@@ -120,7 +121,7 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     const req = h.addSpy.mock.calls[0]![0]
     expect(req.agent).toBe('mingming')
     expect(req.subject).toBe('英语')
-    expect(req.entry_type).toBe('好词好句')
+    expect(req.entry_type).toBe('词汇积累')
     expect(req.content).toBe('a piece of cake')
     // 提交后重新拉取积累本
     expect(h.listSpy).toHaveBeenCalled()
@@ -134,6 +135,30 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await flushPromises()
     const submit = w.find('[data-testid="accum-add-submit"]')
     expect(submit.attributes('disabled')).toBeDefined()
+  })
+
+  // 引文行对齐（20260718 定案迭代 3 · 原型 #k12AccumulationList）：引文全宽首行（quote 卡形态），
+  // meta 行带收藏日期 acc-date（created_at unix 秒 → MM-DD）；旧后端无 created_at 时日期不显示。
+  it('引文行对齐：created_at → MM-DD 收藏日期 + quote 卡形态', async () => {
+    const ts = Math.floor(new Date(2026, 6, 12, 10, 0, 0).getTime() / 1000) // 本地 07-12
+    h.listSpy.mockReset().mockResolvedValue({
+      items: [
+        { record_id: 'q1', subject: '语文', entry_type: '好词好句', content: '时间像海绵里的水', source: '课外阅读', status: 'new', created_at: ts },
+        { record_id: 'q2', subject: '英语', entry_type: '表达积累', content: 'a piece of cake', status: 'new' }, // 旧后端：无 created_at
+      ],
+    })
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+
+    const rows = w.findAll('.k12accum__row--quote')
+    expect(rows.length, '积累行走引文卡形态（row--quote）').toBe(2)
+    // 引文正文全宽置首（b.k12accum__title），日期在 meta 行
+    const first = rows[0]!
+    expect(first.find('b.k12accum__title').text()).toContain('时间像海绵里的水')
+    expect(first.find('[data-testid="accum-date"]').text()).toBe('07-12')
+    // 无 created_at → 不渲染日期占位
+    expect(rows[1]!.find('[data-testid="accum-date"]').exists()).toBe(false)
   })
 
   // BUG-20260712-#2：积累行「详情」走真 handler → 打开详情弹层显内容/学科/类型（不再死按钮）。

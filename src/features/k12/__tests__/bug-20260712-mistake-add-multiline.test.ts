@@ -48,6 +48,8 @@ async function openDialog() {
     global: { plugins: [createPinia(), i18n()] },
   })
   await flushPromises()
+    // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
   await w.find('[data-testid="mistake-add-open"]').trigger('click')
   return w
 }

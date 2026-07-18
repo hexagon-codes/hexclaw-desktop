@@ -31,6 +31,9 @@ export function mistakeToRecord(dto: MistakeDTO, agentId: string, subject?: stri
       subject: subj,
       // 复习队列可混入积累本纠错项；动作层据此区分验算变式与原词重现。
       review_kind: dto.review_kind,
+      // 抽查复验（§3.6）：仅 failed 在详情呈现「家长确认（复验未过）」事实标注；
+      // scheduled 不呈现（不打抽查标签，规则 1）。schema 未声明该字段，不参与行渲染。
+      spot_check_state: dto.spot_check_state,
     },
     dueAt: dto.due_at ?? null,
     version: dto.version,
@@ -80,7 +83,7 @@ export function accumToRecord(dto: AccumDTO, agentId: string): RecordItem {
     collection: ACCUMULATION_COLLECTION,
     schemaVersion: '1',
     status: dto.status,
-    fields: { subject: dto.subject, entry_type: dto.entry_type, content: dto.content, source: dto.source ?? '' },
+    fields: { subject: dto.subject, entry_type: dto.entry_type, content: dto.content, source: dto.source ?? '', created_at: dto.created_at ? String(dto.created_at) : '' },
     version: 0,
   }
 }
@@ -128,10 +131,10 @@ export function gradeToVerify(resp: GradeResp): VerifyResult {
 export interface GradeViewResult {
   verify: VerifyResult
   solution: string
+  /** 批改判定五值口径（agree=答对/disagree=答错；布尔 correct 已随后端契约删除）。 */
   verdict: GradeResp['verdict']
   evidenceType: GradeResp['evidence_type']
   badge: GradeResp['badge']
-  correct: boolean
   wrongStep?: string
   errorCause?: string
   outOfScope: boolean
@@ -151,7 +154,6 @@ export function gradeToResult(resp: GradeResp): GradeViewResult {
     verdict: resp.verdict,
     evidenceType: resp.evidence_type,
     badge: resp.badge,
-    correct: resp.correct,
     wrongStep: resp.wrong_step,
     errorCause: resp.error_cause,
     outOfScope: resp.out_of_scope,

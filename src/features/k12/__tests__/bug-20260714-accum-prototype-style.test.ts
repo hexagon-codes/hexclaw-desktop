@@ -68,9 +68,11 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
     expect(row.find('.k12accum__source').text()).toBe('出处：课外阅读 · 主动收藏')
     expect(row.find('.k12accum__status').text()).toBe('—')
 
+    // 20260718 原型定案更新（引文列表）：引文置首整行，meta 行=学科/类型/来源/(日期)/状态/详情；
+    // 本用例 mock 无 created_at → 无日期节点。
     const ordered = row.element.children
     expect([...ordered].map((el) => el.className)).toEqual([
-      'k12accum__subject', 'k12accum__title', 'k12accum__type',
+      'k12accum__title', 'k12accum__subject', 'k12accum__type',
       'k12accum__source', 'k12accum__status k12accum__status--na', 'btn btn-ghost k12accum__detail',
     ])
   })

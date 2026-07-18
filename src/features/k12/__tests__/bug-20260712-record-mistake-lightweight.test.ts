@@ -59,6 +59,8 @@ describe('BUG-20260712 记一条错题：轻量直录，不跑对抗验算链', 
   it('提交调轻量 record-mistake 端点，绝不调 grade 验算链', async () => {
     const w = render()
     await flushPromises()
+    // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
     await w.find('[data-testid="mistake-add-open"]').trigger('click')
     w.find('[data-testid="mistake-subject"]').findComponent(HcSelect).vm.$emit('update:modelValue', '数学')
     await w.find('[data-testid="mistake-problem"]').setValue('3.8×3')
@@ -72,6 +74,8 @@ describe('BUG-20260712 记一条错题：轻量直录，不跑对抗验算链', 
   it('提交按钮文案=「记入错题本」，不再「验算…1-2 分钟」', async () => {
     const w = render()
     await flushPromises()
+    // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
     await w.find('[data-testid="mistake-add-open"]').trigger('click')
     const submit = w.find('[data-testid="mistake-submit"]')
     expect(submit.text()).toBe('记入错题本')

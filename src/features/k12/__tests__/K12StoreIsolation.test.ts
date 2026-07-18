@@ -6,7 +6,6 @@ const h = vi.hoisted(() => ({
   listMistakes: vi.fn(),
   reviewQueue: vi.fn(),
   insightReport: vi.fn(),
-  studyTime: vi.fn(),
   accumulation: vi.fn(),
   prepCard: vi.fn(),
 }))
@@ -15,13 +14,11 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: (agent: string) => h.listMistakes(agent),
   k12ReviewQueue: (agent: string) => h.reviewQueue(agent),
   k12InsightReport: (agent: string) => h.insightReport(agent),
-  k12StudyTime: (agent: string) => h.studyTime(agent),
   k12ListAccumulation: (agent: string) => h.accumulation(agent),
   k12MarkMastered: vi.fn(),
   k12PrepCard: (req: { agent: string }) => h.prepCard(req),
   k12Grade: vi.fn(),
-  k12Recognize: vi.fn(),
-  k12ColdStart: vi.fn(),
+    k12ColdStart: vi.fn(),
   k12TutorTurn: vi.fn(),
   k12BindIM: vi.fn(),
   k12ProvisionCron: vi.fn(),
@@ -77,32 +74,33 @@ describe('K12 records 多孩异步隔离', () => {
     expect(store.prepCard?.sections[0]?.title).toBe('新孩子')
   })
 
-  it('报告、学习时长、积累本乱序返回时，也只保留最后切换到的孩子', async () => {
+  // study-time 已退役（架构设计 v0.5.0《明确不做》#6）：store 不再有 studyTime/loadStudyTime。
+  it('报告、积累本乱序返回时，也只保留最后切换到的孩子', async () => {
     const oldReport = deferred<any>()
     const newReport = deferred<any>()
-    const oldTime = deferred<any>()
-    const newTime = deferred<any>()
     const oldAccum = deferred<any>()
     const newAccum = deferred<any>()
     h.insightReport.mockImplementation((agent: string) => agent === 'old-child' ? oldReport.promise : newReport.promise)
-    h.studyTime.mockImplementation((agent: string) => agent === 'old-child' ? oldTime.promise : newTime.promise)
     h.accumulation.mockImplementation((agent: string) => agent === 'old-child' ? oldAccum.promise : newAccum.promise)
     const store = useK12Store()
 
-    const oldLoads = Promise.all([store.loadReport('old-child'), store.loadStudyTime('old-child'), store.loadAccumulation('old-child')])
-    const newLoads = Promise.all([store.loadReport('new-child'), store.loadStudyTime('new-child'), store.loadAccumulation('new-child')])
+    const oldLoads = Promise.all([store.loadReport('old-child'), store.loadAccumulation('old-child')])
+    const newLoads = Promise.all([store.loadReport('new-child'), store.loadAccumulation('new-child')])
     newReport.resolve({ suggestion: '新孩子报告' })
-    newTime.resolve({ total_minutes: 20, total_records: 2, days: [], note: '新孩子时长' })
     newAccum.resolve({ items: [{ record_id: 'new-a', subject: '语文', entry_type: '好词好句', content: '新积累', status: 'new' }] })
     await newLoads
     oldReport.resolve({ suggestion: '旧孩子报告' })
-    oldTime.resolve({ total_minutes: 99, total_records: 9, days: [], note: '旧孩子时长' })
     oldAccum.resolve({ items: [{ record_id: 'old-a', subject: '语文', entry_type: '好词好句', content: '旧积累', status: 'new' }] })
     await oldLoads
 
     expect(store.report?.suggestion).toBe('新孩子报告')
-    expect(store.studyTime?.note).toBe('新孩子时长')
     expect(store.accumView?.items[0]?.fields.content).toBe('新积累')
+  })
+
+  it('反向契约：store 不再暴露 studyTime 状态与 loadStudyTime（《明确不做》#6）', () => {
+    const store = useK12Store() as unknown as Record<string, unknown>
+    expect(store.studyTime).toBeUndefined()
+    expect(store.loadStudyTime).toBeUndefined()
   })
 
   it('旧孩子积累请求延迟失败时，不污染新孩子的 error 状态', async () => {
@@ -125,38 +123,33 @@ describe('K12 records 多孩异步隔离', () => {
     h.listMistakes.mockResolvedValueOnce({ items: [oldMistake] })
     h.reviewQueue.mockResolvedValueOnce({ items: [] })
     h.insightReport.mockResolvedValueOnce({ suggestion: '旧报告' })
-    h.studyTime.mockResolvedValueOnce({ total_minutes: 99, total_records: 9, days: [], note: '旧时长' })
     h.accumulation.mockResolvedValueOnce({ items: [{ record_id: 'old-a', subject: '语文', entry_type: '好词好句', content: '旧积累', status: 'new' }] })
     const store = useK12Store()
     await Promise.all([
       store.loadMistakes('old-child'), store.loadReport('old-child'),
-      store.loadStudyTime('old-child'), store.loadAccumulation('old-child'),
+      store.loadAccumulation('old-child'),
     ])
 
     const nextAll = deferred<any>()
     const nextDue = deferred<any>()
     const nextReport = deferred<any>()
-    const nextTime = deferred<any>()
     const nextAccum = deferred<any>()
     h.listMistakes.mockReturnValueOnce(nextAll.promise)
     h.reviewQueue.mockReturnValueOnce(nextDue.promise)
     h.insightReport.mockReturnValueOnce(nextReport.promise)
-    h.studyTime.mockReturnValueOnce(nextTime.promise)
     h.accumulation.mockReturnValueOnce(nextAccum.promise)
     const pending = Promise.all([
       store.loadMistakes('new-child'), store.loadReport('new-child'),
-      store.loadStudyTime('new-child'), store.loadAccumulation('new-child'),
+      store.loadAccumulation('new-child'),
     ])
 
     expect(store.mistakeView).toBeNull()
     expect(store.report).toBeNull()
-    expect(store.studyTime).toBeNull()
     expect(store.accumView).toBeNull()
 
     nextAll.resolve({ items: [] })
     nextDue.resolve({ items: [] })
     nextReport.resolve({ suggestion: '新报告' })
-    nextTime.resolve({ total_minutes: 0, total_records: 0, days: [], note: '新时长' })
     nextAccum.resolve({ items: [] })
     await pending
   })

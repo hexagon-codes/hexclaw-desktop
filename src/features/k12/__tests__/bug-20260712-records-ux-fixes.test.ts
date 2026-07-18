@@ -45,7 +45,7 @@ function render() {
   })
 }
 
-describe('UX-1 「他会了」下放到全部错题档案行', () => {
+describe('UX-1 「家长确认已会」下放到全部错题档案行', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   function viewWith(status: string): RecordCollectionView {
@@ -56,28 +56,28 @@ describe('UX-1 「他会了」下放到全部错题档案行', () => {
     }
   }
 
-  it('未掌握档案行渲染「他会了」并 emit markMastered', async () => {
+  it('未掌握档案行渲染「家长确认已会」并 emit markMastered', async () => {
     const w = mount(RecordList, { props: { schema: MISTAKE_SCHEMA, view: viewWith('new') }, global: { plugins: [i18nInst()] } })
-    const btns = w.findAll('.rl-row .rl-btn').filter((b) => b.text().includes('他会了'))
-    expect(btns.length).toBe(1) // RED：修前档案行无「他会了」
+    const btns = w.findAll('.rl-row .rl-btn').filter((b) => b.text().includes('家长确认已会'))
+    expect(btns.length).toBe(1) // RED：修前档案行无该动作（20260718 §4.11 文案收敛「家长确认已会」）
     const masteredBtn = btns[0]
-    if (!masteredBtn) throw new Error('前置：未找到「他会了」按钮')
+    if (!masteredBtn) throw new Error('前置：未找到「家长确认已会」按钮')
     await masteredBtn.trigger('click')
     const evs = w.emitted('action') as unknown[][] | undefined
     expect(evs?.some((e) => (e[0] as { id: string }).id === 'markMastered')).toBe(true)
   })
 
-  it('已掌握档案行不再显示「他会了」（幂等）', () => {
+  it('已掌握档案行不再显示「家长确认已会」（幂等）', () => {
     const w = mount(RecordList, { props: { schema: MISTAKE_SCHEMA, view: viewWith('mastered') }, global: { plugins: [i18nInst()] } })
-    const btns = w.findAll('.rl-row .rl-btn').filter((b) => b.text().includes('他会了'))
+    const btns = w.findAll('.rl-row .rl-btn').filter((b) => b.text().includes('家长确认已会'))
     expect(btns.length).toBe(0)
   })
 })
 
-describe('UX-1 详情弹层「他会了」动作', () => {
+describe('UX-1 详情弹层「家长确认已会」动作', () => {
   beforeEach(() => { setActivePinia(createPinia()); h.retry = vi.fn(); h.markMastered = vi.fn().mockResolvedValue({ ok: true }) })
 
-  it('详情弹层含「他会了」→ 调 mark-mastered 并关弹层', async () => {
+  it('详情弹层含「家长确认已会」→ 调 mark-mastered 并关弹层', async () => {
     const w = render()
     await flushPromises()
     w.findComponent(RecordList).vm.$emit('action', {
@@ -86,7 +86,7 @@ describe('UX-1 详情弹层「他会了」动作', () => {
     })
     await flushPromises()
     const btn = w.find('[data-testid="detail-mark-mastered"]')
-    expect(btn.exists()).toBe(true) // RED：修前详情弹层无「他会了」
+    expect(btn.exists()).toBe(true) // RED：修前详情弹层无该动作
     await btn.trigger('click')
     await flushPromises()
     expect(h.markMastered).toHaveBeenCalled()

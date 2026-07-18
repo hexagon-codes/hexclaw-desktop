@@ -7,9 +7,11 @@ export default {
   templateName: '作业辅导助手',
   templateDesc: '拍照识题 · 渐进讲解 · 错题本 · 辅导要点',
 
+  // IA 定稿（PRD §1.5）：顶栏三段 辅导｜学习档案｜学情；§4.11 禁「错题本」作导航名。
   tabs: {
     chat: '辅导',
-    records: '错题本',
+    records: '学习档案',
+    insights: '学情',
   },
 
   composer: {
@@ -19,7 +21,8 @@ export default {
 
   emptyState: {
     title: '拍张作业照片，我陪你一起辅导',
-    subtitle: '拍张作业照片，或直接问我这道题怎么给孩子讲——每步讲法都标注依据（📖课本 / ✅已验算），不怕教错。',
+    subtitle:
+      '拍张作业照片，或直接问我这道题怎么给孩子讲——每步讲法都标注依据（📖课本 / ✅已验算），不怕教错。',
   },
 
   collections: {
@@ -53,22 +56,34 @@ export default {
     trendUp: '趋势 ↑ 在进步',
     trendFlat: '趋势 → 待巩固',
     allMistakes: '全部错题',
-    weeklyHook: '每周五 19:00 自动出下一卷 · 做对会自动升级状态',
-    genWorksheet: '一键出复习卷',
+    archiveDesc: '题目档案只负责查找与管理；复习行动在“本周复习”，组好的题在“练习集”。',
+    viewInsights: '查看学情',
+    weeklyHook: '每周五 19:00 自动加入练习集 · 只有验证通过的题目会进入打印版本',
+    genWorksheet: '生成复习卷',
     worksheetTitle: '复习卷',
     customPaper: '自定义组卷',
-    stateMachineHint: '复习做对会自动升级状态，30 天没再练的会自动归档。',
+    // 原型 2527 口径：未掌握题不因久未练习被自动隐藏（旧「30 天自动归档」是错误宣称）
+    stateMachineHint: '未掌握题不会因久未练习被自动隐藏；按学期归档或由家长手动归档。',
     retryTitle: '再练一道（同知识点变式题）',
     retryLoading: '正在生成变式题并验算…（约 1 分钟）',
-    retryFailed: '生成变式题超时或网络中断——出题需程序验算约 1 分钟，请重试。若用本地模型较慢，可在设置切换到更快的云端模型。',
+    retryFailed:
+      '生成变式题超时或网络中断——出题需程序验算约 1 分钟，请重试。若用本地模型较慢，可在设置切换到更快的云端模型。',
     retryRetryBtn: '重试',
     retryMaskHint: '答案供家长核对，先别给孩子看——让他自己做完再对。',
     retryReveal: '显示答案（家长核对）',
     retryCopy: '复制题目与解答',
+    addToBasket: '加入练习集',
+    basketAddedBtn: '已加入待打印',
+    basketAdded: '已加入待打印 · 打印时随卷固化',
+    basketDuplicate: '这道题已在待打印中（重复加入自动去重）',
     retryCopied: '题目与解答已复制（保留 Markdown 格式）',
     retryCopyFailed: '复制失败，请重试',
-    masteredToast: '已掌握 ✓ · 移出复习队列',
-    dividerRule: '做错了要改 → 进「错题」（数理化题 + 语英听写/默写/语法改错，跨科按到期混排走复习）；遇到好东西要记住 → 进「积累」（好词好句/古诗/收藏，无复习）。语英字词再练走原词重现·确定性字符比对，数理化走 solve 验算链；作文只留档进报告、不进复习队列。',
+    // 组卷装篮批量结果（§3.8：生成复习卷/自定义组卷 → 待打印，幂等去重）
+    basketBatchAdded: '已加入练习集 {n} 道（去重 {m}）',
+    // §4.11 信任链：家长确认 ≠ 系统已掌握——toast 不得宣称「已掌握」（后端语义拆分另包，此处先守文案）
+    masteredToast: '家长已确认 · 系统掌握证据另行积累',
+    dividerRule:
+      '做错了要改 → 进「错题」（数理化题 + 语英听写/默写/语法改错，跨科按到期混排走复习）；遇到好东西要记住 → 进「积累」（好词好句/古诗/收藏，无复习）。语英字词再练走原词重现·确定性字符比对，数理化走 solve 验算链；作文只留档进报告、不进复习队列。',
   },
 
   // 项-5：空态设计（正向、家长向——传递"井井有条/孩子跟上了"，不是"暂无数据"）
@@ -77,6 +92,9 @@ export default {
     sub: '错题都在复习计划里，稳步消化中',
     nextReview: '下次复习 · {date}',
     practice: '提前练一练',
+    // §3.6 本周清零庆祝态（原型 k12WeekClearState）：清零是一周唯一的正反馈时刻
+    clearedTitle: '本周清零！',
+    clearedSub: '全部待复习题已处理完 · 下次出卷：周五 19:00',
   },
   emptyAccum: {
     title: '积累本还空着',
@@ -92,8 +110,12 @@ export default {
     knowledgePoint: '知识点',
     errorCause: '错因',
     noErrorCause: '（暂无错因记录）',
-    footnote: '在上方列表点「再练」出同知识点变式题；点「他会了」移出复习队列。',
-    alreadyMastered: '已掌握 ✓',
+    // 抽查复验（§3.6 规则 3/4）：事实标注 + 温和话术——不否定家长判断，只补齐证据
+    spotCheckFailed: '家长确认（复验未过）',
+    spotCheckFailedHint: '这道再一起巩固一次，做对了会自动销账',
+    footnote: '在上方列表点「再练」出同知识点变式题；点「家长确认已会」移出复习队列。',
+    // §4.11：家长确认已会 ≠ 系统已掌握——徽标按家长确认口径呈现
+    alreadyMastered: '家长确认已会 ✓',
     delete: '删除这条错题',
     deleteHint: '用于移除记错的 / 重复的条目——不是为了跳过难题。',
     deleteConfirmTitle: '删除这条错题？',
@@ -114,7 +136,10 @@ export default {
     exists: '这道题已在错题本中',
   },
   customPaper: {
-    hint: '「一键出复习卷」已按智能默认组好（覆盖本周待复习 · 每题 1 道变式 · 连续错的自动 2 道）。想微调再用这里。',
+    hint: '「生成复习卷」已按智能默认组好（覆盖本周待复习 · 每题 1 道变式 · 连续错的自动 2 道）。想微调再用这里；结果同样加入练习集待打印，不产出平行卷子。',
+    scope: '范围',
+    scopeWeek: '本周待复习',
+    scopeUnmastered: '全部未掌握',
     perQ: '每题几道变式',
     difficulty: '难度',
     diffSame: '同档',
@@ -122,8 +147,7 @@ export default {
     diffHarder: '略升 · 拔高',
     total: '总题量',
     totalAll: '全部',
-    generate: '生成并打印（A4）',
-    generated: '已按自定义参数生成复习卷（A4）· 出题已过验算链',
+    generate: '加入练习集',
   },
 
   actions: {
@@ -134,10 +158,120 @@ export default {
     tutor: '💬 辅导',
   },
 
+  // 学习档案五对象（PRD §1.5）：本周复习(行动)｜全部错题(档案)｜练习集｜积累｜作品。学情=顶栏一等 Tab。
   subTabs: {
-    mistakes: '错题',
+    week: '本周复习',
+    mistakes: '全部错题',
+    practiceSets: '练习集',
     accumulation: '积累',
-    insight: '学情',
+    works: '作品',
+  },
+  // 购物车模型（§3.8 2026-07-18 收敛）：练习集 = 待打印篮 + 打印历史；打印/发送即确认固化。
+  practice: {
+    title: '练习集',
+    basketTitle: '待打印',
+    basketMeta: '每周五 19:00 自动加入 · 也可从错题“再练一道”逐题加入 · 重复加入自动去重',
+    basketHint: '打印或发送即确认 · 固化后待打印清空、卷子进入下方历史',
+    basketEmpty: '待打印已清空 · 从错题“再练一道”、本周复习“生成复习卷”里加题。',
+    historyTitle: '打印历史',
+    historyDesc: '打印过的卷 · 完成后拍照回传自动复批；卷面号印在纸质卷页眉/页脚用于回传关联。',
+    historyEmpty: '还没有打印过的卷；待打印的题打印或发送后会出现在这里。',
+    blockedGroup: '已阻断 · 暂不支持组卷，打印时跳过',
+    remove: '移除',
+    removeTitle: '移出待打印，不影响错题与复习安排',
+    publishBlocked: '还没有已验证的题，不能出卷',
+    print: '打印题目卷',
+    assign: '发送到…',
+    willSkip: '{n} 道阻断题打印时跳过',
+    skipped: '已跳过 {n} 道未验证题',
+    submit: '回传作答',
+    grade: '复批',
+    close: '关闭本卷',
+    cancel: '取消',
+    verified: '已验证',
+    blocked: '已阻断',
+    pendingVerify: '待验证',
+    itemCount: '{n} 道',
+    loadError: '练习集加载失败',
+    // 题目卷/答案卷真实渲染（§4.13，2026-07-18）
+    paperQuestion: '题目卷',
+    paperAnswer: '答案卷',
+    paperPreview: '预览题目卷',
+    paperPreviewTitle: '看看打印出来是什么样 · 未验证的题不会出现在卷上',
+    paperPreviewTag: '预览 · 未打印',
+    paperLoading: '正在生成卷面…',
+    paperLoadError: '卷面加载失败',
+    paperPrint: '打印',
+    paperClose: '关闭',
+  },
+  works: {
+    title: '作品',
+    desc: '作文和画作的成长档案 · 保留原稿与每次修改 · 只给具体点评，不打分不代写',
+    empty: '还没有作品——添加一篇语文写作或一张美术作品，这里会保留原稿、点评和历次版本。',
+    writing: '语文写作',
+    art: '美术作品',
+    addFeedback: '写点评',
+    submitRevision: '提交修改稿',
+    archive: '归档',
+    versionCount: '版',
+    loadError: '作品加载失败',
+    // 添加作品弹窗（原型 5326-5361）
+    addWork: '＋ 添加作品',
+    addModalTitle: '添加作品',
+    typeLabel: '作品类型',
+    nameLabel: '作品名称',
+    namePlaceholder: '例如：《春天的校园》',
+    taskLabelWriting: '题目 / 写作要求',
+    taskLabelArt: '创作任务',
+    taskPlaceholder: '简要写下题目或要求',
+    draftLabel: '原稿文字',
+    draftPlaceholder: '粘贴孩子的原稿全文（保留原样，不代改）',
+    intentLabel: '创作意图',
+    intentPlaceholder: '孩子最想表现什么（可先留空，之后补充）',
+    photoLabel: '作品照片',
+    photoPending: '照片上传待接线——先用文字保存，资产服务就绪后可补图',
+    save: '保存到作品档案',
+    cancel: '取消',
+    created: '已保存 · 待点评',
+    // 作品页 KPI + 点评规则（原型 2570-2586）
+    kpiTotal: '全部作品',
+    kpiReviewed: '已点评',
+    kpiPending: '待点评',
+    rulesTitle: '点评规则',
+    rulesBody:
+      '语文写作：比对题目要求、原稿与修改稿；美术：只描述画面中可见的构图、色彩与表达。每次只给 1～3 条能落实的建议，不替孩子完成作品。',
+    aiPendingNote: 'AI 生成点评待接线（后端 Skill）——现阶段由家长手写点评',
+    // 点评联动出口（§3.10）：好句入积累 / 确认错处入错题
+    toAccum: '好句加入积累',
+    accumPlaceholder: '粘贴值得积累的好句',
+    accumSaved: '好句已加入积累 · 保留作品来源',
+    toMistake: '确认并记入错题',
+    mistakePlaceholder: '写下已确认的错处（如「轻轻的吹」用字）',
+    mistakeSaved: '已记入错题 · 作品仍保留在成长档案',
+    confirm: '确认',
+    // 作品照片真实上传（任务1：最小资产服务）
+    photoChoose: '拖放或点击选择照片（png/jpg，10MB 内）',
+    photoUploading: '上传中',
+    photoUploaded: '已上传 · 照片仅保存在本机',
+    photoFailed: '上传失败',
+    photoRetry: '重试',
+    photoRemove: '移除照片',
+    photoNotImage: '只支持图片文件（png/jpg 等）',
+    photoTooLarge: '照片超过 10MB，请压缩后再传',
+    photoHint: '照片仅保存在本机，删除档案即彻底清除',
+    // 发送到手机（任务3，§3.10/§3.12）
+    sendFeedback: '发送点评要点',
+    sendOk: '已发送到 {target}',
+    sendFallbackCopied: '文本已复制，可粘贴到聊天里发给家长',
+    // 观察练习卡（任务2，§3.10 美术）
+    practiceCardTitle: '观察小练习',
+    practiceCardPrint: '打印练习卡',
+    practiceCardSend: '发送到手机',
+    practiceCardMarkDone: '完成打卡',
+    practiceCardDoneAt: '已完成打卡 · 记录保留在作品档案',
+    practiceCardDoneOk: '已记下这次练习 ✓',
+    practiceCardHint: '来自这次点评 · 归档在该作品详情；不进入错题与练习集',
+    printFailed: '打印没有成功，请重试',
   },
   accumulationEmpty: '积累本还没有内容——语文/英语的好词好句、易错词会沉淀在这里。',
   accum: {
@@ -155,6 +289,10 @@ export default {
     submit: '记下',
     cancel: '取消',
     added: '已记入积累本',
+    // §3.9 检验出口（原型积累详情三出口之一）：复制/发送=素材取用，默写题=进自动复批闭环
+    dictationToBasket: '生成默写题，加入练习集',
+    dictationAdded: '已加入练习集',
+    dictationHint: '想检验记没记住？生成默写题加入练习集——打印回传可自动批改。',
   },
 
   settingsBackup: {
@@ -163,28 +301,23 @@ export default {
     empty: '还没有孩子档案——先在「智能体 → 模板库」建档，之后这里可整档备份 / 恢复。',
   },
   report: {
-    title: '学情报告',
-    monthlyNote: '每月 1 日自动生成 · 同步推送到你的机器人会话',
+    // 原型 2613：学情=学习概览（路由器），月报标题口径退役；有年级时用 titleWithGrade
+    title: '学习概览',
+    titleWithGrade: '{grade}学习概览',
+    monthlyNote: '从真实批改与复练证据生成 · 给出当前可执行的下一步',
     weakTop3: '薄弱知识点 TOP3',
     consecutiveFail: '连续挫败提示',
     suggestion: '本月建议',
     empty: '本月还没有足够数据生成报告。',
     semesterTotal: '本学期错题共 {n} 条',
     semesterStatus: '已掌握 {m} · 待复习 {r} · 已重做 {d}',
+    goWeek: '去本周复习 ›',
     tiles: {
-      tutorCount: '本月辅导（一题多轮计 1 次）',
+      mastered: '证据已掌握（复练确认）',
       newMistakes: '新增错题',
       reviewRate: '复习完成率',
-      masteredTodo: '已掌握 · 待复习',
+      practicePending: '练习集待打印',
     },
-  },
-  duration: {
-    title: '学习时长',
-    note: '按实际辅导时长统计 · 仅供家长了解投入，不用于考核',
-    day: '日',
-    week: '周',
-    month: '月',
-    empty: '这段时间没有辅导记录（空态不显示 0）。',
   },
 
   profile: {
@@ -195,12 +328,14 @@ export default {
     grade: '年级 · 学期',
     textbook: '教材版本',
     skillsLabel: '自带技能',
-    skills: '📷 拍照识题 · 💡 渐进讲解 · 📕 错题本 · 📋 辅导要点 · 🧮 数·语·英·物·化',
+    // v0.5.0 学科口径（PRD §1.3）：数·语·英·科学·信息科技·美术（物理化学退出当前 UI 名称）
+    skills: '📷 拍照识题 · 💡 渐进讲解 · 📕 错题本 · 📋 辅导要点 · 🧮 数·语·英·科学·信息科技·美术',
     modelAdvanced: '模型 · 默认已配好强推理模型，可不管',
     providerLabel: '服务商',
     modelLabel: '模型',
     modelNote: '默认已配好强推理模型，可不管',
-    twoChildHint: '二孩？回到模板库再实例化一份，各绑各的群——档案、错题、记忆天然隔离，不需要任何"切换"。',
+    twoChildHint:
+      '二孩？回到模板库再实例化一份，各绑各的群——档案、错题、记忆天然隔离，不需要任何"切换"。',
     autoName: '{child}的辅导助手 · {grade}',
     cardDesc: '{textbook} · {grade} · 按年级边界讲解',
     create: '创建',
@@ -210,14 +345,17 @@ export default {
     editTitle: '孩子档案 · {name}',
     save: '保存',
     saved: '档案已更新 · 讲题范围已切换',
-    editNote: '升学只改这里，讲题边界 / 识题校验 / 备课卡全线即时跟随；历史错题不回溯修改。每年 3/1、9/1 会自动提醒确认新学期（不会擅自变更）。',
+    editNote:
+      '升学只改这里，讲题边界 / 识题校验 / 备课卡全线即时跟随；历史错题不回溯修改。每年 3/1、9/1 会自动提醒确认新学期（不会擅自变更）。',
     edit: '编辑档案',
     advancedSkills: '高级 · 辅导助手的技能（已配好，可微调）',
     requiredTag: '必备',
     delete: '删除档案',
-    deleteConfirm: '确认删除？错题本一并清除',
+    deleteConfirm: '确认删除？学习档案将一并清除，不可恢复',
     deleted: '已删除「{name}」',
   },
+  // 键名 physics/chemistry 是历史 skill ID（manifest.ts 他会话活跃禁改）；
+  // 译名按 v0.5.0 学科口径（PRD §1.3 / §4.11）：科学、信息科技。
   manifest: {
     pedagogy: '教学法（渐进提示·不直接给答案）',
     homework: '拍照识题·分题批改',
@@ -226,8 +364,8 @@ export default {
     english: '英语辅导',
     concept: '知识点讲解',
     exercise: '出题·变式·复习卷',
-    physics: '物理辅导（初中）',
-    chemistry: '化学辅导（初中）',
+    physics: '科学辅导',
+    chemistry: '信息科技辅导',
   },
 
   backup: {
@@ -237,10 +375,12 @@ export default {
     exportBtn: '一键导出归档',
     restoreLabel: '恢复',
     dropHint: '拖放 .hexbak 归档到此处',
-    previewCount: '本地预览：归档含 {count} 条记录（来源：{source}；当前目标：{target}）。确认后由服务端校验并恢复。',
+    previewCount:
+      '本地预览：归档含 {count} 条记录（来源：{source}；当前目标：{target}）。确认后由服务端校验并恢复。',
     restored: '已恢复 {count} 条记录 · 校验通过（幂等合并）',
     restorePending: '记录已校验；合并到本地将在引擎支持后生效。',
-    targetMismatch: '归档属于「{source}」，当前档案是「{target}」。现有恢复接口不支持安全改写目标，请切换到原档案后恢复。',
+    targetMismatch:
+      '归档属于「{source}」，当前档案是「{target}」。现有恢复接口不支持安全改写目标，请切换到原档案后恢复。',
     confirmRestore: '确认恢复',
     restoring: '正在恢复…',
     snapshotReady: '已保留服务端返回的恢复前快照',
@@ -279,12 +419,14 @@ export default {
     groundingFailed: '教材上传失败，请检查文件内容或稍后重试',
     print: '打印（A4）',
     close: '关闭',
-    legend: '📖 依据课本＝检索你上传的教材原文 · 🗂 本地记录 · ✅ 程序验算 · 🤖 AI 归纳·供参考＝未上传教材时降级为 AI 生成、按孩子年级讲法，仅供参考请自行核对。',
+    legend:
+      '📖 依据课本＝检索你上传的教材原文 · 🗂 本地记录 · ✅ 程序验算 · 🤖 AI 归纳·供参考＝未上传教材时降级为 AI 生成、按孩子年级讲法，仅供参考请自行核对。',
     nudge: '今晚要辅导什么？先花 3 分钟备课——我结合孩子的错题与学情，给你一页「怎么教」。',
     startPrep: '开始备课',
     copied: '已复制备课卡，粘贴即可发到手机',
     copyFailed: '复制失败，请重试',
-    generateFailed: '辅导要点生成失败：模型响应超时或网络中断，请重试。本地模型较慢，可在设置里切换到更快的云端模型。',
+    generateFailed:
+      '辅导要点生成失败：模型响应超时或网络中断，请重试。本地模型较慢，可在设置里切换到更快的云端模型。',
   },
   recognize: {
     title: '拍照识题 · 回显护栏',
@@ -310,16 +452,23 @@ export default {
     solving: '解题中…',
     solveFailed: '解题超时或网络中断，请重试；若用本地模型较慢，可在设置切换云端模型。',
     blankHint: '这道还没作答——点「求解 · 怎么讲」看解法，或填上孩子的作答再批改。',
-    unclearAnswerHint: '检测到这里有书写，但答案没读清——请补录孩子的作答后再批改，不会把它当空白题代答。',
+    unclearAnswerHint:
+      '检测到这里有书写，但答案没读清——请补录孩子的作答后再批改，不会把它当空白题代答。',
     unclearAnswerCount: '有 {count} 题检测到书写但未读清，请补录后批改',
+    anchoring: '题目已识别，可先核对；正在后台定位作答位置…',
+    anchorFailed: '题目已识别，但作答位置未能可靠定位；批改仍可继续，图片将降级为文字结果。',
+    jobFailed: '拍照批改任务失败或超时，请重试；若用本地模型较慢，可在设置切换云端模型。',
     recorded: '已存入错题本',
     recordDeduplicated: '已有相同记录，本次未重复新增',
+    correctExpand: '展开解法',
+    correctCollapse: '收起',
     solution: '参考解法',
     wrongStep: '出错步骤',
     errorCause: '错因',
     coldStartInfer: '🧭 AI 据这些知识点推断年级并建档',
     coldStartInferring: '正在倒查课标推断年级…',
-    coldStartHint: '这个孩子还没设年级——我可以据识出的知识点倒查课标、推断该在几年级，建好档后讲题就有边界。',
+    coldStartHint:
+      '这个孩子还没设年级——我可以据识出的知识点倒查课标、推断该在几年级，建好档后讲题就有边界。',
     coldStartInferred: '已据知识点推断为「{grade}」并建档，可在档案里随时修改。',
     coldStartFallback: '知识点不足以推断年级，用了兜底「{grade}」——建议手动到档案确认。',
     err: '识题失败',

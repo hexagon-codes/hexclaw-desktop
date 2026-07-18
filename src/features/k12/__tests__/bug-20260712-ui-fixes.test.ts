@@ -15,8 +15,7 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 //     原 CSS 断言随功能删除而废止；防复活回归锁见 channels/__tests__/removal-chat-route-session-routing.test.ts
 
 vi.mock('@/api/k12', () => ({
-  k12Recognize: vi.fn().mockResolvedValue({ questions: [] }),
-  k12Grade: vi.fn(), k12ColdStart: vi.fn(), k12TutorTurn: vi.fn(),
+    k12Grade: vi.fn(), k12ColdStart: vi.fn(), k12TutorTurn: vi.fn(),
   k12BindIM: vi.fn(), k12ProvisionCron: vi.fn(),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),

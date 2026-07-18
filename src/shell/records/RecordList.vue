@@ -13,6 +13,10 @@ import type { RecordSchema, RecordItem, RecordCollectionView, RecordFieldSpec } 
 const props = defineProps<{
   schema: RecordSchema
   view: RecordCollectionView
+  /** 只显示档案列表（隐藏复习行动区）——供「行动页/档案页」拆分 Tab 复用（中性展示开关，无业务语义） */
+  hideReview?: boolean
+  /** 只显示复习行动区（隐藏档案列表与筛选） */
+  hideList?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -73,7 +77,7 @@ const reviewItems = computed(() => {
 <template>
   <div class="record-list">
     <!-- 复习队列（reviewable 集合才有；场景专属动作经 slot 注入） -->
-    <section v-if="reviewItems.length" class="rl-review">
+    <section v-if="!hideReview && reviewItems.length" class="rl-review">
       <header class="rl-review__head">
         <!-- 20260709 视觉评审：功能位 emoji → 单色描边图标（emoji 保留给身份/语义徽章位） -->
         <b class="rl-review__title"><svg class="rl-ic" viewBox="0 0 24 24"><path d="M4 22V4c0-.6.4-1 1-1h9.5l-.8 3.2c-.1.5.2.8.7.8H20l-2 6h-7" /></svg>{{ t('records.reviewQueueTitle') }} · {{ t('records.reviewQueueCount', { count: reviewItems.length }) }}</b>
@@ -101,10 +105,10 @@ const reviewItems = computed(() => {
     </section>
 
     <!-- 档案区标题注入缝（原型 c8a194e：「全部错题 (N)」——文案由场景层给，shell 零领域词） -->
-    <div v-if="$slots['list-title']" class="rl-list-title"><slot name="list-title" :count="view.items.length" /></div>
+    <div v-if="!hideList && $slots['list-title']" class="rl-list-title"><slot name="list-title" :count="view.items.length" /></div>
 
     <!-- 状态筛选 -->
-    <div v-if="schema.states?.length" class="rl-filters">
+    <div v-if="!hideList && schema.states?.length" class="rl-filters">
       <button class="rl-tag" :class="{ on: activeFilter === 'all' }" @click="activeFilter = 'all'">
         {{ t('records.all') }}
       </button>
@@ -120,8 +124,8 @@ const reviewItems = computed(() => {
     </div>
 
     <!-- 全部记录 -->
-    <p v-if="!filteredItems.length" class="rl-empty">{{ t('records.empty') }}</p>
-    <div v-else class="rl-rows">
+    <p v-if="!hideList && !filteredItems.length" class="rl-empty">{{ t('records.empty') }}</p>
+    <div v-else-if="!hideList" class="rl-rows">
       <div v-for="item in filteredItems" :key="item.recordId" class="rl-row">
         <span v-if="dateField" class="rl-date">{{ fieldValue(item, dateField) }}</span>
         <b class="rl-title">{{ fieldValue(item, titleField) }}</b>

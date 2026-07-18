@@ -27,13 +27,24 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: vi.fn(),
   k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(),
-  k12Recognize: vi.fn().mockResolvedValue({ questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }] }),
+  k12CreateGradingJob: vi.fn().mockResolvedValue({
+    created: true,
+    job: { job_id: 'job-1', stage: 'queued', retryable: false },
+  }),
+  k12GetGradingJob: vi.fn().mockResolvedValue({
+    job_id: 'job-1', stage: 'awaiting_confirmation',
+    confirmation_state: 'pending', anchor_state: 'located',
+    job: { job_id: 'job-1', stage: 'awaiting_confirmation' },
+    recognition: { questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }], subject: '' },
+  }),
+  k12ConfirmGradingJob: vi.fn(),
+  k12RetryGradingJob: vi.fn(),
   k12ColdStart: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({ trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12GetViewDescriptor: vi.fn().mockResolvedValue({
-    header_tabs: ['辅导', '错题本'], message_badges: [], composer_placeholder: '',
+    header_tabs: ['辅导', '学习档案', '学情'], message_badges: [], composer_placeholder: '',
     composer_chips: [], record_collections: [], side_panels: [], actions: [], i18n_keys: [], schema_version: 1,
   }),
 }))
@@ -124,9 +135,9 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
     document.body.innerHTML = '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
-  it('★识题后切 records 再切回 chat：结果仍在、k12Recognize 只调用一次（真机取证：曾重新「正在识题分题」）', async () => {
-    const { k12Recognize } = await import('@/api/k12')
-    const recognizeMock = k12Recognize as unknown as ReturnType<typeof vi.fn>
+  it('★识题后切 records 再切回 chat：结果仍在、GradingJob 只创建一次（真机取证：曾重新「正在识题分题」）', async () => {
+    const { k12CreateGradingJob } = await import('@/api/k12')
+    const recognizeMock = k12CreateGradingJob as unknown as ReturnType<typeof vi.fn>
     recognizeMock.mockClear()
 
     const w = renderEnh()
@@ -136,7 +147,7 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
     expect(recognizeMock).toHaveBeenCalledTimes(1)
 
     // 切错题本 tab → 面板隐藏但**不销毁**（v-show 保活；v-if 销毁会导致重挂载重识题 + prep-card fetch abort）
-    await w.findAll('.k12enh-seg button').find((b) => b.text() === '错题本')!.trigger('click')
+    await w.findAll('.k12enh-seg button').find((b) => b.text() === '学习档案')!.trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="recognize-guard"]').isVisible()).toBe(false)
 

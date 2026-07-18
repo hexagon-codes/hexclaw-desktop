@@ -2,7 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 const h = vi.hoisted(() => ({
-  recognizeSpy: vi.fn(),
+  createJobSpy: vi.fn(),
+  getJobSpy: vi.fn(),
+  confirmJobSpy: vi.fn(),
+  retryJobSpy: vi.fn(),
   tutorTurnSpy: vi.fn(),
   bindSpy: vi.fn(),
   provisionSpy: vi.fn(),
@@ -18,7 +21,10 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
   k12ListAccumulation: vi.fn(),
-  k12Recognize: (img: string) => h.recognizeSpy(img),
+  k12CreateGradingJob: (r: unknown) => h.createJobSpy(r),
+  k12GetGradingJob: (...args: unknown[]) => h.getJobSpy(...args),
+  k12ConfirmGradingJob: (...args: unknown[]) => h.confirmJobSpy(...args),
+  k12RetryGradingJob: (...args: unknown[]) => h.retryJobSpy(...args),
   k12TutorTurn: (r: unknown) => h.tutorTurnSpy(r),
   k12BindIM: (r: unknown) => h.bindSpy(r),
   k12ProvisionCron: (r: unknown) => h.provisionSpy(r),
@@ -32,14 +38,34 @@ describe('K12 store · 自动化/入站接线', () => {
     Object.values(h).forEach((s) => s.mockReset())
   })
 
-  it('recognize 透传题目清单 + 整卷学科', async () => {
-    h.recognizeSpy.mockResolvedValue({ questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }], subject: '数学' })
+  it('recognizePhotoJob：创建 Job → 轮询到确认停点，回传题目清单 + 整卷学科（桌面入口迁移 §6.7）', async () => {
+    h.createJobSpy.mockResolvedValue({
+      created: true,
+      job: { job_id: 'job-1', stage: 'queued', retryable: false },
+    })
+    h.getJobSpy.mockResolvedValue({
+      job_id: 'job-1',
+      stage: 'awaiting_confirmation',
+      confirmation_state: 'pending',
+      anchor_state: 'located',
+      job: { job_id: 'job-1', stage: 'awaiting_confirmation' },
+      recognition: { questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }], subject: '数学' },
+    })
     const store = useK12Store()
-    const res = await store.recognize('data:image/png;base64,AAAA')
-    expect(h.recognizeSpy).toHaveBeenCalledWith('data:image/png;base64,AAAA')
+    const res = await store.recognizePhotoJob('mingming', 'data:image/png;base64,AAAA')
+    const createReq = h.createJobSpy.mock.calls[0]![0] as Record<string, unknown>
+    expect(createReq.agent).toBe('mingming')
+    expect(createReq.image_base64).toBe('data:image/png;base64,AAAA')
+    expect(createReq.source_kind).toBe('desktop')
+    // §4.10 统一幂等键：同（agent, 照片）派生稳定 source_key，同图重投命中同一 Job。
+    expect(createReq.source_key).toBeTruthy()
+    expect(res.jobId).toBe('job-1')
     expect(res.questions[0]?.question).toBe('3.8×3')
-    // Polish-2：整卷学科随识题响应回传（供护栏预填学科下拉）
+    // Polish-2：整卷学科随停点识别产物回传（供护栏预填学科下拉）
     expect(res.subject).toBe('数学')
+    expect(res.anchorState).toBe('located')
+    // 未命中失败 Job：不触发 retry
+    expect(h.retryJobSpy).not.toHaveBeenCalled()
   })
 
   it('tutorTurn 透传分阶段响应', async () => {

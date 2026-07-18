@@ -6,6 +6,7 @@
  * 错误响应统一 {error: string}（语言不保证），由 client.ts normalizeApiError 提到 e.message。
  */
 import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
+import { env } from '@/config/env'
 
 const BASE = '/api/k12'
 
@@ -39,8 +40,9 @@ export interface GradeReq {
   knowledge_points?: string[]
 }
 
-/** verdict：engine 只产 agree/disagree/unverifiable；out_of_scope 走独立布尔字段 */
-export type GradeVerdict = 'agree' | 'disagree' | 'unverifiable' | 'out_of_scope'
+/** verdict 判定五值（§4.5 布尔 correct 已删除）：批改路径 = 批改判定（agree=答对 /
+ *  disagree=答错）；解题分叉/超纲沿用验算/超纲结论；verbatim = 语英原词重现确定性比对。 */
+export type GradeVerdict = 'agree' | 'disagree' | 'unverifiable' | 'out_of_scope' | 'verbatim'
 /** 徽章枚举（后端 usecase/evidence.go Badge()） */
 export type GradeBadge =
   | 'verified-strong'
@@ -57,10 +59,10 @@ export type EvidenceType =
 
 export interface GradeResp {
   solution: string
+  /** 批改判定五值口径（agree=答对/disagree=答错）；布尔 correct 字段已随后端契约删除。 */
   verdict: GradeVerdict
   evidence_type: EvidenceType
   badge: GradeBadge
-  correct: boolean
   wrong_step?: string
   error_cause?: string
   out_of_scope: boolean
@@ -68,7 +70,7 @@ export interface GradeResp {
   record_created: boolean
   record_id?: string
   /** true = student_answer 为空，后端内部转「解题」分叉（非批改）：只给 solution，
-   *  correct/record 无意义。前端应按解题口径呈现，不显对/错、不显入本。 */
+   *  无批改判定与入库。前端应按解题口径呈现，不显对/错、不显入本。 */
   solve_only?: boolean
 }
 
@@ -142,6 +144,9 @@ export interface MistakeDTO {
   subject?: string
   /** 再练方式：verify=验算链变式（数理化）/ verbatim=原词重现字符比对（语英字词） */
   review_kind?: string
+  /** 抽查复验状态（§3.6：none/scheduled/passed/failed）。前端只消费 failed →
+   *  详情「家长确认（复验未过）」事实标注；scheduled 不呈现（不打抽查标签）。 */
+  spot_check_state?: string
 }
 
 export interface MistakesResp {
@@ -185,12 +190,18 @@ export interface ReviewRetryReq {
   grade: string
 }
 export interface ReviewRetryResp {
-  /** 相似题 + 解答（给家长核对，先别给孩子看；守答案遮罩） */
+  /** 相似题 + 解答全文（复制/兼容用；守答案遮罩） */
   solution: string
   /** solve 验算裁决：agree/disagree/unverifiable/out_of_scope */
   verdict: string
   /** 验算徽章文案 */
   badge: string
+  /** 题答分离（2026-07-18 P2 清偿）：题面（先显给孩子做）；后端拆不出时为空 → 整段遮罩回退 */
+  question?: string
+  /** 解答 + 答案部分（默认遮罩，家长点按才揭示） */
+  answer?: string
+  /** 最终答案（装篮 expected_answer_markdown 用） */
+  expected_answer?: string
 }
 
 /** 「再练一道」：基于某错题出一道同知识点相似题，必过 solve 验算链（POST /review/retry）。
@@ -236,23 +247,8 @@ export function k12AddGrounding(req: GroundingReq, signal?: AbortSignal) {
   return apiPost<{ ok: boolean }>(`${BASE}/grounding`, req, { signal })
 }
 
-// ── study-time（学习时长，一维按日；无 period/学科维度）──────
-export interface StudyDay {
-  date: string
-  record_count: number
-  estimated_minutes: number
-}
-export interface StudyTimeResp {
-  days: StudyDay[] | null
-  total_records: number
-  total_minutes: number
-  note: string
-}
-export function k12StudyTime(agent: string) {
-  return apiGet<StudyTimeResp>(`${BASE}/study-time`, { agent })
-}
-
 // ── insight-report（学情报告）────────────────────────────────
+// study-time API 已删除（架构设计 v0.5.0《明确不做》#6：不做学习时长与无证据投入指标）。
 /** reviewing = new + explained（待复习） */
 export interface TrendCounts {
   mastered: number
@@ -330,6 +326,8 @@ export interface AccumDTO {
   content: string
   source?: string
   status: string
+  /** unix 秒；引文列表收藏日期（原型 20260718 定案 acc-date），旧后端无此字段时缺省 */
+  created_at?: number
 }
 export interface AddAccumReq {
   agent: string
@@ -403,9 +401,14 @@ export function renderDocument(req: RenderReq): Promise<Blob> {
 // 注：GET /mistake-sheet 的前端客户端已删除——前端错题卷由客户端 printWorksheet 生成（当前视图错题
 // → A4 iframe 打印），后端周错题卷 md 仅供 cron 投递用（审计 #7 冗余死绑定清理）。
 
-// ── recognize（拍题识题：作业图片 → 结构化题目清单，需 LLM）──────
+// ── 识题产物类型（统一 GradingJob 停点回显消费，§6.7）──────
+// 两阶段直连编排 k12Recognize / k12RecognizeAnchors 已随一次切换删除
+// （§6.14 链路① · 2026-07-18）：识题→锚点→批改统一走下方 grading-jobs 段
+// （停点产物携带识别清单+整卷学科+锚点 bbox）。后端两端点已 404。
+// 反向契约：src/api/__tests__/cutover-20260718-recognize-removed.test.ts。
 /**
- * 学生作答区域的归一化边界框（0~1），随识题一次返回，供前端在原图上叠加确定性批改标记（✓/✗）。
+ * 学生作答区域的归一化边界框（0~1），只由独立答案锚定阶段产出，
+ * 供前端在原图上叠加确定性批改标记（✓/✗）。
  * x,y=框左上角，w,h=框宽高，全部相对整图宽/高的比例（对标作业帮/小猿的「检测坐标 + 程序叠加」范式）。
  * 缺失/null = 该题未定位（视觉模型未给/坐标非法）→ 前端降级为纯文字批改，绝不叠加错位红叉。
  */
@@ -415,33 +418,127 @@ export interface BBox {
   w: number
   h: number
 }
+export type AnswerState = 'blank' | 'present' | 'unclear'
+
 export interface RecognizedQuestion {
   question: string
   knowledge_points: string[]
-  /** 识题回收的孩子手写作答（未作答=空串/缺省）。前端据此区分空白题(走 /solve 求解)与
-   *  已答题(走 /grade 批改)，并预填到作答框供家长核对/修改。 */
+  /** 作答事实的单一真相源；不允许再由答案文本或 bbox 推断。 */
+  answer_state: AnswerState
+  /** 识题回收的孩子手写作答；仅 present 状态应有非空值。 */
   student_answer?: string
   /** 识题自动判定的题目学科（数学/语文/英语/物理/化学，判不出=空/缺省）。 */
   subject?: string
-  /** 学生作答区域归一化边界框（0~1）；缺失/null=未定位（降级纯文字批改，不叠加）。 */
+  /** 仅锚点阶段之后出现（GradingJob 停点产物）；核心识题永远不携带坐标。 */
   bbox?: BBox | null
 }
-/** 识题响应：题目清单 + 整卷学科（逐题判定取多数，供前端预填学科下拉，家长仍可手动覆盖）。 */
-export interface RecognizeResp {
+
+// ── grading-jobs（统一 GradingJob：桌面拍照批改入口，§6.7/§6.15）──────────
+// 桌面编排改道（执行计划 §3.4「入口自编排」收敛）：上传照片 → 创建 Job（后端异步推进）
+// → 轮询到 awaiting_confirmation（响应携带识别停点产物）→ 确认/修正 → 轮询到 completed
+// → 取逐题批改结果渲染。DTO 与 scenarios/k12/apihttp/gradingjob_handler.go 1:1 对齐。
+export interface GradingCheckpointDTO {
+  stage: string
+  artifact_digest?: string
+  recorded_at?: number
+  degraded?: boolean
+}
+export interface GradingJobDTO {
+  job_id: string
+  submission_id: string
+  stage: string
+  confirmation_state: 'pending' | 'confirmed'
+  anchor_state: 'pending' | 'located' | 'degraded'
+  deadline: number
+  idempotency_key: string
+  confirmed_version: number
+  stage_checkpoints?: GradingCheckpointDTO[]
+  attempt_count: number
+  failure_kind?: string
+  retryable: boolean
+  version: number
+  created_at: number
+  updated_at: number
+}
+/** 识别停点产物（awaiting_confirmation 起可用）：护栏回显数据源（含锚点 bbox）。 */
+export interface GradingJobRecognition {
   questions: RecognizedQuestion[]
-  /** 整卷学科（家长不必手选）；识题一科都判不出时为空/缺省。 */
   subject?: string
 }
-/**
- * 作业图片 → 题目清单。image_base64 可带或不带 data:image/...;base64, 前缀（后端会剥）。
- * 识题回显护栏：拿到 questions 后前端展示让家长核对/纠正，确认后再逐题 grade。
- */
-export function k12Recognize(imageBase64: string) {
-  // 视觉识题（全量题目 JSON 生成），默认 30s 必被腰斩 abort（BUG-20260712-T1 真机取证「识题很慢/卡住」）
-  return apiPost<RecognizeResp>(
-    `${BASE}/recognize`,
-    { image_base64: imageBase64 },
-    { timeout: 180_000 },
+/** 逐题批改结果（completed 后可用）；grade 复用 GradeResp wire 形状（判定五值口径）。 */
+export interface PhotoJobItemDTO {
+  question: RecognizedQuestion
+  status:
+    | 'correct' | 'wrong' | 'unanswered' | 'answer_unclear'
+    | 'blank_solved' | 'out_of_scope' | 'untrusted' | 'failed'
+  warning?: string
+  grade?: GradeResp
+}
+export interface PhotoJobResult {
+  mode: string
+  items: PhotoJobItemDTO[]
+  markdown: string
+  image_warning?: string
+}
+export interface GradingJobStatusResp {
+  job_id: string
+  stage: string
+  confirmation_state: 'pending' | 'confirmed'
+  anchor_state: 'pending' | 'located' | 'degraded'
+  deadline: number
+  confirmed_version: number
+  job: GradingJobDTO
+  recognition?: GradingJobRecognition
+  result?: PhotoJobResult
+}
+export interface CreatePhotoGradingJobReq {
+  agent: string
+  /** §4.10 统一幂等键：desktop 用请求标识；同键重投命中既有 Job（created=false）。 */
+  source_key: string
+  source_kind?: string
+  image_base64: string
+  subject?: string
+  grade?: string
+  source_session?: string
+}
+/** 逐题确认/修正（空字段 = 该维度按识别结果确认不改）。 */
+export interface GradingQuestionCorrection {
+  index: number
+  question?: string
+  student_answer?: string
+  answer_state?: AnswerState
+  subject?: string
+}
+export interface ConfirmGradingJobReq {
+  agent: string
+  subject?: string
+  grade?: string
+  question_corrections?: GradingQuestionCorrection[]
+}
+
+/** 创建照片批改 Job：后端固化原图并**异步**推进（响应即回，不等识别完成）。 */
+export function k12CreateGradingJob(req: CreatePhotoGradingJobReq) {
+  return apiPost<{ created: boolean; job: GradingJobDTO }>(`${BASE}/grading-jobs`, req, {
+    timeout: 60_000,
+  })
+}
+/** 查询任务阶段 + 停点/终态产物（轮询端点；阶段耗时分钟级，调用方 2-3s 节流）。 */
+export function k12GetGradingJob(agent: string, jobId: string) {
+  return apiGet<GradingJobStatusResp>(
+    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}`,
+    { agent },
+  )
+}
+/** 批量确认/修正识别结果：冻结 canonical 输入后后端异步续跑到终态。 */
+export function k12ConfirmGradingJob(jobId: string, req: ConfirmGradingJobReq) {
+  return apiPost<GradingJobStatusResp>(
+    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/confirm`, req, { timeout: 60_000 },
+  )
+}
+/** 安全重试（failed_retryable 且 retryable）：回 queued 从检查点异步续跑。 */
+export function k12RetryGradingJob(agent: string, jobId: string) {
+  return apiPost<GradingJobStatusResp>(
+    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/retry`, { agent }, { timeout: 60_000 },
   )
 }
 
@@ -512,7 +609,260 @@ export interface ProvisionedJob {
   schedule: string
   job_id: string
 }
-/** 建档后调一次；未注入 cron.Scheduler → 501 */
+/** provision 时被回收的历史 K12 任务（§6.14 stale kind 回收取证）。 */
+export interface ReclaimedCronJob {
+  job_id: string
+  name: string
+  source_key: string
+}
+/** 建档后调一次；未注入 cron.Scheduler → 501。注册 §3.13 四任务并回收历史 kind 残留。 */
 export function k12ProvisionCron(req: ProvisionCronReq) {
-  return apiPost<{ provisioned: ProvisionedJob[] }>(`${BASE}/cron/provision`, req)
+  return apiPost<{ provisioned: ProvisionedJob[]; reclaimed?: ReclaimedCronJob[] }>(
+    `${BASE}/cron/provision`,
+    req,
+  )
+}
+
+// ── 练习集 PracticeSet（/practice-sets*，PRD §3.8）─────────────
+// DTO 与后端 scenarios/k12/apihttp/practiceset_handler.go 的 json tag 1:1 对齐。
+export type PracticeStatus =
+  | 'draft' | 'confirmed' | 'assigned' | 'submitted' | 'graded' | 'closed' | 'cancelled'
+export type PracticeItemStatus =
+  | 'pending' | 'verified' | 'needs_review' | 'rejected' | 'stale'
+/** 装篮来源（PRD §5.5 added_via）：装篮五入口的 item 级记录 */
+export type PracticeAddedVia =
+  | 'weekly' | 'custom' | 'single_variant' | 'manual' | 'accumulation'
+export interface PracticeItemDTO {
+  item_id: string
+  source_problem_id?: string
+  subject?: string
+  added_via?: PracticeAddedVia
+  question_markdown: string
+  expected_answer_markdown?: string
+  verification_status: PracticeItemStatus
+  verification_evidence?: string
+  blocked_reason?: string
+}
+export interface PracticeSetDTO {
+  record_id: string
+  title: string
+  source_kind: string
+  status: PracticeStatus
+  /** 后端固定 UI 译名：草稿/已确认/待完成/已回传/已批改/已关闭/已取消 */
+  status_label: string
+  /** 全部题目 verified 且非空 → true；固化出卷（发布门）依据 */
+  publishable: boolean
+  question_artifact_id?: string
+  answer_artifact_id?: string
+  /** 固化时被跳过的阻断题数（§3.8，购物车裁决）——逐题跳过非 verified 项，不拒整卷 */
+  skipped_blocked_count?: number
+  /** 卷面号（§4.13 双 ID）：固化时分配 P-{YY}{ISO周}-{序}，印页眉/回传关联；draft 无 */
+  paper_no?: string
+  /** 固化时间（unix 秒）：历史倒序排序依据；draft 无 */
+  finalized_at?: number
+  /** 固化方式 print | send */
+  finalized_via?: string
+  delivery_status: string
+  delivery_target?: string
+  items: PracticeItemDTO[]
+}
+// k12CreatePracticeSet（整卷直建 POST /practice-sets）已随切换日死刑名单删除
+// （执行计划 §3.4 端点冻结 · 2026-07-18）：装篮命令（k12AddToBasket → k12FinalizePracticeSet）
+// 是唯一创建路径，前端从未对接整卷直建。
+export function k12ListPracticeSets(agent: string, status?: string) {
+  return apiGet<{ items: PracticeSetDTO[] }>(
+    `${BASE}/practice-sets`,
+    status ? { agent, status } : { agent },
+  )
+}
+export function k12GetPracticeSet(agent: string, recordId: string) {
+  return apiGet<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}`, { agent })
+}
+/** 标某题验证态；status='verified' 必带 evidence，否则后端 4xx */
+export function k12VerifyPracticeItem(
+  agent: string, recordId: string, itemId: string, status: PracticeItemStatus, evidence?: string,
+) {
+  return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/verify`, {
+    agent, item_id: itemId, status, evidence: evidence ?? '',
+  })
+}
+// ── 购物车模型（2026-07-18 裁决）：单 Learner 单篮，打印/发送即确认固化 ──
+export interface AddToBasketReq {
+  agent: string
+  source_session?: string
+  item: PracticeItemDTO
+}
+/** 装篮（幂等去重：同题重复装篮 added=false）。篮不存在则自动建（draft 待打印篮）。 */
+export function k12AddToBasket(req: AddToBasketReq) {
+  return apiPost<{ record_id: string; added: boolean }>(`${BASE}/practice-sets/basket/items`, req)
+}
+/** 篮内移除某题（只出篮，不影响错题状态与复习安排） */
+export function k12RemoveFromBasket(agent: string, recordId: string, itemId: string) {
+  return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/items/remove`, { agent, item_id: itemId })
+}
+/** finalize 响应：固化后的练习集 + 本次被跳过的阻断题数 */
+export interface FinalizeResp {
+  set: PracticeSetDTO
+  skipped_blocked_count: number
+}
+/**
+ * 固化出卷（打印/发送即家长确认，§3.8 购物车裁决）：draft 一步到 assigned。
+ * 逐题跳过非 verified 项（响应 skipped_blocked_count 明示）；一道 verified 都没有 → 后端 4xx。
+ * via='send' 必带 target（私聊目标）；via='print' 不投递。
+ */
+export function k12FinalizePracticeSet(
+  agent: string, recordId: string, via: 'print' | 'send', target?: string,
+) {
+  return apiPost<FinalizeResp>(`${BASE}/practice-sets/${recordId}/finalize`, {
+    agent, via, target: target ?? '',
+  })
+}
+/** submit/grade/close 顺序推进；非法转移 → 409 */
+export function k12AdvancePracticeSet(
+  agent: string, recordId: string, step: 'submit' | 'grade' | 'close',
+) {
+  return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/${step}`, { agent })
+}
+/** 仅 draft/confirmed 可取消，否则 409 */
+export function k12CancelPracticeSet(agent: string, recordId: string) {
+  return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/cancel`, { agent })
+}
+/** 练习卷渲染结果（§4.13 呈现物真实渲染，GET /practice-sets/{id}/paper） */
+export interface PracticePaperResp {
+  kind: 'question' | 'answer'
+  title: string
+  /** 卷面号；draft 预览为空（固化才分配） */
+  paper_no: string
+  /** 卷面 Markdown（§4.13 版面：页眉卷面号+学期+日期、paper_seq 题号、分页页脚） */
+  markdown: string
+  /** true = draft 预览（与固化正卷同渲染器同口径，诚实预览） */
+  preview: boolean
+}
+/**
+ * 取题目卷/答案卷（§4.13）：kind 缺省 question。固化后为正卷（含卷面号）；
+ * draft 篮走同一渲染器返回预览（preview=true）——预览口径 = 固化产物口径。
+ */
+export function k12GetPracticePaper(agent: string, recordId: string, kind: 'question' | 'answer' = 'question') {
+  return apiGet<PracticePaperResp>(`${BASE}/practice-sets/${recordId}/paper`, { agent, kind })
+}
+
+// ── 作品 CreativeWork（/creative-works*，PRD §3.10）─────────────
+export type WorkType = 'writing' | 'art'
+export type WorkStatus = 'draft' | 'feedback_ready' | 'revised' | 'archived'
+export interface WorkVersionDTO {
+  version_id: string
+  source_asset_id?: string
+  content_markdown?: string
+  feedback?: string
+  /** 观察小练习卡文本（§3.10 美术）：服务端由点评正文提炼（单一事实源），写作/无点评缺省 */
+  practice_card?: string
+  /** 练习卡完成打卡时间（unix 秒；缺省 = 未打卡） */
+  practice_card_done_at?: number
+}
+export interface CreativeWorkDTO {
+  record_id: string
+  work_type: WorkType
+  title: string
+  task: string
+  intent?: string
+  status: WorkStatus
+  /** 后端译名：待点评/已点评/已修改/已归档 */
+  status_label: string
+  versions: WorkVersionDTO[]
+}
+export interface CreateWorkReq {
+  agent: string
+  source_session?: string
+  work_type: WorkType
+  title: string
+  task: string
+  intent?: string
+  content_markdown?: string
+  source_asset_id?: string
+}
+export function k12ListCreativeWorks(agent: string, type?: WorkType) {
+  return apiGet<{ items: CreativeWorkDTO[] }>(
+    `${BASE}/creative-works`,
+    type ? { agent, type } : { agent },
+  )
+}
+export function k12GetCreativeWork(agent: string, recordId: string) {
+  return apiGet<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}`, { agent })
+}
+export function k12CreateCreativeWork(req: CreateWorkReq) {
+  return apiPost<{ record_id: string; created: boolean }>(`${BASE}/creative-works`, req)
+}
+/** 给最新版本附证据化点评（只点评不打分不代写，INV-011） */
+export function k12AttachWorkFeedback(agent: string, recordId: string, feedback: string) {
+  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/feedback`, { agent, feedback })
+}
+/** 提交修改稿形成新版本（feedback_ready → revised） */
+export function k12SubmitWorkRevision(
+  agent: string, recordId: string, contentMarkdown?: string, sourceAssetId?: string,
+) {
+  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/revision`, {
+    agent, content_markdown: contentMarkdown ?? '', source_asset_id: sourceAssetId ?? '',
+  })
+}
+export function k12ArchiveCreativeWork(agent: string, recordId: string) {
+  return apiPost<{ ok: boolean }>(`${BASE}/creative-works/${recordId}/archive`, { agent })
+}
+/** 点评/观察练习卡发送到手机（§3.10/§3.12 绑定私聊辅导延伸消息）。
+ *  未接线 501 / 未绑定 409：调用方降级为复制文本，绝不虚标已发送。 */
+export function k12SendWorkFeedback(
+  agent: string, recordId: string, kind: 'feedback' | 'practice_card' = 'feedback',
+) {
+  return apiPost<{ ok: boolean; target: string }>(
+    `${BASE}/creative-works/${recordId}/send-feedback`, { agent, kind },
+  )
+}
+/** 观察练习卡完成打卡（幂等：保留首次时间；仅美术且已点评） */
+export function k12MarkPracticeCardDone(agent: string, recordId: string) {
+  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/practice-card/done`, { agent })
+}
+
+// ── 作品照片资产（/assets*，最小资产服务：魔数校验/10MB 上限/归属隔离）────
+export interface AssetUploadResp {
+  /** 自描述资产 ID：asset://<agent>/<sha256>.<ext>（内容寻址，同图幂等） */
+  asset_id: string
+  size: number
+}
+
+/** 资产回图 URL（<img :src>）：GET /assets/{file}?agent=——文件段取自 asset_id 尾段 */
+export function k12AssetURL(agent: string, assetId: string): string {
+  if (!assetId.startsWith('asset://')) return ''
+  const file = assetId.slice(assetId.lastIndexOf('/') + 1)
+  return `${env.apiBase}${BASE}/assets/${file}?agent=${encodeURIComponent(agent)}`
+}
+
+/** 上传作品照片（multipart + XHR：带真实上传进度回调）。魔数非图片 415、>10MB 413。 */
+export function k12UploadAsset(
+  agent: string, file: File, onProgress?: (percent: number) => void,
+): Promise<AssetUploadResp> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${env.apiBase}${BASE}/assets?agent=${encodeURIComponent(agent)}`)
+    xhr.timeout = 60_000
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
+    }
+    xhr.onload = () => {
+      let body: Record<string, unknown> = {}
+      try {
+        body = JSON.parse(xhr.responseText || '{}') as Record<string, unknown>
+      } catch {
+        /* 非 JSON 响应按状态码兜底 */
+      }
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(body as unknown as AssetUploadResp)
+      } else {
+        reject(new Error(typeof body.error === 'string' && body.error ? body.error : `上传失败（${xhr.status}）`))
+      }
+    }
+    xhr.onerror = () => reject(new Error('上传失败：网络错误'))
+    xhr.ontimeout = () => reject(new Error('上传超时，请重试'))
+    const form = new FormData()
+    form.append('file', file, file.name)
+    xhr.send(form)
+  })
 }

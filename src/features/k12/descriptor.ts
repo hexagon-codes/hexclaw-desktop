@@ -14,9 +14,11 @@ export const K12_SCENARIO_ID = 'k12-tutor'
 export const K12_VIEW_DESCRIPTOR: InstanceViewDescriptor = {
   schemaVersion: '1',
   i18nNamespace: 'k12',
+  // IA 定稿（PRD §1.5，2026-07-18 迁移）：顶栏三段「辅导｜学习档案｜学情」，学情=一等 Tab（kind: report）。
   headerTabs: [
     { id: 'chat', labelKey: 'k12.tabs.chat', kind: 'chat', icon: '💬' },
-    { id: 'records', labelKey: 'k12.tabs.records', kind: 'records', collection: MISTAKE_SCHEMA.collection, icon: '📕' },
+    { id: 'records', labelKey: 'k12.tabs.records', kind: 'records', collection: MISTAKE_SCHEMA.collection, icon: '📚' },
+    { id: 'insights', labelKey: 'k12.tabs.insights', kind: 'report', icon: '📈' },
   ],
   messageBadges: ['verify', 'record-chip'],
   // composer chips 由后端 descriptor.composer_chips 下发（契约缺口，后端补），前端从 descriptor 渲染，
