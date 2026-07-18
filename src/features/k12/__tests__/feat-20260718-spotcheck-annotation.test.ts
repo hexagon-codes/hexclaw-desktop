@@ -28,6 +28,6 @@ describe('抽查复验 · spot_check_state 透传', () => {
 
   it('mistakesToView 合并列表后仍保留 spot_check_state', () => {
     const view = mistakesToView('a', [dto({ spot_check_state: 'failed' })], [])
-    expect(view.items[0].fields.spot_check_state).toBe('failed')
+    expect(view.items[0]!.fields.spot_check_state).toBe('failed')
   })
 })

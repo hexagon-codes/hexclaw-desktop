@@ -187,7 +187,7 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
 
     // 已打卡：done_at 存在 → 完成态 + 无打卡按钮
     const done = artWork()
-    done.versions[0].practice_card_done_at = 1752800000
+    done.versions[0]!.practice_card_done_at = 1752800000
     h.listSpy.mockResolvedValue({ items: [done] })
     const w2 = render()
     await flushPromises()

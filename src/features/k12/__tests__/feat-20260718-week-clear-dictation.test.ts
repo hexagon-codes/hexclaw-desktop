@@ -112,7 +112,7 @@ describe('②（§3.9）积累详情「生成默写题，加入练习集」', ()
     await flushPromises()
     await w.findAll('.seg button').find((b) => b.text() === '积累')!.trigger('click')
     await flushPromises()
-    await w.findAll('.k12accum__detail').at(0)!.trigger('click')
+    await w.findAll('.k12accum__detail')[0]!.trigger('click')
     await flushPromises()
     return w
   }

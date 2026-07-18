@@ -173,7 +173,9 @@ async function submitAdd() {
 // 取最新携带 asset:// 资产的版本回图；data URL / 本地路径老载体不出缩略（GET 端点只认资产）。
 function workThumbURL(w: CreativeWorkDTO): string {
   for (let i = w.versions.length - 1; i >= 0; i--) {
-    const id = w.versions[i].source_asset_id || ''
+    const v = w.versions[i]
+    if (!v) continue
+    const id = v.source_asset_id || ''
     if (id.startsWith('asset://')) return k12AssetURL(props.agentId, id)
   }
   return ''
@@ -184,7 +186,8 @@ function workThumbURL(w: CreativeWorkDTO): string {
 function practiceCardOf(w: CreativeWorkDTO): WorkVersionDTO | null {
   if (w.work_type !== 'art') return null
   for (let i = w.versions.length - 1; i >= 0; i--) {
-    if (w.versions[i].practice_card) return w.versions[i]
+    const v = w.versions[i]
+    if (v?.practice_card) return v
   }
   return null
 }
@@ -214,7 +217,7 @@ async function markCardDone(w: CreativeWorkDTO) {
 // 未接线/未绑定诚实降级：复制文本到剪贴板 + 家长向提示，绝不虚标已发送。
 function latestFeedbackOf(w: CreativeWorkDTO): string {
   for (let i = w.versions.length - 1; i >= 0; i--) {
-    const fb = (w.versions[i].feedback || '').trim()
+    const fb = (w.versions[i]?.feedback || '').trim()
     if (fb) return fb
   }
   return ''
