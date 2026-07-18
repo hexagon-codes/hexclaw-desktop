@@ -17,6 +17,12 @@ import { test, expect, type Page } from '@playwright/test'
 const EXISTING_CHILD = '小明'
 
 async function gotoMyAgents(page: Page) {
+  // Live E2E targets an already configured sidecar. Mark the welcome redirect as handled
+  // before navigation; otherwise the route guard redirects /agents -> /welcome and the
+  // fixture probe silently skips every agent interaction test.
+  await page.addInitScript(() => {
+    sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+  })
   await page.goto('/agents', { waitUntil: 'domcontentloaded' })
   const skip = page.getByRole('button', { name: '跳过' })
   if (await skip.isVisible().catch(() => false)) await skip.click()

@@ -73,6 +73,7 @@ export async function api(
     finalBody = {
       ...(process.env.HEX_E2E_PROVIDER ? { provider: process.env.HEX_E2E_PROVIDER } : {}),
       ...(process.env.HEX_E2E_MODEL ? { model: process.env.HEX_E2E_MODEL } : {}),
+      ...(!('user_id' in body) ? { user_id: USER_ID } : {}),
       ...body,
     }
   }

@@ -1,7 +1,16 @@
 import { test, expect } from '@playwright/test'
+import { cleanupSessionsWhere } from './live-fixture-cleanup'
 
 test.describe('Browser UI against live sidecar', () => {
   test.setTimeout(600_000)
+  let marker = ''
+
+  test.afterEach(async ({ request }) => {
+    if (marker) {
+      await cleanupSessionsWhere(request, (title) => title.includes(marker))
+      marker = ''
+    }
+  })
 
   test('chat page loads through Vite proxy and can complete a real chat request', async ({ page }) => {
     await page.addInitScript(() => {
@@ -15,7 +24,7 @@ test.describe('Browser UI against live sidecar', () => {
     await expect(input).toBeVisible({ timeout: 30_000 })
 
     const suffix = Math.random().toString(36).replace(/[^a-z]/g, '').slice(0, 8)
-    const marker = `live-browser-ok-${suffix}`
+    marker = `live-browser-ok-${suffix}`
     const prompt = `请只回复 ${marker}，不要添加其他文字。`
     await input.fill(prompt)
     await page.getByTestId('chat-send').click()

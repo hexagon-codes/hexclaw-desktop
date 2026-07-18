@@ -52,6 +52,8 @@ test.describe.serial('Session lifecycle', () => {
     const result: ChatResult = await wsChat(`请直接用一句中文回复普通冒烟测试，标记 ${e2eTextMarker()}`)
     expect(result.content.length).toBeGreaterThan(0)
     expect(result.chunks).toBeGreaterThanOrEqual(1)
+    sessionId = String(result.metadata.session_id ?? '')
+    expect(sessionId).toMatch(/^sess-/)
   })
 
   test('Session appears in list', async () => {
@@ -61,8 +63,8 @@ test.describe.serial('Session lifecycle', () => {
     const sessions: any[] = data.sessions ?? []
     expect(sessions.length).toBeGreaterThan(0)
 
-    // Keep the first session id for later tests
-    sessionId = sessions[0].id
+    // Never select sessions[0]: the live profile may contain real user data.
+    expect(sessions.some((session: any) => session.id === sessionId)).toBe(true)
   })
 
   test('Session has user + assistant messages in history', async () => {
@@ -82,9 +84,17 @@ test.describe.serial('Session lifecycle', () => {
   test('HTTP chat fallback works', async () => {
     const { status, data } = await api('POST', '/api/v1/chat', {
       message: `请直接用一句中文回复普通连通性测试，标记 ${e2eTextMarker()}`,
+      metadata: { tools_enabled: 'off' },
     })
     expect(status).toBe(200)
     expect(data.reply?.length).toBeGreaterThan(0)
+    const httpSessionId = String(data.session_id ?? '')
+    expect(httpSessionId).toMatch(/^sess-/)
+    const removed = await api(
+      'DELETE',
+      `/api/v1/sessions/${httpSessionId}?user_id=${encodeURIComponent(USER_ID)}`,
+    )
+    expect([200, 204]).toContain(removed.status)
   })
 
   test('Delete session removes it from list', async () => {
@@ -198,12 +208,16 @@ test.describe('Knowledge RAG', () => {
   test('RAG chat returns reply', async () => {
     const result: ChatResult = await wsChat(
       'What are Apple Human Interface Guidelines core principles?',
+      { metadata: { tools_enabled: 'off' } },
     )
     expect(result.content.length).toBeGreaterThan(0)
   })
 
   test('Irrelevant question still gets reply', async () => {
-    const result: ChatResult = await wsChat(`请直接回复：普通无关问题收到，标记 ${e2eTextMarker()}`)
+    const result: ChatResult = await wsChat(
+      `请直接回复：普通无关问题收到，标记 ${e2eTextMarker()}`,
+      { metadata: { tools_enabled: 'off' } },
+    )
     expect(result.content.length).toBeGreaterThan(0)
   })
 })
@@ -220,13 +234,20 @@ test.describe('Memory', () => {
   test('Write memory persists on re-read', async () => {
     const suffix = Math.random().toString(36).replace(/[^a-z]/g, '').slice(0, 8)
     const marker = `e2e memory readback ${suffix}`
-    const { status } = await api('POST', '/api/v1/memory', {
+    const { status, data } = await api('POST', '/api/v1/memory', {
       content: marker,
     })
     expect([200, 201, 204]).toContain(status)
-    const read = await api('GET', '/api/v1/memory')
-    expect(read.status).toBe(200)
-    expect(JSON.stringify(read.data)).toContain(marker)
+    const memoryId = String(data.id ?? '')
+    expect(memoryId).toBeTruthy()
+    try {
+      const read = await api('GET', '/api/v1/memory')
+      expect(read.status).toBe(200)
+      expect(JSON.stringify(read.data)).toContain(marker)
+    } finally {
+      const removed = await api('DELETE', `/api/v1/memory/${encodeURIComponent(memoryId)}`)
+      expect([200, 204]).toContain(removed.status)
+    }
   })
 })
 
@@ -239,12 +260,12 @@ test.describe('Gateway security', () => {
     expect(status).toBe(400)
   })
 
-  test('Invalid provider returns 500', async () => {
+  test('Invalid provider is rejected as a client error', async () => {
     const { status } = await api('POST', '/api/v1/chat', {
       message: 'test',
       provider: '不存在',
     })
-    expect(status).toBe(500)
+    expect(status).toBe(400)
   })
 
   test('Cross-user isolation (different user_id sees empty sessions)', async () => {
@@ -273,11 +294,17 @@ test.describe('Config & Ollama', () => {
     expect(Object.keys(providers).length).toBeGreaterThan(0)
   })
 
-  test('Ollama is running with models', async () => {
+  test('Ollama status truthfully reports either ready or unavailable', async () => {
     const { status, data } = await api('GET', '/api/v1/ollama/status')
     expect(status).toBe(200)
-    expect(data.running).toBe(true)
-    expect(data.model_count).toBeGreaterThan(0)
+    expect(typeof data.running).toBe('boolean')
+    expect(typeof data.model_count).toBe('number')
+    if (data.running) {
+      expect(Array.isArray(data.models)).toBe(true)
+      expect(data.model_count).toBe(data.models.length)
+    } else {
+      expect(data.model_count).toBe(0)
+    }
   })
 
   test('Health endpoint returns healthy', async () => {

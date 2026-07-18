@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { readFileSync } from 'node:fs'
+import { cleanupK12Child } from './live-fixture-cleanup'
 
 /**
  * BUG-20260712 批次 · 真实点击验证（live sidecar :16060 + vite :5173 + 真实视觉模型）。
@@ -17,6 +18,7 @@ import { readFileSync } from 'node:fs'
 
 const HOMEWORK = process.env.HEX_E2E_HOMEWORK
 const GRADED_OUTPUT = process.env.HEX_E2E_GRADED_OUTPUT
+let createdChild = ''
 
 test.describe('BUG-20260712 真实点击验证', () => {
   test.setTimeout(600_000)
@@ -24,6 +26,11 @@ test.describe('BUG-20260712 真实点击验证', () => {
     !HOMEWORK,
     '缺少真实作业图片夹具：请设置 HEX_E2E_HOMEWORK=/absolute/path/to/homework.jpg',
   )
+
+  test.afterEach(async ({ request }) => {
+    await cleanupK12Child(request, createdChild)
+    createdChild = ''
+  })
 
   test('composer 审计 → 上传识题 → tab 保活 → 辅导要点 📱/🖨', async ({
     page,
@@ -49,6 +56,7 @@ test.describe('BUG-20260712 真实点击验证', () => {
 
     // 1) 真实用户路径：模板库建档 → 卡片 → 进入辅导（隔离引擎空库，从零建）
     const CHILD = `验证${Math.random().toString(36).slice(2, 5)}`
+    createdChild = CHILD
     await page.goto('/agents', { waitUntil: 'domcontentloaded' })
     const skip = page.getByRole('button', { name: '跳过' })
     if (await skip.isVisible().catch(() => false)) await skip.click()
@@ -92,6 +100,11 @@ test.describe('BUG-20260712 真实点击验证', () => {
     const recognizeSecs = Math.round((Date.now() - t0) / 1000)
     const rowCount = await guard.locator('[data-testid="rq-item"]').count()
     console.log(`[perf] 识题耗时 ${recognizeSecs}s · 识出 ${rowCount} 题`)
+    // 图片批改不是可选装饰：真实已答卷必须等独立坐标阶段完成。旧实现把
+    // 耗时的答案重誊录串在坐标响应后，用户批改完成仍拿不到任何 bbox。
+    await expect(guard.locator('[data-testid="recognize-anchor-status"]')).toHaveCount(0, {
+      timeout: 240_000,
+    })
 
     // 4) Bug S 保活：切错题本 → 无 prep-card 红字 → 回辅导 → 结果仍在、不重新识题
     await page.locator('.k12enh-seg button', { hasText: '错题本' }).click()
@@ -125,32 +138,38 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await expect(overlay).toBeVisible()
     const positionedCount = await overlay.locator('[data-testid^="overlay-mark-"]').count()
     const degradedCount = await overlay.locator('[data-testid^="overlay-degraded-"]').count()
+    const outOfScopeCount = await overlay.locator(
+      '.pg-overlay__degraded-verdict.is-scope',
+    ).count()
     const renderedVerdicts = positionedCount + degradedCount
     expect(renderedVerdicts, '每道已批改题都应有原图标记或诚实降级文字结论').toBe(answeredCount)
+    expect(
+      positionedCount,
+      '真实已答作业的每道范围内已批改题都必须获得独立核验坐标，不能退化成纯文字',
+    ).toBe(answeredCount - outOfScopeCount)
+    expect(positionedCount, '真实图片批改至少应在原图上产生一个可信标记').toBeGreaterThan(0)
+    expect(
+      degradedCount,
+      '只有超出当前学段的题可以不画勾叉；其他题缺坐标必须使门禁失败',
+    ).toBe(outOfScopeCount)
 
+    // 保存批改图不是临时 DOM 假动作：浏览器真实下载 PNG，并校验文件魔数。
     const save = overlay.locator('[data-testid="overlay-save"]')
-    if (positionedCount === 0) {
-      // 视觉模型未给出任何可信坐标时必须 fail closed：只展示文字批改，不伪造批改图。
-      await expect(save).toBeDisabled()
-      console.log(`[grade] 已答 ${answeredCount} 题全部文字降级，无可信坐标，保存按钮已安全禁用`)
-    } else {
-      // 保存批改图不是临时 DOM 假动作：浏览器真实下载 PNG，并校验文件魔数。
-      await expect(save).toBeEnabled()
-      const downloadPromise = page.waitForEvent('download')
-      await save.click()
-      const gradedDownload = await downloadPromise
-      expect(gradedDownload.suggestedFilename()).toMatch(/^作业批改_.*\.png$/)
-      const gradedPath = await gradedDownload.path()
-      expect(gradedPath, '批改 PNG 应生成真实下载文件').toBeTruthy()
-      expect(readFileSync(gradedPath!).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
-      if (GRADED_OUTPUT) {
-        await gradedDownload.saveAs(GRADED_OUTPUT)
-        expect(readFileSync(GRADED_OUTPUT).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
-      }
-      console.log(
-        `[grade] 已答 ${answeredCount} 题全部批改，${positionedCount} 题叠加并导出 PNG，${degradedCount} 题文字降级`,
-      )
+    await expect(save).toBeEnabled()
+    const downloadPromise = page.waitForEvent('download')
+    await save.click()
+    const gradedDownload = await downloadPromise
+    expect(gradedDownload.suggestedFilename()).toMatch(/^作业批改_.*\.png$/)
+    const gradedPath = await gradedDownload.path()
+    expect(gradedPath, '批改 PNG 应生成真实下载文件').toBeTruthy()
+    expect(readFileSync(gradedPath!).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    if (GRADED_OUTPUT) {
+      await gradedDownload.saveAs(GRADED_OUTPUT)
+      expect(readFileSync(GRADED_OUTPUT).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
     }
+    console.log(
+      `[grade] 已答 ${answeredCount} 题全部批改并叠加，导出 PNG 成功`,
+    )
 
     // 7) 📱 发送到手机 = 复制文本到剪贴板（真剪贴板断言）
     await prep.locator('[data-testid="prep-send"]').click()

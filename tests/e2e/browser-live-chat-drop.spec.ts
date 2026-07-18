@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test'
+import { cleanupSession } from './live-fixture-cleanup'
+import { e2eMarker } from './helpers'
 
 /**
  * 真机 E2E [BUG-20260622-CHATINPUT-DROP]：拖拽真实图片到会话框 → 附件出现 → 可发送。
@@ -12,13 +14,32 @@ import { test, expect } from '@playwright/test'
  */
 test.describe('拖拽图片到会话框（live sidecar）', () => {
   test.setTimeout(120_000)
+  let createdSessionId = ''
 
-  test('真实拖一张 PNG → 附件预览出现 → 发送按钮可用并能发送', async ({ page }) => {
+  test.afterEach(async ({ request }) => {
+    await cleanupSession(request, createdSessionId)
+    createdSessionId = ''
+  })
+
+  test('真实拖一张 PNG → 附件预览出现 → 发送按钮可用并能发送', async ({ page, request }) => {
     // 本 spec 焦点＝拖图→预览→发送→草稿清空；welcome 流由 browser-live-welcome-settings 覆盖。
     // 必须显式指定 model（与 browser-live-sidecar 同模式）：无模型时 handleSend 会按设计在
     // model==='' 处 return false（拒绝发送、保留草稿），那会污染本 spec 的「发送后清空」断言。
-    await page.addInitScript(() => sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1'))
-    await page.goto('/chat?model=qwen3.5:9b', { waitUntil: 'domcontentloaded' })
+    createdSessionId = e2eMarker('e2e-drop')
+    const created = await request.post('/_hexclaw/api/v1/sessions?user_id=desktop-user', {
+      data: {
+        id: createdSessionId,
+        title: `E2E image drop ${createdSessionId}`,
+        user_id: 'desktop-user',
+      },
+    })
+    expect(created.ok(), await created.text()).toBe(true)
+    await page.addInitScript((sessionId) => {
+      sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+      localStorage.setItem('hexclaw_lastSessionId', sessionId)
+    }, createdSessionId)
+    const liveModel = process.env.HEX_E2E_MODEL || 'qwen3.5:9b'
+    await page.goto(`/chat?model=${encodeURIComponent(liveModel)}`, { waitUntil: 'domcontentloaded' })
     await expect(page).toHaveURL(/\/chat/)
 
     const box = page.locator('.hc-composer__box')

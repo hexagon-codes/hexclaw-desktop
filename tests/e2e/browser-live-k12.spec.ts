@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
+import { cleanupK12Child } from './live-fixture-cleanup'
 
 /**
  * K12 家长备课助手 · 全链路 UI 冒烟（对 live sidecar :16060 + vite :5173）。
@@ -14,6 +15,10 @@ const CHILD = `冒烟${Math.random().toString(36).slice(2, 6)}`
 
 test.describe('K12 全链路 UI 冒烟', () => {
   test.setTimeout(180_000)
+
+  test.afterEach(async ({ request }) => {
+    await cleanupK12Child(request, CHILD)
+  })
 
   test('建档 → 进辅导 → 头部tab/chips → 错题本 → 学情 → 备课卡 → 改档', async ({ page }: { page: Page }) => {
     // 平台默认全功能全导航（三模式 / 首启模式选择器已下线 · 2026-07-08）；K12 = 作业辅导智能体，

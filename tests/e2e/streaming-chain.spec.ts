@@ -60,11 +60,20 @@ test.describe('Streaming & Thinking', () => {
     expect(result.metadata).toHaveProperty('model')
   })
 
-  test('thinking=on message has reasoning content', async () => {
+  test('thinking=on is acknowledged without fabricating private reasoning', async () => {
     const msg = `逐步推理 7 乘以 13，并给出一句最终答案，标记 ${e2eTextMarker()}`
     const result: ChatResult = await wsChat(msg, { metadata: { thinking: 'on', tools_enabled: 'off' } })
     expect(result.content.length).toBeGreaterThan(0)
-    expect(result.reasoning.length).toBeGreaterThan(0)
+    expect(result.metadata.thinking).toBe('on')
+    expect(['visible', 'not_exposed']).toContain(result.metadata.reasoning_visibility)
+    if (result.metadata.reasoning_visibility === 'visible') {
+      expect(result.reasoning.length).toBeGreaterThan(0)
+    } else {
+      // OpenAI reasoning models may use private reasoning tokens without
+      // returning a public summary for simple prompts. Empty is the honest
+      // contract here; the application must never synthesize chain-of-thought.
+      expect(result.reasoning).toBe('')
+    }
   })
 
   test('thinking=on message has multiple chunks', async () => {

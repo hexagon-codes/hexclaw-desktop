@@ -3,11 +3,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
 import { e2eMarker } from './helpers'
+import { cleanupSession } from './live-fixture-cleanup'
 
 const USER_ID = 'desktop-user'
 const PROVIDER_NAME = process.env.HEX_E2E_PROVIDER || '硅基流动'
 const PREFERRED_MODEL = process.env.HEX_E2E_MODEL || 'Qwen/Qwen3.6-35B-A3B'
 const DINGTALK_E2E_PREFIX = 'E2E DingTalk'
+const createdSessionIds = new Set<string>()
 
 type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue }
 
@@ -85,6 +87,7 @@ async function createToolOnlyBlocksSession(request: APIRequestContext, marker: s
     title: `E2E tool-only ${marker}`,
     user_id: USER_ID,
   })
+  createdSessionIds.add(sessionId)
   await apiJSON(request, 'POST', `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages/batch?user_id=${encodeURIComponent(USER_ID)}`, {
     messages: [
       {
@@ -128,7 +131,15 @@ async function createEmptySession(request: APIRequestContext, title: string): Pr
     title,
     user_id: USER_ID,
   })
+  createdSessionIds.add(sessionId)
   return sessionId
+}
+
+async function cleanupCreatedSessions(request: APIRequestContext): Promise<void> {
+  for (const sessionId of createdSessionIds) {
+    await cleanupSession(request, sessionId)
+  }
+  createdSessionIds.clear()
 }
 
 async function installTauriBridge(
@@ -532,6 +543,7 @@ test.describe.serial('bugfix real browser click closure', () => {
   test.afterAll(async ({ request }) => {
     cleanupWorkDirFixture()
     await cleanupRuntimeDingTalkInstances(request)
+    await cleanupCreatedSessions(request)
   })
 
   test('local folder grant, real model reply, pending bubble, and regenerate replacement', async ({ page, request }) => {
@@ -688,6 +700,10 @@ test.describe.serial('bugfix real browser click closure', () => {
 
 test.describe.serial('code_exec real browser user closure', () => {
   test.setTimeout(600_000)
+
+  test.afterAll(async ({ request }) => {
+    await cleanupCreatedSessions(request)
+  })
 
   test('user approves model-written Python shell calculation and receives executed result', async ({ page, request }) => {
     const model = await resolveLiveModel(request)
