@@ -1916,6 +1916,11 @@ export default {
       model: 'Model',
       apiKey: 'API Key',
       baseUrl: 'Base URL',
+      locality: 'Model deployment',
+      localityAuto: 'Detect automatically (recommended)',
+      localityLocal: 'Local / LAN model',
+      localityCloud: 'Cloud model (including local proxy)',
+      localityHint: 'This describes where model compute and data ultimately reside. Select Cloud when Base URL is a local reverse proxy to a cloud model.',
       ollamaBaseUrlHint: 'Local Ollama service address. Default port is 11434. Change the URL if you use a different port.',
       ollamaModelsHint: 'Models are managed by the Ollama card above (download / delete). This is a read-only view.',
       noOllamaModels: 'No models yet. Download one from the Ollama card above.',
@@ -2691,11 +2696,11 @@ export default {
 
   // Generic record-book view (schema-driven, domain-neutral primitive §7.3)
   records: {
-    reviewQueueTitle: 'To review',
+    reviewQueueTitle: 'Weekly review',
     reviewQueueCount: '{count} due',
     practiceAgain: 'Practice again',
     practice: 'Practice',
-    markMastered: 'Got it now',
+    markMastered: 'Parent confirmed',
     detail: 'Details',
     all: 'All',
     empty: 'No records yet',

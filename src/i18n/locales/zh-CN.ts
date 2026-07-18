@@ -1935,6 +1935,11 @@ export default {
       model: '模型',
       apiKey: 'API Key',
       baseUrl: 'Base URL',
+      locality: '模型部署位置',
+      localityAuto: '自动判断（推荐）',
+      localityLocal: '本机 / 局域网模型',
+      localityCloud: '云端模型（含本地反向代理）',
+      localityHint: '这里表示模型算力和数据最终所在位置；若 Base URL 是本机上的云端反向代理，请选择“云端模型”。',
       ollamaBaseUrlHint: '本地 Ollama 服务地址，默认端口 11434。如需修改端口，请同步修改此地址。',
       ollamaModelsHint: '模型由上方 Ollama 卡片管理（下载 / 删除），此处仅展示。',
       noOllamaModels: '暂无模型，请在上方 Ollama 卡片中下载。',
@@ -2702,12 +2707,14 @@ export default {
 
   // 通用记录本视图（schema 驱动，领域无关的记录本原语 §7.3）
   records: {
-    reviewQueueTitle: '本周该练',
+    // 20260718 §4.11 术语统一：「本周复习」（禁「本周该练」作另一套页面名）
+    reviewQueueTitle: '本周复习',
     reviewQueueCount: '{count} 道待复习',
     practiceAgain: '再练一道',
     practice: '再练',
-    // 20260709 文案评审：按原型定稿回「他会了」——家长口吻是本产品的品牌声音锚点
-    markMastered: '他会了',
+    // 20260718 §4.11 信任链纠偏：家长确认 ≠ 系统已掌握——按钮语义收敛为「家长确认已会」
+    // （替代 20260709 的「他会了」：后端语义拆分另包，这里先修文案口径）
+    markMastered: '家长确认已会',
     detail: '详情',
     all: '全部',
     empty: '暂无记录',

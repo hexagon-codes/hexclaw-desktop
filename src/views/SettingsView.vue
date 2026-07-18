@@ -36,6 +36,7 @@ import { OLLAMA_BASE } from '@/config/env'
 import { isCatalogModelFree } from '@/types'
 import type {
   ProviderConfig,
+  ProviderLocality,
   ProviderType,
   ModelOption,
   ModelCapability,
@@ -204,6 +205,12 @@ function stepMaxTools(delta: number) {
 const nonOllamaProviders = computed(() =>
   config.value?.llm.providers.filter((p) => p.type !== 'ollama') ?? [],
 )
+
+const providerLocalityOptions = computed(() => [
+  { value: 'auto', label: t('settings.llm.localityAuto') },
+  { value: 'local', label: t('settings.llm.localityLocal') },
+  { value: 'cloud', label: t('settings.llm.localityCloud') },
+])
 
 function isDesktopRuntime() {
   return !!(globalThis as Record<string, unknown>).isTauri
@@ -782,6 +789,11 @@ function handleProviderModelChange(provider: ProviderConfig) {
   settingsStore.updateProvider(provider.id, {
     selectedModelId: provider.selectedModelId || provider.models[0]?.id || '',
   })
+  autoSave()
+}
+
+function handleProviderLocalityChange(provider: ProviderConfig, locality: string) {
+  provider.locality = locality as ProviderLocality
   autoSave()
 }
 
@@ -1396,6 +1408,20 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                     />
                     <p v-if="provider.type === 'ollama'" class="hc-settings__hint">
                       {{ t('settings.llm.ollamaBaseUrlHint', '本地 Ollama 服务地址，默认端口 11434。如需修改端口，请同步修改此地址。') }}
+                    </p>
+                  </div>
+
+                  <div class="hc-settings__field">
+                    <label class="hc-settings__label">{{ t('settings.llm.locality') }}</label>
+                    <HcSelect
+                      :model-value="provider.locality ?? 'auto'"
+                      :options="providerLocalityOptions"
+                      :data-testid="`provider-locality-${provider.id}`"
+                      class="hc-settings__select"
+                      @update:model-value="handleProviderLocalityChange(provider, $event)"
+                    />
+                    <p class="hc-settings__hint">
+                      {{ t('settings.llm.localityHint') }}
                     </p>
                   </div>
 

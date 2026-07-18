@@ -355,7 +355,9 @@ export function backendToProviders(
       apiKey: p.api_key || localProvider?.apiKey || '',
       models: mergeProviderModels(localProvider, p.model, p.models),
       selectedModelId: '',
+      locality: p.locality ?? localProvider?.locality ?? 'auto',
       keepAlive: p.keep_alive || localProvider?.keepAlive || '',
+      numCtx: p.num_ctx ?? localProvider?.numCtx ?? 0,
     }
     nextProvider.selectedModelId = resolveProviderSelectedModelId(nextProvider, p.model)
     return nextProvider
@@ -388,10 +390,12 @@ export function providersToBackend(
         p.type === 'custom' || !KNOWN_PROVIDER_TYPES.includes(p.type as KnownProviderType)
           ? 'openai'
           : '',
+      locality: p.locality ?? 'auto',
       tools_enabled: p.toolsEnabled ?? null,
       max_tools: p.maxTools ?? 0,
       enabled: p.enabled,
       keep_alive: p.keepAlive || '',
+      num_ctx: p.numCtx ?? 0,
     }
   }
   // Find which provider the default model belongs to（默认 provider 必须是启用的）

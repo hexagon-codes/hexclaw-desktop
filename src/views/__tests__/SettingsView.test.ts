@@ -376,6 +376,27 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(chips[0]!.text()).toContain('GPT-4o')
   })
 
+  it('lets a loopback gateway be marked as cloud instead of assuming local compute', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config?.llm.providers[0]
+    expect(provider).toBeDefined()
+    provider!.baseUrl = 'http://localhost:18080/v1'
+
+    const providerHead = wrapper.find('.hc-provider__card-head')
+    expect(providerHead.exists()).toBe(true)
+    await providerHead.trigger('click')
+    await flushPromises()
+
+    const testid = `provider-locality-${provider!.id}`
+    expect(wrapper.find(`[data-testid="${testid}"]`).exists()).toBe(true)
+    await selectHcOption(wrapper, testid, '云端模型（含本地反向代理）')
+
+    expect(provider!.locality).toBe('cloud')
+  })
+
   it('opens inline add model form when clicking custom chip', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()

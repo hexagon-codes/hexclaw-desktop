@@ -462,6 +462,7 @@ export const useSettingsStore = defineStore('settings', () => {
     if (!config.value) return null
     const newProvider: ProviderConfig = {
       ...provider,
+      locality: provider.locality ?? (provider.type === 'ollama' ? 'local' : 'auto'),
       name: ensureUniqueProviderName(provider.name, config.value.llm.providers),
       id: nanoid(10),
     }

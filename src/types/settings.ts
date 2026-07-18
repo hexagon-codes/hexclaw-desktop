@@ -57,6 +57,8 @@ export function catalogModelHasMetadata(m: CatalogModel): boolean {
 }
 
 /** Provider 配置 */
+export type ProviderLocality = 'auto' | 'local' | 'cloud'
+
 export interface ProviderConfig {
   id: string
   /** 后端运行时识别的 provider key（对应 hexclaw /api/v1/config/llm 的 map key） */
@@ -69,12 +71,16 @@ export interface ProviderConfig {
   models: ModelOption[]
   /** 当前 provider 在后端运行时默认使用的模型 */
   selectedModelId?: string
+  /** 模型算力/数据最终位置；本地反向代理云模型必须显式为 cloud */
+  locality?: ProviderLocality
   /** 是否启用工具注入（undefined/null=自动，true=强制开，false=强制关） */
   toolsEnabled?: boolean | null
   /** 最大注入工具数（0或undefined=不限制） */
   maxTools?: number
   /** 本地模型驻留时长（仅 Ollama 生效，如 "5m"/"30m"；空=后端默认 30m · BUG-20260710 P1） */
   keepAlive?: string
+  /** 本地模型上下文上限（仅 Ollama；0/undefined=后端自动） */
+  numCtx?: number
 }
 
 /** 支持的 Provider 类型 */
@@ -231,10 +237,12 @@ export interface BackendLLMProvider {
   model: string
   models?: string[]              // 已配置的模型列表（桌面端持久化用）
   compatible: string
+  locality?: ProviderLocality    // auto/local/cloud；localhost 云代理应为 cloud
   tools_enabled?: boolean | null // null=自动（本地关/云开），true=强制开，false=强制关
   max_tools?: number             // 0=不限制
   enabled?: boolean              // false=禁用（后端保留 Key/配置但不参与路由）；缺省/true=启用
   keep_alive?: string            // 本地模型驻留时长（仅 Ollama；空=后端默认 30m · BUG-20260710 P1）
+  num_ctx?: number               // 本地模型上下文上限；0=自动
 }
 
 /** 后端 LLM 配置（匹配 GET/PUT /api/v1/config/llm） */
