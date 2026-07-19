@@ -297,12 +297,14 @@ function handleKeydown(e: KeyboardEvent) {
 
             <div class="mm-search">
               <Search :size="14" class="mm-search__icon" />
-              <input
+              <HcClearableField>
+                <input
                 ref="searchInputRef"
                 v-model="search"
                 type="text"
                 :placeholder="t('settings.modelManager.searchPlaceholder', '搜索模型 id 或名称…')"
               />
+              </HcClearableField>
               <span class="mm-kbd">⌘F</span>
             </div>
 
@@ -331,11 +333,13 @@ function handleKeydown(e: KeyboardEvent) {
               <div class="mm-vendors__sticky">
                 <div v-if="vendorCounts.length > 10" class="mm-vendors__search">
                   <Search :size="11" />
-                  <input
+                  <HcClearableField>
+                    <input
                     v-model="vendorSearch"
                     type="text"
                     :placeholder="t('settings.modelManager.vendorSearch', '过滤厂商…')"
                   />
+                  </HcClearableField>
                 </div>
                 <button
                   class="mm-vendor"

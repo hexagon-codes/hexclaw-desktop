@@ -20,13 +20,17 @@ import {
   ShieldCheck,
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
-import { scenarioRegistry } from '@/shell/scenario/registry'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from '@/stores/model-catalog'
 import { getRuntimeConfig } from '@/api/settings'
 import { getLLMConfig, testLLMConnection, fetchProviderModels } from '@/api/config'
 import { fetchCapabilities, probeCapability } from '@/api/capabilities'
 import { messageFromUnknownError } from '@/utils/errors'
+import { thirdPartyAiServicesUrl } from '@/utils/legal-links'
 import { logger } from '@/utils/logger'
+import {
+  classifyProviderEndpoint,
+  resolveEffectiveProviderLocality,
+} from '@/utils/provider-endpoint'
 import { useTheme, type ThemeMode } from '@/composables/useTheme'
 import { useAboutWindow } from '@/composables/useAboutWindow'
 import { useToast } from '@/composables'
@@ -36,7 +40,6 @@ import { OLLAMA_BASE } from '@/config/env'
 import { isCatalogModelFree } from '@/types'
 import type {
   ProviderConfig,
-  ProviderLocality,
   ProviderType,
   ModelOption,
   ModelCapability,
@@ -53,28 +56,13 @@ import AutomationPermissionsPanel from '@/components/settings/AutomationPermissi
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const toast = useToast()
 const settingsStore = useSettingsStore()
+const thirdPartyAiServicesHref = computed(() => thirdPartyAiServicesUrl(locale.value))
 
-// ── 备份与恢复段（M2-20260710，对齐原型 app.html:2093-2095）──
-// 数据目录=通用行;场景专属备份经 settingsExtension 缝注入,本视图零场景知识（AP-1）。
-const settingsExtension = computed(() => scenarioRegistry.settingsExtension)
-const dataDirDisplay = computed(() => settingsStore.config?.general?.data_dir?.trim() || '~/.hexclaw/')
-async function openDataDir() {
-  try {
-    const dir = dataDirDisplay.value
-    const { homeDir, join } = await import('@tauri-apps/api/path')
-    const { open } = await import('@tauri-apps/plugin-shell')
-    const abs = dir.startsWith('~') ? await join(await homeDir(), dir.slice(1)) : dir
-    await open(abs)
-  } catch (e) {
-    logger.warn('打开数据目录失败', e)
-    toast.error(t('settings.backup.openFailed'))
-  }
-}
 const catalogStore = useModelCatalogStore()
-const { themeMode, setTheme } = useTheme()
+const { setTheme } = useTheme()
 const activeSection = ref('llm')
 const saved = ref(false)
 const saveFailed = ref(false)
@@ -205,12 +193,6 @@ function stepMaxTools(delta: number) {
 const nonOllamaProviders = computed(() =>
   config.value?.llm.providers.filter((p) => p.type !== 'ollama') ?? [],
 )
-
-const providerLocalityOptions = computed(() => [
-  { value: 'auto', label: t('settings.llm.localityAuto') },
-  { value: 'local', label: t('settings.llm.localityLocal') },
-  { value: 'cloud', label: t('settings.llm.localityCloud') },
-])
 
 function isDesktopRuntime() {
   return !!(globalThis as Record<string, unknown>).isTauri
@@ -792,9 +774,68 @@ function handleProviderModelChange(provider: ProviderConfig) {
   autoSave()
 }
 
-function handleProviderLocalityChange(provider: ProviderConfig, locality: string) {
-  provider.locality = locality as ProviderLocality
+function providerBaseUrl(provider: ProviderConfig): string {
+  return provider.baseUrl || PROVIDER_PRESETS[provider.type]?.defaultBaseUrl || ''
+}
+
+function providerEndpointDecision(provider: ProviderConfig) {
+  return classifyProviderEndpoint(provider.type, providerBaseUrl(provider))
+}
+
+function providerNeedsDestinationConfirmation(provider: ProviderConfig): boolean {
+  return providerEndpointDecision(provider).classification === 'ambiguous'
+}
+
+function providerDestinationSelection(provider: ProviderConfig): 'local' | 'cloud' | '' {
+  const decision = providerEndpointDecision(provider)
+  if (
+    decision.classification !== 'ambiguous' ||
+    provider.localitySource !== 'user' ||
+    provider.confirmedEndpointHost !== decision.host
+  ) return ''
+  return provider.locality === 'local' ? 'local' : 'cloud'
+}
+
+function handleProviderDestinationChange(
+  provider: ProviderConfig,
+  locality: 'local' | 'cloud',
+) {
+  const decision = providerEndpointDecision(provider)
+  if (decision.classification !== 'ambiguous' || !decision.host) return
+  provider.locality = locality
+  provider.localitySource = 'user'
+  provider.confirmedEndpointHost = decision.host
+  provider.privateNetworkAccess = decision.requiresPrivateNetworkAccess
+    ? { host: decision.host, allowed: true }
+    : undefined
+  delete testProviderResult.value[provider.id]
   autoSave()
+}
+
+function handleProviderBaseUrlInput(provider: ProviderConfig) {
+  const decision = providerEndpointDecision(provider)
+  const confirmationStillMatches =
+    provider.localitySource === 'user' &&
+    !!decision.host &&
+    provider.confirmedEndpointHost === decision.host
+
+  if (!confirmationStillMatches) {
+    provider.confirmedEndpointHost = undefined
+    provider.privateNetworkAccess = undefined
+    provider.localitySource = 'system'
+    provider.locality =
+      decision.classification === 'local'
+        ? 'local'
+        : decision.classification === 'cloud'
+          ? 'cloud'
+          : 'auto'
+  }
+  delete testProviderResult.value[provider.id]
+  autoSave()
+}
+
+function effectiveProviderLocality(provider: ProviderConfig): 'local' | 'cloud' {
+  return resolveEffectiveProviderLocality({ ...provider, baseUrl: providerBaseUrl(provider) })
 }
 
 /** 删除模型 */
@@ -846,7 +887,7 @@ function saveEditModel() {
 
 // ─── Provider 连接测试 ────────────────────────────────
 const testingProviderId = ref<string | null>(null)
-const testProviderResult = ref<Record<string, { ok: boolean; msg: string }>>({})
+const testProviderResult = ref<Record<string, { ok: boolean; msg: string; locality?: 'local' | 'cloud' }>>({})
 /** API Key 变化后自动测试连接 + 拉取模型（防抖 1.5s） */
 function scheduleAutoTest(provider: ProviderConfig) {
   if (autoTestTimers[provider.id]) clearTimeout(autoTestTimers[provider.id])
@@ -900,19 +941,26 @@ async function testProvider(provider: ProviderConfig) {
 
   try {
     const preset = PROVIDER_PRESETS[provider.type]
-    const result = await testLLMConnection({
-      provider: {
-        type: provider.type,
-        api_key: provider.apiKey?.trim() ?? '',
-        base_url: provider.baseUrl || preset?.defaultBaseUrl || '',
-        model: selectedModelId,
+    const result = await testLLMConnection(
+      {
+        provider: {
+          type: provider.type,
+          api_key: provider.apiKey?.trim() ?? '',
+          base_url: provider.baseUrl || preset?.defaultBaseUrl || '',
+          model: selectedModelId,
+        },
       },
-    })
+      {
+        locality: effectiveProviderLocality(provider),
+        privateNetworkAccess: provider.privateNetworkAccess,
+      },
+    )
     testProviderResult.value[provider.id] = {
       ok: result.ok,
       msg:
         result.message ||
         (result.ok ? t('settings.llm.connectionOk') : t('settings.llm.connectionFailed')),
+      locality: result.ok ? effectiveProviderLocality(provider) : undefined,
     }
     // 连接成功后自动拉取远程模型列表（Ollama 由 syncOllamaModels 处理）
     if (result.ok && provider.type !== 'ollama') {
@@ -935,7 +983,11 @@ async function syncRemoteModels(provider: ProviderConfig): Promise<boolean> {
   const apiKey = provider.apiKey?.trim() || ''
   if (!baseUrl) return true
   try {
-    const remoteModels = await fetchProviderModels(baseUrl, apiKey)
+    const remoteModels = await fetchProviderModels(baseUrl, apiKey, {
+      providerType: provider.type,
+      locality: effectiveProviderLocality(provider),
+      privateNetworkAccess: provider.privateNetworkAccess,
+    })
     if (!remoteModels.length) return true
     // 目录层：全量 + 元数据存本地缓存（含"新增"diff），供模型管理器浏览
     catalogStore.setCatalog(provider.id, remoteModels)
@@ -1311,7 +1363,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                     <button
                       class="hc-provider__icon-btn"
                       title="测试连接"
-                      :disabled="testingProviderId === provider.id"
+                      :disabled="testingProviderId === provider.id || providerEndpointDecision(provider).classification === 'blocked'"
                       @click.stop="testProvider(provider)"
                     >
                       <Loader2
@@ -1363,12 +1415,14 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       >{{ t('settings.llm.provider') }}
                       <span class="hc-settings__required">*</span></label
                     >
-                    <input
+                    <HcClearableField>
+                      <input
                       v-model="provider.name"
                       type="text"
                       class="hc-input"
                       @input="autoSave()"
                     />
+                    </HcClearableField>
                   </div>
 
                   <div v-if="provider.type !== 'ollama'" class="hc-settings__field">
@@ -1377,13 +1431,15 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       <span class="hc-settings__required">*</span></label
                     >
                     <div class="hc-settings__input-group">
-                      <input
+                      <HcClearableField :trailing="38">
+                        <input
                         v-model="provider.apiKey"
                         :type="showApiKeys[provider.id] ? 'text' : 'password'"
                         class="hc-input"
                         :placeholder="PROVIDER_PRESETS[provider.type]?.placeholder || 'API Key'"
                         @input="autoSave(); scheduleAutoTest(provider)"
                       />
+                      </HcClearableField>
                       <button
                         class="hc-settings__eye-btn"
                         @click="showApiKeys[provider.id] = !showApiKeys[provider.id]"
@@ -1399,29 +1455,68 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       >{{ t('settings.llm.baseUrl') }}
                       <span class="hc-settings__required">*</span></label
                     >
-                    <input
+                    <HcClearableField>
+                      <input
                       v-model="provider.baseUrl"
                       type="text"
                       class="hc-input"
                       :placeholder="PROVIDER_PRESETS[provider.type]?.defaultBaseUrl"
-                      @input="autoSave()"
+                      @input="handleProviderBaseUrlInput(provider)"
                     />
+                    </HcClearableField>
                     <p v-if="provider.type === 'ollama'" class="hc-settings__hint">
                       {{ t('settings.llm.ollamaBaseUrlHint', '本地 Ollama 服务地址，默认端口 11434。如需修改端口，请同步修改此地址。') }}
                     </p>
+                    <p
+                      v-if="providerEndpointDecision(provider).classification === 'blocked'"
+                      class="hc-settings__hint hc-settings__hint--error"
+                    >
+                      {{ t('settings.llm.unsafeEndpoint') }}
+                    </p>
                   </div>
 
-                  <div class="hc-settings__field">
-                    <label class="hc-settings__label">{{ t('settings.llm.locality') }}</label>
-                    <HcSelect
-                      :model-value="provider.locality ?? 'auto'"
-                      :options="providerLocalityOptions"
-                      :data-testid="`provider-locality-${provider.id}`"
-                      class="hc-settings__select"
-                      @update:model-value="handleProviderLocalityChange(provider, $event)"
-                    />
-                    <p class="hc-settings__hint">
-                      {{ t('settings.llm.localityHint') }}
+                  <div
+                    v-if="providerNeedsDestinationConfirmation(provider)"
+                    class="hc-settings__field hc-provider-destination"
+                  >
+                    <label class="hc-settings__label">
+                      {{ t('settings.llm.destinationQuestion') }}
+                    </label>
+                    <div class="hc-provider-destination__choices">
+                      <label class="hc-provider-destination__choice">
+                        <input
+                          type="radio"
+                          :name="`provider-destination-${provider.id}`"
+                          value="cloud"
+                          :checked="providerDestinationSelection(provider) === 'cloud'"
+                          :data-testid="`provider-destination-cloud-${provider.id}`"
+                          @change="handleProviderDestinationChange(provider, 'cloud')"
+                        />
+                        <span>
+                          <b>{{ t('settings.llm.destinationCloud') }}</b>
+                          <small>{{ t('settings.llm.destinationCloudHint') }}</small>
+                        </span>
+                      </label>
+                      <label class="hc-provider-destination__choice">
+                        <input
+                          type="radio"
+                          :name="`provider-destination-${provider.id}`"
+                          value="local"
+                          :checked="providerDestinationSelection(provider) === 'local'"
+                          :data-testid="`provider-destination-local-${provider.id}`"
+                          @change="handleProviderDestinationChange(provider, 'local')"
+                        />
+                        <span>
+                          <b>{{ t('settings.llm.destinationLocal') }}</b>
+                          <small>{{ t('settings.llm.destinationLocalHint') }}</small>
+                        </span>
+                      </label>
+                    </div>
+                    <p
+                      v-if="providerEndpointDecision(provider).requiresPrivateNetworkAccess"
+                      class="hc-settings__hint"
+                    >
+                      {{ t('settings.llm.privateNetworkTrustHint') }}
                     </p>
                   </div>
 
@@ -1515,7 +1610,8 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                     </div>
                     <!-- 添加自定义模型表单（内联） -->
                     <div v-if="showAddModelPanel" class="hc-model-add-inline">
-                      <input
+                      <HcClearableField>
+                        <input
                         v-model="newModelId"
                         type="text"
                         class="hc-input hc-input--sm"
@@ -1523,6 +1619,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         @keyup.enter="newModelId.trim() && handleAddCustomModel(provider)"
                         @keyup.escape="showAddModelPanel = false"
                       />
+                      </HcClearableField>
                       <button
                         class="hc-btn hc-btn-primary hc-btn-sm"
                         :disabled="!newModelId.trim()"
@@ -1540,7 +1637,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   <div class="hc-provider__test-row">
                     <button
                       class="hc-btn hc-btn-sm"
-                      :disabled="testingProviderId === provider.id"
+                      :disabled="testingProviderId === provider.id || providerEndpointDecision(provider).classification === 'blocked'"
                       @click="testProvider(provider)"
                     >
                       <Loader2
@@ -1563,6 +1660,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       <CheckCircle v-if="testProviderResult[provider.id]!.ok" :size="12" />
                       <XCircle v-else :size="12" />
                       {{ testProviderResult[provider.id]!.msg }}
+                      <template v-if="testProviderResult[provider.id]!.ok && testProviderResult[provider.id]!.locality">
+                        · {{ testProviderResult[provider.id]!.locality === 'local'
+                          ? t('settings.llm.localService')
+                          : t('settings.llm.cloudService') }}
+                      </template>
                     </span>
                   </div>
 
@@ -1578,6 +1680,20 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 </div>
               </div>
             </div>
+
+            <p
+              class="hc-provider__service-notice"
+              data-testid="third-party-ai-services-notice"
+            >
+              {{ t('settings.llm.providerServiceNotice') }}
+              <a
+                :href="thirdPartyAiServicesHref"
+                :aria-label="`${t('settings.llm.providerServiceDocs')} — ${t('common.openInNewWindow')}`"
+                target="_blank"
+                rel="noopener noreferrer"
+                data-testid="third-party-ai-services-link"
+              >{{ t('settings.llm.providerServiceDocs') }}</a>
+            </p>
           </div>
 
           <!-- Automation permissions（治理入口：级别/待处理/审计/矩阵） -->
@@ -1587,40 +1703,39 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
           <!-- System (merged: appearance + storage) -->
           <div v-else-if="activeSection === 'system'" class="hc-settings__section">
-            <div class="hc-settings__form">
-              <div class="hc-settings__sep" style="margin-top: 4px">
+            <div class="hc-settings__form hc-settings__form--system">
+              <div class="hc-settings__sep">
                 <span class="hc-settings__sep-label">{{ t('settings.appearance.title') }}</span>
                 <span class="hc-settings__sep-line"></span>
               </div>
-              <div class="hc-settings__field">
-                <div class="hc-settings__theme-grid">
-                  <button
-                    v-for="opt in [
-                      {
-                        key: 'light' as ThemeMode,
-                        label: t('settings.appearance.light'),
-                        desc: t('settings.appearance.lightDesc'),
-                      },
-                      {
-                        key: 'dark' as ThemeMode,
-                        label: t('settings.appearance.dark'),
-                        desc: t('settings.appearance.darkDesc'),
-                      },
-                      {
-                        key: 'system' as ThemeMode,
-                        label: t('settings.appearance.system'),
-                        desc: t('settings.appearance.systemDesc'),
-                      },
-                    ]"
-                    :key="opt.key"
-                    class="hc-settings__theme-card"
-                    :class="{ 'hc-settings__theme-card--active': themeMode === opt.key }"
-                    @click="handleThemeSelect(opt.key)"
-                  >
-                    <div class="hc-settings__theme-label">{{ opt.label }}</div>
-                    <div class="hc-settings__theme-desc">{{ opt.desc }}</div>
-                  </button>
-                </div>
+              <div class="hc-settings__theme-grid">
+                <button
+                  v-for="opt in [
+                    {
+                      key: 'light' as ThemeMode,
+                      label: t('settings.appearance.light'),
+                      desc: t('settings.appearance.lightDesc'),
+                    },
+                    {
+                      key: 'dark' as ThemeMode,
+                      label: t('settings.appearance.dark'),
+                      desc: t('settings.appearance.darkDesc'),
+                    },
+                    {
+                      key: 'system' as ThemeMode,
+                      label: t('settings.appearance.system'),
+                      desc: t('settings.appearance.systemDesc'),
+                    },
+                  ]"
+                  :key="opt.key"
+                  class="hc-settings__theme-card"
+                  @click="handleThemeSelect(opt.key)"
+                >
+                  <span class="hc-settings__theme-copy">
+                    <span class="hc-settings__theme-label">{{ opt.label }}</span>
+                    <span class="hc-settings__theme-desc">{{ opt.desc }}</span>
+                  </span>
+                </button>
               </div>
 
               <div class="hc-settings__row">
@@ -1634,7 +1749,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 </div>
               </div>
 
-              <div class="hc-settings__sep" style="margin-top: 16px">
+              <div class="hc-settings__sep">
                 <span class="hc-settings__sep-label">{{ t('settings.general.title') }}</span>
                 <span class="hc-settings__sep-line"></span>
               </div>
@@ -1682,26 +1797,13 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               </label>
             </div>
 
-            <!-- 备份与恢复（M2-20260710·原型 2093-2095）：通用数据目录 + 场景扩展缝 -->
-            <div class="hc-settings__sep" style="margin-top: 16px">
-              <span class="hc-settings__sep-label">{{ t('settings.backup.title') }}</span>
-              <span class="hc-settings__sep-line"></span>
-            </div>
-            <div class="hc-settings__backup-row" data-testid="settings-data-dir">
-              <span class="hc-settings__backup-label">{{ t('settings.backup.dataDir') }}</span>
-              <span class="hc-settings__backup-sp" />
-              <bdi class="hc-settings__backup-path" dir="ltr">{{ dataDirDisplay }}</bdi>
-              <button class="hc-settings__backup-btn" @click="openDataDir">{{ t('settings.backup.open') }}</button>
-            </div>
-            <component :is="settingsExtension" v-if="settingsExtension" />
-
             <!-- 系统信息 -->
-            <div class="hc-settings__sep" style="margin-top: 16px">
+            <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">{{ t('settings.system.info') }}</span>
               <span class="hc-settings__sep-line"></span>
             </div>
 
-            <div class="hc-card hc-settings__info-card" style="margin-top: 10px">
+            <div class="hc-settings__info-card" style="margin-top: 10px">
               <div class="hc-settings__info-grid">
                 <div>
                   <span class="hc-settings__info-label">{{ t('settings.system.version') }}</span>
@@ -1751,7 +1853,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             </div>
 
             <!-- 关于河蟹（身份入口，与「系统信息」分区风格一致） -->
-            <div class="hc-settings__sep" style="margin-top: 16px">
+            <div class="hc-settings__sep" style="margin-top: 18px">
               <span class="hc-settings__sep-label">{{ t('settings.system.aboutLabel', '关于河蟹') }}</span>
               <span class="hc-settings__sep-line"></span>
             </div>
@@ -1789,21 +1891,25 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
           <div class="hc-edit-model">
             <div class="hc-edit-model__field">
               <label>模型 ID <span class="hc-settings__required">*</span></label>
-              <input
+              <HcClearableField>
+                <input
                 v-model="editModelForm.id"
                 type="text"
                 class="hc-input"
                 placeholder="如 gpt-4o, claude-sonnet-4-6"
               />
+              </HcClearableField>
             </div>
             <div class="hc-edit-model__field">
               <label>显示名称</label>
-              <input
+              <HcClearableField>
+                <input
                 v-model="editModelForm.name"
                 type="text"
                 class="hc-input"
                 placeholder="留空则使用模型 ID"
               />
+              </HcClearableField>
             </div>
             <div class="hc-edit-model__field">
               <label>模型能力</label>
@@ -1938,6 +2044,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   margin-bottom: 12px;
 }
 
+.hc-settings__form--system {
+  gap: 0;
+  margin-bottom: 0;
+}
+
 
 .hc-settings__field {
   display: flex;
@@ -2037,8 +2148,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-settings__toggle-label {
+  display: block;
   font-size: 13px;
   font-weight: 500;
+  line-height: 1.5;
   color: var(--hc-text-primary);
 }
 
@@ -2178,16 +2291,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   margin-top: 0;
 }
 
-.hc-settings__backup-row { display: flex; align-items: center; gap: 12px; min-height: 44px; }
-.hc-settings__backup-label { font-size: 13px; font-weight: 500; }
-.hc-settings__backup-sp { flex: 1; }
-.hc-settings__backup-path { font-size: 12px; color: var(--hc-text-muted); font-family: ui-monospace, SFMono-Regular, monospace; }
-.hc-settings__backup-btn {
-  font-size: 12.5px; padding: 6px 11px; border-radius: 8px; cursor: pointer;
-  border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-primary);
-}
-.hc-settings__backup-btn:hover { background: var(--hc-bg-hover); }
-
 .hc-settings__sep-label {
   font-size: 11px;
   font-weight: 600;
@@ -2270,42 +2373,66 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 /* ─── Theme Cards ───── */
 .hc-settings__theme-grid {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+  margin: 8px 0 14px;
 }
 
 .hc-settings__theme-card {
-  flex: 1;
-  border-radius: var(--hc-radius-md);
-  border: 1.5px solid var(--hc-border);
-  background: var(--hc-bg-card);
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 60px;
   padding: 10px 12px;
+  border: 1.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
+  color: var(--hc-text-primary);
   text-align: left;
   cursor: pointer;
+  font: inherit;
   transition:
     border-color 0.2s,
-    box-shadow 0.2s;
+    box-shadow 0.2s,
+    transform 0.15s var(--hc-ease-smooth);
 }
 
 .hc-settings__theme-card:hover {
-  border-color: var(--hc-accent-subtle);
+  border-color: var(--hc-border-hl);
+  transform: translateY(-1px);
 }
 
-.hc-settings__theme-card--active {
-  border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+.hc-settings__theme-card:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 2px;
+}
+
+.hc-settings__theme-copy {
+  position: relative;
+  z-index: 1;
+  display: block;
+  min-width: 0;
 }
 
 .hc-settings__theme-label {
+  display: block;
+  overflow: hidden;
   font-size: 13px;
   font-weight: 600;
   color: var(--hc-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hc-settings__theme-desc {
+  display: block;
+  overflow: hidden;
   font-size: 11px;
   color: var(--hc-text-muted);
   margin-top: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ─── Info Display ───── */
@@ -2317,6 +2444,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-settings__info-card {
+  border: 1px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
   padding: 10px 14px;
 }
 
@@ -2335,7 +2465,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-settings__info-label {
+  display: block;
   font-size: 11px;
+  line-height: 1.5;
   color: var(--hc-text-muted);
 }
 
@@ -2392,7 +2524,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   color: var(--hc-text-secondary);
 }
 .hc-settings__about-emoji {
-  margin-right: 4px;
+  margin-right: 0;
 }
 .hc-settings__about-link {
   display: inline-flex;
@@ -2471,6 +2603,30 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.hc-provider__service-notice {
+  margin: 10px 2px 0;
+  color: var(--hc-text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.hc-provider__service-notice a {
+  color: var(--hc-text-secondary);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.hc-provider__service-notice a:hover {
+  color: var(--hc-accent);
+  text-decoration: underline;
+}
+
+.hc-provider__service-notice a:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid color-mix(in srgb, var(--hc-accent) 55%, transparent);
+  outline-offset: 2px;
 }
 
 .hc-provider__card {
@@ -2831,6 +2987,69 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 .hc-settings__hint {
   font-size: 12px;
   color: var(--hc-text-muted);
+}
+
+.hc-settings__hint--error {
+  color: var(--hc-error);
+}
+
+.hc-provider-destination {
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--hc-accent) 24%, var(--hc-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--hc-accent) 4%, transparent);
+}
+
+.hc-provider-destination__choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.hc-provider-destination__choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--hc-border);
+  border-radius: 8px;
+  background: var(--hc-bg-primary);
+  cursor: pointer;
+}
+
+.hc-provider-destination__choice:has(input:checked) {
+  border-color: var(--hc-accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--hc-accent) 25%, transparent);
+}
+
+.hc-provider-destination__choice input {
+  margin-top: 2px;
+  accent-color: var(--hc-accent);
+}
+
+.hc-provider-destination__choice span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.hc-provider-destination__choice b {
+  color: var(--hc-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.hc-provider-destination__choice small {
+  color: var(--hc-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@media (max-width: 560px) {
+  .hc-provider-destination__choices {
+    grid-template-columns: 1fr;
+  }
 }
 
 .hc-settings__btn--saved {
@@ -3354,7 +3573,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   }
 
   .hc-settings__theme-grid {
-    flex-direction: column;
+    grid-template-columns: 1fr;
   }
 
   .hc-settings__info-grid {

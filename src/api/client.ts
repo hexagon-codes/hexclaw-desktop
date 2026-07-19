@@ -62,9 +62,22 @@ async function withNormalizedError<T>(p: Promise<T>): Promise<T> {
   }
 }
 
-/** GET 请求 */
-export function apiGet<T>(url: string, query?: Record<string, unknown>) {
-  return withNormalizedError(api<T>(url, { method: 'GET', query }))
+export interface ApiGetOptions {
+  timeout?: number | false
+  signal?: AbortSignal
+}
+
+/** GET 请求；轮询类调用可透传 AbortSignal，离开页面时立即释放在途连接。 */
+export function apiGet<T>(
+  url: string,
+  query?: Record<string, unknown>,
+  options?: ApiGetOptions,
+) {
+  const opts: Record<string, unknown> = { method: 'GET', query }
+  if (options?.timeout === false) opts.timeout = 0
+  else if (options?.timeout && options.timeout > 0) opts.timeout = options.timeout
+  if (options?.signal) opts.signal = options.signal
+  return withNormalizedError(api<T>(url, opts))
 }
 
 /** apiPost 可选参数 — 主要给"会触发慢上游"的接口（cron 编译）放宽 timeout */
@@ -92,7 +105,7 @@ export function apiPost<T>(
         : options?.timeout && options.timeout > 0
           ? options.timeout
           : env.timeout
-    return uploadFormData<T>(url, body, tm)
+    return uploadFormData<T>(url, body, tm, options?.signal)
   }
   const opts: Record<string, unknown> = { method: 'POST' }
   if (body) opts.body = body as Record<string, unknown>
@@ -106,11 +119,19 @@ async function uploadFormData<T>(
   url: string,
   body: FormData,
   timeoutMs: number | false,
+  callerSignal?: AbortSignal,
 ): Promise<T> {
   const fullUrl = `${env.apiBase}${url}`
   logger.debug(`→ POST ${fullUrl} (multipart)`)
   const controller = new AbortController()
   const timer = timeoutMs === false ? null : setTimeout(() => controller.abort(), timeoutMs)
+  // BUG-20260718（§15）：透传调用方 AbortSignal——拍照/教材/作品「取消」必须真正中止上传，
+  // 而非只受内部 timeout 支配（旧代码忽略 caller signal → 取消后仍继续上传并写对象）。
+  const onCallerAbort = () => controller.abort((callerSignal as AbortSignal | undefined)?.reason)
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort(callerSignal.reason)
+    else callerSignal.addEventListener('abort', onCallerAbort, { once: true })
+  }
   try {
     const response = await fetch(fullUrl, {
       method: 'POST',
@@ -140,6 +161,7 @@ async function uploadFormData<T>(
     return (await response.json()) as T
   } finally {
     if (timer !== null) clearTimeout(timer)
+    if (callerSignal) callerSignal.removeEventListener('abort', onCallerAbort)
   }
 }
 

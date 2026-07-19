@@ -322,6 +322,32 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('LLM 服务商')
   })
 
+  it('shows the third-party AI service notice once below the provider list', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const providerList = wrapper.get('.hc-provider__list')
+    const notice = wrapper.get('[data-testid="third-party-ai-services-notice"]')
+    const link = wrapper.get('[data-testid="third-party-ai-services-link"]')
+
+    expect(notice.text()).toContain(
+      '云端模型由你配置的第三方 Provider 提供。Provider 可能处理传输内容。',
+    )
+    expect(link.element.tagName).toBe('A')
+    expect(link.text()).toBe('查看第三方 AI 服务说明 ↗')
+    expect(link.attributes('href')).toBe(
+      'https://hexclaw.net/zh/third-party-ai-services',
+    )
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.attributes('rel')).toBe('noopener noreferrer')
+    expect(link.attributes('aria-label')).toContain('在新窗口打开')
+    expect(
+      providerList.element.compareDocumentPosition(notice.element) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(wrapper.findAll('[data-testid="third-party-ai-services-link"]')).toHaveLength(1)
+  })
+
   // 回归 bug-20260626：LLM 服务商页滚动条悬浮在窗口中部。
   // 根因——overflow-y:auto 挂在 max-width 受限的内层 section 上，滚动条贴着「窄列」右缘，
   //        在宽窗口里悬浮于中间，与顶栏右缘脱节，观感破碎。
@@ -376,7 +402,20 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(chips[0]!.text()).toContain('GPT-4o')
   })
 
-  it('lets a loopback gateway be marked as cloud instead of assuming local compute', async () => {
+  it('hides infrastructure choices for a public provider endpoint', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const providerHead = wrapper.find('.hc-provider__card-head')
+    expect(providerHead.exists()).toBe(true)
+    await providerHead.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('模型部署位置')
+    expect(wrapper.text()).not.toContain('这个地址连接到哪里？')
+  })
+
+  it('asks a natural-language question for an ambiguous loopback gateway', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
 
@@ -390,11 +429,61 @@ describe('SettingsView — E2E 关键路径', () => {
     await providerHead.trigger('click')
     await flushPromises()
 
-    const testid = `provider-locality-${provider!.id}`
-    expect(wrapper.find(`[data-testid="${testid}"]`).exists()).toBe(true)
-    await selectHcOption(wrapper, testid, '云端模型（含本地反向代理）')
+    expect(wrapper.text()).toContain('这个地址连接到哪里？')
+    expect(wrapper.text()).toContain('互联网服务')
+    expect(wrapper.text()).toContain('这台电脑或可信局域网')
+    expect(wrapper.find(`[data-testid="provider-destination-cloud-${provider!.id}"]`).exists()).toBe(true)
+    expect(wrapper.find(`[data-testid="provider-destination-local-${provider!.id}"]`).exists()).toBe(true)
+  })
 
-    expect(provider!.locality).toBe('cloud')
+  it('persists a local confirmation for the current endpoint host without a second submit', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config?.llm.providers[0]
+    expect(provider).toBeDefined()
+    provider!.baseUrl = 'http://localhost:18080/v1'
+
+    await wrapper.find('.hc-provider__card-head').trigger('click')
+    await flushPromises()
+
+    await wrapper
+      .get(`[data-testid="provider-destination-local-${provider!.id}"]`)
+      .setValue(true)
+    await flushPromises()
+
+    expect(provider).toMatchObject({
+      locality: 'local',
+      localitySource: 'user',
+      confirmedEndpointHost: 'localhost',
+    })
+  })
+
+  it('shows the effective data destination after a successful connection test', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    await wrapper.find('.hc-provider__card-head').trigger('click')
+    await wrapper.get('.hc-provider__test-row button').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.hc-provider__test-badge').text()).toContain('云端服务')
+  })
+
+  it('blocks protected system-network endpoints in the form', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    await wrapper.find('.hc-provider__card-head').trigger('click')
+    const baseUrlInput = wrapper
+      .findAll('input.hc-input')
+      .find((input) => input.attributes('placeholder') === 'https://api.openai.com/v1')
+    expect(baseUrlInput).toBeDefined()
+    await baseUrlInput!.setValue('http://169.254.169.254/latest/meta-data')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('受保护的系统网络')
+    expect(wrapper.get('.hc-provider__test-row button').attributes('disabled')).toBeDefined()
   })
 
   it('opens inline add model form when clicking custom chip', async () => {
@@ -734,6 +823,31 @@ describe('SettingsView — E2E 关键路径', () => {
 
     resolveTest({ ok: true, message: 'ok' })
     await flushPromises()
+  })
+
+  it('passes provider locality into the connection probe policy', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.baseUrl = 'http://localhost:18080/v1'
+    provider.locality = 'local'
+    provider.localitySource = 'user'
+    provider.confirmedEndpointHost = 'localhost'
+    mockTestLLMConnection.mockClear()
+
+    const vm = wrapper.vm as unknown as {
+      testProvider: (provider: unknown) => Promise<void>
+    }
+    await vm.testProvider(provider)
+
+    expect(mockTestLLMConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: expect.objectContaining({ base_url: provider.baseUrl }),
+      }),
+      expect.objectContaining({ locality: 'local' }),
+    )
   })
 
   // ────────────────────────────────────────────────────
@@ -1083,6 +1197,24 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('data.db')
     expect(wrapper.text()).toContain('127.0.0.1')
   })
+
+  it('does not expose application data or advanced diagnostics in system settings', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const systemBtn = wrapper.findAll('button').find((b) => b.text().includes('系统设置'))
+    expect(systemBtn).toBeDefined()
+    await systemBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('高级与诊断')
+    expect(wrapper.text()).not.toContain('应用数据')
+    expect(wrapper.text()).not.toContain('仅用于故障排查，请勿手动修改目录内容')
+    expect(wrapper.text()).not.toContain('在访达中显示')
+    expect(wrapper.find('[data-testid="settings-app-data"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('家庭学习档案')
+    expect(wrapper.text()).not.toContain('备份与恢复')
+  }, 30_000)
 
   // ────────────────────────────────────────────────────
   // 11. 后端不可达时使用默认配置

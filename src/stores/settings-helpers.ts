@@ -4,6 +4,7 @@
 
 import { loadSecureValue, removeSecureValue, saveSecureValue } from '@/utils/secure-store'
 import { inferCapabilitiesFromId } from '@/config/providers'
+import { resolveEffectiveProviderLocality } from '@/utils/provider-endpoint'
 import type {
   AppConfig,
   CatalogModel,
@@ -356,6 +357,11 @@ export function backendToProviders(
       models: mergeProviderModels(localProvider, p.model, p.models),
       selectedModelId: '',
       locality: p.locality ?? localProvider?.locality ?? 'auto',
+      localitySource: p.locality_source ?? localProvider?.localitySource,
+      confirmedEndpointHost:
+        p.confirmed_endpoint_host ?? localProvider?.confirmedEndpointHost,
+      privateNetworkAccess:
+        p.private_network_access ?? localProvider?.privateNetworkAccess,
       keepAlive: p.keep_alive || localProvider?.keepAlive || '',
       numCtx: p.num_ctx ?? localProvider?.numCtx ?? 0,
     }
@@ -390,7 +396,10 @@ export function providersToBackend(
         p.type === 'custom' || !KNOWN_PROVIDER_TYPES.includes(p.type as KnownProviderType)
           ? 'openai'
           : '',
-      locality: p.locality ?? 'auto',
+      locality: resolveEffectiveProviderLocality(p),
+      locality_source: p.localitySource,
+      confirmed_endpoint_host: p.confirmedEndpointHost,
+      private_network_access: p.privateNetworkAccess,
       tools_enabled: p.toolsEnabled ?? null,
       max_tools: p.maxTools ?? 0,
       enabled: p.enabled,

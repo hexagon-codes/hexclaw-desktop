@@ -1,6 +1,13 @@
 import { env, OLLAMA_BASE } from '@/config/env'
 import { apiPost, apiDelete } from './client'
 
+/** 轻量错误消息提取（不引入额外依赖，避免测试 mock 面扩大）。 */
+function errMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (typeof e === 'string') return e
+  return 'Ollama daemon unreachable'
+}
+
 export interface OllamaModel {
   name: string
   size: number
@@ -15,6 +22,10 @@ export interface OllamaModel {
 
 export interface OllamaStatus {
   running: boolean
+  /** daemon 是否可达（BUG-20260718：区分「不可达」与「可达但无模型」）。 */
+  reachable?: boolean
+  /** 不可达原因（reachable=false 时）。 */
+  error?: string
   version?: string
   models?: OllamaModel[]
   associated: boolean
@@ -38,43 +49,72 @@ export interface OllamaRunningModel {
  * 避免 sidecar 未启动时误报 Ollama 不可用。
  */
 export async function getOllamaStatus(): Promise<OllamaStatus> {
+  // BUG-20260718（§15）：以 /api/tags 作为存活探针（必需）。version 是可选补充，
+  // 不能因 version 探测失败就把一个存活的 daemon 误报为 running:false（旧 Promise.all
+  // 任一失败即 catch → 不可达与无模型混为一谈）。
+  let tagsRes: Response
   try {
-    const [tagsRes, versionRes] = await Promise.all([
-      fetch(`${OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(3000) }),
-      fetch(`${OLLAMA_BASE}/api/version`, { signal: AbortSignal.timeout(3000) }),
-    ])
-    if (!tagsRes.ok) throw new Error(`tags: ${tagsRes.status}`)
-    const tags = await tagsRes.json() as { models?: Array<{ name: string; size: number; modified_at: string; capabilities?: string[]; details?: { family?: string; parameter_size?: string; quantization_level?: string } }> }
-    const version = versionRes.ok ? ((await versionRes.json()) as { version?: string }).version : undefined
-    const models: OllamaModel[] = (tags.models || []).map((m) => ({
-      name: m.name,
-      size: m.size,
-      modified: m.modified_at,
-      family: m.details?.family,
-      parameter_size: m.details?.parameter_size,
-      quantization_level: m.details?.quantization_level,
-      // BUG-20260704：透出真实能力，视觉模型（如 qwen3.5:9b）才能显示「视觉」徽章
-      capabilities: m.capabilities,
-    }))
-    return {
-      running: true,
-      version,
-      models,
-      associated: true,
-      model_count: models.length,
-    }
+    tagsRes = await fetch(`${OLLAMA_BASE}/api/tags`, { signal: AbortSignal.timeout(3000) })
+  } catch (e) {
+    return { running: false, reachable: false, error: errMessage(e), models: [], associated: false, model_count: 0 }
+  }
+  if (!tagsRes.ok) {
+    return { running: false, reachable: false, error: `tags: ${tagsRes.status}`, models: [], associated: false, model_count: 0 }
+  }
+
+  const tags = await tagsRes.json() as { models?: Array<{ name: string; size: number; modified_at: string; capabilities?: string[]; details?: { family?: string; parameter_size?: string; quantization_level?: string } }> }
+
+  // version 可选：失败不掩盖「daemon 存活」这一事实。
+  let version: string | undefined
+  try {
+    const versionRes = await fetch(`${OLLAMA_BASE}/api/version`, { signal: AbortSignal.timeout(3000) })
+    if (versionRes.ok) version = ((await versionRes.json()) as { version?: string }).version
   } catch {
-    return { running: false, models: [], associated: false, model_count: 0 }
+    // daemon 已确认可达（tags 成功），version 拿不到无妨
+  }
+
+  const models: OllamaModel[] = (tags.models || []).map((m) => ({
+    name: m.name,
+    size: m.size,
+    modified: m.modified_at,
+    family: m.details?.family,
+    parameter_size: m.details?.parameter_size,
+    quantization_level: m.details?.quantization_level,
+    // BUG-20260704：透出真实能力，视觉模型（如 qwen3.5:9b）才能显示「视觉」徽章
+    capabilities: m.capabilities,
+  }))
+  return {
+    running: true,
+    reachable: true,
+    version,
+    models,
+    associated: true,
+    model_count: models.length,
   }
 }
 
-/** 直连 Ollama /api/ps 获取运行中模型 */
-export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
+/** 运行中模型结果（BUG-20260718：区分「daemon 不可达」与「可达但无运行模型」）。 */
+export interface OllamaRunningResult {
+  models: OllamaRunningModel[]
+  /** daemon 是否可达。 */
+  reachable: boolean
+  /** 异常原因（不可达或 /api/ps 非 2xx）。 */
+  error?: string
+}
+
+/**
+ * 直连 Ollama /api/ps 获取运行中模型，区分不可达 vs 无模型。
+ *
+ * BUG-20260718（§15）：旧 getOllamaRunning 捕获任意错误都返回 []，「daemon 不可达」
+ * 与「可达但无运行模型」无法区分。此处返回 reachable/error；空模型（reachable=true）
+ * 与不可达（reachable=false）分开。
+ */
+export async function getOllamaRunningResult(): Promise<OllamaRunningResult> {
   try {
     const res = await fetch(`${OLLAMA_BASE}/api/ps`, { signal: AbortSignal.timeout(3000) })
-    if (!res.ok) return []
+    if (!res.ok) return { models: [], reachable: true, error: `ps: ${res.status}` }
     const data = await res.json() as { models?: Array<{ name: string; size: number; size_vram: number; expires_at: string; details?: { parameter_size?: string; quantization_level?: string }; context_length?: number }> }
-    return (data.models || []).map((m) => ({
+    const models = (data.models || []).map((m) => ({
       name: m.name,
       size: m.size,
       size_vram: m.size_vram,
@@ -83,9 +123,15 @@ export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
       quantization_level: m.details?.quantization_level,
       context_length: m.context_length ?? 0,
     }))
-  } catch {
-    return []
+    return { models, reachable: true }
+  } catch (e) {
+    return { models: [], reachable: false, error: errMessage(e) }
   }
+}
+
+/** 运行中模型（best-effort 旧签名）：委托 getOllamaRunningResult，仅取 models。 */
+export async function getOllamaRunning(): Promise<OllamaRunningModel[]> {
+  return (await getOllamaRunningResult()).models
 }
 
 export async function loadOllamaModel(model: string): Promise<void> {

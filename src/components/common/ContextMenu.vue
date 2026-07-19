@@ -24,29 +24,52 @@ const visible = ref(false)
 const x = ref(0)
 const y = ref(0)
 const menuRef = ref<HTMLDivElement>()
+let returnFocusTo: HTMLElement | null = null
+
+function fitToViewport(left: number, top: number) {
+  const el = menuRef.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  x.value = Math.max(8, Math.min(left, window.innerWidth - rect.width - 8))
+  y.value = Math.max(8, Math.min(top, window.innerHeight - rect.height - 8))
+}
+
+function focusFirstItem() {
+  menuRef.value?.querySelector<HTMLButtonElement>('.hc-ctx__item:not(:disabled)')?.focus()
+}
 
 function show(event: MouseEvent) {
   event.preventDefault()
+  returnFocusTo = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
   x.value = event.clientX
   y.value = event.clientY
   visible.value = true
   nextTick(() => {
-    // Adjust position if menu overflows viewport
-    const el = menuRef.value
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    if (rect.right > window.innerWidth) {
-      x.value = window.innerWidth - rect.width - 8
-    }
-    if (rect.bottom > window.innerHeight) {
-      y.value = window.innerHeight - rect.height - 8
-    }
+    fitToViewport(event.clientX, event.clientY)
+    focusFirstItem()
   })
 }
 
-function hide() {
+/** Anchor the menu below a compact trigger (for ellipsis buttons) without coupling callers to menu geometry. */
+function showAt(anchor: HTMLElement) {
+  returnFocusTo = anchor
+  visible.value = true
+  nextTick(() => {
+    const anchorRect = anchor.getBoundingClientRect()
+    const menuWidth = menuRef.value?.getBoundingClientRect().width ?? 0
+    fitToViewport(anchorRect.right - menuWidth, anchorRect.bottom + 6)
+    focusFirstItem()
+  })
+}
+
+function hide(restoreFocus = false) {
   visible.value = false
   emit('close')
+  if (restoreFocus) {
+    const target = returnFocusTo
+    nextTick(() => target?.focus())
+  }
+  returnFocusTo = null
 }
 
 function handleSelect(item: ContextMenuItem) {
@@ -57,8 +80,29 @@ function handleSelect(item: ContextMenuItem) {
 
 function handleClickOutside(e: MouseEvent) {
   if (visible.value && menuRef.value && !menuRef.value.contains(e.target as Node)) {
-    hide()
+    hide(false)
   }
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  const buttons = Array.from(menuRef.value?.querySelectorAll<HTMLButtonElement>('.hc-ctx__item:not(:disabled)') ?? [])
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    hide(true)
+    return
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key) || buttons.length === 0) return
+  e.preventDefault()
+  const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
+  const next = e.key === 'Home'
+    ? 0
+    : e.key === 'End'
+      ? buttons.length - 1
+      : e.key === 'ArrowDown'
+        ? (current + 1 + buttons.length) % buttons.length
+        : (current - 1 + buttons.length) % buttons.length
+  buttons[next]?.focus()
 }
 
 onMounted(() => {
@@ -71,7 +115,7 @@ onUnmounted(() => {
   document.removeEventListener('contextmenu', handleClickOutside)
 })
 
-defineExpose({ show, hide })
+defineExpose({ show, showAt, hide })
 </script>
 
 <template>
@@ -86,14 +130,18 @@ defineExpose({ show, hide })
         v-if="visible"
         ref="menuRef"
         class="hc-ctx"
+        role="menu"
+        aria-orientation="vertical"
         :style="{ left: x + 'px', top: y + 'px' }"
         @contextmenu.prevent
+        @keydown="handleKeydown"
       >
         <template v-for="item in items" :key="item.id">
           <div v-if="item.separator" class="hc-ctx__sep" />
           <button
             v-else
             class="hc-ctx__item"
+            role="menuitem"
             :class="{
               'hc-ctx__item--danger': item.danger,
               'hc-ctx__item--disabled': item.disabled,

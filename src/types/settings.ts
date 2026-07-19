@@ -58,6 +58,12 @@ export function catalogModelHasMetadata(m: CatalogModel): boolean {
 
 /** Provider 配置 */
 export type ProviderLocality = 'auto' | 'local' | 'cloud'
+export type ProviderLocalitySource = 'system' | 'user'
+
+export interface PrivateNetworkAccess {
+  host: string
+  allowed: boolean
+}
 
 export interface ProviderConfig {
   id: string
@@ -73,6 +79,12 @@ export interface ProviderConfig {
   selectedModelId?: string
   /** 模型算力/数据最终位置；本地反向代理云模型必须显式为 cloud */
   locality?: ProviderLocality
+  /** 部署位置由系统推断还是用户确认。 */
+  localitySource?: ProviderLocalitySource
+  /** 用户确认时的规范化主机；Base URL 换主机后确认自动失效。 */
+  confirmedEndpointHost?: string
+  /** RFC1918/ULA 访问授权，严格绑定到单个规范化主机。 */
+  privateNetworkAccess?: PrivateNetworkAccess
   /** 是否启用工具注入（undefined/null=自动，true=强制开，false=强制关） */
   toolsEnabled?: boolean | null
   /** 最大注入工具数（0或undefined=不限制） */
@@ -238,6 +250,9 @@ export interface BackendLLMProvider {
   models?: string[]              // 已配置的模型列表（桌面端持久化用）
   compatible: string
   locality?: ProviderLocality    // auto/local/cloud；localhost 云代理应为 cloud
+  locality_source?: ProviderLocalitySource
+  confirmed_endpoint_host?: string
+  private_network_access?: PrivateNetworkAccess
   tools_enabled?: boolean | null // null=自动（本地关/云开），true=强制开，false=强制关
   max_tools?: number             // 0=不限制
   enabled?: boolean              // false=禁用（后端保留 Key/配置但不参与路由）；缺省/true=启用
@@ -302,6 +317,8 @@ export interface LLMConnectionTestRequest {
     base_url: string
     api_key: string
     model: string
+    locality?: ProviderLocality
+    private_network_access?: PrivateNetworkAccess
   }
 }
 

@@ -435,7 +435,11 @@ export const useSettingsStore = defineStore('settings', () => {
       if (!p.enabled || !p.apiKey?.trim() || p.type === 'ollama') continue
       const baseUrl = p.baseUrl?.trim()
       if (!baseUrl) continue
-      fetchProviderModels(baseUrl, p.apiKey).then((remoteModels) => {
+      fetchProviderModels(baseUrl, p.apiKey, {
+        providerType: p.type,
+        locality: p.locality,
+        privateNetworkAccess: p.privateNetworkAccess,
+      }).then((remoteModels) => {
         if (!remoteModels.length || !config.value) return
         const target = config.value.llm.providers.find((cp) => cp.id === p.id)
         if (!target) return
@@ -463,6 +467,7 @@ export const useSettingsStore = defineStore('settings', () => {
     const newProvider: ProviderConfig = {
       ...provider,
       locality: provider.locality ?? (provider.type === 'ollama' ? 'local' : 'auto'),
+      localitySource: provider.localitySource ?? 'system',
       name: ensureUniqueProviderName(provider.name, config.value.llm.providers),
       id: nanoid(10),
     }

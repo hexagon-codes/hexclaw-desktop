@@ -2,7 +2,19 @@ import { logger } from '@/utils/logger'
 import { messageFromUnknownError } from '@/utils/errors'
 import { env } from '@/config/env'
 import { isTauri } from '@/utils/platform'
-import type { BackendLLMConfig, CatalogModel, LLMConnectionTestRequest, LLMConnectionTestResponse } from '@/types/settings'
+import {
+  classifyProviderEndpoint,
+  matchesProviderPrivateNetworkAccess,
+} from '@/utils/provider-endpoint'
+import type {
+  BackendLLMConfig,
+  CatalogModel,
+  LLMConnectionTestRequest,
+  LLMConnectionTestResponse,
+  PrivateNetworkAccess,
+  ProviderLocality,
+  ProviderType,
+} from '@/types/settings'
 
 function safeJsonParse<T>(text: string, context: string): T {
   try {
@@ -40,41 +52,16 @@ async function proxyApiRequestText(method: string, path: string, body: string | 
   }
 }
 
-function isPrivateHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
-  if (
-    host === 'localhost' ||
-    host === 'metadata.google.internal' ||
-    host === '0.0.0.0' ||
-    host === '::' ||
-    host === '::1'
-  ) {
-    return true
-  }
-
-  const ipv4 = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/)
-  if (ipv4) {
-    const octets = ipv4.slice(1).map(Number)
-    const a = octets[0] ?? -1
-    const b = octets[1] ?? -1
-    return (
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168)
-    )
-  }
-
-  // fc00::/7 (ULA) 与 fe80::/10 (link-local) 仅对 IPv6 字面量成立；纯域名（无 ':'）
-  // 不能用 'fc'/'fd' 前缀粗判，否则 fcdn.example.com / fd-cdn.net 等合法公网域名被误杀。
-  if (host.includes(':')) {
-    return host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80:')
-  }
-  return false
+interface ProviderEndpointContext {
+  providerType?: ProviderType
+  locality?: ProviderLocality
+  privateNetworkAccess?: PrivateNetworkAccess
 }
 
-function assertExternalBaseUrlAllowed(baseUrl: string, providerType?: string): void {
+function assertExternalBaseUrlAllowed(
+  baseUrl: string,
+  { providerType, privateNetworkAccess }: ProviderEndpointContext = {},
+): void {
   // 空 base_url：后端 validateExternalProviderBaseURL 直接放行（走 SDK 默认 endpoint），
   // 前端不应强拦——否则只填 api_key+model 的云 provider 连「测试连接」都发不出去。
   if (baseUrl.trim() === '') return
@@ -89,15 +76,19 @@ function assertExternalBaseUrlAllowed(baseUrl: string, providerType?: string): v
     throw new Error('Invalid URL protocol')
   }
 
-  if (providerType?.toLowerCase() === 'ollama') {
-    // Ollama runs locally — only allow loopback addresses
-    if (parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost' || parsed.hostname === '::1') {
-      return
+  const decision = classifyProviderEndpoint(providerType ?? 'custom', baseUrl)
+  if (decision.classification === 'blocked') {
+    if (providerType?.toLowerCase() === 'ollama' && !decision.requiresPrivateNetworkAccess) {
+      throw new Error('Ollama is only allowed on localhost')
     }
-    throw new Error('Ollama is only allowed on localhost')
+    throw new Error('Unsafe base_url: internal or private network hosts are not allowed')
   }
 
-  if (isPrivateHostname(parsed.hostname)) {
+  // 同机 loopback 可直接使用；RFC1918/ULA 只接受当前主机的显式授权，防止授权被换址复用。
+  if (
+    decision.requiresPrivateNetworkAccess &&
+    !matchesProviderPrivateNetworkAccess(baseUrl, privateNetworkAccess)
+  ) {
     throw new Error('Unsafe base_url: internal or private network hosts are not allowed')
   }
 }
@@ -124,9 +115,24 @@ export async function updateLLMConfig(config: BackendLLMConfig): Promise<void> {
  */
 export async function testLLMConnection(
   payload: LLMConnectionTestRequest,
+  context: Pick<ProviderEndpointContext, 'locality' | 'privateNetworkAccess'> = {},
 ): Promise<LLMConnectionTestResponse> {
-  assertExternalBaseUrlAllowed(payload.provider.base_url, payload.provider.type)
-  const text = await proxyApiRequestText('POST', '/api/v1/config/llm/test', JSON.stringify(payload))
+  assertExternalBaseUrlAllowed(payload.provider.base_url, {
+    providerType: payload.provider.type,
+    locality: context.locality,
+    privateNetworkAccess: context.privateNetworkAccess,
+  })
+  const text = await proxyApiRequestText(
+    'POST',
+    '/api/v1/config/llm/test',
+    JSON.stringify({
+      provider: {
+        ...payload.provider,
+        locality: context.locality,
+        private_network_access: context.privateNetworkAccess,
+      },
+    }),
+  )
   return safeJsonParse<LLMConnectionTestResponse>(text, 'testLLMConnection')
 }
 
@@ -151,9 +157,10 @@ interface BackendProviderModel {
 export async function fetchProviderModels(
   baseUrl: string,
   apiKey: string,
+  context: ProviderEndpointContext = {},
 ): Promise<CatalogModel[]> {
   try {
-    assertExternalBaseUrlAllowed(baseUrl)
+    assertExternalBaseUrlAllowed(baseUrl, context)
   } catch (e) {
     logger.warn('fetchProviderModels: URL blocked by SSRF check:', messageFromUnknownError(e))
     return []
@@ -161,7 +168,12 @@ export async function fetchProviderModels(
   const text = await proxyApiRequestText(
     'POST',
     '/api/v1/config/llm/models',
-    JSON.stringify({ base_url: baseUrl, api_key: apiKey }),
+    JSON.stringify({
+      base_url: baseUrl,
+      api_key: apiKey,
+      locality: context.locality,
+      private_network_access: context.privateNetworkAccess,
+    }),
   )
   const result = safeJsonParse<{ models?: BackendProviderModel[] }>(text, 'fetchProviderModels')
   return (result.models ?? []).map((m) => ({

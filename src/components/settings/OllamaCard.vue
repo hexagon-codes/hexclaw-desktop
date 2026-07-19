@@ -880,7 +880,8 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
         <div class="ollama-card__pull">
           <div class="ollama-card__pull-input">
             <div ref="pullFieldWrapRef" class="ollama-card__pull-field-wrap">
-              <input
+              <HcClearableField>
+                <input
                 v-model="pullModelName"
                 type="text"
                 class="ollama-card__pull-field"
@@ -893,6 +894,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
                 @keydown="onPullKeydown"
                 @input="pullInputError = false; pullError = ''; dropdownIndex = -1"
               />
+              </HcClearableField>
               <Teleport to="body">
                 <Transition name="ollama-dropdown">
                   <div
