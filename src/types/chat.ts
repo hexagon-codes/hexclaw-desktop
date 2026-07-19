@@ -1,9 +1,13 @@
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
+
 /** 工具调用 */
 export interface ToolCall {
   id: string
   name: string
   arguments: string
   result?: string
+  /** Canonical tool output; result remains the legacy/plain-text fallback. */
+  message_content?: MessageContent
   /** 后端 wire 字段（snake_case 对齐 hexagon ToolResult / adapter.ToolCall）：
    *  status/duration_ms 由 hexagon 框架在工具执行点产出并透传，前端直接渲染；
    *  is_error 为结构化错误信号的向后兼容钩子。未下发时优雅降级（前端诚实推导）。 */
@@ -81,10 +85,10 @@ export interface InteractivePayload {
 
 /** 消息内容块 — 强类型替代松散 JSON */
 export type ContentBlock =
-  | { type: 'text'; text: string }
+  | { type: 'text'; text: string; message_content?: MessageContent }
   | { type: 'thinking'; thinking: string; duration?: number }
   | { type: 'tool_use'; id: string; name: string; input: string; status?: 'running' | 'success' | 'error' }
-  | { type: 'tool_result'; toolUseId: string; toolName: string; output: string; isError: boolean }
+  | { type: 'tool_result'; toolUseId: string; toolName: string; output: string; isError: boolean; message_content?: MessageContent }
   | { type: 'code'; language: string; content: string; title?: string }
   | { type: 'buttons'; prompt?: string; buttons: InteractiveButton[]; resolved?: { action: string; label: string } }
 
@@ -93,6 +97,12 @@ export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
   content: string
+  /** v0.5.0 canonical Markdown/LaTeX envelope; content remains the legacy fallback. */
+  message_content?: MessageContent
+  /** Persisted/returned render evidence when the target surface owns one. */
+  render_manifest?: RenderManifest
+  /** Per-block receipts when an ordered text↔tool message has several canonical sources. */
+  render_manifests?: RenderManifest[]
   reasoning?: string
   timestamp: string
   created_at?: string

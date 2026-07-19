@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useI18n } from 'vue-i18n'
-import { Search, Download, PanelLeft, PanelRight, Boxes } from 'lucide-vue-next'
+import { Download, PanelLeft, PanelRight, Boxes } from 'lucide-vue-next'
 import ChatExportMenu from '@/components/chat/ChatExportMenu.vue'
 import { useChatStore } from '@/stores/chat'
 import { useAppStore } from '@/stores/app'
@@ -14,10 +14,6 @@ const showSessions = defineModel<boolean>('showSessions', { required: true })
 
 const showExport = ref(false)
 const exportBtn = ref<HTMLButtonElement>()
-
-const emit = defineEmits<{
-  search: []
-}>()
 
 defineProps<{
   messageCount: number
@@ -47,9 +43,6 @@ defineProps<{
       <div style="flex: 1" />
 
       <!-- 右：会话操作 -->
-      <button v-if="messageCount > 0" class="hc-chat__toolbar-btn" :title="t('common.search') + ' (⌘F)'" @click="emit('search')">
-        <Search :size="14" />
-      </button>
       <button v-if="messageCount > 0" ref="exportBtn" class="hc-chat__toolbar-btn" :title="t('common.download')" @click="showExport = !showExport">
         <Download :size="14" />
       </button>

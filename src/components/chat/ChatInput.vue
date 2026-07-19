@@ -16,7 +16,8 @@ import { listSessionMessages } from '@/api/chat'
 import { generateImage, type ImageGenResult } from '@/api/imagegen'
 import { submitVideoGeneration, pollUntilDone, videoToSrc, type VideoTaskStatus } from '@/api/videogen'
 import { logger } from '@/utils/logger'
-import { shouldSendOnEnter, normalizePastedText, hasWeirdLineBreaks } from '@/utils/chat-compose'
+import { shouldSendOnEnter, hasWeirdLineBreaks } from '@/utils/chat-compose'
+import { insertAtSelection, normalizeMathMarkdown, readMathClipboard } from '@/utils/math-content'
 
 /** `@` 召唤选中项（MentionPopup 抛出）。 */
 interface MentionSelectItem {
@@ -285,7 +286,7 @@ function clearDraft() {
 }
 
 async function handleSend() {
-  const text = inputText.value.trim()
+  const text = normalizeMathMarkdown(inputText.value.trim())
   const files = attachedFiles.value.map((a) => a.file)
   if (props.streaming || props.disabled || submitting.value || generating.value) return
   closePopups()
@@ -552,18 +553,18 @@ function handlePaste(e: ClipboardEvent) {
   }
   // #1 2026-06-23：粘贴文本若含「非标准换行」(\r / U+2028 / U+2029)，textarea 原生不折行 →
   // markdown 渲染连成一行。手动规范化为 \n 再插入光标处，保留换行。
-  const text = e.clipboardData?.getData('text/plain') ?? ''
-  if (text && hasWeirdLineBreaks(text)) {
+  const plain = e.clipboardData?.getData('text/plain') ?? ''
+  const paste = readMathClipboard(e.clipboardData)
+  if (paste.text && (paste.handled || hasWeirdLineBreaks(plain))) {
     e.preventDefault()
     const el = textareaRef.value
     if (!el) return
-    const normalized = normalizePastedText(text)
     const start = el.selectionStart ?? inputText.value.length
     const end = el.selectionEnd ?? start
-    inputText.value = inputText.value.slice(0, start) + normalized + inputText.value.slice(end)
+    const inserted = insertAtSelection(inputText.value, paste.text, start, end)
+    inputText.value = inserted.value
     nextTick(() => {
-      const p = start + normalized.length
-      el.setSelectionRange(p, p)
+      el.setSelectionRange(inserted.caret, inserted.caret)
       el.focus()
       handleInput()
     })
@@ -760,7 +761,8 @@ defineExpose({ focus, setInput, triggerFileUpload })
         </div>
       </div>
 
-      <textarea
+      <HcClearableField>
+        <textarea
         ref="textareaRef"
         v-model="inputText"
         rows="1"
@@ -774,6 +776,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
         @compositionstart="handleCompositionStart"
         @compositionend="handleCompositionEnd"
       />
+      </HcClearableField>
 
       <div class="hc-composer__bar">
         <!-- 左：输入动作（+ 添加 · 🧩 skill · ✨ prompt · 🎤 语音听写） -->

@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
+import type { MessageContent } from '@/contracts/message-content'
 import { getAssistantDisplayContent, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { extractThinkTags } from '@/utils/think-tags'
 import type { SessionStreamState } from './chat-stream-helpers'
@@ -43,6 +44,7 @@ export function createChatStreamCompletionController(params: {
 
   function finalizeAssistantMessage(args: {
     content: string
+    messageContent?: MessageContent
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
@@ -71,6 +73,7 @@ export function createChatStreamCompletionController(params: {
       id: createId(),
       role: 'assistant',
       content: getAssistantDisplayContent(finalContent, finalReasoning),
+      message_content: args.messageContent,
       timestamp: new Date().toISOString(),
       reasoning: finalReasoning,
       metadata,

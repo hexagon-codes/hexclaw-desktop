@@ -21,6 +21,7 @@ export function buildChatRequestMetadata(params: {
   const metadata: Record<string, string> = {}
   if (params.pinnedAgent !== undefined) {
     metadata.pinned_agent = params.pinnedAgent.trim() || 'default'
+    metadata.producer_kind = 'chat'
   }
   if (params.thinkingEnabled) metadata.thinking = 'on'
   if (!params.memoryEnabled) metadata.memory = 'off'
@@ -38,6 +39,7 @@ export function buildChatRequestMetadata(params: {
   // 双双隐式导致英语倾向模型（nemotron omni 等）直接英文作答。后端按白名单拼显式指令。
   if (params.userLocale) {
     metadata.user_locale = params.userLocale
+    metadata.locale = params.userLocale
   }
   // B1: 与后端 7+1 模式（engine/agent_mode.go）保持一致
   // 设计：默认 'auto' 不透传 —— 后端 ResolveMode 对空/未知/auto 等价处理，

@@ -2,6 +2,9 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronUp } from 'lucide-vue-next'
+import katex from 'katex'
+import DOMPurify from 'dompurify'
+import { plainMathSegments, type PlainMathSegment } from '@/utils/math-content'
 
 /**
  * 用户消息纯文本渲染：
@@ -21,6 +24,27 @@ const collapsible = computed(() => {
 })
 
 const expanded = ref(false)
+type RenderedSegment = Extract<PlainMathSegment, { type: 'text' }>
+  | (Extract<PlainMathSegment, { type: 'math' }> & { html: string })
+
+const renderedSegments = computed<RenderedSegment[]>(() => plainMathSegments(props.content ?? '').map((segment): RenderedSegment => {
+  if (segment.type === 'text') return segment
+  try {
+    return {
+      ...segment,
+      html: DOMPurify.sanitize(katex.renderToString(segment.content, {
+        displayMode: segment.display,
+        throwOnError: false,
+        trust: false,
+        strict: 'warn',
+        errorColor: 'var(--hc-text-primary)',
+      })),
+    }
+  } catch {
+    return { type: 'text' as const, content: segment.source, source: segment.source }
+  }
+}))
+
 function toggle() {
   expanded.value = !expanded.value
 }
@@ -32,7 +56,17 @@ function toggle() {
       class="hc-msg__text"
       :class="{ 'hc-msg__text--collapsed': collapsible && !expanded }"
       data-testid="msg-text"
-    >{{ content }}</div>
+    >
+      <template v-for="(segment, index) in renderedSegments" :key="index">
+        <span v-if="segment.type === 'text'">{{ segment.content }}</span>
+        <span
+          v-else
+          class="hc-msg__math"
+          :class="{ 'hc-msg__math--display': segment.display }"
+          v-html="segment.html"
+        />
+      </template>
+    </div>
     <button
       v-if="collapsible"
       type="button"
@@ -58,6 +92,12 @@ function toggle() {
   line-clamp: 8;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.hc-msg__math--display {
+  display: block;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .hc-msg__text-toggle {

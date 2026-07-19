@@ -1,7 +1,7 @@
 /**
  * BUG-20260703 P2-5 — 会话删除无二次确认（覆盖空洞审计项）。
  *
- * 病灶：SessionList 删除按钮（hover/紧凑两处）与右键菜单 ⌫ 直接调
+ * 病灶：SessionList 旧 hover 删除按钮与右键菜单 ⌫ 直接调
  * chatStore.deleteSession——误触即丢整段对话历史（后端软删但 UI 无恢复入口，
  * 用户视角不可逆）。
  * 修：三个入口统一先弹 ConfirmDialog（danger），确认才真删、取消零副作用。
@@ -54,10 +54,13 @@ function mountList() {
   return { wrapper, store }
 }
 
-function findDeleteButton(wrapper: ReturnType<typeof mountList>['wrapper']) {
-  const btn = wrapper.findAll('button').find((b) => b.attributes('title') === '删除会话')
-  expect(btn, '会话项应有删除按钮').toBeTruthy()
-  return btn!
+async function requestDeleteFromMenu(wrapper: ReturnType<typeof mountList>['wrapper']) {
+  const vm = wrapper.vm as unknown as {
+    ctxSessionId: string | null
+    handleCtxAction: (action: string) => Promise<void> | void
+  }
+  vm.ctxSessionId = 's-1'
+  await vm.handleCtxAction('delete')
 }
 
 describe('BUG-20260703 P2-5 — 会话删除二次确认', () => {
@@ -66,10 +69,10 @@ describe('BUG-20260703 P2-5 — 会话删除二次确认', () => {
     localStorage.clear()
   })
 
-  it('点删除按钮 → 先弹确认层，未确认前绝不调 chatStore.deleteSession', async () => {
+  it('点菜单删除 → 先弹确认层，未确认前绝不调 chatStore.deleteSession', async () => {
     const { wrapper, store } = mountList()
     await flushPromises()
-    await findDeleteButton(wrapper).trigger('click')
+    await requestDeleteFromMenu(wrapper)
     await flushPromises()
 
     expect(store.deleteSession).not.toHaveBeenCalled()
@@ -82,7 +85,7 @@ describe('BUG-20260703 P2-5 — 会话删除二次确认', () => {
   it('确认后才真删；确认层随之关闭', async () => {
     const { wrapper, store } = mountList()
     await flushPromises()
-    await findDeleteButton(wrapper).trigger('click')
+    await requestDeleteFromMenu(wrapper)
     await flushPromises()
 
     const buttons = Array.from(document.body.querySelectorAll('.hc-dialog-overlay button'))
@@ -99,7 +102,7 @@ describe('BUG-20260703 P2-5 — 会话删除二次确认', () => {
   it('取消 → 零副作用（不删、弹层关闭、会话仍在）', async () => {
     const { wrapper, store } = mountList()
     await flushPromises()
-    await findDeleteButton(wrapper).trigger('click')
+    await requestDeleteFromMenu(wrapper)
     await flushPromises()
 
     const buttons = Array.from(document.body.querySelectorAll('.hc-dialog-overlay button'))

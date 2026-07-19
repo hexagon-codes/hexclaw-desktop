@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
+import type { MessageContent } from '@/contracts/message-content'
 import { buildChatRequestMetadata } from './chat-request-metadata'
 import { createChatSendBackendDeliveryController } from './chat-send-backend-delivery'
 import {
@@ -25,9 +26,11 @@ export function createChatSendDeliveryController(params: {
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
     content: string
+    messageContent?: MessageContent
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
+    blocks?: ChatMessage['blocks']
     agentName?: string
     reasoning?: string
     sending?: Ref<boolean>

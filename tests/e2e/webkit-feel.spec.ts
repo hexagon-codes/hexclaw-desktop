@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import katex from 'katex'
 
 /**
  * 真机手感（WebKit）门 —— 每轮 hex-test 必跑。
@@ -111,6 +112,44 @@ test.describe('真机手感 @ WebKit（Tauri WKWebView 同引擎）', () => {
     expect(s.scrollable).toBe(true)
     expect(s.autoTop).toBeGreaterThan(0)   // scrollIntoView auto 真滚了
     expect(s.smoothMax).toBeGreaterThan(0) // scrollIntoView smooth 真滚了
+  })
+
+  test('⑤ KaTeX 分数在 WebKit 中保持分子/分母堆叠与分数线，不塌散', async ({ page }) => {
+    const fractionHtml = katex.renderToString(String.raw`\frac{3}{4}`, {
+      displayMode: false,
+      throwOnError: false,
+    })
+    const layout = await page.evaluate(async (renderedFraction) => {
+      const host = document.createElement('div')
+      host.dataset.probe = 'katex-fraction'
+      host.style.cssText = 'position:fixed;left:40px;top:40px;font-size:28px'
+      host.innerHTML = renderedFraction
+      document.body.appendChild(host)
+      const frac = host.querySelector('.mfrac') as HTMLElement
+      const line = host.querySelector('.frac-line') as HTMLElement
+      const vlistTable = host.querySelector('.vlist-t') as HTMLElement
+      const numbers = Array.from(host.querySelectorAll<HTMLElement>('.katex-html .mfrac .mord')).filter(
+        (el) => el.childElementCount === 0 && /^[34]$/.test(el.textContent ?? ''),
+      )
+      const boxes = numbers.map((el) => el.getBoundingClientRect())
+      const result = {
+        host: host.getBoundingClientRect().toJSON(),
+        frac: frac?.getBoundingClientRect().toJSON(),
+        lineWidth: line ? parseFloat(getComputedStyle(line).borderBottomWidth) : 0,
+        tableDisplay: vlistTable ? getComputedStyle(vlistTable).display : '',
+        numberTops: boxes.map((box) => box.top),
+        numberCenters: boxes.map((box) => box.left + box.width / 2),
+      }
+      host.remove()
+      return result
+    }, fractionHtml)
+
+    expect(layout.lineWidth).toBeGreaterThan(0)
+    expect(layout.tableDisplay).toBe('inline-table')
+    expect(layout.frac.height).toBeGreaterThan(20)
+    expect(layout.numberTops).toHaveLength(2)
+    expect(Math.abs(layout.numberTops[0]! - layout.numberTops[1]!)).toBeGreaterThan(8)
+    expect(Math.abs(layout.numberCenters[0]! - layout.numberCenters[1]!)).toBeLessThan(4)
   })
 
   /**

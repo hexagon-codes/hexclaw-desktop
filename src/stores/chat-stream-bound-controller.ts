@@ -1,5 +1,6 @@
 import type { Ref } from 'vue'
 import type { ChatMessage } from '@/types'
+import type { MessageContent } from '@/contracts/message-content'
 import type { createChatStreamController } from './chat-stream-controller'
 
 export function createBoundChatStreamController(params: {
@@ -48,6 +49,7 @@ export function createBoundChatStreamController(params: {
     },
     finalizeAssistantMessage(params: {
       content: string
+      messageContent?: MessageContent
       sessionId: string
       metadata?: Record<string, unknown>
       toolCalls?: ChatMessage['tool_calls']

@@ -9,7 +9,7 @@ export function toContentBlocks(msg: ChatMessage): ContentBlock[] {
     // BUG-20260703 B5 兜底：历史落库的 blocks 可能只有工具块而正文在 content
     // （旧引擎终态回答不进块流）。blocks 优先渲染时正文会蒸发，这里补一个 text 块。
     if (msg.content && !msg.blocks.some((b) => b.type === 'text')) {
-      return [...msg.blocks, { type: 'text', text: msg.content }]
+      return [...msg.blocks, { type: 'text', text: msg.content, message_content: msg.message_content }]
     }
     return msg.blocks
   }
@@ -27,7 +27,7 @@ export function toContentBlocks(msg: ChatMessage): ContentBlock[] {
 
   // 2. content → text block
   if (msg.content) {
-    blocks.push({ type: 'text', text: msg.content })
+    blocks.push({ type: 'text', text: msg.content, message_content: msg.message_content })
   }
 
   // 3. tool_calls → tool_use + tool_result blocks
@@ -46,6 +46,7 @@ export function toContentBlocks(msg: ChatMessage): ContentBlock[] {
           toolName: tc.name,
           output: tc.result,
           isError: false,
+          message_content: tc.message_content,
         })
       }
     }

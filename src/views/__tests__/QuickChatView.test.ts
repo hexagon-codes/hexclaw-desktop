@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { createPinia, setActivePinia } from 'pinia'
 import QuickChatView from '../QuickChatView.vue'
+import quickChatSource from '../QuickChatView.vue?raw'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useSettingsStore } from '@/stores/settings'
 import { sendChat } from '@/api/chat'
@@ -116,6 +117,12 @@ describe('QuickChatView', () => {
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).isTauri
+  })
+
+  it('reuses the shared math-aware user renderer and paste pipeline', () => {
+    expect(quickChatSource).toContain("import MessageText from '@/components/chat/MessageText.vue'")
+    expect(quickChatSource).toContain('@paste="handlePaste"')
+    expect(quickChatSource).toContain('<MessageText :content="msg.content"')
   })
 
   it('falls back to the new runtime default when available models change after sidecar-ready', async () => {

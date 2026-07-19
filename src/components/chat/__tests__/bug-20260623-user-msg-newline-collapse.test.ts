@@ -54,4 +54,32 @@ describe('MessageText — bug-20260623 user message newline + collapse', () => {
     const w = mountText('啊'.repeat(600))
     expect(w.find('[data-testid="msg-expand"]').exists()).toBe(true)
   })
+
+  it('renders pasted fractions while keeping ordinary Markdown syntax literal', () => {
+    const w = mountText(String.raw`**题目**：\(\frac{3}{4}\) 的分数单位是什么？`)
+    const el = w.get('[data-testid="msg-text"]')
+
+    expect(el.find('.katex').exists()).toBe(true)
+    expect(el.find('math mfrac').exists()).toBe(true)
+    expect(el.text()).toContain('**题目**')
+    expect(el.find('strong').exists()).toBe(false)
+    const visibleText = el.element.cloneNode(true) as HTMLElement
+    visibleText.querySelectorAll('.katex').forEach((node) => node.remove())
+    expect(visibleText.textContent).not.toContain('\\frac')
+  })
+
+  it('renders legacy replies where Markdown already consumed the delimiter backslashes', () => {
+    const w = mountText(String.raw`分数单位是 (\frac{1}{4})`)
+    expect(w.get('[data-testid="msg-text"]').find('math mfrac').exists()).toBe(true)
+  })
+
+  it('does not execute HTML or render formulas inside pasted code', () => {
+    const w = mountText('<img src=x onerror=alert(1)> `' + String.raw`\(x\)` + '`')
+    const el = w.get('[data-testid="msg-text"]')
+
+    expect(el.find('img').exists()).toBe(false)
+    expect(el.find('.katex').exists()).toBe(false)
+    expect(el.text()).toContain('<img src=x onerror=alert(1)>')
+    expect(el.text()).toContain(String.raw`\(x\)`)
+  })
 })

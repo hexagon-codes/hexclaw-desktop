@@ -15,6 +15,7 @@ import { logger } from '@/utils/logger'
 import { withModelReasoningDefaults } from '@/utils/model-reasoning'
 import { DESKTOP_USER_ID, USER_CANCELLED_MESSAGE } from '@/constants'
 import type { ChatMessage, ChatAttachment } from '@/types'
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
 // Real cloud models can spend more than two minutes in provider queueing before
 // the first chunk or tool approval arrives. Keep the request socket alive long
@@ -46,15 +47,17 @@ export function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: 
 
 export interface StreamCallbacks {
   onChunk?: (content: string, reasoning?: string) => void
-  onDone?: (content: string, metadata?: Record<string, unknown>, toolCalls?: ChatMessage['tool_calls'], agentName?: string) => void
+  onDone?: (content: string, metadata?: Record<string, unknown>, toolCalls?: ChatMessage['tool_calls'], agentName?: string, messageContent?: MessageContent) => void
   onApprovalRequest?: (request: ToolApprovalRequest) => void
-  onSnapshot?: (snapshot: { content: string; reasoning?: string; metadata?: Record<string, unknown>; done?: boolean }) => void
+  onSnapshot?: (snapshot: { content: string; reasoning?: string; metadata?: Record<string, unknown>; done?: boolean; messageContent?: MessageContent }) => void
   onMemorySaved?: (content: string) => void
 }
 
 interface StreamWsServerMessage {
   type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'memory_saved' | 'stream_snapshot'
   content: string
+  message_content?: MessageContent
+  render_manifest?: RenderManifest
   reasoning?: string
   done?: boolean
   session_id?: string
@@ -88,6 +91,7 @@ function foldRetrievalHits(
 
 export interface WebSocketStreamResult {
   content: string
+  messageContent?: MessageContent
   metadata?: Record<string, unknown>
   toolCalls?: ChatMessage['tool_calls']
   blocks?: ChatMessage['blocks']
@@ -140,6 +144,9 @@ export function sendViaWebSocket(
       reject(err)
     }
 
+    // BUG-20260718（§15）：按 requestId 分流防串——后端若回填 request_id，则丢弃明确
+    // 异源（其它请求）的迟到 chunk/reply；未回填时一律投递（零回归）。
+    const streamScope = requestId ? { requestId } : undefined
     hexclawWS.onChunk((chunk) => {
       markActivity()
       if (chunk.content) accumulatedContent += chunk.content
@@ -152,10 +159,11 @@ export function sendViaWebSocket(
           foldRetrievalHits(chunk.metadata, chunk),
           chunk.tool_calls,
           typeof chunk.metadata?.agent_name === 'string' ? chunk.metadata.agent_name : undefined,
+          chunk.message_content,
         )
         resolve()
       }
-    })
+    }, streamScope)
 
     hexclawWS.onReply((reply) => {
       if (settled) return
@@ -167,9 +175,10 @@ export function sendViaWebSocket(
         foldRetrievalHits(reply.metadata, reply),
         reply.tool_calls,
         typeof reply.metadata?.agent_name === 'string' ? reply.metadata.agent_name : undefined,
+        reply.message_content,
       )
       resolve()
-    })
+    }, streamScope)
 
     hexclawWS.onError((errMsg: string) => {
       // User-initiated cancellation should not trigger fallback or surface as an error.
@@ -181,7 +190,7 @@ export function sendViaWebSocket(
         return
       }
       fail(new ChatRequestError(errMsg || 'WebSocket request failed', true))
-    })
+    }, streamScope)
 
     const wsAttachments = attachments?.map(a => ({ type: a.type, name: a.name, mime: a.mime, data: a.data }))
     hexclawWS.sendMessage(
@@ -305,6 +314,7 @@ function openRequestSocket(
         if (msg.done) {
           settleResolve({
             content: accumulatedContent,
+            messageContent: msg.message_content,
             metadata: foldRetrievalHits(msg.metadata, msg),
             toolCalls: msg.tool_calls,
             blocks: msg.blocks,
@@ -319,10 +329,12 @@ function openRequestSocket(
           reasoning: msg.reasoning,
           metadata: msg.metadata,
           done: msg.done,
+          messageContent: msg.message_content,
         })
         if (msg.done) {
           settleResolve({
             content: msg.content,
+            messageContent: msg.message_content,
             metadata: foldRetrievalHits(msg.metadata, msg),
             toolCalls: msg.tool_calls,
             agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
@@ -333,6 +345,7 @@ function openRequestSocket(
         markActivity()
         settleResolve({
           content: msg.content,
+          messageContent: msg.message_content,
           metadata: foldRetrievalHits(msg.metadata, msg),
           toolCalls: msg.tool_calls,
           agentName: typeof msg.metadata?.agent_name === 'string' ? msg.metadata.agent_name : undefined,
@@ -443,7 +456,7 @@ export async function sendViaBackend(
   attachments?: ChatAttachment[],
   metadata?: Record<string, string>,
   requestId?: string,
-): Promise<{ reply: string; metadata?: Record<string, unknown>; tool_calls?: ChatMessage['tool_calls']; blocks?: ChatMessage['blocks'] }> {
+): Promise<{ reply: string; message_content?: MessageContent; metadata?: Record<string, unknown>; tool_calls?: ChatMessage['tool_calls']; blocks?: ChatMessage['blocks'] }> {
   return withTimeout(
     sendChatViaBackend(text, {
       sessionId,

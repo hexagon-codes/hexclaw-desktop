@@ -4,6 +4,10 @@
  * 依赖 vi.spyOn(Storage.prototype, ...) 的用例失败。
  */
 import { beforeEach } from 'vitest'
+import { config } from '@vue/test-utils'
+import HcClearableField from '@/components/common/HcClearableField.vue'
+
+config.global.components.HcClearableField = HcClearableField
 
 function createMemoryStorage(): Storage {
   const map = new Map<string, string>()

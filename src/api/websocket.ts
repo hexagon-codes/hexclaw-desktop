@@ -2,10 +2,45 @@ import { env } from '@/config/env'
 import { logger } from '@/utils/logger'
 import { DESKTOP_USER_ID } from '@/constants'
 import type { ToolCall, ContentBlock } from '@/types'
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
 type ChunkCallback = (message: WsServerMessage) => void
 type ReplyCallback = (message: WsServerMessage) => void
 type ErrorCallback = (error: string) => void
+
+/**
+ * 回调分流范围（BUG-20260718 §15 防串）：把回调限定到某个 request/session。
+ * 分发时"只丢弃明确异源"的消息——消息带非空且不同的 request_id/session_id 才丢弃；
+ * 后端未回填该字段时一律投递（零回归）。
+ */
+export interface CallbackScope {
+  sessionId?: string
+  requestId?: string
+}
+
+type ScopedCallback<T> = { cb: T; scope?: CallbackScope }
+
+/** 消息是否落入回调 scope：只在字段存在且明确不同的情况下拒绝。 */
+function scopeAllows(msg: WsServerMessage, scope?: CallbackScope): boolean {
+  if (!scope) return true
+  if (
+    scope.requestId &&
+    typeof msg.request_id === 'string' &&
+    msg.request_id.length > 0 &&
+    msg.request_id !== scope.requestId
+  ) {
+    return false
+  }
+  if (
+    scope.sessionId &&
+    typeof msg.session_id === 'string' &&
+    msg.session_id.length > 0 &&
+    msg.session_id !== scope.sessionId
+  ) {
+    return false
+  }
+  return true
+}
 
 interface WsAttachment {
   type: string
@@ -42,9 +77,13 @@ interface WsUsage {
 interface WsServerMessage {
   type: 'chunk' | 'reply' | 'error' | 'pong' | 'tool_approval_request' | 'memory_saved' | 'desktop_notification'
   content: string
+  message_content?: MessageContent
+  render_manifest?: RenderManifest
   reasoning?: string
   done?: boolean
   session_id?: string
+  /** 后端若回填请求 ID，可据此把回调按 request 分流防串（BUG-20260718）。 */
+  request_id?: string
   usage?: WsUsage
   tool_calls?: ToolCall[]
   blocks?: ContentBlock[]
@@ -81,9 +120,9 @@ class HexClawWS {
   private ws: WebSocket | null = null
   private url = `${env.wsBase}/ws`
 
-  private chunkCallbacks: ChunkCallback[] = []
-  private replyCallbacks: ReplyCallback[] = []
-  private errorCallbacks: ErrorCallback[] = []
+  private chunkCallbacks: ScopedCallback<ChunkCallback>[] = []
+  private replyCallbacks: ScopedCallback<ReplyCallback>[] = []
+  private errorCallbacks: ScopedCallback<ErrorCallback>[] = []
   private approvalCallbacks: ApprovalCallback[] = []
   private memorySavedCallbacks: ((content: string) => void)[] = []
   private desktopNotificationCallbacks: DesktopNotificationCallback[] = []
@@ -188,7 +227,7 @@ class HexClawWS {
     requestId?: string,
   ): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      this.errorCallbacks.forEach((cb) => cb('WebSocket is not connected'))
+      this.errorCallbacks.forEach((c) => c.cb('WebSocket is not connected'))
       return
     }
 
@@ -219,19 +258,19 @@ class HexClawWS {
     logger.debug(`→ ws: ${content.slice(0, 50)}... (${attachments?.length ?? 0} attachments)`)
   }
 
-  onChunk(callback: ChunkCallback): () => void {
-    this.chunkCallbacks.push(callback)
-    return () => { this.chunkCallbacks = this.chunkCallbacks.filter((cb) => cb !== callback) }
+  onChunk(callback: ChunkCallback, scope?: CallbackScope): () => void {
+    this.chunkCallbacks.push({ cb: callback, scope })
+    return () => { this.chunkCallbacks = this.chunkCallbacks.filter((c) => c.cb !== callback) }
   }
 
-  onReply(callback: ReplyCallback): () => void {
-    this.replyCallbacks.push(callback)
-    return () => { this.replyCallbacks = this.replyCallbacks.filter((cb) => cb !== callback) }
+  onReply(callback: ReplyCallback, scope?: CallbackScope): () => void {
+    this.replyCallbacks.push({ cb: callback, scope })
+    return () => { this.replyCallbacks = this.replyCallbacks.filter((c) => c.cb !== callback) }
   }
 
-  onError(callback: ErrorCallback): () => void {
-    this.errorCallbacks.push(callback)
-    return () => { this.errorCallbacks = this.errorCallbacks.filter((cb) => cb !== callback) }
+  onError(callback: ErrorCallback, scope?: CallbackScope): () => void {
+    this.errorCallbacks.push({ cb: callback, scope })
+    return () => { this.errorCallbacks = this.errorCallbacks.filter((c) => c.cb !== callback) }
   }
 
   onApprovalRequest(callback: ApprovalCallback): () => void {
@@ -277,7 +316,7 @@ class HexClawWS {
 
   /** Trigger error callbacks to settle pending promises (e.g., on user cancel) */
   triggerError(msg: string): void {
-    this.errorCallbacks.forEach((cb) => cb(msg))
+    this.errorCallbacks.forEach((c) => c.cb(msg))
   }
 
   /** Remove only streaming callbacks (chunk/reply/error), preserve approval listeners */
@@ -308,13 +347,13 @@ class HexClawWS {
 
     switch (msg.type) {
       case 'chunk':
-        this.chunkCallbacks.forEach((cb) => cb(msg))
+        this.chunkCallbacks.forEach((c) => { if (scopeAllows(msg, c.scope)) c.cb(msg) })
         break
       case 'reply':
-        this.replyCallbacks.forEach((cb) => cb(msg))
+        this.replyCallbacks.forEach((c) => { if (scopeAllows(msg, c.scope)) c.cb(msg) })
         break
       case 'error':
-        this.errorCallbacks.forEach((cb) => cb(msg.content))
+        this.errorCallbacks.forEach((c) => { if (scopeAllows(msg, c.scope)) c.cb(msg.content) })
         break
       case 'pong':
         this.lastPongTime = Date.now()
@@ -370,7 +409,7 @@ class HexClawWS {
   private attemptReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       logger.warn(`WebSocket max reconnect attempts (${this.maxReconnectAttempts}) reached`)
-      this.errorCallbacks.forEach((cb) => cb('WebSocket reconnection failed'))
+      this.errorCallbacks.forEach((c) => c.cb('WebSocket reconnection failed'))
       return
     }
 

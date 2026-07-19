@@ -175,23 +175,16 @@ describe('SessionList', () => {
     expect(wrapper.find('[data-session-id="s-1"] .hc-sessions__spinner').exists()).toBe(false)
   })
 
-  it('copy title action should fail gracefully when clipboard API is unavailable', async () => {
+  it('keeps the session menu focused and omits share/copy-title actions', async () => {
     const { wrapper } = mountSessionList()
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
-      ctxSessionId: string | null
-      handleCtxAction: (action: string) => Promise<void> | void
+      sessionMenuItems: Array<{ id: string }>
     }
-
-    vm.ctxSessionId = 's-1'
-
-    Object.defineProperty(navigator, 'clipboard', {
-      configurable: true,
-      value: undefined,
-    })
-
-    await expect(Promise.resolve(vm.handleCtxAction('copy_title'))).resolves.toBeUndefined()
+    expect(vm.sessionMenuItems.map((item) => item.id)).toEqual(['rename', 'pin', 'branches', 'sep1', 'delete'])
+    expect(vm.sessionMenuItems.map((item) => item.id)).not.toContain('share')
+    expect(vm.sessionMenuItems.map((item) => item.id)).not.toContain('copy_title')
   })
 
   it('keeps the latest renamed title when an earlier rename request resolves later', async () => {
@@ -257,16 +250,19 @@ describe('SessionList', () => {
     )
     await flushPromises()
 
-    const deleteBtn = wrapper.findAll('.hc-sessions__delete')[0]
-    expect(deleteBtn).toBeDefined()
+    const vm = wrapper.vm as unknown as {
+      ctxSessionId: string | null
+      handleCtxAction: (action: string) => Promise<void> | void
+    }
+    vm.ctxSessionId = 's-1'
 
     // BUG-20260703 P2-5：删除先过二次确认，确认后才真删
-    await deleteBtn!.trigger('click')
+    await vm.handleCtxAction('delete')
     await flushPromises()
     await confirmPendingDelete()
 
     // 删除在途中再点删除：直接短路（不再弹确认层、不发第二次请求）
-    await deleteBtn!.trigger('click')
+    await vm.handleCtxAction('delete')
     await flushPromises()
     expect(document.body.querySelector('.hc-dialog-overlay')).toBeFalsy()
 
@@ -285,9 +281,12 @@ describe('SessionList', () => {
 
     expect(wrapper.find('.hc-sessions__item--pinned').text()).toContain('第一个会话')
 
-    const deleteBtn = wrapper.findAll('.hc-sessions__delete')[0]
-    expect(deleteBtn).toBeDefined()
-    await deleteBtn!.trigger('click')
+    const vm = wrapper.vm as unknown as {
+      ctxSessionId: string | null
+      handleCtxAction: (action: string) => Promise<void> | void
+    }
+    vm.ctxSessionId = 's-1'
+    await vm.handleCtxAction('delete')
     await flushPromises()
     await confirmPendingDelete() // BUG-20260703 P2-5：先过二次确认
 
@@ -338,6 +337,35 @@ describe('SessionList', () => {
 
     expect(listSessions).toHaveBeenCalledWith({ limit: 50, offset: 2 })
     expect(wrapper.text()).toContain('第三个会话')
+  })
+
+  it('removes a successfully deleted paginated session from the extra-session cache', async () => {
+    listSessions.mockResolvedValueOnce({
+      sessions: [{
+        id: 's-extra',
+        title: '分页旧会话',
+        created_at: '2026-03-01T10:00:00Z',
+        updated_at: '2026-03-01T10:00:00Z',
+        message_count: 1,
+      }],
+      total: 3,
+    })
+    const { wrapper, store } = mountSessionList()
+    await wrapper.get('.hc-sessions__load-more').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('分页旧会话')
+
+    const vm = wrapper.vm as unknown as {
+      ctxSessionId: string | null
+      handleCtxAction: (action: string) => Promise<void> | void
+    }
+    vm.ctxSessionId = 's-extra'
+    await vm.handleCtxAction('delete')
+    await flushPromises()
+    await confirmPendingDelete()
+
+    expect(store.deleteSession).toHaveBeenCalledWith('s-extra')
+    expect(wrapper.text()).not.toContain('分页旧会话')
   })
 
   it('renders cross-session content search results with snippets', async () => {
@@ -428,5 +456,20 @@ describe('SessionList', () => {
     expect(wrapper.find('.hc-sessions__search-input').exists()).toBe(true)
     expect(wrapper.text()).toContain('第一个会话')
     expect(wrapper.text()).toContain('第二个会话')
+  })
+
+  it('uses the left search as the sole fuzzy title-and-content entry', async () => {
+    const { wrapper } = mountSessionList()
+    await flushPromises()
+
+    const input = wrapper.get('.hc-sessions__search-input')
+    expect(input.attributes('placeholder')).toBe('搜索会话与内容')
+    await input.setValue('第 一 个')
+    await new Promise((resolve) => setTimeout(resolve, 260))
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('第一个会话')
+    expect(wrapper.text()).not.toContain('第二个会话')
+    expect(searchMessages).toHaveBeenCalledWith('第 一 个', { limit: 50 })
   })
 })

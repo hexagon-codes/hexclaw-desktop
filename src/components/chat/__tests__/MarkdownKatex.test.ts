@@ -42,6 +42,48 @@ describe('MarkdownRenderer · KaTeX (M1-1)', () => {
     expect(html).toContain('katex-display')
   })
 
+  it.each([
+    String.raw`\(\frac{3}{4}\)`,
+    String.raw`\\(\\frac{3}{4}\\)`,
+    String.raw`(\frac{3}{4})`,
+  ])('兼容粘贴/模型返回的圆括号行内定界符：%s', (content) => {
+    const html = render(`分数单位是 ${content}`).html()
+    expect(html).toContain('katex')
+    expect(html).toContain('mfrac')
+    // KaTeX 会在隐藏的 MathML annotation 中保留原 TeX，供无障碍技术读取；
+    // 这里只断言可见正文不再残留未渲染的公式源码。
+    const wrapper = render(`分数单位是 ${content}`)
+    const visibleText = wrapper.get('.markdown-body').element.cloneNode(true) as HTMLElement
+    visibleText.querySelectorAll('.katex').forEach((node) => node.remove())
+    expect(visibleText.textContent).not.toContain('\\frac')
+  })
+
+  it.each([
+    String.raw`\[\frac{3}{4}\]`,
+    String.raw`\\[\\frac{3}{4}\\]`,
+  ])('兼容粘贴/模型返回的方括号块级定界符：%s', (content) => {
+    const html = render(content).html()
+    expect(html).toContain('katex-display')
+    expect(html).toContain('mfrac')
+  })
+
+  it('不改写代码围栏、行内代码和金额中的公式相似文本', () => {
+    const html = render([
+      String.raw`正文 \(\frac{3}{4}\)`,
+      String.raw`行内代码：` + '`' + String.raw`\(\frac{1}{2}\)` + '`',
+      '```text',
+      String.raw`\[\frac{5}{8}\]`,
+      '```',
+      '价格是 $100，预算是 $200。',
+    ].join('\n')).html()
+
+    expect(html.match(/class="katex"/g)).toHaveLength(1)
+    expect(html).toContain('\\(\\frac{1}{2}\\)')
+    expect(html).toContain('\\[\\frac{5}{8}\\]')
+    expect(html).toContain('$100')
+    expect(html).toContain('$200')
+  })
+
   it('mhchem 化学式 \\ce{} 正常渲染（不落 katex-error）', () => {
     const html = render('水的分子式：$\\ce{H2O}$').html()
     expect(html).toContain('katex')

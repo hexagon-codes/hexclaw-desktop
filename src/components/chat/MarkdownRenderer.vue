@@ -5,22 +5,41 @@ import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { codeToHtml } from 'shiki'
 import { katex } from '@mdit/plugin-katex'
-import 'katex/dist/katex.min.css'
 // mhchem 化学式扩展：必须在 katex 加载后 import，patch 同一 katex 单例（\ce{...}）
 import 'katex/contrib/mhchem'
 import ArtifactRenderer from '@/components/chat/ArtifactRenderer.vue'
 import { setClipboard } from '@/api/desktop'
+import { normalizeMathMarkdown } from '@/utils/math-content'
+import {
+  createRenderManifest,
+  resolveMessageContent,
+  type MessageContent,
+  type RenderManifest,
+  type RenderSurface,
+} from '@/contracts/message-content'
 
-const props = defineProps<{
-  content: string
+const props = withDefaults(defineProps<{
+  content: string | MessageContent
+  surface?: RenderSurface
+  receiptRef?: string
+}>(), {
+  surface: 'desktop',
+  receiptRef: undefined,
+})
+
+const emit = defineEmits<{
+  rendered: [manifest: RenderManifest]
 }>()
+
+const resolvedContent = computed(() => resolveMessageContent(props.content))
+const canonicalMarkdown = computed(() => resolvedContent.value.markdown)
 
 /** Extract previewable code blocks (html/svg) from raw markdown */
 const previewableBlocks = computed(() => {
   const blocks: { language: string; code: string }[] = []
   const fenceRe = /```(html|svg)\n([\s\S]*?)```/g
   let m: RegExpExecArray | null
-  while ((m = fenceRe.exec(props.content)) !== null) {
+  while ((m = fenceRe.exec(canonicalMarkdown.value)) !== null) {
     blocks.push({ language: m[1]!, code: m[2] || '' })
   }
   return blocks
@@ -52,6 +71,7 @@ function createMarkdownRenderer(copyLabel: string) {
   // KaTeX 数学公式：行内 $..$ / 块级 $$..$$，配 mhchem 化学式 \ce{}。
   // 失败降级：throwOnError=false 让非法公式退回原文，errorColor 取正文色（不报红，见 §M1-1）。
   instance.use(katex, {
+    delimiters: 'all',
     throwOnError: false,
     errorColor: 'var(--hc-text-primary)',
   })
@@ -188,18 +208,45 @@ watch(() => t('common.copy'), (newLabel) => {
   }
 })
 
-watch(() => props.content, (content) => {
+watch(canonicalMarkdown, (content) => {
   if (content.includes('```')) highlightCodeBlocks(content)
 }, { immediate: true })
 
 const rendered = computed(() => {
   void renderVersion.value
-  return DOMPurify.sanitize(mdInstance.value.render(props.content))
+  return DOMPurify.sanitize(mdInstance.value.render(normalizeMathMarkdown(canonicalMarkdown.value)))
 })
+
+const renderManifest = computed<RenderManifest | undefined>(() => {
+  if (resolvedContent.value.protocol !== 'canonical') return undefined
+  const content = props.content as MessageContent
+  return createRenderManifest(content, {
+    renderId: `render:${content.content_id.slice('content:'.length)}:${props.surface}`,
+    surface: props.surface,
+    rendererVersion: 'desktop-markdown-v1',
+    capabilities: {
+      markdown: true,
+      tex_math: true,
+      mathml: true,
+      attachments: true,
+    },
+    parts: [{ kind: 'markdown', text: content.markdown }],
+    receiptRef: props.receiptRef,
+  })
+})
+
+watch(renderManifest, (manifest) => {
+  if (manifest) emit('rendered', manifest)
+}, { immediate: true })
 </script>
 
 <template>
-  <div>
+  <div
+    :data-content-protocol="resolvedContent.protocol"
+    :data-source-digest="resolvedContent.sourceDigest"
+    :data-producer-kind="resolvedContent.producerKind"
+    :data-render-id="renderManifest?.render_id"
+  >
     <div class="markdown-body" v-html="rendered" />
     <ArtifactRenderer
       v-for="(block, i) in previewableBlocks"

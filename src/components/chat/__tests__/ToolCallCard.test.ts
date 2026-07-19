@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import ToolCallCard from '../ToolCallCard.vue'
 import type { ToolCall } from '@/types/chat'
+import type { MessageContent } from '@/contracts/message-content'
 
 // lucide 图标全部 stub 成 <span data-icon="Name" />，便于断状态图标
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -17,10 +18,29 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
 
 function mountCard(call: ToolCall) {
   const i18n = createI18n({ legacy: false, locale: 'zh-CN', messages: { 'zh-CN': zhCN } })
-  return mount(ToolCallCard, { props: { call }, global: { plugins: [i18n] } })
+  return mount(ToolCallCard, {
+    props: { call },
+    global: {
+      plugins: [i18n],
+      stubs: {
+        MarkdownRenderer: {
+          props: ['content', 'surface'],
+          template: '<div class="tool-result-md" :data-producer="content.producer_kind" :data-surface="surface" />',
+        },
+      },
+    },
+  })
 }
 
 const base: ToolCall = { id: 't1', name: 'weather', arguments: '{"city":"杭州"}', result: '{"temp":27,"humidity":74}' }
+const canonicalToolResult: MessageContent = {
+  content_id: `content:${'b'.repeat(64)}`,
+  content_version: '1.0',
+  producer_kind: 'tool',
+  markdown: '答案是 $\\frac{3}{4}$。',
+  source_digest: `sha256:${'b'.repeat(64)}`,
+  locale: 'zh-CN',
+}
 
 describe('ToolCallCard —— P0-2/P1-3/P2-5', () => {
   it('本地化工具名（天气查询，绝不裸 weather）', () => {
@@ -64,6 +84,14 @@ describe('ToolCallCard —— P0-2/P1-3/P2-5', () => {
     expect(details.length).toBe(2)
     const pre = w.findAll('pre').map((p) => p.text())
     expect(pre.some((x) => x.includes('"temp": 27'))).toBe(true)
+  })
+
+  it('canonical 工具结果走统一 Markdown/LaTeX 渲染协议', () => {
+    const w = mountCard({ ...base, message_content: canonicalToolResult })
+    const rendered = w.find('.tool-result-md')
+    expect(rendered.exists()).toBe(true)
+    expect(rendered.attributes('data-producer')).toBe('tool')
+    expect(rendered.attributes('data-surface')).toBe('desktop')
   })
 
   it('耗时存在时展示（duration_ms wire 字段）', () => {

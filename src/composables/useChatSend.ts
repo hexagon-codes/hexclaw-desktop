@@ -19,6 +19,7 @@ import { formatContextBlock } from '@/utils/chat-context'
 import { parseDocument } from '@/utils/file-parser'
 import { registerDocPreview } from '@/utils/doc-preview'
 import { logger } from '@/utils/logger'
+import { normalizeMathMarkdown } from '@/utils/math-content'
 import { useToast } from './useToast'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { useChatStore } from '@/stores/chat'
@@ -208,6 +209,10 @@ export function useChatSend(deps: ChatSendDeps) {
       attachments?: ChatAttachment[]
     },
   ): Promise<boolean> {
+    // Shared canonical boundary: covers composer sends as well as edit/retry and
+    // any future callers that bypass ChatInput's paste adapter.
+    text = normalizeMathMarkdown(text)
+
     // Validate model selection before sending
     // model=undefined means "let backend decide" (Agent mode) — valid
     const model = chatStore.chatParams.model

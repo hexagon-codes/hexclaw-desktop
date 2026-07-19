@@ -2,14 +2,29 @@ import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import MessageBlocks from '../MessageBlocks.vue'
 import type { ContentBlock, ToolCall } from '@/types/chat'
+import type { MessageContent } from '@/contracts/message-content'
 
 const stubs = {
-  MarkdownRenderer: { props: ['content'], template: '<div class="md" :data-c="content" />' },
+  MarkdownRenderer: {
+    name: 'MarkdownRenderer',
+    props: ['content'],
+    emits: ['rendered'],
+    template: '<div class="md" :data-c="typeof content === \'string\' ? content : content.producer_kind" />',
+  },
   ToolCallCard: { props: ['call'], template: '<div class="card" :data-id="call.id" :data-res="call.result" />' },
 }
 
 function mountBlocks(blocks: ContentBlock[], toolCalls?: ToolCall[], fallbackContent?: string) {
   return mount(MessageBlocks, { props: { blocks, toolCalls, fallbackContent }, global: { stubs } })
+}
+
+const toolContent: MessageContent = {
+  content_id: `content:${'a'.repeat(64)}`,
+  content_version: '1.0',
+  producer_kind: 'tool',
+  markdown: '结果是 $\\frac{3}{4}$',
+  source_digest: `sha256:${'a'.repeat(64)}`,
+  locale: 'zh-CN',
 }
 
 describe('MessageBlocks —— 有序交错渲染（P4）', () => {
@@ -46,6 +61,29 @@ describe('MessageBlocks —— 有序交错渲染（P4）', () => {
     const blocks: ContentBlock[] = [{ type: 'tool_use', id: 'x', name: 'weather', input: '{"a":1}' }]
     const w = mountBlocks(blocks, [])
     expect(w.find('.card').attributes('data-id')).toBe('x')
+  })
+
+  it('text 块优先把 canonical MessageContent 交给统一渲染器', () => {
+    const blocks: ContentBlock[] = [
+      { type: 'text', text: 'legacy fallback', message_content: toolContent },
+    ]
+    const w = mountBlocks(blocks)
+    expect(w.find('.md').attributes('data-c')).toBe('tool')
+  })
+
+  it('把每个有序文本块的 RenderManifest 上交消息层留证', () => {
+    const w = mountBlocks([{ type: 'text', text: toolContent.markdown, message_content: toolContent }])
+    const manifest = {
+      render_id: 'render:block:1',
+      content_id: toolContent.content_id,
+      surface: 'desktop' as const,
+      capability_snapshot: { markdown: true, tex_math: true },
+      renderer_version: 'desktop-v1',
+      source_digest: toolContent.source_digest,
+      parts: [{ kind: 'markdown' as const, text: toolContent.markdown }],
+    }
+    w.findComponent({ name: 'MarkdownRenderer' }).vm.$emit('rendered', manifest)
+    expect(w.emitted('rendered')?.[0]).toEqual([manifest])
   })
 
   it('BUG-20260629 blocks 只有工具块时，用消息正文兜底，避免最终答案被工具列表替换', () => {

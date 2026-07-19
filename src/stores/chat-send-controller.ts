@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import { DEFAULT_SESSION_TITLE } from '@/constants'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
+import type { MessageContent } from '@/contracts/message-content'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
@@ -40,9 +41,11 @@ export function createChatSendController(params: {
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
     content: string
+    messageContent?: MessageContent
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
+    blocks?: ChatMessage['blocks']
     agentName?: string
     reasoning?: string
     sending?: Ref<boolean>

@@ -208,7 +208,8 @@ onBeforeUnmount(() => {
       <span class="hc-voicechat__title">语音对话</span>
     </div>
 
-    <textarea
+    <HcClearableField>
+      <textarea
       v-model="text"
       class="hc-voicechat__text"
       placeholder="按住右下角 🎤 说话，或在此输入文字（模型会以语音回应）"
@@ -216,6 +217,7 @@ onBeforeUnmount(() => {
       @keydown.meta.enter="sendText"
       @keydown.ctrl.enter="sendText"
     />
+    </HcClearableField>
 
     <div class="hc-voicechat__bar">
       <label class="hc-voicechat__opt">

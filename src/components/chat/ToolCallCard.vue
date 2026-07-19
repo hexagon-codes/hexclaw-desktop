@@ -3,6 +3,8 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Wrench, CircleCheck, CircleX, LoaderCircle } from 'lucide-vue-next'
 import type { ToolCall } from '@/types/chat'
+import MarkdownRenderer from './MarkdownRenderer.vue'
+import type { RenderManifest } from '@/contracts/message-content'
 import {
   toolCallStatus,
   resolveToolDisplayName,
@@ -12,6 +14,7 @@ import {
 } from '@/utils/tool-call'
 
 const props = defineProps<{ call: ToolCall }>()
+const emit = defineEmits<{ rendered: [manifest: RenderManifest] }>()
 const { t } = useI18n()
 
 const status = computed(() => toolCallStatus(props.call))
@@ -53,9 +56,16 @@ const statusLabel = computed(() =>
       <summary>{{ t('chat.toolParams') }}</summary>
       <pre>{{ prettyArgs }}</pre>
     </details>
-    <details v-if="call.result" class="hc-tool__detail">
+    <details v-if="call.result || call.message_content" class="hc-tool__detail">
       <summary>{{ t('chat.toolResult') }}</summary>
-      <pre>{{ prettyResult }}</pre>
+      <MarkdownRenderer
+        v-if="call.message_content"
+        class="hc-tool__result-markdown"
+        :content="call.message_content"
+        surface="desktop"
+        @rendered="emit('rendered', $event)"
+      />
+      <pre v-else>{{ prettyResult }}</pre>
     </details>
   </div>
 </template>
@@ -175,6 +185,14 @@ const statusLabel = computed(() =>
   word-break: break-word;
   overflow-wrap: anywhere;
   max-height: 200px;
+  overflow-y: auto;
+}
+
+.hc-tool__result-markdown {
+  padding: 8px 10px;
+  font-size: 11px;
+  color: var(--hc-text-secondary);
+  max-height: 240px;
   overflow-y: auto;
 }
 </style>

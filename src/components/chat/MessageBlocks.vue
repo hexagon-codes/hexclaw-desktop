@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import MarkdownRenderer from './MarkdownRenderer.vue'
 import ToolCallCard from './ToolCallCard.vue'
 import type { ContentBlock, ToolCall } from '@/types/chat'
+import type { RenderManifest } from '@/contracts/message-content'
 
 /**
  * 按**有序内容块流**渲染一个 assistant 回合：text 与 tool 调用按真实执行序交错
@@ -12,6 +13,7 @@ import type { ContentBlock, ToolCall } from '@/types/chat'
  * thinking 块不在此渲染（reasoning 走消息级独立思考块）；tool_result 块折叠进对应工具卡，不单独渲染。
  */
 const props = defineProps<{ blocks: ContentBlock[]; toolCalls?: ToolCall[]; fallbackContent?: string }>()
+const emit = defineEmits<{ rendered: [manifest: RenderManifest] }>()
 
 const displayBlocks = computed<ContentBlock[]>(() => {
   const hasText = props.blocks.some((b) => b.type === 'text' && b.text.trim())
@@ -30,8 +32,17 @@ function toolCallFor(block: Extract<ContentBlock, { type: 'tool_use' }>): ToolCa
 <template>
   <div class="hc-blocks">
     <template v-for="(b, i) in displayBlocks" :key="i">
-      <MarkdownRenderer v-if="b.type === 'text' && b.text" :content="b.text" />
-      <ToolCallCard v-else-if="b.type === 'tool_use'" :call="toolCallFor(b)" />
+      <MarkdownRenderer
+        v-if="b.type === 'text' && (b.message_content || b.text)"
+        :content="b.message_content ?? b.text"
+        surface="desktop"
+        @rendered="emit('rendered', $event)"
+      />
+      <ToolCallCard
+        v-else-if="b.type === 'tool_use'"
+        :call="toolCallFor(b)"
+        @rendered="emit('rendered', $event)"
+      />
     </template>
   </div>
 </template>

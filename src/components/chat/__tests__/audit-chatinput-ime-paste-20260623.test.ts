@@ -104,4 +104,51 @@ describe('AUDIT 集成：ChatInput IME / 粘贴 / Enter', () => {
     expect((ta(w).element as HTMLTextAreaElement).value).toBe('1.甲\n2.乙\n3.丙')
     w.unmount()
   })
+
+  it('粘贴 LaTeX 圆括号定界符时转成内部 canonical 数学 Markdown', async () => {
+    const w = await mountChatInput({})
+    const el = ta(w).element as HTMLTextAreaElement
+    el.value = '题目：'
+    await ta(w).setValue('题目：')
+    el.setSelectionRange(el.value.length, el.value.length)
+
+    const clipboardData = {
+      items: [] as unknown[],
+      getData: (type: string) => type === 'text/plain'
+        ? String.raw`\\(\\frac{3}{4}\\) 的分数单位是（ ）。`
+        : '',
+    }
+    await ta(w).trigger('paste', { clipboardData })
+    await flushPromises()
+
+    expect((ta(w).element as HTMLTextAreaElement).value)
+      .toBe(String.raw`题目：$\frac{3}{4}$ 的分数单位是（ ）。`)
+    w.unmount()
+  })
+
+  it('优先从 HTML MathML 的 TeX annotation 恢复分数及上下文', async () => {
+    const w = await mountChatInput({})
+    const el = ta(w).element as HTMLTextAreaElement
+    el.setSelectionRange(0, 0)
+    const html = [
+      '<p>第 2 题：',
+      '<span class="katex"><span class="katex-mathml"><math>',
+      '<semantics><mfrac><mn>3</mn><mn>4</mn></mfrac>',
+      '<annotation encoding="application/x-tex">\\frac{3}{4}</annotation></semantics>',
+      '</math></span><span class="katex-html" aria-hidden="true">duplicate visual text</span></span>',
+      ' 的分数单位是（ ）。</p>',
+    ].join('')
+    const clipboardData = {
+      items: [] as unknown[],
+      getData: (type: string) => type === 'text/html' ? html : type === 'text/plain' ? '第 2 题：3 4' : '',
+    }
+
+    await ta(w).trigger('paste', { clipboardData })
+    await flushPromises()
+
+    expect((ta(w).element as HTMLTextAreaElement).value)
+      .toBe(String.raw`第 2 题：$\frac{3}{4}$ 的分数单位是（ ）。`)
+    expect((ta(w).element as HTMLTextAreaElement).value).not.toContain('duplicate visual text')
+    w.unmount()
+  })
 })

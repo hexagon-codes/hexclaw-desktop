@@ -4,6 +4,7 @@ import type { Artifact, ChatMessage } from '@/types'
 import type { LoggerModule, MessageServiceModule } from './chat-session-types'
 import { clearSessionModel } from './session-model-binding'
 import { clearSessionAgent } from './session-agent-binding'
+import { clearSessionDeepThinking } from './session-thinking-preference'
 
 export function createChatSessionLifecycleController(params: {
   currentSessionId: Ref<string | null>
@@ -117,6 +118,7 @@ export function createChatSessionLifecycleController(params: {
       await msgSvc.deleteSession(sessionId)
       clearSessionModel(sessionId) // 防孤儿：会话删除后清除其模型绑定
       clearSessionAgent(sessionId) // 防孤儿：同步清除 agent 绑定（session-agent-binding 契约）
+      clearSessionDeepThinking(sessionId) // 删除会话同步清理深度思考偏好
       if (currentSessionId.value === sessionId) {
         currentSessionId.value = null
         messages.value = []

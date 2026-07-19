@@ -66,6 +66,17 @@ describe('useChatSend', () => {
     )
   })
 
+  it('normalizes formula syntax at the shared send boundary for edit/retry/direct sends', async () => {
+    const deps = makeDeps()
+    const { handleSend } = useChatSend(deps as any)
+    await handleSend(String.raw`题目：\\(\\frac{3}{4}\\)`)
+    expect(deps.chatStore.sendMessage).toHaveBeenCalledWith(
+      String.raw`题目：$\frac{3}{4}$`,
+      undefined,
+      expect.objectContaining({ backendText: expect.any(Function) }),
+    )
+  })
+
   it('allows Agent mode sends when model is undefined', async () => {
     const deps = makeDeps()
     deps.chatStore.chatParams.model = undefined

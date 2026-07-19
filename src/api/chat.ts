@@ -2,6 +2,7 @@ import { logger } from '@/utils/logger'
 import { DESKTOP_USER_ID } from '@/constants'
 import { apiPost, apiGet, apiPatch, apiPut, apiDelete } from './client'
 import type { ChatMessage, ChatSession, ChatRequest } from '@/types'
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
 // ─── 会话 API 辅助函数 ─────────────────────────────────
 //
@@ -55,6 +56,8 @@ export type { ToolCall } from '@/types'
 /** 后端聊天响应 */
 export interface BackendChatResponse {
   reply: string
+  message_content?: MessageContent
+  render_manifest?: RenderManifest
   session_id: string
   tool_calls?: import('@/types').ToolCall[]
   blocks?: import('@/types').ContentBlock[]

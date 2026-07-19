@@ -4,6 +4,7 @@ import type { LoggerModule, MessageServiceModule } from './chat-session-types'
 import { mergeMessagesById, upsertSession } from './chat-session-helpers'
 import { pruneSessionModels } from './session-model-binding'
 import { getSessionAgent, pruneSessionAgents } from './session-agent-binding'
+import { getSessionDeepThinking, pruneSessionDeepThinking } from './session-thinking-preference'
 
 export function createChatSessionLoadingController(params: {
   sessions: Ref<ChatSession[]>
@@ -64,11 +65,11 @@ export function createChatSessionLoadingController(params: {
     // 会话级 Agent 绑定恢复（BUG-20260708）：切走再切回不再丢失该会话的辅导老师人设 / 场景增强。
     // 无绑定（普通会话）→ agentRole 空、chat 模式，与旧行为一致；有绑定 → agent 模式 + 恢复收件人。
     const boundAgent = getSessionAgent(sessionId)
-    chatMode.value = boundAgent ? 'agent' : 'chat'
+    const deepThinking = getSessionDeepThinking(sessionId)
+    chatMode.value = deepThinking ? 'research' : boundAgent ? 'agent' : 'chat'
     agentRole.value = boundAgent
-    // 离开研究/深度思考模式时一并清零，否则 thinkingEnabled 残留 true 会让下个会话
-    // UI 显示「深度思考关」但请求仍发 thinking=on（跨会话状态泄漏，同模型串改根因）。
-    thinkingEnabled.value = false
+    // 深度思考是会话级偏好：有显式绑定则恢复；无绑定必须关闭，绝不沿用上一会话。
+    thinkingEnabled.value = deepThinking
     hasCustomTitle.value = false
 
     currentSessionId.value = sessionId
@@ -132,9 +133,10 @@ export function createChatSessionLoadingController(params: {
         }
       }
       sessions.value = nextSessions
-      // 防累积：丢弃已不存在会话的模型 / Agent 绑定，使 localStorage map 永远 ≤ 会话数
+      // 防累积：丢弃已不存在会话的模型 / Agent / 深度思考绑定，使 localStorage map 永远 ≤ 会话数
       pruneSessionModels(sessions.value.map((session) => session.id))
       pruneSessionAgents(sessions.value.map((session) => session.id))
+      pruneSessionDeepThinking(sessions.value.map((session) => session.id))
       // Don't auto-select a session while a new session is being created (race condition fix).
       // U1：后台流收尾刷新列表时 suppressAutoSelect——否则用户主动新建的空白态(currentSessionId=null)
       // 会被自动 selectSession(lastId) 拽回旧会话，新建按钮等于没点。

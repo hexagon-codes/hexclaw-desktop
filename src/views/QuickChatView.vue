@@ -6,24 +6,31 @@ import { sendChat } from '@/api/chat'
 import { hexclawWS } from '@/api/websocket'
 import { useSettingsStore } from '@/stores/settings'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import MessageText from '@/components/chat/MessageText.vue'
 import { getAssistantDisplayContent, getAssistantReasoningFromMetadata, normalizeAssistantReasoning } from '@/utils/assistant-reply'
 import { withModelReasoningDefaults } from '@/utils/model-reasoning'
+import { insertAtSelection, normalizeMathMarkdown, readMathClipboard } from '@/utils/math-content'
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
+import { recordRenderManifest } from '@/contracts/render-evidence'
 
 interface Message {
   id: string
   role: 'user' | 'assistant'
   content: string
+  message_content?: MessageContent
+  render_manifest?: RenderManifest
   error?: boolean
 }
 
 const STORAGE_KEY = 'quick-chat-messages'
 const MODEL_STORAGE_KEY = 'quick-chat-model'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
 
 const messages = ref<Message[]>([])
 const inputText = ref('')
+const textareaRef = ref<HTMLTextAreaElement>()
 const streaming = ref(false)
 const streamingContent = ref('')
 const streamingReasoning = ref('')
@@ -34,6 +41,10 @@ const selectedProviderKey = ref('')
 const showModelDropdown = ref(false)
 const useWebSocket = ref(false)
 const wsConnected = ref(false)
+
+function captureRenderManifest(message: Message, manifest: RenderManifest) {
+  recordRenderManifest(message, manifest)
+}
 
 const availableModels = computed(() => settingsStore.availableModels)
 
@@ -182,6 +193,7 @@ function setupWsCallbacks(requestGen: number) {
           streamingContent.value,
           streamingReasoning.value || getAssistantReasoningFromMetadata(chunk.metadata),
         ),
+        message_content: chunk.message_content,
       })
       streamingContent.value = ''
       streamingReasoning.value = ''
@@ -202,6 +214,7 @@ function setupWsCallbacks(requestGen: number) {
           ? normalizeAssistantReasoning(reply.reasoning)
           : getAssistantReasoningFromMetadata(reply.metadata),
       ),
+      message_content: reply.message_content,
     })
     streaming.value = false
     streamingContent.value = ''
@@ -224,7 +237,7 @@ function setupWsCallbacks(requestGen: number) {
 }
 
 async function handleSend(retryContent?: string, retryErrorId?: string) {
-  const text = retryContent || inputText.value.trim()
+  const text = normalizeMathMarkdown(retryContent || inputText.value.trim())
   if (!text || streaming.value) return
 
   if (!retryContent) {
@@ -263,7 +276,7 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
       undefined,
       // BUG-20260703 A1：QuickChat 无 Agent 选择 UI = 恒对默认助理，须发 pinned_agent
       // 锁定信号，否则 provider 解析为空时后端会按内容路由被专属 Agent 抢答。
-      withModelReasoningDefaults(selectedModel.value, { pinned_agent: 'default' }),
+      withModelReasoningDefaults(selectedModel.value, { pinned_agent: 'default', producer_kind: 'quick_chat', locale: locale.value }),
       requestId,
     )
   } else {
@@ -275,7 +288,7 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
         model: selectedModel.value || undefined,
         request_id: requestId,
         // BUG-20260703 A1：同上，QuickChat 恒锁默认助理，防内容路由抢答。
-        metadata: withModelReasoningDefaults(selectedModel.value, { pinned_agent: 'default' }),
+        metadata: withModelReasoningDefaults(selectedModel.value, { pinned_agent: 'default', producer_kind: 'quick_chat', locale: locale.value }),
       })
       if (requestGen !== responseRequestGen) return
       messages.value.push({
@@ -285,6 +298,7 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
           typeof resp.reply === 'string' ? resp.reply : '',
           getAssistantReasoningFromMetadata(resp.metadata),
         ),
+        message_content: resp.message_content,
       })
     } catch (e) {
       if (requestGen !== responseRequestGen) return
@@ -301,6 +315,22 @@ async function handleSend(retryContent?: string, retryErrorId?: string) {
       }
     }
   }
+}
+
+function handlePaste(event: ClipboardEvent) {
+  const paste = readMathClipboard(event.clipboardData)
+  if (!paste.text || !paste.handled) return
+  event.preventDefault()
+  const textarea = textareaRef.value
+  if (!textarea) return
+  const start = textarea.selectionStart ?? inputText.value.length
+  const end = textarea.selectionEnd ?? start
+  const inserted = insertAtSelection(inputText.value, paste.text, start, end)
+  inputText.value = inserted.value
+  nextTick(() => {
+    textarea.setSelectionRange(inserted.caret, inserted.caret)
+    textarea.focus()
+  })
 }
 
 function handleRetry(msg: Message) {
@@ -448,12 +478,12 @@ const selectedModelName = computed(() => {
     <div class="flex-1 overflow-y-auto px-4 py-3 space-y-3" @click="showModelDropdown = false">
       <div v-for="msg in messages" :key="msg.id" class="text-sm leading-relaxed">
         <div v-if="msg.role === 'user'" class="text-right">
-          <span
+          <div
             class="inline-block rounded-xl px-3 py-2 text-white max-w-[85%] text-left"
             :style="{ background: 'var(--hc-accent)' }"
           >
-            {{ msg.content }}
-          </span>
+            <MessageText :content="msg.content" />
+          </div>
         </div>
         <div v-else>
           <div
@@ -463,7 +493,11 @@ const selectedModelName = computed(() => {
               color: msg.error ? 'var(--hc-error)' : 'var(--hc-text-primary)',
             }"
           >
-            <MarkdownRenderer :content="msg.content" />
+            <MarkdownRenderer
+              :content="msg.message_content ?? msg.content"
+              surface="quick_chat"
+              @rendered="captureRenderManifest(msg, $event)"
+            />
             <button
               v-if="msg.error"
               class="flex items-center gap-1 mt-1.5 text-xs px-2 py-0.5 rounded transition-colors"
@@ -517,14 +551,18 @@ const selectedModelName = computed(() => {
         class="flex items-end gap-2 rounded-lg border px-3 py-1.5"
         :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)' }"
       >
-        <textarea
+        <HcClearableField>
+          <textarea
+          ref="textareaRef"
           v-model="inputText"
           rows="1"
           class="flex-1 resize-none bg-transparent outline-none text-sm leading-6 max-h-20"
           :style="{ color: 'var(--hc-text-primary)' }"
           :placeholder="t('quickChat.inputPlaceholder')"
           @keydown="handleKeydown"
+          @paste="handlePaste"
         />
+        </HcClearableField>
         <button
           v-if="streaming"
           class="p-1 rounded transition-colors opacity-100"

@@ -14,6 +14,7 @@ import {
 } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { bindSessionAgent, getSessionAgent, markSessionAgentOrphaned } from '@/stores/session-agent-binding'
+import { setSessionDeepThinking } from '@/stores/session-thinking-preference'
 import { healLegacySessionTitles } from '@/stores/session-title-heal'
 import { useThrottledText } from '@/composables/useThrottledText'
 import { isChannelDefaultAgent } from '@/utils/imChannelBinding'
@@ -40,7 +41,6 @@ import ChatInput from '@/components/chat/ChatInput.vue'
 import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import SessionList from '@/components/chat/SessionList.vue'
-import ChatSearchDialog from '@/components/chat/ChatSearchDialog.vue'
 import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import AgentBadge from '@/components/chat/AgentBadge.vue'
@@ -74,6 +74,8 @@ import { getVideoGenStatus, videoToSrc, coverToSrc, type VideoTaskStatus } from 
 import { getVoiceChatStatus, audioToSrc, type VoiceChatResult } from '@/api/voicechat'
 import { nanoid } from 'nanoid'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
+import type { RenderManifest } from '@/contracts/message-content'
+import { recordNestedRenderManifest, recordRenderManifest } from '@/contracts/render-evidence'
 import { getDocPreviewFile } from '@/utils/doc-preview'
 import { uploadDocumentPreview, documentPreviewUrl } from '@/api/documents'
 import { openOrDownloadDocument } from '@/utils/download'
@@ -86,6 +88,14 @@ const router = useRouter()
 const chatStore = useChatStore()
 const agentsStore = useAgentsStore()
 const settingsStore = useSettingsStore()
+
+function captureRenderManifest(message: ChatMessage, manifest: RenderManifest) {
+  recordRenderManifest(message, manifest)
+}
+
+function captureNestedManifest(message: ChatMessage, manifest: RenderManifest) {
+  recordNestedRenderManifest(message, manifest)
+}
 
 /**
  * 是否已配置过模型 —— 与路由首屏守卫（router/index.ts）同款判定：有任一 provider，或已
@@ -140,7 +150,6 @@ function setHoveredMsg(id: string) {
 }
 
 onUnmounted(() => { if (hoverTimer) clearTimeout(hoverTimer) })
-const showSearch = ref(false)
 const attachmentPreview = ref<{
   url: string
   name: string
@@ -260,15 +269,6 @@ function showEarlierMessages() {
     if (host) host.scrollTop += host.scrollHeight - prevHeight
   })
 }
-// 窗口重置并入下方 currentSessionId 滚动重置 watch(BUG-20260628 锚点约定:该 watch 是本源的首个裸 getter)
-/** 搜索跳转等需要定位窗外历史消息时,先扩窗到目标再滚动 */
-function ensureMessageVisible(messageId: string) {
-  const i = chatStore.messages.findIndex((m) => m.id === messageId)
-  if (i >= 0 && i < windowOffset.value) {
-    messageWindow.value = chatStore.messages.length - i + 10
-  }
-}
-
 // ── 流式 markdown 节流(BUG-20260710 P1)：每 chunk 全量重 parse=O(n²)/流,
 // 降为至多 300ms 一帧 + 尾帧必刷(useThrottledText),长回复不再拖死主线程。
 const throttledStreamContent = useThrottledText(() => chatStore.isCurrentStreamingContent, 300)
@@ -551,6 +551,12 @@ const scenarioComposerChips = ref<string[]>([])
 // 场景会话下 composer 拦截的图片（BUG-20260709 拍照发题不解题）：ChatInput 把粘贴/上传图片
 // 以 dataURL 上交 → 透传给场景增强（K12=自动打开识题护栏）；增强消费后回写 '' 复位。零场景知识。
 const scenarioComposerImage = ref('')
+// 场景内联内容是否活动。通用 shell 只据布尔状态隐藏空态、滚到会话末尾，不解析场景内容。
+const scenarioInlineActive = ref(false)
+function handleScenarioInlineActive(active: boolean) {
+  scenarioInlineActive.value = active
+  if (active) nextTick(() => scrollToBottom(true))
+}
 const scenarioCtx = computed(() => {
   const name = chatStore.agentRole
   if (!name) return null
@@ -569,13 +575,24 @@ const scenarioCtx = computed(() => {
     descriptor,
   }
 })
+watch(() => scenarioCtx.value?.agentId, () => {
+  // 切孩子或离开场景时不能把上一会话的内联状态泄漏到新会话，否则普通空会话会被错误隐藏。
+  scenarioInlineActive.value = false
+  scenarioComposerImage.value = ''
+})
 
 // 消息头/meta 里的 agent 名解析为可读 display_name（后端 msg.agent_name 常是内部 id，如
 // k12-tutor-KKE5v8zQ，家长看不懂）。命中注册 agent 显示 display_name，否则回退原值（BUG-20260708）。
+const INTERNAL_AGENT_ROLES = new Set(['assistant', 'default', 'researcher', 'writer', 'coder'])
 function msgAgentDisplay(raw?: string | null): string {
   const name = (raw ?? '').trim()
   if (!name) return ''
-  return agentsStore.findAgent(name)?.display_name?.trim() || name
+  const registered = agentsStore.findAgent(name)?.display_name?.trim()
+  if (registered) return registered
+  // researcher 等是路由/协作角色，不是产品里的智能体名称。场景会话优先显示绑定实例名，
+  // 普通会话回退默认助手名，避免把后端内部标识泄漏给用户。
+  if (INTERNAL_AGENT_ROLES.has(name)) return scenarioCtx.value?.agentName || t('chat.botName')
+  return name
 }
 
 // 场景化空态（P0-20260708 P0-3）：实例声明了 emptyState 则替换通用「选择一个智能体」引导。
@@ -885,13 +902,13 @@ const supportsVideo = computed(() => selectedModelCapabilities.value.includes('v
 // Deep thinking = research mode + thinking enabled (merged UX)
 const isDeepThinking = computed(() => chatStore.chatMode === 'research' && chatStore.thinkingEnabled)
 function toggleDeepThinking() {
-  if (isDeepThinking.value) {
-    chatStore.chatMode = 'chat'
-    chatStore.thinkingEnabled = false
-  } else {
-    chatStore.chatMode = 'research'
-    chatStore.thinkingEnabled = true
+  const enabled = !isDeepThinking.value
+  chatStore.chatMode = enabled ? 'research' : chatStore.agentRole ? 'agent' : 'chat'
+  chatStore.thinkingEnabled = enabled
+  if (chatStore.currentSessionId) {
+    setSessionDeepThinking(chatStore.currentSessionId, enabled)
   }
+  syncChatParams()
 }
 
 // Research mode state (kept for streaming display logic)
@@ -1714,8 +1731,14 @@ watch(
       // 否则下次选中「无绑定会话」时，残留的 userOverrodeModel 会被误判为「新会话首发」，
       // 把上一会话的模型偷偷绑过去（BUG-20260625 跨会话串模型）。
       userOverrodeModel.value = false
+      chatStore.chatMode = 'chat'
+      chatStore.thinkingEnabled = false
       loadLLMConfig()
       return
+    }
+    // 空白新会话可在首发前开启深度思考；ensureSession 分配 id 后补记该会话偏好。
+    if (prevId === null && isDeepThinking.value) {
+      setSessionDeepThinking(newId, true)
     }
     applySessionModel(newId, prevId ?? null)
   },
@@ -1733,9 +1756,9 @@ watch(
 )
 
 function newSession() {
-  if (chatStore.chatMode !== 'research') {
-    chatStore.agentRole = ''
-  }
+  chatStore.chatMode = 'chat'
+  chatStore.thinkingEnabled = false
+  chatStore.agentRole = ''
   userOverrodeModel.value = false
   chatStore.newSession()
 }
@@ -1800,17 +1823,6 @@ function getHitSubtitle(hit: Record<string, unknown>) {
   return knowledgeHitSubtitle(hit, t)
 }
 
-async function scrollToMessage(msgId: string) {
-  ensureMessageVisible(msgId)
-  await nextTick()
-  const el = document.getElementById(`msg-${msgId}`)
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    el.classList.add('hc-msg--highlight')
-    setTimeout(() => el.classList.remove('hc-msg--highlight'), 1500)
-  }
-}
-
 async function handleFileUpload(file: File) {
   const url = URL.createObjectURL(file)
   let type: 'image' | 'video' | 'file' = 'file'
@@ -1846,13 +1858,6 @@ function handleDrop(e: DragEvent) {
   if (file) handleFileUpload(file)
 }
 
-function handleSearchShortcut(e: KeyboardEvent) {
-  if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-    e.preventDefault()
-    showSearch.value = !showSearch.value
-  }
-}
-
 // Memory update notification — shows a transient toast when memory is modified elsewhere
 const memoryJustUpdated = ref(false)
 let memoryToastTimer: ReturnType<typeof setTimeout> | null = null
@@ -1867,8 +1872,6 @@ const memoryToastContent = ref('')
 const offMemoryBus = on('memory:updated', () => showMemoryToast())
 const offMemoryWS = hexclawWS.onMemorySaved((content) => showMemoryToast(content))
 
-onMounted(() => document.addEventListener('keydown', handleSearchShortcut))
-onUnmounted(() => document.removeEventListener('keydown', handleSearchShortcut))
 onUnmounted(() => {
   stopSidebarResize()
   cancelQueryModelSelection()
@@ -1970,15 +1973,6 @@ function startSidebarResize(event: MouseEvent) {
         v-model:show-sessions="showSessions"
         :message-count="chatStore.messages.length"
         :token-badge="t('chat.aboutTokens', { n: formatTokenCount(estimatedTokens) })"
-        @search="showSearch = !showSearch"
-      />
-
-      <!-- Search bar -->
-      <ChatSearchDialog
-        v-if="showSearch"
-        :messages="chatStore.messages"
-        @close="showSearch = false"
-        @scroll-to="scrollToMessage"
       />
 
       <!-- 场景包会话增强（场景实例声明的头部 tab / 记录视图 / 侧栏产物）；shell 只渲染 registry 组件 -->
@@ -1990,6 +1984,7 @@ function startSidebarResize(event: MouseEvent) {
         :composer-image="scenarioComposerImage"
         @update:composer-chips="scenarioComposerChips = $event"
         @update:composer-image="scenarioComposerImage = $event"
+        @update:inline-active="handleScenarioInlineActive"
       />
 
         <!-- Messages -->
@@ -2000,7 +1995,7 @@ function startSidebarResize(event: MouseEvent) {
           @scroll="handleMessagesScroll"
         >
           <div
-            v-if="chatStore.messages.length === 0 && !chatStore.isCurrentStreaming"
+            v-if="chatStore.messages.length === 0 && !chatStore.isCurrentStreaming && !scenarioInlineActive"
             class="hc-chat__empty"
           >
             <EmptyState
@@ -2074,7 +2069,12 @@ function startSidebarResize(event: MouseEvent) {
                   <!-- 工具调用卡：因果位 think → act → answer（P0-1）。
                        有有序内容块时改由气泡内 MessageBlocks 按真实交错序渲染，这里不再单独堆叠（避免重复）。 -->
                   <div v-if="!msg.blocks?.length && displayToolCalls(msg).length" class="hc-msg__tools">
-                    <ToolCallCard v-for="tc in displayToolCalls(msg)" :key="tc.id" :call="tc" />
+                    <ToolCallCard
+                      v-for="tc in displayToolCalls(msg)"
+                      :key="tc.id"
+                      :call="tc"
+                      @rendered="captureNestedManifest(msg, $event)"
+                    />
                   </div>
                   <div class="hc-msg__bubble-wrap">
                     <div
@@ -2133,8 +2133,14 @@ function startSidebarResize(event: MouseEvent) {
                         :blocks="msg.blocks"
                         :tool-calls="msg.tool_calls"
                         :fallback-content="sanitizeMessageContent(msg.content)"
+                        @rendered="captureNestedManifest(msg, $event)"
                       />
-                      <MarkdownRenderer v-else :content="sanitizeMessageContent(msg.content)" />
+                      <MarkdownRenderer
+                        v-else
+                        :content="msg.message_content ?? sanitizeMessageContent(msg.content)"
+                        surface="desktop"
+                        @rendered="captureRenderManifest(msg, $event)"
+                      />
                       <!-- v0.4.0 G3/E6 通用交互块（buttons/select/approval/card 4 type）；
                            优先 message.interactive 新协议，fallback 到 metadata.interactive_buttons 老路径 -->
                       <InteractiveBlock
@@ -2153,21 +2159,6 @@ function startSidebarResize(event: MouseEvent) {
                       />
                       <!-- 入库徽章（判错入库确认，schema 驱动 · shell 通用组件） -->
                       <RecordChip v-if="messageRecordChip(msg)" v-bind="messageRecordChip(msg)!" />
-                    </div>
-                    <div
-                      v-show="hoveredMsgId === msg.id"
-                      class="hc-msg__actions-float hc-msg__actions-float--left"
-                    >
-                      <MessageActions
-                        role="assistant"
-                        :content="msg.content"
-                        :feedback="messageFeedbackValue(msg)"
-                        @retry="handleRetry(windowOffset + idx)"
-                        @fork="handleFork(windowOffset + idx)"
-                        @like="handleLike(msg.id)"
-                        @dislike="handleDislike(msg.id)"
-                        @delete="requestDeleteMessage(msg.id)"
-                      />
                     </div>
                   </div>
                   <div v-if="getMessageArtifacts(msg.id).length > 0" class="hc-msg__artifacts">
@@ -2322,10 +2313,26 @@ function startSidebarResize(event: MouseEvent) {
                       </div>
                     </div>
                   </div>
-                  <div class="hc-msg__meta">
-                    <span>{{ formatTime(msg.timestamp) }}</span>
-                    <span v-if="metadataValue(msg, 'provider') || metadataValue(msg, 'model')">{{ [metadataValue(msg, 'provider'), metadataValue(msg, 'model')].filter(Boolean).join(' · ') }}</span>
-                    <span v-if="msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent">{{ msgAgentDisplay(msg.agent_name || (msg.metadata?.agent_name as string) || (msg.metadata?.routed_agent as string)) }}</span>
+                  <div class="hc-msg__footer">
+                    <div class="hc-msg__actions-slot">
+                      <div v-show="hoveredMsgId === msg.id" class="hc-msg__actions-float hc-msg__actions-float--left">
+                        <MessageActions
+                          role="assistant"
+                          :content="msg.content"
+                          :feedback="messageFeedbackValue(msg)"
+                          @retry="handleRetry(windowOffset + idx)"
+                          @fork="handleFork(windowOffset + idx)"
+                          @like="handleLike(msg.id)"
+                          @dislike="handleDislike(msg.id)"
+                          @delete="requestDeleteMessage(msg.id)"
+                        />
+                      </div>
+                    </div>
+                    <div class="hc-msg__meta">
+                      <span>{{ formatTime(msg.timestamp) }}</span>
+                      <span v-if="metadataValue(msg, 'provider') || metadataValue(msg, 'model')">{{ [metadataValue(msg, 'provider'), metadataValue(msg, 'model')].filter(Boolean).join(' · ') }}</span>
+                      <span v-if="msg.agent_name || msg.metadata?.agent_name || msg.metadata?.routed_agent">{{ msgAgentDisplay(msg.agent_name || (msg.metadata?.agent_name as string) || (msg.metadata?.routed_agent as string)) }}</span>
+                    </div>
                   </div>
                 </div>
               </template>
@@ -2425,7 +2432,8 @@ function startSidebarResize(event: MouseEvent) {
                           <span>{{ skillForChip(sn).display_name || sn }}</span>
                         </span>
                       </div>
-                      <textarea
+                      <HcClearableField>
+                        <textarea
                         :ref="(el) => { if (el) setEditTextareaEl(el as HTMLTextAreaElement) }"
                         v-model="editingText"
                         class="hc-msg__edit-textarea"
@@ -2436,21 +2444,22 @@ function startSidebarResize(event: MouseEvent) {
                         @compositionend="onEditCompositionEnd"
                         @input="autoResizeEditTextarea"
                       />
+                      </HcClearableField>
                       <div class="hc-msg__edit-actions">
                         <button class="hc-msg__edit-btn hc-msg__edit-btn--cancel" @click="cancelEdit">{{ t('common.cancel') }}</button>
                         <button class="hc-msg__edit-btn hc-msg__edit-btn--send" @click="confirmEdit(msg.id)">{{ t('chat.send') }}</button>
                       </div>
                     </div>
-                    <!-- Hover actions toolbar -->
-                    <div
-                      v-show="hoveredMsgId === msg.id"
-                      class="hc-msg__actions-float hc-msg__actions-float--right"
-                    >
-                      <MessageActions role="user" :content="msg.content" @edit="handleEdit(windowOffset + idx)" @delete="requestDeleteMessage(msg.id)" />
-                    </div>
                   </div>
-                  <div class="hc-msg__time hc-msg__time--right">
-                    {{ formatTime(msg.timestamp) }}
+                  <div class="hc-msg__footer hc-msg__footer--right">
+                    <div class="hc-msg__actions-slot hc-msg__actions-slot--right">
+                      <div v-show="hoveredMsgId === msg.id" class="hc-msg__actions-float hc-msg__actions-float--right">
+                        <MessageActions role="user" :content="msg.content" @edit="handleEdit(windowOffset + idx)" @delete="requestDeleteMessage(msg.id)" />
+                      </div>
+                    </div>
+                    <div class="hc-msg__time hc-msg__time--right">
+                      {{ formatTime(msg.timestamp) }}
+                    </div>
                   </div>
                 </div>
               </template>
@@ -2517,8 +2526,16 @@ function startSidebarResize(event: MouseEvent) {
               @respond="chatStore.respondApproval"
             />
 
-            <div ref="messagesEndRef" />
           </div>
+
+          <!-- 场景包内联内容锚点：识题护栏、辅导卡等属于会话内容，必须随消息区滚动，
+               不能作为 .hc-chat__main 的独立 flex 项覆盖或挤走历史消息。通用 Shell 只提供槽位。 -->
+          <div id="hc-chat-scenario-inline" class="hc-chat__scenario-inline" />
+          <!-- 所有滚到底动作必须落在场景内联内容之后，否则打开面板只会停在面板上方。 -->
+          <div
+            v-if="chatStore.messages.length > 0 || chatStore.isCurrentStreaming || scenarioInlineActive"
+            ref="messagesEndRef"
+          />
         </div>
 
         <!-- Memory update toast -->
@@ -2981,6 +2998,15 @@ function startSidebarResize(event: MouseEvent) {
   gap: 16px;
 }
 
+.hc-chat__scenario-inline {
+  width: 100%;
+  max-width: min(94%, 1200px);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 /* ─── Messages (Feishu style) ───── */
 .hc-msg {
   display: flex;
@@ -3062,21 +3088,46 @@ function startSidebarResize(event: MouseEvent) {
   align-items: flex-end;
 }
 
-/* ─── Actions floating toolbar（气泡下方，不会被顶部裁剪） ───── */
+/* ─── Stable message footer: reserve independent action + metadata rows. ─────
+   Metadata must remain readable while hovering; keeping both rows in normal flow
+   prevents the toolbar from covering model information or changing message height. */
+.hc-msg__footer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  min-height: 57px;
+  gap: 2px;
+  margin-top: 4px;
+}
+
+.hc-msg__footer--right {
+  align-items: flex-end;
+}
+
+.hc-msg__actions-slot {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 38px;
+}
+
+.hc-msg__actions-slot--right {
+  justify-content: flex-end;
+}
+
 .hc-msg__actions-float {
-  position: absolute;
-  bottom: -28px;
+  position: static;
   z-index: var(--hc-z-dropdown);
   animation: hc-actions-fade-in 0.15s ease;
-  padding-top: 4px;
 }
 
 .hc-msg__actions-float--left {
-  right: 0;
+  margin-inline-end: auto;
 }
 
 .hc-msg__actions-float--right {
-  right: 0;
+  margin-inline-start: auto;
 }
 
 @keyframes hc-actions-fade-in {
@@ -4204,7 +4255,7 @@ function startSidebarResize(event: MouseEvent) {
   display: flex;
   align-items: center;
   gap: 0;
-  margin-top: 8px;
+  margin-top: 0;
   color: var(--hc-text-muted);
   font-size: 11px;
   opacity: 0.5;

@@ -1,6 +1,7 @@
 import type { Ref } from 'vue'
 import { getAssistantReasoningFromMetadata } from '@/utils/assistant-reply'
 import type { ChatAttachment, ChatMessage } from '@/types'
+import type { MessageContent } from '@/contracts/message-content'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 
@@ -12,6 +13,7 @@ export function createChatSendBackendDeliveryController(params: {
   resetSessionStream: (sessionId?: string | null, sending?: Ref<boolean>, draftSending?: Ref<boolean>) => void
   finalizeAssistantMessage: (params: {
     content: string
+    messageContent?: MessageContent
     sessionId: string
     metadata?: Record<string, unknown>
     toolCalls?: ChatMessage['tool_calls']
@@ -73,6 +75,7 @@ export function createChatSendBackendDeliveryController(params: {
       }
       return finalizeAssistantMessage({
         content: result.reply,
+        messageContent: result.message_content,
         sessionId,
         metadata: result.metadata,
         toolCalls: result.tool_calls,

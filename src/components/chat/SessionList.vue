@@ -2,13 +2,12 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime } from '@/utils/time'
-import { Trash2, Copy, Pencil, Pin, PinOff, Search, GitBranch } from 'lucide-vue-next'
+import { Trash2, MoreHorizontal, Pencil, Pin, PinOff, Search, GitBranch } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
 import { getSessionAgent, getSessionAgentTombstone } from '@/stores/session-agent-binding'
 import { scenarioRegistry } from '@/shell/scenario/registry'
 import { listSessions, searchMessages, getSessionBranches, updateSessionTitle as apiUpdateSessionTitle, type SessionMessageSearchResult } from '@/api/chat'
-import { setClipboard } from '@/api/desktop'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -19,6 +18,7 @@ const chatStore = useChatStore()
 const agentsStore = useAgentsStore()
 const ctxMenu = ref<InstanceType<typeof ContextMenu>>()
 const ctxSessionId = ref<string | null>(null)
+const openMenuSessionId = ref<string | null>(null)
 
 const renamingId = ref<string | null>(null)
 const renameValue = ref('')
@@ -95,6 +95,10 @@ function sessionTitle(s: ChatSession): string {
 // Filter state（搜索框常驻，无需展开/收起开关）
 const filterQuery = ref('')
 
+function normalizeSearchText(value: string) {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
+}
+
 onMounted(() => {
   try {
     const raw = localStorage.getItem('hexclaw_pinned_sessions')
@@ -136,11 +140,19 @@ watch(
 
 
 const sessionMenuItems = computed<ContextMenuItem[]>(() => {
-  const isPinned = ctxSessionId.value ? pinnedIds.value.has(ctxSessionId.value) : false
+  const session = ctxSessionId.value
+    ? [...chatStore.sessions, ...extraSessions.value].find((item) => item.id === ctxSessionId.value)
+    : undefined
+  const isScenarioPinned = session ? isScenarioSession(session) : false
+  const isPinned = session ? isPinnedSession(session) : false
   return [
-    { id: 'pin', label: isPinned ? t('chat.unpin') : t('chat.pin'), icon: isPinned ? PinOff : Pin },
     { id: 'rename', label: t('chat.rename'), icon: Pencil },
-    { id: 'copy_title', label: t('chat.copyTitle'), icon: Copy },
+    {
+      id: 'pin',
+      label: isScenarioPinned ? t('chat.scenarioPinned') : (isPinned ? t('chat.unpin') : t('chat.pin')),
+      icon: isPinned ? PinOff : Pin,
+      disabled: isScenarioPinned,
+    },
     { id: 'branches', label: t('chat.viewBranches', '查看分支'), icon: GitBranch },
     { id: 'sep1', label: '', separator: true },
     { id: 'delete', label: t('chat.deleteSession'), icon: Trash2, danger: true, shortcut: '⌫' },
@@ -168,14 +180,14 @@ type SearchSessionItem = {
 }
 
 const searchSessionItems = computed<SearchSessionItem[]>(() => {
-  const q = filterQuery.value.trim().toLowerCase()
+  const q = normalizeSearchText(filterQuery.value.trim())
   if (!q) return []
 
   const sessionMap = new Map(mergedSessions.value.map((session) => [session.id, session]))
   const results = new Map<string, SearchSessionItem>()
 
   for (const session of mergedSessions.value) {
-    if ((session.title || '').toLowerCase().includes(q)) {
+    if (normalizeSearchText(sessionTitle(session)).includes(q)) {
       results.set(session.id, { session })
     }
   }
@@ -344,6 +356,9 @@ async function performDeleteSession(sessionId: string) {
   }
   try {
     await chatStore.deleteSession(sessionId)
+    // 分页加载的旧会话只存在于 extraSessions；删除成功后必须同步清理本地分页缓存，
+    // 否则 API 已成功但列表仍残留，刷新前会形成“删除无效”的假象。
+    extraSessions.value = extraSessions.value.filter((session) => session.id !== sessionId)
   } catch (e) {
     if (wasPinned) {
       pinnedIds.value.add(sessionId)
@@ -405,7 +420,35 @@ function handleRenameKeydown(e: KeyboardEvent) {
 
 function handleContextMenu(e: MouseEvent, sessionId: string) {
   ctxSessionId.value = sessionId
+  openMenuSessionId.value = sessionId
   ctxMenu.value?.show(e)
+}
+
+function handleActionsClick(e: MouseEvent, sessionId: string) {
+  if (openMenuSessionId.value === sessionId) {
+    ctxMenu.value?.hide()
+    return
+  }
+  const trigger = e.currentTarget
+  if (!(trigger instanceof HTMLElement)) return
+  ctxSessionId.value = sessionId
+  openMenuSessionId.value = sessionId
+  ctxMenu.value?.showAt(trigger)
+}
+
+function handleActionsKeydown(e: KeyboardEvent, sessionId: string) {
+  if (!(e.shiftKey && e.key === 'F10')) return
+  e.preventDefault()
+  e.stopPropagation()
+  const trigger = e.currentTarget
+  if (!(trigger instanceof HTMLElement)) return
+  ctxSessionId.value = sessionId
+  openMenuSessionId.value = sessionId
+  ctxMenu.value?.showAt(trigger)
+}
+
+function handleContextMenuClose() {
+  openMenuSessionId.value = null
 }
 
 async function handleCtxAction(action: string) {
@@ -422,19 +465,11 @@ async function handleCtxAction(action: string) {
       startRename(sid)
       break
     case 'pin':
-      togglePin(sid)
-      break
-    case 'copy_title': {
-      const session = chatStore.sessions.find(s => s.id === sid)
-      if (session) {
-        try {
-          await setClipboard(session.title || t('chat.newSessionDefault'))
-        } catch {
-          // clipboard access can be unavailable in tests or restricted runtimes
-        }
+      {
+        const session = mergedSessions.value.find((item) => item.id === sid)
+        if (session && !isScenarioSession(session)) togglePin(sid)
       }
       break
-    }
   }
 }
 
@@ -530,11 +565,13 @@ onUnmounted(() => {
     <!-- 常驻搜索框（对齐原型 .srch：放大镜图标 + 输入框始终可见） -->
     <div class="hc-sessions__search">
       <Search :size="14" class="hc-sessions__search-icon" />
-      <input
+      <HcClearableField>
+        <input
         v-model="filterQuery"
         class="hc-sessions__search-input"
         :placeholder="t('chat.filterSessions')"
       />
+      </HcClearableField>
     </div>
 
     <template v-if="filterQuery.trim()">
@@ -550,6 +587,7 @@ onUnmounted(() => {
             :class="{
               'hc-sessions__item--active': chatStore.currentSessionId === item.session.id,
               'hc-sessions__item--pinned': isPinnedSession(item.session),
+              'hc-sessions__item--menu-open': openMenuSessionId === item.session.id,
             }"
             @click="selectSession(item.session.id)"
             @dblclick.stop="startRename(item.session.id)"
@@ -562,8 +600,8 @@ onUnmounted(() => {
               aria-hidden="true"
             />
             <div class="hc-sessions__content">
-              <input
-                v-if="renamingId === item.session.id"
+              <HcClearableField v-if="renamingId === item.session.id">
+                <input
                 ref="renameInputRef"
                 v-model="renameValue"
                 class="hc-sessions__rename-input"
@@ -571,6 +609,7 @@ onUnmounted(() => {
                 @keydown="handleRenameKeydown"
                 @click.stop
               />
+              </HcClearableField>
               <div v-else class="hc-sessions__title-row">
                 <!-- BUG-20260703 P2-1：分支会话可辨识（由「由此分叉」创建） -->
                 <GitBranch
@@ -592,14 +631,16 @@ onUnmounted(() => {
                 <span v-else class="hc-sessions__time">{{ formatDate(item.session.updated_at) }}</span>
               </div>
             </div>
+            <Pin v-if="isPinnedSession(item.session)" :size="13" class="hc-sessions__pin-status" aria-hidden="true" />
             <button
-              class="hc-sessions__delete"
-              :disabled="deletingSessionIds.has(item.session.id)"
-              :title="t('chat.deleteSession')"
-              @click.stop="deleteSession(item.session.id)"
-            >
-              <Trash2 :size="12" />
-            </button>
+              class="hc-sessions__actions"
+              type="button"
+              :aria-label="t('chat.sessionActions')"
+              aria-haspopup="menu"
+              :aria-expanded="openMenuSessionId === item.session.id"
+              @click.stop="handleActionsClick($event, item.session.id)"
+              @keydown="handleActionsKeydown($event, item.session.id)"
+            ><MoreHorizontal :size="16" aria-hidden="true" /></button>
           </div>
         </div>
       </template>
@@ -616,6 +657,7 @@ onUnmounted(() => {
           :class="{
             'hc-sessions__item--active': chatStore.currentSessionId === session.id,
             'hc-sessions__item--pinned': isPinnedSession(session),
+            'hc-sessions__item--menu-open': openMenuSessionId === session.id,
           }"
           @click="selectSession(session.id)"
           @dblclick.stop="startRename(session.id)"
@@ -628,8 +670,8 @@ onUnmounted(() => {
             aria-hidden="true"
           />
           <div class="hc-sessions__content">
-            <input
-              v-if="renamingId === session.id"
+            <HcClearableField v-if="renamingId === session.id">
+              <input
               ref="renameInputRef"
               v-model="renameValue"
               class="hc-sessions__rename-input"
@@ -637,6 +679,7 @@ onUnmounted(() => {
               @keydown="handleRenameKeydown"
               @click.stop
             />
+            </HcClearableField>
             <div v-else class="hc-sessions__title-row">
               <!-- BUG-20260703 P2-1：分支会话可辨识（由「由此分叉」创建） -->
               <GitBranch
@@ -658,14 +701,16 @@ onUnmounted(() => {
               <span v-if="session.message_count > 0" class="hc-sessions__count">{{ session.message_count }}</span>
             </div>
           </div>
+          <Pin v-if="isPinnedSession(session)" :size="13" class="hc-sessions__pin-status" aria-hidden="true" />
           <button
-            class="hc-sessions__delete"
-            :disabled="deletingSessionIds.has(session.id)"
-            :title="t('chat.deleteSession')"
-            @click.stop="deleteSession(session.id)"
-          >
-            <Trash2 :size="12" />
-          </button>
+            class="hc-sessions__actions"
+            type="button"
+            :aria-label="t('chat.sessionActions')"
+            aria-haspopup="menu"
+            :aria-expanded="openMenuSessionId === session.id"
+            @click.stop="handleActionsClick($event, session.id)"
+            @keydown="handleActionsKeydown($event, session.id)"
+          ><MoreHorizontal :size="16" aria-hidden="true" /></button>
         </div>
       </div>
     </template>
@@ -683,7 +728,7 @@ onUnmounted(() => {
       {{ loadingMoreSessions ? t('common.loading') : (showAllConversations ? t('chat.loadMoreSessions') : t('chat.allConversations')) }}
     </button>
 
-    <ContextMenu ref="ctxMenu" :items="sessionMenuItems" @select="handleCtxAction" />
+    <ContextMenu ref="ctxMenu" :items="sessionMenuItems" @select="handleCtxAction" @close="handleContextMenuClose" />
 
     <!-- 分支查看器：右键「查看分支」弹层，点分支即切换（getSessionBranches 消费面） -->
     <Teleport to="body">
@@ -804,10 +849,11 @@ onUnmounted(() => {
 }
 
 .hc-sessions__item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 10px;
+  padding: 9px 42px 9px 10px;
   margin-bottom: 1px;
   border-radius: 12px;
   cursor: pointer;
@@ -931,25 +977,57 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-.hc-sessions__delete {
+.hc-sessions__pin-status,
+.hc-sessions__actions {
+  position: absolute;
+  inset-inline-end: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.hc-sessions__pin-status {
+  color: var(--hc-text-muted);
+  opacity: 0.68;
+  pointer-events: none;
+  transition: opacity 0.12s var(--hc-ease-out, ease-out);
+}
+
+.hc-sessions__actions {
+  width: 28px;
+  height: 28px;
   opacity: 0;
-  padding: 4px;
+  padding: 0;
   border-radius: 8px;
   border: none;
   background: transparent;
   color: var(--hc-text-muted);
   cursor: pointer;
-  display: flex;
-  transition: opacity 0.15s, color 0.15s, background 0.15s;
+  display: grid;
+  place-items: center;
+  transition: opacity 0.12s var(--hc-ease-out, ease-out), color 0.12s, background 0.12s;
 }
 
-.hc-sessions__item:hover .hc-sessions__delete {
+.hc-sessions__item:hover .hc-sessions__actions,
+.hc-sessions__item:focus-within .hc-sessions__actions,
+.hc-sessions__item--menu-open .hc-sessions__actions {
   opacity: 1;
 }
 
-.hc-sessions__delete:hover {
-  color: var(--hc-error);
-  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+.hc-sessions__item:hover .hc-sessions__pin-status,
+.hc-sessions__item:focus-within .hc-sessions__pin-status,
+.hc-sessions__item--menu-open .hc-sessions__pin-status {
+  opacity: 0;
+}
+
+.hc-sessions__actions:hover,
+.hc-sessions__actions:focus-visible {
+  color: var(--hc-text-primary);
+  background: color-mix(in srgb, var(--hc-text-primary) 8%, transparent);
+  outline: none;
+}
+
+.hc-sessions__actions:focus-visible {
+  box-shadow: 0 0 0 2px var(--hc-accent-subtle);
 }
 
 .hc-sessions__rename-input {
