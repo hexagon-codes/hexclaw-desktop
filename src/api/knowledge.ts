@@ -186,15 +186,22 @@ export async function getDocument(id: string): Promise<KnowledgeDoc> {
 }
 
 /**
- * 获取文档内容：优先请求详情 API，回退到搜索文档标题拼接 chunk
+ * 获取文档内容：优先请求详情 API，回退到搜索文档标题拼接 chunk。
+ *
+ * BUG-20260718（§15）：detail/search 都失败时不再返回空串（那会把「取内容故障」
+ * 伪装成「真实空文档」），而是抛错让 UI 区分。只有至少一条路径成功、但确实拿不到
+ * 正文时才返回 ''（真实空文档）。
  */
 export async function getDocumentContent(doc: KnowledgeDoc): Promise<string> {
+  let detailError: unknown
+  let searchError: unknown
+
   // 尝试详情接口
   try {
     const detail = await getDocument(doc.id)
     if (detail.content?.trim()) return detail.content
-  } catch {
-    // 详情接口不存在或失败，回退到搜索
+  } catch (e) {
+    detailError = e // 详情接口不存在或失败，回退到搜索
   }
 
   // 回退：通过知识库搜索获取该文档的 chunk 内容
@@ -206,8 +213,13 @@ export async function getDocumentContent(doc: KnowledgeDoc): Promise<string> {
     if (docChunks.length > 0) {
       return docChunks.map((chunk) => chunk.content).join('\n\n')
     }
-  } catch {
-    // 搜索也失败
+  } catch (e) {
+    searchError = e // 搜索也失败
+  }
+
+  // 两条取内容路径都因错误失败（而非确有空文档）→ 抛错，让 UI 显示「加载失败」而非空文档。
+  if (detailError && searchError) {
+    throw detailError instanceof Error ? detailError : new Error('Failed to load document content')
   }
 
   return ''

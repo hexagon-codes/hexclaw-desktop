@@ -54,9 +54,18 @@ describe('knowledge API', () => {
     expect(content).toBe('chunk1\n\nchunk2')
   })
 
-  it('returns empty string when both fail', async () => {
+  // BUG-20260718（§15）：detail 与 search 都失败时抛错，不再把故障伪装成空串。
+  it('throws when both detail and search fail (fault, not empty doc)', async () => {
     apiGet.mockRejectedValueOnce(new Error('404'))
     apiPost.mockRejectedValueOnce(new Error('500'))
+    await expect(
+      getDocumentContent({ id: 'd1', title: 'Test', chunk_count: 1, created_at: '' }),
+    ).rejects.toThrow()
+  })
+
+  it('returns empty string for a genuinely empty document (both paths succeed, no content)', async () => {
+    apiGet.mockResolvedValueOnce({ id: 'd1', title: 'Test', content: '' })
+    apiPost.mockResolvedValueOnce({ result: [] })
     const content = await getDocumentContent({ id: 'd1', title: 'Test', chunk_count: 1, created_at: '' })
     expect(content).toBe('')
   })

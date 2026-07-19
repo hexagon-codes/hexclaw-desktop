@@ -38,6 +38,7 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import HcDateRangePicker from '@/components/common/HcDateRangePicker.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import SemanticIndexCard from '@/components/knowledge/SemanticIndexCard.vue'
 import { parseDocument } from '@/utils/file-parser'
 import { logger } from '@/utils/logger'
 
@@ -859,6 +860,9 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
         </div>
       </Transition>
 
+      <!-- 核心能力与运行状态：健康态默认折叠；旧 sidecar 自动退化为原安装恢复横幅。 -->
+      <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" />
+
       <!-- Upload progress list -->
       <div v-if="uploadingFiles.length > 0" class="mb-4 space-y-2 max-w-2xl">
         <div
@@ -1443,7 +1447,8 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   :style="{ color: 'var(--hc-text-secondary)' }"
                   >{{ t('knowledge.docTitle') }}</label
                 >
-                <input
+                <HcClearableField>
+                  <input
                   v-model="newTitle"
                   type="text"
                   class="rounded-lg border px-3 py-2 text-sm outline-none"
@@ -1454,6 +1459,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   }"
                   :placeholder="t('knowledge.docTitlePlaceholder')"
                 />
+                </HcClearableField>
               </div>
               <div class="flex flex-col gap-1.5">
                 <label
@@ -1461,7 +1467,8 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   :style="{ color: 'var(--hc-text-secondary)' }"
                   >{{ t('knowledge.docContent') }}</label
                 >
-                <textarea
+                <HcClearableField>
+                  <textarea
                   v-model="newContent"
                   rows="6"
                   class="rounded-lg border px-3 py-2 text-sm outline-none resize-none"
@@ -1472,6 +1479,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   }"
                   :placeholder="t('knowledge.docContentPlaceholder')"
                 />
+                </HcClearableField>
               </div>
               <div class="flex flex-col gap-1.5">
                 <label
@@ -1479,7 +1487,8 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   :style="{ color: 'var(--hc-text-secondary)' }"
                   >{{ t('knowledge.docSource') }}</label
                 >
-                <input
+                <HcClearableField>
+                  <input
                   v-model="newSource"
                   type="text"
                   class="rounded-lg border px-3 py-2 text-sm outline-none"
@@ -1490,6 +1499,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   }"
                   :placeholder="t('knowledge.docSourcePlaceholder')"
                 />
+                </HcClearableField>
               </div>
             </div>
             <div
