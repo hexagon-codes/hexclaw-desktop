@@ -43,6 +43,7 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn().mockImplementation(() => Promise.resolve(h.report)),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
+  k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
 }))
 
 function i18n() {
@@ -99,5 +100,17 @@ describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠�
     expect(link.exists(), '行动卡脚注应有查看学情入口').toBe(true)
     await link.trigger('click')
     expect(w.emitted('go-insights'), '点击应上抛 go-insights').toBeTruthy()
+  })
+
+  it('⑤ 外层 target 变化可直达 week / mistakes / practiceSets，不丢学情路由目标', async () => {
+    const w = render()
+    await flushPromises()
+    await w.setProps({ target: 'mistakes' })
+    expect(w.find('[data-testid="mistakes-section"]').exists()).toBe(true)
+    await w.setProps({ target: 'practiceSets' })
+    await flushPromises()
+    expect(w.find('[data-testid="practicesets-section"]').exists()).toBe(true)
+    await w.setProps({ target: 'week' })
+    expect(w.find('[data-testid="week-section"]').exists()).toBe(true)
   })
 })

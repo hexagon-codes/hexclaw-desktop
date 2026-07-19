@@ -9,8 +9,12 @@ import K12RecordsView from '../views/K12RecordsView.vue'
 const h = vi.hoisted(() => ({
   printSpy: vi.fn<(...args: unknown[]) => boolean>(() => true),
   exportPdfSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>().mockResolvedValue(true),
+  exportArchiveDocumentSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>().mockResolvedValue(true),
   addToBasketSpy: vi.fn<(...args: unknown[]) => Promise<{ record_id: string; added: boolean }>>()
     .mockResolvedValue({ record_id: 'ps-1', added: true }),
+  customPaperSpy: vi.fn(),
+  fillBasketSpy: vi.fn(),
+  reviewRetrySpy: vi.fn(),
   listPracticeSetsSpy: vi.fn().mockResolvedValue({ items: [] }),
   mistakes: [
     { record_id: 'a', question: '苹果和梨的价钱', knowledge_point: '小数乘法', error_cause: '进位', status: 'new', version: 0, due_at: 1 },
@@ -21,6 +25,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../export', () => ({
   printWorksheet: (...a: unknown[]) => h.printSpy(...a),
   exportPdf: (...a: unknown[]) => h.exportPdfSpy(...a), exportWord: vi.fn(), worksheetFilename: vi.fn(() => 'f.doc'),
+  exportArchiveDocument: (...a: unknown[]) => h.exportArchiveDocumentSpy(...a),
   download: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
@@ -28,7 +33,9 @@ vi.mock('@/api/k12', () => ({
   k12ReviewQueue: vi.fn().mockImplementation(() =>
     Promise.resolve({ items: [{ ...h.mistakes[0], subject: '数学' }, { ...h.mistakes[1], subject: '数学' }] })),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
-  k12ReviewRetry: vi.fn(),
+  k12ReviewRetry: (...a: unknown[]) => h.reviewRetrySpy(...a),
+  k12GenerateCustomPaper: (...a: unknown[]) => h.customPaperSpy(...a),
+  k12FillPracticeBasket: (...a: unknown[]) => h.fillBasketSpy(...a),
   k12AddToBasket: (...a: unknown[]) => h.addToBasketSpy(...a),
   k12ListPracticeSets: (...a: unknown[]) => h.listPracticeSetsSpy(...a),
   k12FinalizePracticeSet: vi.fn(),
@@ -38,6 +45,7 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn().mockResolvedValue({ trend: { mastered: 0, reviewing: 1, retried: 0, archived: 0, total: 1 }, weak_top3: [], month_new_mistakes: 1, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 1, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
+  k12ExportMd: vi.fn().mockResolvedValue({ format: 'markdown', content: '# 完整学习档案' }),
 }))
 
 function i18n() {
@@ -46,7 +54,10 @@ function i18n() {
 
 function render() {
   return mount(K12RecordsView, {
-    props: { agentId: 'mingming', agentName: '小明的辅导老师', grade: '五年级上 · 人教版' },
+    props: {
+      agentId: 'mingming', agentName: '小明的辅导老师',
+      grade: '五年级上', textbook: '人教版',
+    },
     global: { plugins: [createPinia(), i18n()] },
   })
 }
@@ -58,11 +69,40 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
     setActivePinia(createPinia())
     h.printSpy.mockClear()
     h.exportPdfSpy.mockClear()
+    h.exportArchiveDocumentSpy.mockClear()
     h.addToBasketSpy.mockClear().mockResolvedValue({ record_id: 'ps-1', added: true })
+    h.mistakes.splice(3)
+    h.fillBasketSpy.mockReset().mockResolvedValue({ added: 2, skipped: 0 })
+    h.customPaperSpy.mockReset().mockResolvedValue({
+      generation_job_id: 'paper-job-1',
+      status: 'committed',
+      set: { record_id: 'ps-1', status: 'draft', items: [] },
+      items: [
+        {
+          item_id: 'generated-1', source_problem_id: 'a', variant_index: 1,
+          actual_difficulty: 'harder', verification_status: 'verified',
+          verification_evidence: '独立验算', question_markdown: '变式 1',
+        },
+      ],
+      added: 1,
+      deduplicated: 0,
+    })
+    let retryNo = 0
+    h.reviewRetrySpy.mockReset().mockImplementation((req: { record_id: string }) => {
+      retryNo++
+      return Promise.resolve({
+        solution: `## 问题\n${req.record_id} 变式 ${retryNo}\n## 答案\n${retryNo}`,
+        question: `${req.record_id} 变式 ${retryNo}`,
+        answer: `解答 ${retryNo}`,
+        expected_answer: String(retryNo),
+        verdict: 'agree',
+        badge: 'verified-strong',
+      })
+    })
     h.listPracticeSetsSpy.mockClear().mockResolvedValue({ items: [] })
   })
 
-  it('点「生成复习卷」→ 复习队列逐题装篮（added_via=weekly · pending 诚实）+ 切练习集 Tab，不再 exportPdf', async () => {
+  it('点「生成复习卷」→ 调后端到期题验证装篮链，不再把全部题硬编码 pending', async () => {
     const w = render()
     await flushPromises()
     const genBtn = w.find('[data-testid="build-review-set"]')
@@ -71,19 +111,8 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
     await genBtn.trigger('click')
     await flushPromises()
 
-    // 队列 2 题 → 逐题装篮
-    expect(h.addToBasketSpy).toHaveBeenCalledTimes(2)
-    expect(h.addToBasketSpy).toHaveBeenCalledWith(expect.objectContaining({
-      agent: 'mingming',
-      item: expect.objectContaining({
-        source_problem_id: 'a',
-        subject: '数学',
-        added_via: 'weekly',
-        question_markdown: '苹果和梨的价钱',
-        // 原题重现暂无独立验算答案 → 诚实置 pending（不预宣称已验证）
-        verification_status: 'pending',
-      }),
-    }))
+    expect(h.fillBasketSpy).toHaveBeenCalledWith('mingming')
+    expect(h.addToBasketSpy).not.toHaveBeenCalled()
     // 旧路径整体删除：不再直出 PDF / 打印
     expect(h.exportPdfSpy).not.toHaveBeenCalled()
     expect(h.printSpy).not.toHaveBeenCalled()
@@ -91,68 +120,75 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
     expect(w.find('[data-testid="practicesets-section"]').exists()).toBe(true)
   })
 
-  it('自定义组卷：范围默认「本周待复习」→ added_via=custom 装篮 + 切练习集 Tab', async () => {
+  it('DD-027：全部参数开放，并且 Desktop 只调用一次正式组卷 command', async () => {
     const w = render()
     await flushPromises()
     await w.find('[data-testid="custom-paper-open"]').trigger('click')
-    // 参数行含「范围」两档（本周待复习 / 全部未掌握）
     expect(w.find('[data-testid="paper-scope-week"]').exists()).toBe(true)
     expect(w.find('[data-testid="paper-scope-unmastered"]').exists()).toBe(true)
-    // 按钮文案=「加入练习集」（不再「生成并打印」）
+    await w.find('[data-testid="paper-scope-unmastered"]').trigger('click')
+    await w.find('[data-testid="paper-perq-2"]').trigger('click')
+    await w.find('[data-testid="paper-difficulty-harder"]').trigger('click')
+    await w.findAll('.chip').find((b) => b.text().includes('≤ 5'))!.trigger('click')
+
     const gen = w.find('[data-testid="custom-paper-gen"]')
     expect(gen.text()).toContain('加入练习集')
     expect(gen.text()).not.toContain('打印')
     await gen.trigger('click')
     await flushPromises()
 
-    expect(h.addToBasketSpy).toHaveBeenCalledTimes(2) // 本周待复习 2 题
-    expect(h.addToBasketSpy).toHaveBeenCalledWith(expect.objectContaining({
-      item: expect.objectContaining({ added_via: 'custom', verification_status: 'pending' }),
-    }))
+    expect(h.customPaperSpy).toHaveBeenCalledTimes(1)
+    expect(h.customPaperSpy).toHaveBeenCalledWith({
+      agent: 'mingming',
+      idempotency_key: expect.any(String),
+      scope: 'unmastered',
+      total: 5,
+      per_source: 2,
+      difficulty: 'harder',
+      textbook: '人教版',
+      grade: '五年级上',
+    })
+    expect(h.reviewRetrySpy).not.toHaveBeenCalled()
+    expect(h.addToBasketSpy).not.toHaveBeenCalled()
     expect(h.exportPdfSpy).not.toHaveBeenCalled()
-    expect(w.find('[data-testid="practicesets-section"]').exists()).toBe(true)
+    const result = w.find('[data-testid="custom-paper-result"]')
+    expect(result.attributes('role')).toBe('status')
+    expect(result.text()).toContain('组卷完成')
+    expect(result.text()).toContain('来源题')
+    expect(result.text()).toContain('实际难度')
+    expect(result.text()).toContain('已验证')
   })
 
-  it('自定义组卷：范围「全部未掌握」取档案未掌握全量（排除 mastered/archived）', async () => {
+  it('DD-027：失败留在原弹层，原参数和幂等键重试后展示同一任务回执', async () => {
+    h.customPaperSpy
+      .mockRejectedValueOnce(new Error('第 2 题验证失败，未装入半篮'))
+      .mockResolvedValueOnce({
+        generation_job_id: 'paper-job-replayed', status: 'committed',
+        set: { record_id: 'ps-1', status: 'draft', items: [] },
+        items: [], added: 0, deduplicated: 2,
+      })
     const w = render()
     await flushPromises()
     await w.find('[data-testid="custom-paper-open"]').trigger('click')
-    await w.find('[data-testid="paper-scope-unmastered"]').trigger('click')
     await w.find('[data-testid="custom-paper-gen"]').trigger('click')
     await flushPromises()
 
-    // 档案 3 条里 mastered 的 c 被排除 → 2 次装篮
-    expect(h.addToBasketSpy).toHaveBeenCalledTimes(2)
-    const ids = h.addToBasketSpy.mock.calls.map((c) => (c[0] as { item: { source_problem_id: string } }).item.source_problem_id)
-    expect(ids).toEqual(['a', 'b'])
+    const alert = w.find('[data-testid="custom-paper-error"]')
+    expect(alert.attributes('role')).toBe('alert')
+    expect(alert.text()).toContain('未装入半篮')
+    expect(w.find('[data-testid="custom-paper-form"]').exists()).toBe(true)
+    const firstKey = (h.customPaperSpy.mock.calls[0]![0] as { idempotency_key: string }).idempotency_key
+
+    await w.find('[data-testid="custom-paper-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(h.customPaperSpy).toHaveBeenCalledTimes(2)
+    expect((h.customPaperSpy.mock.calls[1]![0] as { idempotency_key: string }).idempotency_key).toBe(firstKey)
+    expect(w.find('[data-testid="custom-paper-result"]').text()).toContain('未重复加入')
+    expect(w.find('[data-testid="custom-paper-result"]').text()).toContain('paper-job-replayed')
   })
 
-  it('自定义组卷：总题量 ≤ 限量截取（total=5 时不超 5）', async () => {
-    const w = render()
-    await flushPromises()
-    await w.find('[data-testid="custom-paper-open"]').trigger('click')
-    // 选 ≤ 5（源只有 2 题，验证不因限量报错且逐题装篮）
-    const chip5 = w.findAll('.chip').find((b) => b.text().includes('≤ 5'))!
-    await chip5.trigger('click')
-    await w.find('[data-testid="custom-paper-gen"]').trigger('click')
-    await flushPromises()
-    expect(h.addToBasketSpy).toHaveBeenCalledTimes(2)
-  })
-
-  it('装篮结果 toast 数字口径：added=false 计入去重（幂等不重复装）', async () => {
-    h.addToBasketSpy
-      .mockResolvedValueOnce({ record_id: 'ps-1', added: true })
-      .mockResolvedValueOnce({ record_id: 'ps-1', added: false })
-    const w = render()
-    await flushPromises()
-    await w.find('[data-testid="build-review-set"]').trigger('click')
-    await flushPromises()
-    expect(h.addToBasketSpy).toHaveBeenCalledTimes(2)
-    // toast 由 useToast 渲染在组件外，这里核心断言是不抛错且两次调用如实完成（N=1 / 去重 M=1 的入参链路）
-    expect(w.find('[data-testid="practicesets-section"]').exists()).toBe(true)
-  })
-
-  it('溢出菜单的档案导出（错题本 PDF/Word）保留——那是档案导出非出卷', async () => {
+  it('溢出菜单的档案导出保留，并消费服务端完整学习档案 Markdown', async () => {
     const w = render()
     await flushPromises()
     await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
@@ -161,6 +197,8 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
     expect(pdfBtn, '档案导出 PDF 菜单项应保留').toBeTruthy()
     await pdfBtn!.trigger('click')
     await flushPromises()
-    expect(h.exportPdfSpy).toHaveBeenCalledTimes(1)
+    expect(h.exportArchiveDocumentSpy).toHaveBeenCalledWith(expect.objectContaining({
+      content: '# 完整学习档案', format: 'pdf',
+    }))
   })
 })

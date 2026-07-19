@@ -76,19 +76,23 @@ function stageLabel(s: number): string {
       <button v-if="started" class="tutor-panel__reset" @click="reset">{{ t('k12.tutor.reset') }}</button>
     </div>
 
-    <textarea
+    <HcClearableField>
+      <textarea
       v-model="problem"
       class="tutor-panel__in"
       :placeholder="t('k12.tutor.problemPlaceholder')"
       :disabled="started"
       rows="2"
     />
-    <input
+    </HcClearableField>
+    <HcClearableField>
+      <input
       v-model="studentAnswer"
       class="tutor-panel__in"
       :placeholder="t('k12.tutor.answerPlaceholder')"
       :disabled="loading"
     />
+    </HcClearableField>
 
     <!-- 分阶段揭示历史 -->
     <div v-for="(turnItem, i) in turns" :key="i" class="tutor-turn" :class="{ comfort: turnItem.comfort }">

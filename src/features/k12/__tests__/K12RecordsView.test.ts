@@ -139,6 +139,22 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(w.emitted('open-backup')).toBeTruthy()
   })
 
+  it('学习档案五个二级 Tab 的溢出菜单均提供三种导出与备份恢复', async () => {
+    const w = render()
+    await flushPromises()
+    const tabs = ['本周复习', '全部错题', '练习集', '积累', '作品']
+    const expected = ['导出 PDF', '导出 Word', '导出 Markdown', '备份 / 恢复']
+
+    for (const tab of tabs) {
+      await w.findAll('.seg button').find((button) => button.text().includes(tab))!.trigger('click')
+      const trigger = w.find('.k12rec__export > button')
+      if (w.find('.k12rec__menu').exists()) await trigger.trigger('click')
+      await trigger.trigger('click')
+      const actions = w.findAll('.k12rec__menu button').map((button) => button.text())
+      expect(actions).toEqual(expect.arrayContaining(expected))
+    }
+  })
+
   it('学情（顶栏一等 Tab · K12InsightPanel）：真实 insight-report 驱动（薄弱 TOP3 + 连续挫败 + 建议）', async () => {
     // IA 迁移（2026-07-18）：学情从 RecordsView 二级 Tab 抽到 K12InsightPanel（顶栏一等）
     const w = mount(K12InsightPanel, { props: { agentId: 'mingming' }, global: { plugins: [createPinia(), i18n()] } })

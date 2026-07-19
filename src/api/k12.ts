@@ -7,6 +7,8 @@
  */
 import { api, apiGet, apiPost, apiPut, apiDelete } from './client'
 import { env } from '@/config/env'
+import { DESKTOP_USER_ID } from '@/constants'
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
 
 const BASE = '/api/k12'
 
@@ -231,9 +233,9 @@ export interface PrepCardResp {
   sections: PrepSectionDTO[]
 }
 
-export function k12PrepCard(req: PrepCardReq) {
+export function k12PrepCard(req: PrepCardReq, signal?: AbortSignal) {
   // LLM 生成辅导要点，默认 30s 会腰斩→「Fetch is aborted」（BUG-20260712-T1 真机取证）
-  return apiPost<PrepCardResp>(`${BASE}/prep-card`, req, { timeout: 120_000 })
+  return apiPost<PrepCardResp>(`${BASE}/prep-card`, req, { timeout: 120_000, signal })
 }
 
 // ── grounding（家长教材原文，按 agent scope 写入）──────────
@@ -270,6 +272,8 @@ export interface InsightReportResp {
   /** 连续挫败知识点；可能为 JSON null */
   consecutive_fail_kps: string[] | null
   suggestion: string
+  message_content?: MessageContent
+  render_manifest?: RenderManifest
 }
 export function k12InsightReport(agent: string) {
   return apiGet<InsightReportResp>(`${BASE}/insight-report`, { agent })
@@ -349,12 +353,41 @@ export function k12AddAccumulation(req: AddAccumReq) {
 }
 
 // ── backup / restore（真实 .hexbak，服务端带 checksum）──────
+export interface HexbakAsset {
+  asset_id: string
+  owner_agent: string
+  sha256: string
+  mime: string
+  /** Go []byte JSON encoding: base64 content bytes, covered by the v3 checksum. */
+  data: string
+}
+export interface HexbakCreativeWorkOCREvidence {
+  job_id: string
+  agent_name: string
+  request_id?: string
+  source_asset_id: string
+  source_digest: string
+  ocr_raw?: string
+  version: number
+  content_markdown: string
+  content_digest: string
+  confirmed_at: number
+  attempt_count?: number
+  job_created_at?: number
+  job_last_updated_at?: number
+}
 export interface HexbakArchive {
   version: number
+  /** v3 content-addressed immutable archive identity; absent on compatible v1/v2 files. */
+  archive_id?: string
   agent_name: string
   exported_at: number
   profile?: ProfileDTO | null
   records: unknown[]
+  /** v3 content-addressed files referenced by canonical record fields. */
+  assets?: HexbakAsset[]
+  /** v4 confirmed-only CreativeWork OCR evidence, covered by checksum/exact-set validation. */
+  creative_work_ocr?: HexbakCreativeWorkOCREvidence[]
   checksum: string
 }
 export interface K12RestoreResp {
@@ -368,6 +401,39 @@ export function k12Backup(agent: string) {
 /** checksum 不符 → 后端 400 */
 export function k12Restore(archive: HexbakArchive) {
   return apiPost<K12RestoreResp>(`${BASE}/restore`, archive as unknown as Record<string, unknown>)
+}
+export interface K12RestoreAsReq {
+  archive: HexbakArchive
+  source_agent: string
+  target_agent: string
+  guardian_confirmed: boolean
+  idempotency_key: string
+}
+export interface K12RestoreAsResp {
+  migration_id: string
+  source_agent?: string
+  target_agent: string
+  status: 'completed' | 'rolled_back'
+  restored: number
+  original_archive_digest?: string
+  migrated_checksum?: string
+  snapshot_digest?: string
+  journal_entries: number
+  original_archive_preserved: boolean
+  idempotent: boolean
+  snapshot?: HexbakArchive | null
+}
+export function k12RestoreAs(req: K12RestoreAsReq) {
+  return apiPost<K12RestoreAsResp>(`${BASE}/restore-as`, req as unknown as Record<string, unknown>)
+}
+export function k12RollbackRestoreAs(
+  migrationId: string,
+  req: { target_agent: string; guardian_confirmed: boolean },
+) {
+  return apiPost<K12RestoreAsResp>(
+    `${BASE}/restore-as/${encodeURIComponent(migrationId)}/rollback`,
+    req as unknown as Record<string, unknown>,
+  )
 }
 
 // ── export / mistake-sheet（错题本导出 / 错题卷；md 返回 JSON，pdf/docx 二进制）──
@@ -389,13 +455,45 @@ export interface RenderReq {
   title?: string
 }
 /** 把 Markdown 发给平台 render 服务生成二进制文档，返回 Blob（pandoc 30s / +typst PDF 60s，给足 120s）。 */
-export function renderDocument(req: RenderReq): Promise<Blob> {
-  return api<Blob, 'blob'>('/api/v1/render', {
+export async function renderDocument(req: RenderReq): Promise<Blob> {
+  const blob = await api<Blob, 'blob'>('/api/v1/render', {
     method: 'POST',
     body: req,
     responseType: 'blob',
     timeout: 120_000,
   })
+  await assertRenderedDocument(blob, req.format)
+  return blob
+}
+
+/** Fail closed before a JSON/HTML error body can be saved with a PDF/DOCX extension. */
+async function assertRenderedDocument(blob: Blob, format: RenderReq['format']): Promise<void> {
+  if (!(blob instanceof Blob) || blob.size === 0) {
+    throw new Error(`render 返回空的 ${format.toUpperCase()} 文件`)
+  }
+  const mime = blob.type.toLowerCase()
+  if (mime.includes('json')) {
+    throw new Error(`render 返回错误 JSON，不能保存为 ${format.toUpperCase()} 文件`)
+  }
+  const bytes = new Uint8Array(await blob.slice(0, 16).arrayBuffer())
+  if (format === 'pdf') {
+    const pdfMagic = [0x25, 0x50, 0x44, 0x46, 0x2d]
+    if (!pdfMagic.every((value, index) => bytes[index] === value)) {
+      throw new Error('render 返回的 PDF 文件格式无效（缺少 %PDF- magic）')
+    }
+    return
+  }
+  if (format === 'docx') {
+    const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04
+    if (!isZip) {
+      throw new Error('render 返回的 DOCX 文件格式无效（缺少 ZIP magic）')
+    }
+    return
+  }
+  const prefix = new TextDecoder().decode(bytes).trimStart().toLowerCase()
+  if (!prefix.startsWith('<!doctype') && !prefix.startsWith('<html')) {
+    throw new Error('render 返回的 HTML 文件格式无效')
+  }
 }
 
 // 注：GET /mistake-sheet 的前端客户端已删除——前端错题卷由客户端 printWorksheet 生成（当前视图错题
@@ -419,18 +517,51 @@ export interface BBox {
   h: number
 }
 export type AnswerState = 'blank' | 'present' | 'unclear'
+export type ProblemKind = 'standalone' | 'compound_parent' | 'subproblem'
+export type OCRConfirmationReason =
+  | 'fraction'
+  | 'decimal_point'
+  | 'negative_sign'
+  | 'unit'
+  | 'erasure'
+  | 'evidence_conflict'
+  | 'low_confidence'
+  | 'unclear_handwriting'
+  | 'subject_undetermined'
+  | 'canonical_parse_failed'
 
 export interface RecognizedQuestion {
+  /** Submission 内稳定身份；确认、锚点和批改结果必须按 ID 关联，不能依赖返回顺序。 */
+  problem_id?: string
+  problem_kind?: ProblemKind
+  parent_problem_id?: string
+  subproblem_no?: string
+  page_asset_id?: string
+  /** compound_parent 无 Attempt；standalone/subproblem 各自拥有独立 Attempt。 */
+  attempt_id?: string
   question: string
+  /** OCR 原始事实不可变；canonical 只可经家长显式确认形成新版本。 */
+  raw_transcription?: string
+  canonical_markdown?: string
+  canonical_valid?: boolean
+  canonical_version?: number
   knowledge_points: string[]
   /** 作答事实的单一真相源；不允许再由答案文本或 bbox 推断。 */
   answer_state: AnswerState
   /** 识题回收的孩子手写作答；仅 present 状态应有非空值。 */
   student_answer?: string
+  answer_raw_transcription?: string
+  answer_canonical_markdown?: string
+  answer_canonical_valid?: boolean
   /** 识题自动判定的题目学科（数学/语文/英语/物理/化学，判不出=空/缺省）。 */
   subject?: string
   /** 仅锚点阶段之后出现（GradingJob 停点产物）；核心识题永远不携带坐标。 */
   bbox?: BBox | null
+  recognition_confidence?: number
+  confirmation_required?: boolean
+  confirmation_reasons?: OCRConfirmationReason[]
+  confirmed_version?: number
+  input_digest?: string
 }
 
 // ── grading-jobs（统一 GradingJob：桌面拍照批改入口，§6.7/§6.15）──────────
@@ -459,6 +590,8 @@ export interface GradingJobDTO {
   version: number
   created_at: number
   updated_at: number
+  /** GET 详情在识别停点附带；创建/列表响应可缺省。 */
+  recognized_questions?: RecognizedQuestion[]
 }
 /** 识别停点产物（awaiting_confirmation 起可用）：护栏回显数据源（含锚点 bbox）。 */
 export interface GradingJobRecognition {
@@ -469,8 +602,14 @@ export interface GradingJobRecognition {
 export interface PhotoJobItemDTO {
   question: RecognizedQuestion
   status:
-    | 'correct' | 'wrong' | 'unanswered' | 'answer_unclear'
-    | 'blank_solved' | 'out_of_scope' | 'untrusted' | 'failed'
+    | 'correct'
+    | 'wrong'
+    | 'unanswered'
+    | 'answer_unclear'
+    | 'blank_solved'
+    | 'out_of_scope'
+    | 'untrusted'
+    | 'failed'
   warning?: string
   grade?: GradeResp
 }
@@ -491,6 +630,10 @@ export interface GradingJobStatusResp {
   recognition?: GradingJobRecognition
   result?: PhotoJobResult
 }
+export interface GradingJobResultResp {
+  job_id: string
+  result: PhotoJobResult
+}
 export interface CreatePhotoGradingJobReq {
   agent: string
   /** §4.10 统一幂等键：desktop 用请求标识；同键重投命中既有 Job（created=false）。 */
@@ -504,8 +647,13 @@ export interface CreatePhotoGradingJobReq {
 /** 逐题确认/修正（空字段 = 该维度按识别结果确认不改）。 */
 export interface GradingQuestionCorrection {
   index: number
+  problem_id?: string
+  /** 风险题必须逐题显式为 true；不能由整卷默认确认代替。 */
+  confirmed?: boolean
   question?: string
+  canonical_markdown?: string
   student_answer?: string
+  answer_canonical_markdown?: string
   answer_state?: AnswerState
   subject?: string
 }
@@ -517,28 +665,50 @@ export interface ConfirmGradingJobReq {
 }
 
 /** 创建照片批改 Job：后端固化原图并**异步**推进（响应即回，不等识别完成）。 */
-export function k12CreateGradingJob(req: CreatePhotoGradingJobReq) {
+export function k12CreateGradingJob(req: CreatePhotoGradingJobReq, signal?: AbortSignal) {
   return apiPost<{ created: boolean; job: GradingJobDTO }>(`${BASE}/grading-jobs`, req, {
     timeout: 60_000,
+    signal,
   })
 }
 /** 查询任务阶段 + 停点/终态产物（轮询端点；阶段耗时分钟级，调用方 2-3s 节流）。 */
-export function k12GetGradingJob(agent: string, jobId: string) {
+export function k12GetGradingJob(agent: string, jobId: string, signal?: AbortSignal) {
   return apiGet<GradingJobStatusResp>(
     `${BASE}/grading-jobs/${encodeURIComponent(jobId)}`,
     { agent },
+    { signal },
+  )
+}
+/** 独立读取终态投影：Job 详情只承载阶段/停点，不隐式夹带批改结果。 */
+export function k12GetGradingJobResult(agent: string, jobId: string, signal?: AbortSignal) {
+  return apiGet<GradingJobResultResp>(
+    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/result`,
+    { agent },
+    { signal },
   )
 }
 /** 批量确认/修正识别结果：冻结 canonical 输入后后端异步续跑到终态。 */
 export function k12ConfirmGradingJob(jobId: string, req: ConfirmGradingJobReq) {
   return apiPost<GradingJobStatusResp>(
-    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/confirm`, req, { timeout: 60_000 },
+    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/confirm`,
+    req,
+    { timeout: 60_000 },
   )
 }
 /** 安全重试（failed_retryable 且 retryable）：回 queued 从检查点异步续跑。 */
-export function k12RetryGradingJob(agent: string, jobId: string) {
+export function k12RetryGradingJob(agent: string, jobId: string, signal?: AbortSignal) {
   return apiPost<GradingJobStatusResp>(
-    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/retry`, { agent }, { timeout: 60_000 },
+    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/retry`,
+    { agent },
+    { timeout: 60_000, signal },
+  )
+}
+/** 取消仍在识别/等待确认的照片任务；换图或卸载时用于释放后端旧任务。 */
+export function k12CancelGradingJob(agent: string, jobId: string) {
+  return apiPost<GradingJobStatusResp>(
+    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/cancel`,
+    { agent },
+    { timeout: 60_000 },
   )
 }
 
@@ -590,7 +760,7 @@ export function k12BindIM(req: BindIMReq) {
   )
 }
 
-// ── cron/provision（注册 5 个默认自动化任务）──────────────────
+// ── cron/provision（注册 4 个默认自动化任务）──────────────────
 export interface ProvisionCronReq {
   agent: string
   /** 投递到的 IM 平台；空 → 桌面 chat */
@@ -598,8 +768,6 @@ export interface ProvisionCronReq {
   chat_id?: string
   /** 投递目标；空 → 平台默认 chat */
   deliver?: string[]
-  /** cron 配额归属；空 → "k12" */
-  user_id?: string
   /** 本机 API 基址；服务器已配 Runtime.BaseURL 时可省 */
   base_url?: string
 }
@@ -616,22 +784,37 @@ export interface ReclaimedCronJob {
   source_key: string
 }
 /** 建档后调一次；未注入 cron.Scheduler → 501。注册 §3.13 四任务并回收历史 kind 残留。 */
-export function k12ProvisionCron(req: ProvisionCronReq) {
-  return apiPost<{ provisioned: ProvisionedJob[]; reclaimed?: ReclaimedCronJob[] }>(
+export async function k12ProvisionCron(req: ProvisionCronReq) {
+  const response = await apiPost<{ provisioned: ProvisionedJob[]; reclaimed?: ReclaimedCronJob[] }>(
     `${BASE}/cron/provision`,
-    req,
+    { ...req, user_id: DESKTOP_USER_ID },
   )
+  const expected = new Set(['weekly-sheet', 'return-reminder', 'semester-spring', 'semester-fall'])
+  const actual = response.provisioned ?? []
+  const actualKinds = new Set(actual.map((job) => job.kind))
+  if (
+    actual.length !== expected.size ||
+    actualKinds.size !== expected.size ||
+    [...expected].some((kind) => !actualKinds.has(kind))
+  ) {
+    throw new Error('K12 默认自动化任务契约不完整：必须恰好返回 4 个冻结任务')
+  }
+  return response
 }
 
 // ── 练习集 PracticeSet（/practice-sets*，PRD §3.8）─────────────
 // DTO 与后端 scenarios/k12/apihttp/practiceset_handler.go 的 json tag 1:1 对齐。
 export type PracticeStatus =
-  | 'draft' | 'confirmed' | 'assigned' | 'submitted' | 'graded' | 'closed' | 'cancelled'
-export type PracticeItemStatus =
-  | 'pending' | 'verified' | 'needs_review' | 'rejected' | 'stale'
+  | 'draft'
+  | 'confirmed'
+  | 'assigned'
+  | 'submitted'
+  | 'graded'
+  | 'closed'
+  | 'cancelled'
+export type PracticeItemStatus = 'pending' | 'verified' | 'needs_review' | 'rejected' | 'stale'
 /** 装篮来源（PRD §5.5 added_via）：装篮五入口的 item 级记录 */
-export type PracticeAddedVia =
-  | 'weekly' | 'custom' | 'single_variant' | 'manual' | 'accumulation'
+export type PracticeAddedVia = 'weekly' | 'custom' | 'single_variant' | 'manual' | 'accumulation'
 export interface PracticeItemDTO {
   item_id: string
   source_problem_id?: string
@@ -642,6 +825,26 @@ export interface PracticeItemDTO {
   verification_status: PracticeItemStatus
   verification_evidence?: string
   blocked_reason?: string
+  /** 固化后的卷面题号；阻断题为空。 */
+  paper_seq?: number
+  /** 该题作答是否已回传。 */
+  returned?: boolean
+  /** 覆盖该题的追加回传批次，可据此反查原照片证据（DD-028）。 */
+  return_ids?: string[]
+  /** 正式自定义组卷命令及参数回执（DD-027），普通装篮项为空。 */
+  generation_job_id?: string
+  variant_index?: number
+  requested_difficulty?: CustomPaperDifficulty
+  actual_difficulty?: CustomPaperDifficulty
+  /** 逐题复批结论；缺省表示尚未记录。 */
+  result_correct?: boolean
+}
+export interface PracticeReturnAssetDTO {
+  return_id: string
+  asset_id: string
+  item_ids: string[]
+  /** 服务端 Unix 秒。 */
+  returned_at: number
 }
 export interface PracticeSetDTO {
   record_id: string
@@ -665,6 +868,8 @@ export interface PracticeSetDTO {
   delivery_status: string
   delivery_target?: string
   items: PracticeItemDTO[]
+  /** 只追加、不覆盖的作答照片批次（DD-028）。 */
+  return_assets: PracticeReturnAssetDTO[]
 }
 // k12CreatePracticeSet（整卷直建 POST /practice-sets）已随切换日死刑名单删除
 // （执行计划 §3.4 端点冻结 · 2026-07-18）：装篮命令（k12AddToBasket → k12FinalizePracticeSet）
@@ -680,10 +885,17 @@ export function k12GetPracticeSet(agent: string, recordId: string) {
 }
 /** 标某题验证态；status='verified' 必带 evidence，否则后端 4xx */
 export function k12VerifyPracticeItem(
-  agent: string, recordId: string, itemId: string, status: PracticeItemStatus, evidence?: string,
+  agent: string,
+  recordId: string,
+  itemId: string,
+  status: PracticeItemStatus,
+  evidence?: string,
 ) {
   return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/verify`, {
-    agent, item_id: itemId, status, evidence: evidence ?? '',
+    agent,
+    item_id: itemId,
+    status,
+    evidence: evidence ?? '',
   })
 }
 // ── 购物车模型（2026-07-18 裁决）：单 Learner 单篮，打印/发送即确认固化 ──
@@ -696,14 +908,76 @@ export interface AddToBasketReq {
 export function k12AddToBasket(req: AddToBasketReq) {
   return apiPost<{ record_id: string; added: boolean }>(`${BASE}/practice-sets/basket/items`, req)
 }
+
+export type CustomPaperScope = 'week' | 'unmastered'
+export type CustomPaperTotal = 'all' | 5 | 10
+export type CustomPaperDifficulty = 'same' | 'easier' | 'harder'
+export type PracticeGenerationStatus =
+  | 'queued'
+  | 'generating'
+  | 'validating'
+  | 'committed'
+  | 'failed'
+  | 'cancelled'
+
+export interface CustomPaperReq {
+  agent: string
+  idempotency_key: string
+  scope: CustomPaperScope
+  total: CustomPaperTotal
+  per_source: 1 | 2 | 3
+  difficulty: CustomPaperDifficulty
+  textbook: string
+  grade?: string
+  source_session?: string
+}
+
+export interface CustomPaperItemDTO {
+  item_id: string
+  source_problem_id: string
+  variant_index: number
+  actual_difficulty: CustomPaperDifficulty
+  verification_status: PracticeItemStatus
+  verification_evidence?: string
+  blocked_reason?: string
+  question_markdown: string
+  expected_answer_markdown?: string
+}
+
+export interface CustomPaperResp {
+  generation_job_id: string
+  status: PracticeGenerationStatus
+  set: PracticeSetDTO
+  items: CustomPaperItemDTO[]
+  added: number
+  deduplicated: number
+}
+
+/** DD-027 正式组卷：Desktop 只发送一个冻结命令，不逐题 retry/add-to-basket 拼卷。 */
+export function k12GenerateCustomPaper(req: CustomPaperReq) {
+  if (!req.agent.trim() || !req.idempotency_key.trim()) {
+    throw new Error('组卷实例与幂等键不能为空')
+  }
+  if (!['week', 'unmastered'].includes(req.scope)) throw new Error('组卷范围无效')
+  if (![1, 2, 3].includes(req.per_source)) throw new Error('每道来源题只能生成 1/2/3 道变式')
+  if (!['same', 'easier', 'harder'].includes(req.difficulty)) throw new Error('组卷难度无效')
+  if (!['all', 5, 10].includes(req.total)) throw new Error('总题量只能是全部、5 或 10')
+  if (!req.textbook.trim()) throw new Error('请先确认教材版本')
+  return apiPost<CustomPaperResp>(`${BASE}/practice-sets/custom-paper`, req)
+}
 /** 篮内移除某题（只出篮，不影响错题状态与复习安排） */
 export function k12RemoveFromBasket(agent: string, recordId: string, itemId: string) {
-  return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/items/remove`, { agent, item_id: itemId })
+  return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/items/remove`, {
+    agent,
+    item_id: itemId,
+  })
 }
 /** finalize 响应：固化后的练习集 + 本次被跳过的阻断题数 */
 export interface FinalizeResp {
   set: PracticeSetDTO
   skipped_blocked_count: number
+  /** send 尚未接真实投递器时的诚实状态说明。 */
+  delivery_note?: string
 }
 /**
  * 固化出卷（打印/发送即家长确认，§3.8 购物车裁决）：draft 一步到 assigned。
@@ -711,17 +985,73 @@ export interface FinalizeResp {
  * via='send' 必带 target（私聊目标）；via='print' 不投递。
  */
 export function k12FinalizePracticeSet(
-  agent: string, recordId: string, via: 'print' | 'send', target?: string,
+  agent: string,
+  recordId: string,
+  via: 'print' | 'send',
+  target?: string,
 ) {
   return apiPost<FinalizeResp>(`${BASE}/practice-sets/${recordId}/finalize`, {
-    agent, via, target: target ?? '',
+    agent,
+    via,
+    target: target ?? '',
   })
 }
 /** submit/grade/close 顺序推进；非法转移 → 409 */
 export function k12AdvancePracticeSet(
-  agent: string, recordId: string, step: 'submit' | 'grade' | 'close',
+  agent: string,
+  recordId: string,
+  step: 'submit' | 'grade' | 'close',
 ) {
   return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/${step}`, { agent })
+}
+
+/**
+ * 回传作答照片后标记照片覆盖到的题。前端禁止空 item_ids，避免旧端点的“空=整卷回传”
+ * 兼容语义误把未上传/未覆盖的题全部标为已回传。asset_id 为已落本地资产服务的照片证据。
+ */
+export interface SubmitPracticeReturnReq {
+  return_id: string
+  asset_id: string
+  item_ids: string[]
+}
+
+export function k12SubmitPracticeSet(
+  agent: string,
+  recordId: string,
+  req: SubmitPracticeReturnReq,
+) {
+  if (!req.return_id.trim()) throw new Error('回传批次不能为空')
+  if (!req.item_ids.length) throw new Error('至少选择一道照片覆盖的题目')
+  if (!req.asset_id.trim()) throw new Error('请先上传作答照片')
+  return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/submit`, {
+    agent,
+    return_id: req.return_id,
+    asset_id: req.asset_id,
+    item_ids: req.item_ids,
+  })
+}
+
+export interface PracticeGradeResult {
+  item_id: string
+  correct: boolean
+}
+
+/** 逐题复批；禁止空 results 触发后端旧兼容的“整卷全通过”。 */
+export function k12GradePracticeSet(
+  agent: string,
+  recordId: string,
+  results: PracticeGradeResult[],
+) {
+  if (!results.length) throw new Error('请逐题记录对或错')
+  return apiPost<PracticeSetDTO>(`${BASE}/practice-sets/${recordId}/grade`, { agent, results })
+}
+
+/** 手动生成本周复习卷：复用后端 canonical_answer + 学科验证门的到期题装篮链。 */
+export function k12FillPracticeBasket(agent: string) {
+  return apiPost<{ added: number; skipped: number }>(
+    `${BASE}/cron/fill-basket?agent=${encodeURIComponent(agent)}`,
+    {},
+  )
 }
 /** 仅 draft/confirmed 可取消，否则 409 */
 export function k12CancelPracticeSet(agent: string, recordId: string) {
@@ -742,18 +1072,63 @@ export interface PracticePaperResp {
  * 取题目卷/答案卷（§4.13）：kind 缺省 question。固化后为正卷（含卷面号）；
  * draft 篮走同一渲染器返回预览（preview=true）——预览口径 = 固化产物口径。
  */
-export function k12GetPracticePaper(agent: string, recordId: string, kind: 'question' | 'answer' = 'question') {
+export function k12GetPracticePaper(
+  agent: string,
+  recordId: string,
+  kind: 'question' | 'answer' = 'question',
+) {
   return apiGet<PracticePaperResp>(`${BASE}/practice-sets/${recordId}/paper`, { agent, kind })
 }
 
 // ── 作品 CreativeWork（/creative-works*，PRD §3.10）─────────────
 export type WorkType = 'writing' | 'art'
 export type WorkStatus = 'draft' | 'feedback_ready' | 'revised' | 'archived'
+export interface WorkFeedbackObservationDTO {
+  dimension:
+    | 'task_alignment'
+    | 'structure'
+    | 'expression'
+    | 'language_detail'
+    | 'composition'
+    | 'color'
+    | 'line'
+    | 'visible_detail'
+  evidence: string
+}
+export interface WorkFeedbackSourceSnapshotDTO {
+  source: 'ai' | 'parent'
+  method_ref: string
+  capability: string
+}
+export interface WorkFeedbackDTO {
+  feedback_id: string
+  version_id: string
+  feedback_type: WorkType
+  evidence_refs: string[]
+  observations: WorkFeedbackObservationDTO[]
+  source_snapshot: WorkFeedbackSourceSnapshotDTO
+  limitations: string
+  suggestions: string[]
+  allowed_actions: Array<'send' | 'print_practice_card' | 'collect' | 'record_language_issue'>
+  projection_markdown: string
+}
 export interface WorkVersionDTO {
   version_id: string
   source_asset_id?: string
   content_markdown?: string
+  /** DD-013 writing-photo confirmation evidence. */
+  ocr_job_id?: string
+  ocr_raw?: string
+  ocr_version?: number
+  ocr_confirmed_digest?: string
+  content_confirmed_at?: number
   feedback?: string
+  /** Canonical feedback fact; feedback Markdown is only a legacy projection. */
+  structured_feedback?: WorkFeedbackDTO
+  /** 点评实际来源：ai=后端 Skill 生成，parent=家长手写；老记录可为空。 */
+  feedback_source?: 'ai' | 'parent' | string
+  /** AI 点评实际使用的方法论版本戳；家长手写/老记录可为空。 */
+  feedback_skill?: string
   /** 观察小练习卡文本（§3.10 美术）：服务端由点评正文提炼（单一事实源），写作/无点评缺省 */
   practice_card?: string
   /** 练习卡完成打卡时间（unix 秒；缺省 = 未打卡） */
@@ -779,6 +1154,9 @@ export interface CreateWorkReq {
   intent?: string
   content_markdown?: string
   source_asset_id?: string
+  ocr_job_id?: string
+  ocr_version?: number
+  ocr_confirmed_digest?: string
 }
 export function k12ListCreativeWorks(agent: string, type?: WorkType) {
   return apiGet<{ items: CreativeWorkDTO[] }>(
@@ -794,31 +1172,165 @@ export function k12CreateCreativeWork(req: CreateWorkReq) {
 }
 /** 给最新版本附证据化点评（只点评不打分不代写，INV-011） */
 export function k12AttachWorkFeedback(agent: string, recordId: string, feedback: string) {
-  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/feedback`, { agent, feedback })
+  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/feedback`, {
+    agent,
+    feedback,
+  })
+}
+/** 调后端 Skill 生成证据化点评；慢模型由调用方展示生成中/失败重试，不做前端假成功。 */
+export function k12GenerateWorkFeedback(agent: string, recordId: string, signal?: AbortSignal) {
+  return apiPost<CreativeWorkDTO>(
+    `${BASE}/creative-works/${recordId}/generate-feedback`,
+    { agent },
+    { timeout: 240_000, signal },
+  )
 }
 /** 提交修改稿形成新版本（feedback_ready → revised） */
 export function k12SubmitWorkRevision(
-  agent: string, recordId: string, contentMarkdown?: string, sourceAssetId?: string,
+  agent: string,
+  recordId: string,
+  contentMarkdown?: string,
+  sourceAssetId?: string,
+  ocr?: { jobId: string; version: number; digest: string },
 ) {
   return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/revision`, {
-    agent, content_markdown: contentMarkdown ?? '', source_asset_id: sourceAssetId ?? '',
+    agent,
+    content_markdown: contentMarkdown ?? '',
+    source_asset_id: sourceAssetId ?? '',
+    ...(ocr
+      ? {
+          ocr_job_id: ocr.jobId,
+          ocr_version: ocr.version,
+          ocr_confirmed_digest: ocr.digest,
+        }
+      : {}),
   })
 }
 export function k12ArchiveCreativeWork(agent: string, recordId: string) {
   return apiPost<{ ok: boolean }>(`${BASE}/creative-works/${recordId}/archive`, { agent })
 }
-/** 点评/观察练习卡发送到手机（§3.10/§3.12 绑定私聊辅导延伸消息）。
- *  未接线 501 / 未绑定 409：调用方降级为复制文本，绝不虚标已发送。 */
+export type DeliveryReceiptStatus =
+  | 'pending'
+  | 'sending'
+  | 'delivered'
+  | 'failed'
+  | 'outcome_unknown'
+
+export interface DeliveryReceiptDTO {
+  delivery_id: string
+  agent_name: string
+  object_kind: string
+  object_id: string
+  binding_id: string
+  target: {
+    platform: string
+    instance_id?: string
+    chat_id: string
+    label?: string
+  }
+  status: DeliveryReceiptStatus
+  dedupe_key: string
+  payload_digest: string
+  payload_json: string
+  render_manifest_json: string
+  external_message_id?: string
+  attempt: number
+  last_error?: string
+  created_at: number
+  updated_at: number
+}
+
+/** 点评/观察练习卡发送到手机。返回 durable Receipt；sending 仅表示平台受理，
+ *  只有 query 返回 delivered 才能显示「已送达」。 */
 export function k12SendWorkFeedback(
-  agent: string, recordId: string, kind: 'feedback' | 'practice_card' = 'feedback',
+  agent: string,
+  recordId: string,
+  kind: 'feedback' | 'practice_card' = 'feedback',
 ) {
-  return apiPost<{ ok: boolean; target: string }>(
-    `${BASE}/creative-works/${recordId}/send-feedback`, { agent, kind },
-  )
+  return apiPost<DeliveryReceiptDTO>(`${BASE}/creative-works/${recordId}/send-feedback`, {
+    agent,
+    kind,
+  })
+}
+
+/** 把当前会话内已经生成的备课卡文本按同一 Receipt 协议直发私聊。 */
+export function k12SendPrepCard(agent: string, content: string) {
+  return apiPost<DeliveryReceiptDTO>(`${BASE}/prep-card/send`, { agent, content })
+}
+
+export function k12GetDeliveryReceipt(agent: string, deliveryId: string) {
+  return apiGet<DeliveryReceiptDTO>(`${BASE}/delivery-receipts/${deliveryId}`, { agent })
+}
+
+/** 只有 failed 可调用；sending/outcome_unknown 调用会被后端 409 拒绝。 */
+export function k12RetryDeliveryReceipt(agent: string, deliveryId: string) {
+  return apiPost<DeliveryReceiptDTO>(`${BASE}/delivery-receipts/${deliveryId}/retry`, { agent })
+}
+
+/** sending/outcome_unknown 的唯一安全收敛动作，不会再次发送消息。 */
+export function k12QueryDeliveryReceipt(agent: string, deliveryId: string) {
+  return apiPost<DeliveryReceiptDTO>(`${BASE}/delivery-receipts/${deliveryId}/query`, { agent })
 }
 /** 观察练习卡完成打卡（幂等：保留首次时间；仅美术且已点评） */
 export function k12MarkPracticeCardDone(agent: string, recordId: string) {
-  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/practice-card/done`, { agent })
+  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/practice-card/done`, {
+    agent,
+  })
+}
+
+// ── 作文照片 OCR Job（DD-013）────────────────────────────────
+export type CreativeWorkOCRStatus =
+  | 'pending'
+  | 'processing'
+  | 'awaiting_confirmation'
+  | 'failed'
+  | 'confirmed'
+
+export interface CreativeWorkOCRJobDTO {
+  job_id: string
+  request_id: string
+  source_asset_id: string
+  source_digest: string
+  status: CreativeWorkOCRStatus
+  ocr_raw?: string
+  error_message?: string
+  attempt_count: number
+  confirmed_version?: number
+  confirmed_digest?: string
+  confirmed_content?: string
+  confirmed_at?: number
+  created_at: number
+  updated_at: number
+}
+
+export function k12CreateCreativeWorkOCR(req: {
+  agent: string
+  request_id: string
+  source_asset_id: string
+}) {
+  return apiPost<CreativeWorkOCRJobDTO>(`${BASE}/creative-work-ocr-jobs`, req, { timeout: 240_000 })
+}
+
+export function k12GetCreativeWorkOCR(agent: string, jobId: string) {
+  return apiGet<CreativeWorkOCRJobDTO>(
+    `${BASE}/creative-work-ocr-jobs/${encodeURIComponent(jobId)}`,
+    { agent },
+  )
+}
+
+export function k12RetryCreativeWorkOCR(agent: string, jobId: string) {
+  return apiPost<CreativeWorkOCRJobDTO>(
+    `${BASE}/creative-work-ocr-jobs/${encodeURIComponent(jobId)}/retry`,
+    { agent },
+    { timeout: 240_000 },
+  )
+}
+
+export function k12ConfirmCreativeWorkOCR(agent: string, jobId: string, contentMarkdown: string) {
+  return apiPost<CreativeWorkOCRJobDTO>(
+    `${BASE}/creative-work-ocr-jobs/${encodeURIComponent(jobId)}/confirm`,
+    { agent, content_markdown: contentMarkdown },
+  )
 }
 
 // ── 作品照片资产（/assets*，最小资产服务：魔数校验/10MB 上限/归属隔离）────
@@ -837,16 +1349,22 @@ export function k12AssetURL(agent: string, assetId: string): string {
 
 /** 上传作品照片（multipart + XHR：带真实上传进度回调）。魔数非图片 415、>10MB 413。 */
 export function k12UploadAsset(
-  agent: string, file: File, onProgress?: (percent: number) => void,
+  agent: string,
+  file: File,
+  onProgress?: (percent: number) => void,
+  signal?: AbortSignal,
 ): Promise<AssetUploadResp> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
+    const cleanup = () => signal?.removeEventListener('abort', onAbort)
+    const onAbort = () => xhr.abort()
     xhr.open('POST', `${env.apiBase}${BASE}/assets?agent=${encodeURIComponent(agent)}`)
     xhr.timeout = 60_000
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
     }
     xhr.onload = () => {
+      cleanup()
       let body: Record<string, unknown> = {}
       try {
         body = JSON.parse(xhr.responseText || '{}') as Record<string, unknown>
@@ -856,13 +1374,36 @@ export function k12UploadAsset(
       if (xhr.status >= 200 && xhr.status < 300) {
         resolve(body as unknown as AssetUploadResp)
       } else {
-        reject(new Error(typeof body.error === 'string' && body.error ? body.error : `上传失败（${xhr.status}）`))
+        reject(
+          new Error(
+            typeof body.error === 'string' && body.error ? body.error : `上传失败（${xhr.status}）`,
+          ),
+        )
       }
     }
-    xhr.onerror = () => reject(new Error('上传失败：网络错误'))
-    xhr.ontimeout = () => reject(new Error('上传超时，请重试'))
+    xhr.onerror = () => {
+      cleanup()
+      reject(new Error('上传失败：网络错误'))
+    }
+    xhr.ontimeout = () => {
+      cleanup()
+      reject(new Error('上传超时，请重试'))
+    }
+    xhr.onabort = () => {
+      cleanup()
+      const error = new Error('上传已取消')
+      error.name = 'AbortError'
+      reject(error)
+    }
     const form = new FormData()
     form.append('file', file, file.name)
+    if (signal?.aborted) {
+      const error = new Error('上传已取消')
+      error.name = 'AbortError'
+      reject(error)
+      return
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
     xhr.send(form)
   })
 }

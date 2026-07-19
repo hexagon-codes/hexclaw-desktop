@@ -53,6 +53,12 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     })
     await expect(page.getByTestId('recognize-guard')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByTestId('rq-item')).toHaveCount(2, { timeout: 120_000 })
+    await expect(page.getByTestId('k12-photo-assistant-message')).toBeVisible()
+    await expect(page.getByTestId('k12-photo-assistant-message').locator('.k12enh-tutor__name')).toContainText(child)
+    await expect(page.getByTestId('recognize-confirm-all')).toContainText('读得对，开始辅导')
+    await expect(page.getByTestId('recognize-correct')).toContainText('有地方读错了')
+    await expect(page.getByTestId('rq-grade-0')).toHaveCount(0)
+    await page.screenshot({ path: 'test-results/k12-photo-confirm-prototype-aligned.png', fullPage: true })
     await expect(page.getByTestId('rq-answer-0')).toHaveValue('')
     await expect(page.getByTestId('rq-answer-1')).toHaveValue('54')
 

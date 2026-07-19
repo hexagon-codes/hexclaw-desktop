@@ -12,17 +12,22 @@ import {
   k12FinalizePracticeSet,
   k12RemoveFromBasket,
   k12AdvancePracticeSet,
+  k12SubmitPracticeSet,
+  k12GradePracticeSet,
   k12CancelPracticeSet,
   k12GetPracticePaper,
+  k12UploadAsset,
+  k12AssetURL,
   type PracticeSetDTO,
   type PracticeItemDTO,
   type PracticePaperResp,
+  type PracticeReturnAssetDTO,
 } from '@/api/k12'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import { printPracticePaper } from '../export'
+import { printPracticePaper, savePracticePaperPdf } from '../export'
 
 const props = defineProps<{ agentId: string }>()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const toast = useToast()
 
 const sets = ref<PracticeSetDTO[]>([])
@@ -111,18 +116,39 @@ async function finalize(via: 'print' | 'send') {
   const b = basket.value
   if (!b) return
   busy.value = b.record_id
+  let finalized = false
   try {
-    const resp = await k12FinalizePracticeSet(props.agentId, b.record_id, via, via === 'send' ? '手机私聊' : undefined)
-    const base = via === 'print' ? t('k12.practice.print') : t('k12.practice.assign')
-    toast.success(
-      resp.skipped_blocked_count > 0
-        ? `${base} · ${t('k12.practice.skipped', { n: resp.skipped_blocked_count })}`
-        : base,
-    )
-    await load()
+    if (via === 'print') {
+      // DD-023A：先让原生系统对话框返回 PrintJob 成功回执，再固化待打印篮。
+      // 取消/失败保持 draft；绝不先 finalize 后把取消误记为「已打印」。
+      const rendered = await k12GetPracticePaper(props.agentId, b.record_id, 'question')
+      const printed = await printPracticePaper(rendered.markdown, rendered.title)
+      if (!printed) throw new Error(t('k12.practice.paperPrintFailed'))
+      const resp = await k12FinalizePracticeSet(props.agentId, b.record_id, 'print')
+      finalized = true
+      const skipped = resp.skipped_blocked_count > 0
+        ? ` · ${t('k12.practice.skipped', { n: resp.skipped_blocked_count })}`
+        : ''
+      toast.success(`${t('k12.practice.print')}${skipped}`)
+      return
+    }
+
+    const resp = await k12FinalizePracticeSet(props.agentId, b.record_id, 'send', '手机私聊')
+    finalized = true
+    const skipped = resp.skipped_blocked_count > 0
+      ? ` · ${t('k12.practice.skipped', { n: resp.skipped_blocked_count })}`
+      : ''
+    if (resp.set.delivery_status === 'pending') {
+      toast.info(resp.delivery_note || t('k12.practice.deliveryPending'))
+    } else if (resp.set.delivery_status === 'failed') {
+      toast.warning(t('k12.practice.deliveryFailed'))
+    } else {
+      toast.success(`${t('k12.practice.assign')}${skipped}`)
+    }
   } catch (e) {
     toast.error((e as Error).message)
   } finally {
+    if (finalized) await load()
     busy.value = ''
   }
 }
@@ -153,13 +179,189 @@ async function advance(s: PracticeSetDTO, step: 'submit' | 'grade' | 'close', ok
     busy.value = ''
   }
 }
+
+// ── 作答回传 / 逐题复批（§3.8）──
+// 禁止直接用 agent-only 旧调用推进：回传必须有真实照片和覆盖题；复批必须逐题给出对/错，
+// 从调用侧彻底封死后端“空 results = 整卷通过”的兼容旁路。
+interface ReturnDraft {
+  set: PracticeSetDTO | null
+  file: File | null
+  itemIds: string[]
+  /** 上传成功后保留；submit 结果未知时重试不再制造第二份资产。 */
+  assetId: string
+  /** 同一请求快照重试必须复用，后端按它返回既有 return_assets 记录。 */
+  returnId: string
+  requestFingerprint: string
+}
+const emptyReturnDraft = (): ReturnDraft => ({
+  set: null, file: null, itemIds: [], assetId: '', returnId: '', requestFingerprint: '',
+})
+const returnDraft = ref<ReturnDraft>(emptyReturnDraft())
+const returnError = ref('')
+let returnIdSequence = 0
+
+function newReturnId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return `desktop-return:${props.agentId}:${uuid ?? `${Date.now()}-${++returnIdSequence}`}`
+}
+const returnOpen = computed(() => !!returnDraft.value.set)
+const returnItems = computed(() =>
+  returnDraft.value.set?.items.filter((it) => it.verification_status === 'verified') ?? [],
+)
+const returnCanSubmit = computed(() => !!returnDraft.value.file && returnDraft.value.itemIds.length > 0)
+function openReturn(s: PracticeSetDTO) {
+  returnError.value = ''
+  returnDraft.value = { ...emptyReturnDraft(), set: s }
+}
+function closeReturn() {
+  if (busy.value) return
+  returnError.value = ''
+  returnDraft.value = emptyReturnDraft()
+}
+function pickReturnFile(e: Event) {
+  const file = (e.target as HTMLInputElement).files?.[0] ?? null
+  returnError.value = ''
+  returnDraft.value.assetId = ''
+  returnDraft.value.returnId = ''
+  returnDraft.value.requestFingerprint = ''
+  if (!file) {
+    returnDraft.value.file = null
+    return
+  }
+  if (!file.type.startsWith('image/')) {
+    toast.error(t('k12.practice.returnPhotoType'))
+    ;(e.target as HTMLInputElement).value = ''
+    returnDraft.value.file = null
+    return
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    toast.error(t('k12.practice.returnPhotoSize'))
+    ;(e.target as HTMLInputElement).value = ''
+    returnDraft.value.file = null
+    return
+  }
+  returnDraft.value.file = file
+}
+async function submitReturn() {
+  const s = returnDraft.value.set
+  const file = returnDraft.value.file
+  if (!s || !file || !returnDraft.value.itemIds.length) return
+  busy.value = s.record_id
+  returnError.value = ''
+  try {
+    if (!returnDraft.value.assetId) {
+      const asset = await k12UploadAsset(props.agentId, file)
+      returnDraft.value.assetId = asset.asset_id
+    }
+    const itemIds = [...returnDraft.value.itemIds]
+    const fingerprint = `${returnDraft.value.assetId}\n${[...itemIds].sort().join(',')}`
+    if (!returnDraft.value.returnId || returnDraft.value.requestFingerprint !== fingerprint) {
+      returnDraft.value.returnId = newReturnId()
+      returnDraft.value.requestFingerprint = fingerprint
+    }
+    const updated = await k12SubmitPracticeSet(props.agentId, s.record_id, {
+      return_id: returnDraft.value.returnId,
+      asset_id: returnDraft.value.assetId,
+      item_ids: itemIds,
+    })
+    const index = sets.value.findIndex((entry) => entry.record_id === updated.record_id)
+    if (index >= 0) sets.value.splice(index, 1, updated)
+    toast.success(t('k12.practice.returnSaved'))
+    returnDraft.value = emptyReturnDraft()
+  } catch (e) {
+    returnError.value = (e as Error).message || t('k12.practice.returnFailed')
+  } finally {
+    busy.value = ''
+  }
+}
+
+function itemHasReturn(it: PracticeItemDTO): boolean {
+  return !!it.return_ids?.length || !!it.returned
+}
+
+function canUploadReturn(s: PracticeSetDTO): boolean {
+  return s.status === 'assigned' || s.status === 'submitted'
+}
+
+function canGradeReturn(s: PracticeSetDTO): boolean {
+  return s.status === 'submitted' && s.items.some((it) =>
+    it.verification_status === 'verified' && itemHasReturn(it) && it.result_correct === undefined,
+  )
+}
+
+function returnButtonLabel(s: PracticeSetDTO): string {
+  return s.return_assets?.length ? t('k12.practice.returnContinue') : t('k12.practice.submit')
+}
+
+function returnPaperSeqs(s: PracticeSetDTO, asset: PracticeReturnAssetDTO): string {
+  const positions = asset.item_ids.map((itemId) => {
+    const index = s.items.findIndex((item) => item.item_id === itemId)
+    const item = index >= 0 ? s.items[index] : undefined
+    return item?.paper_seq ?? (index >= 0 ? index + 1 : '?')
+  })
+  return positions.join('、')
+}
+
+function returnTimeLabel(returnedAt: number): string {
+  if (!returnedAt) return ''
+  return new Intl.DateTimeFormat(locale.value, {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(returnedAt * 1000))
+}
+
+type GradeChoice = '' | 'correct' | 'incorrect'
+const gradeDraft = ref<{ set: PracticeSetDTO | null; results: Record<string, GradeChoice> }>({
+  set: null, results: {},
+})
+const gradeOpen = computed(() => !!gradeDraft.value.set)
+const gradeItems = computed(() =>
+  gradeDraft.value.set?.items.filter((it) =>
+    it.verification_status === 'verified' && itemHasReturn(it) && it.result_correct === undefined,
+  ) ?? [],
+)
+const gradeCanSubmit = computed(() =>
+  gradeItems.value.length > 0 && gradeItems.value.every((it) => !!gradeDraft.value.results[it.item_id]),
+)
+function openGrade(s: PracticeSetDTO) {
+  gradeDraft.value = {
+    set: s,
+    results: Object.fromEntries(
+      s.items.filter((it) => it.verification_status === 'verified').map((it) => [it.item_id, '']),
+    ),
+  }
+}
+function closeGrade() {
+  if (busy.value) return
+  gradeDraft.value = { set: null, results: {} }
+}
+async function submitGrade() {
+  const s = gradeDraft.value.set
+  if (!s || !gradeCanSubmit.value) return
+  const results = gradeItems.value.map((it) => ({
+    item_id: it.item_id,
+    correct: gradeDraft.value.results[it.item_id] === 'correct',
+  }))
+  busy.value = s.record_id
+  try {
+    await k12GradePracticeSet(props.agentId, s.record_id, results)
+    toast.success(t('k12.practice.gradeSaved'))
+    gradeDraft.value = { set: null, results: {} }
+    await load()
+  } catch (e) {
+    toast.error((e as Error).message)
+  } finally {
+    busy.value = ''
+  }
+}
 // ── 题目卷/答案卷查看（§4.13 呈现物真实渲染，2026-07-18）──
 // 历史卡片：正卷（页眉/页脚含卷面号）；待打印区：draft 预览走后端同一渲染器
 // （诚实预览：预览口径 = 固化产物口径，无卷面号、明示“打印或发送后分配”）。
 const paper = ref<{ open: boolean; loading: boolean; error: string; resp: PracticePaperResp | null }>({
   open: false, loading: false, error: '', resp: null,
 })
+const paperRequest = ref<{ recordId: string; kind: 'question' | 'answer' } | null>(null)
 async function openPaper(recordId: string, kind: 'question' | 'answer') {
+  paperRequest.value = { recordId, kind }
   paper.value = { open: true, loading: true, error: '', resp: null }
   try {
     const resp = await k12GetPracticePaper(props.agentId, recordId, kind)
@@ -168,15 +370,51 @@ async function openPaper(recordId: string, kind: 'question' | 'answer') {
     paper.value = { open: true, loading: false, error: (e as Error).message || t('k12.practice.paperLoadError'), resp: null }
   }
 }
+function retryPaper() {
+  const req = paperRequest.value
+  if (req) void openPaper(req.recordId, req.kind)
+}
 function closePaper() {
   paper.value = { open: false, loading: false, error: '', resp: null }
+  paperRequest.value = null
 }
 // 打印只对正卷开放：预览无卷面号，纸质卷必须走「打印题目卷」固化通道（打印即确认），
 // 预览通道不得成为绕过固化的旁路。
 async function printPaper() {
   const p = paper.value.resp
   if (!p || p.preview) return
-  await printPracticePaper(p.markdown, p.title + (p.kind === 'answer' ? ' · ' + t('k12.practice.paperAnswer') : ''))
+  // 重试开始即撤下上一次失败提示；本次仍失败时再写入新的可重试错误。
+  paper.value.error = ''
+  try {
+    const ok = await printPracticePaper(p.markdown, p.title + (p.kind === 'answer' ? ' · ' + t('k12.practice.paperAnswer') : ''))
+    if (!ok) throw new Error(t('k12.practice.paperPrintFailed'))
+  } catch (e) {
+    paper.value.error = (e as Error).message || t('k12.practice.paperPrintFailed')
+  }
+}
+
+const paperSaveBusy = ref(false)
+async function savePaperPdf() {
+  const p = paper.value.resp
+  if (!p || p.preview || paperSaveBusy.value) return
+  paperSaveBusy.value = true
+  try {
+    await savePracticePaperPdf(
+      p.markdown,
+      p.title + (p.kind === 'answer' ? ' · ' + t('k12.practice.paperAnswer') : ''),
+    )
+  } catch (e) {
+    paper.value.error = (e as Error).message || t('k12.practice.paperSavePdfFailed')
+  } finally {
+    paperSaveBusy.value = false
+  }
+}
+
+function deliveryLabel(status: string): string {
+  if (status === 'pending') return t('k12.practice.deliveryPendingShort')
+  if (status === 'delivered') return t('k12.practice.deliveryDelivered')
+  if (status === 'failed') return t('k12.practice.deliveryFailed')
+  return ''
 }
 
 async function cancelSet(s: PracticeSetDTO) {
@@ -195,7 +433,12 @@ async function cancelSet(s: PracticeSetDTO) {
 
 <template>
   <section class="k12ps">
-    <div v-if="error" class="k12ps__err" data-testid="ps-error">{{ error }}</div>
+    <div v-if="error" class="k12ps__err" data-testid="ps-error">
+      <span>{{ error }}</span>
+      <button class="k12ps__btn" data-testid="ps-load-retry" :disabled="loading" @click="load">
+        {{ t('k12.practice.retry') }}
+      </button>
+    </div>
 
     <!-- ═══ 待打印篮 ═══ -->
     <section class="k12ps__basket" aria-label="待打印" data-testid="ps-basket">
@@ -287,6 +530,38 @@ async function cancelSet(s: PracticeSetDTO) {
             <span>{{ t('k12.practice.itemCount', { n: s.items.filter((it) => it.verification_status === 'verified').length }) }}</span>
             <span v-if="s.skipped_blocked_count">{{ t('k12.practice.skipped', { n: s.skipped_blocked_count }) }}</span>
             <span v-if="s.delivery_target">→ {{ s.delivery_target }}</span>
+            <span v-if="deliveryLabel(s.delivery_status)" :class="{ 'k12ps__delivery--pending': s.delivery_status === 'pending', 'k12ps__delivery--failed': s.delivery_status === 'failed' }">
+              {{ deliveryLabel(s.delivery_status) }}
+            </span>
+          </div>
+          <div
+            v-if="s.return_assets?.length"
+            class="k12ps__returns"
+            role="list"
+            :aria-label="t('k12.practice.returnHistory')"
+            data-testid="ps-return-assets"
+          >
+            <article
+              v-for="(asset, assetIndex) in (s.return_assets ?? [])"
+              :key="asset.return_id"
+              class="k12ps__return-asset"
+              role="listitem"
+              data-testid="ps-return-asset"
+            >
+              <img
+                :src="k12AssetURL(agentId, asset.asset_id)"
+                class="k12ps__return-thumb"
+                :alt="t('k12.practice.returnPhotoAlt', { n: assetIndex + 1 })"
+                loading="lazy"
+              >
+              <span>
+                <b>{{ t('k12.practice.returnPhotoNumber', { n: assetIndex + 1 }) }}</b>
+                · {{ t('k12.practice.returnCoveredNumbers', { nums: returnPaperSeqs(s, asset) }) }}
+              </span>
+              <time v-if="asset.returned_at" :datetime="new Date(asset.returned_at * 1000).toISOString()">
+                {{ returnTimeLabel(asset.returned_at) }}
+              </time>
+            </article>
           </div>
           <footer class="k12ps__hactions">
             <!-- 题目卷/答案卷查看入口（§4.13）：固化过（有卷面号）的卷才有 -->
@@ -298,11 +573,17 @@ async function cancelSet(s: PracticeSetDTO) {
                 {{ t('k12.practice.paperAnswer') }}
               </button>
             </template>
-            <!-- 三态推进：待完成(assigned)→回传；已回传(submitted)→复批；已批改(graded)→关闭(manual) -->
-            <button v-if="s.status === 'assigned'" class="k12ps__btn" :disabled="busy === s.record_id" @click="advance(s, 'submit', t('k12.practice.submit'))">
-              {{ t('k12.practice.submit') }}
+            <!-- DD-028：assigned/submitted 都可继续追加照片；已有覆盖证据的题可分批复批。 -->
+            <button
+              v-if="canUploadReturn(s)"
+              class="k12ps__btn"
+              :disabled="busy === s.record_id"
+              data-testid="ps-return-open"
+              @click="openReturn(s)"
+            >
+              {{ returnButtonLabel(s) }}
             </button>
-            <button v-else-if="s.status === 'submitted'" class="k12ps__btn" :disabled="busy === s.record_id" @click="advance(s, 'grade', t('k12.practice.grade'))">
+            <button v-if="canGradeReturn(s)" class="k12ps__btn" :disabled="busy === s.record_id" @click="openGrade(s)">
               {{ t('k12.practice.grade') }}
             </button>
             <button v-else-if="s.status === 'graded'" class="k12ps__btn k12ps__btn--ghost" :disabled="busy === s.record_id" @click="advance(s, 'close', t('k12.practice.close'))">
@@ -327,7 +608,15 @@ async function cancelSet(s: PracticeSetDTO) {
           <button class="k12ps__rm" :aria-label="t('k12.practice.paperClose')" @click="closePaper">✕</button>
         </header>
         <p v-if="paper.loading" class="k12ps__mhint">{{ t('k12.practice.paperLoading') }}</p>
-        <p v-else-if="paper.error" class="k12ps__err">{{ paper.error }}</p>
+        <div v-else-if="paper.error" class="k12ps__paper-error">
+          <p class="k12ps__err">{{ paper.error }}</p>
+          <button
+            v-if="!paper.resp"
+            class="k12ps__btn"
+            data-testid="ps-paper-retry"
+            @click="retryPaper"
+          >{{ t('k12.practice.retry') }}</button>
+        </div>
         <div v-else-if="paper.resp" class="k12ps__mbody">
           <MarkdownRenderer :content="paper.resp.markdown" />
         </div>
@@ -338,9 +627,124 @@ async function cancelSet(s: PracticeSetDTO) {
             data-testid="ps-paper-print"
             @click="printPaper"
           >{{ t('k12.practice.paperPrint') }}</button>
+          <button
+            v-if="paper.resp && !paper.resp.preview"
+            class="k12ps__btn"
+            data-testid="ps-paper-save-pdf"
+            :disabled="paperSaveBusy"
+            @click="savePaperPdf"
+          >{{ t('k12.practice.paperSavePdf') }}</button>
           <button class="k12ps__btn k12ps__btn--primary" data-testid="ps-paper-close" @click="closePaper">
             {{ t('k12.practice.paperClose') }}
           </button>
+        </footer>
+      </div>
+    </div>
+
+    <!-- 回传照片：照片与覆盖题均为必填；不再以空 body 把整卷标为已回传。 -->
+    <div v-if="returnOpen" class="k12ps__modal" data-testid="ps-return-modal" @click.self="closeReturn">
+      <div
+        class="k12ps__mcard k12ps__mcard--compact"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ps-return-title"
+      >
+        <header class="k12ps__mhead">
+          <b id="ps-return-title">{{ t('k12.practice.returnTitle') }}</b>
+          <span v-if="returnDraft.set?.paper_no" class="k12ps__paperno">{{ returnDraft.set.paper_no }}</span>
+          <span class="k12ps__msp" />
+          <button class="k12ps__rm" :aria-label="t('k12.practice.paperClose')" @click="closeReturn">✕</button>
+        </header>
+        <div class="k12ps__formbody">
+          <p class="k12ps__mhint">{{ t('k12.practice.returnHint') }}</p>
+          <label class="k12ps__file">
+            <span>{{ t('k12.practice.returnPhoto') }}</span>
+            <input data-testid="ps-return-file" type="file" accept="image/png,image/jpeg,image/webp" @change="pickReturnFile">
+          </label>
+          <b class="k12ps__formlabel">{{ t('k12.practice.returnCovered') }}</b>
+          <label v-for="(it, index) in returnItems" :key="it.item_id" class="k12ps__choice">
+            <input
+              v-model="returnDraft.itemIds"
+              type="checkbox"
+              :value="it.item_id"
+              :data-testid="`ps-return-item-${it.item_id}`"
+              @change="returnError = ''"
+            >
+            <span>
+              {{ it.paper_seq || index + 1 }}. {{ it.question_markdown }}
+              <small v-if="it.return_ids?.length" class="k12ps__returned-ref">
+                {{ t('k12.practice.returnAlreadyCovered', { n: it.return_ids.length }) }}
+              </small>
+            </span>
+          </label>
+          <div
+            v-if="returnError"
+            class="k12ps__return-error"
+            role="alert"
+            data-testid="ps-return-error"
+          >
+            <span>{{ returnError }}</span>
+            <button
+              type="button"
+              class="k12ps__btn"
+              data-testid="ps-return-retry"
+              :disabled="!!busy"
+              @click="submitReturn"
+            >{{ t('k12.practice.retry') }}</button>
+          </div>
+        </div>
+        <footer class="k12ps__mfoot">
+          <button class="k12ps__btn" :disabled="!!busy" @click="closeReturn">{{ t('k12.practice.paperClose') }}</button>
+          <button
+            class="k12ps__btn k12ps__btn--primary"
+            data-testid="ps-return-confirm"
+            :disabled="!returnCanSubmit || !!busy"
+            @click="submitReturn"
+          >{{ t('k12.practice.returnConfirm') }}</button>
+        </footer>
+      </div>
+    </div>
+
+    <!-- 逐题复批：每题必须明确对/错，空 results 无提交入口。 -->
+    <div v-if="gradeOpen" class="k12ps__modal" data-testid="ps-grade-modal" @click.self="closeGrade">
+      <div class="k12ps__mcard k12ps__mcard--compact">
+        <header class="k12ps__mhead">
+          <b>{{ t('k12.practice.gradeTitle') }}</b>
+          <span class="k12ps__msp" />
+          <button class="k12ps__rm" :aria-label="t('k12.practice.paperClose')" @click="closeGrade">✕</button>
+        </header>
+        <div class="k12ps__formbody">
+          <p class="k12ps__mhint">{{ t('k12.practice.gradeHint') }}</p>
+          <div v-for="(it, index) in gradeItems" :key="it.item_id" class="k12ps__grade-row">
+            <span>{{ it.paper_seq || index + 1 }}. {{ it.question_markdown }}</span>
+            <label>
+              <input
+                v-model="gradeDraft.results[it.item_id]"
+                type="radio"
+                value="correct"
+                :name="`grade-${it.item_id}`"
+                :data-testid="`ps-grade-correct-${it.item_id}`"
+              > {{ t('k12.practice.gradeCorrect') }}
+            </label>
+            <label>
+              <input
+                v-model="gradeDraft.results[it.item_id]"
+                type="radio"
+                value="incorrect"
+                :name="`grade-${it.item_id}`"
+                :data-testid="`ps-grade-incorrect-${it.item_id}`"
+              > {{ t('k12.practice.gradeIncorrect') }}
+            </label>
+          </div>
+        </div>
+        <footer class="k12ps__mfoot">
+          <button class="k12ps__btn" :disabled="!!busy" @click="closeGrade">{{ t('k12.practice.paperClose') }}</button>
+          <button
+            class="k12ps__btn k12ps__btn--primary"
+            data-testid="ps-grade-confirm"
+            :disabled="!gradeCanSubmit || !!busy"
+            @click="submitGrade"
+          >{{ t('k12.practice.gradeConfirm') }}</button>
         </footer>
       </div>
     </div>
@@ -349,7 +753,7 @@ async function cancelSet(s: PracticeSetDTO) {
 
 <style scoped>
 .k12ps { display: grid; gap: 16px; }
-.k12ps__err { color: var(--hc-error); font-size: 13px; }
+.k12ps__err { color: var(--hc-error); font-size: 13px; display: flex; align-items: center; gap: 10px; }
 
 /* 待打印篮：单卡容器（原型 .practice-basket 语言） */
 .k12ps__basket {
@@ -411,6 +815,19 @@ async function cancelSet(s: PracticeSetDTO) {
 .k12ps__pill--got { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
 .k12ps__pill--muted { color: var(--hc-text-muted); background: var(--hc-bg-input); }
 .k12ps__hmeta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 7px; color: var(--hc-text-muted); font-size: 10.5px; }
+.k12ps__returns { display: grid; gap: 6px; margin-top: 9px; }
+.k12ps__return-asset {
+  display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 7px 9px; align-items: center;
+  padding: 6px 8px; border-radius: var(--hc-radius-md); background: var(--hc-bg-input);
+  color: var(--hc-text-secondary); font-size: 10.5px;
+}
+.k12ps__return-thumb {
+  grid-row: 1 / span 2; width: 32px; height: 32px; border-radius: 6px; object-fit: cover;
+  border: .5px solid var(--hc-border); background: var(--hc-bg-card);
+}
+.k12ps__return-asset time { color: var(--hc-text-muted); font-size: 10px; }
+.k12ps__delivery--pending { color: var(--hc-warning, #b26a00); }
+.k12ps__delivery--failed { color: var(--hc-error); }
 .k12ps__hactions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
 
 /* 按钮 */
@@ -451,4 +868,24 @@ async function cancelSet(s: PracticeSetDTO) {
   display: flex; justify-content: flex-end; gap: 8px; padding: 11px 16px;
   border-top: 1px solid var(--hc-border);
 }
+.k12ps__mcard--compact { width: min(620px, 100%); }
+.k12ps__formbody { display: grid; gap: 10px; padding: 14px 18px; overflow-y: auto; }
+.k12ps__paper-error { display: flex; align-items: center; gap: 10px; padding: 14px 18px; }
+.k12ps__paper-error .k12ps__err { margin: 0; flex: 1; }
+.k12ps__formbody .k12ps__mhint { padding: 0; }
+.k12ps__file { display: grid; gap: 6px; font-size: 12px; color: var(--hc-text-secondary); }
+.k12ps__formlabel { font-size: 12px; color: var(--hc-text-primary); }
+.k12ps__choice { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--hc-text-secondary); }
+.k12ps__returned-ref { display: block; margin-top: 2px; color: var(--hc-accent); }
+.k12ps__return-error {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 9px 10px; border-radius: var(--hc-radius-md);
+  color: var(--hc-error); background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+  font-size: 12px;
+}
+.k12ps__grade-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center;
+  padding: 9px 10px; border-radius: var(--hc-radius-md); background: var(--hc-bg-input); font-size: 12px;
+}
+.k12ps__grade-row label { white-space: nowrap; }
 </style>

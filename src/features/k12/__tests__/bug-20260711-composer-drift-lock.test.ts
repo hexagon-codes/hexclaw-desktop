@@ -19,6 +19,7 @@ import { ref } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
+import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 
 vi.mock('@/api/k12', () => ({
@@ -77,11 +78,15 @@ function renderEnh(extra: Record<string, unknown> = {}) {
   })
 }
 
+function recognizePanel(w: ReturnType<typeof renderEnh>) {
+  return w.findComponent(RecognizeGuardPanel)
+}
+
 describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦克风常驻）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     routeQuery.q = {}
-    document.body.innerHTML = '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+    document.body.innerHTML = '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
     voiceRefs.api = { isListening: ref(false), transcript: ref(''), isSupported: false, toggleListening: vi.fn() }
   })
 
@@ -97,10 +102,10 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
   it('自动改道路径不受影响：composerImage 注入 → 识题护栏自动打开并识题', async () => {
     const w = renderEnh()
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(false)
+    expect(recognizePanel(w).exists()).toBe(false)
     await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').exists(), '图片改道必须自动打开护栏').toBe(true)
+    expect(recognizePanel(w).exists(), '图片改道必须自动打开护栏').toBe(true)
     // 图片消费完成必须复位上报（数据流契约）
     expect(w.emitted('update:composerImage')?.some((e) => e[0] === '')).toBe(true)
   })
@@ -109,10 +114,10 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
     const w = renderEnh()
     await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(true)
-    await w.find('[data-testid="recognize-close"]').trigger('click')
+    expect(recognizePanel(w).exists()).toBe(true)
+    await recognizePanel(w).find('[data-testid="recognize-close"]').trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(false)
+    expect(recognizePanel(w).exists()).toBe(false)
   })
 
   it('★麦克风常驻：语音通道不可用（voiceSupported=false）时按钮仍渲染（原型 composer 固定动作行）', async () => {
@@ -132,7 +137,7 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
   beforeEach(() => {
     setActivePinia(createPinia())
     routeQuery.q = {}
-    document.body.innerHTML = '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+    document.body.innerHTML = '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
   it('★识题后切 records 再切回 chat：结果仍在、GradingJob 只创建一次（真机取证：曾重新「正在识题分题」）', async () => {
@@ -143,18 +148,18 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
     const w = renderEnh()
     await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(true)
+    expect(recognizePanel(w).exists()).toBe(true)
     expect(recognizeMock).toHaveBeenCalledTimes(1)
 
     // 切错题本 tab → 面板隐藏但**不销毁**（v-show 保活；v-if 销毁会导致重挂载重识题 + prep-card fetch abort）
     await w.findAll('.k12enh-seg button').find((b) => b.text() === '学习档案')!.trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').isVisible()).toBe(false)
+    expect(recognizePanel(w).isVisible()).toBe(false)
 
     // 切回辅导 tab → 结果原样恢复、零重复识题
     await w.findAll('.k12enh-seg button').find((b) => b.text() === '辅导')!.trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').isVisible()).toBe(true)
+    expect(recognizePanel(w).isVisible()).toBe(true)
     expect(recognizeMock, '切 tab 不得触发重新识题').toHaveBeenCalledTimes(1)
   })
 })

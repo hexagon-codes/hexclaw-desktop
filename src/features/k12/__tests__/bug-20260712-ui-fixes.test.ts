@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import k12EnhSrc from '../views/K12ChatEnhancement.vue?raw'
+import chatViewSrc from '@/views/ChatView.vue?raw'
 import recordsSrc from '../views/K12RecordsView.vue?raw'
 import { mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
@@ -10,7 +11,7 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 
 // BUG-20260712 桌面 K12 三处 UI bug 闭环：
 //  #1 拍照识题选图后把 base64 原文糊在框里（应显缩略图预览）
-//  #2 识题面板题目多时撑出视口且不能滚（.k12enh-tutor 缺 max-height+overflow-y）
+//  #2 识题面板题目多时撑出视口：它必须进入消息流并复用消息区的唯一滚动容器，不能再套第二层滚动。
 //  #3 频道「绑定会话」添加行布局 bug —— 该 per-chat 会话路由功能经产品评审（方案 A）已彻底移除，
 //     原 CSS 断言随功能删除而废止；防复活回归锁见 channels/__tests__/removal-chat-route-session-routing.test.ts
 
@@ -54,11 +55,16 @@ describe('BUG-20260712 #1 拍照识题选图显缩略图，不糊 base64 原文'
   })
 })
 
-describe('BUG-20260712 #2 识题面板可滚动（题目多不撑出视口）', () => {
-  it('.k12enh-tutor 有 max-height + overflow-y 滚动兜底', () => {
-    // 断言 .k12enh-tutor 规则块内同时含 max-height 与 overflow-y:auto（[^}]* 限定在规则内）
-    expect(k12EnhSrc).toMatch(/\.k12enh-tutor\s*\{[^}]*max-height:[^}]*\}/)         // RED（修前）：无 max-height
-    expect(k12EnhSrc).toMatch(/\.k12enh-tutor\s*\{[^}]*overflow-y:\s*auto[^}]*\}/)  // RED（修前）：无 overflow-y
+describe('BUG-20260712 #2 识题面板复用消息区滚动（题目多不撑出视口）', () => {
+  it('面板落在消息内联槽，自身不建立第二个滚动容器，滚动终点位于面板之后', () => {
+    const tutorRule = k12EnhSrc.match(/\.k12enh-tutor\s*\{[^}]*\}/)?.[0] ?? ''
+    expect(k12EnhSrc).toContain('to="#hc-chat-scenario-inline"')
+    expect(tutorRule).not.toMatch(/max-height\s*:/)
+    expect(tutorRule).not.toMatch(/overflow-y\s*:/)
+    expect(chatViewSrc).toMatch(/id="hc-chat-scenario-inline"[\s\S]*ref="messagesEndRef"/)
+    expect(chatViewSrc).toMatch(/v-if="[^"]*scenarioInlineActive[^"]*"\s+ref="messagesEndRef"/)
+    expect(chatViewSrc).toContain('@update:inline-active="handleScenarioInlineActive"')
+    expect(chatViewSrc).toMatch(/chatStore\.messages\.length === 0[^\n]*!scenarioInlineActive/)
   })
 })
 

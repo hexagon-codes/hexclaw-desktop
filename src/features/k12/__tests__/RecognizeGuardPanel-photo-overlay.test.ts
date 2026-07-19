@@ -14,6 +14,7 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 const h = vi.hoisted(() => ({
   createJobSpy: vi.fn(),
   getJobSpy: vi.fn(),
+  getResultSpy: vi.fn(),
   confirmJobSpy: vi.fn(),
   retryJobSpy: vi.fn(),
   gradeSpy: vi.fn(),
@@ -23,6 +24,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@/api/k12', () => ({
   k12CreateGradingJob: (r: unknown) => h.createJobSpy(r),
   k12GetGradingJob: (...args: unknown[]) => h.getJobSpy(...args),
+  k12GetGradingJobResult: (...args: unknown[]) => h.getResultSpy(...args),
   k12ConfirmGradingJob: (...args: unknown[]) => h.confirmJobSpy(...args),
   k12RetryGradingJob: (...args: unknown[]) => h.retryJobSpy(...args),
   k12Grade: (r: unknown) => h.gradeSpy(r),
@@ -103,14 +105,15 @@ function mockJobGradeFlow(
   })
   h.getJobSpy.mockImplementation(async () =>
     confirmed
-      ? jobStatus('completed', {
-          confirmation_state: 'confirmed',
-          result: { mode: 'grade', items, markdown: '# 批改' },
-        })
+      ? jobStatus('completed', { confirmation_state: 'confirmed' })
       : jobStatus('awaiting_confirmation', {
           recognition: { questions, subject: opts.subject ?? '' },
         }),
   )
+  h.getResultSpy.mockResolvedValue({
+    job_id: 'job-1',
+    result: { mode: 'grade', items, markdown: '# 批改' },
+  })
 }
 
 describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成）', () => {
@@ -118,6 +121,7 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     setActivePinia(createPinia())
     h.createJobSpy.mockReset()
     h.getJobSpy.mockReset()
+    h.getResultSpy.mockReset()
     h.confirmJobSpy.mockReset()
     h.retryJobSpy.mockReset()
     h.gradeSpy.mockReset()
@@ -329,6 +333,7 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     // 入口自编排收敛：整卷批改 = 一次确认命令（带逐题修正）+ 轮询结果，
     // 不再逐题直连 /grade（并发限流责任移入后端编排器）。
     expect(h.confirmJobSpy).toHaveBeenCalledTimes(1)
+    expect(h.getResultSpy).toHaveBeenCalledWith('mingming', 'job-1')
     expect(h.gradeSpy).not.toHaveBeenCalled()
     const confirmReq = h.confirmJobSpy.mock.calls[0]![1] as {
       subject: string

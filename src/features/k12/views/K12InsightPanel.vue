@@ -17,11 +17,17 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   /** 学情=路由器（§3.11）：瓷片/薄弱条/挫败 CTA 点击 → 外层切学习档案。
-   *  TODO(子 Tab 直达)：RecordsView 归另一 agent，本轮外层只切到 records 首页，target 供后续接线。 */
+   *  子 Tab 直达：RecordsView 归另一 agent，本轮外层只切到 records 首页，target 已透传供该 owner 接线。 */
   (e: 'navigate', target: 'week' | 'mistakes' | 'practiceSets'): void
 }>()
 const { t } = useI18n()
 const store = useK12Store()
+
+// AP-027 IME 守卫：这些是 role="button" 键盘激活出口，组字中的回车（isComposing）不应触发跳转。
+const onNavKey = (e: KeyboardEvent, target: 'week' | 'mistakes' | 'practiceSets') => {
+  if (e.isComposing || e.keyCode === 229) return
+  emit('navigate', target)
+}
 
 // 练习集待打印数（原型 2617 第四瓷片）：draft 篮 items 求和，自拉不进 store（练习集面板归另一 agent）。
 const practicePending = ref<number | null>(null)
@@ -81,34 +87,43 @@ const weakBars = computed(() => {
       </h3>
       <span class="k12ins__hint" style="margin: 0">{{ t('k12.report.monthlyNote') }}</span>
     </div>
+    <div
+      v-if="store.reportError || store.mistakesError"
+      class="k12ins__error"
+      role="alert"
+      data-testid="insight-error"
+    >
+      <span>{{ [store.reportError, store.mistakesError].filter(Boolean).join('；') }}</span>
+      <button data-testid="insight-retry" @click="reload">{{ t('common.retry') }}</button>
+    </div>
     <template v-if="report && report.trend.total">
       <!-- 瓷片=路由器（§3.11）：除首块「证据已掌握」（§5.7 合法口径，替代已退役的辅导次数）外均可点跳学习档案 -->
       <div class="k12ins__tiles">
         <div class="k12ins__tile" data-testid="insight-tile-mastered"><b>{{ report.trend.mastered }} 条</b>{{ t('k12.report.tiles.mastered') }}</div>
         <div
           class="k12ins__tile k12ins__tile--nav" role="button" tabindex="0" data-testid="insight-tile-mistakes"
-          @click="emit('navigate', 'mistakes')" @keydown.enter="emit('navigate', 'mistakes')"
+          @click="emit('navigate', 'mistakes')" @keydown.enter="onNavKey($event, 'mistakes')"
         ><b>{{ report.month_new_mistakes }}</b>{{ t('k12.report.tiles.newMistakes') }}</div>
         <div
           class="k12ins__tile k12ins__tile--nav" role="button" tabindex="0" data-testid="insight-tile-week"
-          @click="emit('navigate', 'week')" @keydown.enter="emit('navigate', 'week')"
+          @click="emit('navigate', 'week')" @keydown.enter="onNavKey($event, 'week')"
         ><b>{{ reviewRateDisplay }}</b>{{ t('k12.report.tiles.reviewRate') }}</div>
         <!-- 原型 2617 第四瓷片：练习集「待打印 N 道」（§4.11 术语裁决表述；已掌握·待复习并进下方学期汇总行） -->
         <div
           class="k12ins__tile k12ins__tile--nav" role="button" tabindex="0" data-testid="insight-tile-practice"
-          @click="emit('navigate', 'practiceSets')" @keydown.enter="emit('navigate', 'practiceSets')"
+          @click="emit('navigate', 'practiceSets')" @keydown.enter="onNavKey($event, 'practiceSets')"
         ><b>{{ practicePending != null ? `${practicePending} 道` : '—' }}</b>{{ t('k12.report.tiles.practicePending') }}</div>
       </div>
       <p class="k12ins__hint" data-testid="k12-semester-note" style="margin-top: 8px">
         {{ t('k12.report.semesterTotal', { n: report.trend.total }) }}<template v-if="subjectCounts.length">（{{ subjectCounts.join(' · ') }}）</template> · {{ t('k12.report.semesterStatus', { m: report.trend.mastered, r: report.trend.reviewing, d: report.trend.retried }) }}
       </p>
       <h3 class="k12ins__h">{{ t('k12.report.weakTop3') }}</h3>
-      <!-- 薄弱条可点 → 全部错题（路由器出口；子 Tab 直达见 navigate TODO） -->
+      <!-- 薄弱条可点 → 全部错题（路由器出口；子 Tab 直达见 navigate 事件注释） -->
       <div class="k12ins__bars">
         <div
           v-for="w in weakBars" :key="w.name" class="k12ins__bar k12ins__bar--nav"
           role="button" tabindex="0" data-testid="insight-weak-bar"
-          @click="emit('navigate', 'mistakes')" @keydown.enter="emit('navigate', 'mistakes')"
+          @click="emit('navigate', 'mistakes')" @keydown.enter="onNavKey($event, 'mistakes')"
         >
           <span class="k12ins__barlabel">{{ w.name }}</span>
           <span class="k12ins__rail"><span class="k12ins__fill" :style="{ width: w.pct + '%' }" /></span>
@@ -123,7 +138,7 @@ const weakBars = computed(() => {
       </div>
       <div v-if="report.suggestion" class="k12ins__sugg">💡 {{ report.suggestion }}</div>
     </template>
-    <p v-else class="k12ins__hint">{{ report?.suggestion || t('k12.report.empty') }}</p>
+    <p v-else-if="!store.reportError" class="k12ins__hint">{{ report?.suggestion || t('k12.report.empty') }}</p>
   </section>
 </template>
 
@@ -132,6 +147,16 @@ const weakBars = computed(() => {
 .k12ins__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .k12ins__h { font-size: 14px; color: var(--hc-text-primary); margin: 16px 0 8px; }
 .k12ins__hint { color: var(--hc-text-muted); font-size: 11.5px; line-height: 1.6; }
+.k12ins__error {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 12px; padding: 9px 11px; border-radius: var(--hc-radius-md);
+  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+  color: var(--hc-error); font-size: 12px;
+}
+.k12ins__error button {
+  flex-shrink: 0; border: 1px solid currentColor; border-radius: var(--hc-radius-sm);
+  background: transparent; color: inherit; padding: 4px 10px; cursor: pointer;
+}
 .k12ins__tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
 .k12ins__tile {
   border: .5px solid var(--hc-border); border-radius: var(--hc-radius-lg); background: var(--hc-bg-card);

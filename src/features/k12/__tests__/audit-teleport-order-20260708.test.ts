@@ -43,8 +43,13 @@ const ChatViewLike = defineComponent({
         h(K12ChatEnhancement, {
           agentId: 'ming', agentName: '小明的辅导老师',
           metadata: { 'k12.grade_term': '五年级上' }, descriptor: K12_VIEW_DESCRIPTOR,
+          composerImage: 'data:image/png;base64,Zm9v',
           'onUpdate:recordsActive': () => {},
         }),
+        // 场景交互内容必须进入通用消息滚动区，不能作为消息区之前的兄弟节点把会话挤到屏幕外。
+        h('div', { class: 'hc-chat__messages', 'data-testid': 'chat-messages' }, [
+          h('div', { id: 'hc-chat-scenario-inline' }),
+        ]),
         // 锚点在增强组件**之后**（ChatView 真实顺序）
         h('div', { id: 'hc-chat-scenario-footer' }),
         h('div', { id: 'hc-chat-scenario-composer-top' }),
@@ -87,6 +92,27 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
     expect(bridgeInFooter).toBe(true) // 桥接条到达页脚锚点
     expect(recognizeInActions).toBe(false) // 手动识题按钮已删（BUG-20260711-E：识题=图片自动改道，原型「零手动按钮」）
     expect(chipsInComposer).toBe(false) // chips 已改数据流上交，不得再落锚点（BUG-20260709）
+    w.unmount()
+  })
+
+  it('识题与辅导内容进入消息滚动区，不得覆盖或挤走原会话', async () => {
+    const w = mount(ChatViewLike, {
+      global: {
+        plugins: [createPinia(), i18n()],
+        stubs: {
+          MarkdownRenderer: true,
+          RecognizeGuardPanel: { template: '<div data-testid="recognize-guard-stub" />' },
+        },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    const messages = document.querySelector('[data-testid="chat-messages"]')
+    const inline = document.getElementById('hc-chat-scenario-inline')
+    expect(messages?.contains(inline)).toBe(true)
+    expect(inline?.querySelector('.k12enh-tutor')).toBeTruthy()
+    expect(inline?.querySelector('[data-testid="recognize-guard-stub"]')).toBeTruthy()
     w.unmount()
   })
 })

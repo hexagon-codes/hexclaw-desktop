@@ -22,7 +22,7 @@ import { K12_TEMPLATE_SKILLS, K12_INFRA_SKILLS, isRequiredSkill, defaultBoundSki
 
 /** 建档/改档同构：传 agent 即进「改档」模式（预填 + updateAgent），否则「建档」（registerAgent） */
 const props = defineProps<{
-  agent?: { name: string; display_name?: string; metadata?: Record<string, string>; skills?: string[]; system_prompt?: string; provider?: string; model?: string }
+  agent?: { name: string; display_name?: string; description?: string; metadata?: Record<string, string>; skills?: string[]; system_prompt?: string; provider?: string; model?: string }
 }>()
 
 const emit = defineEmits<{ (e: 'created', name: string): void; (e: 'close'): void; (e: 'removed', name: string): void }>()
@@ -147,6 +147,11 @@ const soulText = ref(props.agent?.system_prompt?.trim() || tutorSoul.value)
 watch(tutorSoul, (v) => { if (!soulDirty.value) soulText.value = v })
 function resetSoul() { soulDirty.value = false; soulText.value = tutorSoul.value }
 
+async function refreshAgentsAfterPersistence() {
+  const refreshed = await agentsStore.loadAgents()
+  if (!refreshed) toast.warning(t('k12.profile.refreshFailed'))
+}
+
 async function submit() {
   submitting.value = true
   error.value = ''
@@ -162,13 +167,32 @@ async function submit() {
         model: model.value,
         ...(skillsDirty.value ? { skills: boundSkills() } : {}),
       })
-      await k12UpdateProfile({
-        agent: props.agent.name,
-        child_name: childName.value.trim(),
-        grade_term: grade.value,
-        textbook_edition: textbook.value,
-      })
-      await agentsStore.loadAgents()
+      try {
+        await k12UpdateProfile({
+          agent: props.agent.name,
+          child_name: childName.value.trim(),
+          grade_term: grade.value,
+          textbook_edition: textbook.value,
+        })
+      } catch (profileError) {
+        // Agent 与 Profile 是两个后端命令：第二步失败时恢复第一步，避免“新显示名/模型 + 旧年级”。
+        try {
+          await updateAgent(props.agent.name, {
+            display_name: props.agent.display_name || props.agent.name,
+            description: props.agent.description ?? '',
+            system_prompt: props.agent.system_prompt ?? '',
+            provider: props.agent.provider ?? '',
+            model: props.agent.model ?? '',
+            ...(skillsDirty.value ? { skills: props.agent.skills ?? [] } : {}),
+          })
+        } catch (rollbackError) {
+          const original = profileError instanceof Error ? profileError.message : String(profileError)
+          const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
+          throw new Error(`${original}; rollback failed: ${rollback}`)
+        }
+        throw profileError
+      }
+      await refreshAgentsAfterPersistence()
       toast.success(t('k12.profile.saved'))
       emit('created', props.agent.name)
       emit('close')
@@ -205,11 +229,25 @@ async function submit() {
       }
       throw profileError
     }
-    await agentsStore.loadAgents()
-    // 随模板默认注册自动化任务（错题卷/提醒/月报/学期确认，投递桌面 chat）。
-    // 最佳努力、不阻断建档：桌面未启用 cron 时后端 501，store 已静默降级。
-    void k12Store.setupAutomation(name).catch(() => {})
+    await refreshAgentsAfterPersistence()
+    // 建档即初始化四个默认工作流。失败不回滚已成功的档案，但必须等待真实结果并显式告警，
+    // 不能 fire-and-forget 后仍宣称提醒已注册（架构 §3.13：不支持时需可见提示）。
+    let provisioned: Awaited<ReturnType<typeof k12Store.setupAutomation>> = []
+    try {
+      provisioned = await k12Store.setupAutomation(name)
+    } catch {
+      provisioned = []
+    }
     toast.success(t('k12.profile.created', { name: displayName.value }))
+    const expectedWorkflowKinds = new Set(['weekly-sheet', 'return-reminder', 'semester-spring', 'semester-fall'])
+    const actualWorkflowKinds = new Set(provisioned.map((job) => job.kind))
+    const automationComplete = actualWorkflowKinds.size === expectedWorkflowKinds.size
+      && [...expectedWorkflowKinds].every((kind) => actualWorkflowKinds.has(kind))
+    if (automationComplete) {
+      toast.success(t('k12.profile.automationReady'))
+    } else {
+      toast.warning(t('k12.profile.automationIncomplete', { count: actualWorkflowKinds.size }))
+    }
     emit('created', name)
     emit('close')
   } catch (e) {
@@ -236,7 +274,9 @@ async function submit() {
 
         <label class="k12pf__field">
           <span>{{ t('k12.profile.childName') }}</span>
-          <input v-model="childName" class="k12pf__input" :placeholder="t('k12.profile.childNamePlaceholder')" />
+          <HcClearableField>
+            <input v-model="childName" class="k12pf__input" :placeholder="t('k12.profile.childNamePlaceholder')" />
+          </HcClearableField>
         </label>
 
         <div class="k12pf__row">
@@ -284,13 +324,15 @@ async function submit() {
         <details class="k12pf__adv">
           <summary>辅导语气 · 已按档案配好，可微调</summary>
           <div class="k12pf__soul">
-            <textarea
+            <HcClearableField>
+              <textarea
               v-model="soulText"
               class="k12pf__soultext"
               data-testid="k12-soul-text"
               rows="4"
               @input="soulDirty = true"
             />
+            </HcClearableField>
             <button v-if="soulDirty" type="button" class="k12pf__soulreset" @click="resetSoul">恢复默认语气</button>
           </div>
         </details>

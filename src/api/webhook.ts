@@ -23,6 +23,57 @@ export interface Webhook {
   created_at: string
 }
 
+export type K12WebhookEventType =
+  | 'k12.submission.requested.v1'
+  | 'k12.practice_return.requested.v1'
+  | 'k12.workflow_run.requested.v1'
+
+export type K12WebhookReceiptStatus =
+  | 'accepted'
+  | 'processing'
+  | 'succeeded'
+  | 'failed'
+  | 'outcome_unknown'
+  | 'rejected'
+
+export interface K12WebhookBinding {
+  binding_id: string
+  name: string
+  agent_id: string
+  learner_id: string
+  scope: 'direct'
+  allowed_events: K12WebhookEventType[]
+  allowed_workflows?: string[]
+  has_secret: boolean
+  secret_version: number
+  status: 'disabled' | 'enabled'
+  created_by: string
+  rotated_at?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface K12WebhookReceipt {
+  receipt_id: string
+  binding_id: string
+  event_id?: string
+  event_type?: K12WebhookEventType
+  payload_digest: string
+  status: K12WebhookReceiptStatus
+  job_or_execution_ref?: string
+  failure_kind?: string
+  retryable: boolean
+  attempt_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface K12WebhookMutation {
+  enabled?: boolean
+  allowed_events?: K12WebhookEventType[]
+  allowed_workflows?: string[]
+}
+
 /** 拼出 Webhook 的真实接收 URL（后端按 name 注册 /api/v1/webhooks/{name}）。 */
 export function webhookUrlFor(name: string): string {
   return `${env.apiBase}/api/v1/webhooks/${encodeURIComponent(name)}`
@@ -32,6 +83,31 @@ export function webhookUrlFor(name: string): string {
 export function getWebhooks() {
   return apiGet<{ webhooks: Webhook[]; total: number }>('/api/v1/webhooks', {
     user_id: DESKTOP_USER_ID,
+  })
+}
+
+/** K12 management is always scoped by the authenticated desktop guardian and
+ * the selected TutorAgent. The receiver body never supplies either identity. */
+export function getK12Webhooks(agentId: string) {
+  return apiGet<{ k12_bindings: K12WebhookBinding[]; total: number }>('/api/v1/webhooks', {
+    user_id: DESKTOP_USER_ID,
+    agent_id: agentId,
+  })
+}
+
+export function getK12WebhookReceipts(name: string, agentId: string) {
+  return apiGet<{ receipts: K12WebhookReceipt[]; total: number }>('/api/v1/webhooks', {
+    user_id: DESKTOP_USER_ID,
+    agent_id: agentId,
+    binding_name: name,
+  })
+}
+
+export function getK12WebhookReceipt(receiptId: string, agentId: string) {
+  return apiGet<{ receipt: K12WebhookReceipt }>('/api/v1/webhooks', {
+    user_id: DESKTOP_USER_ID,
+    agent_id: agentId,
+    receipt_id: receiptId,
   })
 }
 
@@ -63,6 +139,34 @@ export function createWebhook(data: {
   )
 }
 
+export function createK12Webhook(data: {
+  name: string
+  agentId: string
+  learnerId: string
+  allowedEvents: K12WebhookEventType[]
+  allowedWorkflows?: string[]
+}) {
+  return apiPost<{
+    binding: K12WebhookBinding
+    id: string
+    binding_id: string
+    name: string
+    type: 'k12'
+    url: string
+    enabled: boolean
+    secret: string
+  }>('/api/v1/webhooks', {
+    name: data.name,
+    type: 'k12',
+    agent_id: data.agentId,
+    learner_id: data.learnerId,
+    allowed_events: data.allowedEvents,
+    allowed_workflows: data.allowedWorkflows ?? [],
+    user_id: DESKTOP_USER_ID,
+    enabled: false,
+  })
+}
+
 /** 启用/停用 Webhook（PATCH /api/v1/webhooks/{name}）。
  *  停用即回到「验签记录、423 不派发」态；授权完成后启用开始派发 Agent。 */
 export function updateWebhookEnabled(name: string, enabled: boolean) {
@@ -72,8 +176,38 @@ export function updateWebhookEnabled(name: string, enabled: boolean) {
   )
 }
 
+function k12ManagementPath(name: string, agentId: string): string {
+  return `/api/v1/webhooks/${encodeURIComponent(name)}?user_id=${encodeURIComponent(DESKTOP_USER_ID)}&agent_id=${encodeURIComponent(agentId)}`
+}
+
+export function updateK12Webhook(name: string, agentId: string, data: K12WebhookMutation) {
+  return apiPatch<{ binding: K12WebhookBinding; name: string; enabled: boolean }>(
+    k12ManagementPath(name, agentId),
+    data,
+  )
+}
+
+export function rotateK12WebhookSecret(name: string, agentId: string) {
+  return apiPatch<{ binding: K12WebhookBinding; name: string; enabled: boolean; secret: string }>(
+    k12ManagementPath(name, agentId),
+    { rotate_secret: true },
+  )
+}
+
+/** Redispatches the same durable Receipt/event envelope. The backend accepts
+ * this only for failed Receipts carrying persisted local retry evidence. */
+export function retryK12WebhookReceipt(name: string, agentId: string, receiptId: string) {
+  return apiPatch<{ receipt: K12WebhookReceipt }>(k12ManagementPath(name, agentId), {
+    retry_receipt_id: receiptId,
+  })
+}
+
 /** 删除 Webhook — 按 name 寻址（后端路由 DELETE /api/v1/webhooks/{name}，Unregister 按 name）。
  *  注意：必须传 webhook.name，不能传 webhook.id —— 传 id 后端找不到，静默 no-op（bug 2026-06-22）。 */
 export function deleteWebhook(name: string) {
   return apiDelete<{ message: string }>(`/api/v1/webhooks/${encodeURIComponent(name)}`)
+}
+
+export function deleteK12Webhook(name: string, agentId: string) {
+  return apiDelete<{ message: string }>(k12ManagementPath(name, agentId))
 }

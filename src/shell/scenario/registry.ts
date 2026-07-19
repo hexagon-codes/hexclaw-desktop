@@ -36,6 +36,14 @@ export interface ScenarioTemplate {
   form: Component
 }
 
+/** 场景包注入自动化页的 Webhook 管理扩展；通用面板只负责装配与展开。 */
+export interface WebhookManagementExtension {
+  key: string
+  title: string
+  description: string
+  component: Component
+}
+
 interface RegistryState {
   descriptors: Map<string, InstanceViewDescriptor>
   schemas: Map<string, RecordSchema>
@@ -47,8 +55,8 @@ interface RegistryState {
   agentCardExtension: Component | null
   /** 场景建档模板（模板库露出 + 建档表单） */
   scenarioTemplates: ScenarioTemplate[]
-  /** 设置页扩展组件（场景专属备份/偏好等；SettingsView 只渲染，不认识场景 · M2-20260710） */
-  settingsExtension: Component | null
+  /** 自动化 Webhook 页的场景管理扩展（领域 UI 仍由 features/* 提供） */
+  webhookManagementExtensions: WebhookManagementExtension[]
   /** 场景实例内部名模式（BUG-20260712：实例已删除时元数据不复存在，shell 靠名字形状
    *  识别遗留孤儿会话——如标题恰为某场景实例内部名 → 显示「已删除的智能体」） */
   instanceIdPatterns: RegExp[]
@@ -63,7 +71,7 @@ function createState(): RegistryState {
     chatEnhancement: null,
     agentCardExtension: null,
     scenarioTemplates: [],
-    settingsExtension: null,
+    webhookManagementExtensions: [],
     instanceIdPatterns: [],
   }
 }
@@ -113,14 +121,8 @@ export const scenarioRegistry = {
   registerAgentCardExtension(component: Component): void {
     state.agentCardExtension = component
   },
-  registerSettingsExtension(component: Component): void {
-    state.settingsExtension = component
-  },
   get agentCardExtension(): Component | null {
     return state.agentCardExtension
-  },
-  get settingsExtension(): Component | null {
-    return state.settingsExtension
   },
   /** 某实例是否为场景实例（有增强视图）——供通用视图判定是否渲染扩展 */
   isScenarioInstance(ctx: ScenarioContext): boolean {
@@ -142,6 +144,14 @@ export const scenarioRegistry = {
   },
   get scenarioTemplates(): ScenarioTemplate[] {
     return state.scenarioTemplates
+  },
+
+  /** 注册自动化 Webhook 页扩展（通用面板不 import 任一场景包）。 */
+  registerWebhookManagementExtension(extension: WebhookManagementExtension): void {
+    state.webhookManagementExtensions.push(extension)
+  },
+  get webhookManagementExtensions(): readonly WebhookManagementExtension[] {
+    return state.webhookManagementExtensions
   },
 
   /** 注册动作 handler */

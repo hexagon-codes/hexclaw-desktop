@@ -5,6 +5,7 @@
  * PDF = 浏览器打印对话框另存；Word = HTML 内容 .doc（Word 可直接打开，无需额外依赖，砍 CSV/JSON）。
  */
 import type { RecordItem } from '@/contracts'
+import { invoke } from '@tauri-apps/api/core'
 import { isTauri } from '@/utils/platform'
 import { downloadInApp } from '@/utils/download'
 import { renderDocument } from '@/api/k12'
@@ -65,17 +66,15 @@ export function buildWorksheetHtml(items: RecordItem[], meta: WorksheetMeta): st
 </body></html>`
 }
 
-/** 通过隐藏 iframe 打印（PDF = 打印对话框另存为 PDF）。返回是否成功发起。 */
-export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
-  if (typeof document === 'undefined') return false
-  const html = buildWorksheetHtml(items, meta)
-  // BUG-E：Tauri macOS WKWebView 里 iframe `window.print()` 是 no-op（同 BUG-20260712-#6 `<a download>` 失效）。
-  // 桌面端把 HTML 经原生 Save 对话框 + Rust 写盘存成文件，用户用系统预览/浏览器打开后打印。
+/**
+ * 打印同源 HTML：Desktop 交给 Rust 原生 PrintJob，浏览器开发态才使用 window.print()。
+ * Desktop 的布尔值来自系统 NSPrintOperation：取消/失败必须原样返回 false，禁止保存文件兜底。
+ */
+async function printHtml(html: string): Promise<boolean> {
   if (isTauri()) {
-    const b64 = btoa(unescape(encodeURIComponent(html))) // UTF-8 安全 base64（中文题干）
-    await downloadInApp(`data:text/html;base64,${b64}`, worksheetExportFilename(meta, 'html'))
-    return true
+    return invoke<boolean>('native_print_html', { html })
   }
+  if (typeof document === 'undefined') return false
   const iframe = document.createElement('iframe')
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
   document.body.appendChild(iframe)
@@ -90,9 +89,14 @@ export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): 
   const win = iframe.contentWindow!
   win.focus()
   win.print()
-  // 打印对话框关闭后清理（延迟以覆盖同步/异步打印实现）
   setTimeout(() => iframe.remove(), 1000)
   return true
+}
+
+/** 打印错题卷。返回原生打印是否提交成功；取消/失败均为 false。 */
+export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
+  const html = buildWorksheetHtml(items, meta)
+  return printHtml(html)
 }
 
 // ── 练习卷（题目卷/答案卷）打印（§4.13 呈现物真实渲染，2026-07-18）────────
@@ -129,31 +133,13 @@ export function buildPracticePaperHtml(markdown: string, title: string): string 
 </style></head><body>${body}</body></html>`
 }
 
-/** 打印练习卷（复用错题卷打印通道：Tauri 存 HTML 走系统打开，浏览器 iframe window.print）。 */
+/**
+ * 打印练习卷：canonical Markdown 先进入同源 A4 渲染，再由 Desktop 原生 PrintJob
+ * 或浏览器开发态系统打印对话框交付。另存 PDF 不参与此路径。
+ */
 export async function printPracticePaper(markdown: string, title: string): Promise<boolean> {
-  if (typeof document === 'undefined') return false
   const html = buildPracticePaperHtml(markdown, title)
-  if (isTauri()) {
-    const b64 = btoa(unescape(encodeURIComponent(html)))
-    await downloadInApp(`data:text/html;base64,${b64}`, `${title}.html`)
-    return true
-  }
-  const iframe = document.createElement('iframe')
-  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
-  document.body.appendChild(iframe)
-  const doc = iframe.contentWindow?.document
-  if (!doc) {
-    iframe.remove()
-    return false
-  }
-  doc.open()
-  doc.write(html)
-  doc.close()
-  const win = iframe.contentWindow!
-  win.focus()
-  win.print()
-  setTimeout(() => iframe.remove(), 1000)
-  return true
+  return printHtml(html)
 }
 
 // ── 备课卡打印 ──────────────────────────────────────────────
@@ -198,43 +184,18 @@ export function prepCardToText(card: PrepCard, meta: { title: string; gradeLabel
   return `${head}\n${body}`.trim()
 }
 
-/** 打印备课卡（隐藏 iframe 打印，同 printWorksheet）。返回是否成功发起。 */
+/** 打印备课卡。Desktop 必须返回原生 PrintJob 结果，取消不得冒充成功。 */
 export async function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel: string }): Promise<boolean> {
-  if (typeof document === 'undefined') return false
-  // BUG-E：Tauri macOS WKWebView 里 iframe `window.print()` 是 no-op（同 printWorksheet）。
-  // 桌面端把 HTML 经原生 Save 对话框 + Rust 写盘存成文件，用户用系统预览/浏览器打开后打印。
-  if (isTauri()) {
-    const html = buildPrepCardHtml(card, meta)
-    const b64 = btoa(unescape(encodeURIComponent(html))) // UTF-8 安全 base64（中文内容）
-    await downloadInApp(`data:text/html;base64,${b64}`, `${meta.title}.html`)
-    return true
-  }
-  const iframe = document.createElement('iframe')
-  iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
-  document.body.appendChild(iframe)
-  const doc = iframe.contentWindow?.document
-  if (!doc) {
-    iframe.remove()
-    return false
-  }
-  doc.open()
-  doc.write(buildPrepCardHtml(card, meta))
-  doc.close()
-  const win = iframe.contentWindow!
-  win.focus()
-  win.print()
-  setTimeout(() => iframe.remove(), 1000)
-  return true
+  return printHtml(buildPrepCardHtml(card, meta))
 }
 
 /** 触发浏览器下载一个文件 */
-export async function download(filename: string, content: string, mime: string): Promise<void> {
+export async function download(filename: string, content: string, mime: string): Promise<boolean> {
   // BUG-20260712-#6：Tauri WKWebView 里 `<a download>` / blob URL 不触发下载（点了没反应）。
   // 桌面端走原生 Save 对话框 + Rust 写盘（downloadInApp）；浏览器/dev 保留 blob 下载。
   if (isTauri()) {
     const b64 = btoa(unescape(encodeURIComponent(content))) // UTF-8 安全 base64（中文内容）
-    await downloadInApp(`data:${mime};base64,${b64}`, filename)
-    return
+    return (await downloadInApp(`data:${mime};base64,${b64}`, filename)) !== null
   }
   const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
@@ -245,6 +206,7 @@ export async function download(filename: string, content: string, mime: string):
   a.click()
   a.remove()
   setTimeout(() => URL.revokeObjectURL(url), 0)
+  return true
 }
 
 /** 文件名：{称呼}_错题本_{起}_{止}.{ext} */
@@ -289,6 +251,50 @@ async function blobToBase64(blob: Blob): Promise<string> {
   return btoa(bin)
 }
 
+function safePdfFilename(title: string): string {
+  const base = title.replace(/[\\/:*?"<>|]/g, '_').trim() || 'HexClaw'
+  return `${base}.pdf`
+}
+
+export interface ArchiveDocumentExport {
+  content: string
+  format: 'pdf' | 'docx'
+  title: string
+  filename: string
+}
+
+/** 将同一份服务端 canonical Markdown 渲染并保存为 PDF / DOCX。 */
+export async function exportArchiveDocument(options: ArchiveDocumentExport): Promise<boolean> {
+  const { content, format, title, filename } = options
+  const blob = await renderDocument({ content, format, title })
+  const mime = format === 'pdf'
+    ? 'application/pdf'
+    : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  if (isTauri()) {
+    const b64 = await blobToBase64(blob)
+    return (await downloadInApp(`data:${mime};base64,${b64}`, filename)) !== null
+  }
+  if (typeof document === 'undefined') return false
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+  return true
+}
+
+async function saveRenderedPdf(content: string, title: string, filename = safePdfFilename(title)): Promise<boolean> {
+  return exportArchiveDocument({ content, format: 'pdf', title, filename })
+}
+
+/** 练习卷/观察练习卡另存 PDF；独立于 PrintJob，不得写打印成功。 */
+export function savePracticePaperPdf(markdown: string, title: string): Promise<boolean> {
+  return saveRenderedPdf(markdown, title)
+}
+
 /**
  * 导出 PDF。
  * 项-7 治本：Tauri（桌面 WKWebView）下 iframe 打印失效——把错题卷 Markdown 发给后端
@@ -298,10 +304,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 export async function exportPdf(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
   if (isTauri()) {
     const md = buildWorksheetMarkdown(items, meta)
-    const blob = await renderDocument({ content: md, format: 'pdf', title: meta.title })
-    const b64 = await blobToBase64(blob)
-    await downloadInApp(`data:application/pdf;base64,${b64}`, worksheetExportFilename(meta, 'pdf'))
-    return true
+    return saveRenderedPdf(md, meta.title, worksheetExportFilename(meta, 'pdf'))
   }
   return printWorksheet(items, meta)
 }

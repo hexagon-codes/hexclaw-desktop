@@ -9,9 +9,11 @@ import K12RecordsView from '../views/K12RecordsView.vue'
 const h = vi.hoisted(() => ({
   exportMdSpy: vi.fn().mockResolvedValue({ format: 'markdown', content: '# 错题本\n- 3.8×3' }),
   downloadSpy: vi.fn(),
+  exportArchiveDocumentSpy: vi.fn(),
 }))
 vi.mock('../export', () => ({
   printWorksheet: vi.fn(() => true), exportPdf: vi.fn(), exportWord: vi.fn(),
+  exportArchiveDocument: (...a: unknown[]) => h.exportArchiveDocumentSpy(...a),
   worksheetFilename: vi.fn(() => 'f.md'),
   download: (...a: unknown[]) => h.downloadSpy(...a),
 }))
@@ -31,8 +33,13 @@ function i18n() {
 
 // 未闭环补齐（审计 #6）：导出菜单缺「Markdown」——后端 GET /export 导出完整错题本 md，前端 api
 // (k12ExportMd) 就绪但无按钮。补齐后：点 Markdown → 调 k12ExportMd → 下载 .md。
-describe('未闭环补齐: 错题本导出 Markdown', () => {
-  beforeEach(() => { setActivePinia(createPinia()); h.exportMdSpy.mockClear(); h.downloadSpy.mockClear() })
+describe('学习档案三格式导出共用服务端 canonical Markdown', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    h.exportMdSpy.mockClear()
+    h.downloadSpy.mockClear()
+    h.exportArchiveDocumentSpy.mockClear().mockResolvedValue(true)
+  })
 
   it('导出菜单有 Markdown，点击调 k12ExportMd 并下载', async () => {
     const w = mount(K12RecordsView, {
@@ -49,5 +56,25 @@ describe('未闭环补齐: 错题本导出 Markdown', () => {
     await flushPromises()
     expect(h.exportMdSpy).toHaveBeenCalledWith('mingming')
     expect(h.downloadSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['PDF', 'pdf'],
+    ['Word', 'docx'],
+  ] as const)('导出 %s 先取完整学习档案 Markdown，再只做格式渲染', async (label, format) => {
+    const w = mount(K12RecordsView, {
+      props: { agentId: 'mingming', agentName: '小明的辅导老师', grade: '五年级上 · 人教版' },
+      global: { plugins: [createPinia(), i18n()] },
+    })
+    await flushPromises()
+    await w.find('.k12rec__export button').trigger('click')
+    await w.findAll('.k12rec__menu button').find((b) => b.text().includes(label))!.trigger('click')
+    await flushPromises()
+
+    expect(h.exportMdSpy).toHaveBeenCalledWith('mingming')
+    expect(h.exportArchiveDocumentSpy).toHaveBeenCalledWith(expect.objectContaining({
+      content: '# 错题本\n- 3.8×3',
+      format,
+    }))
   })
 })

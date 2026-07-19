@@ -45,6 +45,7 @@ vi.mock('@/api/k12', () => ({
   k12GetGradingJob,
   k12ConfirmGradingJob: vi.fn(),
   k12RetryGradingJob: vi.fn(),
+  k12CancelGradingJob: vi.fn().mockResolvedValue({}),
   k12Grade: vi.fn(),
   k12ColdStart: vi.fn(),
   k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
@@ -130,7 +131,7 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     setActivePinia(createPinia())
     vi.clearAllMocks()
     document.body.innerHTML =
-      '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div>'
+      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div>'
   })
 
   it('★传入 composerImage → RecognizeGuardPanel 打开、GradingJob 创建收到该图、emit 清空', async () => {
@@ -148,9 +149,10 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     // 识题护栏应自动打开并用该图跑识题（回显护栏出题）
     expect(k12CreateGradingJob, 'composerImage 应触发自动识题（当前 prop 不存在/被忽略=bug）').toHaveBeenCalledWith(
       expect.objectContaining({ image_base64: PNG_DATA_URL }),
+      expect.any(AbortSignal),
     )
     await flushPromises()
-    expect(w.find('[data-testid="rq-item"]').exists(), '识题结果应渲染回显护栏').toBe(true)
+    expect(document.querySelector('#hc-chat-scenario-inline [data-testid="rq-item"]'), '识题结果应渲染回显护栏').toBeTruthy()
     // 消费后通知外壳清空，避免重复触发
     expect(w.emitted('update:composerImage'), '消费后应 emit 清空').toBeTruthy()
   })

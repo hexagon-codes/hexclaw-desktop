@@ -3,7 +3,7 @@
  *   任务1 照片真实上传：选图即传（预览缩略 + 进度 + 失败重试），保存带 source_asset_id；
  *          美术卡片显 asset:// 缩略图；
  *   任务2 观察练习卡：art 版本的 practice_card（服务端提炼）渲染成练习卡 + 打印/发送/完成打卡；
- *   任务3 点评发送出口：发送成功显目标；未接线/未绑定诚实降级为复制文本（绝不虚标已发送）。
+ *   任务3 点评发送出口：durable Receipt 区分平台受理/送达；未绑定给连接设置 CTA。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -18,8 +18,11 @@ const h = vi.hoisted(() => ({
   createSpy: vi.fn(),
   uploadSpy: vi.fn(),
   sendSpy: vi.fn(),
+  retryDeliverySpy: vi.fn(),
+  queryDeliverySpy: vi.fn(),
   cardDoneSpy: vi.fn(),
   printSpy: vi.fn(),
+  savePdfSpy: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
   toastInfo: vi.fn(),
@@ -34,12 +37,17 @@ vi.mock('@/api/k12', () => ({
   k12RecordMistake: vi.fn(),
   k12UploadAsset: (a: string, f: File, p?: (n: number) => void) => h.uploadSpy(a, f, p),
   k12AssetURL: (agent: string, id: string) =>
-    id.startsWith('asset://') ? `http://test/api/k12/assets/${id.slice(id.lastIndexOf('/') + 1)}?agent=${agent}` : '',
+    id.startsWith('asset://')
+      ? `http://test/api/k12/assets/${id.slice(id.lastIndexOf('/') + 1)}?agent=${agent}`
+      : '',
   k12SendWorkFeedback: (a: string, id: string, kind?: string) => h.sendSpy(a, id, kind),
+  k12RetryDeliveryReceipt: (a: string, id: string) => h.retryDeliverySpy(a, id),
+  k12QueryDeliveryReceipt: (a: string, id: string) => h.queryDeliverySpy(a, id),
   k12MarkPracticeCardDone: (a: string, id: string) => h.cardDoneSpy(a, id),
 }))
 vi.mock('../export', () => ({
   printPracticePaper: (md: string, title: string) => h.printSpy(md, title),
+  savePracticePaperPdf: (md: string, title: string) => h.savePdfSpy(md, title),
 }))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: h.toastSuccess, error: h.toastError, info: h.toastInfo }),
@@ -47,22 +55,49 @@ vi.mock('@/composables/useToast', () => ({
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh } },
   })
 }
 
 function artWork(over: Partial<CreativeWorkDTO> = {}): CreativeWorkDTO {
   return {
-    record_id: 'w-art', work_type: 'art', title: '雨后的校园', task: '写生',
-    status: 'feedback_ready', status_label: '已点评',
-    versions: [{
-      version_id: 'v1',
-      source_asset_id: 'asset://k12-xiaoming/deadbeef.png',
-      feedback: '画面主体清楚。\n## 建议\n- 试试只用三档明暗再画一张小稿。',
-      practice_card: '- 试试只用三档明暗再画一张小稿。',
-    }],
+    record_id: 'w-art',
+    work_type: 'art',
+    title: '雨后的校园',
+    task: '写生',
+    status: 'feedback_ready',
+    status_label: '已点评',
+    versions: [
+      {
+        version_id: 'v1',
+        source_asset_id: 'asset://k12-xiaoming/deadbeef.png',
+        feedback: '画面主体清楚。\n## 建议\n- 试试只用三档明暗再画一张小稿。',
+        practice_card: '- 试试只用三档明暗再画一张小稿。',
+      },
+    ],
     ...over,
+  }
+}
+
+function delivery(status: 'sending' | 'delivered' | 'failed' | 'outcome_unknown' = 'sending') {
+  return {
+    delivery_id: 'delivery-work-1',
+    agent_name: 'k12-xiaoming',
+    object_kind: 'creative_work_feedback',
+    object_id: 'w-art',
+    binding_id: 'agent-rule:1',
+    target: { platform: 'dingtalk', chat_id: 'staff-1', label: '钉钉 · 妈妈' },
+    status,
+    dedupe_key: 'd1',
+    payload_digest: 'sha256:x',
+    payload_json: '{}',
+    render_manifest_json: '{}',
+    external_message_id: 'pqk-1',
+    attempt: 1,
+    created_at: 1,
+    updated_at: 1,
   }
 }
 
@@ -76,17 +111,25 @@ function render() {
 beforeEach(() => {
   h.listSpy.mockReset().mockResolvedValue({ items: [] })
   h.createSpy.mockReset().mockResolvedValue({ record_id: 'w-new', created: true })
-  h.uploadSpy.mockReset().mockResolvedValue({ asset_id: 'asset://k12-xiaoming/abc123.png', size: 3 })
-  h.sendSpy.mockReset().mockResolvedValue({ ok: true, target: '钉钉 · 妈妈' })
+  h.uploadSpy
+    .mockReset()
+    .mockResolvedValue({ asset_id: 'asset://k12-xiaoming/abc123.png', size: 3 })
+  h.sendSpy.mockReset().mockResolvedValue(delivery())
+  h.retryDeliverySpy.mockReset().mockResolvedValue(delivery())
+  h.queryDeliverySpy.mockReset().mockResolvedValue(delivery('delivered'))
   h.cardDoneSpy.mockReset().mockResolvedValue(artWork())
   h.printSpy.mockReset().mockResolvedValue(true)
+  h.savePdfSpy.mockReset().mockResolvedValue(true)
   h.toastSuccess.mockReset()
   h.toastError.mockReset()
   h.toastInfo.mockReset()
-  vi.stubGlobal('URL', Object.assign(URL, {
-    createObjectURL: vi.fn(() => 'blob:preview'),
-    revokeObjectURL: vi.fn(),
-  }))
+  vi.stubGlobal(
+    'URL',
+    Object.assign(URL, {
+      createObjectURL: vi.fn(() => 'blob:preview'),
+      revokeObjectURL: vi.fn(),
+    }),
+  )
 })
 
 async function pickPhoto(w: ReturnType<typeof render>, file: File) {
@@ -167,7 +210,13 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
 
   it('写作作品不渲染练习卡（观察练习卡只属于美术）', async () => {
     h.listSpy.mockResolvedValue({
-      items: [artWork({ record_id: 'w-wr', work_type: 'writing', versions: [{ version_id: 'v1', feedback: '好' }] })],
+      items: [
+        artWork({
+          record_id: 'w-wr',
+          work_type: 'writing',
+          versions: [{ version_id: 'v1', feedback: '好' }],
+        }),
+      ],
     })
     const w = render()
     await flushPromises()
@@ -179,7 +228,10 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
     const w = render()
     await flushPromises()
     await w.find('[data-testid="cw-card-print"]').trigger('click')
-    expect(h.printSpy).toHaveBeenCalledWith(expect.stringContaining('三档明暗'), expect.stringContaining('雨后的校园'))
+    expect(h.printSpy).toHaveBeenCalledWith(
+      expect.stringContaining('三档明暗'),
+      expect.stringContaining('雨后的校园'),
+    )
 
     await w.find('[data-testid="cw-card-done"]').trigger('click')
     await flushPromises()
@@ -195,6 +247,21 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
     expect(w2.find('[data-testid="cw-card-done"]').exists()).toBe(false)
   })
 
+  it('观察练习卡另存 PDF 与打印分轨', async () => {
+    h.listSpy.mockResolvedValue({ items: [artWork()] })
+    const w = render()
+    await flushPromises()
+
+    await w.find('[data-testid="cw-card-save-pdf"]').trigger('click')
+    await flushPromises()
+
+    expect(h.savePdfSpy).toHaveBeenCalledWith(
+      expect.stringContaining('三档明暗'),
+      expect.stringContaining('雨后的校园'),
+    )
+    expect(h.printSpy).not.toHaveBeenCalled()
+  })
+
   it('练习卡「发送到手机」以 practice_card 类别走发送端点', async () => {
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
@@ -205,18 +272,23 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
   })
 })
 
-describe('任务3 · 点评发送出口（§3.12 未绑定诚实降级）', () => {
-  it('发送成功：调用端点 + 成功提示含目标', async () => {
+describe('任务3 · 点评发送出口（DD-024 durable Receipt）', () => {
+  it('平台受理只显示发送中；查询送达证据后才成功', async () => {
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
     await w.find('[data-testid="cw-send-feedback"]').trigger('click')
     await flushPromises()
     expect(h.sendSpy).toHaveBeenCalledWith('k12-xiaoming', 'w-art', 'feedback')
-    expect(h.toastSuccess).toHaveBeenCalledWith(expect.stringContaining('钉钉 · 妈妈'))
+    expect(h.toastSuccess).not.toHaveBeenCalled()
+    expect(w.get('[data-testid="cw-feedback-delivery-receipt"]').text()).toContain('等待送达确认')
+    await w.get('[data-testid="cw-feedback-delivery-query"]').trigger('click')
+    await flushPromises()
+    expect(h.queryDeliverySpy).toHaveBeenCalledWith('k12-xiaoming', 'delivery-work-1')
+    expect(h.toastSuccess).toHaveBeenCalledWith(expect.stringContaining('已送达'))
   })
 
-  it('未绑定/未接线：复制文本兜底 + 透传家长向原因（不虚标已发送）', async () => {
+  it('未绑定：不复制文本冒充发送，并给连接设置 CTA', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     vi.stubGlobal('navigator', Object.assign(navigator, { clipboard: { writeText } }))
     h.sendSpy.mockRejectedValue(new Error('这个辅导助手还没绑定手机私聊'))
@@ -225,8 +297,37 @@ describe('任务3 · 点评发送出口（§3.12 未绑定诚实降级）', () =
     await flushPromises()
     await w.find('[data-testid="cw-send-feedback"]').trigger('click')
     await flushPromises()
-    expect(writeText).toHaveBeenCalledWith(expect.stringContaining('雨后的校园'))
+    expect(writeText).not.toHaveBeenCalled()
     expect(h.toastSuccess).not.toHaveBeenCalled()
-    expect(h.toastInfo).toHaveBeenCalledWith(expect.stringContaining('还没绑定手机私聊'))
+    expect(h.toastError).toHaveBeenCalledWith(expect.stringContaining('还没绑定手机私聊'))
+    expect(w.get('[data-testid="cw-feedback-bind-required"] a').attributes('href')).toBe(
+      '/channels',
+    )
+  })
+
+  it('明确 failed 才显示安全重试，并复用同一个 delivery_id', async () => {
+    h.sendSpy.mockResolvedValue({ ...delivery('failed'), last_error: '平台明确拒绝' })
+    h.retryDeliverySpy.mockResolvedValue(delivery('sending'))
+    h.listSpy.mockResolvedValue({ items: [artWork()] })
+    const w = render()
+    await flushPromises()
+    await w.get('[data-testid="cw-send-feedback"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="cw-feedback-delivery-retry"]').exists()).toBe(true)
+    await w.get('[data-testid="cw-feedback-delivery-retry"]').trigger('click')
+    await flushPromises()
+    expect(h.retryDeliverySpy).toHaveBeenCalledWith('k12-xiaoming', 'delivery-work-1')
+    expect(w.find('[data-testid="cw-feedback-delivery-retry"]').exists()).toBe(false)
+  })
+
+  it('outcome_unknown 只提供查询，不提供重发', async () => {
+    h.sendSpy.mockResolvedValue(delivery('outcome_unknown'))
+    h.listSpy.mockResolvedValue({ items: [artWork()] })
+    const w = render()
+    await flushPromises()
+    await w.get('[data-testid="cw-send-feedback"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="cw-feedback-delivery-retry"]').exists()).toBe(false)
+    expect(w.find('[data-testid="cw-feedback-delivery-query"]').exists()).toBe(true)
   })
 })

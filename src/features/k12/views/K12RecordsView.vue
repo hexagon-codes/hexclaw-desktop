@@ -5,7 +5,7 @@
  * 复用通用 shell 的 RecordList（schema 驱动），本组件只提供 K12 数据接线 + 场景专属动作
  * （出错题卷 / 导出 / 备份）+ 学情聚合。多孩隔离 = 以 agentId 拉取，切实例即换数据。
  */
-import { computed, ref, watch, onMounted } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RecordList from '@/shell/records/RecordList.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
@@ -17,18 +17,34 @@ import { useK12Store } from '../store'
 import K12PracticeSetsPanel from './K12PracticeSetsPanel.vue'
 import K12CreativeWorksPanel from './K12CreativeWorksPanel.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
-import { k12ReviewRetry, k12ExportMd, k12AddAccumulation, k12AddToBasket } from '@/api/k12'
-// 积累「生成默写题加入练习集」端点未收编进 api/k12.ts（该文件其他会话活跃禁改）→ 暂用 apiPost 内联，
-// TODO：待 api/k12.ts 解锁后收编为 k12AccumDictationToBasket。
+import {
+  k12ReviewRetry,
+  k12ExportMd,
+  k12AddAccumulation,
+  k12AddToBasket,
+  k12FillPracticeBasket,
+  k12GenerateCustomPaper,
+  type CustomPaperDifficulty,
+  type CustomPaperResp,
+  type CustomPaperScope,
+  type CustomPaperTotal,
+} from '@/api/k12'
+// 积累「生成默写题加入练习集」端点未收编进 api/k12.ts（该文件其他会话活跃禁改）→ 此处经 apiPost 直调，
+// 契约与下方 dictationToBasket 一致；api/k12.ts 解锁后由该文件 owner 收编为 k12AccumDictationToBasket。
 import { apiPost } from '@/api/client'
 import { MISTAKE_SCHEMA, ACCUMULATION_SCHEMA } from '../schemas'
-import { exportPdf, exportWord, worksheetFilename, download } from '../export'
+import { exportArchiveDocument, worksheetFilename, download } from '../export'
 import type { RecordItem } from '@/contracts'
 
+type RecordsTarget = 'week' | 'mistakes' | 'practiceSets' | 'accumulation' | 'works'
 const props = defineProps<{
   agentId: string
   agentName: string
   grade: string
+  /** 教材边界（k12.textbook_edition）；旧直挂测试可从「年级 · 教材」兼容解析。 */
+  textbook?: string
+  /** 学情路由器直达目标；变化时切到对应档案对象。 */
+  target?: RecordsTarget
 }>()
 
 const emit = defineEmits<{
@@ -43,7 +59,11 @@ const store = useK12Store()
 
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：学习档案五对象 Tab——本周复习(行动)｜全部错题(档案)｜
 // 练习集｜积累｜作品；学情已提升为顶栏一等 Tab（K12InsightPanel）。默认落在「本周复习」（行动优先）。
-const sub = ref<'week' | 'mistakes' | 'practiceSets' | 'accumulation' | 'works'>('week')
+const sub = ref<RecordsTarget>(props.target ?? 'week')
+watch(() => props.target, (target) => {
+  if (target) sub.value = target
+})
+const creativeWorksRef = ref<InstanceType<typeof K12CreativeWorksPanel>>()
 
 // 积累本分科过滤（#5）：''=全部 / '语文' / '英语'，触达后端 GET /accumulation?subject=（BUG-3）。
 const accumSubject = ref('')
@@ -66,7 +86,13 @@ async function reload() {
 }
 onMounted(reload)
 // 切实例（多孩）→ 重置分科过滤 + 收起记录表单 + 清庆祝态，避免带上一个孩子的会话态
-watch(() => props.agentId, () => { accumSubject.value = ''; accumAddOpen.value = false; clearedThisSession.value = false; reload() })
+watch(() => props.agentId, () => {
+  closeRetry()
+  accumSubject.value = ''
+  accumAddOpen.value = false
+  clearedThisSession.value = false
+  reload()
+})
 
 // 手动记积累本（#4）：家长在会话里遇到好东西 → 直接记进积累本（PRD §3.13）。
 // 学情相关（本月辅导次数/学期分科/薄弱条/完成率）已随 IA 迁移抽到 K12InsightPanel（顶栏一等 Tab）。
@@ -162,30 +188,9 @@ async function submitMistake() {
 
 // ── 组卷改道装篮（§3.6/§3.8 闭环断裂修复 · 原型 buildVerifiedPracticeSet 购物车模型）──
 // 「生成复习卷 / 自定义组卷」不再客户端 exportPdf 直出 PDF（绕过练习集=闭环断裂）：
-// 统一为「装篮」——逐题 AddToBasket（幂等去重），打印/发送在练习集完成（打印即确认固化）。
-// 原题重现暂无独立验算答案 → verification_status 诚实置 'pending'（后端验证后转 verified/blocked）。
-// TODO(§4.7)：语文/英语 verbatim 类「题面即答案」，可由字符校验直判 verified——待后端语义拆分后特判。
+// 默认复习卷复用后端 FillBasketFromDue；自定义卷走 DD-027 正式命令。Desktop 只提交一次
+// 冻结参数，生成、验证、去重、装篮由后端原子完成，禁止逐题 review/retry + AddToBasket 拼卷。
 const basketBusy = ref(false)
-async function addRecordsToBasket(records: RecordItem[], via: 'weekly' | 'custom') {
-  let added = 0
-  let deduped = 0
-  for (const rec of records) {
-    const resp = await k12AddToBasket({
-      agent: props.agentId,
-      item: {
-        item_id: '',
-        source_problem_id: rec.recordId,
-        subject: typeof rec.fields.subject === 'string' ? rec.fields.subject : '',
-        added_via: via,
-        question_markdown: String(rec.fields.question ?? ''),
-        verification_status: 'pending',
-      },
-    })
-    if (resp.added) added++
-    else deduped++
-  }
-  return { added, deduped }
-}
 /** 复习队列对应的到期记录（顺序按队列） */
 function reviewQueueRecords(): RecordItem[] {
   const v = view.value
@@ -200,8 +205,8 @@ async function buildReviewSet() {
   if (!records.length) return
   basketBusy.value = true
   try {
-    const { added, deduped } = await addRecordsToBasket(records, 'weekly')
-    toast.success(t('k12.records.basketBatchAdded', { n: added, m: deduped }))
+    const { added, skipped } = await k12FillPracticeBasket(props.agentId)
+    toast.success(t('k12.records.basketFillAdded', { n: added, m: skipped }))
     sub.value = 'practiceSets'
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
@@ -210,47 +215,104 @@ async function buildReviewSet() {
   }
 }
 
-// 自定义组卷（20260709 渐进披露 / 20260718 改道装篮）：主动作保持零配置智能默认；想微调的少数家长
-// 走此次级面板。范围先做两档（本周待复习 / 全部未掌握）；`total` 客户端切片限量可兑现；
-// `perQ`(每题变式数)/`difficulty`(难度)需后端组卷端点按参数出变式题，客户端装原题无法兑现（契约缺口，UI 先留参数）。
+// 自定义组卷（DD-027A）：失败时保留请求快照和 idempotency_key；原地重试同一正式命令，
+// 使“服务端已提交、客户端丢响应”能读取同一 committed 回执，不重复装篮。
 const customPaperOpen = ref(false)
-const paperForm = ref({ scope: 'week', perQ: '1', difficulty: 'same', total: 'all' })
-const paperScopeOpts = computed(() => [
-  { v: 'week', label: t('k12.customPaper.scopeWeek') },
-  { v: 'unmastered', label: t('k12.customPaper.scopeUnmastered') },
-])
-const paperPerQOpts = ['1', '2', '3']
-const paperDiffOpts = computed(() => [
-  { v: 'same', label: t('k12.customPaper.diffSame') },
-  { v: 'easier', label: t('k12.customPaper.diffEasier') },
-  { v: 'harder', label: t('k12.customPaper.diffHarder') },
-])
-const paperTotalOpts = computed(() => [
-  { v: 'all', label: t('k12.customPaper.totalAll') },
-  { v: '5', label: '≤ 5' },
-  { v: '10', label: '≤ 10' },
-])
-async function genCustomPaper() {
+const paperForm = ref<{
+  scope: CustomPaperScope
+  perQ: 1 | 2 | 3
+  difficulty: CustomPaperDifficulty
+  total: CustomPaperTotal
+}>({ scope: 'week', perQ: 1, difficulty: 'same', total: 'all' })
+const customPaperError = ref('')
+const customPaperResult = ref<CustomPaperResp | null>(null)
+const customPaperIdempotencyKey = ref('')
+let customPaperKeySequence = 0
+
+function newCustomPaperKey(): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return `desktop-custom-paper:${props.agentId}:${uuid ?? `${Date.now()}-${++customPaperKeySequence}`}`
+}
+
+function toggleCustomPaper() {
+  if (basketBusy.value) return
+  if (customPaperOpen.value) {
+    customPaperOpen.value = false
+    return
+  }
+  customPaperError.value = ''
+  customPaperResult.value = null
+  customPaperIdempotencyKey.value = newCustomPaperKey()
+  customPaperOpen.value = true
+}
+
+function closeCustomPaper() {
   if (basketBusy.value) return
   customPaperOpen.value = false
-  // 范围取材：本周待复习=复习队列到期项；全部未掌握=档案里未掌握/未归档全量。
-  const source =
-    paperForm.value.scope === 'week'
-      ? reviewQueueRecords()
-      : (view.value?.items ?? []).filter((i) => i.status !== 'mastered' && i.status !== 'archived')
-  const limit = paperForm.value.total === 'all' ? source.length : Number(paperForm.value.total)
-  const records = source.slice(0, limit)
-  if (!records.length) return
+}
+
+watch(paperForm, () => {
+  if (basketBusy.value) return
+  customPaperError.value = ''
+  customPaperResult.value = null
+  customPaperIdempotencyKey.value = newCustomPaperKey()
+}, { deep: true })
+
+const gradeBoundary = computed(() => props.grade.split('·')[0]?.trim() ?? '')
+const textbookBoundary = computed(() =>
+  props.textbook?.trim() || props.grade.split('·').slice(1).join('·').trim(),
+)
+const paperScopeOpts = computed(() => [
+  { v: 'week' as const, label: t('k12.customPaper.scopeWeek') },
+  { v: 'unmastered' as const, label: t('k12.customPaper.scopeUnmastered') },
+])
+const paperPerQOpts = [1, 2, 3] as const
+const paperDiffOpts = computed(() => [
+  { v: 'same' as const, label: t('k12.customPaper.diffSame') },
+  { v: 'easier' as const, label: t('k12.customPaper.diffEasier') },
+  { v: 'harder' as const, label: t('k12.customPaper.diffHarder') },
+])
+const paperTotalOpts = computed(() => [
+  { v: 'all' as const, label: t('k12.customPaper.totalAll') },
+  { v: 5 as const, label: '≤ 5' },
+  { v: 10 as const, label: '≤ 10' },
+])
+function paperDifficultyLabel(value: CustomPaperDifficulty): string {
+  return paperDiffOpts.value.find((option) => option.v === value)?.label ?? value
+}
+async function genCustomPaper() {
+  if (basketBusy.value) return
+  if (!textbookBoundary.value) {
+    customPaperError.value = t('k12.customPaper.textbookRequired')
+    return
+  }
+  customPaperError.value = ''
+  customPaperResult.value = null
+  if (!customPaperIdempotencyKey.value) customPaperIdempotencyKey.value = newCustomPaperKey()
   basketBusy.value = true
   try {
-    const { added, deduped } = await addRecordsToBasket(records, 'custom')
-    toast.success(t('k12.records.basketBatchAdded', { n: added, m: deduped }))
-    sub.value = 'practiceSets'
+    const result = await k12GenerateCustomPaper({
+      agent: props.agentId,
+      idempotency_key: customPaperIdempotencyKey.value,
+      scope: paperForm.value.scope,
+      total: paperForm.value.total,
+      per_source: paperForm.value.perQ,
+      difficulty: paperForm.value.difficulty,
+      textbook: textbookBoundary.value,
+      ...(gradeBoundary.value ? { grade: gradeBoundary.value } : {}),
+    })
+    if (result.status !== 'committed') throw new Error(t('k12.customPaper.notCommitted'))
+    customPaperResult.value = result
   } catch (e) {
-    toast.error(e instanceof Error ? e.message : String(e))
+    customPaperError.value = e instanceof Error ? e.message : String(e)
   } finally {
     basketBusy.value = false
   }
+}
+
+function viewCustomPaperBasket() {
+  customPaperOpen.value = false
+  sub.value = 'practiceSets'
 }
 
 const view = computed(() => store.mistakeView)
@@ -283,7 +345,8 @@ function practiceEarly() {
 // 本周清零庆祝态（§3.6 / 原型 k12WeekClearState）：清零是一周唯一的正反馈时刻——
 // 空态区分「本轮有做对清零」（庆祝）vs「本来就无到期」（中性计划文案）。
 // DTO 无状态变更时间戳（无法判「今天 retried/mastered」），先以会话内清零动作近似：
-// 本会话「家长确认已会」把队列里的题清掉且队列随之清空 → 庆祝。TODO：后端下发 updated_at 后改为按日判定。
+// 本会话「家长确认已会」把队列里的题清掉且队列随之清空 → 庆祝（后端下发 updated_at 后可升级为按日判定，
+// 当前会话内近似仅影响庆祝时机粒度，不影响正确性）。
 const clearedThisSession = ref(false)
 const weekCleared = computed(() => !hasReviewQueue.value && clearedThisSession.value)
 function isInReviewQueue(recordId: string): boolean {
@@ -397,6 +460,11 @@ function closeRetry() {
   retryAbort = null
   retry.value = { open: false, loading: false, error: false, solution: '', question: '', answer: '', expectedAnswer: '', badge: '', revealed: false, basketed: false }
 }
+onBeforeUnmount(() => {
+  retryGen++
+  retryAbort?.abort()
+  retryAbort = null
+})
 
 async function copyRetrySolution() {
   if (!retry.value.revealed || !retry.value.solution) return
@@ -518,7 +586,7 @@ async function markMasteredFromDetail() {
 // §3.9 检验出口（原型 openAccumulationDetail 三出口之一）：积累详情「生成默写题，加入练习集」——
 // 复制/发送是素材取用（不污染闭环），想检验记没记住走此出口（added_via=accumulation，后端生成默写题装篮）。
 // 端点契约（后端另一 agent 在做，先按约定接）：POST /accumulation/{id}/dictation-to-basket → { record_id, added }。
-// api/k12.ts 其他会话活跃禁改 → apiPost 内联，TODO 待解锁后收编为 k12AccumDictationToBasket。
+// api/k12.ts 其他会话活跃禁改 → 此处 apiPost 内联；解锁后由该文件 owner 收编为 k12AccumDictationToBasket。
 const dictationBusy = ref(false)
 const dictationAdded = ref<string[]>([]) // 本会话已装篮的积累 record_id（按钮幂等置灰）
 async function dictationToBasket() {
@@ -567,20 +635,21 @@ function todayLabel(): string {
   const n = new Date()
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
 }
-function worksheetMeta() {
-  return { childName: props.agentName, title: t('k12.records.worksheetTitle'), dateLabel: todayLabel() }
-}
-function currentItems(): RecordItem[] {
-  return view.value?.items ?? []
-}
 // 出卷（exportPdf 直出）旧路径已删（20260718 §3.8 改道装篮，见 buildReviewSet）；
 // 下方导出仅存档案导出（错题本 PDF/Word/Markdown 档案），非出卷。
-async function doExport(ext: 'pdf' | 'doc') {
+async function doExport(format: 'pdf' | 'docx') {
   exportOpen.value = false
   const d = todayLabel().replace(/-/g, '').slice(4)
   try {
-    if (ext === 'pdf') await exportPdf(currentItems(), worksheetMeta())
-    else await exportWord(currentItems(), worksheetMeta(), worksheetFilename(props.agentName, t('k12.records.worksheetTitle'), d, d, 'doc'))
+    const res = await k12ExportMd(props.agentId)
+    if (res.render_error) throw new Error(res.render_error)
+    const title = t('k12.tabs.records')
+    await exportArchiveDocument({
+      content: res.content,
+      format,
+      title,
+      filename: worksheetFilename(props.agentName, title, d, d, format),
+    })
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e)) // 导出失败 surface，不再静默无反应
   }
@@ -614,8 +683,8 @@ async function doExportMd() {
         <button :class="{ on: sub === 'works' }" data-testid="subtab-works" @click="sub = 'works'">{{ t('k12.subTabs.works') }}</button>
       </div>
       <span class="k12rec__sp" />
-      <!-- 20260709 视觉评审（原型 c8a194e 定稿）：①功能位 emoji → 单色描边图标；②备份/恢复低频动作
-           不占常驻顶栏 → 与导出合并进「⋯」溢出菜单（导出项仅错题 tab，备份全 tab 可达）。 -->
+      <!-- 20260719 信息架构定稿：①功能位 emoji → 单色描边图标；②导出与备份/恢复均为学习档案级动作，
+           不占常驻顶栏，统一收进五个子页均可达的「⋯」溢出菜单。 -->
       <button v-if="sub === 'mistakes'" class="btn k12rec__addbtn" data-testid="mistake-add-open" @click="mistakeAddOpen = !mistakeAddOpen">
         <svg class="k12ic" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
         {{ t('k12.mistakeAdd.open') }}
@@ -624,16 +693,18 @@ async function doExportMd() {
         <svg class="k12ic" viewBox="0 0 24 24"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
         {{ t('k12.accum.addOpen') }}
       </button>
+      <button v-else-if="sub === 'works'" class="btn k12rec__addbtn" data-testid="cw-add-open" @click="creativeWorksRef?.openAdd()">
+        <svg class="k12ic" viewBox="0 0 24 24"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+        {{ t('k12.works.addWork') }}
+      </button>
       <div class="k12rec__export">
         <button class="btn" :title="t('k12.actions.more')" @click="exportOpen = !exportOpen">⋯</button>
         <div v-if="exportOpen" class="k12rec__menu">
-          <template v-if="sub === 'mistakes'">
-            <button @click="doExport('pdf')">{{ t('k12.actions.export') }} PDF</button>
-            <button @click="doExport('doc')">{{ t('k12.actions.export') }} Word</button>
-            <button @click="doExportMd">{{ t('k12.actions.export') }} Markdown</button>
-          </template>
+          <button @click="doExport('pdf')">{{ t('k12.actions.export') }} PDF</button>
+          <button @click="doExport('docx')">{{ t('k12.actions.export') }} Word</button>
+          <button @click="doExportMd">{{ t('k12.actions.export') }} Markdown</button>
           <!-- 原型正文不放筛选条；分科过滤保留为低频溢出动作，避免挤占积累内容层级。 -->
-          <template v-else-if="sub === 'accumulation'">
+          <template v-if="sub === 'accumulation'">
             <button data-testid="accum-filter-all" @click="setAccumSubject(''); exportOpen = false">{{ t('k12.accum.filterAll') }}</button>
             <button data-testid="accum-filter-chinese" @click="setAccumSubject('语文'); exportOpen = false">{{ t('k12.accum.filterChinese') }}</button>
             <button data-testid="accum-filter-english" @click="setAccumSubject('英语'); exportOpen = false">{{ t('k12.accum.filterEnglish') }}</button>
@@ -646,7 +717,14 @@ async function doExportMd() {
     <div class="k12rec__body">
       <!-- 本周复习（行动页，PRD §3.6）：复习队列 + 趋势 + 生成复习卷；档案查管在「全部错题」。 -->
       <section v-if="sub === 'week'" data-testid="week-section">
-        <div v-if="store.error" class="k12rec__err">{{ store.error }}</div>
+        <div v-if="store.mistakesError" class="k12rec__err" role="alert" data-testid="mistakes-error">
+          <span>{{ store.mistakesError }}</span>
+          <button class="btn btn-ghost" data-testid="mistakes-retry" @click="store.loadMistakes(props.agentId)">{{ t('common.retry') }}</button>
+        </div>
+        <div v-if="store.reportError" class="k12rec__err" role="alert" data-testid="records-report-error">
+          <span>{{ store.reportError }}</span>
+          <button class="btn btn-ghost" data-testid="records-report-retry" @click="store.loadReport(props.agentId)">{{ t('common.retry') }}</button>
+        </div>
 
         <!-- 项-5：复习队列空 → 正向空态卡（不留空白）。
              §3.6 本周清零庆祝态：本轮有做对清零 → 庆祝（一周唯一正反馈时刻，不做排名不做焦虑）；
@@ -693,7 +771,13 @@ async function doExportMd() {
                 <svg class="k12ic" viewBox="0 0 24 24"><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v8H6z" /></svg>
                 {{ t('k12.records.genWorksheet') }}
               </button>
-              <button class="btn" data-testid="custom-paper-open" @click="customPaperOpen = !customPaperOpen">
+              <button
+                type="button"
+                class="btn"
+                data-testid="custom-paper-open"
+                :disabled="basketBusy"
+                @click="toggleCustomPaper"
+              >
                 <svg class="k12ic" viewBox="0 0 24 24"><path d="M4 21v-7" /><path d="M4 10V3" /><path d="M12 21v-9" /><path d="M12 8V3" /><path d="M20 21v-5" /><path d="M20 12V3" /><path d="M2 14h4" /><path d="M10 8h4" /><path d="M18 16h4" /></svg>
                 {{ t('k12.records.customPaper') }}
               </button>
@@ -704,7 +788,10 @@ async function doExportMd() {
 
       <!-- 全部错题（档案页，PRD §3.7）：查找、核对、管理——直接展开筛选 + 全量，不与本周复习重复行动。 -->
       <section v-else-if="sub === 'mistakes'" data-testid="mistakes-section">
-        <div v-if="store.error" class="k12rec__err">{{ store.error }}</div>
+        <div v-if="store.mistakesError" class="k12rec__err" role="alert" data-testid="mistakes-error">
+          <span>{{ store.mistakesError }}</span>
+          <button class="btn btn-ghost" data-testid="mistakes-retry" @click="store.loadMistakes(props.agentId)">{{ t('common.retry') }}</button>
+        </div>
         <p class="k12rec__hint" style="margin-top: 0">{{ t('k12.records.archiveDesc') }}</p>
         <div v-if="view" class="k12mistakes">
           <RecordList :schema="MISTAKE_SCHEMA" :view="view" hide-review @action="onAction" />
@@ -726,8 +813,12 @@ async function doExportMd() {
           <h3 class="k12rec__h" style="margin: 0">{{ t('k12.accum.title') }}</h3>
           <span class="k12rec__hint" style="margin: 0">{{ t('k12.accum.desc') }}</span>
         </div>
+        <div v-if="store.accumulationError" class="k12rec__err" role="alert" data-testid="accum-error">
+          <span>{{ store.accumulationError }}</span>
+          <button class="btn btn-ghost" data-testid="accum-retry" @click="reloadAccum">{{ t('common.retry') }}</button>
+        </div>
         <!-- 原型 app.html:1619-1623：积累不是错题状态机，固定单行“学科→内容→类型→出处→状态→详情”。 -->
-        <div v-if="accumView && accumView.items.length" class="k12accum__list">
+        <div v-else-if="accumView && accumView.items.length" class="k12accum__list">
           <!-- 20260718 原型定案对齐（引文列表）：引文置首整行（衬线 + 引号压角，量度 62ch），
                meta 行 = 学科/类型/来源/收藏日期/状态/详情；结构同 .k12accum__row 换皮。 -->
           <div v-for="item in accumView.items" :key="item.recordId" class="k12accum__row k12accum__row--quote">
@@ -751,7 +842,7 @@ async function doExportMd() {
 
       <!-- 作品：语文写作 / 美术（真实 /creative-works）——成长版本 + 证据化点评 -->
       <section v-else-if="sub === 'works'" data-testid="works-section">
-        <K12CreativeWorksPanel :agent-id="props.agentId" />
+        <K12CreativeWorksPanel ref="creativeWorksRef" :agent-id="props.agentId" :show-add-button="false" />
       </section>
 
       <!-- 学情已提升为顶栏一等 Tab（K12InsightPanel，2026-07-18 IA 迁移），不再是二级 Tab。 -->
@@ -771,7 +862,8 @@ async function doExportMd() {
           <!-- 20260712 视觉评审定案（原型 openAddMistake 同步）：题目=英雄字段置首、多行 textarea
                （应用题/古诗/英语整句整段粘贴，单行 input=捕获时刻流失条目）；错处同多行；
                textarea 内 Enter=换行，⌘/Ctrl+Enter 提交。实现不得回退单行 input。 -->
-          <textarea
+          <HcClearableField>
+            <textarea
             v-model="mistakeForm.problem"
             class="k12accum__content k12accum__content--area"
             data-testid="mistake-problem"
@@ -779,6 +871,7 @@ async function doExportMd() {
             :placeholder="t('k12.mistakeAdd.problemPh')"
             @keydown="onMistakeKeydown"
           />
+          </HcClearableField>
           <div class="k12accum__field" data-testid="mistake-subject">
             <span>{{ t('k12.accum.subject') }}</span>
             <HcSelect
@@ -787,7 +880,8 @@ async function doExportMd() {
               :placeholder="t('k12.prep.pickHint')"
             />
           </div>
-          <textarea
+          <HcClearableField>
+            <textarea
             v-model="mistakeForm.studentAnswer"
             class="k12accum__content k12accum__content--area"
             data-testid="mistake-answer"
@@ -795,11 +889,14 @@ async function doExportMd() {
             :placeholder="t('k12.mistakeAdd.answerPh')"
             @keydown="onMistakeKeydown"
           />
-          <input
+          </HcClearableField>
+          <HcClearableField>
+            <input
             v-model="mistakeForm.knowledgePoints"
             class="k12accum__content"
             :placeholder="t('k12.mistakeAdd.kpPh')"
           />
+          </HcClearableField>
           <div class="k12rec__addhint">{{ t('k12.mistakeAdd.hint') }}</div>
           <div class="k12accum__actions">
             <button class="btn btn-ghost" @click="mistakeAddOpen = false">{{ t('k12.accum.cancel') }}</button>
@@ -829,13 +926,15 @@ async function doExportMd() {
         </div>
         <!-- 20260718 原型布局定案对齐：内容=英雄字段置首（同「记一条错题」题目置首惯例），科目+类型并排次之 -->
         <div class="k12accum__form k12accum__form--modal">
-          <textarea
+          <HcClearableField>
+            <textarea
             v-model="accumForm.content"
             class="k12accum__content"
             data-testid="accum-add-content"
             :placeholder="t('k12.accum.contentPlaceholder')"
             rows="4"
           />
+          </HcClearableField>
           <div class="k12accum__row">
             <div class="k12accum__field" data-testid="accum-add-subject">
               <span>{{ t('k12.accum.subject') }}</span>
@@ -861,12 +960,23 @@ async function doExportMd() {
 
     <!-- 自定义组卷 modal（原型 openCustomPaper=弹窗，同构位置 · BUG-20260709）
          渐进披露：一键零配置仍是主动作，微调参数走此弹窗。 -->
-    <div v-if="customPaperOpen" class="k12modal" @click.self="customPaperOpen = false">
-      <div class="k12modal__card">
+    <div v-if="customPaperOpen" class="k12modal" @click.self="closeCustomPaper">
+      <div
+        class="k12modal__card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="custom-paper-title"
+      >
         <div class="k12modal__head">
-          <b>{{ t('k12.records.customPaper') }}</b>
+          <b id="custom-paper-title">{{ t('k12.records.customPaper') }}</b>
           <span class="k12rec__sp" />
-          <button class="btn btn-ghost" @click="customPaperOpen = false">✕</button>
+          <button
+            type="button"
+            class="btn btn-ghost"
+            :disabled="basketBusy"
+            :aria-label="t('k12.customPaper.close')"
+            @click="closeCustomPaper"
+          >✕</button>
         </div>
         <div class="k12accum__form k12accum__form--modal" data-testid="custom-paper-form">
           <div class="k12rec__addhint">{{ t('k12.customPaper.hint') }}</div>
@@ -875,7 +985,10 @@ async function doExportMd() {
             <span class="k12paper__label">{{ t('k12.customPaper.scope') }}</span>
             <button
               v-for="o in paperScopeOpts" :key="o.v"
+              type="button"
               class="chip" :class="{ on: paperForm.scope === o.v }"
+              :disabled="basketBusy || !!customPaperResult"
+              :aria-pressed="paperForm.scope === o.v"
               :data-testid="`paper-scope-${o.v}`"
               @click="paperForm.scope = o.v"
             >{{ o.label }}</button>
@@ -884,7 +997,11 @@ async function doExportMd() {
             <span class="k12paper__label">{{ t('k12.customPaper.perQ') }}</span>
             <button
               v-for="n in paperPerQOpts" :key="n"
+              type="button"
               class="chip" :class="{ on: paperForm.perQ === n }"
+              :disabled="basketBusy || !!customPaperResult"
+              :aria-pressed="paperForm.perQ === n"
+              :data-testid="`paper-perq-${n}`"
               @click="paperForm.perQ = n"
             >{{ n }}</button>
           </div>
@@ -892,21 +1009,98 @@ async function doExportMd() {
             <span class="k12paper__label">{{ t('k12.customPaper.difficulty') }}</span>
             <button
               v-for="o in paperDiffOpts" :key="o.v"
+              type="button"
               class="chip" :class="{ on: paperForm.difficulty === o.v }"
+              :disabled="basketBusy || !!customPaperResult"
+              :aria-pressed="paperForm.difficulty === o.v"
+              :data-testid="`paper-difficulty-${o.v}`"
               @click="paperForm.difficulty = o.v"
             >{{ o.label }}</button>
+          </div>
+          <div class="k12rec__addhint" data-testid="custom-paper-contract-note">
+            {{ t('k12.customPaper.contractNote') }}
           </div>
           <div class="k12paper__row">
             <span class="k12paper__label">{{ t('k12.customPaper.total') }}</span>
             <button
               v-for="o in paperTotalOpts" :key="o.v"
+              type="button"
               class="chip" :class="{ on: paperForm.total === o.v }"
+              :disabled="basketBusy || !!customPaperResult"
+              :aria-pressed="paperForm.total === o.v"
               @click="paperForm.total = o.v"
             >{{ o.label }}</button>
           </div>
+          <p class="k12rec__addhint" data-testid="custom-paper-boundary">
+            {{ t('k12.customPaper.boundary', {
+              textbook: textbookBoundary || t('k12.customPaper.textbookMissing'),
+              grade: gradeBoundary || t('k12.customPaper.gradeMissing'),
+            }) }}
+          </p>
+          <p
+            v-if="basketBusy"
+            class="k12rec__addhint"
+            role="status"
+            aria-live="polite"
+            data-testid="custom-paper-progress"
+          >{{ t('k12.customPaper.generating') }}</p>
+          <div
+            v-else-if="customPaperError"
+            class="k12rec__error"
+            role="alert"
+            data-testid="custom-paper-error"
+          >
+            <span>{{ customPaperError }}</span>
+            <button
+              type="button"
+              class="btn btn-ghost"
+              data-testid="custom-paper-retry"
+              @click="genCustomPaper"
+            >{{ t('k12.customPaper.retry') }}</button>
+          </div>
+          <div
+            v-else-if="customPaperResult"
+            class="k12paper__result"
+            role="status"
+            aria-live="polite"
+            data-testid="custom-paper-result"
+          >
+            <b>{{ t('k12.customPaper.completed') }}</b>
+            <span>{{ t('k12.customPaper.receipt', {
+              id: customPaperResult.generation_job_id,
+              added: customPaperResult.added,
+              deduplicated: customPaperResult.deduplicated,
+            }) }}</span>
+            <span v-if="customPaperResult.added === 0">{{ t('k12.customPaper.idempotentReplay') }}</span>
+            <ul v-if="customPaperResult.items.length" class="k12paper__results">
+              <li v-for="item in customPaperResult.items" :key="item.item_id">
+                <span>{{ t('k12.customPaper.sourceItem', { id: item.source_problem_id }) }}</span>
+                <span>{{ t('k12.customPaper.actualDifficulty', { value: paperDifficultyLabel(item.actual_difficulty) }) }}</span>
+                <span>{{ item.verification_status === 'verified'
+                  ? t('k12.customPaper.verified')
+                  : t('k12.customPaper.blocked') }}</span>
+              </li>
+            </ul>
+          </div>
           <div class="k12accum__actions">
-            <button class="btn btn-ghost" @click="customPaperOpen = false">{{ t('k12.accum.cancel') }}</button>
-            <button class="btn btn-primary" data-testid="custom-paper-gen" @click="genCustomPaper">{{ t('k12.customPaper.generate') }}</button>
+            <button type="button" class="btn btn-ghost" :disabled="basketBusy" @click="closeCustomPaper">
+              {{ customPaperResult ? t('k12.customPaper.close') : t('k12.accum.cancel') }}
+            </button>
+            <button
+              v-if="customPaperResult"
+              type="button"
+              class="btn btn-primary"
+              data-testid="custom-paper-view-basket"
+              @click="viewCustomPaperBasket"
+            >{{ t('k12.customPaper.viewBasket') }}</button>
+            <button
+              v-else
+              type="button"
+              class="btn btn-primary"
+              data-testid="custom-paper-gen"
+              :disabled="basketBusy || !textbookBoundary"
+              @click="genCustomPaper"
+            >{{ basketBusy ? t('k12.customPaper.generatingShort') : t('k12.customPaper.generate') }}</button>
           </div>
         </div>
       </div>
@@ -1074,7 +1268,10 @@ async function doExportMd() {
 }
 .k12rec__sp { flex: 1; }
 .k12rec__body { flex: 1; overflow: auto; padding: 16px 20px 40px; }
-.k12rec__err { color: var(--hc-error); font-size: 13px; margin-bottom: 10px; }
+.k12rec__err {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  color: var(--hc-error); font-size: 13px; margin-bottom: 10px;
+}
 .k12rec__export { position: relative; }
 .k12rec__menu {
   position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
@@ -1186,6 +1383,19 @@ async function doExportMd() {
 .k12rec__addhint { font-size: 11.5px; color: var(--hc-text-muted); line-height: 1.5; }
 .k12paper__row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .k12paper__label { font-size: 12.5px; color: var(--hc-text-secondary); width: 92px; flex-shrink: 0; }
+.k12rec__error,
+.k12paper__result {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  border-radius: var(--hc-radius-md); padding: 10px 12px; font-size: 12px; line-height: 1.5;
+}
+.k12rec__error { color: var(--hc-danger); background: color-mix(in srgb, var(--hc-danger) 8%, transparent); }
+.k12paper__result { color: var(--hc-text-secondary); background: var(--hc-accent-subtle); }
+.k12paper__result > b { color: var(--hc-success); font-size: 13px; }
+.k12paper__results { width: 100%; display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.k12paper__results li {
+  display: flex; gap: 8px; flex-wrap: wrap; padding-top: 5px;
+  border-top: 0.5px solid var(--hc-border);
+}
 /* seg / pill / btn 复用全局 global.css 令牌类 */
 .seg { position: relative; display: inline-flex; background: var(--hc-bg-input); border: 1px solid var(--hc-border); border-radius: 11px; padding: 3px; gap: 2px; }
 .seg button { padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--hc-text-muted); background: transparent; border: none; cursor: pointer; }

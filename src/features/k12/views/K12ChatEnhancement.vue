@@ -17,6 +17,7 @@ import K12RecordsView from './K12RecordsView.vue'
 import K12InsightPanel from './K12InsightPanel.vue'
 import K12BackupModal from './K12BackupModal.vue'
 import RecognizeGuardPanel from './RecognizeGuardPanel.vue'
+import crabLogo from '@/assets/logo-crab.png'
 
 const props = defineProps<{
   agentId: string
@@ -32,6 +33,7 @@ const props = defineProps<{
 
 // 年级 = agent metadata 的 k12.grade_term（后端 profile 契约）；K12 领域键只在 features/k12 解析
 const grade = computed(() => props.metadata?.['k12.grade_term'] ?? '')
+const textbook = computed(() => props.metadata?.['k12.textbook_edition'] ?? '')
 // 头部显示名：优先据 metadata 的孩子称呼派生「小明的辅导助手」（bug 修复：display_name 在辅导路径
 // 可能为空、agentName 回退成内部 ID，头部就显示 ID）；无 child_name 时兜底 agentName。
 const childName = computed(() => props.metadata?.['k12.child_name'] ?? '')
@@ -46,6 +48,8 @@ const emit = defineEmits<{
   (e: 'update:composerChips', v: string[]): void
   /** composer 图片消费完复位（BUG-20260709 拍照发题不解题） */
   (e: 'update:composerImage', v: string): void
+  /** 会话内联槽是否有活动内容：shell 据此收起空会话占位并把新内容滚入可视区。 */
+  (e: 'update:inlineActive', v: boolean): void
 }>()
 
 const { t } = useI18n()
@@ -53,6 +57,12 @@ const route = useRoute()
 
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：顶栏三段 辅导｜学习档案｜学情（学情=一等 Tab）。
 const tab = ref<'chat' | 'records' | 'insights'>('chat')
+type RecordsTarget = 'week' | 'mistakes' | 'practiceSets'
+const recordsTarget = ref<RecordsTarget>('week')
+function goRecords(target: RecordsTarget) {
+  recordsTarget.value = target
+  tab.value = 'records'
+}
 // descriptor.headerTabs 的 kind → 本地 tab 值（report=学情）。
 function tabOfKind(kind: string): 'chat' | 'records' | 'insights' {
   if (kind === 'records') return 'records'
@@ -82,6 +92,9 @@ onMounted(async () => {
 
 // 学习档案与学情都接管消息区（外壳据 recordsActive 隐藏原生消息/输入）。
 watch(tab, (v) => emit('update:recordsActive', v !== 'chat'), { immediate: true })
+watch([recognizeOpen, tab], ([open, currentTab]) => {
+  emit('update:inlineActive', open && currentTab === 'chat')
+}, { immediate: true })
 // chips 数据流上交（辅导 tab 才显示；records tab 输入区本就隐藏，上交空数组保持状态干净）
 watch([composerChips, tab], () => {
   emit('update:composerChips', tab.value === 'chat' ? composerChips.value : [])
@@ -89,6 +102,7 @@ watch([composerChips, tab], () => {
 // 切换实例（多孩）→ 清掉上一个孩子的所有局部 UI 状态；子视图 key 负责同步重建。
 watch(() => props.agentId, () => {
   tab.value = 'chat'
+  recordsTarget.value = 'week'
   recognizeOpen.value = false
   backupOpen.value = false
   pendingRecognizeImage.value = ''
@@ -135,16 +149,27 @@ watch(() => props.composerImage, (img) => {
        识题走独立 OCR 管道不依赖聊天模型 vision；面板头部 ✕ 收起。
        tab 用 v-show 保活（BUG-20260712-S）：v-if 会在切错题本时销毁面板 → 切回重挂载
        重新识题（丢已识结果+重复慢调用）+ 在途 prep-card fetch 被 abort 且错误漏到错题本页。 -->
-  <div v-if="recognizeOpen" v-show="tab === 'chat'" class="k12enh-tutor">
-    <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
-    <RecognizeGuardPanel
-      :key="agentId"
-      :agent-id="agentId"
-      :grade="grade"
-      :initial-image="pendingRecognizeImage"
-      @close="recognizeOpen = false; pendingRecognizeImage = ''"
-    />
-  </div>
+  <Teleport v-if="recognizeOpen" defer to="#hc-chat-scenario-inline">
+    <div v-show="tab === 'chat'" class="k12enh-tutor" data-testid="k12-photo-assistant-message">
+      <div class="k12enh-tutor__avatar">
+        <img :src="crabLogo" alt="" />
+        <span />
+      </div>
+      <div class="k12enh-tutor__body">
+        <div class="k12enh-tutor__name">{{ headerName }}</div>
+        <div class="k12enh-tutor__bubble">
+          <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
+          <RecognizeGuardPanel
+            :key="agentId"
+            :agent-id="agentId"
+            :grade="grade"
+            :initial-image="pendingRecognizeImage"
+            @close="recognizeOpen = false; pendingRecognizeImage = ''"
+          />
+        </div>
+      </div>
+    </div>
+  </Teleport>
 
   <!-- 20260709：删「先花 3 分钟备课」nudge 条。家长辅导是临场的，主动引导改为拍照识题（下方相机入口），
        备课内容改为识题确认后由 RecognizeGuardPanel 内联出「这份作业的辅导要点」。 -->
@@ -175,6 +200,8 @@ watch(() => props.composerImage, (img) => {
       :agent-id="agentId"
       :agent-name="agentName"
       :grade="grade"
+      :textbook="textbook"
+      :target="recordsTarget"
       @go-tutor="tab = 'chat'"
       @go-insights="tab = 'insights'"
       @open-backup="backupOpen = true"
@@ -182,14 +209,19 @@ watch(() => props.composerImage, (img) => {
   </div>
 
   <!-- 学情视图（IA 定稿：顶栏一等 Tab，PRD §3.11）：接管消息区。
-       navigate=学情路由器出口（瓷片/薄弱条/挫败 CTA）→ 切学习档案；
-       TODO(子 Tab 直达)：RecordsView 归另一 agent，本轮不透传 target 指定子 Tab，后续接线。 -->
+       navigate=学情路由器出口（瓷片/薄弱条/挫败 CTA）→ 直达对应学习档案对象。 -->
   <div v-show="tab === 'insights'" class="k12enh-records">
-    <K12InsightPanel :key="agentId" :agent-id="agentId" :grade="grade || undefined" @navigate="tab = 'records'" />
+    <K12InsightPanel :key="agentId" :agent-id="agentId" :grade="grade || undefined" @navigate="goRecords" />
   </div>
 
   <!-- 备份 / 恢复弹窗（M4-1） -->
-  <K12BackupModal v-if="backupOpen" :agent-id="agentId" :agent-name="agentName" @close="backupOpen = false" />
+  <K12BackupModal
+    v-if="backupOpen"
+    :agent-id="agentId"
+    :agent-name="agentName"
+    :target-child-name="childName || agentName"
+    @close="backupOpen = false"
+  />
 
   <!-- 20260709：备课卡专用侧栏已退役。「这份作业的辅导要点」改为 RecognizeGuardPanel 识题结果下方内联
        渲染（PrepCardPanel 已改为内联卡），不再经 shell 侧栏锚点停靠。 -->
@@ -235,14 +267,48 @@ watch(() => props.composerImage, (img) => {
    胶囊渲染归 ChatInput（.hc-composer__skill-chip，对齐原型 .composer-chip），本组件只上交数据。 */
 /* 渐进提示辅导面板（辅导 tab 内嵌，可开合） */
 .k12enh-tutor {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   margin: 0 16px 8px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-elevated);
-  flex-shrink: 0;
-  /* BUG-20260712：识题题目多时(如一整页口算)面板无限长撑出视口且不能滚 → 加高度上限 + 内部滚动。 */
-  max-height: 55vh;
-  overflow-y: auto;
+}
+.k12enh-tutor__avatar {
+  position: relative;
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+}
+.k12enh-tutor__avatar img {
+  display: block;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+.k12enh-tutor__avatar span {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  border: 1.5px solid var(--hc-bg-main);
+  border-radius: 50%;
+  background: var(--hc-success);
+}
+.k12enh-tutor__body {
+  min-width: 0;
+  max-width: min(92%, 980px);
+}
+.k12enh-tutor__name {
+  margin: 0 0 4px 2px;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+.k12enh-tutor__bubble {
+  border-radius: 4px 14px 14px 14px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-primary);
 }
 /* 记录视图接管消息区（外壳隐藏原生消息区后，本层 flex:1 填满） */
 .k12enh-records {

@@ -51,4 +51,28 @@ describe('BUG-20260712-#4 再练取消：关弹窗中止后台 + 不幽灵重开
     await flushPromises()
     expect(w.find('.k12retry').exists()).toBe(false) // 不幽灵重开（RED：修前 open:true → true）
   })
+
+  it('出题中切换孩子 → 中止旧孩子请求并关闭旧弹层', async () => {
+    const w = render()
+    await flushPromises()
+    w.findComponent(RecordList).vm.$emit('action', { id: 'practiceAgain', record: { recordId: 'a', version: 0 } })
+    await flushPromises()
+    const oldSignal = h.signal
+
+    await w.setProps({ agentId: 'xiaohong' })
+    await flushPromises()
+    expect(oldSignal?.aborted).toBe(true)
+    expect(w.find('.k12retry').exists()).toBe(false)
+  })
+
+  it('组件卸载时中止仍在运行的再练请求', async () => {
+    const w = render()
+    await flushPromises()
+    w.findComponent(RecordList).vm.$emit('action', { id: 'practiceAgain', record: { recordId: 'a', version: 0 } })
+    await flushPromises()
+    const signal = h.signal
+
+    w.unmount()
+    expect(signal?.aborted).toBe(true)
+  })
 })

@@ -48,7 +48,7 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     routeQuery.q = {}
     // Teleport 目标锚点（ChatView/ChatInput 提供，测试里预置）：页脚 + composer 上方(能力 chips)
     // + composer 输入行动作(拍照识题按钮) + 场景侧栏(备课卡停靠)
-    document.body.innerHTML = '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+    document.body.innerHTML = '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
   it('据描述符渲染头部 tab（辅导/学习档案/学情）· 头部零动作按钮（20260709：备课卡内联进识题流）', () => {
@@ -122,7 +122,18 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(document.querySelector('[data-testid="k12-recognize-toggle"]')).toBeFalsy()
     await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(true)
+    expect(document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]')).toBeTruthy()
+    const assistant = document.querySelector('#hc-chat-scenario-inline [data-testid="k12-photo-assistant-message"]')
+    expect(assistant?.querySelector('.k12enh-tutor__avatar img')).toBeTruthy()
+    expect(assistant?.querySelector('.k12enh-tutor__name')?.textContent).toContain('小明的辅导老师')
+    expect(assistant?.querySelector('.k12enh-tutor__bubble [data-testid="recognize-guard"]')).toBeTruthy()
+    const inlineEvents = w.emitted('update:inlineActive') ?? []
+    expect(inlineEvents[inlineEvents.length - 1]).toEqual([true])
+
+    document.querySelector<HTMLElement>('#hc-chat-scenario-inline [data-testid="recognize-close"]')?.click()
+    await flushPromises()
+    const closedInlineEvents = w.emitted('update:inlineActive') ?? []
+    expect(closedInlineEvents[closedInlineEvents.length - 1]).toEqual([false])
   })
 
   it('切换实例（agentId 变）→ 回到辅导 tab（多孩结构隔离）', async () => {
@@ -139,12 +150,12 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     // 打开路径=图片自动改道（BUG-20260711-E：手动 toggle 已删）
     await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
-    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(true)
+    expect(document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]')).toBeTruthy()
 
     await w.setProps({ agentId: 'hong' })
     await flushPromises()
 
-    expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(false)
+    expect(document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]')).toBeFalsy()
     const imageEvents = w.emitted('update:composerImage')
     expect(imageEvents?.[imageEvents.length - 1]).toEqual([''])
   })

@@ -137,6 +137,22 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(submit.attributes('disabled')).toBeDefined()
   })
 
+  it('积累加载失败会在当前 Tab 显示错误和原地重试，不污染其他档案', async () => {
+    h.listSpy
+      .mockRejectedValueOnce(new Error('积累加载失败'))
+      .mockResolvedValueOnce({ items: [] })
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+
+    expect(w.get('[data-testid="accum-error"]').text()).toContain('积累加载失败')
+    await w.get('[data-testid="accum-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(h.listSpy).toHaveBeenCalledTimes(2)
+    expect(w.find('[data-testid="accum-error"]').exists()).toBe(false)
+  })
+
   // 引文行对齐（20260718 定案迭代 3 · 原型 #k12AccumulationList）：引文全宽首行（quote 卡形态），
   // meta 行带收藏日期 acc-date（created_at unix 秒 → MM-DD）；旧后端无 created_at 时日期不显示。
   it('引文行对齐：created_at → MM-DD 收藏日期 + quote 卡形态', async () => {

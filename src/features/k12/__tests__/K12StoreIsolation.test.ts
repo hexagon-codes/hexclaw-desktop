@@ -118,6 +118,21 @@ describe('K12 records 多孩异步隔离', () => {
     expect(store.error).toBeNull()
   })
 
+  it('报告与积累的失败状态相互独立，不会由并行请求互相覆盖', async () => {
+    h.insightReport.mockRejectedValue(new Error('报告加载失败'))
+    h.accumulation.mockRejectedValue(new Error('积累加载失败'))
+    const store = useK12Store()
+
+    await Promise.all([
+      store.loadReport('current-child'),
+      store.loadAccumulation('current-child'),
+    ])
+
+    expect(store.reportError).toBe('报告加载失败')
+    expect(store.accumulationError).toBe('积累加载失败')
+    expect(store.mistakesError).toBeNull()
+  })
+
   it('新孩子请求发出时立即清空旧孩子投影，不在等待期间短暂串屏', async () => {
     const oldMistake = { record_id: 'old-r', question: '旧题', knowledge_point: '旧知识点', error_cause: '', status: 'new', version: 1 }
     h.listMistakes.mockResolvedValueOnce({ items: [oldMistake] })

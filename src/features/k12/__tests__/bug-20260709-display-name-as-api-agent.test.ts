@@ -19,6 +19,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import HcSelect from '@/components/common/HcSelect.vue'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
+import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 
 const AGENT_ID = 'k12-tutor-KKE5v8zQ' // agents.name（后端隔离键）
@@ -86,14 +87,14 @@ function render(metadata: Record<string, string>) {
 async function recognizeOnce(w: ReturnType<typeof render>) {
   await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
   await flushPromises()
-  expect(w.find('[data-testid="rq-item"]').exists(), '前置：识题回显护栏出题').toBe(true)
+  expect(w.findComponent(RecognizeGuardPanel).find('[data-testid="rq-item"]').exists(), '前置：识题回显护栏出题').toBe(true)
 }
 
 describe('审计单-High-2：K12 grade/coldStart/prep 必须用 agents.name 作 API agent（非 display name）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
-    document.body.innerHTML = '<div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+    document.body.innerHTML = '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
   it('★grade：批改请求的 agent 必须是 agentId（内部名），不得是 display name', async () => {
@@ -102,9 +103,10 @@ describe('审计单-High-2：K12 grade/coldStart/prep 必须用 agents.name 作 
 
     w.findComponent(HcSelect).vm.$emit('update:modelValue', '数学')
     await flushPromises()
-    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
-    await w.find('[data-testid="rq-answer-0"]').setValue('2')
-    await w.find('[data-testid="rq-grade-0"]').trigger('click')
+    const panel = w.findComponent(RecognizeGuardPanel)
+    await panel.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await panel.find('[data-testid="rq-answer-0"]').setValue('2')
+    await panel.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
 
     expect(k12Grade).toHaveBeenCalledTimes(1)
@@ -120,7 +122,7 @@ describe('审计单-High-2：K12 grade/coldStart/prep 必须用 agents.name 作 
     await recognizeOnce(w)
 
     expect(k12PrepCard).not.toHaveBeenCalled()
-    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await w.findComponent(RecognizeGuardPanel).find('[data-testid="recognize-confirm-all"]').trigger('click')
     await flushPromises()
     expect(k12PrepCard).toHaveBeenCalledTimes(1)
     const req = k12PrepCard.mock.calls[0]![0] as { agent: string }
@@ -134,7 +136,7 @@ describe('审计单-High-2：K12 grade/coldStart/prep 必须用 agents.name 作 
     const w = render({}) // 无 k12.grade_term → 冷启动入口出现
     await recognizeOnce(w)
 
-    const infer = w.find('[data-testid="coldstart-infer"]')
+    const infer = w.findComponent(RecognizeGuardPanel).find('[data-testid="coldstart-infer"]')
     expect(infer.exists(), '前置：无年级 + 已识题 → 冷启动倒查入口出现').toBe(true)
     await infer.trigger('click')
     await flushPromises()

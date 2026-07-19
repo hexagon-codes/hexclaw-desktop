@@ -12,19 +12,23 @@ const h = vi.hoisted(() => ({
   unregisterSpy: vi.fn().mockResolvedValue({}),
   updateSpy: vi.fn().mockResolvedValue({}),
   profileSpy: vi.fn().mockResolvedValue({}),
+  provisionSpy: vi.fn().mockResolvedValue({ provisioned: [] }),
+  getAgentsSpy: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
+  toastSuccessSpy: vi.fn(),
+  toastWarningSpy: vi.fn(),
 }))
 vi.mock('@/api/agents', () => ({
   registerAgent: (a: unknown) => h.registerSpy(a),
   unregisterAgent: (name: string) => h.unregisterSpy(name),
   updateAgent: (name: string, u: unknown) => h.updateSpy(name, u),
-  getAgents: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
+  getAgents: () => h.getAgentsSpy(),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
 vi.mock('@/api/k12', () => ({
   k12UpdateProfile: (r: unknown) => h.profileSpy(r),
   // useK12Store 依赖（建档尾部 fire-and-forget setupAutomation，需可 resolve）
   k12BindIM: vi.fn().mockResolvedValue({}),
-  k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
+  k12ProvisionCron: (req: unknown) => h.provisionSpy(req),
     k12TutorTurn: vi.fn(),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
@@ -34,6 +38,14 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
   k12ListAccumulation: vi.fn(),
+}))
+vi.mock('@/composables/useToast', () => ({
+  useToast: () => ({
+    success: h.toastSuccessSpy,
+    warning: h.toastWarningSpy,
+    error: vi.fn(),
+    info: vi.fn(),
+  }),
 }))
 
 function i18n() {
@@ -56,6 +68,10 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     h.unregisterSpy.mockReset().mockResolvedValue({})
     h.updateSpy.mockClear()
     h.profileSpy.mockReset().mockResolvedValue({})
+    h.provisionSpy.mockReset().mockResolvedValue({ provisioned: [] })
+    h.getAgentsSpy.mockReset().mockResolvedValue({ agents: [], total: 0, default: '' })
+    h.toastSuccessSpy.mockReset()
+    h.toastWarningSpy.mockReset()
   })
 
   it('显示名随称呼/年级自动生成「{称呼}的辅导老师 · {年级}」', async () => {
@@ -98,6 +114,19 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(w.emitted('created')).toBeTruthy()
   })
 
+  it('默认自动任务未注册时等待真实结果并显式告警，不再宣称提醒已注册', async () => {
+    h.provisionSpy.mockResolvedValueOnce({ provisioned: [] })
+    const w = render()
+    await B().find('input.k12pf__input').setValue('小明')
+    await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+
+    expect(h.provisionSpy).toHaveBeenCalledOnce()
+    expect(w.emitted('created')).toBeTruthy()
+    expect(h.toastWarningSpy).toHaveBeenCalledWith(expect.stringContaining('未完整注册'))
+    expect(h.toastSuccessSpy.mock.calls.flat().join('')).not.toContain('已注册')
+  })
+
   it('建档第二步写档案失败 → 注销刚注册的 agent 作补偿，不留下半成品', async () => {
     h.profileSpy.mockRejectedValueOnce(new Error('profile write failed'))
     const w = render()
@@ -110,6 +139,47 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(h.unregisterSpy).toHaveBeenCalledExactlyOnceWith(registered.name)
     expect(w.emitted('created')).toBeFalsy()
     expect(B().text()).toContain('profile write failed')
+  })
+
+  it('改档第二步写档案失败 → 回滚第一步 Agent 配置，不留下新名称配旧年级', async () => {
+    h.profileSpy.mockRejectedValueOnce(new Error('profile update failed'))
+    const w = mount(K12ProfileForm, {
+      props: {
+        agent: {
+          name: 'k12-tutor-x', display_name: '小明的辅导助手 · 五年级',
+          description: '人教版 · 五年级上 · 按年级边界讲解',
+          system_prompt: '旧人设', provider: 'old-provider', model: 'old-model', skills: ['math-tutor'],
+          metadata: { scenario: 'k12-tutor', 'k12.child_name': '小明', 'k12.grade_term': '五年级上', 'k12.textbook_edition': '人教版' },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] }, attachTo: document.body,
+    })
+    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级上')
+    await flushPromises()
+    await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+
+    expect(h.updateSpy).toHaveBeenCalledTimes(2)
+    expect(h.updateSpy.mock.calls[1]).toEqual(['k12-tutor-x', expect.objectContaining({
+      display_name: '小明的辅导助手 · 五年级',
+      description: '人教版 · 五年级上 · 按年级边界讲解',
+      system_prompt: '旧人设', provider: 'old-provider', model: 'old-model',
+    })])
+    expect(w.emitted('created')).toBeFalsy()
+    expect(B().text()).toContain('profile update failed')
+  })
+
+  it('持久建档成功但列表刷新失败 → 仍返回已创建终态并提示刷新，不诱导重复建档', async () => {
+    h.getAgentsSpy.mockRejectedValueOnce(new Error('refresh failed'))
+    const w = render()
+    await B().find('input.k12pf__input').setValue('小明')
+    await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+
+    expect(h.registerSpy).toHaveBeenCalledOnce()
+    expect(h.profileSpy).toHaveBeenCalledOnce()
+    expect(w.emitted('created')).toBeTruthy()
+    expect(h.toastWarningSpy).toHaveBeenCalledWith(expect.stringContaining('已保存'))
   })
 
   it('改档模式：预填 k12.* + 改年级 → updateAgent(显示名) + PUT /profile(grade_term)', async () => {
@@ -194,13 +264,14 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(payload.skills).toContain('k12_grade')
   })
 
-  it('年级选择用后端 18 档中文枚举（含初一上）', () => {
+  it('年级选择只出小学 12 档中文枚举（冻结：无初中，见 bug-20260718-frozen-grade-subject）', () => {
     const w = render()
     // 年级下拉走 HcSelect（B2）：枚举取自 :options 属性
     const gradeSelect = w.findAllComponents(HcSelect)[0]!
     const opts = (gradeSelect.props('options') as { value: string; label: string }[]).map((o) => o.label)
     expect(opts).toContain('五年级上')
-    expect(opts).toContain('初一上')
-    expect(opts).toHaveLength(18)
+    expect(opts).not.toContain('初一上')
+    expect(opts.some((o) => o.includes('初'))).toBe(false)
+    expect(opts).toHaveLength(12)
   })
 })

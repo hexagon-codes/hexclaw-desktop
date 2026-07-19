@@ -320,11 +320,13 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
       <!-- 头部：名称（可编辑）｜试运行 / 保存 -->
       <div class="wfp-head">
         <div class="wfp-head__main">
-          <input
+          <HcClearableField>
+            <input
             v-model="currentName"
             class="wfp-name-input"
             :placeholder="t('workflow.namePlaceholder', '工作流名称')"
           />
+          </HcClearableField>
           <div class="wfp-head__sub">
             {{ t('workflow.linearLabel') }} · {{ t('workflow.steps', { n: steps.length }) }}
           </div>
@@ -414,28 +416,38 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
             <div class="wfp-modal__body">
               <label class="wfp-field">
                 <span class="wfp-field__label">{{ t('workflow.fieldLabel', '步骤名称') }}</span>
-                <input v-model="editForm.label" class="wfp-input" />
+                <HcClearableField>
+                  <input v-model="editForm.label" class="wfp-input" />
+                </HcClearableField>
               </label>
 
               <!-- input：触发输入 -->
               <label v-if="editingType === 'input'" class="wfp-field">
                 <span class="wfp-field__label">{{ t('workflow.fieldInputValue', '输入内容 / 模板') }}</span>
-                <textarea v-model="editForm.config.value" rows="3" class="wfp-input wfp-textarea" :placeholder="t('workflow.fieldInputValueHint', '留空则用运行时输入；支持占位变量 input')" />
+                <HcClearableField>
+                  <textarea v-model="editForm.config.value" rows="3" class="wfp-input wfp-textarea" :placeholder="t('workflow.fieldInputValueHint', '留空则用运行时输入；支持占位变量 input')" />
+                </HcClearableField>
               </label>
 
               <!-- agent：模型 -->
               <template v-if="editingType === 'agent'">
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldPrompt', '指令 / 提示') }}</span>
-                  <textarea v-model="editForm.config.prompt" rows="4" class="wfp-input wfp-textarea" :placeholder="t('workflow.fieldPromptHint', '支持占位变量 previous（上一步输出）')" />
+                  <HcClearableField>
+                    <textarea v-model="editForm.config.prompt" rows="4" class="wfp-input wfp-textarea" :placeholder="t('workflow.fieldPromptHint', '支持占位变量 previous（上一步输出）')" />
+                  </HcClearableField>
                 </label>
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldRole', '智能体角色（可选）') }}</span>
-                  <input v-model="editForm.config.role" class="wfp-input" :placeholder="t('workflow.fieldRoleHint', '如 researcher / writer，留空用默认助理') " />
+                  <HcClearableField>
+                    <input v-model="editForm.config.role" class="wfp-input" :placeholder="t('workflow.fieldRoleHint', '如 researcher / writer，留空用默认助理') " />
+                  </HcClearableField>
                 </label>
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldModel', '模型覆盖（可选）') }}</span>
-                  <input v-model="editForm.config.model" class="wfp-input" :placeholder="t('workflow.fieldModelHint', '留空跟随智能路由')" />
+                  <HcClearableField>
+                    <input v-model="editForm.config.model" class="wfp-input" :placeholder="t('workflow.fieldModelHint', '留空跟随智能路由')" />
+                  </HcClearableField>
                 </label>
               </template>
 
@@ -443,11 +455,15 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
               <template v-if="editingType === 'parallel'">
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldRoles', '并行角色（多个）') }}</span>
-                  <textarea v-model="editForm.config.roles" rows="3" class="wfp-input wfp-textarea" :placeholder="t('workflow.fieldRolesHint', '逗号 / 换行分隔，如 researcher, coder, analyst — 各角色对同一输入并发处理后合并')" />
+                  <HcClearableField>
+                    <textarea v-model="editForm.config.roles" rows="3" class="wfp-input wfp-textarea" :placeholder="t('workflow.fieldRolesHint', '逗号 / 换行分隔，如 researcher, coder, analyst — 各角色对同一输入并发处理后合并')" />
+                  </HcClearableField>
                 </label>
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldModel', '模型覆盖（可选）') }}</span>
-                  <input v-model="editForm.config.model" class="wfp-input" :placeholder="t('workflow.fieldModelHint', '留空跟随智能路由')" />
+                  <HcClearableField>
+                    <input v-model="editForm.config.model" class="wfp-input" :placeholder="t('workflow.fieldModelHint', '留空跟随智能路由')" />
+                  </HcClearableField>
                 </label>
               </template>
 
@@ -455,11 +471,15 @@ defineExpose({ loadWorkflows: store.loadWorkflows, createWorkflow })
               <template v-if="editingType === 'tool'">
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldTool', '工具名称') }}</span>
-                  <input v-model="editForm.config.tool" class="wfp-input" :placeholder="t('workflow.fieldToolHint', '如 media_generate / send_message')" />
+                  <HcClearableField>
+                    <input v-model="editForm.config.tool" class="wfp-input" :placeholder="t('workflow.fieldToolHint', '如 media_generate / send_message')" />
+                  </HcClearableField>
                 </label>
                 <label class="wfp-field">
                   <span class="wfp-field__label">{{ t('workflow.fieldArgs', '参数（JSON，可选）') }}</span>
-                  <textarea v-model="editForm.config.args" rows="3" class="wfp-input wfp-textarea" placeholder='{"key": "value"}' />
+                  <HcClearableField>
+                    <textarea v-model="editForm.config.args" rows="3" class="wfp-input wfp-textarea" placeholder='{"key": "value"}' />
+                  </HcClearableField>
                 </label>
               </template>
 

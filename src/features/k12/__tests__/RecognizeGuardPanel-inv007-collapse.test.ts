@@ -20,6 +20,7 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 const h = vi.hoisted(() => ({
   createJobSpy: vi.fn(),
   getJobSpy: vi.fn(),
+  getResultSpy: vi.fn(),
   confirmJobSpy: vi.fn(),
   retryJobSpy: vi.fn(),
   gradeSpy: vi.fn(),
@@ -29,6 +30,7 @@ const h = vi.hoisted(() => ({
 vi.mock('@/api/k12', () => ({
   k12CreateGradingJob: (r: unknown) => h.createJobSpy(r),
   k12GetGradingJob: (...args: unknown[]) => h.getJobSpy(...args),
+  k12GetGradingJobResult: (...args: unknown[]) => h.getResultSpy(...args),
   k12ConfirmGradingJob: (...args: unknown[]) => h.confirmJobSpy(...args),
   k12RetryGradingJob: (...args: unknown[]) => h.retryJobSpy(...args),
   k12Grade: (r: unknown) => h.gradeSpy(r),
@@ -99,12 +101,13 @@ function mockJobGradeFlow(
   })
   h.getJobSpy.mockImplementation(async () =>
     confirmed
-      ? jobStatus('completed', {
-          confirmation_state: 'confirmed',
-          result: { mode: 'grade', items, markdown: '# 批改' },
-        })
+      ? jobStatus('completed', { confirmation_state: 'confirmed' })
       : jobStatus('awaiting_confirmation', { recognition: { questions, subject: '' } }),
   )
+  h.getResultSpy.mockResolvedValue({
+    job_id: 'job-1',
+    result: { mode: 'grade', items, markdown: '# 批改' },
+  })
 }
 
 const LONG_QUESTION =
@@ -126,6 +129,7 @@ describe('RecognizeGuardPanel · K12-INV-007 正确题默认折叠', () => {
     setActivePinia(createPinia())
     h.createJobSpy.mockReset()
     h.getJobSpy.mockReset()
+    h.getResultSpy.mockReset()
     h.confirmJobSpy.mockReset()
     h.retryJobSpy.mockReset()
     h.gradeSpy.mockReset()
@@ -265,6 +269,7 @@ describe('RecognizeGuardPanel · K12-INV-007 正确题默认折叠', () => {
     await w.find('[data-testid="recognize-grade-all"]').trigger('click')
     await flushPromises()
 
+    expect(h.getResultSpy).toHaveBeenCalledWith('mingming', 'job-1')
     // 第 1 题 agree → 折叠为摘要；第 2 题 disagree → 展开
     expect(w.find('[data-testid="rq-grade-details-0"]').exists()).toBe(false)
     expect(w.find('[data-testid="rq-correct-summary-0"]').exists()).toBe(true)

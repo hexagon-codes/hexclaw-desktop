@@ -14,6 +14,8 @@ import type { PracticeSetDTO, PracticeItemDTO } from '@/api/k12'
 const h = vi.hoisted(() => ({
   listSpy: vi.fn(),
   paperSpy: vi.fn(),
+  printSpy: vi.fn(),
+  savePdfSpy: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
   k12ListPracticeSets: (agent: string, status?: string) => h.listSpy(agent, status),
@@ -25,6 +27,10 @@ vi.mock('@/api/k12', () => ({
 }))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn() }),
+}))
+vi.mock('../export', () => ({
+  printPracticePaper: (markdown: string, title: string) => h.printSpy(markdown, title),
+  savePracticePaperPdf: (markdown: string, title: string) => h.savePdfSpy(markdown, title),
 }))
 
 function i18n() {
@@ -46,6 +52,7 @@ function basket(items: PracticeItemDTO[]): PracticeSetDTO {
   return {
     record_id: 'basket1', title: '待打印篮', source_kind: 'mixed', status: 'draft',
     status_label: '草稿', publishable: false, delivery_status: 'not_sent', items,
+    return_assets: [],
   }
 }
 
@@ -55,6 +62,7 @@ function historySet(over: Partial<PracticeSetDTO> = {}): PracticeSetDTO {
     status_label: '待完成', publishable: true, delivery_status: 'not_sent',
     paper_no: 'P-2629-01', finalized_at: 1784300000, finalized_via: 'print',
     items: [item('q1', '解方程 2x+19=51', '数学', 'verified')],
+    return_assets: [],
     ...over,
   }
 }
@@ -78,6 +86,8 @@ beforeEach(() => {
     markdown: '# 本周复习卷 · 07/18\n\n卷面号 P-2629-01 · 2026/07/18\n\n1. 解方程 2x+19=51\n\n**答：**\n\n第 1/1 页 · P-2629-01',
     preview: false,
   })
+  h.printSpy.mockReset().mockResolvedValue(true)
+  h.savePdfSpy.mockReset().mockResolvedValue(true)
 })
 
 describe('K12PracticeSetsPanel · 题目卷/答案卷真实渲染（§4.13）', () => {
@@ -149,5 +159,55 @@ describe('K12PracticeSetsPanel · 题目卷/答案卷真实渲染（§4.13）', 
     await flushPromises()
     await w.find('[data-testid="ps-paper-close"]').trigger('click')
     expect(w.find('[data-testid="ps-paper-modal"]').exists()).toBe(false)
+  })
+
+  it('题卷加载失败 → 弹层内显示错误并可原地重试', async () => {
+    h.listSpy.mockResolvedValue({ items: [historySet()] })
+    h.paperSpy.mockRejectedValueOnce(new Error('卷面服务超时')).mockResolvedValueOnce({
+      kind: 'question', title: '本周复习卷 · 07/18', paper_no: 'P-2629-01',
+      markdown: '# 重试成功', preview: false,
+    })
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="ps-paper-question"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ps-paper-modal"]').text()).toContain('卷面服务超时')
+
+    await w.find('[data-testid="ps-paper-retry"]').trigger('click')
+    await flushPromises()
+    expect(h.paperSpy).toHaveBeenCalledTimes(2)
+    expect(w.find('[data-testid="ps-paper-modal"]').text()).toContain('重试成功')
+  })
+
+  it('打印 helper 返回 false → 不算成功，弹层内显示错误且打印按钮可重试', async () => {
+    h.listSpy.mockResolvedValue({ items: [historySet()] })
+    h.printSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="ps-paper-question"]').trigger('click')
+    await flushPromises()
+    await w.find('[data-testid="ps-paper-print"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ps-paper-modal"]').text()).toContain('未能唤起打印')
+    expect(w.find('[data-testid="ps-paper-print"]').exists()).toBe(true)
+
+    await w.find('[data-testid="ps-paper-print"]').trigger('click')
+    await flushPromises()
+    expect(h.printSpy).toHaveBeenCalledTimes(2)
+    expect(w.find('[data-testid="ps-paper-modal"]').text()).not.toContain('未能唤起打印')
+  })
+
+  it('正卷的「另存 PDF」独立于打印，不调用 PrintJob helper', async () => {
+    h.listSpy.mockResolvedValue({ items: [historySet()] })
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="ps-paper-question"]').trigger('click')
+    await flushPromises()
+
+    await w.find('[data-testid="ps-paper-save-pdf"]').trigger('click')
+    await flushPromises()
+
+    expect(h.savePdfSpy).toHaveBeenCalledWith(expect.stringContaining('P-2629-01'), '本周复习卷 · 07/18')
+    expect(h.printSpy).not.toHaveBeenCalled()
   })
 })

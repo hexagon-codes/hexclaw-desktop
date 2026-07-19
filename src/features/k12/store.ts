@@ -18,8 +18,10 @@ import {
   k12ListAccumulation,
   k12CreateGradingJob,
   k12GetGradingJob,
+  k12GetGradingJobResult,
   k12ConfirmGradingJob,
   k12RetryGradingJob,
+  k12CancelGradingJob,
   k12ColdStart,
   k12TutorTurn,
   k12BindIM,
@@ -67,7 +69,11 @@ export const useK12Store = defineStore('k12', () => {
   const report = ref<InsightReportResp | null>(null)
   const prepCard = ref<PrepCardResp | null>(null)
   const loading = ref(false)
+  /** @deprecated 档案页改用各资源独立错误，保留空 ref 兼容旧调用方。 */
   const error = ref<string | null>(null)
+  const mistakesError = ref<string | null>(null)
+  const reportError = ref<string | null>(null)
+  const accumulationError = ref<string | null>(null)
   let mistakesRequest = 0
   let reportRequest = 0
   let accumulationRequest = 0
@@ -77,7 +83,7 @@ export const useK12Store = defineStore('k12', () => {
   async function loadMistakes(agent: string, status?: string): Promise<void> {
     const request = ++mistakesRequest
     loading.value = true
-    error.value = null
+    mistakesError.value = null
     mistakeView.value = null
     try {
       const [all, due] = await Promise.all([k12ListMistakes(agent, status), k12ReviewQueue(agent)])
@@ -85,7 +91,7 @@ export const useK12Store = defineStore('k12', () => {
       mistakeView.value = mistakesToView(agent, all.items, due.items)
     } catch (e) {
       if (request !== mistakesRequest) return
-      error.value = e instanceof Error ? e.message : String(e)
+      mistakesError.value = e instanceof Error ? e.message : String(e)
     } finally {
       if (request === mistakesRequest) loading.value = false
     }
@@ -106,14 +112,14 @@ export const useK12Store = defineStore('k12', () => {
   /** 学情报告（真实端点，替代客户端聚合） */
   async function loadReport(agent: string): Promise<void> {
     const request = ++reportRequest
-    error.value = null
+    reportError.value = null
     report.value = null
     try {
       const next = await k12InsightReport(agent)
       if (request === reportRequest) report.value = next
     } catch (e) {
       if (request !== reportRequest) return
-      error.value = e instanceof Error ? e.message : String(e)
+      reportError.value = e instanceof Error ? e.message : String(e)
     }
   }
 
@@ -126,7 +132,7 @@ export const useK12Store = defineStore('k12', () => {
 
   async function loadAccumulation(agent: string, subject?: string): Promise<void> {
     const request = ++accumulationRequest
-    error.value = null
+    accumulationError.value = null
     accumView.value = null
     try {
       const res = await k12ListAccumulation(agent, subject)
@@ -136,7 +142,7 @@ export const useK12Store = defineStore('k12', () => {
       accumView.value = accumToView(agent, keepOnly)
     } catch (e) {
       if (request !== accumulationRequest) return
-      error.value = e instanceof Error ? e.message : String(e)
+      accumulationError.value = e instanceof Error ? e.message : String(e)
     }
   }
 
@@ -149,16 +155,19 @@ export const useK12Store = defineStore('k12', () => {
     agent: string,
     grade: string,
     knowledgePoints?: string[],
+    signal?: AbortSignal,
   ): Promise<void> {
     const request = ++prepRequest
     prepLoading.value = true
     prepError.value = null
     prepCard.value = null
     try {
-      const next = await k12PrepCard({ agent, grade, knowledge_points: knowledgePoints })
+      const next = await k12PrepCard({ agent, grade, knowledge_points: knowledgePoints }, signal)
       if (request === prepRequest) prepCard.value = next
     } catch {
       if (request !== prepRequest) return
+      // 主动换孩子/换作业/离开会话属于正常取消，不应伪装成“生成失败”。
+      if (signal?.aborted) return
       // 治本（BUG-20260712）：k12PrepCard 失败时 e.message 是裸技术串（「[POST] … Load failed」/
       // 「Fetch is aborted」），家长看不懂且吓人。统一翻成可操作的本地化提示（超时/网络中断 → 请重试 +
       // 慢本地模型可切云端）。原始错误对家长无价值，故不透出裸串。
@@ -216,6 +225,32 @@ export const useK12Store = defineStore('k12', () => {
   const JOB_POLL_INTERVAL_MS = 2500
   const JOB_POLL_MAX_ATTEMPTS = 240
 
+  function abortError(): Error {
+    const error = new Error('识题已取消')
+    error.name = 'AbortError'
+    return error
+  }
+
+  function throwIfAborted(signal?: AbortSignal) {
+    if (signal?.aborted) throw abortError()
+  }
+
+  function waitForPoll(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) return new Promise((resolve) => setTimeout(resolve, ms))
+    throwIfAborted(signal)
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      }, ms)
+      const onAbort = () => {
+        clearTimeout(timer)
+        reject(abortError())
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
   /** 同一（agent, 照片）内容派生稳定幂等键（§4.10 desktop 来源键）：重复点击/失败重跑命中同一 Job。 */
   function photoJobSourceKey(agent: string, imageBase64: string): string {
     let hash = 5381
@@ -231,9 +266,12 @@ export const useK12Store = defineStore('k12', () => {
     jobId: string,
     stopStages: string[],
     intervalMs = JOB_POLL_INTERVAL_MS,
+    signal?: AbortSignal,
   ): Promise<GradingJobStatusResp> {
     for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt++) {
-      const status = await k12GetGradingJob(agent, jobId)
+      throwIfAborted(signal)
+      const status = await k12GetGradingJob(agent, jobId, signal)
+      throwIfAborted(signal)
       if (stopStages.includes(status.stage)) return status
       if (
         status.stage === 'failed_terminal' ||
@@ -244,7 +282,7 @@ export const useK12Store = defineStore('k12', () => {
         throw new Error(i18n.global.t('k12.recognize.jobFailed'))
       }
       if (attempt < JOB_POLL_MAX_ATTEMPTS - 1) {
-        await new Promise((resolve) => setTimeout(resolve, intervalMs))
+        await waitForPoll(intervalMs, signal)
       }
     }
     throw new Error(i18n.global.t('k12.recognize.jobFailed'))
@@ -266,29 +304,50 @@ export const useK12Store = defineStore('k12', () => {
   async function recognizePhotoJob(
     agent: string,
     imageBase64: string,
+    signal?: AbortSignal,
   ): Promise<PhotoJobRecognitionView> {
     loading.value = true
     error.value = null
+    let jobId = ''
+    const cancelJob = () => {
+      if (!jobId) return
+      void k12CancelGradingJob(agent, jobId).catch(() => {
+        // 任务可能恰好进入不可取消终态；本地仍必须隔离旧响应。
+      })
+    }
+    signal?.addEventListener('abort', cancelJob)
     try {
+      throwIfAborted(signal)
       const created = await k12CreateGradingJob({
         agent,
         source_key: photoJobSourceKey(agent, imageBase64),
         source_kind: 'desktop',
         image_base64: imageBase64,
-      })
-      const jobId = created.job.job_id
+      }, signal)
+      jobId = created.job.job_id
+      if (signal?.aborted) {
+        cancelJob()
+        throw abortError()
+      }
       if (!created.created && created.job.stage === 'failed_retryable' && created.job.retryable) {
-        await k12RetryGradingJob(agent, jobId)
+        await k12RetryGradingJob(agent, jobId, signal)
       }
       // completed 也是合法停点（同图重投命中已完成 Job）：识别产物仍可回显。
-      const status = await pollGradingJob(agent, jobId, ['awaiting_confirmation', 'completed'])
+      const status = await pollGradingJob(
+        agent,
+        jobId,
+        ['awaiting_confirmation', 'completed'],
+        JOB_POLL_INTERVAL_MS,
+        signal,
+      )
       return {
         jobId,
-        questions: status.recognition?.questions ?? [],
+        questions: status.recognition?.questions ?? status.job.recognized_questions ?? [],
         subject: status.recognition?.subject ?? '',
         anchorState: status.anchor_state,
       }
     } finally {
+      signal?.removeEventListener('abort', cancelJob)
       loading.value = false
     }
   }
@@ -309,11 +368,12 @@ export const useK12Store = defineStore('k12', () => {
       grade: input.grade,
       question_corrections: input.corrections,
     })
-    const status = await pollGradingJob(agent, jobId, ['completed'])
-    if (!status.result) {
+    await pollGradingJob(agent, jobId, ['completed'])
+    const projection = await k12GetGradingJobResult(agent, jobId)
+    if (!projection.result) {
       throw new Error(i18n.global.t('k12.recognize.jobFailed'))
     }
-    return status.result
+    return projection.result
   }
 
   /** 渐进提示一轮：返回分阶段指令 + 守门标志（阶段三带验算解） */
@@ -367,6 +427,9 @@ export const useK12Store = defineStore('k12', () => {
     prepError,
     loading,
     error,
+    mistakesError,
+    reportError,
+    accumulationError,
     loadMistakes,
     markMastered,
     deleteMistake,
@@ -385,7 +448,7 @@ export const useK12Store = defineStore('k12', () => {
   }
 })
 
-/** 后端 501（未注入 cron/router，如非桌面运行时）→ 自动化是增强项，静默降级不阻断建档。 */
+/** 后端 501（未注入 cron/router，如非桌面运行时）→ 返回空集，由调用 UI 显式提示且不阻断建档。 */
 function isNotImplemented(e: unknown): boolean {
   const msg = e instanceof Error ? e.message : String(e)
   return msg.includes('501') || msg.includes('未注入')

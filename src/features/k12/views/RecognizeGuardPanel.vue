@@ -22,7 +22,14 @@ import PrepCardPanel from './PrepCardPanel.vue'
 import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
 import { extractBriefFinalAnswer } from '../graded-photo'
 import { gradeToResult, gradeToVerify } from '../mappers'
-import type { AnswerState, RecognizedQuestion, BBox, PhotoJobResult } from '@/api/k12'
+import type {
+  AnswerState,
+  RecognizedQuestion,
+  BBox,
+  PhotoJobResult,
+  ProblemKind,
+  OCRConfirmationReason,
+} from '@/api/k12'
 import type { VerifyResult } from '@/contracts'
 
 // 审计单-High-2（bug-20260709）：本组件全部 API 调用的 agent = agents.name（后端隔离键），
@@ -39,11 +46,22 @@ const store = useK12Store()
 
 /** 一道识出的题在护栏里的可编辑本地状态 */
 interface GuardRow {
+  problemId: string
+  problemKind: ProblemKind
+  parentProblemId: string
+  subproblemNo: string
+  attemptId: string
+  rawProblem: string
   problem: string // 家长可就地订正的题干（初值=识别原文）
+  canonicalVersion: number
   knowledgePoints: string[]
   editing: boolean
+  rawStudentAnswer: string
   studentAnswer: string
   answerState: AnswerState
+  confirmationRequired: boolean
+  confirmationReasons: OCRConfirmationReason[]
+  recognitionConfirmed: boolean
   grading: boolean
   solving: boolean
   verify: VerifyResult | null
@@ -73,12 +91,14 @@ const anchoring = ref(false)
 const anchorWarning = ref('')
 const errMsg = ref('')
 const confirmed = ref(false)
+const correctionMode = ref(false)
 const selectedSubject = ref('')
 const batchWorking = ref(false)
 // 当前照片对应的统一 GradingJob（§6.7）：识题产物与整卷批改都挂在它上面。
 const currentJobId = ref('')
 let agentGeneration = 0
 let recognitionGeneration = 0
+let recognitionAbort: AbortController | null = null
 const subjectOptions = computed(() =>
   K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
     value,
@@ -130,6 +150,7 @@ const answerPendingIndexes = computed(() =>
     .map((row, i) => ({ row, i }))
     .filter(
       ({ row }) =>
+        isAnswerable(row) &&
         row.problem.trim() &&
         row.answerState === 'present' &&
         row.studentAnswer.trim() &&
@@ -140,12 +161,56 @@ const answerPendingIndexes = computed(() =>
 const blankPendingIndexes = computed(() =>
   rows.value
     .map((row, i) => ({ row, i }))
-    .filter(({ row }) => row.problem.trim() && row.answerState === 'blank' && !row.solution)
+    .filter(
+      ({ row }) =>
+        isAnswerable(row) && row.problem.trim() && row.answerState === 'blank' && !row.solution,
+    )
     .map(({ i }) => i),
 )
 const unclearAnswerCount = computed(
-  () => rows.value.filter((row) => row.problem.trim() && row.answerState === 'unclear').length,
+  () =>
+    rows.value.filter(
+      (row) => isAnswerable(row) && row.problem.trim() && row.answerState === 'unclear',
+    ).length,
 )
+const answerableRowCount = computed(() => rows.value.filter(isAnswerable).length)
+const unconfirmedRiskCount = computed(
+  () =>
+    rows.value.filter((row) => row.confirmationRequired && !row.recognitionConfirmed).length,
+)
+
+const OCR_RISK_LABELS: Record<OCRConfirmationReason, string> = {
+  fraction: '分数线',
+  decimal_point: '小数点',
+  negative_sign: '负号',
+  unit: '单位',
+  erasure: '涂改痕迹',
+  evidence_conflict: '多次识别不一致',
+  low_confidence: '识别置信度较低',
+  unclear_handwriting: '字迹未读清',
+  subject_undetermined: '学科未确定',
+  canonical_parse_failed: '公式解析失败',
+}
+
+function isAnswerable(row: GuardRow): boolean {
+  return row.problemKind !== 'compound_parent'
+}
+
+function riskLabel(reason: OCRConfirmationReason): string {
+  return OCR_RISK_LABELS[reason] ?? reason
+}
+
+function rowLabel(row: GuardRow, index: number): string {
+  if (row.problemKind === 'compound_parent') return '公共题干'
+  if (row.problemKind === 'subproblem') return row.subproblemNo || String(index + 1)
+  return String(index + 1)
+}
+
+function effectiveProblem(row: GuardRow): string {
+  if (row.problemKind !== 'subproblem' || !row.parentProblemId) return row.problem.trim()
+  const parent = rows.value.find((candidate) => candidate.problemId === row.parentProblemId)
+  return [parent?.problem.trim(), row.problem.trim()].filter(Boolean).join('\n\n')
+}
 
 function normalizeAnswerState(question: RecognizedQuestion): AnswerState {
   if (
@@ -175,6 +240,8 @@ watch(
   () => {
     agentGeneration += 1
     recognitionGeneration += 1
+    recognitionAbort?.abort()
+    recognitionAbort = null
     imageB64.value = ''
     rows.value = []
     recognizing.value = false
@@ -182,6 +249,7 @@ watch(
     anchorWarning.value = ''
     errMsg.value = ''
     confirmed.value = false
+    correctionMode.value = false
     batchWorking.value = false
     selectedSubject.value = ''
     currentJobId.value = ''
@@ -202,22 +270,29 @@ watch(
 )
 
 async function run() {
-  if (!imageB64.value.trim() || recognizing.value) return
+  if (!imageB64.value.trim()) return
   const generation = agentGeneration
   const recognition = ++recognitionGeneration
   const sourceImage = imageB64.value.trim()
+  // “最后一张图获胜”：换图即中止旧轮询；store 会在 Job 已创建时尽力调用 cancel route。
+  recognitionAbort?.abort()
+  const controller = new AbortController()
+  recognitionAbort = controller
   recognizing.value = true
   anchoring.value = false
   anchorWarning.value = ''
   errMsg.value = ''
   confirmed.value = false
+  correctionMode.value = false
   coldStartResult.value = null
   currentJobId.value = ''
+  rows.value = []
+  selectedSubject.value = ''
   try {
     // 桌面入口迁移（§6.7/§6.15）：识题编排改走统一 GradingJob——创建 Job 后后端异步推进
     // （识别 + 锚点并行增强），前端轮询到确认停点取识别产物回显；护栏交互不变。
     // 识别失败可重试：同图重跑幂等命中失败 Job 并自动走 retry 端点（store 内实现）。
-    const job = await store.recognizePhotoJob(props.agentId, sourceImage)
+    const job = await store.recognizePhotoJob(props.agentId, sourceImage, controller.signal)
     if (generation !== agentGeneration || recognition !== recognitionGeneration) return
     currentJobId.value = job.jobId
     // Polish-2：识题自动判定整卷学科 → 预填学科下拉，家长不必手选（仍可手动覆盖）。
@@ -228,12 +303,23 @@ async function run() {
     rows.value = job.questions.map((question: RecognizedQuestion) => {
       const answerState = normalizeAnswerState(question)
       return {
-        problem: question.question,
+        problemId: question.problem_id ?? '',
+        problemKind: question.problem_kind ?? 'standalone',
+        parentProblemId: question.parent_problem_id ?? '',
+        subproblemNo: question.subproblem_no ?? '',
+        attemptId: question.attempt_id ?? '',
+        rawProblem: question.raw_transcription ?? question.question,
+        problem: question.canonical_markdown ?? question.question,
+        canonicalVersion: question.canonical_version ?? 1,
         knowledgePoints: question.knowledge_points ?? [],
         editing: false,
         // 预填识题回收的孩子作答；blank/present/unclear 由 answer_state 明确分叉。
-        studentAnswer: question.student_answer ?? '',
+        rawStudentAnswer: question.answer_raw_transcription ?? question.student_answer ?? '',
+        studentAnswer: question.answer_canonical_markdown ?? question.student_answer ?? '',
         answerState,
+        confirmationRequired: question.confirmation_required ?? false,
+        confirmationReasons: question.confirmation_reasons ?? [],
+        recognitionConfirmed: !(question.confirmation_required ?? false),
         grading: false,
         solving: false,
         verify: null,
@@ -250,10 +336,17 @@ async function run() {
       }
     })
   } catch (e) {
-    if (generation !== agentGeneration) return
+    if (
+      generation !== agentGeneration ||
+      recognition !== recognitionGeneration ||
+      (e as Error).name === 'AbortError'
+    ) return
     errMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
-    if (generation === agentGeneration) recognizing.value = false
+    if (generation === agentGeneration && recognition === recognitionGeneration) {
+      recognizing.value = false
+      if (recognitionAbort === controller) recognitionAbort = null
+    }
   }
 }
 
@@ -268,12 +361,24 @@ function syncAnswerState(row: GuardRow) {
 
 function toggleEdit(row: GuardRow) {
   row.editing = !row.editing
+  if (row.confirmationRequired) row.recognitionConfirmed = false
   confirmed.value = false
 }
 
+function startCorrection() {
+  correctionMode.value = true
+  for (const row of rows.value) row.editing = true
+}
+
 function confirmAll() {
-  if (!rows.value.length || rows.value.some((row) => !row.problem.trim())) return
+  if (
+    !rows.value.length ||
+    rows.value.some((row) => !row.problem.trim()) ||
+    unconfirmedRiskCount.value > 0
+  )
+    return
   for (const row of rows.value) row.editing = false
+  correctionMode.value = false
   confirmed.value = true
 }
 
@@ -299,6 +404,7 @@ async function gradeRow(i: number) {
   const row = rows.value[i]
   if (
     !row ||
+    !isAnswerable(row) ||
     !row.problem.trim() ||
     row.answerState !== 'present' ||
     !row.studentAnswer.trim() ||
@@ -312,7 +418,7 @@ async function gradeRow(i: number) {
       agent: props.agentId,
       subject: selectedSubject.value,
       grade: props.grade ?? '',
-      problem: row.problem.trim(),
+      problem: effectiveProblem(row),
       student_answer: row.studentAnswer.trim() || undefined,
       knowledge_points: row.knowledgePoints,
     })
@@ -338,7 +444,14 @@ async function gradeRow(i: number) {
 // 不批改、不入错题本。单一真相源分叉的前端落地——空白题不再被迫填答案或触发批改 502。
 async function solveRow(i: number) {
   const row = rows.value[i]
-  if (!row || !row.problem.trim() || row.answerState !== 'blank' || row.solving || row.grading)
+  if (
+    !row ||
+    !isAnswerable(row) ||
+    !row.problem.trim() ||
+    row.answerState !== 'blank' ||
+    row.solving ||
+    row.grading
+  )
     return
   row.solving = true
   errMsg.value = ''
@@ -347,7 +460,7 @@ async function solveRow(i: number) {
       agent: props.agentId,
       subject: selectedSubject.value,
       grade: props.grade ?? '',
-      problem: row.problem.trim(),
+      problem: effectiveProblem(row),
       knowledge_points: row.knowledgePoints,
     })
     row.verify = res.verify
@@ -368,6 +481,8 @@ async function solveRow(i: number) {
 
 onBeforeUnmount(() => {
   recognitionGeneration += 1
+  recognitionAbort?.abort()
+  recognitionAbort = null
 })
 
 // 云端真实模型连续整卷压测证实 3 路会触发上游 429；2 路在速度与稳定性间取平衡，
@@ -411,8 +526,12 @@ async function gradeWholeSheetViaJob() {
   const jobId = currentJobId.value
   const corrections = rows.value.map((row, index) => ({
     index,
+    problem_id: row.problemId || undefined,
+    confirmed: row.recognitionConfirmed,
     question: row.problem.trim(),
+    canonical_markdown: row.problem.trim(),
     student_answer: row.studentAnswer.trim(),
+    answer_canonical_markdown: row.studentAnswer.trim(),
     answer_state: row.answerState,
     subject: selectedSubject.value || undefined,
   }))
@@ -438,8 +557,15 @@ async function gradeWholeSheetViaJob() {
 
 /** Job completed 的逐题结果 → 护栏行状态（PhotoGradeOverlay 数据源对齐）。 */
 function applyPhotoJobResult(result: PhotoJobResult) {
-  result.items.forEach((item, index) => {
-    const row = rows.value[index]
+  const answerableIndexes = rows.value
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => isAnswerable(row))
+    .map(({ index }) => index)
+  result.items.forEach((item, resultIndex) => {
+    const byID = item.question.problem_id
+      ? rows.value.findIndex((row) => row.problemId === item.question.problem_id)
+      : -1
+    const row = rows.value[byID >= 0 ? byID : (answerableIndexes[resultIndex] ?? -1)]
     if (!row) return
     row.bbox = item.question.bbox ?? row.bbox
     const grade = item.grade
@@ -513,9 +639,13 @@ async function coldStart() {
 </script>
 
 <template>
-  <div class="rec-panel" data-testid="recognize-guard">
+  <div
+    class="rec-panel"
+    :class="{ 'rec-panel--conversation': !!initialImage }"
+    data-testid="recognize-guard"
+  >
     <div class="rec-panel__head">
-      <span class="rec-panel__title">📷 {{ t('k12.recognize.title') }}</span>
+      <span v-if="!initialImage" class="rec-panel__title">📷 {{ t('k12.recognize.title') }}</span>
       <button
         class="rec-panel__x"
         data-testid="recognize-close"
@@ -525,31 +655,34 @@ async function coldStart() {
         ✕
       </button>
     </div>
-    <p class="rec-panel__intro">{{ t('k12.recognize.intro') }}</p>
+    <p v-if="!initialImage" class="rec-panel__intro">{{ t('k12.recognize.intro') }}</p>
 
     <!-- 图片输入：文件选择 + base64 粘贴回退 -->
-    <label class="rec-panel__file">
+    <label v-if="!initialImage" class="rec-panel__file">
       <input type="file" accept="image/*" data-testid="recognize-file" @change="onFile" />
       <span>{{ t('k12.recognize.pickImage') }}</span>
     </label>
     <!-- 选了图片 → 显示缩略图预览（不糊 base64 原文）；textarea 用 v-show 保留在 DOM 供粘贴回退。 -->
     <img
-      v-if="isImageData"
+      v-if="isImageData && !initialImage"
       :src="imageB64"
       class="rec-panel__preview"
       data-testid="recognize-preview"
       alt="作业照片预览"
     />
-    <textarea
-      v-show="!isImageData"
+    <HcClearableField>
+      <textarea
+      v-show="!isImageData && !initialImage"
       v-model="imageB64"
       class="rec-panel__b64"
       data-testid="recognize-b64"
       :placeholder="t('k12.recognize.pasteHint')"
       rows="2"
     />
+    </HcClearableField>
 
     <button
+      v-if="!initialImage"
       class="rec-panel__run"
       data-testid="recognize-run"
       :disabled="!imageB64.trim() || recognizing"
@@ -568,7 +701,7 @@ async function coldStart() {
       {{ anchorWarning || t('k12.recognize.anchoring') }}
     </div>
 
-    <div class="rec-panel__subject" data-testid="recognize-subject">
+    <div v-show="rows.length && !selectedSubject" class="rec-panel__subject" data-testid="recognize-subject">
       <span>{{ t('k12.accum.subject') }}</span>
       <HcSelect
         v-model="selectedSubject"
@@ -601,22 +734,54 @@ async function coldStart() {
 
     <!-- 识题回显护栏：逐题核对 -->
     <div v-if="rows.length" class="rec-guard">
-      <div class="rec-guard__title">🔍 {{ t('k12.recognize.guardTitle') }}</div>
-      <div v-for="(row, i) in rows" :key="i" class="rec-row" data-testid="rq-item">
+      <p v-if="!confirmed" class="rec-guard__lead">📷 {{ t('k12.recognize.confirmLead') }}</p>
+      <p v-else class="rec-guard__lead rec-guard__lead--confirmed">
+        {{ t('k12.recognize.confirmedLead', { count: answerableRowCount }) }}
+      </p>
+      <div
+        v-for="(row, i) in rows"
+        :key="row.problemId || i"
+        class="rec-row"
+        :class="{
+          'rec-row--parent': row.problemKind === 'compound_parent',
+          'rec-row--child': row.problemKind === 'subproblem',
+        }"
+        data-testid="rq-item"
+        :data-problem-id="row.problemId"
+        :data-parent-problem-id="row.parentProblemId"
+        :data-problem-kind="row.problemKind"
+      >
         <div class="rec-row__q">
-          <input
-            v-if="row.editing"
+          <HcClearableField v-if="row.editing">
+            <input
             v-model="row.problem"
             class="rec-row__edit"
             :data-testid="`rq-problem-${i}`"
             :placeholder="t('k12.recognize.problemPlaceholder')"
           />
-          <span v-else class="rec-row__qtext">{{ row.problem }}</span>
-          <button class="rec-row__toggle" :data-testid="`rq-edit-${i}`" @click="toggleEdit(row)">
+          </HcClearableField>
+          <MarkdownRenderer
+            v-else
+            class="rec-row__qtext"
+            :data-testid="row.problemKind === 'compound_parent' ? 'rq-parent' : undefined"
+            :content="`**${rowLabel(row, i)}.** ${row.problem}`"
+          />
+          <button v-if="correctionMode" class="rec-row__toggle" :data-testid="`rq-edit-${i}`" @click="toggleEdit(row)">
             {{ row.editing ? t('k12.recognize.readOk') : t('k12.recognize.readWrong') }}
           </button>
         </div>
-        <div v-if="row.knowledgePoints.length" class="rec-row__kp">
+        <div
+          v-if="!confirmed && row.confirmationRequired"
+          class="rec-row__risk"
+          :data-testid="`rq-risk-${i}`"
+        >
+          <span>请对照原图核对：{{ row.confirmationReasons.map(riskLabel).join('、') }}</span>
+          <label class="rec-row__risk-check">
+            <input v-model="row.recognitionConfirmed" type="checkbox" :data-testid="`rq-confirm-${i}`" />
+            我已逐项核对
+          </label>
+        </div>
+        <div v-show="confirmed && row.knowledgePoints.length" class="rec-row__kp">
           {{ t('k12.recognize.kpLabel') }}：<span
             v-for="kp in row.knowledgePoints"
             :key="kp"
@@ -666,14 +831,16 @@ async function coldStart() {
           >
         </div>
 
-        <div v-if="confirmed" class="rec-row__grade">
-          <input
+        <div v-if="confirmed && isAnswerable(row)" class="rec-row__grade">
+          <HcClearableField>
+            <input
             v-model="row.studentAnswer"
             class="rec-row__answer"
             :data-testid="`rq-answer-${i}`"
             :placeholder="t('k12.recognize.answerPlaceholder')"
             @input="syncAnswerState(row)"
           />
+          </HcClearableField>
           <!-- 空白题：走「求解·怎么讲」（不要求填答案）；已答题：批改按钮亮起。 -->
           <button
             class="rec-row__solvebtn"
@@ -707,29 +874,53 @@ async function coldStart() {
           </button>
         </div>
         <p
-          v-if="confirmed && row.answerState === 'unclear'"
+          v-if="confirmed && isAnswerable(row) && row.answerState === 'unclear'"
           class="rec-row__unclearhint"
           :data-testid="`rq-unclear-hint-${i}`"
         >
           {{ t('k12.recognize.unclearAnswerHint') }}
         </p>
         <p
-          v-else-if="confirmed && row.answerState === 'blank'"
+          v-else-if="confirmed && isAnswerable(row) && row.answerState === 'blank'"
           class="rec-row__blankhint"
           :data-testid="`rq-blank-hint-${i}`"
         >
           {{ t('k12.recognize.blankHint') }}
         </p>
       </div>
-      <button
-        v-if="!confirmed"
-        class="rec-guard__confirm"
-        data-testid="recognize-confirm-all"
-        :disabled="rows.some((row) => !row.problem.trim())"
-        @click="confirmAll"
+      <p
+        v-if="!confirmed && unclearAnswerCount"
+        class="rec-guard__confidence-note"
+        data-testid="recognize-confidence-note"
       >
-        {{ t('k12.recognize.confirmAll') }}
-      </button>
+        <span>{{ t('k12.recognize.needsConfirm') }}</span>
+        {{ t('k12.recognize.unclearRecognitionNote', { count: unclearAnswerCount }) }}
+      </p>
+      <p
+        v-if="!confirmed && unconfirmedRiskCount"
+        class="rec-guard__confidence-note"
+        data-testid="recognize-risk-count"
+      >
+        还有 {{ unconfirmedRiskCount }} 处高风险识别需要逐项对照原图确认。
+      </p>
+      <div v-if="!confirmed" class="rec-guard__confirm-actions">
+        <button
+          class="rec-guard__confirm"
+          data-testid="recognize-confirm-all"
+          :disabled="rows.some((row) => !row.problem.trim()) || unconfirmedRiskCount > 0"
+          @click="confirmAll"
+        >
+          {{ t('k12.recognize.confirmAll') }}
+        </button>
+        <button
+          v-if="!correctionMode"
+          class="rec-guard__correct"
+          data-testid="recognize-correct"
+          @click="startCorrection"
+        >
+          {{ t('k12.recognize.correctRecognition') }}
+        </button>
+      </div>
       <div v-else class="rec-guard__batch" data-testid="recognize-batch-actions">
         <span
           v-if="unclearAnswerCount"
@@ -783,10 +974,28 @@ async function coldStart() {
 
 <style scoped>
 .rec-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 12px 14px;
+}
+.rec-panel--conversation {
+  padding: 10px 14px 12px;
+}
+.rec-panel--conversation .rec-panel__head {
+  position: absolute;
+  z-index: 1;
+  top: 5px;
+  right: 5px;
+}
+.rec-panel--conversation .rec-panel__x {
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.rec-panel--conversation:hover .rec-panel__x,
+.rec-panel--conversation .rec-panel__x:focus-visible {
+  opacity: 1;
 }
 .rec-panel__head {
   display: flex;
@@ -958,13 +1167,36 @@ async function coldStart() {
   gap: 8px;
   margin-top: 4px;
 }
-.rec-guard__title {
-  font-size: 12.5px;
-  font-weight: 700;
+.rec-guard__lead {
+  margin: 0 0 4px;
+  font-size: 13px;
+  line-height: 1.65;
   color: var(--hc-text-primary);
 }
+.rec-guard__lead--confirmed {
+  font-weight: 600;
+}
+.rec-guard__confirm-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.rec-guard__confidence-note {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--hc-text-muted);
+}
+.rec-guard__confidence-note span {
+  display: inline-flex;
+  margin-right: 5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
+  color: var(--hc-warning);
+}
 .rec-guard__confirm {
-  align-self: flex-end;
   font-size: 12px;
   padding: 7px 14px;
   border: 0.5px solid var(--hc-border-hl);
@@ -976,6 +1208,15 @@ async function coldStart() {
 .rec-guard__confirm:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.rec-guard__correct {
+  font-size: 12px;
+  padding: 7px 14px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
+  cursor: pointer;
 }
 .rec-guard__batch {
   display: flex;
@@ -1017,6 +1258,43 @@ async function coldStart() {
   flex-direction: column;
   gap: 6px;
 }
+.rec-row--parent {
+  border-inline-start-color: var(--hc-text-muted);
+  background: var(--hc-bg-subtle);
+  font-weight: 600;
+}
+.rec-row--child {
+  margin-inline-start: 16px;
+  border-inline-start-width: 2px;
+}
+.rec-row__risk {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--hc-radius-md);
+  background: color-mix(in srgb, var(--hc-warning) 10%, transparent);
+  color: var(--hc-warning);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+.rec-row__risk-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.rec-panel--conversation .rec-row {
+  border-inline-start: 0;
+  padding: 5px 0;
+  background: transparent;
+  border-radius: 0;
+}
+.rec-panel--conversation .rec-row--child {
+  margin-inline-start: 16px;
+}
 .rec-row__q {
   display: flex;
   align-items: center;
@@ -1026,6 +1304,9 @@ async function coldStart() {
   flex: 1;
   font-size: 13px;
   color: var(--hc-text-primary);
+}
+.rec-row__qtext :deep(p) {
+  margin: 0;
 }
 .rec-row__edit {
   flex: 1;

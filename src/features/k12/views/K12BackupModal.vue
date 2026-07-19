@@ -1,14 +1,23 @@
 <script setup lang="ts">
 /**
  * 家庭学习档案备份/恢复（features/k12）· M4-1。
- * 导出：错题本记录 → .hexbak（版本头 + checksum）。恢复：本地结构预览 → 明确确认 → 服务端校验并幂等合并。
+ * 导出：家庭学习档案 → archive v3 .hexbak。恢复：预览源/目标 → 监护人确认
+ * → 服务端同 Tutor restore 或跨 Tutor restore-as → snapshot/journal/显式回退。
  */
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
-import { k12Backup, k12Restore, type HexbakArchive } from '@/api/k12'
+import {
+  k12Backup,
+  k12Restore,
+  k12RestoreAs,
+  k12RollbackRestoreAs,
+  type HexbakArchive,
+  type K12RestoreAsResp,
+} from '@/api/k12'
+import { download as saveArchive } from '../export'
 
-const props = defineProps<{ agentId: string; agentName: string }>()
+const props = defineProps<{ agentId: string; agentName: string; targetChildName?: string }>()
 const emit = defineEmits<{ (e: 'close'): void }>()
 
 const { t } = useI18n()
@@ -17,32 +26,30 @@ const toast = useToast()
 const pendingArchive = ref<HexbakArchive | null>(null)
 const restoredCount = ref<number | null>(null)
 const restoreSnapshot = ref<HexbakArchive | null>(null)
+const restoreMigration = ref<K12RestoreAsResp | null>(null)
+const guardianConfirmed = ref(false)
 const importError = ref('')
+const exportError = ref('')
 const busy = ref(false)
-const targetMatches = computed(() => pendingArchive.value?.agent_name === props.agentId)
-
-function download(filename: string, content: string): void {
-  const blob = new Blob([content], { type: 'application/octet-stream' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 0)
-}
+const isRestoreAs = computed(() => Boolean(
+  pendingArchive.value && pendingArchive.value.agent_name !== props.agentId,
+))
+const sourceChildName = computed(() => pendingArchive.value?.profile?.child_name || pendingArchive.value?.agent_name || '')
+const canRestore = computed(() => Boolean(
+  pendingArchive.value && !busy.value && (!isRestoreAs.value || guardianConfirmed.value),
+))
 
 // 导出：真实 GET /api/k12/backup（服务端全量归档 + checksum）→ 下载 .hexbak
 async function doExport() {
   busy.value = true
+  exportError.value = ''
   try {
     const archive = await k12Backup(props.agentId)
     const file = `${props.agentName}_学习档案.hexbak`
-    download(file, JSON.stringify(archive, null, 2))
-    toast.success(t('k12.backup.exported', { file }))
+    const saved = await saveArchive(file, JSON.stringify(archive, null, 2), 'application/octet-stream')
+    if (saved) toast.success(t('k12.backup.exported', { file }))
   } catch (e) {
-    importError.value = e instanceof Error ? e.message : String(e)
+    exportError.value = e instanceof Error ? e.message : String(e)
   } finally {
     busy.value = false
   }
@@ -51,7 +58,13 @@ async function doExport() {
 async function onFile(e: Event) {
   const input = e.target as HTMLInputElement
   const file = input.files?.[0]
-  if (file) await handleFile(file)
+  if (!file) return
+  try {
+    await handleFile(file)
+  } finally {
+    // 允许修正归档后再次选择同一路径；否则浏览器不会再次触发 change。
+    input.value = ''
+  }
 }
 async function onDrop(e: DragEvent) {
   const file = e.dataTransfer?.files?.[0]
@@ -64,15 +77,12 @@ async function handleFile(file: File) {
   pendingArchive.value = null
   restoredCount.value = null
   restoreSnapshot.value = null
+  restoreMigration.value = null
+  guardianConfirmed.value = false
   busy.value = true
   try {
     const archive = parseArchive(JSON.parse(await file.text()))
     pendingArchive.value = archive
-    // 当前服务端没有 target_agent。只改 header 会让 records 的 agent scope 与 checksum 不一致，
-    // 因此跨 agent 归档明确阻断，不伪装成可安全迁移。
-    if (archive.agent_name !== props.agentId) {
-      importError.value = t('k12.backup.targetMismatch', { source: archive.agent_name, target: props.agentId })
-    }
   } catch (e) {
     importError.value = e instanceof Error ? e.message : t('k12.backup.errorBadFile')
   } finally {
@@ -90,6 +100,8 @@ function parseArchive(value: unknown): HexbakArchive {
     || typeof archive.agent_name !== 'string'
     || !archive.agent_name.trim()
     || !Array.isArray(archive.records)
+    || (archive.assets !== undefined && !Array.isArray(archive.assets))
+    || (archive.creative_work_ocr !== undefined && !Array.isArray(archive.creative_work_ocr))
     || typeof archive.checksum !== 'string'
     || !archive.checksum.trim()
   ) throw new Error(t('k12.backup.errorBadFile'))
@@ -98,16 +110,30 @@ function parseArchive(value: unknown): HexbakArchive {
 
 async function confirmRestore() {
   const archive = pendingArchive.value
-  if (!archive || !targetMatches.value || busy.value) return
+  if (!archive || !canRestore.value) return
   busy.value = true
   importError.value = ''
   try {
-    // agent_name 已等于当前 agent，原样交给服务端以保留 records/checksum 一致性。
-    const res = await k12Restore(archive)
-    restoredCount.value = res.restored
-    restoreSnapshot.value = res.snapshot
+    if (archive.agent_name !== props.agentId) {
+      const res = await k12RestoreAs({
+        archive,
+        source_agent: archive.agent_name,
+        target_agent: props.agentId,
+        guardian_confirmed: guardianConfirmed.value,
+        // 与原 archive checksum + target 绑定：用户在超时/重启后重试仍是同一命令。
+        idempotency_key: `restore-as:${props.agentId}:${archive.checksum}`,
+      })
+      restoredCount.value = res.restored
+      restoreSnapshot.value = res.snapshot ?? null
+      restoreMigration.value = res
+    } else {
+      // 同 Tutor 保留 v1/v2/v3 旧 restore 兼容通道，不改写 archive。
+      const res = await k12Restore(archive)
+      restoredCount.value = res.restored
+      restoreSnapshot.value = res.snapshot
+    }
     pendingArchive.value = null
-    toast.success(t('k12.backup.restored', { count: res.restored }))
+    toast.success(t('k12.backup.restored', { count: restoredCount.value }))
   } catch (e) {
     importError.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -115,9 +141,34 @@ async function confirmRestore() {
   }
 }
 
-function saveSnapshot() {
+async function rollbackMigration() {
+  const migration = restoreMigration.value
+  if (!migration || migration.status !== 'completed' || busy.value) return
+  busy.value = true
+  importError.value = ''
+  try {
+    restoreMigration.value = await k12RollbackRestoreAs(migration.migration_id, {
+      target_agent: props.agentId,
+      guardian_confirmed: true,
+    })
+    toast.success(t('k12.backup.rollbackDone'))
+  } catch (e) {
+    importError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function saveSnapshot() {
   if (!restoreSnapshot.value) return
-  download(`${props.agentName}_恢复前快照.hexbak`, JSON.stringify(restoreSnapshot.value, null, 2))
+  const file = `${props.agentName}_恢复前快照.hexbak`
+  importError.value = ''
+  try {
+    const saved = await saveArchive(file, JSON.stringify(restoreSnapshot.value, null, 2), 'application/octet-stream')
+    if (saved) toast.success(t('k12.backup.exported', { file }))
+  } catch (e) {
+    importError.value = e instanceof Error ? e.message : String(e)
+  }
 }
 </script>
 
@@ -134,6 +185,7 @@ function saveSnapshot() {
         <div class="k12bk__field">
           <span>{{ t('k12.backup.exportLabel') }}</span>
           <button class="k12bk__btn k12bk__btn--primary" :disabled="busy" @click="doExport">{{ t('k12.backup.exportBtn') }}</button>
+          <p v-if="exportError" class="k12bk__err" data-testid="backup-export-error">{{ exportError }}</p>
         </div>
 
         <div class="k12bk__field">
@@ -145,12 +197,36 @@ function saveSnapshot() {
           <p v-if="pendingArchive" class="k12bk__preview" data-testid="backup-restore-preview">
             {{ t('k12.backup.previewCount', { count: pendingArchive.records.length, source: pendingArchive.agent_name, target: agentId }) }}
           </p>
+          <section v-if="pendingArchive" class="k12bk__scope" data-testid="backup-restore-scope">
+            <div><b>{{ t('k12.backup.sourceTutor') }}</b><span>{{ pendingArchive.agent_name }} · {{ sourceChildName }}</span></div>
+            <div><b>{{ t('k12.backup.targetTutor') }}</b><span>{{ agentId }} · {{ targetChildName || agentName }}</span></div>
+            <div><b>{{ t('k12.backup.impactScope') }}</b><span>{{ t('k12.backup.impactDetail', { count: pendingArchive.records.length, assetCount: pendingArchive.assets?.length ?? 0 }) }}</span></div>
+            <p v-if="isRestoreAs">{{ t('k12.backup.restoreAsWarning') }}</p>
+            <label v-if="isRestoreAs" class="k12bk__guardian">
+              <input v-model="guardianConfirmed" data-testid="backup-restore-guardian" type="checkbox" />
+              <span>{{ t('k12.backup.guardianConfirm') }}</span>
+            </label>
+          </section>
           <p v-if="restoredCount !== null" class="k12bk__preview">{{ t('k12.backup.restored', { count: restoredCount }) }}</p>
           <div v-if="restoreSnapshot" class="k12bk__snapshot" data-testid="backup-restore-snapshot">
             <span>{{ t('k12.backup.snapshotReady') }}</span>
             <button class="k12bk__btn" @click="saveSnapshot">{{ t('k12.backup.saveSnapshot') }}</button>
           </div>
-          <p v-if="importError" class="k12bk__err">{{ importError }}</p>
+          <section v-if="restoreMigration" class="k12bk__migration" data-testid="backup-restore-migration">
+            <b>{{ t('k12.backup.migrationResult') }} · {{ restoreMigration.status }}</b>
+            <span>{{ t('k12.backup.migrationId') }}: {{ restoreMigration.migration_id }}</span>
+            <span>{{ t('k12.backup.originalDigest') }}: {{ restoreMigration.original_archive_digest }}</span>
+            <span>{{ t('k12.backup.snapshotDigest') }}: {{ restoreMigration.snapshot_digest }}</span>
+            <span>{{ t('k12.backup.journalEntries', { count: restoreMigration.journal_entries }) }}</span>
+            <button
+              v-if="restoreMigration.status === 'completed'"
+              class="k12bk__btn"
+              data-testid="backup-restore-rollback"
+              :disabled="busy"
+              @click="rollbackMigration"
+            >{{ t('k12.backup.rollback') }}</button>
+          </section>
+          <p v-if="importError" class="k12bk__err" data-testid="backup-import-error">{{ importError }}</p>
         </div>
       </div>
       <div class="k12bk__foot">
@@ -159,7 +235,7 @@ function saveSnapshot() {
           v-if="pendingArchive"
           class="k12bk__btn k12bk__btn--primary"
           data-testid="backup-restore-confirm"
-          :disabled="busy || !targetMatches"
+          :disabled="!canRestore"
           @click="confirmRestore"
         >
           {{ busy ? t('k12.backup.restoring') : t('k12.backup.confirmRestore') }}
@@ -197,6 +273,17 @@ function saveSnapshot() {
 }
 .k12bk__file { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
 .k12bk__preview { margin: 0; font-size: 12.5px; color: var(--hc-text-secondary); }
+.k12bk__scope, .k12bk__migration {
+  display: flex; flex-direction: column; gap: 7px; padding: 11px 12px;
+  border: 0.5px solid var(--hc-border); border-radius: 10px; background: var(--hc-bg-card);
+  font-size: 12px; color: var(--hc-text-secondary); overflow-wrap: anywhere;
+}
+.k12bk__scope > div { display: grid; grid-template-columns: 82px 1fr; gap: 8px; }
+.k12bk__scope b, .k12bk__migration b { color: var(--hc-text-primary); }
+.k12bk__scope p { margin: 2px 0; color: var(--hc-warning, #b76300); }
+.k12bk__guardian { display: flex; align-items: flex-start; gap: 7px; color: var(--hc-text-primary); cursor: pointer; }
+.k12bk__guardian input { margin-top: 2px; }
+.k12bk__migration .k12bk__btn { align-self: flex-start; margin-top: 3px; }
 .k12bk__snapshot { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--hc-text-secondary); }
 .k12bk__pending { color: var(--hc-text-muted); font-size: 11.5px; }
 .k12bk__err { margin: 0; font-size: 12.5px; color: var(--hc-error); }

@@ -12,6 +12,12 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { useToast } from '@/composables/useToast'
+import {
+  k12QueryDeliveryReceipt,
+  k12RetryDeliveryReceipt,
+  k12SendPrepCard,
+  type DeliveryReceiptDTO,
+} from '@/api/k12'
 import { useK12Store } from '../store'
 import { printPrepCard, prepCardToText } from '../export'
 import { parseDocument } from '@/utils/file-parser'
@@ -28,11 +34,37 @@ const { t } = useI18n()
 const toast = useToast()
 const store = useK12Store()
 
+let prepAbort: AbortController | null = null
+const deliveryReceipt = ref<DeliveryReceiptDTO | null>(null)
+const deliveryBusy = ref(false)
+const deliverySetupError = ref('')
+
+function cancelPrepCard() {
+  prepAbort?.abort()
+  prepAbort = null
+}
+
+function requestPrepCard(
+  agentId = props.agentId,
+  grade = props.grade,
+  kps = props.knowledgePoints,
+) {
+  cancelPrepCard()
+  if (!agentId || !kps.length) return
+  const controller = new AbortController()
+  prepAbort = controller
+  void store.loadPrepCard(agentId, grade, kps, controller.signal).finally(() => {
+    if (prepAbort === controller) prepAbort = null
+  })
+}
+
 // 识题给出知识点即生成辅导要点（绑定当前作业）；知识点变化重拉。
 watch(
   () => [props.agentId, props.grade, props.knowledgePoints] as const,
   ([agentId, grade, kps]) => {
-    if (agentId && kps && kps.length) store.loadPrepCard(agentId, grade, kps)
+    deliveryReceipt.value = null
+    deliverySetupError.value = ''
+    requestPrepCard(agentId, grade, kps)
   },
   { immediate: true, deep: true },
 )
@@ -40,6 +72,12 @@ watch(
 /** AI 归纳段落用告警色徽章（未校验），其余用 accent（本地记录/课本/验算） */
 function isWeakSource(label: string): boolean {
   return label.includes('AI') || label.includes('⚠️')
+}
+
+function retryPrepCard() {
+  if (!store.prepLoading && props.agentId && props.knowledgePoints.length) {
+    requestPrepCard()
+  }
 }
 
 const groundingInput = ref<HTMLInputElement | null>(null)
@@ -55,7 +93,10 @@ function cancelGroundingUpload() {
 }
 
 watch(() => props.agentId, cancelGroundingUpload)
-onBeforeUnmount(cancelGroundingUpload)
+onBeforeUnmount(() => {
+  cancelPrepCard()
+  cancelGroundingUpload()
+})
 
 function openGroundingPicker() {
   if (!groundingBusy.value) groundingInput.value?.click()
@@ -105,7 +146,7 @@ async function onGroundingFile(event: Event) {
 
 const prepMeta = () => ({ title: t('k12.prep.title'), gradeLabel: props.grade })
 
-// 打印辅导要点（浏览器：隐藏 iframe → 打印对话框；Tauri 桌面：存 HTML 供系统预览打开打印）
+// 打印辅导要点（Tauri：原生 PrintJob/系统打印对话框；浏览器开发态：window.print）。
 async function doPrint() {
   if (!store.prepCard) {
     toast.info(t('k12.prep.empty'))
@@ -118,17 +159,76 @@ async function doPrint() {
   }
 }
 
-// 发到手机：后端无出网推送端点，故用真实客户端动作——复制文本到剪贴板，家长粘贴发到手机 IM。
+function deliveryStatusText(receipt: DeliveryReceiptDTO): string {
+  const target = receipt.target.label || receipt.target.platform
+  switch (receipt.status) {
+    case 'pending':
+      return t('k12.delivery.pending')
+    case 'sending':
+      return t('k12.delivery.sending', { target })
+    case 'delivered':
+      return t('k12.delivery.delivered', { target })
+    case 'failed':
+      return t('k12.delivery.failed', {
+        reason: receipt.last_error || t('k12.delivery.unknownReason'),
+      })
+    case 'outcome_unknown':
+      return t('k12.delivery.outcomeUnknown')
+  }
+}
+
+function applyDeliveryReceipt(receipt: DeliveryReceiptDTO) {
+  deliveryReceipt.value = receipt
+  deliverySetupError.value = ''
+  if (receipt.status === 'delivered') toast.success(deliveryStatusText(receipt))
+  else if (receipt.status === 'failed') toast.error(deliveryStatusText(receipt))
+  else toast.info(deliveryStatusText(receipt))
+}
+
+// 发到手机：真实直发先落 durable Receipt。平台受理只显示「发送中」，
+// 只有查询证据为 delivered 时才显示「已送达」。
 async function doSendPhone() {
-  if (!store.prepCard) {
+  if (!store.prepCard || deliveryBusy.value) {
     toast.info(t('k12.prep.empty'))
     return
   }
+  deliveryBusy.value = true
   try {
-    await navigator.clipboard.writeText(prepCardToText(store.prepCard, prepMeta()))
-    toast.success(t('k12.prep.copied'))
-  } catch {
-    toast.error(t('k12.prep.copyFailed'))
+    applyDeliveryReceipt(
+      await k12SendPrepCard(props.agentId, prepCardToText(store.prepCard, prepMeta())),
+    )
+  } catch (e) {
+    deliverySetupError.value = (e as Error).message || t('k12.delivery.setupRequired')
+    toast.error(deliverySetupError.value)
+  } finally {
+    deliveryBusy.value = false
+  }
+}
+
+async function retryDelivery() {
+  const receipt = deliveryReceipt.value
+  if (!receipt || receipt.status !== 'failed' || deliveryBusy.value) return
+  deliveryBusy.value = true
+  try {
+    applyDeliveryReceipt(await k12RetryDeliveryReceipt(props.agentId, receipt.delivery_id))
+  } catch (e) {
+    toast.error((e as Error).message)
+  } finally {
+    deliveryBusy.value = false
+  }
+}
+
+async function queryDelivery() {
+  const receipt = deliveryReceipt.value
+  if (!receipt || !['sending', 'outcome_unknown'].includes(receipt.status) || deliveryBusy.value)
+    return
+  deliveryBusy.value = true
+  try {
+    applyDeliveryReceipt(await k12QueryDeliveryReceipt(props.agentId, receipt.delivery_id))
+  } catch (e) {
+    toast.error((e as Error).message)
+  } finally {
+    deliveryBusy.value = false
   }
 }
 </script>
@@ -159,9 +259,10 @@ async function doSendPhone() {
           class="icbtn"
           :title="t('k12.prep.sendPhone')"
           data-testid="prep-send"
+          :disabled="deliveryBusy || !store.prepCard"
           @click="doSendPhone"
         >
-          📱
+          {{ deliveryBusy ? '…' : '📱' }}
         </button>
         <button
           class="icbtn"
@@ -176,9 +277,17 @@ async function doSendPhone() {
 
     <div class="tutor-guide__body">
       <p v-if="store.prepLoading" class="tutor-guide__hint">{{ t('k12.prep.generating') }}</p>
-      <p v-else-if="store.prepError" class="tutor-guide__hint tutor-guide__hint--err">
-        {{ store.prepError }}
-      </p>
+      <div v-else-if="store.prepError" class="tutor-guide__error" role="alert">
+        <p class="tutor-guide__hint tutor-guide__hint--err">{{ store.prepError }}</p>
+        <button
+          class="tutor-guide__retry"
+          data-testid="prep-retry"
+          type="button"
+          @click="retryPrepCard"
+        >
+          {{ t('common.retry') }}
+        </button>
+      </div>
 
       <template v-else-if="store.prepCard">
         <div v-for="(s, i) in store.prepCard.sections" :key="i" class="tutor-section">
@@ -194,6 +303,43 @@ async function doSendPhone() {
           <MarkdownRenderer :content="s.content" />
         </div>
         <p class="tutor-guide__legend">{{ t('k12.prep.legend') }}</p>
+        <div
+          v-if="deliveryReceipt"
+          class="tutor-guide__delivery"
+          :class="`tutor-guide__delivery--${deliveryReceipt.status}`"
+          data-testid="prep-delivery-receipt"
+          role="status"
+        >
+          <span>{{ deliveryStatusText(deliveryReceipt) }}</span>
+          <button
+            v-if="deliveryReceipt.status === 'failed'"
+            type="button"
+            data-testid="prep-delivery-retry"
+            :disabled="deliveryBusy"
+            @click="retryDelivery"
+          >
+            {{ t('k12.delivery.retry') }}
+          </button>
+          <button
+            v-if="
+              deliveryReceipt.status === 'sending' || deliveryReceipt.status === 'outcome_unknown'
+            "
+            type="button"
+            data-testid="prep-delivery-query"
+            :disabled="deliveryBusy"
+            @click="queryDelivery"
+          >
+            {{ t('k12.delivery.query') }}
+          </button>
+        </div>
+        <div
+          v-if="deliverySetupError"
+          class="tutor-guide__delivery tutor-guide__delivery--failed"
+          data-testid="prep-delivery-setup"
+        >
+          <span>{{ deliverySetupError }}</span>
+          <a href="/channels" data-testid="prep-bind-cta">{{ t('k12.delivery.bindCTA') }}</a>
+        </div>
       </template>
 
       <p v-else class="tutor-guide__hint">{{ t('k12.prep.empty') }}</p>
@@ -259,6 +405,25 @@ async function doSendPhone() {
   font-size: 12.5px;
   margin: 0;
 }
+.tutor-guide__error {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.tutor-guide__retry {
+  flex-shrink: 0;
+  border: 1px solid var(--hc-danger);
+  border-radius: var(--hc-radius-sm);
+  background: transparent;
+  color: var(--hc-danger);
+  cursor: pointer;
+  padding: 5px 12px;
+  font-size: 12px;
+}
+.tutor-guide__retry:hover {
+  background: color-mix(in srgb, var(--hc-danger) 8%, transparent);
+}
 .tutor-section + .tutor-section {
   margin-top: 12px;
   padding-top: 10px;
@@ -290,6 +455,37 @@ async function doSendPhone() {
   font-size: 11px;
   line-height: 1.6;
   color: var(--hc-text-muted);
+}
+.tutor-guide__delivery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: var(--hc-radius-sm);
+  background: var(--hc-accent-subtle);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+}
+.tutor-guide__delivery--delivered {
+  color: var(--hc-success);
+}
+.tutor-guide__delivery--failed,
+.tutor-guide__delivery--outcome_unknown {
+  color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
+}
+.tutor-guide__delivery button,
+.tutor-guide__delivery a {
+  flex-shrink: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hc-accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 650;
+  text-decoration: none;
 }
 .tutor-guide__hint--err {
   color: var(--hc-error);

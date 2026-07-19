@@ -14,17 +14,21 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 const h = vi.hoisted(() => ({
   createJobSpy: vi.fn(),
   getJobSpy: vi.fn(),
+  getResultSpy: vi.fn(),
   confirmJobSpy: vi.fn(),
   retryJobSpy: vi.fn(),
+  cancelJobSpy: vi.fn(),
   gradeSpy: vi.fn(),
   solveSpy: vi.fn(),
   coldStartSpy: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
-  k12CreateGradingJob: (r: unknown) => h.createJobSpy(r),
+  k12CreateGradingJob: (r: unknown, signal?: AbortSignal) => h.createJobSpy(r, signal),
   k12GetGradingJob: (...args: unknown[]) => h.getJobSpy(...args),
+  k12GetGradingJobResult: (...args: unknown[]) => h.getResultSpy(...args),
   k12ConfirmGradingJob: (...args: unknown[]) => h.confirmJobSpy(...args),
   k12RetryGradingJob: (...args: unknown[]) => h.retryJobSpy(...args),
+  k12CancelGradingJob: (...args: unknown[]) => h.cancelJobSpy(...args),
   k12Grade: (r: unknown) => h.gradeSpy(r),
   k12Solve: (r: unknown) => h.solveSpy(r),
   k12ColdStart: (r: unknown) => h.coldStartSpy(r),
@@ -102,8 +106,10 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     setActivePinia(createPinia())
     h.createJobSpy.mockReset()
     h.getJobSpy.mockReset()
+    h.getResultSpy.mockReset()
     h.confirmJobSpy.mockReset()
     h.retryJobSpy.mockReset()
+    h.cancelJobSpy.mockReset().mockResolvedValue({})
     h.gradeSpy.mockReset()
     h.solveSpy.mockReset()
     h.coldStartSpy.mockReset()
@@ -146,6 +152,140 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(w.find('[data-testid="rq-grade-0"]').exists()).toBe(true)
   })
 
+  it('#1 原型交互：识别结果先整体朗读核对，只提供“读得对/有地方读错”两个主动作', async () => {
+    mockJobRecognition([
+      { question: '竖式计算：2.8 × 0.65', knowledge_points: ['小数乘法'] },
+      { question: '解方程：2x + 15 = 43', knowledge_points: ['简易方程'], answer_state: 'unclear' },
+    ], '数学')
+    const w = render({ initialImage: 'data:image/png;base64,AAAA' })
+    await flushPromises()
+
+    expect(w.text()).toContain('讲之前我先把读到的数字念一遍')
+    expect(w.get('[data-testid="recognize-confirm-all"]').text()).toContain('读得对，开始辅导')
+    expect(w.get('[data-testid="recognize-correct"]').text()).toContain('有地方读错了')
+    expect(w.get('[data-testid="recognize-confidence-note"]').text()).toContain('不会把不确定内容写进题目')
+    expect(w.findAll('[data-testid^="rq-edit-"]')).toHaveLength(0)
+
+    await w.get('[data-testid="recognize-correct"]').trigger('click')
+    expect(w.findAll('[data-testid^="rq-edit-"]')).toHaveLength(2)
+  })
+
+  it('DD-010 复合题：公共题干只渲染一次且无 Attempt，兄弟小题独立确认/修正并按 problem_id 提交', async () => {
+    const questions = [
+      {
+        problem_id: 'parent-1',
+        problem_kind: 'compound_parent',
+        page_asset_id: 'page-1',
+        question: '看统计图，回答下面两题。',
+        raw_transcription: '看统计图，回答下面两题。',
+        canonical_markdown: '看统计图，回答下面两题。',
+        canonical_valid: true,
+        canonical_version: 1,
+        knowledge_points: ['统计图'],
+        answer_state: 'blank',
+      },
+      {
+        problem_id: 'child-1',
+        problem_kind: 'subproblem',
+        parent_problem_id: 'parent-1',
+        subproblem_no: '1',
+        page_asset_id: 'page-1',
+        attempt_id: 'attempt-1',
+        question: '第一天有多少人？',
+        raw_transcription: '第一天有多少人？',
+        canonical_markdown: '第一天有多少人？',
+        canonical_valid: true,
+        canonical_version: 1,
+        knowledge_points: ['读图'],
+        answer_state: 'present',
+        student_answer: '31',
+        answer_raw_transcription: '31',
+        answer_canonical_markdown: '31',
+        confirmation_required: true,
+        confirmation_reasons: ['evidence_conflict', 'decimal_point'],
+      },
+      {
+        problem_id: 'child-2',
+        problem_kind: 'subproblem',
+        parent_problem_id: 'parent-1',
+        subproblem_no: '2',
+        page_asset_id: 'page-1',
+        attempt_id: 'attempt-2',
+        question: '第二天有多少人？',
+        raw_transcription: '第二天有多少人？',
+        canonical_markdown: '第二天有多少人？',
+        canonical_valid: true,
+        canonical_version: 1,
+        knowledge_points: ['读图'],
+        answer_state: 'present',
+        student_answer: '42',
+        answer_raw_transcription: '42',
+        answer_canonical_markdown: '42',
+        confirmation_required: false,
+      },
+    ]
+    h.createJobSpy.mockResolvedValue({ created: true, job: jobDTO('queued') })
+    h.getJobSpy
+      .mockResolvedValueOnce(
+        jobStatus('awaiting_confirmation', { recognition: { questions, subject: '数学' } }),
+      )
+      .mockResolvedValueOnce(
+        jobStatus('completed'),
+      )
+    h.getResultSpy.mockResolvedValue({
+      job_id: 'job-1',
+      result: { mode: 'grade', items: [], markdown: '' },
+    })
+    h.confirmJobSpy.mockResolvedValue(jobStatus('assessing'))
+
+    const w = render({ initialImage: 'data:image/png;base64,AAAA' })
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="rq-parent"]')).toHaveLength(1)
+    expect(w.findAll('[data-problem-kind="subproblem"]')).toHaveLength(2)
+    expect(w.get('[data-testid="rq-risk-1"]').text()).toContain('多次识别不一致')
+    expect(w.get('[data-testid="rq-risk-1"]').text()).toContain('小数点')
+    const parent = w.get('[data-problem-id="parent-1"]')
+    expect(parent.text()).toContain('公共题干')
+    expect(parent.find('[data-testid^="rq-answer-"]').exists()).toBe(false)
+    expect(parent.find('[data-testid^="rq-grade-"]').exists()).toBe(false)
+    expect(parent.find('[data-testid^="rq-solve-"]').exists()).toBe(false)
+
+    // 风险小题必须逐题勾选；整卷按钮不能默认替它确认。
+    expect(w.get('[data-testid="recognize-confirm-all"]').attributes('disabled')).toBeDefined()
+    await w.get('[data-testid="rq-confirm-1"]').setValue(true)
+    expect(w.get('[data-testid="recognize-confirm-all"]').attributes('disabled')).toBeUndefined()
+    await w.get('[data-testid="recognize-confirm-all"]').trigger('click')
+
+    // 两个兄弟 Attempt 各自编辑，公共题干没有答案输入。
+    await w.get('[data-testid="rq-answer-1"]').setValue('30')
+    await w.get('[data-testid="rq-answer-2"]').setValue('40')
+    await w.get('[data-testid="recognize-grade-all"]').trigger('click')
+    await flushPromises()
+
+    const request = h.confirmJobSpy.mock.calls[0]![1] as {
+      question_corrections: Array<Record<string, unknown>>
+    }
+    expect(request.question_corrections).toHaveLength(3)
+    expect(request.question_corrections[0]).toEqual(
+      expect.objectContaining({ problem_id: 'parent-1', confirmed: true }),
+    )
+    expect(request.question_corrections[1]).toEqual(
+      expect.objectContaining({
+        problem_id: 'child-1',
+        confirmed: true,
+        answer_canonical_markdown: '30',
+      }),
+    )
+    expect(request.question_corrections[2]).toEqual(
+      expect.objectContaining({
+        problem_id: 'child-2',
+        confirmed: true,
+        answer_canonical_markdown: '40',
+      }),
+    )
+  })
+
   it('#1 多孩隔离：切换 agent 后忽略旧孩子尚未完成的识题响应', async () => {
     const oldRequest = deferred<{ created: boolean; job: ReturnType<typeof jobDTO> }>()
     h.createJobSpy.mockReturnValueOnce(oldRequest.promise)
@@ -166,6 +306,49 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(w.text()).not.toContain('小明的旧题')
   })
 
+  it('#1 换图隔离：图 A 轮询中收到图 B 时取消 A，A 晚到结果不得画到 B', async () => {
+    const oldPoll = deferred<ReturnType<typeof jobStatus>>()
+    h.createJobSpy
+      .mockResolvedValueOnce({ created: true, job: { ...jobDTO('queued'), job_id: 'job-a' } })
+      .mockResolvedValueOnce({ created: true, job: { ...jobDTO('queued'), job_id: 'job-b' } })
+    h.getJobSpy.mockImplementation((_agent: string, jobId: string) => {
+      if (jobId === 'job-a') return oldPoll.promise
+      return Promise.resolve({
+        ...jobStatus('awaiting_confirmation', {
+          recognition: {
+            questions: [{ question: '图 B 的题', knowledge_points: ['新知识点'] }],
+            subject: '数学',
+          },
+        }),
+        job_id: 'job-b',
+      })
+    })
+
+    const w = render({ initialImage: 'data:image/png;base64,AAAA' })
+    await flushPromises()
+    const oldPollSignal = h.getJobSpy.mock.calls.find((call) => call[1] === 'job-a')?.[2] as
+      | AbortSignal
+      | undefined
+    expect(oldPollSignal).toBeInstanceOf(AbortSignal)
+    expect(oldPollSignal?.aborted).toBe(false)
+    await w.setProps({ initialImage: 'data:image/png;base64,BBBB' })
+    await flushPromises()
+    oldPoll.resolve(jobStatus('awaiting_confirmation', {
+      recognition: {
+        questions: [{ question: '图 A 的旧题', knowledge_points: ['旧知识点'] }],
+        subject: '语文',
+      },
+    }))
+    await flushPromises()
+
+    expect(h.createJobSpy).toHaveBeenCalledTimes(2)
+    expect(h.cancelJobSpy).toHaveBeenCalledWith('mingming', 'job-a')
+    expect(oldPollSignal?.aborted).toBe(true)
+    expect(w.text()).toContain('图 B 的题')
+    expect(w.text()).not.toContain('图 A 的旧题')
+    expect(w.findComponent(HcSelect).props('modelValue')).toBe('数学')
+  })
+
   it('#1 护栏：家长「读错了」可就地改题干，批改用改过的题干', async () => {
     mockJobRecognition([{ question: '3.8x3', knowledge_points: ['小数乘法'] }])
     h.gradeSpy.mockResolvedValue({
@@ -183,7 +366,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await flushPromises()
 
     // 读错 → 编辑题干
-    await w.find('[data-testid="rq-edit-0"]').trigger('click')
+    await w.find('[data-testid="recognize-correct"]').trigger('click')
     await w.find('[data-testid="rq-problem-0"]').setValue('3.8×3=?')
     await chooseSubject(w)
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')

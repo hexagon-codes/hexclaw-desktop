@@ -2,7 +2,7 @@
  * 学情=路由器（PRD §3.11，原型 2613-2631，2026-07-18）：
  * ①标题「学情报告·每月1日自动生成」→「{grade}学习概览 · 从真实批改与复练证据生成」（月报口径退役）；
  * ②瓷片/薄弱条/挫败 CTA 可点 → emit('navigate', target)，外层 K12ChatEnhancement 切学习档案
- *   （子 Tab 直达是 TODO：RecordsView 归另一 agent，本轮不接）；
+ *   并把 target 透传给 RecordsView 直达对应对象；
  * ③第四瓷片=练习集待打印（draft 篮 items 求和，自拉 k12ListPracticeSets，不编数）。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -14,6 +14,7 @@ import { resolve } from 'node:path'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12InsightPanel from '../views/K12InsightPanel.vue'
+import { useK12Store } from '../store'
 
 const h = vi.hoisted(() => ({ practiceSpy: vi.fn() }))
 
@@ -95,6 +96,23 @@ describe('第四瓷片 · 练习集待打印（原型 2617）', () => {
   })
 })
 
+describe('学情加载失败', () => {
+  it('显示可操作错误并可原地重试，不把失败伪装成空报告', async () => {
+    const w = await mountInsight()
+    const store = useK12Store()
+    store.report = null
+    store.reportError = '学情加载失败'
+    await flushPromises()
+
+    expect(w.get('[data-testid="insight-error"]').text()).toContain('学情加载失败')
+    await w.get('[data-testid="insight-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(w.find('[data-testid="insight-error"]').exists()).toBe(false)
+    expect(w.find('[data-testid="insight-tile-mastered"]').exists()).toBe(true)
+  })
+})
+
 describe('路由器出口 · navigate emit（§3.11）', () => {
   it('★瓷片点击：新增错题→mistakes、复习完成率→week、练习集→practiceSets', async () => {
     const w = await mountInsight()
@@ -125,9 +143,10 @@ describe('K12ChatEnhancement 接线（源码契约：外层归其他会话活跃
   const src = readFileSync(
     resolve(__dirname, '../views/K12ChatEnhancement.vue'), 'utf-8',
   )
-  it('InsightPanel 绑定 @navigate → 切 records，且透传 :grade', () => {
+  it('InsightPanel navigate 保留 target，RecordsView 接收 target 直达对象', () => {
     const line = src.split('\n').find((l) => l.includes('<K12InsightPanel'))!
-    expect(line, 'navigate 出口应切学习档案').toContain(`@navigate="tab = 'records'"`)
+    expect(line, 'navigate 出口不应丢掉 target').toContain('@navigate="goRecords"')
     expect(line, '年级应透传给学情标题').toContain(':grade=')
+    expect(src).toContain(':target="recordsTarget"')
   })
 })
