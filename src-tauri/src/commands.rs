@@ -585,6 +585,9 @@ fn build_final_chat_response(
         if let Some(blocks) = dc.get("blocks").filter(|v| !v.is_null()) {
             resp["blocks"] = blocks.clone();
         }
+        if let Some(message_content) = dc.get("message_content").filter(|v| !v.is_null()) {
+            resp["message_content"] = message_content.clone();
+        }
     }
 
     resp.to_string()
@@ -997,7 +1000,15 @@ mod tests {
                 "model": "gpt-4o"
             },
             "tool_calls": [ { "name": "search", "arguments": "{}" } ],
-            "blocks": [ { "type": "text", "text": "hi" } ]
+            "blocks": [ { "type": "text", "text": "hi" } ],
+            "message_content": {
+                "content_id": "content:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "content_version": "1.0",
+                "producer_kind": "chat",
+                "markdown": "final reply",
+                "source_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "locale": "zh-CN"
+            }
         });
 
         let out = build_final_chat_response("final reply", Some(&done));
@@ -1013,6 +1024,7 @@ mod tests {
         // tool_calls / blocks 透传
         assert_eq!(v["tool_calls"][0]["name"], "search");
         assert_eq!(v["blocks"][0]["type"], "text");
+        assert_eq!(v["message_content"]["producer_kind"], "chat");
         // metadata 也透传（前端 BackendChatResponse 声明了 metadata）
         assert_eq!(v["metadata"]["session_id"], "sess-abc-123");
     }

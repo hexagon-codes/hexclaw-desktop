@@ -7,8 +7,10 @@
 //   tray      — 系统托盘
 //   window    — 窗口管理 + 全局快捷键
 
+pub mod autostart;
 pub mod commands;
 pub mod menu;
+pub mod native_print;
 pub mod ollama;
 pub mod sidecar;
 pub mod test_runtime;
@@ -37,8 +39,10 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // macOS 必须注册 .app 登录项；LaunchAgent 只指向包内裸可执行文件，
+        // 会在「登录项与扩展」里显示 hexclaw-desktop 和通用 exec 图标。
         .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            tauri_plugin_autostart::MacosLauncher::AppleScript,
             None,
         ))
         .plugin(tauri_plugin_process::init())
@@ -54,6 +58,10 @@ pub fn run() {
         // 初始化
         .setup(|app| {
             eprintln!("[HexClaw] setup 开始...");
+
+            if let Err(e) = autostart::migrate_legacy_macos_autostart(app.handle()) {
+                log::warn!("旧版 macOS 自启项迁移失败，将保留原配置: {}", e);
+            }
 
             menu::setup(app)?;
 
@@ -138,6 +146,7 @@ pub fn run() {
             commands::open_about,
             commands::set_autostart,
             commands::is_autostart_enabled,
+            native_print::native_print_html,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
