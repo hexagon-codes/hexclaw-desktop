@@ -88,7 +88,8 @@ function chipIcon(s: PickerSkill): string {
       </button>
     </div>
 
-    <input
+    <HcClearableField>
+      <input
       v-model="filter"
       type="text"
       class="rounded-lg border px-3 py-1.5 text-[12px] outline-none"
@@ -96,6 +97,7 @@ function chipIcon(s: PickerSkill): string {
       :placeholder="t('agents.skillsFilterPh', '搜索 Skill…')"
       data-testid="agent-skill-filter"
     />
+    </HcClearableField>
 
     <div v-if="available.length === 0" class="text-[12px]" :style="{ color: 'var(--hc-text-muted)' }">
       {{ t('agents.noSkillsAvailable', '暂无已安装的 Skill') }}

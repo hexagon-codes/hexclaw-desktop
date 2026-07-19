@@ -1036,18 +1036,23 @@ async function handleUnregisterAgent() {
                 </div>
                 <div class="flex flex-col gap-1.5">
                   <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.name') }}</label>
-                  <input v-model="newAgent.name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="agent-name" />
+                  <HcClearableField>
+                    <input v-model="newAgent.name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="agent-name" />
+                  </HcClearableField>
                   <span class="text-[11.5px] leading-snug" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.nameHint') }}</span>
                 </div>
                 <div class="flex flex-col gap-1.5">
                   <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.displayName') }}</label>
-                  <input v-model="newAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="My Agent" />
+                  <HcClearableField>
+                    <input v-model="newAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" placeholder="My Agent" />
+                  </HcClearableField>
                   <span class="text-[11.5px] leading-snug" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.displayNameHint') }}</span>
                 </div>
                 <!-- 人设(SOUL)：自然语言（去 mono，RTL 铁律）+ 快速起草骨架 + 字数 + 专注编辑 -->
                 <div class="flex flex-col gap-1.5">
                   <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.soulField', '人设（SOUL）') }}</label>
-                  <textarea
+                  <HcClearableField>
+                    <textarea
                     ref="addSoulEl"
                     v-model="newAgentSoul"
                     rows="5"
@@ -1055,6 +1060,7 @@ async function handleUnregisterAgent() {
                     class="rounded-lg border px-3 py-2 text-sm outline-none resize-y leading-relaxed"
                     :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
                   ></textarea>
+                  </HcClearableField>
                   <div class="flex items-center gap-1.5 flex-wrap">
                     <span class="text-[11.5px]" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulQuickDraft', '快速起草：') }}</span>
                     <button
@@ -1118,7 +1124,8 @@ async function handleUnregisterAgent() {
                         @click="newAgentTemperature = p.v"
                       >{{ t(p.labelKey) }}{{ p.v ? ` ${p.v}` : '' }}</button>
                     </div>
-                    <input
+                    <HcClearableField>
+                      <input
                       v-model="newAgentTemperature"
                       type="number"
                       min="0"
@@ -1128,11 +1135,13 @@ async function handleUnregisterAgent() {
                       :style="{ background: 'var(--hc-bg-input)', borderColor: newAgentTemperatureValid ? 'var(--hc-border)' : 'var(--hc-error)', color: 'var(--hc-text-primary)' }"
                       :placeholder="t('agents.temperaturePlaceholder', '留空跟随模型默认；0 = 确定性')"
                     />
+                    </HcClearableField>
                     <span v-if="!newAgentTemperatureValid" class="text-[11px]" :style="{ color: 'var(--hc-error)' }">{{ t('agents.temperatureRange', '温度须在 0 ~ 2 之间') }}</span>
                   </div>
                   <div class="flex flex-col gap-1.5">
                     <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.maxTokens', '最大输出 token') }}</label>
-                    <input
+                    <HcClearableField>
+                      <input
                       v-model="newAgentMaxTokens"
                       type="number"
                       min="0"
@@ -1141,6 +1150,7 @@ async function handleUnregisterAgent() {
                       :style="{ background: 'var(--hc-bg-input)', borderColor: newAgentMaxTokensValid ? 'var(--hc-border)' : 'var(--hc-error)', color: 'var(--hc-text-primary)' }"
                       :placeholder="t('agents.maxTokensPlaceholder', '留空跟随模型默认')"
                     />
+                    </HcClearableField>
                   </div>
                   <AgentSkillPicker v-model="newAgentSkills" :available="availableSkills" />
                 </template>
@@ -1219,12 +1229,15 @@ async function handleUnregisterAgent() {
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.displayName') }}</label>
-                <input v-model="editingAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+                <HcClearableField>
+                  <input v-model="editingAgent.display_name" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" />
+                </HcClearableField>
                 <span class="text-[11.5px] leading-snug" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.displayNameHint') }}</span>
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('agents.systemPrompt', '人设(SOUL)') }}</label>
-                <textarea
+                <HcClearableField>
+                  <textarea
                   ref="editSoulEl"
                   v-model="editingAgent.system_prompt"
                   rows="5"
@@ -1232,6 +1245,7 @@ async function handleUnregisterAgent() {
                   :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
                   :placeholder="t('agents.systemPromptPlaceholder', '定义该 Agent 的角色与行为，留空则用默认人设')"
                 ></textarea>
+                </HcClearableField>
                 <div class="flex items-center gap-1.5 flex-wrap">
                   <span class="text-[11.5px]" :style="{ color: 'var(--hc-text-muted)' }">{{ t('agents.soulQuickDraft', '快速起草：') }}</span>
                   <button
@@ -1307,7 +1321,8 @@ async function handleUnregisterAgent() {
                         @click="editTemperature = p.v"
                       >{{ t(p.labelKey) }}{{ p.v ? ` ${p.v}` : '' }}</button>
                     </div>
-                    <input
+                    <HcClearableField>
+                      <input
                       v-model="editTemperature"
                       type="number"
                       min="0"
@@ -1318,6 +1333,7 @@ async function handleUnregisterAgent() {
                       :style="{ background: 'var(--hc-bg-input)', borderColor: editTemperatureValid ? 'var(--hc-border)' : 'var(--hc-error)', color: 'var(--hc-text-primary)' }"
                       :placeholder="t('agents.temperaturePlaceholder', '留空跟随模型默认；0 = 确定性')"
                     />
+                    </HcClearableField>
                     <span v-if="!editTemperatureValid" class="text-[11px]" :style="{ color: 'var(--hc-error)' }">
                       {{ t('agents.temperatureRange', '温度须在 0 ~ 2 之间') }}
                     </span>
@@ -1326,7 +1342,8 @@ async function handleUnregisterAgent() {
                     <label class="text-[12px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">
                       {{ t('agents.maxTokens', '最大输出 token') }}
                     </label>
-                    <input
+                    <HcClearableField>
+                      <input
                       v-model="editMaxTokens"
                       type="number"
                       min="0"
@@ -1336,6 +1353,7 @@ async function handleUnregisterAgent() {
                       :style="{ background: 'var(--hc-bg-input)', borderColor: editMaxTokensValid ? 'var(--hc-border)' : 'var(--hc-error)', color: 'var(--hc-text-primary)' }"
                       :placeholder="t('agents.maxTokensPlaceholder', '留空跟随模型默认')"
                     />
+                    </HcClearableField>
                   </div>
                   <AgentSkillPicker v-model="editSkills" :available="availableSkills" />
                 </div>
@@ -1398,7 +1416,8 @@ async function handleUnregisterAgent() {
                   {{ soulIsCustom ? t('agents.soul.stateCustom', '已自定义') : t('agents.soul.stateDefault', '内置默认') }}
                 </span>
               </div>
-              <textarea
+              <HcClearableField>
+                <textarea
                 v-model="soulText"
                 rows="9"
                 :disabled="soulLoading"
@@ -1406,6 +1425,7 @@ async function handleUnregisterAgent() {
                 class="rounded-lg border px-3 py-2 text-sm outline-none resize-y font-mono leading-relaxed"
                 :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
               ></textarea>
+              </HcClearableField>
               <p class="text-xs m-0" :style="{ color: 'var(--hc-text-muted)' }">
                 {{ t('agents.soul.hint', '引擎每轮对话读取该文件，保存后下一轮即时生效，无需重启。') }}
               </p>

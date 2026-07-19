@@ -29,12 +29,15 @@ export const useAgentsStore = defineStore('agents', () => {
    * 经单一可见性边界 userVisibleAgents 剔除匿名「频道默认模型」Agent（`@im/<platform>`）——它们是
    * IM 频道默认模型的承载体，不是用户管理对象，不应泄漏进 Agent 管理页 / 路由下拉 / 聊天 Agent 选择器。 */
   async function loadAgents() {
-    const [res] = await trySafe(() => getAgents(), '加载 Agent 列表')
+    const [res, err] = await trySafe(() => getAgents(), '加载 Agent 列表')
+    error.value = err
     if (res) {
       registeredAgents.value = userVisibleAgents(res.agents || [])
       defaultAgentName.value = res.default || ''
       agentsLoaded.value = true
+      return true
     }
+    return false
   }
 
   /** 按名称查找已注册 Agent 配置 */

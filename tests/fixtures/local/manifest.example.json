@@ -10,6 +10,16 @@
       "source": "private-local",
       "redistributable": false,
       "description": "Canonical large textbook PDF used only for local ingestion regression tests"
+    },
+    {
+      "id": "scanned_textbook_pdf",
+      "path": "files/scanned-textbook.pdf",
+      "sha256": "65bd80bd35be524bf68f66f9b67820a97176e1487db81810cb268e04e44dd8b2",
+      "bytes": 57313616,
+      "pages": 122,
+      "source": "private-local",
+      "redistributable": false,
+      "description": "Canonical scanned textbook PDF used only for local OCR lifecycle regression tests"
     }
   ]
 }

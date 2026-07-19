@@ -19,6 +19,12 @@ const canonicalTextbook = {
   pages: 131,
 }
 
+const canonicalScannedTextbook = {
+  sha256: '65bd80bd35be524bf68f66f9b67820a97176e1487db81810cb268e04e44dd8b2',
+  bytes: 57313616,
+  pages: 122,
+}
+
 async function makeFixtureSandbox(t, overrides = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'hexclaw-local-fixture-'))
   t.after(async () => {
@@ -47,15 +53,37 @@ async function makeFixtureSandbox(t, overrides = {}) {
     source: 'private-local',
     redistributable: false,
   }
-  await writeFile(manifest, `${JSON.stringify({ schema_version: 1, fixtures: [entry] }, null, 2)}\n`)
+  const fixtures = [entry]
+  let scannedPdf
+  let scannedPDFSHA
+  let scannedPDFBytes
+  if (overrides.includeScanned) {
+    scannedPdf = join(dir, 'scanned-textbook.pdf')
+    const scannedBody = overrides.scannedPdfBody ?? '%PDF-1.6\nsynthetic scanned contract fixture\n%%EOF\n'
+    await writeFile(scannedPdf, scannedBody)
+    scannedPDFBytes = Buffer.byteLength(scannedBody)
+    scannedPDFSHA = createHash('sha256').update(scannedBody).digest('hex')
+    fixtures.push({
+      id: 'scanned_textbook_pdf',
+      path: 'scanned-textbook.pdf',
+      sha256: overrides.scannedSha256 ?? scannedPDFSHA,
+      bytes: overrides.scannedBytes ?? scannedPDFBytes,
+      pages: overrides.scannedPages ?? 2,
+      source: 'private-local',
+      redistributable: false,
+    })
+  }
+  await writeFile(manifest, `${JSON.stringify({ schema_version: 1, fixtures }, null, 2)}\n`)
 
-  return { dir, pdf, manifest, pdfBytes, pdfSHA, binDir }
+  return { dir, pdf, manifest, pdfBytes, pdfSHA, binDir, scannedPdf, scannedPDFBytes, scannedPDFSHA }
 }
 
-function runVerifier({ manifest, pdf, binDir, pages = 2 }) {
+function runVerifier({ manifest, pdf, scannedPdf, binDir, pages = 2 }) {
   const env = { ...process.env }
   delete env.HEX_FIXTURE_TEXTBOOK_PDF
+  delete env.HEX_FIXTURE_SCANNED_TEXTBOOK_PDF
   if (pdf !== undefined) env.HEX_FIXTURE_TEXTBOOK_PDF = pdf
+  if (scannedPdf !== undefined) env.HEX_FIXTURE_SCANNED_TEXTBOOK_PDF = scannedPdf
   env.HEX_TEST_PDF_PAGES = String(pages)
   if (binDir) env.PATH = `${binDir}:${env.PATH ?? ''}`
   const args = [verifierPath]
@@ -84,8 +112,14 @@ test('example manifest is portable and pins the canonical textbook contract', as
   const raw = await readFile(exampleManifestPath, 'utf8')
   const manifest = JSON.parse(raw)
   const fixture = manifest.fixtures?.find((item) => item.id === 'textbook_pdf')
+  const scannedFixture = manifest.fixtures?.find((item) => item.id === 'scanned_textbook_pdf')
 
   assert.equal(manifest.schema_version, 1)
+  assert.deepEqual(
+    manifest.fixtures.map((item) => item.id),
+    ['textbook_pdf', 'scanned_textbook_pdf'],
+    'the two release textbook fixtures form a closed ordered set',
+  )
   assert.ok(fixture, 'textbook_pdf fixture is required')
   assert.equal(fixture.sha256, canonicalTextbook.sha256)
   assert.equal(fixture.bytes, canonicalTextbook.bytes)
@@ -94,6 +128,13 @@ test('example manifest is portable and pins the canonical textbook contract', as
   assert.equal(fixture.redistributable, false)
   assert.doesNotMatch(raw, /(?:\/Users\/|\/home\/|[A-Za-z]:[\\/])/)
   assert.equal(fixture.path, 'files/textbook.pdf')
+  assert.ok(scannedFixture, 'scanned_textbook_pdf fixture is required')
+  assert.equal(scannedFixture.sha256, canonicalScannedTextbook.sha256)
+  assert.equal(scannedFixture.bytes, canonicalScannedTextbook.bytes)
+  assert.equal(scannedFixture.pages, canonicalScannedTextbook.pages)
+  assert.equal(scannedFixture.source, 'private-local')
+  assert.equal(scannedFixture.redistributable, false)
+  assert.equal(scannedFixture.path, 'files/scanned-textbook.pdf')
 })
 
 test('gitignore keeps actual manifests and payloads local while governance files stay visible', async () => {
@@ -126,6 +167,32 @@ test('verifier accepts a controlled manifest with a relative PDF path', async (t
   assert.equal(output.sha256, fixture.pdfSHA)
   assert.equal(output.bytes, fixture.pdfBytes)
   assert.equal(output.pages, 2)
+})
+
+test('verifier checks every fixture in the two-textbook exact set', async (t) => {
+  const fixture = await makeFixtureSandbox(t, { includeScanned: true })
+  const result = runVerifier({ manifest: fixture.manifest, binDir: fixture.binDir })
+
+  assert.equal(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout)
+  assert.deepEqual(output.fixtures.map((item) => item.fixture), [
+    'textbook_pdf',
+    'scanned_textbook_pdf',
+  ])
+  assert.equal(output.fixtures[0].sha256, fixture.pdfSHA)
+  assert.equal(output.fixtures[1].sha256, fixture.scannedPDFSHA)
+})
+
+test('verifier fails closed when only the second textbook is corrupted', async (t) => {
+  const fixture = await makeFixtureSandbox(t, {
+    includeScanned: true,
+    scannedSha256: '0'.repeat(64),
+  })
+  const result = runVerifier({ manifest: fixture.manifest, binDir: fixture.binDir })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /scanned_textbook_pdf.*sha256 mismatch/i)
+  assert.equal(result.stdout, '')
 })
 
 test('HEX_FIXTURE_TEXTBOOK_PDF explicitly overrides only the manifest path', async (t) => {

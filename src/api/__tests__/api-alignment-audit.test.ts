@@ -39,7 +39,9 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
 
   it('createSession sends POST /api/v1/sessions with {id, title}', () => {
     // Frontend: sessionPost('/api/v1/sessions', { id, title })
-    expect(chatSource).toContain("sessionPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions', { id, title })")
+    expect(chatSource).toContain(
+      "sessionPost<{ id: string; title: string; created_at: string }>('/api/v1/sessions', { id, title })",
+    )
   })
 
   it('createSession response matches backend createSessionRequest struct', () => {
@@ -52,7 +54,9 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
   it('updateSessionTitle sends PATCH /api/v1/sessions/{id} with {title}', () => {
     // Frontend: sessionPatch(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })
     // — the sessionPatch wrapper appends the encoded user_id= query itself (M11).
-    expect(chatSource).toContain("sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })")
+    expect(chatSource).toContain(
+      'sessionPatch<{ id: string; title: string; updated_at: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { title })',
+    )
   })
 
   it('updateSessionTitle response matches backend updateSession handler', () => {
@@ -64,23 +68,33 @@ describe('Session API alignment: chat.ts vs handler_session.go', () => {
 
   it('deleteSession sends DELETE /api/v1/sessions/{id}', () => {
     // user_id is encoded like every other query param (review L2 consistency).
-    expect(chatSource).toContain("apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`)")
+    expect(chatSource).toContain(
+      'apiDelete<{ message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}?user_id=${encodeURIComponent(DESKTOP_USER_ID)}`)',
+    )
   })
 
   it('listSessions sends GET /api/v1/sessions with user_id query', () => {
-    expect(chatSource).toContain("sessionGet<{ sessions: SessionSummary[]; total: number }>('/api/v1/sessions'")
+    expect(chatSource).toContain(
+      "sessionGet<{ sessions: SessionSummary[]; total: number }>('/api/v1/sessions'",
+    )
   })
 
   it('getSession sends GET /api/v1/sessions/{id}', () => {
-    expect(chatSource).toContain("sessionGet<SessionSummary>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`)")
+    expect(chatSource).toContain(
+      'sessionGet<SessionSummary>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`)',
+    )
   })
 
   it('listSessionMessages sends GET /api/v1/sessions/{id}/messages', () => {
-    expect(chatSource).toContain("sessionGet<{ messages: ChatMessage[]; total: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`")
+    expect(chatSource).toContain(
+      'sessionGet<{ messages: ChatMessage[]; total: number }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`',
+    )
   })
 
   it('searchMessages sends GET /api/v1/messages/search', () => {
-    expect(chatSource).toContain("sessionGet<{ results: SessionMessageSearchResult[]; total: number; query: string }>('/api/v1/messages/search'")
+    expect(chatSource).toContain(
+      "sessionGet<{ results: SessionMessageSearchResult[]; total: number; query: string }>('/api/v1/messages/search'",
+    )
   })
 })
 
@@ -123,7 +137,9 @@ describe('Fork Session API alignment', () => {
   it('ALIGNED: forkSession response expects session object matching backend', () => {
     const chatSource = readFrontendFile('chat.ts')
     // Frontend now correctly expects: { session: SessionSummary; message: string }
-    expect(chatSource).toContain("sessionPost<{ session: SessionSummary; message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`")
+    expect(chatSource).toContain(
+      'sessionPost<{ session: SessionSummary; message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`',
+    )
   })
 })
 
@@ -134,7 +150,7 @@ describe('Fork Session API alignment', () => {
 describe('MCP Tool Call API alignment: mcp.ts vs handler_extended.go', () => {
   it('ALIGNED: frontend sends "name" field matching backend MCPToolCallRequest', () => {
     const mcpSource = readFrontendFile('mcp.ts')
-    expect(mcpSource).toContain("name: toolName.trim()")
+    expect(mcpSource).toContain('name: toolName.trim()')
   })
 })
 
@@ -145,7 +161,9 @@ describe('MCP Tool Call API alignment: mcp.ts vs handler_extended.go', () => {
 describe('Version API alignment: system.ts vs handler_extended.go', () => {
   it('ALIGNED: frontend expects version and engine matching backend', () => {
     const systemSource = readFrontendFile('system.ts')
-    expect(systemSource).toContain("apiGet<{ version: string; engine: string; engine_version?: string }>('/api/v1/version')")
+    expect(systemSource).toContain(
+      "apiGet<{ version: string; engine: string; engine_version?: string }>('/api/v1/version')",
+    )
   })
 })
 
@@ -191,7 +209,7 @@ describe('Knowledge API alignment: types/knowledge.ts vs handler_knowledge.go', 
   it('addDocument request body aligns with AddDocumentRequest struct', () => {
     const knowledgeSource = readFrontendFile('knowledge.ts')
     // Frontend: { title, content, source }
-    expect(knowledgeSource).toContain("{ title, content, source }")
+    expect(knowledgeSource).toContain('{ title, content, source }')
     // Backend: Title, Content, Source (json: title, content, source)
     // ALIGNED
   })
@@ -276,7 +294,7 @@ describe('Skill API alignment: types/skill.ts vs handler_misc.go', () => {
   it('installSkill sends correct request body', () => {
     const skillsSource = readFrontendFile('skills.ts')
     // Frontend: { source, type }
-    expect(skillsSource).toContain("{ source, type }")
+    expect(skillsSource).toContain('{ source, type }')
     // Backend InstallSkillRequest: Source string `json:"source"`, Type string `json:"type"`
     // ALIGNED
   })
@@ -302,7 +320,7 @@ describe('MCP API alignment: types/mcp.ts vs mcp.ToolInfo', () => {
   it('addMcpServer request body aligns with handler', () => {
     const mcpSource = readFrontendFile('mcp.ts')
     // Frontend: { name, command, args }
-    expect(mcpSource).toContain("{ name, command, args }")
+    expect(mcpSource).toContain('{ name, command, args }')
     // Backend: Name, Command, Args (json: name, command, args) + Transport, Endpoint
     // Frontend does not send transport/endpoint but they're optional in backend
     // ALIGNED
@@ -401,7 +419,7 @@ describe('Ollama API alignment: ollama.ts vs handler_ollama.go', () => {
   it('unloadOllamaModel sends correct request body', () => {
     const ollamaSource = readFrontendFile('ollama.ts')
     // Frontend: JSON.stringify({ model })
-    expect(ollamaSource).toContain("JSON.stringify({ model })")
+    expect(ollamaSource).toContain('JSON.stringify({ model })')
     // Backend: req.Model (json:"model")
     // ALIGNED
   })
@@ -421,17 +439,19 @@ describe('Webhook API alignment: webhook.ts vs handler_webhook.go', () => {
     // Backend ignores url (it generates URL from name) and ignores events.
     const webhookSource = readFrontendFile('webhook.ts')
     // 已修（2026-06-22）：createWebhook 不再向后端发 url/events（后端 RegisterWebhookRequest 不收）。
-    expect(webhookSource).not.toContain("url: data.url")
-    expect(webhookSource).not.toContain("events: data.events")
+    expect(webhookSource).not.toContain('url: data.url')
+    expect(webhookSource).not.toContain('events: data.events')
   })
 
   it('Webhook interface aligned with backend (no url/events; real URL derived from name)', () => {
     const webhookSource = readFrontendFile('webhook.ts')
     // 已修（AUD-3）：后端 webhook.Webhook 无 url/events；前端接口对齐后端字段，
     // 真实 URL 由 webhookUrlFor(name) 据 name 派生（/api/v1/webhooks/{name}）。
-    // Webhook 接口不再含 events/WebhookEvent；create 响应里的 url:string 是后端实有字段，保留。
-    expect(webhookSource).not.toContain('WebhookEvent')
-    expect(webhookSource).not.toContain('events:')
+    // 只约束通用 Webhook；K12 binding 有独立的 allowed_events exact-set 契约。
+    const genericWebhook = webhookSource.match(/export interface Webhook \{[\s\S]*?\n\}/)?.[0]
+    expect(genericWebhook).toBeDefined()
+    expect(genericWebhook).not.toContain('events')
+    expect(genericWebhook).not.toContain('url:')
     expect(webhookSource).toContain('webhookUrlFor')
     expect(webhookSource).toContain("'generic' | 'github' | 'gitlab'")
   })
@@ -485,10 +505,10 @@ describe('LLM Config API alignment: config.ts vs handler_config.go', () => {
     // Frontend BackendLLMConfig: default, providers, routing, cache
     // ALIGNED
     const settingsTypes = readFrontendType('settings.ts')
-    expect(settingsTypes).toContain("default: string")
-    expect(settingsTypes).toContain("providers: Record<string, BackendLLMProvider>")
-    expect(settingsTypes).toContain("routing:")
-    expect(settingsTypes).toContain("cache:")
+    expect(settingsTypes).toContain('default: string')
+    expect(settingsTypes).toContain('providers: Record<string, BackendLLMProvider>')
+    expect(settingsTypes).toContain('routing:')
+    expect(settingsTypes).toContain('cache:')
   })
 
   it('LLMConnectionTestRequest aligns with LLMConnectionTestRequest struct', () => {
@@ -818,22 +838,22 @@ describe('ChatSession alignment: types/chat.ts vs storage.Session', () => {
 describe('ALIGNMENT VERIFICATION SUMMARY', () => {
   it('[FIXED] MCP callMcpTool sends "name" matching backend', () => {
     const mcpSource = readFrontendFile('mcp.ts')
-    expect(mcpSource).toContain("name: toolName.trim()")
+    expect(mcpSource).toContain('name: toolName.trim()')
   })
 
   it('[FIXED] forkSession response type matches backend (session object)', () => {
     const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain("session: SessionSummary; message: string")
+    expect(chatSource).toContain('session: SessionSummary; message: string')
   })
 
   it('[FIXED] SessionSummary uses parent_session_id matching backend', () => {
     const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain("parent_session_id?: string")
+    expect(chatSource).toContain('parent_session_id?: string')
   })
 
   it('[FIXED] SessionSummary uses branch_message_id matching backend', () => {
     const chatSource = readFrontendFile('chat.ts')
-    expect(chatSource).toContain("branch_message_id?: string")
+    expect(chatSource).toContain('branch_message_id?: string')
   })
 
   it('[FIXED] ChatMessage has created_at field for backend compatibility', () => {

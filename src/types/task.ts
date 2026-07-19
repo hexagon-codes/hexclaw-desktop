@@ -43,6 +43,15 @@ export interface CronJob {
    * 匹配 IM 实例 id → name → provider(type)。空/缺省时后端回退 ["chat"]。
    */
   deliver?: string[]
+
+  /** K12 ScheduledWorkflow owner/evidence fields. They are optional for generic/legacy jobs. */
+  agent_id?: string
+  learner_id?: string
+  workflow_id?: string
+  workflow_version?: string
+  object_id?: string
+  timezone?: string
+  delivery_receipt_id?: string
 }
 
 /** 创建任务请求 */

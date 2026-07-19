@@ -27,7 +27,11 @@ vi.mock('@/api/tasks', () => ({
   createCronJob: vi.fn(), deleteCronJob: vi.fn(), pauseCronJob: vi.fn(),
   resumeCronJob: vi.fn(), triggerCronJob: vi.fn(), getCronJobHistory: vi.fn(),
 }))
-vi.mock('@/api/im-channels', () => ({ getConnections: () => api.getConnections() }))
+vi.mock('@/api/im-channels', () => ({
+  getConnections: () => api.getConnections(),
+  // BUG-20260718：TasksView 现用 getConnectionsResult（区分未配置 vs 故障）。
+  getConnectionsResult: async () => ({ connections: await api.getConnections() }),
+}))
 vi.mock('@/api/autonomy', () => ({
   preflightAutonomy: vi.fn(), createAutonomyGrant: vi.fn(),
   getAutonomySummary: () => api.getAutonomySummary(),

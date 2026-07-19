@@ -147,7 +147,8 @@ async function handleSave() {
           <p class="text-xs mb-2" :style="{ color: 'var(--hc-text-muted)' }">
             {{ t('skills.create.descHint', '用一句话描述你想要的技能，AI 会生成一份可安装的 SKILL.md。') }}
           </p>
-          <textarea
+          <HcClearableField>
+            <textarea
             v-model="description"
             rows="4"
             :placeholder="t('skills.create.descPlaceholder', '例如：一个能把会议纪要整理成行动项清单的技能')"
@@ -156,6 +157,7 @@ async function handleSave() {
             :disabled="generating"
             @keydown.meta.enter="handleGenerate"
           />
+          </HcClearableField>
           <p v-if="error" class="text-xs mt-2 px-1" style="color: var(--hc-error)">{{ error }}</p>
           <div class="flex justify-end gap-2 mt-4">
             <button
@@ -217,8 +219,8 @@ async function handleSave() {
               </button>
             </div>
           </div>
-          <textarea
-            v-if="previewTab === 'edit'"
+          <HcClearableField v-if="previewTab === 'edit'">
+            <textarea
             v-model="content"
             rows="14"
             spellcheck="false"
@@ -226,6 +228,7 @@ async function handleSave() {
             :style="{ background: 'var(--hc-bg-primary)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
             :disabled="saving"
           />
+          </HcClearableField>
           <div
             v-else
             class="rounded-lg border p-3 h-[19rem] overflow-y-auto"
@@ -236,7 +239,8 @@ async function handleSave() {
 
           <!-- 按反馈重新生成（保持在 Step2，不清空草稿） -->
           <div class="mt-3 flex items-center gap-2">
-            <input
+            <HcClearableField>
+              <input
               v-model="refineInput"
               :placeholder="t('skills.create.refinePlaceholder', '告诉 AI 怎么改，例如：增加错误处理步骤')"
               class="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg border text-xs"
@@ -244,6 +248,7 @@ async function handleSave() {
               :disabled="refining || saving"
               @keydown.enter="onRefineEnter"
             />
+            </HcClearableField>
             <button
               type="button"
               class="px-3 py-1.5 rounded-lg text-xs font-medium inline-flex items-center gap-1.5 border shrink-0 transition-opacity hover:opacity-90"

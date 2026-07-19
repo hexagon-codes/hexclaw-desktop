@@ -34,7 +34,7 @@ watchEffect(() => {
 
 const appVersion = ref('—')
 // Hexagon 引擎版本（= 后端 engine_version = hexagon.Version）。在下方「POWERED BY」区块展示，
-// 这是引擎版本的归宿——角落 Sidebar 只显 HexClaw 产品版本（产品评审 2026-07-13）。
+// About 保留引擎版本详情；Sidebar 同步展示运行中引擎的精简状态。
 const engineVersion = ref('')
 // 技术栈里的 HexClaw 行展示产品版本（桌面端随包发布、生态锁步）。不再错绑 engine_version——
 // 那是 Hexagon 引擎的版本，会让 HexClaw 冒用引擎版本号（历史混淆）。

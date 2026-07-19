@@ -62,6 +62,9 @@ vi.mock('@/api/autonomy', () => ({
 // 投递目标连接库：默认空（仅通用渠道类型可见）。具体用例可 mockResolvedValueOnce 注入连接。
 vi.mock('@/api/im-channels', () => ({
   getConnections: connApis.getConnections,
+  // BUG-20260718：TasksView 改用 getConnectionsResult 区分「未配置」与「故障」；
+  // 复用同一 getConnections mock 的返回值包一层 { connections }，沿用既有用例数据。
+  getConnectionsResult: vi.fn(async () => ({ connections: await connApis.getConnections() })),
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {

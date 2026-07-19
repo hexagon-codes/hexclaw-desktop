@@ -601,13 +601,15 @@ defineExpose({ openAddServer, switchToMarketplace })
                     <span class="text-[9px] px-1 rounded" :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }">{{ prop.type }}</span>
                     <span v-if="prop.required" class="text-red-400">*</span>
                   </label>
-                  <input
+                  <HcClearableField>
+                    <input
                     v-model="testParams[prop.key]"
                     type="text"
                     class="w-full px-2.5 py-1.5 rounded-lg text-xs border outline-none transition-colors"
                     :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
                     :placeholder="prop.description || prop.key"
                   />
+                  </HcClearableField>
                 </div>
 
                 <!-- If no schema properties, show generic key-value -->
@@ -731,7 +733,9 @@ defineExpose({ openAddServer, switchToMarketplace })
           <div class="p-5 flex flex-col gap-3.5">
             <div class="flex flex-col gap-1.5">
               <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverName') }}</label>
-              <input v-model="newServerName" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverNamePlaceholder')" />
+              <HcClearableField>
+                <input v-model="newServerName" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverNamePlaceholder')" />
+              </HcClearableField>
             </div>
             <div class="flex flex-col gap-1.5">
               <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.transport') }}</label>
@@ -744,16 +748,22 @@ defineExpose({ openAddServer, switchToMarketplace })
             <template v-if="newServerTransport === 'stdio'">
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverCommand') }}</label>
-                <input v-model="newServerCommand" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverCommandPlaceholder')" />
+                <HcClearableField>
+                  <input v-model="newServerCommand" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverCommandPlaceholder')" />
+                </HcClearableField>
               </div>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverArgs') }}</label>
-                <input v-model="newServerArgs" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverArgsPlaceholder')" />
+                <HcClearableField>
+                  <input v-model="newServerArgs" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverArgsPlaceholder')" />
+                </HcClearableField>
               </div>
             </template>
             <div v-else class="flex flex-col gap-1.5">
               <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverEndpoint') }}</label>
-              <input v-model="newServerEndpoint" type="url" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverEndpointPlaceholder')" />
+              <HcClearableField>
+                <input v-model="newServerEndpoint" type="url" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverEndpointPlaceholder')" />
+              </HcClearableField>
             </div>
           </div>
           <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">

@@ -1,4 +1,5 @@
 import { apiPost } from './client'
+import { env } from '@/config/env'
 
 export interface ExtractedDocument {
   text: string
@@ -28,7 +29,10 @@ export async function uploadDocumentPreview(file: File): Promise<{ token: string
 /**
  * 原文件的 http://localhost 直链（供 shell open 渲染/下载）。
  * 必须是绝对 localhost 地址：shell:allow-open 仅放行 http://localhost:*。
+ *
+ * BUG-20260718（§15）：改用运行时 env.apiBase（本身即绝对 localhost 地址，端口随
+ * sidecar 动态分配变化），不再硬编码 localhost:16060——否则动态端口下预览失效/串实例。
  */
 export function documentPreviewUrl(token: string, download = false): string {
-  return `http://localhost:16060/api/v1/documents/preview/${token}${download ? '?dl=1' : ''}`
+  return `${env.apiBase}/api/v1/documents/preview/${token}${download ? '?dl=1' : ''}`
 }

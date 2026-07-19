@@ -130,13 +130,15 @@ defineExpose({ open, close })
         <div class="hc-cmd">
           <div class="hc-cmd__input-wrap">
             <Search :size="16" class="hc-cmd__search-icon" />
-            <input
+            <HcClearableField>
+              <input
               ref="inputRef"
               v-model="query"
               class="hc-cmd__input"
               :placeholder="t('cmd.searchPlaceholder')"
               @keydown="handleKeydown"
             />
+            </HcClearableField>
             <kbd class="hc-cmd__kbd">ESC</kbd>
           </div>
 

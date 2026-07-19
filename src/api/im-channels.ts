@@ -344,18 +344,38 @@ export interface ConnectionSummary {
 }
 
 /**
- * 连接中心脱敏只读列表：GET /api/v1/connections（一处存）。
- *
- * 供 cron 投递目标「从连接库下拉选」按稳定 id 引用（§5 一处存处处引）。
- * 端点未上线 / 引擎降级时优雅返回空列表，绝不抛异常（调用方退回通用渠道类型）。
+ * 连接结果（区分「未配置」与「故障」）。
+ * error 为空：请求成功（connections 可能为空 = 通道未配置，属正常态）。
+ * error 非空：sidecar/权限/网络故障——UI 应显示「故障」而非「无通道」。
  */
-export async function getConnections(): Promise<ConnectionSummary[]> {
+export interface ConnectionsResult {
+  connections: ConnectionSummary[]
+  error?: string
+}
+
+/**
+ * 连接中心脱敏只读列表：GET /api/v1/connections（一处存），区分未配置 vs 故障。
+ *
+ * BUG-20260718（§15）：旧 getConnections 任意失败都吞成空数组，把后端故障画成
+ * 「没有连接」。此处返回 { connections, error }——成功（含 200 空列表）error 为空，
+ * 抛错（网络/权限/sidecar）时标记 error，让 UI 能显示「故障」。
+ */
+export async function getConnectionsResult(): Promise<ConnectionsResult> {
   try {
     const res = await proxyApiRequest<{ connections?: ConnectionSummary[]; total?: number }>('GET', '/api/v1/connections')
-    return res?.connections ?? []
-  } catch {
-    return []
+    return { connections: res?.connections ?? [] }
+  } catch (e) {
+    const { messageFromUnknownError } = await import('@/utils/errors')
+    return { connections: [], error: messageFromUnknownError(e) }
   }
+}
+
+/**
+ * 连接列表（best-effort 旧签名）：供 @ 召唤等「失败即退回通用渠道」的场景使用；
+ * 需要区分「未配置 vs 故障」的调用方（如任务投递面板）请用 getConnectionsResult。
+ */
+export async function getConnections(): Promise<ConnectionSummary[]> {
+  return (await getConnectionsResult()).connections
 }
 
 /** 对已保存实例执行真实运行时健康检查 */

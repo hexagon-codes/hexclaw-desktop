@@ -410,12 +410,14 @@ async function skip() {
           <template v-else>
             <div class="hc-settings__field">
               <label class="hc-settings__label">API Key</label>
-              <input
+              <HcClearableField>
+                <input
                 v-model="apiKey"
                 type="password"
                 class="hc-input"
                 :placeholder="PROVIDER_PRESETS[provider].placeholder"
               />
+              </HcClearableField>
               <p
                 v-if="apiKey.trim().length === 0"
                 class="text-xs mt-1"
@@ -426,22 +428,25 @@ async function skip() {
             </div>
             <div v-if="isCustomProvider" class="hc-settings__field">
               <label class="hc-settings__label">Base URL</label>
-              <input
+              <HcClearableField>
+                <input
                 v-model="customBaseUrl"
                 type="text"
                 class="hc-input"
                 placeholder="https://your-api.example.com/v1"
               />
+              </HcClearableField>
             </div>
             <div class="hc-settings__field">
               <label class="hc-settings__label">Model</label>
-              <input
-                v-if="isCustomProvider"
+              <HcClearableField v-if="isCustomProvider">
+                <input
                 v-model="customModelId"
                 type="text"
                 class="hc-input"
                 :placeholder="t('welcome.customModelPlaceholder')"
               />
+              </HcClearableField>
               <HcSelect v-else v-model="model" :options="providerModelOptions" />
             </div>
             <div class="pt-1">

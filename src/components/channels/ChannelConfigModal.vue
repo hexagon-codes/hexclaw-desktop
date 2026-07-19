@@ -311,11 +311,13 @@ async function handleSave() {
 
             <div class="hc-im-field">
               <label class="hc-im-field__label">{{ t('imChannels.instanceName') }}</label>
-              <input
+              <HcClearableField>
+                <input
                 v-model="formName"
                 class="hc-im-input"
                 :placeholder="t('imChannels.instanceNamePlaceholder')"
               />
+              </HcClearableField>
             </div>
 
             <template v-for="field in configFields" :key="field.key">
@@ -324,12 +326,14 @@ async function handleSave() {
                   {{ locale === 'zh-CN' ? field.label : field.labelEn }}
                 </label>
                 <div class="hc-im-input-wrap">
-                  <input
+                  <HcClearableField :trailing="field.secret ? 36 : 8">
+                    <input
                     v-model="formConfig[field.key]"
                     :type="field.secret && !showSecrets[field.key] ? 'password' : 'text'"
                     class="hc-im-input"
                     :placeholder="field.placeholder"
                   />
+                  </HcClearableField>
                   <button
                     v-if="field.secret"
                     class="hc-im-input-eye"

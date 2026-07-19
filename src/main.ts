@@ -9,10 +9,16 @@ import { createPersistPlugin } from './stores/plugins/persist'
 import { logger } from './utils/logger'
 import { installInputAutofixOff } from './utils/input-autofix'
 import { registerK12Scenario } from './features/k12'
+import HcClearableField from './components/common/HcClearableField.vue'
 
+// KaTeX 是所有会话/场景富文本的基础样式，必须随入口 CSS 同步加载。
+// WKWebView 对异步 Vue 组件 CSS chunk 的装载时序与 Chromium 不同；放在组件内会出现
+// DOM 已渲染但分数布局样式尚未生效的塌散帧，甚至缓存后持续错位。
+import 'katex/dist/katex.min.css'
 import './assets/styles/global.css'
 
 const app = createApp(App)
+app.component('HcClearableField', HcClearableField)
 
 // Pinia + 持久化插件
 const pinia = createPinia()

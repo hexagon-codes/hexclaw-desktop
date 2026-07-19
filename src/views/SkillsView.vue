@@ -948,7 +948,8 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
               {{ t('skills.installDialog.urlLabel') }}
             </label>
             <div class="flex gap-2">
-              <input
+              <HcClearableField>
+                <input
                 v-model="installUrl"
                 type="text"
                 :placeholder="t('skills.installDialog.urlPlaceholder')"
@@ -961,6 +962,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
                 :disabled="installing"
                 @keydown.enter="onUrlInstallEnter"
               />
+              </HcClearableField>
               <button
                 class="px-3 py-2 rounded-lg text-sm font-medium text-white flex-shrink-0 transition-opacity hover:opacity-90"
                 :style="{ background: installing ? 'var(--hc-text-muted)' : 'var(--hc-accent)' }"

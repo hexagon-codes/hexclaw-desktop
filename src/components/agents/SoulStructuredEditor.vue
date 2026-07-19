@@ -203,7 +203,8 @@ function close(apply: boolean) {
               <span class="text-[11px]" :style="{ color: 'var(--hc-text-muted)' }">{{ seg.en }}</span>
             </div>
             <div v-if="state[seg.key]!.on" class="px-3 pb-2.5 flex flex-col gap-1.5">
-              <textarea
+              <HcClearableField>
+                <textarea
                 v-model="state[seg.key]!.val"
                 rows="2"
                 class="rounded-lg border px-2.5 py-1.5 text-[12.5px] outline-none resize-y"
@@ -211,6 +212,7 @@ function close(apply: boolean) {
                 :placeholder="seg.ph"
                 :data-testid="`soul-seg-input-${seg.key}`"
               ></textarea>
+              </HcClearableField>
               <div class="text-[11px]" :style="{ color: 'var(--hc-text-muted)' }">
                 {{ t('agents.soulEd.example', '示例') }}：{{ seg.eg }}
                 <button

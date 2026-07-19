@@ -3,6 +3,8 @@
  *
  * 画布节点、边、工作流定义及执行状态。
  */
+import type { MessageContent, RenderManifest } from '@/contracts/message-content'
+
 
 /** 画布节点 */
 export interface CanvasNode {
@@ -68,6 +70,8 @@ export interface Workflow {
   description?: string
   nodes: CanvasNode[]
   edges: CanvasEdge[]
+  /** Versioned scenario metadata. K12 definitions freeze immutable owner/version here. */
+  data?: Record<string, unknown>
   created_at: string
   updated_at: string
 }
@@ -96,8 +100,18 @@ export interface WorkflowRun {
   status: WorkflowRunStatus
   input?: string
   output?: string
+  message_content?: MessageContent
+  render_manifest?: RenderManifest
   error?: string
   node_results?: WorkflowNodeRun[]
+  /** Durable trigger/owner evidence; optional for generic legacy runs. */
+  agent_id?: string
+  learner_id?: string
+  workflow_version?: string
+  object_id?: string
+  trigger_key?: string
+  prior_run_id?: string
+  retry_safe?: boolean
   started_at: string
   finished_at?: string
 }

@@ -388,10 +388,16 @@ describe('E7 直连 Ollama 状态/运行模型 字段映射与容错', () => {
     })
   })
 
-  it('GREEN：tags 请求失败 → 安全降级 running=false 不抛异常', async () => {
+  it('GREEN：tags 请求失败 → 安全降级 running=false 不抛异常（BUG-20260718：并标记 reachable=false/error 区分不可达）', async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) as unknown as typeof fetch
     const status = await api.getOllamaStatus()
-    expect(status).toEqual({ running: false, models: [], associated: false, model_count: 0 })
+    expect(status.running).toBe(false)
+    expect(status.models).toEqual([])
+    expect(status.associated).toBe(false)
+    expect(status.model_count).toBe(0)
+    // BUG-20260718（§15）：不可达要能与「可达但无模型」区分开。
+    expect(status.reachable).toBe(false)
+    expect(status.error).toBeTruthy()
   })
 
   it('GREEN：getOllamaRunning context_length 缺失 → 兜底 0（与后端 int 默认对齐）', async () => {

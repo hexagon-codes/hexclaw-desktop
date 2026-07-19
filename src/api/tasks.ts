@@ -41,7 +41,6 @@ export const CRON_SSE_TIMEOUT_MS = 180_000
 export interface CronJobUnifiedRequest {
   action: 'create' | 'update' | 'list' | 'pause' | 'resume' | 'remove' | 'run'
   idempotency_key?: string
-  user_id?: string
   draft?: {
     name: string
     schedule: string
@@ -70,8 +69,9 @@ export interface CronJobUnifiedResponse {
 
 export function cronjobAction(req: CronJobUnifiedRequest): Promise<CronJobUnifiedResponse> {
   return apiPost<CronJobUnifiedResponse>('/api/v1/cronjob', {
-    user_id: DESKTOP_USER_ID,
     ...req,
+    // Principal is a Desktop runtime fact, never caller-controlled body data.
+    user_id: DESKTOP_USER_ID,
   })
 }
 
@@ -390,6 +390,17 @@ export interface CronJobRun {
   stderr?: string
   exit_code?: number
   data?: unknown
+
+  /** K12 execution evidence; optional for generic/legacy task history rows. */
+  agent_id?: string
+  learner_id?: string
+  workflow_id?: string
+  workflow_version?: string
+  object_id?: string
+  execution_id?: string
+  trigger?: string
+  timezone?: string
+  delivery_receipt_id?: string
 }
 
 interface CronJobRunWire extends CronJobRun {

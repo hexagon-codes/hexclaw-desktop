@@ -46,4 +46,38 @@ describe('provider locality + num_ctx config round-trip', () => {
     expect(backend.providers.openai?.locality).toBe('cloud')
     expect(backend.providers.openai?.num_ctx).toBe(8192)
   })
+
+  it('round-trips user confirmation and host-scoped private-network access', () => {
+    const provider: ProviderConfig = {
+      id: 'corp-gateway',
+      backendKey: 'corp-gateway',
+      name: 'Corp Gateway',
+      type: 'custom',
+      enabled: true,
+      apiKey: '****test',
+      baseUrl: 'http://10.0.0.8:8080/v1',
+      models: [{ id: 'corp-model', name: 'Corp Model' }],
+      selectedModelId: 'corp-model',
+      locality: 'cloud',
+      localitySource: 'user',
+      confirmedEndpointHost: '10.0.0.8',
+      privateNetworkAccess: { host: '10.0.0.8', allowed: true },
+    }
+
+    const backend = providersToBackend([provider], 'corp-model', 'corp-gateway')
+    expect(backend.providers['corp-gateway']).toMatchObject({
+      locality: 'cloud',
+      locality_source: 'user',
+      confirmed_endpoint_host: '10.0.0.8',
+      private_network_access: { host: '10.0.0.8', allowed: true },
+    })
+
+    const [restored] = backendToProviders(backend, [provider])
+    expect(restored).toMatchObject({
+      locality: 'cloud',
+      localitySource: 'user',
+      confirmedEndpointHost: '10.0.0.8',
+      privateNetworkAccess: { host: '10.0.0.8', allowed: true },
+    })
+  })
 })

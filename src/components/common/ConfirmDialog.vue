@@ -33,14 +33,14 @@ const emit = defineEmits<{
         class="hc-dialog-overlay"
         @click.self="emit('cancel')"
       >
-        <div class="hc-dialog">
+        <div class="hc-dialog" role="alertdialog" aria-modal="true" aria-labelledby="hc-confirm-dialog-title">
           <div class="hc-dialog__header">
             <div class="hc-dialog__icon" :class="danger ? 'hc-dialog__icon--danger' : 'hc-dialog__icon--info'">
               <AlertTriangle v-if="danger" :size="20" />
               <Info v-else :size="20" />
             </div>
             <div>
-              <h3 class="hc-dialog__title">{{ title }}</h3>
+              <h3 id="hc-confirm-dialog-title" class="hc-dialog__title">{{ title }}</h3>
               <p class="hc-dialog__msg">{{ message }}</p>
             </div>
           </div>

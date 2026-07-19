@@ -8,6 +8,7 @@ import { useAppStore } from '@/stores/app'
 import { useAboutWindow } from '@/composables/useAboutWindow'
 import { getGroupedNavItems, isNavActive, NAV_GROUP_LABELS, type NavGroup } from '@/config/navigation'
 import { env } from '@/config/env'
+import { getVersion as getEngineVersion } from '@/api/system'
 import logoUrl from '@/assets/logo.png'
 
 const { t, locale } = useI18n()
@@ -15,15 +16,16 @@ const route = useRoute()
 const appStore = useAppStore()
 const openAbout = useAboutWindow()
 
-// 角落展示的是 **HexClaw 产品版本**（= Tauri app 版本，随包发布、客服锚点、更新基准），
-// 而非内部 Hexagon 引擎版本——后者已退到「关于」页展示（产品评审 2026-07-13）。
-// 空串起步，取到 Tauri app 版本后再显，避免占位符闪烁。
-const appVersion = ref('')
+// 原型权威：角落展示 Hexagon 引擎连接状态与运行时版本。
+// 空串起步；版本接口不可达时仍保留引擎身份，不闪烁占位符。
+const engineVersion = ref('')
 
 onMounted(() => {
-  import('@tauri-apps/api/app')
-    .then(({ getVersion }) => getVersion())
-    .then((v) => { appVersion.value = 'v' + v })
+  getEngineVersion()
+    .then((info) => {
+      const version = info.engine_version?.trim()
+      if (version) engineVersion.value = version.startsWith('v') ? version : `v${version}`
+    })
     .catch(() => {})
 })
 
@@ -44,9 +46,11 @@ const dotClass = computed(() => {
   return 'hc-sidebar__dot--err'
 })
 
-const productLabel = computed(() =>
-  appVersion.value ? `HexClaw ${appVersion.value}` : 'HexClaw',
-)
+const engineLabel = computed(() => {
+  if (appStore.sidecarStatus === 'starting') return t('nav.engineStarting')
+  if (appStore.sidecarStatus !== 'running') return t('engineBanner.title')
+  return engineVersion.value ? `Hexagon engine ${engineVersion.value}` : 'Hexagon engine'
+})
 
 // 平台默认全功能，导航不按模式门控（K12 只是「作业辅导」智能体，非独立 UI 模式）。
 function getGroupItems(group: NavGroup) {
@@ -108,7 +112,7 @@ function getGroupItems(group: NavGroup) {
             :title="t('about.open', '关于河蟹')"
             @click="openAbout"
           >
-            {{ productLabel }}
+            {{ engineLabel }}
           </span>
           <button
             class="hc-sidebar__restart-btn"

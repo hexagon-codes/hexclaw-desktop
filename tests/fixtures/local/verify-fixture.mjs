@@ -11,7 +11,10 @@ import { fileURLToPath } from 'node:url'
 const localDir = dirname(fileURLToPath(import.meta.url))
 const actualManifestPath = join(localDir, 'manifest.json')
 const exampleManifestPath = join(localDir, 'manifest.example.json')
-const fixtureID = 'textbook_pdf'
+const fixturePathOverrides = {
+  textbook_pdf: 'HEX_FIXTURE_TEXTBOOK_PDF',
+  scanned_textbook_pdf: 'HEX_FIXTURE_SCANNED_TEXTBOOK_PDF',
+}
 
 function fail(message) {
   throw new Error(message)
@@ -58,13 +61,16 @@ async function readManifest(manifestPath) {
 
   const ids = manifest.fixtures.map((fixture) => fixture?.id)
   if (new Set(ids).size !== ids.length) fail('manifest fixture ids must be unique')
-  const fixture = manifest.fixtures.find((candidate) => candidate?.id === fixtureID)
-  if (!fixture) fail(`manifest fixture ${fixtureID} is required`)
-  validateFixtureContract(fixture)
-  return fixture
+  if (manifest.fixtures.length === 0) fail('manifest fixtures must not be empty')
+  for (const fixture of manifest.fixtures) validateFixtureContract(fixture)
+  return manifest.fixtures
 }
 
 function validateFixtureContract(fixture) {
+  const fixtureID = fixture?.id
+  if (typeof fixtureID !== 'string' || !/^[a-z][a-z0-9_]*$/.test(fixtureID)) {
+    fail('fixture.id must be a non-empty lowercase identifier')
+  }
   if (typeof fixture.path !== 'string' || fixture.path.trim() === '') {
     fail(`${fixtureID}.path must be a non-empty string`)
   }
@@ -153,9 +159,10 @@ function sameFileSnapshot(before, after) {
     && before.mtimeMs === after.mtimeMs
 }
 
-async function verifyFixture(manifestPath) {
-  const fixture = await readManifest(manifestPath)
-  const override = process.env.HEX_FIXTURE_TEXTBOOK_PDF?.trim()
+async function verifyFixture(manifestPath, fixture) {
+  const fixtureID = fixture.id
+  const overrideName = fixturePathOverrides[fixtureID]
+  const override = overrideName ? process.env[overrideName]?.trim() : ''
   const configuredPath = override || fixture.path
   const path = isAbsolute(configuredPath)
     ? configuredPath
@@ -173,15 +180,15 @@ async function verifyFixture(manifestPath) {
   await assertPDFSignature(path)
   const evidence = await hashAndCountBytes(path)
   if (evidence.bytes !== fixture.bytes) {
-    fail(`byte count mismatch: expected ${fixture.bytes}, got ${evidence.bytes}`)
+    fail(`${fixtureID}: byte count mismatch: expected ${fixture.bytes}, got ${evidence.bytes}`)
   }
   if (evidence.sha256 !== fixture.sha256) {
-    fail(`SHA256 mismatch: expected ${fixture.sha256}, got ${evidence.sha256}`)
+    fail(`${fixtureID}: SHA256 mismatch: expected ${fixture.sha256}, got ${evidence.sha256}`)
   }
 
   const pages = countPDFPages(path)
   if (pages !== fixture.pages) {
-    fail(`page count mismatch: expected ${fixture.pages}, got ${pages}`)
+    fail(`${fixtureID}: page count mismatch: expected ${fixture.pages}, got ${pages}`)
   }
 
   const after = await stat(path)
@@ -197,17 +204,26 @@ async function verifyFixture(manifestPath) {
   }
 }
 
+async function verifyFixtures(manifestPath) {
+  const fixtures = await readManifest(manifestPath)
+  const evidence = []
+  for (const fixture of fixtures) evidence.push(await verifyFixture(manifestPath, fixture))
+  return evidence
+}
+
 async function main() {
   const options = parseArguments(process.argv.slice(2))
   if (options.help) {
     process.stdout.write(
       'Usage: node verify-fixture.mjs [--manifest PATH]\n'
-      + 'Set HEX_FIXTURE_TEXTBOOK_PDF to explicitly override only the PDF path.\n',
+      + 'Set HEX_FIXTURE_TEXTBOOK_PDF and HEX_FIXTURE_SCANNED_TEXTBOOK_PDF '
+      + 'to override the two release PDF paths.\n',
     )
     return
   }
-  const evidence = await verifyFixture(options.manifestPath)
-  process.stdout.write(`${JSON.stringify(evidence)}\n`)
+  const evidence = await verifyFixtures(options.manifestPath)
+  const output = evidence.length === 1 ? evidence[0] : { fixtures: evidence }
+  process.stdout.write(`${JSON.stringify(output)}\n`)
 }
 
 main().catch((error) => {

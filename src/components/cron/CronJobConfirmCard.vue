@@ -185,30 +185,36 @@ function toggleDeliver(channel: string) {
     <div v-else class="cron-card__form">
       <label class="cron-card__field">
         <span class="cron-card__label">任务名称</span>
-        <input
+        <HcClearableField>
+          <input
           v-model="localName"
           class="cron-card__input"
           maxlength="32"
           placeholder="如：每日新闻"
         />
+        </HcClearableField>
       </label>
       <label class="cron-card__field">
         <span class="cron-card__label">执行时间</span>
-        <input
+        <HcClearableField>
+          <input
           v-model="localSchedule"
           class="cron-card__input"
           placeholder="如：每天 8 点 / 0 8 * * * / @daily"
         />
+        </HcClearableField>
         <span v-if="schedulePreview" class="cron-card__hint">预览：{{ schedulePreview }}</span>
       </label>
       <label class="cron-card__field">
         <span class="cron-card__label">做什么</span>
-        <textarea
+        <HcClearableField>
+          <textarea
           v-model="localPrompt"
           class="cron-card__textarea"
           rows="2"
           placeholder="用自然语言描述任务内容"
         />
+        </HcClearableField>
       </label>
       <div class="cron-card__field">
         <span class="cron-card__label">通知到</span>

@@ -244,11 +244,13 @@ onMounted(() => {
             <div class="px-5 py-4 hc-modal-body">
               <div class="hc-field">
                 <label>{{ t('prompts.fTitle', '标题') }}</label>
-                <input
+                <HcClearableField>
+                  <input
                   v-model="editing.title"
                   type="text"
                   :placeholder="t('prompts.fTitlePh', '如：日报总结')"
                 />
+                </HcClearableField>
               </div>
               <div class="hc-field hc-field--row">
                 <div>
@@ -257,11 +259,13 @@ onMounted(() => {
                 </div>
                 <div>
                   <label>{{ t('prompts.fCategory', '分类') }}</label>
-                  <input
+                  <HcClearableField>
+                    <input
                     v-model="editing.category"
                     type="text"
                     :placeholder="t('prompts.fCategoryPh', '如：写作 / 翻译 / 编程（自定义）')"
                   />
+                  </HcClearableField>
                 </div>
               </div>
               <div class="hc-field">
@@ -288,7 +292,8 @@ onMounted(() => {
                     </button>
                   </div>
                 </div>
-                <textarea
+                <HcClearableField>
+                  <textarea
                   v-show="bodyTab === 'edit'"
                   v-model="editing.body_md"
                   rows="6"
@@ -302,6 +307,7 @@ onMounted(() => {
                       : t('prompts.fBodyPh', 'Prompt 正文（Markdown）')
                   "
                 />
+                </HcClearableField>
                 <!-- 预览已经 renderPromptPreview→DOMPurify 消毒，v-html 安全 -->
                 <!-- eslint-disable-next-line vue/no-v-html -->
                 <div v-show="bodyTab === 'preview'" class="hc-body-prev" v-html="bodyPreviewHtml" />
@@ -326,11 +332,13 @@ onMounted(() => {
                 </div>
                 <div>
                   <label>{{ t('prompts.fScope', '工具范围（逗号分隔，可选）') }}</label>
-                  <input
+                  <HcClearableField>
+                    <input
                     v-model="editing.tool_scope"
                     type="text"
                     :placeholder="t('prompts.fScopePh', '如：web_search, code_exec')"
                   />
+                  </HcClearableField>
                 </div>
               </div>
               <label class="hc-switch">

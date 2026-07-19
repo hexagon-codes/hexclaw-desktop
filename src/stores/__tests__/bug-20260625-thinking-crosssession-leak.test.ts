@@ -19,6 +19,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useChatStore } from '../chat'
+import { setSessionDeepThinking } from '../session-thinking-preference'
 
 const {
   loadAllSessions, loadMessages, loadArtifacts, getLastSessionId, setLastSessionId,
@@ -85,6 +86,7 @@ describe('BUG-20260625 深度思考(thinking)开关跨会话泄漏', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    localStorage.clear()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
   afterEach(() => { vi.restoreAllMocks() })
@@ -104,5 +106,22 @@ describe('BUG-20260625 深度思考(thinking)开关跨会话泄漏', () => {
       store.thinkingEnabled,
       '切换会话后 thinkingEnabled 未清零 → UI 显示关但请求仍发 thinking=on（跨会话状态泄漏）',
     ).toBe(false)
+  })
+
+  it('按会话恢复用户显式保存的深度思考偏好，且不会串到其他会话', async () => {
+    const store = useChatStore()
+    setSessionDeepThinking('s1', true)
+
+    await store.selectSession('s1')
+    expect(store.chatMode).toBe('research')
+    expect(store.thinkingEnabled).toBe(true)
+
+    await store.selectSession('s2')
+    expect(store.chatMode).toBe('chat')
+    expect(store.thinkingEnabled).toBe(false)
+
+    await store.selectSession('s1')
+    expect(store.chatMode).toBe('research')
+    expect(store.thinkingEnabled).toBe(true)
   })
 })

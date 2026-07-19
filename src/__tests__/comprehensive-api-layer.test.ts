@@ -680,12 +680,12 @@ describe('knowledge.ts', () => {
       expect(content).toBe('chunk 1\n\nchunk 2')
     })
 
-    it('returns empty string when both detail and search fail', async () => {
+    // BUG-20260718（§15）：detail 与 search 都失败 = 故障，抛错而非伪装成空文档。
+    it('throws when both detail and search fail (fault, not empty doc)', async () => {
       mockedApiGet.mockRejectedValueOnce(new Error('404'))
       mockedApiPost.mockRejectedValueOnce(new Error('500'))
 
-      const content = await getDocumentContent(doc)
-      expect(content).toBe('')
+      await expect(getDocumentContent(doc)).rejects.toThrow()
     })
   })
 

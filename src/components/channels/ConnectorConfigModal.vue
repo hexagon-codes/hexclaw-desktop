@@ -372,25 +372,29 @@ async function handleSave() {
             <!-- 实例名（始终有） -->
             <div class="hc-im-field">
               <label class="hc-im-field__label">{{ t('connections.connectors.form.name', '实例名') }}</label>
-              <input
+              <HcClearableField>
+                <input
                 v-model="formName"
                 class="hc-im-input"
                 data-testid="connector-name-input"
                 :placeholder="t('connections.connectors.form.namePlaceholder', '例如：生产库 / 分析库')"
               />
+              </HcClearableField>
             </div>
 
             <!-- 配置字段（按方式 / 类型） -->
             <div v-for="field in configFields" :key="field.key" class="hc-im-field">
               <label class="hc-im-field__label">{{ field.label }}</label>
               <div class="hc-im-input-wrap">
-                <input
+                <HcClearableField :trailing="field.secret ? 36 : 8">
+                  <input
                   v-model="formConfig[field.key]"
                   :type="field.secret && !showSecrets[field.key] ? 'password' : 'text'"
                   class="hc-im-input"
                   :data-testid="`connector-config-${field.key}`"
                   :placeholder="field.placeholder"
                 />
+                </HcClearableField>
                 <button
                   v-if="field.secret"
                   class="hc-im-input-eye"
@@ -405,12 +409,14 @@ async function handleSave() {
             <div v-if="currentMethod === 'token'" class="hc-im-field">
               <label class="hc-im-field__label">{{ t('connections.connectors.form.token', '访问令牌 (Token)') }}</label>
               <div class="hc-im-input-wrap">
-                <input
+                <HcClearableField :trailing="36">
+                  <input
                   v-model="formToken"
                   :type="showToken ? 'text' : 'password'"
                   class="hc-im-input"
                   :placeholder="t('connections.connectors.form.tokenPlaceholder', '粘贴只读访问令牌')"
                 />
+                </HcClearableField>
                 <button class="hc-im-input-eye" @click="showToken = !showToken">
                   <component :is="showToken ? EyeOff : Eye" :size="14" />
                 </button>

@@ -41,6 +41,17 @@ describe('useAgentsStore', () => {
     expect(store.roles[0]!.constraints).toEqual(['不编造不确定信息'])
   })
 
+  it('loadAgents 失败返回 false 并保留可观察错误，调用方不得误判刷新成功', async () => {
+    vi.mocked(getAgents).mockRejectedValueOnce(new Error('refresh failed'))
+    const store = useAgentsStore()
+
+    const ok = await store.loadAgents()
+
+    expect(ok).toBe(false)
+    expect(store.error?.message).toContain('refresh failed')
+    expect(store.agentsLoaded).toBe(false)
+  })
+
   // hex-test 审计（2026-06-27）：IM「频道默认模型」用匿名 Agent `@im/<platform>` 承载，
   // 必须从用户可见 Agent 列表过滤——否则泄漏进 Agent 管理页/路由下拉/聊天选择器。
   // registeredAgents 喂 ChatView/Inspector/ContextBar，是泄漏的总闸，必须在源头过滤。

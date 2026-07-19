@@ -43,7 +43,11 @@ vi.mock('@/api/webhook', () => ({
 }))
 vi.mock('@/composables', () => ({ useToast: () => toast }))
 vi.mock('@/composables/useToast', () => ({ useToast: () => toast }))
-vi.mock('@/api/im-channels', () => ({ getConnections: vi.fn().mockResolvedValue([]) }))
+vi.mock('@/api/im-channels', () => ({
+  getConnections: vi.fn().mockResolvedValue([]),
+  // BUG-20260718：TasksView 现用 getConnectionsResult（区分未配置 vs 故障）。
+  getConnectionsResult: vi.fn().mockResolvedValue({ connections: [] }),
+}))
 vi.mock('lucide-vue-next', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
   const stub = { template: '<span />' }

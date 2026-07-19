@@ -8,7 +8,7 @@ import {
   getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory,
   type CronJob, type CronJobInput, type CronJobRun, type CronCompileProgress, type CronCompileStage,
 } from '@/api/tasks'
-import { getConnections, type ConnectionSummary } from '@/api/im-channels'
+import { getConnectionsResult, type ConnectionSummary } from '@/api/im-channels'
 import {
   preflightAutonomy, createAutonomyGrant, getAutonomySummary,
   type PreflightResult, type AutonomyTaskStatus,
@@ -63,6 +63,8 @@ const showPresets = ref(false)
 // 留空 = 后端按 prompt 由 LLM 推导（默认 chat）；选了即覆盖。
 const GENERIC_DELIVER_CHANNELS = ['chat', 'push', 'feishu', 'discord', 'wechat'] as const
 const connections = ref<ConnectionSummary[]>([])
+// 连接库拉取故障提示（区分「未配置」与「sidecar/权限/网络故障」，BUG-20260718）。
+const connectionsError = ref<string | null>(null)
 
 /**
  * 可投递的已配置连接：启用 + **具备发送能力**。
@@ -86,8 +88,11 @@ function toggleDeliver(target: string) {
 }
 
 async function loadConnections() {
-  // 优雅降级：引擎未连接 / 端点未上线 → 空列表，仅显示通用渠道类型。
-  connections.value = await getConnections()
+  // BUG-20260718（§15）：用 getConnectionsResult 区分「未配置」与「故障」——
+  // 后端故障时显示告警而非把它画成「没有连接」（旧 getConnections 会吞成空列表）。
+  const r = await getConnectionsResult()
+  connections.value = r.connections
+  connectionsError.value = r.error ?? null
 }
 
 const triggeringJobs = ref<Set<string>>(new Set())
@@ -884,25 +889,29 @@ defineExpose({ openCreateForm, loadJobs })
               <!-- Task name -->
               <div class="hc-field">
                 <label class="hc-field__label">{{ t('tasks.taskName') }}</label>
-                <input
+                <HcClearableField>
+                  <input
                   v-model="form.name"
                   type="text"
                   class="hc-input"
                   :placeholder="t('tasks.taskNamePlaceholder')"
                 />
+                </HcClearableField>
               </div>
 
               <!-- Schedule -->
               <div class="hc-field">
                 <label class="hc-field__label">{{ t('tasks.schedule') }}</label>
                 <div class="schedule-input-wrap">
-                  <input
+                  <HcClearableField>
+                    <input
                     v-model="form.schedule"
                     type="text"
                     class="hc-input"
                     style="font-family: monospace;"
                     :placeholder="t('tasks.cronExprPlaceholder')"
                   />
+                  </HcClearableField>
                   <button
                     class="schedule-preset-btn"
                     type="button"
@@ -930,13 +939,15 @@ defineExpose({ openCreateForm, loadJobs })
               <!-- Prompt -->
               <div class="hc-field">
                 <label class="hc-field__label">{{ t('tasks.prompt') }}</label>
-                <textarea
+                <HcClearableField>
+                  <textarea
                   v-model="form.prompt"
                   rows="4"
                   class="hc-input"
                   style="resize: none; font-family: inherit;"
                   :placeholder="t('tasks.promptPlaceholder')"
                 />
+                </HcClearableField>
               </div>
 
               <!-- Type toggle -->
@@ -977,6 +988,10 @@ defineExpose({ openCreateForm, loadJobs })
                     {{ t(`tasks.deliverChannel.${ch}`) }}
                   </button>
                 </div>
+                <p v-if="connectionsError" class="deliver-hint deliver-hint--error">
+                  <AlertTriangle :size="13" />
+                  {{ t('tasks.connectionsLoadFailed', '连接库加载失败（并非没有连接）：') }}{{ connectionsError }}
+                </p>
                 <template v-if="deliverableConnections.length">
                   <div class="deliver-sublabel">{{ t('tasks.deliverFromConnections', '或从连接库选择') }}</div>
                   <div class="deliver-chips">
@@ -997,11 +1012,13 @@ defineExpose({ openCreateForm, loadJobs })
                 <!-- IM/连接投递目标需指定会话/群组 ID（后端 Deliverer 必需，否则投递失败） -->
                 <div v-if="needsChatId" class="hc-field" style="margin-top: 10px;">
                   <label class="hc-field__label">{{ t('tasks.chatIdLabel', '会话/群组 ID') }}</label>
-                  <input
+                  <HcClearableField>
+                    <input
                     v-model="form.chat_id"
                     class="hc-input"
                     :placeholder="t('tasks.chatIdPlaceholder', '如飞书 chat_id / 群 ID')"
                   />
+                  </HcClearableField>
                   <p class="deliver-hint">{{ t('tasks.chatIdHint', 'IM/连接投递必填——指定要发送到的会话或群组') }}</p>
                 </div>
               </div>
@@ -1754,6 +1771,12 @@ defineExpose({ openCreateForm, loadJobs })
   font-size: 11px;
   color: var(--hc-text-muted);
   margin: 8px 0 0;
+}
+.deliver-hint--error {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--hc-danger, #d64545);
 }
 
 .continuous-toggle {

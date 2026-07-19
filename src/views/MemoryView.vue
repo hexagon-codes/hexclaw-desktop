@@ -639,7 +639,8 @@ async function handleSearch() {
 
               <!-- Editing -->
               <template v-if="editingId === entry.id">
-                <input
+                <HcClearableField>
+                  <input
                   v-model="editValue"
                   data-testid="memory-edit-input"
                   class="flex-1 rounded-lg border px-2 py-1 text-sm outline-none"
@@ -647,6 +648,7 @@ async function handleSearch() {
                   @keydown.enter.exact.prevent="saveEdit"
                   @keydown.escape="cancelEdit"
                 />
+                </HcClearableField>
                 <button
                   class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                   :style="{ color: 'var(--hc-success, #10b981)' }"
@@ -827,7 +829,8 @@ async function handleSearch() {
               </button>
             </div>
             <div class="p-5">
-              <textarea
+              <HcClearableField>
+                <textarea
                 v-model="newContent"
                 data-testid="memory-add-input"
                 rows="7"
@@ -835,6 +838,7 @@ async function handleSearch() {
                 :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
                 :placeholder="t('memory.inputPlaceholder')"
               />
+              </HcClearableField>
             </div>
             <!-- BUG-20260710：footer 单行——类型在左、弹性占位、右侧 [取消][保存]（主操作末位，
                  Apple HIG）。旧布局 select+保存 左组 + flex-wrap，窄宽下保存折到下拉下面、取消孤悬。 -->

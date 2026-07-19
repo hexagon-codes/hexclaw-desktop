@@ -284,7 +284,8 @@ onBeforeUnmount(() => {
           <div v-if="dropdownOpen" class="hc-agent-combo__dropdown" :class="{ 'hc-agent-combo__dropdown--flip': dropdownFlip }">
             <div class="hc-agent-combo__search">
               <Search :size="12" style="flex-shrink:0;opacity:.45" />
-              <input
+              <HcClearableField>
+                <input
                 ref="searchInputRef"
                 v-model="searchQuery"
                 type="text"
@@ -292,6 +293,7 @@ onBeforeUnmount(() => {
                 :placeholder="t('common.search', 'Search...')"
                 @keydown.esc="closeDropdown()"
               />
+              </HcClearableField>
             </div>
             <div class="hc-agent-combo__list">
               <button
