@@ -43,6 +43,8 @@ const props = defineProps<{
   grade: string
   /** 教材边界（k12.textbook_edition）；旧直挂测试可从「年级 · 教材」兼容解析。 */
   textbook?: string
+  /** v-show 保活时的可见态；从辅导切回档案必须刷新，避免展示进入会话时的旧缓存。 */
+  active?: boolean
   /** 学情路由器直达目标；变化时切到对应档案对象。 */
   target?: RecordsTarget
 }>()
@@ -60,9 +62,12 @@ const store = useK12Store()
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：学习档案五对象 Tab——本周复习(行动)｜全部错题(档案)｜
 // 练习集｜积累｜作品；学情已提升为顶栏一等 Tab（K12InsightPanel）。默认落在「本周复习」（行动优先）。
 const sub = ref<RecordsTarget>(props.target ?? 'week')
-watch(() => props.target, (target) => {
-  if (target) sub.value = target
-})
+watch(
+  () => props.target,
+  (target) => {
+    if (target) sub.value = target
+  },
+)
 const creativeWorksRef = ref<InstanceType<typeof K12CreativeWorksPanel>>()
 
 // 积累本分科过滤（#5）：''=全部 / '语文' / '英语'，触达后端 GET /accumulation?subject=（BUG-3）。
@@ -85,14 +90,23 @@ async function reload() {
   ])
 }
 onMounted(reload)
+watch(
+  () => props.active,
+  (active, previous) => {
+    if (active && !previous) void reload()
+  },
+)
 // 切实例（多孩）→ 重置分科过滤 + 收起记录表单 + 清庆祝态，避免带上一个孩子的会话态
-watch(() => props.agentId, () => {
-  closeRetry()
-  accumSubject.value = ''
-  accumAddOpen.value = false
-  clearedThisSession.value = false
-  reload()
-})
+watch(
+  () => props.agentId,
+  () => {
+    closeRetry()
+    accumSubject.value = ''
+    accumAddOpen.value = false
+    clearedThisSession.value = false
+    reload()
+  },
+)
 
 // 手动记积累本（#4）：家长在会话里遇到好东西 → 直接记进积累本（PRD §3.13）。
 // 学情相关（本月辅导次数/学期分科/薄弱条/完成率）已随 IA 迁移抽到 K12InsightPanel（顶栏一等 Tab）。
@@ -110,7 +124,9 @@ const accumForm = ref({ subject: '语文', entry_type: '好词好句', content: 
 // HcSelect 选项（原生 select 在 WKWebView 显 macOS Aqua 样式 · BUG-20260708 D5/B2）
 const accumSubjectOptions = computed(() => ACCUM_SUBJECTS.map((s) => ({ value: s, label: s })))
 const accumTypeOptions = computed(() =>
-  (ACCUM_TYPES_BY_SUBJECT[accumForm.value.subject] ?? ACCUM_TYPES_BY_SUBJECT['语文']!).map((ty) => ({ value: ty, label: ty })),
+  (ACCUM_TYPES_BY_SUBJECT[accumForm.value.subject] ?? ACCUM_TYPES_BY_SUBJECT['语文']!).map(
+    (ty) => ({ value: ty, label: ty }),
+  ),
 )
 watch(
   () => accumForm.value.subject,
@@ -148,10 +164,12 @@ async function submitAccum() {
 // 绝不复用 store.grade 的 solve+verify 对抗验算链（那是「不知道对不对」才要跑，真机 1-2 分钟）；秒级完成。
 const mistakeAddOpen = ref(false)
 const mistakeForm = ref({ subject: '', problem: '', studentAnswer: '', knowledgePoints: '' })
-const mistakeSubjectOptions = computed(() => K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
-  value,
-  label: t(labelKey),
-})))
+const mistakeSubjectOptions = computed(() =>
+  K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
+    value,
+    label: t(labelKey),
+  })),
+)
 const mistakeSaving = ref(false)
 // textarea 内 Enter=换行；⌘/Ctrl+Enter 提交（20260712 视觉评审定案，与桌面输入习惯一致）
 function onMistakeKeydown(e: KeyboardEvent) {
@@ -166,7 +184,9 @@ async function submitMistake() {
   mistakeSaving.value = true
   try {
     const kps = mistakeForm.value.knowledgePoints
-      .split(/[·,，、/]/).map((s) => s.trim()).filter(Boolean)
+      .split(/[·,，、/]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
     const res = await store.recordMistake({
       agent: props.agentId,
       subject: mistakeForm.value.subject,
@@ -251,16 +271,20 @@ function closeCustomPaper() {
   customPaperOpen.value = false
 }
 
-watch(paperForm, () => {
-  if (basketBusy.value) return
-  customPaperError.value = ''
-  customPaperResult.value = null
-  customPaperIdempotencyKey.value = newCustomPaperKey()
-}, { deep: true })
+watch(
+  paperForm,
+  () => {
+    if (basketBusy.value) return
+    customPaperError.value = ''
+    customPaperResult.value = null
+    customPaperIdempotencyKey.value = newCustomPaperKey()
+  },
+  { deep: true },
+)
 
 const gradeBoundary = computed(() => props.grade.split('·')[0]?.trim() ?? '')
-const textbookBoundary = computed(() =>
-  props.textbook?.trim() || props.grade.split('·').slice(1).join('·').trim(),
+const textbookBoundary = computed(
+  () => props.textbook?.trim() || props.grade.split('·').slice(1).join('·').trim(),
 )
 const paperScopeOpts = computed(() => [
   { v: 'week' as const, label: t('k12.customPaper.scopeWeek') },
@@ -333,7 +357,9 @@ const nextReview = computed(() => {
   if (!first) return null
   const d = new Date((first.dueAt as number) * 1000)
   const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  const kp = String(first.fields.knowledge_point ?? '').replace(/[·・]\s*$/, '').trim()
+  const kp = String(first.fields.knowledge_point ?? '')
+    .replace(/[·・]\s*$/, '')
+    .trim()
   return { record: first, date, kp }
 })
 // 温和次级 CTA「提前练一练」：复用最近到期（或第一条）错题触发再练弹层。
@@ -385,7 +411,10 @@ const trendPill = computed(() => {
 
 // 复习完成率/薄弱条已随 IA 迁移抽到 K12InsightPanel（学情=顶栏一等 Tab）。
 
-async function onAction(payload: { id: 'practiceAgain' | 'markMastered' | 'detail'; record: RecordItem }) {
+async function onAction(payload: {
+  id: 'practiceAgain' | 'markMastered' | 'detail'
+  record: RecordItem
+}) {
   const { id, record } = payload
   if (id === 'markMastered') {
     try {
@@ -411,7 +440,18 @@ async function onAction(payload: { id: 'practiceAgain' | 'markMastered' | 'detai
 // UX-2：再练结果**展示**不含验算徽章（练习题非批改）；badge 仅内部保留供装篮定级（§3.8 入口1），不渲染。
 // 题答分离（2026-07-18 P2 清偿）：question=题面（先显给孩子做）、answer=解答（默认遮罩）、
 // expectedAnswer=最终答案（装篮 expected_answer_markdown 用）；后端拆不出时三者为空 → 整段遮罩回退。
-const retry = ref<{ open: boolean; loading: boolean; error: boolean; solution: string; question: string; answer: string; expectedAnswer: string; badge: string; revealed: boolean; basketed: boolean }>({
+const retry = ref<{
+  open: boolean
+  loading: boolean
+  error: boolean
+  solution: string
+  question: string
+  answer: string
+  expectedAnswer: string
+  badge: string
+  revealed: boolean
+  basketed: boolean
+}>({
   open: false,
   loading: false,
   error: false,
@@ -439,26 +479,69 @@ async function doRetry(record: RecordItem) {
   const gen = ++retryGen
   retryAbort?.abort()
   retryAbort = new AbortController()
-  retry.value = { open: true, loading: true, error: false, solution: '', question: '', answer: '', expectedAnswer: '', badge: '', revealed: false, basketed: false }
+  retry.value = {
+    open: true,
+    loading: true,
+    error: false,
+    solution: '',
+    question: '',
+    answer: '',
+    expectedAnswer: '',
+    badge: '',
+    revealed: false,
+    basketed: false,
+  }
   try {
-    const res = await k12ReviewRetry({ agent: props.agentId, record_id: record.recordId, grade: props.grade }, retryAbort.signal)
+    const res = await k12ReviewRetry(
+      { agent: props.agentId, record_id: record.recordId, grade: props.grade },
+      retryAbort.signal,
+    )
     if (gen !== retryGen) return // 已被关闭/取代 → 丢弃，不重开弹窗
     retry.value = {
-      open: true, loading: false, error: false, solution: res.solution,
-      question: res.question ?? '', answer: res.answer ?? '', expectedAnswer: res.expected_answer ?? '',
-      badge: res.badge ?? '', revealed: false, basketed: false,
+      open: true,
+      loading: false,
+      error: false,
+      solution: res.solution,
+      question: res.question ?? '',
+      answer: res.answer ?? '',
+      expectedAnswer: res.expected_answer ?? '',
+      badge: res.badge ?? '',
+      revealed: false,
+      basketed: false,
     }
   } catch {
     if (gen !== retryGen) return // 主动取消/已过期 → 静默
     // 失败/超时不静默关弹层：保留弹层 + 显友好可重试提示（原始技术串对家长无价值，故不透出）。
-    retry.value = { open: true, loading: false, error: true, solution: '', question: '', answer: '', expectedAnswer: '', badge: '', revealed: false, basketed: false }
+    retry.value = {
+      open: true,
+      loading: false,
+      error: true,
+      solution: '',
+      question: '',
+      answer: '',
+      expectedAnswer: '',
+      badge: '',
+      revealed: false,
+      basketed: false,
+    }
   }
 }
 function closeRetry() {
   retryGen++
   retryAbort?.abort()
   retryAbort = null
-  retry.value = { open: false, loading: false, error: false, solution: '', question: '', answer: '', expectedAnswer: '', badge: '', revealed: false, basketed: false }
+  retry.value = {
+    open: false,
+    loading: false,
+    error: false,
+    solution: '',
+    question: '',
+    answer: '',
+    expectedAnswer: '',
+    badge: '',
+    revealed: false,
+    basketed: false,
+  }
 }
 onBeforeUnmount(() => {
   retryGen++
@@ -513,7 +596,11 @@ async function addRetryToBasket() {
 // ── 详情弹层（BUG-20260712-#2）──
 // 复用列表已有的 RecordItem 字段，不额外请求后端，弹层可关闭。kind 区分错题（题目/知识点/错因）
 // 与积累（内容/学科/类型），走各自 schema 状态机上色。
-const detail = ref<{ open: boolean; record: RecordItem | null; kind: 'mistake' | 'accum' }>({ open: false, record: null, kind: 'mistake' })
+const detail = ref<{ open: boolean; record: RecordItem | null; kind: 'mistake' | 'accum' }>({
+  open: false,
+  record: null,
+  kind: 'mistake',
+})
 function openDetail(record: RecordItem, kind: 'mistake' | 'accum' = 'mistake') {
   detail.value = { open: true, record, kind }
 }
@@ -525,7 +612,9 @@ const detailKp = computed(() => String(detail.value.record?.fields.knowledge_poi
 const detailError = computed(() => String(detail.value.record?.fields.error_cause ?? ''))
 // 抽查复验（§3.6 规则 4）：复验未过的题在档案留「家长确认（复验未过）」事实标注——
 // 只呈现 failed；scheduled/passed 不呈现（不打抽查标签、不制造紧张感）。话术温和不指责。
-const detailSpotCheckFailed = computed(() => detail.value.record?.fields.spot_check_state === 'failed')
+const detailSpotCheckFailed = computed(
+  () => detail.value.record?.fields.spot_check_state === 'failed',
+)
 // 积累本字段
 const detailContent = computed(() => String(detail.value.record?.fields.content ?? ''))
 const detailAccumSubject = computed(() => String(detail.value.record?.fields.subject ?? ''))
@@ -537,7 +626,10 @@ function accumDate(item: RecordItem): string {
   const d = new Date(ts * 1000)
   return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
-function accumField(item: RecordItem, key: 'subject' | 'entry_type' | 'content' | 'source'): string {
+function accumField(
+  item: RecordItem,
+  key: 'subject' | 'entry_type' | 'content' | 'source',
+): string {
   return String(item.fields[key] ?? '')
 }
 function accumSourceLabel(item: RecordItem): string {
@@ -611,7 +703,9 @@ async function dictationToBasket() {
 // 用于移除记错的 / 重复的条目（数据纠错，非逃避难题）。删成功 → 关弹层 + reload + toast。
 const confirmDelete = ref(false)
 const deleting = ref(false)
-function askDelete() { confirmDelete.value = true }
+function askDelete() {
+  confirmDelete.value = true
+}
 async function doDelete() {
   const rec = detail.value.record
   if (!rec || deleting.value) return
@@ -660,7 +754,11 @@ async function doExportMd() {
   try {
     const res = await k12ExportMd(props.agentId)
     const d = todayLabel().replace(/-/g, '').slice(4)
-    await download(worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md'), res.content, 'text/markdown;charset=utf-8')
+    await download(
+      worksheetFilename(props.agentName, t('k12.collections.mistakes'), d, d, 'md'),
+      res.content,
+      'text/markdown;charset=utf-8',
+    )
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
   }
@@ -676,40 +774,84 @@ async function doExportMd() {
          学情已提升为顶栏一等 Tab，不再是二级 Tab。 -->
     <div class="k12rec__tabs">
       <div class="seg">
-        <button :class="{ on: sub === 'week' }" data-testid="subtab-week" @click="sub = 'week'">{{ t('k12.subTabs.week') }}</button>
-        <button :class="{ on: sub === 'mistakes' }" data-testid="subtab-mistakes" @click="sub = 'mistakes'">{{ t('k12.subTabs.mistakes') }}</button>
-        <button :class="{ on: sub === 'practiceSets' }" data-testid="subtab-practicesets" @click="sub = 'practiceSets'">{{ t('k12.subTabs.practiceSets') }}</button>
-        <button :class="{ on: sub === 'accumulation' }" @click="sub = 'accumulation'">{{ t('k12.subTabs.accumulation') }}</button>
-        <button :class="{ on: sub === 'works' }" data-testid="subtab-works" @click="sub = 'works'">{{ t('k12.subTabs.works') }}</button>
+        <button :class="{ on: sub === 'week' }" data-testid="subtab-week" @click="sub = 'week'">
+          {{ t('k12.subTabs.week') }}
+        </button>
+        <button
+          :class="{ on: sub === 'mistakes' }"
+          data-testid="subtab-mistakes"
+          @click="sub = 'mistakes'"
+        >
+          {{ t('k12.subTabs.mistakes') }}
+        </button>
+        <button
+          :class="{ on: sub === 'practiceSets' }"
+          data-testid="subtab-practicesets"
+          @click="sub = 'practiceSets'"
+        >
+          {{ t('k12.subTabs.practiceSets') }}
+        </button>
+        <button :class="{ on: sub === 'accumulation' }" @click="sub = 'accumulation'">
+          {{ t('k12.subTabs.accumulation') }}
+        </button>
+        <button :class="{ on: sub === 'works' }" data-testid="subtab-works" @click="sub = 'works'">
+          {{ t('k12.subTabs.works') }}
+        </button>
       </div>
       <span class="k12rec__sp" />
       <!-- 20260719 信息架构定稿：①功能位 emoji → 单色描边图标；②导出与备份/恢复均为学习档案级动作，
            不占常驻顶栏，统一收进五个子页均可达的「⋯」溢出菜单。 -->
-      <button v-if="sub === 'mistakes'" class="btn k12rec__addbtn" data-testid="mistake-add-open" @click="mistakeAddOpen = !mistakeAddOpen">
-        <svg class="k12ic" viewBox="0 0 24 24"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
+      <button
+        v-if="sub === 'mistakes'"
+        class="btn k12rec__addbtn"
+        data-testid="mistake-add-open"
+        @click="mistakeAddOpen = !mistakeAddOpen"
+      >
+        <svg class="k12ic" viewBox="0 0 24 24">
+          <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+        </svg>
         {{ t('k12.mistakeAdd.open') }}
       </button>
-      <button v-else-if="sub === 'accumulation'" class="btn k12rec__addbtn" data-testid="accum-add-open" @click="accumAddOpen = true">
-        <svg class="k12ic" viewBox="0 0 24 24"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+      <button
+        v-else-if="sub === 'accumulation'"
+        class="btn k12rec__addbtn"
+        data-testid="accum-add-open"
+        @click="accumAddOpen = true"
+      >
+        <svg class="k12ic" viewBox="0 0 24 24">
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </svg>
         {{ t('k12.accum.addOpen') }}
       </button>
-      <button v-else-if="sub === 'works'" class="btn k12rec__addbtn" data-testid="cw-add-open" @click="creativeWorksRef?.openAdd()">
-        <svg class="k12ic" viewBox="0 0 24 24"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+      <button
+        v-else-if="sub === 'works'"
+        class="btn k12rec__addbtn"
+        data-testid="cw-add-open"
+        @click="creativeWorksRef?.openAdd()"
+      >
+        <svg class="k12ic" viewBox="0 0 24 24">
+          <path d="M12 5v14" />
+          <path d="M5 12h14" />
+        </svg>
         {{ t('k12.works.addWork') }}
       </button>
       <div class="k12rec__export">
-        <button class="btn" :title="t('k12.actions.more')" @click="exportOpen = !exportOpen">⋯</button>
+        <button class="btn" :title="t('k12.actions.more')" @click="exportOpen = !exportOpen">
+          ⋯
+        </button>
         <div v-if="exportOpen" class="k12rec__menu">
           <button @click="doExport('pdf')">{{ t('k12.actions.export') }} PDF</button>
           <button @click="doExport('docx')">{{ t('k12.actions.export') }} Word</button>
           <button @click="doExportMd">{{ t('k12.actions.export') }} Markdown</button>
-          <!-- 原型正文不放筛选条；分科过滤保留为低频溢出动作，避免挤占积累内容层级。 -->
-          <template v-if="sub === 'accumulation'">
-            <button data-testid="accum-filter-all" @click="setAccumSubject(''); exportOpen = false">{{ t('k12.accum.filterAll') }}</button>
-            <button data-testid="accum-filter-chinese" @click="setAccumSubject('语文'); exportOpen = false">{{ t('k12.accum.filterChinese') }}</button>
-            <button data-testid="accum-filter-english" @click="setAccumSubject('英语'); exportOpen = false">{{ t('k12.accum.filterEnglish') }}</button>
-          </template>
-          <button @click="exportOpen = false; emit('open-backup')">{{ t('k12.actions.backup') }}</button>
+          <button
+            @click="
+              exportOpen = false;
+              emit('open-backup')
+            "
+          >
+            {{ t('k12.actions.backup') }}
+          </button>
         </div>
       </div>
     </div>
@@ -717,13 +859,35 @@ async function doExportMd() {
     <div class="k12rec__body">
       <!-- 本周复习（行动页，PRD §3.6）：复习队列 + 趋势 + 生成复习卷；档案查管在「全部错题」。 -->
       <section v-if="sub === 'week'" data-testid="week-section">
-        <div v-if="store.mistakesError" class="k12rec__err" role="alert" data-testid="mistakes-error">
+        <div
+          v-if="store.mistakesError"
+          class="k12rec__err"
+          role="alert"
+          data-testid="mistakes-error"
+        >
           <span>{{ store.mistakesError }}</span>
-          <button class="btn btn-ghost" data-testid="mistakes-retry" @click="store.loadMistakes(props.agentId)">{{ t('common.retry') }}</button>
+          <button
+            class="btn btn-ghost"
+            data-testid="mistakes-retry"
+            @click="store.loadMistakes(props.agentId)"
+          >
+            {{ t('common.retry') }}
+          </button>
         </div>
-        <div v-if="store.reportError" class="k12rec__err" role="alert" data-testid="records-report-error">
+        <div
+          v-if="store.reportError"
+          class="k12rec__err"
+          role="alert"
+          data-testid="records-report-error"
+        >
           <span>{{ store.reportError }}</span>
-          <button class="btn btn-ghost" data-testid="records-report-retry" @click="store.loadReport(props.agentId)">{{ t('common.retry') }}</button>
+          <button
+            class="btn btn-ghost"
+            data-testid="records-report-retry"
+            @click="store.loadReport(props.agentId)"
+          >
+            {{ t('common.retry') }}
+          </button>
         </div>
 
         <!-- 项-5：复习队列空 → 正向空态卡（不留空白）。
@@ -732,7 +896,9 @@ async function doExportMd() {
         <div v-if="view && !hasReviewQueue" class="k12empty" data-testid="review-empty-card">
           <template v-if="weekCleared">
             <div class="k12empty__icon">🎉</div>
-            <b class="k12empty__title" data-testid="review-cleared-title">{{ t('k12.emptyReview.clearedTitle') }}</b>
+            <b class="k12empty__title" data-testid="review-cleared-title">{{
+              t('k12.emptyReview.clearedTitle')
+            }}</b>
             <p class="k12empty__sub">{{ t('k12.emptyReview.clearedSub') }}</p>
           </template>
           <template v-else>
@@ -740,14 +906,17 @@ async function doExportMd() {
             <b class="k12empty__title">{{ t('k12.emptyReview.title') }}</b>
             <p class="k12empty__sub">{{ t('k12.emptyReview.sub') }}</p>
             <p v-if="nextReview" class="k12empty__next" data-testid="review-empty-next">
-              {{ t('k12.emptyReview.nextReview', { date: nextReview.date }) }}<template v-if="nextReview.kp">（{{ nextReview.kp }}）</template>
+              {{ t('k12.emptyReview.nextReview', { date: nextReview.date })
+              }}<template v-if="nextReview.kp">（{{ nextReview.kp }}）</template>
             </p>
             <button
               v-if="view.items.length"
               class="btn k12empty__cta"
               data-testid="review-empty-cta"
               @click="practiceEarly"
-            >{{ t('k12.emptyReview.practice') }}</button>
+            >
+              {{ t('k12.emptyReview.practice') }}
+            </button>
           </template>
         </div>
 
@@ -761,14 +930,31 @@ async function doExportMd() {
                 class="k12trend"
                 :class="trendPill.up ? 'k12trend--up' : 'k12trend--flat'"
                 data-testid="trend-pill"
-              >{{ trendPill.label }}</span>
+                >{{ trendPill.label }}</span
+              >
             </template>
             <!-- 周五留存钩子 + 查看学情入口（学情已是顶栏一等 Tab） -->
-            <template #review-foot>{{ t('k12.records.weeklyHook') }} · <a class="k12rec__insightlink" data-testid="go-insights" @click="emit('go-insights')">{{ t('k12.records.viewInsights') }} ›</a></template>
+            <template #review-foot
+              >{{ t('k12.records.weeklyHook') }} ·
+              <a class="k12rec__insightlink" data-testid="go-insights" @click="emit('go-insights')"
+                >{{ t('k12.records.viewInsights') }} ›</a
+              ></template
+            >
             <template #review-actions>
               <!-- §3.8 购物车模型：生成复习卷 = 本周待复习批量装篮（幂等），打印/发送在练习集完成 -->
-              <button class="btn btn-primary" data-testid="build-review-set" :disabled="basketBusy" @click="buildReviewSet">
-                <svg class="k12ic" viewBox="0 0 24 24"><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><path d="M6 14h12v8H6z" /></svg>
+              <button
+                class="btn btn-primary"
+                data-testid="build-review-set"
+                :disabled="basketBusy"
+                @click="buildReviewSet"
+              >
+                <svg class="k12ic" viewBox="0 0 24 24">
+                  <path d="M6 9V2h12v7" />
+                  <path
+                    d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"
+                  />
+                  <path d="M6 14h12v8H6z" />
+                </svg>
                 {{ t('k12.records.genWorksheet') }}
               </button>
               <button
@@ -778,7 +964,17 @@ async function doExportMd() {
                 :disabled="basketBusy"
                 @click="toggleCustomPaper"
               >
-                <svg class="k12ic" viewBox="0 0 24 24"><path d="M4 21v-7" /><path d="M4 10V3" /><path d="M12 21v-9" /><path d="M12 8V3" /><path d="M20 21v-5" /><path d="M20 12V3" /><path d="M2 14h4" /><path d="M10 8h4" /><path d="M18 16h4" /></svg>
+                <svg class="k12ic" viewBox="0 0 24 24">
+                  <path d="M4 21v-7" />
+                  <path d="M4 10V3" />
+                  <path d="M12 21v-9" />
+                  <path d="M12 8V3" />
+                  <path d="M20 21v-5" />
+                  <path d="M20 12V3" />
+                  <path d="M2 14h4" />
+                  <path d="M10 8h4" />
+                  <path d="M18 16h4" />
+                </svg>
                 {{ t('k12.records.customPaper') }}
               </button>
             </template>
@@ -788,9 +984,20 @@ async function doExportMd() {
 
       <!-- 全部错题（档案页，PRD §3.7）：查找、核对、管理——直接展开筛选 + 全量，不与本周复习重复行动。 -->
       <section v-else-if="sub === 'mistakes'" data-testid="mistakes-section">
-        <div v-if="store.mistakesError" class="k12rec__err" role="alert" data-testid="mistakes-error">
+        <div
+          v-if="store.mistakesError"
+          class="k12rec__err"
+          role="alert"
+          data-testid="mistakes-error"
+        >
           <span>{{ store.mistakesError }}</span>
-          <button class="btn btn-ghost" data-testid="mistakes-retry" @click="store.loadMistakes(props.agentId)">{{ t('common.retry') }}</button>
+          <button
+            class="btn btn-ghost"
+            data-testid="mistakes-retry"
+            @click="store.loadMistakes(props.agentId)"
+          >
+            {{ t('common.retry') }}
+          </button>
         </div>
         <p class="k12rec__hint" style="margin-top: 0">{{ t('k12.records.archiveDesc') }}</p>
         <div v-if="view" class="k12mistakes">
@@ -812,23 +1019,76 @@ async function doExportMd() {
         <div class="k12rec__reporthead">
           <h3 class="k12rec__h" style="margin: 0">{{ t('k12.accum.title') }}</h3>
           <span class="k12rec__hint" style="margin: 0">{{ t('k12.accum.desc') }}</span>
+          <div class="k12accum__filters" role="group" :aria-label="t('k12.accum.subject')">
+            <button
+              type="button"
+              class="chip"
+              :class="{ on: accumSubject === '' }"
+              :aria-pressed="accumSubject === ''"
+              data-testid="accum-filter-all"
+              @click="setAccumSubject('')"
+            >
+              {{ t('k12.accum.filterAll') }}
+            </button>
+            <button
+              type="button"
+              class="chip"
+              :class="{ on: accumSubject === '语文' }"
+              :aria-pressed="accumSubject === '语文'"
+              data-testid="accum-filter-chinese"
+              @click="setAccumSubject('语文')"
+            >
+              {{ t('k12.accum.filterChinese') }}
+            </button>
+            <button
+              type="button"
+              class="chip"
+              :class="{ on: accumSubject === '英语' }"
+              :aria-pressed="accumSubject === '英语'"
+              data-testid="accum-filter-english"
+              @click="setAccumSubject('英语')"
+            >
+              {{ t('k12.accum.filterEnglish') }}
+            </button>
+          </div>
         </div>
-        <div v-if="store.accumulationError" class="k12rec__err" role="alert" data-testid="accum-error">
+        <div
+          v-if="store.accumulationError"
+          class="k12rec__err"
+          role="alert"
+          data-testid="accum-error"
+        >
           <span>{{ store.accumulationError }}</span>
-          <button class="btn btn-ghost" data-testid="accum-retry" @click="reloadAccum">{{ t('common.retry') }}</button>
+          <button class="btn btn-ghost" data-testid="accum-retry" @click="reloadAccum">
+            {{ t('common.retry') }}
+          </button>
         </div>
         <!-- 原型 app.html:1619-1623：积累不是错题状态机，固定单行“学科→内容→类型→出处→状态→详情”。 -->
         <div v-else-if="accumView && accumView.items.length" class="k12accum__list">
           <!-- 20260718 原型定案对齐（引文列表）：引文置首整行（衬线 + 引号压角，量度 62ch），
                meta 行 = 学科/类型/来源/收藏日期/状态/详情；结构同 .k12accum__row 换皮。 -->
-          <div v-for="item in accumView.items" :key="item.recordId" class="k12accum__row k12accum__row--quote">
-            <b class="k12accum__title" :title="accumField(item, 'content')">{{ accumField(item, 'content') }}</b>
+          <div
+            v-for="item in accumView.items"
+            :key="item.recordId"
+            class="k12accum__row k12accum__row--quote"
+          >
+            <b class="k12accum__title" :title="accumField(item, 'content')">{{
+              accumField(item, 'content')
+            }}</b>
             <span class="k12accum__subject">{{ accumField(item, 'subject') }}</span>
             <span class="k12accum__type">{{ accumField(item, 'entry_type') }}</span>
-            <span class="k12accum__source" :title="accumSourceLabel(item)">{{ accumSourceLabel(item) }}</span>
-            <span v-if="accumDate(item)" class="k12accum__date" data-testid="accum-date">{{ accumDate(item) }}</span>
-            <span class="k12accum__status" :class="`k12accum__status--${accumStatusTone(item)}`">{{ accumStatusLabel(item) }}</span>
-            <button class="btn btn-ghost k12accum__detail" @click="openDetail(item, 'accum')">{{ t('records.detail') }}</button>
+            <span class="k12accum__source" :title="accumSourceLabel(item)">{{
+              accumSourceLabel(item)
+            }}</span>
+            <span v-if="accumDate(item)" class="k12accum__date" data-testid="accum-date">{{
+              accumDate(item)
+            }}</span>
+            <span class="k12accum__status" :class="`k12accum__status--${accumStatusTone(item)}`">{{
+              accumStatusLabel(item)
+            }}</span>
+            <button class="btn btn-ghost k12accum__detail" @click="openDetail(item, 'accum')">
+              {{ t('records.detail') }}
+            </button>
           </div>
         </div>
         <!-- 积累空态：对齐原型 rc1——原型积累区无「大居中卡」形态，只是列表区；空时给克制的
@@ -842,7 +1102,11 @@ async function doExportMd() {
 
       <!-- 作品：语文写作 / 美术（真实 /creative-works）——成长版本 + 证据化点评 -->
       <section v-else-if="sub === 'works'" data-testid="works-section">
-        <K12CreativeWorksPanel ref="creativeWorksRef" :agent-id="props.agentId" :show-add-button="false" />
+        <K12CreativeWorksPanel
+          ref="creativeWorksRef"
+          :agent-id="props.agentId"
+          :show-add-button="false"
+        />
       </section>
 
       <!-- 学情已提升为顶栏一等 Tab（K12InsightPanel，2026-07-18 IA 迁移），不再是二级 Tab。 -->
@@ -864,13 +1128,13 @@ async function doExportMd() {
                textarea 内 Enter=换行，⌘/Ctrl+Enter 提交。实现不得回退单行 input。 -->
           <HcClearableField>
             <textarea
-            v-model="mistakeForm.problem"
-            class="k12accum__content k12accum__content--area"
-            data-testid="mistake-problem"
-            rows="3"
-            :placeholder="t('k12.mistakeAdd.problemPh')"
-            @keydown="onMistakeKeydown"
-          />
+              v-model="mistakeForm.problem"
+              class="k12accum__content k12accum__content--area"
+              data-testid="mistake-problem"
+              rows="3"
+              :placeholder="t('k12.mistakeAdd.problemPh')"
+              @keydown="onMistakeKeydown"
+            />
           </HcClearableField>
           <div class="k12accum__field" data-testid="mistake-subject">
             <span>{{ t('k12.accum.subject') }}</span>
@@ -882,30 +1146,34 @@ async function doExportMd() {
           </div>
           <HcClearableField>
             <textarea
-            v-model="mistakeForm.studentAnswer"
-            class="k12accum__content k12accum__content--area"
-            data-testid="mistake-answer"
-            rows="2"
-            :placeholder="t('k12.mistakeAdd.answerPh')"
-            @keydown="onMistakeKeydown"
-          />
+              v-model="mistakeForm.studentAnswer"
+              class="k12accum__content k12accum__content--area"
+              data-testid="mistake-answer"
+              rows="2"
+              :placeholder="t('k12.mistakeAdd.answerPh')"
+              @keydown="onMistakeKeydown"
+            />
           </HcClearableField>
           <HcClearableField>
             <input
-            v-model="mistakeForm.knowledgePoints"
-            class="k12accum__content"
-            :placeholder="t('k12.mistakeAdd.kpPh')"
-          />
+              v-model="mistakeForm.knowledgePoints"
+              class="k12accum__content"
+              :placeholder="t('k12.mistakeAdd.kpPh')"
+            />
           </HcClearableField>
           <div class="k12rec__addhint">{{ t('k12.mistakeAdd.hint') }}</div>
           <div class="k12accum__actions">
-            <button class="btn btn-ghost" @click="mistakeAddOpen = false">{{ t('k12.accum.cancel') }}</button>
+            <button class="btn btn-ghost" @click="mistakeAddOpen = false">
+              {{ t('k12.accum.cancel') }}
+            </button>
             <button
               class="btn btn-primary"
               data-testid="mistake-submit"
               :disabled="!mistakeForm.subject || !mistakeForm.problem.trim() || mistakeSaving"
               @click="submitMistake"
-            >{{ mistakeSaving ? t('k12.mistakeAdd.submitting') : t('k12.mistakeAdd.submit') }}</button>
+            >
+              {{ mistakeSaving ? t('k12.mistakeAdd.submitting') : t('k12.mistakeAdd.submit') }}
+            </button>
           </div>
         </div>
       </div>
@@ -928,12 +1196,12 @@ async function doExportMd() {
         <div class="k12accum__form k12accum__form--modal">
           <HcClearableField>
             <textarea
-            v-model="accumForm.content"
-            class="k12accum__content"
-            data-testid="accum-add-content"
-            :placeholder="t('k12.accum.contentPlaceholder')"
-            rows="4"
-          />
+              v-model="accumForm.content"
+              class="k12accum__content"
+              data-testid="accum-add-content"
+              :placeholder="t('k12.accum.contentPlaceholder')"
+              rows="4"
+            />
           </HcClearableField>
           <div class="k12accum__row">
             <div class="k12accum__field" data-testid="accum-add-subject">
@@ -946,13 +1214,17 @@ async function doExportMd() {
             </div>
           </div>
           <div class="k12accum__actions">
-            <button class="btn btn-ghost" @click="accumAddOpen = false">{{ t('k12.accum.cancel') }}</button>
+            <button class="btn btn-ghost" @click="accumAddOpen = false">
+              {{ t('k12.accum.cancel') }}
+            </button>
             <button
               class="btn btn-primary"
               data-testid="accum-add-submit"
               :disabled="!accumForm.content.trim() || accumSaving"
               @click="submitAccum"
-            >{{ t('k12.accum.submit') }}</button>
+            >
+              {{ t('k12.accum.submit') }}
+            </button>
           </div>
         </div>
       </div>
@@ -976,7 +1248,9 @@ async function doExportMd() {
             :disabled="basketBusy"
             :aria-label="t('k12.customPaper.close')"
             @click="closeCustomPaper"
-          >✕</button>
+          >
+            ✕
+          </button>
         </div>
         <div class="k12accum__form k12accum__form--modal" data-testid="custom-paper-form">
           <div class="k12rec__addhint">{{ t('k12.customPaper.hint') }}</div>
@@ -984,38 +1258,50 @@ async function doExportMd() {
           <div class="k12paper__row">
             <span class="k12paper__label">{{ t('k12.customPaper.scope') }}</span>
             <button
-              v-for="o in paperScopeOpts" :key="o.v"
+              v-for="o in paperScopeOpts"
+              :key="o.v"
               type="button"
-              class="chip" :class="{ on: paperForm.scope === o.v }"
+              class="chip"
+              :class="{ on: paperForm.scope === o.v }"
               :disabled="basketBusy || !!customPaperResult"
               :aria-pressed="paperForm.scope === o.v"
               :data-testid="`paper-scope-${o.v}`"
               @click="paperForm.scope = o.v"
-            >{{ o.label }}</button>
+            >
+              {{ o.label }}
+            </button>
           </div>
           <div class="k12paper__row">
             <span class="k12paper__label">{{ t('k12.customPaper.perQ') }}</span>
             <button
-              v-for="n in paperPerQOpts" :key="n"
+              v-for="n in paperPerQOpts"
+              :key="n"
               type="button"
-              class="chip" :class="{ on: paperForm.perQ === n }"
+              class="chip"
+              :class="{ on: paperForm.perQ === n }"
               :disabled="basketBusy || !!customPaperResult"
               :aria-pressed="paperForm.perQ === n"
               :data-testid="`paper-perq-${n}`"
               @click="paperForm.perQ = n"
-            >{{ n }}</button>
+            >
+              {{ n }}
+            </button>
           </div>
           <div class="k12paper__row">
             <span class="k12paper__label">{{ t('k12.customPaper.difficulty') }}</span>
             <button
-              v-for="o in paperDiffOpts" :key="o.v"
+              v-for="o in paperDiffOpts"
+              :key="o.v"
               type="button"
-              class="chip" :class="{ on: paperForm.difficulty === o.v }"
+              class="chip"
+              :class="{ on: paperForm.difficulty === o.v }"
               :disabled="basketBusy || !!customPaperResult"
               :aria-pressed="paperForm.difficulty === o.v"
               :data-testid="`paper-difficulty-${o.v}`"
               @click="paperForm.difficulty = o.v"
-            >{{ o.label }}</button>
+            >
+              {{ o.label }}
+            </button>
           </div>
           <div class="k12rec__addhint" data-testid="custom-paper-contract-note">
             {{ t('k12.customPaper.contractNote') }}
@@ -1023,19 +1309,25 @@ async function doExportMd() {
           <div class="k12paper__row">
             <span class="k12paper__label">{{ t('k12.customPaper.total') }}</span>
             <button
-              v-for="o in paperTotalOpts" :key="o.v"
+              v-for="o in paperTotalOpts"
+              :key="o.v"
               type="button"
-              class="chip" :class="{ on: paperForm.total === o.v }"
+              class="chip"
+              :class="{ on: paperForm.total === o.v }"
               :disabled="basketBusy || !!customPaperResult"
               :aria-pressed="paperForm.total === o.v"
               @click="paperForm.total = o.v"
-            >{{ o.label }}</button>
+            >
+              {{ o.label }}
+            </button>
           </div>
           <p class="k12rec__addhint" data-testid="custom-paper-boundary">
-            {{ t('k12.customPaper.boundary', {
-              textbook: textbookBoundary || t('k12.customPaper.textbookMissing'),
-              grade: gradeBoundary || t('k12.customPaper.gradeMissing'),
-            }) }}
+            {{
+              t('k12.customPaper.boundary', {
+                textbook: textbookBoundary || t('k12.customPaper.textbookMissing'),
+                grade: gradeBoundary || t('k12.customPaper.gradeMissing'),
+              })
+            }}
           </p>
           <p
             v-if="basketBusy"
@@ -1043,7 +1335,9 @@ async function doExportMd() {
             role="status"
             aria-live="polite"
             data-testid="custom-paper-progress"
-          >{{ t('k12.customPaper.generating') }}</p>
+          >
+            {{ t('k12.customPaper.generating') }}
+          </p>
           <div
             v-else-if="customPaperError"
             class="k12rec__error"
@@ -1056,7 +1350,9 @@ async function doExportMd() {
               class="btn btn-ghost"
               data-testid="custom-paper-retry"
               @click="genCustomPaper"
-            >{{ t('k12.customPaper.retry') }}</button>
+            >
+              {{ t('k12.customPaper.retry') }}
+            </button>
           </div>
           <div
             v-else-if="customPaperResult"
@@ -1066,24 +1362,39 @@ async function doExportMd() {
             data-testid="custom-paper-result"
           >
             <b>{{ t('k12.customPaper.completed') }}</b>
-            <span>{{ t('k12.customPaper.receipt', {
-              id: customPaperResult.generation_job_id,
-              added: customPaperResult.added,
-              deduplicated: customPaperResult.deduplicated,
-            }) }}</span>
-            <span v-if="customPaperResult.added === 0">{{ t('k12.customPaper.idempotentReplay') }}</span>
+            <span>{{
+              t('k12.customPaper.receipt', {
+                id: customPaperResult.generation_job_id,
+                added: customPaperResult.added,
+                deduplicated: customPaperResult.deduplicated,
+              })
+            }}</span>
+            <span v-if="customPaperResult.added === 0">{{
+              t('k12.customPaper.idempotentReplay')
+            }}</span>
             <ul v-if="customPaperResult.items.length" class="k12paper__results">
               <li v-for="item in customPaperResult.items" :key="item.item_id">
                 <span>{{ t('k12.customPaper.sourceItem', { id: item.source_problem_id }) }}</span>
-                <span>{{ t('k12.customPaper.actualDifficulty', { value: paperDifficultyLabel(item.actual_difficulty) }) }}</span>
-                <span>{{ item.verification_status === 'verified'
-                  ? t('k12.customPaper.verified')
-                  : t('k12.customPaper.blocked') }}</span>
+                <span>{{
+                  t('k12.customPaper.actualDifficulty', {
+                    value: paperDifficultyLabel(item.actual_difficulty),
+                  })
+                }}</span>
+                <span>{{
+                  item.verification_status === 'verified'
+                    ? t('k12.customPaper.verified')
+                    : t('k12.customPaper.blocked')
+                }}</span>
               </li>
             </ul>
           </div>
           <div class="k12accum__actions">
-            <button type="button" class="btn btn-ghost" :disabled="basketBusy" @click="closeCustomPaper">
+            <button
+              type="button"
+              class="btn btn-ghost"
+              :disabled="basketBusy"
+              @click="closeCustomPaper"
+            >
               {{ customPaperResult ? t('k12.customPaper.close') : t('k12.accum.cancel') }}
             </button>
             <button
@@ -1092,7 +1403,9 @@ async function doExportMd() {
               class="btn btn-primary"
               data-testid="custom-paper-view-basket"
               @click="viewCustomPaperBasket"
-            >{{ t('k12.customPaper.viewBasket') }}</button>
+            >
+              {{ t('k12.customPaper.viewBasket') }}
+            </button>
             <button
               v-else
               type="button"
@@ -1100,7 +1413,11 @@ async function doExportMd() {
               data-testid="custom-paper-gen"
               :disabled="basketBusy || !textbookBoundary"
               @click="genCustomPaper"
-            >{{ basketBusy ? t('k12.customPaper.generatingShort') : t('k12.customPaper.generate') }}</button>
+            >
+              {{
+                basketBusy ? t('k12.customPaper.generatingShort') : t('k12.customPaper.generate')
+              }}
+            </button>
           </div>
         </div>
       </div>
@@ -1116,14 +1433,18 @@ async function doExportMd() {
           <span class="k12rec__sp" />
           <button class="btn btn-ghost" @click="closeRetry">✕</button>
         </div>
-        <p v-if="retry.loading" class="k12rec__hint" data-testid="retry-loading">{{ t('k12.records.retryLoading') }}</p>
+        <p v-if="retry.loading" class="k12rec__hint" data-testid="retry-loading">
+          {{ t('k12.records.retryLoading') }}
+        </p>
         <div v-else-if="retry.error" class="k12retry__err" data-testid="retry-error">
           <p class="k12rec__hint">{{ t('k12.records.retryFailed') }}</p>
           <button
             class="btn btn-primary"
             data-testid="retry-again"
             @click="retryRecord && doRetry(retryRecord)"
-          >{{ t('k12.records.retryRetryBtn') }}</button>
+          >
+            {{ t('k12.records.retryRetryBtn') }}
+          </button>
         </div>
         <template v-else>
           <!-- 题答分离（P2 清偿）：题面先显（孩子可直接做题），只遮解答；拆不出时整段遮罩回退 -->
@@ -1135,16 +1456,25 @@ async function doExportMd() {
           />
           <p class="k12retry__mask">🔒 {{ t('k12.records.retryMaskHint') }}</p>
           <!-- 守答案真遮罩：未揭示时模糊 + 禁选中（防孩子凑近一眼看光），家长点按才显示 -->
-          <div class="k12retry__bodywrap" :class="{ 'k12retry__bodywrap--masked': !retry.revealed }">
+          <div
+            class="k12retry__bodywrap"
+            :class="{ 'k12retry__bodywrap--masked': !retry.revealed }"
+          >
             <!-- 变式题为模型生成的富文本（**加粗** / 列表 / LaTeX 数学）→ md 渲染，勿裸显 markdown 标记。
                  遮罩层与 aria-hidden 保留：未揭示时模糊 + 不可读屏。 -->
-            <MarkdownRenderer class="k12retry__body" :aria-hidden="!retry.revealed" :content="retry.question ? retry.answer : retry.solution" />
+            <MarkdownRenderer
+              class="k12retry__body"
+              :aria-hidden="!retry.revealed"
+              :content="retry.question ? retry.answer : retry.solution"
+            />
             <button
               v-if="!retry.revealed"
               class="btn btn-primary k12retry__reveal"
               data-testid="retry-reveal"
               @click="retry.revealed = true"
-            >{{ t('k12.records.retryReveal') }}</button>
+            >
+              {{ t('k12.records.retryReveal') }}
+            </button>
           </div>
           <div v-if="retry.revealed" class="k12retry__actions">
             <!-- 装篮入口（§3.8 入口1）：变式题加入待打印篮，打印时随卷固化 -->
@@ -1153,9 +1483,14 @@ async function doExportMd() {
               :disabled="retry.basketed"
               data-testid="retry-add-basket"
               @click="addRetryToBasket"
-            >{{ retry.basketed ? t('k12.records.basketAddedBtn') : t('k12.records.addToBasket') }}</button>
+            >
+              {{ retry.basketed ? t('k12.records.basketAddedBtn') : t('k12.records.addToBasket') }}
+            </button>
             <button class="btn" data-testid="retry-copy" @click="copyRetrySolution">
-              <svg class="k12ic" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
+              <svg class="k12ic" viewBox="0 0 24 24">
+                <rect x="9" y="9" width="11" height="11" rx="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+              </svg>
               {{ t('k12.records.retryCopy') }}
             </button>
           </div>
@@ -1164,15 +1499,22 @@ async function doExportMd() {
     </div>
 
     <!-- 错题详情弹层（BUG-20260712-#2）：复用列表已有 RecordItem 字段，不额外请求后端，可关闭。 -->
-    <div v-if="detail.open && detail.record" class="k12modal" data-testid="mistake-detail" @click.self="closeDetail">
+    <div
+      v-if="detail.open && detail.record"
+      class="k12modal"
+      data-testid="mistake-detail"
+      @click.self="closeDetail"
+    >
       <div class="k12modal__card">
         <div class="k12modal__head">
           <b>{{ t('k12.detail.title') }}</b>
           <span
             v-if="detailStatus"
-            class="k12detail__status" :class="`k12detail__status--${detailStatusTone}`"
+            class="k12detail__status"
+            :class="`k12detail__status--${detailStatusTone}`"
             data-testid="detail-status"
-          >{{ detailStatus }}</span>
+            >{{ detailStatus }}</span
+          >
           <span class="k12rec__sp" />
           <button class="btn btn-ghost" @click="closeDetail">✕</button>
         </div>
@@ -1180,15 +1522,23 @@ async function doExportMd() {
         <div v-if="detail.kind === 'accum'" class="k12detail">
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.detail.content') }}</span>
-            <MarkdownRenderer class="k12detail__val k12detail__val--md" data-testid="detail-content" :content="detailContent || '—'" />
+            <MarkdownRenderer
+              class="k12detail__val k12detail__val--md"
+              data-testid="detail-content"
+              :content="detailContent || '—'"
+            />
           </div>
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.accum.subject') }}</span>
-            <p class="k12detail__val" data-testid="detail-accum-subject">{{ detailAccumSubject || '—' }}</p>
+            <p class="k12detail__val" data-testid="detail-accum-subject">
+              {{ detailAccumSubject || '—' }}
+            </p>
           </div>
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.accum.type') }}</span>
-            <p class="k12detail__val" data-testid="detail-accum-type">{{ detailAccumType || '—' }}</p>
+            <p class="k12detail__val" data-testid="detail-accum-type">
+              {{ detailAccumType || '—' }}
+            </p>
           </div>
           <!-- §3.9 检验出口：生成默写题加入练习集（打印回传才进自动复批闭环） -->
           <div class="k12detail__actions">
@@ -1197,7 +1547,13 @@ async function doExportMd() {
               data-testid="accum-dictation-to-basket"
               :disabled="dictationBusy || dictationAdded.includes(detail.record!.recordId)"
               @click="dictationToBasket"
-            >{{ dictationAdded.includes(detail.record!.recordId) ? t('k12.accum.dictationAdded') : t('k12.accum.dictationToBasket') }}</button>
+            >
+              {{
+                dictationAdded.includes(detail.record!.recordId)
+                  ? t('k12.accum.dictationAdded')
+                  : t('k12.accum.dictationToBasket')
+              }}
+            </button>
           </div>
           <p class="k12rec__hint" style="margin-top: 4px">{{ t('k12.accum.dictationHint') }}</p>
         </div>
@@ -1205,7 +1561,11 @@ async function doExportMd() {
         <div v-else class="k12detail">
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.detail.question') }}</span>
-            <MarkdownRenderer class="k12detail__val k12detail__val--md" data-testid="detail-question" :content="detailQuestion || '—'" />
+            <MarkdownRenderer
+              class="k12detail__val k12detail__val--md"
+              data-testid="detail-question"
+              :content="detailQuestion || '—'"
+            />
           </div>
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.detail.knowledgePoint') }}</span>
@@ -1213,10 +1573,18 @@ async function doExportMd() {
           </div>
           <div class="k12detail__row">
             <span class="k12detail__label">{{ t('k12.detail.errorCause') }}</span>
-            <MarkdownRenderer class="k12detail__val k12detail__val--md" data-testid="detail-error" :content="detailError || t('k12.detail.noErrorCause')" />
+            <MarkdownRenderer
+              class="k12detail__val k12detail__val--md"
+              data-testid="detail-error"
+              :content="detailError || t('k12.detail.noErrorCause')"
+            />
           </div>
           <!-- 抽查复验未过（§3.6 规则 3/4）：事实标注 + 温和话术，不否定家长判断，只补齐证据 -->
-          <p v-if="detailSpotCheckFailed" class="k12detail__spotcheck" data-testid="detail-spotcheck-failed">
+          <p
+            v-if="detailSpotCheckFailed"
+            class="k12detail__spotcheck"
+            data-testid="detail-spotcheck-failed"
+          >
             {{ t('k12.detail.spotCheckFailed') }} · {{ t('k12.detail.spotCheckFailedHint') }}
           </p>
         </div>
@@ -1228,21 +1596,28 @@ async function doExportMd() {
             class="btn btn-primary"
             data-testid="detail-mark-mastered"
             @click="markMasteredFromDetail"
-          >{{ t('records.markMastered') }}</button>
+          >
+            {{ t('records.markMastered') }}
+          </button>
           <span
             v-else
             class="k12detail__status k12detail__status--got"
             data-testid="detail-mastered-label"
-          >{{ t('k12.detail.alreadyMastered') }}</span>
+            >{{ t('k12.detail.alreadyMastered') }}</span
+          >
           <span class="k12rec__sp" />
           <!-- UX-3：克制删除入口——ghost 次级样式（非首屏主按钮），二次确认后才删。 -->
           <button
             class="btn btn-ghost k12detail__del"
             data-testid="detail-delete"
             @click="askDelete"
-          >{{ t('k12.detail.delete') }}</button>
+          >
+            {{ t('k12.detail.delete') }}
+          </button>
         </div>
-        <p v-if="detail.kind !== 'accum'" class="k12detail__delhint">{{ t('k12.detail.deleteHint') }}</p>
+        <p v-if="detail.kind !== 'accum'" class="k12detail__delhint">
+          {{ t('k12.detail.deleteHint') }}
+        </p>
       </div>
     </div>
 
@@ -1261,230 +1636,780 @@ async function doExportMd() {
 </template>
 
 <style scoped>
-.k12rec { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.k12rec {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
 .k12rec__tabs {
-  display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
-  padding: 10px 14px; border-bottom: 0.5px solid var(--hc-border);
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 0.5px solid var(--hc-border);
 }
-.k12rec__sp { flex: 1; }
-.k12rec__body { flex: 1; overflow: auto; padding: 16px 20px 40px; }
+.k12rec__sp {
+  flex: 1;
+}
+.k12rec__body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 20px 40px;
+}
 .k12rec__err {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  color: var(--hc-error); font-size: 13px; margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--hc-error);
+  font-size: 13px;
+  margin-bottom: 10px;
 }
-.k12rec__export { position: relative; }
+.k12rec__export {
+  position: relative;
+}
 .k12rec__menu {
-  position: absolute; right: 0; top: calc(100% + 4px); z-index: 20;
-  background: var(--hc-bg-elevated); border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md); box-shadow: var(--hc-shadow-md); padding: 4px; min-width: 120px;
-  display: flex; flex-direction: column;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  background: var(--hc-bg-elevated);
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  box-shadow: var(--hc-shadow-md);
+  padding: 4px;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
 }
 .k12rec__menu button {
-  text-align: left; padding: 7px 10px; border: none; background: transparent;
-  color: var(--hc-text-primary); font-size: 13px; border-radius: var(--hc-radius-sm); cursor: pointer;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  color: var(--hc-text-primary);
+  font-size: 13px;
+  border-radius: var(--hc-radius-sm);
+  cursor: pointer;
   white-space: nowrap; /* BUG-20260710 ②：「导出 Markdown」曾折成两行 */
 }
-.k12rec__menu button:hover { background: var(--hc-bg-hover); }
-.k12rec__hint { font-size: 11.5px; color: var(--hc-text-muted); margin-top: 12px; }
-.k12rec__insightlink { color: var(--hc-accent); cursor: pointer; }
-.k12rec__insightlink:hover { text-decoration: underline; }
+.k12rec__menu button:hover {
+  background: var(--hc-bg-hover);
+}
+.k12rec__hint {
+  font-size: 11.5px;
+  color: var(--hc-text-muted);
+  margin-top: 12px;
+}
+.k12rec__insightlink {
+  color: var(--hc-accent);
+  cursor: pointer;
+}
+.k12rec__insightlink:hover {
+  text-decoration: underline;
+}
 .k12rec__alert {
-  margin-top: 14px; padding: 10px 12px; border-radius: var(--hc-radius-md);
-  border-left: 3px solid var(--hc-warning); background: color-mix(in srgb, var(--hc-warning) 8%, transparent);
-  font-size: 12.5px; color: var(--hc-text-secondary);
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: var(--hc-radius-md);
+  border-left: 3px solid var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 8%, transparent);
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
 }
 .k12rec__sugg {
-  margin-top: 10px; padding: 10px 12px; border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card); border: 0.5px solid var(--hc-border);
-  font-size: 12.5px; color: var(--hc-text-secondary);
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
+  border: 0.5px solid var(--hc-border);
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
 }
-.k12rec__h { font-size: 13px; font-weight: 600; margin: 18px 0 4px; }
-.k12rec__reporthead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-.k12rec__tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; } /* M1：原型 mini-grid 4 块 */
+.k12rec__h {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 18px 0 4px;
+}
+.k12rec__reporthead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.k12accum__filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.k12rec__tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+} /* M1：原型 mini-grid 4 块 */
 .k12tile {
-  background: var(--hc-bg-card); border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md); padding: 12px 14px; font-size: 12px; color: var(--hc-text-secondary);
-  display: flex; flex-direction: column; gap: 2px;
+  background: var(--hc-bg-card);
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-.k12tile b { font-size: 18px; color: var(--hc-text-primary); }
-.k12bars { max-width: 520px; margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
-.k12bar { display: flex; align-items: center; gap: 9px; font-size: 12px; }
-.k12bar__label { width: 100px; flex-shrink: 0; color: var(--hc-text-secondary); }
-.k12bar__rail { flex: 1; height: 9px; background: var(--hc-bg-input); border-radius: 99px; overflow: hidden; }
-.k12bar__fill { display: block; height: 100%; background: var(--hc-accent); border-radius: 99px; }
-.k12bar b { width: 26px; text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+.k12tile b {
+  font-size: 18px;
+  color: var(--hc-text-primary);
+}
+.k12bars {
+  max-width: 520px;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.k12bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+}
+.k12bar__label {
+  width: 100px;
+  flex-shrink: 0;
+  color: var(--hc-text-secondary);
+}
+.k12bar__rail {
+  flex: 1;
+  height: 9px;
+  background: var(--hc-bg-input);
+  border-radius: 99px;
+  overflow: hidden;
+}
+.k12bar__fill {
+  display: block;
+  height: 100%;
+  background: var(--hc-accent);
+  border-radius: 99px;
+}
+.k12bar b {
+  width: 26px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+}
 /* 积累本分科过滤 + 手动记录 */
-.k12accum__list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.k12accum__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+}
 .k12accum__row {
-  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 9px 10px;
-  border: 0.5px solid var(--hc-border); border-radius: 10px; background: var(--hc-bg-card);
-  color: var(--hc-text-secondary); font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
 }
 .k12accum__subject {
-  flex: none; padding: 1px 7px; border-radius: 6px; font-size: 11px;
-  background: var(--hc-bg-active); color: var(--hc-text-secondary);
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  background: var(--hc-bg-active);
+  color: var(--hc-text-secondary);
 }
 .k12accum__title {
-  flex: 0 1 auto; min-width: 0; max-width: 46%; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; color: var(--hc-text-primary);
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--hc-text-primary);
 }
 .k12accum__type {
-  flex: none; padding: 2px 7px; border-radius: 4px; white-space: nowrap;
-  background: var(--hc-accent-subtle); color: var(--hc-accent); font-size: 10.5px; font-weight: 650;
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  font-size: 10.5px;
+  font-weight: 650;
 }
-.k12accum__source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.k12accum__status { flex: none; padding: 2px 9px; border-radius: 999px; font-size: 10.5px; font-weight: 700; white-space: nowrap; }
-.k12accum__status--na { color: var(--hc-text-muted); background: var(--hc-bg-input); }
-.k12accum__status--got { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
-.k12accum__detail { flex: none; }
+.k12accum__source {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.k12accum__status {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.k12accum__status--na {
+  color: var(--hc-text-muted);
+  background: var(--hc-bg-input);
+}
+.k12accum__status--got {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+}
+.k12accum__detail {
+  flex: none;
+}
 /* 20260718 原型定案（引文列表）：引文衬线置首 + 引号压角，量度 62ch；meta 行随 flex-wrap 落第二行 */
-.k12accum__row--quote { flex-wrap: wrap; align-content: flex-start; row-gap: 8px; padding: 14px 16px 12px; border-radius: 16px; box-shadow: var(--hc-shadow-sm); }
+.k12accum__row--quote {
+  flex-wrap: wrap;
+  align-content: flex-start;
+  row-gap: 8px;
+  padding: 14px 16px 12px;
+  border-radius: 16px;
+  box-shadow: var(--hc-shadow-sm);
+}
 .k12accum__row--quote .k12accum__title {
-  flex: 1 1 100%; max-width: 62ch; order: -1; white-space: normal; overflow: visible;
-  font-family: 'Songti SC', ui-serif, STSong, serif; font-size: 14.5px; line-height: 1.65;
-  font-weight: 600; position: relative; padding-left: 26px;
+  flex: 1 1 100%;
+  max-width: 62ch;
+  order: -1;
+  white-space: normal;
+  overflow: visible;
+  font-family: 'Songti SC', ui-serif, STSong, serif;
+  font-size: 14.5px;
+  line-height: 1.65;
+  font-weight: 600;
+  position: relative;
+  padding-left: 26px;
 }
 .k12accum__row--quote .k12accum__title::before {
-  content: '\201C'; position: absolute; left: 0; top: -4px; font-size: 27px; line-height: 1;
-  font-family: Georgia, ui-serif, serif; color: var(--hc-accent); opacity: 0.55;
+  content: '\201C';
+  position: absolute;
+  left: 0;
+  top: -4px;
+  font-size: 27px;
+  line-height: 1;
+  font-family: Georgia, ui-serif, serif;
+  color: var(--hc-accent);
+  opacity: 0.55;
 }
-.k12accum__date { flex: none; font-variant-numeric: tabular-nums; color: var(--hc-text-muted); font-size: 12px; }
+.k12accum__date {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--hc-text-muted);
+  font-size: 12px;
+}
 .chip {
-  font-size: 12px; padding: 4px 12px; border-radius: 999px; cursor: pointer;
-  border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-secondary);
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  border: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
 }
-.chip.on { background: var(--hc-accent-subtle); color: var(--hc-accent); border-color: var(--hc-border-hl); font-weight: 600; }
+.chip.on {
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  border-color: var(--hc-border-hl);
+  font-weight: 600;
+}
 .k12accum__form {
-  display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; padding: 12px;
-  border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md); background: var(--hc-bg-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 12px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-elevated);
 }
-.k12accum__row { display: flex; gap: 14px; flex-wrap: wrap; }
-.k12accum__field { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--hc-text-secondary); min-width: 130px; flex: 1; }
-.k12accum__field > span { font-size: 12.5px; }
+.k12accum__row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.k12accum__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
+  min-width: 130px;
+  flex: 1;
+}
+.k12accum__field > span {
+  font-size: 12.5px;
+}
 .k12accum__content {
-  width: 100%; box-sizing: border-box; font-size: 13px; padding: 8px 10px; resize: vertical;
-  border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-input); color: var(--hc-text-primary);
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  padding: 8px 10px;
+  resize: vertical;
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
 }
 /* 多行捕获字段（20260712：题目/错处适配长内容——应用题/古诗/整句整段粘贴） */
 .k12accum__content--area {
-  font: inherit; font-size: 13px; line-height: 1.5; min-height: 44px; resize: vertical;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 44px;
+  resize: vertical;
 }
-.k12accum__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.k12accum__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
 /* 积累空态：克制列表占位（原型 rc1 无大居中卡；入口在上方 bar 常驻） */
-.k12accum__empty { color: var(--hc-text-muted); font-size: 13px; padding: 22px 4px; text-align: center; margin: 0; }
+.k12accum__empty {
+  color: var(--hc-text-muted);
+  font-size: 13px;
+  padding: 22px 4px;
+  text-align: center;
+  margin: 0;
+}
 /* modal 内的表单去掉自带卡片边框（弹层卡片已提供容器） */
-.k12accum__form--modal { border: none; background: transparent; padding: 0; margin-bottom: 0; }
+.k12accum__form--modal {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 0;
+}
 /* 记一条错题 / 自定义组卷 弹窗（原型 modal 形态；与 .k12retry 同族样式） */
-.k12modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.32); padding: 24px; }
-.k12modal__card { width: min(520px, 100%); max-height: 80vh; overflow: auto; background: var(--hc-bg-elevated); border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-lg); box-shadow: var(--hc-shadow-lg); padding: 16px 18px; }
-.k12modal__head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; font-size: 13.5px; }
+.k12modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+  padding: 24px;
+}
+.k12modal__card {
+  width: min(520px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--hc-bg-elevated);
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-lg);
+  box-shadow: var(--hc-shadow-lg);
+  padding: 16px 18px;
+}
+.k12modal__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+  font-size: 13.5px;
+}
 /* 手工录入错题 / 自定义组卷 */
-.k12rec__addhint { font-size: 11.5px; color: var(--hc-text-muted); line-height: 1.5; }
-.k12paper__row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.k12paper__label { font-size: 12.5px; color: var(--hc-text-secondary); width: 92px; flex-shrink: 0; }
+.k12rec__addhint {
+  font-size: 11.5px;
+  color: var(--hc-text-muted);
+  line-height: 1.5;
+}
+.k12paper__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.k12paper__label {
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
+  width: 92px;
+  flex-shrink: 0;
+}
 .k12rec__error,
 .k12paper__result {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
-  border-radius: var(--hc-radius-md); padding: 10px 12px; font-size: 12px; line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  border-radius: var(--hc-radius-md);
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.5;
 }
-.k12rec__error { color: var(--hc-danger); background: color-mix(in srgb, var(--hc-danger) 8%, transparent); }
-.k12paper__result { color: var(--hc-text-secondary); background: var(--hc-accent-subtle); }
-.k12paper__result > b { color: var(--hc-success); font-size: 13px; }
-.k12paper__results { width: 100%; display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+.k12rec__error {
+  color: var(--hc-danger);
+  background: color-mix(in srgb, var(--hc-danger) 8%, transparent);
+}
+.k12paper__result {
+  color: var(--hc-text-secondary);
+  background: var(--hc-accent-subtle);
+}
+.k12paper__result > b {
+  color: var(--hc-success);
+  font-size: 13px;
+}
+.k12paper__results {
+  width: 100%;
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
 .k12paper__results li {
-  display: flex; gap: 8px; flex-wrap: wrap; padding-top: 5px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 5px;
   border-top: 0.5px solid var(--hc-border);
 }
 /* seg / pill / btn 复用全局 global.css 令牌类 */
-.seg { position: relative; display: inline-flex; background: var(--hc-bg-input); border: 1px solid var(--hc-border); border-radius: 11px; padding: 3px; gap: 2px; }
-.seg button { padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--hc-text-muted); background: transparent; border: none; cursor: pointer; }
-.seg button.on { background: var(--hc-bg-elevated); color: var(--hc-accent); box-shadow: var(--hc-shadow-sm); font-weight: 600; }
-.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 3px 9px; border-radius: 7px; }
-.pill-green { background: rgba(50, 213, 131, 0.14); color: var(--hc-success); }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; font-size: 13px; cursor: pointer; border: 0.5px solid var(--hc-border); background: var(--hc-bg-input); color: var(--hc-text-primary); }
-.btn:hover { background: var(--hc-bg-hover); }
-.btn-ghost { background: transparent; border-color: transparent; color: var(--hc-text-secondary); }
-.btn-primary { background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%); color: #fff; border-color: transparent; }
+.seg {
+  position: relative;
+  display: inline-flex;
+  background: var(--hc-bg-input);
+  border: 1px solid var(--hc-border);
+  border-radius: 11px;
+  padding: 3px;
+  gap: 2px;
+}
+.seg button {
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--hc-text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.seg button.on {
+  background: var(--hc-bg-elevated);
+  color: var(--hc-accent);
+  box-shadow: var(--hc-shadow-sm);
+  font-weight: 600;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 7px;
+}
+.pill-green {
+  background: rgba(50, 213, 131, 0.14);
+  color: var(--hc-success);
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  border: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+}
+.btn:hover {
+  background: var(--hc-bg-hover);
+}
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--hc-text-secondary);
+}
+.btn-primary {
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
+  color: #fff;
+  border-color: transparent;
+}
 /* BUG-20260709：必须配对 hover——否则 .btn:hover(0,2,0) 压过 .btn-primary(0,1,0) 的渐变，
    浅色主题下 hover = 近白底 + color:#fff 白字看不见。渐变对齐原型 app.html:158（更亮一档）。 */
-.btn-primary:hover { background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%); }
+.btn-primary:hover {
+  background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%);
+}
 /* 功能位单色描边图标（20260709 视觉评审：emoji 只留身份/语义徽章位；与原型 .ic-sm 同规格） */
-.k12ic { width: 14px; height: 14px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
-.k12rec__addbtn { display: inline-flex; align-items: center; gap: 5px; }
+.k12ic {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  flex-shrink: 0;
+}
+.k12rec__addbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 /* 全部错题=默认折叠的次级档案（原型 1598 <details>）：折叠态隐藏筛选 + 档案行（.record-list 直接子 .rl-rows），
    「本周复习」的 .rl-review .rl-rows 是嵌套子、不受 > 直接子选择器命中，故行动卡常驻。 */
 .k12arch__toggle {
-  display: inline-flex; align-items: center; gap: 6px; padding: 0; border: none; background: none;
-  font-size: 13px; font-weight: 700; color: var(--hc-text-primary); cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--hc-text-primary);
+  cursor: pointer;
 }
-.k12arch__caret { font-size: 10px; color: var(--hc-text-muted); transition: transform 0.15s ease; }
-.k12arch__caret--open { transform: rotate(90deg); }
+.k12arch__caret {
+  font-size: 10px;
+  color: var(--hc-text-muted);
+  transition: transform 0.15s ease;
+}
+.k12arch__caret--open {
+  transform: rotate(90deg);
+}
 .k12mistakes--collapsed :deep(.rl-filters),
 .k12mistakes--collapsed :deep(.rl-empty),
-.k12mistakes--collapsed :deep(.record-list > .rl-rows) { display: none; }
-/* 「本周复习」行动卡：跨科分布 + 趋势 pill（原型 stpill got/done 同源色） */
-.k12dist { font-size: 12.5px; color: var(--hc-text-secondary); margin-left: -4px; }
-.k12trend {
-  font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 700; white-space: nowrap;
+.k12mistakes--collapsed :deep(.record-list > .rl-rows) {
+  display: none;
 }
-.k12trend--up { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
-.k12trend--flat { color: var(--hc-warning); background: color-mix(in srgb, var(--hc-warning) 12%, transparent); }
+/* 「本周复习」行动卡：跨科分布 + 趋势 pill（原型 stpill got/done 同源色） */
+.k12dist {
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
+  margin-left: -4px;
+}
+.k12trend {
+  font-size: 10.5px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.k12trend--up {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+}
+.k12trend--flat {
+  color: var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+}
 /* 学科定色（原型 .kpill.chi/.eng 同源）：错题列表最高频扫读维度=哪科错得多。
    RecordList 保持领域无关，经 data-chip 前缀选择器由本场景层上色（chip 文案「学科·知识点」）。 */
-:deep(.rl-chip[data-chip^='语文']) { background: color-mix(in srgb, #e8590c 12%, transparent); color: #e8590c; }
-:deep(.rl-chip[data-chip^='英语']) { background: color-mix(in srgb, #7048e8 10%, transparent); color: #7048e8; }
+:deep(.rl-chip[data-chip^='语文']) {
+  background: color-mix(in srgb, #e8590c 12%, transparent);
+  color: #e8590c;
+}
+:deep(.rl-chip[data-chip^='英语']) {
+  background: color-mix(in srgb, #7048e8 10%, transparent);
+  color: #7048e8;
+}
 /* 再练一道弹层 */
-.k12retry { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.32); padding: 24px; }
-.k12retry__card { width: min(560px, 100%); max-height: 80vh; overflow: auto; background: var(--hc-bg-elevated); border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-lg); box-shadow: var(--hc-shadow-lg); padding: 16px 18px; }
-.k12retry__head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
-.k12retry__mask { font-size: 11.5px; color: var(--hc-warning); margin-bottom: 8px; }
+.k12retry {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+  padding: 24px;
+}
+.k12retry__card {
+  width: min(560px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+  background: var(--hc-bg-elevated);
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-lg);
+  box-shadow: var(--hc-shadow-lg);
+  padding: 16px 18px;
+}
+.k12retry__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 10px;
+}
+.k12retry__mask {
+  font-size: 11.5px;
+  color: var(--hc-warning);
+  margin-bottom: 8px;
+}
 /* 题面区（题答分离）：先显不遮罩，与遮罩解答区视觉分隔 */
-.k12retry__question { padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px dashed var(--hc-border); }
+.k12retry__question {
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px dashed var(--hc-border);
+}
 /* md 渲染:块级元素自带间距，勿用 pre-wrap（会多出空白）。保留字号/断词/色，遮罩 blur 作用于本容器。 */
 .k12retry__body {
-  word-break: break-word; font-size: 13px; line-height: 1.6; color: var(--hc-text-primary); margin: 0;
-  padding: 16px 20px; border: 0.5px solid var(--hc-border); border-radius: var(--hc-radius-md);
+  word-break: break-word;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--hc-text-primary);
+  margin: 0;
+  padding: 16px 20px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
   background: var(--hc-bg-card);
 }
 /* 守答案真遮罩：模糊 + 禁选中；揭示按钮悬浮居中 */
-.k12retry__bodywrap { position: relative; }
-.k12retry__bodywrap--masked .k12retry__body { filter: blur(7px); user-select: none; pointer-events: none; }
-.k12retry__reveal { position: absolute; inset: 0; margin: auto; width: fit-content; height: fit-content; }
-.k12retry__actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.k12retry__bodywrap {
+  position: relative;
+}
+.k12retry__bodywrap--masked .k12retry__body {
+  filter: blur(7px);
+  user-select: none;
+  pointer-events: none;
+}
+.k12retry__reveal {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: fit-content;
+  height: fit-content;
+}
+.k12retry__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
 /* 再练失败态：可重试提示（不静默关弹层 · BUG-20260712-#1） */
-.k12retry__err { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.k12retry__err {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
 /* 错题详情弹层（BUG-20260712-#2）：字段行 label + 值 */
-.k12detail { display: flex; flex-direction: column; gap: 12px; margin: 4px 0 6px; }
-.k12detail__row { display: flex; flex-direction: column; gap: 3px; }
-.k12detail__label { font-size: 11.5px; color: var(--hc-text-muted); }
-.k12detail__val { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--hc-text-primary); white-space: pre-wrap; word-break: break-word; }
+.k12detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 4px 0 6px;
+}
+.k12detail__row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.k12detail__label {
+  font-size: 11.5px;
+  color: var(--hc-text-muted);
+}
+.k12detail__val {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--hc-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 /* md 渲染变体:块级元素自带间距，取消 pre-wrap 避免多余空白（纯文本字段仍用基类的 pre-wrap）。 */
-.k12detail__val--md { white-space: normal; }
-.k12detail__status { font-size: 10.5px; border-radius: 999px; padding: 2px 9px; font-weight: 700; white-space: nowrap; }
-.k12detail__status--todo { color: var(--hc-error); background: color-mix(in srgb, var(--hc-error) 10%, transparent); }
-.k12detail__status--done { color: var(--hc-warning); background: color-mix(in srgb, var(--hc-warning) 12%, transparent); }
-.k12detail__status--got { color: var(--hc-success); background: color-mix(in srgb, var(--hc-success) 10%, transparent); }
-.k12detail__status--na { color: var(--hc-text-muted); background: var(--hc-bg-input); }
+.k12detail__val--md {
+  white-space: normal;
+}
+.k12detail__status {
+  font-size: 10.5px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.k12detail__status--todo {
+  color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+}
+.k12detail__status--done {
+  color: var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+}
+.k12detail__status--got {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+}
+.k12detail__status--na {
+  color: var(--hc-text-muted);
+  background: var(--hc-bg-input);
+}
 .k12detail__spotcheck {
-  margin: 4px 0 0; font-size: 11.5px; line-height: 1.6; color: var(--hc-warning);
+  margin: 4px 0 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--hc-warning);
   background: color-mix(in srgb, var(--hc-warning) 8%, transparent);
-  border-radius: var(--hc-radius-md); padding: 7px 10px;
+  border-radius: var(--hc-radius-md);
+  padding: 7px 10px;
 }
 /* UX-1/3：详情弹层动作行（家长确认已会 = 主动作左；删除 = 克制 ghost，右侧，弱化） */
-.k12detail__actions { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
-.k12detail__del { color: var(--hc-error); }
-.k12detail__del:hover { background: color-mix(in srgb, var(--hc-error) 10%, transparent); }
-.k12detail__delhint { font-size: 11px; color: var(--hc-text-muted); margin-top: 6px; }
+.k12detail__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+.k12detail__del {
+  color: var(--hc-error);
+}
+.k12detail__del:hover {
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+}
+.k12detail__delhint {
+  font-size: 11px;
+  color: var(--hc-text-muted);
+  margin-top: 6px;
+}
 /* 项-5：正向空态卡（与「本周复习」行动卡等视觉重量，填住空白，不留悬空） */
 .k12empty {
-  display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px;
-  padding: 26px 18px; border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card); border: 0.5px solid var(--hc-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 26px 18px;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-card);
+  border: 0.5px solid var(--hc-border);
 }
-.k12empty__icon { font-size: 30px; line-height: 1; margin-bottom: 2px; }
-.k12empty__title { font-size: 14.5px; color: var(--hc-text-primary); }
-.k12empty__sub { font-size: 12.5px; color: var(--hc-text-secondary); margin: 0; }
-.k12empty__next { font-size: 12px; color: var(--hc-text-muted); margin: 2px 0 0; font-variant-numeric: tabular-nums; }
-.k12empty__cta { margin-top: 10px; }
+.k12empty__icon {
+  font-size: 30px;
+  line-height: 1;
+  margin-bottom: 2px;
+}
+.k12empty__title {
+  font-size: 14.5px;
+  color: var(--hc-text-primary);
+}
+.k12empty__sub {
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
+  margin: 0;
+}
+.k12empty__next {
+  font-size: 12px;
+  color: var(--hc-text-muted);
+  margin: 2px 0 0;
+  font-variant-numeric: tabular-nums;
+}
+.k12empty__cta {
+  margin-top: 10px;
+}
 </style>

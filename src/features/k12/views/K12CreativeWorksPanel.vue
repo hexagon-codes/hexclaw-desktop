@@ -5,7 +5,7 @@
   自包含：直连 /api/k12/creative-works*，本地状态，按 agentId 隔离拉取。
 -->
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import {
@@ -34,6 +34,7 @@ import {
   type WorkType,
 } from '@/api/k12'
 import { printPracticePaper, savePracticePaperPdf } from '../export'
+import { printPersistentArtifact } from '../persistent-print'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 
 const props = withDefaults(defineProps<{ agentId: string; showAddButton?: boolean }>(), {
@@ -116,6 +117,8 @@ const addTask = ref('')
 const addDraft = ref('') // 语文写作：原稿文字
 const addIntent = ref('') // 美术作品：创作意图（可留空）
 const addBusy = ref(false)
+const addDialog = ref<HTMLElement | null>(null)
+let addOpener: HTMLElement | null = null
 
 // ── 作品照片真实上传（任务1：最小资产服务 POST /assets）─────────────
 // 选图即传：预览缩略 + 真实进度 + 失败提示/重试；成功得 asset://<agent>/<sha256>.<ext>，
@@ -349,6 +352,8 @@ watch(addType, (type) => {
   }
 })
 function openAdd() {
+  const active = document.activeElement
+  addOpener = active instanceof HTMLElement ? active : null
   addType.value = 'writing'
   addTitle.value = ''
   addTask.value = ''
@@ -356,6 +361,23 @@ function openAdd() {
   addIntent.value = ''
   resetPhoto()
   addOpen.value = true
+  void nextTick(() => {
+    addDialog.value?.querySelector<HTMLElement>('button:not([disabled])')?.focus()
+  })
+}
+function closeAdd() {
+  if (!addOpen.value) return
+  addOpen.value = false
+  const opener = addOpener
+  addOpener = null
+  void nextTick(() => {
+    if (opener?.isConnected) opener.focus()
+  })
+}
+function onAddKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !addOpen.value) return
+  event.preventDefault()
+  closeAdd()
 }
 async function submitAdd() {
   if (!addValid.value || addBusy.value) return
@@ -380,7 +402,7 @@ async function submitAdd() {
         : {}),
     })
     toast.success(t('k12.works.created'))
-    addOpen.value = false
+    closeAdd()
     resetPhoto()
     await load()
   } catch (e) {
@@ -423,7 +445,15 @@ async function printCard(w: CreativeWorkDTO) {
   printBusyId.value = w.record_id
   printError.value[w.record_id] = ''
   try {
-    const ok = await printPracticePaper(`# ${title}\n${ver.practice_card}`, title)
+    const markdown = `# ${title}\n${ver.practice_card}`
+    const ok = await printPersistentArtifact({
+      agent: props.agentId,
+      sourceKind: 'creative_observation_card',
+      sourceRef: `creative-work:${w.record_id}:${ver.version_id}:practice-card`,
+      title,
+      canonicalMarkdown: markdown,
+      browserPrint: () => printPracticePaper(markdown, title),
+    })
     if (!ok) throw new Error(t('k12.works.printFailed'))
   } catch (e) {
     printError.value[w.record_id] = (e as Error).message || t('k12.works.printFailed')
@@ -630,7 +660,10 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  document.addEventListener('keydown', onAddKeydown)
+  void load()
+})
 watch(
   () => props.agentId,
   () => {
@@ -640,13 +673,14 @@ watch(
     feedbackAbort = null
     feedbackGeneratingId.value = ''
     feedbackGenerateError.value = {}
-    addOpen.value = false
+    closeAdd()
     resetPhoto()
     resetAllRevisionPhotos()
     void load()
   },
 )
 onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onAddKeydown)
   loadGeneration += 1
   feedbackGeneration += 1
   feedbackAbort?.abort()
@@ -1596,9 +1630,10 @@ defineExpose({ load, openAdd })
       v-if="addOpen"
       class="k12cw-overlay"
       data-testid="cw-add-modal"
-      @click.self="addOpen = false"
+      @click.self="closeAdd"
     >
       <div
+        ref="addDialog"
         class="k12cw-modal"
         role="dialog"
         aria-modal="true"
@@ -1609,7 +1644,7 @@ defineExpose({ load, openAdd })
           <button
             class="k12cw-modal__x"
             :aria-label="t('k12.works.cancel')"
-            @click="addOpen = false"
+            @click="closeAdd"
           >
             ✕
           </button>
@@ -1809,7 +1844,7 @@ defineExpose({ load, openAdd })
           </label>
         </div>
         <div class="k12cw-modal__foot">
-          <button class="k12cw__btn k12cw__btn--ghost" @click="addOpen = false">
+          <button class="k12cw__btn k12cw__btn--ghost" @click="closeAdd">
             {{ t('k12.works.cancel') }}
           </button>
           <button
@@ -2070,15 +2105,17 @@ defineExpose({ load, openAdd })
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 9vh;
+  box-sizing: border-box;
+  padding: clamp(12px, 9vh, 72px) 12px;
+  overflow-y: auto;
   background: rgba(8, 18, 32, 0.4);
   backdrop-filter: blur(3px) saturate(120%);
   -webkit-backdrop-filter: blur(3px) saturate(120%);
 }
 .k12cw-modal {
   width: 478px;
-  max-width: 92vw;
-  max-height: 82vh;
+  max-width: 100%;
+  max-height: 100%;
   overflow: auto;
   background: var(--hc-bg-elevated);
   border: 0.5px solid var(--hc-border);
@@ -2230,7 +2267,7 @@ defineExpose({ load, openAdd })
   display: grid;
   grid-template-columns: 112px minmax(0, 1fr);
   gap: 13px;
-  align-items: stretch;
+  align-items: start;
   border: 0.5px solid var(--hc-border);
   border-radius: var(--hc-radius-lg);
   background: var(--hc-bg-card);
@@ -2252,11 +2289,15 @@ defineExpose({ load, openAdd })
   transform: none;
 }
 .k12cw__preview {
+  height: 112px;
   min-height: 112px;
   border-radius: 12px;
   overflow: hidden;
   position: relative;
   background: linear-gradient(180deg, #a9c9e6 0 54%, #8fbb7d 54% 76%, #729a63 76%);
+}
+.k12cw__card--expanded .k12cw__preview {
+  height: 150px;
 }
 .k12cw__preview--writing {
   background: linear-gradient(135deg, #fffdf7, #f4ead5);

@@ -49,11 +49,6 @@ async function gotoAccum(w: ReturnType<typeof render>) {
   await flushPromises()
 }
 
-async function openAccumMore(w: ReturnType<typeof render>) {
-  await w.find('.k12rec__export > button').trigger('click')
-  await flushPromises()
-}
-
 describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -67,12 +62,14 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await gotoAccum(w)
     h.listSpy.mockClear()
 
-    await openAccumMore(w)
+    const group = w.get('.k12accum__filters')
+    expect(group.attributes('role')).toBe('group')
     const chip = w.find('[data-testid="accum-filter-chinese"]')
     expect(chip.exists()).toBe(true)
     await chip.trigger('click')
     await flushPromises()
 
+    expect(chip.attributes('aria-pressed')).toBe('true')
     expect(h.listSpy).toHaveBeenCalled()
     const lastCall = h.listSpy.mock.calls[h.listSpy.mock.calls.length - 1]!
     expect(lastCall[1]).toBe('语文')
@@ -83,11 +80,9 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await flushPromises()
     await gotoAccum(w)
     // 先切语文再切全部
-    await openAccumMore(w)
     await w.find('[data-testid="accum-filter-chinese"]').trigger('click')
     await flushPromises()
     h.listSpy.mockClear()
-    await openAccumMore(w)
     await w.find('[data-testid="accum-filter-all"]').trigger('click')
     await flushPromises()
 

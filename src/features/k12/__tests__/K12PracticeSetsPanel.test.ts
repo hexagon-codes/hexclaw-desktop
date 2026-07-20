@@ -14,6 +14,10 @@ const h = vi.hoisted(() => ({
   advanceSpy: vi.fn(),
   cancelSpy: vi.fn(),
   paperSpy: vi.fn(),
+  preparePrintSpy: vi.fn(),
+  printJobPaperSpy: vi.fn(),
+  printEventSpy: vi.fn(),
+  retryPrintSpy: vi.fn(),
   printSpy: vi.fn(),
   uploadSpy: vi.fn(),
   submitSpy: vi.fn(),
@@ -30,6 +34,10 @@ vi.mock('@/api/k12', () => ({
   k12AdvancePracticeSet: (a: string, id: string, step: string) => h.advanceSpy(a, id, step),
   k12CancelPracticeSet: (a: string, id: string) => h.cancelSpy(a, id),
   k12GetPracticePaper: (a: string, id: string, kind: string) => h.paperSpy(a, id, kind),
+  k12PreparePracticePrintJob: (...args: unknown[]) => h.preparePrintSpy(...args),
+  k12GetPracticePrintJobPaper: (...args: unknown[]) => h.printJobPaperSpy(...args),
+  k12RecordPracticePrintEvent: (...args: unknown[]) => h.printEventSpy(...args),
+  k12RetryPracticePrintJob: (...args: unknown[]) => h.retryPrintSpy(...args),
   k12UploadAsset: (a: string, file: File) => h.uploadSpy(a, file),
   k12SubmitPracticeSet: (a: string, id: string, req: unknown) => h.submitSpy(a, id, req),
   k12GradePracticeSet: (a: string, id: string, results: Array<{ item_id: string; correct: boolean }>) => h.gradeSpy(a, id, results),
@@ -45,6 +53,8 @@ vi.mock('@/composables/useToast', () => ({
 }))
 vi.mock('../export', () => ({
   printPracticePaper: (markdown: string, title: string) => h.printSpy(markdown, title),
+  printPracticePaperWithReceipt: (markdown: string, title: string) =>
+    h.printSpy(markdown, title),
   savePracticePaperPdf: vi.fn().mockResolvedValue(true),
 }))
 
@@ -100,7 +110,39 @@ beforeEach(() => {
     kind: 'question', title: '小数乘法专项 · 07/12', paper_no: 'P-2629-01',
     markdown: '# 小数乘法专项\n\n1. 2.8×0.65=?', preview: false,
   })
-  h.printSpy.mockReset().mockResolvedValue(true)
+  h.preparePrintSpy.mockReset().mockResolvedValue({
+    print_job: {
+      print_job_id: 'print-1',
+      practice_set_id: 'basket1',
+      status: 'preparing',
+      paper_no: 'P-2629-02',
+      source_digest: 'sha256:source',
+      attempt_count: 1,
+    },
+    replayed: false,
+  })
+  h.printJobPaperSpy.mockReset().mockResolvedValue({
+    print_job_id: 'print-1',
+    kind: 'question',
+    title: '待打印篮',
+    paper_no: 'P-2629-02',
+    source_digest: 'sha256:source',
+    artifact_id: 'qsheet-1',
+    markdown: '# 待打印篮\n\n1. 2.8×0.65=?',
+  })
+  h.printEventSpy.mockReset().mockImplementation(
+    (_agent: string, _job: string, event: { status: string }) =>
+      Promise.resolve({ print_job: { print_job_id: 'print-1', status: event.status } }),
+  )
+  h.retryPrintSpy.mockReset().mockResolvedValue({
+    print_job: { print_job_id: 'print-1', status: 'preparing', attempt_count: 2 },
+  })
+  h.printSpy.mockReset().mockResolvedValue({
+    status: 'printed',
+    native_job_id: 'native-1',
+    native_receipt_id: 'receipt-1',
+    printer_snapshot: { adapter: 'appkit' },
+  })
   h.uploadSpy.mockReset().mockResolvedValue({ asset_id: 'asset://k12-xiaoming/return.png', size: 3 })
   h.submitSpy.mockReset().mockResolvedValue(historySet({ status: 'submitted', status_label: '已回传' }))
   h.gradeSpy.mockReset().mockResolvedValue(historySet())
@@ -160,28 +202,87 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.removeSpy).toHaveBeenCalledWith('k12-xiaoming', 'basket1', 'm1')
   })
 
-  it('原生打印取消/失败 → 不固化待打印篮；成功回执后才 finalize', async () => {
+  it('原生打印取消不固化；成功必须由同一持久 PrintJob receipt 原子固化', async () => {
     h.listSpy.mockResolvedValue({
       items: [basket([item('m1', '题', '数学', 'verified'), item('s1', '阻断题', '科学', 'needs_review')])],
     })
-    h.paperSpy.mockResolvedValue({
-      kind: 'question', title: '待打印篮', paper_no: '',
-      markdown: '# 待打印篮\n\n1. 2.8×0.65=?', preview: true,
-    })
-    h.printSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    h.preparePrintSpy
+      .mockResolvedValueOnce({
+        print_job: { print_job_id: 'print-1', status: 'preparing', attempt_count: 1 },
+        replayed: false,
+      })
+      .mockResolvedValueOnce({
+        print_job: { print_job_id: 'print-1', status: 'cancelled', attempt_count: 1 },
+        replayed: true,
+      })
+    h.printSpy
+      .mockResolvedValueOnce({
+        status: 'cancelled',
+        native_job_id: 'native-cancelled',
+        printer_snapshot: { adapter: 'appkit' },
+      })
+      .mockResolvedValueOnce({
+        status: 'printed',
+        native_job_id: 'native-1',
+        native_receipt_id: 'receipt-1',
+        printer_snapshot: { adapter: 'appkit' },
+      })
     const w = render()
     await flushPromises()
     expect(w.text()).toContain('1 道阻断题打印时跳过')
 
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
-    expect(h.paperSpy).toHaveBeenCalledWith('k12-xiaoming', 'basket1', 'question')
+    expect(h.preparePrintSpy).toHaveBeenCalledWith(
+      'k12-xiaoming',
+      'basket1',
+      expect.stringMatching(/^desktop-print:/),
+      'question',
+    )
+    expect(h.printJobPaperSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', 'question')
     expect(h.printSpy).toHaveBeenCalledWith('# 待打印篮\n\n1. 2.8×0.65=?', '待打印篮')
     expect(h.finalizeSpy).not.toHaveBeenCalled()
+    expect(h.printEventSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', {
+      status: 'cancelled',
+      native_job_id: 'native-cancelled',
+      printer_snapshot: { adapter: 'appkit' },
+    })
 
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
-    expect(h.finalizeSpy).toHaveBeenCalledWith('k12-xiaoming', 'basket1', 'print', undefined)
+    expect(h.retryPrintSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1')
+    expect(h.printEventSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', {
+      status: 'printed',
+      native_job_id: 'native-1',
+      native_receipt_id: 'receipt-1',
+      printer_snapshot: { adapter: 'appkit' },
+    })
+    expect(h.finalizeSpy).not.toHaveBeenCalled()
+  })
+
+  it('原生适配器中断必须记 outcome_unknown，禁止把结果未知当失败后盲目重试', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [basket([item('m1', '题', '数学', 'verified')])],
+    })
+    h.printSpy.mockRejectedValueOnce(new Error('native channel closed'))
+    const w = render()
+    await flushPromises()
+
+    await w.find('[data-testid="ps-finalize-print"]').trigger('click')
+    await flushPromises()
+
+    expect(h.printEventSpy.mock.calls.map((call) => call[2])).toEqual([
+      { status: 'dialog_open' },
+      {
+        status: 'outcome_unknown',
+        failure_kind: 'native_adapter_interrupted',
+        failure_detail: '系统打印对话框未返回可验证回执',
+      },
+    ])
+    expect(h.retryPrintSpy).not.toHaveBeenCalled()
+    expect(h.finalizeSpy).not.toHaveBeenCalled()
+    expect(h.toastSuccess).not.toHaveBeenCalled()
+    expect(h.toastError).toHaveBeenCalledWith('native channel closed')
   })
 
   it('发送端只返回 pending → 明示待投递，禁止 toast 虚报发送成功', async () => {

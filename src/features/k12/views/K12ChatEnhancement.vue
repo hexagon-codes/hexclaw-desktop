@@ -201,6 +201,7 @@ watch(() => props.composerImage, (img) => {
       :agent-name="agentName"
       :grade="grade"
       :textbook="textbook"
+      :active="tab === 'records'"
       :target="recordsTarget"
       @go-tutor="tab = 'chat'"
       @go-insights="tab = 'insights'"

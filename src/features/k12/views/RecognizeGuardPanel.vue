@@ -298,8 +298,6 @@ async function run() {
     // Polish-2：识题自动判定整卷学科 → 预填学科下拉，家长不必手选（仍可手动覆盖）。
     // 仅识题判出学科时预填；一科都判不出则保持空，此时 solve/批改按钮仍 gate 空学科需家长手选。
     if (job.subject) selectedSubject.value = job.subject
-    // 锚点是并行增强分支：degraded = 无可信坐标 → 界面按既有文字降级口径提示（§4.9）。
-    if (job.anchorState === 'degraded') anchorWarning.value = t('k12.recognize.anchorFailed')
     rows.value = job.questions.map((question: RecognizedQuestion) => {
       const answerState = normalizeAnswerState(question)
       return {
@@ -335,6 +333,43 @@ async function run() {
         expanded: false,
       }
     })
+    // 锚点与家长确认是正交分支。awaiting_confirmation 只代表识别事实已可回显，
+    // 不能据此把 anchor_state=pending 当成最终无坐标；继续后台轮询，且只按稳定 ProblemID 补 geometry。
+    if (job.anchorState === 'pending') {
+      recognizing.value = false
+      anchoring.value = true
+      try {
+        const anchored = await store.waitForPhotoJobAnchor(
+          props.agentId,
+          job.jobId,
+          controller.signal,
+        )
+        if (generation !== agentGeneration || recognition !== recognitionGeneration) return
+        for (const question of anchored.questions) {
+          if (!question.problem_id) continue
+          const row = rows.value.find((candidate) => candidate.problemId === question.problem_id)
+          if (row && question.bbox) row.bbox = question.bbox
+        }
+        if (anchored.anchorState === 'degraded') {
+          anchorWarning.value = t('k12.recognize.anchorFailed')
+        }
+      } catch (e) {
+        if (
+          generation !== agentGeneration ||
+          recognition !== recognitionGeneration ||
+          (e as Error).name === 'AbortError'
+        )
+          return
+        // 定位分支失败只降级坐标，不污染已回显的识别事实，也不把整次识题误报为失败。
+        anchorWarning.value = t('k12.recognize.anchorFailed')
+      } finally {
+        if (generation === agentGeneration && recognition === recognitionGeneration) {
+          anchoring.value = false
+        }
+      }
+    } else if (job.anchorState === 'degraded') {
+      anchorWarning.value = t('k12.recognize.anchorFailed')
+    }
   } catch (e) {
     if (
       generation !== agentGeneration ||
@@ -408,7 +443,8 @@ async function gradeRow(i: number) {
     !row.problem.trim() ||
     row.answerState !== 'present' ||
     !row.studentAnswer.trim() ||
-    row.grading
+    row.grading ||
+    anchoring.value
   )
     return
   row.grading = true
@@ -503,7 +539,13 @@ async function runBounded(
 }
 
 async function gradeAllAnswered() {
-  if (batchWorking.value || !selectedSubject.value || !answerPendingIndexes.value.length) return
+  if (
+    batchWorking.value ||
+    anchoring.value ||
+    !selectedSubject.value ||
+    !answerPendingIndexes.value.length
+  )
+    return
   batchWorking.value = true
   errMsg.value = ''
   try {
@@ -672,13 +714,13 @@ async function coldStart() {
     />
     <HcClearableField>
       <textarea
-      v-show="!isImageData && !initialImage"
-      v-model="imageB64"
-      class="rec-panel__b64"
-      data-testid="recognize-b64"
-      :placeholder="t('k12.recognize.pasteHint')"
-      rows="2"
-    />
+        v-show="!isImageData && !initialImage"
+        v-model="imageB64"
+        class="rec-panel__b64"
+        data-testid="recognize-b64"
+        :placeholder="t('k12.recognize.pasteHint')"
+        rows="2"
+      />
     </HcClearableField>
 
     <button
@@ -754,11 +796,11 @@ async function coldStart() {
         <div class="rec-row__q">
           <HcClearableField v-if="row.editing">
             <input
-            v-model="row.problem"
-            class="rec-row__edit"
-            :data-testid="`rq-problem-${i}`"
-            :placeholder="t('k12.recognize.problemPlaceholder')"
-          />
+              v-model="row.problem"
+              class="rec-row__edit"
+              :data-testid="`rq-problem-${i}`"
+              :placeholder="t('k12.recognize.problemPlaceholder')"
+            />
           </HcClearableField>
           <MarkdownRenderer
             v-else
@@ -834,12 +876,12 @@ async function coldStart() {
         <div v-if="confirmed && isAnswerable(row)" class="rec-row__grade">
           <HcClearableField>
             <input
-            v-model="row.studentAnswer"
-            class="rec-row__answer"
-            :data-testid="`rq-answer-${i}`"
-            :placeholder="t('k12.recognize.answerPlaceholder')"
-            @input="syncAnswerState(row)"
-          />
+              v-model="row.studentAnswer"
+              class="rec-row__answer"
+              :data-testid="`rq-answer-${i}`"
+              :placeholder="t('k12.recognize.answerPlaceholder')"
+              @input="syncAnswerState(row)"
+            />
           </HcClearableField>
           <!-- 空白题：走「求解·怎么讲」（不要求填答案）；已答题：批改按钮亮起。 -->
           <button
@@ -865,6 +907,7 @@ async function coldStart() {
               !row.problem.trim() ||
               !selectedSubject ||
               !row.studentAnswer.trim() ||
+              anchoring ||
               row.grading ||
               row.solving
             "
@@ -933,7 +976,7 @@ async function coldStart() {
           v-if="answerPendingIndexes.length"
           class="rec-guard__batchbtn rec-guard__batchbtn--primary"
           data-testid="recognize-grade-all"
-          :disabled="batchWorking || !selectedSubject"
+          :disabled="batchWorking || anchoring || !selectedSubject"
           @click="gradeAllAnswered"
         >
           {{

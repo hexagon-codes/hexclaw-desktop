@@ -996,6 +996,206 @@ export function k12FinalizePracticeSet(
     target: target ?? '',
   })
 }
+
+export type PracticePrintJobStatus =
+  | 'preparing'
+  | 'dialog_open'
+  | 'submitted'
+  | 'printed'
+  | 'cancelled'
+  | 'failed'
+  | 'outcome_unknown'
+
+export interface PracticePrintJobDTO {
+  print_job_id: string
+  practice_set_id: string
+  idempotency_key: string
+  status: PracticePrintJobStatus
+  paper_no: string
+  artifact_kind: 'question' | 'answer'
+  artifact_id: string
+  question_artifact_id: string
+  answer_artifact_id: string
+  source_digest: string
+  attempt_count: number
+  native_job_id?: string
+  native_receipt_id?: string
+  printer_snapshot?: Record<string, unknown>
+  failure_kind?: string
+  failure_detail?: string
+  prepared_at: number
+  printed_at?: number
+  updated_at: number
+  version: number
+}
+
+export interface PracticePrintJobResp {
+  print_job: PracticePrintJobDTO
+  replayed?: boolean
+}
+
+export interface PracticePrintJobPaperDTO {
+  print_job_id: string
+  kind: 'question' | 'answer'
+  title: string
+  paper_no: string
+  source_digest: string
+  artifact_id: string
+  markdown: string
+}
+
+export interface PracticePrintEventReq {
+  status: Exclude<PracticePrintJobStatus, 'preparing'>
+  native_job_id?: string
+  native_receipt_id?: string
+  printer_snapshot?: Record<string, unknown>
+  failure_kind?: string
+  failure_detail?: string
+}
+
+export type GenericPrintSourceKind =
+  | 'prep_card'
+  | 'creative_observation_card'
+  | 'practice_question'
+  | 'practice_answer'
+
+export interface PrepareGenericPrintJobReq {
+  agent: string
+  idempotency_key: string
+  source_kind: GenericPrintSourceKind
+  source_ref: string
+  title: string
+  canonical_markdown: string
+}
+
+export interface GenericPrintJobDTO {
+  print_job_id: string
+  idempotency_key: string
+  status: PracticePrintJobStatus
+  artifact_kind: GenericPrintSourceKind
+  artifact_id: string
+  source_kind: GenericPrintSourceKind
+  source_ref: string
+  title: string
+  source_digest: string
+  attempt_count: number
+  native_job_id?: string
+  native_receipt_id?: string
+  printer_snapshot?: Record<string, unknown>
+  failure_kind?: string
+  failure_detail?: string
+  prepared_at: number
+  printed_at?: number
+  updated_at: number
+  version: number
+}
+
+export interface GenericPrintJobResp {
+  print_job: GenericPrintJobDTO
+  replayed?: boolean
+}
+
+export interface GenericPrintArtifactDTO {
+  print_job_id: string
+  artifact_id: string
+  source_kind: GenericPrintSourceKind
+  source_ref: string
+  title: string
+  source_digest: string
+  markdown: string
+}
+
+export function k12PrepareGenericPrintJob(req: PrepareGenericPrintJobReq) {
+  if (
+    !req.agent.trim() ||
+    !req.idempotency_key.trim() ||
+    !req.source_ref.trim() ||
+    !req.title.trim() ||
+    !req.canonical_markdown.trim()
+  ) {
+    throw new Error('打印实例、幂等键与不可变 Artifact 内容不能为空')
+  }
+  return apiPost<GenericPrintJobResp>(`${BASE}/print-jobs`, req)
+}
+
+export function k12GetGenericPrintArtifact(agent: string, printJobId: string) {
+  return apiGet<GenericPrintArtifactDTO>(`${BASE}/print-jobs/${printJobId}/paper`, { agent })
+}
+
+export function k12RecordGenericPrintEvent(
+  agent: string,
+  printJobId: string,
+  event: PracticePrintEventReq,
+) {
+  if (
+    event.status === 'printed' &&
+    (!event.native_job_id ||
+      !event.native_receipt_id ||
+      !event.printer_snapshot ||
+      Object.keys(event.printer_snapshot).length === 0)
+  ) {
+    throw new Error('打印完成必须携带原生任务、回执与打印机快照')
+  }
+  return apiPost<GenericPrintJobResp>(`${BASE}/print-jobs/${printJobId}/events`, {
+    agent,
+    ...event,
+  })
+}
+
+export function k12RetryGenericPrintJob(agent: string, printJobId: string) {
+  return apiPost<GenericPrintJobResp>(`${BASE}/print-jobs/${printJobId}/retry`, { agent })
+}
+
+/** DD-023A phase 1: freeze the paper and reserve one durable PrintJob. */
+export function k12PreparePracticePrintJob(
+  agent: string,
+  recordId: string,
+  idempotencyKey: string,
+  artifactKind: 'question' | 'answer' = 'question',
+) {
+  if (!agent.trim() || !recordId.trim() || !idempotencyKey.trim()) {
+    throw new Error('打印实例、练习集与幂等键不能为空')
+  }
+  return apiPost<PracticePrintJobResp>(`${BASE}/practice-sets/${recordId}/print-jobs`, {
+    agent,
+    idempotency_key: idempotencyKey,
+    artifact_kind: artifactKind,
+  })
+}
+
+export function k12GetPracticePrintJob(agent: string, printJobId: string) {
+  return apiGet<PracticePrintJobResp>(`${BASE}/print-jobs/${printJobId}`, { agent })
+}
+
+export function k12GetPracticePrintJobPaper(
+  agent: string,
+  printJobId: string,
+  kind: 'question' | 'answer' = 'question',
+) {
+  return apiGet<PracticePrintJobPaperDTO>(`${BASE}/print-jobs/${printJobId}/paper`, {
+    agent,
+    kind,
+  })
+}
+
+/** DD-023A phase 2: persist the native dialog/driver receipt before UI success. */
+export function k12RecordPracticePrintEvent(
+  agent: string,
+  printJobId: string,
+  event: PracticePrintEventReq,
+) {
+  if (event.status === 'printed' && (!event.native_job_id || !event.native_receipt_id)) {
+    throw new Error('打印完成必须携带原生任务与回执')
+  }
+  return apiPost<PracticePrintJobResp>(`${BASE}/print-jobs/${printJobId}/events`, {
+    agent,
+    ...event,
+  })
+}
+
+export function k12RetryPracticePrintJob(agent: string, printJobId: string) {
+  return apiPost<PracticePrintJobResp>(`${BASE}/print-jobs/${printJobId}/retry`, { agent })
+}
 /** submit/grade/close 顺序推进；非法转移 → 409 */
 export function k12AdvancePracticeSet(
   agent: string,

@@ -56,8 +56,11 @@ vi.mock('@/api/k12', () => ({
   k12MarkPracticeCardDone: (a: string, id: string) => h.cardDoneSpy(a, id),
 }))
 vi.mock('../export', () => ({
-  printPracticePaper: (...args: unknown[]) => h.printSpy(...args),
+  printPracticePaper: vi.fn().mockResolvedValue(true),
   savePracticePaperPdf: vi.fn().mockResolvedValue(true),
+}))
+vi.mock('../persistent-print', () => ({
+  printPersistentArtifact: (...args: unknown[]) => h.printSpy(...args),
 }))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn() }),
@@ -79,10 +82,11 @@ function work(over: Partial<CreativeWorkDTO> = {}): CreativeWorkDTO {
   }
 }
 
-function render() {
+function render(attachToDocument = false) {
   return mount(K12CreativeWorksPanel, {
     props: { agentId: 'k12-xiaoming' },
     global: { plugins: [i18n()] },
+    ...(attachToDocument ? { attachTo: document.body } : {}),
   })
 }
 
@@ -492,6 +496,23 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     expect(w.find('[data-testid="cw-add-intent"]').exists()).toBe(false)
   })
 
+  it('Escape 关闭弹窗并把焦点还给打开按钮', async () => {
+    h.listSpy.mockResolvedValue({ items: [] })
+    const w = render(true)
+    await flushPromises()
+    const opener = w.find('[data-testid="cw-add-open"]')
+    ;(opener.element as HTMLButtonElement).focus()
+    await opener.trigger('click')
+    expect(w.find('[data-testid="cw-add-modal"]').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await flushPromises()
+
+    expect(w.find('[data-testid="cw-add-modal"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(opener.element)
+    w.unmount()
+  })
+
   it('类型切到美术 → 原稿字段换成创作意图；任务标签随类型变化', async () => {
     h.listSpy.mockResolvedValue({ items: [] })
     const w = render()
@@ -803,6 +824,14 @@ describe('K12CreativeWorksPanel · 点评联动出口（§3.10，写作 · 已�
     await flushPromises()
 
     expect(h.printSpy).toHaveBeenCalledTimes(2)
+    expect(h.printSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+      agent: 'k12-xiaoming',
+      sourceKind: 'creative_observation_card',
+      sourceRef: 'creative-work:w1:v1:practice-card',
+      title: '观察小练习 · 《春天的校园》',
+      canonicalMarkdown: '# 观察小练习 · 《春天的校园》\n观察远近层次并画三棵树',
+      browserPrint: expect.any(Function),
+    }))
     expect(w.find('[data-testid="cw-card-print-error"]').exists()).toBe(false)
   })
 

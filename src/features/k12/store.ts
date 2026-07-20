@@ -296,6 +296,58 @@ export const useK12Store = defineStore('k12', () => {
     anchorState: string
   }
 
+  function photoJobRecognitionView(
+    jobId: string,
+    status: GradingJobStatusResp,
+  ): PhotoJobRecognitionView {
+    return {
+      jobId,
+      questions: status.recognition?.questions ?? status.job.recognized_questions ?? [],
+      subject: status.recognition?.subject ?? '',
+      anchorState: status.anchor_state,
+    }
+  }
+
+  /**
+   * 识别事实已可回显后，继续等待独立锚点分支落到 located/degraded。
+   * 不能只看粗粒度 awaiting_confirmation：该 stage 下 anchor_state 仍可能是 pending。
+   */
+  async function waitForPhotoJobAnchor(
+    agent: string,
+    jobId: string,
+    signal?: AbortSignal,
+  ): Promise<PhotoJobRecognitionView> {
+    const cancelJob = () => {
+      void k12CancelGradingJob(agent, jobId).catch(() => {
+        // 任务可能恰好进入不可取消终态；本地仍必须隔离旧响应。
+      })
+    }
+    signal?.addEventListener('abort', cancelJob, { once: true })
+    try {
+      for (let attempt = 0; attempt < JOB_POLL_MAX_ATTEMPTS; attempt++) {
+        throwIfAborted(signal)
+        const status = await k12GetGradingJob(agent, jobId, signal)
+        throwIfAborted(signal)
+        if (status.anchor_state === 'located' || status.anchor_state === 'degraded') {
+          return photoJobRecognitionView(jobId, status)
+        }
+        if (
+          status.stage === 'failed_terminal' ||
+          status.stage === 'failed_retryable' ||
+          status.stage === 'cancelled'
+        ) {
+          throw new Error(i18n.global.t('k12.recognize.jobFailed'))
+        }
+        if (attempt < JOB_POLL_MAX_ATTEMPTS - 1) {
+          await waitForPoll(JOB_POLL_INTERVAL_MS, signal)
+        }
+      }
+      throw new Error(i18n.global.t('k12.recognize.jobFailed'))
+    } finally {
+      signal?.removeEventListener('abort', cancelJob)
+    }
+  }
+
   /**
    * 拍照识题（Job 化）：创建照片批改 Job → 后端异步推进（识别 + 锚点并行增强）→
    * 轮询到确认停点，返回识别产物供护栏回显。同图重投幂等命中既有 Job；
@@ -319,10 +371,10 @@ export const useK12Store = defineStore('k12', () => {
     try {
       throwIfAborted(signal)
       const created = await k12CreateGradingJob({
-        agent,
-        source_key: photoJobSourceKey(agent, imageBase64),
-        source_kind: 'desktop',
-        image_base64: imageBase64,
+          agent,
+          source_key: photoJobSourceKey(agent, imageBase64),
+          source_kind: 'desktop',
+          image_base64: imageBase64,
       }, signal)
       jobId = created.job.job_id
       if (signal?.aborted) {
@@ -340,12 +392,7 @@ export const useK12Store = defineStore('k12', () => {
         JOB_POLL_INTERVAL_MS,
         signal,
       )
-      return {
-        jobId,
-        questions: status.recognition?.questions ?? status.job.recognized_questions ?? [],
-        subject: status.recognition?.subject ?? '',
-        anchorState: status.anchor_state,
-      }
+      return photoJobRecognitionView(jobId, status)
     } finally {
       signal?.removeEventListener('abort', cancelJob)
       loading.value = false
@@ -441,6 +488,7 @@ export const useK12Store = defineStore('k12', () => {
     recordMistake,
     solve,
     recognizePhotoJob,
+    waitForPhotoJobAnchor,
     gradePhotoJob,
     coldStart,
     tutorTurn,

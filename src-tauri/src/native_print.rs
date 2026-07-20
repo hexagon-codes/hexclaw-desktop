@@ -2,10 +2,61 @@
 //!
 //! The frontend supplies ephemeral, already-sanitized printable HTML. On macOS we load it into
 //! an isolated hidden WKWebView and run `NSPrintOperation` with the system print panel enabled.
-//! `runOperation` is deliberately synchronous on the UI thread: its boolean is the native receipt
-//! that distinguishes Print from Cancel/failure. No HTML/PDF file is persisted by this adapter.
+//! `runOperation` is deliberately synchronous on the UI thread. Its result is wrapped in a typed,
+//! operation-scoped receipt that distinguishes Print from Cancel/failure and can be committed to
+//! the durable backend PrintJob. No HTML/PDF file is persisted by this adapter.
 
 const MAX_PRINT_HTML_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct NativePrinterSnapshot {
+    adapter: &'static str,
+    platform: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    printer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paper: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NativePrintReceipt {
+    status: &'static str,
+    native_job_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_receipt_id: Option<String>,
+    printer_snapshot: NativePrinterSnapshot,
+}
+
+fn receipt_from_result(
+    sequence: u64,
+    printed: bool,
+    printer: Option<String>,
+    paper: Option<String>,
+) -> NativePrintReceipt {
+    let native_job_id = format!("native-print-{sequence}");
+    let native_receipt_id = printed.then(|| {
+        let observed_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        format!("appkit-receipt-{sequence}-{observed_at}")
+    });
+    NativePrintReceipt {
+        status: if printed { "printed" } else { "cancelled" },
+        native_job_id,
+        native_receipt_id,
+        printer_snapshot: NativePrinterSnapshot {
+            adapter: "appkit",
+            platform: if cfg!(target_os = "macos") {
+                "macos"
+            } else {
+                "unsupported"
+            },
+            printer,
+            paper,
+        },
+    }
+}
 
 fn validate_print_html(html: &str) -> Result<(), String> {
     if html.trim().is_empty() {
@@ -39,7 +90,9 @@ fn initialization_script(html: &str) -> Result<String, String> {
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{initialization_script, validate_print_html};
+    use super::{
+        initialization_script, receipt_from_result, validate_print_html, NativePrintReceipt,
+    };
     use objc2_app_kit::NSPrintInfo;
     use objc2_web_kit::WKWebView;
     use std::sync::{
@@ -49,7 +102,7 @@ mod platform {
     use tauri::{webview::PageLoadEvent, WebviewUrl, WebviewWindowBuilder};
     use tokio::sync::oneshot;
 
-    type PrintResult = Result<bool, String>;
+    type PrintResult = Result<NativePrintReceipt, String>;
     type ResultSender = Arc<Mutex<Option<oneshot::Sender<PrintResult>>>>;
 
     static PRINT_WINDOW_SEQUENCE: AtomicU64 = AtomicU64::new(1);
@@ -62,7 +115,9 @@ mod platform {
         }
     }
 
-    fn run_operation(webview: tauri::webview::PlatformWebview) -> PrintResult {
+    fn run_operation(
+        webview: tauri::webview::PlatformWebview,
+    ) -> Result<(bool, Option<String>, Option<String>), String> {
         let ptr = webview.inner().cast::<WKWebView>();
         if ptr.is_null() {
             return Err("无法取得系统打印视图".into());
@@ -70,17 +125,21 @@ mod platform {
 
         // SAFETY: Tauri guarantees this closure runs on the main thread and `inner()` is the
         // retained WKWebView for the lifetime of the callback. AppKit printing is main-thread-only.
-        let operation = unsafe {
+        let (operation, print_info) = unsafe {
             let webview = &*ptr;
             let print_info = NSPrintInfo::sharedPrintInfo();
-            webview.printOperationWithPrintInfo(&print_info)
+            let operation = webview.printOperationWithPrintInfo(&print_info);
+            (operation, print_info)
         };
         operation.setShowsPrintPanel(true);
         operation.setShowsProgressPanel(true);
         // If AppKit spawns the operation separately, runOperation may return before the user has
         // accepted/cancelled. Keep it synchronous so the boolean is an actual native receipt.
         operation.setCanSpawnSeparateThread(false);
-        Ok(operation.runOperation())
+        let printed = operation.runOperation();
+        let printer = Some(print_info.printer().name().to_string());
+        let paper = print_info.paperName().map(|name| name.to_string());
+        Ok((printed, printer, paper))
     }
 
     pub async fn print_html(app: tauri::AppHandle, html: String) -> PrintResult {
@@ -116,7 +175,9 @@ mod platform {
                 let schedule_error_sender = Arc::clone(&callback_sender);
                 let window_to_close = window.clone();
                 if let Err(e) = window.with_webview(move |webview| {
-                    let result = run_operation(webview);
+                    let result = run_operation(webview).map(|(printed, printer, paper)| {
+                        receipt_from_result(sequence, printed, printer, paper)
+                    });
                     let _ = window_to_close.close();
                     send_once(&operation_sender, result);
                 }) {
@@ -135,24 +196,32 @@ mod platform {
     }
 }
 
-/// Open the native print dialog for ephemeral HTML and return the OS operation result.
+/// Open the native print dialog for ephemeral HTML and return an operation-scoped receipt.
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub async fn native_print_html(app: tauri::AppHandle, html: String) -> Result<bool, String> {
+pub async fn native_print_html(
+    app: tauri::AppHandle,
+    html: String,
+) -> Result<NativePrintReceipt, String> {
     platform::print_html(app, html).await
 }
 
 /// DD-023A forbids a save-file fallback on platforms without a verifiable native adapter.
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub async fn native_print_html(_app: tauri::AppHandle, html: String) -> Result<bool, String> {
+pub async fn native_print_html(
+    _app: tauri::AppHandle,
+    html: String,
+) -> Result<NativePrintReceipt, String> {
     validate_print_html(&html)?;
     Err("当前平台尚无可验证的原生打印适配器".into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{initialization_script, validate_print_html, MAX_PRINT_HTML_BYTES};
+    use super::{
+        initialization_script, receipt_from_result, validate_print_html, MAX_PRINT_HTML_BYTES,
+    };
 
     #[test]
     fn rejects_empty_and_oversized_print_payloads() {
@@ -167,5 +236,25 @@ mod tests {
         assert!(script.contains("DOMParser"));
         assert!(script.contains("\\\"中文\\\""));
         assert!(script.contains("__HEXCLAW_PRINT_READY__"));
+    }
+
+    #[test]
+    fn native_result_has_a_typed_operation_and_success_only_receipt() {
+        let printed =
+            receipt_from_result(42, true, Some("EPSON L3250".into()), Some("iso-a4".into()));
+        assert_eq!(printed.status, "printed");
+        assert_eq!(printed.native_job_id, "native-print-42");
+        assert!(printed.native_receipt_id.is_some());
+        assert_eq!(printed.printer_snapshot.adapter, "appkit");
+        assert_eq!(
+            printed.printer_snapshot.printer.as_deref(),
+            Some("EPSON L3250")
+        );
+        assert_eq!(printed.printer_snapshot.paper.as_deref(), Some("iso-a4"));
+
+        let cancelled = receipt_from_result(43, false, None, None);
+        assert_eq!(cancelled.status, "cancelled");
+        assert_eq!(cancelled.native_job_id, "native-print-43");
+        assert!(cancelled.native_receipt_id.is_none());
     }
 }

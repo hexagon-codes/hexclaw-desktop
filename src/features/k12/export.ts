@@ -72,7 +72,11 @@ export function buildWorksheetHtml(items: RecordItem[], meta: WorksheetMeta): st
  */
 async function printHtml(html: string): Promise<boolean> {
   if (isTauri()) {
-    return invoke<boolean>('native_print_html', { html })
+    const result = await invoke<boolean | NativePrintReceipt>('native_print_html', { html })
+    // Older sidecars returned a boolean. Keep non-domain helpers compatible,
+    // but the durable Practice PrintJob path below rejects that legacy shape
+    // because it cannot prove a native operation/receipt identity.
+    return typeof result === 'boolean' ? result : result.status === 'printed'
   }
   if (typeof document === 'undefined') return false
   const iframe = document.createElement('iframe')
@@ -91,6 +95,28 @@ async function printHtml(html: string): Promise<boolean> {
   win.print()
   setTimeout(() => iframe.remove(), 1000)
   return true
+}
+
+export interface NativePrintReceipt {
+  status: 'printed' | 'cancelled'
+  native_job_id: string
+  native_receipt_id?: string
+  printer_snapshot: Record<string, unknown>
+}
+
+function isNativePrintReceipt(value: unknown): value is NativePrintReceipt {
+  if (!value || typeof value !== 'object') return false
+  const receipt = value as Partial<NativePrintReceipt>
+  if (!['printed', 'cancelled'].includes(receipt.status ?? '')) return false
+  if (!receipt.native_job_id?.trim()) return false
+  if (
+    !receipt.printer_snapshot ||
+    typeof receipt.printer_snapshot !== 'object' ||
+    Array.isArray(receipt.printer_snapshot) ||
+    Object.keys(receipt.printer_snapshot).length === 0
+  )
+    return false
+  return receipt.status !== 'printed' || Boolean(receipt.native_receipt_id?.trim())
 }
 
 /** 打印错题卷。返回原生打印是否提交成功；取消/失败均为 false。 */
@@ -142,6 +168,24 @@ export async function printPracticePaper(markdown: string, title: string): Promi
   return printHtml(html)
 }
 
+/**
+ * Durable PrintJob bridge. Unlike the convenience boolean helper, this entry
+ * point is Desktop-only and fails closed unless the native adapter returns a
+ * typed operation receipt suitable for the backend PrintJob event ledger.
+ */
+export async function printPracticePaperWithReceipt(
+  markdown: string,
+  title: string,
+): Promise<NativePrintReceipt> {
+  if (!isTauri()) throw new Error('正式打印需要桌面原生系统打印对话框')
+  const html = buildPracticePaperHtml(markdown, title)
+  const result = await invoke<unknown>('native_print_html', { html })
+  if (!isNativePrintReceipt(result)) {
+    throw new Error('原生打印适配器未返回可验证的 PrintJob 回执')
+  }
+  return result
+}
+
 // ── 备课卡打印 ──────────────────────────────────────────────
 export interface PrepSection { title: string; content: string; source_label: string }
 export interface PrepCard { knowledge_points: string[]; sections: PrepSection[] }
@@ -182,6 +226,21 @@ export function prepCardToText(card: PrepCard, meta: { title: string; gradeLabel
     .map((s) => `\n${s.title}${s.source_label ? `（${s.source_label}）` : ''}\n${s.content}`)
     .join('\n')
   return `${head}\n${body}`.trim()
+}
+
+/** Canonical printable source frozen by the backend generic PrintJob. */
+export function prepCardToMarkdown(
+  card: PrepCard,
+  meta: { title: string; gradeLabel: string },
+): string {
+  const lines = [`# ${meta.title}`, '', meta.gradeLabel]
+  if (card.knowledge_points.length) lines.push('', `知识点：${card.knowledge_points.join(' · ')}`)
+  for (const section of card.sections) {
+    lines.push('', `**${section.title}**`)
+    if (section.source_label) lines.push('', section.source_label)
+    lines.push('', section.content)
+  }
+  return lines.join('\n').trim()
 }
 
 /** 打印备课卡。Desktop 必须返回原生 PrintJob 结果，取消不得冒充成功。 */

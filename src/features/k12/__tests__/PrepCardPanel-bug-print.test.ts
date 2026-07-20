@@ -6,8 +6,13 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import PrepCardPanel from '../views/PrepCardPanel.vue'
 
-const h = vi.hoisted(() => ({ printSpy: vi.fn<(...args: unknown[]) => boolean>(() => true) }))
-vi.mock('../export', () => ({ printPrepCard: (...a: unknown[]) => h.printSpy(...a) }))
+const h = vi.hoisted(() => ({ printSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>(() => Promise.resolve(true)) }))
+vi.mock('../persistent-print', () => ({ printPersistentArtifact: (...a: unknown[]) => h.printSpy(...a) }))
+vi.mock('../export', () => ({
+  printPrepCard: vi.fn().mockResolvedValue(true),
+  prepCardToMarkdown: (card: { sections: Array<{ content: string }> }) => `# 辅导要点\n\n${card.sections[0]?.content ?? ''}`,
+  prepCardToText: vi.fn().mockReturnValue('辅导要点'),
+}))
 vi.mock('@/api/k12', () => ({
   k12PrepCard: vi.fn().mockResolvedValue({
     knowledge_points: ['小数乘法'],
@@ -35,7 +40,7 @@ describe('bug: 备课卡打印按钮须真打印', () => {
     h.printSpy.mockClear()
   })
 
-  it('已生成备课卡时，点🖨 调用 printPrepCard（真打印）而非仅 toast', async () => {
+  it('已生成备课卡时，点🖨 以不可变 canonical 内容调用持久 PrintJob', async () => {
     const w = mount(PrepCardPanel, {
       props: { agentId: 'ming', grade: '五年级上', knowledgePoints: ['小数乘法'] },
       global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
@@ -44,5 +49,13 @@ describe('bug: 备课卡打印按钮须真打印', () => {
     const printBtn = w.findAll('.icbtn').find((b) => b.text().includes('🖨'))!
     await printBtn.trigger('click')
     expect(h.printSpy).toHaveBeenCalledTimes(1)
+    expect(h.printSpy).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'ming',
+      sourceKind: 'prep_card',
+      sourceRef: 'prep-card:五年级上:小数乘法',
+      title: '这份作业的辅导要点',
+      canonicalMarkdown: expect.stringContaining('小数乘法要对齐小数点'),
+      browserPrint: expect.any(Function),
+    }))
   })
 })

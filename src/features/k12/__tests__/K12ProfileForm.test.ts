@@ -94,6 +94,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(payload.display_name).toContain('小明的辅导助手 · 五年级')
     expect(payload.provider).toBe('')
     expect(payload.metadata.scenario).toBe('k12-tutor')
+    expect(payload.metadata['k12.learner_id']).toMatch(/^learner-[A-Za-z0-9_-]{8,}$/)
     // skills 从模板 manifest 全挂好：P0 必备 + P1 默认 + 基础设施（grade-constraint/k12_grade/k12_review）；P2（物化）默认不挂
     for (const s of ['k12-pedagogy', 'homework-checker', 'math-tutor', 'chinese-tutor', 'english-tutor', 'concept-explainer', 'k12_grade']) {
       expect(payload.skills).toContain(s)
@@ -112,6 +113,31 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(prof.grade_term).toBe('五年级上')
     expect(prof.textbook_edition).toBe('人教版')
     expect(w.emitted('created')).toBeTruthy()
+  })
+
+  it('两个同名称孩子生成不同 learner owner，展示名不参与稳定标识', async () => {
+    const first = render()
+    await B().find('input.k12pf__input').setValue('同名孩子')
+    await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+    const firstID = (h.registerSpy.mock.calls[0]![0] as {
+      metadata: Record<string, string>
+    }).metadata['k12.learner_id']
+    first.unmount()
+    document.body.innerHTML = ''
+
+    const second = render()
+    await B().find('input.k12pf__input').setValue('同名孩子')
+    await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+    const secondID = (h.registerSpy.mock.calls[1]![0] as {
+      metadata: Record<string, string>
+    }).metadata['k12.learner_id']
+
+    expect(firstID).toMatch(/^learner-/)
+    expect(secondID).toMatch(/^learner-/)
+    expect(secondID).not.toBe(firstID)
+    second.unmount()
   })
 
   it('默认自动任务未注册时等待真实结果并显式告警，不再宣称提醒已注册', async () => {

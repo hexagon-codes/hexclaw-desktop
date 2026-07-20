@@ -16,6 +16,10 @@ import {
   k12GradePracticeSet,
   k12CancelPracticeSet,
   k12GetPracticePaper,
+  k12GetPracticePrintJobPaper,
+  k12PreparePracticePrintJob,
+  k12RecordPracticePrintEvent,
+  k12RetryPracticePrintJob,
   k12UploadAsset,
   k12AssetURL,
   type PracticeSetDTO,
@@ -24,7 +28,12 @@ import {
   type PracticeReturnAssetDTO,
 } from '@/api/k12'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import { printPracticePaper, savePracticePaperPdf } from '../export'
+import {
+  printPracticePaper,
+  printPracticePaperWithReceipt,
+  savePracticePaperPdf,
+} from '../export'
+import { printPersistentArtifact } from '../persistent-print'
 
 const props = defineProps<{ agentId: string }>()
 const { t, locale } = useI18n()
@@ -34,6 +43,12 @@ const sets = ref<PracticeSetDTO[]>([])
 const loading = ref(false)
 const error = ref('')
 const busy = ref('') // record_id（或 record_id:item_id）级操作锁
+let printRequestSequence = 0
+
+function newPrintIdempotencyKey(recordId: string): string {
+  const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++printRequestSequence}`
+  return `desktop-print:${props.agentId}:${recordId}:${nonce}`
+}
 
 async function load() {
   if (!props.agentId) return
@@ -119,15 +134,74 @@ async function finalize(via: 'print' | 'send') {
   let finalized = false
   try {
     if (via === 'print') {
-      // DD-023A：先让原生系统对话框返回 PrintJob 成功回执，再固化待打印篮。
-      // 取消/失败保持 draft；绝不先 finalize 后把取消误记为「已打印」。
-      const rendered = await k12GetPracticePaper(props.agentId, b.record_id, 'question')
-      const printed = await printPracticePaper(rendered.markdown, rendered.title)
-      if (!printed) throw new Error(t('k12.practice.paperPrintFailed'))
-      const resp = await k12FinalizePracticeSet(props.agentId, b.record_id, 'print')
+      // DD-023A：后端先冻结卷源并预占卷面号；原生对话框的 definitive
+      // receipt 再原子推进 PrintJob + PracticeSet。旧 finalize(print) 不得
+      // 旁路这条链，取消/失败/未知态都必须保留 draft。
+      const prepared = await k12PreparePracticePrintJob(
+        props.agentId,
+        b.record_id,
+        newPrintIdempotencyKey(b.record_id),
+        'question',
+      )
+      let job = prepared.print_job
+      if (job.status === 'printed') {
+        finalized = true
+        toast.success(t('k12.practice.print'))
+        return
+      }
+      if (job.status === 'cancelled' || job.status === 'failed') {
+        job = (await k12RetryPracticePrintJob(props.agentId, job.print_job_id)).print_job
+      } else if (
+        job.status === 'dialog_open' ||
+        job.status === 'submitted' ||
+        job.status === 'outcome_unknown'
+      ) {
+        throw new Error('上一次打印结果仍待核对，请先查询 PrintJob 回执')
+      }
+
+      const rendered = await k12GetPracticePrintJobPaper(
+        props.agentId,
+        job.print_job_id,
+        'question',
+      )
+      await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
+        status: 'dialog_open',
+      })
+
+      let receipt
+      try {
+        receipt = await printPracticePaperWithReceipt(rendered.markdown, rendered.title)
+      } catch (error) {
+        await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
+          status: 'outcome_unknown',
+          failure_kind: 'native_adapter_interrupted',
+          failure_detail: '系统打印对话框未返回可验证回执',
+        })
+        throw error
+      }
+
+      if (receipt.status === 'cancelled') {
+        await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
+          status: 'cancelled',
+          native_job_id: receipt.native_job_id,
+          printer_snapshot: receipt.printer_snapshot,
+        })
+        throw new Error(t('k12.practice.paperPrintFailed'))
+      }
+
+      await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
+        status: 'submitted',
+        native_job_id: receipt.native_job_id,
+      })
+      await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
+        status: 'printed',
+        native_job_id: receipt.native_job_id,
+        native_receipt_id: receipt.native_receipt_id,
+        printer_snapshot: receipt.printer_snapshot,
+      })
       finalized = true
-      const skipped = resp.skipped_blocked_count > 0
-        ? ` · ${t('k12.practice.skipped', { n: resp.skipped_blocked_count })}`
+      const skipped = blockedCount.value > 0
+        ? ` · ${t('k12.practice.skipped', { n: blockedCount.value })}`
         : ''
       toast.success(`${t('k12.practice.print')}${skipped}`)
       return
@@ -382,11 +456,20 @@ function closePaper() {
 // 预览通道不得成为绕过固化的旁路。
 async function printPaper() {
   const p = paper.value.resp
-  if (!p || p.preview) return
+  const req = paperRequest.value
+  if (!p || p.preview || !req) return
   // 重试开始即撤下上一次失败提示；本次仍失败时再写入新的可重试错误。
   paper.value.error = ''
   try {
-    const ok = await printPracticePaper(p.markdown, p.title + (p.kind === 'answer' ? ' · ' + t('k12.practice.paperAnswer') : ''))
+    const title = p.title + (p.kind === 'answer' ? ' · ' + t('k12.practice.paperAnswer') : '')
+    const ok = await printPersistentArtifact({
+      agent: props.agentId,
+      sourceKind: p.kind === 'answer' ? 'practice_answer' : 'practice_question',
+      sourceRef: `practice-set:${req.recordId}:${p.kind}`,
+      title,
+      canonicalMarkdown: p.markdown,
+      browserPrint: () => printPracticePaper(p.markdown, title),
+    })
     if (!ok) throw new Error(t('k12.practice.paperPrintFailed'))
   } catch (e) {
     paper.value.error = (e as Error).message || t('k12.practice.paperPrintFailed')

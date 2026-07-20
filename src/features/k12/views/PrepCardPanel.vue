@@ -19,7 +19,8 @@ import {
   type DeliveryReceiptDTO,
 } from '@/api/k12'
 import { useK12Store } from '../store'
-import { printPrepCard, prepCardToText } from '../export'
+import { printPrepCard, prepCardToMarkdown, prepCardToText } from '../export'
+import { printPersistentArtifact } from '../persistent-print'
 import { parseDocument } from '@/utils/file-parser'
 
 const props = defineProps<{
@@ -153,7 +154,16 @@ async function doPrint() {
     return
   }
   try {
-    await printPrepCard(store.prepCard, prepMeta())
+    const card = store.prepCard
+    const meta = prepMeta()
+    await printPersistentArtifact({
+      agent: props.agentId,
+      sourceKind: 'prep_card',
+      sourceRef: `prep-card:${props.grade}:${props.knowledgePoints.join(',')}`,
+      title: meta.title,
+      canonicalMarkdown: prepCardToMarkdown(card, meta),
+      browserPrint: () => printPrepCard(card, meta),
+    })
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
   }

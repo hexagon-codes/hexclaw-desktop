@@ -173,6 +173,86 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     expect(mark.attributes('style')).toContain('left: 30%')
   })
 
+  it('识别先回显时锚点仍 pending：后台按 ProblemID 只补坐标，随后单题批改可叠加', async () => {
+    const recognized = {
+      problem_id: 'worksheet-q2',
+      question: '8×7=',
+      canonical_markdown: '8×7=',
+      knowledge_points: ['整数乘法'],
+      answer_state: 'present',
+      student_answer: '54',
+      answer_canonical_markdown: '54',
+    }
+    let settleAnchor!: (value: ReturnType<typeof jobStatus>) => void
+    h.createJobSpy.mockResolvedValue({ created: true, job: jobDTO('queued') })
+    h.getJobSpy
+      .mockResolvedValueOnce(
+        jobStatus('awaiting_confirmation', {
+          anchor_state: 'pending',
+          job: { ...jobDTO('awaiting_confirmation'), anchor_state: 'pending' },
+          recognition: { questions: [recognized], subject: '数学' },
+        }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            settleAnchor = resolve
+          }),
+      )
+    h.gradeSpy.mockResolvedValue({
+      solution: '56',
+      verdict: 'disagree',
+      evidence_type: 'numeric_exec',
+      badge: 'disagree',
+      error_cause: '计算错误',
+      out_of_scope: false,
+      record_created: true,
+      record_id: 'r-pending-anchor',
+    })
+
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+
+    // 识别事实立即可核对，定位分支仍在后台独立推进。
+    expect(w.findAll('[data-testid="rq-item"]')).toHaveLength(1)
+    expect(w.find('[data-testid="recognize-anchor-status"]').text()).toContain('正在后台定位')
+
+    settleAnchor(
+      jobStatus('awaiting_confirmation', {
+        anchor_state: 'located',
+        job: { ...jobDTO('awaiting_confirmation'), anchor_state: 'located' },
+        recognition: {
+          questions: [
+            {
+              ...recognized,
+              // 锚点分支只能补 geometry；即使返回漂移文本也不得覆盖识别事实。
+              canonical_markdown: '不得覆盖题干',
+              answer_canonical_markdown: '99',
+              bbox: { x: 0.49, y: 0.48, w: 0.11, h: 0.14 },
+            },
+          ],
+          subject: '数学',
+        },
+      }),
+    )
+    await flushPromises()
+
+    expect(w.find('[data-testid="recognize-anchor-status"]').exists()).toBe(false)
+    expect(w.text()).toContain('8×7=')
+    expect(w.text()).not.toContain('不得覆盖题干')
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="rq-answer-0"]').element).toHaveProperty('value', '54')
+
+    await w.find('[data-testid="rq-grade-0"]').trigger('click')
+    await flushPromises()
+
+    expect(w.find('[data-testid="overlay-sym-0"]').text()).toBe('✗')
+    expect(w.find('[data-testid="overlay-mark-0"]').attributes('style')).toContain('left: 60%')
+  })
+
   it('错题原图只画紧凑红叉，不把答案或整段解答烧进图片', async () => {
     mockJobRecognition([
       {

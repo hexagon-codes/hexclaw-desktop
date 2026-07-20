@@ -54,15 +54,20 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     await expect(page.getByTestId('recognize-guard')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByTestId('rq-item')).toHaveCount(2, { timeout: 120_000 })
     await expect(page.getByTestId('k12-photo-assistant-message')).toBeVisible()
-    await expect(page.getByTestId('k12-photo-assistant-message').locator('.k12enh-tutor__name')).toContainText(child)
+    await expect(
+      page.getByTestId('k12-photo-assistant-message').locator('.k12enh-tutor__name'),
+    ).toContainText(child)
     await expect(page.getByTestId('recognize-confirm-all')).toContainText('读得对，开始辅导')
     await expect(page.getByTestId('recognize-correct')).toContainText('有地方读错了')
     await expect(page.getByTestId('rq-grade-0')).toHaveCount(0)
-    await page.screenshot({ path: 'test-results/k12-photo-confirm-prototype-aligned.png', fullPage: true })
-    await expect(page.getByTestId('rq-answer-0')).toHaveValue('')
-    await expect(page.getByTestId('rq-answer-1')).toHaveValue('54')
+    await page.screenshot({
+      path: 'test-results/k12-photo-confirm-prototype-aligned.png',
+      fullPage: true,
+    })
 
     await page.getByTestId('recognize-confirm-all').click()
+    await expect(page.getByTestId('rq-answer-0')).toHaveValue('')
+    await expect(page.getByTestId('rq-answer-1')).toHaveValue('54')
     await expect(page.getByTestId('rq-solve-0')).toBeEnabled()
     await page.getByTestId('rq-solve-0').click()
     await expect(page.getByTestId('rq-grade-details-0')).toContainText('42', { timeout: 120_000 })
@@ -76,8 +81,10 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     await page.getByTestId('overlay-toggle').click()
     await expect(page.getByTestId('overlay-sym-0')).toBeVisible()
 
-    await page.locator('.k12enh-seg button', { hasText: '错题本' }).click()
+    await page.locator('.k12enh-seg button', { hasText: '学习档案' }).click()
     await expect(page.locator('.k12rec')).toBeVisible({ timeout: 30_000 })
+    await page.getByTestId('subtab-mistakes').click()
+    await expect(page.getByTestId('mistakes-section')).toBeVisible()
     await expect(page.locator('.k12rec')).toContainText('8×7=', { timeout: 30_000 })
   })
 })

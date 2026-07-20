@@ -5,7 +5,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
   tauri: false,
-  printSpy: vi.fn<(command: string, args: { html: string }) => Promise<boolean>>(),
+  printSpy: vi.fn<(command: string, args: { html: string }) => Promise<unknown>>(),
   saveSpy: vi.fn<(src: string, fn: string) => Promise<string | null>>(),
   renderSpy: vi.fn<(req: unknown) => Promise<Blob>>(),
 }))
@@ -15,7 +15,14 @@ vi.mock('@tauri-apps/api/core', () => ({ invoke: (command: string, args: { html:
 // 另存 PDF 仍走后端 render 端点；它与 PrintJob 严格分轨。
 vi.mock('@/api/k12', () => ({ renderDocument: (req: unknown) => h.renderSpy(req) }))
 
-import { printPrepCard, printWorksheet, printPracticePaper, savePracticePaperPdf, exportPdf } from '../export'
+import {
+  exportPdf,
+  printPracticePaper,
+  printPracticePaperWithReceipt,
+  printPrepCard,
+  printWorksheet,
+  savePracticePaperPdf,
+} from '../export'
 import type { RecordItem } from '@/contracts'
 
 const card = {
@@ -46,6 +53,39 @@ describe('DD-023A K12 打印走原生 PrintJob，另存 PDF 独立', () => {
     expect(h.printSpy).toHaveBeenCalledTimes(3)
     expect(h.saveSpy).not.toHaveBeenCalled()
     expect(h.renderSpy).not.toHaveBeenCalled()
+  })
+
+  it('Tauri 练习卷把原生 operation receipt 原样交给持久 PrintJob 链', async () => {
+    h.tauri = true
+    h.printSpy.mockResolvedValue({
+      status: 'printed',
+      native_job_id: 'native-job-1',
+      native_receipt_id: 'native-receipt-1',
+      printer_snapshot: { adapter: 'appkit', platform: 'macos' },
+    })
+
+    await expect(
+      printPracticePaperWithReceipt('# 题目卷\n\n1. 计算 1+1', '题目卷'),
+    ).resolves.toEqual({
+      status: 'printed',
+      native_job_id: 'native-job-1',
+      native_receipt_id: 'native-receipt-1',
+      printer_snapshot: { adapter: 'appkit', platform: 'macos' },
+    })
+  })
+
+  it('Tauri typed receipt 缺打印机快照事实时 fail closed', async () => {
+    h.tauri = true
+    h.printSpy.mockResolvedValue({
+      status: 'printed',
+      native_job_id: 'native-job-1',
+      native_receipt_id: 'native-receipt-1',
+      printer_snapshot: {},
+    })
+
+    await expect(printPracticePaperWithReceipt('# 题目卷', '题目卷')).rejects.toThrow(
+      '未返回可验证',
+    )
   })
 
   it('Tauri 练习卷 → 直接把同源 A4 HTML 交给 native_print_html', async () => {

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "reportPath": "test-results/k12-fixtures/report.json",
+  "currentSource": {
+    "description": "The caller starts the current-source Desktop UI and Sidecar; this gate never creates or substitutes either service.",
+    "endpoints": ["HEX_E2E_BASE_URL", "HEX_E2E_SIDECAR_URL"],
+    "managesWebServer": false,
+    "managesSidecar": false
+  },
+  "specs": [
+    {
+      "file": "ftue-dynamic.spec.ts",
+      "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_REAL_MODEL"],
+      "fixtureOverrides": ["HEX_K12_PHOTO_CLEAR"]
+    },
+    {
+      "file": "grading-real-fixtures.spec.ts",
+      "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_REAL_MODEL"],
+      "fixtureOverrides": ["HEX_K12_PHOTO_CLEAR", "HEX_K12_PHOTO_MESSY", "HEX_K12_PHOTO_BLANK"]
+    },
+    {
+      "file": "creative-real-fixtures.spec.ts",
+      "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_REAL_MODEL", "HEX_K12_CREATIVE_AI"],
+      "fixtureOverrides": ["HEX_K12_WRITING_IMAGE", "HEX_K12_ART_IMAGE"]
+    },
+    {
+      "file": "grounding-pdf.spec.ts",
+      "zeroSkipGates": ["HEX_K12_KNOWLEDGE_LIVE", "HEX_K12_SCAN_OCR_LIVE"],
+      "fixtureOverrides": ["HEX_FIXTURE_TEXTBOOK_PDF", "HEX_FIXTURE_SCANNED_TEXTBOOK_PDF"]
+    },
+    {
+      "file": "practice-integrity.spec.ts",
+      "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_PRACTICE_LIVE"],
+      "fixtureOverrides": ["HEX_K12_PHOTO_BLANK"]
+    },
+    {
+      "file": "role-privacy.spec.ts",
+      "zeroSkipGates": [
+        "HEX_K12_ACCEPTANCE_LIVE",
+        "HEX_K12_ROLE_MODE",
+        "HEX_K12_THIRD_PARTY_SPY_URL",
+        "HEX_K12_CLOUD_EMBEDDING_LABEL"
+      ],
+      "fixtureOverrides": ["HEX_K12_ART_IMAGE"]
+    },
+    {
+      "file": "responsive-a11y.spec.ts",
+      "zeroSkipGates": ["HEX_K12_ACCEPTANCE_LIVE", "HEX_K12_REAL_MODEL"],
+      "fixtureOverrides": ["HEX_K12_PHOTO_CLEAR"]
+    }
+  ]
+}

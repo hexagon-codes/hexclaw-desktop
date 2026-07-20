@@ -33,6 +33,9 @@ const agentsStore = useAgentsStore()
 const k12Store = useK12Store()
 
 const isEdit = computed(() => !!props.agent)
+// Learner owner 与可改的 child_name/display_name 解耦：新建时独立生成一次；改档复用既有 metadata，
+// 且 updateAgent 不写 metadata，因此改名/升年级不会轮换 owner。
+const learnerID = props.agent?.metadata?.['k12.learner_id'] || `learner-${nanoid(12)}`
 
 // 档案存在 agent metadata 的 k12.* 键（后端契约）
 const childName = ref(props.agent?.metadata?.['k12.child_name'] ?? '')
@@ -209,7 +212,7 @@ async function submit() {
       provider: provider.value,
       // 默认 skill 从模板 manifest 全挂好（P0 必备 + P1 默认 + k12_grade 基础设施）
       skills: boundSkills(),
-      metadata: { scenario: K12_SCENARIO_ID, avatar: '🎓' },
+      metadata: { scenario: K12_SCENARIO_ID, avatar: '🎓', 'k12.learner_id': learnerID },
     })
     try {
       await k12UpdateProfile({
