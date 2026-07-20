@@ -13,7 +13,7 @@ type AppConfigOverrides = Omit<
   mcp?: Partial<AppConfig['mcp']>
 }
 
-const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig } = vi.hoisted(() => ({
+const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig, mockLogger } = vi.hoisted(() => ({
   state: {
     savedConfig: null as AppConfig | null,
     secureValues: new Map<string, string>(),
@@ -21,7 +21,10 @@ const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig } = vi.ho
   mockGetLLMConfig: vi.fn(),
   mockUpdateLLMConfig: vi.fn().mockResolvedValue({}),
   mockUpdateConfig: vi.fn().mockResolvedValue({}),
+  mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }))
+
+vi.mock('@/utils/logger', () => ({ logger: mockLogger }))
 
 vi.mock('@/api/config', () => ({
   getLLMConfig: () => mockGetLLMConfig(),
@@ -119,6 +122,15 @@ function makeBackendConfig(): BackendLLMConfig {
   }
 }
 
+function emptyBackendConfig(): BackendLLMConfig {
+  return {
+    default: '',
+    providers: {},
+    routing: { enabled: false, strategy: 'cost-aware' },
+    cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+  }
+}
+
 function makeLocalProvider(overrides?: Partial<ProviderConfig>): ProviderConfig {
   return {
     id: 'custom-1',
@@ -145,6 +157,7 @@ describe('Settings Store persistence', () => {
     mockGetLLMConfig.mockReset()
     mockUpdateLLMConfig.mockClear()
     mockUpdateConfig.mockClear()
+    for (const method of Object.values(mockLogger)) method.mockClear()
     ;(globalThis as Record<string, unknown>).isTauri = true
   })
 
@@ -209,6 +222,28 @@ describe('Settings Store persistence', () => {
     expect(state.savedConfig!.llm.defaultProviderId).toBe('custom-1')
   })
 
+  it('never includes restored or submitted API keys in logger arguments', async () => {
+    const secret = 'sk-secret-must-never-enter-logs'
+    state.savedConfig = makeConfig({
+      llm: {
+        providers: [makeLocalProvider()],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'custom-1',
+      },
+    })
+    state.secureValues.set('llm.provider.custom-1.apiKey', secret)
+    mockGetLLMConfig.mockResolvedValue(makeBackendConfig())
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    store.config!.llm.providers[0]!.apiKey = secret
+    await store.saveConfig(store.config!)
+
+    const logText = JSON.stringify(Object.values(mockLogger).flatMap((method) => method.mock.calls))
+    expect(logText).not.toContain(secret)
+  })
+
   it('多模型 provider 保存时使用 selectedModelId，而不是模型列表第一项', async () => {
     state.savedConfig = makeConfig({
       llm: {
@@ -231,6 +266,85 @@ describe('Settings Store persistence', () => {
 
     const backendConfig = mockUpdateLLMConfig.mock.calls[0]![0] as BackendLLMConfig
     expect(backendConfig.providers['API Mart']!.model).toBe('gpt-4o')
+  })
+
+  it('新 provider 首次保存后回灌服务端身份，重命名再次保存不漂移 backend key', async () => {
+    const canonicalBackendKey = 'OpenRouter Primary'
+    const serverProviderId = 'pvd_v1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    const backendAfterCreate: BackendLLMConfig = {
+      default: canonicalBackendKey,
+      providers: {
+        [canonicalBackendKey]: {
+          provider_instance_id: serverProviderId,
+          api_key: '****key',
+          base_url: 'https://openrouter.ai/api/v1',
+          model: 'chat-model',
+          models: ['chat-model'],
+          model_specs_mode: 'explicit',
+          model_specs: [
+            { id: 'chat-model', display_name: 'Chat Model', capabilities: ['text'] },
+          ],
+          compatible: 'openai',
+          locality: 'cloud',
+          enabled: true,
+        },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+    }
+    mockGetLLMConfig
+      .mockResolvedValueOnce(emptyBackendConfig())
+      .mockResolvedValueOnce(backendAfterCreate)
+      .mockResolvedValueOnce(backendAfterCreate)
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    const created = store.addProvider({
+      name: canonicalBackendKey,
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-live-new-provider',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      models: [{ id: 'chat-model', name: 'Chat Model', capabilities: ['text'] }],
+      selectedModelId: 'chat-model',
+    })!
+    store.config!.llm.defaultProviderId = created.id
+    store.config!.llm.defaultModel = 'chat-model'
+
+    await store.saveConfig(store.config!)
+
+    const afterCreate = store.config!.llm.providers.find((provider) => provider.id === created.id)!
+    expect(afterCreate.id).toBe(created.id)
+    expect(afterCreate.providerInstanceId).toBe(serverProviderId)
+    expect(afterCreate.backendKey).toBe(canonicalBackendKey)
+    expect(afterCreate.apiKey).toBe('sk-live-new-provider')
+    expect(state.savedConfig!.llm.providers[0]).toMatchObject({
+      id: created.id,
+      providerInstanceId: serverProviderId,
+      backendKey: canonicalBackendKey,
+      apiKey: '',
+    })
+
+    afterCreate.name = 'Renamed for display'
+    await store.saveConfig(store.config!)
+
+    expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(2)
+    const firstPayload = mockUpdateLLMConfig.mock.calls[0]![0] as BackendLLMConfig
+    const secondPayload = mockUpdateLLMConfig.mock.calls[1]![0] as BackendLLMConfig
+    expect(Object.keys(firstPayload.providers)).toEqual([canonicalBackendKey])
+    expect(firstPayload.providers[canonicalBackendKey]!.provider_instance_id).toBeUndefined()
+    expect(Object.keys(secondPayload.providers)).toEqual([canonicalBackendKey])
+    expect(secondPayload.providers[canonicalBackendKey]!.provider_instance_id).toBe(serverProviderId)
+    expect(secondPayload.providers).not.toHaveProperty('Renamed for display')
+    const afterRename = store.config!.llm.providers.find((provider) => provider.id === created.id)!
+    expect(afterRename).toMatchObject({
+      id: created.id,
+      name: 'Renamed for display',
+      providerInstanceId: serverProviderId,
+      backendKey: canonicalBackendKey,
+      apiKey: 'sk-live-new-provider',
+    })
   })
 
   it('保存时携带当前路由策略配置', async () => {

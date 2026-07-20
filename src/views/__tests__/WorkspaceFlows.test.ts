@@ -40,11 +40,21 @@ const {
 }))
 
 vi.mock('@/api/knowledge', () => ({
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments,
   addDocument: vi.fn(),
   deleteDocument: vi.fn(),
   searchKnowledge: vi.fn(),
   uploadDocument,
+  getKnowledgeConfig: vi.fn().mockResolvedValue({
+    rerank: true,
+    rerank_model: '',
+    query_expand: true,
+    contextual: true,
+    min_score: 0.55,
+    candidate_k: 50,
+  }),
+  putKnowledgeConfig: vi.fn(),
 }))
 
 vi.mock('@/api/settings', () => ({
@@ -58,7 +68,15 @@ vi.mock('@/api/skills', () => ({
   setSkillEnabled,
   searchClawHub: vi.fn().mockResolvedValue([]),
   installFromHub: vi.fn(),
-  CLAWHUB_CATEGORIES: ['all', 'coding', 'research', 'writing', 'data', 'automation', 'productivity'],
+  CLAWHUB_CATEGORIES: [
+    'all',
+    'coding',
+    'research',
+    'writing',
+    'data',
+    'automation',
+    'productivity',
+  ],
 }))
 
 vi.mock('@/api/im-channels', async () => {
@@ -159,7 +177,8 @@ async function mountWithRouter(component: object, initialPath: string) {
         SearchInput: {
           props: ['modelValue', 'placeholder'],
           emits: ['update:modelValue', 'submit'],
-          template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" @keydown.enter="$emit(\'submit\')" />',
+          template:
+            '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" @keydown.enter="$emit(\'submit\')" />',
         },
         teleport: true,
         transition: false,
@@ -178,12 +197,19 @@ describe('Workspace flows', () => {
     getDocuments.mockResolvedValue({ documents: [], total: 0 })
     uploadDocument.mockImplementation(async (_file: File, onProgress?: (pct: number) => void) => {
       onProgress?.(100)
-      return { id: 'doc-1', title: 'Doc', chunk_count: 1, created_at: new Date().toISOString() }
+      return {
+        document_id: 'doc-1',
+        job_id: 'job-1',
+        text_index_state: 'pending',
+        vector_index_state: 'pending',
+      }
     })
 
     getSkills.mockResolvedValue({
       dir: '/tmp/skills',
-      skills: [{ name: 'demo-skill', description: 'demo', version: '1.0.0', triggers: [], tags: [] }],
+      skills: [
+        { name: 'demo-skill', description: 'demo', version: '1.0.0', triggers: [], tags: [] },
+      ],
     })
     setSkillEnabled.mockResolvedValue(true)
 
@@ -229,7 +255,9 @@ describe('Workspace flows', () => {
     expect(router.currentRoute.value.path).toBe('/knowledge/memory')
     expect(wrapper.find('[data-testid="memory-view"]').exists()).toBe(true)
 
-    const addMemoryButton = wrapper.findAll('button').find((btn) => btn.text().trim() === '添加记忆')
+    const addMemoryButton = wrapper
+      .findAll('button')
+      .find((btn) => btn.text().trim() === '添加记忆')
     expect(addMemoryButton).toBeDefined()
     await addMemoryButton!.trigger('click')
     await flushPromises()
@@ -292,7 +320,9 @@ describe('Workspace flows', () => {
 
     expect(wrapper.text()).toContain('已禁用')
 
-    const enableBtn = wrapper.findAll('button').find((btn) => btn.attributes('title') === '启用 Skill')
+    const enableBtn = wrapper
+      .findAll('button')
+      .find((btn) => btn.attributes('title') === '启用 Skill')
     expect(enableBtn).toBeDefined()
     await enableBtn!.trigger('click')
     await flushPromises()
@@ -322,9 +352,12 @@ describe('Workspace flows', () => {
     await saveBtn!.trigger('click')
     await flushPromises()
 
-    expect(updateIMInstance).toHaveBeenCalledWith('feishu-1', expect.objectContaining({
-      name: '飞书-工作台',
-    }))
+    expect(updateIMInstance).toHaveBeenCalledWith(
+      'feishu-1',
+      expect.objectContaining({
+        name: '飞书-工作台',
+      }),
+    )
     expect(getIMInstances).toHaveBeenCalledTimes(2)
   })
 })

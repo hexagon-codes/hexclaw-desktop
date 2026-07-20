@@ -35,12 +35,16 @@ async function refreshChatSessionsWhenReady() {
 
 async function warmupOllamaModel() {
   try {
-    const { getOllamaStatus, getOllamaRunning, loadOllamaModel } = await import('@/api/ollama')
+    const { getOllamaStatus, getOllamaRunningResult, loadOllamaModel } = await import('@/api/ollama')
     const status = await getOllamaStatus()
     if (!status?.running || !status.models?.length) return
 
-    const running = await getOllamaRunning()
-    if (running.length > 0) return // 已有模型在跑
+    const running = await getOllamaRunningResult()
+    if (!running.reachable || running.error) {
+      console.warn('[AppLayout] Ollama 运行模型状态不可用，跳过自动预热:', running.error)
+      return
+    }
+    if (running.models.length > 0) return // 已有模型在跑
 
     // Ollama 运行中 + 有已下载模型 + 无模型在跑 → 预热第一个模型
     const modelToLoad = status.models[0]!.name

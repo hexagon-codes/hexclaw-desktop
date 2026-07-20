@@ -58,10 +58,10 @@ describe('dead code detection', () => {
       expect(importers.length).toBeGreaterThanOrEqual(1)
     })
 
-    it('is actually called (not just imported)', () => {
-      // Check that it's used in a call expression, not just imported
-      const knowledgeViewSource = readFile('views/KnowledgeView.vue')
-      expect(knowledgeViewSource).toContain('isKnowledgeUploadEndpointMissing(')
+    it('is actually called by the single upload client (not by a UI fallback)', () => {
+      const knowledgeSource = readFile('api/knowledge.ts')
+      expect(knowledgeSource).toContain('isKnowledgeUploadEndpointMissing(normalized)')
+      expect(readFile('views/KnowledgeView.vue')).not.toContain('isKnowledgeUploadEndpointMissing(')
     })
   })
 

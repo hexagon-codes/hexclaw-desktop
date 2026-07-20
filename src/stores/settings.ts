@@ -10,7 +10,6 @@ import type {
   AppConfig,
   ProviderConfig,
   ApiError,
-  ModelCapability,
   ModelOption,
   SecurityConfig,
   SandboxConfig,
@@ -35,6 +34,7 @@ import {
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from './model-catalog'
 import { PROVIDER_PRESETS, resolveOllamaCapabilities } from '@/config/providers'
+import { collectAvailableChatModels, isOllamaProvider } from '@/config/model-contract'
 
 export const useSettingsStore = defineStore('settings', () => {
   const fallbackSandbox = (): SandboxConfig => ({
@@ -67,40 +67,36 @@ export const useSettingsStore = defineStore('settings', () => {
     return mergeConfigProvidersWithRuntime(fromConfig, rp).filter((p) => p.enabled)
   })
 
-  const isOllamaProvider = (p: ProviderConfig) =>
-    p.type === 'ollama' ||
-    p.backendKey?.toLowerCase().includes('ollama') ||
-    p.name?.toLowerCase().includes('ollama')
-
   const cloneSecurity = (security: SecurityConfig): SecurityConfig => ({ ...security })
   const cloneSandbox = (sandbox: SandboxConfig): SandboxConfig => ({ ...sandbox })
 
-  /** 所有可用模型（来自已启用的 Provider + Ollama 实时缓存） */
-  const availableModels = computed(() => {
-    const models: {
-      providerId: string
-      providerKey: string
-      providerName: string
-      modelId: string
-      modelName: string
-      capabilities: ModelCapability[]
-    }[] = []
-    for (const p of enabledProviders.value) {
-      // Ollama Provider 用独立缓存，不依赖 Provider.models
-      const modelList = isOllamaProvider(p) ? ollamaModelsCache.value : p.models
-      for (const m of modelList) {
-        models.push({
-          providerId: p.id,
-          providerKey: p.backendKey || p.name || p.id,
-          providerName: p.name,
-          modelId: m.id,
-          modelName: m.name,
-          capabilities: m.capabilities ?? ['text'],
-        })
-      }
+  /** 仅回灌服务端身份字段；前端 id、展示名、模型和真实/secure API Key 均以目标对象为准。 */
+  const mergeProviderRuntimeIdentities = (
+    targetProviders: ProviderConfig[],
+    runtimeIdentityProviders: ProviderConfig[],
+  ): ProviderConfig[] => targetProviders.map((provider) => {
+    const runtime = runtimeIdentityProviders.find((candidate) =>
+      candidate.id === provider.id ||
+      Boolean(
+        provider.providerInstanceId &&
+        candidate.providerInstanceId === provider.providerInstanceId,
+      ) ||
+      Boolean(candidate.backendKey && providerMatchesBackendKey(provider, candidate.backendKey)),
+    )
+    if (!runtime) return provider
+    return {
+      ...provider,
+      ...(runtime.providerInstanceId
+        ? { providerInstanceId: runtime.providerInstanceId }
+        : {}),
+      ...(runtime.backendKey ? { backendKey: runtime.backendKey } : {}),
     }
-    return models
   })
+
+  /** 所有可用模型（来自已启用的 Provider + Ollama 实时缓存） */
+  const availableModels = computed(() =>
+    collectAvailableChatModels(enabledProviders.value, ollamaModelsCache.value),
+  )
 
   /** 并发锁：防止 loadConfig 被多次并发调用 */
   let loadConfigPromise: Promise<void> | null = null
@@ -156,7 +152,9 @@ export const useSettingsStore = defineStore('settings', () => {
           const { LazyStore } = await import('@tauri-apps/plugin-store')
           const store = new LazyStore(CONFIG_STORE_FILE)
           savedConfig = (await store.get<AppConfig>(CONFIG_STORE_KEY)) ?? null
-          logger.debug('Tauri Store 读取配置:', savedConfig)
+          logger.debug('Tauri Store 配置已读取', {
+            providerCount: savedConfig?.llm?.providers?.length ?? 0,
+          })
         } catch (e) {
           logger.warn('Tauri Store 读取配置失败', e)
         }
@@ -240,14 +238,20 @@ export const useSettingsStore = defineStore('settings', () => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         const backendConfig = await getLLMConfig()
-        logger.debug('后端 LLM 配置原始数据', backendConfig)
+        logger.debug('后端 LLM 配置已读取', {
+          providerCount: Object.keys(backendConfig.providers).length,
+          defaultProvider: backendConfig.default,
+        })
         const localProviders = config.value?.llm.providers ?? []
         const liveProviders = await restoreProviderApiKeys(
           backendToProviders(backendConfig, localProviders),
         )
         const providers = appendLocalProvidersMissingFromRuntime(liveProviders, localProviders)
 
-        logger.debug('转换后的 providers', providers)
+        logger.debug('Provider 配置已转换', {
+          providerCount: providers.length,
+          providerIds: providers.map((provider) => provider.providerInstanceId || provider.backendKey || provider.id),
+        })
         runtimeProviders.value = cloneProviders(providers)
         config.value!.llm.providers = providers
         config.value!.llm.routing = {
@@ -332,6 +336,14 @@ export const useSettingsStore = defineStore('settings', () => {
     config.value = plainConfig
 
     const persistJob = async () => {
+      // 前一项排队保存可能刚拿到服务端身份；构造本次 payload 前先吸收，避免并发重命名漂移 key。
+      plainConfig.llm.providers = mergeProviderRuntimeIdentities(
+        plainConfig.llm.providers,
+        [
+          ...(runtimeProviders.value ?? []),
+          ...(config.value?.llm.providers ?? []),
+        ],
+      )
       await syncProviderApiKeys(plainConfig.llm.providers, previousProviders)
 
       // LLM 配置保存到后端 API
@@ -343,7 +355,10 @@ export const useSettingsStore = defineStore('settings', () => {
           plainConfig.llm.routing,
         )
         await updateLLMConfig(backendConfig)
-        logger.debug('LLM 配置已保存到后端', backendConfig)
+        logger.debug('LLM 配置已保存到后端', {
+          providerCount: Object.keys(backendConfig.providers).length,
+          defaultProvider: backendConfig.default,
+        })
         const backendSnap = await getLLMConfig()
         const liveAfterSave = await restoreProviderApiKeys(
           backendToProviders(backendSnap, plainConfig.llm.providers),
@@ -352,6 +367,16 @@ export const useSettingsStore = defineStore('settings', () => {
           liveAfterSave,
           plainConfig.llm.providers,
         )
+        plainConfig.llm.providers = mergeProviderRuntimeIdentities(
+          plainConfig.llm.providers,
+          mergedAfterSave,
+        )
+        if (config.value) {
+          config.value.llm.providers = mergeProviderRuntimeIdentities(
+            config.value.llm.providers,
+            mergedAfterSave,
+          )
+        }
         runtimeProviders.value = cloneProviders(mergedAfterSave)
       } catch (e) {
         logger.error('LLM 配置保存到后端失败', e)
@@ -520,7 +545,7 @@ export const useSettingsStore = defineStore('settings', () => {
         id: m.name,
         name: m.name,
         // 先查 Ollama preset 白名单（按 base ID 去 tag 匹配），未命中走名称正则推断 vision
-        capabilities: resolveOllamaCapabilities(m.name) as ModelCapability[],
+        capabilities: resolveOllamaCapabilities(m.name),
       }))
     } catch { /* Ollama 可能未运行 */ }
   }

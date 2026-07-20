@@ -363,7 +363,12 @@ describe('Chain 1: Chat Message Flow', () => {
       expect.any(Object),
       '',
       undefined,
-      { pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'default',
+        user_locale: 'zh-CN',
+        locale: 'zh-CN',
+        producer_kind: 'chat',
+      }),
       expect.any(String),
     )
     expect(assistantMsg).not.toBeNull()
@@ -403,7 +408,12 @@ describe('Chain 1: Chat Message Flow', () => {
       expect.any(Object),
       '',
       undefined,
-      { pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'default',
+        user_locale: 'zh-CN',
+        locale: 'zh-CN',
+        producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })
@@ -862,7 +872,14 @@ describe('Chain 6: Model Selection & Parameters', () => {
       '',
       undefined,
       // metadata：F-2 把温度/MaxTokens 映射为后端消费的 agent_temperature/agent_max_tokens
-      { agent_temperature: '0.5', agent_max_tokens: '2048', pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        agent_temperature: '0.5',
+        agent_max_tokens: '2048',
+        pinned_agent: 'default',
+        user_locale: 'zh-CN',
+        locale: 'zh-CN',
+        producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })
@@ -893,7 +910,14 @@ describe('Chain 6: Model Selection & Parameters', () => {
       undefined,
       expect.any(Object),
       // metadata：F-2 把温度/MaxTokens 映射为后端消费的 agent_temperature/agent_max_tokens
-      { agent_temperature: '0.7', agent_max_tokens: '4096', pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        agent_temperature: '0.7',
+        agent_max_tokens: '4096',
+        pinned_agent: 'default',
+        user_locale: 'zh-CN',
+        locale: 'zh-CN',
+        producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })
@@ -914,7 +938,12 @@ describe('Chain 6: Model Selection & Parameters', () => {
       { model: 'gpt-4o' },
       'researcher',
       undefined,
-      { pinned_agent: 'researcher', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'researcher',
+        user_locale: 'zh-CN',
+        locale: 'zh-CN',
+        producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })

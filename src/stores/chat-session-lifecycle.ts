@@ -84,6 +84,9 @@ export function createChatSessionLifecycleController(params: {
         logger.warn('创建会话失败', errorValue)
       }
       currentSessionId.value = id
+      // 新会话一经创建就已经是当前会话；即使尚未发送首条消息，也必须成为重载恢复目标。
+      // 否则 Agent/FTUE 深链预创建的空会话刷新后会停在无选中态，连带丢失会话绑定与场景 UI。
+      msgSvc.setLastSessionId(id)
       syncStreamingMirrors()
       upsertLocalSession({
         id,

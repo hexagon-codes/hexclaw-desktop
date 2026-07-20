@@ -779,7 +779,7 @@ async function handleUnregisterAgent() {
       <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
     </div>
 
-    <div class="flex-1 overflow-y-auto p-6">
+    <div class="hc-agents__content flex-1 overflow-y-auto p-6">
       <!-- ── 我的智能体：小蟹默认助理 hero + 专属智能体 roster ── -->
       <template v-if="activeTab === 'mine'">
       <LoadingState v-if="agentsLoading" />
@@ -1479,6 +1479,10 @@ async function handleUnregisterAgent() {
 
 <style scoped>
 /* ── 卡片布局（对齐原型 app.html cxcard 系列） ── */
+.hc-agents__content {
+  container-type: inline-size;
+}
+
 .hc-cxsec {
   display: flex;
   align-items: baseline;
@@ -1683,7 +1687,7 @@ button.hc-cxcard {
   color: var(--hc-text-muted);
 }
 
-@media (max-width: 720px) {
+@container (max-width: 720px) {
   .hc-cxcards { grid-template-columns: 1fr; }
 }
 

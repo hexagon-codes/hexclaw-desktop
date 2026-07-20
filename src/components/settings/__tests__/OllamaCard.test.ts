@@ -6,6 +6,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 
 const getOllamaStatus = vi.hoisted(() => vi.fn())
 const getOllamaRunning = vi.hoisted(() => vi.fn())
+const getOllamaRunningResult = vi.hoisted(() => vi.fn())
 const syncOllamaModels = vi.hoisted(() => vi.fn())
 const settingsStore = {
   config: { llm: { providers: [{ id: 'openai-1', type: 'openai', enabled: true }] } },
@@ -15,6 +16,7 @@ const settingsStore = {
 vi.mock('@/api/ollama', () => ({
   getOllamaStatus,
   getOllamaRunning,
+  getOllamaRunningResult,
   pullOllamaModel: vi.fn(),
   unloadOllamaModel: vi.fn(),
   deleteOllamaModel: vi.fn(),
@@ -55,6 +57,7 @@ describe('OllamaCard integration', () => {
     vi.clearAllMocks()
     getOllamaStatus.mockResolvedValue({ running: true, associated: true, models: [] })
     getOllamaRunning.mockResolvedValue([])
+    getOllamaRunningResult.mockResolvedValue({ models: [], reachable: true })
     settingsStore.config.llm.providers = [{ id: 'openai-1', type: 'openai', enabled: true }]
   })
 
@@ -70,7 +73,7 @@ describe('OllamaCard integration', () => {
 
     expect(wrapper.emitted('associate')).toBeDefined()
     expect(syncOllamaModels).toHaveBeenCalledTimes(1)
-    expect(getOllamaRunning).toHaveBeenCalled()
+    expect(getOllamaRunningResult).toHaveBeenCalled()
   })
 
   it('shows associated state when status reports running and a provider exists', async () => {
@@ -81,5 +84,40 @@ describe('OllamaCard integration', () => {
     await flushPromises()
     // No enabled Ollama provider in the mock store, so stateLabel shows '已禁用'
     expect(wrapper.text()).toContain('已禁用')
+  })
+
+  it('[bug] shows daemon-unreachable as unknown instead of claiming every model is idle', async () => {
+    getOllamaStatus.mockResolvedValue({
+      running: true,
+      associated: true,
+      models: [{ name: 'qwen3.5:9b', size: 1 }],
+    })
+    getOllamaRunningResult.mockResolvedValue({
+      models: [],
+      reachable: false,
+      error: 'connection refused',
+    })
+
+    const wrapper = mount(OllamaCard, { global: { plugins: [createI18nInstance()] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="ollama-running-unreachable"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="ollama-running-empty"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="ollama-model-running-unknown"]').exists()).toBe(true)
+  })
+
+  it('shows an explicit empty-running state only when /api/ps is reachable', async () => {
+    getOllamaStatus.mockResolvedValue({
+      running: true,
+      associated: true,
+      models: [{ name: 'qwen3.5:9b', size: 1 }],
+    })
+    getOllamaRunningResult.mockResolvedValue({ models: [], reachable: true })
+
+    const wrapper = mount(OllamaCard, { global: { plugins: [createI18nInstance()] } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="ollama-running-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="ollama-running-unreachable"]').exists()).toBe(false)
   })
 })

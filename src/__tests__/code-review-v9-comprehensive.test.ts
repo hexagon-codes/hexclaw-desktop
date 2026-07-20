@@ -306,7 +306,7 @@ describe('Issue #5: Canvas workflow functions silently catch ALL errors', () => 
 
   it('listPanels and getPanel do NOT silently catch — they propagate errors', () => {
     // These non-workflow functions correctly let errors propagate
-    expect(canvasTs).toMatch(/function listPanels\(\)[\s\S]*?return apiGet/)
+    expect(canvasTs).toMatch(/function listPanels\([^)]*\)[\s\S]*?return apiGet/)
     expect(canvasTs).toMatch(/function getPanel\(id[\s\S]*?return apiGet/)
     // Neither has a try/catch
     const listBlock = canvasTs.match(/function listPanels\(\)[^}]+\}/s)?.[0] || ''
@@ -724,7 +724,7 @@ describe('config.ts proxy usage only uses supported HTTP methods', () => {
   })
 
   it('testLLMConnection uses POST (supported)', () => {
-    expect(configTs).toMatch(/proxyApiRequestText\('POST'/)
+    expect(configTs).toMatch(/proxyApiRequestText\(\s*'POST'/)
   })
 
   it('no function in config.ts uses PATCH or DELETE via proxy', () => {

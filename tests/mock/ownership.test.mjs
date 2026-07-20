@@ -75,6 +75,8 @@ const runCLI = ({
       lane,
       '--mockserver-image',
       `mockserver/mockserver:7.4.0@sha256:${'a'.repeat(64)}`,
+      '--gateway-image',
+      `haproxy:3.2.21-alpine@sha256:${'b'.repeat(64)}`,
       ...extraArgs,
     ],
     {
@@ -170,6 +172,10 @@ test('CLI writes a traceable manifest while whitelisting environment data', asyn
     reference: 'mockserver/mockserver:7.4.0',
     digest: `sha256:${'a'.repeat(64)}`,
   })
+  assert.deepEqual(manifest.loopback_gateway_image, {
+    reference: 'haproxy:3.2.21-alpine',
+    digest: `sha256:${'b'.repeat(64)}`,
+  })
   assert.equal((await stat(outputPath)).mode & 0o777, 0o600)
 
   for (const forbidden of [
@@ -244,6 +250,22 @@ test('CLI rejects unpinned MockServer images', async () => {
   })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /must be pinned by sha256 digest/i)
+  await assert.rejects(readFile(path.join(artifactDir, 'run-manifest.json')), /ENOENT/)
+})
+
+test('CLI rejects unpinned loopback gateway images', async () => {
+  const fixture = await createGitFixture()
+  const artifactDir = await mkdtemp(path.join(tmpdir(), 'hexclaw-run-unpinned-gateway-'))
+  await mkdir(path.join(fixture.root, '..', 'hexclaw-local'), { recursive: true })
+
+  const result = runCLI({
+    artifactDir,
+    desktopRoot: fixture.root,
+    fixturePath: fixture.fixturePath,
+    extraArgs: ['--gateway-image', 'haproxy:latest'],
+  })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /loopback gateway image must be pinned by sha256 digest/i)
   await assert.rejects(readFile(path.join(artifactDir, 'run-manifest.json')), /ENOENT/)
 })
 

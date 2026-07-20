@@ -137,6 +137,10 @@ export default {
     runSetupWizard: 'Not set up yet? Run the first-time setup wizard',
     inputPlaceholder: 'Type a message...',
     composerHint: " — / Skill·Prompt, {'@'} Agent",
+    connectionsUnavailable:
+      "Connection directory unavailable; {'@'} connections are temporarily unavailable",
+    connectionsEmpty:
+      "No communication connections configured; you can still {'@'} agents, skills, and knowledge",
     sendTo: 'Send to {name}',
     defaultAgent: 'Little Crab',
     mention: "{'@'} Mention Agent",
@@ -224,7 +228,8 @@ export default {
     deleteMessage: 'Delete Message',
     deleteMessageFailed: 'Failed to delete message; it may reappear after a refresh',
     deleteMessageConfirmTitle: 'Delete this message?',
-    deleteMessageConfirmMessage: 'This message will be removed from the conversation. This cannot be undone.',
+    deleteMessageConfirmMessage:
+      'This message will be removed from the conversation. This cannot be undone.',
     retryFailed: 'Failed to regenerate, your message is kept. Please try again.',
     retryWhileStreaming: 'Please wait for the current reply to finish before regenerating',
     selectModelFirst: 'Please select a model first',
@@ -239,7 +244,8 @@ export default {
     branchesLoadFailed: 'Failed to load branches',
     noBranches: 'No branches yet — click "Fork from here" on any reply to create one',
     deleteSessionConfirmTitle: 'Delete this session?',
-    deleteSessionConfirmMessage: 'This will delete "{title}" and all of its messages. This cannot be undone.',
+    deleteSessionConfirmMessage:
+      'This will delete "{title}" and all of its messages. This cannot be undone.',
     sendFailed: 'Failed to send. Please check if HexClaw service is running.',
     uploadFile: 'Upload File',
     uploadImage: 'Upload image/video/file',
@@ -313,9 +319,12 @@ export default {
     parsingDoc: 'Parsing document...',
     parsedDoc: 'Parsed',
     parsedChars: 'chars',
-    parseDocFailed: 'Could not parse "{name}". Make sure it is not corrupted/encrypted, or paste the text instead.',
-    parseDocEmpty: 'No text found in "{name}" (it may be a scanned or image-only PDF). Please paste the text instead.',
-    docPreviewExpired: 'Original-file preview is only available this session; re-upload to preview.',
+    parseDocFailed:
+      'Could not parse "{name}". Make sure it is not corrupted/encrypted, or paste the text instead.',
+    parseDocEmpty:
+      'No text found in "{name}" (it may be a scanned or image-only PDF). Please paste the text instead.',
+    docPreviewExpired:
+      'Original-file preview is only available this session; re-upload to preview.',
     docPreviewPdfOnly: 'Only PDF can be previewed in-app; open other formats in their app.',
     docPreviewFailed: 'Failed to open the original file, please retry.',
     fileImage: 'Image',
@@ -356,7 +365,8 @@ export default {
     provider: 'Provider',
     model: 'Model',
     systemPrompt: 'Persona (SOUL)',
-    systemPromptPlaceholder: 'Define this agent’s role and behavior; leave empty to use the default persona',
+    systemPromptPlaceholder:
+      'Define this agent’s role and behavior; leave empty to use the default persona',
     pin: 'Pin',
     unpin: 'Unpin',
     scenarioPinned: 'Scenario session stays pinned',
@@ -406,7 +416,8 @@ export default {
 
   agents: {
     systemPrompt: 'Persona (SOUL)',
-    systemPromptPlaceholder: 'Define the agent role and behavior; leave blank to use the default persona',
+    systemPromptPlaceholder:
+      'Define the agent role and behavior; leave blank to use the default persona',
     eyebrow: 'Agents',
     title: 'Agent Management',
     description: 'Manage Agent role definitions',
@@ -426,7 +437,8 @@ export default {
     noDesc: 'No description',
     searchPlaceholder: 'Search agents...',
     name: 'Name',
-    nameHint: "Internal ID (letters/digits) for {'@'}mentions and system lookup; cannot be changed after creation",
+    nameHint:
+      "Internal ID (letters/digits) for {'@'}mentions and system lookup; cannot be changed after creation",
     displayName: 'Display Name',
     displayNameHint: 'The name shown in the UI and conversations; editable anytime',
     goal: 'Goal',
@@ -450,7 +462,8 @@ export default {
     registeredAgents: 'My Agents',
     useGlobalDefault: 'Use global default',
     modelPreference: 'Model preference',
-    modelPreferenceHint: 'Auto-switch to this model when entering this agent conversation. Leave empty to use the global default.',
+    modelPreferenceHint:
+      'Auto-switch to this model when entering this agent conversation. Leave empty to use the global default.',
     deployTo: 'Deploy...',
     undeployFrom: 'Remove from {platform}',
     rulesDesc: 'Routing Rules',
@@ -501,11 +514,13 @@ export default {
       previewTitle: 'Final injection preview',
       previewRendered: 'Rendered',
       previewRaw: 'Raw',
-      applyNote: 'On apply, free sections are assembled into the SOUL text; auto sections stay assembly-time',
+      applyNote:
+        'On apply, free sections are assembled into the SOUL text; auto sections stay assembly-time',
       apply: 'Apply & backfill',
     },
     imFallback: 'IM fallback',
-    imFallbackTitle: "Takes over IM channels with no bound agent; desktop chats always go to Little Crab or the agent you {'@'}",
+    imFallbackTitle:
+      "Takes over IM channels with no bound agent; desktop chats always go to Little Crab or the agent you {'@'}",
     loadAgentsFailed: 'Failed to load agents',
     loadRulesFailed: 'Failed to load routing rules',
     setDefaultFailed: 'Failed to set default agent',
@@ -522,8 +537,10 @@ export default {
     unregisterAgentFailed: 'Failed to unregister agent',
     duplicateName: 'An agent named "{name}" already exists',
     formIncomplete: 'Please fill in all required fields',
-    noRuntimeProviders: 'No runtime-ready models are available. Apply at least one provider in Settings first.',
-    cannotDeleteDefault: 'Cannot delete "{name}" because it is the current default agent. Change the default first.',
+    noRuntimeProviders:
+      'No runtime-ready models are available. Apply at least one provider in Settings first.',
+    cannotDeleteDefault:
+      'Cannot delete "{name}" because it is the current default agent. Change the default first.',
     constraints: 'Constraints',
     noMoreDetail: 'No more details',
     registerAgentFirst: 'Please create an Agent in "My Agents" first',
@@ -541,19 +558,23 @@ export default {
     defaultAssistantMeta: 'Takes over when no other agent is selected · SOUL persona editable',
     editSoul: 'Edit SOUL',
     soulField: 'Persona (SOUL)',
-    soulFieldPh: "Describe this agent's identity, tone, expertise and boundaries. Leave empty to use the global default persona.",
-    soulFieldHint: 'Leave empty to use the global default persona; otherwise describe identity, tone, expertise and boundaries.',
+    soulFieldPh:
+      "Describe this agent's identity, tone, expertise and boundaries. Leave empty to use the global default persona.",
+    soulFieldHint:
+      'Leave empty to use the global default persona; otherwise describe identity, tone, expertise and boundaries.',
     soul: {
       title: 'Edit SOUL',
       subtitle: 'Little Crab · default assistant · stored locally at ~/.hexclaw/SOUL.md',
       label: 'Custom persona',
       stateCustom: 'Customized',
       stateDefault: 'Built-in default',
-      placeholder: "Describe Little Crab's identity, tone, expertise and boundaries. Leave empty to use the engine's built-in default persona.",
+      placeholder:
+        "Describe Little Crab's identity, tone, expertise and boundaries. Leave empty to use the engine's built-in default persona.",
       hint: 'The engine reads this file every turn; changes take effect on the next turn — no restart needed.',
       viewDefault: 'View built-in default persona',
       restoreDefault: 'Restore default',
-      loadError: 'Engine not connected; cannot read the current persona. Saving will apply once the engine is back.',
+      loadError:
+        'Engine not connected; cannot read the current persona. Saving will apply once the engine is back.',
       saved: 'Persona saved — effective on the next turn',
       restored: 'Restored the built-in default persona',
       saveFailed: 'Failed to save persona; please make sure the engine is connected',
@@ -677,7 +698,8 @@ export default {
     chatIdPlaceholder: 'e.g. Feishu chat_id / group ID',
     chatIdHint: 'Required for IM/connection delivery — which chat or group to send to',
     continuousLabel: 'Continuous task',
-    continuousHint: 'Advance a long goal across multiple runs — each tick does just the next increment, with a checkpoint (survives restart); auto-finishes when the goal is done or stalls.',
+    continuousHint:
+      'Advance a long goal across multiple runs — each tick does just the next increment, with a checkpoint (survives restart); auto-finishes when the goal is done or stalls.',
     deliverChannel: {
       chat: 'Current chat',
       push: 'System push',
@@ -772,11 +794,14 @@ export default {
       taskLine: 'Silent preflight for "{name}" found the following:',
       autoTitle: 'Auto-approved by the current profile (no approval needed)',
       needsTitle: 'Needs your decision',
-      estimateNote: 'The capability list is an estimate: misses are caught at runtime, extras never create any grant.',
+      estimateNote:
+        'The capability list is an estimate: misses are caught at runtime, extras never create any grant.',
       grantTitle: 'Grant this task only (recommended)',
-      grantDesc: 'Creates a task-scoped grant: only this task may use these capabilities; global defaults stay unchanged; deleting the task revokes it.',
+      grantDesc:
+        'Creates a task-scoped grant: only this task may use these capabilities; global defaults stay unchanged; deleting the task revokes it.',
       laterTitle: 'Skip granting for now',
-      laterDesc: 'When triggered, ungranted capabilities are intercepted into "pending" — never silently escalated, never silently failed.',
+      laterDesc:
+        'When triggered, ungranted capabilities are intercepted into "pending" — never silently escalated, never silently failed.',
       pausedTitle: 'Save as paused',
       pausedDesc: 'Freezes the task without scheduling; grant and enable later from the task card.',
       back: 'Back to editing',
@@ -806,7 +831,8 @@ export default {
       endpoint: 'Receiving endpoint (copy to the source service)',
       generatedSecret: 'Signing secret (shown once — copy it now)',
       secretCopied: 'Secret copied',
-      testNote: 'Real events return 423 (recorded, not dispatched); append ?test=1 to send a signed test event.',
+      testNote:
+        'Real events return 423 (recorded, not dispatched); append ?test=1 to send a signed test event.',
       needsTitle: 'Capabilities to grant before enabling',
       allClear: 'All estimated capabilities auto-approved — safe to enable',
       keepDisabled: 'Done (keep disabled)',
@@ -824,19 +850,23 @@ export default {
       advanced: 'Advanced',
       functionFirstLead: 'Everyday capabilities auto-run; high-consequence go to approval',
       functionFirstGuard: 'high-consequence actions still ask you first',
-      functionFirstDesc: 'Read, browse, sandboxed exec, workspace edits and messaging run automatically; host exec, connector writes, publishing and capability changes go to approval.',
+      functionFirstDesc:
+        'Read, browse, sandboxed exec, workspace edits and messaging run automatically; host exec, connector writes, publishing and capability changes go to approval.',
       strict: 'Strict approval',
       strictLead: 'Every automated task asks you first',
       strictGuard: 'every automated task asks you first',
-      strictDesc: 'All automated actions require confirmation. Good while observing newly connected external triggers.',
+      strictDesc:
+        'All automated actions require confirmation. Good while observing newly connected external triggers.',
       fullAccess: 'Full access',
       fullAccessLead: 'Everything auto-approved; trusted machine only',
       fullAccessGuard: 'everything auto-approved, no extra confirmation',
-      fullAccessDesc: 'Everything auto-approved. Trusted single-user machine only; requires high-consequence confirmation and forced auditing.',
+      fullAccessDesc:
+        'Everything auto-approved. Trusted single-user machine only; requires high-consequence confirmation and forced auditing.',
       switched: 'Automation level switched and applied immediately',
       switchFailed: 'Switch failed',
       balanced: 'Balanced',
-      balancedGuard: 'reads, browsing, file edits and messaging run automatically; anything that executes code (even sandboxed) asks you first',
+      balancedGuard:
+        'reads, browsing, file edits and messaging run automatically; anything that executes code (even sandboxed) asks you first',
     },
     settings: {
       sectionTitle: 'Automation permissions',
@@ -850,28 +880,33 @@ export default {
       metricTasks: 'Automation tasks',
       metricGrants: 'Active task grants',
       pendingTitle: 'Pending actions',
-      allClear: 'No permission actions to handle; high-consequence capabilities still run via task grants or runtime approval.',
+      allClear:
+        'No permission actions to handle; high-consequence capabilities still run via task grants or runtime approval.',
       pendingAction: 'Resolve',
       logTitle: 'Recent permission decisions (persisted audit)',
       showAllLog: 'Show all ({n})',
       collapseLog: 'Collapse',
       noLog: 'No permission decisions yet — records accrue as automation runs.',
       matrixTitle: 'Effective policy matrix (read-only)',
-      matrixNote: 'Answers "why blocked / why allowed": sandboxed vs host exec are two trust tiers — external sources only auto-run sandboxed exec. Connector (MCP) tools have no built-in category and need task grants when unattended.',
+      matrixNote:
+        'Answers "why blocked / why allowed": sandboxed vs host exec are two trust tiers — external sources only auto-run sandboxed exec. Connector (MCP) tools have no built-in category and need task grants when unattended.',
       matrixCapability: 'Capability',
       legendAuto: 'Auto-approved',
       legendApproval: 'Needs approval',
       cellAuto: 'Auto',
       cellApproval: 'Approval',
-      cardlessNote: 'Currently on the "{name}" level (set via config file or API, not among the cards above); pick any card to switch away.',
+      cardlessNote:
+        'Currently on the "{name}" level (set via config file or API, not among the cards above); pick any card to switch away.',
     },
     fullAccess: {
       title: 'Enable full access?',
       desc: 'Once enabled, cron, webhook, heartbeat, workflow and spawn dispatches auto-run every capability — including host command execution, external writes and publishing. Explicit deny rules still win; every decision is force-audited.',
       envTitle: 'Environment',
-      envDesc: 'Confirm this is a trusted single-user machine; not recommended where others have access.',
+      envDesc:
+        'Confirm this is a trusted single-user machine; not recommended where others have access.',
       altTitle: 'What you usually want instead',
-      altDesc: 'Task-scoped grants from the create flow or task card — minimal scope, revoked when the task is deleted.',
+      altDesc:
+        'Task-scoped grants from the create flow or task card — minimal scope, revoked when the task is deleted.',
       confirm: 'I understand, enable full access',
     },
     grants: {
@@ -898,7 +933,8 @@ export default {
   // Automation · Workflows tab (linear orchestration canvas)
   workflow: {
     emptyTitle: 'No workflows yet',
-    emptyDesc: 'Chain Trigger → Model → Tool → Output into a reusable linear flow so the agent runs a task pipeline automatically.',
+    emptyDesc:
+      'Chain Trigger → Model → Tool → Output into a reusable linear flow so the agent runs a task pipeline automatically.',
     linearLabel: 'Linear orchestration · Trigger → Model → Tool → Output',
     steps: '{n} steps',
     nodeTrigger: 'Trigger / Input',
@@ -909,7 +945,8 @@ export default {
     nodeOutput: 'Output',
     summaryNoRoles: '(no parallel roles set)',
     fieldRoles: 'Parallel roles',
-    fieldRolesHint: 'Comma / newline separated, e.g. researcher, coder, analyst — each processes the same input concurrently, then merged',
+    fieldRolesHint:
+      'Comma / newline separated, e.g. researcher, coder, analyst — each processes the same input concurrently, then merged',
     nodeEdit: 'Edit',
     addStep: 'Add step',
     addStepHint: 'Add step: Model / Tool / Condition / Output',
@@ -961,7 +998,8 @@ export default {
     noteChain: 'Trigger → Model → Tool → Output',
     noteMid1: ' into a reusable ',
     noteLinear: 'linear',
-    notePost: ' flow; scheduled tasks / webhooks act as the trigger step, and steps pass artifacts via context_from. Branch / merge (non-linear DAG) is under evaluation for later versions.',
+    notePost:
+      ' flow; scheduled tasks / webhooks act as the trigger step, and steps pass artifacts via context_from. Branch / merge (non-linear DAG) is under evaluation for later versions.',
   },
 
   channels: {
@@ -1003,7 +1041,8 @@ export default {
     tabAll: 'All',
     tabMemories: 'Memory',
     hint: 'Type “/” in the input to summon enabled prompts; use $ARGUMENTS as a placeholder for command arguments.',
-    cmdHint: 'When a command is summoned, $ARGUMENTS is replaced with the text you enter (plain-text substitution).',
+    cmdHint:
+      'When a command is summoned, $ARGUMENTS is replaced with the text you enter (plain-text substitution).',
     new: 'New Prompt',
     editPrompt: 'Edit Prompt',
     deleteConfirm: 'Delete this prompt? This action cannot be undone.',
@@ -1113,7 +1152,8 @@ export default {
     },
     create: {
       title: 'Create Skill with AI',
-      descHint: 'Describe the skill you want in one line; AI will generate an installable SKILL.md.',
+      descHint:
+        'Describe the skill you want in one line; AI will generate an installable SKILL.md.',
       descPlaceholder: 'e.g. A skill that turns meeting notes into an action-item checklist',
       generate: 'Generate',
       generating: 'Generating…',
@@ -1150,7 +1190,8 @@ export default {
   knowledge: {
     embedding: {
       inactiveTitle: 'Semantic retrieval inactive',
-      inactiveDesc: 'No local embedding model installed; automatic knowledge citations in chat are dormant (document management and manual search are unaffected).',
+      inactiveDesc:
+        'No local embedding model installed; automatic knowledge citations in chat are dormant (document management and manual search are unaffected).',
       installCta: 'Install embedding model',
       installing: 'Installing',
     },
@@ -1159,6 +1200,7 @@ export default {
       modelLabel: 'Index model',
       modelHint: 'Automatic selection is usually the simplest choice, or pin a specific model.',
       auto: 'Automatic',
+      autoRecommended: 'Automatic (Recommended)',
       recommended: 'Recommended',
       cloudGroup: 'Cloud models',
       localGroup: 'Local models',
@@ -1179,14 +1221,71 @@ export default {
       textReady: 'Text search ready',
       currentModel: 'Currently using',
       noActiveModel: 'Currently using text search only',
-      backgroundEnhancing: 'Large-file text is searchable while the semantic index improves in the background.',
-      providerNotice: 'Cloud models are provided by the third-party Provider you configure. HexClaw only connects to and calls that service; index and query text is sent to it, and its billing and data-processing terms apply.',
+      backgroundEnhancing:
+        'Large-file text is searchable while the semantic index improves in the background.',
+      providerNotice:
+        'Cloud models are provided by the third-party Provider you configure. HexClaw only connects to and calls that service; index and query text is sent to it, and its billing and data-processing terms apply.',
       providerDocs: 'View third-party AI service details ↗',
       updated: 'Index model setting updated',
       conflict: 'This setting changed elsewhere. Please choose again.',
       loadFailed: 'Semantic index status is temporarily unavailable',
+      targetRoute: 'Target · {model}',
+      pendingSelection: 'Pending selection',
+      autoRoute: '{selection} · {provider}',
+      fixedRoute: '{model} · {location}',
+      processingItem: '1 item processing',
+      processingItems: '{count} items processing',
+      failedDesiredWithActive:
+        '{desired} · Text search is available; the semantic index is waiting to retry. {active} continues serving queries.',
+      failedDesiredWithoutActive:
+        'Keyword search remains available; {desired} · the semantic index is waiting to retry.',
+      buildingDesiredWithActive:
+        'Building a new index for {desired}; {active} continues serving queries until it is ready.',
+      buildingDesiredWithoutActive:
+        'Keyword search remains available while a new semantic index is built for {desired}.',
+      retryingDesiredWithActive:
+        '{desired} · The new index is waiting to retry; {active} continues serving queries.',
+      retryingDesiredWithoutActive:
+        'Keyword search remains available; {desired} · the semantic index is waiting to retry.',
+      disabledHint: 'Semantic indexing is off; documents remain available through keyword search.',
+      fixedLocalHint:
+        '{profile} · generated locally in the background; text is always available first.',
+      fixedCloudHint: '{profile} · processed in cloud batches; text is always available first.',
+      autoHint: '{reason}. Currently using {profile}.',
+      autoHintWithProgress:
+        '{reason}. Currently using {profile}; semantic enhancement is at {progress} chunks.',
+      actualTextOnly: 'Currently using {profile}',
+      actualProfile: 'In use: {profile}',
+      actualProfileServing: 'In use: {profile} · still serving',
+      semanticRetryPending: 'Text available · semantic index awaiting retry',
+      currentIndexBuildingProgress: 'Current index available · new index {progress}',
+      currentIndexBuilding: 'Current index available · new index enhancing',
+      textOnlyReady: 'Text-only search is ready',
+      semanticRetryWaiting: 'Current index available · waiting to retry',
+      documentsEnhancingOne: 'Current index available · enhancing 1 document',
+      documentsEnhancingMany: 'Current index available · enhancing {count} documents',
+      semanticEnhancing: 'Current index available · semantic enhancement in progress',
+      hybridReady: 'Text + semantic search ready',
+      cancelRebuild: 'Cancel rebuild',
+      cancelRebuildTitle: 'Cancel this rebuild?',
+      cancelRebuildLead: 'The current index will not be affected.',
+      cancelRebuildDetail:
+        'Completed batches from the new index will not be used for queries; text search and the current semantic index remain available.',
+      continueRebuild: 'Continue in background',
+      rebuildCancelled: 'Rebuild cancelled · current index remains available',
+      download: 'Download',
+      downloadingProgress: 'Downloading {progress}%',
+      modelInstalled: '{model} is installed and ready for local semantic indexing',
+      recommendationConfigured: 'Uses your configured embedding service first',
+      recommendationLocalDownload:
+        'A local semantic index becomes available after installing the local embedding model',
+      recommendationUnavailable:
+        'No embedding model is currently available, so text search will continue',
+      recommendationGeneric: 'The index model is selected from currently available capabilities',
+      liveStatusWithAnnouncement: '{announcement}. {status}',
     },
-    processing: 'Uploaded · parsing & indexing on the server (scans/large files are slower, please wait)',
+    processing:
+      'Uploaded · parsing & indexing on the server (scans/large files are slower, please wait)',
     indexing: 'Uploaded · building index, it will appear in the list below',
     title: 'Knowledge Base',
     description: 'Manage documents and knowledge index',
@@ -1208,6 +1307,8 @@ export default {
     ragFootnote:
       'Rerank toggle / query expansion / floor / candidate pool take effect immediately; switching the rerank model needs a sidecar restart.',
     ragRestartHint: 'Rerank model changed — restart the app for it to take effect.',
+    ragLoadFailed:
+      'Unable to read the active configuration. Editing is disabled to avoid overwriting real settings.',
     ragSaveFailed: 'Failed to save retrieval settings',
     allSources: 'All sources',
     loadMore: 'Load more',
@@ -1256,9 +1357,20 @@ export default {
     retryIndex: 'Retry Index',
     reindex: 'Reindex',
     rebuildIndex: 'Rebuild Index',
+    vectorPending: 'Semantic enhancement pending',
+    vectorBuilding: 'Semantic enhancement in progress',
+    vectorRetryWait: 'Semantic enhancement waiting to retry',
+    vectorFailed: 'Semantic enhancement failed',
+    vectorOutcomeUnknown: 'Semantic enhancement result needs verification',
+    vectorCancelled: 'Semantic enhancement cancelled',
+    vectorCancel: 'Cancel semantic enhancement',
+    vectorCancelFailed: 'Failed to cancel semantic enhancement',
     reindexUnavailable: 'The backend does not expose reindexing yet.',
     updatedAt: 'Updated At',
     noContentDetail: 'Document content is not available yet. Please try again later.',
+    docContentLoadFailed: 'Failed to load document content. Please try again.',
+    retryDocContent: 'Reload',
+    emptyContentDetail: 'This document has no text content to display.',
     documentSearchPlaceholder: 'Search documents...',
     searchPlaceholder: 'Enter a query to test knowledge retrieval...',
     searchDesc: 'Test knowledge retrieval. Enter a query to see matching results.',
@@ -1274,6 +1386,8 @@ export default {
     deleteFailed: 'Failed to delete document',
     searchFailed: 'Search failed',
     uploadFailed: 'Upload failed',
+    uploadAwaitingAcceptance: 'Awaiting server confirmation; reselect the same file to recover',
+    uploadReselectToRecover: 'Reselect the same file to recover',
     imageVisionRequired:
       'Image ingestion needs a vision-capable model. Configure a vision model (VLM) in Settings, then upload the image again.',
     backendDisabled: 'Knowledge is temporarily unavailable. Restart the app and try again.',
@@ -1283,6 +1397,8 @@ export default {
       'No indexable text was extracted from this file. Check the content or use a backend with OCR support.',
     unsupportedFileType: 'Unsupported file type. Supported: {types}',
     fileTooLarge: 'File exceeds the maximum size limit ({max})',
+    uploadBatchTooLarge:
+      'This upload batch exceeds the total size limit ({max}). Split it into smaller batches.',
     syncFailed: 'Sync failed, showing cached data',
     syncing: 'Syncing...',
     retrySync: 'Retry',
@@ -1308,11 +1424,14 @@ export default {
         off: 'No automatic capture — manual adds or explicit asks only',
       },
       recallFloor: 'Recall relevance floor',
-      recallFloorHint: 'Memories below this relevance are not injected; only applies with an embedding model, 0 = off',
+      recallFloorHint:
+        'Memories below this relevance are not injected; only applies with an embedding model, 0 = off',
       activeRecall: 'Active session recall',
-      activeRecallHint: 'Before replying, automatically surface relevant context from past sessions',
+      activeRecallHint:
+        'Before replying, automatically surface relevant context from past sessions',
       profileDistill: 'Periodic profile distillation',
-      profileDistillHint: 'Periodically synthesizes scattered facts into a stable user profile (source of the card above)',
+      profileDistillHint:
+        'Periodically synthesizes scattered facts into a stable user profile (source of the card above)',
       profileTitle: 'User profile',
       profileMeta: 'Generated by periodic distillation',
       restartHint: 'Profile distillation setting saved; restart the app to apply.',
@@ -1600,7 +1719,8 @@ export default {
     },
     email: {
       detectIdle: 'Enter your email to auto-detect the provider and configure SMTP / IMAP',
-      detectOk: '✓ Detected {name} · auto-configured SMTP {smtp} / IMAP {imap}, no manual entry needed',
+      detectOk:
+        '✓ Detected {name} · auto-configured SMTP {smtp} / IMAP {imap}, no manual entry needed',
       detectWarn: 'Provider not recognized, please enter SMTP / IMAP servers manually',
     },
     test: {
@@ -1608,7 +1728,8 @@ export default {
     },
     connectors: {
       emptyTitle: 'No data connections yet',
-      emptyDesc: 'Tap Add in the top right to connect databases / cloud storage / documents and other data sources',
+      emptyDesc:
+        'Tap Add in the top right to connect databases / cloud storage / documents and other data sources',
       testing: 'Testing…',
       testOk: 'Connected — {n} resources found',
       testFail: 'Connection failed',
@@ -1618,23 +1739,32 @@ export default {
       checking: 'Checking…',
       // Databases go through MCP (addMcpServer): register / status test / failure hint / required check
       mcpConnected: 'Data connection ready',
-      mcpConnecting: 'Added — connecting in the background (the first add downloads components; check status via the card Test button shortly)',
-      mcpAddFailed: 'Add failed: {msg} (the first add downloads MCP components and may be slow — try again shortly)',
+      mcpConnecting:
+        'Added — connecting in the background (the first add downloads components; check status via the card Test button shortly)',
+      mcpAddFailed:
+        'Add failed: {msg} (the first add downloads MCP components and may be slow — try again shortly)',
       mcpUnsupported: 'This data source is not supported yet',
       mcpTestConnected: 'Connected — MCP service online',
-      mcpTestDisconnected: 'Not connected: MCP service not ready yet (the first time it may still be downloading components — retry shortly)',
-      mcpTestNotConfigured: 'Connector not configured yet — click “Edit” to fill in the connection details',
-      mcpProbeToolMissing: 'MCP service is online, but no SQL query tool belonging to this connection was found (cannot determine a probe tool)',
-      mcpProbeNoInputSchema: 'MCP tool “{tool}” exposes no input schema, so a query probe cannot be built safely',
+      mcpTestDisconnected:
+        'Not connected: MCP service not ready yet (the first time it may still be downloading components — retry shortly)',
+      mcpTestNotConfigured:
+        'Connector not configured yet — click “Edit” to fill in the connection details',
+      mcpProbeToolMissing:
+        'MCP service is online, but no SQL query tool belonging to this connection was found (cannot determine a probe tool)',
+      mcpProbeNoInputSchema:
+        'MCP tool “{tool}” exposes no input schema, so a query probe cannot be built safely',
       mcpProbeNoSqlArg: 'MCP tool “{tool}” has no recognizable SQL query field in its inputs',
       fieldRequired: 'Please fill in: {field}',
-      nameExists: 'A connection with this name already exists — pick another (same name would clash)',
+      nameExists:
+        'A connection with this name already exists — pick another (same name would clash)',
       tokenRequired: 'Please enter the access token first',
       browse: 'Browse resources',
       resources: 'Resources',
       resourcesEmpty: 'No readable resources',
-      tokenHintGithub: 'Generate a read-only token at GitHub Settings → Developer settings → Personal access token',
-      tokenHintNotion: 'Create an integration at Notion Settings → Connections, then share the pages you want to read with it',
+      tokenHintGithub:
+        'Generate a read-only token at GitHub Settings → Developer settings → Personal access token',
+      tokenHintNotion:
+        'Create an integration at Notion Settings → Connections, then share the pages you want to read with it',
       newInstance: 'Add data connection',
       selectType: 'Choose the type of data source to connect',
       deleteConfirmTitle: 'Delete connector',
@@ -1740,19 +1870,23 @@ export default {
   },
 
   webhooks: {
-    description: 'Configure Webhooks to receive notifications for task completion, Agent results, and more.',
+    description:
+      'Configure Webhooks to receive notifications for task completion, Agent results, and more.',
     add: 'Add Webhook',
     namePlaceholder: 'Enter webhook name',
     nameUrlRequired: 'Name and URL are required',
     namePromptRequired: 'Name and handler instruction are required',
     prompt: 'Handler instruction',
-    promptPlaceholder: 'Agent instruction to run when an event arrives, e.g. "summarize the event and notify me"',
+    promptPlaceholder:
+      'Agent instruction to run when an event arrives, e.g. "summarize the event and notify me"',
     secret: 'Signing secret (optional)',
     secretPlaceholder: 'Used to verify request signatures; may be left empty',
-    urlAutoNote: 'A receiving URL is generated after creation — configure it in your external service to trigger.',
+    urlAutoNote:
+      'A receiving URL is generated after creation — configure it in your external service to trigger.',
     bindJob: 'Bind a task (optional)',
     jobNone: 'No task (run the handler instruction)',
-    bindJobNote: 'When an event arrives it triggers this scheduled task; the handler instruction below can be left empty.',
+    bindJobNote:
+      'When an event arrives it triggers this scheduled task; the handler instruction below can be left empty.',
     copyUrl: 'Copy URL',
     copied: 'Webhook URL copied',
     copyFailed: 'Copy failed, please copy manually',
@@ -1775,7 +1909,8 @@ export default {
     deleteFailed: 'Delete failed',
     loadFailed: 'Load failed',
     disabledTitle: 'Webhook receiving is disabled',
-    disabledDesc: 'Set webhook.enabled to true in the config file and restart the engine to use it.',
+    disabledDesc:
+      'Set webhook.enabled to true in the config file and restart the engine to use it.',
     eventTaskComplete: 'Task Complete',
     eventAgentComplete: 'Agent Complete',
     eventError: 'Error',
@@ -1949,21 +2084,26 @@ export default {
       localityAuto: 'Detect automatically (recommended)',
       localityLocal: 'Local / LAN model',
       localityCloud: 'Cloud model (including local proxy)',
-      localityHint: 'This describes where model compute and data ultimately reside. Select Cloud when Base URL is a local reverse proxy to a cloud model.',
+      localityHint:
+        'This describes where model compute and data ultimately reside. Select Cloud when Base URL is a local reverse proxy to a cloud model.',
       destinationQuestion: 'Where does this address connect?',
       destinationCloud: 'Internet service',
       destinationCloudHint: 'Requests are sent through this address to a cloud model',
       destinationLocal: 'This computer or a trusted LAN',
       destinationLocalHint: 'The model runs on a device you control',
-      privateNetworkTrustHint: 'This grants access only to the current host. A new host requires confirmation again.',
+      privateNetworkTrustHint:
+        'This grants access only to the current host. A new host requires confirmation again.',
       localService: 'Local service',
       cloudService: 'Cloud service',
       providerServiceNotice:
         'Cloud models are provided by the third-party Provider you configure. The Provider may process transmitted content.',
       providerServiceDocs: 'View third-party AI service details ↗',
-      unsafeEndpoint: 'This address is invalid or belongs to a protected system network and cannot be connected.',
-      ollamaBaseUrlHint: 'Local Ollama service address. Default port is 11434. Change the URL if you use a different port.',
-      ollamaModelsHint: 'Models are managed by the Ollama card above (download / delete). This is a read-only view.',
+      unsafeEndpoint:
+        'This address is invalid or belongs to a protected system network and cannot be connected.',
+      ollamaBaseUrlHint:
+        'Local Ollama service address. Default port is 11434. Change the URL if you use a different port.',
+      ollamaModelsHint:
+        'Models are managed by the Ollama card above (download / delete). This is a read-only view.',
       noOllamaModels: 'No models yet. Download one from the Ollama card above.',
       temperature: 'Temperature',
       maxTokens: 'Max Tokens',
@@ -1983,20 +2123,29 @@ export default {
       enabled: 'Enabled',
       disabled: 'Disabled',
       deleteProvider: 'Delete Provider',
+      deleteAction: 'Delete',
       deleteProviderConfirm: 'Are you sure you want to delete this provider?',
+      testAction: 'Test',
+      testConnection: 'Test connection',
+      untested: 'Not tested',
+      testing: 'Testing…',
+      connected: 'Connected',
       toolsLabel: 'Skill / MCP Tools',
       toolsToggle: 'Tool Access',
-      toolsDesc: 'When enabled, the model can call installed Skills and MCP tools to perform searches, calculations, and more. Recommended off for small local models.',
+      toolsDesc:
+        'When enabled, the model can call installed Skills and MCP tools to perform searches, calculations, and more. Recommended off for small local models.',
       toolsNoLimit: 'No limit',
       maxToolsLabel: 'Per-request Limit',
-      maxToolsDesc: 'Limit the number of tools per conversation. 0 means no limit. For small models, 3-5 is recommended.',
+      maxToolsDesc:
+        'Limit the number of tools per conversation. 0 means no limit. For small models, 3-5 is recommended.',
       // keep old keys for backward compat
       toolsInjection: 'Skill / MCP Tools',
       toolsAuto: 'Auto (cloud: on / local: off)',
       toolsOn: 'Always on',
       toolsOff: 'Always off',
       maxToolsHint: 'Max tools (0 = no limit)',
-      toolsHint: 'Controls whether Skill and MCP tool definitions are injected into the model. Recommended off or limited for small local models.',
+      toolsHint:
+        'Controls whether Skill and MCP tool definitions are injected into the model. Recommended off or limited for small local models.',
       deleteModel: 'Delete Model',
       deleteModelConfirm: 'Delete model "{name}"?',
       modelId: 'Model ID',
@@ -2185,7 +2334,12 @@ export default {
       associate: 'Link as Provider',
       models: 'Downloaded Models',
       noModels: 'No models downloaded. Run `ollama pull qwen2.5` to get started.',
-      noModelsInline: 'No models downloaded yet. Select or enter a model name below to download one.',
+      noModelsInline:
+        'No models downloaded yet. Select or enter a model name below to download one.',
+      runningProbeUnavailable:
+        'Unable to read model runtime status. Check that Ollama is reachable and try again.',
+      noRunningModels: 'Ollama is reachable, but no models are currently loaded in memory.',
+      runningUnknown: 'Runtime status unknown',
       loadedTitle: 'Loaded into memory. Click to unload and free resources.',
       unloading: 'Unloading...',
       running: 'Running',
@@ -2202,7 +2356,8 @@ export default {
       exceedsMemory: 'Exceeds available memory',
       downloadModel: 'Download',
       goChat: 'Go to Chat',
-      otherLocal: 'Other local LLMs (LM Studio, llama.cpp, vLLM) can be added as OpenAI-compatible providers.',
+      otherLocal:
+        'Other local LLMs (LM Studio, llama.cpp, vLLM) can be added as OpenAI-compatible providers.',
       keepAliveLabel: 'Model keep-alive',
       keepAliveDefault: 'Default (30 min)',
       keepAlive5m: '5 min (save RAM)',
@@ -2216,7 +2371,8 @@ export default {
       writingModel: 'Writing model file...',
       downloadComplete: 'Download complete',
       downloadFailed: 'Download failed',
-      modelNotDetected: 'The download stream ended, but no local model was detected. Retry or check disk space / Ollama logs.',
+      modelNotDetected:
+        'The download stream ended, but no local model was detected. Retry or check disk space / Ollama logs.',
       deleteFailed: 'Delete failed',
       stalling: 'Waiting...',
     },
@@ -2320,7 +2476,8 @@ export default {
   welcome: {
     ollamaDetecting: 'Detecting Ollama…',
     ollamaHint: 'No API key needed — models run locally and work fully offline.',
-    ollamaNoModels: 'No downloaded models yet — you can download them from Settings after onboarding.',
+    ollamaNoModels:
+      'No downloaded models yet — you can download them from Settings after onboarding.',
     ollamaNotRunning: 'Ollama not running — HexClaw will start its built-in engine automatically',
     ollamaReady: 'Ollama is ready',
     ollamaSelectModel: 'Select model',
@@ -2333,7 +2490,8 @@ export default {
     step1Title: 'Configure LLM',
     step1Desc: 'Choose provider and model, then run a real connection test',
     step2Title: 'Choose First Mode',
-    step2Desc: 'Regular chat starts with Little Crab by default, or you can jump into a specialist mode',
+    step2Desc:
+      'Regular chat starts with Little Crab by default, or you can jump into a specialist mode',
     step3Title: 'Get Started',
     step3Desc: 'Confirm the working context before your first valid chat',
     startJourney: 'Click the button below to start your AI Agent journey',
@@ -2729,7 +2887,8 @@ export default {
     programVerified: 'Program-verified',
     checked: 'Checked',
     disagree: 'Two methods disagree · please double-check',
-    disagreeHint: 'Two independent methods gave different results. I won\'t pretend to be sure—please re-check before trusting either answer.',
+    disagreeHint:
+      "Two independent methods gave different results. I won't pretend to be sure—please re-check before trusting either answer.",
     outOfScope: 'Beyond current scope · re-solved within scope',
     unverifiable: 'Cannot verify independently',
     answersLabel: 'Candidate answers',

@@ -6,7 +6,7 @@
  *
  * 修复：新增 `getConnectionsResult()` 返回 `{ connections, error? }`——
  * 200 空列表 → error 为空（未配置）；抛错（网络/权限/sidecar）→ error 被标记（故障）。
- * `getConnections()` 保留旧签名（best-effort 场景，如 @ 召唤），委托新函数。
+ * `getConnections()` 保留数组签名，但故障必须 reject；成功空数组才表示未配置。
  *
  * 注：不用 beforeEach 重置 invoke——vitest v4 下 mockReset/Clear + 异步 throw mock 会与
  * vitest-setup 的 process 级 unhandledRejection 重抛竞态产生假失败；改为每例自带实现。
@@ -48,5 +48,13 @@ describe('BUG-20260718 getConnections 故障 vs 未配置', () => {
     const list = await getConnections()
     expect(Array.isArray(list)).toBe(true)
     expect(list).toHaveLength(1)
+  })
+
+  it('[bug] getConnections 自身遇到故障必须 reject，不能再返回伪空数组', async () => {
+    invoke.mockImplementation(async () => {
+      throw new Error('proxy unreachable')
+    })
+
+    await expect(getConnections()).rejects.toThrow('proxy unreachable')
   })
 })

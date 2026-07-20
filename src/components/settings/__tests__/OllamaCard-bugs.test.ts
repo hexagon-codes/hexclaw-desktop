@@ -29,6 +29,10 @@ vi.mock('@/api/ollama', () => ({
   pullOllamaModel: (model: string, cb: (p: unknown) => void, signal?: AbortSignal) =>
     mockPullOllamaModel(model, cb, signal),
   getOllamaRunning: () => mockGetOllamaRunning(),
+  getOllamaRunningResult: async () => ({
+    models: await mockGetOllamaRunning(),
+    reachable: true,
+  }),
   unloadOllamaModel: (model: string) => mockUnloadOllamaModel(model),
   deleteOllamaModel: (name: string) => mockDeleteOllamaModel(name),
   restartOllama: () => mockRestartOllama(),

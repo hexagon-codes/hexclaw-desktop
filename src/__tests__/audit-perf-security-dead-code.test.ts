@@ -110,12 +110,10 @@ describe('Dead code: unused API exports', () => {
       const importers = files.filter((f) => {
         if (f === targetFull) return false
         const content = readFileSync(f, 'utf-8')
-        // Must contain an actual import of the function, not just re-export
-        return (
-          content.includes(fn) &&
-          content.includes('import') &&
-          !content.includes(`export * from`)
-        )
+        // Match the exact named import. A substring check reports false positives
+        // such as registerWebhookManagementExtension for registerWebhook.
+        const escaped = fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        return new RegExp(`import\\s*\\{[^}]*\\b${escaped}\\b[^}]*\\}\\s*from`, 's').test(content)
       })
 
       expect(importers).toEqual([])
@@ -194,8 +192,8 @@ describe('Performance: event listener cleanup', () => {
   const viewsWithListeners: Array<{ file: string; addPattern: string; removePattern: string }> = [
     {
       file: 'views/ChatView.vue',
-      addPattern: "document.addEventListener('keydown', handleSearchShortcut)",
-      removePattern: "document.removeEventListener('keydown', handleSearchShortcut)",
+      addPattern: "window.addEventListener('focus', refreshBackendGenStatus)",
+      removePattern: "window.removeEventListener('focus', refreshBackendGenStatus)",
     },
     {
       file: 'views/KnowledgeView.vue',

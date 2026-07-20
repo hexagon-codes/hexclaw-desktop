@@ -371,11 +371,13 @@ export async function getConnectionsResult(): Promise<ConnectionsResult> {
 }
 
 /**
- * 连接列表（best-effort 旧签名）：供 @ 召唤等「失败即退回通用渠道」的场景使用；
- * 需要区分「未配置 vs 故障」的调用方（如任务投递面板）请用 getConnectionsResult。
+ * 连接列表兼容签名。成功空数组只表示「确实未配置」；后端/权限/网络故障必须 reject，
+ * 不能再伪装成空列表。需要直接呈现错误态的 UI 可使用 getConnectionsResult。
  */
 export async function getConnections(): Promise<ConnectionSummary[]> {
-  return (await getConnectionsResult()).connections
+  const result = await getConnectionsResult()
+  if (result.error) throw new Error(result.error)
+  return result.connections
 }
 
 /** 对已保存实例执行真实运行时健康检查 */

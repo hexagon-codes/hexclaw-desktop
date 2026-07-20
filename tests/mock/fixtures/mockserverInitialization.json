@@ -216,18 +216,18 @@
       "headers": {
         "content-type": ["application/json; charset=utf-8"]
       },
-      "body": "{\"id\":\"chatcmpl_mock_k12_recognize\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"question\\\":\\\"6×7=\\\",\\\"subject\\\":\\\"数学\\\",\\\"knowledge_points\\\":[\\\"整数乘法\\\"],\\\"student_answer\\\":\\\"\\\"},{\\\"question\\\":\\\"8×7=\\\",\\\"subject\\\":\\\"数学\\\",\\\"knowledge_points\\\":[\\\"整数乘法\\\"],\\\"student_answer\\\":\\\"54\\\",\\\"bbox\\\":{\\\"x\\\":0.42,\\\"y\\\":0.48,\\\"w\\\":0.24,\\\"h\\\":0.16}}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":32,\"total_tokens\":48}}"
+      "body": "{\"id\":\"chatcmpl_mock_k12_recognize\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"problem_id\\\":\\\"worksheet-q1\\\",\\\"problem_kind\\\":\\\"standalone\\\",\\\"question\\\":\\\"6×7=\\\",\\\"canonical_markdown\\\":\\\"6×7=\\\",\\\"subject\\\":\\\"数学\\\",\\\"knowledge_points\\\":[\\\"整数乘法\\\"],\\\"answer_state\\\":\\\"blank\\\",\\\"student_answer\\\":\\\"\\\",\\\"answer_canonical_markdown\\\":\\\"\\\",\\\"recognition_confidence\\\":0.99,\\\"ocr_signals\\\":[]},{\\\"problem_id\\\":\\\"worksheet-q2\\\",\\\"problem_kind\\\":\\\"standalone\\\",\\\"question\\\":\\\"8×7=\\\",\\\"canonical_markdown\\\":\\\"8×7=\\\",\\\"subject\\\":\\\"数学\\\",\\\"knowledge_points\\\":[\\\"整数乘法\\\"],\\\"answer_state\\\":\\\"present\\\",\\\"student_answer\\\":\\\"54\\\",\\\"answer_canonical_markdown\\\":\\\"54\\\",\\\"recognition_confidence\\\":0.99,\\\"ocr_signals\\\":[]}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":64,\"total_tokens\":80}}"
     }
   },
   {
-    "id": "openai-k12-bbox-semantic-verify",
+    "id": "openai-k12-answer-locator",
     "priority": 200,
     "httpRequest": {
       "method": "POST",
       "path": "/v1/chat/completions",
       "body": {
         "type": "REGEX",
-        "regex": "(?s).*bbox 二次语义核验.*洋红色矩形.*"
+        "regex": "(?s).*批量答案定位.*bbox_1000.*"
       }
     },
     "httpResponse": {
@@ -235,7 +235,26 @@
       "headers": {
         "content-type": ["application/json; charset=utf-8"]
       },
-      "body": "{\"id\":\"chatcmpl_mock_k12_bbox\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"index\\\":1,\\\"observed_question\\\":\\\"8×7=\\\",\\\"observed_student_answer\\\":\\\"54\\\"}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":12,\"total_tokens\":20}}"
+      "body": "{\"id\":\"chatcmpl_mock_k12_answer_locator\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"index\\\":2,\\\"bbox_1000\\\":[490,480,600,620]}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":12,\"total_tokens\":20}}"
+    }
+  },
+  {
+    "id": "openai-k12-answer-transcription",
+    "priority": 210,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "REGEX",
+        "regex": "(?s).*批量答案誊录.*student_answer.*"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_k12_answer_transcription\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"index\\\":2,\\\"student_answer\\\":\\\"54\\\"}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":12,\"total_tokens\":20}}"
     }
   }
 ]

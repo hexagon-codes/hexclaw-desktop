@@ -106,8 +106,9 @@ describe('Issue 4: KnowledgeView upload uses entry reference, not index', () => 
     expect(src).toContain('entry.progress = pct')
   })
 
-  it('uses entry.status = "done" for completion', () => {
-    expect(src).toContain("entry.status = 'done'")
+  it('binds HTTP 202 to the durable job instead of declaring completion', () => {
+    expect(src).toContain('uploadsStore.attachJob(entry, accepted.document_id, accepted.job_id)')
+    expect(src).toContain('uploadsStore.markSucceeded(entry)')
   })
 
   it('uses entry.status = "error" for failure', () => {
@@ -118,12 +119,15 @@ describe('Issue 4: KnowledgeView upload uses entry reference, not index', () => 
     // entry 由 uploadsStore.track 返回（内部 reactive 并入池）——对 entry 的变更
     // 直接反映到跨挂载存活的 store 列表；上传任务在其后闭包引用 entry
     const processFilesStart = src.indexOf('async function processFiles')
-    const entryIdx = src.indexOf('const entry = uploadsStore.track', processFilesStart)
+    const entryIdx = src.indexOf('entry = uploadsStore.track', processFilesStart)
     const uploadTaskIdx = src.indexOf('uploadTasks.push', entryIdx)
 
     expect(processFilesStart).toBeGreaterThan(0)
     expect(entryIdx).toBeGreaterThan(processFilesStart)
     expect(uploadTaskIdx).toBeGreaterThan(entryIdx)
+    expect(src.slice(entryIdx, uploadTaskIdx + 1_500)).toContain(
+      'entry = uploadsStore.bindIntent(entry, intent)',
+    )
   })
 })
 

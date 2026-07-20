@@ -39,11 +39,19 @@ export interface AvailableModelLite {
   providerName: string
 }
 
+/** 当前配置中已明确声明为非聊天用途的模型身份。未知模型不在此集合中。 */
+export interface KnownNonChatModelIdentity {
+  modelId: string
+  providerId: string
+  providerKey: string
+}
+
 /** resolveSessionModel 的决策结果，由调用方落地为具体 UI 状态。 */
 export type ModelBindingResolution =
   | { kind: 'none' } // 无绑定 → 沿用默认 / Agent 决策
   | { kind: 'auto' } // 绑定到 'auto'
   | { kind: 'restore'; model: AvailableModelLite } // 绑定且模型仍可用（带最新 provider 元信息）
+  | { kind: 'non-chat'; binding: SessionModelBinding } // 当前配置已明确为非聊天模型，不得乐观恢复到 completion
   | { kind: 'unavailable'; binding: SessionModelBinding } // 绑定的模型此刻不在可用列表（多为异步未加载/Ollama 未同步）→ 调用方乐观恢复绑定本身
 
 type BindingMap = Record<string, SessionModelBinding>
@@ -123,10 +131,18 @@ export function pruneSessionModels(validIds: string[]): void {
 export function resolveSessionModel(
   sessionId: string,
   available: AvailableModelLite[],
+  knownNonChat: KnownNonChatModelIdentity[] = [],
 ): ModelBindingResolution {
   const bound = getSessionModel(sessionId)
   if (!bound) return { kind: 'none' }
   if (bound.model === 'auto') return { kind: 'auto' }
+  const explicitlyNonChat = knownNonChat.some((model) => {
+    if (model.modelId !== bound.model) return false
+    if (bound.providerId) return model.providerId === bound.providerId
+    if (bound.providerKey) return model.providerKey === bound.providerKey
+    return true
+  })
+  if (explicitlyNonChat) return { kind: 'non-chat', binding: bound }
   const match = available.find(
     (m) => m.modelId === bound.model && (!bound.providerId || m.providerId === bound.providerId),
   )
@@ -148,7 +164,7 @@ export type SessionModelAction =
  * 决定进入会话 newId 时该做什么。纯函数，无副作用。
  *
  * 关键不变量：
- * - 会话**有绑定**（restore/auto/unavailable）→ 一律恢复该会话自己的模型。其中 unavailable
+ * - 会话**有聊天绑定**（restore/auto/unavailable）→ 恢复该会话自己的模型。其中 unavailable
  *   （绑定模型此刻不在 availableModels，多为 provider/Ollama 异步未加载）→ **restore-pending 乐观恢复**，
  *   不得静默回退默认（修复 BUG-20260626：切 tab 显示默认、点开下拉才切回上次选的）。会话绑定是
  *   「该会话用哪个模型」的唯一事实源，列表补齐后由 availableModels watcher 复解析精修。
@@ -171,6 +187,8 @@ export function decideSessionModelAction(params: {
       return { kind: 'auto' }
     case 'unavailable':
       return { kind: 'restore-pending', binding: resolution.binding }
+    case 'non-chat':
+      return { kind: 'reset-default' }
     case 'none':
       if (prevId === null && userOverrodeModel && hasSelectedModel) {
         return { kind: 'bind-current' }

@@ -99,6 +99,7 @@ vi.mock('@/api/ollama', () => ({
     models: [],
   }),
   getOllamaRunning: vi.fn().mockResolvedValue([]),
+  getOllamaRunningResult: vi.fn().mockResolvedValue({ models: [], reachable: true }),
   pullOllamaModel: vi.fn(),
   deleteOllamaModel: vi.fn(),
   unloadOllamaModel: vi.fn(),

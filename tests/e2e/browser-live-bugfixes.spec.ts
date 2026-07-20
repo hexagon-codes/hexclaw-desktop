@@ -59,7 +59,7 @@ async function apiJSON<T = Record<string, unknown>>(
   })
   const text = await response.text()
   if (!response.ok()) {
-    throw new Error(`${method} ${path} failed: ${response.status()} ${text}`)
+    throw new Error(`${method} ${path} failed: ${response.status()} (body redacted)`)
   }
   return text ? (JSON.parse(text) as T) : ({} as T)
 }
@@ -447,17 +447,17 @@ async function waitForAssistantTextOrTransientError(page: Page, expected: RegExp
   while (Date.now() < deadline) {
     const pageText = await page.locator('body').innerText({ timeout: 1_000 }).catch(() => '')
     if (isTransientLLMFailureText(pageText)) {
-      throw new Error(`TRANSIENT_LLM_FAILURE: ${pageText.slice(-800)}`)
+      throw new Error('TRANSIENT_LLM_FAILURE (body redacted)')
     }
     if (/Hexagon 引擎未连接|引擎未连接/.test(pageText)) {
-      throw new Error(`LIVE_SIDECAR_DISCONNECTED: ${pageText.slice(-800)}`)
+      throw new Error('LIVE_SIDECAR_DISCONNECTED (body redacted)')
     }
     const assistant = page.getByTestId('chat-message-assistant').last()
     if (await assistant.isVisible().catch(() => false)) {
       const text = (await assistant.innerText()).replace(/\s+/g, ' ').trim()
       if (expected.test(text)) return text
       if (isTransientLLMFailureText(text)) {
-        throw new Error(`TRANSIENT_LLM_FAILURE: ${text}`)
+        throw new Error('TRANSIENT_LLM_FAILURE (body redacted)')
       }
     }
     await page.waitForTimeout(500)

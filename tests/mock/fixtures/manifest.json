@@ -120,11 +120,20 @@
       "contains_personal_data": false
     },
     {
-      "id": "openai-k12-bbox-semantic-verify",
+      "id": "openai-k12-answer-locator",
       "provider": "openai-compatible",
       "method": "POST",
       "path": "/v1/chat/completions",
       "expectation_index": 13,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-k12-answer-transcription",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 14,
       "source": "synthetic",
       "contains_personal_data": false
     }

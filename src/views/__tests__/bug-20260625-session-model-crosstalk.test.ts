@@ -328,6 +328,35 @@ describe('BUG-20260625 切换会话后会话模型被错误改变（跨会话串
     expect(vm.userOverrodeModel, '会话有显式绑定 → 视为用户覆盖，优先于 Agent/默认').toBe(true)
   })
 
+  it.each([
+    { capabilities: ['embedding'], label: 'embedding-only' },
+    { capabilities: [], label: '显式空能力' },
+  ])('历史会话绑定后来变为 $label → 回退聊天默认模型，绝不把该模型送入 completion', async ({ capabilities }) => {
+    const wrapper = mountChatView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as ChatViewVM
+    const chatStore = useChatStore()
+    const settingsStore = useSettingsStore()
+
+    settingsStore.config!.llm.providers.push({
+      id: 'p-vector', name: '向量服务', type: 'custom', backendKey: 'vector-provider',
+      enabled: true, apiKey: 'k', baseUrl: '', selectedModelId: '',
+      models: [{ id: 'vector-only', name: 'Vector only', capabilities }],
+    } as never)
+    setSessionModel('A', {
+      model: 'vector-only', providerId: 'p-vector', providerKey: 'vector-provider',
+      providerName: '向量服务', capabilities,
+    })
+
+    chatStore.currentSessionId = 'A'
+    await flushPromises()
+
+    expect(vm.selectedModel).toBe(DEFAULT_MODEL)
+    expect(vm.userOverrodeModel).toBe(false)
+    expect(chatStore.chatParams.model).toBe(DEFAULT_MODEL)
+    expect(chatStore.chatParams.model).not.toBe('vector-only')
+  })
+
   it('★BUG-20260626 续：列表补齐(availableModels 变化)后乐观恢复仍保持该模型（watcher 复解析不丢）', async () => {
     const wrapper = mountChatView()
     await flushPromises()

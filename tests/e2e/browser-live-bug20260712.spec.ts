@@ -175,7 +175,7 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await prep.locator('[data-testid="prep-send"]').click()
     const clip = await page.evaluate(() => navigator.clipboard.readText())
     expect(clip.length, '剪贴板应有辅导要点全文').toBeGreaterThan(20)
-    console.log(`[clip] 剪贴板前 60 字: ${clip.slice(0, 60).replace(/\n/g, ' ')}`)
+    console.log(`[clip] 剪贴板内容已验证，字符数=${[...clip].length}`)
 
     // 8) 🖨 打印 = 隐藏 iframe + window.print（frame 内 print 已打桩取证）
     await prep.locator('[data-testid="prep-print"]').click()

@@ -21,7 +21,10 @@ const dropdownRef = ref<HTMLUListElement | null>(null)
 const highlightIndex = ref(-1)
 const dropdownStyle = ref<Record<string, string>>({})
 
+// 新增入口只展示有正式品牌与直连契约的 Provider。
+// Ollama 可由首启向导显式纳入；custom 仅保留既有配置的编辑兼容，不再作为新增选项。
 const presets = getProviderTypes({ includeOllama: props.includeOllama })
+  .filter((preset) => preset.type !== 'custom')
 
 const selected = computed(() => presets.find((p) => p.type === props.modelValue) ?? presets[0]!)
 
@@ -174,7 +177,8 @@ watch(() => props.modelValue, () => {
     >
       <img
         :src="PROVIDER_LOGOS[selected.type]"
-        :alt="selected.name"
+        alt=""
+        aria-hidden="true"
         class="hc-provider-select__logo"
       />
       <span class="hc-provider-select__name">{{ selected.name }}</span>
@@ -209,7 +213,8 @@ watch(() => props.modelValue, () => {
           >
             <img
               :src="PROVIDER_LOGOS[preset.type]"
-              :alt="preset.name"
+              alt=""
+              aria-hidden="true"
               class="hc-provider-select__option-logo"
             />
             <span>{{ preset.name }}</span>

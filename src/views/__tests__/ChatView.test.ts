@@ -20,6 +20,11 @@ const { mockGetOllamaStatus } = vi.hoisted(() => ({
   mockGetOllamaStatus: vi.fn(),
 }))
 
+const { mockGetConnections, mockGetConnectionsResult } = vi.hoisted(() => ({
+  mockGetConnections: vi.fn(),
+  mockGetConnectionsResult: vi.fn(),
+}))
+
 const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
   mockRoute: { query: {}, path: '/chat', params: {} as Record<string, string> },
   mockRouterPush: vi.fn(),
@@ -82,6 +87,11 @@ vi.mock('@/api/config', () => ({
 
 vi.mock('@/api/ollama', () => ({
   getOllamaStatus: () => mockGetOllamaStatus(),
+}))
+
+vi.mock('@/api/im-channels', () => ({
+  getConnections: () => mockGetConnections(),
+  getConnectionsResult: () => mockGetConnectionsResult(),
 }))
 
 vi.mock('@/utils/secure-store', () => ({
@@ -207,6 +217,8 @@ describe('ChatView — E2E 关键路径', () => {
     mockRoute.path = '/chat'
     mockRoute.params = {}
     mockGetOllamaStatus.mockResolvedValue({ running: false, associated: false, model_count: 0, models: [] })
+    mockGetConnections.mockResolvedValue([])
+    mockGetConnectionsResult.mockResolvedValue({ connections: [] })
   })
 
   afterEach(() => {
@@ -281,6 +293,28 @@ describe('ChatView — E2E 关键路径', () => {
 
     // EmptyState 中包含 "开始对话" 文字
     expect(wrapper.text()).toContain('开始对话')
+  })
+
+  it('[bug] distinguishes connection-directory failure from a successful empty list', async () => {
+    mockGetConnectionsResult.mockResolvedValueOnce({
+      connections: [],
+      error: 'sidecar unavailable',
+    })
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    expect(mockGetConnectionsResult).toHaveBeenCalled()
+    expect(mockGetConnections).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(false)
+  })
+
+  it('shows a distinct empty state after the connection directory loads successfully', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(false)
   })
 
   // ────────────────────────────────────────────────────

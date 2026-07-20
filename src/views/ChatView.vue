@@ -31,7 +31,9 @@ import {
   resolveSessionModel,
   decideSessionModelAction,
   type SessionModelBinding,
+  type KnownNonChatModelIdentity,
 } from '@/stores/session-model-binding'
+import { isChatModelOption } from '@/stores/settings-helpers'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import { shouldSendOnEnter, imageSrc, scrollNavFlags, resolveChatScroll, videoPosterFromMetadata, videoDisplaySrc } from '@/utils/chat-compose'
@@ -62,7 +64,7 @@ import { knowledgeHitTitle, knowledgeHitSubtitle } from '@/utils/retrieval-hits'
 import { getSubAgentReports, isSubAgentToolCall, type SubAgentReport } from '@/utils/subagents'
 import { getSkills, type Skill } from '@/api/skills'
 import { getDocuments } from '@/api/knowledge'
-import { getConnections, type ConnectionSummary } from '@/api/im-channels'
+import { getConnectionsResult, type ConnectionSummary } from '@/api/im-channels'
 import type { KnowledgeDoc } from '@/types'
 import { setClipboard } from '@/api/desktop'
 import { appendSessionMessagesBatch } from '@/api/chat'
@@ -161,6 +163,19 @@ const isDragging = ref(false)
 const availableSkills = ref<Skill[]>([])
 const knowledgeDocs = ref<KnowledgeDoc[]>([])
 const connections = ref<ConnectionSummary[]>([])
+const connectionDirectoryState = ref<'loading' | 'ready' | 'error'>('loading')
+
+async function loadConnectionDirectory() {
+  connectionDirectoryState.value = 'loading'
+  try {
+    const result = await getConnectionsResult()
+    connections.value = result.connections
+    connectionDirectoryState.value = result.error ? 'error' : 'ready'
+  } catch {
+    connections.value = []
+    connectionDirectoryState.value = 'error'
+  }
+}
 
 // Message context menu
 const msgCtxMenu = ref<InstanceType<typeof ContextMenu>>()
@@ -1036,11 +1051,7 @@ onMounted(async () => {
       knowledgeDocs.value = r?.documents || []
     })
     .catch(() => {})
-  Promise.resolve(getConnections())
-    .then((list) => {
-      connections.value = list || []
-    })
-    .catch(() => {})
+  void loadConnectionDirectory()
 
   // 从 Agent 管理页跳转过来：复用已有同角色会话 或 新建
   const roleQuery = route.query.role as string | undefined
@@ -1153,6 +1164,22 @@ function currentModelBinding(): SessionModelBinding {
 }
 
 /**
+ * 只有当前配置已明确标成非聊天能力的模型进入阻断集合。未出现在配置里的 Ollama/异步目录
+ * 模型仍属于 unknown，继续走既有 restore-pending 乐观恢复。
+ */
+const knownNonChatModels = computed<KnownNonChatModelIdentity[]>(() =>
+  (settingsStore.config?.llm.providers ?? []).flatMap((provider) =>
+    provider.models
+      .filter((model) => !isChatModelOption(model))
+      .map((model) => ({
+        modelId: model.id,
+        providerId: provider.id,
+        providerKey: provider.backendKey || provider.name || provider.id,
+      })),
+  ),
+)
+
+/**
  * 进入某会话时按「会话绑定 > Agent > 默认」解析并落地模型选择。
  * 决策抽到纯函数 decideSessionModelAction（可单测，跨会话串模型 bug 落在这层）。
  * - restore/auto：恢复用户为该会话固定的模型（置 userOverrodeModel=true 使其生效且优先于 Agent）
@@ -1165,7 +1192,7 @@ function currentModelBinding(): SessionModelBinding {
  */
 function applySessionModel(newId: string, prevId: string | null) {
   const action = decideSessionModelAction({
-    resolution: resolveSessionModel(newId, settingsStore.availableModels),
+    resolution: resolveSessionModel(newId, settingsStore.availableModels, knownNonChatModels.value),
     prevId,
     userOverrodeModel: userOverrodeModel.value,
     hasSelectedModel: !!selectedModel.value,
@@ -2606,6 +2633,25 @@ function startSidebarResize(event: MouseEvent) {
               </div>
               <button class="hc-chat__attach-remove" @click="clearAttachmentPreview">×</button>
             </div>
+            <div
+              v-if="connectionDirectoryState === 'error'"
+              data-testid="chat-connections-error"
+              class="hc-chat__connection-state hc-chat__connection-state--error"
+              role="status"
+            >
+              <span>{{ t('chat.connectionsUnavailable') }}</span>
+              <button type="button" @click="loadConnectionDirectory">
+                {{ t('common.retry', '重试') }}
+              </button>
+            </div>
+            <div
+              v-else-if="connectionDirectoryState === 'ready' && connections.length === 0"
+              data-testid="chat-connections-empty"
+              class="hc-chat__connection-state"
+              role="status"
+            >
+              {{ t('chat.connectionsEmpty') }}
+            </div>
             <!-- 语音对话模式（audio-to-audio）— 独立媒介，不属于 composer mode 切换范畴 -->
             <VoiceChatComposer
               v-if="isVoiceChatModel"
@@ -3998,6 +4044,25 @@ function startSidebarResize(event: MouseEvent) {
 .hc-chat__input-wrap {
   max-width: min(94%, 1200px);
   margin: 0 auto;
+}
+
+.hc-chat__connection-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 4px 6px;
+  color: var(--hc-text-muted);
+  font-size: 11px;
+}
+
+.hc-chat__connection-state--error {
+  color: var(--hc-warning, #b45309);
+}
+
+.hc-chat__connection-state button {
+  color: inherit;
+  text-decoration: underline;
 }
 
 /* ─── Research Mode ───── */

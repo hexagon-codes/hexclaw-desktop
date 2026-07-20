@@ -8,6 +8,7 @@ import {
   decideSessionModelAction,
   SESSION_MODEL_STORAGE_KEY,
   type AvailableModelLite,
+  type KnownNonChatModelIdentity,
 } from '@/stores/session-model-binding'
 
 // AUDIT 2026-06-23 会话级模型绑定（普通会话切走再切回模型被重置 → 钉死不变量）
@@ -20,6 +21,10 @@ const MODELS: AvailableModelLite[] = [
   { modelId: 'glm-4-flash', providerId: 'p-zhipu', providerKey: 'zhipu', providerName: '智谱' },
   { modelId: 'gpt-strong', providerId: 'p-openai', providerKey: 'openai', providerName: 'OpenAI' },
   { modelId: 'qwen3.5:9b', providerId: 'p-ollama', providerKey: 'ollama', providerName: 'Ollama' },
+]
+
+const NON_CHAT_MODELS: KnownNonChatModelIdentity[] = [
+  { modelId: 'vector-only', providerId: 'p-openai', providerKey: 'openai' },
 ]
 
 beforeEach(() => {
@@ -112,6 +117,26 @@ describe('AUDIT session-model-binding — resolveSessionModel 解析决策', () 
     setSessionModel('S-A', { model: 'gpt-strong', providerId: 'p-openai', providerKey: 'openai' })
     expect(resolveSessionModel('S-A', MODELS).kind).toBe('restore')
   })
+
+  it('已知当前模型明确为 non-chat → kind=non-chat，不得伪装成异步未加载', () => {
+    const binding = { model: 'vector-only', providerId: 'p-openai', providerKey: 'openai' }
+    setSessionModel('S-A', binding)
+
+    expect(resolveSessionModel('S-A', MODELS, NON_CHAT_MODELS)).toEqual({
+      kind: 'non-chat',
+      binding,
+    })
+  })
+
+  it('真正未知的 Ollama 模型仍保留乐观 unavailable 恢复', () => {
+    const binding = { model: 'qwen-not-loaded:9b', providerId: 'p-ollama', providerKey: 'ollama' }
+    setSessionModel('S-A', binding)
+
+    expect(resolveSessionModel('S-A', MODELS, NON_CHAT_MODELS)).toEqual({
+      kind: 'unavailable',
+      binding,
+    })
+  })
 })
 
 // BUG-20260625 切换会话编排决策（跨会话串模型）——把「解析结果 → UI 动作」的不变量钉死。
@@ -132,6 +157,18 @@ describe('AUDIT session-model-binding — decideSessionModelAction 切换编排�
     const binding = { model: 'qwen3.5:9b', providerId: 'p-ollama', providerKey: 'ollama' }
     const action = decideSessionModelAction({ resolution: { kind: 'unavailable', binding }, prevId: 'S-prev', userOverrodeModel: false, hasSelectedModel: false })
     expect(action).toEqual({ kind: 'restore-pending', binding })
+  })
+
+  it('已知 non-chat 会话绑定 → reset-default，不得 restore-pending', () => {
+    const binding = { model: 'vector-only', providerId: 'p-openai', providerKey: 'openai' }
+    const action = decideSessionModelAction({
+      resolution: { kind: 'non-chat', binding },
+      prevId: 'S-prev',
+      userOverrodeModel: false,
+      hasSelectedModel: false,
+    })
+
+    expect(action).toEqual({ kind: 'reset-default' })
   })
 
   it('★核心修复：从「有绑定会话」切到「无绑定会话」(prevId 非空) → reset-default，不沿用上一会话模型', () => {

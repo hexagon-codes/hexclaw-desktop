@@ -218,13 +218,15 @@ describe('Frontend-Backend API Alignment', () => {
   it('knowledge upload path matches backend (no longer has fallback)', () => {
     const knowledgeSource = fs.readFileSync(path.join(API_DIR, 'knowledge.ts'), 'utf-8')
 
-    // Should use single KNOWLEDGE_UPLOAD_PATH = '/api/v1/knowledge/upload'
-    expect(knowledgeSource).toContain("const KNOWLEDGE_UPLOAD_PATH = '/api/v1/knowledge/upload'")
+    // File and manual creates share the canonical documents collection; multipart is selected by Content-Type.
+    expect(knowledgeSource).toContain('/api/v1/knowledge/documents?user_id=')
+    expect(knowledgeSource).not.toContain("'/api/v1/knowledge/upload'")
 
     // Backend should have this route
     if (backendRoutes.size === 0) return
-    const route = backendRoutes.get('/api/v1/knowledge/upload')
+    const route = backendRoutes.get('/api/v1/knowledge/documents')
     expect(route).toBeDefined()
     expect(route?.has('POST')).toBe(true)
+    expect(backendRoutes.get('/api/v1/knowledge/upload')).toBeUndefined()
   })
 })

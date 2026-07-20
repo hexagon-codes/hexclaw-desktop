@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 
-const tag = process.argv[2]
+const [firstArgument, secondArgument] = process.argv.slice(2)
+const tag = firstArgument === '--' ? secondArgument : firstArgument
 
 if (!tag) {
   console.error('Usage: node ./scripts/ci/verify-release.mjs <tag>')

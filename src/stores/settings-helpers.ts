@@ -3,16 +3,32 @@
  */
 
 import { loadSecureValue, removeSecureValue, saveSecureValue } from '@/utils/secure-store'
-import { inferCapabilitiesFromId } from '@/config/providers'
+import {
+  canonicalizeModelOption,
+  cloneModels,
+  embeddingContractForModel,
+  isChatModelOption,
+  mergeProviderModels,
+  mergeRemoteModelsIntoProvider,
+  normalizeModelCapabilities,
+  resolveProviderSelectedModelId,
+} from '@/config/model-contract'
 import { resolveEffectiveProviderLocality } from '@/utils/provider-endpoint'
 import type {
   AppConfig,
-  CatalogModel,
   ProviderConfig,
-  ModelOption,
   BackendLLMConfig,
   BackendLLMProvider,
 } from '@/types'
+
+export {
+  canonicalizeModelOption,
+  cloneModels,
+  isChatModelOption,
+  mergeRemoteModelsIntoProvider,
+  normalizeModelCapabilities,
+  resolveProviderSelectedModelId,
+}
 
 export const KNOWN_PROVIDER_TYPES = [
   'openai',
@@ -25,38 +41,11 @@ export const KNOWN_PROVIDER_TYPES = [
 ] as const
 type KnownProviderType = (typeof KNOWN_PROVIDER_TYPES)[number]
 
-export function cloneModels(models: ModelOption[] = []): ModelOption[] {
-  return models.map((model) => ({
-    ...model,
-    capabilities: model.capabilities ?? ['text'],
-  }))
-}
-
 export function cloneProviders(providers: ProviderConfig[] = []): ProviderConfig[] {
   return providers.map((provider) => ({
     ...provider,
     models: cloneModels(provider.models),
   }))
-}
-
-export function resolveProviderSelectedModelId(
-  provider: Pick<ProviderConfig, 'models' | 'selectedModelId'>,
-  preferredModelId = '',
-): string {
-  const trimmedPreferredModelId = preferredModelId.trim()
-  if (
-    trimmedPreferredModelId &&
-    provider.models.some((model) => model.id === trimmedPreferredModelId)
-  ) {
-    return trimmedPreferredModelId
-  }
-
-  const currentSelectedModelId = provider.selectedModelId?.trim() ?? ''
-  if (currentSelectedModelId && provider.models.some((model) => model.id === currentSelectedModelId)) {
-    return currentSelectedModelId
-  }
-
-  return provider.models[0]?.id ?? ''
 }
 
 function secureApiKeyKey(providerId: string): string {
@@ -163,32 +152,6 @@ export function mergeConfigProvidersWithRuntime(
   return out
 }
 
-function mergeProviderModels(
-  localProvider: ProviderConfig | undefined,
-  backendModelId: string,
-  backendModels?: string[],
-): ModelOption[] {
-  const localModels = cloneModels(localProvider?.models ?? [])
-
-  // 后端 models 列表优先 — 确保即使 Tauri Store 丢失也不丢模型
-  if (backendModels?.length) {
-    for (const modelId of backendModels) {
-      const id = modelId.trim()
-      if (id && !localModels.some((m) => m.id === id)) {
-        localModels.push({ id, name: id, capabilities: ['text'] })
-      }
-    }
-  }
-
-  // 确保当前选中模型也在列表中
-  const trimmedBackendModelId = backendModelId.trim()
-  if (trimmedBackendModelId && !localModels.some((m) => m.id === trimmedBackendModelId)) {
-    localModels.unshift({ id: trimmedBackendModelId, name: trimmedBackendModelId, capabilities: ['text'] })
-  }
-
-  return localModels
-}
-
 export function resolveDefaultModelProviderId(
   providers: ProviderConfig[],
   modelId: string,
@@ -197,7 +160,12 @@ export function resolveDefaultModelProviderId(
   if (!modelId) return ''
   const isOllama = (p: ProviderConfig) =>
     p.type === 'ollama' || (p.name?.toLowerCase().includes('ollama') ?? false)
-  const holdsModel = (p: ProviderConfig) => isOllama(p) || p.models.some((m) => m.id === modelId)
+  const holdsModel = (p: ProviderConfig) => {
+    const model = p.models.find((candidate) => candidate.id === modelId)
+    if (model) return isChatModelOption(model)
+    // Ollama keeps its live chat directory outside Provider.models.
+    return isOllama(p) && p.models.length === 0
+  }
   if (preferredProviderId) {
     const preferred = providers.find((p) => p.id === preferredProviderId)
     // 已禁用的 provider 不能成为默认（与后端 providersToBackend 跳过禁用一致，bug 2026-06-22-J）。
@@ -240,7 +208,9 @@ export function reconcileDefaultSelection(llmConfig: AppConfig['llm']) {
     )
     const fallback = existsOnDisabledOnly
       ? llmConfig.providers.find(
-          (p) => p.enabled !== false && (isOllamaProvider(p) || p.models.length > 0),
+          (p) =>
+            p.enabled !== false &&
+            ((isOllamaProvider(p) && p.models.length === 0) || p.models.some(isChatModelOption)),
         )
       : undefined
     if (fallback) {
@@ -347,6 +317,7 @@ export function backendToProviders(
     const matchedType = KNOWN_PROVIDER_TYPES.find((t) => lowerName === t || lowerName.startsWith(t))
     const nextProvider: ProviderConfig = {
       id: localProvider?.id ?? name,
+      providerInstanceId: p.provider_instance_id ?? localProvider?.providerInstanceId,
       backendKey: name,
       name: localProvider?.name ?? name,
       type: (localProvider?.type ?? matchedType ?? 'custom') as ProviderConfig['type'],
@@ -354,8 +325,9 @@ export function backendToProviders(
       enabled: p.enabled ?? true,
       baseUrl: p.base_url || localProvider?.baseUrl || '',
       apiKey: p.api_key || localProvider?.apiKey || '',
-      models: mergeProviderModels(localProvider, p.model, p.models),
+      models: mergeProviderModels(localProvider, p.model, p.models, p.model_specs),
       selectedModelId: '',
+      modelSpecsMode: p.model_specs_mode ?? 'legacy',
       locality: p.locality ?? localProvider?.locality ?? 'auto',
       localitySource: p.locality_source ?? localProvider?.localitySource,
       confirmedEndpointHost:
@@ -388,10 +360,21 @@ export function providersToBackend(
       ? defaultModel
       : resolveProviderSelectedModelId(p, p.id === defaultProviderId ? defaultModel : '')
     backendProviders[key] = {
+      ...(p.providerInstanceId ? { provider_instance_id: p.providerInstanceId } : {}),
       api_key: p.apiKey || '',
       base_url: p.baseUrl || '',
       model: selectedModelId,
       models: p.models.map((m) => m.id).filter(Boolean),
+      model_specs: p.models.map((model) => {
+        const embedding = embeddingContractForModel(model)
+        return {
+          id: model.id,
+          display_name: model.name || model.id,
+          ...(model.isCustom === undefined ? {} : { is_custom: model.isCustom }),
+          capabilities: normalizeModelCapabilities(model),
+          ...(embedding ? { embedding } : {}),
+        }
+      }),
       compatible:
         p.type === 'custom' || !KNOWN_PROVIDER_TYPES.includes(p.type as KnownProviderType)
           ? 'openai'
@@ -408,15 +391,14 @@ export function providersToBackend(
     }
   }
   // Find which provider the default model belongs to（默认 provider 必须是启用的）
-  let defaultProvider =
-    Object.entries(backendProviders).find(([, v]) => v.enabled !== false)?.[0]
-    || Object.keys(backendProviders)[0]
-    || ''
+  let defaultProvider = Object.entries(backendProviders).find(
+    ([, value]) => value.enabled !== false && Boolean(value.model),
+  )?.[0] ?? ''
   const exactDefaultProvider = providers.find(
     (provider) =>
       provider.id === defaultProviderId &&
       provider.enabled &&
-      provider.models.some((model) => model.id === defaultModel),
+      provider.models.some((model) => model.id === defaultModel && isChatModelOption(model)),
   )
   if (exactDefaultProvider) {
     // 必须与上面 backendProviders 的键解析一致（backendKey 优先），否则 backendKey≠name 时
@@ -439,23 +421,5 @@ export function providersToBackend(
       strategy: routing.strategy || 'cost-aware',
     },
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
-  }
-}
-
-/** 把远程目录中尚未启用的模型合并进 Provider 启用列表（小目录全量启用路径） */
-export function mergeRemoteModelsIntoProvider(
-  target: ProviderConfig,
-  remoteModels: CatalogModel[],
-  presetDefaults: ModelOption[],
-): void {
-  const existing = new Set(target.models.map((m) => m.id))
-  const presetCaps = new Map(presetDefaults.map((m) => [m.id, m.capabilities]))
-  for (const rm of remoteModels) {
-    if (existing.has(rm.id)) continue
-    target.models.push({
-      id: rm.id,
-      name: rm.name || rm.id,
-      capabilities: presetCaps.get(rm.id) ?? inferCapabilitiesFromId(rm.id),
-    })
   }
 }

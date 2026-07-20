@@ -250,8 +250,11 @@ export const useCanvasStore = defineStore('canvas', () => {
       if (deg === 0) queue.push(nid)
     }
     const order: string[] = []
-    while (queue.length > 0) {
-      const cur = queue.shift()!
+    // Index into the queue instead of Array.shift(): shift moves every remaining
+    // element and turns a wide DAG into O(V²) work under full-suite load.
+    let queueHead = 0
+    while (queueHead < queue.length) {
+      const cur = queue[queueHead++]!
       order.push(cur)
       for (const next of adj.get(cur) || []) {
         const newDeg = (inDeg.get(next) || 1) - 1

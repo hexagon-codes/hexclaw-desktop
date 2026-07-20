@@ -105,6 +105,34 @@ describe('cloneModels', () => {
     expect(result[1]!.capabilities).toEqual(['text'])
     expect(result[2]!.capabilities).toEqual(['vision', 'audio'])
   })
+
+  it('canonicalizes only the two approved OpenRouter embedding ids even when legacy data mislabels them', () => {
+    const result = cloneModels([
+      { id: 'nvidia/nemotron-3-embed-1b:free', name: 'Nemotron Embed' },
+      {
+        id: 'nvidia/llama-nemotron-embed-vl-1b-v2:free',
+        name: 'Nemotron Embed VL',
+        capabilities: ['text'],
+        embedding: { protocol: 'ollama_embeddings', dimension: 7, normalization: 'none' },
+      },
+      { id: 'acme/embed-chat-pro', name: 'Generic Embed Name' },
+      { id: 'acme/embed-chat-explicit', name: 'Generic Explicit Chat', capabilities: ['text'] },
+      { id: 'nvidia/nemotron-3-embed-1b', name: 'Near Match Without Free Suffix', capabilities: ['text'] },
+      { id: 'proxy/nvidia/nemotron-3-embed-1b:free', name: 'Near Match With Prefix', capabilities: ['text'] },
+      { id: 'explicit-empty', name: 'Explicit Empty', capabilities: [] },
+    ])
+
+    expect(result[0]!.capabilities).toEqual(['embedding'])
+    expect(result[1]!.capabilities).toEqual(['embedding'])
+    expect(result[1]!.embedding).toEqual({
+      protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2',
+    })
+    expect(result[2]!.capabilities).toEqual(['text'])
+    expect(result[3]!.capabilities).toEqual(['text'])
+    expect(result[4]!.capabilities).toEqual(['text'])
+    expect(result[5]!.capabilities).toEqual(['text'])
+    expect(result[6]!.capabilities).toEqual([])
+  })
 })
 
 /* ======================== cloneProviders ======================== */
@@ -179,6 +207,18 @@ describe('resolveProviderSelectedModelId', () => {
   it('handles undefined selectedModelId', () => {
     const p = { models: [makeModel('a')], selectedModelId: undefined }
     expect(resolveProviderSelectedModelId(p)).toBe('a')
+  })
+
+  it('never selects embedding-only or explicitly unclassified models for chat', () => {
+    const p = {
+      models: [
+        makeModel('embed', 'Embed', ['embedding' as ModelCapability]),
+        makeModel('unknown', 'Unknown', []),
+        makeModel('chat', 'Chat', ['text']),
+      ],
+      selectedModelId: 'embed',
+    }
+    expect(resolveProviderSelectedModelId(p, 'embed')).toBe('chat')
   })
 })
 
@@ -573,6 +613,112 @@ describe('backendToProviders', () => {
     const result = backendToProviders(backend)
     expect(result[0]!.type).toBe('openai')
   })
+
+  it('round-trips explicit model_specs without collapsing embedding or [] capabilities', () => {
+    const backend = makeBackendConfig({
+      providers: {
+        openrouter: {
+          api_key: '', base_url: '', model: 'chat', compatible: 'openai',
+          provider_instance_id: 'provider-stable-01',
+          models: ['chat', 'embed', 'unknown'],
+          model_specs_mode: 'explicit',
+          model_specs: [
+            { id: 'chat', display_name: 'Chat', capabilities: ['text'] },
+            { id: 'embed', display_name: 'Embed', capabilities: ['embedding'] },
+            { id: 'unknown', display_name: 'Unknown', capabilities: [] },
+          ],
+        },
+      },
+    })
+
+    const provider = backendToProviders(backend)[0]!
+    expect(provider.models).toEqual([
+      { id: 'chat', name: 'Chat', capabilities: ['text'] },
+      { id: 'embed', name: 'Embed', capabilities: ['embedding'] },
+      { id: 'unknown', name: 'Unknown', capabilities: [] },
+    ])
+    expect(provider.modelSpecsMode).toBe('explicit')
+    expect(provider.providerInstanceId).toBe('provider-stable-01')
+  })
+
+  it('round-trips the embedding execution contract without synthesizing one for unknown models', () => {
+    const backend = makeBackendConfig({
+      providers: {
+        openrouter: {
+          api_key: '', base_url: '', model: 'chat', compatible: 'openai',
+          model_specs_mode: 'explicit',
+          model_specs: [
+            { id: 'chat', display_name: 'Chat', capabilities: ['text'] },
+            {
+              id: 'nvidia/nemotron-3-embed-1b:free',
+              display_name: 'Nemotron Embed',
+              capabilities: ['embedding'],
+              embedding: { protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2' },
+            },
+            { id: 'vendor/unknown-vector', display_name: 'Unknown Vector', capabilities: ['embedding'] },
+          ],
+        },
+      },
+    })
+
+    const provider = backendToProviders(backend)[0]!
+    expect(provider.models[1]!.embedding).toEqual({
+      protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2',
+    })
+    expect(provider.models[2]!.embedding).toBeUndefined()
+
+    const serialized = providersToBackend([provider], 'chat', provider.id)
+    expect(serialized.providers.openrouter!.model_specs?.[1]?.embedding).toEqual({
+      protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2',
+    })
+    expect(serialized.providers.openrouter!.model_specs?.[2]?.embedding).toBeUndefined()
+  })
+
+  it('keeps ordered models when explicit model_specs is empty or partial', () => {
+    const backend = makeBackendConfig({
+      providers: {
+        empty: {
+          api_key: '', base_url: '', model: 'chat', compatible: 'openai',
+          models: ['chat', 'vector'], model_specs_mode: 'explicit', model_specs: [],
+        },
+        partial: {
+          api_key: '', base_url: '', model: 'chat', compatible: 'openai',
+          models: ['chat', 'unknown'], model_specs_mode: 'explicit',
+          model_specs: [{ id: 'chat', display_name: 'Chat', capabilities: ['text'] }],
+        },
+      },
+    })
+
+    const providers = backendToProviders(backend)
+    expect(providers.find((provider) => provider.backendKey === 'empty')?.models).toEqual([
+      { id: 'chat', name: 'chat', capabilities: [] },
+      { id: 'vector', name: 'vector', capabilities: [] },
+    ])
+    expect(providers.find((provider) => provider.backendKey === 'partial')?.models).toEqual([
+      { id: 'chat', name: 'Chat', capabilities: ['text'] },
+      { id: 'unknown', name: 'unknown', capabilities: [] },
+    ])
+  })
+
+  it('treats omitted item capabilities as legacy text but preserves explicit []', () => {
+    const backend = makeBackendConfig({
+      providers: {
+        custom: {
+          api_key: '', base_url: '', model: 'legacy-item', compatible: 'openai',
+          models: ['legacy-item', 'unclassified'], model_specs_mode: 'explicit',
+          model_specs: [
+            { id: 'legacy-item', display_name: 'Legacy item' },
+            { id: 'unclassified', display_name: 'Unclassified', capabilities: [] },
+          ],
+        },
+      },
+    })
+
+    expect(backendToProviders(backend)[0]!.models).toEqual([
+      { id: 'legacy-item', name: 'Legacy item', capabilities: ['text'] },
+      { id: 'unclassified', name: 'Unclassified', capabilities: [] },
+    ])
+  })
 })
 
 /* ======================== providersToBackend ======================== */
@@ -646,6 +792,73 @@ describe('providersToBackend', () => {
     const providers = [makeProvider({ id: 'p1', name: 'P1', models: [makeModel('m1')] })]
     const result = providersToBackend(providers, 'nonexistent-model')
     expect(result.default).toBe('P1')
+  })
+
+  it('serializes model_specs and keeps chat default isolated from embedding-only models', () => {
+    const provider = makeProvider({
+      id: 'openrouter',
+      name: 'openrouter',
+      backendKey: 'openrouter',
+      models: [
+        makeModel('embed', 'Embed', ['embedding' as ModelCapability]),
+        makeModel('chat', 'Chat', ['text']),
+        makeModel('unknown', 'Unknown', []),
+      ],
+      selectedModelId: 'embed',
+    })
+
+    const result = providersToBackend([provider], 'embed', 'openrouter')
+    expect(result.providers.openrouter!.model).toBe('chat')
+    expect(result.providers.openrouter!.provider_instance_id).toBeUndefined()
+    expect(result.providers.openrouter!.model_specs_mode).toBeUndefined()
+    expect(result.providers.openrouter!.model_specs).toEqual([
+      { id: 'embed', display_name: 'Embed', capabilities: ['embedding'] },
+      { id: 'chat', display_name: 'Chat', capabilities: ['text'] },
+      { id: 'unknown', display_name: 'Unknown', capabilities: [] },
+    ])
+  })
+
+  it('sends only a server-issued provider_instance_id and omits a new frontend id', () => {
+    const created = makeProvider({ id: 'frontend-uuid', providerInstanceId: undefined })
+    const existing = makeProvider({
+      id: 'frontend-local-id',
+      name: 'Existing',
+      backendKey: 'existing',
+      providerInstanceId: 'provider-stable-01',
+    })
+
+    const result = providersToBackend([created, existing], 'gpt-4', created.id)
+    expect(result.providers.Provider1!.provider_instance_id).toBeUndefined()
+    expect(result.providers.existing!.provider_instance_id).toBe('provider-stable-01')
+  })
+
+  it('serializes the approved OpenRouter embedding models with their exact vector contract', () => {
+    const provider = makeProvider({
+      id: 'openrouter', name: 'openrouter', backendKey: 'openrouter',
+      models: [
+        makeModel('chat', 'Chat', ['text']),
+        makeModel('nvidia/nemotron-3-embed-1b:free', 'Nemotron Embed', ['text']),
+        {
+          ...makeModel('nvidia/llama-nemotron-embed-vl-1b-v2:free', 'Nemotron Embed VL', ['vision']),
+          embedding: { protocol: 'ollama_embeddings', dimension: 7, normalization: 'none' },
+        },
+      ],
+      selectedModelId: 'chat',
+    })
+
+    const specs = providersToBackend([provider], 'chat', provider.id).providers.openrouter!.model_specs!
+    expect(specs.slice(1)).toEqual([
+      {
+        id: 'nvidia/nemotron-3-embed-1b:free', display_name: 'Nemotron Embed',
+        capabilities: ['embedding'],
+        embedding: { protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2' },
+      },
+      {
+        id: 'nvidia/llama-nemotron-embed-vl-1b-v2:free', display_name: 'Nemotron Embed VL',
+        capabilities: ['embedding'],
+        embedding: { protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2' },
+      },
+    ])
   })
 })
 

@@ -186,6 +186,8 @@ vi.mock('@/stores/settings-helpers', () => ({
   providersToBackend: vi.fn(() => ({ providers: {}, default: '', routing: { enabled: false, strategy: 'cost-aware' } })),
   appendLocalProvidersMissingFromRuntime: vi.fn((live: unknown[]) => live),
   providerMatchesBackendKey: vi.fn(() => false),
+  isChatModelOption: vi.fn((model: { capabilities?: string[] }) =>
+    (model.capabilities ?? ['text']).includes('text')),
 }))
 
 // ═══════════════════════════════════════════════════════
@@ -1071,7 +1073,13 @@ describe('Chat Service', () => {
       })
 
       await p
-      expect(callbacks.onDone).toHaveBeenCalledWith('full reply', expect.anything(), expect.anything(), undefined)
+      expect(callbacks.onDone).toHaveBeenCalledWith(
+        'full reply',
+        expect.anything(),
+        expect.anything(),
+        undefined,
+        undefined,
+      )
     })
 
     it('error message -> rejects with ChatRequestError(noFallback=true)', async () => {

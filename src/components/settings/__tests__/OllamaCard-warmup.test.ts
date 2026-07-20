@@ -33,6 +33,10 @@ const mockPullOllamaModel = vi.fn()
 vi.mock('@/api/ollama', () => ({
   getOllamaStatus: () => mockGetOllamaStatus(),
   getOllamaRunning: () => mockGetOllamaRunning(),
+  getOllamaRunningResult: async () => ({
+    models: await mockGetOllamaRunning(),
+    reachable: true,
+  }),
   loadOllamaModel: (model: string) => mockLoadOllamaModel(model),
   unloadOllamaModel: (model: string) => mockUnloadOllamaModel(model),
   deleteOllamaModel: (name: string) => mockDeleteOllamaModel(name),

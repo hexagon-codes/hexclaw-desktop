@@ -17,14 +17,52 @@ services:
       JAVA_TOOL_OPTIONS: -Xms64m -Xmx512m -XX:+ExitOnOutOfMemoryError
     volumes:
       - ./fixtures:/config:ro
-    ports:
-      - '127.0.0.1:${HEX_MOCK_PORT:-0}:1080'
     labels:
       com.hexclaw.test-stack: mock
       com.hexclaw.test-run: ${HEX_MOCK_RUN_ID:-manual}
       com.hexclaw.test-managed: 'true'
     networks:
       - mock_isolated
+
+  # Docker Engine 29 correctly suppresses host publishing on `internal`
+  # networks. Keep fixture engines internal-only and publish a separate,
+  # fixed-route TCP gateway to the host loopback interface.
+  loopback_gateway:
+    image: ${HEX_MOCK_GATEWAY_IMAGE:-haproxy:3.2.21-alpine@sha256:66e25cc9a8332635f4e897f7f4b1e5622c25f09f0ee23cddc6ce9bdb3a24772a}
+    init: true
+    restart: 'no'
+    user: '99:99'
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    pids_limit: 64
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    entrypoint:
+      - /usr/local/sbin/haproxy
+    command:
+      - -db
+      - -f
+      - /config/loopback-gateway.cfg
+    volumes:
+      - ./fixtures/loopback-gateway.cfg:/config/loopback-gateway.cfg:ro
+    depends_on:
+      mockserver:
+        condition: service_healthy
+    ports:
+      - '127.0.0.1:${HEX_MOCK_PORT:-0}:18080'
+      - '127.0.0.1:${HEX_TOXI_CONTROL_PORT:-0}:18474'
+      - '127.0.0.1:${HEX_TOXI_PROXY_PORT:-0}:18666'
+    labels:
+      com.hexclaw.test-stack: mock
+      com.hexclaw.test-run: ${HEX_MOCK_RUN_ID:-manual}
+      com.hexclaw.test-managed: 'true'
+    networks:
+      - mock_isolated
+      - loopback_published
 
   # Optional fault-injection shell. It is absent unless HEX_MOCK_CHAOS=1 makes
   # the orchestrator activate the `chaos` profile. Configure proxies through
@@ -43,9 +81,6 @@ services:
     pids_limit: 128
     tmpfs:
       - /tmp:size=16m,mode=1777
-    ports:
-      - '127.0.0.1:${HEX_TOXI_CONTROL_PORT:-0}:8474'
-      - '127.0.0.1:${HEX_TOXI_PROXY_PORT:-0}:8666'
     labels:
       com.hexclaw.test-stack: mock
       com.hexclaw.test-run: ${HEX_MOCK_RUN_ID:-manual}
@@ -54,11 +89,21 @@ services:
       - mock_isolated
 
 networks:
-  # `internal` removes container egress while published loopback ports remain
-  # reachable from the desktop host. Docker Desktop behaviour is verified by
-  # mock-stack.sh preflight/wait instead of assumed from Compose validation.
+  # Fixture engines have no connection to host interfaces and no default
+  # gateway. Only the fixed-route gateway is dual-homed.
   mock_isolated:
     internal: true
+    labels:
+      com.hexclaw.test-stack: mock
+      com.hexclaw.test-run: ${HEX_MOCK_RUN_ID:-manual}
+      com.hexclaw.test-managed: 'true'
+
+  # This network exists only so Docker can publish the hardened gateway on
+  # 127.0.0.1. The gateway configuration has no dynamic proxy or admin surface.
+  loopback_published:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.host_binding_ipv4: '127.0.0.1'
     labels:
       com.hexclaw.test-stack: mock
       com.hexclaw.test-run: ${HEX_MOCK_RUN_ID:-manual}

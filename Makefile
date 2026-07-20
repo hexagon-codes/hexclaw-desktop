@@ -25,6 +25,7 @@ LOCAL_APP_BUNDLE := $(DESKTOP_ROOT)/src-tauri/target/release/bundle/macos/HexCla
 LOCAL_DMG_DIR := $(DESKTOP_ROOT)/src-tauri/target/release/bundle/dmg
 LOCAL_DMG_ROOT := $(LOCAL_DMG_DIR)/HexClaw.dmgroot
 LOCAL_DMG_PATH := $(LOCAL_DMG_DIR)/HexClaw_$(DESKTOP_VERSION)_$(LOCAL_DMG_ARCH).dmg
+LOCAL_PACKAGE_TAURI_CONFIG := $(DESKTOP_ROOT)/src-tauri/tauri.package-local.conf.json
 
 # Ollama 版本控制（更新版本只需改这一处）
 OLLAMA_VERSION ?= 0.30.10
@@ -40,7 +41,7 @@ build:
 
 # 本机装机包：先用本地全生态 Go workspace 重建 sidecar，再构建 Tauri 包。
 build-local package-local: sidecar-local
-	pnpm tauri build --bundles app
+	pnpm tauri build --config "$(LOCAL_PACKAGE_TAURI_CONFIG)" --bundles app
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		rm -rf "$(LOCAL_DMG_ROOT)" "$(LOCAL_DMG_PATH)"; \
 		mkdir -p "$(LOCAL_DMG_ROOT)" "$(LOCAL_DMG_DIR)"; \

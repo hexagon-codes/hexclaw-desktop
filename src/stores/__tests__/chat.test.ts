@@ -581,7 +581,9 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      { pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
+      }),
       expect.any(String),
     )
     expect(openWebSocketStream).toHaveBeenNthCalledWith(
@@ -592,7 +594,9 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      { pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
+      }),
       expect.any(String),
     )
 
@@ -649,7 +653,9 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      { pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })
@@ -676,7 +682,9 @@ describe('useChatStore', () => {
       undefined,
       expect.any(Object),
       // BUG-20260703：显式 Agent 同时作为 pinned_agent 锁定，后端跳过内容路由
-      { pinned_agent: 'coder', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'coder', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })
@@ -830,7 +838,9 @@ describe('useChatStore', () => {
       '',
       undefined,
       expect.any(Object),
-      { thinking: 'on', pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        thinking: 'on', pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })
@@ -891,7 +901,9 @@ describe('useChatStore', () => {
       undefined,
       expect.any(Object),
       // BUG-20260703：聊天请求恒带 pinned_agent（默认助理=default），不再是 undefined
-      { pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })
@@ -911,7 +923,9 @@ describe('useChatStore', () => {
       expect.any(Object),
       '',
       undefined,
-      { thinking: 'on', pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        thinking: 'on', pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })
@@ -1027,7 +1041,9 @@ describe('useChatStore', () => {
       { provider: '智谱', model: 'glm-5' },
       '',
       undefined,
-      { pinned_agent: 'default', user_locale: 'zh-CN' },
+      expect.objectContaining({
+        pinned_agent: 'default', user_locale: 'zh-CN', locale: 'zh-CN', producer_kind: 'chat',
+      }),
       expect.any(String),
     )
   })

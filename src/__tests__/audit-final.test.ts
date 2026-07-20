@@ -56,6 +56,7 @@ const { getOllamaStatusMock, updateConfigMock, getLLMConfigMock, updateLLMConfig
 vi.mock('@/api/ollama', () => ({
   getOllamaStatus: getOllamaStatusMock,
   getOllamaRunning: vi.fn().mockResolvedValue([]),
+  getOllamaRunningResult: vi.fn().mockResolvedValue({ models: [], reachable: true }),
   pullOllamaModel: vi.fn(),
   unloadOllamaModel: vi.fn(),
   deleteOllamaModel: vi.fn(),
@@ -959,7 +960,7 @@ describe('8. Security: v-html sanitization audit', () => {
     expect(content).toContain('v-html="rendered"')
     // Verify sanitize wraps the markdown render output
     expect(content).toContain(
-      'DOMPurify.sanitize(mdInstance.value.render(normalizeMathMarkdown(props.content)))',
+      'DOMPurify.sanitize(mdInstance.value.render(normalizeMathMarkdown(canonicalMarkdown.value)))',
     )
   })
 

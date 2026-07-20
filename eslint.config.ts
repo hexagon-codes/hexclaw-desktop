@@ -15,8 +15,8 @@ export default defineConfigWithVueTs(
     files: ['**/*.{vue,ts,mts,tsx}'],
   },
 
-  // playwright-report/：Playwright 生成的报告产物（含打包 JS），扫进来会淹没真实告警（审计单-20260709 Medium-3）
-  globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**', 'src-tauri/**', 'tests/e2e/**', 'playwright-report/**', 'test-results/**', '**/*.png', '**/*.ico', '**/*.icns', '**/*.svg', 'src/assets/**']),
+  // playwright-report*/：Playwright 各验收 lane 的报告产物（含打包 JS），扫进来会淹没真实告警（审计单-20260709 Medium-3）
+  globalIgnores(['**/dist/**', '**/dist-ssr/**', '**/coverage/**', 'src-tauri/**', 'tests/e2e/**', 'playwright-report*/**', 'test-results/**', '**/*.png', '**/*.ico', '**/*.icns', '**/*.svg', 'src/assets/**']),
 
   ...pluginVue.configs['flat/essential'],
   vueTsConfigs.recommended,

@@ -116,7 +116,9 @@ export function trimFloodedModels(
   const isKeep = (m: ModelOption) =>
     m.isCustom ||
     m.id === selectedModelId ||
-    !!m.capabilities?.some((c) => c === 'image_generation' || c === 'video_generation')
+    !!m.capabilities?.some(
+      (c) => c === 'image_generation' || c === 'video_generation' || c === 'embedding',
+    )
 
   const fromCatalog = models.filter((m) => !isKeep(m) && catalogIds.has(m.id))
   if (fromCatalog.length < catalog.length * 0.9) return null

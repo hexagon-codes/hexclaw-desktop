@@ -691,29 +691,31 @@ defineExpose({ openAddServer, switchToMarketplace })
           <div v-else-if="filteredMarketplace.length === 0" class="text-center py-8" style="color: var(--hc-text-secondary)">
             {{ t('mcp.noMarketplaceResults', 'No MCP servers found. Try a different search.') }}
           </div>
-          <div v-else class="space-y-3">
-            <div v-for="item in filteredMarketplace" :key="item.name" class="p-3 rounded-lg border" :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-secondary)' }">
-              <div class="flex items-center justify-between mb-1">
-                <div class="flex items-center gap-2">
-                  <Server :size="14" style="color: var(--hc-accent)" />
-                  <span class="font-medium text-sm">{{ item.display_name || item.name }}</span>
-                  <span v-if="item.category" class="px-1.5 py-0.5 rounded text-xs" style="background: var(--hc-bg-tertiary)">{{ item.category }}</span>
+          <div v-else class="hc-mcp-market-grid">
+            <div v-for="item in filteredMarketplace" :key="item.name" class="hc-mcp-market-card">
+              <div class="hc-mcp-market-card__head">
+                <span class="hc-mcp-market-card__icon" aria-hidden="true">
+                  <Server :size="16" />
+                </span>
+                <div class="hc-mcp-market-card__identity">
+                  <strong :title="item.display_name || item.name">{{ item.display_name || item.name }}</strong>
+                  <span v-if="item.category">{{ item.category }}</span>
                 </div>
-                <button
-                  class="flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium text-white"
-                  :style="{ background: servers.includes(item.name) ? 'var(--hc-text-tertiary)' : 'var(--hc-accent)' }"
-                  :disabled="servers.includes(item.name) || installingServers.has(item.name)"
-                  @click="installFromMarketplace(item)"
-                >
-                  <Loader2 v-if="installingServers.has(item.name)" :size="12" class="animate-spin" />
-                  <Download v-else :size="12" />
-                  {{ servers.includes(item.name) ? t('mcp.installed', 'Installed') : t('mcp.install', 'Install') }}
-                </button>
               </div>
-              <p class="text-xs mb-1" style="color: var(--hc-text-secondary)">{{ item.description }}</p>
-              <p v-if="item.config_hint" class="text-[11px]" style="color: var(--hc-text-tertiary)">
+              <p class="hc-mcp-market-card__description">{{ item.description }}</p>
+              <p v-if="item.config_hint" class="hc-mcp-market-card__config">
                 {{ t('mcp.needsConfig', '需配置') }}: {{ item.config_hint }}
               </p>
+              <button
+                class="hc-mcp-market-card__install"
+                :class="{ 'hc-mcp-market-card__install--installed': servers.includes(item.name) }"
+                :disabled="servers.includes(item.name) || installingServers.has(item.name)"
+                @click="installFromMarketplace(item)"
+              >
+                <Loader2 v-if="installingServers.has(item.name)" :size="12" class="animate-spin" />
+                <Download v-else :size="12" />
+                {{ servers.includes(item.name) ? t('mcp.installed', 'Installed') : t('mcp.install', 'Install') }}
+              </button>
             </div>
           </div>
         </div>
@@ -779,3 +781,100 @@ defineExpose({ openAddServer, switchToMarketplace })
     </Teleport>
   </div>
 </template>
+
+<style scoped>
+.hc-mcp-market-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.hc-mcp-market-card {
+  display: flex;
+  min-width: 0;
+  min-height: 154px;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-lg);
+  background: var(--hc-bg-card);
+  box-shadow: var(--hc-shadow-sm);
+}
+
+.hc-mcp-market-card__head {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.hc-mcp-market-card__icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  place-items: center;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-input);
+  color: var(--hc-accent);
+}
+
+.hc-mcp-market-card__identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.hc-mcp-market-card__identity strong {
+  overflow: hidden;
+  color: var(--hc-text-primary);
+  font-size: 13.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hc-mcp-market-card__identity span,
+.hc-mcp-market-card__config {
+  color: var(--hc-text-muted);
+  font-size: 11px;
+}
+
+.hc-mcp-market-card__description {
+  margin: 0;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.hc-mcp-market-card__config {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.hc-mcp-market-card__install {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 5px;
+  margin-top: auto;
+  padding: 6px 11px;
+  border: 0;
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-accent);
+  color: var(--hc-text-inverse);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hc-mcp-market-card__install--installed,
+.hc-mcp-market-card__install:disabled {
+  background: var(--hc-bg-active);
+  color: var(--hc-text-muted);
+  cursor: default;
+}
+</style>

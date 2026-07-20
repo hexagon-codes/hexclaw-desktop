@@ -137,7 +137,7 @@ describe('sendViaWebSocket — extended', () => {
 
     await expect(p).resolves.toBeUndefined()
     expect(cbs.onChunk).toHaveBeenCalledWith('final', undefined)
-    expect(cbs.onDone).toHaveBeenCalledWith('final', metadata, toolCalls, 'coder')
+    expect(cbs.onDone).toHaveBeenCalledWith('final', metadata, toolCalls, 'coder', undefined)
   })
 
   // ─── user cancel ───────────────────────────────────────

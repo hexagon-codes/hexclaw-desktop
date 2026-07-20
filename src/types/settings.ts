@@ -1,5 +1,13 @@
 /** 模型能力标记 */
-export type ModelCapability = 'text' | 'vision' | 'video' | 'audio' | 'code' | 'image_generation' | 'video_generation'
+export type ModelCapability =
+  | 'text'
+  | 'vision'
+  | 'video'
+  | 'audio'
+  | 'code'
+  | 'image_generation'
+  | 'video_generation'
+  | 'embedding'
 
 /** A7 模型 tool_call 可靠度等级（后端 llmrouter.ReliabilityLevel 映射） */
 export type ToolCallReliability = 'unknown' | 'good' | 'partial' | 'bad'
@@ -13,6 +21,13 @@ export interface ModelToolReliability {
   probeError?: string
 }
 
+/** Embedding execution metadata. Unknown custom embedding models may omit it until probed. */
+export interface EmbeddingModelContract {
+  protocol: 'openai_embeddings' | 'ollama_embeddings'
+  dimension: number
+  normalization: 'l2' | 'none'
+}
+
 /** 模型选项 */
 export interface ModelOption {
   id: string
@@ -20,6 +35,8 @@ export interface ModelOption {
   isCustom?: boolean
   /** 模型支持的能力（静态声明），默认 ['text'] */
   capabilities?: ModelCapability[]
+  /** Vector-space contract used by the semantic-index backend; never inferred generically from an id. */
+  embedding?: EmbeddingModelContract
   /** A7 tool_call 动态探测结果（运行时由后端 /api/v1/llm/capabilities 注入） */
   toolReliability?: ModelToolReliability
 }
@@ -67,6 +84,8 @@ export interface PrivateNetworkAccess {
 
 export interface ProviderConfig {
   id: string
+  /** 后端分配/确认的稳定 Provider 实例身份，不随展示名或 map key 变化。 */
+  providerInstanceId?: string
   /** 后端运行时识别的 provider key（对应 hexclaw /api/v1/config/llm 的 map key） */
   backendKey?: string
   name: string
@@ -77,6 +96,8 @@ export interface ProviderConfig {
   models: ModelOption[]
   /** 当前 provider 在后端运行时默认使用的模型 */
   selectedModelId?: string
+  /** 后端模型规格来源；缺失的历史配置按 legacy 处理。 */
+  modelSpecsMode?: 'legacy' | 'explicit'
   /** 模型算力/数据最终位置；本地反向代理云模型必须显式为 cloud */
   locality?: ProviderLocality
   /** 部署位置由系统推断还是用户确认。 */
@@ -93,6 +114,15 @@ export interface ProviderConfig {
   keepAlive?: string
   /** 本地模型上下文上限（仅 Ollama；0/undefined=后端自动） */
   numCtx?: number
+}
+
+/** 后端模型能力目录条目。capabilities 缺失与显式 [] 语义不同。 */
+export interface BackendProviderModelSpec {
+  id: string
+  display_name: string
+  is_custom?: boolean
+  capabilities?: ModelCapability[]
+  embedding?: EmbeddingModelContract
 }
 
 /** 支持的 Provider 类型 */
@@ -244,10 +274,13 @@ export interface AppConfig {
 
 /** 后端 LLM Provider 配置（匹配 hexclaw API） */
 export interface BackendLLMProvider {
+  provider_instance_id?: string
   api_key: string
   base_url: string
   model: string
   models?: string[]              // 已配置的模型列表（桌面端持久化用）
+  model_specs?: BackendProviderModelSpec[]
+  model_specs_mode?: 'legacy' | 'explicit'
   compatible: string
   locality?: ProviderLocality    // auto/local/cloud；localhost 云代理应为 cloud
   locality_source?: ProviderLocalitySource

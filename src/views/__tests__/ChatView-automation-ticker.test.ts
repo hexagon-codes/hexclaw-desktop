@@ -215,10 +215,15 @@ describe('ChatView automation 1Hz elapsed ticker', () => {
   it('formats mm:ss past 60 seconds (L4: 183s → 3:03)', async () => {
     const wrapper = mountChatView()
     await flushPromises()
+    const startedAt = Date.now()
     pushRunningCreateTaskAction()
     await flushPromises()
 
-    await vi.advanceTimersByTimeAsync(183_000)
+    // The preceding test already proves the interval ticks every second. Jump
+    // close to the formatting boundary so this assertion needs one render,
+    // instead of replaying 183 redundant Vue updates under fake timers.
+    vi.setSystemTime(startedAt + 182_000)
+    await vi.advanceTimersByTimeAsync(1_000)
     expect(wrapper.find('.hc-msg__automation-progress-elapsed').text()).toBe('3:03')
 
     wrapper.unmount()

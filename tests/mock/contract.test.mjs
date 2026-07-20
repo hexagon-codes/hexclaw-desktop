@@ -6,11 +6,16 @@ const read = (path) => readFile(new URL(`../../${path}`, import.meta.url), 'utf8
 
 test('compose isolates and hardens the mock services', async () => {
   const compose = await read('tests/mock/compose.yaml')
+  const gateway = await read('tests/mock/fixtures/loopback-gateway.cfg')
 
   assert.match(compose, /mockserver\/mockserver:7\.4\.0@sha256:[a-f0-9]{64}/)
+  assert.match(compose, /haproxy:3\.2\.21-alpine@sha256:[a-f0-9]{64}/)
   assert.match(compose, /ghcr\.io\/shopify\/toxiproxy:2\.12\.0@sha256:[a-f0-9]{64}/)
   assert.match(compose, /profiles:\s*\[chaos\]/)
-  assert.match(compose, /127\.0\.0\.1:\$\{HEX_MOCK_PORT:-0\}:1080/)
+  assert.match(compose, /loopback_gateway:/)
+  assert.match(compose, /127\.0\.0\.1:\$\{HEX_MOCK_PORT:-0\}:18080/)
+  assert.match(compose, /127\.0\.0\.1:\$\{HEX_TOXI_CONTROL_PORT:-0\}:18474/)
+  assert.match(compose, /127\.0\.0\.1:\$\{HEX_TOXI_PROXY_PORT:-0\}:18666/)
   assert.match(compose, /internal:\s*true/)
   assert.match(compose, /read_only:\s*true/g)
   assert.match(compose, /no-new-privileges:true/g)
@@ -20,6 +25,38 @@ test('compose isolates and hardens the mock services', async () => {
   assert.match(compose, /\.\/fixtures:\/config:ro/)
   assert.match(compose, /com\.hexclaw\.test-run:/)
   assert.doesNotMatch(compose, /docker\.sock/)
+
+  const mockserverBlock = compose.match(
+    /  mockserver:\n([\s\S]*?)(?=\n  [a-z][a-z0-9_]*:|\nnetworks:)/,
+  )?.[1]
+  const toxiproxyBlock = compose.match(
+    /  toxiproxy:\n([\s\S]*?)(?=\n  [a-z][a-z0-9_]*:|\nnetworks:)/,
+  )?.[1]
+  const gatewayBlock = compose.match(
+    /  loopback_gateway:\n([\s\S]*?)(?=\n  [a-z][a-z0-9_]*:|\nnetworks:)/,
+  )?.[1]
+  assert.ok(mockserverBlock, 'mockserver service block is missing')
+  assert.ok(toxiproxyBlock, 'toxiproxy service block is missing')
+  assert.ok(gatewayBlock, 'loopback_gateway service block is missing')
+  assert.doesNotMatch(mockserverBlock, /\n    ports:/)
+  assert.doesNotMatch(toxiproxyBlock, /\n    ports:/)
+  assert.match(mockserverBlock, /networks:\n      - mock_isolated/)
+  assert.match(toxiproxyBlock, /networks:\n      - mock_isolated/)
+  assert.match(gatewayBlock, /networks:\n      - mock_isolated\n      - loopback_published/)
+  assert.match(gatewayBlock, /user:\s*['"]99:99['"]/)
+
+  for (const fixedRoute of [
+    ['bind :18080', 'server mockserver mockserver:1080'],
+    ['bind :18474', 'server toxiproxy_control toxiproxy:8474'],
+    ['bind :18666', 'server toxiproxy_data toxiproxy:8666'],
+  ]) {
+    assert.ok(gateway.includes(fixedRoute[0]), `gateway is missing ${fixedRoute[0]}`)
+    assert.ok(gateway.includes(fixedRoute[1]), `gateway is missing ${fixedRoute[1]}`)
+  }
+  assert.doesNotMatch(
+    gateway,
+    /stats\s+(?:enable|uri|socket)|http-request|use_backend|server-template/i,
+  )
 })
 
 test('MockServer configuration fails closed for active and outbound features', async () => {
@@ -103,11 +140,13 @@ test('orchestrator exposes bounded lifecycle and label-scoped cleanup', async ()
   assert.match(script, /write_run_manifest/)
   assert.match(script, /run-manifest\.mjs/)
   assert.match(script, /--lane "\$\{HEX_MOCK_TEST_LANE:-l3-engine-smoke\}"/)
+  assert.match(script, /--gateway-image "\$\{GATEWAY_IMAGE\}"/)
   assert.match(script, /capture_failure/)
   assert.match(script, /if ! wait_for_mockserver; then[\s\S]*?capture_failure[\s\S]*?down_stack/)
   assert.match(script, /com\.hexclaw\.test-stack=mock/)
   assert.match(script, /com\.hexclaw\.test-run=/)
   assert.match(script, /docker compose/)
+  assert.match(script, /compose_profiled port loopback_gateway 18080/)
   assert.doesNotMatch(script, /docker\s+(?:system|container|network|volume)\s+prune/)
 })
 
@@ -190,7 +229,8 @@ test('protocol fixture matrix covers OpenAI, Ollama, and DingTalk contracts', as
     ['openai-chat-nonstream', 'POST', '/v1/chat/completions'],
     ['openai-chat-sse', 'POST', '/v1/chat/completions'],
     ['openai-k12-recognize-mixed-worksheet', 'POST', '/v1/chat/completions'],
-    ['openai-k12-bbox-semantic-verify', 'POST', '/v1/chat/completions'],
+    ['openai-k12-answer-locator', 'POST', '/v1/chat/completions'],
+    ['openai-k12-answer-transcription', 'POST', '/v1/chat/completions'],
     ['ollama-tags', 'GET', '/api/tags'],
     ['ollama-embed', 'POST', '/api/embed'],
     ['ollama-chat-ndjson', 'POST', '/api/chat'],
@@ -221,14 +261,25 @@ test('protocol fixture matrix covers OpenAI, Ollama, and DingTalk contracts', as
   assert.match(openAISSE.httpResponse.body, /data: \[DONE\]/)
 
   const k12Recognize = byID.get('openai-k12-recognize-mixed-worksheet')
-  const k12BBox = byID.get('openai-k12-bbox-semantic-verify')
+  const k12Locator = byID.get('openai-k12-answer-locator')
+  const k12Transcription = byID.get('openai-k12-answer-transcription')
   assert.ok(k12Recognize.priority > openAINonstream.priority)
-  assert.ok(k12BBox.priority > k12Recognize.priority)
-  for (const field of ['question', 'subject', 'knowledge_points', 'student_answer', 'bbox']) {
+  assert.ok(k12Locator.priority > k12Recognize.priority)
+  assert.ok(k12Transcription.priority > k12Locator.priority)
+  for (const field of [
+    'question',
+    'subject',
+    'knowledge_points',
+    'answer_state',
+    'student_answer',
+  ]) {
     assert.match(k12Recognize.httpResponse.body, new RegExp(field))
   }
-  for (const field of ['index', 'observed_question', 'observed_student_answer']) {
-    assert.match(k12BBox.httpResponse.body, new RegExp(field))
+  for (const field of ['index', 'bbox_1000']) {
+    assert.match(k12Locator.httpResponse.body, new RegExp(field))
+  }
+  for (const field of ['index', 'student_answer']) {
+    assert.match(k12Transcription.httpResponse.body, new RegExp(field))
   }
 
   for (const id of ['ollama-chat-ndjson', 'ollama-pull-ndjson']) {
@@ -242,6 +293,30 @@ test('protocol fixture matrix covers OpenAI, Ollama, and DingTalk contracts', as
   assert.match(byID.get('dingtalk-media-upload').httpResponse.body, /"media_id"/)
   assert.match(byID.get('dingtalk-oto-send').httpResponse.body, /"processQueryKey"/)
   assert.match(byID.get('dingtalk-oto-recall').httpResponse.body, /"successResult"/)
+})
+
+test('K12 photo fixtures implement the current independent recognition and anchor protocol', async () => {
+  const expectations = JSON.parse(await read('tests/mock/fixtures/mockserverInitialization.json'))
+  const byID = new Map(expectations.map((expectation) => [expectation.id, expectation]))
+
+  const recognition = byID.get('openai-k12-recognize-mixed-worksheet')
+  const locator = byID.get('openai-k12-answer-locator')
+  const transcription = byID.get('openai-k12-answer-transcription')
+
+  assert.ok(locator, 'fixtures must route the production batch answer locator prompt')
+  assert.ok(transcription, 'fixtures must route both independent answer transcription views')
+  assert.match(locator.httpRequest.body.regex, /批量答案定位/)
+  assert.match(locator.httpRequest.body.regex, /bbox_1000/)
+  assert.match(locator.httpResponse.body, /bbox_1000/)
+  assert.match(transcription.httpRequest.body.regex, /批量答案誊录/)
+  assert.match(transcription.httpResponse.body, /student_answer/)
+
+  assert.match(recognition.httpResponse.body, /answer_state/)
+  assert.doesNotMatch(
+    recognition.httpResponse.body,
+    /bbox(?:_1000)?/,
+    'core recognition must not forge geometry owned by the independent anchor stage',
+  )
 })
 
 test('internal-only PoC probes the complete protocol matrix and negative paths', async () => {

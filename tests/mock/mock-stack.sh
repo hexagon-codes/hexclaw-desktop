@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 COMPOSE_FILE="${SCRIPT_DIR}/compose.yaml"
 COMMAND="${1:-help}"
 MOCK_IMAGE="${HEX_MOCKSERVER_IMAGE:-mockserver/mockserver:7.4.0@sha256:fed9b2089e021947f785d1f0bfda3723352bb2c1634ce7b0bcd42dfd1b0fd02f}"
+GATEWAY_IMAGE="${HEX_MOCK_GATEWAY_IMAGE:-haproxy:3.2.21-alpine@sha256:66e25cc9a8332635f4e897f7f4b1e5622c25f09f0ee23cddc6ce9bdb3a24772a}"
 
 if [[ "${COMMAND}" == "run" && -z "${HEX_MOCK_RUN_ID:-}" ]]; then
   RUN_ID="$(date +%Y%m%dT%H%M%S)-$$"
@@ -77,6 +78,7 @@ write_run_manifest() {
     --ownership "${SCRIPT_DIR}/ownership.json"
     --lane "${HEX_MOCK_TEST_LANE:-l3-engine-smoke}"
     --mockserver-image "${MOCK_IMAGE}"
+    --gateway-image "${GATEWAY_IMAGE}"
   )
   if [[ "${HEX_MOCK_ALLOW_UNKNOWN_GIT:-0}" == "1" ]]; then
     manifest_args+=(--allow-unknown-git)
@@ -121,7 +123,7 @@ preflight() {
 
 endpoint() {
   local binding
-  binding="$(compose_profiled port mockserver 1080 2>/dev/null | tail -n 1)"
+  binding="$(compose_profiled port loopback_gateway 18080 2>/dev/null | tail -n 1)"
   if [[ ! "${binding}" =~ ^127\.0\.0\.1:[0-9]+$ ]]; then
     printf 'unexpected or missing MockServer port binding: %s\n' "${binding:-<none>}" >&2
     return 1

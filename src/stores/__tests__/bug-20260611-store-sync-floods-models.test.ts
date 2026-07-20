@@ -10,7 +10,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
-import type { CatalogModel } from '@/types'
+import type { CatalogModel, ModelOption } from '@/types'
+import { trimFloodedModels } from '../model-catalog'
 
 const MOCK_BACKEND_CONFIG = {
   default: 'openRouter',
@@ -168,5 +169,27 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
 
     MOCK_BACKEND_CONFIG.providers.openRouter.models = ['moonshotai/kimi-k2.6:free'] as never
     MOCK_BACKEND_CONFIG.providers.openRouter.model = 'moonshotai/kimi-k2.6:free'
+  })
+
+  it('收缩历史大目录时保留 embedding 规格，即使旧记录尚无 isCustom', () => {
+    const catalog = bigCatalog(300)
+    const models: ModelOption[] = [
+      ...catalog.map((model): ModelOption => ({
+        id: model.id,
+        name: model.name,
+        capabilities: ['text'],
+      })),
+      {
+        id: 'nvidia/nemotron-3-embed-1b:free',
+        name: 'Nemotron Embed',
+        capabilities: ['embedding'],
+        embedding: { protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2' },
+      },
+    ]
+
+    const trimmed = trimFloodedModels(models, catalog, catalog[0]!.id)!
+    expect(trimmed.some((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')).toBe(true)
+    expect(trimmed.find((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')?.embedding?.dimension)
+      .toBe(2048)
   })
 })

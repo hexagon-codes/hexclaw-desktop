@@ -239,6 +239,7 @@ describe('chat controller modules', () => {
     const createSession = vi.fn().mockImplementation(() => new Promise<void>((resolve) => {
       releaseCreate = resolve
     }))
+    const setLastSessionId = vi.fn()
     const currentSessionId = ref<string | null>(null)
     const controller = createChatSessionLifecycleController({
       currentSessionId,
@@ -255,6 +256,7 @@ describe('chat controller modules', () => {
       sessionSelectionGen: ref(0),
       msgSvc: {
         createSession,
+        setLastSessionId,
       } as any,
       logger: { warn: vi.fn(), error: vi.fn() } as any,
       createId: () => 'session-1',
@@ -274,6 +276,7 @@ describe('chat controller modules', () => {
     await expect(Promise.all([first, second])).resolves.toEqual(['session-1', 'session-1'])
     expect(createSession).toHaveBeenCalledTimes(1)
     expect(currentSessionId.value).toBe('session-1')
+    expect(setLastSessionId).toHaveBeenCalledExactlyOnceWith('session-1')
     expect(pendingSessionTitle.value).toBeNull()
     expect(upsertLocalSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'session-1', title: '临时标题' }),
@@ -787,6 +790,9 @@ describe('chat controller modules', () => {
       pinned_agent: 'default',
       // BUG-20260709：系统语言恒透传（含默认 zh-CN），后端拼显式输出语言指令
       user_locale: 'zh-CN',
+      // v0.5.0 统一消息内容协议：服务端据生产者和规范 locale 生成 RenderManifest。
+      locale: 'zh-CN',
+      producer_kind: 'chat',
     })
   })
 

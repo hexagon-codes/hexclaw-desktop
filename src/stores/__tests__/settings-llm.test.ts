@@ -190,6 +190,24 @@ describe('Settings Store — isTauri 检测与 LLM 加载', () => {
     expect(store.availableModels[0]!.providerKey).toBe('testprovider')
   })
 
+  it('availableModels excludes embedding-only and explicitly unclassified models', async () => {
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    store.config!.llm.providers = [{
+      id: 'mixed', name: 'Mixed', type: 'custom', enabled: true, apiKey: '', baseUrl: '',
+      selectedModelId: 'embed',
+      models: [
+        { id: 'embed', name: 'Embed', capabilities: ['embedding' as never] },
+        { id: 'unknown', name: 'Unknown', capabilities: [] },
+        { id: 'chat', name: 'Chat', capabilities: ['text'] },
+      ],
+    }]
+    store.runtimeProviders = null
+
+    expect(store.availableModels.map((model) => model.modelId)).toEqual(['chat'])
+  })
+
   it('后端加载后本地已启用的 provider（如 Ollama）也出现在 availableModels', async () => {
     mockPersistedAppConfig = {
       llm: {

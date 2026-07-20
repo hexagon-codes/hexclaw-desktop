@@ -24,7 +24,9 @@ async function mountSelect(modelValue: ProviderType = 'openai') {
   })
 }
 
-const ALL_PRESETS = getProviderTypes()
+// 配置层仍保留 custom，供其他显式入口复用；Settings 的“新增服务商”只展示官方项。
+const CONFIG_PRESETS = getProviderTypes()
+const OFFICIAL_PRESETS = CONFIG_PRESETS.filter((preset) => preset.type !== 'custom')
 
 describe('ProviderSelect — 供应商下拉选择器', () => {
   beforeEach(() => {
@@ -38,11 +40,18 @@ describe('ProviderSelect — 供应商下拉选择器', () => {
     expect(wrapper.text()).toContain('Anthropic')
   })
 
-  it('显示当前选中供应商的 logo', async () => {
+  it('显示当前选中供应商的装饰性 logo，且不重复读屏名称', async () => {
     const wrapper = await mountSelect('deepseek')
     const logo = wrapper.find('.hc-provider-select__logo')
     expect(logo.exists()).toBe(true)
-    expect(logo.attributes('alt')).toBe('DeepSeek')
+    expect(logo.attributes('alt')).toBe('')
+    expect(logo.attributes('aria-hidden')).toBe('true')
+
+    await wrapper.find('.hc-provider-select__trigger').trigger('click')
+    for (const optionLogo of wrapper.findAll('.hc-provider-select__option-logo')) {
+      expect(optionLogo.attributes('alt')).toBe('')
+      expect(optionLogo.attributes('aria-hidden')).toBe('true')
+    }
   })
 
   it('初始状态下拉列表关闭', async () => {
@@ -69,12 +78,21 @@ describe('ProviderSelect — 供应商下拉选择器', () => {
 
   // ─── 3. 选项完整性 ────────────────────────────────
 
-  it('下拉列表包含所有供应商', async () => {
+  it('配置层仍保留 13 个非 Ollama preset（含 custom）', () => {
+    expect(CONFIG_PRESETS).toHaveLength(13)
+    expect(CONFIG_PRESETS.map((preset) => preset.type)).toContain('custom')
+    expect(CONFIG_PRESETS.map((preset) => preset.type)).not.toContain('ollama')
+  })
+
+  it('下拉列表只包含 12 个官方服务商', async () => {
     const wrapper = await mountSelect()
     await wrapper.find('.hc-provider-select__trigger').trigger('click')
 
     const options = wrapper.findAll('.hc-provider-select__option')
-    expect(options.length).toBe(ALL_PRESETS.length)
+    expect(options).toHaveLength(12)
+    expect(options.map((option) => option.text())).toEqual(
+      OFFICIAL_PRESETS.map((preset) => preset.name),
+    )
   })
 
   it('不包含 Ollama（由 OllamaCard 统一管理）', async () => {
@@ -83,6 +101,14 @@ describe('ProviderSelect — 供应商下拉选择器', () => {
 
     const texts = wrapper.findAll('.hc-provider-select__option').map((o) => o.text())
     expect(texts).not.toContain('Ollama (本地)')
+  })
+
+  it('不包含 custom/自定义（非官方服务商）', async () => {
+    const wrapper = await mountSelect()
+    await wrapper.find('.hc-provider-select__trigger').trigger('click')
+
+    const texts = wrapper.findAll('.hc-provider-select__option').map((option) => option.text())
+    expect(texts).not.toContain('自定义')
   })
 
   it('包含所有新增的国内供应商', async () => {
@@ -248,7 +274,7 @@ describe('ProviderSelect — 供应商下拉选择器', () => {
     await wrapper.find('.hc-provider-select__trigger').trigger('click')
 
     const logos = wrapper.findAll('.hc-provider-select__option-logo')
-    expect(logos.length).toBe(ALL_PRESETS.length)
+    expect(logos).toHaveLength(OFFICIAL_PRESETS.length)
     logos.forEach((logo) => {
       expect(logo.attributes('src')).toBeTruthy()
     })

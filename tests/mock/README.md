@@ -6,10 +6,14 @@ process isolation and lifecycle. Kubernetes is intentionally not involved.
 
 ## Safety boundary
 
-- Published ports use a random host port bound to `127.0.0.1`.
-- The Compose network is `internal`, so mock containers have no outbound route.
-- Images are version-and-digest pinned. Fixtures are mounted read-only; there is
-  no Docker socket mount.
+- MockServer and Toxiproxy attach only to `mock_isolated`, an `internal`
+  network with no host-interface connection or outbound default gateway.
+- A version-and-digest pinned HAProxy gateway is the only dual-homed service.
+  Its three static TCP routes target only MockServer and Toxiproxy; it has no
+  dynamic proxy, stats, admin, or runtime configuration surface.
+- The gateway publishes random host ports bound to `127.0.0.1`. All images are
+  version-and-digest pinned. Fixtures/configuration are mounted read-only; there
+  is no Docker socket mount.
 - Containers are read-only, capability-free, memory/PID limited, and use
   `no-new-privileges` plus a bounded tmpfs.
 - MockServer proxy fallback, MCP, live-LLM configuration, WASM, persistence, and
@@ -42,7 +46,8 @@ pnpm mock:down
 `test-results/mock-stack/manual/endpoints.env` and writes a mode-0600
 `run-manifest.json` beside it. The manifest records the Desktop revision/dirty
 state, selected HexClaw source, fixture and ownership hashes, test lane, and
-pinned MockServer digest. It never copies arbitrary environment variables.
+pinned MockServer/loopback-gateway digests. It never copies arbitrary
+environment variables.
 For an automated, uniquely labelled lifecycle use the wrapper directly:
 
 ```sh
@@ -54,12 +59,17 @@ Set `HEX_MOCK_TEST_LANE` to a key in `ownership.json`; the default is
 explicit local HexClaw source automatically.
 
 Set `HEX_MOCK_CHAOS=1` to include Toxiproxy. Its control and proxy ports are
-also random and loopback-only; create only proxies whose upstream is another
-container on `mock_isolated`.
+also relayed through the fixed gateway to random loopback-only ports;
+Toxiproxy itself remains internal-only. Create only proxies whose upstream is
+another container on `mock_isolated`.
 
 Docker Engine 28 or newer is required because older engines do not meet the
 loopback publishing security baseline. The legacy override printed by
 `mock:preflight` is for an explicitly isolated machine only.
+
+Docker Engine 29 no longer publishes a container port from an `internal`
+network to the host. Do not move fixture engines onto `loopback_published` to
+work around that boundary; the narrow gateway is the sole host ingress.
 
 ## Playwright L4 lane
 

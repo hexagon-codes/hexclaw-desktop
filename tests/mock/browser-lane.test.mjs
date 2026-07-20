@@ -40,9 +40,24 @@ test('browser mock K12 spec covers the mixed worksheet business chain without re
     'rq-grade-1',
     'photo-grade-overlay',
     'overlay-toggle',
-    '错题本',
+    'subtab-mistakes',
   ]) {
     assert.ok(spec.includes(marker), `K12 browser spec is missing ${marker}`)
   }
   assert.doesNotMatch(spec, /page\.route\(|context\.route\(|request interception/i)
+
+  const confirmation = spec.indexOf("getByTestId('recognize-confirm-all').click()")
+  const answerReview = spec.indexOf("getByTestId('rq-answer-0')).toHaveValue('')")
+  assert.ok(
+    confirmation >= 0 && answerReview > confirmation,
+    'recognized student answers are reviewed only after the recognition confirmation gate',
+  )
+
+  const recordsTab = spec.indexOf("hasText: '学习档案'")
+  const mistakesTab = spec.indexOf("getByTestId('subtab-mistakes').click()")
+  assert.ok(
+    recordsTab >= 0 && mistakesTab > recordsTab,
+    'mistake verification follows the authoritative 学习档案 → 全部错题 navigation',
+  )
+  assert.doesNotMatch(spec, /k12enh-seg button[^\n]+错题本/)
 })

@@ -288,7 +288,13 @@ export function isChatModel(capabilities: ModelCapability[] | undefined): boolea
 }
 
 /** 模型主类型（用于 UI 决定渲染哪种 composer / 是否过滤） */
-export type ModelKind = 'chat' | 'image_generator' | 'video_generator' | 'audio_tool'
+export type ModelKind =
+  | 'chat'
+  | 'image_generator'
+  | 'video_generator'
+  | 'audio_tool'
+  | 'embedding'
+  | 'unclassified'
 
 export function classifyModel(capabilities: ModelCapability[] | undefined): ModelKind {
   const caps = capabilities ?? ['text']
@@ -296,5 +302,6 @@ export function classifyModel(capabilities: ModelCapability[] | undefined): Mode
   if (caps.includes('image_generation')) return 'image_generator'
   if (caps.includes('video_generation')) return 'video_generator'
   if (caps.includes('audio')) return 'audio_tool'
-  return 'chat'
+  if (caps.includes('embedding')) return 'embedding'
+  return 'unclassified'
 }

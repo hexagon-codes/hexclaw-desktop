@@ -10,7 +10,7 @@ async function sidecarJSON<T>(
   const response = await request.fetch(`/_hexclaw${path}`, { method })
   const text = await response.text()
   if (!response.ok() && response.status() !== 404) {
-    throw new Error(`${method} ${path} failed: ${response.status()} ${text}`)
+    throw new Error(`${method} ${path} failed: ${response.status()} (body redacted)`)
   }
   return text && response.status() !== 404 ? JSON.parse(text) as T : {} as T
 }

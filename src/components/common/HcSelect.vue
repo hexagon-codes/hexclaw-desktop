@@ -23,6 +23,8 @@ const props = withDefaults(
     options: Option[]
     placeholder?: string
     disabled?: boolean
+    /** 稳定的可访问名称；尤其用于当前值不能表达字段含义的场景。 */
+    ariaLabel?: string
   }>(),
   { placeholder: '', disabled: false },
 )
@@ -180,6 +182,7 @@ watch(
       class="hc-select__trigger hc-input"
       :class="{ 'hc-select__trigger--disabled': disabled }"
       role="combobox"
+      :aria-label="ariaLabel || undefined"
       :aria-expanded="open"
       aria-haspopup="listbox"
       :aria-disabled="disabled || undefined"

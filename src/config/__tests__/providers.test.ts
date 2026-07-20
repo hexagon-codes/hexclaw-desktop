@@ -255,6 +255,7 @@ describe('isChatModel() / classifyModel() — 聊天页过滤', () => {
     [['image_generation'], false],
     [['video_generation'], false],
     [['audio'], false],
+    [['embedding' as ModelCapability], false],
   ])('%j → isChatModel=%s', (caps, expected) => {
     expect(isChatModel(caps)).toBe(expected)
   })
@@ -265,8 +266,14 @@ describe('isChatModel() / classifyModel() — 聊天页过滤', () => {
     [['image_generation'], 'image_generator'],
     [['video_generation'], 'video_generator'],
     [['audio'], 'audio_tool'],
+    [['embedding' as ModelCapability], 'embedding'],
+    [[], 'unclassified'],
   ])('classifyModel(%j) === %s', (caps, kind) => {
     expect(classifyModel(caps)).toBe(kind)
+  })
+
+  it('does not infer arbitrary model ids containing "embed" as embedding models', () => {
+    expect(inferCapabilitiesFromId('acme/embed-chat-pro')).toEqual(['text'])
   })
 })
 

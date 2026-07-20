@@ -20,9 +20,10 @@ describe('API 成功后状态不应卡在中间态', () => {
     it('handleReindex 成功后使用后端返回的 result.status（不硬编码 processing）', () => {
       const fn = src.match(/async function handleReindex[\s\S]*?^}/m)?.[0] || ''
       expect(fn).toBeTruthy()
-      // 应使用 result.status，不应硬编码 'processing'
-      expect(fn).toContain('result.status')
-      expect(fn).not.toContain("status: 'processing'")
+      // 同步 reindex 分支应使用 result.status；持久化失败重试分支在 202 后合法进入 processing。
+      const synchronousReindex = fn.slice(fn.indexOf('const result = await reindexDocument'))
+      expect(synchronousReindex).toContain('result.status')
+      expect(synchronousReindex).not.toContain("status: 'processing'")
     })
 
     it('handleReindex 成功后更新 chunk_count 和 updated_at', () => {
@@ -35,9 +36,10 @@ describe('API 成功后状态不应卡在中间态', () => {
   describe('KnowledgeView — upload', () => {
     const src = readSrc('views/KnowledgeView.vue')
 
-    it('upload 成功后 entry.status 设为 done（不是 processing）', () => {
-      // 上传成功路径应该设置为 'done'
-      expect(src).toContain("entry.status = 'done'")
+    it('HTTP 202 只绑定持久化 Job，只有 Job succeeded 才转 done', () => {
+      expect(src).toContain('uploadsStore.attachJob(entry, accepted.document_id, accepted.job_id)')
+      expect(src).toContain('uploadsStore.markSucceeded(entry)')
+      expect(src).not.toContain("entry.status = 'done'")
     })
 
     it('upload 失败后 entry.status 设为 error', () => {
@@ -49,8 +51,10 @@ describe('API 成功后状态不应卡在中间态', () => {
     const src = readSrc('views/KnowledgeView.vue')
 
     it('addDocument 成功后调用 loadDocs 刷新列表（不手动设 status）', () => {
-      const fn = src.match(/async function handleAddDocument[\s\S]*?^}/m)?.[0] ||
-                 src.match(/async function handleAdd[\s\S]*?^}/m)?.[0] || ''
+      const fn =
+        src.match(/async function handleAddDocument[\s\S]*?^}/m)?.[0] ||
+        src.match(/async function handleAdd[\s\S]*?^}/m)?.[0] ||
+        ''
       // 成功后应调用 loadDocs() 刷新，而不是手动设置 status
       expect(fn === '' || !fn.includes("status: 'processing'")).toBe(true)
     })

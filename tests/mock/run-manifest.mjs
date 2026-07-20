@@ -51,6 +51,9 @@ const parseArgs = (argv) => {
       case '--mockserver-image':
         options.mockserverImage = value
         break
+      case '--gateway-image':
+        options.gatewayImage = value
+        break
       default:
         fail(`unknown option: ${argument}`)
     }
@@ -63,6 +66,7 @@ const parseArgs = (argv) => {
     ['--ownership', options.ownership],
     ['--lane', options.lane],
     ['--mockserver-image', options.mockserverImage],
+    ['--gateway-image', options.gatewayImage],
   ]) {
     if (!value) fail(`missing required option: ${name}`)
   }
@@ -120,10 +124,10 @@ const inspectDesktopGit = (desktopRoot, allowUnknown) => {
   }
 }
 
-const parsePinnedImage = (image) => {
+const parsePinnedImage = (image, label) => {
   const match = /^(.+?)@(sha256:[a-f0-9]{64})$/.exec(image)
   if (!match) {
-    fail('MockServer image must be pinned by sha256 digest')
+    fail(`${label} image must be pinned by sha256 digest`)
   }
   return { reference: match[1], digest: match[2] }
 }
@@ -183,7 +187,8 @@ const main = async () => {
     fail(`unknown test lane: ${options.lane}`)
   }
   const fixture = await readJSONEvidence(fixturePath, 'fixture manifest')
-  const mockserverImage = parsePinnedImage(options.mockserverImage)
+  const mockserverImage = parsePinnedImage(options.mockserverImage, 'MockServer')
+  const gatewayImage = parsePinnedImage(options.gatewayImage, 'loopback gateway')
   const desktopGit = inspectDesktopGit(desktopRoot, options.allowUnknownGit)
   const generatedAt = new Date()
 
@@ -205,6 +210,7 @@ const main = async () => {
       path: posixRelative(desktopRoot, ownershipPath),
     },
     mockserver_image: mockserverImage,
+    loopback_gateway_image: gatewayImage,
   }
 
   const outputPath = await writeManifest(artifactDir, manifest)

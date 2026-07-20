@@ -694,19 +694,23 @@ describe('knowledge.ts', () => {
       // We cannot easily test XHR in jsdom without mocking XMLHttpRequest,
       // so we test the apiPost fallback path (no progress callback)
       mockedApiPost.mockResolvedValueOnce({
-        id: 'doc-123',
-        title: 'test.pdf',
-        chunk_count: 5,
-        created_at: '2024-01-01',
+        document_id: 'doc-123',
+        job_id: 'job-123',
+        text_index_state: 'pending',
+        vector_index_state: 'pending',
       } as never)
 
       const file = new File(['content'], 'test.pdf', { type: 'application/pdf' })
       const result = await uploadDocument(file)
 
-      expect(result.id).toBe('doc-123')
+      expect(result.document_id).toBe('doc-123')
       expect(mockedApiPost).toHaveBeenCalledWith(
-        '/api/v1/knowledge/upload',
+        '/api/v1/knowledge/documents?user_id=desktop-user',
         expect.any(FormData),
+        expect.objectContaining({
+          headers: { 'Idempotency-Key': expect.stringMatching(/^knowledge-upload:/) },
+          timeout: false,
+        }),
       )
     })
   })

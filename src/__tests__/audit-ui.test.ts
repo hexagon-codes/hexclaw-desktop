@@ -91,6 +91,10 @@ vi.mock('@/api/ollama', () => ({
   pullOllamaModel: (model: string, cb: (p: unknown) => void, signal?: AbortSignal) =>
     mockPullOllamaModel(model, cb, signal),
   getOllamaRunning: () => mockGetOllamaRunning(),
+  getOllamaRunningResult: async () => ({
+    models: await mockGetOllamaRunning(),
+    reachable: true,
+  }),
   unloadOllamaModel: vi.fn(),
   deleteOllamaModel: (name: string) => mockDeleteOllamaModel(name),
   restartOllama: () => mockRestartOllama(),
@@ -149,6 +153,7 @@ vi.mock('@/api/agents', () => ({
 }))
 
 vi.mock('@/api/knowledge', () => ({
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments: mockGetDocuments,
   getDocumentContent: vi.fn().mockResolvedValue(''),
   addDocument: vi.fn(),
@@ -159,7 +164,14 @@ vi.mock('@/api/knowledge', () => ({
   isKnowledgeUploadEndpointMissing: vi.fn().mockReturnValue(false),
   isKnowledgeUploadUnsupportedFormat: vi.fn().mockReturnValue(false),
   getKnowledgeConfig: () =>
-    Promise.resolve({ rerank: true, rerank_model: '', query_expand: true, contextual: true, min_score: 0.55, candidate_k: 50 }),
+    Promise.resolve({
+      rerank: true,
+      rerank_model: '',
+      query_expand: true,
+      contextual: true,
+      min_score: 0.55,
+      candidate_k: 50,
+    }),
   putKnowledgeConfig: (c: Record<string, unknown>) => Promise.resolve({ ...c }),
 }))
 
@@ -188,7 +200,9 @@ vi.mock('@/utils/secure-store', () => ({
 
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() { return null }
+    async get() {
+      return null
+    }
     async set() {}
     async save() {}
     async delete() {}
@@ -222,7 +236,15 @@ vi.mock('@/api/skills', () => ({
   setSkillEnabled: mockSetSkillEnabled,
   searchClawHub: vi.fn().mockResolvedValue([]),
   installFromHub: vi.fn(),
-  CLAWHUB_CATEGORIES: ['all', 'coding', 'research', 'writing', 'data', 'automation', 'productivity'],
+  CLAWHUB_CATEGORIES: [
+    'all',
+    'coding',
+    'research',
+    'writing',
+    'data',
+    'automation',
+    'productivity',
+  ],
 }))
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -395,12 +417,10 @@ describe('OllamaCard — edge cases', () => {
       models: [],
     })
 
-    mockPullOllamaModel.mockImplementation(
-      async (_model: string, cb: (p: any) => void) => {
-        cb({ status: 'downloading', completed: 100, total: 1000 })
-        throw new Error('stream interrupted')
-      },
-    )
+    mockPullOllamaModel.mockImplementation(async (_model: string, cb: (p: any) => void) => {
+      cb({ status: 'downloading', completed: 100, total: 1000 })
+      throw new Error('stream interrupted')
+    })
 
     const wrapper = await mountOllamaCard()
     await flushPromises()
@@ -475,10 +495,20 @@ describe('ChatView — edge cases', () => {
     settingsStore.config = {
       llm: { providers: [], defaultModel: '', defaultProviderId: '' },
       security: {
-        gateway_enabled: true, injection_detection: true, pii_filter: false,
-        content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60,
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
       },
-      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: '',
+      },
       notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
       mcp: { default_protocol: 'stdio' },
     }
@@ -496,10 +526,20 @@ describe('ChatView — edge cases', () => {
     settingsStore.config = {
       llm: { providers: [], defaultModel: '', defaultProviderId: '' },
       security: {
-        gateway_enabled: true, injection_detection: true, pii_filter: false,
-        content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60,
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
       },
-      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: '',
+      },
       notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
       mcp: { default_protocol: 'stdio' },
     }
@@ -518,17 +558,39 @@ describe('ChatView — edge cases', () => {
     settingsStore.config = {
       llm: {
         providers: [
-          { id: 'p1', name: 'P1', backendKey: 'p1', enabled: true, models: [{ id: 'm1', name: 'Model 1' }] },
-          { id: 'p2', name: 'P2', backendKey: 'p2', enabled: true, models: [{ id: 'm2', name: 'Model 2' }] },
+          {
+            id: 'p1',
+            name: 'P1',
+            backendKey: 'p1',
+            enabled: true,
+            models: [{ id: 'm1', name: 'Model 1' }],
+          },
+          {
+            id: 'p2',
+            name: 'P2',
+            backendKey: 'p2',
+            enabled: true,
+            models: [{ id: 'm2', name: 'Model 2' }],
+          },
         ] as any,
         defaultModel: 'm1',
         defaultProviderId: 'p1',
       },
       security: {
-        gateway_enabled: true, injection_detection: true, pii_filter: false,
-        content_filter: true, max_tokens_per_request: 8192, rate_limit_rpm: 60,
+        gateway_enabled: true,
+        injection_detection: true,
+        pii_filter: false,
+        content_filter: true,
+        max_tokens_per_request: 8192,
+        rate_limit_rpm: 60,
       },
-      general: { language: 'zh-CN', log_level: 'info', data_dir: '', auto_start: false, defaultAgentRole: '' },
+      general: {
+        language: 'zh-CN',
+        log_level: 'info',
+        data_dir: '',
+        auto_start: false,
+        defaultAgentRole: '',
+      },
       notification: { system_enabled: true, sound_enabled: false, agent_complete: true },
       mcp: { default_protocol: 'stdio' },
     }
@@ -540,7 +602,12 @@ describe('ChatView — edge cases', () => {
     ;(chatStore as unknown as Record<string, unknown>).isCurrentStreaming = true
     chatStore.messages = [
       { id: 'msg1', role: 'user', content: 'Hello', timestamp: new Date().toISOString() },
-      { id: 'msg2', role: 'assistant', content: 'Streaming...', timestamp: new Date().toISOString() },
+      {
+        id: 'msg2',
+        role: 'assistant',
+        content: 'Streaming...',
+        timestamp: new Date().toISOString(),
+      },
     ]
 
     expect(chatStore.messages.length).toBe(2)
@@ -600,7 +667,8 @@ describe('AgentsView — edge cases', () => {
           SearchInput: {
             props: ['modelValue', 'placeholder'],
             emits: ['update:modelValue'],
-            template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+            template:
+              '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
           },
           ConfirmDialog: { template: '<div />' },
           SegmentedControl: {
@@ -627,7 +695,12 @@ describe('AgentsView — edge cases', () => {
 
     const vm = wrapper.vm as any
     // Set a model that does not exist in the provider's model list
-    vm.newAgent = { name: 'new-agent', display_name: 'New', provider: 'test-provider', model: 'nonexistent-model' }
+    vm.newAgent = {
+      name: 'new-agent',
+      display_name: 'New',
+      provider: 'test-provider',
+      model: 'nonexistent-model',
+    }
     vm.showAddAgent = true
     await wrapper.vm.$nextTick()
 
@@ -653,7 +726,12 @@ describe('AgentsView — edge cases', () => {
     const validModel = providerModels[0]?.id ?? vm.agents?.[0]?.model ?? 'glm-5'
     const validProvider = vm.agents?.[0]?.provider ?? 'test-provider'
 
-    vm.newAgent = { name: 'agent-1', display_name: 'Dup', provider: validProvider, model: validModel }
+    vm.newAgent = {
+      name: 'agent-1',
+      display_name: 'Dup',
+      provider: validProvider,
+      model: validModel,
+    }
     vm.showAddAgent = true
     await wrapper.vm.$nextTick()
     await flushPromises()
@@ -722,10 +800,17 @@ describe('KnowledgeView — edge cases', () => {
     setActivePinia(createPinia())
     mockGetDocuments.mockResolvedValue({ documents: [], total: 0 })
     mockSearchKnowledge.mockResolvedValue({ result: [] })
-    mockUploadDocument.mockImplementation(async (_file: File, onProgress?: (pct: number) => void) => {
-      onProgress?.(100)
-      return { id: 'doc-1', title: 'A', chunk_count: 1, created_at: new Date().toISOString() }
-    })
+    mockUploadDocument.mockImplementation(
+      async (_file: File, onProgress?: (pct: number) => void) => {
+        onProgress?.(100)
+        return {
+          document_id: 'doc-1',
+          job_id: 'job-1',
+          text_index_state: 'pending',
+          vector_index_state: 'pending',
+        }
+      },
+    )
   })
 
   async function mountKnowledgeView(props: Record<string, unknown> = {}) {
@@ -746,13 +831,13 @@ describe('KnowledgeView — edge cases', () => {
     })
   }
 
-  it('uploading file > 50MB is rejected with error message', async () => {
+  it('uploading file > 200 MiB is rejected with error message', async () => {
     const wrapper = await mountKnowledgeView()
     await flushPromises()
 
     const vm = wrapper.vm as any
     const largeFile = new File(['x'], 'huge.pdf', { type: 'application/pdf' })
-    Object.defineProperty(largeFile, 'size', { value: 60 * 1024 * 1024 })
+    Object.defineProperty(largeFile, 'size', { value: 200 * 1024 * 1024 + 1 })
 
     const fileInput = wrapper.find('input[type="file"]')
     if (fileInput.exists()) {
@@ -855,7 +940,8 @@ describe('SkillsView — edge cases', () => {
           SearchInput: {
             props: ['modelValue', 'placeholder'],
             emits: ['update:modelValue'],
-            template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+            template:
+              '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
           },
           teleport: true,
           transition: false,
@@ -910,7 +996,8 @@ describe('Dead code detection — unused API exports', () => {
       for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
         const fullPath = path.join(d, entry.name)
         if (entry.isDirectory()) {
-          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist') continue
+          if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === 'dist')
+            continue
           walk(fullPath)
         } else if (
           entry.isFile() &&

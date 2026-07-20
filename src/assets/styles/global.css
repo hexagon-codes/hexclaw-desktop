@@ -108,6 +108,8 @@
   --hc-surface-2: var(--hc-bg-card);
   --hc-bg-secondary: var(--hc-bg-panel);
   --hc-bg-tertiary: var(--hc-bg-input);
+  --hc-bg-subtle: var(--hc-bg-input);
+  --hc-bg-sunken: var(--hc-bg-main);
   --hc-bg: var(--hc-bg-main);
   --hc-bg-primary: var(--hc-bg-main);
   --hc-accent-border: var(--hc-border-hl);
@@ -1041,4 +1043,3 @@ select.hc-input:focus {
   text-align: left;
   unicode-bidi: embed;
 }
-

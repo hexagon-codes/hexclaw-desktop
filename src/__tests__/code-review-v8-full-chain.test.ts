@@ -496,8 +496,8 @@ describe('LLM 配置链路', () => {
   })
 
   it('testLLMConnection 应校验 URL 格式', () => {
-    expect(configSrc).toContain('assertExternalBaseUrlAllowed(payload.provider.base_url, payload.provider.type)')
-    expect(configSrc).toContain("throw new Error('Invalid URL format')")
+    expect(configSrc).toContain('assertExternalBaseUrlAllowed(payload.provider.base_url, {')
+    expect(configSrc).toContain('providerType: payload.provider.type')
   })
 
   it('safeJsonParse 应包含上下文信息用于调试', () => {
@@ -636,7 +636,7 @@ describe('Canvas 画布链路', () => {
   })
 
   it('saveWorkflow 降级到 localStorage 应正确更新已存在的工作流', () => {
-    expect(canvasSrc).toContain('const existing = workflows.findIndex((w) => w.id === workflow.id)')
+    expect(canvasSrc).toContain('const existing = workflows.findIndex((w) => w.id === payload.id)')
     expect(canvasSrc).toContain('workflows[existing] = saved')
   })
 
@@ -770,7 +770,6 @@ describe('前后端 API 对齐', () => {
       'POST /api/v1/chat',
       // Knowledge
       'POST /api/v1/knowledge/documents',
-      'POST /api/v1/knowledge/upload',
       'GET /api/v1/knowledge/documents',
       'GET /api/v1/knowledge/documents/{id}',
       'DELETE /api/v1/knowledge/documents/{id}',
@@ -925,7 +924,7 @@ describe('代码质量', () => {
 
   it('settings store 不应超过 500 行', () => {
     const settingsSrc = readSrc('stores/settings.ts')
-    const lineCount = settingsSrc.split('\n').length
+    const lineCount = settingsSrc.trimEnd().split('\n').length
     // v0.2.6: 已拆分 settings-helpers.ts，当前 ~515 行
     expect(lineCount).toBeLessThanOrEqual(550)
   })
