@@ -86,6 +86,8 @@ export interface ApiPostOptions {
   timeout?: number | false
   /** 可取消：调用方 AbortController.signal，用于用户主动取消慢操作（如再练出题·BUG-20260712）。 */
   signal?: AbortSignal
+  /** Additional request headers (for example Idempotency-Key on durable creates). */
+  headers?: Record<string, string>
 }
 
 /** POST 请求 */
@@ -105,13 +107,14 @@ export function apiPost<T>(
         : options?.timeout && options.timeout > 0
           ? options.timeout
           : env.timeout
-    return uploadFormData<T>(url, body, tm, options?.signal)
+    return uploadFormData<T>(url, body, tm, options?.signal, options?.headers)
   }
   const opts: Record<string, unknown> = { method: 'POST' }
   if (body) opts.body = body as Record<string, unknown>
   if (options?.timeout === false) opts.timeout = 0
   else if (options?.timeout && options.timeout > 0) opts.timeout = options.timeout
   if (options?.signal) opts.signal = options.signal // 透传取消信号（ofetch 支持）
+  if (options?.headers) opts.headers = options.headers
   return withNormalizedError(api<T>(url, opts))
 }
 
@@ -120,6 +123,7 @@ async function uploadFormData<T>(
   body: FormData,
   timeoutMs: number | false,
   callerSignal?: AbortSignal,
+  headers?: Record<string, string>,
 ): Promise<T> {
   const fullUrl = `${env.apiBase}${url}`
   logger.debug(`→ POST ${fullUrl} (multipart)`)
@@ -133,11 +137,13 @@ async function uploadFormData<T>(
     else callerSignal.addEventListener('abort', onCallerAbort, { once: true })
   }
   try {
-    const response = await fetch(fullUrl, {
+    const requestInit: RequestInit = {
       method: 'POST',
       body,
       signal: controller.signal,
-    })
+    }
+    if (headers) requestInit.headers = headers
+    const response = await fetch(fullUrl, requestInit)
     logger.debug(`← ${response.status} POST ${fullUrl}`)
     if (!response.ok) {
       // 与 ofetch onResponseError 对齐：优先抽取 server body.error 字段（不只 statusText）

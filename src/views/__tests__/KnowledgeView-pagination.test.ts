@@ -12,6 +12,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 const { getDocuments } = vi.hoisted(() => ({ getDocuments: vi.fn() }))
 
 vi.mock('@/api/knowledge', () => ({
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments,
   getDocumentContent: vi.fn(),
   addDocument: vi.fn(),

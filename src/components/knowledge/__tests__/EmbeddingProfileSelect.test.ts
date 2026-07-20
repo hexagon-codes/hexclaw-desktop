@@ -58,6 +58,8 @@ function mountSelect(selection: EmbeddingSelection = { kind: 'auto' }) {
         cloud: '云端',
         installed: '已安装',
         connected: '已配置',
+        download: '下载',
+        downloading: '下载中',
         unavailable: '不可用',
       },
       providerNotice:
@@ -82,7 +84,7 @@ describe('EmbeddingProfileSelect', () => {
   it('renders one rich selector with grouped cloud/local profiles and text-only mode', async () => {
     const wrapper = mountSelect()
     const trigger = wrapper.get('[data-testid="kb-index-model-trigger"]')
-    expect(trigger.attributes('aria-label')).toBe('索引模型: 自动')
+    expect(trigger.attributes('aria-label')).toBe('索引模型: 自动（推荐）')
     await trigger.trigger('click')
     await flushPromises()
 
@@ -96,7 +98,11 @@ describe('EmbeddingProfileSelect', () => {
     const downloadable = [
       ...(listbox?.querySelectorAll<HTMLElement>('[role="option"]') ?? []),
     ].find((option) => option.textContent?.includes('mxbai-embed-large'))
-    expect(downloadable?.getAttribute('aria-disabled')).toBe('true')
+    expect(downloadable?.getAttribute('aria-disabled')).toBeNull()
+    expect(
+      downloadable?.querySelector('[data-testid="kb-index-model-download-local-mxbai"]')
+        ?.textContent,
+    ).toBe('下载')
     expect(listbox?.textContent).toContain('仅文本检索')
 
     const footer = document.body.querySelector('[data-testid="kb-index-provider-notice"]')
@@ -114,12 +120,16 @@ describe('EmbeddingProfileSelect', () => {
   it('supports Arrow/Home/End/Enter/Escape and restores focus to the trigger', async () => {
     const wrapper = mountSelect()
     const trigger = wrapper.get<HTMLButtonElement>('[data-testid="kb-index-model-trigger"]')
+    expect(trigger.attributes('aria-controls')).toBeUndefined()
     trigger.element.focus()
     await trigger.trigger('keydown', { key: 'ArrowDown' })
     await flushPromises()
 
     expect(trigger.attributes('aria-expanded')).toBe('true')
     expect(trigger.attributes('aria-activedescendant')).toBeTruthy()
+    expect(trigger.attributes('aria-controls')).toBe(
+      document.body.querySelector('[role="listbox"]')?.id,
+    )
 
     await trigger.trigger('keydown', { key: 'End' })
     await trigger.trigger('keydown', { key: 'Enter' })
@@ -130,6 +140,7 @@ describe('EmbeddingProfileSelect', () => {
     await trigger.trigger('keydown', { key: 'Home' })
     await trigger.trigger('keydown', { key: 'Escape' })
     expect(trigger.attributes('aria-expanded')).toBe('false')
+    expect(trigger.attributes('aria-controls')).toBeUndefined()
     expect(document.activeElement).toBe(trigger.element)
   })
 
@@ -149,6 +160,104 @@ describe('EmbeddingProfileSelect', () => {
       kind: 'profile',
       profile_id: 'local-nomic',
     })
+  })
+
+  it('starts a local model download without selecting it or closing the menu', async () => {
+    const wrapper = mountSelect()
+    const trigger = wrapper.get('[data-testid="kb-index-model-trigger"]')
+    await trigger.trigger('click')
+    await flushPromises()
+
+    const downloadable = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.includes('mxbai-embed-large'),
+    )
+    expect(downloadable).toBeTruthy()
+    downloadable?.click()
+    await flushPromises()
+
+    expect(wrapper.emitted('download')?.[0]?.[0]).toEqual(profiles[2])
+    expect(wrapper.emitted('select')).toBeUndefined()
+    expect(trigger.attributes('aria-expanded')).toBe('true')
+
+    await wrapper.setProps({
+      profiles: profiles.map((profile) =>
+        profile.profile_id === 'local-mxbai'
+          ? { ...profile, availability: 'downloading' as const }
+          : profile,
+      ),
+      downloadProgress: { 'local-mxbai': 42 },
+    })
+    await flushPromises()
+
+    const downloading = [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.includes('mxbai-embed-large'),
+    )
+    expect(downloading?.getAttribute('aria-disabled')).toBe('true')
+    expect(
+      downloading?.querySelector('[data-testid="kb-index-model-download-local-mxbai"]')
+        ?.textContent,
+    ).toBe('下载中 42%')
+    downloading?.click()
+    expect(wrapper.emitted('download')).toHaveLength(1)
+  })
+
+  it('starts a downloadable local model with the listbox keyboard contract', async () => {
+    const wrapper = mountSelect()
+    const trigger = wrapper.get('[data-testid="kb-index-model-trigger"]')
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    await trigger.trigger('keydown', { key: 'ArrowDown' })
+    await trigger.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+
+    expect(wrapper.emitted('download')?.[0]?.[0]).toEqual(profiles[2])
+    expect(wrapper.emitted('select')).toBeUndefined()
+    expect(trigger.attributes('aria-expanded')).toBe('true')
+  })
+
+  it('limits the trailing download action to local download states and preserves true progress', async () => {
+    const cloudDownloadable: EmbeddingProfile = {
+      ...profiles[0]!,
+      profile_id: 'cloud-downloadable',
+      model_name: 'cloud-not-connected',
+      availability: 'downloadable',
+      display_order: 11,
+    }
+    const wrapper = mountSelect()
+    await wrapper.setProps({
+      profiles: [
+        ...profiles.map((profile) =>
+          profile.profile_id === 'local-mxbai'
+            ? { ...profile, availability: 'downloading' as const }
+            : profile,
+        ),
+        cloudDownloadable,
+      ],
+      downloadProgress: { 'local-mxbai': 0 },
+    })
+    const trigger = wrapper.get('[data-testid="kb-index-model-trigger"]')
+    await trigger.trigger('click')
+    await flushPromises()
+
+    const optionFor = (model: string) =>
+      [...document.body.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+        option.textContent?.includes(model),
+      )
+    expect(optionFor('mxbai-embed-large')?.textContent).toContain('下载中 0%')
+    expect(optionFor('cloud-not-connected')?.getAttribute('aria-disabled')).toBe('true')
+    expect(
+      optionFor('cloud-not-connected')?.querySelector('[data-testid^="kb-index-model-download-"]'),
+    ).toBeNull()
+    expect(
+      optionFor('nomic-embed-text')?.querySelector('[data-testid^="kb-index-model-download-"]'),
+    ).toBeNull()
+
+    await trigger.trigger('keydown', { key: 'Escape' })
+    await wrapper.setProps({ downloadProgress: { 'local-mxbai': 100 } })
+    await trigger.trigger('click')
+    await flushPromises()
+    expect(optionFor('mxbai-embed-large')?.textContent).toContain('下载中 100%')
   })
 
   it('keeps the provider documentation link keyboard reachable without a modal', async () => {

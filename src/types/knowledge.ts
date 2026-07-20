@@ -10,6 +10,21 @@ export interface KnowledgeDoc {
   status?: 'processing' | 'indexed' | 'failed'
   error_message?: string
   source_type?: string
+  vector_index_state?:
+    | 'disabled'
+    | 'pending'
+    | 'building'
+    | 'retry_wait'
+    | 'ready'
+    | 'failed'
+    | 'cancelled'
+  vector_job_id?: string
+  vector_job_state?: 'queued' | 'running' | 'retry_wait' | 'succeeded' | 'failed' | 'cancelled'
+  vector_job_stage?: string
+  vector_chunks_done?: number
+  vector_chunks_total?: number
+  vector_error?: string
+  vector_outcome_unknown?: boolean
 }
 
 /** 知识库搜索结果 */

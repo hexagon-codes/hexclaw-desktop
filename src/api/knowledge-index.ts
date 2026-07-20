@@ -1,4 +1,5 @@
 import { apiGet, apiPost } from './client'
+import { DESKTOP_USER_ID } from '@/constants'
 
 /**
  * The corpus has one source of truth for its embedding choice. Location,
@@ -37,6 +38,8 @@ export type EmbeddingProfile = KnowledgeEmbeddingProfile
 /** Immutable execution projection for the active or staged index revision. */
 export interface KnowledgeEmbeddingRevisionProjection {
   revision_id: string
+  /** Persistent rebuild job, when this is the staged desired revision. */
+  job_id?: string | null
   state: 'disabled' | 'pending' | 'building' | 'retry_wait' | 'ready' | 'failed' | 'cancelled'
   profile: KnowledgeEmbeddingProfile
   chunks_done?: number
@@ -51,12 +54,21 @@ export interface KnowledgeEmbeddingRecommendation {
   reason_text: string
 }
 
+/** Aggregate activity is independent from a staged profile rebuild. */
+export interface KnowledgeIndexingActivity {
+  state: 'idle' | 'building' | 'retry_wait' | 'failed'
+  processing_documents: number
+  chunks_done: number | null
+  chunks_total: number | null
+}
+
 /** Read model for the semantic-index card and its model picker. */
 export interface KnowledgeEmbeddingPolicyProjection {
   policy_version: number
   selection: EmbeddingSelection
   active_revision: KnowledgeEmbeddingRevisionProjection | null
   desired_revision: KnowledgeEmbeddingRevisionProjection | null
+  indexing_activity: KnowledgeIndexingActivity
   available_profiles: KnowledgeEmbeddingProfile[]
   recommendation: KnowledgeEmbeddingRecommendation | null
   catalog_version: number
@@ -75,14 +87,41 @@ export interface ApplyKnowledgeEmbeddingPolicyResult {
   job_id?: string | null
 }
 
+export type KnowledgeJobState =
+  | 'queued'
+  | 'running'
+  | 'retry_wait'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+
+export interface KnowledgeJobProjection {
+  job_id: string
+  state: KnowledgeJobState
+  stage: string
+  pages_done: number | null
+  pages_total: number | null
+  chunks_done: number | null
+  chunks_total: number | null
+  last_error?: string | null
+  available_actions?: string[]
+}
+
 function embeddingPolicyPath(corpusId: string): string {
   return `/api/v1/knowledge/corpora/${encodeURIComponent(corpusId)}/embedding-policy`
+}
+
+function withDesktopUser(url: string): string {
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}user_id=${encodeURIComponent(DESKTOP_USER_ID)}`
 }
 
 export function getKnowledgeEmbeddingPolicy(
   corpusId: string,
 ): Promise<KnowledgeEmbeddingPolicyProjection> {
-  return apiGet<KnowledgeEmbeddingPolicyProjection>(embeddingPolicyPath(corpusId))
+  return apiGet<KnowledgeEmbeddingPolicyProjection>(embeddingPolicyPath(corpusId), {
+    user_id: DESKTOP_USER_ID,
+  })
 }
 
 export function applyKnowledgeEmbeddingPolicy(
@@ -95,8 +134,20 @@ export function applyKnowledgeEmbeddingPolicy(
     selection,
   }
   return apiPost<ApplyKnowledgeEmbeddingPolicyResult>(
-    `${embeddingPolicyPath(corpusId)}:apply`,
+    withDesktopUser(`${embeddingPolicyPath(corpusId)}:apply`),
     body,
+  )
+}
+
+export function getKnowledgeJob(jobId: string): Promise<KnowledgeJobProjection> {
+  return apiGet<KnowledgeJobProjection>(`/api/v1/knowledge/jobs/${encodeURIComponent(jobId)}`, {
+    user_id: DESKTOP_USER_ID,
+  })
+}
+
+export function cancelKnowledgeJob(jobId: string): Promise<KnowledgeJobProjection> {
+  return apiPost<KnowledgeJobProjection>(
+    withDesktopUser(`/api/v1/knowledge/jobs/${encodeURIComponent(jobId)}/cancel`),
   )
 }
 
@@ -106,7 +157,15 @@ export function applyKnowledgeEmbeddingPolicy(
  */
 export function isKnowledgeEmbeddingPolicyUnsupported(error: unknown): boolean {
   if (typeof error !== 'object' || error === null) return false
-  const candidate = error as { status?: unknown; statusCode?: unknown }
-  const status = candidate.status ?? candidate.statusCode
-  return status === 404 || status === 405
+  const candidate = error as {
+    status?: unknown
+    statusCode?: unknown
+    data?: { code?: unknown }
+    response?: { status?: unknown; _data?: { code?: unknown } }
+  }
+  const status = candidate.status ?? candidate.statusCode ?? candidate.response?.status
+  if (status === 405) return true
+  if (status !== 404) return false
+  const code = candidate.data?.code ?? candidate.response?._data?.code
+  return code !== 'semantic_index_not_found'
 }

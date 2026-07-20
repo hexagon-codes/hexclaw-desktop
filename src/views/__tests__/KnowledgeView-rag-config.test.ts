@@ -26,6 +26,7 @@ const api = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/knowledge', () => ({
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments: () => api.getDocuments(),
   searchKnowledge: (q: string, k?: number, f?: unknown) => api.searchKnowledge(q, k, f),
   uploadDocument: (file: File, onP?: (p: number) => void) => api.uploadDocument(file, onP),
@@ -127,6 +128,18 @@ describe('KnowledgeView 检索质量参数面板', () => {
     // HcSelect 触发区显示当前值（非预设值不被吸附到预设而丢失）。
     expect(wrapper.find('[data-testid="kb-rag-candidate-k"]').text()).toContain('42')
     expect(wrapper.find('[data-testid="kb-rag-rerank-model"]').text()).toContain('custom/my-reranker-v9')
+    wrapper.unmount()
+  })
+
+  it('[bug] 获取失败显示 unknown/error，不把前端默认值伪装成后端当前配置', async () => {
+    api.getKnowledgeConfig.mockRejectedValueOnce(new Error('sidecar unavailable'))
+
+    const wrapper = await mountSearchTab()
+
+    expect(wrapper.find('[data-testid="kb-rag-load-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="kb-rag-rerank"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="kb-rag-min-score"]').exists()).toBe(false)
+    expect(api.putKnowledgeConfig).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 

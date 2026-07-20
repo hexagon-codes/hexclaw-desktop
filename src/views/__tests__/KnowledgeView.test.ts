@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { createPinia } from 'pinia'
 import KnowledgeView from '../KnowledgeView.vue'
@@ -12,9 +12,12 @@ const {
   uploadDocument,
   searchKnowledge,
   reindexDocument,
+  retryKnowledgeDocument,
   isKnowledgeUploadEndpointMissing,
   isKnowledgeUploadUnsupportedFormat,
   parseDocument,
+  getKnowledgeJob,
+  cancelKnowledgeJob,
 } = vi.hoisted(() => ({
   getDocuments: vi.fn(),
   getDocumentContent: vi.fn(),
@@ -22,12 +25,16 @@ const {
   uploadDocument: vi.fn(),
   searchKnowledge: vi.fn(),
   reindexDocument: vi.fn(),
+  retryKnowledgeDocument: vi.fn(),
   isKnowledgeUploadEndpointMissing: vi.fn(),
   isKnowledgeUploadUnsupportedFormat: vi.fn(),
   parseDocument: vi.fn(),
+  getKnowledgeJob: vi.fn(),
+  cancelKnowledgeJob: vi.fn(),
 }))
 
 vi.mock('@/api/knowledge', () => ({
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments,
   getDocumentContent,
   addDocument,
@@ -35,15 +42,45 @@ vi.mock('@/api/knowledge', () => ({
   searchKnowledge,
   uploadDocument,
   reindexDocument,
+  retryKnowledgeDocument,
   isKnowledgeUploadEndpointMissing,
   isKnowledgeUploadUnsupportedFormat,
   getKnowledgeConfig: () =>
-    Promise.resolve({ rerank: true, rerank_model: '', query_expand: true, contextual: true, min_score: 0.55, candidate_k: 50 }),
+    Promise.resolve({
+      rerank: true,
+      rerank_model: '',
+      query_expand: true,
+      contextual: true,
+      min_score: 0.55,
+      candidate_k: 50,
+    }),
   putKnowledgeConfig: (c: Record<string, unknown>) => Promise.resolve({ ...c }),
 }))
 
 vi.mock('@/utils/file-parser', () => ({
   parseDocument,
+}))
+
+vi.mock('@/api/knowledge-index', () => ({
+  getKnowledgeJob,
+  cancelKnowledgeJob,
+  getKnowledgeEmbeddingPolicy: vi.fn().mockResolvedValue({
+    policy_version: 1,
+    selection: { kind: 'disabled' },
+    active_revision: null,
+    desired_revision: null,
+    indexing_activity: {
+      state: 'idle',
+      processing_documents: 0,
+      chunks_done: null,
+      chunks_total: null,
+    },
+    available_profiles: [],
+    recommendation: null,
+    catalog_version: 1,
+  }),
+  applyKnowledgeEmbeddingPolicy: vi.fn(),
+  isKnowledgeEmbeddingPolicyUnsupported: vi.fn().mockReturnValue(false),
 }))
 
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -83,6 +120,8 @@ function mountKnowledgeView(props: Record<string, unknown> = {}) {
   })
 }
 
+enableAutoUnmount(afterEach)
+
 describe('KnowledgeView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -96,6 +135,12 @@ describe('KnowledgeView', () => {
     })
     searchKnowledge.mockResolvedValue({ result: [] })
     reindexDocument.mockResolvedValue({ status: 'processing' })
+    retryKnowledgeDocument.mockResolvedValue({
+      document_id: 'doc-1',
+      job_id: 'job-retry',
+      text_index_state: 'pending',
+      vector_index_state: 'disabled',
+    })
     isKnowledgeUploadEndpointMissing.mockReturnValue(false)
     isKnowledgeUploadUnsupportedFormat.mockReturnValue(false)
     parseDocument.mockResolvedValue({
@@ -105,11 +150,29 @@ describe('KnowledgeView', () => {
     uploadDocument.mockImplementation(async (_file: File, onProgress?: (pct: number) => void) => {
       onProgress?.(100)
       return {
-        id: 'doc-1',
-        title: 'A',
-        chunk_count: 1,
-        created_at: new Date().toISOString(),
+        document_id: 'doc-1',
+        job_id: 'job-1',
+        text_index_state: 'pending',
+        vector_index_state: 'pending',
       }
+    })
+    getKnowledgeJob.mockResolvedValue({
+      job_id: 'job-1',
+      state: 'running',
+      stage: 'extracting',
+      pages_done: 0,
+      pages_total: null,
+      chunks_done: null,
+      chunks_total: null,
+    })
+    cancelKnowledgeJob.mockResolvedValue({
+      job_id: 'job-1',
+      state: 'cancelled',
+      stage: 'extracting',
+      pages_done: 0,
+      pages_total: null,
+      chunks_done: null,
+      chunks_total: null,
     })
   })
 
@@ -135,6 +198,257 @@ describe('KnowledgeView', () => {
     expect(getDocuments).toHaveBeenCalledTimes(2)
   })
 
+  it('rejects an oversized batch before hashing or uploading and shows the total-byte budget', async () => {
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    const fileInput = wrapper.get('input[type="file"]')
+    const files = ['one.pdf', 'two.pdf', 'three.pdf'].map((name) => {
+      const file = new File(['small fixture'], name, { type: 'application/pdf' })
+      Object.defineProperty(file, 'size', { configurable: true, value: 200 * 1024 * 1024 })
+      return file
+    })
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: files,
+    })
+
+    await fileInput.trigger('change')
+    await flushPromises()
+
+    expect(uploadDocument).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('512 MB')
+    expect(wrapper.text()).toContain('批')
+  })
+
+  it('keeps response-unknown upload recoverable and reuses one row when the same file is reselected', async () => {
+    let attempt = 0
+    uploadDocument.mockImplementation(
+      async (
+        _file: File,
+        onProgress?: (pct: number) => void,
+        onIntent?: (intent: { idempotencyKey: string; sourceSha256: string }) => void,
+      ) => {
+        attempt += 1
+        onIntent?.({
+          idempotencyKey: 'knowledge-upload:recoverable',
+          sourceSha256: 'a'.repeat(64),
+        })
+        onProgress?.(100)
+        if (attempt === 1) throw new Error('Network error')
+        return {
+          document_id: 'doc-recovered',
+          job_id: 'job-recovered',
+          text_index_state: 'pending',
+          vector_index_state: 'disabled',
+        }
+      },
+    )
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    const input = wrapper.get('input[type="file"]')
+    const selectSameFile = async () => {
+      Object.defineProperty(input.element, 'files', {
+        configurable: true,
+        value: [new File(['same immutable bytes'], 'same.pdf', { type: 'application/pdf' })],
+      })
+      await input.trigger('change')
+      await flushPromises()
+    }
+
+    await selectSameFile()
+    expect(wrapper.findAll('[data-testid="knowledge-upload-job"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="knowledge-upload-pending-response"]').exists()).toBe(true)
+
+    await selectSameFile()
+    expect(uploadDocument).toHaveBeenCalledTimes(2)
+    expect(wrapper.findAll('[data-testid="knowledge-upload-job"]')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="knowledge-upload-pending-response"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="knowledge-upload-cancel"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('[bug] cancels an in-flight byte upload through its AbortSignal without creating a fake job', async () => {
+    let uploadSignal: AbortSignal | undefined
+    uploadDocument.mockImplementation(
+      (
+        _file: File,
+        _onProgress?: (pct: number) => void,
+        onIntent?: (intent: { idempotencyKey: string; sourceSha256: string }) => void,
+        options?: { signal?: AbortSignal },
+      ) => {
+        onIntent?.({
+          idempotencyKey: 'knowledge-upload:cancel-in-flight',
+          sourceSha256: 'b'.repeat(64),
+        })
+        uploadSignal = options?.signal
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('Upload aborted', 'AbortError')),
+            { once: true },
+          )
+        })
+      },
+    )
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    const fileInput = wrapper.get('input[type="file"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [new File(['alpha'], 'cancel.pdf', { type: 'application/pdf' })],
+    })
+
+    await fileInput.trigger('change')
+    await vi.waitFor(() => {
+      expect(wrapper.find('[data-testid="knowledge-upload-cancel"]').exists()).toBe(true)
+    })
+    await wrapper.get('[data-testid="knowledge-upload-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(uploadSignal?.aborted).toBe(true)
+    expect(cancelKnowledgeJob).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="knowledge-upload-cancelled"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="knowledge-upload-pending-response"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('keeps a 202 upload attached to its persistent job and lets the user cancel it', async () => {
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    const fileInput = wrapper.find('input[type="file"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [new File(['alpha'], 'alpha.pdf', { type: 'application/pdf' })],
+    })
+
+    await fileInput.trigger('change')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="knowledge-upload-job"]').exists()).toBe(true)
+    const cancel = wrapper.get('[data-testid="knowledge-upload-cancel"]')
+    await cancel.trigger('click')
+    await flushPromises()
+
+    expect(cancelKnowledgeJob).toHaveBeenCalledWith('job-1')
+    expect(wrapper.find('[data-testid="knowledge-upload-cancelled"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('settles a cancel race when text became ready before the cancel command', async () => {
+    cancelKnowledgeJob.mockResolvedValueOnce({
+      job_id: 'job-1',
+      state: 'succeeded',
+      stage: 'text_indexing',
+      cancel_requested: true,
+      pages_done: 12,
+      pages_total: 12,
+      chunks_done: 48,
+      chunks_total: 48,
+    })
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    const fileInput = wrapper.find('input[type="file"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [new File(['alpha'], 'alpha.pdf', { type: 'application/pdf' })],
+    })
+    await fileInput.trigger('change')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="knowledge-upload-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="knowledge-upload-cancel"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="knowledge-upload-cancelled"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('polls the durable job and only settles the upload after it succeeds', async () => {
+    vi.useFakeTimers()
+    try {
+      getKnowledgeJob.mockResolvedValueOnce({
+        job_id: 'job-1',
+        state: 'succeeded',
+        stage: 'completed',
+        pages_done: 12,
+        pages_total: 12,
+        chunks_done: 48,
+        chunks_total: 48,
+      })
+      const wrapper = mountKnowledgeView()
+      await flushPromises()
+      const fileInput = wrapper.find('input[type="file"]')
+      Object.defineProperty(fileInput.element, 'files', {
+        configurable: true,
+        value: [new File(['alpha'], 'alpha.pdf', { type: 'application/pdf' })],
+      })
+
+      await fileInput.trigger('change')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="upload-processing"]').exists()).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+
+      expect(getKnowledgeJob).toHaveBeenCalledWith('job-1')
+      expect(getDocuments).toHaveBeenCalledTimes(3)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('refreshes the document projection when a durable upload job fails', async () => {
+    vi.useFakeTimers()
+    try {
+      const processingDoc = {
+        id: 'doc-1',
+        title: 'failed.pdf',
+        source: 'upload:failed.pdf',
+        source_type: 'upload',
+        chunk_count: 0,
+        created_at: '2026-01-01T00:00:00Z',
+        status: 'processing',
+      }
+      getDocuments
+        .mockResolvedValueOnce({ documents: [], total: 0 })
+        .mockResolvedValueOnce({ documents: [processingDoc], total: 1 })
+        .mockResolvedValueOnce({
+          documents: [{ ...processingDoc, status: 'failed', error_message: 'OCR unavailable' }],
+          total: 1,
+        })
+      getKnowledgeJob.mockResolvedValueOnce({
+        job_id: 'job-1',
+        state: 'failed',
+        stage: 'ocr',
+        pages_done: 0,
+        pages_total: 1,
+        chunks_done: null,
+        chunks_total: null,
+        last_error: 'OCR unavailable',
+      })
+      const wrapper = mountKnowledgeView()
+      await flushPromises()
+      const input = wrapper.get('input[type="file"]')
+      Object.defineProperty(input.element, 'files', {
+        configurable: true,
+        value: [new File(['pdf'], 'failed.pdf', { type: 'application/pdf' })],
+      })
+      await input.trigger('change')
+      await flushPromises()
+
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+
+      expect(getDocuments).toHaveBeenCalledTimes(3)
+      expect(wrapper.text()).toContain('OCR unavailable')
+      expect(wrapper.text()).toContain('重试索引')
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('允许把后端已支持的 .pptx 文件送入上传链路', async () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
@@ -142,9 +456,11 @@ describe('KnowledgeView', () => {
     const fileInput = wrapper.find('input[type="file"]')
     Object.defineProperty(fileInput.element, 'files', {
       configurable: true,
-      value: [new File(['slides'], 'lesson.pptx', {
-        type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      })],
+      value: [
+        new File(['slides'], 'lesson.pptx', {
+          type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        }),
+      ],
     })
 
     await fileInput.trigger('change')
@@ -156,13 +472,19 @@ describe('KnowledgeView', () => {
 
   it('does not start index polling when an upload finishes after unmount', async () => {
     let resolveUpload!: (value: {
-      id: string
-      title: string
-      chunk_count: number
-      created_at: string
+      document_id: string
+      job_id: string
+      text_index_state: 'pending'
+      vector_index_state: 'pending'
     }) => void
-    uploadDocument.mockReturnValueOnce(new Promise((resolve) => { resolveUpload = resolve }))
-    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval').mockReturnValue(1 as unknown as ReturnType<typeof setInterval>)
+    uploadDocument.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveUpload = resolve
+      }),
+    )
+    const setIntervalSpy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockReturnValue(1 as unknown as ReturnType<typeof setInterval>)
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
@@ -177,10 +499,10 @@ describe('KnowledgeView', () => {
 
     wrapper.unmount()
     resolveUpload({
-      id: 'doc-1',
-      title: 'alpha',
-      chunk_count: 1,
-      created_at: '2026-01-01T00:00:00Z',
+      document_id: 'doc-1',
+      job_id: 'job-1',
+      text_index_state: 'pending',
+      vector_index_state: 'pending',
     })
     await flushPromises()
 
@@ -189,7 +511,7 @@ describe('KnowledgeView', () => {
     expect(pollCalls).toBe(0)
   })
 
-  it('falls back to local parsing when the backend lacks a file upload endpoint', async () => {
+  it('does not create a second local document when the async upload endpoint is unavailable', async () => {
     uploadDocument.mockRejectedValueOnce(
       new Error('当前后端未提供知识库上传接口，请检查 HexClaw 后端版本'),
     )
@@ -214,13 +536,13 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     expect(uploadDocument).toHaveBeenCalledTimes(1)
-    expect(parseDocument).toHaveBeenCalledTimes(1)
-    expect(addDocument).toHaveBeenCalledWith('legacy.pdf', 'legacy parsed content', 'legacy.pdf')
-    expect(getDocuments).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).not.toContain('当前后端未提供知识库上传接口')
+    expect(parseDocument).not.toHaveBeenCalled()
+    expect(addDocument).not.toHaveBeenCalled()
+    expect(getDocuments).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('当前后端未提供知识库上传接口')
   })
 
-  it('falls back to local parsing when the backend rejects a supported PDF as unsupported', async () => {
+  it('does not create a second local document when the async endpoint rejects a format', async () => {
     uploadDocument.mockRejectedValueOnce(new Error('unsupported format: pdf'))
     isKnowledgeUploadUnsupportedFormat.mockReturnValue(true)
     parseDocument.mockResolvedValueOnce({
@@ -243,10 +565,48 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     expect(uploadDocument).toHaveBeenCalledTimes(1)
-    expect(parseDocument).toHaveBeenCalledTimes(1)
-    expect(addDocument).toHaveBeenCalledWith('design.pdf', 'pdf parsed content', 'design.pdf')
-    expect(getDocuments).toHaveBeenCalledTimes(2)
-    expect(wrapper.text()).not.toContain('unsupported format: pdf')
+    expect(parseDocument).not.toHaveBeenCalled()
+    expect(addDocument).not.toHaveBeenCalled()
+    expect(getDocuments).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('unsupported format: pdf')
+  })
+
+  it('accepts the real 57,313,616-byte sixth-grade PDF for asynchronous ingestion', async () => {
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const pdf = new File(['%PDF-1.7'], '六上.pdf', { type: 'application/pdf' })
+    Object.defineProperty(pdf, 'size', { value: 57_313_616 })
+    const fileInput = wrapper.find('input[type="file"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [pdf],
+    })
+
+    await fileInput.trigger('change')
+    await flushPromises()
+
+    expect(uploadDocument).toHaveBeenCalledTimes(1)
+    expect(uploadDocument.mock.calls[0]?.[0]).toBe(pdf)
+  })
+
+  it('rejects files larger than the 200 MiB ingestion ceiling', async () => {
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const tooLarge = new File(['%PDF-1.7'], 'too-large.pdf', { type: 'application/pdf' })
+    Object.defineProperty(tooLarge, 'size', { value: 200 * 1024 * 1024 + 1 })
+    const fileInput = wrapper.find('input[type="file"]')
+    Object.defineProperty(fileInput.element, 'files', {
+      configurable: true,
+      value: [tooLarge],
+    })
+
+    await fileInput.trigger('change')
+    await flushPromises()
+
+    expect(uploadDocument).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain('200 MB')
   })
 
   it('shows an inline error for unsupported file types instead of ignoring them silently', async () => {
@@ -295,14 +655,49 @@ describe('KnowledgeView', () => {
     expect(wrapper.text()).toContain('自动启用增强检索')
   })
 
-  it('exposes spreadsheet formats in the upload accept list', async () => {
+  it('keeps the upload accept list aligned with the v0.5.0 backend whitelist', async () => {
     const wrapper = mountKnowledgeView()
     await flushPromises()
 
     const fileInput = wrapper.get('input[type="file"]')
-    expect(fileInput.attributes('accept')).toContain('.xlsx')
-    expect(fileInput.attributes('accept')).toContain('.xls')
+    expect(fileInput.attributes('accept')?.split(',')).toEqual([
+      '.pdf',
+      '.txt',
+      '.md',
+      '.docx',
+      '.doc',
+      '.pptx',
+      '.csv',
+      '.json',
+      '.png',
+      '.jpg',
+      '.jpeg',
+      '.webp',
+      '.gif',
+    ])
   })
+
+  it.each(['lesson.xls', 'lesson.xlsx'])(
+    'rejects backend-unsupported spreadsheet %s before starting upload',
+    async (name) => {
+      const wrapper = mountKnowledgeView()
+      await flushPromises()
+
+      const fileInput = wrapper.get('input[type="file"]')
+      Object.defineProperty(fileInput.element, 'files', {
+        configurable: true,
+        value: [new File(['sheet'], name, { type: 'application/octet-stream' })],
+      })
+
+      await fileInput.trigger('change')
+      await flushPromises()
+
+      expect(uploadDocument).not.toHaveBeenCalled()
+      expect(wrapper.text()).toContain(
+        '不支持的文件类型，仅支持: .pdf, .txt, .md, .docx, .doc, .pptx, .csv, .json, .png, .jpg, .jpeg, .webp, .gif',
+      )
+    },
+  )
 
   it('opens document detail drawer and renders document content', async () => {
     getDocuments.mockResolvedValueOnce({
@@ -326,6 +721,70 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('完整正文')
+  })
+
+  it('shows a dedicated document-content error and retries without pretending the document is empty', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-content-failed',
+          title: '待读取文档',
+          content: '',
+          chunk_count: 2,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+      total: 1,
+    })
+    getDocumentContent
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValueOnce('重试后正文')
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const docButton = wrapper.findAll('button').find((btn) => btn.text().includes('待读取文档'))
+    await docButton!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="knowledge-doc-content-error"]').text()).toContain(
+      '文档内容加载失败',
+    )
+    expect(wrapper.text()).not.toContain('文档内容暂不可用')
+
+    await wrapper.get('[data-testid="knowledge-doc-content-retry"]').trigger('click')
+    await flushPromises()
+
+    expect(getDocumentContent).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('重试后正文')
+    expect(wrapper.find('[data-testid="knowledge-doc-content-error"]').exists()).toBe(false)
+  })
+
+  it('keeps a successful empty document distinct from a content request failure', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-truly-empty',
+          title: '真正空文档',
+          content: '',
+          chunk_count: 0,
+          created_at: '2026-01-01T00:00:00Z',
+        },
+      ],
+      total: 1,
+    })
+    getDocumentContent.mockResolvedValueOnce('')
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    const docButton = wrapper.findAll('button').find((btn) => btn.text().includes('真正空文档'))
+    await docButton!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="knowledge-doc-content-error"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('文档没有可显示的文本内容')
+    expect(wrapper.find('[data-testid="knowledge-doc-content-retry"]').exists()).toBe(false)
   })
 
   it('shows the document count in the tab without rendering a duplicate stats panel', async () => {
@@ -665,7 +1124,13 @@ describe('KnowledgeView', () => {
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
-      handleReindex: (doc: { id: string; title: string; content: string; chunk_count: number; created_at: string }) => Promise<void>
+      handleReindex: (doc: {
+        id: string
+        title: string
+        content: string
+        chunk_count: number
+        created_at: string
+      }) => Promise<void>
     }
 
     const doc = {
@@ -685,5 +1150,268 @@ describe('KnowledgeView', () => {
 
     resolveReindex()
     await flushPromises()
+  })
+
+  it('uses the durable retry command for a failed document and suppresses double-clicks', async () => {
+    vi.useFakeTimers()
+    try {
+      let resolveRetry!: (value: {
+        document_id: string
+        job_id: string
+        text_index_state: 'pending'
+        vector_index_state: 'disabled'
+      }) => void
+      getDocuments.mockResolvedValueOnce({
+        documents: [
+          {
+            id: 'doc-failed',
+            title: '失败讲义.pdf',
+            content: '',
+            chunk_count: 0,
+            created_at: '2026-01-01T00:00:00Z',
+            status: 'failed',
+            error_message: 'OCR temporarily unavailable',
+          },
+        ],
+        total: 1,
+      })
+      retryKnowledgeDocument.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRetry = resolve
+          }),
+      )
+      const wrapper = mountKnowledgeView()
+      await flushPromises()
+      const retryButton = wrapper
+        .findAll('[data-testid="knowledge-doc-actions"] button')
+        .find((button) => button.text().includes('重试索引'))
+      expect(retryButton).toBeDefined()
+
+      void retryButton!.trigger('click')
+      void retryButton!.trigger('click')
+      await flushPromises()
+
+      expect(retryKnowledgeDocument).toHaveBeenCalledTimes(1)
+      expect(retryKnowledgeDocument).toHaveBeenCalledWith('doc-failed')
+      expect(reindexDocument).not.toHaveBeenCalled()
+
+      resolveRetry({
+        document_id: 'doc-failed',
+        job_id: 'job-retry',
+        text_index_state: 'pending',
+        vector_index_state: 'disabled',
+      })
+      await flushPromises()
+
+      const vm = wrapper.vm as unknown as { docs: Array<{ id: string; status?: string }> }
+      expect(vm.docs.find((doc) => doc.id === 'doc-failed')?.status).toBe('processing')
+      getKnowledgeJob.mockResolvedValueOnce({
+        job_id: 'job-retry',
+        state: 'succeeded',
+        stage: 'text_indexing',
+        pages_done: 1,
+        pages_total: 1,
+        chunks_done: 1,
+        chunks_total: 1,
+      })
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+
+      expect(getKnowledgeJob).toHaveBeenCalledWith('job-retry')
+      expect(getDocuments).toHaveBeenCalledTimes(2)
+      wrapper.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries a failed embedding child without hiding the ready text document', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-vector-failed',
+          title: '数学讲义.pdf',
+          source: 'upload:数学讲义.pdf',
+          source_type: 'upload',
+          content: '已经可以全文检索的正文',
+          chunk_count: 4,
+          created_at: '2026-01-01T00:00:00Z',
+          status: 'indexed',
+          vector_index_state: 'failed',
+          vector_job_id: 'job-vector-failed',
+          vector_job_state: 'failed',
+          vector_job_stage: 'embedding',
+          vector_error: 'embedding provider unavailable',
+        },
+      ],
+      total: 1,
+    })
+    retryKnowledgeDocument.mockResolvedValueOnce({
+      document_id: 'doc-vector-failed',
+      job_id: 'job-vector-retry',
+      text_index_state: 'ready',
+      vector_index_state: 'pending',
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('语义增强失败')
+    expect(wrapper.text()).toContain('embedding provider unavailable')
+    const retry = wrapper.get('[data-testid="knowledge-vector-retry"]')
+    await retry.trigger('click')
+    await flushPromises()
+
+    expect(retryKnowledgeDocument).toHaveBeenCalledWith('doc-vector-failed')
+    expect(reindexDocument).not.toHaveBeenCalled()
+    const vm = wrapper.vm as unknown as {
+      docs: Array<{
+        id: string
+        status?: string
+        vector_index_state?: string
+        vector_job_id?: string
+      }>
+    }
+    expect(vm.docs.find((doc) => doc.id === 'doc-vector-failed')).toMatchObject({
+      status: 'indexed',
+      vector_index_state: 'pending',
+      vector_job_id: 'job-vector-retry',
+    })
+    wrapper.unmount()
+  })
+
+  it('cancels an active document embedding child and refreshes its projection', async () => {
+    const buildingDocument = {
+      id: 'doc-vector-running',
+      title: '科学讲义.pdf',
+      source: 'upload:科学讲义.pdf',
+      source_type: 'upload' as const,
+      content: '正文',
+      chunk_count: 3,
+      created_at: '2026-01-01T00:00:00Z',
+      status: 'indexed' as const,
+      vector_index_state: 'building' as const,
+      vector_job_id: 'job-vector-running',
+      vector_job_state: 'running' as const,
+      vector_job_stage: 'embedding',
+      vector_chunks_done: 1,
+      vector_chunks_total: 3,
+    }
+    getDocuments
+      .mockResolvedValueOnce({ documents: [buildingDocument], total: 1 })
+      .mockResolvedValueOnce({
+        documents: [
+          {
+            ...buildingDocument,
+            vector_index_state: 'cancelled',
+            vector_job_state: 'cancelled',
+          },
+        ],
+        total: 1,
+      })
+    cancelKnowledgeJob.mockResolvedValueOnce({
+      job_id: 'job-vector-running',
+      state: 'cancelled',
+      stage: 'embedding',
+      pages_done: null,
+      pages_total: null,
+      chunks_done: 1,
+      chunks_total: 3,
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    await wrapper.get('[data-testid="knowledge-vector-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(cancelKnowledgeJob).toHaveBeenCalledWith('job-vector-running')
+    expect(getDocuments).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('语义增强已取消')
+    expect(wrapper.find('[data-testid="knowledge-vector-cancel"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('does not offer blind retry when an embedding batch outcome is unknown', async () => {
+    getDocuments.mockResolvedValueOnce({
+      documents: [
+        {
+          id: 'doc-vector-unknown',
+          title: '英语讲义.pdf',
+          source: 'upload:英语讲义.pdf',
+          source_type: 'upload',
+          content: '正文',
+          chunk_count: 2,
+          created_at: '2026-01-01T00:00:00Z',
+          status: 'indexed',
+          vector_index_state: 'failed',
+          vector_job_id: 'job-vector-unknown',
+          vector_job_state: 'failed',
+          vector_job_stage: 'embedding',
+          vector_error: 'provider response timed out after dispatch',
+          vector_outcome_unknown: true,
+        },
+      ],
+      total: 1,
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('语义增强结果待核实')
+    expect(wrapper.find('[data-testid="knowledge-vector-retry"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="knowledge-vector-cancel"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('keeps polling a document embedding child after the root upload row is gone', async () => {
+    const buildingDocument = {
+      id: 'doc-vector-poll',
+      title: '历史讲义.pdf',
+      source: 'upload:历史讲义.pdf',
+      source_type: 'upload' as const,
+      content: '正文',
+      chunk_count: 5,
+      created_at: '2026-01-01T00:00:00Z',
+      status: 'indexed' as const,
+      vector_index_state: 'building' as const,
+      vector_job_id: 'job-vector-poll',
+      vector_job_state: 'running' as const,
+      vector_job_stage: 'embedding',
+    }
+    getDocuments
+      .mockResolvedValueOnce({ documents: [buildingDocument], total: 1 })
+      .mockResolvedValueOnce({
+        documents: [
+          {
+            ...buildingDocument,
+            vector_index_state: 'failed',
+            vector_job_state: 'failed',
+            vector_error: 'embedding quota exhausted',
+          },
+        ],
+        total: 1,
+      })
+    getKnowledgeJob.mockResolvedValueOnce({
+      job_id: 'job-vector-poll',
+      state: 'failed',
+      stage: 'embedding',
+      pages_done: null,
+      pages_total: null,
+      chunks_done: 0,
+      chunks_total: 5,
+      last_error: 'embedding quota exhausted',
+    })
+
+    const wrapper = mountKnowledgeView()
+    await flushPromises()
+    const vm = wrapper.vm as unknown as { pollKnowledgeUploadJobs: () => Promise<void> }
+    await vm.pollKnowledgeUploadJobs()
+    await flushPromises()
+
+    expect(getKnowledgeJob).toHaveBeenCalledWith('job-vector-poll')
+    expect(getDocuments).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('embedding quota exhausted')
+    wrapper.unmount()
   })
 })

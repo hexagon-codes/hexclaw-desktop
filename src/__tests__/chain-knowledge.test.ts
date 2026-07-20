@@ -79,13 +79,13 @@ describe('Chain D: Knowledge Base -> Upload -> Search', () => {
     expect(result.documents[0]!.title).toBe('API Guide')
   })
 
-  it('D2: uploadDocument posts to /api/v1/knowledge/upload (single path, no fallback)', async () => {
+  it('D2: uploadDocument posts to the durable asynchronous documents endpoint', async () => {
     // For uploadDocument without onProgress, it uses apiPost
     mockApiPost.mockResolvedValueOnce({
-      id: 'doc-new',
-      title: 'uploaded.pdf',
-      chunk_count: 10,
-      created_at: '2026-01-01',
+      document_id: 'doc-new',
+      job_id: 'job-new',
+      text_index_state: 'pending',
+      vector_index_state: 'pending',
     })
 
     const { uploadDocument } = await import('@/api/knowledge')
@@ -93,11 +93,15 @@ describe('Chain D: Knowledge Base -> Upload -> Search', () => {
     const result = await uploadDocument(file)
 
     expect(mockApiPost).toHaveBeenCalledWith(
-      '/api/v1/knowledge/upload',
+      '/api/v1/knowledge/documents?user_id=desktop-user',
       expect.any(FormData),
+      expect.objectContaining({
+        headers: { 'Idempotency-Key': expect.stringMatching(/^knowledge-upload:/) },
+        timeout: false,
+      }),
     )
-    expect(result.id).toBe('doc-new')
-    expect(result.chunk_count).toBe(10)
+    expect(result.document_id).toBe('doc-new')
+    expect(result.job_id).toBe('job-new')
   })
 
   it('D3: searchKnowledge sends query and returns results via POST /api/v1/knowledge/search', async () => {

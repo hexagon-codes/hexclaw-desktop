@@ -3,7 +3,7 @@
  *
  * 覆盖一条完整用户旅程的点击链：上传（文档 / 图片）→ 切到检索 → 查询 → 结果渲染 →
  * 元数据过滤 chip → 空态。核心净新增价值：
- *   ① 图片上传契约——后端 /knowledge/upload 显式支持图片（多模态入库），桌面须放行图片
+ *   ① 图片上传契约——后端 /knowledge/documents multipart 支持图片（多模态入库），桌面须放行图片
  *      并路由到后端；且图片绝不本地解析回退（parseDocument 会把二进制当纯文本读成乱码入库）。
  *   ② 检索结果真渲染——查询返回的结构化命中应真出现在 DOM（标题/正文/相关度）。
  */
@@ -28,6 +28,7 @@ const api = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/knowledge', () => ({
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments: () => api.getDocuments(),
   searchKnowledge: (q: string, k?: number, f?: unknown) => api.searchKnowledge(q, k, f),
   uploadDocument: (file: File, onP?: (p: number) => void) => api.uploadDocument(file, onP),
@@ -103,7 +104,12 @@ describe('KnowledgeView 图片上传契约', () => {
     api.isKnowledgeUploadUnsupportedFormat.mockReturnValue(false)
     api.uploadDocument.mockImplementation(async (_f: File, onP?: (p: number) => void) => {
       onP?.(100)
-      return { id: 'doc-img', title: 'cat', chunk_count: 1, created_at: new Date().toISOString() }
+      return {
+        document_id: 'doc-img',
+        job_id: 'job-img',
+        text_index_state: 'pending',
+        vector_index_state: 'pending',
+      }
     })
     api.parseDocument.mockResolvedValue({ text: 'parsed', fileName: 'x' })
   })

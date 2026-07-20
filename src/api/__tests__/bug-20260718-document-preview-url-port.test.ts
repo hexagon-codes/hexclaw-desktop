@@ -21,4 +21,10 @@ describe('BUG-20260718 documentPreviewUrl 跟随运行时端口', () => {
   it('download=true 追加 ?dl=1', () => {
     expect(documentPreviewUrl('tok', true)).toBe('http://localhost:23456/api/v1/documents/preview/tok?dl=1')
   })
+
+  it('[bug] token 作为 path segment 必须完整编码，不能注入子路径或 query/hash', () => {
+    expect(documentPreviewUrl('folder/token ?#%')).toBe(
+      'http://localhost:23456/api/v1/documents/preview/folder%2Ftoken%20%3F%23%25',
+    )
+  })
 })

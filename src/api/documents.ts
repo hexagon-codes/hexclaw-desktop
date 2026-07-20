@@ -34,5 +34,5 @@ export async function uploadDocumentPreview(file: File): Promise<{ token: string
  * sidecar 动态分配变化），不再硬编码 localhost:16060——否则动态端口下预览失效/串实例。
  */
 export function documentPreviewUrl(token: string, download = false): string {
-  return `${env.apiBase}/api/v1/documents/preview/${token}${download ? '?dl=1' : ''}`
+  return `${env.apiBase}/api/v1/documents/preview/${encodeURIComponent(token)}${download ? '?dl=1' : ''}`
 }

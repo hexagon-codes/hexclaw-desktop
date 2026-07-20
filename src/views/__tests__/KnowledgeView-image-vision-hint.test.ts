@@ -26,6 +26,7 @@ const api = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/knowledge', () => ({
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments: () => api.getDocuments(),
   searchKnowledge: (q: string, k?: number, f?: unknown) => api.searchKnowledge(q, k, f),
   uploadDocument: (file: File, onP?: (p: number) => void) => api.uploadDocument(file, onP),

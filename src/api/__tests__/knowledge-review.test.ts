@@ -19,18 +19,25 @@ describe('Knowledge API upload behavior', () => {
 
   it('uploads to the canonical knowledge upload endpoint', async () => {
     apiPost.mockResolvedValueOnce({
-      id: 'doc-1',
-      title: 'alpha.pdf',
-      chunk_count: 2,
-      created_at: '2026-01-01T00:00:00Z',
+      document_id: 'doc-1',
+      job_id: 'job-1',
+      text_index_state: 'pending',
+      vector_index_state: 'pending',
     })
 
     const { uploadDocument } = await import('../knowledge')
     const file = new File(['alpha'], 'alpha.pdf', { type: 'application/pdf' })
     const result = await uploadDocument(file)
 
-    expect(apiPost).toHaveBeenCalledWith('/api/v1/knowledge/upload', expect.any(FormData))
-    expect(result.id).toBe('doc-1')
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/v1/knowledge/documents?user_id=desktop-user',
+      expect.any(FormData),
+      expect.objectContaining({
+        headers: { 'Idempotency-Key': expect.stringMatching(/^knowledge-upload:/) },
+        timeout: false,
+      }),
+    )
+    expect(result.document_id).toBe('doc-1')
   })
 
   it('reports knowledge-disabled when endpoint returns 404', async () => {
@@ -61,7 +68,7 @@ describe('Knowledge API upload behavior', () => {
     expect(raw).not.toContain("message.includes('文件格式错误')")
   })
 
-  it('detects backend unsupported-format responses so the UI can fall back to local parsing', async () => {
+  it('classifies backend unsupported-format responses without starting a second upload path', async () => {
     const { isKnowledgeUploadUnsupportedFormat } = await import('../knowledge')
 
     expect(isKnowledgeUploadUnsupportedFormat({ status: 415, message: 'Unsupported Media Type' })).toBe(true)

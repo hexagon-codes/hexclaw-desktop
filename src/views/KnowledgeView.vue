@@ -21,13 +21,15 @@ import {
   searchKnowledge,
   uploadDocument,
   reindexDocument,
-  isKnowledgeUploadEndpointMissing,
-  isKnowledgeUploadUnsupportedFormat,
+  retryKnowledgeDocument,
   getKnowledgeConfig,
   putKnowledgeConfig,
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES,
 } from '@/api/knowledge'
 import type { KnowledgeSourceCount } from '@/api/knowledge'
 import type { KnowledgeSearchFilter, KnowledgeConfig } from '@/api/knowledge'
+import { cancelKnowledgeJob, getKnowledgeJob } from '@/api/knowledge-index'
+import type { KnowledgeUploadEntry } from '@/stores/knowledge-uploads'
 // DB cache layer removed — data fetched directly from backend API
 import type { KnowledgeDoc, KnowledgeSearchResult } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -39,15 +41,14 @@ import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import HcDateRangePicker from '@/components/common/HcDateRangePicker.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import SemanticIndexCard from '@/components/knowledge/SemanticIndexCard.vue'
-import { parseDocument } from '@/utils/file-parser'
 import { logger } from '@/utils/logger'
 
 // 图片格式走后端多模态入库（视觉模型转写 → 文本 RAG，source_type=image）。
-// 后端 /knowledge/upload 显式支持这些扩展（见 api/handler_knowledge.go），桌面也须放行，
-// 否则多模态入库能力在桌面端无入口。注意：图片无法本地解析（parseDocument 会把二进制当
-// 纯文本读成乱码），故上传失败时绝不回退到本地解析（见 processFiles）。
+// 后端 /knowledge/documents multipart 显式支持这些扩展，桌面也须放行，
+// 否则多模态入库能力在桌面端无入口。所有格式都只走后端持久化异步摄取，
+// 上传失败时不在桌面端再解析/add，避免同一用户意图产生两条状态机和重复文档。
 const IMAGE_TYPES = ['.png', '.jpg', '.jpeg', '.webp', '.gif']
-const DOCUMENT_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.pptx', '.xlsx', '.xls', '.csv', '.json']
+const DOCUMENT_TYPES = ['.pdf', '.txt', '.md', '.docx', '.doc', '.pptx', '.csv', '.json']
 const ACCEPTED_TYPES = [...DOCUMENT_TYPES, ...IMAGE_TYPES]
 
 // 图片入库由后端视觉模型（VLM）转写为文本后再走 RAG 管线。若用户配的模型不具备视觉能力，
@@ -60,6 +61,16 @@ function isVisionModelError(message: string): boolean {
     message.includes('图像转写') ||
     m.includes('vision model') ||
     m.includes('does not support image')
+  )
+}
+
+function isDefinitiveKnowledgeUploadRejection(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const status =
+    (error as { status?: number; statusCode?: number }).status ??
+    (error as { status?: number; statusCode?: number }).statusCode
+  return (
+    typeof status === 'number' && status >= 400 && status < 500 && ![408, 425, 429].includes(status)
   )
 }
 const props = withDefaults(
@@ -151,37 +162,43 @@ const RERANK_MODEL_PRESETS = [
   'Qwen/Qwen3-Reranker-8B',
 ]
 const CANDIDATE_K_PRESETS = [20, 30, 50, 80, 100]
-const ragConfig = ref<KnowledgeConfig>({ ...RAG_DEFAULTS })
-const ragLoaded = ref(false)
+const ragConfig = ref<KnowledgeConfig | null>(null)
+const ragLoadState = ref<'loading' | 'ready' | 'error'>('loading')
 const ragPanelOpen = ref(true) // 默认展开
 const ragSaving = ref(false)
 const ragRestartHint = ref(false) // rerank_model 变更需重启提示
 // 当前 rerank_model 不在预设里时，把它并入下拉（保留手填/历史值，避免下拉重置丢值）。
 const rerankModelOptions = computed(() => {
-  const m = ragConfig.value.rerank_model
-  return m && !RERANK_MODEL_PRESETS.includes(m) ? [m, ...RERANK_MODEL_PRESETS] : RERANK_MODEL_PRESETS
+  const m = ragConfig.value?.rerank_model ?? ''
+  return m && !RERANK_MODEL_PRESETS.includes(m)
+    ? [m, ...RERANK_MODEL_PRESETS]
+    : RERANK_MODEL_PRESETS
 })
 // 同理 candidate_k：手改 yaml / 后端默认变更导致的非预设值也要能回显，否则一改就被吸附到预设。
 const candidateKOptions = computed(() => {
-  const k = ragConfig.value.candidate_k
-  return k > 0 && !CANDIDATE_K_PRESETS.includes(k) ? [k, ...CANDIDATE_K_PRESETS] : CANDIDATE_K_PRESETS
+  const k = ragConfig.value?.candidate_k ?? 0
+  return k > 0 && !CANDIDATE_K_PRESETS.includes(k)
+    ? [k, ...CANDIDATE_K_PRESETS]
+    : CANDIDATE_K_PRESETS
 })
 
 async function loadRagConfig() {
   if (!knowledgeEnabled.value) return
+  ragLoadState.value = 'loading'
+  ragConfig.value = null
   try {
     const cfg = await getKnowledgeConfig()
-    ragConfig.value = { ...RAG_DEFAULTS, ...cfg }
-    ragLoaded.value = true
+    ragConfig.value = { ...cfg }
+    ragLoadState.value = 'ready'
   } catch (e) {
-    // 知识库未启用 / 旧后端无端点：面板退化为默认值，不打扰用户。
+    ragLoadState.value = 'error'
     logger.warn('[Knowledge] 检索参数读取失败', e)
   }
 }
 
 // 全量保存（即时生效 + 落盘）。在写入前夹紧到合法区间，与后端校验对齐。
 async function saveRagConfig() {
-  if (!knowledgeEnabled.value) return
+  if (!knowledgeEnabled.value || !ragConfig.value) return
   const c = ragConfig.value
   c.min_score = Math.min(1, Math.max(0, Number(c.min_score) || 0))
   if (!(c.candidate_k > 0)) c.candidate_k = RAG_DEFAULTS.candidate_k
@@ -197,9 +214,10 @@ async function saveRagConfig() {
       min_score: res.min_score,
       candidate_k: res.candidate_k,
     }
-    ragLoaded.value = true
+    ragLoadState.value = 'ready'
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('knowledge.ragSaveFailed', '保存检索参数失败')
+    errorMsg.value =
+      e instanceof Error ? e.message : t('knowledge.ragSaveFailed', '保存检索参数失败')
     errorSeverity.value = 'error'
   } finally {
     ragSaving.value = false
@@ -207,36 +225,45 @@ async function saveRagConfig() {
 }
 
 function toggleRagBool(key: 'rerank' | 'query_expand' | 'contextual') {
+  if (!ragConfig.value) return
   ragConfig.value[key] = !ragConfig.value[key]
   void saveRagConfig()
 }
 function onMinScoreChange(e: Event) {
+  if (!ragConfig.value) return
   ragConfig.value.min_score = Number((e.target as HTMLInputElement).value)
   void saveRagConfig()
 }
 function onCandidateKPick(v: string) {
+  if (!ragConfig.value) return
   ragConfig.value.candidate_k = Number(v) || RAG_DEFAULTS.candidate_k
   void saveRagConfig()
 }
 function onRerankModelPick(v: string) {
+  if (!ragConfig.value) return
   ragConfig.value.rerank_model = v
   void saveRagConfig()
 }
 // HcSelect 选项（取代原生 <select>/<option>：品牌一致弹层、Teleport 自渲染，
 // 避开 macOS WKWebView 原生 <select> 弹层字号巨大/不受 CSS 控制的老问题，同 HcSelect 设计初衷）。
 const rerankModelSelectOptions = computed(() =>
-  rerankModelOptions.value.map((m) => ({ value: m, label: m === '' ? t('knowledge.ragRerankAuto') : m })),
+  rerankModelOptions.value.map((m) => ({
+    value: m,
+    label: m === '' ? t('knowledge.ragRerankAuto') : m,
+  })),
 )
 const candidateKSelectOptions = computed(() =>
   candidateKOptions.value.map((k) => ({ value: String(k), label: String(k) })),
 )
 function resetRagConfig() {
+  if (!ragConfig.value) return
   ragConfig.value = { ...RAG_DEFAULTS }
   void saveRagConfig()
 }
 const selectedDoc = ref<KnowledgeDoc | null>(null)
 const showDocDetail = ref(false)
 const reindexingDocIds = ref<Set<string>>(new Set())
+const cancellingVectorJobIds = ref<Set<string>>(new Set())
 const normalizedDocumentSearch = computed(() => props.documentSearch.trim().toLowerCase())
 
 // 按 source 分组/过滤 + 渲染窗口（#5）：定时任务快照会按时间序累积上千条，
@@ -264,7 +291,14 @@ const filteredDocs = computed(() => {
   return docs.value.filter((doc) => {
     if (src && doc.source !== src) return false
     if (!query) return true
-    const searchable = [doc.title, doc.source, doc.content, doc.status, doc.error_message]
+    const searchable = [
+      doc.title,
+      doc.source,
+      doc.content,
+      doc.status,
+      doc.error_message,
+      doc.vector_error,
+    ]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
@@ -314,20 +348,161 @@ const isDragging = ref(false)
 const uploadsStore = useKnowledgeUploadsStore()
 const uploadingFiles = computed(() => uploadsStore.items)
 const fileInputRef = ref<HTMLInputElement>()
+const uploadAbortControllers = new Map<KnowledgeUploadEntry, AbortController>()
 
 // done 条目在文档落地（出现在 getDocuments 结果）前保留；挂载期间轻量轮询直到全部落地。
 let indexPollTimer: ReturnType<typeof setInterval> | null = null
+let indexPollInFlight = false
 let isMounted = false
+
+const POLLABLE_VECTOR_JOB_STATES = new Set(['queued', 'running', 'retry_wait'])
+
+function hasPollableVectorJobs(): boolean {
+  return docs.value.some(
+    (doc) =>
+      Boolean(doc.vector_job_id) &&
+      POLLABLE_VECTOR_JOB_STATES.has(doc.vector_job_state ?? '') &&
+      ['pending', 'building', 'retry_wait'].includes(doc.vector_index_state ?? ''),
+  )
+}
+
+function updateVectorJobProjection(job: Awaited<ReturnType<typeof getKnowledgeJob>>) {
+  docs.value = docs.value.map((doc) => {
+    if (doc.vector_job_id !== job.job_id) return doc
+    const vectorState: KnowledgeDoc['vector_index_state'] =
+      job.state === 'queued'
+        ? 'pending'
+        : job.state === 'running'
+          ? 'building'
+          : job.state === 'retry_wait'
+            ? 'retry_wait'
+            : job.state === 'succeeded'
+              ? 'ready'
+              : job.state
+    return {
+      ...doc,
+      vector_index_state: vectorState,
+      vector_job_state: job.state,
+      vector_job_stage: job.stage,
+      vector_chunks_done: job.chunks_done ?? doc.vector_chunks_done,
+      vector_chunks_total: job.chunks_total ?? doc.vector_chunks_total,
+      vector_error: job.state === 'failed' ? job.last_error || doc.vector_error : undefined,
+    }
+  })
+}
+
+async function pollKnowledgeUploadJobs() {
+  if (!isMounted || indexPollInFlight) return
+  indexPollInFlight = true
+  try {
+    let projectionChanged = false
+    const polledJobs = new Map<string, Awaited<ReturnType<typeof getKnowledgeJob>>>()
+    const running = uploadsStore.items.filter(
+      (entry) => entry.status === 'processing' && Boolean(entry.jobId),
+    )
+    for (const entry of running) {
+      try {
+        const job = await getKnowledgeJob(entry.jobId!)
+        polledJobs.set(job.job_id, job)
+        entry.stage = job.stage
+        if (job.state === 'succeeded') {
+          uploadsStore.markSucceeded(entry)
+        } else if (job.state === 'failed') {
+          uploadsStore.markFailed(entry, job.last_error || t('knowledge.uploadFailed'))
+          projectionChanged = true
+        } else if (job.state === 'cancelled') {
+          uploadsStore.markCancelled(entry)
+          projectionChanged = true
+        }
+      } catch (error) {
+        // A transient status read must not turn a durable server job into a local failure.
+        logger.warn('[Knowledge] upload job status read failed', error)
+      }
+    }
+
+    const vectorJobIDs = new Set(
+      docs.value
+        .filter(
+          (doc) =>
+            Boolean(doc.vector_job_id) &&
+            POLLABLE_VECTOR_JOB_STATES.has(doc.vector_job_state ?? ''),
+        )
+        .map((doc) => doc.vector_job_id!),
+    )
+    for (const jobID of vectorJobIDs) {
+      try {
+        const job = polledJobs.get(jobID) ?? (await getKnowledgeJob(jobID))
+        updateVectorJobProjection(job)
+        if (['succeeded', 'failed', 'cancelled'].includes(job.state)) projectionChanged = true
+      } catch (error) {
+        // The list projection remains authoritative when one status read is transiently unavailable.
+        logger.warn('[Knowledge] document embedding job status read failed', error)
+      }
+    }
+    if (
+      isMounted &&
+      (projectionChanged || uploadsStore.items.some((entry) => entry.status === 'done'))
+    ) {
+      await revalidateFromApi(true)
+    }
+  } finally {
+    indexPollInFlight = false
+    if (!uploadsStore.hasAwaitingIndex() && !hasPollableVectorJobs() && indexPollTimer) {
+      clearInterval(indexPollTimer)
+      indexPollTimer = null
+    }
+  }
+}
+
 function ensureIndexPolling() {
   if (!isMounted || indexPollTimer) return
   indexPollTimer = setInterval(() => {
-    if (!uploadsStore.hasAwaitingIndex()) {
+    if (!uploadsStore.hasAwaitingIndex() && !hasPollableVectorJobs()) {
       if (indexPollTimer) clearInterval(indexPollTimer)
       indexPollTimer = null
       return
     }
-    void revalidateFromApi(true)
+    void pollKnowledgeUploadJobs()
   }, 4000)
+}
+
+async function cancelUploadJob(entry: KnowledgeUploadEntry) {
+  if (entry.status === 'uploading') {
+    const controller = uploadAbortControllers.get(entry)
+    if (!controller || entry.cancelling) return
+    entry.cancelling = true
+    controller.abort()
+    uploadAbortControllers.delete(entry)
+    uploadsStore.markCancelled(entry)
+    return
+  }
+  if (!entry.jobId || entry.status !== 'processing' || entry.cancelling) return
+  entry.cancelling = true
+  try {
+    const job = await cancelKnowledgeJob(entry.jobId)
+    if (job.state === 'cancelled') {
+      uploadsStore.markCancelled(entry)
+    } else if (job.state === 'succeeded') {
+      // Text publication may win the narrow race with cancellation. The
+      // backend still cascades cancel_requested to unfinished embedding
+      // children, while the already-ready FTS document remains successful.
+      uploadsStore.markSucceeded(entry)
+      await revalidateFromApi(true)
+    } else {
+      entry.cancelling = false
+    }
+  } catch (error) {
+    entry.cancelling = false
+    errorMsg.value = error instanceof Error ? error.message : t('knowledge.uploadFailed')
+    errorSeverity.value = 'error'
+  }
+}
+
+function canCancelUpload(entry: KnowledgeUploadEntry): boolean {
+  return (
+    (entry.status === 'uploading' && uploadAbortControllers.has(entry)) ||
+    (entry.status === 'processing' && Boolean(entry.jobId))
+  )
 }
 onUnmounted(() => {
   isMounted = false
@@ -340,7 +515,7 @@ onMounted(async () => {
   await loadDocs()
   void loadRagConfig()
   // 切页回来时若仍有「索引中」条目，恢复轮询直到落地（BUG-20260710）
-  if (uploadsStore.hasAwaitingIndex()) ensureIndexPolling()
+  if (uploadsStore.hasAwaitingIndex() || hasPollableVectorJobs()) ensureIndexPolling()
 })
 
 watch(activeTab, () => {
@@ -385,6 +560,9 @@ async function revalidateFromApi(
     errorSeverity.value = null
     // 上传条目结算：已在列表落地的 done 条目移除（挂载/轮询/手动刷新都会走到这里）
     uploadsStore.settleAgainstDocs(docs.value)
+    if (isMounted && (uploadsStore.hasAwaitingIndex() || hasPollableVectorJobs())) {
+      ensureIndexPolling()
+    }
 
     // DB cache layer removed — no local cache to update
   } catch (e) {
@@ -517,34 +695,106 @@ function getDocStatusStyle(doc: KnowledgeDoc) {
   }
 }
 
+function isDurableUploadedDocument(doc: KnowledgeDoc): boolean {
+  return (
+    doc.source_type === 'upload' ||
+    doc.source_type === 'image' ||
+    doc.source?.startsWith('upload:') === true ||
+    doc.source?.startsWith('image:upload:') === true
+  )
+}
+
+function hasRetryableVectorFailure(doc: KnowledgeDoc): boolean {
+  return (
+    doc.vector_index_state === 'failed' &&
+    doc.vector_job_state === 'failed' &&
+    doc.vector_outcome_unknown !== true
+  )
+}
+
+function canReindexDocument(doc: KnowledgeDoc): boolean {
+  return (
+    getDocStatus(doc) === 'failed' ||
+    hasRetryableVectorFailure(doc) ||
+    !isDurableUploadedDocument(doc)
+  )
+}
+
+function canCancelVectorJob(doc: KnowledgeDoc): boolean {
+  return (
+    Boolean(doc.vector_job_id) &&
+    (POLLABLE_VECTOR_JOB_STATES.has(doc.vector_job_state ?? '') ||
+      doc.vector_outcome_unknown === true)
+  )
+}
+
+function getVectorStatusLabel(doc: KnowledgeDoc): string {
+  if (doc.vector_outcome_unknown) {
+    return t('knowledge.vectorOutcomeUnknown', '语义增强结果待核实')
+  }
+  switch (doc.vector_index_state) {
+    case 'pending':
+      return t('knowledge.vectorPending', '语义增强等待中')
+    case 'building':
+      return t('knowledge.vectorBuilding', '语义增强中')
+    case 'retry_wait':
+      return t('knowledge.vectorRetryWait', '语义增强等待重试')
+    case 'failed':
+      return t('knowledge.vectorFailed', '语义增强失败')
+    case 'cancelled':
+      return t('knowledge.vectorCancelled', '语义增强已取消')
+    default:
+      return ''
+  }
+}
+
+function getVectorProgress(doc: KnowledgeDoc): string {
+  if (typeof doc.vector_chunks_total !== 'number' || doc.vector_chunks_total <= 0) return ''
+  return `${doc.vector_chunks_done ?? 0}/${doc.vector_chunks_total}`
+}
+
 const loadingDocContent = ref(false)
+const docContentError = ref('')
 let docContentRequestGen = 0
 
-async function openDocDetail(doc: KnowledgeDoc) {
+async function loadDocContent(doc: KnowledgeDoc) {
   const requestGen = ++docContentRequestGen
+  loadingDocContent.value = true
+  docContentError.value = ''
+  try {
+    const content = await getDocumentContent(doc)
+    if (requestGen === docContentRequestGen && selectedDoc.value?.id === doc.id) {
+      selectedDoc.value = { ...doc, content }
+      // 同步更新列表中的文档对象，避免非空正文下次打开时重复请求。
+      const idx = docs.value.findIndex((d) => d.id === doc.id)
+      if (idx >= 0) docs.value[idx] = selectedDoc.value
+    }
+  } catch (error) {
+    if (requestGen === docContentRequestGen && selectedDoc.value?.id === doc.id) {
+      docContentError.value = t('knowledge.docContentLoadFailed')
+      logger.warn('[Knowledge] document content read failed', error)
+    }
+  } finally {
+    if (requestGen === docContentRequestGen) {
+      loadingDocContent.value = false
+    }
+  }
+}
+
+async function openDocDetail(doc: KnowledgeDoc) {
+  ++docContentRequestGen
   selectedDoc.value = doc
   showDocDetail.value = true
   loadingDocContent.value = false
+  docContentError.value = ''
 
-  // 如果列表接口未返回正文，主动获取内容
-  if (!doc.content?.trim()) {
-    loadingDocContent.value = true
-    try {
-      const content = await getDocumentContent(doc)
-      if (content && requestGen === docContentRequestGen && selectedDoc.value?.id === doc.id) {
-        selectedDoc.value = { ...doc, content }
-        // 同步更新列表中的文档对象，避免下次打开重复请求
-        const idx = docs.value.findIndex((d) => d.id === doc.id)
-        if (idx >= 0) docs.value[idx] = selectedDoc.value
-      }
-    } catch {
-      // 获取失败保持原提示
-    } finally {
-      if (requestGen === docContentRequestGen) {
-        loadingDocContent.value = false
-      }
-    }
-  }
+  // 如果列表接口未返回正文，主动获取内容。
+  if (!doc.content?.trim()) await loadDocContent(doc)
+}
+
+async function retryDocContent() {
+  if (!selectedDoc.value || loadingDocContent.value) return
+  await loadDocContent(selectedDoc.value)
 }
 
 async function handleReindex(doc: KnowledgeDoc) {
@@ -556,6 +806,58 @@ async function handleReindex(doc: KnowledgeDoc) {
   errorMsg.value = ''
 
   try {
+    const retryingText = getDocStatus(doc) === 'failed'
+    const retryingVector = hasRetryableVectorFailure(doc)
+    if (retryingText || retryingVector) {
+      const accepted = await retryKnowledgeDocument(doc.id)
+      docs.value = docs.value.map((item) =>
+        item.id === doc.id
+          ? retryingVector
+            ? {
+                ...item,
+                vector_index_state: accepted.vector_index_state,
+                vector_job_id: accepted.job_id,
+                vector_job_state:
+                  accepted.vector_index_state === 'ready'
+                    ? 'succeeded'
+                    : accepted.vector_index_state === 'failed'
+                      ? 'failed'
+                      : 'queued',
+                vector_job_stage: 'embedding',
+                vector_chunks_done: 0,
+                vector_error: undefined,
+                vector_outcome_unknown: false,
+                updated_at: new Date().toISOString(),
+              }
+            : {
+                ...item,
+                status:
+                  accepted.text_index_state === 'ready'
+                    ? 'indexed'
+                    : accepted.text_index_state === 'failed'
+                      ? 'failed'
+                      : 'processing',
+                error_message: undefined,
+                updated_at: new Date().toISOString(),
+              }
+          : item,
+      )
+      if (retryingText) {
+        const tracked = uploadsStore.items.find((entry) => entry.jobId === accepted.job_id)
+        if (!tracked) {
+          uploadsStore.track({
+            name: doc.title,
+            progress: 100,
+            status: 'processing',
+            documentId: accepted.document_id,
+            jobId: accepted.job_id,
+            stage: accepted.text_index_state === 'ready' ? 'embedding' : 'extracting',
+          })
+        }
+      }
+      ensureIndexPolling()
+      return
+    }
     const result = await reindexDocument(doc.id)
     // 用后端返回的真实状态更新（reindex 是同步的，返回时已完成）
     docs.value = docs.value.map((item) =>
@@ -575,6 +877,40 @@ async function handleReindex(doc: KnowledgeDoc) {
     const current = new Set(reindexingDocIds.value)
     current.delete(doc.id)
     reindexingDocIds.value = current
+  }
+}
+
+async function cancelDocumentVectorJob(doc: KnowledgeDoc) {
+  const jobID = doc.vector_job_id
+  if (!jobID || !canCancelVectorJob(doc) || cancellingVectorJobIds.value.has(jobID)) return
+  const next = new Set(cancellingVectorJobIds.value)
+  next.add(jobID)
+  cancellingVectorJobIds.value = next
+  errorMsg.value = ''
+  try {
+    const job = await cancelKnowledgeJob(jobID)
+    updateVectorJobProjection(job)
+    if (job.state === 'cancelled' || job.state === 'failed') {
+      docs.value = docs.value.map((item) =>
+        item.vector_job_id === jobID
+          ? {
+              ...item,
+              vector_index_state: 'cancelled',
+              vector_outcome_unknown: false,
+              vector_error: undefined,
+            }
+          : item,
+      )
+    }
+    await revalidateFromApi(true)
+  } catch (error) {
+    errorMsg.value =
+      error instanceof Error ? error.message : t('knowledge.vectorCancelFailed', '取消语义增强失败')
+    errorSeverity.value = 'error'
+  } finally {
+    const current = new Set(cancellingVectorJobIds.value)
+    current.delete(jobID)
+    cancellingVectorJobIds.value = current
   }
 }
 
@@ -627,29 +963,27 @@ function openFilePicker() {
   fileInputRef.value?.click()
 }
 
-async function uploadDocumentThroughLegacyFallback(file: File, onProgress?: (pct: number) => void) {
-  onProgress?.(10)
-  const parsed = await parseDocument(file)
-  const content = parsed.text.trim()
-
-  if (!content) {
-    throw new Error(t('knowledge.parsedContentEmpty'))
-  }
-
-  onProgress?.(75)
-  await addDocument(parsed.fileName, content, file.name)
-  onProgress?.(100)
-}
-
-const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50 MB
+const MAX_FILE_SIZE = 200 * 1024 * 1024 // 200 MiB, aligned with the durable ingest service.
 
 async function processFiles(files: FileList) {
   if (!ensureKnowledgeEnabled()) return
   uploadsStore.clearErrors() // 新一轮上传前清掉旧错误条目
+  const selectedFiles = Array.from(files)
+  const batchBytes = selectedFiles.reduce((total, file) => total + file.size, 0)
+  if (batchBytes > MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES) {
+    const firstName = selectedFiles[0]?.name || t('knowledge.title')
+    uploadsStore.track({
+      name: selectedFiles.length > 1 ? `${firstName} +${selectedFiles.length - 1}` : firstName,
+      progress: 0,
+      status: 'error',
+      error: t('knowledge.uploadBatchTooLarge', { max: '512 MB' }),
+    })
+    return
+  }
   const uploadTasks: Promise<void>[] = []
   let uploadedAny = false
 
-  for (const file of Array.from(files)) {
+  for (const file of selectedFiles) {
     if (file.size === 0) {
       uploadsStore.track({
         name: file.name,
@@ -665,7 +999,7 @@ async function processFiles(files: FileList) {
         name: file.name,
         progress: 0,
         status: 'error',
-        error: t('knowledge.fileTooLarge', { max: '50 MB' }),
+        error: t('knowledge.fileTooLarge', { max: '200 MB' }),
       })
       continue
     }
@@ -683,46 +1017,56 @@ async function processFiles(files: FileList) {
 
     // store.track 返回响应式 entry——上传任务改 entry.progress/status 即驱动 UI，
     // 且条目挂在 store 上，跨组件卸载/重挂载存活（BUG-20260710）。
-    const entry = uploadsStore.track({ name: file.name, progress: 0, status: 'uploading' })
+    let entry = uploadsStore.track({ name: file.name, progress: 0, status: 'uploading' })
+    const uploadController = new AbortController()
+    uploadAbortControllers.set(entry, uploadController)
 
     uploadTasks.push(
       (async () => {
         const updateProgress = (pct: number) => {
           entry.progress = pct
-          // 字节传完(100%)后端仍在解析+嵌入：切「处理中」相，别让用户对着 100% 以为卡死（#8）
-          if (pct >= 100) uploadsStore.markProcessing(entry)
+          // 字节已传完但尚未拿到 202/Job：这是可恢复的 response-unknown 窗口，
+          // 不能冒充已有 Job 的 processing 相，否则刷新后无 jobId 可轮询。
+          if (pct >= 100) uploadsStore.markPendingResponse(entry)
         }
 
         try {
-          const uploaded = await uploadDocument(file, updateProgress)
-          entry.status = 'done'
-          entry.progress = 100
-          entry.warning = uploaded.warnings?.join('；')
+          const accepted = await uploadDocument(file, updateProgress, (intent) => {
+            const previousEntry = entry
+            entry = uploadsStore.bindIntent(entry, intent)
+            if (entry !== previousEntry) {
+              uploadAbortControllers.delete(previousEntry)
+              uploadAbortControllers.set(entry, uploadController)
+            }
+          }, { signal: uploadController.signal })
+          uploadsStore.attachJob(entry, accepted.document_id, accepted.job_id)
           uploadedAny = true
         } catch (e) {
-          let uploadError = e
-          // 图片只能由后端视觉模型转写，绝不本地解析回退（否则二进制会被当纯文本读成乱码入库）。
-          const isImage = IMAGE_TYPES.includes(ext)
-          if (!isImage && (isKnowledgeUploadEndpointMissing(e) || isKnowledgeUploadUnsupportedFormat(e))) {
-            try {
-              await uploadDocumentThroughLegacyFallback(file, updateProgress)
-              entry.status = 'done'
-              entry.progress = 100
-              uploadedAny = true
-              return
-            } catch (fallbackError) {
-              uploadError = fallbackError
-            }
+          if (uploadController.signal.aborted) {
+            uploadsStore.markCancelled(entry)
+            return
           }
-
-          entry.status = 'error'
-          const rawMessage = uploadError instanceof Error ? uploadError.message : ''
+          const isImage = IMAGE_TYPES.includes(ext)
+          const rawMessage = e instanceof Error ? e.message : ''
           // 图片入库失败且根因是「缺少视觉模型」时，给出本地化、可操作的引导，
           // 不把后端的底层技术细节（如 "model does not support image input"）甩给用户。
-          entry.error =
+          const message =
             isImage && isVisionModelError(rawMessage)
               ? t('knowledge.imageVisionRequired')
               : rawMessage || t('knowledge.uploadFailed')
+          if (entry.intentKey && !isDefinitiveKnowledgeUploadRejection(e)) {
+            uploadsStore.markPendingResponse(
+              entry,
+              `${message}；${t('knowledge.uploadReselectToRecover', '请重新选择同一文件恢复')}`,
+            )
+          } else {
+            entry.status = 'error'
+            entry.error = message
+          }
+        } finally {
+          if (uploadAbortControllers.get(entry) === uploadController) {
+            uploadAbortControllers.delete(entry)
+          }
         }
       })(),
     )
@@ -819,21 +1163,15 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
     <div
       v-if="!knowledgeEnabled"
       class="mx-6 mt-2 px-4 py-3 rounded-xl text-sm"
-      :style="{ background: 'var(--hc-warning-soft, #f59e0b15)', color: 'var(--hc-warning-text, #b45309)' }"
+      :style="{
+        background: 'var(--hc-warning-soft, #f59e0b15)',
+        color: 'var(--hc-warning-text, #b45309)',
+      }"
     >
       <div class="font-medium">{{ t('knowledge.backendDisabled') }}</div>
       <div class="mt-1 text-xs" :style="{ color: 'var(--hc-text-secondary)' }">
         {{ t('knowledge.backendDisabledDesc') }}
       </div>
-    </div>
-
-    <!-- 标签页（统一 UnderlineTabs，滑动下划线） -->
-    <div class="px-6 pt-3">
-      <UnderlineTabs
-        :tabs="knowledgeTabs"
-        :model-value="activeTab"
-        @update:model-value="activeTab = $event as 'documents' | 'search'"
-      />
     </div>
 
     <div
@@ -863,20 +1201,30 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
       <!-- 核心能力与运行状态：健康态默认折叠；旧 sidecar 自动退化为原安装恢复横幅。 -->
       <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" />
 
+      <!-- 标签页（统一 UnderlineTabs，滑动下划线） -->
+      <UnderlineTabs
+        :tabs="knowledgeTabs"
+        :model-value="activeTab"
+        @update:model-value="activeTab = $event as 'documents' | 'search'"
+      />
+
       <!-- Upload progress list -->
       <div v-if="uploadingFiles.length > 0" class="mb-4 space-y-2 max-w-2xl">
         <div
           v-for="(uf, idx) in uploadingFiles"
           :key="idx"
+          data-testid="knowledge-upload-job"
           class="flex items-center gap-3 px-4 py-2.5 rounded-lg border"
           :style="{
             background: 'var(--hc-bg-card)',
             borderColor:
               uf.status === 'error'
                 ? '#ef4444'
-                : uf.status === 'done'
-                  ? '#10b981'
-                  : 'var(--hc-border)',
+                : uf.status === 'pending-response'
+                  ? '#f59e0b'
+                  : uf.status === 'done'
+                    ? '#10b981'
+                    : 'var(--hc-border)',
           }"
         >
           <Upload
@@ -913,16 +1261,49 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             >
               {{ t('knowledge.processing') }}
             </div>
+            <div
+              v-else-if="uf.status === 'pending-response'"
+              class="text-xs mt-0.5"
+              style="color: #b45309"
+              data-testid="knowledge-upload-pending-response"
+            >
+              {{
+                uf.error ||
+                t('knowledge.uploadAwaitingAcceptance', '等待服务器确认；可重新选择同一文件恢复')
+              }}
+            </div>
             <div v-else-if="uf.status === 'error'" class="text-xs mt-0.5" style="color: #ef4444">
               {{ uf.error }}
+            </div>
+            <div
+              v-else-if="uf.status === 'cancelled'"
+              class="text-xs mt-0.5"
+              :style="{ color: 'var(--hc-text-muted)' }"
+              data-testid="knowledge-upload-cancelled"
+            >
+              {{ t('knowledge.semanticIndex.cancelled') }}
             </div>
             <div v-else-if="uf.warning" class="text-xs mt-0.5" style="color: #f59e0b">
               {{ uf.warning }}
             </div>
-            <div v-else-if="uf.status === 'done'" class="text-xs mt-0.5" :style="{ color: 'var(--hc-text-muted)' }">
+            <div
+              v-else-if="uf.status === 'done'"
+              class="text-xs mt-0.5"
+              :style="{ color: 'var(--hc-text-muted)' }"
+            >
               {{ t('knowledge.indexing') }}
             </div>
           </div>
+          <button
+            v-if="canCancelUpload(uf)"
+            type="button"
+            class="text-xs px-2 py-1 rounded border"
+            :disabled="uf.cancelling"
+            data-testid="knowledge-upload-cancel"
+            @click="cancelUploadJob(uf)"
+          >
+            {{ t('common.cancel') }}
+          </button>
           <span class="text-xs tabular-nums" :style="{ color: 'var(--hc-text-muted)' }">
             {{
               uf.status === 'uploading'
@@ -982,12 +1363,22 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               class="text-xs px-2.5 py-1 rounded-full border transition-colors"
               :style="
                 selectedSource === null
-                  ? { background: 'var(--hc-accent)', borderColor: 'var(--hc-accent)', color: '#fff' }
-                  : { background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }
+                  ? {
+                      background: 'var(--hc-accent)',
+                      borderColor: 'var(--hc-accent)',
+                      color: '#fff',
+                    }
+                  : {
+                      background: 'var(--hc-bg-card)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-secondary)',
+                    }
               "
               @click="selectSource(null)"
             >
-              {{ t('knowledge.allSources') }} ({{ sourceFacet.reduce((sum, item) => sum + item.count, 0) || totalDocs }})
+              {{ t('knowledge.allSources') }} ({{
+                sourceFacet.reduce((sum, item) => sum + item.count, 0) || totalDocs
+              }})
             </button>
             <button
               v-for="f in sourceFacet"
@@ -998,8 +1389,16 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               class="text-xs px-2.5 py-1 rounded-full border transition-colors max-w-[14rem] truncate"
               :style="
                 selectedSource === f.source
-                  ? { background: 'var(--hc-accent)', borderColor: 'var(--hc-accent)', color: '#fff' }
-                  : { background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)' }
+                  ? {
+                      background: 'var(--hc-accent)',
+                      borderColor: 'var(--hc-accent)',
+                      color: '#fff',
+                    }
+                  : {
+                      background: 'var(--hc-bg-card)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-secondary)',
+                    }
               "
               :title="f.source"
               @click="selectSource(f.source)"
@@ -1046,24 +1445,75 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   <p v-if="doc.error_message" class="text-[11px] mt-2" style="color: #dc2626">
                     {{ doc.error_message }}
                   </p>
+                  <p
+                    v-if="getVectorStatusLabel(doc)"
+                    data-testid="knowledge-vector-status"
+                    class="text-[11px] mt-2"
+                    :style="{
+                      color:
+                        doc.vector_index_state === 'failed' || doc.vector_outcome_unknown
+                          ? '#b45309'
+                          : 'var(--hc-text-muted)',
+                    }"
+                  >
+                    {{ getVectorStatusLabel(doc) }}
+                    <span v-if="getVectorProgress(doc)"> · {{ getVectorProgress(doc) }}</span>
+                    <span v-if="doc.vector_error"> · {{ doc.vector_error }}</span>
+                  </p>
                 </button>
                 <div data-testid="knowledge-doc-actions" class="shrink-0 flex items-center gap-1">
                   <button
+                    v-if="canReindexDocument(doc)"
+                    :data-testid="
+                      hasRetryableVectorFailure(doc) ? 'knowledge-vector-retry' : undefined
+                    "
                     class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
                     :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
-                    :disabled="!knowledgeEnabled || reindexingDocIds.has(doc.id)"
+                    :disabled="
+                      !knowledgeEnabled ||
+                      reindexingDocIds.has(doc.id) ||
+                      getDocStatus(doc) === 'processing'
+                    "
                     @click="handleReindex(doc)"
                   >
-                    <RefreshCw :size="12" :class="{ 'animate-spin': reindexingDocIds.has(doc.id) }" />
+                    <RefreshCw
+                      :size="12"
+                      :class="{ 'animate-spin': reindexingDocIds.has(doc.id) }"
+                    />
                     {{
-                      getDocStatus(doc) === 'failed'
+                      getDocStatus(doc) === 'failed' || hasRetryableVectorFailure(doc)
                         ? t('knowledge.retryIndex')
                         : t('knowledge.reindex')
                     }}
                   </button>
                   <button
+                    v-if="canCancelVectorJob(doc)"
+                    data-testid="knowledge-vector-cancel"
+                    class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
+                    :style="{
+                      color: '#b45309',
+                      background: 'color-mix(in srgb, #f59e0b 10%, transparent)',
+                    }"
+                    :title="t('knowledge.vectorCancel', '取消语义增强')"
+                    :disabled="
+                      !knowledgeEnabled || cancellingVectorJobIds.has(doc.vector_job_id || '')
+                    "
+                    @click="cancelDocumentVectorJob(doc)"
+                  >
+                    <RefreshCw
+                      v-if="cancellingVectorJobIds.has(doc.vector_job_id || '')"
+                      :size="12"
+                      class="animate-spin"
+                    />
+                    <X v-else :size="12" />
+                    {{ t('knowledge.vectorCancel', '取消语义增强') }}
+                  </button>
+                  <button
                     class="p-1.5 rounded-lg transition-colors"
-                    :style="{ color: 'var(--hc-error)', background: 'color-mix(in srgb, var(--hc-error) 8%, transparent)' }"
+                    :style="{
+                      color: 'var(--hc-error)',
+                      background: 'color-mix(in srgb, var(--hc-error) 8%, transparent)',
+                    }"
                     :title="t('common.delete')"
                     :disabled="!knowledgeEnabled"
                     @click="confirmDelete(doc)"
@@ -1090,13 +1540,22 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             <button
               type="button"
               class="px-3 py-1.5 rounded-lg border transition-colors"
-              :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-card)' }"
+              :style="{
+                borderColor: 'var(--hc-border)',
+                color: 'var(--hc-text-secondary)',
+                background: 'var(--hc-bg-card)',
+              }"
               @click="loadMoreDocs"
             >
               {{ t('knowledge.loadMore') }}
             </button>
             <span :style="{ color: 'var(--hc-text-muted)' }">
-              {{ t('knowledge.shownOfTotal', { shown: windowedDocs.length, total: displayedTotalDocs }) }}
+              {{
+                t('knowledge.shownOfTotal', {
+                  shown: windowedDocs.length,
+                  total: displayedTotalDocs,
+                })
+              }}
             </span>
           </div>
         </template>
@@ -1130,7 +1589,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   data-testid="kb-rag-reset"
                   class="text-xs"
                   :style="{ color: 'var(--hc-text-muted)' }"
-                  :disabled="!knowledgeEnabled || ragSaving"
+                  :disabled="!knowledgeEnabled || !ragConfig || ragSaving"
                   @click.stop="resetRagConfig"
                 >
                   {{ t('knowledge.ragReset') }}
@@ -1151,9 +1610,13 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               class="px-4 pb-3.5 flex flex-col gap-3 border-t"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
+              <template v-if="ragConfig">
               <!-- 重排 cross-encoder + 模型下拉 -->
               <div class="flex items-center gap-2.5 pt-3 flex-wrap">
-                <span class="text-[13px] flex-1 min-w-0" :style="{ color: 'var(--hc-text-primary)' }">
+                <span
+                  class="text-[13px] flex-1 min-w-0"
+                  :style="{ color: 'var(--hc-text-primary)' }"
+                >
                   {{ t('knowledge.ragRerank') }}
                 </span>
                 <input
@@ -1271,6 +1734,28 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               >
                 {{ t('knowledge.ragRestartHint') }}
               </p>
+              </template>
+              <div
+                v-else-if="ragLoadState === 'error'"
+                data-testid="kb-rag-load-error"
+                class="pt-3 text-xs flex items-center justify-between gap-3"
+                style="color: #b45309"
+                role="alert"
+              >
+                <span>{{ t('knowledge.ragLoadFailed') }}</span>
+                <button type="button" class="underline shrink-0" @click="loadRagConfig">
+                  {{ t('common.retry', '重试') }}
+                </button>
+              </div>
+              <div
+                v-else
+                data-testid="kb-rag-loading"
+                class="pt-3 text-xs"
+                :style="{ color: 'var(--hc-text-muted)' }"
+                role="status"
+              >
+                {{ t('common.loading', '加载中…') }}
+              </div>
             </div>
           </div>
 
@@ -1295,7 +1780,10 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
           </div>
 
           <!-- 元数据过滤：源类型 chip（多选）+ 创建日期区间 -->
-          <div data-testid="knowledge-search-filters" class="flex flex-wrap items-center gap-2 mb-6">
+          <div
+            data-testid="knowledge-search-filters"
+            class="flex flex-wrap items-center gap-2 mb-6"
+          >
             <span class="text-xs shrink-0" :style="{ color: 'var(--hc-text-muted)' }">{{
               t('knowledge.filterType')
             }}</span>
@@ -1308,7 +1796,11 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               class="text-xs px-2.5 py-1 rounded-full border transition-colors"
               :style="
                 selectedTypes.includes(tp)
-                  ? { background: 'var(--hc-accent)', borderColor: 'var(--hc-accent)', color: '#fff' }
+                  ? {
+                      background: 'var(--hc-accent)',
+                      borderColor: 'var(--hc-accent)',
+                      color: '#fff',
+                    }
                   : {
                       background: 'var(--hc-bg-card)',
                       borderColor: 'var(--hc-border)',
@@ -1449,16 +1941,16 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 >
                 <HcClearableField>
                   <input
-                  v-model="newTitle"
-                  type="text"
-                  class="rounded-lg border px-3 py-2 text-sm outline-none"
-                  :style="{
-                    background: 'var(--hc-bg-input)',
-                    borderColor: 'var(--hc-border)',
-                    color: 'var(--hc-text-primary)',
-                  }"
-                  :placeholder="t('knowledge.docTitlePlaceholder')"
-                />
+                    v-model="newTitle"
+                    type="text"
+                    class="rounded-lg border px-3 py-2 text-sm outline-none"
+                    :style="{
+                      background: 'var(--hc-bg-input)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-primary)',
+                    }"
+                    :placeholder="t('knowledge.docTitlePlaceholder')"
+                  />
                 </HcClearableField>
               </div>
               <div class="flex flex-col gap-1.5">
@@ -1469,16 +1961,16 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 >
                 <HcClearableField>
                   <textarea
-                  v-model="newContent"
-                  rows="6"
-                  class="rounded-lg border px-3 py-2 text-sm outline-none resize-none"
-                  :style="{
-                    background: 'var(--hc-bg-input)',
-                    borderColor: 'var(--hc-border)',
-                    color: 'var(--hc-text-primary)',
-                  }"
-                  :placeholder="t('knowledge.docContentPlaceholder')"
-                />
+                    v-model="newContent"
+                    rows="6"
+                    class="rounded-lg border px-3 py-2 text-sm outline-none resize-none"
+                    :style="{
+                      background: 'var(--hc-bg-input)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-primary)',
+                    }"
+                    :placeholder="t('knowledge.docContentPlaceholder')"
+                  />
                 </HcClearableField>
               </div>
               <div class="flex flex-col gap-1.5">
@@ -1489,16 +1981,16 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 >
                 <HcClearableField>
                   <input
-                  v-model="newSource"
-                  type="text"
-                  class="rounded-lg border px-3 py-2 text-sm outline-none"
-                  :style="{
-                    background: 'var(--hc-bg-input)',
-                    borderColor: 'var(--hc-border)',
-                    color: 'var(--hc-text-primary)',
-                  }"
-                  :placeholder="t('knowledge.docSourcePlaceholder')"
-                />
+                    v-model="newSource"
+                    type="text"
+                    class="rounded-lg border px-3 py-2 text-sm outline-none"
+                    :style="{
+                      background: 'var(--hc-bg-input)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-primary)',
+                    }"
+                    :placeholder="t('knowledge.docSourcePlaceholder')"
+                  />
                 </HcClearableField>
               </div>
             </div>
@@ -1583,7 +2075,8 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 :style="{ color: 'var(--hc-text-secondary)' }"
               >
                 <div>
-                  {{ t('knowledge.docCount', { count: 1 }) }} · {{ selectedDoc.chunk_count }} chunk{{ selectedDoc.chunk_count === 1 ? '' : 's' }}
+                  {{ t('knowledge.docCount', { count: 1 }) }} ·
+                  {{ selectedDoc.chunk_count }} chunk{{ selectedDoc.chunk_count === 1 ? '' : 's' }}
                 </div>
                 <div>
                   {{ t('knowledge.updatedAt') }}:
@@ -1610,8 +2103,30 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 }"
               >
                 <template v-if="loadingDocContent">{{ t('common.loading', '加载中...') }}</template>
+                <div
+                  v-else-if="docContentError"
+                  data-testid="knowledge-doc-content-error"
+                  role="alert"
+                  class="flex items-center justify-between gap-3"
+                  style="color: #dc2626"
+                >
+                  <span class="flex items-center gap-2">
+                    <AlertTriangle :size="14" />
+                    {{ docContentError }}
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="knowledge-doc-content-retry"
+                    class="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-medium"
+                    style="background: #ef444415; color: #dc2626"
+                    @click="retryDocContent"
+                  >
+                    <RefreshCw :size="12" />
+                    {{ t('knowledge.retryDocContent') }}
+                  </button>
+                </div>
                 <MarkdownRenderer v-else-if="selectedDoc.content" :content="selectedDoc.content" />
-                <template v-else>{{ t('knowledge.noContentDetail') }}</template>
+                <template v-else>{{ t('knowledge.emptyContentDetail') }}</template>
               </div>
             </div>
           </div>

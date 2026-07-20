@@ -13,6 +13,7 @@ function getByPath(obj: unknown, path: string): unknown {
 const REQUIRED_KNOWLEDGE_KEYS = [
   'knowledge.uploadFile',
   'knowledge.orManualInput',
+  'knowledge.uploadBatchTooLarge',
 ]
 
 // 检索测试的元数据过滤 UI（source_type chip + 日期区间 + 清除）三语必须齐备
@@ -41,9 +42,25 @@ describe('KnowledgeView i18n coverage', () => {
   })
 
   it('all three locales define every KB search filter key (chips/date/clear)', () => {
-    for (const [name, loc] of [['zh-CN', zhCN], ['en', en], ['ug-CN', ugCN]] as const) {
+    for (const [name, loc] of [
+      ['zh-CN', zhCN],
+      ['en', en],
+      ['ug-CN', ugCN],
+    ] as const) {
       const missing = REQUIRED_FILTER_KEYS.filter((path) => getByPath(loc, path) == null)
       expect(missing, `${name} missing filter keys`).toEqual([])
+    }
+  })
+
+  it('all three locales expose the upload-batch budget error with the same placeholder', () => {
+    for (const [name, loc] of [
+      ['zh-CN', zhCN],
+      ['en', en],
+      ['ug-CN', ugCN],
+    ] as const) {
+      const message = getByPath(loc, 'knowledge.uploadBatchTooLarge')
+      expect(typeof message, `${name} missing upload batch error`).toBe('string')
+      expect(message, `${name} upload batch error lost {max}`).toContain('{max}')
     }
   })
 

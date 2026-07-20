@@ -12,6 +12,7 @@ const api = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/knowledge', () => ({
+  MAX_KNOWLEDGE_UPLOAD_BATCH_BYTES: 512 * 1024 * 1024,
   getDocuments: (...args: unknown[]) => api.getDocuments(...args),
   getDocumentContent: vi.fn(),
   addDocument: vi.fn(),
@@ -78,6 +79,11 @@ describe('KnowledgeView semantic-index placement', () => {
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.find('[data-testid="semantic-index-card-stub"]').exists()).toBe(true)
+    const card = wrapper.get('[data-testid="semantic-index-card-stub"]')
+    const documentsTab = wrapper.get('[data-testid="tab-documents"]')
+    expect(
+      card.element.compareDocumentPosition(documentsTab.element) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
 
     await wrapper.get('[data-testid="tab-search"]').trigger('click')
     expect(wrapper.find('[data-testid="semantic-index-card-stub"]').exists()).toBe(false)

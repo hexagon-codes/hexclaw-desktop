@@ -6,6 +6,7 @@ import type { EmbeddingSelection, KnowledgeEmbeddingProfile } from '@/api/knowle
 interface SelectLabels {
   selectLabel: string
   auto: string
+  autoRecommended?: string
   recommended: string
   cloudGroup: string
   localGroup: string
@@ -14,6 +15,7 @@ interface SelectLabels {
   cloud: string
   installed: string
   connected: string
+  download: string
   downloadable?: string
   downloading?: string
   unavailable: string
@@ -29,16 +31,20 @@ const props = withDefaults(
     providerDocsLabel: string
     providerDocsAriaLabel: string
     providerDocsUrl: string
+    downloadProgress?: Record<string, number | null | undefined>
+    formatDownloadProgress?: (progress: number) => string
     disabled?: boolean
   }>(),
   {
     recommendationProfileId: null,
+    downloadProgress: () => ({}),
     disabled: false,
   },
 )
 
 const emit = defineEmits<{
   select: [selection: EmbeddingSelection]
+  download: [profile: KnowledgeEmbeddingProfile]
 }>()
 
 type PickerOption =
@@ -82,9 +88,16 @@ const localProfiles = computed(() =>
 
 function profileIsDisabled(profile: KnowledgeEmbeddingProfile) {
   return (
-    profile.availability === 'downloadable' ||
     profile.availability === 'downloading' ||
-    profile.availability === 'unavailable'
+    profile.availability === 'unavailable' ||
+    (profile.availability === 'downloadable' && profile.location !== 'local')
+  )
+}
+
+function profileHasDownloadStatus(profile: KnowledgeEmbeddingProfile) {
+  return (
+    profile.location === 'local' &&
+    (profile.availability === 'downloadable' || profile.availability === 'downloading')
   )
 }
 
@@ -130,7 +143,9 @@ const selectedProfile = computed(() => {
   return props.profiles.find((profile) => profile.profile_id === props.selection.profile_id) ?? null
 })
 const displayLabel = computed(() => {
-  if (props.selection.kind === 'auto') return props.labels.auto
+  if (props.selection.kind === 'auto') {
+    return props.labels.autoRecommended ?? `${props.labels.auto}（${props.labels.recommended}）`
+  }
   if (props.selection.kind === 'disabled') return props.labels.textOnly
   return selectedProfile.value?.model_name ?? props.selection.profile_id
 })
@@ -176,6 +191,19 @@ function statusLabel(profile: KnowledgeEmbeddingProfile) {
     default:
       return props.labels.unavailable
   }
+}
+
+function downloadStatusLabel(profile: KnowledgeEmbeddingProfile) {
+  if (profile.availability === 'downloadable') return props.labels.download
+  const progress = props.downloadProgress[profile.profile_id]
+  if (typeof progress !== 'number' || !Number.isFinite(progress)) {
+    return props.labels.downloading ?? props.labels.unavailable
+  }
+  const normalized = Math.min(100, Math.max(0, Math.round(progress)))
+  return (
+    props.formatDownloadProgress?.(normalized) ??
+    `${props.labels.downloading ?? props.labels.unavailable} ${normalized}%`
+  )
 }
 
 function firstEnabledIndex() {
@@ -272,6 +300,10 @@ function togglePopover() {
 function pick(index: number) {
   const option = options.value[index]
   if (!option || option.disabled || props.disabled) return
+  if (option.profile?.location === 'local' && option.profile.availability === 'downloadable') {
+    emit('download', option.profile)
+    return
+  }
   emit('select', { ...option.selection })
   closePopover()
 }
@@ -354,6 +386,16 @@ function onViewportChange() {
   if (open.value) updatePosition()
 }
 
+function containsFocus() {
+  const activeElement = document.activeElement
+  return Boolean(
+    activeElement &&
+    (triggerRef.value?.contains(activeElement) || popoverRef.value?.contains(activeElement)),
+  )
+}
+
+defineExpose({ containsFocus })
+
 onMounted(() => {
   document.addEventListener('mousedown', onClickOutside, true)
   document.addEventListener('focusin', onFocusOutside, true)
@@ -388,7 +430,7 @@ watch(
       :aria-label="`${labels.selectLabel}: ${displayLabel}`"
       :aria-expanded="open"
       aria-haspopup="listbox"
-      :aria-controls="listboxId"
+      :aria-controls="open ? listboxId : undefined"
       :aria-activedescendant="activeDescendant"
       :aria-describedby="open ? noticeId : undefined"
       :aria-disabled="disabled || undefined"
@@ -469,9 +511,24 @@ watch(
                   </span>
                   <span v-if="option.profile" class="kb-profile-select__option-meta">
                     {{ option.profile.provider_name }}
-                    <span aria-hidden="true"> · </span>
-                    {{ statusLabel(option.profile) }}
+                    <template v-if="!profileHasDownloadStatus(option.profile)">
+                      <span aria-hidden="true"> · </span>
+                      {{ statusLabel(option.profile) }}
+                    </template>
                   </span>
+                </span>
+                <span
+                  v-if="option.profile && profileHasDownloadStatus(option.profile)"
+                  class="kb-profile-select__download-status"
+                  :class="{
+                    'kb-profile-select__download-status--active':
+                      option.profile.availability === 'downloadable',
+                    'kb-profile-select__download-status--progress':
+                      option.profile.availability === 'downloading',
+                  }"
+                  :data-testid="`kb-index-model-download-${option.profile.profile_id}`"
+                >
+                  {{ downloadStatusLabel(option.profile) }}
                 </span>
                 <Check
                   v-if="optionIsSelected(option)"
@@ -706,6 +763,32 @@ watch(
 .kb-profile-select__check {
   flex-shrink: 0;
   color: var(--hc-accent);
+}
+
+.kb-profile-select__download-status {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--hc-bg-active);
+  color: var(--hc-text-secondary);
+  font-size: 10.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.kb-profile-select__download-status::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hc-warning);
+  content: '';
+}
+
+.kb-profile-select__download-status--progress::before {
+  background: var(--hc-accent);
 }
 
 .kb-profile-select__notice {
