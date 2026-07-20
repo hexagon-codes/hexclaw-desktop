@@ -101,7 +101,7 @@ import {
   MessageSquare,
 } from 'lucide-vue-next'
 import {
-  getOllamaStatus, pullOllamaModel, getOllamaRunning,
+  getOllamaStatus, pullOllamaModel, getOllamaRunningResult,
   loadOllamaModel, unloadOllamaModel, deleteOllamaModel, restartOllama,
   type OllamaStatus, type OllamaRunningModel,
 } from '@/api/ollama'
@@ -111,27 +111,23 @@ import { useRouter } from 'vue-router'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { resolveOllamaCapabilities } from '@/config/providers'
 import HcSelect from '@/components/common/HcSelect.vue'
-import type { ModelCapability } from '@/types/settings'
+import {
+  MODEL_CAPABILITY_DISPLAY,
+  type DisplayModelCapability,
+} from '@/config/model-capability-display'
 
 // 能力标签 emoji + 文案（与 SettingsView 云 Provider 保持一致）
-const CAP_EMOJI: Record<string, string> = {
-  text: '💬', vision: '👁', video: '🎬', audio: '🎤', code: '💻',
-  image_generation: '🎨', video_generation: '📹',
-}
-const CAP_LABEL: Record<string, string> = {
-  text: '文本', vision: '视觉', video: '视频', audio: '音频', code: '代码',
-  image_generation: '绘图', video_generation: '视频生成',
-}
-
 // Ollama 原生能力名 → 前端模态徽章（BUG-20260704）。只映射「模态」类；
 // tools/thinking/insert/embedding 不是模态徽章，不显示（能力真值另在别处用）。
-const OLLAMA_CAP_TO_MODALITY: Record<string, ModelCapability> = {
+const OLLAMA_CAP_TO_MODALITY: Record<string, DisplayModelCapability> = {
   completion: 'text',
   vision: 'vision',
+  tools: 'tools',
+  thinking: 'thinking',
 }
 
-function mapOllamaCapabilities(raw: string[]): ModelCapability[] {
-  const out: ModelCapability[] = []
+function mapOllamaCapabilities(raw: string[]): DisplayModelCapability[] {
+  const out: DisplayModelCapability[] = []
   for (const c of raw) {
     const modality = OLLAMA_CAP_TO_MODALITY[c.trim().toLowerCase()]
     if (modality && !out.includes(modality)) out.push(modality)
@@ -146,7 +142,7 @@ function mapOllamaCapabilities(raw: string[]): ModelCapability[] {
 // 避免"什么徽章都没有 = 不知道支持什么"的误解。
 // BUG-20260704：优先用 Ollama /api/tags 上报的真实能力（qwen3.5:9b 等视觉模型才能显示
 // 「视觉」）；后端/旧版 Ollama 未上报时回退按模型名查静态表。
-function modelCaps(model: { name: string; capabilities?: string[] }): ModelCapability[] {
+function modelCaps(model: { name: string; capabilities?: string[] }): DisplayModelCapability[] {
   if (model.capabilities && model.capabilities.length > 0) {
     return mapOllamaCapabilities(model.capabilities)
   }
@@ -243,7 +239,12 @@ async function detect() {
         dp.backendKey?.toLowerCase().includes('ollama') ||
         dp.name?.toLowerCase().includes('ollama')
       )
-      if (isOllamaDefault && runningModels.value.length === 0 && status.value?.models?.length) {
+      if (
+        isOllamaDefault &&
+        runningProbeState.value === 'ready' &&
+        runningModels.value.length === 0 &&
+        status.value?.models?.length
+      ) {
         const downloadedNames = status.value.models.map(m => m.name)
         const defaultModel = settingsStore.config?.llm.defaultModel
         // 匹配规则（按优先级）：
@@ -369,6 +370,8 @@ async function finalizePulledModel(model: string) {
 
 // ─── 运行状态管理 ───────────────────────────
 const runningModels = ref<OllamaRunningModel[]>([])
+const runningProbeState = ref<'loading' | 'ready' | 'error'>('loading')
+const runningProbeError = ref('')
 const unloadingModel = ref('')
 const deletingModel = ref('')
 
@@ -377,9 +380,27 @@ function isModelRunning(name: string): boolean {
 }
 
 async function refreshRunning() {
+  runningProbeState.value = 'loading'
+  runningProbeError.value = ''
   try {
-    runningModels.value = await getOllamaRunning()
-  } catch { /* ignore */ }
+    const result = await getOllamaRunningResult()
+    runningModels.value = result.models
+    if (!result.reachable || result.error) {
+      runningProbeState.value = 'error'
+      runningProbeError.value = result.error || t(
+        'settings.ollama.runningProbeUnavailable',
+        '无法读取运行模型状态',
+      )
+      return
+    }
+    runningProbeState.value = 'ready'
+  } catch (probeError) {
+    runningModels.value = []
+    runningProbeState.value = 'error'
+    runningProbeError.value = probeError instanceof Error
+      ? probeError.message
+      : t('settings.ollama.runningProbeUnavailable', '无法读取运行模型状态')
+  }
 }
 
 async function handleUnload(name: string) {
@@ -817,6 +838,23 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
 
       <!-- Associated -->
       <div v-else-if="state === 'associated' && status" key="associated" class="ollama-card__body">
+        <p
+          v-if="runningProbeState === 'error'"
+          data-testid="ollama-running-unreachable"
+          class="ollama-card__running-probe ollama-card__running-probe--error"
+          role="status"
+        >
+          {{ t('settings.ollama.runningProbeUnavailable', '无法读取运行模型状态') }}
+          <span v-if="runningProbeError" :title="runningProbeError">· {{ t('common.retry', '请重试') }}</span>
+        </p>
+        <p
+          v-else-if="runningProbeState === 'ready' && runningModels.length === 0"
+          data-testid="ollama-running-empty"
+          class="ollama-card__running-probe"
+          role="status"
+        >
+          {{ t('settings.ollama.noRunningModels', '当前没有驻留在内存中的模型') }}
+        </p>
         <div v-if="status.models?.length" class="ollama-card__models">
           <div v-for="m in status.models" :key="m.name" class="ollama-card__model">
             <div class="ollama-card__model-left">
@@ -826,8 +864,8 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
                 :key="cap"
                 class="ollama-card__cap"
                 :class="`ollama-card__cap--${cap}`"
-                :title="CAP_LABEL[cap]"
-              >{{ CAP_EMOJI[cap] }} {{ CAP_LABEL[cap] }}</span>
+                :title="MODEL_CAPABILITY_DISPLAY[cap].title"
+              >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }} {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
             </div>
             <div class="ollama-card__model-right">
               <span class="ollama-card__model-meta">
@@ -846,21 +884,30 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
                 {{ unloadingModel === m.name ? t('settings.ollama.unloading', '卸载中...') : t('settings.ollama.running', '运行中') }}
               </button>
               <span
-                v-else
+                v-else-if="runningProbeState === 'ready'"
                 class="ollama-card__model-status ollama-card__model-status--idle"
                 :title="t('settings.ollama.notLoadedTitle', '就绪，在对话中选择此模型即可自动加载')"
               >
                 <span class="ollama-card__model-status-dot" />
                 {{ t('settings.ollama.notLoaded', '就绪') }}
               </span>
+              <span
+                v-else
+                data-testid="ollama-model-running-unknown"
+                class="ollama-card__model-status ollama-card__model-status--unknown"
+                :title="t('settings.ollama.runningProbeUnavailable', '无法读取运行模型状态')"
+              >
+                <span class="ollama-card__model-status-dot" />
+                {{ t('settings.ollama.runningUnknown', '状态未知') }}
+              </span>
               <div class="ollama-card__model-actions">
                 <button
                   class="ollama-card__model-btn ollama-card__model-btn--chat"
                   :title="t('settings.ollama.chatWith', { name: m.name })"
+                  :aria-label="t('settings.ollama.chatWith', { name: m.name })"
                   @click="goChat(m.name)"
                 >
                   <MessageSquare :size="10" />
-                  {{ t('settings.ollama.chatAction', '对话') }}
                 </button>
                 <button
                   class="ollama-card__model-btn ollama-card__model-btn--danger"
@@ -1346,21 +1393,23 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
   font-weight: 500;
   margin-left: 4px;
   white-space: nowrap;
 }
 
 .ollama-card__cap--text           { color: var(--hc-text-secondary); background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent); }
-.ollama-card__cap--vision         { color: #80b8ff; background: color-mix(in srgb, #80b8ff 14%, transparent); }
-.ollama-card__cap--video          { color: #d89aff; background: color-mix(in srgb, #d89aff 14%, transparent); }
-.ollama-card__cap--audio          { color: #ffb878; background: color-mix(in srgb, #ffb878 14%, transparent); }
-.ollama-card__cap--code           { color: #8cf0a8; background: color-mix(in srgb, #8cf0a8 14%, transparent); }
-.ollama-card__cap--image_generation { color: #ff9ecd; background: color-mix(in srgb, #ff9ecd 14%, transparent); }
-.ollama-card__cap--video_generation { color: #ffc878; background: color-mix(in srgb, #ffc878 14%, transparent); }
+.ollama-card__cap--vision         { color: var(--hc-success, #34c759); background: color-mix(in srgb, var(--hc-success, #34c759) 12%, transparent); }
+.ollama-card__cap--video          { color: var(--hc-warning, #ff9f0a); background: color-mix(in srgb, var(--hc-warning, #ff9f0a) 12%, transparent); }
+.ollama-card__cap--audio          { color: var(--hc-accent, #5fb3ea); background: color-mix(in srgb, var(--hc-accent, #5fb3ea) 12%, transparent); }
+.ollama-card__cap--code,
+.ollama-card__cap--tools          { color: var(--hc-text-secondary); background: color-mix(in srgb, var(--hc-text-secondary) 12%, transparent); }
+.ollama-card__cap--thinking       { color: var(--hc-warning, #ff9f0a); background: color-mix(in srgb, var(--hc-warning, #ff9f0a) 12%, transparent); }
+.ollama-card__cap--image_generation { color: #ec4899; background: color-mix(in srgb, #ec4899 14%, transparent); }
+.ollama-card__cap--video_generation { color: #f59e0b; background: color-mix(in srgb, #f59e0b 14%, transparent); }
 
 .ollama-card__model-status {
   display: inline-flex;
@@ -1413,6 +1462,26 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
   opacity: 0.5;
 }
 
+.ollama-card__model-status--unknown {
+  color: var(--hc-warning, #b45309);
+  background: color-mix(in srgb, var(--hc-warning, #f59e0b) 12%, transparent);
+  cursor: default;
+}
+
+.ollama-card__model-status--unknown .ollama-card__model-status-dot {
+  background: var(--hc-warning, #f59e0b);
+}
+
+.ollama-card__running-probe {
+  margin: 0 0 8px;
+  color: var(--hc-text-muted);
+  font-size: 12px;
+}
+
+.ollama-card__running-probe--error {
+  color: var(--hc-warning, #b45309);
+}
+
 .ollama-card__model-meta {
   color: var(--hc-text-muted);
   font-size: 11px;
@@ -1445,7 +1514,10 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
 .ollama-card__model-btn--chat {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  justify-content: center;
+  width: 28px;
+  min-height: 24px;
+  padding: 2px;
 }
 
 .ollama-card__model-btn--chat:hover:not(:disabled) {

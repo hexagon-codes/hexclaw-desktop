@@ -24,6 +24,7 @@ const settingsStore = {
 vi.mock('@/api/ollama', () => ({
   getOllamaStatus,
   getOllamaRunning,
+  getOllamaRunningResult: async () => ({ models: await getOllamaRunning(), reachable: true }),
   pullOllamaModel: vi.fn(),
   unloadOllamaModel: vi.fn(),
   deleteOllamaModel: vi.fn(),
@@ -80,6 +81,15 @@ describe('BUG-20260704 Ollama 视觉能力徽章', () => {
     expect(caps.join(' '), `徽章实际=${JSON.stringify(caps)}`).toContain('视觉')
     // 文本也应保留（视觉模型 = 文本 + 视觉）。
     expect(caps.join(' ')).toContain('文本')
+    expect(caps.join(' ')).toContain('工具')
+    expect(caps.join(' ')).toContain('💬 文本')
+    expect(caps.join(' ')).toContain('👁 视觉')
+    expect(caps.join(' ')).toContain('🔧 工具')
+
+    const chatButton = wrapper.get('.ollama-card__model-btn--chat')
+    expect(chatButton.text().trim()).toBe('')
+    expect(chatButton.attributes('aria-label')).toContain('qwen3.5:9b')
+    expect(chatButton.attributes('title')).toContain('qwen3.5:9b')
   })
 
   it('纯文本模型（capabilities 无 vision）不显示「视觉」', async () => {
