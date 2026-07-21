@@ -33,7 +33,7 @@ function onEnter(e: KeyboardEvent) {
 
 <template>
   <div class="hc-search" :class="{ 'hc-search--fluid': fluid }">
-    <Search :size="14" class="hc-search__icon" />
+    <Search :size="15" class="hc-search__icon" />
     <input
       :value="modelValue"
       :data-testid="inputTestId"

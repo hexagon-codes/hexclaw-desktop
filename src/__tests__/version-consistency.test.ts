@@ -55,21 +55,17 @@ describe('Version Consistency', () => {
     expect(staleVersionFiles).toEqual([])
   })
 
-  // 2026-07-20 原型重新确认为桌面 UI 唯一权威：侧栏角落展示 Hexagon 引擎状态与版本。
-  it('Sidebar shows the Hexagon engine status and runtime version', () => {
+  // 2026-07-21 用户最终事实源：侧栏固定展示产品版本；引擎版本只进入关于页。
+  it('Sidebar shows the exact approved HexClaw product version', () => {
     const sidebar = readFile(path.join(SRC, 'components/layout/Sidebar.vue'))
     const scriptSection = sidebar.slice(0, sidebar.indexOf('<template>'))
 
-    expect(scriptSection).toMatch(/const engineVersion\s*=\s*ref/)
-    expect(scriptSection).toContain('getEngineVersion')
-    expect(scriptSection).toContain('engine_version')
-
-    expect(sidebar).toContain('Hexagon engine')
-    expect(sidebar).toContain('engineLabel')
-
-    // Template should not have hardcoded version strings
-    const templateSection = sidebar.slice(sidebar.indexOf('<template>'))
-    expect(templateSection).not.toMatch(/v0\.\d+\.\d+(?!.*\{\{)/)
+    expect(scriptSection).toContain("const productVersionLabel = 'HexClaw 0.5.0-beta'")
+    expect(scriptSection).not.toContain('getEngineVersion')
+    expect(scriptSection).not.toContain('engine_version')
+    expect(scriptSection).not.toMatch(/const engineVersion\s*=\s*ref/)
+    expect(sidebar).toContain('{{ productVersionLabel }}')
+    expect(sidebar).not.toContain('Hexagon engine')
   })
 
   it('AboutView uses dynamic appVersion ref (not hardcoded in template)', () => {
@@ -101,11 +97,10 @@ describe('Version Consistency', () => {
     }
   })
 
-  it('Sidebar engineVersion fallback is empty string', () => {
+  it('Sidebar identity does not drift with engine connection state', () => {
     const sidebar = readFile(path.join(SRC, 'components/layout/Sidebar.vue'))
-    const versionMatch = sidebar.match(/engineVersion\s*=\s*ref\(['"]([^']*)['"]\)/)
-    expect(versionMatch).not.toBeNull()
-    expect(versionMatch![1]).toBe('')
+    expect(sidebar).not.toContain('engineLabel')
+    expect(sidebar).toContain("const productVersionLabel = 'HexClaw 0.5.0-beta'")
   })
 
   it('AboutView also surfaces the Hexagon engine version details', () => {

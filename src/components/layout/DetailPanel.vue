@@ -120,13 +120,20 @@ const resolvedTitle = computed(() => {
 /* Transition */
 .panel-enter-active,
 .panel-leave-active {
-  transition: width 0.25s cubic-bezier(0.25, 0.1, 0.25, 1),
-              opacity 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+  transition: width 0.24s var(--hc-ease-smooth),
+              opacity 0.24s var(--hc-ease-smooth);
 }
 
 .panel-enter-from,
 .panel-leave-to {
   width: 0;
   opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-enter-active,
+  .panel-leave-active {
+    transition: none;
+  }
 }
 </style>

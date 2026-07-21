@@ -1382,7 +1382,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             <!-- 添加 Provider 面板 -->
             <div v-if="showAddProvider" class="hc-provider__add-panel">
               <label class="hc-settings__label">{{ t('settings.llm.selectProvider') }}</label>
-              <ProviderSelect v-model="addProviderType" />
+              <ProviderSelect v-model="addProviderType" :include-custom="true" />
               <div class="hc-provider__add-actions">
                 <button class="hc-btn hc-btn-sm" @click="showAddProvider = false">
                   {{ t('common.cancel') }}

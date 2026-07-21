@@ -60,6 +60,17 @@ describe('BUG-20260703 P2-2 — 记忆行为设置面板', () => {
     api.getMemoryEntries.mockResolvedValue({ entries: [], summary: '', capacity: { used: 0, max: 200 } })
   })
 
+  it('默认收起时正文仍在 DOM，disclosure 的 aria-controls 始终有效', async () => {
+    const w = mountPanel()
+    await flushPromises()
+
+    const toggle = w.get('[data-testid="memset-toggle"]')
+    const region = w.get('#memory-behavior-settings-body')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+    expect(toggle.attributes('aria-controls')).toBe('memory-behavior-settings-body')
+    expect(region.isVisible()).toBe(false)
+  })
+
   it('展开后按后端配置渲染：inline 选中、地板值、两开关状态', async () => {
     const w = mountPanel()
     await flushPromises()

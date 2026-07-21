@@ -11,9 +11,12 @@ export interface ContextMenuItem {
   disabled?: boolean
 }
 
-defineProps<{
+const props = withDefaults(defineProps<{
   items: ContextMenuItem[]
-}>()
+  variant?: 'default' | 'session'
+}>(), {
+  variant: 'default',
+})
 
 const emit = defineEmits<{
   select: [id: string]
@@ -57,7 +60,13 @@ function showAt(anchor: HTMLElement) {
   nextTick(() => {
     const anchorRect = anchor.getBoundingClientRect()
     const menuWidth = menuRef.value?.getBoundingClientRect().width ?? 0
-    fitToViewport(anchorRect.right - menuWidth, anchorRect.bottom + 6)
+    const left = props.variant === 'session'
+      ? anchorRect.left - 16
+      : anchorRect.right - menuWidth
+    const top = props.variant === 'session'
+      ? anchorRect.bottom + 2
+      : anchorRect.bottom + 6
+    fitToViewport(left, top)
     focusFirstItem()
   })
 }
@@ -130,6 +139,7 @@ defineExpose({ show, showAt, hide })
         v-if="visible"
         ref="menuRef"
         class="hc-ctx"
+        :class="{ 'hc-ctx--session': variant === 'session' }"
         role="menu"
         aria-orientation="vertical"
         :style="{ left: x + 'px', top: y + 'px' }"
@@ -163,11 +173,11 @@ defineExpose({ show, showAt, hide })
 .hc-ctx {
   position: fixed;
   z-index: var(--hc-z-popover);
-  min-width: 180px;
-  padding: 4px;
+  min-width: 170px;
+  padding: 6px;
   border-radius: var(--hc-radius-md);
   background: var(--hc-bg-elevated);
-  border: 1px solid var(--hc-border);
+  border: 0.5px solid var(--hc-border);
   box-shadow: var(--hc-shadow-float);
   backdrop-filter: saturate(180%) blur(var(--hc-blur-heavy));
   -webkit-backdrop-filter: saturate(180%) blur(var(--hc-blur-heavy));
@@ -178,11 +188,12 @@ defineExpose({ show, showAt, hide })
   align-items: center;
   gap: var(--hc-space-2);
   width: 100%;
-  padding: 6px 10px;
+  padding: 8px 10px;
   border: none;
-  border-radius: var(--hc-radius-sm);
+  border-radius: 7px;
   background: transparent;
   color: var(--hc-text-primary);
+  font: inherit;
   font-size: 13px;
   cursor: pointer;
   text-align: left;
@@ -190,12 +201,11 @@ defineExpose({ show, showAt, hide })
 }
 
 .hc-ctx__item:hover {
-  background: var(--hc-accent);
-  color: #fff;
+  background: var(--hc-bg-hover);
 }
 
 .hc-ctx__item:hover .hc-ctx__shortcut {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--hc-text-secondary);
 }
 
 .hc-ctx__item--danger {
@@ -208,13 +218,14 @@ defineExpose({ show, showAt, hide })
 }
 
 .hc-ctx__item--disabled {
-  opacity: 0.4;
-  cursor: default;
+  color: var(--hc-text-muted);
+  opacity: 0.72;
+  cursor: not-allowed;
 }
 
 .hc-ctx__item--disabled:hover {
   background: transparent;
-  color: var(--hc-text-primary);
+  color: var(--hc-text-muted);
 }
 
 .hc-ctx__icon {
@@ -236,6 +247,47 @@ defineExpose({ show, showAt, hide })
   height: 1px;
   background: var(--hc-divider);
   margin: 4px 8px;
+}
+
+/* Session rows use the separately approved ChatGPT-measured menu geometry. */
+.hc-ctx--session {
+  width: 140px;
+  min-width: 140px;
+  box-sizing: border-box;
+  padding: 6px;
+  border: 1px solid var(--hc-border);
+  border-radius: 16px;
+  backdrop-filter: saturate(180%) blur(18px);
+  -webkit-backdrop-filter: saturate(180%) blur(18px);
+  transform-origin: top left;
+}
+
+.hc-ctx--session .hc-ctx__item {
+  height: 36px;
+  gap: 10px;
+  padding: 0 10px;
+  border-radius: 9px;
+}
+
+.hc-ctx--session .hc-ctx__icon {
+  width: 17px;
+  height: 17px;
+  opacity: 1;
+}
+
+.hc-ctx--session .hc-ctx__item--danger:hover,
+.hc-ctx--session .hc-ctx__item--danger:focus-visible {
+  color: var(--hc-error);
+  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
+}
+
+.hc-ctx--session .hc-ctx__item--disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.hc-ctx--session .hc-ctx__sep {
+  margin: 5px 8px;
 }
 
 .hc-ctx--enter {

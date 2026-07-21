@@ -64,6 +64,19 @@ function onSearchInput(value: string) {
   flex-shrink: 0;
   position: relative;
   z-index: 1;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+
+.hc-toolbar :deep(.hc-btn) {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+}
+
+.hc-toolbar :deep(.hc-btn-ghost) {
+  height: 30px;
+  padding: 0 8px;
 }
 
 .hc-toolbar__left,

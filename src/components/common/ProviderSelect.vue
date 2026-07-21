@@ -7,8 +7,10 @@ import type { ProviderType } from '@/types'
 const props = withDefaults(defineProps<{
   modelValue: ProviderType
   includeOllama?: boolean
+  includeCustom?: boolean
 }>(), {
   includeOllama: false,
+  includeCustom: false,
 })
 
 const emit = defineEmits<{
@@ -21,10 +23,9 @@ const dropdownRef = ref<HTMLUListElement | null>(null)
 const highlightIndex = ref(-1)
 const dropdownStyle = ref<Record<string, string>>({})
 
-// 新增入口只展示有正式品牌与直连契约的 Provider。
-// Ollama 可由首启向导显式纳入；custom 仅保留既有配置的编辑兼容，不再作为新增选项。
+// 页面必须显式声明是否开放 Ollama / custom，避免共享组件把局部策略扩散到其他入口。
 const presets = getProviderTypes({ includeOllama: props.includeOllama })
-  .filter((preset) => preset.type !== 'custom')
+  .filter((preset) => props.includeCustom || preset.type !== 'custom')
 
 const selected = computed(() => presets.find((p) => p.type === props.modelValue) ?? presets[0]!)
 
@@ -40,14 +41,14 @@ function updatePosition() {
   if (flipUp) {
     dropdownStyle.value = {
       position: 'fixed',
-      bottom: `${window.innerHeight - rect.top + 4}px`,
+      bottom: `${window.innerHeight - rect.top + 6}px`,
       left: `${rect.left}px`,
       width: `${rect.width}px`,
     }
   } else {
     dropdownStyle.value = {
       position: 'fixed',
-      top: `${rect.bottom + 4}px`,
+      top: `${rect.bottom + 6}px`,
       left: `${rect.left}px`,
       width: `${rect.width}px`,
     }
@@ -237,13 +238,31 @@ watch(() => props.modelValue, () => {
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-height: 38px;
+  padding: 8px 34px 8px 11px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  font: inherit;
+  font-size: 13px;
   cursor: pointer;
   appearance: none;
   -webkit-appearance: none;
-  padding-right: 32px;
   line-height: 1.5;
   text-align: left;
   background-image: none;
+}
+
+.hc-provider-select__trigger:hover {
+  border-color: var(--hc-border-hl);
+  background: var(--hc-bg-hover);
+}
+
+.hc-provider-select__trigger:focus-visible {
+  outline: none;
+  border-color: var(--hc-accent);
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
 }
 
 .hc-provider-select__name {
@@ -255,7 +274,7 @@ watch(() => props.modelValue, () => {
 
 .hc-provider-select__arrow {
   position: absolute;
-  right: 10px;
+  right: 11px;
   color: var(--hc-text-muted);
   flex-shrink: 0;
   transition: transform 0.2s;
@@ -283,20 +302,30 @@ watch(() => props.modelValue, () => {
   padding: 4px;
   list-style: none;
   border-radius: var(--hc-radius-md, 8px);
-  border: 1px solid var(--hc-border);
+  border: 0.5px solid var(--hc-border);
   background: var(--hc-bg-elevated);
-  backdrop-filter: blur(var(--hc-blur-heavy, 40px));
+  backdrop-filter: blur(24px) saturate(160%);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
   box-shadow: var(--hc-shadow-float);
+}
+
+[data-theme='light'] .hc-provider-select__dropdown {
+  background: rgba(255, 255, 255, 0.985);
+}
+
+[data-theme='dark'] .hc-provider-select__dropdown {
+  background: rgba(18, 30, 50, 0.985);
 }
 
 .hc-provider-select__option {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-height: 34px;
   padding: 6px 10px;
-  border-radius: var(--hc-radius-sm, 6px);
+  border-radius: 7px;
   font-size: 13px;
-  color: var(--hc-text-secondary);
+  color: var(--hc-text-primary);
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
 }

@@ -363,7 +363,7 @@ async function skip() {
         <div v-if="step === 0" class="space-y-4">
           <div class="hc-settings__field">
             <label class="hc-settings__label">Provider</label>
-            <ProviderSelect v-model="provider" :include-ollama="true" />
+            <ProviderSelect v-model="provider" :include-ollama="true" :include-custom="true" />
           </div>
 
           <!-- Ollama 专属：状态检测 + 模型选择 -->

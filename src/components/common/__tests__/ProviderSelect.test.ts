@@ -14,17 +14,20 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
   return mocked
 })
 
-async function mountSelect(modelValue: ProviderType = 'openai') {
+async function mountSelect(
+  modelValue: ProviderType = 'openai',
+  options: { includeOllama?: boolean; includeCustom?: boolean } = {},
+) {
   const ProviderSelect = (await import('../ProviderSelect.vue')).default
   return mount(ProviderSelect, {
-    props: { modelValue },
+    props: { modelValue, ...options },
     global: {
       stubs: { Teleport: true },
     },
   })
 }
 
-// 配置层仍保留 custom，供其他显式入口复用；Settings 的“新增服务商”只展示官方项。
+// 配置层保留 custom；具体页面必须显式声明是否开放 custom / Ollama。
 const CONFIG_PRESETS = getProviderTypes()
 const OFFICIAL_PRESETS = CONFIG_PRESETS.filter((preset) => preset.type !== 'custom')
 
@@ -84,7 +87,7 @@ describe('ProviderSelect — 供应商下拉选择器', () => {
     expect(CONFIG_PRESETS.map((preset) => preset.type)).not.toContain('ollama')
   })
 
-  it('下拉列表只包含 12 个官方服务商', async () => {
+  it('默认策略下拉列表只包含 12 个官方服务商', async () => {
     const wrapper = await mountSelect()
     await wrapper.find('.hc-provider-select__trigger').trigger('click')
 
@@ -103,12 +106,43 @@ describe('ProviderSelect — 供应商下拉选择器', () => {
     expect(texts).not.toContain('Ollama (本地)')
   })
 
-  it('不包含 custom/自定义（非官方服务商）', async () => {
+  it('默认策略不包含 custom/自定义', async () => {
     const wrapper = await mountSelect()
     await wrapper.find('.hc-provider-select__trigger').trigger('click')
 
     const texts = wrapper.findAll('.hc-provider-select__option').map((option) => option.text())
     expect(texts).not.toContain('自定义')
+  })
+
+  it('显式 includeCustom 时把自定义固定在 12 个官方服务商之后并允许选择', async () => {
+    const wrapper = await mountSelect('openai', { includeCustom: true })
+    await wrapper.find('.hc-provider-select__trigger').trigger('click')
+
+    const options = wrapper.findAll('.hc-provider-select__option')
+    expect(options).toHaveLength(13)
+    expect(options.slice(0, 12).map((option) => option.text())).toEqual(
+      OFFICIAL_PRESETS.map((preset) => preset.name),
+    )
+    expect(options[12]!.text()).toBe('自定义')
+    expect(options[12]!.get('.hc-provider-select__option-logo').attributes('src')).toBeTruthy()
+
+    await options[12]!.trigger('mousedown')
+    expect(wrapper.emitted('update:modelValue')).toEqual([['custom']])
+  })
+
+  it('显式 includeCustom 时正确显示已选中的自定义 Provider', async () => {
+    const wrapper = await mountSelect('custom', { includeCustom: true })
+    expect(wrapper.get('.hc-provider-select__name').text()).toBe('自定义')
+  })
+
+  it('欢迎页策略同时显式包含 Ollama 与末尾自定义，共 14 项', async () => {
+    const wrapper = await mountSelect('openai', { includeOllama: true, includeCustom: true })
+    await wrapper.find('.hc-provider-select__trigger').trigger('click')
+
+    const texts = wrapper.findAll('.hc-provider-select__option').map((option) => option.text())
+    expect(texts).toHaveLength(14)
+    expect(texts).toContain('Ollama (本地)')
+    expect(texts[texts.length - 1]).toBe('自定义')
   })
 
   it('包含所有新增的国内供应商', async () => {

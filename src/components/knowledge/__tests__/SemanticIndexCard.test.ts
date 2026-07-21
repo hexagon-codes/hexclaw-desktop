@@ -188,7 +188,11 @@ describe('SemanticIndexCard', () => {
     expect(wrapper.get('[data-testid="kb-semantic-index-status"]').text()).toBe('已就绪')
     expect(wrapper.find('[data-testid="kb-semantic-index-layers-icon"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('语义索引（高级）')
-    expect(wrapper.find('[data-testid="kb-semantic-index-body"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="kb-semantic-index-body"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="kb-semantic-index-body"]').isVisible()).toBe(false)
+    expect(
+      wrapper.get('[data-testid="kb-semantic-index-header"]').attributes('aria-controls'),
+    ).toBe('kb-semantic-index-body')
     expect(
       wrapper.get('[data-testid="kb-semantic-index-header"]').attributes('aria-expanded'),
     ).toBe('false')
@@ -386,7 +390,8 @@ describe('SemanticIndexCard', () => {
     const wrapper = mountCard()
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="kb-semantic-index-body"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="kb-semantic-index-body"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="kb-semantic-index-body"]').isVisible()).toBe(false)
     expect(wrapper.get('[data-testid="kb-semantic-index-status"]').text()).toBe('1 项处理中')
 
     await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
@@ -421,7 +426,8 @@ describe('SemanticIndexCard', () => {
     const wrapper = mountCard()
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="kb-semantic-index-body"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="kb-semantic-index-body"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="kb-semantic-index-body"]').isVisible()).toBe(false)
     await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
     expect(wrapper.get('[data-testid="kb-index-model-trigger"]').attributes('aria-disabled')).toBe(
       'true',
@@ -460,7 +466,7 @@ describe('SemanticIndexCard', () => {
 
       const wrapper = mountCard()
       await flushPromises()
-      if (!wrapper.find('[data-testid="kb-semantic-index-body"]').exists()) {
+      if (!wrapper.get('[data-testid="kb-semantic-index-body"]').isVisible()) {
         await wrapper.get('[data-testid="kb-semantic-index-header"]').trigger('click')
       }
       const header = wrapper.get<HTMLButtonElement>('[data-testid="kb-semantic-index-header"]')

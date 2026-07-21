@@ -67,8 +67,8 @@ function startSetup() {
   padding: 9px 16px 9px 18px;
   font-size: 12.5px;
   color: var(--hc-warning);
-  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--hc-warning) 32%, transparent);
+  background: rgba(240, 180, 41, 0.12);
+  border-bottom: 0.5px solid rgba(240, 180, 41, 0.32);
   position: relative;
   z-index: 2;
 }
@@ -105,14 +105,14 @@ function startSetup() {
   cursor: pointer;
   white-space: nowrap;
   flex-shrink: 0;
-  border: 1px solid color-mix(in srgb, var(--hc-warning) 42%, transparent);
+  border: 0.5px solid rgba(240, 180, 41, 0.42);
   background: transparent;
   color: var(--hc-warning);
   transition: background 0.15s, opacity 0.15s;
 }
 
 .hc-engine-banner__btn:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--hc-warning) 16%, transparent);
+  background: rgba(240, 180, 41, 0.16);
 }
 
 .hc-engine-banner__btn:disabled {
@@ -122,14 +122,13 @@ function startSetup() {
 
 .hc-engine-banner__btn--primary {
   background: var(--hc-warning);
-  color: var(--hc-bg-elevated);
+  color: #12324c;
   border-color: transparent;
   font-weight: 600;
 }
 
 .hc-engine-banner__btn--primary:hover:not(:disabled) {
-  background: var(--hc-warning);
-  opacity: 0.9;
+  filter: brightness(1.06);
 }
 
 .hc-eb-enter-active {

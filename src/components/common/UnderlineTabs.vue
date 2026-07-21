@@ -47,7 +47,7 @@ const emit = defineEmits<{
 .hc-utabs {
   display: flex;
   gap: 24px;
-  border-bottom: 1px solid var(--hc-border);
+  border-bottom: 0.5px solid var(--hc-border);
 }
 
 .hc-utab {
@@ -63,10 +63,10 @@ const emit = defineEmits<{
   color: var(--hc-text-secondary);
   cursor: pointer;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
   font-family: inherit;
   white-space: nowrap;
-  transition: color 0.18s ease, border-color 0.18s ease;
+  transition: color 0.15s var(--hc-ease-out), border-color 0.15s var(--hc-ease-out);
 }
 
 .hc-utab:hover:not(.hc-utab--on) {
@@ -76,6 +76,7 @@ const emit = defineEmits<{
 .hc-utab--on {
   color: var(--hc-accent);
   border-bottom-color: var(--hc-accent);
+  font-weight: 500;
 }
 
 .hc-utab__icon {

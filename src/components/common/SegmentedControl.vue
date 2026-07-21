@@ -96,7 +96,7 @@ onBeforeUnmount(() => ro?.disconnect())
   /* 磨砂轨道：微染灰底（不再"白压白"），让激活胶囊浮出来 */
   background: var(--hc-bg-input);
   border: 1px solid var(--hc-border);
-  flex-shrink: 1;
+  flex-shrink: 0;
   min-width: 0;
   overflow: hidden;
 }
@@ -129,7 +129,7 @@ onBeforeUnmount(() => ro?.disconnect())
   font-family: inherit;
   font-weight: 500;
   cursor: pointer;
-  transition: color 0.2s ease;
+  transition: color 0.15s var(--hc-ease-out);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -147,9 +147,9 @@ onBeforeUnmount(() => ro?.disconnect())
 
 /* 计数后缀（锚点 prototype .segc）：激活时随品牌色，弱化 */
 .hc-segmented__count {
-  margin-left: 5px;
+  margin-left: 1px;
   font-size: 10.5px;
-  font-weight: 600;
-  opacity: 0.7;
+  font-weight: 400;
+  opacity: 0.62;
 }
 </style>

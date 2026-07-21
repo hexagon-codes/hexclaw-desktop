@@ -89,3 +89,33 @@ test('localhost provider probe and clear buttons close the Settings user journey
   await expect(baseInput).toBeFocused()
   await expect(baseField.getByRole('button', { name: '清空输入内容' })).toHaveCount(0)
 })
+
+test('自定义 Provider 在欢迎页与设置页均可新增', async ({ page }) => {
+  await mockSettingsBackend(page)
+
+  await page.goto('/welcome')
+  const welcomeProvider = page.locator('.hc-provider-select').first()
+  await welcomeProvider.getByRole('combobox').click()
+  await page.getByRole('option', { name: '自定义', exact: true }).click()
+  await expect(welcomeProvider.getByRole('combobox')).toContainText('自定义')
+  await expect(
+    page.locator('.hc-settings__field').filter({ hasText: 'Base URL' }).locator('input'),
+  ).toBeVisible()
+  await expect(
+    page.locator('.hc-settings__field').filter({ hasText: 'Model' }).locator('input'),
+  ).toBeVisible()
+
+  await page.goto('/settings')
+  await page.getByRole('button', { name: '添加服务商' }).click()
+  const addPanel = page.locator('.hc-provider__add-panel')
+  await addPanel.getByRole('combobox').click()
+  await page.getByRole('option', { name: '自定义', exact: true }).click()
+  await expect(addPanel.getByRole('combobox')).toContainText('自定义')
+  await addPanel.getByRole('button', { name: '确认' }).click()
+
+  const customCard = page.locator('[data-provider-type="custom"]')
+  await expect(customCard).toBeVisible()
+  await expect(customCard.locator('[data-provider-field="name"]')).toBeVisible()
+  await expect(customCard.locator('[data-provider-field="api-key"]')).toBeVisible()
+  await expect(customCard.locator('[data-provider-field="base-url"]')).toBeVisible()
+})

@@ -307,57 +307,75 @@ body,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--hc-space-2);
-  border: none;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
   cursor: pointer;
+  font-size: 13px;
   font-weight: 500;
-  transition: background 0.2s cubic-bezier(0.25, 0.1, 0.25, 1), color 0.2s cubic-bezier(0.25, 0.1, 0.25, 1), transform 0.1s;
+  white-space: nowrap;
+  transition:
+    background 0.15s var(--hc-ease-out),
+    box-shadow 0.2s var(--hc-ease-out),
+    transform 0.12s var(--hc-ease-out),
+    border-color 0.15s var(--hc-ease-out);
   border-radius: var(--hc-radius-md);
 }
 
 .hc-btn:active:not(:disabled) {
   transform: scale(0.97);
-  transition-duration: 0.1s;
 }
 
 .hc-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.45;
   cursor: not-allowed;
-  pointer-events: none;
+  transform: none;
+  box-shadow: none;
+}
+
+.hc-btn:disabled:hover {
+  background: var(--hc-bg-input);
 }
 
 .hc-btn-primary {
   /* 官网品牌蓝渐变 + 蓝调柔光（原型 app.html .btn-primary） */
   background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
   color: #fff;
-  padding: var(--hc-space-2) var(--hc-space-4);
-  font-size: 13px;
-  border-radius: var(--hc-radius-md);
+  border-color: transparent;
   box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
 }
 
 .hc-btn-primary:hover {
-  filter: brightness(1.04);
-  box-shadow: 0 8px 22px rgba(95, 179, 234, 0.34);
+  background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(95, 179, 234, 0.34);
+}
+
+.hc-btn-primary:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.hc-btn-primary:disabled:hover {
+  background: var(--hc-accent);
 }
 
 .hc-btn-secondary {
-  background: var(--hc-bg-hover);
+  background: var(--hc-bg-input);
   color: var(--hc-text-primary);
-  padding: var(--hc-space-2) var(--hc-space-4);
-  font-size: 13px;
-  border-radius: var(--hc-radius-md);
 }
 
 .hc-btn-secondary:hover {
-  background: var(--hc-bg-active);
+  background: var(--hc-bg-hover);
 }
 
 .hc-btn-ghost {
   background: transparent;
+  border-color: transparent;
   color: var(--hc-text-secondary);
-  padding: var(--hc-space-1) var(--hc-space-2);
-  font-size: 13px;
+  padding: 6px 8px;
+  box-shadow: none;
 }
 
 .hc-btn-ghost:hover {
@@ -369,8 +387,8 @@ body,
 .hc-input {
   width: 100%;
   border-radius: var(--hc-radius-md);
-  border: 1px solid var(--hc-border);
-  padding: var(--hc-space-2) var(--hc-space-3);
+  border: 0.5px solid var(--hc-border);
+  padding: 9px 12px;
   font-size: 13px;
   outline: none;
   background: var(--hc-bg-input);
@@ -407,7 +425,7 @@ select.hc-input:focus {
 /* ─── Card Base ─────────────────────────────────────────── */
 .hc-card {
   background: var(--hc-bg-card);
-  border: 1px solid var(--hc-border);
+  border: 0.5px solid var(--hc-border);
   border-radius: var(--hc-radius-lg);
   transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
@@ -447,10 +465,9 @@ select.hc-input:focus {
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--hc-text-inverse);
-  /* HIG --shadow-sm: toggle thumb 轻微浮起，alpha ≤ 0.06 */
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-  transition: transform 0.2s cubic-bezier(0.25, 0.1, 0.25, 1);
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
+  transition: transform 0.2s;
 }
 
 .hc-toggle:checked {

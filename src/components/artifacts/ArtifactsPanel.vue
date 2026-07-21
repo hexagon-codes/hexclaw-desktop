@@ -125,12 +125,7 @@ function typeLabel(type: string) {
   background: var(--hc-bg-sidebar);
   display: flex;
   flex-direction: column;
-  animation: hc-slide-in 0.2s ease-out;
-}
-
-@keyframes hc-slide-in {
-  from { transform: translateX(20px); opacity: 0; }
-  to { transform: translateX(0); opacity: 1; }
+  overflow: hidden;
 }
 
 .hc-artifacts__header {

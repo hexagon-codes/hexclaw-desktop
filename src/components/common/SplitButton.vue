@@ -39,12 +39,16 @@ function toggle() {
     if (!trigger || !menu) return
     const r = trigger.getBoundingClientRect()
     const mr = menu.getBoundingClientRect()
-    // Align right edge of menu with right edge of button
-    let left = r.right - mr.width
+    // Match the prototype: align the menu's left edge with the split button,
+    // then keep the menu inside the viewport on narrow windows.
+    let left = r.left
+    if (left + mr.width > window.innerWidth - 8) {
+      left = window.innerWidth - mr.width - 8
+    }
     if (left < 8) left = 8
-    let top = r.bottom + 4
+    let top = r.bottom + 6
     if (top + mr.height > window.innerHeight - 8) {
-      top = r.top - mr.height - 4
+      top = r.top - mr.height - 6
     }
     menuX.value = left
     menuY.value = top
@@ -72,12 +76,12 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside, true
 <template>
   <div ref="wrapperRef" class="hc-split-btn">
     <button class="hc-split-btn__main" @click="emit('click')">
-      <component v-if="icon" :is="icon" :size="14" />
+      <component v-if="icon" :is="icon" :size="15" />
       {{ label }}
     </button>
     <div class="hc-split-btn__divider" />
     <button class="hc-split-btn__caret" @click.stop="toggle">
-      <ChevronDown :size="14" :class="{ 'hc-split-btn__caret-icon--open': open }" />
+      <ChevronDown :size="13" :class="{ 'hc-split-btn__caret-icon--open': open }" />
     </button>
   </div>
 
@@ -119,18 +123,27 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside, true
   align-items: stretch;
   border-radius: var(--hc-radius-md);
   overflow: hidden;
+  box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
+  transition:
+    transform 0.12s var(--hc-ease-out),
+    box-shadow 0.2s var(--hc-ease-out);
+}
+
+.hc-split-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(95, 179, 234, 0.34);
 }
 
 .hc-split-btn__main {
   display: inline-flex;
   align-items: center;
-  gap: var(--hc-space-2);
-  padding: var(--hc-space-2) var(--hc-space-4);
+  gap: 6px;
+  padding: 8px 14px;
   font-size: 13px;
   font-weight: 500;
   border: none;
   cursor: pointer;
-  background: var(--hc-accent);
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
   color: var(--hc-text-inverse);
   transition: background 0.2s;
 }
@@ -152,10 +165,10 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside, true
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0 6px;
+  padding: 0 8px;
   border: none;
   cursor: pointer;
-  background: var(--hc-accent);
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
   color: var(--hc-text-inverse);
   transition: background 0.2s;
 }
@@ -176,11 +189,11 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside, true
 .hc-split-menu {
   position: fixed;
   z-index: var(--hc-z-popover);
-  min-width: 200px;
-  padding: 4px;
+  min-width: 170px;
+  padding: 6px;
   border-radius: var(--hc-radius-md);
   background: var(--hc-bg-elevated);
-  border: 1px solid var(--hc-border);
+  border: 0.5px solid var(--hc-border);
   box-shadow: var(--hc-shadow-float);
   backdrop-filter: saturate(180%) blur(var(--hc-blur-heavy));
   -webkit-backdrop-filter: saturate(180%) blur(var(--hc-blur-heavy));
@@ -191,7 +204,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside, true
   align-items: center;
   gap: var(--hc-space-2);
   width: 100%;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border: none;
   border-radius: var(--hc-radius-sm);
   background: transparent;
@@ -203,8 +216,7 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside, true
 }
 
 .hc-split-menu__item:hover {
-  background: var(--hc-accent);
-  color: #fff;
+  background: var(--hc-bg-hover);
 }
 
 .hc-split-menu__item:hover .hc-split-menu__icon {

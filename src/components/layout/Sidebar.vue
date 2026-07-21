@@ -1,6 +1,6 @@
 <!-- eslint-disable vue/multi-word-component-names -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { RotateCw } from 'lucide-vue-next'
@@ -8,7 +8,6 @@ import { useAppStore } from '@/stores/app'
 import { useAboutWindow } from '@/composables/useAboutWindow'
 import { getGroupedNavItems, isNavActive, NAV_GROUP_LABELS, type NavGroup } from '@/config/navigation'
 import { env } from '@/config/env'
-import { getVersion as getEngineVersion } from '@/api/system'
 import logoUrl from '@/assets/logo.png'
 
 const { t, locale } = useI18n()
@@ -16,18 +15,7 @@ const route = useRoute()
 const appStore = useAppStore()
 const openAbout = useAboutWindow()
 
-// 原型权威：角落展示 Hexagon 引擎连接状态与运行时版本。
-// 空串起步；版本接口不可达时仍保留引擎身份，不闪烁占位符。
-const engineVersion = ref('')
-
-onMounted(() => {
-  getEngineVersion()
-    .then((info) => {
-      const version = info.engine_version?.trim()
-      if (version) engineVersion.value = version.startsWith('v') ? version : `v${version}`
-    })
-    .catch(() => {})
-})
+const productVersionLabel = 'HexClaw 0.5.0-beta'
 
 const collapsed = computed(() => appStore.sidebarCollapsed)
 const groups = computed(() => getGroupedNavItems())
@@ -44,12 +32,6 @@ const dotClass = computed(() => {
   if (s === 'running') return 'hc-sidebar__dot--ok'
   if (s === 'starting') return 'hc-sidebar__dot--starting'
   return 'hc-sidebar__dot--err'
-})
-
-const engineLabel = computed(() => {
-  if (appStore.sidecarStatus === 'starting') return t('nav.engineStarting')
-  if (appStore.sidecarStatus !== 'running') return t('engineBanner.title')
-  return engineVersion.value ? `Hexagon engine ${engineVersion.value}` : 'Hexagon engine'
 })
 
 // 平台默认全功能，导航不按模式门控（K12 只是「作业辅导」智能体，非独立 UI 模式）。
@@ -75,7 +57,7 @@ function getGroupItems(group: NavGroup) {
     <nav class="hc-sidebar__nav" role="navigation">
       <template v-for="(group, gi) in groupOrder">
         <div
-          v-if="(collapsed ? gi > 0 : gi === 1) && getGroupItems(group).length"
+          v-if="gi === 1 && getGroupItems(group).length"
           :key="`div-${group}`"
           class="hc-sidebar__divider"
         />
@@ -95,13 +77,13 @@ function getGroupItems(group: NavGroup) {
           class="hc-sidebar__item"
           :class="{ 'hc-sidebar__item--active': isNavActive(item.path, route.path) }"
         >
-          <component :is="item.icon" :size="17" class="hc-sidebar__icon" />
+          <component :is="item.icon" :size="18" class="hc-sidebar__icon" />
           <span v-if="!collapsed" class="hc-sidebar__label">{{ t(item.i18nKey) }}</span>
         </router-link>
       </template>
     </nav>
 
-    <!-- Footer: engine status + version -->
+    <!-- Footer: sidecar status + fixed product identity -->
     <div class="hc-sidebar__footer">
       <div class="hc-sidebar__engine-row" :title="env.apiBase">
         <span class="hc-sidebar__dot" :class="dotClass" />
@@ -112,7 +94,7 @@ function getGroupItems(group: NavGroup) {
             :title="t('about.open', '关于河蟹')"
             @click="openAbout"
           >
-            {{ engineLabel }}
+            {{ productVersionLabel }}
           </span>
           <button
             class="hc-sidebar__restart-btn"
@@ -136,30 +118,32 @@ function getGroupItems(group: NavGroup) {
   height: 100%;
   width: 226px;
   background: var(--hc-bg-sidebar);
-  border-right: 1px solid var(--hc-border-subtle);
-  transition: width 0.25s cubic-bezier(0.25, 0.1, 0.25, 1);
+  border-right: 0.5px solid var(--hc-border);
+  transition: width 0.18s cubic-bezier(0.25, 0.1, 0.25, 1);
   overflow: hidden;
   padding: 12px 12px 8px;
-  gap: 6px;
+  gap: 0;
+  position: relative;
+  z-index: 1;
 }
 
 .hc-sidebar--collapsed {
   width: 54px;
-  align-items: center;
 }
 
 /* ── Brand ── */
 .hc-sidebar__brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 4px 10px 14px;
+  gap: 9px;
+  padding: 6px 8px 12px;
+  height: 46px;
   flex-shrink: 0;
 }
 
 .hc-sidebar--collapsed .hc-sidebar__brand {
   justify-content: center;
-  padding: 6px 0;
+  padding: 6px 0 12px;
 }
 
 .hc-sidebar__logo {
@@ -183,23 +167,24 @@ function getGroupItems(group: NavGroup) {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 1px;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
 .hc-sidebar__divider {
-  margin: 4px 12px;
-  border-top: 1px solid var(--hc-divider);
+  height: 1px;
+  margin: 7px 8px;
+  border: 0;
+  background: var(--hc-divider);
 }
 
 .hc-sidebar__group-label {
-  padding: 0 12px;
-  margin: 16px 0 6px;
-  font-size: 10.5px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--hc-text-secondary);
+  padding: 12px 12px 5px;
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--hc-text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -229,7 +214,7 @@ function getGroupItems(group: NavGroup) {
 
 .hc-sidebar--collapsed .hc-sidebar__item {
   justify-content: center;
-  padding: 10px 0;
+  padding: 8px 0;
 }
 
 .hc-sidebar__item:hover {
@@ -240,7 +225,6 @@ function getGroupItems(group: NavGroup) {
 .hc-sidebar__item--active {
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
-  font-weight: 600;
 }
 
 .hc-sidebar__icon {
@@ -261,27 +245,31 @@ function getGroupItems(group: NavGroup) {
 
 /* ── Footer ── */
 .hc-sidebar__footer {
+  margin-top: auto;
   flex-shrink: 0;
-  padding: 0 4px 2px;
+  padding: 0;
 }
 
 .hc-sidebar__engine-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 8px;
+  padding: 9px 10px 4px;
   border-radius: 8px;
   cursor: default;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
 }
 
 .hc-sidebar--collapsed .hc-sidebar__engine-row {
   justify-content: center;
-  padding: 8px 0;
+  padding: 9px 0 4px;
+  font-size: 0;
 }
 
 .hc-sidebar__engine-label {
-  font-size: 11px;
-  color: var(--hc-text-muted);
+  font-size: 12px;
+  color: var(--hc-text-secondary);
   flex: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -290,19 +278,19 @@ function getGroupItems(group: NavGroup) {
 }
 
 .hc-sidebar__engine-label:hover {
-  color: var(--hc-text-secondary);
+  color: var(--hc-text-primary);
 }
 
 .hc-sidebar__restart-btn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
   border: none;
   background: transparent;
   color: var(--hc-text-muted);
-  border-radius: 4px;
+  border-radius: 7px;
   cursor: pointer;
   flex-shrink: 0;
   padding: 0;
@@ -312,7 +300,7 @@ function getGroupItems(group: NavGroup) {
 }
 
 .hc-sidebar__restart-btn:hover {
-  color: var(--hc-accent);
+  color: var(--hc-text-secondary);
   background: var(--hc-bg-hover);
 }
 

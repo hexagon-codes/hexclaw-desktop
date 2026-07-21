@@ -96,10 +96,12 @@ function openCommandPalette() {
   cursor: default;
   display: flex;
   align-items: center;
+  gap: 12px;
   padding: 0 12px;
   position: relative;
   z-index: var(--hc-z-toast);
   border-bottom: 1px solid var(--hc-border-subtle);
+  background: var(--hc-bg-panel);
 }
 
 .hc-titlebar--mac {
@@ -109,7 +111,7 @@ function openCommandPalette() {
 .hc-titlebar__left {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -129,7 +131,7 @@ function openCommandPalette() {
 .hc-titlebar__right {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 12px;
 }
 
 .hc-titlebar__btn {
@@ -173,12 +175,16 @@ function openCommandPalette() {
 
 .hc-titlebar__notif {
   position: relative;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
 }
 
 .hc-titlebar__badge {
   position: absolute;
-  top: -1px;
-  right: -2px;
+  top: 1px;
+  right: 0;
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
@@ -187,10 +193,10 @@ function openCommandPalette() {
   background: var(--hc-accent);
   color: #fff;
   font-size: 10px;
-  font-weight: 600;
+  font-weight: 700;
   line-height: 15px;
   text-align: center;
-  box-shadow: 0 0 0 1.5px var(--hc-bg-base, var(--hc-bg-elevated));
+  box-shadow: 0 0 0 1.5px var(--hc-bg-elevated);
   pointer-events: none;
 }
 

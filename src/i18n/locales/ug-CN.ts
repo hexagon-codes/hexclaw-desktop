@@ -240,7 +240,7 @@ export default {
     downloadImage: 'رەسىمنى چۈشۈرۈش',
     downloadVideo: 'سىننى چۈشۈرۈش',
     editMessage: 'ئۇچۇرنى تەھرىرلەش',
-    deleteMessage: 'ئۇچۇرنى ئۆچۈرۈش',
+    deleteMessage: 'ئۆچۈرۈش',
     deleteMessageFailed: 'ئۇچۇرنى ئۆچۈرۈش مەغلۇپ بولدى، يېڭىلىغاندا ئۇچۇر قايتا كۆرۈنۈشى مۇمكىن',
     deleteMessageConfirmTitle: 'بۇ ئۇچۇرنى ئۆچۈرەمسىز؟',
     deleteMessageConfirmMessage:
@@ -248,7 +248,8 @@ export default {
     retryFailed: 'قايتا ھاسىل قىلىش مەغلۇپ بولدى، ئۇچۇرىڭىز ساقلاندى، قايتا سىناڭ',
     retryWhileStreaming: 'نۆۋەتتىكى جاۋاب تاماملانغاندىن كېيىن قايتا ھاسىل قىلىڭ',
     selectModelFirst: 'ئالدى بىلەن مودېل تاللاڭ',
-    deleteSession: 'سۆھبەتنى ئۆچۈرۈش',
+    deleteSession: 'ئۆچۈرۈش',
+    createBranch: 'تارماق قۇرۇش',
     forkFromHere: 'مۇشۇ يەردىن شاخلاش',
     forkCreated: 'شاخچە سۆھبەت قۇرۇلدى',
     forkFailed: 'شاخچە قۇرۇش مەغلۇپ بولدى',

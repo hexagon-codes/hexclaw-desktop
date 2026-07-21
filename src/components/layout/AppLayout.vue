@@ -103,13 +103,14 @@ onUnmounted(() => {
     <div class="hc-app__body">
       <Sidebar />
       <main class="hc-app__content">
+        <div class="hc-app__glow" aria-hidden="true" />
         <!-- 引擎降级 banner：引擎未连接时顶部常驻（锚点 prototype #engineBanner） -->
         <EngineBanner />
         <div class="hc-app__view">
           <slot />
         </div>
       </main>
-      <DetailPanel :open="appStore.detailPanelOpen" @close="appStore.toggleDetailPanel">
+      <DetailPanel :open="appStore.detailPanelOpen" @close="appStore.setDetailPanelOpen(false)">
         <InspectorContext />
       </DetailPanel>
     </div>
@@ -128,13 +129,25 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--hc-bg-main);
+  background: var(--hc-bg-gradient);
 }
 
 .hc-app__body {
   flex: 1;
   display: flex;
   overflow: hidden;
+  position: relative;
+}
+
+.hc-app__body::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52'%3E%3Cpath d='M30 0l26 15v30L30 60 4 45V15z' fill='none' stroke='%235fb3ea' stroke-width='0.45' opacity='0.06'/%3E%3C/svg%3E");
+  background-size: 60px 52px;
 }
 
 .hc-app__content {
@@ -144,6 +157,24 @@ onUnmounted(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
+  z-index: 1;
+  background: var(--hc-bg-gradient);
+}
+
+.hc-app__glow {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 220px;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(
+    circle at top center,
+    rgba(95, 179, 234, 0.1) 0%,
+    rgba(95, 179, 234, 0.03) 36%,
+    rgba(95, 179, 234, 0) 72%
+  );
 }
 
 /* 视图包裹：banner 占自然高度后，视图填满剩余高度（每个视图自带 height:100%/flex） */
@@ -153,5 +184,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+  z-index: 1;
 }
 </style>

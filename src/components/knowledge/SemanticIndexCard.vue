@@ -743,7 +743,7 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
       @click="expanded = !expanded"
     >
       <span class="kb-index-card__icon">
-        <Layers :size="15" data-testid="kb-semantic-index-layers-icon" aria-hidden="true" />
+        <Layers :size="13" data-testid="kb-semantic-index-layers-icon" aria-hidden="true" />
       </span>
       <span class="kb-index-card__title">{{ t('knowledge.semanticIndex.title', '语义索引') }}</span>
       <span class="kb-index-card__summary" data-testid="kb-semantic-index-summary">
@@ -757,7 +757,7 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
         {{ summaryStatus }}
       </span>
       <ChevronDown
-        :size="15"
+        :size="13"
         class="kb-index-card__chevron"
         :class="{ 'kb-index-card__chevron--open': expanded }"
         aria-hidden="true"
@@ -765,7 +765,7 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
     </button>
 
     <div
-      v-if="expanded"
+      v-show="expanded"
       id="kb-semantic-index-body"
       class="kb-index-card__body"
       data-testid="kb-semantic-index-body"
@@ -865,7 +865,8 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 
 <style scoped>
 .kb-index-card {
-  width: min(100%, 640px);
+  width: 100%;
+  max-width: none;
   margin: 0 0 14px;
   color: var(--hc-text-primary);
   container-type: inline-size;
@@ -885,44 +886,41 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
   width: 100%;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 11px 14px;
-  border: 1px solid var(--hc-border);
-  border-radius: 12px 12px 0 0;
-  background: var(--hc-bg-card);
-  color: inherit;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hc-text-muted);
   font: inherit;
+  font-size: 12px;
+  font-weight: 600;
   text-align: left;
   cursor: pointer;
-}
-
-.kb-index-card--collapsed .kb-index-card__header {
-  border-radius: 12px;
+  transition: color 0.15s var(--hc-ease-smooth, ease);
 }
 
 .kb-index-card__header:hover {
-  background: color-mix(in srgb, var(--hc-bg-card) 86%, var(--hc-bg-hover));
+  color: var(--hc-text-secondary);
 }
 
 .kb-index-card__header:focus-visible {
-  position: relative;
-  z-index: 1;
-  outline: 3px solid var(--hc-accent-subtle);
-  outline-offset: 2px;
+  border-radius: 6px;
+  outline: 2px solid var(--hc-ring);
+  outline-offset: 3px;
 }
 
 .kb-index-card__icon {
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
   display: grid;
   place-items: center;
   flex: none;
-  color: var(--hc-text-primary);
+  color: currentColor;
 }
 
 .kb-index-card__title {
   color: var(--hc-text-primary);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
 }
@@ -970,7 +968,7 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 
 .kb-index-card__chevron {
   flex: none;
-  color: var(--hc-text-muted);
+  color: currentColor;
   transition: transform 0.18s var(--hc-ease-out, ease-out);
 }
 
@@ -981,19 +979,18 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 .kb-index-card__body {
   display: flex;
   flex-direction: column;
-  padding: 0 16px 10px;
-  border: 1px solid var(--hc-border);
-  border-top: 0;
-  border-radius: 0 0 12px 12px;
+  gap: 14px;
+  margin-top: 10px;
+  padding: 14px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-lg, 14px);
   background: var(--hc-bg-card);
 }
 
 .kb-index-card__setting {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--hc-divider);
+  gap: 14px;
 }
 
 .kb-index-card__setting-copy {
@@ -1004,15 +1001,16 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 .kb-index-card__setting-copy b {
   display: block;
   color: var(--hc-text-primary);
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 500;
 }
 
 .kb-index-card__setting-copy span {
   display: block;
   margin-top: 2px;
   color: var(--hc-text-muted);
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
 .kb-index-card__selector {
@@ -1035,7 +1033,7 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 0 0;
+  padding: 0;
   color: var(--hc-text-secondary);
   font-size: 11.5px;
 }

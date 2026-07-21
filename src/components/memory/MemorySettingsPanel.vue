@@ -125,6 +125,7 @@ defineExpose({ loadProfile })
       <button
         class="hc-memset__disclosure"
         :aria-expanded="open"
+        aria-controls="memory-behavior-settings-body"
         data-testid="memset-toggle"
         @click="open = !open"
       >
@@ -133,11 +134,12 @@ defineExpose({ loadProfile })
         <ChevronDown :size="13" class="hc-memset__chevron" :class="{ 'hc-memset__chevron--open': open }" />
       </button>
 
-      <div v-if="open && unavailable" class="hc-memset__muted">
-        {{ t('memory.settings.unavailable', '记忆设置不可用（引擎未连接或版本过旧）') }}
-      </div>
+      <div id="memory-behavior-settings-body" v-show="open">
+        <div v-if="unavailable" class="hc-memset__muted">
+          {{ t('memory.settings.unavailable', '记忆设置不可用（引擎未连接或版本过旧）') }}
+        </div>
 
-      <div v-else-if="open && cfg" class="hc-memset__body">
+        <div v-else-if="cfg" class="hc-memset__body">
         <!-- 自动记忆方式 -->
         <div class="hc-memset__row">
           <div class="hc-memset__label">
@@ -220,9 +222,10 @@ defineExpose({ loadProfile })
           </label>
         </div>
 
-        <p v-if="restartHint" class="hc-memset__restart" data-testid="memset-restart-hint">
-          {{ t('memory.settings.restartHint', '画像蒸馏开关已保存，重启应用后生效。') }}
-        </p>
+          <p v-if="restartHint" class="hc-memset__restart" data-testid="memset-restart-hint">
+            {{ t('memory.settings.restartHint', '画像蒸馏开关已保存，重启应用后生效。') }}
+          </p>
+        </div>
       </div>
     </section>
   </div>

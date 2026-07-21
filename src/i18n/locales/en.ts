@@ -225,7 +225,7 @@ export default {
     downloadImage: 'Download image',
     downloadVideo: 'Download video',
     editMessage: 'Edit Message',
-    deleteMessage: 'Delete Message',
+    deleteMessage: 'Delete',
     deleteMessageFailed: 'Failed to delete message; it may reappear after a refresh',
     deleteMessageConfirmTitle: 'Delete this message?',
     deleteMessageConfirmMessage:
@@ -233,7 +233,8 @@ export default {
     retryFailed: 'Failed to regenerate, your message is kept. Please try again.',
     retryWhileStreaming: 'Please wait for the current reply to finish before regenerating',
     selectModelFirst: 'Please select a model first',
-    deleteSession: 'Delete Session',
+    deleteSession: 'Delete',
+    createBranch: 'Create branch',
     forkFromHere: 'Fork from here',
     forkCreated: 'Branch session created',
     forkFailed: 'Failed to create branch',
