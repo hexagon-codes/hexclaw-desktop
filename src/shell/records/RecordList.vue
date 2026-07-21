@@ -17,6 +17,10 @@ const props = defineProps<{
   hideReview?: boolean
   /** 只显示复习行动区（隐藏档案列表与筛选） */
   hideList?: boolean
+  /** 场景层自行提供复合筛选时隐藏内建单维状态筛选。 */
+  hideFilters?: boolean
+  /** 场景层视觉变体类名；通用记录本不解释其业务语义。 */
+  reviewClass?: string
 }>()
 
 const emit = defineEmits<{
@@ -77,10 +81,12 @@ const reviewItems = computed(() => {
 <template>
   <div class="record-list">
     <!-- 复习队列（reviewable 集合才有；场景专属动作经 slot 注入） -->
-    <section v-if="!hideReview && reviewItems.length" class="rl-review">
+    <section v-if="!hideReview && reviewItems.length" class="rl-review" :class="reviewClass">
       <header class="rl-review__head">
         <!-- 20260709 视觉评审：功能位 emoji → 单色描边图标（emoji 保留给身份/语义徽章位） -->
-        <b class="rl-review__title"><svg class="rl-ic" viewBox="0 0 24 24"><path d="M4 22V4c0-.6.4-1 1-1h9.5l-.8 3.2c-.1.5.2.8.7.8H20l-2 6h-7" /></svg>{{ t('records.reviewQueueTitle') }} · {{ t('records.reviewQueueCount', { count: reviewItems.length }) }}</b>
+        <slot name="review-title" :items="reviewItems">
+          <b class="rl-review__title"><svg class="rl-ic" viewBox="0 0 24 24"><path d="M4 22V4c0-.6.4-1 1-1h9.5l-.8 3.2c-.1.5.2.8.7.8H20l-2 6h-7" /></svg>{{ t('records.reviewQueueTitle') }} · {{ t('records.reviewQueueCount', { count: reviewItems.length }) }}</b>
+        </slot>
         <!-- 标题旁注入缝（原型 c8a194e：跨科分布括号 + 趋势 pill 并入行动卡）——场景层经 slot 提供，shell 零领域词 -->
         <slot name="review-meta" :items="reviewItems" />
         <span class="rl-spacer" />
@@ -108,7 +114,7 @@ const reviewItems = computed(() => {
     <div v-if="!hideList && $slots['list-title']" class="rl-list-title"><slot name="list-title" :count="view.items.length" /></div>
 
     <!-- 状态筛选 -->
-    <div v-if="!hideList && schema.states?.length" class="rl-filters">
+    <div v-if="!hideList && !hideFilters && schema.states?.length" class="rl-filters">
       <button class="rl-tag" :class="{ on: activeFilter === 'all' }" @click="activeFilter = 'all'">
         {{ t('records.all') }}
       </button>

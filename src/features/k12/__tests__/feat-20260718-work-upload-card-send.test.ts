@@ -104,7 +104,8 @@ function delivery(status: 'sending' | 'delivered' | 'failed' | 'outcome_unknown'
 function render() {
   return mount(K12CreativeWorksPanel, {
     props: { agentId: 'k12-xiaoming' },
-    global: { plugins: [i18n()] },
+    // 交互测试保留逻辑树，几何/真实 Teleport 由专门的弹窗与浏览器用例覆盖。
+    global: { plugins: [i18n()], stubs: { teleport: true } },
   })
 }
 
@@ -137,6 +138,13 @@ async function pickPhoto(w: ReturnType<typeof render>, file: File) {
   Object.defineProperty(input, 'files', { value: [file], configurable: true })
   await w.find('[data-testid="cw-add-photo-input"]').trigger('change')
   await flushPromises()
+}
+
+async function openDetails(w: ReturnType<typeof render>) {
+  const trigger = w.get('[data-testid="cw-detail-toggle"]')
+  await trigger.trigger('click')
+  await flushPromises()
+  expect(trigger.attributes('aria-expanded')).toBe('true')
 }
 
 describe('任务1 · 照片真实上传', () => {
@@ -199,6 +207,7 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
+    await openDetails(w)
     const card = w.find('[data-testid="cw-practice-card"]')
     expect(card.exists()).toBe(true)
     expect(card.text()).toContain('观察小练习')
@@ -220,6 +229,7 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
     })
     const w = render()
     await flushPromises()
+    await openDetails(w)
     expect(w.find('[data-testid="cw-practice-card"]').exists()).toBe(false)
   })
 
@@ -227,6 +237,7 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
+    await openDetails(w)
     await w.find('[data-testid="cw-card-print"]').trigger('click')
     expect(h.printSpy).toHaveBeenCalledWith(
       expect.stringContaining('三档明暗'),
@@ -243,6 +254,7 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
     h.listSpy.mockResolvedValue({ items: [done] })
     const w2 = render()
     await flushPromises()
+    await openDetails(w2)
     expect(w2.find('[data-testid="cw-card-done-state"]').exists()).toBe(true)
     expect(w2.find('[data-testid="cw-card-done"]').exists()).toBe(false)
   })
@@ -251,6 +263,7 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
+    await openDetails(w)
 
     await w.find('[data-testid="cw-card-save-pdf"]').trigger('click')
     await flushPromises()
@@ -266,6 +279,7 @@ describe('任务2 · 观察练习卡（§3.10：练习必须有产物，承诺�
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
+    await openDetails(w)
     await w.find('[data-testid="cw-card-send"]').trigger('click')
     await flushPromises()
     expect(h.sendSpy).toHaveBeenCalledWith('k12-xiaoming', 'w-art', 'practice_card')
@@ -277,6 +291,7 @@ describe('任务3 · 点评发送出口（DD-024 durable Receipt）', () => {
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
+    await openDetails(w)
     await w.find('[data-testid="cw-send-feedback"]').trigger('click')
     await flushPromises()
     expect(h.sendSpy).toHaveBeenCalledWith('k12-xiaoming', 'w-art', 'feedback')
@@ -295,6 +310,7 @@ describe('任务3 · 点评发送出口（DD-024 durable Receipt）', () => {
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
+    await openDetails(w)
     await w.find('[data-testid="cw-send-feedback"]').trigger('click')
     await flushPromises()
     expect(writeText).not.toHaveBeenCalled()
@@ -311,6 +327,7 @@ describe('任务3 · 点评发送出口（DD-024 durable Receipt）', () => {
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
+    await openDetails(w)
     await w.get('[data-testid="cw-send-feedback"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="cw-feedback-delivery-retry"]').exists()).toBe(true)
@@ -325,6 +342,7 @@ describe('任务3 · 点评发送出口（DD-024 durable Receipt）', () => {
     h.listSpy.mockResolvedValue({ items: [artWork()] })
     const w = render()
     await flushPromises()
+    await openDetails(w)
     await w.get('[data-testid="cw-send-feedback"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="cw-feedback-delivery-retry"]').exists()).toBe(false)

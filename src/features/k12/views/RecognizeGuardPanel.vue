@@ -36,7 +36,15 @@ import type { VerifyResult } from '@/contracts'
 // 故 prop 名就叫 agentId——曾命名 agentName 导致上游把 display_name 传进来，写错孩子作用域。
 // initialImage（BUG-20260709 拍照发题不解题）：composer 粘贴/上传改道进来的图片 dataURL，
 // 传入即预填并自动识题（原型契约「粘贴作业照片即自动 OCR 回显护栏」），家长零多余点击。
-const props = defineProps<{ agentId: string; grade?: string; initialImage?: string }>()
+const props = defineProps<{
+  agentId: string
+  grade?: string
+  textbook?: string
+  textbooks?: Partial<
+    Record<'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art', string>
+  >
+  initialImage?: string
+}>()
 // close：面板自动打开（图片改道）后由头部 ✕ 收起——手动 toggle 已删（BUG-20260711-E），
 // 收起手段必须内聚在面板自身。
 const emit = defineEmits<{ (e: 'close'): void }>()
@@ -90,9 +98,26 @@ const recognizing = ref(false)
 const anchoring = ref(false)
 const anchorWarning = ref('')
 const errMsg = ref('')
+const recognitionFailed = ref(false)
 const confirmed = ref(false)
 const correctionMode = ref(false)
 const selectedSubject = ref('')
+const subjectTextbookKeys: Record<
+  string,
+  'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art'
+> = {
+  数学: 'math',
+  语文: 'chinese',
+  英语: 'english',
+  科学: 'science',
+  信息科技: 'information_technology',
+  美术: 'art',
+}
+const activeTextbook = computed(() => {
+  const key = subjectTextbookKeys[selectedSubject.value]
+  if (!key) return props.textbook || ''
+  return props.textbooks?.[key] || (key === 'math' ? props.textbook || '' : '')
+})
 const batchWorking = ref(false)
 // 当前照片对应的统一 GradingJob（§6.7）：识题产物与整卷批改都挂在它上面。
 const currentJobId = ref('')
@@ -175,8 +200,7 @@ const unclearAnswerCount = computed(
 )
 const answerableRowCount = computed(() => rows.value.filter(isAnswerable).length)
 const unconfirmedRiskCount = computed(
-  () =>
-    rows.value.filter((row) => row.confirmationRequired && !row.recognitionConfirmed).length,
+  () => rows.value.filter((row) => row.confirmationRequired && !row.recognitionConfirmed).length,
 )
 
 const OCR_RISK_LABELS: Record<OCRConfirmationReason, string> = {
@@ -248,6 +272,7 @@ watch(
     anchoring.value = false
     anchorWarning.value = ''
     errMsg.value = ''
+    recognitionFailed.value = false
     confirmed.value = false
     correctionMode.value = false
     batchWorking.value = false
@@ -282,6 +307,7 @@ async function run() {
   anchoring.value = false
   anchorWarning.value = ''
   errMsg.value = ''
+  recognitionFailed.value = false
   confirmed.value = false
   correctionMode.value = false
   coldStartResult.value = null
@@ -375,14 +401,20 @@ async function run() {
       generation !== agentGeneration ||
       recognition !== recognitionGeneration ||
       (e as Error).name === 'AbortError'
-    ) return
+    )
+      return
     errMsg.value = e instanceof Error ? e.message : String(e)
+    recognitionFailed.value = true
   } finally {
     if (generation === agentGeneration && recognition === recognitionGeneration) {
       recognizing.value = false
       if (recognitionAbort === controller) recognitionAbort = null
     }
   }
+}
+
+function retryRecognitionStage() {
+  if (!recognizing.value && imageB64.value.trim()) void run()
 }
 
 function syncAnswerState(row: GuardRow) {
@@ -577,24 +609,13 @@ async function gradeWholeSheetViaJob() {
     answer_state: row.answerState,
     subject: selectedSubject.value || undefined,
   }))
-  try {
-    const result = await store.gradePhotoJob(props.agentId, jobId, {
-      subject: selectedSubject.value,
-      grade: props.grade ?? '',
-      corrections,
-    })
-    if (generation !== agentGeneration) return
-    applyPhotoJobResult(result)
-  } catch (e) {
-    if (generation !== agentGeneration) return
-    // Job 已确认/已完成（如批改后补答重批）→ 确认命令 409：回退逐题直连补批，UI 行为不变。
-    const msg = e instanceof Error ? e.message : String(e)
-    if (msg.includes('409') || msg.includes('不可确认')) {
-      await runBounded([...answerPendingIndexes.value], gradeRow)
-      return
-    }
-    throw e
-  }
+  const result = await store.gradePhotoJob(props.agentId, jobId, {
+    subject: selectedSubject.value,
+    grade: props.grade ?? '',
+    corrections,
+  })
+  if (generation !== agentGeneration) return
+  applyPhotoJobResult(result)
 }
 
 /** Job completed 的逐题结果 → 护栏行状态（PhotoGradeOverlay 数据源对齐）。 */
@@ -733,17 +754,82 @@ async function coldStart() {
       {{ recognizing ? t('k12.recognize.running') : t('k12.recognize.run') }}
     </button>
 
-    <div v-if="errMsg" class="rec-panel__err">{{ t('k12.recognize.err') }}：{{ errMsg }}</div>
-    <div
-      v-if="anchoring || anchorWarning"
-      class="rec-panel__anchor-status"
-      :class="{ 'is-warning': !!anchorWarning }"
-      data-testid="recognize-anchor-status"
-    >
-      {{ anchorWarning || t('k12.recognize.anchoring') }}
+    <div v-if="errMsg && !recognitionFailed" class="rec-panel__err">
+      {{ t('k12.recognize.err') }}：{{ errMsg }}
     </div>
 
-    <div v-show="rows.length && !selectedSubject" class="rec-panel__subject" data-testid="recognize-subject">
+    <div
+      v-if="recognizing || rows.length || recognitionFailed"
+      class="rec-pipeline"
+      data-testid="recognize-pipeline"
+      aria-label="批改准备状态"
+    >
+      <div class="rec-pipeline__head">
+        <b>批改准备</b>
+        <span>识别完成后，两条准备任务同时进行</span>
+      </div>
+      <div class="rec-pipeline__branches">
+        <div
+          class="rec-pipeline__branch"
+          :class="{ 'is-done': confirmed }"
+          data-testid="recognize-confirm-branch"
+        >
+          <i>{{ confirmed ? '✓' : '1' }}</i>
+          <div>
+            <b>{{
+              confirmed ? '题目已确认并冻结' : recognizing ? '正在识别题目' : '等你确认题目'
+            }}</b>
+            <small>{{
+              confirmed
+                ? '定位结果只补充展示，不改写已冻结文字'
+                : '确认后冻结题干与作答，不会被定位结果改写'
+            }}</small>
+          </div>
+        </div>
+        <div
+          class="rec-pipeline__branch"
+          :class="{
+            'is-done': rows.length && !anchoring && !anchorWarning,
+            'is-degraded': !!anchorWarning,
+          }"
+          data-testid="recognize-anchor-branch"
+        >
+          <i>{{ anchorWarning ? '!' : rows.length && !anchoring ? '✓' : '2' }}</i>
+          <div>
+            <b>{{
+              anchorWarning
+                ? '定位超时 · 已转文字批改'
+                : rows.length && !anchoring
+                  ? '原图题目已定位'
+                  : '正在定位原图题目'
+            }}</b>
+            <small>{{
+              anchorWarning ||
+              (rows.length && !anchoring
+                ? '坐标只补充展示，不改写已冻结文字'
+                : '与确认并行 · 阶段预算 60 秒 · 到期转文字批改')
+            }}</small>
+          </div>
+        </div>
+      </div>
+      <div
+        v-if="recognitionFailed"
+        class="rec-pipeline__error"
+        data-testid="recognize-stage-error"
+        role="alert"
+      >
+        <span>{{ t('k12.recognize.err') }}：{{ errMsg }}</span>
+        <button type="button" data-testid="recognize-stage-retry" @click="retryRecognitionStage">
+          重试当前阶段
+        </button>
+      </div>
+    </div>
+
+    <div
+      v-show="rows.length && !selectedSubject"
+      class="rec-panel__subject"
+      data-testid="recognize-subject"
+    >
       <span>{{ t('k12.accum.subject') }}</span>
       <HcSelect
         v-model="selectedSubject"
@@ -808,7 +894,12 @@ async function coldStart() {
             :data-testid="row.problemKind === 'compound_parent' ? 'rq-parent' : undefined"
             :content="`**${rowLabel(row, i)}.** ${row.problem}`"
           />
-          <button v-if="correctionMode" class="rec-row__toggle" :data-testid="`rq-edit-${i}`" @click="toggleEdit(row)">
+          <button
+            v-if="correctionMode"
+            class="rec-row__toggle"
+            :data-testid="`rq-edit-${i}`"
+            @click="toggleEdit(row)"
+          >
             {{ row.editing ? t('k12.recognize.readOk') : t('k12.recognize.readWrong') }}
           </button>
         </div>
@@ -819,7 +910,11 @@ async function coldStart() {
         >
           <span>请对照原图核对：{{ row.confirmationReasons.map(riskLabel).join('、') }}</span>
           <label class="rec-row__risk-check">
-            <input v-model="row.recognitionConfirmed" type="checkbox" :data-testid="`rq-confirm-${i}`" />
+            <input
+              v-model="row.recognitionConfirmed"
+              type="checkbox"
+              :data-testid="`rq-confirm-${i}`"
+            />
             我已逐项核对
           </label>
         </div>
@@ -842,13 +937,19 @@ async function coldStart() {
           :aria-expanded="row.expanded ? 'true' : 'false'"
           @click="row.expanded = !row.expanded"
         >
-          <span class="rec-row__correct-line">{{ i + 1 }}. ✓ {{ truncateProblem(row.problem) }}</span>
+          <span class="rec-row__correct-line"
+            >{{ i + 1 }}. ✓ {{ truncateProblem(row.problem) }}</span
+          >
           <span class="rec-row__correct-toggle">{{
             row.expanded ? t('k12.recognize.correctCollapse') : t('k12.recognize.correctExpand')
           }}</span>
         </button>
         <div
-          v-if="row.verify && (row.solution || row.wrongStep || row.errorCause) && !isDetailsCollapsed(row)"
+          v-if="
+            row.verify &&
+            (row.solution || row.wrongStep || row.errorCause) &&
+            !isDetailsCollapsed(row)
+          "
           class="rec-row__details"
           :data-testid="`rq-grade-details-${i}`"
         >
@@ -1010,6 +1111,7 @@ async function coldStart() {
       v-if="confirmed && rows.length && allKnowledgePoints.length"
       :agent-id="agentId"
       :grade="props.grade || ''"
+      :textbook="activeTextbook"
       :knowledge-points="allKnowledgePoints"
     />
   </div>
@@ -1034,7 +1136,9 @@ async function coldStart() {
 }
 .rec-panel--conversation .rec-panel__x {
   opacity: 0;
-  transition: opacity 0.15s ease, background 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
 }
 .rec-panel--conversation:hover .rec-panel__x,
 .rec-panel--conversation .rec-panel__x:focus-visible {
@@ -1123,13 +1227,93 @@ async function coldStart() {
   font-size: 12px;
   color: var(--hc-danger, #e05a5a);
 }
-.rec-panel__anchor-status {
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--hc-text-muted);
+.rec-pipeline {
+  margin: 9px 0 8px;
+  padding: 10px;
+  border: 1px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-input);
 }
-.rec-panel__anchor-status.is-warning {
-  color: var(--hc-warn, #b7791f);
+.rec-pipeline__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 8px;
+  color: var(--hc-text-muted);
+  font-size: 11px;
+}
+.rec-pipeline__head b {
+  color: var(--hc-text-primary);
+  font-size: 11.5px;
+}
+.rec-pipeline__branches {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+.rec-pipeline__branch {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-muted);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+.rec-pipeline__branch > i {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  font-style: normal;
+  font-weight: 800;
+}
+.rec-pipeline__branch b {
+  display: block;
+  color: var(--hc-text-primary);
+  font-size: 10.5px;
+}
+.rec-pipeline__branch small {
+  display: block;
+  margin-top: 2px;
+  line-height: 1.4;
+}
+.rec-pipeline__branch.is-done > i {
+  background: color-mix(in srgb, var(--hc-success) 12%, transparent);
+  color: var(--hc-success);
+}
+.rec-pipeline__branch.is-degraded > i {
+  background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
+  color: var(--hc-warning);
+}
+.rec-pipeline__error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--hc-error) 7%, transparent);
+  color: var(--hc-error);
+  font-size: 10.5px;
+}
+.rec-pipeline__error span {
+  flex: 1;
+}
+.rec-pipeline__error button {
+  padding: 3px 7px;
+  border: 0.5px solid currentColor;
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 .rec-panel__subject {
   display: flex;
@@ -1467,5 +1651,10 @@ async function coldStart() {
 }
 .rec-row__unclearhint {
   color: var(--hc-warn, #b7791f);
+}
+@media (max-width: 700px) {
+  .rec-pipeline__branches {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

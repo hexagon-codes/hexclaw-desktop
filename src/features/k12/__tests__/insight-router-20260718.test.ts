@@ -19,26 +19,53 @@ import { useK12Store } from '../store'
 const h = vi.hoisted(() => ({ practiceSpy: vi.fn() }))
 
 vi.mock('@/api/k12', () => ({
-  k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
+  k12ListMistakes: vi.fn().mockResolvedValue({
+    items: [
+      {
+        record_id: 'm1',
+        question: '解方程 2x+15=43',
+        knowledge_point: '简易方程',
+        error_cause: '等式性质未掌握',
+        status: 'new',
+        version: 1,
+        subject: '数学',
+      },
+    ],
+  }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(), k12PrepCard: vi.fn(), k12Grade: vi.fn(),
-  k12ColdStart: vi.fn(), k12ReviewRetry: vi.fn(),
+  k12MarkMastered: vi.fn(),
+  k12PrepCard: vi.fn(),
+  k12Grade: vi.fn(),
+  k12ColdStart: vi.fn(),
+  k12ReviewRetry: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { total: 11, mastered: 6, reviewing: 4, retried: 1, archived: 0 },
-    weak_top3: [{ knowledge_point: '简易方程', count: 5 }, { knowledge_point: '小数乘法', count: 3 }],
-    month_new_mistakes: 9, review_completion_rate: 0.78,
-    consecutive_fail_kps: ['简易方程'], suggestion: '先做等式性质热身。',
+    weak_top3: [
+      { knowledge_point: '简易方程', count: 5 },
+      { knowledge_point: '小数乘法', count: 3 },
+    ],
+    month_new_mistakes: 9,
+    review_completion_rate: 0.78,
+    consecutive_fail_kps: ['简易方程'],
+    suggestion: '先做等式性质热身。',
   }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12ListPracticeSets: (agent: string, status?: string) => h.practiceSpy(agent, status),
-  k12MistakeSheet: vi.fn(), k12ExportMd: vi.fn(), k12Backup: vi.fn(), k12Restore: vi.fn(),
+  k12MistakeSheet: vi.fn(),
+  k12ExportMd: vi.fn(),
+  k12Backup: vi.fn(),
+  k12Restore: vi.fn(),
 }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
@@ -114,19 +141,28 @@ describe('学情加载失败', () => {
 })
 
 describe('路由器出口 · navigate emit（§3.11）', () => {
-  it('★瓷片点击：新增错题→mistakes、复习完成率→week、练习集→practiceSets', async () => {
+  it('★瓷片点击：证据已掌握精确预设已掌握，其他目标清理错题筛选', async () => {
     const w = await mountInsight()
-    await w.find('[data-testid="insight-tile-mistakes"]').trigger('click')
+    await w.find('[data-testid="insight-tile-semester"]').trigger('click')
+    await w.find('[data-testid="insight-tile-mastered"]').trigger('click')
     await w.find('[data-testid="insight-tile-week"]').trigger('click')
     await w.find('[data-testid="insight-tile-practice"]').trigger('click')
-    expect(w.emitted('navigate')).toEqual([['mistakes'], ['week'], ['practiceSets']])
+    expect(w.emitted('navigate')).toEqual([
+      [{ target: 'mistakes', subject: '', status: 'all' }],
+      [{ target: 'mistakes', subject: '', status: 'mastered' }],
+      [{ target: 'week', subject: '', status: 'all' }],
+      [{ target: 'practiceSets', subject: '', status: 'all' }],
+    ])
   })
 
-  it('薄弱条点击 → navigate(mistakes)；挫败 CTA → navigate(week)', async () => {
+  it('薄弱条按真实错题学科预设学科并清理状态；挫败 CTA 清理两维筛选', async () => {
     const w = await mountInsight()
     await w.find('[data-testid="insight-weak-bar"]').trigger('click')
     await w.find('[data-testid="insight-fail-cta"]').trigger('click')
-    expect(w.emitted('navigate')).toEqual([['mistakes'], ['week']])
+    expect(w.emitted('navigate')).toEqual([
+      [{ target: 'mistakes', subject: '数学', status: 'all' }],
+      [{ target: 'week', subject: '', status: 'all' }],
+    ])
   })
 
   it('瓷片可键盘触达（role=button + tabindex + enter）', async () => {
@@ -135,18 +171,18 @@ describe('路由器出口 · navigate emit（§3.11）', () => {
     expect(tile.attributes('role')).toBe('button')
     expect(tile.attributes('tabindex')).toBe('0')
     await tile.trigger('keydown.enter')
-    expect(w.emitted('navigate')).toEqual([['week']])
+    expect(w.emitted('navigate')).toEqual([[{ target: 'week', subject: '', status: 'all' }]])
   })
 })
 
 describe('K12ChatEnhancement 接线（源码契约：外层归其他会话活跃区，最小改动只验绑定）', () => {
-  const src = readFileSync(
-    resolve(__dirname, '../views/K12ChatEnhancement.vue'), 'utf-8',
-  )
-  it('InsightPanel navigate 保留 target，RecordsView 接收 target 直达对象', () => {
-    const line = src.split('\n').find((l) => l.includes('<K12InsightPanel'))!
-    expect(line, 'navigate 出口不应丢掉 target').toContain('@navigate="goRecords"')
-    expect(line, '年级应透传给学情标题').toContain(':grade=')
-    expect(src).toContain(':target="recordsTarget"')
+  const src = readFileSync(resolve(__dirname, '../views/K12ChatEnhancement.vue'), 'utf-8')
+  it('InsightPanel navigate 保留结构化 target/subject/status，RecordsView 接收完整下钻条件', () => {
+    expect(src, 'navigate 出口不应丢掉 target').toContain('@navigate="goRecords"')
+    expect(src, '年级应透传给学情标题').toContain(':grade="grade || undefined"')
+    expect(src).toContain(':target="recordsNavigation.target"')
+    expect(src).toContain(':subject="recordsNavigation.subject"')
+    expect(src).toContain(':status="recordsNavigation.status"')
+    expect(src).toContain(':navigation="recordsNavigation"')
   })
 })

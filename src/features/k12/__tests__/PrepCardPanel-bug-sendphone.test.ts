@@ -87,8 +87,7 @@ describe('DD-024: 备课卡真实直发并展示持久回执', () => {
       global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
     })
     await flushPromises()
-    const phoneBtn = w.findAll('.icbtn').find((b) => b.text().includes('📱'))!
-    await phoneBtn.trigger('click')
+    await w.get('[data-testid="prep-send"]').trigger('click')
     await flushPromises()
     expect(h.send).toHaveBeenCalledWith('ming', expect.stringContaining('知识点回顾'))
     expect(writeSpy).not.toHaveBeenCalled()

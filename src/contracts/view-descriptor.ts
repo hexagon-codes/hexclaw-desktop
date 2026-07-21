@@ -60,6 +60,11 @@ export interface ViewAction {
 export interface ComposerPreset {
   /** 提示语 i18n key */
   placeholderKey?: string
+  /** 输入框下方的低干扰说明；强调语与补充说明分别本地化。 */
+  hint?: {
+    emphasisKey: string
+    detailKey: string
+  }
   /**
    * 预设 chips（已本地化的字面串，来自后端 descriptor.composer_chips）。
    * 由后端下发、通用 composer 直接渲染——不在前端 shell 硬编码场景 chip（AP-1）。

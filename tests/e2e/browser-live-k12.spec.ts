@@ -5,9 +5,9 @@ import { cleanupK12Child } from './live-fixture-cleanup'
  * K12 家长备课助手 · 全链路 UI 冒烟（对 live sidecar :16060 + vite :5173）。
  *
  * 覆盖：建档（/agents 模板库 → 作业辅导助手 → 表单）→ 智能体卡快捷入口 →
- * 会话即入口（头部 tab / composer 预设 chips / 备课提醒）→ 错题本记录视图 → 学情 → 备课卡侧栏 → 编辑档案。
+ * 会话即入口（头部 tab / composer 预设 chips）→ 学习档案五对象 → 顶栏学情 → 编辑档案。
  *
- * LLM 无关：建档/描述符/记录列表/学情/备课卡开启 均不依赖云端模型（grade/prep 内容依赖 LLM，此处只验证 UI 抵达）。
+ * LLM 无关：建档/描述符/学习档案/学情均不依赖云端模型（grade/prep 内容依赖 LLM，此处只验证 UI 抵达）。
  * 前置：`pnpm dev`（:5173）+ 后端 sidecar（:16060）已在运行。
  */
 
@@ -20,7 +20,11 @@ test.describe('K12 全链路 UI 冒烟', () => {
     await cleanupK12Child(request, CHILD)
   })
 
-  test('建档 → 进辅导 → 头部tab/chips → 错题本 → 学情 → 备课卡 → 改档', async ({ page }: { page: Page }) => {
+  test('建档 → 进辅导 → 头部tab/chips → 学习档案五对象 → 学情 → 改档', async ({
+    page,
+  }: {
+    page: Page
+  }) => {
     // 平台默认全功能全导航（三模式 / 首启模式选择器已下线 · 2026-07-08）；K12 = 作业辅导智能体，
     // 从 /agents 模板库建档进入，不再走首启模式门控。
     // fresh-DB（无 provider）下路由守卫会重定向 /welcome：预置本 session 的完成标记跳过
@@ -53,39 +57,71 @@ test.describe('K12 全链路 UI 冒烟', () => {
     await card.getByRole('button', { name: /进入辅导/ }).click()
     await expect(page).toHaveURL(/\/chat/, { timeout: 15_000 })
 
-    // 5) 会话即入口：头部 tab（辅导/错题本）+ composer 预设 chips（后端 descriptor 下发）。
+    // 5) 会话即入口：头部严格三段（辅导 / 学习档案 / 学情）
+    //    + composer 预设 chips（后端 descriptor 下发）。
     //    BUG-20260709：chips 改数据流上交（update:composerChips → ChatInput presetChips），
     //    必须渲染在对话框盒（.hc-composer__box）**内部**，不再是输入框上方 Teleport 浮动行。
     //    （备课提醒 nudge 条已于 20260709 退役——辅导要点内联进识题流。）
-    await expect(page.locator('.k12enh-seg')).toBeVisible({ timeout: 20_000 })
-    await expect(page.locator('.k12enh-seg')).toContainText('错题本')
+    const scenarioTabs = page.locator('.k12enh-seg')
+    await expect(scenarioTabs).toBeVisible({ timeout: 20_000 })
+    await expect(scenarioTabs.getByRole('tab')).toHaveCount(3)
+    await expect(scenarioTabs.getByRole('tab')).toHaveText(['辅导', '学习档案', '学情'])
+    await expect(scenarioTabs.getByRole('tab', { name: '辅导', exact: true })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
     const presetChips = page.locator('.hc-composer__box [data-testid="composer-preset-chip"]')
-    await expect(presetChips.first()).toContainText('数学讲解', { timeout: 15_000 })
+    await expect(presetChips.first()).toContainText('自动识别学科', { timeout: 15_000 })
     await expect(presetChips).toHaveCount(3)
 
-    // 6) 错题本 tab → 记录视图接管消息区
-    await page.locator('.k12enh-seg button', { hasText: '错题本' }).click()
+    // 6) 学习档案 tab → 五对象视图接管消息区。学情不得退回二级 Tab。
+    await scenarioTabs.getByRole('tab', { name: '学习档案', exact: true }).click()
     await expect(page.locator('.k12rec')).toBeVisible({ timeout: 15_000 })
-    // 二级 tab：错题 / 积累 / 学情
-    await expect(page.locator('.k12rec__tabs')).toContainText('学情')
+    const objectTabs = page.locator('.k12rec__object-tabs')
+    await expect(objectTabs.getByRole('tab')).toHaveCount(5)
+    await expect(objectTabs.getByRole('tab')).toHaveText([
+      /^本周复习\s*\d+$/,
+      /^全部错题\s*\d+$/,
+      /^练习集\s*\d+$/,
+      /^积累\s*\d+$/,
+      /^作品\s*\d+$/,
+    ])
+    await expect(objectTabs.getByRole('tab', { name: /学情/ })).toHaveCount(0)
+    await expect(page.getByTestId('week-section')).toBeVisible()
 
-    // 7) 学情 tab → 真实 insight-report（有数据=趋势/学习时长；fresh-DB=空态文案。均属 UI 抵达）
-    await page.locator('.k12rec__tabs .seg button', { hasText: '学情' }).click()
-    await expect(page.getByText(/学习时长|还没有错题记录/)).toBeVisible({ timeout: 15_000 })
+    // 7) 顶栏学情 → 真实 insight-report。有数据时展示四张路由卡；fresh-DB 展示证据不足空态。
+    await scenarioTabs.getByRole('tab', { name: '学情', exact: true }).click()
+    await expect(page.getByTestId('insight-panel')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByTestId('insight-title')).toHaveText('六年级学习概览')
+    await expect(page.getByTestId('insight-loading')).toHaveCount(0, { timeout: 15_000 })
+    const insightSettledState = page.locator(
+      '[data-testid="insight-empty"], [data-testid="insight-tile-semester"]',
+    )
+    await expect(insightSettledState.first()).toBeVisible({ timeout: 15_000 })
+    if (await page.getByTestId('insight-tile-semester').count()) {
+      await expect(page.locator('.k12ins__tiles [data-testid^="insight-tile-"]')).toHaveCount(4)
+    }
 
     // 8) 识题唯一入口=composer 图片自动改道（BUG-20260711-E：手动相机 toggle 已删，勿加回）。
     //    上传 1px 图片验证护栏自动打开（识题请求本身依赖 LLM，冒烟不等结果）。
-    await page.locator('.k12enh-seg button', { hasText: '辅导' }).click()
+    await scenarioTabs.getByRole('tab', { name: '辅导', exact: true }).click()
     await expect(page.locator('[data-testid="k12-recognize-toggle"]')).toHaveCount(0) // 回归锁
-    const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
-    await page.locator('.hc-composer input[type="file"]').setInputFiles({ name: 'hw.png', mimeType: 'image/png', buffer: tinyPng })
+    const tinyPng = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    )
+    await page
+      .locator('.hc-composer input[type="file"]')
+      .setInputFiles({ name: 'hw.png', mimeType: 'image/png', buffer: tinyPng })
     await expect(page.locator('[data-testid="recognize-guard"]')).toBeVisible({ timeout: 15_000 })
 
     // 9) 改档：该卡「编辑档案」→ 改档表单预填当前档案
     await page.goto('/agents', { waitUntil: 'domcontentloaded' })
     const card2 = page.locator('.hc-cxcard', { hasText: CHILD })
     await card2.getByRole('button', { name: /编辑档案/ }).click()
-    await expect(page.getByText(`孩子档案 · ${cardName}`, { exact: false })).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText(`孩子档案 · ${cardName}`, { exact: false })).toBeVisible({
+      timeout: 15_000,
+    })
     // 预填年级 = 六年级上（读后端 k12.grade_term）——HcSelect trigger 文案即当前值
     await expect(page.locator('.k12pf .hc-select__trigger').nth(0)).toContainText('六年级上')
   })

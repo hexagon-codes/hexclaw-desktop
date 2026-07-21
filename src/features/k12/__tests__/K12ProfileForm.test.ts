@@ -29,7 +29,7 @@ vi.mock('@/api/k12', () => ({
   // useK12Store 依赖（建档尾部 fire-and-forget setupAutomation，需可 resolve）
   k12BindIM: vi.fn().mockResolvedValue({}),
   k12ProvisionCron: (req: unknown) => h.provisionSpy(req),
-    k12TutorTurn: vi.fn(),
+  k12TutorTurn: vi.fn(),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
@@ -50,12 +50,17 @@ vi.mock('@/composables/useToast', () => ({
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
 function render() {
-  return mount(K12ProfileForm, { global: { plugins: [createPinia(), i18n()] }, attachTo: document.body })
+  return mount(K12ProfileForm, {
+    global: { plugins: [createPinia(), i18n()] },
+    attachTo: document.body,
+  })
 }
 // 弹窗 Teleport 到 body 后，DOM 查询走 body 作用域（wrapper 里只剩 teleport 占位）。
 const B = () => new DOMWrapper(document.body)
@@ -80,7 +85,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(B().find('.k12pf__intro').text()).toContain('小明的辅导助手 · 五年级')
   })
 
-  it('创建 → registerAgent(scenario 标记) + PUT /profile(k12.* 档案) + 显示名 + K12 skills', async () => {
+  it('创建 → registerAgent(scenario 标记 + 六科教材兼容暂存) + PUT /profile(数学 legacy fallback) + 显示名 + K12 skills', async () => {
     const w = render()
     await B().find('input.k12pf__input').setValue('小明')
     await B().find('.k12pf__btn--primary').trigger('click')
@@ -88,15 +93,41 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     // 1) 注册 agent：仅 scenario 标记 + avatar（驱动 registry 解析增强视图），provider 空跟随全局
     expect(h.registerSpy).toHaveBeenCalledTimes(1)
     const payload = h.registerSpy.mock.calls[0]![0] as {
-      name: string; display_name: string; provider: string; skills: string[]; metadata: Record<string, string>
+      name: string
+      display_name: string
+      provider: string
+      skills: string[]
+      system_prompt: string
+      metadata: Record<string, string>
     }
     expect(payload.name).toMatch(/^k12-tutor-/)
     expect(payload.display_name).toContain('小明的辅导助手 · 五年级')
     expect(payload.provider).toBe('')
     expect(payload.metadata.scenario).toBe('k12-tutor')
     expect(payload.metadata['k12.learner_id']).toMatch(/^learner-[A-Za-z0-9_-]{8,}$/)
+    expect(payload.metadata).toMatchObject({
+      'k12.textbook_edition': '人教版',
+      'k12.textbook_edition.math': '人教版',
+      'k12.textbook_edition.chinese': '人教版',
+      'k12.textbook_edition.english': '人教PEP版',
+      'k12.textbook_edition.science': '教科版',
+      'k12.textbook_edition.information_technology': '浙教版',
+      'k12.textbook_edition.art': '人美版',
+    })
+    // 分科绑定必须进入真实辅导边界；不能 UI 保存六科、运行时仍把数学教材套给所有学科。
+    for (const edition of ['人教版', '人教PEP版', '教科版', '浙教版', '人美版']) {
+      expect(payload.system_prompt).toContain(edition)
+    }
     // skills 从模板 manifest 全挂好：P0 必备 + P1 默认 + 基础设施（grade-constraint/k12_grade/k12_review）；P2（物化）默认不挂
-    for (const s of ['k12-pedagogy', 'homework-checker', 'math-tutor', 'chinese-tutor', 'english-tutor', 'concept-explainer', 'k12_grade']) {
+    for (const s of [
+      'k12-pedagogy',
+      'homework-checker',
+      'math-tutor',
+      'chinese-tutor',
+      'english-tutor',
+      'concept-explainer',
+      'k12_grade',
+    ]) {
       expect(payload.skills).toContain(s)
     }
     // 回归锁（F1/F3 修复）：年级边界硬约束基座 + 复习读工具必须始终挂载——引擎不 co-load requires，
@@ -105,7 +136,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(payload.skills).toContain('k12_review')
     expect(payload.skills).not.toContain('physics-tutor')
     expect(payload.skills).not.toContain('chemistry-tutor')
-    // 2) 档案经后端官方 PUT /profile 写入（字段名 grade_term/textbook_edition）
+    // 2) 官方 /profile 仍只有单教材字段：数学同步到 legacy fallback，不伪装分科领域表已实现。
     expect(h.profileSpy).toHaveBeenCalledTimes(1)
     const prof = h.profileSpy.mock.calls[0]![0] as Record<string, string>
     expect(prof.agent).toBe(payload.name)
@@ -115,14 +146,104 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(w.emitted('created')).toBeTruthy()
   })
 
+  it('按原型渲染六科教材行，legacy textbook_edition 仅作为数学 fallback', () => {
+    mount(K12ProfileForm, {
+      props: {
+        agent: {
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '北师大版',
+          },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    const rows = B().findAll('[data-testid="k12-textbook-row"]')
+    expect(rows).toHaveLength(6)
+    expect(rows.map((row) => row.attributes('data-subject'))).toEqual([
+      'math',
+      'chinese',
+      'english',
+      'science',
+      'information_technology',
+      'art',
+    ])
+    expect(rows.map((row) => row.find('.hc-select__label').text())).toEqual([
+      '北师大版',
+      '人教版',
+      '人教PEP版',
+      '教科版',
+      '浙教版',
+      '人美版',
+    ])
+  })
+
+  it('改数学教材只改数学 metadata，保留其他科和无关 metadata，并同步 legacy fallback', async () => {
+    const w = mount(K12ProfileForm, {
+      props: {
+        agent: {
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
+          metadata: {
+            scenario: 'k12-tutor',
+            avatar: '🎓',
+            custom: 'keep-me',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+            'k12.textbook_edition.math': '人教版',
+            'k12.textbook_edition.chinese': '统编版',
+            'k12.textbook_edition.english': '外研版',
+            'k12.textbook_edition.science': '苏教版',
+            'k12.textbook_edition.information_technology': '粤教版',
+            'k12.textbook_edition.art': '湘美版',
+          },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    const mathSelect = w
+      .findAllComponents(HcSelect)
+      .find((select) => select.element.closest('[data-testid="k12-textbook-math"]'))!
+    mathSelect.vm.$emit('update:modelValue', '北师大版')
+    await flushPromises()
+    await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+
+    const [, update] = h.updateSpy.mock.calls[0] as [string, { metadata: Record<string, string> }]
+    expect(update.metadata).toMatchObject({
+      custom: 'keep-me',
+      'k12.textbook_edition': '北师大版',
+      'k12.textbook_edition.math': '北师大版',
+      'k12.textbook_edition.chinese': '统编版',
+      'k12.textbook_edition.english': '外研版',
+      'k12.textbook_edition.science': '苏教版',
+      'k12.textbook_edition.information_technology': '粤教版',
+      'k12.textbook_edition.art': '湘美版',
+    })
+    expect(h.profileSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ textbook_edition: '北师大版' }),
+    )
+  })
+
   it('两个同名称孩子生成不同 learner owner，展示名不参与稳定标识', async () => {
     const first = render()
     await B().find('input.k12pf__input').setValue('同名孩子')
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
-    const firstID = (h.registerSpy.mock.calls[0]![0] as {
-      metadata: Record<string, string>
-    }).metadata['k12.learner_id']
+    const firstID = (
+      h.registerSpy.mock.calls[0]![0] as {
+        metadata: Record<string, string>
+      }
+    ).metadata['k12.learner_id']
     first.unmount()
     document.body.innerHTML = ''
 
@@ -130,9 +251,11 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await B().find('input.k12pf__input').setValue('同名孩子')
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
-    const secondID = (h.registerSpy.mock.calls[1]![0] as {
-      metadata: Record<string, string>
-    }).metadata['k12.learner_id']
+    const secondID = (
+      h.registerSpy.mock.calls[1]![0] as {
+        metadata: Record<string, string>
+      }
+    ).metadata['k12.learner_id']
 
     expect(firstID).toMatch(/^learner-/)
     expect(secondID).toMatch(/^learner-/)
@@ -172,13 +295,23 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
-          name: 'k12-tutor-x', display_name: '小明的辅导助手 · 五年级',
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
           description: '人教版 · 五年级上 · 按年级边界讲解',
-          system_prompt: '旧人设', provider: 'old-provider', model: 'old-model', skills: ['math-tutor'],
-          metadata: { scenario: 'k12-tutor', 'k12.child_name': '小明', 'k12.grade_term': '五年级上', 'k12.textbook_edition': '人教版' },
+          system_prompt: '旧人设',
+          provider: 'old-provider',
+          model: 'old-model',
+          skills: ['math-tutor'],
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+          },
         },
       },
-      global: { plugins: [createPinia(), i18n()] }, attachTo: document.body,
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
     })
     w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级上')
     await flushPromises()
@@ -186,11 +319,16 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await flushPromises()
 
     expect(h.updateSpy).toHaveBeenCalledTimes(2)
-    expect(h.updateSpy.mock.calls[1]).toEqual(['k12-tutor-x', expect.objectContaining({
-      display_name: '小明的辅导助手 · 五年级',
-      description: '人教版 · 五年级上 · 按年级边界讲解',
-      system_prompt: '旧人设', provider: 'old-provider', model: 'old-model',
-    })])
+    expect(h.updateSpy.mock.calls[1]).toEqual([
+      'k12-tutor-x',
+      expect.objectContaining({
+        display_name: '小明的辅导助手 · 五年级',
+        description: '人教版 · 五年级上 · 按年级边界讲解',
+        system_prompt: '旧人设',
+        provider: 'old-provider',
+        model: 'old-model',
+      }),
+    ])
     expect(w.emitted('created')).toBeFalsy()
     expect(B().text()).toContain('profile update failed')
   })
@@ -214,7 +352,13 @@ describe('K12ProfileForm（M1-2 建档）', () => {
         agent: {
           name: 'k12-tutor-x',
           display_name: '小明的辅导助手 · 五年级',
-          metadata: { scenario: 'k12-tutor', 'k12.child_name': '小明', 'k12.grade_term': '五年级上', 'k12.textbook_edition': '人教版', avatar: '🎓' },
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+            avatar: '🎓',
+          },
         },
       },
       global: { plugins: [createPinia(), i18n()] },
@@ -241,13 +385,13 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(w.emitted('created')).toBeTruthy()
   })
 
-  it('卡片副标题：建档写派生 description「教材 · 年级 · 按年级边界讲解」（非写死，随档案跟随）', async () => {
+  it('卡片副标题：建档严格写原型的「年级 · 各学科教材独立绑定 · 按年级边界讲解」', async () => {
     render()
     await B().find('input.k12pf__input').setValue('小明')
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
     const payload = h.registerSpy.mock.calls[0]![0] as { description: string }
-    expect(payload.description).toBe('人教版 · 五年级上 · 按年级边界讲解')
+    expect(payload.description).toBe('五年级上 · 各学科教材独立绑定 · 按年级边界讲解')
   })
 
   it('卡片副标题：改档改年级 → updateAgent 同步派生 description（不写死）', async () => {
@@ -256,7 +400,13 @@ describe('K12ProfileForm（M1-2 建档）', () => {
         agent: {
           name: 'k12-tutor-x',
           display_name: '小明的辅导助手 · 五年级',
-          metadata: { scenario: 'k12-tutor', 'k12.child_name': '小明', 'k12.grade_term': '五年级上', 'k12.textbook_edition': '人教版', avatar: '🎓' },
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+            avatar: '🎓',
+          },
         },
       },
       global: { plugins: [createPinia(), i18n()] },
@@ -267,34 +417,74 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
     const [, upd] = h.updateSpy.mock.calls[0] as [string, { description: string }]
-    expect(upd.description).toBe('人教版 · 六年级上 · 按年级边界讲解')
+    expect(upd.description).toBe('六年级上 · 各学科教材独立绑定 · 按年级边界讲解')
   })
 
-  it('高级折叠：默认技能全挂好、P0 必备锁定、可微调（关掉 P1 不进绑定集）', async () => {
+  it('严格按原型只展示自带技能 chips，不渲染原型不存在的高级技能清单', async () => {
     render()
-    const rows = B().findAll('.k12pf__skillrow')
-    expect(rows.length).toBe(9) // 模板声明的 9 个技能
-    // P0（前 3 个）必备 → 锁定 disabled + 有「必备」标
-    const pedagogy = rows.find((r) => r.text().includes('教学法'))!
-    expect((pedagogy.find('input').element as HTMLInputElement).disabled).toBe(true)
-    expect(pedagogy.text()).toContain('必备')
-    // 关掉一个 P1（知识点讲解 concept-explainer）
-    const conceptRow = rows.find((r) => r.text().includes('知识点讲解'))!
-    await conceptRow.find('input').setValue(false)
+    expect(B().findAll('.k12pf__skillrow')).toHaveLength(0)
+    expect(B().findAll('.k12pf__skillchip')).toHaveLength(5)
+    expect(B().text()).not.toContain('高级 · 辅导助手的技能')
     await B().find('input.k12pf__input').setValue('小明')
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
     const payload = h.registerSpy.mock.calls[0]![0] as { skills: string[] }
-    expect(payload.skills).not.toContain('concept-explainer') // 微调生效
-    expect(payload.skills).toContain('math-tutor') // P0 仍在
+    expect(payload.skills).toContain('concept-explainer')
+    expect(payload.skills).toContain('math-tutor')
     expect(payload.skills).toContain('k12_grade')
+  })
+
+  it('建档 footer 严格为上一步 / 先看示例 / 创建，发出宿主意图且不伪造导航', async () => {
+    const w = render()
+    const labels = B()
+      .findAll('.k12pf__foot .k12pf__btn')
+      .map((button) => button.text())
+    expect(labels).toEqual(['上一步', '先看示例', '创建'])
+
+    await B().find('[data-testid="k12pf-back"]').trigger('click')
+    await B().find('[data-testid="k12pf-preview"]').trigger('click')
+    expect(w.emitted('back')).toHaveLength(1)
+    expect(w.emitted('preview')).toHaveLength(1)
+    expect(w.emitted('close')).toBeUndefined()
+    expect(B().findAll('.k12pf__note')).toHaveLength(1)
+  })
+
+  it('编辑删除使用 alertdialog 确认语义，第一次点击不执行删除', async () => {
+    const w = mount(K12ProfileForm, {
+      props: {
+        agent: {
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+          },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    await B().find('[data-testid="k12pf-delete"]').trigger('click')
+    expect(h.unregisterSpy).not.toHaveBeenCalled()
+    const dialog = B().find('[role="alertdialog"]')
+    expect(dialog.exists()).toBe(true)
+    expect(dialog.text()).toContain('确定删除「小明的辅导助手」？')
+    await dialog.find('.hc-dialog__btn--danger').trigger('click')
+    await flushPromises()
+    expect(h.unregisterSpy).toHaveBeenCalledExactlyOnceWith('k12-tutor-x')
+    expect(w.emitted('removed')).toEqual([['k12-tutor-x']])
   })
 
   it('年级选择只出小学 12 档中文枚举（冻结：无初中，见 bug-20260718-frozen-grade-subject）', () => {
     const w = render()
     // 年级下拉走 HcSelect（B2）：枚举取自 :options 属性
     const gradeSelect = w.findAllComponents(HcSelect)[0]!
-    const opts = (gradeSelect.props('options') as { value: string; label: string }[]).map((o) => o.label)
+    const opts = (gradeSelect.props('options') as { value: string; label: string }[]).map(
+      (o) => o.label,
+    )
     expect(opts).toContain('五年级上')
     expect(opts).not.toContain('初一上')
     expect(opts.some((o) => o.includes('初'))).toBe(false)

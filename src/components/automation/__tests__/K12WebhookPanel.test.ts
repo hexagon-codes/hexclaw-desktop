@@ -44,7 +44,12 @@ const agentA = {
   display_name: '小明的辅导助手',
   provider: '',
   model: '',
-  metadata: { scenario: 'k12-tutor', 'k12.child_name': '小明', 'k12.learner_id': 'learner-a' },
+  metadata: {
+    scenario: 'k12-tutor',
+    'k12.child_name': '小明',
+    'k12.learner_id': 'learner-a',
+    'k12.grade_term': '五年级上',
+  },
 }
 const agentB = {
   name: 'k12-tutor-b',
@@ -114,6 +119,41 @@ describe('K12WebhookPanel', () => {
     })
   })
 
+  it('owns its empty state, so the generic Webhook empty state stays suppressed with zero bindings', async () => {
+    hooks.list.mockResolvedValueOnce({ k12_bindings: [], total: 0 })
+    const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('这个孩子还没有 K12 Webhook')
+    expect(wrapper.emitted('contentChange')).toEqual([[true]])
+  })
+
+  it('projects a binding with the authoritative K12 webhook card hierarchy and truthful contract data', async () => {
+    const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
+    await flushPromises()
+
+    const card = wrapper.get('[data-testid="k12-webhook-row-homework-hook"]')
+    expect(card.classes()).toContain('k12-webhook-card')
+    expect(card.get('.k12wh__logo').text()).toBe('K12')
+    expect(card.get('.k12wh__name').text()).toBe('K12 批改与回传事件')
+    expect(card.get('.k12wh__meta').text()).toContain('绑定：小明的辅导助手 · 五年级上')
+    expect(card.get('.k12wh__status').text()).toBe('未启用')
+    expect(card.get('.k12wh__signature').text()).toContain(
+      'HMAC-SHA256 · Secret 已配置 · 重放窗口 5 分钟',
+    )
+    expect(card.get('.k12wh__signature').text()).toContain('轮换密钥')
+    expect(card.get('.k12wh__events').text()).toContain('k12.submission.requested.v1')
+    expect(card.get('.k12wh__facts').text()).toContain('Secret v1')
+    expect(card.get('.k12wh__facts').text()).toContain('仅接受 direct 事件')
+
+    const actionText = card.get('.k12wh__actions').text()
+    expect(actionText).toContain('事件与回执')
+    expect(actionText).toContain('编辑绑定')
+    expect(actionText).toContain('启用')
+    expect(actionText).not.toContain('Receipt')
+    expect(actionText).not.toContain('Secret')
+  })
+
   it('scopes every operation to the selected child and shows secrets only in one-time result state', async () => {
     const wrapper = mount(K12WebhookPanel, {
       attachTo: document.body,
@@ -123,7 +163,7 @@ describe('K12WebhookPanel', () => {
 
     expect(hooks.list).toHaveBeenCalledWith(agentA.name)
     expect(wrapper.text()).toContain('homework-hook')
-    expect(wrapper.text()).toContain('仅直连')
+    expect(wrapper.text()).toContain('仅接受 direct 事件')
 
     await wrapper.get('[data-testid="k12-webhook-create-open"]').trigger('click')
     await wrapper.get('[data-testid="k12-webhook-name"]').setValue('new-hook')
@@ -149,12 +189,24 @@ describe('K12WebhookPanel', () => {
 
     await wrapper.get('[data-testid="k12-webhook-rotate-homework-hook"]').trigger('click')
     await flushPromises()
+    expect(hooks.rotate).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-testid="k12-webhook-rotate-dialog"]').text()).toContain(
+      '轮换 K12 Webhook 密钥',
+    )
+    await wrapper.get('[data-testid="k12-webhook-rotate-confirm"]').trigger('click')
+    await flushPromises()
     expect(hooks.rotate).toHaveBeenCalledWith('homework-hook', agentA.name)
     expect(wrapper.text()).toContain('whs_rotated')
 
     await wrapper.get('[data-testid="k12-webhook-history-homework-hook"]').trigger('click')
     await flushPromises()
     expect(hooks.history).toHaveBeenCalledWith('homework-hook', agentA.name)
+    expect(wrapper.get('[data-testid="k12-webhook-history-dialog"]').text()).toContain(
+      'K12 Webhook · 事件与回执',
+    )
+    expect(
+      wrapper.get('[data-testid="k12-webhook-row-homework-hook"]').find('.k12wh__history').exists(),
+    ).toBe(false)
     expect(wrapper.text()).toContain('succeeded')
     expect(wrapper.text()).toContain('grading_job:job-1')
 

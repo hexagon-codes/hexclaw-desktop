@@ -12,8 +12,11 @@ export default {
 
   composer: {
     placeholder:
-      'Type a message, or ⌘V to paste a homework photo — texting the bot a photo lands here too',
-    chips: ['🧮 Math help', '💡 Step hints', '📷 Problem check'],
+      'Type a message, paste a problem with fractions/formulas, or ⌘V to paste a homework photo',
+    formulaHintLead: 'Paste fractions and math formulas',
+    formulaHintDetail:
+      'Copyable formulas from webpages, Word, and PDFs render as math after sending; for scanned pages, paste a screenshot.',
+    chips: ['📚 Auto-detect subject', '💡 Step hints', '📷 Problem check'],
   },
 
   emptyState: {
@@ -59,8 +62,14 @@ export default {
     weeklyHook:
       'Auto-added to the practice set every Friday 19:00 · only verified questions enter the printed paper',
     genWorksheet: 'Generate review paper',
+    dueCountUnit: 'due for review',
+    moreWorksheetActions: 'More worksheet options',
     worksheetTitle: 'Review paper',
     customPaper: 'Custom paper',
+    resultCount: 'Showing {shown} / {total}',
+    filterLabel: 'Mistake filters',
+    filterSubject: 'Subject',
+    filterStatus: 'Status',
     stateMachineHint:
       'Unmastered questions are never auto-hidden for inactivity; they are archived by term or manually by the parent.',
     retryTitle: 'One more to practice (same-concept variant)',
@@ -93,6 +102,20 @@ export default {
     practice: 'Practice ahead',
     clearedTitle: 'All clear this week!',
     clearedSub: 'Every due question handled · next paper: Friday 19:00',
+  },
+  ftue: {
+    title: 'Start with the first homework page',
+    journey:
+      'Photograph one homework page. Mistakes appear here automatically; see the first mistake and tutoring note that evening, then receive the first review sheet.',
+    weekValue: 'Photograph a homework page and its mistakes are queued here automatically',
+    cta: 'Go to tutoring · upload the first page',
+    practiceValue: 'Collect practice items, then print them or send them to a phone',
+    collectionTitle: 'Notes · Works',
+    collectionValue: 'Save useful phrases; keep essays and artwork growing here',
+    none: 'None yet',
+    loading: 'Checking the learning archive…',
+    loadError:
+      'Part of the learning archive failed to load, so first-use status cannot be determined yet.',
   },
   emptyAccum: {
     title: 'Your notes are still empty',
@@ -260,10 +283,20 @@ export default {
   },
   works: {
     title: 'Works',
-    desc: 'Growth archive for essays and artwork · keeps the original and every revision · specific feedback only, no scores, no ghostwriting',
+    desc: 'Essays and artwork live here, with the original and every revision kept so progress stays visible; specific suggestions only, no scores.',
     empty:
       'No works yet — add an essay or an artwork; the original, feedback and every revision will be kept here.',
+    emptyTitle: 'No works yet',
+    emptyValue:
+      'Essays and artwork grow here over time; once added, the original, feedback and every revision are kept.',
+    filterEmptyTitle: 'No works of this type',
+    filterEmptyValue: 'Choose another type to view the other works; existing works are unchanged.',
+    loading: 'Loading works…',
+    filterLabel: 'Filter by work type',
+    filterTypeLabel: 'Type',
+    filterAll: 'All',
     writing: 'Writing',
+    writingKind: 'Chinese · Writing',
     art: 'Artwork',
     addFeedback: 'Add feedback',
     submitRevision: 'Submit revision',
@@ -271,6 +304,11 @@ export default {
     viewReview: 'View feedback',
     startReview: 'Start feedback',
     collapseDetail: 'Collapse details',
+    detailClose: 'Close',
+    writingReviewTitle: 'Writing feedback · {title}',
+    artReviewTitle: 'Artwork feedback · {title}',
+    generateWritingReviewTitle: 'Generate writing feedback · {title}',
+    generateArtReviewTitle: 'Generate artwork feedback · {title}',
     versionCount: 'ver.',
     loadError: 'Failed to load works',
     retry: 'Retry here',
@@ -294,7 +332,7 @@ export default {
     feedbackActionCollect: 'Collect',
     feedbackActionLanguageIssue: 'Record language issue',
     // Add-work modal (prototype 5326-5361)
-    addWork: '+ Add work',
+    addWork: 'Add work',
     addModalTitle: 'Add a work',
     typeLabel: 'Type',
     nameLabel: 'Title',
@@ -390,45 +428,78 @@ export default {
   },
 
   report: {
-    // Prototype 2613: insights = learning overview (router), monthly-report framing retired
+    // app.html:2352: insights = learning overview (router), monthly-report framing retired
     title: 'Learning overview',
     titleWithGrade: '{grade} learning overview',
     monthlyNote:
-      'Generated from real grading and re-practice evidence · shows the next actionable step',
-    weakTop3: 'Top 3 weak topics',
-    consecutiveFail: 'Repeated-setback alert',
-    suggestion: 'This month',
-    empty: 'Not enough data to generate a report this month.',
+      'Generated from real grading and re-practice evidence · shows the next action, without meaningless time metrics',
+    loading: 'Loading learning overview…',
+    empty:
+      'Not enough grading and re-practice evidence yet. The next action will appear after the first grading result.',
+    priorityTitle: 'Needs priority attention',
+    priorityNote: 'By mistake count per topic · select to drill into mistakes',
+    consecutiveFail: 'Repeated setback · {topics}',
+    weekActionTitle: 'This week’s actions are ready',
+    weekActionBody:
+      '{n} questions are in the practice set. Print them for your child; upload the completed sheet for re-grading without manual result entry.',
     semesterTotal: '{n} mistakes this semester',
     semesterStatus: 'Mastered {m} · To review {r} · Redone {d}',
     goWeek: 'Go to this week ›',
+    goPrint: 'Print ›',
+    unitItems: '',
+    unitQuestions: '',
     tiles: {
-      mastered: 'Mastered with evidence (retry-confirmed)',
-      newMistakes: 'New mistakes',
-      reviewRate: 'Review completion',
+      semesterMistakes: 'Mistakes this semester',
+      mastered: 'Mastered with evidence',
+      weekPending: 'Due this week',
       practicePending: 'Practice items to print',
     },
   },
 
   profile: {
-    createTitle: 'Create "Homework Tutor"',
+    createTitle: 'Create "K12 Tutor"',
     intro:
       'These fields keep explanations within what your child has learned; the display name is auto-generated as "{name}".',
     childName: "Child's name",
     childNamePlaceholder: 'e.g. Ming',
     grade: 'Grade · Term',
-    textbook: 'Textbook edition',
+    gradeSupportNote:
+      'The current version supports primary grades 1–6. When secondary support opens, you can upgrade this profile without losing learning history.',
+    textbookBySubject: 'Set textbook edition by subject',
+    textbookCreateNote:
+      'Grade and term belong to the child profile; textbook editions are bound per subject, and recognition uses only the current subject edition.',
+    textbookEditNote:
+      'Textbooks are saved per subject; changing Math does not alter the retrieval basis for Chinese, English, or other subjects.',
+    subjects: {
+      math: 'Math',
+      chinese: 'Chinese',
+      english: 'English',
+      science: 'Science',
+      informationTechnology: 'Information Tech',
+      art: 'Art',
+    },
     skillsLabel: 'Built-in skills',
-    skills:
-      '📷 Photo recognition · 💡 Step hints · 📕 Mistake book · 📋 Tutoring tips · 🧮 Math/CN/EN/Science/IT/Art',
+    builtinSkills: {
+      photo: '📷 Photo recognition',
+      progressive: '💡 Progressive hints',
+      mistakes: '📕 Mistake book',
+      works: '🖼 Work feedback',
+      subjects: '📚 Chinese · Math · English · Science · IT · Art',
+    },
+    toneAdvanced: 'Tutoring tone · preconfigured, adjustable',
+    toneReset: 'Restore default tone',
     modelAdvanced: 'Model · a strong reasoning model is preconfigured',
     providerLabel: 'Provider',
     modelLabel: 'Model',
     modelNote: 'A strong reasoning model is preconfigured — you can leave it',
     twoChildHint:
-      'A second child? Instantiate another from the template library, each bound to its own chat — profiles, mistakes and memory are naturally isolated, no "switching" needed.',
+      '💡 More than one child? Create one independent instance per child and bind each private-chat target; profiles, learning records, and memory remain isolated.',
     autoName: "{child}'s Study Assistant · {grade}",
-    cardDesc: '{textbook} · {grade} · Teaching bounded by grade level',
+    assistantName: "{child}'s Study Assistant",
+    cardDesc:
+      '{grade} · Textbooks independently bound by subject · Teaching bounded by grade level',
+    back: 'Back',
+    preview: 'View example',
     create: 'Create',
     cancel: 'Cancel',
     created: 'Created "{name}"',
@@ -443,13 +514,15 @@ export default {
     save: 'Save',
     saved: 'Profile updated · teaching scope switched',
     editNote:
-      'Only change this on grade advancement — teaching boundary / recognition / prep card all follow instantly; past mistakes are not rewritten. Reminders on Mar 1 · Sep 1 each year (never auto-changed).',
+      'Only change this on grade advancement — teaching boundary / recognition / tutoring tips all follow instantly; past mistakes are not rewritten. Reminders on Mar 1 · Sep 1 each year (never auto-changed).',
     edit: 'Edit profile',
     advancedSkills: 'Advanced · Study assistant skills (preconfigured, adjustable)',
     requiredTag: 'Required',
     delete: 'Delete profile',
-    deleteConfirm:
-      'Confirm delete? The learning archive will be cleared too — this cannot be undone',
+    deleteConfirmTitle: 'Delete profile',
+    deleteConfirmMessage:
+      'Delete “{name}”? The learning archive will also be cleared and cannot be recovered.',
+    deleteConfirmAction: 'Delete',
     deleted: 'Deleted "{name}"',
   },
   // Keys physics/chemistry are legacy skill IDs (manifest.ts owned by another session);
@@ -469,7 +542,7 @@ export default {
   backup: {
     title: 'Family Learning Archive · Backup / Restore',
     intro:
-      'Archive contains mistake-book records (with version header + checksum, backward-compatible). Data stays on your device.',
+      'The archive includes the child profile, learning records, linked content files, and confirmed work-recognition and answer evidence, with a version header and checksum. Learning-insight memory and agent-instance settings are not currently included.',
     exportLabel: 'Backup',
     exportBtn: 'Export archive',
     restoreLabel: 'Restore',
@@ -506,15 +579,100 @@ export default {
   },
 
   agentCard: {
+    tag: 'K12',
     mistakeCount: 'Mistakes {n}',
     reviewDue: 'To review {n}',
-    records: 'Mistakes',
+    records: 'Learning archive',
     prep: 'Tutoring tips',
     enterTutor: 'Tutor',
   },
 
   bridge: {
-    text: '💬 I don\'t just tutor — parent notices, lookups, scheduling too. Try "draft a parent-meeting notice"',
+    text: '💬 I do more than tutoring — ask me to write leave notes, reply to teachers, or schedule correction check-ins',
+    action: 'See what else I can do ›',
+  },
+
+  capabilities: {
+    close: 'Close',
+    subjectTitle: 'Primary school · Subject capabilities',
+    subjectPrimary: 'Try one homework page',
+    subjectNoticeLead: 'One child, one long-term tutor',
+    subjectNoticeDetail:
+      'This version supports primary grades only. Subjects are recognized automatically, so parents do not need to choose first. Secondary capabilities can be added later without breaking learning history.',
+    subjectVerificationNote:
+      'Every judgment distinguishes program verification from AI judgment; uncertain cases ask you to review.',
+    viewDemo: 'View example',
+    subjects: {
+      math: {
+        label: 'Math',
+        object: 'Mistakes and practice',
+        assessment: 'Every calculation is verified step by step, never judged by intuition',
+      },
+      chinese: {
+        label: 'Chinese',
+        object: 'Mistakes, practice, notes, and writing',
+        assessment:
+          'Dictation is compared character by character; writing gets specific advice only',
+      },
+      english: {
+        label: 'English',
+        object: 'Mistakes, practice, and notes',
+        assessment: 'Words and patterns are compared word by word; open responses get suggestions',
+      },
+      science: {
+        label: 'Science',
+        object: 'Mistakes and practice',
+        assessment:
+          'Checks textbook facts and experiment rules, and asks for review when uncertain',
+      },
+      informationTechnology: {
+        label: 'Information Tech',
+        object: 'Mistakes and practice',
+        assessment: 'Runs the program before deciding whether it is correct',
+      },
+      art: {
+        label: 'Art',
+        object: 'Work growth archive',
+        assessment: 'Reviews only what is visible and gives growth feedback without scores',
+      },
+    },
+    demo: {
+      title: '{subject} · Primary capability example',
+      primary: 'View subject records',
+      rows: { evidence: 'Visible evidence', basis: 'Decision basis', practice: 'Practice again' },
+      science: {
+        noticeLabel: 'Worksheet recognition:',
+        notice: 'The bulb does not form a closed circuit',
+        evidence: 'The wire connects only one battery terminal, so the path is open',
+        basis: 'Graph-rule validation · no subjective model guess',
+        practice: 'Choose again from diagrams that can light the bulb',
+      },
+      informationTechnology: {
+        noticeLabel: 'Project run:',
+        notice: 'The repeat block runs one time too few',
+        evidence: 'The target quadrilateral has only three move-and-turn steps',
+        basis: 'Block-rule parsing + isolated sandbox run',
+        practice: 'Change the repeat count, run again, and compare the path',
+      },
+    },
+    generalTitle: 'What else this Agent can do',
+    generalPrimary: 'Fill in an example request',
+    generalExample: 'Write a notice for a parent meeting tomorrow at 3 PM',
+    general: {
+      homeSchool: {
+        label: 'Home–school communication',
+        detail: 'Parent-meeting notices, leave notes, and drafts to teachers',
+      },
+      organize: {
+        label: 'Organize materials',
+        detail: 'Turn textbooks, notices, or webpages into key points',
+      },
+      schedule: {
+        label: 'Schedule reminders',
+        detail:
+          'Create personal scheduled tasks using the private-chat channel bound to this Agent',
+      },
+    },
   },
 
   prep: {
@@ -535,6 +693,7 @@ export default {
     close: 'Close',
     legend:
       '📖 From textbook = searched your uploaded materials · 🗂 local records · ✅ program-verified · 🤖 AI summary (for reference) = when no textbook uploaded, downgraded to AI by grade level; please double-check.',
+    currentBasis: 'Current basis: {textbook} · {grade}',
     nudge:
       "Tutoring tonight? Spend 3 minutes prepping — I'll combine your child's mistakes and insights into a one-page 'how to teach'.",
     startPrep: 'Start prep',
@@ -618,6 +777,35 @@ export default {
   },
   overlay: {
     title: 'Grading on the photo',
+    completed: 'Page grading complete',
+    summarySubtitle:
+      'The original homework photo is the result · {correct} correct · {attention} need attention',
+    hideAnnotations: 'Hide annotations',
+    showAnnotations: 'Show annotations',
+    summaryLabel: 'Grading summary',
+    totalQuestions: 'Questions',
+    correctCount: 'Correct',
+    attentionCount: 'Need attention',
+    pendingReview: 'Pending review',
+    originalUntouched: 'Original homework photo · unchanged',
+    originalReadOnly: 'Original stays read-only',
+    annotationCaption: 'Marks are drawn above the photo; the photo itself is never changed',
+    legendLabel: 'Grading status legend',
+    statusCorrect: 'Correct',
+    statusIncorrect: 'Incorrect',
+    statusUnanswered: 'Unanswered',
+    statusUnclear: 'Unclear',
+    statusPartiallyCorrect: 'Partly correct',
+    statusProcessIssue: 'Process issue',
+    statusOutOfScope: 'Out of scope',
+    onlyAttention: 'Only questions needing attention are expanded',
+    questionCount: '{count}',
+    issueTitle: 'Question {number} · {issue}',
+    needsAttention: 'Needs attention',
+    question: 'Question',
+    correctCollapsed: '{count} correct · collapsed by default',
+    questionNumber: 'Question {number}',
+    noCorrectQuestions: 'No correct questions on this page',
     showOriginal: 'Show original',
     showGraded: 'Show grading',
     imageAlt: 'Homework photo with grading overlay',

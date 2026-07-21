@@ -82,16 +82,31 @@ function deferred<T>() {
 // 识别产物（含锚点 bbox）随停点响应返回。以下 helper 等价替代旧 k12Recognize mock。
 function jobDTO(stage = 'awaiting_confirmation') {
   return {
-    job_id: 'job-1', submission_id: 'photo-x', stage,
-    confirmation_state: 'pending', anchor_state: 'located', deadline: 0,
-    idempotency_key: 'desktop|k|v0', confirmed_version: 0,
-    attempt_count: 0, retryable: false, version: 1, created_at: 0, updated_at: 0,
+    job_id: 'job-1',
+    submission_id: 'photo-x',
+    stage,
+    confirmation_state: 'pending',
+    anchor_state: 'located',
+    deadline: 0,
+    idempotency_key: 'desktop|k|v0',
+    confirmed_version: 0,
+    attempt_count: 0,
+    retryable: false,
+    version: 1,
+    created_at: 0,
+    updated_at: 0,
   }
 }
 function jobStatus(stage: string, extra: Record<string, unknown> = {}) {
   return {
-    job_id: 'job-1', stage, confirmation_state: 'pending', anchor_state: 'located',
-    deadline: 0, confirmed_version: 0, job: jobDTO(stage), ...extra,
+    job_id: 'job-1',
+    stage,
+    confirmation_state: 'pending',
+    anchor_state: 'located',
+    deadline: 0,
+    confirmed_version: 0,
+    job: jobDTO(stage),
+    ...extra,
   }
 }
 function mockJobRecognition(questions: Array<Record<string, unknown>>, subject = '') {
@@ -117,18 +132,18 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
 
   it('#1 识题：图片 → 调 recognize → 逐题回显题干+知识点', async () => {
     mockJobRecognition([
-        { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
-        { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
-      ])
+      { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
+      { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
+    ])
     const w = render()
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
     await flushPromises()
 
     expect(h.createJobSpy).toHaveBeenCalledTimes(1)
-    expect(
-      (h.createJobSpy.mock.calls[0]![0] as { image_base64: string }).image_base64,
-    ).toContain('AAAA')
+    expect((h.createJobSpy.mock.calls[0]![0] as { image_base64: string }).image_base64).toContain(
+      'AAAA',
+    )
     const items = w.findAll('[data-testid="rq-item"]')
     expect(items.length).toBe(2)
     expect(w.text()).toContain('3.8×3=?')
@@ -152,18 +167,62 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(w.find('[data-testid="rq-grade-0"]').exists()).toBe(true)
   })
 
+  it('权威原型：确认与原图定位以两个正交分支呈现，确认后只更新各自状态', async () => {
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }], '数学')
+    const w = render()
+    await setImage(w)
+    await w.get('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+
+    const pipeline = w.get('[data-testid="recognize-pipeline"]')
+    expect(pipeline.attributes('aria-label')).toBe('批改准备状态')
+    expect(pipeline.findAll('.rec-pipeline__branch')).toHaveLength(2)
+    expect(w.get('[data-testid="recognize-confirm-branch"]').text()).toContain('等你确认题目')
+    expect(w.get('[data-testid="recognize-anchor-branch"]').text()).toContain('原图题目已定位')
+
+    await w.get('[data-testid="recognize-confirm-all"]').trigger('click')
+    expect(w.get('[data-testid="recognize-confirm-branch"]').classes()).toContain('is-done')
+    expect(w.get('[data-testid="recognize-confirm-branch"]').text()).toContain('题目已确认并冻结')
+  })
+
+  it('识别阶段失败保留原位错误卡，并从同一阶段重试', async () => {
+    h.createJobSpy.mockRejectedValueOnce(new Error('provider timeout'))
+    const w = render()
+    await setImage(w)
+    await w.get('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+
+    expect(w.get('[data-testid="recognize-stage-error"]').attributes('role')).toBe('alert')
+    expect(w.get('[data-testid="recognize-stage-error"]').text()).toContain('provider timeout')
+
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }], '数学')
+    await w.get('[data-testid="recognize-stage-retry"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="recognize-stage-error"]').exists()).toBe(false)
+    expect(w.findAll('[data-testid="rq-item"]')).toHaveLength(1)
+  })
+
   it('#1 原型交互：识别结果先整体朗读核对，只提供“读得对/有地方读错”两个主动作', async () => {
-    mockJobRecognition([
-      { question: '竖式计算：2.8 × 0.65', knowledge_points: ['小数乘法'] },
-      { question: '解方程：2x + 15 = 43', knowledge_points: ['简易方程'], answer_state: 'unclear' },
-    ], '数学')
+    mockJobRecognition(
+      [
+        { question: '竖式计算：2.8 × 0.65', knowledge_points: ['小数乘法'] },
+        {
+          question: '解方程：2x + 15 = 43',
+          knowledge_points: ['简易方程'],
+          answer_state: 'unclear',
+        },
+      ],
+      '数学',
+    )
     const w = render({ initialImage: 'data:image/png;base64,AAAA' })
     await flushPromises()
 
     expect(w.text()).toContain('讲之前我先把读到的数字念一遍')
     expect(w.get('[data-testid="recognize-confirm-all"]').text()).toContain('读得对，开始辅导')
     expect(w.get('[data-testid="recognize-correct"]').text()).toContain('有地方读错了')
-    expect(w.get('[data-testid="recognize-confidence-note"]').text()).toContain('不会把不确定内容写进题目')
+    expect(w.get('[data-testid="recognize-confidence-note"]').text()).toContain(
+      '不会把不确定内容写进题目',
+    )
     expect(w.findAll('[data-testid^="rq-edit-"]')).toHaveLength(0)
 
     await w.get('[data-testid="recognize-correct"]').trigger('click')
@@ -229,9 +288,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
       .mockResolvedValueOnce(
         jobStatus('awaiting_confirmation', { recognition: { questions, subject: '数学' } }),
       )
-      .mockResolvedValueOnce(
-        jobStatus('completed'),
-      )
+      .mockResolvedValueOnce(jobStatus('completed'))
     h.getResultSpy.mockResolvedValue({
       job_id: 'job-1',
       result: { mode: 'grade', items: [], markdown: '' },
@@ -333,12 +390,14 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(oldPollSignal?.aborted).toBe(false)
     await w.setProps({ initialImage: 'data:image/png;base64,BBBB' })
     await flushPromises()
-    oldPoll.resolve(jobStatus('awaiting_confirmation', {
-      recognition: {
-        questions: [{ question: '图 A 的旧题', knowledge_points: ['旧知识点'] }],
-        subject: '语文',
-      },
-    }))
+    oldPoll.resolve(
+      jobStatus('awaiting_confirmation', {
+        recognition: {
+          questions: [{ question: '图 A 的旧题', knowledge_points: ['旧知识点'] }],
+          subject: '语文',
+        },
+      }),
+    )
     await flushPromises()
 
     expect(h.createJobSpy).toHaveBeenCalledTimes(2)
@@ -419,10 +478,13 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('Polish-2 识题自动判定学科：整卷 subject 预填学科下拉，solve/批改按钮不再 gate 空学科', async () => {
-    mockJobRecognition([
+    mockJobRecognition(
+      [
         { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
         { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
-      ], '数学')
+      ],
+      '数学',
+    )
     h.gradeSpy.mockResolvedValue({
       solution: '11.4',
       verdict: 'agree',
@@ -535,9 +597,9 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
 
   it('#3 冷启动：无年级时据识题知识点倒查推断年级、回显建档结果', async () => {
     mockJobRecognition([
-        { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
-        { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
-      ])
+      { question: '3.8×3=?', knowledge_points: ['小数乘法'] },
+      { question: '简算 25×4', knowledge_points: ['乘法结合律'] },
+    ])
     h.coldStartSpy.mockResolvedValue({
       child_name: '',
       grade_term: '五年级上',
@@ -568,9 +630,9 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   // ── 空白 vs 已答（单一真相源治本，前端落地）───────────────────────
   it('识题回收作答预填：已答题预填 student_answer，空白题留空', async () => {
     mockJobRecognition([
-        { question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' },
-        { question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' },
-      ])
+      { question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' },
+      { question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' },
+    ])
     const w = render()
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
@@ -584,7 +646,9 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('空白题走「求解」端点（不填答案、不触发批改）', async () => {
-    mockJobRecognition([{ question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' }])
+    mockJobRecognition([
+      { question: '2x+15=43', knowledge_points: ['一元一次方程'], student_answer: '' },
+    ])
     h.solveSpy.mockResolvedValue({
       solution: '解：x=14',
       verdict: 'agree',
@@ -620,7 +684,9 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('已答题：填了作答 → 批改按钮可点，走 grade 而非 solve', async () => {
-    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' }])
+    mockJobRecognition([
+      { question: '3.8×3=?', knowledge_points: ['小数乘法'], student_answer: '10.4' },
+    ])
     h.gradeSpy.mockResolvedValue({
       solution: '11.4',
       verdict: 'disagree',
@@ -647,5 +713,30 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(h.gradeSpy).toHaveBeenCalledTimes(1)
     expect(h.solveSpy).not.toHaveBeenCalled()
     expect(h.gradeSpy.mock.calls[0]![0].student_answer).toBe('10.4')
+  })
+
+  it('整卷 Job 已确认返回 409 时不得绕过版本状态机回退逐题 grade', async () => {
+    mockJobRecognition([
+      {
+        question: '3.8×3=?',
+        knowledge_points: ['小数乘法'],
+        student_answer: '10.4',
+        answer_state: 'present',
+      },
+    ])
+    h.confirmJobSpy.mockRejectedValue(new Error('409：completed Job 不可再次确认'))
+    h.gradeSpy.mockResolvedValue({ solution: '11.4', verdict: 'disagree' })
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+    await chooseSubject(w)
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await w.find('[data-testid="recognize-grade-all"]').trigger('click')
+    await flushPromises()
+
+    expect(h.confirmJobSpy).toHaveBeenCalledOnce()
+    expect(h.gradeSpy).not.toHaveBeenCalled()
+    expect(w.text()).toContain('completed Job 不可再次确认')
   })
 })

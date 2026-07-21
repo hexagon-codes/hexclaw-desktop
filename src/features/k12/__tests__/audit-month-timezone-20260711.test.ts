@@ -7,7 +7,7 @@
  * 该数字借错题/积累记录活跃近似伪造辅导次数，属零容忍风险。
  *
  * 反向契约：①学情面板任何位置不出现「本月辅导」文案；②首瓷片为 §5.7 合法
- * 指标「证据已掌握」（report.trend.mastered）；③面板不请求 /study-time
+ * 指标只来自证据链；③面板不请求 /study-time
  * （api mock 未提供 k12StudyTime，若组件仍调用会直接抛错红掉）。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -21,32 +21,45 @@ import K12InsightPanel from '../views/K12InsightPanel.vue'
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(), k12PrepCard: vi.fn(), k12Grade: vi.fn(),
-  k12ColdStart: vi.fn(), k12ReviewRetry: vi.fn(),
+  k12MarkMastered: vi.fn(),
+  k12PrepCard: vi.fn(),
+  k12Grade: vi.fn(),
+  k12ColdStart: vi.fn(),
+  k12ReviewRetry: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { total: 14, mastered: 6, reviewing: 4, retried: 1, archived: 0 },
-    weak_top3: [], month_new_mistakes: 3, review_completion_rate: 0.5,
-    consecutive_fail_kps: [], suggestion: '',
+    weak_top3: [],
+    month_new_mistakes: 3,
+    review_completion_rate: 0.5,
+    consecutive_fail_kps: [],
+    suggestion: '',
   }),
   // 反向契约：不提供 k12StudyTime——组件若仍引用该 API 会在此红掉
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
-  k12MistakeSheet: vi.fn(), k12ExportMd: vi.fn(), k12Backup: vi.fn(), k12Restore: vi.fn(),
+  k12MistakeSheet: vi.fn(),
+  k12ExportMd: vi.fn(),
+  k12Backup: vi.fn(),
+  k12Restore: vi.fn(),
   k12AddAccumulation: vi.fn(),
 }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
 
 describe('反向契约 · 学情不展示辅导次数（《明确不做》#6）', () => {
-  beforeEach(() => { document.body.innerHTML = '' })
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
 
-  it('★面板不出现「本月辅导」，首瓷片=证据已掌握（trend.mastered）', async () => {
+  it('★面板不出现「本月辅导」，原型前两瓷片=本学期错题 + 证据已掌握', async () => {
     setActivePinia(createPinia())
     const w = mount(K12InsightPanel, {
       props: { agentId: 'k12-x', agentName: '小明', grade: '五年级上' },
@@ -57,7 +70,9 @@ describe('反向契约 · 学情不展示辅导次数（《明确不做》#6）'
     expect(w.text()).not.toContain('学习时长')
     const tiles = w.findAll('.k12ins__tile')
     expect(tiles.length, 'mini-grid 仍 4 块').toBe(4)
-    expect(tiles[0]!.text()).toContain('6 条')
-    expect(tiles[0]!.text()).toContain('证据已掌握')
+    expect(tiles[0]!.text()).toContain('14条')
+    expect(tiles[0]!.text()).toContain('本学期错题')
+    expect(tiles[1]!.text()).toContain('6条')
+    expect(tiles[1]!.text()).toContain('证据已掌握')
   })
 })

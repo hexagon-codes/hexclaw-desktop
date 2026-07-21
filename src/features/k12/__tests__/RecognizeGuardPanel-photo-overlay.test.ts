@@ -66,16 +66,31 @@ async function chooseSubject(w: ReturnType<typeof render>, subject = '数学') {
 
 function jobDTO(stage = 'awaiting_confirmation') {
   return {
-    job_id: 'job-1', submission_id: 'photo-x', stage,
-    confirmation_state: 'pending', anchor_state: 'located', deadline: 0,
-    idempotency_key: 'desktop|k|v0', confirmed_version: 0,
-    attempt_count: 0, retryable: false, version: 1, created_at: 0, updated_at: 0,
+    job_id: 'job-1',
+    submission_id: 'photo-x',
+    stage,
+    confirmation_state: 'pending',
+    anchor_state: 'located',
+    deadline: 0,
+    idempotency_key: 'desktop|k|v0',
+    confirmed_version: 0,
+    attempt_count: 0,
+    retryable: false,
+    version: 1,
+    created_at: 0,
+    updated_at: 0,
   }
 }
 function jobStatus(stage: string, extra: Record<string, unknown> = {}) {
   return {
-    job_id: 'job-1', stage, confirmation_state: 'pending', anchor_state: 'located',
-    deadline: 0, confirmed_version: 0, job: jobDTO(stage), ...extra,
+    job_id: 'job-1',
+    stage,
+    confirmation_state: 'pending',
+    anchor_state: 'located',
+    deadline: 0,
+    confirmed_version: 0,
+    job: jobDTO(stage),
+    ...extra,
   }
 }
 /** 停点识别产物（含/不含 bbox）；anchorState=degraded 时界面按无坐标降级提示。 */
@@ -217,7 +232,7 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
 
     // 识别事实立即可核对，定位分支仍在后台独立推进。
     expect(w.findAll('[data-testid="rq-item"]')).toHaveLength(1)
-    expect(w.find('[data-testid="recognize-anchor-status"]').text()).toContain('正在后台定位')
+    expect(w.find('[data-testid="recognize-anchor-branch"]').text()).toContain('正在定位原图题目')
 
     settleAnchor(
       jobStatus('awaiting_confirmation', {
@@ -239,7 +254,7 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     )
     await flushPromises()
 
-    expect(w.find('[data-testid="recognize-anchor-status"]').exists()).toBe(false)
+    expect(w.find('[data-testid="recognize-anchor-branch"]').text()).toContain('原图题目已定位')
     expect(w.text()).toContain('8×7=')
     expect(w.text()).not.toContain('不得覆盖题干')
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
@@ -313,7 +328,10 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     await flushPromises()
 
     // 锚点 degraded → 界面提示按无坐标文字降级（§4.9），批改流程不被阻塞。
-    expect(w.find('[data-testid="recognize-anchor-status"]').exists()).toBe(true)
+    const anchorBranch = w.find('[data-testid="recognize-anchor-branch"]')
+    expect(anchorBranch.exists()).toBe(true)
+    expect(anchorBranch.classes()).toContain('is-degraded')
+    expect(anchorBranch.text()).toContain('定位超时 · 已转文字批改')
     await chooseSubject(w, '语文')
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
     await flushPromises()
@@ -382,17 +400,26 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
         question: questions[0],
         status: 'correct',
         grade: {
-          solution: '8', verdict: 'agree', evidence_type: 'numeric_exec',
-          badge: 'verified-strong', out_of_scope: false, record_created: false,
+          solution: '8',
+          verdict: 'agree',
+          evidence_type: 'numeric_exec',
+          badge: 'verified-strong',
+          out_of_scope: false,
+          record_created: false,
         },
       },
       {
         question: questions[1],
         status: 'wrong',
         grade: {
-          solution: '0.1', verdict: 'disagree', evidence_type: 'numeric_exec',
-          badge: 'disagree', error_cause: '小数点位置错误', out_of_scope: false,
-          record_created: true, record_id: 'r-batch-1',
+          solution: '0.1',
+          verdict: 'disagree',
+          evidence_type: 'numeric_exec',
+          badge: 'disagree',
+          error_cause: '小数点位置错误',
+          out_of_scope: false,
+          record_created: true,
+          record_id: 'r-batch-1',
         },
       },
     ])
@@ -517,9 +544,7 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     await w.find('[data-testid="recognize-solve-all"]').trigger('click')
     await flushPromises()
     expect(h.solveSpy).toHaveBeenCalledOnce()
-    expect(
-      (h.solveSpy.mock.calls[0]![0] as { problem: string }).problem,
-    ).toContain('真正空白')
+    expect((h.solveSpy.mock.calls[0]![0] as { problem: string }).problem).toContain('真正空白')
   })
 
   it('识别失败可重试：同图重跑命中 failed_retryable Job 时自动走 retry 端点续跑', async () => {

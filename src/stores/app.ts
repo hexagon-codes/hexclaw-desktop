@@ -91,6 +91,10 @@ const setup = () => {
     detailPanelOpen.value = !detailPanelOpen.value
   }
 
+  function setDetailPanelOpen(open: boolean) {
+    detailPanelOpen.value = open
+  }
+
   return {
     sidecarReady,
     sidecarStatus,
@@ -103,6 +107,7 @@ const setup = () => {
     restartSidecar,
     toggleSidebar,
     toggleDetailPanel,
+    setDetailPanelOpen,
   }
 }
 

@@ -9,6 +9,11 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { k12ListPracticeSets } from '@/api/k12'
 import { useK12Store } from '../store'
+import type {
+  K12MistakeStatusFilter,
+  K12RecordsNavigation,
+  K12RecordsTarget,
+} from '../records-navigation'
 
 const props = defineProps<{
   agentId: string
@@ -16,180 +21,476 @@ const props = defineProps<{
   grade?: string
 }>()
 const emit = defineEmits<{
-  /** 学情=路由器（§3.11）：瓷片/薄弱条/挫败 CTA 点击 → 外层切学习档案。
-   *  子 Tab 直达：RecordsView 归另一 agent，本轮外层只切到 records 首页，target 已透传供该 owner 接线。 */
-  (e: 'navigate', target: 'week' | 'mistakes' | 'practiceSets'): void
+  /** 学情=路由器（§3.11）：精确携带对象/学科/状态，非目标维度显式清为全部。 */
+  (e: 'navigate', navigation: K12RecordsNavigation): void
 }>()
 const { t } = useI18n()
 const store = useK12Store()
+const loading = ref(false)
+let reloadRequest = 0
 
 // AP-027 IME 守卫：这些是 role="button" 键盘激活出口，组字中的回车（isComposing）不应触发跳转。
-const onNavKey = (e: KeyboardEvent, target: 'week' | 'mistakes' | 'practiceSets') => {
-  if (e.isComposing || e.keyCode === 229) return
-  emit('navigate', target)
+function navigation(
+  target: K12RecordsTarget,
+  subject = '',
+  status: K12MistakeStatusFilter = 'all',
+): K12RecordsNavigation {
+  return { target, subject, status }
 }
 
-// 练习集待打印数（原型 2617 第四瓷片）：draft 篮 items 求和，自拉不进 store（练习集面板归另一 agent）。
+const onNavKey = (e: KeyboardEvent, destination: K12RecordsNavigation) => {
+  if (e.isComposing || e.keyCode === 229) return
+  emit('navigate', destination)
+}
+
+// 练习集待打印数（app.html:2354 第四瓷片）：draft 篮 items 求和，自拉不进 store（练习集面板归另一 agent）。
 const practicePending = ref<number | null>(null)
-async function loadPracticePending() {
+async function loadPracticePending(agentId: string, request: number) {
   try {
-    const resp = await k12ListPracticeSets(props.agentId, 'draft')
-    practicePending.value = (resp.items ?? []).reduce((sum, s) => sum + (s.items?.length ?? 0), 0)
+    const resp = await k12ListPracticeSets(agentId, 'draft')
+    if (request === reloadRequest) {
+      practicePending.value = (resp.items ?? []).reduce((sum, s) => sum + (s.items?.length ?? 0), 0)
+    }
   } catch {
-    practicePending.value = null // 拉取失败显示「—」，不编数
+    if (request === reloadRequest) practicePending.value = null // 拉取失败显示「—」，不编数
   }
 }
 
 async function reload() {
-  if (!props.agentId) return
+  const agentId = props.agentId
+  const request = ++reloadRequest
+  practicePending.value = null
+  if (!agentId) {
+    loading.value = false
+    return
+  }
+  loading.value = true
   await Promise.all([
-    store.loadReport(props.agentId),
-    store.loadMistakes(props.agentId), // 学期分科计数依赖错题 subject
-    loadPracticePending(),
+    store.loadReport(agentId),
+    store.loadMistakes(agentId),
+    loadPracticePending(agentId, request),
   ])
+  if (request === reloadRequest) loading.value = false
 }
 onMounted(reload)
 watch(() => props.agentId, reload)
 
 const report = computed(() => store.report)
+const weekPending = computed(() => store.mistakeView?.reviewQueue?.length ?? null)
+const errorMessage = computed(() =>
+  [store.reportError, store.mistakesError].filter(Boolean).join('；'),
+)
+const hasInsightData = computed(() =>
+  Boolean(
+    report.value &&
+    (report.value.trend.total > 0 ||
+      report.value.weak_top3.length > 0 ||
+      (report.value.consecutive_fail_kps?.length ?? 0) > 0 ||
+      (weekPending.value ?? 0) > 0 ||
+      (practicePending.value ?? 0) > 0),
+  ),
+)
 
-// 学期分科计数：仅当 mistakes 下发 subject 时渲染（不编造）。
-const SUBJECT_ORDER = ['数学', '语文', '英语', '科学', '信息科技']
-const subjectCounts = computed(() => {
-  const byName = new Map<string, number>()
-  for (const it of store.mistakeView?.items ?? []) {
-    const subj = typeof it.fields?.subject === 'string' ? it.fields.subject : ''
-    if (subj) byName.set(subj, (byName.get(subj) ?? 0) + 1)
+// insight-report 的 weak_top3 只含知识点；学科从同一错题事实集回投。
+// 同名知识点若跨学科冲突则不猜测，降级为“全部学科”。
+const weakSubjectByKnowledgePoint = computed(() => {
+  const subjects = new Map<string, Set<string>>()
+  for (const item of store.mistakeView?.items ?? []) {
+    const subject = String(item.fields.subject ?? '').trim()
+    if (!subject) continue
+    const chip = String(item.fields.knowledge_point ?? '').trim()
+    const prefix = `${subject}·`
+    const knowledgePoint = chip.startsWith(prefix) ? chip.slice(prefix.length) : chip
+    if (!knowledgePoint) continue
+    const values = subjects.get(knowledgePoint) ?? new Set<string>()
+    values.add(subject)
+    subjects.set(knowledgePoint, values)
   }
-  return SUBJECT_ORDER.filter((n) => byName.has(n)).map((n) => `${n} ${byName.get(n)}`)
-})
-
-// 复习完成率：-1 哨兵（分母为 0）→ 显示「—」
-const reviewRateDisplay = computed(() => {
-  const r = report.value?.review_completion_rate
-  return r == null || r < 0 ? '—' : `${Math.round(r * 100)}%`
+  return new Map(
+    [...subjects].map(([knowledgePoint, values]) => [
+      knowledgePoint,
+      values.size === 1 ? [...values][0]! : '',
+    ]),
+  )
 })
 
 // 薄弱知识点 TOP3 归一化为百分比宽度
 const weakBars = computed(() => {
   const list = report.value?.weak_top3 ?? []
-  const max = Math.max(1, ...list.map((w) => w.count))
-  return list.map((w) => ({ name: w.knowledge_point, count: w.count, pct: Math.round((w.count / max) * 100) }))
+  // 原型 5/6→83%、3/6→50%、1/6→17%：分母与「本周待复习」同一事实源。
+  // 队列为空/不可用时才退回 TOP3 最大值，并钳到 100%，不让异常数据撑破轨道。
+  const weekCount = weekPending.value ?? 0
+  const denominator = weekCount > 0 ? weekCount : Math.max(1, ...list.map((w) => w.count))
+  return list.map((w) => ({
+    name: w.knowledge_point,
+    count: w.count,
+    pct: Math.min(100, Math.round((w.count / denominator) * 100)),
+    subject: weakSubjectByKnowledgePoint.value.get(w.knowledge_point) ?? '',
+  }))
 })
 </script>
 
 <template>
   <section class="k12ins" data-testid="insight-panel">
     <div class="k12ins__head">
-      <!-- 原型 2613：「学情报告·每月1日自动生成」→「{grade}学习概览 · 从真实批改与复练证据生成」 -->
-      <h3 class="k12ins__h" style="margin: 0" data-testid="insight-title">
+      <!-- app.html:2352：「{grade}学习概览 · 从真实批改与复练证据生成」 -->
+      <h2 class="k12ins__h" style="margin: 0" data-testid="insight-title">
         {{ grade ? t('k12.report.titleWithGrade', { grade }) : t('k12.report.title') }}
-      </h3>
+      </h2>
       <span class="k12ins__hint" style="margin: 0">{{ t('k12.report.monthlyNote') }}</span>
     </div>
     <div
-      v-if="store.reportError || store.mistakesError"
-      class="k12ins__error"
-      role="alert"
-      data-testid="insight-error"
+      v-if="loading"
+      class="k12ins__state"
+      role="status"
+      aria-live="polite"
+      data-testid="insight-loading"
     >
-      <span>{{ [store.reportError, store.mistakesError].filter(Boolean).join('；') }}</span>
+      {{ t('k12.report.loading') }}
+    </div>
+    <div v-else-if="errorMessage" class="k12ins__error" role="alert" data-testid="insight-error">
+      <span>{{ errorMessage }}</span>
       <button data-testid="insight-retry" @click="reload">{{ t('common.retry') }}</button>
     </div>
-    <template v-if="report && report.trend.total">
-      <!-- 瓷片=路由器（§3.11）：除首块「证据已掌握」（§5.7 合法口径，替代已退役的辅导次数）外均可点跳学习档案 -->
-      <div class="k12ins__tiles">
-        <div class="k12ins__tile" data-testid="insight-tile-mastered"><b>{{ report.trend.mastered }} 条</b>{{ t('k12.report.tiles.mastered') }}</div>
+    <template v-else-if="report && hasInsightData">
+      <!-- 原型 app.html:2354：四块均是档案路由器，数字与单位分层。 -->
+      <div class="k12ins__tiles" style="margin-top: 12px">
         <div
-          class="k12ins__tile k12ins__tile--nav" role="button" tabindex="0" data-testid="insight-tile-mistakes"
-          @click="emit('navigate', 'mistakes')" @keydown.enter="onNavKey($event, 'mistakes')"
-        ><b>{{ report.month_new_mistakes }}</b>{{ t('k12.report.tiles.newMistakes') }}</div>
-        <div
-          class="k12ins__tile k12ins__tile--nav" role="button" tabindex="0" data-testid="insight-tile-week"
-          @click="emit('navigate', 'week')" @keydown.enter="onNavKey($event, 'week')"
-        ><b>{{ reviewRateDisplay }}</b>{{ t('k12.report.tiles.reviewRate') }}</div>
-        <!-- 原型 2617 第四瓷片：练习集「待打印 N 道」（§4.11 术语裁决表述；已掌握·待复习并进下方学期汇总行） -->
-        <div
-          class="k12ins__tile k12ins__tile--nav" role="button" tabindex="0" data-testid="insight-tile-practice"
-          @click="emit('navigate', 'practiceSets')" @keydown.enter="onNavKey($event, 'practiceSets')"
-        ><b>{{ practicePending != null ? `${practicePending} 道` : '—' }}</b>{{ t('k12.report.tiles.practicePending') }}</div>
-      </div>
-      <p class="k12ins__hint" data-testid="k12-semester-note" style="margin-top: 8px">
-        {{ t('k12.report.semesterTotal', { n: report.trend.total }) }}<template v-if="subjectCounts.length">（{{ subjectCounts.join(' · ') }}）</template> · {{ t('k12.report.semesterStatus', { m: report.trend.mastered, r: report.trend.reviewing, d: report.trend.retried }) }}
-      </p>
-      <h3 class="k12ins__h">{{ t('k12.report.weakTop3') }}</h3>
-      <!-- 薄弱条可点 → 全部错题（路由器出口；子 Tab 直达见 navigate 事件注释） -->
-      <div class="k12ins__bars">
-        <div
-          v-for="w in weakBars" :key="w.name" class="k12ins__bar k12ins__bar--nav"
-          role="button" tabindex="0" data-testid="insight-weak-bar"
-          @click="emit('navigate', 'mistakes')" @keydown.enter="onNavKey($event, 'mistakes')"
+          class="k12ins__tile"
+          role="button"
+          tabindex="0"
+          data-testid="insight-tile-semester"
+          @click="emit('navigate', navigation('mistakes'))"
+          @keydown.enter="onNavKey($event, navigation('mistakes'))"
         >
-          <span class="k12ins__barlabel">{{ w.name }}</span>
-          <span class="k12ins__rail"><span class="k12ins__fill" :style="{ width: w.pct + '%' }" /></span>
-          <b>{{ w.count }}</b>
+          <b
+            ><span>{{ report.trend.total }}</span
+            ><em>{{ t('k12.report.unitItems') }}</em></b
+          >{{ t('k12.report.tiles.semesterMistakes') }}
+        </div>
+        <div
+          class="k12ins__tile"
+          role="button"
+          tabindex="0"
+          data-testid="insight-tile-mastered"
+          @click="emit('navigate', navigation('mistakes', '', 'mastered'))"
+          @keydown.enter="onNavKey($event, navigation('mistakes', '', 'mastered'))"
+        >
+          <b
+            ><span>{{ report.trend.mastered }}</span
+            ><em>{{ t('k12.report.unitItems') }}</em></b
+          >{{ t('k12.report.tiles.mastered') }}
+        </div>
+        <div
+          class="k12ins__tile"
+          role="button"
+          tabindex="0"
+          data-testid="insight-tile-week"
+          @click="emit('navigate', navigation('week'))"
+          @keydown.enter="onNavKey($event, navigation('week'))"
+        >
+          <b
+            ><span>{{ weekPending ?? '—' }}</span
+            ><em v-if="weekPending != null">{{ t('k12.report.unitItems') }}</em></b
+          >{{ t('k12.report.tiles.weekPending') }}
+        </div>
+        <div
+          class="k12ins__tile"
+          role="button"
+          tabindex="0"
+          data-testid="insight-tile-practice"
+          @click="emit('navigate', navigation('practiceSets'))"
+          @keydown.enter="onNavKey($event, navigation('practiceSets'))"
+        >
+          <b
+            ><span>{{ practicePending ?? '—' }}</span
+            ><em v-if="practicePending != null">{{ t('k12.report.unitQuestions') }}</em></b
+          >{{ t('k12.report.tiles.practicePending') }}
         </div>
       </div>
-      <div v-if="report.consecutive_fail_kps && report.consecutive_fail_kps.length" class="k12ins__alert">
-        <b>⚠ {{ t('k12.report.consecutiveFail') }}</b> · {{ report.consecutive_fail_kps.join('、') }}
-        <button class="k12ins__cta" data-testid="insight-fail-cta" @click="emit('navigate', 'week')">
+      <template v-if="weakBars.length">
+        <div class="k12ins__section" style="margin-top: 16px">
+          <h3 data-testid="insight-priority-title">{{ t('k12.report.priorityTitle') }}</h3>
+          <span class="k12ins__hint" data-testid="insight-priority-note">{{
+            t('k12.report.priorityNote')
+          }}</span>
+        </div>
+        <div class="k12ins__priority" data-testid="insight-priority-card" style="margin-top: 8px">
+          <div
+            v-for="w in weakBars"
+            :key="w.name"
+            class="k12ins__bar"
+            role="button"
+            tabindex="0"
+            data-testid="insight-weak-bar"
+            @click="emit('navigate', navigation('mistakes', w.subject))"
+            @keydown.enter="onNavKey($event, navigation('mistakes', w.subject))"
+          >
+            <span class="k12ins__barlabel">{{ w.name }}</span>
+            <span class="k12ins__rail"
+              ><span class="k12ins__fill" :style="{ width: w.pct + '%' }"
+            /></span>
+            <b>{{ w.count }}</b>
+          </div>
+        </div>
+      </template>
+      <div
+        v-if="report.consecutive_fail_kps?.length"
+        class="k12ins__notice k12ins__notice--accent k12ins__action"
+        data-testid="insight-setback-action"
+        style="margin-top: 14px"
+      >
+        <div>
+          <b>{{
+            t('k12.report.consecutiveFail', { topics: report.consecutive_fail_kps.join('、') })
+          }}</b>
+          <template v-if="report.suggestion"><br />{{ report.suggestion }}</template>
+        </div>
+        <button
+          class="k12ins__button"
+          data-testid="insight-fail-cta"
+          @click="emit('navigate', navigation('week'))"
+        >
           {{ t('k12.report.goWeek') }}
         </button>
       </div>
-      <div v-if="report.suggestion" class="k12ins__sugg">💡 {{ report.suggestion }}</div>
+      <div
+        v-if="practicePending != null && practicePending > 0"
+        class="k12ins__notice k12ins__action"
+        data-testid="insight-week-action"
+        style="margin-top: 10px"
+      >
+        <div>
+          <b>{{ t('k12.report.weekActionTitle') }}</b
+          ><br />
+          {{ t('k12.report.weekActionBody', { n: practicePending }) }}
+        </div>
+        <button
+          class="k12ins__button"
+          data-testid="insight-print-cta"
+          @click="emit('navigate', navigation('practiceSets'))"
+        >
+          {{ t('k12.report.goPrint') }}
+        </button>
+      </div>
     </template>
-    <p v-else-if="!store.reportError" class="k12ins__hint">{{ report?.suggestion || t('k12.report.empty') }}</p>
+    <div v-else class="k12ins__state" data-testid="insight-empty">
+      {{ t('k12.report.empty') }}
+    </div>
   </section>
 </template>
 
 <style scoped>
-.k12ins { padding: 14px 18px 40px; max-width: 720px; }
-.k12ins__head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-.k12ins__h { font-size: 14px; color: var(--hc-text-primary); margin: 16px 0 8px; }
-.k12ins__hint { color: var(--hc-text-muted); font-size: 11.5px; line-height: 1.6; }
+.k12ins {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 26px 48px;
+}
+.k12ins__head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 18px 2px 10px;
+}
+.k12ins__h {
+  font-size: 15px;
+  color: var(--hc-text-primary);
+  margin: 16px 0 8px;
+}
+.k12ins__hint {
+  color: var(--hc-text-muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+.k12ins__state {
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  padding: 11px 13px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--hc-text-secondary);
+}
 .k12ins__error {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin-bottom: 12px; padding: 9px 11px; border-radius: var(--hc-radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 13px;
+  border-radius: 12px;
   background: color-mix(in srgb, var(--hc-error) 8%, transparent);
-  color: var(--hc-error); font-size: 12px;
+  border: 0.5px solid var(--hc-border);
+  color: var(--hc-error);
+  font-size: 12.5px;
 }
 .k12ins__error button {
-  flex-shrink: 0; border: 1px solid currentColor; border-radius: var(--hc-radius-sm);
-  background: transparent; color: inherit; padding: 4px 10px; cursor: pointer;
+  flex-shrink: 0;
+  border: 0.5px solid currentColor;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  padding: 6px 12px;
+  cursor: pointer;
 }
-.k12ins__tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+.k12ins__tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+}
 .k12ins__tile {
-  border: .5px solid var(--hc-border); border-radius: var(--hc-radius-lg); background: var(--hc-bg-card);
-  box-shadow: var(--hc-shadow-sm); padding: 13px 15px; font-size: 11.5px; color: var(--hc-text-secondary);
+  cursor: pointer;
+  border: 0.5px solid transparent;
+  border-radius: 14px;
+  background: var(--hc-bg-card);
+  box-shadow: var(--hc-shadow-sm);
+  padding: 14px 16px;
+  font-size: 12px;
+  color: var(--hc-text-secondary);
+  transition:
+    border-color 0.15s var(--hc-ease-out),
+    box-shadow 0.2s var(--hc-ease-out),
+    transform 0.15s var(--hc-ease-out);
+}
+.k12ins__tile:hover {
+  border-color: var(--hc-border-hl);
+  box-shadow: var(--hc-shadow-md);
+  transform: translateY(-1px);
 }
 .k12ins__tile b {
-  display: block; font-size: 21px; font-weight: 700; letter-spacing: -.02em;
-  color: var(--hc-text-primary); margin-bottom: 3px; font-variant-numeric: tabular-nums;
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--hc-text-primary);
+  margin-bottom: 3px;
+  font-variant-numeric: tabular-nums;
 }
-.k12ins__tile--nav { cursor: pointer; transition: border-color .15s, box-shadow .15s, background .15s; }
-.k12ins__tile--nav:hover { border-color: var(--hc-accent); background: var(--hc-bg-hover); box-shadow: var(--hc-shadow-md, var(--hc-shadow-sm)); }
-.k12ins__bar--nav { cursor: pointer; border-radius: var(--hc-radius-md); padding: 2px 4px; margin: -2px -4px; transition: background .15s; }
-.k12ins__bar--nav:hover { background: var(--hc-bg-hover); }
-.k12ins__cta {
-  display: block; margin-top: 7px; font: inherit; font-size: 11.5px; font-weight: 550;
-  border: .5px solid var(--hc-border); border-radius: var(--hc-radius-md); background: transparent;
-  color: var(--hc-accent); padding: 4px 10px; cursor: pointer;
+.k12ins__tile b em {
+  margin-left: 3px;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 600;
 }
-.k12ins__cta:hover { background: var(--hc-bg-hover); }
-.k12ins__bars { display: grid; gap: 7px; max-width: 560px; }
-.k12ins__bar { display: flex; align-items: center; gap: 9px; font-size: 12px; }
-.k12ins__barlabel { width: 84px; flex-shrink: 0; color: var(--hc-text-secondary); }
-.k12ins__rail { flex: 1; height: 8px; border-radius: 999px; background: var(--hc-bg-input); overflow: hidden; }
-.k12ins__fill { display: block; height: 100%; border-radius: 999px; background: var(--hc-accent); }
-.k12ins__alert {
-  margin-top: 12px; padding: 10px 13px; border: .5px solid var(--hc-border); border-left: none;
-  border-radius: var(--hc-radius-md); background: var(--hc-bg-card); font-size: 12px; color: var(--hc-text-secondary);
-  position: relative; padding-left: 17px;
+.k12ins__section {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 18px 2px 10px;
 }
-.k12ins__alert::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 3px; border-radius: 2px; background: var(--hc-warning, #e69500); }
-.k12ins__alert b { color: var(--hc-text-primary); }
-.k12ins__sugg {
-  margin-top: 10px; padding: 10px 13px; border: .5px solid var(--hc-border); border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card); font-size: 12px; color: var(--hc-text-secondary); line-height: 1.6;
+.k12ins__section h3 {
+  margin: 0;
+  color: var(--hc-text-primary);
+  font-size: 13px;
+}
+.k12ins__priority {
+  max-width: 640px;
+  padding: 6px 8px;
+  border-radius: 14px;
+  background: var(--hc-bg-card);
+  box-shadow: var(--hc-shadow-sm);
+}
+.k12ins__bar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 9px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background 0.15s var(--hc-ease-out);
+}
+.k12ins__bar:hover {
+  background: var(--hc-bg-hover);
+}
+.k12ins__barlabel {
+  width: 76px;
+  flex-shrink: 0;
+  color: var(--hc-text-secondary);
+}
+.k12ins__rail {
+  flex: 1;
+  height: 9px;
+  border-radius: 99px;
+  background: var(--hc-bg-input);
+  overflow: hidden;
+}
+.k12ins__fill {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--hc-accent);
+}
+.k12ins__bar b {
+  width: 26px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.k12ins__notice {
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  padding: 11px 13px;
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
+  line-height: 1.55;
+}
+.k12ins__notice b {
+  color: var(--hc-text-primary);
+}
+.k12ins__notice--accent {
+  position: relative;
+  padding-left: 17px;
+}
+.k12ins__notice--accent::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 11px;
+  bottom: 11px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--hc-warning);
+}
+.k12ins__action {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.k12ins__action > div {
+  flex: 1;
+  min-width: 0;
+}
+.k12ins__button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  padding: 6px 8px;
+  border: 0.5px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.15s var(--hc-ease-out),
+    color 0.15s var(--hc-ease-out);
+}
+.k12ins__button:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+@media (max-width: 780px) {
+  .k12ins {
+    padding: 14px 16px 40px;
+  }
 }
 </style>

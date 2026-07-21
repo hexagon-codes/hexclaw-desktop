@@ -17,7 +17,13 @@ export const K12_VIEW_DESCRIPTOR: InstanceViewDescriptor = {
   // IA 定稿（PRD §1.5，2026-07-18 迁移）：顶栏三段「辅导｜学习档案｜学情」，学情=一等 Tab（kind: report）。
   headerTabs: [
     { id: 'chat', labelKey: 'k12.tabs.chat', kind: 'chat', icon: '💬' },
-    { id: 'records', labelKey: 'k12.tabs.records', kind: 'records', collection: MISTAKE_SCHEMA.collection, icon: '📚' },
+    {
+      id: 'records',
+      labelKey: 'k12.tabs.records',
+      kind: 'records',
+      collection: MISTAKE_SCHEMA.collection,
+      icon: '📚',
+    },
     { id: 'insights', labelKey: 'k12.tabs.insights', kind: 'report', icon: '📈' },
   ],
   messageBadges: ['verify', 'record-chip'],
@@ -25,20 +31,26 @@ export const K12_VIEW_DESCRIPTOR: InstanceViewDescriptor = {
   // 不在此静态硬编码 K12 chip（避免场景字面量进通用 composer · AP-1）。
   composer: {
     placeholderKey: 'k12.composer.placeholder',
+    hint: {
+      emphasisKey: 'k12.composer.formulaHintLead',
+      detailKey: 'k12.composer.formulaHintDetail',
+    },
   },
-  // 场景化空态：首屏引导家长进入辅导流，替代通用「选择一个智能体」（P0-20260708 P0-3）
-  emptyState: {
-    titleKey: 'k12.emptyState.title',
-    subtitleKey: 'k12.emptyState.subtitle',
-  },
+  // 权威原型 app.html 的 K12 辅导页没有额外空态卡；保持通用会话区，不注入原型外入口。
   recordCollections: [
-    { collection: MISTAKE_SCHEMA.collection, labelKey: 'k12.collections.mistakes', schemaVersion: MISTAKE_SCHEMA.schemaVersion },
-    { collection: ACCUMULATION_SCHEMA.collection, labelKey: 'k12.collections.accumulation', schemaVersion: ACCUMULATION_SCHEMA.schemaVersion },
+    {
+      collection: MISTAKE_SCHEMA.collection,
+      labelKey: 'k12.collections.mistakes',
+      schemaVersion: MISTAKE_SCHEMA.schemaVersion,
+    },
+    {
+      collection: ACCUMULATION_SCHEMA.collection,
+      labelKey: 'k12.collections.accumulation',
+      schemaVersion: ACCUMULATION_SCHEMA.schemaVersion,
+    },
   ],
   // 20260709：备课卡侧栏退役 → 辅导要点内联进识题流（RecognizeGuardPanel），故无 prep-card 侧栏/头部动作。
   sidePanels: [],
-  actions: [
-    { id: 'backup', labelKey: 'k12.actions.backup', placement: 'toolbar' },
-    { id: 'export', labelKey: 'k12.actions.export', placement: 'toolbar' },
-  ],
+  // 学习档案中的导出/备份入口由 RecordsView 唯一承载，不再保留未消费的重复动作声明。
+  actions: [],
 }

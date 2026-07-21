@@ -5,13 +5,20 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
+import recordsSource from '../views/K12RecordsView.vue?raw'
 
 const h = vi.hoisted(() => ({
   list: vi.fn().mockResolvedValue({
-    items: [{
-      record_id: 'a1', subject: '语文', entry_type: '好词好句',
-      content: '时间像海绵里的水，挤一挤总是有的', source: '课外阅读 · 主动收藏', status: '已积累',
-    }],
+    items: [
+      {
+        record_id: 'a1',
+        subject: '语文',
+        entry_type: '好词好句',
+        content: '时间像海绵里的水，挤一挤总是有的',
+        source: '课外阅读 · 主动收藏',
+        status: '已积累',
+      },
+    ],
   }),
 }))
 
@@ -21,10 +28,15 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { mastered: 0, reviewing: 0, retried: 0, archived: 0, total: 0 },
-    weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1,
-    consecutive_fail_kps: [], suggestion: '',
+    weak_top3: [],
+    month_new_mistakes: 0,
+    review_completion_rate: -1,
+    consecutive_fail_kps: [],
+    suggestion: '',
   }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: (...args: unknown[]) => h.list(...args),
   k12AddAccumulation: vi.fn(),
   k12ReviewRetry: vi.fn(),
@@ -33,7 +45,9 @@ vi.mock('@/api/k12', () => ({
 
 function render() {
   const i18n = createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
   return mount(K12RecordsView, {
@@ -51,7 +65,10 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
   it('使用原型单行字段顺序，不显示错题状态筛选，并把新增入口放在顶栏', async () => {
     const w = render()
     await flushPromises()
-    await w.findAll('.seg button').find((b) => b.text() === '积累')!.trigger('click')
+    await w
+      .findAll('.seg button')
+      .find((b) => b.text() === '积累')!
+      .trigger('click')
     await flushPromises()
 
     const section = w.find('[data-testid="accum-prototype"]')
@@ -72,8 +89,18 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
     // 本用例 mock 无 created_at → 无日期节点。
     const ordered = row.element.children
     expect([...ordered].map((el) => el.className)).toEqual([
-      'k12accum__title', 'k12accum__subject', 'k12accum__type',
-      'k12accum__source', 'k12accum__status k12accum__status--na', 'btn btn-ghost k12accum__detail',
+      'k12accum__title',
+      'k12accum__subject',
+      'k12accum__type',
+      'k12accum__source',
+      'k12accum__status k12accum__status--na',
+      'btn btn-ghost k12accum__detail',
     ])
+  })
+
+  it('列表行与新增表单行使用独立 class，表单 flex-wrap 不得污染归档列表', () => {
+    expect(recordsSource.match(/\.k12accum__row\s*\{/g)).toHaveLength(1)
+    expect(recordsSource).toContain('class="k12accum__form-row"')
+    expect(recordsSource).toMatch(/\.k12accum__form-row\s*\{[^}]*flex-wrap:\s*wrap;/s)
   })
 })

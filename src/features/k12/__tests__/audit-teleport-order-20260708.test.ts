@@ -18,20 +18,40 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: vi.fn(),
   k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(),
-  k12InsightReport: vi.fn().mockResolvedValue({ trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12InsightReport: vi.fn().mockResolvedValue({
+    trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
+    weak_top3: [],
+    month_new_mistakes: 0,
+    review_completion_rate: -1,
+    consecutive_fail_kps: null,
+    suggestion: '',
+  }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12GetViewDescriptor: vi.fn().mockResolvedValue({
-    header_tabs: ['辅导', '错题本'], message_badges: [], composer_placeholder: '',
-    composer_chips: ['🧮 数学讲解', '💡 渐进提示', '📷 识题校验'],
-    record_collections: [], side_panels: [], actions: [], i18n_keys: [], schema_version: 1,
+    header_tabs: ['辅导', '错题本'],
+    message_badges: [],
+    composer_placeholder: '',
+    composer_chips: ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验'],
+    record_collections: [],
+    side_panels: [],
+    actions: [],
+    i18n_keys: [],
+    schema_version: 1,
   }),
 }))
 const routeQuery = vi.hoisted(() => ({ q: {} as Record<string, string> }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery.q }) }))
 
 function i18n() {
-  return createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN } })
+  return createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
+  })
 }
 
 // 仿 ChatView 真实结构：增强组件在前，锚点 div 在后（同一父）。
@@ -41,8 +61,10 @@ const ChatViewLike = defineComponent({
     return () =>
       h('div', [
         h(K12ChatEnhancement, {
-          agentId: 'ming', agentName: '小明的辅导老师',
-          metadata: { 'k12.grade_term': '五年级上' }, descriptor: K12_VIEW_DESCRIPTOR,
+          agentId: 'ming',
+          agentName: '小明的辅导老师',
+          metadata: { 'k12.grade_term': '五年级上' },
+          descriptor: K12_VIEW_DESCRIPTOR,
           composerImage: 'data:image/png;base64,Zm9v',
           'onUpdate:recordsActive': () => {},
         }),
@@ -74,7 +96,10 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
   // BUG-20260709：composer chips 已放弃 Teleport 改数据流上交（update:composerChips → ChatInput
   // 盒内渲染），此处锁「chips 不再落任何锚点」防旧方案回潮。
   it('真实顺序下 defer Teleport：桥接到达锚点、chips 不再走 Teleport、无定位失败警告', async () => {
-    const w = mount(ChatViewLike, { global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } }, attachTo: document.body })
+    const w = mount(ChatViewLike, {
+      global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
+      attachTo: document.body,
+    })
     await flushPromises()
 
     const warnedTeleport = warnSpy.mock.calls.some((c: unknown[]) =>
@@ -86,7 +111,13 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
     const bridgeInFooter = !!footer?.querySelector('.k12enh-bridge')
     const recognizeInActions = !!actions?.querySelector('[data-testid="k12-recognize-toggle"]')
     const chipsInComposer = !!composerTop?.querySelector('[data-testid="k12-composer-chips"]')
-    console.info('[audit] warned=%s bridgeInFooter=%s recognizeInActions=%s chipsInComposer=%s', warnedTeleport, bridgeInFooter, recognizeInActions, chipsInComposer)
+    console.info(
+      '[audit] warned=%s bridgeInFooter=%s recognizeInActions=%s chipsInComposer=%s',
+      warnedTeleport,
+      bridgeInFooter,
+      recognizeInActions,
+      chipsInComposer,
+    )
 
     expect(warnedTeleport).toBe(false) // defer 后不再"定位失败"
     expect(bridgeInFooter).toBe(true) // 桥接条到达页脚锚点

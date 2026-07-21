@@ -24,6 +24,7 @@ import HcClearableField from '@/components/common/HcClearableField.vue'
 import { K12_SCENARIO_ID } from '../descriptor'
 
 const toast = useToast()
+const emit = defineEmits<{ contentChange: [hasContent: boolean] }>()
 
 const agents = ref<AgentConfig[]>([])
 const selectedAgentId = ref('')
@@ -56,6 +57,18 @@ const currentAgent = computed(() =>
 const currentLearnerId = computed(
   () => currentAgent.value?.metadata?.['k12.learner_id'] || currentAgent.value?.name || '',
 )
+const currentAgentLabel = computed(() => {
+  const agent = currentAgent.value
+  if (!agent) return selectedAgentId.value
+  return agent.display_name || agent.metadata?.['k12.child_name'] || agent.name
+})
+const currentAgentGrade = computed(() => {
+  const grade = currentAgent.value?.metadata?.['k12.grade_term']
+  return typeof grade === 'string' ? grade.trim() : ''
+})
+const currentBindingTarget = computed(() =>
+  [currentAgentLabel.value, currentAgentGrade.value].filter(Boolean).join(' · '),
+)
 
 const editorOpen = ref(false)
 const editorMode = ref<'create' | 'edit'>('create')
@@ -65,11 +78,16 @@ const formEvents = ref<K12WebhookEventType[]>(['k12.submission.requested.v1'])
 const formWorkflows = ref('')
 
 const secretResult = ref<{ title: string; name: string; secret: string } | null>(null)
+const rotateTarget = ref<K12WebhookBinding | null>(null)
 const historyName = ref('')
 const receipts = ref<K12WebhookReceipt[]>([])
 let historyTimer: ReturnType<typeof setTimeout> | undefined
 let bindingsRequestGeneration = 0
 let historyRequestGeneration = 0
+
+const historyBinding = computed(() =>
+  bindings.value.find((binding) => binding.name === historyName.value),
+)
 
 function isK12Agent(agent: AgentConfig): boolean {
   return agent.metadata?.scenario === K12_SCENARIO_ID
@@ -121,6 +139,7 @@ function onAgentChanged() {
   // Child switching is an ownership boundary: never leave another Tutor's
   // one-time secret or edit form visible in the newly selected scope.
   secretResult.value = null
+  rotateTarget.value = null
   editorOpen.value = false
   void loadBindings()
 }
@@ -220,13 +239,20 @@ async function toggleBinding(binding: K12WebhookBinding) {
   }
 }
 
-async function rotateSecret(binding: K12WebhookBinding) {
+function requestRotateSecret(binding: K12WebhookBinding) {
   if (busy.value) return
+  rotateTarget.value = binding
+}
+
+async function confirmRotateSecret() {
+  const binding = rotateTarget.value
+  if (!binding || busy.value) return
   const agentID = selectedAgentId.value
   busy.value = `rotate:${binding.name}`
   try {
     const result = await rotateK12WebhookSecret(binding.name, agentID)
     if (selectedAgentId.value === agentID) {
+      rotateTarget.value = null
       secretResult.value = { title: 'Secret 已轮换', name: binding.name, secret: result.secret }
     }
     await loadBindings()
@@ -257,10 +283,18 @@ function clearHistoryPoll() {
   historyTimer = undefined
 }
 
+function closeHistory() {
+  clearHistoryPoll()
+  historyRequestGeneration++
+  historyName.value = ''
+  receipts.value = []
+}
+
 async function loadHistory(binding: K12WebhookBinding) {
   clearHistoryPoll()
   const agentID = selectedAgentId.value
   const requestGeneration = ++historyRequestGeneration
+  if (historyName.value !== binding.name) receipts.value = []
   historyName.value = binding.name
   try {
     const result = await getK12WebhookReceipts(binding.name, agentID)
@@ -307,8 +341,13 @@ async function copy(value: string) {
   }
 }
 
-onMounted(() => void loadAgents())
+onMounted(() => {
+  // 本面板拥有绑定列表和 K12 专属空态；即使零绑定，也不能再叠加通用 Webhook 空态。
+  emit('contentChange', true)
+  void loadAgents()
+})
 onBeforeUnmount(() => {
+  emit('contentChange', false)
   bindingsRequestGeneration++
   historyRequestGeneration++
   clearHistoryPoll()
@@ -317,15 +356,17 @@ onBeforeUnmount(() => {
 
 <template>
   <section class="k12wh" data-testid="k12-webhook-panel">
-    <header class="k12wh__header">
-      <div>
-        <h3>K12 Webhook</h3>
-        <p>
-          绑定到指定孩子的辅导实例；服务端解析 owner，仅接受 HMAC、时间窗与 nonce 校验后的 direct
-          事件。
-        </p>
-      </div>
+    <header class="k12wh__toolbar">
+      <label class="k12wh__agent">
+        <span>孩子 / 辅导实例</span>
+        <select v-model="selectedAgentId" data-testid="k12-webhook-agent" @change="onAgentChanged">
+          <option v-for="agent in agents" :key="agent.name" :value="agent.name">
+            {{ agent.metadata?.['k12.child_name'] || agent.display_name }}
+          </option>
+        </select>
+      </label>
       <button
+        class="k12wh__button k12wh__button--primary"
         data-testid="k12-webhook-create-open"
         :disabled="!selectedAgentId"
         @click="openCreate"
@@ -333,15 +374,6 @@ onBeforeUnmount(() => {
         新建绑定
       </button>
     </header>
-
-    <label class="k12wh__agent">
-      <span>孩子 / 辅导实例</span>
-      <select v-model="selectedAgentId" data-testid="k12-webhook-agent" @change="onAgentChanged">
-        <option v-for="agent in agents" :key="agent.name" :value="agent.name">
-          {{ agent.metadata?.['k12.child_name'] || agent.display_name }}
-        </option>
-      </select>
-    </label>
 
     <p v-if="agents.length === 0 && !error" class="k12wh__empty">请先创建一个 K12 辅导实例。</p>
     <div v-if="error" class="k12wh__error" role="alert">
@@ -356,74 +388,160 @@ onBeforeUnmount(() => {
     <article
       v-for="binding in bindings"
       :key="binding.binding_id"
-      class="k12wh__card"
+      class="k12wh__card k12-webhook-card"
       :data-testid="`k12-webhook-row-${binding.name}`"
     >
-      <div class="k12wh__summary">
-        <div>
-          <strong>{{ binding.name }}</strong>
-          <span class="k12wh__badge">{{ binding.status }}</span>
-          <span class="k12wh__badge">仅直连</span>
-          <p>{{ webhookUrlFor(binding.name) }}</p>
-          <small
-            >Secret v{{ binding.secret_version }} · {{ binding.allowed_events.join(' · ') }}</small
-          >
+      <div class="k12wh__top">
+        <div class="k12wh__logo">K12</div>
+        <div class="k12wh__identity">
+          <div class="k12wh__name">K12 批改与回传事件</div>
+          <div class="k12wh__meta">绑定：{{ currentBindingTarget }}</div>
         </div>
-        <div class="k12wh__actions">
-          <button
-            :data-testid="`k12-webhook-toggle-${binding.name}`"
-            @click="toggleBinding(binding)"
-          >
-            {{ binding.status === 'enabled' ? '停用' : '启用' }}
-          </button>
-          <button :data-testid="`k12-webhook-edit-${binding.name}`" @click="openEdit(binding)">
-            编辑
-          </button>
-          <button
-            :data-testid="`k12-webhook-rotate-${binding.name}`"
-            @click="rotateSecret(binding)"
-          >
-            轮换 Secret
-          </button>
-          <button
-            :data-testid="`k12-webhook-history-${binding.name}`"
-            @click="loadHistory(binding)"
-          >
-            Receipt
-          </button>
-          <button
-            :data-testid="`k12-webhook-delete-${binding.name}`"
-            aria-label="删除"
-            @click="removeBinding(binding)"
-          >
-            <Trash2 :size="14" />
-          </button>
-        </div>
+        <span class="k12wh__spacer"></span>
+        <span
+          class="k12wh__status"
+          :class="{ 'k12wh__status--enabled': binding.status === 'enabled' }"
+          >{{ binding.status === 'enabled' ? '启用' : '未启用' }}</span
+        >
       </div>
-      <div v-if="historyName === binding.name" class="k12wh__history">
-        <div class="k12wh__history-title">
-          <strong>执行回执</strong>
-          <button aria-label="刷新 Receipt" @click="loadHistory(binding)">
-            <RefreshCw :size="13" />
-          </button>
-        </div>
-        <p v-if="receipts.length === 0">暂无 Receipt</p>
-        <div v-for="receipt in receipts" :key="receipt.receipt_id" class="k12wh__receipt">
-          <span>{{ receipt.status }}</span>
-          <code>{{
-            receipt.job_or_execution_ref || receipt.failure_kind || receipt.receipt_id
-          }}</code>
-          <button
-            v-if="receipt.status === 'failed' && receipt.retryable"
-            :data-testid="`k12-webhook-retry-receipt-${receipt.receipt_id}`"
-            :disabled="busy === `retry:${receipt.receipt_id}`"
-            @click="retryReceipt(binding, receipt)"
-          >
-            {{ busy === `retry:${receipt.receipt_id}` ? '重新派发中…' : '重新派发' }}
-          </button>
-        </div>
+
+      <div class="k12wh__resource k12wh__signature">
+        <b>签名</b>
+        <span class="k12wh__spacer"
+          >HMAC-SHA256 · Secret {{ binding.has_secret ? '已配置' : '未配置' }} · 重放窗口 5
+          分钟</span
+        >
+        <button
+          class="k12wh__button k12wh__button--ghost"
+          :data-testid="`k12-webhook-rotate-${binding.name}`"
+          :disabled="Boolean(busy)"
+          @click="requestRotateSecret(binding)"
+        >
+          轮换密钥
+        </button>
+      </div>
+
+      <div class="k12wh__events" aria-label="允许事件">
+        <code v-for="event in binding.allowed_events" :key="event" class="k12wh__event">{{
+          event
+        }}</code>
+      </div>
+
+      <div class="k12wh__facts">
+        <span>绑定名：{{ binding.name }}</span>
+        <span>Secret v{{ binding.secret_version }}</span>
+        <span>仅接受 direct 事件</span>
+      </div>
+
+      <div class="k12wh__actions">
+        <button
+          class="k12wh__button"
+          :data-testid="`k12-webhook-history-${binding.name}`"
+          @click="loadHistory(binding)"
+        >
+          事件与回执
+        </button>
+        <button
+          class="k12wh__button"
+          :data-testid="`k12-webhook-edit-${binding.name}`"
+          @click="openEdit(binding)"
+        >
+          编辑绑定
+        </button>
+        <button
+          class="k12wh__button k12wh__button--ghost"
+          :data-testid="`k12-webhook-toggle-${binding.name}`"
+          :disabled="Boolean(busy)"
+          @click="toggleBinding(binding)"
+        >
+          {{ binding.status === 'enabled' ? '暂停' : '启用' }}
+        </button>
+        <button
+          class="k12wh__button k12wh__button--ghost k12wh__delete"
+          :data-testid="`k12-webhook-delete-${binding.name}`"
+          :disabled="Boolean(busy)"
+          aria-label="删除"
+          title="删除"
+          @click="removeBinding(binding)"
+        >
+          <Trash2 :size="14" />
+        </button>
       </div>
     </article>
+
+    <div
+      v-if="historyBinding"
+      class="k12wh__modal"
+      data-testid="k12-webhook-history-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="k12-webhook-history-title"
+    >
+      <div class="k12wh__dialog">
+        <div class="k12wh__history-title">
+          <strong id="k12-webhook-history-title">K12 Webhook · 事件与回执</strong>
+          <span class="k12wh__history-tools">
+            <button aria-label="刷新 Receipt" @click="loadHistory(historyBinding)">
+              <RefreshCw :size="13" />
+            </button>
+            <button aria-label="关闭" @click="closeHistory"><X :size="16" /></button>
+          </span>
+        </div>
+        <div class="k12wh__notice">
+          <b>{{ currentBindingTarget }}</b> · 只接受绑定白名单内的 direct 事件；owner
+          由服务端绑定解析。
+        </div>
+        <div class="k12wh__history">
+          <p v-if="receipts.length === 0">暂无 Receipt</p>
+          <div v-for="receipt in receipts" :key="receipt.receipt_id" class="k12wh__receipt">
+            <span>{{ receipt.status }}</span>
+            <code>{{
+              receipt.job_or_execution_ref || receipt.failure_kind || receipt.receipt_id
+            }}</code>
+            <button
+              v-if="receipt.status === 'failed' && receipt.retryable"
+              :data-testid="`k12-webhook-retry-receipt-${receipt.receipt_id}`"
+              :disabled="busy === `retry:${receipt.receipt_id}`"
+              @click="retryReceipt(historyBinding, receipt)"
+            >
+              {{ busy === `retry:${receipt.receipt_id}` ? '重新派发中…' : '重新派发' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="rotateTarget"
+      class="k12wh__modal"
+      data-testid="k12-webhook-rotate-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="k12-webhook-rotate-title"
+    >
+      <div class="k12wh__dialog">
+        <header>
+          <strong id="k12-webhook-rotate-title">轮换 K12 Webhook 密钥</strong>
+          <button aria-label="关闭" @click="rotateTarget = null"><X :size="16" /></button>
+        </header>
+        <div class="k12wh__notice">
+          新密钥只在轮换完成后显示一次；当前后端会立即停用旧密钥，请先确认接收方可以同步更新。
+        </div>
+        <div class="k12wh__dialog-actions">
+          <button class="k12wh__button k12wh__button--ghost" @click="rotateTarget = null">
+            取消
+          </button>
+          <button
+            class="k12wh__button k12wh__button--primary"
+            data-testid="k12-webhook-rotate-confirm"
+            :disabled="busy.startsWith('rotate:')"
+            @click="confirmRotateSecret"
+          >
+            {{ busy.startsWith('rotate:') ? '轮换中…' : '确认轮换' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="editorOpen" class="k12wh__modal" role="dialog" aria-modal="true">
       <div class="k12wh__dialog">
@@ -502,8 +620,7 @@ onBeforeUnmount(() => {
   gap: 14px;
   color: var(--hc-text-primary);
 }
-.k12wh__header,
-.k12wh__summary,
+.k12wh__toolbar,
 .k12wh__history-title,
 .k12wh__dialog header,
 .k12wh__secret {
@@ -512,22 +629,53 @@ onBeforeUnmount(() => {
   gap: 12px;
   align-items: center;
 }
-.k12wh__header h3,
-.k12wh__header p,
-.k12wh__summary p {
-  margin: 0;
+.k12wh__toolbar {
+  align-items: end;
 }
-.k12wh__header p,
-.k12wh__summary p,
 .k12wh__empty,
 .k12wh__dialog p,
 small {
   color: var(--hc-text-muted);
   font-size: 12px;
 }
-.k12wh button,
+.k12wh button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.15s var(--hc-ease-out),
+    box-shadow 0.2s var(--hc-ease-out),
+    transform 0.12s var(--hc-ease-out),
+    border-color 0.15s var(--hc-ease-out);
+}
+.k12wh button:hover {
+  background: var(--hc-bg-hover);
+}
+.k12wh button:active {
+  transform: scale(0.97);
+}
+.k12wh button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+.k12wh button:disabled {
+  cursor: default;
+  opacity: 0.55;
+  transform: none;
+  box-shadow: none;
+}
 .k12wh select,
-.k12wh input {
+.k12wh input:not([type='checkbox']) {
   border: 1px solid var(--hc-border);
   border-radius: 8px;
   background: var(--hc-bg-elevated);
@@ -540,37 +688,206 @@ small {
   gap: 6px;
   font-size: 13px;
 }
-.k12wh__card {
-  border: 1px solid var(--hc-border);
-  border-radius: 12px;
-  padding: 14px;
-  background: var(--hc-bg-card);
+.k12wh__agent {
+  width: min(320px, 100%);
 }
-.k12wh__badge {
-  display: inline-block;
-  margin-left: 7px;
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--hc-accent) 14%, transparent);
-  font-size: 11px;
+.k12wh__card {
+  border: 0.5px solid var(--hc-border);
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--hc-bg-card);
+  box-shadow: var(--hc-shadow-sm);
+  transition:
+    border-color 0.15s var(--hc-ease-out),
+    box-shadow 0.2s var(--hc-ease-out),
+    transform 0.15s var(--hc-ease-out);
+}
+.k12wh__card:hover {
+  border-color: var(--hc-border-hl);
+  box-shadow: var(--hc-shadow-md);
+  transform: translateY(-2px);
+}
+.k12-webhook-card {
+  border-color: color-mix(in srgb, var(--hc-accent) 42%, var(--hc-border));
+  background: linear-gradient(145deg, var(--hc-accent-subtle), var(--hc-bg-card) 45%);
+}
+.k12wh__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.k12wh__logo {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: var(--hc-bg-input);
+  font-size: 18px;
+}
+.k12wh__identity {
+  min-width: 0;
+}
+.k12wh__name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.k12wh__meta {
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.k12wh__spacer {
+  flex: 1;
+  min-width: 0;
+}
+.k12wh__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  padding: 3px 9px;
+  border-radius: 7px;
+  background: var(--hc-bg-active);
+  color: var(--hc-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.k12wh__status::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--hc-text-muted);
+  content: '';
+}
+.k12wh__status--enabled {
+  background: rgb(50 213 131 / 14%);
+  color: var(--hc-success);
+}
+.k12wh__status--enabled::before {
+  background: var(--hc-success);
+}
+.k12wh__resource {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+}
+.k12wh__resource b {
+  color: var(--hc-text-primary);
+}
+.k12wh__signature > .k12wh__spacer {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.k12wh__events,
+.k12wh__facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+}
+.k12wh__event {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  padding: 2px 6px;
+  border-radius: 5px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 9.5px;
+}
+.k12wh__button--ghost {
+  padding: 6px 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--hc-text-secondary);
+  box-shadow: none;
+}
+.k12wh__button--primary {
+  border-color: transparent;
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
+  color: #fff;
+  box-shadow: 0 6px 18px rgb(95 179 234 / 28%);
+}
+.k12wh__button--primary:hover {
+  background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%);
+}
+.k12wh__delete {
+  color: var(--hc-error);
 }
 .k12wh__actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
+}
+.k12wh__history-tools,
+.k12wh__dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.k12wh__history-tools button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.k12wh__notice {
+  padding: 11px 13px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.k12wh__notice b {
+  color: var(--hc-text-primary);
+}
+.k12wh__dialog-actions {
   justify-content: flex-end;
 }
 .k12wh__history {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 1px solid var(--hc-border);
+  display: grid;
+  gap: 8px;
 }
 .k12wh__receipt {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
-  padding: 6px 0;
+  padding: 9px 10px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-card);
   font-size: 12px;
+}
+.k12wh__receipt code {
+  overflow: hidden;
+  color: var(--hc-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .k12wh__error {
   display: flex;
@@ -623,13 +940,17 @@ small {
   background: var(--hc-bg-sunken);
 }
 @media (max-width: 720px) {
-  .k12wh__summary,
-  .k12wh__header {
+  .k12wh__toolbar,
+  .k12wh__resource {
     align-items: stretch;
     flex-direction: column;
   }
-  .k12wh__actions {
-    justify-content: flex-start;
+  .k12wh__agent {
+    width: 100%;
+  }
+  .k12wh__events,
+  .k12wh__facts {
+    grid-template-columns: 1fr;
   }
 }
 </style>

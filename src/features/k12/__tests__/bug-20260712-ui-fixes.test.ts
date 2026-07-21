@@ -16,17 +16,25 @@ import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 //     原 CSS 断言随功能删除而废止；防复活回归锁见 channels/__tests__/removal-chat-route-session-routing.test.ts
 
 vi.mock('@/api/k12', () => ({
-    k12Grade: vi.fn(), k12ColdStart: vi.fn(), k12TutorTurn: vi.fn(),
-  k12BindIM: vi.fn(), k12ProvisionCron: vi.fn(),
+  k12Grade: vi.fn(),
+  k12ColdStart: vi.fn(),
+  k12TutorTurn: vi.fn(),
+  k12BindIM: vi.fn(),
+  k12ProvisionCron: vi.fn(),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(), k12PrepCard: vi.fn(), k12InsightReport: vi.fn(),
-  k12StudyTime: vi.fn(), k12ListAccumulation: vi.fn(),
+  k12MarkMastered: vi.fn(),
+  k12PrepCard: vi.fn(),
+  k12InsightReport: vi.fn(),
+  k12StudyTime: vi.fn(),
+  k12ListAccumulation: vi.fn(),
 }))
 
 function render() {
   const i18n = createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
   return mount(RecognizeGuardPanel, {
@@ -64,7 +72,9 @@ describe('BUG-20260712 #2 识题面板复用消息区滚动（题目多不撑出
     expect(chatViewSrc).toMatch(/id="hc-chat-scenario-inline"[\s\S]*ref="messagesEndRef"/)
     expect(chatViewSrc).toMatch(/v-if="[^"]*scenarioInlineActive[^"]*"\s+ref="messagesEndRef"/)
     expect(chatViewSrc).toContain('@update:inline-active="handleScenarioInlineActive"')
-    expect(chatViewSrc).toMatch(/chatStore\.messages\.length === 0[^\n]*!scenarioInlineActive/)
+    expect(chatViewSrc).toMatch(
+      /chatStore\.messages\.length === 0[\s\S]{0,160}!scenarioInlineActive/,
+    )
   })
 })
 

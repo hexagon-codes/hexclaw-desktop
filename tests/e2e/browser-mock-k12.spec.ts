@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test'
 test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
   test.setTimeout(300_000)
 
-  test('mixed worksheet: recognize → solve blank → grade answered → overlay → mistake book', async ({
+  test('mixed worksheet: recognize → solve blank → grade answered → prototype result → learning archive', async ({
     page,
   }) => {
     await page.setContent(`
@@ -33,7 +33,7 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     if (await skip.isVisible().catch(() => false)) await skip.click()
     await page.getByText('模板库', { exact: false }).first().click()
     await page.getByText('作业辅导助手', { exact: false }).first().click()
-    await expect(page.getByText('创建「作业辅导助手」')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByText('创建「K12 辅导助手」')).toBeVisible({ timeout: 30_000 })
     await page.locator('.k12pf__input').first().fill(child)
     await page.locator('.k12pf .hc-select__trigger').nth(0).click()
     await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '六年级上' }).click()
@@ -45,6 +45,35 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     await expect(card).toBeVisible({ timeout: 30_000 })
     await card.getByRole('button', { name: /进入辅导/ }).click()
     await expect(page).toHaveURL(/\/chat/, { timeout: 30_000 })
+    const scenarioTabs = page.locator('.k12enh-seg')
+    await expect(scenarioTabs.getByRole('tab')).toHaveText(['辅导', '学习档案', '学情'])
+    await expect(page.getByTestId('chat-input')).toHaveAttribute(
+      'placeholder',
+      '发消息、粘贴带分数/公式的题目，或 ⌘V 粘贴作业照片',
+    )
+    await expect(page.getByTestId('scenario-composer-hint')).toContainText('支持粘贴分数与数学公式')
+    const presetChips = page.locator('.hc-composer__box [data-testid="composer-preset-chip"]')
+    await expect(presetChips).toHaveCount(3)
+    await expect(presetChips.first()).toContainText('自动识别学科')
+
+    // 权威原型：首个能力 chip 可打开六学科说明；关闭后焦点回到触发器。
+    const subjectCapabilityTrigger = page.getByTestId('composer-preset-chip-action')
+    await subjectCapabilityTrigger.click()
+    const capabilityDialog = page.getByTestId('k12-capability-dialog')
+    await expect(capabilityDialog).toBeVisible()
+    await expect(capabilityDialog.getByTestId('k12-subject-capability')).toHaveCount(6)
+    await capabilityDialog.getByTestId('k12-capability-close').click()
+    await expect(capabilityDialog).toHaveCount(0)
+    await expect(subjectCapabilityTrigger).toBeFocused()
+
+    // Footer 能力说明不是死按钮：主操作将原型示例填回通用 composer 并聚焦。
+    await page.getByTestId('k12-general-capabilities').click()
+    await expect(capabilityDialog.getByTestId('k12-general-capability')).toHaveCount(3)
+    await capabilityDialog.getByTestId('k12-capability-primary').click()
+    const chatInput = page.getByTestId('chat-input')
+    await expect(chatInput).toBeFocused()
+    await expect(chatInput).not.toHaveValue('')
+    await chatInput.fill('')
 
     await page.locator('.hc-composer input[type="file"]').setInputFiles({
       name: 'synthetic-mixed-worksheet.png',
@@ -53,6 +82,9 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     })
     await expect(page.getByTestId('recognize-guard')).toBeVisible({ timeout: 30_000 })
     await expect(page.getByTestId('rq-item')).toHaveCount(2, { timeout: 120_000 })
+    await expect(page.getByTestId('recognize-pipeline')).toBeVisible()
+    await expect(page.getByTestId('recognize-confirm-branch')).toBeVisible()
+    await expect(page.getByTestId('recognize-anchor-branch')).toBeVisible()
     await expect(page.getByTestId('k12-photo-assistant-message')).toBeVisible()
     await expect(
       page.getByTestId('k12-photo-assistant-message').locator('.k12enh-tutor__name'),
@@ -74,17 +106,48 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
 
     await expect(page.getByTestId('rq-grade-1')).toBeEnabled()
     await page.getByTestId('rq-grade-1').click()
-    await expect(page.getByTestId('photo-grade-overlay')).toBeVisible({ timeout: 120_000 })
+    const gradeResult = page.getByTestId('photo-grade-overlay')
+    await expect(gradeResult).toBeVisible({ timeout: 120_000 })
+    await expect(gradeResult).toHaveClass(/grade-result/)
+    await expect(gradeResult.locator('.grade-summary .grade-stat')).toHaveCount(4)
+    await expect(gradeResult.locator('.grade-workspace')).toBeVisible()
+    await expect(gradeResult.locator('.grade-media')).toBeVisible()
+    await expect(gradeResult.locator('.grade-analysis')).toBeVisible()
+    await expect(gradeResult.locator('.grade-legend [data-grade-status]')).toHaveCount(8)
+    await expect(gradeResult.locator('.grade-card--issue[open]').first()).toBeVisible()
+    const correctCards = gradeResult.locator('.grade-card--correct')
+    for (let index = 0; index < (await correctCards.count()); index += 1) {
+      await expect(correctCards.nth(index)).not.toHaveAttribute('open', '')
+    }
     await expect(page.getByTestId('overlay-sym-0')).toHaveText('✗')
-    await page.getByTestId('overlay-toggle').click()
+    const overlayToggle = page.getByTestId('overlay-toggle')
+    await expect(overlayToggle).toHaveAttribute('aria-pressed', 'true')
+    await overlayToggle.click()
+    await expect(overlayToggle).toHaveAttribute('aria-pressed', 'false')
     await expect(page.getByTestId('overlay-sym-0')).toHaveCount(0)
-    await page.getByTestId('overlay-toggle').click()
+    await expect(gradeResult.locator('.grade-analysis')).toBeVisible()
+    await overlayToggle.click()
+    await expect(overlayToggle).toHaveAttribute('aria-pressed', 'true')
     await expect(page.getByTestId('overlay-sym-0')).toBeVisible()
+    await page.screenshot({
+      path: 'test-results/k12-photo-grade-result-prototype-aligned.png',
+      fullPage: true,
+    })
 
-    await page.locator('.k12enh-seg button', { hasText: '学习档案' }).click()
+    await scenarioTabs.getByRole('tab', { name: '学习档案', exact: true }).click()
     await expect(page.locator('.k12rec')).toBeVisible({ timeout: 30_000 })
+    const objectTabs = page.locator('.k12rec__object-tabs').getByRole('tab')
+    await expect(objectTabs).toHaveCount(5)
+    for (const [index, label] of ['本周复习', '全部错题', '练习集', '积累', '作品'].entries()) {
+      await expect(objectTabs.nth(index)).toHaveAccessibleName(new RegExp(`^${label} \\d+$`))
+    }
+    await expect(page.getByTestId('week-section')).toBeVisible()
     await page.getByTestId('subtab-mistakes').click()
     await expect(page.getByTestId('mistakes-section')).toBeVisible()
     await expect(page.locator('.k12rec')).toContainText('8×7=', { timeout: 30_000 })
+    await page.screenshot({
+      path: 'test-results/k12-learning-archive-prototype-aligned.png',
+      fullPage: true,
+    })
   })
 })

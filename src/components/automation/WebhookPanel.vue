@@ -42,17 +42,14 @@ const toast = useToast()
 
 // 场景包经 registry 注入自己的管理面板；通用 Webhook 不认识任何领域。
 const managementExtensions = scenarioRegistry.webhookManagementExtensions
-const openManagementExtensions = ref<Set<string>>(new Set())
+const managementContentKeys = ref<Set<string>>(new Set())
+const hasManagementContent = computed(() => managementContentKeys.value.size > 0)
 
-function isManagementExtensionOpen(key: string): boolean {
-  return openManagementExtensions.value.has(key)
-}
-
-function toggleManagementExtension(key: string): void {
-  const next = new Set(openManagementExtensions.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  openManagementExtensions.value = next
+function onManagementContentChange(key: string, hasContent: boolean): void {
+  const next = new Set(managementContentKeys.value)
+  if (hasContent) next.add(key)
+  else next.delete(key)
+  managementContentKeys.value = next
 }
 
 // 顶栏搜索词（由 AutomationView 透传）：按 webhook 名过滤可见项。
@@ -555,23 +552,12 @@ defineExpose({ loadWebhooks, openCreateForm, form })
       v-for="extension in managementExtensions"
       :key="extension.key"
       class="webhook-panel__extension-entry"
+      :data-testid="`scenario-webhook-manager-${extension.key}`"
     >
-      <button
-        class="webhook-panel__extension-toggle"
-        :data-testid="`scenario-webhook-manager-toggle-${extension.key}`"
-        :aria-expanded="isManagementExtensionOpen(extension.key)"
-        @click="toggleManagementExtension(extension.key)"
-      >
-        <span>
-          <strong>{{ extension.title }}</strong>
-          <small>{{ extension.description }}</small>
-        </span>
-        <span>{{ isManagementExtensionOpen(extension.key) ? '收起管理' : '打开管理' }}</span>
-      </button>
       <component
         :is="extension.component"
-        v-if="isManagementExtensionOpen(extension.key)"
         class="webhook-panel__extension-manager"
+        @content-change="onManagementContentChange(extension.key, $event)"
       />
     </section>
 
@@ -590,7 +576,7 @@ defineExpose({ loadWebhooks, openCreateForm, form })
       <p>{{ loadError }}</p>
     </div>
     <!-- 空态：对齐原型「暂无 Webhook / 创建 Webhook 接收外部事件触发任务」 -->
-    <div v-else-if="webhooks.length === 0" class="webhook-panel__empty">
+    <div v-else-if="webhooks.length === 0 && !hasManagementContent" class="webhook-panel__empty">
       <div class="webhook-panel__empty-icon"><WebhookIcon :size="32" /></div>
       <h3 class="webhook-panel__empty-title">{{ t('webhooks.emptyTitle') }}</h3>
       <p class="webhook-panel__empty-desc">{{ t('webhooks.emptyDesc') }}</p>
@@ -684,41 +670,6 @@ defineExpose({ loadWebhooks, openCreateForm, form })
 }
 .webhook-panel__extension-entry {
   margin-bottom: 16px;
-  border: 1px solid color-mix(in srgb, var(--hc-accent) 35%, var(--hc-border));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--hc-accent) 5%, var(--hc-bg-card));
-  overflow: hidden;
-}
-.webhook-panel__extension-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 13px 14px;
-  border: 0;
-  background: transparent;
-  color: var(--hc-text-primary);
-  text-align: left;
-  cursor: pointer;
-}
-.webhook-panel__extension-toggle > span:first-child {
-  display: grid;
-  gap: 3px;
-}
-.webhook-panel__extension-toggle small {
-  color: var(--hc-text-muted);
-  font-size: 12px;
-  font-weight: 400;
-}
-.webhook-panel__extension-toggle > span:last-child {
-  flex: none;
-  color: var(--hc-accent);
-  font-size: 12px;
-}
-.webhook-panel__extension-manager {
-  padding: 14px;
-  border-top: 1px solid var(--hc-border);
 }
 /* 新建 Webhook 弹窗正文（表单字段纵向排列） */
 .webhook-modal__body {

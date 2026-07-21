@@ -40,16 +40,26 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 const props = withDefaults(defineProps<{ agentId: string; showAddButton?: boolean }>(), {
   showAddButton: true,
 })
+const emit = defineEmits<{
+  (e: 'count', count: number): void
+}>()
 const { t } = useI18n()
 const toast = useToast()
 
 const works = ref<CreativeWorkDTO[]>([])
+watch(
+  () => works.value.length,
+  (count) => emit('count', count),
+  { immediate: true },
+)
 const loading = ref(false)
 const error = ref('')
 let loadGeneration = 0
 const busyId = ref('')
 const typeFilter = ref<'' | WorkType>('')
 const expandedId = ref('')
+const detailDialogs = ref<HTMLElement[]>([])
+let detailOpener: HTMLElement | null = null
 // 点评/修改稿的行内输入：按 record_id 存草稿文本。
 const feedbackDraft = ref<Record<string, string>>({})
 const revisionDraft = ref<Record<string, string>>({})
@@ -67,17 +77,95 @@ const filtered = computed(() =>
 // ── KPI（原型 2570-2576）：从列表计算，不另拉端点 ─────────────
 // 「已点评」以证据判定：任一版本带 feedback 即算（status 会随修改稿回到待点评态，证据不回退）。
 function isReviewed(w: CreativeWorkDTO): boolean {
-  return w.versions.some((v) => !!v.feedback)
+  return w.versions.some((v) => !!v.feedback || !!v.structured_feedback)
 }
 function latestVersion(w: CreativeWorkDTO): WorkVersionDTO | undefined {
   return w.versions[w.versions.length - 1]
 }
+function currentVersionReviewed(w: CreativeWorkDTO): boolean {
+  return w.status === 'feedback_ready' || w.status === 'archived'
+}
 function cardSummary(w: CreativeWorkDTO): string {
   const version = latestVersion(w)
-  return (version?.feedback || version?.content_markdown || w.task || '').trim()
+  return (
+    version?.structured_feedback?.suggestions[0] ||
+    version?.feedback ||
+    version?.content_markdown ||
+    w.task ||
+    ''
+  ).trim()
 }
-function toggleDetails(w: CreativeWorkDTO) {
-  expandedId.value = expandedId.value === w.record_id ? '' : w.record_id
+function cardEvidence(w: CreativeWorkDTO): string[] {
+  const observations = latestVersion(w)?.structured_feedback?.observations ?? []
+  if (observations.length > 0) {
+    return observations
+      .slice(0, 3)
+      .map(
+        (observation) =>
+          `${feedbackDimensionLabel(observation.dimension)}：${observation.evidence}`,
+      )
+  }
+  return [w.task, w.intent || '', `${w.versions.length} ${t('k12.works.versionCount')}`].filter(
+    Boolean,
+  )
+}
+function detailTitle(w: CreativeWorkDTO): string {
+  const key = currentVersionReviewed(w)
+    ? w.work_type === 'writing'
+      ? 'k12.works.writingReviewTitle'
+      : 'k12.works.artReviewTitle'
+    : w.work_type === 'writing'
+      ? 'k12.works.generateWritingReviewTitle'
+      : 'k12.works.generateArtReviewTitle'
+  return t(key, { title: w.title })
+}
+function activeDetailDialog(): HTMLElement | null {
+  return detailDialogs.value.find((dialog) => dialog.dataset.workId === expandedId.value) ?? null
+}
+function openDetails(w: CreativeWorkDTO, event?: Event) {
+  const trigger = event?.currentTarget
+  detailOpener = trigger instanceof HTMLElement ? trigger : null
+  expandedId.value = w.record_id
+  void nextTick(() => activeDetailDialog()?.focus())
+}
+function closeDetails(restoreFocus = true) {
+  if (!expandedId.value) return
+  expandedId.value = ''
+  const opener = detailOpener
+  detailOpener = null
+  void nextTick(() => {
+    if (restoreFocus && opener?.isConnected) opener.focus()
+  })
+}
+function toggleDetails(w: CreativeWorkDTO, event?: Event) {
+  if (expandedId.value === w.record_id) closeDetails()
+  else openDetails(w, event)
+}
+function trapDetailFocus(event: KeyboardEvent) {
+  const dialog = activeDetailDialog()
+  if (!dialog || event.key !== 'Tab') return
+  const selector =
+    'button:not([disabled]),a[href],input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
+  const focusable = [...dialog.querySelectorAll<HTMLElement>(selector)].filter(
+    (element) => !element.hidden,
+  )
+  if (focusable.length === 0) {
+    event.preventDefault()
+    dialog.focus()
+    return
+  }
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  if (
+    event.shiftKey &&
+    (document.activeElement === first || !dialog.contains(document.activeElement))
+  ) {
+    event.preventDefault()
+    last.focus()
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault()
+    first.focus()
+  }
 }
 
 function feedbackDimensionLabel(
@@ -352,6 +440,7 @@ watch(addType, (type) => {
   }
 })
 function openAdd() {
+  closeDetails(false)
   const active = document.activeElement
   addOpener = active instanceof HTMLElement ? active : null
   addType.value = 'writing'
@@ -375,9 +464,18 @@ function closeAdd() {
   })
 }
 function onAddKeydown(event: KeyboardEvent) {
-  if (event.key !== 'Escape' || !addOpen.value) return
-  event.preventDefault()
-  closeAdd()
+  if (addOpen.value && event.key === 'Escape') {
+    event.preventDefault()
+    closeAdd()
+    return
+  }
+  if (!expandedId.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeDetails()
+    return
+  }
+  trapDetailFocus(event)
 }
 async function submitAdd() {
   if (!addValid.value || addBusy.value) return
@@ -673,6 +771,7 @@ watch(
     feedbackAbort = null
     feedbackGeneratingId.value = ''
     feedbackGenerateError.value = {}
+    closeDetails(false)
     closeAdd()
     resetPhoto()
     resetAllRevisionPhotos()
@@ -685,6 +784,7 @@ onBeforeUnmount(() => {
   feedbackGeneration += 1
   feedbackAbort?.abort()
   feedbackAbort = null
+  closeDetails(false)
   resetPhoto()
   resetAllRevisionPhotos()
 })
@@ -1045,13 +1145,30 @@ defineExpose({ load, openAdd })
       </div>
     </div>
 
-    <div class="k12cw__filter" role="tablist" aria-label="作品类型">
-      <span class="k12cw__filter-label">{{ t('k12.works.typeLabel') }}</span>
-      <button :class="{ on: typeFilter === '' }" @click="typeFilter = ''">全部</button>
-      <button :class="{ on: typeFilter === 'writing' }" @click="typeFilter = 'writing'">
+    <div class="k12cw__filter" :aria-label="t('k12.works.filterLabel')">
+      <span class="k12cw__filter-label">{{ t('k12.works.filterTypeLabel') }}</span>
+      <button
+        type="button"
+        :class="{ on: typeFilter === '' }"
+        :aria-pressed="typeFilter === ''"
+        @click="typeFilter = ''"
+      >
+        {{ t('k12.works.filterAll') }}
+      </button>
+      <button
+        type="button"
+        :class="{ on: typeFilter === 'writing' }"
+        :aria-pressed="typeFilter === 'writing'"
+        @click="typeFilter = 'writing'"
+      >
         {{ t('k12.works.writing') }}
       </button>
-      <button :class="{ on: typeFilter === 'art' }" @click="typeFilter = 'art'">
+      <button
+        type="button"
+        :class="{ on: typeFilter === 'art' }"
+        :aria-pressed="typeFilter === 'art'"
+        @click="typeFilter = 'art'"
+      >
         {{ t('k12.works.art') }}
       </button>
     </div>
@@ -1073,9 +1190,21 @@ defineExpose({ load, openAdd })
         {{ t('k12.works.retry') }}
       </button>
     </div>
-    <div v-else-if="loading && works.length === 0" class="k12cw__empty">…</div>
+    <div
+      v-else-if="loading && works.length === 0"
+      class="k12cw__loading"
+      data-testid="cw-loading"
+      role="status"
+      aria-live="polite"
+    >
+      {{ t('k12.works.loading') }}
+    </div>
     <div v-else-if="filtered.length === 0" class="k12cw__empty" data-testid="cw-empty">
-      {{ t('k12.works.empty') }}
+      <b data-testid="cw-empty-title">{{
+        works.length === 0 ? t('k12.works.emptyTitle') : t('k12.works.filterEmptyTitle')
+      }}</b
+      ><br />
+      {{ works.length === 0 ? t('k12.works.emptyValue') : t('k12.works.filterEmptyValue') }}
     </div>
 
     <ul v-else class="k12cw__list" data-testid="cw-list">
@@ -1083,7 +1212,7 @@ defineExpose({ load, openAdd })
         v-for="w in filtered"
         :key="w.record_id"
         class="k12cw__card"
-        :class="{ 'k12cw__card--expanded': expandedId === w.record_id }"
+        :data-review-state="currentVersionReviewed(w) ? 'reviewed' : 'pending'"
       >
         <div class="k12cw__preview" :class="`k12cw__preview--${w.work_type}`">
           <img
@@ -1098,540 +1227,595 @@ defineExpose({ load, openAdd })
         </div>
         <div class="k12cw__copy">
           <header class="k12cw__head">
-            <span class="k12cw__kind">{{
-              w.work_type === 'writing' ? t('k12.works.writing') : t('k12.works.art')
-            }}</span>
-            <b class="k12cw__title">{{ w.title }}</b>
+            <span class="k12cw__kind" :class="`k12cw__kind--${w.work_type}`">
+              {{ w.work_type === 'writing' ? t('k12.works.writingKind') : t('k12.works.art') }}
+            </span>
             <span :class="`k12cw__pill k12cw__pill--${statusTone(w.status)}`">{{
               w.status_label
             }}</span>
-            <span class="k12cw__vers"
-              >{{ w.versions.length }} {{ t('k12.works.versionCount') }}</span
-            >
           </header>
+          <h3 class="k12cw__title">{{ w.title }}</h3>
           <div class="k12cw__evidence">
-            <span>{{ t('k12.works.versionCount') }}：{{ w.versions.length }}</span>
-            <span>{{ w.task }}</span>
+            <span v-for="evidence in cardEvidence(w)" :key="evidence">{{ evidence }}</span>
           </div>
           <p class="k12cw__summary">{{ cardSummary(w) }}</p>
           <button
             class="k12cw__detail-toggle"
             data-testid="cw-detail-toggle"
-            @click="toggleDetails(w)"
+            aria-haspopup="dialog"
+            :aria-expanded="expandedId === w.record_id"
+            :aria-controls="`cw-detail-${w.record_id}`"
+            @click="toggleDetails(w, $event)"
           >
-            {{
-              expandedId === w.record_id
-                ? t('k12.works.collapseDetail')
-                : isReviewed(w)
-                  ? t('k12.works.viewReview')
-                  : t('k12.works.startReview')
-            }}
+            {{ currentVersionReviewed(w) ? t('k12.works.viewReview') : t('k12.works.startReview') }}
           </button>
 
-          <div class="k12cw__details">
-            <!-- 版本时间线：原稿 + 每次修改稿 + 各自点评 -->
-            <ol class="k12cw__versions">
-              <li v-for="ver in w.versions" :key="ver.version_id" class="k12cw__ver">
-                <span class="k12cw__vid">{{ ver.version_id }}</span>
-                <div class="k12cw__vbody">
-                  <MarkdownRenderer
-                    v-if="ver.content_markdown"
-                    class="k12cw__vcontent"
-                    data-testid="cw-version-content"
-                    :content="ver.content_markdown"
-                  />
-                  <div
-                    v-if="ver.structured_feedback"
-                    class="k12cw__vfeedback k12cw__vfeedback--structured"
-                    data-testid="cw-structured-feedback"
+          <Teleport to="body">
+            <div
+              class="k12cw-detail-overlay"
+              :class="{ 'is-open': expandedId === w.record_id }"
+              :aria-hidden="expandedId !== w.record_id"
+              :data-testid="expandedId === w.record_id ? 'cw-detail-overlay' : undefined"
+              @click.self="closeDetails()"
+            >
+              <div
+                :id="`cw-detail-${w.record_id}`"
+                ref="detailDialogs"
+                class="k12cw-detail-modal"
+                :data-work-id="w.record_id"
+                :data-testid="expandedId === w.record_id ? 'cw-detail-modal' : undefined"
+                role="dialog"
+                aria-modal="true"
+                :aria-labelledby="`cw-detail-title-${w.record_id}`"
+                tabindex="-1"
+              >
+                <header class="k12cw-detail-modal__head">
+                  <b :id="`cw-detail-title-${w.record_id}`">{{ detailTitle(w) }}</b>
+                  <button
+                    type="button"
+                    class="k12cw-detail-modal__x"
+                    :data-testid="expandedId === w.record_id ? 'cw-detail-close' : undefined"
+                    :aria-label="t('k12.works.detailClose')"
+                    @click="closeDetails()"
                   >
-                    <span aria-hidden="true">💬</span>
-                    <div class="k12cw__feedback-facts">
-                      <b>{{ t('k12.works.feedbackObservations') }}</b>
-                      <ul class="k12cw__feedback-list">
-                        <li
-                          v-for="(observation, index) in ver.structured_feedback.observations"
-                          :key="`${observation.dimension}-${index}`"
-                        >
-                          <span class="k12cw__feedback-dimension">{{
-                            feedbackDimensionLabel(observation.dimension)
-                          }}</span>
-                          <MarkdownRenderer :content="observation.evidence" />
-                        </li>
-                      </ul>
-                      <b>{{ t('k12.works.feedbackSuggestions') }}</b>
-                      <ol class="k12cw__feedback-list">
-                        <li
-                          v-for="suggestion in ver.structured_feedback.suggestions"
-                          :key="suggestion"
-                        >
-                          <MarkdownRenderer :content="suggestion" />
-                        </li>
-                      </ol>
-                      <p class="k12cw__feedback-limit">
-                        <b>{{ t('k12.works.feedbackLimitations') }}</b>
-                        {{ ver.structured_feedback.limitations }}
-                      </p>
-                      <div
-                        class="k12cw__feedback-actions"
-                        :aria-label="t('k12.works.feedbackAllowedActions')"
+                    ✕
+                  </button>
+                </header>
+                <div class="k12cw-detail-modal__body">
+                  <div class="k12cw__details">
+                    <!-- 版本时间线：原稿 + 每次修改稿 + 各自点评 -->
+                    <ol class="k12cw__versions">
+                      <li v-for="ver in w.versions" :key="ver.version_id" class="k12cw__ver">
+                        <span class="k12cw__vid">{{ ver.version_id }}</span>
+                        <div class="k12cw__vbody">
+                          <MarkdownRenderer
+                            v-if="ver.content_markdown"
+                            class="k12cw__vcontent"
+                            data-testid="cw-version-content"
+                            :content="ver.content_markdown"
+                          />
+                          <div
+                            v-if="ver.structured_feedback"
+                            class="k12cw__vfeedback k12cw__vfeedback--structured"
+                            data-testid="cw-structured-feedback"
+                          >
+                            <span aria-hidden="true">💬</span>
+                            <div class="k12cw__feedback-facts">
+                              <b>{{ t('k12.works.feedbackObservations') }}</b>
+                              <ul class="k12cw__feedback-list">
+                                <li
+                                  v-for="(observation, index) in ver.structured_feedback
+                                    .observations"
+                                  :key="`${observation.dimension}-${index}`"
+                                >
+                                  <span class="k12cw__feedback-dimension">{{
+                                    feedbackDimensionLabel(observation.dimension)
+                                  }}</span>
+                                  <MarkdownRenderer :content="observation.evidence" />
+                                </li>
+                              </ul>
+                              <b>{{ t('k12.works.feedbackSuggestions') }}</b>
+                              <ol class="k12cw__feedback-list">
+                                <li
+                                  v-for="suggestion in ver.structured_feedback.suggestions"
+                                  :key="suggestion"
+                                >
+                                  <MarkdownRenderer :content="suggestion" />
+                                </li>
+                              </ol>
+                              <p class="k12cw__feedback-limit">
+                                <b>{{ t('k12.works.feedbackLimitations') }}</b>
+                                {{ ver.structured_feedback.limitations }}
+                              </p>
+                              <div
+                                class="k12cw__feedback-actions"
+                                :aria-label="t('k12.works.feedbackAllowedActions')"
+                              >
+                                <span
+                                  v-for="action in ver.structured_feedback.allowed_actions"
+                                  :key="action"
+                                >
+                                  {{ feedbackActionLabel(action) }}
+                                </span>
+                              </div>
+                            </div>
+                            <small class="k12cw__provenance" data-testid="cw-feedback-provenance">
+                              {{
+                                ver.structured_feedback.source_snapshot.source === 'ai'
+                                  ? t('k12.works.feedbackSourceAI')
+                                  : t('k12.works.feedbackSourceParent')
+                              }}
+                              · {{ ver.structured_feedback.source_snapshot.method_ref }}
+                            </small>
+                          </div>
+                          <div v-else-if="ver.feedback" class="k12cw__vfeedback">
+                            <span aria-hidden="true">💬</span>
+                            <MarkdownRenderer
+                              data-testid="cw-version-feedback"
+                              :content="ver.feedback"
+                            />
+                            <small
+                              v-if="ver.feedback_source || ver.feedback_skill"
+                              class="k12cw__provenance"
+                              data-testid="cw-feedback-provenance"
+                            >
+                              {{
+                                ver.feedback_source === 'ai'
+                                  ? t('k12.works.feedbackSourceAI')
+                                  : t('k12.works.feedbackSourceParent')
+                              }}
+                              <template v-if="ver.feedback_skill">
+                                · {{ ver.feedback_skill }}</template
+                              >
+                            </small>
+                          </div>
+                        </div>
+                      </li>
+                    </ol>
+
+                    <!-- 发送点评要点（任务3，§3.10：点评可发送到手机）：失败诚实降级为复制文本 -->
+                    <div
+                      v-if="latestFeedbackOf(w) && w.status !== 'archived'"
+                      class="k12cw__sendrow"
+                    >
+                      <button
+                        class="k12cw__btn k12cw__btn--ghost"
+                        data-testid="cw-send-feedback"
+                        :disabled="busyId === w.record_id"
+                        @click="sendToPhone(w, 'feedback')"
                       >
-                        <span
-                          v-for="action in ver.structured_feedback.allowed_actions"
-                          :key="action"
+                        {{ t('k12.works.sendFeedback') }}
+                      </button>
+                      <div
+                        v-if="deliveryOf(w, 'feedback')"
+                        class="k12cw__delivery"
+                        :class="`k12cw__delivery--${deliveryOf(w, 'feedback')?.status}`"
+                        data-testid="cw-feedback-delivery-receipt"
+                        role="status"
+                      >
+                        <span>{{ deliveryTextOf(w, 'feedback') }}</span>
+                        <button
+                          v-if="deliveryOf(w, 'feedback')?.status === 'failed'"
+                          type="button"
+                          data-testid="cw-feedback-delivery-retry"
+                          @click="retryPhoneDelivery(w, 'feedback')"
                         >
-                          {{ feedbackActionLabel(action) }}
-                        </span>
+                          {{ t('k12.delivery.retry') }}
+                        </button>
+                        <button
+                          v-if="
+                            deliveryOf(w, 'feedback')?.status === 'sending' ||
+                            deliveryOf(w, 'feedback')?.status === 'outcome_unknown'
+                          "
+                          type="button"
+                          data-testid="cw-feedback-delivery-query"
+                          @click="queryPhoneDelivery(w, 'feedback')"
+                        >
+                          {{ t('k12.delivery.query') }}
+                        </button>
+                      </div>
+                      <div
+                        v-if="deliverySetupErrorOf(w, 'feedback')"
+                        class="k12cw__delivery k12cw__delivery--failed"
+                        data-testid="cw-feedback-bind-required"
+                      >
+                        <span>{{ deliverySetupErrorOf(w, 'feedback') }}</span>
+                        <a href="/channels">{{ t('k12.delivery.bindCTA') }}</a>
                       </div>
                     </div>
-                    <small class="k12cw__provenance" data-testid="cw-feedback-provenance">
-                      {{
-                        ver.structured_feedback.source_snapshot.source === 'ai'
-                          ? t('k12.works.feedbackSourceAI')
-                          : t('k12.works.feedbackSourceParent')
-                      }}
-                      · {{ ver.structured_feedback.source_snapshot.method_ref }}
-                    </small>
-                  </div>
-                  <div v-else-if="ver.feedback" class="k12cw__vfeedback">
-                    <span aria-hidden="true">💬</span>
-                    <MarkdownRenderer data-testid="cw-version-feedback" :content="ver.feedback" />
-                    <small
-                      v-if="ver.feedback_source || ver.feedback_skill"
-                      class="k12cw__provenance"
-                      data-testid="cw-feedback-provenance"
-                    >
-                      {{
-                        ver.feedback_source === 'ai'
-                          ? t('k12.works.feedbackSourceAI')
-                          : t('k12.works.feedbackSourceParent')
-                      }}
-                      <template v-if="ver.feedback_skill"> · {{ ver.feedback_skill }}</template>
-                    </small>
-                  </div>
-                </div>
-              </li>
-            </ol>
 
-            <!-- 发送点评要点（任务3，§3.10：点评可发送到手机）：失败诚实降级为复制文本 -->
-            <div v-if="latestFeedbackOf(w) && w.status !== 'archived'" class="k12cw__sendrow">
-              <button
-                class="k12cw__btn k12cw__btn--ghost"
-                data-testid="cw-send-feedback"
-                :disabled="busyId === w.record_id"
-                @click="sendToPhone(w, 'feedback')"
-              >
-                {{ t('k12.works.sendFeedback') }}
-              </button>
-              <div
-                v-if="deliveryOf(w, 'feedback')"
-                class="k12cw__delivery"
-                :class="`k12cw__delivery--${deliveryOf(w, 'feedback')?.status}`"
-                data-testid="cw-feedback-delivery-receipt"
-                role="status"
-              >
-                <span>{{ deliveryTextOf(w, 'feedback') }}</span>
-                <button
-                  v-if="deliveryOf(w, 'feedback')?.status === 'failed'"
-                  type="button"
-                  data-testid="cw-feedback-delivery-retry"
-                  @click="retryPhoneDelivery(w, 'feedback')"
-                >
-                  {{ t('k12.delivery.retry') }}
-                </button>
-                <button
-                  v-if="
-                    deliveryOf(w, 'feedback')?.status === 'sending' ||
-                    deliveryOf(w, 'feedback')?.status === 'outcome_unknown'
-                  "
-                  type="button"
-                  data-testid="cw-feedback-delivery-query"
-                  @click="queryPhoneDelivery(w, 'feedback')"
-                >
-                  {{ t('k12.delivery.query') }}
-                </button>
-              </div>
-              <div
-                v-if="deliverySetupErrorOf(w, 'feedback')"
-                class="k12cw__delivery k12cw__delivery--failed"
-                data-testid="cw-feedback-bind-required"
-              >
-                <span>{{ deliverySetupErrorOf(w, 'feedback') }}</span>
-                <a href="/channels">{{ t('k12.delivery.bindCTA') }}</a>
-              </div>
-            </div>
-
-            <!-- 观察练习卡（任务2，§3.10 美术）：练习必须有产物——归档在版本记录，
+                    <!-- 观察练习卡（任务2，§3.10 美术）：练习必须有产物——归档在版本记录，
              承诺即动作：打印 / 发送到手机 / 完成打卡；不进错题与练习集 -->
-            <div v-if="practiceCardOf(w)" class="k12cw__pcard" data-testid="cw-practice-card">
-              <b>{{ t('k12.works.practiceCardTitle') }}</b>
-              <p class="k12cw__pcardtext">{{ practiceCardOf(w)!.practice_card }}</p>
-              <p
-                v-if="practiceCardOf(w)!.practice_card_done_at"
-                class="k12cw__pcarddone"
-                data-testid="cw-card-done-state"
-              >
-                ✓ {{ t('k12.works.practiceCardDoneAt') }}
-              </p>
-              <div class="k12cw__linkbtns">
-                <button
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-card-print"
-                  :disabled="printBusyId === w.record_id"
-                  @click="printCard(w)"
-                >
-                  {{ t('k12.works.practiceCardPrint') }}
-                </button>
-                <button
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-card-save-pdf"
-                  :disabled="savePdfBusyId === w.record_id"
-                  @click="saveCardPdf(w)"
-                >
-                  {{ t('k12.works.practiceCardSavePdf') }}
-                </button>
-                <button
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-card-send"
-                  :disabled="busyId === w.record_id"
-                  @click="sendToPhone(w, 'practice_card')"
-                >
-                  {{ t('k12.works.practiceCardSend') }}
-                </button>
-                <button
-                  v-if="!practiceCardOf(w)!.practice_card_done_at"
-                  class="k12cw__btn"
-                  data-testid="cw-card-done"
-                  :disabled="busyId === w.record_id"
-                  @click="markCardDone(w)"
-                >
-                  {{ t('k12.works.practiceCardMarkDone') }}
-                </button>
-              </div>
-              <div
-                v-if="deliveryOf(w, 'practice_card')"
-                class="k12cw__delivery"
-                :class="`k12cw__delivery--${deliveryOf(w, 'practice_card')?.status}`"
-                data-testid="cw-card-delivery-receipt"
-                role="status"
-              >
-                <span>{{ deliveryTextOf(w, 'practice_card') }}</span>
-                <button
-                  v-if="deliveryOf(w, 'practice_card')?.status === 'failed'"
-                  type="button"
-                  data-testid="cw-card-delivery-retry"
-                  @click="retryPhoneDelivery(w, 'practice_card')"
-                >
-                  {{ t('k12.delivery.retry') }}
-                </button>
-                <button
-                  v-if="
-                    deliveryOf(w, 'practice_card')?.status === 'sending' ||
-                    deliveryOf(w, 'practice_card')?.status === 'outcome_unknown'
-                  "
-                  type="button"
-                  data-testid="cw-card-delivery-query"
-                  @click="queryPhoneDelivery(w, 'practice_card')"
-                >
-                  {{ t('k12.delivery.query') }}
-                </button>
-              </div>
-              <div
-                v-if="deliverySetupErrorOf(w, 'practice_card')"
-                class="k12cw__delivery k12cw__delivery--failed"
-                data-testid="cw-card-bind-required"
-              >
-                <span>{{ deliverySetupErrorOf(w, 'practice_card') }}</span>
-                <a href="/channels">{{ t('k12.delivery.bindCTA') }}</a>
-              </div>
-              <p
-                v-if="printError[w.record_id]"
-                class="k12cw__inlineerr"
-                data-testid="cw-card-print-error"
-              >
-                {{ printError[w.record_id] }}
-                <button
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-card-print-retry"
-                  :disabled="printBusyId === w.record_id"
-                  @click="printCard(w)"
-                >
-                  {{ t('k12.works.retry') }}
-                </button>
-              </p>
-              <p class="k12cw__ainote">{{ t('k12.works.practiceCardHint') }}</p>
-            </div>
-
-            <!-- 待点评 / 已修改：后端 Skill 真实生成 + 家长手写，两条入口均只写证据化点评。 -->
-            <div v-if="w.status === 'draft' || w.status === 'revised'" class="k12cw__act">
-              <HcClearableField>
-                <textarea
-                  v-model="feedbackDraft[w.record_id]"
-                  class="k12cw__input"
-                  :placeholder="t('k12.works.addFeedback') + '（只给具体建议，不打分不代写）'"
-                  rows="2"
-                  data-testid="cw-feedback-input"
-                ></textarea>
-              </HcClearableField>
-              <div class="k12cw__linkbtns">
-                <button
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-feedback-generate"
-                  :disabled="!!feedbackGeneratingId || busyId === w.record_id"
-                  @click="generateFeedback(w)"
-                >
-                  {{ t('k12.works.aiGenerate') }}
-                </button>
-                <span
-                  v-if="feedbackGeneratingId === w.record_id"
-                  class="k12cw__ainote"
-                  data-testid="cw-feedback-generating"
-                  >{{ t('k12.works.aiGenerating') }}</span
-                >
-              </div>
-              <p
-                v-if="feedbackGenerateError[w.record_id]"
-                class="k12cw__inlineerr"
-                data-testid="cw-feedback-generate-error"
-              >
-                {{ feedbackGenerateError[w.record_id] }}
-                <button
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-feedback-generate-retry"
-                  :disabled="!!feedbackGeneratingId"
-                  @click="generateFeedback(w)"
-                >
-                  {{ t('k12.works.retry') }}
-                </button>
-              </p>
-              <button
-                class="k12cw__btn k12cw__btn--primary"
-                :disabled="busyId === w.record_id || !(feedbackDraft[w.record_id] || '').trim()"
-                data-testid="cw-feedback-submit"
-                @click="submitFeedback(w)"
-              >
-                {{ t('k12.works.addFeedback') }}
-              </button>
-            </div>
-
-            <!-- 已点评：提交修改稿 -->
-            <div v-else-if="w.status === 'feedback_ready'" class="k12cw__act">
-              <HcClearableField>
-                <textarea
-                  v-model="revisionDraft[w.record_id]"
-                  class="k12cw__input"
-                  :placeholder="t('k12.works.submitRevision')"
-                  rows="2"
-                  data-testid="cw-revision-input"
-                ></textarea>
-              </HcClearableField>
-              <div class="k12cw__revision-photo">
-                <label class="k12cw__btn k12cw__btn--ghost">
-                  {{ t('k12.works.revisionPhotoChoose') }}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    class="k12cw__file"
-                    data-testid="cw-revision-photo-input"
-                    @change="onRevisionPhotoPick(w, $event)"
-                  />
-                </label>
-                <template v-if="revisionPhotos[w.record_id]">
-                  <img
-                    :src="revisionPhotos[w.record_id]!.preview"
-                    class="k12cw__revision-thumb"
-                    alt=""
-                  />
-                  <span v-if="revisionPhotoUploading(w.record_id)" class="k12cw__ainote">
-                    {{ t('k12.works.photoUploading') }} {{ revisionPhotos[w.record_id]!.pct }}%
-                  </span>
-                  <span
-                    v-else-if="revisionPhotos[w.record_id]!.error"
-                    class="k12cw__inlineerr"
-                    data-testid="cw-revision-photo-error"
-                    >{{ revisionPhotos[w.record_id]!.error }}</span
-                  >
-                  <span v-else-if="revisionPhotos[w.record_id]!.assetId" class="k12cw__ainote">
-                    {{ t('k12.works.photoUploaded') }}
-                  </span>
-                  <button
-                    v-if="revisionPhotos[w.record_id]!.error"
-                    class="k12cw__btn k12cw__btn--ghost"
-                    type="button"
-                    @click="uploadRevisionPhoto(w.record_id)"
-                  >
-                    {{ t('k12.works.photoRetry') }}
-                  </button>
-                  <button
-                    class="k12cw__btn k12cw__btn--ghost"
-                    type="button"
-                    @click="resetRevisionPhoto(w.record_id)"
-                  >
-                    {{ t('k12.works.photoRemove') }}
-                  </button>
-                  <div
-                    v-if="w.work_type === 'writing' && revisionPhotos[w.record_id]!.assetId"
-                    class="k12cw__ocr k12cw__revision-ocr"
-                    aria-live="polite"
-                    data-testid="cw-revision-ocr-state"
-                  >
-                    <p
-                      v-if="revisionPhotos[w.record_id]!.ocrBusy"
-                      class="k12cw__ainote"
-                      data-testid="cw-revision-ocr-processing"
-                    >
-                      {{ t('k12.works.ocrProcessing') }}
-                    </p>
                     <div
-                      v-else-if="
-                        revisionPhotos[w.record_id]!.ocrError ||
-                        revisionPhotos[w.record_id]!.ocrJob?.status === 'failed'
-                      "
-                      class="k12cw__inlineerr"
-                      data-testid="cw-revision-ocr-error"
+                      v-if="practiceCardOf(w)"
+                      class="k12cw__pcard"
+                      data-testid="cw-practice-card"
                     >
-                      <p>
-                        {{
-                          revisionPhotos[w.record_id]!.ocrError ||
-                          revisionPhotos[w.record_id]!.ocrJob?.error_message ||
-                          t('k12.works.ocrFailed')
-                        }}
+                      <b>{{ t('k12.works.practiceCardTitle') }}</b>
+                      <p class="k12cw__pcardtext">{{ practiceCardOf(w)!.practice_card }}</p>
+                      <p
+                        v-if="practiceCardOf(w)!.practice_card_done_at"
+                        class="k12cw__pcarddone"
+                        data-testid="cw-card-done-state"
+                      >
+                        ✓ {{ t('k12.works.practiceCardDoneAt') }}
+                      </p>
+                      <div class="k12cw__linkbtns">
+                        <button
+                          class="k12cw__btn k12cw__btn--ghost"
+                          data-testid="cw-card-print"
+                          :disabled="printBusyId === w.record_id"
+                          @click="printCard(w)"
+                        >
+                          {{ t('k12.works.practiceCardPrint') }}
+                        </button>
+                        <button
+                          class="k12cw__btn k12cw__btn--ghost"
+                          data-testid="cw-card-save-pdf"
+                          :disabled="savePdfBusyId === w.record_id"
+                          @click="saveCardPdf(w)"
+                        >
+                          {{ t('k12.works.practiceCardSavePdf') }}
+                        </button>
+                        <button
+                          class="k12cw__btn k12cw__btn--ghost"
+                          data-testid="cw-card-send"
+                          :disabled="busyId === w.record_id"
+                          @click="sendToPhone(w, 'practice_card')"
+                        >
+                          {{ t('k12.works.practiceCardSend') }}
+                        </button>
+                        <button
+                          v-if="!practiceCardOf(w)!.practice_card_done_at"
+                          class="k12cw__btn"
+                          data-testid="cw-card-done"
+                          :disabled="busyId === w.record_id"
+                          @click="markCardDone(w)"
+                        >
+                          {{ t('k12.works.practiceCardMarkDone') }}
+                        </button>
+                      </div>
+                      <div
+                        v-if="deliveryOf(w, 'practice_card')"
+                        class="k12cw__delivery"
+                        :class="`k12cw__delivery--${deliveryOf(w, 'practice_card')?.status}`"
+                        data-testid="cw-card-delivery-receipt"
+                        role="status"
+                      >
+                        <span>{{ deliveryTextOf(w, 'practice_card') }}</span>
+                        <button
+                          v-if="deliveryOf(w, 'practice_card')?.status === 'failed'"
+                          type="button"
+                          data-testid="cw-card-delivery-retry"
+                          @click="retryPhoneDelivery(w, 'practice_card')"
+                        >
+                          {{ t('k12.delivery.retry') }}
+                        </button>
+                        <button
+                          v-if="
+                            deliveryOf(w, 'practice_card')?.status === 'sending' ||
+                            deliveryOf(w, 'practice_card')?.status === 'outcome_unknown'
+                          "
+                          type="button"
+                          data-testid="cw-card-delivery-query"
+                          @click="queryPhoneDelivery(w, 'practice_card')"
+                        >
+                          {{ t('k12.delivery.query') }}
+                        </button>
+                      </div>
+                      <div
+                        v-if="deliverySetupErrorOf(w, 'practice_card')"
+                        class="k12cw__delivery k12cw__delivery--failed"
+                        data-testid="cw-card-bind-required"
+                      >
+                        <span>{{ deliverySetupErrorOf(w, 'practice_card') }}</span>
+                        <a href="/channels">{{ t('k12.delivery.bindCTA') }}</a>
+                      </div>
+                      <p
+                        v-if="printError[w.record_id]"
+                        class="k12cw__inlineerr"
+                        data-testid="cw-card-print-error"
+                      >
+                        {{ printError[w.record_id] }}
+                        <button
+                          class="k12cw__btn k12cw__btn--ghost"
+                          data-testid="cw-card-print-retry"
+                          :disabled="printBusyId === w.record_id"
+                          @click="printCard(w)"
+                        >
+                          {{ t('k12.works.retry') }}
+                        </button>
+                      </p>
+                      <p class="k12cw__ainote">{{ t('k12.works.practiceCardHint') }}</p>
+                    </div>
+
+                    <!-- 待点评 / 已修改：后端 Skill 真实生成 + 家长手写，两条入口均只写证据化点评。 -->
+                    <div v-if="w.status === 'draft' || w.status === 'revised'" class="k12cw__act">
+                      <HcClearableField>
+                        <textarea
+                          v-model="feedbackDraft[w.record_id]"
+                          class="k12cw__input"
+                          :placeholder="
+                            t('k12.works.addFeedback') + '（只给具体建议，不打分不代写）'
+                          "
+                          rows="2"
+                          data-testid="cw-feedback-input"
+                        ></textarea>
+                      </HcClearableField>
+                      <div class="k12cw__linkbtns">
+                        <button
+                          class="k12cw__btn k12cw__btn--ghost"
+                          data-testid="cw-feedback-generate"
+                          :disabled="!!feedbackGeneratingId || busyId === w.record_id"
+                          @click="generateFeedback(w)"
+                        >
+                          {{ t('k12.works.aiGenerate') }}
+                        </button>
+                        <span
+                          v-if="feedbackGeneratingId === w.record_id"
+                          class="k12cw__ainote"
+                          data-testid="cw-feedback-generating"
+                          >{{ t('k12.works.aiGenerating') }}</span
+                        >
+                      </div>
+                      <p
+                        v-if="feedbackGenerateError[w.record_id]"
+                        class="k12cw__inlineerr"
+                        data-testid="cw-feedback-generate-error"
+                      >
+                        {{ feedbackGenerateError[w.record_id] }}
+                        <button
+                          class="k12cw__btn k12cw__btn--ghost"
+                          data-testid="cw-feedback-generate-retry"
+                          :disabled="!!feedbackGeneratingId"
+                          @click="generateFeedback(w)"
+                        >
+                          {{ t('k12.works.retry') }}
+                        </button>
                       </p>
                       <button
-                        type="button"
-                        class="k12cw__btn k12cw__btn--ghost"
-                        data-testid="cw-revision-ocr-retry"
-                        @click="retryRevisionOCR(w.record_id)"
+                        class="k12cw__btn k12cw__btn--primary"
+                        :disabled="
+                          busyId === w.record_id || !(feedbackDraft[w.record_id] || '').trim()
+                        "
+                        data-testid="cw-feedback-submit"
+                        @click="submitFeedback(w)"
                       >
-                        {{ t('k12.works.ocrRetry') }}
+                        {{ t('k12.works.addFeedback') }}
                       </button>
-                      <p class="k12cw__ainote">{{ t('k12.works.ocrManualHint') }}</p>
                     </div>
-                    <p
-                      v-else-if="revisionOCRConfirmed(w)"
-                      class="k12cw__ainote k12cw__ocrok"
-                      data-testid="cw-revision-ocr-confirmed"
+
+                    <!-- 已点评：提交修改稿 -->
+                    <div v-else-if="w.status === 'feedback_ready'" class="k12cw__act">
+                      <HcClearableField>
+                        <textarea
+                          v-model="revisionDraft[w.record_id]"
+                          class="k12cw__input"
+                          :placeholder="t('k12.works.submitRevision')"
+                          rows="2"
+                          data-testid="cw-revision-input"
+                        ></textarea>
+                      </HcClearableField>
+                      <div class="k12cw__revision-photo">
+                        <label class="k12cw__btn k12cw__btn--ghost">
+                          {{ t('k12.works.revisionPhotoChoose') }}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            class="k12cw__file"
+                            data-testid="cw-revision-photo-input"
+                            @change="onRevisionPhotoPick(w, $event)"
+                          />
+                        </label>
+                        <template v-if="revisionPhotos[w.record_id]">
+                          <img
+                            :src="revisionPhotos[w.record_id]!.preview"
+                            class="k12cw__revision-thumb"
+                            alt=""
+                          />
+                          <span v-if="revisionPhotoUploading(w.record_id)" class="k12cw__ainote">
+                            {{ t('k12.works.photoUploading') }}
+                            {{ revisionPhotos[w.record_id]!.pct }}%
+                          </span>
+                          <span
+                            v-else-if="revisionPhotos[w.record_id]!.error"
+                            class="k12cw__inlineerr"
+                            data-testid="cw-revision-photo-error"
+                            >{{ revisionPhotos[w.record_id]!.error }}</span
+                          >
+                          <span
+                            v-else-if="revisionPhotos[w.record_id]!.assetId"
+                            class="k12cw__ainote"
+                          >
+                            {{ t('k12.works.photoUploaded') }}
+                          </span>
+                          <button
+                            v-if="revisionPhotos[w.record_id]!.error"
+                            class="k12cw__btn k12cw__btn--ghost"
+                            type="button"
+                            @click="uploadRevisionPhoto(w.record_id)"
+                          >
+                            {{ t('k12.works.photoRetry') }}
+                          </button>
+                          <button
+                            class="k12cw__btn k12cw__btn--ghost"
+                            type="button"
+                            @click="resetRevisionPhoto(w.record_id)"
+                          >
+                            {{ t('k12.works.photoRemove') }}
+                          </button>
+                          <div
+                            v-if="w.work_type === 'writing' && revisionPhotos[w.record_id]!.assetId"
+                            class="k12cw__ocr k12cw__revision-ocr"
+                            aria-live="polite"
+                            data-testid="cw-revision-ocr-state"
+                          >
+                            <p
+                              v-if="revisionPhotos[w.record_id]!.ocrBusy"
+                              class="k12cw__ainote"
+                              data-testid="cw-revision-ocr-processing"
+                            >
+                              {{ t('k12.works.ocrProcessing') }}
+                            </p>
+                            <div
+                              v-else-if="
+                                revisionPhotos[w.record_id]!.ocrError ||
+                                revisionPhotos[w.record_id]!.ocrJob?.status === 'failed'
+                              "
+                              class="k12cw__inlineerr"
+                              data-testid="cw-revision-ocr-error"
+                            >
+                              <p>
+                                {{
+                                  revisionPhotos[w.record_id]!.ocrError ||
+                                  revisionPhotos[w.record_id]!.ocrJob?.error_message ||
+                                  t('k12.works.ocrFailed')
+                                }}
+                              </p>
+                              <button
+                                type="button"
+                                class="k12cw__btn k12cw__btn--ghost"
+                                data-testid="cw-revision-ocr-retry"
+                                @click="retryRevisionOCR(w.record_id)"
+                              >
+                                {{ t('k12.works.ocrRetry') }}
+                              </button>
+                              <p class="k12cw__ainote">{{ t('k12.works.ocrManualHint') }}</p>
+                            </div>
+                            <p
+                              v-else-if="revisionOCRConfirmed(w)"
+                              class="k12cw__ainote k12cw__ocrok"
+                              data-testid="cw-revision-ocr-confirmed"
+                            >
+                              {{ t('k12.works.ocrConfirmed') }}
+                            </p>
+                            <p
+                              v-else-if="
+                                revisionPhotos[w.record_id]!.ocrJob?.status ===
+                                  'awaiting_confirmation' ||
+                                revisionPhotos[w.record_id]!.ocrJob?.status === 'confirmed'
+                              "
+                              class="k12cw__ainote"
+                              data-testid="cw-revision-ocr-awaiting"
+                            >
+                              {{ t('k12.works.ocrAwaiting') }}
+                            </p>
+                            <button
+                              v-if="revisionPhotos[w.record_id]!.ocrJob && !revisionOCRConfirmed(w)"
+                              type="button"
+                              class="k12cw__btn k12cw__btn--ghost"
+                              :disabled="
+                                revisionPhotos[w.record_id]!.ocrBusy ||
+                                !(revisionDraft[w.record_id] || '').trim()
+                              "
+                              data-testid="cw-revision-ocr-confirm"
+                              @click="confirmRevisionOCR(w.record_id)"
+                            >
+                              {{ t('k12.works.ocrConfirm') }}
+                            </button>
+                          </div>
+                        </template>
+                      </div>
+                      <button
+                        class="k12cw__btn k12cw__btn--primary"
+                        :disabled="busyId === w.record_id || !canSubmitRevision(w)"
+                        data-testid="cw-revision-submit"
+                        @click="submitRevision(w)"
+                      >
+                        {{ t('k12.works.submitRevision') }}
+                      </button>
+                    </div>
+
+                    <!-- 点评联动出口（§3.10，仅写作 · 已点评）：好句入积累 / 确认错处入错题 -->
+                    <div
+                      v-if="w.work_type === 'writing' && w.status === 'feedback_ready'"
+                      class="k12cw__link"
                     >
-                      {{ t('k12.works.ocrConfirmed') }}
-                    </p>
-                    <p
-                      v-else-if="
-                        revisionPhotos[w.record_id]!.ocrJob?.status === 'awaiting_confirmation' ||
-                        revisionPhotos[w.record_id]!.ocrJob?.status === 'confirmed'
-                      "
-                      class="k12cw__ainote"
-                      data-testid="cw-revision-ocr-awaiting"
-                    >
-                      {{ t('k12.works.ocrAwaiting') }}
-                    </p>
-                    <button
-                      v-if="revisionPhotos[w.record_id]!.ocrJob && !revisionOCRConfirmed(w)"
-                      type="button"
-                      class="k12cw__btn k12cw__btn--ghost"
-                      :disabled="
-                        revisionPhotos[w.record_id]!.ocrBusy ||
-                        !(revisionDraft[w.record_id] || '').trim()
-                      "
-                      data-testid="cw-revision-ocr-confirm"
-                      @click="confirmRevisionOCR(w.record_id)"
-                    >
-                      {{ t('k12.works.ocrConfirm') }}
-                    </button>
+                      <div class="k12cw__linkbtns">
+                        <button
+                          class="k12cw__btn k12cw__btn--ghost"
+                          data-testid="cw-accum-open"
+                          @click="toggleAccum(w)"
+                        >
+                          {{ t('k12.works.toAccum') }}
+                        </button>
+                        <button
+                          class="k12cw__btn k12cw__btn--ghost"
+                          data-testid="cw-mistake-open"
+                          @click="toggleMistake(w)"
+                        >
+                          {{ t('k12.works.toMistake') }}
+                        </button>
+                      </div>
+                      <div v-if="accumOpenId === w.record_id" class="k12cw__linkform">
+                        <HcClearableField>
+                          <textarea
+                            v-model="accumDraft[w.record_id]"
+                            class="k12cw__input"
+                            :placeholder="t('k12.works.accumPlaceholder')"
+                            rows="2"
+                            data-testid="cw-accum-input"
+                          ></textarea>
+                        </HcClearableField>
+                        <button
+                          class="k12cw__btn k12cw__btn--primary"
+                          :disabled="
+                            busyId === w.record_id || !(accumDraft[w.record_id] || '').trim()
+                          "
+                          data-testid="cw-accum-submit"
+                          @click="submitAccum(w)"
+                        >
+                          {{ t('k12.works.confirm') }}
+                        </button>
+                      </div>
+                      <div v-if="mistakeOpenId === w.record_id" class="k12cw__linkform">
+                        <HcClearableField>
+                          <textarea
+                            v-model="mistakeDraft[w.record_id]"
+                            class="k12cw__input"
+                            :placeholder="t('k12.works.mistakePlaceholder')"
+                            rows="2"
+                            data-testid="cw-mistake-input"
+                          ></textarea>
+                        </HcClearableField>
+                        <button
+                          class="k12cw__btn k12cw__btn--primary"
+                          :disabled="
+                            busyId === w.record_id || !(mistakeDraft[w.record_id] || '').trim()
+                          "
+                          data-testid="cw-mistake-submit"
+                          @click="submitMistake(w)"
+                        >
+                          {{ t('k12.works.confirm') }}
+                        </button>
+                      </div>
+                    </div>
+
+                    <footer v-if="w.status !== 'archived'" class="k12cw__foot">
+                      <button
+                        class="k12cw__btn k12cw__btn--ghost"
+                        :disabled="busyId === w.record_id"
+                        @click="archive(w)"
+                      >
+                        {{ t('k12.works.archive') }}
+                      </button>
+                    </footer>
                   </div>
-                </template>
-              </div>
-              <button
-                class="k12cw__btn k12cw__btn--primary"
-                :disabled="busyId === w.record_id || !canSubmitRevision(w)"
-                data-testid="cw-revision-submit"
-                @click="submitRevision(w)"
-              >
-                {{ t('k12.works.submitRevision') }}
-              </button>
-            </div>
-
-            <!-- 点评联动出口（§3.10，仅写作 · 已点评）：好句入积累 / 确认错处入错题 -->
-            <div
-              v-if="w.work_type === 'writing' && w.status === 'feedback_ready'"
-              class="k12cw__link"
-            >
-              <div class="k12cw__linkbtns">
-                <button
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-accum-open"
-                  @click="toggleAccum(w)"
-                >
-                  {{ t('k12.works.toAccum') }}
-                </button>
-                <button
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-mistake-open"
-                  @click="toggleMistake(w)"
-                >
-                  {{ t('k12.works.toMistake') }}
-                </button>
-              </div>
-              <div v-if="accumOpenId === w.record_id" class="k12cw__linkform">
-                <HcClearableField>
-                  <textarea
-                    v-model="accumDraft[w.record_id]"
-                    class="k12cw__input"
-                    :placeholder="t('k12.works.accumPlaceholder')"
-                    rows="2"
-                    data-testid="cw-accum-input"
-                  ></textarea>
-                </HcClearableField>
-                <button
-                  class="k12cw__btn k12cw__btn--primary"
-                  :disabled="busyId === w.record_id || !(accumDraft[w.record_id] || '').trim()"
-                  data-testid="cw-accum-submit"
-                  @click="submitAccum(w)"
-                >
-                  {{ t('k12.works.confirm') }}
-                </button>
-              </div>
-              <div v-if="mistakeOpenId === w.record_id" class="k12cw__linkform">
-                <HcClearableField>
-                  <textarea
-                    v-model="mistakeDraft[w.record_id]"
-                    class="k12cw__input"
-                    :placeholder="t('k12.works.mistakePlaceholder')"
-                    rows="2"
-                    data-testid="cw-mistake-input"
-                  ></textarea>
-                </HcClearableField>
-                <button
-                  class="k12cw__btn k12cw__btn--primary"
-                  :disabled="busyId === w.record_id || !(mistakeDraft[w.record_id] || '').trim()"
-                  data-testid="cw-mistake-submit"
-                  @click="submitMistake(w)"
-                >
-                  {{ t('k12.works.confirm') }}
-                </button>
+                </div>
+                <footer class="k12cw-detail-modal__foot">
+                  <button type="button" class="k12cw__btn" @click="closeDetails()">
+                    {{ t('k12.works.detailClose') }}
+                  </button>
+                </footer>
               </div>
             </div>
-
-            <footer v-if="w.status !== 'archived'" class="k12cw__foot">
-              <button
-                class="k12cw__btn k12cw__btn--ghost"
-                :disabled="busyId === w.record_id"
-                @click="archive(w)"
-              >
-                {{ t('k12.works.archive') }}
-              </button>
-            </footer>
-          </div>
+          </Teleport>
         </div>
       </li>
     </ul>
 
     <!-- 添加作品弹窗（原型 5326-5361）。z-index 走 modal 令牌，与 K12BackupModal 同层。 -->
-    <div
-      v-if="addOpen"
-      class="k12cw-overlay"
-      data-testid="cw-add-modal"
-      @click.self="closeAdd"
-    >
+    <div v-if="addOpen" class="k12cw-overlay" data-testid="cw-add-modal" @click.self="closeAdd">
       <div
         ref="addDialog"
         class="k12cw-modal"
@@ -1641,11 +1825,7 @@ defineExpose({ load, openAdd })
       >
         <div class="k12cw-modal__head">
           <b>{{ t('k12.works.addModalTitle') }}</b>
-          <button
-            class="k12cw-modal__x"
-            :aria-label="t('k12.works.cancel')"
-            @click="closeAdd"
-          >
+          <button class="k12cw-modal__x" :aria-label="t('k12.works.cancel')" @click="closeAdd">
             ✕
           </button>
         </div>
@@ -1871,7 +2051,8 @@ defineExpose({ load, openAdd })
 .k12cw__overview {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
 }
 .k12cw__overview > .k12cw__btn {
@@ -1892,9 +2073,9 @@ defineExpose({ load, openAdd })
   border: 0.5px solid var(--hc-border);
   border-radius: 10px;
   background: var(--hc-bg-card);
-  padding: 8px 12px;
-  font-size: 10.5px;
-  color: var(--hc-text-secondary);
+  padding: 7px 12px;
+  font-size: 11px;
+  color: var(--hc-text-muted);
 }
 .k12cw__kpi b {
   font-size: 16px;
@@ -1904,15 +2085,25 @@ defineExpose({ load, openAdd })
   font-variant-numeric: tabular-nums;
 }
 .k12cw__rules {
+  position: relative;
   border: 0.5px solid var(--hc-border);
-  border-left: 3px solid var(--hc-accent);
-  border-radius: var(--hc-radius-md);
+  border-radius: 12px;
   background: var(--hc-bg-card);
-  padding: 10px 13px;
-  font-size: 11.5px;
-  line-height: 1.65;
+  padding: 11px 13px 11px 17px;
+  font-size: 12.5px;
+  line-height: 1.55;
   color: var(--hc-text-secondary);
   margin-bottom: 12px;
+}
+.k12cw__rules::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 11px;
+  bottom: 11px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--hc-accent);
 }
 .k12cw__rules b {
   display: block;
@@ -2097,6 +2288,97 @@ defineExpose({ load, openAdd })
   font-size: 11px;
   color: var(--hc-success);
 }
+.k12cw-detail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--hc-z-modal);
+  display: none;
+  align-items: flex-start;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 11vh 12px 12px;
+  overflow-y: auto;
+  background: rgba(8, 18, 32, 0.4);
+  backdrop-filter: blur(3px) saturate(120%);
+  -webkit-backdrop-filter: blur(3px) saturate(120%);
+}
+.k12cw-detail-overlay.is-open {
+  display: flex;
+  animation: k12cw-fade 0.2s var(--hc-ease-out);
+}
+.k12cw-detail-modal {
+  width: 478px;
+  max-width: 92vw;
+  overflow: hidden;
+  background: var(--hc-bg-elevated);
+  border: 0.5px solid var(--hc-border);
+  border-radius: 16px;
+  box-shadow: var(--hc-shadow-float);
+  outline: none;
+  animation: k12cw-pop 0.32s var(--hc-ease-out);
+}
+.k12cw-detail-modal__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 18px;
+  border-bottom: 0.5px solid var(--hc-border);
+}
+.k12cw-detail-modal__head b {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  font-weight: 600;
+}
+.k12cw-detail-modal__x {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--hc-text-muted);
+  cursor: pointer;
+}
+.k12cw-detail-modal__x:hover {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+.k12cw-detail-modal__body {
+  max-height: 62vh;
+  overflow: auto;
+  padding: 18px;
+}
+.k12cw-detail-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 0.5px solid var(--hc-border);
+}
+@keyframes k12cw-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes k12cw-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 .k12cw-overlay {
   /* modal 层（9100）令牌，与 K12BackupModal 一致；须低于 popover（BUG-20260708） */
   position: fixed;
@@ -2106,7 +2388,7 @@ defineExpose({ load, openAdd })
   align-items: flex-start;
   justify-content: center;
   box-sizing: border-box;
-  padding: clamp(12px, 9vh, 72px) 12px;
+  padding: 11vh 12px 12px;
   overflow-y: auto;
   background: rgba(8, 18, 32, 0.4);
   backdrop-filter: blur(3px) saturate(120%);
@@ -2114,9 +2396,9 @@ defineExpose({ load, openAdd })
 }
 .k12cw-modal {
   width: 478px;
-  max-width: 100%;
+  max-width: 92vw;
   max-height: 100%;
-  overflow: auto;
+  overflow: hidden;
   background: var(--hc-bg-elevated);
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
@@ -2125,9 +2407,10 @@ defineExpose({ load, openAdd })
 .k12cw-modal__head {
   display: flex;
   align-items: center;
-  padding: 15px 18px;
+  gap: 10px;
+  padding: 16px 18px;
   border-bottom: 0.5px solid var(--hc-border);
-  font-size: 14.5px;
+  font-size: 15px;
   color: var(--hc-text-primary);
 }
 .k12cw-modal__x {
@@ -2145,9 +2428,11 @@ defineExpose({ load, openAdd })
   color: var(--hc-text-primary);
 }
 .k12cw-modal__body {
-  padding: 16px 18px;
+  padding: 18px;
   display: grid;
   gap: 13px;
+  max-height: 62vh;
+  overflow: auto;
 }
 .k12cw-modal__field {
   display: grid;
@@ -2160,46 +2445,49 @@ defineExpose({ load, openAdd })
 .k12cw-modal__foot {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 13px 18px;
+  gap: 10px;
+  padding: 14px 18px;
   border-top: 0.5px solid var(--hc-border);
 }
 .k12cw__filter {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 7px;
+  flex-wrap: wrap;
   margin-bottom: 12px;
-  padding: 10px 12px;
+  padding: 12px 14px;
   border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
+  border-radius: 14px;
   background: var(--hc-bg-card);
 }
 .k12cw__filter-label {
-  margin-right: 8px;
-  font-size: 11px;
-  color: var(--hc-text-secondary);
+  width: 38px;
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--hc-text-muted);
 }
 .k12cw__filter button {
   font: inherit;
   font-size: 12px;
-  border: none;
-  background: transparent;
+  border: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-input);
   color: var(--hc-text-secondary);
-  padding: 6px 12px;
-  border-radius: var(--hc-radius-md);
+  padding: 5px 8px;
+  border-radius: 9px;
   cursor: pointer;
   transition:
     background 0.15s,
     color 0.15s;
 }
 .k12cw__filter button:hover {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
+  border-color: var(--hc-border-hl);
 }
 .k12cw__filter button.on {
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
   font-weight: 600;
+  border-color: color-mix(in srgb, var(--hc-accent) 35%, var(--hc-border));
 }
 .k12cw__err {
   display: flex;
@@ -2248,11 +2536,18 @@ defineExpose({ load, openAdd })
 .k12cw__revision-ocr {
   flex: 1 0 100%;
 }
-.k12cw__empty {
-  color: var(--hc-text-muted);
-  font-size: 13px;
-  padding: 24px 4px;
-  line-height: 1.6;
+.k12cw__empty,
+.k12cw__loading {
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12.5px;
+  padding: 11px 13px;
+  line-height: 1.55;
+}
+.k12cw__empty b {
+  color: var(--hc-text-primary);
 }
 .k12cw__list {
   list-style: none;
@@ -2269,7 +2564,7 @@ defineExpose({ load, openAdd })
   gap: 13px;
   align-items: start;
   border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-lg);
+  border-radius: 16px;
   background: var(--hc-bg-card);
   box-shadow: var(--hc-shadow-sm);
   padding: 14px;
@@ -2283,11 +2578,6 @@ defineExpose({ load, openAdd })
   box-shadow: var(--hc-shadow-md);
   border-color: var(--hc-border-hl);
 }
-.k12cw__card--expanded {
-  grid-column: 1 / -1;
-  grid-template-columns: 150px minmax(0, 1fr);
-  transform: none;
-}
 .k12cw__preview {
   height: 112px;
   min-height: 112px;
@@ -2295,9 +2585,6 @@ defineExpose({ load, openAdd })
   overflow: hidden;
   position: relative;
   background: linear-gradient(180deg, #a9c9e6 0 54%, #8fbb7d 54% 76%, #729a63 76%);
-}
-.k12cw__card--expanded .k12cw__preview {
-  height: 150px;
 }
 .k12cw__preview--writing {
   background: linear-gradient(135deg, #fffdf7, #f4ead5);
@@ -2335,7 +2622,7 @@ defineExpose({ load, openAdd })
 .k12cw__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 .k12cw__kind {
@@ -2345,10 +2632,20 @@ defineExpose({ load, openAdd })
   background: var(--hc-accent-subtle);
   border-radius: 4px;
   padding: 2px 7px;
+  white-space: nowrap;
+}
+.k12cw__kind--writing {
+  background: color-mix(in srgb, #e8590c 12%, transparent);
+  color: #e8590c;
+}
+.k12cw__kind--art {
+  background: color-mix(in srgb, #c2255c 10%, transparent);
+  color: #c2255c;
 }
 .k12cw__title {
   font-size: 13.5px;
   color: var(--hc-text-primary);
+  margin: 1px 0 5px;
 }
 .k12cw__pill {
   font-size: 10.5px;
@@ -2365,8 +2662,8 @@ defineExpose({ load, openAdd })
   background: color-mix(in srgb, var(--hc-success) 10%, transparent);
 }
 .k12cw__pill--done {
-  color: var(--hc-accent);
-  background: var(--hc-accent-subtle);
+  color: var(--hc-warning);
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
 }
 .k12cw__pill--muted {
   color: var(--hc-text-muted);
@@ -2411,19 +2708,21 @@ defineExpose({ load, openAdd })
 .k12cw__detail-toggle {
   border: none;
   background: transparent;
-  padding: 5px 0;
+  padding: 6px 0;
+  border-radius: 8px;
   color: var(--hc-text-primary);
   font: inherit;
   font-size: 11.5px;
   cursor: pointer;
 }
-.k12cw__card:not(.k12cw__card--expanded) .k12cw__details {
-  display: none;
+.k12cw__card[data-review-state='pending'] .k12cw__detail-toggle {
+  background: var(--hc-bg-card);
+  border: 0.5px solid var(--hc-border);
+  padding: 6px 12px;
+  box-shadow: var(--hc-shadow-sm);
 }
 .k12cw__details {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 0.5px dashed var(--hc-border);
+  min-width: 0;
 }
 .k12cw__versions {
   list-style: none;
@@ -2579,8 +2878,7 @@ defineExpose({ load, openAdd })
   }
 }
 @media (max-width: 560px) {
-  .k12cw__card,
-  .k12cw__card--expanded {
+  .k12cw__card {
     grid-template-columns: 88px minmax(0, 1fr);
   }
   .k12cw__kpis {

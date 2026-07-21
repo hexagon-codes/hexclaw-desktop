@@ -376,6 +376,50 @@ export interface HexbakCreativeWorkOCREvidence {
   job_created_at?: number
   job_last_updated_at?: number
 }
+export interface HexbakProblem {
+  problem_id: string
+  agent_name: string
+  submission_id: string
+  page_asset_id: string
+  ordinal: number
+  problem_kind: 'standalone' | 'compound_parent' | 'subproblem'
+  parent_problem_id?: string
+  subproblem_no?: string
+  subject?: string
+  stem_raw: string
+  stem_markdown: string
+  concept_ids?: string[]
+  transcription_confidence?: number
+  confirmation_required?: boolean
+  confirmation_reasons?: string[]
+  canonical_version: number
+  created_at: number
+  updated_at: number
+}
+export interface HexbakAttemptBBox {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+export interface HexbakAttempt {
+  attempt_id: string
+  agent_name: string
+  submission_id: string
+  problem_id: string
+  answer_state: string
+  answer_raw: string
+  answer_markdown: string
+  confirmed_version: number
+  input_digest?: string
+  bbox?: HexbakAttemptBBox
+  created_at: number
+  updated_at: number
+}
+export interface HexbakProblemAttemptSnapshot {
+  problems: HexbakProblem[]
+  attempts: HexbakAttempt[]
+}
 export interface HexbakArchive {
   version: number
   /** v3 content-addressed immutable archive identity; absent on compatible v1/v2 files. */
@@ -388,6 +432,8 @@ export interface HexbakArchive {
   assets?: HexbakAsset[]
   /** v4 confirmed-only CreativeWork OCR evidence, covered by checksum/exact-set validation. */
   creative_work_ocr?: HexbakCreativeWorkOCREvidence[]
+  /** v5 canonical photographed-problem and answer snapshots, covered by checksum validation. */
+  problem_attempts?: HexbakProblemAttemptSnapshot[]
   checksum: string
 }
 export interface K12RestoreResp {

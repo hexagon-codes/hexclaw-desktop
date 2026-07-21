@@ -33,26 +33,49 @@ vi.mock('@/api/k12', () => ({
     job: { job_id: 'job-1', stage: 'queued', retryable: false },
   }),
   k12GetGradingJob: vi.fn().mockResolvedValue({
-    job_id: 'job-1', stage: 'awaiting_confirmation',
-    confirmation_state: 'pending', anchor_state: 'located',
+    job_id: 'job-1',
+    stage: 'awaiting_confirmation',
+    confirmation_state: 'pending',
+    anchor_state: 'located',
     job: { job_id: 'job-1', stage: 'awaiting_confirmation' },
-    recognition: { questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }], subject: '' },
+    recognition: {
+      questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }],
+      subject: '',
+    },
   }),
   k12ConfirmGradingJob: vi.fn(),
   k12RetryGradingJob: vi.fn(),
   k12ColdStart: vi.fn(),
-  k12InsightReport: vi.fn().mockResolvedValue({ trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12InsightReport: vi.fn().mockResolvedValue({
+    trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
+    weak_top3: [],
+    month_new_mistakes: 0,
+    review_completion_rate: -1,
+    consecutive_fail_kps: null,
+    suggestion: '',
+  }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12GetViewDescriptor: vi.fn().mockResolvedValue({
-    header_tabs: ['辅导', '学习档案', '学情'], message_badges: [], composer_placeholder: '',
-    composer_chips: [], record_collections: [], side_panels: [], actions: [], i18n_keys: [], schema_version: 1,
+    header_tabs: ['辅导', '学习档案', '学情'],
+    message_badges: [],
+    composer_placeholder: '',
+    composer_chips: [],
+    record_collections: [],
+    side_panels: [],
+    actions: [],
+    i18n_keys: [],
+    schema_version: 1,
   }),
 }))
 const routeQuery = vi.hoisted(() => ({ q: {} as Record<string, string> }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery.q }) }))
 
-const { voiceRefs } = vi.hoisted(() => ({ voiceRefs: { api: null as unknown as Record<string, unknown> } }))
+const { voiceRefs } = vi.hoisted(() => ({
+  voiceRefs: { api: null as unknown as Record<string, unknown> },
+}))
 vi.mock('@/composables/useVoice', () => ({ useVoice: () => voiceRefs.api }))
 vi.mock('@/stores/chat', () => ({ useChatStore: () => ({ thinkingEnabled: false }) }))
 vi.mock('lucide-vue-next', async (importOriginal) => {
@@ -65,14 +88,22 @@ vi.mock('lucide-vue-next', async (importOriginal) => {
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
 
 function renderEnh(extra: Record<string, unknown> = {}) {
   return mount(K12ChatEnhancement, {
-    props: { agentId: 'ming', agentName: '小明的辅导老师', metadata: { 'k12.grade_term': '五年级上' }, descriptor: K12_VIEW_DESCRIPTOR, ...extra },
+    props: {
+      agentId: 'ming',
+      agentName: '小明的辅导老师',
+      metadata: { 'k12.grade_term': '五年级上' },
+      descriptor: K12_VIEW_DESCRIPTOR,
+      ...extra,
+    },
     global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
     attachTo: document.body,
   })
@@ -86,8 +117,15 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
   beforeEach(() => {
     setActivePinia(createPinia())
     routeQuery.q = {}
-    document.body.innerHTML = '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
-    voiceRefs.api = { isListening: ref(false), transcript: ref(''), isSupported: false, toggleListening: vi.fn() }
+    document.body.innerHTML =
+      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+    voiceRefs.api = {
+      isListening: ref(false),
+      transcript: ref(''),
+      error: ref(''),
+      isSupported: false,
+      toggleListening: vi.fn(),
+    }
   })
 
   it('★回归锁：composer 不得再出现手动识题按钮（原型 app.html:1316「零手动按钮」）', async () => {
@@ -128,7 +166,9 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
         stubs: { MentionPopup: { template: '<div />' }, TemplatePopup: { template: '<div />' } },
       },
     })
-    const mic = w.findAll('.hc-composer__tool').find((b) => (b.attributes('title') || '').includes('语音'))
+    const mic = w
+      .findAll('.hc-composer__tool')
+      .find((b) => (b.attributes('title') || '').includes('语音'))
     expect(mic, '麦克风按钮必须常驻（不可用时点击给出提示，而非整颗消失）').toBeTruthy()
   })
 })
@@ -137,7 +177,8 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
   beforeEach(() => {
     setActivePinia(createPinia())
     routeQuery.q = {}
-    document.body.innerHTML = '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+    document.body.innerHTML =
+      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
   it('★识题后切 records 再切回 chat：结果仍在、GradingJob 只创建一次（真机取证：曾重新「正在识题分题」）', async () => {
@@ -152,12 +193,18 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
     expect(recognizeMock).toHaveBeenCalledTimes(1)
 
     // 切错题本 tab → 面板隐藏但**不销毁**（v-show 保活；v-if 销毁会导致重挂载重识题 + prep-card fetch abort）
-    await w.findAll('.k12enh-seg button').find((b) => b.text() === '学习档案')!.trigger('click')
+    await w
+      .findAll('.k12enh-seg button')
+      .find((b) => b.text() === '学习档案')!
+      .trigger('click')
     await flushPromises()
     expect(recognizePanel(w).isVisible()).toBe(false)
 
     // 切回辅导 tab → 结果原样恢复、零重复识题
-    await w.findAll('.k12enh-seg button').find((b) => b.text() === '辅导')!.trigger('click')
+    await w
+      .findAll('.k12enh-seg button')
+      .find((b) => b.text() === '辅导')!
+      .trigger('click')
     await flushPromises()
     expect(recognizePanel(w).isVisible()).toBe(true)
     expect(recognizeMock, '切 tab 不得触发重新识题').toHaveBeenCalledTimes(1)

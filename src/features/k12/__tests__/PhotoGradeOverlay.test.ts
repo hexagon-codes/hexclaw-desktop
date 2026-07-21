@@ -34,6 +34,29 @@ function render(marks: Mark[], image = 'data:image/png;base64,AAAA') {
 }
 
 describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错位防护）', () => {
+  it('权威原型：结果以整页摘要 + 原图主体 + 右侧仅展开需关注题呈现', () => {
+    const w = render([
+      { correct: true, bbox: { x: 0.1, y: 0.2, w: 0.15, h: 0.05 }, question: '第 1 题' },
+      {
+        correct: false,
+        bbox: { x: 0.3, y: 0.5, w: 0.2, h: 0.06 },
+        question: '第 2 题',
+        correctAnswer: '100',
+        errorCause: '进位错误',
+      },
+    ])
+
+    expect(w.get('[data-testid="photo-grade-overlay"]').classes()).toContain('grade-result')
+    const stats = w.findAll('.grade-stat b').map((item) => item.text())
+    expect(stats).toEqual(['2', '1', '1', '0'])
+    expect(w.get('.grade-media__bar').text()).toContain('作业原图 · 未经任何修改')
+    expect(w.get('.grade-analysis__head').text()).toContain('只展开需要关注的题')
+    expect(w.findAll('.grade-analysis .grade-card--issue')).toHaveLength(1)
+    expect(w.get('.grade-card--issue').attributes('open')).toBeDefined()
+    expect(w.get('.grade-card--correct').attributes('open')).toBeUndefined()
+    expect(w.findAll('.grade-legend [data-grade-status]')).toHaveLength(8)
+  })
+
   it('①合法 bbox：对题画绿 ✓、错题画红 ✗，并按归一化坐标定位', async () => {
     const w = render([
       { correct: true, bbox: { x: 0.1, y: 0.2, w: 0.15, h: 0.05 }, question: '3.8×3=?' },
@@ -141,8 +164,9 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
     )
   })
 
-  it('提供保存批改图按钮，不能只有临时 DOM 叠层', () => {
+  it('不混入权威原型外的保存批改图入口', () => {
     const w = render([{ correct: true, bbox: { x: 0.1, y: 0.2, w: 0.1, h: 0.05 } }])
-    expect(w.find('[data-testid="overlay-save"]').exists()).toBe(true)
+    expect(w.find('[data-testid="overlay-toggle"]').exists()).toBe(true)
+    expect(w.find('[data-testid="overlay-save"]').exists()).toBe(false)
   })
 })

@@ -1,5 +1,5 @@
 /**
- * BUG-20260709 · composer chips（数学讲解/渐进提示/识题校验）不在对话框（composer 盒）内。
+ * BUG-20260709 · composer chips（自动识别学科/渐进提示/识题校验）不在对话框（composer 盒）内。
  *
  * 症状（真机 live 巡检，用户两次报告）：chips 经 Teleport 挂到 `#hc-chat-scenario-composer-top`
  * 锚点，渲染成输入框**上方**一行浮动说明文本——不在对话框里，且 Teleport 锚点方案（defer 时序、
@@ -24,36 +24,52 @@ import k12Zh from '../i18n/zh-CN'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
+import chatViewSource from '@/views/ChatView.vue?raw'
 
-const CHIPS = ['🧮 数学讲解', '💡 渐进提示', '📷 识题校验']
+const CHIPS = ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验']
+const PROJECTED_CHIPS = [
+  { id: 'k12-composer-chip-0', label: CHIPS[0], actionId: 'subject-capabilities' },
+  { id: 'k12-composer-chip-1', label: CHIPS[1] },
+  { id: 'k12-composer-chip-2', label: CHIPS[2] },
+]
 
 vi.mock('@/api/k12', () => ({
   k12GetViewDescriptor: vi.fn().mockResolvedValue({
     header_tabs: ['辅导', '错题本'],
     message_badges: [],
     composer_placeholder: '',
-    composer_chips: ['🧮 数学讲解', '💡 渐进提示', '📷 识题校验'],
-    record_collections: [], side_panels: [], actions: [], i18n_keys: [], schema_version: 1,
+    composer_chips: ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验'],
+    record_collections: [],
+    side_panels: [],
+    actions: [],
+    i18n_keys: [],
+    schema_version: 1,
   }),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(), k12PrepCard: vi.fn(), k12Grade: vi.fn(),
+  k12MarkMastered: vi.fn(),
+  k12PrepCard: vi.fn(),
+  k12Grade: vi.fn(),
   k12ColdStart: vi.fn(),
-  k12InsightReport: vi.fn(), k12StudyTime: vi.fn(), k12ListAccumulation: vi.fn(),
+  k12InsightReport: vi.fn(),
+  k12StudyTime: vi.fn(),
+  k12ListAccumulation: vi.fn(),
 }))
 
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
 
 beforeEach(() => {
   setActivePinia(createPinia())
-  document.body.innerHTML = ''
+  document.body.innerHTML = '<div id="hc-chat-scenario-footer"></div>'
 })
 
 describe('BUG-20260709 · composer chips 必须在对话框（composer 盒）内', () => {
@@ -71,7 +87,7 @@ describe('BUG-20260709 · composer chips 必须在对话框（composer 盒）内
 
     const emitted = wrapper.emitted('update:composerChips')
     expect(emitted, 'chips 应经 emit 上交给 shell（放弃 Teleport 锚点方案）').toBeTruthy()
-    expect(emitted![emitted!.length - 1]![0]).toEqual(CHIPS)
+    expect(emitted![emitted!.length - 1]![0]).toEqual(PROJECTED_CHIPS)
   })
 
   it('★K12ChatEnhancement：不得再向 composer 上方锚点 Teleport chips 行（旧方案退役）', async () => {
@@ -130,7 +146,45 @@ describe('BUG-20260709 · composer chips 必须在对话框（composer 盒）内
     expect(wrapper.findAll('[data-testid="composer-preset-chip"]').length).toBe(2)
 
     // 换一组 chips（切换实例）→ 已关闭状态复位
-    await wrapper.setProps({ presetChips: ['🧮 数学讲解'] })
+    await wrapper.setProps({ presetChips: ['📚 自动识别学科'] })
     expect(wrapper.findAll('[data-testid="composer-preset-chip"]').length).toBe(1)
+  })
+
+  it('app.html：场景提示语与公式粘贴说明在 composer 盒内按描述符透传', async () => {
+    expect(K12_VIEW_DESCRIPTOR.composer).toEqual(
+      expect.objectContaining({
+        placeholderKey: 'k12.composer.placeholder',
+        hint: {
+          emphasisKey: 'k12.composer.formulaHintLead',
+          detailKey: 'k12.composer.formulaHintDetail',
+        },
+      }),
+    )
+    expect(chatViewSource).toContain(':scenario-placeholder="scenarioComposerPlaceholder"')
+    expect(chatViewSource).toContain(':scenario-hint="scenarioComposerHint"')
+
+    const wrapper = mount(ChatInput, {
+      props: {
+        scenarioPlaceholder: '发消息、粘贴带分数/公式的题目，或 ⌘V 粘贴作业照片',
+        scenarioHint: {
+          emphasis: '支持粘贴分数与数学公式',
+          detail: '网页、Word、PDF 中可复制的公式发送后按数学排版显示；扫描页仍建议粘贴截图。',
+        },
+      },
+      global: {
+        plugins: [i18n()],
+        stubs: { TemplatePopup: true, MentionPopup: true },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.get('textarea').attributes('placeholder')).toBe(
+      '发消息、粘贴带分数/公式的题目，或 ⌘V 粘贴作业照片',
+    )
+    const hint = wrapper.get('[data-testid="scenario-composer-hint"]')
+    expect(hint.get('b').text()).toBe('支持粘贴分数与数学公式')
+    expect(hint.text()).toContain(
+      '网页、Word、PDF 中可复制的公式发送后按数学排版显示；扫描页仍建议粘贴截图。',
+    )
   })
 })

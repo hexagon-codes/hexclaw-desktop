@@ -23,28 +23,60 @@ import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
 
 vi.mock('@/api/k12', () => ({
-  k12ListMistakes: vi.fn().mockResolvedValue({ items: [
-    { record_id: 'a', question: '苹果和梨的价钱', knowledge_point: '小数乘法', error_cause: '进位', status: 'new', version: 0, due_at: 1 },
-  ] }),
+  k12ListMistakes: vi.fn().mockResolvedValue({
+    items: [
+      {
+        record_id: 'a',
+        question: '苹果和梨的价钱',
+        knowledge_point: '小数乘法',
+        error_cause: '进位',
+        status: 'new',
+        version: 0,
+        due_at: 1,
+      },
+    ],
+  }),
   // 队列非空 → review 行动卡渲染（「自定义组卷」按钮在其中）
-  k12ReviewQueue: vi.fn().mockResolvedValue({ items: [
-    { record_id: 'a', question: '苹果和梨的价钱', knowledge_point: '小数乘法', error_cause: '进位', status: 'new', version: 0, due_at: 1 },
-  ] }),
+  k12ReviewQueue: vi.fn().mockResolvedValue({
+    items: [
+      {
+        record_id: 'a',
+        question: '苹果和梨的价钱',
+        knowledge_point: '小数乘法',
+        error_cause: '进位',
+        status: 'new',
+        version: 0,
+        due_at: 1,
+      },
+    ],
+  }),
   k12MarkMastered: vi.fn(),
   k12ReviewRetry: vi.fn(),
   k12PrepCard: vi.fn(),
-  k12Grade: vi.fn().mockResolvedValue({ badge: 'verified-strong', evidence_type: 'program', record_created: true }),
+  k12Grade: vi.fn().mockResolvedValue({
+    badge: 'verified-strong',
+    evidence_type: 'program',
+    record_created: true,
+  }),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { mastered: 0, reviewing: 0, retried: 0, archived: 0, total: 0 },
-    weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '',
+    weak_top3: [],
+    month_new_mistakes: 0,
+    review_completion_rate: -1,
+    consecutive_fail_kps: null,
+    suggestion: '',
   }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
 }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
@@ -63,7 +95,10 @@ describe('BUG-20260709-A 记一条错题/自定义组卷应为 modal 弹窗（�
     const w = render()
     await flushPromises()
     // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
-    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    await w
+      .findAll('.seg button')
+      .find((b) => b.text() === '全部错题')!
+      .trigger('click')
     await w.find('[data-testid="mistake-add-open"]').trigger('click')
     const modal = w.find('.k12modal')
     expect(modal.exists(), '应出现 modal 遮罩层（原型 openAddMistake=modal）').toBe(true)
@@ -76,6 +111,7 @@ describe('BUG-20260709-A 记一条错题/自定义组卷应为 modal 弹窗（�
   it('★点「自定义组卷」→ 同为 modal 弹层（原型 openCustomPaper=modal，同构位置）', async () => {
     const w = render()
     await flushPromises()
+    await w.find('[data-testid="review-split-more"]').trigger('click')
     await w.find('[data-testid="custom-paper-open"]').trigger('click')
     const modal = w.find('.k12modal')
     expect(modal.exists(), '自定义组卷同为原型 modal').toBe(true)
@@ -87,7 +123,10 @@ describe('BUG-20260709-A 记一条错题/自定义组卷应为 modal 弹窗（�
     const w = render()
     await flushPromises()
     // IA 迁移（2026-07-18）：记一条错题=「全部错题」档案页主操作，先切 Tab
-    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    await w
+      .findAll('.seg button')
+      .find((b) => b.text() === '全部错题')!
+      .trigger('click')
     await w.find('[data-testid="mistake-add-open"]').trigger('click')
     expect(w.find('.k12modal').exists()).toBe(true)
     // 在遮罩自身上触发 click（target=self），命中 @click.self 关闭

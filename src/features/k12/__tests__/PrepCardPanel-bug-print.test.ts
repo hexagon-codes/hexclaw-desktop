@@ -6,29 +6,42 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import PrepCardPanel from '../views/PrepCardPanel.vue'
 
-const h = vi.hoisted(() => ({ printSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>(() => Promise.resolve(true)) }))
-vi.mock('../persistent-print', () => ({ printPersistentArtifact: (...a: unknown[]) => h.printSpy(...a) }))
+const h = vi.hoisted(() => ({
+  printSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>(() => Promise.resolve(true)),
+}))
+vi.mock('../persistent-print', () => ({
+  printPersistentArtifact: (...a: unknown[]) => h.printSpy(...a),
+}))
 vi.mock('../export', () => ({
   printPrepCard: vi.fn().mockResolvedValue(true),
-  prepCardToMarkdown: (card: { sections: Array<{ content: string }> }) => `# 辅导要点\n\n${card.sections[0]?.content ?? ''}`,
+  prepCardToMarkdown: (card: { sections: Array<{ content: string }> }) =>
+    `# 辅导要点\n\n${card.sections[0]?.content ?? ''}`,
   prepCardToText: vi.fn().mockReturnValue('辅导要点'),
 }))
 vi.mock('@/api/k12', () => ({
   k12PrepCard: vi.fn().mockResolvedValue({
     knowledge_points: ['小数乘法'],
-    sections: [{ title: '知识点回顾', content: '小数乘法要对齐小数点…', source_label: '📖 依据课本' }],
+    sections: [
+      { title: '知识点回顾', content: '小数乘法要对齐小数点…', source_label: '📖 依据课本' },
+    ],
   }),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(), k12Grade: vi.fn(), k12InsightReport: vi.fn(),
-  k12StudyTime: vi.fn(), k12ListAccumulation: vi.fn(),
+  k12MarkMastered: vi.fn(),
+  k12Grade: vi.fn(),
+  k12InsightReport: vi.fn(),
+  k12StudyTime: vi.fn(),
+  k12ListAccumulation: vi.fn(),
   k12TutorTurn: vi.fn(),
-  k12BindIM: vi.fn().mockResolvedValue({}), k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
+  k12BindIM: vi.fn().mockResolvedValue({}),
+  k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
 }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
@@ -46,16 +59,17 @@ describe('bug: 备课卡打印按钮须真打印', () => {
       global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
     })
     await flushPromises() // loadPrepCard 完成，store.prepCard 就绪
-    const printBtn = w.findAll('.icbtn').find((b) => b.text().includes('🖨'))!
-    await printBtn.trigger('click')
+    await w.get('[data-testid="prep-print"]').trigger('click')
     expect(h.printSpy).toHaveBeenCalledTimes(1)
-    expect(h.printSpy).toHaveBeenCalledWith(expect.objectContaining({
-      agent: 'ming',
-      sourceKind: 'prep_card',
-      sourceRef: 'prep-card:五年级上:小数乘法',
-      title: '这份作业的辅导要点',
-      canonicalMarkdown: expect.stringContaining('小数乘法要对齐小数点'),
-      browserPrint: expect.any(Function),
-    }))
+    expect(h.printSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'ming',
+        sourceKind: 'prep_card',
+        sourceRef: 'prep-card:五年级上:小数乘法',
+        title: '这份作业的辅导要点',
+        canonicalMarkdown: expect.stringContaining('小数乘法要对齐小数点'),
+        browserPrint: expect.any(Function),
+      }),
+    )
   })
 })

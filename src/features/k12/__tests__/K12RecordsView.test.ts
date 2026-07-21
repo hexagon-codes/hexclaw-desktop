@@ -40,13 +40,11 @@ const h = vi.hoisted(() => {
   return {
     mistakes,
     markMasteredSpy: vi.fn().mockResolvedValue({ ok: true }),
-    retrySpy: vi
-      .fn()
-      .mockResolvedValue({
-        solution: '变式题：4.2×3=? 解：12.6',
-        verdict: 'agree',
-        badge: '✅ 已程序验算',
-      }),
+    retrySpy: vi.fn().mockResolvedValue({
+      solution: '变式题：4.2×3=? 解：12.6',
+      verdict: 'agree',
+      badge: '✅ 已程序验算',
+    }),
     recordMistakeSpy: vi.fn(),
     listMistakesSpy: vi.fn(),
   }
@@ -109,13 +107,11 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     setActivePinia(createPinia())
     markMasteredSpy.mockClear()
     h.listMistakesSpy.mockReset().mockResolvedValue({ items: h.mistakes })
-    h.recordMistakeSpy
-      .mockReset()
-      .mockResolvedValue({
-        record_created: true,
-        record_id: 'manual-cn-1',
-        error_cause: '记错下一句',
-      })
+    h.recordMistakeSpy.mockReset().mockResolvedValue({
+      record_created: true,
+      record_id: 'manual-cn-1',
+      error_cause: '记错下一句',
+    })
   })
 
   it('挂载即拉取错题本，按 schema 渲染错题 + 复习队列', async () => {
@@ -231,7 +227,7 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
       global: { plugins: [createPinia(), i18n()] },
     })
     await flushPromises()
-    expect(w.text()).toContain('薄弱知识点 TOP3')
+    expect(w.text()).toContain('需要优先处理')
     // 薄弱 bar 来自后端 weak_top3
     const bars = w.findAll('.k12ins__bar')
     expect(bars[0]!.text()).toContain('简易方程')

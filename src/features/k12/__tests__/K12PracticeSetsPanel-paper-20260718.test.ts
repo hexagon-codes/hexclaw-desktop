@@ -38,14 +38,23 @@ vi.mock('../persistent-print', () => ({
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh } },
   })
 }
 
-function item(id: string, q: string, subject: string, status: PracticeItemDTO['verification_status']): PracticeItemDTO {
+function item(
+  id: string,
+  q: string,
+  subject: string,
+  status: PracticeItemDTO['verification_status'],
+): PracticeItemDTO {
   return {
-    item_id: id, question_markdown: q, subject, added_via: 'weekly',
+    item_id: id,
+    question_markdown: q,
+    subject,
+    added_via: 'weekly',
     verification_status: status,
     verification_evidence: status === 'verified' ? '独立验算' : undefined,
   }
@@ -53,17 +62,30 @@ function item(id: string, q: string, subject: string, status: PracticeItemDTO['v
 
 function basket(items: PracticeItemDTO[]): PracticeSetDTO {
   return {
-    record_id: 'basket1', title: '待打印篮', source_kind: 'mixed', status: 'draft',
-    status_label: '草稿', publishable: false, delivery_status: 'not_sent', items,
+    record_id: 'basket1',
+    title: '待打印篮',
+    source_kind: 'mixed',
+    status: 'draft',
+    status_label: '草稿',
+    publishable: false,
+    delivery_status: 'not_sent',
+    items,
     return_assets: [],
   }
 }
 
 function historySet(over: Partial<PracticeSetDTO> = {}): PracticeSetDTO {
   return {
-    record_id: 'hist1', title: '本周复习卷 · 07/18', source_kind: 'mixed', status: 'assigned',
-    status_label: '待完成', publishable: true, delivery_status: 'not_sent',
-    paper_no: 'P-2629-01', finalized_at: 1784300000, finalized_via: 'print',
+    record_id: 'hist1',
+    title: '本周复习卷 · 07/18',
+    source_kind: 'mixed',
+    status: 'assigned',
+    status_label: '待完成',
+    publishable: true,
+    delivery_status: 'not_sent',
+    paper_no: 'P-2629-01',
+    finalized_at: 1784300000,
+    finalized_via: 'print',
     items: [item('q1', '解方程 2x+19=51', '数学', 'verified')],
     return_assets: [],
     ...over,
@@ -76,7 +98,10 @@ function render() {
     global: {
       plugins: [i18n()],
       stubs: {
-        MarkdownRenderer: { props: ['content'], template: '<div class="md-stub">{{ content }}</div>' },
+        MarkdownRenderer: {
+          props: ['content'],
+          template: '<div class="md-stub">{{ content }}</div>',
+        },
       },
     },
   })
@@ -85,8 +110,11 @@ function render() {
 beforeEach(() => {
   h.listSpy.mockReset()
   h.paperSpy.mockReset().mockResolvedValue({
-    kind: 'question', title: '本周复习卷 · 07/18', paper_no: 'P-2629-01',
-    markdown: '# 本周复习卷 · 07/18\n\n卷面号 P-2629-01 · 2026/07/18\n\n1. 解方程 2x+19=51\n\n**答：**\n\n第 1/1 页 · P-2629-01',
+    kind: 'question',
+    title: '本周复习卷 · 07/18',
+    paper_no: 'P-2629-01',
+    markdown:
+      '# 本周复习卷 · 07/18\n\n卷面号 P-2629-01 · 2026/07/18\n\n1. 解方程 2x+19=51\n\n**答：**\n\n第 1/1 页 · P-2629-01',
     preview: false,
   })
   h.printSpy.mockReset().mockResolvedValue(true)
@@ -115,8 +143,11 @@ describe('K12PracticeSetsPanel · 题目卷/答案卷真实渲染（§4.13）', 
   it('点答案卷 → kind=answer', async () => {
     h.listSpy.mockResolvedValue({ items: [historySet()] })
     h.paperSpy.mockResolvedValue({
-      kind: 'answer', title: '本周复习卷 · 07/18', paper_no: 'P-2629-01',
-      markdown: '# 本周复习卷 · 07/18 · 答案卷\n\n1. 解方程 2x+19=51\n\n**答案：** x = 16 · 独立验算',
+      kind: 'answer',
+      title: '本周复习卷 · 07/18',
+      paper_no: 'P-2629-01',
+      markdown:
+        '# 本周复习卷 · 07/18 · 答案卷\n\n1. 解方程 2x+19=51\n\n**答案：** x = 16 · 独立验算',
       preview: false,
     })
     const w = render()
@@ -127,24 +158,20 @@ describe('K12PracticeSetsPanel · 题目卷/答案卷真实渲染（§4.13）', 
     expect(w.find('[data-testid="ps-paper-modal"]').text()).toContain('x = 16')
   })
 
-  it('待打印区有「预览题目卷」；draft 预览走同一端点（诚实预览，preview 标注）', async () => {
+  it('待打印区不增加原型外的「预览题目卷」入口', async () => {
     h.listSpy.mockResolvedValue({ items: [basket([item('m1', '3.8×3=?', '数学', 'verified')])] })
     h.paperSpy.mockResolvedValue({
-      kind: 'question', title: '待打印篮', paper_no: '',
-      markdown: '# 待打印篮\n\n预览 · 打印或发送后分配卷面号\n\n1. 3.8×3=?\n\n**答：**\n\n第 1/1 页 · 预览',
+      kind: 'question',
+      title: '待打印篮',
+      paper_no: '',
+      markdown:
+        '# 待打印篮\n\n预览 · 打印或发送后分配卷面号\n\n1. 3.8×3=?\n\n**答：**\n\n第 1/1 页 · 预览',
       preview: true,
     })
     const w = render()
     await flushPromises()
-    const btn = w.find('[data-testid="ps-paper-preview"]')
-    expect(btn.exists(), '待打印区应有预览题目卷入口').toBe(true)
-    await btn.trigger('click')
-    await flushPromises()
-    expect(h.paperSpy).toHaveBeenCalledWith('k12-xiaoming', 'basket1', 'question')
-    const modal = w.find('[data-testid="ps-paper-modal"]')
-    expect(modal.text()).toContain('3.8×3=?')
-    // 预览明示未固化（无卷面号）。
-    expect(modal.text()).toContain('打印或发送后分配卷面号')
+    expect(w.find('[data-testid="ps-paper-preview"]').exists()).toBe(false)
+    expect(h.paperSpy).not.toHaveBeenCalled()
   })
 
   it('空篮（无已验证题）不显示预览入口', async () => {
@@ -167,8 +194,11 @@ describe('K12PracticeSetsPanel · 题目卷/答案卷真实渲染（§4.13）', 
   it('题卷加载失败 → 弹层内显示错误并可原地重试', async () => {
     h.listSpy.mockResolvedValue({ items: [historySet()] })
     h.paperSpy.mockRejectedValueOnce(new Error('卷面服务超时')).mockResolvedValueOnce({
-      kind: 'question', title: '本周复习卷 · 07/18', paper_no: 'P-2629-01',
-      markdown: '# 重试成功', preview: false,
+      kind: 'question',
+      title: '本周复习卷 · 07/18',
+      paper_no: 'P-2629-01',
+      markdown: '# 重试成功',
+      preview: false,
     })
     const w = render()
     await flushPromises()
@@ -197,14 +227,16 @@ describe('K12PracticeSetsPanel · 题目卷/答案卷真实渲染（§4.13）', 
     await w.find('[data-testid="ps-paper-print"]').trigger('click')
     await flushPromises()
     expect(h.printSpy).toHaveBeenCalledTimes(2)
-    expect(h.printSpy).toHaveBeenLastCalledWith(expect.objectContaining({
-      agent: 'k12-xiaoming',
-      sourceKind: 'practice_question',
-      sourceRef: 'practice-set:hist1:question',
-      title: '本周复习卷 · 07/18',
-      canonicalMarkdown: expect.stringContaining('P-2629-01'),
-      browserPrint: expect.any(Function),
-    }))
+    expect(h.printSpy).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        agent: 'k12-xiaoming',
+        sourceKind: 'practice_question',
+        sourceRef: 'practice-set:hist1:question',
+        title: '本周复习卷 · 07/18',
+        canonicalMarkdown: expect.stringContaining('P-2629-01'),
+        browserPrint: expect.any(Function),
+      }),
+    )
     expect(w.find('[data-testid="ps-paper-modal"]').text()).not.toContain('未能唤起打印')
   })
 
@@ -218,7 +250,10 @@ describe('K12PracticeSetsPanel · 题目卷/答案卷真实渲染（§4.13）', 
     await w.find('[data-testid="ps-paper-save-pdf"]').trigger('click')
     await flushPromises()
 
-    expect(h.savePdfSpy).toHaveBeenCalledWith(expect.stringContaining('P-2629-01'), '本周复习卷 · 07/18')
+    expect(h.savePdfSpy).toHaveBeenCalledWith(
+      expect.stringContaining('P-2629-01'),
+      '本周复习卷 · 07/18',
+    )
     expect(h.printSpy).not.toHaveBeenCalled()
   })
 })

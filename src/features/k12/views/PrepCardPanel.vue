@@ -10,6 +10,7 @@
  */
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { BookOpen, Printer, Smartphone } from 'lucide-vue-next'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { useToast } from '@/composables/useToast'
 import {
@@ -27,6 +28,8 @@ const props = defineProps<{
   /** 隔离键 = agents.name（与 recognize/grade 同键） */
   agentId: string
   grade: string
+  /** 当前档案的兼容教材边界，仅用于诚实展示当前依据；分科绑定由 profile metadata 承载。 */
+  textbook?: string
   /** 识题识别出的真实知识点（绑定当前作业）；非空即生成 */
   knowledgePoints: string[]
 }>()
@@ -247,6 +250,12 @@ async function queryDelivery() {
   <section class="tutor-guide" data-testid="tutor-guide" aria-label="这份作业的辅导要点">
     <div class="tutor-guide__head">
       <b>📋 {{ t('k12.prep.title') }}</b>
+      <span
+        v-if="store.prepCard?.knowledge_points.length"
+        class="tutor-guide__unit"
+        :title="store.prepCard.knowledge_points.join(' · ')"
+        >{{ store.prepCard.knowledge_points[0] }}</span
+      >
       <div class="tutor-guide__actions">
         <input
           ref="groundingInput"
@@ -263,7 +272,8 @@ async function queryDelivery() {
           data-testid="prep-grounding-open"
           @click="openGroundingPicker"
         >
-          {{ groundingBusy ? '…' : '📖' }}
+          <span v-if="groundingBusy">…</span>
+          <BookOpen v-else :size="17" aria-hidden="true" />
         </button>
         <button
           class="icbtn"
@@ -272,7 +282,8 @@ async function queryDelivery() {
           :disabled="deliveryBusy || !store.prepCard"
           @click="doSendPhone"
         >
-          {{ deliveryBusy ? '…' : '📱' }}
+          <span v-if="deliveryBusy">…</span>
+          <Smartphone v-else :size="17" aria-hidden="true" />
         </button>
         <button
           class="icbtn"
@@ -280,7 +291,7 @@ async function queryDelivery() {
           data-testid="prep-print"
           @click="doPrint"
         >
-          🖨
+          <Printer :size="17" aria-hidden="true" />
         </button>
       </div>
     </div>
@@ -312,48 +323,59 @@ async function queryDelivery() {
           </h5>
           <MarkdownRenderer :content="s.content" />
         </div>
-        <p class="tutor-guide__legend">{{ t('k12.prep.legend') }}</p>
-        <div
-          v-if="deliveryReceipt"
-          class="tutor-guide__delivery"
-          :class="`tutor-guide__delivery--${deliveryReceipt.status}`"
-          data-testid="prep-delivery-receipt"
-          role="status"
-        >
-          <span>{{ deliveryStatusText(deliveryReceipt) }}</span>
-          <button
-            v-if="deliveryReceipt.status === 'failed'"
-            type="button"
-            data-testid="prep-delivery-retry"
-            :disabled="deliveryBusy"
-            @click="retryDelivery"
-          >
-            {{ t('k12.delivery.retry') }}
-          </button>
-          <button
-            v-if="
-              deliveryReceipt.status === 'sending' || deliveryReceipt.status === 'outcome_unknown'
-            "
-            type="button"
-            data-testid="prep-delivery-query"
-            :disabled="deliveryBusy"
-            @click="queryDelivery"
-          >
-            {{ t('k12.delivery.query') }}
-          </button>
-        </div>
-        <div
-          v-if="deliverySetupError"
-          class="tutor-guide__delivery tutor-guide__delivery--failed"
-          data-testid="prep-delivery-setup"
-        >
-          <span>{{ deliverySetupError }}</span>
-          <a href="/channels" data-testid="prep-bind-cta">{{ t('k12.delivery.bindCTA') }}</a>
-        </div>
       </template>
 
       <p v-else class="tutor-guide__hint">{{ t('k12.prep.empty') }}</p>
     </div>
+
+    <footer v-if="store.prepCard" class="tutor-guide__legend">
+      <span>{{ t('k12.prep.legend') }}</span>
+      <span v-if="textbook || grade" class="tutor-guide__basis">
+        {{
+          t('k12.prep.currentBasis', {
+            textbook: textbook || t('k12.customPaper.textbookMissing'),
+            grade,
+          })
+        }}
+      </span>
+      <div
+        v-if="deliveryReceipt"
+        class="tutor-guide__delivery"
+        :class="`tutor-guide__delivery--${deliveryReceipt.status}`"
+        data-testid="prep-delivery-receipt"
+        role="status"
+      >
+        <span>{{ deliveryStatusText(deliveryReceipt) }}</span>
+        <button
+          v-if="deliveryReceipt.status === 'failed'"
+          type="button"
+          data-testid="prep-delivery-retry"
+          :disabled="deliveryBusy"
+          @click="retryDelivery"
+        >
+          {{ t('k12.delivery.retry') }}
+        </button>
+        <button
+          v-if="
+            deliveryReceipt.status === 'sending' || deliveryReceipt.status === 'outcome_unknown'
+          "
+          type="button"
+          data-testid="prep-delivery-query"
+          :disabled="deliveryBusy"
+          @click="queryDelivery"
+        >
+          {{ t('k12.delivery.query') }}
+        </button>
+      </div>
+      <div
+        v-if="deliverySetupError"
+        class="tutor-guide__delivery tutor-guide__delivery--failed"
+        data-testid="prep-delivery-setup"
+      >
+        <span>{{ deliverySetupError }}</span>
+        <a href="/channels" data-testid="prep-bind-cta">{{ t('k12.delivery.bindCTA') }}</a>
+      </div>
+    </footer>
   </section>
 </template>
 
@@ -361,36 +383,49 @@ async function queryDelivery() {
 /* 内联卡（长在识题结果下方，不是侧栏）：绑定框 + accent 头 */
 .tutor-guide {
   border: 1px solid var(--hc-border-hl);
-  border-radius: var(--hc-radius-lg);
+  border-radius: 14px;
   background: var(--hc-bg-card);
   overflow: hidden;
   margin-top: 6px;
+  box-shadow: var(--hc-shadow-sm);
 }
 .tutor-guide__head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
+  padding: 11px 15px;
   border-bottom: 0.5px solid var(--hc-divider);
   background: var(--hc-accent-subtle);
   font-size: 13px;
 }
 .tutor-guide__head b {
-  flex: 1;
   font-weight: 700;
+}
+.tutor-guide__unit {
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
+  font-size: 11.5px;
+  font-weight: 600;
 }
 .tutor-guide__actions {
   display: flex;
   gap: 4px;
   align-items: center;
+  margin-left: auto;
 }
 .icbtn {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--hc-radius-sm);
-  border: 0.5px solid var(--hc-border);
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: none;
   background: transparent;
   color: var(--hc-text-secondary);
   cursor: pointer;
@@ -399,6 +434,13 @@ async function queryDelivery() {
 .icbtn:hover {
   background: var(--hc-bg-hover);
   color: var(--hc-text-primary);
+}
+.icbtn:active {
+  transform: scale(0.9);
+}
+.icbtn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
 }
 .icbtn:disabled {
   cursor: wait;
@@ -409,6 +451,9 @@ async function queryDelivery() {
 }
 .tutor-guide__body {
   padding: 13px 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
 }
 .tutor-guide__hint {
   color: var(--hc-text-muted);
@@ -434,14 +479,13 @@ async function queryDelivery() {
 .tutor-guide__retry:hover {
   background: color-mix(in srgb, var(--hc-danger) 8%, transparent);
 }
-.tutor-section + .tutor-section {
-  margin-top: 12px;
-  padding-top: 10px;
-  border-top: 0.5px solid var(--hc-divider);
-}
 .tutor-section__title {
   margin: 0 0 4px;
-  font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  font-size: 12px;
   color: var(--hc-accent);
   font-weight: 600;
 }
@@ -451,7 +495,6 @@ async function queryDelivery() {
   padding: 1px 6px;
   border-radius: 5px;
   vertical-align: middle;
-  margin-left: 7px;
   background: color-mix(in srgb, var(--hc-accent) 13%, transparent);
   color: var(--hc-accent);
 }
@@ -461,20 +504,29 @@ async function queryDelivery() {
   border: 1px dashed color-mix(in srgb, var(--hc-warning) 40%, transparent);
 }
 .tutor-guide__legend {
-  margin: 14px 0 0;
-  font-size: 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin: 0;
+  padding: 9px 15px 12px;
+  border-top: 0.5px solid var(--hc-divider);
+  font-size: 10.5px;
   line-height: 1.6;
   color: var(--hc-text-muted);
+}
+.tutor-guide__basis {
+  display: block;
+  color: var(--hc-accent);
 }
 .tutor-guide__delivery {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-top: 10px;
-  padding: 8px 10px;
-  border-radius: var(--hc-radius-sm);
-  background: var(--hc-accent-subtle);
+  margin-top: 0;
+  padding: 0;
+  background: transparent;
   color: var(--hc-text-secondary);
   font-size: 12px;
 }

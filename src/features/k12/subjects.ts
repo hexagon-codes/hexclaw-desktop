@@ -4,9 +4,29 @@
  * 美术进作品不进批改（subject 取值非法），故不在此列。冻结锁 bug-20260718-frozen-grade-subject。
  */
 export const K12_GRADE_SUBJECT_OPTIONS = [
-  { value: '数学', labelKey: 'k12.prep.subjectMath' },
-  { value: '语文', labelKey: 'k12.prep.subjectChinese' },
-  { value: '英语', labelKey: 'k12.prep.subjectEnglish' },
-  { value: '科学', labelKey: 'k12.prep.subjectScience' },
-  { value: '信息科技', labelKey: 'k12.prep.subjectInfoTech' },
+  {
+    value: '数学',
+    labelKey: 'k12.prep.subjectMath',
+    plainLabelKey: 'k12.profile.subjects.math',
+  },
+  {
+    value: '语文',
+    labelKey: 'k12.prep.subjectChinese',
+    plainLabelKey: 'k12.profile.subjects.chinese',
+  },
+  {
+    value: '英语',
+    labelKey: 'k12.prep.subjectEnglish',
+    plainLabelKey: 'k12.profile.subjects.english',
+  },
+  {
+    value: '科学',
+    labelKey: 'k12.prep.subjectScience',
+    plainLabelKey: 'k12.profile.subjects.science',
+  },
+  {
+    value: '信息科技',
+    labelKey: 'k12.prep.subjectInfoTech',
+    plainLabelKey: 'k12.profile.subjects.informationTechnology',
+  },
 ] as const

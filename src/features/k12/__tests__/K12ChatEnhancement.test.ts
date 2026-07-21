@@ -13,14 +13,29 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: vi.fn(),
   k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(),
-    k12ColdStart: vi.fn(),
-  k12InsightReport: vi.fn().mockResolvedValue({ trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12ColdStart: vi.fn(),
+  k12InsightReport: vi.fn().mockResolvedValue({
+    trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
+    weak_top3: [],
+    month_new_mistakes: 0,
+    review_completion_rate: -1,
+    consecutive_fail_kps: null,
+    suggestion: '',
+  }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12GetViewDescriptor: vi.fn().mockResolvedValue({
-    header_tabs: ['辅导', '学习档案', '学情'], message_badges: [], composer_placeholder: '',
-    composer_chips: ['🧮 数学讲解', '💡 渐进提示', '📷 识题校验'],
-    record_collections: [], side_panels: [], actions: [], i18n_keys: [], schema_version: 1,
+    header_tabs: ['辅导', '学习档案', '学情'],
+    message_badges: [],
+    composer_placeholder: '',
+    composer_chips: ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验'],
+    record_collections: [],
+    side_panels: [],
+    actions: [],
+    i18n_keys: [],
+    schema_version: 1,
   }),
 }))
 
@@ -29,14 +44,21 @@ vi.mock('vue-router', () => ({ useRoute: () => ({ query: routeQuery.q }) }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
 
 function render() {
   return mount(K12ChatEnhancement, {
-    props: { agentId: 'ming', agentName: '小明的辅导老师', metadata: { 'k12.grade_term': '五年级上' }, descriptor: K12_VIEW_DESCRIPTOR },
+    props: {
+      agentId: 'ming',
+      agentName: '小明的辅导老师',
+      metadata: { 'k12.grade_term': '五年级上' },
+      descriptor: K12_VIEW_DESCRIPTOR,
+    },
     global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
     attachTo: document.body,
   })
@@ -48,7 +70,8 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     routeQuery.q = {}
     // Teleport 目标锚点（ChatView/ChatInput 提供，测试里预置）：页脚 + composer 上方(能力 chips)
     // + composer 输入行动作(拍照识题按钮) + 场景侧栏(备课卡停靠)
-    document.body.innerHTML = '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+    document.body.innerHTML =
+      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
   it('据描述符渲染头部 tab（辅导/学习档案/学情）· 头部零动作按钮（20260709：备课卡内联进识题流）', () => {
@@ -58,6 +81,36 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(w.text()).toContain('小明的辅导老师')
     // 头部不再有「备课卡」按钮（辅导要点已内联进识题流）
     expect(w.find('.k12enh-prepbtn').exists()).toBe(false)
+  })
+
+  it('权威原型：头部保持 48px 节奏，三段 Tab 具备完整 tablist/tab/tabpanel 关系', async () => {
+    const w = render()
+    const tablist = w.get('.k12enh-seg')
+    const tabs = tablist.findAll('button')
+
+    expect(tablist.attributes('role')).toBe('tablist')
+    expect(tablist.attributes('aria-label')).toBe('辅导助手功能')
+    expect(tabs.map((item) => item.attributes('role'))).toEqual(['tab', 'tab', 'tab'])
+    expect(tabs.map((item) => item.attributes('aria-selected'))).toEqual(['true', 'false', 'false'])
+    expect(tabs.map((item) => item.attributes('tabindex'))).toEqual(['0', '-1', '-1'])
+    expect(tabs.map((item) => item.attributes('aria-controls'))).toEqual([
+      'k12-enh-view-chat',
+      'k12-enh-view-records',
+      'k12-enh-view-insights',
+    ])
+    expect(w.get('#k12-enh-view-chat').attributes('role')).toBe('tabpanel')
+    expect(w.get('#k12-enh-view-chat').attributes('aria-labelledby')).toBe(
+      tabs[0]!.attributes('id'),
+    )
+
+    await tabs[1]!.trigger('click')
+    expect(tabs[0]!.attributes('aria-selected')).toBe('false')
+    expect(tabs[0]!.attributes('tabindex')).toBe('-1')
+    expect(tabs[1]!.attributes('aria-selected')).toBe('true')
+    expect(tabs[1]!.attributes('tabindex')).toBe('0')
+    expect(w.get('#k12-enh-view-records').attributes('aria-labelledby')).toBe(
+      tabs[1]!.attributes('id'),
+    )
   })
 
   it('默认辅导 tab：recordsActive=false（不接管消息区）', () => {
@@ -86,7 +139,11 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     // 新契约：chips 上交 shell → ChatInput 在对话框盒内渲染（见 bug-20260709-composer-chips-inside-input）
     const ev = w.emitted('update:composerChips')
     expect(ev).toBeTruthy()
-    expect(ev![ev!.length - 1]![0]).toEqual(['🧮 数学讲解', '💡 渐进提示', '📷 识题校验'])
+    expect(ev![ev!.length - 1]![0]).toEqual([
+      { id: 'k12-composer-chip-0', label: '📚 自动识别学科', actionId: 'subject-capabilities' },
+      { id: 'k12-composer-chip-1', label: '💡 渐进提示' },
+      { id: 'k12-composer-chip-2', label: '📷 识题校验' },
+    ])
     // 旧 Teleport 锚点不得再收到 chips（浮动行=不在对话框内，方案退役）
     const anchor = document.getElementById('hc-chat-scenario-composer-top')
     expect(anchor?.querySelector('[data-testid="k12-composer-chips"]') ?? null).toBeNull()
@@ -101,10 +158,15 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
 
   it('切学习档案 tab → 备课提醒条 + 扩展桥消失', async () => {
     const w = render()
-    await w.findAll('.k12enh-seg button').find((b) => b.text() === '学习档案')!.trigger('click')
+    await w
+      .findAll('.k12enh-seg button')
+      .find((b) => b.text() === '学习档案')!
+      .trigger('click')
     await flushPromises()
     expect(w.find('.k12enh-nudge').exists()).toBe(false)
-    expect(document.getElementById('hc-chat-scenario-footer')!.querySelector('.k12enh-bridge')).toBeFalsy()
+    expect(
+      document.getElementById('hc-chat-scenario-footer')!.querySelector('.k12enh-bridge'),
+    ).toBeFalsy()
   })
 
   it('深链 ?scenarioTab=records → 挂载即进学习档案 tab', async () => {
@@ -122,15 +184,23 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(document.querySelector('[data-testid="k12-recognize-toggle"]')).toBeFalsy()
     await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
-    expect(document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]')).toBeTruthy()
-    const assistant = document.querySelector('#hc-chat-scenario-inline [data-testid="k12-photo-assistant-message"]')
+    expect(
+      document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]'),
+    ).toBeTruthy()
+    const assistant = document.querySelector(
+      '#hc-chat-scenario-inline [data-testid="k12-photo-assistant-message"]',
+    )
     expect(assistant?.querySelector('.k12enh-tutor__avatar img')).toBeTruthy()
     expect(assistant?.querySelector('.k12enh-tutor__name')?.textContent).toContain('小明的辅导老师')
-    expect(assistant?.querySelector('.k12enh-tutor__bubble [data-testid="recognize-guard"]')).toBeTruthy()
+    expect(
+      assistant?.querySelector('.k12enh-tutor__bubble [data-testid="recognize-guard"]'),
+    ).toBeTruthy()
     const inlineEvents = w.emitted('update:inlineActive') ?? []
     expect(inlineEvents[inlineEvents.length - 1]).toEqual([true])
 
-    document.querySelector<HTMLElement>('#hc-chat-scenario-inline [data-testid="recognize-close"]')?.click()
+    document
+      .querySelector<HTMLElement>('#hc-chat-scenario-inline [data-testid="recognize-close"]')
+      ?.click()
     await flushPromises()
     const closedInlineEvents = w.emitted('update:inlineActive') ?? []
     expect(closedInlineEvents[closedInlineEvents.length - 1]).toEqual([false])
@@ -138,7 +208,10 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
 
   it('切换实例（agentId 变）→ 回到辅导 tab（多孩结构隔离）', async () => {
     const w = render()
-    await w.findAll('.k12enh-seg button').find((b) => b.text() === '学习档案')!.trigger('click')
+    await w
+      .findAll('.k12enh-seg button')
+      .find((b) => b.text() === '学习档案')!
+      .trigger('click')
     await w.setProps({ agentId: 'hong' })
     await flushPromises()
     const ev = w.emitted('update:recordsActive')
@@ -150,12 +223,16 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     // 打开路径=图片自动改道（BUG-20260711-E：手动 toggle 已删）
     await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
-    expect(document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]')).toBeTruthy()
+    expect(
+      document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]'),
+    ).toBeTruthy()
 
     await w.setProps({ agentId: 'hong' })
     await flushPromises()
 
-    expect(document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]')).toBeFalsy()
+    expect(
+      document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]'),
+    ).toBeFalsy()
     const imageEvents = w.emitted('update:composerImage')
     expect(imageEvents?.[imageEvents.length - 1]).toEqual([''])
   })

@@ -23,13 +23,26 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: pushSpy }) }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
 function render() {
   return mount(K12AgentCard, {
-    props: { agent: { name: 'k12-tutor-abc', display_name: '小明的辅导老师 · 五年级', metadata: { scenario: 'k12-tutor', 'k12.child_name': '小明', grade: '五年级上', 'k12.grade_term': '五年级上' } } },
+    props: {
+      agent: {
+        name: 'k12-tutor-abc',
+        display_name: '小明的辅导老师 · 五年级',
+        metadata: {
+          scenario: 'k12-tutor',
+          'k12.child_name': '小明',
+          grade: '五年级上',
+          'k12.grade_term': '五年级上',
+        },
+      },
+    },
     global: { plugins: [createPinia(), i18n()] },
     attachTo: document.body,
   })
@@ -47,17 +60,18 @@ describe('K12AgentCard（原型同步·辅导老师卡计数 + 快捷入口）',
   it('挂载即拉取并渲染 错题/待复习 计数', async () => {
     const w = render()
     await flushPromises()
+    expect(w.find('[data-testid="k12-agent-tag"]').exists()).toBe(false)
     expect(w.text()).toContain('错题 3')
     expect(w.text()).toContain('待复习 2')
   })
 
-  it('计数不可用（引擎未就绪/接口失败）时不渲染徽章行（消空徽章行留白）', async () => {
+  it('计数不可用时不渲染空计数行，K12 标识由宿主标题行投影', async () => {
     ;(k12ListMistakes as unknown as Mock).mockRejectedValueOnce(new Error('offline'))
     ;(k12ReviewQueue as unknown as Mock).mockRejectedValueOnce(new Error('offline'))
     const w = render()
     await flushPromises()
-    // 计数皆 null → chips 容器整行不渲染（原型对齐：无数据不留空行）
     expect(w.find('.k12ac__chips').exists()).toBe(false)
+    expect(w.find('.k12ac__identity').exists()).toBe(false)
   })
 
   it('快捷入口深链带 role + roleTitle + scenarioTab query（BUG-20260711：roleTitle 快照显示名进会话标题，agent 删除后不回退成内部 ID）', async () => {
@@ -65,9 +79,22 @@ describe('K12AgentCard（原型同步·辅导老师卡计数 + 快捷入口）',
     await flushPromises()
     const btns = w.findAll('.k12ac__btn')
     await btns.find((b) => b.text().includes('进入辅导'))!.trigger('click')
-    expect(pushSpy).toHaveBeenLastCalledWith({ path: '/chat', query: { role: 'k12-tutor-abc', roleTitle: '小明的辅导老师 · 五年级' } })
-    await btns.find((b) => b.text() === '错题本')!.trigger('click')
-    expect(pushSpy).toHaveBeenLastCalledWith({ path: '/chat', query: { role: 'k12-tutor-abc', roleTitle: '小明的辅导老师 · 五年级', scenarioTab: 'records' } })
+    expect(pushSpy).toHaveBeenLastCalledWith({
+      path: '/chat',
+      query: { role: 'k12-tutor-abc', roleTitle: '小明的辅导老师 · 五年级' },
+    })
+    const enter = btns.find((b) => b.text().includes('进入辅导'))!
+    expect(enter.text()).toBe('进入辅导')
+    expect(enter.text()).not.toContain('🎓')
+    await btns.find((b) => b.text() === '学习档案')!.trigger('click')
+    expect(pushSpy).toHaveBeenLastCalledWith({
+      path: '/chat',
+      query: {
+        role: 'k12-tutor-abc',
+        roleTitle: '小明的辅导老师 · 五年级',
+        scenarioTab: 'records',
+      },
+    })
     // 备课卡快捷入口已移除：卡上不应再有「备课卡」按钮
     expect(btns.find((b) => b.text().includes('备课卡'))).toBeUndefined()
   })
@@ -77,9 +104,14 @@ describe('K12AgentCard（原型同步·辅导老师卡计数 + 快捷入口）',
     await flushPromises()
     // 弹窗 Teleport 到 body，故查 document.body（wrapper 里只剩占位）。
     expect(document.body.querySelector('.k12pf')).toBeFalsy()
-    await w.findAll('.k12ac__btn').find((b) => b.text().includes('编辑档案'))!.trigger('click')
+    await w
+      .findAll('.k12ac__btn')
+      .find((b) => b.text().includes('编辑档案'))!
+      .trigger('click')
     expect(document.body.querySelector('.k12pf')).toBeTruthy()
     // 预填年级（改档模式）——年级下拉走 HcSelect，触发器标签显示当前年级（B2：不再用原生 select）
-    expect(document.body.querySelector('.k12pf__row .hc-select__label')?.textContent).toBe('五年级上')
+    expect(document.body.querySelector('.k12pf__row .hc-select__label')?.textContent).toBe(
+      '五年级上',
+    )
   })
 })

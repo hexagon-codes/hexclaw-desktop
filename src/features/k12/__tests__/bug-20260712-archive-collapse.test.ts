@@ -13,13 +13,27 @@ import K12RecordsView from '../views/K12RecordsView.vue'
 
 const h = vi.hoisted(() => {
   const mk = (id: string, q: string, kp: string, status = 'new', subject?: string) => ({
-    record_id: id, question: q, knowledge_point: kp, error_cause: '示例', status, version: 0, due_at: 1710000000, subject,
+    record_id: id,
+    question: q,
+    knowledge_point: kp,
+    error_cause: '示例',
+    status,
+    version: 0,
+    due_at: 1710000000,
+    subject,
   })
   return {
     mistakes: [
       mk('a', '苹果和梨的价钱', '小数乘法'),
       mk('b', '解方程 2x+15=43', '简易方程'),
-      { record_id: 'd', question: '用数对表示位置', knowledge_point: '位置', error_cause: '行列反了', status: 'mastered', version: 2 },
+      {
+        record_id: 'd',
+        question: '用数对表示位置',
+        knowledge_point: '位置',
+        error_cause: '行列反了',
+        status: 'mastered',
+        version: 2,
+      },
     ],
     due: [
       mk('a', '苹果和梨的价钱', '小数乘法', 'new', '数学'),
@@ -27,8 +41,11 @@ const h = vi.hoisted(() => {
     ],
     report: {
       trend: { mastered: 5, reviewing: 2, retried: 1, archived: 0, total: 8 },
-      weak_top3: [], month_new_mistakes: 2, review_completion_rate: 0.5,
-      consecutive_fail_kps: null, suggestion: '',
+      weak_top3: [],
+      month_new_mistakes: 2,
+      review_completion_rate: 0.5,
+      consecutive_fail_kps: null,
+      suggestion: '',
     },
   }
 })
@@ -41,14 +58,18 @@ vi.mock('@/api/k12', () => ({
   k12PrepCard: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn().mockImplementation(() => Promise.resolve(h.report)),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
 }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
@@ -76,9 +97,14 @@ describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠�
   it('② 切「全部错题」→ 档案页直接展开：筛选 + 全量 + 归档脚注，且无行动卡', async () => {
     const w = render()
     await flushPromises()
-    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    await w
+      .findAll('.seg button')
+      .find((b) => b.text() === '全部错题')!
+      .trigger('click')
     expect(w.find('[data-testid="mistakes-section"]').exists()).toBe(true)
-    expect(w.find('.rl-filters').exists(), '档案页应直接显示筛选').toBe(true)
+    expect(w.find('.k12rec__filter-stack').exists(), '档案页应直接显示学科与状态复合筛选').toBe(
+      true,
+    )
     // 20260718 术语快修：原型 2527 口径——未掌握题不因久未练习被自动隐藏（旧「30 天自动归档」退役）
     expect(w.text(), '归档规则脚注应直接可见').toContain('未掌握题不会因久未练习被自动隐藏')
     expect(w.find('.rl-review').exists(), '档案页不应有复习行动卡（hide-review）').toBe(false)
@@ -88,14 +114,17 @@ describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠�
     const w = render()
     await flushPromises()
     expect(w.find('[data-testid="archive-toggle"]').exists()).toBe(false)
-    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    await w
+      .findAll('.seg button')
+      .find((b) => b.text() === '全部错题')!
+      .trigger('click')
     expect(w.find('[data-testid="archive-toggle"]').exists()).toBe(false)
   })
 
   it('④ 行动卡含趋势 pill 与「查看学情」入口（学情=顶栏一等 Tab）', async () => {
     const w = render()
     await flushPromises()
-    expect(w.find('.rl-review').text()).toContain('本周复习')
+    expect(w.find('.rl-review').text()).toContain('2道待复习')
     const link = w.find('[data-testid="go-insights"]')
     expect(link.exists(), '行动卡脚注应有查看学情入口').toBe(true)
     await link.trigger('click')

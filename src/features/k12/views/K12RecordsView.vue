@@ -5,7 +5,7 @@
  * 复用通用 shell 的 RecordList（schema 驱动），本组件只提供 K12 数据接线 + 场景专属动作
  * （出错题卷 / 导出 / 备份）+ 学情聚合。多孩隔离 = 以 agentId 拉取，切实例即换数据。
  */
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import RecordList from '@/shell/records/RecordList.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
@@ -24,6 +24,8 @@ import {
   k12AddToBasket,
   k12FillPracticeBasket,
   k12GenerateCustomPaper,
+  k12ListPracticeSets,
+  k12ListCreativeWorks,
   type CustomPaperDifficulty,
   type CustomPaperResp,
   type CustomPaperScope,
@@ -34,9 +36,13 @@ import {
 import { apiPost } from '@/api/client'
 import { MISTAKE_SCHEMA, ACCUMULATION_SCHEMA } from '../schemas'
 import { exportArchiveDocument, worksheetFilename, download } from '../export'
-import type { RecordItem } from '@/contracts'
+import type { RecordCollectionView, RecordItem } from '@/contracts'
+import type {
+  K12MistakeStatusFilter,
+  K12RecordsNavigation,
+  K12RecordsTarget,
+} from '../records-navigation'
 
-type RecordsTarget = 'week' | 'mistakes' | 'practiceSets' | 'accumulation' | 'works'
 const props = defineProps<{
   agentId: string
   agentName: string
@@ -46,7 +52,13 @@ const props = defineProps<{
   /** v-show 保活时的可见态；从辅导切回档案必须刷新，避免展示进入会话时的旧缓存。 */
   active?: boolean
   /** 学情路由器直达目标；变化时切到对应档案对象。 */
-  target?: RecordsTarget
+  target?: K12RecordsTarget
+  /** 场景动作直达全部错题时可同步选中学科；空值清除该直达过滤。 */
+  subject?: string
+  /** 学情直达的错题状态；all 显式清除该维筛选。 */
+  status?: K12MistakeStatusFilter
+  /** 完整的下钻命令；对象身份变化时重放三维，包括与上次值相同的重复下钻。 */
+  navigation?: K12RecordsNavigation
 }>()
 
 const emit = defineEmits<{
@@ -61,19 +73,77 @@ const store = useK12Store()
 
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：学习档案五对象 Tab——本周复习(行动)｜全部错题(档案)｜
 // 练习集｜积累｜作品；学情已提升为顶栏一等 Tab（K12InsightPanel）。默认落在「本周复习」（行动优先）。
-const sub = ref<RecordsTarget>(props.target ?? 'week')
+const sub = ref<K12RecordsTarget>(props.navigation?.target ?? props.target ?? 'week')
+const reviewMenuOpen = ref(false)
 watch(
   () => props.target,
   (target) => {
     if (target) sub.value = target
   },
 )
+watch(sub, () => {
+  reviewMenuOpen.value = false
+  exportOpen.value = false
+})
 const creativeWorksRef = ref<InstanceType<typeof K12CreativeWorksPanel>>()
+
+// 对象 Tab 计数与原型一致：本周=到期队列，错题=全部档案，练习集=待打印篮，积累=全部收藏，作品=全部作品。
+// 练习集面板每次真实 load 后会回推最新篮数；作品当前为自包含面板，父层只读列表总数用于导航计数。
+const practiceCount = ref(0)
+const accumulationTotalCount = ref(0)
+const worksCount = ref(0)
+const objectCountsLoading = ref(true)
+const objectCountsError = ref(false)
+const practiceObjectEmpty = ref(false)
+const worksObjectEmpty = ref(false)
+let objectCountRequest = 0
+
+// 五对象计数是导航增强信息：独立请求、独立 settle，不得让任一计数失败阻断错题/积累主内容。
+async function fetchPracticeSetsForCount() {
+  return k12ListPracticeSets(props.agentId)
+}
+async function fetchCreativeWorksForCount() {
+  return k12ListCreativeWorks(props.agentId)
+}
+async function reloadObjectCounts() {
+  const request = ++objectCountRequest
+  objectCountsLoading.value = true
+  objectCountsError.value = false
+  const [practiceResult, worksResult] = await Promise.allSettled([
+    fetchPracticeSetsForCount(),
+    fetchCreativeWorksForCount(),
+  ])
+  if (request !== objectCountRequest) return
+  if (practiceResult.status === 'fulfilled') {
+    const draft = practiceResult.value.items.find((item) => item.status === 'draft')
+    practiceCount.value = draft?.items.length ?? 0
+    practiceObjectEmpty.value = practiceResult.value.items.length === 0
+  }
+  if (worksResult.status === 'fulfilled') {
+    worksCount.value = worksResult.value.items.length
+    worksObjectEmpty.value = worksResult.value.items.length === 0
+  }
+  objectCountsError.value =
+    practiceResult.status === 'rejected' || worksResult.status === 'rejected'
+  objectCountsLoading.value = false
+}
 
 // 积累本分科过滤（#5）：''=全部 / '语文' / '英语'，触达后端 GET /accumulation?subject=（BUG-3）。
 const accumSubject = ref('')
+const accumulationLoading = ref(true)
+let accumulationLoadRequest = 0
 async function reloadAccum() {
-  await store.loadAccumulation(props.agentId, accumSubject.value || undefined)
+  const request = ++accumulationLoadRequest
+  accumulationLoading.value = true
+  try {
+    await store.loadAccumulation(props.agentId, accumSubject.value || undefined)
+    if (request !== accumulationLoadRequest) return
+    if (!accumSubject.value && store.accumView) {
+      accumulationTotalCount.value = store.accumView.items.length
+    }
+  } finally {
+    if (request === accumulationLoadRequest) accumulationLoading.value = false
+  }
 }
 function setAccumSubject(s: string) {
   if (accumSubject.value === s) return
@@ -81,12 +151,23 @@ function setAccumSubject(s: string) {
   reloadAccum()
 }
 
+const mistakesLoading = ref(true)
+async function reloadMistakes() {
+  mistakesLoading.value = true
+  try {
+    await store.loadMistakes(props.agentId)
+  } finally {
+    mistakesLoading.value = false
+  }
+}
+
 async function reload() {
   if (!props.agentId) return
   await Promise.all([
-    store.loadMistakes(props.agentId),
+    reloadMistakes(),
     store.loadReport(props.agentId), // trend pill（本周复习行动卡）数据源；学情全量在 K12InsightPanel
     reloadAccum(),
+    reloadObjectCounts(),
   ])
 }
 onMounted(reload)
@@ -102,8 +183,17 @@ watch(
   () => {
     closeRetry()
     accumSubject.value = ''
+    mistakeSubject.value = ''
+    mistakeStatus.value = 'all'
     accumAddOpen.value = false
     clearedThisSession.value = false
+    practiceCount.value = 0
+    accumulationTotalCount.value = 0
+    worksCount.value = 0
+    practiceObjectEmpty.value = false
+    worksObjectEmpty.value = false
+    objectCountsError.value = false
+    objectCountsLoading.value = true
     reload()
   },
 )
@@ -266,6 +356,11 @@ function toggleCustomPaper() {
   customPaperOpen.value = true
 }
 
+function openCustomPaperFromReviewMenu() {
+  reviewMenuOpen.value = false
+  toggleCustomPaper()
+}
+
 function closeCustomPaper() {
   if (basketBusy.value) return
   customPaperOpen.value = false
@@ -342,6 +437,83 @@ function viewCustomPaperBasket() {
 const view = computed(() => store.mistakeView)
 const accumView = computed(() => store.accumView)
 const report = computed(() => store.report)
+const weekCount = computed(() => view.value?.reviewQueue?.length ?? 0)
+const mistakeCount = computed(() => view.value?.items.length ?? 0)
+
+function updatePracticeCount(count: number) {
+  practiceCount.value = count
+}
+function updateWorksCount(count: number) {
+  worksCount.value = count
+}
+
+// 全部错题的两维筛选严格按原型：学科与状态可以叠加，结果数始终显示「当前 / 全部」。
+// new + explained 同属家长视角的「待复习」，避免把领域中间态抬成第六个筛选按钮。
+const mistakeSubject = ref('')
+const mistakeStatus = ref<K12MistakeStatusFilter>('all')
+watch(
+  () => props.subject,
+  (subject) => {
+    mistakeSubject.value = subject ?? ''
+  },
+  { immediate: true },
+)
+watch(
+  () => props.status,
+  (status) => {
+    mistakeStatus.value = status ?? 'all'
+  },
+  { immediate: true },
+)
+watch(
+  () => props.navigation,
+  (next) => {
+    if (!next) return
+    sub.value = next.target
+    mistakeSubject.value = next.subject
+    mistakeStatus.value = next.status
+  },
+  { immediate: true },
+)
+const mistakeSubjectFilters = computed(() => [
+  { value: '', label: t('records.all') },
+  ...K12_GRADE_SUBJECT_OPTIONS.map(({ value, plainLabelKey }) => ({
+    value,
+    label: t(plainLabelKey),
+  })),
+])
+const mistakeStatusFilters = computed(() => [
+  { value: 'all' as const, label: t('records.all') },
+  { value: 'review' as const, label: t('k12.mistakeStatus.new') },
+  { value: 'retried' as const, label: t('k12.mistakeStatus.retried') },
+  { value: 'mastered' as const, label: t('k12.mistakeStatus.mastered') },
+  { value: 'archived' as const, label: t('k12.mistakeStatus.archived') },
+])
+
+function mistakeSubjectOf(item: RecordItem): string {
+  const explicit = String(item.fields.subject ?? '').trim()
+  if (explicit) return explicit
+  const chip = String(item.fields.knowledge_point ?? '')
+  return K12_GRADE_SUBJECT_OPTIONS.find(({ value }) => chip.startsWith(`${value}·`))?.value ?? ''
+}
+
+function matchesMistakeStatus(item: RecordItem): boolean {
+  if (mistakeStatus.value === 'all') return true
+  if (mistakeStatus.value === 'review') return item.status === 'new' || item.status === 'explained'
+  return item.status === mistakeStatus.value
+}
+
+const filteredMistakeItems = computed(() =>
+  (view.value?.items ?? []).filter(
+    (item) =>
+      (!mistakeSubject.value || mistakeSubjectOf(item) === mistakeSubject.value) &&
+      matchesMistakeStatus(item),
+  ),
+)
+const filteredMistakeView = computed<RecordCollectionView | null>(() => {
+  if (!view.value) return null
+  return { ...view.value, items: filteredMistakeItems.value }
+})
 
 // 项-5：空态设计——复习队列（本周复习）常空时不留尴尬空白。
 // 折叠机制随旧两段 IA 退役（2026-07-18）：本周复习=行动页（hide-list）、全部错题=档案页（hide-review），
@@ -375,6 +547,29 @@ function practiceEarly() {
 // 当前会话内近似仅影响庆祝时机粒度，不影响正确性）。
 const clearedThisSession = ref(false)
 const weekCleared = computed(() => !hasReviewQueue.value && clearedThisSession.value)
+const ftueCandidate = computed(() =>
+  Boolean(view.value && view.value.items.length === 0 && !hasReviewQueue.value),
+)
+const ftueAuxLoading = computed(
+  () => ftueCandidate.value && (accumulationLoading.value || objectCountsLoading.value),
+)
+const ftueAuxError = computed(
+  () => ftueCandidate.value && Boolean(store.accumulationError || objectCountsError.value),
+)
+const isFtue = computed(() =>
+  Boolean(
+    ftueCandidate.value &&
+    !ftueAuxLoading.value &&
+    !ftueAuxError.value &&
+    accumView.value &&
+    accumView.value.items.length === 0 &&
+    accumulationTotalCount.value === 0 &&
+    practiceCount.value === 0 &&
+    worksCount.value === 0 &&
+    practiceObjectEmpty.value &&
+    worksObjectEmpty.value,
+  ),
+)
 function isInReviewQueue(recordId: string): boolean {
   return view.value?.reviewQueue?.includes(recordId) ?? false
 }
@@ -384,7 +579,7 @@ function isInReviewQueue(recordId: string): boolean {
 // 全部未知 → 空串不显括号（诚实降级，/mistakes 列表 subject 是 P2 缺口）。
 const reviewSubjectDist = computed(() => {
   const v = view.value
-  if (!v?.reviewQueue?.length) return ''
+  if (!v?.reviewQueue?.length) return []
   const byId = new Map(v.items.map((i) => [i.recordId, i]))
   const counts = new Map<string, number>()
   for (const id of v.reviewQueue) {
@@ -395,8 +590,7 @@ const reviewSubjectDist = computed(() => {
       counts.set(s, (counts.get(s) ?? 0) + 1)
     }
   }
-  if (!counts.size) return ''
-  return [...counts.entries()].map(([s, n]) => `${s} ${n}`).join(' · ')
+  return [...counts.entries()].map(([subject, count]) => ({ subject, count }))
 })
 
 // 原型 c8a194e + PRD §3.5.7：趋势 pill 并入行动卡。语义=「仅确有进步才用绿系」——
@@ -725,6 +919,69 @@ async function doDelete() {
 
 // ── 打印 / 导出（M2-3 / M3-5）──
 const exportOpen = ref(false)
+const recordsMoreTrigger = ref<HTMLButtonElement | null>(null)
+const recordsMoreMenu = ref<HTMLElement | null>(null)
+
+function exportMenuItems(): HTMLButtonElement[] {
+  return Array.from(
+    recordsMoreMenu.value?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? [],
+  )
+}
+
+function closeExportMenu(restoreFocus = false) {
+  if (!exportOpen.value) return
+  exportOpen.value = false
+  if (restoreFocus) void nextTick(() => recordsMoreTrigger.value?.focus())
+}
+
+async function toggleExportMenu() {
+  if (exportOpen.value) {
+    closeExportMenu(true)
+    return
+  }
+  exportOpen.value = true
+  await nextTick()
+  exportMenuItems()[0]?.focus()
+}
+
+function onExportMenuKeydown(event: KeyboardEvent) {
+  const items = exportMenuItems()
+  if (!items.length) return
+  const current = Math.max(0, items.indexOf(document.activeElement as HTMLButtonElement))
+  let target = -1
+  if (event.key === 'ArrowDown') target = (current + 1) % items.length
+  else if (event.key === 'ArrowUp') target = (current - 1 + items.length) % items.length
+  else if (event.key === 'Home') target = 0
+  else if (event.key === 'End') target = items.length - 1
+  else if (event.key === 'Escape') {
+    event.preventDefault()
+    closeExportMenu(true)
+    return
+  } else return
+  event.preventDefault()
+  items[target]?.focus()
+}
+
+function onRecordsOutsideClick(event: MouseEvent) {
+  if (!exportOpen.value) return
+  const target = event.target as Node | null
+  if (
+    target &&
+    (recordsMoreTrigger.value?.contains(target) || recordsMoreMenu.value?.contains(target))
+  )
+    return
+  closeExportMenu(true)
+}
+
+function openBackupFromMenu() {
+  closeExportMenu(false)
+  recordsMoreTrigger.value?.focus()
+  emit('open-backup')
+}
+
+onMounted(() => document.addEventListener('click', onRecordsOutsideClick))
+onBeforeUnmount(() => document.removeEventListener('click', onRecordsOutsideClick))
+
 function todayLabel(): string {
   const n = new Date()
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
@@ -732,7 +989,7 @@ function todayLabel(): string {
 // 出卷（exportPdf 直出）旧路径已删（20260718 §3.8 改道装篮，见 buildReviewSet）；
 // 下方导出仅存档案导出（错题本 PDF/Word/Markdown 档案），非出卷。
 async function doExport(format: 'pdf' | 'docx') {
-  exportOpen.value = false
+  closeExportMenu(true)
   const d = todayLabel().replace(/-/g, '').slice(4)
   try {
     const res = await k12ExportMd(props.agentId)
@@ -750,7 +1007,7 @@ async function doExport(format: 'pdf' | 'docx') {
 }
 // 导出完整错题本为 Markdown（后端 GET /export 直出 md，含全部记录/状态；补齐审计 #6 未闭环）。
 async function doExportMd() {
-  exportOpen.value = false
+  closeExportMenu(true)
   try {
     const res = await k12ExportMd(props.agentId)
     const d = todayLabel().replace(/-/g, '').slice(4)
@@ -773,32 +1030,106 @@ async function doExportMd() {
     <!-- 学习档案五对象 Tab（PRD §1.5 IA 定稿）：本周复习 / 全部错题 / 练习集 / 积累 / 作品。
          学情已提升为顶栏一等 Tab，不再是二级 Tab。 -->
     <div class="k12rec__tabs">
-      <div class="seg">
-        <button :class="{ on: sub === 'week' }" data-testid="subtab-week" @click="sub = 'week'">
+      <div class="seg k12rec__object-tabs" role="tablist" :aria-label="t('k12.tabs.records')">
+        <button
+          role="tab"
+          :aria-selected="sub === 'week'"
+          :aria-label="`${t('k12.subTabs.week')} ${weekCount}`"
+          :class="{ on: sub === 'week' }"
+          data-testid="subtab-week"
+          @click="sub = 'week'"
+        >
           {{ t('k12.subTabs.week') }}
+          <span class="k12-tab-count" aria-hidden="true" :data-count="weekCount" />
         </button>
         <button
+          role="tab"
+          :aria-selected="sub === 'mistakes'"
+          :aria-label="`${t('k12.subTabs.mistakes')} ${mistakeCount}`"
           :class="{ on: sub === 'mistakes' }"
           data-testid="subtab-mistakes"
           @click="sub = 'mistakes'"
         >
           {{ t('k12.subTabs.mistakes') }}
+          <span class="k12-tab-count" aria-hidden="true" :data-count="mistakeCount" />
         </button>
         <button
+          role="tab"
+          :aria-selected="sub === 'practiceSets'"
+          :aria-label="`${t('k12.subTabs.practiceSets')} ${practiceCount}`"
           :class="{ on: sub === 'practiceSets' }"
           data-testid="subtab-practicesets"
           @click="sub = 'practiceSets'"
         >
           {{ t('k12.subTabs.practiceSets') }}
+          <span class="k12-tab-count" aria-hidden="true" :data-count="practiceCount" />
         </button>
-        <button :class="{ on: sub === 'accumulation' }" @click="sub = 'accumulation'">
+        <button
+          role="tab"
+          :aria-selected="sub === 'accumulation'"
+          :aria-label="`${t('k12.subTabs.accumulation')} ${accumulationTotalCount}`"
+          :class="{ on: sub === 'accumulation' }"
+          data-testid="subtab-accumulation"
+          @click="sub = 'accumulation'"
+        >
           {{ t('k12.subTabs.accumulation') }}
+          <span class="k12-tab-count" aria-hidden="true" :data-count="accumulationTotalCount" />
         </button>
-        <button :class="{ on: sub === 'works' }" data-testid="subtab-works" @click="sub = 'works'">
+        <button
+          role="tab"
+          :aria-selected="sub === 'works'"
+          :aria-label="`${t('k12.subTabs.works')} ${worksCount}`"
+          :class="{ on: sub === 'works' }"
+          data-testid="subtab-works"
+          @click="sub = 'works'"
+        >
           {{ t('k12.subTabs.works') }}
+          <span class="k12-tab-count" aria-hidden="true" :data-count="worksCount" />
         </button>
       </div>
-      <span class="k12rec__sp" />
+      <!-- 原型 2209-2211：本周唯一上下文主操作是 split。主按钮走智能默认；下拉只承载已有真实能力。
+           「自动任务设置」尚无本组件可达的真实命令/路由，不渲染无效假入口。 -->
+      <div v-if="sub === 'week'" class="k12rec__review-action" data-testid="review-split">
+        <div class="k12rec__split">
+          <button
+            class="btn btn-primary"
+            data-testid="build-review-set"
+            :disabled="basketBusy || !hasReviewQueue"
+            @click="buildReviewSet"
+          >
+            <svg class="k12ic" viewBox="0 0 24 24">
+              <path d="M6 9V2h12v7" />
+              <path
+                d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"
+              />
+              <path d="M6 14h12v8H6z" />
+            </svg>
+            {{ t('k12.records.genWorksheet') }}
+          </button>
+          <button
+            type="button"
+            class="k12rec__split-caret"
+            data-testid="review-split-more"
+            :aria-label="t('k12.records.moreWorksheetActions')"
+            aria-haspopup="menu"
+            :aria-expanded="reviewMenuOpen"
+            :disabled="basketBusy"
+            @click="reviewMenuOpen = !reviewMenuOpen"
+          >
+            <svg class="k12ic" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
+          </button>
+        </div>
+        <div v-if="reviewMenuOpen" class="k12rec__menu" role="menu" data-testid="review-split-menu">
+          <button
+            type="button"
+            role="menuitem"
+            data-testid="custom-paper-open"
+            @click="openCustomPaperFromReviewMenu"
+          >
+            {{ t('k12.records.customPaper') }}
+          </button>
+        </div>
+      </div>
       <!-- 20260719 信息架构定稿：①功能位 emoji → 单色描边图标；②导出与备份/恢复均为学习档案级动作，
            不占常驻顶栏，统一收进五个子页均可达的「⋯」溢出菜单。 -->
       <button
@@ -837,19 +1168,38 @@ async function doExportMd() {
         {{ t('k12.works.addWork') }}
       </button>
       <div class="k12rec__export">
-        <button class="btn" :title="t('k12.actions.more')" @click="exportOpen = !exportOpen">
+        <button
+          ref="recordsMoreTrigger"
+          type="button"
+          class="btn"
+          :title="t('k12.actions.more')"
+          aria-haspopup="menu"
+          :aria-expanded="exportOpen"
+          aria-controls="k12-records-more-menu"
+          data-testid="records-more-trigger"
+          @click="toggleExportMenu"
+        >
           ⋯
         </button>
-        <div v-if="exportOpen" class="k12rec__menu">
-          <button @click="doExport('pdf')">{{ t('k12.actions.export') }} PDF</button>
-          <button @click="doExport('docx')">{{ t('k12.actions.export') }} Word</button>
-          <button @click="doExportMd">{{ t('k12.actions.export') }} Markdown</button>
-          <button
-            @click="
-              exportOpen = false;
-              emit('open-backup')
-            "
-          >
+        <div
+          v-if="exportOpen"
+          id="k12-records-more-menu"
+          ref="recordsMoreMenu"
+          class="k12rec__menu"
+          role="menu"
+          data-testid="records-more-menu"
+          @keydown="onExportMenuKeydown"
+        >
+          <button type="button" role="menuitem" @click="doExport('pdf')">
+            {{ t('k12.actions.export') }} PDF
+          </button>
+          <button type="button" role="menuitem" @click="doExport('docx')">
+            {{ t('k12.actions.export') }} Word
+          </button>
+          <button type="button" role="menuitem" @click="doExportMd">
+            {{ t('k12.actions.export') }} Markdown
+          </button>
+          <button type="button" role="menuitem" @click="openBackupFromMenu">
             {{ t('k12.actions.backup') }}
           </button>
         </div>
@@ -860,156 +1210,258 @@ async function doExportMd() {
       <!-- 本周复习（行动页，PRD §3.6）：复习队列 + 趋势 + 生成复习卷；档案查管在「全部错题」。 -->
       <section v-if="sub === 'week'" data-testid="week-section">
         <div
-          v-if="store.mistakesError"
+          v-if="mistakesLoading"
+          class="k12rec__loading"
+          role="status"
+          data-testid="records-loading"
+        >
+          {{ t('common.loading') }}
+        </div>
+        <div
+          v-else-if="store.mistakesError"
           class="k12rec__err"
           role="alert"
           data-testid="mistakes-error"
         >
           <span>{{ store.mistakesError }}</span>
-          <button
-            class="btn btn-ghost"
-            data-testid="mistakes-retry"
-            @click="store.loadMistakes(props.agentId)"
-          >
+          <button class="btn btn-ghost" data-testid="mistakes-retry" @click="reloadMistakes">
             {{ t('common.retry') }}
           </button>
         </div>
-        <div
-          v-if="store.reportError"
-          class="k12rec__err"
-          role="alert"
-          data-testid="records-report-error"
-        >
-          <span>{{ store.reportError }}</span>
-          <button
-            class="btn btn-ghost"
-            data-testid="records-report-retry"
-            @click="store.loadReport(props.agentId)"
+        <template v-else>
+          <div
+            v-if="store.reportError"
+            class="k12rec__err"
+            role="alert"
+            data-testid="records-report-error"
           >
-            {{ t('common.retry') }}
-          </button>
-        </div>
-
-        <!-- 项-5：复习队列空 → 正向空态卡（不留空白）。
-             §3.6 本周清零庆祝态：本轮有做对清零 → 庆祝（一周唯一正反馈时刻，不做排名不做焦虑）；
-             本来就无到期 → 中性计划文案。 -->
-        <div v-if="view && !hasReviewQueue" class="k12empty" data-testid="review-empty-card">
-          <template v-if="weekCleared">
-            <div class="k12empty__icon">🎉</div>
-            <b class="k12empty__title" data-testid="review-cleared-title">{{
-              t('k12.emptyReview.clearedTitle')
-            }}</b>
-            <p class="k12empty__sub">{{ t('k12.emptyReview.clearedSub') }}</p>
-          </template>
-          <template v-else>
-            <div class="k12empty__icon">✅</div>
-            <b class="k12empty__title">{{ t('k12.emptyReview.title') }}</b>
-            <p class="k12empty__sub">{{ t('k12.emptyReview.sub') }}</p>
-            <p v-if="nextReview" class="k12empty__next" data-testid="review-empty-next">
-              {{ t('k12.emptyReview.nextReview', { date: nextReview.date })
-              }}<template v-if="nextReview.kp">（{{ nextReview.kp }}）</template>
-            </p>
+            <span>{{ store.reportError }}</span>
             <button
-              v-if="view.items.length"
-              class="btn k12empty__cta"
-              data-testid="review-empty-cta"
-              @click="practiceEarly"
+              class="btn btn-ghost"
+              data-testid="records-report-retry"
+              @click="store.loadReport(props.agentId)"
             >
-              {{ t('k12.emptyReview.practice') }}
+              {{ t('common.retry') }}
             </button>
-          </template>
-        </div>
+          </div>
 
-        <div v-if="view" class="k12mistakes">
-          <RecordList :schema="MISTAKE_SCHEMA" :view="view" hide-list @action="onAction">
-            <!-- 原型 c8a194e：分布括号紧贴标题 + 趋势 pill 并入行动卡（数据齐才显，诚实降级） -->
-            <template #review-meta>
-              <span v-if="reviewSubjectDist" class="k12dist">（{{ reviewSubjectDist }}）</span>
-              <span
-                v-if="trendPill"
-                class="k12trend"
-                :class="trendPill.up ? 'k12trend--up' : 'k12trend--flat'"
-                data-testid="trend-pill"
-                >{{ trendPill.label }}</span
-              >
+          <!-- 五对象真全零 → 原型 FTUE。其他对象未落定或失败时不得抢跑，更不得造示例计数。 -->
+          <div
+            v-if="ftueAuxLoading"
+            class="k12rec__loading"
+            role="status"
+            data-testid="records-ftue-loading"
+          >
+            {{ t('k12.ftue.loading') }}
+          </div>
+          <div
+            v-else-if="ftueAuxError"
+            class="k12rec__err"
+            role="alert"
+            data-testid="records-ftue-error"
+          >
+            <span>{{ t('k12.ftue.loadError') }}</span>
+            <button type="button" class="btn btn-ghost" @click="reload">
+              {{ t('common.retry') }}
+            </button>
+          </div>
+          <div v-else-if="isFtue" class="k12rec__ftue" data-testid="records-ftue">
+            <div class="k12rec__ftue-notice">
+              <b>{{ t('k12.ftue.title') }}</b
+              ><br />
+              {{ t('k12.ftue.journey') }}
+            </div>
+            <div class="k12rec__ftue-list">
+              <div class="k12rec__ftue-row">
+                <b>{{ t('k12.subTabs.week') }}</b>
+                <span>{{ t('k12.ftue.weekValue') }}</span>
+                <button type="button" class="btn btn-primary" @click="emit('go-tutor')">
+                  {{ t('k12.ftue.cta') }}
+                </button>
+              </div>
+              <div class="k12rec__ftue-row">
+                <b>{{ t('k12.subTabs.practiceSets') }}</b>
+                <span>{{ t('k12.ftue.practiceValue') }}</span>
+                <em>{{ t('k12.ftue.none') }}</em>
+              </div>
+              <div class="k12rec__ftue-row">
+                <b>{{ t('k12.ftue.collectionTitle') }}</b>
+                <span>{{ t('k12.ftue.collectionValue') }}</span>
+                <em>{{ t('k12.ftue.none') }}</em>
+              </div>
+            </div>
+          </div>
+
+          <!-- 项-5：复习队列空 → 正向空态卡（不留空白）。
+               §3.6 本周清零庆祝态：本轮有做对清零 → 庆祝（一周唯一正反馈时刻，不做排名不做焦虑）；
+               本来就无到期 → 中性计划文案。 -->
+          <div v-else-if="view && !hasReviewQueue" class="k12empty" data-testid="review-empty-card">
+            <template v-if="weekCleared">
+              <div class="k12empty__icon">🎉</div>
+              <b class="k12empty__title" data-testid="review-cleared-title">{{
+                t('k12.emptyReview.clearedTitle')
+              }}</b>
+              <p class="k12empty__sub">{{ t('k12.emptyReview.clearedSub') }}</p>
             </template>
-            <!-- 周五留存钩子 + 查看学情入口（学情已是顶栏一等 Tab） -->
-            <template #review-foot
-              >{{ t('k12.records.weeklyHook') }} ·
-              <a class="k12rec__insightlink" data-testid="go-insights" @click="emit('go-insights')"
-                >{{ t('k12.records.viewInsights') }} ›</a
-              ></template
+            <template v-else>
+              <div class="k12empty__icon">✅</div>
+              <b class="k12empty__title">{{ t('k12.emptyReview.title') }}</b>
+              <p class="k12empty__sub">{{ t('k12.emptyReview.sub') }}</p>
+              <p v-if="nextReview" class="k12empty__next" data-testid="review-empty-next">
+                {{ t('k12.emptyReview.nextReview', { date: nextReview.date })
+                }}<template v-if="nextReview.kp">（{{ nextReview.kp }}）</template>
+              </p>
+              <button
+                v-if="view.items.length"
+                class="btn k12empty__cta"
+                data-testid="review-empty-cta"
+                @click="practiceEarly"
+              >
+                {{ t('k12.emptyReview.practice') }}
+              </button>
+            </template>
+          </div>
+
+          <div v-if="view" class="k12mistakes k12mistakes--week">
+            <RecordList
+              :schema="MISTAKE_SCHEMA"
+              :view="view"
+              hide-list
+              review-class="k12week__hero"
+              @action="onAction"
             >
-            <template #review-actions>
-              <!-- §3.8 购物车模型：生成复习卷 = 本周待复习批量装篮（幂等），打印/发送在练习集完成 -->
-              <button
-                class="btn btn-primary"
-                data-testid="build-review-set"
-                :disabled="basketBusy"
-                @click="buildReviewSet"
+              <template #review-title="{ items }">
+                <div class="k12week__count">
+                  <b>{{ items.length }}</b>
+                  <span>{{ t('k12.records.dueCountUnit') }}</span>
+                </div>
+              </template>
+              <!-- 原型 2235：学科分布 pill + 趋势 pill 并入 hero 顶部（数据齐才显，诚实降级） -->
+              <template #review-meta>
+                <div v-if="reviewSubjectDist.length" class="k12week__meta">
+                  <span
+                    v-for="entry in reviewSubjectDist"
+                    :key="entry.subject"
+                    class="k12week__subject"
+                    >{{ entry.subject }} {{ entry.count }}</span
+                  >
+                </div>
+                <span
+                  v-if="trendPill"
+                  class="k12trend"
+                  :class="trendPill.up ? 'k12trend--up' : 'k12trend--flat'"
+                  data-testid="trend-pill"
+                  >{{ trendPill.label }}</span
+                >
+              </template>
+              <!-- 周五留存钩子 + 查看学情入口（学情已是顶栏一等 Tab） -->
+              <template #review-foot
+                >{{ t('k12.records.weeklyHook') }} ·
+                <a
+                  class="k12rec__insightlink"
+                  data-testid="go-insights"
+                  @click="emit('go-insights')"
+                  >{{ t('k12.records.viewInsights') }} ›</a
+                ></template
               >
-                <svg class="k12ic" viewBox="0 0 24 24">
-                  <path d="M6 9V2h12v7" />
-                  <path
-                    d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"
-                  />
-                  <path d="M6 14h12v8H6z" />
-                </svg>
-                {{ t('k12.records.genWorksheet') }}
-              </button>
-              <button
-                type="button"
-                class="btn"
-                data-testid="custom-paper-open"
-                :disabled="basketBusy"
-                @click="toggleCustomPaper"
-              >
-                <svg class="k12ic" viewBox="0 0 24 24">
-                  <path d="M4 21v-7" />
-                  <path d="M4 10V3" />
-                  <path d="M12 21v-9" />
-                  <path d="M12 8V3" />
-                  <path d="M20 21v-5" />
-                  <path d="M20 12V3" />
-                  <path d="M2 14h4" />
-                  <path d="M10 8h4" />
-                  <path d="M18 16h4" />
-                </svg>
-                {{ t('k12.records.customPaper') }}
-              </button>
-            </template>
-          </RecordList>
-        </div>
+            </RecordList>
+          </div>
+        </template>
       </section>
 
       <!-- 全部错题（档案页，PRD §3.7）：查找、核对、管理——直接展开筛选 + 全量，不与本周复习重复行动。 -->
       <section v-else-if="sub === 'mistakes'" data-testid="mistakes-section">
         <div
-          v-if="store.mistakesError"
+          v-if="mistakesLoading"
+          class="k12rec__loading"
+          role="status"
+          data-testid="records-loading"
+        >
+          {{ t('common.loading') }}
+        </div>
+        <div
+          v-else-if="store.mistakesError"
           class="k12rec__err"
           role="alert"
           data-testid="mistakes-error"
         >
           <span>{{ store.mistakesError }}</span>
-          <button
-            class="btn btn-ghost"
-            data-testid="mistakes-retry"
-            @click="store.loadMistakes(props.agentId)"
-          >
+          <button class="btn btn-ghost" data-testid="mistakes-retry" @click="reloadMistakes">
             {{ t('common.retry') }}
           </button>
         </div>
-        <p class="k12rec__hint" style="margin-top: 0">{{ t('k12.records.archiveDesc') }}</p>
-        <div v-if="view" class="k12mistakes">
-          <RecordList :schema="MISTAKE_SCHEMA" :view="view" hide-review @action="onAction" />
-        </div>
-        <!-- 归档规则脚注（原型 1599） -->
-        <p v-if="view" class="k12rec__hint">{{ t('k12.records.stateMachineHint') }}</p>
+        <template v-else-if="view && filteredMistakeView">
+          <div class="k12rec__object-summary">
+            <p class="k12rec__object-description">{{ t('k12.records.archiveDesc') }}</p>
+            <span
+              class="k12rec__result-count"
+              role="status"
+              aria-live="polite"
+              data-testid="mistake-result-count"
+              >{{
+                t('k12.records.resultCount', {
+                  shown: filteredMistakeItems.length,
+                  total: mistakeCount,
+                })
+              }}</span
+            >
+          </div>
+          <div class="k12rec__filter-stack" :aria-label="t('k12.records.filterLabel')">
+            <div
+              class="k12rec__filter-row k12rec__filter-row--subject"
+              role="group"
+              :aria-label="t('k12.records.filterSubject')"
+            >
+              <span class="k12rec__filter-label">{{ t('k12.records.filterSubject') }}</span>
+              <button
+                v-for="option in mistakeSubjectFilters"
+                :key="option.value || 'all'"
+                type="button"
+                class="k12rec__filter"
+                :class="{ on: mistakeSubject === option.value }"
+                :aria-pressed="mistakeSubject === option.value"
+                :data-testid="`mistake-subject-${option.value || 'all'}`"
+                @click="mistakeSubject = option.value"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <div
+              class="k12rec__filter-row"
+              role="group"
+              :aria-label="t('k12.records.filterStatus')"
+            >
+              <span class="k12rec__filter-label">{{ t('k12.records.filterStatus') }}</span>
+              <button
+                v-for="option in mistakeStatusFilters"
+                :key="option.value"
+                type="button"
+                class="k12rec__filter"
+                :class="{ on: mistakeStatus === option.value }"
+                :aria-pressed="mistakeStatus === option.value"
+                :data-testid="`mistake-status-${option.value}`"
+                @click="mistakeStatus = option.value"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
+          <p class="k12rec__hint k12rec__archive-note">{{ t('k12.records.stateMachineHint') }}</p>
+          <div class="k12mistakes">
+            <RecordList
+              :schema="MISTAKE_SCHEMA"
+              :view="filteredMistakeView"
+              hide-review
+              hide-filters
+              @action="onAction"
+            />
+          </div>
+        </template>
       </section>
 
       <!-- 练习集：组好的题（真实 /practice-sets）——生命周期 + 发布门 -->
       <section v-else-if="sub === 'practiceSets'" data-testid="practicesets-section">
-        <K12PracticeSetsPanel :agent-id="props.agentId" />
+        <K12PracticeSetsPanel :agent-id="props.agentId" @count="updatePracticeCount" />
       </section>
 
       <!-- 积累本：语/英沉淀（真实 /accumulation）——记录本原语第二场景 -->
@@ -1053,7 +1505,15 @@ async function doExportMd() {
           </div>
         </div>
         <div
-          v-if="store.accumulationError"
+          v-if="accumulationLoading"
+          class="k12rec__loading"
+          role="status"
+          data-testid="accum-loading"
+        >
+          {{ t('common.loading') }}
+        </div>
+        <div
+          v-else-if="store.accumulationError"
           class="k12rec__err"
           role="alert"
           data-testid="accum-error"
@@ -1106,6 +1566,7 @@ async function doExportMd() {
           ref="creativeWorksRef"
           :agent-id="props.agentId"
           :show-add-button="false"
+          @count="updateWorksCount"
         />
       </section>
 
@@ -1203,7 +1664,7 @@ async function doExportMd() {
               rows="4"
             />
           </HcClearableField>
-          <div class="k12accum__row">
+          <div class="k12accum__form-row">
             <div class="k12accum__field" data-testid="accum-add-subject">
               <span>{{ t('k12.accum.subject') }}</span>
               <HcSelect v-model="accumForm.subject" :options="accumSubjectOptions" />
@@ -1658,6 +2119,58 @@ async function doExportMd() {
   overflow: auto;
   padding: 16px 20px 40px;
 }
+.k12rec__ftue {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.k12rec__ftue-notice {
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  padding: 11px 13px;
+  font-size: 12.5px;
+  color: var(--hc-text-secondary);
+  line-height: 1.55;
+}
+.k12rec__ftue-notice b {
+  color: var(--hc-text-primary);
+}
+.k12rec__ftue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.k12rec__ftue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+}
+.k12rec__ftue-row b {
+  color: var(--hc-text-primary);
+}
+.k12rec__ftue-row > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.k12rec__ftue-row em {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-muted);
+  font-style: normal;
+}
 .k12rec__err {
   display: flex;
   align-items: center;
@@ -1666,6 +2179,57 @@ async function doExportMd() {
   color: var(--hc-error);
   font-size: 13px;
   margin-bottom: 10px;
+}
+.k12rec__loading {
+  margin: 0;
+  padding: 18px 2px;
+  color: var(--hc-text-muted);
+  font-size: 12.5px;
+}
+.k12rec__review-action {
+  position: relative;
+  flex: none;
+}
+.k12rec__split {
+  display: inline-flex;
+  border-radius: 10px;
+  box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
+  transition:
+    transform 0.12s ease-out,
+    box-shadow 0.2s ease-out;
+}
+.k12rec__split:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(95, 179, 234, 0.34);
+}
+.k12rec__split .btn-primary {
+  height: 32px;
+  border-radius: 8px 0 0 8px;
+  box-shadow: none;
+}
+.k12rec__split .btn-primary:hover {
+  transform: none;
+  box-shadow: none;
+}
+.k12rec__split-caret {
+  width: 30px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-left: 0.5px solid rgba(255, 255, 255, 0.3);
+  border-radius: 0 8px 8px 0;
+  background: linear-gradient(180deg, #5fb3ea 0%, #4a9de0 100%);
+  color: #fff;
+  cursor: pointer;
+}
+.k12rec__split-caret:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+.k12rec__split-caret:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .k12rec__export {
   position: relative;
@@ -1697,6 +2261,79 @@ async function doExportMd() {
 }
 .k12rec__menu button:hover {
   background: var(--hc-bg-hover);
+}
+.k12rec__object-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+}
+.k12rec__object-description {
+  margin: 0;
+  color: var(--hc-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.k12rec__result-count {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.k12rec__filter-stack {
+  display: grid;
+  gap: 9px;
+  padding: 12px 14px;
+  margin: 0 0 12px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 14px;
+  background: var(--hc-bg-card);
+}
+.k12rec__filter-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.k12rec__filter-label {
+  width: 38px;
+  flex: none;
+  color: var(--hc-text-muted);
+  font-size: 10.5px;
+  font-weight: 700;
+}
+.k12rec__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 9px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.k12rec__filter-row--subject .k12rec__filter {
+  width: 68px;
+  justify-content: center;
+  flex: none;
+  white-space: nowrap;
+}
+.k12rec__filter.on {
+  color: var(--hc-accent);
+  border-color: color-mix(in srgb, var(--hc-accent) 35%, var(--hc-border));
+  background: var(--hc-accent-subtle);
+}
+.k12rec__archive-note {
+  margin: 0 0 8px;
+  line-height: 1.6;
 }
 .k12rec__hint {
   font-size: 11.5px;
@@ -1939,7 +2576,7 @@ async function doExportMd() {
   border-radius: var(--hc-radius-md);
   background: var(--hc-bg-elevated);
 }
-.k12accum__row {
+.k12accum__form-row {
   display: flex;
   gap: 14px;
   flex-wrap: wrap;
@@ -2105,6 +2742,57 @@ async function doExportMd() {
   box-shadow: var(--hc-shadow-sm);
   font-weight: 600;
 }
+/* 原型 1172-1177：二级对象 Tab 没有 segmented 底板；选中态仅强调色轻底，不做白卡浮起。 */
+.k12rec__object-tabs {
+  gap: 3px;
+  overflow-x: auto;
+  max-width: 100%;
+  flex: 1 1 auto;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+}
+.k12rec__object-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  padding: 7px 12px;
+  border-radius: 9px;
+  color: var(--hc-text-secondary);
+}
+.k12rec__object-tabs button:hover:not(.on) {
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
+}
+.k12rec__object-tabs button.on {
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  box-shadow: none;
+  font-weight: 600;
+}
+.k12-tab-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-muted);
+  font-size: 10px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+}
+.k12-tab-count::before {
+  content: attr(data-count);
+}
+.k12rec__object-tabs button.on .k12-tab-count {
+  background: color-mix(in srgb, var(--hc-accent) 15%, transparent);
+  color: var(--hc-accent);
+}
 .pill {
   display: inline-flex;
   align-items: center;
@@ -2190,12 +2878,82 @@ async function doExportMd() {
 .k12mistakes--collapsed :deep(.record-list > .rl-rows) {
   display: none;
 }
-/* 「本周复习」行动卡：跨科分布 + 趋势 pill（原型 stpill got/done 同源色） */
-.k12dist {
-  font-size: 12.5px;
-  color: var(--hc-text-secondary);
-  margin-left: -4px;
+/* 原型 1193-1212：本周复习用大数字 hero；列表、自动化脚注都收进同一张卡。 */
+:deep(.k12week__hero) {
+  border: 0.5px solid var(--hc-border);
+  border-left: 0.5px solid var(--hc-border);
+  border-radius: 16px;
+  background: linear-gradient(160deg, var(--hc-accent-subtle), var(--hc-bg-card) 55%);
+  box-shadow: var(--hc-shadow-sm);
+  padding: 18px 18px 13px;
+  margin: 2px 0 14px;
 }
+:deep(.k12week__hero .rl-review__head) {
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.k12week__count {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+.k12week__count b {
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--hc-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.k12week__count span {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--hc-text-secondary);
+}
+.k12week__meta {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+.k12week__subject {
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+  font-size: 10.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+:deep(.k12week__hero .rl-review__head > .rl-spacer) {
+  display: none;
+}
+:deep(.k12week__hero .rl-rows) {
+  margin-top: 0;
+}
+:deep(.k12week__hero .rl-row) {
+  padding: 10px 12px;
+}
+:deep(.k12week__hero .rl-row > .rl-title) {
+  flex: 0 0 250px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:deep(.k12week__hero .rl-row > .rl-btn) {
+  height: 28px;
+  padding: 0 9px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+:deep(.k12week__hero .rl-review__foot) {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 0.5px solid var(--hc-divider);
+}
+/* 「本周复习」趋势 pill（原型 stpill got/done 同源色） */
 .k12trend {
   font-size: 10.5px;
   border-radius: 999px;

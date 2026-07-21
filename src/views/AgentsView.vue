@@ -3,7 +3,7 @@ import { onMounted, ref, computed, watch, nextTick, type Component } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  Bot, Plus, X, Pencil, Trash2, ChevronDown, ChevronUp, LibraryBig, MessageSquare,
+  Bot, Plus, X, ChevronDown, ChevronUp, LibraryBig,
   Headset, PenLine, Code, Languages, BarChart3, Mail, Database, BookOpen, FileText, Search,
 } from 'lucide-vue-next'
 import logoUrl from '@/assets/logo.png'
@@ -546,6 +546,7 @@ function onScenarioCreated() {
 
 // 场景实例卡扩展（如 K12 辅导老师卡的计数/快捷入口）：本视图零场景知识，只对场景实例渲染 registry 组件
 const agentCardExtension = scenarioRegistry.agentCardExtension
+const agentCardBadgeKey = scenarioRegistry.agentCardBadgeKey
 function isScenarioAgent(agent: AgentConfig): boolean {
   return scenarioRegistry.isScenarioInstance({ agentId: agent.name, metadata: agent.metadata })
 }
@@ -779,7 +780,7 @@ async function handleUnregisterAgent() {
       <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
     </div>
 
-    <div class="hc-agents__content flex-1 overflow-y-auto p-6">
+    <div class="hc-agents__content flex-1 overflow-y-auto">
       <!-- ── 我的智能体：小蟹默认助理 hero + 专属智能体 roster ── -->
       <template v-if="activeTab === 'mine'">
       <LoadingState v-if="agentsLoading" />
@@ -793,7 +794,7 @@ async function handleUnregisterAgent() {
                   <img :src="logoUrl" alt="" width="38" height="38" />
                 </div>
                 <div class="min-w-0">
-                  <div class="hc-cxnm flex items-center gap-2 flex-wrap">
+                  <div class="hc-cxnm">
                     {{ defaultAssistantName }}
                     <span class="hc-tag">{{ t('agents.defaultAssistantTag') }}</span>
                   </div>
@@ -804,7 +805,6 @@ async function handleUnregisterAgent() {
               </div>
               <div class="hc-crow">
                 <button class="hc-btn" @click="openSoulEditor">
-                  <Pencil :size="13" />
                   {{ t('agents.editSoul') }}
                 </button>
                 <span class="hc-tag">{{ t('agents.followSettingsRouting') }}</span>
@@ -830,8 +830,13 @@ async function handleUnregisterAgent() {
                     <Bot v-else :size="20" />
                   </div>
                   <div class="min-w-0 flex-1">
-                    <div class="hc-cxnm flex items-center gap-2 flex-wrap">
+                    <div class="hc-cxnm">
                       {{ agent.display_name || agent.name }}
+                      <span
+                        v-if="agentCardBadgeKey && isScenarioAgent(agent)"
+                        class="hc-tag"
+                        data-testid="scenario-agent-title-badge"
+                      >{{ t(agentCardBadgeKey) }}</span>
                       <!-- BUG-20260703 问题4：router 自动兜底（第一个注册者）≠ 小蟹「默认助理」。
                            徽章按真实语义命名，title 讲清桌面聊天不受它影响，消除双「默认」撞车。 -->
                       <span
@@ -841,7 +846,7 @@ async function handleUnregisterAgent() {
                         :title="t('agents.imFallbackTitle')"
                       >{{ t('agents.imFallback') }}</span>
                     </div>
-                    <div class="hc-cxmeta truncate">{{ agent.description || t('agents.noDesc') }}</div>
+                    <div class="hc-cxmeta">{{ agent.description || t('agents.noDesc') }}</div>
                   </div>
                 </div>
 
@@ -878,21 +883,18 @@ async function handleUnregisterAgent() {
                     :data-testid="`agent-enter-chat-${agent.name}`"
                     @click="enterAgentChat(agent.name)"
                   >
-                    <MessageSquare :size="13" />
                     {{ t('agents.enterChat') }}
                   </button>
                   <button v-if="!isScenarioAgent(agent)" class="hc-btn" @click="openEditAgent(agent)">
-                    <Pencil :size="13" />
                     {{ t('common.edit') }}
                   </button>
                   <!-- BUG-20260710 ①：场景卡不再渲染孤行删除（原型 K12 卡动作行无删除）——
                        删除作为低频动作下沉到「编辑档案」弹层（K12ProfileForm 编辑态）。 -->
                   <button
                     v-if="agent.name !== defaultAgent && !isScenarioAgent(agent)"
-                    class="hc-btn hc-btn--danger"
+                    class="hc-btn hc-btn-ghost hc-btn--danger"
                     @click="confirmUnregister(agent.name)"
                   >
-                    <Trash2 :size="13" />
                     {{ t('agents.delete', '删除') }}
                   </button>
                 </div>
@@ -924,7 +926,7 @@ async function handleUnregisterAgent() {
               <div class="hc-cxlogo" style="font-size: 20px">{{ stpl.icon }}</div>
               <div class="min-w-0 flex-1">
                 <div class="hc-cxnm">{{ t(stpl.nameKey) }}</div>
-                <div class="hc-cxmeta truncate">{{ t(stpl.descKey) }}</div>
+                <div class="hc-cxmeta">{{ t(stpl.descKey) }}</div>
               </div>
             </div>
             <div class="hc-crow">
@@ -942,7 +944,7 @@ async function handleUnregisterAgent() {
               <div class="hc-cxlogo"><component :is="tpl.icon" :size="20" /></div>
               <div class="min-w-0 flex-1">
                 <div class="hc-cxnm">{{ tpl.name }}</div>
-                <div class="hc-cxmeta truncate">{{ tpl.desc }}</div>
+                <div class="hc-cxmeta">{{ tpl.desc }}</div>
               </div>
             </div>
             <div class="hc-crow">
@@ -1480,6 +1482,7 @@ async function handleUnregisterAgent() {
 <style scoped>
 /* ── 卡片布局（对齐原型 app.html cxcard 系列） ── */
 .hc-agents__content {
+  padding: 16px 26px 48px;
   container-type: inline-size;
 }
 
@@ -1519,7 +1522,9 @@ async function handleUnregisterAgent() {
   gap: 12px;
   text-align: left;
   box-shadow: var(--hc-shadow-sm);
-  transition: border-color 0.15s ease-out, box-shadow 0.2s ease-out, transform 0.12s ease-out;
+  backdrop-filter: saturate(160%) blur(16px);
+  -webkit-backdrop-filter: saturate(160%) blur(16px);
+  transition: transform 0.28s var(--hc-ease-out), box-shadow 0.28s var(--hc-ease-out), border-color 0.2s var(--hc-ease-out), background 0.2s var(--hc-ease-out);
 }
 .hc-cxcard:hover {
   border-color: var(--hc-border-hl);
@@ -1528,7 +1533,7 @@ async function handleUnregisterAgent() {
 }
 
 .hc-cxcard--hero {
-  border: 1px solid var(--hc-border-hl);
+  border: 1px solid rgba(95, 179, 234, 0.45);
   background: var(--hc-accent-subtle);
   box-shadow: 0 0 0 3px var(--hc-accent-subtle);
 }
@@ -1626,7 +1631,7 @@ async function handleUnregisterAgent() {
 /* 标签 / 状态徽标 */
 .hc-tag {
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 1px 7px;
   border-radius: 6px;
   background: var(--hc-bg-active);
   color: var(--hc-text-secondary);
@@ -1642,6 +1647,7 @@ async function handleUnregisterAgent() {
   font-size: 12px;
   padding: 3px 9px;
   border-radius: 7px;
+  white-space: nowrap;
 }
 .hc-pill::before {
   content: "";
@@ -1650,7 +1656,7 @@ async function handleUnregisterAgent() {
   border-radius: 50%;
 }
 .hc-pill--green {
-  background: var(--hc-accent-subtle);
+  background: rgba(50, 213, 131, 0.14);
   color: var(--hc-success);
 }
 .hc-pill--green::before { background: var(--hc-success); }
@@ -1688,7 +1694,14 @@ button.hc-cxcard {
 }
 
 @container (max-width: 720px) {
+  .hc-agents__content { padding: 14px 16px 40px; }
   .hc-cxcards { grid-template-columns: 1fr; }
+  .hc-cxnm,
+  .hc-cxmeta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
 
 /* ── 新建弹窗第一步「选择起点」卡片网格 ── */

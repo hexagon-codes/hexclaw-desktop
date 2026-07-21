@@ -14,14 +14,33 @@ import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
 
 const h = vi.hoisted(() => {
-  const due = { record_id: 'a', question: '3.8×3', knowledge_point: '小数乘法', error_cause: '进位', status: 'new', version: 0, due_at: 1, subject: '数学' }
+  const due = {
+    record_id: 'a',
+    question: '3.8×3',
+    knowledge_point: '小数乘法',
+    error_cause: '进位',
+    status: 'new',
+    version: 0,
+    due_at: 1,
+    subject: '数学',
+  }
   return {
     due,
     mistakes: [due] as Array<Record<string, unknown>>,
     queue: [due] as Array<Record<string, unknown>>,
-    apiPostSpy: vi.fn<(...args: unknown[]) => Promise<unknown>>()
+    apiPostSpy: vi
+      .fn<(...args: unknown[]) => Promise<unknown>>()
       .mockResolvedValue({ record_id: 'ps-1', added: true }),
-    accum: [{ record_id: 'acc-1', subject: '语文', entry_type: '好词好句', content: '不积跬步无以至千里', status: '', source: '' }],
+    accum: [
+      {
+        record_id: 'acc-1',
+        subject: '语文',
+        entry_type: '好词好句',
+        content: '不积跬步无以至千里',
+        status: '',
+        source: '',
+      },
+    ],
   }
 })
 
@@ -44,17 +63,32 @@ vi.mock('@/api/k12', () => ({
   k12ReviewRetry: vi.fn(),
   k12AddToBasket: vi.fn().mockResolvedValue({ record_id: 'ps-1', added: true }),
   k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
+  k12ListCreativeWorks: vi.fn().mockResolvedValue({ items: [] }),
   k12FinalizePracticeSet: vi.fn(),
   k12RemoveFromBasket: vi.fn(),
   k12AdvancePracticeSet: vi.fn(),
   k12CancelPracticeSet: vi.fn(),
-  k12InsightReport: vi.fn().mockResolvedValue({ trend: { mastered: 0, reviewing: 1, retried: 0, archived: 0, total: 1 }, weak_top3: [], month_new_mistakes: 1, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 1, total_minutes: 0, note: '' }),
+  k12InsightReport: vi.fn().mockResolvedValue({
+    trend: { mastered: 0, reviewing: 1, retried: 0, archived: 0, total: 1 },
+    weak_top3: [],
+    month_new_mistakes: 1,
+    review_completion_rate: -1,
+    consecutive_fail_kps: null,
+    suggestion: '',
+  }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 1, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockImplementation(() => Promise.resolve({ items: h.accum })),
 }))
 
 function i18n() {
-  return createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN } })
+  return createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
+  })
 }
 function render() {
   return mount(K12RecordsView, {
@@ -110,7 +144,10 @@ describe('②（§3.9）积累详情「生成默写题，加入练习集」', ()
   async function openAccumDetail() {
     const w = render()
     await flushPromises()
-    await w.findAll('.seg button').find((b) => b.text() === '积累')!.trigger('click')
+    await w
+      .findAll('.seg button')
+      .find((b) => b.text() === '积累')!
+      .trigger('click')
     await flushPromises()
     await w.findAll('.k12accum__detail')[0]!.trigger('click')
     await flushPromises()
@@ -124,10 +161,9 @@ describe('②（§3.9）积累详情「生成默写题，加入练习集」', ()
     expect(btn.text()).toContain('生成默写题')
     await btn.trigger('click')
     await flushPromises()
-    expect(h.apiPostSpy).toHaveBeenCalledWith(
-      '/api/k12/accumulation/acc-1/dictation-to-basket',
-      { agent: 'mingming' },
-    )
+    expect(h.apiPostSpy).toHaveBeenCalledWith('/api/k12/accumulation/acc-1/dictation-to-basket', {
+      agent: 'mingming',
+    })
   })
 
   it('成功后按钮幂等：文案转「已加入练习集」并置灰，不重复调端点', async () => {

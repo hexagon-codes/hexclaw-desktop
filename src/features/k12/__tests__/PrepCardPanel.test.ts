@@ -11,8 +11,16 @@ const h = vi.hoisted(() => ({
   prepSpy: vi.fn().mockResolvedValue({
     knowledge_points: ['简易方程'],
     sections: [
-      { title: '① 知识点回顾', content: '等式两边同时加减，$2x+15=43 \\Rightarrow x=14$', source_label: '📖 依据课本' },
-      { title: '⑤ 情绪提示', content: '连续错过，先从热身题开始。', source_label: '🤖 AI 归纳·供参考（未校验）' },
+      {
+        title: '① 知识点回顾',
+        content: '等式两边同时加减，$2x+15=43 \\Rightarrow x=14$',
+        source_label: '📖 依据课本',
+      },
+      {
+        title: '⑤ 情绪提示',
+        content: '连续错过，先从热身题开始。',
+        source_label: '🤖 AI 归纳·供参考（未校验）',
+      },
     ],
   }),
 }))
@@ -35,8 +43,13 @@ function i18n() {
 
 function render(knowledgePoints: string[] = ['简易方程']) {
   return mount(PrepCardPanel, {
-    props: { agentId: 'mingming', grade: '五年级上', knowledgePoints },
-    global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: { props: ['content'], template: '<div class="md">{{ content }}</div>' } } },
+    props: { agentId: 'mingming', grade: '五年级上', textbook: '人教版', knowledgePoints },
+    global: {
+      plugins: [createPinia(), i18n()],
+      stubs: {
+        MarkdownRenderer: { props: ['content'], template: '<div class="md">{{ content }}</div>' },
+      },
+    },
   })
 }
 
@@ -68,6 +81,17 @@ describe('PrepCardPanel（辅导要点内联卡）', () => {
     expect(w.find('.tutor-badge--weak').text()).toContain('AI 归纳')
   })
 
+  it('权威原型：头部展示当前作业范围，图标使用同源 SVG，依据与投递状态归入独立 footer', async () => {
+    const w = render(['简易方程'])
+    await flushPromises()
+
+    expect(w.get('.tutor-guide__unit').text()).toBe('简易方程')
+    expect(w.findAll('.tutor-guide__actions .icbtn svg')).toHaveLength(3)
+    expect(w.get('.tutor-guide__legend').element.parentElement).toBe(w.get('.tutor-guide').element)
+    expect(w.get('.tutor-guide__basis').text()).toContain('人教版')
+    expect(w.get('.tutor-guide__basis').text()).toContain('五年级上')
+  })
+
   it('无知识点不生成（未识题即无辅导要点）', async () => {
     render([])
     await flushPromises()
@@ -81,8 +105,16 @@ describe('PrepCardPanel（辅导要点内联卡）', () => {
 
     const retry = w.get('[data-testid="prep-retry"]')
     expect(retry.text()).toContain('重试')
-    let finishRetry!: (value: { knowledge_points: string[]; sections: Array<{ title: string; content: string; source_label: string }> }) => void
-    h.prepSpy.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve }))
+    let finishRetry!: (value: {
+      knowledge_points: string[]
+      sections: Array<{ title: string; content: string; source_label: string }>
+    }) => void
+    h.prepSpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishRetry = resolve
+        }),
+    )
     await retry.trigger('click')
     await flushPromises()
 
@@ -92,7 +124,9 @@ describe('PrepCardPanel（辅导要点内联卡）', () => {
 
     finishRetry({
       knowledge_points: ['简易方程'],
-      sections: [{ title: '① 知识点回顾', content: '等式两边同时加减。', source_label: '📖 依据课本' }],
+      sections: [
+        { title: '① 知识点回顾', content: '等式两边同时加减。', source_label: '📖 依据课本' },
+      ],
     })
     await flushPromises()
 

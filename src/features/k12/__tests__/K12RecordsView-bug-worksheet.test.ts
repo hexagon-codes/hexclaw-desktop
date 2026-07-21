@@ -9,29 +9,63 @@ import K12RecordsView from '../views/K12RecordsView.vue'
 const h = vi.hoisted(() => ({
   printSpy: vi.fn<(...args: unknown[]) => boolean>(() => true),
   exportPdfSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>().mockResolvedValue(true),
-  exportArchiveDocumentSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>().mockResolvedValue(true),
-  addToBasketSpy: vi.fn<(...args: unknown[]) => Promise<{ record_id: string; added: boolean }>>()
+  exportArchiveDocumentSpy: vi
+    .fn<(...args: unknown[]) => Promise<boolean>>()
+    .mockResolvedValue(true),
+  addToBasketSpy: vi
+    .fn<(...args: unknown[]) => Promise<{ record_id: string; added: boolean }>>()
     .mockResolvedValue({ record_id: 'ps-1', added: true }),
   customPaperSpy: vi.fn(),
   fillBasketSpy: vi.fn(),
   reviewRetrySpy: vi.fn(),
   listPracticeSetsSpy: vi.fn().mockResolvedValue({ items: [] }),
   mistakes: [
-    { record_id: 'a', question: '苹果和梨的价钱', knowledge_point: '小数乘法', error_cause: '进位', status: 'new', version: 0, due_at: 1 },
-    { record_id: 'b', question: '解方程 2x+15=43', knowledge_point: '简易方程', error_cause: '移项', status: 'new', version: 0, due_at: 1 },
-    { record_id: 'c', question: '梯形面积', knowledge_point: '面积', error_cause: '公式', status: 'mastered', version: 1 },
+    {
+      record_id: 'a',
+      question: '苹果和梨的价钱',
+      knowledge_point: '小数乘法',
+      error_cause: '进位',
+      status: 'new',
+      version: 0,
+      due_at: 1,
+    },
+    {
+      record_id: 'b',
+      question: '解方程 2x+15=43',
+      knowledge_point: '简易方程',
+      error_cause: '移项',
+      status: 'new',
+      version: 0,
+      due_at: 1,
+    },
+    {
+      record_id: 'c',
+      question: '梯形面积',
+      knowledge_point: '面积',
+      error_cause: '公式',
+      status: 'mastered',
+      version: 1,
+    },
   ],
 }))
 vi.mock('../export', () => ({
   printWorksheet: (...a: unknown[]) => h.printSpy(...a),
-  exportPdf: (...a: unknown[]) => h.exportPdfSpy(...a), exportWord: vi.fn(), worksheetFilename: vi.fn(() => 'f.doc'),
+  exportPdf: (...a: unknown[]) => h.exportPdfSpy(...a),
+  exportWord: vi.fn(),
+  worksheetFilename: vi.fn(() => 'f.doc'),
   exportArchiveDocument: (...a: unknown[]) => h.exportArchiveDocumentSpy(...a),
   download: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: h.mistakes }),
   k12ReviewQueue: vi.fn().mockImplementation(() =>
-    Promise.resolve({ items: [{ ...h.mistakes[0], subject: '数学' }, { ...h.mistakes[1], subject: '数学' }] })),
+    Promise.resolve({
+      items: [
+        { ...h.mistakes[0], subject: '数学' },
+        { ...h.mistakes[1], subject: '数学' },
+      ],
+    }),
+  ),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
   k12ReviewRetry: (...a: unknown[]) => h.reviewRetrySpy(...a),
   k12GenerateCustomPaper: (...a: unknown[]) => h.customPaperSpy(...a),
@@ -42,21 +76,37 @@ vi.mock('@/api/k12', () => ({
   k12RemoveFromBasket: vi.fn(),
   k12AdvancePracticeSet: vi.fn(),
   k12CancelPracticeSet: vi.fn(),
-  k12InsightReport: vi.fn().mockResolvedValue({ trend: { mastered: 0, reviewing: 1, retried: 0, archived: 0, total: 1 }, weak_top3: [], month_new_mistakes: 1, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 1, total_minutes: 0, note: '' }),
+  k12InsightReport: vi.fn().mockResolvedValue({
+    trend: { mastered: 0, reviewing: 1, retried: 0, archived: 0, total: 1 },
+    weak_top3: [],
+    month_new_mistakes: 1,
+    review_completion_rate: -1,
+    consecutive_fail_kps: null,
+    suggestion: '',
+  }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 1, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
   k12ExportMd: vi.fn().mockResolvedValue({ format: 'markdown', content: '# 完整学习档案' }),
 }))
 
 function i18n() {
-  return createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN } })
+  return createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
+  })
 }
 
 function render() {
   return mount(K12RecordsView, {
     props: {
-      agentId: 'mingming', agentName: '小明的辅导老师',
-      grade: '五年级上', textbook: '人教版',
+      agentId: 'mingming',
+      agentName: '小明的辅导老师',
+      grade: '五年级上',
+      textbook: '人教版',
     },
     global: { plugins: [createPinia(), i18n()] },
   })
@@ -79,9 +129,13 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
       set: { record_id: 'ps-1', status: 'draft', items: [] },
       items: [
         {
-          item_id: 'generated-1', source_problem_id: 'a', variant_index: 1,
-          actual_difficulty: 'harder', verification_status: 'verified',
-          verification_evidence: '独立验算', question_markdown: '变式 1',
+          item_id: 'generated-1',
+          source_problem_id: 'a',
+          variant_index: 1,
+          actual_difficulty: 'harder',
+          verification_status: 'verified',
+          verification_evidence: '独立验算',
+          question_markdown: '变式 1',
         },
       ],
       added: 1,
@@ -123,13 +177,17 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
   it('DD-027：全部参数开放，并且 Desktop 只调用一次正式组卷 command', async () => {
     const w = render()
     await flushPromises()
+    await w.find('[data-testid="review-split-more"]').trigger('click')
     await w.find('[data-testid="custom-paper-open"]').trigger('click')
     expect(w.find('[data-testid="paper-scope-week"]').exists()).toBe(true)
     expect(w.find('[data-testid="paper-scope-unmastered"]').exists()).toBe(true)
     await w.find('[data-testid="paper-scope-unmastered"]').trigger('click')
     await w.find('[data-testid="paper-perq-2"]').trigger('click')
     await w.find('[data-testid="paper-difficulty-harder"]').trigger('click')
-    await w.findAll('.chip').find((b) => b.text().includes('≤ 5'))!.trigger('click')
+    await w
+      .findAll('.chip')
+      .find((b) => b.text().includes('≤ 5'))!
+      .trigger('click')
 
     const gen = w.find('[data-testid="custom-paper-gen"]')
     expect(gen.text()).toContain('加入练习集')
@@ -163,12 +221,16 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
     h.customPaperSpy
       .mockRejectedValueOnce(new Error('第 2 题验证失败，未装入半篮'))
       .mockResolvedValueOnce({
-        generation_job_id: 'paper-job-replayed', status: 'committed',
+        generation_job_id: 'paper-job-replayed',
+        status: 'committed',
         set: { record_id: 'ps-1', status: 'draft', items: [] },
-        items: [], added: 0, deduplicated: 2,
+        items: [],
+        added: 0,
+        deduplicated: 2,
       })
     const w = render()
     await flushPromises()
+    await w.find('[data-testid="review-split-more"]').trigger('click')
     await w.find('[data-testid="custom-paper-open"]').trigger('click')
     await w.find('[data-testid="custom-paper-gen"]').trigger('click')
     await flushPromises()
@@ -177,13 +239,16 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
     expect(alert.attributes('role')).toBe('alert')
     expect(alert.text()).toContain('未装入半篮')
     expect(w.find('[data-testid="custom-paper-form"]').exists()).toBe(true)
-    const firstKey = (h.customPaperSpy.mock.calls[0]![0] as { idempotency_key: string }).idempotency_key
+    const firstKey = (h.customPaperSpy.mock.calls[0]![0] as { idempotency_key: string })
+      .idempotency_key
 
     await w.find('[data-testid="custom-paper-retry"]').trigger('click')
     await flushPromises()
 
     expect(h.customPaperSpy).toHaveBeenCalledTimes(2)
-    expect((h.customPaperSpy.mock.calls[1]![0] as { idempotency_key: string }).idempotency_key).toBe(firstKey)
+    expect(
+      (h.customPaperSpy.mock.calls[1]![0] as { idempotency_key: string }).idempotency_key,
+    ).toBe(firstKey)
     expect(w.find('[data-testid="custom-paper-result"]').text()).toContain('未重复加入')
     expect(w.find('[data-testid="custom-paper-result"]').text()).toContain('paper-job-replayed')
   })
@@ -191,14 +256,20 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
   it('溢出菜单的档案导出保留，并消费服务端完整学习档案 Markdown', async () => {
     const w = render()
     await flushPromises()
-    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    await w
+      .findAll('.seg button')
+      .find((b) => b.text() === '全部错题')!
+      .trigger('click')
     await w.find('.k12rec__export button').trigger('click')
     const pdfBtn = w.findAll('.k12rec__menu button').find((b) => b.text().includes('PDF'))
     expect(pdfBtn, '档案导出 PDF 菜单项应保留').toBeTruthy()
     await pdfBtn!.trigger('click')
     await flushPromises()
-    expect(h.exportArchiveDocumentSpy).toHaveBeenCalledWith(expect.objectContaining({
-      content: '# 完整学习档案', format: 'pdf',
-    }))
+    expect(h.exportArchiveDocumentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: '# 完整学习档案',
+        format: 'pdf',
+      }),
+    )
   })
 })

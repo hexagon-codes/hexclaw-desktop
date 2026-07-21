@@ -50,6 +50,7 @@ export function registerK12Scenario(): void {
   scenarioRegistry.registerChatEnhancement(K12ChatEnhancement)
   // 4b) 智能体卡扩展（错题/待复习计数 + 快捷入口）→ AgentsView 对场景实例渲染
   scenarioRegistry.registerAgentCardExtension(K12AgentCard)
+  scenarioRegistry.registerAgentCardBadge('k12.agentCard.tag')
   // 5) 建档模板（模板库露出「作业辅导助手」卡 + 建档表单）→ AgentsView 动态渲染，不 import 场景包
   scenarioRegistry.registerScenarioTemplate({
     key: K12_SCENARIO_ID,

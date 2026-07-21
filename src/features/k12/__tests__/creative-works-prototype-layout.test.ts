@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import worksSource from '../views/K12CreativeWorksPanel.vue?raw'
 import recordsSource from '../views/K12RecordsView.vue?raw'
+import zhCN from '../i18n/zh-CN'
+import en from '../i18n/en'
+import ugCN from '../i18n/ug-CN'
 
 describe('K12 works prototype layout', () => {
   it('keeps overview/KPIs, filters and rules in the prototype visual order', () => {
@@ -12,17 +15,45 @@ describe('K12 works prototype layout', () => {
     expect(rules).toBeGreaterThan(filters)
   })
 
-  it('uses compact two-column preview cards and hides detailed workflows until requested', () => {
+  it('uses compact two-column preview cards and opens detail in the prototype modal', () => {
     expect(worksSource).toContain('class="k12cw__preview"')
     expect(worksSource).toContain('data-testid="cw-detail-toggle"')
     expect(worksSource).toMatch(/\.k12cw__list\s*\{[^}]*grid-template-columns:\s*repeat\(2,/)
-    expect(worksSource).toMatch(/\.k12cw__details\s*\{[^}]*display:\s*none/)
+    expect(worksSource).not.toContain('k12cw__card--expanded')
+    expect(worksSource).toMatch(/:data-testid="[^"]*cw-detail-modal[^"]*"/)
+    expect(worksSource).toMatch(/\.k12cw-detail-modal\s*\{[^}]*width:\s*478px/)
+    expect(worksSource).toMatch(/\.k12cw-detail-modal__body\s*\{[^}]*max-height:\s*62vh/)
+  })
+
+  it('matches the prototype card and filter geometry instead of using a custom treatment', () => {
+    expect(worksSource).toMatch(
+      /\.k12cw__card\s*\{[^}]*grid-template-columns:\s*112px minmax\(0, 1fr\)[^}]*border-radius:\s*16px[^}]*padding:\s*14px/,
+    )
+    expect(worksSource).toMatch(
+      /\.k12cw__filter\s*\{[^}]*gap:\s*7px[^}]*padding:\s*12px 14px[^}]*border-radius:\s*14px/,
+    )
+    expect(worksSource).toMatch(
+      /\.k12cw__filter button\s*\{[^}]*border:\s*0\.5px solid var\(--hc-border\)[^}]*background:\s*var\(--hc-bg-input\)[^}]*border-radius:\s*9px/,
+    )
+  })
+
+  it('uses the prototype subject and status pill colors', () => {
+    expect(worksSource).toContain('k12cw__kind--writing')
+    expect(worksSource).toContain('k12cw__kind--art')
+    expect(worksSource).toMatch(/\.k12cw__kind--writing\s*\{[^}]*#e8590c[^}]*color:\s*#e8590c/)
+    expect(worksSource).toMatch(/\.k12cw__kind--art\s*\{[^}]*#c2255c[^}]*color:\s*#c2255c/)
+    expect(worksSource).toMatch(/\.k12cw__pill--done\s*\{[^}]*color:\s*var\(--hc-warning\)/)
   })
 
   it('puts the add-work action in the archive toolbar instead of duplicating it inside content', () => {
-    expect(recordsSource).toContain("v-else-if=\"sub === 'works'\"")
+    expect(recordsSource).toContain('v-else-if="sub === \'works\'"')
     expect(recordsSource).toContain('creativeWorksRef?.openAdd()')
     expect(worksSource).toContain('showAddButton')
+    expect([zhCN.works.addWork, en.works.addWork, ugCN.works.addWork]).toEqual([
+      '添加作品',
+      'Add work',
+      'ئەسەر قوشۇش',
+    ])
   })
 
   it('keeps native printing and Save PDF as two independent practice-card actions (DD-023A)', () => {
@@ -30,5 +61,11 @@ describe('K12 works prototype layout', () => {
     expect(worksSource).toContain('data-testid="cw-card-print"')
     expect(worksSource).toContain('data-testid="cw-card-save-pdf"')
     expect(worksSource).toContain('savePracticePaperPdf')
+  })
+
+  it('keeps the full information-technology subject label on one line', () => {
+    expect(recordsSource).toMatch(
+      /\.k12rec__filter-row--subject \.k12rec__filter\s*\{[^}]*width:\s*68px[^}]*white-space:\s*nowrap/,
+    )
   })
 })
