@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown, Volume2, Square, GitBranch, Trash2 } from 'lucide-vue-next'
-import { computed, ref } from 'vue'
+import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown, Volume2, Square, MoreHorizontal } from 'lucide-vue-next'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setClipboard } from '@/api/desktop'
 import { useVoice } from '@/composables/useVoice'
@@ -26,6 +26,8 @@ const emit = defineEmits<{
 }>()
 
 const copied = ref(false)
+const menuOpen = ref(false)
+const rootRef = ref<HTMLElement | null>(null)
 const activeFeedback = computed(() => props.feedback ?? null)
 // F4：整条全是代码块/纯图片时 plainText 为空 → 朗读无意义。禁用喇叭而非"点了没反应"。
 const speakable = computed(() => plainText(props.content).length > 0)
@@ -71,99 +73,194 @@ async function toggleSpeak() {
     toast.error(t('chat.speakFailed', '语音播报失败，请检查语音合成服务是否已配置'))
   }
 }
+
+function toggleMore() {
+  menuOpen.value = !menuOpen.value
+}
+
+function runMenuAction(action: 'fork' | 'delete') {
+  menuOpen.value = false
+  if (action === 'fork') emit('fork')
+  else emit('delete')
+}
+
+function onDocumentMouseDown(event: MouseEvent) {
+  if (!rootRef.value?.contains(event.target as Node)) menuOpen.value = false
+}
+
+function onDocumentKeydown(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || !menuOpen.value) return
+  event.preventDefault()
+  menuOpen.value = false
+  rootRef.value?.querySelector<HTMLButtonElement>('[data-testid="message-more"]')?.focus()
+}
+
+onMounted(() => {
+  document.addEventListener('mousedown', onDocumentMouseDown, true)
+  // Safari/WebKit does not focus a button after a pointer click, so Escape cannot
+  // rely on a keydown bubbling through the toolbar. Listen at document scope.
+  document.addEventListener('keydown', onDocumentKeydown)
+})
+onBeforeUnmount(() => {
+  document.removeEventListener('mousedown', onDocumentMouseDown, true)
+  document.removeEventListener('keydown', onDocumentKeydown)
+})
 </script>
 
 <template>
-  <div class="hc-msg-actions">
+  <div
+    ref="rootRef"
+    class="hc-msg-actions"
+    :class="`hc-msg-actions--${role}`"
+    role="toolbar"
+  >
     <template v-if="role === 'assistant'">
-      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active': activeFeedback === 'like' }" :title="t('chat.liked')" @click="emit('like')">
-        <ThumbsUp :size="13" />
+      <button type="button" class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active': activeFeedback === 'like' }" :title="t('chat.liked')" :aria-label="t('chat.liked')" @click="emit('like')">
+        <ThumbsUp :size="14" />
       </button>
-      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active-bad': activeFeedback === 'dislike' }" :title="t('chat.disliked')" @click="emit('dislike')">
-        <ThumbsDown :size="13" />
+      <button type="button" class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active-bad': activeFeedback === 'dislike' }" :title="t('chat.disliked')" :aria-label="t('chat.disliked')" @click="emit('dislike')">
+        <ThumbsDown :size="14" />
       </button>
       <span class="hc-msg-actions__divider" />
-      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
-        <Check v-if="copied" :size="13" />
-        <Copy v-else :size="13" />
+      <button type="button" class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" :aria-label="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
+        <Check v-if="copied" :size="14" />
+        <Copy v-else :size="14" />
       </button>
       <button
+        type="button"
         class="hc-msg-actions__btn"
         :class="{ 'hc-msg-actions__btn--speaking': isSpeaking }"
         :disabled="!speakable && !isSpeaking"
         :title="isSpeaking ? t('chat.stopSpeaking', '停止朗读') : t('chat.speakMessage', '朗读')"
+        :aria-label="isSpeaking ? t('chat.stopSpeaking', '停止朗读') : t('chat.speakMessage', '朗读')"
         @click="toggleSpeak"
       >
-        <Square v-if="isSpeaking" :size="13" />
-        <Volume2 v-else :size="13" />
+        <Square v-if="isSpeaking" :size="14" />
+        <Volume2 v-else :size="14" />
       </button>
-      <button class="hc-msg-actions__btn" :title="t('chat.regenerate')" data-testid="message-regenerate" @click="emit('retry')">
-        <RotateCcw :size="13" />
-      </button>
-      <!-- BUG-20260703 P2-1：由此分叉——以本条回复为分支点复制会话，原会话原样保留 -->
-      <button class="hc-msg-actions__btn" :title="t('chat.forkFromHere', '由此分叉')" data-testid="message-fork" @click="emit('fork')">
-        <GitBranch :size="13" />
-      </button>
-      <!-- 单条消息删除：原本只藏在右键菜单里(发现性差)，这里给悬浮工具条也加一个显式入口 -->
-      <button class="hc-msg-actions__btn hc-msg-actions__btn--danger" :title="t('chat.deleteMessage')" :aria-label="t('chat.deleteMessage')" data-testid="message-delete" @click="emit('delete')">
-        <Trash2 :size="13" />
+      <button type="button" class="hc-msg-actions__btn" :title="t('chat.regenerate')" :aria-label="t('chat.regenerate')" data-testid="message-regenerate" @click="emit('retry')">
+        <RotateCcw :size="14" />
       </button>
     </template>
 
     <template v-else>
-      <button class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
-        <Check v-if="copied" :size="13" />
-        <Copy v-else :size="13" />
+      <button type="button" class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" :aria-label="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
+        <Check v-if="copied" :size="14" />
+        <Copy v-else :size="14" />
       </button>
-      <button class="hc-msg-actions__btn" :title="t('chat.editMessage')" @click="emit('edit')">
-        <Pencil :size="13" />
-      </button>
-      <button class="hc-msg-actions__btn hc-msg-actions__btn--danger" :title="t('chat.deleteMessage')" :aria-label="t('chat.deleteMessage')" data-testid="message-delete" @click="emit('delete')">
-        <Trash2 :size="13" />
+      <button type="button" class="hc-msg-actions__btn" :title="t('chat.editMessage')" :aria-label="t('chat.editMessage')" @click="emit('edit')">
+        <Pencil :size="14" />
       </button>
     </template>
+
+    <div class="hc-msg-actions__more">
+      <button
+        type="button"
+        class="hc-msg-actions__btn"
+        data-testid="message-more"
+        :title="t('chat.composer.more', '更多')"
+        :aria-label="t('chat.composer.more', '更多')"
+        aria-haspopup="menu"
+        :aria-expanded="menuOpen"
+        @click="toggleMore"
+      >
+        <MoreHorizontal :size="14" />
+      </button>
+      <div v-show="menuOpen" class="hc-msg-actions__more-menu" role="menu">
+        <button
+          v-if="role === 'assistant'"
+          type="button"
+          role="menuitem"
+          data-testid="message-fork"
+          @click="runMenuAction('fork')"
+        >
+          {{ t('chat.createBranch', '创建分支') }}
+        </button>
+        <button
+          type="button"
+          role="menuitem"
+          class="hc-msg-actions__danger"
+          data-testid="message-delete"
+          :title="t('common.delete')"
+          @click="runMenuAction('delete')"
+        >
+          {{ t('common.delete') }}
+        </button>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
-/* Apple HIG: 毛玻璃浮层 + 弹簧入场动效 */
 .hc-msg-actions {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  padding: 4px 6px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.72);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 0.5px solid rgba(0, 0, 0, 0.08);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
-  animation: hc-spring-in 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.hc-msg-actions--assistant {
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  opacity: 0.68;
+  visibility: visible;
+  pointer-events: auto;
+  transition: opacity 0.14s var(--hc-ease-out);
+}
+
+.hc-msg-actions--assistant:hover,
+.hc-msg-actions--assistant:focus-within {
+  opacity: 1;
+}
+
+.hc-msg-actions--assistant .hc-msg-actions__btn {
+  color: var(--hc-text-muted);
+}
+
+.hc-msg-actions--user {
+  height: 30px;
+  padding: 3px;
+  border: 0.5px solid color-mix(in srgb, var(--hc-border) 82%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--hc-bg-elevated) 82%, transparent);
+  backdrop-filter: blur(16px) saturate(150%);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  box-shadow:
+    0 6px 18px color-mix(in srgb, var(--hc-text-primary) 8%, transparent),
+    inset 0 0.5px 0 color-mix(in srgb, #fff 52%, transparent);
 }
 
 .hc-msg-actions__divider {
-  width: 0.5px;
+  width: 1px;
   height: 16px;
-  background: rgba(0, 0, 0, 0.1);
+  background: var(--hc-divider);
   margin: 0 2px;
 }
 
 .hc-msg-actions__btn {
-  padding: 5px 7px;
-  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  padding: 0;
+  border-radius: 8px;
   border: none;
   background: transparent;
-  color: var(--hc-text-secondary, #6E6E73);
+  color: var(--hc-text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.15s, color 0.15s;
+  transition:
+    background 0.12s var(--hc-ease-out),
+    color 0.12s var(--hc-ease-out),
+    transform 0.1s var(--hc-spring);
 }
 
 .hc-msg-actions__btn:hover {
-  background: rgba(0, 0, 0, 0.06);
-  color: var(--hc-text-primary, #1D1D1F);
+  background: var(--hc-bg-hover);
+  color: var(--hc-text-primary);
 }
 
 .hc-msg-actions__btn:active {
@@ -172,9 +269,16 @@ async function toggleSpeak() {
 
 .hc-msg-actions__btn--copied { color: #34C759 !important; }
 
-.hc-msg-actions__btn--danger:hover {
-  background: rgba(255, 59, 48, 0.1);
-  color: var(--hc-error, #FF3B30);
+.hc-msg-actions__btn:focus-visible,
+.hc-msg-actions__more-menu button:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: 1px;
+}
+
+.hc-msg-actions__btn svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.9;
 }
 
 .hc-msg-actions__btn--speaking {
@@ -198,8 +302,52 @@ async function toggleSpeak() {
   background: rgba(255, 59, 48, 0.08);
 }
 
-@keyframes hc-spring-in {
-  from { opacity: 0; transform: scale(0.96) translateY(8px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
+.hc-msg-actions__more {
+  position: relative;
+  display: flex;
+}
+
+.hc-msg-actions__more-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 7px);
+  min-width: 142px;
+  padding: 5px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 11px;
+  background: var(--hc-bg-elevated);
+  box-shadow: var(--hc-shadow-float);
+  z-index: 8;
+}
+
+.hc-msg-actions__more-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--hc-text-primary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hc-msg-actions__more-menu button:hover {
+  background: var(--hc-bg-hover);
+}
+
+.hc-msg-actions__more-menu .hc-msg-actions__danger {
+  color: var(--hc-error);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hc-msg-actions--assistant,
+  .hc-msg-actions__btn {
+    transition: none;
+  }
 }
 </style>

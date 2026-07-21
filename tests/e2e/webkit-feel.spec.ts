@@ -155,7 +155,7 @@ test.describe('真机手感 @ WebKit（Tauri WKWebView 同引擎）', () => {
   /**
    * ⑨ composer 盒内首行 chips 几何 + 药丸样式（对齐原型 .composer-chips/.composer-chip；防再漂移）
    *
-   * 背景：K12 辅导会话 composer 首行渲染场景预设 chips（🧮数学讲解/💡渐进提示/📷识题校验），
+   * 背景：K12 辅导会话 composer 首行渲染场景预设 chips（📚自动识别学科/💡渐进提示/📷识题校验），
    * 曾漂成 bg-active(2× 蓝) + 14px 圆角矩形 + 主文字色 + 1px 边、且 chips 行 padding-bottom:8px
    * + margin-bottom:6px 叠出 14px 空档（原型仅 margin-bottom:8px）。此处在真实 WebKit 里量几何取证：
    *   ① chip 左缘 == placeholder 左缘 == 盒 padding-left（同一垂直基线，不贴边不错位）；
@@ -182,7 +182,7 @@ test.describe('真机手感 @ WebKit（Tauri WKWebView 同引擎）', () => {
       const name = document.createElement('span')
       name.className = 'hc-composer__skill-name'
       name.setAttribute(scopeAttr, '')
-      name.textContent = '🧮 数学讲解'
+      name.textContent = '📚 自动识别学科'
       chip.appendChild(name)
       chips.appendChild(chip)
       // 关掉入场动效（fadeScaleIn 起始 translateY(8px)/scale）——否则量到动画中间帧偏移，非稳态几何

@@ -2,18 +2,20 @@ import { describe, expect, it } from 'vitest'
 import chatViewSource from '../ChatView.vue?raw'
 
 describe('message hover actions positioning', () => {
-  it('anchors assistant actions to the left and user actions to the right in the footer lane', () => {
-    expect(chatViewSource).toMatch(/\.hc-msg__actions-float\s*\{[\s\S]*?position:\s*static/)
-    expect(chatViewSource).toMatch(/\.hc-msg__actions-float--left\s*\{[\s\S]*?margin-inline-end:\s*auto/)
-    expect(chatViewSource).toMatch(/\.hc-msg__actions-slot--right\s*\{[\s\S]*?justify-content:\s*flex-end/)
+  it('uses an inline assistant footer and keeps the mirrored absolute user footer', () => {
+    expect(chatViewSource).toMatch(/\.hc-msg__footer\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*center;[\s\S]*?gap:\s*8px;[\s\S]*?margin-top:\s*7px/)
+    expect(chatViewSource).toMatch(/\.hc-msg__actions-inline\s*\{[\s\S]*?display:\s*inline-flex;[\s\S]*?margin-left:\s*0/)
+    expect(chatViewSource).toMatch(/\.hc-msg__footer--right\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?right:\s*0;[\s\S]*?bottom:\s*0;[\s\S]*?width:\s*max-content/)
+    expect(chatViewSource).toMatch(/\.hc-msg__body--user\s*\{[\s\S]*?position:\s*relative;[\s\S]*?padding-bottom:\s*36px/)
   })
 
-  it('keeps message geometry stable while preserving a separate metadata row', () => {
+  it('keeps assistant actions mounted and visible while user actions retain hover and keyboard reveal', () => {
     expect(chatViewSource).not.toContain('hc-msg__bubble-wrap--actions-visible')
     expect(chatViewSource).not.toMatch(/transition:\s*margin-bottom/)
-    expect(chatViewSource).toContain('hc-msg__actions-slot')
-    expect(chatViewSource).toMatch(/\.hc-msg__footer\s*\{[\s\S]*?flex-direction:\s*column/)
-    expect(chatViewSource).toMatch(/\.hc-msg__actions-slot\s*\{[\s\S]*?min-height:/)
-    expect(chatViewSource).not.toMatch(/v-show="hoveredMsgId !== msg\.id" class="hc-msg__meta"/)
+    expect(chatViewSource).not.toContain('hc-msg__actions-slot')
+    expect(chatViewSource).not.toContain('v-show="hoveredMsgId === msg.id"')
+    expect(chatViewSource).toContain(':tabindex="0"')
+    expect(chatViewSource).toContain('<div class="hc-msg__actions-inline">')
+    expect(chatViewSource).toMatch(/\.hc-msg:hover \.hc-msg__actions-float,\s*\.hc-msg:focus-within \.hc-msg__actions-float/)
   })
 })

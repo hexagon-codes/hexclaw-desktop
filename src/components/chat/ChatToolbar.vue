@@ -3,17 +3,31 @@ import { useI18n } from 'vue-i18n'
 import { Download, PanelLeft, PanelRight, Boxes } from 'lucide-vue-next'
 import ChatExportMenu from '@/components/chat/ChatExportMenu.vue'
 import { useChatStore } from '@/stores/chat'
-import { useAppStore } from '@/stores/app'
 import { ref } from 'vue'
+import {
+  toggleChatWorkspaceEntry,
+  type ChatWorkspaceMode,
+} from '@/components/chat/workspace-mode'
 
 const { t } = useI18n()
 const chatStore = useChatStore()
-const appStore = useAppStore()
 
-const showSessions = defineModel<boolean>('showSessions', { required: true })
+const workspaceMode = defineModel<ChatWorkspaceMode>('workspaceMode', { required: true })
 
 const showExport = ref(false)
 const exportBtn = ref<HTMLButtonElement>()
+
+function toggleSessionsRail() {
+  workspaceMode.value = toggleChatWorkspaceEntry(workspaceMode.value, 'sessions')
+}
+
+function toggleArtifactsRail() {
+  workspaceMode.value = toggleChatWorkspaceEntry(workspaceMode.value, 'artifacts')
+}
+
+function toggleContextRail() {
+  workspaceMode.value = toggleChatWorkspaceEntry(workspaceMode.value, 'context')
+}
 
 defineProps<{
   messageCount: number
@@ -24,14 +38,15 @@ defineProps<{
 <template>
   <div class="hc-chat__toolbar">
     <div class="hc-chat__toolbar-row">
-      <!-- 左：控「左侧」会话列表（空间映射 — 控左栏的钮在左） -->
+      <!-- Desktop refinement: the control for the left session rail stays on the left. -->
       <button
         class="hc-chat__toolbar-btn"
-        :class="{ 'hc-chat__toolbar-btn--active': showSessions }"
+        :class="{ 'hc-chat__toolbar-btn--active': workspaceMode === 'sessions' }"
         :title="t('chat.toggleSessions')"
-        @click="showSessions = !showSessions"
+        :aria-pressed="workspaceMode === 'sessions'"
+        @click="toggleSessionsRail"
       >
-        <PanelLeft :size="14" />
+        <PanelLeft :size="15" />
       </button>
 
       <div class="hc-chat__stat-strip">
@@ -44,7 +59,7 @@ defineProps<{
 
       <!-- 右：会话操作 -->
       <button v-if="messageCount > 0" ref="exportBtn" class="hc-chat__toolbar-btn" :title="t('common.download')" @click="showExport = !showExport">
-        <Download :size="14" />
+        <Download :size="15" />
       </button>
       <ChatExportMenu v-if="showExport" :messages="chatStore.messages" :trigger-el="exportBtn" @close="showExport = false" />
 
@@ -53,22 +68,24 @@ defineProps<{
       <!-- 右：控「右侧」产物面板（唯一图标 Boxes + 计数） -->
       <button
         class="hc-chat__toolbar-btn"
-        :class="{ 'hc-chat__toolbar-btn--active': chatStore.showArtifacts }"
+        :class="{ 'hc-chat__toolbar-btn--active': workspaceMode === 'artifacts' }"
         :title="t('chat.artifacts')"
-        @click="chatStore.showArtifacts = !chatStore.showArtifacts"
+        :aria-pressed="workspaceMode === 'artifacts'"
+        @click="toggleArtifactsRail"
       >
-        <Boxes :size="14" />
+        <Boxes :size="15" />
         <span v-if="chatStore.artifacts.length > 0" class="hc-chat__artifact-badge">{{ chatStore.artifacts.length }}</span>
       </button>
 
       <!-- 右：控「右侧」上下文/详情面板（唯一图标 PanelRight，与产物明确区分） -->
       <button
         class="hc-chat__toolbar-btn"
-        :class="{ 'hc-chat__toolbar-btn--active': appStore.detailPanelOpen }"
+        :class="{ 'hc-chat__toolbar-btn--active': workspaceMode === 'context' }"
         :title="t('chat.contextPanel')"
-        @click="appStore.toggleDetailPanel"
+        :aria-pressed="workspaceMode === 'context'"
+        @click="toggleContextRail"
       >
-        <PanelRight :size="14" />
+        <PanelRight :size="15" />
       </button>
     </div>
   </div>
@@ -78,22 +95,20 @@ defineProps<{
 .hc-chat__toolbar {
   flex-shrink: 0;
   border-bottom: 0.5px solid var(--hc-divider);
-  background: var(--hc-bg-panel);
-  padding: 0 14px;
+  padding: 11px 16px;
 }
 
 .hc-chat__toolbar-row {
-  height: 42px;
+  height: 30px;
   display: flex;
   align-items: center;
-  gap: 8px;
 }
 
 .hc-chat__stat-strip {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-left: 2px;
+  margin-left: 6px;
 }
 
 .hc-token-badge {
@@ -103,15 +118,15 @@ defineProps<{
 }
 
 .hc-chat__toolbar-btn {
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
   background: transparent;
   color: var(--hc-text-secondary);
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   position: relative;
   transition: background 0.15s, color 0.15s;
@@ -131,20 +146,20 @@ defineProps<{
   width: 1px;
   height: 16px;
   background: var(--hc-divider);
-  margin: 0 2px;
+  margin: 0 4px;
 }
 
 .hc-chat__artifact-badge {
   position: absolute;
   top: 2px;
   right: 2px;
-  min-width: 14px;
-  height: 14px;
+  min-width: 13px;
+  height: 13px;
   border-radius: 7px;
   background: var(--hc-accent);
   color: var(--hc-text-inverse);
   font-size: 9px;
-  font-weight: 600;
+  line-height: 13px;
   display: flex;
   align-items: center;
   justify-content: center;

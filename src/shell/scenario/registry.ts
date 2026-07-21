@@ -18,6 +18,30 @@ export interface ScenarioContext {
   metadata?: Record<string, unknown>
 }
 
+/**
+ * 场景投影到通用 composer 的结构化 chip。shell 只转发稳定 action id，
+ * 不解释 action 的领域含义；无 actionId 时仍是普通可关闭提示。
+ */
+export interface ScenarioComposerChip {
+  id: string
+  label: string
+  actionId?: string
+}
+
+/** shell 将一次 composer action 转成带序号的命令，避免连续点击同一 action 被 watch 去重。 */
+export interface ScenarioComposerAction {
+  id: string
+  sequence: number
+}
+
+/**
+ * 场景组件可请求通用 composer 执行的最小命令集。命令只操作输入控件，
+ * 不发送消息、不携带领域语义，具体文案仍留在 feature 包。
+ */
+export type ScenarioComposerCommand =
+  | { type: 'focus' }
+  | { type: 'set-input'; text: string; focus?: boolean }
+
 /** 描述符解析器：命中则返回该实例的视图描述符，否则 null */
 export type DescriptorResolver = (ctx: ScenarioContext) => InstanceViewDescriptor | null
 
@@ -53,6 +77,8 @@ interface RegistryState {
   chatEnhancement: Component | null
   /** 智能体卡扩展组件（场景实例卡上的计数/快捷入口；AgentsView 只渲染，不认识场景） */
   agentCardExtension: Component | null
+  /** 智能体卡标题徽章 i18n key；由场景包声明，shell 只负责标题行投影。 */
+  agentCardBadgeKey: string | null
   /** 场景建档模板（模板库露出 + 建档表单） */
   scenarioTemplates: ScenarioTemplate[]
   /** 自动化 Webhook 页的场景管理扩展（领域 UI 仍由 features/* 提供） */
@@ -70,6 +96,7 @@ function createState(): RegistryState {
     actionHandlers: new Map(),
     chatEnhancement: null,
     agentCardExtension: null,
+    agentCardBadgeKey: null,
     scenarioTemplates: [],
     webhookManagementExtensions: [],
     instanceIdPatterns: [],
@@ -123,6 +150,12 @@ export const scenarioRegistry = {
   },
   get agentCardExtension(): Component | null {
     return state.agentCardExtension
+  },
+  registerAgentCardBadge(labelKey: string): void {
+    state.agentCardBadgeKey = labelKey
+  },
+  get agentCardBadgeKey(): string | null {
+    return state.agentCardBadgeKey
   },
   /** 某实例是否为场景实例（有增强视图）——供通用视图判定是否渲染扩展 */
   isScenarioInstance(ctx: ScenarioContext): boolean {

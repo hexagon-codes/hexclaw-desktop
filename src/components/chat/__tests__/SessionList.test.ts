@@ -111,6 +111,9 @@ describe('SessionList', () => {
     const firstSection = wrapper.findAll('.hc-sessions__section')[0]!
     expect(firstSection.text()).toContain('场景会话')
     expect(wrapper.find('[data-session-id="tutor"]').classes()).toContain('hc-sessions__item--pinned')
+    const fixedPin = wrapper.get('[data-session-id="tutor"] .hc-sessions__pin-action')
+    expect(fixedPin.attributes('aria-label')).toBe('固定置顶')
+    expect(fixedPin.attributes('disabled')).toBeDefined()
     scenarioRegistry.reset()
   })
 

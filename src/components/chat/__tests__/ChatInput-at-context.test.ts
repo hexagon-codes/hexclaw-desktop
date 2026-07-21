@@ -43,7 +43,13 @@ async function mountChatInput(props: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
-  voiceRefs.api = { isListening: ref(false), transcript: ref(''), isSupported: false, toggleListening: vi.fn() }
+  voiceRefs.api = {
+    isListening: ref(false),
+    transcript: ref(''),
+    error: ref(''),
+    isSupported: false,
+    toggleListening: vi.fn(),
+  }
   getDocumentContent.mockReset()
   listSessionMessages.mockReset()
 })

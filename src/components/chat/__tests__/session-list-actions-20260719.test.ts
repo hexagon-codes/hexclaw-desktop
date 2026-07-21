@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -61,14 +63,66 @@ describe('SessionList ChatGPT-style row actions', () => {
     expect(trigger.attributes('aria-label')).toBe('会话操作')
     expect(trigger.attributes('aria-haspopup')).toBe('menu')
     expect(trigger.attributes('aria-expanded')).toBe('true')
+    const menuItems = Array.from(document.body.querySelectorAll<HTMLElement>('.hc-ctx__item'))
+      .map((item) => item.textContent?.trim() ?? '')
     const text = document.body.querySelector('.hc-ctx')?.textContent ?? ''
     expect(text).toContain('重命名')
     expect(text).toContain('置顶')
     expect(text).toContain('查看分支')
     expect(text).toContain('删除')
+    expect(menuItems).toContain('删除⌫')
+    expect(menuItems).not.toContain('删除会话⌫')
     expect(text).not.toContain('分享')
     expect(text).not.toContain('复制标题')
     expect(wrapper.find('.hc-sessions__delete').exists()).toBe(false)
+  })
+
+  it('renders adjacent direct pin and ellipsis controls with measured ChatGPT geometry', async () => {
+    const { wrapper } = mountList()
+    await flushPromises()
+
+    let row = wrapper.get('[data-session-id="s-1"]')
+    const pin = row.get('.hc-sessions__pin-action')
+    const more = row.get('.hc-sessions__actions')
+    expect(pin.attributes('aria-label')).toBe('置顶')
+    expect(pin.find('.lucide-pin').exists()).toBe(true)
+    expect(more.attributes('aria-label')).toBe('会话操作')
+
+    await pin.trigger('click')
+    await flushPromises()
+    row = wrapper.get('[data-session-id="s-1"]')
+    expect(row.get('.hc-sessions__pin-action').attributes('aria-label')).toBe('取消置顶')
+    expect(row.find('.hc-sessions__pin-action .lucide-pin-off').exists()).toBe(true)
+    expect(JSON.parse(localStorage.getItem('hexclaw_pinned_sessions') || '[]')).toEqual(['s-1'])
+
+    const sections = wrapper.findAll('.hc-sessions__section')
+    expect(sections[0]?.get('.hc-sessions__section-label').text()).toBe('已置顶')
+    expect(sections[0]?.find('[data-session-id="s-1"]').exists()).toBe(true)
+    expect(sections.slice(1).some((section) => section.find('[data-session-id="s-1"]').exists())).toBe(false)
+    expect(wrapper.findAll('.hc-sessions__item')[0]?.attributes('data-session-id')).toBe('s-1')
+
+    const source = readFileSync(resolve(process.cwd(), 'src/components/chat/SessionList.vue'), 'utf8')
+    expect(source).toMatch(/<PinOff[\s\S]*?:size="18"/)
+    expect(source).toMatch(/<Pin[\s\S]*?:size="18"/)
+    expect(source).toMatch(/<MoreHorizontal :size="20"/)
+    expect(source).toMatch(/\.hc-sessions__item\s*\{[\s\S]*?display:\s*grid;[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\) 24px 24px;[\s\S]*?column-gap:\s*0;[\s\S]*?padding:\s*9px 8px 9px 10px;[\s\S]*?border-radius:\s*10px/)
+    expect(source).not.toMatch(/\.hc-sessions__item\s*\{[\s\S]*?min-height:\s*58px/)
+    expect(source).toMatch(/\.hc-sessions__pin-action\s*\{[^}]*grid-column:\s*2/)
+    expect(source).toMatch(/\.hc-sessions__actions\s*\{[^}]*grid-column:\s*3/)
+    expect(source).toMatch(/\.hc-sessions__pin-action,[\s\S]*?color:\s*#8e8e8e/)
+    expect(source).toMatch(/\.hc-sessions__rename-input\s*\{[\s\S]*?height:\s*19\.5px;[\s\S]*?border-radius:\s*6px;[\s\S]*?box-shadow:\s*0 0 0 3px var\(--hc-accent-subtle\)/)
+    expect(source).toContain('<ContextMenu ref="ctxMenu" :items="sessionMenuItems" variant="session"')
+    expect(source).not.toMatch(/\.hc-sessions__item--pinned\s*\{[\s\S]*?background:/)
+  })
+
+  it('uses the dedicated 140px prototype session menu without changing global menus', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/components/common/ContextMenu.vue'), 'utf8')
+    expect(source).toContain("variant?: 'default' | 'session'")
+    expect(source).toMatch(/props\.variant === 'session'[\s\S]*?anchorRect\.left - 16/)
+    expect(source).toMatch(/props\.variant === 'session'[\s\S]*?anchorRect\.bottom \+ 2/)
+    expect(source).toMatch(/\.hc-ctx--session\s*\{[\s\S]*?width:\s*140px;[\s\S]*?min-width:\s*140px;[\s\S]*?border-radius:\s*16px/)
+    expect(source).toMatch(/\.hc-ctx--session \.hc-ctx__item\s*\{[\s\S]*?height:\s*36px;[\s\S]*?gap:\s*10px;[\s\S]*?border-radius:\s*9px/)
+    expect(source).toMatch(/\.hc-ctx--session \.hc-ctx__item--danger:hover[\s\S]*?color-mix\(in srgb,\s*var\(--hc-error\) 10%,\s*transparent\)/)
   })
 
   it('pins and unpins from the same menu while persisting the manual pin set', async () => {
@@ -79,7 +133,7 @@ describe('SessionList ChatGPT-style row actions', () => {
     ;(Array.from(document.body.querySelectorAll<HTMLButtonElement>('.hc-ctx__item')).find((el) => el.textContent?.includes('置顶')))!.click()
     await flushPromises()
     expect(wrapper.find('[data-session-id="s-1"]').classes()).toContain('hc-sessions__item--pinned')
-    expect(wrapper.find('[data-session-id="s-1"] .hc-sessions__pin-status').exists()).toBe(true)
+    expect(wrapper.find('[data-session-id="s-1"] .hc-sessions__pin-action .lucide-pin-off').exists()).toBe(true)
     expect(wrapper.findAll('.hc-sessions__section-label')[0]?.text()).toBe('已置顶')
     expect(JSON.parse(localStorage.getItem('hexclaw_pinned_sessions') || '[]')).toEqual(['s-1'])
 
@@ -88,6 +142,10 @@ describe('SessionList ChatGPT-style row actions', () => {
     await flushPromises()
     expect(wrapper.find('[data-session-id="s-1"]').classes()).not.toContain('hc-sessions__item--pinned')
     expect(JSON.parse(localStorage.getItem('hexclaw_pinned_sessions') || '[]')).toEqual([])
+  })
+
+  it('uses the approved fixed-pin wording for scenario sessions', () => {
+    expect(zhCN.chat.scenarioPinned).toBe('固定置顶')
   })
 
   it('starts inline rename and delete confirmation from the ellipsis menu', async () => {

@@ -93,8 +93,8 @@ describe('BUG-20260703 P2-1 — handleFork 行为', () => {
   })
 })
 
-describe('BUG-20260703 P2-1 — MessageActions 分叉按钮', () => {
-  it('assistant 消息渲染「由此分叉」按钮并派发 fork 事件；user 消息无此按钮', async () => {
+describe('BUG-20260703 P2-1 — MessageActions 分支菜单项', () => {
+  it('assistant 把创建分支收进原型 More 菜单；user 菜单无此项', async () => {
     const i18n = createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': zhCN, zh: zhCN } })
     const w = mount(MessageActions, {
       props: { role: 'assistant', content: 'hi' },
@@ -102,6 +102,9 @@ describe('BUG-20260703 P2-1 — MessageActions 分叉按钮', () => {
     })
     const btn = w.find('[data-testid="message-fork"]')
     expect(btn.exists()).toBe(true)
+    expect(w.find('.hc-msg-actions > [data-testid="message-fork"]').exists()).toBe(false)
+    await w.get('[data-testid="message-more"]').trigger('click')
+    expect(btn.text()).toContain('创建分支')
     await btn.trigger('click')
     expect(w.emitted('fork')).toHaveLength(1)
 

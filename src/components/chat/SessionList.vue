@@ -120,6 +120,16 @@ function togglePin(sessionId: string) {
   savePins()
 }
 
+function pinActionLabel(session: ChatSession): string {
+  if (isScenarioSession(session)) return t('chat.scenarioPinned')
+  return isPinnedSession(session) ? t('chat.unpin') : t('chat.pin')
+}
+
+function handlePinAction(session: ChatSession) {
+  if (isScenarioSession(session)) return
+  togglePin(session.id)
+}
+
 // 活动会话永远可见（BUG-20260711-G）：点 agent 复用三天前的老会话时，条目按 updated_at
 // 排在「更早」分组视口外，用户视角=「列表里不显示」。选中变化即把活动条目滚进视口；
 // 不重排列表（保持按活跃时间分组的稳定心智），block:nearest 已可见时零跳动。
@@ -155,7 +165,7 @@ const sessionMenuItems = computed<ContextMenuItem[]>(() => {
     },
     { id: 'branches', label: t('chat.viewBranches', '查看分支'), icon: GitBranch },
     { id: 'sep1', label: '', separator: true },
-    { id: 'delete', label: t('chat.deleteSession'), icon: Trash2, danger: true, shortcut: '⌫' },
+    { id: 'delete', label: t('common.delete'), icon: Trash2, danger: true, shortcut: '⌫' },
   ]
 })
 
@@ -631,7 +641,17 @@ onUnmounted(() => {
                 <span v-else class="hc-sessions__time">{{ formatDate(item.session.updated_at) }}</span>
               </div>
             </div>
-            <Pin v-if="isPinnedSession(item.session)" :size="13" class="hc-sessions__pin-status" aria-hidden="true" />
+            <button
+              class="hc-sessions__pin-action"
+              type="button"
+              :aria-label="pinActionLabel(item.session)"
+              :title="pinActionLabel(item.session)"
+              :disabled="isScenarioSession(item.session)"
+              @click.stop="handlePinAction(item.session)"
+            >
+              <PinOff v-if="isPinnedSession(item.session)" :size="18" aria-hidden="true" />
+              <Pin v-else :size="18" aria-hidden="true" />
+            </button>
             <button
               class="hc-sessions__actions"
               type="button"
@@ -640,7 +660,7 @@ onUnmounted(() => {
               :aria-expanded="openMenuSessionId === item.session.id"
               @click.stop="handleActionsClick($event, item.session.id)"
               @keydown="handleActionsKeydown($event, item.session.id)"
-            ><MoreHorizontal :size="16" aria-hidden="true" /></button>
+            ><MoreHorizontal :size="20" aria-hidden="true" /></button>
           </div>
         </div>
       </template>
@@ -701,7 +721,17 @@ onUnmounted(() => {
               <span v-if="session.message_count > 0" class="hc-sessions__count">{{ session.message_count }}</span>
             </div>
           </div>
-          <Pin v-if="isPinnedSession(session)" :size="13" class="hc-sessions__pin-status" aria-hidden="true" />
+          <button
+            class="hc-sessions__pin-action"
+            type="button"
+            :aria-label="pinActionLabel(session)"
+            :title="pinActionLabel(session)"
+            :disabled="isScenarioSession(session)"
+            @click.stop="handlePinAction(session)"
+          >
+            <PinOff v-if="isPinnedSession(session)" :size="18" aria-hidden="true" />
+            <Pin v-else :size="18" aria-hidden="true" />
+          </button>
           <button
             class="hc-sessions__actions"
             type="button"
@@ -710,7 +740,7 @@ onUnmounted(() => {
             :aria-expanded="openMenuSessionId === session.id"
             @click.stop="handleActionsClick($event, session.id)"
             @keydown="handleActionsKeydown($event, session.id)"
-          ><MoreHorizontal :size="16" aria-hidden="true" /></button>
+          ><MoreHorizontal :size="20" aria-hidden="true" /></button>
         </div>
       </div>
     </template>
@@ -728,7 +758,7 @@ onUnmounted(() => {
       {{ loadingMoreSessions ? t('common.loading') : (showAllConversations ? t('chat.loadMoreSessions') : t('chat.allConversations')) }}
     </button>
 
-    <ContextMenu ref="ctxMenu" :items="sessionMenuItems" @select="handleCtxAction" @close="handleContextMenuClose" />
+    <ContextMenu ref="ctxMenu" :items="sessionMenuItems" variant="session" @select="handleCtxAction" @close="handleContextMenuClose" />
 
     <!-- 分支查看器：右键「查看分支」弹层，点分支即切换（getSessionBranches 消费面） -->
     <Teleport to="body">
@@ -850,28 +880,35 @@ onUnmounted(() => {
 
 .hc-sessions__item {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px 24px;
   align-items: center;
-  gap: 8px;
-  padding: 9px 42px 9px 10px;
+  column-gap: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 8px 9px 10px;
   margin-bottom: 1px;
-  border-radius: 12px;
+  border-radius: 10px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s var(--hc-ease-out, ease-out);
 }
 
 .hc-sessions__item:hover {
-  background: color-mix(in srgb, var(--hc-bg-hover) 88%, transparent);
+  background: color-mix(in srgb, var(--hc-text-primary) 7%, transparent);
 }
 
 .hc-sessions__item--active {
-  /* 选中态对齐原型 .cs-item.on 的精确 token（比旧 accent10% 略实，「你在此」更清晰） */
-  background: var(--hc-bg-active);
+  background: color-mix(in srgb, var(--hc-text-primary) 7%, transparent);
 }
 
 .hc-sessions__content {
-  flex: 1;
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
+}
+
+.hc-sessions__item:has(> .hc-sessions__spinner) .hc-sessions__content {
+  padding-inline-start: 20px;
 }
 
 .hc-sessions__title-row {
@@ -882,9 +919,12 @@ onUnmounted(() => {
 }
 
 .hc-sessions__spinner {
+  position: absolute;
+  inset-inline-start: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   width: 12px;
   height: 12px;
-  flex: 0 0 12px;
   border-radius: 999px;
   border: 1.5px solid color-mix(in srgb, var(--hc-text-muted) 28%, transparent);
   border-top-color: var(--hc-accent);
@@ -977,72 +1017,71 @@ onUnmounted(() => {
   text-overflow: ellipsis;
 }
 
-.hc-sessions__pin-status,
+.hc-sessions__pin-action,
 .hc-sessions__actions {
-  position: absolute;
-  inset-inline-end: 7px;
-  top: 50%;
-  transform: translateY(-50%);
-}
-
-.hc-sessions__pin-status {
-  color: var(--hc-text-muted);
-  opacity: 0.68;
-  pointer-events: none;
-  transition: opacity 0.12s var(--hc-ease-out, ease-out);
-}
-
-.hc-sessions__actions {
-  width: 28px;
+  width: 24px;
   height: 28px;
   opacity: 0;
   padding: 0;
   border-radius: 8px;
   border: none;
   background: transparent;
-  color: var(--hc-text-muted);
+  color: #8e8e8e;
   cursor: pointer;
-  display: grid;
-  place-items: center;
-  transition: opacity 0.12s var(--hc-ease-out, ease-out), color 0.12s, background 0.12s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity 0.12s var(--hc-ease-out, ease-out), color 0.12s;
 }
 
+.hc-sessions__pin-action {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.hc-sessions__actions {
+  grid-column: 3;
+  grid-row: 1;
+}
+.hc-sessions__pin-action:disabled { cursor: default; }
+
+.hc-sessions__item:hover .hc-sessions__pin-action,
 .hc-sessions__item:hover .hc-sessions__actions,
+.hc-sessions__item:focus-within .hc-sessions__pin-action,
 .hc-sessions__item:focus-within .hc-sessions__actions,
+.hc-sessions__item--menu-open .hc-sessions__pin-action,
 .hc-sessions__item--menu-open .hc-sessions__actions {
   opacity: 1;
 }
 
-.hc-sessions__item:hover .hc-sessions__pin-status,
-.hc-sessions__item:focus-within .hc-sessions__pin-status,
-.hc-sessions__item--menu-open .hc-sessions__pin-status {
-  opacity: 0;
-}
-
+.hc-sessions__pin-action:not(:disabled):hover,
+.hc-sessions__pin-action:not(:disabled):focus-visible,
 .hc-sessions__actions:hover,
 .hc-sessions__actions:focus-visible {
   color: var(--hc-text-primary);
-  background: color-mix(in srgb, var(--hc-text-primary) 8%, transparent);
+  background: transparent;
   outline: none;
 }
 
+.hc-sessions__pin-action:focus-visible,
 .hc-sessions__actions:focus-visible {
   box-shadow: 0 0 0 2px var(--hc-accent-subtle);
 }
 
 .hc-sessions__rename-input {
+  display: block;
   width: 100%;
+  height: 19.5px;
+  box-sizing: border-box;
   font-size: 13px;
+  line-height: 17.5px;
   color: var(--hc-text-primary);
   background: var(--hc-bg-input, var(--hc-bg-hover));
   border: 1px solid var(--hc-accent);
-  border-radius: 4px;
-  padding: 1px 4px;
+  border-radius: 6px;
+  padding: 0 5px;
   outline: none;
-}
-
-.hc-sessions__item--pinned {
-  background: color-mix(in srgb, var(--hc-bg-hover) 72%, transparent);
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
 }
 
 .hc-sessions__empty {
@@ -1082,7 +1121,7 @@ onUnmounted(() => {
 
 @keyframes hc-session-spin {
   to {
-    transform: rotate(360deg);
+    transform: translateY(-50%) rotate(360deg);
   }
 }
 </style>

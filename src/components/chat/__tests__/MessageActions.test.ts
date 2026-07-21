@@ -55,6 +55,20 @@ function mountMessageActions(feedback: 'like' | 'dislike' | null) {
   })
 }
 
+function mountUserMessageActions() {
+  const i18n = createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: { 'zh-CN': zhCN, zh: zhCN },
+  })
+
+  return mount(MessageActions, {
+    props: { role: 'user', content: 'hi' },
+    global: { plugins: [i18n] },
+  })
+}
+
 describe('MessageActions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -119,30 +133,46 @@ describe('MessageActions', () => {
     expect(wrapper.emitted('copy')).toHaveLength(1)
   })
 
-  // 治本：单条消息删除原本只藏在右键菜单里(发现性差)，悬浮工具条现在也要有显式删除入口。
-  // RED（修前）：工具条没有删除按钮 → 下面 find/emit 断言失败。
-  it('renders a delete button for assistant messages and emits delete', async () => {
+  it('exposes role-specific presentation hooks for inline assistant actions and unchanged user actions', () => {
+    expect(mountMessageActions(null).classes()).toContain('hc-msg-actions--assistant')
+    expect(mountUserMessageActions().classes()).toContain('hc-msg-actions--user')
+  })
+
+  it('keeps assistant delete inside the prototype More menu', async () => {
     const wrapper = mountMessageActions(null)
+    expect(wrapper.find('.hc-msg-actions > [data-testid="message-delete"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="message-more"]').trigger('click')
     const deleteBtn = wrapper.get('[data-testid="message-delete"]')
-    expect(deleteBtn.attributes('title')).toBe(zhCN.chat.deleteMessage)
-    expect(deleteBtn.attributes('aria-label')).toBe(zhCN.chat.deleteMessage)
+    expect(deleteBtn.attributes('title')).toBe(zhCN.common.delete)
+    expect(deleteBtn.text()).toBe('删除')
     await deleteBtn.trigger('click')
     expect(wrapper.emitted('delete')).toHaveLength(1)
   })
 
-  it('renders a delete button for user messages and emits delete', async () => {
-    const i18n = createI18n({
-      legacy: false,
-      locale: 'zh-CN',
-      fallbackLocale: 'zh-CN',
-      messages: { 'zh-CN': zhCN, zh: zhCN },
-    })
-    const wrapper = mount(MessageActions, {
-      props: { role: 'user', content: 'hi' },
-      global: { plugins: [i18n] },
-    })
+  it('keeps user delete inside the prototype More menu', async () => {
+    const wrapper = mountUserMessageActions()
+    expect(wrapper.find('.hc-msg-actions > [data-testid="message-delete"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="message-more"]').trigger('click')
     const deleteBtn = wrapper.get('[data-testid="message-delete"]')
+    expect(deleteBtn.attributes('title')).toBe(zhCN.common.delete)
+    expect(deleteBtn.text()).toBe('删除')
     await deleteBtn.trigger('click')
     expect(wrapper.emitted('delete')).toHaveLength(1)
+  })
+
+  it('closes the More menu from document Escape and restores focus in WebKit-compatible flow', async () => {
+    const wrapper = mountMessageActions(null)
+    document.body.appendChild(wrapper.element)
+    const moreButton = wrapper.get<HTMLButtonElement>('[data-testid="message-more"]')
+
+    await moreButton.trigger('click')
+    expect(wrapper.get('[role="menu"]').isVisible()).toBe(true)
+    moreButton.element.blur()
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('[role="menu"]').isVisible()).toBe(false)
+    expect(document.activeElement).toBe(moreButton.element)
+    wrapper.unmount()
   })
 })

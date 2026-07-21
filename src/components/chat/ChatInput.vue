@@ -3,7 +3,20 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { useI18n } from 'vue-i18n'
 import { readLocalFileAsFile } from '@/api/desktop'
-import { ArrowUp, Square, Paperclip, Mic, Sparkles, Puzzle, Plus, Upload, BookOpen, Plug, MessageSquare, Loader2 } from 'lucide-vue-next'
+import {
+  ArrowUp,
+  Square,
+  Paperclip,
+  Mic,
+  Sparkles,
+  Puzzle,
+  Plus,
+  Upload,
+  BookOpen,
+  Plug,
+  MessageSquare,
+  Loader2,
+} from 'lucide-vue-next'
 import MentionPopup from './MentionPopup.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
@@ -14,10 +27,16 @@ import type { ConnectionSummary } from '@/api/im-channels'
 import { getDocumentContent } from '@/api/knowledge'
 import { listSessionMessages } from '@/api/chat'
 import { generateImage, type ImageGenResult } from '@/api/imagegen'
-import { submitVideoGeneration, pollUntilDone, videoToSrc, type VideoTaskStatus } from '@/api/videogen'
+import {
+  submitVideoGeneration,
+  pollUntilDone,
+  videoToSrc,
+  type VideoTaskStatus,
+} from '@/api/videogen'
 import { logger } from '@/utils/logger'
 import { shouldSendOnEnter, hasWeirdLineBreaks } from '@/utils/chat-compose'
 import { insertAtSelection, normalizeMathMarkdown, readMathClipboard } from '@/utils/math-content'
+import type { ScenarioComposerChip } from '@/shell/scenario/registry'
 
 /** `@` 召唤选中项（MentionPopup 抛出）。 */
 interface MentionSelectItem {
@@ -55,7 +74,9 @@ const voiceToast = useToast()
 // ③ STT 错误不再静默吞掉（麦克风拒权/转写失败）——浮出 toast，避免"点了没反应"。
 // isSupported 不再用于隐藏麦克风（BUG-20260711-E：按钮常驻对齐原型，不可用时点击走 error→toast）
 const { isListening, transcript, toggleListening, error: voiceError } = useVoice()
-watch(voiceError, (msg) => { if (msg) voiceToast.error(msg) })
+watch(voiceError, (msg) => {
+  if (msg) voiceToast.error(msg)
+})
 
 // 语音识别结果 -> 输入框
 watch(transcript, (text) => {
@@ -77,9 +98,12 @@ const props = defineProps<{
   allowImage?: boolean
   allowVideo?: boolean
   recipientName?: string
-  /** 收件人（Agent/场景）声明的预设能力 chips——渲染在 composer 盒内首行（对齐原型 .composer-chip），
-   *  纯展示数据（string[]），可 × 关闭；来源由父级决定，本组件零场景知识。 */
-  presetChips?: string[]
+  /** 收件人（Agent/场景）声明的预设能力 chips——渲染在 composer 盒内首行（对齐原型 .composer-chip）。
+   *  string 保留后端旧契约兼容；结构化项只把 actionId 向父级派发，本组件不解释领域语义。 */
+  presetChips?: Array<string | ScenarioComposerChip>
+  /** 场景描述符声明的输入提示与辅助说明；公共输入框只负责投影，不解析领域语义。 */
+  scenarioPlaceholder?: string
+  scenarioHint?: { emphasis: string; detail: string }
   sendHandler?: (
     text: string,
     files: File[],
@@ -113,6 +137,8 @@ const emit = defineEmits<{
   skillAction: [action: 'ai-create' | 'upload-local' | 'add-market']
   /** 场景图片改道（BUG-20260709）：scenarioImageIntercept 时图片以 dataURL 外发 */
   'scenario-image': [dataUrl: string]
+  /** 结构化预设 chip 的领域无关 action id；由父级转交对应场景 feature。 */
+  'preset-chip-action': [actionId: string]
 }>()
 
 /** 本轮「已挂载技能」——选中 skill 后显示可移除 chip，让用户看得见在用什么。
@@ -129,13 +155,23 @@ const contextChips = ref<ContextChip[]>([])
 
 /** 预设能力 chips 的本地关闭态；换一组 chips（切换收件人/实例）即复位 */
 const dismissedPresetChips = ref<Set<string>>(new Set())
-watch(() => props.presetChips, () => { dismissedPresetChips.value = new Set() })
-const presetChipList = computed(() =>
-  (props.presetChips ?? []).filter((c) => !dismissedPresetChips.value.has(c)),
+watch(
+  () => props.presetChips,
+  () => {
+    dismissedPresetChips.value = new Set()
+  },
 )
-function dismissPresetChip(chip: string) {
+function normalizePresetChip(chip: string | ScenarioComposerChip): ScenarioComposerChip {
+  return typeof chip === 'string' ? { id: chip, label: chip } : chip
+}
+const presetChipList = computed(() =>
+  (props.presetChips ?? [])
+    .map(normalizePresetChip)
+    .filter((chip) => !dismissedPresetChips.value.has(chip.id)),
+)
+function dismissPresetChip(chipId: string) {
   const next = new Set(dismissedPresetChips.value)
-  next.add(chip)
+  next.add(chipId)
   dismissedPresetChips.value = next
 }
 
@@ -158,7 +194,9 @@ async function resolveContextContent(item: MentionSelectItem): Promise<string> {
     const doc = (props.knowledgeDocs ?? []).find((d) => d.id === item.id)
     if (!doc) return contextFallbackLine(item)
     const content = await getDocumentContent(doc)
-    return content?.trim() ? `【知识库·${doc.title}】\n${content.trim()}` : contextFallbackLine(item)
+    return content?.trim()
+      ? `【知识库·${doc.title}】\n${content.trim()}`
+      : contextFallbackLine(item)
   }
   if (item.type === 'connection') {
     // 仅作为上下文说明，不暗示模型已有工具访问能力（避免幻觉「我已调用」）。
@@ -168,7 +206,10 @@ async function resolveContextContent(item: MentionSelectItem): Promise<string> {
   // session：取近期消息做摘要
   const { messages } = await listSessionMessages(item.id, { limit: 12 })
   const recap = (messages ?? [])
-    .map((m) => `${m.role === 'user' ? '用户' : '助手'}：${(m.content || '').replace(/\s+/g, ' ').slice(0, 200)}`)
+    .map(
+      (m) =>
+        `${m.role === 'user' ? '用户' : '助手'}：${(m.content || '').replace(/\s+/g, ' ').slice(0, 200)}`,
+    )
     .filter((l) => l.length > 3)
     .join('\n')
   return recap ? `【历史会话·${item.name}】\n${recap}` : contextFallbackLine(item)
@@ -184,11 +225,20 @@ function addContextRef(item: MentionSelectItem) {
   const uid = `${item.type}:${item.id}:${++contextSeq}`
   contextChips.value = [
     ...contextChips.value,
-    { uid, type: item.type as ChatContextRef['type'], id: item.id, label: item.name, content: '', loading: true },
+    {
+      uid,
+      type: item.type as ChatContextRef['type'],
+      id: item.id,
+      label: item.name,
+      content: '',
+      loading: true,
+    },
   ]
   // 按 uid 回填：若该 chip 已被移除（或同 id 重加换了 uid），陈旧 promise 不会误写。
   const applyFill = (content: string) => {
-    contextChips.value = contextChips.value.map((c) => (c.uid === uid ? { ...c, content, loading: false } : c))
+    contextChips.value = contextChips.value.map((c) =>
+      c.uid === uid ? { ...c, content, loading: false } : c,
+    )
   }
   const p = resolveContextContent(item)
     .then(applyFill)
@@ -236,7 +286,9 @@ const composerMode = computed<ComposerMode>(() => {
 const isGenMode = computed(() => composerMode.value !== 'chat')
 
 // 含图附件 → vision 语义（chat mode 下的派生状态，仅影响 placeholder）
-const hasImageAttachment = computed(() => attachedFiles.value.some(a => a.file.type.startsWith('image/')))
+const hasImageAttachment = computed(() =>
+  attachedFiles.value.some((a) => a.file.type.startsWith('image/')),
+)
 
 watch(composerMode, (mode) => emit('mode:changed', mode), { immediate: true })
 
@@ -251,7 +303,10 @@ const canSend = computed(() => {
 
 const placeholder = computed(() => {
   if (composerMode.value === 'image_generate') {
-    return t('chat.composer.placeholder.imageGen', '描述你想生成的图像，例如「写实风格的橘猫站在月球」')
+    return t(
+      'chat.composer.placeholder.imageGen',
+      '描述你想生成的图像，例如「写实风格的橘猫站在月球」',
+    )
   }
   if (composerMode.value === 'video_generate') {
     return t('chat.composer.placeholder.videoGen', '描述视频内容，例如「橘猫在月球跳跃，电影感」')
@@ -259,14 +314,14 @@ const placeholder = computed(() => {
   if (hasImageAttachment.value) {
     return t('chat.composer.placeholder.vision', '已附图：可问解题、批改、识字…')
   }
-  if (props.recipientName) return t('chat.sendTo', { name: props.recipientName }) + t('chat.composerHint')
+  if (props.scenarioPlaceholder) return props.scenarioPlaceholder
+  if (props.recipientName)
+    return t('chat.sendTo', { name: props.recipientName }) + t('chat.composerHint')
   return t('chat.inputPlaceholder') + t('chat.composerHint')
 })
 
 const fileAccept = computed(() => {
-  const types = [
-    '.pdf', '.txt', '.md', '.doc', '.docx', '.pptx', '.xlsx', '.xls', '.csv', '.json',
-  ]
+  const types = ['.pdf', '.txt', '.md', '.doc', '.docx', '.pptx', '.xlsx', '.xls', '.csv', '.json']
   if (props.allowImage !== false) {
     types.push('.png', '.jpg', '.jpeg', '.gif', '.webp')
   }
@@ -278,11 +333,15 @@ const MAX_HEIGHT = 160
 
 function clearDraft() {
   inputText.value = ''
-  attachedFiles.value.forEach((a) => { if (a.previewUrl) URL.revokeObjectURL(a.previewUrl) })
+  attachedFiles.value.forEach((a) => {
+    if (a.previewUrl) URL.revokeObjectURL(a.previewUrl)
+  })
   attachedFiles.value = []
   mountedSkills.value = []
   contextChips.value = []
-  nextTick(() => { if (textareaRef.value) textareaRef.value.style.height = 'auto' })
+  nextTick(() => {
+    if (textareaRef.value) textareaRef.value.style.height = 'auto'
+  })
 }
 
 async function handleSend() {
@@ -365,10 +424,13 @@ async function handleSend() {
   try {
     // 发送前等待所有上下文解析完成，避免「chip 仍在 loading 就发送」导致空内容被静默丢弃
     if (pendingContextFills.size > 0) {
-      await Promise.allSettled([...pendingContextFills])
+      await Promise.allSettled(pendingContextFills)
     }
     const contextRefs: ChatContextRef[] = contextChips.value.map((c) => ({
-      type: c.type, id: c.id, label: c.label, content: c.content,
+      type: c.type,
+      id: c.id,
+      label: c.label,
+      content: c.content,
     }))
     const skillNames = mountedSkills.value.map((s) => s.name)
     const accepted = await props.sendHandler(
@@ -386,19 +448,32 @@ async function handleSend() {
 
 function handleKeydown(e: KeyboardEvent) {
   if (showTemplate.value && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
-    templateRef.value?.handleKeydown(e); return
+    templateRef.value?.handleKeydown(e)
+    return
   }
   if (showMention.value && ['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(e.key)) {
-    mentionRef.value?.handleKeydown(e); return
+    mentionRef.value?.handleKeydown(e)
+    return
   }
-  if (shouldSendOnEnter(e, { composing: composing.value, msSinceCompositionEnd: Date.now() - lastCompositionEnd })) {
-    e.preventDefault(); handleSend()
+  if (
+    shouldSendOnEnter(e, {
+      composing: composing.value,
+      msSinceCompositionEnd: Date.now() - lastCompositionEnd,
+    })
+  ) {
+    e.preventDefault()
+    handleSend()
   }
 }
 
 // IME 合成态手动跟踪（兜底 isComposing/keyCode 在 WKWebView 上的时序不可靠）。
-function handleCompositionStart() { composing.value = true }
-function handleCompositionEnd() { composing.value = false; lastCompositionEnd = Date.now() }
+function handleCompositionStart() {
+  composing.value = true
+}
+function handleCompositionEnd() {
+  composing.value = false
+  lastCompositionEnd = Date.now()
+}
 
 function handleInput() {
   const el = textareaRef.value
@@ -408,7 +483,10 @@ function handleInput() {
   detectPopups()
 }
 
-function closePopups() { showMention.value = false; showTemplate.value = false }
+function closePopups() {
+  showMention.value = false
+  showTemplate.value = false
+}
 
 function detectPopups() {
   const el = textareaRef.value
@@ -421,24 +499,33 @@ function detectPopups() {
   if (slashMatch) {
     templateQuery.value = slashMatch[1] ?? ''
     paletteScope.value = 'all' // 斜杠召回：Skill + Prompt 一起列
-    showTemplate.value = true; showMention.value = false
+    showTemplate.value = true
+    showMention.value = false
     const rect = el.getBoundingClientRect()
-    templatePosition.value = { bottom: window.innerHeight - rect.top + 8, left: Math.min(rect.left + 14, window.innerWidth - 356) }
+    templatePosition.value = {
+      bottom: window.innerHeight - rect.top + 8,
+      left: Math.min(rect.left + 14, window.innerWidth - 356),
+    }
     return
   }
   showTemplate.value = false
 
   const atIdx = beforeCursor.lastIndexOf('@')
-  if (atIdx >= 0 && (atIdx === 0 || beforeCursor[atIdx - 1] === ' ' || beforeCursor[atIdx - 1] === '\n')) {
+  if (
+    atIdx >= 0 &&
+    (atIdx === 0 || beforeCursor[atIdx - 1] === ' ' || beforeCursor[atIdx - 1] === '\n')
+  ) {
     const query = beforeCursor.slice(atIdx + 1)
     if (!query.includes(' ') && !query.includes('\n') && query.length < 20) {
-      mentionQuery.value = query; showMention.value = true
+      mentionQuery.value = query
+      showMention.value = true
       const rect = el.getBoundingClientRect()
       const bottom = window.innerHeight - rect.top + 8
       let left = rect.left + 40
       if (left + 320 > window.innerWidth) left = window.innerWidth - 328
       if (left < 8) left = 8
-      mentionPosition.value = { bottom, left }; return
+      mentionPosition.value = { bottom, left }
+      return
     }
   }
   showMention.value = false
@@ -482,7 +569,9 @@ function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string
     // 这里仅剥掉 slash 召回的 /query（按钮召回时 before+text.slice(end) 即原文不变）。
     inputText.value = before + text.slice(end)
     nextTick(() => {
-      el.setSelectionRange(before.length, before.length); handleInput(); focus()
+      el.setSelectionRange(before.length, before.length)
+      handleInput()
+      focus()
     })
     return
   }
@@ -493,7 +582,8 @@ function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string
   const ARG = '$ARGUMENTS'
   const argIdx = content.indexOf(ARG)
   nextTick(() => {
-    handleInput(); focus()
+    handleInput()
+    focus()
     // command 闭环：选中第一个 $ARGUMENTS 占位，用户直接键入即替换填参（避免字面量被发给模型）。
     if (argIdx >= 0) {
       const s = before.length + argIdx
@@ -517,18 +607,26 @@ function handleMentionSelect(item: MentionSelectItem) {
     inputText.value = text.slice(0, atIdx) + `@${item.name} ` + text.slice(cursorPos)
     nextTick(() => {
       const p = atIdx + item.name.length + 2
-      el.setSelectionRange(p, p); el.focus(); handleInput()
+      el.setSelectionRange(p, p)
+      el.focus()
+      handleInput()
     })
     return
   }
 
   // 知识 / 连接 / 会话：移除 @query token，挂为上下文 chip（内容注入 backendText）
   inputText.value = text.slice(0, atIdx) + text.slice(cursorPos)
-  nextTick(() => { el.setSelectionRange(atIdx, atIdx); el.focus(); handleInput() })
+  nextTick(() => {
+    el.setSelectionRange(atIdx, atIdx)
+    el.focus()
+    handleInput()
+  })
   addContextRef(item)
 }
 
-function handleFileClick() { fileInputRef.value?.click() }
+function handleFileClick() {
+  fileInputRef.value?.click()
+}
 function handleFileChange(e: Event) {
   const input = e.target as HTMLInputElement
   if (!input.files) return
@@ -678,15 +776,32 @@ function openPalette(scope: 'all' | 'skills' | 'prompts') {
   paletteScope.value = scope
   showMention.value = false
   showTemplate.value = true
-  templatePosition.value = { bottom: window.innerHeight - rect.top + 8, left: Math.min(rect.left + 14, window.innerWidth - 356) }
+  templatePosition.value = {
+    bottom: window.innerHeight - rect.top + 8,
+    left: Math.min(rect.left + 14, window.innerWidth - 356),
+  }
   el.focus()
 }
-function openPromptPicker() { openPalette('prompts') } // ✨ 按钮
-function openSkillPicker() { openPalette('skills') }   // 🔧 按钮
+function openPromptPicker() {
+  openPalette('prompts')
+} // ✨ 按钮
+function openSkillPicker() {
+  openPalette('skills')
+} // 🔧 按钮
 
-function focus() { textareaRef.value?.focus() }
-function setInput(text: string) { inputText.value = text; nextTick(() => { handleInput(); focus() }) }
-function triggerFileUpload() { handleFileClick() }
+function focus() {
+  textareaRef.value?.focus()
+}
+function setInput(text: string, shouldFocus = true) {
+  inputText.value = text
+  nextTick(() => {
+    handleInput()
+    if (shouldFocus) focus()
+  })
+}
+function triggerFileUpload() {
+  handleFileClick()
+}
 
 defineExpose({ focus, setInput, triggerFileUpload })
 </script>
@@ -714,16 +829,28 @@ defineExpose({ focus, setInput, triggerFileUpload })
       >
         <span
           v-for="c in presetChipList"
-          :key="'preset:' + c"
+          :key="'preset:' + c.id"
           class="hc-composer__skill-chip"
           data-testid="composer-preset-chip"
         >
-          <span class="hc-composer__skill-name">{{ c }}</span>
           <button
+            v-if="c.actionId"
+            type="button"
+            class="hc-composer__skill-name hc-composer__skill-action"
+            data-testid="composer-preset-chip-action"
+            @click="emit('preset-chip-action', c.actionId)"
+          >
+            {{ c.label }}
+          </button>
+          <span v-else class="hc-composer__skill-name">{{ c.label }}</span>
+          <button
+            type="button"
             class="hc-composer__skill-remove"
             :title="t('common.close', '关闭')"
-            @click="dismissPresetChip(c)"
-          >×</button>
+            @click.stop="dismissPresetChip(c.id)"
+          >
+            ×
+          </button>
         </span>
         <span v-for="s in mountedSkills" :key="'skill:' + s.name" class="hc-composer__skill-chip">
           <SkillIcon :skill="s" :size="14" />
@@ -732,17 +859,26 @@ defineExpose({ focus, setInput, triggerFileUpload })
             class="hc-composer__skill-remove"
             :title="t('chat.removeSkill', '移除技能')"
             @click="removeMountedSkill(s.name)"
-          >×</button>
+          >
+            ×
+          </button>
         </span>
         <span v-for="c in contextChips" :key="c.type + ':' + c.id" class="hc-composer__skill-chip">
           <Loader2 v-if="c.loading" :size="13" class="hc-composer__chip-spin" />
-          <component :is="contextIcon(c.type)" v-else :size="13" :style="{ color: contextColor(c.type) }" />
+          <component
+            :is="contextIcon(c.type)"
+            v-else
+            :size="13"
+            :style="{ color: contextColor(c.type) }"
+          />
           <span class="hc-composer__skill-name">{{ c.label }}</span>
           <button
             class="hc-composer__skill-remove"
             :title="t('chat.removeContext', '移除引用')"
             @click="removeContextRef(c.type, c.id)"
-          >×</button>
+          >
+            ×
+          </button>
         </span>
       </div>
 
@@ -763,20 +899,29 @@ defineExpose({ focus, setInput, triggerFileUpload })
 
       <HcClearableField>
         <textarea
-        ref="textareaRef"
-        v-model="inputText"
-        rows="1"
-        class="hc-composer__field"
-        data-testid="chat-input"
-        :placeholder="placeholder"
-        :disabled="disabled || submitting"
-        @keydown="handleKeydown"
-        @input="handleInput"
-        @paste="handlePaste"
-        @compositionstart="handleCompositionStart"
-        @compositionend="handleCompositionEnd"
-      />
+          ref="textareaRef"
+          v-model="inputText"
+          rows="1"
+          class="hc-composer__field"
+          data-testid="chat-input"
+          :placeholder="placeholder"
+          :disabled="disabled || submitting"
+          @keydown="handleKeydown"
+          @input="handleInput"
+          @paste="handlePaste"
+          @compositionstart="handleCompositionStart"
+          @compositionend="handleCompositionEnd"
+        />
       </HcClearableField>
+
+      <p
+        v-if="scenarioHint"
+        class="hc-composer__scenario-hint"
+        data-testid="scenario-composer-hint"
+      >
+        <b>{{ scenarioHint.emphasis }}</b
+        ><span> · {{ scenarioHint.detail }}</span>
+      </p>
 
       <div class="hc-composer__bar">
         <!-- 左：输入动作（+ 添加 · 🧩 skill · ✨ prompt · 🎤 语音听写） -->
@@ -849,7 +994,14 @@ defineExpose({ focus, setInput, triggerFileUpload })
       </div>
     </div>
 
-    <input ref="fileInputRef" type="file" multiple class="hidden" :accept="fileAccept" @change="handleFileChange" />
+    <input
+      ref="fileInputRef"
+      type="file"
+      multiple
+      class="hidden"
+      :accept="fileAccept"
+      @change="handleFileChange"
+    />
     <MentionPopup
       ref="mentionRef"
       :visible="showMention"
@@ -862,7 +1014,23 @@ defineExpose({ focus, setInput, triggerFileUpload })
       @select="handleMentionSelect"
       @close="showMention = false"
     />
-    <TemplatePopup ref="templateRef" :visible="showTemplate" :query="templateQuery" :position="templatePosition" :skills="skills || []" :scope="paletteScope" @select="handleTemplateSelect" @close="showTemplate = false" @create="emit('createTemplate')" @skill-action="(a) => { showTemplate = false; emit('skillAction', a) }" />
+    <TemplatePopup
+      ref="templateRef"
+      :visible="showTemplate"
+      :query="templateQuery"
+      :position="templatePosition"
+      :skills="skills || []"
+      :scope="paletteScope"
+      @select="handleTemplateSelect"
+      @close="showTemplate = false"
+      @create="emit('createTemplate')"
+      @skill-action="
+        (a) => {
+          showTemplate = false
+          emit('skillAction', a)
+        }
+      "
+    />
   </div>
 </template>
 
@@ -877,15 +1045,19 @@ defineExpose({ focus, setInput, triggerFileUpload })
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
   padding: 20px 20px 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
-  transition: border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
-              box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.04);
+  transition:
+    border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .hc-composer__box:focus-within {
   border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle),
-              0 1px 3px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 0 0 3px var(--hc-accent-subtle),
+    0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
 /* 拖拽文件高亮 */
@@ -906,8 +1078,8 @@ defineExpose({ focus, setInput, triggerFileUpload })
   justify-content: center;
   gap: 8px;
   border-radius: 16px;
-  background: color-mix(in srgb, var(--hc-accent, #007AFF) 10%, var(--hc-bg-input));
-  color: var(--hc-accent, #007AFF);
+  background: color-mix(in srgb, var(--hc-accent, #007aff) 10%, var(--hc-bg-input));
+  color: var(--hc-accent, #007aff);
   font-size: 13px;
   font-weight: 600;
   pointer-events: none;
@@ -925,7 +1097,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
   line-height: 1.6;
   max-height: 160px;
   min-height: 24px;
-  color: var(--hc-text-primary, #1D1D1F);
+  color: var(--hc-text-primary, #1d1d1f);
   padding: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   overflow-y: auto;
@@ -934,12 +1106,26 @@ defineExpose({ focus, setInput, triggerFileUpload })
 
 .hc-composer__field::placeholder {
   /* P1：占位符更克制——比正文/次级文字更浅一档（文案不变，仅降视觉权重） */
-  color: var(--hc-text-muted, #A1A1A6);
+  color: var(--hc-text-muted, #a1a1a6);
   font-weight: 400;
 }
 
+.hc-composer__scenario-hint {
+  margin: 3px 4px 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--hc-text-muted);
+}
+
+.hc-composer__scenario-hint b {
+  color: var(--hc-accent);
+  font-weight: 600;
+}
+
 /* 输入框滚动条：与全局一致的「悬停浮现·离开即隐」，仅更纤细（贴合小高度输入区） */
-.hc-composer__field::-webkit-scrollbar { width: 8px; }
+.hc-composer__field::-webkit-scrollbar {
+  width: 8px;
+}
 .hc-composer__field::-webkit-scrollbar-thumb {
   background-color: transparent;
   border: 2px solid transparent;
@@ -1000,6 +1186,23 @@ defineExpose({ focus, setInput, triggerFileUpload })
   white-space: nowrap;
 }
 
+.hc-composer__skill-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hc-composer__skill-action:hover,
+.hc-composer__skill-action:focus-visible {
+  color: var(--hc-text-primary);
+  outline: none;
+}
+
 .hc-composer__skill-remove {
   border: none;
   background: transparent;
@@ -1046,15 +1249,32 @@ defineExpose({ focus, setInput, triggerFileUpload })
   gap: 8px;
   padding: 10px 14px;
   border-radius: 10px;
-  background: var(--hc-bg-card, #F5F5F7);
+  background: var(--hc-bg-card, #f5f5f7);
   border: 0.5px solid rgba(0, 0, 0, 0.06);
   max-width: 200px;
 }
 
-.hc-composer__file-icon { color: var(--hc-text-secondary, #6E6E73); flex-shrink: 0; }
-.hc-composer__file-info { display: flex; flex-direction: column; min-width: 0; }
-.hc-composer__file-name { font-size: 13px; font-weight: 500; color: var(--hc-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.hc-composer__file-size { font-size: 12px; color: var(--hc-text-secondary, #6E6E73); }
+.hc-composer__file-icon {
+  color: var(--hc-text-secondary, #6e6e73);
+  flex-shrink: 0;
+}
+.hc-composer__file-info {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.hc-composer__file-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--hc-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hc-composer__file-size {
+  font-size: 12px;
+  color: var(--hc-text-secondary, #6e6e73);
+}
 
 .hc-composer__file-remove {
   position: absolute;
@@ -1076,7 +1296,9 @@ defineExpose({ focus, setInput, triggerFileUpload })
   transition: color 0.15s;
 }
 
-.hc-composer__file-remove:hover { color: var(--hc-error, #FF3B30); }
+.hc-composer__file-remove:hover {
+  color: var(--hc-error, #ff3b30);
+}
 
 /* ─── 底部栏 ───── */
 .hc-composer__bar {
@@ -1118,8 +1340,10 @@ defineExpose({ focus, setInput, triggerFileUpload })
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background-color 0.15s, color 0.15s,
-              transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition:
+    background-color 0.15s,
+    color 0.15s,
+    transform 0.12s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
 /* P1：图标 hover 反馈——浮起底色 + 提色，提升可发现性（tooltip 已在 title） */
@@ -1137,25 +1361,38 @@ defineExpose({ focus, setInput, triggerFileUpload })
   background: var(--hc-bg-hover);
 }
 
-.hc-composer__tool:active { transform: scale(0.9); }
-.hc-composer__tool:disabled { opacity: 0.4; cursor: default; }
-.hc-composer__tool:disabled:hover { color: var(--hc-text-secondary); background: transparent; }
+.hc-composer__tool:active {
+  transform: scale(0.9);
+}
+.hc-composer__tool:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.hc-composer__tool:disabled:hover {
+  color: var(--hc-text-secondary);
+  background: transparent;
+}
 
 /* Thinking 开启 — 紫色高亮 */
 .hc-composer__tool--thinking {
-  color: #AF52DE;
+  color: #af52de;
   background: rgba(175, 82, 222, 0.1);
 }
 
 /* 语音录音中 — 红色脉动 */
 .hc-composer__tool--recording {
-  color: var(--hc-error, #FF3B30);
+  color: var(--hc-error, #ff3b30);
   animation: voicePulse 1.2s ease-in-out infinite;
 }
 
 @keyframes voicePulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 
 /* 发送按钮：克制描边圆（空态清晰可见，非幽灵）；有草稿 → 主色渐变焦点 */
@@ -1180,14 +1417,21 @@ defineExpose({ focus, setInput, triggerFileUpload })
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-              color 0.2s, border-color 0.2s,
-              box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition:
+    background-color 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.hc-composer__send:disabled { cursor: default; }
-.hc-composer__send:not(:disabled):hover { color: var(--hc-text-primary); border-color: var(--hc-border-hl); }
+.hc-composer__send:disabled {
+  cursor: default;
+}
+.hc-composer__send:not(:disabled):hover {
+  color: var(--hc-text-primary);
+  border-color: var(--hc-border-hl);
+}
 
 .hc-composer__send--active {
   background: linear-gradient(180deg, var(--hc-accent) 0%, var(--hc-accent-hover) 100%);
@@ -1206,7 +1450,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
 }
 
 .hc-composer__send--stop {
-  background: var(--hc-error, #FF3B30);
+  background: var(--hc-error, #ff3b30);
   color: var(--hc-text-inverse);
 }
 
