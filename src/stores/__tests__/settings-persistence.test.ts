@@ -17,6 +17,7 @@ const { state, mockGetLLMConfig, mockUpdateLLMConfig, mockUpdateConfig, mockLogg
   state: {
     savedConfig: null as AppConfig | null,
     secureValues: new Map<string, string>(),
+    loadSecureValueHook: null as null | ((key: string) => Promise<string | null>),
   },
   mockGetLLMConfig: vi.fn(),
   mockUpdateLLMConfig: vi.fn().mockResolvedValue({}),
@@ -37,7 +38,10 @@ vi.mock('@/api/settings', () => ({
 }))
 
 vi.mock('@/utils/secure-store', () => ({
-  loadSecureValue: vi.fn(async (key: string) => state.secureValues.get(key) ?? null),
+  loadSecureValue: vi.fn(async (key: string) => {
+    if (state.loadSecureValueHook) return state.loadSecureValueHook(key)
+    return state.secureValues.get(key) ?? null
+  }),
   saveSecureValue: vi.fn(async (key: string, value: string) => {
     state.secureValues.set(key, value)
   }),
@@ -154,6 +158,7 @@ describe('Settings Store persistence', () => {
     setActivePinia(createPinia())
     state.savedConfig = null
     state.secureValues.clear()
+    state.loadSecureValueHook = null
     mockGetLLMConfig.mockReset()
     mockUpdateLLMConfig.mockClear()
     mockUpdateConfig.mockClear()
@@ -473,6 +478,91 @@ describe('Settings Store persistence', () => {
 
     expect(store.config!.llm.defaultProviderId).toBe('')
     expect(store.config!.llm.defaultModel).toBe('')
+  })
+
+  it('保存等待安全存储期间产生的新编辑不会被旧快照覆盖', async () => {
+    state.savedConfig = makeConfig({
+      llm: {
+        providers: [makeLocalProvider()],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'custom-1',
+      },
+    })
+    state.secureValues.set('llm.provider.custom-1.apiKey', 'sk-live-key')
+    mockGetLLMConfig.mockResolvedValue(makeBackendConfig())
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    store.config!.llm.providers[0]!.apiKey = '****key'
+
+    let releaseSecureLoad!: () => void
+    let markSecureLoadStarted!: () => void
+    const secureLoadGate = new Promise<void>((resolve) => {
+      releaseSecureLoad = resolve
+    })
+    const secureLoadStarted = new Promise<void>((resolve) => {
+      markSecureLoadStarted = resolve
+    })
+    state.loadSecureValueHook = async (key) => {
+      markSecureLoadStarted()
+      await secureLoadGate
+      return state.secureValues.get(key) ?? null
+    }
+
+    const save = store.saveConfig(store.config!)
+    await secureLoadStarted
+    store.config!.llm.providers[0]!.name = 'Edited while saving'
+    releaseSecureLoad()
+    await save
+
+    expect(store.config!.llm.providers[0]!.name).toBe('Edited while saving')
+    const payload = mockUpdateLLMConfig.mock.calls[0]![0] as BackendLLMConfig
+    expect(payload.providers).toHaveProperty('API Mart')
+    expect(payload.providers).not.toHaveProperty('Edited while saving')
+  })
+
+  it('provider 删除保存成功后清理最后一次持久化快照对应的安全 Key', async () => {
+    state.savedConfig = makeConfig({
+      llm: {
+        providers: [makeLocalProvider()],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'custom-1',
+      },
+    })
+    state.secureValues.set('llm.provider.custom-1.apiKey', 'sk-live-key')
+    mockGetLLMConfig.mockResolvedValue(makeBackendConfig())
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    store.removeProvider('custom-1')
+
+    await store.saveConfig(store.config!)
+
+    expect(state.secureValues.has('llm.provider.custom-1.apiKey')).toBe(false)
+  })
+
+  it('provider 删除保存失败时保留上次成功配置的安全 Key', async () => {
+    state.savedConfig = makeConfig({
+      llm: {
+        providers: [makeLocalProvider()],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'custom-1',
+      },
+    })
+    state.secureValues.set('llm.provider.custom-1.apiKey', 'sk-live-key')
+    mockGetLLMConfig.mockResolvedValue(makeBackendConfig())
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    store.removeProvider('custom-1')
+    mockUpdateLLMConfig.mockRejectedValueOnce(new Error('backend unavailable'))
+
+    await expect(store.saveConfig(store.config!)).rejects.toThrow('backend unavailable')
+
+    expect(state.secureValues.get('llm.provider.custom-1.apiKey')).toBe('sk-live-key')
   })
 
   it('安全和 sandbox 同步失败时应同时回滚内存状态和本地持久化', async () => {

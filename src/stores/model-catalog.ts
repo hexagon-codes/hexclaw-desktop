@@ -33,6 +33,8 @@ export interface ProviderCatalog {
   syncedAt: string
   /** 本次同步相对上次新增的模型 id（用于"新增"视图和入口蓝点） */
   newIds: string[]
+  /** remote = Provider 目录；fallback = 远端不可用时由已持久化启用项形成的快照。 */
+  source?: 'remote' | 'fallback'
 }
 
 type CatalogMap = Record<string, ProviderCatalog>
@@ -72,6 +74,23 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
       models,
       syncedAt: new Date().toISOString(),
       newIds,
+      source: 'remote',
+    }
+    persist()
+  }
+
+  /**
+   * 远端目录尚不可用时，以已持久化启用项建立稳定快照。
+   * 仅大于自动启用阈值且没有可用目录时建立；后续 setCatalog 会整份替换为远端目录。
+   */
+  function ensureFallbackCatalog(providerId: string, models: ModelOption[]) {
+    if (models.length <= AUTO_ENABLE_CATALOG_LIMIT) return
+    if ((catalogs.value[providerId]?.models.length ?? 0) > 0) return
+    catalogs.value[providerId] = {
+      models: models.map((model) => ({ id: model.id, name: model.name || model.id })),
+      syncedAt: new Date().toISOString(),
+      newIds: [],
+      source: 'fallback',
     }
     persist()
   }
@@ -95,42 +114,15 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
     persist()
   }
 
-  return { catalogs, setCatalog, getCatalog, removeCatalog, markNewSeen }
+  return {
+    catalogs,
+    setCatalog,
+    ensureFallbackCatalog,
+    getCatalog,
+    removeCatalog,
+    markNewSeen,
+  }
 })
-
-/**
- * 识别并清理"全量灌入"污染的启用列表。
- *
- * 灌入特征：启用列表超过阈值，且其中来自目录的非自定义模型覆盖了目录的绝大部分
- * （≥90%）——没有用户会手动启用整个目录，这只可能是旧版同步逻辑灌进去的。
- * 清理后保留：自定义模型、图像/视频/向量模型、当前选中模型，以及目录已下架的既有模型。
- *
- * 返回 null 表示不是灌入污染（如用户手动启用了几十个），不做任何修改。
- */
-export function trimFloodedModels(
-  models: ModelOption[],
-  catalog: CatalogModel[],
-  selectedModelId: string | undefined,
-): ModelOption[] | null {
-  if (models.length <= AUTO_ENABLE_CATALOG_LIMIT) return null
-  // 只对聚合商规模的目录做灌入识别：中等目录（如 15 个模型的官方直连商）
-  // 用户通过"全选该组"主动启用全部是合法操作，不能命中灌入特征被误杀
-  if (catalog.length < AUTO_ENABLE_CATALOG_LIMIT * 5) return null
-
-  const catalogIds = new Set(catalog.map((m) => m.id))
-  const isKeep = (m: ModelOption) =>
-    m.isCustom ||
-    m.id === selectedModelId ||
-    !catalogIds.has(m.id) ||
-    !!m.capabilities?.some(
-      (c) => c === 'image_generation' || c === 'video_generation' || c === 'embedding',
-    )
-
-  const fromCatalog = models.filter((m) => !isKeep(m) && catalogIds.has(m.id))
-  if (fromCatalog.length < catalog.length * 0.9) return null
-
-  return models.filter(isKeep)
-}
 
 export interface ProviderCatalogReconcileResult {
   changed: boolean
@@ -145,7 +137,7 @@ function modelListSignature(models: ModelOption[], selectedModelId: string | und
  * 将远端目录投影到 Provider 的“已启用模型”层。
  *
  * - 小目录：目录内模型全部启用；既有但本次未返回的条目继续保留，由目录层投影为 stale。
- * - 大目录：不自动启用新条目；只刷新已启用项名称，并收缩可识别的历史全量灌入。
+ * - 大目录：不自动启用或删除任何条目；只刷新已启用项名称。
  */
 export function reconcileProviderCatalog(
   target: ProviderConfig,
@@ -157,8 +149,6 @@ export function reconcileProviderCatalog(
   const remoteById = new Map(remoteModels.map((model) => [model.id, model]))
 
   if (managed) {
-    const trimmed = trimFloodedModels(target.models, remoteModels, target.selectedModelId)
-    if (trimmed) target.models = trimmed
     target.models = target.models.map((model) => {
       const remote = remoteById.get(model.id)
       if (!remote?.name || remote.name === model.name || model.isCustom) return model
@@ -201,6 +191,35 @@ interface ProviderCatalogSyncLease {
 }
 
 const providerCatalogSyncGenerations = new Map<string, number>()
+const credentialSummarySalt = (() => {
+  const bytes = new Uint32Array(2)
+  globalThis.crypto?.getRandomValues?.(bytes)
+  if (bytes[0] || bytes[1]) return `${bytes[0]!.toString(16)}${bytes[1]!.toString(16)}`
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`
+})()
+
+/**
+ * 仅用于当前进程内的 lease 等值判断。随机盐摘要不会持久化、输出日志或暴露 API Key 明文。
+ */
+function credentialSummary(apiKey: string | undefined): string {
+  const input = `${credentialSummarySalt}\0${apiKey ?? ''}`
+  let first = 0x811c9dc5
+  let second = 0x9e3779b9
+  for (let index = 0; index < input.length; index += 1) {
+    const code = input.charCodeAt(index)
+    first = Math.imul(first ^ code, 0x01000193)
+    second = Math.imul(second ^ code, 0x85ebca6b)
+  }
+  return `${(first >>> 0).toString(16).padStart(8, '0')}${(second >>> 0).toString(16).padStart(8, '0')}`
+}
+
+/** 单调废止该 Provider 已签发的全部目录同步 lease。 */
+export function invalidateProviderCatalogSync(providerId: string): void {
+  providerCatalogSyncGenerations.set(
+    providerId,
+    (providerCatalogSyncGenerations.get(providerId) ?? 0) + 1,
+  )
+}
 
 function providerCatalogSyncFingerprint(
   provider: ProviderConfig,
@@ -209,6 +228,9 @@ function providerCatalogSyncFingerprint(
   return JSON.stringify([
     provider.providerInstanceId ?? '',
     provider.backendKey ?? '',
+    provider.enabled,
+    provider.type,
+    credentialSummary(provider.apiKey),
     effectiveBaseUrl.trim().replace(/\/+$/, ''),
     provider.locality ?? 'auto',
     provider.privateNetworkAccess?.host ?? '',
@@ -222,9 +244,9 @@ export function beginProviderCatalogSync(
   effectiveBaseUrl: string,
 ): ProviderCatalogSyncLease {
   const providerId = provider.id
-  const generation = (providerCatalogSyncGenerations.get(providerId) ?? 0) + 1
+  invalidateProviderCatalogSync(providerId)
+  const generation = providerCatalogSyncGenerations.get(providerId)!
   const fingerprint = providerCatalogSyncFingerprint(provider, effectiveBaseUrl)
-  providerCatalogSyncGenerations.set(providerId, generation)
   return {
     isCurrent(currentProvider, currentBaseUrl) {
       return (

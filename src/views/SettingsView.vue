@@ -131,6 +131,8 @@ let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
 const autoTestTimers: Record<string, ReturnType<typeof setTimeout>> = {}
 let autoSavePromise: Promise<void> | null = null
 let hasPendingAutoSave = false
+let autoSaveGeneration = 0
+let persistedAutoSaveGeneration = 0
 let unlistenCloseRequested: (() => void) | null = null
 let closingAfterFlush = false
 
@@ -221,6 +223,21 @@ function hasUnsavedChanges() {
   return hasPendingAutoSave || autoSaveTimer !== null
 }
 
+function hasUnfinishedSettingsPersistence() {
+  return hasUnsavedChanges() || autoSavePromise !== null
+}
+
+function markAutoSavePending() {
+  autoSaveGeneration += 1
+  hasPendingAutoSave = true
+  isDirty.value = true
+}
+
+function refreshAutoSaveDirtyState() {
+  hasPendingAutoSave = persistedAutoSaveGeneration < autoSaveGeneration
+  isDirty.value = hasPendingAutoSave
+}
+
 function resetPendingModelDraft() {
   newModelId.value = ''
   newModelCapability.value = 'text'
@@ -263,7 +280,8 @@ async function flushAutoSave({
     autoSaveTimer = null
   }
 
-  const shouldSave = force || hasPendingAutoSave || !!newModelId.value.trim()
+  const hasPendingModelDraft = !!newModelId.value.trim()
+  const shouldSave = force || hasPendingAutoSave || hasPendingModelDraft
   if (!shouldSave) {
     if (autoSavePromise) {
       await autoSavePromise
@@ -271,27 +289,34 @@ async function flushAutoSave({
     return
   }
   if (!settingsStore.config) return
-  if (autoSavePromise) {
-    await autoSavePromise
-    return
+  if ((force || hasPendingModelDraft) && persistedAutoSaveGeneration >= autoSaveGeneration) {
+    markAutoSavePending()
   }
+  while (persistedAutoSaveGeneration < autoSaveGeneration) {
+    if (autoSavePromise) {
+      await autoSavePromise
+      continue
+    }
 
-  hasPendingAutoSave = false
-  isDirty.value = false
-  autoSavePromise = persistSettings({ showSavedFeedback, refreshRuntimeInfo })
-  try {
-    await autoSavePromise
-  } catch (e) {
-    hasPendingAutoSave = true
-    isDirty.value = true
-    throw e
-  } finally {
-    autoSavePromise = null
+    const savingGeneration = autoSaveGeneration
+    hasPendingAutoSave = false
+    isDirty.value = false
+    autoSavePromise = persistSettings({ showSavedFeedback, refreshRuntimeInfo })
+    try {
+      await autoSavePromise
+      persistedAutoSaveGeneration = Math.max(persistedAutoSaveGeneration, savingGeneration)
+    } catch (e) {
+      refreshAutoSaveDirtyState()
+      throw e
+    } finally {
+      autoSavePromise = null
+      refreshAutoSaveDirtyState()
+    }
   }
 }
 
 function handleBeforeUnload() {
-  if (!hasUnsavedChanges()) return
+  if (!hasUnfinishedSettingsPersistence()) return
   void flushAutoSave({ force: true })
 }
 
@@ -407,7 +432,7 @@ onMounted(async () => {
       const { getCurrentWindow } = await import('@tauri-apps/api/window')
       const appWindow = getCurrentWindow()
       unlistenCloseRequested = await appWindow.onCloseRequested(async (event) => {
-        if (closingAfterFlush || !hasUnsavedChanges()) return
+        if (closingAfterFlush || !hasUnfinishedSettingsPersistence()) return
 
         event.preventDefault()
         try {
@@ -433,7 +458,7 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  if (hasUnsavedChanges()) {
+  if (hasUnfinishedSettingsPersistence()) {
     void flushAutoSave({ force: true })
   }
   if (typeof window !== 'undefined') {
@@ -1104,7 +1129,10 @@ async function testProvider(provider: ProviderConfig) {
 }
 
 /** 连接成功后，从 Provider 动态拉取可用模型目录 */
-async function syncRemoteModels(provider: ProviderConfig): Promise<boolean> {
+async function syncRemoteModels(
+  provider: ProviderConfig,
+  { waitForPersistence = false }: { waitForPersistence?: boolean } = {},
+): Promise<boolean> {
   const preset = PROVIDER_PRESETS[provider.type]
   const baseUrl = provider.baseUrl || preset?.defaultBaseUrl || ''
   const apiKey = provider.apiKey?.trim() || ''
@@ -1130,7 +1158,14 @@ async function syncRemoteModels(provider: ProviderConfig): Promise<boolean> {
       remoteModels,
       currentPreset?.defaultModels ?? [],
     )
-    if (result.changed) autoSave()
+    if (result.changed) {
+      if (waitForPersistence) {
+        markAutoSavePending()
+        await flushAutoSave({ force: true })
+      } else {
+        autoSave()
+      }
+    }
     return true
   } catch (e) {
     // 自动后台同步（testProvider 成功后触发）忽略返回值 → 静默。
@@ -1171,7 +1206,7 @@ async function handleManagerResync() {
   if (!provider || managerSyncing.value) return
   managerSyncing.value = true
   try {
-    const ok = await syncRemoteModels(provider)
+    const ok = await syncRemoteModels(provider, { waitForPersistence: true })
     if (!ok) {
       toast.error(t('settings.llm.syncModelsFailed', '同步模型列表失败，请检查连接'))
     }
@@ -1201,8 +1236,7 @@ function isStaleModel(provider: ProviderConfig, model: ModelOption): boolean {
 
 /** 自动保存（防抖） */
 function autoSave() {
-  hasPendingAutoSave = true
-  isDirty.value = true
+  markAutoSavePending()
   if (autoSaveTimer) clearTimeout(autoSaveTimer)
   autoSaveTimer = setTimeout(async () => {
     try {

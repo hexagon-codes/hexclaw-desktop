@@ -32,7 +32,7 @@ import {
   resolveLoadedDefaultSelection,
 } from './settings-helpers'
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
-import { syncProviderModelCatalogs } from './provider-model-sync'
+import { createSettingsProviderSync } from './settings-provider-sync'
 import { resolveOllamaCapabilities } from '@/config/providers'
 import { collectAvailableChatModels, isOllamaProvider } from '@/config/model-contract'
 
@@ -79,33 +79,14 @@ export const useSettingsStore = defineStore('settings', () => {
   let loadConfigPromise: Promise<void> | null = null
   /** 当前加载进行中时，force reload 会挂到这里，避免被静默吞掉 */
   let forceReloadPromise: Promise<void> | null = null
-  /** 保存队列：保证并发 saveConfig 按调用顺序串行提交，避免旧保存覆盖新状态 */
-  let saveConfigQueue: Promise<void> = Promise.resolve()
-
-  /**
-   * 小目录同步改变的是已启用模型配置，必须写回后端；直接复用同一保存队列，
-   * 但不再次触发目录同步，避免 save → sync → save 的递归回路。
-   */
-  function persistSyncedProviderModels() {
-    const persistJob = async () => {
-      if (!config.value) return
-      const snapshot: AppConfig = JSON.parse(JSON.stringify(config.value))
-      snapshot.llm.providers = await materializeProviderApiKeys(snapshot.llm.providers)
-      await updateLLMConfig(
-        providersToBackend(
-          snapshot.llm.providers,
-          snapshot.llm.defaultModel,
-          snapshot.llm.defaultProviderId ?? '',
-          snapshot.llm.routing,
-        ),
-      )
-    }
-    const queuedJob = saveConfigQueue.catch(() => undefined).then(persistJob)
-    saveConfigQueue = queuedJob
-    void queuedJob.catch((e) => {
-      logger.warn('自动启用的小目录模型持久化失败，将在下次显式保存时重试', e)
-    })
-  }
+  /** 最近一次成功完成持久化的 Provider 快照，用于安全 Key 的增删差分。 */
+  let lastPersistedProviders: ProviderConfig[] = []
+  /** saveConfig 调用版本；旧保存只能提交自己的不可变快照，不能覆盖更新版本的内存状态。 */
+  let latestSaveRevision = 0
+  const providerSync = createSettingsProviderSync({
+    getConfig: () => config.value,
+    getRuntimeProviders: () => runtimeProviders.value,
+  })
 
   /** 加载配置 — 非 LLM 配置从 Tauri Store 读取，LLM 配置从后端 API 读取 */
   async function loadConfig({ force = false } = {}) {
@@ -134,6 +115,8 @@ export const useSettingsStore = defineStore('settings', () => {
       }
       return forceReloadPromise
     }
+    // 每次真正开始加载都先废止旧目录请求；force reload 等待后端期间，旧响应也不得落地。
+    providerSync.invalidateAll(config.value?.llm.providers ?? [])
     loadConfigPromise = doLoadConfig()
     try {
       await loadConfigPromise
@@ -176,6 +159,7 @@ export const useSettingsStore = defineStore('settings', () => {
         strategy: 'cost-aware',
       }
       const existingLlm = config.value?.llm ?? defaults.llm
+      const previousLoadedProviders = cloneProviders(config.value?.llm.providers ?? [])
       const persistedLlm = savedConfig?.llm
         ? {
             providers: cloneProviders(savedConfig.llm.providers ?? []),
@@ -208,6 +192,10 @@ export const useSettingsStore = defineStore('settings', () => {
       } else {
         config.value = { ...defaults, llm: persistedLlm }
       }
+      providerSync.invalidateTransitions(
+        previousLoadedProviders,
+        config.value!.llm.providers,
+      )
 
       config.value!.llm.providers = await restoreProviderApiKeys(config.value!.llm.providers)
       config.value!.llm.defaultProviderId = resolveDefaultModelProviderId(
@@ -232,7 +220,12 @@ export const useSettingsStore = defineStore('settings', () => {
       syncedSandbox.value = cloneSandbox(config.value.sandbox ?? fallbackSandbox())
     }
 
+    lastPersistedProviders = cloneProviders(config.value?.llm.providers ?? [])
+
     loading.value = false
+    // 目录是可再生缓存：配置可先使用，远程刷新在后台完成。小目录变更走独立保存队列，
+    // 不调用 saveConfig，因此不会形成 save → sync → save 递归。
+    providerSync.sync(cloneProviders(config.value?.llm.providers ?? []))
   }
 
   /** 从后端加载 LLM 配置，带重试机制 */
@@ -254,6 +247,7 @@ export const useSettingsStore = defineStore('settings', () => {
           providerCount: providers.length,
           providerIds: providers.map((provider) => provider.providerInstanceId || provider.backendKey || provider.id),
         })
+        providerSync.invalidateTransitions(config.value!.llm.providers, providers)
         runtimeProviders.value = cloneProviders(providers)
         config.value!.llm.providers = providers
         config.value!.llm.routing = {
@@ -294,29 +288,34 @@ export const useSettingsStore = defineStore('settings', () => {
   /** 保存配置 — LLM 配置保存到后端 API，其余保存到 Tauri Store */
   async function saveConfig(newConfig: AppConfig): Promise<{ securitySyncFailed: boolean }> {
     // 深拷贝去掉 Vue 响应式代理，确保序列化正确
-    const plainConfig: AppConfig = JSON.parse(JSON.stringify(newConfig))
-    const previousProviders = cloneProviders(config.value?.llm.providers ?? [])
+    const requestedConfig: AppConfig = JSON.parse(JSON.stringify(newConfig))
     const previousSecurity = cloneSecurity(syncedSecurity.value)
     const previousSandbox = cloneSandbox(syncedSandbox.value)
+    const saveRevision = ++latestSaveRevision
     let securitySyncFailed = false
 
-    assertUniqueProviderNames(plainConfig.llm.providers)
-    plainConfig.llm.providers = await materializeProviderApiKeys(plainConfig.llm.providers)
-    plainConfig.llm.defaultProviderId = resolveDefaultModelProviderId(
-      plainConfig.llm.providers,
-      plainConfig.llm.defaultModel,
-      plainConfig.llm.defaultProviderId ?? '',
+    assertUniqueProviderNames(requestedConfig.llm.providers)
+    requestedConfig.llm.defaultProviderId = resolveDefaultModelProviderId(
+      requestedConfig.llm.providers,
+      requestedConfig.llm.defaultModel,
+      requestedConfig.llm.defaultProviderId ?? '',
     )
-    plainConfig.llm.routing = {
-      enabled: plainConfig.llm.routing?.enabled ?? false,
-      strategy: plainConfig.llm.routing?.strategy || 'cost-aware',
+    requestedConfig.llm.routing = {
+      enabled: requestedConfig.llm.routing?.enabled ?? false,
+      strategy: requestedConfig.llm.routing?.strategy || 'cost-aware',
     }
-    reconcileDefaultSelection(plainConfig.llm)
+    reconcileDefaultSelection(requestedConfig.llm)
 
-    // 先更新本地状态，确保 UI 不会因为异步操作延迟而丢失响应性
-    config.value = plainConfig
+    // 首个 await 前同步切换到本次调用的快照；之后旧任务不再整体回写 config。
+    providerSync.invalidateTransitions(
+      config.value?.llm.providers ?? [],
+      requestedConfig.llm.providers,
+    )
+    config.value = JSON.parse(JSON.stringify(requestedConfig))
+    const requestedConfigSignature = JSON.stringify(requestedConfig)
 
     const persistJob = async () => {
+      const plainConfig: AppConfig = JSON.parse(JSON.stringify(requestedConfig))
       // 前一项排队保存可能刚拿到服务端身份；构造本次 payload 前先吸收，避免并发重命名漂移 key。
       plainConfig.llm.providers = mergeProviderRuntimeIdentities(
         plainConfig.llm.providers,
@@ -325,7 +324,7 @@ export const useSettingsStore = defineStore('settings', () => {
           ...(config.value?.llm.providers ?? []),
         ],
       )
-      await syncProviderApiKeys(plainConfig.llm.providers, previousProviders)
+      plainConfig.llm.providers = await materializeProviderApiKeys(plainConfig.llm.providers)
 
       // LLM 配置保存到后端 API
       try {
@@ -352,13 +351,18 @@ export const useSettingsStore = defineStore('settings', () => {
           plainConfig.llm.providers,
           mergedAfterSave,
         )
+        const activeStillMatchesRequest =
+          saveRevision === latestSaveRevision &&
+          JSON.stringify(config.value) === requestedConfigSignature
         if (config.value) {
           config.value.llm.providers = mergeProviderRuntimeIdentities(
             config.value.llm.providers,
             mergedAfterSave,
           )
         }
-        runtimeProviders.value = cloneProviders(mergedAfterSave)
+        if (activeStillMatchesRequest) {
+          runtimeProviders.value = cloneProviders(mergedAfterSave)
+        }
       } catch (e) {
         logger.error('LLM 配置保存到后端失败', e)
         if (isTauri()) {
@@ -385,9 +389,13 @@ export const useSettingsStore = defineStore('settings', () => {
           security: cloneSecurity(previousSecurity),
           sandbox: cloneSandbox(previousSandbox),
         }
-        if (config.value) {
-          config.value.security = cloneSecurity(previousSecurity)
-          config.value.sandbox = cloneSandbox(previousSandbox)
+        if (config.value && saveRevision === latestSaveRevision) {
+          if (JSON.stringify(config.value.security) === JSON.stringify(requestedConfig.security)) {
+            config.value.security = cloneSecurity(previousSecurity)
+          }
+          if (JSON.stringify(config.value.sandbox) === JSON.stringify(requestedConfig.sandbox)) {
+            config.value.sandbox = cloneSandbox(previousSandbox)
+          }
         }
       }
 
@@ -421,22 +429,26 @@ export const useSettingsStore = defineStore('settings', () => {
         localStorage.setItem(CONFIG_STORE_KEY, JSON.stringify(configToSave))
       }
 
+      const previousProviders = cloneProviders(lastPersistedProviders)
+      try {
+        await syncProviderApiKeys(plainConfig.llm.providers, previousProviders)
+      } catch (e) {
+        try {
+          await syncProviderApiKeys(previousProviders, plainConfig.llm.providers)
+        } catch (rollbackError) {
+          logger.error('Provider API Key 回滚失败', rollbackError)
+        }
+        throw e
+      }
+      lastPersistedProviders = cloneProviders(plainConfig.llm.providers)
+
       // 保存后异步拉取远程模型列表（不阻塞保存，失败静默）
-      syncAllProviderModels(plainConfig.llm.providers)
+      providerSync.sync(plainConfig.llm.providers)
     }
 
-    const queuedJob = saveConfigQueue.catch(() => undefined).then(persistJob)
-    saveConfigQueue = queuedJob
+    const queuedJob = providerSync.enqueue(persistJob)
     await queuedJob
     return { securitySyncFailed }
-  }
-
-  function syncAllProviderModels(providers: ProviderConfig[]) {
-    syncProviderModelCatalogs(providers, {
-      getConfiguredProviders: () => config.value?.llm.providers ?? [],
-      getRuntimeProviders: () => runtimeProviders.value,
-      persistChangedProviders: persistSyncedProviderModels,
-    })
   }
 
   /** 添加 Provider */
@@ -464,10 +476,14 @@ export const useSettingsStore = defineStore('settings', () => {
     if (!config.value) return
     const idx = config.value.llm.providers.findIndex((p) => p.id === id)
     if (idx !== -1) {
+      const previous = config.value.llm.providers[idx]!
       const merged = {
-        ...config.value.llm.providers[idx]!,
+        ...previous,
         ...updates,
       } as ProviderConfig
+      if (previous.enabled !== merged.enabled) {
+        providerSync.invalidate(id)
+      }
       config.value.llm.providers[idx] = merged
       // 切换默认 Provider 的当前模型 = 切换全局默认模型。
       // 不同步的话 reconcileDefaultSelection 会用旧的 defaultModel 把选择改回去。
@@ -485,6 +501,7 @@ export const useSettingsStore = defineStore('settings', () => {
   /** 删除 Provider */
   function removeProvider(id: string) {
     if (!config.value) return
+    providerSync.invalidate(id)
     config.value.llm.providers = config.value.llm.providers.filter((p) => p.id !== id)
     reconcileDefaultSelection(config.value.llm)
   }

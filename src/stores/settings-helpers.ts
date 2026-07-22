@@ -142,7 +142,8 @@ export function resolveLoadedDefaultSelection(
     providers.some(
       (provider) =>
         provider.id === providerId &&
-        provider.models.some((model) => model.id === modelId),
+        provider.enabled !== false &&
+        provider.models.some((model) => model.id === modelId && isChatModelOption(model)),
     )
 
   if (containsSelection(persistedProviderId, persistedModelId)) {

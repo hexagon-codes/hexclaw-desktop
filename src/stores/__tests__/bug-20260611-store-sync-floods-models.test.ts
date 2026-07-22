@@ -1,6 +1,6 @@
 /**
- * BUG-20260611 回归测试：settings store 的 syncAllProviderModels（saveConfig 后
- * 异步触发）把远程全量模型 push 进 provider.models，绕过"目录/启用"两层架构——
+ * BUG-20260611 回归测试：settings store 的 syncAllProviderModels（配置加载或保存后
+ * 异步触发）不得把远程全量模型 push 进 provider.models，绕过"目录/启用"两层架构——
  * 聚合商（OpenRouter 数百模型）每次保存配置都会把启用列表灌满。
  *
  * 期望：
@@ -10,8 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { flushPromises } from '@vue/test-utils'
-import type { CatalogModel, ModelOption } from '@/types'
-import { trimFloodedModels } from '../model-catalog'
+import type { CatalogModel } from '@/types'
 
 const MOCK_BACKEND_CONFIG = {
   default: 'openRouter',
@@ -90,6 +89,147 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     MOCK_BACKEND_CONFIG.providers.openRouter.models = ['moonshotai/kimi-k2.6:free'] as never
   })
 
+  it('配置加载后非阻塞刷新小目录并自动持久化完整的四模型集合', async () => {
+    const remoteModels: CatalogModel[] = [
+      { id: 'moonshotai/kimi-k2.6:free', name: 'moonshotai/kimi-k2.6:free' },
+      { id: 'proxy/model-b', name: 'Model B' },
+      { id: 'proxy/model-c', name: 'Model C' },
+      { id: 'proxy/model-d', name: 'Model D' },
+    ]
+    mockFetchProviderModels.mockResolvedValue(remoteModels)
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+
+    await store.loadConfig()
+
+    await flushPromises()
+    await flushPromises()
+    expect(mockFetchProviderModels).toHaveBeenCalledTimes(1)
+    expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).toEqual(
+      remoteModels.map((model) => model.id),
+    )
+    expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(1)
+    const persisted = mockUpdateLLMConfig.mock.calls[0]![0] as {
+      providers: Record<string, { models?: string[] }>
+    }
+    expect(persisted.providers.openRouter?.models).toEqual(remoteModels.map((model) => model.id))
+  }, 10_000)
+
+  it('配置加载后把十一模型目录写入 catalog，但不自动扩张已启用集合', async () => {
+    const remoteModels: CatalogModel[] = [
+      { id: 'moonshotai/kimi-k2.6:free', name: 'moonshotai/kimi-k2.6:free' },
+      ...Array.from({ length: 10 }, (_, index) => ({
+        id: `zhipu/model-${index}`,
+        name: `Model ${index}`,
+      })),
+    ]
+    mockFetchProviderModels.mockResolvedValue(remoteModels)
+
+    const { useSettingsStore } = await import('../settings')
+    const { useModelCatalogStore } = await import('../model-catalog')
+    const store = useSettingsStore()
+    const catalogStore = useModelCatalogStore()
+
+    await store.loadConfig()
+
+    await vi.waitFor(() => expect(mockFetchProviderModels).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() =>
+      expect(catalogStore.getCatalog(store.config!.llm.providers[0]!.id)?.models).toHaveLength(11),
+    )
+    expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).toEqual([
+      'moonshotai/kimi-k2.6:free',
+    ])
+    expect(mockUpdateLLMConfig).not.toHaveBeenCalled()
+  })
+
+  it('配置加载后的目录刷新失败时保留既有模型和目录缓存', async () => {
+    mockFetchProviderModels.mockRejectedValue(new Error('provider unavailable'))
+
+    const { useSettingsStore } = await import('../settings')
+    const { useModelCatalogStore } = await import('../model-catalog')
+    const store = useSettingsStore()
+    const catalogStore = useModelCatalogStore()
+    catalogStore.setCatalog('openRouter', [{ id: 'cached-model', name: 'Cached Model' }])
+
+    await store.loadConfig()
+
+    await vi.waitFor(() => expect(mockFetchProviderModels).toHaveBeenCalledTimes(1))
+    expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).toEqual([
+      'moonshotai/kimi-k2.6:free',
+    ])
+    expect(catalogStore.getCatalog('openRouter')?.models).toEqual([
+      { id: 'cached-model', name: 'Cached Model' },
+    ])
+    expect(mockUpdateLLMConfig).not.toHaveBeenCalled()
+  })
+
+  it('远程目录失败时用已持久化的十一模型建立可管理目录快照', async () => {
+    const persistedIds = Array.from({ length: 11 }, (_, index) => `zhipu/glm-${index}`)
+    MOCK_BACKEND_CONFIG.providers.openRouter.models = persistedIds as never
+    MOCK_BACKEND_CONFIG.providers.openRouter.model = persistedIds[0]!
+    mockFetchProviderModels.mockRejectedValue(new Error('endpoint policy rejected'))
+
+    const { useSettingsStore } = await import('../settings')
+    const { useModelCatalogStore } = await import('../model-catalog')
+    const store = useSettingsStore()
+
+    await store.loadConfig()
+    await vi.waitFor(() => expect(mockFetchProviderModels).toHaveBeenCalledTimes(1))
+
+    const provider = store.config!.llm.providers[0]!
+    expect(provider.models.map((model) => model.id)).toEqual(persistedIds)
+    expect(useModelCatalogStore().getCatalog(provider.id)).toMatchObject({
+      source: 'fallback',
+      models: persistedIds.map((id) => ({ id, name: id })),
+      newIds: [],
+    })
+    expect(mockUpdateLLMConfig).not.toHaveBeenCalled()
+  })
+
+  it('force reload 开始后立即废止此前的目录响应，并只接受 reload 后的新响应', async () => {
+    const firstCatalog = deferred<CatalogModel[]>()
+    const secondCatalog = deferred<CatalogModel[]>()
+    mockFetchProviderModels
+      .mockImplementationOnce(() => firstCatalog.promise)
+      .mockImplementationOnce(() => secondCatalog.promise)
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    await vi.waitFor(() => expect(mockFetchProviderModels).toHaveBeenCalledTimes(1))
+
+    const reloadBackend = deferred<typeof MOCK_BACKEND_CONFIG>()
+    mockGetLLMConfig.mockImplementationOnce(() => reloadBackend.promise)
+    const reload = store.loadConfig({ force: true })
+    await vi.waitFor(() => expect(mockGetLLMConfig).toHaveBeenCalledTimes(2))
+
+    firstCatalog.resolve([
+      { id: 'moonshotai/kimi-k2.6:free', name: 'moonshotai/kimi-k2.6:free' },
+      { id: 'stale-before-reload', name: 'Stale Before Reload' },
+    ])
+    await flushPromises()
+    expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).not.toContain(
+      'stale-before-reload',
+    )
+
+    reloadBackend.resolve(MOCK_BACKEND_CONFIG)
+    await reload
+    await vi.waitFor(() => expect(mockFetchProviderModels).toHaveBeenCalledTimes(2))
+    secondCatalog.resolve([
+      { id: 'moonshotai/kimi-k2.6:free', name: 'moonshotai/kimi-k2.6:free' },
+      { id: 'fresh-after-reload', name: 'Fresh After Reload' },
+    ])
+    await vi.waitFor(() =>
+      expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).toContain(
+        'fresh-after-reload',
+      ),
+    )
+    expect(store.config!.llm.providers[0]!.models.map((model) => model.id)).not.toContain(
+      'stale-before-reload',
+    )
+  })
+
   it('大目录（300 个）：provider.models 保持启用子集，全量进 catalog', async () => {
     mockFetchProviderModels.mockResolvedValue(bigCatalog(300))
 
@@ -113,10 +253,10 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     expect(catalog!.models).toHaveLength(300)
   })
 
-  it('存量灌入污染：启用列表 ≈ 全量目录时自动收缩为策展子集', async () => {
+  it('大目录同步严格保留既有启用集合，不用启发式猜测并删除用户选择', async () => {
     const catalog = bigCatalog(300)
     mockFetchProviderModels.mockResolvedValue(catalog)
-    // 模拟旧版已把全量目录灌进配置：models 含 300 个目录模型 + 1 个自定义
+    // 即使既有集合覆盖整个目录，也无法证明它不是用户在管理器中主动全选。
     MOCK_BACKEND_CONFIG.providers.openRouter.models = [
       ...catalog.map((m) => m.id),
       'my-custom-model',
@@ -136,7 +276,8 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     await flushPromises()
 
     const after = store.config!.llm.providers[0]!
-    expect(after.models.length, '灌入污染应被收缩').toBeLessThanOrEqual(5)
+    // backend model + 300 catalog rows + one custom row are all retained.
+    expect(after.models).toHaveLength(302)
     const ids = after.models.map((m) => m.id)
     expect(ids, '自定义模型必须保留').toContain('my-custom-model')
     expect(ids, '当前选中模型必须保留').toContain(after.selectedModelId)
@@ -144,7 +285,7 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     const availableIds = store.availableModels.map((model) => model.modelId)
     expect(availableIds).toContain('my-custom-model')
     expect(availableIds).toContain(after.selectedModelId)
-    expect(availableIds).not.toContain(catalog[1]!.id)
+    expect(availableIds).toContain(catalog[1]!.id)
 
     expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(2)
     const persisted = mockUpdateLLMConfig.mock.calls[mockUpdateLLMConfig.mock.calls.length - 1]?.[0] as typeof MOCK_BACKEND_CONFIG
@@ -169,9 +310,6 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     const { useSettingsStore } = await import('../settings')
     const store = useSettingsStore()
     await store.loadConfig()
-
-    await store.saveConfig(store.config!)
-    await flushPromises()
     expect(mockFetchProviderModels).toHaveBeenCalledTimes(1)
 
     store.config!.llm.providers[0]!.baseUrl = 'https://new-endpoint.example/v1'
@@ -212,13 +350,13 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
   })
 
   it.each([
-    { count: 10, expectedEnabled: 11, expectedUpdates: 2, expectedPersisted: 11 },
-    { count: 11, expectedEnabled: 1, expectedUpdates: 1, expectedPersisted: 1 },
-  ])('目录阈值 $count：启用模型数量为 $expectedEnabled 且同步不递归保存', async ({
+    { count: 10, expectedEnabled: 11, expectedUpdates: 1, expectedPersistedModels: 11 },
+    { count: 11, expectedEnabled: 1, expectedUpdates: 0, expectedPersistedModels: 0 },
+  ])('启动目录阈值 $count：启用模型数量为 $expectedEnabled 且同步不递归保存', async ({
     count,
     expectedEnabled,
     expectedUpdates,
-    expectedPersisted,
+    expectedPersistedModels,
   }) => {
     const catalog = bigCatalog(count)
     mockFetchProviderModels.mockResolvedValue(catalog)
@@ -227,7 +365,6 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     const store = useSettingsStore()
 
     await store.loadConfig()
-    await store.saveConfig(store.config!)
     await flushPromises()
     await flushPromises()
 
@@ -242,13 +379,13 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
       }),
     )
     expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(expectedUpdates)
-    const persisted = mockUpdateLLMConfig.mock.calls[mockUpdateLLMConfig.mock.calls.length - 1]?.[0] as {
-      providers: Record<string, { models?: string[] }>
-    }
-    expect(persisted.providers.openRouter?.models).toHaveLength(expectedPersisted)
+    const persisted = mockUpdateLLMConfig.mock.calls[mockUpdateLLMConfig.mock.calls.length - 1]?.[0] as
+      | { providers: Record<string, { models?: string[] }> }
+      | undefined
+    expect(persisted?.providers.openRouter?.models?.length ?? 0).toBe(expectedPersistedModels)
   })
 
-  it('中等目录（15 个）用户全选不应被识别为灌入而误杀', async () => {
+  it('中等目录（15 个）用户全选不会被同步删除', async () => {
     const midCatalog = bigCatalog(15)
     mockFetchProviderModels.mockResolvedValue(midCatalog)
     // 用户在模型管理器里"全选该组"主动启用全部 15 个
@@ -268,50 +405,4 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     MOCK_BACKEND_CONFIG.providers.openRouter.model = 'moonshotai/kimi-k2.6:free'
   })
 
-  it('收缩历史大目录时保留 embedding 规格，即使旧记录尚无 isCustom', () => {
-    const catalog = bigCatalog(300)
-    const models: ModelOption[] = [
-      ...catalog.map(
-        (model): ModelOption => ({
-          id: model.id,
-          name: model.name,
-          capabilities: ['text'],
-        }),
-      ),
-      {
-        id: 'nvidia/nemotron-3-embed-1b:free',
-        name: 'Nemotron Embed',
-        capabilities: ['embedding'],
-        embedding: { protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2' },
-      },
-    ]
-
-    const trimmed = trimFloodedModels(models, catalog, catalog[0]!.id)!
-    expect(trimmed.some((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')).toBe(true)
-    expect(
-      trimmed.find((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')?.embedding?.dimension,
-    ).toBe(2048)
-  })
-
-  it('收缩历史大目录时保留目录已下架但此前已启用的模型', () => {
-    const catalog = bigCatalog(300)
-    const stale: ModelOption = {
-      id: 'retired-provider/retired-chat',
-      name: 'Retired Chat',
-      capabilities: ['text'],
-    }
-    const models: ModelOption[] = [
-      ...catalog.map(
-        (model): ModelOption => ({
-          id: model.id,
-          name: model.name,
-          capabilities: ['text'],
-        }),
-      ),
-      stale,
-    ]
-
-    const trimmed = trimFloodedModels(models, catalog, catalog[0]!.id)!
-    expect(trimmed).toContainEqual(stale)
-  })
 })

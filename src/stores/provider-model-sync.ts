@@ -25,6 +25,9 @@ export function syncProviderModelCatalogs(
 ) {
   const catalogStore = useModelCatalogStore()
   for (const provider of providers) {
+    if (provider.type !== 'ollama') {
+      catalogStore.ensureFallbackCatalog(provider.id, provider.models)
+    }
     if (
       !provider.enabled ||
       (!provider.apiKey?.trim() && !provider.providerInstanceId) ||
@@ -34,12 +37,12 @@ export function syncProviderModelCatalogs(
     if (!baseUrl && !provider.providerInstanceId) continue
 
     const syncLease = beginProviderCatalogSync(provider, baseUrl)
-    void fetchProviderModels(baseUrl, provider.apiKey, {
+    void Promise.resolve().then(() => fetchProviderModels(baseUrl, provider.apiKey, {
       providerType: provider.type,
       providerInstanceId: provider.providerInstanceId,
       locality: provider.locality,
       privateNetworkAccess: provider.privateNetworkAccess,
-    }).then((remoteModels) => {
+    })).then((remoteModels) => {
       if (!remoteModels.length) return
       const target = context.getConfiguredProviders().find((candidate) => candidate.id === provider.id)
       if (!target) return

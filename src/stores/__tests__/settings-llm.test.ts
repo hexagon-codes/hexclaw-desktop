@@ -38,8 +38,8 @@ vi.mock('@/api/settings', () => ({
 
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() {
-      return mockPersistedAppConfig
+    async get(key: string) {
+      return key === 'app_config' ? mockPersistedAppConfig : null
     }
     async set() {}
     async save() {}

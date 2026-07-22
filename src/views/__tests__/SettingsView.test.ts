@@ -896,7 +896,6 @@ describe('SettingsView — E2E 关键路径', () => {
   })
 
   it('waits for manual resync persistence and surfaces a save failure', async () => {
-    ;(globalThis as Record<string, unknown>).isTauri = true
     const error = vi.fn()
     ;(window as unknown as Record<string, unknown>).__hcToast = { value: { error } }
     const wrapper = await mountSettingsView()
@@ -911,8 +910,7 @@ describe('SettingsView — E2E 关键路径', () => {
     mockFetchProviderModels.mockResolvedValueOnce(
       Array.from({ length: 10 }, (_, index) => ({ id: `new-${index}`, name: `New ${index}` })),
     )
-    const { updateLLMConfig } = await import('@/api/config')
-    vi.mocked(updateLLMConfig).mockRejectedValueOnce(new Error('disk unavailable'))
+    const saveConfig = vi.spyOn(store, 'saveConfig').mockRejectedValueOnce(new Error('disk unavailable'))
     await wrapper.get('.hc-provider__card-head').trigger('click')
     await wrapper.get('.hc-model-chip--manage').trigger('click')
     await flushPromises()
@@ -921,8 +919,64 @@ describe('SettingsView — E2E 关键路径', () => {
     await body.get('button[title="重新同步"]').trigger('click')
     await flushPromises()
 
-    expect(updateLLMConfig).toHaveBeenCalled()
+    expect(saveConfig).toHaveBeenCalled()
     expect(error).toHaveBeenCalledWith('同步模型列表失败，请检查连接')
+  })
+
+  it('queues manual resync persistence behind an in-flight autosave', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    const { useModelCatalogStore } = await import('@/stores/model-catalog')
+    useModelCatalogStore().setCatalog(
+      provider.id,
+      Array.from({ length: 11 }, (_, index) => ({ id: `old-${index}`, name: `Old ${index}` })),
+    )
+    const startupFetchCalls = mockFetchProviderModels.mock.calls.length
+    mockFetchProviderModels.mockResolvedValueOnce(
+      Array.from({ length: 10 }, (_, index) => ({ id: `new-${index}`, name: `New ${index}` })),
+    )
+
+    let releaseFirstSave!: () => void
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve
+    })
+    const savedSnapshots: string[][] = []
+    const saveConfig = vi.spyOn(store, 'saveConfig')
+    saveConfig
+      .mockImplementationOnce(async (nextConfig) => {
+        savedSnapshots.push(nextConfig.llm.providers[0]!.models.map((model) => model.id))
+        await firstSaveGate
+        return { securitySyncFailed: false }
+      })
+      .mockImplementationOnce(async (nextConfig) => {
+        savedSnapshots.push(nextConfig.llm.providers[0]!.models.map((model) => model.id))
+        return { securitySyncFailed: false }
+      })
+
+    await wrapper.get('.hc-provider__card-head').trigger('click')
+    await wrapper.get('[data-provider-field="api-key"]').setValue('sk-edited-before-save')
+    await wrapper.get('.hc-btn-primary').trigger('click')
+    await vi.waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1))
+
+    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await flushPromises()
+    const body = new DOMWrapper(document.body)
+    await body.get('button[title="重新同步"]').trigger('click')
+    await vi.waitFor(() =>
+      expect(mockFetchProviderModels).toHaveBeenCalledTimes(startupFetchCalls + 1),
+    )
+    expect(saveConfig).toHaveBeenCalledTimes(1)
+
+    releaseFirstSave()
+    await vi.waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(2))
+
+    expect(savedSnapshots[0]).not.toEqual(Array.from({ length: 10 }, (_, index) => `new-${index}`))
+    expect(savedSnapshots[1]!.slice(0, 10)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `new-${index}`),
+    )
+    expect(savedSnapshots[1]).toContain('gpt-4o')
   })
 
   it('disables add-model submission for an empty or duplicate model id', async () => {
@@ -1265,6 +1319,56 @@ describe('SettingsView — E2E 关键路径', () => {
       providers: Record<string, { api_key: string }>
     }
     expect(backendPayload.providers.openai?.api_key).toBe('sk-fresh-key')
+
+    wrapper.unmount()
+  })
+
+  it('waits for an in-flight save and drains edits made before close completes', async () => {
+    ;(globalThis as Record<string, unknown>).isTauri = true
+    const { updateLLMConfig } = await import('@/api/config')
+    const mockedUpdateLLMConfig = vi.mocked(updateLLMConfig)
+
+    let releaseFirstSave!: () => void
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve
+    })
+    mockedUpdateLLMConfig
+      .mockImplementationOnce(() => firstSaveGate)
+      .mockImplementationOnce(() => Promise.resolve())
+
+    const wrapper = await mountSettingsView()
+    for (let i = 0; i < 20; i++) {
+      await flushPromises()
+      await wrapper.vm.$nextTick()
+      if (wrapper.find('[data-testid="llm-routing-toggle"]').exists()) break
+    }
+
+    const routingToggle = wrapper.get<HTMLInputElement>('[data-testid="llm-routing-toggle"]')
+    await routingToggle.setValue(true)
+    const saveButton = wrapper.findAll('button').find((button) => button.text().includes('保存'))
+    expect(saveButton).toBeDefined()
+    await saveButton!.trigger('click')
+    await vi.waitFor(() => expect(mockedUpdateLLMConfig).toHaveBeenCalledTimes(1))
+
+    const closeEvent = { preventDefault: vi.fn() }
+    expect(closeRequestState.handler).not.toBeNull()
+    const closePromise = closeRequestState.handler!(closeEvent)
+    await flushPromises()
+
+    expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1)
+    expect(closeRequestState.close).not.toHaveBeenCalled()
+
+    await routingToggle.setValue(false)
+    releaseFirstSave()
+    await closePromise
+    await flushPromises()
+
+    expect(mockedUpdateLLMConfig).toHaveBeenCalledTimes(2)
+    const finalPayload = mockedUpdateLLMConfig.mock.calls[1]![0] as {
+      routing: { enabled: boolean }
+    }
+    expect(finalPayload.routing.enabled).toBe(false)
+    expect(closeRequestState.close).toHaveBeenCalledTimes(1)
 
     wrapper.unmount()
   })

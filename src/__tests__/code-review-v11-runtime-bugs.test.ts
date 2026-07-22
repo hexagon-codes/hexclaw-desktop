@@ -293,12 +293,16 @@ describe('BUG 16: SettingsView flushAutoSave re-saves after in-flight promise', 
     expect(fnBody).toMatch(/await\s+autoSavePromise[\s\S]*return/)
   })
 
-  it('sets hasPendingAutoSave = true on error to ensure retry', () => {
+  it('recomputes pending state from the persisted/current generation on error', () => {
     const fnStart = src.indexOf('async function flushAutoSave')
     const fnEnd = src.indexOf('\n}\n', fnStart)
     const fnBody = src.slice(fnStart, fnEnd)
-    // Error handler should set hasPendingAutoSave = true
-    expect(fnBody).toMatch(/catch\s*\([^)]*\)\s*\{[^}]*hasPendingAutoSave\s*=\s*true/)
+    // A failed generation remains newer than persistedAutoSaveGeneration, so the shared
+    // generation helper must restore the pending flag without duplicating state writes.
+    expect(src).toMatch(
+      /function\s+refreshAutoSaveDirtyState\s*\(\)\s*\{[\s\S]*?hasPendingAutoSave\s*=\s*persistedAutoSaveGeneration\s*<\s*autoSaveGeneration/,
+    )
+    expect(fnBody).toMatch(/catch\s*\([^)]*\)\s*\{[\s\S]*?refreshAutoSaveDirtyState\(\)[\s\S]*?throw\s+\w+/)
   })
 })
 

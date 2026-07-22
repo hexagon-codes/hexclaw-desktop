@@ -86,7 +86,7 @@ describe('provider catalog reconciliation', () => {
     expect(target.models.find((model) => model.id === 'embed')?.embedding?.dimension).toBe(1024)
   })
 
-  it('大目录污染收缩会返回 changed，且不把目录中未启用项加入启用池', () => {
+  it('大目录不会用启发式删除既有启用集合，也不把未启用项自动加入', () => {
     const catalog = Array.from({ length: 300 }, (_, index) => ({
       id: `catalog-${index}`,
       name: `Catalog ${index}`,
@@ -128,6 +128,35 @@ describe('provider catalog sync generation', () => {
     const lease = beginProviderCatalogSync(target, target.baseUrl)
 
     target.enabled = false
+
+    expect(lease.isCurrent(target, target.baseUrl)).toBe(false)
+  })
+
+  it('API Key 变化后旧请求不再拥有写权限', () => {
+    const target = provider([])
+    target.apiKey = 'sk-before'
+    const lease = beginProviderCatalogSync(target, target.baseUrl)
+
+    target.apiKey = 'sk-after'
+
+    expect(lease.isCurrent(target, target.baseUrl)).toBe(false)
+  })
+
+  it('API Key 的原始请求值变化后旧请求不再拥有写权限', () => {
+    const target = provider([])
+    target.apiKey = 'sk-value'
+    const lease = beginProviderCatalogSync(target, target.baseUrl)
+
+    target.apiKey = 'sk-value '
+
+    expect(lease.isCurrent(target, target.baseUrl)).toBe(false)
+  })
+
+  it('provider type 变化后旧请求不再拥有写权限', () => {
+    const target = provider([])
+    const lease = beginProviderCatalogSync(target, target.baseUrl)
+
+    target.type = 'openai'
 
     expect(lease.isCurrent(target, target.baseUrl)).toBe(false)
   })

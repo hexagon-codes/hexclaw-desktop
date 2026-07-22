@@ -3,14 +3,17 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { beginProviderCatalogSync } from '../model-catalog'
 
 const mockGetLLMConfig = vi.fn()
 const mockUpdateLLMConfig = vi.fn().mockResolvedValue({})
 const mockUpdateConfig = vi.fn().mockResolvedValue({})
+const mockFetchProviderModels = vi.fn().mockResolvedValue([])
 
 vi.mock('@/api/config', () => ({
   getLLMConfig: () => mockGetLLMConfig(),
   updateLLMConfig: (config: unknown) => mockUpdateLLMConfig(config),
+  fetchProviderModels: (...args: unknown[]) => mockFetchProviderModels(...args),
 }))
 
 vi.mock('@/api/settings', () => ({
@@ -35,6 +38,8 @@ describe('Settings Store — backendToProviders 类型映射逻辑', () => {
     mockUpdateLLMConfig.mockResolvedValue({})
     mockUpdateConfig.mockReset()
     mockUpdateConfig.mockResolvedValue({})
+    mockFetchProviderModels.mockReset()
+    mockFetchProviderModels.mockResolvedValue([])
     ;(globalThis as Record<string, unknown>).isTauri = true
   })
 
@@ -112,5 +117,64 @@ describe('Settings Store — backendToProviders 类型映射逻辑', () => {
     // disabled providers are skipped in providersToBackend (backend treats all as active)
     // but saved locally via Tauri Store and merged back on next loadConfig
     expect(store.config!.llm.providers.length).toBe(2)
+  })
+
+  it('provider enabled 发生 false→true ABA 后，切换前的目录 lease 永久失效', async () => {
+    mockGetLLMConfig.mockResolvedValue({
+      default: 'testprovider',
+      providers: {
+        testprovider: {
+          api_key: 'key1',
+          base_url: 'https://api.example.com/v1',
+          model: 'model1',
+          compatible: 'openai',
+        },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+    })
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig({ force: true })
+    const target = store.config!.llm.providers[0]!
+    const lease = beginProviderCatalogSync(target, target.baseUrl)
+
+    store.updateProvider(target.id, { enabled: false })
+    store.updateProvider(target.id, { enabled: true })
+
+    expect(lease.isCurrent(store.config!.llm.providers[0]!, target.baseUrl)).toBe(false)
+  })
+
+  it('force reload 发生 enabled false→true ABA 后，reload 前的目录 lease 永久失效', async () => {
+    const backendConfig = (enabled: boolean) => ({
+      default: 'testprovider',
+      providers: {
+        testprovider: {
+          api_key: 'key1',
+          base_url: 'https://api.example.com/v1',
+          model: 'model1',
+          compatible: 'openai',
+          enabled,
+        },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
+    })
+    mockGetLLMConfig
+      .mockResolvedValueOnce(backendConfig(true))
+      .mockResolvedValueOnce(backendConfig(false))
+      .mockResolvedValueOnce(backendConfig(true))
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig({ force: true })
+    const target = store.config!.llm.providers[0]!
+    const lease = beginProviderCatalogSync(target, target.baseUrl)
+
+    await store.loadConfig({ force: true })
+    await store.loadConfig({ force: true })
+
+    expect(lease.isCurrent(store.config!.llm.providers[0]!, target.baseUrl)).toBe(false)
   })
 })
