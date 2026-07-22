@@ -357,7 +357,9 @@ describe('Knowledge 知识库链路', () => {
 
   it('uploadViaXhr 应处理网络错误和中断', () => {
     expect(knowledgeSrc).toContain("reject(new Error('Network error'))")
-    expect(knowledgeSrc).toContain("reject(new Error('Upload aborted'))")
+    expect(knowledgeSrc).toContain("const error = new Error('Upload aborted')")
+    expect(knowledgeSrc).toContain("error.name = 'AbortError'")
+    expect(knowledgeSrc).toContain('reject(abortError())')
   })
 })
 

@@ -676,10 +676,7 @@ const livePhase = computed(() => {
   ) {
     return semanticMessage('semanticRetryPending')
   }
-  if (
-    desiredRevision.value?.state === 'retry_wait' ||
-    activity.value.state === 'retry_wait'
-  ) {
+  if (desiredRevision.value?.state === 'retry_wait' || activity.value.state === 'retry_wait') {
     return semanticMessage('semanticRetryWaiting')
   }
   if (desiredRevision.value || activity.value.state === 'building') {
@@ -809,11 +806,7 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
       </div>
 
       <div class="kb-index-card__actual" data-testid="kb-semantic-index-actual">
-        <i18n-t
-          :keypath="`knowledge.semanticIndex.${activeUsageKey}`"
-          tag="span"
-          scope="global"
-        >
+        <i18n-t :keypath="`knowledge.semanticIndex.${activeUsageKey}`" tag="span" scope="global">
           <template #profile>
             <strong>{{ activeUsageProfile }}</strong>
           </template>
@@ -905,7 +898,7 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 
 .kb-index-card__header:focus-visible {
   border-radius: 6px;
-  outline: 2px solid var(--hc-ring);
+  outline: 2px solid var(--hc-accent);
   outline-offset: 3px;
 }
 

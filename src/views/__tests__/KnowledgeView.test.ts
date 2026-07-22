@@ -808,7 +808,9 @@ describe('KnowledgeView', () => {
     const docsTab = wrapper.findAll('button').find((btn) => /全部\s*1/.test(btn.text()))
     expect(docsTab?.exists()).toBe(true)
     expect(wrapper.find('[data-testid="knowledge-doc-stats"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="knowledge-doc-list"]').classes()).toContain('max-w-2xl')
+    expect(wrapper.get('[data-testid="knowledge-doc-list"]').classes()).toContain(
+      'knowledge-page__document-list',
+    )
   })
 
   it('renders document cards with a compact action group instead of loose floating actions', async () => {
