@@ -35,7 +35,13 @@ function makeStore(overrides: Record<string, unknown> = {}) {
   return {
     messages: [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '' },
-      { id: 'live-a1', role: 'assistant', content: 'hi', timestamp: '', metadata: { backend_message_id: 'be-9' } },
+      {
+        id: 'live-a1',
+        role: 'assistant',
+        content: 'hi',
+        timestamp: '',
+        metadata: { backend_message_id: 'be-9' },
+      },
     ],
     currentSessionId: 's-1',
     streaming: false,
@@ -67,7 +73,13 @@ describe('BUG-20260703 P2-1 — handleFork 行为', () => {
 
   it('重载消息（无 backend_message_id 元数据）直接用消息 id 作分支点', async () => {
     const store = makeStore()
-    store.messages[1] = { id: 'be-77', role: 'assistant', content: 'hi', timestamp: '', metadata: {} } as never
+    store.messages[1] = {
+      id: 'be-77',
+      role: 'assistant',
+      content: 'hi',
+      timestamp: '',
+      metadata: {},
+    } as never
     const { handleFork } = useChatActions(store as never, makeToast() as never, vi.fn())
     await handleFork(1)
     expect(forkSession).toHaveBeenCalledWith('s-1', 'be-77')
@@ -94,8 +106,13 @@ describe('BUG-20260703 P2-1 — handleFork 行为', () => {
 })
 
 describe('BUG-20260703 P2-1 — MessageActions 分支菜单项', () => {
-  it('assistant 把创建分支收进原型 More 菜单；user 菜单无此项', async () => {
-    const i18n = createI18n({ legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN', messages: { 'zh-CN': zhCN, zh: zhCN } })
+  it('assistant 把创建分支收进 More 菜单；user 菜单无此项', async () => {
+    const i18n = createI18n({
+      legacy: false,
+      locale: 'zh-CN',
+      fallbackLocale: 'zh-CN',
+      messages: { 'zh-CN': zhCN, zh: zhCN },
+    })
     const w = mount(MessageActions, {
       props: { role: 'assistant', content: 'hi' },
       global: { plugins: [i18n] },

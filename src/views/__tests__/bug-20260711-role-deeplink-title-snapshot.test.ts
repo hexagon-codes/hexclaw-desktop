@@ -264,4 +264,16 @@ describe('BUG-20260711：role 深链会话标题快照 display_name（治本）'
     expect(chatStore.currentSessionId, '应复用存量内部名标题会话').toBe('s-legacy')
     expect((createSession as unknown as Mock).mock.calls.length, '不得重复建会话').toBe(0)
   })
+
+  it('消费 role 深链后保留 scenarioTab，学习档案快捷入口不得被清回辅导页', async () => {
+    mockRoute.query = { role: K12_AGENT, roleTitle: K12_DISPLAY, scenarioTab: 'records' }
+    mockListSessions.mockResolvedValue({ sessions: [], total: 0 })
+    mountChatView()
+    await flushPromises()
+
+    expect(mockRouterReplace).toHaveBeenCalledWith({
+      path: '/chat',
+      query: { scenarioTab: 'records' },
+    })
+  })
 })

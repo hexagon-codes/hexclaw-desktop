@@ -1,5 +1,16 @@
 <script setup lang="ts">
-import { Copy, Check, RotateCcw, Pencil, ThumbsUp, ThumbsDown, Volume2, Square, MoreHorizontal } from 'lucide-vue-next'
+import {
+  Copy,
+  Check,
+  RotateCcw,
+  Pencil,
+  ThumbsUp,
+  ThumbsDown,
+  Volume2,
+  Square,
+  MoreHorizontal,
+  Trash2,
+} from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { setClipboard } from '@/api/desktop'
@@ -27,7 +38,9 @@ const emit = defineEmits<{
 
 const copied = ref(false)
 const menuOpen = ref(false)
+const deleteReady = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
+let deleteUnlockTimer: ReturnType<typeof setTimeout> | null = null
 const activeFeedback = computed(() => props.feedback ?? null)
 // F4：整条全是代码块/纯图片时 plainText 为空 → 朗读无意义。禁用喇叭而非"点了没反应"。
 const speakable = computed(() => plainText(props.content).length > 0)
@@ -50,11 +63,11 @@ async function handleCopy() {
 /** 朗读消息内容 — Markdown 转纯文本，避免读出 ``` # * 等符号 */
 function plainText(md: string): string {
   return md
-    .replace(/```[\s\S]*?```/g, '')           // 代码块整段去掉
-    .replace(/`[^`]*`/g, '')                  // 行内代码
-    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')     // 图片
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')  // 链接保留 anchor
-    .replace(/[#*_~>|]/g, '')                 // 标记符号
+    .replace(/```[\s\S]*?```/g, '') // 代码块整段去掉
+    .replace(/`[^`]*`/g, '') // 行内代码
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '') // 图片
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1') // 链接保留 anchor
+    .replace(/[#*_~>|]/g, '') // 标记符号
     .replace(/\s+/g, ' ')
     .trim()
 }
@@ -75,54 +88,86 @@ async function toggleSpeak() {
 }
 
 function toggleMore() {
-  menuOpen.value = !menuOpen.value
+  if (menuOpen.value) {
+    closeMore()
+    return
+  }
+  menuOpen.value = true
+  deleteReady.value = false
+  deleteUnlockTimer = setTimeout(() => {
+    deleteReady.value = true
+    deleteUnlockTimer = null
+  }, 10_000)
+}
+
+function closeMore() {
+  menuOpen.value = false
+  deleteReady.value = false
+  if (deleteUnlockTimer) clearTimeout(deleteUnlockTimer)
+  deleteUnlockTimer = null
 }
 
 function runMenuAction(action: 'fork' | 'delete') {
-  menuOpen.value = false
+  if (action === 'delete' && !deleteReady.value) return
+  closeMore()
   if (action === 'fork') emit('fork')
   else emit('delete')
 }
 
 function onDocumentMouseDown(event: MouseEvent) {
-  if (!rootRef.value?.contains(event.target as Node)) menuOpen.value = false
+  if (!rootRef.value?.contains(event.target as Node)) closeMore()
 }
 
 function onDocumentKeydown(event: KeyboardEvent) {
   if (event.key !== 'Escape' || !menuOpen.value) return
   event.preventDefault()
-  menuOpen.value = false
+  closeMore()
   rootRef.value?.querySelector<HTMLButtonElement>('[data-testid="message-more"]')?.focus()
 }
 
 onMounted(() => {
   document.addEventListener('mousedown', onDocumentMouseDown, true)
-  // Safari/WebKit does not focus a button after a pointer click, so Escape cannot
-  // rely on a keydown bubbling through the toolbar. Listen at document scope.
   document.addEventListener('keydown', onDocumentKeydown)
 })
 onBeforeUnmount(() => {
+  if (deleteUnlockTimer) clearTimeout(deleteUnlockTimer)
   document.removeEventListener('mousedown', onDocumentMouseDown, true)
   document.removeEventListener('keydown', onDocumentKeydown)
 })
 </script>
 
 <template>
-  <div
-    ref="rootRef"
-    class="hc-msg-actions"
-    :class="`hc-msg-actions--${role}`"
-    role="toolbar"
-  >
+  <div ref="rootRef" class="hc-msg-actions" :class="`hc-msg-actions--${role}`" role="toolbar">
     <template v-if="role === 'assistant'">
-      <button type="button" class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active': activeFeedback === 'like' }" :title="t('chat.liked')" :aria-label="t('chat.liked')" @click="emit('like')">
+      <button
+        type="button"
+        class="hc-msg-actions__btn"
+        :class="{ 'hc-msg-actions__btn--active': activeFeedback === 'like' }"
+        :title="t('chat.liked')"
+        :aria-label="t('chat.liked')"
+        @click="emit('like')"
+      >
         <ThumbsUp :size="14" />
       </button>
-      <button type="button" class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--active-bad': activeFeedback === 'dislike' }" :title="t('chat.disliked')" :aria-label="t('chat.disliked')" @click="emit('dislike')">
+      <button
+        type="button"
+        class="hc-msg-actions__btn"
+        :class="{ 'hc-msg-actions__btn--active-bad': activeFeedback === 'dislike' }"
+        :title="t('chat.disliked')"
+        :aria-label="t('chat.disliked')"
+        @click="emit('dislike')"
+      >
         <ThumbsDown :size="14" />
       </button>
       <span class="hc-msg-actions__divider" />
-      <button type="button" class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" :aria-label="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
+      <button
+        type="button"
+        class="hc-msg-actions__btn"
+        :class="{ 'hc-msg-actions__btn--copied': copied }"
+        :title="copied ? t('chat.copied') : t('common.copy')"
+        :aria-label="copied ? t('chat.copied') : t('common.copy')"
+        @click="handleCopy"
+      >
         <Check v-if="copied" :size="14" />
         <Copy v-else :size="14" />
       </button>
@@ -132,27 +177,48 @@ onBeforeUnmount(() => {
         :class="{ 'hc-msg-actions__btn--speaking': isSpeaking }"
         :disabled="!speakable && !isSpeaking"
         :title="isSpeaking ? t('chat.stopSpeaking', '停止朗读') : t('chat.speakMessage', '朗读')"
-        :aria-label="isSpeaking ? t('chat.stopSpeaking', '停止朗读') : t('chat.speakMessage', '朗读')"
+        :aria-label="
+          isSpeaking ? t('chat.stopSpeaking', '停止朗读') : t('chat.speakMessage', '朗读')
+        "
         @click="toggleSpeak"
       >
         <Square v-if="isSpeaking" :size="14" />
         <Volume2 v-else :size="14" />
       </button>
-      <button type="button" class="hc-msg-actions__btn" :title="t('chat.regenerate')" :aria-label="t('chat.regenerate')" data-testid="message-regenerate" @click="emit('retry')">
+      <button
+        type="button"
+        class="hc-msg-actions__btn"
+        :title="t('chat.regenerate')"
+        :aria-label="t('chat.regenerate')"
+        data-testid="message-regenerate"
+        @click="emit('retry')"
+      >
         <RotateCcw :size="14" />
       </button>
     </template>
 
     <template v-else>
-      <button type="button" class="hc-msg-actions__btn" :class="{ 'hc-msg-actions__btn--copied': copied }" :title="copied ? t('chat.copied') : t('common.copy')" :aria-label="copied ? t('chat.copied') : t('common.copy')" @click="handleCopy">
+      <button
+        type="button"
+        class="hc-msg-actions__btn"
+        :class="{ 'hc-msg-actions__btn--copied': copied }"
+        :title="copied ? t('chat.copied') : t('common.copy')"
+        :aria-label="copied ? t('chat.copied') : t('common.copy')"
+        @click="handleCopy"
+      >
         <Check v-if="copied" :size="14" />
         <Copy v-else :size="14" />
       </button>
-      <button type="button" class="hc-msg-actions__btn" :title="t('chat.editMessage')" :aria-label="t('chat.editMessage')" @click="emit('edit')">
+      <button
+        type="button"
+        class="hc-msg-actions__btn"
+        :title="t('chat.editMessage')"
+        :aria-label="t('chat.editMessage')"
+        @click="emit('edit')"
+      >
         <Pencil :size="14" />
       </button>
     </template>
-
     <div class="hc-msg-actions__more">
       <button
         type="button"
@@ -182,8 +248,10 @@ onBeforeUnmount(() => {
           class="hc-msg-actions__danger"
           data-testid="message-delete"
           :title="t('common.delete')"
+          :disabled="!deleteReady"
           @click="runMenuAction('delete')"
         >
+          <Trash2 :size="14" aria-hidden="true" />
           {{ t('common.delete') }}
         </button>
       </div>
@@ -267,7 +335,9 @@ onBeforeUnmount(() => {
   transform: scale(0.92);
 }
 
-.hc-msg-actions__btn--copied { color: #34C759 !important; }
+.hc-msg-actions__btn--copied {
+  color: #34c759 !important;
+}
 
 .hc-msg-actions__btn:focus-visible,
 .hc-msg-actions__more-menu button:focus-visible {
@@ -282,23 +352,28 @@ onBeforeUnmount(() => {
 }
 
 .hc-msg-actions__btn--speaking {
-  color: var(--hc-accent, #007AFF);
+  color: var(--hc-accent, #007aff);
   background: rgba(0, 122, 255, 0.1);
   animation: hc-speak-pulse 1.4s ease-in-out infinite;
 }
 
 @keyframes hc-speak-pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.55; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }
 
 .hc-msg-actions__btn--active {
-  color: var(--hc-accent, #007AFF);
+  color: var(--hc-accent, #007aff);
   background: rgba(0, 122, 255, 0.1);
 }
 
 .hc-msg-actions__btn--active-bad {
-  color: var(--hc-error, #FF3B30);
+  color: var(--hc-error, #ff3b30);
   background: rgba(255, 59, 48, 0.08);
 }
 
@@ -311,7 +386,8 @@ onBeforeUnmount(() => {
   position: absolute;
   right: 0;
   bottom: calc(100% + 7px);
-  min-width: 142px;
+  min-width: 112px;
+  max-width: 128px;
   padding: 5px;
   border: 0.5px solid var(--hc-border);
   border-radius: 11px;
@@ -322,6 +398,7 @@ onBeforeUnmount(() => {
 
 .hc-msg-actions__more-menu button {
   width: 100%;
+  height: 40px;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -333,6 +410,7 @@ onBeforeUnmount(() => {
   font: inherit;
   font-size: 12px;
   text-align: left;
+  white-space: nowrap;
   cursor: pointer;
 }
 
@@ -342,6 +420,16 @@ onBeforeUnmount(() => {
 
 .hc-msg-actions__more-menu .hc-msg-actions__danger {
   color: var(--hc-error);
+}
+
+.hc-msg-actions__more-menu .hc-msg-actions__danger:disabled {
+  color: var(--hc-text-muted);
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.hc-msg-actions__more-menu .hc-msg-actions__danger:disabled:hover {
+  background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

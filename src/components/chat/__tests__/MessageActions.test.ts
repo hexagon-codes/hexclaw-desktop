@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import MessageActions from '../MessageActions.vue'
+import messageActionsSource from '../MessageActions.vue?raw'
 
 const { speakMock, stopMock, toastError, voiceError, isSpeaking } = vi.hoisted(() => ({
   speakMock: vi.fn(),
@@ -91,7 +92,9 @@ describe('MessageActions', () => {
 
   // Bug 复现(2026-06-25): 喇叭点了没反应 —— speak() 把后端错误(如 TTS 未配置)静默吞掉、零反馈。
   it('surfaces TTS failure via toast when speak fails', async () => {
-    speakMock.mockImplementation(async () => { voiceError.value = 'TTS 服务未配置' })
+    speakMock.mockImplementation(async () => {
+      voiceError.value = 'TTS 服务未配置'
+    })
     const wrapper = mountMessageActions(null)
     // 顺序: like(0) dislike(1) copy(2) speak(3) retry(4)
     const speakBtn = wrapper.findAll('button')[3]
@@ -102,7 +105,9 @@ describe('MessageActions', () => {
   })
 
   it('does not toast when speak succeeds', async () => {
-    speakMock.mockImplementation(async () => { /* success: no error set */ })
+    speakMock.mockImplementation(async () => {
+      /* success: no error set */
+    })
     const wrapper = mountMessageActions(null)
     await wrapper.findAll('button')[3]?.trigger('click')
     await flushPromises()
@@ -138,41 +143,70 @@ describe('MessageActions', () => {
     expect(mountUserMessageActions().classes()).toContain('hc-msg-actions--user')
   })
 
-  it('keeps assistant delete inside the prototype More menu', async () => {
+  it('keeps assistant delete inside the More menu', async () => {
+    vi.useFakeTimers()
     const wrapper = mountMessageActions(null)
     expect(wrapper.find('.hc-msg-actions > [data-testid="message-delete"]').exists()).toBe(false)
     await wrapper.get('[data-testid="message-more"]').trigger('click')
     const deleteBtn = wrapper.get('[data-testid="message-delete"]')
     expect(deleteBtn.attributes('title')).toBe(zhCN.common.delete)
     expect(deleteBtn.text()).toBe('删除')
+    expect(deleteBtn.attributes('disabled')).toBeDefined()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(deleteBtn.attributes('disabled')).toBeUndefined()
+    expect(wrapper.get('[data-testid="message-fork"]').text()).toContain('创建分支')
     await deleteBtn.trigger('click')
     expect(wrapper.emitted('delete')).toHaveLength(1)
+    vi.useRealTimers()
   })
 
-  it('keeps user delete inside the prototype More menu', async () => {
+  it('keeps user delete inside the More menu', async () => {
+    vi.useFakeTimers()
     const wrapper = mountUserMessageActions()
     expect(wrapper.find('.hc-msg-actions > [data-testid="message-delete"]').exists()).toBe(false)
     await wrapper.get('[data-testid="message-more"]').trigger('click')
     const deleteBtn = wrapper.get('[data-testid="message-delete"]')
     expect(deleteBtn.attributes('title')).toBe(zhCN.common.delete)
     expect(deleteBtn.text()).toBe('删除')
+    expect(deleteBtn.attributes('disabled')).toBeDefined()
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(deleteBtn.attributes('disabled')).toBeUndefined()
     await deleteBtn.trigger('click')
     expect(wrapper.emitted('delete')).toHaveLength(1)
+    vi.useRealTimers()
   })
 
-  it('closes the More menu from document Escape and restores focus in WebKit-compatible flow', async () => {
+  it('closes the More menu with Escape, resets delete cooldown, and restores trigger focus', async () => {
+    vi.useFakeTimers()
     const wrapper = mountMessageActions(null)
     document.body.appendChild(wrapper.element)
     const moreButton = wrapper.get<HTMLButtonElement>('[data-testid="message-more"]')
 
     await moreButton.trigger('click')
-    expect(wrapper.get('[role="menu"]').isVisible()).toBe(true)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(wrapper.get('[data-testid="message-delete"]').attributes('disabled')).toBeUndefined()
+
     moreButton.element.blur()
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await wrapper.vm.$nextTick()
 
     expect(wrapper.get('[role="menu"]').isVisible()).toBe(false)
     expect(document.activeElement).toBe(moreButton.element)
+
+    await moreButton.trigger('click')
+    expect(wrapper.get('[data-testid="message-delete"]').attributes('disabled')).toBeDefined()
     wrapper.unmount()
+    vi.useRealTimers()
+  })
+
+  it('keeps the destructive menu compact while retaining an explicit trash icon and label', () => {
+    expect(messageActionsSource).toContain('import {\n  Copy,')
+    expect(messageActionsSource).toContain('Trash2')
+    expect(messageActionsSource).toMatch(
+      /\.hc-msg-actions__more-menu\s*\{[^}]*min-width:\s*112px[^}]*max-width:\s*128px/s,
+    )
+    expect(messageActionsSource).toMatch(
+      /\.hc-msg-actions__more-menu button\s*\{[^}]*height:\s*40px[^}]*white-space:\s*nowrap/s,
+    )
   })
 })

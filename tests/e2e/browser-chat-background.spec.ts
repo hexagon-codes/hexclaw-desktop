@@ -33,7 +33,13 @@ const initialSessions: SessionRow[] = [
 ]
 
 const moreSessions: SessionRow[] = [
-  { id: 's-more', title: '更早的会话', created_at: '2026-04-06T10:00:00.000Z', updated_at: '2026-04-06T10:00:00.000Z', message_count: 1 },
+  {
+    id: 's-more',
+    title: '更早的会话',
+    created_at: '2026-04-06T10:00:00.000Z',
+    updated_at: '2026-04-06T10:00:00.000Z',
+    message_count: 1,
+  },
 ]
 
 function json(route: Route, body: unknown, status = 200) {
@@ -46,21 +52,31 @@ function json(route: Route, body: unknown, status = 200) {
 
 async function installMockBackend(page: Page) {
   const messagesBySession = new Map<string, MessageRow[]>([
-    ['s-active', [
-      { id: 'm-active-user', role: 'user', content: '当前会话问题', timestamp: now, created_at: now },
-      {
-        id: 'm-active-assistant',
-        role: 'assistant',
-        content: '当前会话回答',
-        timestamp: now,
-        created_at: now,
-        agent_name: '小王的辅导助手 · 五年级',
-        metadata: { provider: 'Ollama (本地)', model: 'qwen3.5:9b' },
-      },
-    ]],
-    ['s-bg', [
-      { id: 'm-bg-user', role: 'user', content: '后台会话问题', timestamp: now, created_at: now },
-    ]],
+    [
+      's-active',
+      [
+        {
+          id: 'm-active-user',
+          role: 'user',
+          content: '当前会话问题',
+          timestamp: now,
+          created_at: now,
+        },
+        {
+          id: 'm-active-assistant',
+          role: 'assistant',
+          content: '当前会话回答',
+          timestamp: now,
+          created_at: now,
+          agent_name: '小王的辅导助手 · 五年级',
+          metadata: { provider: 'Ollama (本地)', model: 'qwen3.5:9b' },
+        },
+      ],
+    ],
+    [
+      's-bg',
+      [{ id: 'm-bg-user', role: 'user', content: '后台会话问题', timestamp: now, created_at: now }],
+    ],
   ])
 
   await page.exposeFunction('e2ePersistAssistant', (sessionId: string, content: string) => {
@@ -105,28 +121,45 @@ async function installMockBackend(page: Page) {
       }
 
       send(raw: string) {
-        const payload = JSON.parse(raw) as { type?: string; session_id?: string; request_id?: string }
-        if (payload.type === 'resume' && payload.session_id === 's-bg' && payload.request_id === 'req-bg') {
-          this.emit({
-            type: 'stream_snapshot',
-            session_id: 's-bg',
-            request_id: 'req-bg',
-            content: '后台生成中',
-            done: false,
-            metadata: { provider: 'MockProvider', model: 'mock-chat' },
-          }, 20)
-          this.emit({
-            type: 'chunk',
-            session_id: 's-bg',
-            request_id: 'req-bg',
-            content: '，继续生成',
-            done: false,
-            metadata: { provider: 'MockProvider', model: 'mock-chat' },
-          }, 80)
+        const payload = JSON.parse(raw) as {
+          type?: string
+          session_id?: string
+          request_id?: string
+        }
+        if (
+          payload.type === 'resume' &&
+          payload.session_id === 's-bg' &&
+          payload.request_id === 'req-bg'
+        ) {
+          this.emit(
+            {
+              type: 'stream_snapshot',
+              session_id: 's-bg',
+              request_id: 'req-bg',
+              content: '后台生成中',
+              done: false,
+              metadata: { provider: 'MockProvider', model: 'mock-chat' },
+            },
+            20,
+          )
+          this.emit(
+            {
+              type: 'chunk',
+              session_id: 's-bg',
+              request_id: 'req-bg',
+              content: '，继续生成',
+              done: false,
+              metadata: { provider: 'MockProvider', model: 'mock-chat' },
+            },
+            80,
+          )
           setTimeout(() => {
             const content = '后台生成完成'
-            void (window as unknown as { e2ePersistAssistant?: (sessionId: string, content: string) => Promise<void> })
-              .e2ePersistAssistant?.('s-bg', content)
+            void (
+              window as unknown as {
+                e2ePersistAssistant?: (sessionId: string, content: string) => Promise<void>
+              }
+            ).e2ePersistAssistant?.('s-bg', content)
             this.dispatchMessage({
               type: 'reply',
               session_id: 's-bg',
@@ -140,13 +173,16 @@ async function installMockBackend(page: Page) {
 
         if (payload.type === 'message') {
           const sessionId = payload.session_id ?? 's-active'
-          this.emit({
-            type: 'reply',
-            session_id: sessionId,
-            request_id: payload.request_id,
-            content: '新消息回复完成',
-            metadata: { provider: 'MockProvider', model: 'mock-chat' },
-          }, 60)
+          this.emit(
+            {
+              type: 'reply',
+              session_id: sessionId,
+              request_id: payload.request_id,
+              content: '新消息回复完成',
+              metadata: { provider: 'MockProvider', model: 'mock-chat' },
+            },
+            60,
+          )
         }
       }
 
@@ -216,17 +252,19 @@ async function installMockBackend(page: Page) {
 
     if (path === '/api/v1/streams/active') {
       return json(route, {
-        streams: [{
-          request_id: 'req-bg',
-          session_id: 's-bg',
-          user_id: 'desktop-user',
-          content: '后台生成中',
-          done: false,
-          status: 'streaming',
-          metadata: { provider: 'MockProvider', model: 'mock-chat' },
-          started_at: now,
-          updated_at: now,
-        }],
+        streams: [
+          {
+            request_id: 'req-bg',
+            session_id: 's-bg',
+            user_id: 'desktop-user',
+            content: '后台生成中',
+            done: false,
+            status: 'streaming',
+            metadata: { provider: 'MockProvider', model: 'mock-chat' },
+            started_at: now,
+            updated_at: now,
+          },
+        ],
         total: 1,
       })
     }
@@ -248,18 +286,20 @@ async function installMockBackend(page: Page) {
       return json(route, {
         query: requestUrl.searchParams.get('q') ?? '',
         total: 1,
-        results: [{
-          session_title: '搜索命中的会话',
-          rank: 1,
-          message: {
-            id: 'm-found',
-            session_id: 's-found',
-            role: 'assistant',
-            content: '这是跨会话搜索命中的片段',
-            timestamp: now,
-            created_at: now,
+        results: [
+          {
+            session_title: '搜索命中的会话',
+            rank: 1,
+            message: {
+              id: 'm-found',
+              session_id: 's-found',
+              role: 'assistant',
+              content: '这是跨会话搜索命中的片段',
+              timestamp: now,
+              created_at: now,
+            },
           },
-        }],
+        ],
       })
     }
 
@@ -298,7 +338,9 @@ async function expectWorkspaceMode(page: Page, mode: ChatWorkspaceMode) {
   }
 }
 
-test('browser moves a pinned session into the first pinned section exactly once', async ({ page }) => {
+test('browser moves a pinned session into the first pinned section exactly once', async ({
+  page,
+}) => {
   await installMockBackend(page)
   await page.goto('/chat')
 
@@ -321,7 +363,9 @@ test('browser moves a pinned session into the first pinned section exactly once'
   await expect(backgroundRow).not.toHaveClass(/hc-sessions__item--pinned/)
 })
 
-test('browser restores background stream, keeps session state isolated, and supports session history controls', async ({ page }) => {
+test('browser restores background stream, keeps session state isolated, and supports session history controls', async ({
+  page,
+}) => {
   await installMockBackend(page)
 
   await page.goto('/chat')
@@ -386,7 +430,9 @@ test('browser restores background stream, keeps session state isolated, and supp
   })
   await backgroundRow.screenshot({ path: 'test-results/chat-session-row-hover@2x.png' })
 
-  const primaryColor = await backgroundRow.locator('.hc-sessions__title').evaluate((el) => getComputedStyle(el).color)
+  const primaryColor = await backgroundRow
+    .locator('.hc-sessions__title')
+    .evaluate((el) => getComputedStyle(el).color)
   await pinAction.hover()
   await expect(pinAction).toHaveCSS('color', primaryColor)
   await expect(actionsTrigger).toHaveCSS('color', 'rgb(142, 142, 142)')
@@ -438,7 +484,9 @@ test('browser restores background stream, keeps session state isolated, and supp
   await expect(page.locator('.hc-chat__thread')).toContainText('当前会话回答')
   await expect(page.locator('.hc-chat__thread')).not.toContainText('后台生成完成')
 
-  await expect(page.locator('[data-session-id="s-bg"] .hc-sessions__spinner')).toBeHidden({ timeout: 5_000 })
+  await expect(page.locator('[data-session-id="s-bg"] .hc-sessions__spinner')).toBeHidden({
+    timeout: 5_000,
+  })
 
   await page.locator('[data-session-id="s-bg"]').click()
   await expect(page.locator('.hc-chat__thread')).toContainText('后台生成完成')
@@ -472,7 +520,10 @@ test('browser restores background stream, keeps session state isolated, and supp
   await confirmDialog.getByRole('button', { name: '删除' }).click()
   await expect(olderRow).toHaveCount(0)
 
-  await page.screenshot({ path: 'test-results/chat-session-actions-and-search.png', fullPage: true })
+  await page.screenshot({
+    path: 'test-results/chat-session-actions-and-search.png',
+    fullPage: true,
+  })
 })
 
 test('browser keeps sessions, artifacts, context, and focus as one mutually exclusive workspace state', async ({
@@ -507,12 +558,12 @@ test('browser keeps sessions, artifacts, context, and focus as one mutually excl
   await artifactsButton.click()
   await expectWorkspaceMode(page, 'artifacts')
   await artifactsButton.click()
-  await expectWorkspaceMode(page, 'focus')
+  await expectWorkspaceMode(page, 'sessions')
 
   await contextButton.click()
   await expectWorkspaceMode(page, 'context')
   await page.locator('.hc-inspector__btn').dblclick()
-  await expectWorkspaceMode(page, 'focus')
+  await expectWorkspaceMode(page, 'sessions')
 
   // 从右侧面板直接切到另一右侧面板，两者必须互斥；再切 sessions 也必须关闭右侧面板。
   await artifactsButton.click()
@@ -521,7 +572,12 @@ test('browser keeps sessions, artifacts, context, and focus as one mutually excl
   await expectWorkspaceMode(page, 'context')
   await sessionsButton.click()
   await expectWorkspaceMode(page, 'sessions')
+  // 用户显式折叠会话栏后，关闭右侧工作区保持全宽对话。
   await sessionsButton.click()
+  await expectWorkspaceMode(page, 'focus')
+  await artifactsButton.click()
+  await expectWorkspaceMode(page, 'artifacts')
+  await artifactsButton.click()
   await expectWorkspaceMode(page, 'focus')
 
   const focusGeometry = await assistantRow.evaluate((row) => {

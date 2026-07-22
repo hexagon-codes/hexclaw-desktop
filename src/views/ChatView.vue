@@ -61,7 +61,10 @@ import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import SessionList from '@/components/chat/SessionList.vue'
 import ChatToolbar from '@/components/chat/ChatToolbar.vue'
-import type { ChatWorkspaceMode } from '@/components/chat/workspace-mode'
+import {
+  workspaceAfterRightPanelClose,
+  type ChatWorkspaceMode,
+} from '@/components/chat/workspace-mode'
 import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import AgentBadge from '@/components/chat/AgentBadge.vue'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
@@ -155,8 +158,21 @@ const userScrolledUp = ref(false)
 const chatWorkspaceMode = ref<ChatWorkspaceMode>(
   chatStore.showArtifacts ? 'artifacts' : appStore.detailPanelOpen ? 'context' : 'sessions',
 )
+// 右侧工作区临时挤出会话栏；只有用户点击左侧按钮时才记为明确折叠。
+const sessionsCollapsedByUser = ref(false)
 const showSessions = computed(() => chatWorkspaceMode.value === 'sessions')
 const isConversationOnly = computed(() => chatWorkspaceMode.value === 'focus')
+
+function restoreWorkspaceAfterRightPanelClose() {
+  chatWorkspaceMode.value = workspaceAfterRightPanelClose(sessionsCollapsedByUser.value)
+}
+
+function onWorkspaceModeChange(next: ChatWorkspaceMode) {
+  const current = chatWorkspaceMode.value
+  if (next === 'sessions') sessionsCollapsedByUser.value = false
+  else if (current === 'sessions' && next === 'focus') sessionsCollapsedByUser.value = true
+  chatWorkspaceMode.value = next
+}
 
 function syncWorkspaceModeProjection(mode: ChatWorkspaceMode) {
   const artifactsOpen = mode === 'artifacts'
@@ -172,7 +188,7 @@ watch(
   () => chatStore.showArtifacts,
   (open) => {
     if (open && chatWorkspaceMode.value !== 'artifacts') chatWorkspaceMode.value = 'artifacts'
-    else if (!open && chatWorkspaceMode.value === 'artifacts') chatWorkspaceMode.value = 'focus'
+    else if (!open && chatWorkspaceMode.value === 'artifacts') restoreWorkspaceAfterRightPanelClose()
   },
   { flush: 'sync' },
 )
@@ -180,7 +196,7 @@ watch(
   () => appStore.detailPanelOpen,
   (open) => {
     if (open && chatWorkspaceMode.value !== 'context') chatWorkspaceMode.value = 'context'
-    else if (!open && chatWorkspaceMode.value === 'context') chatWorkspaceMode.value = 'focus'
+    else if (!open && chatWorkspaceMode.value === 'context') restoreWorkspaceAfterRightPanelClose()
   },
   { flush: 'sync' },
 )
@@ -1199,7 +1215,15 @@ onMounted(async () => {
     chatStore.hasCustomTitle = true
     // 持久化会话→Agent 绑定：切走再切回该会话时确定性恢复辅导老师人设 + 场景增强（BUG-20260708）。
     if (chatStore.currentSessionId) bindSessionAgent(chatStore.currentSessionId, roleQuery)
-    router.replace({ path: '/chat' })
+    // 只消费本段负责的 Agent 深链参数；`scenarioTab` 等同路由状态属于场景增强，
+    // 必须继续交给对应组件处理，不能在绑定 Agent 后一并清空。
+    const remainingQuery = { ...route.query }
+    delete remainingQuery.role
+    delete remainingQuery.roleTitle
+    router.replace({
+      path: '/chat',
+      ...(Object.keys(remainingQuery).length > 0 ? { query: remainingQuery } : {}),
+    })
   }
 
   // 先同步 Ollama 列表再初始化模型 —— 否则 loadLLMConfig 在 ollamaModelsCache 仍空时会把默认模型判空
@@ -2191,9 +2215,10 @@ function startSidebarResize(event: MouseEvent) {
       </Transition>
       <!-- Compact toolbar -->
       <ChatToolbar
-        v-model:workspace-mode="chatWorkspaceMode"
+        :workspace-mode="chatWorkspaceMode"
         :message-count="chatStore.messages.length"
         :token-badge="t('chat.aboutTokens', { n: formatTokenCount(estimatedTokens) })"
+        @update:workspace-mode="onWorkspaceModeChange"
       />
 
       <!-- 场景包会话增强（场景实例声明的头部 tab / 记录视图 / 侧栏产物）；shell 只渲染 registry 组件 -->
@@ -3141,7 +3166,7 @@ function startSidebarResize(event: MouseEvent) {
         v-if="chatWorkspaceMode === 'artifacts'"
         :artifacts="chatStore.artifacts"
         :selected-id="chatStore.selectedArtifactId"
-        @close="chatWorkspaceMode = 'focus'"
+        @close="restoreWorkspaceAfterRightPanelClose"
         @select="chatStore.selectArtifact($event)"
       />
     </Transition>

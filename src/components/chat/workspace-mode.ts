@@ -9,3 +9,8 @@ export function toggleChatWorkspaceEntry(
 ): ChatWorkspaceMode {
   return current === entry ? 'focus' : entry
 }
+
+/** Closing a right-side workspace restores the session rail unless the user hid it. */
+export function workspaceAfterRightPanelClose(sessionsCollapsedByUser: boolean): ChatWorkspaceMode {
+  return sessionsCollapsedByUser ? 'focus' : 'sessions'
+}
