@@ -959,9 +959,8 @@ describe('8. Security: v-html sanitization audit', () => {
     expect(content).toContain('DOMPurify.sanitize')
     expect(content).toContain('v-html="rendered"')
     // Verify sanitize wraps the markdown render output
-    expect(content).toContain(
-      'DOMPurify.sanitize(mdInstance.value.render(normalizeMathMarkdown(canonicalMarkdown.value)))',
-    )
+    expect(content).toContain('DOMPurify.sanitize(')
+    expect(content).toContain('KATEX_DOMPURIFY_CONFIG')
   })
 
   it('MarkdownRenderer.vue: markdown-it has html:false (prevents raw HTML injection)', () => {

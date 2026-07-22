@@ -42,6 +42,20 @@ describe('MarkdownRenderer · KaTeX (M1-1)', () => {
     expect(html).toContain('katex-display')
   })
 
+  it('净化后保留 KaTeX TeX annotation，供 MathML 语义、复制与辅助技术使用', () => {
+    const wrapper = render([
+      String.raw`行内 $\frac{1}{2}$`,
+      '',
+      '块级：',
+      '',
+      String.raw`$$\frac{5}{6}$$`,
+    ].join('\n'))
+    const annotations = wrapper.findAll('annotation[encoding="application/x-tex"]')
+
+    expect(annotations).toHaveLength(2)
+    expect(annotations.map((node) => node.text())).toEqual(['\\frac{1}{2}', '\\frac{5}{6}'])
+  })
+
   it.each([
     String.raw`\(\frac{3}{4}\)`,
     String.raw`\\(\\frac{3}{4}\\)`,

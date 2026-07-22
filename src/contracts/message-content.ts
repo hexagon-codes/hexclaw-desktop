@@ -69,7 +69,7 @@ export interface RenderManifest {
 
 const SHA256 = /^sha256:[0-9a-f]{64}$/
 const CONTENT_ID = /^content:[0-9a-f]{64}$/
-const RAW_TEX = /(\\(?:frac|sqrt|sum|int|begin|left|right|times|cdot|leq|geq|alpha|beta)\b|\$[^$\n]+\$|\\\(|\\\[)/s
+const RAW_TEX = /(\\(?:frac|sqrt|sum|int|begin|left|right|times|cdot|leq|geq|alpha|beta)\b|\\[,;:!]|\$[^$\n]+\$|\\\(|\\\[)/s
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

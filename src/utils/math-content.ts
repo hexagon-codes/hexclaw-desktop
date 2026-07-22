@@ -1,4 +1,17 @@
 import { normalizePastedText } from './chat-compose'
+import type { Config } from 'dompurify'
+
+/**
+ * DOMPurify intentionally drops MathML <annotation> by default. KaTeX places
+ * the original TeX source in exactly that text-only element, which screen
+ * readers, copy/paste recovery and our canonical rendering contract rely on.
+ * Keep the exception narrow: no raw HTML is enabled and no executable tag or
+ * event attribute is added.
+ */
+export const KATEX_DOMPURIFY_CONFIG: Config = {
+  ADD_TAGS: ['annotation'],
+  ADD_ATTR: ['encoding'],
+}
 
 export interface ClipboardDataLike {
   getData(type: string): string

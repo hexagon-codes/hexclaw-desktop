@@ -231,9 +231,8 @@ describe('DOMPurify + markdown-it double defense in MarkdownRenderer', () => {
   })
 
   it('runs DOMPurify.sanitize on the rendered markdown output', () => {
-    expect(md).toContain(
-      'DOMPurify.sanitize(mdInstance.value.render(normalizeMathMarkdown(canonicalMarkdown.value)))',
-    )
+    expect(md).toContain('DOMPurify.sanitize(')
+    expect(md).toContain('KATEX_DOMPURIFY_CONFIG')
   })
 
   it('imports DOMPurify explicitly', () => {

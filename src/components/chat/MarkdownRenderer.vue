@@ -9,7 +9,7 @@ import { katex } from '@mdit/plugin-katex'
 import 'katex/contrib/mhchem'
 import ArtifactRenderer from '@/components/chat/ArtifactRenderer.vue'
 import { setClipboard } from '@/api/desktop'
-import { normalizeMathMarkdown } from '@/utils/math-content'
+import { KATEX_DOMPURIFY_CONFIG, normalizeMathMarkdown } from '@/utils/math-content'
 import {
   createRenderManifest,
   resolveMessageContent,
@@ -214,7 +214,10 @@ watch(canonicalMarkdown, (content) => {
 
 const rendered = computed(() => {
   void renderVersion.value
-  return DOMPurify.sanitize(mdInstance.value.render(normalizeMathMarkdown(canonicalMarkdown.value)))
+  return DOMPurify.sanitize(
+    mdInstance.value.render(normalizeMathMarkdown(canonicalMarkdown.value)),
+    KATEX_DOMPURIFY_CONFIG,
+  )
 })
 
 const renderManifest = computed<RenderManifest | undefined>(() => {

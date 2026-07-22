@@ -4,7 +4,11 @@ import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronUp } from 'lucide-vue-next'
 import katex from 'katex'
 import DOMPurify from 'dompurify'
-import { plainMathSegments, type PlainMathSegment } from '@/utils/math-content'
+import {
+  KATEX_DOMPURIFY_CONFIG,
+  plainMathSegments,
+  type PlainMathSegment,
+} from '@/utils/math-content'
 
 /**
  * 用户消息纯文本渲染：
@@ -38,7 +42,7 @@ const renderedSegments = computed<RenderedSegment[]>(() => plainMathSegments(pro
         trust: false,
         strict: 'warn',
         errorColor: 'var(--hc-text-primary)',
-      })),
+      }), KATEX_DOMPURIFY_CONFIG),
     }
   } catch {
     return { type: 'text' as const, content: segment.source, source: segment.source }

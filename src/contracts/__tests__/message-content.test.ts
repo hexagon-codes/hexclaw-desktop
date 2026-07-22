@@ -84,4 +84,16 @@ describe('MessageContent + RenderManifest protocol', () => {
       parts: [{ kind: 'text', text: canonical.markdown }],
     })).toThrow(/raw LaTeX|fallback/)
   })
+
+  it('rejects a leaked LaTeX spacing command on a non-TeX surface', () => {
+    const spacingContent = { ...canonical, markdown: '$12 \\, \\mathrm{cm}$' }
+    expect(() => createRenderManifest(spacingContent, {
+      renderId: 'render-spacing',
+      surface: 'channel',
+      rendererVersion: 'channel-markdown-readable-math-v1',
+      capabilities: { markdown: true, tex_math: false, unicode_math: true },
+      parts: [{ kind: 'markdown', text: '12 \\,cm' }],
+      fallbackReason: 'math_to_readable_text',
+    })).toThrow(/raw LaTeX/)
+  })
 })

@@ -61,6 +61,7 @@ describe('MessageText — bug-20260623 user message newline + collapse', () => {
 
     expect(el.find('.katex').exists()).toBe(true)
     expect(el.find('math mfrac').exists()).toBe(true)
+    expect(el.find('annotation[encoding="application/x-tex"]').text()).toBe('\\frac{3}{4}')
     expect(el.text()).toContain('**题目**')
     expect(el.find('strong').exists()).toBe(false)
     const visibleText = el.element.cloneNode(true) as HTMLElement
