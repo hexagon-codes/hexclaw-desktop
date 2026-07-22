@@ -143,9 +143,14 @@ describe('BUG-20260710 ① · K12 卡删除入口下沉', () => {
     openBtn!.click()
     await flushPromises()
 
-    // 二次确认后才真正删除
-    const confirmBtn = document.body.querySelector('[data-testid="k12pf-delete-confirm"]') as HTMLElement | null
-    expect(!!confirmBtn, '删除必须有二次确认').toBe(true)
+    // 二次确认后才真正删除。平台 ConfirmDialog 以 alertdialog + 可访问按钮名称为稳定契约，
+    // 不再依赖已移除的 K12 私有 data-testid。
+    const dialog = document.body.querySelector('[role="alertdialog"]') as HTMLElement | null
+    expect(!!dialog, '删除必须打开二次确认对话框').toBe(true)
+    const confirmBtn = Array.from(dialog!.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === '删除',
+    ) as HTMLElement | undefined
+    expect(!!confirmBtn, '二次确认对话框必须提供可访问名称为“删除”的确认按钮').toBe(true)
     confirmBtn!.click()
     await flushPromises()
 

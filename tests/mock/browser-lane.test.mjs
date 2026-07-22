@@ -53,7 +53,9 @@ test('browser mock K12 spec covers the mixed worksheet business chain without re
     'recognized student answers are reviewed only after the recognition confirmation gate',
   )
 
-  const recordsTab = spec.indexOf("hasText: '学习档案'")
+  const recordsTab = spec.indexOf(
+    "getByRole('tab', { name: '学习档案', exact: true }).click()",
+  )
   const mistakesTab = spec.indexOf("getByTestId('subtab-mistakes').click()")
   assert.ok(
     recordsTab >= 0 && mistakesTab > recordsTab,

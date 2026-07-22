@@ -16,6 +16,13 @@ describe('desktop page density and responsive style contracts', () => {
       /\.hc-model-chips\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*172px\),\s*1fr\)\)/s,
     )
     expect(settings).toMatch(/\.hc-model-chip__cap\s*\{[^}]*white-space:\s*nowrap/s)
+    expect(settings).toMatch(/\.hc-model-chip__name\s*\{[^}]*flex:\s*1 1 auto/s)
+    expect(settings).toMatch(
+      /\.hc-model-chip__free-label\s*\{[^}]*flex:\s*none[^}]*white-space:\s*nowrap/s,
+    )
+    expect(settings).toMatch(
+      /\.hc-model-chip__cap\s*\{[^}]*flex:\s*none[^}]*white-space:\s*nowrap/s,
+    )
   })
 
   it('renders the MCP marketplace as the prototype adaptive card grid', () => {
@@ -42,9 +49,7 @@ describe('desktop page density and responsive style contracts', () => {
   it('aligns semantic index with the memory settings disclosure shell', () => {
     const semanticIndex = source('components/knowledge/SemanticIndexCard.vue')
 
-    expect(semanticIndex).toMatch(
-      /\.kb-index-card\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/s,
-    )
+    expect(semanticIndex).toMatch(/\.kb-index-card\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/s)
     expect(semanticIndex).toMatch(
       /\.kb-index-card__header\s*\{[^}]*gap:\s*6px[^}]*padding:\s*0[^}]*border:\s*0[^}]*background:\s*transparent[^}]*font-size:\s*12px/s,
     )

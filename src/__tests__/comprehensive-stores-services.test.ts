@@ -60,7 +60,11 @@ vi.mock('@/services/messageService', () => mockMsgSvc)
 // --- chatService ---
 class MockChatRequestError extends Error {
   noFallback: boolean
-  constructor(m: string, nf = false) { super(m); this.name = 'ChatRequestError'; this.noFallback = nf }
+  constructor(m: string, nf = false) {
+    super(m)
+    this.name = 'ChatRequestError'
+    this.noFallback = nf
+  }
 }
 const mockChatSvc = {
   sendViaWebSocket: vi.fn().mockResolvedValue(undefined),
@@ -82,19 +86,42 @@ vi.mock('@/services/chatService', () => mockChatSvc)
 // --- websocket ---
 type AnyFn = (...args: unknown[]) => unknown
 const wsCallbacks: { approval: AnyFn[]; chunk: AnyFn[]; reply: AnyFn[]; error: AnyFn[] } = {
-  approval: [], chunk: [], reply: [], error: [],
+  approval: [],
+  chunk: [],
+  reply: [],
+  error: [],
 }
 const mockHexclawWS = {
-  onApprovalRequest: vi.fn((cb: AnyFn) => { wsCallbacks.approval.push(cb); return () => { wsCallbacks.approval = wsCallbacks.approval.filter(c => c !== cb) } }),
+  onApprovalRequest: vi.fn((cb: AnyFn) => {
+    wsCallbacks.approval.push(cb)
+    return () => {
+      wsCallbacks.approval = wsCallbacks.approval.filter((c) => c !== cb)
+    }
+  }),
   sendApprovalResponse: vi.fn(),
   sendRaw: vi.fn(),
   clearStreamCallbacks: vi.fn(),
   triggerError: vi.fn(),
   isConnected: vi.fn(() => true),
   connect: vi.fn().mockResolvedValue(undefined),
-  onChunk: vi.fn((cb: AnyFn) => { wsCallbacks.chunk.push(cb); return () => { wsCallbacks.chunk = wsCallbacks.chunk.filter(c => c !== cb) } }),
-  onReply: vi.fn((cb: AnyFn) => { wsCallbacks.reply.push(cb); return () => { wsCallbacks.reply = wsCallbacks.reply.filter(c => c !== cb) } }),
-  onError: vi.fn((cb: AnyFn) => { wsCallbacks.error.push(cb); return () => { wsCallbacks.error = wsCallbacks.error.filter(c => c !== cb) } }),
+  onChunk: vi.fn((cb: AnyFn) => {
+    wsCallbacks.chunk.push(cb)
+    return () => {
+      wsCallbacks.chunk = wsCallbacks.chunk.filter((c) => c !== cb)
+    }
+  }),
+  onReply: vi.fn((cb: AnyFn) => {
+    wsCallbacks.reply.push(cb)
+    return () => {
+      wsCallbacks.reply = wsCallbacks.reply.filter((c) => c !== cb)
+    }
+  }),
+  onError: vi.fn((cb: AnyFn) => {
+    wsCallbacks.error.push(cb)
+    return () => {
+      wsCallbacks.error = wsCallbacks.error.filter((c) => c !== cb)
+    }
+  }),
   sendMessage: vi.fn(),
 }
 vi.mock('@/api/websocket', () => ({
@@ -155,7 +182,8 @@ vi.mock('@/api/client', () => ({
 
 // --- config/env ---
 vi.mock('@/config/env', () => ({
-  OLLAMA_BASE: 'http://localhost:11434', env: { apiBase: 'http://localhost:23517', wsBase: 'ws://localhost:23517', timeout: 10000 },
+  OLLAMA_BASE: 'http://localhost:11434',
+  env: { apiBase: 'http://localhost:23517', wsBase: 'ws://localhost:23517', timeout: 10000 },
 }))
 
 // --- constants ---
@@ -174,8 +202,12 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@/stores/settings-helpers', () => ({
   cloneProviders: vi.fn((p: unknown[]) => JSON.parse(JSON.stringify(p))),
   mergeConfigProvidersWithRuntime: vi.fn((config: unknown[]) => [...config]),
-  resolveProviderSelectedModelId: vi.fn((p: { models?: { id: string }[] }) => p.models?.[0]?.id ?? ''),
-  resolveDefaultModelProviderId: vi.fn((_providers: unknown[], _model: string, existing: string) => existing),
+  resolveProviderSelectedModelId: vi.fn(
+    (p: { models?: { id: string }[] }) => p.models?.[0]?.id ?? '',
+  ),
+  resolveDefaultModelProviderId: vi.fn(
+    (_providers: unknown[], _model: string, existing: string) => existing,
+  ),
   ensureUniqueProviderName: vi.fn((name: string) => name),
   assertUniqueProviderNames: vi.fn(),
   reconcileDefaultSelection: vi.fn(),
@@ -183,11 +215,23 @@ vi.mock('@/stores/settings-helpers', () => ({
   materializeProviderApiKeys: vi.fn(async (p: unknown[]) => p),
   syncProviderApiKeys: vi.fn(async () => {}),
   backendToProviders: vi.fn(() => []),
-  providersToBackend: vi.fn(() => ({ providers: {}, default: '', routing: { enabled: false, strategy: 'cost-aware' } })),
+  providersToBackend: vi.fn(() => ({
+    providers: {},
+    default: '',
+    routing: { enabled: false, strategy: 'cost-aware' },
+  })),
   appendLocalProvidersMissingFromRuntime: vi.fn((live: unknown[]) => live),
+  mergeProviderRuntimeIdentities: vi.fn((target: unknown[]) => target),
+  resolveLoadedDefaultSelection: vi.fn(
+    (_providers: unknown[], _backend: unknown, modelId: string, providerId: string) => ({
+      modelId,
+      providerId,
+    }),
+  ),
   providerMatchesBackendKey: vi.fn(() => false),
   isChatModelOption: vi.fn((model: { capabilities?: string[] }) =>
-    (model.capabilities ?? ['text']).includes('text')),
+    (model.capabilities ?? ['text']).includes('text'),
+  ),
 }))
 
 // ═══════════════════════════════════════════════════════
@@ -241,7 +285,12 @@ describe('Chat Store', () => {
     it('rapid session switching — stale loadMessages result is discarded (sessionSelectionGen guard)', async () => {
       let resolveFirst!: (msgs: never[]) => void
       mockMsgSvc.loadMessages
-        .mockImplementationOnce(() => new Promise(r => { resolveFirst = r }))
+        .mockImplementationOnce(
+          () =>
+            new Promise((r) => {
+              resolveFirst = r
+            }),
+        )
         .mockResolvedValueOnce([{ id: 'm2', role: 'user', content: 'second', timestamp: '' }])
 
       const store = await getChatStore()
@@ -253,7 +302,7 @@ describe('Chat Store', () => {
       await Promise.all([p1, p2])
 
       expect(store.currentSessionId).toBe('s2')
-      expect(store.messages.some(m => m.content === 'first')).toBe(false)
+      expect(store.messages.some((m) => m.content === 'first')).toBe(false)
     })
 
     it('cleans up streaming state from previous session', async () => {
@@ -353,7 +402,7 @@ describe('Chat Store', () => {
 
       store.stopStreaming()
 
-      const partialMsg = store.messages.find(m => m.content === 'partial answer')
+      const partialMsg = store.messages.find((m) => m.content === 'partial answer')
       expect(partialMsg).toBeDefined()
       expect(partialMsg!.role).toBe('assistant')
       expect(mockMsgSvc.persistMessage).toHaveBeenCalled()
@@ -389,7 +438,14 @@ describe('Chat Store', () => {
     it('empty content with reasoning -> shows a non-empty fallback message', async () => {
       mockChatSvc.ensureWebSocketConnected.mockResolvedValue(true)
       mockChatSvc.openWebSocketStream.mockImplementation(
-        (_text: string, _sessionId: string, _params: unknown, _role: string, _attachments: unknown, callbacks?: { onChunk?: (content: string, reasoning?: string) => void }) => {
+        (
+          _text: string,
+          _sessionId: string,
+          _params: unknown,
+          _role: string,
+          _attachments: unknown,
+          callbacks?: { onChunk?: (content: string, reasoning?: string) => void },
+        ) => {
           callbacks?.onChunk?.('', 'thought about it')
           return {
             cancel: vi.fn(),
@@ -415,7 +471,7 @@ describe('Chat Store', () => {
 
       // The finalizeAssistantMessage sets content = '' || (undefined ? '' : '(空回复)') = '(空回复)'
       expect(msg).not.toBeNull()
-      const assistantMsg = store.messages.find(m => m.role === 'assistant')
+      const assistantMsg = store.messages.find((m) => m.role === 'assistant')
       expect(assistantMsg?.content).toBe('这次没有生成可显示的回答，请重试或换个方式提问。')
     })
 
@@ -489,21 +545,27 @@ describe('Chat Store', () => {
       const store = await getChatStore()
       // Insert an assistant message with backend_message_id
       store.messages.push({
-        id: 'a1', role: 'assistant', content: 'Hi', timestamp: '',
+        id: 'a1',
+        role: 'assistant',
+        content: 'Hi',
+        timestamp: '',
         metadata: { backend_message_id: 'bm-1' },
       })
 
       mockApiChat.updateMessageFeedback.mockResolvedValue({})
       await store.setMessageFeedback('a1', 'like')
 
-      const updated = store.messages.find(m => m.id === 'a1')
+      const updated = store.messages.find((m) => m.id === 'a1')
       expect(updated?.metadata?.user_feedback).toBe('like')
     })
 
     it('rolls back on backend sync failure', async () => {
       const store = await getChatStore()
       store.messages.push({
-        id: 'a2', role: 'assistant', content: 'Hi', timestamp: '',
+        id: 'a2',
+        role: 'assistant',
+        content: 'Hi',
+        timestamp: '',
         metadata: { backend_message_id: 'bm-2' },
       })
 
@@ -511,7 +573,7 @@ describe('Chat Store', () => {
 
       await expect(store.setMessageFeedback('a2', 'dislike')).rejects.toThrow('sync fail')
       // After rollback, metadata should be restored to original (no user_feedback)
-      const msg = store.messages.find(m => m.id === 'a2')
+      const msg = store.messages.find((m) => m.id === 'a2')
       expect(msg?.metadata?.user_feedback).toBeUndefined()
     })
   })
@@ -523,8 +585,21 @@ describe('Chat Store', () => {
       const store = await getChatStore()
       store.currentSessionId = 'sess-del'
       store.messages = [{ id: 'm1', role: 'user', content: 'x', timestamp: '' }]
-      store.artifacts = [{ id: 'a1', type: 'code', title: 'x', language: 'js', content: 'x', messageId: 'm1', blockIndex: 0, createdAt: '' }]
-      store.sessions = [{ id: 'sess-del', title: 'Del', created_at: '', updated_at: '', message_count: 1 }]
+      store.artifacts = [
+        {
+          id: 'a1',
+          type: 'code',
+          title: 'x',
+          language: 'js',
+          content: 'x',
+          messageId: 'm1',
+          blockIndex: 0,
+          createdAt: '',
+        },
+      ]
+      store.sessions = [
+        { id: 'sess-del', title: 'Del', created_at: '', updated_at: '', message_count: 1 },
+      ]
 
       await store.deleteSession('sess-del')
 
@@ -600,7 +675,9 @@ describe('Settings Store', () => {
   describe('loadConfig()', () => {
     it('concurrent calls deduplicated (single load)', async () => {
       let resolveLoad!: () => void
-      const loadPromise = new Promise<void>(r => { resolveLoad = r })
+      const loadPromise = new Promise<void>((r) => {
+        resolveLoad = r
+      })
       // Track how many times doLoadConfig runs by spying on getLLMConfig
       mockApiConfig.getLLMConfig.mockImplementation(() => {
         return loadPromise.then(() => ({
@@ -690,7 +767,9 @@ describe('Settings Store', () => {
       expect(result).not.toBeNull()
       expect(result!.id).toBeTruthy()
       expect(result!.name).toBe('TestProvider')
-      expect(store.config!.llm.providers).toContainEqual(expect.objectContaining({ id: result!.id }))
+      expect(store.config!.llm.providers).toContainEqual(
+        expect.objectContaining({ id: result!.id }),
+      )
     })
 
     it('sets as default if no default exists', async () => {
@@ -723,8 +802,24 @@ describe('Settings Store', () => {
       await store.loadConfig()
 
       store.config!.llm.providers = [
-        { id: 'p1', name: 'P1', type: 'openai', enabled: true, apiKey: '', baseUrl: '', models: [] },
-        { id: 'p2', name: 'P2', type: 'openai', enabled: true, apiKey: '', baseUrl: '', models: [] },
+        {
+          id: 'p1',
+          name: 'P1',
+          type: 'openai',
+          enabled: true,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
+        {
+          id: 'p2',
+          name: 'P2',
+          type: 'openai',
+          enabled: true,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
       ]
       store.config!.llm.defaultProviderId = 'p1'
 
@@ -744,11 +839,35 @@ describe('Settings Store', () => {
       await store.loadConfig()
 
       store.config!.llm.providers = [
-        { id: 'p1', name: 'OpenAI', type: 'openai', enabled: true, apiKey: '', baseUrl: '', models: [] },
-        { id: 'p2', name: 'Disabled', type: 'openai', enabled: false, apiKey: '', baseUrl: '', models: [] },
+        {
+          id: 'p1',
+          name: 'OpenAI',
+          type: 'openai',
+          enabled: true,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
+        {
+          id: 'p2',
+          name: 'Disabled',
+          type: 'openai',
+          enabled: false,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
       ]
       store.runtimeProviders = [
-        { id: 'p1', name: 'OpenAI', type: 'openai', enabled: true, apiKey: '', baseUrl: '', models: [] },
+        {
+          id: 'p1',
+          name: 'OpenAI',
+          type: 'openai',
+          enabled: true,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
       ]
 
       // mergeConfigProvidersWithRuntime is mocked to return config providers
@@ -763,7 +882,15 @@ describe('Settings Store', () => {
       await store.loadConfig()
 
       store.config!.llm.providers = [
-        { id: 'p1', name: 'OpenAI', type: 'openai', enabled: true, apiKey: '', baseUrl: '', models: [] },
+        {
+          id: 'p1',
+          name: 'OpenAI',
+          type: 'openai',
+          enabled: true,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
       ]
       store.runtimeProviders = null
 
@@ -775,7 +902,15 @@ describe('Settings Store', () => {
       await store.loadConfig()
 
       store.config!.llm.providers = [
-        { id: 'p1', name: 'OpenAI', type: 'openai', enabled: true, apiKey: '', baseUrl: '', models: [] },
+        {
+          id: 'p1',
+          name: 'OpenAI',
+          type: 'openai',
+          enabled: true,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
       ]
       store.runtimeProviders = []
 
@@ -791,7 +926,15 @@ describe('Settings Store', () => {
       await store.loadConfig()
 
       store.config!.llm.providers = [
-        { id: 'ollama1', name: 'Ollama', type: 'ollama', enabled: true, apiKey: '', baseUrl: '', models: [] },
+        {
+          id: 'ollama1',
+          name: 'Ollama',
+          type: 'ollama',
+          enabled: true,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
       ]
       store.runtimeProviders = null
 
@@ -808,7 +951,7 @@ describe('Settings Store', () => {
 
       const models = store.availableModels
       expect(models.length).toBe(2)
-      expect(models.map(m => m.modelId)).toEqual(['llama3', 'mistral'])
+      expect(models.map((m) => m.modelId)).toEqual(['llama3', 'mistral'])
     })
   })
 
@@ -824,14 +967,22 @@ describe('Settings Store', () => {
       const store = await getSettingsStore()
       await store.loadConfig()
       store.config!.llm.providers = [
-        { id: 'ollama1', name: 'Ollama', type: 'ollama', enabled: true, apiKey: '', baseUrl: '', models: [] },
+        {
+          id: 'ollama1',
+          name: 'Ollama',
+          type: 'ollama',
+          enabled: true,
+          apiKey: '',
+          baseUrl: '',
+          models: [],
+        },
       ]
       store.runtimeProviders = null
 
       await store.syncOllamaModels()
 
       const models = store.availableModels
-      expect(models.some(m => m.modelId === 'codellama')).toBe(true)
+      expect(models.some((m) => m.modelId === 'codellama')).toBe(true)
     })
   })
 })
@@ -1000,13 +1151,15 @@ describe('Chat Service', () => {
     it('resolves before timeout -> returns value', async () => {
       // Import the real function from chatService mock
       // Since chatService is mocked, we test the concept directly
-      const { withTimeout } = await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
+      const { withTimeout } =
+        await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
       const result = await withTimeout(Promise.resolve(42), 1000, 'timed out')
       expect(result).toBe(42)
     })
 
     it('exceeds timeout -> rejects with message', async () => {
-      const { withTimeout } = await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
+      const { withTimeout } =
+        await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
       const neverResolves = new Promise(() => {})
       const p = withTimeout(neverResolves, 100, 'Request timed out')
       vi.advanceTimersByTime(150)
@@ -1022,7 +1175,8 @@ describe('Chat Service', () => {
     // We use vi.importActual to get the real implementation.
 
     async function getRealSendViaWebSocket() {
-      const mod = await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
+      const mod =
+        await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
       return mod.sendViaWebSocket
     }
 
@@ -1044,7 +1198,9 @@ describe('Chat Service', () => {
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
       // Find the chunk callback that was registered
-      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as AnyFn
+      const chunkCb = mockHexclawWS.onChunk.mock.calls[
+        mockHexclawWS.onChunk.mock.calls.length - 1
+      ]![0] as AnyFn
       chunkCb({
         type: 'chunk',
         content: 'answer text',
@@ -1064,7 +1220,9 @@ describe('Chat Service', () => {
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
-      const replyCb = mockHexclawWS.onReply.mock.calls[mockHexclawWS.onReply.mock.calls.length - 1]![0] as AnyFn
+      const replyCb = mockHexclawWS.onReply.mock.calls[
+        mockHexclawWS.onReply.mock.calls.length - 1
+      ]![0] as AnyFn
       replyCb({
         type: 'reply',
         content: 'full reply',
@@ -1088,7 +1246,9 @@ describe('Chat Service', () => {
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
-      const errorCb = mockHexclawWS.onError.mock.calls[mockHexclawWS.onError.mock.calls.length - 1]![0] as AnyFn
+      const errorCb = mockHexclawWS.onError.mock.calls[
+        mockHexclawWS.onError.mock.calls.length - 1
+      ]![0] as AnyFn
       errorCb('Backend processing error')
 
       let caught: unknown = null
@@ -1108,7 +1268,9 @@ describe('Chat Service', () => {
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
-      const errorCb = mockHexclawWS.onError.mock.calls[mockHexclawWS.onError.mock.calls.length - 1]![0] as AnyFn
+      const errorCb = mockHexclawWS.onError.mock.calls[
+        mockHexclawWS.onError.mock.calls.length - 1
+      ]![0] as AnyFn
       errorCb('用户取消')
 
       // Should resolve, not reject
@@ -1122,7 +1284,9 @@ describe('Chat Service', () => {
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
       // Send first chunk (not done) — this clears first-reply timer and starts inactivity timer
-      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as AnyFn
+      const chunkCb = mockHexclawWS.onChunk.mock.calls[
+        mockHexclawWS.onChunk.mock.calls.length - 1
+      ]![0] as AnyFn
       chunkCb({ type: 'chunk', content: 'partial', done: false })
 
       // Advance past inactivity timeout (300s，2026-07 从 120s 放宽)
@@ -1137,7 +1301,9 @@ describe('Chat Service', () => {
 
       const p = sendViaWebSocket('hello', 's1', {}, '', undefined, callbacks)
 
-      const chunkCb = mockHexclawWS.onChunk.mock.calls[mockHexclawWS.onChunk.mock.calls.length - 1]![0] as AnyFn
+      const chunkCb = mockHexclawWS.onChunk.mock.calls[
+        mockHexclawWS.onChunk.mock.calls.length - 1
+      ]![0] as AnyFn
 
       // First chunk starts inactivity timer
       chunkCb({ type: 'chunk', content: 'a', done: false })
@@ -1156,7 +1322,8 @@ describe('Chat Service', () => {
 
   describe('ensureWebSocketConnected()', () => {
     it('already connected -> returns true', async () => {
-      const { ensureWebSocketConnected } = await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
+      const { ensureWebSocketConnected } =
+        await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
       mockHexclawWS.isConnected.mockReturnValue(true)
 
       const result = await ensureWebSocketConnected()
@@ -1165,7 +1332,8 @@ describe('Chat Service', () => {
     })
 
     it('connect fails -> returns false', async () => {
-      const { ensureWebSocketConnected } = await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
+      const { ensureWebSocketConnected } =
+        await vi.importActual<typeof import('@/services/chatService')>('@/services/chatService')
       mockHexclawWS.isConnected.mockReturnValue(false)
       mockHexclawWS.connect.mockRejectedValueOnce(new Error('refused'))
 
@@ -1220,7 +1388,10 @@ describe('Message Service', () => {
     it('extracts tool_calls from metadata', async () => {
       const { normalizeLoadedMessage } = await getRealMessageService()
       const row = {
-        id: 'm1', role: 'assistant', content: 'hi', timestamp: '2026-01-01T00:00:00Z',
+        id: 'm1',
+        role: 'assistant',
+        content: 'hi',
+        timestamp: '2026-01-01T00:00:00Z',
         metadata: JSON.stringify({ tool_calls: [{ id: 't1', name: 'search', args: '{}' }] }),
       }
       const msg = normalizeLoadedMessage(row)
@@ -1231,7 +1402,10 @@ describe('Message Service', () => {
     it('extracts reasoning from metadata', async () => {
       const { normalizeLoadedMessage } = await getRealMessageService()
       const row = {
-        id: 'm2', role: 'assistant', content: 'answer', timestamp: '2026-01-01T00:00:00Z',
+        id: 'm2',
+        role: 'assistant',
+        content: 'answer',
+        timestamp: '2026-01-01T00:00:00Z',
         metadata: JSON.stringify({ reasoning: 'I thought about this carefully' }),
       }
       const msg = normalizeLoadedMessage(row)
@@ -1241,7 +1415,10 @@ describe('Message Service', () => {
     it('non-array tool_calls -> undefined', async () => {
       const { normalizeLoadedMessage } = await getRealMessageService()
       const row = {
-        id: 'm3', role: 'assistant', content: 'answer', timestamp: '2026-01-01T00:00:00Z',
+        id: 'm3',
+        role: 'assistant',
+        content: 'answer',
+        timestamp: '2026-01-01T00:00:00Z',
         metadata: JSON.stringify({ tool_calls: 'not-an-array' }),
       }
       const msg = normalizeLoadedMessage(row)
@@ -1255,7 +1432,10 @@ describe('Message Service', () => {
     it('includes tool_calls, agent_name, reasoning', async () => {
       const { serializeMessageMetadata } = await getRealMessageService()
       const msg = {
-        id: 'm1', role: 'assistant' as const, content: 'answer', timestamp: '',
+        id: 'm1',
+        role: 'assistant' as const,
+        content: 'answer',
+        timestamp: '',
         tool_calls: [{ id: 't1', name: 'fn', arguments: '{}', result: 'ok' }],
         agent_name: 'coder',
         reasoning: 'deep thought',
@@ -1270,7 +1450,10 @@ describe('Message Service', () => {
     it('empty metadata -> undefined', async () => {
       const { serializeMessageMetadata } = await getRealMessageService()
       const msg = {
-        id: 'm2', role: 'user' as const, content: 'hello', timestamp: '',
+        id: 'm2',
+        role: 'user' as const,
+        content: 'hello',
+        timestamp: '',
       }
       const result = serializeMessageMetadata(msg)
       expect(result).toBeUndefined()
