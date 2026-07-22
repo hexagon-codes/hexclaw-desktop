@@ -500,15 +500,16 @@ describe('Config API alignment: settings.ts vs handler_extended.go', () => {
 
 describe('LLM Config API alignment: config.ts vs handler_config.go', () => {
   it('BackendLLMConfig aligns with LLMConfigResponse struct', () => {
-    // Backend LLMConfigResponse: Default, Providers, Routing, Cache
-    //   (json: default, providers, routing, cache)
-    // Frontend BackendLLMConfig: default, providers, routing, cache
+    // Backend LLMConfigResponse: Default, Providers, Routing, Cache, ReasoningProvider, ReasoningModel
+    // Frontend BackendLLMConfig mirrors all fields; reasoning selection is optional for legacy servers.
     // ALIGNED
     const settingsTypes = readFrontendType('settings.ts')
     expect(settingsTypes).toContain('default: string')
     expect(settingsTypes).toContain('providers: Record<string, BackendLLMProvider>')
     expect(settingsTypes).toContain('routing:')
     expect(settingsTypes).toContain('cache:')
+    expect(settingsTypes).toContain('reasoning_provider?: string')
+    expect(settingsTypes).toContain('reasoning_model?: string')
   })
 
   it('LLMConnectionTestRequest aligns with LLMConnectionTestRequest struct', () => {

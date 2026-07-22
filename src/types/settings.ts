@@ -299,6 +299,9 @@ export interface BackendLLMConfig {
   providers: Record<string, BackendLLMProvider>
   routing: { enabled: boolean; strategy: string }
   cache: { enabled: boolean; similarity: number; ttl: string; max_entries: number }
+  /** K12 solve/grade 的强文本路由；设置页不改写，后端在 provider 重命名时按稳定身份迁移。 */
+  reasoning_provider?: string
+  reasoning_model?: string
 }
 
 export interface BackendRuntimeConfig {

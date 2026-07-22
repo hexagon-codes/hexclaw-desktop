@@ -747,6 +747,7 @@ Both follow the **local-first** principle: data is never uploaded to third-party
 **Architecture**
 - Added `scenarioRegistry`, view descriptors, record schemas, VerifyResult, and scenario-extension contracts so scenario packs mount through descriptors without changing the generic shell.
 - Added frontend `/api/k12/*` type contracts covering recognition, grading, review queue, tutoring tips, insights, profile, backup, export, IM binding, and automation provisioning.
+- LLM providers now use a three-layer model contract—catalog, enabled pool, and current default. Catalogs with up to 10 models are enabled automatically; larger catalogs are curated and explicitly applied in the model manager, while chat defaults are restricted to chat-capable models.
 
 ### v0.3.0
 

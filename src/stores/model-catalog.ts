@@ -1,7 +1,12 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { logger } from '@/utils/logger'
-import type { CatalogModel, ModelOption } from '@/types'
+import {
+  canonicalizeModelOption,
+  resolveProviderSelectedModelId,
+} from '@/config/model-contract'
+import { inferCapabilitiesFromId } from '@/config/providers'
+import type { CatalogModel, ModelOption, ProviderConfig } from '@/types'
 
 /**
  * 模型目录 store — "目录 / 启用"两层架构的目录层。
@@ -98,7 +103,7 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
  *
  * 灌入特征：启用列表超过阈值，且其中来自目录的非自定义模型覆盖了目录的绝大部分
  * （≥90%）——没有用户会手动启用整个目录，这只可能是旧版同步逻辑灌进去的。
- * 清理后保留：自定义模型、图像/视频生成模型、当前选中模型。
+ * 清理后保留：自定义模型、图像/视频/向量模型、当前选中模型，以及目录已下架的既有模型。
  *
  * 返回 null 表示不是灌入污染（如用户手动启用了几十个），不做任何修改。
  */
@@ -116,6 +121,7 @@ export function trimFloodedModels(
   const isKeep = (m: ModelOption) =>
     m.isCustom ||
     m.id === selectedModelId ||
+    !catalogIds.has(m.id) ||
     !!m.capabilities?.some(
       (c) => c === 'image_generation' || c === 'video_generation' || c === 'embedding',
     )
@@ -124,4 +130,108 @@ export function trimFloodedModels(
   if (fromCatalog.length < catalog.length * 0.9) return null
 
   return models.filter(isKeep)
+}
+
+export interface ProviderCatalogReconcileResult {
+  changed: boolean
+  managed: boolean
+}
+
+function modelListSignature(models: ModelOption[], selectedModelId: string | undefined): string {
+  return JSON.stringify({ models, selectedModelId: selectedModelId ?? '' })
+}
+
+/**
+ * 将远端目录投影到 Provider 的“已启用模型”层。
+ *
+ * - 小目录：目录内模型全部启用；既有但本次未返回的条目继续保留，由目录层投影为 stale。
+ * - 大目录：不自动启用新条目；只刷新已启用项名称，并收缩可识别的历史全量灌入。
+ */
+export function reconcileProviderCatalog(
+  target: ProviderConfig,
+  remoteModels: CatalogModel[],
+  presetDefaults: ModelOption[],
+): ProviderCatalogReconcileResult {
+  const before = modelListSignature(target.models, target.selectedModelId)
+  const managed = remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT
+  const remoteById = new Map(remoteModels.map((model) => [model.id, model]))
+
+  if (managed) {
+    const trimmed = trimFloodedModels(target.models, remoteModels, target.selectedModelId)
+    if (trimmed) target.models = trimmed
+    target.models = target.models.map((model) => {
+      const remote = remoteById.get(model.id)
+      if (!remote?.name || remote.name === model.name || model.isCustom) return model
+      return canonicalizeModelOption({ ...model, name: remote.name })
+    })
+  } else {
+    const existingById = new Map(target.models.map((model) => [model.id, model]))
+    const presetById = new Map(presetDefaults.map((model) => [model.id, model]))
+    const next: ModelOption[] = remoteModels.map((remote) => {
+      const existing = existingById.get(remote.id)
+      const preset = presetById.get(remote.id)
+      if (existing) {
+        return canonicalizeModelOption({
+          ...existing,
+          name: remote.name || existing.name || remote.id,
+        })
+      }
+      return canonicalizeModelOption({
+        id: remote.id,
+        name: remote.name || remote.id,
+        capabilities: preset?.capabilities ?? inferCapabilitiesFromId(remote.id),
+        ...(preset?.embedding ? { embedding: { ...preset.embedding } } : {}),
+      })
+    })
+    for (const existing of target.models) {
+      if (!remoteById.has(existing.id)) next.push(canonicalizeModelOption(existing))
+    }
+    target.models = next
+  }
+
+  target.selectedModelId = resolveProviderSelectedModelId(target)
+  return {
+    changed: before !== modelListSignature(target.models, target.selectedModelId),
+    managed,
+  }
+}
+
+interface ProviderCatalogSyncLease {
+  isCurrent(provider: ProviderConfig, effectiveBaseUrl: string): boolean
+}
+
+const providerCatalogSyncGenerations = new Map<string, number>()
+
+function providerCatalogSyncFingerprint(
+  provider: ProviderConfig,
+  effectiveBaseUrl: string,
+): string {
+  return JSON.stringify([
+    provider.providerInstanceId ?? '',
+    provider.backendKey ?? '',
+    effectiveBaseUrl.trim().replace(/\/+$/, ''),
+    provider.locality ?? 'auto',
+    provider.privateNetworkAccess?.host ?? '',
+    provider.privateNetworkAccess?.allowed ?? false,
+  ])
+}
+
+/** 为一次目录同步签发单写 generation；旧请求完成后只能被丢弃。 */
+export function beginProviderCatalogSync(
+  provider: ProviderConfig,
+  effectiveBaseUrl: string,
+): ProviderCatalogSyncLease {
+  const providerId = provider.id
+  const generation = (providerCatalogSyncGenerations.get(providerId) ?? 0) + 1
+  const fingerprint = providerCatalogSyncFingerprint(provider, effectiveBaseUrl)
+  providerCatalogSyncGenerations.set(providerId, generation)
+  return {
+    isCurrent(currentProvider, currentBaseUrl) {
+      return (
+        currentProvider.id === providerId &&
+        providerCatalogSyncGenerations.get(providerId) === generation &&
+        providerCatalogSyncFingerprint(currentProvider, currentBaseUrl) === fingerprint
+      )
+    },
+  }
 }

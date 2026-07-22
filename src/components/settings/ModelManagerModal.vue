@@ -5,6 +5,11 @@ import { Search, X, RefreshCw, Sparkles } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT } from '@/stores/model-catalog'
 import { inferCapabilitiesFromId } from '@/config/providers'
+import {
+  canonicalizeModelOption,
+  isChatModelOption,
+  resolveProviderSelectedModelId,
+} from '@/config/model-contract'
 import { isCatalogModelFree, catalogModelHasMetadata } from '@/types'
 import type { CatalogModel, ModelCapability, ModelOption, ProviderConfig } from '@/types'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
@@ -42,11 +47,50 @@ const recDismissed = ref(false)
 const clearArmed = ref(false)
 let clearTimer: ReturnType<typeof setTimeout> | null = null
 const searchInputRef = ref<HTMLInputElement | null>(null)
+const modalRef = ref<HTMLElement | null>(null)
+const draftModels = ref<ModelOption[]>([])
+const draftSelectedModelId = ref('')
+const baselineModels = ref<ModelOption[]>([])
+const baselineSelectedModelId = ref('')
 
 const catalog = computed(() => catalogStore.getCatalog(props.provider.id))
 const catalogModels = computed<CatalogModel[]>(() => catalog.value?.models ?? [])
+const catalogIds = computed(() => new Set(catalogModels.value.map((model) => model.id)))
+const managedModels = computed<CatalogModel[]>(() => [
+  ...catalogModels.value,
+  ...draftModels.value
+    .filter((model) => !catalogIds.value.has(model.id))
+    .map((model) => ({ id: model.id, name: model.name || model.id })),
+])
 const newIds = computed(() => new Set(catalog.value?.newIds ?? []))
-const enabledIds = computed(() => new Set(props.provider.models.map((m) => m.id)))
+const enabledIds = computed(() => new Set(draftModels.value.map((m) => m.id)))
+const draftChatModels = computed(() => draftModels.value.filter(isChatModelOption))
+const replacementRequired = computed(
+  () =>
+    draftChatModels.value.length > 0 &&
+    !draftChatModels.value.some((model) => model.id === draftSelectedModelId.value),
+)
+
+function comparableModel(model: ModelOption) {
+  const canonical = canonicalizeModelOption(model)
+  return {
+    id: canonical.id,
+    name: canonical.name,
+    isCustom: Boolean(canonical.isCustom),
+    capabilities: canonical.capabilities ?? [],
+    embedding: canonical.embedding ?? null,
+    toolReliability: canonical.toolReliability ?? null,
+  }
+}
+
+const hasDraftChanges = computed(() => {
+  return (
+    JSON.stringify(props.provider.models.map(comparableModel)) !==
+      JSON.stringify(draftModels.value.map(comparableModel)) ||
+    (props.provider.selectedModelId || '') !== draftSelectedModelId.value
+  )
+})
+const canApply = computed(() => hasDraftChanges.value && !replacementRequired.value)
 
 /** 目录是否带元数据（决定能力筛选/徽章是否可用——宁可不标，不能标错） */
 const hasMetadata = computed(() => catalogModels.value.some(catalogModelHasMetadata))
@@ -61,12 +105,24 @@ watch(
     vendorFilter.value = '__all__'
     vendorSearch.value = ''
     capFilters.value = new Set()
+    baselineModels.value = props.provider.models.map(cloneModelOption)
+    baselineSelectedModelId.value = props.provider.selectedModelId || ''
+    setDraftModels(props.provider.models)
+    draftSelectedModelId.value = props.provider.selectedModelId || ''
     disarmClear()
     nextTick(() => searchInputRef.value?.focus())
   },
+  { immediate: true },
 )
 
-function handleClose() {
+watch(
+  () => props.syncing,
+  (syncing, wasSyncing) => {
+    if (props.open && wasSyncing && !syncing) rebaseDraftAfterResync()
+  },
+)
+
+function handleCancel() {
   catalogStore.markNewSeen(props.provider.id)
   disarmClear()
   emit('close')
@@ -80,7 +136,7 @@ function vendorOf(id: string): string {
 
 const vendorCounts = computed(() => {
   const counts = new Map<string, number>()
-  for (const m of catalogModels.value) {
+  for (const m of managedModels.value) {
     const v = vendorOf(m.id)
     counts.set(v, (counts.get(v) ?? 0) + 1)
   }
@@ -107,16 +163,32 @@ const showVendorNav = computed(() => vendorCounts.value.length >= 2)
 
 // ─── 筛选 ──────────────────────────────────────────────
 const viewSegments = computed(() => [
-  { key: 'all', label: `${t('settings.modelManager.viewAll', '全部')} ${catalogModels.value.length}` },
-  { key: 'enabled', label: `${t('settings.modelManager.viewEnabled', '已启用')} ${enabledIds.value.size}` },
+  {
+    key: 'all',
+    label: `${t('settings.modelManager.viewAll', '全部')} ${managedModels.value.length}`,
+  },
+  {
+    key: 'enabled',
+    label: `${t('settings.modelManager.viewEnabled', '已启用')} ${enabledIds.value.size}`,
+  },
   ...(newIds.value.size > 0
-    ? [{ key: 'new', label: `${t('settings.modelManager.viewNew', '本次新增')} ${newIds.value.size}` }]
+    ? [
+        {
+          key: 'new',
+          label: `${t('settings.modelManager.viewNew', '本次新增')} ${newIds.value.size}`,
+        },
+      ]
     : []),
 ])
 
 const capFilterOptions = computed(() => {
-  if (!hasMetadata.value) return []
+  const options = [
+    { key: 'chat', label: t('settings.modelManager.filterChat', '文本对话') },
+    { key: 'embedding', label: t('settings.modelManager.filterEmbedding', 'Embedding') },
+  ]
+  if (!hasMetadata.value) return options
   return [
+    ...options,
     { key: 'free', label: t('settings.modelManager.filterFree', '免费') },
     { key: 'vision', label: t('settings.modelManager.filterVision', '视觉') },
     { key: 'tools', label: t('settings.modelManager.filterTools', '工具调用') },
@@ -134,13 +206,22 @@ function toggleCapFilter(key: string) {
 const filteredModels = computed(() => {
   const q = search.value.trim().toLowerCase()
   const f = capFilters.value
-  return catalogModels.value.filter((m) => {
+  return managedModels.value.filter((m) => {
+    const capabilities = capabilitiesOf(m)
     if (view.value === 'enabled' && !enabledIds.value.has(m.id)) return false
     if (view.value === 'new' && !newIds.value.has(m.id)) return false
     if (vendorFilter.value !== '__all__' && vendorOf(m.id) !== vendorFilter.value) return false
-    if (q && !m.id.toLowerCase().includes(q) && !(m.name ?? '').toLowerCase().includes(q)) return false
+    if (q && !m.id.toLowerCase().includes(q) && !(m.name ?? '').toLowerCase().includes(q))
+      return false
+    if (f.has('chat') && !capabilities.includes('text')) return false
+    if (f.has('embedding') && !capabilities.includes('embedding')) return false
     if (f.has('free') && !isCatalogModelFree(m)) return false
-    if (f.has('vision') && !m.inputModalities?.includes('image')) return false
+    if (
+      f.has('vision') &&
+      !m.inputModalities?.includes('image') &&
+      !capabilities.includes('vision')
+    )
+      return false
     if (f.has('tools') && !m.supportsTools) return false
     if (f.has('ctx128') && (m.contextLength ?? 0) < 128_000) return false
     return true
@@ -179,36 +260,141 @@ const showRecommendBanner = computed(
 )
 
 function enableRecommended() {
-  setModels([...props.provider.models, ...recommended.value.map(toModelOption)])
+  setDraftModels([...draftModels.value, ...recommended.value.map(toModelOption)])
 }
 
 // ─── 启用 / 停用 ────────────────────────────────────────
-function capabilitiesOf(m: CatalogModel): ModelCapability[] {
-  const caps = inferCapabilitiesFromId(m.id)
-  if (m.inputModalities?.includes('image') && caps.includes('text') && !caps.includes('vision')) {
-    caps.push('vision')
+function cloneModelOption(model: ModelOption): ModelOption {
+  return canonicalizeModelOption({
+    ...model,
+    ...(model.capabilities ? { capabilities: [...model.capabilities] } : {}),
+    ...(model.embedding ? { embedding: { ...model.embedding } } : {}),
+    ...(model.toolReliability ? { toolReliability: { ...model.toolReliability } } : {}),
+  })
+}
+
+function modelOptionFromCatalog(m: CatalogModel, existing?: ModelOption): ModelOption {
+  if (existing?.isCustom) return cloneModelOption(existing)
+  const capabilities = existing?.capabilities
+    ? [...existing.capabilities]
+    : inferCapabilitiesFromId(m.id)
+  if (
+    m.inputModalities?.includes('image') &&
+    capabilities.includes('text') &&
+    !capabilities.includes('vision')
+  ) {
+    capabilities.push('vision')
   }
-  return caps
+  return canonicalizeModelOption({
+    ...(existing ? cloneModelOption(existing) : {}),
+    id: m.id,
+    name: m.name || m.id,
+    capabilities,
+  })
+}
+
+function normalizeAgainstCatalog(model: ModelOption): ModelOption {
+  if (model.isCustom) return cloneModelOption(model)
+  const catalogModel = catalogModels.value.find((candidate) => candidate.id === model.id)
+  return catalogModel ? modelOptionFromCatalog(catalogModel, model) : cloneModelOption(model)
+}
+
+function capabilitiesOf(m: CatalogModel): ModelCapability[] {
+  const enabledModel = draftModels.value.find((model) => model.id === m.id)
+  return modelOptionFromCatalog(m, enabledModel).capabilities ?? []
+}
+
+function isStaleCatalogModel(modelId: string): boolean {
+  const enabledModel = draftModels.value.find((model) => model.id === modelId)
+  if (!enabledModel || enabledModel.isCustom) return false
+  const capabilities = enabledModel.capabilities ?? []
+  if (capabilities.includes('image_generation') || capabilities.includes('video_generation')) {
+    return false
+  }
+  return !catalogIds.value.has(modelId)
 }
 
 function toModelOption(m: CatalogModel): ModelOption {
-  return { id: m.id, name: m.name || m.id, capabilities: capabilitiesOf(m) }
+  return modelOptionFromCatalog(
+    m,
+    draftModels.value.find((model) => model.id === m.id),
+  )
 }
 
-function setModels(models: ModelOption[]) {
-  const selectedStillValid = models.some((m) => m.id === props.provider.selectedModelId)
+function setDraftModels(models: ModelOption[]) {
+  const seen = new Set<string>()
+  draftModels.value = models.map(normalizeAgainstCatalog).filter((model) => {
+    if (seen.has(model.id)) return false
+    seen.add(model.id)
+    return true
+  })
+}
+
+function rebaseDraftAfterResync() {
+  const baselineIds = new Set(baselineModels.value.map((model) => model.id))
+  const draftIds = new Set(draftModels.value.map((model) => model.id))
+  const explicitlyRemoved = new Set(
+    baselineModels.value.filter((model) => !draftIds.has(model.id)).map((model) => model.id),
+  )
+  const userChangedSelection = draftSelectedModelId.value !== baselineSelectedModelId.value
+  const preserveById = new Map<string, ModelOption>()
+  for (const model of draftModels.value) {
+    const isExplicitlyAdded = !baselineIds.has(model.id)
+    const isNewCurrent = userChangedSelection && model.id === draftSelectedModelId.value
+    const isRetainedStale = baselineIds.has(model.id) && !catalogIds.value.has(model.id)
+    if (isExplicitlyAdded || isNewCurrent || isRetainedStale) {
+      preserveById.set(model.id, model)
+    }
+  }
+  const rebased = props.provider.models
+    .filter((model) => !explicitlyRemoved.has(model.id))
+    .map(normalizeAgainstCatalog)
+  const rebasedIds = new Set(rebased.map((model) => model.id))
+  for (const model of preserveById.values()) {
+    if (rebasedIds.has(model.id)) continue
+    rebased.push(normalizeAgainstCatalog(model))
+    rebasedIds.add(model.id)
+  }
+
+  const preservedDraftSelection = draftSelectedModelId.value
+  baselineModels.value = props.provider.models.map(cloneModelOption)
+  baselineSelectedModelId.value = props.provider.selectedModelId || ''
+  setDraftModels(rebased)
+  draftSelectedModelId.value = userChangedSelection
+    ? preservedDraftSelection
+    : props.provider.selectedModelId || ''
+}
+
+function handleApply() {
+  const models = draftModels.value.map(normalizeAgainstCatalog)
+  const selectedModelId =
+    draftChatModels.value.length === 0
+      ? ''
+      : resolveProviderSelectedModelId(
+          { models, selectedModelId: draftSelectedModelId.value },
+          draftSelectedModelId.value,
+        )
   settingsStore.updateProvider(props.provider.id, {
     models,
-    selectedModelId: selectedStillValid ? props.provider.selectedModelId : models[0]?.id || '',
+    selectedModelId,
   })
   emit('change')
+  catalogStore.markNewSeen(props.provider.id)
+  disarmClear()
+  emit('close')
+}
+
+function selectDraftCurrentModel(modelId: string) {
+  const model = draftModels.value.find((candidate) => candidate.id === modelId)
+  if (!model || !isChatModelOption(model)) return
+  draftSelectedModelId.value = modelId
 }
 
 function toggleModel(m: CatalogModel) {
   if (enabledIds.value.has(m.id)) {
-    setModels(props.provider.models.filter((x) => x.id !== m.id))
+    setDraftModels(draftModels.value.filter((x) => x.id !== m.id))
   } else {
-    setModels([...props.provider.models, toModelOption(m)])
+    setDraftModels([...draftModels.value, toModelOption(m)])
   }
 }
 
@@ -219,10 +405,10 @@ function isGroupAllEnabled(models: CatalogModel[]): boolean {
 function toggleGroup(models: CatalogModel[]) {
   if (isGroupAllEnabled(models)) {
     const ids = new Set(models.map((m) => m.id))
-    setModels(props.provider.models.filter((x) => !ids.has(x.id)))
+    setDraftModels(draftModels.value.filter((x) => !ids.has(x.id)))
   } else {
     const additions = models.filter((m) => !enabledIds.value.has(m.id)).map(toModelOption)
-    setModels([...props.provider.models, ...additions])
+    setDraftModels([...draftModels.value, ...additions])
   }
 }
 
@@ -234,7 +420,7 @@ function handleClear() {
     return
   }
   disarmClear()
-  setModels([])
+  setDraftModels([])
 }
 
 function disarmClear() {
@@ -251,12 +437,45 @@ function ctxLabel(ctx?: number): string {
 
 function handleKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
-    handleClose()
+    handleCancel()
     return
   }
   if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
     e.preventDefault()
     searchInputRef.value?.focus()
+    return
+  }
+  if (e.key !== 'Tab') return
+
+  const modal = modalRef.value
+  if (!modal) return
+  const focusable = Array.from(
+    modal.querySelectorAll<HTMLElement>(
+      [
+        'button:not([disabled])',
+        'input:not([disabled])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        'a[href]',
+        '[tabindex]:not([tabindex="-1"])',
+      ].join(','),
+    ),
+  )
+  if (focusable.length === 0) {
+    e.preventDefault()
+    modal.focus()
+    return
+  }
+
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  const active = document.activeElement
+  if (e.shiftKey && (active === first || !modal.contains(active))) {
+    e.preventDefault()
+    last.focus()
+  } else if (!e.shiftKey && (active === last || !modal.contains(active))) {
+    e.preventDefault()
+    first.focus()
   }
 }
 </script>
@@ -268,10 +487,17 @@ function handleKeydown(e: KeyboardEvent) {
         v-if="open"
         class="hc-dialog-overlay"
         tabindex="-1"
-        @click.self="handleClose"
+        @click.self="handleCancel"
         @keydown="handleKeydown"
       >
-        <div class="mm-modal" role="dialog" :aria-label="t('settings.modelManager.title', '管理模型')">
+        <div
+          ref="modalRef"
+          class="mm-modal"
+          role="dialog"
+          aria-modal="true"
+          tabindex="-1"
+          :aria-label="t('settings.modelManager.title', '管理模型')"
+        >
           <!-- 头部 -->
           <div class="mm-head">
             <div class="mm-title-row">
@@ -279,18 +505,30 @@ function handleKeydown(e: KeyboardEvent) {
                 {{ t('settings.modelManager.title', '管理模型') }} — {{ provider.name }}
               </span>
               <span v-if="newIds.size > 0" class="mm-badge mm-badge--new">
-                {{ t('settings.modelManager.newCount', { n: newIds.size }, `本次同步新增 ${newIds.size} 个`) }}
+                {{
+                  t(
+                    'settings.modelManager.newCount',
+                    { n: newIds.size },
+                    `本次同步新增 ${newIds.size} 个`,
+                  )
+                }}
               </span>
               <span class="mm-spacer" />
               <button
                 class="mm-icon-btn"
                 :title="t('settings.modelManager.resync', '重新同步')"
+                :aria-label="t('settings.modelManager.resync', '重新同步')"
                 :disabled="syncing"
                 @click="emit('resync')"
               >
                 <RefreshCw :size="15" :class="{ 'animate-spin': syncing }" />
               </button>
-              <button class="mm-icon-btn" :title="t('common.close', '关闭')" @click="handleClose">
+              <button
+                class="mm-icon-btn"
+                :title="t('common.close', '关闭')"
+                :aria-label="t('common.close', '关闭')"
+                @click="handleCancel"
+              >
                 <X :size="15" />
               </button>
             </div>
@@ -299,11 +537,12 @@ function handleKeydown(e: KeyboardEvent) {
               <Search :size="14" class="mm-search__icon" />
               <HcClearableField>
                 <input
-                ref="searchInputRef"
-                v-model="search"
-                type="text"
-                :placeholder="t('settings.modelManager.searchPlaceholder', '搜索模型 id 或名称…')"
-              />
+                  ref="searchInputRef"
+                  v-model="search"
+                  type="text"
+                  :placeholder="t('settings.modelManager.searchPlaceholder', '搜索模型 id 或名称…')"
+                  :aria-label="t('settings.modelManager.searchPlaceholder', '搜索模型 id 或名称…')"
+                />
               </HcClearableField>
               <span class="mm-kbd">⌘F</span>
             </div>
@@ -312,12 +551,16 @@ function handleKeydown(e: KeyboardEvent) {
               <SegmentedControl v-model="view" :segments="viewSegments" />
               <template v-if="capFilterOptions.length">
                 <span class="mm-toolbar__divider" />
-                <span class="mm-toolbar__label">{{ t('settings.modelManager.filterLabel', '筛选') }}</span>
+                <span class="mm-toolbar__label">{{
+                  t('settings.modelManager.filterLabel', '筛选')
+                }}</span>
                 <button
                   v-for="opt in capFilterOptions"
                   :key="opt.key"
                   class="mm-filter-chip"
                   :class="{ 'mm-filter-chip--on': capFilters.has(opt.key) }"
+                  :data-testid="`model-manager-filter-${opt.key}`"
+                  :aria-pressed="capFilters.has(opt.key)"
                   @click="toggleCapFilter(opt.key)"
                 >
                   {{ opt.label }}
@@ -335,10 +578,11 @@ function handleKeydown(e: KeyboardEvent) {
                   <Search :size="11" />
                   <HcClearableField>
                     <input
-                    v-model="vendorSearch"
-                    type="text"
-                    :placeholder="t('settings.modelManager.vendorSearch', '过滤厂商…')"
-                  />
+                      v-model="vendorSearch"
+                      type="text"
+                      :placeholder="t('settings.modelManager.vendorSearch', '过滤厂商…')"
+                      :aria-label="t('settings.modelManager.vendorSearch', '过滤厂商…')"
+                    />
                   </HcClearableField>
                 </div>
                 <button
@@ -347,8 +591,10 @@ function handleKeydown(e: KeyboardEvent) {
                   @click="vendorFilter = '__all__'"
                 >
                   {{ t('settings.modelManager.allVendors', '全部') }}
-                  <span v-if="enabledIds.size" class="mm-vendor__enabled">{{ enabledIds.size }}</span>
-                  <span class="mm-vendor__count">{{ catalogModels.length }}</span>
+                  <span v-if="enabledIds.size" class="mm-vendor__enabled">{{
+                    enabledIds.size
+                  }}</span>
+                  <span class="mm-vendor__count">{{ managedModels.length }}</span>
                 </button>
               </div>
               <button
@@ -372,7 +618,12 @@ function handleKeydown(e: KeyboardEvent) {
               <div v-if="showRecommendBanner" class="mm-recommend">
                 <Sparkles :size="16" class="mm-recommend__icon" />
                 <span class="mm-recommend__text">
-                  {{ t('settings.modelManager.recommendText', '根据「免费 + 支持工具调用 + 大上下文」为你推荐') }}
+                  {{
+                    t(
+                      'settings.modelManager.recommendText',
+                      '根据「免费 + 支持工具调用 + 大上下文」为你推荐',
+                    )
+                  }}
                   <b>{{ recommended.map((m) => m.name).join('、') }}</b>
                 </span>
                 <button class="hc-btn hc-btn-primary hc-btn-sm" @click="enableRecommended">
@@ -381,6 +632,22 @@ function handleKeydown(e: KeyboardEvent) {
                 <button class="hc-btn hc-btn-sm" @click="recDismissed = true">
                   {{ t('settings.modelManager.recommendDismiss', '忽略') }}
                 </button>
+              </div>
+
+              <div
+                v-if="replacementRequired"
+                id="model-manager-replacement-required"
+                class="mm-replacement"
+                data-testid="model-manager-replacement-required"
+                role="alert"
+                aria-live="polite"
+              >
+                {{
+                  t(
+                    'settings.modelManager.replacementRequired',
+                    '请选择一个当前对话模型后再应用更改',
+                  )
+                }}
               </div>
 
               <div v-if="!filteredModels.length" class="mm-empty">
@@ -404,18 +671,15 @@ function handleKeydown(e: KeyboardEvent) {
                   :key="m.id"
                   class="mm-row"
                   :class="{ 'mm-row--on': enabledIds.has(m.id) }"
-                  role="switch"
-                  :aria-checked="enabledIds.has(m.id)"
-                  tabindex="0"
-                  @click="toggleModel(m)"
-                  @keydown.enter.prevent="toggleModel(m)"
-                  @keydown.space.prevent="toggleModel(m)"
                 >
                   <div class="mm-row__info">
                     <div class="mm-row__name">
                       {{ m.name }}
                       <span v-if="newIds.has(m.id)" class="mm-badge mm-badge--new">
                         {{ t('settings.modelManager.newTag', '新') }}
+                      </span>
+                      <span v-if="isStaleCatalogModel(m.id)" class="mm-badge mm-badge--stale">
+                        {{ t('settings.llm.modelStaleLabel', '已下架') }}
                       </span>
                       <template v-if="hasMetadata">
                         <span v-if="isCatalogModelFree(m)" class="mm-badge mm-badge--free">
@@ -427,12 +691,41 @@ function handleKeydown(e: KeyboardEvent) {
                         <span v-if="m.supportsTools" class="mm-badge">
                           {{ t('settings.modelManager.badgeTools', '工具') }}
                         </span>
-                        <span v-if="m.contextLength" class="mm-badge">{{ ctxLabel(m.contextLength) }}</span>
+                        <span v-if="capabilitiesOf(m).includes('embedding')" class="mm-badge">
+                          {{ t('settings.modelManager.badgeEmbedding', 'Embedding') }}
+                        </span>
+                        <span v-if="m.contextLength" class="mm-badge">{{
+                          ctxLabel(m.contextLength)
+                        }}</span>
                       </template>
                     </div>
                     <div class="mm-row__id">{{ m.id }}</div>
                   </div>
-                  <span class="mm-switch" />
+                  <button
+                    v-if="enabledIds.has(m.id) && capabilitiesOf(m).includes('text')"
+                    type="button"
+                    class="mm-current"
+                    :class="{ 'mm-current--active': draftSelectedModelId === m.id }"
+                    :data-testid="`model-manager-select-${m.id}`"
+                    @click.stop="selectDraftCurrentModel(m.id)"
+                  >
+                    {{
+                      draftSelectedModelId === m.id
+                        ? t('settings.modelManager.currentModel', '当前')
+                        : t('settings.modelManager.setCurrentModel', '设为当前')
+                    }}
+                  </button>
+                  <button
+                    type="button"
+                    class="mm-row__toggle"
+                    role="switch"
+                    :aria-label="m.name"
+                    :aria-checked="enabledIds.has(m.id)"
+                    :data-testid="`model-manager-toggle-${m.id}`"
+                    @click="toggleModel(m)"
+                  >
+                    <span class="mm-switch" aria-hidden="true" />
+                  </button>
                 </div>
               </template>
             </div>
@@ -457,12 +750,31 @@ function handleKeydown(e: KeyboardEvent) {
             >
               {{
                 clearArmed
-                  ? t('settings.modelManager.clearConfirm', { n: enabledIds.size }, `确认清空 ${enabledIds.size} 个？`)
+                  ? t(
+                      'settings.modelManager.clearConfirm',
+                      { n: enabledIds.size },
+                      `确认清空 ${enabledIds.size} 个？`,
+                    )
                   : t('settings.modelManager.clear', '清空启用')
               }}
             </button>
-            <button class="hc-btn hc-btn-primary" @click="handleClose">
-              {{ t('common.done', '完成') }}
+            <button
+              class="hc-btn hc-btn-secondary"
+              data-testid="model-manager-cancel"
+              @click="handleCancel"
+            >
+              {{ t('common.cancel', '取消') }}
+            </button>
+            <button
+              class="hc-btn hc-btn-primary"
+              data-testid="model-manager-apply"
+              :disabled="!canApply"
+              :aria-describedby="
+                replacementRequired ? 'model-manager-replacement-required' : undefined
+              "
+              @click="handleApply"
+            >
+              {{ t('settings.modelManager.applyChanges', '应用更改') }}
             </button>
           </div>
         </div>
@@ -499,7 +811,9 @@ function handleKeydown(e: KeyboardEvent) {
   box-shadow: var(--hc-shadow-float);
 }
 
-.mm-spacer { flex: 1; }
+.mm-spacer {
+  flex: 1;
+}
 
 /* ── 头部 ── */
 .mm-head {
@@ -530,13 +844,18 @@ function handleKeydown(e: KeyboardEvent) {
   background: none;
   color: var(--hc-text-secondary);
   cursor: pointer;
-  transition: background-color 130ms ease, color 130ms ease;
+  transition:
+    background-color 130ms ease,
+    color 130ms ease;
 }
 .mm-icon-btn:hover {
   background: var(--hc-bg-hover);
   color: var(--hc-text-primary);
 }
-.mm-icon-btn:disabled { opacity: 0.5; cursor: default; }
+.mm-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 
 .mm-search {
   display: flex;
@@ -546,13 +865,17 @@ function handleKeydown(e: KeyboardEvent) {
   border: 0.5px solid var(--hc-border);
   border-radius: var(--hc-radius-md);
   background: var(--hc-bg-input);
-  transition: border-color 150ms ease, box-shadow 150ms ease;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
 }
 .mm-search:focus-within {
   border-color: var(--hc-accent);
   box-shadow: 0 0 0 3px var(--hc-accent-subtle);
 }
-.mm-search__icon { color: var(--hc-text-muted); }
+.mm-search__icon {
+  color: var(--hc-text-muted);
+}
 .mm-search input {
   flex: 1;
   border: none;
@@ -561,7 +884,9 @@ function handleKeydown(e: KeyboardEvent) {
   font-size: 13px;
   color: var(--hc-text-primary);
 }
-.mm-search input::placeholder { color: var(--hc-text-muted); }
+.mm-search input::placeholder {
+  color: var(--hc-text-muted);
+}
 .mm-kbd {
   padding: 1px 6px;
   border: 0.5px solid var(--hc-border);
@@ -594,7 +919,10 @@ function handleKeydown(e: KeyboardEvent) {
   font-size: 11.5px;
   color: var(--hc-text-secondary);
   cursor: pointer;
-  transition: border-color 130ms ease, background-color 130ms ease, color 130ms ease;
+  transition:
+    border-color 130ms ease,
+    background-color 130ms ease,
+    color 130ms ease;
 }
 .mm-filter-chip--on {
   border-color: var(--hc-accent);
@@ -661,9 +989,13 @@ function handleKeydown(e: KeyboardEvent) {
   color: var(--hc-text-secondary);
   cursor: pointer;
   text-align: left;
-  transition: background-color 130ms ease, color 130ms ease;
+  transition:
+    background-color 130ms ease,
+    color 130ms ease;
 }
-.mm-vendor:hover { background: var(--hc-bg-hover); }
+.mm-vendor:hover {
+  background: var(--hc-bg-hover);
+}
 .mm-vendor--active {
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
@@ -691,7 +1023,9 @@ function handleKeydown(e: KeyboardEvent) {
   font-size: 10.5px;
   color: var(--hc-text-muted);
 }
-.mm-vendor--active .mm-vendor__count { color: var(--hc-accent); }
+.mm-vendor--active .mm-vendor__count {
+  color: var(--hc-accent);
+}
 
 .mm-list {
   flex: 1;
@@ -709,19 +1043,35 @@ function handleKeydown(e: KeyboardEvent) {
   border-radius: var(--hc-radius-md);
   background: var(--hc-accent-subtle);
 }
-.mm-recommend__icon { color: var(--hc-accent); flex-shrink: 0; }
+.mm-recommend__icon {
+  color: var(--hc-accent);
+  flex-shrink: 0;
+}
 .mm-recommend__text {
   flex: 1;
   font-size: 12.5px;
   color: var(--hc-text-primary);
 }
-.mm-recommend__text b { color: var(--hc-accent); font-weight: 600; }
+.mm-recommend__text b {
+  color: var(--hc-accent);
+  font-weight: 600;
+}
 
 .mm-empty {
   padding: 64px 0;
   text-align: center;
   font-size: 12.5px;
   color: var(--hc-text-muted);
+}
+
+.mm-replacement {
+  margin: var(--hc-space-3) var(--hc-space-4) var(--hc-space-1);
+  padding: 8px 12px;
+  border: 0.5px solid color-mix(in srgb, var(--hc-warning) 45%, var(--hc-border));
+  border-radius: var(--hc-radius-sm);
+  background: color-mix(in srgb, var(--hc-warning) 10%, transparent);
+  color: var(--hc-text-primary);
+  font-size: 12px;
 }
 
 .mm-group-head {
@@ -753,23 +1103,34 @@ function handleKeydown(e: KeyboardEvent) {
   cursor: pointer;
   text-transform: none;
 }
-.mm-group-head__btn:hover { text-decoration: underline; }
+.mm-group-head__btn:hover {
+  text-decoration: underline;
+}
 
 .mm-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: var(--hc-space-3);
-  padding: 9px var(--hc-space-5);
+  padding: 9px calc(var(--hc-space-5) + 36px + var(--hc-space-3)) 9px var(--hc-space-5);
   cursor: pointer;
   outline: none;
   transition: background-color 130ms ease;
 }
-.mm-row:hover { background: var(--hc-bg-hover); }
-.mm-row:focus-visible {
+.mm-row:hover {
+  background: var(--hc-bg-hover);
+}
+.mm-row:focus-within {
   background: var(--hc-accent-subtle);
   box-shadow: inset 3px 0 0 var(--hc-accent);
 }
-.mm-row__info { flex: 1; min-width: 0; }
+.mm-row__info {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  pointer-events: none;
+}
 .mm-row__name {
   display: flex;
   align-items: center;
@@ -786,6 +1147,45 @@ function handleKeydown(e: KeyboardEvent) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.mm-current {
+  position: relative;
+  z-index: 2;
+  flex: none;
+  border: none;
+  border-radius: var(--hc-radius-sm);
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--hc-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.mm-current:hover {
+  background: var(--hc-accent-subtle);
+  color: var(--hc-accent);
+}
+.mm-current--active {
+  color: var(--hc-accent);
+  font-weight: 600;
+}
+
+.mm-row__toggle {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+.mm-row__toggle:focus-visible {
+  outline: none;
+}
+.mm-row__toggle .mm-switch {
+  position: absolute;
+  right: var(--hc-space-5);
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .mm-badge {
@@ -805,16 +1205,23 @@ function handleKeydown(e: KeyboardEvent) {
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
 }
+.mm-badge--stale {
+  background: color-mix(in srgb, var(--hc-warning) 14%, transparent);
+  color: var(--hc-warning);
+}
 
 .mm-switch {
   position: relative;
+  z-index: 1;
   width: 36px;
   height: 21px;
   flex-shrink: 0;
   border-radius: 999px;
   border: 0.5px solid var(--hc-border);
   background: var(--hc-bg-active);
-  transition: background-color 200ms ease, border-color 200ms ease;
+  transition:
+    background-color 200ms ease,
+    border-color 200ms ease;
 }
 .mm-switch::after {
   content: '';
@@ -832,7 +1239,9 @@ function handleKeydown(e: KeyboardEvent) {
   background: var(--hc-accent);
   border-color: var(--hc-accent);
 }
-.mm-row--on .mm-switch::after { left: 17px; }
+.mm-row--on .mm-switch::after {
+  left: 17px;
+}
 
 /* ── 底部 ── */
 .mm-foot {
@@ -863,7 +1272,9 @@ function handleKeydown(e: KeyboardEvent) {
   font-size: 12px;
   color: var(--hc-text-muted);
   cursor: pointer;
-  transition: background-color 130ms ease, color 130ms ease;
+  transition:
+    background-color 130ms ease,
+    color 130ms ease;
 }
 .mm-clear:hover {
   background: rgba(245, 101, 101, 0.12);
@@ -876,15 +1287,27 @@ function handleKeydown(e: KeyboardEvent) {
 }
 
 /* 入场动效（沿用 hc-dialog Transition 命名） */
-.hc-dialog-enter-active { transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1); }
-.hc-dialog-leave-active { transition: opacity 200ms ease; }
+.hc-dialog-enter-active {
+  transition: opacity 300ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.hc-dialog-leave-active {
+  transition: opacity 200ms ease;
+}
 .hc-dialog-enter-active .mm-modal {
   animation: mm-scale-in 320ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 .hc-dialog-enter-from,
-.hc-dialog-leave-to { opacity: 0; }
+.hc-dialog-leave-to {
+  opacity: 0;
+}
 @keyframes mm-scale-in {
-  from { opacity: 0; transform: scale(0.96) translateY(8px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 </style>

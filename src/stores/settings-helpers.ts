@@ -99,6 +99,61 @@ export function providerMatchesBackendKey(provider: ProviderConfig, backendKey: 
     .some((value) => value.trim().toLowerCase() === normalizedBackendKey)
 }
 
+/** 只从服务端快照回灌稳定身份，保留目标配置的展示名、模型和凭据。 */
+export function mergeProviderRuntimeIdentities(
+  targetProviders: ProviderConfig[],
+  runtimeIdentityProviders: ProviderConfig[],
+): ProviderConfig[] {
+  return targetProviders.map((provider) => {
+    const runtime = runtimeIdentityProviders.find((candidate) =>
+      candidate.id === provider.id ||
+      Boolean(
+        provider.providerInstanceId &&
+        candidate.providerInstanceId === provider.providerInstanceId,
+      ) ||
+      Boolean(candidate.backendKey && providerMatchesBackendKey(provider, candidate.backendKey)),
+    )
+    if (!runtime) return provider
+    return {
+      ...provider,
+      ...(runtime.providerInstanceId
+        ? { providerInstanceId: runtime.providerInstanceId }
+        : {}),
+      ...(runtime.backendKey ? { backendKey: runtime.backendKey } : {}),
+    }
+  })
+}
+
+/** 后端加载后，在有效的本地选择与后端默认之间确定可恢复的默认模型。 */
+export function resolveLoadedDefaultSelection(
+  providers: ProviderConfig[],
+  backendConfig: BackendLLMConfig,
+  persistedModelId: string,
+  persistedProviderId: string,
+): { modelId: string; providerId: string } {
+  const backendModelId = backendConfig.default
+    ? backendConfig.providers[backendConfig.default]?.model || ''
+    : ''
+  const backendProviderId = backendConfig.default
+    ? providers.find((provider) => providerMatchesBackendKey(provider, backendConfig.default))
+        ?.id || ''
+    : ''
+  const containsSelection = (providerId: string, modelId: string) =>
+    providers.some(
+      (provider) =>
+        provider.id === providerId &&
+        provider.models.some((model) => model.id === modelId),
+    )
+
+  if (containsSelection(persistedProviderId, persistedModelId)) {
+    return { modelId: persistedModelId, providerId: persistedProviderId }
+  }
+  if (containsSelection(backendProviderId, backendModelId)) {
+    return { modelId: backendModelId, providerId: backendProviderId }
+  }
+  return { modelId: '', providerId: '' }
+}
+
 /** 后端快照中缺失的本地 provider 补回（与 loadLLMFromBackend 逻辑一致） */
 export function appendLocalProvidersMissingFromRuntime(
   runtimeSlice: ProviderConfig[],
@@ -310,9 +365,13 @@ export function backendToProviders(
   localProviders: ProviderConfig[] = [],
 ): ProviderConfig[] {
   return Object.entries(backend.providers).map(([name, p]) => {
-    const localProvider = localProviders.find((provider) =>
-      providerMatchesBackendKey(provider, name),
-    )
+    const localProvider =
+      (p.provider_instance_id
+        ? localProviders.find(
+            (provider) => provider.providerInstanceId === p.provider_instance_id,
+          )
+        : undefined) ??
+      localProviders.find((provider) => providerMatchesBackendKey(provider, name))
     const lowerName = name.toLowerCase()
     const matchedType = KNOWN_PROVIDER_TYPES.find((t) => lowerName === t || lowerName.startsWith(t))
     const nextProvider: ProviderConfig = {

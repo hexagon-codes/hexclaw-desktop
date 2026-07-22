@@ -293,6 +293,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
   afterEach(() => {
     delete (globalThis as Record<string, unknown>).isTauri
+    delete (window as unknown as Record<string, unknown>).__hcToast
     if (unhandledHandler) {
       window.removeEventListener('unhandledrejection', unhandledHandler)
       unhandledHandler = null
@@ -312,7 +313,6 @@ describe('SettingsView — E2E 关键路径', () => {
       expect(wrapper.text()).toContain(section)
     }
   }, 30_000)
-
 
   // ────────────────────────────────────────────────────
   // 2. 挂载时加载配置
@@ -359,9 +359,7 @@ describe('SettingsView — E2E 关键路径', () => {
     )
     expect(link.element.tagName).toBe('A')
     expect(link.text()).toBe('查看第三方 AI 服务说明 ↗')
-    expect(link.attributes('href')).toBe(
-      'https://hexclaw.net/zh/third-party-ai-services',
-    )
+    expect(link.attributes('href')).toBe('https://hexclaw.net/zh/third-party-ai-services')
     expect(link.attributes('target')).toBe('_blank')
     expect(link.attributes('rel')).toBe('noopener noreferrer')
     expect(link.attributes('aria-label')).toContain('在新窗口打开')
@@ -456,8 +454,12 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(wrapper.text()).toContain('这个地址连接到哪里？')
     expect(wrapper.text()).toContain('互联网服务')
     expect(wrapper.text()).toContain('这台电脑或可信局域网')
-    expect(wrapper.find(`[data-testid="provider-destination-cloud-${provider!.id}"]`).exists()).toBe(true)
-    expect(wrapper.find(`[data-testid="provider-destination-local-${provider!.id}"]`).exists()).toBe(true)
+    expect(
+      wrapper.find(`[data-testid="provider-destination-cloud-${provider!.id}"]`).exists(),
+    ).toBe(true)
+    expect(
+      wrapper.find(`[data-testid="provider-destination-local-${provider!.id}"]`).exists(),
+    ).toBe(true)
   })
 
   it('persists a local confirmation for the current endpoint host without a second submit', async () => {
@@ -472,9 +474,7 @@ describe('SettingsView — E2E 关键路径', () => {
     await wrapper.find('.hc-provider__card-head').trigger('click')
     await flushPromises()
 
-    await wrapper
-      .get(`[data-testid="provider-destination-local-${provider!.id}"]`)
-      .setValue(true)
+    await wrapper.get(`[data-testid="provider-destination-local-${provider!.id}"]`).setValue(true)
     await flushPromises()
 
     expect(provider).toMatchObject({
@@ -548,12 +548,19 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
     const store = await getSettingsStore()
     const provider = store.addProvider({
-      name: 'OpenRouter', type: 'custom', enabled: true, apiKey: 'sk-test',
-      baseUrl: 'https://openrouter.ai/api/v1', selectedModelId: 'chat',
+      name: 'OpenRouter',
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      selectedModelId: 'chat',
       models: [
         { id: 'chat', name: 'Chat', capabilities: ['text'] },
         {
-          id: 'embed', name: 'Embed', isCustom: true, capabilities: ['embedding'],
+          id: 'embed',
+          name: 'Embed',
+          isCustom: true,
+          capabilities: ['embedding'],
           toolReliability: { level: 'good' },
         },
       ],
@@ -563,7 +570,9 @@ describe('SettingsView — E2E 关键路径', () => {
     store.config!.llm.defaultModel = 'chat'
     await flushPromises()
 
-    const card = wrapper.findAll('.hc-provider__card').find((item) => item.text().includes('OpenRouter'))!
+    const card = wrapper
+      .findAll('.hc-provider__card')
+      .find((item) => item.text().includes('OpenRouter'))!
     await card.get('.hc-provider__card-head').trigger('click')
     await flushPromises()
 
@@ -594,7 +603,11 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
     const store = await getSettingsStore()
     store.addProvider({
-      name: 'Custom Chat', type: 'custom', enabled: true, apiKey: 'sk-test', baseUrl: 'https://api.example.com/v1',
+      name: 'Custom Chat',
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://api.example.com/v1',
       selectedModelId: 'preset',
       models: [
         { id: 'preset', name: 'Preset', capabilities: ['text'] },
@@ -603,7 +616,9 @@ describe('SettingsView — E2E 关键路径', () => {
     })
     await flushPromises()
 
-    const card = wrapper.findAll('.hc-provider__card').find((item) => item.text().includes('Custom Chat'))!
+    const card = wrapper
+      .findAll('.hc-provider__card')
+      .find((item) => item.text().includes('Custom Chat'))!
     await card.get('.hc-provider__card-head').trigger('click')
     await flushPromises()
     const chip = card.get('.hc-model-chip--custom')
@@ -621,8 +636,12 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
     const store = await getSettingsStore()
     const provider = store.addProvider({
-      name: 'Vector only', type: 'custom', enabled: true, apiKey: 'sk-test',
-      baseUrl: 'https://openrouter.ai/api/v1', selectedModelId: '',
+      name: 'Vector only',
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      selectedModelId: '',
       models: [{ id: 'embed', name: 'Embed', capabilities: ['embedding'] }],
     })!
 
@@ -641,7 +660,10 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
     const store = await getSettingsStore()
     const provider = store.addProvider({
-      name: 'OpenRouter', type: 'custom', enabled: true, apiKey: 'sk-test',
+      name: 'OpenRouter',
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-test',
       baseUrl: 'https://openrouter.ai/api/v1',
       selectedModelId: 'nvidia/nemotron-3-embed-1b:free',
       models: [],
@@ -653,10 +675,13 @@ describe('SettingsView — E2E 关键路径', () => {
 
     await vm.syncRemoteModels(provider)
 
-    expect(provider.models.find((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')?.capabilities)
-      .toEqual(['embedding'])
+    expect(
+      provider.models.find((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')?.capabilities,
+    ).toEqual(['embedding'])
     expect(provider.selectedModelId).toBe('chat-model')
-    expect(vm.displayCapabilities({ id: 'explicit-empty', name: 'Unknown', capabilities: [] })).toEqual([])
+    expect(
+      vm.displayCapabilities({ id: 'explicit-empty', name: 'Unknown', capabilities: [] }),
+    ).toEqual([])
   })
 
   it('adds Embedding as an explicit core capability without changing chat selection', async () => {
@@ -664,15 +689,21 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
     const store = await getSettingsStore()
     const provider = store.addProvider({
-      name: 'OpenRouter', type: 'custom', enabled: true, apiKey: 'sk-test',
-      baseUrl: 'https://openrouter.ai/api/v1', selectedModelId: 'chat',
+      name: 'OpenRouter',
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://openrouter.ai/api/v1',
+      selectedModelId: 'chat',
       models: [{ id: 'chat', name: 'Chat', capabilities: ['text'] }],
     })!
     store.config!.llm.defaultProviderId = provider.id
     store.config!.llm.defaultModel = 'chat'
     await flushPromises()
 
-    const card = wrapper.findAll('.hc-provider__card').find((item) => item.text().includes('OpenRouter'))!
+    const card = wrapper
+      .findAll('.hc-provider__card')
+      .find((item) => item.text().includes('OpenRouter'))!
     await card.get('.hc-provider__card-head').trigger('click')
     await card.get('.hc-model-chip--add').trigger('click')
     await flushPromises()
@@ -685,56 +716,68 @@ describe('SettingsView — E2E 关键路径', () => {
     await flushPromises()
 
     const updated = store.config!.llm.providers.find((item) => item.id === provider.id)!
-    expect(updated.models.find((model) => model.id === 'vendor/vector-v1')?.capabilities).toEqual(['embedding'])
+    expect(updated.models.find((model) => model.id === 'vendor/vector-v1')?.capabilities).toEqual([
+      'embedding',
+    ])
     expect(updated.selectedModelId).toBe('chat')
     expect(store.config!.llm.defaultModel).toBe('chat')
   })
 
-  it.each([
-    'nvidia/nemotron-3-embed-1b:free',
-    'nvidia/llama-nemotron-embed-vl-1b-v2:free',
-  ])('canonicalizes approved OpenRouter id %s as embedding even when the dialog remains on 文本', async (modelId) => {
-    const wrapper = await mountSettingsView()
-    await flushPromises()
-    const store = await getSettingsStore()
-    const provider = store.addProvider({
-      name: 'OpenRouter', type: 'custom', enabled: true, apiKey: 'sk-test',
-      baseUrl: 'https://openrouter.ai/api/v1', selectedModelId: 'chat',
-      models: [{ id: 'chat', name: 'Chat', capabilities: ['text'] }],
-    })!
-    store.config!.llm.defaultProviderId = provider.id
-    store.config!.llm.defaultModel = 'chat'
-    await flushPromises()
+  it.each(['nvidia/nemotron-3-embed-1b:free', 'nvidia/llama-nemotron-embed-vl-1b-v2:free'])(
+    'canonicalizes approved OpenRouter id %s as embedding even when the dialog remains on 文本',
+    async (modelId) => {
+      const wrapper = await mountSettingsView()
+      await flushPromises()
+      const store = await getSettingsStore()
+      const provider = store.addProvider({
+        name: 'OpenRouter',
+        type: 'custom',
+        enabled: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://openrouter.ai/api/v1',
+        selectedModelId: 'chat',
+        models: [{ id: 'chat', name: 'Chat', capabilities: ['text'] }],
+      })!
+      store.config!.llm.defaultProviderId = provider.id
+      store.config!.llm.defaultModel = 'chat'
+      await flushPromises()
 
-    const card = wrapper.findAll('.hc-provider__card').find((item) => item.text().includes('OpenRouter'))!
-    await card.get('.hc-provider__card-head').trigger('click')
-    await card.get('.hc-model-chip--add').trigger('click')
-    await flushPromises()
-    const body = new DOMWrapper(document.body)
-    expect(body.get('[data-testid="custom-model-capability"]').text()).toContain('文本')
-    await body.get('[data-testid="custom-model-id"]').setValue(modelId)
-    await body.get('[data-testid="custom-model-submit"]').trigger('click')
-    await flushPromises()
+      const card = wrapper
+        .findAll('.hc-provider__card')
+        .find((item) => item.text().includes('OpenRouter'))!
+      await card.get('.hc-provider__card-head').trigger('click')
+      await card.get('.hc-model-chip--add').trigger('click')
+      await flushPromises()
+      const body = new DOMWrapper(document.body)
+      expect(body.get('[data-testid="custom-model-capability"]').text()).toContain('文本')
+      await body.get('[data-testid="custom-model-id"]').setValue(modelId)
+      await body.get('[data-testid="custom-model-submit"]').trigger('click')
+      await flushPromises()
 
-    const updated = store.config!.llm.providers.find((item) => item.id === provider.id)!
-    const added = updated.models.find((model) => model.id === modelId)!
-    expect(added.capabilities).toEqual(['embedding'])
-    expect(added.embedding).toEqual({
-      protocol: 'openai_embeddings', dimension: 2048, normalization: 'l2',
-    })
-    expect(updated.selectedModelId).toBe('chat')
-    expect(store.config!.llm.defaultModel).toBe('chat')
-    expect(card.get('.hc-model-chip--embedding').text()).toContain(modelId)
+      const updated = store.config!.llm.providers.find((item) => item.id === provider.id)!
+      const added = updated.models.find((model) => model.id === modelId)!
+      expect(added.capabilities).toEqual(['embedding'])
+      expect(added.embedding).toEqual({
+        protocol: 'openai_embeddings',
+        dimension: 2048,
+        normalization: 'l2',
+      })
+      expect(updated.selectedModelId).toBe('chat')
+      expect(store.config!.llm.defaultModel).toBe('chat')
+      expect(card.get('.hc-model-chip--embedding').text()).toContain(modelId)
 
-    const vm = wrapper.vm as unknown as {
-      refreshCapability: (provider: unknown, model: unknown) => Promise<void>
-    }
-    await vm.refreshCapability(updated, added)
-    expect(capabilityApi.probeCapability).not.toHaveBeenCalled()
-  })
+      const vm = wrapper.vm as unknown as {
+        refreshCapability: (provider: unknown, model: unknown) => Promise<void>
+      }
+      await vm.refreshCapability(updated, added)
+      expect(capabilityApi.probeCapability).not.toHaveBeenCalled()
+    },
+  )
 
-  it('does not expose the removed secondary model-manager entry', async () => {
-    const wrapper = await mountSettingsView()
+  it('exposes the model-manager entry for a provider catalog larger than the auto-enable limit', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const wrapper = await mountSettingsView(host)
     await flushPromises()
     const store = await getSettingsStore()
     const provider = store.config!.llm.providers[0]!
@@ -746,8 +789,140 @@ describe('SettingsView — E2E 关键路径', () => {
     await wrapper.get('.hc-provider__card-head').trigger('click')
     await flushPromises()
 
+    const manage = wrapper.get('.hc-model-chip--manage')
+    expect(manage.text()).toContain('管理模型')
+    expect(wrapper.get('.hc-model-enabled-summary').text()).toContain('1 / 11')
+
+    await manage.trigger('click')
+    await flushPromises()
+
+    const body = new DOMWrapper(document.body)
+    expect(body.get('[role="dialog"]').text()).toContain('管理模型')
+    await body.get('[data-testid="model-manager-cancel"]').trigger('click')
+    await flushPromises()
+    expect(document.activeElement).toBe(manage.element)
+  }, 10_000)
+
+  it('makes the settings background inert only while the model manager is open', async () => {
+    const host = document.createElement('div')
+    document.body.append(host)
+    const wrapper = await mountSettingsView(host)
+    await flushPromises()
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    const { useModelCatalogStore } = await import('@/stores/model-catalog')
+    useModelCatalogStore().setCatalog(
+      provider.id,
+      Array.from({ length: 11 }, (_, index) => ({ id: `model-${index}`, name: `Model ${index}` })),
+    )
+    await wrapper.get('.hc-provider__card-head').trigger('click')
+    await flushPromises()
+
+    const settingsRoot = wrapper.get('.hc-settings')
+    expect(settingsRoot.attributes()).not.toHaveProperty('inert')
+
+    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await flushPromises()
+    expect(settingsRoot.attributes()).toHaveProperty('inert')
+
+    const body = new DOMWrapper(document.body)
+    await body.get('[data-testid="model-manager-cancel"]').trigger('click')
+    await flushPromises()
+    expect(settingsRoot.attributes()).not.toHaveProperty('inert')
+  }, 10_000)
+
+  it('keeps a small provider catalog inline without a model-manager entry', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    const { useModelCatalogStore } = await import('@/stores/model-catalog')
+    useModelCatalogStore().setCatalog(
+      provider.id,
+      Array.from({ length: 10 }, (_, index) => ({ id: `model-${index}`, name: `Model ${index}` })),
+    )
+    await wrapper.get('.hc-provider__card-head').trigger('click')
+    await flushPromises()
+
     expect(wrapper.find('.hc-model-chip--manage').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('管理模型')
+  })
+
+  it('surfaces a manual model-catalog resync failure from the manager', async () => {
+    const error = vi.fn()
+    ;(window as unknown as Record<string, unknown>).__hcToast = { value: { error } }
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    const { useModelCatalogStore } = await import('@/stores/model-catalog')
+    useModelCatalogStore().setCatalog(
+      provider.id,
+      Array.from({ length: 11 }, (_, index) => ({ id: `model-${index}`, name: `Model ${index}` })),
+    )
+    mockFetchProviderModels.mockRejectedValueOnce(new Error('upstream unavailable'))
+    await wrapper.get('.hc-provider__card-head').trigger('click')
+    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await flushPromises()
+
+    const body = new DOMWrapper(document.body)
+    await body.get('button[title="重新同步"]').trigger('click')
+    await flushPromises()
+
+    expect(error).toHaveBeenCalledWith('同步模型列表失败，请检查连接')
+  })
+
+  it('surfaces an empty parsed catalog as a manual resync failure', async () => {
+    const error = vi.fn()
+    ;(window as unknown as Record<string, unknown>).__hcToast = { value: { error } }
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    const { useModelCatalogStore } = await import('@/stores/model-catalog')
+    useModelCatalogStore().setCatalog(
+      provider.id,
+      Array.from({ length: 11 }, (_, index) => ({ id: `model-${index}`, name: `Model ${index}` })),
+    )
+    mockFetchProviderModels.mockResolvedValueOnce([])
+    await wrapper.get('.hc-provider__card-head').trigger('click')
+    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await flushPromises()
+
+    const body = new DOMWrapper(document.body)
+    await body.get('button[title="重新同步"]').trigger('click')
+    await flushPromises()
+
+    expect(error).toHaveBeenCalledWith('同步模型列表失败，请检查连接')
+  })
+
+  it('waits for manual resync persistence and surfaces a save failure', async () => {
+    ;(globalThis as Record<string, unknown>).isTauri = true
+    const error = vi.fn()
+    ;(window as unknown as Record<string, unknown>).__hcToast = { value: { error } }
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    const { useModelCatalogStore } = await import('@/stores/model-catalog')
+    useModelCatalogStore().setCatalog(
+      provider.id,
+      Array.from({ length: 11 }, (_, index) => ({ id: `old-${index}`, name: `Old ${index}` })),
+    )
+    mockFetchProviderModels.mockResolvedValueOnce(
+      Array.from({ length: 10 }, (_, index) => ({ id: `new-${index}`, name: `New ${index}` })),
+    )
+    const { updateLLMConfig } = await import('@/api/config')
+    vi.mocked(updateLLMConfig).mockRejectedValueOnce(new Error('disk unavailable'))
+    await wrapper.get('.hc-provider__card-head').trigger('click')
+    await wrapper.get('.hc-model-chip--manage').trigger('click')
+    await flushPromises()
+
+    const body = new DOMWrapper(document.body)
+    await body.get('button[title="重新同步"]').trigger('click')
+    await flushPromises()
+
+    expect(updateLLMConfig).toHaveBeenCalled()
+    expect(error).toHaveBeenCalledWith('同步模型列表失败，请检查连接')
   })
 
   it('disables add-model submission for an empty or duplicate model id', async () => {
@@ -766,7 +941,9 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(provider).not.toBeNull()
     await flushPromises()
 
-    const card = wrapper.findAll('.hc-provider__card').find((item) => item.text().includes('OpenAI'))!
+    const card = wrapper
+      .findAll('.hc-provider__card')
+      .find((item) => item.text().includes('OpenAI'))!
     await card.get('.hc-provider__card-head').trigger('click')
     await card.get('.hc-model-chip--add').trigger('click')
     await flushPromises()
@@ -936,7 +1113,10 @@ describe('SettingsView — E2E 关键路径', () => {
   it('shows the connection-test lifecycle in the header and disables duplicate clicks', async () => {
     let resolveTest!: (value: { ok: boolean; message: string }) => void
     mockTestLLMConnection.mockImplementation(
-      () => new Promise((resolve) => { resolveTest = resolve as typeof resolveTest }),
+      () =>
+        new Promise((resolve) => {
+          resolveTest = resolve as typeof resolveTest
+        }),
     )
     const wrapper = await mountSettingsView()
     await flushPromises()
@@ -1044,7 +1224,9 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1)
     expect(mockedUpdateLLMConfig).toHaveBeenCalled()
-    const backendPayload = mockedUpdateLLMConfig.mock.calls[mockedUpdateLLMConfig.mock.calls.length - 1]?.[0] as {
+    const backendPayload = mockedUpdateLLMConfig.mock.calls[
+      mockedUpdateLLMConfig.mock.calls.length - 1
+    ]?.[0] as {
       providers: Record<string, unknown>
     }
     expect(Object.keys(backendPayload.providers)).toHaveLength(2)
@@ -1077,7 +1259,9 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(closeEvent.preventDefault).toHaveBeenCalledTimes(1)
     expect(mockedUpdateLLMConfig).toHaveBeenCalled()
-    const backendPayload = mockedUpdateLLMConfig.mock.calls[mockedUpdateLLMConfig.mock.calls.length - 1]?.[0] as {
+    const backendPayload = mockedUpdateLLMConfig.mock.calls[
+      mockedUpdateLLMConfig.mock.calls.length - 1
+    ]?.[0] as {
       providers: Record<string, { api_key: string }>
     }
     expect(backendPayload.providers.openai?.api_key).toBe('sk-fresh-key')
@@ -1140,7 +1324,10 @@ describe('SettingsView — E2E 关键路径', () => {
       wrapper.unmount()
       await vi.advanceTimersByTimeAsync(1_600)
 
-      expect(mockTestLLMConnection, 'unmounted Settings must not fire its deferred provider test').not.toHaveBeenCalled()
+      expect(
+        mockTestLLMConnection,
+        'unmounted Settings must not fire its deferred provider test',
+      ).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }
@@ -1260,11 +1447,11 @@ describe('SettingsView — E2E 关键路径', () => {
 
     // Whether or not the Ollama provider card renders in DOM,
     // the store should have the Ollama provider after sync
-    expect(store.config!.llm.providers.some(p => p.type === 'ollama')).toBe(true)
+    expect(store.config!.llm.providers.some((p) => p.type === 'ollama')).toBe(true)
 
     // If providerCard is rendered, also verify models synced
-    const ollamaModels = store.availableModels.filter(m => m.providerName === 'Ollama')
-    expect(!providerCard || ollamaModels.some(m => m.modelId === 'qwen3:8b')).toBe(true)
+    const ollamaModels = store.availableModels.filter((m) => m.providerName === 'Ollama')
+    expect(!providerCard || ollamaModels.some((m) => m.modelId === 'qwen3:8b')).toBe(true)
   })
 
   it('does not add a second Ollama provider when handleAssociateOllama is called twice', async () => {
@@ -1281,17 +1468,16 @@ describe('SettingsView — E2E 关键路径', () => {
     vm.handleAssociateOllama()
     await flushPromises()
 
-    const ollamaCount1 = store.config!.llm.providers.filter(p => p.type === 'ollama').length
+    const ollamaCount1 = store.config!.llm.providers.filter((p) => p.type === 'ollama').length
     expect(ollamaCount1).toBe(1)
 
     // Second call should be a no-op since an Ollama provider already exists
     vm.handleAssociateOllama()
     await flushPromises()
 
-    const ollamaCount2 = store.config!.llm.providers.filter(p => p.type === 'ollama').length
+    const ollamaCount2 = store.config!.llm.providers.filter((p) => p.type === 'ollama').length
     expect(ollamaCount2).toBe(1)
   })
-
 
   // ────────────────────────────────────────────────────
   // 5. 工具栏保存配置并显示确认
@@ -1611,7 +1797,9 @@ describe('SettingsView — E2E 关键路径', () => {
 
     // 直接 mock store.saveConfig 抛出致命错误（模拟 Tauri 桌面端 LLM 保存失败）
     const originalSave = store.saveConfig
-    store.saveConfig = vi.fn().mockRejectedValueOnce(new Error('Disk full')) as typeof store.saveConfig
+    store.saveConfig = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Disk full')) as typeof store.saveConfig
 
     // 通过 SettingsView 暴露的方法执行删除
     const vm = wrapper.vm as unknown as {

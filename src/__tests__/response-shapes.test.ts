@@ -97,15 +97,14 @@ describe('API response shape alignment', () => {
 
   // ─── GET /api/v1/config/llm ─────────────────────────────────────────
   //
-  // Backend LLMConfigResponse: { default, providers, routing, cache }
-  // Frontend BackendLLMConfig: { default, providers, routing, cache }
+  // Backend LLMConfigResponse additionally preserves the K12 reasoning provider/model selection.
 
   describe('GET /api/v1/config/llm', () => {
     it('BackendLLMConfig fields match LLMConfigResponse', () => {
       // Backend struct LLMConfigResponse JSON tags:
-      const backendFields = ['default', 'providers', 'routing', 'cache']
+      const backendFields = ['default', 'providers', 'routing', 'cache', 'reasoning_provider', 'reasoning_model']
       // Frontend BackendLLMConfig declares:
-      const frontendFields = ['default', 'providers', 'routing', 'cache']
+      const frontendFields = ['default', 'providers', 'routing', 'cache', 'reasoning_provider', 'reasoning_model']
       expect(frontendFields.sort()).toEqual(backendFields.sort())
     })
 

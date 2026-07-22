@@ -2,7 +2,7 @@ import { ref, computed, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import { logger } from '@/utils/logger'
-import { getLLMConfig, updateLLMConfig, fetchProviderModels } from '@/api/config'
+import { getLLMConfig, updateLLMConfig } from '@/api/config'
 import { getOllamaStatus } from '@/api/ollama'
 import { updateConfig } from '@/api/settings'
 import { isTauri } from '@/utils/platform'
@@ -28,12 +28,12 @@ import {
   backendToProviders,
   providersToBackend,
   appendLocalProvidersMissingFromRuntime,
-  providerMatchesBackendKey,
-  mergeRemoteModelsIntoProvider,
+  mergeProviderRuntimeIdentities,
+  resolveLoadedDefaultSelection,
 } from './settings-helpers'
 import { CONFIG_STORE_FILE, CONFIG_STORE_KEY, defaultConfig } from './settings-defaults'
-import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from './model-catalog'
-import { PROVIDER_PRESETS, resolveOllamaCapabilities } from '@/config/providers'
+import { syncProviderModelCatalogs } from './provider-model-sync'
+import { resolveOllamaCapabilities } from '@/config/providers'
 import { collectAvailableChatModels, isOllamaProvider } from '@/config/model-contract'
 
 export const useSettingsStore = defineStore('settings', () => {
@@ -70,29 +70,6 @@ export const useSettingsStore = defineStore('settings', () => {
   const cloneSecurity = (security: SecurityConfig): SecurityConfig => ({ ...security })
   const cloneSandbox = (sandbox: SandboxConfig): SandboxConfig => ({ ...sandbox })
 
-  /** 仅回灌服务端身份字段；前端 id、展示名、模型和真实/secure API Key 均以目标对象为准。 */
-  const mergeProviderRuntimeIdentities = (
-    targetProviders: ProviderConfig[],
-    runtimeIdentityProviders: ProviderConfig[],
-  ): ProviderConfig[] => targetProviders.map((provider) => {
-    const runtime = runtimeIdentityProviders.find((candidate) =>
-      candidate.id === provider.id ||
-      Boolean(
-        provider.providerInstanceId &&
-        candidate.providerInstanceId === provider.providerInstanceId,
-      ) ||
-      Boolean(candidate.backendKey && providerMatchesBackendKey(provider, candidate.backendKey)),
-    )
-    if (!runtime) return provider
-    return {
-      ...provider,
-      ...(runtime.providerInstanceId
-        ? { providerInstanceId: runtime.providerInstanceId }
-        : {}),
-      ...(runtime.backendKey ? { backendKey: runtime.backendKey } : {}),
-    }
-  })
-
   /** 所有可用模型（来自已启用的 Provider + Ollama 实时缓存） */
   const availableModels = computed(() =>
     collectAvailableChatModels(enabledProviders.value, ollamaModelsCache.value),
@@ -104,6 +81,31 @@ export const useSettingsStore = defineStore('settings', () => {
   let forceReloadPromise: Promise<void> | null = null
   /** 保存队列：保证并发 saveConfig 按调用顺序串行提交，避免旧保存覆盖新状态 */
   let saveConfigQueue: Promise<void> = Promise.resolve()
+
+  /**
+   * 小目录同步改变的是已启用模型配置，必须写回后端；直接复用同一保存队列，
+   * 但不再次触发目录同步，避免 save → sync → save 的递归回路。
+   */
+  function persistSyncedProviderModels() {
+    const persistJob = async () => {
+      if (!config.value) return
+      const snapshot: AppConfig = JSON.parse(JSON.stringify(config.value))
+      snapshot.llm.providers = await materializeProviderApiKeys(snapshot.llm.providers)
+      await updateLLMConfig(
+        providersToBackend(
+          snapshot.llm.providers,
+          snapshot.llm.defaultModel,
+          snapshot.llm.defaultProviderId ?? '',
+          snapshot.llm.routing,
+        ),
+      )
+    }
+    const queuedJob = saveConfigQueue.catch(() => undefined).then(persistJob)
+    saveConfigQueue = queuedJob
+    void queuedJob.catch((e) => {
+      logger.warn('自动启用的小目录模型持久化失败，将在下次显式保存时重试', e)
+    })
+  }
 
   /** 加载配置 — 非 LLM 配置从 Tauri Store 读取，LLM 配置从后端 API 读取 */
   async function loadConfig({ force = false } = {}) {
@@ -258,35 +260,14 @@ export const useSettingsStore = defineStore('settings', () => {
           enabled: backendConfig.routing.enabled,
           strategy: backendConfig.routing.strategy || 'cost-aware',
         }
-        const persistedDefaultModel = config.value!.llm.defaultModel
-        const persistedDefaultProviderId = config.value!.llm.defaultProviderId ?? ''
-        const backendDefaultModel = backendConfig.default
-          ? backendConfig.providers[backendConfig.default]?.model || ''
-          : ''
-        const backendDefaultProviderId = backendConfig.default
-          ? providers.find((provider) => providerMatchesBackendKey(provider, backendConfig.default))
-              ?.id || ''
-          : ''
-        const hasPersistedDefaultModel = providers.some(
-          (provider) =>
-            provider.id === persistedDefaultProviderId &&
-            provider.models.some((model) => model.id === persistedDefaultModel),
+        const restoredDefault = resolveLoadedDefaultSelection(
+          providers,
+          backendConfig,
+          config.value!.llm.defaultModel,
+          config.value!.llm.defaultProviderId ?? '',
         )
-        const hasBackendDefaultModel = providers.some(
-          (provider) =>
-            provider.id === backendDefaultProviderId &&
-            provider.models.some((model) => model.id === backendDefaultModel),
-        )
-        config.value!.llm.defaultModel = hasPersistedDefaultModel
-          ? persistedDefaultModel
-          : hasBackendDefaultModel
-            ? backendDefaultModel
-            : ''
-        config.value!.llm.defaultProviderId = hasPersistedDefaultModel
-          ? persistedDefaultProviderId
-          : hasBackendDefaultModel
-            ? backendDefaultProviderId
-            : ''
+        config.value!.llm.defaultModel = restoredDefault.modelId
+        config.value!.llm.defaultProviderId = restoredDefault.providerId
         logger.info('LLM 配置加载成功', { providerCount: providers.length })
         return
       } catch (e) {
@@ -450,40 +431,12 @@ export const useSettingsStore = defineStore('settings', () => {
     return { securitySyncFailed }
   }
 
-  /**
-   * 保存后异步拉取每个云端 Provider 的模型目录（fire-and-forget）。
-   * 全量目录进 catalog store；仅小目录（≤ AUTO_ENABLE_CATALOG_LIMIT）合并进启用列表。
-   */
   function syncAllProviderModels(providers: ProviderConfig[]) {
-    const catalogStore = useModelCatalogStore()
-    for (const p of providers) {
-      if (!p.enabled || !p.apiKey?.trim() || p.type === 'ollama') continue
-      const baseUrl = p.baseUrl?.trim()
-      if (!baseUrl) continue
-      fetchProviderModels(baseUrl, p.apiKey, {
-        providerType: p.type,
-        locality: p.locality,
-        privateNetworkAccess: p.privateNetworkAccess,
-      }).then((remoteModels) => {
-        if (!remoteModels.length || !config.value) return
-        const target = config.value.llm.providers.find((cp) => cp.id === p.id)
-        if (!target) return
-        catalogStore.setCatalog(target.id, remoteModels)
-        if (remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT) {
-          const trimmed = trimFloodedModels(target.models, remoteModels, target.selectedModelId)
-          if (trimmed) {
-            target.models = trimmed
-            logger.info('启用列表为历史全量灌入，已收缩为策展子集', p.name, trimmed.length)
-          }
-          logger.debug('目录已同步（大目录，不自动启用）', p.name, remoteModels.length)
-          return
-        }
-        mergeRemoteModelsIntoProvider(target, remoteModels, PROVIDER_PRESETS[p.type]?.defaultModels ?? [])
-        logger.debug('自动拉取模型列表完成', p.name, remoteModels.length)
-      }).catch(() => {
-        // 静默失败，兜底模型已可用
-      })
-    }
+    syncProviderModelCatalogs(providers, {
+      getConfiguredProviders: () => config.value?.llm.providers ?? [],
+      getRuntimeProviders: () => runtimeProviders.value,
+      persistChangedProviders: persistSyncedProviderModels,
+    })
   }
 
   /** 添加 Provider */

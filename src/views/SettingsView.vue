@@ -15,9 +15,15 @@ import {
   XCircle,
   RotateCcw,
   ShieldCheck,
+  SlidersHorizontal,
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
-import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT, trimFloodedModels } from '@/stores/model-catalog'
+import {
+  useModelCatalogStore,
+  AUTO_ENABLE_CATALOG_LIMIT,
+  beginProviderCatalogSync,
+  reconcileProviderCatalog,
+} from '@/stores/model-catalog'
 import {
   canonicalizeModelOption,
   isChatModelOption,
@@ -55,6 +61,7 @@ import ProviderSelect from '@/components/common/ProviderSelect.vue'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 import OllamaCard from '@/components/settings/OllamaCard.vue'
+import ModelManagerModal from '@/components/settings/ModelManagerModal.vue'
 import AutomationPermissionsPanel from '@/components/settings/AutomationPermissionsPanel.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -87,7 +94,9 @@ let customModelReturnFocus: HTMLElement | null = null
 // 编辑模型 Modal
 const editingModel = ref<{ providerId: string; idx: number; model: ModelOption } | null>(null)
 const editModelOverlayRef = ref<HTMLDivElement | null>(null)
-watch(editingModel, (v) => { if (v) nextTick(() => editModelOverlayRef.value?.focus()) })
+watch(editingModel, (v) => {
+  if (v) nextTick(() => editModelOverlayRef.value?.focus())
+})
 const editModelForm = ref<{ name: string; id: string; caps: Record<ModelCapability, boolean> }>({
   name: '',
   id: '',
@@ -113,9 +122,9 @@ const openAbout = useAboutWindow()
 
 // Load desktop app version from Tauri
 onMounted(() => {
-  import('@tauri-apps/api/app').then(({ getVersion }) =>
-    getVersion().then((v) => (appVersion.value = 'v' + v)),
-  ).catch(() => {})
+  import('@tauri-apps/api/app')
+    .then(({ getVersion }) => getVersion().then((v) => (appVersion.value = 'v' + v)))
+    .catch(() => {})
 })
 const runtimeInfoLoading = ref(false)
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -128,7 +137,11 @@ let closingAfterFlush = false
 // tab 序：AI 能力域配置（LLM/自动化权限）相邻靠前，平台工具类（系统设置）居尾。
 const sections = computed(() => [
   { key: 'llm', label: t('settings.llm.title'), icon: Key },
-  { key: 'automation', label: t('autonomy.settings.sectionTitle', '自动化权限'), icon: ShieldCheck },
+  {
+    key: 'automation',
+    label: t('autonomy.settings.sectionTitle', '自动化权限'),
+    icon: ShieldCheck,
+  },
   { key: 'system', label: t('settings.system.title'), icon: Palette },
 ])
 
@@ -196,8 +209,8 @@ function stepMaxTools(delta: number) {
   autoSave()
 }
 
-const nonOllamaProviders = computed(() =>
-  config.value?.llm.providers.filter((p) => p.type !== 'ollama') ?? [],
+const nonOllamaProviders = computed(
+  () => config.value?.llm.providers.filter((p) => p.type !== 'ollama') ?? [],
 )
 
 function isDesktopRuntime() {
@@ -360,7 +373,10 @@ function reliabilityIcon(level: string): string {
 }
 
 function reliabilityTooltip(r: { level: string; lastProbe?: string; probeError?: string }): string {
-  const label = { good: '工具调用可靠', partial: '工具调用部分可靠', bad: '工具调用不可靠', unknown: '未检测' }[r.level] ?? r.level
+  const label =
+    { good: '工具调用可靠', partial: '工具调用部分可靠', bad: '工具调用不可靠', unknown: '未检测' }[
+      r.level
+    ] ?? r.level
   const parts = [label]
   if (r.lastProbe) {
     const d = new Date(r.lastProbe)
@@ -373,7 +389,6 @@ function reliabilityTooltip(r: { level: string; lastProbe?: string; probeError?:
 function probingModel(providerId: string, modelId: string): boolean {
   return probingKey.value === `${providerId}:${modelId}`
 }
-
 
 onMounted(async () => {
   // settings 页面被路由守卫豁免，config 可能尚未加载
@@ -455,8 +470,19 @@ watch(editingProviderId, () => {
 })
 
 const config = computed(() => settingsStore.config)
+const modelManagerProviderId = ref<string | null>(null)
+const managerSyncing = ref(false)
+let modelManagerReturnFocus: HTMLElement | null = null
+const modelManagerProvider = computed(
+  () =>
+    config.value?.llm.providers.find((provider) => provider.id === modelManagerProviderId.value) ??
+    null,
+)
 const customModelDialogProvider = computed(
-  () => config.value?.llm.providers.find((provider) => provider.id === customModelDialogProviderId.value) ?? null,
+  () =>
+    config.value?.llm.providers.find(
+      (provider) => provider.id === customModelDialogProviderId.value,
+    ) ?? null,
 )
 const customModelCapabilityOptions = computed(() => [
   { value: 'text', label: '文本' },
@@ -472,7 +498,10 @@ const customModelIdIsDuplicate = computed(() => {
   return !!provider && !!modelId && provider.models.some((model) => model.id === modelId)
 })
 const canSubmitCustomModel = computed(
-  () => !!customModelDialogProvider.value && !!normalizedNewModelId.value && !customModelIdIsDuplicate.value,
+  () =>
+    !!customModelDialogProvider.value &&
+    !!normalizedNewModelId.value &&
+    !customModelIdIsDuplicate.value,
 )
 
 watch(customModelDialogProviderId, (providerId) => {
@@ -513,7 +542,8 @@ const selectedDefaultModelValue = computed({
     if (!llmConfig?.defaultModel) return ''
     const providerId =
       llmConfig.defaultProviderId ||
-      defaultModelOptions.value.find((option) => option.modelId === llmConfig.defaultModel)?.providerId ||
+      defaultModelOptions.value.find((option) => option.modelId === llmConfig.defaultModel)
+        ?.providerId ||
       ''
     return providerId ? `${providerId}::${llmConfig.defaultModel}` : ''
   },
@@ -598,17 +628,22 @@ const runtimeDefaultModel = computed(() => {
   return runtimeLLMConfig.value?.providers[defaultProvider]?.model || '—'
 })
 const runtimeApiEndpoint = computed(
-  () => `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
+  () =>
+    `${runtimeConfig.value?.server.host || '127.0.0.1'}:${runtimeConfig.value?.server.port || '—'}`,
 )
 const runtimeLocalStoreFile = 'data.db'
 const runtimeModeShort = computed(() => {
   const rawMode = runtimeConfig.value?.server.mode?.trim()?.toLowerCase()
   if (!rawMode) return ''
   switch (rawMode) {
-    case 'desktop': return t('settings.storage.modeDesktop', '桌面模式')
-    case 'production': return t('settings.storage.modeProduction', '生产模式')
-    case 'development': return t('settings.storage.modeDevelopment', '开发模式')
-    default: return rawMode
+    case 'desktop':
+      return t('settings.storage.modeDesktop', '桌面模式')
+    case 'production':
+      return t('settings.storage.modeProduction', '生产模式')
+    case 'development':
+      return t('settings.storage.modeDevelopment', '开发模式')
+    default:
+      return rawMode
   }
 })
 
@@ -687,7 +722,9 @@ function handleAddProvider() {
 async function handleDeleteProvider(id: string) {
   // 保存删除前快照，以便失败时恢复
   const snapshot = settingsStore.config
-    ? JSON.parse(JSON.stringify(settingsStore.config.llm.providers)) as typeof settingsStore.config.llm.providers
+    ? (JSON.parse(
+        JSON.stringify(settingsStore.config.llm.providers),
+      ) as typeof settingsStore.config.llm.providers)
     : null
   const prevEditingId = editingProviderId.value
 
@@ -747,7 +784,7 @@ function isEmbeddingOnlyModel(model: ModelOption): boolean {
 
 /** 从 Provider 模型列表移除；向量模型不会参与聊天选择回退。 */
 function removeProviderModel(provider: ProviderConfig, modelId: string) {
-  const idx = provider.models.findIndex(m => m.id === modelId)
+  const idx = provider.models.findIndex((m) => m.id === modelId)
   if (idx < 0) return
   provider.models.splice(idx, 1)
   if (provider.selectedModelId === modelId) {
@@ -763,11 +800,12 @@ function capabilitiesForCustomModel(capability: ModelCapability): ModelCapabilit
 
 function openCustomModelDialog(provider: ProviderConfig, event?: MouseEvent) {
   resetPendingModelDraft()
-  customModelReturnFocus = event?.currentTarget instanceof HTMLElement
-    ? event.currentTarget
-    : document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null
+  customModelReturnFocus =
+    event?.currentTarget instanceof HTMLElement
+      ? event.currentTarget
+      : document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
   customModelDialogProviderId.value = provider.id
 }
 
@@ -790,14 +828,18 @@ function handleCustomModelDialogKeydown(event: KeyboardEvent) {
 
   const dialog = customModelDialogRef.value
   if (!dialog) return
-  const focusable = Array.from(dialog.querySelectorAll<HTMLElement>([
-    'button:not([disabled])',
-    'input:not([disabled])',
-    'select:not([disabled])',
-    'textarea:not([disabled])',
-    'a[href]',
-    '[tabindex]:not([tabindex="-1"])',
-  ].join(',')))
+  const focusable = Array.from(
+    dialog.querySelectorAll<HTMLElement>(
+      [
+        'button:not([disabled])',
+        'input:not([disabled])',
+        'select:not([disabled])',
+        'textarea:not([disabled])',
+        'a[href]',
+        '[tabindex]:not([tabindex="-1"])',
+      ].join(','),
+    ),
+  )
   if (focusable.length === 0) {
     event.preventDefault()
     dialog.focus()
@@ -879,14 +921,12 @@ function providerDestinationSelection(provider: ProviderConfig): 'local' | 'clou
     decision.classification !== 'ambiguous' ||
     provider.localitySource !== 'user' ||
     provider.confirmedEndpointHost !== decision.host
-  ) return ''
+  )
+    return ''
   return provider.locality === 'local' ? 'local' : 'cloud'
 }
 
-function handleProviderDestinationChange(
-  provider: ProviderConfig,
-  locality: 'local' | 'cloud',
-) {
+function handleProviderDestinationChange(provider: ProviderConfig, locality: 'local' | 'cloud') {
   const decision = providerEndpointDecision(provider)
   if (decision.classification !== 'ambiguous' || !decision.host) return
   provider.locality = locality
@@ -971,7 +1011,9 @@ function saveEditModel() {
   settingsStore.updateProvider(providerId, {
     models: updated,
     selectedModelId:
-      provider.selectedModelId === previousModelId ? editModelForm.value.id : provider.selectedModelId,
+      provider.selectedModelId === previousModelId
+        ? editModelForm.value.id
+        : provider.selectedModelId,
   })
   editingModel.value = null
   autoSave()
@@ -979,7 +1021,9 @@ function saveEditModel() {
 
 // ─── Provider 连接测试 ────────────────────────────────
 const testingProviderId = ref<string | null>(null)
-const testProviderResult = ref<Record<string, { ok: boolean; msg: string; locality?: 'local' | 'cloud' }>>({})
+const testProviderResult = ref<
+  Record<string, { ok: boolean; msg: string; locality?: 'local' | 'cloud' }>
+>({})
 /** API Key 变化后自动测试连接 + 拉取模型（防抖 1.5s） */
 function scheduleAutoTest(provider: ProviderConfig) {
   if (autoTestTimers[provider.id]) clearTimeout(autoTestTimers[provider.id])
@@ -998,9 +1042,10 @@ async function testProvider(provider: ProviderConfig) {
   delete testProviderResult.value[provider.id]
 
   // 此入口只验证 chat-completions；Embedding-only 由知识库 profile preflight 验证。
-  const preferred = provider.models?.find(
-    (model) => model.id === provider.selectedModelId && isChatModelOption(model),
-  ) || provider.models?.find(isChatModelOption)
+  const preferred =
+    provider.models?.find(
+      (model) => model.id === provider.selectedModelId && isChatModelOption(model),
+    ) || provider.models?.find(isChatModelOption)
   const selectedModelId = (preferred?.id || '').trim()
   if (!selectedModelId) {
     testProviderResult.value[provider.id] = {
@@ -1063,77 +1108,29 @@ async function syncRemoteModels(provider: ProviderConfig): Promise<boolean> {
   const preset = PROVIDER_PRESETS[provider.type]
   const baseUrl = provider.baseUrl || preset?.defaultBaseUrl || ''
   const apiKey = provider.apiKey?.trim() || ''
-  if (!baseUrl) return true
+  if (!baseUrl && !provider.providerInstanceId) return false
+  const syncLease = beginProviderCatalogSync(provider, baseUrl)
   try {
     const remoteModels = await fetchProviderModels(baseUrl, apiKey, {
       providerType: provider.type,
+      providerInstanceId: provider.providerInstanceId,
       locality: effectiveProviderLocality(provider),
       privateNetworkAccess: provider.privateNetworkAccess,
     })
-    if (!remoteModels.length) return true
+    if (!remoteModels.length) throw new Error('empty model catalog')
+    const currentProvider = config.value?.llm.providers.find((candidate) => candidate.id === provider.id)
+    if (!currentProvider) return false
+    const currentPreset = PROVIDER_PRESETS[currentProvider.type]
+    const currentBaseUrl = currentProvider.baseUrl || currentPreset?.defaultBaseUrl || ''
+    if (!syncLease.isCurrent(currentProvider, currentBaseUrl)) return false
     // 目录层：全量 + 元数据存本地缓存；Provider 卡片只呈现已配置子集。
-    catalogStore.setCatalog(provider.id, remoteModels)
-
-    if (remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT) {
-      // 聚合商大目录：不自动灌入启用层，只回填已配置模型的展示名。
-      // 上游已下架的模型由 isStaleModel 标记，不静默删除。
-      const trimmed = trimFloodedModels(provider.models, remoteModels, provider.selectedModelId)
-      if (trimmed) {
-        provider.models = trimmed
-      }
-      const catalogMap = new Map(remoteModels.map(m => [m.id, m]))
-      let changed = false
-      const refreshed = provider.models.map(m => {
-        const cm = catalogMap.get(m.id)
-        if (cm?.name && cm.name !== m.name && !m.isCustom) {
-          changed = true
-          return { ...m, name: cm.name }
-        }
-        return m
-      })
-      if (changed) {
-        provider.models = refreshed
-        autoSave()
-      }
-      return true
-    }
-
-    // 小目录：维持原行为，与预设合并后全量进启用列表
-    const presetMap = new Map((preset?.defaultModels ?? []).map(m => [m.id, m]))
-    const existingMap = new Map(provider.models.map(m => [m.id, m]))
-    const merged: typeof provider.models = []
-    const seen = new Set<string>()
-    // 1) 远程返回的：按远程顺序合并（含 capabilities 回填）
-    for (const rm of remoteModels) {
-      const existing = existingMap.get(rm.id) || presetMap.get(rm.id)
-      const capabilities = existing
-        ? normalizeModelCapabilities(existing)
-        : normalizeModelCapabilities({ id: rm.id })
-      merged.push({
-        id: rm.id,
-        name: rm.name || rm.id,
-        capabilities,
-        isCustom: existing?.isCustom,
-        ...(existing?.embedding ? { embedding: { ...existing.embedding } } : {}),
-      })
-      seen.add(rm.id)
-    }
-    // 2) 保留两类远程未返回但应该继续存在的模型：
-    //    - 用户自定义（isCustom: true）— 明确用户意愿，不能被覆盖
-    //    - 图像/视频生成 preset（cogview-4 / cogvideox-2 等）— 这些走 /images 或 /videos endpoint，
-    //      智谱等 /models 接口不返回；若清掉会影响生成模式可用性
-    for (const m of provider.models) {
-      if (seen.has(m.id)) continue
-      const isGenOnly = !!m.capabilities?.some(c => c === 'image_generation' || c === 'video_generation')
-      if (m.isCustom || isGenOnly) {
-        merged.push(m)
-        seen.add(m.id)
-      }
-    }
-    provider.models = merged
-    // 当前模型必须留在 chat consumer 域；Embedding/未分类模型不能成为回退项。
-    provider.selectedModelId = resolveProviderSelectedModelId(provider)
-    autoSave()
+    catalogStore.setCatalog(currentProvider.id, remoteModels)
+    const result = reconcileProviderCatalog(
+      currentProvider,
+      remoteModels,
+      currentPreset?.defaultModels ?? [],
+    )
+    if (result.changed) autoSave()
     return true
   } catch (e) {
     // 自动后台同步（testProvider 成功后触发）忽略返回值 → 静默。
@@ -1146,9 +1143,41 @@ function providerCatalogCount(providerId: string): number {
   return catalogStore.getCatalog(providerId)?.models.length ?? 0
 }
 
-/** 大目录仅在 Provider 卡片内显示摘要；不再提供跨层模型管理器。 */
+/** 目录超过阈值时使用“摘要 + 管理器”，避免把聚合商全量目录铺进 Provider 卡片。 */
 function isManagedCatalog(providerId: string): boolean {
   return providerCatalogCount(providerId) > AUTO_ENABLE_CATALOG_LIMIT
+}
+
+function providerHasNewModels(providerId: string): boolean {
+  return (catalogStore.getCatalog(providerId)?.newIds.length ?? 0) > 0
+}
+
+function openModelManager(providerId: string, event: MouseEvent) {
+  modelManagerReturnFocus = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+  modelManagerProviderId.value = providerId
+}
+
+function closeModelManager() {
+  modelManagerProviderId.value = null
+  const returnFocus = modelManagerReturnFocus
+  modelManagerReturnFocus = null
+  nextTick(() => {
+    if (returnFocus?.isConnected) returnFocus.focus()
+  })
+}
+
+async function handleManagerResync() {
+  const provider = modelManagerProvider.value
+  if (!provider || managerSyncing.value) return
+  managerSyncing.value = true
+  try {
+    const ok = await syncRemoteModels(provider)
+    if (!ok) {
+      toast.error(t('settings.llm.syncModelsFailed', '同步模型列表失败，请检查连接'))
+    }
+  } finally {
+    managerSyncing.value = false
+  }
 }
 
 /** 模型是否免费（仅当目录带价格元数据时返回 true，宁缺勿错） */
@@ -1165,8 +1194,9 @@ function isStaleModel(provider: ProviderConfig, model: ModelOption): boolean {
   const catalog = catalogStore.getCatalog(provider.id)
   if (!catalog || catalog.models.length === 0) return false
   if (model.isCustom) return false
-  if (model.capabilities?.some(c => c === 'image_generation' || c === 'video_generation')) return false
-  return !catalog.models.some(m => m.id === model.id)
+  if (model.capabilities?.some((c) => c === 'image_generation' || c === 'video_generation'))
+    return false
+  return !catalog.models.some((m) => m.id === model.id)
 }
 
 /** 自动保存（防抖） */
@@ -1181,6 +1211,16 @@ function autoSave() {
       logger.error('[HexClaw] 自动保存失败:', e)
     }
   }, 500)
+}
+
+function onProviderApiKeyInput(provider: ProviderConfig) {
+  autoSave()
+  scheduleAutoTest(provider)
+}
+
+function selectProviderModel(provider: ProviderConfig, modelId: string) {
+  provider.selectedModelId = modelId
+  handleProviderModelChange(provider)
 }
 
 async function onToolbarReset() {
@@ -1207,7 +1247,9 @@ async function saveConfig() {
     // 保存失败不能静默：清成功态 + 置失败态，按钮显示「保存失败，请重试」（4s 后复位）
     saved.value = false
     saveFailed.value = true
-    setTimeout(() => { saveFailed.value = false }, 4000)
+    setTimeout(() => {
+      saveFailed.value = false
+    }, 4000)
   }
 }
 
@@ -1229,7 +1271,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 </script>
 
 <template>
-  <div class="hc-settings" :inert="customModelDialogProviderId ? true : undefined">
+  <div
+    class="hc-settings"
+    :inert="customModelDialogProviderId || modelManagerProviderId ? true : undefined"
+  >
     <PageToolbar>
       <template #tabs>
         <SegmentedControl
@@ -1249,8 +1294,16 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
           @click="saveConfig"
         >
           <CheckCircle v-if="saved" :size="14" />
-          {{ saved ? t('common.saved') : saveFailed ? t('settings.toolbar.saveFailed', '保存失败，请重试') : t('settings.toolbar.saveSettings', '保存') }}
-          <span class="hc-settings__dirty" :class="{ 'hc-settings__dirty--on': isDirty }">· 未保存</span>
+          {{
+            saved
+              ? t('common.saved')
+              : saveFailed
+                ? t('settings.toolbar.saveFailed', '保存失败，请重试')
+                : t('settings.toolbar.saveSettings', '保存')
+          }}
+          <span class="hc-settings__dirty" :class="{ 'hc-settings__dirty--on': isDirty }"
+            >· 未保存</span
+          >
         </button>
       </template>
     </PageToolbar>
@@ -1261,11 +1314,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
         <template v-if="config">
           <!-- LLM Providers -->
-          <div
-            v-if="activeSection === 'llm'"
-            class="hc-settings__section"
-            style="max-width: 600px"
-          >
+          <div v-if="activeSection === 'llm'" class="hc-settings__section" style="max-width: 600px">
             <!-- ── 默认行为 ── -->
             <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">默认行为</span>
@@ -1275,7 +1324,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             <div class="hc-settings__row">
               <span class="hc-settings__row-label">
                 {{ t('settings.llm.defaultModel') }}
-                <span class="hc-settings__info" :data-info="t('settings.llm.defaultModelHint')">?</span>
+                <span class="hc-settings__info" :data-info="t('settings.llm.defaultModelHint')"
+                  >?</span
+                >
               </span>
               <div class="hc-settings__row-right">
                 <HcSelect
@@ -1292,7 +1343,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             <div class="hc-settings__row">
               <span class="hc-settings__row-label">
                 {{ t('settings.llm.routingEnabled') }}
-                <span class="hc-settings__info" data-info="开启后，未指定模型的请求将根据偏好策略自动选择最优模型。">?</span>
+                <span
+                  class="hc-settings__info"
+                  data-info="开启后，未指定模型的请求将根据偏好策略自动选择最优模型。"
+                  >?</span
+                >
               </span>
               <div class="hc-settings__row-right">
                 <HcSelect
@@ -1316,7 +1371,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             <div class="hc-settings__row">
               <span class="hc-settings__row-label">
                 Agent 模式
-                <span class="hc-settings__info" data-info="auto 按问题自动选；ReAct 工具循环；Plan-Execute 先规划再执行；Reflection 答后自查；ToT 多解择优；Self-Reflect 每步反思；Memory-Augmented 个性化档案；Debate 双视角辩论。">?</span>
+                <span
+                  class="hc-settings__info"
+                  data-info="auto 按问题自动选；ReAct 工具循环；Plan-Execute 先规划再执行；Reflection 答后自查；ToT 多解择优；Self-Reflect 每步反思；Memory-Augmented 个性化档案；Debate 双视角辩论。"
+                  >?</span
+                >
               </span>
               <div class="hc-settings__row-right">
                 <HcSelect
@@ -1337,18 +1396,27 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             <div class="hc-settings__row">
               <span class="hc-settings__row-label">
                 {{ t('settings.llm.toolsToggle') }}
-                <span class="hc-settings__info" data-info="开启后模型可使用已安装的 Skill 和 MCP 工具完成搜索、计算等操作。本地小模型建议关闭。">?</span>
+                <span
+                  class="hc-settings__info"
+                  data-info="开启后模型可使用已安装的 Skill 和 MCP 工具完成搜索、计算等操作。本地小模型建议关闭。"
+                  >?</span
+                >
               </span>
               <div class="hc-settings__row-right">
                 <input
                   type="checkbox"
                   class="hc-toggle"
                   :checked="(config.llm.tools?.enabled ?? 'auto') !== 'off'"
-                  @change="(e: Event) => {
-                    const on = (e.target as HTMLInputElement).checked
-                    config!.llm.tools = { enabled: on ? 'auto' : 'off', maxTools: config!.llm.tools?.maxTools ?? 0 }
-                    autoSave()
-                  }"
+                  @change="
+                    (e: Event) => {
+                      const on = (e.target as HTMLInputElement).checked
+                      config!.llm.tools = {
+                        enabled: on ? 'auto' : 'off',
+                        maxTools: config!.llm.tools?.maxTools ?? 0,
+                      }
+                      autoSave()
+                    }
+                  "
                 />
               </div>
             </div>
@@ -1357,7 +1425,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               <div class="hc-settings__row">
                 <span class="hc-settings__row-label">
                   {{ t('settings.llm.maxToolsLabel') }}
-                  <span class="hc-settings__info" data-info="限制单次对话注入的工具数量。0 表示不限制，小模型建议 3–5。">?</span>
+                  <span
+                    class="hc-settings__info"
+                    data-info="限制单次对话注入的工具数量。0 表示不限制，小模型建议 3–5。"
+                    >?</span
+                  >
                 </span>
                 <div class="hc-settings__row-right">
                   <div class="hc-settings__stepper">
@@ -1373,7 +1445,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             <div class="hc-settings__sep">
               <span class="hc-settings__sep-label">服务商</span>
               <span class="hc-settings__sep-line"></span>
-              <button class="hc-btn hc-btn-sm hc-settings__sep-action" @click="showAddProvider = !showAddProvider">
+              <button
+                class="hc-btn hc-btn-sm hc-settings__sep-action"
+                @click="showAddProvider = !showAddProvider"
+              >
                 <Plus :size="14" />
                 {{ t('settings.llm.addProvider') }}
               </button>
@@ -1394,7 +1469,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
             </div>
 
             <!-- 本地 LLM (Ollama) 卡片 -->
-            <OllamaCard @associate="handleAssociateOllama" @toggle-provider="handleToggleOllamaProvider" />
+            <OllamaCard
+              @associate="handleAssociateOllama"
+              @toggle-provider="handleToggleOllamaProvider"
+            />
 
             <!-- Provider 列表（本地 Ollama 常驻，故不再额外渲染「尚未添加服务商」空态；对齐原型） -->
             <div class="hc-provider__list">
@@ -1420,40 +1498,66 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       {{ t('settings.llm.models').toLowerCase() }}</span
                     >
                   </div>
-                <div class="hc-provider__card-actions">
+                  <div class="hc-provider__card-actions">
                     <span
                       class="hc-provider__connection-status"
                       :class="{
-                        'hc-provider__connection-status--testing': testingProviderId === provider.id,
-                        'hc-provider__connection-status--ok': testingProviderId !== provider.id && testProviderResult[provider.id]?.ok,
-                        'hc-provider__connection-status--error': testingProviderId !== provider.id && testProviderResult[provider.id] && !testProviderResult[provider.id]!.ok,
+                        'hc-provider__connection-status--testing':
+                          testingProviderId === provider.id,
+                        'hc-provider__connection-status--ok':
+                          testingProviderId !== provider.id && testProviderResult[provider.id]?.ok,
+                        'hc-provider__connection-status--error':
+                          testingProviderId !== provider.id &&
+                          testProviderResult[provider.id] &&
+                          !testProviderResult[provider.id]!.ok,
                       }"
                       aria-live="polite"
-                      :aria-label="testProviderResult[provider.id]?.ok && testProviderResult[provider.id]?.locality
-                        ? `${t('settings.llm.connected', '已连接')} · ${testProviderResult[provider.id]!.locality === 'local' ? t('settings.llm.localService') : t('settings.llm.cloudService')}`
-                        : undefined"
+                      :aria-label="
+                        testProviderResult[provider.id]?.ok &&
+                        testProviderResult[provider.id]?.locality
+                          ? `${t('settings.llm.connected', '已连接')} · ${testProviderResult[provider.id]!.locality === 'local' ? t('settings.llm.localService') : t('settings.llm.cloudService')}`
+                          : undefined
+                      "
                     >
-                      <Loader2 v-if="testingProviderId === provider.id" :size="12" class="animate-spin" />
+                      <Loader2
+                        v-if="testingProviderId === provider.id"
+                        :size="12"
+                        class="animate-spin"
+                      />
                       <CheckCircle v-else-if="testProviderResult[provider.id]?.ok" :size="12" />
                       <XCircle v-else-if="testProviderResult[provider.id]" :size="12" />
                       <span v-else class="hc-provider__connection-dot" aria-hidden="true" />
-                      {{ testingProviderId === provider.id
-                        ? t('settings.llm.testing', '测试中…')
-                        : testProviderResult[provider.id]?.ok
-                          ? t('settings.llm.connected', '已连接')
-                          : testProviderResult[provider.id]
-                            ? t('settings.llm.connectionFailed')
-                            : t('settings.llm.untested', '未测试') }}
-                      <template v-if="testingProviderId !== provider.id && testProviderResult[provider.id]?.ok && testProviderResult[provider.id]!.locality">
-                        · {{ testProviderResult[provider.id]!.locality === 'local'
-                          ? t('settings.llm.localService')
-                          : t('settings.llm.cloudService') }}
+                      {{
+                        testingProviderId === provider.id
+                          ? t('settings.llm.testing', '测试中…')
+                          : testProviderResult[provider.id]?.ok
+                            ? t('settings.llm.connected', '已连接')
+                            : testProviderResult[provider.id]
+                              ? t('settings.llm.connectionFailed')
+                              : t('settings.llm.untested', '未测试')
+                      }}
+                      <template
+                        v-if="
+                          testingProviderId !== provider.id &&
+                          testProviderResult[provider.id]?.ok &&
+                          testProviderResult[provider.id]!.locality
+                        "
+                      >
+                        ·
+                        {{
+                          testProviderResult[provider.id]!.locality === 'local'
+                            ? t('settings.llm.localService')
+                            : t('settings.llm.cloudService')
+                        }}
                       </template>
                     </span>
                     <button
                       class="hc-btn hc-btn-sm hc-provider__test-btn"
                       :title="t('settings.llm.testConnection', '测试连接')"
-                      :disabled="testingProviderId !== null || providerEndpointDecision(provider).classification === 'blocked'"
+                      :disabled="
+                        testingProviderId !== null ||
+                        providerEndpointDecision(provider).classification === 'blocked'
+                      "
                       @click.stop="testProvider(provider)"
                     >
                       {{ t('settings.llm.testAction', '测试') }}
@@ -1486,7 +1590,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   </div>
                 </div>
                 <p
-                  v-if="testingProviderId !== provider.id && testProviderResult[provider.id] && !testProviderResult[provider.id]!.ok"
+                  v-if="
+                    testingProviderId !== provider.id &&
+                    testProviderResult[provider.id] &&
+                    !testProviderResult[provider.id]!.ok
+                  "
                   class="hc-provider__connection-detail"
                   role="status"
                 >
@@ -1497,9 +1605,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 <div v-if="editingProviderId === provider.id" class="hc-provider__edit">
                   <div
                     class="hc-provider__config-grid"
-                    :class="provider.type === 'custom'
-                      ? 'hc-provider__config-grid--custom'
-                      : 'hc-provider__config-grid--builtin'"
+                    :class="
+                      provider.type === 'custom'
+                        ? 'hc-provider__config-grid--custom'
+                        : 'hc-provider__config-grid--builtin'
+                    "
                   >
                     <div v-if="provider.type === 'custom'" class="hc-settings__field">
                       <label class="hc-settings__label" :for="`provider-${provider.id}-name`"
@@ -1532,7 +1642,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             :type="showApiKeys[provider.id] ? 'text' : 'password'"
                             class="hc-input"
                             :placeholder="PROVIDER_PRESETS[provider.type]?.placeholder || 'API Key'"
-                            @input="autoSave(); scheduleAutoTest(provider)"
+                            @input="onProviderApiKeyInput(provider)"
                           />
                         </HcClearableField>
                         <button
@@ -1621,18 +1731,42 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   <!-- 模型选择（芯片式） -->
                   <div class="hc-settings__field">
                     <div class="hc-model-section-header">
-                      <label class="hc-settings__label">{{ t('settings.llm.models') }} <span class="hc-settings__required">*</span></label>
-                      <span v-if="isManagedCatalog(provider.id)" class="hc-model-enabled-summary">
-                        {{ t('settings.llm.modelsEnabledSummary', '已启用') }}
-                        <b>{{ provider.models.length }}</b> / {{ providerCatalogCount(provider.id) }}
-                        {{ t('settings.llm.modelsAvailable', '可用') }}
-                      </span>
-                      <span v-if="testProviderResult[provider.id]?.ok" class="hc-model-sync-hint">
-                        {{ t('settings.llm.modelsDynamic', '动态获取') }} · {{ t('settings.llm.justSynced', '刚刚同步') }}
-                      </span>
-                      <span v-else-if="provider.models.length > 0 && !isManagedCatalog(provider.id)" class="hc-model-sync-hint">
-                        {{ t('settings.llm.modelsPreset', '预设模型') }}
-                      </span>
+                      <label class="hc-settings__label"
+                        >{{ t('settings.llm.models') }}
+                        <span class="hc-settings__required">*</span></label
+                      >
+                      <div class="hc-model-section-actions">
+                        <span v-if="isManagedCatalog(provider.id)" class="hc-model-enabled-summary">
+                          {{ t('settings.llm.modelsEnabledSummary', '已启用') }}
+                          <b>{{ provider.models.length }}</b> /
+                          {{ providerCatalogCount(provider.id) }}
+                          {{ t('settings.llm.modelsAvailable', '可用') }}
+                        </span>
+                        <button
+                          v-if="isManagedCatalog(provider.id)"
+                          type="button"
+                          class="hc-model-chip hc-model-chip--manage"
+                          @click="openModelManager(provider.id, $event)"
+                        >
+                          <SlidersHorizontal :size="12" />
+                          {{ t('settings.llm.manageModels', '管理模型') }}
+                          <span
+                            v-if="providerHasNewModels(provider.id)"
+                            class="hc-model-chip__new-dot"
+                            :title="t('settings.llm.newModelsFound', '本次同步发现新模型')"
+                          />
+                        </button>
+                        <span v-if="testProviderResult[provider.id]?.ok" class="hc-model-sync-hint">
+                          {{ t('settings.llm.modelsDynamic', '动态获取') }} ·
+                          {{ t('settings.llm.justSynced', '刚刚同步') }}
+                        </span>
+                        <span
+                          v-else-if="provider.models.length > 0 && !isManagedCatalog(provider.id)"
+                          class="hc-model-sync-hint"
+                        >
+                          {{ t('settings.llm.modelsPreset', '预设模型') }}
+                        </span>
+                      </div>
                     </div>
                     <div class="hc-model-chips">
                       <template v-for="model in provider.models" :key="model.id">
@@ -1644,9 +1778,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             'hc-model-chip--embedding': isEmbeddingOnlyModel(model),
                             'hc-model-chip--stale': isStaleModel(provider, model),
                           }"
-                          :title="isEmbeddingOnlyModel(model)
-                            ? `${model.name || model.id} · Embedding · 仅用于知识库语义索引`
-                            : (model.name || model.id)"
+                          :title="
+                            isEmbeddingOnlyModel(model)
+                              ? `${model.name || model.id} · Embedding · 仅用于知识库语义索引`
+                              : model.name || model.id
+                          "
                         >
                           <span class="hc-model-chip__name" :title="model.name || model.id">
                             {{ model.name || model.id }}
@@ -1657,7 +1793,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             class="hc-model-chip__cap"
                             :class="`hc-model-chip__cap--${cap}`"
                             :title="MODEL_CAPABILITY_DISPLAY[cap].title"
-                          >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }} {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
+                            >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
+                            {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
+                          >
                           <button
                             v-if="model.isCustom || isEmbeddingOnlyModel(model)"
                             type="button"
@@ -1665,7 +1803,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             :aria-label="`删除 ${model.name || model.id}`"
                             title="删除自定义模型"
                             @click.stop="removeProviderModel(provider, model.id)"
-                          >×</button>
+                          >
+                            ×
+                          </button>
                         </div>
 
                         <!-- 自定义对话模型用非交互容器承载三个互不嵌套的按钮。 -->
@@ -1682,7 +1822,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             type="button"
                             class="hc-model-chip__select"
                             :aria-label="`选择模型 ${model.name || model.id}`"
-                            @click="provider.selectedModelId = model.id; handleProviderModelChange(provider)"
+                            @click="selectProviderModel(provider, model.id)"
                           >
                             <span class="hc-model-chip__name" :title="model.name || model.id">
                               {{ model.name || model.id }}
@@ -1693,22 +1833,35 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                               class="hc-model-chip__cap"
                               :class="`hc-model-chip__cap--${cap}`"
                               :title="MODEL_CAPABILITY_DISPLAY[cap].title"
-                            >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }} {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
+                              >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
+                              {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
+                            >
                             <span
-                              v-if="model.toolReliability && model.toolReliability.level !== 'unknown'"
+                              v-if="
+                                model.toolReliability && model.toolReliability.level !== 'unknown'
+                              "
                               class="hc-model-chip__reliability"
                               :class="`hc-model-chip__reliability--${model.toolReliability.level}`"
                               :title="reliabilityTooltip(model.toolReliability)"
-                            >{{ reliabilityIcon(model.toolReliability.level) }}</span>
+                              >{{ reliabilityIcon(model.toolReliability.level) }}</span
+                            >
                           </button>
                           <button
                             type="button"
                             class="hc-model-chip__probe"
                             :aria-label="`重新检测 ${model.name || model.id} 工具调用可靠度`"
-                            :title="probingModel(provider.id, model.id) ? '探测中…' : '重新检测工具调用可靠度'"
+                            :title="
+                              probingModel(provider.id, model.id)
+                                ? '探测中…'
+                                : '重新检测工具调用可靠度'
+                            "
                             @click.stop="refreshCapability(provider, model)"
                           >
-                            <Loader2 v-if="probingModel(provider.id, model.id)" :size="10" class="animate-spin" />
+                            <Loader2
+                              v-if="probingModel(provider.id, model.id)"
+                              :size="10"
+                              class="animate-spin"
+                            />
                             <RotateCcw v-else :size="10" />
                           </button>
                           <button
@@ -1717,7 +1870,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             :aria-label="`删除 ${model.name || model.id}`"
                             title="删除自定义模型"
                             @click.stop="removeProviderModel(provider, model.id)"
-                          >×</button>
+                          >
+                            ×
+                          </button>
                         </div>
 
                         <!-- Provider 预设对话模型不可删除。 -->
@@ -1729,18 +1884,29 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             'hc-model-chip--active': provider.selectedModelId === model.id,
                             'hc-model-chip--stale': isStaleModel(provider, model),
                           }"
-                          :title="isStaleModel(provider, model)
-                            ? t('settings.llm.modelStale', '上游已下架：该模型在最近一次同步的目录中不存在')
-                            : (model.name || model.id)"
-                          @click="provider.selectedModelId = model.id; handleProviderModelChange(provider)"
+                          :title="
+                            isStaleModel(provider, model)
+                              ? t(
+                                  'settings.llm.modelStale',
+                                  '上游已下架：该模型在最近一次同步的目录中不存在',
+                                )
+                              : model.name || model.id
+                          "
+                          @click="selectProviderModel(provider, model.id)"
                         >
                           <span class="hc-model-chip__name" :title="model.name || model.id">
                             {{ model.name || model.id }}
                           </span>
-                          <span v-if="isModelFree(provider.id, model.id)" class="hc-model-chip__free-label">
+                          <span
+                            v-if="isModelFree(provider.id, model.id)"
+                            class="hc-model-chip__free-label"
+                          >
                             {{ t('settings.llm.modelFreeLabel', '免费') }}
                           </span>
-                          <span v-if="isStaleModel(provider, model)" class="hc-model-chip__stale-label">
+                          <span
+                            v-if="isStaleModel(provider, model)"
+                            class="hc-model-chip__stale-label"
+                          >
                             {{ t('settings.llm.modelStaleLabel', '已下架') }}
                           </span>
                           <span
@@ -1749,7 +1915,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             class="hc-model-chip__cap"
                             :class="`hc-model-chip__cap--${cap}`"
                             :title="MODEL_CAPABILITY_DISPLAY[cap].title"
-                          >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }} {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
+                            >{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}
+                            {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
+                          >
                         </button>
                       </template>
                       <!-- 添加自定义模型 -->
@@ -1763,15 +1931,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                       </button>
                     </div>
                   </div>
-
                 </div>
               </div>
             </div>
 
-            <p
-              class="hc-provider__service-notice"
-              data-testid="third-party-ai-services-notice"
-            >
+            <p class="hc-provider__service-notice" data-testid="third-party-ai-services-notice">
               {{ t('settings.llm.providerServiceNotice') }}
               <a
                 :href="thirdPartyAiServicesHref"
@@ -1779,12 +1943,16 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 target="_blank"
                 rel="noopener noreferrer"
                 data-testid="third-party-ai-services-link"
-              >{{ t('settings.llm.providerServiceDocs') }}</a>
+                >{{ t('settings.llm.providerServiceDocs') }}</a
+              >
             </p>
           </div>
 
           <!-- Automation permissions（治理入口：级别/待处理/审计/矩阵） -->
-          <div v-else-if="activeSection === 'automation'" class="hc-settings__section hc-settings__section--automation">
+          <div
+            v-else-if="activeSection === 'automation'"
+            class="hc-settings__section hc-settings__section--automation"
+          >
             <AutomationPermissionsPanel />
           </div>
 
@@ -1894,19 +2062,28 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               <div class="hc-settings__info-grid">
                 <div>
                   <span class="hc-settings__info-label">{{ t('settings.system.version') }}</span>
+                  <!-- prettier-ignore -->
                   <div class="hc-settings__info-value hc-settings__info-value--mono" dir="ltr">{{ appVersion }}</div>
                 </div>
                 <div>
-                  <span class="hc-settings__info-label">{{ t('settings.system.localStorage') }}</span>
+                  <span class="hc-settings__info-label">{{
+                    t('settings.system.localStorage')
+                  }}</span>
                   <div class="hc-settings__info-value">
                     <bdi class="hc-settings__info-mono">{{ runtimeLocalStoreFile }}</bdi> ·
-                    <span :style="{ color: runtimeConfig ? 'var(--hc-success)' : 'var(--hc-text-muted)' }">
+                    <span
+                      :style="{
+                        color: runtimeConfig ? 'var(--hc-success)' : 'var(--hc-text-muted)',
+                      }"
+                    >
                       {{ runtimeConfig ? t('settings.system.connected') : '—' }}
                     </span>
                   </div>
                 </div>
                 <div>
-                  <span class="hc-settings__info-label">{{ t('settings.system.knowledgeIndex') }}</span>
+                  <span class="hc-settings__info-label">{{
+                    t('settings.system.knowledgeIndex')
+                  }}</span>
                   <div
                     class="hc-settings__info-value"
                     :style="{
@@ -1923,7 +2100,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   </div>
                 </div>
                 <div>
-                  <span class="hc-settings__info-label">{{ t('settings.system.apiEndpoint') }}</span>
+                  <span class="hc-settings__info-label">{{
+                    t('settings.system.apiEndpoint')
+                  }}</span>
                   <div class="hc-settings__info-value">
                     <template v-if="runtimeModeShort">{{ runtimeModeShort }} · </template>
                     <bdi class="hc-settings__info-mono">{{ runtimeApiEndpoint }}</bdi>
@@ -1941,13 +2120,17 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
             <!-- 关于河蟹（身份入口，与「系统信息」分区风格一致） -->
             <div class="hc-settings__sep" style="margin-top: 18px">
-              <span class="hc-settings__sep-label">{{ t('settings.system.aboutLabel', '关于河蟹') }}</span>
+              <span class="hc-settings__sep-label">{{
+                t('settings.system.aboutLabel', '关于河蟹')
+              }}</span>
               <span class="hc-settings__sep-line"></span>
             </div>
             <div class="hc-settings__about">
               <p class="hc-settings__about-intro">
                 <span class="hc-settings__about-emoji" aria-hidden="true">🦀</span>
-                {{ t('about.subtitle', '一只横行本地的 AI 螃蟹 —— 钳得住活，守得住数据，长得出本事') }}
+                {{
+                  t('about.subtitle', '一只横行本地的 AI 螃蟹 —— 钳得住活，守得住数据，长得出本事')
+                }}
               </p>
               <button type="button" class="hc-settings__about-link" @click="openAbout">
                 {{ t('about.learnMore', '了解更多') }}
@@ -1960,7 +2143,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
     </div>
   </div>
 
-  <!-- 添加自定义模型：权威原型规定的轻量弹窗（不保留内联/二级管理入口） -->
+  <!-- 添加自定义模型：轻量弹窗，不在 Provider 卡片中保留内联编辑表单。 -->
   <Teleport to="body">
     <Transition name="hc-dialog">
       <div
@@ -1985,7 +2168,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
           </div>
           <div class="hc-edit-model">
             <div class="hc-edit-model__field">
-              <label for="hc-custom-model-id">模型 ID <span class="hc-settings__required">*</span></label>
+              <label for="hc-custom-model-id"
+                >模型 ID <span class="hc-settings__required">*</span></label
+              >
               <HcClearableField>
                 <input
                   id="hc-custom-model-id"
@@ -1997,7 +2182,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                   placeholder="如 anthropic/claude-3.7-sonnet-long-context-preview"
                   autocomplete="off"
                   :aria-invalid="customModelIdIsDuplicate || undefined"
-                  :aria-describedby="customModelIdIsDuplicate ? 'hc-custom-model-id-error' : undefined"
+                  :aria-describedby="
+                    customModelIdIsDuplicate ? 'hc-custom-model-id-error' : undefined
+                  "
                   @keyup.enter="canSubmitCustomModel && submitCustomModel()"
                 />
               </HcClearableField>
@@ -2007,7 +2194,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 data-testid="custom-model-id-error"
                 class="hc-settings__hint hc-settings__hint--error"
                 role="alert"
-              >该模型已在列表中</p>
+              >
+                该模型已在列表中
+              </p>
             </div>
             <fieldset class="hc-edit-model__field hc-custom-model-dialog__capability">
               <legend>核心能力</legend>
@@ -2058,34 +2247,49 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
               <label>模型 ID <span class="hc-settings__required">*</span></label>
               <HcClearableField>
                 <input
-                v-model="editModelForm.id"
-                type="text"
-                class="hc-input"
-                placeholder="如 gpt-4o, claude-sonnet-4-6"
-              />
+                  v-model="editModelForm.id"
+                  type="text"
+                  class="hc-input"
+                  placeholder="如 gpt-4o, claude-sonnet-4-6"
+                />
               </HcClearableField>
             </div>
             <div class="hc-edit-model__field">
               <label>显示名称</label>
               <HcClearableField>
                 <input
-                v-model="editModelForm.name"
-                type="text"
-                class="hc-input"
-                placeholder="留空则使用模型 ID"
-              />
+                  v-model="editModelForm.name"
+                  type="text"
+                  class="hc-input"
+                  placeholder="留空则使用模型 ID"
+                />
               </HcClearableField>
             </div>
             <div class="hc-edit-model__field">
               <label>模型能力</label>
               <div class="hc-edit-model__caps">
                 <label
-                  v-for="cap in ['text', 'vision', 'video', 'audio', 'code', 'image_generation', 'video_generation', 'embedding'] as ModelCapability[]"
+                  v-for="cap in [
+                    'text',
+                    'vision',
+                    'video',
+                    'audio',
+                    'code',
+                    'image_generation',
+                    'video_generation',
+                    'embedding',
+                  ] as ModelCapability[]"
                   :key="cap"
                   class="hc-edit-model__cap-item"
                 >
-                  <input v-model="editModelForm.caps[cap]" type="checkbox" :disabled="cap === 'text'" />
-                  <span class="hc-edit-model__cap-icon">{{ MODEL_CAPABILITY_DISPLAY[cap].icon }}</span>
+                  <input
+                    v-model="editModelForm.caps[cap]"
+                    type="checkbox"
+                    :disabled="cap === 'text'"
+                  />
+                  <span class="hc-edit-model__cap-icon">{{
+                    MODEL_CAPABILITY_DISPLAY[cap].icon
+                  }}</span>
                   <span>{{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span>
                 </label>
               </div>
@@ -2130,6 +2334,15 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
     @cancel="pendingDeleteModel = null"
   />
 
+  <ModelManagerModal
+    v-if="modelManagerProvider"
+    :open="!!modelManagerProvider"
+    :provider="modelManagerProvider"
+    :syncing="managerSyncing"
+    @close="closeModelManager"
+    @change="autoSave()"
+    @resync="handleManagerResync"
+  />
 </template>
 
 <style scoped>
@@ -2200,7 +2413,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   gap: 0;
   margin-bottom: 0;
 }
-
 
 .hc-settings__field {
   display: flex;
@@ -2364,7 +2576,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   cursor: help;
   position: relative;
   flex-shrink: 0;
-  transition: color 0.18s, border-color 0.18s;
+  transition:
+    color 0.18s,
+    border-color 0.18s;
 }
 
 .hc-settings__info:hover {
@@ -2636,13 +2850,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 .hc-settings__info-value--mono {
   font-family:
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    'Liberation Mono',
-    'Courier New',
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
     monospace;
   font-size: 12px;
   overflow: hidden;
@@ -2656,13 +2864,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
    关键：等宽字体不含维吾尔/阿拉伯连写字形，绝不能套在翻译标签上（会断字、字距拉宽）。 */
 .hc-settings__info-mono {
   font-family:
-    ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    Monaco,
-    Consolas,
-    'Liberation Mono',
-    'Courier New',
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New',
     monospace;
   font-size: 12px;
   direction: ltr;
@@ -2747,7 +2949,6 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   flex-direction: column;
   gap: 10px;
 }
-
 
 .hc-provider__add-actions {
   display: flex;
@@ -2876,7 +3077,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   background: var(--hc-bg-hover);
   font-size: 11px;
   white-space: nowrap;
-  transition: color 0.18s, background 0.18s;
+  transition:
+    color 0.18s,
+    background 0.18s;
 }
 
 .hc-provider__connection-status--testing {
@@ -2904,8 +3107,14 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 @keyframes hc-provider-status-pop {
-  from { transform: scale(0.96); opacity: 0.72; }
-  to { transform: scale(1); opacity: 1; }
+  from {
+    transform: scale(0.96);
+    opacity: 0.72;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .hc-provider__test-btn {
@@ -3293,7 +3502,9 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   color: var(--hc-text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: border-color 0.15s, color 0.15s;
+  transition:
+    border-color 0.15s,
+    color 0.15s;
 }
 
 .hc-webhook__type-btn:hover {
@@ -3395,7 +3606,17 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   margin-bottom: 4px;
+}
+
+.hc-model-section-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .hc-model-sync-hint {
@@ -3430,6 +3651,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-model-chip__name {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3491,7 +3713,10 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
   background: transparent;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.15s, background 0.15s, color 0.15s;
+  transition:
+    opacity 0.15s,
+    background 0.15s,
+    color 0.15s;
 }
 
 .hc-model-chip:hover .hc-model-chip__remove,
@@ -3510,6 +3735,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 /* A7 工具调用可靠度 badge（emoji 本身自带颜色，给一个柔和着色背景）
    HIG：圆角 var(--hc-radius-sm)、字号 10、letter-spacing 微负、不用硬编码 fallback */
 .hc-model-chip__reliability {
+  flex: none;
   font-size: 10px;
   padding: 1px 5px;
   border-radius: var(--hc-radius-sm);
@@ -3583,6 +3809,32 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 /* 管理模型入口：目录/启用两层架构的主入口（聚合商数百模型场景） */
+.hc-model-chip--manage {
+  position: relative;
+  min-height: 26px;
+  padding: 3px 10px;
+  border-style: dashed;
+  border-color: var(--hc-accent, #5fb3ea);
+  color: var(--hc-accent, #5fb3ea);
+  white-space: nowrap;
+}
+
+.hc-model-chip--manage:hover {
+  background: var(--hc-accent-subtle);
+  border-color: var(--hc-accent, #5fb3ea);
+}
+
+.hc-model-chip__new-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--hc-bg-panel);
+  border-radius: 50%;
+  background: var(--hc-accent, #5fb3ea);
+}
+
 /* 已启用摘要（目录存在时显示"已启用 N / M 可用"） */
 .hc-model-enabled-summary {
   font-size: 11px;
@@ -3596,12 +3848,14 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
 /* 免费模型：目录价格元数据为 0 时显示 */
 .hc-model-chip__free-label {
+  flex: none;
   font-size: 9px;
   padding: 1px 5px;
   border-radius: 3px;
   font-weight: 500;
   background: color-mix(in srgb, var(--hc-success, #32d583) 14%, transparent);
   color: var(--hc-success, #32d583);
+  white-space: nowrap;
 }
 
 /* 上游已下架：橙色警示，不静默删除，由用户处置 */
@@ -3611,15 +3865,18 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 }
 
 .hc-model-chip__stale-label {
+  flex: none;
   font-size: 9px;
   padding: 1px 5px;
   border-radius: 3px;
   font-weight: 500;
   background: color-mix(in srgb, var(--hc-warning, #f0b429) 16%, transparent);
   color: var(--hc-warning, #f0b429);
+  white-space: nowrap;
 }
 
 .hc-model-chip__cap {
+  flex: none;
   font-size: 9px;
   padding: 1px 5px;
   border-radius: 3px;
@@ -3815,5 +4072,4 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
     grid-template-columns: 1fr;
   }
 }
-
 </style>

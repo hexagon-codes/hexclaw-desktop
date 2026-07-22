@@ -17,6 +17,7 @@ const MOCK_BACKEND_CONFIG = {
   default: 'openRouter',
   providers: {
     openRouter: {
+      provider_instance_id: 'pvd_v1_00112233445566778899aabbccddeeff',
       api_key: '****ceb3',
       base_url: 'https://openrouter.ai/api/v1',
       model: 'moonshotai/kimi-k2.6:free',
@@ -48,7 +49,9 @@ vi.mock('@/api/settings', () => ({
 
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() { return null }
+    async get() {
+      return null
+    }
     async set() {}
     async save() {}
     async delete() {}
@@ -67,6 +70,14 @@ function bigCatalog(n: number): CatalogModel[] {
   }))
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -74,6 +85,9 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     mockGetLLMConfig.mockClear()
     mockUpdateLLMConfig.mockClear()
     mockFetchProviderModels.mockReset()
+    MOCK_BACKEND_CONFIG.providers.openRouter.base_url = 'https://openrouter.ai/api/v1'
+    MOCK_BACKEND_CONFIG.providers.openRouter.model = 'moonshotai/kimi-k2.6:free'
+    MOCK_BACKEND_CONFIG.providers.openRouter.models = ['moonshotai/kimi-k2.6:free'] as never
   })
 
   it('大目录（300 个）：provider.models 保持启用子集，全量进 catalog', async () => {
@@ -127,7 +141,53 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     expect(ids, '自定义模型必须保留').toContain('my-custom-model')
     expect(ids, '当前选中模型必须保留').toContain(after.selectedModelId)
 
+    const availableIds = store.availableModels.map((model) => model.modelId)
+    expect(availableIds).toContain('my-custom-model')
+    expect(availableIds).toContain(after.selectedModelId)
+    expect(availableIds).not.toContain(catalog[1]!.id)
+
+    expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(2)
+    const persisted = mockUpdateLLMConfig.mock.calls[mockUpdateLLMConfig.mock.calls.length - 1]?.[0] as typeof MOCK_BACKEND_CONFIG
+    expect(persisted.providers.openRouter.models).toHaveLength(after.models.length)
+
+    mockGetLLMConfig.mockResolvedValueOnce(persisted)
+    setActivePinia(createPinia())
+    const restarted = useSettingsStore()
+    await restarted.loadConfig()
+    expect(restarted.config!.llm.providers[0]!.models.map((model) => model.id)).toEqual(ids)
+
     MOCK_BACKEND_CONFIG.providers.openRouter.models = ['moonshotai/kimi-k2.6:free'] as never
+  })
+
+  it('同一 provider 的旧 endpoint 响应后到时不得覆盖新 endpoint 的目录', async () => {
+    const first = deferred<CatalogModel[]>()
+    const second = deferred<CatalogModel[]>()
+    mockFetchProviderModels
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => second.promise)
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+
+    await store.saveConfig(store.config!)
+    await flushPromises()
+    expect(mockFetchProviderModels).toHaveBeenCalledTimes(1)
+
+    store.config!.llm.providers[0]!.baseUrl = 'https://new-endpoint.example/v1'
+    await store.saveConfig(store.config!)
+    await flushPromises()
+    expect(mockFetchProviderModels).toHaveBeenCalledTimes(2)
+
+    second.resolve([{ id: 'new-endpoint-model', name: 'New Endpoint Model' }])
+    await flushPromises()
+    first.resolve([{ id: 'old-endpoint-model', name: 'Old Endpoint Model' }])
+    await flushPromises()
+    await flushPromises()
+
+    const ids = store.config!.llm.providers[0]!.models.map((model) => model.id)
+    expect(ids).toContain('new-endpoint-model')
+    expect(ids).not.toContain('old-endpoint-model')
   })
 
   it('小目录（5 个）：维持原有全量合并行为', async () => {
@@ -149,6 +209,43 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
     for (const m of small) {
       expect(ids).toContain(m.id)
     }
+  })
+
+  it.each([
+    { count: 10, expectedEnabled: 11, expectedUpdates: 2, expectedPersisted: 11 },
+    { count: 11, expectedEnabled: 1, expectedUpdates: 1, expectedPersisted: 1 },
+  ])('目录阈值 $count：启用模型数量为 $expectedEnabled 且同步不递归保存', async ({
+    count,
+    expectedEnabled,
+    expectedUpdates,
+    expectedPersisted,
+  }) => {
+    const catalog = bigCatalog(count)
+    mockFetchProviderModels.mockResolvedValue(catalog)
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+
+    await store.loadConfig()
+    await store.saveConfig(store.config!)
+    await flushPromises()
+    await flushPromises()
+
+    const after = store.config!.llm.providers[0]!
+    expect(after.models).toHaveLength(expectedEnabled)
+    expect(mockFetchProviderModels).toHaveBeenCalledTimes(1)
+    expect(mockFetchProviderModels).toHaveBeenCalledWith(
+      'https://openrouter.ai/api/v1',
+      '****ceb3',
+      expect.objectContaining({
+        providerInstanceId: 'pvd_v1_00112233445566778899aabbccddeeff',
+      }),
+    )
+    expect(mockUpdateLLMConfig).toHaveBeenCalledTimes(expectedUpdates)
+    const persisted = mockUpdateLLMConfig.mock.calls[mockUpdateLLMConfig.mock.calls.length - 1]?.[0] as {
+      providers: Record<string, { models?: string[] }>
+    }
+    expect(persisted.providers.openRouter?.models).toHaveLength(expectedPersisted)
   })
 
   it('中等目录（15 个）用户全选不应被识别为灌入而误杀', async () => {
@@ -174,11 +271,13 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
   it('收缩历史大目录时保留 embedding 规格，即使旧记录尚无 isCustom', () => {
     const catalog = bigCatalog(300)
     const models: ModelOption[] = [
-      ...catalog.map((model): ModelOption => ({
-        id: model.id,
-        name: model.name,
-        capabilities: ['text'],
-      })),
+      ...catalog.map(
+        (model): ModelOption => ({
+          id: model.id,
+          name: model.name,
+          capabilities: ['text'],
+        }),
+      ),
       {
         id: 'nvidia/nemotron-3-embed-1b:free',
         name: 'Nemotron Embed',
@@ -189,7 +288,30 @@ describe('BUG-20260611: saveConfig 后的模型同步不得灌满启用列表', 
 
     const trimmed = trimFloodedModels(models, catalog, catalog[0]!.id)!
     expect(trimmed.some((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')).toBe(true)
-    expect(trimmed.find((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')?.embedding?.dimension)
-      .toBe(2048)
+    expect(
+      trimmed.find((model) => model.id === 'nvidia/nemotron-3-embed-1b:free')?.embedding?.dimension,
+    ).toBe(2048)
+  })
+
+  it('收缩历史大目录时保留目录已下架但此前已启用的模型', () => {
+    const catalog = bigCatalog(300)
+    const stale: ModelOption = {
+      id: 'retired-provider/retired-chat',
+      name: 'Retired Chat',
+      capabilities: ['text'],
+    }
+    const models: ModelOption[] = [
+      ...catalog.map(
+        (model): ModelOption => ({
+          id: model.id,
+          name: model.name,
+          capabilities: ['text'],
+        }),
+      ),
+      stale,
+    ]
+
+    const trimmed = trimFloodedModels(models, catalog, catalog[0]!.id)!
+    expect(trimmed).toContainEqual(stale)
   })
 })

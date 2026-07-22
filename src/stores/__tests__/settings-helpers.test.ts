@@ -19,6 +19,8 @@ import {
   assertUniqueProviderNames,
   isMaskedApiKey,
   providerMatchesBackendKey,
+  mergeProviderRuntimeIdentities,
+  resolveLoadedDefaultSelection,
   appendLocalProvidersMissingFromRuntime,
   mergeConfigProvidersWithRuntime,
   reconcileDefaultSelection,
@@ -356,6 +358,141 @@ describe('providerMatchesBackendKey', () => {
   })
 })
 
+describe('mergeProviderRuntimeIdentities', () => {
+  it('回灌服务端稳定身份但保留本地模型、名称和 API Key', () => {
+    const local = makeProvider({
+      id: 'local-id',
+      name: 'My OpenRouter',
+      backendKey: 'openrouter-2',
+      apiKey: 'sk-local',
+      models: [makeModel('chat-local')],
+    })
+    const runtime = makeProvider({
+      id: 'runtime-id',
+      name: 'My OpenRouter',
+      backendKey: 'openrouter-2',
+      providerInstanceId: 'provider-stable-2',
+      apiKey: 'masked',
+      models: [makeModel('runtime-model')],
+    })
+
+    expect(mergeProviderRuntimeIdentities([local], [runtime])).toEqual([
+      {
+        ...local,
+        backendKey: 'openrouter-2',
+        providerInstanceId: 'provider-stable-2',
+      },
+    ])
+  })
+})
+
+describe('resolveLoadedDefaultSelection', () => {
+  const providers = [
+    makeProvider({
+      id: 'local',
+      name: 'Local',
+      backendKey: 'local',
+      models: [makeModel('local-chat')],
+    }),
+    makeProvider({
+      id: 'remote',
+      name: 'Remote',
+      backendKey: 'remote',
+      models: [makeModel('remote-chat')],
+    }),
+  ]
+  const backend = makeBackendConfig({
+    default: 'remote',
+    providers: {
+      remote: { api_key: 'masked', base_url: '', model: 'remote-chat', compatible: '' },
+    },
+  })
+
+  it('优先保留仍有效的本地默认选择', () => {
+    expect(resolveLoadedDefaultSelection(providers, backend, 'local-chat', 'local')).toEqual({
+      modelId: 'local-chat',
+      providerId: 'local',
+    })
+  })
+
+  it('本地选择失效时回退到仍存在的后端默认', () => {
+    expect(resolveLoadedDefaultSelection(providers, backend, 'gone', 'local')).toEqual({
+      modelId: 'remote-chat',
+      providerId: 'remote',
+    })
+  })
+
+  it('不会恢复 embedding-only 模型为聊天默认', () => {
+    const embeddingProviders = [
+      makeProvider({
+        id: 'embedding',
+        name: 'Embedding',
+        backendKey: 'embedding',
+        models: [
+          {
+            id: 'nvidia/nemotron-3-embed-1b:free',
+            name: 'Embedding',
+            capabilities: ['embedding'],
+          },
+        ],
+      }),
+    ]
+    const embeddingBackend = makeBackendConfig({
+      default: 'embedding',
+      providers: {
+        embedding: {
+          api_key: 'masked',
+          base_url: '',
+          model: 'nvidia/nemotron-3-embed-1b:free',
+          compatible: '',
+        },
+      },
+    })
+
+    expect(
+      resolveLoadedDefaultSelection(
+        embeddingProviders,
+        embeddingBackend,
+        'nvidia/nemotron-3-embed-1b:free',
+        'embedding',
+      ),
+    ).toEqual({ modelId: '', providerId: '' })
+  })
+
+  it('不会恢复已禁用 Provider 的模型为聊天默认', () => {
+    const disabledProviders = [
+      makeProvider({
+        id: 'disabled',
+        name: 'Disabled',
+        backendKey: 'disabled',
+        enabled: false,
+        models: [makeModel('disabled-chat')],
+      }),
+    ]
+    const disabledBackend = makeBackendConfig({
+      default: 'disabled',
+      providers: {
+        disabled: {
+          api_key: 'masked',
+          base_url: '',
+          model: 'disabled-chat',
+          compatible: '',
+          enabled: false,
+        },
+      },
+    })
+
+    expect(
+      resolveLoadedDefaultSelection(
+        disabledProviders,
+        disabledBackend,
+        'disabled-chat',
+        'disabled',
+      ),
+    ).toEqual({ modelId: '', providerId: '' })
+  })
+})
+
 /* ====== appendLocalProvidersMissingFromRuntime ====== */
 describe('appendLocalProvidersMissingFromRuntime', () => {
   it('returns runtime as-is when no local providers', () => {
@@ -586,6 +723,36 @@ describe('backendToProviders', () => {
     // Merges models — backend model prepended if not in local
     expect(result[0]!.models.some((m) => m.id === 'gpt-4')).toBe(true)
     expect(result[0]!.models.some((m) => m.id === 'gpt-3.5')).toBe(true)
+  })
+
+  it('preserves the frontend id by stable provider identity after the backend key is renamed', () => {
+    const providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
+    const backend = makeBackendConfig({
+      providers: {
+        'renamed-backend-key': {
+          provider_instance_id: providerInstanceId,
+          api_key: '****server',
+          base_url: 'https://api.example.com/v1',
+          model: 'server-model',
+          compatible: 'openai',
+        },
+      },
+    })
+    const local = [
+      makeProvider({
+        id: 'frontend-stable-id',
+        name: 'Old display name',
+        backendKey: 'old-backend-key',
+        providerInstanceId,
+        apiKey: 'secure-real-key',
+      }),
+    ]
+
+    const result = backendToProviders(backend, local)
+
+    expect(result[0]!.id).toBe('frontend-stable-id')
+    expect(result[0]!.providerInstanceId).toBe(providerInstanceId)
+    expect(result[0]!.backendKey).toBe('renamed-backend-key')
   })
 
   it('sets backendKey on each provider', () => {

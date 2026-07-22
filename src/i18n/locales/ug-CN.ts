@@ -2075,16 +2075,21 @@ export default {
   settings: {
     modelManager: {
       allVendors: 'ھەممىسى',
+      applyChanges: 'ئۆزگەرتىشلەرنى قوللىنىش',
+      badgeEmbedding: 'Embedding',
       badgeFree: 'ھەقسىز',
       badgeTools: 'قورال',
       badgeVision: 'كۆرۈش',
       clear: 'Clear enabled', // TODO: verify ug
       clearConfirm: 'Clear {n} enabled model(s)?', // TODO: verify ug
+      currentModel: 'نۆۋەتتىكى',
       deselectGroup: 'Deselect all', // TODO: verify ug
       empty: 'No matching models — try adjusting your search or filters', // TODO: verify ug
       enabledSummary: 'قوزغىتىلدى',
       enabledUnit: ' model(s)', // TODO: verify ug
       filterCtx: '≥128K context', // TODO: verify ug
+      filterChat: 'تېكىست سۆھبەت',
+      filterEmbedding: 'Embedding',
       filterFree: 'ھەقسىز',
       filterLabel: 'سۈزگۈچ',
       filterTools: 'Tool calling', // TODO: verify ug
@@ -2096,9 +2101,11 @@ export default {
       recommendDismiss: 'Dismiss', // TODO: verify ug
       recommendEnable: 'Enable all', // TODO: verify ug
       recommendText: 'Recommended by "free + tool calling + large context"', // TODO: verify ug
+      replacementRequired: 'ئۆزگەرتىشنى قوللىنىشتىن بۇرۇن نۆۋەتتىكى سۆھبەت مودېلىنى تاللاڭ',
       resync: 'Resync', // TODO: verify ug
       searchPlaceholder: 'Search model id or name…', // TODO: verify ug
       selectGroup: 'Select all in group', // TODO: verify ug
+      setCurrentModel: 'نۆۋەتتىكى قىلىش',
       title: 'Manage models', // TODO: verify ug
       vendorSearch: 'Filter vendors…', // TODO: verify ug
       viewAll: 'ھەممىسى',
@@ -2395,7 +2402,8 @@ export default {
       noModelsInline: 'چۈشۈرۈلگەن مودېل يوق، تۆۋەندە تاللاڭ ياكى مودېل نامى كىرگۈزۈپ چۈشۈرۈڭ.',
       runningProbeUnavailable:
         'مودېلنىڭ ئىجرا ھالىتىنى ئوقۇغىلى بولمىدى؛ Ollama مۇلازىمىتىنى تەكشۈرۈپ قايتا سىناڭ.',
-      noRunningModels: 'Ollama نى زىيارەت قىلغىلى بولىدۇ، لېكىن ئەسلەكتە ئىجرا بولۇۋاتقان مودېل يوق.',
+      noRunningModels:
+        'Ollama نى زىيارەت قىلغىلى بولىدۇ، لېكىن ئەسلەكتە ئىجرا بولۇۋاتقان مودېل يوق.',
       runningUnknown: 'ئىجرا ھالىتى نامەلۇم',
       loadedTitle: 'ئەسلىمىگە يۈكلەندى، چېكىپ بوشاتسىڭىز بولىدۇ',
       unloading: 'بوشىتىلىۋاتىدۇ...',

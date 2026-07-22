@@ -7,7 +7,7 @@
  *   SF-1 SettingsView onToolbarReset（重置按钮）失败 → toast.error
  *   SF-2 SettingsView refreshCapability（能力探测按钮）失败 → toast.error
  *   SF-3 SettingsView handleDeleteProvider（删除 Provider 确认）失败 → toast.error（已恢复快照）
- *   SF-4 二级模型管理器已移除；后台目录同步仍须返回成败，不能伪装成功
+ *   SF-4 模型管理器手动重同步失败 → toast.error
  *   SF-7 TasksView loadJobs（加载列表）失败 → toast.error（非仅 console.error）
  *   SF-8 TasksView handlePauseResume（暂停/恢复）失败 → toast.error
  *   SF-9 TasksView handleDelete（删除任务）失败 → toast.error
@@ -49,10 +49,11 @@ describe('SF SettingsView — 用户主动操作失败已 surface 到 toast', ()
     expect(c).toContain('toast.error')
     expect(c, '不能丢掉原有快照恢复').toContain('snapshot')
   })
-  it('SF-4 已移除二级模型管理器，并保留后台目录同步失败信号', () => {
-    expect(src).not.toContain('async function handleManagerResync')
-    expect(src).not.toContain('ModelManagerModal')
-    expect(catchOf(fnBody(src, 'async function syncRemoteModels'))).toContain('return false')
+  it('SF-4 模型管理器手动重同步失败 → toast.error', () => {
+    expect(src).toContain('ModelManagerModal')
+    const fn = fnBody(src, 'async function handleManagerResync')
+    expect(fn).toContain('syncRemoteModels')
+    expect(fn).toContain('toast.error')
   })
 })
 

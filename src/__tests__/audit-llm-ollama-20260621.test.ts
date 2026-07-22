@@ -562,11 +562,12 @@ describe('E11 fetchProviderModels 字段映射与边界', () => {
     })
   })
 
-  it('GREEN：被 SSRF 拦截的 baseUrl → 返回空数组（不抛、不打网络）', async () => {
+  it('GREEN：被 SSRF 拦截的 baseUrl → 显式失败且不打网络', async () => {
     const spy = vi.fn()
     globalThis.fetch = spy as unknown as typeof fetch
-    const models = await cfg.fetchProviderModels('http://169.254.169.254/v1', 'k')
-    expect(models).toEqual([])
+    await expect(
+      cfg.fetchProviderModels('http://169.254.169.254/v1', 'k'),
+    ).rejects.toThrow('Unsafe base_url')
     expect(spy).not.toHaveBeenCalled() // 防御性：根本没发请求
   })
 

@@ -54,6 +54,8 @@ async function proxyApiRequestText(method: string, path: string, body: string | 
 
 interface ProviderEndpointContext {
   providerType?: ProviderType
+  /** 已持久化 Provider 的稳定后端身份；目录同步据此使用后端保存的真实凭据。 */
+  providerInstanceId?: string
   locality?: ProviderLocality
   privateNetworkAccess?: PrivateNetworkAccess
 }
@@ -159,24 +161,26 @@ export async function fetchProviderModels(
   apiKey: string,
   context: ProviderEndpointContext = {},
 ): Promise<CatalogModel[]> {
-  try {
-    assertExternalBaseUrlAllowed(baseUrl, context)
-  } catch (e) {
-    logger.warn('fetchProviderModels: URL blocked by SSRF check:', messageFromUnknownError(e))
-    return []
-  }
+  assertExternalBaseUrlAllowed(baseUrl, context)
   const text = await proxyApiRequestText(
     'POST',
     '/api/v1/config/llm/models',
     JSON.stringify({
+      provider_instance_id: context.providerInstanceId,
       base_url: baseUrl,
       api_key: apiKey,
       locality: context.locality,
       private_network_access: context.privateNetworkAccess,
     }),
   )
-  const result = safeJsonParse<{ models?: BackendProviderModel[] }>(text, 'fetchProviderModels')
-  return (result.models ?? []).map((m) => ({
+  const result = safeJsonParse<{ models?: BackendProviderModel[]; error?: string }>(
+    text,
+    'fetchProviderModels',
+  )
+  if (result.error?.trim()) {
+    throw new Error(`fetchProviderModels: ${result.error.trim()}`)
+  }
+  const models = (result.models ?? []).map((m) => ({
     id: m.id,
     name: m.name || m.id,
     contextLength: m.context_length,
@@ -185,4 +189,8 @@ export async function fetchProviderModels(
     inputModalities: m.input_modalities,
     supportsTools: m.supports_tools,
   }))
+  if (models.length === 0) {
+    throw new Error('fetchProviderModels: empty model catalog')
+  }
+  return models
 }
