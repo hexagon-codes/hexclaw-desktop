@@ -122,6 +122,8 @@ describe('审计单-High-2：K12 grade/coldStart/prep 必须用 agents.name 作 
     await recognizeOnce(w)
 
     expect(k12PrepCard).not.toHaveBeenCalled()
+    w.findComponent(HcSelect).vm.$emit('update:modelValue', '数学')
+    await flushPromises()
     await w.findComponent(RecognizeGuardPanel).find('[data-testid="recognize-confirm-all"]').trigger('click')
     await flushPromises()
     expect(k12PrepCard).toHaveBeenCalledTimes(1)

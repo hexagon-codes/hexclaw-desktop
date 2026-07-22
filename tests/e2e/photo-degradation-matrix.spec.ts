@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page, type TestInfo } from '@playwright/test'
 import {
   assertLiveRuntime,
   cleanupLiveChild,
@@ -115,17 +115,28 @@ async function uploadAndRecognize(page: Page, fixture: Fixture) {
   return guard
 }
 
-async function saveOverlayPNG(guard: import('@playwright/test').Locator): Promise<void> {
-  const page = guard.page()
-  const save = guard.getByTestId('overlay-save')
-  await expect(save, 'a positioned overlay must support a real PNG export').toBeEnabled()
-  const downloadPromise = page.waitForEvent('download')
-  await save.click()
-  const download = await downloadPromise
-  const path = await download.path()
-  expect(path, 'graded image export must create a file').toBeTruthy()
-  expect(readFileSync(path!).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
-  expect(download.suggestedFilename()).toMatch(/^作业批改_.*\.png$/)
+async function inputValues(locator: Locator): Promise<string[]> {
+  return locator.evaluateAll((inputs) =>
+    inputs.map((input) => {
+      if (!(input instanceof HTMLInputElement)) throw new Error('expected an input element')
+      return input.value
+    }),
+  )
+}
+
+async function attachOverlayEvidence(
+  guard: Locator,
+  testInfo: TestInfo,
+  attachmentName: string,
+): Promise<void> {
+  const overlay = guard.getByTestId('photo-grade-overlay')
+  await expect(
+    overlay.getByTestId('overlay-save'),
+    'the authoritative grading overlay has no save control',
+  ).toHaveCount(0)
+  const screenshot = await overlay.screenshot({ type: 'png' })
+  expect(screenshot.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+  await testInfo.attach(attachmentName, { body: screenshot, contentType: 'image/png' })
 }
 
 async function countBackupRecords(page: Page): Promise<number> {
@@ -170,13 +181,13 @@ test.describe.serial('real K12 photo oracle and honest degradation', () => {
     }
   })
 
-  test('clear answered sheet keeps process-quality evidence and exports positioned grading', async ({
+  test('clear answered sheet keeps process-quality evidence and visible positioned grading', async ({
     page,
-  }) => {
+  }, testInfo) => {
     childName = `清晰卷${Date.now().toString(36)}`
     await createTutor(page, childName)
     const guard = await uploadAndRecognize(page, FIXTURES.clear)
-    const answers = await guard.locator('input[data-testid^="rq-answer-"]').inputValues()
+    const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
     expect(
       answers.filter((answer) => answer.trim()).length,
       'clear answered sheet must not be mistaken for a blank worksheet',
@@ -197,13 +208,13 @@ test.describe.serial('real K12 photo oracle and honest degradation', () => {
       'answer 29 is correct but its 42=18×2 process issue must remain attached to that item',
     ).toHaveCount(1)
     await expect(processEvidence).toContainText(/出错步骤|错误原因|过程.*(?:错误|问题)/)
-    await expect(overlay.getByTestId('overlay-degraded')).toHaveCount(0)
-    await saveOverlayPNG(guard)
+    await expect(overlay.locator('[data-testid^="overlay-degraded-"]')).toHaveCount(0)
+    await attachOverlayEvidence(guard, testInfo, 'clear-sheet-grading-overlay.png')
   })
 
   test('messy sheet yields 12 correct, 3 wrong, 1 unanswered without guessing handwriting', async ({
     page,
-  }) => {
+  }, testInfo) => {
     childName = `凌乱卷${Date.now().toString(36)}`
     await createTutor(page, childName)
     const guard = await uploadAndRecognize(page, FIXTURES.messy)
@@ -214,9 +225,10 @@ test.describe.serial('real K12 photo oracle and honest degradation', () => {
       await answerableRows.count(),
       'messy fixture oracle contains exactly 16 answerable items',
     ).toBe(16)
-    const answers = await guard.locator('input[data-testid^="rq-answer-"]').inputValues()
+    const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
     expect(answers.filter((answer) => answer.trim()).length).toBe(15)
     await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(1)
+    await expect(guard.locator('[data-testid^="rq-unclear-hint-"]')).toHaveCount(0)
     await expect(guard.getByTestId('recognize-grade-all')).toContainText('15')
     await expect(guard.getByTestId('recognize-solve-all')).toContainText('1')
     await guard.getByTestId('recognize-grade-all').click()
@@ -230,7 +242,9 @@ test.describe.serial('real K12 photo oracle and honest degradation', () => {
     expect(verdicts.filter((value) => value.includes('✓')).length, 'golden correct count').toBe(12)
     expect(verdicts.filter((value) => value.includes('✗')).length, 'golden wrong count').toBe(3)
     expect(verdicts, 'unanswered item must not receive a red cross').toHaveLength(15)
-    await expect(guard).toContainText(/0\.5\s*\+\s*1\/3|88|225\s*(?:kg|千克)/)
+    await expect(guard).toContainText(/0\.5\s*\+\s*1\/3/)
+    await expect(guard).toContainText(/88/)
+    await expect(guard).toContainText(/225\s*(?:kg|千克)/)
     const degraded = overlay.locator('[data-testid^="overlay-degraded-"]')
     for (const item of await degraded.all()) {
       await expect(
@@ -242,7 +256,7 @@ test.describe.serial('real K12 photo oracle and honest degradation', () => {
         'degradation must state a real verdict',
       ).not.toBeEmpty()
     }
-    if (await overlay.locator('[data-testid^="overlay-mark-"]').count()) await saveOverlayPNG(guard)
+    await attachOverlayEvidence(guard, testInfo, 'messy-sheet-grading-overlay.png')
   })
 
   test('blank worksheet takes solve-only lane and creates no mistake or grading overlay', async ({
@@ -252,15 +266,24 @@ test.describe.serial('real K12 photo oracle and honest degradation', () => {
     await createTutor(page, childName)
     const recordsBefore = await countBackupRecords(page)
     const guard = await uploadAndRecognize(page, FIXTURES.blank)
-    const answers = await guard.locator('input[data-testid^="rq-answer-"]').inputValues()
+    const answerableRows = guard.locator(
+      '[data-testid="rq-item"]:not([data-problem-kind="compound_parent"])',
+    )
+    const answers = await inputValues(guard.locator('input[data-testid^="rq-answer-"]'))
     expect(
       answers.length,
       'blank fixture must still recognize at least one question',
     ).toBeGreaterThan(0)
     expect(
+      await answerableRows.count(),
+      'every blank-fixture question must have one answer input',
+    ).toBe(answers.length)
+    expect(
       answers.every((answer) => answer.trim() === ''),
       'blank paper must not hallucinate student answers',
     ).toBe(true)
+    await expect(guard.locator('[data-testid^="rq-blank-hint-"]')).toHaveCount(answers.length)
+    await expect(guard.locator('[data-testid^="rq-unclear-hint-"]')).toHaveCount(0)
     await expect(guard.getByTestId('recognize-grade-all')).toHaveCount(0)
     await expect(guard.getByTestId('recognize-solve-all')).toBeVisible()
     await guard.getByTestId('recognize-solve-all').click()

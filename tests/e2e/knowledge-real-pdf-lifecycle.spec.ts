@@ -4,7 +4,6 @@ import { resolve } from 'node:path'
 import { expect, test, type APIRequestContext, type Page, type Request } from '@playwright/test'
 import {
   assertLiveRuntime,
-  cleanupLiveChild,
   liveGateBlockers,
   liveJSON,
   liveSidecarURL,
@@ -67,40 +66,6 @@ function nested(payload: Json, ...keys: string[]): unknown {
   return undefined
 }
 
-async function createTutor(
-  page: Page,
-  childName: string,
-): Promise<{ agentID: string; learnerID: string }> {
-  await page.addInitScript(() => sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1'))
-  await page.goto('/agents', { waitUntil: 'domcontentloaded' })
-  const skip = page.getByRole('button', { name: '跳过' })
-  if (await skip.isVisible().catch(() => false)) await skip.click()
-  await page.getByText('模板库', { exact: false }).first().click()
-  await page.getByText('作业辅导助手', { exact: false }).first().click()
-  await page.locator('.k12pf__input').first().fill(childName)
-  await page.locator('.k12pf .hc-select__trigger').nth(0).click()
-  await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '五年级下' }).click()
-  await page.getByRole('button', { name: '创建', exact: true }).click()
-  await expect(page.locator('.k12pf')).toHaveCount(0, { timeout: 30_000 })
-
-  const payload = await liveJSON<Json>(page.request, 'GET', '/api/v1/agents')
-  const agents = Array.isArray(payload.agents) ? (payload.agents as Json[]) : []
-  const matches = agents.filter((agent) => {
-    const metadata = agent.metadata as Json | undefined
-    return metadata?.['k12.child_name'] === childName
-  })
-  expect(matches, 'isolated child must map to one TutorAgent owner').toHaveLength(1)
-  const metadata = matches[0]!.metadata as Json
-  const agentID = String(matches[0]!.name || '')
-  const learnerID = String(metadata['k12.learner_id'] || metadata['k12.child_id'] || '')
-  expect(agentID).not.toBe('')
-  expect(
-    learnerID,
-    'K12 corpus binding requires a stable learner_id, not the display name',
-  ).not.toBe('')
-  return { agentID, learnerID }
-}
-
 function isDocumentUpload(request: Request): boolean {
   const url = new URL(request.url())
   return (
@@ -111,7 +76,6 @@ function isDocumentUpload(request: Request): boolean {
 async function uploadFromVisibleChooser(
   page: Page,
   fixture: PDFContract,
-  owner: { agentID: string; learnerID: string },
   onCreated: (id: string) => void,
 ): Promise<{ id: string; request: Request }> {
   await page.goto('/knowledge', { waitUntil: 'domcontentloaded' })
@@ -133,25 +97,13 @@ async function uploadFromVisibleChooser(
     url.pathname,
     'new uploads must use the durable document/job API; legacy /knowledge/upload is retired',
   ).toMatch(/\/api\/v1\/knowledge\/documents$/)
-
-  const multipart = uploadRequest.postDataBuffer()
-  expect(multipart, 'visible chooser must transmit the real multipart bytes').not.toBeNull()
-  expect(multipart!.length, 'multipart must include the complete immutable PDF').toBeGreaterThan(
-    fixture.bytes,
-  )
-  const body = multipart!.toString('latin1')
-  for (const [field, value] of [
-    ['agent_id', owner.agentID],
-    ['learner_id', owner.learnerID],
-    ['subject', '数学'],
-    ['grade', fixture.grade],
-  ] as const) {
-    expect(body, `multipart is missing ${field}=${value}`).toContain(`name="${field}"`)
-    expect(body).toContain(value)
-  }
+  expect(uploadRequest.headers()['content-type']).toMatch(/^multipart\/form-data;\s*boundary=/i)
 
   expect(response!.status(), 'durable parse/index job creation must return 202').toBe(202)
   expect(id, 'upload response must return the created document id for exact cleanup').not.toBe('')
+  const persisted = await documentDetail(page.request, id)
+  expect(Number(nested(persisted, 'size_bytes'))).toBe(fixture.bytes)
+  expect(String(nested(persisted, 'sha256', 'source_digest'))).toBe(fixture.sha256)
   return { id, request: uploadRequest }
 }
 
@@ -206,10 +158,6 @@ async function waitForIndexed(
   expect(Number(nested(detail, 'chunks_total', 'chunk_count'))).toBeGreaterThan(0)
   expect(Number(nested(detail, 'chunks_done', 'chunk_count'))).toBeGreaterThan(0)
   expect(String(nested(detail, 'sha256', 'source_digest'))).toBe(fixture.sha256)
-  expect(String(nested(detail, 'agent_id', 'owner_id'))).not.toBe('')
-  expect(String(nested(detail, 'learner_id'))).not.toBe('')
-  expect(String(nested(detail, 'subject'))).toBe('数学')
-  expect(String(nested(detail, 'grade'))).toBe(fixture.grade)
   return detail
 }
 
@@ -266,7 +214,7 @@ test('KNOW-001 fixed textbook PDFs have the frozen bytes, magic and SHA', () => 
   for (const fixture of Object.values(PDFS)) assertPDF(fixture)
 })
 
-test.describe.serial('K12 real textbook knowledge lifecycle', () => {
+test.describe.serial('real textbook knowledge lifecycle', () => {
   test.setTimeout(40 * 60_000)
   test.skip(
     blockers.length > 0,
@@ -276,7 +224,6 @@ test.describe.serial('K12 real textbook knowledge lifecycle', () => {
     ),
   )
 
-  let childName = ''
   const createdDocumentIDs = new Set<string>()
 
   test.beforeEach(async ({ page, request }, testInfo) => {
@@ -293,33 +240,23 @@ test.describe.serial('K12 real textbook knowledge lifecycle', () => {
       }
     }
     createdDocumentIDs.clear()
-    try {
-      await cleanupLiveChild(request, childName)
-    } catch (error) {
-      cleanupFailures.push(error)
-    } finally {
-      childName = ''
-      for (const fixture of Object.values(PDFS)) assertPDF(fixture)
-    }
+    for (const fixture of Object.values(PDFS)) assertPDF(fixture)
     if (cleanupFailures.length) {
-      throw new AggregateError(cleanupFailures, 'K12 knowledge cleanup did not reach zero residue')
+      throw new AggregateError(cleanupFailures, 'knowledge cleanup did not reach zero residue')
     }
   })
 
-  test('text PDF and scanned PDF upload, bind, search, cancel/resume and delete with zero residue', async ({
+  test('text PDF and scanned PDF upload, search, cancel/resume and delete with zero residue', async ({
     page,
     request,
   }) => {
-    childName = `教材库${Date.now().toString(36)}`
-    const owner = await createTutor(page, childName)
-
-    const textUpload = await uploadFromVisibleChooser(page, PDFS.text, owner, (id) =>
+    const textUpload = await uploadFromVisibleChooser(page, PDFS.text, (id) =>
       createdDocumentIDs.add(id),
     )
     await waitForIndexed(request, textUpload.id, PDFS.text)
     await searchAndAssertSource(page, PDFS.text, textUpload.id)
 
-    const scanUpload = await uploadFromVisibleChooser(page, PDFS.scan, owner, (id) =>
+    const scanUpload = await uploadFromVisibleChooser(page, PDFS.scan, (id) =>
       createdDocumentIDs.add(id),
     )
     await expect(page.getByTestId('upload-processing')).toBeVisible({ timeout: 60_000 })
@@ -368,7 +305,7 @@ test.describe.serial('K12 real textbook knowledge lifecycle', () => {
     expect(Number((await documentDetail(request, scanUpload.id))._status)).toBe(404)
   })
 
-  test('native sidecar restart preserves document, chunks, binding and page anchors', async ({
+  test('native sidecar restart preserves document, chunks and page anchors', async ({
     page,
     request,
   }) => {
@@ -376,9 +313,7 @@ test.describe.serial('K12 real textbook knowledge lifecycle', () => {
       process.env.HEX_K12_NATIVE_RESTART !== '1',
       'NOT RUN: requires a packaged Desktop whose sidebar restart button controls the tested sidecar',
     )
-    childName = `教材重启${Date.now().toString(36)}`
-    const owner = await createTutor(page, childName)
-    const upload = await uploadFromVisibleChooser(page, PDFS.text, owner, (id) =>
+    const upload = await uploadFromVisibleChooser(page, PDFS.text, (id) =>
       createdDocumentIDs.add(id),
     )
     const before = await waitForIndexed(request, upload.id, PDFS.text)

@@ -1,5 +1,4 @@
 import { test, expect, type Page } from '@playwright/test'
-import { readFileSync } from 'node:fs'
 import { cleanupK12Child } from './live-fixture-cleanup'
 
 /**
@@ -10,7 +9,7 @@ import { cleanupK12Child } from './live-fixture-cleanup'
  *  ② 识题链路真实上传作业照片：计时（「识题很慢」量化）+ 结果行出现；
  *  ③ Bug S 保活：切错题本→回辅导，结果仍在、不重新识题；错题本页无 prep-card 红字（abort 泄漏）；
  *  ④ 「这份作业的辅导要点」📱发送到手机（剪贴板真断言）+ 🖨打印（打印 iframe 真断言）；
- *  ⑤ 已答卷整张批改 → 原图全量叠加 → 保存的 PNG 真下载且魔数正确。
+ *  ⑤ 已答卷整张批改 → 原图全量叠加 → Playwright 截图附件留证。
  *
  * 前置：pnpm dev + sidecar 在跑；HEX_E2E_HOMEWORK 指向一张真实作业照片。
  * 图片是外部真实夹具，不得回退到某次会话的临时 scratchpad 路径；夹具缺失应明确 skip。
@@ -38,7 +37,7 @@ test.describe('BUG-20260712 真实点击验证', () => {
   }: {
     page: Page
     context: import('@playwright/test').BrowserContext
-  }) => {
+  }, testInfo) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write'])
     await page.addInitScript(() => {
       sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
@@ -138,9 +137,7 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await expect(overlay).toBeVisible()
     const positionedCount = await overlay.locator('[data-testid^="overlay-mark-"]').count()
     const degradedCount = await overlay.locator('[data-testid^="overlay-degraded-"]').count()
-    const outOfScopeCount = await overlay.locator(
-      '.pg-overlay__degraded-verdict.is-scope',
-    ).count()
+    const outOfScopeCount = await overlay.locator('.pg-overlay__degraded-verdict.is-scope').count()
     const renderedVerdicts = positionedCount + degradedCount
     expect(renderedVerdicts, '每道已批改题都应有原图标记或诚实降级文字结论').toBe(answeredCount)
     expect(
@@ -148,28 +145,24 @@ test.describe('BUG-20260712 真实点击验证', () => {
       '真实已答作业的每道范围内已批改题都必须获得独立核验坐标，不能退化成纯文字',
     ).toBe(answeredCount - outOfScopeCount)
     expect(positionedCount, '真实图片批改至少应在原图上产生一个可信标记').toBeGreaterThan(0)
-    expect(
-      degradedCount,
-      '只有超出当前学段的题可以不画勾叉；其他题缺坐标必须使门禁失败',
-    ).toBe(outOfScopeCount)
-
-    // 保存批改图不是临时 DOM 假动作：浏览器真实下载 PNG，并校验文件魔数。
-    const save = overlay.locator('[data-testid="overlay-save"]')
-    await expect(save).toBeEnabled()
-    const downloadPromise = page.waitForEvent('download')
-    await save.click()
-    const gradedDownload = await downloadPromise
-    expect(gradedDownload.suggestedFilename()).toMatch(/^作业批改_.*\.png$/)
-    const gradedPath = await gradedDownload.path()
-    expect(gradedPath, '批改 PNG 应生成真实下载文件').toBeTruthy()
-    expect(readFileSync(gradedPath!).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
-    if (GRADED_OUTPUT) {
-      await gradedDownload.saveAs(GRADED_OUTPUT)
-      expect(readFileSync(GRADED_OUTPUT).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
-    }
-    console.log(
-      `[grade] 已答 ${answeredCount} 题全部批改并叠加，导出 PNG 成功`,
+    expect(degradedCount, '只有超出当前学段的题可以不画勾叉；其他题缺坐标必须使门禁失败').toBe(
+      outOfScopeCount,
     )
+
+    // 权威原型不提供“保存批改图”；以可见批改层截图作为真实测试证据。
+    await expect(
+      overlay.getByTestId('overlay-save'),
+      'the authoritative grading overlay has no save control',
+    ).toHaveCount(0)
+    const overlayScreenshot = await overlay.screenshot(
+      GRADED_OUTPUT ? { path: GRADED_OUTPUT, type: 'png' } : { type: 'png' },
+    )
+    expect(overlayScreenshot.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a')
+    await testInfo.attach('bug20260712-grading-overlay.png', {
+      body: overlayScreenshot,
+      contentType: 'image/png',
+    })
+    console.log(`[grade] 已答 ${answeredCount} 题全部批改并叠加，截图证据已附加`)
 
     // 7) 📱 发送到手机 = 复制文本到剪贴板（真剪贴板断言）
     await prep.locator('[data-testid="prep-send"]').click()
