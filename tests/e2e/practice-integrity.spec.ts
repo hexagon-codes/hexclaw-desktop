@@ -51,6 +51,7 @@ async function createTutorAndOpenPractice(page: Page, childName: string): Promis
   const owner = matches[0]!.name!
   await page.getByText('我的智能体', { exact: false }).first().click()
   await page.locator('.hc-cxcard', { hasText: childName }).getByRole('button', { name: /错题本|学习档案/ }).click()
+  await expect(page).toHaveURL(/(?:\?|&)scenarioTab=records(?:&|$)/)
   await expect(page.locator('.k12rec')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('subtab-practicesets').click()
   await expect(page.getByTestId('practicesets-section')).toBeVisible()
@@ -65,6 +66,20 @@ async function addBasketItem(
   return json(await page.request.post(`${BASE_URL}/api/k12/practice-sets/basket/items`, {
     data: { agent: owner, source_session: 'e2e-practice-integrity', item },
   }))
+}
+
+async function verifyBasketItem(
+  page: Page,
+  owner: string,
+  recordId: string,
+  itemId: string,
+  status: 'verified' | 'needs_review',
+  evidence = '',
+): Promise<Json> {
+  return json(await page.request.post(
+    `${BASE_URL}/api/k12/practice-sets/${encodeURIComponent(recordId)}/verify`,
+    { data: { agent: owner, item_id: itemId, status, evidence } },
+  ))
 }
 
 function numberedLines(text: string): string[] {
@@ -95,39 +110,63 @@ test.describe('real practice basket, paper projection and return evidence', () =
     const verifiedA = {
       item_id: `item-${e2eMarker('a')}`, source_problem_id: 'problem-fixture-a', subject: '数学', added_via: 'manual',
       question_markdown: '1. 6 × 7 = ____', expected_answer_markdown: 'ANSWER_ONLY_42',
-      verification_status: 'verified', verification_evidence: `fixture:${RETURN_FIXTURE.sha256}:human-reviewed`,
+      verification_status: 'pending',
     }
     const verifiedB = {
       item_id: `item-${e2eMarker('b')}`, source_problem_id: 'problem-fixture-b', subject: '数学', added_via: 'manual',
       question_markdown: '2. 8 × 7 = ____', expected_answer_markdown: 'ANSWER_ONLY_56',
-      verification_status: 'verified', verification_evidence: `fixture:${RETURN_FIXTURE.sha256}:human-reviewed`,
+      verification_status: 'pending',
     }
     const blocked = {
       item_id: `item-${e2eMarker('blocked')}`, source_problem_id: 'problem-fixture-unclear', subject: '科学', added_via: 'manual',
       question_markdown: 'BLOCKED_ONLY_QUESTION', expected_answer_markdown: 'BLOCKED_ONLY_ANSWER',
-      verification_status: 'needs_review', blocked_reason: '科学题验证门未开放',
+      verification_status: 'pending',
     }
     const first = await addBasketItem(page, owner, verifiedA)
     expect(first.added).toBe(true)
+    const pending = await json<Json>(
+      await page.request.get(`${BASE_URL}/api/k12/practice-sets/${encodeURIComponent(first.record_id)}?agent=${encodeURIComponent(owner)}`),
+    )
+    expect((pending.items as Json[])[0]?.verification_status, 'adding a candidate must not make it verified').toBe('pending')
+    await verifyBasketItem(
+      page,
+      owner,
+      first.record_id,
+      String(verifiedA.item_id),
+      'verified',
+      `fixture:${RETURN_FIXTURE.sha256}:human-reviewed`,
+    )
     expect((await addBasketItem(page, owner, verifiedA)).added, 'same item retry must be idempotent').toBe(false)
     expect((await addBasketItem(page, owner, verifiedB)).added).toBe(true)
+    await verifyBasketItem(
+      page,
+      owner,
+      first.record_id,
+      String(verifiedB.item_id),
+      'verified',
+      `fixture:${RETURN_FIXTURE.sha256}:human-reviewed`,
+    )
     expect((await addBasketItem(page, owner, blocked)).added).toBe(true)
+    await verifyBasketItem(page, owner, first.record_id, String(blocked.item_id), 'needs_review')
     await page.reload({ waitUntil: 'domcontentloaded' })
     await page.getByTestId('subtab-practicesets').click()
 
     await expect(page.getByTestId('ps-basket-count')).toContainText('3')
     await expect(page.getByTestId('ps-blocked-group')).toBeVisible()
     await expect(page.getByTestId('ps-finalize-print')).toBeEnabled()
-    await page.getByTestId('ps-paper-preview').click()
-    const preview = page.getByTestId('ps-paper-modal')
-    await expect(preview).toBeVisible()
-    const previewText = await preview.innerText()
+    const preview = await json<Json>(
+      await page.request.get(
+        `${BASE_URL}/api/k12/practice-sets/${encodeURIComponent(first.record_id)}/paper?agent=${encodeURIComponent(owner)}&kind=question`,
+      ),
+    )
+    expect(preview.preview).toBe(true)
+    expect(preview.paper_no).toBe('')
+    const previewText = String(preview.markdown)
     expect(previewText).toContain('6 × 7')
     expect(previewText).toContain('8 × 7')
     expect(previewText).not.toContain('ANSWER_ONLY_42')
     expect(previewText).not.toContain('ANSWER_ONLY_56')
     expect(previewText).not.toContain('BLOCKED_ONLY_QUESTION')
-    await preview.getByTestId('ps-paper-close').click()
 
     const finalized = await json<{ set: Json; skipped_blocked_count: number }>(
       await page.request.post(`${BASE_URL}/api/k12/practice-sets/${encodeURIComponent(first.record_id)}/finalize`, {
@@ -144,10 +183,12 @@ test.describe('real practice basket, paper projection and return evidence', () =
     await expect(history).toBeVisible()
     await history.getByTestId('ps-paper-question').click()
     const questionModal = page.getByTestId('ps-paper-modal')
+    await expect(questionModal).toContainText('6 × 7')
     const questionText = await questionModal.innerText()
     await questionModal.getByTestId('ps-paper-close').click()
     await history.getByTestId('ps-paper-answer').click()
     const answerModal = page.getByTestId('ps-paper-modal')
+    await expect(answerModal).toContainText('ANSWER_ONLY_42')
     const answerText = await answerModal.innerText()
     expect(numberedLines(answerText).map((line) => line.replace(/ANSWER_ONLY_\d+/g, ''))).toHaveLength(numberedLines(questionText).length)
     expect(answerText).toContain('ANSWER_ONLY_42')

@@ -52,7 +52,7 @@ async function createTutor(page: Page, childName: string): Promise<void> {
   if (await skip.isVisible().catch(() => false)) await skip.click()
   await page.getByText('模板库', { exact: false }).first().click()
   await page.getByText('作业辅导助手', { exact: false }).first().click()
-  await expect(page.getByText('创建「作业辅导助手」')).toBeVisible({ timeout: 20_000 })
+  await expect(page.getByText('创建「K12 辅导助手」')).toBeVisible({ timeout: 20_000 })
   await page.locator('.k12pf__input').first().fill(childName)
   await page.locator('.k12pf .hc-select__trigger').nth(0).click()
   await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '五年级下' }).click()

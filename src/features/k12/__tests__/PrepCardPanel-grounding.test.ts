@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/k12', () => ({
-  k12PrepCard: (req: unknown) => h.prep(req),
+  k12PrepCard: (req: unknown, signal?: AbortSignal) => h.prep(req, signal),
   k12AddGrounding: (req: unknown, signal?: AbortSignal) => h.add(req, signal),
   k12ListMistakes: vi.fn(),
   k12ReviewQueue: vi.fn(),
@@ -33,7 +33,7 @@ function i18n() {
 
 function render(agentId = 'mingming') {
   return mount(PrepCardPanel, {
-    props: { agentId, grade: '五年级上', knowledgePoints: ['小数乘法'] },
+    props: { agentId, grade: '五年级上', subject: '数学', knowledgePoints: ['小数乘法'] },
     global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
   })
 }
@@ -58,14 +58,23 @@ describe('PrepCardPanel 教材上传闭环', () => {
 
     expect(h.parse).toHaveBeenCalledWith(file)
     expect(h.add).toHaveBeenCalledWith(
-      { agent: 'mingming', title: '人教版五上.pdf', content: '小数乘法教材原文' },
+      {
+        agent: 'mingming',
+        subject: '数学',
+        title: '人教版五上.pdf',
+        content: '小数乘法教材原文',
+      },
       expect.any(AbortSignal),
     )
-    expect(h.prep).toHaveBeenCalledWith({
-      agent: 'mingming',
-      grade: '五年级上',
-      knowledge_points: ['小数乘法'],
-    })
+    expect(h.prep).toHaveBeenCalledWith(
+      {
+        agent: 'mingming',
+        grade: '五年级上',
+        subject: '数学',
+        knowledge_points: ['小数乘法'],
+      },
+      undefined,
+    )
   })
 
   it('上传过程中切换孩子，旧请求完成后不得为新孩子触发刷新', async () => {
@@ -91,5 +100,26 @@ describe('PrepCardPanel 教材上传闭环', () => {
 
     expect(h.add.mock.calls[0]?.[0]).toMatchObject({ agent: 'child-a' })
     expect(h.prep.mock.calls.length).toBe(prepCallsAfterSwitch)
+  })
+
+  it('切换学科会中止旧教材请求，新请求只使用当前学科', async () => {
+    h.prep.mockImplementation(() => new Promise(() => {}))
+    const w = render()
+    await flushPromises()
+
+    const firstSignal = h.prep.mock.calls[0]?.[1] as AbortSignal | undefined
+    await w.setProps({ subject: '语文', knowledgePoints: ['古诗积累'] })
+    await flushPromises()
+
+    expect(firstSignal?.aborted).toBe(true)
+    expect(h.prep).toHaveBeenLastCalledWith(
+      {
+        agent: 'mingming',
+        grade: '五年级上',
+        subject: '语文',
+        knowledge_points: ['古诗积累'],
+      },
+      expect.any(AbortSignal),
+    )
   })
 })

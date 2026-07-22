@@ -42,7 +42,7 @@ async function openTutorTemplate(page: Page): Promise<void> {
   if (await skip.isVisible().catch(() => false)) await skip.click()
   await page.getByText('模板库', { exact: false }).first().click()
   await page.getByText('作业辅导助手', { exact: false }).first().click()
-  await expect(page.getByRole('dialog')).toContainText('创建「作业辅导助手」')
+  await expect(page.getByRole('dialog')).toContainText('创建「K12 辅导助手」')
 }
 
 async function createTutor(

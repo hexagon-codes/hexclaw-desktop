@@ -218,6 +218,17 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(ev?.[ev.length - 1]).toEqual([false])
   })
 
+  it('学习档案深链切换实例后仍进入新孩子的学习档案', async () => {
+    routeQuery.q = { scenarioTab: 'records' }
+    const w = render()
+    await flushPromises()
+    await w.setProps({ agentId: 'hong' })
+    await flushPromises()
+    const ev = w.emitted('update:recordsActive')
+    expect(ev?.[ev.length - 1]).toEqual([true])
+    expect(w.get('#k12-enh-view-records').isVisible()).toBe(true)
+  })
+
   it('切换实例（agentId 变）→ 关闭上一个孩子的识题面板并清空待识别图片', async () => {
     const w = render()
     // 打开路径=图片自动改道（BUG-20260711-E：手动 toggle 已删）

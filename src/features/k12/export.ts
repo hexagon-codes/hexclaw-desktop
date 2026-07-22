@@ -67,17 +67,11 @@ export function buildWorksheetHtml(items: RecordItem[], meta: WorksheetMeta): st
 }
 
 /**
- * 打印同源 HTML：Desktop 交给 Rust 原生 PrintJob，浏览器开发态才使用 window.print()。
- * Desktop 的布尔值来自系统 NSPrintOperation：取消/失败必须原样返回 false，禁止保存文件兜底。
+ * Browser/prototype-only HTML print helper. Desktop formal printing is rejected here and must
+ * use the canonical PDF + PDFKit path below.
  */
 async function printHtml(html: string): Promise<boolean> {
-  if (isTauri()) {
-    const result = await invoke<boolean | NativePrintReceipt>('native_print_html', { html })
-    // Older sidecars returned a boolean. Keep non-domain helpers compatible,
-    // but the durable Practice PrintJob path below rejects that legacy shape
-    // because it cannot prove a native operation/receipt identity.
-    return typeof result === 'boolean' ? result : result.status === 'printed'
-  }
+  if (isTauri()) throw new Error('桌面正式打印必须使用服务端 PDF 与原生 PDFKit')
   if (typeof document === 'undefined') return false
   const iframe = document.createElement('iframe')
   iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0'
@@ -104,6 +98,46 @@ export interface NativePrintReceipt {
   printer_snapshot: Record<string, unknown>
 }
 
+const MAX_NATIVE_PRINT_PDF_BYTES = 32 * 1024 * 1024
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let bin = ''
+  const CHUNK = 0x8000
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(bin)
+}
+
+async function printablePdfBase64(pdf: Blob): Promise<string> {
+  if (pdf.size === 0) throw new Error('打印 PDF 不能为空')
+  if (pdf.size > MAX_NATIVE_PRINT_PDF_BYTES) {
+    throw new Error(`打印 PDF 过大 ${pdf.size} > ${MAX_NATIVE_PRINT_PDF_BYTES} 字节`)
+  }
+  const bytes = new Uint8Array(await pdf.arrayBuffer())
+  if (
+    bytes.length < 5 ||
+    bytes[0] !== 0x25 ||
+    bytes[1] !== 0x50 ||
+    bytes[2] !== 0x44 ||
+    bytes[3] !== 0x46 ||
+    bytes[4] !== 0x2d
+  ) {
+    throw new Error('打印内容不是有效的 PDF 文档')
+  }
+  return bytesToBase64(bytes)
+}
+
+async function printPdfWithReceipt(pdf: Blob): Promise<NativePrintReceipt> {
+  if (!isTauri()) throw new Error('正式打印需要桌面原生系统打印对话框')
+  const pdfBase64 = await printablePdfBase64(pdf)
+  const result = await invoke<unknown>('native_print_pdf', { pdfBase64 })
+  if (!isNativePrintReceipt(result)) {
+    throw new Error('原生打印适配器未返回可验证的 PrintJob 回执')
+  }
+  return result
+}
+
 function isNativePrintReceipt(value: unknown): value is NativePrintReceipt {
   if (!value || typeof value !== 'object') return false
   const receipt = value as Partial<NativePrintReceipt>
@@ -119,7 +153,7 @@ function isNativePrintReceipt(value: unknown): value is NativePrintReceipt {
   return receipt.status !== 'printed' || Boolean(receipt.native_receipt_id?.trim())
 }
 
-/** 打印错题卷。返回原生打印是否提交成功；取消/失败均为 false。 */
+/** 浏览器/prototype 打印错题卷；Desktop 正式入口必须先走持久 PDF 预览控制器。 */
 export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): Promise<boolean> {
   const html = buildWorksheetHtml(items, meta)
   return printHtml(html)
@@ -128,8 +162,8 @@ export async function printWorksheet(items: RecordItem[], meta: WorksheetMeta): 
 // ── 练习卷（题目卷/答案卷）打印（§4.13 呈现物真实渲染，2026-07-18）────────
 /**
  * 把后端渲染的练习卷 Markdown（§4.13 受控文法：# 标题 / N. 题目 / **粗体** / --- 作答线 / 普通行）
- * 转成 A4 可打印 HTML。只处理卷面文法，不是通用 Markdown 解析器——卷面由后端唯一渲染器产出，
- * 前端打印通道与查看弹层同源（不做第二套排版）。
+ * 转成浏览器开发态 A4 HTML。只处理卷面文法，不是通用 Markdown 解析器；Desktop 正式打印
+ * 不调用此函数，而是消费服务端 canonical PDF。
  */
 export function buildPracticePaperHtml(markdown: string, title: string): string {
   const body = markdown
@@ -160,8 +194,8 @@ export function buildPracticePaperHtml(markdown: string, title: string): string 
 }
 
 /**
- * 打印练习卷：canonical Markdown 先进入同源 A4 渲染，再由 Desktop 原生 PrintJob
- * 或浏览器开发态系统打印对话框交付。另存 PDF 不参与此路径。
+ * 浏览器/prototype 打印练习卷。Desktop 正式入口必须先由唯一服务端渲染器生成可见
+ * PDF 预览，再通过 printPracticePaperWithReceipt 将同一 Blob 交给 PDFKit。
  */
 export async function printPracticePaper(markdown: string, title: string): Promise<boolean> {
   const html = buildPracticePaperHtml(markdown, title)
@@ -169,21 +203,14 @@ export async function printPracticePaper(markdown: string, title: string): Promi
 }
 
 /**
- * Durable PrintJob bridge. Unlike the convenience boolean helper, this entry
- * point is Desktop-only and fails closed unless the native adapter returns a
- * typed operation receipt suitable for the backend PrintJob event ledger.
+ * Durable PrintJob bridge. The Blob must be the exact PDF already rendered for preview/save.
+ * This entry point never accepts Markdown/HTML and fails closed unless the native adapter returns
+ * a typed operation receipt suitable for the backend PrintJob event ledger.
  */
 export async function printPracticePaperWithReceipt(
-  markdown: string,
-  title: string,
+  pdf: Blob,
 ): Promise<NativePrintReceipt> {
-  if (!isTauri()) throw new Error('正式打印需要桌面原生系统打印对话框')
-  const html = buildPracticePaperHtml(markdown, title)
-  const result = await invoke<unknown>('native_print_html', { html })
-  if (!isNativePrintReceipt(result)) {
-    throw new Error('原生打印适配器未返回可验证的 PrintJob 回执')
-  }
-  return result
+  return printPdfWithReceipt(pdf)
 }
 
 // ── 备课卡打印 ──────────────────────────────────────────────
@@ -243,7 +270,7 @@ export function prepCardToMarkdown(
   return lines.join('\n').trim()
 }
 
-/** 打印备课卡。Desktop 必须返回原生 PrintJob 结果，取消不得冒充成功。 */
+/** 浏览器/prototype 打印备课卡；Desktop 正式入口必须先走持久 PDF 预览控制器。 */
 export async function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel: string }): Promise<boolean> {
   return printHtml(buildPrepCardHtml(card, meta))
 }
@@ -302,12 +329,7 @@ export function buildWorksheetMarkdown(items: RecordItem[], meta: WorksheetMeta)
 /** Blob → base64（分块避免 String.fromCharCode 参数过多；供 downloadInApp 的 data: URL 用）。 */
 async function blobToBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer())
-  let bin = ''
-  const CHUNK = 0x8000
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
-  }
-  return btoa(bin)
+  return bytesToBase64(bytes)
 }
 
 function safePdfFilename(title: string): string {
@@ -352,6 +374,11 @@ async function saveRenderedPdf(content: string, title: string, filename = safePd
 /** 练习卷/观察练习卡另存 PDF；独立于 PrintJob，不得写打印成功。 */
 export function savePracticePaperPdf(markdown: string, title: string): Promise<boolean> {
   return saveRenderedPdf(markdown, title)
+}
+
+/** 正式打印预览与保存 PDF 共用同一服务端 PDF 渲染结果，避免出现两套分页规则。 */
+export function renderPracticePaperPdf(markdown: string, title: string): Promise<Blob> {
+  return renderDocument({ content: markdown, format: 'pdf', title })
 }
 
 /**

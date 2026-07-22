@@ -37,7 +37,7 @@ test.describe('K12 全链路 UI 冒烟', () => {
     await page.getByText('模板库', { exact: false }).first().click()
     await page.getByText('作业辅导助手', { exact: false }).first().click()
     // K12ProfileForm 弹出
-    await expect(page.getByText('创建「作业辅导助手」')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('创建「K12 辅导助手」')).toBeVisible({ timeout: 15_000 })
     await page.locator('.k12pf__input').first().fill(CHILD)
     // 年级·学期走 HcSelect（B2 迁移：原生 select → 自渲染下拉，Teleport 到 body）
     await page.locator('.k12pf .hc-select__trigger').nth(0).click()

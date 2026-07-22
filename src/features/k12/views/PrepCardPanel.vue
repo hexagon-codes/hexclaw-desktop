@@ -21,13 +21,16 @@ import {
 } from '@/api/k12'
 import { useK12Store } from '../store'
 import { printPrepCard, prepCardToMarkdown, prepCardToText } from '../export'
-import { printPersistentArtifact } from '../persistent-print'
+import type { PersistentPrintRequest } from '../persistent-print'
+import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import { parseDocument } from '@/utils/file-parser'
 
 const props = defineProps<{
   /** 隔离键 = agents.name（与 recognize/grade 同键） */
   agentId: string
   grade: string
+  /** 识题确认的当前学科，用于分科教材检索与写入隔离。 */
+  subject?: string
   /** 当前档案的兼容教材边界，仅用于诚实展示当前依据；分科绑定由 profile metadata 承载。 */
   textbook?: string
   /** 识题识别出的真实知识点（绑定当前作业）；非空即生成 */
@@ -37,6 +40,9 @@ const props = defineProps<{
 const { t } = useI18n()
 const toast = useToast()
 const store = useK12Store()
+const persistentPrintController = ref<{
+  open: (request: PersistentPrintRequest) => Promise<void>
+} | null>(null)
 
 let prepAbort: AbortController | null = null
 const deliveryReceipt = ref<DeliveryReceiptDTO | null>(null)
@@ -51,24 +57,25 @@ function cancelPrepCard() {
 function requestPrepCard(
   agentId = props.agentId,
   grade = props.grade,
+  subject = props.subject ?? '',
   kps = props.knowledgePoints,
 ) {
   cancelPrepCard()
   if (!agentId || !kps.length) return
   const controller = new AbortController()
   prepAbort = controller
-  void store.loadPrepCard(agentId, grade, kps, controller.signal).finally(() => {
+  void store.loadPrepCard(agentId, grade, subject, kps, controller.signal).finally(() => {
     if (prepAbort === controller) prepAbort = null
   })
 }
 
 // 识题给出知识点即生成辅导要点（绑定当前作业）；知识点变化重拉。
 watch(
-  () => [props.agentId, props.grade, props.knowledgePoints] as const,
-  ([agentId, grade, kps]) => {
+  () => [props.agentId, props.grade, props.subject, props.knowledgePoints] as const,
+  ([agentId, grade, subject, kps]) => {
     deliveryReceipt.value = null
     deliverySetupError.value = ''
-    requestPrepCard(agentId, grade, kps)
+    requestPrepCard(agentId, grade, subject ?? '', kps)
   },
   { immediate: true, deep: true },
 )
@@ -96,7 +103,7 @@ function cancelGroundingUpload() {
   groundingBusy.value = false
 }
 
-watch(() => props.agentId, cancelGroundingUpload)
+watch(() => [props.agentId, props.subject], cancelGroundingUpload)
 onBeforeUnmount(() => {
   cancelPrepCard()
   cancelGroundingUpload()
@@ -117,25 +124,38 @@ async function onGroundingFile(event: Event) {
   groundingAbort = controller
   const generation = ++groundingGeneration
   const agentId = props.agentId
+  const subject = props.subject ?? ''
   groundingBusy.value = true
   try {
     const parsed = await parseDocument(file)
     if (
       generation !== groundingGeneration ||
       controller.signal.aborted ||
-      props.agentId !== agentId
+      props.agentId !== agentId ||
+      (props.subject ?? '') !== subject
     )
       return
     if (!parsed.text.trim()) throw new Error('empty grounding document')
-    await store.addGrounding(agentId, parsed.fileName || file.name, parsed.text, controller.signal)
+    await store.addGrounding(
+      agentId,
+      subject,
+      parsed.fileName || file.name,
+      parsed.text,
+      controller.signal,
+    )
     if (
       generation !== groundingGeneration ||
       controller.signal.aborted ||
-      props.agentId !== agentId
+      props.agentId !== agentId ||
+      (props.subject ?? '') !== subject
     )
       return
-    await store.loadPrepCard(agentId, props.grade, props.knowledgePoints)
-    if (generation === groundingGeneration && props.agentId === agentId)
+    await store.loadPrepCard(agentId, props.grade, subject, props.knowledgePoints)
+    if (
+      generation === groundingGeneration &&
+      props.agentId === agentId &&
+      (props.subject ?? '') === subject
+    )
       toast.success(t('k12.prep.groundingUploaded'))
   } catch {
     if (!controller.signal.aborted && generation === groundingGeneration)
@@ -159,7 +179,7 @@ async function doPrint() {
   try {
     const card = store.prepCard
     const meta = prepMeta()
-    await printPersistentArtifact({
+    await persistentPrintController.value?.open({
       agent: props.agentId,
       sourceKind: 'prep_card',
       sourceRef: `prep-card:${props.grade}:${props.knowledgePoints.join(',')}`,
@@ -170,6 +190,10 @@ async function doPrint() {
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
   }
+}
+
+function onPersistentPrintError(error: Error) {
+  toast.error(error.message)
 }
 
 function deliveryStatusText(receipt: DeliveryReceiptDTO): string {
@@ -248,6 +272,10 @@ async function queryDelivery() {
 
 <template>
   <section class="tutor-guide" data-testid="tutor-guide" aria-label="这份作业的辅导要点">
+    <K12PersistentPrintController
+      ref="persistentPrintController"
+      @error="onPersistentPrintError"
+    />
     <div class="tutor-guide__head">
       <b>📋 {{ t('k12.prep.title') }}</b>
       <span

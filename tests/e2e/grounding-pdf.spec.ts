@@ -80,7 +80,11 @@ async function createTutor(page: Page, childName: string, grade: string): Promis
   return { agentID, learnerID }
 }
 
-async function visibleUpload(page: Page, fixture: PDFContract): Promise<Request> {
+async function visibleUpload(
+  page: Page,
+  fixture: PDFContract,
+  track: (documentID: string, jobID: string) => void,
+): Promise<{ request: Request; payload: Json; documentID: string; jobID: string }> {
   verifySource(fixture)
   await page.goto('/knowledge', { waitUntil: 'domcontentloaded' })
   await page.getByRole('button', { name: /添加文档|Add Document/ }).click()
@@ -93,12 +97,23 @@ async function visibleUpload(page: Page, fixture: PDFContract): Promise<Request>
   const chooser = await chooserPromise
   await chooser.setFiles(fixture.path)
   const upload = await requestPromise
-  const body = upload.postDataBuffer()
-  expect(body, 'visible chooser must send multipart bytes').not.toBeNull()
-  const source = readFileSync(fixture.path)
-  expect(body!.indexOf(source), 'multipart body must contain the exact immutable PDF bytes').toBeGreaterThanOrEqual(0)
   expect(new URL(upload.url()).pathname, 'legacy filename-only upload is not the durable K12 grounding contract').toBe('/api/v1/knowledge/documents')
-  return upload
+  expect(upload.method()).toBe('POST')
+  expect(upload.headers()['content-type']).toMatch(/^multipart\/form-data;\s*boundary=/i)
+  const response = await upload.response()
+  expect(response).not.toBeNull()
+  expect(response!.status(), 'durable upload must create an async job').toBe(202)
+  const payload = await response!.json() as Json
+  const documentID = String(nested(payload, 'id', 'document_id', 'doc_id') || '')
+  const jobID = String(nested(payload, 'job_id') || '')
+  expect(documentID).not.toBe('')
+  expect(jobID).not.toBe('')
+  track(documentID, jobID)
+
+  const persisted = await detail(page.request, documentID)
+  expect(Number(nested(persisted, 'size_bytes'))).toBe(fixture.bytes)
+  expect(String(nested(persisted, 'sha256', 'source_digest'))).toBe(fixture.sha256)
+  return { request: upload, payload, documentID, jobID }
 }
 
 async function detail(request: APIRequestContext, id: string): Promise<Json> {
@@ -155,10 +170,12 @@ test.describe('real K12 grounding PDF lifecycle', () => {
   test.setTimeout(40 * 60_000)
   test.skip(!KNOWLEDGE_LIVE, 'NOT RUN: set HEX_K12_KNOWLEDGE_LIVE=1 with isolated durable parser/index/embedding services')
   let childName = ''
-  const created = new Set<string>()
+  const created = new Map<string, string>()
 
   test.afterEach(async ({ request }) => {
-    for (const id of created) {
+    for (const [id, jobID] of created) {
+      const cancel = await request.post(`${BASE_URL}/api/v1/knowledge/jobs/${encodeURIComponent(jobID)}/cancel`)
+      expect([200, 404, 409]).toContain(cancel.status())
       const response = await request.delete(`${BASE_URL}/api/v1/knowledge/documents/${encodeURIComponent(id)}`)
       expect([200, 204, 404]).toContain(response.status())
     }
@@ -171,21 +188,13 @@ test.describe('real K12 grounding PDF lifecycle', () => {
   test('131-page text PDF enters through the visible chooser with owner, subject and page-grounded retrieval', async ({ page, request }) => {
     childName = `五下教材-${e2eMarker('child')}`
     const owner = await createTutor(page, childName, PDFS.text.grade)
-    const upload = await visibleUpload(page, PDFS.text)
-    const multipart = upload.postDataBuffer()!.toString('latin1')
-    for (const value of [owner.agentID, owner.learnerID, '数学', PDFS.text.grade]) {
-      expect(multipart, `grounding upload must carry owner/binding value ${value}`).toContain(value)
-    }
-    const response = await upload.response()
-    expect(response).not.toBeNull()
-    expect(response!.status(), 'durable upload must create an async job').toBe(202)
-    const payload = await response!.json() as Json
-    const id = String(nested(payload, 'id', 'document_id', 'doc_id') || '')
-    expect(id).not.toBe('')
-    created.add(id)
+    const accepted = await visibleUpload(page, PDFS.text, (id, jobID) => created.set(id, jobID))
+    const id = accepted.documentID
     const indexed = await waitIndexed(request, id, PDFS.text)
     expect(String(nested(indexed, 'agent_id', 'owner_id'))).toBe(owner.agentID)
     expect(String(nested(indexed, 'learner_id'))).toBe(owner.learnerID)
+    expect(String(nested(indexed, 'subject'))).toBe('数学')
+    expect(String(nested(indexed, 'grade'))).toBe(PDFS.text.grade)
 
     await page.goto('/knowledge', { waitUntil: 'domcontentloaded' })
     await page.getByText('检索测试', { exact: false }).click()
@@ -208,21 +217,16 @@ test.describe('real K12 grounding PDF lifecycle', () => {
     test.skip(!SCAN_OCR_LIVE, 'NOT RUN: set HEX_K12_SCAN_OCR_LIVE=1 only with authorized full-document OCR capacity')
     childName = `六上扫描-${e2eMarker('child')}`
     await createTutor(page, childName, PDFS.scan.grade)
-    const upload = await visibleUpload(page, PDFS.scan)
-    const response = await upload.response()
-    expect(response?.status()).toBe(202)
-    const payload = await response!.json() as Json
-    const id = String(nested(payload, 'id', 'document_id', 'doc_id') || '')
-    expect(id).not.toBe('')
-    created.add(id)
+    const accepted = await visibleUpload(page, PDFS.scan, (id, jobID) => created.set(id, jobID))
+    const id = accepted.documentID
     await expect(page.getByTestId('upload-processing'), '57MB scanned PDF must not masquerade as immediately indexed text').toBeVisible({ timeout: 60_000 })
     const job = page.locator('[data-testid="knowledge-upload-job"]').filter({ hasText: '人教版·小学六年级上册.pdf' })
     await expect(job, 'OCR job must expose durable controls').toBeVisible()
-    const cancelResponse = page.waitForResponse((value) => value.request().method() === 'POST' && /\/cancel$/.test(new URL(value.url()).pathname))
+    const cancelResponse = page.waitForResponse((value) => value.request().method() === 'POST' && new URL(value.url()).pathname.endsWith('/cancel'))
     await job.getByRole('button', { name: '取消', exact: true }).click()
     expect((await cancelResponse).ok()).toBe(true)
     await expect(job).toContainText(/已取消|可恢复/)
-    const resumeResponse = page.waitForResponse((value) => value.request().method() === 'POST' && /\/resume$/.test(new URL(value.url()).pathname))
+    const resumeResponse = page.waitForResponse((value) => value.request().method() === 'POST' && new URL(value.url()).pathname.endsWith('/resume'))
     await job.getByRole('button', { name: /恢复|继续/ }).click()
     expect((await resumeResponse).ok()).toBe(true)
     await waitIndexed(request, id, PDFS.scan)

@@ -56,6 +56,20 @@ describe('K12 works prototype layout', () => {
     ])
   })
 
+  it('teleports the add-work modal to the app body so ancestor layout cannot stretch or clip it', () => {
+    const addModal = worksSource.indexOf('data-testid="cw-add-modal"')
+    const teleport = worksSource.lastIndexOf('<Teleport to="body">', addModal)
+    const teleportClose = worksSource.lastIndexOf('</Teleport>', addModal)
+    expect(addModal).toBeGreaterThan(-1)
+    expect(teleport).toBeGreaterThan(-1)
+    expect(teleportClose).toBeLessThan(teleport)
+  })
+
+  it('uses a bounded desktop modal with a scrolling body and fixed action bar', () => {
+    expect(worksSource).toMatch(/\.k12cw-modal\s*\{[^}]*max-height:\s*min\(720px,\s*calc\(100vh - 24px\)\)[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/s)
+    expect(worksSource).toMatch(/\.k12cw-modal__body\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s)
+  })
+
   it('keeps native printing and Save PDF as two independent practice-card actions (DD-023A)', () => {
     expect(worksSource).not.toContain("isTauri() ? t('k12.works.practiceCardSavePdf')")
     expect(worksSource).toContain('data-testid="cw-card-print"')

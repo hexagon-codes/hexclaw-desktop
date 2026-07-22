@@ -34,7 +34,8 @@ import {
   type WorkType,
 } from '@/api/k12'
 import { printPracticePaper, savePracticePaperPdf } from '../export'
-import { printPersistentArtifact } from '../persistent-print'
+import type { PersistentPrintRequest } from '../persistent-print'
+import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 
 const props = withDefaults(defineProps<{ agentId: string; showAddButton?: boolean }>(), {
@@ -60,6 +61,9 @@ const typeFilter = ref<'' | WorkType>('')
 const expandedId = ref('')
 const detailDialogs = ref<HTMLElement[]>([])
 let detailOpener: HTMLElement | null = null
+const previewImageSrc = ref('')
+const previewImageAlt = ref('')
+let previewOpener: HTMLElement | null = null
 // 点评/修改稿的行内输入：按 record_id 存草稿文本。
 const feedbackDraft = ref<Record<string, string>>({})
 const revisionDraft = ref<Record<string, string>>({})
@@ -133,6 +137,23 @@ function closeDetails(restoreFocus = true) {
   expandedId.value = ''
   const opener = detailOpener
   detailOpener = null
+  void nextTick(() => {
+    if (restoreFocus && opener?.isConnected) opener.focus()
+  })
+}
+function openImagePreview(src: string, alt: string, event?: Event) {
+  if (!src) return
+  const trigger = event?.currentTarget
+  previewOpener = trigger instanceof HTMLElement ? trigger : null
+  previewImageSrc.value = src
+  previewImageAlt.value = alt
+}
+function closeImagePreview(restoreFocus = true) {
+  if (!previewImageSrc.value) return
+  previewImageSrc.value = ''
+  previewImageAlt.value = ''
+  const opener = previewOpener
+  previewOpener = null
   void nextTick(() => {
     if (restoreFocus && opener?.isConnected) opener.focus()
   })
@@ -464,6 +485,11 @@ function closeAdd() {
   })
 }
 function onAddKeydown(event: KeyboardEvent) {
+  if (previewImageSrc.value && event.key === 'Escape') {
+    event.preventDefault()
+    closeImagePreview()
+    return
+  }
   if (addOpen.value && event.key === 'Escape') {
     event.preventDefault()
     closeAdd()
@@ -536,6 +562,10 @@ function practiceCardOf(w: CreativeWorkDTO): WorkVersionDTO | null {
 const printBusyId = ref('')
 const savePdfBusyId = ref('')
 const printError = ref<Record<string, string>>({})
+const pendingPrintWorkId = ref('')
+const persistentPrintController = ref<{
+  open: (request: PersistentPrintRequest) => Promise<void>
+} | null>(null)
 async function printCard(w: CreativeWorkDTO) {
   const ver = practiceCardOf(w)
   if (!ver?.practice_card) return
@@ -544,7 +574,8 @@ async function printCard(w: CreativeWorkDTO) {
   printError.value[w.record_id] = ''
   try {
     const markdown = `# ${title}\n${ver.practice_card}`
-    const ok = await printPersistentArtifact({
+    pendingPrintWorkId.value = w.record_id
+    await persistentPrintController.value?.open({
       agent: props.agentId,
       sourceKind: 'creative_observation_card',
       sourceRef: `creative-work:${w.record_id}:${ver.version_id}:practice-card`,
@@ -552,12 +583,23 @@ async function printCard(w: CreativeWorkDTO) {
       canonicalMarkdown: markdown,
       browserPrint: () => printPracticePaper(markdown, title),
     })
-    if (!ok) throw new Error(t('k12.works.printFailed'))
   } catch (e) {
     printError.value[w.record_id] = (e as Error).message || t('k12.works.printFailed')
   } finally {
     printBusyId.value = ''
   }
+}
+
+function onPersistentPrintResult(printed: boolean) {
+  const recordId = pendingPrintWorkId.value
+  if (!printed && recordId) printError.value[recordId] = t('k12.works.printFailed')
+  pendingPrintWorkId.value = ''
+}
+
+function onPersistentPrintError(error: Error) {
+  const recordId = pendingPrintWorkId.value
+  if (recordId) printError.value[recordId] = error.message || t('k12.works.printFailed')
+  pendingPrintWorkId.value = ''
 }
 
 async function saveCardPdf(w: CreativeWorkDTO) {
@@ -772,6 +814,7 @@ watch(
     feedbackGeneratingId.value = ''
     feedbackGenerateError.value = {}
     closeDetails(false)
+    closeImagePreview(false)
     closeAdd()
     resetPhoto()
     resetAllRevisionPhotos()
@@ -785,6 +828,7 @@ onBeforeUnmount(() => {
   feedbackAbort?.abort()
   feedbackAbort = null
   closeDetails(false)
+  closeImagePreview(false)
   resetPhoto()
   resetAllRevisionPhotos()
 })
@@ -1118,6 +1162,11 @@ defineExpose({ load, openAdd })
 
 <template>
   <section class="k12cw">
+    <K12PersistentPrintController
+      ref="persistentPrintController"
+      @result="onPersistentPrintResult"
+      @error="onPersistentPrintError"
+    />
     <div class="k12cw__overview">
       <p class="k12cw__desc" style="margin: 0">{{ t('k12.works.desc') }}</p>
       <button
@@ -1222,6 +1271,16 @@ defineExpose({ load, openAdd })
             :alt="w.title"
             data-testid="cw-thumb"
             loading="lazy"
+            role="button"
+            tabindex="0"
+            :aria-label="`预览${w.title}`"
+            @click="openImagePreview(workThumbURL(w), w.title, $event)"
+            @keydown.enter.prevent="
+              !$event.isComposing &&
+              $event.keyCode !== 229 &&
+              openImagePreview(workThumbURL(w), w.title, $event)
+            "
+            @keydown.space.prevent="openImagePreview(workThumbURL(w), w.title, $event)"
           />
           <span v-else class="k12cw__preview-placeholder" aria-hidden="true" />
         </div>
@@ -1814,230 +1873,261 @@ defineExpose({ load, openAdd })
       </li>
     </ul>
 
-    <!-- 添加作品弹窗（原型 5326-5361）。z-index 走 modal 令牌，与 K12BackupModal 同层。 -->
-    <div v-if="addOpen" class="k12cw-overlay" data-testid="cw-add-modal" @click.self="closeAdd">
+    <Teleport to="body">
       <div
-        ref="addDialog"
-        class="k12cw-modal"
+        v-if="previewImageSrc"
+        class="k12cw-image-preview"
+        data-testid="cw-image-preview"
         role="dialog"
         aria-modal="true"
-        :aria-label="t('k12.works.addModalTitle')"
+        :aria-label="`预览${previewImageAlt}`"
+        tabindex="-1"
+        @click.self="closeImagePreview()"
+        @keydown.esc.prevent="closeImagePreview()"
       >
-        <div class="k12cw-modal__head">
-          <b>{{ t('k12.works.addModalTitle') }}</b>
-          <button class="k12cw-modal__x" :aria-label="t('k12.works.cancel')" @click="closeAdd">
-            ✕
-          </button>
-        </div>
-        <div class="k12cw-modal__body">
-          <label class="k12cw-modal__field">
-            <span>{{ t('k12.works.typeLabel') }}</span>
-            <div class="k12cw__seg" role="radiogroup" :aria-label="t('k12.works.typeLabel')">
-              <button
-                type="button"
-                :class="{ on: addType === 'writing' }"
-                :aria-pressed="addType === 'writing'"
-                data-testid="cw-add-type-writing"
-                @click="addType = 'writing'"
-              >
-                {{ t('k12.works.writing') }}
-              </button>
-              <button
-                type="button"
-                :class="{ on: addType === 'art' }"
-                :aria-pressed="addType === 'art'"
-                data-testid="cw-add-type-art"
-                @click="addType = 'art'"
-              >
-                {{ t('k12.works.art') }}
-              </button>
-            </div>
-          </label>
-          <!-- 作品照片（20260718 布局定案：英雄字段置首）：hc-drop 同款拖放区，拖放或点击选择；
-               选图即真实上传（POST /assets），预览缩略 + 真实进度 + 失败重试。 -->
-          <div class="k12cw-modal__field">
-            <span>{{ t('k12.works.photoLabel') }}</span>
-            <input
-              ref="photoInput"
-              type="file"
-              accept="image/*"
-              class="k12cw__file"
-              data-testid="cw-add-photo-input"
-              @change="onPhotoPick"
-            />
-            <div
-              v-if="!photoPreview"
-              class="k12cw__drop"
-              :class="{ 'k12cw__drop--over': photoDragOver }"
-              role="button"
-              tabindex="0"
-              data-testid="cw-add-photo"
-              @click="photoInput?.click()"
-              @keydown.enter.prevent="onPhotoKey($event)"
-              @keydown.space.prevent="photoInput?.click()"
-              @dragover.prevent="photoDragOver = true"
-              @dragleave="photoDragOver = false"
-              @drop.prevent="onPhotoDrop"
-            >
-              <span class="k12cw__dropicon" aria-hidden="true">📷</span>
-              <b>{{ t('k12.works.photoChoose') }}</b>
-            </div>
-            <div v-else class="k12cw__photoprev" data-testid="cw-photo-preview">
-              <img :src="photoPreview" alt="" />
-              <div class="k12cw__photostate">
-                <span v-if="photoUploading" data-testid="cw-photo-progress">
-                  {{ t('k12.works.photoUploading') }} {{ photoPct }}%
-                </span>
-                <span v-else-if="photoError" class="k12cw__photoerr" data-testid="cw-photo-error">{{
-                  photoError
-                }}</span>
-                <span v-else-if="photoAssetId" data-testid="cw-photo-ok">{{
-                  t('k12.works.photoUploaded')
-                }}</span>
+        <img :src="previewImageSrc" :alt="previewImageAlt" />
+        <button
+          type="button"
+          class="k12cw-image-preview__close"
+          aria-label="关闭预览"
+          @click="closeImagePreview()"
+        >
+          ✕
+        </button>
+      </div>
+    </Teleport>
+
+    <!-- 添加作品弹窗（原型 5326-5361）。挂到 body，避免档案容器的布局上下文裁切/拉伸 fixed 弹层。 -->
+    <Teleport to="body">
+      <div v-if="addOpen" class="k12cw-overlay" data-testid="cw-add-modal" @click.self="closeAdd">
+        <div
+          ref="addDialog"
+          class="k12cw-modal"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="t('k12.works.addModalTitle')"
+        >
+          <div class="k12cw-modal__head">
+            <b>{{ t('k12.works.addModalTitle') }}</b>
+            <button class="k12cw-modal__x" :aria-label="t('k12.works.cancel')" @click="closeAdd">
+              ✕
+            </button>
+          </div>
+          <div class="k12cw-modal__body">
+            <label class="k12cw-modal__field">
+              <span>{{ t('k12.works.typeLabel') }}</span>
+              <div class="k12cw__seg" role="radiogroup" :aria-label="t('k12.works.typeLabel')">
                 <button
-                  v-if="photoError"
                   type="button"
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-photo-retry"
-                  @click="uploadPhoto"
+                  :class="{ on: addType === 'writing' }"
+                  :aria-pressed="addType === 'writing'"
+                  data-testid="cw-add-type-writing"
+                  @click="addType = 'writing'"
                 >
-                  {{ t('k12.works.photoRetry') }}
+                  {{ t('k12.works.writing') }}
                 </button>
                 <button
                   type="button"
-                  class="k12cw__btn k12cw__btn--ghost"
-                  data-testid="cw-photo-remove"
-                  @click="resetPhoto"
+                  :class="{ on: addType === 'art' }"
+                  :aria-pressed="addType === 'art'"
+                  data-testid="cw-add-type-art"
+                  @click="addType = 'art'"
                 >
-                  {{ t('k12.works.photoRemove') }}
+                  {{ t('k12.works.art') }}
                 </button>
               </div>
-            </div>
-            <p class="k12cw__ainote">{{ t('k12.works.photoHint') }}</p>
-            <div
-              v-if="addType === 'writing' && photoPreview"
-              class="k12cw__ocr"
-              aria-live="polite"
-              data-testid="cw-ocr-state"
-            >
-              <p v-if="photoOCRBusy" class="k12cw__ainote" data-testid="cw-ocr-processing">
-                {{ t('k12.works.ocrProcessing') }}
-              </p>
+            </label>
+            <!-- 作品照片（20260718 布局定案：英雄字段置首）：hc-drop 同款拖放区，拖放或点击选择；
+               选图即真实上传（POST /assets），预览缩略 + 真实进度 + 失败重试。 -->
+            <div class="k12cw-modal__field">
+              <span>{{ t('k12.works.photoLabel') }}</span>
+              <input
+                ref="photoInput"
+                type="file"
+                accept="image/*"
+                class="k12cw__file"
+                data-testid="cw-add-photo-input"
+                @change="onPhotoPick"
+              />
               <div
-                v-else-if="photoOCRRequestError || photoOCRJob?.status === 'failed'"
-                class="k12cw__inlineerr"
-                data-testid="cw-ocr-error"
+                v-if="!photoPreview"
+                class="k12cw__drop"
+                :class="{ 'k12cw__drop--over': photoDragOver }"
+                role="button"
+                tabindex="0"
+                data-testid="cw-add-photo"
+                @click="photoInput?.click()"
+                @keydown.enter.prevent="onPhotoKey($event)"
+                @keydown.space.prevent="photoInput?.click()"
+                @dragover.prevent="photoDragOver = true"
+                @dragleave="photoDragOver = false"
+                @drop.prevent="onPhotoDrop"
               >
-                <p>
-                  {{
-                    photoOCRRequestError || photoOCRJob?.error_message || t('k12.works.ocrFailed')
-                  }}
-                </p>
-                <div class="k12cw__linkbtns">
+                <span class="k12cw__dropicon" aria-hidden="true">📷</span>
+                <b>{{ t('k12.works.photoChoose') }}</b>
+              </div>
+              <div v-else class="k12cw__photoprev" data-testid="cw-photo-preview">
+                <img :src="photoPreview" alt="" />
+                <div class="k12cw__photostate">
+                  <span v-if="photoUploading" data-testid="cw-photo-progress">
+                    {{ t('k12.works.photoUploading') }} {{ photoPct }}%
+                  </span>
+                  <span
+                    v-else-if="photoError"
+                    class="k12cw__photoerr"
+                    data-testid="cw-photo-error"
+                    >{{ photoError }}</span
+                  >
+                  <span v-else-if="photoAssetId" data-testid="cw-photo-ok">{{
+                    t('k12.works.photoUploaded')
+                  }}</span>
+                  <button
+                    v-if="photoError"
+                    type="button"
+                    class="k12cw__btn k12cw__btn--ghost"
+                    data-testid="cw-photo-retry"
+                    @click="uploadPhoto"
+                  >
+                    {{ t('k12.works.photoRetry') }}
+                  </button>
                   <button
                     type="button"
                     class="k12cw__btn k12cw__btn--ghost"
-                    data-testid="cw-ocr-retry"
-                    @click="retryPhotoOCR"
+                    data-testid="cw-photo-remove"
+                    @click="resetPhoto"
                   >
-                    {{ t('k12.works.ocrRetry') }}
+                    {{ t('k12.works.photoRemove') }}
                   </button>
                 </div>
-                <p class="k12cw__ainote">{{ t('k12.works.ocrManualHint') }}</p>
               </div>
-              <p
-                v-else-if="photoOCRConfirmed"
-                class="k12cw__ainote k12cw__ocrok"
-                data-testid="cw-ocr-confirmed"
+              <p class="k12cw__ainote">{{ t('k12.works.photoHint') }}</p>
+              <div
+                v-if="addType === 'writing' && photoPreview"
+                class="k12cw__ocr"
+                aria-live="polite"
+                data-testid="cw-ocr-state"
               >
-                {{ t('k12.works.ocrConfirmed') }}
-              </p>
-              <p
-                v-else-if="
-                  photoOCRJob?.status === 'awaiting_confirmation' ||
-                  photoOCRJob?.status === 'confirmed'
-                "
-                class="k12cw__ainote"
-                data-testid="cw-ocr-awaiting"
-              >
-                {{ t('k12.works.ocrAwaiting') }}
-              </p>
+                <p v-if="photoOCRBusy" class="k12cw__ainote" data-testid="cw-ocr-processing">
+                  {{ t('k12.works.ocrProcessing') }}
+                </p>
+                <div
+                  v-else-if="photoOCRRequestError || photoOCRJob?.status === 'failed'"
+                  class="k12cw__inlineerr"
+                  data-testid="cw-ocr-error"
+                >
+                  <p>
+                    {{
+                      photoOCRRequestError || photoOCRJob?.error_message || t('k12.works.ocrFailed')
+                    }}
+                  </p>
+                  <div class="k12cw__linkbtns">
+                    <button
+                      type="button"
+                      class="k12cw__btn k12cw__btn--ghost"
+                      data-testid="cw-ocr-retry"
+                      @click="retryPhotoOCR"
+                    >
+                      {{ t('k12.works.ocrRetry') }}
+                    </button>
+                  </div>
+                  <p class="k12cw__ainote">{{ t('k12.works.ocrManualHint') }}</p>
+                </div>
+                <p
+                  v-else-if="photoOCRConfirmed"
+                  class="k12cw__ainote k12cw__ocrok"
+                  data-testid="cw-ocr-confirmed"
+                >
+                  {{ t('k12.works.ocrConfirmed') }}
+                </p>
+                <p
+                  v-else-if="
+                    photoOCRJob?.status === 'awaiting_confirmation' ||
+                    photoOCRJob?.status === 'confirmed'
+                  "
+                  class="k12cw__ainote"
+                  data-testid="cw-ocr-awaiting"
+                >
+                  {{ t('k12.works.ocrAwaiting') }}
+                </p>
+              </div>
             </div>
+            <label class="k12cw-modal__field">
+              <span>{{ t('k12.works.nameLabel') }}</span>
+              <HcClearableField>
+                <input
+                  v-model="addTitle"
+                  class="k12cw__input"
+                  :placeholder="t('k12.works.namePlaceholder')"
+                  data-testid="cw-add-title"
+                />
+              </HcClearableField>
+            </label>
+            <label class="k12cw-modal__field">
+              <span>{{
+                addType === 'writing'
+                  ? t('k12.works.taskLabelWriting')
+                  : t('k12.works.taskLabelArt')
+              }}</span>
+              <HcClearableField>
+                <input
+                  v-model="addTask"
+                  class="k12cw__input"
+                  :placeholder="t('k12.works.taskPlaceholder')"
+                  data-testid="cw-add-task"
+                />
+              </HcClearableField>
+            </label>
+            <label v-if="addType === 'writing'" class="k12cw-modal__field">
+              <span>{{ t('k12.works.draftLabel') }}</span>
+              <HcClearableField>
+                <textarea
+                  v-model="addDraft"
+                  class="k12cw__input"
+                  rows="4"
+                  :placeholder="t('k12.works.draftPlaceholder')"
+                  data-testid="cw-add-draft"
+                ></textarea>
+              </HcClearableField>
+              <button
+                v-if="photoPreview && photoOCRJob && !photoOCRConfirmed"
+                type="button"
+                class="k12cw__btn k12cw__btn--ghost"
+                :disabled="photoOCRBusy || !addDraft.trim()"
+                data-testid="cw-ocr-confirm"
+                @click="confirmPhotoOCR"
+              >
+                {{ t('k12.works.ocrConfirm') }}
+              </button>
+            </label>
+            <label v-else class="k12cw-modal__field">
+              <span>{{ t('k12.works.intentLabel') }}</span>
+              <HcClearableField>
+                <textarea
+                  v-model="addIntent"
+                  class="k12cw__input"
+                  rows="3"
+                  :placeholder="t('k12.works.intentPlaceholder')"
+                  data-testid="cw-add-intent"
+                ></textarea>
+              </HcClearableField>
+            </label>
           </div>
-          <label class="k12cw-modal__field">
-            <span>{{ t('k12.works.nameLabel') }}</span>
-            <HcClearableField>
-              <input
-                v-model="addTitle"
-                class="k12cw__input"
-                :placeholder="t('k12.works.namePlaceholder')"
-                data-testid="cw-add-title"
-              />
-            </HcClearableField>
-          </label>
-          <label class="k12cw-modal__field">
-            <span>{{
-              addType === 'writing' ? t('k12.works.taskLabelWriting') : t('k12.works.taskLabelArt')
-            }}</span>
-            <HcClearableField>
-              <input
-                v-model="addTask"
-                class="k12cw__input"
-                :placeholder="t('k12.works.taskPlaceholder')"
-                data-testid="cw-add-task"
-              />
-            </HcClearableField>
-          </label>
-          <label v-if="addType === 'writing'" class="k12cw-modal__field">
-            <span>{{ t('k12.works.draftLabel') }}</span>
-            <HcClearableField>
-              <textarea
-                v-model="addDraft"
-                class="k12cw__input"
-                rows="4"
-                :placeholder="t('k12.works.draftPlaceholder')"
-                data-testid="cw-add-draft"
-              ></textarea>
-            </HcClearableField>
-            <button
-              v-if="photoPreview && photoOCRJob && !photoOCRConfirmed"
-              type="button"
-              class="k12cw__btn k12cw__btn--ghost"
-              :disabled="photoOCRBusy || !addDraft.trim()"
-              data-testid="cw-ocr-confirm"
-              @click="confirmPhotoOCR"
-            >
-              {{ t('k12.works.ocrConfirm') }}
+          <div class="k12cw-modal__foot">
+            <button class="k12cw__btn k12cw__btn--ghost" @click="closeAdd">
+              {{ t('k12.works.cancel') }}
             </button>
-          </label>
-          <label v-else class="k12cw-modal__field">
-            <span>{{ t('k12.works.intentLabel') }}</span>
-            <HcClearableField>
-              <textarea
-                v-model="addIntent"
-                class="k12cw__input"
-                rows="3"
-                :placeholder="t('k12.works.intentPlaceholder')"
-                data-testid="cw-add-intent"
-              ></textarea>
-            </HcClearableField>
-          </label>
-        </div>
-        <div class="k12cw-modal__foot">
-          <button class="k12cw__btn k12cw__btn--ghost" @click="closeAdd">
-            {{ t('k12.works.cancel') }}
-          </button>
-          <button
-            class="k12cw__btn k12cw__btn--primary"
-            :disabled="!addValid || addBusy"
-            data-testid="cw-add-submit"
-            @click="submitAdd"
-          >
-            {{ t('k12.works.save') }}
-          </button>
+            <button
+              class="k12cw__btn k12cw__btn--primary"
+              :disabled="!addValid || addBusy"
+              data-testid="cw-add-submit"
+              @click="submitAdd"
+            >
+              {{ t('k12.works.save') }}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </Teleport>
   </section>
 </template>
 
@@ -2221,6 +2311,41 @@ defineExpose({ load, openAdd })
   height: 100%;
   object-fit: cover;
   display: block;
+  cursor: zoom-in;
+}
+.k12cw__thumb:focus-visible {
+  outline: 2px solid var(--hc-accent);
+  outline-offset: -3px;
+}
+.k12cw-image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: var(--hc-z-modal);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(8, 18, 32, 0.58);
+  backdrop-filter: blur(4px) saturate(120%);
+  -webkit-backdrop-filter: blur(4px) saturate(120%);
+}
+.k12cw-image-preview > img {
+  max-width: min(920px, calc(100vw - 48px));
+  max-height: calc(100vh - 48px);
+  object-fit: contain;
+  border-radius: 14px;
+  box-shadow: var(--hc-shadow-float);
+}
+.k12cw-image-preview__close {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--hc-text-primary);
+  cursor: pointer;
 }
 .k12cw__sendrow {
   display: grid;
@@ -2397,7 +2522,9 @@ defineExpose({ load, openAdd })
 .k12cw-modal {
   width: 478px;
   max-width: 92vw;
-  max-height: 100%;
+  max-height: min(720px, calc(100vh - 24px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   background: var(--hc-bg-elevated);
   border: 0.5px solid var(--hc-border);
@@ -2428,10 +2555,10 @@ defineExpose({ load, openAdd })
   color: var(--hc-text-primary);
 }
 .k12cw-modal__body {
+  min-height: 0;
   padding: 18px;
   display: grid;
   gap: 13px;
-  max-height: 62vh;
   overflow: auto;
 }
 .k12cw-modal__field {

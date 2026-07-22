@@ -1108,9 +1108,10 @@ async function coldStart() {
 
     <!-- 整体确认后才内联辅导要点：避免 OCR 尚未核对就把误识知识点送入备课链。 -->
     <PrepCardPanel
-      v-if="confirmed && rows.length && allKnowledgePoints.length"
+      v-if="confirmed && selectedSubject && rows.length && allKnowledgePoints.length"
       :agent-id="agentId"
       :grade="props.grade || ''"
+      :subject="selectedSubject"
       :textbook="activeTextbook"
       :knowledge-points="allKnowledgePoints"
     />

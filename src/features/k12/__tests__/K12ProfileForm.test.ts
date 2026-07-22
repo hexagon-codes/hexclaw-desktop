@@ -330,7 +330,39 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       }),
     ])
     expect(w.emitted('created')).toBeFalsy()
+    expect(h.provisionSpy).not.toHaveBeenCalled()
     expect(B().text()).toContain('profile update failed')
+  })
+
+  it('改档持久化成功后按具体 agent 补齐默认任务，失败保留档案终态并可由下次保存重试', async () => {
+    h.provisionSpy.mockRejectedValueOnce(new Error('cron temporarily unavailable'))
+    const w = mount(K12ProfileForm, {
+      props: {
+        agent: {
+          name: 'k12-tutor-x',
+          display_name: '小明的辅导助手 · 五年级',
+          metadata: {
+            scenario: 'k12-tutor',
+            'k12.child_name': '小明',
+            'k12.grade_term': '五年级上',
+            'k12.textbook_edition': '人教版',
+          },
+        },
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    await B().find('.k12pf__btn--primary').trigger('click')
+    await flushPromises()
+
+    expect(h.profileSpy).toHaveBeenCalledOnce()
+    expect(h.provisionSpy).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agent: 'k12-tutor-x' }),
+    )
+    expect(w.emitted('created')).toEqual([['k12-tutor-x']])
+    expect(B().text()).not.toContain('cron temporarily unavailable')
+    expect(h.toastWarningSpy).toHaveBeenCalledWith(expect.stringContaining('0/4'))
   })
 
   it('持久建档成功但列表刷新失败 → 仍返回已创建终态并提示刷新，不诱导重复建档', async () => {

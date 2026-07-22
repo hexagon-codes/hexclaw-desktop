@@ -6,7 +6,7 @@ import {
   type GenericPrintSourceKind,
 } from '@/api/k12'
 import { isTauri } from '@/utils/platform'
-import { printPracticePaperWithReceipt } from './export'
+import { printPracticePaperWithReceipt, renderPracticePaperPdf } from './export'
 
 export interface PersistentPrintRequest {
   agent: string
@@ -21,7 +21,16 @@ export interface PersistentPrintRequest {
 
 let printSequence = 0
 const operationKeys = new Map<string, string>()
-const inFlightPrints = new Map<string, Promise<boolean>>()
+const inFlightPreparations = new Map<string, Promise<PersistentPrintPreparation>>()
+
+export type PersistentPrintPreparation =
+  | { status: 'completed'; printed: boolean }
+  | {
+      status: 'preview'
+      title: string
+      pdf: Blob
+      confirm: () => Promise<boolean>
+    }
 
 function operationIdentity(req: PersistentPrintRequest): string {
   return `${req.agent}\u0000${req.sourceKind}\u0000${req.sourceRef}\u0000${req.title}\u0000${req.canonicalMarkdown}`
@@ -43,11 +52,14 @@ function clearOperationKey(req: PersistentPrintRequest) {
 }
 
 /**
- * Executes the shared DD-023 state machine. The backend-frozen Artifact—not
- * mutable component state—is the only payload handed to the native adapter.
+ * Prepare the shared DD-023 state machine up to a visible PDF preview. The
+ * backend-frozen Artifact—not mutable component state—is the only rendered
+ * source. `dialog_open` and native printing remain impossible until confirm().
  */
-async function executePersistentPrint(req: PersistentPrintRequest): Promise<boolean> {
-  if (!isTauri()) return req.browserPrint()
+async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPreparation> {
+  if (!isTauri()) {
+    return { status: 'completed', printed: await req.browserPrint() }
+  }
 
   const prepared = await k12PrepareGenericPrintJob({
     agent: req.agent,
@@ -60,7 +72,7 @@ async function executePersistentPrint(req: PersistentPrintRequest): Promise<bool
   let job = prepared.print_job
   if (job.status === 'printed') {
     clearOperationKey(req)
-    return true
+    return { status: 'completed', printed: true }
   }
   if (job.status === 'cancelled' || job.status === 'failed') {
     job = (await k12RetryGenericPrintJob(req.agent, job.print_job_id)).print_job
@@ -69,48 +81,60 @@ async function executePersistentPrint(req: PersistentPrintRequest): Promise<bool
   }
 
   const artifact = await k12GetGenericPrintArtifact(req.agent, job.print_job_id)
-  await k12RecordGenericPrintEvent(req.agent, job.print_job_id, { status: 'dialog_open' })
+  const pdf = await renderPracticePaperPdf(artifact.markdown, artifact.title)
+  let confirmation: Promise<boolean> | null = null
+  const confirm = () => {
+    if (confirmation) return confirmation
+    confirmation = (async () => {
+      await k12RecordGenericPrintEvent(req.agent, job.print_job_id, { status: 'dialog_open' })
 
-  let receipt
-  try {
-    receipt = await printPracticePaperWithReceipt(artifact.markdown, artifact.title)
-  } catch (error) {
-    await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-      status: 'outcome_unknown',
-      failure_kind: 'native_receipt_unavailable',
-      failure_detail: '原生打印结果未能确认',
-    })
-    throw error
-  }
-  if (receipt.status === 'cancelled') {
-    await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-      status: 'cancelled',
-      native_job_id: receipt.native_job_id,
-    })
-    return false
+      let receipt
+      try {
+        // The exact Blob exposed for preview is passed unchanged to PDFKit.
+        receipt = await printPracticePaperWithReceipt(pdf)
+      } catch (error) {
+        await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
+          status: 'outcome_unknown',
+          failure_kind: 'native_receipt_unavailable',
+          failure_detail: '原生打印结果未能确认',
+        })
+        throw error
+      }
+      if (receipt.status === 'cancelled') {
+        await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
+          status: 'cancelled',
+          native_job_id: receipt.native_job_id,
+          printer_snapshot: receipt.printer_snapshot,
+        })
+        return false
+      }
+
+      await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
+        status: 'submitted',
+        native_job_id: receipt.native_job_id,
+      })
+      await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
+        status: 'printed',
+        native_job_id: receipt.native_job_id,
+        native_receipt_id: receipt.native_receipt_id,
+        printer_snapshot: receipt.printer_snapshot,
+      })
+      clearOperationKey(req)
+      return true
+    })()
+    return confirmation
   }
 
-  await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-    status: 'submitted',
-    native_job_id: receipt.native_job_id,
-  })
-  await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-    status: 'printed',
-    native_job_id: receipt.native_job_id,
-    native_receipt_id: receipt.native_receipt_id,
-    printer_snapshot: receipt.printer_snapshot,
-  })
-  clearOperationKey(req)
-  return true
+  return { status: 'preview', title: artifact.title, pdf, confirm }
 }
 
-export function printPersistentArtifact(req: PersistentPrintRequest): Promise<boolean> {
+export function preparePersistentPrint(req: PersistentPrintRequest): Promise<PersistentPrintPreparation> {
   const identity = operationIdentity(req)
-  const running = inFlightPrints.get(identity)
+  const running = inFlightPreparations.get(identity)
   if (running) return running
-  const started = executePersistentPrint(req).finally(() => {
-    if (inFlightPrints.get(identity) === started) inFlightPrints.delete(identity)
+  const started = prepare(req).finally(() => {
+    if (inFlightPreparations.get(identity) === started) inFlightPreparations.delete(identity)
   })
-  inFlightPrints.set(identity, started)
+  inFlightPreparations.set(identity, started)
   return started
 }

@@ -40,7 +40,7 @@ describe('BUG-20260712 · prep-card 失败提示友好化', () => {
       new Error('[POST] "http://localhost:16060/api/k12/prep-card": <no response> Load failed'),
     )
     const store = useK12Store()
-    await store.loadPrepCard('mingming', '五年级上', ['小数乘法'])
+    await store.loadPrepCard('mingming', '五年级上', '数学', ['小数乘法'])
 
     expect(store.prepLoading).toBe(false)
     expect(store.prepError).toBeTruthy()
@@ -52,7 +52,7 @@ describe('BUG-20260712 · prep-card 失败提示友好化', () => {
   it('k12PrepCard reject（Fetch is aborted，切 tab 中止）→ 同样翻成友好文案，不透裸串', async () => {
     prepSpy.mockRejectedValue(new Error('Fetch is aborted'))
     const store = useK12Store()
-    await store.loadPrepCard('mingming', '五年级上', ['简易方程'])
+    await store.loadPrepCard('mingming', '五年级上', '数学', ['简易方程'])
 
     expect(store.prepError).toContain('重试')
     expect(store.prepError).not.toContain('aborted')

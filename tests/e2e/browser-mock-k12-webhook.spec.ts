@@ -235,7 +235,7 @@ test.describe.serial('Desktop + real Sidecar signed K12 webhook lane', () => {
 
     await page.addInitScript(() => sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1'))
     await page.goto('/automation/webhooks', { waitUntil: 'domcontentloaded' })
-    await page.getByTestId('scenario-webhook-manager-toggle-k12-tutor').click()
+    // K12 Webhook 是场景页的直接可见面板；旧的额外展开开关已按原型移除。
     await expect(page.getByTestId('k12-webhook-panel')).toBeVisible()
     await expect(page.getByTestId(`k12-webhook-row-${bindingName}`)).toBeVisible({
       timeout: 30_000,

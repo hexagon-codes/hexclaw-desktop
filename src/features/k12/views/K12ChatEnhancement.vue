@@ -89,6 +89,11 @@ function tabOfKind(kind: string): 'chat' | 'records' | 'insights' {
   if (kind === 'report') return 'insights'
   return 'chat'
 }
+function tabFromRoute(): 'chat' | 'records' | 'insights' {
+  if (route.query.scenarioTab === 'records') return 'records'
+  if (route.query.scenarioTab === 'insights') return 'insights'
+  return 'chat'
+}
 function panelIdOfKind(kind: string): string {
   const target = tabOfKind(kind)
   return `k12-enh-view-${target}`
@@ -245,8 +250,7 @@ function trapCapabilityFocus(event: KeyboardEvent) {
 
 // 深链（智能体卡快捷入口）：?scenarioTab=records|insights → 直接进学习档案/学情
 onMounted(async () => {
-  if (route.query.scenarioTab === 'records') tab.value = 'records'
-  if (route.query.scenarioTab === 'insights') tab.value = 'insights'
+  tab.value = tabFromRoute()
   try {
     const d = await k12GetViewDescriptor('tutor')
     composerChips.value = (d.composer_chips ?? []).map((label, index) => ({
@@ -287,13 +291,19 @@ watch(
 watch(
   () => props.agentId,
   () => {
-    tab.value = 'chat'
+    tab.value = tabFromRoute()
     recordsNavigation.value = { target: 'week', subject: '', status: 'all' }
     recognizeOpen.value = false
     backupOpen.value = false
     pendingRecognizeImage.value = ''
     closeCapabilityDialog(false)
     emit('update:composerImage', '')
+  },
+)
+watch(
+  () => route.query.scenarioTab,
+  () => {
+    tab.value = tabFromRoute()
   },
 )
 

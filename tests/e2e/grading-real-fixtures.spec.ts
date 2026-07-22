@@ -99,7 +99,8 @@ async function uploadAndConfirm(page: Page, owner: string, fixture: Fixture) {
   expect(body.agent).toBe(owner)
   expect(body.source_kind).toBe('desktop')
   expect(body.source_key).toBeTruthy()
-  const transmitted = Buffer.from(body.image_base64 || '', 'base64')
+  const encoded = (body.image_base64 || '').replace(/^data:[^,]+;base64,/, '')
+  const transmitted = Buffer.from(encoded, 'base64')
   expect(transmitted.length).toBe(source.length)
   expect(digest(transmitted), 'GradingJob must receive the exact frozen source bytes').toBe(fixture.sha256)
 

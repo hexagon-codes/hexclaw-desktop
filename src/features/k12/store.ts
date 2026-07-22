@@ -154,6 +154,7 @@ export const useK12Store = defineStore('k12', () => {
   async function loadPrepCard(
     agent: string,
     grade: string,
+    subject: string,
     knowledgePoints?: string[],
     signal?: AbortSignal,
   ): Promise<void> {
@@ -162,7 +163,10 @@ export const useK12Store = defineStore('k12', () => {
     prepError.value = null
     prepCard.value = null
     try {
-      const next = await k12PrepCard({ agent, grade, knowledge_points: knowledgePoints }, signal)
+      const next = await k12PrepCard(
+        { agent, grade, subject: subject || undefined, knowledge_points: knowledgePoints },
+        signal,
+      )
       if (request === prepRequest) prepCard.value = next
     } catch {
       if (request !== prepRequest) return
@@ -177,14 +181,15 @@ export const useK12Store = defineStore('k12', () => {
     }
   }
 
-  /** 家长上传教材原文：按当前孩子 agent scope 入库；刷新由调用界面在确认仍是同一孩子后触发。 */
+  /** 家长上传教材原文：按当前孩子 × 学科入库；刷新由调用界面在双重 scope 未变时触发。 */
   async function addGrounding(
     agent: string,
+    subject: string,
     title: string,
     content: string,
     signal?: AbortSignal,
   ): Promise<void> {
-    await k12AddGrounding({ agent, title, content }, signal)
+    await k12AddGrounding({ agent, subject: subject || undefined, title, content }, signal)
   }
 
   /** 批改一道题 → 验算徽章数据 + 是否入库 */
@@ -437,9 +442,9 @@ export const useK12Store = defineStore('k12', () => {
   }
 
   /**
-   * 建档后一键接线：把家庭群绑到实例（入站路由）+ 注册默认自动化任务（错题卷/提醒/月报/学期确认）。
-   * platform/chatId 为空时只注册桌面 chat 投递、跳过 IM 绑定。桌面无 cron/router 时后端返回 501，
-   * 这里吞掉 501 让建档不因自动化缺失而失败（自动化是增强项）。
+   * 档案保存后一键接线：把家庭群绑到实例（入站路由）+ missing-only 补齐冻结的四个默认任务。
+   * platform/chatId 为空时只补桌面 chat 缺项、跳过 IM 绑定。已有 exact SourceKey 任务由后端
+   * 原样保留；桌面无 cron/router 时后端返回 501，这里降级为空，让档案保存不被增强项阻断。
    */
   async function setupAutomation(
     agent: string,

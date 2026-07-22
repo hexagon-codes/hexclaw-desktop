@@ -4,7 +4,7 @@
   打印/发送即家长确认（finalize 一步固化，逐题跳过阻断题）；界面不展示六态时间轴（三态：待打印/待完成/已批改）。
 -->
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import {
@@ -28,24 +28,53 @@ import {
   type PracticeReturnAssetDTO,
 } from '@/api/k12'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import { printPracticePaper, printPracticePaperWithReceipt, savePracticePaperPdf } from '../export'
-import { printPersistentArtifact } from '../persistent-print'
+import K12PrintPreviewModal from '../components/K12PrintPreviewModal.vue'
+import {
+  printPracticePaper,
+  printPracticePaperWithReceipt,
+  renderPracticePaperPdf,
+  savePracticePaperPdf,
+} from '../export'
+import type { PersistentPrintRequest } from '../persistent-print'
+import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 
 const props = defineProps<{ agentId: string }>()
 const emit = defineEmits<{ (event: 'count', count: number): void }>()
 const { t, locale } = useI18n()
 const toast = useToast()
+const persistentPrintController = ref<{
+  open: (request: PersistentPrintRequest) => Promise<void>
+} | null>(null)
 
 const sets = ref<PracticeSetDTO[]>([])
 const loading = ref(false)
 const error = ref('')
 const busy = ref('') // record_id（或 record_id:item_id）级操作锁
+const printPreview = ref({
+  open: false,
+  printing: false,
+  pdfUrl: '',
+  title: '',
+  pdf: null as Blob | null,
+  jobId: '',
+  recordId: '',
+})
 let printRequestSequence = 0
 
 function newPrintIdempotencyKey(recordId: string): string {
   const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++printRequestSequence}`
   return `desktop-print:${props.agentId}:${recordId}:${nonce}`
 }
+
+function closePrintPreview(force = false) {
+  if (printPreview.value.printing && !force) return
+  if (printPreview.value.pdfUrl) URL.revokeObjectURL(printPreview.value.pdfUrl)
+  printPreview.value = { open: false, printing: false, pdfUrl: '', title: '', pdf: null, jobId: '', recordId: '' }
+}
+
+onBeforeUnmount(() => {
+  if (printPreview.value.pdfUrl) URL.revokeObjectURL(printPreview.value.pdfUrl)
+})
 
 async function load() {
   if (!props.agentId) return
@@ -186,45 +215,16 @@ async function finalize(via: 'print' | 'send') {
         job.print_job_id,
         'question',
       )
-      await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
-        status: 'dialog_open',
-      })
-
-      let receipt
-      try {
-        receipt = await printPracticePaperWithReceipt(rendered.markdown, rendered.title)
-      } catch (error) {
-        await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
-          status: 'outcome_unknown',
-          failure_kind: 'native_adapter_interrupted',
-          failure_detail: '系统打印对话框未返回可验证回执',
-        })
-        throw error
+      const pdf = await renderPracticePaperPdf(rendered.markdown, rendered.title)
+      printPreview.value = {
+        open: true,
+        printing: false,
+        pdfUrl: URL.createObjectURL(pdf),
+        title: rendered.title,
+        pdf,
+        jobId: job.print_job_id,
+        recordId: b.record_id,
       }
-
-      if (receipt.status === 'cancelled') {
-        await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
-          status: 'cancelled',
-          native_job_id: receipt.native_job_id,
-          printer_snapshot: receipt.printer_snapshot,
-        })
-        throw new Error(t('k12.practice.paperPrintFailed'))
-      }
-
-      await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
-        status: 'submitted',
-        native_job_id: receipt.native_job_id,
-      })
-      await k12RecordPracticePrintEvent(props.agentId, job.print_job_id, {
-        status: 'printed',
-        native_job_id: receipt.native_job_id,
-        native_receipt_id: receipt.native_receipt_id,
-        printer_snapshot: receipt.printer_snapshot,
-      })
-      finalized = true
-      const skipped =
-        blockedCount.value > 0 ? ` · ${t('k12.practice.skipped', { n: blockedCount.value })}` : ''
-      toast.success(`${t('k12.practice.print')}${skipped}`)
       return
     }
 
@@ -245,6 +245,42 @@ async function finalize(via: 'print' | 'send') {
     toast.error((e as Error).message)
   } finally {
     if (finalized) await load()
+    busy.value = ''
+  }
+}
+
+async function confirmPrintPreview() {
+  const current = printPreview.value
+  if (!current.jobId || !current.pdf || current.printing) return
+  current.printing = true
+  busy.value = current.recordId
+  try {
+    await k12RecordPracticePrintEvent(props.agentId, current.jobId, { status: 'dialog_open' })
+    // DD-023A：确认打印必须复用 iframe 正在预览的 exact PDF Blob，禁止再次
+    // 从 Markdown/HTML 渲染，否则预览与物理打印分页会漂移。
+    const receipt = await printPracticePaperWithReceipt(current.pdf)
+    if (receipt.status === 'cancelled') {
+      await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
+        status: 'cancelled', native_job_id: receipt.native_job_id, printer_snapshot: receipt.printer_snapshot,
+      })
+      toast.info(t('k12.practice.paperPrintFailed'))
+      closePrintPreview(true)
+      return
+    }
+    await k12RecordPracticePrintEvent(props.agentId, current.jobId, { status: 'submitted', native_job_id: receipt.native_job_id })
+    await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
+      status: 'printed', native_job_id: receipt.native_job_id, native_receipt_id: receipt.native_receipt_id, printer_snapshot: receipt.printer_snapshot,
+    })
+    closePrintPreview(true)
+    toast.success(t('k12.practice.print'))
+    await load()
+  } catch (error) {
+    await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
+      status: 'outcome_unknown', failure_kind: 'native_adapter_interrupted', failure_detail: '系统打印对话框未返回可验证回执',
+    })
+    toast.error((error as Error).message)
+  } finally {
+    current.printing = false
     busy.value = ''
   }
 }
@@ -520,7 +556,7 @@ async function printPaper() {
   paper.value.error = ''
   try {
     const title = p.title + (p.kind === 'answer' ? ' · ' + t('k12.practice.paperAnswer') : '')
-    const ok = await printPersistentArtifact({
+    await persistentPrintController.value?.open({
       agent: props.agentId,
       sourceKind: p.kind === 'answer' ? 'practice_answer' : 'practice_question',
       sourceRef: `practice-set:${req.recordId}:${p.kind}`,
@@ -528,10 +564,17 @@ async function printPaper() {
       canonicalMarkdown: p.markdown,
       browserPrint: () => printPracticePaper(p.markdown, title),
     })
-    if (!ok) throw new Error(t('k12.practice.paperPrintFailed'))
   } catch (e) {
     paper.value.error = (e as Error).message || t('k12.practice.paperPrintFailed')
   }
+}
+
+function onPersistentPrintResult(printed: boolean) {
+  if (!printed) paper.value.error = t('k12.practice.paperPrintFailed')
+}
+
+function onPersistentPrintError(error: Error) {
+  paper.value.error = error.message || t('k12.practice.paperPrintFailed')
 }
 
 const paperSaveBusy = ref(false)
@@ -574,6 +617,19 @@ async function cancelSet(s: PracticeSetDTO) {
 
 <template>
   <section class="k12ps">
+    <K12PersistentPrintController
+      ref="persistentPrintController"
+      @result="onPersistentPrintResult"
+      @error="onPersistentPrintError"
+    />
+    <K12PrintPreviewModal
+      :open="printPreview.open"
+      :title="printPreview.title"
+      :pdf-url="printPreview.pdfUrl"
+      :printing="printPreview.printing"
+      @close="closePrintPreview"
+      @print="confirmPrintPreview"
+    />
     <div v-if="error" class="k12ps__err" data-testid="ps-error">
       <span>{{ error }}</span>
       <button class="k12ps__btn" data-testid="ps-load-retry" :disabled="loading" @click="load">

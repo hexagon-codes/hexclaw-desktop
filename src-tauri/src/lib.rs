@@ -146,7 +146,7 @@ pub fn run() {
             commands::open_about,
             commands::set_autostart,
             commands::is_autostart_enabled,
-            native_print::native_print_html,
+            native_print::native_print_pdf,
         ])
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {

@@ -78,7 +78,7 @@ describe('K12 Task owner and Desktop API contract', () => {
     } as Parameters<typeof k12ProvisionCron>[0])
 
     expect(result.provisioned.map((job) => job.kind)).toEqual(DEFAULT_K12_JOBS.map((job) => job.kind))
-    expect(client.apiPost).toHaveBeenLastCalledWith('/api/k12/cron/provision', {
+    expect(client.apiPost).toHaveBeenLastCalledWith('/api/k12/cron/reconcile-defaults', {
       agent: 'tutor-a',
       user_id: 'desktop-user',
     })

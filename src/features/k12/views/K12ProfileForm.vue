@@ -240,6 +240,25 @@ async function refreshAgentsAfterPersistence() {
   if (!refreshed) toast.warning(t('k12.profile.refreshFailed'))
 }
 
+const expectedWorkflowKinds = new Set([
+  'weekly-sheet',
+  'return-reminder',
+  'semester-spring',
+  'semester-fall',
+])
+
+function automationWorkflowCount(
+  provisioned: Awaited<ReturnType<typeof k12Store.setupAutomation>>,
+) {
+  const actualWorkflowKinds = new Set(provisioned.map((job) => job.kind))
+  return {
+    count: actualWorkflowKinds.size,
+    complete:
+      actualWorkflowKinds.size === expectedWorkflowKinds.size &&
+      [...expectedWorkflowKinds].every((kind) => actualWorkflowKinds.has(kind)),
+  }
+}
+
 async function submit() {
   submitting.value = true
   error.value = ''
@@ -282,7 +301,19 @@ async function submit() {
         throw profileError
       }
       await refreshAgentsAfterPersistence()
+      // 档案保存是唯一作用域明确的存量修复触发点：只补该 agent 缺失的默认任务。
+      // 失败不回滚已成功的档案，也不写“已完成”标记；下次保存会自然重试。
+      let provisioned: Awaited<ReturnType<typeof k12Store.setupAutomation>> = []
+      try {
+        provisioned = await k12Store.setupAutomation(props.agent.name)
+      } catch {
+        // 自动化是档案之外的增强链路；missing-only 后端保证部分成功可安全重试。
+      }
       toast.success(t('k12.profile.saved'))
+      const automation = automationWorkflowCount(provisioned)
+      if (!automation.complete) {
+        toast.warning(t('k12.profile.automationIncomplete', { count: automation.count }))
+      }
       emit('created', props.agent.name)
       emit('close')
       return
@@ -333,20 +364,11 @@ async function submit() {
       provisioned = []
     }
     toast.success(t('k12.profile.created', { name: displayName.value }))
-    const expectedWorkflowKinds = new Set([
-      'weekly-sheet',
-      'return-reminder',
-      'semester-spring',
-      'semester-fall',
-    ])
-    const actualWorkflowKinds = new Set(provisioned.map((job) => job.kind))
-    const automationComplete =
-      actualWorkflowKinds.size === expectedWorkflowKinds.size &&
-      [...expectedWorkflowKinds].every((kind) => actualWorkflowKinds.has(kind))
-    if (automationComplete) {
+    const automation = automationWorkflowCount(provisioned)
+    if (automation.complete) {
       toast.success(t('k12.profile.automationReady'))
     } else {
-      toast.warning(t('k12.profile.automationIncomplete', { count: actualWorkflowKinds.size }))
+      toast.warning(t('k12.profile.automationIncomplete', { count: automation.count }))
     }
     emit('created', name)
     emit('close')

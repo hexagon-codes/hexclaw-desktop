@@ -10,7 +10,9 @@ const h = vi.hoisted(() => ({
   printSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>(() => Promise.resolve(true)),
 }))
 vi.mock('../persistent-print', () => ({
-  printPersistentArtifact: (...a: unknown[]) => h.printSpy(...a),
+  preparePersistentPrint: async (...a: unknown[]) => ({
+    status: 'completed', printed: await h.printSpy(...a),
+  }),
 }))
 vi.mock('../export', () => ({
   printPrepCard: vi.fn().mockResolvedValue(true),

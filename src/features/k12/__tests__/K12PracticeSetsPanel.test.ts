@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   printEventSpy: vi.fn(),
   retryPrintSpy: vi.fn(),
   printSpy: vi.fn(),
+  renderPdfSpy: vi.fn(),
   uploadSpy: vi.fn(),
   submitSpy: vi.fn(),
   gradeSpy: vi.fn(),
@@ -53,8 +54,9 @@ vi.mock('@/composables/useToast', () => ({
 }))
 vi.mock('../export', () => ({
   printPracticePaper: (markdown: string, title: string) => h.printSpy(markdown, title),
-  printPracticePaperWithReceipt: (markdown: string, title: string) =>
-    h.printSpy(markdown, title),
+  printPracticePaperWithReceipt: (pdf: Blob) => h.printSpy(pdf),
+  renderPracticePaperPdf: (markdown: string, title: string) =>
+    h.renderPdfSpy(markdown, title),
   savePracticePaperPdf: vi.fn().mockResolvedValue(true),
 }))
 
@@ -101,6 +103,8 @@ function render() {
 }
 
 beforeEach(() => {
+  vi.spyOn(URL, 'createObjectURL').mockReturnValue('about:blank')
+  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
   h.listSpy.mockReset()
   h.finalizeSpy.mockReset().mockResolvedValue({ set: historySet({ status: 'assigned', status_label: '待完成' }), skipped_blocked_count: 2 })
   h.removeSpy.mockReset().mockResolvedValue(basket([]))
@@ -143,6 +147,7 @@ beforeEach(() => {
     native_receipt_id: 'receipt-1',
     printer_snapshot: { adapter: 'appkit' },
   })
+  h.renderPdfSpy.mockReset().mockResolvedValue(new Blob(['%PDF-1.7'], { type: 'application/pdf' }))
   h.uploadSpy.mockReset().mockResolvedValue({ asset_id: 'asset://k12-xiaoming/return.png', size: 3 })
   h.submitSpy.mockReset().mockResolvedValue(historySet({ status: 'submitted', status_label: '已回传' }))
   h.gradeSpy.mockReset().mockResolvedValue(historySet())
@@ -150,6 +155,10 @@ beforeEach(() => {
   h.toastError.mockReset()
   h.toastInfo.mockReset()
   h.toastWarning.mockReset()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
@@ -202,7 +211,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.removeSpy).toHaveBeenCalledWith('k12-xiaoming', 'basket1', 'm1')
   })
 
-  it('原生打印取消不固化；成功必须由同一持久 PrintJob receipt 原子固化', async () => {
+  it('先预览再确认系统打印；取消不固化，成功由同一持久 PrintJob receipt 原子固化', async () => {
     h.listSpy.mockResolvedValue({
       items: [basket([item('m1', '题', '数学', 'verified'), item('s1', '阻断题', '科学', 'needs_review')])],
     })
@@ -227,6 +236,8 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
         native_receipt_id: 'receipt-1',
         printer_snapshot: { adapter: 'appkit' },
       })
+    const exactPreviewPdf = new Blob(['%PDF-exact-preview'], { type: 'application/pdf' })
+    h.renderPdfSpy.mockResolvedValue(exactPreviewPdf)
     const w = render()
     await flushPromises()
     expect(w.text()).toContain('1 道阻断题打印时跳过')
@@ -240,8 +251,16 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
       'question',
     )
     expect(h.printJobPaperSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', 'question')
-    expect(h.printSpy).toHaveBeenCalledWith('# 待打印篮\n\n1. 2.8×0.65=?', '待打印篮')
+    expect(h.renderPdfSpy).toHaveBeenCalledWith('# 待打印篮\n\n1. 2.8×0.65=?', '待打印篮')
+    expect(document.body.querySelector('[data-testid="k12-print-preview"]')).not.toBeNull()
+    expect(h.printSpy).not.toHaveBeenCalled()
+    expect(h.printEventSpy).not.toHaveBeenCalled()
     expect(h.finalizeSpy).not.toHaveBeenCalled()
+
+    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await flushPromises()
+    expect(h.printSpy).toHaveBeenCalledWith(exactPreviewPdf)
+    expect(h.renderPdfSpy).toHaveBeenCalledTimes(1)
     expect(h.printEventSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', {
       status: 'cancelled',
       native_job_id: 'native-cancelled',
@@ -251,6 +270,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
     expect(h.retryPrintSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1')
+    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await flushPromises()
+    expect(h.printSpy).toHaveBeenLastCalledWith(exactPreviewPdf)
     expect(h.printEventSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', {
       status: 'printed',
       native_job_id: 'native-1',
@@ -270,6 +292,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
 
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
+    expect(h.printEventSpy).not.toHaveBeenCalled()
+    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await flushPromises()
 
     expect(h.printEventSpy.mock.calls.map((call) => call[2])).toEqual([
       { status: 'dialog_open' },
@@ -283,6 +308,26 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.finalizeSpy).not.toHaveBeenCalled()
     expect(h.toastSuccess).not.toHaveBeenCalled()
     expect(h.toastError).toHaveBeenCalledWith('native channel closed')
+    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-close"]')!.click()
+    await flushPromises()
+  })
+
+  it('PDF 渲染失败不进入系统打印，且释放页面操作锁', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [basket([item('m1', '题', '数学', 'verified')])],
+    })
+    h.renderPdfSpy.mockRejectedValueOnce(new Error('PDF 渲染失败'))
+    const w = render()
+    await flushPromises()
+
+    await w.find('[data-testid="ps-finalize-print"]').trigger('click')
+    await flushPromises()
+
+    expect(document.body.querySelector('[data-testid="k12-print-preview"]')).toBeNull()
+    expect(h.printSpy).not.toHaveBeenCalled()
+    expect(h.printEventSpy).not.toHaveBeenCalled()
+    expect(h.toastError).toHaveBeenCalledWith('PDF 渲染失败')
+    expect(w.find('[data-testid="ps-finalize-print"]').attributes('disabled')).toBeUndefined()
   })
 
   it('发送端只返回 pending → 明示待投递，禁止 toast 虚报发送成功', async () => {

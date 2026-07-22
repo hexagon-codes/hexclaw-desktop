@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import { nextTick } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12CreativeWorksPanel from '../views/K12CreativeWorksPanel.vue'
@@ -65,7 +66,9 @@ vi.mock('../export', () => ({
   savePracticePaperPdf: vi.fn().mockResolvedValue(true),
 }))
 vi.mock('../persistent-print', () => ({
-  printPersistentArtifact: (...args: unknown[]) => h.printSpy(...args),
+  preparePersistentPrint: async (...args: unknown[]) => ({
+    status: 'completed', printed: await h.printSpy(...args),
+  }),
 }))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn() }),
@@ -97,7 +100,7 @@ function render(attachToDocument = false) {
     props: { agentId: 'k12-xiaoming' },
     // Unit tests inspect the dialog through the component wrapper; the browser suite verifies
     // that production Teleport places the fixed overlay at the viewport root.
-    global: { plugins: [i18n()], stubs: { teleport: true } },
+    global: { plugins: [i18n()], stubs: { Teleport: true } },
     ...(attachToDocument ? { attachTo: document.body } : {}),
   })
 }
@@ -175,6 +178,27 @@ beforeEach(() => {
 })
 
 describe('K12CreativeWorksPanel · 作品', () => {
+  it('点击作品缩略图会在独立预览层展示原图，Escape 可关闭', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        work({
+          work_type: 'art',
+          versions: [{ version_id: 'v1', source_asset_id: 'asset://k12-xiaoming/art.png' }],
+        }),
+      ],
+    })
+    const w = render(true)
+    await flushPromises()
+
+    await w.get('[data-testid="cw-thumb"]').trigger('click')
+    await nextTick()
+    expect(w.get('[data-testid="cw-image-preview"] img').attributes('src')).toContain('art.png')
+
+    await w.get('[data-testid="cw-image-preview"]').trigger('keydown', { key: 'Escape' })
+    await nextTick()
+    expect(w.find('[data-testid="cw-image-preview"]').exists()).toBe(false)
+  })
+
   it('每次真实加载后向父层同步作品总数', async () => {
     h.listSpy.mockResolvedValue({ items: [work(), work({ record_id: 'w2' })] })
     const w = render()
@@ -737,7 +761,8 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     await w.find('[data-testid="cw-add-task"]').setValue('写校园春景')
     expect(submit.attributes('disabled'), '写作缺原稿仍禁用').toBeDefined()
     await w.find('[data-testid="cw-add-draft"]').setValue('柳枝像绿色的丝带')
-    expect(submit.attributes('disabled')).toBeUndefined()
+    await nextTick()
+    expect(w.find('[data-testid="cw-add-submit"]').attributes('disabled')).toBeUndefined()
   })
 
   it('提交写作 → k12CreateCreativeWork 带 content_markdown，无 intent；成功后关弹窗并刷新', async () => {
@@ -942,8 +967,13 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     const drop = w.find('[data-testid="cw-add-photo"]')
     const file = new File(['img'], 'draft.png', { type: 'image/png' })
     await drop.trigger('dragover')
-    expect(drop.classes(), 'dragover 有态').toContain('k12cw__drop--over')
-    await drop.trigger('drop', { dataTransfer: { files: [file] } })
+    await nextTick()
+    expect(w.find('[data-testid="cw-add-photo"]').classes(), 'dragover 有态').toContain(
+      'k12cw__drop--over',
+    )
+    await w
+      .find('[data-testid="cw-add-photo"]')
+      .trigger('drop', { dataTransfer: { files: [file] } })
     await flushPromises()
     expect(h.uploadSpy).toHaveBeenCalledTimes(1)
     expect(h.uploadSpy.mock.calls[0]![0]).toBe('k12-xiaoming')

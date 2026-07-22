@@ -33,7 +33,9 @@ vi.mock('../export', () => ({
   savePracticePaperPdf: (markdown: string, title: string) => h.savePdfSpy(markdown, title),
 }))
 vi.mock('../persistent-print', () => ({
-  printPersistentArtifact: (...args: unknown[]) => h.printSpy(...args),
+  preparePersistentPrint: async (...args: unknown[]) => ({
+    status: 'completed', printed: await h.printSpy(...args),
+  }),
 }))
 
 function i18n() {

@@ -62,7 +62,7 @@ test.describe('BUG-20260712 真实点击验证', () => {
     if (await skip.isVisible().catch(() => false)) await skip.click()
     await page.getByText('模板库', { exact: false }).first().click()
     await page.getByText('作业辅导助手', { exact: false }).first().click()
-    await expect(page.getByText('创建「作业辅导助手」')).toBeVisible({ timeout: 15_000 })
+    await expect(page.getByText('创建「K12 辅导助手」')).toBeVisible({ timeout: 15_000 })
     await page.locator('.k12pf__input').first().fill(CHILD)
     // 真实夹具是五年级下册作业；明确选同年级学期，避免合法题目被误判为超纲。
     await page.locator('.k12pf .hc-select__trigger').nth(0).click()

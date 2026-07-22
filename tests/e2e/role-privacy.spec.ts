@@ -55,6 +55,7 @@ async function openWorks(page: Page, childName: string): Promise<void> {
   await page.goto('/agents', { waitUntil: 'domcontentloaded' })
   await page.getByText('我的智能体', { exact: false }).first().click()
   await page.locator('.hc-cxcard', { hasText: childName }).getByRole('button', { name: /错题本|学习档案/ }).click()
+  await expect(page).toHaveURL(/(?:\?|&)scenarioTab=records(?:&|$)/)
   await expect(page.locator('.k12rec')).toBeVisible({ timeout: 30_000 })
   await page.getByTestId('subtab-works').click()
   await expect(page.getByTestId('works-section')).toBeVisible()

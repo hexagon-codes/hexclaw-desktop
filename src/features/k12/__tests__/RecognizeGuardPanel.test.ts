@@ -152,7 +152,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
   })
 
   it('#1 总确认门：识题后先整体确认，确认前不得展示备课卡', async () => {
-    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }])
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }], '数学')
     const w = render()
     await setImage(w)
     await w.find('[data-testid="recognize-run"]').trigger('click')
@@ -165,6 +165,21 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await flushPromises()
     expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(true)
     expect(w.find('[data-testid="rq-grade-0"]').exists()).toBe(true)
+  })
+
+  it('学科未识别时允许确认题目，但不得跨学科生成辅导要点；选定学科后才挂载', async () => {
+    mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }])
+    const w = render()
+    await setImage(w)
+    await w.find('[data-testid="recognize-run"]').trigger('click')
+    await flushPromises()
+
+    await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(false)
+
+    await chooseSubject(w, '数学')
+    expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(true)
   })
 
   it('权威原型：确认与原图定位以两个正交分支呈现，确认后只更新各自状态', async () => {

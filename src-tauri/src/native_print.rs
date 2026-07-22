@@ -1,12 +1,14 @@
 //! Native print adapter for K12 printable artifacts (DD-023A).
 //!
-//! The frontend supplies ephemeral, already-sanitized printable HTML. On macOS we load it into
-//! an isolated hidden WKWebView and run `NSPrintOperation` with the system print panel enabled.
+//! Durable K12 PrintJobs supply the exact PDF bytes already shown in preview. On macOS PDFKit
+//! creates `NSPrintOperation` directly from those bytes, so no WebView can reflow final pages.
 //! `runOperation` is deliberately synchronous on the UI thread. Its result is wrapped in a typed,
 //! operation-scoped receipt that distinguishes Print from Cancel/failure and can be committed to
 //! the durable backend PrintJob. No HTML/PDF file is persisted by this adapter.
 
-const MAX_PRINT_HTML_BYTES: usize = 4 * 1024 * 1024;
+use base64::Engine;
+
+const MAX_PRINT_PDF_BYTES: usize = 32 * 1024 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize)]
 struct NativePrinterSnapshot {
@@ -58,48 +60,49 @@ fn receipt_from_result(
     }
 }
 
-fn validate_print_html(html: &str) -> Result<(), String> {
-    if html.trim().is_empty() {
-        return Err("打印内容不能为空".into());
+fn decode_print_pdf(pdf_base64: &str) -> Result<Vec<u8>, String> {
+    let encoded = pdf_base64.trim();
+    if encoded.is_empty() {
+        return Err("打印 PDF 不能为空".into());
     }
-    if html.len() > MAX_PRINT_HTML_BYTES {
+    let max_encoded_len = MAX_PRINT_PDF_BYTES.div_ceil(3) * 4;
+    if encoded.len() > max_encoded_len {
         return Err(format!(
-            "打印内容过大 {} > {} 字节",
-            html.len(),
-            MAX_PRINT_HTML_BYTES
+            "打印 PDF 编码过大 {} > {} 字节",
+            encoded.len(),
+            max_encoded_len
         ));
     }
-    Ok(())
-}
-
-fn initialization_script(html: &str) -> Result<String, String> {
-    let source = serde_json::to_string(html).map_err(|e| format!("打印内容编码失败: {e}"))?;
-    Ok(format!(
-        r#"(() => {{
-  const source = {source};
-  document.addEventListener('DOMContentLoaded', () => {{
-    const parsed = new DOMParser().parseFromString(source, 'text/html');
-    document.title = parsed.title || 'HexClaw Print';
-    document.head.innerHTML = parsed.head.innerHTML;
-    document.body.innerHTML = parsed.body.innerHTML;
-    window.__HEXCLAW_PRINT_READY__ = true;
-  }}, {{ once: true }});
-}})();"#
-    ))
+    let pdf = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| format!("打印 PDF 编码无效: {e}"))?;
+    if pdf.is_empty() {
+        return Err("打印 PDF 不能为空".into());
+    }
+    if pdf.len() > MAX_PRINT_PDF_BYTES {
+        return Err(format!(
+            "打印 PDF 过大 {} > {} 字节",
+            pdf.len(),
+            MAX_PRINT_PDF_BYTES
+        ));
+    }
+    if !pdf.starts_with(b"%PDF-") {
+        return Err("打印内容不是有效的 PDF 文档".into());
+    }
+    Ok(pdf)
 }
 
 #[cfg(target_os = "macos")]
 mod platform {
-    use super::{
-        initialization_script, receipt_from_result, validate_print_html, NativePrintReceipt,
-    };
+    use super::{decode_print_pdf, receipt_from_result, NativePrintReceipt};
+    use objc2::{AnyThread, MainThreadMarker};
     use objc2_app_kit::NSPrintInfo;
-    use objc2_web_kit::WKWebView;
+    use objc2_foundation::NSData;
+    use objc2_pdf_kit::{PDFDocument, PDFPrintScalingMode};
     use std::sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
         Arc, Mutex,
     };
-    use tauri::{webview::PageLoadEvent, WebviewUrl, WebviewWindowBuilder};
     use tokio::sync::oneshot;
 
     type PrintResult = Result<NativePrintReceipt, String>;
@@ -115,128 +118,84 @@ mod platform {
         }
     }
 
-    fn run_operation(
-        webview: tauri::webview::PlatformWebview,
-    ) -> Result<(bool, Option<String>, Option<String>), String> {
-        let ptr = webview.inner().cast::<WKWebView>();
-        if ptr.is_null() {
-            return Err("无法取得系统打印视图".into());
+    fn run_pdf_operation(pdf: &[u8], sequence: u64) -> Result<NativePrintReceipt, String> {
+        let mtm =
+            MainThreadMarker::new().ok_or_else(|| "系统 PDF 打印必须在主线程启动".to_string())?;
+        // SAFETY: `pdf` remains alive for the duration of this call and NSData copies the bytes.
+        let data = unsafe { NSData::dataWithBytes_length(pdf.as_ptr().cast(), pdf.len()) };
+        // SAFETY: PDFKit parsing and print-operation construction execute on AppKit's main thread.
+        let document = unsafe { PDFDocument::initWithData(PDFDocument::alloc(), &data) }
+            .ok_or_else(|| "系统无法解析打印 PDF".to_string())?;
+        if unsafe { document.pageCount() } == 0 {
+            return Err("打印 PDF 不包含可打印页面".into());
         }
 
-        // SAFETY: Tauri guarantees this closure runs on the main thread and `inner()` is the
-        // retained WKWebView for the lifetime of the callback. AppKit printing is main-thread-only.
-        let (operation, print_info) = unsafe {
-            let webview = &*ptr;
-            let print_info = NSPrintInfo::sharedPrintInfo();
-            let operation = webview.printOperationWithPrintInfo(&print_info);
-            (operation, print_info)
-        };
+        let print_info = NSPrintInfo::sharedPrintInfo();
+        // `PageScaleDownToFit` preserves the canonical PDF page geometry and only prevents a
+        // printer's non-printable margins from clipping it; PDFKit does not reflow content.
+        let operation = unsafe {
+            document.printOperationForPrintInfo_scalingMode_autoRotate(
+                Some(&print_info),
+                PDFPrintScalingMode::PageScaleDownToFit,
+                true,
+                mtm,
+            )
+        }
+        .ok_or_else(|| "系统无法创建 PDF 打印任务".to_string())?;
         operation.setShowsPrintPanel(true);
         operation.setShowsProgressPanel(true);
-        // If AppKit spawns the operation separately, runOperation may return before the user has
-        // accepted/cancelled. Keep it synchronous so the boolean is an actual native receipt.
         operation.setCanSpawnSeparateThread(false);
         let printed = operation.runOperation();
         let printer = Some(print_info.printer().name().to_string());
         let paper = print_info.paperName().map(|name| name.to_string());
-        Ok((printed, printer, paper))
+        Ok(receipt_from_result(sequence, printed, printer, paper))
     }
 
-    pub async fn print_html(app: tauri::AppHandle, html: String) -> PrintResult {
-        validate_print_html(&html)?;
-        let script = initialization_script(&html)?;
+    pub async fn print_pdf(app: tauri::AppHandle, pdf_base64: String) -> PrintResult {
+        let pdf = decode_print_pdf(&pdf_base64)?;
         let sequence = PRINT_WINDOW_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let label = format!("native-print-{sequence}");
-        let url = "about:blank"
-            .parse()
-            .map_err(|e| format!("初始化打印视图失败: {e}"))?;
-
         let (tx, rx) = oneshot::channel::<PrintResult>();
         let sender: ResultSender = Arc::new(Mutex::new(Some(tx)));
-        let callback_sender = Arc::clone(&sender);
-        let started = Arc::new(AtomicBool::new(false));
-        let callback_started = Arc::clone(&started);
+        let main_sender = Arc::clone(&sender);
 
-        WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
-            .title("HexClaw Print")
-            .inner_size(1.0, 1.0)
-            .visible(false)
-            .focused(false)
-            .skip_taskbar(true)
-            .initialization_script(script)
-            .on_page_load(move |window, payload| {
-                if !matches!(payload.event(), PageLoadEvent::Finished)
-                    || callback_started.swap(true, Ordering::SeqCst)
-                {
-                    return;
-                }
-
-                let operation_sender = Arc::clone(&callback_sender);
-                let schedule_error_sender = Arc::clone(&callback_sender);
-                let window_to_close = window.clone();
-                if let Err(e) = window.with_webview(move |webview| {
-                    let result = run_operation(webview).map(|(printed, printer, paper)| {
-                        receipt_from_result(sequence, printed, printer, paper)
-                    });
-                    let _ = window_to_close.close();
-                    send_once(&operation_sender, result);
-                }) {
-                    let _ = window.close();
-                    send_once(
-                        &schedule_error_sender,
-                        Err(format!("无法启动系统打印对话框: {e}")),
-                    );
-                }
-            })
-            .build()
-            .map_err(|e| format!("创建打印视图失败: {e}"))?;
+        if let Err(error) = app.run_on_main_thread(move || {
+            send_once(&main_sender, run_pdf_operation(&pdf, sequence));
+        }) {
+            send_once(
+                &sender,
+                Err(format!("无法在主线程启动系统 PDF 打印对话框: {error}")),
+            );
+        }
 
         rx.await
-            .map_err(|_| "系统打印对话框未返回结果".to_string())?
+            .map_err(|_| "系统 PDF 打印对话框未返回结果".to_string())?
     }
 }
 
-/// Open the native print dialog for ephemeral HTML and return an operation-scoped receipt.
+/// Print an in-memory canonical PDF with PDFKit/AppKit. PDFKit consumes the exact bytes already
+/// shown in the preview, so the native print operation cannot reflow the document.
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub async fn native_print_html(
+pub async fn native_print_pdf(
     app: tauri::AppHandle,
-    html: String,
+    pdf_base64: String,
 ) -> Result<NativePrintReceipt, String> {
-    platform::print_html(app, html).await
+    platform::print_pdf(app, pdf_base64).await
 }
 
-/// DD-023A forbids a save-file fallback on platforms without a verifiable native adapter.
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub async fn native_print_html(
+pub async fn native_print_pdf(
     _app: tauri::AppHandle,
-    html: String,
+    pdf_base64: String,
 ) -> Result<NativePrintReceipt, String> {
-    validate_print_html(&html)?;
-    Err("当前平台尚无可验证的原生打印适配器".into())
+    decode_print_pdf(&pdf_base64)?;
+    Err("当前平台尚无可验证的原生 PDF 打印适配器".into())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        initialization_script, receipt_from_result, validate_print_html, MAX_PRINT_HTML_BYTES,
-    };
-
-    #[test]
-    fn rejects_empty_and_oversized_print_payloads() {
-        assert!(validate_print_html("  ").is_err());
-        assert!(validate_print_html(&"x".repeat(MAX_PRINT_HTML_BYTES + 1)).is_err());
-        assert!(validate_print_html("<!doctype html><p>ok</p>").is_ok());
-    }
-
-    #[test]
-    fn initialization_script_json_encodes_untrusted_document_text() {
-        let script = initialization_script("<p>`quote` \"中文\"</p>").unwrap();
-        assert!(script.contains("DOMParser"));
-        assert!(script.contains("\\\"中文\\\""));
-        assert!(script.contains("__HEXCLAW_PRINT_READY__"));
-    }
+    use super::{decode_print_pdf, receipt_from_result, MAX_PRINT_PDF_BYTES};
 
     #[test]
     fn native_result_has_a_typed_operation_and_success_only_receipt() {
@@ -256,5 +215,19 @@ mod tests {
         assert_eq!(cancelled.status, "cancelled");
         assert_eq!(cancelled.native_job_id, "native-print-43");
         assert!(cancelled.native_receipt_id.is_none());
+    }
+
+    #[test]
+    fn pdf_payload_requires_exact_pdf_magic_and_enforces_the_decoded_size_limit() {
+        let decoded = decode_print_pdf("JVBERi0xLjc=").expect("valid PDF payload");
+        assert_eq!(decoded, b"%PDF-1.7");
+
+        assert!(decode_print_pdf("").is_err());
+        assert!(decode_print_pdf("PGh0bWw+").is_err());
+        assert!(decode_print_pdf("not base64").is_err());
+
+        // Reject before decoding an attacker-controlled payload large enough to exceed the cap.
+        let encoded_over_limit = "A".repeat(((MAX_PRINT_PDF_BYTES + 2) / 3) * 4 + 4);
+        assert!(decode_print_pdf(&encoded_over_limit).is_err());
     }
 }

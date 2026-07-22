@@ -43,7 +43,13 @@ function i18n() {
 
 function render(knowledgePoints: string[] = ['简易方程']) {
   return mount(PrepCardPanel, {
-    props: { agentId: 'mingming', grade: '五年级上', textbook: '人教版', knowledgePoints },
+    props: {
+      agentId: 'mingming',
+      grade: '五年级上',
+      subject: '数学',
+      textbook: '人教版',
+      knowledgePoints,
+    },
     global: {
       plugins: [createPinia(), i18n()],
       stubs: {
@@ -66,7 +72,12 @@ describe('PrepCardPanel（辅导要点内联卡）', () => {
     render(['简易方程'])
     await flushPromises()
     expect(h.prepSpy).toHaveBeenCalledWith(
-      { agent: 'mingming', grade: '五年级上', knowledge_points: ['简易方程'] },
+      {
+        agent: 'mingming',
+        grade: '五年级上',
+        subject: '数学',
+        knowledge_points: ['简易方程'],
+      },
       expect.any(AbortSignal),
     )
   })
@@ -134,6 +145,7 @@ describe('PrepCardPanel（辅导要点内联卡）', () => {
       {
         agent: 'mingming',
         grade: '五年级上',
+        subject: '数学',
         knowledge_points: ['简易方程'],
       },
       expect.any(AbortSignal),

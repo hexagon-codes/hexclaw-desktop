@@ -234,7 +234,7 @@ test.describe('K12 responsive and accessibility release gate', () => {
     test.skip(!LIVE_VISION, 'NOT RUN: requires HEX_K12_REAL_MODEL=1 and an authorized vision provider')
     childName = `键盘批改-${e2eMarker('child')}`
     const owner = await createTutorAndOpenArchive(page, childName)
-    await page.getByRole('button', { name: '辅导', exact: true }).click()
+    await page.getByRole('tab', { name: '辅导', exact: true }).click()
     const source = verifyClearFixture()
     const requestPromise = page.waitForRequest((request) =>
       request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/api/k12/grading-jobs'),

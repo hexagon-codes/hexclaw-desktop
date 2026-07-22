@@ -1675,8 +1675,10 @@ dependencies = [
  "futures-util",
  "libc",
  "log",
+ "objc2",
  "objc2-app-kit",
- "objc2-web-kit",
+ "objc2-foundation",
+ "objc2-pdf-kit",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -2621,6 +2623,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f112d1746737b0da274ef79a23aac283376f335f4095a083a267a082f21db0c0"
 dependencies = [
  "bitflags 2.11.0",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+]
+
+[[package]]
+name = "objc2-pdf-kit"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c14ed801ae810c6ba487cedd7616bb48f9a8e37940042f57e862538e2c7db117"
+dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",

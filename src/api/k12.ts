@@ -218,6 +218,8 @@ export function k12ReviewRetry(req: ReviewRetryReq, signal?: AbortSignal) {
 export interface PrepCardReq {
   agent: string
   grade: string
+  /** 当前作业学科；用于 Learner × Subject 教材隔离检索。 */
+  subject?: string
   knowledge_points?: string[]
 }
 
@@ -241,6 +243,8 @@ export function k12PrepCard(req: PrepCardReq, signal?: AbortSignal) {
 // ── grounding（家长教材原文，按 agent scope 写入）──────────
 export interface GroundingReq {
   agent: string
+  /** 当前作业学科；不传仅保留旧版不分科语义。 */
+  subject?: string
   title: string
   content: string
 }
@@ -806,7 +810,7 @@ export function k12BindIM(req: BindIMReq) {
   )
 }
 
-// ── cron/provision（注册 4 个默认自动化任务）──────────────────
+// ── cron 默认任务 reconciliation（missing-only 补齐 4 项）─────
 export interface ProvisionCronReq {
   agent: string
   /** 投递到的 IM 平台；空 → 桌面 chat */
@@ -829,10 +833,13 @@ export interface ReclaimedCronJob {
   name: string
   source_key: string
 }
-/** 建档后调一次；未注入 cron.Scheduler → 501。注册 §3.13 四任务并回收历史 kind 残留。 */
+/**
+ * 建档/改档成功后按具体 agent 调用；未注入 cron.Scheduler → 501。
+ * 后端仅补 §3.13 四任务缺项，已有 exact SourceKey 任务保持原样。
+ */
 export async function k12ProvisionCron(req: ProvisionCronReq) {
   const response = await apiPost<{ provisioned: ProvisionedJob[]; reclaimed?: ReclaimedCronJob[] }>(
-    `${BASE}/cron/provision`,
+    `${BASE}/cron/reconcile-defaults`,
     { ...req, user_id: DESKTOP_USER_ID },
   )
   const expected = new Set(['weekly-sheet', 'return-reminder', 'semester-spring', 'semester-fall'])
