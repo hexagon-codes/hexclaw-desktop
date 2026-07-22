@@ -16,8 +16,10 @@ import {
   k12GradePracticeSet,
   k12CancelPracticeSet,
   k12GetPracticePaper,
+  k12GetPracticePrintJob,
   k12GetPracticePrintJobPaper,
   k12PreparePracticePrintJob,
+  k12CommitPracticePrintReceipt,
   k12RecordPracticePrintEvent,
   k12RetryPracticePrintJob,
   k12UploadAsset,
@@ -36,6 +38,10 @@ import {
   savePracticePaperPdf,
 } from '../export'
 import type { PersistentPrintRequest } from '../persistent-print'
+import {
+  commitPrintReceiptWithConvergence,
+  recordDialogOpenWithConvergence,
+} from '../print-receipt'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 
 const props = defineProps<{ agentId: string }>()
@@ -255,10 +261,22 @@ async function confirmPrintPreview() {
   current.printing = true
   busy.value = current.recordId
   try {
-    await k12RecordPracticePrintEvent(props.agentId, current.jobId, { status: 'dialog_open' })
+    await recordDialogOpenWithConvergence(
+      () => k12RecordPracticePrintEvent(props.agentId, current.jobId, { status: 'dialog_open' }),
+      () => k12GetPracticePrintJob(props.agentId, current.jobId),
+    )
     // DD-023A：确认打印必须复用 iframe 正在预览的 exact PDF Blob，禁止再次
     // 从 Markdown/HTML 渲染，否则预览与物理打印分页会漂移。
     const receipt = await printPracticePaperWithReceipt(current.pdf)
+    if (receipt.status === 'failed' || receipt.status === 'outcome_unknown') {
+      await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
+        status: receipt.status,
+        native_job_id: receipt.native_job_id,
+        failure_kind: receipt.failure_kind,
+        failure_detail: receipt.failure_detail,
+      })
+      throw new Error(receipt.failure_detail || receipt.failure_kind || '系统打印对话框未返回可验证回执')
+    }
     if (receipt.status === 'cancelled') {
       await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
         status: 'cancelled', native_job_id: receipt.native_job_id, printer_snapshot: receipt.printer_snapshot,
@@ -267,17 +285,20 @@ async function confirmPrintPreview() {
       closePrintPreview(true)
       return
     }
-    await k12RecordPracticePrintEvent(props.agentId, current.jobId, { status: 'submitted', native_job_id: receipt.native_job_id })
-    await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
-      status: 'printed', native_job_id: receipt.native_job_id, native_receipt_id: receipt.native_receipt_id, printer_snapshot: receipt.printer_snapshot,
-    })
+    const nativeReceipt = {
+      native_job_id: receipt.native_job_id,
+      native_receipt_id: receipt.native_receipt_id!,
+      printer_snapshot: receipt.printer_snapshot,
+    }
+    await commitPrintReceiptWithConvergence(
+      nativeReceipt,
+      () => k12CommitPracticePrintReceipt(props.agentId, current.jobId, nativeReceipt),
+      () => k12GetPracticePrintJob(props.agentId, current.jobId),
+    )
     closePrintPreview(true)
     toast.success(t('k12.practice.print'))
     await load()
   } catch (error) {
-    await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
-      status: 'outcome_unknown', failure_kind: 'native_adapter_interrupted', failure_detail: '系统打印对话框未返回可验证回执',
-    })
     toast.error((error as Error).message)
   } finally {
     current.printing = false

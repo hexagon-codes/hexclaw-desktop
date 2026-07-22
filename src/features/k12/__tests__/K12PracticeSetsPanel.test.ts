@@ -15,7 +15,9 @@ const h = vi.hoisted(() => ({
   cancelSpy: vi.fn(),
   paperSpy: vi.fn(),
   preparePrintSpy: vi.fn(),
+  getPrintJobSpy: vi.fn(),
   printJobPaperSpy: vi.fn(),
+  commitPrintSpy: vi.fn(),
   printEventSpy: vi.fn(),
   retryPrintSpy: vi.fn(),
   printSpy: vi.fn(),
@@ -36,7 +38,9 @@ vi.mock('@/api/k12', () => ({
   k12CancelPracticeSet: (a: string, id: string) => h.cancelSpy(a, id),
   k12GetPracticePaper: (a: string, id: string, kind: string) => h.paperSpy(a, id, kind),
   k12PreparePracticePrintJob: (...args: unknown[]) => h.preparePrintSpy(...args),
+  k12GetPracticePrintJob: (...args: unknown[]) => h.getPrintJobSpy(...args),
   k12GetPracticePrintJobPaper: (...args: unknown[]) => h.printJobPaperSpy(...args),
+  k12CommitPracticePrintReceipt: (...args: unknown[]) => h.commitPrintSpy(...args),
   k12RecordPracticePrintEvent: (...args: unknown[]) => h.printEventSpy(...args),
   k12RetryPracticePrintJob: (...args: unknown[]) => h.retryPrintSpy(...args),
   k12UploadAsset: (a: string, file: File) => h.uploadSpy(a, file),
@@ -125,6 +129,9 @@ beforeEach(() => {
     },
     replayed: false,
   })
+  h.getPrintJobSpy.mockReset().mockResolvedValue({
+    print_job: { print_job_id: 'print-1', status: 'dialog_open' },
+  })
   h.printJobPaperSpy.mockReset().mockResolvedValue({
     print_job_id: 'print-1',
     kind: 'question',
@@ -138,6 +145,15 @@ beforeEach(() => {
     (_agent: string, _job: string, event: { status: string }) =>
       Promise.resolve({ print_job: { print_job_id: 'print-1', status: event.status } }),
   )
+  h.commitPrintSpy.mockReset().mockResolvedValue({
+    print_job: {
+      print_job_id: 'print-1',
+      status: 'printed',
+      native_job_id: 'native-1',
+      native_receipt_id: 'receipt-1',
+      printer_snapshot: { adapter: 'appkit' },
+    },
+  })
   h.retryPrintSpy.mockReset().mockResolvedValue({
     print_job: { print_job_id: 'print-1', status: 'preparing', attempt_count: 2 },
   })
@@ -273,8 +289,7 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
     await flushPromises()
     expect(h.printSpy).toHaveBeenLastCalledWith(exactPreviewPdf)
-    expect(h.printEventSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', {
-      status: 'printed',
+    expect(h.commitPrintSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', {
       native_job_id: 'native-1',
       native_receipt_id: 'receipt-1',
       printer_snapshot: { adapter: 'appkit' },
@@ -286,7 +301,13 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     h.listSpy.mockResolvedValue({
       items: [basket([item('m1', '题', '数学', 'verified')])],
     })
-    h.printSpy.mockRejectedValueOnce(new Error('native channel closed'))
+    h.printSpy.mockResolvedValueOnce({
+      status: 'outcome_unknown',
+      native_job_id: 'native-unknown',
+      printer_snapshot: { adapter: 'appkit' },
+      failure_kind: 'native_result_unavailable',
+      failure_detail: 'native channel closed',
+    })
     const w = render()
     await flushPromises()
 
@@ -300,8 +321,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
       { status: 'dialog_open' },
       {
         status: 'outcome_unknown',
-        failure_kind: 'native_adapter_interrupted',
-        failure_detail: '系统打印对话框未返回可验证回执',
+        native_job_id: 'native-unknown',
+        failure_kind: 'native_result_unavailable',
+        failure_detail: 'native channel closed',
       },
     ])
     expect(h.retryPrintSpy).not.toHaveBeenCalled()
@@ -310,6 +332,84 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.toastError).toHaveBeenCalledWith('native channel closed')
     await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-close"]')!.click()
     await flushPromises()
+  })
+
+  it('篮子打印的确定性 native 故障记 failed，允许同一 PrintJob 后续受控重试', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [basket([item('m1', '题', '数学', 'verified')])],
+    })
+    h.printSpy.mockResolvedValueOnce({
+      status: 'failed',
+      native_job_id: 'native-failed',
+      printer_snapshot: { adapter: 'appkit' },
+      failure_kind: 'pdf_media_box_invalid',
+      failure_detail: '打印 PDF 页面尺寸无效',
+    })
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="ps-finalize-print"]').trigger('click')
+    await flushPromises()
+    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await flushPromises()
+
+    expect(h.printEventSpy).toHaveBeenLastCalledWith('k12-xiaoming', 'print-1', {
+      status: 'failed',
+      native_job_id: 'native-failed',
+      failure_kind: 'pdf_media_box_invalid',
+      failure_detail: '打印 PDF 页面尺寸无效',
+    })
+    expect(h.commitPrintSpy).not.toHaveBeenCalled()
+    expect(h.toastError).toHaveBeenCalledWith('打印 PDF 页面尺寸无效')
+    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-close"]')!.click()
+    await flushPromises()
+  })
+
+  it('篮子打印在 commit 响应丢失时查询同一 receipt 收敛，不再次调用原生打印', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [basket([item('m1', '题', '数学', 'verified')])],
+    })
+    h.commitPrintSpy.mockRejectedValueOnce(new Error('response lost'))
+    h.getPrintJobSpy.mockResolvedValueOnce({
+      print_job: {
+        print_job_id: 'print-1',
+        status: 'printed',
+        native_job_id: 'native-1',
+        native_receipt_id: 'receipt-1',
+        printer_snapshot: { adapter: 'appkit' },
+      },
+    })
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="ps-finalize-print"]').trigger('click')
+    await flushPromises()
+    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await flushPromises()
+
+    expect(h.printSpy).toHaveBeenCalledTimes(1)
+    expect(h.commitPrintSpy).toHaveBeenCalledTimes(1)
+    expect(h.getPrintJobSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1')
+    expect(h.toastSuccess).toHaveBeenCalled()
+  })
+
+  it('篮子 dialog_open 响应丢失时先查询收敛，再且仅再调用一次原生打印', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [basket([item('m1', '题', '数学', 'verified')])],
+    })
+    h.printEventSpy.mockRejectedValueOnce(new Error('dialog response lost'))
+    h.getPrintJobSpy.mockResolvedValueOnce({
+      print_job: { print_job_id: 'print-1', status: 'dialog_open' },
+    })
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="ps-finalize-print"]').trigger('click')
+    await flushPromises()
+    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await flushPromises()
+
+    expect(h.printEventSpy).toHaveBeenCalledTimes(1)
+    expect(h.getPrintJobSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1')
+    expect(h.printSpy).toHaveBeenCalledTimes(1)
+    expect(h.commitPrintSpy).toHaveBeenCalledTimes(1)
   })
 
   it('PDF 渲染失败不进入系统打印，且释放页面操作锁', async () => {

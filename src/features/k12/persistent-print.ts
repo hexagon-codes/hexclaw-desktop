@@ -1,5 +1,7 @@
 import {
+  k12CommitGenericPrintReceipt,
   k12GetGenericPrintArtifact,
+  k12GetGenericPrintJob,
   k12PrepareGenericPrintJob,
   k12RecordGenericPrintEvent,
   k12RetryGenericPrintJob,
@@ -7,6 +9,10 @@ import {
 } from '@/api/k12'
 import { isTauri } from '@/utils/platform'
 import { printPracticePaperWithReceipt, renderPracticePaperPdf } from './export'
+import {
+  commitPrintReceiptWithConvergence,
+  recordDialogOpenWithConvergence,
+} from './print-receipt'
 
 export interface PersistentPrintRequest {
   agent: string
@@ -86,19 +92,21 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
   const confirm = () => {
     if (confirmation) return confirmation
     confirmation = (async () => {
-      await k12RecordGenericPrintEvent(req.agent, job.print_job_id, { status: 'dialog_open' })
+      await recordDialogOpenWithConvergence(
+        () => k12RecordGenericPrintEvent(req.agent, job.print_job_id, { status: 'dialog_open' }),
+        () => k12GetGenericPrintJob(req.agent, job.print_job_id),
+      )
 
-      let receipt
-      try {
-        // The exact Blob exposed for preview is passed unchanged to PDFKit.
-        receipt = await printPracticePaperWithReceipt(pdf)
-      } catch (error) {
+      // The exact Blob exposed for preview is passed unchanged to PDFKit.
+      const receipt = await printPracticePaperWithReceipt(pdf)
+      if (receipt.status === 'failed' || receipt.status === 'outcome_unknown') {
         await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-          status: 'outcome_unknown',
-          failure_kind: 'native_receipt_unavailable',
-          failure_detail: '原生打印结果未能确认',
+          status: receipt.status,
+          native_job_id: receipt.native_job_id,
+          failure_kind: receipt.failure_kind,
+          failure_detail: receipt.failure_detail,
         })
-        throw error
+        throw new Error(receipt.failure_detail || receipt.failure_kind || '原生打印结果未能确认')
       }
       if (receipt.status === 'cancelled') {
         await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
@@ -109,16 +117,16 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
         return false
       }
 
-      await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-        status: 'submitted',
+      const nativeReceipt = {
         native_job_id: receipt.native_job_id,
-      })
-      await k12RecordGenericPrintEvent(req.agent, job.print_job_id, {
-        status: 'printed',
-        native_job_id: receipt.native_job_id,
-        native_receipt_id: receipt.native_receipt_id,
+        native_receipt_id: receipt.native_receipt_id!,
         printer_snapshot: receipt.printer_snapshot,
-      })
+      }
+      await commitPrintReceiptWithConvergence(
+        nativeReceipt,
+        () => k12CommitGenericPrintReceipt(req.agent, job.print_job_id, nativeReceipt),
+        () => k12GetGenericPrintJob(req.agent, job.print_job_id),
+      )
       clearOperationKey(req)
       return true
     })()

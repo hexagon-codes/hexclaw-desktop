@@ -79,7 +79,7 @@ describe('DD-023A K12 打印走原生 PrintJob，另存 PDF 独立', () => {
     })
   })
 
-  it('Tauri typed receipt 缺打印机快照事实时 fail closed', async () => {
+  it('Tauri typed receipt 缺打印机快照事实时只归类 outcome_unknown', async () => {
     h.tauri = true
     h.printSpy.mockResolvedValue({
       status: 'printed',
@@ -88,9 +88,10 @@ describe('DD-023A K12 打印走原生 PrintJob，另存 PDF 独立', () => {
       printer_snapshot: {},
     })
 
-    await expect(printPracticePaperWithReceipt(pdf())).rejects.toThrow(
-      '未返回可验证',
-    )
+    await expect(printPracticePaperWithReceipt(pdf())).resolves.toMatchObject({
+      status: 'outcome_unknown',
+      failure_kind: 'native_result_unverifiable',
+    })
   })
 
   it('已预览 PDF 只编码一次精确字节并交给 native_print_pdf', async () => {
@@ -129,21 +130,47 @@ describe('DD-023A K12 打印走原生 PrintJob，另存 PDF 独立', () => {
     expect(h.renderSpy).not.toHaveBeenCalled()
   })
 
-  it('原生边界在 IPC 前拒绝空、超限和伪 PDF payload', async () => {
+  it('原生边界在 IPC 前把空、超限和伪 PDF 归类为可安全重试的 failed', async () => {
     h.tauri = true
     const oversized = {
       size: 32 * 1024 * 1024 + 1,
       arrayBuffer: vi.fn(),
     } as unknown as Blob
 
-    await expect(printPracticePaperWithReceipt(new Blob([]))).rejects.toThrow('不能为空')
-    await expect(printPracticePaperWithReceipt(oversized)).rejects.toThrow('过大')
+    await expect(printPracticePaperWithReceipt(new Blob([]))).resolves.toMatchObject({
+      status: 'failed', failure_kind: 'pdf_preflight_failed', failure_detail: expect.stringContaining('不能为空'),
+    })
+    await expect(printPracticePaperWithReceipt(oversized)).resolves.toMatchObject({
+      status: 'failed', failure_kind: 'pdf_preflight_failed', failure_detail: expect.stringContaining('过大'),
+    })
     await expect(
       printPracticePaperWithReceipt(new Blob(['<html>not pdf</html>'], { type: 'application/pdf' })),
-    ).rejects.toThrow('不是有效的 PDF')
+    ).resolves.toMatchObject({
+      status: 'failed', failure_kind: 'pdf_preflight_failed', failure_detail: expect.stringContaining('不是有效的 PDF'),
+    })
 
     expect(oversized.arrayBuffer).not.toHaveBeenCalled()
     expect(h.printSpy).not.toHaveBeenCalled()
+  })
+
+  it('原生已确认的确定性故障保持 failed；IPC 无结果只归类 outcome_unknown', async () => {
+    h.tauri = true
+    h.printSpy.mockResolvedValueOnce({
+      status: 'failed',
+      native_job_id: 'native-failed',
+      printer_snapshot: { adapter: 'appkit', platform: 'macos' },
+      failure_kind: 'pdf_page_limit_exceeded',
+      failure_detail: '打印 PDF 页数超过限制',
+    })
+    await expect(printPracticePaperWithReceipt(pdf())).resolves.toMatchObject({
+      status: 'failed', native_job_id: 'native-failed', failure_kind: 'pdf_page_limit_exceeded',
+    })
+
+    h.printSpy.mockRejectedValueOnce(new Error('native response channel closed'))
+    await expect(printPracticePaperWithReceipt(pdf())).resolves.toMatchObject({
+      status: 'outcome_unknown', failure_kind: 'native_result_unavailable',
+      failure_detail: expect.stringContaining('native response channel closed'),
+    })
   })
 
   it('Tauri 辅导要点 helper 不得成为绕过预览的 PDFKit 旁路', async () => {

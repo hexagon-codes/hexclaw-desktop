@@ -14,7 +14,10 @@ vi.mock('../client', () => ({
 }))
 
 import {
+  k12CommitGenericPrintReceipt,
+  k12CommitPracticePrintReceipt,
   k12GetGenericPrintArtifact,
+  k12GetGenericPrintJob,
   k12PrepareGenericPrintJob,
   k12GetPracticePrintJob,
   k12GetPracticePrintJobPaper,
@@ -70,6 +73,32 @@ describe('DD-023A Practice PrintJob API contract', () => {
     })
     expect(h.post).toHaveBeenNthCalledWith(2, '/api/k12/print-jobs/print-a/retry', {
       agent: 'tutor-a',
+    })
+  })
+
+  it('commits one complete native receipt through the atomic PrintJob endpoint', async () => {
+    h.get.mockResolvedValue({})
+    h.post.mockResolvedValue({})
+    const receipt = {
+      native_job_id: 'native-a',
+      native_receipt_id: 'receipt-a',
+      printer_snapshot: { adapter: 'appkit', printer: 'Office', paper: 'A4' },
+    }
+
+    await k12GetGenericPrintJob('tutor-a', 'gprint-a')
+    await k12CommitGenericPrintReceipt('tutor-a', 'gprint-a', receipt)
+    await k12CommitPracticePrintReceipt('tutor-a', 'print-a', receipt)
+
+    expect(h.get).toHaveBeenCalledWith('/api/k12/print-jobs/gprint-a', {
+      agent: 'tutor-a',
+    })
+    expect(h.post).toHaveBeenNthCalledWith(1, '/api/k12/print-jobs/gprint-a/commit', {
+      agent: 'tutor-a',
+      ...receipt,
+    })
+    expect(h.post).toHaveBeenNthCalledWith(2, '/api/k12/print-jobs/print-a/commit', {
+      agent: 'tutor-a',
+      ...receipt,
     })
   })
 

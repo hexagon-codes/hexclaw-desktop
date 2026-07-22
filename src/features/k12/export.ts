@@ -92,10 +92,12 @@ async function printHtml(html: string): Promise<boolean> {
 }
 
 export interface NativePrintReceipt {
-  status: 'printed' | 'cancelled'
+  status: 'printed' | 'cancelled' | 'failed' | 'outcome_unknown'
   native_job_id: string
   native_receipt_id?: string
   printer_snapshot: Record<string, unknown>
+  failure_kind?: string
+  failure_detail?: string
 }
 
 const MAX_NATIVE_PRINT_PDF_BYTES = 32 * 1024 * 1024
@@ -129,11 +131,50 @@ async function printablePdfBase64(pdf: Blob): Promise<string> {
 }
 
 async function printPdfWithReceipt(pdf: Blob): Promise<NativePrintReceipt> {
-  if (!isTauri()) throw new Error('正式打印需要桌面原生系统打印对话框')
-  const pdfBase64 = await printablePdfBase64(pdf)
-  const result = await invoke<unknown>('native_print_pdf', { pdfBase64 })
+  const localJobId = () =>
+    `desktop-print-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`}`
+  const localOutcome = (
+    status: 'failed' | 'outcome_unknown',
+    failureKind: string,
+    failureDetail: string,
+  ): NativePrintReceipt => ({
+    status,
+    native_job_id: localJobId(),
+    printer_snapshot: { adapter: 'desktop-native-bridge', platform: 'desktop' },
+    failure_kind: failureKind,
+    failure_detail: failureDetail,
+  })
+
+  if (!isTauri()) {
+    return localOutcome('failed', 'native_print_unavailable', '正式打印需要桌面原生系统打印对话框')
+  }
+  let pdfBase64: string
+  try {
+    pdfBase64 = await printablePdfBase64(pdf)
+  } catch (error) {
+    return localOutcome(
+      'failed',
+      'pdf_preflight_failed',
+      error instanceof Error ? error.message : String(error),
+    )
+  }
+
+  let result: unknown
+  try {
+    result = await invoke<unknown>('native_print_pdf', { pdfBase64 })
+  } catch (error) {
+    return localOutcome(
+      'outcome_unknown',
+      'native_result_unavailable',
+      error instanceof Error ? error.message : String(error),
+    )
+  }
   if (!isNativePrintReceipt(result)) {
-    throw new Error('原生打印适配器未返回可验证的 PrintJob 回执')
+    return localOutcome(
+      'outcome_unknown',
+      'native_result_unverifiable',
+      '原生打印适配器未返回可验证的 PrintJob 回执',
+    )
   }
   return result
 }
@@ -141,7 +182,7 @@ async function printPdfWithReceipt(pdf: Blob): Promise<NativePrintReceipt> {
 function isNativePrintReceipt(value: unknown): value is NativePrintReceipt {
   if (!value || typeof value !== 'object') return false
   const receipt = value as Partial<NativePrintReceipt>
-  if (!['printed', 'cancelled'].includes(receipt.status ?? '')) return false
+  if (!['printed', 'cancelled', 'failed', 'outcome_unknown'].includes(receipt.status ?? '')) return false
   if (!receipt.native_job_id?.trim()) return false
   if (
     !receipt.printer_snapshot ||
@@ -150,7 +191,11 @@ function isNativePrintReceipt(value: unknown): value is NativePrintReceipt {
     Object.keys(receipt.printer_snapshot).length === 0
   )
     return false
-  return receipt.status !== 'printed' || Boolean(receipt.native_receipt_id?.trim())
+  if (receipt.status === 'printed') return Boolean(receipt.native_receipt_id?.trim())
+  if (receipt.status === 'failed' || receipt.status === 'outcome_unknown') {
+    return Boolean(receipt.failure_kind?.trim())
+  }
+  return true
 }
 
 /** 浏览器/prototype 打印错题卷；Desktop 正式入口必须先走持久 PDF 预览控制器。 */

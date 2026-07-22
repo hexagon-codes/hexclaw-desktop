@@ -1106,6 +1106,12 @@ export interface PracticePrintEventReq {
   failure_detail?: string
 }
 
+export interface NativePrintCommitReq {
+  native_job_id: string
+  native_receipt_id: string
+  printer_snapshot: Record<string, unknown>
+}
+
 export type GenericPrintSourceKind =
   | 'prep_card'
   | 'creative_observation_card'
@@ -1175,6 +1181,33 @@ export function k12GetGenericPrintArtifact(agent: string, printJobId: string) {
   return apiGet<GenericPrintArtifactDTO>(`${BASE}/print-jobs/${printJobId}/paper`, { agent })
 }
 
+export function k12GetGenericPrintJob(agent: string, printJobId: string) {
+  return apiGet<GenericPrintJobResp>(`${BASE}/print-jobs/${printJobId}`, { agent })
+}
+
+function validateNativePrintCommit(receipt: NativePrintCommitReq) {
+  if (
+    !receipt.native_job_id.trim() ||
+    !receipt.native_receipt_id.trim() ||
+    !receipt.printer_snapshot ||
+    Object.keys(receipt.printer_snapshot).length === 0
+  ) {
+    throw new Error('打印完成必须携带原生任务、回执与打印机快照')
+  }
+}
+
+export function k12CommitGenericPrintReceipt(
+  agent: string,
+  printJobId: string,
+  receipt: NativePrintCommitReq,
+) {
+  validateNativePrintCommit(receipt)
+  return apiPost<GenericPrintJobResp>(`${BASE}/print-jobs/${printJobId}/commit`, {
+    agent,
+    ...receipt,
+  })
+}
+
 export function k12RecordGenericPrintEvent(
   agent: string,
   printJobId: string,
@@ -1218,6 +1251,18 @@ export function k12PreparePracticePrintJob(
 
 export function k12GetPracticePrintJob(agent: string, printJobId: string) {
   return apiGet<PracticePrintJobResp>(`${BASE}/print-jobs/${printJobId}`, { agent })
+}
+
+export function k12CommitPracticePrintReceipt(
+  agent: string,
+  printJobId: string,
+  receipt: NativePrintCommitReq,
+) {
+  validateNativePrintCommit(receipt)
+  return apiPost<PracticePrintJobResp>(`${BASE}/print-jobs/${printJobId}/commit`, {
+    agent,
+    ...receipt,
+  })
 }
 
 export function k12GetPracticePrintJobPaper(
