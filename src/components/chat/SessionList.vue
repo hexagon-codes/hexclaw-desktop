@@ -39,18 +39,67 @@ let filterAbortController: AbortController | null = null
 // Pin state
 const pinnedIds = ref<Set<string>>(new Set())
 
-// 场景实例会话自动置顶：据会话绑定的 agent 是否有场景描述符判定（registry，通用无领域词）。
-// 审计单-Medium-4（bug-20260709）：绑定用与 sessionTitle 同一套三路解析（localStorage 绑定 >
-// 后端 agent_name > 标题即内部名）——原来只认 s.agent_name，localStorage 绑定恢复的场景会话
-// 标题显示正常却拿不到常驻置顶。
-function isScenarioSession(s: ChatSession): boolean {
-  // 注意不能要求 findAgent 必中（boundAgentOf 返回 cfg 才算）：resolver 可仅凭 agentId 判定，
-  // agent 未注册到 store 时也要能置顶（SessionList.test「场景实例会话自动置顶」回归锁）。
+// “查看分支”不能靠标题、parent_session_id 或当前分页内容猜测；菜单每次打开都以
+// GET /sessions/:id/branches 的真实结果刷新。未知/加载中/失败/空列表都保持禁用，
+// 只有当前目标被后端证明至少有一个子分支时才启用。
+type BranchAvailability = 'unknown' | 'loading' | 'available' | 'empty' | 'error'
+const branchAvailability = ref<Map<string, BranchAvailability>>(new Map())
+const branchCache = ref<Map<string, ChatSession[]>>(new Map())
+const branchAvailabilityRequestSeq = new Map<string, number>()
+
+function setBranchAvailability(
+  sessionId: string,
+  availability: BranchAvailability,
+  branches?: ChatSession[],
+) {
+  const nextAvailability = new Map(branchAvailability.value)
+  nextAvailability.set(sessionId, availability)
+  branchAvailability.value = nextAvailability
+  if (branches) {
+    const nextCache = new Map(branchCache.value)
+    nextCache.set(sessionId, branches)
+    branchCache.value = nextCache
+  }
+}
+
+async function refreshBranchAvailability(sessionId: string) {
+  const requestSeq = (branchAvailabilityRequestSeq.get(sessionId) ?? 0) + 1
+  branchAvailabilityRequestSeq.set(sessionId, requestSeq)
+  setBranchAvailability(sessionId, 'loading')
+  try {
+    const result = await getSessionBranches(sessionId)
+    if (branchAvailabilityRequestSeq.get(sessionId) !== requestSeq) return
+    const branches = result.branches ?? []
+    setBranchAvailability(sessionId, branches.length > 0 ? 'available' : 'empty', branches)
+  } catch {
+    if (branchAvailabilityRequestSeq.get(sessionId) !== requestSeq) return
+    setBranchAvailability(sessionId, 'error', [])
+  }
+}
+
+// 会话身份只在这里解析一次：稳定后端 agent_id > 本地持久绑定 > 遗留 agent_name >
+// 标题兜底（内部名或唯一显示名）。标题仅是存量恢复兜底，图标、置顶和可读标题必须消费同一结果，
+// 避免首次渲染与点击恢复使用两套规则而产生“点前无图标、点后才出现”的漂移。
+function resolveSessionAgent(s: ChatSession) {
   const raw = (s.title ?? '').trim()
-  const boundName = getSessionAgent(s.id) || s.agent_name || raw
-  if (!boundName) return false
-  const cfg = agentsStore.findAgent(boundName)
-  return scenarioRegistry.isScenarioInstance({ agentId: boundName, metadata: cfg?.metadata })
+  const candidate = (s.agent_id ?? '').trim() || getSessionAgent(s.id) || (s.agent_name ?? '').trim() || raw
+  const config = candidate ? agentsStore.findAgentByNameOrDisplay(candidate) : undefined
+  return {
+    agentId: config?.name ?? candidate,
+    config,
+  }
+}
+
+// 场景实例会话自动置顶：据同一会话身份解析结果是否有场景描述符判定（registry，通用无领域词）。
+function isScenarioSession(s: ChatSession): boolean {
+  // 注意不能要求 config 必中：resolver 可仅凭 agentId 判定，agent 未注册到 store 时也要能置顶
+  //（SessionList.test「场景实例会话自动置顶」回归锁）。
+  const resolved = resolveSessionAgent(s)
+  if (!resolved.agentId) return false
+  return scenarioRegistry.isScenarioInstance({
+    agentId: resolved.agentId,
+    metadata: resolved.config?.metadata,
+  })
 }
 // 有效置顶 = 手动置顶 或 场景实例（场景实例常驻顶部）
 function isPinnedSession(s: ChatSession): boolean {
@@ -60,26 +109,29 @@ function isPinnedSession(s: ChatSession): boolean {
 // 会话可读标题：场景会话 title 默认 = 原始 agent id（如 k12-tutor-KKE5v8zQ），家长看不懂。
 // 该会话绑定的 Agent 三路解析：localStorage 绑定 > 后端 agent_name > 标题本身即 agent 内部名
 // （深链建会话时把标题设为 role=agent 名）。命中且标题未被手动改名时显示 display_name（P0-20260708）。
-// 会话绑定的 Agent 三路解析：localStorage 绑定 > 后端 agent_name > 标题即内部名。
+// 会话绑定的 Agent 统一解析结果。
 function boundAgentOf(s: ChatSession) {
-  const raw = (s.title ?? '').trim()
-  const boundName = getSessionAgent(s.id) || s.agent_name || raw
-  return boundName ? agentsStore.findAgent(boundName) : undefined
+  return resolveSessionAgent(s).config
 }
 
 // 会话列表对齐原型（app.html .cs-item）：智能体会话的身份 = **标题内联 emoji 前缀**（如「🎓 小明的辅导老师
 // · 五年级」），而非独立头像框或 meta 里的智能体名。通用会话（无专属 agent avatar）不加前缀。
 function sessionTitle(s: ChatSession): string {
   const raw = (s.title ?? '').trim()
-  const boundName = getSessionAgent(s.id) || s.agent_name || raw
-  const cfg = boundAgentOf(s)
+  const resolved = resolveSessionAgent(s)
+  const boundName = resolved.agentId
+  const cfg = resolved.config
   const avatar = (cfg?.metadata?.avatar ?? '').trim()
   const display = (cfg?.display_name ?? '').trim()
   // 孤儿态（BUG-20260712 治标）：agent 已删除且标题未被手动改名 → 显示「已删除的智能体」，
   // 绝不裸显内部 ID（技术泄漏）。信号两路：①绑定墓碑/后端 agent_name 指向查无此人的 agent；
   // ②遗留会话（绑定早被旧守卫清掉）标题恰为某场景实例内部名（registry 名模式，shell 零场景知识）。
   if (!cfg && agentsStore.agentsLoaded) {
-    const assoc = getSessionAgent(s.id) || getSessionAgentTombstone(s.id) || (s.agent_name ?? '')
+    const assoc =
+      (s.agent_id ?? '').trim() ||
+      getSessionAgent(s.id) ||
+      getSessionAgentTombstone(s.id) ||
+      (s.agent_name ?? '')
     const orphanByAssoc = !!assoc && (!raw || raw === assoc)
     const orphanByPattern = !!raw && scenarioRegistry.matchesInstanceId(raw)
     if (orphanByAssoc || orphanByPattern) return t('chat.orphanAgentSession')
@@ -163,7 +215,13 @@ const sessionMenuItems = computed<ContextMenuItem[]>(() => {
       icon: isPinned ? PinOff : Pin,
       disabled: isScenarioPinned,
     },
-    { id: 'branches', label: t('chat.viewBranches', '查看分支'), icon: GitBranch },
+    {
+      id: 'branches',
+      label: t('chat.viewBranches', '查看分支'),
+      icon: GitBranch,
+      disabled:
+        !session || branchAvailability.value.get(session.id) !== 'available',
+    },
     { id: 'sep1', label: '', separator: true },
     { id: 'delete', label: t('common.delete'), icon: Trash2, danger: true, shortcut: '⌫' },
   ]
@@ -431,6 +489,7 @@ function handleRenameKeydown(e: KeyboardEvent) {
 function handleContextMenu(e: MouseEvent, sessionId: string) {
   ctxSessionId.value = sessionId
   openMenuSessionId.value = sessionId
+  void refreshBranchAvailability(sessionId)
   ctxMenu.value?.show(e)
 }
 
@@ -443,6 +502,7 @@ function handleActionsClick(e: MouseEvent, sessionId: string) {
   if (!(trigger instanceof HTMLElement)) return
   ctxSessionId.value = sessionId
   openMenuSessionId.value = sessionId
+  void refreshBranchAvailability(sessionId)
   ctxMenu.value?.showAt(trigger)
 }
 
@@ -454,6 +514,7 @@ function handleActionsKeydown(e: KeyboardEvent, sessionId: string) {
   if (!(trigger instanceof HTMLElement)) return
   ctxSessionId.value = sessionId
   openMenuSessionId.value = sessionId
+  void refreshBranchAvailability(sessionId)
   ctxMenu.value?.showAt(trigger)
 }
 
@@ -803,6 +864,8 @@ onUnmounted(() => {
       :message="t('chat.deleteSessionConfirmMessage', { title: confirmDeleteTitle })"
       :confirm-text="t('agents.delete', '删除')"
       :cancel-text="t('common.cancel', '取消')"
+      :confirm-delay-ms="5_000"
+      :confirmation-key="confirmDeleteId"
       danger
       @confirm="confirmDeleteSession"
       @cancel="confirmDeleteId = null"

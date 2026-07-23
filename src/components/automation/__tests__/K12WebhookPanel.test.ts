@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import HcSelect from '@/components/common/HcSelect.vue'
 import K12WebhookPanel from '@/features/k12/views/K12WebhookPanel.vue'
 
 const hooks = vi.hoisted(() => ({
@@ -33,6 +34,7 @@ vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: hooks.success, error: hooks.error }),
 }))
 vi.mock('lucide-vue-next', () => ({
+  ChevronDown: { template: '<span />' },
   Copy: { template: '<span />' },
   RefreshCw: { template: '<span />' },
   Trash2: { template: '<span />' },
@@ -128,6 +130,26 @@ describe('K12WebhookPanel', () => {
     expect(wrapper.emitted('contentChange')).toEqual([[true]])
   })
 
+  it('uses the shared application select for the child scope and reloads the selected owner', async () => {
+    const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
+    await flushPromises()
+
+    const agentField = wrapper.get('[data-testid="k12-webhook-agent"]')
+    const agentSelect = agentField.findComponent(HcSelect)
+    expect(agentSelect.exists()).toBe(true)
+    expect(agentSelect.props('options')).toEqual([
+      { value: agentA.name, label: '小明' },
+      { value: agentB.name, label: '小红' },
+    ])
+    expect(agentField.find('select').exists()).toBe(false)
+
+    agentSelect.vm.$emit('update:modelValue', agentB.name)
+    await flushPromises()
+
+    expect(hooks.list).toHaveBeenLastCalledWith(agentB.name)
+    expect(wrapper.text()).not.toContain('homework-hook')
+  })
+
   it('projects a binding with the authoritative K12 webhook card hierarchy and truthful contract data', async () => {
     const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
     await flushPromises()
@@ -210,7 +232,10 @@ describe('K12WebhookPanel', () => {
     expect(wrapper.text()).toContain('succeeded')
     expect(wrapper.text()).toContain('grading_job:job-1')
 
-    await wrapper.get('[data-testid="k12-webhook-agent"]').setValue(agentB.name)
+    wrapper
+      .get('[data-testid="k12-webhook-agent"]')
+      .findComponent(HcSelect)
+      .vm.$emit('update:modelValue', agentB.name)
     await flushPromises()
     expect(hooks.list).toHaveBeenLastCalledWith(agentB.name)
     expect(wrapper.text()).not.toContain('homework-hook')
@@ -247,7 +272,10 @@ describe('K12WebhookPanel', () => {
 
     const wrapper = mount(K12WebhookPanel, { global: { stubs: { teleport: true } } })
     await flushPromises()
-    await wrapper.get('[data-testid="k12-webhook-agent"]').setValue(agentB.name)
+    wrapper
+      .get('[data-testid="k12-webhook-agent"]')
+      .findComponent(HcSelect)
+      .vm.$emit('update:modelValue', agentB.name)
     await flushPromises()
     resolveAgentAList({ k12_bindings: [binding], total: 1 })
     await flushPromises()
@@ -258,7 +286,10 @@ describe('K12WebhookPanel', () => {
       k12_bindings: agent === agentA.name ? [binding] : [],
       total: agent === agentA.name ? 1 : 0,
     }))
-    await wrapper.get('[data-testid="k12-webhook-agent"]').setValue(agentA.name)
+    wrapper
+      .get('[data-testid="k12-webhook-agent"]')
+      .findComponent(HcSelect)
+      .vm.$emit('update:modelValue', agentA.name)
     await flushPromises()
 
     let resolveHistory!: (value: { receipts: Array<Record<string, string>>; total: number }) => void
@@ -268,7 +299,10 @@ describe('K12WebhookPanel', () => {
       }),
     )
     await wrapper.get('[data-testid="k12-webhook-history-homework-hook"]').trigger('click')
-    await wrapper.get('[data-testid="k12-webhook-agent"]').setValue(agentB.name)
+    wrapper
+      .get('[data-testid="k12-webhook-agent"]')
+      .findComponent(HcSelect)
+      .vm.$emit('update:modelValue', agentB.name)
     await flushPromises()
     resolveHistory({
       receipts: [

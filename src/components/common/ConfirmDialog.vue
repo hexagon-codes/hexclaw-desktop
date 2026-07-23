@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { AlertTriangle, Info } from 'lucide-vue-next'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     open: boolean
     title?: string
@@ -9,6 +10,9 @@ withDefaults(
     confirmText?: string
     cancelText?: string
     danger?: boolean
+    confirmDelayMs?: number
+    /** Distinguishes destructive targets while the same dialog instance stays open. */
+    confirmationKey?: string | number | null
   }>(),
   {
     title: '确认操作',
@@ -16,6 +20,8 @@ withDefaults(
     confirmText: '确认',
     cancelText: '取消',
     danger: true,
+    confirmDelayMs: 0,
+    confirmationKey: null,
   },
 )
 
@@ -23,6 +29,58 @@ const emit = defineEmits<{
   confirm: []
   cancel: []
 }>()
+
+const confirmLocked = ref(false)
+const confirmCommitted = ref(false)
+let confirmUnlockTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearConfirmDelay() {
+  if (confirmUnlockTimer) clearTimeout(confirmUnlockTimer)
+  confirmUnlockTimer = null
+}
+
+function restartConfirmDelay() {
+  clearConfirmDelay()
+  confirmCommitted.value = false
+  const delay = Math.max(0, props.confirmDelayMs)
+  confirmLocked.value = props.open && delay > 0
+  if (!confirmLocked.value) return
+  confirmUnlockTimer = setTimeout(() => {
+    confirmLocked.value = false
+    confirmUnlockTimer = null
+  }, delay)
+}
+
+function handleCancel() {
+  clearConfirmDelay()
+  emit('cancel')
+}
+
+function handleConfirm() {
+  if (confirmLocked.value || confirmCommitted.value) return
+  confirmCommitted.value = true
+  clearConfirmDelay()
+  emit('confirm')
+}
+
+watch(
+  [() => props.open, () => props.confirmDelayMs, () => props.confirmationKey],
+  restartConfirmDelay,
+  { immediate: true, flush: 'sync' },
+)
+
+function handleKeydown(event: KeyboardEvent) {
+  if (!props.open || event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  handleCancel()
+}
+
+onMounted(() => document.addEventListener('keydown', handleKeydown))
+onBeforeUnmount(() => {
+  clearConfirmDelay()
+  document.removeEventListener('keydown', handleKeydown)
+})
 </script>
 
 <template>
@@ -31,7 +89,7 @@ const emit = defineEmits<{
       <div
         v-if="open"
         class="hc-dialog-overlay"
-        @click.self="emit('cancel')"
+        @click.self="handleCancel"
       >
         <div class="hc-dialog" role="alertdialog" aria-modal="true" aria-labelledby="hc-confirm-dialog-title">
           <div class="hc-dialog__header">
@@ -45,11 +103,12 @@ const emit = defineEmits<{
             </div>
           </div>
           <div class="hc-dialog__actions">
-            <button class="hc-btn hc-btn-secondary" @click="emit('cancel')">{{ cancelText }}</button>
+            <button class="hc-btn hc-btn-secondary" @click="handleCancel">{{ cancelText }}</button>
             <button
               class="hc-btn"
               :class="danger ? 'hc-dialog__btn--danger' : 'hc-btn-primary'"
-              @click="emit('confirm')"
+              :disabled="confirmLocked || confirmCommitted"
+              @click="handleConfirm"
             >
               {{ confirmText }}
             </button>
@@ -142,8 +201,19 @@ const emit = defineEmits<{
   border-radius: var(--hc-radius-sm);
 }
 
-.hc-dialog__btn--danger:hover {
+.hc-dialog__btn--danger:hover:not(:disabled) {
   opacity: 0.9;
+}
+
+.hc-dialog__btn--danger:disabled,
+.hc-dialog__btn--danger:disabled:hover {
+  cursor: not-allowed;
+  background: var(--hc-error);
+  color: #fff;
+  opacity: 0.45;
+  transform: none;
+  box-shadow: none;
+  transition: none;
 }
 
 /* Transitions */

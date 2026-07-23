@@ -2,13 +2,14 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronUp } from 'lucide-vue-next'
-import katex from 'katex'
 import DOMPurify from 'dompurify'
 import {
   KATEX_DOMPURIFY_CONFIG,
   plainMathSegments,
   type PlainMathSegment,
 } from '@/utils/math-content'
+import { isKatexParseError, renderKatexToHtml } from '@/utils/math-render'
+import { useMathOverflowAccessibility } from '@/composables/useMathOverflowAccessibility'
 
 /**
  * 用户消息纯文本渲染：
@@ -28,6 +29,8 @@ const collapsible = computed(() => {
 })
 
 const expanded = ref(false)
+const messageRoot = ref<HTMLElement | null>(null)
+useMathOverflowAccessibility(messageRoot)
 type RenderedSegment = Extract<PlainMathSegment, { type: 'text' }>
   | (Extract<PlainMathSegment, { type: 'math' }> & { html: string })
 
@@ -36,15 +39,13 @@ const renderedSegments = computed<RenderedSegment[]>(() => plainMathSegments(pro
   try {
     return {
       ...segment,
-      html: DOMPurify.sanitize(katex.renderToString(segment.content, {
-        displayMode: segment.display,
-        throwOnError: false,
-        trust: false,
-        strict: 'warn',
-        errorColor: 'var(--hc-text-primary)',
-      }), KATEX_DOMPURIFY_CONFIG),
+      html: DOMPurify.sanitize(
+        renderKatexToHtml(segment.content, segment.display),
+        KATEX_DOMPURIFY_CONFIG,
+      ),
     }
-  } catch {
+  } catch (error) {
+    if (!isKatexParseError(error)) throw error
     return { type: 'text' as const, content: segment.source, source: segment.source }
   }
 }))
@@ -55,7 +56,7 @@ function toggle() {
 </script>
 
 <template>
-  <div class="hc-msg__text-wrap">
+  <div ref="messageRoot" class="hc-msg__text-wrap">
     <div
       class="hc-msg__text"
       :class="{ 'hc-msg__text--collapsed': collapsible && !expanded }"
@@ -66,7 +67,10 @@ function toggle() {
         <span
           v-else
           class="hc-msg__math"
-          :class="{ 'hc-msg__math--display': segment.display }"
+          :class="{
+            'hc-msg__math--display': segment.display,
+            'hc-math-inline': !segment.display,
+          }"
           v-html="segment.html"
         />
       </template>

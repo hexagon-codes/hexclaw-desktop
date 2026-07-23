@@ -88,6 +88,10 @@ onBeforeUnmount(() => {
 
 .hc-clearable-field :deep(input),
 .hc-clearable-field :deep(textarea) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding-inline-end: calc(var(--hc-clearable-trailing) + 30px) !important;
 }
 

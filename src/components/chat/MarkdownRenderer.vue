@@ -4,12 +4,12 @@ import { useI18n } from 'vue-i18n'
 import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { codeToHtml } from 'shiki'
-import { katex } from '@mdit/plugin-katex'
-// mhchem 化学式扩展：必须在 katex 加载后 import，patch 同一 katex 单例（\ce{...}）
-import 'katex/contrib/mhchem'
+import { tex } from '@mdit/plugin-tex'
 import ArtifactRenderer from '@/components/chat/ArtifactRenderer.vue'
 import { setClipboard } from '@/api/desktop'
 import { KATEX_DOMPURIFY_CONFIG, normalizeMathMarkdown } from '@/utils/math-content'
+import { isKatexParseError, renderKatexToHtml } from '@/utils/math-render'
+import { decoratePromptPreviewHtml, projectPromptPreview } from '@/utils/prompt-preview'
 import {
   createRenderManifest,
   resolveMessageContent,
@@ -17,22 +17,36 @@ import {
   type RenderManifest,
   type RenderSurface,
 } from '@/contracts/message-content'
+import { useMathOverflowAccessibility } from '@/composables/useMathOverflowAccessibility'
 
-const props = withDefaults(defineProps<{
-  content: string | MessageContent
-  surface?: RenderSurface
-  receiptRef?: string
-}>(), {
-  surface: 'desktop',
-  receiptRef: undefined,
-})
+const props = withDefaults(
+  defineProps<{
+    content: string | MessageContent
+    surface?: RenderSurface
+    receiptRef?: string
+    highlightPromptArgs?: boolean
+    showArtifacts?: boolean
+  }>(),
+  {
+    surface: 'desktop',
+    receiptRef: undefined,
+    highlightPromptArgs: false,
+    showArtifacts: true,
+  },
+)
 
 const emit = defineEmits<{
   rendered: [manifest: RenderManifest]
 }>()
 
+const rendererRoot = ref<HTMLElement | null>(null)
+useMathOverflowAccessibility(rendererRoot)
+
 const resolvedContent = computed(() => resolveMessageContent(props.content))
 const canonicalMarkdown = computed(() => resolvedContent.value.markdown)
+const promptPreviewProjection = computed(() =>
+  props.highlightPromptArgs ? projectPromptPreview(canonicalMarkdown.value) : undefined,
+)
 
 /** Extract previewable code blocks (html/svg) from raw markdown */
 const previewableBlocks = computed(() => {
@@ -68,13 +82,47 @@ function createMarkdownRenderer(copyLabel: string) {
     typographer: true,
   })
 
-  // KaTeX 数学公式：行内 $..$ / 块级 $$..$$，配 mhchem 化学式 \ce{}。
-  // 失败降级：throwOnError=false 让非法公式退回原文，errorColor 取正文色（不报红，见 §M1-1）。
-  instance.use(katex, {
+  // 本组件只拥有 TeX delimiter/token 解析；KaTeX 执行统一委托给 math-render adapter。
+  const parseErrorSignal = 'data-math-render-error="parse-error"'
+  instance.use(tex, {
     delimiters: 'all',
-    throwOnError: false,
-    errorColor: 'var(--hc-text-primary)',
+    render: (content, displayMode) => {
+      try {
+        const html = renderKatexToHtml(content, displayMode)
+        return displayMode
+          ? `<p class="katex-block">${html}</p>\n`
+          : `<span class="hc-math-inline">${html}</span>`
+      } catch (error) {
+        if (!isKatexParseError(error)) throw error
+        const tag = displayMode ? 'p' : 'span'
+        return `<${tag} ${parseErrorSignal}></${tag}>${displayMode ? '\n' : ''}`
+      }
+    },
   })
+
+  // The delimiter parser owns token.markup/content, so this is the only layer
+  // that can restore the complete source instead of a partial, misleading formula.
+  const closeMathDelimiter = (markup: string) => {
+    if (markup === String.raw`\(`) return String.raw`\)`
+    if (markup === String.raw`\[`) return String.raw`\]`
+    return markup
+  }
+  const restoreFailedMath = (ruleName: 'math_inline' | 'math_block') => {
+    const renderRule = instance.renderer.rules[ruleName]
+    if (!renderRule) return
+    instance.renderer.rules[ruleName] = (tokens, index, options, env, self) => {
+      const html = renderRule(tokens, index, options, env, self)
+      if (!html.includes(parseErrorSignal)) return html
+      const token = tokens[index]!
+      const source = instance.utils.escapeHtml(
+        `${token.markup}${token.content}${closeMathDelimiter(token.markup)}`,
+      )
+      const tag = token.block ? 'p' : 'span'
+      return `<${tag} class="hc-math-fallback" data-math-fallback="parse-error">${source}</${tag}>${token.block ? '\n' : ''}`
+    }
+  }
+  restoreFailedMath('math_inline')
+  restoreFailedMath('math_block')
 
   // markdown-it 默认已支持 GFM 表格/删除线/linkify；补齐 GitHub 任务列表语义和类名。
   instance.renderer.rules.s_open = () => '<del>'
@@ -214,8 +262,11 @@ watch(canonicalMarkdown, (content) => {
 
 const rendered = computed(() => {
   void renderVersion.value
+  const projection = promptPreviewProjection.value
+  const markdown = projection?.markdown ?? canonicalMarkdown.value
+  const html = mdInstance.value.render(normalizeMathMarkdown(markdown))
   return DOMPurify.sanitize(
-    mdInstance.value.render(normalizeMathMarkdown(canonicalMarkdown.value)),
+    projection ? decoratePromptPreviewHtml(html, projection) : html,
     KATEX_DOMPURIFY_CONFIG,
   )
 })
@@ -245,18 +296,21 @@ watch(renderManifest, (manifest) => {
 
 <template>
   <div
+    ref="rendererRoot"
     :data-content-protocol="resolvedContent.protocol"
     :data-source-digest="resolvedContent.sourceDigest"
     :data-producer-kind="resolvedContent.producerKind"
     :data-render-id="renderManifest?.render_id"
   >
     <div class="markdown-body" v-html="rendered" />
-    <ArtifactRenderer
-      v-for="(block, i) in previewableBlocks"
-      :key="`artifact-${i}`"
-      :content="block.code"
-      :language="block.language"
-    />
+    <template v-if="showArtifacts">
+      <ArtifactRenderer
+        v-for="(block, i) in previewableBlocks"
+        :key="`artifact-${i}`"
+        :content="block.code"
+        :language="block.language"
+      />
+    </template>
   </div>
 </template>
 

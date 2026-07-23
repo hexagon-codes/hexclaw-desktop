@@ -8,7 +8,7 @@
  *
  * harness 约定参考同目录 SessionList.test.ts。
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -69,6 +69,10 @@ describe('BUG-20260703 P2-5 — 会话删除二次确认', () => {
     localStorage.clear()
   })
 
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('点菜单删除 → 先弹确认层，未确认前绝不调 chatStore.deleteSession', async () => {
     const { wrapper, store } = mountList()
     await flushPromises()
@@ -83,6 +87,7 @@ describe('BUG-20260703 P2-5 — 会话删除二次确认', () => {
   })
 
   it('确认后才真删；确认层随之关闭', async () => {
+    vi.useFakeTimers()
     const { wrapper, store } = mountList()
     await flushPromises()
     await requestDeleteFromMenu(wrapper)
@@ -91,6 +96,9 @@ describe('BUG-20260703 P2-5 — 会话删除二次确认', () => {
     const buttons = Array.from(document.body.querySelectorAll('.hc-dialog-overlay button'))
     const confirmBtn = buttons.find((b) => b.textContent?.trim() === '删除')
     expect(confirmBtn, '确认层应有「删除」确认按钮').toBeTruthy()
+    expect((confirmBtn as HTMLButtonElement).disabled).toBe(true)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect((confirmBtn as HTMLButtonElement).disabled).toBe(false)
     ;(confirmBtn as HTMLButtonElement).click()
     await flushPromises()
 

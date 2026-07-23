@@ -124,13 +124,10 @@ onUnmounted(() => document.removeEventListener('mousedown', onClickOutside, true
   border-radius: var(--hc-radius-md);
   overflow: hidden;
   box-shadow: 0 6px 18px rgba(95, 179, 234, 0.28);
-  transition:
-    transform 0.12s var(--hc-ease-out),
-    box-shadow 0.2s var(--hc-ease-out);
+  transition: box-shadow 0.2s var(--hc-ease-out);
 }
 
 .hc-split-btn:hover {
-  transform: translateY(-1px);
   box-shadow: 0 10px 26px rgba(95, 179, 234, 0.34);
 }
 

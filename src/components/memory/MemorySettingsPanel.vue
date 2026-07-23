@@ -10,7 +10,8 @@
  */
 import { ref, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronDown, Settings2, UserRound, RefreshCw } from 'lucide-vue-next'
+import { Settings2, UserRound, RefreshCw } from 'lucide-vue-next'
+import HcSettingsDisclosure from '@/components/common/HcSettingsDisclosure.vue'
 import {
   getMemoryConfig,
   updateMemoryConfig,
@@ -121,20 +122,15 @@ defineExpose({ loadProfile })
     </div>
 
     <!-- 行为设置（默认收起 disclosure） -->
-    <section class="hc-memset__section">
-      <button
-        class="hc-memset__disclosure"
-        :aria-expanded="open"
-        aria-controls="memory-behavior-settings-body"
-        data-testid="memset-toggle"
-        @click="open = !open"
-      >
-        <Settings2 :size="13" />
-        {{ t('memory.settings.title', '记忆行为设置') }}
-        <ChevronDown :size="13" class="hc-memset__chevron" :class="{ 'hc-memset__chevron--open': open }" />
-      </button>
+    <HcSettingsDisclosure
+      v-model="open"
+      class="hc-memset__section"
+      body-id="memory-behavior-settings-body"
+      trigger-test-id="memset-toggle"
+    >
+      <template #icon><Settings2 :size="13" /></template>
+      <template #title>{{ t('memory.settings.title', '记忆行为设置') }}</template>
 
-      <div id="memory-behavior-settings-body" v-show="open">
         <div v-if="unavailable" class="hc-memset__muted">
           {{ t('memory.settings.unavailable', '记忆设置不可用（引擎未连接或版本过旧）') }}
         </div>
@@ -226,8 +222,7 @@ defineExpose({ loadProfile })
             {{ t('memory.settings.restartHint', '画像蒸馏开关已保存，重启应用后生效。') }}
           </p>
         </div>
-      </div>
-    </section>
+    </HcSettingsDisclosure>
   </div>
 </template>
 
@@ -260,23 +255,9 @@ defineExpose({ loadProfile })
 }
 
 /* ── 行为设置 ── */
-.hc-memset__section { display: flex; flex-direction: column; gap: 10px; }
-.hc-memset__disclosure {
-  display: inline-flex; align-items: center; gap: 6px; align-self: flex-start;
-  padding: 0; border: none; background: transparent; cursor: pointer;
-  font-size: 12px; font-weight: 600; color: var(--hc-text-muted);
-  transition: color 0.15s var(--hc-ease-smooth, ease);
-}
-.hc-memset__disclosure:hover { color: var(--hc-text-secondary); }
-.hc-memset__chevron { transition: transform 0.2s var(--hc-ease-smooth, ease); }
-.hc-memset__chevron--open { transform: rotate(180deg); }
 .hc-memset__muted { font-size: 12px; color: var(--hc-text-muted); }
 
-.hc-memset__body {
-  display: flex; flex-direction: column; gap: 14px;
-  padding: 14px; border-radius: var(--hc-radius-lg);
-  background: var(--hc-bg-card); border: 0.5px solid var(--hc-border);
-}
+.hc-memset__body { display: flex; flex-direction: column; gap: 14px; }
 .hc-memset__row { display: flex; align-items: center; gap: 14px; }
 .hc-memset__label { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .hc-memset__label b { font-size: 13px; color: var(--hc-text-primary); font-weight: 500; }

@@ -14,3 +14,37 @@ export function toggleChatWorkspaceEntry(
 export function workspaceAfterRightPanelClose(sessionsCollapsedByUser: boolean): ChatWorkspaceMode {
   return sessionsCollapsedByUser ? 'focus' : 'sessions'
 }
+
+export type ChatWorkspaceTransition = {
+  mode: ChatWorkspaceMode
+  sessionsCollapsedByUser: boolean
+}
+
+/**
+ * The right rails may temporarily displace the sessions rail, but they do not
+ * own the user's collapse preference. Closing the active right rail therefore
+ * restores sessions only when that rail displaced them.
+ */
+export function resolveChatWorkspaceTransition(
+  current: ChatWorkspaceMode,
+  requested: ChatWorkspaceMode,
+  sessionsCollapsedByUser: boolean,
+): ChatWorkspaceTransition {
+  if (
+    (current === 'artifacts' || current === 'context') &&
+    requested === 'focus'
+  ) {
+    return {
+      mode: workspaceAfterRightPanelClose(sessionsCollapsedByUser),
+      sessionsCollapsedByUser,
+    }
+  }
+
+  if (current === 'sessions' && requested === 'focus') {
+    return { mode: 'focus', sessionsCollapsedByUser: true }
+  }
+  if (requested === 'sessions') {
+    return { mode: 'sessions', sessionsCollapsedByUser: false }
+  }
+  return { mode: requested, sessionsCollapsedByUser }
+}

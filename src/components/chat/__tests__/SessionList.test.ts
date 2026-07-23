@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mount, flushPromises, enableAutoUnmount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import SessionList from '../SessionList.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
@@ -78,14 +79,30 @@ function mountSessionList(customSessions?: ChatSession[]) {
   return { wrapper, store }
 }
 
-/** BUG-20260703 P2-5：删除走二次确认——点掉 Teleport 到 body 的确认层「删除」按钮。 */
-async function confirmPendingDelete() {
-  const buttons = Array.from(document.body.querySelectorAll('.hc-dialog-overlay button'))
-  const confirmBtn = buttons.find((b) => b.textContent?.trim() === '删除')
+function pendingDeleteConfirmButton(): HTMLButtonElement {
+  const overlays = Array.from(document.body.querySelectorAll<HTMLElement>('.hc-dialog-overlay'))
+  const overlay = overlays[overlays.length - 1]
+  const buttons = overlay
+    ? Array.from(overlay.querySelectorAll<HTMLButtonElement>('button'))
+    : []
+  const confirmBtn = buttons.find((button) => button.textContent?.trim() === '删除')
   expect(confirmBtn, '应弹出删除确认层').toBeTruthy()
-  ;(confirmBtn as HTMLButtonElement).click()
+  return confirmBtn as HTMLButtonElement
+}
+
+/** 删除确认只在弹层打开后冷却；fake timers 精确跨过 5 秒边界。 */
+async function confirmPendingDeleteAfterCooldown() {
+  const confirmBtn = pendingDeleteConfirmButton()
+  expect(confirmBtn.disabled).toBe(true)
+  await vi.advanceTimersByTimeAsync(4_999)
+  expect(confirmBtn.disabled).toBe(true)
+  await vi.advanceTimersByTimeAsync(1)
+  expect(confirmBtn.disabled).toBe(false)
+  confirmBtn.click()
   await flushPromises()
 }
+
+enableAutoUnmount(afterEach)
 
 describe('SessionList', () => {
   beforeEach(() => {
@@ -93,6 +110,11 @@ describe('SessionList', () => {
     localStorage.clear()
     listSessions.mockResolvedValue({ sessions: [], total: 0 })
     searchMessages.mockResolvedValue({ results: [], total: 0, query: '' })
+    getSessionBranches.mockResolvedValue({ branches: [], total: 0 })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
   })
 
   it('场景实例会话自动置顶（agent 有场景描述符 → 常驻顶部，即便更旧）', async () => {
@@ -114,6 +136,61 @@ describe('SessionList', () => {
     const fixedPin = wrapper.get('[data-session-id="tutor"] .hc-sessions__pin-action')
     expect(fixedPin.attributes('aria-label')).toBe('固定置顶')
     expect(fixedPin.attributes('disabled')).toBeDefined()
+    scenarioRegistry.reset()
+  })
+
+  it('冷启动未点击时按 display_name 恢复 K12 身份、内联图标与固定置顶', async () => {
+    scenarioRegistry.reset()
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.agentId === 'k12-tutor-ming'
+        ? {
+            schemaVersion: '1',
+            headerTabs: [{ id: 'chat', labelKey: 'x', kind: 'chat' }],
+            messageBadges: [],
+            recordCollections: [],
+            sidePanels: [],
+            actions: [],
+          }
+        : null,
+    )
+    const displayName = '小明的辅导助手 · 五年级'
+    const { wrapper } = mountSessionList([
+      {
+        id: 'active-normal',
+        title: '普通会话',
+        created_at: '2026-04-05T10:00:00Z',
+        updated_at: '2026-04-05T10:00:00Z',
+        message_count: 1,
+      },
+      {
+        id: 'cold-tutor',
+        title: displayName,
+        created_at: '2026-04-01T10:00:00Z',
+        updated_at: '2026-04-01T10:00:00Z',
+        message_count: 1,
+      },
+    ])
+    const agentsStore = useAgentsStore()
+    agentsStore.registeredAgents = [
+      {
+        name: 'k12-tutor-ming',
+        display_name: displayName,
+        metadata: { scenario: 'k12-parent-tutor', avatar: '🎓' },
+      },
+    ] as never
+    agentsStore.agentsLoaded = true
+    await flushPromises()
+
+    expect(wrapper.get('[data-session-id="cold-tutor"] .hc-sessions__title').text()).toBe(
+      `🎓 ${displayName}`,
+    )
+    expect(wrapper.get('[data-session-id="cold-tutor"]').classes()).toContain(
+      'hc-sessions__item--pinned',
+    )
+    expect(wrapper.findAll('.hc-sessions__section')[0]!.text()).toContain(displayName)
+    expect(wrapper.get('[data-session-id="active-normal"] .hc-sessions__title').text()).toBe(
+      '普通会话',
+    )
     scenarioRegistry.reset()
   })
 
@@ -183,11 +260,99 @@ describe('SessionList', () => {
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
-      sessionMenuItems: Array<{ id: string }>
+      sessionMenuItems: Array<{ id: string; disabled?: boolean }>
     }
     expect(vm.sessionMenuItems.map((item) => item.id)).toEqual(['rename', 'pin', 'branches', 'sep1', 'delete'])
     expect(vm.sessionMenuItems.map((item) => item.id)).not.toContain('share')
     expect(vm.sessionMenuItems.map((item) => item.id)).not.toContain('copy_title')
+    expect(vm.sessionMenuItems.find((item) => item.id === 'branches')?.disabled).toBe(true)
+  })
+
+  it('enables View branches only after the selected session is proven to have children', async () => {
+    getSessionBranches.mockResolvedValueOnce({
+      branches: [
+        {
+          id: 'branch-1',
+          title: '分支会话',
+          created_at: '2026-04-03T10:00:00Z',
+          updated_at: '2026-04-03T10:00:00Z',
+          message_count: 1,
+          parent_session_id: 's-1',
+        },
+      ],
+      total: 1,
+    })
+    const { wrapper } = mountSessionList()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      ctxSessionId: string | null
+      refreshBranchAvailability: (sessionId: string) => Promise<void>
+      sessionMenuItems: Array<{ id: string; disabled?: boolean }>
+    }
+    vm.ctxSessionId = 's-1'
+    const refresh = vm.refreshBranchAvailability('s-1')
+
+    expect(vm.sessionMenuItems.find((item) => item.id === 'branches')?.disabled).toBe(true)
+    await refresh
+    await flushPromises()
+
+    expect(getSessionBranches).toHaveBeenCalledWith('s-1')
+    expect(vm.sessionMenuItems.find((item) => item.id === 'branches')?.disabled).toBe(false)
+  })
+
+  it('keeps View branches disabled when the selected session has no children', async () => {
+    getSessionBranches.mockResolvedValueOnce({ branches: [], total: 0 })
+    const { wrapper } = mountSessionList()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      ctxSessionId: string | null
+      refreshBranchAvailability: (sessionId: string) => Promise<void>
+      sessionMenuItems: Array<{ id: string; disabled?: boolean }>
+    }
+    vm.ctxSessionId = 's-1'
+    await vm.refreshBranchAvailability('s-1')
+    await flushPromises()
+
+    expect(vm.sessionMenuItems.find((item) => item.id === 'branches')?.disabled).toBe(true)
+    expect(document.body.querySelector('[data-testid="branches-dialog"]')).toBeNull()
+  })
+
+  it('reuses the shared destructive confirmation with a five-second in-dialog cooldown', async () => {
+    vi.useFakeTimers()
+    const { wrapper, store } = mountSessionList()
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      deleteSession: (sessionId: string) => void
+    }
+    vm.deleteSession('s-1')
+    await flushPromises()
+
+    const dialog = wrapper.findComponent(ConfirmDialog)
+    expect(dialog.props('open')).toBe(true)
+    expect(dialog.props('danger')).toBe(true)
+    expect(dialog.props('confirmDelayMs')).toBe(5_000)
+    expect(dialog.props('confirmationKey')).toBe('s-1')
+
+    const confirmBtn = pendingDeleteConfirmButton()
+    expect(confirmBtn.disabled).toBe(true)
+    confirmBtn.click()
+    await flushPromises()
+    expect(store.deleteSession).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(confirmBtn.disabled).toBe(true)
+    expect(store.deleteSession).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1)
+    expect(confirmBtn.disabled).toBe(false)
+    confirmBtn.click()
+    confirmBtn.click()
+    await flushPromises()
+    expect(store.deleteSession).toHaveBeenCalledTimes(1)
+    expect(store.deleteSession).toHaveBeenCalledWith('s-1')
   })
 
   it('keeps the latest renamed title when an earlier rename request resolves later', async () => {
@@ -242,6 +407,7 @@ describe('SessionList', () => {
   })
 
   it('does not send duplicate delete requests while a session deletion is still in flight', async () => {
+    vi.useFakeTimers()
     let resolveDelete!: () => void
 
     const { wrapper, store } = mountSessionList()
@@ -262,7 +428,7 @@ describe('SessionList', () => {
     // BUG-20260703 P2-5：删除先过二次确认，确认后才真删
     await vm.handleCtxAction('delete')
     await flushPromises()
-    await confirmPendingDelete()
+    await confirmPendingDeleteAfterCooldown()
 
     // 删除在途中再点删除：直接短路（不再弹确认层、不发第二次请求）
     await vm.handleCtxAction('delete')
@@ -276,6 +442,7 @@ describe('SessionList', () => {
   })
 
   it('preserves pin state when deleting a pinned session fails', async () => {
+    vi.useFakeTimers()
     localStorage.setItem('hexclaw_pinned_sessions', JSON.stringify(['s-1']))
 
     const { wrapper, store } = mountSessionList()
@@ -291,7 +458,7 @@ describe('SessionList', () => {
     vm.ctxSessionId = 's-1'
     await vm.handleCtxAction('delete')
     await flushPromises()
-    await confirmPendingDelete() // BUG-20260703 P2-5：先过二次确认
+    await confirmPendingDeleteAfterCooldown()
 
     expect(store.deleteSession).toHaveBeenCalledWith('s-1')
     expect(wrapper.find('.hc-sessions__item--pinned').text()).toContain('第一个会话')
@@ -343,6 +510,7 @@ describe('SessionList', () => {
   })
 
   it('removes a successfully deleted paginated session from the extra-session cache', async () => {
+    vi.useFakeTimers()
     listSessions.mockResolvedValueOnce({
       sessions: [{
         id: 's-extra',
@@ -365,7 +533,7 @@ describe('SessionList', () => {
     vm.ctxSessionId = 's-extra'
     await vm.handleCtxAction('delete')
     await flushPromises()
-    await confirmPendingDelete()
+    await confirmPendingDeleteAfterCooldown()
 
     expect(store.deleteSession).toHaveBeenCalledWith('s-extra')
     expect(wrapper.text()).not.toContain('分页旧会话')

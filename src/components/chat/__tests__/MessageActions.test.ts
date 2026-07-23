@@ -144,46 +144,38 @@ describe('MessageActions', () => {
   })
 
   it('keeps assistant delete inside the More menu', async () => {
-    vi.useFakeTimers()
     const wrapper = mountMessageActions(null)
     expect(wrapper.find('.hc-msg-actions > [data-testid="message-delete"]').exists()).toBe(false)
     await wrapper.get('[data-testid="message-more"]').trigger('click')
     const deleteBtn = wrapper.get('[data-testid="message-delete"]')
     expect(deleteBtn.attributes('title')).toBe(zhCN.common.delete)
     expect(deleteBtn.text()).toBe('删除')
-    expect(deleteBtn.attributes('disabled')).toBeDefined()
-    await vi.advanceTimersByTimeAsync(10_000)
     expect(deleteBtn.attributes('disabled')).toBeUndefined()
     expect(wrapper.get('[data-testid="message-fork"]').text()).toContain('创建分支')
     await deleteBtn.trigger('click')
     expect(wrapper.emitted('delete')).toHaveLength(1)
-    vi.useRealTimers()
+    expect(wrapper.get('[role="menu"]').isVisible()).toBe(false)
   })
 
   it('keeps user delete inside the More menu', async () => {
-    vi.useFakeTimers()
     const wrapper = mountUserMessageActions()
     expect(wrapper.find('.hc-msg-actions > [data-testid="message-delete"]').exists()).toBe(false)
     await wrapper.get('[data-testid="message-more"]').trigger('click')
     const deleteBtn = wrapper.get('[data-testid="message-delete"]')
     expect(deleteBtn.attributes('title')).toBe(zhCN.common.delete)
     expect(deleteBtn.text()).toBe('删除')
-    expect(deleteBtn.attributes('disabled')).toBeDefined()
-    await vi.advanceTimersByTimeAsync(10_000)
     expect(deleteBtn.attributes('disabled')).toBeUndefined()
     await deleteBtn.trigger('click')
     expect(wrapper.emitted('delete')).toHaveLength(1)
-    vi.useRealTimers()
+    expect(wrapper.get('[role="menu"]').isVisible()).toBe(false)
   })
 
-  it('closes the More menu with Escape, resets delete cooldown, and restores trigger focus', async () => {
-    vi.useFakeTimers()
+  it('closes the More menu with Escape and restores trigger focus', async () => {
     const wrapper = mountMessageActions(null)
     document.body.appendChild(wrapper.element)
     const moreButton = wrapper.get<HTMLButtonElement>('[data-testid="message-more"]')
 
     await moreButton.trigger('click')
-    await vi.advanceTimersByTimeAsync(10_000)
     expect(wrapper.get('[data-testid="message-delete"]').attributes('disabled')).toBeUndefined()
 
     moreButton.element.blur()
@@ -194,9 +186,8 @@ describe('MessageActions', () => {
     expect(document.activeElement).toBe(moreButton.element)
 
     await moreButton.trigger('click')
-    expect(wrapper.get('[data-testid="message-delete"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="message-delete"]').attributes('disabled')).toBeUndefined()
     wrapper.unmount()
-    vi.useRealTimers()
   })
 
   it('keeps the destructive menu compact while retaining an explicit trash icon and label', () => {

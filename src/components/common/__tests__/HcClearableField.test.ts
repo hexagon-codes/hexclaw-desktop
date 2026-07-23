@@ -2,6 +2,7 @@ import { defineComponent, nextTick, ref } from 'vue'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import HcClearableField from '../HcClearableField.vue'
+import clearableSource from '../HcClearableField.vue?raw'
 
 function mountTextField(initial = 'filled') {
   return mount(defineComponent({
@@ -18,6 +19,12 @@ function mountTextField(initial = 'filled') {
 }
 
 describe('HcClearableField', () => {
+  it('owns a full-width, min-width-safe field contract for every slotted input and textarea', () => {
+    expect(clearableSource).toMatch(
+      /\.hc-clearable-field\s+:deep\(input\),[\s\S]*?\.hc-clearable-field\s+:deep\(textarea\)\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/s,
+    )
+  })
+
   it('shows a real clear button only while an editable field has content', async () => {
     const wrapper = mountTextField()
     await nextTick()

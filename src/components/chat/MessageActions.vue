@@ -38,9 +38,7 @@ const emit = defineEmits<{
 
 const copied = ref(false)
 const menuOpen = ref(false)
-const deleteReady = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
-let deleteUnlockTimer: ReturnType<typeof setTimeout> | null = null
 const activeFeedback = computed(() => props.feedback ?? null)
 // F4：整条全是代码块/纯图片时 plainText 为空 → 朗读无意义。禁用喇叭而非"点了没反应"。
 const speakable = computed(() => plainText(props.content).length > 0)
@@ -93,22 +91,13 @@ function toggleMore() {
     return
   }
   menuOpen.value = true
-  deleteReady.value = false
-  deleteUnlockTimer = setTimeout(() => {
-    deleteReady.value = true
-    deleteUnlockTimer = null
-  }, 10_000)
 }
 
 function closeMore() {
   menuOpen.value = false
-  deleteReady.value = false
-  if (deleteUnlockTimer) clearTimeout(deleteUnlockTimer)
-  deleteUnlockTimer = null
 }
 
 function runMenuAction(action: 'fork' | 'delete') {
-  if (action === 'delete' && !deleteReady.value) return
   closeMore()
   if (action === 'fork') emit('fork')
   else emit('delete')
@@ -130,7 +119,6 @@ onMounted(() => {
   document.addEventListener('keydown', onDocumentKeydown)
 })
 onBeforeUnmount(() => {
-  if (deleteUnlockTimer) clearTimeout(deleteUnlockTimer)
   document.removeEventListener('mousedown', onDocumentMouseDown, true)
   document.removeEventListener('keydown', onDocumentKeydown)
 })
@@ -248,7 +236,6 @@ onBeforeUnmount(() => {
           class="hc-msg-actions__danger"
           data-testid="message-delete"
           :title="t('common.delete')"
-          :disabled="!deleteReady"
           @click="runMenuAction('delete')"
         >
           <Trash2 :size="14" aria-hidden="true" />
@@ -420,16 +407,6 @@ onBeforeUnmount(() => {
 
 .hc-msg-actions__more-menu .hc-msg-actions__danger {
   color: var(--hc-error);
-}
-
-.hc-msg-actions__more-menu .hc-msg-actions__danger:disabled {
-  color: var(--hc-text-muted);
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
-.hc-msg-actions__more-menu .hc-msg-actions__danger:disabled:hover {
-  background: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

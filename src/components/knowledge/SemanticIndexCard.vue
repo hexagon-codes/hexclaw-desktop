@@ -8,7 +8,8 @@
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { AlertCircle, ChevronDown, Layers, LoaderCircle } from 'lucide-vue-next'
+import { AlertCircle, Layers, LoaderCircle } from 'lucide-vue-next'
+import HcSettingsDisclosure from '@/components/common/HcSettingsDisclosure.vue'
 import EmbeddingStatusBanner from './EmbeddingStatusBanner.vue'
 import EmbeddingProfileSelect from './EmbeddingProfileSelect.vue'
 import SemanticRebuildCancelDialog from './SemanticRebuildCancelDialog.vue'
@@ -60,7 +61,7 @@ const errorDetail = ref('')
 const pollErrorDetail = ref('')
 const announcement = ref('')
 const trackedJobId = ref<string | null>(null)
-const headerRef = ref<HTMLButtonElement | null>(null)
+const headerRef = ref<{ focus: () => void } | null>(null)
 const selectorRef = ref<{ containsFocus: () => boolean } | null>(null)
 const providerDocsUrl = computed(() => thirdPartyAiServicesUrl(locale.value))
 const observedModelPulls = new Map<string, Promise<void>>()
@@ -724,28 +725,26 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
     </button>
   </section>
 
-  <section
+  <HcSettingsDisclosure
     v-else-if="mode === 'policy' && policy"
+    ref="headerRef"
+    v-model="expanded"
     class="kb-index-card"
-    :class="{ 'kb-index-card--collapsed': !expanded }"
     data-testid="kb-semantic-index-card"
+    body-id="kb-semantic-index-body"
+    trigger-test-id="kb-semantic-index-header"
+    panel-test-id="kb-semantic-index-body"
   >
-    <button
-      ref="headerRef"
-      type="button"
-      class="kb-index-card__header"
-      data-testid="kb-semantic-index-header"
-      :aria-expanded="expanded"
-      aria-controls="kb-semantic-index-body"
-      @click="expanded = !expanded"
-    >
-      <span class="kb-index-card__icon">
-        <Layers :size="13" data-testid="kb-semantic-index-layers-icon" aria-hidden="true" />
-      </span>
-      <span class="kb-index-card__title">{{ t('knowledge.semanticIndex.title', '语义索引') }}</span>
+    <template #icon>
+      <Layers :size="13" data-testid="kb-semantic-index-layers-icon" aria-hidden="true" />
+    </template>
+    <template #title>{{ t('knowledge.semanticIndex.title', '语义索引') }}</template>
+    <template #summary>
       <span class="kb-index-card__summary" data-testid="kb-semantic-index-summary">
         {{ summaryRoute }}
       </span>
+    </template>
+    <template #status>
       <span
         class="kb-index-card__status"
         :class="`kb-index-card__status--${summaryTone}`"
@@ -753,20 +752,9 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
       >
         {{ summaryStatus }}
       </span>
-      <ChevronDown
-        :size="13"
-        class="kb-index-card__chevron"
-        :class="{ 'kb-index-card__chevron--open': expanded }"
-        aria-hidden="true"
-      />
-    </button>
+    </template>
 
-    <div
-      v-show="expanded"
-      id="kb-semantic-index-body"
-      class="kb-index-card__body"
-      data-testid="kb-semantic-index-body"
-    >
+    <div class="kb-index-card__body">
       <div class="kb-index-card__setting">
         <div class="kb-index-card__setting-copy">
           <b>{{ t('knowledge.semanticIndex.modelLabel', '索引模型') }}</b>
@@ -840,8 +828,10 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
         {{ visibleError }}
       </p>
     </div>
-    <p class="sr-only" aria-live="polite" aria-atomic="true">{{ liveStatusText }}</p>
-  </section>
+    <template #after>
+      <p class="sr-only" aria-live="polite" aria-atomic="true">{{ liveStatusText }}</p>
+    </template>
+  </HcSettingsDisclosure>
 
   <SemanticRebuildCancelDialog
     :open="cancelConfirmOpen"
@@ -875,53 +865,8 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
   box-shadow: 0 1px 1px color-mix(in srgb, var(--hc-text-primary) 3%, transparent);
 }
 
-.kb-index-card__header {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--hc-text-muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  text-align: left;
-  cursor: pointer;
-  transition: color 0.15s var(--hc-ease-smooth, ease);
-}
-
-.kb-index-card__header:hover {
-  color: var(--hc-text-secondary);
-}
-
-.kb-index-card__header:focus-visible {
-  border-radius: 6px;
-  outline: 2px solid var(--hc-accent);
-  outline-offset: 3px;
-}
-
-.kb-index-card__icon {
-  width: 13px;
-  height: 13px;
-  display: grid;
-  place-items: center;
-  flex: none;
-  color: currentColor;
-}
-
-.kb-index-card__title {
-  color: var(--hc-text-primary);
-  font-size: 12px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .kb-index-card__summary {
-  min-width: 0;
-  max-width: 45%;
-  margin-left: auto;
+  display: block;
   overflow: hidden;
   color: var(--hc-text-muted);
   font-size: 11.5px;
@@ -959,25 +904,10 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
   box-shadow: none;
 }
 
-.kb-index-card__chevron {
-  flex: none;
-  color: currentColor;
-  transition: transform 0.18s var(--hc-ease-out, ease-out);
-}
-
-.kb-index-card__chevron--open {
-  transform: rotate(180deg);
-}
-
 .kb-index-card__body {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  margin-top: 10px;
-  padding: 14px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-lg, 14px);
-  background: var(--hc-bg-card);
 }
 
 .kb-index-card__setting {
@@ -1126,10 +1056,6 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 }
 
 @container (max-width: 520px) {
-  .kb-index-card__summary {
-    max-width: 36%;
-  }
-
   .kb-index-card__setting {
     align-items: flex-start;
     flex-wrap: wrap;
@@ -1145,10 +1071,6 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 }
 
 @container (max-width: 420px) {
-  .kb-index-card__summary {
-    max-width: 28%;
-  }
-
   .kb-index-card__actual {
     flex-wrap: wrap;
   }
@@ -1163,21 +1085,9 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 }
 
 @container (max-width: 360px) {
-  .kb-index-card__summary {
-    display: none;
-  }
-
-  .kb-index-card__header {
-    gap: 7px;
-  }
-
   .kb-index-card__status {
     margin-left: auto;
     font-size: 10.5px;
-  }
-
-  .kb-index-card__body {
-    padding-inline: 13px;
   }
 
   .kb-index-card__selector {
@@ -1186,7 +1096,6 @@ const visibleError = computed(() => errorDetail.value || pollErrorDetail.value)
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .kb-index-card__chevron,
   .kb-index-card__spinner {
     transition: none;
     animation: none;

@@ -71,10 +71,38 @@ describe('SessionList ChatGPT-style row actions', () => {
     expect(text).toContain('查看分支')
     expect(text).toContain('删除')
     expect(menuItems).toContain('删除⌫')
+    const branchesItem = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>('.hc-ctx__item'),
+    ).find((item) => item.textContent?.trim() === '查看分支')
+    expect(branchesItem?.disabled).toBe(true)
     expect(menuItems).not.toContain('删除会话⌫')
     expect(text).not.toContain('分享')
     expect(text).not.toContain('复制标题')
     expect(wrapper.find('.hc-sessions__delete').exists()).toBe(false)
+  })
+
+  it('enables the same View branches menu item when the backend reports child sessions', async () => {
+    getSessionBranches.mockResolvedValueOnce({
+      branches: [
+        {
+          id: 'branch-1',
+          title: '分支会话',
+          created_at: '2026-07-23T10:00:00Z',
+          updated_at: '2026-07-23T10:00:00Z',
+          message_count: 1,
+          parent_session_id: 's-1',
+        },
+      ],
+      total: 1,
+    })
+    const { wrapper } = mountList()
+    await flushPromises()
+    await openActions(wrapper)
+
+    const branchesItem = Array.from(
+      document.body.querySelectorAll<HTMLButtonElement>('.hc-ctx__item'),
+    ).find((item) => item.textContent?.trim() === '查看分支')
+    expect(branchesItem?.disabled).toBe(false)
   })
 
   it('renders adjacent direct pin and ellipsis controls with measured ChatGPT geometry', async () => {
