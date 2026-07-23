@@ -6,6 +6,9 @@ test.use({
 })
 
 const now = '2026-07-23T12:00:00.000Z'
+const k12Agent = 'k12-tutor-current-source'
+const k12Session = 'session-current-source'
+const k12AssetFile = 'current-source-art.svg'
 
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
@@ -317,10 +320,12 @@ const mcpMarketplace = [
 ]
 
 async function installCurrentSourceMocks(page: Page) {
-  await page.addInitScript(() => {
+  await page.addInitScript(({ agent, session }) => {
     localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
     sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
-  })
+    localStorage.setItem('hexclaw_lastSessionId', session)
+    localStorage.setItem('hexclaw_sessionAgents', JSON.stringify({ [session]: agent }))
+  }, { agent: k12Agent, session: k12Session })
 
   await page.route('http://localhost:11434/**', (route) =>
     json(route, { models: [], version: 'test' }),
@@ -336,6 +341,69 @@ async function installCurrentSourceMocks(page: Page) {
         knowledge: { enabled: true },
         llm: { default: '', providers: {}, routing: { enabled: false }, cache: {} },
       })
+    }
+    if (path === '/api/v1/config/llm' && method === 'GET') {
+      return json(route, {
+        default: '',
+        providers: {},
+        routing: { enabled: false },
+        cache: { enabled: false },
+      })
+    }
+    if (path === '/api/v1/ollama/status') {
+      return json(route, { running: false, associated: false, models: [] })
+    }
+    if (path === '/api/v1/roles') return json(route, { roles: [], total: 0 })
+    if (path === '/api/v1/streams/active') return json(route, { streams: [], total: 0 })
+    if (path === '/api/v1/agents') {
+      return json(route, {
+        agents: [
+          {
+            name: k12Agent,
+            display_name: '小明的辅导助手',
+            description: '五年级下 · 各学科教材独立绑定',
+            provider: '',
+            model: '',
+            metadata: {
+              scenario: 'k12-tutor',
+              'k12.child_name': '小明',
+              'k12.learner_id': 'learner-current-source',
+              'k12.grade_term': '五年级下',
+            },
+          },
+        ],
+        total: 1,
+        default: k12Agent,
+      })
+    }
+    if (method === 'GET' && path === '/api/v1/sessions') {
+      return json(route, {
+        sessions: [
+          {
+            id: k12Session,
+            title: '小明的辅导助手',
+            created_at: now,
+            updated_at: now,
+            message_count: 0,
+          },
+        ],
+        total: 1,
+      })
+    }
+    if (method === 'GET' && path === `/api/v1/sessions/${k12Session}/messages`) {
+      return json(route, { messages: [], total: 0 })
+    }
+    if (method === 'GET' && path === `/api/v1/sessions/${k12Session}/artifacts`) {
+      return json(route, { artifacts: [], total: 0 })
+    }
+    if (path === '/api/v1/prompts/all' || path === '/api/v1/prompts') {
+      return json(route, { prompts: [], total: 0 })
+    }
+    if (path === '/api/v1/webhooks' && method === 'GET') {
+      if (requestUrl.searchParams.has('agent_id')) {
+        return json(route, { k12_bindings: [], total: 0 })
+      }
+      return json(route, { webhooks: [], total: 0 })
     }
     if (path === '/api/v1/knowledge/documents' && method === 'GET') {
       return json(route, {
@@ -449,6 +517,65 @@ async function installCurrentSourceMocks(page: Page) {
     }
     if (path === '/api/v1/mcp/status') {
       return json(route, { statuses: { filesystem: 'connected' }, total: 1 })
+    }
+    if (path === '/api/k12/view-descriptor') {
+      return json(route, {
+        header_tabs: ['辅导', '学习档案', '学情'],
+        message_badges: [],
+        composer_placeholder: '',
+        composer_chips: [],
+        record_collections: [],
+        side_panels: [],
+        actions: [],
+        i18n_keys: [],
+        schema_version: 1,
+      })
+    }
+    if (
+      path === '/api/k12/mistakes' ||
+      path === '/api/k12/review-queue' ||
+      path === '/api/k12/accumulation' ||
+      path === '/api/k12/practice-sets'
+    ) {
+      return json(route, { items: [] })
+    }
+    if (path === '/api/k12/insight-report') {
+      return json(route, {
+        trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
+        weak_top3: [],
+        consecutive_fail_kps: [],
+        month_new_mistakes: 0,
+        review_completion_rate: -1,
+      })
+    }
+    if (path === '/api/k12/creative-works' && method === 'GET') {
+      return json(route, {
+        items: [
+          {
+            record_id: 'work-current-source',
+            work_type: 'art',
+            title: '彩虹下的女孩和小猫',
+            task: '观察画面中的主体、动物、彩虹与装饰元素',
+            intent: '用明亮色彩表达快乐',
+            status: 'feedback_ready',
+            status_label: '已点评',
+            versions: [
+              {
+                version_id: 'version-current-source',
+                source_asset_id: `asset://${k12Agent}/${k12AssetFile}`,
+                feedback: '主体清晰，色彩关系完整。',
+              },
+            ],
+          },
+        ],
+      })
+    }
+    if (path === `/api/k12/assets/${k12AssetFile}` && method === 'GET') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'image/svg+xml',
+        body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="240"><rect width="320" height="240" fill="#eff7ff"/><circle cx="160" cy="105" r="54" fill="#ffb6d5"/><path d="M45 115 Q160 -5 275 115" fill="none" stroke="#5aa8ef" stroke-width="16"/><text x="160" y="205" text-anchor="middle" font-size="24" fill="#173854">作品预览</text></svg>',
+      })
     }
 
     return json(route, {})
@@ -595,6 +722,227 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
 
     await page.screenshot({
       path: 'test-results/bug-20260723-knowledge-layout-runtime.png',
+      fullPage: true,
+    })
+  })
+
+  test('Prompt editor keeps the approved 600px form track and collapses paired fields only when narrow', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.goto('/integration/prompts', { waitUntil: 'domcontentloaded' })
+    await page.getByRole('button', { name: /新建 Prompt/ }).click()
+
+    const dialog = page.getByTestId('prompt-editor-dialog')
+    await expect(dialog).toBeVisible()
+    const desktop = await dialog.evaluate((node) => {
+      const rect = node.getBoundingClientRect()
+      const body = node.querySelector('.hc-modal-body') as HTMLElement | null
+      const tracks = [...node.querySelectorAll('.hc-clearable-field')].map((wrapper) => {
+        const control = wrapper.querySelector('input, textarea') as HTMLElement | null
+        if (!control) throw new Error('prompt control is unavailable')
+        const wrapperRect = wrapper.getBoundingClientRect()
+        const controlRect = control.getBoundingClientRect()
+        return {
+          wrapperWidth: wrapperRect.width,
+          controlWidth: controlRect.width,
+        }
+      })
+      if (!body) throw new Error('prompt body is unavailable')
+      return {
+        width: rect.width,
+        insideViewport: rect.left >= 0 && rect.right <= innerWidth,
+        overflow: body.scrollWidth - body.clientWidth,
+        tracks,
+      }
+    })
+    expect(desktop.width).toBeGreaterThanOrEqual(598)
+    expect(desktop.width).toBeLessThanOrEqual(602)
+    expect(desktop.insideViewport).toBe(true)
+    expect(desktop.overflow).toBeLessThanOrEqual(1)
+    for (const track of desktop.tracks) {
+      expect(Math.abs(track.wrapperWidth - track.controlWidth)).toBeLessThanOrEqual(1)
+    }
+    await page.screenshot({
+      path: 'test-results/bug-20260723-prompt-modal-runtime.png',
+      fullPage: true,
+    })
+
+    await page.setViewportSize({ width: 520, height: 760 })
+    const narrow = await dialog.evaluate((node) => {
+      const rect = node.getBoundingClientRect()
+      const body = node.querySelector('.hc-modal-body') as HTMLElement | null
+      const pair = node.querySelector('.hc-field--row') as HTMLElement | null
+      if (!body || !pair) throw new Error('prompt narrow geometry is unavailable')
+      return {
+        width: rect.width,
+        insideViewport: rect.left >= 0 && rect.right <= innerWidth,
+        overflow: body.scrollWidth - body.clientWidth,
+        pairDirection: getComputedStyle(pair).flexDirection,
+      }
+    })
+    expect(narrow.width).toBeLessThanOrEqual(488)
+    expect(narrow.insideViewport).toBe(true)
+    expect(narrow.overflow).toBeLessThanOrEqual(1)
+    expect(narrow.pairDirection).toBe('column')
+    await page.screenshot({
+      path: 'test-results/bug-20260723-prompt-modal-narrow-runtime.png',
+      fullPage: true,
+    })
+  })
+
+  test('K12 Webhook editor keeps a scrollable body, fixed actions and full-width controls', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 760 })
+    await page.goto('/automation/webhooks', { waitUntil: 'domcontentloaded' })
+
+    const panel = page.getByTestId('k12-webhook-panel')
+    await expect(panel).toBeVisible()
+    await expect(panel.getByTestId('k12-webhook-create-open')).toBeEnabled()
+    await panel.getByTestId('k12-webhook-create-open').click()
+
+    const overlay = page.getByTestId('k12-webhook-editor-dialog')
+    const dialog = overlay.locator('.k12wh__dialog--editor')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByTestId('k12-webhook-editor-cancel')).toBeVisible()
+    const geometry = await dialog.evaluate((node) => {
+      const body = node.querySelector('.k12wh__editor-body') as HTMLElement | null
+      const footer = node.querySelector('.k12wh__editor-footer') as HTMLElement | null
+      const field = node.querySelector('.hc-clearable-field') as HTMLElement | null
+      const input = field?.querySelector('input') as HTMLElement | null
+      if (!body || !footer || !field || !input) throw new Error('webhook editor geometry missing')
+      const nodeRect = node.getBoundingClientRect()
+      const fieldRect = field.getBoundingClientRect()
+      const inputRect = input.getBoundingClientRect()
+      return {
+        insideViewport:
+          nodeRect.left >= 0 &&
+          nodeRect.right <= innerWidth &&
+          nodeRect.top >= 0 &&
+          nodeRect.bottom <= innerHeight,
+        bodyOverflow: body.scrollWidth - body.clientWidth,
+        fieldDelta: Math.abs(fieldRect.width - inputRect.width),
+        rows: getComputedStyle(node).gridTemplateRows.split(/\s+/).length,
+        footerBorder: getComputedStyle(footer).borderTopWidth,
+      }
+    })
+    expect(geometry.insideViewport).toBe(true)
+    expect(geometry.bodyOverflow).toBeLessThanOrEqual(1)
+    expect(geometry.fieldDelta).toBeLessThanOrEqual(1)
+    expect(geometry.rows).toBe(3)
+    expect(Number.parseFloat(geometry.footerBorder)).toBeGreaterThan(0)
+    await page.screenshot({
+      path: 'test-results/bug-20260723-k12-webhook-modal-runtime.png',
+      fullPage: true,
+    })
+
+    await page.setViewportSize({ width: 390, height: 680 })
+    await expect(dialog).toBeInViewport()
+    await expect(dialog.getByTestId('k12-webhook-editor-cancel')).toBeInViewport()
+    await page.screenshot({
+      path: 'test-results/bug-20260723-k12-webhook-modal-narrow-runtime.png',
+      fullPage: true,
+    })
+  })
+
+  test('K12 works keep a two-column archive, bounded add/detail dialogs and keyboard image preview', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await page.goto(
+      `/chat?role=${encodeURIComponent(k12Agent)}&roleTitle=${encodeURIComponent('小明的辅导助手')}&scenarioTab=records`,
+      { waitUntil: 'domcontentloaded' },
+    )
+    await expect(page.locator('.k12rec')).toBeVisible({ timeout: 20_000 })
+    await page.getByTestId('subtab-works').click()
+
+    const works = page.getByTestId('works-section')
+    await expect(works).toBeVisible()
+    await expect(works.getByTestId('cw-list')).toBeVisible()
+    const list = await works.getByTestId('cw-list').evaluate((node) => ({
+      columns: getComputedStyle(node).gridTemplateColumns.split(/\s+/).filter(Boolean).length,
+      overflow: node.scrollWidth - node.clientWidth,
+    }))
+    expect(list.columns).toBe(2)
+    expect(list.overflow).toBeLessThanOrEqual(1)
+
+    await page.getByTestId('cw-add-open').click()
+    const addOverlay = page.getByTestId('cw-add-modal')
+    const addDialog = addOverlay.getByRole('dialog')
+    await expect(addDialog).toBeVisible()
+    const addGeometry = await addDialog.evaluate((node) => {
+      const body = node.querySelector('.k12cw-modal__body') as HTMLElement | null
+      const footer = node.querySelector('.k12cw-modal__foot') as HTMLElement | null
+      const tracks = [...node.querySelectorAll('.hc-clearable-field')].map((wrapper) => {
+        const control = wrapper.querySelector('input, textarea') as HTMLElement | null
+        if (!control) throw new Error('work form control missing')
+        return Math.abs(wrapper.getBoundingClientRect().width - control.getBoundingClientRect().width)
+      })
+      const rect = node.getBoundingClientRect()
+      if (!body || !footer) throw new Error('work modal geometry missing')
+      return {
+        width: rect.width,
+        insideViewport:
+          rect.left >= 0 &&
+          rect.right <= innerWidth &&
+          rect.top >= 0 &&
+          rect.bottom <= innerHeight,
+        bodyOverflow: body.scrollWidth - body.clientWidth,
+        footerVisible: footer.getBoundingClientRect().bottom <= innerHeight,
+        tracks,
+      }
+    })
+    expect(addGeometry.width).toBeGreaterThanOrEqual(476)
+    expect(addGeometry.width).toBeLessThanOrEqual(480)
+    expect(addGeometry.insideViewport).toBe(true)
+    expect(addGeometry.bodyOverflow).toBeLessThanOrEqual(1)
+    expect(addGeometry.footerVisible).toBe(true)
+    expect(addGeometry.tracks.every((delta) => delta <= 1)).toBe(true)
+    await page.screenshot({
+      path: 'test-results/bug-20260723-k12-add-work-modal-runtime.png',
+      fullPage: true,
+    })
+    await addDialog.locator('.k12cw-modal__foot').getByRole('button', { name: '取消' }).click()
+
+    const thumb = works.getByTestId('cw-thumb')
+    await thumb.focus()
+    await page.keyboard.press('Enter')
+    const preview = page.getByTestId('cw-image-preview')
+    await expect(preview).toBeVisible()
+    await expect(preview).toBeFocused()
+    await expect(preview.locator('img')).toHaveAttribute('src', new RegExp(k12AssetFile))
+    await page.screenshot({
+      path: 'test-results/bug-20260723-k12-work-image-preview-runtime.png',
+      fullPage: true,
+    })
+    await page.keyboard.press('Escape')
+    await expect(preview).toHaveCount(0)
+    await expect(thumb).toBeFocused()
+
+    await works.getByTestId('cw-detail-toggle').click()
+    const detail = page.getByTestId('cw-detail-modal')
+    await expect(detail).toBeVisible()
+    const detailGeometry = await detail.evaluate((node) => {
+      const rect = node.getBoundingClientRect()
+      const body = node.querySelector('.k12cw-detail-modal__body') as HTMLElement | null
+      const footer = node.querySelector('.k12cw-detail-modal__foot') as HTMLElement | null
+      if (!body || !footer) throw new Error('work detail geometry missing')
+      return {
+        insideViewport:
+          rect.left >= 0 &&
+          rect.right <= innerWidth &&
+          rect.top >= 0 &&
+          rect.bottom <= innerHeight,
+        bodyOverflow: body.scrollWidth - body.clientWidth,
+        footerVisible: footer.getBoundingClientRect().bottom <= innerHeight,
+      }
+    })
+    expect(detailGeometry.insideViewport).toBe(true)
+    expect(detailGeometry.bodyOverflow).toBeLessThanOrEqual(1)
+    expect(detailGeometry.footerVisible).toBe(true)
+    await page.screenshot({
+      path: 'test-results/bug-20260723-k12-work-detail-runtime.png',
       fullPage: true,
     })
   })

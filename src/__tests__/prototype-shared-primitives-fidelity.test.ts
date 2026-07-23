@@ -47,7 +47,7 @@ describe('prototype shared primitive fidelity', () => {
     const disabled = cssRule(global, '.hc-btn:disabled')
 
     expect(primaryHover).toMatch(/background:\s*linear-gradient\(180deg,\s*#67b8ec 0%,\s*#4f9fe1 100%\)/)
-    expect(primaryHover).toMatch(/transform:\s*translateY\(-1px\)/)
+    expect(primaryHover).not.toMatch(/transform\s*:/)
     expect(primaryHover).toMatch(/box-shadow:\s*0 10px 26px rgba\(95,\s*179,\s*234,\s*0\.34\)/)
     expect(primaryHover).not.toContain('filter:')
     expect(primaryActive).toMatch(/transform:\s*translateY\(0\) scale\(0\.98\)/)
