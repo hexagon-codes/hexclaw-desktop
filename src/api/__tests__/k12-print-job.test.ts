@@ -108,8 +108,8 @@ describe('DD-023A Practice PrintJob API contract', () => {
 
     await k12PrepareGenericPrintJob({
       agent: 'tutor-a',
-      idempotency_key: 'desktop:prep:1',
-      source_kind: 'prep_card',
+      idempotency_key: 'desktop:tutoring-tips:1',
+      source_kind: 'tutoring_tips',
       source_ref: 'submission:s1',
       title: '这份作业的辅导要点',
       canonical_markdown: '# 辅导要点\n\n小数点对齐',
@@ -118,8 +118,8 @@ describe('DD-023A Practice PrintJob API contract', () => {
 
     expect(h.post).toHaveBeenCalledWith('/api/k12/print-jobs', {
       agent: 'tutor-a',
-      idempotency_key: 'desktop:prep:1',
-      source_kind: 'prep_card',
+      idempotency_key: 'desktop:tutoring-tips:1',
+      source_kind: 'tutoring_tips',
       source_ref: 'submission:s1',
       title: '这份作业的辅导要点',
       canonical_markdown: '# 辅导要点\n\n小数点对齐',

@@ -1,5 +1,5 @@
 /**
- * K12 家长备课助手后端契约（/api/k12/*）。
+ * K12 家长辅导助手后端契约（/api/k12/*）。
  * DTO 与后端 scenarios/k12/apihttp/handler.go 的 json tag 1:1 对齐（前端类型即契约）。
  *
  * 注意：K12 端点**不需要 user_id**，隔离键是 `agent`（= agents.name）。
@@ -214,30 +214,95 @@ export function k12ReviewRetry(req: ReviewRetryReq, signal?: AbortSignal) {
   return apiPost<ReviewRetryResp>(`${BASE}/review/retry`, req, { timeout: 120_000, signal })
 }
 
-// ── prep-card（备课卡，只读五段）─────────────────────────────
-export interface PrepCardReq {
+// ── tutoring-tips（辅导要点，固定三段）─────────────────────────────
+export interface TutoringTipsReq {
   agent: string
-  grade: string
-  /** 当前作业学科；用于 Learner × Subject 教材隔离检索。 */
-  subject?: string
-  knowledge_points?: string[]
+  /** 已由家长确认并冻结 canonical 输入的当前批改 Job。 */
+  grading_job_id: string
 }
 
-/** source_label 是带 emoji 的中文串（📖 依据课本 / 🤖 AI 归纳·供参考（未校验）/ ⚠️ 本次未生成·请核对 / 🗂 本地记录 / ✅ 已程序验算 / 🧠 学情信号） */
-export interface PrepSectionDTO {
+/** source_label 只承载原型三类来源：📖 依据课本 / 🧠 学情信号 / 🤖 AI 归纳·供参考。 */
+export interface TutoringTipsSectionDTO {
   title: string
   content: string
   source_label: string
 }
 
-export interface PrepCardResp {
+export interface TutoringTipsResp {
   knowledge_points: string[]
-  sections: PrepSectionDTO[]
+  sections: [TutoringTipsSectionDTO, TutoringTipsSectionDTO, TutoringTipsSectionDTO]
 }
 
-export function k12PrepCard(req: PrepCardReq, signal?: AbortSignal) {
+const TUTORING_TIPS_SOURCE_LABELS = new Set([
+  '📖 依据课本',
+  '🧠 学情信号',
+  '🤖 AI 归纳·供参考',
+])
+
+function assertTutoringTipsResp(value: unknown): asserts value is TutoringTipsResp {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('invalid tutoring tips response')
+  }
+  const response = value as Record<string, unknown>
+  const keys = Object.keys(response).sort()
+  if (keys.length !== 2 || keys[0] !== 'knowledge_points' || keys[1] !== 'sections') {
+    throw new Error('invalid tutoring tips response fields')
+  }
+  if (
+    !Array.isArray(response.knowledge_points) ||
+    !response.knowledge_points.every((item) => typeof item === 'string') ||
+    !Array.isArray(response.sections) ||
+    response.sections.length !== 3
+  ) {
+    throw new Error('invalid tutoring tips response shape')
+  }
+
+  const sections = response.sections as unknown[]
+  for (const section of sections) {
+    if (!section || typeof section !== 'object' || Array.isArray(section)) {
+      throw new Error('invalid tutoring tips section')
+    }
+    const record = section as Record<string, unknown>
+    const sectionKeys = Object.keys(record).sort()
+    if (
+      sectionKeys.length !== 3 ||
+      sectionKeys[0] !== 'content' ||
+      sectionKeys[1] !== 'source_label' ||
+      sectionKeys[2] !== 'title' ||
+      typeof record.title !== 'string' ||
+      typeof record.content !== 'string' ||
+      typeof record.source_label !== 'string' ||
+      !TUTORING_TIPS_SOURCE_LABELS.has(record.source_label)
+    ) {
+      throw new Error('invalid tutoring tips section fields')
+    }
+    if (/热身|warm[ -]?up/i.test(`${record.title}\n${record.content}`)) {
+      throw new Error('invalid tutoring tips warm-up section')
+    }
+  }
+  const titles = sections.map((section) => (section as TutoringTipsSectionDTO).title.trim())
+  if (
+    titles[0] !== '这页在练什么' ||
+    !titles[1]?.endsWith('要留意') ||
+    titles[2] !== '每道题怎么带（不直接给答案）'
+  ) {
+    throw new Error('invalid tutoring tips section order')
+  }
+}
+
+export async function k12TutoringTips(req: TutoringTipsReq, signal?: AbortSignal) {
+  const body: TutoringTipsReq = {
+    agent: req.agent.trim(),
+    grading_job_id: req.grading_job_id.trim(),
+  }
+  if (!body.agent || !body.grading_job_id) throw new Error('untrusted tutoring tips scope')
   // LLM 生成辅导要点，默认 30s 会腰斩→「Fetch is aborted」（BUG-20260712-T1 真机取证）
-  return apiPost<PrepCardResp>(`${BASE}/prep-card`, req, { timeout: 120_000, signal })
+  const response = await apiPost<unknown>(`${BASE}/tutoring-tips`, body, {
+    timeout: 120_000,
+    signal,
+  })
+  assertTutoringTipsResp(response)
+  return response
 }
 
 // ── grounding（家长教材原文，按 agent scope 写入）──────────
@@ -618,8 +683,23 @@ export interface RecognizedQuestion {
 // 桌面编排改道（执行计划 §3.4「入口自编排」收敛）：上传照片 → 创建 Job（后端异步推进）
 // → 轮询到 awaiting_confirmation（响应携带识别停点产物）→ 确认/修正 → 轮询到 completed
 // → 取逐题批改结果渲染。DTO 与 scenarios/k12/apihttp/gradingjob_handler.go 1:1 对齐。
+export type GradingJobStage =
+  | 'queued'
+  | 'normalizing'
+  | 'recognizing'
+  | 'locating'
+  | 'awaiting_confirmation'
+  | 'assessing'
+  | 'rendering'
+  | 'projecting'
+  | 'completed'
+  | 'cancelled'
+  | 'outcome_unknown'
+  | 'failed_retryable'
+  | 'failed_terminal'
+
 export interface GradingCheckpointDTO {
-  stage: string
+  stage: GradingJobStage
   artifact_digest?: string
   recorded_at?: number
   degraded?: boolean
@@ -627,7 +707,7 @@ export interface GradingCheckpointDTO {
 export interface GradingJobDTO {
   job_id: string
   submission_id: string
-  stage: string
+  stage: GradingJobStage
   confirmation_state: 'pending' | 'confirmed'
   anchor_state: 'pending' | 'located' | 'degraded'
   deadline: number
@@ -671,7 +751,7 @@ export interface PhotoJobResult {
 }
 export interface GradingJobStatusResp {
   job_id: string
-  stage: string
+  stage: GradingJobStage
   confirmation_state: 'pending' | 'confirmed'
   anchor_state: 'pending' | 'located' | 'degraded'
   deadline: number
@@ -738,11 +818,15 @@ export function k12GetGradingJobResult(agent: string, jobId: string, signal?: Ab
   )
 }
 /** 批量确认/修正识别结果：冻结 canonical 输入后后端异步续跑到终态。 */
-export function k12ConfirmGradingJob(jobId: string, req: ConfirmGradingJobReq) {
+export function k12ConfirmGradingJob(
+  jobId: string,
+  req: ConfirmGradingJobReq,
+  signal?: AbortSignal,
+) {
   return apiPost<GradingJobStatusResp>(
     `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/confirm`,
     req,
-    { timeout: 60_000 },
+    { timeout: 60_000, signal },
   )
 }
 /** 安全重试（failed_retryable 且 retryable）：回 queued 从检查点异步续跑。 */
@@ -1113,7 +1197,7 @@ export interface NativePrintCommitReq {
 }
 
 export type GenericPrintSourceKind =
-  | 'prep_card'
+  | 'tutoring_tips'
   | 'creative_observation_card'
   | 'practice_question'
   | 'practice_answer'
@@ -1551,9 +1635,9 @@ export function k12SendWorkFeedback(
   })
 }
 
-/** 把当前会话内已经生成的备课卡文本按同一 Receipt 协议直发私聊。 */
-export function k12SendPrepCard(agent: string, content: string) {
-  return apiPost<DeliveryReceiptDTO>(`${BASE}/prep-card/send`, { agent, content })
+/** 把当前会话内已经生成的辅导要点文本按同一 Receipt 协议直发私聊。 */
+export function k12SendTutoringTips(agent: string, content: string) {
+  return apiPost<DeliveryReceiptDTO>(`${BASE}/tutoring-tips/send`, { agent, content })
 }
 
 export function k12GetDeliveryReceipt(agent: string, deliveryId: string) {

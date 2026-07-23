@@ -13,7 +13,7 @@ import {
   k12GetDeliveryReceipt,
   k12QueryDeliveryReceipt,
   k12RetryDeliveryReceipt,
-  k12SendPrepCard,
+  k12SendTutoringTips,
   k12SendWorkFeedback,
 } from '../k12'
 
@@ -23,14 +23,14 @@ describe('DD-024 durable DeliveryReceipt API', () => {
     h.apiPost.mockReset().mockResolvedValue({})
   })
 
-  it('作品与备课卡发送都返回后端 Receipt，不走剪贴板替代', async () => {
+  it('作品与辅导要点发送都返回后端 Receipt，不走剪贴板替代', async () => {
     await k12SendWorkFeedback('ming', 'work-1', 'feedback')
-    await k12SendPrepCard('ming', '【辅导要点】\n正文')
+    await k12SendTutoringTips('ming', '【辅导要点】\n正文')
     expect(h.apiPost).toHaveBeenNthCalledWith(1, '/api/k12/creative-works/work-1/send-feedback', {
       agent: 'ming',
       kind: 'feedback',
     })
-    expect(h.apiPost).toHaveBeenNthCalledWith(2, '/api/k12/prep-card/send', {
+    expect(h.apiPost).toHaveBeenNthCalledWith(2, '/api/k12/tutoring-tips/send', {
       agent: 'ming',
       content: '【辅导要点】\n正文',
     })
