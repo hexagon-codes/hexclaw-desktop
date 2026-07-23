@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, Wrench, Search, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download, RefreshCw } from 'lucide-vue-next'
+import { Server, Wrench, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download, RefreshCw } from 'lucide-vue-next'
 import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, restartMcpServer, getMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
 import { useToast } from '@/composables/useToast'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
@@ -10,7 +10,6 @@ import { resolveUserHome } from '@/utils/platform'
 import type { McpTool } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
-import SearchInput from '@/components/common/SearchInput.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
 
 const { t } = useI18n()
@@ -20,6 +19,9 @@ const props = withDefaults(defineProps<{
 }>(), {
   embeddedSearch: undefined,
 })
+const emit = defineEmits<{
+  'search-context-change': [context: 'mcp-servers' | 'mcp-tools' | 'mcp-marketplace']
+}>()
 
 const servers = ref<string[]>([])
 const serverStatuses = ref<Record<string, 'connected' | 'disconnected' | 'error'>>({})
@@ -27,6 +29,15 @@ const tools = ref<McpTool[]>([])
 const loading = ref(true)
 const errorMsg = ref('')
 const activeTab = ref<'servers' | 'tools' | 'marketplace'>('servers')
+watch(
+  activeTab,
+  (tab) =>
+    emit(
+      'search-context-change',
+      tab === 'marketplace' ? 'mcp-marketplace' : tab === 'tools' ? 'mcp-tools' : 'mcp-servers',
+    ),
+  { immediate: true },
+)
 
 // 二级 tab（统一 UnderlineTabs）：服务器 / 工具 / 市场（带计数）
 const mcpSubTabs = computed(() => [
@@ -71,7 +82,7 @@ const activeMcpCats = computed(() => MCP_PILLS.find((p) => p.key === marketplace
 // 统一后的市场列表：原硬编码"推荐区"已删除，直接按 pill 分类 + 搜索词客户端过滤后端 hub 列表
 const filteredMarketplace = computed(() => {
   const cats = activeMcpCats.value
-  const q = marketplaceSearch.value.trim().toLowerCase()
+  const q = (props.embeddedSearch ?? toolSearchQuery.value).trim().toLowerCase()
   return marketplaceItems.value.filter((item) => {
     if (cats && !cats.includes((item.category || '').toLowerCase())) return false
     if (!q) return true
@@ -87,7 +98,6 @@ const filteredMarketplace = computed(() => {
 // ─── MCP Marketplace state ──────────────────────────────
 const marketplaceItems = ref<McpMarketplaceEntry[]>([])
 const marketplaceLoading = ref(false)
-const marketplaceSearch = ref('')
 const installingServers = ref<Set<string>>(new Set())
 let marketplaceRequestGen = 0
 let loadAllRequestGen = 0
@@ -231,7 +241,7 @@ function toggleTool(name: string) {
 
 // ─── 顶栏统一搜索（IntegrationView 注入）；本地 toolSearchQuery 作为兜底 ───
 const activeQuery = computed(() =>
-  ((props.embeddedSearch ?? '') || toolSearchQuery.value).toLowerCase().trim(),
+  (props.embeddedSearch ?? toolSearchQuery.value).trim().toLowerCase(),
 )
 
 // 服务器列表过滤（按名称）
@@ -476,7 +486,7 @@ defineExpose({ openAddServer, switchToMarketplace })
           :description="t('mcp.emptyDesc')"
         />
 
-        <div v-else class="space-y-3 max-w-2xl">
+        <div v-else class="hc-capability-installed-track space-y-3">
           <div
             v-for="name in filteredServers"
             :key="name"
@@ -535,7 +545,7 @@ defineExpose({ openAddServer, switchToMarketplace })
           :description="t('mcp.noTools')"
         />
 
-        <div v-else class="space-y-3 max-w-2xl">
+        <div v-else class="hc-capability-installed-track space-y-3">
           <div
             v-for="tool in filteredTools"
             :key="tool.name"
@@ -654,21 +664,7 @@ defineExpose({ openAddServer, switchToMarketplace })
 
       <!-- Marketplace Tab -->
       <template v-else-if="activeTab === 'marketplace'">
-        <div class="p-4">
-          <!-- 搜索框（对齐 Skill 市场：顶部一个 ClawHub 搜索框；同时过滤推荐区 + 后端市场）-->
-          <div class="flex gap-2 mb-4 max-w-4xl">
-            <SearchInput
-              v-model="marketplaceSearch"
-              class="flex-1"
-              :fluid="true"
-              :placeholder="t('mcp.searchMarketplace', 'Search MCP servers...')"
-              @submit="loadMarketplace()"
-            />
-            <button class="px-3 py-2 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)' }" @click="loadMarketplace()">
-              <Search :size="14" />
-            </button>
-          </div>
-
+        <div class="hc-capability-market-surface">
           <!-- 分类 pill（视觉/交互照搬 Skill 市场分类 pill）-->
           <div class="flex flex-wrap gap-2 mb-5 max-w-4xl">
             <button
@@ -691,7 +687,7 @@ defineExpose({ openAddServer, switchToMarketplace })
           <div v-else-if="filteredMarketplace.length === 0" class="text-center py-8" style="color: var(--hc-text-secondary)">
             {{ t('mcp.noMarketplaceResults', 'No MCP servers found. Try a different search.') }}
           </div>
-          <div v-else class="hc-mcp-market-grid">
+          <div v-else class="hc-capability-market-grid">
             <div v-for="item in filteredMarketplace" :key="item.name" class="hc-mcp-market-card">
               <div class="hc-mcp-market-card__head">
                 <span class="hc-mcp-market-card__icon" aria-hidden="true">
@@ -783,13 +779,6 @@ defineExpose({ openAddServer, switchToMarketplace })
 </template>
 
 <style scoped>
-.hc-mcp-market-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr));
-  gap: 12px;
-  align-items: stretch;
-}
-
 .hc-mcp-market-card {
   display: flex;
   min-width: 0;

@@ -11,7 +11,7 @@ import {
   FileUp,
   RefreshCw,
   AlertTriangle,
-  ChevronDown,
+  Settings2,
 } from 'lucide-vue-next'
 import {
   getDocuments,
@@ -40,6 +40,7 @@ import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import HcDateRangePicker from '@/components/common/HcDateRangePicker.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import HcSettingsDisclosure from '@/components/common/HcSettingsDisclosure.vue'
 import SemanticIndexCard from '@/components/knowledge/SemanticIndexCard.vue'
 import { logger } from '@/utils/logger'
 
@@ -1204,15 +1205,17 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
       </Transition>
 
       <div class="knowledge-page__content">
-        <!-- 核心能力与运行状态：健康态默认折叠；旧 sidecar 自动退化为原安装恢复横幅。 -->
-        <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" />
+        <div class="knowledge-page__tab-stack">
+          <!-- 标签页（统一 UnderlineTabs，滑动下划线） -->
+          <UnderlineTabs
+            :tabs="knowledgeTabs"
+            :model-value="activeTab"
+            @update:model-value="activeTab = $event as 'documents' | 'search'"
+          />
 
-        <!-- 标签页（统一 UnderlineTabs，滑动下划线） -->
-        <UnderlineTabs
-          :tabs="knowledgeTabs"
-          :model-value="activeTab"
-          @update:model-value="activeTab = $event as 'documents' | 'search'"
-        />
+          <div class="knowledge-page__active-panel">
+        <!-- 仅“全部”面板的第一项：健康态默认折叠；切换回来时重新按默认态挂载。 -->
+        <SemanticIndexCard v-if="activeTab === 'documents' && knowledgeEnabled" />
 
         <!-- Upload progress list -->
         <div v-if="uploadingFiles.length > 0" class="mb-4 space-y-2 max-w-2xl">
@@ -1588,52 +1591,32 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 
             <!-- 检索质量参数（高级）：折叠面板（默认展开），全局持久化（写 yaml + 热更新 KB Manager）。
                即时生效：rerank/查询扩展/情境增强 开关、min_score、candidate_k；换 rerank 模型需重启 sidecar。 -->
-            <div
+            <HcSettingsDisclosure
+              v-model="ragPanelOpen"
+              body-id="kb-rag-body"
+              trigger-test-id="kb-rag-toggle"
+              panel-test-id="kb-rag-body"
               data-testid="kb-rag-panel"
-              class="mb-5 rounded-xl border"
-              :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-card)' }"
+              class="knowledge-page__rag-disclosure mb-5"
             >
-              <div
-                data-testid="kb-rag-toggle"
-                class="flex items-center justify-between px-3.5 py-2.5 cursor-pointer select-none"
-                @click="ragPanelOpen = !ragPanelOpen"
-              >
-                <span
-                  class="text-[13px] font-semibold"
-                  :style="{ color: 'var(--hc-text-primary)' }"
+              <template #icon><Settings2 :size="13" /></template>
+              <template #title>{{ t('knowledge.ragTitle') }}</template>
+              <template #actions>
+                <button
+                  type="button"
+                  data-testid="kb-rag-reset"
+                  class="knowledge-page__rag-reset"
+                  :disabled="!knowledgeEnabled || !ragConfig || ragSaving"
+                  @click="resetRagConfig"
                 >
-                  {{ t('knowledge.ragTitle') }}
-                </span>
-                <span class="flex items-center gap-3.5">
-                  <button
-                    type="button"
-                    data-testid="kb-rag-reset"
-                    class="text-xs"
-                    :style="{ color: 'var(--hc-text-muted)' }"
-                    :disabled="!knowledgeEnabled || !ragConfig || ragSaving"
-                    @click.stop="resetRagConfig"
-                  >
-                    {{ t('knowledge.ragReset') }}
-                  </button>
-                  <ChevronDown
-                    :size="15"
-                    :style="{
-                      color: 'var(--hc-text-muted)',
-                      transform: ragPanelOpen ? 'rotate(180deg)' : 'none',
-                      transition: 'transform .15s',
-                    }"
-                  />
-                </span>
-              </div>
+                  {{ t('knowledge.ragReset') }}
+                </button>
+              </template>
 
-              <div
-                v-show="ragPanelOpen"
-                class="px-4 pb-3.5 flex flex-col gap-3 border-t"
-                :style="{ borderColor: 'var(--hc-border)' }"
-              >
+              <div class="knowledge-page__rag-body">
                 <template v-if="ragConfig">
                   <!-- 重排 cross-encoder + 模型下拉 -->
-                  <div class="flex items-center gap-2.5 pt-3 flex-wrap">
+                  <div class="flex items-center gap-2.5 flex-wrap">
                     <span
                       class="text-[13px] flex-1 min-w-0"
                       :style="{ color: 'var(--hc-text-primary)' }"
@@ -1761,7 +1744,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 <div
                   v-else-if="ragLoadState === 'error'"
                   data-testid="kb-rag-load-error"
-                  class="pt-3 text-xs flex items-center justify-between gap-3"
+                  class="text-xs flex items-center justify-between gap-3"
                   style="color: #b45309"
                   role="alert"
                 >
@@ -1773,14 +1756,14 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 <div
                   v-else
                   data-testid="kb-rag-loading"
-                  class="pt-3 text-xs"
+                  class="text-xs"
                   :style="{ color: 'var(--hc-text-muted)' }"
                   role="status"
                 >
                   {{ t('common.loading', '加载中…') }}
                 </div>
               </div>
-            </div>
+            </HcSettingsDisclosure>
 
             <div class="flex gap-2 mb-3">
               <SearchInput
@@ -1904,6 +1887,8 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
             />
           </div>
         </template>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -1913,10 +1898,11 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
         <div
           v-if="showAddDialog"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 backdrop-blur-sm"
+          data-testid="knowledge-add-document-modal"
           @click.self="closeAddDialog"
         >
           <div
-            class="w-full max-w-lg rounded-2xl border flex flex-col overflow-hidden"
+            class="knowledge-add-document-modal rounded-2xl border overflow-hidden"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div
@@ -1937,10 +1923,10 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                 <X :size="17" />
               </button>
             </div>
-            <div class="p-5 flex flex-col gap-3.5">
+            <div class="knowledge-add-document-modal__body p-5 flex flex-col gap-3.5">
               <!-- 文件上传区 -->
               <div
-                class="flex items-center gap-3 p-3 rounded-lg border border-dashed cursor-pointer hover:border-solid transition-colors"
+                class="knowledge-add-document-modal__drop flex items-center gap-3 p-3 rounded-lg border border-dashed cursor-pointer hover:border-solid transition-colors"
                 :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-secondary)' }"
                 @click="openFilePicker"
               >
@@ -1967,7 +1953,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   <input
                     v-model="newTitle"
                     type="text"
-                    class="rounded-lg border px-3 py-2 text-sm outline-none"
+                    class="w-full min-w-0 rounded-lg border px-3 py-2 text-sm outline-none"
                     :style="{
                       background: 'var(--hc-bg-input)',
                       borderColor: 'var(--hc-border)',
@@ -1987,7 +1973,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   <textarea
                     v-model="newContent"
                     rows="6"
-                    class="rounded-lg border px-3 py-2 text-sm outline-none resize-none"
+                    class="w-full min-w-0 rounded-lg border px-3 py-2 text-sm outline-none resize-none"
                     :style="{
                       background: 'var(--hc-bg-input)',
                       borderColor: 'var(--hc-border)',
@@ -2007,7 +1993,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
                   <input
                     v-model="newSource"
                     type="text"
-                    class="rounded-lg border px-3 py-2 text-sm outline-none"
+                    class="w-full min-w-0 rounded-lg border px-3 py-2 text-sm outline-none"
                     :style="{
                       background: 'var(--hc-bg-input)',
                       borderColor: 'var(--hc-border)',
@@ -2019,7 +2005,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
               </div>
             </div>
             <div
-              class="flex items-center justify-end gap-2 px-5 py-3.5 border-t"
+              class="knowledge-add-document-modal__footer flex items-center justify-end gap-2 px-5 py-3.5 border-t"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
               <button
@@ -2161,6 +2147,63 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
 </template>
 
 <style scoped>
+.knowledge-add-document-modal {
+  display: grid;
+  width: min(478px, calc(100vw - 32px));
+  min-width: 0;
+  max-height: min(760px, calc(100vh - 24px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.knowledge-add-document-modal__body {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow-y: auto;
+}
+
+.knowledge-add-document-modal__drop,
+.knowledge-add-document-modal__footer {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.knowledge-page__tab-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.knowledge-page__active-panel {
+  min-width: 0;
+}
+
+.knowledge-page__rag-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.knowledge-page__rag-reset {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--hc-text-muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.knowledge-page__rag-reset:hover:not(:disabled) {
+  color: var(--hc-text-secondary);
+}
+
+.knowledge-page__rag-reset:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .modal-enter-active {
   transition: opacity 0.2s ease-out;
 }

@@ -20,8 +20,8 @@ import {
 import HcSelect from '@/components/common/HcSelect.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { useSettingsStore } from '@/stores/settings'
-import { renderPromptPreview } from '@/utils/prompt-preview'
 
 const { t } = useI18n()
 
@@ -120,12 +120,10 @@ async function toggleEnabled(p: Prompt) {
 
 const isCommand = computed(() => editing.value?.type === 'command')
 
-// P1：正文「编辑 / 预览」切换 + Markdown 渲染（$ARGUMENTS 高亮）。预览仅供阅读，模型读原文。
+// P1：正文「编辑 / 预览」切换。预览复用全局 Markdown/KaTeX 安全边界，模型仍读原文。
 const bodyTab = ref<'edit' | 'preview'>('edit')
-const bodyPreviewHtml = computed(() => {
-  const html = renderPromptPreview(editing.value?.body_md ?? '')
-  return html || `<p class="hc-prev-empty">${t('prompts.previewEmpty', '（空）')}</p>`
-})
+const bodyPreviewContent = computed(() => editing.value?.body_md ?? '')
+const hasBodyPreview = computed(() => bodyPreviewContent.value.trim().length > 0)
 // 打开/切换编辑对象时回到「编辑」态（监听 ref 身份，typing 不重置）
 watch(editing, () => {
   bodyTab.value = 'edit'
@@ -223,7 +221,8 @@ onMounted(() => {
           @click.self="editing = null"
         >
           <div
-            class="w-full max-w-md rounded-2xl border flex flex-col overflow-hidden"
+            class="hc-prompt-modal rounded-2xl border overflow-hidden"
+            data-testid="prompt-editor-dialog"
             :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
           >
             <div
@@ -308,9 +307,17 @@ onMounted(() => {
                   "
                 />
                 </HcClearableField>
-                <!-- 预览已经 renderPromptPreview→DOMPurify 消毒，v-html 安全 -->
-                <!-- eslint-disable-next-line vue/no-v-html -->
-                <div v-show="bodyTab === 'preview'" class="hc-body-prev" v-html="bodyPreviewHtml" />
+                <div v-show="bodyTab === 'preview'" class="hc-body-prev">
+                  <MarkdownRenderer
+                    v-if="hasBodyPreview"
+                    :content="bodyPreviewContent"
+                    :show-artifacts="false"
+                    highlight-prompt-args
+                  />
+                  <p v-else class="hc-prev-empty">
+                    {{ t('prompts.previewEmpty', '（空）') }}
+                  </p>
+                </div>
                 <small class="hc-prompts__hint">{{
                   isCommand
                     ? t(
@@ -346,7 +353,7 @@ onMounted(() => {
               </label>
             </div>
             <div
-              class="flex items-center justify-end gap-2 px-5 py-3.5 border-t"
+              class="hc-prompt-modal__footer flex items-center justify-end gap-2 px-5 py-3.5 border-t"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
               <button class="hc-btn" @click="editing = null">{{ t('common.cancel', '取消') }}</button>
@@ -568,15 +575,30 @@ onMounted(() => {
   cursor: not-allowed;
 }
 /* 弹窗正文区：表单字段纵向排列（取代旧内联编辑器布局） */
+.hc-prompt-modal {
+  display: grid;
+  width: min(600px, calc(100vw - 32px));
+  min-width: 0;
+  max-height: min(800px, calc(100vh - 32px));
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
 .hc-modal-body {
   display: flex;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   flex-direction: column;
   gap: 12px;
-  max-height: 70vh;
   overflow-y: auto;
+}
+.hc-prompt-modal__footer {
+  min-width: 0;
 }
 .hc-field {
   display: flex;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   flex-direction: column;
   gap: 4px;
 }
@@ -590,6 +612,7 @@ onMounted(() => {
 }
 .hc-field--row > div {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -597,6 +620,10 @@ onMounted(() => {
 .hc-field input,
 .hc-field select,
 .hc-field textarea {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 8px 10px;
   border-radius: var(--hc-radius-md);
   border: 1px solid var(--hc-border);
@@ -652,6 +679,9 @@ onMounted(() => {
   line-height: 1.6;
 }
 .hc-body-prev {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   min-height: 132px;
   max-height: 320px;
   overflow: auto;
@@ -662,6 +692,10 @@ onMounted(() => {
   font-size: 12.5px;
   line-height: 1.65;
   color: var(--hc-text-primary);
+}
+.hc-body-prev :deep(.markdown-body) {
+  font-size: inherit;
+  line-height: inherit;
 }
 .hc-body-prev :deep(h1),
 .hc-body-prev :deep(h2),
@@ -712,5 +746,10 @@ onMounted(() => {
 .modal-enter-from,
 .modal-leave-to {
   opacity: 0;
+}
+@media (max-width: 560px) {
+  .hc-field--row {
+    flex-direction: column;
+  }
 }
 </style>

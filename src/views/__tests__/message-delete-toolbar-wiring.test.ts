@@ -34,5 +34,7 @@ describe('ChatView — 消息删除工具条接线', () => {
     expect(chatViewSrc).toContain('pendingDeleteMsgId')
     expect(chatViewSrc).toContain('@confirm="confirmDeleteMessage"')
     expect(chatViewSrc).toContain("t('chat.deleteMessageConfirmTitle')")
+    expect(chatViewSrc).toContain(':confirm-delay-ms="5_000"')
+    expect(chatViewSrc).toContain(':confirmation-key="pendingDeleteMsgId"')
   })
 })

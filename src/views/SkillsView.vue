@@ -48,9 +48,17 @@ const props = withDefaults(defineProps<{
   embeddedSearch: undefined,
   hideInstalledSearch: false,
 })
+const emit = defineEmits<{
+  'search-context-change': [context: 'skills-installed' | 'skills-marketplace']
+}>()
 
 // ─── Tab 切换 ─────────────────────────────────────────
 const activeTab = ref<'installed' | 'hub'>('installed')
+watch(
+  activeTab,
+  (tab) => emit('search-context-change', tab === 'hub' ? 'skills-marketplace' : 'skills-installed'),
+  { immediate: true },
+)
 
 // 二级 tab（统一 UnderlineTabs）：已安装（带计数）/ 市场 —— 纯文字，无图标（与 MCP/Prompt 一致）
 const skillSubTabs = computed(() => [
@@ -307,7 +315,7 @@ function isSkillEnabled(skillOrName: Skill | string): boolean {
 }
 
 const filteredSkills = computed(() => {
-  const q = (props.embeddedSearch ?? searchQuery.value).toLowerCase()
+  const q = (props.embeddedSearch ?? searchQuery.value).trim().toLowerCase()
   if (!q) return skills.value
   return skills.value.filter(
     (s) =>
@@ -324,7 +332,6 @@ const hasLocalOnlySkills = computed(() =>
 // ─── ClawHub 技能市场 ────────────────────────────────
 const hubSkills = ref<ClawHubSkill[]>([])
 const hubLoading = ref(false)
-const hubSearchQuery = ref('')
 const hubCategory = ref<string>('all')
 const hubInstallingSet = ref<Set<string>>(new Set())
 const hubInstallError = ref('')
@@ -356,7 +363,7 @@ const activeSkillCats = computed(() => SKILL_PILLS.find((p) => p.key === hubCate
 // 原硬编码"热门推荐"已删除：统一按 pill 分类 + 搜索词客户端过滤后端 hub 列表
 const filteredHubSkills = computed(() => {
   const cats = activeSkillCats.value
-  const q = hubSearchQuery.value.trim().toLowerCase()
+  const q = (props.embeddedSearch ?? searchQuery.value).trim().toLowerCase()
   return hubSkills.value.filter((s) => {
     if (cats && !cats.includes((s.category || '').toLowerCase())) return false
     if (!q) return true
@@ -615,7 +622,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
         </button>
       </EmptyState>
 
-      <div v-else class="space-y-3 max-w-2xl">
+      <div v-else class="hc-capability-installed-track space-y-3">
         <!-- 技能目录提示 -->
         <div
           v-if="skillsDir"
@@ -723,16 +730,10 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
     </div>
 
     <!-- ════════ ClawHub 市场 Tab ════════ -->
-    <div v-if="activeTab === 'hub'" class="flex-1 overflow-y-auto p-6">
-      <!-- 搜索栏 -->
-      <div class="max-w-4xl mb-4">
-        <SearchInput
-          v-model="hubSearchQuery"
-          :fluid="true"
-          :placeholder="t('skills.hub.searchPlaceholder')"
-        />
-      </div>
-
+    <div
+      v-if="activeTab === 'hub'"
+      class="hc-capability-market-surface flex-1 overflow-y-auto p-6"
+    >
       <!-- 分类 Chips -->
       <div class="flex flex-wrap gap-2 mb-5 max-w-4xl">
         <button
@@ -778,7 +779,7 @@ defineExpose({ openInstallDialog, switchToHub, openCreateDialog })
         />
 
         <!-- 技能卡片网格 -->
-        <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-w-4xl">
+        <div v-else class="hc-capability-market-grid">
         <div
           v-for="skill in filteredHubSkills"
           :key="skill.name"

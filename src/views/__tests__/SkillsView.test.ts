@@ -63,11 +63,12 @@ function createTestI18n() {
   })
 }
 
-function mountSkillsView() {
+function mountSkillsView(props: { embeddedSearch?: string; hideInstalledSearch?: boolean } = {}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   return mount(SkillsView, {
     attachTo: document.body,
+    props,
     global: {
       plugins: [createTestI18n(), pinia],
       stubs: {
@@ -355,6 +356,50 @@ describe('SkillsView', () => {
     expect(searchClawHub).toHaveBeenCalledTimes(1)
     expect(wrapper.text()).toContain('research-skill')
     expect(wrapper.text()).not.toContain('coding-skill')
+  })
+
+  it('uses the parent toolbar query in marketplace and emits the active search context', async () => {
+    searchClawHub.mockResolvedValueOnce([
+      {
+        name: 'research-skill',
+        display_name: 'Research Skill',
+        description: 'paper discovery',
+        author: 'openclaw',
+        version: '1.0.0',
+        tags: ['research'],
+        downloads: 1,
+        category: 'research',
+      },
+      {
+        name: 'coding-skill',
+        display_name: 'Coding Skill',
+        description: 'code automation',
+        author: 'openclaw',
+        version: '1.0.0',
+        tags: ['coding'],
+        downloads: 1,
+        category: 'coding',
+      },
+    ])
+
+    const wrapper = mountSkillsView({
+      embeddedSearch: 'research',
+      hideInstalledSearch: true,
+    })
+    await flushPromises()
+
+    const marketplaceTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
+    expect(marketplaceTab).toBeDefined()
+    await marketplaceTab!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('Research Skill')
+    expect(wrapper.text()).not.toContain('Coding Skill')
+    expect(wrapper.find('input').exists()).toBe(false)
+    expect(wrapper.emitted('search-context-change')).toEqual([
+      ['skills-installed'],
+      ['skills-marketplace'],
+    ])
   })
 
   it('previews a hub skill SKILL.md before install, then installs from the preview modal', async () => {

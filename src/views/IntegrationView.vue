@@ -23,6 +23,16 @@ function resolveTab(path: string): string {
 
 const activeTab = ref(resolveTab(route.path))
 const integrationSearch = ref('')
+type CapabilitySearchContext =
+  | 'skills-installed'
+  | 'skills-marketplace'
+  | 'mcp-servers'
+  | 'mcp-tools'
+  | 'mcp-marketplace'
+  | 'prompts'
+const activeSearchContext = ref<CapabilitySearchContext>(
+  activeTab.value === 'mcp' ? 'mcp-servers' : activeTab.value === 'prompts' ? 'prompts' : 'skills-installed',
+)
 const tabKeyMap: Record<string, string> = {
   'integration-skills': 'skills',
   'integration-mcp': 'mcp',
@@ -44,6 +54,8 @@ watch(activeTab, (tab) => {
   const pathMap: Record<string, string> = { skills: '/integration', mcp: '/integration/mcp', prompts: '/integration/prompts' }
   const target = pathMap[tab] || '/integration'
   if (route.path !== target) router.replace(target)
+  activeSearchContext.value =
+    tab === 'mcp' ? 'mcp-servers' : tab === 'prompts' ? 'prompts' : 'skills-installed'
 })
 
 const skillsViewRef = ref<{ openInstallDialog?: () => void; switchToHub?: () => void; openCreateDialog?: () => void }>()
@@ -66,12 +78,27 @@ watch(() => route.query.action, () => handleSkillQueryAction())
 const mcpViewRef = ref<{ openAddServer?: () => void; switchToMarketplace?: () => void }>()
 const promptsViewRef = ref<{ newPrompt?: () => void }>()
 
-// 顶栏搜索框 placeholder：3 个子 tab 都显示搜索框，文案按子 tab 区分
+// 能力页唯一搜索入口：子视图只声明上下文，输入状态与可见控件均由页面壳层持有。
 const searchPlaceholder = computed(() => {
-  if (activeTab.value === 'mcp') return t('integration.searchMcp', '搜索 MCP…')
-  if (activeTab.value === 'prompts') return t('integration.searchPrompts', '搜索 Prompt…')
-  return t('integration.searchSkills', '搜索 Skill…')
+  switch (activeSearchContext.value) {
+    case 'skills-marketplace':
+      return t('skills.hub.searchPlaceholder', '搜索 ClawHub Skill…')
+    case 'mcp-tools':
+      return t('mcp.searchTools', '搜索工具…')
+    case 'mcp-marketplace':
+      return t('mcp.searchMarketplace', '搜索 MCP 服务器…')
+    case 'mcp-servers':
+      return t('integration.searchMcp', '搜索 MCP…')
+    case 'prompts':
+      return t('integration.searchPrompts', '搜索 Prompt…')
+    default:
+      return t('skills.searchPlaceholder', '搜索 Skill…')
+  }
 })
+
+function setSearchContext(context: CapabilitySearchContext) {
+  activeSearchContext.value = context
+}
 
 const splitLabel = computed(() =>
   activeTab.value === 'mcp'
@@ -113,6 +140,7 @@ function onSplitSelect(id: string) {
   <div class="hc-page-shell">
     <PageToolbar
       :search-placeholder="searchPlaceholder"
+      :search-value="integrationSearch"
       @search="integrationSearch = $event"
     >
       <template #tabs>
@@ -144,11 +172,13 @@ function onSplitSelect(id: string) {
         ref="skillsViewRef"
         :embedded-search="integrationSearch"
         :hide-installed-search="true"
+        @search-context-change="setSearchContext"
       />
       <McpView
         v-else-if="activeTab === 'mcp'"
         ref="mcpViewRef"
         :embedded-search="integrationSearch"
+        @search-context-change="setSearchContext"
       />
       <PromptsView
         v-else-if="activeTab === 'prompts'"

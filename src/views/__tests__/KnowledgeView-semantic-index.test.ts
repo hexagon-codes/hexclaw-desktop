@@ -64,7 +64,27 @@ function mountView() {
 describe('KnowledgeView semantic-index placement', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    api.getDocuments.mockResolvedValue({ documents: [], total: 0 })
+    api.getDocuments.mockResolvedValue({
+      documents: [
+        {
+          id: 'doc-a',
+          title: '教材 A',
+          source: 'upload:教材-A.pdf',
+          status: 'indexed',
+          chunk_count: 2,
+          created_at: '2026-07-23T08:00:00Z',
+        },
+        {
+          id: 'doc-b',
+          title: '教材 B',
+          source: 'upload:教材-B.pdf',
+          status: 'indexed',
+          chunk_count: 2,
+          created_at: '2026-07-23T08:01:00Z',
+        },
+      ],
+      total: 2,
+    })
     api.getKnowledgeConfig.mockResolvedValue({
       rerank: true,
       rerank_model: '',
@@ -75,14 +95,19 @@ describe('KnowledgeView semantic-index placement', () => {
     })
   })
 
-  it('shows the semantic-index card only on the documents home tab', async () => {
+  it('places semantic index inside the documents panel after tabs and before source filters', async () => {
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.find('[data-testid="semantic-index-card-stub"]').exists()).toBe(true)
     const card = wrapper.get('[data-testid="semantic-index-card-stub"]')
     const documentsTab = wrapper.get('[data-testid="tab-documents"]')
+    const sourceFilters = wrapper.get('[data-testid="knowledge-source-filters"]')
     expect(
-      card.element.compareDocumentPosition(documentsTab.element) & Node.DOCUMENT_POSITION_FOLLOWING,
+      documentsTab.element.compareDocumentPosition(card.element) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    expect(
+      card.element.compareDocumentPosition(sourceFilters.element) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
 
     await wrapper.get('[data-testid="tab-search"]').trigger('click')

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, computed, watch, nextTick, type Component } from 'vue'
+import { onMounted, ref, shallowRef, computed, watch, nextTick, type Component } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -538,10 +538,16 @@ async function useLibraryTemplate(tpl: AgentTemplate) {
 // 场景包建档模板（如 K12 作业辅导助手）：由 registry 提供卡片 + 专属建档表单；
 // 本视图零 K12 知识，用 <component :is> 动态渲染表单。
 const scenarioTemplates = scenarioRegistry.scenarioTemplates
-const activeScenarioForm = ref<Component | null>(null)
+const activeScenarioForm = shallowRef<Component | null>(null)
 function onScenarioCreated() {
   activeScenarioForm.value = null
   void loadAgents()
+}
+
+/** 专属建档“上一步”回到通用创建起点；宿主必须消费该意图，不能留下无响应按钮。 */
+function onScenarioBack() {
+  activeScenarioForm.value = null
+  openAddAgentDialog()
 }
 
 // 场景实例卡扩展（如 K12 辅导老师卡的计数/快捷入口）：本视图零场景知识，只对场景实例渲染 registry 组件
@@ -822,36 +828,41 @@ async function handleUnregisterAgent() {
               <div
                 v-for="agent in filteredAgents"
                 :key="agent.name"
-                class="hc-cxcard"
+                class="hc-cxcard hc-cxcard--dedicated"
               >
-                <div class="hc-cxtop">
+                <div class="hc-cxtop hc-agent-card__header">
                   <div class="hc-cxlogo">
                     <span v-if="agent.metadata?.avatar" class="text-[20px] leading-none">{{ agent.metadata.avatar }}</span>
                     <Bot v-else :size="20" />
                   </div>
                   <div class="min-w-0 flex-1">
-                    <div class="hc-cxnm">
-                      {{ agent.display_name || agent.name }}
+                    <div class="hc-cxnm hc-cxnm--card">
+                      <span class="hc-cxnm__label">{{ agent.display_name || agent.name }}</span>
                       <span
                         v-if="agentCardBadgeKey && isScenarioAgent(agent)"
-                        class="hc-tag"
+                        class="hc-tag hc-cxnm__badge"
                         data-testid="scenario-agent-title-badge"
                       >{{ t(agentCardBadgeKey) }}</span>
                       <!-- BUG-20260703 问题4：router 自动兜底（第一个注册者）≠ 小蟹「默认助理」。
                            徽章按真实语义命名，title 讲清桌面聊天不受它影响，消除双「默认」撞车。 -->
                       <span
                         v-if="agent.name === defaultAgent"
-                        class="hc-pill hc-pill--green"
+                        class="hc-pill hc-pill--green hc-cxnm__badge"
                         data-testid="agent-im-fallback-badge"
                         :title="t('agents.imFallbackTitle')"
                       >{{ t('agents.imFallback') }}</span>
                     </div>
-                    <div class="hc-cxmeta">{{ agent.description || t('agents.noDesc') }}</div>
+                    <div class="hc-cxmeta hc-cxmeta--card">{{ agent.description || t('agents.noDesc') }}</div>
                   </div>
                 </div>
 
-                <!-- 绑定标签行（通道 / 任务） -->
-                <div v-if="getAgentBindings(agent.name).length" class="hc-crow">
+                <!-- 普通智能体的事实槽承载通道 / 任务绑定；场景卡由扩展独占事实槽，
+                     避免 K12 学习指标与 dingtalk 等通用部署信息混排。 -->
+                <div
+                  v-if="!isScenarioAgent(agent)"
+                  class="hc-crow hc-agent-card__facts"
+                  :aria-hidden="getAgentBindings(agent.name).length === 0"
+                >
                   <span
                     v-for="b in getAgentBindings(agent.name)"
                     :key="b"
@@ -874,7 +885,7 @@ async function handleUnregisterAgent() {
                      整行对场景卡不渲染——否则通用按钮全被 v-if 隐藏后留一个空 .hc-crow div，
                      叠加卡 gap 12px 在扩展块下方悬空一段空白，并把等高网格里的普通卡撑出底部留白
                      （原型回灌 20260711：场景卡不出现空动作行）。BUG-20260708 B3 -->
-                <div v-if="!isScenarioAgent(agent)" class="hc-crow">
+                <div v-if="!isScenarioAgent(agent)" class="hc-crow hc-agent-card__footer">
                   <!-- BUG-20260703 问题1：每张卡一键进会话（复用 /chat?role= 的收件人锁定机制），
                        不再只有 K12 卡能直达、其余智能体只能靠 @ 召唤。 -->
                   <button
@@ -962,6 +973,7 @@ async function handleUnregisterAgent() {
       v-if="activeScenarioForm"
       @created="onScenarioCreated"
       @removed="onScenarioCreated"
+      @back="onScenarioBack"
       @close="activeScenarioForm = null"
     />
 
@@ -1507,9 +1519,7 @@ async function handleUnregisterAgent() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  /* 每张卡取自然高度，不被同行最高卡拉伸——否则较矮的普通卡（如翻译官）会被同行较高
-     的 K12 卡撑出一段底部空白（原型数据同构未暴露，真机混排才显）。原型回灌 20260711。 */
-  align-items: start;
+  align-items: stretch;
 }
 
 .hc-cxcard {
@@ -1530,6 +1540,9 @@ async function handleUnregisterAgent() {
   border-color: var(--hc-border-hl);
   box-shadow: var(--hc-shadow-md);
   transform: translateY(-2px);
+}
+.hc-cxcard--dedicated {
+  min-block-size: 146px;
 }
 
 .hc-cxcard--hero {
@@ -1564,6 +1577,17 @@ async function handleUnregisterAgent() {
   align-items: center;
   gap: 12px;
 }
+.hc-agent-card__header {
+  min-block-size: 38px;
+  min-width: 0;
+}
+.hc-agent-card__facts {
+  min-block-size: 24px;
+  align-content: flex-start;
+}
+.hc-agent-card__footer {
+  margin-top: auto;
+}
 .hc-cxlogo {
   width: 38px;
   height: 38px;
@@ -1593,6 +1617,29 @@ async function handleUnregisterAgent() {
   font-weight: 600;
   font-size: 14px;
   color: var(--hc-text-primary);
+}
+.hc-cxnm--card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.hc-cxnm__label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hc-cxmeta--card {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.hc-cxnm__badge {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .hc-cxmeta {
   font-size: 12px;

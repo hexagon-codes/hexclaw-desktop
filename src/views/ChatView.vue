@@ -62,6 +62,7 @@ import SkillIcon from '@/components/common/SkillIcon.vue'
 import SessionList from '@/components/chat/SessionList.vue'
 import ChatToolbar from '@/components/chat/ChatToolbar.vue'
 import {
+  resolveChatWorkspaceTransition,
   workspaceAfterRightPanelClose,
   type ChatWorkspaceMode,
 } from '@/components/chat/workspace-mode'
@@ -168,10 +169,13 @@ function restoreWorkspaceAfterRightPanelClose() {
 }
 
 function onWorkspaceModeChange(next: ChatWorkspaceMode) {
-  const current = chatWorkspaceMode.value
-  if (next === 'sessions') sessionsCollapsedByUser.value = false
-  else if (current === 'sessions' && next === 'focus') sessionsCollapsedByUser.value = true
-  chatWorkspaceMode.value = next
+  const transition = resolveChatWorkspaceTransition(
+    chatWorkspaceMode.value,
+    next,
+    sessionsCollapsedByUser.value,
+  )
+  sessionsCollapsedByUser.value = transition.sessionsCollapsedByUser
+  chatWorkspaceMode.value = transition.mode
 }
 
 function syncWorkspaceModeProjection(mode: ChatWorkspaceMode) {
@@ -674,6 +678,7 @@ const scenarioCtx = computed(() => {
   return {
     agentId: name,
     agentName: cfg?.display_name || name,
+    sessionId: chatStore.currentSessionId ?? '',
     // 透传通用 metadata，场景专属字段由场景增强组件自行解析（ChatView 零场景知识）
     metadata: cfg?.metadata ?? {},
     descriptor,
@@ -3149,7 +3154,7 @@ function startSidebarResize(event: MouseEvent) {
     <!-- Message context menu -->
     <ContextMenu ref="msgCtxMenu" :items="msgContextItems" @select="handleMsgCtxAction" />
 
-    <!-- 场景侧栏锚点（`.hc-chat` 行级 flex 子，与 ArtifactsPanel 同层）：场景包侧栏（如 K12 备课卡）
+    <!-- 场景侧栏锚点（`.hc-chat` 行级 flex 子，与 ArtifactsPanel 同层）：场景包侧栏（如 K12 辅导要点）
          Teleport 落此，作为右侧停靠面板挤压主区、而非在主区内 absolute 覆盖会话头部（BUG-20260708 B4）。
          display:contents 让 teleport 进来的面板自身成为行级 flex 项。
          与产物面板互斥（右侧只挂一个停靠面板）：产物开则隐藏场景侧栏，避免两个面板把主区挤成 0 宽
@@ -3193,6 +3198,8 @@ function startSidebarResize(event: MouseEvent) {
       :message="t('chat.deleteMessageConfirmMessage')"
       :confirm-text="t('agents.delete', '删除')"
       :cancel-text="t('common.cancel', '取消')"
+      :confirm-delay-ms="5_000"
+      :confirmation-key="pendingDeleteMsgId"
       danger
       @confirm="confirmDeleteMessage"
       @cancel="pendingDeleteMsgId = null"
@@ -3204,9 +3211,10 @@ function startSidebarResize(event: MouseEvent) {
 .hc-chat {
   display: flex;
   height: 100%;
+  background: var(--hc-bg-main);
 }
 
-/* 场景侧栏锚点：display:contents → teleport 进来的场景侧栏（K12 备课卡）自身成为 .hc-chat 行级 flex 项 */
+/* 场景侧栏锚点：display:contents → teleport 进来的场景侧栏（K12 辅导要点）自身成为 .hc-chat 行级 flex 项 */
 .hc-chat__scenario-sidepanel {
   display: contents;
 }
@@ -3351,7 +3359,7 @@ function startSidebarResize(event: MouseEvent) {
   flex: 1;
   display: flex;
   flex-direction: column;
-  /* 兜底最小宽：防止右侧同时挂两个停靠面板（备课卡侧栏 + 产物面板）时主区被挤成 0 宽、
+  /* 兜底最小宽：防止右侧同时挂两个停靠面板（辅导要点侧栏 + 产物面板）时主区被挤成 0 宽、
      消息文字竖排逐字换行（BUG-20260708）。内部子元素各自 min-width:0 保留 ellipsis。 */
   min-width: 340px;
   position: relative;
@@ -3576,6 +3584,8 @@ function startSidebarResize(event: MouseEvent) {
 /* ─── Bubble wrap (contains bubble + floating actions) ───── */
 .hc-msg__bubble-wrap {
   position: relative;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .hc-msg__bubble-wrap--user {
@@ -3658,6 +3668,9 @@ function startSidebarResize(event: MouseEvent) {
 
 /* ─── Bubble ───── */
 .hc-msg__bubble {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   border-radius: 12px;
   padding: 12px 16px;
   font-size: 14px;

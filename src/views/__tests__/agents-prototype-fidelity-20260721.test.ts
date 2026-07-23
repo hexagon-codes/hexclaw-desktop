@@ -40,13 +40,15 @@ describe('AgentsView authoritative prototype fidelity', () => {
     expect(source).not.toMatch(/<(?:MessageSquare|Trash2)\b/)
   })
 
-  it('lets title badges and descriptions flow like the prototype instead of forcing desktop-only flex/truncation', () => {
+  it('keeps dedicated-card titles and descriptions in their elastic slot without squeezing badges', () => {
     expect(source).toMatch(
       /<div class="hc-cxnm">\s*\{\{ defaultAssistantName \}\}\s*<span class="hc-tag">/s,
     )
     expect(source).toMatch(
-      /<div class="hc-cxnm">\s*\{\{ agent\.display_name \|\| agent\.name \}\}/s,
+      /<div class="hc-cxnm hc-cxnm--card">\s*<span class="hc-cxnm__label">\{\{ agent\.display_name \|\| agent\.name \}\}<\/span>/s,
     )
-    expect(source).not.toContain('class="hc-cxmeta truncate"')
+    expect(source).toContain('class="hc-cxmeta hc-cxmeta--card"')
+    expect(source).toContain('class="hc-tag hc-cxnm__badge"')
+    expect(source).toContain('class="hc-pill hc-pill--green hc-cxnm__badge"')
   })
 })

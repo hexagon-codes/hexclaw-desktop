@@ -65,9 +65,10 @@ function setupDefaultMocks() {
   mockGetMcpMarketplace.mockResolvedValue({ skills: [], total: 0 })
 }
 
-async function mountMcpView() {
+async function mountMcpView(props: { embeddedSearch?: string } = {}) {
   const McpView = (await import('../McpView.vue')).default
   return mount(McpView, {
+    props,
     global: {
       plugins: [createTestI18n()],
       stubs: {
@@ -771,7 +772,7 @@ describe('McpView — MCP 全链路', () => {
     expect(wrapper.text()).toContain('Filesystem')
   })
 
-  it('Marketplace 搜索（客户端过滤，不再调后端 search）', async () => {
+  it('Marketplace 使用父级顶栏搜索过滤、无内部搜索框并上报搜索上下文', async () => {
     mockGetMcpMarketplace.mockResolvedValue({
       skills: [
         { name: 'found', display_name: 'Found', description: 'Test', category: '', command: 'cmd', args: [], downloads: 0, rating: 0 },
@@ -779,24 +780,21 @@ describe('McpView — MCP 全链路', () => {
       ],
       total: 2,
     })
-    const wrapper = await mountMcpView()
+    const wrapper = await mountMcpView({ embeddedSearch: 'found' })
     await flushPromises()
 
-    const vm = wrapper.vm as unknown as {
-      activeTab: string
-      marketplaceSearch: string
-      loadMarketplace: () => Promise<void>
-    }
-    vm.activeTab = 'marketplace'
-    await vm.loadMarketplace()
-    await flushPromises()
-
-    // 搜索词改为对已拉取列表做客户端过滤
-    vm.marketplaceSearch = 'found'
+    const marketplaceTab = wrapper.findAll('button').find((btn) => btn.text().includes('市场'))
+    expect(marketplaceTab).toBeDefined()
+    await marketplaceTab!.trigger('click')
     await flushPromises()
 
     expect(wrapper.text()).toContain('Found')
     expect(wrapper.text()).not.toContain('Other')
+    expect(wrapper.find('input').exists()).toBe(false)
+    expect(wrapper.emitted('search-context-change')).toEqual([
+      ['mcp-servers'],
+      ['mcp-marketplace'],
+    ])
   })
 
   it('Marketplace 加载在一次失败后成功时应清掉旧错误提示', async () => {
@@ -885,16 +883,13 @@ describe('McpView — MCP 全链路', () => {
 
     const vm = wrapper.vm as unknown as {
       activeTab: string
-      marketplaceSearch: string
       loadMarketplace: () => Promise<void>
     }
 
     vm.activeTab = 'marketplace'
-    vm.marketplaceSearch = 'old'
     const oldRequest = vm.loadMarketplace()
     await flushPromises()
 
-    vm.marketplaceSearch = 'new'
     const newRequest = vm.loadMarketplace()
     await flushPromises()
 
