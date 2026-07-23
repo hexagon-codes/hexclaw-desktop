@@ -21,6 +21,7 @@ export const currentSourceTestMatch = [
   '**/streaming-chain.spec.ts',
   '**/browser-chat-background.spec.ts',
   '**/browser-clearable-inputs.spec.ts',
+  '**/browser-current-ui-regression-20260723.spec.ts',
 ]
 
 export default defineConfig({

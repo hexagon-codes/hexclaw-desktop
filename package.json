@@ -46,7 +46,7 @@
     "test:webkit-feel": "playwright test -c playwright.webkit.config.ts"
   },
   "dependencies": {
-    "@mdit/plugin-katex": "^1.0.1",
+    "@mdit/plugin-tex": "^1.0.1",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-dialog": "^2.7.0",

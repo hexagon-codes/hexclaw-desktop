@@ -20,13 +20,19 @@ export default defineConfig({
   build: {
     // 代码高亮语言包已按需懒加载，个别静态语言块天然偏大；
     // 同时继续把 XLSX/Markdown 相关重依赖拆出，避免主包继续膨胀。
-    // （PDF 解析已下沉后端，前端不再打包 pdfjs。）
+    // 文档内容抽取仍由后端完成；打印预览按需加载 PDF.js 及其同源 Worker，
+    // 只解码冻结后的打印 PDF Blob，不进入首屏主包。
     chunkSizeWarningLimit: 800,
     rollupOptions: {
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return
-          if (id.includes('/vue/') || id.includes('/vue-router/') || id.includes('/pinia/') || id.includes('/vue-i18n/')) {
+          if (
+            id.includes('/vue/') ||
+            id.includes('/vue-router/') ||
+            id.includes('/pinia/') ||
+            id.includes('/vue-i18n/')
+          ) {
             return 'vendor-vue'
           }
           if (id.includes('/xlsx/')) return 'vendor-xlsx'

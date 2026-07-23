@@ -8,7 +8,7 @@ importers:
 
   .:
     dependencies:
-      '@mdit/plugin-katex':
+      '@mdit/plugin-tex':
         specifier: ^1.0.1
         version: 1.0.1(markdown-it@14.3.0)
       '@tauri-apps/api':
@@ -638,24 +638,6 @@ packages:
 
   '@juggle/resize-observer@3.4.0':
     resolution: {integrity: sha512-dfLbk+PwWvFzSxwk3n5ySL0hfBog779o8h68wK/7/APo/7cgyWp5jcXockbxdk5kFRkbeXWm4Fbi9FrdN381sA==}
-
-  '@mdit/helper@1.0.1':
-    resolution: {integrity: sha512-zAzShsRZmkqjuoOFg6/zTCYVpvghj9a30Cl/eOGkE0xzRJJJG8T18eqb2lgceQhjVLWHK02HNVkzyfNHc429lQ==}
-    engines: {node: '>=22'}
-    peerDependencies:
-      markdown-it: ^14.2.0
-    peerDependenciesMeta:
-      markdown-it:
-        optional: true
-
-  '@mdit/plugin-katex@1.0.1':
-    resolution: {integrity: sha512-JQGdKOYGjL9Jr1HQXkJTjZXgUoX8b51f2NvEuoUKdfKE+bYKgYYNCxNkGfrxTjDWAFNAiP5J1kA3vwmxxsR3aA==}
-    engines: {node: '>=22'}
-    peerDependencies:
-      markdown-it: ^14.2.0
-    peerDependenciesMeta:
-      markdown-it:
-        optional: true
 
   '@mdit/plugin-tex@1.0.1':
     resolution: {integrity: sha512-ZzU7/ZkkpMvI4+Wxbr22d52LWRy8a+knlDI04wjDWm56ezQMkI7HT5O9x8GBapvFIxjOTVdT/Ie5b4cz+0oHJA==}
@@ -3596,21 +3578,6 @@ snapshots:
       '@jridgewell/sourcemap-codec': 1.5.5
 
   '@juggle/resize-observer@3.4.0': {}
-
-  '@mdit/helper@1.0.1(markdown-it@14.3.0)':
-    dependencies:
-      '@types/markdown-it': 14.1.2
-    optionalDependencies:
-      markdown-it: 14.3.0
-
-  '@mdit/plugin-katex@1.0.1(markdown-it@14.3.0)':
-    dependencies:
-      '@mdit/helper': 1.0.1(markdown-it@14.3.0)
-      '@mdit/plugin-tex': 1.0.1(markdown-it@14.3.0)
-      '@types/markdown-it': 14.1.2
-      katex: 0.17.0
-    optionalDependencies:
-      markdown-it: 14.3.0
 
   '@mdit/plugin-tex@1.0.1(markdown-it@14.3.0)':
     dependencies:
