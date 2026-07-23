@@ -1,5 +1,20 @@
 import { normalizePastedText } from './chat-compose'
 import type { Config } from 'dompurify'
+import type { KatexOptions } from 'katex'
+
+/**
+ * The one KaTeX security/accessibility policy used by both production render
+ * boundaries. Keep this finite: canonical content can originate from users,
+ * models, tools, knowledge documents and external channels.
+ */
+export const KATEX_RENDER_POLICY = Object.freeze({
+  output: 'htmlAndMathml',
+  throwOnError: true,
+  trust: false,
+  strict: 'warn',
+  maxSize: 20,
+  maxExpand: 1000,
+} satisfies KatexOptions)
 
 /**
  * DOMPurify intentionally drops MathML <annotation> by default. KaTeX places

@@ -15,7 +15,18 @@ export interface ParsedDocument {
 }
 
 /** Supported document extensions */
-const DOCUMENT_EXTENSIONS = ['.pdf', '.docx', '.doc', '.pptx', '.xlsx', '.xls', '.csv', '.txt', '.md', '.json']
+const DOCUMENT_EXTENSIONS = [
+  '.pdf',
+  '.docx',
+  '.doc',
+  '.pptx',
+  '.xlsx',
+  '.xls',
+  '.csv',
+  '.txt',
+  '.md',
+  '.json',
+]
 
 /** Check if a file is a parseable document (not image/video) */
 export function isDocumentFile(file: File): boolean {
@@ -28,7 +39,9 @@ export function isDocumentFile(file: File): boolean {
 /** Parse a document file and extract its text content */
 export async function parseDocument(file: File): Promise<ParsedDocument> {
   if (file.size > MAX_FILE_SIZE) {
-    throw new Error(`File "${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(0)} MB, max ${MAX_FILE_SIZE / 1024 / 1024} MB)`)
+    throw new Error(
+      `File "${file.name}" is too large (${(file.size / 1024 / 1024).toFixed(0)} MB, max ${MAX_FILE_SIZE / 1024 / 1024} MB)`,
+    )
   }
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
   const fileName = file.name
@@ -61,11 +74,16 @@ export async function parseDocument(file: File): Promise<ParsedDocument> {
 
 function truncateText(text: string): string {
   if (text.length <= MAX_TEXT_LENGTH) return text
-  return text.slice(0, MAX_TEXT_LENGTH) + '\n\n[... content truncated, showing first 50000 characters ...]'
+  return (
+    text.slice(0, MAX_TEXT_LENGTH) +
+    '\n\n[... content truncated, showing first 50000 characters ...]'
+  )
 }
 
 // PDF / DOC / DOCX / PPTX 下沉后端统一解析：
-//   - PDF：桌面 WKWebView 无法可靠跑 pdfjs（自定义协议建不了 Web Worker）→ 后端 poppler pdftotext；
+//   - PDF 文档抽取：为避免把通用解析与版面恢复压到渲染进程，统一走后端 poppler pdftotext；
+//     K12 打印预览是另一条受限链路，仅按需加载随应用打包的 PDF.js Worker，
+//     并渲染同一份冻结打印 Blob，不承担文档抽取职责；
 //   - 老 .doc(OLE)：需原生工具（macOS textutil）；
 //   - .docx/.pptx：复用 hexagon（OOXML，CJK 干净），顺带去掉前端 mammoth。
 // 表格 .xlsx/.xls 仍前端 SheetJS（唯一能解老 .xls 且更强）。
