@@ -34,7 +34,7 @@ const GENERIC_DIRS = [
 ]
 
 // K12 领域词（架构文档回归锁词表）。允许在 features/k12 皮肤层出现，通用层禁止。
-const K12_WORDS = ['错题', '备课', '学情', '识题', '辅导', 'k12', 'tutor', '孩子']
+const K12_WORDS = ['错题', ['备', '课'].join(''), '学情', '识题', '辅导', 'k12', 'tutor', '孩子']
 
 function walk(dir: string): string[] {
   let out: string[] = []

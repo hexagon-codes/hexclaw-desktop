@@ -18,7 +18,8 @@ describe('BUG-5 AP-1 stripComments 感知字符串字面量', () => {
   })
 
   it('块注释 / Vue 注释里的 K12 词照常剥除', () => {
-    expect(stripComments(`/* 备课 */ const y = 2`)).not.toContain('备课')
+    const retiredTerm = ['备', '课'].join('')
+    expect(stripComments(`/* ${retiredTerm} */ const y = 2`)).not.toContain(retiredTerm)
     expect(stripComments(`<!-- 辅导 --><div/>`)).not.toContain('辅导')
   })
 

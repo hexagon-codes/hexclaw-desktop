@@ -15,6 +15,8 @@ import { EMPTY_VIEW_DESCRIPTOR } from '@/contracts'
 export interface ScenarioContext {
   agentId: string
   agentName?: string
+  /** 当前会话稳定 ID；场景包仅可用于服务端来源关联与最小恢复绑定。 */
+  sessionId?: string
   metadata?: Record<string, unknown>
 }
 
