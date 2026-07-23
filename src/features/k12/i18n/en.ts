@@ -120,7 +120,7 @@ export default {
   emptyAccum: {
     title: 'Your notes are still empty',
     sub: 'Good phrases, poems, tricky words — jot them down as you go',
-    cta: '＋ Add to notes',
+    cta: 'Add to notes',
   },
 
   // Mistake detail dialog (BUG-20260712-#2)
@@ -193,7 +193,6 @@ export default {
   },
 
   actions: {
-    prepCard: '📋 Tutoring tips',
     backup: 'Backup / Restore',
     export: 'Export',
     more: 'Export / Backup',
@@ -412,7 +411,7 @@ export default {
     filterAll: 'All',
     filterChinese: 'Chinese',
     filterEnglish: 'English',
-    addOpen: '＋ Add to collection',
+    addOpen: 'Add to collection',
     addTitle: 'Add an entry',
     subject: 'Subject',
     type: 'Type',
@@ -462,7 +461,20 @@ export default {
       'These fields keep explanations within what your child has learned; the display name is auto-generated as "{name}".',
     childName: "Child's name",
     childNamePlaceholder: 'e.g. Ming',
-    grade: 'Grade · Term',
+    grade: 'Grade',
+    semester: 'Semester',
+    gradeLevels: {
+      1: 'Grade 1',
+      2: 'Grade 2',
+      3: 'Grade 3',
+      4: 'Grade 4',
+      5: 'Grade 5',
+      6: 'Grade 6',
+    },
+    semesters: {
+      first: 'First semester',
+      second: 'Second semester',
+    },
     gradeSupportNote:
       'The current version supports primary grades 1–6. When secondary support opens, you can upgrade this profile without losing learning history.',
     textbookBySubject: 'Set textbook edition by subject',
@@ -499,7 +511,6 @@ export default {
     cardDesc:
       '{grade} · Textbooks independently bound by subject · Teaching bounded by grade level',
     back: 'Back',
-    preview: 'View example',
     create: 'Create',
     cancel: 'Cancel',
     created: 'Created "{name}"',
@@ -583,7 +594,6 @@ export default {
     mistakeCount: 'Mistakes {n}',
     reviewDue: 'To review {n}',
     records: 'Learning archive',
-    prep: 'Tutoring tips',
     enterTutor: 'Tutor',
   },
 
@@ -675,7 +685,7 @@ export default {
     },
   },
 
-  prep: {
+  tutoringTips: {
     title: 'Tutoring tips for this homework',
     generating: 'Generating tutoring tips from textbook & mistakes…',
     empty: 'Tutoring tips appear automatically after recognizing the homework.',
@@ -690,15 +700,9 @@ export default {
     groundingUploaded: 'Textbook uploaded and tutoring tips refreshed',
     groundingFailed: 'Textbook upload failed. Check the file and try again.',
     print: 'Print (A4)',
-    close: 'Close',
     legend:
-      '📖 From textbook = searched your uploaded materials · 🗂 local records · ✅ program-verified · 🤖 AI summary (for reference) = when no textbook uploaded, downgraded to AI by grade level; please double-check.',
+      '📖 From textbook = searched your uploaded materials · 🧠 Learning signal = from the mistake notebook · 🤖 AI summary (for reference) = generated at the child’s grade level when no textbook is uploaded; please double-check.',
     currentBasis: 'Current basis: {textbook} · {grade}',
-    nudge:
-      "Tutoring tonight? Spend 3 minutes prepping — I'll combine your child's mistakes and insights into a one-page 'how to teach'.",
-    startPrep: 'Start prep',
-    copied: 'Prep card copied — paste to send to your phone',
-    copyFailed: 'Copy failed, please retry',
     generateFailed:
       'Failed to generate tutoring tips: the model timed out or the network was interrupted. Please retry. Local models can be slow — switch to a faster cloud model in settings.',
   },

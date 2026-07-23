@@ -11,14 +11,14 @@
  *
  * 本层只做识题回显 + 批改触发；题干正误由家长核对护栏兜底，答案对错由后端 solve 验算链裁决，不造答案。
  */
-import { ref, computed, onBeforeUnmount, watch } from 'vue'
+import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useK12Store } from '../store'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
-import PrepCardPanel from './PrepCardPanel.vue'
+import TutoringTipsPanel from './TutoringTipsPanel.vue'
 import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
 import { extractBriefFinalAnswer } from '../graded-photo'
 import { gradeToResult, gradeToVerify } from '../mappers'
@@ -26,6 +26,8 @@ import type {
   AnswerState,
   RecognizedQuestion,
   BBox,
+  GradingQuestionCorrection,
+  GradingJobStatusResp,
   PhotoJobResult,
   ProblemKind,
   OCRConfirmationReason,
@@ -44,6 +46,8 @@ const props = defineProps<{
     Record<'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art', string>
   >
   initialImage?: string
+  /** 当前通用会话稳定 ID：只用于后端 source_session 与最小 Job 绑定恢复。 */
+  sessionId?: string
 }>()
 // close：面板自动打开（图片改道）后由头部 ✕ 收起——手动 toggle 已删（BUG-20260711-E），
 // 收起手段必须内聚在面板自身。
@@ -119,17 +123,79 @@ const activeTextbook = computed(() => {
   return props.textbooks?.[key] || (key === 'math' ? props.textbook || '' : '')
 })
 const batchWorking = ref(false)
+const confirming = ref(false)
 // 当前照片对应的统一 GradingJob（§6.7）：识题产物与整卷批改都挂在它上面。
 const currentJobId = ref('')
+const outcomeUnknown = ref(false)
+const restoredFromBinding = ref(false)
+const outcomeDialogOpen = ref(false)
+const outcomeDialogRef = ref<HTMLElement>()
+let outcomeReturnFocus: HTMLElement | null = null
 let agentGeneration = 0
 let recognitionGeneration = 0
 let recognitionAbort: AbortController | null = null
+let restoreAbort: AbortController | null = null
+let confirmationAbort: AbortController | null = null
+let gradingAbort: AbortController | null = null
 const subjectOptions = computed(() =>
   K12_GRADE_SUBJECT_OPTIONS.map(({ value, labelKey }) => ({
     value,
     label: t(labelKey),
   })),
 )
+
+function enterOutcomeUnknown(jobId: string) {
+  currentJobId.value = jobId
+  outcomeUnknown.value = true
+  batchWorking.value = false
+  recognizing.value = false
+  anchoring.value = false
+  recognitionFailed.value = false
+  errMsg.value = ''
+}
+
+function openOutcomeDialog(event?: Event) {
+  const trigger = event?.currentTarget
+  outcomeReturnFocus = trigger instanceof HTMLElement ? trigger : null
+  outcomeDialogOpen.value = true
+  void nextTick(() => outcomeDialogRef.value?.focus())
+}
+
+function closeOutcomeDialog(restoreFocus = true) {
+  const target = outcomeReturnFocus
+  outcomeDialogOpen.value = false
+  outcomeReturnFocus = null
+  if (restoreFocus && target?.isConnected) void nextTick(() => target.focus())
+}
+
+function trapOutcomeFocus(event: KeyboardEvent) {
+  if (event.key !== 'Tab' || !outcomeDialogRef.value) return
+  const focusable = [
+    ...outcomeDialogRef.value.querySelectorAll<HTMLElement>(
+      'button:not([disabled]),[href],input:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
+    ),
+  ]
+  if (!focusable.length) {
+    event.preventDefault()
+    outcomeDialogRef.value.focus()
+    return
+  }
+  const first = focusable[0]!
+  const last = focusable[focusable.length - 1]!
+  if (
+    event.shiftKey &&
+    (document.activeElement === first || document.activeElement === outcomeDialogRef.value)
+  ) {
+    event.preventDefault()
+    last.focus()
+  } else if (
+    !event.shiftKey &&
+    (document.activeElement === last || document.activeElement === outcomeDialogRef.value)
+  ) {
+    event.preventDefault()
+    first.focus()
+  }
+}
 
 // 冷启动倒查建档（#3）：仅在无年级时可用（识题产出知识点后倒查推断）
 const coldStarting = ref(false)
@@ -248,6 +314,63 @@ function normalizeAnswerState(question: RecognizedQuestion): AnswerState {
   return question.student_answer?.trim() ? 'present' : 'blank'
 }
 
+function guardRowsFromQuestions(questions: RecognizedQuestion[]): GuardRow[] {
+  return questions.map((question) => ({
+    problemId: question.problem_id ?? '',
+    problemKind: question.problem_kind ?? 'standalone',
+    parentProblemId: question.parent_problem_id ?? '',
+    subproblemNo: question.subproblem_no ?? '',
+    attemptId: question.attempt_id ?? '',
+    rawProblem: question.raw_transcription ?? question.question,
+    problem: question.canonical_markdown ?? question.question,
+    canonicalVersion: question.canonical_version ?? 1,
+    knowledgePoints: question.knowledge_points ?? [],
+    editing: false,
+    rawStudentAnswer: question.answer_raw_transcription ?? question.student_answer ?? '',
+    studentAnswer: question.answer_canonical_markdown ?? question.student_answer ?? '',
+    answerState: normalizeAnswerState(question),
+    confirmationRequired: question.confirmation_required ?? false,
+    confirmationReasons: question.confirmation_reasons ?? [],
+    recognitionConfirmed: !(question.confirmation_required ?? false),
+    grading: false,
+    solving: false,
+    verify: null,
+    recorded: false,
+    recordDeduplicated: false,
+    solution: '',
+    wrongStep: '',
+    errorCause: '',
+    bbox: question.bbox ?? null,
+    graded: false,
+    verdict: '',
+    expanded: false,
+  }))
+}
+
+function projectRestoredStatus(status: GradingJobStatusResp) {
+  currentJobId.value = status.job_id
+  restoredFromBinding.value = true
+  recognitionFailed.value = false
+  errMsg.value = ''
+
+  const questions = status.recognition?.questions ?? status.job.recognized_questions ?? []
+  if (questions.length && !rows.value.length) rows.value = guardRowsFromQuestions(questions)
+  if (!selectedSubject.value && status.recognition?.subject) {
+    selectedSubject.value = status.recognition.subject
+  }
+
+  const recognitionStages = ['queued', 'normalizing', 'recognizing']
+  recognizing.value =
+    recognitionStages.includes(status.stage) || (status.stage === 'locating' && !rows.value.length)
+  anchoring.value = status.anchor_state === 'pending' && !!rows.value.length
+  anchorWarning.value = status.anchor_state === 'degraded' ? t('k12.recognize.anchorFailed') : ''
+  confirmed.value = status.confirmation_state === 'confirmed'
+  batchWorking.value = ['assessing', 'rendering', 'projecting'].includes(status.stage)
+  outcomeUnknown.value = false
+
+  if (status.stage === 'outcome_unknown') enterOutcomeUnknown(status.job_id)
+}
+
 function onFile(e: Event) {
   const file = (e.target as HTMLInputElement).files?.[0]
   if (!file) return
@@ -264,6 +387,12 @@ watch(
   () => {
     agentGeneration += 1
     recognitionGeneration += 1
+    restoreAbort?.abort()
+    restoreAbort = null
+    confirmationAbort?.abort()
+    confirmationAbort = null
+    gradingAbort?.abort()
+    gradingAbort = null
     recognitionAbort?.abort()
     recognitionAbort = null
     imageB64.value = ''
@@ -276,6 +405,10 @@ watch(
     confirmed.value = false
     correctionMode.value = false
     batchWorking.value = false
+    confirming.value = false
+    outcomeUnknown.value = false
+    restoredFromBinding.value = false
+    closeOutcomeDialog(false)
     selectedSubject.value = ''
     currentJobId.value = ''
     coldStarting.value = false
@@ -294,8 +427,54 @@ watch(
   { immediate: true },
 )
 
+// 刷新/重启恢复：没有新图片时，只按 session+agent 的最小绑定 GET 同一 Job。
+// outcome_unknown 原位恢复；确定终态/非法绑定由 store 清理后关闭这条空的场景消息。
+onMounted(async () => {
+  if (props.initialImage?.trim() || !props.sessionId?.trim()) return
+  const generation = agentGeneration
+  const controller = new AbortController()
+  restoreAbort = controller
+  restoredFromBinding.value = true
+  try {
+    const status = await store.restorePhotoJob(
+      props.agentId,
+      props.sessionId,
+      controller.signal,
+      (snapshot) => {
+        if (generation !== agentGeneration || controller.signal.aborted) return
+        projectRestoredStatus(snapshot)
+      },
+    )
+    if (generation !== agentGeneration || controller.signal.aborted) return
+    if (!status) {
+      restoredFromBinding.value = false
+      emit('close')
+      return
+    }
+    projectRestoredStatus(status)
+  } catch (error) {
+    if (
+      generation !== agentGeneration ||
+      controller.signal.aborted ||
+      (error as Error).name === 'AbortError'
+    )
+      return
+    restoredFromBinding.value = false
+    emit('close')
+  } finally {
+    if (restoreAbort === controller) restoreAbort = null
+  }
+})
+
 async function run() {
   if (!imageB64.value.trim()) return
+  restoreAbort?.abort()
+  restoreAbort = null
+  confirmationAbort?.abort()
+  confirmationAbort = null
+  confirming.value = false
+  gradingAbort?.abort()
+  gradingAbort = null
   const generation = agentGeneration
   const recognition = ++recognitionGeneration
   const sourceImage = imageB64.value.trim()
@@ -308,6 +487,9 @@ async function run() {
   anchorWarning.value = ''
   errMsg.value = ''
   recognitionFailed.value = false
+  outcomeUnknown.value = false
+  restoredFromBinding.value = false
+  closeOutcomeDialog(false)
   confirmed.value = false
   correctionMode.value = false
   coldStartResult.value = null
@@ -318,47 +500,22 @@ async function run() {
     // 桌面入口迁移（§6.7/§6.15）：识题编排改走统一 GradingJob——创建 Job 后后端异步推进
     // （识别 + 锚点并行增强），前端轮询到确认停点取识别产物回显；护栏交互不变。
     // 识别失败可重试：同图重跑幂等命中失败 Job 并自动走 retry 端点（store 内实现）。
-    const job = await store.recognizePhotoJob(props.agentId, sourceImage, controller.signal)
+    const job = await store.recognizePhotoJob(
+      props.agentId,
+      sourceImage,
+      controller.signal,
+      props.sessionId,
+    )
     if (generation !== agentGeneration || recognition !== recognitionGeneration) return
     currentJobId.value = job.jobId
+    if (job.stage === 'outcome_unknown') {
+      enterOutcomeUnknown(job.jobId)
+      return
+    }
     // Polish-2：识题自动判定整卷学科 → 预填学科下拉，家长不必手选（仍可手动覆盖）。
     // 仅识题判出学科时预填；一科都判不出则保持空，此时 solve/批改按钮仍 gate 空学科需家长手选。
     if (job.subject) selectedSubject.value = job.subject
-    rows.value = job.questions.map((question: RecognizedQuestion) => {
-      const answerState = normalizeAnswerState(question)
-      return {
-        problemId: question.problem_id ?? '',
-        problemKind: question.problem_kind ?? 'standalone',
-        parentProblemId: question.parent_problem_id ?? '',
-        subproblemNo: question.subproblem_no ?? '',
-        attemptId: question.attempt_id ?? '',
-        rawProblem: question.raw_transcription ?? question.question,
-        problem: question.canonical_markdown ?? question.question,
-        canonicalVersion: question.canonical_version ?? 1,
-        knowledgePoints: question.knowledge_points ?? [],
-        editing: false,
-        // 预填识题回收的孩子作答；blank/present/unclear 由 answer_state 明确分叉。
-        rawStudentAnswer: question.answer_raw_transcription ?? question.student_answer ?? '',
-        studentAnswer: question.answer_canonical_markdown ?? question.student_answer ?? '',
-        answerState,
-        confirmationRequired: question.confirmation_required ?? false,
-        confirmationReasons: question.confirmation_reasons ?? [],
-        recognitionConfirmed: !(question.confirmation_required ?? false),
-        grading: false,
-        solving: false,
-        verify: null,
-        recorded: false,
-        recordDeduplicated: false,
-        solution: '',
-        wrongStep: '',
-        errorCause: '',
-        // 锚点 bbox 已随 Job 停点产物返回（无需独立 anchors 请求）。
-        bbox: question.bbox ?? null,
-        graded: false,
-        verdict: '',
-        expanded: false,
-      }
-    })
+    rows.value = guardRowsFromQuestions(job.questions)
     // 锚点与家长确认是正交分支。awaiting_confirmation 只代表识别事实已可回显，
     // 不能据此把 anchor_state=pending 当成最终无坐标；继续后台轮询，且只按稳定 ProblemID 补 geometry。
     if (job.anchorState === 'pending') {
@@ -371,6 +528,10 @@ async function run() {
           controller.signal,
         )
         if (generation !== agentGeneration || recognition !== recognitionGeneration) return
+        if (anchored.stage === 'outcome_unknown') {
+          enterOutcomeUnknown(job.jobId)
+          return
+        }
         for (const question of anchored.questions) {
           if (!question.problem_id) continue
           const row = rows.value.find((candidate) => candidate.problemId === question.problem_id)
@@ -414,7 +575,7 @@ async function run() {
 }
 
 function retryRecognitionStage() {
-  if (!recognizing.value && imageB64.value.trim()) void run()
+  if (!outcomeUnknown.value && !recognizing.value && imageB64.value.trim()) void run()
 }
 
 function syncAnswerState(row: GuardRow) {
@@ -427,26 +588,86 @@ function syncAnswerState(row: GuardRow) {
 }
 
 function toggleEdit(row: GuardRow) {
+  if (outcomeUnknown.value || confirming.value) return
   row.editing = !row.editing
   if (row.confirmationRequired) row.recognitionConfirmed = false
   confirmed.value = false
 }
 
 function startCorrection() {
+  if (outcomeUnknown.value || confirming.value) return
   correctionMode.value = true
   for (const row of rows.value) row.editing = true
 }
 
-function confirmAll() {
+function gradingCorrections(): GradingQuestionCorrection[] {
+  return rows.value.map((row, index) => ({
+    index,
+    problem_id: row.problemId || undefined,
+    confirmed: row.recognitionConfirmed,
+    question: row.problem.trim(),
+    canonical_markdown: row.problem.trim(),
+    student_answer: row.studentAnswer.trim(),
+    answer_canonical_markdown: row.studentAnswer.trim(),
+    answer_state: row.answerState,
+    subject: selectedSubject.value || undefined,
+  }))
+}
+
+async function confirmAll() {
   if (
+    outcomeUnknown.value ||
+    confirming.value ||
+    !props.agentId.trim() ||
+    !props.sessionId?.trim() ||
+    !currentJobId.value.trim() ||
     !rows.value.length ||
     rows.value.some((row) => !row.problem.trim()) ||
     unconfirmedRiskCount.value > 0
   )
     return
-  for (const row of rows.value) row.editing = false
-  correctionMode.value = false
-  confirmed.value = true
+  const generation = agentGeneration
+  const jobId = currentJobId.value
+  confirmationAbort?.abort()
+  const controller = new AbortController()
+  confirmationAbort = controller
+  confirming.value = true
+  errMsg.value = ''
+  try {
+    const status = await store.confirmPhotoJob(
+      props.agentId,
+      jobId,
+      {
+        subject: selectedSubject.value,
+        grade: props.grade ?? '',
+        corrections: gradingCorrections(),
+      },
+      controller.signal,
+    )
+    if (generation !== agentGeneration || controller.signal.aborted || currentJobId.value !== jobId)
+      return
+    if (status.stage === 'outcome_unknown') {
+      enterOutcomeUnknown(jobId)
+      return
+    }
+    if (status.confirmation_state !== 'confirmed') {
+      throw new Error(t('k12.recognize.jobFailed'))
+    }
+    for (const row of rows.value) row.editing = false
+    correctionMode.value = false
+    confirmed.value = true
+  } catch (error) {
+    if (
+      generation !== agentGeneration ||
+      controller.signal.aborted ||
+      (error as Error).name === 'AbortError'
+    )
+      return
+    errMsg.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (confirmationAbort === controller) confirmationAbort = null
+    if (generation === agentGeneration) confirming.value = false
+  }
 }
 
 // ── INV-007：正确题默认折叠（口径对齐 IM 侧 INV-008 正确题单行摘要）────────────
@@ -470,6 +691,7 @@ function truncateProblem(problem: string): string {
 async function gradeRow(i: number) {
   const row = rows.value[i]
   if (
+    outcomeUnknown.value ||
     !row ||
     !isAnswerable(row) ||
     !row.problem.trim() ||
@@ -513,6 +735,7 @@ async function gradeRow(i: number) {
 async function solveRow(i: number) {
   const row = rows.value[i]
   if (
+    outcomeUnknown.value ||
     !row ||
     !isAnswerable(row) ||
     !row.problem.trim() ||
@@ -548,7 +771,14 @@ async function solveRow(i: number) {
 }
 
 onBeforeUnmount(() => {
+  closeOutcomeDialog(false)
   recognitionGeneration += 1
+  restoreAbort?.abort()
+  restoreAbort = null
+  confirmationAbort?.abort()
+  confirmationAbort = null
+  gradingAbort?.abort()
+  gradingAbort = null
   recognitionAbort?.abort()
   recognitionAbort = null
 })
@@ -572,6 +802,7 @@ async function runBounded(
 
 async function gradeAllAnswered() {
   if (
+    outcomeUnknown.value ||
     batchWorking.value ||
     anchoring.value ||
     !selectedSubject.value ||
@@ -598,24 +829,39 @@ async function gradeAllAnswered() {
 async function gradeWholeSheetViaJob() {
   const generation = agentGeneration
   const jobId = currentJobId.value
-  const corrections = rows.value.map((row, index) => ({
-    index,
-    problem_id: row.problemId || undefined,
-    confirmed: row.recognitionConfirmed,
-    question: row.problem.trim(),
-    canonical_markdown: row.problem.trim(),
-    student_answer: row.studentAnswer.trim(),
-    answer_canonical_markdown: row.studentAnswer.trim(),
-    answer_state: row.answerState,
-    subject: selectedSubject.value || undefined,
-  }))
-  const result = await store.gradePhotoJob(props.agentId, jobId, {
-    subject: selectedSubject.value,
-    grade: props.grade ?? '',
-    corrections,
-  })
-  if (generation !== agentGeneration) return
-  applyPhotoJobResult(result)
+  const corrections = gradingCorrections()
+  gradingAbort?.abort()
+  const controller = new AbortController()
+  gradingAbort = controller
+  try {
+    const outcome = await store.gradePhotoJob(
+      props.agentId,
+      jobId,
+      {
+        subject: selectedSubject.value,
+        grade: props.grade ?? '',
+        corrections,
+        sourceSession: props.sessionId,
+      },
+      controller.signal,
+    )
+    if (generation !== agentGeneration || controller.signal.aborted) return
+    if (outcome.stage === 'outcome_unknown') {
+      enterOutcomeUnknown(jobId)
+      return
+    }
+    applyPhotoJobResult(outcome.result)
+  } catch (error) {
+    if (
+      generation !== agentGeneration ||
+      controller.signal.aborted ||
+      (error as Error).name === 'AbortError'
+    )
+      return
+    throw error
+  } finally {
+    if (gradingAbort === controller) gradingAbort = null
+  }
 }
 
 /** Job completed 的逐题结果 → 护栏行状态（PhotoGradeOverlay 数据源对齐）。 */
@@ -672,7 +918,13 @@ function applyPhotoJobResult(result: PhotoJobResult) {
 }
 
 async function solveAllBlank() {
-  if (batchWorking.value || !selectedSubject.value || !blankPendingIndexes.value.length) return
+  if (
+    outcomeUnknown.value ||
+    batchWorking.value ||
+    !selectedSubject.value ||
+    !blankPendingIndexes.value.length
+  )
+    return
   batchWorking.value = true
   errMsg.value = ''
   const indexes = [...blankPendingIndexes.value]
@@ -684,7 +936,7 @@ async function solveAllBlank() {
 }
 
 async function coldStart() {
-  if (!canColdStart.value || coldStarting.value) return
+  if (outcomeUnknown.value || !canColdStart.value || coldStarting.value) return
   coldStarting.value = true
   errMsg.value = ''
   try {
@@ -704,11 +956,13 @@ async function coldStart() {
 <template>
   <div
     class="rec-panel"
-    :class="{ 'rec-panel--conversation': !!initialImage }"
+    :class="{ 'rec-panel--conversation': !!initialImage || restoredFromBinding }"
     data-testid="recognize-guard"
   >
     <div class="rec-panel__head">
-      <span v-if="!initialImage" class="rec-panel__title">📷 {{ t('k12.recognize.title') }}</span>
+      <span v-if="!initialImage && !restoredFromBinding" class="rec-panel__title"
+        >📷 {{ t('k12.recognize.title') }}</span
+      >
       <button
         class="rec-panel__x"
         data-testid="recognize-close"
@@ -718,22 +972,24 @@ async function coldStart() {
         ✕
       </button>
     </div>
-    <p v-if="!initialImage" class="rec-panel__intro">{{ t('k12.recognize.intro') }}</p>
+    <p v-if="!initialImage && !restoredFromBinding" class="rec-panel__intro">
+      {{ t('k12.recognize.intro') }}
+    </p>
 
     <!-- 图片输入：文件选择 + base64 粘贴回退 -->
-    <label v-if="!initialImage" class="rec-panel__file">
+    <label v-if="!initialImage && !restoredFromBinding" class="rec-panel__file">
       <input type="file" accept="image/*" data-testid="recognize-file" @change="onFile" />
       <span>{{ t('k12.recognize.pickImage') }}</span>
     </label>
     <!-- 选了图片 → 显示缩略图预览（不糊 base64 原文）；textarea 用 v-show 保留在 DOM 供粘贴回退。 -->
     <img
-      v-if="isImageData && !initialImage"
+      v-if="isImageData && !initialImage && !restoredFromBinding"
       :src="imageB64"
       class="rec-panel__preview"
       data-testid="recognize-preview"
       alt="作业照片预览"
     />
-    <HcClearableField>
+    <HcClearableField v-if="!restoredFromBinding">
       <textarea
         v-show="!isImageData && !initialImage"
         v-model="imageB64"
@@ -745,7 +1001,7 @@ async function coldStart() {
     </HcClearableField>
 
     <button
-      v-if="!initialImage"
+      v-if="!initialImage && !restoredFromBinding"
       class="rec-panel__run"
       data-testid="recognize-run"
       :disabled="!imageB64.trim() || recognizing"
@@ -754,21 +1010,21 @@ async function coldStart() {
       {{ recognizing ? t('k12.recognize.running') : t('k12.recognize.run') }}
     </button>
 
-    <div v-if="errMsg && !recognitionFailed" class="rec-panel__err">
+    <div v-if="errMsg && !recognitionFailed && !outcomeUnknown" class="rec-panel__err">
       {{ t('k12.recognize.err') }}：{{ errMsg }}
     </div>
 
     <div
-      v-if="recognizing || rows.length || recognitionFailed"
+      v-if="recognizing || rows.length || recognitionFailed || outcomeUnknown"
       class="rec-pipeline"
       data-testid="recognize-pipeline"
       aria-label="批改准备状态"
     >
-      <div class="rec-pipeline__head">
+      <div v-if="!outcomeUnknown" class="rec-pipeline__head">
         <b>批改准备</b>
         <span>识别完成后，两条准备任务同时进行</span>
       </div>
-      <div class="rec-pipeline__branches">
+      <div v-if="!outcomeUnknown" class="rec-pipeline__branches">
         <div
           class="rec-pipeline__branch"
           :class="{ 'is-done': confirmed }"
@@ -813,7 +1069,7 @@ async function coldStart() {
         </div>
       </div>
       <div
-        v-if="recognitionFailed"
+        v-if="recognitionFailed && !outcomeUnknown"
         class="rec-pipeline__error"
         data-testid="recognize-stage-error"
         role="alert"
@@ -821,6 +1077,20 @@ async function coldStart() {
         <span>{{ t('k12.recognize.err') }}：{{ errMsg }}</span>
         <button type="button" data-testid="recognize-stage-retry" @click="retryRecognitionStage">
           重试当前阶段
+        </button>
+      </div>
+      <div
+        v-if="outcomeUnknown"
+        class="rec-pipeline__error is-unknown"
+        data-testid="recognize-outcome-unknown"
+        role="status"
+      >
+        <span
+          ><b>结果待核实</b
+          >本次批改结果尚未确认。为避免重复调用，系统不会自动重试；刷新或重新打开后仍会保留此状态。</span
+        >
+        <button type="button" data-testid="recognize-outcome-status" @click="openOutcomeDialog">
+          查看结果状态
         </button>
       </div>
     </div>
@@ -834,7 +1104,7 @@ async function coldStart() {
       <HcSelect
         v-model="selectedSubject"
         :options="subjectOptions"
-        :placeholder="t('k12.prep.pickHint')"
+        :placeholder="t('k12.tutoringTips.pickHint')"
       />
     </div>
 
@@ -844,7 +1114,7 @@ async function coldStart() {
       <button
         class="rec-cold__btn"
         data-testid="coldstart-infer"
-        :disabled="coldStarting"
+        :disabled="outcomeUnknown || coldStarting"
         @click="coldStart"
       >
         {{
@@ -886,6 +1156,7 @@ async function coldStart() {
               class="rec-row__edit"
               :data-testid="`rq-problem-${i}`"
               :placeholder="t('k12.recognize.problemPlaceholder')"
+              :disabled="confirming"
             />
           </HcClearableField>
           <MarkdownRenderer
@@ -990,6 +1261,7 @@ async function coldStart() {
             :data-testid="`rq-solve-${i}`"
             :disabled="
               batchWorking ||
+              outcomeUnknown ||
               !row.problem.trim() ||
               !selectedSubject ||
               row.answerState !== 'blank' ||
@@ -1005,6 +1277,7 @@ async function coldStart() {
             :data-testid="`rq-grade-${i}`"
             :disabled="
               batchWorking ||
+              outcomeUnknown ||
               !row.problem.trim() ||
               !selectedSubject ||
               !row.studentAnswer.trim() ||
@@ -1051,7 +1324,15 @@ async function coldStart() {
         <button
           class="rec-guard__confirm"
           data-testid="recognize-confirm-all"
-          :disabled="rows.some((row) => !row.problem.trim()) || unconfirmedRiskCount > 0"
+          :disabled="
+            outcomeUnknown ||
+            confirming ||
+            !agentId.trim() ||
+            !sessionId?.trim() ||
+            !currentJobId.trim() ||
+            rows.some((row) => !row.problem.trim()) ||
+            unconfirmedRiskCount > 0
+          "
           @click="confirmAll"
         >
           {{ t('k12.recognize.confirmAll') }}
@@ -1060,6 +1341,7 @@ async function coldStart() {
           v-if="!correctionMode"
           class="rec-guard__correct"
           data-testid="recognize-correct"
+          :disabled="outcomeUnknown || confirming"
           @click="startCorrection"
         >
           {{ t('k12.recognize.correctRecognition') }}
@@ -1077,7 +1359,7 @@ async function coldStart() {
           v-if="answerPendingIndexes.length"
           class="rec-guard__batchbtn rec-guard__batchbtn--primary"
           data-testid="recognize-grade-all"
-          :disabled="batchWorking || anchoring || !selectedSubject"
+          :disabled="batchWorking || outcomeUnknown || anchoring || !selectedSubject"
           @click="gradeAllAnswered"
         >
           {{
@@ -1090,7 +1372,7 @@ async function coldStart() {
           v-if="blankPendingIndexes.length"
           class="rec-guard__batchbtn"
           data-testid="recognize-solve-all"
-          :disabled="batchWorking || !selectedSubject"
+          :disabled="batchWorking || outcomeUnknown || !selectedSubject"
           @click="solveAllBlank"
         >
           {{
@@ -1101,21 +1383,63 @@ async function coldStart() {
         </button>
       </div>
     </div>
-    <p v-else-if="!recognizing" class="rec-panel__empty">{{ t('k12.recognize.empty') }}</p>
+    <p v-else-if="!recognizing && !outcomeUnknown && !restoredFromBinding" class="rec-panel__empty">
+      {{ t('k12.recognize.empty') }}
+    </p>
 
     <!-- 原图批改叠加（Phase 1）：已批改题在作业原图上确定性画 ✓/✗（bbox 缺失/非法则降级文字批改）。 -->
     <PhotoGradeOverlay v-if="showOverlay" :image="imageB64" :marks="overlayMarks" />
 
-    <!-- 整体确认后才内联辅导要点：避免 OCR 尚未核对就把误识知识点送入备课链。 -->
-    <PrepCardPanel
+    <!-- 服务端持久确认成功后才内联辅导要点；未知结果只冻结生成，不清空已生成内容。 -->
+    <TutoringTipsPanel
       v-if="confirmed && selectedSubject && rows.length && allKnowledgePoints.length"
       :agent-id="agentId"
+      :grading-job-id="currentJobId"
+      :session-id="sessionId"
+      :generation-locked="outcomeUnknown"
       :grade="props.grade || ''"
       :subject="selectedSubject"
       :textbook="activeTextbook"
       :knowledge-points="allKnowledgePoints"
     />
   </div>
+
+  <Teleport v-if="outcomeDialogOpen" to="body">
+    <div class="rec-unknown-overlay">
+      <div
+        ref="outcomeDialogRef"
+        class="rec-unknown-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="recognize-outcome-title"
+        tabindex="-1"
+        data-testid="recognize-outcome-dialog"
+        @keydown.esc.stop.prevent="closeOutcomeDialog()"
+        @keydown.tab="trapOutcomeFocus"
+      >
+        <div class="rec-unknown-modal__head">
+          <b id="recognize-outcome-title">结果待核实</b>
+        </div>
+        <div class="rec-unknown-modal__body">
+          <div class="rec-unknown-notice">
+            <b>本次批改没有得到可确认的完整结果。</b><br />
+            为避免重复调用和重复计费，系统不会自动重试。已完成的内容会安全保留；你可以稍后再查看，刷新或重新打开后仍会恢复这个状态。
+          </div>
+          <div class="rec-unknown-list">
+            <div class="rec-unknown-row"><b>当前状态</b><span>等待结果核实</span><i>待核实</i></div>
+            <div class="rec-unknown-row">
+              <b>已完成内容</b><span>已安全保留，不会从头重复处理</span><i>已保留</i>
+            </div>
+          </div>
+        </div>
+        <div class="rec-unknown-modal__foot">
+          <button type="button" data-testid="recognize-outcome-close" @click="closeOutcomeDialog()">
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -1316,6 +1640,20 @@ async function coldStart() {
   font: inherit;
   cursor: pointer;
 }
+.rec-pipeline__error.is-unknown {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--hc-warning) 10%, transparent);
+  color: var(--hc-text-secondary);
+}
+.rec-pipeline__error.is-unknown span {
+  line-height: 1.5;
+}
+.rec-pipeline__error.is-unknown b {
+  display: block;
+  margin-bottom: 1px;
+  color: var(--hc-warning);
+  font-size: 10.5px;
+}
 .rec-panel__subject {
   display: flex;
   flex-direction: column;
@@ -1339,6 +1677,99 @@ async function coldStart() {
 }
 .rec-row__details b {
   color: var(--hc-text-primary);
+}
+
+/* 已批准的“结果待核实”只读详情：沿用桌面 modal 几何，不增加额外操作。 */
+.rec-unknown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--hc-z-modal);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 11vh;
+  background: rgba(8, 18, 32, 0.4);
+  backdrop-filter: blur(3px) saturate(120%);
+  -webkit-backdrop-filter: blur(3px) saturate(120%);
+}
+.rec-unknown-modal {
+  width: 478px;
+  max-width: 92vw;
+  overflow: hidden;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 16px;
+  outline: none;
+  background: var(--hc-bg-elevated);
+  box-shadow: var(--hc-shadow-float);
+  color: var(--hc-text-primary);
+}
+.rec-unknown-modal__head {
+  padding: 16px 18px;
+  border-bottom: 0.5px solid var(--hc-border);
+}
+.rec-unknown-modal__head b {
+  font-size: 15px;
+  font-weight: 600;
+}
+.rec-unknown-modal__body {
+  padding: 16px 18px;
+}
+.rec-unknown-notice {
+  padding: 10px 12px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 10px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.rec-unknown-notice b {
+  color: var(--hc-text-primary);
+}
+.rec-unknown-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+}
+.rec-unknown-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 9px;
+  color: var(--hc-text-secondary);
+  font-size: 11.5px;
+}
+.rec-unknown-row b {
+  color: var(--hc-text-primary);
+}
+.rec-unknown-row span {
+  flex: 1;
+}
+.rec-unknown-row i {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
+  color: var(--hc-warning);
+  font-style: normal;
+  font-size: 10.5px;
+}
+.rec-unknown-modal__foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 12px 18px;
+  border-top: 0.5px solid var(--hc-border);
+}
+.rec-unknown-modal__foot button {
+  padding: 7px 14px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 8px;
+  background: var(--hc-bg-input);
+  color: var(--hc-text-primary);
+  font: inherit;
+  cursor: pointer;
 }
 /* md 值容器:紧凑段距，避免块级 p 默认外边距撑开批改详情行。 */
 .rec-row__md :deep(p) {

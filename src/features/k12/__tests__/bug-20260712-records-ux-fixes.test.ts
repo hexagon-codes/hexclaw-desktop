@@ -28,7 +28,7 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: (...args: unknown[]) => h.markMastered(...args),
   k12DeleteMistake: (...args: unknown[]) => h.del(...args),
   k12ReviewRetry: (...args: unknown[]) => h.retry(...args),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({ trend: { mastered: 0, reviewing: 1, retried: 0, archived: 0, total: 1 }, weak_top3: [], month_new_mistakes: 1, review_completion_rate: 0, consecutive_fail_kps: [], suggestion: '' }),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),

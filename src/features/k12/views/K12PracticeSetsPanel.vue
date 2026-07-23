@@ -4,7 +4,7 @@
   打印/发送即家长确认（finalize 一步固化，逐题跳过阻断题）；界面不展示六态时间轴（三态：待打印/待完成/已批改）。
 -->
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import {
@@ -59,7 +59,6 @@ const busy = ref('') // record_id（或 record_id:item_id）级操作锁
 const printPreview = ref({
   open: false,
   printing: false,
-  pdfUrl: '',
   title: '',
   pdf: null as Blob | null,
   jobId: '',
@@ -74,13 +73,15 @@ function newPrintIdempotencyKey(recordId: string): string {
 
 function closePrintPreview(force = false) {
   if (printPreview.value.printing && !force) return
-  if (printPreview.value.pdfUrl) URL.revokeObjectURL(printPreview.value.pdfUrl)
-  printPreview.value = { open: false, printing: false, pdfUrl: '', title: '', pdf: null, jobId: '', recordId: '' }
+  printPreview.value = {
+    open: false,
+    printing: false,
+    title: '',
+    pdf: null,
+    jobId: '',
+    recordId: '',
+  }
 }
-
-onBeforeUnmount(() => {
-  if (printPreview.value.pdfUrl) URL.revokeObjectURL(printPreview.value.pdfUrl)
-})
 
 async function load() {
   if (!props.agentId) return
@@ -225,7 +226,6 @@ async function finalize(via: 'print' | 'send') {
       printPreview.value = {
         open: true,
         printing: false,
-        pdfUrl: URL.createObjectURL(pdf),
         title: rendered.title,
         pdf,
         jobId: job.print_job_id,
@@ -265,7 +265,7 @@ async function confirmPrintPreview() {
       () => k12RecordPracticePrintEvent(props.agentId, current.jobId, { status: 'dialog_open' }),
       () => k12GetPracticePrintJob(props.agentId, current.jobId),
     )
-    // DD-023A：确认打印必须复用 iframe 正在预览的 exact PDF Blob，禁止再次
+    // DD-023A：确认打印必须复用 PDF.js 画布正在预览的 exact PDF Blob，禁止再次
     // 从 Markdown/HTML 渲染，否则预览与物理打印分页会漂移。
     const receipt = await printPracticePaperWithReceipt(current.pdf)
     if (receipt.status === 'failed' || receipt.status === 'outcome_unknown') {
@@ -275,11 +275,15 @@ async function confirmPrintPreview() {
         failure_kind: receipt.failure_kind,
         failure_detail: receipt.failure_detail,
       })
-      throw new Error(receipt.failure_detail || receipt.failure_kind || '系统打印对话框未返回可验证回执')
+      throw new Error(
+        receipt.failure_detail || receipt.failure_kind || '系统打印对话框未返回可验证回执',
+      )
     }
     if (receipt.status === 'cancelled') {
       await k12RecordPracticePrintEvent(props.agentId, current.jobId, {
-        status: 'cancelled', native_job_id: receipt.native_job_id, printer_snapshot: receipt.printer_snapshot,
+        status: 'cancelled',
+        native_job_id: receipt.native_job_id,
+        printer_snapshot: receipt.printer_snapshot,
       })
       toast.info(t('k12.practice.paperPrintFailed'))
       closePrintPreview(true)
@@ -646,7 +650,7 @@ async function cancelSet(s: PracticeSetDTO) {
     <K12PrintPreviewModal
       :open="printPreview.open"
       :title="printPreview.title"
-      :pdf-url="printPreview.pdfUrl"
+      :pdf="printPreview.pdf"
       :printing="printPreview.printing"
       @close="closePrintPreview"
       @print="confirmPrintPreview"

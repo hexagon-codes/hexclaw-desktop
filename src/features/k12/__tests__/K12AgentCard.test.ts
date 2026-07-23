@@ -65,12 +65,15 @@ describe('K12AgentCard（原型同步·辅导老师卡计数 + 快捷入口）',
     expect(w.text()).toContain('待复习 2')
   })
 
-  it('计数不可用时不渲染空计数行，K12 标识由宿主标题行投影', async () => {
+  it('计数不可用时保留空事实槽但不生成占位文案，K12 标识由宿主标题行投影', async () => {
     ;(k12ListMistakes as unknown as Mock).mockRejectedValueOnce(new Error('offline'))
     ;(k12ReviewQueue as unknown as Mock).mockRejectedValueOnce(new Error('offline'))
     const w = render()
     await flushPromises()
-    expect(w.find('.k12ac__chips').exists()).toBe(false)
+    const facts = w.find('.k12ac__chips')
+    expect(facts.exists()).toBe(true)
+    expect(facts.text()).toBe('')
+    expect(facts.attributes('aria-hidden')).toBe('true')
     expect(w.find('.k12ac__identity').exists()).toBe(false)
   })
 
@@ -95,8 +98,8 @@ describe('K12AgentCard（原型同步·辅导老师卡计数 + 快捷入口）',
         scenarioTab: 'records',
       },
     })
-    // 备课卡快捷入口已移除：卡上不应再有「备课卡」按钮
-    expect(btns.find((b) => b.text().includes('备课卡'))).toBeUndefined()
+    // 辅导要点快捷入口已移除：卡上不应再有「辅导要点」按钮
+    expect(btns.find((b) => b.text().includes('辅导要点'))).toBeUndefined()
   })
 
   it('编辑档案 → 打开改档表单（预填当前档案）', async () => {

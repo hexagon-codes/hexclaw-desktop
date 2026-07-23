@@ -258,11 +258,11 @@ export async function printPracticePaperWithReceipt(
   return printPdfWithReceipt(pdf)
 }
 
-// ── 备课卡打印 ──────────────────────────────────────────────
-export interface PrepSection { title: string; content: string; source_label: string }
-export interface PrepCard { knowledge_points: string[]; sections: PrepSection[] }
+// ── 辅导要点打印 ──────────────────────────────────────────────
+export interface TutoringTipsSection { title: string; content: string; source_label: string }
+export interface TutoringTips { knowledge_points: string[]; sections: TutoringTipsSection[] }
 
-export function buildPrepCardHtml(card: PrepCard, meta: { title: string; gradeLabel: string }): string {
+export function buildTutoringTipsHtml(card: TutoringTips, meta: { title: string; gradeLabel: string }): string {
   const kps = card.knowledge_points.map((k) => esc(k)).join(' · ')
   const secs = card.sections
     .map(
@@ -291,8 +291,8 @@ export function buildPrepCardHtml(card: PrepCard, meta: { title: string; gradeLa
 </body></html>`
 }
 
-/** 备课卡纯文本（供「发到手机」复制到剪贴板：家长粘贴进手机 IM/备忘）。 */
-export function prepCardToText(card: PrepCard, meta: { title: string; gradeLabel: string }): string {
+/** 辅导要点纯文本：冻结为私聊投递载荷。 */
+export function tutoringTipsToText(card: TutoringTips, meta: { title: string; gradeLabel: string }): string {
   const head = `【${meta.title}】${meta.gradeLabel}${card.knowledge_points.length ? ` · ${card.knowledge_points.join(' · ')}` : ''}`
   const body = card.sections
     .map((s) => `\n${s.title}${s.source_label ? `（${s.source_label}）` : ''}\n${s.content}`)
@@ -301,8 +301,8 @@ export function prepCardToText(card: PrepCard, meta: { title: string; gradeLabel
 }
 
 /** Canonical printable source frozen by the backend generic PrintJob. */
-export function prepCardToMarkdown(
-  card: PrepCard,
+export function tutoringTipsToMarkdown(
+  card: TutoringTips,
   meta: { title: string; gradeLabel: string },
 ): string {
   const lines = [`# ${meta.title}`, '', meta.gradeLabel]
@@ -315,9 +315,9 @@ export function prepCardToMarkdown(
   return lines.join('\n').trim()
 }
 
-/** 浏览器/prototype 打印备课卡；Desktop 正式入口必须先走持久 PDF 预览控制器。 */
-export async function printPrepCard(card: PrepCard, meta: { title: string; gradeLabel: string }): Promise<boolean> {
-  return printHtml(buildPrepCardHtml(card, meta))
+/** 浏览器/prototype 打印辅导要点；Desktop 正式入口必须先走持久 PDF 预览控制器。 */
+export async function printTutoringTips(card: TutoringTips, meta: { title: string; gradeLabel: string }): Promise<boolean> {
+  return printHtml(buildTutoringTipsHtml(card, meta))
 }
 
 /** 触发浏览器下载一个文件 */

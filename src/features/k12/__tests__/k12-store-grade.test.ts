@@ -7,7 +7,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn(),
   k12ReviewQueue: vi.fn(),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12Grade: (req: unknown) => gradeSpy(req),
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),

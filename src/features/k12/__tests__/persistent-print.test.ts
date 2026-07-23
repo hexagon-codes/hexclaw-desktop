@@ -31,8 +31,8 @@ import { preparePersistentPrint } from '../persistent-print'
 
 const request = {
   agent: 'tutor-a',
-  idempotencyKey: 'desktop:prep:1',
-  sourceKind: 'prep_card' as const,
+  idempotencyKey: 'desktop:tutoring-tips:1',
+  sourceKind: 'tutoring_tips' as const,
   sourceRef: 'submission:s1',
   title: '辅导要点',
   canonicalMarkdown: '# 辅导要点\n\n小数点对齐',
@@ -42,11 +42,11 @@ const request = {
 function job(status = 'preparing') {
   return {
     print_job_id: 'gprint-a',
-    idempotency_key: 'desktop:prep:1',
+    idempotency_key: 'desktop:tutoring-tips:1',
     status,
-    artifact_kind: 'prep_card',
+    artifact_kind: 'tutoring_tips',
     artifact_id: 'part-a',
-    source_kind: 'prep_card',
+    source_kind: 'tutoring_tips',
     source_ref: 'submission:s1',
     title: '辅导要点',
     source_digest: 'abc',
@@ -67,7 +67,7 @@ describe('persistent generic PrintJob orchestration', () => {
     h.paper.mockReset().mockResolvedValue({
       print_job_id: 'gprint-a',
       artifact_id: 'part-a',
-      source_kind: 'prep_card',
+      source_kind: 'tutoring_tips',
       source_ref: 'submission:s1',
       title: '冻结标题',
       source_digest: 'abc',
@@ -111,8 +111,8 @@ describe('persistent generic PrintJob orchestration', () => {
 
     expect(h.prepare).toHaveBeenCalledWith({
       agent: 'tutor-a',
-      idempotency_key: 'desktop:prep:1',
-      source_kind: 'prep_card',
+      idempotency_key: 'desktop:tutoring-tips:1',
+      source_kind: 'tutoring_tips',
       source_ref: 'submission:s1',
       title: '辅导要点',
       canonical_markdown: '# 辅导要点\n\n小数点对齐',

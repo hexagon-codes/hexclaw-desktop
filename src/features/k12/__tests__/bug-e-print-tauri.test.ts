@@ -19,7 +19,7 @@ import {
   exportPdf,
   printPracticePaper,
   printPracticePaperWithReceipt,
-  printPrepCard,
+  printTutoringTips,
   printWorksheet,
   savePracticePaperPdf,
 } from '../export'
@@ -29,7 +29,7 @@ const card = {
   knowledge_points: ['长方体的体积'],
   sections: [{ title: '讲解思路', content: '底面积 × 高', source_label: 'AI 归纳' }],
 }
-const prepMeta = { title: '辅导要点', gradeLabel: '五年级' }
+const tutoringTipsMeta = { title: '辅导要点', gradeLabel: '五年级' }
 
 const items = [
   { recordId: 'r1', fields: { question: '一个长方体的体积是多少', knowledge_point: '长方体的体积' } },
@@ -54,7 +54,7 @@ describe('DD-023A K12 打印走原生 PrintJob，另存 PDF 独立', () => {
     h.tauri = true
     await expect(printWorksheet(items, wsMeta)).rejects.toThrow('必须使用服务端 PDF')
     await expect(printPracticePaper('# 练习卷\n\n1. 题目', '练习卷')).rejects.toThrow('必须使用服务端 PDF')
-    await expect(printPrepCard(card, prepMeta)).rejects.toThrow('必须使用服务端 PDF')
+    await expect(printTutoringTips(card, tutoringTipsMeta)).rejects.toThrow('必须使用服务端 PDF')
     expect(h.printSpy).not.toHaveBeenCalled()
     expect(h.saveSpy).not.toHaveBeenCalled()
     expect(h.renderSpy).not.toHaveBeenCalled()
@@ -175,7 +175,7 @@ describe('DD-023A K12 打印走原生 PrintJob，另存 PDF 独立', () => {
 
   it('Tauri 辅导要点 helper 不得成为绕过预览的 PDFKit 旁路', async () => {
     h.tauri = true
-    await expect(printPrepCard(card, prepMeta)).rejects.toThrow('必须使用服务端 PDF')
+    await expect(printTutoringTips(card, tutoringTipsMeta)).rejects.toThrow('必须使用服务端 PDF')
     expect(h.renderSpy).not.toHaveBeenCalled()
     expect(h.printSpy).not.toHaveBeenCalled()
     expect(h.saveSpy).not.toHaveBeenCalled()
@@ -218,7 +218,7 @@ describe('DD-023A K12 打印走原生 PrintJob，另存 PDF 独立', () => {
   it('浏览器/dev 环境（isTauri=false）→ 使用系统 window.print，不调用 Tauri PrintJob/保存', async () => {
     h.tauri = false
     // jsdom 的 iframe win.print 为 no-op；这里只验证平台分流不落原生保存
-    await printPrepCard(card, prepMeta)
+    await printTutoringTips(card, tutoringTipsMeta)
     await printWorksheet(items, wsMeta)
     expect(h.printSpy).not.toHaveBeenCalled()
     expect(h.saveSpy).not.toHaveBeenCalled()

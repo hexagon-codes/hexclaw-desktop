@@ -46,7 +46,7 @@ export function registerK12Scenario(): void {
   // 遗留孤儿会话（标题恰为 k12-tutor-xxx → 列表显示「已删除的智能体」而非裸 ID）
   scenarioRegistry.registerInstanceIdPattern(new RegExp(`^${K12_SCENARIO_ID}-`))
 
-  // 4) 会话增强组件（头部 tab + 记录视图 + 备课卡侧栏）→ chat shell 用 <component :is> 渲染
+  // 4) 会话增强组件（头部 tab + 记录视图 + 辅导要点侧栏）→ chat shell 用 <component :is> 渲染
   scenarioRegistry.registerChatEnhancement(K12ChatEnhancement)
   // 4b) 智能体卡扩展（错题/待复习计数 + 快捷入口）→ AgentsView 对场景实例渲染
   scenarioRegistry.registerAgentCardExtension(K12AgentCard)

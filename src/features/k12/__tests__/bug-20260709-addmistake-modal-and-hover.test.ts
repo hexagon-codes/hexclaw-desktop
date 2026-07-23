@@ -52,7 +52,7 @@ vi.mock('@/api/k12', () => ({
   }),
   k12MarkMastered: vi.fn(),
   k12ReviewRetry: vi.fn(),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12Grade: vi.fn().mockResolvedValue({
     badge: 'verified-strong',
     evidence_type: 'program',

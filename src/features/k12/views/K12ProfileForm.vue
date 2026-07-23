@@ -17,7 +17,15 @@ import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import { GRADES, gradeShort } from '../curriculum'
+import {
+  PRIMARY_GRADES,
+  SEMESTERS,
+  gradeShort,
+  joinGradeTerm,
+  splitGradeTerm,
+  type PrimaryGrade,
+  type Semester,
+} from '../curriculum'
 import { K12_SCENARIO_ID } from '../descriptor'
 import { K12_INFRA_SKILLS, defaultBoundSkills } from '../manifest'
 
@@ -40,7 +48,6 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'removed', name: string): void
   (e: 'back'): void
-  (e: 'preview'): void
 }>()
 
 const { t } = useI18n()
@@ -55,7 +62,11 @@ const learnerID = props.agent?.metadata?.['k12.learner_id'] || `learner-${nanoid
 
 // 档案存在 agent metadata 的 k12.* 键（后端契约）
 const childName = ref(props.agent?.metadata?.['k12.child_name'] ?? '')
-const grade = ref(props.agent?.metadata?.['k12.grade_term'] ?? '五年级上')
+const initialGradeTerm = splitGradeTerm(props.agent?.metadata?.['k12.grade_term'] ?? '五年级上')
+const gradeLevel = ref<PrimaryGrade>(initialGradeTerm.grade)
+const semester = ref<Semester>(initialGradeTerm.semester)
+// UI 二级联动只拆展示/选择；持久化与所有下游讲题边界继续使用唯一 grade_term 契约。
+const grade = computed(() => joinGradeTerm(gradeLevel.value, semester.value))
 const TEXTBOOK_SUBJECTS = [
   {
     key: 'math',
@@ -168,7 +179,18 @@ const displayName = computed(() =>
 const cardDescription = computed(() => t('k12.profile.cardDesc', { grade: grade.value }))
 
 // HcSelect 选项（替代原生 <select>；WKWebView 下原生 select 显 macOS Aqua 样式 · BUG-20260708 B2）
-const gradeOptions = computed(() => GRADES.map((g) => ({ value: g, label: g })))
+const gradeOptions = computed(() =>
+  PRIMARY_GRADES.map((value, index) => ({
+    value,
+    label: t(`k12.profile.gradeLevels.${index + 1}`),
+  })),
+)
+const semesterOptions = computed(() =>
+  SEMESTERS.map((value) => ({
+    value,
+    label: t(`k12.profile.semesters.${value === '上' ? 'first' : 'second'}`),
+  })),
+)
 function textbookOptions(subject: (typeof TEXTBOOK_SUBJECTS)[number]) {
   return subject.options.map((edition) => ({ value: edition, label: edition }))
 }
@@ -413,10 +435,24 @@ async function submit() {
             </HcClearableField>
           </label>
 
-          <div class="k12pf__row k12pf__row--single">
+          <div class="k12pf__row k12pf__row--grade-term">
             <div class="k12pf__field">
               <span>{{ t('k12.profile.grade') }}</span>
-              <HcSelect v-model="grade" :options="gradeOptions" />
+              <HcSelect
+                v-model="gradeLevel"
+                :options="gradeOptions"
+                :aria-label="t('k12.profile.grade')"
+                data-testid="k12pf-grade"
+              />
+            </div>
+            <div class="k12pf__field">
+              <span>{{ t('k12.profile.semester') }}</span>
+              <HcSelect
+                v-model="semester"
+                :options="semesterOptions"
+                :aria-label="t('k12.profile.semester')"
+                data-testid="k12pf-semester"
+              />
             </div>
           </div>
           <p class="k12pf__hint">{{ t('k12.profile.gradeSupportNote') }}</p>
@@ -523,11 +559,12 @@ async function submit() {
             </button>
           </template>
           <template v-else>
-            <button class="k12pf__btn" data-testid="k12pf-back" @click="emit('back')">
+            <button
+              class="k12pf__btn k12pf__btn--back"
+              data-testid="k12pf-back"
+              @click="emit('back')"
+            >
               {{ t('k12.profile.back') }}
-            </button>
-            <button class="k12pf__btn" data-testid="k12pf-preview" @click="emit('preview')">
-              {{ t('k12.profile.preview') }}
             </button>
             <button class="k12pf__btn k12pf__btn--primary" :disabled="submitting" @click="submit">
               {{ t('k12.profile.create') }}
@@ -633,8 +670,8 @@ async function submit() {
   display: flex;
   gap: 12px;
 }
-.k12pf__row--single {
-  display: block;
+.k12pf__row--grade-term > .k12pf__field {
+  min-width: 0;
 }
 .k12pf__input {
   padding: 9px 12px;
@@ -766,6 +803,9 @@ async function submit() {
 }
 .k12pf__foot--create {
   justify-content: flex-end;
+}
+.k12pf__foot--create .k12pf__btn--back {
+  margin-right: auto;
 }
 .k12pf__footsp {
   flex: 1;

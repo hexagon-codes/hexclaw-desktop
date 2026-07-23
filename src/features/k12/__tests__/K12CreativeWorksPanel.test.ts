@@ -178,7 +178,7 @@ beforeEach(() => {
 })
 
 describe('K12CreativeWorksPanel · 作品', () => {
-  it('点击作品缩略图会在独立预览层展示原图，Escape 可关闭', async () => {
+  it('点击作品缩略图会把焦点移入独立预览层，Escape 关闭后焦点回到缩略图', async () => {
     h.listSpy.mockResolvedValue({
       items: [
         work({
@@ -190,13 +190,18 @@ describe('K12CreativeWorksPanel · 作品', () => {
     const w = render(true)
     await flushPromises()
 
-    await w.get('[data-testid="cw-thumb"]').trigger('click')
+    const thumbnail = w.get('[data-testid="cw-thumb"]')
+    ;(thumbnail.element as HTMLElement).focus()
+    await thumbnail.trigger('click')
     await nextTick()
-    expect(w.get('[data-testid="cw-image-preview"] img').attributes('src')).toContain('art.png')
+    const preview = w.get('[data-testid="cw-image-preview"]')
+    expect(preview.get('img').attributes('src')).toContain('art.png')
+    expect(document.activeElement).toBe(preview.element)
 
-    await w.get('[data-testid="cw-image-preview"]').trigger('keydown', { key: 'Escape' })
+    await preview.trigger('keydown', { key: 'Escape' })
     await nextTick()
     expect(w.find('[data-testid="cw-image-preview"]').exists()).toBe(false)
+    expect(document.activeElement).toBe(thumbnail.element)
   })
 
   it('每次真实加载后向父层同步作品总数', async () => {

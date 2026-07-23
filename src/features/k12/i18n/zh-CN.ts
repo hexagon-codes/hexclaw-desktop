@@ -121,7 +121,7 @@ export default {
   emptyAccum: {
     title: '积累本还空着',
     sub: '好词好句、古诗、易错词，随手记进来',
-    cta: '＋ 记到积累本',
+    cta: '记到积累本',
   },
 
   // 错题详情弹层（BUG-20260712-#2）
@@ -191,7 +191,6 @@ export default {
   },
 
   actions: {
-    prepCard: '📋 辅导要点',
     backup: '备份 / 恢复',
     export: '导出',
     more: '导出 / 备份',
@@ -401,7 +400,7 @@ export default {
     filterAll: '全部',
     filterChinese: '语文',
     filterEnglish: '英语',
-    addOpen: '＋ 记到积累本',
+    addOpen: '记到积累本',
     addTitle: '记一条到积累本',
     subject: '学科',
     type: '类型',
@@ -448,7 +447,20 @@ export default {
     intro: '这些信息决定讲题只用孩子学过的知识；显示名自动生成为「{name}」。',
     childName: '孩子称呼',
     childNamePlaceholder: '例如：小明',
-    grade: '年级 · 学期',
+    grade: '年级',
+    semester: '学期',
+    gradeLevels: {
+      1: '一年级',
+      2: '二年级',
+      3: '三年级',
+      4: '四年级',
+      5: '五年级',
+      6: '六年级',
+    },
+    semesters: {
+      first: '上学期',
+      second: '下学期',
+    },
     gradeSupportNote:
       '当前版本支持小学一至六年级。初高中能力开放后，可直接升级当前孩子档案，历史学习记录会继续保留。',
     textbookBySubject: '按学科设置教材版本',
@@ -483,7 +495,6 @@ export default {
     assistantName: '{child}的辅导助手',
     cardDesc: '{grade} · 各学科教材独立绑定 · 按年级边界讲解',
     back: '上一步',
-    preview: '先看示例',
     create: '创建',
     cancel: '取消',
     created: '已创建「{name}」',
@@ -563,7 +574,6 @@ export default {
     mistakeCount: '错题 {n}',
     reviewDue: '待复习 {n}',
     records: '学习档案',
-    prep: '辅导要点',
     enterTutor: '进入辅导',
   },
 
@@ -645,7 +655,7 @@ export default {
     },
   },
 
-  prep: {
+  tutoringTips: {
     title: '这份作业的辅导要点',
     generating: '正在结合课本与错题生成辅导要点…',
     empty: '识题后会自动给出这份作业的辅导要点。',
@@ -660,14 +670,9 @@ export default {
     groundingUploaded: '教材已上传，辅导要点已按教材刷新',
     groundingFailed: '教材上传失败，请检查文件内容或稍后重试',
     print: '打印（A4）',
-    close: '关闭',
     legend:
-      '📖 依据课本＝检索你上传的教材原文 · 🗂 本地记录 · ✅ 程序验算 · 🤖 AI 归纳·供参考＝未上传教材时降级为 AI 生成、按孩子年级讲法，仅供参考请自行核对。',
+      '📖 依据课本＝检索你上传的教材原文 · 🧠 学情信号＝来自错题本 · 🤖 AI 归纳·供参考＝未上传教材时按孩子年级讲法生成，仅供参考请自行核对。',
     currentBasis: '当前依据：{textbook} · {grade}',
-    nudge: '今晚要辅导什么？先花 3 分钟备课——我结合孩子的错题与学情，给你一页「怎么教」。',
-    startPrep: '开始备课',
-    copied: '已复制备课卡，粘贴即可发到手机',
-    copyFailed: '复制失败，请重试',
     generateFailed:
       '辅导要点生成失败：模型响应超时或网络中断，请重试。本地模型较慢，可在设置里切换到更快的云端模型。',
   },

@@ -1,14 +1,9 @@
 <script setup lang="ts">
 /**
- * 「这份作业的辅导要点」内联卡（features/k12）· 20260709 最优雅形态（原「家长备课卡」侧栏去侧栏化）。
- *
- * 设计翻转：家长辅导是临场的——先看到作业才知怎么教，事前"备课"是逆链路的教师心智。故取消独立侧栏 +
- * nudge + 头部按钮，改为**识题确认后由 RecognizeGuardPanel 内联渲染**，用识题识别出的**真实知识点**
- * 绑定当前作业（不再是科目级泛化）。只读聚合 + 来源标注：source_label 由后端直出
- * （📖 依据课本 / 🗂 本地记录 / ✅ 已程序验算 / 🧠 学情信号 / 🤖 AI 归纳·供参考）——无验算保护段落用来源
- * 徽章替代信任兜底（AP-5）。事件驱动生成（识题给出知识点即生成，非每日 cron）。
+ * 「这份作业的辅导要点」只在识题结果持久确认后内联展示；从不存在当前独立侧栏或入口。
+ * 生成请求只携带可信 agent + grading_job_id，正文与来源均以服务端冻结 Job 为准。
  */
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { BookOpen, Printer, Smartphone } from 'lucide-vue-next'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
@@ -16,11 +11,11 @@ import { useToast } from '@/composables/useToast'
 import {
   k12QueryDeliveryReceipt,
   k12RetryDeliveryReceipt,
-  k12SendPrepCard,
+  k12SendTutoringTips,
   type DeliveryReceiptDTO,
 } from '@/api/k12'
 import { useK12Store } from '../store'
-import { printPrepCard, prepCardToMarkdown, prepCardToText } from '../export'
+import { printTutoringTips, tutoringTipsToMarkdown, tutoringTipsToText } from '../export'
 import type { PersistentPrintRequest } from '../persistent-print'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import { parseDocument } from '@/utils/file-parser'
@@ -28,6 +23,12 @@ import { parseDocument } from '@/utils/file-parser'
 const props = defineProps<{
   /** 隔离键 = agents.name（与 recognize/grade 同键） */
   agentId: string
+  /** 当前已确认并冻结输入的 GradingJob。 */
+  gradingJobId: string
+  /** 当前会话稳定 ID；与 Job 的持久绑定共同构成可信生成作用域。 */
+  sessionId?: string
+  /** Job 结果未知时冻结所有生成型动作；已生成内容与投递/打印仍保留。 */
+  generationLocked?: boolean
   grade: string
   /** 识题确认的当前学科，用于分科教材检索与写入隔离。 */
   subject?: string
@@ -44,50 +45,60 @@ const persistentPrintController = ref<{
   open: (request: PersistentPrintRequest) => Promise<void>
 } | null>(null)
 
-let prepAbort: AbortController | null = null
+let tutoringTipsAbort: AbortController | null = null
 const deliveryReceipt = ref<DeliveryReceiptDTO | null>(null)
 const deliveryBusy = ref(false)
 const deliverySetupError = ref('')
 
-function cancelPrepCard() {
-  prepAbort?.abort()
-  prepAbort = null
+function cancelTutoringTips() {
+  tutoringTipsAbort?.abort()
+  tutoringTipsAbort = null
 }
 
-function requestPrepCard(
+const generationAllowed = computed(
+  () =>
+    !props.generationLocked &&
+    !!props.agentId.trim() &&
+    !!props.gradingJobId?.trim() &&
+    !!props.sessionId?.trim(),
+)
+
+function requestTutoringTips(
   agentId = props.agentId,
-  grade = props.grade,
-  subject = props.subject ?? '',
-  kps = props.knowledgePoints,
+  gradingJobId = props.gradingJobId,
+  sessionId = props.sessionId,
+  generationLocked = props.generationLocked,
 ) {
-  cancelPrepCard()
-  if (!agentId || !kps.length) return
+  cancelTutoringTips()
+  if (generationLocked || !agentId.trim() || !gradingJobId?.trim() || !sessionId?.trim()) return
   const controller = new AbortController()
-  prepAbort = controller
-  void store.loadPrepCard(agentId, grade, subject, kps, controller.signal).finally(() => {
-    if (prepAbort === controller) prepAbort = null
+  tutoringTipsAbort = controller
+  void store.loadTutoringTips(agentId, gradingJobId, controller.signal).finally(() => {
+    if (tutoringTipsAbort === controller) tutoringTipsAbort = null
   })
 }
 
-// 识题给出知识点即生成辅导要点（绑定当前作业）；知识点变化重拉。
+// 只随可信 Job 作用域生成；结果未知时仅中止生成，不清空已经拿到的辅导要点。
 watch(
-  () => [props.agentId, props.grade, props.subject, props.knowledgePoints] as const,
-  ([agentId, grade, subject, kps]) => {
-    deliveryReceipt.value = null
-    deliverySetupError.value = ''
-    requestPrepCard(agentId, grade, subject ?? '', kps)
+  () => [props.agentId, props.gradingJobId, props.sessionId, props.generationLocked] as const,
+  ([agentId, gradingJobId, sessionId, generationLocked], previous) => {
+    if (!previous || previous[0] !== agentId || previous[1] !== gradingJobId || previous[2] !== sessionId) {
+      deliveryReceipt.value = null
+      deliverySetupError.value = ''
+    }
+    requestTutoringTips(agentId, gradingJobId, sessionId, generationLocked)
   },
-  { immediate: true, deep: true },
+  { immediate: true },
 )
 
-/** AI 归纳段落用告警色徽章（未校验），其余用 accent（本地记录/课本/验算） */
+/** AI 归纳段落用告警色徽章（未校验），课本与学情来源用 accent。 */
 function isWeakSource(label: string): boolean {
   return label.includes('AI') || label.includes('⚠️')
 }
 
-function retryPrepCard() {
-  if (!store.prepLoading && props.agentId && props.knowledgePoints.length) {
-    requestPrepCard()
+function retryTutoringTips() {
+  if (!store.tutoringTipsLoading && generationAllowed.value) {
+    requestTutoringTips()
   }
 }
 
@@ -103,21 +114,30 @@ function cancelGroundingUpload() {
   groundingBusy.value = false
 }
 
-watch(() => [props.agentId, props.subject], cancelGroundingUpload)
+watch(
+  () => [
+    props.agentId,
+    props.subject,
+    props.gradingJobId,
+    props.sessionId,
+    props.generationLocked,
+  ],
+  cancelGroundingUpload,
+)
 onBeforeUnmount(() => {
-  cancelPrepCard()
+  cancelTutoringTips()
   cancelGroundingUpload()
 })
 
 function openGroundingPicker() {
-  if (!groundingBusy.value) groundingInput.value?.click()
+  if (!groundingBusy.value && generationAllowed.value) groundingInput.value?.click()
 }
 
 async function onGroundingFile(event: Event) {
   const input = event.target as HTMLInputElement
   const file = input.files?.[0]
   input.value = '' // 同一文件修订后可再次选择。
-  if (!file || !props.agentId) return
+  if (!file || !generationAllowed.value) return
 
   groundingAbort?.abort()
   const controller = new AbortController()
@@ -125,6 +145,8 @@ async function onGroundingFile(event: Event) {
   const generation = ++groundingGeneration
   const agentId = props.agentId
   const subject = props.subject ?? ''
+  const gradingJobId = props.gradingJobId
+  const sessionId = props.sessionId ?? ''
   groundingBusy.value = true
   try {
     const parsed = await parseDocument(file)
@@ -132,7 +154,10 @@ async function onGroundingFile(event: Event) {
       generation !== groundingGeneration ||
       controller.signal.aborted ||
       props.agentId !== agentId ||
-      (props.subject ?? '') !== subject
+      (props.subject ?? '') !== subject ||
+      props.gradingJobId !== gradingJobId ||
+      (props.sessionId ?? '') !== sessionId ||
+      props.generationLocked
     )
       return
     if (!parsed.text.trim()) throw new Error('empty grounding document')
@@ -147,19 +172,25 @@ async function onGroundingFile(event: Event) {
       generation !== groundingGeneration ||
       controller.signal.aborted ||
       props.agentId !== agentId ||
-      (props.subject ?? '') !== subject
+      (props.subject ?? '') !== subject ||
+      props.gradingJobId !== gradingJobId ||
+      (props.sessionId ?? '') !== sessionId ||
+      props.generationLocked
     )
       return
-    await store.loadPrepCard(agentId, props.grade, subject, props.knowledgePoints)
+    await store.loadTutoringTips(agentId, gradingJobId, controller.signal)
     if (
       generation === groundingGeneration &&
       props.agentId === agentId &&
-      (props.subject ?? '') === subject
+      (props.subject ?? '') === subject &&
+      props.gradingJobId === gradingJobId &&
+      (props.sessionId ?? '') === sessionId &&
+      !props.generationLocked
     )
-      toast.success(t('k12.prep.groundingUploaded'))
+      toast.success(t('k12.tutoringTips.groundingUploaded'))
   } catch {
     if (!controller.signal.aborted && generation === groundingGeneration)
-      toast.error(t('k12.prep.groundingFailed'))
+      toast.error(t('k12.tutoringTips.groundingFailed'))
   } finally {
     if (generation === groundingGeneration) {
       groundingBusy.value = false
@@ -168,24 +199,24 @@ async function onGroundingFile(event: Event) {
   }
 }
 
-const prepMeta = () => ({ title: t('k12.prep.title'), gradeLabel: props.grade })
+const tutoringTipsMeta = () => ({ title: t('k12.tutoringTips.title'), gradeLabel: props.grade })
 
 // 打印辅导要点（Tauri：原生 PrintJob/系统打印对话框；浏览器开发态：window.print）。
 async function doPrint() {
-  if (!store.prepCard) {
-    toast.info(t('k12.prep.empty'))
+  if (!store.tutoringTips) {
+    toast.info(t('k12.tutoringTips.empty'))
     return
   }
   try {
-    const card = store.prepCard
-    const meta = prepMeta()
+    const card = store.tutoringTips
+    const meta = tutoringTipsMeta()
     await persistentPrintController.value?.open({
       agent: props.agentId,
-      sourceKind: 'prep_card',
-      sourceRef: `prep-card:${props.grade}:${props.knowledgePoints.join(',')}`,
+      sourceKind: 'tutoring_tips',
+      sourceRef: `tutoring-tips:${props.gradingJobId}`,
       title: meta.title,
-      canonicalMarkdown: prepCardToMarkdown(card, meta),
-      browserPrint: () => printPrepCard(card, meta),
+      canonicalMarkdown: tutoringTipsToMarkdown(card, meta),
+      browserPrint: () => printTutoringTips(card, meta),
     })
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
@@ -225,14 +256,14 @@ function applyDeliveryReceipt(receipt: DeliveryReceiptDTO) {
 // 发到手机：真实直发先落 durable Receipt。平台受理只显示「发送中」，
 // 只有查询证据为 delivered 时才显示「已送达」。
 async function doSendPhone() {
-  if (!store.prepCard || deliveryBusy.value) {
-    toast.info(t('k12.prep.empty'))
+  if (!store.tutoringTips || deliveryBusy.value) {
+    toast.info(t('k12.tutoringTips.empty'))
     return
   }
   deliveryBusy.value = true
   try {
     applyDeliveryReceipt(
-      await k12SendPrepCard(props.agentId, prepCardToText(store.prepCard, prepMeta())),
+      await k12SendTutoringTips(props.agentId, tutoringTipsToText(store.tutoringTips, tutoringTipsMeta())),
     )
   } catch (e) {
     deliverySetupError.value = (e as Error).message || t('k12.delivery.setupRequired')
@@ -271,33 +302,33 @@ async function queryDelivery() {
 </script>
 
 <template>
-  <section class="tutor-guide" data-testid="tutor-guide" aria-label="这份作业的辅导要点">
+  <section class="tutoring-tips" data-testid="tutoring-tips" aria-label="这份作业的辅导要点">
     <K12PersistentPrintController
       ref="persistentPrintController"
       @error="onPersistentPrintError"
     />
-    <div class="tutor-guide__head">
-      <b>📋 {{ t('k12.prep.title') }}</b>
+    <div class="tutoring-tips__head">
+      <b>📋 {{ t('k12.tutoringTips.title') }}</b>
       <span
-        v-if="store.prepCard?.knowledge_points.length"
-        class="tutor-guide__unit"
-        :title="store.prepCard.knowledge_points.join(' · ')"
-        >{{ store.prepCard.knowledge_points[0] }}</span
+        v-if="store.tutoringTips?.knowledge_points.length"
+        class="tutoring-tips__unit"
+        :title="store.tutoringTips.knowledge_points.join(' · ')"
+        >{{ store.tutoringTips.knowledge_points[0] }}</span
       >
-      <div class="tutor-guide__actions">
+      <div class="tutoring-tips__actions">
         <input
           ref="groundingInput"
           class="grounding-file"
-          data-testid="prep-grounding-file"
+          data-testid="tutoring-tips-grounding-file"
           type="file"
           accept=".pdf,.doc,.docx,.pptx,.txt,.md,.csv,.xlsx,.xls,.json"
           @change="onGroundingFile"
         />
         <button
           class="icbtn"
-          :disabled="groundingBusy"
-          :title="t('k12.prep.uploadGrounding')"
-          data-testid="prep-grounding-open"
+          :disabled="groundingBusy || !generationAllowed"
+          :title="t('k12.tutoringTips.uploadGrounding')"
+          data-testid="tutoring-tips-grounding-open"
           @click="openGroundingPicker"
         >
           <span v-if="groundingBusy">…</span>
@@ -305,9 +336,9 @@ async function queryDelivery() {
         </button>
         <button
           class="icbtn"
-          :title="t('k12.prep.sendPhone')"
-          data-testid="prep-send"
-          :disabled="deliveryBusy || !store.prepCard"
+          :title="t('k12.tutoringTips.sendPhone')"
+          data-testid="tutoring-tips-send"
+          :disabled="deliveryBusy || !store.tutoringTips"
           @click="doSendPhone"
         >
           <span v-if="deliveryBusy">…</span>
@@ -315,8 +346,8 @@ async function queryDelivery() {
         </button>
         <button
           class="icbtn"
-          :title="t('k12.prep.print')"
-          data-testid="prep-print"
+          :title="t('k12.tutoringTips.print')"
+          data-testid="tutoring-tips-print"
           @click="doPrint"
         >
           <Printer :size="17" aria-hidden="true" />
@@ -324,23 +355,24 @@ async function queryDelivery() {
       </div>
     </div>
 
-    <div class="tutor-guide__body">
-      <p v-if="store.prepLoading" class="tutor-guide__hint">{{ t('k12.prep.generating') }}</p>
-      <div v-else-if="store.prepError" class="tutor-guide__error" role="alert">
-        <p class="tutor-guide__hint tutor-guide__hint--err">{{ store.prepError }}</p>
+    <div class="tutoring-tips__body">
+      <p v-if="store.tutoringTipsLoading" class="tutoring-tips__hint">{{ t('k12.tutoringTips.generating') }}</p>
+      <div v-else-if="store.tutoringTipsError" class="tutoring-tips__error" role="alert">
+        <p class="tutoring-tips__hint tutoring-tips__hint--err">{{ store.tutoringTipsError }}</p>
         <button
-          class="tutor-guide__retry"
-          data-testid="prep-retry"
+          class="tutoring-tips__retry"
+          data-testid="tutoring-tips-retry"
           type="button"
-          @click="retryPrepCard"
+          :disabled="!generationAllowed"
+          @click="retryTutoringTips"
         >
           {{ t('common.retry') }}
         </button>
       </div>
 
-      <template v-else-if="store.prepCard">
-        <div v-for="(s, i) in store.prepCard.sections" :key="i" class="tutor-section">
-          <h5 class="tutor-section__title">
+      <template v-else-if="store.tutoringTips">
+        <div v-for="(s, i) in store.tutoringTips.sections" :key="i" class="tutoring-tips__section">
+          <h5 class="tutoring-tips__section__title">
             {{ s.title }}
             <span
               v-if="s.source_label"
@@ -353,14 +385,14 @@ async function queryDelivery() {
         </div>
       </template>
 
-      <p v-else class="tutor-guide__hint">{{ t('k12.prep.empty') }}</p>
+      <p v-else class="tutoring-tips__hint">{{ t('k12.tutoringTips.empty') }}</p>
     </div>
 
-    <footer v-if="store.prepCard" class="tutor-guide__legend">
-      <span>{{ t('k12.prep.legend') }}</span>
-      <span v-if="textbook || grade" class="tutor-guide__basis">
+    <footer v-if="store.tutoringTips" class="tutoring-tips__legend">
+      <span>{{ t('k12.tutoringTips.legend') }}</span>
+      <span v-if="textbook || grade" class="tutoring-tips__basis">
         {{
-          t('k12.prep.currentBasis', {
+          t('k12.tutoringTips.currentBasis', {
             textbook: textbook || t('k12.customPaper.textbookMissing'),
             grade,
           })
@@ -368,16 +400,16 @@ async function queryDelivery() {
       </span>
       <div
         v-if="deliveryReceipt"
-        class="tutor-guide__delivery"
-        :class="`tutor-guide__delivery--${deliveryReceipt.status}`"
-        data-testid="prep-delivery-receipt"
+        class="tutoring-tips__delivery"
+        :class="`tutoring-tips__delivery--${deliveryReceipt.status}`"
+        data-testid="tutoring-tips-delivery-receipt"
         role="status"
       >
         <span>{{ deliveryStatusText(deliveryReceipt) }}</span>
         <button
           v-if="deliveryReceipt.status === 'failed'"
           type="button"
-          data-testid="prep-delivery-retry"
+          data-testid="tutoring-tips-delivery-retry"
           :disabled="deliveryBusy"
           @click="retryDelivery"
         >
@@ -388,7 +420,7 @@ async function queryDelivery() {
             deliveryReceipt.status === 'sending' || deliveryReceipt.status === 'outcome_unknown'
           "
           type="button"
-          data-testid="prep-delivery-query"
+          data-testid="tutoring-tips-delivery-query"
           :disabled="deliveryBusy"
           @click="queryDelivery"
         >
@@ -397,11 +429,11 @@ async function queryDelivery() {
       </div>
       <div
         v-if="deliverySetupError"
-        class="tutor-guide__delivery tutor-guide__delivery--failed"
-        data-testid="prep-delivery-setup"
+        class="tutoring-tips__delivery tutoring-tips__delivery--failed"
+        data-testid="tutoring-tips-delivery-setup"
       >
         <span>{{ deliverySetupError }}</span>
-        <a href="/channels" data-testid="prep-bind-cta">{{ t('k12.delivery.bindCTA') }}</a>
+        <a href="/channels" data-testid="tutoring-tips-bind-cta">{{ t('k12.delivery.bindCTA') }}</a>
       </div>
     </footer>
   </section>
@@ -409,7 +441,7 @@ async function queryDelivery() {
 
 <style scoped>
 /* 内联卡（长在识题结果下方，不是侧栏）：绑定框 + accent 头 */
-.tutor-guide {
+.tutoring-tips {
   border: 1px solid var(--hc-border-hl);
   border-radius: 14px;
   background: var(--hc-bg-card);
@@ -417,7 +449,7 @@ async function queryDelivery() {
   margin-top: 6px;
   box-shadow: var(--hc-shadow-sm);
 }
-.tutor-guide__head {
+.tutoring-tips__head {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -426,10 +458,10 @@ async function queryDelivery() {
   background: var(--hc-accent-subtle);
   font-size: 13px;
 }
-.tutor-guide__head b {
+.tutoring-tips__head b {
   font-weight: 700;
 }
-.tutor-guide__unit {
+.tutoring-tips__unit {
   max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -441,7 +473,7 @@ async function queryDelivery() {
   font-size: 11.5px;
   font-weight: 600;
 }
-.tutor-guide__actions {
+.tutoring-tips__actions {
   display: flex;
   gap: 4px;
   align-items: center;
@@ -477,24 +509,24 @@ async function queryDelivery() {
 .grounding-file {
   display: none;
 }
-.tutor-guide__body {
+.tutoring-tips__body {
   padding: 13px 15px;
   display: flex;
   flex-direction: column;
   gap: 13px;
 }
-.tutor-guide__hint {
+.tutoring-tips__hint {
   color: var(--hc-text-muted);
   font-size: 12.5px;
   margin: 0;
 }
-.tutor-guide__error {
+.tutoring-tips__error {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
-.tutor-guide__retry {
+.tutoring-tips__retry {
   flex-shrink: 0;
   border: 1px solid var(--hc-danger);
   border-radius: var(--hc-radius-sm);
@@ -504,10 +536,10 @@ async function queryDelivery() {
   padding: 5px 12px;
   font-size: 12px;
 }
-.tutor-guide__retry:hover {
+.tutoring-tips__retry:hover {
   background: color-mix(in srgb, var(--hc-danger) 8%, transparent);
 }
-.tutor-section__title {
+.tutoring-tips__section__title {
   margin: 0 0 4px;
   display: flex;
   align-items: center;
@@ -531,7 +563,7 @@ async function queryDelivery() {
   color: var(--hc-warning);
   border: 1px dashed color-mix(in srgb, var(--hc-warning) 40%, transparent);
 }
-.tutor-guide__legend {
+.tutoring-tips__legend {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -543,11 +575,11 @@ async function queryDelivery() {
   line-height: 1.6;
   color: var(--hc-text-muted);
 }
-.tutor-guide__basis {
+.tutoring-tips__basis {
   display: block;
   color: var(--hc-accent);
 }
-.tutor-guide__delivery {
+.tutoring-tips__delivery {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -558,16 +590,16 @@ async function queryDelivery() {
   color: var(--hc-text-secondary);
   font-size: 12px;
 }
-.tutor-guide__delivery--delivered {
+.tutoring-tips__delivery--delivered {
   color: var(--hc-success);
 }
-.tutor-guide__delivery--failed,
-.tutor-guide__delivery--outcome_unknown {
+.tutoring-tips__delivery--failed,
+.tutoring-tips__delivery--outcome_unknown {
   color: var(--hc-error);
   background: color-mix(in srgb, var(--hc-error) 8%, transparent);
 }
-.tutor-guide__delivery button,
-.tutor-guide__delivery a {
+.tutoring-tips__delivery button,
+.tutoring-tips__delivery a {
   flex-shrink: 0;
   border: 0;
   background: transparent;
@@ -577,7 +609,7 @@ async function queryDelivery() {
   font-weight: 650;
   text-decoration: none;
 }
-.tutor-guide__hint--err {
+.tutoring-tips__hint--err {
   color: var(--hc-error);
 }
 </style>

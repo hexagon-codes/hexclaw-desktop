@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
-import PrepCardPanel from '../views/PrepCardPanel.vue'
+import TutoringTipsPanel from '../views/TutoringTipsPanel.vue'
 
 const h = vi.hoisted(() => ({
   send: vi.fn(),
@@ -16,10 +16,16 @@ const h = vi.hoisted(() => ({
 }))
 
 vi.mock('@/api/k12', () => ({
-  k12PrepCard: vi.fn().mockResolvedValue({
+  k12TutoringTips: vi.fn().mockResolvedValue({
     knowledge_points: ['小数乘法'],
     sections: [
-      { title: '知识点回顾', content: '小数乘法要对齐小数点', source_label: '📖 依据课本' },
+      { title: '这页在练什么', content: '小数乘法要对齐小数点', source_label: '📖 依据课本' },
+      { title: '小明要留意', content: '暂无历史证据。', source_label: '🧠 学情信号' },
+      {
+        title: '每道题怎么带（不直接给答案）',
+        content: '先问孩子小数位数。',
+        source_label: '🤖 AI 归纳·供参考',
+      },
     ],
   }),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
@@ -32,7 +38,7 @@ vi.mock('@/api/k12', () => ({
   k12TutorTurn: vi.fn(),
   k12BindIM: vi.fn().mockResolvedValue({}),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-  k12SendPrepCard: (...args: unknown[]) => h.send(...args),
+  k12SendTutoringTips: (...args: unknown[]) => h.send(...args),
   k12RetryDeliveryReceipt: (...args: unknown[]) => h.retry(...args),
   k12QueryDeliveryReceipt: (...args: unknown[]) => h.query(...args),
 }))
@@ -50,10 +56,10 @@ function i18n() {
 }
 
 const sendingReceipt = {
-  delivery_id: 'delivery-prep-1',
+  delivery_id: 'delivery-tutoring-tips-1',
   agent_name: 'ming',
-  object_kind: 'prep_card',
-  object_id: 'prep-1',
+  object_kind: 'tutoring_tips',
+  object_id: 'tutoring-tips-1',
   binding_id: 'agent-rule:1',
   target: { platform: 'dingtalk', chat_id: 'staff-1', label: '钉钉 · 妈妈' },
   status: 'sending',
@@ -67,7 +73,7 @@ const sendingReceipt = {
   updated_at: 1,
 } as const
 
-describe('DD-024: 备课卡真实直发并展示持久回执', () => {
+describe('DD-024: 辅导要点真实直发并展示持久回执', () => {
   const writeSpy = vi.fn()
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -82,34 +88,46 @@ describe('DD-024: 备课卡真实直发并展示持久回执', () => {
   })
 
   it('点📱 调真实投递端点；受理只显示发送中，查询证据后才显示已送达', async () => {
-    const w = mount(PrepCardPanel, {
-      props: { agentId: 'ming', grade: '五年级上', knowledgePoints: ['小数乘法'] },
+    const w = mount(TutoringTipsPanel, {
+      props: {
+        agentId: 'ming',
+        gradingJobId: 'job-confirmed-1',
+        sessionId: 'session-1',
+        grade: '五年级上',
+        knowledgePoints: ['小数乘法'],
+      },
       global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
     })
     await flushPromises()
-    await w.get('[data-testid="prep-send"]').trigger('click')
+    await w.get('[data-testid="tutoring-tips-send"]').trigger('click')
     await flushPromises()
-    expect(h.send).toHaveBeenCalledWith('ming', expect.stringContaining('知识点回顾'))
+    expect(h.send).toHaveBeenCalledWith('ming', expect.stringContaining('这页在练什么'))
     expect(writeSpy).not.toHaveBeenCalled()
-    expect(w.get('[data-testid="prep-delivery-receipt"]').text()).toContain('等待送达确认')
+    expect(w.get('[data-testid="tutoring-tips-delivery-receipt"]').text()).toContain('等待送达确认')
     expect(w.text()).not.toContain('已送达钉钉')
 
-    await w.get('[data-testid="prep-delivery-query"]').trigger('click')
+    await w.get('[data-testid="tutoring-tips-delivery-query"]').trigger('click')
     await flushPromises()
-    expect(h.query).toHaveBeenCalledWith('ming', 'delivery-prep-1')
-    expect(w.get('[data-testid="prep-delivery-receipt"]').text()).toContain('已送达')
+    expect(h.query).toHaveBeenCalledWith('ming', 'delivery-tutoring-tips-1')
+    expect(w.get('[data-testid="tutoring-tips-delivery-receipt"]').text()).toContain('已送达')
   })
 
   it('未绑定时提供连接设置 CTA，不复制文本冒充发送', async () => {
     h.send.mockRejectedValue(new Error('这个辅导助手还没绑定手机私聊'))
-    const w = mount(PrepCardPanel, {
-      props: { agentId: 'ming', grade: '五年级上', knowledgePoints: ['小数乘法'] },
+    const w = mount(TutoringTipsPanel, {
+      props: {
+        agentId: 'ming',
+        gradingJobId: 'job-confirmed-1',
+        sessionId: 'session-1',
+        grade: '五年级上',
+        knowledgePoints: ['小数乘法'],
+      },
       global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
     })
     await flushPromises()
-    await w.get('[data-testid="prep-send"]').trigger('click')
+    await w.get('[data-testid="tutoring-tips-send"]').trigger('click')
     await flushPromises()
     expect(writeSpy).not.toHaveBeenCalled()
-    expect(w.get('[data-testid="prep-bind-cta"]').attributes('href')).toBe('/channels')
+    expect(w.get('[data-testid="tutoring-tips-bind-cta"]').attributes('href')).toBe('/channels')
   })
 })

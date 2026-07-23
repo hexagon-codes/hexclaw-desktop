@@ -11,7 +11,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
+  k12TutoringTips: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(),
   k12ColdStart: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
@@ -69,17 +69,17 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     setActivePinia(createPinia())
     routeQuery.q = {}
     // Teleport 目标锚点（ChatView/ChatInput 提供，测试里预置）：页脚 + composer 上方(能力 chips)
-    // + composer 输入行动作(拍照识题按钮) + 场景侧栏(备课卡停靠)
+    // + composer 输入行动作(拍照识题按钮) + 场景侧栏(辅导要点停靠)
     document.body.innerHTML =
       '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
-  it('据描述符渲染头部 tab（辅导/学习档案/学情）· 头部零动作按钮（20260709：备课卡内联进识题流）', () => {
+  it('据描述符渲染头部 tab（辅导/学习档案/学情）· 头部零动作按钮（20260709：辅导要点内联进识题流）', () => {
     const w = render()
     expect(w.text()).toContain('辅导')
     expect(w.text()).toContain('学习档案')
     expect(w.text()).toContain('小明的辅导老师')
-    // 头部不再有「备课卡」按钮（辅导要点已内联进识题流）
+    // 头部不再有「辅导要点」按钮（辅导要点已内联进识题流）
     expect(w.find('.k12enh-prepbtn').exists()).toBe(false)
   })
 
@@ -130,8 +130,7 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(w.find('.k12enh-records').isVisible()).toBe(true)
   })
 
-  // 20260709：删「点备课卡→侧栏」「备课提醒条可见且可关」两用例——备课卡侧栏/nudge 已退役，
-  // 辅导要点改为识题确认后由 RecognizeGuardPanel 内联生成（见 PrepCardPanel.test / RecognizeGuardPanel）。
+  // 辅导要点只在识题持久确认后由 RecognizeGuardPanel 内联生成；不存在独立入口或侧栏。
 
   it('辅导 tab：composer 预设 chips 经 update:composerChips 数据流上交（BUG-20260709 起不再 Teleport）', async () => {
     const w = render()
@@ -156,7 +155,7 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(footer.textContent).toContain('我不只会辅导')
   })
 
-  it('切学习档案 tab → 备课提醒条 + 扩展桥消失', async () => {
+  it('切学习档案 tab → 辅导扩展桥消失', async () => {
     const w = render()
     await w
       .findAll('.k12enh-seg button')

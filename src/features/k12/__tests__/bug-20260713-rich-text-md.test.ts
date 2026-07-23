@@ -31,7 +31,7 @@ vi.mock('@/api/k12', () => ({
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [h.mistakes[0]] }),
   k12MarkMastered: vi.fn(),
   k12ReviewRetry: (req: unknown) => h.retrySpy(req),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12RecordMistake: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({

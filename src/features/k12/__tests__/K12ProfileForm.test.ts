@@ -33,7 +33,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
@@ -313,7 +313,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       global: { plugins: [createPinia(), i18n()] },
       attachTo: document.body,
     })
-    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级上')
+    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级')
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
@@ -398,8 +398,8 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     })
     // 预填称呼（读 k12.child_name）
     expect((B().find('input.k12pf__input').element as HTMLInputElement).value).toBe('小明')
-    // 改年级 → 六年级上（年级下拉走 HcSelect，B2：不再用原生 select）
-    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级上')
+    // 改年级 → 六年级；学期保持原来的“上”（两个字段均走 HcSelect）
+    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级')
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
@@ -444,7 +444,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       global: { plugins: [createPinia(), i18n()] },
       attachTo: document.body,
     })
-    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级上')
+    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '六年级')
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
@@ -466,17 +466,16 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(payload.skills).toContain('k12_grade')
   })
 
-  it('建档 footer 严格为上一步 / 先看示例 / 创建，发出宿主意图且不伪造导航', async () => {
+  it('建档 footer 严格为上一步 / 创建，仅发出有生产宿主的返回意图', async () => {
     const w = render()
     const labels = B()
       .findAll('.k12pf__foot .k12pf__btn')
       .map((button) => button.text())
-    expect(labels).toEqual(['上一步', '先看示例', '创建'])
+    expect(labels).toEqual(['上一步', '创建'])
 
     await B().find('[data-testid="k12pf-back"]').trigger('click')
-    await B().find('[data-testid="k12pf-preview"]').trigger('click')
     expect(w.emitted('back')).toHaveLength(1)
-    expect(w.emitted('preview')).toHaveLength(1)
+    expect(B().find('[data-testid="k12pf-preview"]').exists()).toBe(false)
     expect(w.emitted('close')).toBeUndefined()
     expect(B().findAll('.k12pf__note')).toHaveLength(1)
   })
@@ -510,16 +509,18 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(w.emitted('removed')).toEqual([['k12-tutor-x']])
   })
 
-  it('年级选择只出小学 12 档中文枚举（冻结：无初中，见 bug-20260718-frozen-grade-subject）', () => {
+  it('年级与学期拆成 6×2 二级选择（冻结：无初中，grade_term 契约不变）', () => {
     const w = render()
-    // 年级下拉走 HcSelect（B2）：枚举取自 :options 属性
+    // 两个字段均走 HcSelect；value 仍为稳定中文契约，label 可按语言本地化。
     const gradeSelect = w.findAllComponents(HcSelect)[0]!
-    const opts = (gradeSelect.props('options') as { value: string; label: string }[]).map(
+    const gradeOpts = (gradeSelect.props('options') as { value: string; label: string }[]).map(
       (o) => o.label,
     )
-    expect(opts).toContain('五年级上')
-    expect(opts).not.toContain('初一上')
-    expect(opts.some((o) => o.includes('初'))).toBe(false)
-    expect(opts).toHaveLength(12)
+    const semesterOpts = (
+      w.findAllComponents(HcSelect)[1]!.props('options') as { value: string; label: string }[]
+    ).map((o) => o.label)
+    expect(gradeOpts).toEqual(['一年级', '二年级', '三年级', '四年级', '五年级', '六年级'])
+    expect(semesterOpts).toEqual(['上学期', '下学期'])
+    expect(gradeOpts.some((o) => o.includes('初'))).toBe(false)
   })
 })

@@ -36,7 +36,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
   k12ListAccumulation: vi.fn(),
@@ -52,7 +52,7 @@ function i18n() {
 }
 function render(props: Record<string, unknown> = {}) {
   return mount(RecognizeGuardPanel, {
-    props: { agentId: 'mingming', grade: '五年级上', ...props },
+    props: { agentId: 'mingming', grade: '五年级上', sessionId: 'session-1', ...props },
     global: { plugins: [createPinia(), i18n()] },
   })
 }
@@ -138,6 +138,9 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     h.getJobSpy.mockReset()
     h.getResultSpy.mockReset()
     h.confirmJobSpy.mockReset()
+    h.confirmJobSpy.mockResolvedValue(
+      jobStatus('awaiting_confirmation', { confirmation_state: 'confirmed' }),
+    )
     h.retryJobSpy.mockReset()
     h.gradeSpy.mockReset()
     h.solveSpy.mockReset()
@@ -293,6 +296,7 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     await flushPromises()
     await chooseSubject(w)
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
 
@@ -369,6 +373,7 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     await flushPromises()
     await chooseSubject(w)
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
 
@@ -440,7 +445,7 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay（原图批改 Phase 1 集成
     // 入口自编排收敛：整卷批改 = 一次确认命令（带逐题修正）+ 轮询结果，
     // 不再逐题直连 /grade（并发限流责任移入后端编排器）。
     expect(h.confirmJobSpy).toHaveBeenCalledTimes(1)
-    expect(h.getResultSpy).toHaveBeenCalledWith('mingming', 'job-1')
+    expect(h.getResultSpy).toHaveBeenCalledWith('mingming', 'job-1', expect.any(AbortSignal))
     expect(h.gradeSpy).not.toHaveBeenCalled()
     const confirmReq = h.confirmJobSpy.mock.calls[0]![1] as {
       subject: string

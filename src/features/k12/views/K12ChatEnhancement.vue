@@ -24,10 +24,13 @@ import type {
   ScenarioComposerChip,
   ScenarioComposerCommand,
 } from '@/shell/scenario/registry'
+import { hasGradingJobBinding } from '../grading-job-binding'
 
 const props = defineProps<{
   agentId: string
   agentName: string
+  /** 通用会话 ID：仅用于 source_session 与同一 GradingJob 的最小刷新恢复。 */
+  sessionId?: string
   /** 通用 metadata（ChatView 透传）；年级由本组件解析后端 profile 键 k12.grade_term */
   metadata?: Record<string, string>
   descriptor: InstanceViewDescriptor
@@ -106,7 +109,7 @@ function closeRecognize() {
   pendingRecognizeImage.value = ''
 }
 
-// 头部零硬编码动作按钮（20260709）：备课卡已内联进识题流（识题确认后自动出「这份作业的辅导要点」），
+// 头部零硬编码动作按钮（20260709）：辅导要点已内联进识题流（识题确认后自动出「这份作业的辅导要点」），
 // 头部只留身份 + [辅导|错题本] tab；识题=composer 拍照入口、渐进提示=辅导默认行为，均非头部动作。
 // composer 预设 chips：从后端 view-descriptor 下发（AP-1：不在前端硬编码场景 chip）
 const composerChips = ref<ScenarioComposerChip[]>([])
@@ -300,6 +303,20 @@ watch(
     emit('update:composerImage', '')
   },
 )
+// 刷新/重启后只在同一 session+agent 存在最小 Job 绑定时恢复原会话位置；
+// 不从图片、题目或显示名猜测，也不把另一孩子的 Job 投影进来。
+watch(
+  [() => props.sessionId, () => props.agentId],
+  ([sessionId, agentId]) => {
+    const recoverable = hasGradingJobBinding(sessionId, agentId)
+    if (recoverable) {
+      tab.value = 'chat'
+      pendingRecognizeImage.value = ''
+    }
+    recognizeOpen.value = recoverable
+  },
+  { immediate: true },
+)
 watch(
   () => route.query.scenarioTab,
   () => {
@@ -323,11 +340,9 @@ watch(
 </script>
 
 <template>
-  <!-- ① 头部槽：身份（单行截断防长名竖排断行·D2）+ 子视图 tab + 头部动作（**descriptor 声明式**·D1/根治）。
-       头部动作只渲染 descriptor.actions 里 placement=header 的（=备课卡），组件内**零硬编码按钮**——
-       想加头部控件只能改 descriptor（对着原型评审），杜绝识题/渐进提示这类硬编码旁路复漂移。
-       识题=走 composer 拍照入口（独立 OCR 管道，见下方 Teleport）；渐进提示=辅导默认行为（人设+chip），
-       二者都不是头部动作，故不在此。 -->
+  <!-- ① 头部槽：身份（单行截断防长名竖排断行·D2）+ 子视图 tab。
+       当前 descriptor.actions 为空，头部没有场景动作；识题只走 composer 拍照入口，辅导要点只在
+       RecognizeGuardPanel 持久确认后内联展示，不存在 shell 侧栏或锚点。 -->
   <div class="k12enh-tabs">
     <div class="k12enh-id">
       <span class="k12enh-av">🎓</span>
@@ -362,7 +377,7 @@ watch(
        （原型 app.html:1316「零手动按钮」，BUG-20260711-E 删除了手动相机 toggle——禁止加回）。
        识题走独立 OCR 管道不依赖聊天模型 vision；面板头部 ✕ 收起。
        tab 用 v-show 保活（BUG-20260712-S）：v-if 会在切错题本时销毁面板 → 切回重挂载
-       重新识题（丢已识结果+重复慢调用）+ 在途 prep-card fetch 被 abort 且错误漏到错题本页。 -->
+       重新识题（丢已识结果+重复慢调用）+ 在途 tutoring-tips fetch 被 abort 且错误漏到错题本页。 -->
     <Teleport v-if="recognizeOpen" defer to="#hc-chat-scenario-inline">
       <div v-show="tab === 'chat'" class="k12enh-tutor" data-testid="k12-photo-assistant-message">
         <div class="k12enh-tutor__avatar">
@@ -374,8 +389,9 @@ watch(
           <div class="k12enh-tutor__bubble">
             <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
             <RecognizeGuardPanel
-              :key="agentId"
+              :key="`${agentId}:${sessionId || ''}`"
               :agent-id="agentId"
+              :session-id="sessionId"
               :grade="grade"
               :textbook="textbook"
               :textbooks="subjectTextbooks"
@@ -387,8 +403,7 @@ watch(
       </div>
     </Teleport>
 
-    <!-- 20260709：删「先花 3 分钟备课」nudge 条。家长辅导是临场的，主动引导改为拍照识题（下方相机入口），
-       备课内容改为识题确认后由 RecognizeGuardPanel 内联出「这份作业的辅导要点」。 -->
+    <!-- 辅导要点只在 RecognizeGuardPanel 识题持久确认后内联展示。 -->
 
     <!-- K12→通用扩展桥（辅导 tab，Teleport 到会话页脚；兑现「通用留存」）。
        defer：本增强组件在 ChatView 里渲染在锚点 div 之前（ChatView ~1815 vs 锚点 2344），
@@ -575,8 +590,7 @@ watch(
     </div>
   </Teleport>
 
-  <!-- 20260709：备课卡专用侧栏已退役。「这份作业的辅导要点」改为 RecognizeGuardPanel 识题结果下方内联
-       渲染（PrepCardPanel 已改为内联卡），不再经 shell 侧栏锚点停靠。 -->
+  <!-- 当前不存在辅导要点 shell 侧栏或锚点。 -->
 </template>
 
 <style scoped>
@@ -925,5 +939,5 @@ watch(
   display: flex;
   flex-direction: column;
 }
-/* 备课卡侧栏现经 Teleport 挂到 `.hc-chat` 行级锚点作停靠面板（见 template），此处无需定位样式。 */
+/* 辅导要点只在 RecognizeGuardPanel 内联；本组件没有对应 shell 侧栏定位样式。 */
 </style>

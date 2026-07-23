@@ -1024,7 +1024,7 @@ async function doExportMd() {
 
 <template>
   <div class="k12rec">
-    <!-- 实例上下文头卡（🎓 姓名 + 年级 + 回辅导/备课卡）由外层 k12enh-tabs 唯一提供；
+    <!-- 实例上下文头卡（🎓 姓名 + 年级 + 回辅导/辅导要点）由外层 k12enh-tabs 唯一提供；
          此处不再自绘，避免错题本 tab 下姓名/年级重复渲染两遍（BUG-20260708 B8）。 -->
 
     <!-- 学习档案五对象 Tab（PRD §1.5 IA 定稿）：本周复习 / 全部错题 / 练习集 / 积累 / 作品。
@@ -1602,7 +1602,7 @@ async function doExportMd() {
             <HcSelect
               v-model="mistakeForm.subject"
               :options="mistakeSubjectOptions"
-              :placeholder="t('k12.prep.pickHint')"
+              :placeholder="t('k12.tutoringTips.pickHint')"
             />
           </div>
           <HcClearableField>

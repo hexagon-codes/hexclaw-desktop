@@ -12,7 +12,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: (...args: unknown[]) => h.listMistakes(...args),
   k12ReviewQueue: (...args: unknown[]) => h.reviewQueue(...args),
   k12MarkMastered: (...args: unknown[]) => h.markMastered(...args),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),

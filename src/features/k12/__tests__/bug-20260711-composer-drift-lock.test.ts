@@ -26,7 +26,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
+  k12TutoringTips: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(),
   k12CreateGradingJob: vi.fn().mockResolvedValue({
     created: true,
@@ -192,7 +192,7 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
     expect(recognizePanel(w).exists()).toBe(true)
     expect(recognizeMock).toHaveBeenCalledTimes(1)
 
-    // 切错题本 tab → 面板隐藏但**不销毁**（v-show 保活；v-if 销毁会导致重挂载重识题 + prep-card fetch abort）
+    // 切错题本 tab → 面板隐藏但**不销毁**（v-show 保活；v-if 销毁会导致重挂载重识题 + tutoring-tips fetch abort）
     await w
       .findAll('.k12enh-seg button')
       .find((b) => b.text() === '学习档案')!

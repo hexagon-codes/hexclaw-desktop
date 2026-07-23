@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   gradeSpy: vi.fn(),
   solveSpy: vi.fn(),
   coldStartSpy: vi.fn(),
+  tutoringTipsSpy: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
   k12CreateGradingJob: (r: unknown, signal?: AbortSignal) => h.createJobSpy(r, signal),
@@ -38,7 +39,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: (...args: unknown[]) => h.tutoringTipsSpy(...args),
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
   k12ListAccumulation: vi.fn(),
@@ -54,7 +55,7 @@ function i18n() {
 }
 function render(props: Record<string, unknown> = {}) {
   return mount(RecognizeGuardPanel, {
-    props: { agentId: 'mingming', grade: '五年级上', ...props },
+    props: { agentId: 'mingming', grade: '五年级上', sessionId: 'session-1', ...props },
     global: { plugins: [createPinia(), i18n()] },
   })
 }
@@ -111,9 +112,11 @@ function jobStatus(stage: string, extra: Record<string, unknown> = {}) {
 }
 function mockJobRecognition(questions: Array<Record<string, unknown>>, subject = '') {
   h.createJobSpy.mockResolvedValue({ created: true, job: jobDTO('queued') })
-  h.getJobSpy.mockResolvedValue(
-    jobStatus('awaiting_confirmation', { recognition: { questions, subject } }),
-  )
+  h.getJobSpy
+    .mockResolvedValueOnce(
+      jobStatus('awaiting_confirmation', { recognition: { questions, subject } }),
+    )
+    .mockResolvedValue(jobStatus('assessing', { confirmation_state: 'confirmed' }))
 }
 
 describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷启动建档）', () => {
@@ -128,6 +131,21 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     h.gradeSpy.mockReset()
     h.solveSpy.mockReset()
     h.coldStartSpy.mockReset()
+    h.tutoringTipsSpy.mockReset().mockResolvedValue({
+      knowledge_points: ['小数乘法'],
+      sections: [
+        { title: '这页在练什么', content: '小数乘法。', source_label: '📖 依据课本' },
+        { title: '小明要留意', content: '暂无历史证据。', source_label: '🧠 学情信号' },
+        {
+          title: '每道题怎么带（不直接给答案）',
+          content: '先问孩子小数位数。',
+          source_label: '🤖 AI 归纳·供参考',
+        },
+      ],
+    })
+    h.confirmJobSpy.mockResolvedValue(
+      jobStatus('assessing', { confirmation_state: 'confirmed' }),
+    )
   })
 
   it('#1 识题：图片 → 调 recognize → 逐题回显题干+知识点', async () => {
@@ -151,7 +169,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(w.text()).toContain('乘法结合律')
   })
 
-  it('#1 总确认门：识题后先整体确认，确认前不得展示备课卡', async () => {
+  it('#1 总确认门：识题后先整体确认，确认前不得展示辅导要点', async () => {
     mockJobRecognition([{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }], '数学')
     const w = render()
     await setImage(w)
@@ -159,11 +177,21 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await flushPromises()
 
     expect(w.find('[data-testid="recognize-confirm-all"]').exists()).toBe(true)
-    expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(false)
+    expect(w.find('[data-testid="tutoring-tips"]').exists()).toBe(false)
     expect(w.find('[data-testid="rq-grade-0"]').exists()).toBe(false)
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(true)
+    expect(h.confirmJobSpy).toHaveBeenCalledTimes(1)
+    expect(h.confirmJobSpy).toHaveBeenCalledWith(
+      'job-1',
+      expect.objectContaining({ agent: 'mingming' }),
+      expect.any(AbortSignal),
+    )
+    expect(h.tutoringTipsSpy).toHaveBeenCalledWith(
+      { agent: 'mingming', grading_job_id: 'job-1' },
+      expect.any(AbortSignal),
+    )
+    expect(w.find('[data-testid="tutoring-tips"]').exists()).toBe(true)
     expect(w.find('[data-testid="rq-grade-0"]').exists()).toBe(true)
   })
 
@@ -176,10 +204,10 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
 
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(false)
+    expect(w.find('[data-testid="tutoring-tips"]').exists()).toBe(false)
 
     await chooseSubject(w, '数学')
-    expect(w.find('[data-testid="tutor-guide"]').exists()).toBe(true)
+    expect(w.find('[data-testid="tutoring-tips"]').exists()).toBe(true)
   })
 
   it('权威原型：确认与原图定位以两个正交分支呈现，确认后只更新各自状态', async () => {
@@ -196,6 +224,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(w.get('[data-testid="recognize-anchor-branch"]').text()).toContain('原图题目已定位')
 
     await w.get('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     expect(w.get('[data-testid="recognize-confirm-branch"]').classes()).toContain('is-done')
     expect(w.get('[data-testid="recognize-confirm-branch"]').text()).toContain('题目已确认并冻结')
   })
@@ -303,12 +332,14 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
       .mockResolvedValueOnce(
         jobStatus('awaiting_confirmation', { recognition: { questions, subject: '数学' } }),
       )
-      .mockResolvedValueOnce(jobStatus('completed'))
+      .mockResolvedValueOnce(jobStatus('completed', { confirmation_state: 'confirmed' }))
     h.getResultSpy.mockResolvedValue({
       job_id: 'job-1',
       result: { mode: 'grade', items: [], markdown: '' },
     })
-    h.confirmJobSpy.mockResolvedValue(jobStatus('assessing'))
+    h.confirmJobSpy.mockResolvedValue(
+      jobStatus('assessing', { confirmation_state: 'confirmed' }),
+    )
 
     const w = render({ initialImage: 'data:image/png;base64,AAAA' })
     await flushPromises()
@@ -328,6 +359,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await w.get('[data-testid="rq-confirm-1"]').setValue(true)
     expect(w.get('[data-testid="recognize-confirm-all"]').attributes('disabled')).toBeUndefined()
     await w.get('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
 
     // 两个兄弟 Attempt 各自编辑，公共题干没有答案输入。
     await w.get('[data-testid="rq-answer-1"]').setValue('30')
@@ -346,14 +378,14 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
       expect.objectContaining({
         problem_id: 'child-1',
         confirmed: true,
-        answer_canonical_markdown: '30',
+        answer_canonical_markdown: '31',
       }),
     )
     expect(request.question_corrections[2]).toEqual(
       expect.objectContaining({
         problem_id: 'child-2',
         confirmed: true,
-        answer_canonical_markdown: '40',
+        answer_canonical_markdown: '42',
       }),
     )
   })
@@ -444,6 +476,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await w.find('[data-testid="rq-problem-0"]').setValue('3.8×3=?')
     await chooseSubject(w)
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     // 填孩子作答 → 批改
     await w.find('[data-testid="rq-answer-0"]').setValue('11.4')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
@@ -478,6 +511,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(subjectSelect.exists(), '拍题批改前必须让家长明确选择学科').toBe(true)
     await chooseSubject(w, '语文')
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     // 批改需有孩子作答（空白题走「求解」而非批改）——填上作答再批改。
     await w.find('[data-testid="rq-answer-0"]').setValue('疑是地上霜')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
@@ -563,6 +597,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await flushPromises()
     await chooseSubject(w)
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     await w.find('[data-testid="rq-answer-0"]').setValue('11.4')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
@@ -589,6 +624,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await flushPromises()
     await chooseSubject(w)
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     await w.find('[data-testid="rq-answer-0"]').setValue('10.4')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
@@ -730,7 +766,7 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     expect(h.gradeSpy.mock.calls[0]![0].student_answer).toBe('10.4')
   })
 
-  it('整卷 Job 已确认返回 409 时不得绕过版本状态机回退逐题 grade', async () => {
+  it('持久确认返回 409 时保持未确认，不挂载辅导要点或绕过状态机批改', async () => {
     mockJobRecognition([
       {
         question: '3.8×3=?',
@@ -747,11 +783,12 @@ describe('RecognizeGuardPanel（#1 识题回显护栏 + #2 逐题批改 + #3 冷
     await flushPromises()
     await chooseSubject(w)
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
-    await w.find('[data-testid="recognize-grade-all"]').trigger('click')
     await flushPromises()
 
     expect(h.confirmJobSpy).toHaveBeenCalledOnce()
     expect(h.gradeSpy).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="recognize-grade-all"]').exists()).toBe(false)
+    expect(w.find('[data-testid="tutoring-tips"]').exists()).toBe(false)
     expect(w.text()).toContain('completed Job 不可再次确认')
   })
 })

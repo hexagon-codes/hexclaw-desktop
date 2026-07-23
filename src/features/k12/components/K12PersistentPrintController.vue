@@ -16,7 +16,6 @@ const state = ref({
   open: false,
   printing: false,
   title: '',
-  pdfUrl: '',
   preparation: null as Extract<PersistentPrintPreparation, { status: 'preview' }> | null,
 })
 let generation = 0
@@ -24,8 +23,7 @@ let generation = 0
 function close(force = false) {
   if (state.value.printing && !force) return
   generation++
-  if (state.value.pdfUrl) URL.revokeObjectURL(state.value.pdfUrl)
-  state.value = { open: false, printing: false, title: '', pdfUrl: '', preparation: null }
+  state.value = { open: false, printing: false, title: '', preparation: null }
 }
 
 async function open(request: PersistentPrintRequest): Promise<void> {
@@ -36,12 +34,10 @@ async function open(request: PersistentPrintRequest): Promise<void> {
     emit('result', prepared.printed)
     return
   }
-  if (state.value.pdfUrl) URL.revokeObjectURL(state.value.pdfUrl)
   state.value = {
     open: true,
     printing: false,
     title: prepared.title,
-    pdfUrl: URL.createObjectURL(prepared.pdf),
     preparation: prepared,
   }
 }
@@ -72,7 +68,7 @@ defineExpose({ open, close })
   <K12PrintPreviewModal
     :open="state.open"
     :title="state.title"
-    :pdf-url="state.pdfUrl"
+    :pdf="state.preparation?.pdf ?? null"
     :printing="state.printing"
     @close="close"
     @print="confirm"

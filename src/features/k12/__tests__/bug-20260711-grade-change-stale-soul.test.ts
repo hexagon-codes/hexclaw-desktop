@@ -37,7 +37,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
@@ -83,7 +83,7 @@ describe('BUG-20260711-A：改档年级后 tutor 人设必须重派生', () => {
   it('★实例人设=自动派生（未自定义）时：改年级 五年级上→五年级下 → 回写的 system_prompt 跟随新年级', async () => {
     // 建档写入的正是派生人设——这不是家长自定义
     const w = mountEdit(derivedSoul('小明', '五年级上', '人教版'))
-    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '五年级下')
+    w.findAllComponents(HcSelect)[1]!.vm.$emit('update:modelValue', '下')
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
@@ -97,7 +97,7 @@ describe('BUG-20260711-A：改档年级后 tutor 人设必须重派生', () => {
   it('对照：家长自定义过人设（≠派生模板）时改年级 → 自定义人设保留不被覆盖', async () => {
     const custom = '你是小明的专属老师，说话要幽默。'
     const w = mountEdit(custom)
-    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '五年级下')
+    w.findAllComponents(HcSelect)[1]!.vm.$emit('update:modelValue', '下')
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()

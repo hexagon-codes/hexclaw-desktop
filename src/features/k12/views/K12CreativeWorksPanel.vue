@@ -63,6 +63,7 @@ const detailDialogs = ref<HTMLElement[]>([])
 let detailOpener: HTMLElement | null = null
 const previewImageSrc = ref('')
 const previewImageAlt = ref('')
+const previewDialog = ref<HTMLElement | null>(null)
 let previewOpener: HTMLElement | null = null
 // 点评/修改稿的行内输入：按 record_id 存草稿文本。
 const feedbackDraft = ref<Record<string, string>>({})
@@ -147,6 +148,7 @@ function openImagePreview(src: string, alt: string, event?: Event) {
   previewOpener = trigger instanceof HTMLElement ? trigger : null
   previewImageSrc.value = src
   previewImageAlt.value = alt
+  void nextTick(() => previewDialog.value?.focus())
 }
 function closeImagePreview(restoreFocus = true) {
   if (!previewImageSrc.value) return
@@ -1876,6 +1878,7 @@ defineExpose({ load, openAdd })
     <Teleport to="body">
       <div
         v-if="previewImageSrc"
+        ref="previewDialog"
         class="k12cw-image-preview"
         data-testid="cw-image-preview"
         role="dialog"
@@ -2051,32 +2054,34 @@ defineExpose({ load, openAdd })
                 </p>
               </div>
             </div>
-            <label class="k12cw-modal__field">
-              <span>{{ t('k12.works.nameLabel') }}</span>
-              <HcClearableField>
-                <input
-                  v-model="addTitle"
-                  class="k12cw__input"
-                  :placeholder="t('k12.works.namePlaceholder')"
-                  data-testid="cw-add-title"
-                />
-              </HcClearableField>
-            </label>
-            <label class="k12cw-modal__field">
-              <span>{{
-                addType === 'writing'
-                  ? t('k12.works.taskLabelWriting')
-                  : t('k12.works.taskLabelArt')
-              }}</span>
-              <HcClearableField>
-                <input
-                  v-model="addTask"
-                  class="k12cw__input"
-                  :placeholder="t('k12.works.taskPlaceholder')"
-                  data-testid="cw-add-task"
-                />
-              </HcClearableField>
-            </label>
+            <div class="k12cw-modal__row">
+              <label class="k12cw-modal__field">
+                <span>{{ t('k12.works.nameLabel') }}</span>
+                <HcClearableField>
+                  <input
+                    v-model="addTitle"
+                    class="k12cw__input"
+                    :placeholder="t('k12.works.namePlaceholder')"
+                    data-testid="cw-add-title"
+                  />
+                </HcClearableField>
+              </label>
+              <label class="k12cw-modal__field">
+                <span>{{
+                  addType === 'writing'
+                    ? t('k12.works.taskLabelWriting')
+                    : t('k12.works.taskLabelArt')
+                }}</span>
+                <HcClearableField>
+                  <input
+                    v-model="addTask"
+                    class="k12cw__input"
+                    :placeholder="t('k12.works.taskPlaceholder')"
+                    data-testid="cw-add-task"
+                  />
+                </HcClearableField>
+              </label>
+            </div>
             <label v-if="addType === 'writing'" class="k12cw-modal__field">
               <span>{{ t('k12.works.draftLabel') }}</span>
               <HcClearableField>
@@ -2555,15 +2560,25 @@ defineExpose({ load, openAdd })
   color: var(--hc-text-primary);
 }
 .k12cw-modal__body {
+  width: 100%;
   min-height: 0;
+  min-width: 0;
+  box-sizing: border-box;
   padding: 18px;
   display: grid;
   gap: 13px;
   overflow: auto;
 }
+.k12cw-modal__row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
 .k12cw-modal__field {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 .k12cw-modal__field > span {
   font-size: 12.5px;
@@ -2939,6 +2954,10 @@ defineExpose({ load, openAdd })
   margin-bottom: 8px;
 }
 .k12cw__input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   font: inherit;
   font-size: 12px;
   border: 0.5px solid var(--hc-border);
@@ -3005,6 +3024,9 @@ defineExpose({ load, openAdd })
   }
 }
 @media (max-width: 560px) {
+  .k12cw-modal__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .k12cw__card {
     grid-template-columns: 88px minmax(0, 1fr);
   }

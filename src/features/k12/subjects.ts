@@ -6,27 +6,27 @@
 export const K12_GRADE_SUBJECT_OPTIONS = [
   {
     value: '数学',
-    labelKey: 'k12.prep.subjectMath',
+    labelKey: 'k12.tutoringTips.subjectMath',
     plainLabelKey: 'k12.profile.subjects.math',
   },
   {
     value: '语文',
-    labelKey: 'k12.prep.subjectChinese',
+    labelKey: 'k12.tutoringTips.subjectChinese',
     plainLabelKey: 'k12.profile.subjects.chinese',
   },
   {
     value: '英语',
-    labelKey: 'k12.prep.subjectEnglish',
+    labelKey: 'k12.tutoringTips.subjectEnglish',
     plainLabelKey: 'k12.profile.subjects.english',
   },
   {
     value: '科学',
-    labelKey: 'k12.prep.subjectScience',
+    labelKey: 'k12.tutoringTips.subjectScience',
     plainLabelKey: 'k12.profile.subjects.science',
   },
   {
     value: '信息科技',
-    labelKey: 'k12.prep.subjectInfoTech',
+    labelKey: 'k12.tutoringTips.subjectInfoTech',
     plainLabelKey: 'k12.profile.subjects.informationTechnology',
   },
 ] as const

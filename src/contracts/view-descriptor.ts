@@ -37,7 +37,7 @@ export interface RecordCollectionRef {
 
 /** 侧栏产物面板（场景专属侧栏，独立于通用 artifact 面板 · §7.4 产物槽） */
 export interface SidePanelRef {
-  /** 面板 id，如 'prep-card' */
+  /** 面板 id，如 'tutoring-tips' */
   id: string
   titleKey: string
   icon?: string

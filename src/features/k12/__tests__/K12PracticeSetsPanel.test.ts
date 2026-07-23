@@ -29,10 +29,13 @@ const h = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastInfo: vi.fn(),
   toastWarning: vi.fn(),
+  previewGetDocument: vi.fn(),
+  previewRender: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
   k12ListPracticeSets: (agent: string, status?: string) => h.listSpy(agent, status),
-  k12FinalizePracticeSet: (a: string, id: string, via: string, target?: string) => h.finalizeSpy(a, id, via, target),
+  k12FinalizePracticeSet: (a: string, id: string, via: string, target?: string) =>
+    h.finalizeSpy(a, id, via, target),
   k12RemoveFromBasket: (a: string, id: string, itemId: string) => h.removeSpy(a, id, itemId),
   k12AdvancePracticeSet: (a: string, id: string, step: string) => h.advanceSpy(a, id, step),
   k12CancelPracticeSet: (a: string, id: string) => h.cancelSpy(a, id),
@@ -45,7 +48,11 @@ vi.mock('@/api/k12', () => ({
   k12RetryPracticePrintJob: (...args: unknown[]) => h.retryPrintSpy(...args),
   k12UploadAsset: (a: string, file: File) => h.uploadSpy(a, file),
   k12SubmitPracticeSet: (a: string, id: string, req: unknown) => h.submitSpy(a, id, req),
-  k12GradePracticeSet: (a: string, id: string, results: Array<{ item_id: string; correct: boolean }>) => h.gradeSpy(a, id, results),
+  k12GradePracticeSet: (
+    a: string,
+    id: string,
+    results: Array<{ item_id: string; correct: boolean }>,
+  ) => h.gradeSpy(a, id, results),
   k12AssetURL: (agent: string, assetId: string) => `/asset/${agent}/${encodeURIComponent(assetId)}`,
 }))
 vi.mock('@/composables/useToast', () => ({
@@ -59,21 +66,37 @@ vi.mock('@/composables/useToast', () => ({
 vi.mock('../export', () => ({
   printPracticePaper: (markdown: string, title: string) => h.printSpy(markdown, title),
   printPracticePaperWithReceipt: (pdf: Blob) => h.printSpy(pdf),
-  renderPracticePaperPdf: (markdown: string, title: string) =>
-    h.renderPdfSpy(markdown, title),
+  renderPracticePaperPdf: (markdown: string, title: string) => h.renderPdfSpy(markdown, title),
   savePracticePaperPdf: vi.fn().mockResolvedValue(true),
+}))
+vi.mock('pdfjs-dist/legacy/build/pdf.mjs', () => ({
+  GlobalWorkerOptions: { workerSrc: '' },
+  getDocument: (...args: unknown[]) => h.previewGetDocument(...args),
+}))
+vi.mock('pdfjs-dist/legacy/build/pdf.worker.mjs?url', () => ({
+  default: 'pdf.worker.test.mjs',
 }))
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh } },
   })
 }
 
-function item(id: string, q: string, subject: string, status: PracticeItemDTO['verification_status'], via = 'weekly'): PracticeItemDTO {
+function item(
+  id: string,
+  q: string,
+  subject: string,
+  status: PracticeItemDTO['verification_status'],
+  via = 'weekly',
+): PracticeItemDTO {
   return {
-    item_id: id, question_markdown: q, subject, added_via: via as PracticeItemDTO['added_via'],
+    item_id: id,
+    question_markdown: q,
+    subject,
+    added_via: via as PracticeItemDTO['added_via'],
     verification_status: status,
     verification_evidence: status === 'verified' ? '独立验算' : undefined,
     blocked_reason: status !== 'verified' ? '验证器未达质量门' : undefined,
@@ -82,17 +105,30 @@ function item(id: string, q: string, subject: string, status: PracticeItemDTO['v
 
 function basket(items: PracticeItemDTO[]): PracticeSetDTO {
   return {
-    record_id: 'basket1', title: '待打印篮', source_kind: 'mixed', status: 'draft',
-    status_label: '草稿', publishable: false, delivery_status: 'not_sent', items,
+    record_id: 'basket1',
+    title: '待打印篮',
+    source_kind: 'mixed',
+    status: 'draft',
+    status_label: '草稿',
+    publishable: false,
+    delivery_status: 'not_sent',
+    items,
     return_assets: [],
   }
 }
 
 function historySet(over: Partial<PracticeSetDTO> = {}): PracticeSetDTO {
   return {
-    record_id: 'hist1', title: '小数乘法专项 · 07/12', source_kind: 'mixed', status: 'graded',
-    status_label: '已批改', publishable: true, delivery_status: 'delivered',
-    paper_no: 'P-2629-01', finalized_at: 1784300000, finalized_via: 'print',
+    record_id: 'hist1',
+    title: '小数乘法专项 · 07/12',
+    source_kind: 'mixed',
+    status: 'graded',
+    status_label: '已批改',
+    publishable: true,
+    delivery_status: 'delivered',
+    paper_no: 'P-2629-01',
+    finalized_at: 1784300000,
+    finalized_via: 'print',
     items: [item('q9', '2.8×0.65=?', '数学', 'verified')],
     return_assets: [],
     ...over,
@@ -107,16 +143,42 @@ function render() {
 }
 
 beforeEach(() => {
-  vi.spyOn(URL, 'createObjectURL').mockReturnValue('about:blank')
-  vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined)
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+    {} as CanvasRenderingContext2D,
+  )
+  h.previewRender.mockReset().mockResolvedValue(undefined)
+  h.previewGetDocument.mockReset().mockReturnValue({
+    promise: Promise.resolve({
+      numPages: 1,
+      getPage: async () => ({
+        getViewport: ({ scale }: { scale: number }) => ({
+          width: 595 * scale,
+          height: 842 * scale,
+        }),
+        render: () => ({ promise: h.previewRender(), cancel: vi.fn() }),
+      }),
+      destroy: vi.fn().mockResolvedValue(undefined),
+    }),
+    destroy: vi.fn().mockResolvedValue(undefined),
+  })
   h.listSpy.mockReset()
-  h.finalizeSpy.mockReset().mockResolvedValue({ set: historySet({ status: 'assigned', status_label: '待完成' }), skipped_blocked_count: 2 })
+  h.finalizeSpy
+    .mockReset()
+    .mockResolvedValue({
+      set: historySet({ status: 'assigned', status_label: '待完成' }),
+      skipped_blocked_count: 2,
+    })
   h.removeSpy.mockReset().mockResolvedValue(basket([]))
   h.advanceSpy.mockReset().mockResolvedValue(historySet())
-  h.cancelSpy.mockReset().mockResolvedValue(historySet({ status: 'cancelled', status_label: '已取消' }))
+  h.cancelSpy
+    .mockReset()
+    .mockResolvedValue(historySet({ status: 'cancelled', status_label: '已取消' }))
   h.paperSpy.mockReset().mockResolvedValue({
-    kind: 'question', title: '小数乘法专项 · 07/12', paper_no: 'P-2629-01',
-    markdown: '# 小数乘法专项\n\n1. 2.8×0.65=?', preview: false,
+    kind: 'question',
+    title: '小数乘法专项 · 07/12',
+    paper_no: 'P-2629-01',
+    markdown: '# 小数乘法专项\n\n1. 2.8×0.65=?',
+    preview: false,
   })
   h.preparePrintSpy.mockReset().mockResolvedValue({
     print_job: {
@@ -141,10 +203,11 @@ beforeEach(() => {
     artifact_id: 'qsheet-1',
     markdown: '# 待打印篮\n\n1. 2.8×0.65=?',
   })
-  h.printEventSpy.mockReset().mockImplementation(
-    (_agent: string, _job: string, event: { status: string }) =>
+  h.printEventSpy
+    .mockReset()
+    .mockImplementation((_agent: string, _job: string, event: { status: string }) =>
       Promise.resolve({ print_job: { print_job_id: 'print-1', status: event.status } }),
-  )
+    )
   h.commitPrintSpy.mockReset().mockResolvedValue({
     print_job: {
       print_job_id: 'print-1',
@@ -164,8 +227,12 @@ beforeEach(() => {
     printer_snapshot: { adapter: 'appkit' },
   })
   h.renderPdfSpy.mockReset().mockResolvedValue(new Blob(['%PDF-1.7'], { type: 'application/pdf' }))
-  h.uploadSpy.mockReset().mockResolvedValue({ asset_id: 'asset://k12-xiaoming/return.png', size: 3 })
-  h.submitSpy.mockReset().mockResolvedValue(historySet({ status: 'submitted', status_label: '已回传' }))
+  h.uploadSpy
+    .mockReset()
+    .mockResolvedValue({ asset_id: 'asset://k12-xiaoming/return.png', size: 3 })
+  h.submitSpy
+    .mockReset()
+    .mockResolvedValue(historySet({ status: 'submitted', status_label: '已回传' }))
   h.gradeSpy.mockReset().mockResolvedValue(historySet())
   h.toastSuccess.mockReset()
   h.toastError.mockReset()
@@ -174,6 +241,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  document.body.innerHTML = ''
   vi.restoreAllMocks()
 })
 
@@ -199,11 +267,13 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
 
   it('篮内按学科分组（§4.13 顺序），阻断题沉底成组且降透明', async () => {
     h.listSpy.mockResolvedValue({
-      items: [basket([
-        item('c1', '默写：梅须逊雪', '语文', 'verified'),
-        item('m1', '2.8×0.65=?', '数学', 'verified'),
-        item('s1', '闭合电路判断', '科学', 'needs_review'),
-      ])],
+      items: [
+        basket([
+          item('c1', '默写：梅须逊雪', '语文', 'verified'),
+          item('m1', '2.8×0.65=?', '数学', 'verified'),
+          item('s1', '闭合电路判断', '科学', 'needs_review'),
+        ]),
+      ],
     })
     const w = render()
     await flushPromises()
@@ -229,7 +299,12 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
 
   it('先预览再确认系统打印；取消不固化，成功由同一持久 PrintJob receipt 原子固化', async () => {
     h.listSpy.mockResolvedValue({
-      items: [basket([item('m1', '题', '数学', 'verified'), item('s1', '阻断题', '科学', 'needs_review')])],
+      items: [
+        basket([
+          item('m1', '题', '数学', 'verified'),
+          item('s1', '阻断题', '科学', 'needs_review'),
+        ]),
+      ],
     })
     h.preparePrintSpy
       .mockResolvedValueOnce({
@@ -273,7 +348,12 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.printEventSpy).not.toHaveBeenCalled()
     expect(h.finalizeSpy).not.toHaveBeenCalled()
 
-    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="k12-print-preview-ready"]')).not.toBeNull()
+    })
+    await document.body
+      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!
+      .click()
     await flushPromises()
     expect(h.printSpy).toHaveBeenCalledWith(exactPreviewPdf)
     expect(h.renderPdfSpy).toHaveBeenCalledTimes(1)
@@ -286,7 +366,12 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
     expect(h.retryPrintSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1')
-    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await vi.waitFor(() => {
+      expect(document.body.querySelector('[data-testid="k12-print-preview-ready"]')).not.toBeNull()
+    })
+    await document.body
+      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!
+      .click()
     await flushPromises()
     expect(h.printSpy).toHaveBeenLastCalledWith(exactPreviewPdf)
     expect(h.commitPrintSpy).toHaveBeenCalledWith('k12-xiaoming', 'print-1', {
@@ -314,7 +399,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
     expect(h.printEventSpy).not.toHaveBeenCalled()
-    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await document.body
+      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!
+      .click()
     await flushPromises()
 
     expect(h.printEventSpy.mock.calls.map((call) => call[2])).toEqual([
@@ -330,7 +417,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.finalizeSpy).not.toHaveBeenCalled()
     expect(h.toastSuccess).not.toHaveBeenCalled()
     expect(h.toastError).toHaveBeenCalledWith('native channel closed')
-    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-close"]')!.click()
+    await document.body
+      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-close"]')!
+      .click()
     await flushPromises()
   })
 
@@ -349,7 +438,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await flushPromises()
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
-    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await document.body
+      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!
+      .click()
     await flushPromises()
 
     expect(h.printEventSpy).toHaveBeenLastCalledWith('k12-xiaoming', 'print-1', {
@@ -360,7 +451,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     })
     expect(h.commitPrintSpy).not.toHaveBeenCalled()
     expect(h.toastError).toHaveBeenCalledWith('打印 PDF 页面尺寸无效')
-    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-close"]')!.click()
+    await document.body
+      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-close"]')!
+      .click()
     await flushPromises()
   })
 
@@ -382,7 +475,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await flushPromises()
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
-    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await document.body
+      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!
+      .click()
     await flushPromises()
 
     expect(h.printSpy).toHaveBeenCalledTimes(1)
@@ -403,7 +498,9 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await flushPromises()
     await w.find('[data-testid="ps-finalize-print"]').trigger('click')
     await flushPromises()
-    await document.body.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!.click()
+    await document.body
+      .querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')!
+      .click()
     await flushPromises()
 
     expect(h.printEventSpy).toHaveBeenCalledTimes(1)
@@ -433,7 +530,12 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
   it('发送端只返回 pending → 明示待投递，禁止 toast 虚报发送成功', async () => {
     h.listSpy.mockResolvedValue({ items: [basket([item('m1', '题', '数学', 'verified')])] })
     h.finalizeSpy.mockResolvedValue({
-      set: historySet({ status: 'assigned', status_label: '待完成', delivery_status: 'pending', delivery_target: '手机私聊' }),
+      set: historySet({
+        status: 'assigned',
+        status_label: '待完成',
+        delivery_status: 'pending',
+        delivery_target: '手机私聊',
+      }),
       skipped_blocked_count: 0,
       delivery_note: '卷已固化，投递待执行',
     })
@@ -458,7 +560,14 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     h.listSpy.mockResolvedValue({
       items: [
         historySet({ record_id: 'old', title: '旧卷', finalized_at: 100, paper_no: 'P-2628-01' }),
-        historySet({ record_id: 'new', title: '新卷', finalized_at: 200, paper_no: 'P-2629-02', status: 'assigned', status_label: '待完成' }),
+        historySet({
+          record_id: 'new',
+          title: '新卷',
+          finalized_at: 200,
+          paper_no: 'P-2629-02',
+          status: 'assigned',
+          status_label: '待完成',
+        }),
       ],
     })
     const w = render()
@@ -473,10 +582,15 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
   })
 
   it('assigned 回传必须先选照片和照片覆盖题；空输入不调用 submit', async () => {
-    h.listSpy.mockResolvedValue({ items: [historySet({ status: 'assigned', status_label: '待完成' })] })
+    h.listSpy.mockResolvedValue({
+      items: [historySet({ status: 'assigned', status_label: '待完成' })],
+    })
     const w = render()
     await flushPromises()
-    await w.findAll('.k12ps__btn').find((b) => b.text() === '回传作答')!.trigger('click')
+    await w
+      .findAll('.k12ps__btn')
+      .find((b) => b.text() === '回传作答')!
+      .trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="ps-return-modal"]').exists()).toBe(true)
     expect(w.find('[data-testid="ps-return-confirm"]').attributes('disabled')).toBeDefined()
@@ -503,28 +617,38 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     const q2 = { ...item('q2', '第 2 题', '数学', 'verified'), paper_seq: 2 }
     const initial = historySet({ status: 'assigned', status_label: '待完成', items: [q1, q2] })
     const firstReturn = {
-      return_id: 'return-1', asset_id: 'asset://k12-xiaoming/one.png',
-      item_ids: ['q1'], returned_at: 1784300100,
+      return_id: 'return-1',
+      asset_id: 'asset://k12-xiaoming/one.png',
+      item_ids: ['q1'],
+      returned_at: 1784300100,
     }
     const secondReturn = {
-      return_id: 'return-2', asset_id: 'asset://k12-xiaoming/two.png',
-      item_ids: ['q2'], returned_at: 1784300200,
+      return_id: 'return-2',
+      asset_id: 'asset://k12-xiaoming/two.png',
+      item_ids: ['q2'],
+      returned_at: 1784300200,
     }
     h.listSpy.mockResolvedValue({ items: [initial] })
     h.submitSpy
-      .mockResolvedValueOnce(historySet({
-        status: 'submitted', status_label: '已回传',
-        items: [{ ...q1, returned: true, return_ids: ['return-1'] }, q2],
-        return_assets: [firstReturn],
-      }))
-      .mockResolvedValueOnce(historySet({
-        status: 'submitted', status_label: '已回传',
-        items: [
-          { ...q1, returned: true, return_ids: ['return-1'] },
-          { ...q2, returned: true, return_ids: ['return-2'] },
-        ],
-        return_assets: [firstReturn, secondReturn],
-      }))
+      .mockResolvedValueOnce(
+        historySet({
+          status: 'submitted',
+          status_label: '已回传',
+          items: [{ ...q1, returned: true, return_ids: ['return-1'] }, q2],
+          return_assets: [firstReturn],
+        }),
+      )
+      .mockResolvedValueOnce(
+        historySet({
+          status: 'submitted',
+          status_label: '已回传',
+          items: [
+            { ...q1, returned: true, return_ids: ['return-1'] },
+            { ...q2, returned: true, return_ids: ['return-2'] },
+          ],
+          return_assets: [firstReturn, secondReturn],
+        }),
+      )
 
     const w = render()
     await flushPromises()
@@ -563,16 +687,27 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     h.listSpy.mockResolvedValue({
       items: [historySet({ status: 'assigned', status_label: '待完成' })],
     })
-    h.submitSpy
-      .mockRejectedValueOnce(new Error('网络中断，结果未知'))
-      .mockResolvedValueOnce(historySet({
-        status: 'submitted', status_label: '已回传',
-        items: [{ ...item('q9', '2.8×0.65=?', '数学', 'verified'), returned: true, return_ids: ['return-replay'] }],
-        return_assets: [{
-          return_id: 'return-replay', asset_id: 'asset://k12-xiaoming/return.png',
-          item_ids: ['q9'], returned_at: 1784300100,
-        }],
-      }))
+    h.submitSpy.mockRejectedValueOnce(new Error('网络中断，结果未知')).mockResolvedValueOnce(
+      historySet({
+        status: 'submitted',
+        status_label: '已回传',
+        items: [
+          {
+            ...item('q9', '2.8×0.65=?', '数学', 'verified'),
+            returned: true,
+            return_ids: ['return-replay'],
+          },
+        ],
+        return_assets: [
+          {
+            return_id: 'return-replay',
+            asset_id: 'asset://k12-xiaoming/return.png',
+            item_ids: ['q9'],
+            returned_at: 1784300100,
+          },
+        ],
+      }),
+    )
     const w = render()
     await flushPromises()
     await w.find('[data-testid="ps-return-open"]').trigger('click')
@@ -591,26 +726,41 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
 
     expect(h.uploadSpy).toHaveBeenCalledTimes(1)
     expect(h.submitSpy).toHaveBeenCalledTimes(2)
-    expect((h.submitSpy.mock.calls[1]![2] as { return_id: string }).return_id).toBe(firstReq.return_id)
+    expect((h.submitSpy.mock.calls[1]![2] as { return_id: string }).return_id).toBe(
+      firstReq.return_id,
+    )
   })
 
   it('submitted 复批必须逐题明确对/错；空 results 不调用 grade', async () => {
     h.listSpy.mockResolvedValue({
-      items: [historySet({
-        status: 'submitted', status_label: '已回传',
-        items: [{
-          ...item('q9', '2.8×0.65=?', '数学', 'verified'),
-          returned: true, return_ids: ['return-grade'],
-        }],
-        return_assets: [{
-          return_id: 'return-grade', asset_id: 'asset://k12-xiaoming/answer.png',
-          item_ids: ['q9'], returned_at: 1784300100,
-        }],
-      })],
+      items: [
+        historySet({
+          status: 'submitted',
+          status_label: '已回传',
+          items: [
+            {
+              ...item('q9', '2.8×0.65=?', '数学', 'verified'),
+              returned: true,
+              return_ids: ['return-grade'],
+            },
+          ],
+          return_assets: [
+            {
+              return_id: 'return-grade',
+              asset_id: 'asset://k12-xiaoming/answer.png',
+              item_ids: ['q9'],
+              returned_at: 1784300100,
+            },
+          ],
+        }),
+      ],
     })
     const w = render()
     await flushPromises()
-    await w.findAll('.k12ps__btn').find((b) => b.text() === '复批')!.trigger('click')
+    await w
+      .findAll('.k12ps__btn')
+      .find((b) => b.text() === '复批')!
+      .trigger('click')
     await flushPromises()
 
     expect(w.find('[data-testid="ps-grade-modal"]').exists()).toBe(true)
@@ -620,6 +770,8 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     await w.find('[data-testid="ps-grade-correct-q9"]').setValue(true)
     await w.find('[data-testid="ps-grade-confirm"]').trigger('click')
     await flushPromises()
-    expect(h.gradeSpy).toHaveBeenCalledWith('k12-xiaoming', 'hist1', [{ item_id: 'q9', correct: true }])
+    expect(h.gradeSpy).toHaveBeenCalledWith('k12-xiaoming', 'hist1', [
+      { item_id: 'q9', correct: true },
+    ])
   })
 })

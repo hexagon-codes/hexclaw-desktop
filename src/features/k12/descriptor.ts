@@ -2,8 +2,8 @@
  * K12 实例视图描述符（features/k12）· 架构 §8.4。
  *
  * 这份声明就是原型里 k12chat/records 头部 + composer 预设的**契约化落点**——
- * shell 只渲染本描述符，不认识"错题本"。（20260709：备课卡侧栏退役，辅导要点内联进识题流，故本描述符
- * 不再声明 prep-card 侧栏/头部动作。）后端 view descriptor 端点就绪后，
+ * shell 只渲染本描述符，不认识"错题本"。（20260709：辅导要点侧栏退役，辅导要点内联进识题流，故本描述符
+ * 不再声明 tutoring-tips 侧栏/头部动作。）后端 view descriptor 端点就绪后，
  * 本静态声明由 `getInstanceViewDescriptor(agentId)` 的真实响应替换（fallback 保留）。
  */
 import type { InstanceViewDescriptor } from '@/contracts'
@@ -49,7 +49,7 @@ export const K12_VIEW_DESCRIPTOR: InstanceViewDescriptor = {
       schemaVersion: ACCUMULATION_SCHEMA.schemaVersion,
     },
   ],
-  // 20260709：备课卡侧栏退役 → 辅导要点内联进识题流（RecognizeGuardPanel），故无 prep-card 侧栏/头部动作。
+  // 20260709：辅导要点侧栏退役 → 辅导要点内联进识题流（RecognizeGuardPanel），故无 tutoring-tips 侧栏/头部动作。
   sidePanels: [],
   // 学习档案中的导出/备份入口由 RecordsView 唯一承载，不再保留未消费的重复动作声明。
   actions: [],

@@ -1,17 +1,54 @@
 /**
  * K12 年级 / 教材枚举（features/k12）。
- * 当前能力范围仅小学（架构 §1.3 v0.5.0 / K12-INV-014：不暴露初中、高中）——年级收窄为小学 12 档
- * （一年级上~六年级下，顺序即学习先后，用于超纲判定）。冻结锁 bug-20260718-frozen-grade-subject。
- * 这些值是**后端契约**（grade 字段每请求携带），故不 i18n——各语言均用中文年级名。
+ * 当前能力范围仅小学（架构 §1.3 v0.5.0 / K12-INV-014：不暴露初中、高中）。
+ * UI 将年级与学期作为两个独立选择器；领域/API 仍使用既有 `一年级上`~`六年级下`
+ * grade_term 契约。冻结锁 bug-20260718-frozen-grade-subject。
+ * 下列 value 是**后端契约**，不做 i18n；仅 HcSelect 的 label 由各语言资源提供。
  */
-export const GRADES: string[] = [
-  '一年级上', '一年级下',
-  '二年级上', '二年级下',
-  '三年级上', '三年级下',
-  '四年级上', '四年级下',
-  '五年级上', '五年级下',
-  '六年级上', '六年级下',
-]
+export const PRIMARY_GRADES = [
+  '一年级',
+  '二年级',
+  '三年级',
+  '四年级',
+  '五年级',
+  '六年级',
+] as const
+
+export type PrimaryGrade = (typeof PRIMARY_GRADES)[number]
+
+export const SEMESTERS = ['上', '下'] as const
+
+export type Semester = (typeof SEMESTERS)[number]
+
+export type GradeTerm = `${PrimaryGrade}${Semester}`
+
+export const GRADES: GradeTerm[] = PRIMARY_GRADES.flatMap((grade) =>
+  SEMESTERS.map((semester) => `${grade}${semester}` as GradeTerm),
+)
+
+const DEFAULT_GRADE: PrimaryGrade = '五年级'
+const DEFAULT_SEMESTER: Semester = '上'
+
+/**
+ * 既有 grade_term → 两个 UI 字段。
+ * 所有受支持的 12 个契约值均无损拆分；历史异常值不外泄到受控下拉，回到建档默认。
+ */
+export function splitGradeTerm(value: string): {
+  grade: PrimaryGrade
+  semester: Semester
+} {
+  const semester = value.endsWith('下') ? '下' : value.endsWith('上') ? '上' : null
+  const grade = value.slice(0, -1)
+  if (semester && PRIMARY_GRADES.includes(grade as PrimaryGrade)) {
+    return { grade: grade as PrimaryGrade, semester }
+  }
+  return { grade: DEFAULT_GRADE, semester: DEFAULT_SEMESTER }
+}
+
+/** 两个 UI 字段 → 既有 grade_term/API 串；不引入第二套持久化格式。 */
+export function joinGradeTerm(grade: PrimaryGrade, semester: Semester): GradeTerm {
+  return `${grade}${semester}`
+}
 
 /** 教材版本（首批人教版走通全链，北师大/苏教随 M3-3 扩展） */
 export const TEXTBOOKS: string[] = ['人教版', '北师大版', '苏教版']

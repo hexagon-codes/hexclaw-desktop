@@ -58,7 +58,10 @@ function enter(query?: Record<string, string>) {
 
 <template>
   <div class="k12ac">
-    <div v-if="mistakeCount || dueCount" class="k12ac__chips">
+    <div
+      class="k12ac__chips hc-agent-card__facts"
+      :aria-hidden="!(mistakeCount || dueCount)"
+    >
       <span v-if="mistakeCount" class="k12ac__tag">{{
         t('k12.agentCard.mistakeCount', { n: mistakeCount })
       }}</span>
@@ -66,14 +69,14 @@ function enter(query?: Record<string, string>) {
         t('k12.agentCard.reviewDue', { n: dueCount })
       }}</span>
     </div>
-    <div class="k12ac__actions">
+    <div class="k12ac__actions hc-agent-card__footer">
       <button class="k12ac__btn k12ac__btn--primary" @click="enter()">
         {{ t('k12.agentCard.enterTutor') }}
       </button>
       <button class="k12ac__btn" @click="enter({ scenarioTab: 'records' })">
         {{ t('k12.agentCard.records') }}
       </button>
-      <!-- 20260709：备课卡快捷入口移除——辅导要点已内联进识题流，不再有独立入口/深链。 -->
+      <!-- 20260709：辅导要点快捷入口移除——辅导要点已内联进识题流，不再有独立入口/深链。 -->
       <button class="k12ac__btn k12ac__btn--ghost" @click="editing = true">
         {{ t('k12.profile.edit') }}
       </button>
@@ -96,11 +99,13 @@ function enter(query?: Record<string, string>) {
    = 桌面通用 .hc-btn 度量（8px 14px / 13px / radius-md / 0.5px border）。 */
 .k12ac {
   display: flex;
+  flex: 1;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
 }
 .k12ac__chips {
   display: flex;
+  min-block-size: 24px;
   gap: 7px;
   flex-wrap: wrap;
   align-items: center;
@@ -117,6 +122,7 @@ function enter(query?: Record<string, string>) {
 }
 .k12ac__actions {
   display: flex;
+  margin-top: auto;
   gap: 8px;
   flex-wrap: wrap;
 }

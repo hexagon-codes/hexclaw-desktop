@@ -21,6 +21,7 @@ import type { AgentConfig } from '@/types'
 import { useToast } from '@/composables/useToast'
 import { userVisibleAgents } from '@/utils/imChannelBinding'
 import HcClearableField from '@/components/common/HcClearableField.vue'
+import HcSelect from '@/components/common/HcSelect.vue'
 import { K12_SCENARIO_ID } from '../descriptor'
 
 const toast = useToast()
@@ -53,6 +54,12 @@ const eventOptions: Array<{ value: K12WebhookEventType; label: string; testid: s
 
 const currentAgent = computed(() =>
   agents.value.find((agent) => agent.name === selectedAgentId.value),
+)
+const agentOptions = computed(() =>
+  agents.value.map((agent) => ({
+    value: agent.name,
+    label: agent.metadata?.['k12.child_name'] || agent.display_name,
+  })),
 )
 const currentLearnerId = computed(
   () => currentAgent.value?.metadata?.['k12.learner_id'] || currentAgent.value?.name || '',
@@ -142,6 +149,12 @@ function onAgentChanged() {
   rotateTarget.value = null
   editorOpen.value = false
   void loadBindings()
+}
+
+function selectAgent(agentID: string) {
+  if (agentID === selectedAgentId.value) return
+  selectedAgentId.value = agentID
+  onAgentChanged()
 }
 
 function openCreate() {
@@ -357,13 +370,14 @@ onBeforeUnmount(() => {
 <template>
   <section class="k12wh" data-testid="k12-webhook-panel">
     <header class="k12wh__toolbar">
-      <label class="k12wh__agent">
+      <label class="k12wh__agent" data-testid="k12-webhook-agent">
         <span>孩子 / 辅导实例</span>
-        <select v-model="selectedAgentId" data-testid="k12-webhook-agent" @change="onAgentChanged">
-          <option v-for="agent in agents" :key="agent.name" :value="agent.name">
-            {{ agent.metadata?.['k12.child_name'] || agent.display_name }}
-          </option>
-        </select>
+        <HcSelect
+          :model-value="selectedAgentId"
+          :options="agentOptions"
+          aria-label="孩子 / 辅导实例"
+          @update:model-value="selectAgent"
+        />
       </label>
       <button
         class="k12wh__button k12wh__button--primary"
@@ -543,50 +557,72 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <div v-if="editorOpen" class="k12wh__modal" role="dialog" aria-modal="true">
-      <div class="k12wh__dialog">
+    <div
+      v-if="editorOpen"
+      class="k12wh__modal"
+      data-testid="k12-webhook-editor-dialog"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div class="k12wh__dialog k12wh__dialog--editor">
         <header>
           <strong>{{ editorMode === 'create' ? '新建 K12 Webhook' : `编辑 ${editingName}` }}</strong
-          ><button @click="editorOpen = false"><X :size="16" /></button>
+          ><button type="button" aria-label="关闭" @click="editorOpen = false">
+            <X :size="16" />
+          </button>
         </header>
-        <label>
-          名称
-          <HcClearableField>
-            <input
-              v-model="formName"
-              data-testid="k12-webhook-name"
-              :disabled="editorMode === 'edit'"
-            />
-          </HcClearableField>
-        </label>
-        <fieldset>
-          <legend>允许事件</legend>
-          <label v-for="option in eventOptions" :key="option.value">
-            <input
-              type="checkbox"
-              :data-testid="option.testid"
-              :checked="formEvents.includes(option.value)"
-              @change="toggleEvent(option.value, ($event.target as HTMLInputElement).checked)"
-            />
-            {{ option.label }}
+        <div class="k12wh__editor-body">
+          <label>
+            名称
+            <HcClearableField>
+              <input
+                v-model="formName"
+                data-testid="k12-webhook-name"
+                :disabled="editorMode === 'edit'"
+              />
+            </HcClearableField>
           </label>
-        </fieldset>
-        <label v-if="formEvents.includes('k12.workflow_run.requested.v1')">
-          Workflow 白名单（workflow@version，逗号分隔）
-          <HcClearableField>
-            <input v-model="formWorkflows" data-testid="k12-webhook-workflows" />
-          </HcClearableField>
-        </label>
-        <p>新绑定默认 disabled；Secret 由服务端生成，创建后仅显示一次。</p>
-        <button
-          :data-testid="
-            editorMode === 'create' ? 'k12-webhook-create-submit' : 'k12-webhook-edit-submit'
-          "
-          :disabled="busy === 'editor'"
-          @click="submitEditor"
-        >
-          保存
-        </button>
+          <fieldset>
+            <legend>允许事件</legend>
+            <label v-for="option in eventOptions" :key="option.value">
+              <input
+                type="checkbox"
+                :data-testid="option.testid"
+                :checked="formEvents.includes(option.value)"
+                @change="toggleEvent(option.value, ($event.target as HTMLInputElement).checked)"
+              />
+              {{ option.label }}
+            </label>
+          </fieldset>
+          <label v-if="formEvents.includes('k12.workflow_run.requested.v1')">
+            Workflow 白名单（workflow@version，逗号分隔）
+            <HcClearableField>
+              <input v-model="formWorkflows" data-testid="k12-webhook-workflows" />
+            </HcClearableField>
+          </label>
+          <p>新绑定默认 disabled；Secret 由服务端生成，创建后仅显示一次。</p>
+        </div>
+        <div class="k12wh__dialog-actions k12wh__editor-footer">
+          <button
+            type="button"
+            class="k12wh__button k12wh__button--ghost"
+            data-testid="k12-webhook-editor-cancel"
+            @click="editorOpen = false"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            class="k12wh__button k12wh__button--primary"
+            :data-testid="
+              editorMode === 'create' ? 'k12-webhook-create-submit' : 'k12-webhook-edit-submit'
+            "
+            :disabled="busy === 'editor'"
+            @click="submitEditor"
+          >
+            保存
+          </button>
+        </div>
       </div>
     </div>
 
@@ -674,7 +710,6 @@ small {
   transform: none;
   box-shadow: none;
 }
-.k12wh select,
 .k12wh input:not([type='checkbox']) {
   border: 1px solid var(--hc-border);
   border-radius: 8px;
@@ -917,9 +952,40 @@ small {
   background: var(--hc-bg-elevated);
   box-shadow: 0 18px 60px rgb(0 0 0 / 28%);
 }
+.k12wh__dialog--editor {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+.k12wh__editor-body {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  gap: 14px;
+  overflow-y: auto;
+}
+.k12wh__editor-body > label {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+.k12wh__editor-body input:not([type='checkbox']) {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.k12wh__editor-footer {
+  padding-top: 14px;
+  border-top: 1px solid var(--hc-border);
+}
 .k12wh__dialog fieldset {
   display: grid;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
   gap: 8px;
+  padding: 12px;
   border: 1px solid var(--hc-border);
   border-radius: 10px;
 }

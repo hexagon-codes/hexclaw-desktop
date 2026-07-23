@@ -42,7 +42,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn(),
+  k12TutoringTips: vi.fn(),
   k12InsightReport: vi.fn(),
   k12StudyTime: vi.fn(),
   k12ListAccumulation: vi.fn(),
@@ -58,7 +58,7 @@ function i18n() {
 }
 function render(props: Record<string, unknown> = {}) {
   return mount(RecognizeGuardPanel, {
-    props: { agentId: 'mingming', grade: '五年级上', ...props },
+    props: { agentId: 'mingming', grade: '五年级上', sessionId: 'session-1', ...props },
     global: { plugins: [createPinia(), i18n()] },
   })
 }
@@ -119,6 +119,7 @@ async function gradeFirstRow(w: ReturnType<typeof render>, answer: string) {
   await flushPromises()
   await chooseSubject(w)
   await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+  await flushPromises()
   await w.find('[data-testid="rq-answer-0"]').setValue(answer)
   await w.find('[data-testid="rq-grade-0"]').trigger('click')
   await flushPromises()
@@ -131,6 +132,9 @@ describe('RecognizeGuardPanel · K12-INV-007 正确题默认折叠', () => {
     h.getJobSpy.mockReset()
     h.getResultSpy.mockReset()
     h.confirmJobSpy.mockReset()
+    h.confirmJobSpy.mockResolvedValue(
+      jobStatus('awaiting_confirmation', { confirmation_state: 'confirmed' }),
+    )
     h.retryJobSpy.mockReset()
     h.gradeSpy.mockReset()
     h.solveSpy.mockReset()
@@ -227,6 +231,7 @@ describe('RecognizeGuardPanel · K12-INV-007 正确题默认折叠', () => {
     await flushPromises()
     await chooseSubject(w, '语文')
     await w.find('[data-testid="recognize-confirm-all"]').trigger('click')
+    await flushPromises()
     await w.find('[data-testid="rq-answer-0"]').setValue('小狗在跑')
     await w.find('[data-testid="rq-grade-0"]').trigger('click')
     await flushPromises()
@@ -269,7 +274,7 @@ describe('RecognizeGuardPanel · K12-INV-007 正确题默认折叠', () => {
     await w.find('[data-testid="recognize-grade-all"]').trigger('click')
     await flushPromises()
 
-    expect(h.getResultSpy).toHaveBeenCalledWith('mingming', 'job-1')
+    expect(h.getResultSpy).toHaveBeenCalledWith('mingming', 'job-1', expect.any(AbortSignal))
     // 第 1 题 agree → 折叠为摘要；第 2 题 disagree → 展开
     expect(w.find('[data-testid="rq-grade-details-0"]').exists()).toBe(false)
     expect(w.find('[data-testid="rq-correct-summary-0"]').exists()).toBe(true)

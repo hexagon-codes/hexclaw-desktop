@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
   reviewQueue: vi.fn(),
   insightReport: vi.fn(),
   accumulation: vi.fn(),
-  prepCard: vi.fn(),
+  tutoringTips: vi.fn(),
 }))
 
 vi.mock('@/api/k12', () => ({
@@ -16,7 +16,7 @@ vi.mock('@/api/k12', () => ({
   k12InsightReport: (agent: string) => h.insightReport(agent),
   k12ListAccumulation: (agent: string) => h.accumulation(agent),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: (req: { agent: string }) => h.prepCard(req),
+  k12TutoringTips: (req: { agent: string }) => h.tutoringTips(req),
   k12Grade: vi.fn(),
     k12ColdStart: vi.fn(),
   k12TutorTurn: vi.fn(),
@@ -59,19 +59,43 @@ describe('K12 records 多孩异步隔离', () => {
   })
 
   it('辅导要点乱序返回时，只保留最后切换到的孩子', async () => {
-    const oldPrep = deferred<any>()
-    const newPrep = deferred<any>()
-    h.prepCard.mockImplementation((req: { agent: string }) => req.agent === 'old-child' ? oldPrep.promise : newPrep.promise)
+    const oldTips = deferred<any>()
+    const newTips = deferred<any>()
+    h.tutoringTips.mockImplementation((req: { agent: string }) =>
+      req.agent === 'old-child' ? oldTips.promise : newTips.promise,
+    )
     const store = useK12Store()
 
-    const oldLoad = store.loadPrepCard('old-child', '五年级上', '数学', ['整数乘法'])
-    const newLoad = store.loadPrepCard('new-child', '五年级上', '数学', ['小数乘法'])
-    newPrep.resolve({ knowledge_points: ['小数乘法'], sections: [{ title: '新孩子', content: '新内容', source_label: '📖 依据课本' }] })
+    const oldLoad = store.loadTutoringTips('old-child', 'job-old')
+    const newLoad = store.loadTutoringTips('new-child', 'job-new')
+    newTips.resolve({
+      knowledge_points: ['小数乘法'],
+      sections: [
+        { title: '这页在练什么', content: '新内容', source_label: '📖 依据课本' },
+        { title: '新孩子要留意', content: '暂无历史证据', source_label: '🧠 学情信号' },
+        {
+          title: '每道题怎么带（不直接给答案）',
+          content: '新带法',
+          source_label: '🤖 AI 归纳·供参考',
+        },
+      ],
+    })
     await newLoad
-    oldPrep.resolve({ knowledge_points: ['整数乘法'], sections: [{ title: '旧孩子', content: '旧内容', source_label: '📖 依据课本' }] })
+    oldTips.resolve({
+      knowledge_points: ['整数乘法'],
+      sections: [
+        { title: '这页在练什么', content: '旧内容', source_label: '📖 依据课本' },
+        { title: '旧孩子要留意', content: '暂无历史证据', source_label: '🧠 学情信号' },
+        {
+          title: '每道题怎么带（不直接给答案）',
+          content: '旧带法',
+          source_label: '🤖 AI 归纳·供参考',
+        },
+      ],
+    })
     await oldLoad
 
-    expect(store.prepCard?.sections[0]?.title).toBe('新孩子')
+    expect(store.tutoringTips?.sections[0]?.content).toBe('新内容')
   })
 
   // study-time 已退役（架构设计 v0.5.0《明确不做》#6）：store 不再有 studyTime/loadStudyTime。

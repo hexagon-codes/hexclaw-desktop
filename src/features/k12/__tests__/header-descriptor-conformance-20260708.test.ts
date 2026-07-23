@@ -19,7 +19,7 @@ import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(), k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
+  k12MarkMastered: vi.fn(), k12TutoringTips: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(), k12ColdStart: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({ trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
@@ -62,7 +62,7 @@ describe('BUG-20260708 头部 descriptor 一致性锁', () => {
     expect(head.text()).not.toContain(k12Zh.tutor.title) // 渐进提示辅导 文案不在头部
   })
 
-  it('descriptor 头部零动作（20260709：备课卡内联进识题流，头部只留辅导/错题本 tab）', () => {
+  it('descriptor 头部零动作（20260709：辅导要点内联进识题流，头部只留辅导/错题本 tab）', () => {
     const headerActs = K12_VIEW_DESCRIPTOR.actions.filter((a) => a.placement === 'header')
     expect(headerActs.map((a) => a.id)).toEqual([])
   })

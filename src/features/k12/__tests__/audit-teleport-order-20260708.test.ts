@@ -16,7 +16,7 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: vi.fn(),
-  k12PrepCard: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
+  k12TutoringTips: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
@@ -76,7 +76,7 @@ const ChatViewLike = defineComponent({
         h('div', { id: 'hc-chat-scenario-footer' }),
         h('div', { id: 'hc-chat-scenario-composer-top' }),
         h('div', { id: 'hc-chat-scenario-composer-actions' }), // 输入行动作锚点（拍照识题按钮下沉，BUG-20260708）
-        h('div', { id: 'hc-chat-scenario-sidepanel' }), // 备课卡侧栏停靠锚点（BUG-20260708 B4）
+        h('div', { id: 'hc-chat-scenario-sidepanel' }), // 辅导要点侧栏停靠锚点（BUG-20260708 B4）
       ])
   },
 })

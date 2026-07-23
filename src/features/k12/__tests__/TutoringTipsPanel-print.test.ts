@@ -4,7 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
-import PrepCardPanel from '../views/PrepCardPanel.vue'
+import TutoringTipsPanel from '../views/TutoringTipsPanel.vue'
 
 const h = vi.hoisted(() => ({
   printSpy: vi.fn<(...args: unknown[]) => Promise<boolean>>(() => Promise.resolve(true)),
@@ -15,16 +15,22 @@ vi.mock('../persistent-print', () => ({
   }),
 }))
 vi.mock('../export', () => ({
-  printPrepCard: vi.fn().mockResolvedValue(true),
-  prepCardToMarkdown: (card: { sections: Array<{ content: string }> }) =>
+  printTutoringTips: vi.fn().mockResolvedValue(true),
+  tutoringTipsToMarkdown: (card: { sections: Array<{ content: string }> }) =>
     `# 辅导要点\n\n${card.sections[0]?.content ?? ''}`,
-  prepCardToText: vi.fn().mockReturnValue('辅导要点'),
+  tutoringTipsToText: vi.fn().mockReturnValue('辅导要点'),
 }))
 vi.mock('@/api/k12', () => ({
-  k12PrepCard: vi.fn().mockResolvedValue({
+  k12TutoringTips: vi.fn().mockResolvedValue({
     knowledge_points: ['小数乘法'],
     sections: [
-      { title: '知识点回顾', content: '小数乘法要对齐小数点…', source_label: '📖 依据课本' },
+      { title: '这页在练什么', content: '小数乘法要对齐小数点…', source_label: '📖 依据课本' },
+      { title: '小明要留意', content: '暂无历史证据。', source_label: '🧠 学情信号' },
+      {
+        title: '每道题怎么带（不直接给答案）',
+        content: '先问孩子小数位数。',
+        source_label: '🤖 AI 归纳·供参考',
+      },
     ],
   }),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
@@ -48,26 +54,32 @@ function i18n() {
   })
 }
 
-// bug（用户报）：备课卡「打印」按钮不可用——原实现只 toast，不真打印。
-describe('bug: 备课卡打印按钮须真打印', () => {
+// bug（用户报）：辅导要点「打印」按钮不可用——原实现只 toast，不真打印。
+describe('bug: 辅导要点打印按钮须真打印', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     h.printSpy.mockClear()
   })
 
-  it('已生成备课卡时，点🖨 以不可变 canonical 内容调用持久 PrintJob', async () => {
-    const w = mount(PrepCardPanel, {
-      props: { agentId: 'ming', grade: '五年级上', knowledgePoints: ['小数乘法'] },
+  it('已生成辅导要点时，点🖨 以不可变 canonical 内容调用持久 PrintJob', async () => {
+    const w = mount(TutoringTipsPanel, {
+      props: {
+        agentId: 'ming',
+        gradingJobId: 'job-confirmed-1',
+        sessionId: 'session-1',
+        grade: '五年级上',
+        knowledgePoints: ['小数乘法'],
+      },
       global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
     })
-    await flushPromises() // loadPrepCard 完成，store.prepCard 就绪
-    await w.get('[data-testid="prep-print"]').trigger('click')
+    await flushPromises() // loadTutoringTips 完成，store.tutoringTips 就绪
+    await w.get('[data-testid="tutoring-tips-print"]').trigger('click')
     expect(h.printSpy).toHaveBeenCalledTimes(1)
     expect(h.printSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: 'ming',
-        sourceKind: 'prep_card',
-        sourceRef: 'prep-card:五年级上:小数乘法',
+        sourceKind: 'tutoring_tips',
+        sourceRef: 'tutoring-tips:job-confirmed-1',
         title: '这份作业的辅导要点',
         canonicalMarkdown: expect.stringContaining('小数乘法要对齐小数点'),
         browserPrint: expect.any(Function),

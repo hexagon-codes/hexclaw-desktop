@@ -70,6 +70,19 @@ describe('K12 works prototype layout', () => {
     expect(worksSource).toMatch(/\.k12cw-modal__body\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s)
   })
 
+  it('keeps the approved add-work form geometry and renders the title label exactly once', () => {
+    expect(worksSource.match(/t\('k12\.works\.nameLabel'\)/g)).toHaveLength(1)
+    expect(worksSource).toMatch(
+      /class="k12cw-modal__row"[\s\S]*?data-testid="cw-add-title"[\s\S]*?data-testid="cw-add-task"/,
+    )
+    expect(worksSource).toMatch(
+      /\.k12cw-modal__row\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)[^}]*gap:\s*10px/s,
+    )
+    expect(worksSource).toMatch(
+      /\.k12cw__input\s*\{[^}]*display:\s*block[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/s,
+    )
+  })
+
   it('keeps native printing and Save PDF as two independent practice-card actions (DD-023A)', () => {
     expect(worksSource).not.toContain("isTauri() ? t('k12.works.practiceCardSavePdf')")
     expect(worksSource).toContain('data-testid="cw-card-print"')
