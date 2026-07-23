@@ -353,7 +353,6 @@ body,
 
 .hc-btn-primary:hover {
   background: linear-gradient(180deg, #67b8ec 0%, #4f9fe1 100%);
-  transform: translateY(-1px);
   box-shadow: 0 10px 26px rgba(95, 179, 234, 0.34);
 }
 
@@ -451,6 +450,50 @@ select.hc-input:focus {
   border-color: var(--hc-border-hl);
   box-shadow: var(--hc-shadow-md);
   transform: translateY(-2px);
+}
+
+/* ─── Capability content tracks (Skills / MCP) ─────────── */
+.hc-capability-installed-track {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.hc-capability-market-surface {
+  width: 100%;
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.hc-capability-market-search {
+  width: 100%;
+  min-width: 0;
+  max-width: 56rem;
+}
+
+.hc-capability-market-grid {
+  display: grid;
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+@container (min-width: 640px) {
+  .hc-capability-market-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 960px) {
+  .hc-capability-market-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container (min-width: 1280px) {
+  .hc-capability-market-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
 }
 
 /* ─── Toggle Switch — macOS style ───────────────────────── */
@@ -1198,6 +1241,30 @@ select.hc-input:focus {
   direction: ltr;
   text-align: left;
   unicode-bidi: embed;
+}
+
+/* Shared inline-math projection contract.
+   KaTeX intentionally emits multiple `.base` boxes at legal math breakpoints.
+   Prose containers use break-word, so the formula wrapper must be atomic or
+   WebKit can split one equation across lines and visually detach fractions. */
+.hc-math-inline {
+  display: inline-block;
+  max-width: 100%;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  overflow-y: hidden;
+  vertical-align: middle;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* The global RTL plaintext fallback has higher specificity because its :is()
+   list contains attribute selectors. Reassert the atomic math boundary here. */
+[dir='rtl'] .hc-math-inline {
+  direction: ltr;
+  unicode-bidi: isolate;
 }
 
 /* KaTeX 的分式、上下标依赖内部 span 的定位与 LTR 文本顺序。

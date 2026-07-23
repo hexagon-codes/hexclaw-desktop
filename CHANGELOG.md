@@ -28,11 +28,11 @@
 ### K12 场景包
 - 新增内置 **作业辅导助手** 场景包：在智能体模板库中建档，采集孩子称呼、年级学期和教材版本，自动生成专属辅导老师 Agent 实例。
 - 作业辅导实例默认绑定辅导技能：教学法、拍照识题、数学 / 语文 / 英语辅导、知识点讲解、变式出题，并把年级边界、批改和复习工具作为基础设施技能挂载。
-- 聊天页按场景实例增强：辅导 / 错题本顶部 Tab、场景化空态、后端 descriptor 下发的 composer chips、家长备课卡右侧停靠面板，以及“作业辅导不等于独立 UI 模式”的通用 shell 接线。
-- 智能体卡新增场景扩展：错题数、待复习数、进入辅导、直达错题本、打开备课卡和编辑孩子档案。
+- 聊天页按场景实例增强：辅导 / 错题本顶部 Tab、场景化空态、后端 descriptor 下发的 composer chips、识题持久确认后内联辅导要点，以及“作业辅导不等于独立 UI 模式”的通用 shell 接线。
+- 智能体卡新增场景扩展：错题数、待复习数、进入辅导、直达错题本和编辑孩子档案。
 - 新增错题本 / 积累本 / 学情视图：错题状态机、到期复习队列、再练一道、他会了、错题卷打印 / PDF / Word 导出、薄弱知识点 TOP3、复习完成率和连续挫败提示。
 - 新增家庭学习档案备份 / 恢复：`.hexbak` 归档带版本头和 checksum，恢复路径按幂等合并预留。
-- 新增事件驱动家长备课卡：按错题、学情和选定科目生成一页“怎么教”，每段显示课本 / 本地记录 / 程序验算 / AI 归纳等来源标注，支持打印和复制到手机 IM。
+- 新增事件驱动辅导要点：基于已确认作业 Job 生成固定三段“怎么带”，只显示课本 / 学情信号 / AI 归纳三类来源，支持打印和持久私聊投递。
 
 ### 场景扩展架构
 - 新增 `src/contracts/`：`InstanceViewDescriptor`、`RecordSchema`、`RecordItem`、`VerifyResult` 等前端契约，作为后端 JSON Schema codegen 前的手写兼容层。
@@ -41,7 +41,7 @@
 - 新增通用记录视图接线，K12 错题本和积累本复用同一 `RecordSchema` / `RecordCollectionView` 原语。
 
 ### API 契约
-- 新增 `/api/k12/*` 前端客户端类型：view descriptor、识题、批改、错题列表、复习队列、mark-mastered、review retry、备课卡、学情报告、孩子档案、cold-start、积累本、备份恢复、导出、tutor-turn、IM 绑定和 cron provision。
+- 新增 `/api/k12/*` 前端客户端类型：view descriptor、识题、批改、错题列表、复习队列、mark-mastered、review retry、辅导要点、学情报告、孩子档案、cold-start、积累本、备份恢复、导出、tutor-turn、IM 绑定和 cron provision。
 - K12 API 隔离键统一为 `agent`，不依赖 `user_id`；多孩隔离按不可变 Agent 实例名完成。
 
 ### 聊天与渲染
@@ -52,7 +52,7 @@
 ### UI / 修复
 - `HcSelect` 禁用态不再使用原生 `disabled` 按钮外观，避免 macOS WKWebView 下被 UA 样式撑成胶囊；MCP 新增服务器 transport 下拉改用 `HcSelect`。
 - 侧边栏分组只有存在导航项时才渲染分割线和组标题，避免空组留下视觉噪声。
-- 作业辅导相关多处 2026-07-08 现场问题补回归：建档弹窗 Teleport、备课卡停靠层级、错题本头部重复、composer chips 锚点、空态可操作科目选择、发送手机走真实剪贴板动作。
+- 作业辅导相关多处 2026-07-08 现场问题补回归：建档弹窗 Teleport、辅导要点内联层级、错题本头部重复、composer chips 锚点、空态可操作科目选择、发送手机走持久私聊投递。
 
 ### 工程
 - 桌面端版本升至 `0.5.0-beta`（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` / lockfile）。

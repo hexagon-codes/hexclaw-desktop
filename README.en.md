@@ -48,7 +48,7 @@ Native macOS / Windows / Linux · Sidecar local deployment · Zero cloud depende
 | **AI Chat** | Multi-model support: OpenAI / DeepSeek / Anthropic / Gemini / Qwen / Ollama, streaming output, GitHub-flavored Markdown (task lists, strikethrough, and tables) + KaTeX math / mhchem chemistry rendering, syntax highlighting, deep thinking |
 | **Image/Video Generation** | ZhipuAI CogView-4 image generation + CogVideoX-2 video generation, unified text-input entry (no separate mode buttons), results persisted to `{DataDir}/generated/` and referenced via `/api/v1/files/generated/...` URLs (never expire, won't bloat SQLite), inline preview + always-visible download button |
 | **Agent Orchestration** | Custom Agent roles/goals/backstory, multi-Agent collaboration, Agent conference mode, role template library |
-| **Scenario Packs / K12 Tutor** | Homework Tutor template mounted through the generic `scenarioRegistry`: child profile, default tutoring skills, photo problem recognition, progressive hints, Mistake Book / Notebook / insights, Lesson Prep Card, verification badges, and record chips; explanations, grading, and record details render rich text and formulas, while each child remains isolated by Agent instance |
+| **Scenario Packs / K12 Tutor** | Homework Tutor template mounted through the generic `scenarioRegistry`: child profile, default tutoring skills, photo problem recognition, progressive hints, Mistake Book / Notebook / insights, tutoring tips shown inline after recognition is confirmed, verification badges, and record chips; explanations, grading, and record details render rich text and formulas, while each child remains isolated by Agent instance |
 | **Skill System** | Skill marketplace + custom skills, tool registration and permission management |
 | **Workflow Canvas** | Visual drag-and-drop Agent workflow orchestration, DAG execution engine |
 | **MCP Protocol** | Model Context Protocol tool integration, plug-and-play external tools |
@@ -319,7 +319,7 @@ hexclaw-desktop/
 │   ├── contracts/                # Scenario extension contracts (ViewDescriptor/RecordSchema/VerifyResult)
 │   ├── shell/                    # Domain-neutral shell slots (scenario registry/records/message badges)
 │   ├── features/                 # Scenario-pack implementations
-│   │   └── k12/                  # Homework Tutor (profile/tutor/mistakes/prep/insights)
+│   │   └── k12/                  # Homework Tutor (profile/tutor/mistakes/tutoring-tips/insights)
 │   ├── views/                    # Page views
 │   │   ├── ChatView.vue          # AI chat (default landing · sessions/attachments/Artifacts/model switching)
 │   │   ├── AgentsView.vue        # Agent management (templates/running/rules/conference)

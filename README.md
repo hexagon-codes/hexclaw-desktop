@@ -49,7 +49,7 @@ macOS / Windows / Linux 原生运行 · Sidecar 架构本地部署 · 零云端�
 | **图片/视频生成** | 智谱 CogView-4 图片生成 + CogVideoX-2 视频生成，统一文本对话框入口（无独立 mode 按钮），生成结果落盘到 `{DataDir}/generated/` 后以 `/api/v1/files/generated/...` URL 引用（永不过期、不撑爆 SQLite），气泡内联预览 + 一直可见的下载按钮 |
 | **本地模型 (Ollama)** | 一键检测/关联本地 Ollama，自动发现已下载模型，状态机管理（检测→运行→关联），LM Studio/llama.cpp 走 OpenAI 兼容接入 |
 | **Agent 编排** | 自定义 Agent 角色/目标/背景，多 Agent 协作 (Handoff + Orchestrate + Spawn)，Agent 会议模式，角色模板库 |
-| **场景包 / K12 作业辅导** | 通过通用 `scenarioRegistry` 挂载作业辅导助手模板：孩子档案、默认辅导技能、拍照识题、渐进提示、错题本/积累本/学情报告、家长备课卡、验算徽章与入库徽章；讲解、批改和记录详情支持富文本 / 公式渲染，多孩按 Agent 实例隔离 |
+| **场景包 / K12 作业辅导** | 通过通用 `scenarioRegistry` 挂载作业辅导助手模板：孩子档案、默认辅导技能、拍照识题、确认后内联辅导要点、渐进提示、错题本/积累本/学情报告、验算徽章与入库徽章；讲解、批改和记录详情支持富文本 / 公式渲染，多孩按 Agent 实例隔离 |
 | **自主 Agent** | Budget 三维预算兜底 (token/时间/金额)，代码执行沙箱 (macOS Seatbelt/Linux Namespace/Windows 5 层隔离)，Checkpoint 长任务恢复 |
 | **工具审批** | 危险工具 WebSocket 实时审批 (ToolApprovalCard)，safe/sensitive/dangerous 三级风险分类，"始终允许"记忆 |
 | **Skill 系统** | 技能市场 + 自定义技能 + LLM 创建新 Skill (SkillWriter + 安全扫描)，Skill Chain 链式调用，依赖管理，Tool 注册与 Per-tool 权限 |
@@ -334,7 +334,7 @@ hexclaw-desktop/
 │   ├── contracts/                # 场景扩展契约 (ViewDescriptor/RecordSchema/VerifyResult)
 │   ├── shell/                    # 领域无关 shell 扩展槽 (scenario registry/records/message badges)
 │   ├── features/                 # 场景包实现
-│   │   └── k12/                  # 作业辅导助手 (建档/辅导/错题本/备课卡/学情)
+│   │   └── k12/                  # 作业辅导助手 (建档/辅导/错题本/辅导要点/学情)
 │   ├── views/                    # 页面视图
 │   │   ├── ChatView.vue          # AI 对话 (默认首页 · 会话/附件/Artifacts/模型切换)
 │   │   ├── AgentsView.vue        # Agent 管理 (模板/运行中/规则/会议)
