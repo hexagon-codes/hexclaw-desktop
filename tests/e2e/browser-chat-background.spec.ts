@@ -338,6 +338,82 @@ async function expectWorkspaceMode(page: Page, mode: ChatWorkspaceMode) {
   }
 }
 
+test('chat workspace owns an opaque neutral canvas instead of leaking the shell glow', async ({
+  page,
+}) => {
+  await installMockBackend(page)
+  await page.addInitScript(() => localStorage.setItem('hc-theme', 'light'))
+  await page.goto('/chat')
+
+  const chat = page.locator('.hc-chat')
+  await expect(chat).toBeVisible()
+  await expect(chat).toHaveCSS('background-color', 'rgb(251, 252, 254)')
+  await expect(chat).toHaveCSS('background-image', 'none')
+
+  const computed = await chat.evaluate((element) => {
+    const style = getComputedStyle(element)
+    const token = getComputedStyle(document.documentElement).getPropertyValue('--hc-bg-main').trim()
+    return {
+      backgroundColor: style.backgroundColor,
+      backgroundImage: style.backgroundImage,
+      token,
+      opacity: style.opacity,
+    }
+  })
+  expect(computed).toEqual({
+    backgroundColor: 'rgb(251, 252, 254)',
+    backgroundImage: 'none',
+    token: '#fbfcfe',
+    opacity: '1',
+  })
+
+  await page.screenshot({
+    path: 'test-results/bug-20260723-015-chat-solid-background.png',
+    fullPage: true,
+  })
+})
+
+test('session delete confirmation keeps its five-second cooldown hover visually inert', async ({
+  page,
+}) => {
+  await installMockBackend(page)
+  await page.addInitScript(() => localStorage.setItem('hc-theme', 'light'))
+  await page.goto('/chat')
+
+  const session = page.locator('[data-session-id="s-bg"]')
+  await session.hover()
+  await session.getByRole('button', { name: '会话操作' }).click()
+  await page.getByRole('menu').getByRole('menuitem', { name: '删除', exact: true }).click()
+
+  const dialog = page.getByRole('alertdialog')
+  const confirm = dialog.getByRole('button', { name: '删除', exact: true })
+  await expect(confirm).toBeDisabled()
+
+  const visualState = async () =>
+    confirm.evaluate((element) => {
+      const style = getComputedStyle(element)
+      const rect = element.getBoundingClientRect()
+      return {
+        backgroundColor: style.backgroundColor,
+        color: style.color,
+        opacity: style.opacity,
+        transform: style.transform,
+        boxShadow: style.boxShadow,
+        transitionDuration: style.transitionDuration,
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      }
+    })
+
+  const beforeHover = await visualState()
+  await confirm.hover({ force: true })
+  const afterHover = await visualState()
+  expect(afterHover).toEqual(beforeHover)
+
+  await dialog.screenshot({
+    path: 'test-results/bug-20260723-007-delete-cooldown-hover.png',
+  })
+})
+
 test('browser moves a pinned session into the first pinned section exactly once', async ({
   page,
 }) => {

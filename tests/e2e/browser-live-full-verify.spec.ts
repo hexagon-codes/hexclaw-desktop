@@ -56,16 +56,16 @@ test.describe('本轮改动 live 验证', () => {
 
     // 弹窗出现
     await expect(page.locator('.k12pf')).toBeVisible({ timeout: 15_000 })
-    // 打开「年级·学期」HcSelect（第 0 个 trigger）
+    // 打开独立「年级」HcSelect（第 0 个 trigger）
     const gradeTrigger = page.locator('.k12pf .hc-select__trigger').nth(0)
     await gradeTrigger.click()
     // 下拉出现（Teleport 到 body）
     const dropdown = page.locator('.hc-select__dropdown')
     await expect(dropdown).toBeVisible({ timeout: 5_000 })
     // 关键：点中一个选项。若遮罩(z-index)盖住下拉，此 click 会因 actionability 超时失败 → 即遮挡回归。
-    await dropdown.locator('.hc-select__option', { hasText: '六年级上' }).click({ timeout: 5_000 })
+    await dropdown.locator('.hc-select__option', { hasText: '六年级' }).click({ timeout: 5_000 })
     // trigger 标签更新 = 选中生效（下拉确实可交互，未被盖）
-    await expect(gradeTrigger).toContainText('六年级上')
+    await expect(gradeTrigger).toContainText('六年级')
     // 收尾：取消，不落库污染（本用例只验证下拉可用）
     await page.locator('.k12pf__x').click().catch(() => {})
   })

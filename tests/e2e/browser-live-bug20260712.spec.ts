@@ -7,7 +7,7 @@ import { cleanupK12Child } from './live-fixture-cleanup'
  * 覆盖用户报告的四件事：
  *  ① composer 样式审计（「输入框样式错乱」）：结构/字号/工具行断言 + 截图取证；
  *  ② 识题链路真实上传作业照片：计时（「识题很慢」量化）+ 结果行出现；
- *  ③ Bug S 保活：切错题本→回辅导，结果仍在、不重新识题；错题本页无 prep-card 红字（abort 泄漏）；
+ *  ③ Bug S 保活：切错题本→回辅导，结果仍在、不重新识题；错题本页无 tutoring-tips 红字（abort 泄漏）；
  *  ④ 「这份作业的辅导要点」📱发送到手机（剪贴板真断言）+ 🖨打印（打印 iframe 真断言）；
  *  ⑤ 已答卷整张批改 → 原图全量叠加 → Playwright 截图附件留证。
  *
@@ -45,7 +45,7 @@ test.describe('BUG-20260712 真实点击验证', () => {
       if (window !== window.top) {
         try {
           ;(window as unknown as { print: () => void }).print = () => {
-            ;(window.top as unknown as { __prepPrinted?: boolean }).__prepPrinted = true
+            ;(window.top as unknown as { __tutoringTipsPrinted?: boolean }).__tutoringTipsPrinted = true
           }
         } catch {
           /* cross-origin 忽略 */
@@ -65,7 +65,9 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await page.locator('.k12pf__input').first().fill(CHILD)
     // 真实夹具是五年级下册作业；明确选同年级学期，避免合法题目被误判为超纲。
     await page.locator('.k12pf .hc-select__trigger').nth(0).click()
-    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '五年级下' }).click()
+    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '五年级' }).click()
+    await page.locator('.k12pf .hc-select__trigger').nth(1).click()
+    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '下学期' }).click()
     await page.getByRole('button', { name: '创建' }).click()
     await expect(page.locator('.k12pf')).toHaveCount(0, { timeout: 20_000 })
     await page.getByText('我的智能体', { exact: false }).first().click()
@@ -105,20 +107,20 @@ test.describe('BUG-20260712 真实点击验证', () => {
       timeout: 240_000,
     })
 
-    // 4) Bug S 保活：切错题本 → 无 prep-card 红字 → 回辅导 → 结果仍在、不重新识题
+    // 4) Bug S 保活：切错题本 → 无 tutoring-tips 红字 → 回辅导 → 结果仍在、不重新识题
     await page.locator('.k12enh-seg button', { hasText: '错题本' }).click()
     await expect(page.locator('.k12rec')).toBeVisible({ timeout: 15_000 })
     await expect(page.getByText('Fetch is aborted')).toHaveCount(0)
-    await expect(page.getByText('prep-card')).toHaveCount(0)
+    await expect(page.getByText('tutoring-tips')).toHaveCount(0)
     await page.locator('.k12enh-seg button', { hasText: '辅导' }).click()
     await expect(guard.locator('[data-testid="rq-item"]').first()).toBeVisible({ timeout: 5_000 })
     await expect(guard.getByText('正在识题分题')).toHaveCount(0) // 不得重新识题
 
     // 5) 确认读对 → 辅导要点生成（真实 LLM）
     await guard.locator('[data-testid="recognize-confirm-all"]').click()
-    const prep = page.locator('[data-testid="tutor-guide"]')
-    await expect(prep).toBeVisible({ timeout: 15_000 })
-    await expect(prep.locator('.tutor-section').first()).toBeVisible({ timeout: 240_000 })
+    const tutoringTips = page.locator('[data-testid="tutoring-tips"]')
+    await expect(tutoringTips).toBeVisible({ timeout: 15_000 })
+    await expect(tutoringTips.locator('.tutoring-tips__section').first()).toBeVisible({ timeout: 240_000 })
 
     // 6) 已答卷整张批改：只批改读出的 student_answer；有 bbox 但未读清的题必须提示补录，
     // 不得混进“空白题求解”。真实模型批改结束后，每道成功结果都进入原图批改层。
@@ -165,19 +167,19 @@ test.describe('BUG-20260712 真实点击验证', () => {
     console.log(`[grade] 已答 ${answeredCount} 题全部批改并叠加，截图证据已附加`)
 
     // 7) 📱 发送到手机 = 复制文本到剪贴板（真剪贴板断言）
-    await prep.locator('[data-testid="prep-send"]').click()
+    await tutoringTips.locator('[data-testid="tutoring-tips-send"]').click()
     const clip = await page.evaluate(() => navigator.clipboard.readText())
     expect(clip.length, '剪贴板应有辅导要点全文').toBeGreaterThan(20)
     console.log(`[clip] 剪贴板内容已验证，字符数=${[...clip].length}`)
 
     // 8) 🖨 打印 = 隐藏 iframe + window.print（frame 内 print 已打桩取证）
-    await prep.locator('[data-testid="prep-print"]').click()
+    await tutoringTips.locator('[data-testid="tutoring-tips-print"]').click()
     await expect
       .poll(
         async () =>
           page.evaluate(
             () =>
-              (window as unknown as { __prepPrinted?: boolean }).__prepPrinted === true ||
+              (window as unknown as { __tutoringTipsPrinted?: boolean }).__tutoringTipsPrinted === true ||
               document.querySelectorAll('iframe').length > 0,
           ),
         { timeout: 3_000 },

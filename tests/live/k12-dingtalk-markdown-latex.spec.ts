@@ -158,7 +158,7 @@ test.describe.serial('LIVE K12 DingTalk Markdown/LaTeX receipt acceptance', () =
     expect(health.healthy).toBe(true)
 
     const body = dingTalkBody(envValue('HEX_K12_LIVE_RUN_ID'))
-    const initial = await liveJSON<DeliveryReceipt>(request, 'POST', '/api/k12/prep-card/send', {
+    const initial = await liveJSON<DeliveryReceipt>(request, 'POST', '/api/k12/tutoring-tips/send', {
       agent: agentName,
       content: body,
     })
@@ -166,7 +166,7 @@ test.describe.serial('LIVE K12 DingTalk Markdown/LaTeX receipt acceptance', () =
       initial.agent_name === agentName,
       'Receipt owner must equal the gated K12 Agent (value redacted)',
     ).toBe(true)
-    expect(initial.object_kind).toBe('prep_card')
+    expect(initial.object_kind).toBe('tutoring_tips')
     expect(initial.binding_id).toMatch(/^agent-rule:/)
     expect(initial.target.platform).toBe('dingtalk')
     expect(
@@ -227,7 +227,7 @@ test.describe.serial('LIVE K12 DingTalk Markdown/LaTeX receipt acceptance', () =
     // The same business object + canonical payload must resolve to the frozen
     // Receipt instead of producing a second real DingTalk message. This also
     // lets Chromium and WebKit share one approved external send per run ID.
-    const replay = await liveJSON<DeliveryReceipt>(request, 'POST', '/api/k12/prep-card/send', {
+    const replay = await liveJSON<DeliveryReceipt>(request, 'POST', '/api/k12/tutoring-tips/send', {
       agent: agentName,
       content: body,
     })

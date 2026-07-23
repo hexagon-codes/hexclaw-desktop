@@ -50,7 +50,9 @@ async function createTutorAndOpenArchive(page: Page, childName: string): Promise
   const createDialog = page.getByRole('dialog')
   await createDialog.locator('.k12pf__input').fill(childName)
   await createDialog.locator('.hc-select__trigger').nth(0).click()
-  await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '五年级下' }).click()
+  await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '五年级' }).click()
+  await createDialog.locator('.hc-select__trigger').nth(1).click()
+  await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '下学期' }).click()
   await createDialog.getByRole('button', { name: '创建', exact: true }).click()
   await expect(createDialog).toHaveCount(0, { timeout: 30_000 })
   const agents = await json<{ agents?: Array<{ name?: string; metadata?: Record<string, string> }> }>(

@@ -36,7 +36,9 @@ test.describe('Browser UI + real Sidecar + synthetic K12 provider', () => {
     await expect(page.getByText('创建「K12 辅导助手」')).toBeVisible({ timeout: 30_000 })
     await page.locator('.k12pf__input').first().fill(child)
     await page.locator('.k12pf .hc-select__trigger').nth(0).click()
-    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '六年级上' }).click()
+    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '六年级' }).click()
+    await page.locator('.k12pf .hc-select__trigger').nth(1).click()
+    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '上学期' }).click()
     await page.getByRole('button', { name: '创建' }).click()
     await expect(page.locator('.k12pf')).toHaveCount(0, { timeout: 30_000 })
 

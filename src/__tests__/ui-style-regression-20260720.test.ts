@@ -25,13 +25,17 @@ describe('desktop page density and responsive style contracts', () => {
     )
   })
 
-  it('renders the MCP marketplace as the prototype adaptive card grid', () => {
+  it('renders the MCP marketplace through the shared adaptive capability grid', () => {
     const mcp = source('views/McpView.vue')
+    const global = source('assets/styles/global.css')
 
-    expect(mcp).toContain('class="hc-mcp-market-grid"')
+    expect(mcp).toContain('class="hc-capability-market-grid"')
     expect(mcp).toContain('class="hc-mcp-market-card"')
     expect(mcp).toMatch(
-      /\.hc-mcp-market-grid\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(220px,\s*100%\),\s*1fr\)\)/s,
+      /class="hc-capability-market-surface"[\s\S]*class="hc-capability-market-grid"/,
+    )
+    expect(global).toMatch(
+      /\.hc-capability-market-grid\s*\{[^}]*grid-template-columns:\s*repeat\(1,\s*minmax\(0,\s*1fr\)\)/s,
     )
   })
 
@@ -48,13 +52,20 @@ describe('desktop page density and responsive style contracts', () => {
 
   it('aligns semantic index with the memory settings disclosure shell', () => {
     const semanticIndex = source('components/knowledge/SemanticIndexCard.vue')
+    const memorySettings = source('components/memory/MemorySettingsPanel.vue')
+    const disclosure = source('components/common/HcSettingsDisclosure.vue')
 
     expect(semanticIndex).toMatch(/\.kb-index-card\s*\{[^}]*width:\s*100%[^}]*max-width:\s*none/s)
-    expect(semanticIndex).toMatch(
-      /\.kb-index-card__header\s*\{[^}]*gap:\s*6px[^}]*padding:\s*0[^}]*border:\s*0[^}]*background:\s*transparent[^}]*font-size:\s*12px/s,
+    expect(semanticIndex).toContain('<HcSettingsDisclosure')
+    expect(memorySettings).toContain('<HcSettingsDisclosure')
+    expect(disclosure).toMatch(
+      /\.hc-settings-disclosure__head\s*\{[^}]*gap:\s*6px[^}]*min-height:\s*32px/s,
     )
     expect(semanticIndex).toMatch(
-      /\.kb-index-card__body\s*\{[^}]*gap:\s*14px[^}]*margin-top:\s*10px[^}]*padding:\s*14px[^}]*border:\s*0\.5px solid var\(--hc-border\)[^}]*border-radius:\s*var\(--hc-radius-lg/s,
+      /\.kb-index-card__body\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*gap:\s*14px/s,
+    )
+    expect(disclosure).toMatch(
+      /\.hc-settings-disclosure__panel\s*\{[^}]*margin-top:\s*10px[^}]*padding:\s*14px[^}]*border:\s*0\.5px solid var\(--hc-border\)[^}]*border-radius:\s*var\(--hc-radius-lg/s,
     )
   })
 

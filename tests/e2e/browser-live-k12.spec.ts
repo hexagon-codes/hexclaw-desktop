@@ -2,12 +2,12 @@ import { test, expect, type Page } from '@playwright/test'
 import { cleanupK12Child } from './live-fixture-cleanup'
 
 /**
- * K12 家长备课助手 · 全链路 UI 冒烟（对 live sidecar :16060 + vite :5173）。
+ * K12 家长辅导助手 · 全链路 UI 冒烟（对 live sidecar :16060 + vite :5173）。
  *
  * 覆盖：建档（/agents 模板库 → 作业辅导助手 → 表单）→ 智能体卡快捷入口 →
  * 会话即入口（头部 tab / composer 预设 chips）→ 学习档案五对象 → 顶栏学情 → 编辑档案。
  *
- * LLM 无关：建档/描述符/学习档案/学情均不依赖云端模型（grade/prep 内容依赖 LLM，此处只验证 UI 抵达）。
+ * LLM 无关：建档/描述符/学习档案/学情均不依赖云端模型（grade/tutoringTips 内容依赖 LLM，此处只验证 UI 抵达）。
  * 前置：`pnpm dev`（:5173）+ 后端 sidecar（:16060）已在运行。
  */
 
@@ -39,9 +39,11 @@ test.describe('K12 全链路 UI 冒烟', () => {
     // K12ProfileForm 弹出
     await expect(page.getByText('创建「K12 辅导助手」')).toBeVisible({ timeout: 15_000 })
     await page.locator('.k12pf__input').first().fill(CHILD)
-    // 年级·学期走 HcSelect（B2 迁移：原生 select → 自渲染下拉，Teleport 到 body）
+    // 年级与学期分别走 HcSelect；value 在提交时仍合成为既有 grade_term。
     await page.locator('.k12pf .hc-select__trigger').nth(0).click()
-    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '六年级上' }).click()
+    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '六年级' }).click()
+    await page.locator('.k12pf .hc-select__trigger').nth(1).click()
+    await page.locator('.hc-select__dropdown .hc-select__option', { hasText: '上学期' }).click()
     await page.getByRole('button', { name: '创建' }).click()
     await expect(page.locator('.k12pf')).toHaveCount(0, { timeout: 20_000 }) // 表单关闭 = 建档成功
 
@@ -61,7 +63,7 @@ test.describe('K12 全链路 UI 冒烟', () => {
     //    + composer 预设 chips（后端 descriptor 下发）。
     //    BUG-20260709：chips 改数据流上交（update:composerChips → ChatInput presetChips），
     //    必须渲染在对话框盒（.hc-composer__box）**内部**，不再是输入框上方 Teleport 浮动行。
-    //    （备课提醒 nudge 条已于 20260709 退役——辅导要点内联进识题流。）
+    //    辅导要点只在识题持久确认后内联，不存在独立提醒入口。
     const scenarioTabs = page.locator('.k12enh-seg')
     await expect(scenarioTabs).toBeVisible({ timeout: 20_000 })
     await expect(scenarioTabs.getByRole('tab')).toHaveCount(3)
@@ -122,7 +124,8 @@ test.describe('K12 全链路 UI 冒烟', () => {
     await expect(page.getByText(`孩子档案 · ${cardName}`, { exact: false })).toBeVisible({
       timeout: 15_000,
     })
-    // 预填年级 = 六年级上（读后端 k12.grade_term）——HcSelect trigger 文案即当前值
-    await expect(page.locator('.k12pf .hc-select__trigger').nth(0)).toContainText('六年级上')
+    // 既有 grade_term=六年级上 无损拆成两个 HcSelect。
+    await expect(page.locator('.k12pf .hc-select__trigger').nth(0)).toContainText('六年级')
+    await expect(page.locator('.k12pf .hc-select__trigger').nth(1)).toContainText('上学期')
   })
 })

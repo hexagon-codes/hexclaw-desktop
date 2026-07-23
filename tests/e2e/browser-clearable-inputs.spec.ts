@@ -65,7 +65,7 @@ test('localhost provider probe and clear buttons close the Settings user journey
   await providerHead.getByTitle('测试连接', { exact: true }).click()
   const request = await probeRequest
   expect((await request.postDataJSON()).provider.base_url).toBe('http://localhost:18080/v1')
-  await expect(providerCard.getByText('连接测试通过')).toBeVisible()
+  await expect(providerHead.getByLabel('已连接 · 云端服务')).toBeVisible()
 
   const apiField = providerCard.locator('.hc-settings__field').filter({ hasText: 'API Key' })
   const apiClear = apiField.getByRole('button', { name: '清空输入内容' })
