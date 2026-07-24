@@ -9,6 +9,7 @@
  */
 import type { Component } from 'vue'
 import type { InstanceViewDescriptor, RecordSchema } from '@/contracts'
+import type { ChatAttachment } from '@/types'
 import { EMPTY_VIEW_DESCRIPTOR } from '@/contracts'
 
 /** 解析描述符时传入的实例上下文（来自 agent 实例） */
@@ -34,6 +35,25 @@ export interface ScenarioComposerChip {
 export interface ScenarioComposerAction {
   id: string
   sequence: number
+}
+
+/** 场景图片任务请求的显式模型路由。服务端仍须按能力目录重新校验。 */
+export interface ScenarioImageModelRoute {
+  provider: string
+  model: string
+  capability: 'vision'
+}
+
+/**
+ * 通用 composer 拦截图片后交给场景包的完整事实。
+ *
+ * dataUrl 是场景任务的原始输入，attachment 是同一图片在会话消息中的持久化投影；
+ * route 只由拥有会话模型状态的 shell 注入，输入组件不猜测模型。
+ */
+export interface ScenarioComposerImagePayload {
+  dataUrl: string
+  attachment: ChatAttachment
+  route?: ScenarioImageModelRoute
 }
 
 /**

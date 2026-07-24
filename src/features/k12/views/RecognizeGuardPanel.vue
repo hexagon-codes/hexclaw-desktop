@@ -33,6 +33,7 @@ import type {
   OCRConfirmationReason,
 } from '@/api/k12'
 import type { VerifyResult } from '@/contracts'
+import type { ScenarioImageModelRoute } from '@/shell/scenario/registry'
 
 // 审计单-High-2（bug-20260709）：本组件全部 API 调用的 agent = agents.name（后端隔离键），
 // 故 prop 名就叫 agentId——曾命名 agentName 导致上游把 display_name 传进来，写错孩子作用域。
@@ -46,6 +47,8 @@ const props = defineProps<{
     Record<'math' | 'chinese' | 'english' | 'science' | 'information_technology' | 'art', string>
   >
   initialImage?: string
+  /** 会话显式选择的视觉路由请求；服务端按能力目录校验后才冻结到 Job。 */
+  modelRoute?: ScenarioImageModelRoute
   /** 当前通用会话稳定 ID：只用于后端 source_session 与最小 Job 绑定恢复。 */
   sessionId?: string
 }>()
@@ -505,6 +508,7 @@ async function run() {
       sourceImage,
       controller.signal,
       props.sessionId,
+      props.modelRoute,
     )
     if (generation !== agentGeneration || recognition !== recognitionGeneration) return
     currentJobId.value = job.jobId

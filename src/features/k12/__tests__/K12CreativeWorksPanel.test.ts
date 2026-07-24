@@ -4,6 +4,7 @@ import { createI18n } from 'vue-i18n'
 import { nextTick } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
+import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import K12CreativeWorksPanel from '../views/K12CreativeWorksPanel.vue'
 import type { CreativeWorkDTO } from '@/api/k12'
 
@@ -307,6 +308,30 @@ describe('K12CreativeWorksPanel · 作品', () => {
     expect(w.find('[data-testid="cw-detail-modal"]').exists()).toBe(false)
   })
 
+  it('作品详情提供架构定义的低强调归档动作，成功后刷新为只读终态且不可重复触发', async () => {
+    h.listSpy
+      .mockResolvedValueOnce({ items: [work()] })
+      .mockResolvedValueOnce({
+        items: [work({ status: 'archived', status_label: '已归档' })],
+      })
+    const w = render()
+    await flushPromises()
+    await w.get('[data-testid="cw-detail-toggle"]').trigger('click')
+    await flushPromises()
+
+    const archive = w.get('[data-testid="cw-archive"]')
+    expect(archive.classes()).toContain('k12cw__btn--ghost')
+    await archive.trigger('click')
+    await flushPromises()
+
+    expect(h.archiveSpy).toHaveBeenCalledTimes(1)
+    expect(h.archiveSpy).toHaveBeenCalledWith('k12-xiaoming', 'w1')
+    expect(w.text()).toContain('已归档')
+    expect(w.find('[data-testid="cw-archive"]').exists()).toBe(false)
+    expect(w.find('[data-testid="cw-feedback-submit"]').exists()).toBe(false)
+    expect(w.find('[data-testid="cw-revision-submit"]').exists()).toBe(false)
+  })
+
   it('作品详情模态框把 Tab 焦点圈在弹窗内', async () => {
     h.listSpy.mockResolvedValue({ items: [work()] })
     const w = render(true)
@@ -450,6 +475,283 @@ describe('K12CreativeWorksPanel · 作品', () => {
     expect(feedback.text()).toContain('收藏')
     expect(feedback.text()).toContain('记录语言问题')
     expect(feedback.text()).toContain('writing-feedback@1.0.0/embedded')
+  })
+
+  it('历史 polluted structured feedback 回退到安全 Markdown 投影，不显示被污染 atom 或 raw 标记', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        work({
+          status: 'feedback_ready',
+          status_label: '已点评',
+          versions: [
+            {
+              version_id: 'v1',
+              feedback: '兼容点评投影',
+              structured_feedback: {
+                feedback_id: 'feedback-polluted',
+                version_id: 'v1',
+                feedback_type: 'writing',
+                evidence_refs: ['content-ref:sha256:polluted#full'],
+                observations: [
+                  {
+                    dimension: 'expression',
+                    evidence:
+                      '旧解析残留 RAW_POLLUTED_ATOM ### **不应按事实行显示**\n### 下一步\n多行 projection',
+                  },
+                ],
+                source_snapshot: {
+                  source: 'ai',
+                  method_ref: 'writing-feedback@legacy',
+                  capability: 'evidence_based_feedback',
+                },
+                limitations: '仅依据当前原稿。',
+                suggestions: ['由孩子补充听觉细节。'],
+                allowed_actions: ['send'],
+                projection_markdown:
+                  '### 观察\n\n使用了**绿色的丝带**这个比喻。\n\n### 下一步\n\n- 由孩子补充听觉细节。\n\n<img src=x onerror="window.__unsafe_feedback=1">',
+              },
+            },
+          ],
+        }),
+      ],
+    })
+    const w = render()
+    await flushPromises()
+
+    const projection = w.get('[data-testid="cw-structured-feedback-projection"]')
+    expect(projection.get('h3').text()).toBe('观察')
+    expect(projection.get('strong').text()).toBe('绿色的丝带')
+    expect(w.text()).not.toMatch(/###|\*\*/)
+    expect(w.text()).not.toContain('RAW_POLLUTED_ATOM')
+    expect(projection.find('img').exists()).toBe(false)
+    const renderer = w
+      .findAllComponents(MarkdownRenderer)
+      .find(
+        (component) => component.attributes('data-testid') === 'cw-structured-feedback-projection',
+      )
+    expect(renderer?.props('showArtifacts')).toBe(false)
+  })
+
+  it('历史 polluted structured feedback 无可用投影时 fail-closed，不回退显示污染 atom', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        work({
+          status: 'feedback_ready',
+          status_label: '已点评',
+          versions: [
+            {
+              version_id: 'v1',
+              structured_feedback: {
+                feedback_id: 'feedback-polluted-without-projection',
+                version_id: 'v1',
+                feedback_type: 'writing',
+                evidence_refs: ['content-ref:sha256:polluted-empty#full'],
+                observations: [
+                  {
+                    dimension: 'expression',
+                    evidence: 'RAW_ATOM_WITHOUT_PROJECTION\n### **不得泄漏**',
+                  },
+                ],
+                source_snapshot: {
+                  source: 'ai',
+                  method_ref: 'writing-feedback@legacy',
+                  capability: 'evidence_based_feedback',
+                },
+                limitations: '仅依据当前原稿。',
+                suggestions: [],
+                allowed_actions: [],
+                projection_markdown: '',
+              },
+            },
+          ],
+        }),
+      ],
+    })
+    const w = render()
+    await flushPromises()
+
+    expect(w.text()).not.toContain('RAW_ATOM_WITHOUT_PROJECTION')
+    expect(w.text()).not.toMatch(/###|\*\*/)
+    expect(w.find('.k12cw__feedback-facts').exists()).toBe(false)
+  })
+
+  it('所有作品点评 Markdown renderer 都关闭 artifact 执行面', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        work({
+          status: 'feedback_ready',
+          status_label: '已点评',
+          versions: [
+            {
+              version_id: 'v1',
+              content_markdown: '原稿',
+              structured_feedback: {
+                feedback_id: 'feedback-clean',
+                version_id: 'v1',
+                feedback_type: 'writing',
+                evidence_refs: ['content-ref:sha256:clean#full'],
+                observations: [{ dimension: 'expression', evidence: '比喻有可见依据。' }],
+                source_snapshot: {
+                  source: 'ai',
+                  method_ref: 'writing-feedback@1.0.0/embedded',
+                  capability: 'evidence_based_feedback',
+                },
+                limitations: '仅依据本版原文。',
+                suggestions: ['补充一个声音细节。'],
+                allowed_actions: ['send'],
+                projection_markdown: '### 观察\n\n比喻有可见依据。',
+              },
+            },
+            {
+              version_id: 'v2',
+              content_markdown: '修改稿',
+              feedback: '家长点评',
+              feedback_source: 'parent',
+            },
+          ],
+        }),
+      ],
+    })
+    const w = render()
+    await flushPromises()
+
+    const reviewRenderers = w
+      .findAllComponents(MarkdownRenderer)
+      .filter((component) => component.element.closest('.k12cw__vfeedback'))
+    expect(reviewRenderers).toHaveLength(3)
+    for (const renderer of reviewRenderers) {
+      expect(renderer.props('showArtifacts')).toBe(false)
+    }
+  })
+
+  it('点评、练习卡等执行动作只读取当前最新版本，不跨版本复用旧结果', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        work({
+          work_type: 'art',
+          status: 'revised',
+          status_label: '已修改',
+          versions: [
+            {
+              version_id: 'v1',
+              content_markdown: '原画',
+              feedback: '旧版点评',
+              practice_card: '旧版观察练习',
+            },
+            { version_id: 'v2', content_markdown: '当前修改稿' },
+          ],
+        }),
+      ],
+    })
+    const w = render()
+    await flushPromises()
+
+    expect(w.find('[data-testid="cw-send-feedback"]').exists()).toBe(false)
+    expect(w.find('[data-testid="cw-practice-card"]').exists()).toBe(false)
+  })
+
+  it('发送回执按当前版本隔离，新版本点评不复用旧版本发送状态', async () => {
+    const firstVersion = {
+      version_id: 'v1',
+      content_markdown: '原稿',
+      feedback: '第一版点评',
+    }
+    const revised = work({
+      status: 'revised',
+      status_label: '已修改',
+      versions: [firstVersion, { version_id: 'v2', content_markdown: '修改稿' }],
+    })
+    const secondReviewed = work({
+      status: 'feedback_ready',
+      status_label: '已点评',
+      versions: [
+        firstVersion,
+        { version_id: 'v2', content_markdown: '修改稿', feedback: '第二版点评' },
+      ],
+    })
+    h.listSpy
+      .mockResolvedValueOnce({
+        items: [
+          work({
+            status: 'feedback_ready',
+            status_label: '已点评',
+            versions: [firstVersion],
+          }),
+        ],
+      })
+      .mockResolvedValueOnce({ items: [revised] })
+    h.sendSpy.mockResolvedValueOnce({
+      delivery_id: 'delivery-v1',
+      agent_name: 'k12-xiaoming',
+      object_kind: 'feedback',
+      object_id: 'w1',
+      binding_id: 'binding-1',
+      target: { platform: 'dingtalk', chat_id: 'chat-1', label: '妈妈' },
+      status: 'delivered',
+      dedupe_key: 'feedback-v1',
+      payload_digest: 'digest-v1',
+      payload_json: '{}',
+      render_manifest_json: '{}',
+      attempt: 1,
+      created_at: 1,
+      updated_at: 1,
+    })
+    h.generateFeedbackSpy.mockResolvedValueOnce(secondReviewed)
+    const w = render()
+    await flushPromises()
+
+    await w.get('[data-testid="cw-send-feedback"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="cw-feedback-delivery-receipt"]').text()).toContain('妈妈')
+
+    await w.get('[data-testid="cw-revision-input"]').setValue('修改稿')
+    await w.get('[data-testid="cw-revision-submit"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="cw-feedback-generate"]').trigger('click')
+    await flushPromises()
+
+    expect(w.text()).toContain('第二版点评')
+    expect(w.find('[data-testid="cw-feedback-delivery-receipt"]').exists()).toBe(false)
+  })
+
+  it('已归档作品只保留历史事实和关闭动作，不显示练习卡、发送等执行动作', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        work({
+          work_type: 'art',
+          status: 'archived',
+          status_label: '已归档',
+          versions: [
+            {
+              version_id: 'v1',
+              content_markdown: '原画',
+              feedback: '构图清楚',
+              practice_card: '观察远近层次',
+            },
+          ],
+        }),
+      ],
+    })
+    const w = render()
+    await flushPromises()
+
+    for (const testId of [
+      'cw-send-feedback',
+      'cw-card-print',
+      'cw-card-save-pdf',
+      'cw-card-send',
+      'cw-card-done',
+      'cw-feedback-generate',
+      'cw-feedback-submit',
+      'cw-revision-submit',
+      'cw-accum-open',
+      'cw-mistake-open',
+    ]) {
+      expect(w.find(`[data-testid="${testId}"]`).exists()).toBe(false)
+    }
+    await w.get('[data-testid="cw-detail-toggle"]').trigger('click')
+    await flushPromises()
+    expect(w.get('[data-testid="cw-detail-modal"]').text()).toContain('关闭')
   })
 
   it('待点评 → 写点评走 feedback（非空才启用）', async () => {
@@ -695,6 +997,55 @@ describe('K12CreativeWorksPanel · KPI 行 + 点评规则（原型 2570-2586）'
     expect(h.generateFeedbackSpy).toHaveBeenCalledTimes(2)
     expect(w.find('[data-testid="cw-feedback-generate-error"]').exists()).toBe(false)
     expect(w.text()).toContain('比喻具体，可再补充声音细节')
+  })
+
+  it('AI 生成中禁用手写并发提交；失败后只保留唯一原地重试入口', async () => {
+    const pending = deferred<CreativeWorkDTO>()
+    h.listSpy.mockResolvedValue({ items: [work()] })
+    h.generateFeedbackSpy.mockReturnValueOnce(pending.promise)
+    const w = render()
+    await flushPromises()
+    const input = w.get('[data-testid="cw-feedback-input"]')
+    await input.setValue('生成期间不应并发提交')
+
+    await w.get('[data-testid="cw-feedback-generate"]').trigger('click')
+    await nextTick()
+
+    const generating = w.get('[data-testid="cw-feedback-generating"]')
+    expect(generating.attributes('role')).toBe('status')
+    expect(generating.attributes('aria-live')).toBe('polite')
+    expect(w.get('[data-testid="cw-feedback-input"]').attributes('disabled')).toBeDefined()
+    const submit = w.get('[data-testid="cw-feedback-submit"]')
+    expect(submit.attributes('disabled')).toBeDefined()
+    await submit.trigger('click')
+    expect(h.feedbackSpy).not.toHaveBeenCalled()
+
+    pending.reject(new Error('模型响应超时'))
+    await flushPromises()
+
+    const error = w.get('[data-testid="cw-feedback-generate-error"]')
+    expect(error.attributes('role')).toBe('alert')
+    expect(w.find('[data-testid="cw-feedback-generate"]').exists()).toBe(false)
+    expect(w.findAll('[data-testid="cw-feedback-generate-retry"]')).toHaveLength(1)
+  })
+
+  it('点评与修改稿输入具有可访问名称', async () => {
+    h.listSpy.mockResolvedValue({ items: [work()] })
+    const draft = render()
+    await flushPromises()
+    expect(draft.get('[data-testid="cw-feedback-input"]').attributes('aria-label')).toBe(
+      k12Zh.works.addFeedback,
+    )
+    draft.unmount()
+
+    h.listSpy.mockResolvedValue({
+      items: [work({ status: 'feedback_ready', status_label: '已点评' })],
+    })
+    const reviewed = render()
+    await flushPromises()
+    expect(reviewed.get('[data-testid="cw-revision-input"]').attributes('aria-label')).toBe(
+      k12Zh.works.submitRevision,
+    )
   })
 
   it('AI 点评切换孩子时真正 abort 旧的 240s 请求', async () => {

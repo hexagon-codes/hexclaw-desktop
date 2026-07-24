@@ -39,6 +39,7 @@ import {
   type GradingJobStatusResp,
   type GradingQuestionCorrection,
   type PhotoJobResult,
+  type CreatePhotoGradingJobReq,
   type TutorTurnReq,
   type TutorTurnResp,
   type BindIMReq,
@@ -272,12 +273,27 @@ export const useK12Store = defineStore('k12', () => {
   }
 
   /** 同一（agent, 照片）内容派生稳定幂等键（§4.10 desktop 来源键）：重复点击/失败重跑命中同一 Job。 */
-  function photoJobSourceKey(agent: string, imageBase64: string): string {
+  type PhotoModelSnapshot = NonNullable<CreatePhotoGradingJobReq['model_snapshot']>
+
+  function stablePhotoHash(value: string): string {
     let hash = 5381
-    for (let i = 0; i < imageBase64.length; i++) {
-      hash = ((hash << 5) + hash + imageBase64.charCodeAt(i)) >>> 0
+    for (let i = 0; i < value.length; i++) {
+      hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0
     }
-    return `photo-${agent}-${hash.toString(16)}-${imageBase64.length}`
+    return `${hash.toString(16)}-${value.length}`
+  }
+
+  /** 无显式路由时保持历史键；显式 provider/model 进入幂等身份，不能命中旧模型 Job。 */
+  function photoJobSourceKey(
+    agent: string,
+    imageBase64: string,
+    modelSnapshot?: PhotoModelSnapshot,
+  ): string {
+    const legacyKey = `photo-${agent}-${stablePhotoHash(imageBase64)}`
+    if (!modelSnapshot) return legacyKey
+    return `${legacyKey}-route-${stablePhotoHash(
+      `${modelSnapshot.provider}\u0000${modelSnapshot.model}`,
+    )}`
   }
 
   /** 轮询单个 Job 直到到达 stopStages 之一；失败态/超时抛家长向错误。 */
@@ -382,6 +398,7 @@ export const useK12Store = defineStore('k12', () => {
     imageBase64: string,
     signal?: AbortSignal,
     sourceSession?: string,
+    modelSnapshot?: PhotoModelSnapshot,
   ): Promise<PhotoJobRecognitionView> {
     loading.value = true
     error.value = null
@@ -398,10 +415,11 @@ export const useK12Store = defineStore('k12', () => {
       const created = await k12CreateGradingJob(
         {
           agent,
-          source_key: photoJobSourceKey(agent, imageBase64),
+          source_key: photoJobSourceKey(agent, imageBase64, modelSnapshot),
           source_kind: 'desktop',
           image_base64: imageBase64,
           source_session: sourceSession || undefined,
+          model_snapshot: modelSnapshot,
         },
         signal,
       )

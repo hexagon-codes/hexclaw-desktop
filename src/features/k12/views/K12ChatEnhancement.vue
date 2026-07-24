@@ -23,6 +23,8 @@ import type {
   ScenarioComposerAction,
   ScenarioComposerChip,
   ScenarioComposerCommand,
+  ScenarioComposerImagePayload,
+  ScenarioImageModelRoute,
 } from '@/shell/scenario/registry'
 import { hasGradingJobBinding } from '../grading-job-binding'
 
@@ -37,7 +39,7 @@ const props = defineProps<{
   /** composer 改道进来的图片 dataURL（BUG-20260709 拍照发题不解题）：
    *  外壳把 ChatInput 拦下的粘贴/上传图片经此传入 → 自动打开识题护栏并识题；
    *  消费后 emit update:composerImage('') 复位，避免重复触发。通用 prop，零 shell 领域词。 */
-  composerImage?: string
+  composerImage?: ScenarioComposerImagePayload | string
   /** 通用 shell 转发的结构化 composer action；领域 action id 只由本 feature 解释。 */
   composerAction?: ScenarioComposerAction
 }>()
@@ -104,9 +106,13 @@ function panelIdOfKind(kind: string): string {
 const recognizeOpen = ref(false)
 const backupOpen = ref(false)
 const pendingRecognizeImage = ref('')
+const pendingRecognizeRoute = ref<ScenarioImageModelRoute>()
+// composerImage 是离散事件而非图片状态；同一 dataURL 重投也必须让护栏收到新一轮请求。
+const recognizeRequestSequence = ref(0)
 function closeRecognize() {
   recognizeOpen.value = false
   pendingRecognizeImage.value = ''
+  pendingRecognizeRoute.value = undefined
 }
 
 // 头部零硬编码动作按钮（20260709）：辅导要点已内联进识题流（识题确认后自动出「这份作业的辅导要点」），
@@ -299,6 +305,7 @@ watch(
     recognizeOpen.value = false
     backupOpen.value = false
     pendingRecognizeImage.value = ''
+    pendingRecognizeRoute.value = undefined
     closeCapabilityDialog(false)
     emit('update:composerImage', '')
   },
@@ -330,9 +337,13 @@ watch(
   () => props.composerImage,
   (img) => {
     if (!img) return
+    const dataUrl = typeof img === 'string' ? img : img.dataUrl
+    if (!dataUrl) return
     tab.value = 'chat'
+    recognizeRequestSequence.value += 1
     recognizeOpen.value = true
-    pendingRecognizeImage.value = img
+    pendingRecognizeImage.value = dataUrl
+    pendingRecognizeRoute.value = typeof img === 'string' ? undefined : img.route
     emit('update:composerImage', '')
   },
   { immediate: true },
@@ -389,13 +400,14 @@ watch(
           <div class="k12enh-tutor__bubble">
             <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
             <RecognizeGuardPanel
-              :key="`${agentId}:${sessionId || ''}`"
+              :key="`${agentId}:${sessionId || ''}:${recognizeRequestSequence}`"
               :agent-id="agentId"
               :session-id="sessionId"
               :grade="grade"
               :textbook="textbook"
               :textbooks="subjectTextbooks"
               :initial-image="pendingRecognizeImage"
+              :model-route="pendingRecognizeRoute"
               @close="closeRecognize"
             />
           </div>
@@ -703,7 +715,7 @@ watch(
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  margin: 0 16px 8px;
+  margin: 0 0 8px;
 }
 .k12enh-tutor__avatar {
   position: relative;

@@ -78,6 +78,20 @@ describe('BUG-20260712 #2 识题面板复用消息区滚动（题目多不撑出
   })
 })
 
+describe('BUG-20260724-001 K12 场景消息与普通助手消息共用水平轨道', () => {
+  it('内联锚点不居中限宽，场景消息不再叠加水平 margin', () => {
+    const inlineRule =
+      chatViewSrc.match(/\.hc-chat__scenario-inline\s*\{[^}]*\}/)?.[0] ?? ''
+    const tutorRule = k12EnhSrc.match(/\.k12enh-tutor\s*\{[^}]*\}/)?.[0] ?? ''
+
+    expect(inlineRule).toMatch(/width\s*:\s*100%/)
+    expect(inlineRule).toMatch(/max-width\s*:\s*none/)
+    expect(inlineRule).toMatch(/margin\s*:\s*0\s*;/)
+    expect(tutorRule).toMatch(/gap\s*:\s*10px/)
+    expect(tutorRule).toMatch(/margin\s*:\s*0 0 8px\s*;/)
+  })
+})
+
 // BUG-20260712 #3（频道「绑定会话」添加行布局）已随 per-chat 会话路由功能整体移除（方案 A）——
 // 断言删除，改由 channels/__tests__/removal-chat-route-session-routing.test.ts 防止复活。
 

@@ -359,7 +359,7 @@ onBeforeUnmount(resetPreview)
   border: 0.5px solid var(--hc-border);
   border-radius: 8px;
   background: #fff;
-  box-shadow: var(--hc-shadow-subtle);
+  box-shadow: var(--hc-shadow-sm);
 }
 .k12-print-preview__pages :deep(canvas) {
   display: block;

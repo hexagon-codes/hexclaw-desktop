@@ -178,7 +178,7 @@ describe('BUG-20260709 · composer chips 必须在对话框（composer 盒）内
     })
     await flushPromises()
 
-    expect(wrapper.get('textarea').attributes('placeholder')).toBe(
+    expect(wrapper.get('[data-testid="chat-input"]').attributes('data-placeholder')).toBe(
       '发消息、粘贴带分数/公式的题目，或 ⌘V 粘贴作业照片',
     )
     const hint = wrapper.get('[data-testid="scenario-composer-hint"]')

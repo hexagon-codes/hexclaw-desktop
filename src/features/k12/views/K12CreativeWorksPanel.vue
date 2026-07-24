@@ -87,11 +87,25 @@ function isReviewed(w: CreativeWorkDTO): boolean {
 function latestVersion(w: CreativeWorkDTO): WorkVersionDTO | undefined {
   return w.versions[w.versions.length - 1]
 }
+function structuredFeedbackIsPolluted(feedback: WorkFeedbackDTO): boolean {
+  const atoms = [
+    ...(feedback.observations ?? []).map((observation) => observation.evidence),
+    ...(feedback.suggestions ?? []),
+    feedback.limitations ?? '',
+  ]
+  return atoms.some((atom) => /[\r\n]|\*\*|__|(?:^|\s)#{1,6}\s/.test(atom))
+}
+function structuredFeedbackProjection(version: WorkVersionDTO): string {
+  return version.structured_feedback?.projection_markdown?.trim() || version.feedback?.trim() || ''
+}
 function currentVersionReviewed(w: CreativeWorkDTO): boolean {
   return w.status === 'feedback_ready' || w.status === 'archived'
 }
 function cardSummary(w: CreativeWorkDTO): string {
   const version = latestVersion(w)
+  if (version?.structured_feedback && structuredFeedbackIsPolluted(version.structured_feedback)) {
+    return (w.task || w.intent || `${w.versions.length} ${t('k12.works.versionCount')}`).trim()
+  }
   return (
     version?.structured_feedback?.suggestions[0] ||
     version?.feedback ||
@@ -101,7 +115,9 @@ function cardSummary(w: CreativeWorkDTO): string {
   ).trim()
 }
 function cardEvidence(w: CreativeWorkDTO): string[] {
-  const observations = latestVersion(w)?.structured_feedback?.observations ?? []
+  const feedback = latestVersion(w)?.structured_feedback
+  const observations =
+    feedback && !structuredFeedbackIsPolluted(feedback) ? feedback.observations : []
   if (observations.length > 0) {
     return observations
       .slice(0, 3)
@@ -553,12 +569,9 @@ function workThumbURL(w: CreativeWorkDTO): string {
 // ── 观察练习卡（任务2：§3.10 美术——练习必须有产物 + 打印/发送/打卡出口）────
 // 卡文本由服务端从点评正文提炼（practice_card，单一事实源）；取最新带点评版本。
 function practiceCardOf(w: CreativeWorkDTO): WorkVersionDTO | null {
-  if (w.work_type !== 'art') return null
-  for (let i = w.versions.length - 1; i >= 0; i--) {
-    const v = w.versions[i]
-    if (v?.practice_card) return v
-  }
-  return null
+  if (w.work_type !== 'art' || w.status === 'archived') return null
+  const version = latestVersion(w)
+  return version?.practice_card ? version : null
 }
 
 const printBusyId = ref('')
@@ -619,6 +632,7 @@ async function saveCardPdf(w: CreativeWorkDTO) {
 }
 
 async function markCardDone(w: CreativeWorkDTO) {
+  if (!practiceCardOf(w)) return
   busyId.value = w.record_id
   try {
     await k12MarkPracticeCardDone(props.agentId, w.record_id)
@@ -633,15 +647,13 @@ async function markCardDone(w: CreativeWorkDTO) {
 
 // ── 发送到手机（DD-024：先落 Receipt，再发绑定私聊）────────────────
 function latestFeedbackOf(w: CreativeWorkDTO): string {
-  for (let i = w.versions.length - 1; i >= 0; i--) {
-    const fb = (w.versions[i]?.feedback || '').trim()
-    if (fb) return fb
-  }
-  return ''
+  if (w.status === 'archived') return ''
+  const version = latestVersion(w)
+  return version ? structuredFeedbackProjection(version) : ''
 }
 
 function deliveryKey(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card'): string {
-  return `${w.record_id}:${kind}`
+  return `${w.record_id}:${latestVersion(w)?.version_id ?? 'none'}:${kind}`
 }
 
 function deliveryOf(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card') {
@@ -844,7 +856,7 @@ function statusTone(s: string): string {
 
 async function submitFeedback(w: CreativeWorkDTO) {
   const fb = (feedbackDraft.value[w.record_id] || '').trim()
-  if (!fb) return
+  if (!fb || feedbackGeneratingId.value || busyId.value) return
   busyId.value = w.record_id
   try {
     await k12AttachWorkFeedback(props.agentId, w.record_id, fb)
@@ -1361,7 +1373,15 @@ defineExpose({ load, openAdd })
                             data-testid="cw-structured-feedback"
                           >
                             <span aria-hidden="true">💬</span>
-                            <div class="k12cw__feedback-facts">
+                            <template v-if="structuredFeedbackIsPolluted(ver.structured_feedback)">
+                              <MarkdownRenderer
+                                v-if="structuredFeedbackProjection(ver)"
+                                data-testid="cw-structured-feedback-projection"
+                                :content="structuredFeedbackProjection(ver)"
+                                :show-artifacts="false"
+                              />
+                            </template>
+                            <div v-else class="k12cw__feedback-facts">
                               <b>{{ t('k12.works.feedbackObservations') }}</b>
                               <ul class="k12cw__feedback-list">
                                 <li
@@ -1372,7 +1392,10 @@ defineExpose({ load, openAdd })
                                   <span class="k12cw__feedback-dimension">{{
                                     feedbackDimensionLabel(observation.dimension)
                                   }}</span>
-                                  <MarkdownRenderer :content="observation.evidence" />
+                                  <MarkdownRenderer
+                                    :content="observation.evidence"
+                                    :show-artifacts="false"
+                                  />
                                 </li>
                               </ul>
                               <b>{{ t('k12.works.feedbackSuggestions') }}</b>
@@ -1381,7 +1404,7 @@ defineExpose({ load, openAdd })
                                   v-for="suggestion in ver.structured_feedback.suggestions"
                                   :key="suggestion"
                                 >
-                                  <MarkdownRenderer :content="suggestion" />
+                                  <MarkdownRenderer :content="suggestion" :show-artifacts="false" />
                                 </li>
                               </ol>
                               <p class="k12cw__feedback-limit">
@@ -1414,6 +1437,7 @@ defineExpose({ load, openAdd })
                             <MarkdownRenderer
                               data-testid="cw-version-feedback"
                               :content="ver.feedback"
+                              :show-artifacts="false"
                             />
                             <small
                               v-if="ver.feedback_source || ver.feedback_skill"
@@ -1488,7 +1512,7 @@ defineExpose({ load, openAdd })
                     <!-- 观察练习卡（任务2，§3.10 美术）：练习必须有产物——归档在版本记录，
              承诺即动作：打印 / 发送到手机 / 完成打卡；不进错题与练习集 -->
                     <div
-                      v-if="practiceCardOf(w)"
+                      v-if="w.status !== 'archived' && practiceCardOf(w)"
                       class="k12cw__pcard"
                       data-testid="cw-practice-card"
                     >
@@ -1596,6 +1620,8 @@ defineExpose({ load, openAdd })
                         <textarea
                           v-model="feedbackDraft[w.record_id]"
                           class="k12cw__input"
+                          :aria-label="t('k12.works.addFeedback')"
+                          :disabled="feedbackGeneratingId === w.record_id"
                           :placeholder="
                             t('k12.works.addFeedback') + '（只给具体建议，不打分不代写）'
                           "
@@ -1605,9 +1631,11 @@ defineExpose({ load, openAdd })
                       </HcClearableField>
                       <div class="k12cw__linkbtns">
                         <button
+                          v-if="!feedbackGenerateError[w.record_id]"
                           class="k12cw__btn k12cw__btn--ghost"
                           data-testid="cw-feedback-generate"
                           :disabled="!!feedbackGeneratingId || busyId === w.record_id"
+                          :aria-busy="feedbackGeneratingId === w.record_id"
                           @click="generateFeedback(w)"
                         >
                           {{ t('k12.works.aiGenerate') }}
@@ -1616,6 +1644,8 @@ defineExpose({ load, openAdd })
                           v-if="feedbackGeneratingId === w.record_id"
                           class="k12cw__ainote"
                           data-testid="cw-feedback-generating"
+                          role="status"
+                          aria-live="polite"
                           >{{ t('k12.works.aiGenerating') }}</span
                         >
                       </div>
@@ -1623,6 +1653,7 @@ defineExpose({ load, openAdd })
                         v-if="feedbackGenerateError[w.record_id]"
                         class="k12cw__inlineerr"
                         data-testid="cw-feedback-generate-error"
+                        role="alert"
                       >
                         {{ feedbackGenerateError[w.record_id] }}
                         <button
@@ -1637,7 +1668,9 @@ defineExpose({ load, openAdd })
                       <button
                         class="k12cw__btn k12cw__btn--primary"
                         :disabled="
-                          busyId === w.record_id || !(feedbackDraft[w.record_id] || '').trim()
+                          !!feedbackGeneratingId ||
+                          busyId === w.record_id ||
+                          !(feedbackDraft[w.record_id] || '').trim()
                         "
                         data-testid="cw-feedback-submit"
                         @click="submitFeedback(w)"
@@ -1652,6 +1685,7 @@ defineExpose({ load, openAdd })
                         <textarea
                           v-model="revisionDraft[w.record_id]"
                           class="k12cw__input"
+                          :aria-label="t('k12.works.submitRevision')"
                           :placeholder="t('k12.works.submitRevision')"
                           rows="2"
                           data-testid="cw-revision-input"
@@ -1856,6 +1890,7 @@ defineExpose({ load, openAdd })
                       <button
                         class="k12cw__btn k12cw__btn--ghost"
                         :disabled="busyId === w.record_id"
+                        data-testid="cw-archive"
                         @click="archive(w)"
                       >
                         {{ t('k12.works.archive') }}
@@ -2324,7 +2359,10 @@ defineExpose({ load, openAdd })
 }
 .k12cw-image-preview {
   position: fixed;
-  inset: 0;
+  top: var(--hc-titlebar-height);
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: var(--hc-z-modal);
   display: grid;
   place-items: center;
@@ -2335,7 +2373,7 @@ defineExpose({ load, openAdd })
 }
 .k12cw-image-preview > img {
   max-width: min(920px, calc(100vw - 48px));
-  max-height: calc(100vh - 48px);
+  max-height: calc(100vh - var(--hc-titlebar-height) - 48px);
   object-fit: contain;
   border-radius: 14px;
   box-shadow: var(--hc-shadow-float);

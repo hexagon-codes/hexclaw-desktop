@@ -117,8 +117,8 @@ describe('K12 composer 能力入口 · app.html 唯一权威', () => {
     )
     await flushPromises()
 
-    const input = wrapper.get<HTMLTextAreaElement>('[data-testid="chat-input"]')
-    expect(input.element.value).toBe('帮我写一条明天下午 3 点开家长会的通知')
+    const input = wrapper.get<HTMLElement>('[data-testid="chat-input"]')
+    expect(input.element.textContent).toBe('帮我写一条明天下午 3 点开家长会的通知')
     expect(document.activeElement).toBe(input.element)
     expect(sendHandler).not.toHaveBeenCalled()
   })

@@ -17,6 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+import { ref } from 'vue'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -61,7 +62,13 @@ vi.mock('@/api/k12', () => ({
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 
 vi.mock('@/composables/useVoice', () => ({
-  useVoice: () => ({ isListening: { value: false }, transcript: { value: '' }, isSupported: false, toggleListening: vi.fn() }),
+  useVoice: () => ({
+    isListening: ref(false),
+    transcript: ref(''),
+    error: ref(''),
+    isSupported: false,
+    toggleListening: vi.fn(),
+  }),
 }))
 vi.mock('@/stores/chat', async (importOriginal) => {
   const original = await importOriginal<Record<string, unknown>>()
@@ -82,8 +89,18 @@ function i18n() {
   })
 }
 
+function dispatchPaste(element: HTMLElement, clipboardData: {
+  items: Array<{ type: string; getAsFile: () => File | null }>
+  getData: (type: string) => string
+}) {
+  const event = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'clipboardData', { value: clipboardData })
+  element.dispatchEvent(event)
+  return event
+}
+
 describe('BUG-20260709 ① ChatInput：scenarioImageIntercept=true 时粘贴图片改道场景管道', () => {
-  it('★粘贴图片 → emit scenario-image(dataURL)，且不进附件条', async () => {
+  it('★粘贴图片 → emit 同源 scenario-image payload，且不进附件条', async () => {
     const ChatInput = (await import('@/components/chat/ChatInput.vue')).default
     const w = mount(ChatInput, {
       props: { scenarioImageIntercept: true },
@@ -97,12 +114,22 @@ describe('BUG-20260709 ① ChatInput：scenarioImageIntercept=true 时粘贴图�
       items: [{ type: 'image/png', getAsFile: () => file }],
       getData: () => '',
     }
-    await w.find('textarea').trigger('paste', { clipboardData })
+    dispatchPaste(w.get<HTMLElement>('[data-testid="chat-input"]').element, clipboardData)
     // FileReader 异步读 dataURL → 轮询等待 emit
     await vi.waitFor(() => {
       const ev = w.emitted('scenario-image')
       expect(ev, '粘贴图片应 emit scenario-image（当前走 addFiles 附件=bug 症状）').toBeTruthy()
-      expect(String(ev![0]![0])).toMatch(/^data:image\/png;base64,/)
+      const payload = ev![0]![0] as {
+        dataUrl: string
+        attachment: { type: string; name: string; mime: string; data: string }
+      }
+      expect(payload.dataUrl).toMatch(/^data:image\/png;base64,/)
+      expect(payload.attachment).toEqual({
+        type: 'image',
+        name: 'homework.png',
+        mime: 'image/png',
+        data: payload.dataUrl.split(',')[1],
+      })
     }, { timeout: 2000 })
     // 图片不得同时进附件条（否则同一张图既识题又随消息发聊天，双路重复）
     expect(w.find('.hc-composer__files').exists(), '拦截后附件条不应出现').toBe(false)
@@ -117,8 +144,9 @@ describe('BUG-20260709 ① ChatInput：scenarioImageIntercept=true 时粘贴图�
       },
     })
     const file = new File([Uint8Array.from([0x89, 0x50, 0x4e, 0x47])], 'cat.png', { type: 'image/png' })
-    await w.find('textarea').trigger('paste', {
-      clipboardData: { items: [{ type: 'image/png', getAsFile: () => file }], getData: () => '' },
+    dispatchPaste(w.get<HTMLElement>('[data-testid="chat-input"]').element, {
+      items: [{ type: 'image/png', getAsFile: () => file }],
+      getData: () => '',
     })
     await flushPromises()
     expect(w.find('.hc-composer__files').exists(), '通用会话粘贴图片仍应进附件（vision 路由不受影响）').toBe(true)
@@ -135,12 +163,23 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
   })
 
   it('★传入 composerImage → RecognizeGuardPanel 打开、GradingJob 创建收到该图、emit 清空', async () => {
+    const attachment = {
+      type: 'image' as const,
+      name: 'homework.png',
+      mime: 'image/png',
+      data: PNG_DATA_URL.split(',')[1]!,
+    }
+    const route = {
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+      capability: 'vision' as const,
+    }
     const w = mount(K12ChatEnhancement, {
       props: {
         agentId: 'k12-tutor-x', agentName: '小明的辅导老师',
         metadata: { 'k12.grade_term': '五年级上' },
         descriptor: K12_VIEW_DESCRIPTOR,
-        composerImage: PNG_DATA_URL,
+        composerImage: { dataUrl: PNG_DATA_URL, attachment, route },
       },
       global: { plugins: [createPinia(), i18n()] },
       attachTo: document.body,
@@ -148,13 +187,76 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     await flushPromises()
     // 识题护栏应自动打开并用该图跑识题（回显护栏出题）
     expect(k12CreateGradingJob, 'composerImage 应触发自动识题（当前 prop 不存在/被忽略=bug）').toHaveBeenCalledWith(
-      expect.objectContaining({ image_base64: PNG_DATA_URL }),
+      expect.objectContaining({
+        image_base64: PNG_DATA_URL,
+        model_snapshot: route,
+      }),
       expect.any(AbortSignal),
     )
+    expect(k12CreateGradingJob).toHaveBeenCalledTimes(1)
     await flushPromises()
     expect(document.querySelector('#hc-chat-scenario-inline [data-testid="rq-item"]'), '识题结果应渲染回显护栏').toBeTruthy()
     // 消费后通知外壳清空，避免重复触发
     expect(w.emitted('update:composerImage'), '消费后应 emit 清空').toBeTruthy()
+  })
+
+  it('同图切换显式模型再次提交时，每个图片事件各创建一次场景 Job', async () => {
+    const attachment = {
+      type: 'image' as const,
+      name: 'homework.png',
+      mime: 'image/png',
+      data: PNG_DATA_URL.split(',')[1]!,
+    }
+    const w = mount(K12ChatEnhancement, {
+      props: {
+        agentId: 'k12-tutor-x',
+        agentName: '小明的辅导老师',
+        metadata: { 'k12.grade_term': '五年级上' },
+        descriptor: K12_VIEW_DESCRIPTOR,
+      },
+      global: { plugins: [createPinia(), i18n()] },
+      attachTo: document.body,
+    })
+
+    await w.setProps({
+      composerImage: {
+        dataUrl: PNG_DATA_URL,
+        attachment,
+        route: {
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          capability: 'vision',
+        },
+      },
+    })
+    await vi.waitFor(() => expect(k12CreateGradingJob).toHaveBeenCalledTimes(1))
+
+    // 模拟父级收到 update:composerImage 后复位，再以相同图片摘要、不同显式模型提交。
+    await w.setProps({ composerImage: '' })
+    await w.setProps({
+      composerImage: {
+        dataUrl: PNG_DATA_URL,
+        attachment,
+        route: {
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.3-codex-spark',
+          capability: 'vision',
+        },
+      },
+    })
+
+    await vi.waitFor(() => expect(k12CreateGradingJob).toHaveBeenCalledTimes(2))
+    expect(k12CreateGradingJob).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        image_base64: PNG_DATA_URL,
+        model_snapshot: {
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.3-codex-spark',
+          capability: 'vision',
+        },
+      }),
+      expect.any(AbortSignal),
+    )
   })
 })
 

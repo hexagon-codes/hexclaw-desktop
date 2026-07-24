@@ -773,6 +773,12 @@ export interface CreatePhotoGradingJobReq {
   subject?: string
   grade?: string
   source_session?: string
+  /** 客户端显式路由请求；服务端仍须重新校验 text+vision 能力后才可冻结。 */
+  model_snapshot?: {
+    provider: string
+    model: string
+    capability: 'vision'
+  }
 }
 /** 逐题确认/修正（空字段 = 该维度按识别结果确认不改）。 */
 export interface GradingQuestionCorrection {

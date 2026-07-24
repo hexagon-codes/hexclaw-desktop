@@ -58,7 +58,8 @@ describe('K12 store · 自动化/入站接线', () => {
     expect(createReq.image_base64).toBe('data:image/png;base64,AAAA')
     expect(createReq.source_kind).toBe('desktop')
     // §4.10 统一幂等键：同（agent, 照片）派生稳定 source_key，同图重投命中同一 Job。
-    expect(createReq.source_key).toBeTruthy()
+    expect(createReq.source_key).toBe('photo-mingming-a37183c0-26')
+    expect(createReq.model_snapshot).toBeUndefined()
     expect(res.jobId).toBe('job-1')
     expect(res.questions[0]?.question).toBe('3.8×3')
     // Polish-2：整卷学科随停点识别产物回传（供护栏预填学科下拉）
@@ -66,6 +67,51 @@ describe('K12 store · 自动化/入站接线', () => {
     expect(res.anchorState).toBe('located')
     // 未命中失败 Job：不触发 retry
     expect(h.retryJobSpy).not.toHaveBeenCalled()
+  })
+
+  it('显式视觉路由原样进入 model_snapshot，并参与同图 source_key 隔离', async () => {
+    h.createJobSpy.mockResolvedValue({
+      created: true,
+      job: { job_id: 'job-route', stage: 'queued', retryable: false },
+    })
+    h.getJobSpy.mockResolvedValue({
+      job_id: 'job-route',
+      stage: 'awaiting_confirmation',
+      confirmation_state: 'pending',
+      anchor_state: 'located',
+      job: { job_id: 'job-route', stage: 'awaiting_confirmation' },
+      recognition: { questions: [], subject: '数学' },
+    })
+    const store = useK12Store()
+    const route = {
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+      capability: 'vision' as const,
+    }
+
+    await store.recognizePhotoJob(
+      'mingming',
+      'data:image/png;base64,AAAA',
+      undefined,
+      'scenario-session',
+      route,
+    )
+
+    const createReq = h.createJobSpy.mock.calls[0]![0] as Record<string, unknown>
+    expect(createReq.model_snapshot).toEqual(route)
+    expect(createReq.source_session).toBe('scenario-session')
+    expect(createReq.source_key).not.toBe('photo-mingming-a37183c0-26')
+
+    h.createJobSpy.mockClear()
+    await store.recognizePhotoJob(
+      'mingming',
+      'data:image/png;base64,AAAA',
+      undefined,
+      'scenario-session',
+      { ...route, model: 'gpt-5.3-codex-spark' },
+    )
+    const otherRouteReq = h.createJobSpy.mock.calls[0]![0] as Record<string, unknown>
+    expect(otherRouteReq.source_key).not.toBe(createReq.source_key)
   })
 
   it('tutorTurn 透传分阶段响应', async () => {

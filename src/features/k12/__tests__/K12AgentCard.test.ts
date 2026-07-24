@@ -112,9 +112,12 @@ describe('K12AgentCard（原型同步·辅导老师卡计数 + 快捷入口）',
       .find((b) => b.text().includes('编辑档案'))!
       .trigger('click')
     expect(document.body.querySelector('.k12pf')).toBeTruthy()
-    // 预填年级（改档模式）——年级下拉走 HcSelect，触发器标签显示当前年级（B2：不再用原生 select）
-    expect(document.body.querySelector('.k12pf__row .hc-select__label')?.textContent).toBe(
-      '五年级上',
-    )
+    // 预填年级与学期（改档模式）——二级联动各自走 HcSelect，持久化契约仍是「五年级上」。
+    expect(
+      document.body.querySelector('[data-testid="k12pf-grade"] .hc-select__label')?.textContent,
+    ).toBe('五年级')
+    expect(
+      document.body.querySelector('[data-testid="k12pf-semester"] .hc-select__label')?.textContent,
+    ).toBe('上学期')
   })
 })
