@@ -17,14 +17,14 @@ import {
 export function useMathOverflowAccessibility(root: Ref<HTMLElement | null>) {
   let resizeObserver: ResizeObserver | undefined
   let animationFrame: number | undefined
+  let disposed = false
 
   const syncAndObserve = () => {
     animationFrame = undefined
     const element = root.value
     if (!element) return
-    const formulas = syncMathOverflowAccessibility(element)
+    syncMathOverflowAccessibility(element)
     resizeObserver?.observe(element)
-    formulas.forEach((formula) => resizeObserver?.observe(formula))
   }
 
   const scheduleSync = () => {
@@ -36,18 +36,19 @@ export function useMathOverflowAccessibility(root: Ref<HTMLElement | null>) {
 
   onMounted(() => {
     if (typeof ResizeObserver !== 'undefined') {
-      resizeObserver = new ResizeObserver(() => {
-        const element = root.value
-        if (element) syncMathOverflowAccessibility(element)
-      })
+      resizeObserver = new ResizeObserver(scheduleSync)
     }
     root.value?.addEventListener('keydown', handleMathOverflowKeydown)
     scheduleSync()
+    void document.fonts?.ready.then(() => {
+      if (!disposed) scheduleSync()
+    })
   })
 
   onUpdated(scheduleSync)
 
   onBeforeUnmount(() => {
+    disposed = true
     root.value?.removeEventListener('keydown', handleMathOverflowKeydown)
     resizeObserver?.disconnect()
     if (animationFrame !== undefined) cancelAnimationFrame(animationFrame)

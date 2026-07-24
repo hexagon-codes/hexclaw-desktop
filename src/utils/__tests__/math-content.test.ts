@@ -45,6 +45,23 @@ describe('math content boundary', () => {
     expect(result.source).toBe('html')
   })
 
+  it('preserves canonical edge whitespace from a rich math projection', () => {
+    const html = '\n  <math><semantics><mi>x</mi>'
+      + '<annotation encoding="application/x-tex">x</annotation></semantics></math>  \n'
+    const result = readMathClipboard(clipboard('', html))
+
+    expect(result).toEqual({ text: '\n  $x$  \n', handled: true, source: 'html' })
+  })
+
+  it('prefers exact canonical plain text over a lossy rich projection', () => {
+    const plain = String.raw`  \(x\)  ` + '\n'
+    const html = '<math><semantics><mi>x</mi>'
+      + '<annotation encoding="application/x-tex">x</annotation></semantics></math>'
+    const result = readMathClipboard(clipboard(plain, html))
+
+    expect(result).toEqual({ text: plain, handled: true, source: 'plain' })
+  })
+
   it('ignores untrusted rich HTML when it has no explicit math semantics', () => {
     const result = readMathClipboard(clipboard('原始安全文本', '<img src=x onerror=alert(1)><b>伪公式</b>'))
     expect(result).toEqual({ text: '原始安全文本', handled: false, source: 'plain' })

@@ -42,6 +42,16 @@ export type PlainMathSegment =
   | { type: 'text'; content: string; source: string }
   | { type: 'math'; content: string; source: string; display: boolean }
 
+/**
+ * A projection segment whose half-open offsets always address the untouched
+ * canonical input. Math `source` is therefore the exact delimiter spelling
+ * from that input, even when `content` was normalized for KaTeX.
+ */
+export type PlainMathSegmentWithSourceSpan = PlainMathSegment & {
+  sourceStart: number
+  sourceEnd: number
+}
+
 const VULGAR_FRACTIONS: Record<string, string> = {
   '½': String.raw`\frac{1}{2}`,
   '⅓': String.raw`\frac{1}{3}`,
@@ -63,7 +73,7 @@ const VULGAR_FRACTIONS: Record<string, string> = {
   '⅒': String.raw`\frac{1}{10}`,
 }
 
-type CodePartition = { code: boolean; content: string }
+type CodePartition = { code: boolean; content: string; start: number; end: number }
 
 function findClosingRun(source: string, from: number, marker: string): number {
   let cursor = from
@@ -83,7 +93,14 @@ function partitionCode(source: string): CodePartition[] {
   let cursor = 0
 
   const pushPlain = (end: number) => {
-    if (end > plainStart) parts.push({ code: false, content: source.slice(plainStart, end) })
+    if (end > plainStart) {
+      parts.push({
+        code: false,
+        content: source.slice(plainStart, end),
+        start: plainStart,
+        end,
+      })
+    }
   }
 
   while (cursor < source.length) {
@@ -108,7 +125,12 @@ function partitionCode(source: string): CodePartition[] {
     if (close < 0) {
       if (isFence) {
         pushPlain(cursor)
-        parts.push({ code: true, content: source.slice(cursor) })
+        parts.push({
+          code: true,
+          content: source.slice(cursor),
+          start: cursor,
+          end: source.length,
+        })
         return parts
       }
       cursor = runEnd
@@ -117,7 +139,12 @@ function partitionCode(source: string): CodePartition[] {
 
     pushPlain(cursor)
     const codeEnd = close + marker.length
-    parts.push({ code: true, content: source.slice(cursor, codeEnd) })
+    parts.push({
+      code: true,
+      content: source.slice(cursor, codeEnd),
+      start: cursor,
+      end: codeEnd,
+    })
     cursor = codeEnd
     plainStart = codeEnd
   }
@@ -130,26 +157,95 @@ function unescapeDoubleEncodedTex(body: string, delimiterEscapes: string): strin
   return delimiterEscapes.length === 2 ? body.replace(/\\\\/g, '\\') : body
 }
 
-function normalizeBareTexWrappers(text: string): string {
+interface SourceMappedText {
+  content: string
+  /** Input offset for each output boundary; length is `content.length + 1`. */
+  sourceBoundaries: number[]
+}
+
+function replaceSourceMapped(
+  mapped: SourceMappedText,
+  pattern: RegExp,
+  replacement: (...match: string[]) => string,
+): SourceMappedText {
+  const output: string[] = []
+  const sourceBoundaries: number[] = [mapped.sourceBoundaries[0] ?? 0]
+  let cursor = 0
+
+  for (const match of mapped.content.matchAll(pattern)) {
+    const start = match.index
+    const matched = match[0]
+    const end = start + matched.length
+
+    output.push(mapped.content.slice(cursor, start))
+    for (let boundary = cursor + 1; boundary <= start; boundary++) {
+      sourceBoundaries.push(mapped.sourceBoundaries[boundary]!)
+    }
+
+    const next = replacement(...match)
+    output.push(next)
+    if (next === matched) {
+      for (let boundary = start + 1; boundary <= end; boundary++) {
+        sourceBoundaries.push(mapped.sourceBoundaries[boundary]!)
+      }
+      cursor = end
+      continue
+    }
+    const sourceStart = mapped.sourceBoundaries[start]!
+    const sourceEnd = mapped.sourceBoundaries[end]!
+    for (let boundary = 1; boundary <= next.length; boundary++) {
+      sourceBoundaries.push(boundary === next.length ? sourceEnd : sourceStart)
+    }
+    cursor = end
+  }
+
+  output.push(mapped.content.slice(cursor))
+  for (let boundary = cursor + 1; boundary <= mapped.content.length; boundary++) {
+    sourceBoundaries.push(mapped.sourceBoundaries[boundary]!)
+  }
+
+  return { content: output.join(''), sourceBoundaries }
+}
+
+function normalizeMathTextWithSourceMap(text: string): SourceMappedText {
+  let mapped: SourceMappedText = {
+    content: text,
+    sourceBoundaries: Array.from({ length: text.length + 1 }, (_, index) => index),
+  }
+  mapped = replaceSourceMapped(
+    mapped,
+    /(\\{1,2})\[([\s\S]*?)\1\]/g,
+    (_all, slashes: string, body: string) => {
+      const tex = unescapeDoubleEncodedTex(body, slashes).trim()
+      return tex ? `$$\n${tex}\n$$` : _all
+    },
+  )
+  mapped = replaceSourceMapped(
+    mapped,
+    /(\\{1,2})\(([^\n]*?)\1\)/g,
+    (_all, slashes: string, body: string) => {
+      const tex = unescapeDoubleEncodedTex(body, slashes).trim()
+      return tex ? `$${tex}$` : _all
+    },
+  )
   const explicitTex = String.raw`\\(?:dfrac|tfrac|frac)\{[^{}\n]+\}\{[^{}\n]+\}|\\sqrt(?:\[[^\]\n]+\])?\{[^{}\n]+\}`
-  return text.replace(new RegExp(String.raw`([([])\s*(${explicitTex})\s*([)\]])`, 'g'), (all, open: string, tex: string, close: string) => {
-    if ((open === '(' && close !== ')') || (open === '[' && close !== ']')) return all
-    return `$${tex}$`
-  })
+  mapped = replaceSourceMapped(
+    mapped,
+    new RegExp(String.raw`([([])\s*(${explicitTex})\s*([)\]])`, 'g'),
+    (all, open: string, tex: string, close: string) => {
+      if ((open === '(' && close !== ')') || (open === '[' && close !== ']')) return all
+      return `$${tex}$`
+    },
+  )
+  return replaceSourceMapped(
+    mapped,
+    /[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅐⅛⅜⅝⅞⅑⅒]/g,
+    (fraction) => `$${VULGAR_FRACTIONS[fraction]}$`,
+  )
 }
 
 function normalizeMathText(text: string): string {
-  const normalizedDelimiters = text
-    .replace(/(\\{1,2})\[([\s\S]*?)\1\]/g, (_all, slashes: string, body: string) => {
-      const tex = unescapeDoubleEncodedTex(body, slashes).trim()
-      return tex ? `$$\n${tex}\n$$` : _all
-    })
-    .replace(/(\\{1,2})\(([^\n]*?)\1\)/g, (_all, slashes: string, body: string) => {
-      const tex = unescapeDoubleEncodedTex(body, slashes).trim()
-      return tex ? `$${tex}$` : _all
-    })
-  return normalizeBareTexWrappers(normalizedDelimiters)
-    .replace(/[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅐⅛⅜⅝⅞⅑⅒]/g, (fraction) => `$${VULGAR_FRACTIONS[fraction]}$`)
+  return normalizeMathTextWithSourceMap(text).content
 }
 
 /**
@@ -234,6 +330,7 @@ const BLOCK_ELEMENTS = new Set([
   'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr',
   'li', 'main', 'nav', 'ol', 'p', 'pre', 'section', 'table', 'tr', 'ul',
 ])
+const IGNORED_HTML_ELEMENTS = new Set(['script', 'style', 'noscript', 'iframe', 'object'])
 
 function htmlNodeText(node: Node): string {
   if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
@@ -241,7 +338,7 @@ function htmlNodeText(node: Node): string {
   const element = node as Element
   const tag = element.localName.toLowerCase()
   if (tag === 'br') return '\n'
-  if (tag === 'script' || tag === 'style' || tag === 'noscript' || tag === 'iframe' || tag === 'object') return ''
+  if (IGNORED_HTML_ELEMENTS.has(tag)) return ''
   const content = Array.from(element.childNodes).map(htmlNodeText).join('')
   return BLOCK_ELEMENTS.has(tag) ? `${content}\n` : content
 }
@@ -266,7 +363,12 @@ function replaceHtmlFractions(document: Document): boolean {
 
 function mathAwareTextFromHtml(html: string): { text: string; hasMath: boolean } {
   if (!html || typeof DOMParser === 'undefined') return { text: '', hasMath: false }
-  const document = new DOMParser().parseFromString(html, 'text/html')
+  const boundaryAttribute = 'data-hc-clipboard-boundary'
+  const document = new DOMParser().parseFromString(
+    `<span ${boundaryAttribute}></span>${html}<span ${boundaryAttribute}></span>`,
+    'text/html',
+  )
+  document.body.querySelectorAll(`[${boundaryAttribute}]`).forEach((node) => node.remove())
   let hasMath = replaceHtmlFractions(document)
 
   const replaceMath = (element: Element, replacementTarget: Element = element) => {
@@ -286,12 +388,18 @@ function mathAwareTextFromHtml(html: string): { text: string; hasMath: boolean }
     if (document.body.contains(math)) replaceMath(math)
   }
 
-  const text = htmlNodeText(document.body)
+  let text = htmlNodeText(document.body)
     .split('\u00a0').join(' ')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n[ \t]+/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  const visibleBodyChildren = Array.from(document.body.children)
+    .filter((element) => !IGNORED_HTML_ELEMENTS.has(element.localName.toLowerCase()))
+  const lastBodyChild = visibleBodyChildren[visibleBodyChildren.length - 1]
+  if (
+    lastBodyChild
+    && BLOCK_ELEMENTS.has(lastBodyChild.localName.toLowerCase())
+    && text.endsWith('\n')
+  ) {
+    text = text.slice(0, -1)
+  }
   return { text, hasMath }
 }
 
@@ -303,6 +411,12 @@ export function readMathClipboard(data: ClipboardDataLike | null | undefined): M
   const html = data.getData('text/html') ?? ''
   const rich = mathAwareTextFromHtml(html)
   if (rich.hasMath && rich.text) {
+    const plainAlreadyCarriesMath = plainMathSegments(normalizedPlain).some(
+      (segment) => segment.type === 'math',
+    )
+    if (plainAlreadyCarriesMath) {
+      return { text: normalizePastedText(plain), handled: true, source: 'plain' }
+    }
     return { text: normalizeMathMarkdown(normalizePastedText(rich.text)), handled: true, source: 'html' }
   }
   if (!plain) return { text: '', handled: false, source: 'none' }
@@ -331,9 +445,39 @@ function pushText(segments: PlainMathSegment[], content: string) {
 }
 
 function parseDollarMath(source: string): PlainMathSegment[] {
-  const segments: PlainMathSegment[] = []
+  return parseDollarMathWithOffsets(source).map((segment) => (
+    segment.type === 'math'
+      ? {
+          type: 'math',
+          content: segment.content,
+          source: segment.source,
+          display: segment.display,
+        }
+      : {
+          type: 'text',
+          content: segment.content,
+          source: segment.source,
+        }
+  ))
+}
+
+type IndexedPlainMathSegment = PlainMathSegment & { start: number; end: number }
+
+function parseDollarMathWithOffsets(source: string): IndexedPlainMathSegment[] {
+  const segments: IndexedPlainMathSegment[] = []
   let textStart = 0
   let cursor = 0
+
+  const pushIndexedText = (start: number, end: number) => {
+    if (end <= start) return
+    segments.push({
+      type: 'text',
+      content: source.slice(start, end),
+      source: source.slice(start, end),
+      start,
+      end,
+    })
+  }
 
   while (cursor < source.length) {
     if (source[cursor] !== '$' || isEscaped(source, cursor)) {
@@ -348,7 +492,9 @@ function parseDollarMath(source: string): PlainMathSegment[] {
       continue
     }
     let close = source.indexOf(delimiter, contentStart)
-    while (close >= 0 && isEscaped(source, close)) close = source.indexOf(delimiter, close + delimiter.length)
+    while (close >= 0 && isEscaped(source, close)) {
+      close = source.indexOf(delimiter, close + delimiter.length)
+    }
     if (close < 0 || close === contentStart) {
       cursor += delimiter.length
       continue
@@ -362,14 +508,21 @@ function parseDollarMath(source: string): PlainMathSegment[] {
       }
     }
 
-    pushText(segments, source.slice(textStart, cursor))
-    const content = source.slice(contentStart, close)
-    segments.push({ type: 'math', content, source: source.slice(cursor, close + delimiter.length), display })
-    cursor = close + delimiter.length
+    pushIndexedText(textStart, cursor)
+    const end = close + delimiter.length
+    segments.push({
+      type: 'math',
+      content: source.slice(contentStart, close),
+      source: source.slice(cursor, end),
+      display,
+      start: cursor,
+      end,
+    })
+    cursor = end
     textStart = cursor
   }
 
-  pushText(segments, source.slice(textStart))
+  pushIndexedText(textStart, source.length)
   return segments
 }
 
@@ -384,6 +537,53 @@ export function plainMathSegments(source: string): PlainMathSegment[] {
     for (const segment of parseDollarMath(normalizeMathText(part.content))) {
       if (segment.type === 'text') pushText(segments, segment.content)
       else segments.push(segment)
+    }
+  }
+  return segments
+}
+
+/**
+ * Tokenize for source-preserving editors. Rendering content follows the same
+ * normalization policy as `plainMathSegments`, while every source/span points
+ * into the original canonical string rather than the normalized projection.
+ */
+export function plainMathSegmentsWithSourceSpans(
+  source: string,
+): PlainMathSegmentWithSourceSpan[] {
+  const segments: PlainMathSegmentWithSourceSpan[] = []
+  for (const part of partitionCode(source)) {
+    if (part.code) {
+      segments.push({
+        type: 'text',
+        content: part.content,
+        source: part.content,
+        sourceStart: part.start,
+        sourceEnd: part.end,
+      })
+      continue
+    }
+
+    const normalized = normalizeMathTextWithSourceMap(part.content)
+    for (const segment of parseDollarMathWithOffsets(normalized.content)) {
+      const sourceStart = part.start + normalized.sourceBoundaries[segment.start]!
+      const sourceEnd = part.start + normalized.sourceBoundaries[segment.end]!
+      const canonicalSlice = source.slice(sourceStart, sourceEnd)
+      segments.push({
+        ...(segment.type === 'math'
+          ? {
+              type: 'math' as const,
+              content: segment.content,
+              source: canonicalSlice,
+              display: segment.display,
+            }
+          : {
+              type: 'text' as const,
+              content: canonicalSlice,
+              source: canonicalSlice,
+            }),
+        sourceStart,
+        sourceEnd,
+      })
     }
   }
   return segments

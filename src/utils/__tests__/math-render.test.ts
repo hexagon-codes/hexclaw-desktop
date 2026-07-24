@@ -4,6 +4,13 @@ import { isKatexParseError, renderKatexToHtml } from '../math-render'
 describe('shared math-render adapter', () => {
   it('统一应用可访问输出、安全尺寸上限与 mhchem 扩展', () => {
     const fraction = renderKatexToHtml(String.raw`\frac{3}{4}`, false)
+    const fractionProbe = document.createElement('div')
+    fractionProbe.innerHTML = fraction
+    expect(
+      fractionProbe.querySelector(
+        ':scope > .hc-math-viewport.hc-math-viewport--inline > .katex',
+      ),
+    ).not.toBeNull()
     expect(fraction).toContain('katex-mathml')
     expect(fraction).toContain('katex-html')
 
@@ -17,6 +24,14 @@ describe('shared math-render adapter', () => {
     const chemistry = renderKatexToHtml(String.raw`\ce{H2O}`, false)
     expect(chemistry).toContain('<mi mathvariant="normal">H</mi>')
     expect(chemistry).toContain('<mi mathvariant="normal">O</mi>')
+
+    const display = document.createElement('div')
+    display.innerHTML = renderKatexToHtml(String.raw`\frac{3}{4}`, true)
+    expect(
+      display.querySelector(
+        ':scope > .hc-math-viewport.hc-math-viewport--display > .katex-display',
+      ),
+    ).not.toBeNull()
   })
 
   it('将 ParseError 作为可判定错误交还调用边界，不生成伪成功 HTML', () => {

@@ -239,6 +239,18 @@ describe('数学公式架构防漂移', () => {
     )
   })
 
+  it('主 ChatInput 复用 MessageText editable，不得另建第三套公式 renderer', () => {
+    const chatInput = byPath.get('components/chat/ChatInput.vue')
+    expect(chatInput).toBeDefined()
+    expectCanonicalComponent(
+      chatInput!,
+      'MessageText',
+      'components/chat/MessageText.vue',
+    )
+    expect(chatInput!.source).toMatch(/<MessageText[\s\S]*?\beditable\b/)
+    expect(chatInput!.source).not.toMatch(/\b(?:katex\.render|renderKatexToHtml)\s*\(/)
+  })
+
   it('Chat、QuickChat 与现有 K12 数学展示面均复用共享渲染边界', () => {
     for (const path of ['views/ChatView.vue', 'views/QuickChatView.vue']) {
       const file = byPath.get(path)
