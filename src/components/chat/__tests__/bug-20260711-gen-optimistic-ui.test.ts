@@ -12,7 +12,7 @@
  * 本测试在未修复代码上 FAIL（无 generation:start 事件、输入框滞留），修复后 PASS。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -62,8 +62,25 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  voiceRefs.api = { isListening: ref(false), transcript: ref(''), isSupported: false, toggleListening: vi.fn() }
+  voiceRefs.api = {
+    isListening: ref(false),
+    transcript: ref(''),
+    error: ref(''),
+    isSupported: false,
+    toggleListening: vi.fn(),
+  }
 })
+
+const editor = (w: VueWrapper) => w.get<HTMLElement>('[data-testid="chat-input"]')
+const canonicalSource = (w: VueWrapper) =>
+  editor(w).attributes('data-canonical-source') ?? ''
+
+async function setDraft(w: VueWrapper, value: string) {
+  const field = editor(w)
+  field.element.textContent = value
+  await field.trigger('input')
+  await w.vm.$nextTick()
+}
 
 describe('BUG-20260711-C：媒体生成必须乐观上屏（发送即 start 事件 + 清空输入框）', () => {
   it('★图像模式：点击发送后、generateImage 未完成时——已 emit generation:start 且输入框已清空', async () => {
@@ -71,7 +88,7 @@ describe('BUG-20260711-C：媒体生成必须乐观上屏（发送即 start 事�
     imagegenMock.generateImage.mockReturnValue(gen.promise)
     const w = await mountGen({ supportsImageGen: true })
 
-    await w.find('textarea').setValue('生成一个美女图片')
+    await setDraft(w, '生成一个美女图片')
     await w.find('.hc-composer__send').trigger('click')
     await flushPromises() // 事件派发/DOM 更新（生成 promise 仍挂起）
 
@@ -79,7 +96,7 @@ describe('BUG-20260711-C：媒体生成必须乐观上屏（发送即 start 事�
     expect(w.emitted('generation:start'), 'generation:start 必须在生成完成前发出').toBeTruthy()
     expect(w.emitted('generation:start')![0]).toEqual(['image', '生成一个美女图片'])
     // 核心断言 2：提示词不滞留输入框（bug 症状：卡在对话框里）
-    expect((w.find('textarea').element as HTMLTextAreaElement).value).toBe('')
+    expect(canonicalSource(w)).toBe('')
 
     gen.resolve({ provider: 'p', model: 'gen-model', images: [], usage_ms: 1 })
     await flushPromises()
@@ -92,13 +109,13 @@ describe('BUG-20260711-C：媒体生成必须乐观上屏（发送即 start 事�
     videogenMock.pollUntilDone.mockReturnValue(poll.promise)
     const w = await mountGen({ supportsVideoGen: true })
 
-    await w.find('textarea').setValue('生成一个美女跳舞的视频')
+    await setDraft(w, '生成一个美女跳舞的视频')
     await w.find('.hc-composer__send').trigger('click')
     await flushPromises()
 
     expect(w.emitted('generation:start'), 'generation:start 必须在轮询完成前发出').toBeTruthy()
     expect(w.emitted('generation:start')![0]).toEqual(['video', '生成一个美女跳舞的视频'])
-    expect((w.find('textarea').element as HTMLTextAreaElement).value).toBe('')
+    expect(canonicalSource(w)).toBe('')
 
     poll.resolve({ status: 'success', video_url: 'https://example.com/v.mp4' })
     await flushPromises()
@@ -108,7 +125,7 @@ describe('BUG-20260711-C：媒体生成必须乐观上屏（发送即 start 事�
   it('失败路径：生成报错 → emit generation:error（父级把占位置为失败态），不吞错', async () => {
     imagegenMock.generateImage.mockRejectedValue(new Error('provider down'))
     const w = await mountGen({ supportsImageGen: true })
-    await w.find('textarea').setValue('x')
+    await setDraft(w, 'x')
     await w.find('.hc-composer__send').trigger('click')
     await flushPromises()
     expect(w.emitted('generation:error')).toBeTruthy()

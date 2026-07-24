@@ -113,6 +113,22 @@ describe('useChatActions', () => {
     expect(store.messages).toHaveLength(0)
   })
 
+  it('confirmEdit preserves canonical leading and trailing whitespace byte-for-byte', async () => {
+    const store = makeMockStore()
+    const { handleEdit, confirmEdit, editingText } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+    )
+    handleEdit(0)
+    const canonical = '\n  题目 $2\\frac{3}{4}$' + '  \n'
+    editingText.value = canonical
+
+    await confirmEdit('u1')
+
+    expect(mockSend).toHaveBeenCalledWith(canonical)
+  })
+
   // ── BUG-20260625：会话上传图片→编辑→提交，图片丢失 ──
   // 根因：confirmEdit/handleRetry 重发只带 text，丢掉原用户消息 metadata.attachments（图片）。
   const IMG = { type: 'image', name: 'photo.png', mime: 'image/png', data: 'data:image/png;base64,AAAA' }

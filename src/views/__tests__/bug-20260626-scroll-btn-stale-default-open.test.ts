@@ -22,7 +22,11 @@ import zhCN from '@/i18n/locales/zh-CN'
  */
 
 const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
-  mockRoute: { query: {} as Record<string, string>, path: '/chat', params: {} as Record<string, string> },
+  mockRoute: {
+    query: {} as Record<string, string>,
+    path: '/chat',
+    params: {} as Record<string, string>,
+  },
   mockRouterPush: vi.fn(),
   mockRouterReplace: vi.fn(),
 }))
@@ -36,36 +40,48 @@ vi.mock('@/api/websocket', () => ({
   hexclawWS: {
     isConnected: vi.fn().mockReturnValue(false),
     connect: vi.fn().mockRejectedValue(new Error('test')),
-    clearCallbacks: vi.fn(), clearStreamCallbacks: vi.fn(),
+    clearCallbacks: vi.fn(),
+    clearStreamCallbacks: vi.fn(),
     onChunk: vi.fn().mockReturnValue(() => {}),
     onReply: vi.fn().mockReturnValue(() => {}),
     onError: vi.fn().mockReturnValue(() => {}),
     onApprovalRequest: vi.fn().mockReturnValue(() => {}),
     onMemorySaved: vi.fn().mockReturnValue(() => {}),
-    sendMessage: vi.fn(), sendRaw: vi.fn(), triggerError: vi.fn(), sendApprovalResponse: vi.fn(),
+    sendMessage: vi.fn(),
+    sendRaw: vi.fn(),
+    triggerError: vi.fn(),
+    sendApprovalResponse: vi.fn(),
   },
 }))
 vi.mock('@/api/agents', () => ({
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
-  createRole: vi.fn(), updateRole: vi.fn(), deleteRole: vi.fn(),
+  createRole: vi.fn(),
+  updateRole: vi.fn(),
+  deleteRole: vi.fn(),
 }))
 vi.mock('@/api/knowledge', () => ({
   searchKnowledge: vi.fn().mockResolvedValue({ result: [] }),
   getDocuments: vi.fn().mockResolvedValue({ documents: [], total: 0 }),
-  addDocument: vi.fn(), deleteDocument: vi.fn(), reindexDocument: vi.fn(), uploadDocument: vi.fn(),
+  addDocument: vi.fn(),
+  deleteDocument: vi.fn(),
+  reindexDocument: vi.fn(),
+  uploadDocument: vi.fn(),
   isKnowledgeUploadEndpointMissing: vi.fn().mockReturnValue(false),
   isKnowledgeUploadUnsupportedFormat: vi.fn().mockReturnValue(false),
 }))
 vi.mock('@/api/config', () => ({
   getLLMConfig: vi.fn().mockResolvedValue({
-    default: 'openai', providers: {},
+    default: 'openai',
+    providers: {},
     routing: { enabled: false, strategy: 'cost-aware' },
     cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10000 },
   }),
   updateLLMConfig: vi.fn(),
 }))
 vi.mock('@/api/ollama', () => ({
-  getOllamaStatus: vi.fn().mockResolvedValue({ running: false, associated: false, model_count: 0, models: [] }),
+  getOllamaStatus: vi
+    .fn()
+    .mockResolvedValue({ running: false, associated: false, model_count: 0, models: [] }),
 }))
 vi.mock('@/utils/secure-store', () => ({
   saveSecureValue: vi.fn().mockResolvedValue(undefined),
@@ -79,7 +95,9 @@ vi.mock('@/utils/file-parser', () => ({
 vi.mock('@/api/desktop', () => ({ setClipboard: vi.fn().mockResolvedValue(undefined) }))
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() { return null }
+    async get() {
+      return null
+    }
     async set() {}
     async save() {}
     async delete() {}
@@ -107,7 +125,9 @@ vi.mock('vue-router', () => ({
 
 function createTestI18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': zhCN, zh: zhCN },
   })
 }
@@ -121,7 +141,10 @@ function mountChatView() {
       plugins: [pinia, i18n],
       stubs: {
         SessionList: { template: '<div data-testid="session-list" />' },
-        MarkdownRenderer: { props: ['content'], template: '<div class="markdown-stub">{{ content }}</div>' },
+        MarkdownRenderer: {
+          props: ['content'],
+          template: '<div class="markdown-stub">{{ content }}</div>',
+        },
         MessageActions: { template: '<div />' },
         ChatSearchDialog: { template: '<div />' },
         ChatExportMenu: { template: '<div />' },
@@ -134,7 +157,10 @@ function mountChatView() {
 }
 
 /** 给 jsdom 元素打上可控的滚动几何（jsdom 默认全 0、无布局）。 */
-function setGeometry(el: HTMLElement, g: { scrollHeight: number; clientHeight: number; scrollTop: number }) {
+function setGeometry(
+  el: HTMLElement,
+  g: { scrollHeight: number; clientHeight: number; scrollTop: number },
+) {
   Object.defineProperty(el, 'scrollHeight', { configurable: true, value: g.scrollHeight })
   Object.defineProperty(el, 'clientHeight', { configurable: true, value: g.clientHeight })
   Object.defineProperty(el, 'scrollTop', { configurable: true, writable: true, value: g.scrollTop })
@@ -146,16 +172,24 @@ let capturedResizeCb: (() => void) | null = null
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
   ;(globalThis as Record<string, unknown>).ResizeObserver = class {
-    constructor(cb: () => void) { capturedResizeCb = cb }
-    observe() {}
+    constructor(private readonly cb: () => void) {}
+    observe(target: Element) {
+      // ChatView 现在还会为数学公式创建独立 ResizeObserver；只捕获消息容器这一条，
+      // 避免“最后创建的 observer”让本测试误驱动到无关回调。
+      if (target.classList.contains('hc-chat__messages')) capturedResizeCb = this.cb
+    }
     unobserve() {}
     disconnect() {}
   }
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
     value: vi.fn().mockImplementation((query: string) => ({
-      matches: query === '(prefers-color-scheme: dark)', media: query, onchange: null,
-      addEventListener: vi.fn(), removeEventListener: vi.fn(), dispatchEvent: vi.fn(),
+      matches: query === '(prefers-color-scheme: dark)',
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
     })),
   })
 })
@@ -223,7 +257,10 @@ describe('BUG-20260626: 打开会话默认在底部时不残留下翻箭头', ()
     await flushPromises()
     await new Promise((r) => setTimeout(r, 130))
 
-    const vm = wrapper.vm as unknown as { messagesContainerRef: HTMLElement; showScrollToBottom: boolean }
+    const vm = wrapper.vm as unknown as {
+      messagesContainerRef: HTMLElement
+      showScrollToBottom: boolean
+    }
     const el = vm.messagesContainerRef
     setGeometry(el, { scrollHeight: 2000, clientHeight: 500, scrollTop: 0 })
     await wrapper.find('.hc-chat__messages').trigger('scroll')

@@ -7,7 +7,13 @@ import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
 import { getSessionAgent, getSessionAgentTombstone } from '@/stores/session-agent-binding'
 import { scenarioRegistry } from '@/shell/scenario/registry'
-import { listSessions, searchMessages, getSessionBranches, updateSessionTitle as apiUpdateSessionTitle, type SessionMessageSearchResult } from '@/api/chat'
+import {
+  listSessions,
+  searchMessages,
+  getSessionBranches,
+  updateSessionTitle as apiUpdateSessionTitle,
+  type SessionMessageSearchResult,
+} from '@/api/chat'
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -82,7 +88,8 @@ async function refreshBranchAvailability(sessionId: string) {
 // 避免首次渲染与点击恢复使用两套规则而产生“点前无图标、点后才出现”的漂移。
 function resolveSessionAgent(s: ChatSession) {
   const raw = (s.title ?? '').trim()
-  const candidate = (s.agent_id ?? '').trim() || getSessionAgent(s.id) || (s.agent_name ?? '').trim() || raw
+  const candidate =
+    (s.agent_id ?? '').trim() || getSessionAgent(s.id) || (s.agent_name ?? '').trim() || raw
   const config = candidate ? agentsStore.findAgentByNameOrDisplay(candidate) : undefined
   return {
     agentId: config?.name ?? candidate,
@@ -109,11 +116,6 @@ function isPinnedSession(s: ChatSession): boolean {
 // 会话可读标题：场景会话 title 默认 = 原始 agent id（如 k12-tutor-KKE5v8zQ），家长看不懂。
 // 该会话绑定的 Agent 三路解析：localStorage 绑定 > 后端 agent_name > 标题本身即 agent 内部名
 // （深链建会话时把标题设为 role=agent 名）。命中且标题未被手动改名时显示 display_name（P0-20260708）。
-// 会话绑定的 Agent 统一解析结果。
-function boundAgentOf(s: ChatSession) {
-  return resolveSessionAgent(s).config
-}
-
 // 会话列表对齐原型（app.html .cs-item）：智能体会话的身份 = **标题内联 emoji 前缀**（如「🎓 小明的辅导老师
 // · 五年级」），而非独立头像框或 meta 里的智能体名。通用会话（无专属 agent avatar）不加前缀。
 function sessionTitle(s: ChatSession): string {
@@ -137,9 +139,10 @@ function sessionTitle(s: ChatSession): string {
     if (orphanByAssoc || orphanByPattern) return t('chat.orphanAgentSession')
   }
   // 标题为空 / 恰为 agent 内部名（未手动改名）→ 显示可读名；改过名则保留自定义标题
-  const base = display && (!raw || raw === boundName || raw === cfg?.name)
-    ? display
-    : raw || t('chat.newSessionDefault')
+  const base =
+    display && (!raw || raw === boundName || raw === cfg?.name)
+      ? display
+      : raw || t('chat.newSessionDefault')
   // 专属智能体（带 avatar emoji）在标题前内联图标（原型做法）
   return avatar ? `${avatar} ${base}` : base
 }
@@ -155,7 +158,9 @@ onMounted(() => {
   try {
     const raw = localStorage.getItem('hexclaw_pinned_sessions')
     if (raw) pinnedIds.value = new Set(JSON.parse(raw))
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 })
 
 function savePins() {
@@ -191,15 +196,17 @@ watch(
     if (!sid) return
     await nextTick()
     // CSS.escape 兜底（jsdom 无该全局）：会话 id 只需转义引号/反斜杠即可安全进属性选择器
-    const escaped = typeof CSS !== 'undefined' && CSS.escape
-      ? CSS.escape(sid)
-      : sid.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-    const el = document.querySelector<HTMLElement>(`.hc-sessions__item[data-session-id="${escaped}"]`)
+    const escaped =
+      typeof CSS !== 'undefined' && CSS.escape
+        ? CSS.escape(sid)
+        : sid.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+    const el = document.querySelector<HTMLElement>(
+      `.hc-sessions__item[data-session-id="${escaped}"]`,
+    )
     el?.scrollIntoView?.({ block: 'nearest' }) // 方法级可选：jsdom 元素无 scrollIntoView 实现
   },
   { immediate: true },
 )
-
 
 const sessionMenuItems = computed<ContextMenuItem[]>(() => {
   const session = ctxSessionId.value
@@ -211,7 +218,11 @@ const sessionMenuItems = computed<ContextMenuItem[]>(() => {
     { id: 'rename', label: t('chat.rename'), icon: Pencil },
     {
       id: 'pin',
-      label: isScenarioPinned ? t('chat.scenarioPinned') : (isPinned ? t('chat.unpin') : t('chat.pin')),
+      label: isScenarioPinned
+        ? t('chat.scenarioPinned')
+        : isPinned
+          ? t('chat.unpin')
+          : t('chat.pin'),
       icon: isPinned ? PinOff : Pin,
       disabled: isScenarioPinned,
     },
@@ -219,8 +230,7 @@ const sessionMenuItems = computed<ContextMenuItem[]>(() => {
       id: 'branches',
       label: t('chat.viewBranches', '查看分支'),
       icon: GitBranch,
-      disabled:
-        !session || branchAvailability.value.get(session.id) !== 'available',
+      disabled: !session || branchAvailability.value.get(session.id) !== 'available',
     },
     { id: 'sep1', label: '', separator: true },
     { id: 'delete', label: t('common.delete'), icon: Trash2, danger: true, shortcut: '⌫' },
@@ -237,8 +247,8 @@ const mergedSessions = computed<ChatSession[]>(() => {
 
 const sortedSessions = computed(() => {
   const list = mergedSessions.value
-  const pinned = list.filter(s => isPinnedSession(s))
-  const unpinned = list.filter(s => !isPinnedSession(s))
+  const pinned = list.filter((s) => isPinnedSession(s))
+  const unpinned = list.filter((s) => !isPinnedSession(s))
   return [...pinned, ...unpinned]
 })
 
@@ -320,30 +330,41 @@ const sessionSections = computed<SessionSection[]>(() => {
     earlier: [],
   }
   for (const session of unpinned) {
-    buckets[getSessionDateBucket(session.updated_at) as 'today' | 'yesterday' | 'earlier'].push(session)
+    buckets[getSessionDateBucket(session.updated_at) as 'today' | 'yesterday' | 'earlier'].push(
+      session,
+    )
   }
 
-  if (buckets.today.length > 0) sections.push({ key: 'today', label: t('chat.todaySection'), sessions: buckets.today })
-  if (buckets.yesterday.length > 0) sections.push({ key: 'yesterday', label: t('chat.yesterdaySection'), sessions: buckets.yesterday })
-  if (buckets.earlier.length > 0) sections.push({ key: 'earlier', label: t('chat.earlierSection'), sessions: buckets.earlier })
+  if (buckets.today.length > 0)
+    sections.push({ key: 'today', label: t('chat.todaySection'), sessions: buckets.today })
+  if (buckets.yesterday.length > 0)
+    sections.push({
+      key: 'yesterday',
+      label: t('chat.yesterdaySection'),
+      sessions: buckets.yesterday,
+    })
+  if (buckets.earlier.length > 0)
+    sections.push({ key: 'earlier', label: t('chat.earlierSection'), sessions: buckets.earlier })
 
   return sections
 })
 
 const searchSections = computed<SearchSessionSection[]>(() => {
   if (!filterQuery.value.trim()) return []
-  return [{
-    key: 'search-results',
-    label: t('chat.searchResultsSection'),
-    sessions: searchSessionItems.value,
-  }]
+  return [
+    {
+      key: 'search-results',
+      label: t('chat.searchResultsSection'),
+      sessions: searchSessionItems.value,
+    },
+  ]
 })
 
-const showEmptyState = computed(() => (
+const showEmptyState = computed(() =>
   filterQuery.value.trim()
     ? searchSessionItems.value.length === 0 && !searchingHistory.value
-    : sortedSessions.value.length === 0
-))
+    : sortedSessions.value.length === 0,
+)
 
 function formatDate(ts: string): string {
   return formatTime(ts, true)
@@ -396,7 +417,8 @@ const confirmDeleteId = ref<string | null>(null)
 const confirmDeleteTitle = computed(() => {
   const sid = confirmDeleteId.value
   if (!sid) return ''
-  const session = chatStore.sessions.find(s => s.id === sid) ?? mergedSessions.value.find(s => s.id === sid)
+  const session =
+    chatStore.sessions.find((s) => s.id === sid) ?? mergedSessions.value.find((s) => s.id === sid)
   return session?.title || t('chat.newSessionDefault')
 })
 
@@ -444,12 +466,16 @@ async function performDeleteSession(sessionId: string) {
 function startRename(sessionId: string) {
   // 分页加载的会话只在 extraSessions 里、不在 chatStore.sessions，需走 mergedSessions 兜底，
   // 否则「加载更多」得到的旧会话双击/右键重命名时 startRename 直接 return（输入框不弹）。
-  const session = chatStore.sessions.find(s => s.id === sessionId) ?? mergedSessions.value.find(s => s.id === sessionId)
+  const session =
+    chatStore.sessions.find((s) => s.id === sessionId) ??
+    mergedSessions.value.find((s) => s.id === sessionId)
   if (!session) return
   renamingId.value = sessionId
   renameValue.value = session.title || t('chat.newSessionDefault')
   nextTick(() => {
-    const input = Array.isArray(renameInputRef.value) ? renameInputRef.value[0] : renameInputRef.value
+    const input = Array.isArray(renameInputRef.value)
+      ? renameInputRef.value[0]
+      : renameInputRef.value
     input?.focus()
     input?.select()
   })
@@ -466,7 +492,8 @@ async function commitRename() {
     await apiUpdateSessionTitle(sid, newTitle)
     if (renameRequestSeq.get(sid) !== requestSeq) return
     // 同 startRename：extraSessions（分页加载）的标题也要本地刷新，否则改名成功但 UI 不变。
-    const session = chatStore.sessions.find(s => s.id === sid) ?? mergedSessions.value.find(s => s.id === sid)
+    const session =
+      chatStore.sessions.find((s) => s.id === sid) ?? mergedSessions.value.find((s) => s.id === sid)
     if (session) session.title = newTitle
   } catch (e) {
     console.error('[SessionList] rename failed:', e)
@@ -638,15 +665,17 @@ onUnmounted(() => {
       <Search :size="14" class="hc-sessions__search-icon" />
       <HcClearableField>
         <input
-        v-model="filterQuery"
-        class="hc-sessions__search-input"
-        :placeholder="t('chat.filterSessions')"
-      />
+          v-model="filterQuery"
+          class="hc-sessions__search-input"
+          :placeholder="t('chat.filterSessions')"
+        />
       </HcClearableField>
     </div>
 
     <template v-if="filterQuery.trim()">
-      <div v-if="searchingHistory" class="hc-sessions__searching">{{ t('chat.searchingHistory') }}</div>
+      <div v-if="searchingHistory" class="hc-sessions__searching">
+        {{ t('chat.searchingHistory') }}
+      </div>
       <template v-for="section in searchSections" :key="section.key">
         <div class="hc-sessions__section">
           <div class="hc-sessions__section-label">{{ section.label }}</div>
@@ -673,13 +702,13 @@ onUnmounted(() => {
             <div class="hc-sessions__content">
               <HcClearableField v-if="renamingId === item.session.id">
                 <input
-                ref="renameInputRef"
-                v-model="renameValue"
-                class="hc-sessions__rename-input"
-                @blur="commitRename"
-                @keydown="handleRenameKeydown"
-                @click.stop
-              />
+                  ref="renameInputRef"
+                  v-model="renameValue"
+                  class="hc-sessions__rename-input"
+                  @blur="commitRename"
+                  @keydown="handleRenameKeydown"
+                  @click.stop
+                />
               </HcClearableField>
               <div v-else class="hc-sessions__title-row">
                 <!-- BUG-20260703 P2-1：分支会话可辨识（由「由此分叉」创建） -->
@@ -698,8 +727,12 @@ onUnmounted(() => {
                 />
               </div>
               <div v-if="renamingId !== item.session.id" class="hc-sessions__meta">
-                <span v-if="item.snippet" class="hc-sessions__snippet">{{ formatSearchSnippet(item.snippet) }}</span>
-                <span v-else class="hc-sessions__time">{{ formatDate(item.session.updated_at) }}</span>
+                <span v-if="item.snippet" class="hc-sessions__snippet">{{
+                  formatSearchSnippet(item.snippet)
+                }}</span>
+                <span v-else class="hc-sessions__time">{{
+                  formatDate(item.session.updated_at)
+                }}</span>
               </div>
             </div>
             <button
@@ -721,7 +754,9 @@ onUnmounted(() => {
               :aria-expanded="openMenuSessionId === item.session.id"
               @click.stop="handleActionsClick($event, item.session.id)"
               @keydown="handleActionsKeydown($event, item.session.id)"
-            ><MoreHorizontal :size="20" aria-hidden="true" /></button>
+            >
+              <MoreHorizontal :size="20" aria-hidden="true" />
+            </button>
           </div>
         </div>
       </template>
@@ -753,13 +788,13 @@ onUnmounted(() => {
           <div class="hc-sessions__content">
             <HcClearableField v-if="renamingId === session.id">
               <input
-              ref="renameInputRef"
-              v-model="renameValue"
-              class="hc-sessions__rename-input"
-              @blur="commitRename"
-              @keydown="handleRenameKeydown"
-              @click.stop
-            />
+                ref="renameInputRef"
+                v-model="renameValue"
+                class="hc-sessions__rename-input"
+                @blur="commitRename"
+                @keydown="handleRenameKeydown"
+                @click.stop
+              />
             </HcClearableField>
             <div v-else class="hc-sessions__title-row">
               <!-- BUG-20260703 P2-1：分支会话可辨识（由「由此分叉」创建） -->
@@ -779,7 +814,9 @@ onUnmounted(() => {
             </div>
             <div v-if="renamingId !== session.id" class="hc-sessions__meta">
               <span class="hc-sessions__time">{{ formatDate(session.updated_at) }}</span>
-              <span v-if="session.message_count > 0" class="hc-sessions__count">{{ session.message_count }}</span>
+              <span v-if="session.message_count > 0" class="hc-sessions__count">{{
+                session.message_count
+              }}</span>
             </div>
           </div>
           <button
@@ -801,7 +838,9 @@ onUnmounted(() => {
             :aria-expanded="openMenuSessionId === session.id"
             @click.stop="handleActionsClick($event, session.id)"
             @keydown="handleActionsKeydown($event, session.id)"
-          ><MoreHorizontal :size="20" aria-hidden="true" /></button>
+          >
+            <MoreHorizontal :size="20" aria-hidden="true" />
+          </button>
         </div>
       </div>
     </template>
@@ -816,10 +855,22 @@ onUnmounted(() => {
       :disabled="loadingMoreSessions"
       @click="loadMoreSessions"
     >
-      {{ loadingMoreSessions ? t('common.loading') : (showAllConversations ? t('chat.loadMoreSessions') : t('chat.allConversations')) }}
+      {{
+        loadingMoreSessions
+          ? t('common.loading')
+          : showAllConversations
+            ? t('chat.loadMoreSessions')
+            : t('chat.allConversations')
+      }}
     </button>
 
-    <ContextMenu ref="ctxMenu" :items="sessionMenuItems" variant="session" @select="handleCtxAction" @close="handleContextMenuClose" />
+    <ContextMenu
+      ref="ctxMenu"
+      :items="sessionMenuItems"
+      variant="session"
+      @select="handleCtxAction"
+      @close="handleContextMenuClose"
+    />
 
     <!-- 分支查看器：右键「查看分支」弹层，点分支即切换（getSessionBranches 消费面） -->
     <Teleport to="body">
@@ -829,15 +880,31 @@ onUnmounted(() => {
         data-testid="branches-dialog"
         @click.self="branchesFor = null"
       >
-        <div class="hc-branches__panel" role="dialog" :aria-label="t('chat.branchesTitle', '会话分支')">
+        <div
+          class="hc-branches__panel"
+          role="dialog"
+          :aria-label="t('chat.branchesTitle', '会话分支')"
+        >
           <div class="hc-branches__head">
             <GitBranch :size="14" />
             <b>{{ t('chat.branchesTitle', '会话分支') }}</b>
-            <button class="hc-branches__close" :aria-label="t('common.close')" @click="branchesFor = null">✕</button>
+            <button
+              class="hc-branches__close"
+              :aria-label="t('common.close')"
+              @click="branchesFor = null"
+            >
+              ✕
+            </button>
           </div>
           <div v-if="branchesLoading" class="hc-branches__muted">{{ t('common.loading') }}</div>
-          <div v-else-if="branchesError" class="hc-branches__muted">{{ t('chat.branchesLoadFailed', '分支加载失败') }}</div>
-          <div v-else-if="branchesList.length === 0" class="hc-branches__muted" data-testid="branches-empty">
+          <div v-else-if="branchesError" class="hc-branches__muted">
+            {{ t('chat.branchesLoadFailed', '分支加载失败') }}
+          </div>
+          <div
+            v-else-if="branchesList.length === 0"
+            class="hc-branches__muted"
+            data-testid="branches-empty"
+          >
             {{ t('chat.noBranches', '此会话还没有分支——在任意回复上点「由此分叉」即可创建') }}
           </div>
           <div v-else class="hc-branches__list">
@@ -849,7 +916,9 @@ onUnmounted(() => {
               @click="selectBranch(b.id)"
             >
               <GitBranch :size="11" class="hc-branches__item-icon" />
-              <span class="hc-branches__item-title">{{ b.title || t('chat.newSessionDefault') }}</span>
+              <span class="hc-branches__item-title">{{
+                b.title || t('chat.newSessionDefault')
+              }}</span>
               <span class="hc-branches__item-time">{{ formatDate(b.updated_at) }}</span>
             </button>
           </div>
@@ -893,7 +962,9 @@ onUnmounted(() => {
   border: 0.5px solid var(--hc-border);
   border-radius: 10px;
   background: var(--hc-bg-input, var(--hc-bg-hover));
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .hc-sessions__search:focus-within {
@@ -1012,39 +1083,92 @@ onUnmounted(() => {
 
 /* ─── 分支查看器弹层 ─── */
 .hc-branches__overlay {
-  position: fixed; inset: 0; z-index: 60;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(2px);
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
 }
 .hc-branches__panel {
-  width: min(360px, 90vw); max-height: 60vh; overflow: auto;
-  border-radius: 14px; padding: 14px;
-  background: var(--hc-bg-elevated); border: 1px solid var(--hc-border);
-  box-shadow: var(--hc-shadow-lg, 0 12px 32px rgba(0,0,0,.22));
+  width: min(360px, 90vw);
+  max-height: 60vh;
+  overflow: auto;
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--hc-bg-elevated);
+  border: 1px solid var(--hc-border);
+  box-shadow: var(--hc-shadow-lg, 0 12px 32px rgba(0, 0, 0, 0.22));
 }
 .hc-branches__head {
-  display: flex; align-items: center; gap: 7px; margin-bottom: 10px;
-  color: var(--hc-text-primary); font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: var(--hc-text-primary);
+  font-size: 13px;
 }
 .hc-branches__close {
-  margin-inline-start: auto; border: none; background: transparent; cursor: pointer;
-  color: var(--hc-text-muted); font-size: 13px; padding: 2px 6px; border-radius: 6px;
+  margin-inline-start: auto;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--hc-text-muted);
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 6px;
 }
-.hc-branches__close:hover { color: var(--hc-text-primary); background: var(--hc-bg-hover, rgba(127,127,127,.1)); }
-.hc-branches__muted { font-size: 12.5px; line-height: 1.6; color: var(--hc-text-muted); padding: 6px 2px; }
-.hc-branches__list { display: flex; flex-direction: column; gap: 4px; }
+.hc-branches__close:hover {
+  color: var(--hc-text-primary);
+  background: var(--hc-bg-hover, rgba(127, 127, 127, 0.1));
+}
+.hc-branches__muted {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--hc-text-muted);
+  padding: 6px 2px;
+}
+.hc-branches__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .hc-branches__item {
-  display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;
-  padding: 8px 10px; border: none; border-radius: 9px; background: transparent;
-  cursor: pointer; text-align: start;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  cursor: pointer;
+  text-align: start;
 }
-.hc-branches__item:hover { background: var(--hc-bg-hover, rgba(127,127,127,.1)); }
-.hc-branches__item-icon { flex: 0 0 auto; color: var(--hc-text-muted); }
+.hc-branches__item:hover {
+  background: var(--hc-bg-hover, rgba(127, 127, 127, 0.1));
+}
+.hc-branches__item-icon {
+  flex: 0 0 auto;
+  color: var(--hc-text-muted);
+}
 .hc-branches__item-title {
-  flex: 1; min-width: 0; font-size: 13px; color: var(--hc-text-primary);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--hc-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.hc-branches__item-time { flex: 0 0 auto; font-size: 11px; color: var(--hc-text-muted); }
+.hc-branches__item-time {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--hc-text-muted);
+}
 
 .hc-sessions__approval-dot {
   width: 7px;
@@ -1094,7 +1218,9 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 0.12s var(--hc-ease-out, ease-out), color 0.12s;
+  transition:
+    opacity 0.12s var(--hc-ease-out, ease-out),
+    color 0.12s;
 }
 
 .hc-sessions__pin-action {
@@ -1106,7 +1232,9 @@ onUnmounted(() => {
   grid-column: 3;
   grid-row: 1;
 }
-.hc-sessions__pin-action:disabled { cursor: default; }
+.hc-sessions__pin-action:disabled {
+  cursor: default;
+}
 
 .hc-sessions__item:hover .hc-sessions__pin-action,
 .hc-sessions__item:hover .hc-sessions__actions,
@@ -1169,7 +1297,10 @@ onUnmounted(() => {
   color: var(--hc-text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .hc-sessions__load-more:hover:not(:disabled) {

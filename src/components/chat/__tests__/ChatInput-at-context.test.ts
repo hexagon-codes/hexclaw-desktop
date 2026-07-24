@@ -55,10 +55,34 @@ beforeEach(() => {
 })
 
 const mention = (w: VueWrapper) => w.findComponent(MentionStub)
+const editor = (w: VueWrapper) => w.get<HTMLElement>('[data-testid="chat-input"]')
+const canonicalSource = (w: VueWrapper) =>
+  editor(w).attributes('data-canonical-source') ?? ''
+
+async function setDraft(w: VueWrapper, value: string) {
+  const field = editor(w)
+  field.element.textContent = value
+  await field.trigger('input')
+  await w.vm.$nextTick()
+}
+
+function setCaret(w: VueWrapper, offset: number) {
+  const field = editor(w).element
+  field.focus()
+  const textContainer = field.querySelector<HTMLElement>('[data-edit-text]')
+  const node = textContainer?.firstChild ?? field.firstChild ?? field
+  const range = document.createRange()
+  range.setStart(node, Math.min(offset, node.textContent?.length ?? 0))
+  range.collapse(true)
+  const selection = window.getSelection()!
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
 
 // 真实流程：用户先键入 `@` 触发面板，再选中项。测试需同样先把 `@` 放进输入框。
 async function pickMention(w: VueWrapper, item: Record<string, unknown>) {
-  await w.find('textarea').setValue('@')
+  await setDraft(w, '@')
+  setCaret(w, 1)
   mention(w).vm.$emit('select', item)
   await flushPromises()
 }
@@ -81,7 +105,7 @@ describe('ChatInput @ 召唤上下文', () => {
     const sendHandler = vi.fn().mockResolvedValue(true)
     const w = await mountChatInput({ knowledgeDocs, sendHandler })
     await pickMention(w, { type: 'knowledge', id: 'd1', name: 'API 规范' })
-    await w.find('textarea').setValue('帮我看看')
+    await setDraft(w, '帮我看看')
     await w.vm.$nextTick()
     // 触发发送（点击发送按钮）
     await w.find('.hc-composer__send').trigger('click')
@@ -118,7 +142,7 @@ describe('ChatInput @ 召唤上下文', () => {
   it('Agent 选中仍插入 @name 文本（不作为上下文 chip）', async () => {
     const w = await mountChatInput({ agents: [{ name: 'kouzi', title: '扣子' }], sendHandler: vi.fn() })
     await pickMention(w, { type: 'agent', id: 'kouzi', name: 'kouzi' })
-    expect((w.find('textarea').element as HTMLTextAreaElement).value).toContain('@kouzi')
+    expect(canonicalSource(w)).toContain('@kouzi')
     expect(w.find('.hc-composer__skill-chip').exists()).toBe(false)
   })
 
@@ -135,7 +159,7 @@ describe('ChatInput @ 召唤上下文', () => {
     const sendHandler = vi.fn().mockResolvedValue(true)
     const w = await mountChatInput({ knowledgeDocs, sendHandler })
     await pickMention(w, { type: 'knowledge', id: 'd1', name: 'API 规范' }) // chip 处于 loading
-    await w.find('textarea').setValue('帮我看看')
+    await setDraft(w, '帮我看看')
     await w.vm.$nextTick()
     w.find('.hc-composer__send').trigger('click') // handleSend 内部 await pendingContextFills
     await Promise.resolve()
@@ -159,7 +183,7 @@ describe('ChatInput @ 召唤上下文', () => {
     await flushPromises()
     d2.resolve('FRESH_第二次')
     await flushPromises()
-    await w.find('textarea').setValue('x')
+    await setDraft(w, 'x')
     await w.find('.hc-composer__send').trigger('click')
     await flushPromises()
     const [, , options] = sendHandler.mock.calls[0] as [string, File[], { contextRefs?: { content: string }[] }]

@@ -544,12 +544,16 @@ watch(renderManifest, (manifest) => {
 }
 
 /* ─── KaTeX 数学公式 ─── */
-/* 块级公式在窄容器内自身横向滚动，绝不撑破消息气泡（页面 body 永不横滚） */
+/* 块级公式把间距留在稳定 viewport，内部 KaTeX 永不承担裁剪或滚动。 */
 .markdown-body :deep(.katex-display) {
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 2px 0;
-  margin: 0.5em 0;
+  overflow: visible;
+  padding-block: 0;
+  padding-inline: 0;
+  margin: 0;
+}
+
+.markdown-body :deep(.hc-math-viewport--display) {
+  margin-block: 0.5em;
 }
 /* 失败降级：非法公式退回原文用正文色呈现，不报红（§M1-1 DoD） */
 .markdown-body :deep(.katex-error) {

@@ -4,7 +4,7 @@
  * Extracts retry, like, dislike, and in-place edit logic from ChatView.
  */
 
-import { ref, nextTick } from 'vue'
+import { ref } from 'vue'
 import { removeMessage } from '@/services/messageService'
 import { forkSession } from '@/api/chat'
 import { i18n } from '@/i18n'
@@ -47,11 +47,6 @@ export function useChatActions(
   // ─── 原位编辑（DeepSeek 风格） ──────────────────────
   const editingMsgId = ref<string | null>(null)
   const editingText = ref('')
-  let editTextareaEl: HTMLTextAreaElement | null = null
-
-  function setEditTextareaEl(el: HTMLTextAreaElement | null) {
-    editTextareaEl = el
-  }
 
   /**
    * 原子删除从 fromIdx 起的整段消息（重试/编辑即"替换整轮"）。
@@ -201,19 +196,13 @@ export function useChatActions(
     if (!msg || msg.role !== 'user') return
     editingMsgId.value = msg.id
     editingText.value = msg.content
-    nextTick(() => {
-      if (editTextareaEl) {
-        editTextareaEl.focus()
-        editTextareaEl.style.height = 'auto'
-        editTextareaEl.style.height = editTextareaEl.scrollHeight + 'px'
-        editTextareaEl.setSelectionRange(editTextareaEl.value.length, editTextareaEl.value.length)
-      }
-    })
+    // The editable MessageText projection owns focus/caret after it mounts.
+    // Keeping a detached textarea ref here would create a second editor model.
   }
 
   async function confirmEdit(msgId: string) {
-    const text = editingText.value.trim()
-    if (!text) {
+    const text = editingText.value
+    if (!text.trim()) {
       cancelEdit()
       return
     }
@@ -258,16 +247,9 @@ export function useChatActions(
     editingText.value = ''
   }
 
-  function autoResizeEditTextarea(e: Event) {
-    const el = e.target as HTMLTextAreaElement
-    el.style.height = 'auto'
-    el.style.height = el.scrollHeight + 'px'
-  }
-
   return {
     editingMsgId,
     editingText,
-    setEditTextareaEl,
     handleRetry,
     handleFork,
     handleLike,
@@ -275,6 +257,5 @@ export function useChatActions(
     handleEdit,
     confirmEdit,
     cancelEdit,
-    autoResizeEditTextarea,
   }
 }

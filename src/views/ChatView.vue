@@ -30,6 +30,8 @@ import {
   type ScenarioComposerAction,
   type ScenarioComposerChip,
   type ScenarioComposerCommand,
+  type ScenarioComposerImagePayload,
+  type ScenarioImageModelRoute,
 } from '@/shell/scenario/registry'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import RecordChip from '@/shell/chat/RecordChip.vue'
@@ -45,6 +47,7 @@ import {
 } from '@/stores/session-model-binding'
 import { isChatModelOption } from '@/stores/settings-helpers'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import ReasoningRenderer from '@/components/chat/ReasoningRenderer.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import {
   shouldSendOnEnter,
@@ -95,7 +98,7 @@ import { getDocuments } from '@/api/knowledge'
 import { getConnectionsResult, type ConnectionSummary } from '@/api/im-channels'
 import type { KnowledgeDoc } from '@/types'
 import { setClipboard } from '@/api/desktop'
-import { appendSessionMessagesBatch } from '@/api/chat'
+import { appendSessionMessage, appendSessionMessagesBatch } from '@/api/chat'
 import { inferCapabilitiesFromId } from '@/config/providers'
 import { logger } from '@/utils/logger'
 import VoiceChatComposer from '@/components/chat/VoiceChatComposer.vue'
@@ -600,6 +603,15 @@ const chatTemperature = ref(0.7)
 const chatMaxTokens = ref(4096)
 /** true when user explicitly picks a model via selectModel(), reset on agent/session switch */
 const userOverrodeModel = ref(false)
+/** 深度思考只改变推理能力，不改变已有收件人的模型所有权。
+ *  普通 research 的内部 researcher 仍沿用既有全局模型路由。 */
+const usesBoundAgentModel = computed(
+  () =>
+    !userOverrodeModel.value &&
+    !!chatStore.agentRole &&
+    chatStore.agentRole !== 'researcher' &&
+    (chatStore.chatMode === 'agent' || chatStore.chatMode === 'research'),
+)
 /** 绑定模型暂不在 availableModels 时的自足元信息（名/能力来自会话绑定）：让显示与能力门控
  *  不依赖列表加载（修复 BUG-20260626）。模型一旦进入 availableModels，下面 computed 优先用列表
  *  里的 found，本 ref 即被忽略；进入「列表里有」的选择/恢复路径时清空，避免残留。 */
@@ -607,8 +619,8 @@ const pendingModelMeta = ref<{ name: string; capabilities: string[] } | null>(nu
 
 // 当前模型的显示名
 const selectedModelDisplay = computed(() => {
-  // 仅在显式 Agent 模式下，且用户未手动选模型时，显示 Agent 偏好模型
-  if (!userOverrodeModel.value && chatStore.chatMode === 'agent' && chatStore.agentRole) {
+  // 已绑定 Agent 开启深度思考后仍显示同一 Agent 偏好模型；research 不等于换收件人。
+  if (usesBoundAgentModel.value) {
     const cfg = agentsStore.findAgent(chatStore.agentRole)
     if (cfg?.model) {
       const agentLabel = cfg.display_name || cfg.name || chatStore.agentRole
@@ -656,9 +668,47 @@ function handleScenarioComposerCommand(command: ScenarioComposerCommand) {
   if (command.type === 'focus') composer.focus()
   if (command.type === 'set-input') composer.setInput(command.text, command.focus !== false)
 }
-// 场景会话下 composer 拦截的图片（BUG-20260709 拍照发题不解题）：ChatInput 把粘贴/上传图片
-// 以 dataURL 上交 → 透传给场景增强（K12=自动打开识题护栏）；增强消费后回写 '' 复位。零场景知识。
-const scenarioComposerImage = ref('')
+// 场景会话下 composer 拦截的图片：ChatInput 产出同源 dataURL + message attachment；
+// shell 负责形成一次可见/持久用户消息，并只在用户显式选模时附上当前路由。
+const scenarioComposerImage = ref<ScenarioComposerImagePayload | ''>('')
+function currentExplicitScenarioImageRoute(): ScenarioImageModelRoute | undefined {
+  const provider = selectedProviderKey.value.trim()
+  const model = selectedModel.value.trim()
+  if (!userOverrodeModel.value || model === 'auto' || !provider || !model) return undefined
+  return { provider, model, capability: 'vision' }
+}
+async function persistScenarioImageMessage(message: ChatMessage, sessionId: string) {
+  try {
+    await appendSessionMessage(sessionId, {
+      id: message.id,
+      role: 'user',
+      content: message.content,
+      metadata: message.metadata,
+    })
+  } catch (errorValue) {
+    logger.error('[ChatView] persist scenario image message failed', errorValue)
+    toast.error?.(t('chat.persistFailed', '消息保存失败，刷新会话后可能丢失'))
+  }
+}
+async function handleScenarioImage(payload: ScenarioComposerImagePayload) {
+  // 模型选择必须在用户动作发生时冻结，不能在 await 创建会话期间被后续 UI 操作改写。
+  const route = currentExplicitScenarioImageRoute()
+  const routedPayload: ScenarioComposerImagePayload = route ? { ...payload, route } : payload
+  const message: ChatMessage = {
+    id: nanoid(12),
+    role: 'user',
+    content: '',
+    timestamp: new Date().toISOString(),
+    metadata: { attachments: [payload.attachment] },
+  }
+  chatStore.messages.push(message)
+  void nextTick(scrollToBottom)
+  // 新会话首图必须先建立稳定 session，再启动场景；否则 source_session 为空，
+  // 随后的会话 watcher 还会重建并清掉刚启动的识题面板。
+  const sessionId = await chatStore.ensureSession()
+  void persistScenarioImageMessage(message, sessionId)
+  scenarioComposerImage.value = routedPayload
+}
 // 场景内联内容是否活动。通用 shell 只据布尔状态隐藏空态、滚到会话末尾，不解析场景内容。
 const scenarioInlineActive = ref(false)
 function handleScenarioInlineActive(active: boolean) {
@@ -1413,8 +1463,7 @@ function applySessionModel(newId: string, prevId: string | null) {
  * 普通聊天始终使用用户设置的默认模型。
  */
 function syncChatParams() {
-  const letBackendDecide =
-    chatStore.chatMode === 'agent' && !!chatStore.agentRole && !userOverrodeModel.value
+  const letBackendDecide = usesBoundAgentModel.value
 
   chatStore.chatParams.provider = letBackendDecide
     ? undefined
@@ -1583,7 +1632,6 @@ const { handleSend } = useChatSend({
 const {
   editingMsgId,
   editingText,
-  setEditTextareaEl,
   handleRetry,
   handleFork,
   handleLike,
@@ -1591,7 +1639,6 @@ const {
   handleEdit,
   confirmEdit,
   cancelEdit,
-  autoResizeEditTextarea,
 } = useChatActions(chatStore, toast, handleSend)
 
 // 编辑卡回车的 IME 合成态守卫（与 ChatInput 同源 shouldSendOnEnter）：中文/日文 IME 回车是
@@ -2339,7 +2386,7 @@ function startSidebarResize(event: MouseEvent) {
                       }}</span>
                     </summary>
                     <div class="hc-thinking__content">
-                      {{ normalizeAssistantReasoning(msg.reasoning) }}
+                      <ReasoningRenderer :content="normalizeAssistantReasoning(msg.reasoning)" />
                     </div>
                   </details>
                 </div>
@@ -2774,20 +2821,15 @@ function startSidebarResize(event: MouseEvent) {
                       </span>
                     </div>
                     <HcClearableField>
-                      <textarea
-                        :ref="
-                          (el) => {
-                            if (el) setEditTextareaEl(el as HTMLTextAreaElement)
-                          }
-                        "
-                        v-model="editingText"
+                      <MessageText
+                        v-model:content="editingText"
                         class="hc-msg__edit-textarea"
-                        rows="1"
+                        editable
+                        autofocus
                         @keydown.enter.exact="onEditEnter($event, msg.id)"
                         @keydown.escape="cancelEdit"
                         @compositionstart="onEditCompositionStart"
                         @compositionend="onEditCompositionEnd"
-                        @input="autoResizeEditTextarea"
                       />
                     </HcClearableField>
                     <div class="hc-msg__edit-actions">
@@ -2852,7 +2894,7 @@ function startSidebarResize(event: MouseEvent) {
                   >
                 </div>
                 <div ref="thinkingContentRef" class="hc-thinking__content">
-                  {{ streamingReasoningDisplay }}
+                  <ReasoningRenderer :content="streamingReasoningDisplay" />
                 </div>
               </div>
               <div
@@ -2866,7 +2908,9 @@ function startSidebarResize(event: MouseEvent) {
                       >{{ chatStore.streamingThinkingElapsed }}s</span
                     >
                   </summary>
-                  <div class="hc-thinking__content">{{ streamingReasoningDisplay }}</div>
+                  <div class="hc-thinking__content">
+                    <ReasoningRenderer :content="streamingReasoningDisplay" />
+                  </div>
                 </details>
               </div>
               <!-- Main reply content -->
@@ -3032,7 +3076,7 @@ function startSidebarResize(event: MouseEvent) {
             :scenario-placeholder="scenarioComposerPlaceholder"
             :scenario-hint="scenarioComposerHint"
             :scenario-image-intercept="!!(scenarioCtx && chatEnhancement)"
-            @scenario-image="scenarioComposerImage = $event"
+            @scenario-image="handleScenarioImage"
             @preset-chip-action="handleScenarioComposerAction"
             :send-handler="handleSend"
             :gen-model-id="selectedModel"
@@ -3499,8 +3543,8 @@ function startSidebarResize(event: MouseEvent) {
 
 .hc-chat__scenario-inline {
   width: 100%;
-  max-width: min(94%, 1200px);
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;

@@ -270,6 +270,27 @@ describe('useChatSend', () => {
     expect(deps.chatStore.agentRole).toBe('')
   })
 
+  it('深度思考发送保留已绑定场景 Agent；普通无绑定 research 才使用 researcher', async () => {
+    const sceneDeps = makeDeps()
+    sceneDeps.chatStore.chatMode = 'research'
+    sceneDeps.chatStore.agentRole = 'k12-tutor-mingming'
+
+    const sceneSend = useChatSend(sceneDeps as any)
+    await sceneSend.handleSend('帮我深入分析这道题')
+
+    expect(sceneDeps.chatStore.agentRole).toBe('k12-tutor-mingming')
+    expect(sceneDeps.chatStore.sendMessage).toHaveBeenCalledOnce()
+
+    const ordinaryDeps = makeDeps()
+    ordinaryDeps.chatStore.chatMode = 'research'
+    ordinaryDeps.chatStore.agentRole = ''
+
+    const ordinarySend = useChatSend(ordinaryDeps as any)
+    await ordinarySend.handleSend('研究一个普通问题')
+
+    expect(ordinaryDeps.chatStore.agentRole).toBe('researcher')
+  })
+
   it('sends video attachments with type=video instead of downgrading them to generic files', async () => {
     parseDocument.mockRejectedValueOnce(new Error('unsupported video parsing'))
 

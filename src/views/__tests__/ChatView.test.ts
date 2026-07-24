@@ -6,6 +6,7 @@ import ChatView from '../ChatView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 import { useSettingsStore } from '@/stores/settings'
 import { useChatStore } from '@/stores/chat'
+import { useAgentsStore } from '@/stores/agents'
 
 const { parseDocument, isDocumentFile } = vi.hoisted(() => ({
   parseDocument: vi.fn(),
@@ -25,6 +26,17 @@ const { mockGetConnections, mockGetConnectionsResult } = vi.hoisted(() => ({
   mockGetConnectionsResult: vi.fn(),
 }))
 
+const { mockAppendSessionMessage, mockAppendSessionMessagesBatch } = vi.hoisted(() => ({
+  mockAppendSessionMessage: vi.fn().mockResolvedValue({
+    id: 'scenario-image-message',
+    session_id: 'scenario-session',
+  }),
+  mockAppendSessionMessagesBatch: vi.fn().mockResolvedValue({
+    ids: [],
+    session_id: 'scenario-session',
+  }),
+}))
+
 const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
   mockRoute: { query: {}, path: '/chat', params: {} as Record<string, string> },
   mockRouterPush: vi.fn(),
@@ -36,6 +48,8 @@ vi.mock('@/api/chat', () => ({
   sendChatViaBackend: vi.fn().mockResolvedValue({ reply: '你好！', session_id: 's1' }),
   sendChat: vi.fn(),
   listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
+  appendSessionMessage: mockAppendSessionMessage,
+  appendSessionMessagesBatch: mockAppendSessionMessagesBatch,
 }))
 
 vi.mock('@/api/websocket', () => ({
@@ -189,6 +203,17 @@ function mountChatView(options?: { setup?: () => void; attachTo?: HTMLElement })
   })
 }
 
+function chatEditor(wrapper: ReturnType<typeof mountChatView>) {
+  return wrapper.get<HTMLElement>('[data-testid="chat-input"]')
+}
+
+async function setChatDraft(wrapper: ReturnType<typeof mountChatView>, value: string) {
+  const editor = chatEditor(wrapper)
+  editor.element.textContent = value
+  await editor.trigger('input')
+  await wrapper.vm.$nextTick()
+}
+
 // jsdom 不提供 scrollIntoView 和 matchMedia，需要手动补齐
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn()
@@ -228,13 +253,12 @@ describe('ChatView — E2E 关键路径', () => {
   // ────────────────────────────────────────────────────
   // 1. 渲染：输入框和发送按钮
   // ────────────────────────────────────────────────────
-  it('renders chat input area with textarea and send button', async () => {
+  it('renders the canonical rich-text chat input and send button', async () => {
     const wrapper = mountChatView()
     await flushPromises()
 
-    // ChatInput 组件应被渲染（包含 textarea）
-    const textarea = wrapper.find('textarea')
-    expect(textarea.exists()).toBe(true)
+    const editor = chatEditor(wrapper)
+    expect(editor.attributes('contenteditable')).toBe('true')
 
     // 发送按钮存在（title="发送 (Enter)"）
     const sendBtn = wrapper.find('button[title="发送 (Enter)"]')
@@ -329,9 +353,7 @@ describe('ChatView — E2E 关键路径', () => {
     const chatStore = useChatStore()
     chatStore.chatParams.model = 'test-model'
 
-    // 输入消息
-    const textarea = wrapper.find('textarea')
-    await textarea.setValue('测试消息')
+    await setChatDraft(wrapper, '测试消息')
 
     // 直接点击发送按钮，走 ChatInput -> sendHandler -> useChatSend 完整链路
     const sendButton = wrapper.find('.hc-composer__send')
@@ -647,6 +669,274 @@ describe('ChatView — E2E 关键路径', () => {
     expect(editCard.text()).toContain('girlfriend')
   })
 
+  it('编辑含公式的用户消息时复用 canonical 公式投影而不是退回 raw TeX textarea', async () => {
+    const source = String.raw`第一天修了 $2\frac{3}{4}$ 千米，第二天多修 $1\frac{1}{2}$ 千米。`
+    const wrapper = mountChatView({ attachTo: document.body })
+    await flushPromises()
+
+    const store = useChatStore()
+    store.messages.push({
+      id: 'u-math-edit',
+      role: 'user',
+      content: source,
+      timestamp: '2026-07-24T00:00:00Z',
+    })
+    await flushPromises()
+
+    const vm = wrapper.vm as unknown as {
+      editingMsgId: string | null
+      editingText: string
+    }
+    vm.editingMsgId = 'u-math-edit'
+    vm.editingText = source
+    await flushPromises()
+
+    const editCard = wrapper.get('.hc-msg__edit-card')
+    const editor = editCard.get('[data-testid="message-math-editor"]')
+    expect(editCard.find('textarea').exists()).toBe(false)
+    expect(editor.attributes('data-canonical-source')).toBe(source)
+    expect(editor.findAll('[data-edit-math-state="rendered"]')).toHaveLength(2)
+    expect(
+      editor
+        .findAll('annotation[encoding="application/x-tex"]')
+        .map((annotation) => annotation.text()),
+    ).toEqual([String.raw`2\frac{3}{4}`, String.raw`1\frac{1}{2}`])
+
+    wrapper.unmount()
+  })
+
+  it('BUG-20260724-002 场景图片形成恰一条持久用户消息且不调用普通 chat', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const store = useChatStore()
+    store.currentSessionId = 'scenario-session'
+    ;(
+      wrapper.vm as unknown as {
+        selectModel: (
+          modelId: string,
+          providerId: string,
+          providerKey: string,
+          providerName: string,
+        ) => void
+      }
+    ).selectModel('gpt-5.6-sol', 'provider-config-id', 'hexclaw-gpt', 'HexClaw GPT')
+    const sendSpy = vi.spyOn(store, 'sendMessage')
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgo='
+    const payload = {
+      dataUrl,
+      attachment: {
+        type: 'image' as const,
+        name: 'homework.png',
+        mime: 'image/png',
+        data: 'iVBORw0KGgo=',
+      },
+    }
+
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+
+    await vi.waitFor(() => {
+      expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
+    })
+    const imageMessages = store.messages.filter(
+      (message) =>
+        message.role === 'user' &&
+        Array.isArray(message.metadata?.attachments) &&
+        message.metadata.attachments.some(
+          (attachment) =>
+            (attachment as { type?: string; data?: string }).type === 'image' &&
+            (attachment as { data?: string }).data === payload.attachment.data,
+        ),
+    )
+    expect(imageMessages).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="chat-message-user"] img')).toHaveLength(1)
+    expect(mockAppendSessionMessage).toHaveBeenCalledWith(
+      'scenario-session',
+      expect.objectContaining({
+        id: imageMessages[0]!.id,
+        role: 'user',
+        content: '',
+        metadata: { attachments: [payload.attachment] },
+      }),
+    )
+    expect(sendSpy).not.toHaveBeenCalled()
+    expect(
+      (
+        wrapper.vm as unknown as {
+          scenarioComposerImage: {
+            dataUrl: string
+            attachment: { type: string; name: string; mime: string; data: string }
+            route?: { provider: string; model: string; capability: string }
+          }
+        }
+      ).scenarioComposerImage,
+    ).toEqual({
+      ...payload,
+      route: {
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+        capability: 'vision',
+      },
+    })
+
+    wrapper.unmount()
+  })
+
+  it('BUG-20260724-002 新会话首图等待稳定 session 后才启动场景且仍只持久化一次', async () => {
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    const store = useChatStore()
+    expect(store.currentSessionId).toBeNull()
+    let releaseSession!: () => void
+    const sessionGate = new Promise<void>((resolve) => {
+      releaseSession = resolve
+    })
+    vi.spyOn(store, 'ensureSession').mockImplementation(async () => {
+      await sessionGate
+      store.currentSessionId = 'fresh-scenario-session'
+      return 'fresh-scenario-session'
+    })
+    const payload = {
+      dataUrl: 'data:image/png;base64,Zmlyc3Q=',
+      attachment: {
+        type: 'image' as const,
+        name: 'first.png',
+        mime: 'image/png',
+        data: 'Zmlyc3Q=',
+      },
+    }
+
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', payload)
+    await flushPromises()
+
+    expect(
+      store.messages.filter(
+        (message) =>
+          message.role === 'user' &&
+          Array.isArray(message.metadata?.attachments) &&
+          message.metadata.attachments.some(
+            (attachment) => (attachment as { data?: string }).data === payload.attachment.data,
+          ),
+      ),
+    ).toHaveLength(1)
+    expect(
+      (
+        wrapper.vm as unknown as {
+          scenarioComposerImage: unknown
+        }
+      ).scenarioComposerImage,
+    ).toBe('')
+    expect(mockAppendSessionMessage).not.toHaveBeenCalled()
+
+    releaseSession()
+    await vi.waitFor(() => {
+      expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
+    })
+    expect(mockAppendSessionMessage).toHaveBeenCalledWith(
+      'fresh-scenario-session',
+      expect.objectContaining({ role: 'user', metadata: { attachments: [payload.attachment] } }),
+    )
+    expect(
+      (
+        wrapper.vm as unknown as {
+          scenarioComposerImage: { dataUrl: string }
+        }
+      ).scenarioComposerImage.dataUrl,
+    ).toBe(payload.dataUrl)
+
+    wrapper.unmount()
+  })
+
+  it('BUG-20260724-006 深度思考保留已绑定 Agent 的模型显示与后端模型决策', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const settingsStore = useSettingsStore()
+        settingsStore.config = {
+          llm: {
+            providers: [
+              {
+                id: 'global-provider-id',
+                name: 'Global',
+                type: 'openai',
+                enabled: true,
+                apiKey: '',
+                baseUrl: 'https://example.invalid/v1',
+                backendKey: 'global-provider',
+                models: [
+                  {
+                    id: 'global-default-model',
+                    name: 'Global Default',
+                    capabilities: ['text'],
+                  },
+                ],
+                selectedModelId: 'global-default-model',
+              },
+            ],
+            defaultModel: 'global-default-model',
+            defaultProviderId: 'global-provider-id',
+            routing: { enabled: false, strategy: 'cost-aware' },
+          },
+          security: {
+            gateway_enabled: true,
+            injection_detection: true,
+            pii_filter: false,
+            content_filter: true,
+            max_tokens_per_request: 8192,
+            rate_limit_rpm: 60,
+          },
+          general: {
+            language: 'zh-CN',
+            log_level: 'info',
+            data_dir: '',
+            auto_start: false,
+            defaultAgentRole: '',
+          },
+          notification: {
+            system_enabled: true,
+            sound_enabled: false,
+            agent_complete: true,
+          },
+          mcp: { default_protocol: 'stdio' },
+        }
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'k12-tutor-mingming',
+            display_name: '小明的辅导助手',
+            model: 'gpt-5.6-sol',
+            provider: 'hexclaw-gpt',
+          },
+        ]
+      },
+    })
+    await flushPromises()
+
+    const store = useChatStore()
+    store.agentRole = 'k12-tutor-mingming'
+    store.chatMode = 'agent'
+    await flushPromises()
+    const vm = wrapper.vm as unknown as {
+      selectedModelDisplay: string
+      syncChatParams: () => void
+      toggleDeepThinking: () => void
+    }
+    vm.syncChatParams()
+    expect(vm.selectedModelDisplay).toBe('gpt-5.6-sol · 小明的辅导助手')
+    expect(store.chatParams.provider).toBeUndefined()
+    expect(store.chatParams.model).toBeUndefined()
+
+    vm.toggleDeepThinking()
+    await flushPromises()
+
+    expect(store.chatMode).toBe('research')
+    expect(store.agentRole).toBe('k12-tutor-mingming')
+    expect(vm.selectedModelDisplay).toBe('gpt-5.6-sol · 小明的辅导助手')
+    expect(store.chatParams.provider).toBeUndefined()
+    expect(store.chatParams.model).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
   it('keeps the latest parsed document when an earlier parse resolves later', async () => {
     let resolveFirst!: (value: { text: string; fileName: string; pageCount?: number }) => void
     let resolveSecond!: (value: { text: string; fileName: string; pageCount?: number }) => void
@@ -882,7 +1172,7 @@ describe('ChatView — E2E 关键路径', () => {
     const chatStore = useChatStore()
     expect(chatStore.chatParams.model).toBe('deepseek-chat')
 
-    await wrapper.find('textarea').setValue('立即发送')
+    await setChatDraft(wrapper, '立即发送')
     await wrapper.find('.hc-composer__send').trigger('click')
     await flushPromises()
 

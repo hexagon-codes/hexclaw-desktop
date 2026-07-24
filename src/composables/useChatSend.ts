@@ -388,9 +388,11 @@ export function useChatSend(deps: ChatSendDeps) {
     // 注意：技能激活**不**经正文 @name 注入——`@skill` 会被后端当 mention/tool 致空回答。
     // skillNames 作为前向兼容字段透传，由专用激活通道处理（不写进 backendText）。
 
-    // Set agent role for research mode; clear stale role when not in research
+    // 深度思考是当前收件人的推理模式，不是改换收件人。已有绑定 Agent（含场景实例）必须保留，
+    // 否则 sceneCtx/chips/placeholder 与 pinned_agent 会在发送瞬间一起漂移。
+    // 只有没有显式/会话绑定收件人的普通 research 才使用通用 researcher。
     if (chatStore.chatMode === 'research') {
-      chatStore.agentRole = 'researcher'
+      if (!chatStore.agentRole) chatStore.agentRole = 'researcher'
     } else if (chatStore.agentRole === 'researcher') {
       chatStore.agentRole = ''
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { ref } from 'vue'
 import zhCN from '@/i18n/locales/zh-CN'
@@ -8,6 +8,7 @@ vi.mock('@/composables/useVoice', () => ({
   useVoice: () => ({
     isListening: ref(false),
     transcript: ref(''),
+    error: ref(''),
     isSupported: false,
     toggleListening: vi.fn(),
   }),
@@ -52,6 +53,19 @@ async function mountChatInput(props: Record<string, unknown> = {}) {
   })
 }
 
+const editor = (wrapper: VueWrapper) =>
+  wrapper.get<HTMLElement>('[data-testid="chat-input"]')
+
+const canonicalSource = (wrapper: VueWrapper) =>
+  editor(wrapper).attributes('data-canonical-source') ?? ''
+
+async function setDraft(wrapper: VueWrapper, value: string) {
+  const field = editor(wrapper)
+  field.element.textContent = value
+  await field.trigger('input')
+  await wrapper.vm.$nextTick()
+}
+
 describe('ChatInput attachment capability gating', () => {
   it('omits image extensions when the selected model does not allow images', async () => {
     const wrapper = await mountChatInput({
@@ -79,26 +93,24 @@ describe('ChatInput attachment capability gating', () => {
     const sendHandler = vi.fn().mockResolvedValue(false)
     const wrapper = await mountChatInput({ sendHandler })
 
-    const textarea = wrapper.get('textarea')
-    await textarea.setValue('draft message')
+    await setDraft(wrapper, 'draft message')
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
     expect(sendHandler).toHaveBeenCalledWith('draft message', [], undefined)
-    expect((textarea.element as HTMLTextAreaElement).value).toBe('draft message')
+    expect(canonicalSource(wrapper)).toBe('draft message')
   })
 
   it('clears the draft only after sendHandler accepts the send request', async () => {
     const sendHandler = vi.fn().mockResolvedValue(true)
     const wrapper = await mountChatInput({ sendHandler })
 
-    const textarea = wrapper.get('textarea')
-    await textarea.setValue('draft message')
+    await setDraft(wrapper, 'draft message')
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
     expect(sendHandler).toHaveBeenCalledWith('draft message', [], undefined)
-    expect((textarea.element as HTMLTextAreaElement).value).toBe('')
+    expect(canonicalSource(wrapper)).toBe('')
   })
 
   it('does not submit twice while an async sendHandler is still pending', async () => {
@@ -111,8 +123,7 @@ describe('ChatInput attachment capability gating', () => {
     )
     const wrapper = await mountChatInput({ sendHandler })
 
-    const textarea = wrapper.get('textarea')
-    await textarea.setValue('draft message')
+    await setDraft(wrapper, 'draft message')
     await wrapper.get('.hc-composer__send').trigger('click')
     await wrapper.get('.hc-composer__send').trigger('click')
 
@@ -121,6 +132,6 @@ describe('ChatInput attachment capability gating', () => {
     expect(resolveSend).not.toBeNull()
     resolveSend!(true)
     await flushPromises()
-    expect((textarea.element as HTMLTextAreaElement).value).toBe('')
+    expect(canonicalSource(wrapper)).toBe('')
   })
 })

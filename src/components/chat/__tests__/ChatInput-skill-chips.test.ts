@@ -39,10 +39,26 @@ async function mountChatInput(props: Record<string, unknown> = {}) {
 }
 
 beforeEach(() => {
-  voiceRefs.api = { isListening: ref(false), transcript: ref(''), isSupported: false, toggleListening: vi.fn() }
+  voiceRefs.api = {
+    isListening: ref(false),
+    transcript: ref(''),
+    error: ref(''),
+    isSupported: false,
+    toggleListening: vi.fn(),
+  }
 })
 
 const palette = (w: VueWrapper) => w.findComponent(PaletteStub)
+const editor = (w: VueWrapper) => w.get<HTMLElement>('[data-testid="chat-input"]')
+const canonicalSource = (w: VueWrapper) =>
+  editor(w).attributes('data-canonical-source') ?? ''
+
+async function setDraft(w: VueWrapper, value: string) {
+  const field = editor(w)
+  field.element.textContent = value
+  await field.trigger('input')
+  await w.vm.$nextTick()
+}
 
 describe('ChatInput 已挂载技能 chip', () => {
   const skills = [
@@ -55,10 +71,9 @@ describe('ChatInput 已挂载技能 chip', () => {
     await w.vm.$nextTick()
     expect(w.find('.hc-composer__skill-chip').exists()).toBe(true)
     expect(w.text()).toContain('股票')
-    const ta = w.find('textarea').element as HTMLTextAreaElement
     // Skill 统一为 chip 表示，不污染输入框为 @name（@ 是召唤语法、Skill 属 / 命令世界）；
     // 技能激活在发送时经 skillNames 注入，不靠正文 @token（修复 @skill 被当 mention/tool 致空回答）。
-    expect(ta.value).not.toContain('@stocks')
+    expect(canonicalSource(w)).not.toContain('@stocks')
   })
 
   it('移除 chip：chip 消失，输入框始终不含 @name（chip-only 表示）', async () => {
@@ -68,8 +83,7 @@ describe('ChatInput 已挂载技能 chip', () => {
     await w.find('.hc-composer__skill-remove').trigger('click')
     await w.vm.$nextTick()
     expect(w.find('.hc-composer__skill-chip').exists()).toBe(false)
-    const ta = w.find('textarea').element as HTMLTextAreaElement
-    expect(ta.value).not.toContain('@stocks')
+    expect(canonicalSource(w)).not.toContain('@stocks')
   })
 
   it('同一 skill 不重复挂载', async () => {
@@ -85,7 +99,7 @@ describe('ChatInput 已挂载技能 chip', () => {
     const w = await mountChatInput({ skills, sendHandler })
     palette(w).vm.$emit('select', { kind: 'skill', name: 'stocks' })
     await w.vm.$nextTick()
-    await w.find('textarea').setValue('你在哪里？')
+    await setDraft(w, '你在哪里？')
     await w.vm.$nextTick()
     await w.get('.hc-composer__send').trigger('click')
     await flushPromises()
@@ -106,8 +120,7 @@ describe('ChatInput 已挂载技能 chip', () => {
     })
     await w.vm.$nextTick()
 
-    const ta = w.find('textarea').element as HTMLTextAreaElement
-    expect(ta.value).toBe('请用三点总结：$ARGUMENTS')
+    expect(canonicalSource(w)).toBe('请用三点总结：$ARGUMENTS')
 
     await w.get('.hc-composer__send').trigger('click')
     await flushPromises()
@@ -128,11 +141,11 @@ describe('ChatInput 已挂载技能 chip', () => {
     palette(w).vm.$emit('select', { kind: 'skill', name: 'foo' }) // 挂载 foo + 插入 @foo
     await w.vm.$nextTick()
     // 用户继续输入，文本里出现无关的 @foobar
-    await w.find('textarea').setValue('@foobar 测试')
+    await setDraft(w, '@foobar 测试')
     await w.vm.$nextTick()
     await w.find('.hc-composer__skill-remove').trigger('click') // 移除 foo chip
     await w.vm.$nextTick()
     // @foobar 不应被从中段切成 "bar 测试"
-    expect((w.find('textarea').element as HTMLTextAreaElement).value).toBe('@foobar 测试')
+    expect(canonicalSource(w)).toBe('@foobar 测试')
   })
 })

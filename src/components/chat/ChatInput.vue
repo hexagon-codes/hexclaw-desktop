@@ -18,11 +18,12 @@ import {
   Loader2,
 } from 'lucide-vue-next'
 import MentionPopup from './MentionPopup.vue'
+import MessageText from './MessageText.vue'
 import TemplatePopup from './TemplatePopup.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import { useVoice } from '@/composables/useVoice'
 import { useToast } from '@/composables/useToast'
-import type { Skill, KnowledgeDoc, ChatSession, ChatContextRef } from '@/types'
+import type { Skill, KnowledgeDoc, ChatSession, ChatContextRef, ChatAttachment } from '@/types'
 import type { ConnectionSummary } from '@/api/im-channels'
 import { getDocumentContent } from '@/api/knowledge'
 import { listSessionMessages } from '@/api/chat'
@@ -34,9 +35,12 @@ import {
   type VideoTaskStatus,
 } from '@/api/videogen'
 import { logger } from '@/utils/logger'
-import { shouldSendOnEnter, hasWeirdLineBreaks } from '@/utils/chat-compose'
-import { insertAtSelection, normalizeMathMarkdown, readMathClipboard } from '@/utils/math-content'
-import type { ScenarioComposerChip } from '@/shell/scenario/registry'
+import { shouldSendOnEnter } from '@/utils/chat-compose'
+import { normalizeMathMarkdown } from '@/utils/math-content'
+import type {
+  ScenarioComposerChip,
+  ScenarioComposerImagePayload,
+} from '@/shell/scenario/registry'
 
 /** `@` 召唤选中项（MentionPopup 抛出）。 */
 interface MentionSelectItem {
@@ -135,8 +139,8 @@ const emit = defineEmits<{
   'mode:changed': [mode: ComposerMode]
   /** 扣子式技能子菜单底部入口（由父级 ChatView 处理：打开 AI 创建弹层 / 跳转 Skill 管理） */
   skillAction: [action: 'ai-create' | 'upload-local' | 'add-market']
-  /** 场景图片改道（BUG-20260709）：scenarioImageIntercept 时图片以 dataURL 外发 */
-  'scenario-image': [dataUrl: string]
+  /** 场景图片改道：同时外发任务原图与同源的消息附件投影。 */
+  'scenario-image': [payload: ScenarioComposerImagePayload]
   /** 结构化预设 chip 的领域无关 action id；由父级转交对应场景 feature。 */
   'preset-chip-action': [actionId: string]
 }>()
@@ -254,7 +258,14 @@ function removeContextRef(type: string, id: string) {
 const inputText = ref('')
 const composing = ref(false) // IME 合成态（compositionstart→true / end→false）
 let lastCompositionEnd = 0 // 上次合成结束时间戳，兜底 WKWebView compositionend 早于确认键 keydown
-const textareaRef = ref<HTMLTextAreaElement>()
+type MathEditorHandle = {
+  focusToEnd: () => void
+  focusEditor: () => void
+  getEditorElement: () => HTMLElement | null
+  getSelectionOffsets: () => { start: number; end: number } | null
+  setCanonicalSelection: (start: number, end?: number) => void
+}
+const mathEditorRef = ref<MathEditorHandle>()
 const fileInputRef = ref<HTMLInputElement>()
 const mentionRef = ref<InstanceType<typeof MentionPopup>>()
 const templateRef = ref<InstanceType<typeof TemplatePopup>>()
@@ -329,8 +340,6 @@ const fileAccept = computed(() => {
   return types.join(',')
 })
 
-const MAX_HEIGHT = 160
-
 function clearDraft() {
   inputText.value = ''
   attachedFiles.value.forEach((a) => {
@@ -339,9 +348,7 @@ function clearDraft() {
   attachedFiles.value = []
   mountedSkills.value = []
   contextChips.value = []
-  nextTick(() => {
-    if (textareaRef.value) textareaRef.value.style.height = 'auto'
-  })
+  closePopups()
 }
 
 async function handleSend() {
@@ -475,11 +482,23 @@ function handleCompositionEnd() {
   lastCompositionEnd = Date.now()
 }
 
+function editorElement(): HTMLElement | null {
+  return mathEditorRef.value?.getEditorElement() ?? null
+}
+
+function editorSelection(): { start: number; end: number } {
+  return mathEditorRef.value?.getSelectionOffsets() ?? {
+    start: inputText.value.length,
+    end: inputText.value.length,
+  }
+}
+
+function handleContentUpdate(content: string) {
+  inputText.value = content
+  handleInput()
+}
+
 function handleInput() {
-  const el = textareaRef.value
-  if (!el) return
-  el.style.height = 'auto'
-  el.style.height = Math.min(el.scrollHeight, MAX_HEIGHT) + 'px'
   detectPopups()
 }
 
@@ -489,10 +508,10 @@ function closePopups() {
 }
 
 function detectPopups() {
-  const el = textareaRef.value
+  const el = editorElement()
   if (!el) return
-  const text = el.value
-  const cursorPos = el.selectionStart
+  const text = inputText.value
+  const cursorPos = editorSelection().start
   const beforeCursor = text.slice(0, cursorPos)
 
   const slashMatch = beforeCursor.match(/(?:^|\n)\/([^\n/]{0,20})$/)
@@ -533,10 +552,8 @@ function detectPopups() {
 
 // 若光标前是斜杠召回 token（行首 /xxx）则返回其范围，供选中后剥离；否则 null（按钮召回=光标处插入）。
 function slashStripRange(): { start: number; end: number } | null {
-  const el = textareaRef.value
-  if (!el) return null
-  const cursorPos = el.selectionStart
-  const before = el.value.slice(0, cursorPos)
+  const cursorPos = editorSelection().start
+  const before = inputText.value.slice(0, cursorPos)
   const m = before.match(/(?:^|\n)(\/[^\n/]{0,20})$/)
   if (!m) return null
   return { start: cursorPos - m[1]!.length, end: cursorPos }
@@ -545,10 +562,8 @@ function slashStripRange(): { start: number; end: number } | null {
 // 统一命令面板选中：skill → 插 @name；prompt → 插正文（含 $ARGUMENTS snippet 填参）。
 // 斜杠召回会剥掉 /query；按钮召回在光标处插入。
 function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string; name?: string }) {
-  const el = textareaRef.value
-  if (!el) return
-  const cursorPos = el.selectionStart
-  const text = el.value
+  const cursorPos = editorSelection().start
+  const text = inputText.value
   const strip = slashStripRange()
   const start = strip ? strip.start : cursorPos
   const end = strip ? strip.end : cursorPos
@@ -569,9 +584,9 @@ function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string
     // 这里仅剥掉 slash 召回的 /query（按钮召回时 before+text.slice(end) 即原文不变）。
     inputText.value = before + text.slice(end)
     nextTick(() => {
-      el.setSelectionRange(before.length, before.length)
+      mathEditorRef.value?.setCanonicalSelection(before.length)
       handleInput()
-      focus()
+      mathEditorRef.value?.focusEditor()
     })
     return
   }
@@ -583,20 +598,18 @@ function handleTemplateSelect(item: { kind: 'skill' | 'prompt'; content?: string
   const argIdx = content.indexOf(ARG)
   nextTick(() => {
     handleInput()
-    focus()
+    mathEditorRef.value?.focusEditor()
     // command 闭环：选中第一个 $ARGUMENTS 占位，用户直接键入即替换填参（避免字面量被发给模型）。
     if (argIdx >= 0) {
       const s = before.length + argIdx
-      el.setSelectionRange(s, s + ARG.length)
+      mathEditorRef.value?.setCanonicalSelection(s, s + ARG.length)
     }
   })
 }
 
 function handleMentionSelect(item: MentionSelectItem) {
-  const el = textareaRef.value
-  if (!el) return
-  const cursorPos = el.selectionStart
-  const text = el.value
+  const cursorPos = editorSelection().start
+  const text = inputText.value
   const beforeCursor = text.slice(0, cursorPos)
   const atIdx = beforeCursor.lastIndexOf('@')
   showMention.value = false
@@ -607,8 +620,8 @@ function handleMentionSelect(item: MentionSelectItem) {
     inputText.value = text.slice(0, atIdx) + `@${item.name} ` + text.slice(cursorPos)
     nextTick(() => {
       const p = atIdx + item.name.length + 2
-      el.setSelectionRange(p, p)
-      el.focus()
+      mathEditorRef.value?.setCanonicalSelection(p)
+      mathEditorRef.value?.focusEditor()
       handleInput()
     })
     return
@@ -617,8 +630,8 @@ function handleMentionSelect(item: MentionSelectItem) {
   // 知识 / 连接 / 会话：移除 @query token，挂为上下文 chip（内容注入 backendText）
   inputText.value = text.slice(0, atIdx) + text.slice(cursorPos)
   nextTick(() => {
-    el.setSelectionRange(atIdx, atIdx)
-    el.focus()
+    mathEditorRef.value?.setCanonicalSelection(atIdx)
+    mathEditorRef.value?.focusEditor()
     handleInput()
   })
   addContextRef(item)
@@ -646,27 +659,11 @@ function handlePaste(e: ClipboardEvent) {
   }
   if (imageFiles.length > 0) {
     e.preventDefault()
+    e.stopPropagation()
     addFiles(imageFiles)
-    return
   }
-  // #1 2026-06-23：粘贴文本若含「非标准换行」(\r / U+2028 / U+2029)，textarea 原生不折行 →
-  // markdown 渲染连成一行。手动规范化为 \n 再插入光标处，保留换行。
-  const plain = e.clipboardData?.getData('text/plain') ?? ''
-  const paste = readMathClipboard(e.clipboardData)
-  if (paste.text && (paste.handled || hasWeirdLineBreaks(plain))) {
-    e.preventDefault()
-    const el = textareaRef.value
-    if (!el) return
-    const start = el.selectionStart ?? inputText.value.length
-    const end = el.selectionEnd ?? start
-    const inserted = insertAtSelection(inputText.value, paste.text, start, end)
-    inputText.value = inserted.value
-    nextTick(() => {
-      el.setSelectionRange(inserted.caret, inserted.caret)
-      el.focus()
-      handleInput()
-    })
-  }
+  // 文本 / MathML / TeX 粘贴统一下沉到 MessageText editable：它负责规范化换行、
+  // canonical 插入和原位数学投影；这里只在 capture 阶段优先截获图片附件。
 }
 
 // 拖拽上传：与 handlePaste 同源，把拖入的文件交给 addFiles（image 会经后端
@@ -690,6 +687,8 @@ function handleDrop(e: DragEvent) {
   if (!canAcceptFiles()) return
   const files = e.dataTransfer?.files
   if (!files || files.length === 0) return
+  e.preventDefault()
+  e.stopPropagation()
   addFiles(Array.from(files))
 }
 
@@ -746,7 +745,15 @@ function addFiles(files: File[]) {
       const reader = new FileReader()
       reader.onload = () => {
         const url = String(reader.result ?? '')
-        if (url) emit('scenario-image', url)
+        if (!url) return
+        const comma = url.indexOf(',')
+        const attachment: ChatAttachment = {
+          type: 'image',
+          name: file.name,
+          mime: file.type,
+          data: comma >= 0 ? url.slice(comma + 1) : url,
+        }
+        emit('scenario-image', { dataUrl: url, attachment })
       }
       reader.readAsDataURL(file)
       continue
@@ -769,7 +776,7 @@ function formatFileSize(bytes: number): string {
 
 // 统一命令面板入口：与输入「/」等效，更可发现。scope 决定列 Skill / Prompt / 全部。
 function openPalette(scope: 'all' | 'skills' | 'prompts') {
-  const el = textareaRef.value
+  const el = editorElement()
   if (!el) return
   const rect = el.getBoundingClientRect()
   templateQuery.value = ''
@@ -780,7 +787,7 @@ function openPalette(scope: 'all' | 'skills' | 'prompts') {
     bottom: window.innerHeight - rect.top + 8,
     left: Math.min(rect.left + 14, window.innerWidth - 356),
   }
-  el.focus()
+  mathEditorRef.value?.focusEditor()
 }
 function openPromptPicker() {
   openPalette('prompts')
@@ -790,7 +797,7 @@ function openSkillPicker() {
 } // 🔧 按钮
 
 function focus() {
-  textareaRef.value?.focus()
+  mathEditorRef.value?.focusToEnd()
 }
 function setInput(text: string, shouldFocus = true) {
   inputText.value = text
@@ -814,7 +821,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
       @dragenter.prevent="handleDragEnter"
       @dragover.prevent
       @dragleave.prevent="handleDragLeave"
-      @drop.prevent="handleDrop"
+      @drop.capture="handleDrop"
     >
       <!-- 拖放文件遮罩 -->
       <div v-if="isDragging" class="hc-composer__dropzone">
@@ -898,17 +905,17 @@ defineExpose({ focus, setInput, triggerFileUpload })
       </div>
 
       <HcClearableField>
-        <textarea
-          ref="textareaRef"
-          v-model="inputText"
-          rows="1"
-          class="hc-composer__field"
-          data-testid="chat-input"
+        <MessageText
+          ref="mathEditorRef"
+          :content="inputText"
+          editable
+          editor-class="hc-composer__field"
+          editor-test-id="chat-input"
           :placeholder="placeholder"
           :disabled="disabled || submitting"
+          @update:content="handleContentUpdate"
           @keydown="handleKeydown"
-          @input="handleInput"
-          @paste="handlePaste"
+          @paste.capture="handlePaste"
           @compositionstart="handleCompositionStart"
           @compositionend="handleCompositionEnd"
         />
@@ -1086,10 +1093,9 @@ defineExpose({ focus, setInput, triggerFileUpload })
   backdrop-filter: blur(2px);
 }
 
-/* Textarea */
-.hc-composer__field {
+/* Canonical inline editor：与消息编辑共用 MessageText editable，视觉尺寸保持原 composer。 */
+.hc-composer :deep(.hc-composer__field) {
   width: 100%;
-  resize: none;
   background: transparent;
   border: none;
   outline: none;
@@ -1104,7 +1110,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
   letter-spacing: -0.01em;
 }
 
-.hc-composer__field::placeholder {
+.hc-composer :deep(.hc-composer__field[data-placeholder]:empty::before) {
   /* P1：占位符更克制——比正文/次级文字更浅一档（文案不变，仅降视觉权重） */
   color: var(--hc-text-muted, #a1a1a6);
   font-weight: 400;
@@ -1123,10 +1129,10 @@ defineExpose({ focus, setInput, triggerFileUpload })
 }
 
 /* 输入框滚动条：与全局一致的「悬停浮现·离开即隐」，仅更纤细（贴合小高度输入区） */
-.hc-composer__field::-webkit-scrollbar {
+.hc-composer :deep(.hc-composer__field::-webkit-scrollbar) {
   width: 8px;
 }
-.hc-composer__field::-webkit-scrollbar-thumb {
+.hc-composer :deep(.hc-composer__field::-webkit-scrollbar-thumb) {
   background-color: transparent;
   border: 2px solid transparent;
   background-clip: padding-box;
@@ -1134,10 +1140,10 @@ defineExpose({ focus, setInput, triggerFileUpload })
   min-height: 24px;
   transition: background-color 0.25s var(--hc-ease-out);
 }
-.hc-composer__field:hover::-webkit-scrollbar-thumb {
+.hc-composer :deep(.hc-composer__field:hover::-webkit-scrollbar-thumb) {
   background-color: var(--hc-scrollbar-thumb);
 }
-.hc-composer__field::-webkit-scrollbar-thumb:hover {
+.hc-composer :deep(.hc-composer__field::-webkit-scrollbar-thumb:hover) {
   background-color: var(--hc-scrollbar-thumb-hover);
 }
 

@@ -69,11 +69,22 @@ async function mountChatInput(props: Record<string, unknown> = {}, locale = 'zh-
 const tools = (w: VueWrapper) => w.findAll('.hc-composer__tool')
 const toolByTitle = (w: VueWrapper, sub: string) =>
   tools(w).find((b) => (b.attributes('title') || '').includes(sub))
+const editor = (w: VueWrapper) => w.get<HTMLElement>('[data-testid="chat-input"]')
+const canonicalSource = (w: VueWrapper) =>
+  editor(w).attributes('data-canonical-source') ?? ''
+
+async function setDraft(w: VueWrapper, value: string) {
+  const field = editor(w)
+  field.element.textContent = value
+  await field.trigger('input')
+  await w.vm.$nextTick()
+}
 
 beforeEach(() => {
   voiceRefs.api = {
     isListening: ref(false),
     transcript: ref(''),
+    error: ref(''),
     isSupported: true,
     toggleListening: vi.fn(),
   }
@@ -119,7 +130,7 @@ describe('ChatInput · 对话框重新设计', () => {
 
   it('placeholder 内嵌「/ Skill·Prompt、@ 智能体」灰色注释', async () => {
     const w = await mountChatInput({ recipientName: '小蟹' })
-    const ph = w.get('textarea').attributes('placeholder') || ''
+    const ph = editor(w).attributes('data-placeholder') || ''
     expect(ph).toContain('发送给 小蟹')
     expect(ph).toContain('Skill·Prompt')
     expect(ph).toContain('@ 智能体')
@@ -131,7 +142,7 @@ describe('ChatInput · 对话框重新设计', () => {
     expect((send.element as HTMLButtonElement).disabled).toBe(true)
     expect(send.classes()).not.toContain('hc-composer__send--active')
 
-    await w.get('textarea').setValue('hello')
+    await setDraft(w, 'hello')
     expect((send.element as HTMLButtonElement).disabled).toBe(false)
     expect(send.classes()).toContain('hc-composer__send--active')
   })
@@ -161,7 +172,7 @@ describe('ChatInput · 🎤 语音听写闭环', () => {
     ;(voiceRefs.api.transcript as { value: string }).value = '帮我写一首关于月亮的诗'
     await nextTick()
     await flushPromises()
-    expect((w.get('textarea').element as HTMLTextAreaElement).value).toBe('帮我写一首关于月亮的诗')
+    expect(canonicalSource(w)).toBe('帮我写一首关于月亮的诗')
   })
 })
 

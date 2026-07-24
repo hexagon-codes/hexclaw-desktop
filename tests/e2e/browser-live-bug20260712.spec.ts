@@ -77,11 +77,11 @@ test.describe('BUG-20260712 真实点击验证', () => {
     await expect(page).toHaveURL(/\/chat/, { timeout: 15_000 })
     await expect(page.locator('.k12enh-seg')).toBeVisible({ timeout: 20_000 })
 
-    // 2) composer 样式审计（「样式错乱」定位）：盒可见、textarea 字号正常、工具行齐全、发送键在
+    // 2) composer 样式审计（「样式错乱」定位）：盒可见、canonical editor 字号正常、工具行齐全、发送键在
     const box = page.locator('.hc-composer__box')
     await expect(box).toBeVisible()
-    const ta = box.locator('textarea')
-    const fontSize = await ta.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
+    const editor = box.getByTestId('chat-input')
+    const fontSize = await editor.evaluate((el) => parseFloat(getComputedStyle(el).fontSize))
     expect(fontSize, `composer 字号异常放大: ${fontSize}px`).toBeLessThanOrEqual(16)
     const toolCount = await box.locator('.hc-composer__tool:visible').count()
     expect(toolCount, 'composer 工具行按钮缺失').toBeGreaterThanOrEqual(4) // + / Skill / Prompt / 🎤

@@ -92,6 +92,7 @@ async function installMockBackend(page: Page) {
   })
 
   await page.addInitScript(() => {
+    localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
     sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
     localStorage.setItem('hexclaw_lastSessionId', 's-bg')
     localStorage.setItem('hexclaw_pinned_sessions', JSON.stringify(['s-active']))
@@ -383,11 +384,20 @@ test('session delete confirmation keeps its five-second cooldown hover visually 
   const session = page.locator('[data-session-id="s-bg"]')
   await session.hover()
   await session.getByRole('button', { name: '会话操作' }).click()
-  await page.getByRole('menu').getByRole('menuitem', { name: '删除', exact: true }).click()
+  const deleteItem = page.getByRole('menu').locator('.hc-ctx__item--danger')
+  await expect(deleteItem.locator('.hc-ctx__label')).toHaveText('删除')
+  await deleteItem.click()
 
   const dialog = page.getByRole('alertdialog')
   const confirm = dialog.getByRole('button', { name: '删除', exact: true })
   await expect(confirm).toBeDisabled()
+
+  // The dialog has an approved entrance transition. Finish that transition before
+  // measuring pointer hover so the geometry check cannot wait on a moving target.
+  await dialog.evaluate(async (element) => {
+    const animations = element.getAnimations({ subtree: true })
+    await Promise.all(animations.map((animation) => animation.finished.catch(() => undefined)))
+  })
 
   const visualState = async () =>
     confirm.evaluate((element) => {

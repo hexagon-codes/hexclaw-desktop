@@ -59,6 +59,53 @@ function i18n() {
 }
 
 describe('BUG-20260723 · complete math source survives send and history replay', () => {
+  it('renders pasted canonical formulas inside the composer before sending the exact source', async () => {
+    const sendHandler = vi.fn().mockResolvedValue(true)
+    const ChatInput = (await import('../ChatInput.vue')).default
+    const wrapper = mount(ChatInput, {
+      props: { sendHandler },
+      global: {
+        plugins: [i18n()],
+        stubs: {
+          MentionPopup: { template: '<div />' },
+          TemplatePopup: { template: '<div />' },
+        },
+      },
+      attachTo: document.body,
+    })
+    const input = wrapper.get('[data-testid="chat-input"]')
+    const clipboardData = {
+      items: [] as unknown[],
+      getData: (type: string) => {
+        if (type === 'text/plain') return FULL_SOURCE
+        if (type !== 'text/html') return ''
+        return [
+          '<math><semantics><mfrac><mn>1</mn><mn>2</mn></mfrac>',
+          '<annotation encoding="application/x-tex">1\\frac{1}{2}</annotation>',
+          '</semantics></math>',
+        ].join('')
+      },
+    }
+
+    await input.trigger('paste', { clipboardData })
+    await flushPromises()
+
+    const canonical = input.attributes('data-canonical-source')
+      || (input.element as HTMLTextAreaElement).value
+    expect(canonical).toBe(FULL_SOURCE)
+    expect(input.findAll('.katex')).toHaveLength(2)
+    expect(
+      input
+        .findAll('annotation[encoding="application/x-tex"]')
+        .map((annotation) => annotation.text()),
+    ).toEqual([String.raw`1\frac{1}{2} \times \frac{2}{3} =`, String.raw`2\frac{1}{4} \div \frac{9}{8} =`])
+
+    await wrapper.get('.hc-composer__send').trigger('click')
+    await flushPromises()
+    expect(sendHandler).toHaveBeenCalledWith(FULL_SOURCE, [], undefined)
+    wrapper.unmount()
+  })
+
   it('keeps one identical string from ChatInput through optimistic display and reload', async () => {
     const messages: Array<{
       id: string
@@ -98,7 +145,9 @@ describe('BUG-20260723 · complete math source survives send and history replay'
       },
     })
 
-    await wrapper.get('textarea').setValue(FULL_SOURCE)
+    const composer = wrapper.get('[data-testid="chat-input"]')
+    composer.element.textContent = FULL_SOURCE
+    await composer.trigger('input')
     await wrapper.get('.hc-composer__send').trigger('click')
     await flushPromises()
 
