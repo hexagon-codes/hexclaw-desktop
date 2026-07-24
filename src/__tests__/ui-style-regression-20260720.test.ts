@@ -77,4 +77,16 @@ describe('desktop page density and responsive style contracts', () => {
     expect(works).not.toContain('.k12cw__card--expanded')
     expect(works).toContain('class="k12cw-detail-modal"')
   })
+
+  it('keeps the creative-work image preview below the desktop titlebar safe area', () => {
+    const works = source('features/k12/views/K12CreativeWorksPanel.vue')
+
+    expect(works).toMatch(
+      /\.k12cw-image-preview\s*\{[^}]*top:\s*var\(--hc-titlebar-height\);[^}]*right:\s*0;[^}]*bottom:\s*0;[^}]*left:\s*0;/s,
+    )
+    expect(works).not.toMatch(/\.k12cw-image-preview\s*\{[^}]*inset:\s*0;/s)
+    expect(works).toMatch(
+      /\.k12cw-image-preview\s*>\s*img\s*\{[^}]*max-height:\s*calc\(100vh - var\(--hc-titlebar-height\) - 48px\);/s,
+    )
+  })
 })

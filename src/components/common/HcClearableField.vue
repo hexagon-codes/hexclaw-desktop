@@ -12,7 +12,12 @@ const props = withDefaults(defineProps<{
 const root = ref<HTMLElement | null>(null)
 const hasValue = ref(false)
 const isTextarea = ref(false)
-let field: HTMLInputElement | HTMLTextAreaElement | null = null
+type NativeClearableControl = HTMLInputElement | HTMLTextAreaElement
+let field: HTMLElement | null = null
+
+function isNativeControl(control: HTMLElement | null): control is NativeClearableControl {
+  return control instanceof HTMLInputElement || control instanceof HTMLTextAreaElement
+}
 
 const instance = getCurrentInstance()
 const clearLabel = computed(() => {
@@ -23,7 +28,9 @@ const clearLabel = computed(() => {
 })
 
 function syncState() {
-  const next = root.value?.querySelector<HTMLInputElement | HTMLTextAreaElement>('input, textarea') ?? null
+  const next = root.value?.querySelector<HTMLElement>(
+    'input, textarea, [data-clearable-control]',
+  ) ?? null
   if (next !== field) {
     field?.removeEventListener('input', syncState)
     field?.removeEventListener('change', syncState)
@@ -31,15 +38,33 @@ function syncState() {
     field?.addEventListener('input', syncState)
     field?.addEventListener('change', syncState)
   }
-  isTextarea.value = field instanceof HTMLTextAreaElement
-  hasValue.value = !!field?.value && !field.disabled && !field.readOnly
+  const current = field
+  const isNativeField = isNativeControl(current)
+  const isEditableSurface = !!current?.matches('[data-clearable-control][contenteditable="true"]')
+  const unavailable = isNativeField
+    ? current.disabled || current.readOnly
+    : current?.getAttribute('aria-disabled') === 'true'
+      || current?.getAttribute('contenteditable') !== 'true'
+  const value = isNativeField
+    ? current.value
+    : current?.dataset.canonicalSource ?? current?.textContent ?? ''
+  isTextarea.value = current instanceof HTMLTextAreaElement || isEditableSurface
+  hasValue.value = !!value && !unavailable
 }
 
 function clear() {
-  if (!field || field.disabled || field.readOnly) return
-  field.value = ''
-  field.dispatchEvent(new Event('input', { bubbles: true }))
-  field.focus()
+  if (!field) return
+  const current = field
+  const isNativeField = isNativeControl(current)
+  const unavailable = isNativeField
+    ? current.disabled || current.readOnly
+    : current.getAttribute('aria-disabled') === 'true'
+      || current.getAttribute('contenteditable') !== 'true'
+  if (unavailable) return
+  if (isNativeField) current.value = ''
+  else current.textContent = ''
+  current.dispatchEvent(new Event('input', { bubbles: true }))
+  current.focus()
   syncState()
 }
 
@@ -87,7 +112,8 @@ onBeforeUnmount(() => {
 }
 
 .hc-clearable-field :deep(input),
-.hc-clearable-field :deep(textarea) {
+.hc-clearable-field :deep(textarea),
+.hc-clearable-field :deep([data-clearable-control]) {
   display: block;
   width: 100%;
   min-width: 0;

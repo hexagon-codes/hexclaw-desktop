@@ -21,7 +21,7 @@ function mountTextField(initial = 'filled') {
 describe('HcClearableField', () => {
   it('owns a full-width, min-width-safe field contract for every slotted input and textarea', () => {
     expect(clearableSource).toMatch(
-      /\.hc-clearable-field\s+:deep\(input\),[\s\S]*?\.hc-clearable-field\s+:deep\(textarea\)\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/s,
+      /\.hc-clearable-field\s+:deep\(input\),[\s\S]*?\.hc-clearable-field\s+:deep\(textarea\),[\s\S]*?\.hc-clearable-field\s+:deep\(\[data-clearable-control\]\)\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/s,
     )
   })
 
@@ -67,6 +67,39 @@ describe('HcClearableField', () => {
 
     expect((wrapper.vm as unknown as { value: string }).value).toBe('')
     expect(wrapper.find('button').exists()).toBe(false)
+  })
+
+  it('supports the canonical contenteditable control used by message math editing', async () => {
+    const wrapper = mount(defineComponent({
+      components: { HcClearableField },
+      setup() {
+        const value = ref(String.raw`题目 $2\frac{3}{4}$`)
+        const update = (event: Event) => {
+          value.value = (event.currentTarget as HTMLElement).textContent ?? ''
+        }
+        return { value, update }
+      },
+      template: `
+        <HcClearableField>
+          <div
+            contenteditable="true"
+            data-clearable-control
+            :data-canonical-source="value"
+            @input="update"
+          >{{ value }}</div>
+        </HcClearableField>
+      `,
+    }), { attachTo: document.body })
+    await nextTick()
+
+    expect(wrapper.find('button').exists()).toBe(true)
+    await wrapper.get('button').trigger('click')
+
+    expect((wrapper.vm as unknown as { value: string }).value).toBe('')
+    expect(wrapper.find('[data-clearable-control]').text()).toBe('')
+    expect(wrapper.find('button').exists()).toBe(false)
+    expect(document.activeElement).toBe(wrapper.get('[data-clearable-control]').element)
+    wrapper.unmount()
   })
 
   it.each(['disabled', 'readonly'] as const)('does not offer clearing for %s fields', (state) => {

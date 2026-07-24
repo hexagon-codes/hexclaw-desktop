@@ -1253,11 +1253,32 @@ select.hc-input:focus {
   white-space: nowrap;
   word-break: normal;
   overflow-wrap: normal;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: visible;
   vertical-align: middle;
   direction: ltr;
   unicode-bidi: isolate;
+}
+
+/* The semantic shell above never owns scrolling. This inner layout boundary
+   remains visibly overflowing for ordinary formulas and becomes the sole
+   horizontal viewport only when width detection proves that it is needed. */
+.hc-math-viewport {
+  display: block;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: visible;
+  white-space: nowrap;
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+
+/* A fixed logical guard belongs to the scroll viewport itself. It protects
+   KaTeX's positioned fraction/radical ink from WebKit's overflow clip without
+   inspecting or measuring KaTeX's private descendant layout. */
+.hc-math-viewport--scrollable {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.4em;
 }
 
 /* The global RTL plaintext fallback has higher specificity because its :is()

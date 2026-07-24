@@ -32,8 +32,8 @@ describe('prototype shared-control fidelity', () => {
     expect(trigger).toMatch(/padding-right:\s*32px/)
     expect(cssRule(raw, '.hc-select__arrow')).toMatch(/position:\s*absolute/)
     expect(cssRule(raw, '.hc-select__arrow')).toMatch(/right:\s*10px/)
-    expect(raw).toContain("top: `${rect.bottom + 4}px`")
-    expect(raw).toContain("bottom: `${window.innerHeight - rect.top + 4}px`")
+    expect(raw).toContain('top: `${rect.bottom + 4}px`')
+    expect(raw).toContain('bottom: `${window.innerHeight - rect.top + 4}px`')
   })
 
   it('keeps ProviderSelect on the dedicated prototype provider selector contract', () => {
@@ -46,15 +46,21 @@ describe('prototype shared-control fidelity', () => {
     expect(trigger).toMatch(/padding:\s*8px 34px 8px 11px/)
     expect(trigger).toMatch(/border:\s*0\.5px solid var\(--hc-border\)/)
     expect(trigger).toMatch(/border-radius:\s*10px/)
-    expect(cssRule(raw, '.hc-provider-select__trigger:hover')).toMatch(/border-color:\s*var\(--hc-border-hl\)/)
-    expect(cssRule(raw, '.hc-provider-select__trigger:hover')).toMatch(/background:\s*var\(--hc-bg-hover\)/)
-    expect(cssRule(raw, '.hc-provider-select__trigger:focus-visible')).toMatch(/box-shadow:\s*0 0 0 3px var\(--hc-accent-subtle\)/)
+    expect(cssRule(raw, '.hc-provider-select__trigger:hover')).toMatch(
+      /border-color:\s*var\(--hc-border-hl\)/,
+    )
+    expect(cssRule(raw, '.hc-provider-select__trigger:hover')).toMatch(
+      /background:\s*var\(--hc-bg-hover\)/,
+    )
+    expect(cssRule(raw, '.hc-provider-select__trigger:focus-visible')).toMatch(
+      /box-shadow:\s*0 0 0 3px var\(--hc-accent-subtle\)/,
+    )
     expect(cssRule(raw, '.hc-provider-select__arrow')).toMatch(/right:\s*11px/)
     expect(menu).toMatch(/border:\s*0\.5px solid var\(--hc-border\)/)
     expect(menu).toMatch(/backdrop-filter:\s*blur\(24px\) saturate\(160%\)/)
     expect(option).toMatch(/min-height:\s*34px/)
     expect(option).toMatch(/border-radius:\s*7px/)
-    expect(raw).toContain("top: `${rect.bottom + 6}px`")
+    expect(raw).toContain('top: `${rect.bottom + 6}px`')
   })
 
   it('keeps segmented counts and underline tabs at their prototype weights and hairlines', () => {
@@ -103,7 +109,7 @@ describe('prototype shared-control fidelity', () => {
     expect(raw).toContain('let left = r.left')
     expect(raw).toContain('let top = r.bottom + 6')
     expect(split).toMatch(/box-shadow:\s*0 6px 18px rgba\(95,\s*179,\s*234,\s*0\.28\)/)
-    expect(cssRule(raw, '.hc-split-btn:hover')).toMatch(/transform:\s*translateY\(-1px\)/)
+    expect(cssRule(raw, '.hc-split-btn:hover')).not.toMatch(/transform\s*:/)
     expect(main).toMatch(/gap:\s*6px/)
     expect(main).toMatch(/padding:\s*8px 14px/)
     expect(main).toMatch(/background:\s*linear-gradient\(180deg,\s*#5fb3ea 0%,\s*#4a9de0 100%\)/)
