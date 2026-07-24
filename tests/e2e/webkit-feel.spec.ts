@@ -31,7 +31,7 @@ test.describe('真机手感 @ WebKit（Tauri WKWebView 同引擎）', () => {
   test('① 应用在 WebKit 里正常 boot（输入区 + 消息容器渲染，不白屏）', async ({ page }) => {
     await expect(page.locator('.hc-chat__input-area')).toBeVisible()
     await expect(page.locator('.hc-chat__messages')).toHaveCount(1)
-    await expect(page.locator('textarea').first()).toBeVisible()
+    await expect(page.getByTestId('chat-input')).toBeVisible()
   })
 
   test('② 滚动导航箭头几何：锚定输入框上方、水平居中、不重叠（WebKit 渲染）', async ({ page }) => {
@@ -170,8 +170,8 @@ test.describe('真机手感 @ WebKit（Tauri WKWebView 同引擎）', () => {
       const box = document.querySelector('.hc-composer__box') as HTMLElement
       const scopeAttr = box.getAttributeNames().find((n) => n.startsWith('data-v-'))!
       const boxCS = getComputedStyle(box)
-      const ta = box.querySelector('textarea') as HTMLTextAreaElement
-      const taCS = getComputedStyle(ta)
+      const editor = box.querySelector<HTMLElement>('[data-testid="chat-input"]')!
+      const editorCS = getComputedStyle(editor)
 
       const chips = document.createElement('div')
       chips.className = 'hc-composer__skills'
@@ -190,20 +190,22 @@ test.describe('真机手感 @ WebKit（Tauri WKWebView 同引擎）', () => {
       box.insertBefore(chips, box.firstChild)
 
       const boxRect = box.getBoundingClientRect()
-      const taRect = ta.getBoundingClientRect()
+      const editorRect = editor.getBoundingClientRect()
       const chipRect = chip.getBoundingClientRect()
       const chipCS = getComputedStyle(chip)
       // 盒左内边距（content-left 相对盒左缘）
       const boxPadLeft = parseFloat(boxCS.borderLeftWidth) + parseFloat(boxCS.paddingLeft)
-      // placeholder/文本 content-left（textarea 自身 padding:0，故 == 盒 padding-left）
-      const taContentLeft = (taRect.left - boxRect.left) + parseFloat(taCS.borderLeftWidth) + parseFloat(taCS.paddingLeft)
+      // placeholder/文本 content-left（canonical editor 自身 padding:0，故 == 盒 padding-left）
+      const editorContentLeft = (editorRect.left - boxRect.left)
+        + parseFloat(editorCS.borderLeftWidth)
+        + parseFloat(editorCS.paddingLeft)
       const chipLeft = chipRect.left - boxRect.left
       const r = {
-        placeholderVsBoxPad: Math.round(taContentLeft - boxPadLeft),
-        chipVsPlaceholder: Math.round(chipLeft - taContentLeft),
+        placeholderVsBoxPad: Math.round(editorContentLeft - boxPadLeft),
+        chipVsPlaceholder: Math.round(chipLeft - editorContentLeft),
         chipRadius: parseFloat(chipCS.borderTopLeftRadius),
         chipHalfHeight: chipRect.height / 2,
-        gapChipsToInput: Math.round(taRect.top - chipRect.bottom),
+        gapChipsToInput: Math.round(editorRect.top - chipRect.bottom),
       }
       chips.remove()
       return r

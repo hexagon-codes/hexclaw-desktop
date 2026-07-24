@@ -320,12 +320,15 @@ const mcpMarketplace = [
 ]
 
 async function installCurrentSourceMocks(page: Page) {
-  await page.addInitScript(({ agent, session }) => {
-    localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
-    sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
-    localStorage.setItem('hexclaw_lastSessionId', session)
-    localStorage.setItem('hexclaw_sessionAgents', JSON.stringify({ [session]: agent }))
-  }, { agent: k12Agent, session: k12Session })
+  await page.addInitScript(
+    ({ agent, session }) => {
+      localStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+      sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+      localStorage.setItem('hexclaw_lastSessionId', session)
+      localStorage.setItem('hexclaw_sessionAgents', JSON.stringify({ [session]: agent }))
+    },
+    { agent: k12Agent, session: k12Session },
+  )
 
   await page.route('http://localhost:11434/**', (route) =>
     json(route, { models: [], version: 'test' }),
@@ -665,7 +668,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
 
     const semanticGeometry = await disclosureGeometry(semantic)
     await page.screenshot({
-      path: 'test-results/bug-20260723-knowledge-tabs-semantic-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-knowledge-tabs-semantic-runtime.png',
       fullPage: true,
     })
 
@@ -677,7 +680,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     await expect(page.getByTestId('kb-rag-body')).toBeVisible()
     expect(await disclosureGeometry(rag)).toEqual(semanticGeometry)
     await page.screenshot({
-      path: 'test-results/bug-20260723-knowledge-rag-disclosure-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-knowledge-rag-disclosure-runtime.png',
       fullPage: true,
     })
 
@@ -690,7 +693,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     await expect(page.locator('#memory-behavior-settings-body')).toBeVisible()
     expect(await disclosureGeometry(memoryDisclosure)).toEqual(semanticGeometry)
     await page.screenshot({
-      path: 'test-results/bug-20260723-memory-disclosure-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-memory-disclosure-runtime.png',
       fullPage: true,
     })
 
@@ -721,7 +724,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     }
 
     await page.screenshot({
-      path: 'test-results/bug-20260723-knowledge-layout-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-knowledge-layout-runtime.png',
       fullPage: true,
     })
   })
@@ -735,6 +738,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
 
     const dialog = page.getByTestId('prompt-editor-dialog')
     await expect(dialog).toBeVisible()
+    await page.waitForTimeout(250)
     const desktop = await dialog.evaluate((node) => {
       const rect = node.getBoundingClientRect()
       const body = node.querySelector('.hc-modal-body') as HTMLElement | null
@@ -764,7 +768,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
       expect(Math.abs(track.wrapperWidth - track.controlWidth)).toBeLessThanOrEqual(1)
     }
     await page.screenshot({
-      path: 'test-results/bug-20260723-prompt-modal-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-prompt-modal-runtime.png',
       fullPage: true,
     })
 
@@ -786,7 +790,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     expect(narrow.overflow).toBeLessThanOrEqual(1)
     expect(narrow.pairDirection).toBe('column')
     await page.screenshot({
-      path: 'test-results/bug-20260723-prompt-modal-narrow-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-prompt-modal-narrow-runtime.png',
       fullPage: true,
     })
   })
@@ -833,7 +837,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     expect(geometry.rows).toBe(3)
     expect(Number.parseFloat(geometry.footerBorder)).toBeGreaterThan(0)
     await page.screenshot({
-      path: 'test-results/bug-20260723-k12-webhook-modal-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-k12-webhook-modal-runtime.png',
       fullPage: true,
     })
 
@@ -841,7 +845,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     await expect(dialog).toBeInViewport()
     await expect(dialog.getByTestId('k12-webhook-editor-cancel')).toBeInViewport()
     await page.screenshot({
-      path: 'test-results/bug-20260723-k12-webhook-modal-narrow-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-k12-webhook-modal-narrow-runtime.png',
       fullPage: true,
     })
   })
@@ -855,6 +859,16 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
       { waitUntil: 'domcontentloaded' },
     )
     await expect(page.locator('.k12rec')).toBeVisible({ timeout: 20_000 })
+
+    await page.getByTestId('subtab-accumulation').click()
+    const accumAdd = page.getByTestId('accum-add-open')
+    await expect(accumAdd).toHaveText('记到积累本')
+    await expect(accumAdd.locator('svg')).toHaveCount(1)
+    await page.screenshot({
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-k12-accum-single-plus-runtime.png',
+      fullPage: true,
+    })
+
     await page.getByTestId('subtab-works').click()
 
     const works = page.getByTestId('works-section')
@@ -877,17 +891,16 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
       const tracks = [...node.querySelectorAll('.hc-clearable-field')].map((wrapper) => {
         const control = wrapper.querySelector('input, textarea') as HTMLElement | null
         if (!control) throw new Error('work form control missing')
-        return Math.abs(wrapper.getBoundingClientRect().width - control.getBoundingClientRect().width)
+        return Math.abs(
+          wrapper.getBoundingClientRect().width - control.getBoundingClientRect().width,
+        )
       })
       const rect = node.getBoundingClientRect()
       if (!body || !footer) throw new Error('work modal geometry missing')
       return {
         width: rect.width,
         insideViewport:
-          rect.left >= 0 &&
-          rect.right <= innerWidth &&
-          rect.top >= 0 &&
-          rect.bottom <= innerHeight,
+          rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
         bodyOverflow: body.scrollWidth - body.clientWidth,
         footerVisible: footer.getBoundingClientRect().bottom <= innerHeight,
         tracks,
@@ -900,7 +913,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     expect(addGeometry.footerVisible).toBe(true)
     expect(addGeometry.tracks.every((delta) => delta <= 1)).toBe(true)
     await page.screenshot({
-      path: 'test-results/bug-20260723-k12-add-work-modal-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-k12-add-work-modal-runtime.png',
       fullPage: true,
     })
     await addDialog.locator('.k12cw-modal__foot').getByRole('button', { name: '取消' }).click()
@@ -911,9 +924,99 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     const preview = page.getByTestId('cw-image-preview')
     await expect(preview).toBeVisible()
     await expect(preview).toBeFocused()
-    await expect(preview.locator('img')).toHaveAttribute('src', new RegExp(k12AssetFile))
+    const previewImage = preview.locator('img')
+    const previewClose = preview.getByRole('button', { name: '关闭预览' })
+    await expect(previewClose).toBeVisible()
+    await expect(previewImage).toHaveAttribute('src', new RegExp(k12AssetFile))
+    await expect
+      .poll(() =>
+        previewImage.evaluate((image: HTMLImageElement) => ({
+          complete: image.complete,
+          naturalWidth: image.naturalWidth,
+          naturalHeight: image.naturalHeight,
+        })),
+      )
+      .toMatchObject({
+        complete: true,
+        naturalWidth: 320,
+        naturalHeight: 240,
+      })
+    await previewImage.evaluate(async (image: HTMLImageElement) => {
+      await image.decode()
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      )
+    })
+    const previewImageState = await previewImage.evaluate((image: HTMLImageElement) => {
+      const imageRect = image.getBoundingClientRect()
+      const previewRect = image.parentElement!.getBoundingClientRect()
+      const style = getComputedStyle(image)
+      return {
+        complete: image.complete,
+        naturalWidth: image.naturalWidth,
+        naturalHeight: image.naturalHeight,
+        renderedWidth: imageRect.width,
+        renderedHeight: imageRect.height,
+        centerDeltaX: Math.abs(
+          imageRect.left + imageRect.width / 2 - (previewRect.left + previewRect.width / 2),
+        ),
+        centerDeltaY: Math.abs(
+          imageRect.top + imageRect.height / 2 - (previewRect.top + previewRect.height / 2),
+        ),
+        display: style.display,
+        visibility: style.visibility,
+        opacity: style.opacity,
+      }
+    })
+    expect(previewImageState.complete).toBe(true)
+    expect(previewImageState.naturalWidth).toBeGreaterThan(0)
+    expect(previewImageState.naturalHeight).toBeGreaterThan(0)
+    expect(previewImageState.renderedWidth).toBeGreaterThan(100)
+    expect(previewImageState.renderedHeight).toBeGreaterThan(100)
+    expect(previewImageState.centerDeltaX).toBeLessThanOrEqual(1)
+    expect(previewImageState.centerDeltaY).toBeLessThanOrEqual(1)
+    expect(previewImageState.display).not.toBe('none')
+    expect(previewImageState.visibility).toBe('visible')
+    expect(previewImageState.opacity).toBe('1')
+    const previewSafeArea = await page.evaluate(() => {
+      const titlebar = document.querySelector<HTMLElement>('.hc-titlebar')
+      const overlay = document.querySelector<HTMLElement>('[data-testid="cw-image-preview"]')
+      const image = overlay?.querySelector<HTMLImageElement>('img')
+      const close = overlay?.querySelector<HTMLButtonElement>('[aria-label="关闭预览"]')
+      if (!titlebar || !overlay || !image || !close) {
+        throw new Error('creative-work preview safe-area geometry is unavailable')
+      }
+      const titlebarRect = titlebar.getBoundingClientRect()
+      const overlayRect = overlay.getBoundingClientRect()
+      const imageRect = image.getBoundingClientRect()
+      const closeRect = close.getBoundingClientRect()
+      const hitTarget = document.elementFromPoint(
+        closeRect.left + closeRect.width / 2,
+        closeRect.top + closeRect.height / 2,
+      )
+      return {
+        titlebarBottom: titlebarRect.bottom,
+        overlayTop: overlayRect.top,
+        closeTop: closeRect.top,
+        closeBottom: closeRect.bottom,
+        closeHitTarget: hitTarget === close || close.contains(hitTarget),
+        imageTop: imageRect.top,
+        imageBottom: imageRect.bottom,
+        imageMaxHeight: Number.parseFloat(getComputedStyle(image).maxHeight),
+        viewportHeight: innerHeight,
+      }
+    })
+    expect(previewSafeArea.overlayTop).toBeGreaterThanOrEqual(previewSafeArea.titlebarBottom - 0.5)
+    expect(previewSafeArea.closeTop).toBeGreaterThanOrEqual(previewSafeArea.titlebarBottom - 0.5)
+    expect(previewSafeArea.closeBottom).toBeLessThanOrEqual(previewSafeArea.viewportHeight + 0.5)
+    expect(previewSafeArea.closeHitTarget).toBe(true)
+    expect(previewSafeArea.imageTop).toBeGreaterThanOrEqual(previewSafeArea.titlebarBottom - 0.5)
+    expect(previewSafeArea.imageBottom).toBeLessThanOrEqual(previewSafeArea.viewportHeight + 0.5)
+    expect(previewSafeArea.imageMaxHeight).toBeLessThanOrEqual(
+      previewSafeArea.viewportHeight - previewSafeArea.titlebarBottom - 48 + 0.5,
+    )
     await page.screenshot({
-      path: 'test-results/bug-20260723-k12-work-image-preview-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-k12-work-image-preview-runtime.png',
       fullPage: true,
     })
     await page.keyboard.press('Escape')
@@ -923,26 +1026,48 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     await works.getByTestId('cw-detail-toggle').click()
     const detail = page.getByTestId('cw-detail-modal')
     await expect(detail).toBeVisible()
+    await detail.evaluate(async (node) => {
+      const overlay = node.parentElement
+      const animations = [...(overlay?.getAnimations() ?? []), ...node.getAnimations()]
+      await Promise.all(animations.map((animation) => animation.finished))
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      )
+    })
     const detailGeometry = await detail.evaluate((node) => {
       const rect = node.getBoundingClientRect()
       const body = node.querySelector('.k12cw-detail-modal__body') as HTMLElement | null
       const footer = node.querySelector('.k12cw-detail-modal__foot') as HTMLElement | null
+      const overlay = node.parentElement
       if (!body || !footer) throw new Error('work detail geometry missing')
+      const style = getComputedStyle(node)
+      const overlayStyle = overlay ? getComputedStyle(overlay) : null
       return {
         insideViewport:
-          rect.left >= 0 &&
-          rect.right <= innerWidth &&
-          rect.top >= 0 &&
-          rect.bottom <= innerHeight,
+          rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
         bodyOverflow: body.scrollWidth - body.clientWidth,
         footerVisible: footer.getBoundingClientRect().bottom <= innerHeight,
+        display: style.display,
+        opacity: style.opacity,
+        visibility: style.visibility,
+        transform: style.transform,
+        overlayDisplay: overlayStyle?.display,
+        overlayOpacity: overlayStyle?.opacity,
+        overlayVisibility: overlayStyle?.visibility,
       }
     })
     expect(detailGeometry.insideViewport).toBe(true)
     expect(detailGeometry.bodyOverflow).toBeLessThanOrEqual(1)
     expect(detailGeometry.footerVisible).toBe(true)
+    expect(detailGeometry.display).not.toBe('none')
+    expect(detailGeometry.opacity).toBe('1')
+    expect(detailGeometry.visibility).toBe('visible')
+    expect(detailGeometry.transform).toBe('none')
+    expect(detailGeometry.overlayDisplay).toBe('flex')
+    expect(detailGeometry.overlayOpacity).toBe('1')
+    expect(detailGeometry.overlayVisibility).toBe('visible')
     await page.screenshot({
-      path: 'test-results/bug-20260723-k12-work-detail-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-k12-work-detail-runtime.png',
       fullPage: true,
     })
   })
@@ -973,7 +1098,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     await toolbarSearch.fill('')
     await expect(skillGrid.locator(':scope > *')).toHaveCount(skillMarketplace.length)
     await page.screenshot({
-      path: 'test-results/bug-20260723-skills-market-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-skills-market-runtime.png',
       fullPage: true,
     })
 
@@ -998,7 +1123,7 @@ test.describe('2026-07-23 current-source UI runtime regression', () => {
     await expect(mcpGrid.locator(':scope > *')).toHaveCount(mcpMarketplace.length)
     expect((await marketGeometry(page)).columns).toBe(skillGeometry.columns)
     await page.screenshot({
-      path: 'test-results/bug-20260723-mcp-market-runtime.png',
+      path: 'tests/e2e/screenshots/current-source/bug-20260723-mcp-market-runtime.png',
       fullPage: true,
     })
   })

@@ -113,6 +113,7 @@ describe('CSP security policy', () => {
 
   describe('style-src', () => {
     const styleSrc = csp['style-src'] ?? []
+    const styleSrcAttr = csp['style-src-attr'] ?? []
 
     it('includes unsafe-inline (required by Vue)', () => {
       expect(
@@ -123,6 +124,17 @@ describe('CSP security policy', () => {
 
     it('includes self', () => {
       expect(styleSrc).toContain("'self'")
+    })
+
+    it('allows dynamic element styles after Tauri injects hashes into style-src', () => {
+      // Tauri v2 appends hashes/nonces to style-src for bundled assets. CSP then
+      // ignores style-src 'unsafe-inline' for style="" attributes, which KaTeX
+      // uses for fraction/radical vertical layout. Keep the exception scoped to
+      // attributes instead of disabling Tauri's asset-CSP hardening.
+      expect(
+        styleSrcAttr,
+        `style-src-attr must explicitly allow KaTeX/Vue element styles. Got: ${styleSrcAttr.join(' ')}`,
+      ).toEqual(["'unsafe-inline'"])
     })
   })
 

@@ -280,6 +280,42 @@ describe('集成: 会话完整生命周期', () => {
 describe('集成: Agent 角色 → 对话', () => {
   beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks(); mockApi.mockReset() })
 
+  it('K12 场景开启 research 后仍以原 Agent 发送并保持 pinned_agent', async () => {
+    const { useChatStore } = await import('@/stores/chat')
+    const { useChatSend } = await import('@/composables/useChatSend')
+    const chat = useChatStore()
+    chat.chatParams.model = 'gpt-5.6-sol'
+    chat.chatMode = 'research'
+    chat.agentRole = 'k12-tutor-mingming'
+    chatSvc.sendViaBackend.mockResolvedValueOnce({ reply: '正在深入分析…', metadata: {} })
+
+    const { handleSend } = useChatSend({
+      chatStore: chat,
+      parsedDocument: ref(null),
+      attachmentPreview: ref(null),
+      clearAttachmentPreview: vi.fn(),
+      scrollToBottom: vi.fn(),
+      attachConversationAutomationActions: vi.fn().mockResolvedValue(undefined),
+    } as any)
+
+    await handleSend('深入分析这道题')
+    await vi.waitFor(() => expect(chatSvc.sendViaBackend).toHaveBeenCalled())
+
+    expect(chat.agentRole).toBe('k12-tutor-mingming')
+    expect(chatSvc.sendViaBackend).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.any(Object),
+      'k12-tutor-mingming',
+      undefined,
+      expect.objectContaining({
+        pinned_agent: 'k12-tutor-mingming',
+        producer_kind: 'chat',
+      }),
+      expect.any(String),
+    )
+  })
+
   it('research 模式设置 agentRole → sendMessage 传递 role → 退出模式清除', async () => {
     const { useChatStore } = await import('@/stores/chat')
     const { useChatSend } = await import('@/composables/useChatSend')

@@ -1,18 +1,25 @@
 import { expect, test } from '@playwright/test'
 
 function onePagePdf(): number[] {
+  const pageContent = [
+    '0.12 0.42 0.78 rg',
+    '72 650 451 100 re f',
+    '0.88 0.94 1 rg',
+    '72 560 330 56 re f',
+    '0 0 0 rg',
+    '72 520 451 2 re f',
+  ].join('\n')
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-    '<< /Length 52 >>\\nstream\\nBT /F1 24 Tf 72 760 Td (Print Preview Ready) Tj ET\\nendstream',
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R >>',
+    `<< /Length ${new TextEncoder().encode(pageContent).length} >>\nstream\n${pageContent}\nendstream`,
   ]
   let pdf = '%PDF-1.4\n'
   const offsets = [0]
   for (const [index, object] of objects.entries()) {
     offsets.push(new TextEncoder().encode(pdf).length)
-    pdf += `${index + 1} 0 obj\n${object.replaceAll('\\\\n', '\n')}\nendobj\n`
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`
   }
   const xrefOffset = new TextEncoder().encode(pdf).length
   pdf += `xref\n0 ${objects.length + 1}\n`
@@ -31,7 +38,7 @@ test('WKWebView-family preview renders the exact PDF Blob to canvas before enabl
   await page.setViewportSize({ width: 1280, height: 900 })
   await page.goto('/', { waitUntil: 'domcontentloaded' })
 
-  await page.evaluate(async (bytes) => {
+  const initiallyDisabled = await page.evaluate(async (bytes) => {
     const load = (specifier: string) =>
       (
         new Function('specifier', 'return import(specifier)') as (
@@ -66,12 +73,16 @@ test('WKWebView-family preview renders the exact PDF Blob to canvas before enabl
       },
     })
     createApp(Harness).mount(host)
+    return (
+      document.querySelector<HTMLButtonElement>('[data-testid="k12-print-preview-print"]')
+        ?.disabled === true
+    )
   }, onePagePdf())
 
   const dialog = page.getByTestId('k12-print-preview')
   await expect(dialog).toBeVisible()
   await expect(dialog.locator('iframe')).toHaveCount(0)
-  await expect(page.getByTestId('k12-print-preview-print')).toBeDisabled()
+  expect(initiallyDisabled).toBe(true)
 
   await expect(page.getByTestId('k12-print-preview-ready')).toBeAttached({
     timeout: 30_000,
@@ -84,6 +95,20 @@ test('WKWebView-family preview renders the exact PDF Blob to canvas before enabl
   const box = await canvas.boundingBox()
   expect(box?.width).toBeGreaterThan(500)
   expect(box?.height).toBeGreaterThan(700)
+  const nonWhiteSampleCount = await canvas.evaluate((node) => {
+    const context = (node as HTMLCanvasElement).getContext('2d')
+    if (!context) return 0
+    const { width, height } = node as HTMLCanvasElement
+    const pixels = context.getImageData(0, 0, width, height).data
+    let count = 0
+    for (let index = 0; index < pixels.length; index += 64) {
+      if (pixels[index] < 245 || pixels[index + 1] < 245 || pixels[index + 2] < 245) {
+        count += 1
+      }
+    }
+    return count
+  })
+  expect(nonWhiteSampleCount).toBeGreaterThan(100)
 
   await dialog.screenshot({
     path: testInfo.outputPath(

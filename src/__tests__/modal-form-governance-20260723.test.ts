@@ -70,7 +70,7 @@ describe('2026-07-23 modal form governance', () => {
       /\.hc-clearable-field\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/s,
     )
     expect(clearableSource).toMatch(
-      /\.hc-clearable-field :deep\(input\),[\s\S]*?:deep\(textarea\)\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/s,
+      /\.hc-clearable-field :deep\(input\),\s*\.hc-clearable-field :deep\(textarea\),\s*\.hc-clearable-field :deep\(\[data-clearable-control\]\)\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box/s,
     )
     expect(worksSource).toMatch(
       /\.k12cw-modal__body\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box[^}]*overflow:\s*auto/s,

@@ -91,7 +91,7 @@ describe('file-parser.ts file size limit', () => {
   })
 
   it('throws an Error when file exceeds the size limit', () => {
-    expect(fileParser).toMatch(/throw new Error.*too large/)
+    expect(fileParser).toMatch(/throw new Error\([\s\S]*?too large/)
   })
 })
 
@@ -117,7 +117,9 @@ describe('WebSocket reconnect loop prevention', () => {
 
   it('has a stability delay of at least a few seconds', () => {
     // The timer uses 10_000 (10 seconds)
-    const timerMatch = ws.match(/setTimeout\(\s*\(\)\s*=>\s*\{[^}]*reconnectAttempts[^}]*\}\s*,\s*(\d[\d_]*)/)
+    const timerMatch = ws.match(
+      /setTimeout\(\s*\(\)\s*=>\s*\{[^}]*reconnectAttempts[^}]*\}\s*,\s*(\d[\d_]*)/,
+    )
     expect(timerMatch).toBeTruthy()
     const delay = Number(timerMatch![1]!.replace(/_/g, ''))
     expect(delay).toBeGreaterThanOrEqual(5000)
@@ -137,7 +139,9 @@ describe('Credential handling', () => {
 
   it('stream_chat forwards API key only via Authorization header', () => {
     // The API key should appear in an Authorization header, not in the URL or body
-    expect(commands).toMatch(/\.header\("Authorization",\s*format!\("Bearer \{\}",\s*params\.api_key\)/)
+    expect(commands).toMatch(
+      /\.header\("Authorization",\s*format!\("Bearer \{\}",\s*params\.api_key\)/,
+    )
   })
 
   it('secure storage is handled in TypeScript via Tauri LazyStore', () => {

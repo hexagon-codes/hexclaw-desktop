@@ -184,10 +184,10 @@ describe('Bug #2: 复制代码按钮 Tauri 兼容 + 视觉反馈', () => {
 // ═══════════════════════════════════════════════════════════
 
 describe('Bug #3: 聊天输入框粘贴图片支持', () => {
-  it('修复前行为（复现）: textarea 没有 @paste 处理器', () => {
-    // 验证修复后确实有了
+  it('修复后: canonical contenteditable 编辑器在捕获阶段交给图片粘贴处理器', () => {
     const source = readFileSync('src/components/chat/ChatInput.vue', 'utf-8')
-    expect(source).toContain('@paste="handlePaste"')
+    expect(source).toContain('<MessageText')
+    expect(source).toContain('@paste.capture="handlePaste"')
   })
 
   it('修复后: handlePaste 函数存在并检测 image/* 类型', () => {
