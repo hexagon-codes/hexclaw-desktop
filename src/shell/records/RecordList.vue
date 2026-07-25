@@ -63,6 +63,12 @@ function canMarkMastered(item: RecordItem): boolean {
   return tone !== 'got' && tone !== 'na'
 }
 
+function canPractice(item: RecordItem): boolean {
+  if (!props.schema.reviewable) return false
+  const tone = stateOf(item)?.tone
+  return tone !== 'got' && tone !== 'na'
+}
+
 // 状态筛选（通用）：全部 + 各状态
 const activeFilter = ref<string>('all')
 const filteredItems = computed(() => {
@@ -104,6 +110,7 @@ const reviewItems = computed(() => {
           <button class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
             {{ t('records.markMastered') }}
           </button>
+          <slot name="review-row-actions" :item="item" />
         </div>
       </div>
       <!-- 卡内脚注注入缝（原型 c8a194e：留存钩子独立成行，如「每周五 19:00 自动出下一卷」） -->
@@ -142,13 +149,14 @@ const reviewItems = computed(() => {
         </span>
         <!-- 「再练」是复习动作：仅可复习集合（schema.reviewable）才渲染——积累本不复习/不再练，
              无条件渲染死按钮会点了无反应（BUG-20260712-#2 治本，schema 门控行内动作）。 -->
-        <button v-if="schema.reviewable" class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
+        <button v-if="canPractice(item)" class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
           {{ t('records.practice') }}
         </button>
         <!-- UX-1：全部错题档案行也能「他会了」（未掌握/未归档时才显，幂等）。 -->
         <button v-if="canMarkMastered(item)" class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
           {{ t('records.markMastered') }}
         </button>
+        <slot name="list-row-actions" :item="item" />
         <button class="rl-btn" @click="emit('action', { id: 'detail', record: item })">
           {{ t('records.detail') }}
         </button>
@@ -284,6 +292,19 @@ const reviewItems = computed(() => {
 .rl-btn:hover {
   background: var(--hc-bg-hover);
   color: var(--hc-text-primary);
+}
+.record-list :slotted(.rl-btn) {
+  border: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-card);
+  color: var(--hc-text-secondary);
+  border-radius: 6px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.record-list :slotted(.rl-btn:hover) {
+  border-color: var(--hc-accent);
+  color: var(--hc-accent);
 }
 .rl-empty {
   color: var(--hc-text-muted);

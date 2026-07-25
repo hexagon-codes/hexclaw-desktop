@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
-import type { ChatAttachment, ChatDocumentRef } from '@/types'
-import type { createChatSendController } from './chat-send-controller'
+import type { ChatAttachment } from '@/types'
+import type { ChatSendOptions, createChatSendController } from './chat-send-controller'
 import type { createChatSessionController } from './chat-session-controller'
 import type { createBoundChatStreamController } from './chat-stream-bound-controller'
 import type { createChatThinkingTimerController } from './chat-thinking-timer'
@@ -31,11 +31,7 @@ export function createChatFacadeActions(params: {
     async sendMessage(
       text: string,
       attachments?: ChatAttachment[],
-      options?: {
-        backendText?: string | (() => Promise<string | undefined>)
-        skillNames?: string[]
-        documents?: ChatDocumentRef[]
-      },
+      options?: ChatSendOptions,
     ) {
       error.value = null
       return sendController.sendMessage(text, attachments, options)

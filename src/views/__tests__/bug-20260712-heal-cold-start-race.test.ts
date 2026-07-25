@@ -198,6 +198,23 @@ describe('BUG-20260712-K：自愈必须数据就绪驱动（冷启动 sidecar �
     delete (globalThis as Record<string, unknown>).isTauri
   })
 
+  it('冷启动先加载智能体身份，再投影会话列表，避免固定 K12 会话首屏丢失头像与置顶身份', async () => {
+    mockListSessions.mockResolvedValue({ sessions: [], total: 0 })
+    mockGetAgents.mockResolvedValue({
+      agents: [{ name: AGENT, display_name: DISPLAY, metadata: { scenario: 'k12-tutor' } }],
+      default: '',
+    })
+
+    mountChatView()
+    await flushPromises()
+
+    expect(mockGetAgents).toHaveBeenCalledTimes(1)
+    expect(mockListSessions).toHaveBeenCalledTimes(1)
+    expect(mockGetAgents.mock.invocationCallOrder[0]).toBeLessThan(
+      mockListSessions.mock.invocationCallOrder[0]!,
+    )
+  })
+
   it('★冷启动：挂载时后端全挂（空数据）→ 引擎稍后就绪补上数据 → 自愈必须补跑', async () => {
     // 挂载瞬间：引擎未就绪，sessions/agents 全空（真机冷启动形态）
     mockListSessions.mockRejectedValue(new Error('engine not ready'))

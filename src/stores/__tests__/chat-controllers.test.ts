@@ -6,6 +6,7 @@ import { createChatArtifactController } from '../chat-artifact-controller'
 import { createChatFacadeActions } from '../chat-facade-actions'
 import { createChatMessageController } from '../chat-message-controller'
 import { createChatSendAutoTitleController } from '../chat-send-auto-title'
+import { createChatSendController } from '../chat-send-controller'
 import { createChatSendDeliveryController } from '../chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from '../chat-send-guards'
 import { createChatSessionLifecycleController } from '../chat-session-lifecycle'
@@ -907,6 +908,162 @@ describe('chat controller modules', () => {
         metadata: { backend_message_id: 'msg-1' },
       }),
     )
+  })
+
+  it('keeps the accepted edit model and agent route frozen while websocket connection settles', async () => {
+    let resolveConnection!: (connected: boolean) => void
+    const chatParams = ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' })
+    const agentRole = ref('k12-tutor-mingming')
+    const sendViaBackend = vi.fn().mockResolvedValue({
+      reply: 'backend reply',
+      session_id: 'edit-branch',
+      metadata: {},
+      tool_calls: [],
+    })
+    const controller = createChatSendDeliveryController({
+      chatParams,
+      agentRole,
+      thinkingEnabled: ref(false),
+      activeStreams: ref({}),
+      chatSvc: {
+        ensureWebSocketConnected: vi.fn().mockReturnValue(
+          new Promise<boolean>((resolve) => {
+            resolveConnection = resolve
+          }),
+        ),
+        sendViaBackend,
+      } as any,
+      getSettingsStore: ((() => ({ config: { memory: { enabled: true } }, availableModels: [] })) as any),
+      clearSessionCancelled: vi.fn(),
+      isSessionCancelled: vi.fn().mockReturnValue(false),
+      setSessionPending: vi.fn(),
+      upsertStreamState: vi.fn(),
+      updateStreamChunk: vi.fn().mockReturnValue(false),
+      resetSessionStream: vi.fn(),
+      finalizeAssistantMessage: vi.fn().mockReturnValue({ id: 'assistant' }) as any,
+      handleSendError: vi.fn(),
+      storePendingApproval: vi.fn(),
+      streamHandles: new Map(),
+    })
+
+    const pending = controller.deliverMessage({
+      backendText: 'edited question',
+      sessionId: 'edit-branch',
+      requestId: 'edited-request',
+      sending: ref(false),
+      draftSending: ref(false),
+      samplingSnapshot: {
+        agentRole: 'k12-tutor-mingming',
+        chatParams: { provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' },
+        thinkingEnabled: false,
+      },
+    })
+    chatParams.value = { provider: 'other-provider', model: 'other-model' }
+    agentRole.value = 'other-agent'
+    resolveConnection(false)
+    await pending
+
+    expect(sendViaBackend).toHaveBeenCalledWith(
+      'edited question',
+      'edit-branch',
+      { provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' },
+      'k12-tutor-mingming',
+      undefined,
+      expect.any(Object),
+      'edited-request',
+    )
+  })
+
+  it('directs an edited version to its explicit branch without mutating the visible source session', async () => {
+    const currentSessionId = ref<string | null>('source-session')
+    const sourceMessages = [{
+      id: 'source-user',
+      role: 'user' as const,
+      content: '原问题',
+      timestamp: '2026-07-24T00:00:00Z',
+    }]
+    const messages = ref<ChatMessage[]>(sourceMessages.map((message) => ({ ...message })))
+    const ensureSession = vi.fn().mockResolvedValue('wrong-current-session')
+    const persistMessage = vi.fn().mockResolvedValue(true)
+    const sendViaBackend = vi.fn().mockResolvedValue({
+      reply: '新版本回答',
+      session_id: 'edit-branch',
+      metadata: { backend_message_id: 'branch-assistant' },
+      tool_calls: [],
+    })
+    const finalizeAssistantMessage = vi.fn().mockReturnValue({
+      id: 'branch-assistant',
+      role: 'assistant',
+      content: '新版本回答',
+      timestamp: '2026-07-24T00:00:01Z',
+    })
+    const sending = ref(false)
+    const draftSending = ref(false)
+
+    const controller = createChatSendController({
+      currentSessionId,
+      messages,
+      pendingSessionIds: ref({}),
+      draftSending,
+      activeStreams: ref({}),
+      chatParams: ref({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' }),
+      agentRole: ref('k12-tutor-mingming'),
+      thinkingEnabled: ref(false),
+      hasCustomTitle: ref(true),
+      sessions: ref([]),
+      msgSvc: {
+        updateSessionTitle: vi.fn().mockResolvedValue(undefined),
+      } as any,
+      chatSvc: {
+        ensureWebSocketConnected: vi.fn().mockResolvedValue(false),
+        sendViaBackend,
+      } as any,
+      createId: () => 'edited-user-version',
+      getSettingsStore: ((() => ({
+        config: { memory: { enabled: true } },
+        availableModels: [],
+      })) as any),
+      ensureSession,
+      clearSessionCancelled: vi.fn(),
+      isSessionCancelled: vi.fn().mockReturnValue(false),
+      isSessionStreaming: vi.fn().mockReturnValue(false),
+      setSessionPending: vi.fn(),
+      refreshSendingState: vi.fn(),
+      setLocalSessionTitle: vi.fn(),
+      setPendingSuggestedTitleExpectation: vi.fn(),
+      pendingAutoTitleSync: new Map(),
+      persistMessage,
+      upsertStreamState: vi.fn(),
+      updateStreamChunk: vi.fn().mockReturnValue(false),
+      resetSessionStream: vi.fn(),
+      finalizeAssistantMessage: finalizeAssistantMessage as any,
+      handleSendError: vi.fn(),
+      storePendingApproval: vi.fn(),
+      streamHandles: new Map(),
+      sending,
+    })
+
+    const result = await controller.sendMessage('修改后的问题', undefined, {
+      targetSessionId: 'edit-branch',
+    })
+
+    expect(currentSessionId.value).toBe('source-session')
+    expect(messages.value).toEqual(sourceMessages)
+    expect(ensureSession).not.toHaveBeenCalled()
+    expect(persistMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'edited-user-version', content: '修改后的问题' }),
+      'edit-branch',
+    )
+    expect(sendViaBackend).toHaveBeenCalledWith(
+      '修改后的问题',
+      'edit-branch',
+      expect.objectContaining({ model: 'gpt-5.6-sol' }),
+      'k12-tutor-mingming',
+      undefined,
+      expect.any(Object),
+      'edited-user-version',
+    )
+    expect(result).toMatchObject({ id: 'branch-assistant' })
   })
 
   it('builds thin facade actions around session/send/stream controllers', async () => {

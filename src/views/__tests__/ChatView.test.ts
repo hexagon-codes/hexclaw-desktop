@@ -4,9 +4,21 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import ChatView from '../ChatView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
+import k12ZhCN from '@/features/k12/i18n/zh-CN'
+import { K12_VIEW_DESCRIPTOR } from '@/features/k12/descriptor'
 import { useSettingsStore } from '@/stores/settings'
 import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
+import {
+  bindSessionAgent,
+  clearSessionAgent,
+  getSessionAgent,
+} from '@/stores/session-agent-binding'
+import { clearSessionDeepThinking } from '@/stores/session-thinking-preference'
+import {
+  scenarioRegistry,
+  type ScenarioComposerImagePayload,
+} from '@/shell/scenario/registry'
 
 const { parseDocument, isDocumentFile } = vi.hoisted(() => ({
   parseDocument: vi.fn(),
@@ -37,6 +49,11 @@ const { mockAppendSessionMessage, mockAppendSessionMessagesBatch } = vi.hoisted(
   }),
 }))
 
+const { mockForkSession, mockDeleteSession } = vi.hoisted(() => ({
+  mockForkSession: vi.fn().mockResolvedValue({ session: { id: 'edited-image-branch' } }),
+  mockDeleteSession: vi.fn().mockResolvedValue({ message: 'ok' }),
+}))
+
 const { mockRoute, mockRouterPush, mockRouterReplace } = vi.hoisted(() => ({
   mockRoute: { query: {}, path: '/chat', params: {} as Record<string, string> },
   mockRouterPush: vi.fn(),
@@ -50,6 +67,8 @@ vi.mock('@/api/chat', () => ({
   listActiveStreams: vi.fn().mockResolvedValue({ streams: [], total: 0 }),
   appendSessionMessage: mockAppendSessionMessage,
   appendSessionMessagesBatch: mockAppendSessionMessagesBatch,
+  forkSession: mockForkSession,
+  deleteSession: mockDeleteSession,
 }))
 
 vi.mock('@/api/websocket', () => ({
@@ -162,7 +181,10 @@ function createTestI18n() {
     legacy: false,
     locale: 'zh-CN',
     fallbackLocale: 'zh-CN',
-    messages: { 'zh-CN': zhCN, zh: zhCN },
+    messages: {
+      'zh-CN': { ...zhCN, k12: k12ZhCN },
+      zh: { ...zhCN, k12: k12ZhCN },
+    },
   })
 }
 
@@ -175,7 +197,10 @@ vi.mock('vue-router', () => ({
 /**
  * 挂载 ChatView 的辅助函数
  */
-function mountChatView(options?: { setup?: () => void; attachTo?: HTMLElement }) {
+function mountChatView(options?: {
+  setup?: () => void
+  attachTo?: HTMLElement
+}) {
   const pinia = createPinia()
   setActivePinia(pinia)
   options?.setup?.()
@@ -244,6 +269,8 @@ describe('ChatView — E2E 关键路径', () => {
     mockGetOllamaStatus.mockResolvedValue({ running: false, associated: false, model_count: 0, models: [] })
     mockGetConnections.mockResolvedValue([])
     mockGetConnectionsResult.mockResolvedValue({ connections: [] })
+    mockForkSession.mockResolvedValue({ session: { id: 'edited-image-branch' } })
+    mockDeleteSession.mockResolvedValue({ message: 'ok' })
   })
 
   afterEach(() => {
@@ -766,12 +793,15 @@ describe('ChatView — E2E 关键路径', () => {
           scenarioComposerImage: {
             dataUrl: string
             attachment: { type: string; name: string; mime: string; data: string }
+            requestId?: string
             route?: { provider: string; model: string; capability: string }
           }
         }
       ).scenarioComposerImage,
     ).toEqual({
       ...payload,
+      requestId: imageMessages[0]!.id,
+      sourceSessionId: 'scenario-session',
       route: {
         provider: 'hexclaw-gpt',
         model: 'gpt-5.6-sol',
@@ -780,6 +810,596 @@ describe('ChatView — E2E 关键路径', () => {
     })
 
     wrapper.unmount()
+  })
+
+  it('BUG-20260724-010 编辑纯图片消息会以新消息身份重新进入既有场景图片管道', async () => {
+    const descriptor = {
+      schemaVersion: '1',
+      headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
+      messageBadges: [],
+      recordCollections: [],
+      sidePanels: [],
+      actions: [],
+    }
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'edit-image-test' ? descriptor as never : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'EditImageScenarioStub',
+      template: '<div />',
+    })
+
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'edit-image-agent',
+            display_name: '图片场景',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            metadata: { scenario: 'edit-image-test' },
+          },
+        ]
+      },
+    })
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'edit-image-session'
+      store.agentRole = 'edit-image-agent'
+      store.chatMode = 'agent'
+      vi.spyOn(store, 'loadSessions').mockResolvedValue(undefined)
+      vi.spyOn(store, 'selectSession').mockImplementation(async (sessionId: string) => {
+        store.currentSessionId = sessionId
+        store.agentRole = getSessionAgent(sessionId)
+        store.chatMode = store.agentRole ? 'agent' : 'chat'
+        store.messages.splice(0)
+      })
+      const attachment = {
+        type: 'image' as const,
+        name: 'homework.png',
+        mime: 'image/png',
+        data: 'aG9tZXdvcms=',
+      }
+      store.messages.push(
+        {
+          id: 'original-image-message',
+          role: 'user',
+          content: '',
+          timestamp: '2026-07-24T00:00:00Z',
+          metadata: { attachments: [attachment] },
+        },
+        {
+          id: 'later-assistant-message',
+          role: 'assistant',
+          content: '原来的回复',
+          timestamp: '2026-07-24T00:00:01Z',
+          metadata: {},
+        },
+      )
+      await flushPromises()
+
+      const vm = wrapper.vm as unknown as {
+        editingMsgId: string | null
+        editingText: string
+        confirmEdit: (messageId: string) => Promise<void>
+        scenarioComposerImage: {
+          dataUrl: string
+          requestId?: string
+          attachment: typeof attachment
+        } | ''
+      }
+      vm.editingMsgId = 'original-image-message'
+      vm.editingText = ''
+      await vm.confirmEdit('original-image-message')
+
+      await vi.waitFor(() => {
+        expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
+      })
+      expect(mockForkSession).toHaveBeenCalledWith('edit-image-session', 'original-image-message', {
+        includeMessage: false,
+      })
+      expect(store.currentSessionId).toBe('edited-image-branch')
+      expect(store.agentRole).toBe('edit-image-agent')
+      expect(store.messages).toHaveLength(1)
+      const revisedMessage = store.messages[0]!
+      expect(revisedMessage.id).not.toBe('original-image-message')
+      expect(revisedMessage.metadata?.attachments).toEqual([attachment])
+      expect(mockAppendSessionMessage).toHaveBeenCalledWith(
+        'edited-image-branch',
+        expect.objectContaining({ id: revisedMessage.id, content: '', metadata: { attachments: [attachment] } }),
+      )
+      expect(vm.scenarioComposerImage).toEqual({
+        dataUrl: 'data:image/png;base64,aG9tZXdvcms=',
+        attachment,
+        contextText: '',
+        requestId: revisedMessage.id,
+        sourceSessionId: 'edited-image-branch',
+        route: {
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          capability: 'vision',
+        },
+      })
+    } finally {
+      wrapper.unmount()
+      scenarioRegistry.reset()
+    }
+  })
+
+  it('BUG-20260724-010 编辑带说明的图片消息仍进入场景管道并原样保留说明与历史', async () => {
+    const descriptor = {
+      schemaVersion: '1',
+      headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
+      messageBadges: [],
+      recordCollections: [],
+      sidePanels: [],
+      actions: [],
+    }
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'edit-image-with-text-test' ? (descriptor as never) : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'EditImageWithTextScenarioStub',
+      template: '<div />',
+    })
+
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'edit-image-with-text-agent',
+            display_name: '图片场景',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            metadata: { scenario: 'edit-image-with-text-test' },
+          },
+        ]
+      },
+    })
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'edit-image-with-text-session'
+      store.agentRole = 'edit-image-with-text-agent'
+      store.chatMode = 'agent'
+      vi.spyOn(store, 'loadSessions').mockResolvedValue(undefined)
+      vi.spyOn(store, 'selectSession').mockImplementation(async (sessionId: string) => {
+        store.currentSessionId = sessionId
+        store.agentRole = getSessionAgent(sessionId)
+        store.chatMode = store.agentRole ? 'agent' : 'chat'
+        store.messages.splice(0)
+      })
+      const attachment = {
+        type: 'image' as const,
+        name: 'homework-with-note.png',
+        mime: 'image/png',
+        data: 'aG9tZXdvcmstd2l0aC1ub3Rl',
+      }
+      store.messages.push(
+        {
+          id: 'original-image-with-text',
+          role: 'user',
+          content: '请批改这一页',
+          timestamp: '2026-07-24T00:00:00Z',
+          metadata: { attachments: [attachment] },
+        },
+        {
+          id: 'preserved-tail',
+          role: 'assistant',
+          content: '旧回复必须保留',
+          timestamp: '2026-07-24T00:00:01Z',
+          metadata: {},
+        },
+      )
+      await flushPromises()
+
+      const vm = wrapper.vm as unknown as {
+        editingMsgId: string | null
+        editingText: string
+        confirmEdit: (messageId: string) => Promise<void>
+        scenarioComposerImage: ScenarioComposerImagePayload | ''
+      }
+      vm.editingMsgId = 'original-image-with-text'
+      vm.editingText = '请按五年级方法详细讲解'
+      await vm.confirmEdit('original-image-with-text')
+
+      await vi.waitFor(() => {
+        expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
+      })
+      expect(mockForkSession).toHaveBeenCalledWith('edit-image-with-text-session', 'original-image-with-text', {
+        includeMessage: false,
+      })
+      expect(store.currentSessionId).toBe('edited-image-branch')
+      expect(store.agentRole).toBe('edit-image-with-text-agent')
+      expect(store.messages).toHaveLength(1)
+      const revisedMessage = store.messages[0]!
+      expect(revisedMessage.content).toBe('请按五年级方法详细讲解')
+      expect(revisedMessage.metadata?.attachments).toEqual([attachment])
+      expect(mockAppendSessionMessage).toHaveBeenCalledWith(
+        'edited-image-branch',
+        expect.objectContaining({
+          id: revisedMessage.id,
+          content: '请按五年级方法详细讲解',
+          metadata: { attachments: [attachment] },
+        }),
+      )
+      expect(vm.scenarioComposerImage).toMatchObject({
+        dataUrl: 'data:image/png;base64,aG9tZXdvcmstd2l0aC1ub3Rl',
+        attachment,
+        contextText: '请按五年级方法详细讲解',
+        requestId: revisedMessage.id,
+        route: {
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          capability: 'vision',
+        },
+      })
+    } finally {
+      wrapper.unmount()
+      scenarioRegistry.reset()
+    }
+  })
+
+  it('BUG-20260724-010 图片编辑提交迟到时不会投影到用户已切换的同 Agent 会话', async () => {
+    const descriptor = {
+      schemaVersion: '1',
+      headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
+      messageBadges: [],
+      recordCollections: [],
+      sidePanels: [],
+      actions: [],
+    }
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'edit-image-session-race-test' ? (descriptor as never) : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'EditImageSessionRaceStub',
+      template: '<div />',
+    })
+
+    let releasePersist!: () => void
+    mockAppendSessionMessage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releasePersist = () =>
+            resolve({
+              id: 'revised-image-message',
+              session_id: 'edited-image-branch',
+            })
+        }),
+    )
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'edit-image-session-race-agent',
+            display_name: '图片场景',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            metadata: { scenario: 'edit-image-session-race-test' },
+          },
+        ]
+      },
+    })
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'edit-image-source-session'
+      store.agentRole = 'edit-image-session-race-agent'
+      store.chatMode = 'agent'
+      vi.spyOn(store, 'loadSessions').mockResolvedValue(undefined)
+      vi.spyOn(store, 'selectSession').mockImplementation(async (sessionId: string) => {
+        store.currentSessionId = sessionId
+        store.agentRole = 'edit-image-session-race-agent'
+        store.chatMode = 'agent'
+        store.messages.splice(0)
+      })
+      const attachment = {
+        type: 'image' as const,
+        name: 'homework-race.png',
+        mime: 'image/png',
+        data: 'cmFjZS1pbWFnZQ==',
+      }
+      store.messages.push({
+        id: 'original-race-image',
+        role: 'user',
+        content: '',
+        timestamp: '2026-07-24T00:00:00Z',
+        metadata: { attachments: [attachment] },
+      })
+      await flushPromises()
+
+      const vm = wrapper.vm as unknown as {
+        editingMsgId: string | null
+        editingText: string
+        confirmEdit: (messageId: string) => Promise<void>
+        scenarioComposerImage: ScenarioComposerImagePayload | ''
+      }
+      vm.editingMsgId = 'original-race-image'
+      vm.editingText = ''
+      const pending = vm.confirmEdit('original-race-image')
+      await vi.waitFor(() => {
+        expect(mockForkSession).toHaveBeenCalledWith(
+          'edit-image-source-session',
+          'original-race-image',
+          { includeMessage: false },
+        )
+      })
+      await vi.waitFor(() => {
+        expect(mockAppendSessionMessage).toHaveBeenCalledWith(
+          'edited-image-branch',
+          expect.objectContaining({ metadata: { attachments: [attachment] } }),
+        )
+      })
+
+      await store.selectSession('other-same-agent-session')
+      releasePersist()
+      await pending
+
+      // The accepted attempt belongs to the edit branch. Its late completion may
+      // update that branch's persisted state, but must not activate a scenario
+      // panel in another session merely because both sessions share one Agent.
+      expect(store.currentSessionId).toBe('other-same-agent-session')
+      expect(vm.scenarioComposerImage).toBe('')
+      expect(mockDeleteSession).not.toHaveBeenCalledWith('edited-image-branch')
+
+      // The accepted attempt remains owned by/recoverable from its actual branch.
+      await store.selectSession('edited-image-branch')
+      await flushPromises()
+      expect(vm.scenarioComposerImage).toMatchObject({
+        requestId: expect.any(String),
+        sourceSessionId: 'edited-image-branch',
+        attachment,
+      })
+    } finally {
+      wrapper.unmount()
+      scenarioRegistry.reset()
+    }
+  })
+
+  it('BUG-20260724-003 未手动选模时仍冻结全局默认视觉路由', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        const settingsStore = useSettingsStore()
+        settingsStore.config = {
+          llm: {
+            providers: [
+              {
+                id: 'sol-provider-id',
+                name: 'HexClaw GPT',
+                type: 'openai',
+                enabled: true,
+                apiKey: '',
+                baseUrl: 'https://example.invalid/v1',
+                backendKey: 'hexclaw-gpt',
+                models: [
+                  {
+                    id: 'gpt-5.6-sol',
+                    name: 'gpt-5.6-sol',
+                    capabilities: ['text', 'vision'],
+                  },
+                ],
+                selectedModelId: 'gpt-5.6-sol',
+              },
+            ],
+            defaultModel: 'gpt-5.6-sol',
+            defaultProviderId: 'sol-provider-id',
+            routing: { enabled: false, strategy: 'cost-aware' },
+          },
+          security: {
+            gateway_enabled: true,
+            injection_detection: true,
+            pii_filter: false,
+            content_filter: true,
+            max_tokens_per_request: 8192,
+            rate_limit_rpm: 60,
+          },
+          general: {
+            language: 'zh-CN',
+            log_level: 'info',
+            data_dir: '',
+            auto_start: false,
+            defaultAgentRole: '',
+          },
+          notification: {
+            system_enabled: true,
+            sound_enabled: false,
+            agent_complete: true,
+          },
+          mcp: { default_protocol: 'stdio' },
+        }
+      },
+    })
+    await flushPromises()
+
+    const store = useChatStore()
+    store.currentSessionId = 'default-route-session'
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', {
+      dataUrl: 'data:image/png;base64,ZGVmYXVsdA==',
+      attachment: {
+        type: 'image',
+        name: 'default.png',
+        mime: 'image/png',
+        data: 'ZGVmYXVsdA==',
+      },
+    })
+
+    await vi.waitFor(() => {
+      expect(
+        (
+          wrapper.vm as unknown as {
+            scenarioComposerImage: {
+              requestId?: string
+              route?: { provider: string; model: string; capability: string }
+            }
+          }
+        ).scenarioComposerImage.route,
+      ).toEqual({
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+        capability: 'vision',
+      })
+    })
+
+    wrapper.unmount()
+  })
+
+  it('BUG-20260724-003 未手动选模时冻结智能体绑定路由而非全局默认路由', async () => {
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'k12-tutor-mingming',
+            display_name: '小明的辅导助手',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+          },
+        ]
+      },
+    })
+    await flushPromises()
+
+    const store = useChatStore()
+    store.currentSessionId = 'agent-route-session'
+    store.agentRole = 'k12-tutor-mingming'
+    store.chatMode = 'agent'
+    await flushPromises()
+    wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', {
+      dataUrl: 'data:image/png;base64,YWdlbnQ=',
+      attachment: {
+        type: 'image',
+        name: 'agent.png',
+        mime: 'image/png',
+        data: 'YWdlbnQ=',
+      },
+    })
+
+    await vi.waitFor(() => {
+      expect(
+        (
+          wrapper.vm as unknown as {
+            scenarioComposerImage: {
+              requestId?: string
+              route?: { provider: string; model: string; capability: string }
+            }
+          }
+        ).scenarioComposerImage.route,
+      ).toEqual({
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+        capability: 'vision',
+      })
+    })
+
+    wrapper.unmount()
+  })
+
+  it('BUG-20260724-003 旧失败图片显式重试会用新消息身份和点击时当前路由创建唯一新 attempt', async () => {
+    const descriptor = {
+      schemaVersion: '1',
+      headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
+      messageBadges: [],
+      recordCollections: [],
+      sidePanels: [],
+      actions: [],
+    }
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'attempt-retry-test' ? (descriptor as never) : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'AttemptRetryScenarioStub',
+      props: ['composerImage'],
+      emits: ['scenarioImageAttempt'],
+      template: '<button data-testid="retry-attempt" />',
+    })
+
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'attempt-retry-agent',
+            display_name: '重试模型助手',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.3-codex-spark',
+            metadata: { scenario: 'attempt-retry-test' },
+          },
+        ]
+      },
+    })
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      const agents = useAgentsStore()
+      store.currentSessionId = 'attempt-retry-session'
+      store.agentRole = 'attempt-retry-agent'
+      store.chatMode = 'agent'
+      const original = {
+        dataUrl: 'data:image/png;base64,cmV0cnk=',
+        attachment: {
+          type: 'image' as const,
+          name: 'retry.png',
+          mime: 'image/png',
+          data: 'cmV0cnk=',
+        },
+      }
+      wrapper.getComponent({ name: 'ChatInput' }).vm.$emit('scenario-image', original)
+
+      await vi.waitFor(() => {
+        expect(mockAppendSessionMessage).toHaveBeenCalledTimes(1)
+      })
+      const enhancement = wrapper.getComponent({ name: 'AttemptRetryScenarioStub' })
+      const frozenOldAttempt = enhancement.props('composerImage') as {
+        requestId: string
+        route: { provider: string; model: string; capability: string }
+      }
+      expect(frozenOldAttempt.route.model).toBe('gpt-5.3-codex-spark')
+
+      // 旧 Job/消息的快照保持不变；家长在重试前已把当前绑定切到新模型。
+      agents.registeredAgents[0]!.model = 'gpt-5.6-sol'
+      await flushPromises()
+      enhancement.vm.$emit('scenarioImageAttempt', enhancement.props('composerImage'))
+      enhancement.vm.$emit('scenarioImageAttempt', enhancement.props('composerImage'))
+
+      await vi.waitFor(() => {
+        expect(mockAppendSessionMessage).toHaveBeenCalledTimes(2)
+      })
+      const imageMessages = store.messages.filter(
+        (message) =>
+          message.role === 'user' &&
+          Array.isArray(message.metadata?.attachments) &&
+          message.metadata.attachments.some(
+            (attachment) => (attachment as { data?: string }).data === 'cmV0cnk=',
+          ),
+      )
+      expect(imageMessages).toHaveLength(2)
+      expect(imageMessages[1]!.id).not.toBe(frozenOldAttempt.requestId)
+      expect(frozenOldAttempt.route.model).toBe('gpt-5.3-codex-spark')
+      expect(
+        (
+          wrapper.vm as unknown as {
+            scenarioComposerImage: {
+              requestId: string
+              route: { provider: string; model: string; capability: string }
+            }
+          }
+        ).scenarioComposerImage,
+      ).toMatchObject({
+        requestId: imageMessages[1]!.id,
+        route: {
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          capability: 'vision',
+        },
+      })
+    } finally {
+      wrapper.unmount()
+      scenarioRegistry.reset()
+    }
   })
 
   it('BUG-20260724-002 新会话首图等待稳定 session 后才启动场景且仍只持久化一次', async () => {
@@ -935,6 +1555,124 @@ describe('ChatView — E2E 关键路径', () => {
     expect(store.chatParams.model).toBeUndefined()
 
     wrapper.unmount()
+  })
+
+  it('绑定 K12 会话开启深度思考并发送后，切走再切回仍保留三枚 Skill chips 与场景提示语', async () => {
+    const k12SessionId = 'k12-thinking-composer-session'
+    const ordinarySessionId = 'ordinary-thinking-composer-session'
+    const k12AgentId = 'k12-tutor-mingming'
+    const expectedChips = ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验']
+    const expectedPlaceholder = '发消息、粘贴带分数/公式的题目，或 ⌘V 粘贴作业照片'
+
+    scenarioRegistry.reset()
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'k12-tutor' ? K12_VIEW_DESCRIPTOR : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'K12ComposerStateIntegrationStub',
+      emits: ['update:composerChips'],
+      mounted() {
+        this.$emit('update:composerChips', expectedChips)
+      },
+      template: '<div data-testid="k12-composer-state-integration" />',
+    })
+    bindSessionAgent(k12SessionId, k12AgentId)
+
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: k12AgentId,
+            display_name: '小明的辅导助手',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            metadata: {
+              scenario: 'k12-tutor',
+              'k12.child_name': '小明',
+              'k12.grade_term': '五年级下',
+              'k12.textbook_edition': '人教版',
+            },
+          },
+        ]
+      },
+    })
+
+    const expectK12Composer = async () => {
+      await vi.waitFor(() => {
+        expect(wrapper.findAll('[data-testid="composer-preset-chip"]')).toHaveLength(3)
+      })
+      expect(
+        wrapper
+          .findAll('[data-testid="composer-preset-chip"]')
+          .map((chip) => chip.text().replace(/×$/, '').trim()),
+      ).toEqual(expectedChips)
+      expect(chatEditor(wrapper).attributes('data-placeholder')).toBe(expectedPlaceholder)
+    }
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.sessions = [
+        {
+          id: k12SessionId,
+          title: '小明的辅导助手',
+          created_at: '2026-07-25T00:00:00Z',
+          updated_at: '2026-07-25T00:00:00Z',
+          message_count: 0,
+        },
+        {
+          id: ordinarySessionId,
+          title: '普通会话',
+          created_at: '2026-07-25T00:00:01Z',
+          updated_at: '2026-07-25T00:00:01Z',
+          message_count: 0,
+        },
+      ]
+
+      await store.selectSession(k12SessionId)
+      await flushPromises()
+      expect(store.agentRole).toBe(k12AgentId)
+      await expectK12Composer()
+
+      await wrapper.get('.hc-chat__research-btn').trigger('click')
+      await flushPromises()
+      expect(store.chatMode).toBe('research')
+      expect(store.thinkingEnabled).toBe(true)
+      expect(store.agentRole).toBe(k12AgentId)
+      await expectK12Composer()
+
+      await setChatDraft(wrapper, '请讲解二分之一加三分之一')
+      await wrapper.get('.hc-composer__send').trigger('click')
+      await vi.waitFor(() => {
+        expect(
+          store.messages.some(
+            (message) =>
+              message.role === 'user' && message.content === '请讲解二分之一加三分之一',
+          ),
+        ).toBe(true)
+      })
+      await vi.waitFor(() => {
+        expect(store.sending).toBe(false)
+      })
+      await expectK12Composer()
+
+      await store.selectSession(ordinarySessionId)
+      await flushPromises()
+      expect(store.agentRole).toBe('')
+      expect(wrapper.findAll('[data-testid="composer-preset-chip"]')).toHaveLength(0)
+
+      await store.selectSession(k12SessionId)
+      await flushPromises()
+      expect(store.agentRole).toBe(k12AgentId)
+      expect(store.chatMode).toBe('research')
+      expect(store.thinkingEnabled).toBe(true)
+      await expectK12Composer()
+    } finally {
+      wrapper.unmount()
+      clearSessionAgent(k12SessionId)
+      clearSessionDeepThinking(k12SessionId)
+      scenarioRegistry.reset()
+    }
   })
 
   it('keeps the latest parsed document when an earlier parse resolves later', async () => {

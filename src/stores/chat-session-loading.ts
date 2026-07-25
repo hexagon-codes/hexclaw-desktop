@@ -111,7 +111,14 @@ export function createChatSessionLoadingController(params: {
 
   async function loadSessions(opts?: { suppressAutoSelect?: boolean }) {
     try {
-      const loadedSessions = await msgSvc.loadAllSessions()
+      const loadResult = typeof msgSvc.loadAllSessionsResult === 'function'
+        ? await msgSvc.loadAllSessionsResult()
+        : { sessions: await msgSvc.loadAllSessions(), succeeded: true }
+      // 冷启动 sidecar 尚未就绪时，旧 loadAllSessions 会把请求失败压成 []。失败不是
+      // “后端权威确认零会话”：此时既不能清空当前列表，也不能 prune 会话级模型/Agent/
+      // 深度思考绑定，否则 sidecar-ready 后虽能补回会话，稳定身份（图标/固定置顶）已经丢失。
+      if (!loadResult.succeeded) return
+      const loadedSessions = loadResult.sessions
       let nextSessions = loadedSessions
       // Preserve local title for sessions with a pending auto-title sync
       // (backend may not have received the PATCH yet)

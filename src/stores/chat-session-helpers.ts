@@ -13,8 +13,14 @@ export function mergeMessagesById(
   cached: ChatMessage[],
 ): ChatMessage[] {
   if (cached.length === 0) return backend
-  const backendIds = new Set(backend.map((m) => m.id))
-  const extras = cached.filter((m) => !backendIds.has(m.id))
+  const canonicalMessageId = (message: ChatMessage): string => {
+    const backendMessageId = message.metadata?.backend_message_id
+    return typeof backendMessageId === 'string' && backendMessageId
+      ? backendMessageId
+      : message.id
+  }
+  const backendIds = new Set(backend.map(canonicalMessageId))
+  const extras = cached.filter((message) => !backendIds.has(canonicalMessageId(message)))
   return extras.length ? [...backend, ...extras] : backend
 }
 

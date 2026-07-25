@@ -167,10 +167,10 @@ export function createChatSendDeliveryController(params: {
     // 否则切会话重载后文档退化成纯文本（卡片只在前端本地、不落库）。
     let requestMetadata = buildRequestMetadata(args.samplingSnapshot)
     if (skillNames && skillNames.length) {
-      requestMetadata = { ...(requestMetadata ?? {}), skills: skillNames.join(',') }
+      requestMetadata = { ...requestMetadata, skills: skillNames.join(',') }
     }
     if (documents && documents.length) {
-      requestMetadata = { ...(requestMetadata ?? {}), documents: JSON.stringify(documents) }
+      requestMetadata = { ...requestMetadata, documents: JSON.stringify(documents) }
     }
     const wsConnected = await chatSvc.ensureWebSocketConnected()
 
@@ -186,6 +186,7 @@ export function createChatSendDeliveryController(params: {
         attachments,
         requestId,
         requestMetadata,
+        samplingSnapshot: args.samplingSnapshot,
         sending,
         draftSending,
       })
@@ -197,6 +198,7 @@ export function createChatSendDeliveryController(params: {
       attachments,
       requestId,
       requestMetadata,
+      samplingSnapshot: args.samplingSnapshot,
       sending,
       draftSending,
     })
@@ -211,6 +213,7 @@ export function createChatSendDeliveryController(params: {
       attachments,
       requestId,
       requestMetadata,
+      samplingSnapshot: args.samplingSnapshot,
       sending,
       draftSending,
     })

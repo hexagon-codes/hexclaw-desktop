@@ -88,6 +88,7 @@ import {
   useChatActions,
   useCronCompileLabel,
 } from '@/composables'
+import type { EditedMessageSubmission } from '@/composables/useChatActions'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
@@ -669,15 +670,51 @@ function handleScenarioComposerCommand(command: ScenarioComposerCommand) {
   if (command.type === 'set-input') composer.setInput(command.text, command.focus !== false)
 }
 // 场景会话下 composer 拦截的图片：ChatInput 产出同源 dataURL + message attachment；
-// shell 负责形成一次可见/持久用户消息，并只在用户显式选模时附上当前路由。
+// shell 负责形成一次可见/持久用户消息，并冻结该次提交的 request_id + 实际会话路由。
 const scenarioComposerImage = ref<ScenarioComposerImagePayload | ''>('')
-function currentExplicitScenarioImageRoute(): ScenarioImageModelRoute | undefined {
-  const provider = selectedProviderKey.value.trim()
-  const model = selectedModel.value.trim()
-  if (!userOverrodeModel.value || model === 'auto' || !provider || !model) return undefined
+interface PendingScenarioImageProjection {
+  message: ChatMessage
+  payload: ScenarioComposerImagePayload
+}
+// 编辑图片在 source 仍可见时先写入目标分支；只有该分支真正成为 current 后才允许
+// 投影给场景组件。Map 以 session 为所有权边界，杜绝“同 Agent 即同会话”的错误假设。
+const pendingScenarioImageProjections = new Map<string, PendingScenarioImageProjection>()
+function activateScenarioImageProjection(sessionId: string): void {
+  if (chatStore.currentSessionId !== sessionId) return
+  const pending = pendingScenarioImageProjections.get(sessionId)
+  if (!pending || pending.payload.sourceSessionId !== sessionId) return
+  if (!chatStore.messages.some((message) => message.id === pending.message.id)) {
+    chatStore.messages.push(pending.message)
+  }
+  scenarioComposerImage.value = pending.payload
+  pendingScenarioImageProjections.delete(sessionId)
+  void nextTick(scrollToBottom)
+}
+function scenarioImageRoute(
+  providerValue: string | undefined,
+  modelValue: string | undefined,
+): ScenarioImageModelRoute | undefined {
+  const provider = providerValue?.trim() ?? ''
+  const model = modelValue?.trim() ?? ''
+  if (!provider || !model || model === 'auto') return undefined
   return { provider, model, capability: 'vision' }
 }
-async function persistScenarioImageMessage(message: ChatMessage, sessionId: string) {
+function currentScenarioImageRoute(): ScenarioImageModelRoute | undefined {
+  // Agent 模式未手动覆盖时，输入框展示的是 Agent 绑定模型；不能拿 selected* 中的
+  // 全局默认冒充它。Agent 明确跟随全局默认（provider/model 为空）时再落到 selected*。
+  if (usesBoundAgentModel.value) {
+    const cfg = agentsStore.findAgent(chatStore.agentRole)
+    const bound = scenarioImageRoute(cfg?.provider, cfg?.model)
+    if (bound) return bound
+    if (cfg?.model?.trim()) {
+      const matched = settingsStore.availableModels.find((candidate) => candidate.modelId === cfg.model)
+      const resolved = scenarioImageRoute(matched?.providerKey, cfg.model)
+      if (resolved) return resolved
+    }
+  }
+  return scenarioImageRoute(selectedProviderKey.value, selectedModel.value)
+}
+async function persistScenarioImageMessage(message: ChatMessage, sessionId: string): Promise<boolean> {
   try {
     await appendSessionMessage(sessionId, {
       id: message.id,
@@ -685,29 +722,67 @@ async function persistScenarioImageMessage(message: ChatMessage, sessionId: stri
       content: message.content,
       metadata: message.metadata,
     })
+    return true
   } catch (errorValue) {
     logger.error('[ChatView] persist scenario image message failed', errorValue)
     toast.error?.(t('chat.persistFailed', '消息保存失败，刷新会话后可能丢失'))
+    return false
   }
 }
-async function handleScenarioImage(payload: ScenarioComposerImagePayload) {
-  // 模型选择必须在用户动作发生时冻结，不能在 await 创建会话期间被后续 UI 操作改写。
-  const route = currentExplicitScenarioImageRoute()
-  const routedPayload: ScenarioComposerImagePayload = route ? { ...payload, route } : payload
+async function handleScenarioImage(
+  payload: ScenarioComposerImagePayload,
+  targetSessionId?: string,
+): Promise<boolean> {
   const message: ChatMessage = {
     id: nanoid(12),
     role: 'user',
-    content: '',
+    content: payload.contextText ?? '',
     timestamp: new Date().toISOString(),
     metadata: { attachments: [payload.attachment] },
   }
-  chatStore.messages.push(message)
-  void nextTick(scrollToBottom)
+  // request_id 与可见/持久消息使用同一身份；模型选择也在用户动作发生时冻结，
+  // 不能在 await 创建会话期间被后续 UI 操作改写。
+  const route = currentScenarioImageRoute()
+  const directedSessionId = targetSessionId?.trim() || ''
+  if (!directedSessionId) {
+    chatStore.messages.push(message)
+    void nextTick(scrollToBottom)
+  }
   // 新会话首图必须先建立稳定 session，再启动场景；否则 source_session 为空，
   // 随后的会话 watcher 还会重建并清掉刚启动的识题面板。
-  const sessionId = await chatStore.ensureSession()
-  void persistScenarioImageMessage(message, sessionId)
-  scenarioComposerImage.value = routedPayload
+  const sessionId = directedSessionId || await chatStore.ensureSession()
+  const routedPayload: ScenarioComposerImagePayload = {
+    dataUrl: payload.dataUrl,
+    attachment: payload.attachment,
+    ...(payload.contextText !== undefined ? { contextText: payload.contextText } : {}),
+    requestId: message.id,
+    sourceSessionId: sessionId,
+    ...(route ? { route } : {}),
+  }
+  if (!(await persistScenarioImageMessage(message, sessionId))) {
+    if (chatStore.currentSessionId === sessionId) {
+      const messageIndex = chatStore.messages.findIndex((candidate) => candidate.id === message.id)
+      if (messageIndex >= 0) chatStore.messages.splice(messageIndex, 1)
+    }
+    return false
+  }
+  pendingScenarioImageProjections.set(sessionId, { message, payload: routedPayload })
+  activateScenarioImageProjection(sessionId)
+  return true
+}
+// 场景失败卡片的“重新提交”是一次新的用户 attempt，不是对旧 Job 原地换绑模型。
+// feature 只把原始图片事实上交；shell 在点击时重新冻结当前路由，并用新的持久消息 ID
+// 作为 request_id。相同旧 attempt 的并发事件只允许一个穿过边界，避免双击创建两个 Job。
+const resubmittingScenarioAttempts = new Set<string>()
+async function handleScenarioImageAttempt(payload: ScenarioComposerImagePayload) {
+  const previousAttempt = payload.requestId?.trim()
+  if (!previousAttempt || resubmittingScenarioAttempts.has(previousAttempt)) return
+  resubmittingScenarioAttempts.add(previousAttempt)
+  try {
+    await handleScenarioImage(payload)
+  } finally {
+    resubmittingScenarioAttempts.delete(previousAttempt)
+  }
 }
 // 场景内联内容是否活动。通用 shell 只据布尔状态隐藏空态、滚到会话末尾，不解析场景内容。
 const scenarioInlineActive = ref(false)
@@ -735,12 +810,13 @@ const scenarioCtx = computed(() => {
   }
 })
 watch(
-  () => scenarioCtx.value?.agentId,
-  () => {
-    // 切孩子或离开场景时不能把上一会话的内联状态泄漏到新会话，否则普通空会话会被错误隐藏。
+  [() => scenarioCtx.value?.agentId, () => scenarioCtx.value?.sessionId],
+  ([, sessionId]) => {
+    // 切孩子、切同一孩子的会话或离开场景时，上一会话的离散图片 attempt 均不得泄漏。
     scenarioInlineActive.value = false
     scenarioComposerImage.value = ''
     scenarioComposerAction.value = undefined
+    if (sessionId) activateScenarioImageProjection(sessionId)
   },
 )
 
@@ -1226,11 +1302,13 @@ onMounted(async () => {
   // 窗口聚焦时重查（用户可能在 Settings 更新了 API Key 切回来）
   window.addEventListener('focus', refreshBackendGenStatus)
 
+  // 会话列表的固定身份、头像和场景元数据依赖智能体目录。冷启动必须先把身份依赖加载完整，
+  // 再投影会话；否则同一会话会在首次点击前暂时退化成普通会话。
+  agentsStore.loadRoles()
+  await agentsStore.loadAgents()
   await chatStore.loadSessions()
   await chatStore.recoverActiveStreams()
   chatStore.initApprovalListener()
-  agentsStore.loadRoles()
-  await agentsStore.loadAgents()
   // best-effort 预载：用 Promise.resolve 兜底，避免 API 同步返回 undefined 时
   // 在 .then 之前抛出未捕获 TypeError（'失败不阻塞会话' 的契约要落到实处）。
   Promise.resolve(getSkills())
@@ -1312,8 +1390,8 @@ onMounted(async () => {
       await settingsStore.syncOllamaModels()
       // 冷启动补拉（BUG-20260712-K 同类根因）：挂载时引擎未就绪 → 会话/agents 全空，
       // 就绪后必须重拉，否则列表空白且标题自愈/孤儿文案层（数据就绪驱动）拿不到数据。
-      await chatStore.loadSessions()
       await agentsStore.loadAgents()
+      await chatStore.loadSessions()
       // 后端延迟就绪后同样按优先级恢复当前会话模型，避免覆盖会话绑定（同 BUG-20260626-2 根因）。
       initLLMModelForCurrentSession()
       unlisten()
@@ -1629,6 +1707,33 @@ const { handleSend } = useChatSend({
   attachConversationAutomationActions,
 })
 
+async function submitEditedMessage(submission: EditedMessageSubmission): Promise<boolean> {
+  const attachments = submission.carry?.attachments ?? []
+  // 场景会话的单图消息（含可选说明文字）必须回到与 composer 上传/粘贴相同的图片入口；
+  // handleScenarioImage 会分配全新的消息/request_id，并保留旧消息及其后续历史。
+  if (
+    scenarioCtx.value &&
+    chatEnhancement &&
+    attachments.length === 1 &&
+    attachments[0]?.type === 'image'
+  ) {
+    const attachment = attachments[0]
+    return handleScenarioImage({
+      dataUrl: imageSrc(attachment),
+      attachment,
+      contextText: submission.content,
+    }, submission.targetSessionId)
+  }
+  return submission.carry
+    ? handleSend(submission.content, undefined, {
+        ...submission.carry,
+        targetSessionId: submission.targetSessionId,
+      })
+    : handleSend(submission.content, undefined, {
+        targetSessionId: submission.targetSessionId,
+      })
+}
+
 const {
   editingMsgId,
   editingText,
@@ -1639,7 +1744,7 @@ const {
   handleEdit,
   confirmEdit,
   cancelEdit,
-} = useChatActions(chatStore, toast, handleSend)
+} = useChatActions(chatStore, toast, handleSend, submitEditedMessage)
 
 // 编辑卡回车的 IME 合成态守卫（与 ChatInput 同源 shouldSendOnEnter）：中文/日文 IME 回车是
 // 「确认候选词」，不能误当「提交编辑」。compositionstart/end 跟踪 + 兜底 WKWebView 早结束竞态。
@@ -2285,6 +2390,7 @@ function startSidebarResize(event: MouseEvent) {
         @update:composer-image="scenarioComposerImage = $event"
         @update:inline-active="handleScenarioInlineActive"
         @composer-command="handleScenarioComposerCommand"
+        @scenario-image-attempt="handleScenarioImageAttempt"
       />
 
       <!-- Messages -->

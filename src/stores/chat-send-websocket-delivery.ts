@@ -60,6 +60,10 @@ export function createChatSendWebSocketDeliveryController(params: {
     attachments?: ChatAttachment[]
     requestId: string
     requestMetadata?: Record<string, string>
+    samplingSnapshot?: {
+      agentRole: string
+      chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
+    }
     sending: Ref<boolean>
     draftSending: Ref<boolean>
   }): Promise<ChatMessage | null | typeof CHAT_SEND_WEBSOCKET_FALLBACK> {
@@ -69,6 +73,7 @@ export function createChatSendWebSocketDeliveryController(params: {
       attachments,
       requestId,
       requestMetadata,
+      samplingSnapshot,
       sending,
       draftSending,
     } = args
@@ -89,8 +94,8 @@ export function createChatSendWebSocketDeliveryController(params: {
     const handle = chatSvc.openWebSocketStream(
       backendText,
       sessionId,
-      chatParams.value,
-      agentRole.value,
+      samplingSnapshot?.chatParams ?? chatParams.value,
+      samplingSnapshot?.agentRole ?? agentRole.value,
       attachments,
       {
         onChunk: (content, reasoning) => {
@@ -120,7 +125,7 @@ export function createChatSendWebSocketDeliveryController(params: {
         return finalizeAssistantMessage({
           content: finalState.content,
           sessionId,
-          metadata: { ...(result?.metadata ?? {}) },
+          metadata: { ...result?.metadata },
           reasoning: finalState.reasoning,
           sending,
           draftSending,

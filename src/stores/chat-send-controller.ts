@@ -10,6 +10,19 @@ type ChatServiceModule = typeof import('@/services/chatService')
 type MessageServiceModule = typeof import('@/services/messageService')
 type SettingsStoreFactory = typeof import('./settings').useSettingsStore
 
+export interface ChatSendOptions {
+  // backendText 支持惰性 thunk：含慢的上下文解析时，由 sendMessage 在用户气泡进入其
+  // 所属会话后再解析，避免阻塞普通 composer 的乐观上屏。
+  backendText?: string | (() => Promise<string | undefined>)
+  skillNames?: string[]
+  documents?: ChatDocumentRef[]
+  /**
+   * 内部定向提交目标。用于“编辑即新版本”事务：分支被接受前仍展示源会话，
+   * 因而不能从全局 currentSessionId 推断写入目标。
+   */
+  targetSessionId?: string
+}
+
 export function createChatSendController(params: {
   currentSessionId: Ref<string | null>
   messages: Ref<ChatMessage[]>
@@ -127,22 +140,19 @@ export function createChatSendController(params: {
   async function sendMessage(
     text: string,
     attachments?: ChatAttachment[],
-    options?: {
-      // backendText 支持惰性 thunk：含慢的 Auto-RAG searchKnowledge 时，由本函数在「用户气泡已
-      // 乐观上屏」之后再 await 解析，避免发送时「卡一下才上屏」(BUG-20260628)；string 形态向后兼容。
-      backendText?: string | (() => Promise<string | undefined>)
-      skillNames?: string[]
-      documents?: ChatDocumentRef[]
-    },
+    options?: ChatSendOptions,
   ): Promise<ChatMessage | null> {
-    const initialSessionId = currentSessionId.value
-    const shouldSeedAutoTitle = shouldSeedChatAutoTitle({
-      hasCustomTitle: hasCustomTitle.value,
-      initialSessionId,
-      messages: messages.value,
-      sessions: sessions.value,
-      defaultSessionTitle,
-    })
+    const directedSessionId = options?.targetSessionId?.trim() || null
+    const initialSessionId = directedSessionId ?? currentSessionId.value
+    const projectsIntoCurrentSession = !directedSessionId
+      || directedSessionId === currentSessionId.value
+    const shouldSeedAutoTitle = !directedSessionId && shouldSeedChatAutoTitle({
+        hasCustomTitle: hasCustomTitle.value,
+        initialSessionId,
+        messages: messages.value,
+        sessions: sessions.value,
+        defaultSessionTitle,
+      })
     if (shouldBlockChatSend({
       initialSessionId,
       pendingSessionIds: pendingSessionIds.value,
@@ -168,8 +178,10 @@ export function createChatSendController(params: {
         timestamp: new Date().toISOString(),
         metadata: Object.keys(userMeta).length ? userMeta : undefined,
       }
-      messages.value.push(userMessage) // ★ 乐观 push：用户气泡立即上屏，先于 ensureSession / Auto-RAG
-      const sessionId = await ensureSession()
+      // 普通 composer 保持乐观上屏；定向编辑在分支被接受前必须保持 source 可见，
+      // 因而只投递到显式目标，不污染当前会话的消息数组。
+      if (projectsIntoCurrentSession) messages.value.push(userMessage)
+      const sessionId = directedSessionId ?? await ensureSession()
       // ensureSession 完成后立即释放 draftSending，不再阻塞后续发送
       draftSending.value = false
       refreshSendingState(sending, draftSending)

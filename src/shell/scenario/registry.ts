@@ -48,11 +48,17 @@ export interface ScenarioImageModelRoute {
  * 通用 composer 拦截图片后交给场景包的完整事实。
  *
  * dataUrl 是场景任务的原始输入，attachment 是同一图片在会话消息中的持久化投影；
- * route 只由拥有会话模型状态的 shell 注入，输入组件不猜测模型。
+ * requestId/route/sourceSessionId 只由拥有消息身份与会话状态的 shell 注入，输入组件不猜测。
  */
 export interface ScenarioComposerImagePayload {
   dataUrl: string
   attachment: ChatAttachment
+  /** 图片随消息携带的用户说明；为空时保持纯图片语义。 */
+  contextText?: string
+  /** §4.10 desktop request_id；与持久用户消息 ID 同源，同图再次提交也必须得到新 ID。 */
+  requestId?: string
+  /** 该图片 attempt 唯一允许投影和建 Job 的来源会话；禁止同 Agent 会话间串任务。 */
+  sourceSessionId?: string
   route?: ScenarioImageModelRoute
 }
 

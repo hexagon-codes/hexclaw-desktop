@@ -46,6 +46,10 @@ export function createChatSendBackendDeliveryController(params: {
     attachments?: ChatAttachment[]
     requestId: string
     requestMetadata?: Record<string, string>
+    samplingSnapshot?: {
+      agentRole: string
+      chatParams: { provider?: string; model?: string; temperature?: number; maxTokens?: number }
+    }
     sending: Ref<boolean>
     draftSending: Ref<boolean>
   }): Promise<ChatMessage | null> {
@@ -55,6 +59,7 @@ export function createChatSendBackendDeliveryController(params: {
       attachments,
       requestId,
       requestMetadata,
+      samplingSnapshot,
       sending,
       draftSending,
     } = args
@@ -63,8 +68,8 @@ export function createChatSendBackendDeliveryController(params: {
       const result = await chatSvc.sendViaBackend(
         backendText,
         sessionId,
-        chatParams.value,
-        agentRole.value,
+        samplingSnapshot?.chatParams ?? chatParams.value,
+        samplingSnapshot?.agentRole ?? agentRole.value,
         attachments,
         requestMetadata,
         requestId,

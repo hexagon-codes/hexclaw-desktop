@@ -74,21 +74,34 @@ export function serializeMessageMetadata(msg: ChatMessage): Record<string, unkno
 
 // ─── 会话操作 ──────────────────────────────────────
 
-export async function loadAllSessions(): Promise<ChatSession[]> {
+export interface LoadAllSessionsResult {
+  sessions: ChatSession[]
+  /** false 表示请求失败；true + [] 才是后端权威确认的空列表。 */
+  succeeded: boolean
+}
+
+export async function loadAllSessionsResult(): Promise<LoadAllSessionsResult> {
   try {
     const res = await listSessions({ limit: 200 })
-    return (res.sessions || []).map(s => ({
-      id: s.id,
-      title: s.title || DEFAULT_SESSION_TITLE,
-      created_at: s.created_at || new Date().toISOString(),
-      updated_at: s.updated_at || new Date().toISOString(),
-      message_count: s.message_count ?? 0,
-      // 分支标识透传（BUG-20260703 P2-1）：会话列表用它渲染分支徽标
-      parent_session_id: s.parent_session_id || undefined,
-    }))
+    return {
+      sessions: (res.sessions || []).map(s => ({
+        id: s.id,
+        title: s.title || DEFAULT_SESSION_TITLE,
+        created_at: s.created_at || new Date().toISOString(),
+        updated_at: s.updated_at || new Date().toISOString(),
+        message_count: s.message_count ?? 0,
+        // 分支标识透传（BUG-20260703 P2-1）：会话列表用它渲染分支徽标
+        parent_session_id: s.parent_session_id || undefined,
+      })),
+      succeeded: true,
+    }
   } catch {
-    return []
+    return { sessions: [], succeeded: false }
   }
+}
+
+export async function loadAllSessions(): Promise<ChatSession[]> {
+  return (await loadAllSessionsResult()).sessions
 }
 
 export async function createSession(id: string, title: string): Promise<void> {
