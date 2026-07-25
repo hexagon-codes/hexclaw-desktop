@@ -34,7 +34,7 @@ describe('BUG-20260712-T1：K12 慢 LLM 端点超时预算', () => {
   beforeEach(() => postSpy.mockClear())
 
   it('★tutoringTips/grade/solve/tutor 均带放宽 timeout（默认 30s=必腰斩）', async () => {
-    await k12TutoringTips({ agent: 'a', grading_job_id: 'job-confirmed-1' })
+    await k12TutoringTips({ agent: 'a', dispatch_id: 'dispatch-confirmed-1' })
     await k12Grade({ agent: 'a', subject: '数学', grade: 'g', problem: 'p' } as never)
     await k12Solve({ agent: 'a', subject: '数学', grade: 'g', problem: 'p' } as never)
     await k12TutorTurn({ agent: 'a', prior_stage: 0 } as never)

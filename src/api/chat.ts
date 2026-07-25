@@ -213,13 +213,24 @@ export function sendChat(req: ChatRequest) {
 
 // ============== Session Fork (D10) ==============
 
+/**
+ * 分支复制边界。
+ *
+ * 未传时保持既有手工「由此分叉」语义：包含分支点消息；编辑历史消息时传
+ * `includeMessage: false`，令服务端只复制该消息之前的稳定前缀。
+ */
+export interface ForkSessionOptions {
+  includeMessage?: boolean
+}
+
 /** 从指定消息处分支对话 */
-export function forkSession(sessionId: string, messageId?: string) {
+export function forkSession(sessionId: string, messageId?: string, options?: ForkSessionOptions) {
   // user_id must reach the BODY: backend handleForkSession (handler_session.go:547)
   // reads the body only and falls back to "api-user" when it is absent.
   // sessionPost injects user_id into both the body and the URL query.
   return sessionPost<{ session: SessionSummary; message: string }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`, {
     message_id: messageId,
+    ...(options?.includeMessage === undefined ? {} : { include_message: options.includeMessage }),
   })
 }
 

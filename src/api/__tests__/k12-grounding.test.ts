@@ -32,7 +32,7 @@ describe('K12 教材 grounding API 契约', () => {
     const signal = new AbortController().signal
     const req = {
       agent: 'mingming',
-      grading_job_id: 'job-confirmed-1',
+      dispatch_id: 'dispatch-confirmed-1',
     }
     apiPost.mockResolvedValue({
       knowledge_points: ['小数乘法'],

@@ -48,29 +48,33 @@ describe('BUG 3: cloneMessage deep clone', () => {
 })
 
 // ════════════════════════════════════════════════════════════
-// BUG 10 (HIGH): confirmEdit deletes messages before model check — FIXED
+// BUG 10 (HIGH): confirmEdit must validate before submitting and never delete history — FIXED
 // ════════════════════════════════════════════════════════════
 
 describe('BUG 10: confirmEdit / handleRetry model guard ordering', () => {
   const src = readSrc('composables/useChatActions.ts')
 
-  it('confirmEdit checks chatStore.chatParams.model before deleting', () => {
+  it('confirmEdit checks chatStore.chatParams.model before submitting and never deletes history', () => {
     const fnStart = src.indexOf('async function confirmEdit')
-    const delPos = src.indexOf('removeRangeAtomic(', fnStart)
+    const fnEnd = src.indexOf('\n  function cancelEdit', fnStart)
+    const fnBody = src.slice(fnStart, fnEnd)
+    const submitPos = fnBody.indexOf('submitEditedMessage')
     const modelCheckPos = src.indexOf('chatStore.chatParams.model', fnStart)
-    // Model check must appear before the atomic delete
+    // Model check must appear before the immutable edited submission.
     expect(modelCheckPos).toBeGreaterThan(fnStart)
-    expect(delPos).toBeGreaterThan(-1)
-    expect(modelCheckPos).toBeLessThan(delPos)
+    expect(submitPos).toBeGreaterThan(-1)
+    expect(modelCheckPos - fnStart).toBeLessThan(submitPos)
+    expect(fnBody).not.toContain('removeRangeAtomic(')
+    expect(fnBody).not.toContain('removeMessage(')
   })
 
-  it('confirmEdit returns early (cancelEdit) when model is empty', () => {
+  it('confirmEdit returns early and preserves the edit when model is empty', () => {
     const fnStart = src.indexOf('async function confirmEdit')
     const fnBody = src.slice(fnStart, src.indexOf('\n  async function', fnStart + 10) > 0
       ? src.indexOf('\n  async function', fnStart + 10)
       : src.indexOf('\n  function', fnStart + 10))
-    // Should call cancelEdit() when model is missing
-    expect(fnBody).toContain('cancelEdit()')
+    expect(fnBody).toContain('chat.selectModelFirst')
+    expect(fnBody).toContain('return')
   })
 
   it('handleRetry checks chatStore.chatParams.model before deleting', () => {
@@ -150,7 +154,7 @@ describe('BUG 6: ensureSession does not push to sessions array', () => {
 // BUG 9 (MEDIUM): handleRetry splices before backend delete — DOCUMENTED
 // ════════════════════════════════════════════════════════════
 
-describe('BUG 9: handleRetry/confirmEdit atomic delete (AP-094)', () => {
+describe('BUG 9: retry atomic delete and edit immutable submission (AP-094)', () => {
   const src = readSrc('composables/useChatActions.ts')
 
   it('removeRangeAtomic splices UI before awaiting backend deletes (optimistic)', () => {
@@ -184,10 +188,13 @@ describe('BUG 9: handleRetry/confirmEdit atomic delete (AP-094)', () => {
     expect(body).toContain('return false') // 中止重发，杜绝重复
   })
 
-  it('handleRetry/confirmEdit gate resend on the atomic delete result', () => {
-    // 两处都必须：if (!(await removeRangeAtomic(...))) return —— 删除失败即不重发。
+  it('handleRetry gates resend on delete result while confirmEdit never deletes history', () => {
     expect(src).toContain('if (!(await removeRangeAtomic(userMsgIdx))) return')
-    expect(src).toContain('if (!(await removeRangeAtomic(idx))) return')
+    const fnStart = src.indexOf('async function confirmEdit')
+    const fnEnd = src.indexOf('\n  function cancelEdit', fnStart)
+    const fnBody = src.slice(fnStart, fnEnd)
+    expect(fnBody).not.toContain('removeRangeAtomic(')
+    expect(fnBody).toContain('submitEditedMessage')
   })
 })
 
@@ -336,16 +343,36 @@ vi.mock('@/services/messageService', () => ({
   removeMessage: vi.fn().mockResolvedValue(undefined),
 }))
 
+const editBranchMocks = vi.hoisted(() => ({
+  forkSession: vi.fn(),
+  deleteSession: vi.fn(),
+}))
+vi.mock('@/api/chat', () => ({
+  forkSession: editBranchMocks.forkSession,
+  deleteSession: editBranchMocks.deleteSession,
+}))
+
 function makeMockChatStore(overrides: {
   messages?: Array<{ id: string; role: string; content: string; timestamp: string; metadata?: Record<string, unknown> }>
   model?: string
 }) {
   const messages = overrides.messages ?? []
-  return {
+  const store = {
     messages,
+    currentSessionId: 'source-session',
+    agentRole: '',
+    chatMode: 'agent',
+    thinkingEnabled: false,
+    streaming: false,
     chatParams: { model: overrides.model ?? '' },
     setMessageFeedback: vi.fn().mockResolvedValue(null),
+    loadSessions: vi.fn().mockResolvedValue(undefined),
+    selectSession: vi.fn<(sessionId: string) => Promise<void>>(),
   }
+  store.selectSession.mockImplementation(async (sessionId: string) => {
+    store.currentSessionId = sessionId
+  })
+  return store
 }
 
 function makeMockToast() {
@@ -364,6 +391,8 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockHandleSend = vi.fn().mockResolvedValue(true)
+    editBranchMocks.forkSession.mockResolvedValue({ session: { id: 'edit-branch' } })
+    editBranchMocks.deleteSession.mockResolvedValue(undefined)
   })
 
   // AP-096/F4 修正：无模型时不再静默 cancelEdit（丢编辑+无提示），改 toast 并**保留编辑内容**。
@@ -392,7 +421,7 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
     expect(editingText.value).toBe('updated text')
   })
 
-  it('confirmEdit with valid model -> messages spliced, handleSend called', async () => {
+  it('confirmEdit with valid model -> source history preserved, exclusive-prefix branch receives edit', async () => {
     const messages = [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
       { id: 'a1', role: 'assistant', content: 'hi', timestamp: '2025-01-01T00:00:01Z' },
@@ -406,13 +435,21 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
 
     await confirmEdit('u1')
 
-    // Messages SHOULD be spliced (user msg + assistant reply removed)
-    expect(messages).toHaveLength(0)
-    // handleSend SHOULD be called with the edited text
-    expect(mockHandleSend).toHaveBeenCalledWith('updated text')
+    expect(messages.map((message) => message.id)).toEqual(['u1', 'a1'])
+    expect(editBranchMocks.forkSession).toHaveBeenCalledWith(
+      'source-session',
+      'u1',
+      { includeMessage: false },
+    )
+    expect(mockHandleSend).toHaveBeenCalledWith(
+      'updated text',
+      undefined,
+      { targetSessionId: 'edit-branch' },
+    )
+    expect(store.currentSessionId).toBe('edit-branch')
   })
 
-  it('confirmEdit with model="auto" -> messages spliced, handleSend called', async () => {
+  it('confirmEdit with model="auto" -> source history preserved, branch receives edit', async () => {
     const messages = [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '2025-01-01T00:00:00Z' },
       { id: 'a1', role: 'assistant', content: 'hi', timestamp: '2025-01-01T00:00:01Z' },
@@ -426,8 +463,12 @@ describe('useChatActions runtime: confirmEdit model guard', () => {
 
     await confirmEdit('u1')
 
-    expect(messages).toHaveLength(0)
-    expect(mockHandleSend).toHaveBeenCalledWith('auto model edit')
+    expect(messages.map((message) => message.id)).toEqual(['u1', 'a1'])
+    expect(mockHandleSend).toHaveBeenCalledWith(
+      'auto model edit',
+      undefined,
+      { targetSessionId: 'edit-branch' },
+    )
   })
 
   it('confirmEdit with empty trimmed text -> edit cancelled, messages intact', async () => {

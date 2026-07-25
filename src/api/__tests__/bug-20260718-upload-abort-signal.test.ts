@@ -77,7 +77,11 @@ describe('轮询 GET 透传取消信号', () => {
     )
     const { apiGet } = await import('../client')
     const ctrl = new AbortController()
-    const pending = apiGet('/api/k12/grading-jobs/job-a', { agent: 'mingming' }, { signal: ctrl.signal })
+    const pending = apiGet(
+      '/api/k12/image-tasks/dispatch-a',
+      { agent: 'mingming' },
+      { signal: ctrl.signal },
+    )
     ctrl.abort()
 
     await expect(pending).rejects.toThrow()

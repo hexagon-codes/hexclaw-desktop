@@ -52,11 +52,13 @@ export type GradeBadge =
   | 'disagree'
   | 'out-of-scope'
   | 'unverifiable'
+  | 'verbatim-recall'
 export type EvidenceType =
   | 'numeric_exec'
   | 'symbolic_exec'
   | 'heterogeneous_model'
   | 'heuristic'
+  | 'verbatim'
   | 'none'
 
 export interface GradeResp {
@@ -71,6 +73,8 @@ export interface GradeResp {
   out_of_scope_kp?: string
   record_created: boolean
   record_id?: string
+  /** 课程词表暂未映射的知识点；仅作 fail-visible 证据，不等同超纲。 */
+  curriculum_unmapped?: string[]
   /** true = student_answer 为空，后端内部转「解题」分叉（非批改）：只给 solution，
    *  无批改判定与入库。前端应按解题口径呈现，不显对/错、不显入本。 */
   solve_only?: boolean
@@ -149,6 +153,12 @@ export interface MistakeDTO {
   /** 抽查复验状态（§3.6：none/scheduled/passed/failed）。前端只消费 failed →
    *  详情「家长确认（复验未过）」事实标注；scheduled 不呈现（不打抽查标签）。 */
   spot_check_state?: string
+  /** 当前软归档事实；恢复后清空，历史审计保存在服务端归档快照。 */
+  archived_reason?: string
+  archived_at?: number
+  archive_restored_at?: number
+  /** 服务端确认存在可恢复快照；legacy archived 不得由客户端猜测可恢复。 */
+  restorable?: boolean
 }
 
 export interface MistakesResp {
@@ -171,6 +181,41 @@ export function k12DeleteMistake(agent: string, recordId: string) {
   return apiDelete<{ ok: boolean }>(
     `${BASE}/mistakes/${encodeURIComponent(recordId)}?agent=${encodeURIComponent(agent)}`,
   )
+}
+
+// ── controlled mistake archive / restore（BUG-20260725-017）────────
+export interface MistakeArchiveCommandReq {
+  agent: string
+  version: number
+  idempotency_key: string
+}
+
+/** 「不再复习」：CAS 软归档。成功响应中的 version 是 Undo 唯一合法的 restore version。 */
+export function k12ArchiveMistake(
+  agent: string,
+  recordId: string,
+  version: number,
+  idempotencyKey: string,
+) {
+  return apiPost<MistakeDTO>(`${BASE}/mistakes/${encodeURIComponent(recordId)}/archive`, {
+    agent,
+    version,
+    idempotency_key: idempotencyKey,
+  })
+}
+
+/** 8 秒 Undo 与「已归档」长期恢复共用的唯一 CAS restore。 */
+export function k12RestoreMistake(
+  agent: string,
+  recordId: string,
+  version: number,
+  idempotencyKey: string,
+) {
+  return apiPost<MistakeDTO>(`${BASE}/mistakes/${encodeURIComponent(recordId)}/restore`, {
+    agent,
+    version,
+    idempotency_key: idempotencyKey,
+  })
 }
 
 // ── mark-mastered（他会了，乐观锁）───────────────────────────
@@ -217,8 +262,8 @@ export function k12ReviewRetry(req: ReviewRetryReq, signal?: AbortSignal) {
 // ── tutoring-tips（辅导要点，固定三段）─────────────────────────────
 export interface TutoringTipsReq {
   agent: string
-  /** 已由家长确认并冻结 canonical 输入的当前批改 Job。 */
-  grading_job_id: string
+  /** 已由家长确认并冻结 canonical 输入的当前图片任务；服务端负责解析内部批改实体。 */
+  dispatch_id: string
 }
 
 /** source_label 只承载原型三类来源：📖 依据课本 / 🧠 学情信号 / 🤖 AI 归纳·供参考。 */
@@ -233,11 +278,7 @@ export interface TutoringTipsResp {
   sections: [TutoringTipsSectionDTO, TutoringTipsSectionDTO, TutoringTipsSectionDTO]
 }
 
-const TUTORING_TIPS_SOURCE_LABELS = new Set([
-  '📖 依据课本',
-  '🧠 学情信号',
-  '🤖 AI 归纳·供参考',
-])
+const TUTORING_TIPS_SOURCE_LABELS = new Set(['📖 依据课本', '🧠 学情信号', '🤖 AI 归纳·供参考'])
 
 function assertTutoringTipsResp(value: unknown): asserts value is TutoringTipsResp {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -293,9 +334,9 @@ function assertTutoringTipsResp(value: unknown): asserts value is TutoringTipsRe
 export async function k12TutoringTips(req: TutoringTipsReq, signal?: AbortSignal) {
   const body: TutoringTipsReq = {
     agent: req.agent.trim(),
-    grading_job_id: req.grading_job_id.trim(),
+    dispatch_id: req.dispatch_id.trim(),
   }
-  if (!body.agent || !body.grading_job_id) throw new Error('untrusted tutoring tips scope')
+  if (!body.agent || !body.dispatch_id) throw new Error('untrusted tutoring tips scope')
   // LLM 生成辅导要点，默认 30s 会腰斩→「Fetch is aborted」（BUG-20260712-T1 真机取证）
   const response = await apiPost<unknown>(`${BASE}/tutoring-tips`, body, {
     timeout: 120_000,
@@ -419,6 +460,13 @@ export function k12ListAccumulation(agent: string, subject?: string) {
 }
 export function k12AddAccumulation(req: AddAccumReq) {
   return apiPost<{ record_id: string; created: boolean }>(`${BASE}/accumulation`, req)
+}
+/** 将这条积累内容发送给当前辅导智能体绑定的全部有效私聊。
+ *  接收人枚举、物理目标去重和目标快照全部由服务端完成。 */
+export function k12SendAccumulation(agent: string, recordId: string) {
+  return apiPost<DeliveryBatchDTO>(`${BASE}/accumulation/${encodeURIComponent(recordId)}/send`, {
+    agent,
+  })
 }
 
 // ── backup / restore（真实 .hexbak，服务端带 checksum）──────
@@ -614,9 +662,9 @@ async function assertRenderedDocument(blob: Blob, format: RenderReq['format']): 
 // 注：GET /mistake-sheet 的前端客户端已删除——前端错题卷由客户端 printWorksheet 生成（当前视图错题
 // → A4 iframe 打印），后端周错题卷 md 仅供 cron 投递用（审计 #7 冗余死绑定清理）。
 
-// ── 识题产物类型（统一 GradingJob 停点回显消费，§6.7）──────
+// ── 图片任务公开作业投影类型（§6.7）──────────────────────────
 // 两阶段直连编排 k12Recognize / k12RecognizeAnchors 已随一次切换删除
-// （§6.14 链路① · 2026-07-18）：识题→锚点→批改统一走下方 grading-jobs 段
+// （§6.14 链路① · 2026-07-18）：识题→锚点→批改统一走 ImageTaskDispatch facade
 // （停点产物携带识别清单+整卷学科+锚点 bbox）。后端两端点已 404。
 // 反向契约：src/api/__tests__/cutover-20260718-recognize-removed.test.ts。
 /**
@@ -670,7 +718,7 @@ export interface RecognizedQuestion {
   answer_canonical_valid?: boolean
   /** 识题自动判定的题目学科（数学/语文/英语/物理/化学，判不出=空/缺省）。 */
   subject?: string
-  /** 仅锚点阶段之后出现（GradingJob 停点产物）；核心识题永远不携带坐标。 */
+  /** 仅锚点阶段之后出现在公开作业投影中；核心识题永远不携带坐标。 */
   bbox?: BBox | null
   recognition_confidence?: number
   confirmation_required?: boolean
@@ -679,11 +727,10 @@ export interface RecognizedQuestion {
   input_digest?: string
 }
 
-// ── grading-jobs（统一 GradingJob：桌面拍照批改入口，§6.7/§6.15）──────────
-// 桌面编排改道（执行计划 §3.4「入口自编排」收敛）：上传照片 → 创建 Job（后端异步推进）
-// → 轮询到 awaiting_confirmation（响应携带识别停点产物）→ 确认/修正 → 轮询到 completed
-// → 取逐题批改结果渲染。DTO 与 scenarios/k12/apihttp/gradingjob_handler.go 1:1 对齐。
-export type GradingJobStage =
+// ── ImageTaskDispatch（四类图片任务唯一公共 facade，§3.2/§5.4）────────────
+// Desktop 只调用 /image-tasks create/get/confirm/retry/cancel/result。
+// 作业子链的内部身份与路由不会暴露；Desktop 只消费以下公开投影。
+export type ImageTaskHomeworkStage =
   | 'queued'
   | 'normalizing'
   | 'recognizing'
@@ -694,37 +741,12 @@ export type GradingJobStage =
   | 'projecting'
   | 'completed'
   | 'cancelled'
-  | 'outcome_unknown'
+  | 'recovering'
   | 'failed_retryable'
   | 'failed_terminal'
 
-export interface GradingCheckpointDTO {
-  stage: GradingJobStage
-  artifact_digest?: string
-  recorded_at?: number
-  degraded?: boolean
-}
-export interface GradingJobDTO {
-  job_id: string
-  submission_id: string
-  stage: GradingJobStage
-  confirmation_state: 'pending' | 'confirmed'
-  anchor_state: 'pending' | 'located' | 'degraded'
-  deadline: number
-  idempotency_key: string
-  confirmed_version: number
-  stage_checkpoints?: GradingCheckpointDTO[]
-  attempt_count: number
-  failure_kind?: string
-  retryable: boolean
-  version: number
-  created_at: number
-  updated_at: number
-  /** GET 详情在识别停点附带；创建/列表响应可缺省。 */
-  recognized_questions?: RecognizedQuestion[]
-}
 /** 识别停点产物（awaiting_confirmation 起可用）：护栏回显数据源（含锚点 bbox）。 */
-export interface GradingJobRecognition {
+export interface ImageTaskHomeworkRecognition {
   questions: RecognizedQuestion[]
   subject?: string
 }
@@ -742,44 +764,194 @@ export interface PhotoJobItemDTO {
     | 'failed'
   warning?: string
   grade?: GradeResp
+  /**
+   * Item-level result contract. Blank worksheets use `parent_teaching_guide`;
+   * completed homework keeps its assessment projection unchanged.
+   */
+  result_kind: PhotoJobResultKind
+  /** Complete, parent-facing guide for exactly one blank-worksheet problem. */
+  parent_guide?: ParentTeachingGuideDTO
+}
+
+/** The page-level photo route frozen by the backend classifier. */
+export type PhotoJobTaskIntent = 'completed_homework' | 'blank_worksheet'
+
+/** The only approved result surface for a classified photo task. */
+export type PhotoJobResultSurface = 'annotated_homework' | 'parent_teaching_guide'
+
+/** Item-level result semantics; never infer these from legacy `mode`. */
+export type PhotoJobResultKind =
+  | 'assessment'
+  | 'parent_teaching_guide'
+  | 'unanswered'
+  | 'needs_review'
+  | 'out_of_scope'
+  | 'failed'
+
+/**
+ * K12-INV-060 blank-worksheet contract. These seven fields are deliberately
+ * parent-facing and preserve the server-provided teaching order for one exact
+ * question; the UI must not synthesize them from generic grade text.
+ */
+export interface ParentTeachingGuideDTO {
+  answer: string
+  full_solution_steps: string[]
+  grade_level_method: string
+  likely_mistakes: string[]
+  parent_teaching_sequence: string[]
+  follow_up_questions: string[]
+  checking_method: string
 }
 export interface PhotoJobResult {
-  mode: string
+  mode: 'grade' | 'solve'
+  /** Product task semantics; `mode` remains only the legacy processing switch. */
+  task_intent: PhotoJobTaskIntent
+  /** Approved result surface selected by `task_intent`. */
+  result_surface: PhotoJobResultSurface
   items: PhotoJobItemDTO[]
   markdown: string
-  image_warning?: string
-}
-export interface GradingJobStatusResp {
-  job_id: string
-  stage: GradingJobStage
-  confirmation_state: 'pending' | 'confirmed'
-  anchor_state: 'pending' | 'located' | 'degraded'
-  deadline: number
-  confirmed_version: number
-  job: GradingJobDTO
-  recognition?: GradingJobRecognition
-  result?: PhotoJobResult
-}
-export interface GradingJobResultResp {
-  job_id: string
-  result: PhotoJobResult
-}
-export interface CreatePhotoGradingJobReq {
-  agent: string
-  /** §4.10 统一幂等键：desktop 用请求标识；同键重投命中既有 Job（created=false）。 */
-  source_key: string
-  source_kind?: string
-  image_base64: string
-  subject?: string
-  grade?: string
-  source_session?: string
-  /** 客户端显式路由请求；服务端仍须重新校验 text+vision 能力后才可冻结。 */
-  model_snapshot?: {
-    provider: string
-    model: string
-    capability: 'vision'
+  image_warning: string
+  /**
+   * 服务端基于原始作业图生成的不可变批注产物。桌面端优先直接展示该产物；
+   * 老服务未返回时，才使用题目 bbox 做本地确定性叠加。
+   */
+  annotated_image?: {
+    mime: string
+    data_base64: string
+    digest: string
   }
 }
+export type ImageTaskIntent =
+  | 'completed_homework'
+  | 'blank_worksheet'
+  | 'writing'
+  | 'artwork'
+  | 'unknown'
+
+export type ImageTaskDispatchStatus =
+  | 'routing'
+  | 'awaiting_confirmation'
+  | 'routed'
+  | 'failed'
+  | 'cancelled'
+
+export type ImageTaskCreativeFeedbackState =
+  | 'feedback_pending'
+  | 'feedback_ready'
+  | 'feedback_failed'
+  | 'recovering'
+
+export type ImageTaskProgressDTO =
+  | { operation: 'classification'; state: ImageTaskDispatchStatus }
+  | { operation: 'homework'; state: ImageTaskHomeworkStage }
+  | { operation: 'writing_ocr'; state: CreativeWorkIntakeStatus }
+  | {
+      operation: 'promotion'
+      state: CreativeWorkIntakeStatus | ImageTaskCreativeFeedbackState
+    }
+
+export interface ImageTaskHomeworkProjectionDTO {
+  kind: 'homework'
+  stage: ImageTaskHomeworkStage
+  confirmation_state: 'pending' | 'confirmed'
+  anchor_state: 'pending' | 'located' | 'degraded'
+  recognition?: ImageTaskHomeworkRecognition
+}
+
+export interface CreativeConflictDTO {
+  segment_id: string
+  raw_text?: string
+  canonical_text?: string
+  reason?: string
+}
+
+export type CreativeWorkIntakeStatus =
+  | 'preparing'
+  | 'awaiting_confirmation'
+  | 'ready'
+  | 'promoted'
+  | 'failed'
+  | 'cancelled'
+
+export interface ImageTaskCreativeProjectionDTO {
+  kind: 'creative'
+  intake_id: string
+  work_type: 'writing' | 'art'
+  status: CreativeWorkIntakeStatus
+  /** Hidden workflow semantics for manual archive entry; never rendered as UI copy. */
+  entry_kind?: 'auto' | 'new_work' | 'revision'
+  promotion_policy?: 'automatic' | 'explicit_commit'
+  routing_provenance?: 'model_classified' | 'parent_selected'
+  commit_required?: boolean
+  commit_state?: 'pending' | 'committed'
+  promoted_work_id?: string
+  promoted_version_id?: string
+  /**
+   * Confirmable OCR snapshot for writing photos. This state is needed to
+   * submit the smallest conflict correction, but is not itself a display
+   * surface.
+   */
+  canonical_version?: number
+  canonical_content?: string
+  conflicts?: CreativeConflictDTO[]
+  work?: {
+    work_id: string
+    display_name: string
+  }
+}
+
+export type ImageTaskTargetProjectionDTO =
+  | ImageTaskHomeworkProjectionDTO
+  | ImageTaskCreativeProjectionDTO
+
+export interface ImageTaskDispatchDTO {
+  dispatch_id: string
+  task_intent: ImageTaskIntent
+  status: ImageTaskDispatchStatus
+  intent_evidence: string[]
+  intent_confidence: number
+  confirmation_candidates: ImageTaskIntent[]
+  target?: {
+    type: 'homework_submission' | 'creative_work_intake'
+    id: string
+  }
+  target_projection?: ImageTaskTargetProjectionDTO
+  progress: ImageTaskProgressDTO
+  version: number
+  created_at: number
+  updated_at: number
+}
+
+export interface ImageTaskDispatchResp {
+  dispatch: ImageTaskDispatchDTO
+}
+
+export interface CreateImageTaskReq {
+  agent: string
+  source_session: string
+  source_kind: 'desktop' | 'api' | 'im_direct'
+  source_ref: string
+  source_asset_refs: string[]
+  message_intent?: string
+  attempt_generation: number
+  route_request: {
+    provider?: string
+    model?: string
+    selection_source?: 'explicit' | 'auto'
+  }
+  creative_entry?:
+    | {
+        kind: 'new_work'
+        task_intent: 'writing' | 'artwork'
+      }
+    | {
+        kind: 'revision'
+        task_intent: 'writing' | 'artwork'
+        work_id: string
+        base_version_id: string
+      }
+}
+
 /** 逐题确认/修正（空字段 = 该维度按识别结果确认不改）。 */
 export interface GradingQuestionCorrection {
   index: number
@@ -793,63 +965,901 @@ export interface GradingQuestionCorrection {
   answer_state?: AnswerState
   subject?: string
 }
-export interface ConfirmGradingJobReq {
+
+export interface ConfirmImageTaskReq {
   agent: string
-  subject?: string
-  grade?: string
-  question_corrections?: GradingQuestionCorrection[]
+  version: number
+  intent?: ImageTaskIntent
+  homework?: {
+    subject?: string
+    grade?: string
+    question_corrections: GradingQuestionCorrection[]
+  }
+  creative?:
+    | {
+        action: 'freeze_ocr'
+        canonical_version: number
+        canonical_content: string
+        segment_corrections?: Array<{
+          segment_id: string
+          canonical_text: string
+        }>
+      }
+    | {
+        action: 'commit'
+        work_title?: string
+        task_requirement?: string
+        intent?: string
+        content_markdown?: string
+      }
 }
 
-/** 创建照片批改 Job：后端固化原图并**异步**推进（响应即回，不等识别完成）。 */
-export function k12CreateGradingJob(req: CreatePhotoGradingJobReq, signal?: AbortSignal) {
-  return apiPost<{ created: boolean; job: GradingJobDTO }>(`${BASE}/grading-jobs`, req, {
+export interface ImageTaskVersionReq {
+  agent: string
+  version: number
+}
+
+export interface ImageTaskCreateResp extends ImageTaskDispatchResp {
+  created: boolean
+}
+
+export interface ImageTaskWorkFeedbackObservationDTO {
+  dimension: string
+  evidence: string
+}
+
+export interface ImageTaskWorkFeedbackSourceDTO {
+  source: 'ai' | 'parent'
+  method_ref: string
+  capability: string
+}
+
+/** Closed, score-free feedback fact persisted with the formal work version. */
+export interface ImageTaskStructuredFeedbackDTO {
+  feedback_id: string
+  version_id: string
+  feedback_type: 'writing' | 'art'
+  evidence_refs: string[]
+  observations: ImageTaskWorkFeedbackObservationDTO[]
+  source_snapshot: ImageTaskWorkFeedbackSourceDTO
+  limitations: string
+  suggestions: string[]
+  projection_markdown: string
+}
+
+export interface ImageTaskCreativeFeedbackDTO {
+  structured_feedback: ImageTaskStructuredFeedbackDTO
+  /** Stable renderer field; must equal structured_feedback.projection_markdown. */
+  projection_markdown: string
+}
+
+export interface ImageTaskCreativeResultPayload {
+  intake: {
+    intake_id: string
+    status: CreativeWorkIntakeStatus
+  }
+  work?: {
+    work_id: string
+    display_name: string
+  }
+  /** Omitted until the formal CreativeWork is durably feedback_ready. */
+  feedback?: ImageTaskCreativeFeedbackDTO
+}
+
+export type ImageTaskResultProjection =
+  | { kind: 'completed_homework'; payload: PhotoJobResult }
+  | { kind: 'blank_worksheet'; payload: PhotoJobResult }
+  | { kind: 'writing'; payload: ImageTaskCreativeResultPayload }
+  | { kind: 'artwork'; payload: ImageTaskCreativeResultPayload }
+
+export interface ImageTaskResultResp {
+  dispatch_id: string
+  task_intent: ImageTaskIntent
+  status: ImageTaskDispatchStatus
+  result: ImageTaskResultProjection | null
+}
+
+type ImageTaskWireRecord = Record<string, unknown>
+
+const IMAGE_TASK_INTENTS = new Set<ImageTaskIntent>([
+  'completed_homework',
+  'blank_worksheet',
+  'writing',
+  'artwork',
+  'unknown',
+])
+const IMAGE_TASK_STATUSES = new Set<ImageTaskDispatchStatus>([
+  'routing',
+  'awaiting_confirmation',
+  'routed',
+  'failed',
+  'cancelled',
+])
+const IMAGE_TASK_HOMEWORK_STAGES = new Set<ImageTaskHomeworkStage>([
+  'queued',
+  'normalizing',
+  'recognizing',
+  'locating',
+  'awaiting_confirmation',
+  'assessing',
+  'rendering',
+  'projecting',
+  'completed',
+  'cancelled',
+  'recovering',
+  'failed_retryable',
+  'failed_terminal',
+])
+const IMAGE_TASK_CREATIVE_STATUSES = new Set<CreativeWorkIntakeStatus>([
+  'preparing',
+  'awaiting_confirmation',
+  'ready',
+  'promoted',
+  'failed',
+  'cancelled',
+])
+const IMAGE_TASK_PROGRESS_OPERATIONS = new Set<ImageTaskProgressDTO['operation']>([
+  'classification',
+  'homework',
+  'writing_ocr',
+  'promotion',
+])
+const IMAGE_TASK_CREATIVE_FEEDBACK_STATES = new Set<ImageTaskCreativeFeedbackState>([
+  'feedback_pending',
+  'feedback_ready',
+  'feedback_failed',
+  'recovering',
+])
+const IMAGE_TASK_PROBLEM_KINDS = new Set<ProblemKind>([
+  'standalone',
+  'compound_parent',
+  'subproblem',
+])
+const IMAGE_TASK_ANSWER_STATES = new Set<AnswerState>(['blank', 'present', 'unclear'])
+const IMAGE_TASK_CONFIRMATION_REASONS = new Set<OCRConfirmationReason>([
+  'fraction',
+  'decimal_point',
+  'negative_sign',
+  'unit',
+  'erasure',
+  'evidence_conflict',
+  'low_confidence',
+  'unclear_handwriting',
+  'subject_undetermined',
+  'canonical_parse_failed',
+])
+const IMAGE_TASK_PHOTO_STATUSES = new Set<PhotoJobItemDTO['status']>([
+  'correct',
+  'wrong',
+  'unanswered',
+  'answer_unclear',
+  'blank_solved',
+  'out_of_scope',
+  'untrusted',
+  'failed',
+])
+const IMAGE_TASK_PHOTO_RESULT_KINDS = new Set<PhotoJobResultKind>([
+  'assessment',
+  'parent_teaching_guide',
+  'unanswered',
+  'needs_review',
+  'out_of_scope',
+  'failed',
+])
+const IMAGE_TASK_GRADE_VERDICTS = new Set<GradeVerdict>([
+  'agree',
+  'disagree',
+  'unverifiable',
+  'out_of_scope',
+  'verbatim',
+])
+const IMAGE_TASK_GRADE_BADGES = new Set<GradeBadge>([
+  'verified-strong',
+  'verified-weak',
+  'disagree',
+  'out-of-scope',
+  'unverifiable',
+  'verbatim-recall',
+])
+const IMAGE_TASK_EVIDENCE_TYPES = new Set<EvidenceType>([
+  'numeric_exec',
+  'symbolic_exec',
+  'heterogeneous_model',
+  'heuristic',
+  'verbatim',
+  'none',
+])
+
+function imageTaskWireRecord(value: unknown, message: string): ImageTaskWireRecord {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(message)
+  return value as ImageTaskWireRecord
+}
+
+function assertImageTaskKeys(
+  value: ImageTaskWireRecord,
+  required: readonly string[],
+  optional: readonly string[],
+  message: string,
+) {
+  const allowed = new Set([...required, ...optional])
+  if (
+    required.some((key) => !Object.prototype.hasOwnProperty.call(value, key)) ||
+    Object.keys(value).some((key) => !allowed.has(key))
+  ) {
+    throw new Error(message)
+  }
+}
+
+function isImageTaskStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function isImageTaskNonEmptyStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((item) => typeof item === 'string' && !!item.trim())
+  )
+}
+
+function assertImageTaskBBox(value: unknown, message: string) {
+  const bbox = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(bbox, ['x', 'y', 'w', 'h'], [], message)
+  if (
+    !['x', 'y', 'w', 'h'].every(
+      (key) => typeof bbox[key] === 'number' && Number.isFinite(bbox[key]),
+    )
+  ) {
+    throw new Error(message)
+  }
+}
+
+function assertImageTaskRecognizedQuestion(
+  value: unknown,
+  message: string,
+): asserts value is RecognizedQuestion {
+  const question = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    question,
+    [
+      'problem_id',
+      'problem_kind',
+      'page_asset_id',
+      'question',
+      'raw_transcription',
+      'canonical_markdown',
+      'canonical_valid',
+      'canonical_version',
+      'knowledge_points',
+      'student_answer',
+      'answer_canonical_valid',
+      'answer_state',
+      'confirmation_required',
+      'confirmed_version',
+    ],
+    [
+      'parent_problem_id',
+      'subproblem_no',
+      'attempt_id',
+      'answer_raw_transcription',
+      'answer_canonical_markdown',
+      'subject',
+      'recognition_confidence',
+      'confirmation_reasons',
+      'input_digest',
+      'bbox',
+    ],
+    message,
+  )
+  if (
+    typeof question.problem_id !== 'string' ||
+    !IMAGE_TASK_PROBLEM_KINDS.has(question.problem_kind as ProblemKind) ||
+    typeof question.page_asset_id !== 'string' ||
+    typeof question.question !== 'string' ||
+    typeof question.raw_transcription !== 'string' ||
+    typeof question.canonical_markdown !== 'string' ||
+    typeof question.canonical_valid !== 'boolean' ||
+    !Number.isInteger(question.canonical_version) ||
+    Number(question.canonical_version) < 1 ||
+    !isImageTaskStringArray(question.knowledge_points) ||
+    typeof question.student_answer !== 'string' ||
+    typeof question.answer_canonical_valid !== 'boolean' ||
+    !IMAGE_TASK_ANSWER_STATES.has(question.answer_state as AnswerState) ||
+    typeof question.confirmation_required !== 'boolean' ||
+    !Number.isInteger(question.confirmed_version) ||
+    Number(question.confirmed_version) < 0
+  ) {
+    throw new Error(message)
+  }
+  for (const key of [
+    'parent_problem_id',
+    'subproblem_no',
+    'attempt_id',
+    'answer_raw_transcription',
+    'answer_canonical_markdown',
+    'subject',
+    'input_digest',
+  ]) {
+    if (question[key] !== undefined && typeof question[key] !== 'string') {
+      throw new Error(message)
+    }
+  }
+  if (
+    question.recognition_confidence !== undefined &&
+    (typeof question.recognition_confidence !== 'number' ||
+      !Number.isFinite(question.recognition_confidence))
+  ) {
+    throw new Error(message)
+  }
+  if (
+    question.confirmation_reasons !== undefined &&
+    (!Array.isArray(question.confirmation_reasons) ||
+      !question.confirmation_reasons.every((reason) =>
+        IMAGE_TASK_CONFIRMATION_REASONS.has(reason as OCRConfirmationReason),
+      ))
+  ) {
+    throw new Error(message)
+  }
+  if (question.bbox !== undefined) assertImageTaskBBox(question.bbox, message)
+}
+
+function assertImageTaskGrade(value: unknown, message: string): asserts value is GradeResp {
+  const grade = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    grade,
+    [
+      'solution',
+      'verdict',
+      'evidence_type',
+      'badge',
+      'out_of_scope',
+      'record_created',
+      'solve_only',
+    ],
+    ['wrong_step', 'error_cause', 'out_of_scope_kp', 'record_id', 'curriculum_unmapped'],
+    message,
+  )
+  if (
+    typeof grade.solution !== 'string' ||
+    !IMAGE_TASK_GRADE_VERDICTS.has(grade.verdict as GradeVerdict) ||
+    !IMAGE_TASK_EVIDENCE_TYPES.has(grade.evidence_type as EvidenceType) ||
+    !IMAGE_TASK_GRADE_BADGES.has(grade.badge as GradeBadge) ||
+    typeof grade.out_of_scope !== 'boolean' ||
+    typeof grade.record_created !== 'boolean' ||
+    typeof grade.solve_only !== 'boolean'
+  ) {
+    throw new Error(message)
+  }
+  for (const key of ['wrong_step', 'error_cause', 'out_of_scope_kp', 'record_id']) {
+    if (grade[key] !== undefined && typeof grade[key] !== 'string') throw new Error(message)
+  }
+  if (
+    grade.curriculum_unmapped !== undefined &&
+    !isImageTaskStringArray(grade.curriculum_unmapped)
+  ) {
+    throw new Error(message)
+  }
+}
+
+function assertImageTaskParentGuide(
+  value: unknown,
+  message: string,
+): asserts value is ParentTeachingGuideDTO {
+  const guide = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    guide,
+    [
+      'answer',
+      'full_solution_steps',
+      'grade_level_method',
+      'likely_mistakes',
+      'parent_teaching_sequence',
+      'follow_up_questions',
+      'checking_method',
+    ],
+    [],
+    message,
+  )
+  if (
+    typeof guide.answer !== 'string' ||
+    !guide.answer.trim() ||
+    !isImageTaskNonEmptyStringArray(guide.full_solution_steps) ||
+    typeof guide.grade_level_method !== 'string' ||
+    !guide.grade_level_method.trim() ||
+    !isImageTaskNonEmptyStringArray(guide.likely_mistakes) ||
+    !isImageTaskNonEmptyStringArray(guide.parent_teaching_sequence) ||
+    !isImageTaskNonEmptyStringArray(guide.follow_up_questions) ||
+    typeof guide.checking_method !== 'string' ||
+    !guide.checking_method.trim()
+  ) {
+    throw new Error(message)
+  }
+}
+
+function assertImageTaskPhotoPayload(
+  value: ImageTaskWireRecord,
+  intent: 'completed_homework' | 'blank_worksheet',
+  message: string,
+) {
+  assertImageTaskKeys(
+    value,
+    ['mode', 'task_intent', 'result_surface', 'items', 'markdown', 'image_warning'],
+    ['annotated_image'],
+    message,
+  )
+  const expectedSurface =
+    intent === 'completed_homework' ? 'annotated_homework' : 'parent_teaching_guide'
+  if (
+    (value.mode !== 'grade' && value.mode !== 'solve') ||
+    value.task_intent !== intent ||
+    value.result_surface !== expectedSurface ||
+    !Array.isArray(value.items) ||
+    typeof value.markdown !== 'string' ||
+    typeof value.image_warning !== 'string'
+  ) {
+    throw new Error(message)
+  }
+  for (const itemValue of value.items) {
+    const item = imageTaskWireRecord(itemValue, message)
+    assertImageTaskKeys(
+      item,
+      ['question', 'status', 'result_kind'],
+      ['warning', 'grade', 'parent_guide'],
+      message,
+    )
+    assertImageTaskRecognizedQuestion(item.question, message)
+    if (
+      !IMAGE_TASK_PHOTO_STATUSES.has(item.status as PhotoJobItemDTO['status']) ||
+      !IMAGE_TASK_PHOTO_RESULT_KINDS.has(item.result_kind as PhotoJobResultKind) ||
+      (item.warning !== undefined && typeof item.warning !== 'string')
+    ) {
+      throw new Error(message)
+    }
+    if (item.grade !== undefined) assertImageTaskGrade(item.grade, message)
+    if (item.parent_guide !== undefined) assertImageTaskParentGuide(item.parent_guide, message)
+
+    if (intent === 'blank_worksheet') {
+      if (
+        item.status !== 'blank_solved' ||
+        item.result_kind !== 'parent_teaching_guide' ||
+        item.parent_guide === undefined
+      ) {
+        throw new Error(message)
+      }
+      continue
+    }
+    if (
+      (item.status === 'correct' || item.status === 'wrong') &&
+      (item.result_kind !== 'assessment' || item.grade === undefined)
+    ) {
+      throw new Error(message)
+    }
+    if (item.status === 'wrong' && item.parent_guide === undefined) throw new Error(message)
+    if (item.status === 'correct' && item.parent_guide !== undefined) throw new Error(message)
+  }
+  if (value.annotated_image !== undefined) {
+    const image = imageTaskWireRecord(value.annotated_image, message)
+    assertImageTaskKeys(image, ['mime', 'data_base64', 'digest'], [], message)
+    if (
+      typeof image.mime !== 'string' ||
+      !image.mime.trim() ||
+      typeof image.data_base64 !== 'string' ||
+      !image.data_base64.trim() ||
+      typeof image.digest !== 'string' ||
+      !image.digest.startsWith('sha256:')
+    ) {
+      throw new Error(message)
+    }
+  }
+}
+
+function assertImageTaskTarget(value: unknown) {
+  const message = 'invalid image task dispatch response'
+  const target = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(target, ['type', 'id'], [], message)
+  if (
+    (target.type !== 'homework_submission' && target.type !== 'creative_work_intake') ||
+    typeof target.id !== 'string' ||
+    !target.id.trim()
+  ) {
+    throw new Error(message)
+  }
+}
+
+function assertImageTaskHomeworkProjection(value: ImageTaskWireRecord) {
+  const message = 'invalid image task dispatch response'
+  assertImageTaskKeys(
+    value,
+    ['kind', 'stage', 'confirmation_state', 'anchor_state'],
+    ['recognition'],
+    message,
+  )
+  if (
+    value.kind !== 'homework' ||
+    !IMAGE_TASK_HOMEWORK_STAGES.has(value.stage as ImageTaskHomeworkStage) ||
+    (value.confirmation_state !== 'pending' && value.confirmation_state !== 'confirmed') ||
+    !['pending', 'located', 'degraded'].includes(String(value.anchor_state))
+  ) {
+    throw new Error(message)
+  }
+  if (value.recognition !== undefined) {
+    const recognition = imageTaskWireRecord(value.recognition, message)
+    assertImageTaskKeys(recognition, ['questions'], ['subject'], message)
+    if (
+      !Array.isArray(recognition.questions) ||
+      (recognition.subject !== undefined && typeof recognition.subject !== 'string')
+    ) {
+      throw new Error(message)
+    }
+    for (const question of recognition.questions) {
+      assertImageTaskRecognizedQuestion(question, message)
+    }
+  }
+}
+
+function assertImageTaskCreativeProjection(value: ImageTaskWireRecord) {
+  const message = 'invalid image task dispatch response'
+  assertImageTaskKeys(
+    value,
+    ['kind', 'intake_id', 'work_type', 'status'],
+    [
+      'entry_kind',
+      'promotion_policy',
+      'routing_provenance',
+      'commit_required',
+      'commit_state',
+      'promoted_work_id',
+      'promoted_version_id',
+      'canonical_version',
+      'canonical_content',
+      'conflicts',
+      'work',
+    ],
+    message,
+  )
+  if (
+    value.kind !== 'creative' ||
+    typeof value.intake_id !== 'string' ||
+    !value.intake_id.trim() ||
+    (value.work_type !== 'writing' && value.work_type !== 'art') ||
+    !IMAGE_TASK_CREATIVE_STATUSES.has(value.status as CreativeWorkIntakeStatus)
+  ) {
+    throw new Error(message)
+  }
+  if (
+    (value.entry_kind !== undefined &&
+      value.entry_kind !== 'auto' &&
+      value.entry_kind !== 'new_work' &&
+      value.entry_kind !== 'revision') ||
+    (value.promotion_policy !== undefined &&
+      value.promotion_policy !== 'automatic' &&
+      value.promotion_policy !== 'explicit_commit') ||
+    (value.routing_provenance !== undefined &&
+      value.routing_provenance !== 'model_classified' &&
+      value.routing_provenance !== 'parent_selected') ||
+    (value.commit_required !== undefined && typeof value.commit_required !== 'boolean') ||
+    (value.commit_state !== undefined &&
+      value.commit_state !== 'pending' &&
+      value.commit_state !== 'committed') ||
+    (value.promoted_work_id !== undefined && typeof value.promoted_work_id !== 'string') ||
+    (value.promoted_version_id !== undefined && typeof value.promoted_version_id !== 'string')
+  ) {
+    throw new Error(message)
+  }
+  if (
+    (value.canonical_version !== undefined &&
+      (!Number.isInteger(value.canonical_version) || Number(value.canonical_version) < 1)) ||
+    (value.canonical_content !== undefined && typeof value.canonical_content !== 'string')
+  ) {
+    throw new Error(message)
+  }
+  if (value.conflicts !== undefined) {
+    if (
+      !Array.isArray(value.conflicts) ||
+      !value.conflicts.every((conflict) => {
+        const item = imageTaskWireRecord(conflict, message)
+        assertImageTaskKeys(item, ['segment_id'], ['raw_text', 'canonical_text', 'reason'], message)
+        return typeof item.segment_id === 'string' && !!item.segment_id.trim()
+      })
+    ) {
+      throw new Error(message)
+    }
+  }
+  if (value.work !== undefined) {
+    const work = imageTaskWireRecord(value.work, message)
+    assertImageTaskKeys(work, ['work_id', 'display_name'], [], message)
+    if (
+      typeof work.work_id !== 'string' ||
+      !work.work_id.trim() ||
+      typeof work.display_name !== 'string'
+    ) {
+      throw new Error(message)
+    }
+  }
+}
+
+function assertImageTaskStructuredFeedback(
+  value: unknown,
+  message: string,
+): asserts value is ImageTaskStructuredFeedbackDTO {
+  const feedback = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    feedback,
+    [
+      'feedback_id',
+      'version_id',
+      'feedback_type',
+      'evidence_refs',
+      'observations',
+      'source_snapshot',
+      'limitations',
+      'suggestions',
+      'projection_markdown',
+    ],
+    [],
+    message,
+  )
+  if (
+    typeof feedback.feedback_id !== 'string' ||
+    !feedback.feedback_id.trim() ||
+    typeof feedback.version_id !== 'string' ||
+    !feedback.version_id.trim() ||
+    (feedback.feedback_type !== 'writing' && feedback.feedback_type !== 'art') ||
+    !isImageTaskStringArray(feedback.evidence_refs) ||
+    !Array.isArray(feedback.observations) ||
+    typeof feedback.limitations !== 'string' ||
+    !isImageTaskStringArray(feedback.suggestions) ||
+    typeof feedback.projection_markdown !== 'string' ||
+    !feedback.projection_markdown.trim()
+  ) {
+    throw new Error(message)
+  }
+  for (const observationValue of feedback.observations) {
+    const observation = imageTaskWireRecord(observationValue, message)
+    assertImageTaskKeys(observation, ['dimension', 'evidence'], [], message)
+    if (
+      typeof observation.dimension !== 'string' ||
+      !observation.dimension.trim() ||
+      typeof observation.evidence !== 'string' ||
+      !observation.evidence.trim()
+    ) {
+      throw new Error(message)
+    }
+  }
+  const source = imageTaskWireRecord(feedback.source_snapshot, message)
+  assertImageTaskKeys(source, ['source', 'method_ref', 'capability'], [], message)
+  if (
+    (source.source !== 'ai' && source.source !== 'parent') ||
+    typeof source.method_ref !== 'string' ||
+    typeof source.capability !== 'string'
+  ) {
+    throw new Error(message)
+  }
+}
+
+function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDispatchDTO {
+  const message = 'invalid image task dispatch response'
+  const dispatch = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    dispatch,
+    [
+      'dispatch_id',
+      'task_intent',
+      'status',
+      'intent_evidence',
+      'intent_confidence',
+      'confirmation_candidates',
+      'progress',
+      'version',
+      'created_at',
+      'updated_at',
+    ],
+    ['target', 'target_projection'],
+    message,
+  )
+  if (
+    typeof dispatch.dispatch_id !== 'string' ||
+    !dispatch.dispatch_id.trim() ||
+    !IMAGE_TASK_INTENTS.has(dispatch.task_intent as ImageTaskIntent) ||
+    !IMAGE_TASK_STATUSES.has(dispatch.status as ImageTaskDispatchStatus) ||
+    !isImageTaskStringArray(dispatch.intent_evidence) ||
+    typeof dispatch.intent_confidence !== 'number' ||
+    !Number.isFinite(dispatch.intent_confidence) ||
+    !Array.isArray(dispatch.confirmation_candidates) ||
+    !dispatch.confirmation_candidates.every((candidate) =>
+      IMAGE_TASK_INTENTS.has(candidate as ImageTaskIntent),
+    ) ||
+    !Number.isInteger(dispatch.version) ||
+    typeof dispatch.created_at !== 'number' ||
+    !Number.isFinite(dispatch.created_at) ||
+    typeof dispatch.updated_at !== 'number' ||
+    !Number.isFinite(dispatch.updated_at)
+  ) {
+    throw new Error(message)
+  }
+
+  const progress = imageTaskWireRecord(dispatch.progress, message)
+  assertImageTaskKeys(progress, ['operation', 'state'], [], message)
+  if (
+    !IMAGE_TASK_PROGRESS_OPERATIONS.has(progress.operation as ImageTaskProgressDTO['operation']) ||
+    typeof progress.state !== 'string' ||
+    !progress.state.trim()
+  ) {
+    throw new Error(message)
+  }
+  const validProgressState =
+    (progress.operation === 'classification' &&
+      IMAGE_TASK_STATUSES.has(progress.state as ImageTaskDispatchStatus)) ||
+    (progress.operation === 'homework' &&
+      IMAGE_TASK_HOMEWORK_STAGES.has(progress.state as ImageTaskHomeworkStage)) ||
+    (progress.operation === 'writing_ocr' &&
+      IMAGE_TASK_CREATIVE_STATUSES.has(progress.state as CreativeWorkIntakeStatus)) ||
+    (progress.operation === 'promotion' &&
+      (IMAGE_TASK_CREATIVE_STATUSES.has(progress.state as CreativeWorkIntakeStatus) ||
+        IMAGE_TASK_CREATIVE_FEEDBACK_STATES.has(progress.state as ImageTaskCreativeFeedbackState)))
+  if (!validProgressState) throw new Error(message)
+  if (dispatch.target !== undefined) assertImageTaskTarget(dispatch.target)
+  if (dispatch.target_projection !== undefined) {
+    const projection = imageTaskWireRecord(dispatch.target_projection, message)
+    if (projection.kind === 'homework') assertImageTaskHomeworkProjection(projection)
+    else if (projection.kind === 'creative') assertImageTaskCreativeProjection(projection)
+    else throw new Error(message)
+  }
+}
+
+function assertImageTaskDispatchResp(value: unknown): asserts value is ImageTaskDispatchResp {
+  const message = 'invalid image task dispatch response'
+  const response = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(response, ['dispatch'], [], message)
+  assertImageTaskDispatch(response.dispatch)
+}
+
+function assertImageTaskCreateResp(value: unknown): asserts value is ImageTaskCreateResp {
+  const message = 'invalid image task dispatch response'
+  const response = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(response, ['created', 'dispatch'], [], message)
+  if (typeof response.created !== 'boolean') throw new Error(message)
+  assertImageTaskDispatch(response.dispatch)
+}
+
+function assertImageTaskResultResp(value: unknown): asserts value is ImageTaskResultResp {
+  const message = 'invalid image task result response'
+  const response = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(response, ['dispatch_id', 'task_intent', 'status', 'result'], [], message)
+  if (
+    typeof response.dispatch_id !== 'string' ||
+    !response.dispatch_id.trim() ||
+    !IMAGE_TASK_INTENTS.has(response.task_intent as ImageTaskIntent) ||
+    !IMAGE_TASK_STATUSES.has(response.status as ImageTaskDispatchStatus)
+  ) {
+    throw new Error(message)
+  }
+  if (response.result === null) return
+  const result = imageTaskWireRecord(response.result, message)
+  assertImageTaskKeys(result, ['kind', 'payload'], [], message)
+  if (
+    !['completed_homework', 'blank_worksheet', 'writing', 'artwork'].includes(
+      String(result.kind),
+    ) ||
+    result.kind !== response.task_intent
+  ) {
+    throw new Error(message)
+  }
+  const payload = imageTaskWireRecord(result.payload, message)
+  if (result.kind === 'completed_homework' || result.kind === 'blank_worksheet') {
+    assertImageTaskPhotoPayload(payload, result.kind, message)
+    return
+  }
+  assertImageTaskKeys(payload, ['intake'], ['work', 'feedback'], message)
+  const intake = imageTaskWireRecord(payload.intake, message)
+  assertImageTaskKeys(intake, ['intake_id', 'status'], [], message)
+  if (
+    typeof intake.intake_id !== 'string' ||
+    !intake.intake_id.trim() ||
+    !IMAGE_TASK_CREATIVE_STATUSES.has(intake.status as CreativeWorkIntakeStatus)
+  ) {
+    throw new Error(message)
+  }
+  if (payload.work !== undefined) {
+    const work = imageTaskWireRecord(payload.work, message)
+    assertImageTaskKeys(work, ['work_id', 'display_name'], [], message)
+    if (
+      typeof work.work_id !== 'string' ||
+      !work.work_id.trim() ||
+      typeof work.display_name !== 'string'
+    ) {
+      throw new Error(message)
+    }
+  }
+  if (payload.feedback !== undefined) {
+    const feedback = imageTaskWireRecord(payload.feedback, message)
+    assertImageTaskKeys(feedback, ['structured_feedback', 'projection_markdown'], [], message)
+    assertImageTaskStructuredFeedback(feedback.structured_feedback, message)
+    if (
+      typeof feedback.projection_markdown !== 'string' ||
+      !feedback.projection_markdown.trim() ||
+      feedback.projection_markdown !==
+        (feedback.structured_feedback as ImageTaskStructuredFeedbackDTO).projection_markdown
+    ) {
+      throw new Error(message)
+    }
+  }
+}
+
+/** 固化原图资产后创建唯一图片任务；响应即回，不等待分类或子链完成。 */
+export async function k12CreateImageTask(req: CreateImageTaskReq, signal?: AbortSignal) {
+  const response = await apiPost<unknown>(`${BASE}/image-tasks`, req, {
     timeout: 60_000,
     signal,
   })
+  assertImageTaskCreateResp(response)
+  return response
 }
-/** 查询任务阶段 + 停点/终态产物（轮询端点；阶段耗时分钟级，调用方 2-3s 节流）。 */
-export function k12GetGradingJob(agent: string, jobId: string, signal?: AbortSignal) {
-  return apiGet<GradingJobStatusResp>(
-    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}`,
+/** 查询分流、公开子链停点与最小冲突；内部 invocation/provider 不在该 DTO 中。 */
+export async function k12GetImageTask(agent: string, dispatchId: string, signal?: AbortSignal) {
+  const response = await apiGet<unknown>(
+    `${BASE}/image-tasks/${encodeURIComponent(dispatchId)}`,
     { agent },
     { signal },
   )
+  assertImageTaskDispatchResp(response)
+  return response
 }
-/** 独立读取终态投影：Job 详情只承载阶段/停点，不隐式夹带批改结果。 */
-export function k12GetGradingJobResult(agent: string, jobId: string, signal?: AbortSignal) {
-  return apiGet<GradingJobResultResp>(
-    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/result`,
-    { agent },
-    { signal },
-  )
-}
-/** 批量确认/修正识别结果：冻结 canonical 输入后后端异步续跑到终态。 */
-export function k12ConfirmGradingJob(
-  jobId: string,
-  req: ConfirmGradingJobReq,
+/** 读取同一 dispatch 的四类判别式终态结果，不从状态文案推断领域类型。 */
+export async function k12GetImageTaskResult(
+  agent: string,
+  dispatchId: string,
   signal?: AbortSignal,
 ) {
-  return apiPost<GradingJobStatusResp>(
-    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/confirm`,
+  const response = await apiGet<unknown>(
+    `${BASE}/image-tasks/${encodeURIComponent(dispatchId)}/result`,
+    { agent },
+    { signal },
+  )
+  assertImageTaskResultResp(response)
+  return response
+}
+/** 只提交当前 dispatch 版本声明的意图或目标子链最小冲突。 */
+export async function k12ConfirmImageTask(
+  dispatchId: string,
+  req: ConfirmImageTaskReq,
+  signal?: AbortSignal,
+) {
+  const response = await apiPost<unknown>(
+    `${BASE}/image-tasks/${encodeURIComponent(dispatchId)}/confirm`,
     req,
     { timeout: 60_000, signal },
   )
+  assertImageTaskDispatchResp(response)
+  return response
 }
-/** 安全重试（failed_retryable 且 retryable）：回 queued 从检查点异步续跑。 */
-export function k12RetryGradingJob(agent: string, jobId: string, signal?: AbortSignal) {
-  return apiPost<GradingJobStatusResp>(
-    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/retry`,
-    { agent },
+/** 安全重试只沿服务端冻结的 operation snapshot/checkpoint 恢复。 */
+export async function k12RetryImageTask(
+  dispatchId: string,
+  req: ImageTaskVersionReq,
+  signal?: AbortSignal,
+) {
+  const response = await apiPost<unknown>(
+    `${BASE}/image-tasks/${encodeURIComponent(dispatchId)}/retry`,
+    req,
     { timeout: 60_000, signal },
   )
+  assertImageTaskDispatchResp(response)
+  return response
 }
-/** 取消仍在识别/等待确认的照片任务；换图或卸载时用于释放后端旧任务。 */
-export function k12CancelGradingJob(agent: string, jobId: string) {
-  return apiPost<GradingJobStatusResp>(
-    `${BASE}/grading-jobs/${encodeURIComponent(jobId)}/cancel`,
-    { agent },
-    { timeout: 60_000 },
+/** 显式取消 facade；TaskShell close、切会话或 AbortSignal 都不能隐式调用。 */
+export async function k12CancelImageTask(
+  dispatchId: string,
+  req: ImageTaskVersionReq,
+  signal?: AbortSignal,
+) {
+  const response = await apiPost<unknown>(
+    `${BASE}/image-tasks/${encodeURIComponent(dispatchId)}/cancel`,
+    req,
+    { timeout: 60_000, signal },
   )
+  assertImageTaskDispatchResp(response)
+  return response
 }
 
 // ── tutor-turn（渐进提示三阶段 + 情绪守门）────────────────────
@@ -1008,8 +2018,9 @@ export interface PracticeSetDTO {
   finalized_at?: number
   /** 固化方式 print | send */
   finalized_via?: string
+  /** via=send 时冻结的全绑定投递批次；重放与重启恢复只能查询这个批次。 */
+  delivery_batch_id?: string
   delivery_status: string
-  delivery_target?: string
   items: PracticeItemDTO[]
   /** 只追加、不覆盖的作答照片批次（DD-028）。 */
   return_assets: PracticeReturnAssetDTO[]
@@ -1119,24 +2130,18 @@ export function k12RemoveFromBasket(agent: string, recordId: string, itemId: str
 export interface FinalizeResp {
   set: PracticeSetDTO
   skipped_blocked_count: number
-  /** send 尚未接真实投递器时的诚实状态说明。 */
-  delivery_note?: string
+  /** via=send 时随 PracticeSet 原子创建的全绑定投递批次。 */
+  delivery_batch?: DeliveryBatchDTO
 }
 /**
  * 固化出卷（打印/发送即家长确认，§3.8 购物车裁决）：draft 一步到 assigned。
  * 逐题跳过非 verified 项（响应 skipped_blocked_count 明示）；一道 verified 都没有 → 后端 4xx。
- * via='send' 必带 target（私聊目标）；via='print' 不投递。
+ * via='send' 由服务端枚举当前辅导智能体全部有效私聊；Desktop 不传平台、接收人或目标。
  */
-export function k12FinalizePracticeSet(
-  agent: string,
-  recordId: string,
-  via: 'print' | 'send',
-  target?: string,
-) {
+export function k12FinalizePracticeSet(agent: string, recordId: string, via: 'print' | 'send') {
   return apiPost<FinalizeResp>(`${BASE}/practice-sets/${recordId}/finalize`, {
     agent,
     via,
-    target: target ?? '',
   })
 }
 
@@ -1202,11 +2207,7 @@ export interface NativePrintCommitReq {
   printer_snapshot: Record<string, unknown>
 }
 
-export type GenericPrintSourceKind =
-  | 'tutoring_tips'
-  | 'creative_observation_card'
-  | 'practice_question'
-  | 'practice_answer'
+export type GenericPrintSourceKind = 'tutoring_tips' | 'practice_question' | 'practice_answer'
 
 export interface PrepareGenericPrintJobReq {
   agent: string
@@ -1470,6 +2471,7 @@ export function k12GetPracticePaper(
 
 // ── 作品 CreativeWork（/creative-works*，PRD §3.10）─────────────
 export type WorkType = 'writing' | 'art'
+/** `archived` is a legacy read-only fact; Desktop no longer exposes an archive command. */
 export type WorkStatus = 'draft' | 'feedback_ready' | 'revised' | 'archived'
 export interface WorkFeedbackObservationDTO {
   dimension:
@@ -1484,6 +2486,7 @@ export interface WorkFeedbackObservationDTO {
   evidence: string
 }
 export interface WorkFeedbackSourceSnapshotDTO {
+  /** `parent` is retained only to render historical feedback; new feedback is server-generated. */
   source: 'ai' | 'parent'
   method_ref: string
   capability: string
@@ -1497,7 +2500,6 @@ export interface WorkFeedbackDTO {
   source_snapshot: WorkFeedbackSourceSnapshotDTO
   limitations: string
   suggestions: string[]
-  allowed_actions: Array<'send' | 'print_practice_card' | 'collect' | 'record_language_issue'>
   projection_markdown: string
 }
 export interface WorkVersionDTO {
@@ -1517,10 +2519,6 @@ export interface WorkVersionDTO {
   feedback_source?: 'ai' | 'parent' | string
   /** AI 点评实际使用的方法论版本戳；家长手写/老记录可为空。 */
   feedback_skill?: string
-  /** 观察小练习卡文本（§3.10 美术）：服务端由点评正文提炼（单一事实源），写作/无点评缺省 */
-  practice_card?: string
-  /** 练习卡完成打卡时间（unix 秒；缺省 = 未打卡） */
-  practice_card_done_at?: number
 }
 export interface CreativeWorkDTO {
   record_id: string
@@ -1558,44 +2556,25 @@ export function k12GetCreativeWork(agent: string, recordId: string) {
 export function k12CreateCreativeWork(req: CreateWorkReq) {
   return apiPost<{ record_id: string; created: boolean }>(`${BASE}/creative-works`, req)
 }
-/** 给最新版本附证据化点评（只点评不打分不代写，INV-011） */
-export function k12AttachWorkFeedback(agent: string, recordId: string, feedback: string) {
-  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/feedback`, {
-    agent,
-    feedback,
-  })
-}
-/** 调后端 Skill 生成证据化点评；慢模型由调用方展示生成中/失败重试，不做前端假成功。 */
-export function k12GenerateWorkFeedback(agent: string, recordId: string, signal?: AbortSignal) {
+/** 为已有点评追加一次生成；commandId 由调用方创建，重放同 ID 不得重复生成。 */
+export function k12GenerateWorkFeedback(
+  agent: string,
+  recordId: string,
+  commandId: string,
+  signal?: AbortSignal,
+) {
   return apiPost<CreativeWorkDTO>(
-    `${BASE}/creative-works/${recordId}/generate-feedback`,
-    { agent },
+    `${BASE}/creative-works/${encodeURIComponent(recordId)}/generate-feedback`,
+    { agent, command_id: commandId },
     { timeout: 240_000, signal },
   )
 }
 /** 提交修改稿形成新版本（feedback_ready → revised） */
-export function k12SubmitWorkRevision(
-  agent: string,
-  recordId: string,
-  contentMarkdown?: string,
-  sourceAssetId?: string,
-  ocr?: { jobId: string; version: number; digest: string },
-) {
+export function k12SubmitWorkRevision(agent: string, recordId: string, contentMarkdown?: string) {
   return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/revision`, {
     agent,
     content_markdown: contentMarkdown ?? '',
-    source_asset_id: sourceAssetId ?? '',
-    ...(ocr
-      ? {
-          ocr_job_id: ocr.jobId,
-          ocr_version: ocr.version,
-          ocr_confirmed_digest: ocr.digest,
-        }
-      : {}),
   })
-}
-export function k12ArchiveCreativeWork(agent: string, recordId: string) {
-  return apiPost<{ ok: boolean }>(`${BASE}/creative-works/${recordId}/archive`, { agent })
 }
 export type DeliveryReceiptStatus =
   | 'pending'
@@ -1606,6 +2585,8 @@ export type DeliveryReceiptStatus =
 
 export interface DeliveryReceiptDTO {
   delivery_id: string
+  batch_id: string
+  batch_ordinal: number
   agent_name: string
   object_kind: string
   object_id: string
@@ -1628,96 +2609,52 @@ export interface DeliveryReceiptDTO {
   updated_at: number
 }
 
-/** 点评/观察练习卡发送到手机。返回 durable Receipt；sending 仅表示平台受理，
- *  只有 query 返回 delivered 才能显示「已送达」。 */
-export function k12SendWorkFeedback(
-  agent: string,
-  recordId: string,
-  kind: 'feedback' | 'practice_card' = 'feedback',
-) {
-  return apiPost<DeliveryReceiptDTO>(`${BASE}/creative-works/${recordId}/send-feedback`, {
-    agent,
-    kind,
-  })
-}
-
-/** 把当前会话内已经生成的辅导要点文本按同一 Receipt 协议直发私聊。 */
-export function k12SendTutoringTips(agent: string, content: string) {
-  return apiPost<DeliveryReceiptDTO>(`${BASE}/tutoring-tips/send`, { agent, content })
-}
-
-export function k12GetDeliveryReceipt(agent: string, deliveryId: string) {
-  return apiGet<DeliveryReceiptDTO>(`${BASE}/delivery-receipts/${deliveryId}`, { agent })
-}
-
-/** 只有 failed 可调用；sending/outcome_unknown 调用会被后端 409 拒绝。 */
-export function k12RetryDeliveryReceipt(agent: string, deliveryId: string) {
-  return apiPost<DeliveryReceiptDTO>(`${BASE}/delivery-receipts/${deliveryId}/retry`, { agent })
-}
-
-/** sending/outcome_unknown 的唯一安全收敛动作，不会再次发送消息。 */
-export function k12QueryDeliveryReceipt(agent: string, deliveryId: string) {
-  return apiPost<DeliveryReceiptDTO>(`${BASE}/delivery-receipts/${deliveryId}/query`, { agent })
-}
-/** 观察练习卡完成打卡（幂等：保留首次时间；仅美术且已点评） */
-export function k12MarkPracticeCardDone(agent: string, recordId: string) {
-  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/practice-card/done`, {
-    agent,
-  })
-}
-
-// ── 作文照片 OCR Job（DD-013）────────────────────────────────
-export type CreativeWorkOCRStatus =
+export type DeliveryBatchStatus =
   | 'pending'
-  | 'processing'
-  | 'awaiting_confirmation'
+  | 'sending'
+  | 'delivered'
   | 'failed'
-  | 'confirmed'
+  | 'partial_failed'
+  | 'outcome_unknown'
 
-export interface CreativeWorkOCRJobDTO {
-  job_id: string
-  request_id: string
-  source_asset_id: string
-  source_digest: string
-  status: CreativeWorkOCRStatus
-  ocr_raw?: string
-  error_message?: string
-  attempt_count: number
-  confirmed_version?: number
-  confirmed_digest?: string
-  confirmed_content?: string
-  confirmed_at?: number
+export interface DeliveryBatchDTO {
+  batch_id: string
+  agent_name: string
+  object_kind: string
+  object_id: string
+  dedupe_key: string
+  content_digest: string
+  status: DeliveryBatchStatus
+  receipts: DeliveryReceiptDTO[]
   created_at: number
   updated_at: number
 }
 
-export function k12CreateCreativeWorkOCR(req: {
-  agent: string
-  request_id: string
-  source_asset_id: string
-}) {
-  return apiPost<CreativeWorkOCRJobDTO>(`${BASE}/creative-work-ocr-jobs`, req, { timeout: 240_000 })
+/** 将当前会话内已生成的辅导要点发送给该智能体绑定的全部有效私聊。 */
+export function k12SendTutoringTips(agent: string, content: string) {
+  return apiPost<DeliveryBatchDTO>(`${BASE}/tutoring-tips/send`, { agent, content })
 }
 
-export function k12GetCreativeWorkOCR(agent: string, jobId: string) {
-  return apiGet<CreativeWorkOCRJobDTO>(
-    `${BASE}/creative-work-ocr-jobs/${encodeURIComponent(jobId)}`,
+/** 读取已经冻结目标快照的投递批次；不会重新枚举绑定，也不会触发发送。 */
+export function k12GetDeliveryBatch(agent: string, batchId: string) {
+  return apiGet<DeliveryBatchDTO>(`${BASE}/delivery-batches/${encodeURIComponent(batchId)}`, {
+    agent,
+  })
+}
+
+/** 仅重发 failed child；已送达目标不会再次发送。 */
+export function k12RetryDeliveryBatch(agent: string, batchId: string) {
+  return apiPost<DeliveryBatchDTO>(
+    `${BASE}/delivery-batches/${encodeURIComponent(batchId)}/retry`,
     { agent },
   )
 }
 
-export function k12RetryCreativeWorkOCR(agent: string, jobId: string) {
-  return apiPost<CreativeWorkOCRJobDTO>(
-    `${BASE}/creative-work-ocr-jobs/${encodeURIComponent(jobId)}/retry`,
+/** pending/sending/outcome_unknown 的唯一安全收敛动作；只查询原 child，不重发。 */
+export function k12QueryDeliveryBatch(agent: string, batchId: string) {
+  return apiPost<DeliveryBatchDTO>(
+    `${BASE}/delivery-batches/${encodeURIComponent(batchId)}/query`,
     { agent },
-    { timeout: 240_000 },
-  )
-}
-
-export function k12ConfirmCreativeWorkOCR(agent: string, jobId: string, contentMarkdown: string) {
-  return apiPost<CreativeWorkOCRJobDTO>(
-    `${BASE}/creative-work-ocr-jobs/${encodeURIComponent(jobId)}/confirm`,
-    { agent, content_markdown: contentMarkdown },
   )
 }
 

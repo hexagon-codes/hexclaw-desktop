@@ -180,6 +180,17 @@ describe('Session Management', () => {
         expect.objectContaining({ body: { message_id: undefined, user_id: 'desktop-user' } }),
       )
     })
+
+    it('passes explicit exclusive boundary for history-message editing without changing the default', async () => {
+      mockFetch.mockResolvedValue({ session: { id: 's2' }, message: 'forked' })
+      await forkSession('s1', 'msg-123', { includeMessage: false })
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/v1/sessions/s1/fork?user_id=desktop-user',
+        expect.objectContaining({
+          body: { message_id: 'msg-123', include_message: false, user_id: 'desktop-user' },
+        }),
+      )
+    })
   })
 
   // ─── getSessionBranches ──────────────────────────
