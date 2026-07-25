@@ -755,6 +755,7 @@ export default {
     presetNoon: 'Daily at noon',
     presetEvening: 'Daily at 6 PM',
     presetDaily: 'Daily',
+    deleteConfirmTitle: 'Delete task?',
     confirmDelete: 'Are you sure you want to delete task "{name}"?',
   },
 
@@ -1046,6 +1047,7 @@ export default {
       'When a command is summoned, $ARGUMENTS is replaced with the text you enter (plain-text substitution).',
     new: 'New Prompt',
     editPrompt: 'Edit Prompt',
+    deleteConfirmTitle: 'Delete prompt?',
     deleteConfirm: 'Delete this prompt? This action cannot be undone.',
     empty: 'No prompts yet — create one from the top right.',
     enabled: 'Enabled',
@@ -2737,6 +2739,7 @@ export default {
     restartServer: 'Restart',
     restarted: 'Restarted {name}',
     restartFailed: 'Restart failed',
+    removeConfirmTitle: 'Remove MCP server?',
     removeConfirm: 'Remove this MCP server?',
     serverName: 'Server Name',
     serverNamePlaceholder: 'Enter server name',

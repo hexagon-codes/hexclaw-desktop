@@ -776,6 +776,7 @@ export default {
     presetNoon: 'ھەر كۈنى چۈشتە سائەت 12',
     presetEvening: 'ھەر كۈنى كەچ سائەت 6',
     presetDaily: 'ھەر كۈنى',
+    deleteConfirmTitle: 'ۋەزىپىنى ئۆچۈرەمسىز؟',
     confirmDelete: '"{name}" ۋەزىپىسىنى راستىنلا ئۆچۈرەمسىز؟',
   },
 
@@ -1075,6 +1076,7 @@ export default {
       'بۇيرۇق چاقىرىلغاندا، $ARGUMENTS سىز كىرگۈزگەن تېكىست بىلەن ئالماشتۇرۇلىدۇ (ساپ تېكىست ئالماشتۇرۇش).',
     new: 'يېڭى Prompt',
     editPrompt: 'Prompt تەھرىرلەش',
+    deleteConfirmTitle: 'Prompt نى ئۆچۈرەمسىز؟',
     deleteConfirm: 'بۇ Prompt نى ئۆچۈرەمسىز؟ بۇ مەشغۇلاتنى ئەسلىگە كەلتۈرگىلى بولمايدۇ.',
     empty: 'تېخى Prompt يوق، ئوڭ ئۈستىدىن يېڭىدىن قۇرۇڭ.',
     enabled: 'قوزغىتىش',
@@ -2803,6 +2805,7 @@ export default {
     restartServer: 'قايتا قوزغىتىش',
     restarted: '{name} قايتا قوزغىتىلدى',
     restartFailed: 'قايتا قوزغىتىش مەغلۇپ بولدى',
+    removeConfirmTitle: 'MCP مۇلازىمېتىرنى چىقىرىۋېتەمسىز؟',
     removeConfirm: 'بۇ MCP مۇلازىمېتىرنى راستىنلا چىقىرىۋېتەمسىز؟',
     serverName: 'مۇلازىمېتىر نامى',
     serverNamePlaceholder: 'مۇلازىمېتىر نامى كىرگۈزۈڭ',

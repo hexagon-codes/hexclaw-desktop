@@ -1,6 +1,6 @@
 /**
- * BUG PROOF (RED): PromptsView 删除 Prompt（垃圾桶按钮 → removePrompt）直接调 deletePrompt，
- * 无任何 window.confirm。仓库其它页（McpView confirm / AgentsView ConfirmDialog）都有删除确认，本页缺。
+ * PromptsView destructive deletion regression:
+ * every delete must pass through the shared ConfirmDialog and cancellation must preserve data.
  *
  * 砍薄版（§5）：原「记忆卡删除被伪装成停用」一案随记忆薄版移除而下线（记忆管理已迁至 MemoryView）。
  */
@@ -10,13 +10,13 @@ import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import PromptsView from '@/views/PromptsView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
-const { getAllPrompts, deletePrompt, upsertPrompt } =
-  vi.hoisted(() => ({
-    getAllPrompts: vi.fn(),
-    deletePrompt: vi.fn(),
-    upsertPrompt: vi.fn(),
-  }))
+const { getAllPrompts, deletePrompt, upsertPrompt } = vi.hoisted(() => ({
+  getAllPrompts: vi.fn(),
+  deletePrompt: vi.fn(),
+  upsertPrompt: vi.fn(),
+}))
 
 vi.mock('@/api/prompts', () => ({
   getAllPrompts,
@@ -78,10 +78,9 @@ const onePrompt = {
 }
 describe('BUG: PromptsView destructive actions lack guards', () => {
   it('deleting a prompt must ask for confirmation, and cancel must abort the delete', async () => {
+    vi.clearAllMocks()
     getAllPrompts.mockResolvedValue({ prompts: [onePrompt], total: 1 })
     deletePrompt.mockResolvedValue({ deleted: 'p1' })
-    // 用户点「取消」：正确实现应中止删除。
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
 
     const wrapper = mountView()
     await flushPromises()
@@ -89,12 +88,16 @@ describe('BUG: PromptsView destructive actions lack guards', () => {
     await wrapper.find('.hc-icon-btn--danger').trigger('click')
     await flushPromises()
 
-    // 当前实现：removePrompt 直接调 deletePrompt，无 confirm → 两条断言都 FAIL，证明缺确认保护。
-    expect(confirmSpy, 'prompt deletion must prompt for confirmation').toHaveBeenCalled()
+    const dialog = wrapper.findComponent(ConfirmDialog)
+    expect(dialog.exists(), 'prompt deletion must open the shared confirmation dialog').toBe(true)
+    expect(dialog.props('open')).toBe(true)
+    dialog.vm.$emit('cancel')
+    await flushPromises()
+
     expect(
       deletePrompt,
       'cancelling the confirmation must abort the delete — a misclick must not destroy data',
     ).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(ConfirmDialog).props('open')).toBe(false)
   })
-
 })

@@ -3,15 +3,49 @@ import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime, formatElapsedSeconds, formatDurationMs } from '@/utils/time'
 import { outputPreview, hasOutput } from '@/utils/output-preview'
-import { Clock, Play, Pause, Trash2, X, Save, RefreshCw, Calendar, Hash, ChevronDown, Zap, History, CheckCircle, XCircle, Loader, Code, AlertTriangle, Clock3, Sparkles, ShieldAlert } from 'lucide-vue-next'
 import {
-  getCronJobs, createCronJob, deleteCronJob, pauseCronJob, resumeCronJob, triggerCronJob, getCronJobHistory,
-  type CronJob, type CronJobInput, type CronJobRun, type CronCompileProgress, type CronCompileStage,
+  Clock,
+  Play,
+  Pause,
+  Trash2,
+  X,
+  Save,
+  RefreshCw,
+  Calendar,
+  Hash,
+  ChevronDown,
+  Zap,
+  History,
+  CheckCircle,
+  XCircle,
+  Loader,
+  Code,
+  AlertTriangle,
+  Clock3,
+  Sparkles,
+  ShieldAlert,
+} from 'lucide-vue-next'
+import {
+  getCronJobs,
+  createCronJob,
+  deleteCronJob,
+  pauseCronJob,
+  resumeCronJob,
+  triggerCronJob,
+  getCronJobHistory,
+  type CronJob,
+  type CronJobInput,
+  type CronJobRun,
+  type CronCompileProgress,
+  type CronCompileStage,
 } from '@/api/tasks'
 import { getConnectionsResult, type ConnectionSummary } from '@/api/im-channels'
 import {
-  preflightAutonomy, createAutonomyGrant, getAutonomySummary,
-  type PreflightResult, type AutonomyTaskStatus,
+  preflightAutonomy,
+  createAutonomyGrant,
+  getAutonomySummary,
+  type PreflightResult,
+  type AutonomyTaskStatus,
 } from '@/api/autonomy'
 import type { JobSpec } from '@/types'
 import { useToast } from '@/composables'
@@ -19,6 +53,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import PermissionApprovalModal from '@/components/automation/PermissionApprovalModal.vue'
 import PermissionBlockedModal from '@/components/automation/PermissionBlockedModal.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
 const toast = useToast()
@@ -72,7 +107,9 @@ const connectionsError = ref<string | null>(null)
  * 必须按 capabilities 闸门，否则只收的 email 被选作投递目标 → 运行期 instanceMgr.Send "no running adapter" 必失败。
  */
 const deliverableConnections = computed(() =>
-  connections.value.filter((c) => c.enabled !== false && (c.capabilities?.includes('send') ?? false)),
+  connections.value.filter(
+    (c) => c.enabled !== false && (c.capabilities?.includes('send') ?? false),
+  ),
 )
 
 function isDeliverSelected(target: string): boolean {
@@ -98,6 +135,7 @@ async function loadConnections() {
 const triggeringJobs = ref<Set<string>>(new Set())
 const pausingJobs = ref<Set<string>>(new Set())
 const deletingJobs = ref<Set<string>>(new Set())
+const pendingDeleteJob = ref<CronJob | null>(null)
 const jobHistories = ref<Record<string, CronJobRun[]>>({})
 const expandedJobId = ref<string | null>(null)
 const expandedRunId = ref<string | null>(null)
@@ -137,7 +175,10 @@ const needsChatId = computed(() =>
 )
 
 const formValid = computed(() => {
-  const base = form.value.name.trim() !== '' && form.value.schedule.trim() !== '' && form.value.prompt.trim() !== ''
+  const base =
+    form.value.name.trim() !== '' &&
+    form.value.schedule.trim() !== '' &&
+    form.value.prompt.trim() !== ''
   // 选了 IM/连接投递目标却没填 chat_id → 必然投递失败，阻止提交。
   return base && (!needsChatId.value || (form.value.chat_id ?? '').trim() !== '')
 })
@@ -235,7 +276,15 @@ onMounted(() => document.addEventListener('click', collapseOnOutsideClick))
 onUnmounted(() => document.removeEventListener('click', collapseOnOutsideClick))
 
 function openCreateForm() {
-  form.value = { name: '', schedule: '', prompt: '', type: 'cron', deliver: [], chat_id: '', continuous: false }
+  form.value = {
+    name: '',
+    schedule: '',
+    prompt: '',
+    type: 'cron',
+    deliver: [],
+    chat_id: '',
+    continuous: false,
+  }
   loadConnections() // 打开即拉取连接库（已缓存则瞬时返回；失败优雅降级）
   showForm.value = true
   showPresets.value = false
@@ -252,21 +301,31 @@ const createAbort = ref<AbortController | null>(null)
 
 function stageLabel(stage: CronCompileStage): string {
   switch (stage) {
-    case 'analyzing':   return t('tasks.stageAnalyzing',  '解析需求…')
-    case 'calling_llm': return t('tasks.stageCallingLLM', '调用 LLM 生成脚本…')
-    case 'validating':  return t('tasks.stageValidating', '校验脚本安全性…')
-    case 'persisting':  return t('tasks.stagePersisting', '保存任务…')
-    default: return stage
+    case 'analyzing':
+      return t('tasks.stageAnalyzing', '解析需求…')
+    case 'calling_llm':
+      return t('tasks.stageCallingLLM', '调用 LLM 生成脚本…')
+    case 'validating':
+      return t('tasks.stageValidating', '校验脚本安全性…')
+    case 'persisting':
+      return t('tasks.stagePersisting', '保存任务…')
+    default:
+      return stage
   }
 }
 
 function stageProgress(stage: CronCompileStage): number {
   switch (stage) {
-    case 'analyzing':   return 10
-    case 'calling_llm': return 60
-    case 'validating':  return 85
-    case 'persisting':  return 95
-    default: return 5
+    case 'analyzing':
+      return 10
+    case 'calling_llm':
+      return 60
+    case 'validating':
+      return 85
+    case 'persisting':
+      return 95
+    default:
+      return 5
   }
 }
 
@@ -304,7 +363,9 @@ async function submitCreate(options: { paused?: boolean } = {}): Promise<CronJob
       { ...form.value, ...(options.paused ? { paused: true } : {}) },
       {
         signal: ctrl.signal,
-        onProgress: (p) => { createProgress.value = p },
+        onProgress: (p) => {
+          createProgress.value = p
+        },
       },
     )
     showForm.value = false
@@ -363,9 +424,13 @@ async function onApprovalChoose(mode: 'grant' | 'later' | 'paused') {
         console.error('任务级授权/启用失败:', e)
         if (granted) {
           // 授权已落库，仅启用失败：任务保持暂停，提示在任务卡上直接启用（无需重新授权）。
-          toast.error(t('autonomy.approval.enableFailed', '授权已保存，但启用未成功，可在任务卡上直接启用'))
+          toast.error(
+            t('autonomy.approval.enableFailed', '授权已保存，但启用未成功，可在任务卡上直接启用'),
+          )
         } else {
-          toast.error(t('autonomy.approval.grantFailed', '授权未完成，任务已保存为暂停，可在任务卡上重试'))
+          toast.error(
+            t('autonomy.approval.grantFailed', '授权未完成，任务已保存为暂停，可在任务卡上重试'),
+          )
         }
       }
       await loadJobs()
@@ -401,9 +466,11 @@ async function handlePauseResume(job: CronJob) {
   }
 }
 
-async function handleDelete(job: CronJob) {
+async function confirmDeleteJob() {
+  const job = pendingDeleteJob.value
+  if (!job) return
   if (deletingJobs.value.has(job.id)) return
-  if (!confirm(t('tasks.confirmDelete', { name: job.name }))) return
+  pendingDeleteJob.value = null
   deletingJobs.value = new Set([...deletingJobs.value, job.id])
   try {
     await deleteCronJob(job.id)
@@ -450,7 +517,14 @@ async function handleTrigger(job: CronJob) {
 const RUN_WATCH_POLL_MS = 3000
 const RUN_WATCH_TIMEOUT_MS = 8 * 60 * 1000
 /** Statuses that mean the run finished — stop polling when one shows up. */
-const TERMINAL_RUN_STATUSES = new Set(['success', 'failed', 'error', 'timeout', 'healed', 'heal_failed'])
+const TERMINAL_RUN_STATUSES = new Set([
+  'success',
+  'failed',
+  'error',
+  'timeout',
+  'healed',
+  'heal_failed',
+])
 /**
  * Forward-only match tolerance (ms). A row counts as "this trigger's row" only
  * if it started at/after the local trigger time, minus a tiny clock-skew
@@ -484,7 +558,10 @@ function makeOptimisticRun(jobId: string, triggeredAt: number): CronJobRun {
  * top until the server reports a row for this trigger, and tell the caller
  * whether that row is terminal (so polling can stop).
  */
-function mergeHistoryWithWatch(jobId: string, runs: CronJobRun[]): { runs: CronJobRun[]; terminal: boolean } {
+function mergeHistoryWithWatch(
+  jobId: string,
+  runs: CronJobRun[],
+): { runs: CronJobRun[]; terminal: boolean } {
   const watch = runWatches.get(jobId)
   if (!watch) return { runs, terminal: false }
   const fresh = runs.find((r) => {
@@ -508,7 +585,9 @@ function startRunWatch(jobId: string) {
   jobHistories.value[jobId] = [makeOptimisticRun(jobId, triggeredAt), ...existing]
 
   if (!elapsedTicker) {
-    elapsedTicker = setInterval(() => { nowMs.value = Date.now() }, 1000)
+    elapsedTicker = setInterval(() => {
+      nowMs.value = Date.now()
+    }, 1000)
   }
   const timer = setInterval(() => {
     if (Date.now() - triggeredAt >= RUN_WATCH_TIMEOUT_MS) {
@@ -586,40 +665,61 @@ function toggleRunDetail(runId: string) {
 
 function runStatusIcon(status: string) {
   switch (status) {
-    case 'success': return CheckCircle
+    case 'success':
+      return CheckCircle
     case 'failed':
-    case 'error': return XCircle
-    case 'timeout': return Clock3
-    case 'running': return Loader
-    case 'healed': return CheckCircle
-    case 'heal_failed': return XCircle
-    default: return Clock
+    case 'error':
+      return XCircle
+    case 'timeout':
+      return Clock3
+    case 'running':
+      return Loader
+    case 'healed':
+      return CheckCircle
+    case 'heal_failed':
+      return XCircle
+    default:
+      return Clock
   }
 }
 
 function runStatusColor(status: string): string {
   switch (status) {
-    case 'success': return 'var(--hc-success)'
+    case 'success':
+      return 'var(--hc-success)'
     case 'failed':
-    case 'error': return 'var(--hc-error)'
-    case 'timeout': return 'var(--hc-warning)'
-    case 'running': return 'var(--hc-accent)'
-    case 'healed': return 'var(--hc-accent)'
-    case 'heal_failed': return 'var(--hc-warning)'
-    default: return 'var(--hc-text-muted)'
+    case 'error':
+      return 'var(--hc-error)'
+    case 'timeout':
+      return 'var(--hc-warning)'
+    case 'running':
+      return 'var(--hc-accent)'
+    case 'healed':
+      return 'var(--hc-accent)'
+    case 'heal_failed':
+      return 'var(--hc-warning)'
+    default:
+      return 'var(--hc-text-muted)'
   }
 }
 
 function runStatusText(status: string): string {
   switch (status) {
-    case 'success': return t('tasks.statusSuccess', '成功')
+    case 'success':
+      return t('tasks.statusSuccess', '成功')
     case 'failed':
-    case 'error': return t('tasks.statusFailed', '失败')
-    case 'timeout': return t('tasks.statusTimeout', '超时')
-    case 'running': return t('tasks.statusRunning', '运行中')
-    case 'healed': return t('tasks.statusHealed', '已自愈')
-    case 'heal_failed': return t('tasks.statusHealFailed', '自愈失败')
-    default: return status
+    case 'error':
+      return t('tasks.statusFailed', '失败')
+    case 'timeout':
+      return t('tasks.statusTimeout', '超时')
+    case 'running':
+      return t('tasks.statusRunning', '运行中')
+    case 'healed':
+      return t('tasks.statusHealed', '已自愈')
+    case 'heal_failed':
+      return t('tasks.statusHealFailed', '自愈失败')
+    default:
+      return status
   }
 }
 
@@ -632,28 +732,40 @@ function scheduleLabel(schedule: string): string {
 
 function statusColor(status: string): string {
   switch (status) {
-    case 'active': return 'var(--hc-success)'
-    case 'paused': return 'var(--hc-warning)'
-    case 'done': return 'var(--hc-text-muted)'
-    default: return 'var(--hc-text-muted)'
+    case 'active':
+      return 'var(--hc-success)'
+    case 'paused':
+      return 'var(--hc-warning)'
+    case 'done':
+      return 'var(--hc-text-muted)'
+    default:
+      return 'var(--hc-text-muted)'
   }
 }
 
 function statusBg(status: string): string {
   switch (status) {
-    case 'active': return 'rgba(50, 213, 131, 0.1)'
-    case 'paused': return 'rgba(240, 180, 41, 0.1)'
-    case 'done': return 'var(--hc-bg-hover)'
-    default: return 'var(--hc-bg-hover)'
+    case 'active':
+      return 'rgba(50, 213, 131, 0.1)'
+    case 'paused':
+      return 'rgba(240, 180, 41, 0.1)'
+    case 'done':
+      return 'var(--hc-bg-hover)'
+    default:
+      return 'var(--hc-bg-hover)'
   }
 }
 
 function statusText(status: string): string {
   switch (status) {
-    case 'active': return t('tasks.statusActive')
-    case 'paused': return t('tasks.statusPaused')
-    case 'done': return t('tasks.statusDone')
-    default: return status
+    case 'active':
+      return t('tasks.statusActive')
+    case 'paused':
+      return t('tasks.statusPaused')
+    case 'done':
+      return t('tasks.statusDone')
+    default:
+      return status
   }
 }
 
@@ -673,11 +785,7 @@ defineExpose({ openCreateForm, loadJobs })
       />
 
       <div v-else class="tasks-grid">
-        <div
-          v-for="job in filteredJobs"
-          :key="job.id"
-          class="task-card"
-        >
+        <div v-for="job in filteredJobs" :key="job.id" class="task-card">
           <!-- Card header -->
           <div class="task-card__header">
             <div class="task-card__title-row">
@@ -686,7 +794,10 @@ defineExpose({ openCreateForm, loadJobs })
                 class="task-card__status"
                 :style="{ color: statusColor(job.status), background: statusBg(job.status) }"
               >
-                <span class="task-card__status-dot" :style="{ background: statusColor(job.status) }" />
+                <span
+                  class="task-card__status-dot"
+                  :style="{ background: statusColor(job.status) }"
+                />
                 {{ statusText(job.status) }}
               </span>
               <button
@@ -697,7 +808,8 @@ defineExpose({ openCreateForm, loadJobs })
                 @click.stop="openBlockedModal(job)"
               >
                 <ShieldAlert :size="12" />
-                {{ t('autonomy.badge.pending', '待授权') }} · {{ t('autonomy.badge.open', '去开启') }}
+                {{ t('autonomy.badge.pending', '待授权') }} ·
+                {{ t('autonomy.badge.open', '去开启') }}
               </button>
             </div>
             <p class="task-card__prompt">{{ job.source_prompt }}</p>
@@ -709,7 +821,10 @@ defineExpose({ openCreateForm, loadJobs })
               <Calendar :size="13" />
               <span>{{ scheduleLabel(job.schedule) }}</span>
             </div>
-            <div class="task-card__meta-item task-card__meta-item--next" :style="{ color: 'var(--hc-accent)', fontWeight: 500 }">
+            <div
+              class="task-card__meta-item task-card__meta-item--next"
+              :style="{ color: 'var(--hc-accent)', fontWeight: 500 }"
+            >
               <Clock :size="13" />
               <span>{{ t('tasks.nextRun', { time: formatTime(job.next_run_at) }) }}</span>
             </div>
@@ -740,12 +855,16 @@ defineExpose({ openCreateForm, loadJobs })
             >
               <Loader v-if="triggeringJobs.has(job.id)" :size="14" class="animate-spin" />
               <Zap v-else :size="14" />
-              <span>{{ triggeringJobs.has(job.id) ? t('tasks.triggering') : t('tasks.triggerNow') }}</span>
+              <span>{{
+                triggeringJobs.has(job.id) ? t('tasks.triggering') : t('tasks.triggerNow')
+              }}</span>
             </button>
             <button
               v-if="job.status !== 'done'"
               class="task-card__action-btn"
-              :style="{ color: job.status === 'active' ? 'var(--hc-warning)' : 'var(--hc-success)' }"
+              :style="{
+                color: job.status === 'active' ? 'var(--hc-warning)' : 'var(--hc-success)',
+              }"
               :title="job.status === 'active' ? t('tasks.pauseTask') : t('tasks.resumeTask')"
               :disabled="pausingJobs.has(job.id)"
               @click="handlePauseResume(job)"
@@ -765,49 +884,71 @@ defineExpose({ openCreateForm, loadJobs })
             </button>
             <button
               class="task-card__action-btn"
-              :style="{ color: expandedJobId === job.id ? 'var(--hc-accent)' : 'var(--hc-text-secondary)' }"
+              :style="{
+                color: expandedJobId === job.id ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
+              }"
               :title="t('tasks.execHistory')"
               @click="toggleHistory(job.id)"
             >
               <History :size="14" />
-              <span>{{ expandedJobId === job.id ? t('tasks.hideHistory', '收起历史') : t('tasks.history') }}</span>
+              <span>{{
+                expandedJobId === job.id ? t('tasks.hideHistory', '收起历史') : t('tasks.history')
+              }}</span>
             </button>
             <button
               v-if="job.spec && !isAgentJob(job)"
               class="task-card__action-btn"
-              :style="{ color: scriptVisible.has(job.id) ? 'var(--hc-accent)' : 'var(--hc-text-secondary)' }"
+              :style="{
+                color: scriptVisible.has(job.id) ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
+              }"
               :title="t('tasks.viewScript', '查看脚本')"
               @click="toggleScript(job.id)"
             >
               <Code :size="14" />
-              <span>{{ scriptVisible.has(job.id) ? t('tasks.hideScript', '隐藏脚本') : t('tasks.viewScript', '查看脚本') }}</span>
+              <span>{{
+                scriptVisible.has(job.id)
+                  ? t('tasks.hideScript', '隐藏脚本')
+                  : t('tasks.viewScript', '查看脚本')
+              }}</span>
             </button>
             <button
               class="task-card__action-btn task-card__action-btn--danger"
               :title="t('common.delete')"
               :disabled="deletingJobs.has(job.id)"
-              @click="handleDelete(job)"
+              @click="pendingDeleteJob = job"
             >
               <Loader v-if="deletingJobs.has(job.id)" :size="14" class="animate-spin" />
               <Trash2 v-else :size="14" />
-              <span>{{ deletingJobs.has(job.id) ? t('common.loading', '处理中...') : t('common.delete') }}</span>
+              <span>{{
+                deletingJobs.has(job.id) ? t('common.loading', '处理中...') : t('common.delete')
+              }}</span>
             </button>
           </div>
 
           <!-- Agent runtime badge: agent jobs reason per run, no script panel -->
           <div v-if="isAgentJob(job)" class="task-card__agent-badge">
             <Sparkles :size="12" />
-            <span>{{ t('tasks.agentRuntime', 'Agent · 每次执行由 AI 推理完成') }}<template v-if="job.spec?.timeout_s"> · {{ job.spec.timeout_s }}s</template></span>
+            <span
+              >{{ t('tasks.agentRuntime', 'Agent · 每次执行由 AI 推理完成')
+              }}<template v-if="job.spec?.timeout_s"> · {{ job.spec.timeout_s }}s</template></span
+            >
           </div>
 
           <!-- Compiled script viewer (script jobs only) -->
-          <div v-if="scriptVisible.has(job.id) && job.spec && !isAgentJob(job)" class="task-card__script">
+          <div
+            v-if="scriptVisible.has(job.id) && job.spec && !isAgentJob(job)"
+            class="task-card__script"
+          >
             <div class="task-card__script-header">
               <span class="task-card__script-meta">
                 Python · {{ job.spec.deps?.length || 0 }} deps · {{ job.spec.timeout_s }}s
               </span>
-              <span v-if="hasRealCompiledAt(job.spec)" class="task-card__script-meta task-card__script-meta--dim">
-                {{ t('tasks.compiledBy', '编译于') }} {{ formatTime(job.spec.compiled.at) }} · {{ job.spec.compiled.model }}
+              <span
+                v-if="hasRealCompiledAt(job.spec)"
+                class="task-card__script-meta task-card__script-meta--dim"
+              >
+                {{ t('tasks.compiledBy', '编译于') }} {{ formatTime(job.spec.compiled.at) }} ·
+                {{ job.spec.compiled.model }}
               </span>
             </div>
             <pre class="task-card__script-code">{{ job.spec.script }}</pre>
@@ -819,20 +960,52 @@ defineExpose({ openCreateForm, loadJobs })
           <!-- Execution history -->
           <div v-if="expandedJobId === job.id" class="task-card__history">
             <div class="task-card__history-title">{{ t('tasks.recentExecHistory') }}</div>
-            <div v-if="!jobHistories[job.id]?.length" class="task-card__history-empty">{{ t('tasks.noExecHistory') }}</div>
+            <div v-if="!jobHistories[job.id]?.length" class="task-card__history-empty">
+              {{ t('tasks.noExecHistory') }}
+            </div>
             <div v-else class="task-card__history-list">
-              <div v-for="run in jobHistories[job.id]" :key="run.id" class="task-card__history-entry">
+              <div
+                v-for="run in jobHistories[job.id]"
+                :key="run.id"
+                class="task-card__history-entry"
+              >
                 <div
                   class="task-card__history-item"
-                  :class="{ 'task-card__history-item--clickable': !!(run.result || run.error || hasOutput(run.stdout) || hasOutput(run.stderr)) }"
-                  @click="(run.result || run.error || hasOutput(run.stdout) || hasOutput(run.stderr)) ? toggleRunDetail(run.id) : undefined"
+                  :class="{
+                    'task-card__history-item--clickable': !!(
+                      run.result ||
+                      run.error ||
+                      hasOutput(run.stdout) ||
+                      hasOutput(run.stderr)
+                    ),
+                  }"
+                  @click="
+                    run.result || run.error || hasOutput(run.stdout) || hasOutput(run.stderr)
+                      ? toggleRunDetail(run.id)
+                      : undefined
+                  "
                 >
-                  <component :is="runStatusIcon(run.status)" :size="13" :style="{ color: runStatusColor(run.status), flexShrink: 0 }" />
+                  <component
+                    :is="runStatusIcon(run.status)"
+                    :size="13"
+                    :style="{ color: runStatusColor(run.status), flexShrink: 0 }"
+                  />
                   <span class="task-card__history-time">{{ formatTime(run.started_at) }}</span>
-                  <span v-if="run.status === 'running'" class="task-card__history-duration">{{ runningElapsed(run) }}</span>
-                  <span v-else-if="run.duration_ms" class="task-card__history-duration">{{ formatDurationMs(run.duration_ms) }}</span>
-                  <span class="task-card__history-status" :style="{ color: runStatusColor(run.status) }">{{ runStatusText(run.status) }}</span>
-                  <span v-if="typeof run.exit_code === 'number' && run.exit_code !== 0" class="task-card__history-exit">
+                  <span v-if="run.status === 'running'" class="task-card__history-duration">{{
+                    runningElapsed(run)
+                  }}</span>
+                  <span v-else-if="run.duration_ms" class="task-card__history-duration">{{
+                    formatDurationMs(run.duration_ms)
+                  }}</span>
+                  <span
+                    class="task-card__history-status"
+                    :style="{ color: runStatusColor(run.status) }"
+                    >{{ runStatusText(run.status) }}</span
+                  >
+                  <span
+                    v-if="typeof run.exit_code === 'number' && run.exit_code !== 0"
+                    class="task-card__history-exit"
+                  >
                     exit {{ run.exit_code }}
                   </span>
                   <ChevronDown
@@ -847,22 +1020,31 @@ defineExpose({ openCreateForm, loadJobs })
                   <div v-if="run.error" class="task-card__history-error">
                     <AlertTriangle :size="12" /> {{ run.error }}
                   </div>
-                  <div v-if="run.data !== undefined && run.data !== null" class="task-card__history-data">
+                  <div
+                    v-if="run.data !== undefined && run.data !== null"
+                    class="task-card__history-data"
+                  >
                     <strong>data:</strong>
-                    <pre>{{ typeof run.data === 'string' ? run.data : JSON.stringify(run.data, null, 2) }}</pre>
+                    <pre>{{
+                      typeof run.data === 'string' ? run.data : JSON.stringify(run.data, null, 2)
+                    }}</pre>
                   </div>
                   <div v-if="hasOutput(run.stdout)" class="task-card__history-stdout">
                     <button class="task-card__history-toggle" @click.stop="toggleStdout(run.id)">
                       {{ t('tasks.runOutput') }} {{ expandedStdout.has(run.id) ? '▾' : '▸' }}
                     </button>
-                    <span v-if="!expandedStdout.has(run.id)" class="task-card__history-preview">{{ outputPreview(run.stdout) }}</span>
+                    <span v-if="!expandedStdout.has(run.id)" class="task-card__history-preview">{{
+                      outputPreview(run.stdout)
+                    }}</span>
                     <pre v-if="expandedStdout.has(run.id)">{{ run.stdout }}</pre>
                   </div>
                   <div v-if="hasOutput(run.stderr)" class="task-card__history-stderr">
                     <button class="task-card__history-toggle" @click.stop="toggleStderr(run.id)">
                       {{ t('tasks.runErrorOutput') }} {{ expandedStderr.has(run.id) ? '▾' : '▸' }}
                     </button>
-                    <span v-if="!expandedStderr.has(run.id)" class="task-card__history-preview">{{ outputPreview(run.stderr) }}</span>
+                    <span v-if="!expandedStderr.has(run.id)" class="task-card__history-preview">{{
+                      outputPreview(run.stderr)
+                    }}</span>
                     <pre v-if="expandedStderr.has(run.id)">{{ run.stderr }}</pre>
                   </div>
                   <div v-if="run.result" class="task-card__history-result">{{ run.result }}</div>
@@ -891,11 +1073,11 @@ defineExpose({ openCreateForm, loadJobs })
                 <label class="hc-field__label">{{ t('tasks.taskName') }}</label>
                 <HcClearableField>
                   <input
-                  v-model="form.name"
-                  type="text"
-                  class="hc-input"
-                  :placeholder="t('tasks.taskNamePlaceholder')"
-                />
+                    v-model="form.name"
+                    type="text"
+                    class="hc-input"
+                    :placeholder="t('tasks.taskNamePlaceholder')"
+                  />
                 </HcClearableField>
               </div>
 
@@ -905,12 +1087,12 @@ defineExpose({ openCreateForm, loadJobs })
                 <div class="schedule-input-wrap">
                   <HcClearableField>
                     <input
-                    v-model="form.schedule"
-                    type="text"
-                    class="hc-input"
-                    style="font-family: monospace;"
-                    :placeholder="t('tasks.cronExprPlaceholder')"
-                  />
+                      v-model="form.schedule"
+                      type="text"
+                      class="hc-input"
+                      style="font-family: monospace"
+                      :placeholder="t('tasks.cronExprPlaceholder')"
+                    />
                   </HcClearableField>
                   <button
                     class="schedule-preset-btn"
@@ -941,12 +1123,12 @@ defineExpose({ openCreateForm, loadJobs })
                 <label class="hc-field__label">{{ t('tasks.prompt') }}</label>
                 <HcClearableField>
                   <textarea
-                  v-model="form.prompt"
-                  rows="4"
-                  class="hc-input"
-                  style="resize: none; font-family: inherit;"
-                  :placeholder="t('tasks.promptPlaceholder')"
-                />
+                    v-model="form.prompt"
+                    rows="4"
+                    class="hc-input"
+                    style="resize: none; font-family: inherit"
+                    :placeholder="t('tasks.promptPlaceholder')"
+                  />
                 </HcClearableField>
               </div>
 
@@ -990,10 +1172,13 @@ defineExpose({ openCreateForm, loadJobs })
                 </div>
                 <p v-if="connectionsError" class="deliver-hint deliver-hint--error">
                   <AlertTriangle :size="13" />
-                  {{ t('tasks.connectionsLoadFailed', '连接库加载失败（并非没有连接）：') }}{{ connectionsError }}
+                  {{ t('tasks.connectionsLoadFailed', '连接库加载失败（并非没有连接）：')
+                  }}{{ connectionsError }}
                 </p>
                 <template v-if="deliverableConnections.length">
-                  <div class="deliver-sublabel">{{ t('tasks.deliverFromConnections', '或从连接库选择') }}</div>
+                  <div class="deliver-sublabel">
+                    {{ t('tasks.deliverFromConnections', '或从连接库选择') }}
+                  </div>
                   <div class="deliver-chips">
                     <button
                       v-for="conn in deliverableConnections"
@@ -1008,18 +1193,24 @@ defineExpose({ openCreateForm, loadJobs })
                     </button>
                   </div>
                 </template>
-                <p class="deliver-hint">{{ t('tasks.deliverHint', '留空 = 自动（默认发到当前会话）') }}</p>
+                <p class="deliver-hint">
+                  {{ t('tasks.deliverHint', '留空 = 自动（默认发到当前会话）') }}
+                </p>
                 <!-- IM/连接投递目标需指定会话/群组 ID（后端 Deliverer 必需，否则投递失败） -->
-                <div v-if="needsChatId" class="hc-field" style="margin-top: 10px;">
-                  <label class="hc-field__label">{{ t('tasks.chatIdLabel', '会话/群组 ID') }}</label>
+                <div v-if="needsChatId" class="hc-field" style="margin-top: 10px">
+                  <label class="hc-field__label">{{
+                    t('tasks.chatIdLabel', '会话/群组 ID')
+                  }}</label>
                   <HcClearableField>
                     <input
-                    v-model="form.chat_id"
-                    class="hc-input"
-                    :placeholder="t('tasks.chatIdPlaceholder', '如飞书 chat_id / 群 ID')"
-                  />
+                      v-model="form.chat_id"
+                      class="hc-input"
+                      :placeholder="t('tasks.chatIdPlaceholder', '如飞书 chat_id / 群 ID')"
+                    />
                   </HcClearableField>
-                  <p class="deliver-hint">{{ t('tasks.chatIdHint', 'IM/连接投递必填——指定要发送到的会话或群组') }}</p>
+                  <p class="deliver-hint">
+                    {{ t('tasks.chatIdHint', 'IM/连接投递必填——指定要发送到的会话或群组') }}
+                  </p>
                 </div>
               </div>
 
@@ -1032,7 +1223,12 @@ defineExpose({ openCreateForm, loadJobs })
                   </span>
                 </label>
                 <p class="deliver-hint">
-                  {{ t('tasks.continuousHint', '分多次累积推进长目标——每次只做下一个增量，带进度存档（重启可续），目标完成 / 卡住自动收工。') }}
+                  {{
+                    t(
+                      'tasks.continuousHint',
+                      '分多次累积推进长目标——每次只做下一个增量，带进度存档（重启可续），目标完成 / 卡住自动收工。',
+                    )
+                  }}
                 </p>
               </div>
             </div>
@@ -1041,12 +1237,19 @@ defineExpose({ openCreateForm, loadJobs })
               <div class="hc-compile-progress__header">
                 <Loader :size="14" class="animate-spin" />
                 <span>{{ stageLabel(createProgress.stage) }}</span>
-                <span class="hc-compile-progress__pct">{{ stageProgress(createProgress.stage) }}%</span>
+                <span class="hc-compile-progress__pct"
+                  >{{ stageProgress(createProgress.stage) }}%</span
+                >
               </div>
               <div class="hc-compile-progress__bar">
-                <div class="hc-compile-progress__fill" :style="{ width: stageProgress(createProgress.stage) + '%' }"></div>
+                <div
+                  class="hc-compile-progress__fill"
+                  :style="{ width: stageProgress(createProgress.stage) + '%' }"
+                ></div>
               </div>
-              <div v-if="createProgress.message" class="hc-compile-progress__msg">{{ createProgress.message }}</div>
+              <div v-if="createProgress.message" class="hc-compile-progress__msg">
+                {{ createProgress.message }}
+              </div>
             </div>
             <div class="hc-modal__footer">
               <button
@@ -1085,6 +1288,17 @@ defineExpose({ openCreateForm, loadJobs })
     @close="blockedOpen = false"
     @resolved="onBlockedResolved"
   />
+  <ConfirmDialog
+    :open="!!pendingDeleteJob"
+    :title="t('tasks.deleteConfirmTitle', '删除任务？')"
+    :message="pendingDeleteJob ? t('tasks.confirmDelete', { name: pendingDeleteJob.name }) : ''"
+    :confirm-text="t('common.delete')"
+    :cancel-text="t('common.cancel')"
+    :confirmation-key="pendingDeleteJob?.id"
+    danger
+    @confirm="confirmDeleteJob"
+    @cancel="pendingDeleteJob = null"
+  />
 </template>
 
 <style scoped>
@@ -1108,7 +1322,9 @@ defineExpose({ openCreateForm, loadJobs })
   display: flex;
   flex-direction: column;
   gap: 12px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
 }
 
 .task-card:hover {
@@ -1151,12 +1367,21 @@ defineExpose({ openCreateForm, loadJobs })
 }
 
 .task-card__perm-badge {
-  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
-  font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
   border: 0.5px solid rgba(240, 180, 41, 0.35);
-  background: rgba(240, 180, 41, 0.12); color: var(--hc-warning, #e69500);
+  background: rgba(240, 180, 41, 0.12);
+  color: var(--hc-warning, #e69500);
 }
-.task-card__perm-badge:hover { background: rgba(240, 180, 41, 0.2); }
+.task-card__perm-badge:hover {
+  background: rgba(240, 180, 41, 0.2);
+}
 .task-card__status-dot {
   width: 5px;
   height: 5px;
@@ -1264,8 +1489,12 @@ defineExpose({ openCreateForm, loadJobs })
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* ── History ── */
@@ -1378,9 +1607,9 @@ defineExpose({ openCreateForm, loadJobs })
 .task-card__history-data pre {
   margin: 4px 0 0;
   padding: 6px 8px;
-  background: var(--hc-bg-subtle, rgba(0,0,0,0.04));
+  background: var(--hc-bg-subtle, rgba(0, 0, 0, 0.04));
   border-radius: 4px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 11px;
   white-space: pre-wrap;
 }
@@ -1393,9 +1622,9 @@ defineExpose({ openCreateForm, loadJobs })
 .task-card__history-stdout pre {
   margin: 4px 0 0;
   padding: 6px 8px;
-  background: var(--hc-bg-subtle, rgba(0,0,0,0.04));
+  background: var(--hc-bg-subtle, rgba(0, 0, 0, 0.04));
   border-radius: 4px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 11px;
   white-space: pre-wrap;
   max-height: 240px;
@@ -1425,9 +1654,9 @@ defineExpose({ openCreateForm, loadJobs })
 .task-card__history-exit {
   font-size: 10px;
   color: var(--hc-warning);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   padding: 1px 4px;
-  background: rgba(255,165,0,0.1);
+  background: rgba(255, 165, 0, 0.1);
   border-radius: 3px;
 }
 
@@ -1450,7 +1679,7 @@ defineExpose({ openCreateForm, loadJobs })
 .task-card__script {
   margin: 8px 4px 0;
   padding: 10px 12px;
-  background: var(--hc-bg-subtle, rgba(0,0,0,0.04));
+  background: var(--hc-bg-subtle, rgba(0, 0, 0, 0.04));
   border-radius: 8px;
   font-size: 12px;
 }
@@ -1470,9 +1699,9 @@ defineExpose({ openCreateForm, loadJobs })
   margin: 0;
   padding: 8px 10px;
   background: var(--hc-bg);
-  border: 1px solid var(--hc-border, rgba(0,0,0,0.08));
+  border: 1px solid var(--hc-border, rgba(0, 0, 0, 0.08));
   border-radius: 6px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 11px;
   line-height: 1.55;
   white-space: pre-wrap;
@@ -1484,7 +1713,7 @@ defineExpose({ openCreateForm, loadJobs })
   margin-top: 6px;
   font-size: 10px;
   color: var(--hc-text-muted);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
 /* ── Modal ── */
@@ -1573,7 +1802,7 @@ defineExpose({ openCreateForm, loadJobs })
   gap: 6px;
   padding: 10px 20px;
   border-top: 1px solid var(--hc-divider);
-  background: var(--hc-bg-subtle, rgba(0,0,0,0.02));
+  background: var(--hc-bg-subtle, rgba(0, 0, 0, 0.02));
 }
 .hc-compile-progress__header {
   display: flex;
@@ -1584,7 +1813,7 @@ defineExpose({ openCreateForm, loadJobs })
 }
 .hc-compile-progress__pct {
   margin-left: auto;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 11px;
   color: var(--hc-accent);
   font-weight: 500;
@@ -1604,7 +1833,7 @@ defineExpose({ openCreateForm, loadJobs })
 .hc-compile-progress__msg {
   font-size: 11px;
   color: var(--hc-text-muted);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
 
 .hc-field {
@@ -1642,7 +1871,9 @@ defineExpose({ openCreateForm, loadJobs })
   border-radius: var(--hc-radius-sm);
   cursor: pointer;
   display: flex;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .schedule-preset-btn:hover {
@@ -1666,7 +1897,9 @@ defineExpose({ openCreateForm, loadJobs })
   border: 1px solid var(--hc-border);
   background: var(--hc-bg-card);
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    border-color 0.15s;
   font-size: 12px;
 }
 
@@ -1712,7 +1945,9 @@ defineExpose({ openCreateForm, loadJobs })
   font-weight: 500;
   color: var(--hc-text-secondary);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
   justify-content: center;
 }
 
@@ -1747,7 +1982,10 @@ defineExpose({ openCreateForm, loadJobs })
   font-size: 12px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
 }
 .deliver-chip:hover {
   border-color: var(--hc-accent);
@@ -1795,11 +2033,25 @@ defineExpose({ openCreateForm, loadJobs })
 }
 
 /* ── Transitions ── */
-.modal-enter-active { transition: opacity 0.2s ease-out; }
-.modal-leave-active { transition: opacity 0.15s ease-in; }
-.modal-enter-from, .modal-leave-to { opacity: 0; }
+.modal-enter-active {
+  transition: opacity 0.2s ease-out;
+}
+.modal-leave-active {
+  transition: opacity 0.15s ease-in;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
 
-.fade-enter-active { transition: opacity 0.15s ease-out; }
-.fade-leave-active { transition: opacity 0.1s ease-in; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
+.fade-enter-active {
+  transition: opacity 0.15s ease-out;
+}
+.fade-leave-active {
+  transition: opacity 0.1s ease-in;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
 </style>

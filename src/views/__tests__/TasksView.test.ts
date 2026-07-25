@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import TasksView from '../TasksView.vue'
 import zhCN from '@/i18n/locales/zh-CN'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const taskApis = vi.hoisted(() => ({
   getCronJobs: vi.fn(),
@@ -39,25 +40,30 @@ vi.mock('@/composables', () => ({
 // 自动化权限治理 API：组件挂载即静默预检/总览，测试里一律 mock 成全绿空态。
 vi.mock('@/api/autonomy', () => ({
   preflightAutonomy: vi.fn().mockResolvedValue({
-    source: 'cron', profile: 'function_first',
-    capabilities: [], estimated: [], needs_decision: [], all_clear: true,
+    source: 'cron',
+    profile: 'function_first',
+    capabilities: [],
+    estimated: [],
+    needs_decision: [],
+    all_clear: true,
   }),
   createAutonomyGrant: vi.fn().mockResolvedValue({ grant: { id: 'g-1' } }),
   getAutonomySummary: vi.fn().mockResolvedValue({
     profile: 'function_first',
     counts: { tasks: 0, ready: 0, pending: 0, grants: 0 },
-    pending: [], tasks: [],
+    pending: [],
+    tasks: [],
   }),
   listAutonomyDecisions: vi.fn().mockResolvedValue({ decisions: [], total: 0 }),
   listAutonomyGrants: vi.fn().mockResolvedValue({ grants: [], total: 0 }),
   revokeAutonomyGrant: vi.fn().mockResolvedValue({ message: 'ok' }),
   getAutonomyProfile: vi.fn().mockResolvedValue({
-    profile: 'function_first', profiles: [],
+    profile: 'function_first',
+    profiles: [],
     matrix: { profile: 'function_first', categories: [], rows: [] },
   }),
   updateAutonomyProfile: vi.fn(),
 }))
-
 
 // 投递目标连接库：默认空（仅通用渠道类型可见）。具体用例可 mockResolvedValueOnce 注入连接。
 vi.mock('@/api/im-channels', () => ({
@@ -129,15 +135,28 @@ const pythonSpec = {
   script: 'print("hi")',
   deps: ['requests'],
   timeout_s: 60,
-  compiled: { model: 'qwen3', at: '2026-06-10T01:00:00Z', tokens_in: 10, tokens_out: 20, hash: 'abc' },
+  compiled: {
+    model: 'qwen3',
+    at: '2026-06-10T01:00:00Z',
+    tokens_in: 10,
+    tokens_out: 20,
+    hash: 'abc',
+  },
 }
 
 describe('TasksView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.stubGlobal('confirm', vi.fn(() => true))
+    vi.stubGlobal(
+      'confirm',
+      vi.fn(() => true),
+    )
     taskApis.getCronJobs.mockResolvedValue({ jobs: [{ ...baseJob }], total: 1 })
-    taskApis.createCronJob.mockResolvedValue({ id: 'job-2', name: '晚报生成', next_run_at: '2026-04-03T18:00:00Z' })
+    taskApis.createCronJob.mockResolvedValue({
+      id: 'job-2',
+      name: '晚报生成',
+      next_run_at: '2026-04-03T18:00:00Z',
+    })
     taskApis.deleteCronJob.mockResolvedValue({ message: 'ok' })
     taskApis.pauseCronJob.mockResolvedValue({ message: 'paused' })
     taskApis.resumeCronJob.mockResolvedValue({ message: 'resumed' })
@@ -149,7 +168,6 @@ describe('TasksView', () => {
   it('creates a task through the modal and reloads the list', async () => {
     const wrapper = mountTasksView()
     await flushPromises()
-
     ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await wrapper.vm.$nextTick()
 
@@ -185,11 +203,17 @@ describe('TasksView', () => {
 
   it('deliver target: selecting a generic channel + a configured connection passes both via deliver (§5 一处存处处引)', async () => {
     connApis.getConnections.mockResolvedValue([
-      { id: 'pi-feishu-1', provider: 'feishu', name: '研发群机器人', capabilities: ['receive', 'send'], status: 'connected', enabled: true },
+      {
+        id: 'pi-feishu-1',
+        provider: 'feishu',
+        name: '研发群机器人',
+        capabilities: ['receive', 'send'],
+        status: 'connected',
+        enabled: true,
+      },
     ])
     const wrapper = mountTasksView()
     await flushPromises()
-
     ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
@@ -208,7 +232,9 @@ describe('TasksView', () => {
     await wrapper.vm.$nextTick()
 
     // IM/连接投递目标需指定 chat_id（适配器无默认会话；不填则后端 Deliverer 硬失败）。
-    const chatIdInput = wrapper.findAll('input').find((i) => (i.attributes('placeholder') ?? '').includes('chat_id'))
+    const chatIdInput = wrapper
+      .findAll('input')
+      .find((i) => (i.attributes('placeholder') ?? '').includes('chat_id'))
     expect(chatIdInput, '选 IM 投递目标后应出现 chat_id 输入').toBeDefined()
     await chatIdInput!.setValue('oc_group_1')
 
@@ -224,20 +250,49 @@ describe('TasksView', () => {
 
   it('BUG-20260625 R3 H-2: only send-capable connections are offered as deliver targets', async () => {
     connApis.getConnections.mockResolvedValue([
-      { id: 'pi-email-1', provider: 'email', name: '我的邮箱', capabilities: ['receive', 'send'], status: 'connected', enabled: true },
-      { id: 'pi-email-legacy', provider: 'email', name: '历史只收邮箱', capabilities: ['receive'], status: 'connected', enabled: true },
-      { id: 'pi-feishu-1', provider: 'feishu', name: '研发群机器人', capabilities: ['receive', 'send'], status: 'connected', enabled: true },
+      {
+        id: 'pi-email-1',
+        provider: 'email',
+        name: '我的邮箱',
+        capabilities: ['receive', 'send'],
+        status: 'connected',
+        enabled: true,
+      },
+      {
+        id: 'pi-email-legacy',
+        provider: 'email',
+        name: '历史只收邮箱',
+        capabilities: ['receive'],
+        status: 'connected',
+        enabled: true,
+      },
+      {
+        id: 'pi-feishu-1',
+        provider: 'feishu',
+        name: '研发群机器人',
+        capabilities: ['receive', 'send'],
+        status: 'connected',
+        enabled: true,
+      },
     ])
     const wrapper = mountTasksView()
     await flushPromises()
-
     ;(wrapper.vm as unknown as { openCreateForm: () => void }).openCreateForm()
     await flushPromises()
 
     const chipTexts = wrapper.findAll('.deliver-chip').map((c) => c.text())
-    expect(chipTexts.some((t) => t.includes('研发群机器人')), '可发送的 IM 连接应在投递目标').toBe(true)
-    expect(chipTexts.some((t) => t.includes('我的邮箱')), '可发送的 email 连接应在投递目标').toBe(true)
-    expect(chipTexts.some((t) => t.includes('历史只收邮箱')), 'receive-only 连接不应作为投递目标').toBe(false)
+    expect(
+      chipTexts.some((t) => t.includes('研发群机器人')),
+      '可发送的 IM 连接应在投递目标',
+    ).toBe(true)
+    expect(
+      chipTexts.some((t) => t.includes('我的邮箱')),
+      '可发送的 email 连接应在投递目标',
+    ).toBe(true)
+    expect(
+      chipTexts.some((t) => t.includes('历史只收邮箱')),
+      'receive-only 连接不应作为投递目标',
+    ).toBe(false)
   })
 
   it('pauses and resumes an active job from the card actions', async () => {
@@ -327,7 +382,10 @@ describe('TasksView', () => {
     const wrapper = mountTasksView()
     await flushPromises()
 
-    await wrapper.findAll('button').find((btn) => btn.text().includes('历史'))!.trigger('click')
+    await wrapper
+      .findAll('button')
+      .find((btn) => btn.text().includes('历史'))!
+      .trigger('click')
     await flushPromises()
 
     // Expand the run detail (result is present so the row stays clickable).
@@ -355,7 +413,10 @@ describe('TasksView', () => {
     const wrapper = mountTasksView()
     await flushPromises()
 
-    await wrapper.findAll('button').find((btn) => btn.text().includes('历史'))!.trigger('click')
+    await wrapper
+      .findAll('button')
+      .find((btn) => btn.text().includes('历史'))!
+      .trigger('click')
     await flushPromises()
     await wrapper.find('.task-card__history-item--clickable').trigger('click')
     await flushPromises()
@@ -373,7 +434,10 @@ describe('TasksView', () => {
     async function mountWithExpandedHistory() {
       const wrapper = mountTasksView()
       await flushPromises()
-      await wrapper.findAll('button').find((btn) => btn.text().includes('历史'))!.trigger('click')
+      await wrapper
+        .findAll('button')
+        .find((btn) => btn.text().includes('历史'))!
+        .trigger('click')
       await flushPromises()
       expect(wrapper.find('.task-card__history').exists()).toBe(true)
       return wrapper
@@ -466,7 +530,10 @@ describe('TasksView', () => {
       const wrapper = mountTasksView()
       await flushPromises()
 
-      await wrapper.findAll('button').find((btn) => btn.text().includes('查看脚本'))!.trigger('click')
+      await wrapper
+        .findAll('button')
+        .find((btn) => btn.text().includes('查看脚本'))!
+        .trigger('click')
       await flushPromises()
 
       expect(wrapper.find('.task-card__script').exists()).toBe(true)
@@ -486,7 +553,10 @@ describe('TasksView', () => {
         const wrapper = mountTasksView()
         await flushPromises()
 
-        await wrapper.findAll('button').find((btn) => btn.text().includes('立即执行'))!.trigger('click')
+        await wrapper
+          .findAll('button')
+          .find((btn) => btn.text().includes('立即执行'))!
+          .trigger('click')
         await flushPromises()
 
         // (a) history auto-expanded, (b) optimistic running row on top
@@ -545,7 +615,10 @@ describe('TasksView', () => {
 
       const wrapper = mountTasksView()
       await flushPromises()
-      await wrapper.findAll('button').find((btn) => btn.text().includes('历史'))!.trigger('click')
+      await wrapper
+        .findAll('button')
+        .find((btn) => btn.text().includes('历史'))!
+        .trigger('click')
       await flushPromises()
 
       expect(wrapper.find('.task-card__history-duration').text()).toBe('17s')
@@ -561,12 +634,18 @@ describe('TasksView', () => {
         const wrapper = mountTasksView()
         await flushPromises()
 
-        await wrapper.findAll('button').find((btn) => btn.text().includes('立即执行'))!.trigger('click')
+        await wrapper
+          .findAll('button')
+          .find((btn) => btn.text().includes('立即执行'))!
+          .trigger('click')
         await flushPromises()
         expect(wrapper.find('.task-card__history').exists()).toBe(true)
 
         // Click 收起历史 to collapse the panel.
-        await wrapper.findAll('button').find((btn) => btn.text().includes('收起历史'))!.trigger('click')
+        await wrapper
+          .findAll('button')
+          .find((btn) => btn.text().includes('收起历史'))!
+          .trigger('click')
         await flushPromises()
         expect(wrapper.find('.task-card__history').exists()).toBe(false)
 
@@ -588,7 +667,10 @@ describe('TasksView', () => {
         const wrapper = mountTasksView()
         await flushPromises()
 
-        await wrapper.findAll('button').find((btn) => btn.text().includes('立即执行'))!.trigger('click')
+        await wrapper
+          .findAll('button')
+          .find((btn) => btn.text().includes('立即执行'))!
+          .trigger('click')
         await flushPromises()
         expect(wrapper.find('.task-card__history').exists()).toBe(true)
 
@@ -630,7 +712,10 @@ describe('TasksView', () => {
           },
         ])
 
-        await wrapper.findAll('button').find((btn) => btn.text().includes('立即执行'))!.trigger('click')
+        await wrapper
+          .findAll('button')
+          .find((btn) => btn.text().includes('立即执行'))!
+          .trigger('click')
         await flushPromises()
 
         // First poll fires at 3s: the prior scheduled row must NOT be matched,
@@ -680,10 +765,17 @@ describe('TasksView', () => {
         const wrapper = mountTasksView()
         await flushPromises()
 
-        await wrapper.findAll('button').find((btn) => btn.text().includes('立即执行'))!.trigger('click')
+        await wrapper
+          .findAll('button')
+          .find((btn) => btn.text().includes('立即执行'))!
+          .trigger('click')
         await flushPromises()
 
-        await wrapper.findAll('button').find((btn) => btn.text().includes('删除'))!.trigger('click')
+        await wrapper
+          .findAll('button')
+          .find((btn) => btn.text().includes('删除'))!
+          .trigger('click')
+        wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
         await flushPromises()
 
         const callsAfterDelete = taskApis.getCronJobHistory.mock.calls.length
@@ -702,8 +794,6 @@ describe('TasksView', () => {
   })
 
   it('does not start a second delete request while the first one is still running', async () => {
-    vi.stubGlobal('confirm', vi.fn(() => true))
-
     let resolveDelete!: () => void
     taskApis.deleteCronJob.mockImplementationOnce(
       () =>
@@ -719,6 +809,7 @@ describe('TasksView', () => {
     expect(deleteBtn).toBeDefined()
 
     await deleteBtn!.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     // After first click, button is disabled — second click is a no-op
@@ -727,6 +818,5 @@ describe('TasksView', () => {
 
     resolveDelete()
     await flushPromises()
-    vi.unstubAllGlobals()
   })
 })

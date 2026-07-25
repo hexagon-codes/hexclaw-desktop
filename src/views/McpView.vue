@@ -1,8 +1,30 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Server, Wrench, Play, Loader2, CircleCheck, CircleX, Plus, Trash2, X, Download, RefreshCw } from 'lucide-vue-next'
-import { getMcpServers, getMcpTools, callMcpTool, getMcpServerStatus, addMcpServer, removeMcpServer, restartMcpServer, getMcpMarketplace, type McpMarketplaceEntry } from '@/api/mcp'
+import {
+  Server,
+  Wrench,
+  Play,
+  Loader2,
+  CircleCheck,
+  CircleX,
+  Plus,
+  Trash2,
+  X,
+  Download,
+  RefreshCw,
+} from 'lucide-vue-next'
+import {
+  getMcpServers,
+  getMcpTools,
+  callMcpTool,
+  getMcpServerStatus,
+  addMcpServer,
+  removeMcpServer,
+  restartMcpServer,
+  getMcpMarketplace,
+  type McpMarketplaceEntry,
+} from '@/api/mcp'
 import { useToast } from '@/composables/useToast'
 import UnderlineTabs from '@/components/common/UnderlineTabs.vue'
 import { installFromHub } from '@/api/skills'
@@ -11,14 +33,18 @@ import type { McpTool } from '@/types'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { t } = useI18n()
 
-const props = withDefaults(defineProps<{
-  embeddedSearch?: string
-}>(), {
-  embeddedSearch: undefined,
-})
+const props = withDefaults(
+  defineProps<{
+    embeddedSearch?: string
+  }>(),
+  {
+    embeddedSearch: undefined,
+  },
+)
 const emit = defineEmits<{
   'search-context-change': [context: 'mcp-servers' | 'mcp-tools' | 'mcp-marketplace']
 }>()
@@ -45,12 +71,17 @@ const mcpSubTabs = computed(() => [
   { key: 'tools', label: t('mcp.tools'), count: tools.value.length },
   // 市场计数 = 已加载的市场条目数（懒加载，未进入市场 tab 前为 0，0 时 UnderlineTabs 自动隐藏，
   // 与 Skills 市场 tab 一致）。
-  { key: 'marketplace', label: t('mcp.marketplace', 'Marketplace'), count: marketplaceItems.value.length },
+  {
+    key: 'marketplace',
+    label: t('mcp.marketplace', 'Marketplace'),
+    count: marketplaceItems.value.length,
+  },
 ])
 function onMcpTabChange(key: string) {
   activeTab.value = key as 'servers' | 'tools' | 'marketplace'
   // 市场已在 onMounted 预读（tab 标签即显总条数）；仅在尚未加载时才补拉，避免重复请求。
-  if (key === 'marketplace' && marketplaceItems.value.length === 0 && !marketplaceLoading.value) loadMarketplace()
+  if (key === 'marketplace' && marketplaceItems.value.length === 0 && !marketplaceLoading.value)
+    loadMarketplace()
 }
 
 // ─── 市场分类 pill（精选 pill → hub 分类集合 的展示映射；统一渲染后端 hub 市场，客户端过滤）──
@@ -63,7 +94,11 @@ interface McpPill {
 const MCP_PILLS: McpPill[] = [
   { key: 'all', label: t('mcp.cat.all', '全部'), cats: null },
   { key: 'finance', label: t('mcp.cat.finance', '金融'), cats: ['finance'] },
-  { key: 'dev', label: t('mcp.cat.dev', '开发'), cats: ['development', 'system', 'devops', 'cloud', 'monitoring'] },
+  {
+    key: 'dev',
+    label: t('mcp.cat.dev', '开发'),
+    cats: ['development', 'system', 'devops', 'cloud', 'monitoring'],
+  },
   { key: 'data', label: t('mcp.cat.data', '数据'), cats: ['database', 'memory', 'reasoning'] },
   { key: 'search', label: t('mcp.cat.search', '搜索'), cats: ['search', 'web'] },
   { key: 'browser', label: t('mcp.cat.browser', '浏览器'), cats: ['automation'] },
@@ -77,7 +112,9 @@ const MCP_PILLS: McpPill[] = [
 const marketplaceCategory = ref<string>('all')
 
 // 选中 pill 命中的 hub 分类集合（null=全部）
-const activeMcpCats = computed(() => MCP_PILLS.find((p) => p.key === marketplaceCategory.value)?.cats ?? null)
+const activeMcpCats = computed(
+  () => MCP_PILLS.find((p) => p.key === marketplaceCategory.value)?.cats ?? null,
+)
 
 // 统一后的市场列表：原硬编码"推荐区"已删除，直接按 pill 分类 + 搜索词客户端过滤后端 hub 列表
 const filteredMarketplace = computed(() => {
@@ -120,8 +157,7 @@ async function loadMarketplace(opts?: { silent?: boolean }) {
     console.error('Failed to load MCP marketplace:', e)
     if (!silent) errorMsg.value = e instanceof Error ? e.message : 'Failed to load marketplace'
     marketplaceItems.value = []
-  }
-  finally {
+  } finally {
     if (requestGen === marketplaceRequestGen) {
       marketplaceLoading.value = false
     }
@@ -138,8 +174,10 @@ async function installFromMarketplace(entry: McpMarketplaceEntry) {
     if (entry.command?.trim()) {
       let args = entry.args || []
       // filesystem server 需要目录参数，动态追加用户 home 目录（兼容 Win/Linux/macOS）
-      if (args.some(a => a.includes('server-filesystem'))) {
-        const hasPath = args.some(a => a.startsWith('/') || a.startsWith('~') || /^[A-Z]:\\/i.test(a))
+      if (args.some((a) => a.includes('server-filesystem'))) {
+        const hasPath = args.some(
+          (a) => a.startsWith('/') || a.startsWith('~') || /^[A-Z]:\\/i.test(a),
+        )
         if (!hasPath) {
           const home = await resolveUserHome()
           if (home) args = [...args, home]
@@ -150,8 +188,9 @@ async function installFromMarketplace(entry: McpMarketplaceEntry) {
       await installFromHub(entry.name)
     }
     await loadAll()
-  } catch (e) { errorMsg.value = e instanceof Error ? e.message : 'Install failed' }
-  finally {
+  } catch (e) {
+    errorMsg.value = e instanceof Error ? e.message : 'Install failed'
+  } finally {
     const nextInstalling = new Set(installingServers.value)
     nextInstalling.delete(entry.name)
     installingServers.value = nextInstalling
@@ -317,7 +356,9 @@ async function executeTest(toolName: string) {
   }
 }
 
-function getSchemaProperties(tool: McpTool): Array<{ key: string; type: string; description: string; required: boolean }> {
+function getSchemaProperties(
+  tool: McpTool,
+): Array<{ key: string; type: string; description: string; required: boolean }> {
   if (!tool.input_schema) return []
   const schema = tool.input_schema as Record<string, unknown>
   const props = schema.properties as Record<string, Record<string, unknown>> | undefined
@@ -350,6 +391,7 @@ const transportOptions = computed(() => [
 const newServerEndpoint = ref('')
 const addingServer = ref(false)
 const removingServers = ref<Set<string>>(new Set())
+const pendingRemoveServer = ref<string | null>(null)
 // M3-20260710：单服务器重启（stdio 进程僵死/外部依赖变更后手动拉起）
 const toast = useToast()
 const restartingServers = ref<Set<string>>(new Set())
@@ -418,16 +460,18 @@ async function handleAddServer() {
   }
 }
 
-async function handleRemoveServer(name: string) {
+async function confirmRemoveServer() {
+  const name = pendingRemoveServer.value
+  if (!name) return
   if (removingServers.value.has(name)) return
-  if (!confirm(t('mcpManage.removeConfirm'))) return
+  pendingRemoveServer.value = null
   const nextRemoving = new Set(removingServers.value)
   nextRemoving.add(name)
   removingServers.value = nextRemoving
   errorMsg.value = ''
   try {
     await removeMcpServer(name)
-    servers.value = servers.value.filter(s => s !== name)
+    servers.value = servers.value.filter((s) => s !== name)
     delete serverStatuses.value[name]
     await loadAll()
   } catch (e) {
@@ -454,12 +498,11 @@ defineExpose({ openAddServer, switchToMarketplace })
 
 <template>
   <div class="h-full flex flex-col overflow-hidden">
-
     <!-- 错误提示 -->
     <div
       v-if="errorMsg"
       class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
-      style="background: #ef444420; color: #ef4444;"
+      style="background: #ef444420; color: #ef4444"
     >
       <span>{{ errorMsg }}</span>
       <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
@@ -497,12 +540,23 @@ defineExpose({ openAddServer, switchToMarketplace })
             <div
               class="w-2.5 h-2.5 rounded-full flex-shrink-0"
               :style="{
-                background: getServerStatus(name) === 'connected' ? '#10b981' : getServerStatus(name) === 'error' ? '#ef4444' : '#6b7280',
+                background:
+                  getServerStatus(name) === 'connected'
+                    ? '#10b981'
+                    : getServerStatus(name) === 'error'
+                      ? '#ef4444'
+                      : '#6b7280',
               }"
-              :title="getServerStatus(name) === 'connected' ? t('mcp.serverConnected') : t('mcp.serverDisconnected')"
+              :title="
+                getServerStatus(name) === 'connected'
+                  ? t('mcp.serverConnected')
+                  : t('mcp.serverDisconnected')
+              "
             />
             <Server :size="16" :style="{ color: 'var(--hc-accent)' }" />
-            <span class="text-sm font-medium flex-1" :style="{ color: 'var(--hc-text-primary)' }">{{ name }}</span>
+            <span class="text-sm font-medium flex-1" :style="{ color: 'var(--hc-text-primary)' }">{{
+              name
+            }}</span>
             <button
               class="p-1.5 rounded-md hover:bg-white/5 transition-colors flex-shrink-0"
               data-testid="mcp-server-restart"
@@ -519,7 +573,7 @@ defineExpose({ openAddServer, switchToMarketplace })
               :disabled="removingServers.has(name)"
               :style="{ color: 'var(--hc-text-muted)' }"
               :title="t('mcpManage.removeServer')"
-              @click="handleRemoveServer(name)"
+              @click="pendingRemoveServer = name"
             >
               <Trash2 :size="14" />
             </button>
@@ -530,7 +584,11 @@ defineExpose({ openAddServer, switchToMarketplace })
                 color: getServerStatus(name) === 'connected' ? '#10b981' : '#6b7280',
               }"
             >
-              {{ getServerStatus(name) === 'connected' ? t('mcp.serverConnected') : t('mcp.serverDisconnected') }}
+              {{
+                getServerStatus(name) === 'connected'
+                  ? t('mcp.serverConnected')
+                  : t('mcp.serverDisconnected')
+              }}
             </span>
           </div>
         </div>
@@ -558,8 +616,14 @@ defineExpose({ openAddServer, switchToMarketplace })
             >
               <Wrench :size="14" :style="{ color: 'var(--hc-accent)' }" />
               <div class="flex-1 min-w-0">
-                <span class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ tool.name }}</span>
-                <p v-if="tool.description" class="text-xs mt-0.5 truncate" :style="{ color: 'var(--hc-text-muted)' }">
+                <span class="text-sm font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{
+                  tool.name
+                }}</span>
+                <p
+                  v-if="tool.description"
+                  class="text-xs mt-0.5 truncate"
+                  :style="{ color: 'var(--hc-text-muted)' }"
+                >
                   {{ tool.description }}
                 </p>
               </div>
@@ -567,7 +631,8 @@ defineExpose({ openAddServer, switchToMarketplace })
               <button
                 class="flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors hover:bg-white/10"
                 :style="{
-                  color: testingTool === tool.name ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
+                  color:
+                    testingTool === tool.name ? 'var(--hc-accent)' : 'var(--hc-text-secondary)',
                   background: testingTool === tool.name ? 'var(--hc-accent-subtle)' : 'transparent',
                 }"
                 @click.stop="openTestForm(tool.name)"
@@ -586,7 +651,11 @@ defineExpose({ openAddServer, switchToMarketplace })
               class="px-4 pb-4 border-t"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
-              <pre class="text-xs mt-3 p-3 rounded-lg overflow-x-auto" :style="{ background: 'var(--hc-bg-main)', color: 'var(--hc-text-secondary)' }">{{ JSON.stringify(tool.input_schema, null, 2) }}</pre>
+              <pre
+                class="text-xs mt-3 p-3 rounded-lg overflow-x-auto"
+                :style="{ background: 'var(--hc-bg-main)', color: 'var(--hc-text-secondary)' }"
+                >{{ JSON.stringify(tool.input_schema, null, 2) }}</pre
+              >
             </div>
 
             <!-- Test form -->
@@ -606,31 +675,50 @@ defineExpose({ openAddServer, switchToMarketplace })
                   :key="prop.key"
                   class="flex flex-col gap-1"
                 >
-                  <label class="text-[10px] font-medium flex items-center gap-1" :style="{ color: 'var(--hc-text-muted)' }">
+                  <label
+                    class="text-[10px] font-medium flex items-center gap-1"
+                    :style="{ color: 'var(--hc-text-muted)' }"
+                  >
                     {{ prop.key }}
-                    <span class="text-[9px] px-1 rounded" :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }">{{ prop.type }}</span>
+                    <span
+                      class="text-[9px] px-1 rounded"
+                      :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
+                      >{{ prop.type }}</span
+                    >
                     <span v-if="prop.required" class="text-red-400">*</span>
                   </label>
                   <HcClearableField>
                     <input
-                    v-model="testParams[prop.key]"
-                    type="text"
-                    class="w-full px-2.5 py-1.5 rounded-lg text-xs border outline-none transition-colors"
-                    :style="{ background: 'var(--hc-bg-main)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-                    :placeholder="prop.description || prop.key"
-                  />
+                      v-model="testParams[prop.key]"
+                      type="text"
+                      class="w-full px-2.5 py-1.5 rounded-lg text-xs border outline-none transition-colors"
+                      :style="{
+                        background: 'var(--hc-bg-main)',
+                        borderColor: 'var(--hc-border)',
+                        color: 'var(--hc-text-primary)',
+                      }"
+                      :placeholder="prop.description || prop.key"
+                    />
                   </HcClearableField>
                 </div>
 
                 <!-- If no schema properties, show generic key-value -->
-                <div v-if="getSchemaProperties(tool).length === 0" class="text-xs" :style="{ color: 'var(--hc-text-muted)' }">
+                <div
+                  v-if="getSchemaProperties(tool).length === 0"
+                  class="text-xs"
+                  :style="{ color: 'var(--hc-text-muted)' }"
+                >
                   {{ t('mcp.noParams') }}
                 </div>
 
                 <!-- Execute button -->
                 <button
                   class="flex items-center justify-center gap-1.5 w-full px-3 py-1.5 rounded-lg text-xs font-medium text-white transition-colors"
-                  :style="{ background: isTestRunning(tool.name) ? 'var(--hc-text-muted)' : 'var(--hc-accent)' }"
+                  :style="{
+                    background: isTestRunning(tool.name)
+                      ? 'var(--hc-text-muted)'
+                      : 'var(--hc-accent)',
+                  }"
                   :disabled="isTestRunning(tool.name)"
                   @click="executeTest(tool.name)"
                 >
@@ -641,19 +729,39 @@ defineExpose({ openAddServer, switchToMarketplace })
 
                 <!-- Test result -->
                 <div v-if="testResult" class="mt-2">
-                  <div v-if="testResult.error" class="rounded-lg p-3" style="background: #ef444410;">
+                  <div v-if="testResult.error" class="rounded-lg p-3" style="background: #ef444410">
                     <div class="flex items-center gap-1.5 mb-1">
-                      <CircleX :size="12" style="color: #ef4444;" />
-                      <span class="text-xs font-medium" style="color: #ef4444;">{{ t('mcp.testError') }}</span>
+                      <CircleX :size="12" style="color: #ef4444" />
+                      <span class="text-xs font-medium" style="color: #ef4444">{{
+                        t('mcp.testError')
+                      }}</span>
                     </div>
-                    <pre class="text-xs whitespace-pre-wrap" style="color: #ef4444;">{{ testResult.error }}</pre>
+                    <pre class="text-xs whitespace-pre-wrap" style="color: #ef4444">{{
+                      testResult.error
+                    }}</pre>
                   </div>
-                  <div v-if="testResult.output !== undefined" class="rounded-lg p-3" :style="{ background: 'var(--hc-bg-main)' }">
+                  <div
+                    v-if="testResult.output !== undefined"
+                    class="rounded-lg p-3"
+                    :style="{ background: 'var(--hc-bg-main)' }"
+                  >
                     <div class="flex items-center gap-1.5 mb-1">
-                      <CircleCheck :size="12" style="color: #10b981;" />
-                      <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-primary)' }">{{ t('mcp.testResult') }}</span>
+                      <CircleCheck :size="12" style="color: #10b981" />
+                      <span
+                        class="text-xs font-medium"
+                        :style="{ color: 'var(--hc-text-primary)' }"
+                        >{{ t('mcp.testResult') }}</span
+                      >
                     </div>
-                    <pre class="text-xs whitespace-pre-wrap overflow-x-auto" :style="{ color: 'var(--hc-text-secondary)' }">{{ typeof testResult.output === 'string' ? testResult.output : JSON.stringify(testResult.output, null, 2) }}</pre>
+                    <pre
+                      class="text-xs whitespace-pre-wrap overflow-x-auto"
+                      :style="{ color: 'var(--hc-text-secondary)' }"
+                      >{{
+                        typeof testResult.output === 'string'
+                          ? testResult.output
+                          : JSON.stringify(testResult.output, null, 2)
+                      }}</pre
+                    >
                   </div>
                 </div>
               </div>
@@ -672,7 +780,8 @@ defineExpose({ openAddServer, switchToMarketplace })
               :key="pill.key"
               class="px-3 py-1 rounded-full text-xs font-medium transition-colors"
               :style="{
-                background: marketplaceCategory === pill.key ? 'var(--hc-accent)' : 'var(--hc-bg-hover)',
+                background:
+                  marketplaceCategory === pill.key ? 'var(--hc-accent)' : 'var(--hc-bg-hover)',
                 color: marketplaceCategory === pill.key ? '#fff' : 'var(--hc-text-secondary)',
               }"
               @click="marketplaceCategory = pill.key"
@@ -684,7 +793,11 @@ defineExpose({ openAddServer, switchToMarketplace })
           <div v-if="marketplaceLoading" class="text-center py-8">
             <Loader2 :size="20" class="animate-spin mx-auto" style="color: var(--hc-accent)" />
           </div>
-          <div v-else-if="filteredMarketplace.length === 0" class="text-center py-8" style="color: var(--hc-text-secondary)">
+          <div
+            v-else-if="filteredMarketplace.length === 0"
+            class="text-center py-8"
+            style="color: var(--hc-text-secondary)"
+          >
             {{ t('mcp.noMarketplaceResults', 'No MCP servers found. Try a different search.') }}
           </div>
           <div v-else class="hc-capability-market-grid">
@@ -694,7 +807,9 @@ defineExpose({ openAddServer, switchToMarketplace })
                   <Server :size="16" />
                 </span>
                 <div class="hc-mcp-market-card__identity">
-                  <strong :title="item.display_name || item.name">{{ item.display_name || item.name }}</strong>
+                  <strong :title="item.display_name || item.name">{{
+                    item.display_name || item.name
+                  }}</strong>
                   <span v-if="item.category">{{ item.category }}</span>
                 </div>
               </div>
@@ -710,7 +825,11 @@ defineExpose({ openAddServer, switchToMarketplace })
               >
                 <Loader2 v-if="installingServers.has(item.name)" :size="12" class="animate-spin" />
                 <Download v-else :size="12" />
-                {{ servers.includes(item.name) ? t('mcp.installed', 'Installed') : t('mcp.install', 'Install') }}
+                {{
+                  servers.includes(item.name)
+                    ? t('mcp.installed', 'Installed')
+                    : t('mcp.install', 'Install')
+                }}
               </button>
             </div>
           </div>
@@ -720,53 +839,146 @@ defineExpose({ openAddServer, switchToMarketplace })
 
     <!-- 添加 MCP 服务器对话框 -->
     <Teleport to="body">
-      <div v-if="showAddServer" class="fixed inset-0 z-50 flex items-center justify-center" style="background: rgba(0,0,0,0.45); backdrop-filter: blur(4px);" @click.self="closeAddServer">
-        <div class="w-full max-w-md rounded-xl border shadow-lg overflow-hidden" :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }">
-          <div class="flex items-center justify-between px-5 py-4 border-b" :style="{ borderColor: 'var(--hc-border)' }">
-            <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">{{ t('mcpManage.addServerTitle') }}</h2>
-            <button class="p-1 rounded-md hover:bg-white/5" :style="{ color: 'var(--hc-text-muted)' }" @click="closeAddServer">
+      <div
+        v-if="showAddServer"
+        class="fixed inset-0 z-50 flex items-center justify-center"
+        style="background: rgba(0, 0, 0, 0.45); backdrop-filter: blur(4px)"
+        @click.self="closeAddServer"
+      >
+        <div
+          class="w-full max-w-md rounded-xl border shadow-lg overflow-hidden"
+          :style="{ background: 'var(--hc-bg-elevated)', borderColor: 'var(--hc-border)' }"
+        >
+          <div
+            class="flex items-center justify-between px-5 py-4 border-b"
+            :style="{ borderColor: 'var(--hc-border)' }"
+          >
+            <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">
+              {{ t('mcpManage.addServerTitle') }}
+            </h2>
+            <button
+              class="p-1 rounded-md hover:bg-white/5"
+              :style="{ color: 'var(--hc-text-muted)' }"
+              @click="closeAddServer"
+            >
               <X :size="17" />
             </button>
           </div>
           <div class="p-5 flex flex-col gap-3.5">
             <div class="flex flex-col gap-1.5">
-              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverName') }}</label>
+              <label
+                class="text-[13px] font-medium"
+                :style="{ color: 'var(--hc-text-secondary)' }"
+                >{{ t('mcpManage.serverName') }}</label
+              >
               <HcClearableField>
-                <input v-model="newServerName" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverNamePlaceholder')" />
+                <input
+                  v-model="newServerName"
+                  type="text"
+                  class="rounded-lg border px-3 py-2 text-sm outline-none"
+                  :style="{
+                    background: 'var(--hc-bg-input)',
+                    borderColor: 'var(--hc-border)',
+                    color: 'var(--hc-text-primary)',
+                  }"
+                  :placeholder="t('mcpManage.serverNamePlaceholder')"
+                />
               </HcClearableField>
             </div>
             <div class="flex flex-col gap-1.5">
-              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.transport') }}</label>
+              <label
+                class="text-[13px] font-medium"
+                :style="{ color: 'var(--hc-text-secondary)' }"
+                >{{ t('mcpManage.transport') }}</label
+              >
               <HcSelect
                 :model-value="newServerTransport"
                 :options="transportOptions"
-                @update:model-value="(v) => (newServerTransport = v as 'stdio' | 'sse' | 'streamable')"
+                @update:model-value="
+                  (v) => (newServerTransport = v as 'stdio' | 'sse' | 'streamable')
+                "
               />
             </div>
             <template v-if="newServerTransport === 'stdio'">
               <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverCommand') }}</label>
+                <label
+                  class="text-[13px] font-medium"
+                  :style="{ color: 'var(--hc-text-secondary)' }"
+                  >{{ t('mcpManage.serverCommand') }}</label
+                >
                 <HcClearableField>
-                  <input v-model="newServerCommand" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverCommandPlaceholder')" />
+                  <input
+                    v-model="newServerCommand"
+                    type="text"
+                    class="rounded-lg border px-3 py-2 text-sm outline-none"
+                    :style="{
+                      background: 'var(--hc-bg-input)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-primary)',
+                    }"
+                    :placeholder="t('mcpManage.serverCommandPlaceholder')"
+                  />
                 </HcClearableField>
               </div>
               <div class="flex flex-col gap-1.5">
-                <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverArgs') }}</label>
+                <label
+                  class="text-[13px] font-medium"
+                  :style="{ color: 'var(--hc-text-secondary)' }"
+                  >{{ t('mcpManage.serverArgs') }}</label
+                >
                 <HcClearableField>
-                  <input v-model="newServerArgs" type="text" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverArgsPlaceholder')" />
+                  <input
+                    v-model="newServerArgs"
+                    type="text"
+                    class="rounded-lg border px-3 py-2 text-sm outline-none"
+                    :style="{
+                      background: 'var(--hc-bg-input)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-primary)',
+                    }"
+                    :placeholder="t('mcpManage.serverArgsPlaceholder')"
+                  />
                 </HcClearableField>
               </div>
             </template>
             <div v-else class="flex flex-col gap-1.5">
-              <label class="text-[13px] font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('mcpManage.serverEndpoint') }}</label>
+              <label
+                class="text-[13px] font-medium"
+                :style="{ color: 'var(--hc-text-secondary)' }"
+                >{{ t('mcpManage.serverEndpoint') }}</label
+              >
               <HcClearableField>
-                <input v-model="newServerEndpoint" type="url" class="rounded-lg border px-3 py-2 text-sm outline-none" :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }" :placeholder="t('mcpManage.serverEndpointPlaceholder')" />
+                <input
+                  v-model="newServerEndpoint"
+                  type="url"
+                  class="rounded-lg border px-3 py-2 text-sm outline-none"
+                  :style="{
+                    background: 'var(--hc-bg-input)',
+                    borderColor: 'var(--hc-border)',
+                    color: 'var(--hc-text-primary)',
+                  }"
+                  :placeholder="t('mcpManage.serverEndpointPlaceholder')"
+                />
               </HcClearableField>
             </div>
           </div>
-          <div class="flex items-center justify-end gap-2 px-5 py-3.5 border-t" :style="{ borderColor: 'var(--hc-border)' }">
-            <button class="px-3 py-1.5 rounded-lg text-sm font-medium" :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }" @click="closeAddServer">{{ t('common.cancel') }}</button>
-            <button class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white" :style="{ background: 'var(--hc-accent)', opacity: !addServerValid ? 0.4 : 1 }" :disabled="!addServerValid || addingServer" @click="handleAddServer">
+          <div
+            class="flex items-center justify-end gap-2 px-5 py-3.5 border-t"
+            :style="{ borderColor: 'var(--hc-border)' }"
+          >
+            <button
+              class="px-3 py-1.5 rounded-lg text-sm font-medium"
+              :style="{ color: 'var(--hc-text-secondary)', background: 'var(--hc-bg-hover)' }"
+              @click="closeAddServer"
+            >
+              {{ t('common.cancel') }}
+            </button>
+            <button
+              class="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
+              :style="{ background: 'var(--hc-accent)', opacity: !addServerValid ? 0.4 : 1 }"
+              :disabled="!addServerValid || addingServer"
+              @click="handleAddServer"
+            >
               <Loader2 v-if="addingServer" :size="14" class="animate-spin" />
               <Plus v-else :size="14" />
               {{ t('common.create') }}
@@ -775,6 +987,17 @@ defineExpose({ openAddServer, switchToMarketplace })
         </div>
       </div>
     </Teleport>
+    <ConfirmDialog
+      :open="!!pendingRemoveServer"
+      :title="t('mcpManage.removeConfirmTitle', '移除 MCP 服务器？')"
+      :message="t('mcpManage.removeConfirm')"
+      :confirm-text="t('common.delete')"
+      :cancel-text="t('common.cancel')"
+      :confirmation-key="pendingRemoveServer"
+      danger
+      @confirm="confirmRemoveServer"
+      @cancel="pendingRemoveServer = null"
+    />
   </div>
 </template>
 

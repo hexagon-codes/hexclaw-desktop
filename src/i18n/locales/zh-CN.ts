@@ -743,6 +743,7 @@ export default {
     presetNoon: '每天中午 12 点',
     presetEvening: '每天晚上 6 点',
     presetDaily: '每天',
+    deleteConfirmTitle: '删除任务？',
     confirmDelete: '确定删除任务「{name}」吗？',
   },
 
@@ -1025,6 +1026,7 @@ export default {
     cmdHint: '命令召唤时，$ARGUMENTS 会被替换为用户填入的文本（纯文本替换）。',
     new: '新建 Prompt',
     editPrompt: '编辑 Prompt',
+    deleteConfirmTitle: '删除 Prompt？',
     deleteConfirm: '确定删除该 Prompt？此操作不可恢复。',
     empty: '暂无 Prompt，点击右上角新建。',
     enabled: '启用',
@@ -2669,6 +2671,7 @@ export default {
     restartServer: '重启',
     restarted: '已重启 {name}',
     restartFailed: '重启失败',
+    removeConfirmTitle: '移除 MCP 服务器？',
     removeConfirm: '确定移除此 MCP 服务器？',
     serverName: '服务器名称',
     serverNamePlaceholder: '输入服务器名称',

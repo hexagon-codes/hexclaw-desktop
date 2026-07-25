@@ -7,7 +7,7 @@
  * FIXED issues (assert correct state):
  *   1. ChatView loadSessions race condition — await added
  *   2. TeamView i18n destructuring — { t } = useI18n()
- *   3. TasksView delete confirmation — confirm(t('tasks.confirmDelete'...))
+ *   3. TasksView delete confirmation — shared ConfirmDialog + 5s destructive cooldown
  *   4. KnowledgeView upload index corruption — uses entry.progress instead of uploadingFiles.value[idx]
  *   5. IMChannelsView deleteIMInstance — sidecar by-id delete
  *
@@ -60,23 +60,25 @@ describe('Issue 1: ChatView loadSessions must be awaited', () => {
 // Issue 3 (FIXED): TasksView delete confirmation
 // ════════════════════════════════════════════════════════════
 
-describe('Issue 3: TasksView delete confirmation with i18n', () => {
+describe('Issue 3: TasksView uses the shared destructive confirmation flow', () => {
   const src = readSrc('views/TasksView.vue')
 
-  it('handleDelete calls confirm() with t("tasks.confirmDelete")', () => {
-    const handleDeleteBlock = src.slice(
-      src.indexOf('async function handleDelete'),
-      src.indexOf('async function handleDelete') + 400,
-    )
-    expect(handleDeleteBlock).toMatch(/confirm\s*\(\s*t\(\s*['"]tasks\.confirmDelete['"]/)
+  it('opens ConfirmDialog for the selected task instead of using native confirm()', () => {
+    expect(src).toContain("import ConfirmDialog from '@/components/common/ConfirmDialog.vue'")
+    expect(src).toContain('const pendingDeleteJob = ref<CronJob | null>(null)')
+    expect(src).toContain('@click="pendingDeleteJob = job"')
+    expect(src).toContain(':open="!!pendingDeleteJob"')
+    expect(src).toContain('@confirm="confirmDeleteJob"')
+    expect(src).not.toMatch(/\b(?:window\.)?confirm\s*\(/)
   })
 
-  it('confirm() is called before deleteCronJob', () => {
-    const handleDeleteStart = src.indexOf('async function handleDelete')
-    const confirmIdx = src.indexOf('confirm(t(', handleDeleteStart)
-    const deleteIdx = src.indexOf('deleteCronJob', handleDeleteStart)
-    expect(confirmIdx).toBeGreaterThan(0)
-    expect(deleteIdx).toBeGreaterThan(confirmIdx)
+  it('only confirmDeleteJob performs the backend deletion', () => {
+    const fnStart = src.indexOf('async function confirmDeleteJob')
+    const fnEnd = src.indexOf('\n}', fnStart + 50)
+    const fnBody = src.slice(fnStart, fnEnd + 2)
+    expect(fnStart).toBeGreaterThan(0)
+    expect(fnBody).toContain('pendingDeleteJob.value')
+    expect(fnBody).toContain('await deleteCronJob(job.id)')
   })
 
   it('en.ts has tasks.confirmDelete key', () => {
@@ -169,18 +171,18 @@ describe('Issue 5: deleteIMInstance deletes sidecar record by id', () => {
 
 // Issue 7 已修复（2026-06-22）：原仅 console.error 静默，现失败 surface 到 toast.error。
 // 详见 audit-silent-failure-closure-20260622.test.ts（SF-8/SF-9）。
-describe('Issue 7 (RESOLVED): TasksView handleDelete/handlePauseResume 失败已 surface 到 toast', () => {
+describe('Issue 7 (RESOLVED): TasksView confirmDeleteJob/handlePauseResume 失败已 surface 到 toast', () => {
   const src = readSrc('views/TasksView.vue')
 
-  it('handleDelete error handler 仍保留 console.error 开发日志', () => {
-    const fnStart = src.indexOf('async function handleDelete')
+  it('confirmDeleteJob error handler 仍保留 console.error 开发日志', () => {
+    const fnStart = src.indexOf('async function confirmDeleteJob')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
     expect(fnBody).toContain('console.error')
   })
 
-  it('handleDelete 失败现 surface 到 toast.error（Issue 7 已修）', () => {
-    const fnStart = src.indexOf('async function handleDelete')
+  it('confirmDeleteJob 失败现 surface 到 toast.error（Issue 7 已修）', () => {
+    const fnStart = src.indexOf('async function confirmDeleteJob')
     const fnEnd = src.indexOf('\n}', fnStart + 50)
     const fnBody = src.slice(fnStart, fnEnd + 2)
     expect(fnBody).toContain('toast.error')

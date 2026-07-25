@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
 // ── mock 数据连接器 store（模块级单例）：用 vi.hoisted 构造可在 mock 工厂里共享的假实现 ──
@@ -147,7 +148,7 @@ describe('BUG-20260621 connector-delete: 数据连接器删除', () => {
     // 点确认（danger 主按钮）。
     const confirmBtn = wrapper.find('.hc-dialog__btn--danger')
     expect(confirmBtn.exists()).toBe(true)
-    await confirmBtn.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     // removeInstance 被以实例 id 调用一次。

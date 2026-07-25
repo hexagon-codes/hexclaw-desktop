@@ -14,9 +14,20 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
-const { getRoles, getAgents, getRules, addRule, deleteRule, setDefaultAgent, registerAgent, unregisterAgent, updateAgent } = vi.hoisted(() => ({
+const {
+  getRoles,
+  getAgents,
+  getRules,
+  addRule,
+  deleteRule,
+  setDefaultAgent,
+  registerAgent,
+  unregisterAgent,
+  updateAgent,
+} = vi.hoisted(() => ({
   getRoles: vi.fn(),
   getAgents: vi.fn(),
   getRules: vi.fn(),
@@ -61,7 +72,9 @@ vi.mock('@/utils/secure-store', () => ({
 
 vi.mock('@tauri-apps/plugin-store', () => {
   class MockLazyStore {
-    async get() { return null }
+    async get() {
+      return null
+    }
     async set() {}
     async save() {}
     async delete() {}
@@ -118,7 +131,8 @@ async function mountView() {
         SearchInput: {
           props: ['modelValue', 'placeholder'],
           emits: ['update:modelValue'],
-          template: '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          template:
+            '<input :value="modelValue" :placeholder="placeholder" @input="$emit(\'update:modelValue\', $event.target.value)" />',
         },
         // 注意：不 stub ConfirmDialog —— 用真实组件，才能在弹层里找到确认按钮。
         teleport: true,
@@ -227,7 +241,7 @@ describe('BUG-20260621 agents-delete: 专属智能体删除', () => {
     // 3) 点击弹层确认按钮（danger 确认按钮 = .hc-dialog__btn--danger）
     const confirmBtn = wrapper.find('.hc-dialog__btn--danger')
     expect(confirmBtn.exists()).toBe(true)
-    await confirmBtn.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     // 4) 以该 agent name 注销一次

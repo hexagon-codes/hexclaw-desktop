@@ -21,15 +21,19 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import LoadingState from '@/components/common/LoadingState.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useSettingsStore } from '@/stores/settings'
 
 const { t } = useI18n()
 
-const props = withDefaults(defineProps<{
-  filter?: string
-}>(), {
-  filter: '',
-})
+const props = withDefaults(
+  defineProps<{
+    filter?: string
+  }>(),
+  {
+    filter: '',
+  },
+)
 
 // ── 顶栏统一搜索（IntegrationView 注入）──
 const query = computed(() => (props.filter ?? '').toLowerCase().trim())
@@ -38,15 +42,14 @@ const query = computed(() => (props.filter ?? '').toLowerCase().trim())
 const prompts = ref<Prompt[]>([])
 const loadingPrompts = ref(false)
 const editing = ref<Partial<Prompt> | null>(null) // 非空 = 正在编辑/新建
+const pendingDeletePrompt = ref<Prompt | null>(null)
 
 // 按标题 / 正文过滤 Prompt 列表
 const filteredPrompts = computed(() => {
   const q = query.value
   if (!q) return prompts.value
   return prompts.value.filter(
-    (p) =>
-      p.title.toLowerCase().includes(q) ||
-      (p.body_md ?? '').toLowerCase().includes(q),
+    (p) => p.title.toLowerCase().includes(q) || (p.body_md ?? '').toLowerCase().includes(q),
   )
 })
 
@@ -100,17 +103,21 @@ async function savePrompt() {
     editing.value = null
     await loadPrompts()
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('prompts.saveFailed', '保存失败，请重试')
+    actionError.value =
+      err instanceof Error ? err.message : t('prompts.saveFailed', '保存失败，请重试')
   }
 }
-async function removePrompt(id: string) {
-  if (!confirm(t('prompts.deleteConfirm', '确定删除该 Prompt？此操作不可恢复。'))) return
+async function confirmRemovePrompt() {
+  const target = pendingDeletePrompt.value
+  if (!target) return
+  pendingDeletePrompt.value = null
   actionError.value = ''
   try {
-    await deletePrompt(id)
+    await deletePrompt(target.id)
     await loadPrompts()
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('prompts.deleteFailed', '删除失败，请重试')
+    actionError.value =
+      err instanceof Error ? err.message : t('prompts.deleteFailed', '删除失败，请重试')
   }
 }
 async function toggleEnabled(p: Prompt) {
@@ -136,7 +143,9 @@ const promptTypeOptions = [
 ]
 const editingTypeModel = computed<string>({
   get: () => editing.value?.type ?? 'prompt',
-  set: (v) => { if (editing.value) editing.value.type = v as PromptType },
+  set: (v) => {
+    if (editing.value) editing.value.type = v as PromptType
+  },
 })
 
 // ── 建议模型：选择型字段 → 下拉（来自已启用 Provider 的可用模型 + 「不指定」默认）──
@@ -158,7 +167,9 @@ const modelOptions = computed(() => {
 })
 const editingModelModel = computed<string>({
   get: () => editing.value?.model ?? '',
-  set: (v) => { if (editing.value) editing.value.model = v },
+  set: (v) => {
+    if (editing.value) editing.value.model = v
+  },
 })
 
 const route = useRoute()
@@ -177,11 +188,16 @@ onMounted(() => {
 
 <template>
   <div class="hc-prompts">
-    <p v-if="actionError" role="alert" style="color: var(--hc-error); font-size: 12.5px; margin: 0 0 8px;">{{ actionError }}</p>
+    <p
+      v-if="actionError"
+      role="alert"
+      style="color: var(--hc-error); font-size: 12.5px; margin: 0 0 8px"
+    >
+      {{ actionError }}
+    </p>
 
     <!-- ── Prompt 库 ── -->
     <section class="hc-prompts__panel">
-
       <LoadingState v-if="loadingPrompts" />
       <EmptyState
         v-else-if="filteredPrompts.length === 0"
@@ -192,7 +208,9 @@ onMounted(() => {
         <li v-for="p in filteredPrompts" :key="p.id" class="hc-prompts__item">
           <div class="hc-prompts__item-main">
             <span class="hc-tag" :class="p.type === 'command' ? 'hc-tag--cmd' : 'hc-tag--prompt'">{{
-              p.type === 'command' ? t('prompts.typeCommand', '命令') : t('prompts.typePrompt', 'Prompt 片段')
+              p.type === 'command'
+                ? t('prompts.typeCommand', '命令')
+                : t('prompts.typePrompt', 'Prompt 片段')
             }}</span>
             <span class="hc-prompts__title">{{ p.title }}</span>
             <span v-if="p.category" class="hc-prompts__cat">{{ p.category }}</span>
@@ -203,13 +221,12 @@ onMounted(() => {
               <span>{{ p.enabled ? t('prompts.on', '已启用') : t('prompts.off', '已禁用') }}</span>
             </label>
             <button class="hc-icon-btn" @click="editPrompt(p)"><Pencil :size="15" /></button>
-            <button class="hc-icon-btn hc-icon-btn--danger" @click="removePrompt(p.id)">
+            <button class="hc-icon-btn hc-icon-btn--danger" @click="pendingDeletePrompt = p">
               <Trash2 :size="15" />
             </button>
           </div>
         </li>
       </ul>
-
     </section>
 
     <!-- 新建/编辑 Prompt 弹窗（居中，参照 AgentsView showAddAgent） -->
@@ -229,8 +246,15 @@ onMounted(() => {
               class="flex items-center justify-between px-5 py-4 border-b"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
-              <h2 class="text-[15px] font-semibold m-0" :style="{ color: 'var(--hc-text-primary)' }">
-                {{ editing.id ? t('prompts.editPrompt', '编辑 Prompt') : t('prompts.newPrompt', '新建 Prompt') }}
+              <h2
+                class="text-[15px] font-semibold m-0"
+                :style="{ color: 'var(--hc-text-primary)' }"
+              >
+                {{
+                  editing.id
+                    ? t('prompts.editPrompt', '编辑 Prompt')
+                    : t('prompts.newPrompt', '新建 Prompt')
+                }}
               </h2>
               <button
                 class="p-1 rounded-md hover:bg-white/5"
@@ -245,10 +269,10 @@ onMounted(() => {
                 <label>{{ t('prompts.fTitle', '标题') }}</label>
                 <HcClearableField>
                   <input
-                  v-model="editing.title"
-                  type="text"
-                  :placeholder="t('prompts.fTitlePh', '如：日报总结')"
-                />
+                    v-model="editing.title"
+                    type="text"
+                    :placeholder="t('prompts.fTitlePh', '如：日报总结')"
+                  />
                 </HcClearableField>
               </div>
               <div class="hc-field hc-field--row">
@@ -260,10 +284,10 @@ onMounted(() => {
                   <label>{{ t('prompts.fCategory', '分类') }}</label>
                   <HcClearableField>
                     <input
-                    v-model="editing.category"
-                    type="text"
-                    :placeholder="t('prompts.fCategoryPh', '如：写作 / 翻译 / 编程（自定义）')"
-                  />
+                      v-model="editing.category"
+                      type="text"
+                      :placeholder="t('prompts.fCategoryPh', '如：写作 / 翻译 / 编程（自定义）')"
+                    />
                   </HcClearableField>
                 </div>
               </div>
@@ -293,19 +317,19 @@ onMounted(() => {
                 </div>
                 <HcClearableField>
                   <textarea
-                  v-show="bodyTab === 'edit'"
-                  v-model="editing.body_md"
-                  rows="6"
-                  class="hc-body-edit"
-                  :placeholder="
-                    isCommand
-                      ? t(
-                          'prompts.fBodyCmdPh',
-                          '用 $ARGUMENTS 占位用户参数，如：翻译以下内容：$ARGUMENTS',
-                        )
-                      : t('prompts.fBodyPh', 'Prompt 正文（Markdown）')
-                  "
-                />
+                    v-show="bodyTab === 'edit'"
+                    v-model="editing.body_md"
+                    rows="6"
+                    class="hc-body-edit"
+                    :placeholder="
+                      isCommand
+                        ? t(
+                            'prompts.fBodyCmdPh',
+                            '用 $ARGUMENTS 占位用户参数，如：翻译以下内容：$ARGUMENTS',
+                          )
+                        : t('prompts.fBodyPh', 'Prompt 正文（Markdown）')
+                    "
+                  />
                 </HcClearableField>
                 <div v-show="bodyTab === 'preview'" class="hc-body-prev">
                   <MarkdownRenderer
@@ -318,15 +342,17 @@ onMounted(() => {
                     {{ t('prompts.previewEmpty', '（空）') }}
                   </p>
                 </div>
-                <small class="hc-prompts__hint">{{
-                  isCommand
-                    ? t(
-                        'prompts.cmdHint',
-                        'command 召唤时，$ARGUMENTS 会被替换为用户填入的文本（纯文本替换）。',
-                      )
-                    : t('prompts.mdHint', '支持 Markdown。')
-                }}
-                  {{ t('prompts.previewNote', '预览仅供阅读，模型看到的是上方原文。') }}</small>
+                <small class="hc-prompts__hint"
+                  >{{
+                    isCommand
+                      ? t(
+                          'prompts.cmdHint',
+                          'command 召唤时，$ARGUMENTS 会被替换为用户填入的文本（纯文本替换）。',
+                        )
+                      : t('prompts.mdHint', '支持 Markdown。')
+                  }}
+                  {{ t('prompts.previewNote', '预览仅供阅读，模型看到的是上方原文。') }}</small
+                >
               </div>
               <div class="hc-field hc-field--row">
                 <div>
@@ -341,22 +367,25 @@ onMounted(() => {
                   <label>{{ t('prompts.fScope', '工具范围（逗号分隔，可选）') }}</label>
                   <HcClearableField>
                     <input
-                    v-model="editing.tool_scope"
-                    type="text"
-                    :placeholder="t('prompts.fScopePh', '如：web_search, code_exec')"
-                  />
+                      v-model="editing.tool_scope"
+                      type="text"
+                      :placeholder="t('prompts.fScopePh', '如：web_search, code_exec')"
+                    />
                   </HcClearableField>
                 </div>
               </div>
               <label class="hc-switch">
-                <input v-model="editing.enabled" type="checkbox" /> {{ t('prompts.enabled', '启用') }}
+                <input v-model="editing.enabled" type="checkbox" />
+                {{ t('prompts.enabled', '启用') }}
               </label>
             </div>
             <div
               class="hc-prompt-modal__footer flex items-center justify-end gap-2 px-5 py-3.5 border-t"
               :style="{ borderColor: 'var(--hc-border)' }"
             >
-              <button class="hc-btn" @click="editing = null">{{ t('common.cancel', '取消') }}</button>
+              <button class="hc-btn" @click="editing = null">
+                {{ t('common.cancel', '取消') }}
+              </button>
               <button
                 class="hc-btn hc-btn--primary"
                 :disabled="!editing.title?.trim()"
@@ -370,6 +399,17 @@ onMounted(() => {
       </Transition>
     </Teleport>
 
+    <ConfirmDialog
+      :open="!!pendingDeletePrompt"
+      :title="t('prompts.deleteConfirmTitle', '删除 Prompt？')"
+      :message="t('prompts.deleteConfirm', '确定删除该 Prompt？此操作不可恢复。')"
+      :confirm-text="t('common.delete', '删除')"
+      :cancel-text="t('common.cancel', '取消')"
+      :confirmation-key="pendingDeletePrompt?.id"
+      danger
+      @confirm="confirmRemovePrompt"
+      @cancel="pendingDeletePrompt = null"
+    />
   </div>
 </template>
 

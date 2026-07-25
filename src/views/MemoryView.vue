@@ -1,7 +1,19 @@
 <script setup lang="ts">
 import { onMounted, ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Archive, ArchiveRestore, Brain, Search, Save, Pencil, Trash2, X, Check, Pin, PinOff } from 'lucide-vue-next'
+import {
+  Archive,
+  ArchiveRestore,
+  Brain,
+  Search,
+  Save,
+  Pencil,
+  Trash2,
+  X,
+  Check,
+  Pin,
+  PinOff,
+} from 'lucide-vue-next'
 import {
   getMemoryEntries,
   createMemoryEntry,
@@ -78,11 +90,12 @@ const hasVisibleSummary = computed(() => memoryView.value !== 'archived' && !!su
 const showingSearchResults = computed(() => searching.value || searchApplied.value)
 const supportsStructuredMemory = computed(() => !legacyMode.value)
 const currentMemoryCount = computed(() => capacity.value?.used ?? entries.value.length)
-const showMemoryListToolbar = computed(() => (
-  supportsStructuredMemory.value
-  || !!capacity.value?.archived
-  || totalEntries.value > entries.value.length
-))
+const showMemoryListToolbar = computed(
+  () =>
+    supportsStructuredMemory.value ||
+    !!capacity.value?.archived ||
+    totalEntries.value > entries.value.length,
+)
 
 const TYPE_COLORS: Record<string, string> = {
   identity: 'var(--hc-accent)',
@@ -93,7 +106,14 @@ const TYPE_COLORS: Record<string, string> = {
   rule: '#ef4444',
 }
 
-const MEMORY_TYPES: MemoryType[] = ['rule', 'identity', 'preference', 'instruction', 'fact', 'context']
+const MEMORY_TYPES: MemoryType[] = [
+  'rule',
+  'identity',
+  'preference',
+  'instruction',
+  'fact',
+  'context',
+]
 const MEMORY_SOURCES: MemorySource[] = ['manual', 'chat_explicit', 'chat_extract', 'system']
 
 // ── HcSelect 投影（替代原生 <select>，value 一律 string）──
@@ -103,7 +123,10 @@ const typeFilterOptions = computed(() => [
 ])
 const sourceFilterOptions = computed(() => [
   { value: 'all', label: t('memory.allSources') },
-  ...MEMORY_SOURCES.map((source) => ({ value: source, label: t(`memory.sourceType.${source}`, source) })),
+  ...MEMORY_SOURCES.map((source) => ({
+    value: source,
+    label: t(`memory.sourceType.${source}`, source),
+  })),
 ])
 // 过滤器 select 原本带 @change="refreshMemoryList"，HcSelect 走 v-model，
 // 副作用在 setter 内触发（值变化才刷新，等价原 @change 语义）。
@@ -139,11 +162,12 @@ function normalizeMemoryText(text: string): string {
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith('## '))
-    .map((line) => line
-      .replace(/^- \[\d{1,2}:\d{2}\]\s*/, '')  // strip timestamp prefix
-      .replace(/^\[[\w:]+\]\s*/, '')             // strip [type:source] tag
-      .replace(/^- /, '')                        // strip list marker
-      .trim(),
+    .map((line) =>
+      line
+        .replace(/^- \[\d{1,2}:\d{2}\]\s*/, '') // strip timestamp prefix
+        .replace(/^\[[\w:]+\]\s*/, '') // strip [type:source] tag
+        .replace(/^- /, '') // strip list marker
+        .trim(),
     )
     .filter(Boolean)
     .join('\n')
@@ -183,7 +207,13 @@ async function loadMemory(reset = true) {
   else loadingMore.value = true
   errorMsg.value = ''
   try {
-    const params: { view: MemoryViewMode; limit: number; cursor?: string; type?: MemoryType; source?: MemorySource } = {
+    const params: {
+      view: MemoryViewMode
+      limit: number
+      cursor?: string
+      type?: MemoryType
+      source?: MemorySource
+    } = {
       view: memoryView.value,
       limit: MEMORY_PAGE_SIZE,
     }
@@ -209,7 +239,8 @@ async function loadMemory(reset = true) {
     }
     totalEntries.value = res.total ?? entries.value.length
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('memory.loadFailed', 'Failed to load memory')
+    errorMsg.value =
+      e instanceof Error ? e.message : t('memory.loadFailed', 'Failed to load memory')
   } finally {
     if (reset) loading.value = false
     else loadingMore.value = false
@@ -280,7 +311,8 @@ async function saveEdit(e?: KeyboardEvent) {
     emit('memory:updated')
     await loadMemory()
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('memory.saveFailed', 'Failed to save memory')
+    errorMsg.value =
+      e instanceof Error ? e.message : t('memory.saveFailed', 'Failed to save memory')
   } finally {
     savingEdit.value = false
   }
@@ -303,7 +335,8 @@ async function handleDeleteEntry(id: string) {
     emit('memory:updated')
     await loadMemory()
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('memory.deleteFailed', 'Failed to delete memory')
+    errorMsg.value =
+      e instanceof Error ? e.message : t('memory.deleteFailed', 'Failed to delete memory')
   } finally {
     deletingId.value = null
   }
@@ -324,7 +357,8 @@ async function confirmArchiveEntry() {
     emit('memory:updated')
     await loadMemory()
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('memory.archiveFailed', 'Failed to archive memory')
+    errorMsg.value =
+      e instanceof Error ? e.message : t('memory.archiveFailed', 'Failed to archive memory')
   } finally {
     movingId.value = null
   }
@@ -339,7 +373,8 @@ async function handleRestoreEntry(entry: MemoryEntry) {
     emit('memory:updated')
     await loadMemory()
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('memory.restoreFailed', 'Failed to restore memory')
+    errorMsg.value =
+      e instanceof Error ? e.message : t('memory.restoreFailed', 'Failed to restore memory')
   } finally {
     movingId.value = null
   }
@@ -372,7 +407,8 @@ async function handleClearAll() {
     emit('memory:updated')
     await loadMemory()
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('memory.clearFailed', 'Failed to clear memory')
+    errorMsg.value =
+      e instanceof Error ? e.message : t('memory.clearFailed', 'Failed to clear memory')
   } finally {
     deleting.value = false
   }
@@ -408,7 +444,13 @@ function requestClearAll() {
   showClearAllConfirm.value = true
 }
 
-defineExpose({ openAddDialog, setToolbarSearch, submitToolbarSearch, requestClearAll, refreshMemoryList })
+defineExpose({
+  openAddDialog,
+  setToolbarSearch,
+  submitToolbarSearch,
+  requestClearAll,
+  refreshMemoryList,
+})
 
 async function handleSave() {
   if (!newContent.value.trim()) return
@@ -423,7 +465,8 @@ async function handleSave() {
     await loadMemory()
     activeTab.value = 'view'
   } catch (e) {
-    errorMsg.value = e instanceof Error ? e.message : t('memory.saveFailed', 'Failed to save memory')
+    errorMsg.value =
+      e instanceof Error ? e.message : t('memory.saveFailed', 'Failed to save memory')
   } finally {
     saving.value = false
   }
@@ -465,7 +508,10 @@ async function handleSearch() {
     <div
       v-if="errorMsg"
       class="mx-6 mt-2 px-4 py-2 rounded-lg text-sm flex items-center justify-between"
-      style="background: color-mix(in srgb, var(--hc-error) 12%, transparent); color: var(--hc-error);"
+      style="
+        background: color-mix(in srgb, var(--hc-error) 12%, transparent);
+        color: var(--hc-error);
+      "
     >
       <span>{{ errorMsg }}</span>
       <button class="text-xs underline ml-4" @click="errorMsg = ''">{{ t('common.close') }}</button>
@@ -478,9 +524,7 @@ async function handleSearch() {
       :style="{ borderColor: 'var(--hc-border)' }"
     >
       <button
-        v-for="tab in [
-          { key: 'view' as const, label: t('memory.currentMemory') },
-        ]"
+        v-for="tab in [{ key: 'view' as const, label: t('memory.currentMemory') }]"
         :key="tab.key"
         :data-testid="`memory-tab-${tab.key}`"
         class="px-4 py-2 text-sm font-medium border-b-2 transition-colors -mb-px"
@@ -510,7 +554,10 @@ async function handleSearch() {
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="flex flex-wrap items-center gap-2">
               <template v-if="supportsStructuredMemory">
-                <div class="inline-flex rounded-xl border p-1" :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-card)' }">
+                <div
+                  class="inline-flex rounded-xl border p-1"
+                  :style="{ borderColor: 'var(--hc-border)', background: 'var(--hc-bg-card)' }"
+                >
                   <button
                     v-for="view in [
                       { key: 'active' as const, label: t('memory.activeMemory') },
@@ -521,7 +568,10 @@ async function handleSearch() {
                     class="px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
                     :style="{
                       background: memoryView === view.key ? 'var(--hc-bg-hover)' : 'transparent',
-                      color: memoryView === view.key ? 'var(--hc-text-primary)' : 'var(--hc-text-secondary)',
+                      color:
+                        memoryView === view.key
+                          ? 'var(--hc-text-primary)'
+                          : 'var(--hc-text-secondary)',
                     }"
                     @click="switchMemoryView(view.key)"
                   >
@@ -549,7 +599,11 @@ async function handleSearch() {
             >
               {{ t('memory.archivedCount', { count: capacity.archived }) }}
             </span>
-            <span v-if="totalEntries > entries.length" class="text-xs whitespace-nowrap" :style="{ color: 'var(--hc-text-muted)' }">
+            <span
+              v-if="totalEntries > entries.length"
+              class="text-xs whitespace-nowrap"
+              :style="{ color: 'var(--hc-text-muted)' }"
+            >
               {{ t('memory.loadedCount', { loaded: entries.length, total: totalEntries }) }}
             </span>
           </div>
@@ -635,19 +689,27 @@ async function handleSearch() {
               class="rounded-xl border p-3 flex items-start gap-3 group"
               :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
             >
-              <Brain :size="13" class="mt-0.5 flex-shrink-0" :style="{ color: TYPE_COLORS[entry.type] || 'var(--hc-accent)' }" />
+              <Brain
+                :size="13"
+                class="mt-0.5 flex-shrink-0"
+                :style="{ color: TYPE_COLORS[entry.type] || 'var(--hc-accent)' }"
+              />
 
               <!-- Editing -->
               <template v-if="editingId === entry.id">
                 <HcClearableField>
                   <input
-                  v-model="editValue"
-                  data-testid="memory-edit-input"
-                  class="flex-1 rounded-lg border px-2 py-1 text-sm outline-none"
-                  :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-                  @keydown.enter.exact.prevent="saveEdit"
-                  @keydown.escape="cancelEdit"
-                />
+                    v-model="editValue"
+                    data-testid="memory-edit-input"
+                    class="flex-1 rounded-lg border px-2 py-1 text-sm outline-none"
+                    :style="{
+                      background: 'var(--hc-bg-input)',
+                      borderColor: 'var(--hc-border)',
+                      color: 'var(--hc-text-primary)',
+                    }"
+                    @keydown.enter.exact.prevent="saveEdit"
+                    @keydown.escape="cancelEdit"
+                  />
                 </HcClearableField>
                 <button
                   class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
@@ -688,20 +750,29 @@ async function handleSearch() {
                       class="text-[10px]"
                       :style="{ color: 'var(--hc-text-muted)' }"
                     >
-                      {{ t('memory.source', '来源') }}：{{ t(`memory.sourceType.${entry.source}`, entry.source) }}
+                      {{ t('memory.source', '来源') }}：{{
+                        t(`memory.sourceType.${entry.source}`, entry.source)
+                      }}
                     </span>
                     <span
                       v-if="entry.pinned"
                       data-testid="memory-pinned-badge"
                       class="text-[10px] px-1.5 py-0.5 rounded font-medium inline-flex items-center gap-0.5"
-                      :style="{ background: 'color-mix(in srgb, var(--hc-accent) 14%, transparent)', color: 'var(--hc-accent)' }"
+                      :style="{
+                        background: 'color-mix(in srgb, var(--hc-accent) 14%, transparent)',
+                        color: 'var(--hc-accent)',
+                      }"
                     >
                       <Pin :size="9" /> {{ t('memory.pinned', '常驻') }}
                     </span>
                     <span class="text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
                       {{ formatTime(entry.created_at, true) }}
                     </span>
-                    <span v-if="entry.hit_count > 0" class="text-[10px]" :style="{ color: 'var(--hc-text-muted)' }">
+                    <span
+                      v-if="entry.hit_count > 0"
+                      class="text-[10px]"
+                      :style="{ color: 'var(--hc-text-muted)' }"
+                    >
                       {{ t('memory.hitCount', { count: entry.hit_count }) }}
                     </span>
                     <span
@@ -713,7 +784,9 @@ async function handleSearch() {
                     </span>
                   </div>
                 </div>
-                <div class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div
+                  class="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                >
                   <template v-if="supportsStructuredMemory">
                     <button
                       v-if="entry.status === 'archived'"
@@ -741,7 +814,11 @@ async function handleSearch() {
                       class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                       :style="{ color: entry.pinned ? 'var(--hc-accent)' : 'var(--hc-text-muted)' }"
                       :disabled="movingId === entry.id"
-                      :title="entry.pinned ? t('memory.unpinMemory', '取消置顶') : t('memory.pinMemory', '置顶（常驻）')"
+                      :title="
+                        entry.pinned
+                          ? t('memory.unpinMemory', '取消置顶')
+                          : t('memory.pinMemory', '置顶（常驻）')
+                      "
                       @click="handleTogglePin(entry)"
                     >
                       <PinOff v-if="entry.pinned" :size="12" />
@@ -757,7 +834,7 @@ async function handleSearch() {
                   </button>
                   <button
                     class="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
-                    style="color: var(--hc-error);"
+                    style="color: var(--hc-error)"
                     :disabled="deletingId === entry.id"
                     @click="handleDeleteEntry(entry.id)"
                   >
@@ -770,7 +847,11 @@ async function handleSearch() {
             <button
               v-if="hasMore"
               class="w-full rounded-xl border p-3 flex items-center justify-center gap-2 text-sm transition-colors"
-              :style="{ borderColor: 'var(--hc-border)', color: 'var(--hc-text-secondary)', opacity: loadingMore ? 0.5 : 1 }"
+              :style="{
+                borderColor: 'var(--hc-border)',
+                color: 'var(--hc-text-secondary)',
+                opacity: loadingMore ? 0.5 : 1,
+              }"
               :disabled="loadingMore"
               @click="loadMoreMemory"
             >
@@ -784,17 +865,25 @@ async function handleSearch() {
               :style="{ background: 'var(--hc-bg-card)', borderColor: 'var(--hc-border)' }"
             >
               <div class="flex items-center gap-2 mb-3">
-                <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{ t('memory.context') }}</span>
-                <span class="text-[10px] px-1.5 py-0.5 rounded" :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }">{{ t('memory.readOnly', 'Read-only') }}</span>
+                <span class="text-xs font-medium" :style="{ color: 'var(--hc-text-secondary)' }">{{
+                  t('memory.context')
+                }}</span>
+                <span
+                  class="text-[10px] px-1.5 py-0.5 rounded"
+                  :style="{ background: 'var(--hc-bg-hover)', color: 'var(--hc-text-muted)' }"
+                  >{{ t('memory.readOnly', 'Read-only') }}</span
+                >
               </div>
-              <p class="text-sm leading-relaxed whitespace-pre-wrap" :style="{ color: 'var(--hc-text-primary)' }">
+              <p
+                class="text-sm leading-relaxed whitespace-pre-wrap"
+                :style="{ color: 'var(--hc-text-primary)' }"
+              >
                 {{ summary }}
               </p>
             </div>
           </div>
         </template>
       </template>
-
     </div>
 
     <Teleport to="body">
@@ -831,13 +920,17 @@ async function handleSearch() {
             <div class="p-5">
               <HcClearableField>
                 <textarea
-                v-model="newContent"
-                data-testid="memory-add-input"
-                rows="7"
-                class="w-full rounded-lg border px-3 py-2 text-sm leading-relaxed outline-none resize-none"
-                :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
-                :placeholder="t('memory.inputPlaceholder')"
-              />
+                  v-model="newContent"
+                  data-testid="memory-add-input"
+                  rows="7"
+                  class="w-full rounded-lg border px-3 py-2 text-sm leading-relaxed outline-none resize-none"
+                  :style="{
+                    background: 'var(--hc-bg-input)',
+                    borderColor: 'var(--hc-border)',
+                    color: 'var(--hc-text-primary)',
+                  }"
+                  :placeholder="t('memory.inputPlaceholder')"
+                />
               </HcClearableField>
             </div>
             <!-- BUG-20260710：footer 单行——类型在左、弹性占位、右侧 [取消][保存]（主操作末位，
@@ -867,7 +960,10 @@ async function handleSearch() {
                 <button
                   data-testid="memory-add-save"
                   class="w-[96px] flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-white"
-                  :style="{ background: 'var(--hc-accent)', opacity: (!newContent.trim() || saving) ? 0.4 : 1 }"
+                  :style="{
+                    background: 'var(--hc-accent)',
+                    opacity: !newContent.trim() || saving ? 0.4 : 1,
+                  }"
                   :disabled="!newContent.trim() || saving"
                   @click="handleSave"
                 >
@@ -883,8 +979,14 @@ async function handleSearch() {
 
     <ConfirmDialog
       :open="!!archiveTarget"
+      :danger="false"
       :title="t('memory.archiveTitle', 'Archive memory')"
-      :message="t('memory.archiveMessage', 'This memory will be moved to the archive. You can restore it later.')"
+      :message="
+        t(
+          'memory.archiveMessage',
+          'This memory will be moved to the archive. You can restore it later.',
+        )
+      "
       :confirm-text="t('memory.archiveConfirm', 'Archive')"
       @confirm="confirmArchiveEntry"
       @cancel="archiveTarget = null"
@@ -904,9 +1006,16 @@ async function handleSearch() {
 
 <style scoped>
 /* 新建记忆弹窗淡入淡出（对齐 AgentsView showAddAgent 弹窗的 modal 过渡） */
-.modal-enter-active { transition: opacity 0.2s ease-out; }
-.modal-leave-active { transition: opacity 0.15s ease-in; }
-.modal-enter-from, .modal-leave-to { opacity: 0; }
+.modal-enter-active {
+  transition: opacity 0.2s ease-out;
+}
+.modal-leave-active {
+  transition: opacity 0.15s ease-in;
+}
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
 
 /* 过滤器下拉：紧凑、随内容自适应宽（对齐原生 select 的 width:auto/font-size:12px） */
 .hc-memory-filter-select {
