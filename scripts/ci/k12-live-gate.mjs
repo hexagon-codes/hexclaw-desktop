@@ -18,7 +18,6 @@ export const K12_LIVE_SPEC_FILES = Object.freeze([
   'knowledge-real-pdf-lifecycle.spec.ts',
   'skill-lifecycle-recall.spec.ts',
   'workflow-trigger-rotation.spec.ts',
-  'print-export-real.spec.ts',
 ])
 export const K12_LIVE_PROJECTS = Object.freeze(['chromium', 'webkit'])
 

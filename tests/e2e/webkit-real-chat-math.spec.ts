@@ -25,6 +25,38 @@ type MessageRow = {
   metadata?: Record<string, unknown>
 }
 
+type SessionRow = {
+  id: string
+  title: string
+  user_id: string
+  parent_session_id?: string
+  branch_message_id?: string
+  created_at: string
+  updated_at: string
+}
+
+type ForkRequestEvidence = {
+  sourceSessionId: string
+  branchSessionId: string
+  messageId: string
+  includeMessage: boolean
+}
+
+type DeliveryEvidence = {
+  sessionId: string
+  requestId: string
+  source: string
+}
+
+type MathBackendState = {
+  sessions: Map<string, SessionRow>
+  messagesBySession: Map<string, MessageRow[]>
+  receivedSources: string[]
+  forkRequests: ForkRequestEvidence[]
+  deliveries: DeliveryEvidence[]
+  nextBranchNumber: number
+}
+
 function json(route: Route, body: unknown, status = 200) {
   return route.fulfill({
     status,
@@ -33,10 +65,46 @@ function json(route: Route, body: unknown, status = 200) {
   })
 }
 
-async function installMathHistoryBackend(page: Page, messages: MessageRow[]) {
+function createMathBackendState(
+  sourceMessages: MessageRow[],
+  receivedSources: string[],
+): MathBackendState {
+  return {
+    sessions: new Map([
+      [
+        SESSION_ID,
+        {
+          id: SESSION_ID,
+          title: '数学公式真实组件回归',
+          user_id: 'desktop-user',
+          created_at: NOW,
+          updated_at: NOW,
+        },
+      ],
+    ]),
+    messagesBySession: new Map([[SESSION_ID, sourceMessages]]),
+    receivedSources,
+    forkRequests: [],
+    deliveries: [],
+    nextBranchNumber: 0,
+  }
+}
+
+function sessionResponse(state: MathBackendState, session: SessionRow) {
+  return {
+    ...session,
+    message_count: state.messagesBySession.get(session.id)?.length ?? 0,
+  }
+}
+
+async function installMathHistoryBackend(page: Page, state: MathBackendState) {
   await page.addInitScript((sessionId) => {
-    sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
-    localStorage.setItem('hexclaw_lastSessionId', sessionId)
+    if (!sessionStorage.getItem('hexclaw:welcomeRedirectDone')) {
+      sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
+    }
+    if (!localStorage.getItem('hexclaw_lastSessionId')) {
+      localStorage.setItem('hexclaw_lastSessionId', sessionId)
+    }
   }, SESSION_ID)
 
   await page.route('**/_hexclaw/**', async (route) => {
@@ -68,22 +136,82 @@ async function installMathHistoryBackend(page: Page, messages: MessageRow[]) {
     if (path === '/api/v1/skills') return json(route, { skills: [], total: 0 })
     if (path === '/api/v1/streams/active') return json(route, { streams: [], total: 0 })
     if (method === 'GET' && path === '/api/v1/sessions') {
+      const sessions = [...state.sessions.values()].map((session) => sessionResponse(state, session))
       return json(route, {
-        sessions: [
-          {
-            id: SESSION_ID,
-            title: '数学公式真实组件回归',
-            user_id: 'desktop-user',
-            created_at: NOW,
-            updated_at: NOW,
-            message_count: messages.length,
-          },
-        ],
-        total: 1,
+        sessions,
+        total: sessions.length,
       })
     }
-    if (method === 'GET' && path === `/api/v1/sessions/${SESSION_ID}/messages`) {
+    const messagesMatch = path.match(/^\/api\/v1\/sessions\/([^/]+)\/messages$/)
+    if (method === 'GET' && messagesMatch) {
+      const sessionId = decodeURIComponent(messagesMatch[1]!)
+      const messages = state.messagesBySession.get(sessionId)
+      if (!messages) return json(route, { error: 'session not found' }, 404)
       return json(route, { messages, total: messages.length })
+    }
+    const branchesMatch = path.match(/^\/api\/v1\/sessions\/([^/]+)\/branches$/)
+    if (method === 'GET' && branchesMatch) {
+      const sourceSessionId = decodeURIComponent(branchesMatch[1]!)
+      const branches = [...state.sessions.values()]
+        .filter((session) => session.parent_session_id === sourceSessionId)
+        .map((session) => sessionResponse(state, session))
+      return json(route, { branches, total: branches.length })
+    }
+    const forkMatch = path.match(/^\/api\/v1\/sessions\/([^/]+)\/fork$/)
+    if (method === 'POST' && forkMatch) {
+      const sourceSessionId = decodeURIComponent(forkMatch[1]!)
+      const sourceSession = state.sessions.get(sourceSessionId)
+      const sourceMessages = state.messagesBySession.get(sourceSessionId)
+      if (!sourceSession || !sourceMessages) {
+        return json(route, { error: 'session not found' }, 404)
+      }
+
+      const body = (route.request().postDataJSON() ?? {}) as Record<string, unknown>
+      const messageId = typeof body.message_id === 'string' ? body.message_id : ''
+      const includeMessage = body.include_message !== false
+      const messageIndex = messageId
+        ? sourceMessages.findIndex((message) => message.id === messageId)
+        : sourceMessages.length - 1
+      if (messageId && messageIndex < 0) {
+        return json(route, { error: 'message not found' }, 404)
+      }
+
+      const branchSessionId = `e2e-math-branch-${++state.nextBranchNumber}`
+      const prefixEnd = messageIndex < 0 ? 0 : messageIndex + (includeMessage ? 1 : 0)
+      const branchMessages = sourceMessages
+        .slice(0, prefixEnd)
+        .map((message) => ({ ...message, metadata: { ...message.metadata } }))
+      const branch: SessionRow = {
+        id: branchSessionId,
+        title: `${sourceSession.title}（分支 ${state.nextBranchNumber}）`,
+        user_id: sourceSession.user_id,
+        parent_session_id: sourceSessionId,
+        ...(messageId ? { branch_message_id: messageId } : {}),
+        created_at: NOW,
+        updated_at: NOW,
+      }
+      state.sessions.set(branchSessionId, branch)
+      state.messagesBySession.set(branchSessionId, branchMessages)
+      state.forkRequests.push({
+        sourceSessionId,
+        branchSessionId,
+        messageId,
+        includeMessage,
+      })
+      return json(route, {
+        session: sessionResponse(state, branch),
+        message: 'session forked',
+      })
+    }
+    const deleteSessionMatch = path.match(/^\/api\/v1\/sessions\/([^/]+)$/)
+    if (method === 'DELETE' && deleteSessionMatch) {
+      const sessionId = decodeURIComponent(deleteSessionMatch[1]!)
+      if (!state.sessions.has(sessionId)) {
+        return json(route, { error: 'session not found' }, 404)
+      }
+      state.sessions.delete(sessionId)
+      state.messagesBySession.delete(sessionId)
+      return json(route, { message: 'session deleted' })
     }
 
     return json(route, {})
@@ -92,20 +220,22 @@ async function installMathHistoryBackend(page: Page, messages: MessageRow[]) {
 
 async function installTauriMathBackend(
   page: Page,
-  messages: MessageRow[],
-  receivedSources: string[],
+  state: MathBackendState,
 ) {
   await page.exposeFunction(
     'e2eMathBackendChat',
     (params: { message?: unknown; session_id?: unknown; request_id?: unknown }) => {
       const source = String(params.message ?? '')
       const sessionId = String(params.session_id ?? SESSION_ID)
+      const messages = state.messagesBySession.get(sessionId)
+      if (!messages) throw new Error(`unknown E2E math session: ${sessionId}`)
       const requestId = String(params.request_id ?? `e2e-request-${messages.length}`)
       const timestamp = new Date().toISOString()
-      receivedSources.push(source)
+      state.receivedSources.push(source)
+      state.deliveries.push({ sessionId, requestId, source })
       messages.push(
         {
-          id: `${requestId}-user`,
+          id: requestId,
           role: 'user',
           content: source,
           timestamp,
@@ -437,8 +567,9 @@ test('real /chat send and history replay keep adjacent user and assistant formul
 }) => {
   const persistedMessages: MessageRow[] = []
   const receivedSources: string[] = []
-  await installMathHistoryBackend(page, persistedMessages)
-  await installTauriMathBackend(page, persistedMessages, receivedSources)
+  const backend = createMathBackendState(persistedMessages, receivedSources)
+  await installMathHistoryBackend(page, backend)
+  await installTauriMathBackend(page, backend)
 
   await page.setViewportSize(DESKTOP_MIN_VIEWPORT)
   await page.goto('/chat')
@@ -502,8 +633,9 @@ test('editing a real user message keeps formulas rendered until one canonical so
 }) => {
   const persistedMessages: MessageRow[] = []
   const receivedSources: string[] = []
-  await installMathHistoryBackend(page, persistedMessages)
-  await installTauriMathBackend(page, persistedMessages, receivedSources)
+  const backend = createMathBackendState(persistedMessages, receivedSources)
+  await installMathHistoryBackend(page, backend)
+  await installTauriMathBackend(page, backend)
 
   await page.setViewportSize(DESKTOP_MIN_VIEWPORT)
   await page.goto('/chat')
@@ -645,6 +777,28 @@ test('editing a real user message keeps formulas rendered until one canonical so
   await editCard.getByRole('button', { name: '发送' }).click()
   await expect(userRow.locator('.hc-msg__edit-card')).toHaveCount(0)
   expect(receivedSources).toEqual([EXACT_SOURCE, EDITED_SOURCE])
+  expect(backend.forkRequests).toHaveLength(1)
+  const firstFork = backend.forkRequests[0]!
+  expect(firstFork).toMatchObject({
+    sourceSessionId: SESSION_ID,
+    messageId: persistedMessages[0]!.id,
+    includeMessage: false,
+  })
+  expect(backend.deliveries.at(-1)).toMatchObject({
+    sessionId: firstFork.branchSessionId,
+    source: EDITED_SOURCE,
+  })
+  expect(backend.messagesBySession.get(SESSION_ID)?.map((message) => message.content)).toEqual([
+    EXACT_SOURCE,
+    EXACT_SOURCE,
+  ])
+  expect(
+    backend.messagesBySession.get(firstFork.branchSessionId)?.map((message) => message.content),
+  ).toEqual([EDITED_SOURCE, EDITED_SOURCE])
+  expect(backend.sessions.get(firstFork.branchSessionId)).toMatchObject({
+    parent_session_id: SESSION_ID,
+    branch_message_id: persistedMessages[0]!.id,
+  })
 
   await page.reload()
   const replayedUser = page.getByTestId('chat-message-user').last()
@@ -688,6 +842,20 @@ test('editing a real user message keeps formulas rendered until one canonical so
   await clearCard.getByRole('button', { name: '发送' }).click()
   await expect(replayedUser.locator('.hc-msg__edit-card')).toHaveCount(0)
   expect(receivedSources).toEqual([EXACT_SOURCE, EDITED_SOURCE, EDITED_SOURCE])
+  expect(backend.forkRequests).toHaveLength(2)
+  const secondFork = backend.forkRequests[1]!
+  expect(secondFork).toMatchObject({
+    sourceSessionId: firstFork.branchSessionId,
+    includeMessage: false,
+  })
+  expect(backend.deliveries.at(-1)).toMatchObject({
+    sessionId: secondFork.branchSessionId,
+    source: EDITED_SOURCE,
+  })
+  expect(backend.sessions.get(secondFork.branchSessionId)).toMatchObject({
+    parent_session_id: firstFork.branchSessionId,
+    branch_message_id: secondFork.messageId,
+  })
 })
 
 test('formula editing preserves delimiter, display, paste and drop boundaries in a real browser', async ({
@@ -703,8 +871,9 @@ test('formula editing preserves delimiter, display, paste and drop boundaries in
     },
   ]
   const receivedSources: string[] = []
-  await installMathHistoryBackend(page, persistedMessages)
-  await installTauriMathBackend(page, persistedMessages, receivedSources)
+  const backend = createMathBackendState(persistedMessages, receivedSources)
+  await installMathHistoryBackend(page, backend)
+  await installTauriMathBackend(page, backend)
 
   await page.setViewportSize(DESKTOP_MIN_VIEWPORT)
   await page.goto('/chat')
@@ -805,8 +974,9 @@ test('real overflowing formulas become local keyboard scroll regions in WebKit',
 }) => {
   const persistedMessages: MessageRow[] = []
   const receivedSources: string[] = []
-  await installMathHistoryBackend(page, persistedMessages)
-  await installTauriMathBackend(page, persistedMessages, receivedSources)
+  const backend = createMathBackendState(persistedMessages, receivedSources)
+  await installMathHistoryBackend(page, backend)
+  await installTauriMathBackend(page, backend)
 
   await page.setViewportSize(DESKTOP_MIN_VIEWPORT)
   await page.goto('/chat')

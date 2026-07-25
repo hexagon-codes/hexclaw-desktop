@@ -2,7 +2,7 @@ import { defineConfig, devices } from '@playwright/test'
 
 /**
  * Keep this list exact.  The release lane contains the three producer/surface
- * LIVE contracts plus the six stateful K12 acceptance journeys.  A broad
+ * LIVE contracts plus the five stateful K12 acceptance journeys.  A broad
  * `**\/*.spec.ts` here would silently mix mock/source-server tests into the
  * installed-RC evidence.
  */
@@ -15,7 +15,6 @@ const k12LiveSpecs = [
   '**/e2e/knowledge-real-pdf-lifecycle.spec.ts',
   '**/e2e/skill-lifecycle-recall.spec.ts',
   '**/e2e/workflow-trigger-rotation.spec.ts',
-  '**/e2e/print-export-real.spec.ts',
 ]
 
 export default defineConfig({

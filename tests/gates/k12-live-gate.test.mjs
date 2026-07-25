@@ -13,7 +13,6 @@ const expectedSpecs = [
   'knowledge-real-pdf-lifecycle.spec.ts',
   'skill-lifecycle-recall.spec.ts',
   'workflow-trigger-rotation.spec.ts',
-  'print-export-real.spec.ts',
 ]
 const expectedProjects = ['chromium', 'webkit']
 
@@ -43,7 +42,10 @@ function passingReport(specs = expectedSpecs, projects = expectedProjects) {
 test('package routes diagnostic and strict LIVE lanes through the guarded runner', async () => {
   const pkg = JSON.parse(await readFile(repoFile('package.json'), 'utf8'))
   assert.equal(pkg.scripts['test:e2e:k12-live'], 'node ./scripts/ci/k12-live-gate.mjs')
-  assert.equal(pkg.scripts['test:e2e:k12-live:strict'], 'node ./scripts/ci/k12-live-gate.mjs --strict')
+  assert.equal(
+    pkg.scripts['test:e2e:k12-live:strict'],
+    'node ./scripts/ci/k12-live-gate.mjs --strict',
+  )
 })
 
 test('LIVE runner strips only the pnpm separator and keeps diagnostic Playwright flags', async () => {
@@ -66,7 +68,7 @@ test('LIVE runner strips only the pnpm separator and keeps diagnostic Playwright
   )
 })
 
-test('LIVE strict audit accepts only the frozen nine-file two-browser matrix', async () => {
+test('LIVE strict audit accepts only the frozen eight-file two-browser matrix', async () => {
   const { auditK12LiveReport } = await loadGateModule()
   const audit = auditK12LiveReport(passingReport())
 

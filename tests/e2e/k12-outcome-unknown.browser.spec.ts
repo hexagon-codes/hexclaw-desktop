@@ -1,14 +1,15 @@
 import { expect, test, type Page, type Route, type TestInfo } from '@playwright/test'
 
 const SESSION_ID = 'session-outcome-unknown'
-const JOB_ID = 'job-outcome-unknown'
+const OTHER_SESSION_ID = 'session-other-child'
+const DISPATCH_ID = 'dispatch-recovering'
 const AGENT_A = 'k12-tutor-mingming'
 const AGENT_B = 'k12-tutor-xiaowang'
 const NOW = '2026-07-23T09:00:00.000Z'
-const GRADING_BINDING_KEY = 'hexclaw.k12.grading-job-bindings.v1'
+const IMAGE_TASK_BINDING_KEY = 'hexclaw.k12.image-task-bindings.v1'
 const SESSION_AGENT_KEY = 'hexclaw_sessionAgents'
 
-type GradingRequest = {
+type ImageTaskRequest = {
   method: string
   path: string
   agent: string
@@ -22,49 +23,112 @@ function json(route: Route, body: unknown, status = 200) {
   })
 }
 
-function outcomeUnknownStatus() {
-  const job = {
-    job_id: JOB_ID,
-    submission_id: 'submission-outcome-unknown',
-    stage: 'outcome_unknown',
-    confirmation_state: 'confirmed',
-    anchor_state: 'located',
-    deadline: 0,
-    idempotency_key: 'desktop|fixture|v1',
-    confirmed_version: 1,
-    stage_checkpoints: [],
-    attempt_count: 1,
-    failure_kind: 'provider_outcome_unknown',
-    retryable: false,
-    version: 3,
-    created_at: 1,
-    updated_at: 2,
-  }
+function imageTaskStatus(stage: 'recovering' | 'completed') {
   return {
-    job_id: JOB_ID,
-    stage: 'outcome_unknown',
-    confirmation_state: 'confirmed',
-    anchor_state: 'located',
-    deadline: 0,
-    confirmed_version: 1,
-    job,
+    dispatch: {
+      dispatch_id: DISPATCH_ID,
+      task_intent: 'completed_homework',
+      status: 'routed',
+      intent_evidence: ['answer_regions_present'],
+      intent_confidence: 0.99,
+      confirmation_candidates: [],
+      target: { type: 'homework_submission', id: 'homework-public-target' },
+      target_projection: {
+        kind: 'homework',
+        stage,
+        confirmation_state: 'confirmed',
+        anchor_state: 'located',
+      },
+      progress: { operation: 'homework', state: stage },
+      version: 3,
+      created_at: 1,
+      updated_at: 2,
+    },
   }
 }
 
-async function installBrowserRuntime(page: Page, gradingRequests: GradingRequest[]) {
+function completedResult() {
+  const question = {
+    problem_id: 'problem-1',
+    problem_kind: 'standalone',
+    page_asset_id: 'asset-page-1',
+    question: '4÷0.5=',
+    raw_transcription: '4÷0.5=',
+    canonical_markdown: '4\\div0.5=',
+    canonical_valid: true,
+    canonical_version: 1,
+    knowledge_points: ['小数除法'],
+    student_answer: '8',
+    answer_canonical_markdown: '8',
+    answer_canonical_valid: true,
+    answer_state: 'present',
+    confirmation_required: false,
+    confirmed_version: 1,
+    bbox: { x: 0.1, y: 0.1, w: 0.2, h: 0.08 },
+  }
+  return {
+    dispatch_id: DISPATCH_ID,
+    task_intent: 'completed_homework',
+    status: 'routed',
+    result: {
+      kind: 'completed_homework',
+      payload: {
+        mode: 'grade',
+        task_intent: 'completed_homework',
+        result_surface: 'annotated_homework',
+        items: [
+          {
+            question,
+            status: 'correct',
+            result_kind: 'assessment',
+            grade: {
+              solution: '8',
+              verdict: 'agree',
+              evidence_type: 'numeric_exec',
+              badge: 'verified-strong',
+              out_of_scope: false,
+              record_created: false,
+              solve_only: false,
+            },
+          },
+        ],
+        markdown: '# 批改完成',
+        image_warning: '',
+        annotated_image: {
+          mime: 'image/png',
+          data_base64: 'QU5OT1RBVEVE',
+          digest: 'sha256:annotated',
+        },
+      },
+    },
+  }
+}
+
+async function installBrowserRuntime(page: Page, imageTaskRequests: ImageTaskRequest[]) {
   await page.addInitScript(
-    ({ agentA, gradingBindingKey, jobId, sessionAgentKey, sessionId }) => {
+    ({
+      agentA,
+      agentB,
+      dispatchId,
+      imageTaskBindingKey,
+      otherSessionId,
+      sessionAgentKey,
+      sessionId,
+    }) => {
       sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1')
       localStorage.setItem('hexclaw_lastSessionId', sessionId)
       if (!localStorage.getItem(sessionAgentKey)) {
-        localStorage.setItem(sessionAgentKey, JSON.stringify({ [sessionId]: agentA }))
-      }
-      if (!localStorage.getItem(gradingBindingKey)) {
         localStorage.setItem(
-          gradingBindingKey,
+          sessionAgentKey,
+          JSON.stringify({ [sessionId]: agentA, [otherSessionId]: agentB }),
+        )
+      }
+      if (!localStorage.getItem(imageTaskBindingKey)) {
+        localStorage.setItem(
+          imageTaskBindingKey,
           JSON.stringify({
             version: 1,
-            bindings: { [sessionId]: { agent_id: agentA, job_id: jobId } },
+            bindings: { [sessionId]: { agent_id: agentA, dispatch_id: dispatchId } },
           }),
         )
       }
@@ -110,28 +174,48 @@ async function installBrowserRuntime(page: Page, gradingRequests: GradingRequest
     },
     {
       agentA: AGENT_A,
-      gradingBindingKey: GRADING_BINDING_KEY,
-      jobId: JOB_ID,
+      agentB: AGENT_B,
+      dispatchId: DISPATCH_ID,
+      imageTaskBindingKey: IMAGE_TASK_BINDING_KEY,
+      otherSessionId: OTHER_SESSION_ID,
       sessionAgentKey: SESSION_AGENT_KEY,
       sessionId: SESSION_ID,
     },
   )
 
+  let imageTaskStatusReads = 0
   await page.route('**/_hexclaw/**', async (route) => {
     const requestUrl = new URL(route.request().url())
     const path = requestUrl.pathname.replace('/_hexclaw', '')
     const method = route.request().method()
 
-    if (path.startsWith('/api/k12/grading-jobs')) {
-      gradingRequests.push({
+    if (path.startsWith('/api/k12/image-tasks')) {
+      imageTaskRequests.push({
         method,
         path,
         agent: requestUrl.searchParams.get('agent') ?? '',
       })
-      if (method === 'GET' && path === `/api/k12/grading-jobs/${JOB_ID}`) {
-        return json(route, outcomeUnknownStatus())
+      if (method === 'GET' && path === `/api/k12/image-tasks/${DISPATCH_ID}`) {
+        imageTaskStatusReads += 1
+        return json(route, imageTaskStatus(imageTaskStatusReads === 1 ? 'recovering' : 'completed'))
       }
-      return json(route, { error: 'unexpected grading route' }, 409)
+      if (method === 'GET' && path === `/api/k12/image-tasks/${DISPATCH_ID}/result`) {
+        return json(route, completedResult())
+      }
+      return json(route, { error: 'unexpected image task route' }, 409)
+    }
+
+    if (
+      path.startsWith('/api/k12/grading-jobs') ||
+      path.startsWith('/api/k12/recognize') ||
+      path.startsWith('/api/k12/creative-work-ocr-jobs')
+    ) {
+      imageTaskRequests.push({
+        method,
+        path,
+        agent: requestUrl.searchParams.get('agent') ?? '',
+      })
+      return json(route, { error: 'removed public route' }, 410)
     }
 
     if (path === '/api/v1/config/llm') {
@@ -197,18 +281,35 @@ async function installBrowserRuntime(page: Page, gradingRequests: GradingRequest
           {
             id: SESSION_ID,
             title: '小明的辅导助手',
+            agent_id: AGENT_A,
+            created_at: NOW,
+            updated_at: NOW,
+            message_count: 0,
+          },
+          {
+            id: OTHER_SESSION_ID,
+            title: '小王的辅导助手',
+            agent_id: AGENT_B,
             created_at: NOW,
             updated_at: NOW,
             message_count: 0,
           },
         ],
-        total: 1,
+        total: 2,
       })
     }
-    if (method === 'GET' && path === `/api/v1/sessions/${SESSION_ID}/messages`) {
+    if (
+      method === 'GET' &&
+      (path === `/api/v1/sessions/${SESSION_ID}/messages` ||
+        path === `/api/v1/sessions/${OTHER_SESSION_ID}/messages`)
+    ) {
       return json(route, { messages: [], total: 0 })
     }
-    if (method === 'GET' && path === `/api/v1/sessions/${SESSION_ID}/artifacts`) {
+    if (
+      method === 'GET' &&
+      (path === `/api/v1/sessions/${SESSION_ID}/artifacts` ||
+        path === `/api/v1/sessions/${OTHER_SESSION_ID}/artifacts`)
+    ) {
       return json(route, { artifacts: [], total: 0 })
     }
     if (path === '/api/k12/view-descriptor') {
@@ -247,101 +348,90 @@ async function installBrowserRuntime(page: Page, gradingRequests: GradingRequest
   })
 }
 
-async function expectUnknownCard(page: Page) {
+async function expectRecoveringProjection(page: Page) {
   const inline = page.locator('#hc-chat-scenario-inline')
-  const card = inline.getByTestId('recognize-outcome-unknown')
-  await expect(card).toBeVisible()
-  await expect(card).toContainText('结果待核实')
-  await expect(card).toContainText(
-    '本次批改结果尚未确认。为避免重复调用，系统不会自动重试；刷新或重新打开后仍会保留此状态。',
-  )
-  await expect(card.getByRole('button', { name: '查看结果状态' })).toBeVisible()
+  const progress = inline.getByTestId('recognize-recovering')
+  await expect(progress).toBeVisible()
+  await expect(progress).toContainText('正在恢复批改结果')
+  await expect(progress).toContainText('不会重新创建任务或重复提交')
+  await expect(inline).not.toContainText('结果待核实')
+  await expect(inline.getByRole('button', { name: '查看结果状态' })).toHaveCount(0)
+  await expect(page.getByTestId('recognize-outcome-dialog')).toHaveCount(0)
   await expect(inline).not.toContainText('整卷处理中')
   await expect(inline).not.toContainText('重试当前阶段')
-  return card
+  return progress
 }
 
 async function screenshot(locator: ReturnType<Page['locator']>, testInfo: TestInfo, name: string) {
   await locator.screenshot({ path: testInfo.outputPath(name) })
 }
 
-test('outcome_unknown stops polling, stays read-only, restores after refresh, and never crosses agents', async ({
+function statusReads(requests: ImageTaskRequest[]) {
+  return requests.filter(
+    ({ method, path }) => method === 'GET' && path === `/api/k12/image-tasks/${DISPATCH_ID}`,
+  )
+}
+
+function assertFacadeReadOnly(requests: ImageTaskRequest[]) {
+  expect(requests.length).toBeGreaterThan(0)
+  expect(requests.every(({ agent }) => agent === AGENT_A)).toBe(true)
+  expect(
+    requests.every(
+      ({ method, path }) =>
+        method === 'GET' &&
+        (path === `/api/k12/image-tasks/${DISPATCH_ID}` ||
+          path === `/api/k12/image-tasks/${DISPATCH_ID}/result`),
+    ),
+  ).toBe(true)
+}
+
+test('recovering is transient, converges on the same dispatch, and restores after refresh/session switches', async ({
   page,
 }, testInfo) => {
-  const gradingRequests: GradingRequest[] = []
-  await installBrowserRuntime(page, gradingRequests)
+  const imageTaskRequests: ImageTaskRequest[] = []
+  await installBrowserRuntime(page, imageTaskRequests)
 
   await page.goto('/chat', { waitUntil: 'domcontentloaded' })
-  const card = await expectUnknownCard(page)
-  await screenshot(card, testInfo, 'outcome-unknown-card.png')
+  const progress = await expectRecoveringProjection(page)
+  await screenshot(progress, testInfo, 'recovering-inline-progress.png')
 
-  expect(gradingRequests).toEqual([
-    {
-      method: 'GET',
-      path: `/api/k12/grading-jobs/${JOB_ID}`,
-      agent: AGENT_A,
-    },
-  ])
-  // One full polling interval later the terminal projection must still have issued no second GET.
-  await page.waitForTimeout(2_800)
-  expect(gradingRequests).toHaveLength(1)
-
-  const detailTrigger = card.getByRole('button', { name: '查看结果状态' })
-  await detailTrigger.focus()
-  await detailTrigger.click()
-  const detail = page.getByTestId('recognize-outcome-dialog')
-  await expect(detail).toBeVisible()
-  await expect(detail).toContainText('本次批改没有得到可确认的完整结果。')
-  await expect(detail).toContainText(
-    '为避免重复调用和重复计费，系统不会自动重试。已完成的内容会安全保留；你可以稍后再查看，刷新或重新打开后仍会恢复这个状态。',
+  await expect(page.getByTestId('photo-grade-overlay')).toBeVisible({ timeout: 10_000 })
+  await expect(page.getByTestId('recognize-recovering')).toHaveCount(0)
+  await expect(page.locator('body')).not.toContainText(
+    /outcome_unknown|provider_outcome_unknown|submission-outcome|invocation|ledger|checkpoint|调用 ID/i,
   )
-  await expect(detail).toContainText('当前状态等待结果核实待核实')
-  await expect(detail).toContainText('已完成内容已安全保留，不会从头重复处理已保留')
-  await expect(detail.getByRole('button')).toHaveCount(1)
-  await expect(detail.getByRole('button', { name: '关闭' })).toBeVisible()
-  await expect(detail).not.toContainText(/outcome_unknown|invocation|ledger|checkpoint|调用 ID/i)
-  expect(gradingRequests).toHaveLength(1)
-  await screenshot(detail, testInfo, 'outcome-unknown-detail.png')
-
-  await detail.getByRole('button', { name: '关闭' }).click()
-  await expect(detail).toBeHidden()
-  await expect(detailTrigger).toBeFocused()
-  expect(gradingRequests).toHaveLength(1)
+  expect(statusReads(imageTaskRequests)).toHaveLength(3)
+  assertFacadeReadOnly(imageTaskRequests)
 
   await page.reload({ waitUntil: 'domcontentloaded' })
-  await expectUnknownCard(page)
-  expect(gradingRequests).toEqual([
-    expect.objectContaining({ method: 'GET', path: `/api/k12/grading-jobs/${JOB_ID}` }),
-    expect.objectContaining({ method: 'GET', path: `/api/k12/grading-jobs/${JOB_ID}` }),
-  ])
-  expect(gradingRequests.every((request) => request.agent === AGENT_A)).toBe(true)
-  expect(
-    gradingRequests.some(
-      (request) =>
-        request.method !== 'GET' ||
-        request.path.endsWith('/confirm') ||
-        request.path.endsWith('/retry') ||
-        request.path.endsWith('/result'),
-    ),
-  ).toBe(false)
+  await expect(page.getByTestId('photo-grade-overlay')).toBeVisible({ timeout: 10_000 })
+  const readsAfterRefresh = statusReads(imageTaskRequests).length
+  expect(readsAfterRefresh).toBeGreaterThan(3)
+  assertFacadeReadOnly(imageTaskRequests)
 
-  // Keep the same session and persisted GradingJob binding, but switch the session's active K12 agent.
-  // The binding must fail closed: no card and no request for the other child's view.
-  const callsBeforeOtherAgent = gradingRequests.length
-  await page.evaluate(
-    ({ agentB, sessionAgentKey, sessionId }) => {
-      localStorage.setItem(sessionAgentKey, JSON.stringify({ [sessionId]: agentB }))
-    },
-    { agentB: AGENT_B, sessionAgentKey: SESSION_AGENT_KEY, sessionId: SESSION_ID },
+  const callsBeforeOtherSession = imageTaskRequests.length
+  await page.locator(`[data-session-id="${OTHER_SESSION_ID}"]`).click()
+  await expect(page.locator(`[data-session-id="${OTHER_SESSION_ID}"]`)).toHaveClass(
+    /hc-sessions__item--active/,
   )
-  await page.reload({ waitUntil: 'domcontentloaded' })
-  await expect(page.getByText('小王的辅导助手', { exact: false }).first()).toBeVisible()
-  await expect(page.getByTestId('recognize-outcome-unknown')).toHaveCount(0)
-  expect(gradingRequests).toHaveLength(callsBeforeOtherAgent)
+  await expect(page.getByTestId('recognize-recovering')).toHaveCount(0)
+  await expect(page.getByTestId('photo-grade-overlay')).toHaveCount(0)
+  expect(imageTaskRequests).toHaveLength(callsBeforeOtherSession)
 
-  const persisted = await page.evaluate((key) => localStorage.getItem(key), GRADING_BINDING_KEY)
+  await page.locator(`[data-session-id="${SESSION_ID}"]`).click()
+  await expect(page.locator(`[data-session-id="${SESSION_ID}"]`)).toHaveClass(
+    /hc-sessions__item--active/,
+  )
+  await expect(page.getByTestId('photo-grade-overlay')).toBeVisible({ timeout: 10_000 })
+  expect(statusReads(imageTaskRequests).length).toBeGreaterThan(readsAfterRefresh)
+  assertFacadeReadOnly(imageTaskRequests)
+  await expect(page.locator('body')).not.toContainText('结果待核实')
+  await expect(page.getByRole('button', { name: '查看结果状态' })).toHaveCount(0)
+  await expect(page.getByTestId('recognize-outcome-dialog')).toHaveCount(0)
+
+  const persisted = await page.evaluate((key) => localStorage.getItem(key), IMAGE_TASK_BINDING_KEY)
   expect(JSON.parse(persisted ?? 'null')).toEqual({
     version: 1,
-    bindings: { [SESSION_ID]: { agent_id: AGENT_A, job_id: JOB_ID } },
+    bindings: { [SESSION_ID]: { agent_id: AGENT_A, dispatch_id: DISPATCH_ID } },
   })
 })
