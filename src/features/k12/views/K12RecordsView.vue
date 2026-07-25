@@ -26,11 +26,13 @@ import {
   k12GenerateCustomPaper,
   k12ListPracticeSets,
   k12ListCreativeWorks,
+  k12SendAccumulation,
   type CustomPaperDifficulty,
   type CustomPaperResp,
   type CustomPaperScope,
   type CustomPaperTotal,
 } from '@/api/k12'
+import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 // 积累「生成默写题加入练习集」端点未收编进 api/k12.ts（该文件其他会话活跃禁改）→ 此处经 apiPost 直调，
 // 契约与下方 dictationToBasket 一致；api/k12.ts 解锁后由该文件 owner 收编为 k12AccumDictationToBasket。
 import { apiPost } from '@/api/client'
@@ -70,6 +72,10 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const toast = useToast()
 const store = useK12Store()
+const accumulationDelivery = useK12DeliveryBatch({
+  agent: () => props.agentId,
+  idleLabel: '发送到手机',
+})
 
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：学习档案五对象 Tab——本周复习(行动)｜全部错题(档案)｜
 // 练习集｜积累｜作品；学情已提升为顶栏一等 Tab（K12InsightPanel）。默认落在「本周复习」（行动优先）。
@@ -97,6 +103,39 @@ const objectCountsError = ref(false)
 const practiceObjectEmpty = ref(false)
 const worksObjectEmpty = ref(false)
 let objectCountRequest = 0
+
+type ArchiveUndo = {
+  agentId: string
+  recordId: string
+  version: number
+  timer: ReturnType<typeof setTimeout>
+}
+const archiveUndo = ref<ArchiveUndo | null>(null)
+const archiveBusy = ref<string[]>([])
+let archiveIntentSequence = 0
+let latestArchiveUndoIntent = 0
+
+function removeArchiveUndo(recordId?: string) {
+  if (!archiveUndo.value || (recordId && archiveUndo.value.recordId !== recordId)) return
+  clearTimeout(archiveUndo.value.timer)
+  archiveUndo.value = null
+}
+
+function clearArchiveUndos() {
+  removeArchiveUndo()
+}
+
+function exposeArchiveUndo(recordId: string, version: number, agentId: string) {
+  removeArchiveUndo()
+  const timer = setTimeout(() => removeArchiveUndo(recordId), 8_000)
+  archiveUndo.value = { agentId, recordId, version, timer }
+}
+
+function setArchiveBusy(recordId: string, busy: boolean) {
+  archiveBusy.value = busy
+    ? [...new Set([...archiveBusy.value, recordId])]
+    : archiveBusy.value.filter((id) => id !== recordId)
+}
 
 // 五对象计数是导航增强信息：独立请求、独立 settle，不得让任一计数失败阻断错题/积累主内容。
 async function fetchPracticeSetsForCount() {
@@ -181,6 +220,8 @@ watch(
 watch(
   () => props.agentId,
   () => {
+    clearArchiveUndos()
+    archiveBusy.value = []
     closeRetry()
     accumSubject.value = ''
     mistakeSubject.value = ''
@@ -197,6 +238,8 @@ watch(
     reload()
   },
 )
+
+onBeforeUnmount(clearArchiveUndos)
 
 // 手动记积累本（#4）：家长在会话里遇到好东西 → 直接记进积累本（PRD §3.13）。
 // 学情相关（本月辅导次数/学期分科/薄弱条/完成率）已随 IA 迁移抽到 K12InsightPanel（顶栏一等 Tab）。
@@ -438,7 +481,12 @@ const view = computed(() => store.mistakeView)
 const accumView = computed(() => store.accumView)
 const report = computed(() => store.report)
 const weekCount = computed(() => view.value?.reviewQueue?.length ?? 0)
-const mistakeCount = computed(() => view.value?.items.length ?? 0)
+const mistakeCount = computed(
+  () => view.value?.items.filter((item) => item.status !== 'archived').length ?? 0,
+)
+const archivedMistakeCount = computed(
+  () => view.value?.items.filter((item) => item.status === 'archived').length ?? 0,
+)
 
 function updatePracticeCount(count: number) {
   practiceCount.value = count
@@ -498,10 +546,14 @@ function mistakeSubjectOf(item: RecordItem): string {
 }
 
 function matchesMistakeStatus(item: RecordItem): boolean {
-  if (mistakeStatus.value === 'all') return true
+  if (mistakeStatus.value === 'all') return item.status !== 'archived'
   if (mistakeStatus.value === 'review') return item.status === 'new' || item.status === 'explained'
   return item.status === mistakeStatus.value
 }
+
+const mistakeResultTotal = computed(() =>
+  mistakeStatus.value === 'archived' ? archivedMistakeCount.value : mistakeCount.value,
+)
 
 const filteredMistakeItems = computed(() =>
   (view.value?.items ?? []).filter(
@@ -628,6 +680,59 @@ async function onAction(payload: {
   } else if (id === 'detail') {
     openDetail(record)
   }
+}
+
+async function archiveMistake(record: RecordItem) {
+  const agent = props.agentId
+  if (!agent || archiveBusy.value.includes(record.recordId) || record.status === 'archived') return
+  const intent = ++archiveIntentSequence
+  setArchiveBusy(record.recordId, true)
+  try {
+    const archived = await store.archiveMistake(agent, record.recordId, record.version)
+    if (props.agentId !== agent) return
+    // 多条归档可并发；Undo 归属按用户发起顺序，而不是网络响应顺序。
+    // 较早请求的迟到成功不得覆盖较晚成功动作的唯一 Undo。
+    if (intent >= latestArchiveUndoIntent) {
+      latestArchiveUndoIntent = intent
+      exposeArchiveUndo(record.recordId, archived.version, agent)
+    }
+    if (detail.value.record?.recordId === record.recordId) closeDetail()
+    void store.calibrateMistakes(agent)
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+    if (props.agentId === agent) void store.calibrateMistakes(agent)
+  } finally {
+    setArchiveBusy(record.recordId, false)
+  }
+}
+
+async function restoreMistake(recordId: string, version: number, undo = false) {
+  const agent = props.agentId
+  if (!agent || archiveBusy.value.includes(recordId)) return
+  setArchiveBusy(recordId, true)
+  try {
+    await store.restoreMistake(agent, recordId, version)
+    if (props.agentId !== agent) return
+    removeArchiveUndo(recordId)
+    if (detail.value.record?.recordId === recordId) closeDetail()
+    toast.success(t(undo ? 'k12.records.archiveUndone' : 'k12.records.restoreSucceeded'))
+    void store.calibrateMistakes(agent)
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+    if (props.agentId === agent) void store.calibrateMistakes(agent)
+  } finally {
+    setArchiveBusy(recordId, false)
+  }
+}
+
+function restoreArchivedRecord(record: RecordItem) {
+  if (record.status !== 'archived') return
+  void restoreMistake(record.recordId, record.version)
+}
+
+function undoArchive(undo: ArchiveUndo) {
+  if (undo.agentId !== props.agentId) return
+  void restoreMistake(undo.recordId, undo.version, true)
 }
 
 // 「再练一道」变式题结果弹层（守答案真遮罩：revealed=false 时答案模糊+禁选中，点按才揭示）。
@@ -796,9 +901,11 @@ const detail = ref<{ open: boolean; record: RecordItem | null; kind: 'mistake' |
   kind: 'mistake',
 })
 function openDetail(record: RecordItem, kind: 'mistake' | 'accum' = 'mistake') {
+  accumulationDelivery.reset()
   detail.value = { open: true, record, kind }
 }
 function closeDetail() {
+  accumulationDelivery.reset()
   detail.value = { open: false, record: null, kind: 'mistake' }
 }
 const detailQuestion = computed(() => String(detail.value.record?.fields.question ?? ''))
@@ -853,6 +960,10 @@ const detailStatusTone = computed(() => {
 })
 // UX-1：详情弹层「家长确认已会」——已掌握态不显该动作（幂等，与档案行同口径）。
 const detailMastered = computed(() => detail.value.record?.status === 'mastered')
+const detailArchived = computed(() => detail.value.record?.status === 'archived')
+const detailRestorable = computed(
+  () => detailArchived.value && detail.value.record?.fields.restorable === true,
+)
 async function markMasteredFromDetail() {
   const rec = detail.value.record
   if (!rec) return
@@ -875,6 +986,20 @@ async function markMasteredFromDetail() {
 // api/k12.ts 其他会话活跃禁改 → 此处 apiPost 内联；解锁后由该文件 owner 收编为 k12AccumDictationToBasket。
 const dictationBusy = ref(false)
 const dictationAdded = ref<string[]>([]) // 本会话已装篮的积累 record_id（按钮幂等置灰）
+async function copyAccumulationContent() {
+  if (!detailContent.value) return
+  try {
+    await setClipboard(detailContent.value)
+    toast.success(t('k12.accum.copied'))
+  } catch {
+    toast.error(t('k12.accum.copyFailed'))
+  }
+}
+async function sendAccumulationToPhone() {
+  const rec = detail.value.record
+  if (!rec) return
+  await accumulationDelivery.send(() => k12SendAccumulation(props.agentId, rec.recordId))
+}
 async function dictationToBasket() {
   const rec = detail.value.record
   if (!rec || dictationBusy.value || dictationAdded.value.includes(rec.recordId)) return
@@ -1210,7 +1335,7 @@ async function doExportMd() {
       <!-- 本周复习（行动页，PRD §3.6）：复习队列 + 趋势 + 生成复习卷；档案查管在「全部错题」。 -->
       <section v-if="sub === 'week'" data-testid="week-section">
         <div
-          v-if="mistakesLoading"
+          v-if="mistakesLoading && !store.mistakeView"
           class="k12rec__loading"
           role="status"
           data-testid="records-loading"
@@ -1364,6 +1489,17 @@ async function doExportMd() {
                   >{{ t('k12.records.viewInsights') }} ›</a
                 ></template
               >
+              <template #review-row-actions="{ item }">
+                <button
+                  type="button"
+                  class="rl-btn"
+                  :disabled="archiveBusy.includes(item.recordId)"
+                  :data-testid="`mistake-archive-${item.recordId}`"
+                  @click="archiveMistake(item)"
+                >
+                  {{ t('k12.records.archiveReview') }}
+                </button>
+              </template>
             </RecordList>
           </div>
         </template>
@@ -1372,7 +1508,7 @@ async function doExportMd() {
       <!-- 全部错题（档案页，PRD §3.7）：查找、核对、管理——直接展开筛选 + 全量，不与本周复习重复行动。 -->
       <section v-else-if="sub === 'mistakes'" data-testid="mistakes-section">
         <div
-          v-if="mistakesLoading"
+          v-if="mistakesLoading && !store.mistakeView"
           class="k12rec__loading"
           role="status"
           data-testid="records-loading"
@@ -1401,7 +1537,7 @@ async function doExportMd() {
               >{{
                 t('k12.records.resultCount', {
                   shown: filteredMistakeItems.length,
-                  total: mistakeCount,
+                  total: mistakeResultTotal,
                 })
               }}</span
             >
@@ -1454,7 +1590,30 @@ async function doExportMd() {
               hide-review
               hide-filters
               @action="onAction"
-            />
+            >
+              <template #list-row-actions="{ item }">
+                <button
+                  v-if="item.status === 'archived' && item.fields.restorable === true"
+                  type="button"
+                  class="rl-btn"
+                  :disabled="archiveBusy.includes(item.recordId)"
+                  :data-testid="`mistake-restore-${item.recordId}`"
+                  @click="restoreArchivedRecord(item)"
+                >
+                  {{ t('k12.records.restoreReview') }}
+                </button>
+                <button
+                  v-else-if="item.status !== 'archived'"
+                  type="button"
+                  class="rl-btn"
+                  :disabled="archiveBusy.includes(item.recordId)"
+                  :data-testid="`mistake-archive-${item.recordId}`"
+                  @click="archiveMistake(item)"
+                >
+                  {{ t('k12.records.archiveReview') }}
+                </button>
+              </template>
+            </RecordList>
           </div>
         </template>
       </section>
@@ -2004,6 +2163,21 @@ async function doExportMd() {
           <!-- §3.9 检验出口：生成默写题加入练习集（打印回传才进自动复批闭环） -->
           <div class="k12detail__actions">
             <button
+              class="btn btn-ghost"
+              data-testid="accum-copy-content"
+              @click="copyAccumulationContent"
+            >
+              {{ t('k12.accum.copyContent') }}
+            </button>
+            <button
+              class="btn btn-ghost"
+              data-testid="accum-send-phone"
+              :disabled="accumulationDelivery.disabled.value"
+              @click="sendAccumulationToPhone"
+            >
+              {{ accumulationDelivery.label.value }}
+            </button>
+            <button
               class="btn"
               data-testid="accum-dictation-to-basket"
               :disabled="dictationBusy || dictationAdded.includes(detail.record!.recordId)"
@@ -2053,7 +2227,16 @@ async function doExportMd() {
         <!-- UX-1：详情弹层「家长确认已会」（已掌握态改显只读徽标，幂等）。仅错题（积累不复习/无掌握语义）。 -->
         <div v-if="detail.kind !== 'accum'" class="k12detail__actions">
           <button
-            v-if="!detailMastered"
+            v-if="detailRestorable"
+            class="btn btn-primary"
+            data-testid="detail-restore-review"
+            :disabled="archiveBusy.includes(detail.record!.recordId)"
+            @click="restoreArchivedRecord(detail.record!)"
+          >
+            {{ t('k12.records.restoreReview') }}
+          </button>
+          <button
+            v-else-if="!detailArchived && !detailMastered"
             class="btn btn-primary"
             data-testid="detail-mark-mastered"
             @click="markMasteredFromDetail"
@@ -2061,11 +2244,20 @@ async function doExportMd() {
             {{ t('records.markMastered') }}
           </button>
           <span
-            v-else
+            v-else-if="!detailArchived"
             class="k12detail__status k12detail__status--got"
             data-testid="detail-mastered-label"
             >{{ t('k12.detail.alreadyMastered') }}</span
           >
+          <button
+            v-if="!detailArchived"
+            class="btn btn-ghost"
+            data-testid="detail-archive-review"
+            :disabled="archiveBusy.includes(detail.record!.recordId)"
+            @click="archiveMistake(detail.record!)"
+          >
+            {{ t('k12.records.archiveReview') }}
+          </button>
           <span class="k12rec__sp" />
           <!-- UX-3：克制删除入口——ghost 次级样式（非首屏主按钮），二次确认后才删。 -->
           <button
@@ -2093,6 +2285,28 @@ async function doExportMd() {
       @confirm="doDelete"
       @cancel="confirmDelete = false"
     />
+
+    <Teleport to="body">
+      <div
+        v-if="archiveUndo"
+        class="k12archive-undos"
+        role="status"
+        aria-live="polite"
+        aria-atomic="false"
+      >
+        <div :key="`${archiveUndo.agentId}:${archiveUndo.recordId}`" class="k12archive-undo">
+          <span>{{ t('k12.records.archivedToast') }}</span>
+          <button
+            type="button"
+            :disabled="archiveBusy.includes(archiveUndo.recordId)"
+            :data-testid="`mistake-archive-undo-${archiveUndo.recordId}`"
+            @click="undoArchive(archiveUndo)"
+          >
+            {{ t('k12.records.undoArchive') }}
+          </button>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -2102,6 +2316,40 @@ async function doExportMd() {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+.k12archive-undos {
+  position: fixed;
+  left: 50%;
+  bottom: 20px;
+  transform: translateX(-50%);
+  z-index: var(--hc-z-toast);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.k12archive-undo {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  min-width: 260px;
+  padding: 11px 14px;
+  color: var(--hc-text-primary);
+  background: var(--hc-bg-elevated);
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  box-shadow: var(--hc-shadow-lg);
+}
+.k12archive-undo button {
+  margin-inline-start: auto;
+  border: 0;
+  background: transparent;
+  color: var(--hc-accent);
+  font-weight: 650;
+  cursor: pointer;
+}
+.k12archive-undo button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 .k12rec__tabs {
   display: flex;

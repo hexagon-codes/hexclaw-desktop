@@ -1,7 +1,7 @@
 <!--
   K12 作品面板（PRD §3.10）· 学习档案「作品」对象 Tab。
-  语文写作 / 美术作品统一承载成长版本：draft→已点评→已修改→再点评（可归档）。
-  只给证据化点评，不打分、不代写、不排名（INV-011）——点评内容由家长/Skill 提供，此处只做流转与展示。
+  语文写作 / 美术作品统一承载成长版本；保存作品或修改稿后由服务端自动生成点评。
+  只给证据化点评，不打分、不代写、不排名（INV-011）。
   自包含：直连 /api/k12/creative-works*，本地状态，按 agentId 隔离拉取。
 -->
 <script setup lang="ts">
@@ -11,31 +11,22 @@ import { useToast } from '@/composables/useToast'
 import {
   k12ListCreativeWorks,
   k12CreateCreativeWork,
-  k12AttachWorkFeedback,
   k12GenerateWorkFeedback,
   k12SubmitWorkRevision,
-  k12ArchiveCreativeWork,
-  k12AddAccumulation,
-  k12RecordMistake,
   k12UploadAsset,
-  k12CreateCreativeWorkOCR,
-  k12RetryCreativeWorkOCR,
-  k12ConfirmCreativeWorkOCR,
+  k12CreateImageTask,
+  k12GetImageTask,
+  k12RetryImageTask,
+  k12ConfirmImageTask,
+  k12CancelImageTask,
   k12AssetURL,
-  k12SendWorkFeedback,
-  k12RetryDeliveryReceipt,
-  k12QueryDeliveryReceipt,
-  k12MarkPracticeCardDone,
   type CreativeWorkDTO,
-  type CreativeWorkOCRJobDTO,
-  type DeliveryReceiptDTO,
+  type ImageTaskCreativeProjectionDTO,
+  type ImageTaskDispatchDTO,
   type WorkFeedbackDTO,
   type WorkVersionDTO,
   type WorkType,
 } from '@/api/k12'
-import { printPracticePaper, savePracticePaperPdf } from '../export'
-import type { PersistentPrintRequest } from '../persistent-print'
-import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 
 const props = withDefaults(defineProps<{ agentId: string; showAddButton?: boolean }>(), {
@@ -65,13 +56,10 @@ const previewImageSrc = ref('')
 const previewImageAlt = ref('')
 const previewDialog = ref<HTMLElement | null>(null)
 let previewOpener: HTMLElement | null = null
-// 点评/修改稿的行内输入：按 record_id 存草稿文本。
-const feedbackDraft = ref<Record<string, string>>({})
+// 修改稿行内输入：按 record_id 存草稿文本。
 const revisionDraft = ref<Record<string, string>>({})
-const feedbackGeneratingId = ref('')
-const feedbackGenerateError = ref<Record<string, string>>({})
-const deliveryReceipts = ref<Record<string, DeliveryReceiptDTO>>({})
-const deliverySetupErrors = ref<Record<string, string>>({})
+const feedbackRegeneratingId = ref('')
+const feedbackRegenerateError = ref<Record<string, string>>({})
 let feedbackGeneration = 0
 let feedbackAbort: AbortController | null = null
 
@@ -80,9 +68,10 @@ const filtered = computed(() =>
 )
 
 // ── KPI（原型 2570-2576）：从列表计算，不另拉端点 ─────────────
-// 「已点评」以证据判定：任一版本带 feedback 即算（status 会随修改稿回到待点评态，证据不回退）。
+// 「已点评」只看当前最新版本；提交修改稿后，新版本的自动点评完成前仍是待点评。
 function isReviewed(w: CreativeWorkDTO): boolean {
-  return w.versions.some((v) => !!v.feedback || !!v.structured_feedback)
+  const version = latestVersion(w)
+  return !!(version?.feedback || version?.structured_feedback)
 }
 function latestVersion(w: CreativeWorkDTO): WorkVersionDTO | undefined {
   return w.versions[w.versions.length - 1]
@@ -99,7 +88,7 @@ function structuredFeedbackProjection(version: WorkVersionDTO): string {
   return version.structured_feedback?.projection_markdown?.trim() || version.feedback?.trim() || ''
 }
 function currentVersionReviewed(w: CreativeWorkDTO): boolean {
-  return w.status === 'feedback_ready' || w.status === 'archived'
+  return isReviewed(w)
 }
 function cardSummary(w: CreativeWorkDTO): string {
   const version = latestVersion(w)
@@ -131,14 +120,7 @@ function cardEvidence(w: CreativeWorkDTO): string[] {
   )
 }
 function detailTitle(w: CreativeWorkDTO): string {
-  const key = currentVersionReviewed(w)
-    ? w.work_type === 'writing'
-      ? 'k12.works.writingReviewTitle'
-      : 'k12.works.artReviewTitle'
-    : w.work_type === 'writing'
-      ? 'k12.works.generateWritingReviewTitle'
-      : 'k12.works.generateArtReviewTitle'
-  return t(key, { title: w.title })
+  return t('k12.works.detailTitle', { title: w.title })
 }
 function activeDetailDialog(): HTMLElement | null {
   return detailDialogs.value.find((dialog) => dialog.dataset.workId === expandedId.value) ?? null
@@ -151,7 +133,9 @@ function openDetails(w: CreativeWorkDTO, event?: Event) {
 }
 function closeDetails(restoreFocus = true) {
   if (!expandedId.value) return
+  const recordId = expandedId.value
   expandedId.value = ''
+  resetRevisionPhoto(recordId)
   const opener = detailOpener
   detailOpener = null
   void nextTick(() => {
@@ -223,15 +207,6 @@ function feedbackDimensionLabel(
   return labels[dimension]
 }
 
-function feedbackActionLabel(action: WorkFeedbackDTO['allowed_actions'][number]): string {
-  const labels: Record<typeof action, string> = {
-    send: t('k12.works.feedbackActionSend'),
-    print_practice_card: t('k12.works.feedbackActionPrint'),
-    collect: t('k12.works.feedbackActionCollect'),
-    record_language_issue: t('k12.works.feedbackActionLanguageIssue'),
-  }
-  return labels[action]
-}
 const kpiTotal = computed(() => works.value.length)
 const kpiReviewed = computed(() => works.value.filter(isReviewed).length)
 const kpiPending = computed(() => kpiTotal.value - kpiReviewed.value)
@@ -264,12 +239,33 @@ let photoFile: File | null = null
 let photoGeneration = 0
 let photoAbort: AbortController | null = null
 
-// DD-013：上传成功只代表原图落盘；写作照片必须再经过持久 OCR Job 与家长确认。
-const photoOCRJob = ref<CreativeWorkOCRJobDTO | null>(null)
+// DD-013/DD-030：可见交互保持不变；带图作品在内部统一走 ImageTaskDispatch。
+// 这里的本地 view 只是兼容既有模板状态，不是旧 public OCR resource。
+type CreativePhotoJobStatus =
+  | 'pending'
+  | 'processing'
+  | 'awaiting_confirmation'
+  | 'failed'
+  | 'confirmed'
+
+interface CreativePhotoJobView {
+  dispatch_id: string
+  source_asset_id: string
+  status: CreativePhotoJobStatus
+  ocr_raw?: string
+  error_message?: string
+  confirmed_version?: number
+  confirmed_content?: string
+}
+
+const photoImageTask = ref<ImageTaskDispatchDTO | null>(null)
+const photoOCRJob = ref<CreativePhotoJobView | null>(null)
 const photoOCRBusy = ref(false)
 const photoOCRRequestError = ref('')
 let photoOCRGeneration = 0
 let photoOCRRequestId = ''
+const manualCreativePollIntervalMS = 250
+const manualCreativePollLimit = 960
 
 function newOCRRequestId(): string {
   return (
@@ -278,16 +274,93 @@ function newOCRRequestId(): string {
   )
 }
 
-function resetPhotoOCR(clearDraft = false) {
+function creativeProjection(
+  dispatch: ImageTaskDispatchDTO | null | undefined,
+): ImageTaskCreativeProjectionDTO | undefined {
+  if (!dispatch) return undefined
+  const projection = dispatch.target_projection
+  return projection?.kind === 'creative' ? projection : undefined
+}
+
+function manualCreativeTaskSettled(dispatch: ImageTaskDispatchDTO): boolean {
+  if (dispatch.status === 'failed' || dispatch.status === 'cancelled') return true
+  const status = creativeProjection(dispatch)?.status
+  return (
+    status === 'awaiting_confirmation' ||
+    status === 'ready' ||
+    status === 'promoted' ||
+    status === 'failed' ||
+    status === 'cancelled'
+  )
+}
+
+function photoJobView(dispatch: ImageTaskDispatchDTO, sourceAssetId: string): CreativePhotoJobView {
+  const projection = creativeProjection(dispatch)
+  let status: CreativePhotoJobStatus = 'processing'
+  if (
+    dispatch.status === 'failed' ||
+    dispatch.status === 'cancelled' ||
+    projection?.status === 'failed' ||
+    projection?.status === 'cancelled'
+  ) {
+    status = 'failed'
+  } else if (projection?.status === 'awaiting_confirmation') {
+    status = 'awaiting_confirmation'
+  } else if (projection?.status === 'ready' || projection?.status === 'promoted') {
+    status = 'confirmed'
+  }
+  return {
+    dispatch_id: dispatch.dispatch_id,
+    source_asset_id: sourceAssetId,
+    status,
+    ocr_raw: projection?.canonical_content,
+    confirmed_version: status === 'confirmed' ? projection?.canonical_version : undefined,
+    confirmed_content: status === 'confirmed' ? projection?.canonical_content : undefined,
+  }
+}
+
+async function pollManualCreativeTask(
+  initial: ImageTaskDispatchDTO,
+  active: () => boolean,
+  apply: (dispatch: ImageTaskDispatchDTO) => void,
+): Promise<ImageTaskDispatchDTO> {
+  let current = initial
+  apply(current)
+  for (let index = 0; index < manualCreativePollLimit; index += 1) {
+    if (!active() || manualCreativeTaskSettled(current)) return current
+    await new Promise<void>((resolve) => window.setTimeout(resolve, manualCreativePollIntervalMS))
+    if (!active()) return current
+    current = (await k12GetImageTask(props.agentId, current.dispatch_id)).dispatch
+    apply(current)
+  }
+  throw new Error(t('k12.works.ocrFailed'))
+}
+
+function cancelManualCreativeTask(dispatch: ImageTaskDispatchDTO | null) {
+  if (!dispatch || creativeProjection(dispatch)?.status === 'promoted') return
+  void k12CancelImageTask(dispatch.dispatch_id, {
+    agent: props.agentId,
+    version: dispatch.version,
+  }).catch(() => {
+    // 关闭/换图只做 best-effort 取消；旧 intake 已有 owner/identity 约束，不能污染新任务。
+  })
+}
+
+function resetPhotoOCR(clearDraft = false, cancelTask = true) {
   photoOCRGeneration += 1
+  const dispatch = photoImageTask.value
+  photoImageTask.value = null
   photoOCRJob.value = null
   photoOCRBusy.value = false
   photoOCRRequestError.value = ''
   photoOCRRequestId = ''
   if (clearDraft) addDraft.value = ''
+  if (cancelTask) cancelManualCreativeTask(dispatch)
 }
 
-function applyPhotoOCRJob(job: CreativeWorkOCRJobDTO) {
+function applyPhotoImageTask(dispatch: ImageTaskDispatchDTO, assetId: string) {
+  photoImageTask.value = dispatch
+  const job = photoJobView(dispatch, assetId)
   photoOCRJob.value = job
   photoOCRRequestError.value = ''
   if (job.status === 'awaiting_confirmation' && job.ocr_raw) {
@@ -299,20 +372,41 @@ function applyPhotoOCRJob(job: CreativeWorkOCRJobDTO) {
 
 async function startPhotoOCR() {
   const assetId = photoAssetId.value
-  if (!assetId || addType.value !== 'writing') return
+  if (!assetId) return
   if (!photoOCRRequestId) photoOCRRequestId = newOCRRequestId()
   const generation = ++photoOCRGeneration
+  const selectedType = addType.value
   photoOCRBusy.value = true
   photoOCRRequestError.value = ''
   photoOCRJob.value = null
   try {
-    const job = await k12CreateCreativeWorkOCR({
+    const response = await k12CreateImageTask({
       agent: props.agentId,
-      request_id: photoOCRRequestId,
-      source_asset_id: assetId,
+      source_session: `creative-works:${props.agentId}`,
+      source_kind: 'desktop',
+      source_ref: photoOCRRequestId,
+      source_asset_refs: [assetId],
+      attempt_generation: 1,
+      route_request: { selection_source: 'auto' },
+      creative_entry: {
+        kind: 'new_work',
+        task_intent: selectedType === 'writing' ? 'writing' : 'artwork',
+      },
     })
-    if (generation !== photoOCRGeneration || assetId !== photoAssetId.value) return
-    applyPhotoOCRJob(job)
+    if (
+      generation !== photoOCRGeneration ||
+      assetId !== photoAssetId.value ||
+      selectedType !== addType.value
+    )
+      return
+    await pollManualCreativeTask(
+      response.dispatch,
+      () =>
+        generation === photoOCRGeneration &&
+        assetId === photoAssetId.value &&
+        selectedType === addType.value,
+      (dispatch) => applyPhotoImageTask(dispatch, assetId),
+    )
   } catch (e) {
     if (generation !== photoOCRGeneration) return
     photoOCRRequestError.value = (e as Error).message || t('k12.works.ocrFailed')
@@ -322,18 +416,26 @@ async function startPhotoOCR() {
 }
 
 async function retryPhotoOCR() {
-  const job = photoOCRJob.value
-  if (!job || photoOCRBusy.value) {
-    if (!job && photoAssetId.value) await startPhotoOCR()
+  const dispatch = photoImageTask.value
+  if (!dispatch || photoOCRBusy.value) {
+    if (!dispatch && photoAssetId.value) await startPhotoOCR()
     return
   }
+  const assetId = photoAssetId.value
   const generation = ++photoOCRGeneration
   photoOCRBusy.value = true
   photoOCRRequestError.value = ''
   try {
-    const updated = await k12RetryCreativeWorkOCR(props.agentId, job.job_id)
-    if (generation !== photoOCRGeneration || job.source_asset_id !== photoAssetId.value) return
-    applyPhotoOCRJob(updated)
+    const response = await k12RetryImageTask(dispatch.dispatch_id, {
+      agent: props.agentId,
+      version: dispatch.version,
+    })
+    if (generation !== photoOCRGeneration || assetId !== photoAssetId.value) return
+    await pollManualCreativeTask(
+      response.dispatch,
+      () => generation === photoOCRGeneration && assetId === photoAssetId.value,
+      (updated) => applyPhotoImageTask(updated, assetId),
+    )
   } catch (e) {
     if (generation !== photoOCRGeneration) return
     photoOCRRequestError.value = (e as Error).message || t('k12.works.ocrFailed')
@@ -344,15 +446,24 @@ async function retryPhotoOCR() {
 
 async function confirmPhotoOCR() {
   const job = photoOCRJob.value
+  const dispatch = photoImageTask.value
   const content = addDraft.value.trim()
-  if (!job || !content || photoOCRBusy.value) return
+  if (!job || !dispatch || !content || photoOCRBusy.value) return
   const generation = ++photoOCRGeneration
   photoOCRBusy.value = true
   photoOCRRequestError.value = ''
   try {
-    const confirmed = await k12ConfirmCreativeWorkOCR(props.agentId, job.job_id, content)
+    const response = await k12ConfirmImageTask(dispatch.dispatch_id, {
+      agent: props.agentId,
+      version: dispatch.version,
+      creative: {
+        action: 'freeze_ocr',
+        canonical_version: creativeProjection(dispatch)?.canonical_version ?? 1,
+        canonical_content: content,
+      },
+    })
     if (generation !== photoOCRGeneration || job.source_asset_id !== photoAssetId.value) return
-    applyPhotoOCRJob(confirmed)
+    applyPhotoImageTask(response.dispatch, job.source_asset_id)
   } catch (e) {
     if (generation !== photoOCRGeneration) return
     photoOCRRequestError.value = (e as Error).message || t('k12.works.ocrConfirmFailed')
@@ -365,7 +476,7 @@ const photoUploading = computed(
   () => photoPct.value >= 0 && photoPct.value < 100 && !photoError.value,
 )
 
-function resetPhoto() {
+function resetPhoto(cancelTask = true) {
   photoGeneration += 1
   photoAbort?.abort()
   photoAbort = null
@@ -375,7 +486,7 @@ function resetPhoto() {
   photoPct.value = -1
   photoError.value = ''
   photoFile = null
-  resetPhotoOCR()
+  resetPhotoOCR(false, cancelTask)
   if (photoInput.value) photoInput.value.value = ''
 }
 
@@ -437,7 +548,7 @@ async function uploadPhoto() {
     if (generation !== photoGeneration) return
     photoAssetId.value = resp.asset_id
     photoPct.value = 100
-    if (addType.value === 'writing') void startPhotoOCR()
+    void startPhotoOCR()
   } catch (e) {
     if (generation !== photoGeneration || (e as Error).name === 'AbortError') return
     photoError.value = (e as Error).message || t('k12.works.photoFailed')
@@ -451,7 +562,12 @@ async function uploadPhoto() {
 // 原图可选；一旦出现本地预览，本次上传必须成功拿到 asset_id 才能保存。
 // 上传中/失败均阻断，移除预览后恢复纯文本保存（DD-026B）。
 const photoReady = computed(
-  () => !photoPreview.value || (!!photoAssetId.value && !photoUploading.value && !photoError.value),
+  () =>
+    !photoPreview.value ||
+    (!!photoAssetId.value &&
+      !photoUploading.value &&
+      !photoError.value &&
+      creativeProjection(photoImageTask.value)?.status === 'ready'),
 )
 const photoOCRConfirmed = computed(() => {
   const job = photoOCRJob.value
@@ -460,7 +576,6 @@ const photoOCRConfirmed = computed(() => {
     job.status === 'confirmed' &&
     job.source_asset_id === photoAssetId.value &&
     !!job.confirmed_version &&
-    !!job.confirmed_digest &&
     job.confirmed_content === addDraft.value.trim()
   )
 })
@@ -473,8 +588,10 @@ const addValid = computed(
     (addType.value === 'art' || !photoPreview.value || photoOCRConfirmed.value),
 )
 
-watch(addType, (type) => {
-  if (type === 'writing' && photoAssetId.value && !photoOCRJob.value && !photoOCRBusy.value) {
+watch(addType, () => {
+  if (photoAssetId.value) {
+    resetPhotoOCR(false)
+    photoOCRRequestId = newOCRRequestId()
     void startPhotoOCR()
   }
 })
@@ -496,6 +613,7 @@ function openAdd() {
 function closeAdd() {
   if (!addOpen.value) return
   addOpen.value = false
+  resetPhoto()
   const opener = addOpener
   addOpener = null
   void nextTick(() => {
@@ -525,27 +643,38 @@ async function submitAdd() {
   if (!addValid.value || addBusy.value) return
   addBusy.value = true
   try {
-    const confirmedOCR =
-      addType.value === 'writing' && photoPreview.value ? photoOCRJob.value : null
-    await k12CreateCreativeWork({
-      agent: props.agentId,
-      work_type: addType.value,
-      title: addTitle.value.trim(),
-      task: addTask.value.trim(),
-      intent: addType.value === 'art' ? addIntent.value.trim() || undefined : undefined,
-      content_markdown: addType.value === 'writing' ? addDraft.value.trim() : undefined,
-      source_asset_id: photoAssetId.value || undefined,
-      ...(confirmedOCR && confirmedOCR.status === 'confirmed'
-        ? {
-            ocr_job_id: confirmedOCR.job_id,
-            ocr_version: confirmedOCR.confirmed_version,
-            ocr_confirmed_digest: confirmedOCR.confirmed_digest,
-          }
-        : {}),
-    })
+    if (photoAssetId.value) {
+      const dispatch = photoImageTask.value
+      if (!dispatch || creativeProjection(dispatch)?.status !== 'ready') return
+      const response = await k12ConfirmImageTask(dispatch.dispatch_id, {
+        agent: props.agentId,
+        version: dispatch.version,
+        creative: {
+          action: 'commit',
+          work_title: addTitle.value.trim(),
+          task_requirement: addTask.value.trim(),
+          intent: addType.value === 'art' ? addIntent.value.trim() || undefined : undefined,
+          content_markdown: addType.value === 'writing' ? addDraft.value.trim() : undefined,
+        },
+      })
+      photoImageTask.value = response.dispatch
+      if (creativeProjection(response.dispatch)?.status !== 'promoted') {
+        throw new Error(t('k12.works.ocrFailed'))
+      }
+      // A promoted explicit commit is terminal and must not be cancelled by modal cleanup.
+      photoImageTask.value = null
+    } else {
+      await k12CreateCreativeWork({
+        agent: props.agentId,
+        work_type: addType.value,
+        title: addTitle.value.trim(),
+        task: addTask.value.trim(),
+        intent: addType.value === 'art' ? addIntent.value.trim() || undefined : undefined,
+        content_markdown: addType.value === 'writing' ? addDraft.value.trim() : undefined,
+      })
+    }
     toast.success(t('k12.works.created'))
     closeAdd()
-    resetPhoto()
     await load()
   } catch (e) {
     toast.error((e as Error).message)
@@ -564,236 +693,6 @@ function workThumbURL(w: CreativeWorkDTO): string {
     if (id.startsWith('asset://')) return k12AssetURL(props.agentId, id)
   }
   return ''
-}
-
-// ── 观察练习卡（任务2：§3.10 美术——练习必须有产物 + 打印/发送/打卡出口）────
-// 卡文本由服务端从点评正文提炼（practice_card，单一事实源）；取最新带点评版本。
-function practiceCardOf(w: CreativeWorkDTO): WorkVersionDTO | null {
-  if (w.work_type !== 'art' || w.status === 'archived') return null
-  const version = latestVersion(w)
-  return version?.practice_card ? version : null
-}
-
-const printBusyId = ref('')
-const savePdfBusyId = ref('')
-const printError = ref<Record<string, string>>({})
-const pendingPrintWorkId = ref('')
-const persistentPrintController = ref<{
-  open: (request: PersistentPrintRequest) => Promise<void>
-} | null>(null)
-async function printCard(w: CreativeWorkDTO) {
-  const ver = practiceCardOf(w)
-  if (!ver?.practice_card) return
-  const title = `${t('k12.works.practiceCardTitle')} · ${w.title}`
-  printBusyId.value = w.record_id
-  printError.value[w.record_id] = ''
-  try {
-    const markdown = `# ${title}\n${ver.practice_card}`
-    pendingPrintWorkId.value = w.record_id
-    await persistentPrintController.value?.open({
-      agent: props.agentId,
-      sourceKind: 'creative_observation_card',
-      sourceRef: `creative-work:${w.record_id}:${ver.version_id}:practice-card`,
-      title,
-      canonicalMarkdown: markdown,
-      browserPrint: () => printPracticePaper(markdown, title),
-    })
-  } catch (e) {
-    printError.value[w.record_id] = (e as Error).message || t('k12.works.printFailed')
-  } finally {
-    printBusyId.value = ''
-  }
-}
-
-function onPersistentPrintResult(printed: boolean) {
-  const recordId = pendingPrintWorkId.value
-  if (!printed && recordId) printError.value[recordId] = t('k12.works.printFailed')
-  pendingPrintWorkId.value = ''
-}
-
-function onPersistentPrintError(error: Error) {
-  const recordId = pendingPrintWorkId.value
-  if (recordId) printError.value[recordId] = error.message || t('k12.works.printFailed')
-  pendingPrintWorkId.value = ''
-}
-
-async function saveCardPdf(w: CreativeWorkDTO) {
-  const ver = practiceCardOf(w)
-  if (!ver?.practice_card) return
-  const title = `${t('k12.works.practiceCardTitle')} · ${w.title}`
-  savePdfBusyId.value = w.record_id
-  try {
-    await savePracticePaperPdf(`# ${title}\n${ver.practice_card}`, title)
-  } catch (e) {
-    toast.error((e as Error).message || t('k12.works.practiceCardSavePdfFailed'))
-  } finally {
-    savePdfBusyId.value = ''
-  }
-}
-
-async function markCardDone(w: CreativeWorkDTO) {
-  if (!practiceCardOf(w)) return
-  busyId.value = w.record_id
-  try {
-    await k12MarkPracticeCardDone(props.agentId, w.record_id)
-    toast.success(t('k12.works.practiceCardDoneOk'))
-    await load()
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    busyId.value = ''
-  }
-}
-
-// ── 发送到手机（DD-024：先落 Receipt，再发绑定私聊）────────────────
-function latestFeedbackOf(w: CreativeWorkDTO): string {
-  if (w.status === 'archived') return ''
-  const version = latestVersion(w)
-  return version ? structuredFeedbackProjection(version) : ''
-}
-
-function deliveryKey(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card'): string {
-  return `${w.record_id}:${latestVersion(w)?.version_id ?? 'none'}:${kind}`
-}
-
-function deliveryOf(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card') {
-  return deliveryReceipts.value[deliveryKey(w, kind)]
-}
-
-function deliverySetupErrorOf(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card') {
-  return deliverySetupErrors.value[deliveryKey(w, kind)] || ''
-}
-
-function deliveryTextOf(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card'): string {
-  const receipt = deliveryOf(w, kind)
-  return receipt ? deliveryStatusText(receipt) : ''
-}
-
-function deliveryStatusText(receipt: DeliveryReceiptDTO): string {
-  const target = receipt.target.label || receipt.target.platform
-  switch (receipt.status) {
-    case 'pending':
-      return t('k12.delivery.pending')
-    case 'sending':
-      return t('k12.delivery.sending', { target })
-    case 'delivered':
-      return t('k12.delivery.delivered', { target })
-    case 'failed':
-      return t('k12.delivery.failed', {
-        reason: receipt.last_error || t('k12.delivery.unknownReason'),
-      })
-    case 'outcome_unknown':
-      return t('k12.delivery.outcomeUnknown')
-  }
-}
-
-function applyDeliveryReceipt(
-  w: CreativeWorkDTO,
-  kind: 'feedback' | 'practice_card',
-  receipt: DeliveryReceiptDTO,
-) {
-  const key = deliveryKey(w, kind)
-  deliveryReceipts.value[key] = receipt
-  delete deliverySetupErrors.value[key]
-  const message = deliveryStatusText(receipt)
-  if (receipt.status === 'delivered') toast.success(message)
-  else if (receipt.status === 'failed') toast.error(message)
-  else toast.info(message)
-}
-
-async function sendToPhone(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card') {
-  const text =
-    kind === 'practice_card' ? practiceCardOf(w)?.practice_card || '' : latestFeedbackOf(w)
-  if (!text) return
-  busyId.value = w.record_id
-  try {
-    const resp = await k12SendWorkFeedback(props.agentId, w.record_id, kind)
-    applyDeliveryReceipt(w, kind, resp)
-  } catch (e) {
-    const message = (e as Error).message || t('k12.delivery.setupRequired')
-    deliverySetupErrors.value[deliveryKey(w, kind)] = message
-    toast.error(message)
-  } finally {
-    busyId.value = ''
-  }
-}
-
-async function retryPhoneDelivery(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card') {
-  const receipt = deliveryOf(w, kind)
-  if (!receipt || receipt.status !== 'failed' || busyId.value) return
-  busyId.value = w.record_id
-  try {
-    applyDeliveryReceipt(w, kind, await k12RetryDeliveryReceipt(props.agentId, receipt.delivery_id))
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    busyId.value = ''
-  }
-}
-
-async function queryPhoneDelivery(w: CreativeWorkDTO, kind: 'feedback' | 'practice_card') {
-  const receipt = deliveryOf(w, kind)
-  if (!receipt || !['sending', 'outcome_unknown'].includes(receipt.status) || busyId.value) return
-  busyId.value = w.record_id
-  try {
-    applyDeliveryReceipt(w, kind, await k12QueryDeliveryReceipt(props.agentId, receipt.delivery_id))
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    busyId.value = ''
-  }
-}
-
-// ── 点评联动出口（§3.10，原型 5385-5464）：写作已点评卡 → 好句入积累 / 确认错处入错题 ──
-// 只在 feedback_ready 的写作卡展示；内容由家长确认后填入（不自动摘取，点评是家长手写的）。
-const accumOpenId = ref('')
-const mistakeOpenId = ref('')
-const accumDraft = ref<Record<string, string>>({})
-const mistakeDraft = ref<Record<string, string>>({})
-function toggleAccum(w: CreativeWorkDTO) {
-  accumOpenId.value = accumOpenId.value === w.record_id ? '' : w.record_id
-  mistakeOpenId.value = ''
-}
-function toggleMistake(w: CreativeWorkDTO) {
-  mistakeOpenId.value = mistakeOpenId.value === w.record_id ? '' : w.record_id
-  accumOpenId.value = ''
-}
-async function submitAccum(w: CreativeWorkDTO) {
-  const content = (accumDraft.value[w.record_id] || '').trim()
-  if (!content) return
-  busyId.value = w.record_id
-  try {
-    await k12AddAccumulation({
-      agent: props.agentId,
-      subject: '语文',
-      entry_type: '写作素材',
-      content,
-      source: `作品点评 · ${w.title}`,
-    })
-    accumDraft.value[w.record_id] = ''
-    accumOpenId.value = ''
-    toast.success(t('k12.works.accumSaved'))
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    busyId.value = ''
-  }
-}
-async function submitMistake(w: CreativeWorkDTO) {
-  const problem = (mistakeDraft.value[w.record_id] || '').trim()
-  if (!problem) return
-  busyId.value = w.record_id
-  try {
-    // grade 留空：后端 resolveGrade 从孩子档案回填（record_mistake handler 契约）。
-    await k12RecordMistake({ agent: props.agentId, subject: '语文', grade: '', problem })
-    mistakeDraft.value[w.record_id] = ''
-    mistakeOpenId.value = ''
-    toast.success(t('k12.works.mistakeSaved'))
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    busyId.value = ''
-  }
 }
 
 async function load() {
@@ -825,8 +724,8 @@ watch(
     feedbackGeneration += 1
     feedbackAbort?.abort()
     feedbackAbort = null
-    feedbackGeneratingId.value = ''
-    feedbackGenerateError.value = {}
+    feedbackRegeneratingId.value = ''
+    feedbackRegenerateError.value = {}
     closeDetails(false)
     closeImagePreview(false)
     closeAdd()
@@ -854,37 +753,33 @@ function statusTone(s: string): string {
   return 'muted'
 }
 
-async function submitFeedback(w: CreativeWorkDTO) {
-  const fb = (feedbackDraft.value[w.record_id] || '').trim()
-  if (!fb || feedbackGeneratingId.value || busyId.value) return
-  busyId.value = w.record_id
-  try {
-    await k12AttachWorkFeedback(props.agentId, w.record_id, fb)
-    feedbackDraft.value[w.record_id] = ''
-    toast.success(t('k12.works.addFeedback'))
-    await load()
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    busyId.value = ''
-  }
+function newFeedbackCommandId(): string {
+  return (
+    globalThis.crypto?.randomUUID?.() ??
+    `feedback-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  )
 }
 
-async function generateFeedback(w: CreativeWorkDTO) {
-  if (feedbackGeneratingId.value) return
+async function regenerateFeedback(w: CreativeWorkDTO) {
+  if (feedbackRegeneratingId.value || w.status === 'archived' || !currentVersionReviewed(w)) return
   const agent = props.agentId
   const generation = ++feedbackGeneration
   feedbackAbort?.abort()
   const controller = new AbortController()
   feedbackAbort = controller
-  feedbackGeneratingId.value = w.record_id
-  feedbackGenerateError.value[w.record_id] = ''
+  feedbackRegeneratingId.value = w.record_id
+  feedbackRegenerateError.value[w.record_id] = ''
   try {
-    const updated = await k12GenerateWorkFeedback(agent, w.record_id, controller.signal)
+    const updated = await k12GenerateWorkFeedback(
+      agent,
+      w.record_id,
+      newFeedbackCommandId(),
+      controller.signal,
+    )
     if (generation !== feedbackGeneration || agent !== props.agentId) return
     const index = works.value.findIndex((item) => item.record_id === w.record_id)
     if (index >= 0) works.value.splice(index, 1, updated)
-    toast.success(t('k12.works.aiGenerated'))
+    toast.success(t('k12.works.feedbackRegenerated'))
   } catch (e) {
     if (
       generation !== feedbackGeneration ||
@@ -892,11 +787,10 @@ async function generateFeedback(w: CreativeWorkDTO) {
       (e as Error).name === 'AbortError'
     )
       return
-    feedbackGenerateError.value[w.record_id] =
-      (e as Error).message || t('k12.works.aiGenerateFailed')
+    feedbackRegenerateError.value[w.record_id] = t('k12.works.feedbackRegenerateFailed')
   } finally {
     if (generation === feedbackGeneration) {
-      feedbackGeneratingId.value = ''
+      feedbackRegeneratingId.value = ''
       if (feedbackAbort === controller) feedbackAbort = null
     }
   }
@@ -907,7 +801,8 @@ interface RevisionPhotoState {
   preview: string
   pct: number
   error: string
-  ocrJob: CreativeWorkOCRJobDTO | null
+  dispatch: ImageTaskDispatchDTO | null
+  ocrJob: CreativePhotoJobView | null
   ocrBusy: boolean
   ocrError: string
   ocrRequestId: string
@@ -931,6 +826,7 @@ function canSubmitRevision(w: CreativeWorkDTO): boolean {
   ) {
     return false
   }
+  if (state?.assetId && creativeProjection(state.dispatch)?.status !== 'ready') return false
   if (w.work_type === 'writing' && state?.assetId && !revisionOCRConfirmed(w)) return false
   return !!(revisionDraft.value[w.record_id] || '').trim() || !!state?.assetId
 }
@@ -944,17 +840,18 @@ function revisionOCRConfirmed(w: CreativeWorkDTO): boolean {
     job.status === 'confirmed' &&
     job.source_asset_id === state.assetId &&
     !!job.confirmed_version &&
-    !!job.confirmed_digest &&
     job.confirmed_content === (revisionDraft.value[w.record_id] || '').trim()
   )
 }
 
-function applyRevisionOCRJob(
+function applyRevisionImageTask(
   recordId: string,
   state: RevisionPhotoState,
-  job: CreativeWorkOCRJobDTO,
+  dispatch: ImageTaskDispatchDTO,
 ) {
-  if (revisionPhotos.value[recordId] !== state || job.source_asset_id !== state.assetId) return
+  if (revisionPhotos.value[recordId] !== state) return
+  state.dispatch = dispatch
+  const job = photoJobView(dispatch, state.assetId)
   state.ocrJob = job
   state.ocrError = ''
   if (job.status === 'awaiting_confirmation' && job.ocr_raw) {
@@ -967,20 +864,38 @@ function applyRevisionOCRJob(
 async function startRevisionOCR(recordId: string) {
   const state = revisionPhotos.value[recordId]
   const work = works.value.find((item) => item.record_id === recordId)
-  if (!state?.assetId || work?.work_type !== 'writing') return
+  const baseVersion = work ? latestVersion(work) : undefined
+  if (!state?.assetId || !work || !baseVersion) return
   const assetId = state.assetId
   const generation = ++state.ocrGeneration
   state.ocrBusy = true
   state.ocrError = ''
   state.ocrJob = null
   try {
-    const job = await k12CreateCreativeWorkOCR({
+    const response = await k12CreateImageTask({
       agent: props.agentId,
-      request_id: state.ocrRequestId,
-      source_asset_id: assetId,
+      source_session: `creative-works:${props.agentId}`,
+      source_kind: 'desktop',
+      source_ref: state.ocrRequestId,
+      source_asset_refs: [assetId],
+      attempt_generation: 1,
+      route_request: { selection_source: 'auto' },
+      creative_entry: {
+        kind: 'revision',
+        task_intent: work.work_type === 'writing' ? 'writing' : 'artwork',
+        work_id: work.record_id,
+        base_version_id: baseVersion.version_id,
+      },
     })
     if (revisionPhotos.value[recordId] !== state || generation !== state.ocrGeneration) return
-    applyRevisionOCRJob(recordId, state, job)
+    await pollManualCreativeTask(
+      response.dispatch,
+      () =>
+        revisionPhotos.value[recordId] === state &&
+        generation === state.ocrGeneration &&
+        state.assetId === assetId,
+      (dispatch) => applyRevisionImageTask(recordId, state, dispatch),
+    )
   } catch (e) {
     if (revisionPhotos.value[recordId] !== state || generation !== state.ocrGeneration) return
     state.ocrError = (e as Error).message || t('k12.works.ocrFailed')
@@ -994,8 +909,8 @@ async function startRevisionOCR(recordId: string) {
 async function retryRevisionOCR(recordId: string) {
   const state = revisionPhotos.value[recordId]
   if (!state || state.ocrBusy) return
-  const job = state.ocrJob
-  if (!job) {
+  const dispatch = state.dispatch
+  if (!dispatch) {
     await startRevisionOCR(recordId)
     return
   }
@@ -1003,9 +918,16 @@ async function retryRevisionOCR(recordId: string) {
   state.ocrBusy = true
   state.ocrError = ''
   try {
-    const updated = await k12RetryCreativeWorkOCR(props.agentId, job.job_id)
+    const response = await k12RetryImageTask(dispatch.dispatch_id, {
+      agent: props.agentId,
+      version: dispatch.version,
+    })
     if (revisionPhotos.value[recordId] !== state || generation !== state.ocrGeneration) return
-    applyRevisionOCRJob(recordId, state, updated)
+    await pollManualCreativeTask(
+      response.dispatch,
+      () => revisionPhotos.value[recordId] === state && generation === state.ocrGeneration,
+      (updated) => applyRevisionImageTask(recordId, state, updated),
+    )
   } catch (e) {
     if (revisionPhotos.value[recordId] !== state || generation !== state.ocrGeneration) return
     state.ocrError = (e as Error).message || t('k12.works.ocrFailed')
@@ -1019,15 +941,24 @@ async function retryRevisionOCR(recordId: string) {
 async function confirmRevisionOCR(recordId: string) {
   const state = revisionPhotos.value[recordId]
   const job = state?.ocrJob
+  const dispatch = state?.dispatch
   const content = (revisionDraft.value[recordId] || '').trim()
-  if (!state || !job || !content || state.ocrBusy) return
+  if (!state || !job || !dispatch || !content || state.ocrBusy) return
   const generation = ++state.ocrGeneration
   state.ocrBusy = true
   state.ocrError = ''
   try {
-    const confirmed = await k12ConfirmCreativeWorkOCR(props.agentId, job.job_id, content)
+    const response = await k12ConfirmImageTask(dispatch.dispatch_id, {
+      agent: props.agentId,
+      version: dispatch.version,
+      creative: {
+        action: 'freeze_ocr',
+        canonical_version: creativeProjection(dispatch)?.canonical_version ?? 1,
+        canonical_content: content,
+      },
+    })
     if (revisionPhotos.value[recordId] !== state || generation !== state.ocrGeneration) return
-    applyRevisionOCRJob(recordId, state, confirmed)
+    applyRevisionImageTask(recordId, state, response.dispatch)
   } catch (e) {
     if (revisionPhotos.value[recordId] !== state || generation !== state.ocrGeneration) return
     state.ocrError = (e as Error).message || t('k12.works.ocrConfirmFailed')
@@ -1053,13 +984,18 @@ function onRevisionPhotoPick(w: CreativeWorkDTO, e: Event) {
     return
   }
   const previous = revisionPhotos.value[w.record_id]
-  if (previous?.preview) URL.revokeObjectURL(previous.preview)
+  if (previous) {
+    previous.ocrGeneration += 1
+    cancelManualCreativeTask(previous.dispatch)
+    if (previous.preview) URL.revokeObjectURL(previous.preview)
+  }
   revisionPhotoFiles.set(w.record_id, file)
   revisionPhotos.value[w.record_id] = {
     assetId: '',
     preview: URL.createObjectURL(file),
     pct: 0,
     error: '',
+    dispatch: null,
     ocrJob: null,
     ocrBusy: false,
     ocrError: '',
@@ -1095,7 +1031,7 @@ async function uploadRevisionPhoto(recordId: string) {
     state.assetId = resp.asset_id
     state.pct = 100
     const work = works.value.find((item) => item.record_id === recordId)
-    if (work?.work_type === 'writing') void startRevisionOCR(recordId)
+    if (work) void startRevisionOCR(recordId)
   } catch (e) {
     if (revisionPhotoGenerations.get(recordId) !== generation || (e as Error).name === 'AbortError')
       return
@@ -1115,6 +1051,7 @@ function resetRevisionPhoto(recordId: string) {
   revisionPhotoFiles.delete(recordId)
   const state = revisionPhotos.value[recordId]
   if (state) state.ocrGeneration += 1
+  if (state) cancelManualCreativeTask(state.dispatch)
   if (state?.preview) URL.revokeObjectURL(state.preview)
   delete revisionPhotos.value[recordId]
 }
@@ -1131,19 +1068,20 @@ async function submitRevision(w: CreativeWorkDTO) {
   busyId.value = w.record_id
   try {
     if (assetId) {
-      const ocrJob = photoState?.ocrJob
-      const ocr =
-        w.work_type === 'writing' &&
-        ocrJob?.status === 'confirmed' &&
-        ocrJob.confirmed_version &&
-        ocrJob.confirmed_digest
-          ? {
-              jobId: ocrJob.job_id,
-              version: ocrJob.confirmed_version,
-              digest: ocrJob.confirmed_digest,
-            }
-          : undefined
-      await k12SubmitWorkRevision(props.agentId, w.record_id, content || undefined, assetId, ocr)
+      const dispatch = photoState?.dispatch
+      if (!dispatch || creativeProjection(dispatch)?.status !== 'ready') return
+      const response = await k12ConfirmImageTask(dispatch.dispatch_id, {
+        agent: props.agentId,
+        version: dispatch.version,
+        creative: {
+          action: 'commit',
+          content_markdown: content || undefined,
+        },
+      })
+      if (creativeProjection(response.dispatch)?.status !== 'promoted') {
+        throw new Error(t('k12.works.ocrFailed'))
+      }
+      if (photoState) photoState.dispatch = null
     } else {
       await k12SubmitWorkRevision(props.agentId, w.record_id, content)
     }
@@ -1158,29 +1096,11 @@ async function submitRevision(w: CreativeWorkDTO) {
   }
 }
 
-async function archive(w: CreativeWorkDTO) {
-  busyId.value = w.record_id
-  try {
-    await k12ArchiveCreativeWork(props.agentId, w.record_id)
-    toast.success(t('k12.works.archive'))
-    await load()
-  } catch (e) {
-    toast.error((e as Error).message)
-  } finally {
-    busyId.value = ''
-  }
-}
-
 defineExpose({ load, openAdd })
 </script>
 
 <template>
   <section class="k12cw">
-    <K12PersistentPrintController
-      ref="persistentPrintController"
-      @result="onPersistentPrintResult"
-      @error="onPersistentPrintError"
-    />
     <div class="k12cw__overview">
       <p class="k12cw__desc" style="margin: 0">{{ t('k12.works.desc') }}</p>
       <button
@@ -1320,7 +1240,7 @@ defineExpose({ load, openAdd })
             :aria-controls="`cw-detail-${w.record_id}`"
             @click="toggleDetails(w, $event)"
           >
-            {{ currentVersionReviewed(w) ? t('k12.works.viewReview') : t('k12.works.startReview') }}
+            {{ t('k12.works.viewDetails') }}
           </button>
 
           <Teleport to="body">
@@ -1411,17 +1331,6 @@ defineExpose({ load, openAdd })
                                 <b>{{ t('k12.works.feedbackLimitations') }}</b>
                                 {{ ver.structured_feedback.limitations }}
                               </p>
-                              <div
-                                class="k12cw__feedback-actions"
-                                :aria-label="t('k12.works.feedbackAllowedActions')"
-                              >
-                                <span
-                                  v-for="action in ver.structured_feedback.allowed_actions"
-                                  :key="action"
-                                >
-                                  {{ feedbackActionLabel(action) }}
-                                </span>
-                              </div>
                             </div>
                             <small class="k12cw__provenance" data-testid="cw-feedback-provenance">
                               {{
@@ -1458,229 +1367,18 @@ defineExpose({ load, openAdd })
                       </li>
                     </ol>
 
-                    <!-- 发送点评要点（任务3，§3.10：点评可发送到手机）：失败诚实降级为复制文本 -->
-                    <div
-                      v-if="latestFeedbackOf(w) && w.status !== 'archived'"
-                      class="k12cw__sendrow"
+                    <p
+                      v-if="!currentVersionReviewed(w) && w.status !== 'archived'"
+                      class="k12cw__ainote"
+                      data-testid="cw-feedback-auto-pending"
+                      role="status"
+                      aria-live="polite"
                     >
-                      <button
-                        class="k12cw__btn k12cw__btn--ghost"
-                        data-testid="cw-send-feedback"
-                        :disabled="busyId === w.record_id"
-                        @click="sendToPhone(w, 'feedback')"
-                      >
-                        {{ t('k12.works.sendFeedback') }}
-                      </button>
-                      <div
-                        v-if="deliveryOf(w, 'feedback')"
-                        class="k12cw__delivery"
-                        :class="`k12cw__delivery--${deliveryOf(w, 'feedback')?.status}`"
-                        data-testid="cw-feedback-delivery-receipt"
-                        role="status"
-                      >
-                        <span>{{ deliveryTextOf(w, 'feedback') }}</span>
-                        <button
-                          v-if="deliveryOf(w, 'feedback')?.status === 'failed'"
-                          type="button"
-                          data-testid="cw-feedback-delivery-retry"
-                          @click="retryPhoneDelivery(w, 'feedback')"
-                        >
-                          {{ t('k12.delivery.retry') }}
-                        </button>
-                        <button
-                          v-if="
-                            deliveryOf(w, 'feedback')?.status === 'sending' ||
-                            deliveryOf(w, 'feedback')?.status === 'outcome_unknown'
-                          "
-                          type="button"
-                          data-testid="cw-feedback-delivery-query"
-                          @click="queryPhoneDelivery(w, 'feedback')"
-                        >
-                          {{ t('k12.delivery.query') }}
-                        </button>
-                      </div>
-                      <div
-                        v-if="deliverySetupErrorOf(w, 'feedback')"
-                        class="k12cw__delivery k12cw__delivery--failed"
-                        data-testid="cw-feedback-bind-required"
-                      >
-                        <span>{{ deliverySetupErrorOf(w, 'feedback') }}</span>
-                        <a href="/channels">{{ t('k12.delivery.bindCTA') }}</a>
-                      </div>
-                    </div>
+                      {{ t('k12.works.feedbackAutoPending') }}
+                    </p>
 
-                    <!-- 观察练习卡（任务2，§3.10 美术）：练习必须有产物——归档在版本记录，
-             承诺即动作：打印 / 发送到手机 / 完成打卡；不进错题与练习集 -->
-                    <div
-                      v-if="w.status !== 'archived' && practiceCardOf(w)"
-                      class="k12cw__pcard"
-                      data-testid="cw-practice-card"
-                    >
-                      <b>{{ t('k12.works.practiceCardTitle') }}</b>
-                      <p class="k12cw__pcardtext">{{ practiceCardOf(w)!.practice_card }}</p>
-                      <p
-                        v-if="practiceCardOf(w)!.practice_card_done_at"
-                        class="k12cw__pcarddone"
-                        data-testid="cw-card-done-state"
-                      >
-                        ✓ {{ t('k12.works.practiceCardDoneAt') }}
-                      </p>
-                      <div class="k12cw__linkbtns">
-                        <button
-                          class="k12cw__btn k12cw__btn--ghost"
-                          data-testid="cw-card-print"
-                          :disabled="printBusyId === w.record_id"
-                          @click="printCard(w)"
-                        >
-                          {{ t('k12.works.practiceCardPrint') }}
-                        </button>
-                        <button
-                          class="k12cw__btn k12cw__btn--ghost"
-                          data-testid="cw-card-save-pdf"
-                          :disabled="savePdfBusyId === w.record_id"
-                          @click="saveCardPdf(w)"
-                        >
-                          {{ t('k12.works.practiceCardSavePdf') }}
-                        </button>
-                        <button
-                          class="k12cw__btn k12cw__btn--ghost"
-                          data-testid="cw-card-send"
-                          :disabled="busyId === w.record_id"
-                          @click="sendToPhone(w, 'practice_card')"
-                        >
-                          {{ t('k12.works.practiceCardSend') }}
-                        </button>
-                        <button
-                          v-if="!practiceCardOf(w)!.practice_card_done_at"
-                          class="k12cw__btn"
-                          data-testid="cw-card-done"
-                          :disabled="busyId === w.record_id"
-                          @click="markCardDone(w)"
-                        >
-                          {{ t('k12.works.practiceCardMarkDone') }}
-                        </button>
-                      </div>
-                      <div
-                        v-if="deliveryOf(w, 'practice_card')"
-                        class="k12cw__delivery"
-                        :class="`k12cw__delivery--${deliveryOf(w, 'practice_card')?.status}`"
-                        data-testid="cw-card-delivery-receipt"
-                        role="status"
-                      >
-                        <span>{{ deliveryTextOf(w, 'practice_card') }}</span>
-                        <button
-                          v-if="deliveryOf(w, 'practice_card')?.status === 'failed'"
-                          type="button"
-                          data-testid="cw-card-delivery-retry"
-                          @click="retryPhoneDelivery(w, 'practice_card')"
-                        >
-                          {{ t('k12.delivery.retry') }}
-                        </button>
-                        <button
-                          v-if="
-                            deliveryOf(w, 'practice_card')?.status === 'sending' ||
-                            deliveryOf(w, 'practice_card')?.status === 'outcome_unknown'
-                          "
-                          type="button"
-                          data-testid="cw-card-delivery-query"
-                          @click="queryPhoneDelivery(w, 'practice_card')"
-                        >
-                          {{ t('k12.delivery.query') }}
-                        </button>
-                      </div>
-                      <div
-                        v-if="deliverySetupErrorOf(w, 'practice_card')"
-                        class="k12cw__delivery k12cw__delivery--failed"
-                        data-testid="cw-card-bind-required"
-                      >
-                        <span>{{ deliverySetupErrorOf(w, 'practice_card') }}</span>
-                        <a href="/channels">{{ t('k12.delivery.bindCTA') }}</a>
-                      </div>
-                      <p
-                        v-if="printError[w.record_id]"
-                        class="k12cw__inlineerr"
-                        data-testid="cw-card-print-error"
-                      >
-                        {{ printError[w.record_id] }}
-                        <button
-                          class="k12cw__btn k12cw__btn--ghost"
-                          data-testid="cw-card-print-retry"
-                          :disabled="printBusyId === w.record_id"
-                          @click="printCard(w)"
-                        >
-                          {{ t('k12.works.retry') }}
-                        </button>
-                      </p>
-                      <p class="k12cw__ainote">{{ t('k12.works.practiceCardHint') }}</p>
-                    </div>
-
-                    <!-- 待点评 / 已修改：后端 Skill 真实生成 + 家长手写，两条入口均只写证据化点评。 -->
-                    <div v-if="w.status === 'draft' || w.status === 'revised'" class="k12cw__act">
-                      <HcClearableField>
-                        <textarea
-                          v-model="feedbackDraft[w.record_id]"
-                          class="k12cw__input"
-                          :aria-label="t('k12.works.addFeedback')"
-                          :disabled="feedbackGeneratingId === w.record_id"
-                          :placeholder="
-                            t('k12.works.addFeedback') + '（只给具体建议，不打分不代写）'
-                          "
-                          rows="2"
-                          data-testid="cw-feedback-input"
-                        ></textarea>
-                      </HcClearableField>
-                      <div class="k12cw__linkbtns">
-                        <button
-                          v-if="!feedbackGenerateError[w.record_id]"
-                          class="k12cw__btn k12cw__btn--ghost"
-                          data-testid="cw-feedback-generate"
-                          :disabled="!!feedbackGeneratingId || busyId === w.record_id"
-                          :aria-busy="feedbackGeneratingId === w.record_id"
-                          @click="generateFeedback(w)"
-                        >
-                          {{ t('k12.works.aiGenerate') }}
-                        </button>
-                        <span
-                          v-if="feedbackGeneratingId === w.record_id"
-                          class="k12cw__ainote"
-                          data-testid="cw-feedback-generating"
-                          role="status"
-                          aria-live="polite"
-                          >{{ t('k12.works.aiGenerating') }}</span
-                        >
-                      </div>
-                      <p
-                        v-if="feedbackGenerateError[w.record_id]"
-                        class="k12cw__inlineerr"
-                        data-testid="cw-feedback-generate-error"
-                        role="alert"
-                      >
-                        {{ feedbackGenerateError[w.record_id] }}
-                        <button
-                          class="k12cw__btn k12cw__btn--ghost"
-                          data-testid="cw-feedback-generate-retry"
-                          :disabled="!!feedbackGeneratingId"
-                          @click="generateFeedback(w)"
-                        >
-                          {{ t('k12.works.retry') }}
-                        </button>
-                      </p>
-                      <button
-                        class="k12cw__btn k12cw__btn--primary"
-                        :disabled="
-                          !!feedbackGeneratingId ||
-                          busyId === w.record_id ||
-                          !(feedbackDraft[w.record_id] || '').trim()
-                        "
-                        data-testid="cw-feedback-submit"
-                        @click="submitFeedback(w)"
-                      >
-                        {{ t('k12.works.addFeedback') }}
-                      </button>
-                    </div>
-
-                    <!-- 已点评：提交修改稿 -->
-                    <div v-else-if="w.status === 'feedback_ready'" class="k12cw__act">
+                    <!-- 当前唯一后续动作：上传修改稿；保存后由服务端自动点评。 -->
+                    <div v-if="w.status !== 'archived'" class="k12cw__act">
                       <HcClearableField>
                         <textarea
                           v-model="revisionDraft[w.record_id]"
@@ -1819,83 +1517,29 @@ defineExpose({ load, openAdd })
                       >
                         {{ t('k12.works.submitRevision') }}
                       </button>
-                    </div>
-
-                    <!-- 点评联动出口（§3.10，仅写作 · 已点评）：好句入积累 / 确认错处入错题 -->
-                    <div
-                      v-if="w.work_type === 'writing' && w.status === 'feedback_ready'"
-                      class="k12cw__link"
-                    >
-                      <div class="k12cw__linkbtns">
-                        <button
-                          class="k12cw__btn k12cw__btn--ghost"
-                          data-testid="cw-accum-open"
-                          @click="toggleAccum(w)"
-                        >
-                          {{ t('k12.works.toAccum') }}
-                        </button>
-                        <button
-                          class="k12cw__btn k12cw__btn--ghost"
-                          data-testid="cw-mistake-open"
-                          @click="toggleMistake(w)"
-                        >
-                          {{ t('k12.works.toMistake') }}
-                        </button>
-                      </div>
-                      <div v-if="accumOpenId === w.record_id" class="k12cw__linkform">
-                        <HcClearableField>
-                          <textarea
-                            v-model="accumDraft[w.record_id]"
-                            class="k12cw__input"
-                            :placeholder="t('k12.works.accumPlaceholder')"
-                            rows="2"
-                            data-testid="cw-accum-input"
-                          ></textarea>
-                        </HcClearableField>
-                        <button
-                          class="k12cw__btn k12cw__btn--primary"
-                          :disabled="
-                            busyId === w.record_id || !(accumDraft[w.record_id] || '').trim()
-                          "
-                          data-testid="cw-accum-submit"
-                          @click="submitAccum(w)"
-                        >
-                          {{ t('k12.works.confirm') }}
-                        </button>
-                      </div>
-                      <div v-if="mistakeOpenId === w.record_id" class="k12cw__linkform">
-                        <HcClearableField>
-                          <textarea
-                            v-model="mistakeDraft[w.record_id]"
-                            class="k12cw__input"
-                            :placeholder="t('k12.works.mistakePlaceholder')"
-                            rows="2"
-                            data-testid="cw-mistake-input"
-                          ></textarea>
-                        </HcClearableField>
-                        <button
-                          class="k12cw__btn k12cw__btn--primary"
-                          :disabled="
-                            busyId === w.record_id || !(mistakeDraft[w.record_id] || '').trim()
-                          "
-                          data-testid="cw-mistake-submit"
-                          @click="submitMistake(w)"
-                        >
-                          {{ t('k12.works.confirm') }}
-                        </button>
-                      </div>
-                    </div>
-
-                    <footer v-if="w.status !== 'archived'" class="k12cw__foot">
                       <button
+                        v-if="currentVersionReviewed(w)"
                         class="k12cw__btn k12cw__btn--ghost"
-                        :disabled="busyId === w.record_id"
-                        data-testid="cw-archive"
-                        @click="archive(w)"
+                        :disabled="!!feedbackRegeneratingId"
+                        :aria-busy="feedbackRegeneratingId === w.record_id"
+                        data-testid="cw-feedback-regenerate"
+                        @click="regenerateFeedback(w)"
                       >
-                        {{ t('k12.works.archive') }}
+                        {{
+                          feedbackRegeneratingId === w.record_id
+                            ? t('k12.works.feedbackRegenerating')
+                            : t('k12.works.feedbackRegenerate')
+                        }}
                       </button>
-                    </footer>
+                      <p
+                        v-if="feedbackRegenerateError[w.record_id]"
+                        class="k12cw__inlineerr"
+                        data-testid="cw-feedback-regenerate-error"
+                        role="alert"
+                      >
+                        {{ feedbackRegenerateError[w.record_id] }}
+                      </p>
+                    </div>
                   </div>
                 </div>
                 <footer class="k12cw-detail-modal__foot">
@@ -2032,7 +1676,7 @@ defineExpose({ load, openAdd })
                     type="button"
                     class="k12cw__btn k12cw__btn--ghost"
                     data-testid="cw-photo-remove"
-                    @click="resetPhoto"
+                    @click="resetPhoto()"
                   >
                     {{ t('k12.works.photoRemove') }}
                   </button>
@@ -2246,13 +1890,6 @@ defineExpose({ load, openAdd })
   color: var(--hc-text-muted);
   line-height: 1.5;
 }
-.k12cw__link {
-  border-top: 0.5px dashed var(--hc-border);
-  padding-top: 8px;
-  margin-bottom: 8px;
-  display: grid;
-  gap: 7px;
-}
 .k12cw__linkbtns {
   display: flex;
   gap: 7px;
@@ -2260,10 +1897,6 @@ defineExpose({ load, openAdd })
 }
 .k12cw__linkbtns .k12cw__btn--ghost {
   border-color: var(--hc-border);
-}
-.k12cw__linkform {
-  display: grid;
-  gap: 7px;
 }
 .k12cw__seg {
   display: flex;
@@ -2389,72 +2022,6 @@ defineExpose({ load, openAdd })
   background: rgba(255, 255, 255, 0.92);
   color: var(--hc-text-primary);
   cursor: pointer;
-}
-.k12cw__sendrow {
-  display: grid;
-  justify-items: end;
-  gap: 7px;
-  margin-bottom: 8px;
-}
-.k12cw__sendrow .k12cw__btn--ghost {
-  border-color: var(--hc-border);
-}
-.k12cw__delivery {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 9px;
-  border-radius: var(--hc-radius-sm);
-  background: var(--hc-accent-subtle);
-  color: var(--hc-text-secondary);
-  font-size: 11.5px;
-}
-.k12cw__delivery--delivered {
-  color: var(--hc-success);
-}
-.k12cw__delivery--failed,
-.k12cw__delivery--outcome_unknown {
-  color: var(--hc-error);
-  background: color-mix(in srgb, var(--hc-error) 8%, transparent);
-}
-.k12cw__delivery button,
-.k12cw__delivery a {
-  flex-shrink: 0;
-  border: 0;
-  background: transparent;
-  color: var(--hc-accent);
-  cursor: pointer;
-  font: inherit;
-  font-weight: 650;
-  text-decoration: none;
-}
-.k12cw__pcard {
-  border: 0.5px solid var(--hc-border);
-  border-left: 3px solid var(--hc-success);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-input);
-  padding: 10px 13px;
-  margin-bottom: 10px;
-  display: grid;
-  gap: 7px;
-}
-.k12cw__pcard > b {
-  font-size: 12px;
-  color: var(--hc-text-primary);
-}
-.k12cw__pcardtext {
-  margin: 0;
-  font-size: 11.5px;
-  line-height: 1.7;
-  color: var(--hc-text-secondary);
-  white-space: pre-line;
-}
-.k12cw__pcarddone {
-  margin: 0;
-  font-size: 11px;
-  color: var(--hc-success);
 }
 .k12cw-detail-overlay {
   position: fixed;
@@ -2975,17 +2542,6 @@ defineExpose({ load, openAdd })
 .k12cw__feedback-limit {
   color: var(--hc-text-muted);
 }
-.k12cw__feedback-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-.k12cw__feedback-actions span {
-  padding: 2px 7px;
-  border: 1px solid var(--hc-border);
-  border-radius: 999px;
-  background: var(--hc-bg-subtle);
-}
 .k12cw__act {
   display: grid;
   gap: 7px;
@@ -3008,10 +2564,6 @@ defineExpose({ load, openAdd })
 }
 .k12cw__input:focus {
   border-color: var(--hc-accent);
-}
-.k12cw__foot {
-  display: flex;
-  justify-content: flex-end;
 }
 .k12cw__btn {
   font: inherit;

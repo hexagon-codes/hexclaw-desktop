@@ -43,11 +43,16 @@ import {
   recordDialogOpenWithConvergence,
 } from '../print-receipt'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
+import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 
 const props = defineProps<{ agentId: string }>()
 const emit = defineEmits<{ (event: 'count', count: number): void }>()
 const { t, locale } = useI18n()
 const toast = useToast()
+const delivery = useK12DeliveryBatch({
+  agent: () => props.agentId,
+  idleLabel: '发送练习集',
+})
 const persistentPrintController = ref<{
   open: (request: PersistentPrintRequest) => Promise<void>
 } | null>(null)
@@ -102,6 +107,12 @@ defineExpose({ load })
 
 // ── 待打印篮（单 Learner 单篮：draft 态练习集，§3.8）──
 const basket = computed(() => sets.value.find((s) => s.status === 'draft') ?? null)
+watch(
+  () => basket.value?.record_id,
+  (recordId, previous) => {
+    if (previous && previous !== recordId) delivery.reset()
+  },
+)
 watch(
   () => basket.value?.items.length ?? 0,
   (count) => emit('count', count),
@@ -188,65 +199,57 @@ async function removeItem(it: PracticeItemDTO) {
 async function finalize(via: 'print' | 'send') {
   const b = basket.value
   if (!b) return
+  if (via === 'send') {
+    await delivery.send(async () => {
+      const response = await k12FinalizePracticeSet(props.agentId, b.record_id, 'send')
+      if (!response.delivery_batch) throw new Error('投递批次未创建')
+      return response.delivery_batch
+    })
+    return
+  }
   busy.value = b.record_id
   let finalized = false
   try {
-    if (via === 'print') {
-      // DD-023A：后端先冻结卷源并预占卷面号；原生对话框的 definitive
-      // receipt 再原子推进 PrintJob + PracticeSet。旧 finalize(print) 不得
-      // 旁路这条链，取消/失败/未知态都必须保留 draft。
-      const prepared = await k12PreparePracticePrintJob(
-        props.agentId,
-        b.record_id,
-        newPrintIdempotencyKey(b.record_id),
-        'question',
-      )
-      let job = prepared.print_job
-      if (job.status === 'printed') {
-        finalized = true
-        toast.success(t('k12.practice.print'))
-        return
-      }
-      if (job.status === 'cancelled' || job.status === 'failed') {
-        job = (await k12RetryPracticePrintJob(props.agentId, job.print_job_id)).print_job
-      } else if (
-        job.status === 'dialog_open' ||
-        job.status === 'submitted' ||
-        job.status === 'outcome_unknown'
-      ) {
-        throw new Error('上一次打印结果仍待核对，请先查询 PrintJob 回执')
-      }
-
-      const rendered = await k12GetPracticePrintJobPaper(
-        props.agentId,
-        job.print_job_id,
-        'question',
-      )
-      const pdf = await renderPracticePaperPdf(rendered.markdown, rendered.title)
-      printPreview.value = {
-        open: true,
-        printing: false,
-        title: rendered.title,
-        pdf,
-        jobId: job.print_job_id,
-        recordId: b.record_id,
-      }
+    // DD-023A：后端先冻结卷源并预占卷面号；原生对话框的 definitive
+    // receipt 再原子推进 PrintJob + PracticeSet。旧 finalize(print) 不得
+    // 旁路这条链，取消/失败/未知态都必须保留 draft。
+    const prepared = await k12PreparePracticePrintJob(
+      props.agentId,
+      b.record_id,
+      newPrintIdempotencyKey(b.record_id),
+      'question',
+    )
+    let job = prepared.print_job
+    if (job.status === 'printed') {
+      finalized = true
+      toast.success(t('k12.practice.print'))
       return
     }
-
-    const resp = await k12FinalizePracticeSet(props.agentId, b.record_id, 'send', '手机私聊')
-    finalized = true
-    const skipped =
-      resp.skipped_blocked_count > 0
-        ? ` · ${t('k12.practice.skipped', { n: resp.skipped_blocked_count })}`
-        : ''
-    if (resp.set.delivery_status === 'pending') {
-      toast.info(resp.delivery_note || t('k12.practice.deliveryPending'))
-    } else if (resp.set.delivery_status === 'failed') {
-      toast.warning(t('k12.practice.deliveryFailed'))
-    } else {
-      toast.success(`${t('k12.practice.assign')}${skipped}`)
+    if (job.status === 'cancelled' || job.status === 'failed') {
+      job = (await k12RetryPracticePrintJob(props.agentId, job.print_job_id)).print_job
+    } else if (
+      job.status === 'dialog_open' ||
+      job.status === 'submitted' ||
+      job.status === 'outcome_unknown'
+    ) {
+      throw new Error('上一次打印结果仍待核对，请先查询 PrintJob 回执')
     }
+
+    const rendered = await k12GetPracticePrintJobPaper(
+      props.agentId,
+      job.print_job_id,
+      'question',
+    )
+    const pdf = await renderPracticePaperPdf(rendered.markdown, rendered.title)
+    printPreview.value = {
+      open: true,
+      printing: false,
+      title: rendered.title,
+      pdf,
+      jobId: job.print_job_id,
+      recordId: b.record_id,
+    }
+    return
   } catch (e) {
     toast.error((e as Error).message)
   } finally {
@@ -683,7 +686,7 @@ async function cancelSet(s: PracticeSetDTO) {
           <div class="k12ps__bactions">
             <button
               class="k12ps__btn k12ps__btn--primary"
-              :disabled="!canFinalize || busy === basket?.record_id"
+              :disabled="!canFinalize || busy === basket?.record_id || Boolean(delivery.batch.value)"
               :title="!canFinalize ? t('k12.practice.publishBlocked') : ''"
               data-testid="ps-finalize-print"
               @click="finalize('print')"
@@ -692,11 +695,11 @@ async function cancelSet(s: PracticeSetDTO) {
             </button>
             <button
               class="k12ps__btn"
-              :disabled="!canFinalize || busy === basket?.record_id"
+              :disabled="!canFinalize || delivery.disabled.value"
               data-testid="ps-finalize-send"
               @click="finalize('send')"
             >
-              {{ t('k12.practice.assign') }}
+              {{ delivery.label.value }}
             </button>
           </div>
         </header>
@@ -799,7 +802,6 @@ async function cancelSet(s: PracticeSetDTO) {
               <span v-if="s.skipped_blocked_count">{{
                 t('k12.practice.skipped', { n: s.skipped_blocked_count })
               }}</span>
-              <span v-if="s.delivery_target">→ {{ s.delivery_target }}</span>
               <span
                 v-if="deliveryLabel(s.delivery_status)"
                 :class="{

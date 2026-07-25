@@ -81,13 +81,15 @@ afterEach(() => {
 })
 
 describe('K12 composer 能力入口 · app.html 唯一权威', () => {
-  it('新增 bridge/capabilities 文案在中英维三语保持同构', () => {
-    const zhKeys = leafKeys({ bridge: k12Zh.bridge, capabilities: k12Zh.capabilities }).sort()
-    expect(leafKeys({ bridge: k12En.bridge, capabilities: k12En.capabilities }).sort()).toEqual(
-      zhKeys,
-    )
-    expect(leafKeys({ bridge: k12Ug.bridge, capabilities: k12Ug.capabilities }).sort()).toEqual(
-      zhKeys,
+  it('subject capabilities 文案在中英维三语保持同构，永久推广 bridge 已退役', () => {
+    const zhKeys = leafKeys(k12Zh.capabilities).sort()
+    expect(leafKeys(k12En.capabilities).sort()).toEqual(zhKeys)
+    expect(leafKeys(k12Ug.capabilities).sort()).toEqual(zhKeys)
+    expect(k12Zh).not.toHaveProperty('bridge')
+    expect(k12En).not.toHaveProperty('bridge')
+    expect(k12Ug).not.toHaveProperty('bridge')
+    expect(k12Zh.composer.placeholder).toBe(
+      '发消息，或让我写请假条、回复老师消息、设置订正提醒',
     )
   })
 
@@ -227,37 +229,14 @@ describe('K12 composer 能力入口 · app.html 唯一权威', () => {
     expect(wrapper.get('[data-testid="records-stub"]').attributes('data-target')).toBe('works')
   })
 
-  it('底部桥恢复原型链接；弹窗三类能力的主动作写入示例请求并聚焦', async () => {
+  it('底部不再出现永久推广桥，通用能力弹窗分支也不存在', async () => {
     const wrapper = renderEnhancement()
     wrappers.push(wrapper)
     await flushPromises()
 
     const footer = document.getElementById('hc-chat-scenario-footer')!
-    expect(footer.textContent).toContain(
-      '我不只会辅导——写请假条、回复老师消息、记订正打卡提醒也能找我',
-    )
-    const link = footer.querySelector<HTMLElement>('[data-testid="k12-general-capabilities"]')!
-    expect(link.textContent).toBe('看看还能做什么 ›')
-    link.click()
-    await flushPromises()
-
-    const dialog = document.querySelector<HTMLElement>('[data-testid="k12-capability-dialog"]')!
-    expect(dialog.textContent).toContain('这个 Agent 还能帮你做什么')
-    expect(
-      [...dialog.querySelectorAll('[data-testid="k12-general-capability"] b')].map(
-        (item) => item.textContent,
-      ),
-    ).toEqual(['家校沟通', '资料整理', '日程提醒'])
-    expect(dialog.querySelector('[data-testid="k12-capability-primary"]')?.textContent).toBe(
-      '填入示例请求',
-    )
-    ;(dialog.querySelector('[data-testid="k12-capability-primary"]') as HTMLElement).click()
-    await flushPromises()
-    const generalCommands = wrapper.emitted('composerCommand') ?? []
-    expect(generalCommands[generalCommands.length - 1]?.[0]).toEqual({
-      type: 'set-input',
-      text: '帮我写一条明天下午 3 点开家长会的通知',
-      focus: true,
-    })
+    expect(footer.textContent).not.toContain('我不只会辅导')
+    expect(footer.querySelector('[data-testid="k12-general-capabilities"]')).toBeNull()
+    expect(wrapper.html()).not.toContain("kind: 'general'")
   })
 })

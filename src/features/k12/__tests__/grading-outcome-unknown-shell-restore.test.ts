@@ -7,8 +7,9 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
+import { K12_IMAGE_TASK_BINDINGS_KEY } from '../image-task-binding'
 
-const STORAGE_KEY = 'hexclaw.k12.grading-job-bindings.v1'
+const STORAGE_KEY = K12_IMAGE_TASK_BINDINGS_KEY
 
 vi.mock('@/api/k12', () => ({
   k12GetViewDescriptor: vi.fn().mockResolvedValue({ composer_chips: [] }),
@@ -59,7 +60,7 @@ function render(agentId = 'mingming') {
   })
 }
 
-describe('K12 会话刷新后的 GradingJob 入口恢复', () => {
+describe('K12 会话刷新后的 ImageTaskDispatch 入口恢复', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     localStorage.clear()
@@ -72,7 +73,7 @@ describe('K12 会话刷新后的 GradingJob 入口恢复', () => {
       STORAGE_KEY,
       JSON.stringify({
         version: 1,
-        bindings: { 'session-1': { agent_id: 'mingming', job_id: 'job-unknown' } },
+        bindings: { 'session-1': { agent_id: 'mingming', dispatch_id: 'dispatch-unknown' } },
       }),
     )
     render()
@@ -91,7 +92,7 @@ describe('K12 会话刷新后的 GradingJob 入口恢复', () => {
       STORAGE_KEY,
       JSON.stringify({
         version: 1,
-        bindings: { 'session-1': { agent_id: 'other-child', job_id: 'job-other' } },
+        bindings: { 'session-1': { agent_id: 'other-child', dispatch_id: 'dispatch-other' } },
       }),
     )
     render('mingming')

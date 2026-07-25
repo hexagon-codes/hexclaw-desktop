@@ -12,7 +12,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import type { BBox } from '@/api/k12'
+import type { BBox, ParentTeachingGuideDTO } from '@/api/k12'
 import { isValidGradingBBox } from '../graded-photo'
 
 /** 一道题的叠加标记：批改结论 + 可选订正/错因，按题 id 对齐其 bbox。 */
@@ -29,14 +29,28 @@ interface OverlayMark {
   correctAnswer?: string
   /** 错因。 */
   errorCause?: string
+  /** 错题的完整家长讲法；正确题和非错题必须为空。 */
+  parentGuide?: ParentTeachingGuideDTO | null
 }
 
-const props = defineProps<{ image: string; marks: OverlayMark[] }>()
+const props = defineProps<{
+  /** 原始作业图；只读对照与老服务 bbox 叠加的底图。 */
+  image: string
+  /** 新服务返回的不可变批注图 data URL；存在时优先展示，禁止重复画 DOM 勾叉。 */
+  annotatedImage?: string
+  marks: OverlayMark[]
+}>()
 
 const { t } = useI18n()
 
 // 叠加层可开关：看原图 / 看批改（设计文档 §5 交互）。
 const showOverlay = ref(true)
+const displayedImage = computed(() =>
+  showOverlay.value && props.annotatedImage
+    ? props.annotatedImage
+    : props.image || props.annotatedImage || '',
+)
+const showProgrammaticMarks = computed(() => showOverlay.value && !props.annotatedImage)
 
 /**
  * bbox 合理性校验（错位防护）——与后端 normalizeBBox 同口径：
@@ -131,15 +145,15 @@ function markStyle(b: BBox) {
           <span class="grade-media__hash">{{ t('k12.overlay.originalReadOnly') }}</span>
         </div>
 
-        <!-- 原图为底 + 绝对定位叠加层（确定性绘制，非 AI 生成） -->
+        <!-- 新契约优先展示服务端不可变批注图；老契约才走原图 + bbox 确定性叠加。 -->
         <div class="grade-photo pg-overlay__canvas">
           <img
-            :src="image"
+            :src="displayedImage"
             class="pg-overlay__img"
             :alt="t('k12.overlay.imageAlt')"
             data-testid="overlay-image"
           />
-          <template v-if="showOverlay">
+          <template v-if="showProgrammaticMarks">
             <div
               v-for="m in positioned"
               :key="m._i"
@@ -238,7 +252,10 @@ function markStyle(b: BBox) {
               <span>{{ t('k12.overlay.question') }}</span>
               <MarkdownRenderer class="grade-card__md" :content="m.question" />
             </div>
-            <div v-if="!m.outOfScope && m.correctAnswer" class="grade-card__row">
+            <div
+              v-if="!m.outOfScope && m.correctAnswer && !m.parentGuide"
+              class="grade-card__row"
+            >
               <span>{{ t('k12.overlay.correctAnswer') }}</span>
               <MarkdownRenderer class="grade-card__md" :content="m.correctAnswer" />
             </div>
@@ -246,6 +263,58 @@ function markStyle(b: BBox) {
               <span>{{ t('k12.overlay.errorCause') }}</span>
               <MarkdownRenderer class="grade-card__md" :content="m.errorCause" />
             </div>
+            <template v-if="!m.outOfScope && m.parentGuide">
+              <div class="grade-card__row">
+                <span>答案</span>
+                <MarkdownRenderer class="grade-card__md" :content="m.parentGuide.answer" />
+              </div>
+              <div class="grade-card__row">
+                <span>必要步骤</span>
+                <ol class="grade-card__list">
+                  <li v-for="step in m.parentGuide.full_solution_steps" :key="step">
+                    <MarkdownRenderer class="grade-card__md" :content="step" />
+                  </li>
+                </ol>
+              </div>
+              <div class="grade-card__row">
+                <span>本年级方法</span>
+                <MarkdownRenderer
+                  class="grade-card__md"
+                  :content="m.parentGuide.grade_level_method"
+                />
+              </div>
+              <div class="grade-card__row">
+                <span>易错点</span>
+                <ul class="grade-card__list">
+                  <li v-for="mistake in m.parentGuide.likely_mistakes" :key="mistake">
+                    <MarkdownRenderer class="grade-card__md" :content="mistake" />
+                  </li>
+                </ul>
+              </div>
+              <div class="grade-card__row">
+                <span>家长怎么讲</span>
+                <ol class="grade-card__list">
+                  <li v-for="step in m.parentGuide.parent_teaching_sequence" :key="step">
+                    <MarkdownRenderer class="grade-card__md" :content="step" />
+                  </li>
+                </ol>
+              </div>
+              <div class="grade-card__row">
+                <span>可以追问</span>
+                <ul class="grade-card__list">
+                  <li v-for="question in m.parentGuide.follow_up_questions" :key="question">
+                    <MarkdownRenderer class="grade-card__md" :content="question" />
+                  </li>
+                </ul>
+              </div>
+              <div class="grade-card__row">
+                <span>怎么检查</span>
+                <MarkdownRenderer
+                  class="grade-card__md"
+                  :content="m.parentGuide.checking_method"
+                />
+              </div>
+            </template>
             <div v-if="m.outOfScope" class="grade-wrong-step is-scope">
               {{ t('verify.outOfScope') }}
             </div>
@@ -608,6 +677,12 @@ function markStyle(b: BBox) {
 }
 .grade-card__row > span:first-child {
   color: var(--hc-text-muted);
+}
+.grade-card__list {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
 }
 .grade-card__md :deep(p) {
   margin: 0;

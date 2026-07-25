@@ -12,7 +12,7 @@ export default {
 
   composer: {
     placeholder:
-      'Type a message, paste a problem with fractions/formulas, or ⌘V to paste a homework photo',
+      'Send a message, or ask me to write a leave note, reply to a teacher, or set a correction reminder',
     formulaHintLead: 'Paste fractions and math formulas',
     formulaHintDetail:
       'Copyable formulas from webpages, Word, and PDFs render as math after sending; for scanned pages, paste a screenshot.',
@@ -90,6 +90,12 @@ export default {
     basketBatchAdded: 'Added {n} to the practice set ({m} duplicates skipped)',
     basketFillAdded: 'Added {n} to the practice set ({m} duplicate or unsupported items skipped)',
     masteredToast: 'Parent confirmed · mastery evidence accrues separately',
+    archiveReview: 'Stop reviewing',
+    restoreReview: 'Restore review',
+    archivedToast: 'Removed from review',
+    undoArchive: 'Undo',
+    archiveUndone: 'Review restored',
+    restoreSucceeded: 'Review restored',
     dividerRule:
       'Wrong-and-fix → 「Mistakes」(math/phys/chem problems + CN/EN dictation/spelling/grammar fixes, cross-subject review by due date); worth-remembering → 「Notes」(good phrases/poems/collected, no review). CN/EN word practice = verbatim recall + exact string match; math/sci = solve verification. Essays are archived into reports only, not the review queue.',
   },
@@ -297,17 +303,11 @@ export default {
     writing: 'Writing',
     writingKind: 'Chinese · Writing',
     art: 'Artwork',
-    addFeedback: 'Add feedback',
-    submitRevision: 'Submit revision',
-    archive: 'Archive',
-    viewReview: 'View feedback',
-    startReview: 'Start feedback',
+    submitRevision: 'Upload revision',
+    viewDetails: 'View details',
     collapseDetail: 'Collapse details',
     detailClose: 'Close',
-    writingReviewTitle: 'Writing feedback · {title}',
-    artReviewTitle: 'Artwork feedback · {title}',
-    generateWritingReviewTitle: 'Generate writing feedback · {title}',
-    generateArtReviewTitle: 'Generate artwork feedback · {title}',
+    detailTitle: 'Work details · {title}',
     versionCount: 'ver.',
     loadError: 'Failed to load works',
     retry: 'Retry here',
@@ -317,7 +317,6 @@ export default {
     feedbackObservations: 'Observations and evidence',
     feedbackSuggestions: 'Next suggestions',
     feedbackLimitations: 'Capability and evidence limits:',
-    feedbackAllowedActions: 'Allowed actions',
     feedbackDimensionTask: 'Task alignment',
     feedbackDimensionStructure: 'Structure',
     feedbackDimensionExpression: 'Expression',
@@ -326,10 +325,14 @@ export default {
     feedbackDimensionColor: 'Color',
     feedbackDimensionLine: 'Line',
     feedbackDimensionVisible: 'Visible detail',
-    feedbackActionSend: 'Send',
-    feedbackActionPrint: 'Print observation card',
-    feedbackActionCollect: 'Collect',
-    feedbackActionLanguageIssue: 'Record language issue',
+    feedbackAutoPending:
+      'The latest feedback for this version is being generated automatically; earlier feedback is preserved.',
+    feedbackRegenerate: 'Regenerate feedback',
+    feedbackRegenerating: 'Regenerating…',
+    feedbackRegenerated:
+      'Latest feedback regenerated · earlier feedback remains in the version record',
+    feedbackRegenerateFailed:
+      'Regeneration failed. The earlier feedback was preserved. You can retry.',
     // Add-work modal (prototype 5326-5361)
     addWork: 'Add work',
     addModalTitle: 'Add a work',
@@ -348,7 +351,7 @@ export default {
       'Photo upload not wired yet — save with text first; add the image once the asset service is ready',
     save: 'Save to works archive',
     cancel: 'Cancel',
-    created: 'Saved · awaiting feedback',
+    created: 'Saved · generating feedback automatically',
     // KPI row + feedback rules (prototype 2570-2586)
     kpiTotal: 'All works',
     kpiReviewed: 'Reviewed',
@@ -356,20 +359,6 @@ export default {
     rulesTitle: 'Feedback rules',
     rulesBody:
       'Writing: compared against the prompt, the original and each revision; artwork: only visible composition, color and expression are described. Only 1-3 actionable suggestions each time — never finishing the work for the child.',
-    aiPendingNote:
-      'AI-generated feedback not wired yet (backend Skill) — parents write feedback by hand for now',
-    aiGenerate: 'Generate AI feedback',
-    aiGenerating: 'Generating feedback…',
-    aiGenerated: 'Feedback generated',
-    aiGenerateFailed: 'Feedback generation failed; please retry',
-    // Feedback linkage exits (PRD 3.10)
-    toAccum: 'Save good sentence',
-    accumPlaceholder: 'Paste the sentence worth keeping',
-    accumSaved: 'Added to accumulation · work source kept',
-    toMistake: 'Confirm & log as mistake',
-    mistakePlaceholder: 'Write down the confirmed issue',
-    mistakeSaved: 'Logged as a mistake · the work stays in the archive',
-    confirm: 'Confirm',
     photoChoose: 'Drop a photo here or click to choose (png/jpg, up to 10MB)',
     photoUploading: 'Uploading',
     photoUploaded: 'Uploaded · photo stays on this computer',
@@ -388,20 +377,6 @@ export default {
     ocrConfirm: 'Confirm draft text',
     ocrConfirmed: 'Draft text confirmed. The work can now be saved.',
     ocrConfirmFailed: 'Could not confirm the draft text; please retry',
-    sendFeedback: 'Send feedback highlights',
-    sendOk: 'Sent to {target}',
-    sendFallbackCopied: 'Text copied — paste it into your chat to share',
-    practiceCardTitle: 'Observation practice',
-    practiceCardPrint: 'Print card',
-    practiceCardSavePdf: 'Save card as PDF',
-    practiceCardSavePdfFailed: 'Could not save the practice card PDF — retry',
-    practiceCardSend: 'Send to phone',
-    practiceCardMarkDone: 'Mark done',
-    practiceCardDoneAt: 'Completed · record kept in the work archive',
-    practiceCardDoneOk: 'Practice recorded ✓',
-    practiceCardHint:
-      'From this feedback · archived with the work; never enters mistakes or practice sets',
-    printFailed: 'Printing failed, please try again',
   },
   accumulationEmpty:
     'Nothing here yet — Chinese/English good phrases and easy-to-miss words collect here.',
@@ -420,6 +395,9 @@ export default {
     submit: 'Save',
     cancel: 'Cancel',
     added: 'Saved to collection',
+    copyContent: 'Copy content',
+    copied: 'Content copied',
+    copyFailed: 'Copy failed. Please retry.',
     dictationToBasket: 'Make dictation questions · add to practice set',
     dictationAdded: 'Added to practice set',
     dictationHint:
@@ -597,11 +575,6 @@ export default {
     enterTutor: 'Tutor',
   },
 
-  bridge: {
-    text: '💬 I do more than tutoring — ask me to write leave notes, reply to teachers, or schedule correction check-ins',
-    action: 'See what else I can do ›',
-  },
-
   capabilities: {
     close: 'Close',
     subjectTitle: 'Primary school · Subject capabilities',
@@ -665,24 +638,6 @@ export default {
         practice: 'Change the repeat count, run again, and compare the path',
       },
     },
-    generalTitle: 'What else this Agent can do',
-    generalPrimary: 'Fill in an example request',
-    generalExample: 'Write a notice for a parent meeting tomorrow at 3 PM',
-    general: {
-      homeSchool: {
-        label: 'Home–school communication',
-        detail: 'Parent-meeting notices, leave notes, and drafts to teachers',
-      },
-      organize: {
-        label: 'Organize materials',
-        detail: 'Turn textbooks, notices, or webpages into key points',
-      },
-      schedule: {
-        label: 'Schedule reminders',
-        detail:
-          'Create personal scheduled tasks using the private-chat channel bound to this Agent',
-      },
-    },
   },
 
   tutoringTips: {
@@ -695,7 +650,7 @@ export default {
     subjectEnglish: '🔤 English',
     subjectScience: '🔬 Science',
     subjectInfoTech: '💻 Info Tech',
-    sendPhone: 'Send to phone (DM)',
+    sendPhone: 'Send to phone',
     uploadGrounding: 'Upload textbook source',
     groundingUploaded: 'Textbook uploaded and tutoring tips refreshed',
     groundingFailed: 'Textbook upload failed. Check the file and try again.',
@@ -705,18 +660,6 @@ export default {
     currentBasis: 'Current basis: {textbook} · {grade}',
     generateFailed:
       'Failed to generate tutoring tips: the model timed out or the network was interrupted. Please retry. Local models can be slow — switch to a faster cloud model in settings.',
-  },
-  delivery: {
-    pending: 'Delivery created and waiting to send',
-    sending: 'Submitted to {target}; waiting for delivery confirmation',
-    delivered: 'Delivered to {target}',
-    failed: 'Send failed: {reason}',
-    outcomeUnknown: 'Delivery outcome is unknown. Query it before any retry to avoid duplicates.',
-    unknownReason: 'No reason supplied by the platform',
-    retry: 'Retry send',
-    query: 'Check delivery',
-    setupRequired: 'This tutor is not bound to a phone DM yet',
-    bindCTA: 'Open connection settings',
   },
   recognize: {
     title: 'Photo capture · echo guard',

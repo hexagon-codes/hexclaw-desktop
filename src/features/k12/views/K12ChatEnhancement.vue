@@ -26,12 +26,12 @@ import type {
   ScenarioComposerImagePayload,
   ScenarioImageModelRoute,
 } from '@/shell/scenario/registry'
-import { hasGradingJobBinding } from '../grading-job-binding'
+import { hasImageTaskBinding } from '../image-task-binding'
 
 const props = defineProps<{
   agentId: string
   agentName: string
-  /** 通用会话 ID：仅用于 source_session 与同一 GradingJob 的最小刷新恢复。 */
+  /** 通用会话 ID：仅用于 source_session 与同一 ImageTaskDispatch 的最小刷新恢复。 */
   sessionId?: string
   /** 通用 metadata（ChatView 透传）；年级由本组件解析后端 profile 键 k12.grade_term */
   metadata?: Record<string, string>
@@ -73,6 +73,8 @@ const emit = defineEmits<{
   (e: 'update:inlineActive', v: boolean): void
   /** 请求 shell 操作通用输入框；K12 文案不进入 ChatInput/ChatView。 */
   (e: 'composerCommand', command: ScenarioComposerCommand): void
+  /** 失败任务显式重提：只上交原始图片事实；shell 负责新消息身份与当前路由冻结。 */
+  (e: 'scenarioImageAttempt', payload: ScenarioComposerImagePayload): void
 }>()
 
 const { t } = useI18n()
@@ -106,13 +108,25 @@ function panelIdOfKind(kind: string): string {
 const recognizeOpen = ref(false)
 const backupOpen = ref(false)
 const pendingRecognizeImage = ref('')
+const pendingRecognizeRequestId = ref('')
 const pendingRecognizeRoute = ref<ScenarioImageModelRoute>()
+const pendingRecognizeMessageIntent = ref('')
+// 消费 composerImage 后仍保留本 attempt 的不可变输入事实，供失败卡片显式重提。
+// request_id/route 仅描述旧 attempt；shell 接到事件后必须丢弃二者并重新冻结。
+const pendingRecognizePayload = ref<ScenarioComposerImagePayload>()
 // composerImage 是离散事件而非图片状态；同一 dataURL 重投也必须让护栏收到新一轮请求。
 const recognizeRequestSequence = ref(0)
 function closeRecognize() {
   recognizeOpen.value = false
   pendingRecognizeImage.value = ''
+  pendingRecognizeRequestId.value = ''
   pendingRecognizeRoute.value = undefined
+  pendingRecognizeMessageIntent.value = ''
+  pendingRecognizePayload.value = undefined
+}
+function retryRecognizeAsNewAttempt() {
+  if (!pendingRecognizePayload.value?.requestId?.trim()) return
+  emit('scenarioImageAttempt', pendingRecognizePayload.value)
 }
 
 // 头部零硬编码动作按钮（20260709）：辅导要点已内联进识题流（识题确认后自动出「这份作业的辅导要点」），
@@ -125,7 +139,6 @@ type SubjectDemo = 'science' | 'informationTechnology' | 'art'
 type CapabilityDialog =
   | { kind: 'subjects' }
   | { kind: 'subject-demo'; subject: Exclude<SubjectDemo, 'art'> }
-  | { kind: 'general' }
 
 const capabilityDialog = ref<CapabilityDialog | null>(null)
 const capabilityDialogRef = ref<HTMLElement>()
@@ -175,7 +188,6 @@ const subjectCapabilities = computed(() => [
 
 const capabilityTitle = computed(() => {
   if (capabilityDialog.value?.kind === 'subjects') return t('k12.capabilities.subjectTitle')
-  if (capabilityDialog.value?.kind === 'general') return t('k12.capabilities.generalTitle')
   const subject = capabilityDialog.value?.subject
   return subject
     ? t('k12.capabilities.demo.title', { subject: t(`k12.capabilities.subjects.${subject}.label`) })
@@ -184,7 +196,6 @@ const capabilityTitle = computed(() => {
 
 const capabilityPrimary = computed(() => {
   if (capabilityDialog.value?.kind === 'subjects') return t('k12.capabilities.subjectPrimary')
-  if (capabilityDialog.value?.kind === 'general') return t('k12.capabilities.generalPrimary')
   return t('k12.capabilities.demo.primary')
 })
 
@@ -218,15 +229,6 @@ function runCapabilityPrimary() {
   if (dialog.kind === 'subjects') {
     closeCapabilityDialog(false)
     emit('composerCommand', { type: 'focus' })
-    return
-  }
-  if (dialog.kind === 'general') {
-    closeCapabilityDialog()
-    emit('composerCommand', {
-      type: 'set-input',
-      text: t('k12.capabilities.generalExample'),
-      focus: true,
-    })
     return
   }
   const subject = dialog.subject === 'science' ? '科学' : '信息科技'
@@ -305,7 +307,10 @@ watch(
     recognizeOpen.value = false
     backupOpen.value = false
     pendingRecognizeImage.value = ''
+    pendingRecognizeRequestId.value = ''
     pendingRecognizeRoute.value = undefined
+    pendingRecognizeMessageIntent.value = ''
+    pendingRecognizePayload.value = undefined
     closeCapabilityDialog(false)
     emit('update:composerImage', '')
   },
@@ -315,7 +320,7 @@ watch(
 watch(
   [() => props.sessionId, () => props.agentId],
   ([sessionId, agentId]) => {
-    const recoverable = hasGradingJobBinding(sessionId, agentId)
+    const recoverable = hasImageTaskBinding(sessionId, agentId)
     if (recoverable) {
       tab.value = 'chat'
       pendingRecognizeImage.value = ''
@@ -337,13 +342,27 @@ watch(
   () => props.composerImage,
   (img) => {
     if (!img) return
+    // shell 注入的图片 attempt 具有会话所有权；同一 Agent 的其他会话也无权消费。
+    // 兼容 string 仅用于旧调用边界，新结构化 payload 必须 fail-closed。
+    if (
+      typeof img !== 'string'
+      && img.sourceSessionId
+      && img.sourceSessionId !== props.sessionId
+    ) {
+      emit('update:composerImage', '')
+      return
+    }
     const dataUrl = typeof img === 'string' ? img : img.dataUrl
     if (!dataUrl) return
     tab.value = 'chat'
     recognizeRequestSequence.value += 1
     recognizeOpen.value = true
     pendingRecognizeImage.value = dataUrl
+    pendingRecognizeRequestId.value = typeof img === 'string' ? '' : img.requestId?.trim() || ''
     pendingRecognizeRoute.value = typeof img === 'string' ? undefined : img.route
+    pendingRecognizeMessageIntent.value =
+      typeof img === 'string' ? '' : img.contextText?.trim() || ''
+    pendingRecognizePayload.value = typeof img === 'string' ? undefined : img
     emit('update:composerImage', '')
   },
   { immediate: true },
@@ -407,8 +426,11 @@ watch(
               :textbook="textbook"
               :textbooks="subjectTextbooks"
               :initial-image="pendingRecognizeImage"
+              :request-id="pendingRecognizeRequestId"
               :model-route="pendingRecognizeRoute"
+              :message-intent="pendingRecognizeMessageIntent"
               @close="closeRecognize"
+              @retry="retryRecognizeAsNewAttempt"
             />
           </div>
         </div>
@@ -417,23 +439,6 @@ watch(
 
     <!-- 辅导要点只在 RecognizeGuardPanel 识题持久确认后内联展示。 -->
 
-    <!-- K12→通用扩展桥（辅导 tab，Teleport 到会话页脚；兑现「通用留存」）。
-       defer：本增强组件在 ChatView 里渲染在锚点 div 之前（ChatView ~1815 vs 锚点 2344），
-       无 defer 时同步 Teleport 抢在锚点渲染前定位 → "Failed to locate Teleport target"、桥接丢失
-       （BUG-20260708）。Vue 3.5 defer 把 target 解析延到父树挂载后，此时锚点已在 DOM。 -->
-    <Teleport v-if="tab === 'chat'" defer to="#hc-chat-scenario-footer">
-      <div class="k12enh-bridge">
-        {{ t('k12.bridge.text') }}
-        <button
-          type="button"
-          class="k12enh-bridge__link"
-          data-testid="k12-general-capabilities"
-          @click="openCapabilityDialog({ kind: 'general' })"
-        >
-          {{ t('k12.bridge.action') }}
-        </button>
-      </div>
-    </Teleport>
   </div>
 
   <!-- composer 预设 chips（后端 descriptor 下发，对齐原型 .composer-chips）：
@@ -567,22 +572,6 @@ watch(
             </div>
           </template>
 
-          <template v-else>
-            <div class="k12cap-list">
-              <div class="k12cap-row" data-testid="k12-general-capability">
-                <b>{{ t('k12.capabilities.general.homeSchool.label') }}</b>
-                <span>{{ t('k12.capabilities.general.homeSchool.detail') }}</span>
-              </div>
-              <div class="k12cap-row" data-testid="k12-general-capability">
-                <b>{{ t('k12.capabilities.general.organize.label') }}</b>
-                <span>{{ t('k12.capabilities.general.organize.detail') }}</span>
-              </div>
-              <div class="k12cap-row" data-testid="k12-general-capability">
-                <b>{{ t('k12.capabilities.general.schedule.label') }}</b>
-                <span>{{ t('k12.capabilities.general.schedule.detail') }}</span>
-              </div>
-            </div>
-          </template>
         </div>
 
         <div class="k12cap-modal__foot">
@@ -685,27 +674,6 @@ watch(
 }
 .k12enh-chat-panel {
   display: contents;
-}
-/* 扩展桥（Teleport 到会话页脚） */
-.k12enh-bridge {
-  text-align: center;
-  margin: 0 16px 12px;
-  font-size: 11.5px;
-  color: var(--hc-text-muted);
-}
-.k12enh-bridge__link {
-  margin-left: 4px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--hc-accent);
-  font: inherit;
-  cursor: pointer;
-}
-.k12enh-bridge__link:hover,
-.k12enh-bridge__link:focus-visible {
-  text-decoration: underline;
-  outline: none;
 }
 /* 手动识题按钮样式已随入口删除退役（BUG-20260711-E：识题唯一入口=图片自动改道）。 */
 /* composer 预设 chips 样式已随 Teleport 方案退役（BUG-20260709）：

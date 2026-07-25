@@ -53,7 +53,7 @@ function render(
   return mount(TutoringTipsPanel, {
     props: {
       agentId: 'mingming',
-      gradingJobId: 'job-confirmed-1',
+      dispatchId: 'dispatch-confirmed-1',
       sessionId: 'session-1',
       grade: '五年级上',
       subject: '数学',
@@ -78,13 +78,13 @@ describe('TutoringTipsPanel（辅导要点内联卡）', () => {
     h.tutoringTipsSpy.mockClear()
   })
 
-  it('可信 Job 就绪后事件驱动生成，只带 agent/grading_job_id', async () => {
+  it('可信图片任务就绪后事件驱动生成，只带 agent/dispatch_id', async () => {
     render(['简易方程'])
     await flushPromises()
     expect(h.tutoringTipsSpy).toHaveBeenCalledWith(
       {
         agent: 'mingming',
-        grading_job_id: 'job-confirmed-1',
+        dispatch_id: 'dispatch-confirmed-1',
       },
       expect.any(AbortSignal),
     )
@@ -112,7 +112,7 @@ describe('TutoringTipsPanel（辅导要点内联卡）', () => {
   })
 
   it('缺少可信 Job 或 session 时不生成', async () => {
-    render(['简易方程'], { gradingJobId: '', sessionId: '' })
+    render(['简易方程'], { dispatchId: '', sessionId: '' })
     await flushPromises()
     expect(h.tutoringTipsSpy).not.toHaveBeenCalled()
   })
@@ -158,7 +158,7 @@ describe('TutoringTipsPanel（辅导要点内联卡）', () => {
     expect(h.tutoringTipsSpy).toHaveBeenLastCalledWith(
       {
         agent: 'mingming',
-        grading_job_id: 'job-confirmed-1',
+        dispatch_id: 'dispatch-confirmed-1',
       },
       expect.any(AbortSignal),
     )
@@ -177,7 +177,7 @@ describe('TutoringTipsPanel（辅导要点内联卡）', () => {
 
     await w.setProps({
       agentId: 'honghong',
-      gradingJobId: 'job-confirmed-2',
+      dispatchId: 'dispatch-confirmed-2',
       knowledgePoints: ['分数乘法'],
     })
     await flushPromises()

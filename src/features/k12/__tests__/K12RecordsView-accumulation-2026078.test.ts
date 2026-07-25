@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -13,6 +13,10 @@ import HcSelect from '@/components/common/HcSelect.vue'
 const h = vi.hoisted(() => ({
   listSpy: vi.fn(),
   addSpy: vi.fn(),
+  sendSpy: vi.fn(),
+  querySpy: vi.fn(),
+  retrySpy: vi.fn(),
+  clipboardSpy: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
@@ -27,8 +31,15 @@ vi.mock('@/api/k12', () => ({
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: (agent: string, subject?: string) => h.listSpy(agent, subject),
   k12AddAccumulation: (req: unknown) => h.addSpy(req),
+  k12SendAccumulation: (...args: unknown[]) => h.sendSpy(...args),
+  k12GetDeliveryBatch: vi.fn(),
+  k12QueryDeliveryBatch: (...args: unknown[]) => h.querySpy(...args),
+  k12RetryDeliveryBatch: (...args: unknown[]) => h.retrySpy(...args),
   k12ReviewRetry: vi.fn(),
   k12ExportMd: vi.fn(),
+}))
+vi.mock('@/api/desktop', () => ({
+  setClipboard: (...args: unknown[]) => h.clipboardSpy(...args),
 }))
 
 function i18n() {
@@ -54,7 +65,12 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     setActivePinia(createPinia())
     h.listSpy.mockReset().mockResolvedValue({ items: [] })
     h.addSpy.mockReset().mockResolvedValue({ record_id: 'x', created: true })
+    h.sendSpy.mockReset()
+    h.querySpy.mockReset()
+    h.retrySpy.mockReset()
+    h.clipboardSpy.mockReset().mockResolvedValue(undefined)
   })
+  afterEach(() => vi.useRealTimers())
 
   it('#5 分科过滤：点「语文」chip → 以 subject=语文 重新拉取积累本', async () => {
     const w = render()
@@ -190,5 +206,82 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(w.find('[data-testid="detail-content"]').text()).toContain('a piece of cake')
     expect(w.find('[data-testid="detail-accum-subject"]').text()).toContain('英语')
     expect(w.find('[data-testid="detail-accum-type"]').text()).toContain('好词好句')
+  })
+
+  it('积累详情只提供复制、全绑定发送、生成默写题；发送不选择平台或接收人', async () => {
+    vi.useFakeTimers()
+    h.listSpy.mockResolvedValue({
+      items: [
+        {
+          record_id: 'x1',
+          subject: '英语',
+          entry_type: '好词好句',
+          content: 'a piece of cake',
+          status: 'new',
+        },
+      ],
+    })
+    const child = {
+      delivery_id: 'delivery-1',
+      batch_id: 'batch-1',
+      batch_ordinal: 0,
+      agent_name: 'mingming',
+      object_kind: 'accumulation',
+      object_id: 'x1',
+      binding_id: 'binding-1',
+      target: { platform: 'feishu', chat_id: 'chat-1' },
+      status: 'outcome_unknown',
+      dedupe_key: 'child-1',
+      payload_digest: 'sha256:payload',
+      payload_json: '{}',
+      render_manifest_json: '{}',
+      attempt: 1,
+      created_at: 1,
+      updated_at: 1,
+    }
+    h.sendSpy.mockResolvedValue({
+      batch_id: 'batch-1',
+      agent_name: 'mingming',
+      object_kind: 'accumulation',
+      object_id: 'x1',
+      dedupe_key: 'batch-1',
+      content_digest: 'sha256:content',
+      status: 'outcome_unknown',
+      receipts: [child],
+      created_at: 1,
+      updated_at: 1,
+    })
+    h.querySpy.mockResolvedValue({
+      batch_id: 'batch-1',
+      agent_name: 'mingming',
+      object_kind: 'accumulation',
+      object_id: 'x1',
+      dedupe_key: 'batch-1',
+      content_digest: 'sha256:content',
+      status: 'delivered',
+      receipts: [{ ...child, status: 'delivered' }],
+      created_at: 1,
+      updated_at: 2,
+    })
+
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+    await w.get('.k12accum__detail').trigger('click')
+    await flushPromises()
+
+    expect(w.get('[data-testid="accum-copy-content"]').text()).toBe('复制内容')
+    expect(w.get('[data-testid="accum-send-phone"]').text()).toBe('发送到手机')
+    expect(w.text()).not.toMatch(/选择.*(钉钉|飞书|接收人|发送目标)/)
+
+    await w.get('[data-testid="accum-send-phone"]').trigger('click')
+    await flushPromises()
+    expect(h.sendSpy).toHaveBeenCalledWith('mingming', 'x1')
+    expect(w.get('[data-testid="accum-send-phone"]').text()).toBe('发送中…')
+
+    await vi.runOnlyPendingTimersAsync()
+    await flushPromises()
+    expect(h.querySpy).toHaveBeenCalledWith('mingming', 'batch-1')
+    expect(w.get('[data-testid="accum-send-phone"]').text()).toBe('发送成功')
   })
 })

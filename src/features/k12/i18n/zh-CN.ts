@@ -15,7 +15,7 @@ export default {
   },
 
   composer: {
-    placeholder: '发消息、粘贴带分数/公式的题目，或 ⌘V 粘贴作业照片',
+    placeholder: '发消息，或让我写请假条、回复老师消息、设置订正提醒',
     formulaHintLead: '支持粘贴分数与数学公式',
     formulaHintDetail: '网页、Word、PDF 中可复制的公式发送后按数学排版显示；扫描页仍建议粘贴截图。',
     chips: ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验'],
@@ -91,6 +91,12 @@ export default {
     basketFillAdded: '已加入练习集 {n} 道（跳过 {m} 道重复或暂不支持题）',
     // §4.11 信任链：家长确认 ≠ 系统已掌握——toast 不得宣称「已掌握」（后端语义拆分另包，此处先守文案）
     masteredToast: '家长已确认 · 系统掌握证据另行积累',
+    archiveReview: '不再复习',
+    restoreReview: '恢复复习',
+    archivedToast: '已移出复习',
+    undoArchive: '撤销',
+    archiveUndone: '已恢复复习',
+    restoreSucceeded: '已恢复复习',
     dividerRule:
       '做错了要改 → 进「错题」（数理化题 + 语英听写/默写/语法改错，跨科按到期混排走复习）；遇到好东西要记住 → 进「积累」（好词好句/古诗/收藏，无复习）。语英字词再练走原词重现·确定性字符比对，数理化走 solve 验算链；作文只留档进报告、不进复习队列。',
   },
@@ -288,17 +294,11 @@ export default {
     writing: '语文写作',
     writingKind: '语文·习作',
     art: '美术作品',
-    addFeedback: '写点评',
-    submitRevision: '提交修改稿',
-    archive: '归档',
-    viewReview: '查看点评',
-    startReview: '开始点评',
+    submitRevision: '上传修改稿',
+    viewDetails: '查看详情',
     collapseDetail: '收起详情',
     detailClose: '关闭',
-    writingReviewTitle: '写作点评 · {title}',
-    artReviewTitle: '作品点评 · {title}',
-    generateWritingReviewTitle: '生成写作点评 · {title}',
-    generateArtReviewTitle: '生成作品点评 · {title}',
+    detailTitle: '作品详情 · {title}',
     versionCount: '版',
     loadError: '作品加载失败',
     retry: '原地重试',
@@ -308,7 +308,6 @@ export default {
     feedbackObservations: '观察与依据',
     feedbackSuggestions: '下一步建议',
     feedbackLimitations: '能力与证据限制：',
-    feedbackAllowedActions: '允许动作',
     feedbackDimensionTask: '切题',
     feedbackDimensionStructure: '结构',
     feedbackDimensionExpression: '表达',
@@ -317,10 +316,11 @@ export default {
     feedbackDimensionColor: '色彩',
     feedbackDimensionLine: '线条',
     feedbackDimensionVisible: '可见细节',
-    feedbackActionSend: '发送',
-    feedbackActionPrint: '打印观察练习卡',
-    feedbackActionCollect: '收藏',
-    feedbackActionLanguageIssue: '记录语言问题',
+    feedbackAutoPending: '正在自动生成这一版的最新点评；旧点评仍会保留。',
+    feedbackRegenerate: '重新生成点评',
+    feedbackRegenerating: '正在重新生成…',
+    feedbackRegenerated: '最新点评已重新生成 · 原点评仍保留在版本记录中',
+    feedbackRegenerateFailed: '重新生成失败，旧点评已保留。你可以重试。',
     // 添加作品弹窗（原型 5326-5361）
     addWork: '添加作品',
     addModalTitle: '添加作品',
@@ -338,7 +338,7 @@ export default {
     photoPending: '照片上传待接线——先用文字保存，资产服务就绪后可补图',
     save: '保存到作品档案',
     cancel: '取消',
-    created: '已保存 · 待点评',
+    created: '已保存 · 正在自动生成点评',
     // 作品页 KPI + 点评规则（原型 2570-2586）
     kpiTotal: '全部作品',
     kpiReviewed: '已点评',
@@ -346,19 +346,6 @@ export default {
     rulesTitle: '点评规则',
     rulesBody:
       '语文写作：比对题目要求、原稿与修改稿；美术：只描述画面中可见的构图、色彩与表达。每次只给 1～3 条能落实的建议，不替孩子完成作品。',
-    aiPendingNote: 'AI 生成点评待接线（后端 Skill）——现阶段由家长手写点评',
-    aiGenerate: 'AI 生成点评',
-    aiGenerating: '正在生成点评…',
-    aiGenerated: '点评已生成',
-    aiGenerateFailed: '点评生成失败，请重试',
-    // 点评联动出口（§3.10）：好句入积累 / 确认错处入错题
-    toAccum: '好句加入积累',
-    accumPlaceholder: '粘贴值得积累的好句',
-    accumSaved: '好句已加入积累 · 保留作品来源',
-    toMistake: '确认并记入错题',
-    mistakePlaceholder: '写下已确认的错处（如「轻轻的吹」用字）',
-    mistakeSaved: '已记入错题 · 作品仍保留在成长档案',
-    confirm: '确认',
     // 作品照片真实上传（任务1：最小资产服务）
     photoChoose: '拖放或点击选择照片（png/jpg，10MB 内）',
     photoUploading: '上传中',
@@ -377,21 +364,6 @@ export default {
     ocrConfirm: '确认原稿文字',
     ocrConfirmed: '原稿文字已确认，可以保存到作品档案。',
     ocrConfirmFailed: '确认原稿文字失败，请重试',
-    // 发送到手机（任务3，§3.10/§3.12）
-    sendFeedback: '发送点评要点',
-    sendOk: '已发送到 {target}',
-    sendFallbackCopied: '文本已复制，可粘贴到聊天里发给家长',
-    // 观察练习卡（任务2，§3.10 美术）
-    practiceCardTitle: '观察小练习',
-    practiceCardPrint: '打印练习卡',
-    practiceCardSavePdf: '保存练习卡 PDF',
-    practiceCardSavePdfFailed: '练习卡 PDF 保存失败，请重试',
-    practiceCardSend: '发送到手机',
-    practiceCardMarkDone: '完成打卡',
-    practiceCardDoneAt: '已完成打卡 · 记录保留在作品档案',
-    practiceCardDoneOk: '已记下这次练习 ✓',
-    practiceCardHint: '来自这次点评 · 归档在该作品详情；不进入错题与练习集',
-    printFailed: '打印失败，请重试',
   },
   accumulationEmpty: '积累本还没有内容——语文/英语的好词好句、易错词会沉淀在这里。',
   accum: {
@@ -409,6 +381,9 @@ export default {
     submit: '记下',
     cancel: '取消',
     added: '已记入积累本',
+    copyContent: '复制内容',
+    copied: '内容已复制',
+    copyFailed: '复制失败，请重试',
     // §3.9 检验出口（原型积累详情三出口之一）：复制/发送=素材取用，默写题=进自动复批闭环
     dictationToBasket: '生成默写题，加入练习集',
     dictationAdded: '已加入练习集',
@@ -577,11 +552,6 @@ export default {
     enterTutor: '进入辅导',
   },
 
-  bridge: {
-    text: '💬 我不只会辅导——写请假条、回复老师消息、记订正打卡提醒也能找我',
-    action: '看看还能做什么 ›',
-  },
-
   capabilities: {
     close: '关闭',
     subjectTitle: '小学阶段 · 学科能力',
@@ -642,17 +612,6 @@ export default {
         practice: '修改循环次数后重新运行并对比轨迹',
       },
     },
-    generalTitle: '这个 Agent 还能帮你做什么',
-    generalPrimary: '填入示例请求',
-    generalExample: '帮我写一条明天下午 3 点开家长会的通知',
-    general: {
-      homeSchool: { label: '家校沟通', detail: '家长会通知、请假说明、老师沟通草稿' },
-      organize: { label: '资料整理', detail: '把教材、通知或网页整理成要点' },
-      schedule: {
-        label: '日程提醒',
-        detail: '创建个人定时任务；发送目标仍沿用该 Agent 绑定的私聊渠道',
-      },
-    },
   },
 
   tutoringTips: {
@@ -665,7 +624,7 @@ export default {
     subjectEnglish: '🔤 英语',
     subjectScience: '🔬 科学',
     subjectInfoTech: '💻 信息科技',
-    sendPhone: '发到手机（私聊）',
+    sendPhone: '发送到手机',
     uploadGrounding: '上传教材原文',
     groundingUploaded: '教材已上传，辅导要点已按教材刷新',
     groundingFailed: '教材上传失败，请检查文件内容或稍后重试',
@@ -675,18 +634,6 @@ export default {
     currentBasis: '当前依据：{textbook} · {grade}',
     generateFailed:
       '辅导要点生成失败：模型响应超时或网络中断，请重试。本地模型较慢，可在设置里切换到更快的云端模型。',
-  },
-  delivery: {
-    pending: '投递任务已创建，等待发送',
-    sending: '已提交到 {target}，等待送达确认',
-    delivered: '已送达 {target}',
-    failed: '发送失败：{reason}',
-    outcomeUnknown: '送达结果未知；为避免重复消息，只能查询，不能直接重发',
-    unknownReason: '平台未提供原因',
-    retry: '重试发送',
-    query: '查询送达结果',
-    setupRequired: '这个辅导助手还没绑定手机私聊',
-    bindCTA: '去连接设置绑定',
   },
   recognize: {
     title: '拍照识题 · 回显护栏',

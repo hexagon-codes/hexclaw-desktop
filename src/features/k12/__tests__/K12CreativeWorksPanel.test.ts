@@ -7,33 +7,29 @@ import k12Zh from '../i18n/zh-CN'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import K12CreativeWorksPanel from '../views/K12CreativeWorksPanel.vue'
 import type { CreativeWorkDTO } from '@/api/k12'
+import apiSource from '@/api/k12.ts?raw'
 
-// 作品面板（PRD §3.10）：直连 /creative-works*，只点评不打分不代写（INV-011）。
-// 验证：列表/类型过滤、点评走 feedback、修改稿走 revision、版本时间线渲染、
-// 添加作品弹窗（原型 5326-5361）、KPI/点评规则（原型 2570-2586）、点评联动出口（好句入积累/错处入错题）。
+// 作品面板（PRD §3.10）：纯文本走 /creative-works*，带图手工录入走 ImageTaskDispatch；
+// 只点评不打分不代写（INV-011）。
+// 验证：列表/类型过滤、保存/上传后由服务端自动点评、修改稿走 revision、版本时间线渲染，
+// 以及详情仅保留最新点评的重新生成入口。
 const h = vi.hoisted(() => ({
   listSpy: vi.fn(),
   createSpy: vi.fn(),
-  feedbackSpy: vi.fn(),
   generateFeedbackSpy: vi.fn(),
   revisionSpy: vi.fn(),
-  archiveSpy: vi.fn(),
-  accumSpy: vi.fn(),
-  recordMistakeSpy: vi.fn(),
   uploadSpy: vi.fn(),
-  createOCRSpy: vi.fn(),
-  retryOCRSpy: vi.fn(),
-  confirmOCRSpy: vi.fn(),
-  sendSpy: vi.fn(),
-  cardDoneSpy: vi.fn(),
-  printSpy: vi.fn(),
+  createImageTaskSpy: vi.fn(),
+  getImageTaskSpy: vi.fn(),
+  getImageTaskResultSpy: vi.fn(),
+  confirmImageTaskSpy: vi.fn(),
+  retryImageTaskSpy: vi.fn(),
+  cancelImageTaskSpy: vi.fn(),
 }))
 vi.mock('@/api/k12', () => ({
   k12ListCreativeWorks: (agent: string, type?: string) => h.listSpy(agent, type),
   k12CreateCreativeWork: (req: unknown) => h.createSpy(req),
-  k12AttachWorkFeedback: (a: string, id: string, fb: string) => h.feedbackSpy(a, id, fb),
-  k12GenerateWorkFeedback: (a: string, id: string, signal?: AbortSignal) =>
-    h.generateFeedbackSpy(a, id, signal),
+  k12GenerateWorkFeedback: (...args: unknown[]) => h.generateFeedbackSpy(...args),
   k12SubmitWorkRevision: (
     a: string,
     id: string,
@@ -46,30 +42,19 @@ vi.mock('@/api/k12', () => ({
         ? h.revisionSpy(a, id, c)
         : h.revisionSpy(a, id, c, asset)
       : h.revisionSpy(a, id, c, asset, ocr),
-  k12ArchiveCreativeWork: (a: string, id: string) => h.archiveSpy(a, id),
-  k12AddAccumulation: (req: unknown) => h.accumSpy(req),
-  k12RecordMistake: (req: unknown) => h.recordMistakeSpy(req),
   k12UploadAsset: (a: string, f: File, p?: (n: number) => void, signal?: AbortSignal) =>
     h.uploadSpy(a, f, p, signal),
-  k12CreateCreativeWorkOCR: (req: unknown) => h.createOCRSpy(req),
-  k12RetryCreativeWorkOCR: (agent: string, jobId: string) => h.retryOCRSpy(agent, jobId),
-  k12ConfirmCreativeWorkOCR: (agent: string, jobId: string, content: string) =>
-    h.confirmOCRSpy(agent, jobId, content),
+  k12CreateImageTask: (req: unknown) => h.createImageTaskSpy(req),
+  k12GetImageTask: (agent: string, dispatchId: string) => h.getImageTaskSpy(agent, dispatchId),
+  k12GetImageTaskResult: (agent: string, dispatchId: string) =>
+    h.getImageTaskResultSpy(agent, dispatchId),
+  k12ConfirmImageTask: (dispatchId: string, req: unknown) => h.confirmImageTaskSpy(dispatchId, req),
+  k12RetryImageTask: (dispatchId: string, req: unknown) => h.retryImageTaskSpy(dispatchId, req),
+  k12CancelImageTask: (dispatchId: string, req: unknown) => h.cancelImageTaskSpy(dispatchId, req),
   k12AssetURL: (agent: string, id: string) =>
     id.startsWith('asset://')
       ? `http://test/api/k12/assets/${id.slice(id.lastIndexOf('/') + 1)}?agent=${agent}`
       : '',
-  k12SendWorkFeedback: (a: string, id: string, kind?: string) => h.sendSpy(a, id, kind),
-  k12MarkPracticeCardDone: (a: string, id: string) => h.cardDoneSpy(a, id),
-}))
-vi.mock('../export', () => ({
-  printPracticePaper: vi.fn().mockResolvedValue(true),
-  savePracticePaperPdf: vi.fn().mockResolvedValue(true),
-}))
-vi.mock('../persistent-print', () => ({
-  preparePersistentPrint: async (...args: unknown[]) => ({
-    status: 'completed', printed: await h.printSpy(...args),
-  }),
 }))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn() }),
@@ -93,6 +78,103 @@ function work(over: Partial<CreativeWorkDTO> = {}): CreativeWorkDTO {
     status_label: '待点评',
     versions: [{ version_id: 'v1', content_markdown: '柳枝像绿色的丝带' }],
     ...over,
+  }
+}
+
+type ManualEntry =
+  | { kind: 'new_work'; task_intent: 'writing' | 'artwork' }
+  | {
+      kind: 'revision'
+      task_intent: 'writing' | 'artwork'
+      work_id: string
+      base_version_id: string
+    }
+
+type ManualCreativeStatus =
+  | 'preparing'
+  | 'awaiting_confirmation'
+  | 'ready'
+  | 'promoted'
+  | 'failed'
+  | 'cancelled'
+
+const manualDispatches = new Map<string, Record<string, any>>()
+
+function manualCreativeDispatch(
+  entry: ManualEntry,
+  status: ManualCreativeStatus,
+  {
+    dispatchId = `creative-dispatch-${manualDispatches.size + 1}`,
+    version = 1,
+    canonicalContent = entry.task_intent === 'writing' ? 'OCR 原稿' : undefined,
+  }: { dispatchId?: string; version?: number; canonicalContent?: string } = {},
+) {
+  const dispatch = {
+    dispatch_id: dispatchId,
+    task_intent: entry.task_intent,
+    status:
+      status === 'awaiting_confirmation'
+        ? 'awaiting_confirmation'
+        : status === 'failed'
+          ? 'failed'
+          : status === 'cancelled'
+            ? 'cancelled'
+            : 'routed',
+    intent_evidence: ['parent_selected'],
+    intent_confidence: 1,
+    confirmation_candidates: [],
+    target: { type: 'creative_work_intake', id: `intake-${dispatchId}` },
+    target_projection: {
+      kind: 'creative',
+      intake_id: `intake-${dispatchId}`,
+      work_type: entry.task_intent === 'writing' ? 'writing' : 'art',
+      status,
+      entry_kind: entry.kind,
+      promotion_policy: 'explicit_commit',
+      commit_required: status !== 'promoted',
+      commit_state: status === 'promoted' ? 'committed' : 'pending',
+      canonical_version: canonicalContent ? version : undefined,
+      canonical_content: canonicalContent,
+      ...(status === 'promoted'
+        ? {
+            work: {
+              work_id: entry.kind === 'revision' ? entry.work_id : 'w-new',
+              display_name: entry.task_intent === 'writing' ? '语文写作' : '美术作品',
+            },
+          }
+        : {}),
+    },
+    progress: { operation: 'promotion', state: status },
+    version,
+    created_at: 100,
+    updated_at: 101,
+    _entry: entry,
+  }
+  manualDispatches.set(dispatchId, dispatch)
+  return dispatch
+}
+
+function imageTaskCreateResponse(req: Record<string, any>) {
+  const entry = req.creative_entry as ManualEntry
+  const status = entry.task_intent === 'writing' ? 'awaiting_confirmation' : 'ready'
+  return { created: true, dispatch: manualCreativeDispatch(entry, status) }
+}
+
+function imageTaskConfirmResponse(dispatchId: string, req: Record<string, any>) {
+  const current = manualDispatches.get(dispatchId)
+  const entry = current?._entry as ManualEntry
+  const action = req.creative?.action
+  const status = action === 'commit' ? 'promoted' : 'ready'
+  const canonicalContent =
+    action === 'freeze_ocr'
+      ? req.creative.canonical_content
+      : current?.target_projection?.canonical_content
+  return {
+    dispatch: manualCreativeDispatch(entry, status, {
+      dispatchId,
+      version: Number(current?.version ?? 1) + 1,
+      canonicalContent,
+    }),
   }
 }
 
@@ -125,57 +207,44 @@ async function pickPhoto(w: ReturnType<typeof render>, file: File) {
 beforeEach(() => {
   h.listSpy.mockReset()
   h.createSpy.mockReset().mockResolvedValue({ record_id: 'w-new', created: true })
-  h.feedbackSpy
-    .mockReset()
-    .mockResolvedValue(work({ status: 'feedback_ready', status_label: '已点评' }))
   h.generateFeedbackSpy
     .mockReset()
     .mockResolvedValue(work({ status: 'feedback_ready', status_label: '已点评' }))
   h.revisionSpy.mockReset().mockResolvedValue(work({ status: 'revised', status_label: '已修改' }))
-  h.archiveSpy.mockReset().mockResolvedValue({ ok: true })
-  h.accumSpy.mockReset().mockResolvedValue({ record_id: 'a1', created: true })
-  h.recordMistakeSpy.mockReset().mockResolvedValue({ record_created: true, record_id: 'm1' })
   h.uploadSpy.mockReset().mockResolvedValue({ asset_id: 'asset://k12-xiaoming/abc.png', size: 3 })
-  h.createOCRSpy.mockReset().mockResolvedValue({
-    job_id: 'ocr-1',
-    request_id: 'request-1',
-    source_asset_id: 'asset://k12-xiaoming/abc.png',
-    source_digest: 'asset-digest',
-    status: 'awaiting_confirmation',
-    ocr_raw: 'OCR 原稿',
-    attempt_count: 1,
-    created_at: 100,
-    updated_at: 101,
+  manualDispatches.clear()
+  h.createImageTaskSpy.mockReset().mockImplementation(imageTaskCreateResponse)
+  h.getImageTaskSpy.mockReset().mockImplementation((_agent: string, dispatchId: string) => ({
+    dispatch: manualDispatches.get(dispatchId),
+  }))
+  h.getImageTaskResultSpy.mockReset().mockResolvedValue({ result: null })
+  h.confirmImageTaskSpy.mockReset().mockImplementation(imageTaskConfirmResponse)
+  h.retryImageTaskSpy.mockReset().mockImplementation((dispatchId: string) => {
+    const current = manualDispatches.get(dispatchId)
+    const entry = current?._entry as ManualEntry
+    return {
+      dispatch: manualCreativeDispatch(
+        entry,
+        entry.task_intent === 'writing' ? 'awaiting_confirmation' : 'ready',
+        {
+          dispatchId,
+          version: Number(current?.version ?? 1) + 1,
+          canonicalContent: entry.task_intent === 'writing' ? '重试 OCR 原稿' : undefined,
+        },
+      ),
+    }
   })
-  h.retryOCRSpy.mockReset().mockResolvedValue({
-    job_id: 'ocr-1',
-    request_id: 'request-1',
-    source_asset_id: 'asset://k12-xiaoming/abc.png',
-    source_digest: 'asset-digest',
-    status: 'awaiting_confirmation',
-    ocr_raw: '重试 OCR 原稿',
-    attempt_count: 2,
-    created_at: 100,
-    updated_at: 102,
+  h.cancelImageTaskSpy.mockReset().mockImplementation(async (dispatchId: string) => {
+    const current = manualDispatches.get(dispatchId)
+    const entry = current?._entry as ManualEntry
+    return {
+      dispatch: manualCreativeDispatch(entry, 'cancelled', {
+        dispatchId,
+        version: Number(current?.version ?? 1) + 1,
+        canonicalContent: current?.target_projection?.canonical_content,
+      }),
+    }
   })
-  h.confirmOCRSpy.mockReset().mockResolvedValue({
-    job_id: 'ocr-1',
-    request_id: 'request-1',
-    source_asset_id: 'asset://k12-xiaoming/abc.png',
-    source_digest: 'asset-digest',
-    status: 'confirmed',
-    ocr_raw: 'OCR 原稿',
-    confirmed_content: '家长修正稿',
-    confirmed_version: 1,
-    confirmed_digest: 'confirmed-digest',
-    confirmed_at: 103,
-    attempt_count: 1,
-    created_at: 100,
-    updated_at: 103,
-  })
-  h.sendSpy.mockReset().mockResolvedValue({ ok: true, target: '钉钉 · 妈妈' })
-  h.cardDoneSpy.mockReset().mockResolvedValue(work())
-  h.printSpy.mockReset().mockResolvedValue(true)
 })
 
 describe('K12CreativeWorksPanel · 作品', () => {
@@ -273,7 +342,7 @@ describe('K12CreativeWorksPanel · 作品', () => {
     const dialog = w.get('[data-testid="cw-detail-modal"]')
     expect(dialog.attributes('role')).toBe('dialog')
     expect(dialog.attributes('aria-modal')).toBe('true')
-    expect(dialog.text()).toContain('写作点评 · 《春天的校园》')
+    expect(dialog.text()).toContain('作品详情 · 《春天的校园》')
     expect(document.activeElement).toBe(dialog.element)
     expect(w.find('.k12cw__card--expanded').exists()).toBe(false)
 
@@ -294,9 +363,11 @@ describe('K12CreativeWorksPanel · 作品', () => {
     await opener.trigger('click')
     await flushPromises()
     expect(opener.attributes('aria-expanded')).toBe('true')
-    expect(w.get('[data-testid="cw-detail-modal"]').text()).toContain(
-      '生成写作点评 · 《春天的校园》',
+    expect(w.get('[data-testid="cw-detail-modal"]').text()).toContain('作品详情 · 《春天的校园》')
+    expect(w.get('[data-testid="cw-feedback-auto-pending"]').text()).toBe(
+      k12Zh.works.feedbackAutoPending,
     )
+    expect(w.find('[data-testid="cw-feedback-regenerate"]').exists()).toBe(false)
     await w.get('[data-testid="cw-detail-close"]').trigger('click')
     await flushPromises()
     expect(w.find('[data-testid="cw-detail-modal"]').exists()).toBe(false)
@@ -308,28 +379,43 @@ describe('K12CreativeWorksPanel · 作品', () => {
     expect(w.find('[data-testid="cw-detail-modal"]').exists()).toBe(false)
   })
 
-  it('作品详情提供架构定义的低强调归档动作，成功后刷新为只读终态且不可重复触发', async () => {
-    h.listSpy
-      .mockResolvedValueOnce({ items: [work()] })
-      .mockResolvedValueOnce({
-        items: [work({ status: 'archived', status_label: '已归档' })],
-      })
+  it('作品详情只保留版本、最新点评、上传修改稿、重新生成点评和关闭', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        work({
+          status: 'feedback_ready',
+          status_label: '已点评',
+          versions: [
+            {
+              version_id: 'v1',
+              content_markdown: '原稿',
+              feedback: '旧点评继续可读',
+            },
+          ],
+        }),
+      ],
+    })
     const w = render()
     await flushPromises()
     await w.get('[data-testid="cw-detail-toggle"]').trigger('click')
     await flushPromises()
 
-    const archive = w.get('[data-testid="cw-archive"]')
-    expect(archive.classes()).toContain('k12cw__btn--ghost')
-    await archive.trigger('click')
-    await flushPromises()
-
-    expect(h.archiveSpy).toHaveBeenCalledTimes(1)
-    expect(h.archiveSpy).toHaveBeenCalledWith('k12-xiaoming', 'w1')
-    expect(w.text()).toContain('已归档')
-    expect(w.find('[data-testid="cw-archive"]').exists()).toBe(false)
-    expect(w.find('[data-testid="cw-feedback-submit"]').exists()).toBe(false)
-    expect(w.find('[data-testid="cw-revision-submit"]').exists()).toBe(false)
+    expect(w.get('[data-testid="cw-version-content"]').text()).toContain('原稿')
+    expect(w.get('[data-testid="cw-version-feedback"]').text()).toContain('旧点评继续可读')
+    expect(w.find('[data-testid="cw-revision-submit"]').exists()).toBe(true)
+    expect(w.find('[data-testid="cw-feedback-regenerate"]').exists()).toBe(true)
+    for (const retired of [
+      'cw-feedback-input',
+      'cw-feedback-submit',
+      'cw-feedback-generate',
+      'cw-send-feedback',
+      'cw-practice-card',
+      'cw-accum-open',
+      'cw-mistake-open',
+      'cw-archive',
+    ]) {
+      expect(w.find(`[data-testid="${retired}"]`).exists()).toBe(false)
+    }
   })
 
   it('作品详情模态框把 Tab 焦点圈在弹窗内', async () => {
@@ -431,7 +517,7 @@ describe('K12CreativeWorksPanel · 作品', () => {
     expect(provenance.text()).toContain('writing-feedback@1.0.0/embedded')
   })
 
-  it('结构化点评作为 canonical UI 投影，展示观察、限制、建议和允许动作', async () => {
+  it('结构化点评作为 canonical UI 投影，仅展示观察、限制、建议和来源', async () => {
     h.listSpy.mockResolvedValue({
       items: [
         work({
@@ -456,7 +542,6 @@ describe('K12CreativeWorksPanel · 作品', () => {
                 },
                 limitations: '仅依据家长确认后的本版原文。',
                 suggestions: ['由孩子补充一个听觉细节。'],
-                allowed_actions: ['send', 'collect', 'record_language_issue'],
                 projection_markdown: '### 观察\n\n使用了“绿色的丝带”这个可见比喻。',
               },
             },
@@ -471,9 +556,9 @@ describe('K12CreativeWorksPanel · 作品', () => {
     expect(feedback.text()).toContain('使用了“绿色的丝带”这个可见比喻。')
     expect(feedback.text()).toContain('仅依据家长确认后的本版原文。')
     expect(feedback.text()).toContain('由孩子补充一个听觉细节。')
-    expect(feedback.text()).toContain('发送')
-    expect(feedback.text()).toContain('收藏')
-    expect(feedback.text()).toContain('记录语言问题')
+    expect(feedback.text()).not.toContain('发送')
+    expect(feedback.text()).not.toContain('收藏')
+    expect(feedback.text()).not.toContain('记录语言问题')
     expect(feedback.text()).toContain('writing-feedback@1.0.0/embedded')
   })
 
@@ -506,7 +591,6 @@ describe('K12CreativeWorksPanel · 作品', () => {
                 },
                 limitations: '仅依据当前原稿。',
                 suggestions: ['由孩子补充听觉细节。'],
-                allowed_actions: ['send'],
                 projection_markdown:
                   '### 观察\n\n使用了**绿色的丝带**这个比喻。\n\n### 下一步\n\n- 由孩子补充听觉细节。\n\n<img src=x onerror="window.__unsafe_feedback=1">',
               },
@@ -559,7 +643,6 @@ describe('K12CreativeWorksPanel · 作品', () => {
                 },
                 limitations: '仅依据当前原稿。',
                 suggestions: [],
-                allowed_actions: [],
                 projection_markdown: '',
               },
             },
@@ -598,7 +681,6 @@ describe('K12CreativeWorksPanel · 作品', () => {
                 },
                 limitations: '仅依据本版原文。',
                 suggestions: ['补充一个声音细节。'],
-                allowed_actions: ['send'],
                 projection_markdown: '### 观察\n\n比喻有可见依据。',
               },
             },
@@ -624,7 +706,7 @@ describe('K12CreativeWorksPanel · 作品', () => {
     }
   })
 
-  it('点评、练习卡等执行动作只读取当前最新版本，不跨版本复用旧结果', async () => {
+  it('旧版本点评不让当前修改稿进入已点评态或显示重新生成入口', async () => {
     h.listSpy.mockResolvedValue({
       items: [
         work({
@@ -636,7 +718,6 @@ describe('K12CreativeWorksPanel · 作品', () => {
               version_id: 'v1',
               content_markdown: '原画',
               feedback: '旧版点评',
-              practice_card: '旧版观察练习',
             },
             { version_id: 'v2', content_markdown: '当前修改稿' },
           ],
@@ -646,72 +727,10 @@ describe('K12CreativeWorksPanel · 作品', () => {
     const w = render()
     await flushPromises()
 
-    expect(w.find('[data-testid="cw-send-feedback"]').exists()).toBe(false)
-    expect(w.find('[data-testid="cw-practice-card"]').exists()).toBe(false)
-  })
-
-  it('发送回执按当前版本隔离，新版本点评不复用旧版本发送状态', async () => {
-    const firstVersion = {
-      version_id: 'v1',
-      content_markdown: '原稿',
-      feedback: '第一版点评',
-    }
-    const revised = work({
-      status: 'revised',
-      status_label: '已修改',
-      versions: [firstVersion, { version_id: 'v2', content_markdown: '修改稿' }],
-    })
-    const secondReviewed = work({
-      status: 'feedback_ready',
-      status_label: '已点评',
-      versions: [
-        firstVersion,
-        { version_id: 'v2', content_markdown: '修改稿', feedback: '第二版点评' },
-      ],
-    })
-    h.listSpy
-      .mockResolvedValueOnce({
-        items: [
-          work({
-            status: 'feedback_ready',
-            status_label: '已点评',
-            versions: [firstVersion],
-          }),
-        ],
-      })
-      .mockResolvedValueOnce({ items: [revised] })
-    h.sendSpy.mockResolvedValueOnce({
-      delivery_id: 'delivery-v1',
-      agent_name: 'k12-xiaoming',
-      object_kind: 'feedback',
-      object_id: 'w1',
-      binding_id: 'binding-1',
-      target: { platform: 'dingtalk', chat_id: 'chat-1', label: '妈妈' },
-      status: 'delivered',
-      dedupe_key: 'feedback-v1',
-      payload_digest: 'digest-v1',
-      payload_json: '{}',
-      render_manifest_json: '{}',
-      attempt: 1,
-      created_at: 1,
-      updated_at: 1,
-    })
-    h.generateFeedbackSpy.mockResolvedValueOnce(secondReviewed)
-    const w = render()
-    await flushPromises()
-
-    await w.get('[data-testid="cw-send-feedback"]').trigger('click')
-    await flushPromises()
-    expect(w.get('[data-testid="cw-feedback-delivery-receipt"]').text()).toContain('妈妈')
-
-    await w.get('[data-testid="cw-revision-input"]').setValue('修改稿')
-    await w.get('[data-testid="cw-revision-submit"]').trigger('click')
-    await flushPromises()
-    await w.get('[data-testid="cw-feedback-generate"]').trigger('click')
-    await flushPromises()
-
-    expect(w.text()).toContain('第二版点评')
-    expect(w.find('[data-testid="cw-feedback-delivery-receipt"]').exists()).toBe(false)
+    expect(w.get('[data-testid="cw-feedback-auto-pending"]').text()).toBe(
+      k12Zh.works.feedbackAutoPending,
+    )
+    expect(w.find('[data-testid="cw-feedback-regenerate"]').exists()).toBe(false)
   })
 
   it('已归档作品只保留历史事实和关闭动作，不显示练习卡、发送等执行动作', async () => {
@@ -726,7 +745,6 @@ describe('K12CreativeWorksPanel · 作品', () => {
               version_id: 'v1',
               content_markdown: '原画',
               feedback: '构图清楚',
-              practice_card: '观察远近层次',
             },
           ],
         }),
@@ -743,6 +761,8 @@ describe('K12CreativeWorksPanel · 作品', () => {
       'cw-card-done',
       'cw-feedback-generate',
       'cw-feedback-submit',
+      'cw-feedback-regenerate',
+      'cw-feedback-auto-pending',
       'cw-revision-submit',
       'cw-accum-open',
       'cw-mistake-open',
@@ -754,16 +774,19 @@ describe('K12CreativeWorksPanel · 作品', () => {
     expect(w.get('[data-testid="cw-detail-modal"]').text()).toContain('关闭')
   })
 
-  it('待点评 → 写点评走 feedback（非空才启用）', async () => {
+  it('待点评作品只显示服务端自动点评状态，不提供手写或首次生成入口', async () => {
     h.listSpy.mockResolvedValue({ items: [work()] })
     const w = render()
     await flushPromises()
-    const submit = w.find('[data-testid="cw-feedback-submit"]')
-    expect(submit.attributes('disabled')).toBeDefined() // 空输入禁用
-    await w.find('[data-testid="cw-feedback-input"]').setValue('比喻好，可加感官细节')
-    await w.find('[data-testid="cw-feedback-submit"]').trigger('click')
-    await flushPromises()
-    expect(h.feedbackSpy).toHaveBeenCalledWith('k12-xiaoming', 'w1', '比喻好，可加感官细节')
+
+    expect(w.get('[data-testid="cw-feedback-auto-pending"]').text()).toBe(
+      k12Zh.works.feedbackAutoPending,
+    )
+    expect(w.find('[data-testid="cw-feedback-input"]').exists()).toBe(false)
+    expect(w.find('[data-testid="cw-feedback-submit"]').exists()).toBe(false)
+    expect(w.find('[data-testid="cw-feedback-generate"]').exists()).toBe(false)
+    expect(w.find('[data-testid="cw-feedback-regenerate"]').exists()).toBe(false)
+    expect(h.generateFeedbackSpy).not.toHaveBeenCalled()
   })
 
   it('已点评 → 提交修改稿走 revision', async () => {
@@ -780,9 +803,10 @@ describe('K12CreativeWorksPanel · 作品', () => {
       'w1',
       '柳枝像绿色的丝带，风一吹沙沙响',
     )
+    expect(h.generateFeedbackSpy).not.toHaveBeenCalled()
   })
 
-  it('修改稿可只上传照片；快速改选时中止 A 且只提交最后成功的 B asset_id', async () => {
+  it('美术修改稿可只上传照片；快速改选时中止 A，B 通过 revision dispatch 单独 commit', async () => {
     h.listSpy.mockResolvedValue({
       items: [work({ work_type: 'art', status: 'feedback_ready', status_label: '已点评' })],
     })
@@ -811,12 +835,26 @@ describe('K12CreativeWorksPanel · 作品', () => {
     await flushPromises()
 
     expect((h.uploadSpy.mock.calls[0]![3] as AbortSignal | undefined)?.aborted).toBe(true)
-    expect(h.revisionSpy).toHaveBeenCalledWith(
-      'k12-xiaoming',
-      'w1',
-      undefined,
-      'asset://k12-xiaoming/revision-b.png',
+    expect(h.createImageTaskSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'k12-xiaoming',
+        source_asset_refs: ['asset://k12-xiaoming/revision-b.png'],
+        creative_entry: {
+          kind: 'revision',
+          task_intent: 'artwork',
+          work_id: 'w1',
+          base_version_id: 'v1',
+        },
+      }),
     )
+    expect(h.confirmImageTaskSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        agent: 'k12-xiaoming',
+        creative: { action: 'commit', content_markdown: undefined },
+      }),
+    )
+    expect(h.revisionSpy).not.toHaveBeenCalled()
   })
 
   it('修改稿照片 A 成功后改选 B，B 失败不得沿用 A 提交', async () => {
@@ -836,6 +874,7 @@ describe('K12CreativeWorksPanel · 作品', () => {
     })
     await input.trigger('change')
     await flushPromises()
+    const firstDispatchId = [...manualDispatches.keys()][0]!
     Object.defineProperty(input.element, 'files', {
       configurable: true,
       value: [new File(['b'], 'revision-b.png', { type: 'image/png' })],
@@ -843,13 +882,17 @@ describe('K12CreativeWorksPanel · 作品', () => {
     await input.trigger('change')
     await flushPromises()
 
+    expect(h.cancelImageTaskSpy).toHaveBeenCalledWith(firstDispatchId, {
+      agent: 'k12-xiaoming',
+      version: 1,
+    })
     expect(w.find('[data-testid="cw-revision-photo-error"]').text()).toContain('B 上传失败')
     expect(w.find('[data-testid="cw-revision-submit"]').attributes('disabled')).toBeDefined()
     await w.find('[data-testid="cw-revision-submit"]').trigger('click')
     expect(h.revisionSpy).not.toHaveBeenCalled()
   })
 
-  it('作文修改稿照片也必须完成 OCR 校对确认，并把确认版本证据提交给 revision', async () => {
+  it('作文修改稿照片先 freeze_ocr，再以同一 revision dispatch 单独 commit', async () => {
     h.listSpy.mockResolvedValue({
       items: [work({ status: 'feedback_ready', status_label: '已点评' })],
     })
@@ -864,10 +907,16 @@ describe('K12CreativeWorksPanel · 作品', () => {
     await input.trigger('change')
     await flushPromises()
 
-    expect(h.createOCRSpy).toHaveBeenCalledWith(
+    expect(h.createImageTaskSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         agent: 'k12-xiaoming',
-        source_asset_id: 'asset://k12-xiaoming/abc.png',
+        source_asset_refs: ['asset://k12-xiaoming/abc.png'],
+        creative_entry: {
+          kind: 'revision',
+          task_intent: 'writing',
+          work_id: 'w1',
+          base_version_id: 'v1',
+        },
       }),
     )
     expect(w.find('[data-testid="cw-revision-ocr-awaiting"]').exists()).toBe(true)
@@ -877,35 +926,37 @@ describe('K12CreativeWorksPanel · 作品', () => {
     expect(w.find('[data-testid="cw-revision-submit"]').attributes('disabled')).toBeDefined()
 
     await w.find('[data-testid="cw-revision-input"]').setValue('家长校对后的修改稿')
-    h.confirmOCRSpy.mockResolvedValueOnce({
-      job_id: 'ocr-1',
-      request_id: 'request-1',
-      source_asset_id: 'asset://k12-xiaoming/abc.png',
-      source_digest: 'asset-digest',
-      status: 'confirmed',
-      ocr_raw: 'OCR 原稿',
-      confirmed_content: '家长校对后的修改稿',
-      confirmed_version: 2,
-      confirmed_digest: 'revision-digest-v2',
-      confirmed_at: 104,
-      attempt_count: 1,
-      created_at: 100,
-      updated_at: 104,
-    })
     await w.find('[data-testid="cw-revision-ocr-confirm"]').trigger('click')
     await flushPromises()
 
+    expect(h.confirmImageTaskSpy).toHaveBeenNthCalledWith(
+      1,
+      expect.any(String),
+      expect.objectContaining({
+        agent: 'k12-xiaoming',
+        creative: {
+          action: 'freeze_ocr',
+          canonical_version: 1,
+          canonical_content: '家长校对后的修改稿',
+        },
+      }),
+    )
     expect(w.find('[data-testid="cw-revision-ocr-confirmed"]').exists()).toBe(true)
     expect(w.find('[data-testid="cw-revision-submit"]').attributes('disabled')).toBeUndefined()
     await w.find('[data-testid="cw-revision-submit"]').trigger('click')
     await flushPromises()
-    expect(h.revisionSpy).toHaveBeenCalledWith(
-      'k12-xiaoming',
-      'w1',
-      '家长校对后的修改稿',
-      'asset://k12-xiaoming/abc.png',
-      { jobId: 'ocr-1', version: 2, digest: 'revision-digest-v2' },
+    expect(h.confirmImageTaskSpy).toHaveBeenNthCalledWith(
+      2,
+      expect.any(String),
+      expect.objectContaining({
+        agent: 'k12-xiaoming',
+        creative: {
+          action: 'commit',
+          content_markdown: '家长校对后的修改稿',
+        },
+      }),
     )
+    expect(h.revisionSpy).not.toHaveBeenCalled()
   })
 
   it('类型过滤 → 只拉对应类型', async () => {
@@ -925,7 +976,7 @@ describe('K12CreativeWorksPanel · 作品', () => {
 })
 
 describe('K12CreativeWorksPanel · KPI 行 + 点评规则（原型 2570-2586）', () => {
-  it('三 KPI 从列表计算：全部 / 已点评（任一版本带 feedback）/ 待点评', async () => {
+  it('三 KPI 从最新版本计算：全部 / 已点评 / 待点评', async () => {
     h.listSpy.mockResolvedValue({
       items: [
         work(), // draft，无 feedback → 待点评
@@ -939,7 +990,12 @@ describe('K12CreativeWorksPanel · KPI 行 + 点评规则（原型 2570-2586）'
           record_id: 'w3',
           work_type: 'art',
           title: '画作',
-          versions: [{ version_id: 'v1', feedback: '构图清楚' }],
+          status: 'revised',
+          status_label: '已修改',
+          versions: [
+            { version_id: 'v1', feedback: '旧版构图点评' },
+            { version_id: 'v2', content_markdown: '修改稿' },
+          ],
         }),
       ],
     })
@@ -948,8 +1004,8 @@ describe('K12CreativeWorksPanel · KPI 行 + 点评规则（原型 2570-2586）'
     const kpis = w.findAll('[data-testid="cw-kpis"] .k12cw__kpi')
     expect(kpis.length).toBe(3)
     expect(kpis[0]!.text()).toContain('3') // 全部作品
-    expect(kpis[1]!.text()).toContain('2') // 已点评
-    expect(kpis[2]!.text()).toContain('1') // 待点评
+    expect(kpis[1]!.text()).toContain('1') // 最新版本已点评
+    expect(kpis[2]!.text()).toContain('2') // 初稿与修改稿正在自动点评
   })
 
   it('点评规则 notice 照原型 2582 文案（不打分不代写边界）', async () => {
@@ -963,8 +1019,20 @@ describe('K12CreativeWorksPanel · KPI 行 + 点评规则（原型 2570-2586）'
     expect(rules.text()).toContain('不替孩子完成作品')
   })
 
-  it('AI 点评显示生成中；失败原地可重试，只有真实成功响应才展示点评', async () => {
+  it('重新生成点评时保留旧点评；失败给固定提示，重试成功后替换为新点评', async () => {
     const pending = deferred<CreativeWorkDTO>()
+    const reviewed = work({
+      status: 'feedback_ready',
+      status_label: '已点评',
+      versions: [
+        {
+          version_id: 'v1',
+          content_markdown: '柳枝像绿色的丝带',
+          feedback: '旧点评仍应保留',
+          feedback_source: 'ai',
+        },
+      ],
+    })
     const ready = work({
       status: 'feedback_ready',
       status_label: '已点评',
@@ -978,94 +1046,86 @@ describe('K12CreativeWorksPanel · KPI 行 + 点评规则（原型 2570-2586）'
         },
       ],
     })
-    h.listSpy.mockResolvedValue({ items: [work()] })
+    h.listSpy.mockResolvedValue({ items: [reviewed] })
     h.generateFeedbackSpy.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(ready)
     const w = render()
     await flushPromises()
 
-    await w.find('[data-testid="cw-feedback-generate"]').trigger('click')
-    expect(w.find('[data-testid="cw-feedback-generating"]').exists()).toBe(true)
+    await w.get('[data-testid="cw-feedback-regenerate"]').trigger('click')
+    await nextTick()
+    const regenerating = w.get('[data-testid="cw-feedback-regenerate"]')
+    expect(regenerating.text()).toBe('正在重新生成…')
+    expect(regenerating.attributes('disabled')).toBeDefined()
+    expect(regenerating.attributes('aria-busy')).toBe('true')
+    expect(w.text()).toContain('旧点评仍应保留')
+
     pending.reject(new Error('模型响应超时'))
     await flushPromises()
 
-    expect(w.find('[data-testid="cw-feedback-generate-error"]').text()).toContain('模型响应超时')
-    expect(w.find('[data-testid="cw-feedback-generate-retry"]').exists()).toBe(true)
-    expect(w.text()).not.toContain('比喻具体，可再补充声音细节')
+    const error = w.get('[data-testid="cw-feedback-regenerate-error"]')
+    expect(error.attributes('role')).toBe('alert')
+    expect(error.text()).toBe('重新生成失败，旧点评已保留。你可以重试。')
+    expect(w.text()).toContain('旧点评仍应保留')
+    expect(w.get('[data-testid="cw-feedback-regenerate"]').text()).toBe('重新生成点评')
 
-    await w.find('[data-testid="cw-feedback-generate-retry"]').trigger('click')
+    await w.get('[data-testid="cw-feedback-regenerate"]').trigger('click')
     await flushPromises()
     expect(h.generateFeedbackSpy).toHaveBeenCalledTimes(2)
-    expect(w.find('[data-testid="cw-feedback-generate-error"]').exists()).toBe(false)
+    const firstCall = h.generateFeedbackSpy.mock.calls[0]!
+    const secondCall = h.generateFeedbackSpy.mock.calls[1]!
+    expect(firstCall).toEqual(['k12-xiaoming', 'w1', expect.any(String), expect.any(AbortSignal)])
+    expect(secondCall).toEqual(['k12-xiaoming', 'w1', expect.any(String), expect.any(AbortSignal)])
+    expect(firstCall[2]).not.toBe(secondCall[2])
+    expect(w.find('[data-testid="cw-feedback-regenerate-error"]').exists()).toBe(false)
     expect(w.text()).toContain('比喻具体，可再补充声音细节')
   })
 
-  it('AI 生成中禁用手写并发提交；失败后只保留唯一原地重试入口', async () => {
-    const pending = deferred<CreativeWorkDTO>()
+  it('上传修改稿输入具有可访问名称，详情不存在手写点评输入', async () => {
     h.listSpy.mockResolvedValue({ items: [work()] })
-    h.generateFeedbackSpy.mockReturnValueOnce(pending.promise)
     const w = render()
     await flushPromises()
-    const input = w.get('[data-testid="cw-feedback-input"]')
-    await input.setValue('生成期间不应并发提交')
-
-    await w.get('[data-testid="cw-feedback-generate"]').trigger('click')
-    await nextTick()
-
-    const generating = w.get('[data-testid="cw-feedback-generating"]')
-    expect(generating.attributes('role')).toBe('status')
-    expect(generating.attributes('aria-live')).toBe('polite')
-    expect(w.get('[data-testid="cw-feedback-input"]').attributes('disabled')).toBeDefined()
-    const submit = w.get('[data-testid="cw-feedback-submit"]')
-    expect(submit.attributes('disabled')).toBeDefined()
-    await submit.trigger('click')
-    expect(h.feedbackSpy).not.toHaveBeenCalled()
-
-    pending.reject(new Error('模型响应超时'))
-    await flushPromises()
-
-    const error = w.get('[data-testid="cw-feedback-generate-error"]')
-    expect(error.attributes('role')).toBe('alert')
-    expect(w.find('[data-testid="cw-feedback-generate"]').exists()).toBe(false)
-    expect(w.findAll('[data-testid="cw-feedback-generate-retry"]')).toHaveLength(1)
-  })
-
-  it('点评与修改稿输入具有可访问名称', async () => {
-    h.listSpy.mockResolvedValue({ items: [work()] })
-    const draft = render()
-    await flushPromises()
-    expect(draft.get('[data-testid="cw-feedback-input"]').attributes('aria-label')).toBe(
-      k12Zh.works.addFeedback,
-    )
-    draft.unmount()
-
-    h.listSpy.mockResolvedValue({
-      items: [work({ status: 'feedback_ready', status_label: '已点评' })],
-    })
-    const reviewed = render()
-    await flushPromises()
-    expect(reviewed.get('[data-testid="cw-revision-input"]').attributes('aria-label')).toBe(
+    expect(w.get('[data-testid="cw-revision-input"]').attributes('aria-label')).toBe(
       k12Zh.works.submitRevision,
     )
+    expect(w.find('[data-testid="cw-feedback-input"]').exists()).toBe(false)
   })
 
-  it('AI 点评切换孩子时真正 abort 旧的 240s 请求', async () => {
+  it('重新生成点评时切换孩子会 abort 旧请求', async () => {
     const pending = deferred<CreativeWorkDTO>()
-    h.listSpy.mockResolvedValue({ items: [work()] })
+    h.listSpy.mockResolvedValue({
+      items: [
+        work({
+          status: 'feedback_ready',
+          status_label: '已点评',
+          versions: [{ version_id: 'v1', content_markdown: '原稿', feedback: '旧点评' }],
+        }),
+      ],
+    })
     h.generateFeedbackSpy.mockReturnValueOnce(pending.promise)
     const w = render()
     await flushPromises()
 
-    await w.find('[data-testid="cw-feedback-generate"]').trigger('click')
-    const signal = h.generateFeedbackSpy.mock.calls[0]![2] as AbortSignal
+    await w.get('[data-testid="cw-feedback-regenerate"]').trigger('click')
+    const signal = h.generateFeedbackSpy.mock.calls[0]![3] as AbortSignal
     expect(signal.aborted).toBe(false)
     await w.setProps({ agentId: 'k12-xiaohong' })
+    await flushPromises()
 
     expect(signal.aborted).toBe(true)
-    expect(w.find('[data-testid="cw-feedback-generating"]').exists()).toBe(false)
+    expect(w.get('[data-testid="cw-feedback-regenerate"]').text()).toBe('重新生成点评')
   })
 })
 
 describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', () => {
+  it('公开 API 不再导出退役的 OCR、手写点评、归档、发送和练习卡动作', () => {
+    expect(apiSource).not.toMatch(
+      /export\s+(?:async\s+)?function\s+k12(?:Create|Get|Retry|Confirm)CreativeWorkOCR/,
+    )
+    expect(apiSource).not.toMatch(
+      /export\s+(?:async\s+)?function\s+k12(?:AttachWorkFeedback|ArchiveCreativeWork|SendWorkFeedback|MarkPracticeCardDone)/,
+    )
+  })
+
   it('「添加作品」按钮打开弹窗；默认语文写作，显示原稿字段', async () => {
     h.listSpy.mockResolvedValue({ items: [] })
     const w = render()
@@ -1075,6 +1135,63 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     expect(w.find('[data-testid="cw-add-modal"]').exists()).toBe(true)
     expect(w.find('[data-testid="cw-add-draft"]').exists()).toBe(true)
     expect(w.find('[data-testid="cw-add-intent"]').exists()).toBe(false)
+  })
+
+  it('添加作品弹窗沿用既定字段顺序、按钮与文案', async () => {
+    h.listSpy.mockResolvedValue({ items: [] })
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="cw-add-open"]').trigger('click')
+
+    const ordered = [
+      w.get('[data-testid="cw-add-photo"]').element,
+      w.get('[data-testid="cw-add-title"]').element,
+      w.get('[data-testid="cw-add-task"]').element,
+      w.get('[data-testid="cw-add-draft"]').element,
+      w.get('[data-testid="cw-add-submit"]').element,
+    ]
+    for (let index = 0; index < ordered.length - 1; index += 1) {
+      expect(
+        ordered[index]!.compareDocumentPosition(ordered[index + 1]!) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy()
+    }
+    expect(w.get('[data-testid="cw-add-photo"]').text()).toContain(k12Zh.works.photoChoose)
+    expect(w.get('[data-testid="cw-add-submit"]').text()).toBe(k12Zh.works.save)
+    expect(
+      w
+        .get('[data-testid="cw-add-modal"]')
+        .findAll('button')
+        .some((button) => button.text() === k12Zh.works.cancel),
+    ).toBe(true)
+  })
+
+  it('关闭尚未提交的带图作品会取消 intake，不触发 commit 或创建作品', async () => {
+    h.listSpy.mockResolvedValue({ items: [] })
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="cw-add-open"]').trigger('click')
+    await w.find('[data-testid="cw-add-type-art"]').trigger('click')
+    await w.find('[data-testid="cw-add-photo"]').trigger('drop', {
+      dataTransfer: { files: [new File(['art'], 'art.png', { type: 'image/png' })] },
+    })
+    await flushPromises()
+    const dispatchId = [...manualDispatches.keys()][0]!
+
+    const cancel = w
+      .get('[data-testid="cw-add-modal"]')
+      .findAll('button')
+      .find((button) => button.text() === k12Zh.works.cancel)!
+    await cancel.trigger('click')
+    await flushPromises()
+
+    expect(h.cancelImageTaskSpy).toHaveBeenCalledWith(dispatchId, {
+      agent: 'k12-xiaoming',
+      version: 1,
+    })
+    expect(h.confirmImageTaskSpy).not.toHaveBeenCalled()
+    expect(h.createSpy).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="cw-add-modal"]').exists()).toBe(false)
   })
 
   it('Escape 关闭弹窗并把焦点还给打开按钮', async () => {
@@ -1141,6 +1258,7 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     })
     expect(w.find('[data-testid="cw-add-modal"]').exists()).toBe(false)
     expect(h.listSpy.mock.calls.length, '提交后重拉列表').toBeGreaterThanOrEqual(2)
+    expect(h.generateFeedbackSpy).not.toHaveBeenCalled()
   })
 
   it('提交美术 → 带 intent，不带 content_markdown（美术无必填原稿）', async () => {
@@ -1164,10 +1282,10 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     })
   })
 
-  it('作文照片：上传后 OCR 中→可编辑预览→家长确认，确认前不得保存', async () => {
+  it('作文照片：new_work dispatch 先 freeze_ocr，确认后仍须单独 commit 才建作品', async () => {
     h.listSpy.mockResolvedValue({ items: [] })
     const pending = deferred<Record<string, unknown>>()
-    h.createOCRSpy.mockReturnValueOnce(pending.promise)
+    h.createImageTaskSpy.mockReturnValueOnce(pending.promise)
     const w = render()
     await flushPromises()
     await w.find('[data-testid="cw-add-open"]').trigger('click')
@@ -1180,71 +1298,70 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
 
     expect(w.find('[data-testid="cw-ocr-processing"]').exists()).toBe(true)
     expect(w.find('[data-testid="cw-add-submit"]').attributes('disabled')).toBeDefined()
+    const entry: ManualEntry = { kind: 'new_work', task_intent: 'writing' }
     pending.resolve({
-      job_id: 'ocr-photo-1',
-      request_id: 'request-photo-1',
-      source_asset_id: 'asset://k12-xiaoming/abc.png',
-      source_digest: 'asset-digest',
-      status: 'awaiting_confirmation',
-      ocr_raw: '柳枝象绿色丝带',
-      attempt_count: 1,
-      created_at: 100,
-      updated_at: 101,
+      created: true,
+      dispatch: manualCreativeDispatch(entry, 'awaiting_confirmation', {
+        dispatchId: 'dispatch-writing-new',
+        canonicalContent: '柳枝象绿色丝带',
+      }),
     })
     await flushPromises()
 
+    expect(h.createImageTaskSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'k12-xiaoming',
+        source_session: 'creative-works:k12-xiaoming',
+        source_kind: 'desktop',
+        source_asset_refs: ['asset://k12-xiaoming/abc.png'],
+        creative_entry: { kind: 'new_work', task_intent: 'writing' },
+      }),
+    )
     expect((w.find('[data-testid="cw-add-draft"]').element as HTMLTextAreaElement).value).toBe(
       '柳枝象绿色丝带',
     )
     expect(w.find('[data-testid="cw-ocr-awaiting"]').exists()).toBe(true)
     expect(w.find('[data-testid="cw-add-submit"]').attributes('disabled')).toBeDefined()
     await w.find('[data-testid="cw-add-draft"]').setValue('柳枝像绿色丝带')
-    h.confirmOCRSpy.mockResolvedValueOnce({
-      job_id: 'ocr-photo-1',
-      request_id: 'request-photo-1',
-      source_asset_id: 'asset://k12-xiaoming/abc.png',
-      source_digest: 'asset-digest',
-      status: 'confirmed',
-      ocr_raw: '柳枝象绿色丝带',
-      confirmed_content: '柳枝像绿色丝带',
-      confirmed_version: 1,
-      confirmed_digest: 'digest-v1',
-      confirmed_at: 103,
-      attempt_count: 1,
-      created_at: 100,
-      updated_at: 103,
-    })
     await w.find('[data-testid="cw-ocr-confirm"]').trigger('click')
     await flushPromises()
 
-    expect(h.confirmOCRSpy).toHaveBeenCalledWith('k12-xiaoming', 'ocr-photo-1', '柳枝像绿色丝带')
+    expect(h.confirmImageTaskSpy).toHaveBeenNthCalledWith(1, 'dispatch-writing-new', {
+      agent: 'k12-xiaoming',
+      version: 1,
+      creative: {
+        action: 'freeze_ocr',
+        canonical_version: 1,
+        canonical_content: '柳枝像绿色丝带',
+      },
+    })
     expect(w.find('[data-testid="cw-ocr-confirmed"]').exists()).toBe(true)
     expect(w.find('[data-testid="cw-add-submit"]').attributes('disabled')).toBeUndefined()
     await w.find('[data-testid="cw-add-submit"]').trigger('click')
     await flushPromises()
-    expect(h.createSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source_asset_id: 'asset://k12-xiaoming/abc.png',
+    expect(h.confirmImageTaskSpy).toHaveBeenNthCalledWith(2, 'dispatch-writing-new', {
+      agent: 'k12-xiaoming',
+      version: 2,
+      creative: {
+        action: 'commit',
+        work_title: '《春天的校园》',
+        task_requirement: '写校园春景',
+        intent: undefined,
         content_markdown: '柳枝像绿色丝带',
-        ocr_job_id: 'ocr-photo-1',
-        ocr_version: 1,
-        ocr_confirmed_digest: 'digest-v1',
-      }),
-    )
+      },
+    })
+    expect(h.createSpy).not.toHaveBeenCalled()
   })
 
   it('作文 OCR 失败：原位可重试，也可手工粘贴后确认', async () => {
     h.listSpy.mockResolvedValue({ items: [] })
-    h.createOCRSpy.mockResolvedValueOnce({
-      job_id: 'ocr-failed',
-      request_id: 'request-failed',
-      source_asset_id: 'asset://k12-xiaoming/abc.png',
-      source_digest: 'asset-digest',
-      status: 'failed',
-      error_message: '视觉模型超时',
-      attempt_count: 1,
-      created_at: 100,
-      updated_at: 101,
+    const entry: ManualEntry = { kind: 'new_work', task_intent: 'writing' }
+    h.createImageTaskSpy.mockResolvedValueOnce({
+      created: true,
+      dispatch: manualCreativeDispatch(entry, 'failed', {
+        dispatchId: 'dispatch-writing-failed',
+        canonicalContent: undefined,
+      }),
     })
     const w = render()
     await flushPromises()
@@ -1254,51 +1371,40 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     })
     await flushPromises()
 
-    expect(w.find('[data-testid="cw-ocr-error"]').text()).toContain('视觉模型超时')
+    expect(w.find('[data-testid="cw-ocr-error"]').exists()).toBe(true)
     expect(w.find('[data-testid="cw-ocr-retry"]').exists()).toBe(true)
     await w.find('[data-testid="cw-ocr-retry"]').trigger('click')
     await flushPromises()
-    expect(h.retryOCRSpy).toHaveBeenCalledWith('k12-xiaoming', 'ocr-failed')
+    expect(h.retryImageTaskSpy).toHaveBeenCalledWith('dispatch-writing-failed', {
+      agent: 'k12-xiaoming',
+      version: 1,
+    })
     expect((w.find('[data-testid="cw-add-draft"]').element as HTMLTextAreaElement).value).toBe(
       '重试 OCR 原稿',
     )
 
     // A second failed job can skip model retry and use the documented manual-paste fallback.
-    h.createOCRSpy.mockResolvedValueOnce({
-      job_id: 'ocr-manual',
-      request_id: 'request-manual',
-      source_asset_id: 'asset://k12-xiaoming/abc.png',
-      source_digest: 'asset-digest',
-      status: 'failed',
-      error_message: '仍无法识别',
-      attempt_count: 1,
-      created_at: 110,
-      updated_at: 111,
+    h.createImageTaskSpy.mockResolvedValueOnce({
+      created: true,
+      dispatch: manualCreativeDispatch(entry, 'failed', {
+        dispatchId: 'dispatch-writing-manual',
+        canonicalContent: undefined,
+      }),
     })
     await pickPhoto(w, new File(['new-image'], 'manual.png', { type: 'image/png' }))
     await flushPromises()
     await w.find('[data-testid="cw-add-draft"]').setValue('家长手工粘贴的正文')
-    h.confirmOCRSpy.mockResolvedValueOnce({
-      job_id: 'ocr-manual',
-      request_id: 'request-manual',
-      source_asset_id: 'asset://k12-xiaoming/abc.png',
-      source_digest: 'asset-digest',
-      status: 'confirmed',
-      confirmed_content: '家长手工粘贴的正文',
-      confirmed_version: 1,
-      confirmed_digest: 'manual-digest',
-      confirmed_at: 112,
-      attempt_count: 1,
-      created_at: 110,
-      updated_at: 112,
-    })
     await w.find('[data-testid="cw-ocr-confirm"]').trigger('click')
     await flushPromises()
-    expect(h.confirmOCRSpy).toHaveBeenLastCalledWith(
-      'k12-xiaoming',
-      'ocr-manual',
-      '家长手工粘贴的正文',
-    )
+    expect(h.confirmImageTaskSpy).toHaveBeenLastCalledWith('dispatch-writing-manual', {
+      agent: 'k12-xiaoming',
+      version: 1,
+      creative: {
+        action: 'freeze_ocr',
+        canonical_version: 1,
+        canonical_content: '家长手工粘贴的正文',
+      },
+    })
   })
 
   // 20260718 控件统一（原型 creativeWorkDropzone）：弃裸选择按钮，改知识库「添加文档」
@@ -1367,8 +1473,13 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
       dataTransfer: { files: [new File(['a'], 'a.png', { type: 'image/png' })] },
     })
     await flushPromises()
+    const firstDispatchId = [...manualDispatches.keys()][0]!
     await pickPhoto(w, new File(['b'], 'b.png', { type: 'image/png' }))
     await flushPromises()
+    expect(h.cancelImageTaskSpy).toHaveBeenCalledWith(firstDispatchId, {
+      agent: 'k12-xiaoming',
+      version: 1,
+    })
     expect(w.find('[data-testid="cw-photo-error"]').text()).toContain('B 上传失败')
     expect(w.find('[data-testid="cw-add-submit"]').attributes('disabled')).toBeDefined()
     await w.find('[data-testid="cw-add-submit"]').trigger('click')
@@ -1380,8 +1491,14 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     await w.find('[data-testid="cw-add-submit"]').trigger('click')
     await flushPromises()
     expect(h.createSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ source_asset_id: undefined }),
+      expect.objectContaining({
+        agent: 'k12-xiaoming',
+        work_type: 'art',
+        title: '画作',
+        task: '水彩',
+      }),
     )
+    expect(h.createSpy.mock.calls[0]![0]).not.toHaveProperty('source_asset_id')
   })
 
   it('快速改选照片时最后一次选择获胜，旧上传晚返回也不得覆盖新 asset_id', async () => {
@@ -1408,118 +1525,72 @@ describe('K12CreativeWorksPanel · 添加作品弹窗（原型 5326-5361）', ()
     await flushPromises()
 
     expect((h.uploadSpy.mock.calls[0]![3] as AbortSignal | undefined)?.aborted).toBe(true)
-    expect(h.createSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ source_asset_id: 'asset://k12-xiaoming/b.png' }),
+    expect(h.createImageTaskSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source_asset_refs: ['asset://k12-xiaoming/b.png'],
+        creative_entry: { kind: 'new_work', task_intent: 'artwork' },
+      }),
     )
+    expect(h.confirmImageTaskSpy).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        creative: {
+          action: 'commit',
+          work_title: '画作',
+          task_requirement: '水彩',
+          intent: undefined,
+          content_markdown: undefined,
+        },
+      }),
+    )
+    expect(h.createSpy).not.toHaveBeenCalled()
   })
 })
 
-describe('K12CreativeWorksPanel · 点评联动出口（§3.10，写作 · 已点评）', () => {
-  const readyWriting = () =>
-    work({
-      status: 'feedback_ready',
-      status_label: '已点评',
-      versions: [{ version_id: 'v1', content_markdown: '柳枝像绿色的丝带', feedback: '比喻好' }],
-    })
-
-  it('feedback_ready 写作卡显示「好句加入积累」「确认并记入错题」', async () => {
-    h.listSpy.mockResolvedValue({ items: [readyWriting()] })
-    const w = render()
-    await flushPromises()
-    expect(w.find('[data-testid="cw-accum-open"]').exists()).toBe(true)
-    expect(w.find('[data-testid="cw-mistake-open"]').exists()).toBe(true)
-  })
-
-  it('美术卡不显示联动按钮（积累/错题出口只属于写作点评）', async () => {
+describe('K12CreativeWorksPanel · 退役动作不再投影', () => {
+  it('写作和美术都不恢复发送、练习卡、积累或错题入口', async () => {
     h.listSpy.mockResolvedValue({
       items: [
         work({
-          work_type: 'art',
-          status: 'feedback_ready',
-          status_label: '已点评',
-          versions: [{ version_id: 'v1', feedback: '构图清楚' }],
-        }),
-      ],
-    })
-    const w = render()
-    await flushPromises()
-    expect(w.find('[data-testid="cw-accum-open"]').exists()).toBe(false)
-    expect(w.find('[data-testid="cw-mistake-open"]').exists()).toBe(false)
-  })
-
-  it('观察练习卡打印失败显示可见错误和原地重试，重试成功后清除错误', async () => {
-    h.listSpy.mockResolvedValue({
-      items: [
-        work({
-          work_type: 'art',
           status: 'feedback_ready',
           status_label: '已点评',
           versions: [
             {
               version_id: 'v1',
+              content_markdown: '柳枝像绿色的丝带',
+              feedback: '比喻好',
+            },
+          ],
+        }),
+        work({
+          record_id: 'w-art',
+          work_type: 'art',
+          title: '《校园水彩》',
+          status: 'feedback_ready',
+          status_label: '已点评',
+          versions: [
+            {
+              version_id: 'v-art',
               feedback: '构图清楚',
-              practice_card: '观察远近层次并画三棵树',
             },
           ],
         }),
       ],
     })
-    h.printSpy.mockResolvedValueOnce(false).mockResolvedValueOnce(true)
     const w = render()
     await flushPromises()
 
-    await w.find('[data-testid="cw-card-print"]').trigger('click')
-    await flushPromises()
-    expect(w.find('[data-testid="cw-card-print-error"]').text()).toContain('打印失败')
-    await w.find('[data-testid="cw-card-print-retry"]').trigger('click')
-    await flushPromises()
-
-    expect(h.printSpy).toHaveBeenCalledTimes(2)
-    expect(h.printSpy).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        agent: 'k12-xiaoming',
-        sourceKind: 'creative_observation_card',
-        sourceRef: 'creative-work:w1:v1:practice-card',
-        title: '观察小练习 · 《春天的校园》',
-        canonicalMarkdown: '# 观察小练习 · 《春天的校园》\n观察远近层次并画三棵树',
-        browserPrint: expect.any(Function),
-      }),
-    )
-    expect(w.find('[data-testid="cw-card-print-error"]').exists()).toBe(false)
-  })
-
-  it('好句加入积累：展开输入 → 确认调 k12AddAccumulation(语文·写作素材·带作品来源)', async () => {
-    h.listSpy.mockResolvedValue({ items: [readyWriting()] })
-    const w = render()
-    await flushPromises()
-    await w.find('[data-testid="cw-accum-open"]').trigger('click')
-    const submit = w.find('[data-testid="cw-accum-submit"]')
-    expect(submit.attributes('disabled'), '空输入禁用').toBeDefined()
-    await w.find('[data-testid="cw-accum-input"]').setValue('柳枝像绿色的丝带，在春风里轻轻摆动。')
-    await w.find('[data-testid="cw-accum-submit"]').trigger('click')
-    await flushPromises()
-    expect(h.accumSpy).toHaveBeenCalledWith({
-      agent: 'k12-xiaoming',
-      subject: '语文',
-      entry_type: '写作素材',
-      content: '柳枝像绿色的丝带，在春风里轻轻摆动。',
-      source: '作品点评 · 《春天的校园》',
-    })
-  })
-
-  it('确认并记入错题：展开输入 → 确认调 k12RecordMistake(语文，grade 留空由后端回填)', async () => {
-    h.listSpy.mockResolvedValue({ items: [readyWriting()] })
-    const w = render()
-    await flushPromises()
-    await w.find('[data-testid="cw-mistake-open"]').trigger('click')
-    await w.find('[data-testid="cw-mistake-input"]').setValue('习作中「轻轻的吹」用字待修改')
-    await w.find('[data-testid="cw-mistake-submit"]').trigger('click')
-    await flushPromises()
-    expect(h.recordMistakeSpy).toHaveBeenCalledWith({
-      agent: 'k12-xiaoming',
-      subject: '语文',
-      grade: '',
-      problem: '习作中「轻轻的吹」用字待修改',
-    })
+    for (const retired of [
+      'cw-send-feedback',
+      'cw-card-print',
+      'cw-card-save-pdf',
+      'cw-card-send',
+      'cw-card-done',
+      'cw-accum-open',
+      'cw-mistake-open',
+      'cw-archive',
+    ]) {
+      expect(w.find(`[data-testid="${retired}"]`).exists()).toBe(false)
+    }
   })
 })

@@ -2,10 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
 const h = vi.hoisted(() => ({
-  createJobSpy: vi.fn(),
-  getJobSpy: vi.fn(),
-  confirmJobSpy: vi.fn(),
-  retryJobSpy: vi.fn(),
+  uploadSpy: vi.fn(),
+  createTaskSpy: vi.fn(),
+  getTaskSpy: vi.fn(),
+  getResultSpy: vi.fn(),
+  confirmTaskSpy: vi.fn(),
+  retryTaskSpy: vi.fn(),
+  cancelTaskSpy: vi.fn(),
   tutorTurnSpy: vi.fn(),
   bindSpy: vi.fn(),
   provisionSpy: vi.fn(),
@@ -19,12 +22,14 @@ vi.mock('@/api/k12', () => ({
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn(),
-  k12StudyTime: vi.fn(),
   k12ListAccumulation: vi.fn(),
-  k12CreateGradingJob: (r: unknown) => h.createJobSpy(r),
-  k12GetGradingJob: (...args: unknown[]) => h.getJobSpy(...args),
-  k12ConfirmGradingJob: (...args: unknown[]) => h.confirmJobSpy(...args),
-  k12RetryGradingJob: (...args: unknown[]) => h.retryJobSpy(...args),
+  k12UploadAsset: (...args: unknown[]) => h.uploadSpy(...args),
+  k12CreateImageTask: (...args: unknown[]) => h.createTaskSpy(...args),
+  k12GetImageTask: (...args: unknown[]) => h.getTaskSpy(...args),
+  k12GetImageTaskResult: (...args: unknown[]) => h.getResultSpy(...args),
+  k12ConfirmImageTask: (...args: unknown[]) => h.confirmTaskSpy(...args),
+  k12RetryImageTask: (...args: unknown[]) => h.retryTaskSpy(...args),
+  k12CancelImageTask: (...args: unknown[]) => h.cancelTaskSpy(...args),
   k12TutorTurn: (r: unknown) => h.tutorTurnSpy(r),
   k12BindIM: (r: unknown) => h.bindSpy(r),
   k12ProvisionCron: (r: unknown) => h.provisionSpy(r),
@@ -32,56 +37,86 @@ vi.mock('@/api/k12', () => ({
 
 import { useK12Store } from '../store'
 
+function imageTaskResponse(
+  overrides: Record<string, unknown> = {},
+  projectionOverrides: Record<string, unknown> = {},
+) {
+  return {
+    dispatch: {
+      dispatch_id: 'dispatch-1',
+      task_intent: 'completed_homework',
+      status: 'routed',
+      intent_evidence: ['answer_regions_present'],
+      intent_confidence: 0.99,
+      confirmation_candidates: [],
+      target: { type: 'homework_submission', id: 'submission-1' },
+      target_projection: {
+        kind: 'homework',
+        stage: 'awaiting_confirmation',
+        confirmation_state: 'pending',
+        anchor_state: 'located',
+        recognition: {
+          questions: [
+            {
+              question: '3.8×3',
+              knowledge_points: ['小数乘法'],
+              answer_state: 'blank',
+              confirmation_required: true,
+            },
+          ],
+          subject: '数学',
+        },
+        ...projectionOverrides,
+      },
+      progress: { operation: 'homework', state: 'awaiting_confirmation' },
+      version: 1,
+      created_at: 1,
+      updated_at: 1,
+      ...overrides,
+    },
+  }
+}
+
 describe('K12 store · 自动化/入站接线', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    localStorage.clear()
     Object.values(h).forEach((s) => s.mockReset())
+    h.uploadSpy.mockResolvedValue({ asset_id: 'asset://mingming/photo.png', size: 3 })
   })
 
-  it('recognizePhotoJob：创建 Job → 轮询到确认停点，回传题目清单 + 整卷学科（桌面入口迁移 §6.7）', async () => {
-    h.createJobSpy.mockResolvedValue({
+  it('dispatchImageTask：固化图片 → 创建 facade → 轮询到确认停点并回传公开投影', async () => {
+    h.createTaskSpy.mockResolvedValue({
       created: true,
-      job: { job_id: 'job-1', stage: 'queued', retryable: false },
+      ...imageTaskResponse(
+        { status: 'routing', target: undefined, target_projection: undefined },
+        {},
+      ),
     })
-    h.getJobSpy.mockResolvedValue({
-      job_id: 'job-1',
-      stage: 'awaiting_confirmation',
-      confirmation_state: 'pending',
-      anchor_state: 'located',
-      job: { job_id: 'job-1', stage: 'awaiting_confirmation' },
-      recognition: { questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }], subject: '数学' },
-    })
+    h.getTaskSpy.mockResolvedValue(imageTaskResponse())
     const store = useK12Store()
-    const res = await store.recognizePhotoJob('mingming', 'data:image/png;base64,AAAA')
-    const createReq = h.createJobSpy.mock.calls[0]![0] as Record<string, unknown>
+    const res = await store.dispatchImageTask({
+      agent: 'mingming',
+      dataUrl: 'data:image/png;base64,AAAA',
+      sourceSession: 'session-basic',
+      sourceRef: 'message-basic',
+    })
+    const createReq = h.createTaskSpy.mock.calls[0]![0] as Record<string, unknown>
     expect(createReq.agent).toBe('mingming')
-    expect(createReq.image_base64).toBe('data:image/png;base64,AAAA')
     expect(createReq.source_kind).toBe('desktop')
-    // §4.10 统一幂等键：同（agent, 照片）派生稳定 source_key，同图重投命中同一 Job。
-    expect(createReq.source_key).toBe('photo-mingming-a37183c0-26')
-    expect(createReq.model_snapshot).toBeUndefined()
-    expect(res.jobId).toBe('job-1')
+    expect(createReq.source_ref).toBe('message-basic')
+    expect(createReq.source_session).toBe('session-basic')
+    expect(createReq.source_asset_refs).toEqual(['asset://mingming/photo.png'])
+    expect(createReq.route_request).toEqual({ selection_source: 'auto' })
+    expect(res.dispatchId).toBe('dispatch-1')
     expect(res.questions[0]?.question).toBe('3.8×3')
-    // Polish-2：整卷学科随停点识别产物回传（供护栏预填学科下拉）
     expect(res.subject).toBe('数学')
     expect(res.anchorState).toBe('located')
-    // 未命中失败 Job：不触发 retry
-    expect(h.retryJobSpy).not.toHaveBeenCalled()
+    expect(h.retryTaskSpy).not.toHaveBeenCalled()
   })
 
-  it('显式视觉路由原样进入 model_snapshot，并参与同图 source_key 隔离', async () => {
-    h.createJobSpy.mockResolvedValue({
-      created: true,
-      job: { job_id: 'job-route', stage: 'queued', retryable: false },
-    })
-    h.getJobSpy.mockResolvedValue({
-      job_id: 'job-route',
-      stage: 'awaiting_confirmation',
-      confirmation_state: 'pending',
-      anchor_state: 'located',
-      job: { job_id: 'job-route', stage: 'awaiting_confirmation' },
-      recognition: { questions: [], subject: '数学' },
-    })
+  it('显式视觉路由进入 route_request；两次提交由各自 source_ref 隔离', async () => {
+    h.createTaskSpy.mockResolvedValue({ created: true, ...imageTaskResponse() })
     const store = useK12Store()
     const route = {
       provider: 'hexclaw-gpt',
@@ -89,29 +124,74 @@ describe('K12 store · 自动化/入站接线', () => {
       capability: 'vision' as const,
     }
 
-    await store.recognizePhotoJob(
-      'mingming',
-      'data:image/png;base64,AAAA',
-      undefined,
-      'scenario-session',
+    await store.dispatchImageTask({
+      agent: 'mingming',
+      dataUrl: 'data:image/png;base64,AAAA',
+      sourceSession: 'scenario-session',
       route,
-    )
+      sourceRef: 'message-sol',
+    })
 
-    const createReq = h.createJobSpy.mock.calls[0]![0] as Record<string, unknown>
-    expect(createReq.model_snapshot).toEqual(route)
+    const createReq = h.createTaskSpy.mock.calls[0]![0] as Record<string, unknown>
+    expect(createReq.route_request).toEqual({
+      provider: route.provider,
+      model: route.model,
+      selection_source: 'explicit',
+    })
     expect(createReq.source_session).toBe('scenario-session')
-    expect(createReq.source_key).not.toBe('photo-mingming-a37183c0-26')
+    expect(createReq.source_ref).toBe('message-sol')
 
-    h.createJobSpy.mockClear()
-    await store.recognizePhotoJob(
-      'mingming',
-      'data:image/png;base64,AAAA',
-      undefined,
-      'scenario-session',
-      { ...route, model: 'gpt-5.3-codex-spark' },
-    )
-    const otherRouteReq = h.createJobSpy.mock.calls[0]![0] as Record<string, unknown>
-    expect(otherRouteReq.source_key).not.toBe(createReq.source_key)
+    h.createTaskSpy.mockClear()
+    await store.dispatchImageTask({
+      agent: 'mingming',
+      dataUrl: 'data:image/png;base64,AAAA',
+      sourceSession: 'scenario-session',
+      route: { ...route, model: 'gpt-5.3-codex-spark' },
+      sourceRef: 'message-spark',
+    })
+    const otherRouteReq = h.createTaskSpy.mock.calls[0]![0] as Record<string, unknown>
+    expect(otherRouteReq.source_ref).not.toBe(createReq.source_ref)
+  })
+
+  it('desktop source_ref 是任务幂等身份：同请求重放稳定、同图新提交不复用旧任务', async () => {
+    h.createTaskSpy.mockResolvedValue({ created: true, ...imageTaskResponse() })
+    const store = useK12Store()
+    const route = {
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+      capability: 'vision' as const,
+    }
+
+    for (const sourceRef of ['message-request-a', 'message-request-a', 'message-request-b']) {
+      await store.dispatchImageTask({
+        agent: 'mingming',
+        dataUrl: 'data:image/png;base64,AAAA',
+        sourceSession: 'scenario-session',
+        route,
+        sourceRef,
+      })
+    }
+    const firstKey = (h.createTaskSpy.mock.calls[0]![0] as { source_ref: string }).source_ref
+    const replayKey = (h.createTaskSpy.mock.calls[1]![0] as { source_ref: string }).source_ref
+    const newSubmissionKey = (h.createTaskSpy.mock.calls[2]![0] as { source_ref: string }).source_ref
+
+    expect(firstKey).toBe('message-request-a')
+    expect(replayKey).toBe(firstKey)
+    expect(newSubmissionKey).toBe('message-request-b')
+    expect(newSubmissionKey).not.toBe(firstKey)
+  })
+
+  it('缺少 desktop session/source identity 时 fail-closed，不再退回图片内容哈希身份', async () => {
+    const store = useK12Store()
+    await expect(
+      store.dispatchImageTask({
+        agent: 'mingming',
+        dataUrl: 'data:image/png;base64,AAAA',
+        sourceSession: '',
+        sourceRef: '',
+      }),
+    ).rejects.toThrow('desktop image task identity')
+    expect(h.createTaskSpy).not.toHaveBeenCalled()
   })
 
   it('tutorTurn 透传分阶段响应', async () => {

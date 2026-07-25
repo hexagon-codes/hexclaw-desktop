@@ -34,6 +34,10 @@ export function mistakeToRecord(dto: MistakeDTO, agentId: string, subject?: stri
       // 抽查复验（§3.6）：仅 failed 在详情呈现「家长确认（复验未过）」事实标注；
       // scheduled 不呈现（不打抽查标签，规则 1）。schema 未声明该字段，不参与行渲染。
       spot_check_state: dto.spot_check_state,
+      archived_reason: dto.archived_reason,
+      archived_at: dto.archived_at,
+      archive_restored_at: dto.archive_restored_at,
+      restorable: dto.restorable === true,
     },
     dueAt: dto.due_at ?? null,
     version: dto.version,

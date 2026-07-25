@@ -66,8 +66,12 @@ describe('K12 works prototype layout', () => {
   })
 
   it('uses a bounded desktop modal with a scrolling body and fixed action bar', () => {
-    expect(worksSource).toMatch(/\.k12cw-modal\s*\{[^}]*max-height:\s*min\(720px,\s*calc\(100vh - 24px\)\)[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/s)
-    expect(worksSource).toMatch(/\.k12cw-modal__body\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s)
+    expect(worksSource).toMatch(
+      /\.k12cw-modal\s*\{[^}]*max-height:\s*min\(720px,\s*calc\(100vh - 24px\)\)[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto/s,
+    )
+    expect(worksSource).toMatch(
+      /\.k12cw-modal__body\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s,
+    )
   })
 
   it('keeps the approved add-work form geometry and renders the title label exactly once', () => {
@@ -83,11 +87,53 @@ describe('K12 works prototype layout', () => {
     )
   })
 
-  it('keeps native printing and Save PDF as two independent practice-card actions (DD-023A)', () => {
-    expect(worksSource).not.toContain("isTauri() ? t('k12.works.practiceCardSavePdf')")
-    expect(worksSource).toContain('data-testid="cw-card-print"')
-    expect(worksSource).toContain('data-testid="cw-card-save-pdf"')
-    expect(worksSource).toContain('savePracticePaperPdf')
+  it('detail keeps only versions, latest feedback, revision upload, regeneration and close', () => {
+    for (const retained of [
+      'data-testid="cw-version-content"',
+      'data-testid="cw-version-feedback"',
+      'data-testid="cw-revision-submit"',
+      'data-testid="cw-feedback-regenerate"',
+      "'cw-detail-close'",
+    ]) {
+      expect(worksSource).toContain(retained)
+    }
+    for (const retired of [
+      'data-testid="cw-feedback-input"',
+      'data-testid="cw-feedback-submit"',
+      'data-testid="cw-feedback-generate"',
+      'data-testid="cw-send-feedback"',
+      'data-testid="cw-practice-card"',
+      'data-testid="cw-accum-open"',
+      'data-testid="cw-mistake-open"',
+      'data-testid="cw-archive"',
+      'k12AttachWorkFeedback',
+      'k12ArchiveCreativeWork',
+      'k12SendWorkFeedback',
+      'k12MarkPracticeCardDone',
+      'savePracticePaperPdf',
+    ]) {
+      expect(worksSource).not.toContain(retired)
+    }
+  })
+
+  it('all locales remove copy for retired manual-feedback, delivery and practice-card actions', () => {
+    const retiredKeys = [
+      'addFeedback',
+      'archive',
+      'sendFeedback',
+      'practiceCardTitle',
+      'practiceCardPrint',
+      'practiceCardSavePdf',
+      'practiceCardSend',
+      'practiceCardMarkDone',
+      'toAccum',
+      'toMistake',
+    ]
+    for (const locale of [zhCN, en, ugCN]) {
+      for (const key of retiredKeys) {
+        expect(locale.works).not.toHaveProperty(key)
+      }
+    }
   })
 
   it('keeps the full information-technology subject label on one line', () => {

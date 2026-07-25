@@ -65,7 +65,7 @@ describe('bug: 辅导要点打印按钮须真打印', () => {
     const w = mount(TutoringTipsPanel, {
       props: {
         agentId: 'ming',
-        gradingJobId: 'job-confirmed-1',
+        dispatchId: 'dispatch-confirmed-1',
         sessionId: 'session-1',
         grade: '五年级上',
         knowledgePoints: ['小数乘法'],
@@ -79,7 +79,7 @@ describe('bug: 辅导要点打印按钮须真打印', () => {
       expect.objectContaining({
         agent: 'ming',
         sourceKind: 'tutoring_tips',
-        sourceRef: 'tutoring-tips:job-confirmed-1',
+        sourceRef: 'tutoring-tips:dispatch-confirmed-1',
         title: '这份作业的辅导要点',
         canonicalMarkdown: expect.stringContaining('小数乘法要对齐小数点'),
         browserPrint: expect.any(Function),

@@ -10,7 +10,7 @@
  *   ① ChatInput 新增通用 prop scenarioImageIntercept：为 true 时粘贴的图片不进附件，
  *      转为 emit('scenario-image', dataURL)（AP-1：ChatInput 零 K12 词，通用场景缝）；
  *   ② K12ChatEnhancement 新增通用 prop composerImage：收到图片 → 自动打开识题护栏
- *      并触发识题（GradingJob 创建收到该图），随后 emit 清空事件供外壳复位；
+ *      并经唯一 ImageTask facade 固化原图、创建 dispatch，随后 emit 清空事件供外壳复位；
  *   ③ ChatView 把 ①② 接起来（源码接线锁：防「有 setter 无 consumer」装饰性参数，AP-194 同族）。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
@@ -27,26 +27,57 @@ import { K12_VIEW_DESCRIPTOR } from '../descriptor'
 
 const PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgo='
 
-// 桌面入口迁移（§6.7）：composer 图片改道后触发的是统一 GradingJob 创建（携带该图）。
-const { k12CreateGradingJob, k12GetGradingJob } = vi.hoisted(() => ({
-  k12CreateGradingJob: vi.fn().mockResolvedValue({
-    created: true,
-    job: { job_id: 'job-1', stage: 'queued', retryable: false },
+const { k12UploadAsset, k12CreateImageTask } = vi.hoisted(() => ({
+  k12UploadAsset: vi.fn().mockResolvedValue({
+    asset_id: 'asset://k12-tutor-x/photo.png',
+    size: 4,
   }),
-  k12GetGradingJob: vi.fn().mockResolvedValue({
-    job_id: 'job-1', stage: 'awaiting_confirmation',
-    confirmation_state: 'pending', anchor_state: 'located',
-    job: { job_id: 'job-1', stage: 'awaiting_confirmation' },
-    recognition: { questions: [{ question: '3.8×3=?', knowledge_points: ['小数乘法'] }], subject: '' },
+  k12CreateImageTask: vi.fn().mockResolvedValue({
+    created: true,
+    dispatch: {
+      dispatch_id: 'dispatch-1',
+      task_intent: 'completed_homework',
+      status: 'awaiting_confirmation',
+      intent_evidence: ['answer_regions_present'],
+      intent_confidence: 0.99,
+      confirmation_candidates: [],
+      target: { type: 'homework_submission', id: 'submission-1' },
+      target_projection: {
+        kind: 'homework',
+        stage: 'awaiting_confirmation',
+        confirmation_state: 'pending',
+        anchor_state: 'located',
+        recognition: {
+          subject: '',
+          questions: [
+            {
+              problem_id: 'problem-1',
+              question: '3.8×3=?',
+              knowledge_points: ['小数乘法'],
+              answer_state: 'present',
+              student_answer: '11.4',
+              confirmation_required: true,
+              confirmation_reasons: ['decimal_point'],
+            },
+          ],
+        },
+      },
+      progress: { operation: 'homework', state: 'awaiting_confirmation' },
+      version: 1,
+      created_at: 1,
+      updated_at: 2,
+    },
   }),
 }))
 
 vi.mock('@/api/k12', () => ({
-  k12CreateGradingJob,
-  k12GetGradingJob,
-  k12ConfirmGradingJob: vi.fn(),
-  k12RetryGradingJob: vi.fn(),
-  k12CancelGradingJob: vi.fn().mockResolvedValue({}),
+  k12UploadAsset,
+  k12CreateImageTask,
+  k12GetImageTask: vi.fn(),
+  k12GetImageTaskResult: vi.fn(),
+  k12ConfirmImageTask: vi.fn(),
+  k12RetryImageTask: vi.fn(),
+  k12CancelImageTask: vi.fn(),
   k12Grade: vi.fn(),
   k12ColdStart: vi.fn(),
   k12TutoringTips: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
@@ -158,11 +189,12 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
+    localStorage.clear()
     document.body.innerHTML =
       '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div>'
   })
 
-  it('★传入 composerImage → RecognizeGuardPanel 打开、GradingJob 创建收到该图、emit 清空', async () => {
+  it('★传入 composerImage → RecognizeGuardPanel 打开、唯一 facade 收到不可变资产与冻结路由、emit 清空', async () => {
     const attachment = {
       type: 'image' as const,
       name: 'homework.png',
@@ -177,30 +209,52 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     const w = mount(K12ChatEnhancement, {
       props: {
         agentId: 'k12-tutor-x', agentName: '小明的辅导老师',
+        sessionId: 'session-1',
         metadata: { 'k12.grade_term': '五年级上' },
         descriptor: K12_VIEW_DESCRIPTOR,
-        composerImage: { dataUrl: PNG_DATA_URL, attachment, route },
+        composerImage: {
+          dataUrl: PNG_DATA_URL,
+          attachment,
+          requestId: 'message-homework',
+          route,
+        },
       },
       global: { plugins: [createPinia(), i18n()] },
       attachTo: document.body,
     })
-    await flushPromises()
+    expect(
+      document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]'),
+    ).toBeTruthy()
+    await vi.waitFor(() => expect(k12UploadAsset).toHaveBeenCalledTimes(1))
     // 识题护栏应自动打开并用该图跑识题（回显护栏出题）
-    expect(k12CreateGradingJob, 'composerImage 应触发自动识题（当前 prop 不存在/被忽略=bug）').toHaveBeenCalledWith(
+    expect(k12UploadAsset).toHaveBeenCalledWith(
+      'k12-tutor-x',
+      expect.objectContaining({ type: 'image/png' }),
+      undefined,
+      expect.any(AbortSignal),
+    )
+    expect(k12CreateImageTask).toHaveBeenCalledWith(
       expect.objectContaining({
-        image_base64: PNG_DATA_URL,
-        model_snapshot: route,
+        agent: 'k12-tutor-x',
+        source_ref: 'message-homework',
+        source_asset_refs: ['asset://k12-tutor-x/photo.png'],
+        attempt_generation: 1,
+        route_request: {
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          selection_source: 'explicit',
+        },
       }),
       expect.any(AbortSignal),
     )
-    expect(k12CreateGradingJob).toHaveBeenCalledTimes(1)
+    expect(k12CreateImageTask).toHaveBeenCalledTimes(1)
     await flushPromises()
     expect(document.querySelector('#hc-chat-scenario-inline [data-testid="rq-item"]'), '识题结果应渲染回显护栏').toBeTruthy()
     // 消费后通知外壳清空，避免重复触发
     expect(w.emitted('update:composerImage'), '消费后应 emit 清空').toBeTruthy()
   })
 
-  it('同图切换显式模型再次提交时，每个图片事件各创建一次场景 Job', async () => {
+  it('同图切换显式模型主动重提时使用新的 source identity，各创建一次 facade dispatch', async () => {
     const attachment = {
       type: 'image' as const,
       name: 'homework.png',
@@ -211,6 +265,7 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
       props: {
         agentId: 'k12-tutor-x',
         agentName: '小明的辅导老师',
+        sessionId: 'session-1',
         metadata: { 'k12.grade_term': '五年级上' },
         descriptor: K12_VIEW_DESCRIPTOR,
       },
@@ -222,6 +277,7 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
       composerImage: {
         dataUrl: PNG_DATA_URL,
         attachment,
+        requestId: 'message-homework-attempt-1',
         route: {
           provider: 'hexclaw-gpt',
           model: 'gpt-5.6-sol',
@@ -229,7 +285,7 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
         },
       },
     })
-    await vi.waitFor(() => expect(k12CreateGradingJob).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(k12CreateImageTask).toHaveBeenCalledTimes(1))
 
     // 模拟父级收到 update:composerImage 后复位，再以相同图片摘要、不同显式模型提交。
     await w.setProps({ composerImage: '' })
@@ -237,6 +293,7 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
       composerImage: {
         dataUrl: PNG_DATA_URL,
         attachment,
+        requestId: 'message-homework-attempt-2',
         route: {
           provider: 'hexclaw-gpt',
           model: 'gpt-5.3-codex-spark',
@@ -245,18 +302,22 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
       },
     })
 
-    await vi.waitFor(() => expect(k12CreateGradingJob).toHaveBeenCalledTimes(2))
-    expect(k12CreateGradingJob).toHaveBeenLastCalledWith(
+    await vi.waitFor(() => expect(k12CreateImageTask).toHaveBeenCalledTimes(2))
+    expect(k12CreateImageTask).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        image_base64: PNG_DATA_URL,
-        model_snapshot: {
+        source_ref: 'message-homework-attempt-2',
+        attempt_generation: 1,
+        route_request: {
           provider: 'hexclaw-gpt',
           model: 'gpt-5.3-codex-spark',
-          capability: 'vision',
+          selection_source: 'explicit',
         },
       }),
       expect.any(AbortSignal),
     )
+    expect(
+      k12CreateImageTask.mock.calls.map((call) => call[0].source_ref),
+    ).toEqual(['message-homework-attempt-1', 'message-homework-attempt-2'])
   })
 })
 

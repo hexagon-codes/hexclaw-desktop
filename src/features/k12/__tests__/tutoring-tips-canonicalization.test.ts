@@ -65,7 +65,7 @@ function validResponse() {
 function request() {
   return {
     agent: 'k12-tutor-ming',
-    grading_job_id: 'job-confirmed-1',
+    dispatch_id: 'dispatch-confirmed-1',
   }
 }
 
@@ -95,7 +95,7 @@ describe('ADR-K12-022 · TutoringTips 单一契约', () => {
     expect(K12_VIEW_DESCRIPTOR.sidePanels).toEqual([])
   })
 
-  it('只调用新端点并仅透传可信 agent + grading_job_id', async () => {
+  it('只调用新端点并仅透传可信 agent + dispatch_id', async () => {
     const call = (k12Api as Record<string, unknown>).k12TutoringTips
     expect(call).toBeTypeOf('function')
     apiPost.mockResolvedValue(validResponse())

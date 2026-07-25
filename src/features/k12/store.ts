@@ -9,6 +9,8 @@ import {
   k12ReviewQueue,
   k12MarkMastered,
   k12DeleteMistake,
+  k12ArchiveMistake,
+  k12RestoreMistake,
   k12TutoringTips,
   k12AddGrounding,
   k12Grade,
@@ -16,12 +18,13 @@ import {
   k12Solve,
   k12InsightReport,
   k12ListAccumulation,
-  k12CreateGradingJob,
-  k12GetGradingJob,
-  k12GetGradingJobResult,
-  k12ConfirmGradingJob,
-  k12RetryGradingJob,
-  k12CancelGradingJob,
+  k12UploadAsset,
+  k12CreateImageTask,
+  k12GetImageTask,
+  k12GetImageTaskResult,
+  k12ConfirmImageTask,
+  k12RetryImageTask,
+  k12CancelImageTask,
   k12ColdStart,
   k12TutorTurn,
   k12BindIM,
@@ -35,31 +38,38 @@ import {
   type TutoringTipsResp,
   type InsightReportResp,
   type RecognizedQuestion,
-  type GradingJobStage,
-  type GradingJobStatusResp,
   type GradingQuestionCorrection,
   type PhotoJobResult,
-  type CreatePhotoGradingJobReq,
+  type ImageTaskDispatchDTO,
+  type ImageTaskHomeworkProjectionDTO,
+  type ImageTaskCreativeProjectionDTO,
+  type ImageTaskCreativeFeedbackState,
+  type ImageTaskIntent,
+  type ImageTaskResultProjection,
+  type ConfirmImageTaskReq,
   type TutorTurnReq,
   type TutorTurnResp,
   type BindIMReq,
   type ProvisionCronReq,
   type ProvisionedJob,
+  type MistakeDTO,
 } from '@/api/k12'
 import type { RecordCollectionView, VerifyResult } from '@/contracts'
+import type { ScenarioImageModelRoute } from '@/shell/scenario/registry'
 import { i18n } from '@/i18n'
 import {
   mistakesToView,
+  mistakeToRecord,
   gradeToResult,
   gradeToVerify,
   accumToView,
   type GradeViewResult,
 } from './mappers'
 import {
-  clearGradingJobBinding,
-  getGradingJobBinding,
-  setGradingJobBinding,
-} from './grading-job-binding'
+  clearImageTaskBinding,
+  getImageTaskBinding,
+  setImageTaskBinding,
+} from './image-task-binding'
 
 /** 空白题解题结果（不含批改/入库语义）。 */
 export interface SolveViewResult {
@@ -69,9 +79,32 @@ export interface SolveViewResult {
   outOfScopeKnowledgePoint?: string
 }
 
-export type PhotoJobGradeOutcome =
-  | { stage: 'completed'; result: PhotoJobResult }
-  | { stage: 'outcome_unknown' }
+export type ImageTaskCompletionOutcome =
+  | {
+      stage: 'completed'
+      taskIntent: 'completed_homework' | 'blank_worksheet'
+      result: PhotoJobResult
+    }
+  | {
+      stage: 'promoted'
+      taskIntent: 'writing' | 'artwork'
+      result: Extract<ImageTaskResultProjection, { kind: 'writing' | 'artwork' }>['payload']
+    }
+
+export interface ImageTaskView {
+  dispatchId: string
+  dispatchVersion: number
+  taskIntent: ImageTaskIntent
+  stage: string
+  questions: RecognizedQuestion[]
+  subject: string
+  anchorState: 'pending' | 'located' | 'degraded'
+  confirmationState: 'pending' | 'confirmed'
+  creative?: ImageTaskCreativeProjectionDTO
+  intentCandidates: ImageTaskIntent[]
+}
+
+type ImageTaskStatusObserver = (dispatch: ImageTaskDispatchDTO) => void
 
 export const useK12Store = defineStore('k12', () => {
   /** 当前实例（孩子）的错题本视图；多孩隔离 = 以 agent 拉取，切实例即换数据 */
@@ -86,6 +119,7 @@ export const useK12Store = defineStore('k12', () => {
   const reportError = ref<string | null>(null)
   const accumulationError = ref<string | null>(null)
   let mistakesRequest = 0
+  let mistakesAgent = ''
   let reportRequest = 0
   let accumulationRequest = 0
   let tutoringTipsRequest = 0
@@ -93,9 +127,14 @@ export const useK12Store = defineStore('k12', () => {
   /** 拉取某实例错题本 + 复习队列（合并为通用记录集视图） */
   async function loadMistakes(agent: string, status?: string): Promise<void> {
     const request = ++mistakesRequest
+    const sameAgent = mistakesAgent === agent
+    mistakesAgent = agent
     loading.value = true
     mistakesError.value = null
-    mistakeView.value = null
+    // 同一孩子的刷新保留已经展示/由受控命令确认的正式投影；否则归档 2xx
+    // 与刷新并发时，刷新先清空视图会让命令响应无处落盘。切换孩子仍立即清空，
+    // 保持多孩隔离，迟到请求继续由 request 序号丢弃。
+    if (!sameAgent) mistakeView.value = null
     try {
       const [all, due] = await Promise.all([k12ListMistakes(agent, status), k12ReviewQueue(agent)])
       if (request !== mistakesRequest) return
@@ -118,6 +157,106 @@ export const useK12Store = defineStore('k12', () => {
   async function deleteMistake(agent: string, recordId: string): Promise<void> {
     await k12DeleteMistake(agent, recordId)
     await loadMistakes(agent)
+  }
+
+  function replaceMistakeProjection(agent: string, dto: MistakeDTO) {
+    const current = mistakeView.value
+    if (!current) return
+    const index = current.items.findIndex(
+      (item) => item.agentId === agent && item.recordId === dto.record_id,
+    )
+    if (index < 0) return
+
+    const existing = current.items[index]!
+    const subject =
+      typeof existing.fields.subject === 'string' ? existing.fields.subject : undefined
+    const projected = mistakeToRecord(dto, agent, subject)
+    const nextItem = {
+      ...existing,
+      ...projected,
+      fields: {
+        ...existing.fields,
+        ...projected.fields,
+        review_kind: projected.fields.review_kind ?? existing.fields.review_kind,
+      },
+    }
+    const items = current.items.slice()
+    items[index] = nextItem
+    const statusCounts: Record<string, number> = {}
+    for (const item of items) {
+      if (item.status) statusCounts[item.status] = (statusCounts[item.status] ?? 0) + 1
+    }
+
+    const queue = (current.reviewQueue ?? []).filter((id) => id !== dto.record_id)
+    const dueNow =
+      dto.status !== 'archived' &&
+      dto.due_at != null &&
+      dto.due_at <= Math.floor(Date.now() / 1_000)
+    if (dueNow) queue.push(dto.record_id)
+    mistakeView.value = {
+      ...current,
+      items,
+      reviewQueue: queue,
+      statusCounts,
+    }
+  }
+
+  /**
+   * 已提交命令后的服务端校准：失败只保留当前正式投影，不清空视图、不把无关刷新并入事务。
+   * request 序号仍阻止旧孩子的迟到响应覆盖新孩子。
+   */
+  async function calibrateMistakes(agent: string): Promise<void> {
+    const request = ++mistakesRequest
+    try {
+      const [all, due] = await Promise.all([k12ListMistakes(agent), k12ReviewQueue(agent)])
+      if (request !== mistakesRequest) return
+      mistakeView.value = mistakesToView(agent, all.items, due.items)
+      mistakesError.value = null
+    } catch (error) {
+      if (request !== mistakesRequest || mistakeView.value) return
+      mistakesError.value = error instanceof Error ? error.message : String(error)
+    }
+  }
+
+  function mistakeCommandKey(action: 'archive' | 'restore', agent: string, recordId: string) {
+    const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
+    return `desktop-mistake-${action}:${agent}:${recordId}:${random}`
+  }
+
+  function controlledCommandMayHaveCommitted(error: unknown): boolean {
+    const status = httpStatus(error)
+    return status == null || status >= 500 || status === 408 || status === 425 || status === 429
+  }
+
+  /** CAS 归档命令；调用层在确认当前孩子未切换后刷新两份服务端投影。 */
+  async function archiveMistake(agent: string, recordId: string, version: number) {
+    const key = mistakeCommandKey('archive', agent, recordId)
+    try {
+      const archived = await k12ArchiveMistake(agent, recordId, version, key)
+      replaceMistakeProjection(agent, archived)
+      return archived
+    } catch (error) {
+      // 响应丢失时，用同一幂等键安全读取/重放正式结果；绝不换 key 生成第二个意图。
+      if (!controlledCommandMayHaveCommitted(error)) throw error
+      const archived = await k12ArchiveMistake(agent, recordId, version, key)
+      replaceMistakeProjection(agent, archived)
+      return archived
+    }
+  }
+
+  /** Undo 与长期恢复的唯一命令；禁止本地伪造恢复状态。 */
+  async function restoreMistake(agent: string, recordId: string, version: number) {
+    const key = mistakeCommandKey('restore', agent, recordId)
+    try {
+      const restored = await k12RestoreMistake(agent, recordId, version, key)
+      replaceMistakeProjection(agent, restored)
+      return restored
+    } catch (error) {
+      if (!controlledCommandMayHaveCommitted(error)) throw error
+      const restored = await k12RestoreMistake(agent, recordId, version, key)
+      replaceMistakeProjection(agent, restored)
+      return restored
+    }
   }
 
   /** 学情报告（真实端点，替代客户端聚合） */
@@ -173,17 +312,17 @@ export const useK12Store = defineStore('k12', () => {
   const tutoringTipsError = ref<string | null>(null)
   async function loadTutoringTips(
     agent: string,
-    gradingJobId: string,
+    dispatchId: string,
     signal?: AbortSignal,
   ): Promise<void> {
-    // 辅导要点只能基于服务端已确认 Job；缺少任一可信绑定时 fail-closed，绝不回退到客户端原文。
-    if (!agent.trim() || !gradingJobId.trim()) return
+    // 辅导要点只能基于服务端已确认图片任务；内部批改实体由服务端解析，客户端不持有内部 ID。
+    if (!agent.trim() || !dispatchId.trim()) return
     const request = ++tutoringTipsRequest
     tutoringTipsLoading.value = true
     tutoringTipsError.value = null
     tutoringTips.value = null
     try {
-      const next = await k12TutoringTips({ agent, grading_job_id: gradingJobId }, signal)
+      const next = await k12TutoringTips({ agent, dispatch_id: dispatchId }, signal)
       if (request === tutoringTipsRequest) tutoringTips.value = next
     } catch {
       if (request !== tutoringTipsRequest) return
@@ -237,13 +376,9 @@ export const useK12Store = defineStore('k12', () => {
     }
   }
 
-  // ── 拍照批改编排（2026-07-18 桌面入口迁移到统一 GradingJob，§6.7/§6.15）──────
-  // 上传照片 → 创建 Job（后端异步推进识别+锚点）→ 轮询到 awaiting_confirmation 停点 →
-  // 护栏确认交互 → confirm → 轮询到 completed → 取逐题结果渲染。
-  // 旧两阶段直连编排（k12Recognize/k12RecognizeAnchors）已随一次切换删除（§6.14 链路①）；
-  // grade/solve 是甄别保留的单点能力（单题补批/空白题求解），不属旧编排链路。
-
-  /** 轮询节流：阶段耗时分钟级（识别 ~1-3 分钟、整卷批改可达数分钟）→ 2.5s 间隔 + 10 分钟上限。 */
+  // ── 四类图片任务统一 facade（ImageTaskDispatch，§3.2/§5.4）──────────────
+  // Desktop 先固化不可变 Asset，再只通过 /image-tasks 驱动分流根对象。作业类的
+  // 作业与作品的内部目标都由服务端持有；本 store 只消费公开投影。
   const JOB_POLL_INTERVAL_MS = 2500
 
   function abortError(): Error {
@@ -272,304 +407,386 @@ export const useK12Store = defineStore('k12', () => {
     })
   }
 
-  /** 同一（agent, 照片）内容派生稳定幂等键（§4.10 desktop 来源键）：重复点击/失败重跑命中同一 Job。 */
-  type PhotoModelSnapshot = NonNullable<CreatePhotoGradingJobReq['model_snapshot']>
+  function dataURLFile(dataUrl: string, sourceRef: string): File {
+    const comma = dataUrl.indexOf(',')
+    const metadata = comma >= 0 ? dataUrl.slice(0, comma) : ''
+    const encoded = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
+    const mime = /^data:([^;,]+)/.exec(metadata)?.[1] ?? 'image/jpeg'
+    const binary = atob(encoded.replace(/\s+/g, ''))
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+    const extension = mime === 'image/png' ? 'png' : mime === 'image/webp' ? 'webp' : 'jpg'
+    return new File([bytes], `image-task-${sourceRef}.${extension}`, { type: mime })
+  }
 
-  function stablePhotoHash(value: string): string {
-    let hash = 5381
-    for (let i = 0; i < value.length; i++) {
-      hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0
+  function homeworkProjection(
+    dispatch: ImageTaskDispatchDTO,
+  ): ImageTaskHomeworkProjectionDTO | undefined {
+    return dispatch.target_projection?.kind === 'homework'
+      ? dispatch.target_projection
+      : undefined
+  }
+
+  function creativeFeedbackState(
+    dispatch: ImageTaskDispatchDTO,
+  ): ImageTaskCreativeFeedbackState | undefined {
+    if (
+      dispatch.target_projection?.kind !== 'creative' ||
+      dispatch.target_projection.status !== 'promoted' ||
+      dispatch.progress.operation !== 'promotion'
+    ) {
+      return undefined
     }
-    return `${hash.toString(16)}-${value.length}`
+    const state = dispatch.progress.state
+    return [
+      'feedback_pending',
+      'feedback_ready',
+      'feedback_failed',
+      'recovering',
+    ].includes(state)
+      ? (state as ImageTaskCreativeFeedbackState)
+      : undefined
   }
 
-  /** 无显式路由时保持历史键；显式 provider/model 进入幂等身份，不能命中旧模型 Job。 */
-  function photoJobSourceKey(
-    agent: string,
-    imageBase64: string,
-    modelSnapshot?: PhotoModelSnapshot,
-  ): string {
-    const legacyKey = `photo-${agent}-${stablePhotoHash(imageBase64)}`
-    if (!modelSnapshot) return legacyKey
-    return `${legacyKey}-route-${stablePhotoHash(
-      `${modelSnapshot.provider}\u0000${modelSnapshot.model}`,
-    )}`
+  function imageTaskView(dispatch: ImageTaskDispatchDTO): ImageTaskView {
+    const homework = homeworkProjection(dispatch)
+    const creative =
+      dispatch.target_projection?.kind === 'creative' ? dispatch.target_projection : undefined
+    const feedbackState = creativeFeedbackState(dispatch)
+    return {
+      dispatchId: dispatch.dispatch_id,
+      dispatchVersion: dispatch.version,
+      taskIntent: dispatch.task_intent,
+      stage: homework?.stage ?? feedbackState ?? creative?.status ?? dispatch.status,
+      questions: homework?.recognition?.questions ?? [],
+      subject: homework?.recognition?.subject ?? '',
+      anchorState: homework?.anchor_state ?? 'pending',
+      confirmationState: homework?.confirmation_state ?? 'pending',
+      creative,
+      intentCandidates: dispatch.confirmation_candidates,
+    }
   }
 
-  /** 轮询单个 Job 直到到达 stopStages 之一；失败态/超时抛家长向错误。 */
-  async function pollGradingJob(
+  function isFacadeFailure(dispatch: ImageTaskDispatchDTO): boolean {
+    if (dispatch.status === 'failed' || dispatch.status === 'cancelled') return true
+    const projection = dispatch.target_projection
+    if (projection?.kind === 'homework') {
+      return (
+        projection.stage === 'failed_retryable' ||
+        projection.stage === 'failed_terminal' ||
+        projection.stage === 'cancelled'
+      )
+    }
+    if (creativeFeedbackState(dispatch) === 'feedback_failed') return true
+    return projection?.kind === 'creative'
+      ? projection.status === 'failed' || projection.status === 'cancelled'
+      : false
+  }
+
+  function readyForTaskShell(dispatch: ImageTaskDispatchDTO): boolean {
+    if (isFacadeFailure(dispatch) || dispatch.status === 'awaiting_confirmation') return true
+    const projection = dispatch.target_projection
+    if (projection?.kind === 'homework') {
+      const hasFactConflict =
+        projection.recognition?.questions.some((question) => question.confirmation_required) ?? false
+      return (
+        projection.stage === 'completed' ||
+        (projection.stage === 'awaiting_confirmation' &&
+          projection.confirmation_state === 'pending' &&
+          hasFactConflict)
+      )
+    }
+    if (projection?.kind !== 'creative') return false
+    const feedbackState = creativeFeedbackState(dispatch)
+    return (
+      (projection.work_type === 'writing' &&
+        projection.status === 'awaiting_confirmation' &&
+        !!projection.conflicts?.length) ||
+      feedbackState === 'feedback_ready' ||
+      feedbackState === 'feedback_failed'
+    )
+  }
+
+  function resultReady(dispatch: ImageTaskDispatchDTO): boolean {
+    const projection = dispatch.target_projection
+    if (projection?.kind === 'homework') return projection.stage === 'completed'
+    if (projection?.kind === 'creative') {
+      return creativeFeedbackState(dispatch) === 'feedback_ready'
+    }
+    return false
+  }
+
+  async function pollImageTask(
     agent: string,
-    jobId: string,
-    stopStages: readonly GradingJobStage[],
+    dispatchId: string,
+    stop: (dispatch: ImageTaskDispatchDTO) => boolean,
     intervalMs = JOB_POLL_INTERVAL_MS,
     signal?: AbortSignal,
-  ): Promise<GradingJobStatusResp> {
-    // 客户端计数器不能替代持久 Job 真相；只由服务端 stage 或调用方 AbortSignal 收敛。
+    onStatus?: ImageTaskStatusObserver,
+  ): Promise<ImageTaskDispatchDTO> {
     for (;;) {
       throwIfAborted(signal)
-      const status = await k12GetGradingJob(agent, jobId, signal)
+      const response = await k12GetImageTask(agent, dispatchId, signal)
       throwIfAborted(signal)
-      // 结果未知是持久终态投影：一个轮询周期内立即返回，由上层停止等待；绝不能继续
-      // GET 到客户端上限，更不能落入 result/retry 路径造成重复调用或重复计费风险。
-      if (status.stage === 'outcome_unknown') return status
-      if (stopStages.includes(status.stage)) return status
-      if (
-        status.stage === 'failed_terminal' ||
-        status.stage === 'failed_retryable' ||
-        status.stage === 'cancelled'
-      ) {
-        // 裸 failure_kind 对家长无价值：统一翻成可操作提示（可重试失败由调用方触发 retry 端点）。
-        throw new Error(i18n.global.t('k12.recognize.jobFailed'))
-      }
+      onStatus?.(response.dispatch)
+      if (stop(response.dispatch)) return response.dispatch
       await waitForPoll(intervalMs, signal)
     }
   }
 
-  /** 护栏回显视图：Job 停点的识别产物 + 锚点态（degraded → 界面按无坐标文字降级提示）。 */
-  interface PhotoJobRecognitionView {
-    stage: GradingJobStage
-    jobId: string
-    questions: RecognizedQuestion[]
-    subject: string
-    anchorState: string
-  }
-
-  function photoJobRecognitionView(
-    jobId: string,
-    status: GradingJobStatusResp,
-  ): PhotoJobRecognitionView {
-    return {
-      stage: status.stage,
-      jobId,
-      questions: status.recognition?.questions ?? status.job.recognized_questions ?? [],
-      subject: status.recognition?.subject ?? '',
-      anchorState: status.anchor_state,
-    }
-  }
-
-  /**
-   * 识别事实已可回显后，继续等待独立锚点分支落到 located/degraded。
-   * 不能只看粗粒度 awaiting_confirmation：该 stage 下 anchor_state 仍可能是 pending。
-   */
-  async function waitForPhotoJobAnchor(
+  /** 已取得一次快照后的续轮询。先等待一个 polling interval，避免同一调用栈重复 GET。 */
+  async function continuePollingImageTask(
     agent: string,
-    jobId: string,
+    dispatchId: string,
+    stop: (dispatch: ImageTaskDispatchDTO) => boolean,
+    intervalMs: number,
     signal?: AbortSignal,
-  ): Promise<PhotoJobRecognitionView> {
-    const cancelJob = () => {
-      void k12CancelGradingJob(agent, jobId).catch(() => {
-        // 任务可能恰好进入不可取消终态；本地仍必须隔离旧响应。
-      })
-    }
-    signal?.addEventListener('abort', cancelJob, { once: true })
-    try {
-      // 定位增强同样只认服务端停点/终态或 AbortSignal，不用固定轮询次数猜失败。
-      for (;;) {
-        throwIfAborted(signal)
-        const status = await k12GetGradingJob(agent, jobId, signal)
-        throwIfAborted(signal)
-        if (status.stage === 'outcome_unknown') {
-          return photoJobRecognitionView(jobId, status)
-        }
-        if (status.anchor_state === 'located' || status.anchor_state === 'degraded') {
-          return photoJobRecognitionView(jobId, status)
-        }
-        if (
-          status.stage === 'failed_terminal' ||
-          status.stage === 'failed_retryable' ||
-          status.stage === 'cancelled'
-        ) {
-          throw new Error(i18n.global.t('k12.recognize.jobFailed'))
-        }
-        await waitForPoll(JOB_POLL_INTERVAL_MS, signal)
-      }
-    } finally {
-      signal?.removeEventListener('abort', cancelJob)
-    }
+    onStatus?: ImageTaskStatusObserver,
+  ): Promise<ImageTaskDispatchDTO> {
+    await waitForPoll(intervalMs, signal)
+    return pollImageTask(agent, dispatchId, stop, intervalMs, signal, onStatus)
   }
 
-  /**
-   * 拍照识题（Job 化）：创建照片批改 Job → 后端异步推进（识别 + 锚点并行增强）→
-   * 轮询到确认停点，返回识别产物供护栏回显。同图重投幂等命中既有 Job；
-   * 命中可重试失败任务时自动走 retry 端点从检查点续跑（识别失败可重试）。
-   */
-  async function recognizePhotoJob(
-    agent: string,
-    imageBase64: string,
+  async function dispatchImageTask(
+    input: {
+      agent: string
+      dataUrl: string
+      sourceSession: string
+      sourceRef: string
+      messageIntent?: string
+      route?: ScenarioImageModelRoute
+      attemptGeneration?: number
+    },
     signal?: AbortSignal,
-    sourceSession?: string,
-    modelSnapshot?: PhotoModelSnapshot,
-  ): Promise<PhotoJobRecognitionView> {
+    onStatus?: ImageTaskStatusObserver,
+  ): Promise<ImageTaskView> {
+    const sourceSession = input.sourceSession.trim()
+    const sourceRef = input.sourceRef.trim()
+    if (!input.agent.trim() || !sourceSession || !sourceRef) {
+      throw new Error('desktop image task identity is required')
+    }
     loading.value = true
     error.value = null
-    let jobId = ''
-    const cancelJob = () => {
-      if (!jobId) return
-      void k12CancelGradingJob(agent, jobId).catch(() => {
-        // 任务可能恰好进入不可取消终态；本地仍必须隔离旧响应。
-      })
-    }
-    signal?.addEventListener('abort', cancelJob)
     try {
       throwIfAborted(signal)
-      const created = await k12CreateGradingJob(
+      const asset = await k12UploadAsset(
+        input.agent,
+        dataURLFile(input.dataUrl, sourceRef),
+        undefined,
+        signal,
+      )
+      throwIfAborted(signal)
+      const created = await k12CreateImageTask(
         {
-          agent,
-          source_key: photoJobSourceKey(agent, imageBase64, modelSnapshot),
+          agent: input.agent,
+          source_session: sourceSession,
           source_kind: 'desktop',
-          image_base64: imageBase64,
-          source_session: sourceSession || undefined,
-          model_snapshot: modelSnapshot,
+          source_ref: sourceRef,
+          source_asset_refs: [asset.asset_id],
+          ...(input.messageIntent?.trim() ? { message_intent: input.messageIntent.trim() } : {}),
+          attempt_generation: input.attemptGeneration ?? 1,
+          route_request: input.route
+            ? {
+                provider: input.route.provider,
+                model: input.route.model,
+                selection_source: 'explicit',
+              }
+            : { selection_source: 'auto' },
         },
         signal,
       )
-      jobId = created.job.job_id
-      setGradingJobBinding(sourceSession, agent, jobId)
-      if (signal?.aborted) {
-        cancelJob()
-        // create 已成功时服务端可能已接管任务；cancel 只是尽力而为。
-        // 保留最小绑定，让刷新/重启能查询同一 Job 的最终服务端状态。
-        throw abortError()
+      onStatus?.(created.dispatch)
+      const dispatchId = created.dispatch.dispatch_id
+      setImageTaskBinding(sourceSession, input.agent, dispatchId)
+      throwIfAborted(signal)
+      const dispatch = readyForTaskShell(created.dispatch)
+        ? created.dispatch
+        : await pollImageTask(
+            input.agent,
+            dispatchId,
+            readyForTaskShell,
+            JOB_POLL_INTERVAL_MS,
+            signal,
+            onStatus,
+          )
+      if (isFacadeFailure(dispatch)) {
+        throw new Error(i18n.global.t('k12.recognize.jobFailed'))
       }
-      if (!created.created && created.job.stage === 'failed_retryable' && created.job.retryable) {
-        await k12RetryGradingJob(agent, jobId, signal)
-      }
-      // completed 也是合法停点（同图重投命中已完成 Job）：识别产物仍可回显。
-      const status = await pollGradingJob(
-        agent,
-        jobId,
-        ['awaiting_confirmation', 'completed'],
-        JOB_POLL_INTERVAL_MS,
-        signal,
-      )
-      return photoJobRecognitionView(jobId, status)
+      return imageTaskView(dispatch)
     } finally {
-      signal?.removeEventListener('abort', cancelJob)
       loading.value = false
     }
   }
 
-  /**
-   * 整卷批改（Job 化）：批量确认/修正识别结果（冻结 canonical 输入，§6.7 规则 1）→
-   * 后端异步续跑 assessing→rendering→projecting → 轮询到 completed → 返回逐题结果
-   * （PhotoGradeOverlay 数据源）。
-   */
-  async function gradePhotoJob(
+  async function waitForImageTaskHomeworkAnchor(
     agent: string,
-    jobId: string,
-    input: {
-      subject?: string
-      grade?: string
-      corrections?: GradingQuestionCorrection[]
-      sourceSession?: string
-    },
+    dispatchId: string,
     signal?: AbortSignal,
-  ): Promise<PhotoJobGradeOutcome> {
-    throwIfAborted(signal)
-    // 批改前先读取同一 Job 的服务端真相：确认动作可能已在内联辅导要点挂载前完成，
-    // 刷新/竞态后绝不能重复 POST /confirm。
-    let status = await k12GetGradingJob(agent, jobId, signal)
-    throwIfAborted(signal)
-    if (status.stage === 'outcome_unknown') return { stage: 'outcome_unknown' }
-    if (status.confirmation_state === 'pending') {
-      status = await k12ConfirmGradingJob(
-        jobId,
-        {
-          agent,
-          subject: input.subject,
-          grade: input.grade,
-          question_corrections: input.corrections,
-        },
-        signal,
-      )
-      throwIfAborted(signal)
-      if (status.stage === 'outcome_unknown') return { stage: 'outcome_unknown' }
-    }
-    if (status.stage !== 'completed') {
-      status = await pollGradingJob(agent, jobId, ['completed'], JOB_POLL_INTERVAL_MS, signal)
-    }
-    if (status.stage === 'outcome_unknown') return { stage: 'outcome_unknown' }
-    throwIfAborted(signal)
-    const projection = await k12GetGradingJobResult(agent, jobId, signal)
-    if (!projection.result) {
+  ): Promise<ImageTaskView> {
+    const dispatch = await pollImageTask(
+      agent,
+      dispatchId,
+      (candidate) => {
+        if (isFacadeFailure(candidate)) return true
+        const homework = homeworkProjection(candidate)
+        return (
+          homework?.stage === 'completed' ||
+          homework?.anchor_state === 'located' ||
+          homework?.anchor_state === 'degraded'
+        )
+      },
+      JOB_POLL_INTERVAL_MS,
+      signal,
+    )
+    if (isFacadeFailure(dispatch)) {
       throw new Error(i18n.global.t('k12.recognize.jobFailed'))
     }
-    clearGradingJobBinding(input.sourceSession, agent, jobId)
-    return { stage: 'completed', result: projection.result }
+    return imageTaskView(dispatch)
   }
 
-  /** 家长确认识题结果：持久冻结当前 corrections；成功前调用方不得投影为已确认。 */
-  async function confirmPhotoJob(
+  async function confirmImageTask(
     agent: string,
-    jobId: string,
+    dispatchId: string,
+    version: number,
     input: {
+      intent?: ImageTaskIntent
       subject?: string
       grade?: string
       corrections?: GradingQuestionCorrection[]
+      creative?: Extract<NonNullable<ConfirmImageTaskReq['creative']>, { action: 'freeze_ocr' }>
     },
     signal?: AbortSignal,
-  ): Promise<GradingJobStatusResp> {
+  ): Promise<ImageTaskView> {
     throwIfAborted(signal)
-    return await k12ConfirmGradingJob(
-      jobId,
+    const response = await k12ConfirmImageTask(
+      dispatchId,
       {
         agent,
-        subject: input.subject,
-        grade: input.grade,
-        question_corrections: input.corrections,
+        version,
+        ...(input.intent ? { intent: input.intent } : {}),
+        ...(input.corrections
+          ? {
+              homework: {
+                subject: input.subject,
+                grade: input.grade,
+                question_corrections: input.corrections,
+              },
+            }
+          : {}),
+        ...(input.creative ? { creative: input.creative } : {}),
       },
       signal,
     )
+    return imageTaskView(response.dispatch)
   }
 
-  /**
-   * 刷新/重启只按最小 session+agent 绑定查询同一 Job。确定终态不再恢复并清理绑定；
-   * outcome_unknown 必须保留，供原位“结果待核实”持续投影。这里不触发 create/confirm/retry/result。
-   */
-  async function restorePhotoJob(
+  async function retryImageTask(
+    agent: string,
+    dispatchId: string,
+    version: number,
+    signal?: AbortSignal,
+  ): Promise<ImageTaskView> {
+    throwIfAborted(signal)
+    const response = await k12RetryImageTask(dispatchId, { agent, version }, signal)
+    throwIfAborted(signal)
+    return imageTaskView(response.dispatch)
+  }
+
+  async function cancelImageTask(
+    agent: string,
+    dispatchId: string,
+    version: number,
+    signal?: AbortSignal,
+  ): Promise<ImageTaskView> {
+    throwIfAborted(signal)
+    const response = await k12CancelImageTask(dispatchId, { agent, version }, signal)
+    throwIfAborted(signal)
+    return imageTaskView(response.dispatch)
+  }
+
+  async function completeImageTask(
+    agent: string,
+    dispatchId: string,
+    _input: { sourceSession?: string },
+    signal?: AbortSignal,
+    onStatus?: ImageTaskStatusObserver,
+  ): Promise<ImageTaskCompletionOutcome> {
+    throwIfAborted(signal)
+    const response = await k12GetImageTask(agent, dispatchId, signal)
+    throwIfAborted(signal)
+    onStatus?.(response.dispatch)
+    const dispatch = resultReady(response.dispatch)
+      ? response.dispatch
+      : await continuePollingImageTask(
+          agent,
+          dispatchId,
+          (candidate) => resultReady(candidate) || isFacadeFailure(candidate),
+          JOB_POLL_INTERVAL_MS,
+          signal,
+          onStatus,
+        )
+    if (isFacadeFailure(dispatch)) {
+      throw new Error(i18n.global.t('k12.recognize.jobFailed'))
+    }
+    const projection = await k12GetImageTaskResult(agent, dispatchId, signal)
+    if (!projection.result || projection.task_intent !== dispatch.task_intent) {
+      throw new Error(i18n.global.t('k12.recognize.jobFailed'))
+    }
+    if (
+      (projection.task_intent === 'completed_homework' &&
+        projection.result.kind === 'completed_homework') ||
+      (projection.task_intent === 'blank_worksheet' &&
+        projection.result.kind === 'blank_worksheet')
+    ) {
+      return {
+        stage: 'completed',
+        taskIntent: projection.task_intent,
+        result: projection.result.payload,
+      }
+    }
+    if (
+      (projection.task_intent === 'writing' && projection.result.kind === 'writing') ||
+      (projection.task_intent === 'artwork' && projection.result.kind === 'artwork')
+    ) {
+      return {
+        stage: 'promoted',
+        taskIntent: projection.task_intent,
+        result: projection.result.payload,
+      }
+    }
+    throw new Error(i18n.global.t('k12.recognize.jobFailed'))
+  }
+
+  async function restoreImageTask(
     agent: string,
     sourceSession: string | undefined,
     signal?: AbortSignal,
-    onStatus?: (status: GradingJobStatusResp) => void,
-  ): Promise<GradingJobStatusResp | null> {
-    const binding = getGradingJobBinding(sourceSession, agent)
+    onStatus?: ImageTaskStatusObserver,
+  ): Promise<ImageTaskView | null> {
+    const binding = getImageTaskBinding(sourceSession, agent)
     if (!binding) return null
-    // 恢复链路没有客户端猜测终态的固定上限：只要服务端仍是活动态，就继续 GET
-    // 同一 Job，直到服务端给出可投影停点/终态或调用方中止。
-    for (;;) {
+    try {
+      const response = await k12GetImageTask(agent, binding.dispatchId, signal)
       throwIfAborted(signal)
-      let status: GradingJobStatusResp
-      try {
-        status = await k12GetGradingJob(agent, binding.jobId, signal)
-      } catch (error) {
-        const code = httpStatus(error)
-        if (code === 403 || code === 404) {
-          clearGradingJobBinding(sourceSession, agent, binding.jobId)
-          return null
-        }
-        throw error
-      }
-      throwIfAborted(signal)
-      onStatus?.(status)
-
-      if (status.stage === 'outcome_unknown') return status
-      // awaiting_confirmation 与 anchor_state 正交：恢复到 pending 时仍需只读 GET 同一 Job，
-      // 否则界面会永久停在“正在定位”。只有定位已收敛后才交还给确认交互。
-      if (status.stage === 'awaiting_confirmation' && status.anchor_state !== 'pending') {
-        return status
-      }
-      if (
-        status.stage === 'completed' ||
-        status.stage === 'cancelled' ||
-        status.stage === 'failed_terminal' ||
-        // failed_retryable 需要显式 retry 交互；本轮未批准恢复页增加该操作，故不能保留
-        // 一个每次刷新都打开、随后静默关闭的幽灵绑定。
-        status.stage === 'failed_retryable'
-      ) {
-        clearGradingJobBinding(sourceSession, agent, binding.jobId)
+      onStatus?.(response.dispatch)
+      const dispatch = readyForTaskShell(response.dispatch)
+        ? response.dispatch
+        : await continuePollingImageTask(
+            agent,
+            binding.dispatchId,
+            readyForTaskShell,
+            JOB_POLL_INTERVAL_MS,
+            signal,
+            onStatus,
+          )
+      return imageTaskView(dispatch)
+    } catch (error) {
+      const code = httpStatus(error)
+      if (code === 403 || code === 404) {
+        clearImageTaskBinding(sourceSession, agent, binding.dispatchId)
         return null
       }
-      await waitForPoll(JOB_POLL_INTERVAL_MS, signal)
+      throw error
     }
   }
 
@@ -628,8 +845,11 @@ export const useK12Store = defineStore('k12', () => {
     reportError,
     accumulationError,
     loadMistakes,
+    calibrateMistakes,
     markMastered,
     deleteMistake,
+    archiveMistake,
+    restoreMistake,
     loadTutoringTips,
     addGrounding,
     loadReport,
@@ -637,11 +857,14 @@ export const useK12Store = defineStore('k12', () => {
     grade,
     recordMistake,
     solve,
-    recognizePhotoJob,
-    waitForPhotoJobAnchor,
-    confirmPhotoJob,
-    gradePhotoJob,
-    restorePhotoJob,
+    dispatchImageTask,
+    pollImageTask,
+    waitForImageTaskHomeworkAnchor,
+    confirmImageTask,
+    retryImageTask,
+    cancelImageTask,
+    completeImageTask,
+    restoreImageTask,
     coldStart,
     tutorTurn,
     setupAutomation,

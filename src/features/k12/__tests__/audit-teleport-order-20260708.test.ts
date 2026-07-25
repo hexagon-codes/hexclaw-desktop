@@ -91,11 +91,9 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
   })
   afterEach(() => warnSpy.mockRestore())
 
-  // 回归锁（BUG-20260708 修复后）：增强组件渲染在锚点之前，Teleport 加 defer 后，
-  // 仍在用的 Teleport（桥接条/识题按钮）能正确到达锚点、无 "Failed to locate Teleport target" 警告。
-  // BUG-20260709：composer chips 已放弃 Teleport 改数据流上交（update:composerChips → ChatInput
-  // 盒内渲染），此处锁「chips 不再落任何锚点」防旧方案回潮。
-  it('真实顺序下 defer Teleport：桥接到达锚点、chips 不再走 Teleport、无定位失败警告', async () => {
+  // composer chips 已改为数据流上交；手动识题与永久能力推广桥均已退役。
+  // 此处锁定真实挂载顺序下三个旧 Teleport 入口都不会回潮，也没有定位失败警告。
+  it('真实顺序下：已退役入口不再走 Teleport，且无定位失败警告', async () => {
     const w = mount(ChatViewLike, {
       global: { plugins: [createPinia(), i18n()], stubs: { MarkdownRenderer: true } },
       attachTo: document.body,
@@ -120,7 +118,7 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
     )
 
     expect(warnedTeleport).toBe(false) // defer 后不再"定位失败"
-    expect(bridgeInFooter).toBe(true) // 桥接条到达页脚锚点
+    expect(bridgeInFooter).toBe(false) // 永久能力推广桥已退役
     expect(recognizeInActions).toBe(false) // 手动识题按钮已删（BUG-20260711-E：识题=图片自动改道，原型「零手动按钮」）
     expect(chipsInComposer).toBe(false) // chips 已改数据流上交，不得再落锚点（BUG-20260709）
     w.unmount()

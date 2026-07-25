@@ -148,14 +148,15 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(anchor?.querySelector('[data-testid="k12-composer-chips"]') ?? null).toBeNull()
   })
 
-  it('辅导 tab：扩展桥 Teleport 到会话页脚', () => {
+  it('辅导 tab：不再渲染永久能力推广行或通用能力入口', () => {
     render()
     const footer = document.getElementById('hc-chat-scenario-footer')!
-    expect(footer.querySelector('.k12enh-bridge')).toBeTruthy()
-    expect(footer.textContent).toContain('我不只会辅导')
+    expect(footer.querySelector('.k12enh-bridge')).toBeFalsy()
+    expect(footer.querySelector('[data-testid="k12-general-capabilities"]')).toBeFalsy()
+    expect(footer.textContent).not.toContain('我不只会辅导')
   })
 
-  it('切学习档案 tab → 辅导扩展桥消失', async () => {
+  it('切学习档案 tab → 不产生已退役的辅导扩展桥', async () => {
     const w = render()
     await w
       .findAll('.k12enh-seg button')
@@ -194,15 +195,27 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(
       assistant?.querySelector('.k12enh-tutor__bubble [data-testid="recognize-guard"]'),
     ).toBeTruthy()
+    expect(
+      document.querySelectorAll(
+        '#hc-chat-scenario-inline [data-testid="k12-photo-assistant-message"] [data-testid="recognize-close"]',
+      ),
+    ).toHaveLength(1)
     const inlineEvents = w.emitted('update:inlineActive') ?? []
     expect(inlineEvents[inlineEvents.length - 1]).toEqual([true])
 
-    document
-      .querySelector<HTMLElement>('#hc-chat-scenario-inline [data-testid="recognize-close"]')
-      ?.click()
+    const taskToggle = document.querySelector<HTMLElement>(
+      '#hc-chat-scenario-inline [data-testid="recognize-close"]',
+    )!
+    taskToggle.click()
     await flushPromises()
-    const closedInlineEvents = w.emitted('update:inlineActive') ?? []
-    expect(closedInlineEvents[closedInlineEvents.length - 1]).toEqual([false])
+    const collapsedGuard = document.querySelector<HTMLElement>(
+      '#hc-chat-scenario-inline [data-testid="recognize-guard"]',
+    )
+    expect(collapsedGuard?.classList.contains('rec-panel--collapsed')).toBe(true)
+    expect(taskToggle.getAttribute('aria-label')).toBe('展开任务')
+    // 收起保留同一消息与后台任务，因此父层 inline slot 仍处于活动态。
+    const collapsedInlineEvents = w.emitted('update:inlineActive') ?? []
+    expect(collapsedInlineEvents[collapsedInlineEvents.length - 1]).toEqual([true])
   })
 
   it('切换实例（agentId 变）→ 回到辅导 tab（多孩结构隔离）', async () => {
@@ -245,5 +258,57 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     ).toBeFalsy()
     const imageEvents = w.emitted('update:composerImage')
     expect(imageEvents?.[imageEvents.length - 1]).toEqual([''])
+  })
+
+  it('BUG-20260724-003 失败面板显式重试把不可变原图事实上交 shell 创建新 attempt', async () => {
+    const attachment = {
+      type: 'image' as const,
+      name: 'homework.png',
+      mime: 'image/png',
+      data: 'Zm9v',
+    }
+    const originalAttempt = {
+      dataUrl: 'data:image/png;base64,Zm9v',
+      attachment,
+      requestId: 'message-old-spark',
+      route: {
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.3-codex-spark',
+        capability: 'vision' as const,
+      },
+    }
+    const w = mount(K12ChatEnhancement, {
+      props: {
+        agentId: 'ming',
+        agentName: '小明的辅导老师',
+        metadata: { 'k12.grade_term': '五年级上' },
+        descriptor: K12_VIEW_DESCRIPTOR,
+        composerImage: originalAttempt,
+      },
+      global: {
+        plugins: [createPinia(), i18n()],
+        stubs: {
+          MarkdownRenderer: true,
+          RecognizeGuardPanel: {
+            name: 'RecognizeGuardPanel',
+            emits: ['retry'],
+            template: `<button
+              type="button"
+              data-testid="failed-attempt-retry"
+              @click="$emit('retry')"
+            />`,
+          },
+        },
+      },
+      attachTo: document.body,
+    })
+    await flushPromises()
+
+    document
+      .querySelector<HTMLButtonElement>('[data-testid="failed-attempt-retry"]')!
+      .click()
+    await flushPromises()
+
+    expect(w.emitted('scenarioImageAttempt')).toEqual([[originalAttempt]])
   })
 })

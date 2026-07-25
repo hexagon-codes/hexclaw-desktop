@@ -35,7 +35,7 @@ function render(agentId = 'mingming') {
   return mount(TutoringTipsPanel, {
     props: {
       agentId,
-      gradingJobId: `job-${agentId}`,
+      dispatchId: `dispatch-${agentId}`,
       sessionId: 'session-1',
       grade: '五年级上',
       subject: '数学',
@@ -87,7 +87,7 @@ describe('TutoringTipsPanel 教材上传闭环', () => {
     expect(h.tutoringTips).toHaveBeenCalledWith(
       {
         agent: 'mingming',
-        grading_job_id: 'job-mingming',
+        dispatch_id: 'dispatch-mingming',
       },
       expect.any(AbortSignal),
     )
@@ -108,7 +108,7 @@ describe('TutoringTipsPanel 教材上传闭环', () => {
     Object.defineProperty(input.element, 'files', { configurable: true, value: [file] })
     await input.trigger('change')
     await flushPromises()
-    await w.setProps({ agentId: 'child-b', gradingJobId: 'job-child-b' })
+    await w.setProps({ agentId: 'child-b', dispatchId: 'dispatch-child-b' })
     await flushPromises()
     const tutoringTipsCallsAfterSwitch = h.tutoringTips.mock.calls.length
     resolveAdd({ ok: true })

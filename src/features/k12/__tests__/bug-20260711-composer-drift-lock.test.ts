@@ -28,23 +28,41 @@ vi.mock('@/api/k12', () => ({
   k12MarkMastered: vi.fn(),
   k12TutoringTips: vi.fn().mockResolvedValue({ knowledge_points: [], sections: [] }),
   k12Grade: vi.fn(),
-  k12CreateGradingJob: vi.fn().mockResolvedValue({
-    created: true,
-    job: { job_id: 'job-1', stage: 'queued', retryable: false },
+  k12UploadAsset: vi.fn().mockResolvedValue({
+    asset_id: 'asset://ming/photo.png',
+    size: 3,
   }),
-  k12GetGradingJob: vi.fn().mockResolvedValue({
-    job_id: 'job-1',
-    stage: 'awaiting_confirmation',
-    confirmation_state: 'pending',
-    anchor_state: 'located',
-    job: { job_id: 'job-1', stage: 'awaiting_confirmation' },
-    recognition: {
-      questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'] }],
-      subject: '',
+  k12CreateImageTask: vi.fn().mockResolvedValue({
+    created: true,
+    dispatch: {
+      dispatch_id: 'dispatch-1',
+      task_intent: 'completed_homework',
+      status: 'routed',
+      intent_evidence: ['answer_regions_present'],
+      intent_confidence: 0.99,
+      confirmation_candidates: [],
+      target: { type: 'homework_submission', id: 'submission-1' },
+      target_projection: {
+        kind: 'homework',
+        stage: 'awaiting_confirmation',
+        confirmation_state: 'pending',
+        anchor_state: 'located',
+        recognition: {
+          questions: [{ question: '3.8×3', knowledge_points: ['小数乘法'], answer_state: 'blank' }],
+          subject: '',
+        },
+      },
+      progress: { operation: 'homework', state: 'awaiting_confirmation' },
+      version: 1,
+      created_at: 1,
+      updated_at: 1,
     },
   }),
-  k12ConfirmGradingJob: vi.fn(),
-  k12RetryGradingJob: vi.fn(),
+  k12GetImageTask: vi.fn(),
+  k12GetImageTaskResult: vi.fn(),
+  k12ConfirmImageTask: vi.fn(),
+  k12RetryImageTask: vi.fn(),
+  k12CancelImageTask: vi.fn(),
   k12ColdStart: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
@@ -100,6 +118,7 @@ function renderEnh(extra: Record<string, unknown> = {}) {
     props: {
       agentId: 'ming',
       agentName: '小明的辅导老师',
+      sessionId: 'session-1',
       metadata: { 'k12.grade_term': '五年级上' },
       descriptor: K12_VIEW_DESCRIPTOR,
       ...extra,
@@ -148,14 +167,25 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
     expect(w.emitted('update:composerImage')?.some((e) => e[0] === '')).toBe(true)
   })
 
-  it('自动打开的护栏可关闭（头部 ✕）——删手动 toggle 后不能变成关不掉的面板', async () => {
+  it('自动打开的任务壳可收起并原位恢复（头部 ✕ 不取消后台任务）', async () => {
     const w = renderEnh()
     await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
     await flushPromises()
-    expect(recognizePanel(w).exists()).toBe(true)
-    await recognizePanel(w).find('[data-testid="recognize-close"]').trigger('click')
+    const panel = recognizePanel(w)
+    expect(panel.exists()).toBe(true)
+    const toggle = panel.find('[data-testid="recognize-close"]')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
+
+    await toggle.trigger('click')
     await flushPromises()
-    expect(recognizePanel(w).exists()).toBe(false)
+    expect(recognizePanel(w).exists()).toBe(true)
+    expect(recognizePanel(w).classes()).toContain('rec-panel--collapsed')
+    expect(toggle.attributes('aria-expanded')).toBe('false')
+
+    await toggle.trigger('click')
+    await flushPromises()
+    expect(recognizePanel(w).classes()).not.toContain('rec-panel--collapsed')
+    expect(toggle.attributes('aria-expanded')).toBe('true')
   })
 
   it('★麦克风常驻：语音通道不可用（voiceSupported=false）时按钮仍渲染（原型 composer 固定动作行）', async () => {
@@ -181,9 +211,9 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
       '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
-  it('★识题后切 records 再切回 chat：结果仍在、GradingJob 只创建一次（真机取证：曾重新「正在识题分题」）', async () => {
-    const { k12CreateGradingJob } = await import('@/api/k12')
-    const recognizeMock = k12CreateGradingJob as unknown as ReturnType<typeof vi.fn>
+  it('★识题后切 records 再切回 chat：结果仍在、图片任务只创建一次（真机取证：曾重新「正在识题分题」）', async () => {
+    const { k12CreateImageTask } = await import('@/api/k12')
+    const recognizeMock = k12CreateImageTask as unknown as ReturnType<typeof vi.fn>
     recognizeMock.mockClear()
 
     const w = renderEnh()

@@ -249,8 +249,9 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     expect(hero.text()).toContain('英语 1')
     expect(hero.text()).toContain('趋势 ↑ 在进步')
     expect(hero.find('[data-testid="build-review-set"]').exists()).toBe(false)
-    // 后端尚无 archive command；不得拿数据删除或 mark-mastered 冒充“不再复习”。
-    expect(hero.text()).not.toContain('不再复习')
+    // BUG-017 已补正式 CAS archive/restore；周队列可直接软归档，但不弹删除确认。
+    expect(hero.findAll('[data-testid^="mistake-archive-"]')).toHaveLength(2)
+    expect(hero.text()).toContain('不再复习')
   })
 
   it('全部错题显示结果数，并同时支持学科与状态筛选', async () => {

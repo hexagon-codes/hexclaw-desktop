@@ -10,6 +10,9 @@ import type { PracticeSetDTO, PracticeItemDTO } from '@/api/k12'
 const h = vi.hoisted(() => ({
   listSpy: vi.fn(),
   finalizeSpy: vi.fn(),
+  deliveryGetSpy: vi.fn(),
+  deliveryRetrySpy: vi.fn(),
+  deliveryQuerySpy: vi.fn(),
   removeSpy: vi.fn(),
   advanceSpy: vi.fn(),
   cancelSpy: vi.fn(),
@@ -36,6 +39,9 @@ vi.mock('@/api/k12', () => ({
   k12ListPracticeSets: (agent: string, status?: string) => h.listSpy(agent, status),
   k12FinalizePracticeSet: (a: string, id: string, via: string, target?: string) =>
     h.finalizeSpy(a, id, via, target),
+  k12GetDeliveryBatch: (...args: unknown[]) => h.deliveryGetSpy(...args),
+  k12RetryDeliveryBatch: (...args: unknown[]) => h.deliveryRetrySpy(...args),
+  k12QueryDeliveryBatch: (...args: unknown[]) => h.deliveryQuerySpy(...args),
   k12RemoveFromBasket: (a: string, id: string, itemId: string) => h.removeSpy(a, id, itemId),
   k12AdvancePracticeSet: (a: string, id: string, step: string) => h.advanceSpy(a, id, step),
   k12CancelPracticeSet: (a: string, id: string) => h.cancelSpy(a, id),
@@ -168,6 +174,9 @@ beforeEach(() => {
       set: historySet({ status: 'assigned', status_label: '待完成' }),
       skipped_blocked_count: 2,
     })
+  h.deliveryGetSpy.mockReset()
+  h.deliveryRetrySpy.mockReset()
+  h.deliveryQuerySpy.mockReset()
   h.removeSpy.mockReset().mockResolvedValue(basket([]))
   h.advanceSpy.mockReset().mockResolvedValue(historySet())
   h.cancelSpy
@@ -241,6 +250,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   document.body.innerHTML = ''
   vi.restoreAllMocks()
 })
@@ -527,25 +537,75 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(w.find('[data-testid="ps-finalize-print"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('发送端只返回 pending → 明示待投递，禁止 toast 虚报发送成功', async () => {
+  it('发送练习集不传目标；unknown 只查原批次并仅在原按钮投影状态', async () => {
+    vi.useFakeTimers()
     h.listSpy.mockResolvedValue({ items: [basket([item('m1', '题', '数学', 'verified')])] })
+    const receipt = {
+      delivery_id: 'delivery-1',
+      batch_id: 'batch-1',
+      batch_ordinal: 0,
+      agent_name: 'k12-xiaoming',
+      object_kind: 'practice_set',
+      object_id: 'basket1',
+      binding_id: 'binding-1',
+      target: { platform: 'dingtalk', chat_id: 'chat-1' },
+      status: 'outcome_unknown',
+      dedupe_key: 'child-1',
+      payload_digest: 'sha256:payload',
+      payload_json: '{}',
+      render_manifest_json: '{}',
+      attempt: 1,
+      created_at: 1,
+      updated_at: 1,
+    }
     h.finalizeSpy.mockResolvedValue({
       set: historySet({
         status: 'assigned',
         status_label: '待完成',
         delivery_status: 'pending',
-        delivery_target: '手机私聊',
+        delivery_batch_id: 'batch-1',
       }),
       skipped_blocked_count: 0,
-      delivery_note: '卷已固化，投递待执行',
+      delivery_batch: {
+        batch_id: 'batch-1',
+        agent_name: 'k12-xiaoming',
+        object_kind: 'practice_set',
+        object_id: 'basket1',
+        dedupe_key: 'batch-1',
+        content_digest: 'sha256:content',
+        status: 'outcome_unknown',
+        receipts: [receipt],
+        created_at: 1,
+        updated_at: 1,
+      },
+    })
+    h.deliveryQuerySpy.mockResolvedValue({
+      batch_id: 'batch-1',
+      agent_name: 'k12-xiaoming',
+      object_kind: 'practice_set',
+      object_id: 'basket1',
+      dedupe_key: 'batch-1',
+      content_digest: 'sha256:content',
+      status: 'delivered',
+      receipts: [{ ...receipt, status: 'delivered' }],
+      created_at: 1,
+      updated_at: 2,
     })
     const w = render()
     await flushPromises()
     await w.find('[data-testid="ps-finalize-send"]').trigger('click')
     await flushPromises()
 
-    expect(h.toastInfo).toHaveBeenCalledWith('卷已固化，投递待执行')
+    expect(h.finalizeSpy).toHaveBeenCalledWith('k12-xiaoming', 'basket1', 'send', undefined)
+    expect(w.find('[data-testid="ps-finalize-send"]').text()).toBe('发送中…')
+    expect(w.text()).not.toMatch(/选择.*(钉钉|飞书|接收人|发送目标)/)
+    await vi.runOnlyPendingTimersAsync()
+    await flushPromises()
+    expect(h.deliveryQuerySpy).toHaveBeenCalledWith('k12-xiaoming', 'batch-1')
+    expect(w.find('[data-testid="ps-finalize-send"]').text()).toBe('发送成功')
     expect(h.toastSuccess).not.toHaveBeenCalled()
+    expect(h.toastInfo).not.toHaveBeenCalled()
+    vi.useRealTimers()
   })
 
   it('全阻断篮 → 固化禁用并提示', async () => {

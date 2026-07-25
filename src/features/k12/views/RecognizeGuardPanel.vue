@@ -2,18 +2,18 @@
 /**
  * 拍照识题回显护栏面板（#1 · 原型 app.html #chatTutorView 的信任链上游兜底，PRD §3.2.5）。
  *
- * 流程（2026-07-18 桌面入口迁移到统一 GradingJob，§6.7/§6.15）：作业图片 base64 →
- * store.recognizePhotoJob 创建 Job（后端异步识别+锚点并行增强）→ 轮询到确认停点回显分题 →
- * **家长核对回显「我读到的是…对吗？」✓读对/✏️读错**（OCR 低置信度必核对）→ 逐题填孩子作答 →
- * 「批改整张作业」= store.gradePhotoJob 确认修正 + 轮询到 completed 取逐题结果；
- * 单题补批/空白题求解仍走直连 store.grade / store.solve（保留的单点能力）。
+ * 流程：作业图片先固化 Asset，再由 store.dispatchImageTask 创建唯一 ImageTaskDispatch →
+ * 服务端分类并推进内部目标链，前端只消费 facade 的公开停点与终态结果 →
+ * 清晰内容自动推进，仅在 OCR 证据冲突时让家长核对并冻结修正 →
+ * store.completeImageTask 读取同一 dispatch 的判别式结果。
  * 无年级时（冷启动首拍）据识出的知识点倒查课标推断年级建档（#3，store.coldStart）。
  *
- * 本层只做识题回显 + 批改触发；题干正误由家长核对护栏兜底，答案对错由后端 solve 验算链裁决，不造答案。
+ * 本层只做任务进度、风险确认与结果投影；不暴露逐题批改/求解等内部目标操作。
  */
-import { ref, computed, nextTick, onBeforeUnmount, onMounted, watch } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { nanoid } from 'nanoid'
 import { useI18n } from 'vue-i18n'
-import { useK12Store } from '../store'
+import { useK12Store, type ImageTaskView } from '../store'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
@@ -27,7 +27,11 @@ import type {
   RecognizedQuestion,
   BBox,
   GradingQuestionCorrection,
-  GradingJobStatusResp,
+  ImageTaskDispatchDTO,
+  ImageTaskCreativeProjectionDTO,
+  ImageTaskCreativeResultPayload,
+  ImageTaskIntent,
+  ParentTeachingGuideDTO,
   PhotoJobResult,
   ProblemKind,
   OCRConfirmationReason,
@@ -49,15 +53,30 @@ const props = defineProps<{
   initialImage?: string
   /** 会话显式选择的视觉路由请求；服务端按能力目录校验后才冻结到 Job。 */
   modelRoute?: ScenarioImageModelRoute
+  /** §4.10 desktop request_id，与本次图片用户消息 ID 同源。 */
+  requestId?: string
   /** 当前通用会话稳定 ID：只用于后端 source_session 与最小 Job 绑定恢复。 */
   sessionId?: string
+  /** 当前图片消息的可选意图提示；仅作为分类证据，不替代服务端裁决。 */
+  messageIntent?: string
 }>()
 // close：面板自动打开（图片改道）后由头部 ✕ 收起——手动 toggle 已删（BUG-20260711-E），
 // 收起手段必须内聚在面板自身。
-const emit = defineEmits<{ (e: 'close'): void }>()
+const emit = defineEmits<{
+  (e: 'close'): void
+  /**
+   * 用户主动重试必须由会话 shell 创建新的消息/request_id，并重新冻结当前模型路由。
+   * 组件绝不能把旧 Job 的 request_id 原地重放，否则模型改绑后会撞上不可变调用账本。
+   */
+  (e: 'retry'): void
+}>()
 
 const { t } = useI18n()
 const store = useK12Store()
+// Shell 正常路径传入与持久消息同源的 request_id；独立/兼容挂载也只生成一次请求身份，
+// 绝不退回“同图同 key”的内容哈希。
+const generatedRequestId = nanoid(12)
+const effectiveRequestId = computed(() => props.requestId?.trim() || generatedRequestId)
 
 /** 一道识出的题在护栏里的可编辑本地状态 */
 interface GuardRow {
@@ -77,14 +96,14 @@ interface GuardRow {
   confirmationRequired: boolean
   confirmationReasons: OCRConfirmationReason[]
   recognitionConfirmed: boolean
-  grading: boolean
-  solving: boolean
   verify: VerifyResult | null
   recorded: boolean
   recordDeduplicated: boolean
   solution: string
   wrongStep: string
   errorCause: string
+  /** completed_homework 错题的完整家长讲法；正确题必须为空。 */
+  parentGuide: ParentTeachingGuideDTO | null
   // 独立锚定阶段回收的学生作答区域归一化边界框（缺失/非法=null → 该题降级纯文字批改，不叠加）。
   bbox: BBox | null
   // graded=true 表示本题走了「批改」（已答卷路径），供原图叠加只画已批改题的 ✓/✗；solve（空白题求解）不叠加。
@@ -98,6 +117,21 @@ interface GuardRow {
 }
 
 const imageB64 = ref('')
+// 服务端不可变批注图；为空时 PhotoGradeOverlay 才使用原图+bbox 的兼容叠加。
+const annotatedImage = ref('')
+/**
+ * K12-INV-060 has a distinct, parent-facing result projection. It is only
+ * populated from the typed completed-job contract; rows remain the legacy
+ * completed-homework/recognition projection and are not repurposed as a
+ * blank-worksheet UI.
+ */
+interface BlankWorksheetGuideItem {
+  problemId: string
+  question: string
+  guide: ParentTeachingGuideDTO
+}
+const blankWorksheetGuide = ref<BlankWorksheetGuideItem[]>([])
+const hasBlankWorksheetGuide = computed(() => blankWorksheetGuide.value.length > 0)
 // BUG-20260712：选了文件/贴了图片 data URL 时显示缩略图预览，不再把 base64 原文糊在框里（UX 糙）。
 const isImageData = computed(() => imageB64.value.trim().startsWith('data:image'))
 const rows = ref<GuardRow[]>([])
@@ -127,13 +161,38 @@ const activeTextbook = computed(() => {
 })
 const batchWorking = ref(false)
 const confirming = ref(false)
-// 当前照片对应的统一 GradingJob（§6.7）：识题产物与整卷批改都挂在它上面。
-const currentJobId = ref('')
+// Desktop 只持有 facade identity/version；服务端内部目标身份不泄露到客户端。
+const currentDispatchId = ref('')
+const currentDispatchVersion = ref(0)
+const currentTaskIntent = ref<ImageTaskIntent>('unknown')
+interface CreativeConflictRow {
+  segmentId: string
+  rawText: string
+  editedText: string
+  reason: string
+  confirmed: boolean
+  editing: boolean
+}
+const creativeProjection = ref<ImageTaskCreativeProjectionDTO | null>(null)
+const creativeConflicts = ref<CreativeConflictRow[]>([])
+const creativeResult = ref<{
+  taskIntent: 'writing' | 'artwork'
+  payload: ImageTaskCreativeResultPayload
+} | null>(null)
+const collapsed = ref(false)
+const taskShellTitle = computed(() => {
+  if (currentTaskIntent.value === 'completed_homework') return '已作答作业'
+  if (currentTaskIntent.value === 'blank_worksheet') return '空白卷 · 家长讲题指南'
+  if (currentTaskIntent.value === 'writing') return '语文写作'
+  if (currentTaskIntent.value === 'artwork') return '美术作品'
+  return '图片任务'
+})
+const unconfirmedCreativeConflictCount = computed(
+  () => creativeConflicts.value.filter((conflict) => !conflict.confirmed).length,
+)
+// recovering 仅表示同一个图片任务正在恢复；不是终态，也不提供二次操作入口。
 const outcomeUnknown = ref(false)
 const restoredFromBinding = ref(false)
-const outcomeDialogOpen = ref(false)
-const outcomeDialogRef = ref<HTMLElement>()
-let outcomeReturnFocus: HTMLElement | null = null
 let agentGeneration = 0
 let recognitionGeneration = 0
 let recognitionAbort: AbortController | null = null
@@ -147,57 +206,14 @@ const subjectOptions = computed(() =>
   })),
 )
 
-function enterOutcomeUnknown(jobId: string) {
-  currentJobId.value = jobId
+function enterOutcomeUnknown(dispatchId: string) {
+  currentDispatchId.value = dispatchId
   outcomeUnknown.value = true
-  batchWorking.value = false
+  batchWorking.value = true
   recognizing.value = false
   anchoring.value = false
   recognitionFailed.value = false
   errMsg.value = ''
-}
-
-function openOutcomeDialog(event?: Event) {
-  const trigger = event?.currentTarget
-  outcomeReturnFocus = trigger instanceof HTMLElement ? trigger : null
-  outcomeDialogOpen.value = true
-  void nextTick(() => outcomeDialogRef.value?.focus())
-}
-
-function closeOutcomeDialog(restoreFocus = true) {
-  const target = outcomeReturnFocus
-  outcomeDialogOpen.value = false
-  outcomeReturnFocus = null
-  if (restoreFocus && target?.isConnected) void nextTick(() => target.focus())
-}
-
-function trapOutcomeFocus(event: KeyboardEvent) {
-  if (event.key !== 'Tab' || !outcomeDialogRef.value) return
-  const focusable = [
-    ...outcomeDialogRef.value.querySelectorAll<HTMLElement>(
-      'button:not([disabled]),[href],input:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])',
-    ),
-  ]
-  if (!focusable.length) {
-    event.preventDefault()
-    outcomeDialogRef.value.focus()
-    return
-  }
-  const first = focusable[0]!
-  const last = focusable[focusable.length - 1]!
-  if (
-    event.shiftKey &&
-    (document.activeElement === first || document.activeElement === outcomeDialogRef.value)
-  ) {
-    event.preventDefault()
-    last.focus()
-  } else if (
-    !event.shiftKey &&
-    (document.activeElement === last || document.activeElement === outcomeDialogRef.value)
-  ) {
-    event.preventDefault()
-    first.focus()
-  }
 }
 
 // 冷启动倒查建档（#3）：仅在无年级时可用（识题产出知识点后倒查推断）
@@ -235,31 +251,82 @@ const overlayMarks = computed(() =>
       // solution 可能是整段 Markdown 推导；原图上只显示简短最终答案。
       correctAnswer: extractBriefFinalAnswer(r.solution),
       errorCause: r.errorCause,
+      parentGuide: r.parentGuide,
     })),
 )
-// 仅在有作业原图（data URL）且至少一题已批改时展示叠加图。
-const showOverlay = computed(() => isImageData.value && overlayMarks.value.length > 0)
-const answerPendingIndexes = computed(() =>
-  rows.value
-    .map((row, i) => ({ row, i }))
-    .filter(
-      ({ row }) =>
-        isAnswerable(row) &&
-        row.problem.trim() &&
-        row.answerState === 'present' &&
-        row.studentAnswer.trim() &&
-        !row.graded,
+
+const SAFE_ANNOTATED_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp'])
+
+/** 后端 wire 的原始 base64 → WebView 可直接加载的安全 data URL；非法值严格回退 bbox 叠加。 */
+function annotatedImageDataURL(value: PhotoJobResult['annotated_image']): string {
+  const mime = value?.mime.trim().toLowerCase() ?? ''
+  const payload = value?.data_base64.replace(/\s/g, '') ?? ''
+  if (
+    !SAFE_ANNOTATED_IMAGE_MIMES.has(mime) ||
+    !payload ||
+    payload.length % 4 === 1 ||
+    !/^[A-Za-z0-9+/]*={0,2}$/.test(payload)
+  ) {
+    return ''
+  }
+  return `data:${mime};base64,${payload}`
+}
+
+function hasGuideTextList(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === 'string' && entry.trim())
+  )
+}
+
+/** Accept the exact seven-field guide shape before switching away from grade UI. */
+function isParentTeachingGuide(value: unknown): value is ParentTeachingGuideDTO {
+  if (!value || typeof value !== 'object') return false
+  const guide = value as Partial<ParentTeachingGuideDTO>
+  return (
+    typeof guide.answer === 'string' &&
+    !!guide.answer.trim() &&
+    hasGuideTextList(guide.full_solution_steps) &&
+    typeof guide.grade_level_method === 'string' &&
+    !!guide.grade_level_method.trim() &&
+    hasGuideTextList(guide.likely_mistakes) &&
+    hasGuideTextList(guide.parent_teaching_sequence) &&
+    hasGuideTextList(guide.follow_up_questions) &&
+    typeof guide.checking_method === 'string' &&
+    !!guide.checking_method.trim()
+  )
+}
+
+function parentTeachingGuideItems(result: PhotoJobResult): BlankWorksheetGuideItem[] {
+  if (result.task_intent !== 'blank_worksheet') return []
+  if (
+    result.result_surface !== 'parent_teaching_guide' ||
+    result.items.length === 0 ||
+    result.items.some(
+      (item) =>
+        item.status !== 'blank_solved' ||
+        item.result_kind !== 'parent_teaching_guide' ||
+        !isParentTeachingGuide(item.parent_guide),
     )
-    .map(({ i }) => i),
-)
-const blankPendingIndexes = computed(() =>
-  rows.value
-    .map((row, i) => ({ row, i }))
-    .filter(
-      ({ row }) =>
-        isAnswerable(row) && row.problem.trim() && row.answerState === 'blank' && !row.solution,
-    )
-    .map(({ i }) => i),
+  ) {
+    // A whole-sheet guide is one atomic result. Never present a filtered
+    // subset as though the page had been completely solved.
+    throw new Error('invalid blank worksheet parent guide')
+  }
+  return result.items.map((item) => ({
+    problemId: item.question.problem_id ?? '',
+    // The recognized display question is the frozen original-order label.
+    // Canonical Markdown is reserved for formula-bearing body content and
+    // may be a delimiter-free transport form, so never expose it raw here.
+    question: item.question.question || item.question.canonical_markdown || '',
+    guide: item.parent_guide as ParentTeachingGuideDTO,
+  }))
+}
+
+// 新服务优先展示不可变批注图；老服务缺字段时保留原图+bbox 确定性叠加兼容。
+const showOverlay = computed(
+  () => !!annotatedImage.value || (isImageData.value && overlayMarks.value.length > 0),
 )
 const unclearAnswerCount = computed(
   () =>
@@ -267,7 +334,7 @@ const unclearAnswerCount = computed(
       (row) => isAnswerable(row) && row.problem.trim() && row.answerState === 'unclear',
     ).length,
 )
-const answerableRowCount = computed(() => rows.value.filter(isAnswerable).length)
+const riskCount = computed(() => rows.value.filter((row) => row.confirmationRequired).length)
 const unconfirmedRiskCount = computed(
   () => rows.value.filter((row) => row.confirmationRequired && !row.recognitionConfirmed).length,
 )
@@ -297,12 +364,6 @@ function rowLabel(row: GuardRow, index: number): string {
   if (row.problemKind === 'compound_parent') return '公共题干'
   if (row.problemKind === 'subproblem') return row.subproblemNo || String(index + 1)
   return String(index + 1)
-}
-
-function effectiveProblem(row: GuardRow): string {
-  if (row.problemKind !== 'subproblem' || !row.parentProblemId) return row.problem.trim()
-  const parent = rows.value.find((candidate) => candidate.problemId === row.parentProblemId)
-  return [parent?.problem.trim(), row.problem.trim()].filter(Boolean).join('\n\n')
 }
 
 function normalizeAnswerState(question: RecognizedQuestion): AnswerState {
@@ -335,14 +396,13 @@ function guardRowsFromQuestions(questions: RecognizedQuestion[]): GuardRow[] {
     confirmationRequired: question.confirmation_required ?? false,
     confirmationReasons: question.confirmation_reasons ?? [],
     recognitionConfirmed: !(question.confirmation_required ?? false),
-    grading: false,
-    solving: false,
     verify: null,
     recorded: false,
     recordDeduplicated: false,
     solution: '',
     wrongStep: '',
     errorCause: '',
+    parentGuide: null,
     bbox: question.bbox ?? null,
     graded: false,
     verdict: '',
@@ -350,28 +410,103 @@ function guardRowsFromQuestions(questions: RecognizedQuestion[]): GuardRow[] {
   }))
 }
 
-function projectRestoredStatus(status: GradingJobStatusResp) {
-  currentJobId.value = status.job_id
-  restoredFromBinding.value = true
-  recognitionFailed.value = false
-  errMsg.value = ''
+function projectCreativeIntake(projection?: ImageTaskCreativeProjectionDTO) {
+  if (
+    currentTaskIntent.value !== 'writing' ||
+    projection?.work_type !== 'writing' ||
+    projection.status !== 'awaiting_confirmation'
+  ) {
+    creativeProjection.value = projection ?? null
+    creativeConflicts.value = []
+    return
+  }
 
-  const questions = status.recognition?.questions ?? status.job.recognized_questions ?? []
+  const previous = new Map(
+    creativeConflicts.value.map((conflict) => [conflict.segmentId, conflict]),
+  )
+  creativeProjection.value = projection
+  creativeConflicts.value = (projection.conflicts ?? []).map((conflict) => {
+    const prior = previous.get(conflict.segment_id)
+    const source = (conflict.raw_text || conflict.canonical_text || '').trim()
+    return {
+      segmentId: conflict.segment_id,
+      rawText: source,
+      editedText: prior?.editedText ?? (conflict.canonical_text || source).trim(),
+      reason: conflict.reason ?? '',
+      confirmed: prior?.confirmed ?? false,
+      editing: prior?.editing ?? false,
+    }
+  })
+}
+
+function projectImageTaskView(view: ImageTaskView) {
+  currentDispatchId.value = view.dispatchId
+  currentDispatchVersion.value = view.dispatchVersion
+  currentTaskIntent.value = view.taskIntent
+  projectCreativeIntake(view.creative)
+  recognitionFailed.value = view.stage === 'feedback_failed'
+  errMsg.value = recognitionFailed.value ? t('k12.recognize.jobFailed') : ''
+
+  const questions = view.questions
   if (questions.length && !rows.value.length) rows.value = guardRowsFromQuestions(questions)
-  if (!selectedSubject.value && status.recognition?.subject) {
-    selectedSubject.value = status.recognition.subject
+  if (!selectedSubject.value && view.subject) {
+    selectedSubject.value = view.subject
   }
 
   const recognitionStages = ['queued', 'normalizing', 'recognizing']
   recognizing.value =
-    recognitionStages.includes(status.stage) || (status.stage === 'locating' && !rows.value.length)
-  anchoring.value = status.anchor_state === 'pending' && !!rows.value.length
-  anchorWarning.value = status.anchor_state === 'degraded' ? t('k12.recognize.anchorFailed') : ''
-  confirmed.value = status.confirmation_state === 'confirmed'
-  batchWorking.value = ['assessing', 'rendering', 'projecting'].includes(status.stage)
-  outcomeUnknown.value = false
+    recognitionStages.includes(view.stage) || (view.stage === 'locating' && !rows.value.length)
+  anchoring.value = view.anchorState === 'pending' && !!rows.value.length
+  anchorWarning.value = view.anchorState === 'degraded' ? t('k12.recognize.anchorFailed') : ''
+  confirmed.value = view.confirmationState === 'confirmed'
+  outcomeUnknown.value = view.stage === 'recovering'
+  batchWorking.value =
+    outcomeUnknown.value ||
+    ['assessing', 'rendering', 'projecting', 'feedback_pending'].includes(view.stage)
+  if (outcomeUnknown.value) {
+    recognizing.value = false
+    anchoring.value = false
+  }
+}
 
-  if (status.stage === 'outcome_unknown') enterOutcomeUnknown(status.job_id)
+function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
+  currentDispatchId.value = dispatch.dispatch_id
+  currentDispatchVersion.value = dispatch.version
+  currentTaskIntent.value = dispatch.task_intent
+  const projection = dispatch.target_projection
+  if (projection?.kind === 'homework') {
+    projectImageTaskView({
+      dispatchId: dispatch.dispatch_id,
+      dispatchVersion: dispatch.version,
+      taskIntent: dispatch.task_intent,
+      stage: projection.stage,
+      questions: projection.recognition?.questions ?? [],
+      subject: projection.recognition?.subject ?? '',
+      anchorState: projection.anchor_state,
+      confirmationState: projection.confirmation_state,
+      creative: undefined,
+      intentCandidates: dispatch.confirmation_candidates,
+    })
+    return
+  }
+  projectCreativeIntake(projection?.kind === 'creative' ? projection : undefined)
+  const feedbackState =
+    projection?.kind === 'creative' && dispatch.progress.operation === 'promotion'
+      ? dispatch.progress.state
+      : ''
+  recognitionFailed.value =
+    dispatch.status === 'failed' || feedbackState === 'feedback_failed'
+  errMsg.value = recognitionFailed.value ? t('k12.recognize.jobFailed') : ''
+  recognizing.value =
+    dispatch.status === 'routing' ||
+    (projection?.kind === 'creative' && projection.status === 'preparing')
+  outcomeUnknown.value = feedbackState === 'recovering'
+  batchWorking.value =
+    recognizing.value ||
+    outcomeUnknown.value ||
+    feedbackState === 'feedback_pending' ||
+    (projection?.kind === 'creative' &&
+      (projection.status === 'ready' || projection.status === 'awaiting_confirmation'))
 }
 
 function onFile(e: Event) {
@@ -399,6 +534,8 @@ watch(
     recognitionAbort?.abort()
     recognitionAbort = null
     imageB64.value = ''
+    annotatedImage.value = ''
+    blankWorksheetGuide.value = []
     rows.value = []
     recognizing.value = false
     anchoring.value = false
@@ -411,9 +548,14 @@ watch(
     confirming.value = false
     outcomeUnknown.value = false
     restoredFromBinding.value = false
-    closeOutcomeDialog(false)
     selectedSubject.value = ''
-    currentJobId.value = ''
+    currentDispatchId.value = ''
+    currentDispatchVersion.value = 0
+    currentTaskIntent.value = 'unknown'
+    creativeProjection.value = null
+    creativeConflicts.value = []
+    creativeResult.value = null
+    collapsed.value = false
     coldStarting.value = false
     coldStartResult.value = null
   },
@@ -424,14 +566,15 @@ watch(
   () => props.initialImage,
   (img) => {
     if (!img || !img.trim()) return
+    collapsed.value = false
     imageB64.value = img
     void run()
   },
   { immediate: true },
 )
 
-// 刷新/重启恢复：没有新图片时，只按 session+agent 的最小绑定 GET 同一 Job。
-// outcome_unknown 原位恢复；确定终态/非法绑定由 store 清理后关闭这条空的场景消息。
+// 刷新/重启恢复：没有新图片时，只按 session+agent 的最小绑定 GET 同一 dispatch。
+// recovering 仅投影作业链的公开瞬时恢复进度；终态只从同一 facade result 读取。
 onMounted(async () => {
   if (props.initialImage?.trim() || !props.sessionId?.trim()) return
   const generation = agentGeneration
@@ -439,22 +582,27 @@ onMounted(async () => {
   restoreAbort = controller
   restoredFromBinding.value = true
   try {
-    const status = await store.restorePhotoJob(
+    const view = await store.restoreImageTask(
       props.agentId,
       props.sessionId,
       controller.signal,
       (snapshot) => {
         if (generation !== agentGeneration || controller.signal.aborted) return
-        projectRestoredStatus(snapshot)
+        projectImageTaskDispatch(snapshot)
       },
     )
     if (generation !== agentGeneration || controller.signal.aborted) return
-    if (!status) {
+    if (!view) {
       restoredFromBinding.value = false
       emit('close')
       return
     }
-    projectRestoredStatus(status)
+    projectImageTaskView(view)
+    if (view.stage === 'completed' || view.stage === 'feedback_ready') {
+      batchWorking.value = true
+      await completeImageTaskFlow()
+      if (generation === agentGeneration && !controller.signal.aborted) batchWorking.value = false
+    }
   } catch (error) {
     if (
       generation !== agentGeneration ||
@@ -481,7 +629,7 @@ async function run() {
   const generation = agentGeneration
   const recognition = ++recognitionGeneration
   const sourceImage = imageB64.value.trim()
-  // “最后一张图获胜”：换图即中止旧轮询；store 会在 Job 已创建时尽力调用 cancel route。
+  // “最后一张图获胜”：换图只中止旧的本地轮询；服务端旧 dispatch 不被隐式取消。
   recognitionAbort?.abort()
   const controller = new AbortController()
   recognitionAbort = controller
@@ -492,48 +640,73 @@ async function run() {
   recognitionFailed.value = false
   outcomeUnknown.value = false
   restoredFromBinding.value = false
-  closeOutcomeDialog(false)
+  annotatedImage.value = ''
+  blankWorksheetGuide.value = []
   confirmed.value = false
   correctionMode.value = false
   coldStartResult.value = null
-  currentJobId.value = ''
+  currentDispatchId.value = ''
+  currentDispatchVersion.value = 0
+  currentTaskIntent.value = 'unknown'
+  creativeProjection.value = null
+  creativeConflicts.value = []
+  creativeResult.value = null
   rows.value = []
   selectedSubject.value = ''
   try {
-    // 桌面入口迁移（§6.7/§6.15）：识题编排改走统一 GradingJob——创建 Job 后后端异步推进
-    // （识别 + 锚点并行增强），前端轮询到确认停点取识别产物回显；护栏交互不变。
-    // 识别失败可重试：同图重跑幂等命中失败 Job 并自动走 retry 端点（store 内实现）。
-    const job = await store.recognizePhotoJob(
-      props.agentId,
-      sourceImage,
+    // 单入口先固化 Asset，再由 /image-tasks 分类；Desktop 不再创建或保存内部 Job identity。
+    const task = await store.dispatchImageTask(
+      {
+        agent: props.agentId,
+        dataUrl: sourceImage,
+        sourceSession: props.sessionId ?? '',
+        sourceRef: effectiveRequestId.value,
+        messageIntent: props.messageIntent,
+        route: props.modelRoute,
+      },
       controller.signal,
-      props.sessionId,
-      props.modelRoute,
+      (snapshot) => {
+        if (generation !== agentGeneration || recognition !== recognitionGeneration) return
+        projectImageTaskDispatch(snapshot)
+      },
     )
     if (generation !== agentGeneration || recognition !== recognitionGeneration) return
-    currentJobId.value = job.jobId
-    if (job.stage === 'outcome_unknown') {
-      enterOutcomeUnknown(job.jobId)
+    projectImageTaskView(task)
+    if (task.stage === 'recovering') {
+      enterOutcomeUnknown(task.dispatchId)
       return
     }
     // Polish-2：识题自动判定整卷学科 → 预填学科下拉，家长不必手选（仍可手动覆盖）。
     // 仅识题判出学科时预填；一科都判不出则保持空，此时 solve/批改按钮仍 gate 空学科需家长手选。
-    if (job.subject) selectedSubject.value = job.subject
-    rows.value = guardRowsFromQuestions(job.questions)
+    if (task.subject) selectedSubject.value = task.subject
+    rows.value = guardRowsFromQuestions(task.questions)
+    // Blank worksheet tasks have already frozen their source facts and completed
+    // the whole-sheet parent guide. Read the same facade result directly; never
+    // route this through the completed-homework confirmation/grade controls.
+    if (task.stage === 'completed' || task.stage === 'feedback_ready') {
+      confirmed.value = true
+      batchWorking.value = true
+      await completeImageTaskFlow()
+      return
+    }
+    // Writing/artwork have their own CreativeWorkIntake lifecycle. They never
+    // enter the homework anchor/recognition path; only the facade can advance
+    // or expose their smallest confirmation conflict.
+    if (task.taskIntent === 'writing' || task.taskIntent === 'artwork') return
     // 锚点与家长确认是正交分支。awaiting_confirmation 只代表识别事实已可回显，
     // 不能据此把 anchor_state=pending 当成最终无坐标；继续后台轮询，且只按稳定 ProblemID 补 geometry。
-    if (job.anchorState === 'pending') {
+    if (task.anchorState === 'pending') {
       recognizing.value = false
       anchoring.value = true
       try {
-        const anchored = await store.waitForPhotoJobAnchor(
+        const anchored = await store.waitForImageTaskHomeworkAnchor(
           props.agentId,
-          job.jobId,
+          task.dispatchId,
           controller.signal,
         )
         if (generation !== agentGeneration || recognition !== recognitionGeneration) return
-        if (anchored.stage === 'outcome_unknown') {
-          enterOutcomeUnknown(job.jobId)
+        if (anchored.stage === 'recovering') {
+          enterOutcomeUnknown(task.dispatchId)
           return
         }
         for (const question of anchored.questions) {
@@ -558,7 +731,7 @@ async function run() {
           anchoring.value = false
         }
       }
-    } else if (job.anchorState === 'degraded') {
+    } else if (task.anchorState === 'degraded') {
       anchorWarning.value = t('k12.recognize.anchorFailed')
     }
   } catch (e) {
@@ -578,16 +751,39 @@ async function run() {
   }
 }
 
-function retryRecognitionStage() {
-  if (!outcomeUnknown.value && !recognizing.value && imageB64.value.trim()) void run()
-}
-
-function syncAnswerState(row: GuardRow) {
-  if (row.studentAnswer.trim()) {
-    row.answerState = 'present'
-  } else if (row.answerState !== 'blank') {
-    // 清空一处已检测到的书写，不代表纸面变成空白；要求家长确认，避免误走自动求解。
-    row.answerState = 'unclear'
+async function retryRecognitionStage() {
+  if (
+    outcomeUnknown.value ||
+    recognizing.value ||
+    !currentDispatchId.value.trim() ||
+    currentDispatchVersion.value < 1
+  ) {
+    return
+  }
+  const generation = agentGeneration
+  const dispatchId = currentDispatchId.value
+  recognitionFailed.value = false
+  errMsg.value = ''
+  batchWorking.value = true
+  try {
+    const view = await store.retryImageTask(
+      props.agentId,
+      dispatchId,
+      currentDispatchVersion.value,
+    )
+    if (generation !== agentGeneration || dispatchId !== currentDispatchId.value) return
+    projectImageTaskView(view)
+    if (view.stage === 'recovering') {
+      enterOutcomeUnknown(dispatchId)
+      return
+    }
+    await completeImageTaskFlow()
+  } catch (error) {
+    if (generation !== agentGeneration || (error as Error).name === 'AbortError') return
+    recognitionFailed.value = true
+    errMsg.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (generation === agentGeneration && !outcomeUnknown.value) batchWorking.value = false
   }
 }
 
@@ -601,21 +797,137 @@ function toggleEdit(row: GuardRow) {
 function startCorrection() {
   if (outcomeUnknown.value || confirming.value) return
   correctionMode.value = true
-  for (const row of rows.value) row.editing = true
+  for (const row of rows.value) row.editing = row.confirmationRequired
 }
 
 function gradingCorrections(): GradingQuestionCorrection[] {
-  return rows.value.map((row, index) => ({
-    index,
-    problem_id: row.problemId || undefined,
-    confirmed: row.recognitionConfirmed,
-    question: row.problem.trim(),
-    canonical_markdown: row.problem.trim(),
-    student_answer: row.studentAnswer.trim(),
-    answer_canonical_markdown: row.studentAnswer.trim(),
-    answer_state: row.answerState,
-    subject: selectedSubject.value || undefined,
-  }))
+  return rows.value.flatMap((row, index) =>
+    row.confirmationRequired
+      ? [
+          {
+            index,
+            problem_id: row.problemId || undefined,
+            confirmed: row.recognitionConfirmed,
+            question: row.problem.trim(),
+            canonical_markdown: row.problem.trim(),
+            student_answer: row.studentAnswer.trim(),
+            answer_canonical_markdown: row.studentAnswer.trim(),
+            answer_state: row.answerState,
+            subject: selectedSubject.value || undefined,
+          },
+        ]
+      : [],
+  )
+}
+
+function creativeFreezeCommand() {
+  const projection = creativeProjection.value
+  if (
+    currentTaskIntent.value !== 'writing' ||
+    projection?.status !== 'awaiting_confirmation' ||
+    !projection.canonical_version ||
+    !projection.canonical_content?.trim() ||
+    !creativeConflicts.value.length
+  ) {
+    return null
+  }
+
+  let canonicalContent = projection.canonical_content.trim()
+  const segmentCorrections: Array<{ segment_id: string; canonical_text: string }> = []
+  for (const conflict of creativeConflicts.value) {
+    const rawText = conflict.rawText.trim()
+    const correctedText = conflict.editedText.trim()
+    if (
+      !conflict.segmentId.trim() ||
+      !rawText ||
+      !correctedText ||
+      canonicalContent.split(rawText).length - 1 !== 1
+    ) {
+      return null
+    }
+    canonicalContent = canonicalContent.replace(rawText, correctedText)
+    segmentCorrections.push({
+      segment_id: conflict.segmentId,
+      canonical_text: correctedText,
+    })
+  }
+  return {
+    action: 'freeze_ocr' as const,
+    canonical_version: projection.canonical_version,
+    canonical_content: canonicalContent,
+    segment_corrections: segmentCorrections,
+  }
+}
+
+const canConfirmCreative = computed(
+  () =>
+    !outcomeUnknown.value &&
+    !confirming.value &&
+    !!props.agentId.trim() &&
+    !!currentDispatchId.value.trim() &&
+    currentDispatchVersion.value > 0 &&
+    unconfirmedCreativeConflictCount.value === 0 &&
+    !!creativeFreezeCommand(),
+)
+
+function toggleCreativeConflictEdit(conflict: CreativeConflictRow) {
+  if (outcomeUnknown.value || confirming.value) return
+  conflict.editing = !conflict.editing
+  conflict.confirmed = false
+}
+
+async function confirmCreativeOCR() {
+  const creative = creativeFreezeCommand()
+  if (!canConfirmCreative.value || !creative) return
+
+  const generation = agentGeneration
+  const dispatchId = currentDispatchId.value
+  confirmationAbort?.abort()
+  const controller = new AbortController()
+  confirmationAbort = controller
+  confirming.value = true
+  errMsg.value = ''
+  try {
+    const view = await store.confirmImageTask(
+      props.agentId,
+      dispatchId,
+      currentDispatchVersion.value,
+      { creative },
+      controller.signal,
+    )
+    if (
+      generation !== agentGeneration ||
+      controller.signal.aborted ||
+      currentDispatchId.value !== dispatchId
+    ) {
+      return
+    }
+    projectImageTaskView(view)
+    if (view.stage === 'recovering') {
+      enterOutcomeUnknown(dispatchId)
+      return
+    }
+    if (view.taskIntent !== 'writing' || view.stage === 'awaiting_confirmation') {
+      throw new Error(t('k12.recognize.jobFailed'))
+    }
+    batchWorking.value = true
+    await completeImageTaskFlow()
+  } catch (error) {
+    if (
+      generation !== agentGeneration ||
+      controller.signal.aborted ||
+      (error as Error).name === 'AbortError'
+    ) {
+      return
+    }
+    errMsg.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    if (confirmationAbort === controller) confirmationAbort = null
+    if (generation === agentGeneration) {
+      confirming.value = false
+      batchWorking.value = false
+    }
+  }
 }
 
 async function confirmAll() {
@@ -624,23 +936,26 @@ async function confirmAll() {
     confirming.value ||
     !props.agentId.trim() ||
     !props.sessionId?.trim() ||
-    !currentJobId.value.trim() ||
+    !currentDispatchId.value.trim() ||
+    currentDispatchVersion.value < 1 ||
     !rows.value.length ||
-    rows.value.some((row) => !row.problem.trim()) ||
+    rows.value.some((row) => row.confirmationRequired && !row.problem.trim()) ||
+    riskCount.value === 0 ||
     unconfirmedRiskCount.value > 0
   )
     return
   const generation = agentGeneration
-  const jobId = currentJobId.value
+  const dispatchId = currentDispatchId.value
   confirmationAbort?.abort()
   const controller = new AbortController()
   confirmationAbort = controller
   confirming.value = true
   errMsg.value = ''
   try {
-    const status = await store.confirmPhotoJob(
+    const view = await store.confirmImageTask(
       props.agentId,
-      jobId,
+      dispatchId,
+      currentDispatchVersion.value,
       {
         subject: selectedSubject.value,
         grade: props.grade ?? '',
@@ -648,18 +963,30 @@ async function confirmAll() {
       },
       controller.signal,
     )
-    if (generation !== agentGeneration || controller.signal.aborted || currentJobId.value !== jobId)
+    if (
+      generation !== agentGeneration ||
+      controller.signal.aborted ||
+      currentDispatchId.value !== dispatchId
+    )
       return
-    if (status.stage === 'outcome_unknown') {
-      enterOutcomeUnknown(jobId)
-      return
+    projectImageTaskView(view)
+    if (view.stage === 'recovering') {
+      enterOutcomeUnknown(dispatchId)
     }
-    if (status.confirmation_state !== 'confirmed') {
+    if (
+      view.stage !== 'recovering' &&
+      view.confirmationState !== 'confirmed'
+    ) {
       throw new Error(t('k12.recognize.jobFailed'))
     }
     for (const row of rows.value) row.editing = false
     correctionMode.value = false
-    confirmed.value = true
+    confirmed.value = view.confirmationState === 'confirmed'
+    // 确认只是同一个 dispatch 的停点，不是第二个用户任务。服务端确认成功后立即继续轮询
+    // assessing→rendering→projecting，并在 completed 时自动展示结果。
+    batchWorking.value = true
+    await completeImageTaskFlow()
+    if (generation === agentGeneration && !controller.signal.aborted) confirmed.value = true
   } catch (error) {
     if (
       generation !== agentGeneration ||
@@ -670,7 +997,10 @@ async function confirmAll() {
     errMsg.value = error instanceof Error ? error.message : String(error)
   } finally {
     if (confirmationAbort === controller) confirmationAbort = null
-    if (generation === agentGeneration) confirming.value = false
+    if (generation === agentGeneration) {
+      confirming.value = false
+      batchWorking.value = false
+    }
   }
 }
 
@@ -691,91 +1021,7 @@ function truncateProblem(problem: string): string {
   return chars.slice(0, CORRECT_SUMMARY_MAX).join('') + '…'
 }
 
-// 命名避开 props.grade（vue/no-dupe-keys：script 顶层标识符与 prop 同名会在模板里撞键）
-async function gradeRow(i: number) {
-  const row = rows.value[i]
-  if (
-    outcomeUnknown.value ||
-    !row ||
-    !isAnswerable(row) ||
-    !row.problem.trim() ||
-    row.answerState !== 'present' ||
-    !row.studentAnswer.trim() ||
-    row.grading ||
-    anchoring.value
-  )
-    return
-  row.grading = true
-  errMsg.value = ''
-  try {
-    const res = await store.grade({
-      agent: props.agentId,
-      subject: selectedSubject.value,
-      grade: props.grade ?? '',
-      problem: effectiveProblem(row),
-      student_answer: row.studentAnswer.trim() || undefined,
-      knowledge_points: row.knowledgePoints,
-    })
-    row.verify = res.verify
-    row.recorded = res.recordCreated
-    row.recordDeduplicated = res.recordDeduplicated
-    row.solution = res.solution
-    row.wrongStep = res.wrongStep ?? ''
-    row.errorCause = res.errorCause ?? ''
-    // 已答卷路径：标记为已批改并记录判定（五值口径），供原图叠加画 ✓/✗（bbox 缺失时降级文字批改）。
-    row.graded = true
-    row.verdict = res.verdict
-    // INV-007：新批改结论回填即回到默认折叠态（agree 折叠、其余展开由 isDetailsCollapsed 判定）。
-    row.expanded = false
-  } catch (e) {
-    errMsg.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    row.grading = false
-  }
-}
-
-// 空白/未作答题「求解·怎么讲」：走 /solve 端点（不要求填答案），给完整解法与验算徽章，
-// 不批改、不入错题本。单一真相源分叉的前端落地——空白题不再被迫填答案或触发批改 502。
-async function solveRow(i: number) {
-  const row = rows.value[i]
-  if (
-    outcomeUnknown.value ||
-    !row ||
-    !isAnswerable(row) ||
-    !row.problem.trim() ||
-    row.answerState !== 'blank' ||
-    row.solving ||
-    row.grading
-  )
-    return
-  row.solving = true
-  errMsg.value = ''
-  try {
-    const res = await store.solve({
-      agent: props.agentId,
-      subject: selectedSubject.value,
-      grade: props.grade ?? '',
-      problem: effectiveProblem(row),
-      knowledge_points: row.knowledgePoints,
-    })
-    row.verify = res.verify
-    row.solution = res.solution
-    // 解题分叉：无批改结论、不入库、不参与原图叠加（叠加只标已批改的已答题）。
-    row.wrongStep = ''
-    row.errorCause = ''
-    row.recorded = false
-    row.recordDeduplicated = false
-    row.graded = false
-    row.verdict = ''
-  } catch (e) {
-    errMsg.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    row.solving = false
-  }
-}
-
 onBeforeUnmount(() => {
-  closeOutcomeDialog(false)
   recognitionGeneration += 1
   restoreAbort?.abort()
   restoreAbort = null
@@ -787,74 +1033,44 @@ onBeforeUnmount(() => {
   recognitionAbort = null
 })
 
-// 云端真实模型连续整卷压测证实 3 路会触发上游 429；2 路在速度与稳定性间取平衡，
-// 同时避免无界 Promise.all。客户端为每题保留 240s，不能再靠缩短超时假装结束。
-async function runBounded(
-  indexes: number[],
-  worker: (i: number) => Promise<void>,
-  concurrency = 2,
-) {
-  let cursor = 0
-  const runners = Array.from({ length: Math.min(concurrency, indexes.length) }, async () => {
-    while (cursor < indexes.length) {
-      const index = indexes[cursor++]!
-      await worker(index)
-    }
-  })
-  await Promise.all(runners)
-}
-
-async function gradeAllAnswered() {
-  if (
-    outcomeUnknown.value ||
-    batchWorking.value ||
-    anchoring.value ||
-    !selectedSubject.value ||
-    !answerPendingIndexes.value.length
-  )
-    return
-  batchWorking.value = true
-  errMsg.value = ''
-  try {
-    if (currentJobId.value) {
-      await gradeWholeSheetViaJob()
-    } else {
-      // 无在途 Job（旧数据/降级态）：保留逐题直连批改兜底。
-      await runBounded([...answerPendingIndexes.value], gradeRow)
-    }
-  } catch (e) {
-    errMsg.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    batchWorking.value = false
-  }
-}
-
-/** Job 化整卷批改（§6.7 公共命令③）：确认冻结（含家长修正）→ 后端异步整卷批改 → 逐题结果回填。 */
-async function gradeWholeSheetViaJob() {
+/** Facade 化整卷批改：确认冻结后只轮询同一 dispatch，并从判别式 result 回填。 */
+async function completeImageTaskFlow() {
   const generation = agentGeneration
-  const jobId = currentJobId.value
-  const corrections = gradingCorrections()
+  const dispatchId = currentDispatchId.value
   gradingAbort?.abort()
   const controller = new AbortController()
   gradingAbort = controller
   try {
-    const outcome = await store.gradePhotoJob(
+    const outcome = await store.completeImageTask(
       props.agentId,
-      jobId,
+      dispatchId,
       {
-        subject: selectedSubject.value,
-        grade: props.grade ?? '',
-        corrections,
         sourceSession: props.sessionId,
       },
       controller.signal,
+      (status) => {
+        if (generation !== agentGeneration || controller.signal.aborted) return
+        projectImageTaskDispatch(status)
+      },
     )
     if (generation !== agentGeneration || controller.signal.aborted) return
-    if (outcome.stage === 'outcome_unknown') {
-      enterOutcomeUnknown(jobId)
-      return
+    outcomeUnknown.value = false
+    if (outcome.stage === 'completed') {
+      creativeResult.value = null
+      applyPhotoJobResult(outcome.result)
+    } else {
+      // Creative result is a different discriminated projection. Never feed
+      // intake/work metadata to the homework result mapper; feedback is only
+      // rendered when the public result contract actually carries it.
+      blankWorksheetGuide.value = []
+      rows.value = []
+      annotatedImage.value = ''
+      creativeResult.value = {
+        taskIntent: outcome.taskIntent,
+        payload: outcome.result,
+      }
+      confirmed.value = true
     }
-    applyPhotoJobResult(outcome.result)
   } catch (error) {
     if (
       generation !== agentGeneration ||
@@ -870,6 +1086,34 @@ async function gradeWholeSheetViaJob() {
 
 /** Job completed 的逐题结果 → 护栏行状态（PhotoGradeOverlay 数据源对齐）。 */
 function applyPhotoJobResult(result: PhotoJobResult) {
+  const parentGuides = parentTeachingGuideItems(result)
+  if (parentGuides.length) {
+    // Preserve backend item order (the frozen original-question order), and
+    // suppress the legacy recognition/grade controls for this separate surface.
+    blankWorksheetGuide.value = parentGuides
+    annotatedImage.value = ''
+    rows.value = []
+    confirmed.value = true
+    return
+  }
+  blankWorksheetGuide.value = []
+  if (
+    result.task_intent !== 'completed_homework' ||
+    result.result_surface !== 'annotated_homework' ||
+    result.items.some(
+      (item) =>
+        (item.status === 'wrong' && !isParentTeachingGuide(item.parent_guide)) ||
+        (item.status === 'correct' && item.parent_guide !== undefined),
+    )
+  ) {
+    throw new Error('invalid completed homework result')
+  }
+  annotatedImage.value = annotatedImageDataURL(result.annotated_image)
+  // 恢复 completed Job 时详情响应可能不再带 recognition 停点；结果中的稳定问题身份
+  // 足以重建逐题视图，避免“任务完成但界面空白”。
+  if (!rows.value.length && result.items.length) {
+    rows.value = guardRowsFromQuestions(result.items.map((item) => item.question))
+  }
   const answerableIndexes = rows.value
     .map((row, index) => ({ row, index }))
     .filter(({ row }) => isAnswerable(row))
@@ -895,6 +1139,10 @@ function applyPhotoJobResult(result: PhotoJobResult) {
         row.solution = res.solution
         row.wrongStep = res.wrongStep ?? ''
         row.errorCause = res.errorCause ?? ''
+        row.parentGuide =
+          item.status === 'wrong' && isParentTeachingGuide(item.parent_guide)
+            ? item.parent_guide
+            : null
         row.graded = true
         row.verdict = res.verdict
         // INV-007：整卷 Job 回填同样回到默认折叠态。
@@ -908,6 +1156,7 @@ function applyPhotoJobResult(result: PhotoJobResult) {
         row.solution = grade.solution
         row.wrongStep = ''
         row.errorCause = ''
+        row.parentGuide = null
         row.recorded = false
         row.recordDeduplicated = false
         row.graded = false
@@ -919,24 +1168,6 @@ function applyPhotoJobResult(result: PhotoJobResult) {
         break
     }
   })
-}
-
-async function solveAllBlank() {
-  if (
-    outcomeUnknown.value ||
-    batchWorking.value ||
-    !selectedSubject.value ||
-    !blankPendingIndexes.value.length
-  )
-    return
-  batchWorking.value = true
-  errMsg.value = ''
-  const indexes = [...blankPendingIndexes.value]
-  try {
-    await runBounded(indexes, solveRow)
-  } finally {
-    batchWorking.value = false
-  }
 }
 
 async function coldStart() {
@@ -960,20 +1191,38 @@ async function coldStart() {
 <template>
   <div
     class="rec-panel"
-    :class="{ 'rec-panel--conversation': !!initialImage || restoredFromBinding }"
+    :class="{
+      'rec-panel--conversation': !!initialImage || restoredFromBinding,
+      'rec-panel--collapsed': collapsed,
+    }"
     data-testid="recognize-guard"
   >
     <div class="rec-panel__head">
-      <span v-if="!initialImage && !restoredFromBinding" class="rec-panel__title"
+      <span
+        v-if="!initialImage && !restoredFromBinding && !collapsed"
+        class="rec-panel__title"
         >📷 {{ t('k12.recognize.title') }}</span
       >
+      <span
+        v-else-if="
+          !collapsed && (currentTaskIntent === 'writing' || currentTaskIntent === 'artwork')
+        "
+        class="rec-panel__title"
+        >{{ taskShellTitle }}</span
+      >
+      <template v-else-if="collapsed">
+        <span class="rec-panel__title">{{ taskShellTitle }}</span>
+        <span class="rec-panel__collapsed-summary">任务已收起 · 后台继续处理</span>
+      </template>
       <button
         class="rec-panel__x"
         data-testid="recognize-close"
-        :aria-label="t('common.close', '关闭')"
-        @click="emit('close')"
+        :aria-label="collapsed ? '展开任务' : '收起任务'"
+        :aria-expanded="collapsed ? 'false' : 'true'"
+        :title="collapsed ? '展开任务' : '收起任务（后台继续处理）'"
+        @click="collapsed = !collapsed"
       >
-        ✕
+        {{ collapsed ? '↕' : '✕' }}
       </button>
     </div>
     <p v-if="!initialImage && !restoredFromBinding" class="rec-panel__intro">
@@ -993,7 +1242,7 @@ async function coldStart() {
       data-testid="recognize-preview"
       alt="作业照片预览"
     />
-    <HcClearableField v-if="!restoredFromBinding">
+    <HcClearableField v-if="!initialImage && !restoredFromBinding">
       <textarea
         v-show="!isImageData && !initialImage"
         v-model="imageB64"
@@ -1014,36 +1263,53 @@ async function coldStart() {
       {{ recognizing ? t('k12.recognize.running') : t('k12.recognize.run') }}
     </button>
 
-    <div v-if="errMsg && !recognitionFailed && !outcomeUnknown" class="rec-panel__err">
+    <div
+      v-if="
+        errMsg &&
+        !outcomeUnknown &&
+        (!recognitionFailed || currentTaskIntent !== 'completed_homework')
+      "
+      class="rec-panel__err"
+    >
       {{ t('k12.recognize.err') }}：{{ errMsg }}
     </div>
 
     <div
-      v-if="recognizing || rows.length || recognitionFailed || outcomeUnknown"
+      v-if="
+        outcomeUnknown ||
+        ((!hasBlankWorksheetGuide && !showOverlay) &&
+          ((currentTaskIntent === 'completed_homework' &&
+            (rows.length || recognitionFailed || batchWorking || anchoring)) ||
+            ((currentTaskIntent === 'writing' || currentTaskIntent === 'artwork') &&
+              recognitionFailed)))
+      "
       class="rec-pipeline"
       data-testid="recognize-pipeline"
-      aria-label="批改准备状态"
+      aria-label="已作答作业处理状态"
     >
-      <div v-if="!outcomeUnknown" class="rec-pipeline__head">
-        <b>批改准备</b>
-        <span>识别完成后，两条准备任务同时进行</span>
+      <div
+        v-if="!outcomeUnknown && currentTaskIntent === 'completed_homework'"
+        class="rec-pipeline__head"
+      >
+        <b>已作答作业</b>
+        <span>{{
+          riskCount
+            ? `清晰内容自动处理 · 仅核对 ${riskCount} 处不确定项`
+            : '清晰内容自动处理'
+        }}</span>
       </div>
-      <div v-if="!outcomeUnknown" class="rec-pipeline__branches">
+      <div
+        v-if="!outcomeUnknown && currentTaskIntent === 'completed_homework'"
+        class="rec-pipeline__branches"
+      >
         <div
-          class="rec-pipeline__branch"
-          :class="{ 'is-done': confirmed }"
+          class="rec-pipeline__branch is-done"
           data-testid="recognize-confirm-branch"
         >
-          <i>{{ confirmed ? '✓' : '1' }}</i>
+          <i>✓</i>
           <div>
-            <b>{{
-              confirmed ? '题目已确认并冻结' : recognizing ? '正在识别题目' : '等你确认题目'
-            }}</b>
-            <small>{{
-              confirmed
-                ? '定位结果只补充展示，不改写已冻结文字'
-                : '确认后冻结题干与作答，不会被定位结果改写'
-            }}</small>
+            <b>清晰题已自动通过</b>
+            <small>识别证据一致，不需要家长逐题确认</small>
           </div>
         </div>
         <div
@@ -1086,21 +1352,18 @@ async function coldStart() {
       <div
         v-if="outcomeUnknown"
         class="rec-pipeline__error is-unknown"
-        data-testid="recognize-outcome-unknown"
+        data-testid="recognize-recovering"
         role="status"
       >
         <span
-          ><b>结果待核实</b
-          >本次批改结果尚未确认。为避免重复调用，系统不会自动重试；刷新或重新打开后仍会保留此状态。</span
+          ><b>正在恢复批改结果</b
+          >系统正在查询同一个任务的服务端状态；不会重新创建任务或重复提交。恢复后会自动显示结果。</span
         >
-        <button type="button" data-testid="recognize-outcome-status" @click="openOutcomeDialog">
-          查看结果状态
-        </button>
       </div>
     </div>
 
     <div
-      v-show="rows.length && !selectedSubject"
+      v-show="!hasBlankWorksheetGuide && !showOverlay && rows.length && !selectedSubject"
       class="rec-panel__subject"
       data-testid="recognize-subject"
     >
@@ -1112,8 +1375,27 @@ async function coldStart() {
       />
     </div>
 
+    <div
+      v-if="creativeResult"
+      class="rec-creative-result"
+      :data-testid="`${creativeResult.taskIntent}-result-surface`"
+      :data-task-intent="creativeResult.taskIntent"
+      :data-result-surface="
+        creativeResult.taskIntent === 'writing' ? 'writing-feedback' : 'art-feedback'
+      "
+      :data-intake-status="creativeResult.payload.intake.status"
+      :data-work-id="creativeResult.payload.work?.work_id || undefined"
+    >
+      <MarkdownRenderer
+        v-if="creativeResult.payload.feedback"
+        class="rec-creative-result__feedback"
+        :data-testid="`${creativeResult.taskIntent}-result-feedback`"
+        :content="creativeResult.payload.feedback.projection_markdown"
+      />
+    </div>
+
     <!-- 冷启动倒查建档入口（#3，仅无年级 + 已识题时） -->
-    <div v-if="canColdStart" class="rec-cold">
+    <div v-if="!hasBlankWorksheetGuide && !showOverlay && canColdStart" class="rec-cold">
       <span class="rec-cold__hint">{{ t('k12.recognize.coldStartHint') }}</span>
       <button
         class="rec-cold__btn"
@@ -1126,7 +1408,11 @@ async function coldStart() {
         }}
       </button>
     </div>
-    <div v-if="coldStartResult" class="rec-cold rec-cold--done" data-testid="coldstart-result">
+    <div
+      v-if="!hasBlankWorksheetGuide && !showOverlay && coldStartResult"
+      class="rec-cold rec-cold--done"
+      data-testid="coldstart-result"
+    >
       {{
         coldStartResult.inferred
           ? t('k12.recognize.coldStartInferred', { grade: coldStartResult.grade })
@@ -1134,11 +1420,158 @@ async function coldStart() {
       }}
     </div>
 
-    <!-- 识题回显护栏：逐题核对 -->
-    <div v-if="rows.length" class="rec-guard">
-      <p v-if="!confirmed" class="rec-guard__lead">📷 {{ t('k12.recognize.confirmLead') }}</p>
-      <p v-else class="rec-guard__lead rec-guard__lead--confirmed">
-        {{ t('k12.recognize.confirmedLead', { count: answerableRowCount }) }}
+    <!-- 空白卷使用独立的家长讲题结果面。 -->
+    <section
+      v-if="hasBlankWorksheetGuide"
+      class="guide blank-worksheet-guide"
+      data-testid="blank-worksheet-parent-guide"
+      aria-label="空白卷家长讲题指南"
+    >
+      <div class="guide__head">
+        <b>📋 空白卷 · 家长讲题指南</b>
+        <span class="guide__unit">已按原题顺序自动解答 {{ blankWorksheetGuide.length }} 题</span>
+      </div>
+      <div class="guide__body">
+        <details
+          v-for="(item, index) in blankWorksheetGuide"
+          :key="item.problemId || `${index}-${item.question}`"
+          open
+          class="grade-card grade-card--issue"
+          data-testid="blank-worksheet-guide-item"
+          :data-parent-guide-problem="index + 1"
+        >
+          <summary>
+            <span class="grade-card__status">{{ index + 1 }}</span>
+            <MarkdownRenderer class="grade-card__question" :content="item.question" />
+          </summary>
+          <div class="grade-card__body">
+            <div class="grade-card__row">
+              <span>答案</span
+              ><MarkdownRenderer class="grade-card__md" :content="item.guide.answer" />
+            </div>
+            <div class="grade-card__row">
+              <span>必要步骤</span>
+              <ol class="grade-card__list">
+                <li v-for="step in item.guide.full_solution_steps" :key="step">
+                  <MarkdownRenderer class="grade-card__md" :content="step" />
+                </li>
+              </ol>
+            </div>
+            <div class="grade-card__row">
+              <span>本年级方法</span
+              ><MarkdownRenderer class="grade-card__md" :content="item.guide.grade_level_method" />
+            </div>
+            <div class="grade-card__row">
+              <span>易错点</span>
+              <ul class="grade-card__list">
+                <li v-for="mistake in item.guide.likely_mistakes" :key="mistake">
+                  <MarkdownRenderer class="grade-card__md" :content="mistake" />
+                </li>
+              </ul>
+            </div>
+            <div class="grade-card__row">
+              <span>家长怎么讲</span>
+              <ol class="grade-card__list">
+                <li v-for="step in item.guide.parent_teaching_sequence" :key="step">
+                  <MarkdownRenderer class="grade-card__md" :content="step" />
+                </li>
+              </ol>
+            </div>
+            <div class="grade-card__row">
+              <span>可以追问</span>
+              <ul class="grade-card__list">
+                <li v-for="question in item.guide.follow_up_questions" :key="question">
+                  <MarkdownRenderer class="grade-card__md" :content="question" />
+                </li>
+              </ul>
+            </div>
+            <div class="grade-card__row">
+              <span>怎么检查</span
+              ><MarkdownRenderer class="grade-card__md" :content="item.guide.checking_method" />
+            </div>
+          </div>
+        </details>
+      </div>
+    </section>
+
+    <div
+      v-else-if="
+        currentTaskIntent === 'writing' &&
+        creativeProjection?.status === 'awaiting_confirmation' &&
+        creativeConflicts.length
+      "
+      class="rec-guard"
+      data-testid="creative-conflict-guard"
+    >
+      <div
+        v-for="conflict in creativeConflicts"
+        :key="conflict.segmentId"
+        class="rec-row"
+        data-testid="creative-conflict-item"
+        :data-segment-id="conflict.segmentId"
+      >
+        <div class="rec-row__q">
+          <HcClearableField v-if="conflict.editing">
+            <input
+              v-model="conflict.editedText"
+              class="rec-row__edit"
+              data-testid="creative-conflict-input"
+              :disabled="confirming"
+            />
+          </HcClearableField>
+          <span v-else class="rec-row__qtext">{{ conflict.editedText }}</span>
+          <button
+            class="rec-row__toggle"
+            data-testid="creative-conflict-edit"
+            :disabled="confirming"
+            @click="toggleCreativeConflictEdit(conflict)"
+          >
+            {{ conflict.editing ? t('k12.recognize.readOk') : t('k12.recognize.readWrong') }}
+          </button>
+        </div>
+        <div class="rec-row__risk">
+          <span>请对照原图核对</span>
+          <label class="rec-row__risk-check">
+            <input
+              v-model="conflict.confirmed"
+              type="checkbox"
+              data-testid="creative-conflict-confirm"
+              :disabled="confirming"
+            />
+            我已逐项核对
+          </label>
+        </div>
+      </div>
+      <p
+        v-if="unconfirmedCreativeConflictCount"
+        class="rec-guard__confidence-note"
+        data-testid="creative-conflict-count"
+      >
+        还有 {{ unconfirmedCreativeConflictCount }} 处高风险识别需要逐项对照原图确认。
+      </p>
+      <div class="rec-guard__confirm-actions">
+        <button
+          class="rec-guard__confirm"
+          data-testid="creative-confirm-all"
+          :disabled="!canConfirmCreative"
+          @click="confirmCreativeOCR"
+        >
+          {{ t('k12.recognize.confirmAll') }}
+        </button>
+      </div>
+    </div>
+
+    <!-- 已作答作业终态只投影一个结果面：批注原图与摘要在前，错题家长讲法和正确题折叠均内聚其中。 -->
+    <PhotoGradeOverlay
+      v-else-if="currentTaskIntent === 'completed_homework' && showOverlay"
+      :image="imageB64"
+      :annotated-image="annotatedImage"
+      :marks="overlayMarks"
+    />
+
+    <div v-else-if="currentTaskIntent === 'completed_homework' && rows.length" class="rec-guard">
+      <p v-if="!confirmed && riskCount" class="rec-guard__lead">
+        📷 {{ t('k12.recognize.confirmLead') }}
       </p>
       <div
         v-for="(row, i) in rows"
@@ -1170,7 +1603,7 @@ async function coldStart() {
             :content="`**${rowLabel(row, i)}.** ${row.problem}`"
           />
           <button
-            v-if="correctionMode"
+            v-if="correctionMode && row.confirmationRequired"
             class="rec-row__toggle"
             :data-testid="`rq-edit-${i}`"
             @click="toggleEdit(row)"
@@ -1249,65 +1682,6 @@ async function coldStart() {
           >
         </div>
 
-        <div v-if="confirmed && isAnswerable(row)" class="rec-row__grade">
-          <HcClearableField>
-            <input
-              v-model="row.studentAnswer"
-              class="rec-row__answer"
-              :data-testid="`rq-answer-${i}`"
-              :placeholder="t('k12.recognize.answerPlaceholder')"
-              @input="syncAnswerState(row)"
-            />
-          </HcClearableField>
-          <!-- 空白题：走「求解·怎么讲」（不要求填答案）；已答题：批改按钮亮起。 -->
-          <button
-            class="rec-row__solvebtn"
-            :data-testid="`rq-solve-${i}`"
-            :disabled="
-              batchWorking ||
-              outcomeUnknown ||
-              !row.problem.trim() ||
-              !selectedSubject ||
-              row.answerState !== 'blank' ||
-              row.solving ||
-              row.grading
-            "
-            @click="solveRow(i)"
-          >
-            {{ row.solving ? t('k12.recognize.solving') : t('k12.recognize.solve') }}
-          </button>
-          <button
-            class="rec-row__gradebtn"
-            :data-testid="`rq-grade-${i}`"
-            :disabled="
-              batchWorking ||
-              outcomeUnknown ||
-              !row.problem.trim() ||
-              !selectedSubject ||
-              !row.studentAnswer.trim() ||
-              anchoring ||
-              row.grading ||
-              row.solving
-            "
-            @click="gradeRow(i)"
-          >
-            {{ row.grading ? t('k12.recognize.grading') : t('k12.recognize.grade') }}
-          </button>
-        </div>
-        <p
-          v-if="confirmed && isAnswerable(row) && row.answerState === 'unclear'"
-          class="rec-row__unclearhint"
-          :data-testid="`rq-unclear-hint-${i}`"
-        >
-          {{ t('k12.recognize.unclearAnswerHint') }}
-        </p>
-        <p
-          v-else-if="confirmed && isAnswerable(row) && row.answerState === 'blank'"
-          class="rec-row__blankhint"
-          :data-testid="`rq-blank-hint-${i}`"
-        >
-          {{ t('k12.recognize.blankHint') }}
-        </p>
       </div>
       <p
         v-if="!confirmed && unclearAnswerCount"
@@ -1324,7 +1698,7 @@ async function coldStart() {
       >
         还有 {{ unconfirmedRiskCount }} 处高风险识别需要逐项对照原图确认。
       </p>
-      <div v-if="!confirmed" class="rec-guard__confirm-actions">
+      <div v-if="!confirmed && riskCount" class="rec-guard__confirm-actions">
         <button
           class="rec-guard__confirm"
           data-testid="recognize-confirm-all"
@@ -1333,7 +1707,8 @@ async function coldStart() {
             confirming ||
             !agentId.trim() ||
             !sessionId?.trim() ||
-            !currentJobId.trim() ||
+            !currentDispatchId.trim() ||
+            currentDispatchVersion < 1 ||
             rows.some((row) => !row.problem.trim()) ||
             unconfirmedRiskCount > 0
           "
@@ -1351,54 +1726,32 @@ async function coldStart() {
           {{ t('k12.recognize.correctRecognition') }}
         </button>
       </div>
-      <div v-else class="rec-guard__batch" data-testid="recognize-batch-actions">
-        <span
-          v-if="unclearAnswerCount"
-          class="rec-guard__unclear"
-          data-testid="recognize-unclear-count"
-        >
-          {{ t('k12.recognize.unclearAnswerCount', { count: unclearAnswerCount }) }}
-        </span>
-        <button
-          v-if="answerPendingIndexes.length"
-          class="rec-guard__batchbtn rec-guard__batchbtn--primary"
-          data-testid="recognize-grade-all"
-          :disabled="batchWorking || outcomeUnknown || anchoring || !selectedSubject"
-          @click="gradeAllAnswered"
-        >
-          {{
-            batchWorking
-              ? t('k12.recognize.batchWorking')
-              : t('k12.recognize.gradeAll', { count: answerPendingIndexes.length })
-          }}
-        </button>
-        <button
-          v-if="blankPendingIndexes.length"
-          class="rec-guard__batchbtn"
-          data-testid="recognize-solve-all"
-          :disabled="batchWorking || outcomeUnknown || !selectedSubject"
-          @click="solveAllBlank"
-        >
-          {{
-            batchWorking
-              ? t('k12.recognize.batchWorking')
-              : t('k12.recognize.solveAll', { count: blankPendingIndexes.length })
-          }}
-        </button>
-      </div>
     </div>
-    <p v-else-if="!recognizing && !outcomeUnknown && !restoredFromBinding" class="rec-panel__empty">
+    <p
+      v-else-if="
+        !hasBlankWorksheetGuide &&
+        currentTaskIntent !== 'writing' &&
+        currentTaskIntent !== 'artwork' &&
+        !recognizing &&
+        !outcomeUnknown &&
+        !restoredFromBinding
+      "
+      class="rec-panel__empty"
+    >
       {{ t('k12.recognize.empty') }}
     </p>
 
-    <!-- 原图批改叠加（Phase 1）：已批改题在作业原图上确定性画 ✓/✗（bbox 缺失/非法则降级文字批改）。 -->
-    <PhotoGradeOverlay v-if="showOverlay" :image="imageB64" :marks="overlayMarks" />
-
     <!-- 服务端持久确认成功后才内联辅导要点；未知结果只冻结生成，不清空已生成内容。 -->
     <TutoringTipsPanel
-      v-if="confirmed && selectedSubject && rows.length && allKnowledgePoints.length"
+      v-if="
+        !hasBlankWorksheetGuide &&
+        confirmed &&
+        selectedSubject &&
+        rows.length &&
+        allKnowledgePoints.length
+      "
       :agent-id="agentId"
-      :grading-job-id="currentJobId"
+      :dispatch-id="currentDispatchId"
       :session-id="sessionId"
       :generation-locked="outcomeUnknown"
       :grade="props.grade || ''"
@@ -1407,43 +1760,6 @@ async function coldStart() {
       :knowledge-points="allKnowledgePoints"
     />
   </div>
-
-  <Teleport v-if="outcomeDialogOpen" to="body">
-    <div class="rec-unknown-overlay">
-      <div
-        ref="outcomeDialogRef"
-        class="rec-unknown-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="recognize-outcome-title"
-        tabindex="-1"
-        data-testid="recognize-outcome-dialog"
-        @keydown.esc.stop.prevent="closeOutcomeDialog()"
-        @keydown.tab="trapOutcomeFocus"
-      >
-        <div class="rec-unknown-modal__head">
-          <b id="recognize-outcome-title">结果待核实</b>
-        </div>
-        <div class="rec-unknown-modal__body">
-          <div class="rec-unknown-notice">
-            <b>本次批改没有得到可确认的完整结果。</b><br />
-            为避免重复调用和重复计费，系统不会自动重试。已完成的内容会安全保留；你可以稍后再查看，刷新或重新打开后仍会恢复这个状态。
-          </div>
-          <div class="rec-unknown-list">
-            <div class="rec-unknown-row"><b>当前状态</b><span>等待结果核实</span><i>待核实</i></div>
-            <div class="rec-unknown-row">
-              <b>已完成内容</b><span>已安全保留，不会从头重复处理</span><i>已保留</i>
-            </div>
-          </div>
-        </div>
-        <div class="rec-unknown-modal__foot">
-          <button type="button" data-testid="recognize-outcome-close" @click="closeOutcomeDialog()">
-            关闭
-          </button>
-        </div>
-      </div>
-    </div>
-  </Teleport>
 </template>
 
 <style scoped>
@@ -1457,11 +1773,22 @@ async function coldStart() {
 .rec-panel--conversation {
   padding: 10px 14px 12px;
 }
+.rec-panel--collapsed > :not(.rec-panel__head) {
+  display: none !important;
+}
+.rec-panel--collapsed.rec-panel--conversation {
+  padding: 10px 12px;
+}
 .rec-panel--conversation .rec-panel__head {
   position: absolute;
   z-index: 1;
   top: 5px;
   right: 5px;
+}
+.rec-panel--collapsed.rec-panel--conversation .rec-panel__head {
+  position: static;
+  width: 100%;
+  gap: 8px;
 }
 .rec-panel--conversation .rec-panel__x {
   opacity: 0;
@@ -1469,9 +1796,127 @@ async function coldStart() {
     opacity 0.15s ease,
     background 0.15s ease;
 }
+.rec-panel--collapsed.rec-panel--conversation .rec-panel__x {
+  opacity: 1;
+}
 .rec-panel--conversation:hover .rec-panel__x,
 .rec-panel--conversation .rec-panel__x:focus-visible {
   opacity: 1;
+}
+/* K12-INV-060: a blank worksheet has its own approved parent-teaching result
+   surface. These are the same guide/grade-card primitives as the prototype;
+   they deliberately do not inherit completed-homework assessment styling. */
+.guide {
+  margin-top: 6px;
+  overflow: hidden;
+  border: 1px solid var(--hc-border-hl);
+  border-radius: 14px;
+  background: var(--hc-bg-card);
+  box-shadow: var(--hc-shadow-sm);
+}
+.guide__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 15px;
+  border-bottom: 0.5px solid var(--hc-divider);
+  background: var(--hc-accent-subtle);
+}
+.guide__head b {
+  font-size: 13px;
+  font-weight: 700;
+}
+.guide__unit {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--hc-accent) 12%, transparent);
+  color: var(--hc-accent);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.guide__body {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 13px 15px;
+}
+.grade-card {
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--hc-border);
+  border-radius: 11px;
+  background: var(--hc-bg-card);
+  transition:
+    border-color 0.18s,
+    box-shadow 0.18s;
+}
+.grade-card[open] {
+  border-color: color-mix(in srgb, var(--hc-warning) 45%, var(--hc-border));
+  box-shadow: var(--hc-shadow-sm);
+}
+.grade-card summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 11px;
+  list-style: none;
+  cursor: pointer;
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.grade-card summary::-webkit-details-marker {
+  display: none;
+}
+.grade-card summary::after {
+  margin-left: auto;
+  color: var(--hc-text-muted);
+  content: '⌄';
+  transition: transform 0.15s;
+}
+.grade-card[open] summary::after {
+  transform: rotate(180deg);
+}
+.grade-card__status {
+  display: grid;
+  flex: none;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--hc-accent);
+  color: #fff;
+  font-weight: 900;
+}
+.grade-card__question {
+  min-width: 0;
+  color: var(--hc-text-primary);
+}
+.grade-card__question :deep(p),
+.grade-card__md :deep(p) {
+  margin: 0;
+}
+.grade-card__body {
+  padding: 0 11px 11px;
+  border-top: 1px solid var(--hc-divider);
+}
+.grade-card__row {
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr);
+  gap: 7px;
+  padding-top: 8px;
+  color: var(--hc-text-secondary);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+.grade-card__row > span:first-child {
+  color: var(--hc-text-muted);
+}
+.grade-card__list {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding-left: 18px;
 }
 .rec-panel__head {
   display: flex;
@@ -1481,6 +1926,10 @@ async function coldStart() {
   font-size: 13px;
   font-weight: 700;
   flex: 1;
+}
+.rec-panel__collapsed-summary {
+  color: var(--hc-text-muted);
+  font-size: 11.5px;
 }
 .rec-panel__x {
   border: none;
@@ -1683,98 +2132,6 @@ async function coldStart() {
   color: var(--hc-text-primary);
 }
 
-/* 已批准的“结果待核实”只读详情：沿用桌面 modal 几何，不增加额外操作。 */
-.rec-unknown-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--hc-z-modal);
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding-top: 11vh;
-  background: rgba(8, 18, 32, 0.4);
-  backdrop-filter: blur(3px) saturate(120%);
-  -webkit-backdrop-filter: blur(3px) saturate(120%);
-}
-.rec-unknown-modal {
-  width: 478px;
-  max-width: 92vw;
-  overflow: hidden;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 16px;
-  outline: none;
-  background: var(--hc-bg-elevated);
-  box-shadow: var(--hc-shadow-float);
-  color: var(--hc-text-primary);
-}
-.rec-unknown-modal__head {
-  padding: 16px 18px;
-  border-bottom: 0.5px solid var(--hc-border);
-}
-.rec-unknown-modal__head b {
-  font-size: 15px;
-  font-weight: 600;
-}
-.rec-unknown-modal__body {
-  padding: 16px 18px;
-}
-.rec-unknown-notice {
-  padding: 10px 12px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 10px;
-  background: var(--hc-bg-input);
-  color: var(--hc-text-secondary);
-  font-size: 12px;
-  line-height: 1.65;
-}
-.rec-unknown-notice b {
-  color: var(--hc-text-primary);
-}
-.rec-unknown-list {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  margin-top: 10px;
-}
-.rec-unknown-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 9px;
-  color: var(--hc-text-secondary);
-  font-size: 11.5px;
-}
-.rec-unknown-row b {
-  color: var(--hc-text-primary);
-}
-.rec-unknown-row span {
-  flex: 1;
-}
-.rec-unknown-row i {
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
-  color: var(--hc-warning);
-  font-style: normal;
-  font-size: 10.5px;
-}
-.rec-unknown-modal__foot {
-  display: flex;
-  justify-content: flex-end;
-  padding: 12px 18px;
-  border-top: 0.5px solid var(--hc-border);
-}
-.rec-unknown-modal__foot button {
-  padding: 7px 14px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 8px;
-  background: var(--hc-bg-input);
-  color: var(--hc-text-primary);
-  font: inherit;
-  cursor: pointer;
-}
 /* md 值容器:紧凑段距，避免块级 p 默认外边距撑开批改详情行。 */
 .rec-row__md :deep(p) {
   margin: 2px 0;
@@ -1880,36 +2237,6 @@ async function coldStart() {
   background: var(--hc-bg-input);
   color: var(--hc-text-secondary);
   cursor: pointer;
-}
-.rec-guard__batch {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.rec-guard__unclear {
-  flex: 1 1 100%;
-  font-size: 11.5px;
-  color: var(--hc-warn, #b7791f);
-  text-align: end;
-}
-.rec-guard__batchbtn {
-  font-size: 12px;
-  padding: 7px 14px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-input);
-  color: var(--hc-text-primary);
-  cursor: pointer;
-}
-.rec-guard__batchbtn--primary {
-  border-color: var(--hc-border-hl);
-  background: var(--hc-accent);
-  color: white;
-}
-.rec-guard__batchbtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 .rec-row {
   border-inline-start: 3px solid var(--hc-accent);
@@ -2034,59 +2361,6 @@ async function coldStart() {
   flex-shrink: 0;
   font-size: 11px;
   color: var(--hc-accent);
-}
-.rec-row__grade {
-  display: flex;
-  gap: 6px;
-}
-.rec-row__answer {
-  flex: 1;
-  font-size: 12.5px;
-  padding: 6px 8px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-input);
-  color: var(--hc-text-primary);
-}
-.rec-row__gradebtn {
-  font-size: 12px;
-  padding: 6px 12px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-input);
-  color: var(--hc-text-primary);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.rec-row__gradebtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.rec-row__solvebtn {
-  font-size: 12px;
-  padding: 6px 12px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-input);
-  color: var(--hc-accent);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.rec-row__solvebtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.rec-row__blankhint,
-.rec-row__unclearhint {
-  margin: 0;
-  font-size: 11.5px;
-  line-height: 1.5;
-}
-.rec-row__blankhint {
-  color: var(--hc-text-muted);
-}
-.rec-row__unclearhint {
-  color: var(--hc-warn, #b7791f);
 }
 @media (max-width: 700px) {
   .rec-pipeline__branches {
