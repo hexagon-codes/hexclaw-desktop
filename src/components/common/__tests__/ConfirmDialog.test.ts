@@ -35,13 +35,38 @@ describe('ConfirmDialog', () => {
 
   it('emits confirm on confirm click', async () => {
     const wrapper = mount(ConfirmDialog, {
-      props: { open: true },
+      props: { open: true, danger: false },
       global: { stubs: { Teleport: true } },
     })
     const buttons = wrapper.findAll('button')
     const confirmBtn = buttons[buttons.length - 1]!
     await confirmBtn.trigger('click')
     expect(wrapper.emitted('confirm')).toHaveLength(1)
+  })
+
+  it('uses the global five-second cooldown for destructive actions by default', async () => {
+    vi.useFakeTimers()
+    const wrapper = mount(ConfirmDialog, {
+      props: { open: true, danger: true },
+      global: { stubs: { Teleport: true } },
+    })
+    const buttons = wrapper.findAll('button')
+    const confirmBtn = buttons[buttons.length - 1]!
+
+    expect(confirmBtn.attributes('disabled')).toBeDefined()
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(confirmBtn.attributes('disabled')).toBeDefined()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(confirmBtn.attributes('disabled')).toBeUndefined()
+  })
+
+  it('never applies the destructive cooldown to recoverable informational actions', () => {
+    const wrapper = mount(ConfirmDialog, {
+      props: { open: true, danger: false },
+      global: { stubs: { Teleport: true } },
+    })
+    const buttons = wrapper.findAll('button')
+    expect(buttons[buttons.length - 1]!.attributes('disabled')).toBeUndefined()
   })
 
   it('emits cancel on cancel click', async () => {
@@ -129,7 +154,7 @@ describe('ConfirmDialog', () => {
 
   it('cancels the open dialog with Escape and never confirms twice from rapid clicks', async () => {
     const wrapper = mount(ConfirmDialog, {
-      props: { open: true, confirmationKey: 'session-1' },
+      props: { open: true, danger: false, confirmationKey: 'session-1' },
       attachTo: document.body,
       global: { stubs: { Teleport: true } },
     })

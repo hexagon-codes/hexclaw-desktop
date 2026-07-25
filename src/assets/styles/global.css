@@ -386,6 +386,19 @@ body,
   color: var(--hc-text-primary);
 }
 
+.hc-btn-danger-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--hc-error);
+  box-shadow: none;
+}
+
+.hc-btn-danger-ghost:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--hc-error) 9%, transparent);
+  border-color: color-mix(in srgb, var(--hc-error) 20%, transparent);
+  color: var(--hc-error);
+}
+
 /* ─── Input Base ────────────────────────────────────────── */
 .hc-input {
   width: 100%;

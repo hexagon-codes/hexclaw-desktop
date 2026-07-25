@@ -20,7 +20,7 @@ const props = withDefaults(
     confirmText: '确认',
     cancelText: '取消',
     danger: true,
-    confirmDelayMs: 0,
+    confirmDelayMs: 5_000,
     confirmationKey: null,
   },
 )
@@ -42,7 +42,7 @@ function clearConfirmDelay() {
 function restartConfirmDelay() {
   clearConfirmDelay()
   confirmCommitted.value = false
-  const delay = Math.max(0, props.confirmDelayMs)
+  const delay = props.danger ? Math.max(0, props.confirmDelayMs) : 0
   confirmLocked.value = props.open && delay > 0
   if (!confirmLocked.value) return
   confirmUnlockTimer = setTimeout(() => {
@@ -64,7 +64,7 @@ function handleConfirm() {
 }
 
 watch(
-  [() => props.open, () => props.confirmDelayMs, () => props.confirmationKey],
+  [() => props.open, () => props.danger, () => props.confirmDelayMs, () => props.confirmationKey],
   restartConfirmDelay,
   { immediate: true, flush: 'sync' },
 )
@@ -86,14 +86,18 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition name="hc-dialog">
-      <div
-        v-if="open"
-        class="hc-dialog-overlay"
-        @click.self="handleCancel"
-      >
-        <div class="hc-dialog" role="alertdialog" aria-modal="true" aria-labelledby="hc-confirm-dialog-title">
+      <div v-if="open" class="hc-dialog-overlay" @click.self="handleCancel">
+        <div
+          class="hc-dialog"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="hc-confirm-dialog-title"
+        >
           <div class="hc-dialog__header">
-            <div class="hc-dialog__icon" :class="danger ? 'hc-dialog__icon--danger' : 'hc-dialog__icon--info'">
+            <div
+              class="hc-dialog__icon"
+              :class="danger ? 'hc-dialog__icon--danger' : 'hc-dialog__icon--info'"
+            >
               <AlertTriangle v-if="danger" :size="20" />
               <Info v-else :size="20" />
             </div>

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import ConnectionChannelCards from '../ConnectionChannelCards.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import zhCN from '@/i18n/locales/zh-CN'
 
 // BUG-20260621 channel-delete 回归：锁定「连接·通道与账号删除」流程。
@@ -113,9 +114,9 @@ describe('BUG-20260621 channel-delete', () => {
     const confirmBtn = wrapper.find('.hc-dialog__btn--danger')
     expect(confirmBtn.exists()).toBe(true)
 
-    // 点确认 → deleteIMInstance('feishu-1') 被调用一次，且未误删（不应在确认前调用）
+    // 公共 ConfirmDialog 已独立覆盖 5 秒冷却；这里验证冷却结束后的 confirm 接线。
     expect(deleteIMInstance).not.toHaveBeenCalled()
-    await confirmBtn.trigger('click')
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     expect(deleteIMInstance).toHaveBeenCalledTimes(1)
