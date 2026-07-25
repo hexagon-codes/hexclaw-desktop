@@ -5,7 +5,6 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
-import HcSelect from '@/components/common/HcSelect.vue'
 
 // #4/#5（hex-test 闭环）：积累本手动记录入口 + 语/英分科过滤。
 // 后端 POST /accumulation（k12AddAccumulation）真 + GET /accumulation?subject=（store BUG-3 已通），
@@ -14,6 +13,8 @@ const h = vi.hoisted(() => ({
   listSpy: vi.fn(),
   addSpy: vi.fn(),
   sendSpy: vi.fn(),
+  generateSpy: vi.fn(),
+  deleteSpy: vi.fn(),
   querySpy: vi.fn(),
   retrySpy: vi.fn(),
   clipboardSpy: vi.fn(),
@@ -26,12 +27,20 @@ vi.mock('@/api/k12', () => ({
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { mastered: 0, reviewing: 0, retried: 0, archived: 0, total: 0 },
-    weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '',
+    weak_top3: [],
+    month_new_mistakes: 0,
+    review_completion_rate: -1,
+    consecutive_fail_kps: null,
+    suggestion: '',
   }),
-  k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
+  k12StudyTime: vi
+    .fn()
+    .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: (agent: string, subject?: string) => h.listSpy(agent, subject),
-  k12AddAccumulation: (req: unknown) => h.addSpy(req),
+  k12AddAccumulation: (...args: unknown[]) => h.addSpy(...args),
   k12SendAccumulation: (...args: unknown[]) => h.sendSpy(...args),
+  k12GenerateAccumulationDictation: (...args: unknown[]) => h.generateSpy(...args),
+  k12DeleteAccumulation: (...args: unknown[]) => h.deleteSpy(...args),
   k12GetDeliveryBatch: vi.fn(),
   k12QueryDeliveryBatch: (...args: unknown[]) => h.querySpy(...args),
   k12RetryDeliveryBatch: (...args: unknown[]) => h.retrySpy(...args),
@@ -44,19 +53,25 @@ vi.mock('@/api/desktop', () => ({
 
 function i18n() {
   return createI18n({
-    legacy: false, locale: 'zh-CN', fallbackLocale: 'zh-CN',
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
     messages: { 'zh-CN': { ...zhCN, k12: k12Zh }, zh: zhCN },
   })
 }
 function render() {
   return mount(K12RecordsView, {
+    attachTo: document.body,
     props: { agentId: 'mingming', agentName: '小明的辅导老师', grade: '五年级上' },
     global: { plugins: [createPinia(), i18n()] },
   })
 }
 
 async function gotoAccum(w: ReturnType<typeof render>) {
-  await w.findAll('.seg button').find((b) => b.text() === k12Zh.subTabs.accumulation)!.trigger('click')
+  await w
+    .findAll('.seg button')
+    .find((b) => b.text() === k12Zh.subTabs.accumulation)!
+    .trigger('click')
   await flushPromises()
 }
 
@@ -66,11 +81,27 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     h.listSpy.mockReset().mockResolvedValue({ items: [] })
     h.addSpy.mockReset().mockResolvedValue({ record_id: 'x', created: true })
     h.sendSpy.mockReset()
+    h.generateSpy.mockReset().mockResolvedValue({
+      dictation_generation: {
+        generation_id: 'generation-1',
+        status: 'queued',
+        attempt: 1,
+        updated_at: 100,
+      },
+    })
+    h.deleteSpy.mockReset().mockResolvedValue({
+      accumulation_id: 'x1',
+      deleted: true,
+      version: 2,
+    })
     h.querySpy.mockReset()
     h.retrySpy.mockReset()
     h.clipboardSpy.mockReset().mockResolvedValue(undefined)
   })
-  afterEach(() => vi.useRealTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    document.body.innerHTML = ''
+  })
 
   it('#5 分科过滤：点「语文」chip → 以 subject=语文 重新拉取积累本', async () => {
     const w = render()
@@ -106,7 +137,7 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(lastCall[1]).toBeUndefined()
   })
 
-  it('#4 手动记录：填表提交 → 调 k12AddAccumulation 并刷新', async () => {
+  it('#4 手动记录：表单只显示内容，提交 DTO 也只含 content', async () => {
     const w = render()
     await flushPromises()
     await gotoAccum(w)
@@ -117,25 +148,56 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     const form = w.find('[data-testid="accum-add-form"]')
     expect(form.exists()).toBe(true)
     expect(form.classes()).toContain('k12modal')
-
-    // 选学科英语（20260718 原型定案：类型按学科分化，切英语后类型 sync 重置为「表达积累」），
-    // 再显式选「词汇积累」（学科/类型下拉走 HcSelect，D5：不再用原生 select）、填内容
-    w.findAllComponents(HcSelect)[0]!.vm.$emit('update:modelValue', '英语')
-    w.findAllComponents(HcSelect)[1]!.vm.$emit('update:modelValue', '词汇积累')
-    await flushPromises()
+    expect(form.find('[data-testid="accum-add-subject"]').exists()).toBe(false)
+    expect(form.find('[data-testid="accum-add-type"]').exists()).toBe(false)
+    expect(form.text()).not.toContain('更正分类')
     await w.find('[data-testid="accum-add-content"]').setValue('a piece of cake')
     h.listSpy.mockClear()
     await w.find('[data-testid="accum-add-submit"]').trigger('click')
     await flushPromises()
 
     expect(h.addSpy).toHaveBeenCalledTimes(1)
-    const req = h.addSpy.mock.calls[0]![0]
-    expect(req.agent).toBe('mingming')
-    expect(req.subject).toBe('英语')
-    expect(req.entry_type).toBe('词汇积累')
-    expect(req.content).toBe('a piece of cake')
+    expect(h.addSpy).toHaveBeenCalledWith(
+      'mingming',
+      { content: 'a piece of cake' },
+      expect.stringMatching(/^desktop-accum-create:mingming:/),
+    )
     // 提交后重新拉取积累本
     expect(h.listSpy).toHaveBeenCalled()
+  })
+
+  it('新增幂等键：失败原地重试复用；内容变化或成功后的新提交才旋转', async () => {
+    h.addSpy
+      .mockRejectedValueOnce(new Error('结果未知'))
+      .mockRejectedValueOnce(new Error('结果未知'))
+      .mockResolvedValue({ record_id: 'x', created: true })
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+    await w.get('[data-testid="accum-add-open"]').trigger('click')
+    const content = w.get('[data-testid="accum-add-content"]')
+    const submit = w.get('[data-testid="accum-add-submit"]')
+
+    await content.setValue('a piece of cake')
+    await submit.trigger('click')
+    await flushPromises()
+    const firstKey = h.addSpy.mock.calls[0]![2]
+
+    await submit.trigger('click')
+    await flushPromises()
+    expect(h.addSpy.mock.calls[1]![2]).toBe(firstKey)
+
+    await content.setValue('take it easy')
+    await submit.trigger('click')
+    await flushPromises()
+    const changedContentKey = h.addSpy.mock.calls[2]![2]
+    expect(changedContentKey).not.toBe(firstKey)
+
+    await w.get('[data-testid="accum-add-open"]').trigger('click')
+    await w.get('[data-testid="accum-add-content"]').setValue('take it easy')
+    await w.get('[data-testid="accum-add-submit"]').trigger('click')
+    await flushPromises()
+    expect(h.addSpy.mock.calls[3]![2]).not.toBe(changedContentKey)
   })
 
   it('#4 手动记录：内容为空时提交按钮禁用', async () => {
@@ -149,9 +211,7 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
   })
 
   it('积累加载失败会在当前 Tab 显示错误和原地重试，不污染其他档案', async () => {
-    h.listSpy
-      .mockRejectedValueOnce(new Error('积累加载失败'))
-      .mockResolvedValueOnce({ items: [] })
+    h.listSpy.mockRejectedValueOnce(new Error('积累加载失败')).mockResolvedValueOnce({ items: [] })
     const w = render()
     await flushPromises()
     await gotoAccum(w)
@@ -170,8 +230,22 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     const ts = Math.floor(new Date(2026, 6, 12, 10, 0, 0).getTime() / 1000) // 本地 07-12
     h.listSpy.mockReset().mockResolvedValue({
       items: [
-        { record_id: 'q1', subject: '语文', entry_type: '好词好句', content: '时间像海绵里的水', source: '课外阅读', status: 'new', created_at: ts },
-        { record_id: 'q2', subject: '英语', entry_type: '表达积累', content: 'a piece of cake', status: 'new' }, // 旧后端：无 created_at
+        {
+          record_id: 'q1',
+          subject: '语文',
+          entry_type: '好词好句',
+          content: '时间像海绵里的水',
+          source: '课外阅读',
+          status: 'new',
+          created_at: ts,
+        },
+        {
+          record_id: 'q2',
+          subject: '英语',
+          entry_type: '表达积累',
+          content: 'a piece of cake',
+          status: 'new',
+        }, // 旧后端：无 created_at
       ],
     })
     const w = render()
@@ -188,27 +262,117 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     expect(rows[1]!.find('[data-testid="accum-date"]').exists()).toBe(false)
   })
 
-  // BUG-20260712-#2：积累行「详情」走真 handler → 打开详情弹层显内容/学科/类型（不再死按钮）。
-  it('积累行「详情」点击 → 打开详情弹层显内容/学科/类型', async () => {
+  // BUG-20260712-#2：积累行「查看详情」走真 handler，派生元数据只读且不投影掌握/状态。
+  it('积累行「查看详情」点击 → 显示服务端派生元数据，但没有 mastery/status 或更正分类', async () => {
     h.listSpy.mockReset().mockResolvedValue({
-      items: [{ record_id: 'x1', subject: '英语', entry_type: '好词好句', content: 'a piece of cake', status: 'new' }],
+      items: [
+        {
+          record_id: 'x1',
+          subject: '英语',
+          entry_type: '好词好句',
+          content: 'a piece of cake',
+          source: 'Unit 4',
+          version: 1,
+        },
+      ],
     })
     const w = render()
     await flushPromises()
     await gotoAccum(w)
-    // 积累行只应有「详情」（无「再练」）
+    // 积累行只应有默写主动作 +「查看详情」（无「再练」）
     const rowBtns = w.findAll('.k12accum__row .k12accum__detail').map((b) => b.text())
     expect(rowBtns).not.toContain('再练')
-    await w.findAll('.k12accum__row .k12accum__detail').find((b) => b.text() === '详情')!.trigger('click')
+    await w
+      .findAll('.k12accum__row .k12accum__detail')
+      .find((b) => b.text() === '查看详情')!
+      .trigger('click')
     await flushPromises()
     const modal = w.find('[data-testid="mistake-detail"]')
     expect(modal.exists()).toBe(true)
+    expect(modal.get('.k12modal__head b').text()).toBe('积累内容详情')
     expect(w.find('[data-testid="detail-content"]').text()).toContain('a piece of cake')
     expect(w.find('[data-testid="detail-accum-subject"]').text()).toContain('英语')
     expect(w.find('[data-testid="detail-accum-type"]').text()).toContain('好词好句')
+    expect(w.find('[data-testid="detail-accum-source"]').text()).toContain('Unit 4')
+    expect(w.find('[data-testid="detail-status"]').exists()).toBe(false)
+    expect(modal.text()).not.toMatch(/已掌握|待复习|更正分类/)
   })
 
-  it('积累详情只提供复制、全绑定发送、生成默写题；发送不选择平台或接收人', async () => {
+  it('列表从服务端 generation 摘要恢复 initial/pending/committed/failed 四种动作状态', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        {
+          record_id: 'initial',
+          subject: '语文',
+          entry_type: '好词好句',
+          content: '一寸光阴一寸金',
+          version: 1,
+        },
+        {
+          record_id: 'pending',
+          subject: '英语',
+          entry_type: '表达积累',
+          content: 'take it easy',
+          version: 2,
+          dictation_generation: { generation_id: 'g-p', status: 'generating' },
+        },
+        {
+          record_id: 'joined',
+          subject: '英语',
+          entry_type: '词汇积累',
+          content: 'practice',
+          version: 3,
+          dictation_generation: {
+            generation_id: 'g-j',
+            status: 'committed',
+            practice_item_id: 'practice-1',
+          },
+        },
+        {
+          record_id: 'failed',
+          subject: '语文',
+          entry_type: '写作素材',
+          content: '雨后的树叶',
+          version: 4,
+          dictation_generation: { generation_id: 'g-f', status: 'failed' },
+        },
+      ],
+    })
+
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+
+    const initial = w.get('[data-testid="accum-list-dictation-initial"]')
+    expect(initial.text()).toBe('生成默写题，加入练习集')
+    expect(initial.attributes('disabled')).toBeUndefined()
+
+    const pending = w.get('[data-testid="accum-list-dictation-pending"]')
+    expect(pending.text()).toBe('生成默写题，加入练习集')
+    expect(pending.attributes('disabled')).toBeDefined()
+    expect(pending.attributes('aria-busy')).toBe('true')
+
+    const joined = w.get('[data-testid="accum-list-dictation-joined"]')
+    expect(joined.text()).toBe('已加入练习集')
+    expect(joined.attributes('disabled')).toBeDefined()
+
+    const failed = w.get('[data-testid="accum-list-dictation-failed"]')
+    expect(failed.text()).toBe('生成默写题，加入练习集')
+    expect(failed.attributes('disabled')).toBeUndefined()
+
+    const rows = w.findAll('.k12accum__row')
+    for (const row of rows) {
+      expect(row.find('.k12accum__status').exists()).toBe(false)
+      expect(row.findAll('button').map((button) => button.text())).toHaveLength(2)
+      expect(row.findAll('button')[1]!.text()).toBe('查看详情')
+    }
+
+    await failed.trigger('click')
+    await flushPromises()
+    expect(h.generateSpy).toHaveBeenCalledWith('mingming', 'failed')
+  })
+
+  it('积累详情动作 exact-set 为复制、发送、生成默写题、删除，且只有头部 X 关闭', async () => {
     vi.useFakeTimers()
     h.listSpy.mockResolvedValue({
       items: [
@@ -217,7 +381,7 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
           subject: '英语',
           entry_type: '好词好句',
           content: 'a piece of cake',
-          status: 'new',
+          version: 1,
         },
       ],
     })
@@ -270,8 +434,15 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await w.get('.k12accum__detail').trigger('click')
     await flushPromises()
 
-    expect(w.get('[data-testid="accum-copy-content"]').text()).toBe('复制内容')
-    expect(w.get('[data-testid="accum-send-phone"]').text()).toBe('发送到手机')
+    const modal = w.get('[data-testid="mistake-detail"]')
+    expect(modal.findAll('.k12modal__head button')).toHaveLength(1)
+    expect(modal.findAll('.k12detail__actions button').map((button) => button.text())).toEqual([
+      '复制内容',
+      '发送到手机',
+      '生成默写题，加入练习集',
+      '删除',
+    ])
+    expect(modal.text()).not.toContain('更正分类')
     expect(w.text()).not.toMatch(/选择.*(钉钉|飞书|接收人|发送目标)/)
 
     await w.get('[data-testid="accum-send-phone"]').trigger('click')
@@ -283,5 +454,121 @@ describe('K12RecordsView 积累本（#4 手动记录 + #5 分科过滤）', () =
     await flushPromises()
     expect(h.querySpy).toHaveBeenCalledWith('mingming', 'batch-1')
     expect(w.get('[data-testid="accum-send-phone"]').text()).toBe('发送成功')
+  })
+
+  it('积累删除复用 5 秒 ConfirmDialog，并只在后端成功后移除当前投影', async () => {
+    vi.useFakeTimers()
+    let resolveDelete!: (value: {
+      accumulation_id: string
+      deleted: boolean
+      version: number
+    }) => void
+    h.deleteSpy.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveDelete = resolve
+      }),
+    )
+    h.listSpy.mockResolvedValue({
+      items: [
+        {
+          record_id: 'x1',
+          subject: '英语',
+          entry_type: '表达积累',
+          content: 'a piece of cake',
+          version: 7,
+        },
+      ],
+    })
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+    await w.get('.k12accum__detail').trigger('click')
+    const detailCard = w.get<HTMLElement>('[data-testid="mistake-detail"] .k12modal__card')
+    detailCard.element.scrollTop = 93
+    const deleteButton = w.get<HTMLButtonElement>('[data-testid="accum-delete"]')
+    expect(deleteButton.classes()).toContain('hc-btn-danger-ghost')
+    deleteButton.element.focus()
+    await deleteButton.trigger('click')
+    await flushPromises()
+
+    const dialog = document.body.querySelector('[role="alertdialog"]')
+    expect(w.find('[data-testid="mistake-detail"]').exists()).toBe(false)
+    expect(document.body.querySelectorAll('[aria-modal="true"]')).toHaveLength(1)
+    expect(dialog?.textContent).toContain('删除这条积累？')
+    expect(dialog?.textContent).toContain(
+      '将从积累列表移除；已生成的练习题和发送记录仍保留。此操作不可撤销。',
+    )
+    const confirm = dialog?.querySelector('.hc-dialog__btn--danger') as HTMLButtonElement
+    expect(confirm.disabled).toBe(true)
+    expect(h.deleteSpy).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(5_000)
+    confirm.click()
+    await flushPromises()
+
+    expect(h.deleteSpy).toHaveBeenCalledWith(
+      'mingming',
+      'x1',
+      7,
+      expect.stringMatching(/^desktop-accum-delete:mingming:x1:/),
+    )
+    expect(w.find('[data-testid="mistake-detail"]').exists()).toBe(false)
+
+    resolveDelete({ accumulation_id: 'x1', deleted: true, version: 8 })
+    await flushPromises()
+    expect(w.find('[data-testid="mistake-detail"]').exists()).toBe(false)
+    expect(h.listSpy.mock.calls.length).toBeGreaterThan(1)
+    w.unmount()
+  })
+
+  it('积累删除取消与失败都恢复同一详情、滚动位置和删除入口焦点', async () => {
+    vi.useFakeTimers()
+    h.listSpy.mockResolvedValue({
+      items: [
+        {
+          record_id: 'x1',
+          subject: '英语',
+          entry_type: '表达积累',
+          content: 'a piece of cake',
+          version: 7,
+        },
+      ],
+    })
+    const w = render()
+    await flushPromises()
+    await gotoAccum(w)
+    await w.get('.k12accum__detail').trigger('click')
+    let detailCard = w.get<HTMLElement>('[data-testid="mistake-detail"] .k12modal__card')
+    detailCard.element.scrollTop = 64
+    await w.get('[data-testid="accum-delete"]').trigger('click')
+    await flushPromises()
+    const cancel = Array.from(document.body.querySelectorAll('button')).find(
+      (button) => button.textContent === '取消',
+    ) as HTMLButtonElement
+    cancel.click()
+    await flushPromises()
+
+    detailCard = w.get<HTMLElement>('[data-testid="mistake-detail"] .k12modal__card')
+    expect(detailCard.element.scrollTop).toBe(64)
+    expect(document.activeElement).toBe(
+      w.get<HTMLButtonElement>('[data-testid="accum-delete"]').element,
+    )
+
+    h.deleteSpy.mockRejectedValueOnce(new Error('删除失败'))
+    detailCard.element.scrollTop = 121
+    await w.get('[data-testid="accum-delete"]').trigger('click')
+    await vi.advanceTimersByTimeAsync(5_000)
+    ;(document.body.querySelector('.hc-dialog__btn--danger') as HTMLButtonElement).click()
+    await flushPromises()
+
+    expect(w.find('[data-testid="mistake-detail"]').exists()).toBe(true)
+    expect(
+      w.get<HTMLElement>('[data-testid="mistake-detail"] .k12modal__card').element.scrollTop,
+    ).toBe(121)
+    expect(document.activeElement).toBe(
+      w.get<HTMLButtonElement>('[data-testid="accum-delete"]').element,
+    )
+    expect(w.findAll('.k12accum__row')).toHaveLength(1)
+    w.unmount()
   })
 })

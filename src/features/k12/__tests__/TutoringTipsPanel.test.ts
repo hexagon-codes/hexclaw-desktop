@@ -46,10 +46,7 @@ function i18n() {
   })
 }
 
-function render(
-  knowledgePoints: string[] = ['简易方程'],
-  overrides: Record<string, unknown> = {},
-) {
+function render(knowledgePoints: string[] = ['简易方程'], overrides: Record<string, unknown> = {}) {
   return mount(TutoringTipsPanel, {
     props: {
       agentId: 'mingming',
@@ -105,8 +102,11 @@ describe('TutoringTipsPanel（辅导要点内联卡）', () => {
     await flushPromises()
 
     expect(w.get('.tutoring-tips__unit').text()).toBe('简易方程')
-    expect(w.findAll('.tutoring-tips__actions .icbtn svg')).toHaveLength(3)
-    expect(w.get('.tutoring-tips__legend').element.parentElement).toBe(w.get('.tutoring-tips').element)
+    // 上传教材与打印使用原型指定 SVG；发送按钮按统一投递合同直接显示四态文案。
+    expect(w.findAll('.tutoring-tips__actions .icbtn svg')).toHaveLength(2)
+    expect(w.get('.tutoring-tips__legend').element.parentElement).toBe(
+      w.get('.tutoring-tips').element,
+    )
     expect(w.get('.tutoring-tips__basis').text()).toContain('人教版')
     expect(w.get('.tutoring-tips__basis').text()).toContain('五年级上')
   })

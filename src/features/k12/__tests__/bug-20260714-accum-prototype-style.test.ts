@@ -16,7 +16,7 @@ const h = vi.hoisted(() => ({
         entry_type: '好词好句',
         content: '时间像海绵里的水，挤一挤总是有的',
         source: '课外阅读 · 主动收藏',
-        status: '已积累',
+        version: 1,
       },
     ],
   }),
@@ -83,9 +83,9 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
     expect(row.find('.k12accum__title').text()).toContain('时间像海绵里的水')
     expect(row.find('.k12accum__type').text()).toBe('好词好句')
     expect(row.find('.k12accum__source').text()).toBe('出处：课外阅读 · 主动收藏')
-    expect(row.find('.k12accum__status').text()).toBe('—')
+    expect(row.find('.k12accum__status').exists()).toBe(false)
 
-    // 20260718 原型定案更新（引文列表）：引文置首整行，meta 行=学科/类型/来源/(日期)/状态/详情；
+    // 当前合同：引文置首，meta 只读；无 mastery/status，行末固定生成主动作 + 查看详情。
     // 本用例 mock 无 created_at → 无日期节点。
     const ordered = row.element.children
     expect([...ordered].map((el) => el.className)).toEqual([
@@ -93,14 +93,19 @@ describe('BUG-20260714 积累本对齐 prototype/app.html:1618-1624', () => {
       'k12accum__subject',
       'k12accum__type',
       'k12accum__source',
-      'k12accum__status k12accum__status--na',
+      'btn',
       'btn btn-ghost k12accum__detail',
+    ])
+    expect(row.findAll('button').map((button) => button.text())).toEqual([
+      '生成默写题，加入练习集',
+      '查看详情',
     ])
   })
 
-  it('列表行与新增表单行使用独立 class，表单 flex-wrap 不得污染归档列表', () => {
+  it('新增表单不再包含客户端分类字段或旧并排分类行', () => {
     expect(recordsSource.match(/\.k12accum__row\s*\{/g)).toHaveLength(1)
-    expect(recordsSource).toContain('class="k12accum__form-row"')
-    expect(recordsSource).toMatch(/\.k12accum__form-row\s*\{[^}]*flex-wrap:\s*wrap;/s)
+    expect(recordsSource).not.toContain('class="k12accum__form-row"')
+    expect(recordsSource).not.toContain('data-testid="accum-add-subject"')
+    expect(recordsSource).not.toContain('data-testid="accum-add-type"')
   })
 })

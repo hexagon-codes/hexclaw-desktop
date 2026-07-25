@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
@@ -78,6 +78,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     h.toastSuccessSpy.mockReset()
     h.toastWarningSpy.mockReset()
   })
+  afterEach(() => vi.useRealTimers())
 
   it('显示名随称呼/年级自动生成「{称呼}的辅导老师 · {年级}」', async () => {
     render()
@@ -481,6 +482,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
   })
 
   it('编辑删除使用 alertdialog 确认语义，第一次点击不执行删除', async () => {
+    vi.useFakeTimers()
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
@@ -503,6 +505,10 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     const dialog = B().find('[role="alertdialog"]')
     expect(dialog.exists()).toBe(true)
     expect(dialog.text()).toContain('确定删除「小明的辅导助手」？')
+    expect((dialog.find('.hc-dialog__btn--danger').element as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+    await vi.advanceTimersByTimeAsync(5_000)
     await dialog.find('.hc-dialog__btn--danger').trigger('click')
     await flushPromises()
     expect(h.unregisterSpy).toHaveBeenCalledExactlyOnceWith('k12-tutor-x')

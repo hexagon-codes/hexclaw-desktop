@@ -14,10 +14,15 @@ import type { CreativeWorkDTO } from '@/api/k12'
 const h = vi.hoisted(() => ({
   listSpy: vi.fn(),
   createSpy: vi.fn(),
+  generateFeedbackSpy: vi.fn(),
+  deleteWorkSpy: vi.fn(),
+  sendWorkSpy: vi.fn(),
+  getDeliveryBatchSpy: vi.fn(),
+  queryDeliveryBatchSpy: vi.fn(),
+  retryDeliveryBatchSpy: vi.fn(),
   uploadSpy: vi.fn(),
   createImageTaskSpy: vi.fn(),
   getImageTaskSpy: vi.fn(),
-  getImageTaskResultSpy: vi.fn(),
   confirmImageTaskSpy: vi.fn(),
   retryImageTaskSpy: vi.fn(),
   cancelImageTaskSpy: vi.fn(),
@@ -27,14 +32,16 @@ const h = vi.hoisted(() => ({
 vi.mock('@/api/k12', () => ({
   k12ListCreativeWorks: (agent: string, type?: string) => h.listSpy(agent, type),
   k12CreateCreativeWork: (req: unknown) => h.createSpy(req),
-  k12GenerateWorkFeedback: vi.fn(),
-  k12SubmitWorkRevision: vi.fn(),
+  k12GenerateWorkFeedback: (...args: unknown[]) => h.generateFeedbackSpy(...args),
+  k12DeleteCreativeWork: (...args: unknown[]) => h.deleteWorkSpy(...args),
+  k12SendCreativeWork: (...args: unknown[]) => h.sendWorkSpy(...args),
+  k12GetDeliveryBatch: (...args: unknown[]) => h.getDeliveryBatchSpy(...args),
+  k12QueryDeliveryBatch: (...args: unknown[]) => h.queryDeliveryBatchSpy(...args),
+  k12RetryDeliveryBatch: (...args: unknown[]) => h.retryDeliveryBatchSpy(...args),
   k12UploadAsset: (a: string, f: File, p?: (n: number) => void, signal?: AbortSignal) =>
     h.uploadSpy(a, f, p, signal),
   k12CreateImageTask: (req: unknown) => h.createImageTaskSpy(req),
   k12GetImageTask: (agent: string, dispatchId: string) => h.getImageTaskSpy(agent, dispatchId),
-  k12GetImageTaskResult: (agent: string, dispatchId: string) =>
-    h.getImageTaskResultSpy(agent, dispatchId),
   k12ConfirmImageTask: (dispatchId: string, req: unknown) => h.confirmImageTaskSpy(dispatchId, req),
   k12RetryImageTask: (dispatchId: string, req: unknown) => h.retryImageTaskSpy(dispatchId, req),
   k12CancelImageTask: (dispatchId: string, req: unknown) => h.cancelImageTaskSpy(dispatchId, req),
@@ -42,6 +49,9 @@ vi.mock('@/api/k12', () => ({
     id.startsWith('asset://')
       ? `http://test/api/k12/assets/${id.slice(id.lastIndexOf('/') + 1)}?agent=${agent}`
       : '',
+}))
+vi.mock('@/api/desktop', () => ({
+  setClipboard: vi.fn(),
 }))
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({ success: h.toastSuccess, error: h.toastError }),
@@ -57,19 +67,30 @@ function i18n() {
 
 function artWork(over: Partial<CreativeWorkDTO> = {}): CreativeWorkDTO {
   return {
-    record_id: 'w-art',
+    work_id: 'w-art',
     work_type: 'art',
-    title: '雨后的校园',
-    task: '写生',
-    status: 'feedback_ready',
-    status_label: '已点评',
-    versions: [
-      {
-        version_id: 'v1',
-        source_asset_id: 'asset://k12-xiaoming/deadbeef.png',
-        feedback: '画面主体清楚。\n## 建议\n- 试试只用三档明暗再画一张小稿。',
+    display_name: '《雨后的校园》',
+    work_title: '《雨后的校园》',
+    source_asset_id: 'asset://k12-xiaoming/deadbeef.png',
+    row_version: 1,
+    initial_feedback: {
+      generation_id: 'generation-art',
+      status: 'succeeded',
+      feedback: {
+        feedback_id: 'feedback-art',
+        feedback_type: 'art',
+        evidence_refs: ['asset:deadbeef'],
+        visible_evidence: ['画面主体清楚'],
+        affirmation: '主体很明确。',
+        parent_guidance: '可以问孩子最喜欢哪个颜色。',
+        next_step: '下次只试三档明暗。',
+        source_snapshot: {
+          source: 'ai',
+          method_ref: 'art-feedback@1',
+          capability: 'creative_work_feedback',
+        },
       },
-    ],
+    },
     ...over,
   }
 }
@@ -111,7 +132,17 @@ function artDispatch(status: 'ready' | 'promoted', version = 1) {
 
 beforeEach(() => {
   h.listSpy.mockReset().mockResolvedValue({ items: [] })
-  h.createSpy.mockReset().mockResolvedValue({ record_id: 'w-new', created: true })
+  h.createSpy.mockReset().mockResolvedValue({
+    work_id: 'w-new',
+    created: true,
+    initial_feedback_generation_id: 'generation-new',
+  })
+  h.generateFeedbackSpy.mockReset()
+  h.deleteWorkSpy.mockReset()
+  h.sendWorkSpy.mockReset()
+  h.getDeliveryBatchSpy.mockReset()
+  h.queryDeliveryBatchSpy.mockReset()
+  h.retryDeliveryBatchSpy.mockReset()
   h.uploadSpy
     .mockReset()
     .mockResolvedValue({ asset_id: 'asset://k12-xiaoming/abc123.png', size: 3 })
@@ -120,7 +151,6 @@ beforeEach(() => {
     dispatch: artDispatch('ready'),
   })
   h.getImageTaskSpy.mockReset().mockResolvedValue({ dispatch: artDispatch('ready') })
-  h.getImageTaskResultSpy.mockReset().mockResolvedValue({ result: null })
   h.confirmImageTaskSpy.mockReset().mockResolvedValue({ dispatch: artDispatch('promoted', 2) })
   h.retryImageTaskSpy.mockReset().mockResolvedValue({ dispatch: artDispatch('ready', 2) })
   h.cancelImageTaskSpy.mockReset().mockResolvedValue({
@@ -172,7 +202,6 @@ describe('任务1 · 照片真实上传', () => {
     )
 
     await w.find('[data-testid="cw-add-title"]').setValue('《雨后的校园》')
-    await w.find('[data-testid="cw-add-task"]').setValue('水彩写生')
     await w.find('[data-testid="cw-add-submit"]').trigger('click')
     await flushPromises()
     expect(h.confirmImageTaskSpy).toHaveBeenCalledWith('dispatch-art-new', {
@@ -181,9 +210,6 @@ describe('任务1 · 照片真实上传', () => {
       creative: {
         action: 'commit',
         work_title: '《雨后的校园》',
-        task_requirement: '水彩写生',
-        intent: undefined,
-        content_markdown: undefined,
       },
     })
     expect(h.createSpy).not.toHaveBeenCalled()

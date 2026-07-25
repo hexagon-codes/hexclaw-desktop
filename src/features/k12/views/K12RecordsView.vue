@@ -21,22 +21,23 @@ import {
   k12ReviewRetry,
   k12ExportMd,
   k12AddAccumulation,
+  k12DeleteAccumulation,
+  k12GenerateAccumulationDictation,
   k12AddToBasket,
   k12FillPracticeBasket,
   k12GenerateCustomPaper,
   k12ListPracticeSets,
   k12ListCreativeWorks,
   k12SendAccumulation,
+  type AccumulationDictationGenerationDTO,
+  type AccumulationDictationStatus,
   type CustomPaperDifficulty,
   type CustomPaperResp,
   type CustomPaperScope,
   type CustomPaperTotal,
 } from '@/api/k12'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
-// 积累「生成默写题加入练习集」端点未收编进 api/k12.ts（该文件其他会话活跃禁改）→ 此处经 apiPost 直调，
-// 契约与下方 dictationToBasket 一致；api/k12.ts 解锁后由该文件 owner 收编为 k12AccumDictationToBasket。
-import { apiPost } from '@/api/client'
-import { MISTAKE_SCHEMA, ACCUMULATION_SCHEMA } from '../schemas'
+import { MISTAKE_SCHEMA } from '../schemas'
 import { exportArchiveDocument, worksheetFilename, download } from '../export'
 import type { RecordCollectionView, RecordItem } from '@/contracts'
 import type {
@@ -223,6 +224,9 @@ watch(
     clearArchiveUndos()
     archiveBusy.value = []
     closeRetry()
+    // 删除确认与被确认对象必须随辅导对象切换一并销毁，避免旧对象的
+    // 冷却计时器、焦点恢复或迟到响应污染新对象。
+    closeDetail()
     accumSubject.value = ''
     mistakeSubject.value = ''
     mistakeStatus.value = 'all'
@@ -244,45 +248,37 @@ onBeforeUnmount(clearArchiveUndos)
 // 手动记积累本（#4）：家长在会话里遇到好东西 → 直接记进积累本（PRD §3.13）。
 // 学情相关（本月辅导次数/学期分科/薄弱条/完成率）已随 IA 迁移抽到 K12InsightPanel（顶栏一等 Tab）。
 
-// 20260718 原型定案对齐（app.html K12_ACCUMULATION_TYPES）：类型按学科分化——语文收好词好句/
-// 古诗积累/写作素材，英语收表达积累/词汇积累；原静态四项混排会出现「英语 × 古诗」无效组合。
-// 切学科时类型重置为该学科首项；展示侧兼容存量旧词汇（见 store ACCUM_KEEP_TYPES）。
-const ACCUM_SUBJECTS = ['语文', '英语']
-const ACCUM_TYPES_BY_SUBJECT: Record<string, string[]> = {
-  语文: ['好词好句', '古诗积累', '写作素材'],
-  英语: ['表达积累', '词汇积累'],
-}
 const accumAddOpen = ref(false)
-const accumForm = ref({ subject: '语文', entry_type: '好词好句', content: '' })
-// HcSelect 选项（原生 select 在 WKWebView 显 macOS Aqua 样式 · BUG-20260708 D5/B2）
-const accumSubjectOptions = computed(() => ACCUM_SUBJECTS.map((s) => ({ value: s, label: s })))
-const accumTypeOptions = computed(() =>
-  (ACCUM_TYPES_BY_SUBJECT[accumForm.value.subject] ?? ACCUM_TYPES_BY_SUBJECT['语文']!).map(
-    (ty) => ({ value: ty, label: ty }),
-  ),
-)
-watch(
-  () => accumForm.value.subject,
-  (s) => {
-    accumForm.value.entry_type = (ACCUM_TYPES_BY_SUBJECT[s] ?? ACCUM_TYPES_BY_SUBJECT['语文']!)[0]!
-  },
-  // sync：学科一变立即重置类型；pre-flush 会在「同 tick 先选学科再选类型」时反过来冲掉用户的类型选择
-  { flush: 'sync' },
-)
+const accumForm = ref({ content: '' })
 const accumSaving = ref(false)
+const accumCreateIdempotencyKey = ref('')
+let accumCreateKeySequence = 0
+
+function newAccumCreateKey(agent = props.agentId): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return `desktop-accum-create:${agent}:${uuid ?? `${Date.now()}-${++accumCreateKeySequence}`}`
+}
+
+function rotateAccumCreateKey() {
+  accumCreateIdempotencyKey.value = newAccumCreateKey()
+}
+
+watch(
+  () => props.agentId,
+  () => rotateAccumCreateKey(),
+  { immediate: true },
+)
+
 async function submitAccum() {
   const content = accumForm.value.content.trim()
   if (!content || accumSaving.value) return
+  const idempotencyKey = accumCreateIdempotencyKey.value || newAccumCreateKey()
   accumSaving.value = true
   try {
-    await k12AddAccumulation({
-      agent: props.agentId,
-      subject: accumForm.value.subject,
-      entry_type: accumForm.value.entry_type,
-      content,
-    })
+    await k12AddAccumulation(props.agentId, { content }, idempotencyKey)
     toast.success(t('k12.accum.added'))
     accumForm.value.content = ''
+    rotateAccumCreateKey()
     accumAddOpen.value = false
     await reloadAccum()
   } catch (e) {
@@ -900,12 +896,26 @@ const detail = ref<{ open: boolean; record: RecordItem | null; kind: 'mistake' |
   record: null,
   kind: 'mistake',
 })
+const detailCard = ref<HTMLElement | null>(null)
+const confirmDelete = ref(false)
+const accumulationDeleteReturnState = ref<{
+  recordID: string
+  scrollTop: number
+} | null>(null)
+const accumulationDeleteConfirmActive = computed(
+  () => confirmDelete.value && detail.value.kind === 'accum',
+)
+
 function openDetail(record: RecordItem, kind: 'mistake' | 'accum' = 'mistake') {
   accumulationDelivery.reset()
+  confirmDelete.value = false
+  accumulationDeleteReturnState.value = null
   detail.value = { open: true, record, kind }
 }
 function closeDetail() {
   accumulationDelivery.reset()
+  confirmDelete.value = false
+  accumulationDeleteReturnState.value = null
   detail.value = { open: false, record: null, kind: 'mistake' }
 }
 const detailQuestion = computed(() => String(detail.value.record?.fields.question ?? ''))
@@ -920,6 +930,7 @@ const detailSpotCheckFailed = computed(
 const detailContent = computed(() => String(detail.value.record?.fields.content ?? ''))
 const detailAccumSubject = computed(() => String(detail.value.record?.fields.subject ?? ''))
 const detailAccumType = computed(() => String(detail.value.record?.fields.entry_type ?? ''))
+const detailAccumSource = computed(() => String(detail.value.record?.fields.source ?? ''))
 // 收藏日期（原型 acc-date）：fields.created_at（unix 秒字符串）→ MM-DD；旧后端无字段时不显示
 function accumDate(item: RecordItem): string {
   const ts = Number(item.fields.created_at ?? '')
@@ -937,26 +948,17 @@ function accumSourceLabel(item: RecordItem): string {
   const source = accumField(item, 'source')
   return source ? `${t('k12.accumulationFields.source')}：${source}` : ''
 }
-function accumStatusLabel(item: RecordItem): string {
-  return item.status === '已掌握' || item.status === 'mastered'
-    ? t('k12.mistakeStatus.mastered')
-    : t('k12.accumulationStatus.na')
-}
-function accumStatusTone(item: RecordItem): 'got' | 'na' {
-  return item.status === '已掌握' || item.status === 'mastered' ? 'got' : 'na'
-}
 const detailStatus = computed(() => {
+  if (detail.value.kind === 'accum') return ''
   const s = detail.value.record?.status
   if (!s) return '—'
-  const schema = detail.value.kind === 'accum' ? ACCUMULATION_SCHEMA : MISTAKE_SCHEMA
-  const st = schema.states?.find((x) => x.id === s)
+  const st = MISTAKE_SCHEMA.states?.find((x) => x.id === s)
   return st ? t(st.labelKey) : s
 })
 // 状态色调复用对应 schema 状态机声明（与 RecordList 行内状态徽章同源，零硬编码色映射）。
 const detailStatusTone = computed(() => {
   const s = detail.value.record?.status
-  const schema = detail.value.kind === 'accum' ? ACCUMULATION_SCHEMA : MISTAKE_SCHEMA
-  return schema.states?.find((st) => st.id === s)?.tone ?? 'na'
+  return MISTAKE_SCHEMA.states?.find((st) => st.id === s)?.tone ?? 'na'
 })
 // UX-1：详情弹层「家长确认已会」——已掌握态不显该动作（幂等，与档案行同口径）。
 const detailMastered = computed(() => detail.value.record?.status === 'mastered')
@@ -980,12 +982,62 @@ async function markMasteredFromDetail() {
   }
 }
 
-// §3.9 检验出口（原型 openAccumulationDetail 三出口之一）：积累详情「生成默写题，加入练习集」——
-// 复制/发送是素材取用（不污染闭环），想检验记没记住走此出口（added_via=accumulation，后端生成默写题装篮）。
-// 端点契约（后端另一 agent 在做，先按约定接）：POST /accumulation/{id}/dictation-to-basket → { record_id, added }。
-// api/k12.ts 其他会话活跃禁改 → 此处 apiPost 内联；解锁后由该文件 owner 收编为 k12AccumDictationToBasket。
-const dictationBusy = ref(false)
-const dictationAdded = ref<string[]>([]) // 本会话已装篮的积累 record_id（按钮幂等置灰）
+// 积累默写 generation 始终以 GET/POST 返回的 durable 摘要为真相源；组件只保留在途提交锁，
+// 不用会话数组冒充持久状态。queued/generating/validating 均为同一 pending 投影。
+const ACCUMULATION_DICTATION_STATUSES = new Set<AccumulationDictationStatus>([
+  'queued',
+  'generating',
+  'validating',
+  'committed',
+  'failed',
+])
+const dictationBusy = ref<string[]>([])
+
+function accumulationGeneration(
+  item: RecordItem | null | undefined,
+): AccumulationDictationGenerationDTO | undefined {
+  const value = item?.fields.dictation_generation
+  if (!value || typeof value !== 'object') return undefined
+  const status = (value as { status?: unknown }).status
+  if (
+    typeof status !== 'string' ||
+    !ACCUMULATION_DICTATION_STATUSES.has(status as AccumulationDictationStatus)
+  )
+    return undefined
+  return value as AccumulationDictationGenerationDTO
+}
+
+function accumulationDictationPending(item: RecordItem): boolean {
+  const status = accumulationGeneration(item)?.status
+  return status === 'queued' || status === 'generating' || status === 'validating'
+}
+
+function accumulationDictationCommitted(item: RecordItem): boolean {
+  return accumulationGeneration(item)?.status === 'committed'
+}
+
+function accumulationDictationDisabled(item: RecordItem): boolean {
+  return (
+    dictationBusy.value.includes(item.recordId) ||
+    accumulationDictationPending(item) ||
+    accumulationDictationCommitted(item)
+  )
+}
+
+function accumulationDictationLabel(item: RecordItem): string {
+  return t(
+    accumulationDictationCommitted(item)
+      ? 'k12.accum.dictationAdded'
+      : 'k12.accum.dictationToBasket',
+  )
+}
+
+function setDictationBusy(recordId: string, busy: boolean) {
+  dictationBusy.value = busy
+    ? [...new Set([...dictationBusy.value, recordId])]
+    : dictationBusy.value.filter((id) => id !== recordId)
+}
+
 async function copyAccumulationContent() {
   if (!detailContent.value) return
   try {
@@ -1000,43 +1052,135 @@ async function sendAccumulationToPhone() {
   if (!rec) return
   await accumulationDelivery.send(() => k12SendAccumulation(props.agentId, rec.recordId))
 }
-async function dictationToBasket() {
-  const rec = detail.value.record
-  if (!rec || dictationBusy.value || dictationAdded.value.includes(rec.recordId)) return
-  dictationBusy.value = true
+async function dictationToBasket(rec: RecordItem | null = detail.value.record) {
+  if (!rec || accumulationDictationDisabled(rec)) return
+  setDictationBusy(rec.recordId, true)
   try {
-    const resp = await apiPost<{ record_id: string; added: boolean }>(
-      `/api/k12/accumulation/${rec.recordId}/dictation-to-basket`,
-      { agent: props.agentId },
-    )
-    dictationAdded.value = [...dictationAdded.value, rec.recordId]
-    toast.success(resp.added ? t('k12.records.basketAdded') : t('k12.records.basketDuplicate'))
+    const response = await k12GenerateAccumulationDictation(props.agentId, rec.recordId)
+    rec.fields.dictation_generation = response.dictation_generation
+    await reloadAccum()
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
+    await reloadAccum()
   } finally {
-    dictationBusy.value = false
+    setDictationBusy(rec.recordId, false)
   }
 }
 
-// UX-3：详情弹层内「删除这条错题」——克制入口（非首屏主按钮）+ 二次确认（复用 ConfirmDialog）。
-// 用于移除记错的 / 重复的条目（数据纠错，非逃避难题）。删成功 → 关弹层 + reload + toast。
-const confirmDelete = ref(false)
+// 详情删除统一复用平台 ConfirmDialog。积累删除额外携带 owner、版本和稳定幂等键；
+// 只有服务端确认成功后才关闭详情并刷新当前积累投影。
 const deleting = ref(false)
+const accumulationDeleteKeys = new Map<string, string>()
+let accumulationDeleteSequence = 0
+
+function accumulationDeleteTarget(record: RecordItem): string {
+  return `${props.agentId}:${record.recordId}`
+}
+
+function accumulationDeleteKey(record: RecordItem): string {
+  const target = accumulationDeleteTarget(record)
+  const existing = accumulationDeleteKeys.get(target)
+  if (existing) return existing
+  const created = `desktop-accum-delete:${props.agentId}:${record.recordId}:${Date.now()}-${++accumulationDeleteSequence}`
+  accumulationDeleteKeys.set(target, created)
+  return created
+}
+
 function askDelete() {
+  const rec = detail.value.record
+  if (!rec) return
+  if (detail.value.kind === 'accum') {
+    accumulationDeleteKey(rec)
+    accumulationDeleteReturnState.value = {
+      recordID: rec.recordId,
+      scrollTop: detailCard.value?.scrollTop ?? 0,
+    }
+  }
   confirmDelete.value = true
 }
+
+function restoreAccumulationDetail(recordID: string) {
+  const saved = accumulationDeleteReturnState.value
+  void nextTick(() => {
+    if (
+      !saved ||
+      saved.recordID !== recordID ||
+      detail.value.kind !== 'accum' ||
+      detail.value.record?.recordId !== recordID
+    ) {
+      if (accumulationDeleteReturnState.value === saved) {
+        accumulationDeleteReturnState.value = null
+      }
+      return
+    }
+    if (detailCard.value) detailCard.value.scrollTop = saved.scrollTop
+    detailCard.value?.querySelector<HTMLElement>('[data-testid="accum-delete"]')?.focus()
+    if (accumulationDeleteReturnState.value === saved) {
+      accumulationDeleteReturnState.value = null
+    }
+  })
+}
+
+function cancelDelete() {
+  if (deleting.value) return
+  const rec = detail.value.record
+  const restoreAccumulation = detail.value.kind === 'accum' && !!rec
+  confirmDelete.value = false
+  if (restoreAccumulation) restoreAccumulationDetail(rec.recordId)
+  else accumulationDeleteReturnState.value = null
+}
+
+const deleteConfirmTitle = computed(() =>
+  t(
+    detail.value.kind === 'accum'
+      ? 'k12.accum.deleteConfirmTitle'
+      : 'k12.detail.deleteConfirmTitle',
+  ),
+)
+const deleteConfirmMessage = computed(() =>
+  t(
+    detail.value.kind === 'accum'
+      ? 'k12.accum.deleteConfirmMessage'
+      : 'k12.detail.deleteConfirmMsg',
+  ),
+)
+const deleteConfirmText = computed(() =>
+  t(detail.value.kind === 'accum' ? 'k12.accum.delete' : 'k12.detail.deleteConfirmOk'),
+)
+const deleteConfirmationKey = computed(
+  () => `${detail.value.kind}:${props.agentId}:${detail.value.record?.recordId ?? ''}`,
+)
+
 async function doDelete() {
   const rec = detail.value.record
   if (!rec || deleting.value) return
   deleting.value = true
   try {
+    if (detail.value.kind === 'accum') {
+      const target = accumulationDeleteTarget(rec)
+      await k12DeleteAccumulation(
+        props.agentId,
+        rec.recordId,
+        rec.version,
+        accumulationDeleteKey(rec),
+      )
+      accumulationDeleteKeys.delete(target)
+      accumulationDeleteReturnState.value = null
+      confirmDelete.value = false
+      closeDetail()
+      await reloadAccum()
+      return
+    }
     await store.deleteMistake(props.agentId, rec.recordId) // 内含 reload
     toast.success(t('k12.detail.deleted'))
     confirmDelete.value = false
     closeDetail()
   } catch (e) {
     toast.error(e instanceof Error ? e.message : String(e))
+    const restoreAccumulation = detail.value.kind === 'accum'
+    const recordID = rec.recordId
     confirmDelete.value = false
+    if (restoreAccumulation) restoreAccumulationDetail(recordID)
   } finally {
     deleting.value = false
   }
@@ -1682,10 +1826,9 @@ async function doExportMd() {
             {{ t('common.retry') }}
           </button>
         </div>
-        <!-- 原型 app.html:1619-1623：积累不是错题状态机，固定单行“学科→内容→类型→出处→状态→详情”。 -->
+        <!-- 当前积累合同：服务端派生学科/类型/来源；列表不投影 mastery/status。 -->
         <div v-else-if="accumView && accumView.items.length" class="k12accum__list">
-          <!-- 20260718 原型定案对齐（引文列表）：引文置首整行（衬线 + 引号压角，量度 62ch），
-               meta 行 = 学科/类型/来源/收藏日期/状态/详情；结构同 .k12accum__row 换皮。 -->
+          <!-- 引文置首；每行 exact-set 为生成默写题主动作 + 查看详情。 -->
           <div
             v-for="item in accumView.items"
             :key="item.recordId"
@@ -1702,11 +1845,21 @@ async function doExportMd() {
             <span v-if="accumDate(item)" class="k12accum__date" data-testid="accum-date">{{
               accumDate(item)
             }}</span>
-            <span class="k12accum__status" :class="`k12accum__status--${accumStatusTone(item)}`">{{
-              accumStatusLabel(item)
-            }}</span>
-            <button class="btn btn-ghost k12accum__detail" @click="openDetail(item, 'accum')">
-              {{ t('records.detail') }}
+            <button
+              class="btn"
+              :data-testid="`accum-list-dictation-${item.recordId}`"
+              :disabled="accumulationDictationDisabled(item)"
+              :aria-busy="accumulationDictationPending(item)"
+              @click="dictationToBasket(item)"
+            >
+              {{ accumulationDictationLabel(item) }}
+            </button>
+            <button
+              class="btn btn-ghost k12accum__detail"
+              :data-testid="`accum-list-detail-${item.recordId}`"
+              @click="openDetail(item, 'accum')"
+            >
+              {{ t('k12.accum.viewDetails') }}
             </button>
           </div>
         </div>
@@ -1812,7 +1965,7 @@ async function doExportMd() {
           <span class="k12rec__sp" />
           <button class="btn btn-ghost" @click="accumAddOpen = false">✕</button>
         </div>
-        <!-- 20260718 原型布局定案对齐：内容=英雄字段置首（同「记一条错题」题目置首惯例），科目+类型并排次之 -->
+        <!-- 当前创建合同只接受 content；学科、类型、来源均由服务端派生。 -->
         <div class="k12accum__form k12accum__form--modal">
           <HcClearableField>
             <textarea
@@ -1821,18 +1974,9 @@ async function doExportMd() {
               data-testid="accum-add-content"
               :placeholder="t('k12.accum.contentPlaceholder')"
               rows="4"
+              @input="rotateAccumCreateKey"
             />
           </HcClearableField>
-          <div class="k12accum__form-row">
-            <div class="k12accum__field" data-testid="accum-add-subject">
-              <span>{{ t('k12.accum.subject') }}</span>
-              <HcSelect v-model="accumForm.subject" :options="accumSubjectOptions" />
-            </div>
-            <div class="k12accum__field" data-testid="accum-add-type">
-              <span>{{ t('k12.accum.type') }}</span>
-              <HcSelect v-model="accumForm.entry_type" :options="accumTypeOptions" />
-            </div>
-          </div>
           <div class="k12accum__actions">
             <button class="btn btn-ghost" @click="accumAddOpen = false">
               {{ t('k12.accum.cancel') }}
@@ -2120,14 +2264,16 @@ async function doExportMd() {
 
     <!-- 错题详情弹层（BUG-20260712-#2）：复用列表已有 RecordItem 字段，不额外请求后端，可关闭。 -->
     <div
-      v-if="detail.open && detail.record"
+      v-if="detail.open && detail.record && !accumulationDeleteConfirmActive"
       class="k12modal"
       data-testid="mistake-detail"
+      role="dialog"
+      aria-modal="true"
       @click.self="closeDetail"
     >
-      <div class="k12modal__card">
+      <div ref="detailCard" class="k12modal__card">
         <div class="k12modal__head">
-          <b>{{ t('k12.detail.title') }}</b>
+          <b>{{ detail.kind === 'accum' ? t('k12.accum.detailTitle') : t('k12.detail.title') }}</b>
           <span
             v-if="detailStatus"
             class="k12detail__status"
@@ -2160,6 +2306,12 @@ async function doExportMd() {
               {{ detailAccumType || '—' }}
             </p>
           </div>
+          <div class="k12detail__row">
+            <span class="k12detail__label">{{ t('k12.accumulationFields.source') }}</span>
+            <p class="k12detail__val" data-testid="detail-accum-source">
+              {{ detailAccumSource || '—' }}
+            </p>
+          </div>
           <!-- §3.9 检验出口：生成默写题加入练习集（打印回传才进自动复批闭环） -->
           <div class="k12detail__actions">
             <button
@@ -2180,14 +2332,19 @@ async function doExportMd() {
             <button
               class="btn"
               data-testid="accum-dictation-to-basket"
-              :disabled="dictationBusy || dictationAdded.includes(detail.record!.recordId)"
-              @click="dictationToBasket"
+              :disabled="accumulationDictationDisabled(detail.record!)"
+              :aria-busy="accumulationDictationPending(detail.record!)"
+              @click="dictationToBasket(detail.record)"
             >
-              {{
-                dictationAdded.includes(detail.record!.recordId)
-                  ? t('k12.accum.dictationAdded')
-                  : t('k12.accum.dictationToBasket')
-              }}
+              {{ accumulationDictationLabel(detail.record!) }}
+            </button>
+            <button
+              type="button"
+              class="hc-btn hc-btn-ghost hc-btn-danger-ghost"
+              data-testid="accum-delete"
+              @click="askDelete"
+            >
+              {{ t('k12.accum.delete') }}
             </button>
           </div>
           <p class="k12rec__hint" style="margin-top: 4px">{{ t('k12.accum.dictationHint') }}</p>
@@ -2261,7 +2418,7 @@ async function doExportMd() {
           <span class="k12rec__sp" />
           <!-- UX-3：克制删除入口——ghost 次级样式（非首屏主按钮），二次确认后才删。 -->
           <button
-            class="btn btn-ghost k12detail__del"
+            class="hc-btn hc-btn-ghost hc-btn-danger-ghost"
             data-testid="detail-delete"
             @click="askDelete"
           >
@@ -2277,13 +2434,14 @@ async function doExportMd() {
     <!-- UX-3：删除二次确认（复用平台 ConfirmDialog；副文案说明用途=移除记错/重复条目）。 -->
     <ConfirmDialog
       :open="confirmDelete"
-      :title="t('k12.detail.deleteConfirmTitle')"
-      :message="t('k12.detail.deleteConfirmMsg')"
-      :confirm-text="t('k12.detail.deleteConfirmOk')"
+      :title="deleteConfirmTitle"
+      :message="deleteConfirmMessage"
+      :confirm-text="deleteConfirmText"
       :cancel-text="t('k12.accum.cancel')"
       :danger="true"
+      :confirmation-key="deleteConfirmationKey"
       @confirm="doDelete"
-      @cancel="confirmDelete = false"
+      @cancel="cancelDelete"
     />
 
     <Teleport to="body">
@@ -2741,22 +2899,6 @@ async function doExportMd() {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.k12accum__status {
-  flex: none;
-  padding: 2px 9px;
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.k12accum__status--na {
-  color: var(--hc-text-muted);
-  background: var(--hc-bg-input);
-}
-.k12accum__status--got {
-  color: var(--hc-success);
-  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
-}
 .k12accum__detail {
   flex: none;
 }
@@ -2823,11 +2965,6 @@ async function doExportMd() {
   border: 0.5px solid var(--hc-border);
   border-radius: var(--hc-radius-md);
   background: var(--hc-bg-elevated);
-}
-.k12accum__form-row {
-  display: flex;
-  gap: 14px;
-  flex-wrap: wrap;
 }
 .k12accum__field {
   display: flex;
@@ -3365,18 +3502,12 @@ async function doExportMd() {
   border-radius: var(--hc-radius-md);
   padding: 7px 10px;
 }
-/* UX-1/3：详情弹层动作行（家长确认已会 = 主动作左；删除 = 克制 ghost，右侧，弱化） */
+/* UX-1/3：详情弹层动作行；危险删除视觉由全局 hc-btn-danger-ghost 统一治理。 */
 .k12detail__actions {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 14px;
-}
-.k12detail__del {
-  color: var(--hc-error);
-}
-.k12detail__del:hover {
-  background: color-mix(in srgb, var(--hc-error) 10%, transparent);
 }
 .k12detail__delhint {
   font-size: 11px;

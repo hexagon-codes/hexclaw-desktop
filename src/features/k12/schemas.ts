@@ -24,7 +24,12 @@ export const MISTAKE_SCHEMA: RecordSchema = {
   dedupeKey: ['question'],
   fields: [
     { key: 'question', labelKey: 'k12.mistakeFields.title', type: 'string', role: 'title' },
-    { key: 'knowledge_point', labelKey: 'k12.mistakeFields.knowledgePoint', type: 'string', role: 'chip' },
+    {
+      key: 'knowledge_point',
+      labelKey: 'k12.mistakeFields.knowledgePoint',
+      type: 'string',
+      role: 'chip',
+    },
     { key: 'error_cause', labelKey: 'k12.mistakeFields.errorCause', type: 'string', role: 'meta' },
   ],
   states: [
@@ -55,11 +60,6 @@ export const ACCUMULATION_SCHEMA: RecordSchema = {
     { key: 'subject', labelKey: 'k12.accumulationFields.subject', type: 'string', role: 'chip' },
     { key: 'entry_type', labelKey: 'k12.accumulationFields.type', type: 'string', role: 'chip' },
     { key: 'source', labelKey: 'k12.accumulationFields.source', type: 'string', role: 'meta' },
-  ],
-  states: [
-    // 后端积累状态是领域中文常量，不是错题本的 new/retried/mastered ID。
-    { id: '已积累', labelKey: 'k12.accumulationStatus.na', tone: 'na' },
-    { id: '已掌握', labelKey: 'k12.mistakeStatus.mastered', tone: 'got' },
   ],
 }
 

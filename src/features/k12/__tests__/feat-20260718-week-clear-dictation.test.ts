@@ -2,8 +2,8 @@
  * 20260718 前端包 · 新交互组件测试：
  *  ① 本周清零庆祝态（§3.6 / 原型 k12WeekClearState）：本轮有「家长确认已会」清空队列 → 庆祝文案
  *     （🎉 本周清零 + 下次出卷预告）；本来就无到期 → 维持中性空态（不假庆祝）。
- *  ② 积累详情「生成默写题，加入练习集」（§3.9 检验出口）：POST /accumulation/{id}/dictation-to-basket
- *     （api/k12.ts 他会话禁改 → apiPost 内联，契约 {record_id, added}），成功后按钮幂等置灰。
+ *  ② 积累详情「生成默写题，加入练习集」（§3.9 检验出口）：走 typed API，
+ *     UI 状态只从服务端 durable generation 摘要恢复。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -28,29 +28,20 @@ const h = vi.hoisted(() => {
     due,
     mistakes: [due] as Array<Record<string, unknown>>,
     queue: [due] as Array<Record<string, unknown>>,
-    apiPostSpy: vi
-      .fn<(...args: unknown[]) => Promise<unknown>>()
-      .mockResolvedValue({ record_id: 'ps-1', added: true }),
+    generateSpy: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
     accum: [
       {
         record_id: 'acc-1',
         subject: '语文',
         entry_type: '好词好句',
         content: '不积跬步无以至千里',
-        status: '',
         source: '',
+        version: 1,
       },
-    ],
+    ] as Array<Record<string, unknown>>,
   }
 })
 
-vi.mock('@/api/client', () => ({
-  api: vi.fn(),
-  apiGet: vi.fn(),
-  apiPost: (...a: unknown[]) => h.apiPostSpy(...a),
-  apiPut: vi.fn(),
-  apiDelete: vi.fn(),
-}))
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockImplementation(() => Promise.resolve({ items: h.mistakes })),
   k12ReviewQueue: vi.fn().mockImplementation(() => Promise.resolve({ items: h.queue })),
@@ -80,6 +71,7 @@ vi.mock('@/api/k12', () => ({
     .fn()
     .mockResolvedValue({ days: [], total_records: 1, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockImplementation(() => Promise.resolve({ items: h.accum })),
+  k12GenerateAccumulationDictation: (...args: unknown[]) => h.generateSpy(...args),
 }))
 
 function i18n() {
@@ -102,7 +94,7 @@ describe('①（§3.6）本周清零庆祝态', () => {
     setActivePinia(createPinia())
     h.mistakes = [h.due]
     h.queue = [h.due]
-    h.apiPostSpy.mockClear()
+    h.generateSpy.mockClear()
   })
 
   it('本轮「家长确认已会」清空队列 → 空态卡显庆祝文案（🎉 本周清零 + 下次出卷预告）', async () => {
@@ -138,7 +130,26 @@ describe('②（§3.9）积累详情「生成默写题，加入练习集」', ()
     setActivePinia(createPinia())
     h.mistakes = [h.due]
     h.queue = [h.due]
-    h.apiPostSpy.mockClear().mockResolvedValue({ record_id: 'ps-1', added: true })
+    h.accum = [
+      {
+        record_id: 'acc-1',
+        subject: '语文',
+        entry_type: '好词好句',
+        content: '不积跬步无以至千里',
+        source: '',
+        version: 1,
+      },
+    ]
+    h.generateSpy.mockReset().mockImplementation(async () => {
+      const dictation_generation = {
+        generation_id: 'generation-1',
+        status: 'queued',
+        attempt: 1,
+        updated_at: 100,
+      }
+      h.accum = [{ ...h.accum[0], dictation_generation }]
+      return { dictation_generation }
+    })
   })
 
   async function openAccumDetail() {
@@ -154,32 +165,40 @@ describe('②（§3.9）积累详情「生成默写题，加入练习集」', ()
     return w
   }
 
-  it('积累详情弹层有出口按钮，点按调 dictation-to-basket 端点（约定契约 {record_id, added}）', async () => {
+  it('积累详情弹层通过 typed API 创建 durable generation，并投影 pending', async () => {
     const w = await openAccumDetail()
     const btn = w.find('[data-testid="accum-dictation-to-basket"]')
     expect(btn.exists(), '积累详情应有「生成默写题，加入练习集」出口').toBe(true)
     expect(btn.text()).toContain('生成默写题')
     await btn.trigger('click')
     await flushPromises()
-    expect(h.apiPostSpy).toHaveBeenCalledWith('/api/k12/accumulation/acc-1/dictation-to-basket', {
-      agent: 'mingming',
-    })
+    expect(h.generateSpy).toHaveBeenCalledWith('mingming', 'acc-1')
+    expect(btn.attributes('disabled')).toBeDefined()
+    expect(btn.attributes('aria-busy')).toBe('true')
   })
 
-  it('成功后按钮幂等：文案转「已加入练习集」并置灰，不重复调端点', async () => {
+  it('重载后从服务端 committed 摘要恢复「已加入练习集」，不靠内存成功标记', async () => {
+    h.accum = [
+      {
+        ...h.accum[0],
+        dictation_generation: {
+          generation_id: 'generation-committed',
+          status: 'committed',
+          practice_item_id: 'practice-1',
+        },
+      },
+    ]
     const w = await openAccumDetail()
     const btn = w.find('[data-testid="accum-dictation-to-basket"]')
-    await btn.trigger('click')
-    await flushPromises()
     expect(btn.text()).toContain('已加入练习集')
     expect(btn.attributes('disabled')).toBeDefined()
     await btn.trigger('click')
     await flushPromises()
-    expect(h.apiPostSpy).toHaveBeenCalledTimes(1)
+    expect(h.generateSpy).not.toHaveBeenCalled()
   })
 
   it('端点失败 → 按钮保持可重试（不置灰不改文案）', async () => {
-    h.apiPostSpy.mockRejectedValueOnce(new Error('后端还没就绪'))
+    h.generateSpy.mockRejectedValueOnce(new Error('后端还没就绪'))
     const w = await openAccumDetail()
     const btn = w.find('[data-testid="accum-dictation-to-basket"]')
     await btn.trigger('click')

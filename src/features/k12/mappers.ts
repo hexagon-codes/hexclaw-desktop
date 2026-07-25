@@ -69,7 +69,8 @@ export function mistakesToView(
 
   const items = merged.map((d) => mistakeToRecord(d, agentId))
   const statusCounts: Record<string, number> = {}
-  for (const it of items) if (it.status) statusCounts[it.status] = (statusCounts[it.status] ?? 0) + 1
+  for (const it of items)
+    if (it.status) statusCounts[it.status] = (statusCounts[it.status] ?? 0) + 1
   return {
     collection: MISTAKE_COLLECTION,
     schemaVersion: '1',
@@ -86,9 +87,15 @@ export function accumToRecord(dto: AccumDTO, agentId: string): RecordItem {
     agentId,
     collection: ACCUMULATION_COLLECTION,
     schemaVersion: '1',
-    status: dto.status,
-    fields: { subject: dto.subject, entry_type: dto.entry_type, content: dto.content, source: dto.source ?? '', created_at: dto.created_at ? String(dto.created_at) : '' },
-    version: 0,
+    fields: {
+      subject: dto.subject,
+      entry_type: dto.entry_type,
+      content: dto.content,
+      source: dto.source ?? '',
+      created_at: dto.created_at ? String(dto.created_at) : '',
+      dictation_generation: dto.dictation_generation,
+    },
+    version: dto.version,
   }
 }
 
