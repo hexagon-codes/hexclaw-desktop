@@ -433,23 +433,35 @@ export function k12ColdStart(req: ColdStartReq) {
 }
 
 // ── accumulation（语/英积累本，GET/POST）─────────────────────
+export type AccumulationDictationStatus =
+  | 'queued'
+  | 'generating'
+  | 'validating'
+  | 'committed'
+  | 'failed'
+
+export interface AccumulationDictationGenerationDTO {
+  generation_id: string
+  status: AccumulationDictationStatus
+  practice_item_id?: string
+  failure_reason?: string
+  attempt?: number
+  updated_at?: number
+}
+
 export interface AccumDTO {
   record_id: string
   subject: string
   entry_type: string
   content: string
   source?: string
-  status: string
+  version: number
+  dictation_generation?: AccumulationDictationGenerationDTO
   /** unix 秒；引文列表收藏日期（原型 20260718 定案 acc-date），旧后端无此字段时缺省 */
   created_at?: number
 }
 export interface AddAccumReq {
-  agent: string
-  source_session?: string
-  subject: string
-  entry_type: string
   content: string
-  source?: string
 }
 // subject 可选：给了则触达后端 GET /accumulation?subject= 过滤（语/英分科），不给取全量（BUG-3）。
 export function k12ListAccumulation(agent: string, subject?: string) {
@@ -458,14 +470,54 @@ export function k12ListAccumulation(agent: string, subject?: string) {
     subject ? { agent, subject } : { agent },
   )
 }
-export function k12AddAccumulation(req: AddAccumReq) {
-  return apiPost<{ record_id: string; created: boolean }>(`${BASE}/accumulation`, req)
+export function k12AddAccumulation(agent: string, req: AddAccumReq, idempotencyKey: string) {
+  return api<{ record_id: string; created: boolean }>(`${BASE}/accumulation`, {
+    method: 'POST',
+    query: { agent },
+    body: { content: req.content },
+    headers: { 'Idempotency-Key': idempotencyKey },
+  })
+}
+
+export interface AccumulationDictationCommandResp {
+  dictation_generation: AccumulationDictationGenerationDTO
+}
+
+/** 创建、重放或恢复同一条积累的 durable 默写 generation。 */
+export function k12GenerateAccumulationDictation(agent: string, recordId: string) {
+  return apiPost<AccumulationDictationCommandResp>(
+    `${BASE}/accumulation/${encodeURIComponent(recordId)}/dictation-to-basket`,
+    { agent },
+  )
 }
 /** 将这条积累内容发送给当前辅导智能体绑定的全部有效私聊。
  *  接收人枚举、物理目标去重和目标快照全部由服务端完成。 */
 export function k12SendAccumulation(agent: string, recordId: string) {
   return apiPost<DeliveryBatchDTO>(`${BASE}/accumulation/${encodeURIComponent(recordId)}/send`, {
     agent,
+  })
+}
+
+export interface DeleteAccumulationReceipt {
+  accumulation_id: string
+  deleted: boolean
+  version: number
+}
+
+/** 危险删除积累：CAS 版本与幂等键只走协议头，不进入业务 JSON。 */
+export function k12DeleteAccumulation(
+  agent: string,
+  recordId: string,
+  version: number,
+  idempotencyKey: string,
+) {
+  return api<DeleteAccumulationReceipt>(`${BASE}/accumulation/${encodeURIComponent(recordId)}`, {
+    method: 'DELETE',
+    query: { agent },
+    headers: {
+      'If-Match': String(version),
+      'Idempotency-Key': idempotencyKey,
+    },
   })
 }
 
@@ -818,7 +870,7 @@ export interface PhotoJobResult {
   annotated_image?: {
     mime: string
     data_base64: string
-    digest: string
+    digest?: string
   }
 }
 export type ImageTaskIntent =
@@ -879,13 +931,12 @@ export interface ImageTaskCreativeProjectionDTO {
   work_type: 'writing' | 'art'
   status: CreativeWorkIntakeStatus
   /** Hidden workflow semantics for manual archive entry; never rendered as UI copy. */
-  entry_kind?: 'auto' | 'new_work' | 'revision'
+  entry_kind?: 'auto' | 'new_work'
   promotion_policy?: 'automatic' | 'explicit_commit'
   routing_provenance?: 'model_classified' | 'parent_selected'
   commit_required?: boolean
   commit_state?: 'pending' | 'committed'
   promoted_work_id?: string
-  promoted_version_id?: string
   /**
    * Confirmable OCR snapshot for writing photos. This state is needed to
    * submit the smallest conflict correction, but is not itself a display
@@ -939,17 +990,10 @@ export interface CreateImageTaskReq {
     model?: string
     selection_source?: 'explicit' | 'auto'
   }
-  creative_entry?:
-    | {
-        kind: 'new_work'
-        task_intent: 'writing' | 'artwork'
-      }
-    | {
-        kind: 'revision'
-        task_intent: 'writing' | 'artwork'
-        work_id: string
-        base_version_id: string
-      }
+  creative_entry?: {
+    kind: 'new_work'
+    task_intent: 'writing' | 'artwork'
+  }
 }
 
 /** 逐题确认/修正（空字段 = 该维度按识别结果确认不改）。 */
@@ -988,8 +1032,6 @@ export interface ConfirmImageTaskReq {
     | {
         action: 'commit'
         work_title?: string
-        task_requirement?: string
-        intent?: string
         content_markdown?: string
       }
 }
@@ -2471,20 +2513,7 @@ export function k12GetPracticePaper(
 
 // ── 作品 CreativeWork（/creative-works*，PRD §3.10）─────────────
 export type WorkType = 'writing' | 'art'
-/** `archived` is a legacy read-only fact; Desktop no longer exposes an archive command. */
-export type WorkStatus = 'draft' | 'feedback_ready' | 'revised' | 'archived'
-export interface WorkFeedbackObservationDTO {
-  dimension:
-    | 'task_alignment'
-    | 'structure'
-    | 'expression'
-    | 'language_detail'
-    | 'composition'
-    | 'color'
-    | 'line'
-    | 'visible_detail'
-  evidence: string
-}
+export type WorkFeedbackGenerationStatus = 'queued' | 'running' | 'succeeded' | 'failed'
 export interface WorkFeedbackSourceSnapshotDTO {
   /** `parent` is retained only to render historical feedback; new feedback is server-generated. */
   source: 'ai' | 'parent'
@@ -2493,87 +2522,220 @@ export interface WorkFeedbackSourceSnapshotDTO {
 }
 export interface WorkFeedbackDTO {
   feedback_id: string
-  version_id: string
   feedback_type: WorkType
   evidence_refs: string[]
-  observations: WorkFeedbackObservationDTO[]
+  visible_evidence: string[]
+  affirmation: string
+  parent_guidance: string
+  next_step: string
   source_snapshot: WorkFeedbackSourceSnapshotDTO
-  limitations: string
-  suggestions: string[]
-  projection_markdown: string
+  limitations?: string
+  projection_markdown?: string
 }
-export interface WorkVersionDTO {
-  version_id: string
-  source_asset_id?: string
-  content_markdown?: string
-  /** DD-013 writing-photo confirmation evidence. */
-  ocr_job_id?: string
-  ocr_raw?: string
-  ocr_version?: number
-  ocr_confirmed_digest?: string
-  content_confirmed_at?: number
-  feedback?: string
-  /** Canonical feedback fact; feedback Markdown is only a legacy projection. */
-  structured_feedback?: WorkFeedbackDTO
-  /** 点评实际来源：ai=后端 Skill 生成，parent=家长手写；老记录可为空。 */
-  feedback_source?: 'ai' | 'parent' | string
-  /** AI 点评实际使用的方法论版本戳；家长手写/老记录可为空。 */
-  feedback_skill?: string
+
+export interface WorkFeedbackGenerationDTO {
+  generation_id: string
+  status: WorkFeedbackGenerationStatus
+  feedback?: WorkFeedbackDTO
+  failure_message?: string
 }
+
 export interface CreativeWorkDTO {
-  record_id: string
+  work_id: string
   work_type: WorkType
-  title: string
-  task: string
-  intent?: string
-  status: WorkStatus
-  /** 后端译名：待点评/已点评/已修改/已归档 */
-  status_label: string
-  versions: WorkVersionDTO[]
+  /** Neutral display label; it is not an inferred child-authored title. */
+  display_name: string
+  /** Present only when a parent entered an artwork's real, existing title. */
+  work_title?: string
+  content_markdown?: string
+  source_asset_id?: string
+  row_version: number
+  initial_feedback: WorkFeedbackGenerationDTO
+  latest_feedback?: WorkFeedbackGenerationDTO
+  delivery_batch_id?: string
 }
+
 export interface CreateWorkReq {
   agent: string
-  source_session?: string
-  work_type: WorkType
-  title: string
-  task: string
-  intent?: string
-  content_markdown?: string
-  source_asset_id?: string
-  ocr_job_id?: string
-  ocr_version?: number
-  ocr_confirmed_digest?: string
+  work_type: 'writing'
+  content_markdown: string
+  /** Command metadata; sent as Idempotency-Key, never as a business JSON field. */
+  command_id: string
 }
-export function k12ListCreativeWorks(agent: string, type?: WorkType) {
-  return apiGet<{ items: CreativeWorkDTO[] }>(
+
+interface LegacyWorkFeedbackDTO {
+  feedback_id?: string
+  evidence_refs?: string[]
+  observations?: Array<{ evidence?: string }>
+  source_snapshot?: WorkFeedbackSourceSnapshotDTO
+  limitations?: string
+  suggestions?: string[]
+  projection_markdown?: string
+}
+
+interface LegacyWorkVersionDTO {
+  source_asset_id?: string
+  content_markdown?: string
+  feedback?: string
+  structured_feedback?: LegacyWorkFeedbackDTO
+  feedback_source?: 'ai' | 'parent' | string
+  feedback_skill?: string
+}
+
+interface CreativeWorkWireDTO extends Partial<CreativeWorkDTO> {
+  record_id?: string
+  title?: string
+  status?: string
+  versions?: LegacyWorkVersionDTO[]
+  initial_feedback_generation?: WorkFeedbackGenerationDTO
+  latest_feedback_generation?: WorkFeedbackGenerationDTO
+}
+
+function legacyFeedback(
+  workType: WorkType,
+  workID: string,
+  version: LegacyWorkVersionDTO,
+): WorkFeedbackDTO | undefined {
+  const structured = version.structured_feedback
+  const projection = structured?.projection_markdown?.trim() || version.feedback?.trim() || ''
+  if (!structured && !projection) return undefined
+  const suggestions = structured?.suggestions?.filter(Boolean) ?? []
+  return {
+    feedback_id: structured?.feedback_id || `legacy-feedback:${workID}`,
+    feedback_type: workType,
+    evidence_refs: structured?.evidence_refs ?? [],
+    visible_evidence:
+      structured?.observations?.map((item) => item.evidence?.trim() || '').filter(Boolean) ?? [],
+    affirmation: suggestions[0] ?? '',
+    parent_guidance: suggestions[1] ?? '',
+    next_step: suggestions[2] ?? '',
+    limitations: structured?.limitations,
+    projection_markdown: projection,
+    source_snapshot: structured?.source_snapshot ?? {
+      source: version.feedback_source === 'parent' ? 'parent' : 'ai',
+      method_ref: version.feedback_skill || 'legacy-read-only',
+      capability: 'creative-work-feedback',
+    },
+  }
+}
+
+function normalizeCreativeWork(raw: CreativeWorkWireDTO): CreativeWorkDTO {
+  const workID = raw.work_id || raw.record_id || ''
+  const workType: WorkType = raw.work_type === 'art' ? 'art' : 'writing'
+  const legacyVersion = raw.versions?.[raw.versions.length - 1]
+  const legacyLatest = legacyVersion ? legacyFeedback(workType, workID, legacyVersion) : undefined
+  const initial =
+    raw.initial_feedback ??
+    raw.initial_feedback_generation ??
+    ({
+      generation_id: `legacy-initial:${workID}`,
+      status: legacyLatest ? 'succeeded' : raw.status === 'feedback_failed' ? 'failed' : 'running',
+      feedback: legacyLatest,
+    } satisfies WorkFeedbackGenerationDTO)
+  const latest =
+    raw.latest_feedback ??
+    raw.latest_feedback_generation ??
+    (legacyLatest
+      ? ({
+          generation_id: initial.generation_id,
+          status: 'succeeded',
+          feedback: legacyLatest,
+        } satisfies WorkFeedbackGenerationDTO)
+      : undefined)
+  const fallbackName = workType === 'writing' ? '语文写作' : '美术作品'
+  const displayName = raw.display_name?.trim() || raw.title?.trim() || fallbackName
+  return {
+    work_id: workID,
+    work_type: workType,
+    display_name: displayName,
+    work_title: raw.work_title?.trim() || (workType === 'art' ? raw.title?.trim() : undefined),
+    content_markdown: raw.content_markdown ?? legacyVersion?.content_markdown,
+    source_asset_id: raw.source_asset_id ?? legacyVersion?.source_asset_id,
+    row_version: Number(raw.row_version ?? 0),
+    initial_feedback: initial,
+    latest_feedback: latest,
+    delivery_batch_id: raw.delivery_batch_id,
+  }
+}
+
+export async function k12ListCreativeWorks(agent: string, type?: WorkType) {
+  const response = await apiGet<{ items: CreativeWorkWireDTO[] }>(
     `${BASE}/creative-works`,
     type ? { agent, type } : { agent },
   )
+  return { items: response.items.map(normalizeCreativeWork) }
 }
-export function k12GetCreativeWork(agent: string, recordId: string) {
-  return apiGet<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}`, { agent })
+export async function k12GetCreativeWork(agent: string, workId: string) {
+  const response = await apiGet<CreativeWorkWireDTO>(
+    `${BASE}/creative-works/${encodeURIComponent(workId)}`,
+    { agent },
+  )
+  return normalizeCreativeWork(response)
 }
 export function k12CreateCreativeWork(req: CreateWorkReq) {
-  return apiPost<{ record_id: string; created: boolean }>(`${BASE}/creative-works`, req)
+  return apiPost<{
+    work_id: string
+    created: boolean
+    initial_feedback_generation_id: string
+  }>(
+    `${BASE}/creative-works`,
+    {
+      agent: req.agent,
+      work_type: req.work_type,
+      content_markdown: req.content_markdown,
+    },
+    { headers: { 'Idempotency-Key': req.command_id } },
+  )
 }
-/** 为已有点评追加一次生成；commandId 由调用方创建，重放同 ID 不得重复生成。 */
-export function k12GenerateWorkFeedback(
+/**
+ * 首轮失败时由服务端恢复同一 generation；已有 latest 时按 commandId 追加一代。
+ * commandId 属于命令元数据，只通过 Idempotency-Key 传输。
+ */
+export async function k12GenerateWorkFeedback(
   agent: string,
-  recordId: string,
+  workId: string,
   commandId: string,
   signal?: AbortSignal,
 ) {
-  return apiPost<CreativeWorkDTO>(
-    `${BASE}/creative-works/${encodeURIComponent(recordId)}/generate-feedback`,
-    { agent, command_id: commandId },
-    { timeout: 240_000, signal },
+  const response = await apiPost<CreativeWorkWireDTO>(
+    `${BASE}/creative-works/${encodeURIComponent(workId)}/generate-feedback`,
+    { agent },
+    {
+      timeout: 240_000,
+      signal,
+      headers: { 'Idempotency-Key': commandId },
+    },
   )
+  return normalizeCreativeWork(response)
 }
-/** 提交修改稿形成新版本（feedback_ready → revised） */
-export function k12SubmitWorkRevision(agent: string, recordId: string, contentMarkdown?: string) {
-  return apiPost<CreativeWorkDTO>(`${BASE}/creative-works/${recordId}/revision`, {
+
+/** 建立整份作品的全绑定 DeliveryBatch；不发送独立点评子对象。 */
+export function k12SendCreativeWork(agent: string, workId: string) {
+  return apiPost<DeliveryBatchDTO>(`${BASE}/creative-works/${encodeURIComponent(workId)}/send`, {
     agent,
-    content_markdown: contentMarkdown ?? '',
+  })
+}
+
+export interface DeleteCreativeWorkReceiptDTO {
+  deleted: boolean
+  work_id: string
+  row_version: number
+}
+
+/** CAS + 幂等 tombstone；调用方仅在本请求成功后移除本地投影。 */
+export function k12DeleteCreativeWork(
+  agent: string,
+  workId: string,
+  rowVersion: number,
+  commandId: string,
+) {
+  return api<DeleteCreativeWorkReceiptDTO>(`${BASE}/creative-works/${encodeURIComponent(workId)}`, {
+    method: 'DELETE',
+    query: { agent },
+    headers: {
+      'If-Match': String(rowVersion),
+      'Idempotency-Key': commandId,
+    },
   })
 }
 export type DeliveryReceiptStatus =

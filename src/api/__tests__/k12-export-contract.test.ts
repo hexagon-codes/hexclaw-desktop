@@ -30,10 +30,13 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12ConfirmImageTask',
   'k12CreateCreativeWork',
   'k12CreateImageTask',
+  'k12DeleteAccumulation',
+  'k12DeleteCreativeWork',
   'k12DeleteMistake',
   'k12ExportMd',
   'k12FillPracticeBasket',
   'k12FinalizePracticeSet',
+  'k12GenerateAccumulationDictation',
   'k12GenerateCustomPaper',
   'k12GenerateWorkFeedback',
   'k12GetCreativeWork',
@@ -75,10 +78,10 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12ReviewRetry',
   'k12RollbackRestoreAs',
   'k12SendAccumulation',
+  'k12SendCreativeWork',
   'k12SendTutoringTips',
   'k12Solve',
   'k12SubmitPracticeSet',
-  'k12SubmitWorkRevision',
   'k12TutorTurn',
   'k12UpdateProfile',
   'k12UploadAsset',
@@ -113,8 +116,12 @@ describe('K12 Desktop runtime export contract', () => {
 
     expect(client.apiPost).toHaveBeenCalledWith(
       '/api/k12/creative-works/work%20%2F%201/generate-feedback',
-      { agent: 'tutor/小明', command_id: 'feedback-command-1' },
-      { timeout: 240_000, signal: controller.signal },
+      { agent: 'tutor/小明' },
+      {
+        timeout: 240_000,
+        signal: controller.signal,
+        headers: { 'Idempotency-Key': 'feedback-command-1' },
+      },
     )
   })
 
@@ -122,9 +129,9 @@ describe('K12 Desktop runtime export contract', () => {
     expect(apiSource).not.toMatch(/\ballowed_actions\b/)
     expect(apiSource).not.toMatch(/\bpractice_card(?:_done_at)?\b/)
     expect(apiSource).not.toContain('creative_observation_card')
-    expect(apiSource).toMatch(
-      /WorkStatus\s*=\s*'draft'\s*\|\s*'feedback_ready'\s*\|\s*'revised'\s*\|\s*'archived'/,
-    )
+    expect(apiSource).not.toContain('export function k12SubmitWorkRevision')
+    expect(apiSource).not.toMatch(/export type WorkStatus/)
+    expect(apiSource).toContain('interface LegacyWorkVersionDTO')
     expect(apiSource).toMatch(/source:\s*'ai'\s*\|\s*'parent'/)
   })
 

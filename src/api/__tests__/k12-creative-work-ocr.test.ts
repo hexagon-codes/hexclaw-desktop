@@ -103,8 +103,6 @@ describe('K12 manual creative image API contract', () => {
       version: 3,
       creative: {
         action: 'commit',
-        work_title: '我的好爸爸',
-        task_requirement: '写一篇记叙文',
         content_markdown: '家长确认稿',
       },
     })
@@ -139,8 +137,6 @@ describe('K12 manual creative image API contract', () => {
         version: 3,
         creative: {
           action: 'commit',
-          work_title: '我的好爸爸',
-          task_requirement: '写一篇记叙文',
           content_markdown: '家长确认稿',
         },
       },
@@ -148,36 +144,48 @@ describe('K12 manual creative image API contract', () => {
     )
   })
 
-  it('freezes the revision identity in creative_entry instead of writing a version directly', async () => {
-    client.apiPost.mockResolvedValue({ created: true, dispatch: manualCreativeDispatch() })
+  it('creates text-only writing with exact business fields and a command header', async () => {
+    client.apiPost.mockResolvedValue({
+      work_id: 'work-1',
+      created: true,
+      initial_feedback_generation_id: 'feedback-1',
+    })
 
-    await k12Api.k12CreateImageTask({
+    await k12Api.k12CreateCreativeWork({
       agent: 'kid-a',
-      source_session: 'creative-works:kid-a',
-      source_kind: 'desktop',
-      source_ref: 'manual-revision-1',
-      source_asset_refs: ['asset://kid-a/revision.png'],
-      attempt_generation: 1,
-      route_request: { selection_source: 'auto' },
-      creative_entry: {
-        kind: 'revision',
-        task_intent: 'writing',
-        work_id: 'work-1',
-        base_version_id: 'version-1',
-      },
+      work_type: 'writing',
+      content_markdown: '家长粘贴的作文正文',
+      command_id: 'create-writing-1',
     })
 
     expect(client.apiPost).toHaveBeenCalledWith(
-      '/api/k12/image-tasks',
-      expect.objectContaining({
-        creative_entry: {
-          kind: 'revision',
-          task_intent: 'writing',
-          work_id: 'work-1',
-          base_version_id: 'version-1',
-        },
-      }),
-      { timeout: 60_000, signal: undefined },
+      '/api/k12/creative-works',
+      {
+        agent: 'kid-a',
+        work_type: 'writing',
+        content_markdown: '家长粘贴的作文正文',
+      },
+      { headers: { 'Idempotency-Key': 'create-writing-1' } },
     )
+  })
+
+  it('uses the approved whole-work send and CAS delete routes', async () => {
+    client.apiPost.mockResolvedValue({ batch_id: 'batch-1', status: 'pending', receipts: [] })
+    client.api.mockResolvedValue({ deleted: true, work_id: 'work-1', row_version: 8 })
+
+    await k12Api.k12SendCreativeWork('kid-a', 'work-1')
+    await k12Api.k12DeleteCreativeWork('kid-a', 'work-1', 7, 'delete-work-1')
+
+    expect(client.apiPost).toHaveBeenCalledWith('/api/k12/creative-works/work-1/send', {
+      agent: 'kid-a',
+    })
+    expect(client.api).toHaveBeenCalledWith('/api/k12/creative-works/work-1', {
+      method: 'DELETE',
+      query: { agent: 'kid-a' },
+      headers: {
+        'If-Match': '7',
+        'Idempotency-Key': 'delete-work-1',
+      },
+    })
   })
 })
