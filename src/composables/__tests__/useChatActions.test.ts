@@ -4,17 +4,37 @@ vi.mock('@/services/messageService', () => ({
   removeMessage: vi.fn().mockResolvedValue(undefined),
 }))
 
+vi.mock('@/api/chat', () => ({
+  forkSession: vi.fn().mockResolvedValue({ session: { id: 'edit-branch' } }),
+  deleteSession: vi.fn().mockResolvedValue({ message: 'ok' }),
+}))
+
+import { deleteSession, forkSession } from '@/api/chat'
+import { bindSessionAgent, getSessionAgent } from '@/stores/session-agent-binding'
+import { getSessionModel, setSessionModel } from '@/stores/session-model-binding'
+import { getSessionDeepThinking, setSessionDeepThinking } from '@/stores/session-thinking-preference'
 import { useChatActions } from '../useChatActions'
 
 function makeMockStore() {
-  return {
+  const store = {
+    currentSessionId: 'source-session',
+    agentRole: '',
+    chatMode: 'chat',
+    thinkingEnabled: false,
     messages: [
       { id: 'u1', role: 'user', content: 'hello', timestamp: '' },
       { id: 'a1', role: 'assistant', content: 'hi there', timestamp: '', metadata: {} },
     ],
     chatParams: { model: 'gpt-4' },
     setMessageFeedback: vi.fn().mockResolvedValue(null),
+    loadSessions: vi.fn().mockResolvedValue(undefined),
+    selectSession: vi.fn(),
+    deleteSession: vi.fn().mockResolvedValue(undefined),
   }
+  store.selectSession.mockImplementation(async (sessionId: string) => {
+    store.currentSessionId = sessionId
+  })
+  return store
 }
 
 function makeMockToast() {
@@ -26,6 +46,9 @@ describe('useChatActions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(forkSession).mockResolvedValue({ session: { id: 'edit-branch' } } as never)
+    vi.mocked(deleteSession).mockResolvedValue({ message: 'ok' } as never)
+    localStorage.clear()
     mockSend = vi.fn().mockResolvedValue(true) as unknown as (text: string, files?: File[]) => Promise<boolean>
   })
 
@@ -103,14 +126,72 @@ describe('useChatActions', () => {
     expect(editingText.value).toBe('')
   })
 
-  it('confirmEdit removes old messages and re-sends', async () => {
+  it('confirmEdit creates an exclusive-prefix branch before submitting the edited first message', async () => {
     const store = makeMockStore()
+    const before = store.messages.map((message) => ({ ...message }))
     const { handleEdit, confirmEdit, editingText } = useChatActions(store as any, makeMockToast() as any, mockSend)
     handleEdit(0)
     editingText.value = 'updated question'
     await confirmEdit('u1')
-    expect(mockSend).toHaveBeenCalledWith('updated question')
-    expect(store.messages).toHaveLength(0)
+    expect(forkSession).toHaveBeenCalledWith('source-session', 'u1', { includeMessage: false })
+    expect(store.loadSessions).toHaveBeenCalledOnce()
+    expect(store.selectSession).toHaveBeenCalledWith('edit-branch')
+    expect(mockSend).toHaveBeenCalledWith('updated question', undefined, {
+      targetSessionId: 'edit-branch',
+    })
+    expect(store.messages).toEqual(before)
+  })
+
+  it.each([
+    { target: 'u1', index: 0, messages: ['u1', 'a1'] },
+    { target: 'u2', index: 2, messages: ['u1', 'a1', 'u2', 'a2'] },
+    { target: 'u3', index: 4, messages: ['u1', 'a1', 'u2', 'a2', 'u3'] },
+  ])('branches from the exclusive prefix when editing $target', async ({ target, index, messages }) => {
+    const store = makeMockStore()
+    store.messages = messages.map((id) => ({
+      id,
+      role: id.startsWith('u') ? 'user' : 'assistant',
+      content: id,
+      timestamp: '',
+      metadata: {},
+    }))
+    const { handleEdit, confirmEdit, editingText } = useChatActions(store as any, makeMockToast() as any, mockSend)
+
+    handleEdit(index)
+    editingText.value = `${target}-edited`
+    await confirmEdit(target)
+
+    expect(forkSession).toHaveBeenCalledWith('source-session', target, { includeMessage: false })
+    expect(mockSend).toHaveBeenCalledWith(`${target}-edited`, undefined, {
+      targetSessionId: 'edit-branch',
+    })
+  })
+
+  it('inherits source agent, explicit model, and deep-thinking bindings before selecting the edit branch', async () => {
+    const store = makeMockStore()
+    store.agentRole = 'k12-tutor-mingming'
+    bindSessionAgent('source-session', 'k12-tutor-mingming')
+    setSessionModel('source-session', {
+      model: 'gpt-5.6-sol',
+      providerId: 'p-sol',
+      providerKey: 'hexclaw-gpt',
+      capabilities: ['text', 'vision'],
+    })
+    setSessionDeepThinking('source-session', true)
+    store.selectSession.mockImplementation(async (sessionId: string) => {
+      expect(getSessionAgent(sessionId)).toBe('k12-tutor-mingming')
+      expect(getSessionModel(sessionId)?.model).toBe('gpt-5.6-sol')
+      expect(getSessionDeepThinking(sessionId)).toBe(true)
+      store.currentSessionId = sessionId
+    })
+    const { handleEdit, confirmEdit } = useChatActions(store as any, makeMockToast() as any, mockSend)
+
+    handleEdit(0)
+    await confirmEdit('u1')
+
+    expect(getSessionAgent('edit-branch')).toBe('k12-tutor-mingming')
+    expect(getSessionModel('edit-branch')).toMatchObject({ model: 'gpt-5.6-sol', providerKey: 'hexclaw-gpt' })
+    expect(getSessionDeepThinking('edit-branch')).toBe(true)
   })
 
   it('confirmEdit preserves canonical leading and trailing whitespace byte-for-byte', async () => {
@@ -126,7 +207,164 @@ describe('useChatActions', () => {
 
     await confirmEdit('u1')
 
-    expect(mockSend).toHaveBeenCalledWith(canonical)
+    expect(mockSend).toHaveBeenCalledWith(canonical, undefined, {
+      targetSessionId: 'edit-branch',
+    })
+  })
+
+  it('submits an edit exactly once when confirm is triggered twice before the fork resolves', async () => {
+    const store = makeMockStore()
+    let resolveFork!: (value: { session: { id: string } }) => void
+    vi.mocked(forkSession).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFork = resolve
+      }) as never,
+    )
+    const { handleEdit, confirmEdit, editingText } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+    )
+    handleEdit(0)
+    editingText.value = 'updated question'
+
+    const first = confirmEdit('u1')
+    const second = confirmEdit('u1')
+
+    expect(forkSession).toHaveBeenCalledTimes(1)
+    resolveFork({ session: { id: 'edit-branch' } })
+    await Promise.all([first, second])
+
+    expect(mockSend).toHaveBeenCalledTimes(1)
+    expect(store.selectSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not select or submit into an edit branch when the user switches sessions while fork is pending', async () => {
+    const store = makeMockStore()
+    let resolveFork!: (value: { session: { id: string } }) => void
+    vi.mocked(forkSession).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFork = resolve
+      }) as never,
+    )
+    const { handleEdit, confirmEdit, editingMsgId, editingText } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+    )
+    handleEdit(0)
+    editingText.value = 'updated question'
+
+    const pending = confirmEdit('u1')
+    store.currentSessionId = 'other-session'
+    resolveFork({ session: { id: 'edit-branch' } })
+    await pending
+
+    expect(store.selectSession).not.toHaveBeenCalledWith('edit-branch')
+    expect(mockSend).not.toHaveBeenCalled()
+    expect(deleteSession).toHaveBeenCalledWith('edit-branch')
+    expect(store.currentSessionId).toBe('other-session')
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('updated question')
+  })
+
+  it('keeps the source conversation visible until the edited submission is accepted', async () => {
+    const store = makeMockStore()
+    const sourceMessageIds = store.messages.map((message) => message.id)
+    store.selectSession.mockImplementation(async (sessionId: string) => {
+      store.currentSessionId = sessionId
+      if (sessionId === 'edit-branch') store.messages = []
+    })
+    let resolveSubmission!: (accepted: boolean) => void
+    const submitEdited = vi.fn().mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveSubmission = resolve
+      }),
+    )
+    const { handleEdit, confirmEdit, editingText } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+      submitEdited,
+    )
+    handleEdit(0)
+    editingText.value = 'updated question'
+
+    const pending = confirmEdit('u1')
+    await vi.waitFor(() => {
+      expect(submitEdited).toHaveBeenCalledTimes(1)
+    })
+    const sessionWhilePending = store.currentSessionId
+    const messageIdsWhilePending = store.messages.map((message) => message.id)
+    expect(store.selectSession).not.toHaveBeenCalled()
+    resolveSubmission(true)
+    await pending
+
+    // K12-INV-062: the visible projection changes only after the new immutable
+    // version has been accepted. A pending submit must never expose the
+    // exclusive-prefix branch and make the original conversation tail blink away.
+    expect(sessionWhilePending).toBe('source-session')
+    expect(messageIdsWhilePending).toEqual(sourceMessageIds)
+    expect(store.currentSessionId).toBe('edit-branch')
+    expect(store.selectSession).toHaveBeenCalledTimes(1)
+    expect(store.selectSession).toHaveBeenCalledWith('edit-branch')
+  })
+
+  it('preserves an accepted edit branch without stealing focus when the user switches during submission', async () => {
+    const store = makeMockStore()
+    let resolveSubmission!: (accepted: boolean) => void
+    const submitEdited = vi.fn().mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveSubmission = resolve
+      }),
+    )
+    const { handleEdit, confirmEdit, editingMsgId, editingText } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+      submitEdited,
+    )
+    handleEdit(0)
+    editingText.value = 'accepted in background'
+
+    const pending = confirmEdit('u1')
+    await vi.waitFor(() => expect(submitEdited).toHaveBeenCalledTimes(1))
+    store.currentSessionId = 'other-session'
+    resolveSubmission(true)
+    await pending
+
+    expect(store.currentSessionId).toBe('other-session')
+    expect(store.selectSession).not.toHaveBeenCalled()
+    expect(deleteSession).not.toHaveBeenCalledWith('edit-branch')
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('accepted in background')
+  })
+
+  it('compensates a rejected edit branch without stealing focus after a session switch', async () => {
+    const store = makeMockStore()
+    let resolveSubmission!: (accepted: boolean) => void
+    const submitEdited = vi.fn().mockReturnValue(
+      new Promise<boolean>((resolve) => {
+        resolveSubmission = resolve
+      }),
+    )
+    const { handleEdit, confirmEdit } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+      submitEdited,
+    )
+    handleEdit(0)
+
+    const pending = confirmEdit('u1')
+    await vi.waitFor(() => expect(submitEdited).toHaveBeenCalledTimes(1))
+    store.currentSessionId = 'other-session'
+    resolveSubmission(false)
+    await pending
+
+    expect(store.currentSessionId).toBe('other-session')
+    expect(store.selectSession).not.toHaveBeenCalled()
+    expect(deleteSession).toHaveBeenCalledWith('edit-branch')
   })
 
   // ── BUG-20260625：会话上传图片→编辑→提交，图片丢失 ──
@@ -134,14 +372,25 @@ describe('useChatActions', () => {
   const IMG = { type: 'image', name: 'photo.png', mime: 'image/png', data: 'data:image/png;base64,AAAA' }
 
   function makeStoreWithImage() {
-    return {
+    const store = {
+      currentSessionId: 'source-session',
+      agentRole: '',
+      chatMode: 'chat',
+      thinkingEnabled: false,
       messages: [
         { id: 'u1', role: 'user', content: '看这张图', timestamp: '', metadata: { attachments: [IMG] } },
         { id: 'a1', role: 'assistant', content: '收到', timestamp: '', metadata: {} },
       ],
       chatParams: { model: 'gpt-4' },
       setMessageFeedback: vi.fn().mockResolvedValue(null),
+      loadSessions: vi.fn().mockResolvedValue(undefined),
+      selectSession: vi.fn(),
+      deleteSession: vi.fn().mockResolvedValue(undefined),
     }
+    store.selectSession.mockImplementation(async (sessionId: string) => {
+      store.currentSessionId = sessionId
+    })
+    return store
   }
 
   it('BUG-20260625 confirmEdit 重发携带原消息的图片附件（不丢图）', async () => {
@@ -156,6 +405,144 @@ describe('useChatActions', () => {
     const [text, , options] = send.mock.calls[0]!
     expect(text).toBe('看这张图（改）')
     expect(options?.attachments).toEqual([IMG]) // ★图片必须随编辑重发
+  })
+
+  it('BUG-20260724 image-only message can be submitted from edit without deleting history', async () => {
+    const store = makeStoreWithImage()
+    store.messages[0]!.content = ''
+    const before = store.messages.map((message) => ({ ...message }))
+    const submitEdited = vi.fn().mockResolvedValue(true)
+    const { handleEdit, confirmEdit, editingMsgId } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+      submitEdited,
+    )
+
+    handleEdit(0)
+    await confirmEdit('u1')
+
+    expect(submitEdited).toHaveBeenCalledTimes(1)
+    expect(submitEdited).toHaveBeenCalledWith({
+      sourceMessage: store.messages[0],
+      targetSessionId: 'edit-branch',
+      content: '',
+      carry: { attachments: [IMG] },
+    })
+    expect(mockSend).not.toHaveBeenCalled()
+    expect(store.messages).toEqual(before)
+    expect(editingMsgId.value).toBeNull()
+  })
+
+  it('confirmEdit keeps the draft and history when the edited submission is rejected', async () => {
+    const store = makeMockStore()
+    const before = store.messages.map((message) => ({ ...message }))
+    const submitEdited = vi.fn().mockResolvedValue(false)
+    const { handleEdit, confirmEdit, editingMsgId, editingText } = useChatActions(
+      store as any,
+      makeMockToast() as any,
+      mockSend,
+      submitEdited,
+    )
+
+    handleEdit(0)
+    editingText.value = 'updated question'
+    await confirmEdit('u1')
+
+    expect(store.messages).toEqual(before)
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('updated question')
+  })
+
+  it('keeps the original session and draft when exclusive fork creation fails', async () => {
+    const store = makeMockStore()
+    const before = store.messages.map((message) => ({ ...message }))
+    const toast = makeMockToast()
+    vi.mocked(forkSession).mockRejectedValueOnce(new Error('fork unavailable'))
+    const { handleEdit, confirmEdit, editingMsgId, editingText } = useChatActions(
+      store as any,
+      toast as any,
+      mockSend,
+    )
+
+    handleEdit(0)
+    editingText.value = 'updated question'
+    await confirmEdit('u1')
+
+    expect(mockSend).not.toHaveBeenCalled()
+    expect(store.selectSession).not.toHaveBeenCalled()
+    expect(store.messages).toEqual(before)
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('updated question')
+    expect(toast.error).toHaveBeenCalled()
+  })
+
+  it('rolls back a rejected branch without ever leaving the original session', async () => {
+    const store = makeMockStore()
+    const before = store.messages.map((message) => ({ ...message }))
+    const toast = makeMockToast()
+    const rejectedSend = vi.fn().mockResolvedValue(false)
+    bindSessionAgent('source-session', 'k12-tutor-mingming')
+    setSessionModel('source-session', { model: 'gpt-5.6-sol', providerId: 'p-sol', providerKey: 'hexclaw-gpt' })
+    setSessionDeepThinking('source-session', true)
+    const { handleEdit, confirmEdit, editingMsgId, editingText } = useChatActions(
+      store as any,
+      toast as any,
+      rejectedSend,
+    )
+
+    handleEdit(0)
+    editingText.value = 'updated question'
+    await confirmEdit('u1')
+
+    expect(deleteSession).toHaveBeenCalledWith('edit-branch')
+    expect(store.selectSession).not.toHaveBeenCalled()
+    expect(getSessionAgent('edit-branch')).toBe('')
+    expect(getSessionModel('edit-branch')).toBeNull()
+    expect(getSessionDeepThinking('edit-branch')).toBe(false)
+    expect(store.messages).toEqual(before)
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('updated question')
+    expect(toast.error).toHaveBeenCalled()
+  })
+
+  it('leaves the failed edit branch recoverable when compensation deletion fails', async () => {
+    const store = makeMockStore()
+    store.selectSession.mockImplementation(async (sessionId: string) => {
+      store.currentSessionId = sessionId
+    })
+    const toast = makeMockToast()
+    const rejectedSend = vi.fn().mockResolvedValue(false)
+    vi.mocked(deleteSession).mockRejectedValueOnce(new Error('delete unavailable'))
+    bindSessionAgent('source-session', 'k12-tutor-mingming')
+    setSessionModel('source-session', {
+      model: 'gpt-5.6-sol',
+      providerId: 'p-sol',
+      providerKey: 'hexclaw-gpt',
+    })
+    setSessionDeepThinking('source-session', true)
+    const { handleEdit, confirmEdit, editingMsgId, editingText } = useChatActions(
+      store as any,
+      toast as any,
+      rejectedSend,
+    )
+
+    handleEdit(0)
+    editingText.value = 'updated question'
+    await confirmEdit('u1')
+
+    expect(store.selectSession).not.toHaveBeenCalled()
+    expect(deleteSession).toHaveBeenCalledWith('edit-branch')
+    expect(getSessionAgent('edit-branch')).toBe('k12-tutor-mingming')
+    expect(getSessionModel('edit-branch')).toMatchObject({
+      model: 'gpt-5.6-sol',
+      providerKey: 'hexclaw-gpt',
+    })
+    expect(getSessionDeepThinking('edit-branch')).toBe(true)
+    expect(store.currentSessionId).toBe('source-session')
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('updated question')
+    expect(toast.error).toHaveBeenCalled()
   })
 
   it('BUG-20260625 handleRetry 重发携带原用户消息的图片附件（不丢图）', async () => {
@@ -241,12 +628,8 @@ describe('useChatActions', () => {
       expect(store.messages).toHaveLength(2) // 原样保留
     })
 
-    it('confirmEdit surfaces backend delete failures via toast', async () => {
+    it('confirmEdit never deletes the source message or its conversation tail', async () => {
       const { removeMessage } = await import('@/services/messageService')
-      const { logger } = await import('@/utils/logger')
-      vi.mocked(removeMessage).mockRejectedValue(new Error('delete failed'))
-      vi.spyOn(logger, 'error').mockImplementation(() => {})
-
       const store = makeMockStore()
       const toast = makeMockToast()
       const { handleEdit, confirmEdit, editingText } = useChatActions(store as any, toast as any, mockSend)
@@ -255,8 +638,9 @@ describe('useChatActions', () => {
       await confirmEdit('u1')
       await flushMicrotasks()
 
-      expect(toast.error).toHaveBeenCalled()
-      vi.mocked(removeMessage).mockResolvedValue(undefined)
+      expect(vi.mocked(removeMessage)).not.toHaveBeenCalled()
+      expect(store.messages.map((message) => message.id)).toEqual(['u1', 'a1'])
+      expect(toast.error).not.toHaveBeenCalled()
     })
 
     it('does not toast when deletes succeed', async () => {
@@ -282,44 +666,26 @@ describe('useChatActions', () => {
       expect(vi.mocked(removeMessage)).not.toHaveBeenCalledWith('a1')
     })
 
-    // BUG（2026-06-28 用户反馈）：编辑早期消息删整条尾巴时，旧实现逐条串行 await → 提交后卡几秒。
-    // 改并行删除：所有 removeMessage 必须在任一 resolve 之前就全部发出（折叠为一批往返）。
-    it('confirmEdit 删除整轮尾巴时并行发出全部删除请求（不再串行卡顿）', async () => {
+    it('confirmEdit preserves every later turn instead of deleting the conversation tail', async () => {
       const { removeMessage } = await import('@/services/messageService')
-      let resolveCount = 0
-      const deferred: Array<() => void> = []
-      vi.mocked(removeMessage).mockImplementation(
-        () =>
-          new Promise<void>((resolve) => {
-            deferred.push(() => {
-              resolveCount++
-              resolve()
-            })
-          }),
-      )
-
       const store = makeMockStore()
-      // 编辑第一条 → 其后整条尾巴（u1 + a1 + a2 + a3）都要删。
       store.messages.push(
         { id: 'a2', role: 'assistant', content: 'more', timestamp: '', metadata: {} } as any,
         { id: 'a3', role: 'assistant', content: 'even more', timestamp: '', metadata: {} } as any,
       )
+      const beforeIds = store.messages.map((message) => message.id)
       const toast = makeMockToast()
       const { handleEdit, confirmEdit, editingText } = useChatActions(store as any, toast as any, mockSend)
       handleEdit(0)
       editingText.value = 'updated question'
-      const p = confirmEdit('u1')
+      await confirmEdit('u1')
       await flushMicrotasks()
 
-      // 串行实现此刻只会发出 1 个删除（在等第 1 个 resolve）；并行实现 4 个全部已发出。
-      expect(vi.mocked(removeMessage)).toHaveBeenCalledTimes(4)
-      expect(resolveCount).toBe(0) // 都还没 resolve，证明是并发等待而非串行
-
-      deferred.forEach((fn) => fn())
-      await p
-      await flushMicrotasks()
-      expect(mockSend).toHaveBeenCalledWith('updated question')
-      vi.mocked(removeMessage).mockResolvedValue(undefined)
+      expect(vi.mocked(removeMessage)).not.toHaveBeenCalled()
+      expect(store.messages.map((message) => message.id)).toEqual(beforeIds)
+      expect(mockSend).toHaveBeenCalledWith('updated question', undefined, {
+        targetSessionId: 'edit-branch',
+      })
     })
   })
 })

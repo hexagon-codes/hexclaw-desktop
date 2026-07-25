@@ -207,6 +207,8 @@ export function useChatSend(deps: ChatSendDeps) {
       skillNames?: string[]
       // 预置附件（编辑/重试重发时带回原消息的图片等，BUG-20260625），与 files/preview 合并
       attachments?: ChatAttachment[]
+      /** 内部定向发送：编辑版本写入新分支时，当前可见会话仍保持 source。 */
+      targetSessionId?: string
     },
   ): Promise<boolean> {
     // Shared canonical boundary: covers composer sends as well as edit/retry and
@@ -222,7 +224,13 @@ export function useChatSend(deps: ChatSendDeps) {
 
     // ✦ Layer 0 — slash command (`/cron add 30m "..."` / `/cron list` / 等)
     //   (D3.2：附件路径不走 slash，与 fast-path 同等约束)
-    if (!files?.length && !attachmentPreview.value && !parsedDocument.value && !options?.attachments?.length) {
+    if (
+      !options?.targetSessionId
+      && !files?.length
+      && !attachmentPreview.value
+      && !parsedDocument.value
+      && !options?.attachments?.length
+    ) {
       const slash = parseCronSlashCommand(text)
       if (slash) {
         // 不论 kind，都先把 user 原始输入 push 到 chat，符合用户预期
@@ -242,7 +250,13 @@ export function useChatSend(deps: ChatSendDeps) {
 
     // ✦ 4 层 Intent Resolver — tier=1 fast-path 跳过 LLM，避开 tool_use_id 链路 bug
     //   (附件路径不走 fast-path：用户带文件的意图通常超出"纯创建任务"，留给 LLM)
-    if (!files?.length && !attachmentPreview.value && !parsedDocument.value && !options?.attachments?.length) {
+    if (
+      !options?.targetSessionId
+      && !files?.length
+      && !attachmentPreview.value
+      && !parsedDocument.value
+      && !options?.attachments?.length
+    ) {
       const intent = classifyCronIntent(text)
       if (intent.tier === 1) {
         const fastMessage = buildFastPathAssistantMessage(text)
@@ -405,6 +419,7 @@ export function useChatSend(deps: ChatSendDeps) {
       backendText: resolveBackendText,
       skillNames,
       documents: documentRefs.length ? documentRefs : undefined,
+      targetSessionId: options?.targetSessionId,
     }
     const sendPromise = chatStore.sendMessage(
       finalText,

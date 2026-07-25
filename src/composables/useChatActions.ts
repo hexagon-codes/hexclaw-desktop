@@ -6,10 +6,26 @@
 
 import { ref } from 'vue'
 import { removeMessage } from '@/services/messageService'
-import { forkSession } from '@/api/chat'
+import { deleteSession, forkSession } from '@/api/chat'
 import { i18n } from '@/i18n'
 import { logger } from '@/utils/logger'
 import { backendDeletableMessageId } from '@/utils/chat-message-id'
+import {
+  bindSessionAgent,
+  clearSessionAgent,
+  getSessionAgent,
+} from '@/stores/session-agent-binding'
+import {
+  clearSessionModel,
+  getSessionModel,
+  setSessionModel,
+  type SessionModelBinding,
+} from '@/stores/session-model-binding'
+import {
+  clearSessionDeepThinking,
+  getSessionDeepThinking,
+  setSessionDeepThinking,
+} from '@/stores/session-thinking-preference'
 import type { useChatStore } from '@/stores/chat'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { useToast } from './useToast'
@@ -19,6 +35,52 @@ type Toast = ReturnType<typeof useToast>
 
 /** 编辑/重试重发时需保留的原消息载荷（图片等附件 + 挂载技能）。 */
 type ResendCarry = { attachments?: ChatAttachment[]; skillNames?: string[] }
+type DirectedResend = ResendCarry & { targetSessionId: string }
+export interface EditedMessageSubmission {
+  /** 被编辑的历史消息只读保留；调用方可据其来源选择正确的提交管道。 */
+  sourceMessage: ChatMessage
+  /** 本次不可变新版本唯一允许写入的分支；提交器不得再读取全局 currentSessionId 猜目标。 */
+  targetSessionId: string
+  /** 新版本正文。仅用于判空时 trim，提交时保持 canonical 字节不变。 */
+  content: string
+  carry?: ResendCarry
+}
+export type SubmitEditedMessage = (submission: EditedMessageSubmission) => Promise<boolean>
+
+/**
+ * Forking a session creates a new client-side preference namespace. Capture it before
+ * selectSession() so its restoring logic sees the same agent/model/thinking context as
+ * the source instead of resetting the branch to a generic chat session.
+ */
+interface EditBranchContext {
+  agentName: string
+  model: SessionModelBinding | null
+  deepThinking: boolean
+}
+
+function captureEditBranchContext(chatStore: ChatStore, sourceSessionID: string): EditBranchContext {
+  return {
+    // A just-created source session may have active Agent state before its local binding is
+    // persisted; preserving it is still required for the edit request that created this branch.
+    agentName: getSessionAgent(sourceSessionID) || chatStore.agentRole || '',
+    model: getSessionModel(sourceSessionID),
+    deepThinking: getSessionDeepThinking(sourceSessionID) || (
+      chatStore.chatMode === 'research' && chatStore.thinkingEnabled
+    ),
+  }
+}
+
+function inheritEditBranchContext(branchSessionID: string, context: EditBranchContext): void {
+  if (context.agentName) bindSessionAgent(branchSessionID, context.agentName)
+  if (context.model) setSessionModel(branchSessionID, context.model)
+  if (context.deepThinking) setSessionDeepThinking(branchSessionID, true)
+}
+
+function clearEditBranchContext(branchSessionID: string): void {
+  clearSessionAgent(branchSessionID)
+  clearSessionModel(branchSessionID)
+  clearSessionDeepThinking(branchSessionID)
+}
 
 /**
  * 从原用户消息提取「重发需保留」的载荷：图片/附件（metadata.attachments）+ 挂载技能（metadata.skills）。
@@ -42,11 +104,71 @@ function resendCarryFrom(msg: ChatMessage | undefined): ResendCarry | undefined 
 export function useChatActions(
   chatStore: ChatStore,
   toast: Toast,
-  handleSend: (text: string, files?: File[], options?: ResendCarry) => Promise<boolean>,
+  handleSend: (text: string, files?: File[], options?: ResendCarry | DirectedResend) => Promise<boolean>,
+  submitEditedMessage?: SubmitEditedMessage,
 ) {
   // ─── 原位编辑（DeepSeek 风格） ──────────────────────
   const editingMsgId = ref<string | null>(null)
   const editingText = ref('')
+  // 编辑提交会跨越 fork/load/select/send 多个异步边界。单一运行令牌同时解决：
+  // 1) 双击发送创建两个分支；2) 等待期间切换会话后把分支/消息写进错误会话；
+  // 3) 用户取消后，迟到的 fork 响应仍继续提交。
+  // 这是内部并发闸，不改变任何可见按钮或交互布局。
+  let editGeneration = 0
+  let activeEditSubmission: number | null = null
+
+  function editSubmissionIsCurrent(
+    token: number,
+    messageID: string,
+    expectedSessionID: string,
+  ): boolean {
+    return activeEditSubmission === token
+      && editGeneration === token
+      && editingMsgId.value === messageID
+      && chatStore.currentSessionId === expectedSessionID
+  }
+
+  function editSubmissionIdentityIsCurrent(token: number, messageID: string): boolean {
+    return activeEditSubmission === token
+      && editGeneration === token
+      && editingMsgId.value === messageID
+  }
+
+  /**
+   * 删除失败分支前必须先离开它，否则 loadSessions 会把“当前但已删除”的分支留在内存。
+   * 只有 DELETE 确认成功后才清理本地绑定；若删除失败，完整保留 Agent/模型/思考上下文，
+   * 让该分支仍可在会话列表恢复，而不是留下一个丢失路由信息的孤儿。
+   */
+  async function compensateEditBranch(branchSessionID: string, sourceSessionID: string): Promise<void> {
+    if (chatStore.currentSessionId === branchSessionID) {
+      try {
+        await chatStore.selectSession(sourceSessionID)
+      } catch (error) {
+        logger.error('[useChatActions] failed to leave edited branch before compensation', error)
+        return
+      }
+    }
+
+    try {
+      await deleteSession(branchSessionID)
+    } catch (error) {
+      logger.error('[useChatActions] failed to compensate edited branch', error)
+      // Refresh while preserving the branch bindings so a failed DELETE remains discoverable.
+      try {
+        await chatStore.loadSessions()
+      } catch (refreshError) {
+        logger.error('[useChatActions] failed to refresh recoverable edited branch', refreshError)
+      }
+      return
+    }
+
+    clearEditBranchContext(branchSessionID)
+    try {
+      await chatStore.loadSessions()
+    } catch (error) {
+      logger.error('[useChatActions] failed to refresh sessions after edited branch compensation', error)
+    }
+  }
 
   /**
    * 原子删除从 fromIdx 起的整段消息（重试/编辑即"替换整轮"）。
@@ -192,8 +314,10 @@ export function useChatActions(
   }
 
   function handleEdit(msgIndex: number) {
+    if (activeEditSubmission !== null) return
     const msg = chatStore.messages[msgIndex]
     if (!msg || msg.role !== 'user') return
+    editGeneration += 1
     editingMsgId.value = msg.id
     editingText.value = msg.content
     // The editable MessageText projection owns focus/caret after it mounts.
@@ -201,8 +325,18 @@ export function useChatActions(
   }
 
   async function confirmEdit(msgId: string) {
+    // The first call owns the entire fork→submit transaction. Later clicks are harmless.
+    if (activeEditSubmission !== null) return
     const text = editingText.value
-    if (!text.trim()) {
+    const idx = chatStore.messages.findIndex((m) => m.id === msgId)
+    if (idx < 0) {
+      cancelEdit()
+      return
+    }
+    const sourceMessage = chatStore.messages[idx]!
+    // 附件本身就是有效内容：纯图片消息编辑不能被空文本校验吞掉（BUG-20260724-010）。
+    const carry = resendCarryFrom(sourceMessage)
+    if (!text.trim() && !carry?.attachments?.length) {
       cancelEdit()
       return
     }
@@ -220,29 +354,85 @@ export function useChatActions(
       return
     }
 
-    const idx = chatStore.messages.findIndex((m) => m.id === msgId)
-
-    editingMsgId.value = null
-    editingText.value = ''
-
-    if (idx < 0) return
-
-    // BUG-20260625：编辑重发须带回原消息的图片附件 + 挂载技能（捕获要在删除之前）。
-    const carry = resendCarryFrom(chatStore.messages[idx])
-    const snapshot = chatStore.messages.slice(idx) // AP-096 兜底快照
-
-    // 删除原消息及其之后的所有回复（DeepSeek 风格：编辑即替换）——原子删除，失败则回滚+提示、不重发。
-    if (!(await removeRangeAtomic(idx))) return
-
-    // 重新发送（会创建新用户消息 + 获取 AI 回复），带回原附件/技能
-    const ok = carry ? await handleSend(text, undefined, carry) : await handleSend(text)
-    if (!ok) {
-      chatStore.messages.splice(idx, 0, ...snapshot)
+    const sourceSessionID = chatStore.currentSessionId
+    if (!sourceSessionID) {
+      // 编辑已有历史消息却没有会话归属，不能安全地退化成追加发送；草稿必须保留。
       toast.error(i18n.global.t('chat.retryFailed'))
+      return
+    }
+
+    const token = editGeneration
+    activeEditSubmission = token
+    let branchSessionID: string | null = null
+    const branchContext = captureEditBranchContext(chatStore, sourceSessionID)
+    try {
+      // BUG-20260724-009/010：编辑不是原会话尾部追加，更不是破坏性裁剪。
+      // 服务端在一个事务中复制「源消息之前」的前缀；手工分支仍默认包含分支点。
+      const fork = await forkSession(sourceSessionID, backendDeletableMessageId(sourceMessage), {
+        includeMessage: false,
+      })
+      branchSessionID = fork.session.id
+
+      // A late fork response must never steal focus from a session the user selected meanwhile.
+      if (!editSubmissionIsCurrent(token, msgId, sourceSessionID)) {
+        await compensateEditBranch(branchSessionID, sourceSessionID)
+        return
+      }
+      await chatStore.loadSessions()
+      if (!editSubmissionIsCurrent(token, msgId, sourceSessionID)) {
+        await compensateEditBranch(branchSessionID, sourceSessionID)
+        return
+      }
+      // Must happen after loadSessions (which prunes unknown ids) and before the directed submit.
+      // The branch is deliberately *not* selected yet: the source remains the visible projection
+      // until the replacement has crossed its persistence/acceptance boundary.
+      inheritEditBranchContext(branchSessionID, branchContext)
+
+      // ChatView 可注入场景提交器，让纯图片重新进入原场景管道；普通发送同样显式携带
+      // targetSessionId。任何提交器都不能把 global currentSessionId 当作隐式写入目标。
+      const ok = submitEditedMessage
+        ? await submitEditedMessage({
+            sourceMessage,
+            targetSessionId: branchSessionID,
+            content: text,
+            carry,
+          })
+        : await handleSend(text, undefined, {
+            ...carry,
+            targetSessionId: branchSessionID,
+          })
+      if (!ok) {
+        await compensateEditBranch(branchSessionID, sourceSessionID)
+        toast.error(i18n.global.t('chat.retryFailed'))
+        return
+      }
+
+      // Accepted branches are immutable user data. A session switch/cancel during the in-flight
+      // submit may prevent automatic navigation, but must neither steal focus nor delete the
+      // successfully accepted branch. It remains discoverable in the session list.
+      if (!editSubmissionIdentityIsCurrent(token, msgId)
+        || chatStore.currentSessionId !== sourceSessionID) {
+        return
+      }
+      await chatStore.selectSession(branchSessionID)
+      if (!editSubmissionIdentityIsCurrent(token, msgId)
+        || chatStore.currentSessionId !== branchSessionID) {
+        return
+      }
+      cancelEdit()
+    } catch (error) {
+      logger.error('[useChatActions] edited submission failed', error)
+      if (branchSessionID) {
+        await compensateEditBranch(branchSessionID, sourceSessionID)
+      }
+      toast.error(i18n.global.t('chat.retryFailed'))
+    } finally {
+      if (activeEditSubmission === token) activeEditSubmission = null
     }
   }
 
   function cancelEdit() {
+    editGeneration += 1
     editingMsgId.value = null
     editingText.value = ''
   }
