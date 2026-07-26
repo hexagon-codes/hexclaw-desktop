@@ -981,6 +981,7 @@ defineExpose({ focus, setInput, triggerFileUpload })
           <button
             v-if="streaming"
             class="hc-composer__send hc-composer__send--stop"
+            :disabled="disabled"
             :title="t('chat.stopGenerate')"
             @click="emit('stop')"
           >
@@ -1126,25 +1127,6 @@ defineExpose({ focus, setInput, triggerFileUpload })
 .hc-composer__scenario-hint b {
   color: var(--hc-accent);
   font-weight: 600;
-}
-
-/* 输入框滚动条：与全局一致的「悬停浮现·离开即隐」，仅更纤细（贴合小高度输入区） */
-.hc-composer :deep(.hc-composer__field::-webkit-scrollbar) {
-  width: 8px;
-}
-.hc-composer :deep(.hc-composer__field::-webkit-scrollbar-thumb) {
-  background-color: transparent;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-  border-radius: 999px;
-  min-height: 24px;
-  transition: background-color 0.25s var(--hc-ease-out);
-}
-.hc-composer :deep(.hc-composer__field:hover::-webkit-scrollbar-thumb) {
-  background-color: var(--hc-scrollbar-thumb);
-}
-.hc-composer :deep(.hc-composer__field::-webkit-scrollbar-thumb:hover) {
-  background-color: var(--hc-scrollbar-thumb-hover);
 }
 
 /* ─── 附件预览 ───── */

@@ -11,6 +11,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import chatViewSrc from '@/views/ChatView.vue?raw'
+import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 
 describe('ChatView — 消息删除工具条接线', () => {
   it('assistant 与 user 两处 MessageActions 都接了 @delete → requestDeleteMessage', () => {
@@ -31,10 +32,11 @@ describe('ChatView — 消息删除工具条接线', () => {
 
   it('删除不可逆 → 走二次确认（ConfirmDialog + pendingDeleteMsgId）', () => {
     expect(chatViewSrc).toContain('ConfirmDialog')
-    expect(chatViewSrc).toContain('pendingDeleteMsgId')
-    expect(chatViewSrc).toContain('@confirm="confirmDeleteMessage"')
-    expect(chatViewSrc).toContain("t('chat.deleteMessageConfirmTitle')")
-    expect(chatViewSrc).toContain(':confirm-delay-ms="5_000"')
-    expect(chatViewSrc).toContain(':confirmation-key="pendingDeleteMsgId"')
+      expect(chatViewSrc).toContain('pendingDeleteMsgId')
+      expect(chatViewSrc).toContain('@confirm="confirmDeleteMessage"')
+      expect(chatViewSrc).toContain("t('chat.deleteMessageConfirmTitle')")
+      expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(3_000)
+      expect(chatViewSrc).not.toContain(':confirm-delay-ms=')
+      expect(chatViewSrc).toContain(':confirmation-key="pendingDeleteMsgId"')
+    })
   })
-})

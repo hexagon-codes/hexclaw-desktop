@@ -20,11 +20,15 @@ import { useToast } from '@/composables/useToast'
 const { t } = useI18n()
 const toast = useToast()
 
-const props = defineProps<{
-  role: 'user' | 'assistant'
-  content: string
-  feedback?: 'like' | 'dislike' | null
-}>()
+const props = withDefaults(
+  defineProps<{
+    role: 'user' | 'assistant'
+    content: string
+    showRetry?: boolean
+    feedback?: 'like' | 'dislike' | null
+  }>(),
+  { showRetry: true },
+)
 
 const emit = defineEmits<{
   copy: []
@@ -178,6 +182,7 @@ onBeforeUnmount(() => {
         class="hc-msg-actions__btn"
         :title="t('chat.regenerate')"
         :aria-label="t('chat.regenerate')"
+        v-if="showRetry !== false"
         data-testid="message-regenerate"
         @click="emit('retry')"
       >

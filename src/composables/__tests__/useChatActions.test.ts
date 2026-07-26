@@ -194,6 +194,48 @@ describe('useChatActions', () => {
     expect(getSessionDeepThinking('edit-branch')).toBe(true)
   })
 
+  it('keeps source route, attachments, history, and draft when an edited service submission fails', async () => {
+    const store = makeStoreWithImage()
+    const toast = makeMockToast()
+    const snapshot = Object.freeze({
+      agentRole: 'translator',
+      chatParams: Object.freeze({
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+        temperature: 0.4,
+        maxTokens: 2048,
+      }),
+      thinkingEnabled: true,
+    })
+    const submitEdited = vi.fn().mockResolvedValue(false)
+    const captureRoute = vi.fn().mockReturnValue(snapshot)
+    const before = store.messages.map((message) => ({ ...message }))
+    const { handleEdit, confirmEdit, editingMsgId, editingText } = useChatActions(
+      store as any,
+      toast as any,
+      mockSend,
+      submitEdited,
+      captureRoute,
+    )
+
+    handleEdit(0)
+    editingText.value = '图片说明已修改'
+    await confirmEdit('u1')
+
+    expect(captureRoute).toHaveBeenCalledWith('source-session')
+    expect(submitEdited).toHaveBeenCalledWith({
+      sourceMessage: store.messages[0],
+      targetSessionId: 'edit-branch',
+      content: '图片说明已修改',
+      carry: { attachments: [IMG] },
+      routeSnapshot: snapshot,
+    })
+    expect(store.messages).toEqual(before)
+    expect(editingMsgId.value).toBe('u1')
+    expect(editingText.value).toBe('图片说明已修改')
+    expect(toast.error).toHaveBeenCalled()
+  })
+
   it('confirmEdit preserves canonical leading and trailing whitespace byte-for-byte', async () => {
     const store = makeMockStore()
     const { handleEdit, confirmEdit, editingText } = useChatActions(

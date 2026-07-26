@@ -16,6 +16,10 @@ import {
 } from '@/stores/session-agent-binding'
 import { clearSessionDeepThinking } from '@/stores/session-thinking-preference'
 import {
+  clearSessionModel,
+  setSessionModel,
+} from '@/stores/session-model-binding'
+import {
   scenarioRegistry,
   type ScenarioComposerImagePayload,
 } from '@/shell/scenario/registry'
@@ -36,6 +40,11 @@ const { mockGetOllamaStatus } = vi.hoisted(() => ({
 const { mockGetConnections, mockGetConnectionsResult } = vi.hoisted(() => ({
   mockGetConnections: vi.fn(),
   mockGetConnectionsResult: vi.fn(),
+}))
+
+const tauriEventMock = vi.hoisted(() => ({
+  sidecarReady: undefined as undefined | (() => void | Promise<void>),
+  listen: vi.fn(),
 }))
 
 const { mockAppendSessionMessage, mockAppendSessionMessagesBatch } = vi.hoisted(() => ({
@@ -127,6 +136,15 @@ vi.mock('@/api/im-channels', () => ({
   getConnectionsResult: () => mockGetConnectionsResult(),
 }))
 
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: tauriEventMock.listen.mockImplementation(
+    async (event: string, handler: () => void | Promise<void>) => {
+      if (event === 'sidecar-ready') tauriEventMock.sidecarReady = handler
+      return vi.fn()
+    },
+  ),
+}))
+
 vi.mock('@/utils/secure-store', () => ({
   saveSecureValue: vi.fn().mockResolvedValue(undefined),
   loadSecureValue: vi.fn().mockResolvedValue(null),
@@ -151,6 +169,86 @@ vi.mock('@tauri-apps/plugin-store', () => {
     async delete() {}
   }
   return { LazyStore: MockLazyStore }
+})
+
+describe('BUG-20260726-031 · progressive result unread projection', () => {
+  it('BUG-20260726-031 preserves an up-scrolled viewport and exposes one unread-result action', async () => {
+    scenarioRegistry.reset()
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'progressive-unread-test' ? K12_VIEW_DESCRIPTOR : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'ProgressiveUnreadScenarioStub',
+      emits: ['contentUpdated'],
+      template:
+        '<button type="button" aria-label="发布第 3 题结果" @click="$emit(\'contentUpdated\')" />',
+    })
+
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'progressive-unread-agent',
+            display_name: '小明的辅导助手',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            metadata: { scenario: 'progressive-unread-test' },
+          },
+        ]
+      },
+    })
+
+    try {
+      await flushPromises()
+      useAgentsStore().registeredAgents = [
+        {
+          name: 'progressive-unread-agent',
+          display_name: '小明的辅导助手',
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          metadata: { scenario: 'progressive-unread-test' },
+        },
+      ]
+      const store = useChatStore()
+      store.currentSessionId = 'progressive-unread-session'
+      store.agentRole = 'progressive-unread-agent'
+      store.chatMode = 'agent'
+      store.messages = [
+        {
+          id: 'existing-result',
+          role: 'assistant',
+          content: '已有题目结果',
+          timestamp: '2026-07-26T09:00:00Z',
+          created_at: new Date().toISOString(),
+        },
+      ]
+      await flushPromises()
+
+      const viewport = wrapper.get('.hc-chat__messages')
+      Object.defineProperties(viewport.element, {
+        scrollHeight: { configurable: true, value: 1_200 },
+        clientHeight: { configurable: true, value: 400 },
+      })
+      ;(viewport.element as HTMLElement).scrollTop = 160
+      await viewport.trigger('scroll')
+      await flushPromises()
+      const anchorBeforeUpdate = (viewport.element as HTMLElement).scrollTop
+
+      await wrapper.get('[aria-label="发布第 3 题结果"]').trigger('click')
+      await flushPromises()
+
+      expect((viewport.element as HTMLElement).scrollTop).toBe(anchorBeforeUpdate)
+      expect(
+        wrapper
+          .findAll('button')
+          .find((button) => button.attributes('aria-label') === '1 道新结果'),
+        '上翻阅读时必须投影带数量的新结果动作，而不是无语义的通用下翻箭头',
+      ).toBeDefined()
+    } finally {
+      wrapper.unmount()
+      scenarioRegistry.reset()
+    }
+  })
 })
 
 // Mock lucide-vue-next 图标组件（避免渲染问题）
@@ -269,6 +367,7 @@ describe('ChatView — E2E 关键路径', () => {
     mockGetOllamaStatus.mockResolvedValue({ running: false, associated: false, model_count: 0, models: [] })
     mockGetConnections.mockResolvedValue([])
     mockGetConnectionsResult.mockResolvedValue({ connections: [] })
+    tauriEventMock.sidecarReady = undefined
     mockForkSession.mockResolvedValue({ session: { id: 'edited-image-branch' } })
     mockDeleteSession.mockResolvedValue({ message: 'ok' })
   })
@@ -362,6 +461,36 @@ describe('ChatView — E2E 关键路径', () => {
 
   it('shows a distinct empty state after the connection directory loads successfully', async () => {
     const wrapper = mountChatView()
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="chat-connections-error"]').exists()).toBe(false)
+  })
+
+  it('[BUG-20260725-008] reloads connections on sidecar-ready and ignores an older late failure', async () => {
+    let rejectColdStart!: (error: Error) => void
+    const coldStart = new Promise<never>((_resolve, reject) => {
+      rejectColdStart = reject
+    })
+    mockGetConnectionsResult
+      .mockReset()
+      .mockImplementationOnce(() => coldStart)
+      .mockResolvedValueOnce({ connections: [] })
+
+    const wrapper = mountChatView()
+    await flushPromises()
+
+    expect(mockGetConnectionsResult).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(tauriEventMock.sidecarReady).toBeTypeOf('function'))
+    const settingsStore = useSettingsStore()
+    vi.spyOn(settingsStore, 'loadConfig').mockRejectedValueOnce(new Error('provider refresh failed'))
+
+    await tauriEventMock.sidecarReady?.()
+    await flushPromises()
+    expect(mockGetConnectionsResult).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
+
+    rejectColdStart(new Error('cold-start request failed late'))
     await flushPromises()
 
     expect(wrapper.find('[data-testid="chat-connections-empty"]').exists()).toBe(true)
@@ -928,6 +1057,117 @@ describe('ChatView — E2E 关键路径', () => {
     }
   })
 
+  it('REG-CHAT-EDIT-ROUTE-005 场景单图编辑在 fork 等待期间仍使用源会话冻结路由', async () => {
+    const descriptor = {
+      schemaVersion: '1',
+      headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
+      messageBadges: [],
+      recordCollections: [],
+      sidePanels: [],
+      actions: [],
+    }
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'edit-image-route-snapshot' ? (descriptor as never) : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'EditImageRouteSnapshotStub',
+      template: '<div />',
+    })
+
+    let resolveFork!: (value: { session: { id: string } }) => void
+    mockForkSession.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveFork = resolve
+      }),
+    )
+    const sourceSessionId = 'edit-image-route-source'
+    const agentId = 'edit-image-route-agent'
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: agentId,
+            display_name: '图片场景',
+            provider: 'agent-default-provider',
+            model: 'agent-default-model',
+            metadata: { scenario: 'edit-image-route-snapshot' },
+          },
+        ]
+      },
+    })
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = sourceSessionId
+      store.agentRole = agentId
+      store.chatMode = 'agent'
+      bindSessionAgent(sourceSessionId, agentId)
+      setSessionModel(sourceSessionId, {
+        model: 'gpt-5.6-sol',
+        providerId: 'source-provider-id',
+        providerKey: 'hexclaw-gpt',
+        capabilities: ['text', 'vision'],
+      })
+      vi.spyOn(store, 'loadSessions').mockResolvedValue(undefined)
+      vi.spyOn(store, 'selectSession').mockImplementation(async (sessionId: string) => {
+        store.currentSessionId = sessionId
+        store.agentRole = getSessionAgent(sessionId)
+        store.chatMode = store.agentRole ? 'agent' : 'chat'
+        store.messages.splice(0)
+      })
+      const attachment = {
+        type: 'image' as const,
+        name: 'frozen-route.png',
+        mime: 'image/png',
+        data: 'ZnJvemVuLXJvdXRl',
+      }
+      store.messages.push({
+        id: 'source-image',
+        role: 'user',
+        content: '原说明',
+        timestamp: '2026-07-26T00:00:00Z',
+        metadata: { attachments: [attachment] },
+      })
+      await flushPromises()
+
+      const vm = wrapper.vm as unknown as {
+        editingMsgId: string | null
+        editingText: string
+        confirmEdit: (messageId: string) => Promise<void>
+        scenarioComposerImage: ScenarioComposerImagePayload | ''
+      }
+      vm.editingMsgId = 'source-image'
+      vm.editingText = '新说明'
+      const pending = vm.confirmEdit('source-image')
+      await vi.waitFor(() => expect(mockForkSession).toHaveBeenCalledTimes(1))
+
+      const agent = useAgentsStore().registeredAgents[0]!
+      agent.provider = 'unrelated-provider'
+      agent.model = 'unrelated-model'
+      store.chatParams.provider = 'another-provider'
+      store.chatParams.model = 'another-model'
+      resolveFork({ session: { id: 'edited-image-branch' } })
+      await pending
+
+      expect(vm.scenarioComposerImage).toMatchObject({
+        attachment,
+        contextText: '新说明',
+        sourceSessionId: 'edited-image-branch',
+        route: {
+          provider: 'hexclaw-gpt',
+          model: 'gpt-5.6-sol',
+          capability: 'vision',
+        },
+      })
+    } finally {
+      wrapper.unmount()
+      clearSessionAgent(sourceSessionId)
+      clearSessionModel(sourceSessionId)
+      scenarioRegistry.reset()
+    }
+  })
+
   it('BUG-20260724-010 编辑带说明的图片消息仍进入场景管道并原样保留说明与历史', async () => {
     const descriptor = {
       schemaVersion: '1',
@@ -1313,7 +1553,7 @@ describe('ChatView — E2E 关键路径', () => {
     scenarioRegistry.registerChatEnhancement({
       name: 'AttemptRetryScenarioStub',
       props: ['composerImage'],
-      emits: ['scenarioImageAttempt'],
+      emits: ['scenarioImageAttempt', 'update:composerImage'],
       template: '<button data-testid="retry-attempt" />',
     })
 
@@ -1364,6 +1604,7 @@ describe('ChatView — E2E 关键路径', () => {
       await flushPromises()
       enhancement.vm.$emit('scenarioImageAttempt', enhancement.props('composerImage'))
       enhancement.vm.$emit('scenarioImageAttempt', enhancement.props('composerImage'))
+      enhancement.vm.$emit('update:composerImage', '')
 
       await vi.waitFor(() => {
         expect(mockAppendSessionMessage).toHaveBeenCalledTimes(2)
@@ -1395,6 +1636,57 @@ describe('ChatView — E2E 关键路径', () => {
           model: 'gpt-5.6-sol',
           capability: 'vision',
         },
+      })
+    } finally {
+      wrapper.unmount()
+      scenarioRegistry.reset()
+    }
+  })
+
+  it('BUG-20260725-009 场景文本任务获得界面所示的 Agent 绑定模型快照', async () => {
+    const descriptor = {
+      schemaVersion: '1',
+      headerTabs: [{ id: 'chat', labelKey: 'chat.title', kind: 'chat' }],
+      messageBadges: [],
+      recordCollections: [],
+      sidePanels: [],
+      actions: [],
+    }
+    scenarioRegistry.registerResolver((ctx) =>
+      ctx.metadata?.scenario === 'text-route-test' ? (descriptor as never) : null,
+    )
+    scenarioRegistry.registerChatEnhancement({
+      name: 'TextRouteScenarioStub',
+      props: ['modelRoute'],
+      template: '<div data-testid="text-route-scenario" />',
+    })
+
+    const wrapper = mountChatView({
+      setup: () => {
+        useAgentsStore().registeredAgents = [
+          {
+            name: 'text-route-agent',
+            display_name: '文本任务助手',
+            provider: 'hexclaw-gpt',
+            model: 'gpt-5.6-sol',
+            metadata: { scenario: 'text-route-test' },
+          },
+        ]
+      },
+    })
+
+    try {
+      await flushPromises()
+      const store = useChatStore()
+      store.currentSessionId = 'text-route-session'
+      store.agentRole = 'text-route-agent'
+      store.chatMode = 'agent'
+      await flushPromises()
+
+      expect(wrapper.getComponent({ name: 'TextRouteScenarioStub' }).props('modelRoute')).toEqual({
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+        capability: 'text',
       })
     } finally {
       wrapper.unmount()
@@ -1562,7 +1854,7 @@ describe('ChatView — E2E 关键路径', () => {
     const ordinarySessionId = 'ordinary-thinking-composer-session'
     const k12AgentId = 'k12-tutor-mingming'
     const expectedChips = ['📚 自动识别学科', '💡 渐进提示', '📷 识题校验']
-    const expectedPlaceholder = '发消息、粘贴带分数/公式的题目，或 ⌘V 粘贴作业照片'
+    const expectedPlaceholder = '发消息，或让我写请假条、回复老师消息、设置订正提醒'
 
     scenarioRegistry.reset()
     scenarioRegistry.registerResolver((ctx) =>

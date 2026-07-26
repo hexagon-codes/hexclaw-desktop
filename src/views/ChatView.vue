@@ -19,7 +19,10 @@ import {
   getSessionAgent,
   markSessionAgentOrphaned,
 } from '@/stores/session-agent-binding'
-import { setSessionDeepThinking } from '@/stores/session-thinking-preference'
+import {
+  getSessionDeepThinking,
+  setSessionDeepThinking,
+} from '@/stores/session-thinking-preference'
 import { healLegacySessionTitles } from '@/stores/session-title-heal'
 import { useThrottledText } from '@/composables/useThrottledText'
 import { isChannelDefaultAgent } from '@/utils/imChannelBinding'
@@ -27,11 +30,13 @@ import { removeMessage } from '@/services/messageService'
 import { useAgentsStore } from '@/stores/agents'
 import {
   scenarioRegistry,
+  scenarioMessageAnchorId,
   type ScenarioComposerAction,
   type ScenarioComposerChip,
   type ScenarioComposerCommand,
   type ScenarioComposerImagePayload,
   type ScenarioImageModelRoute,
+  type ScenarioTextModelRoute,
 } from '@/shell/scenario/registry'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import RecordChip from '@/shell/chat/RecordChip.vue'
@@ -40,6 +45,7 @@ import type { VerifyResult, VerifyVerdict } from '@/contracts'
 import { useSettingsStore } from '@/stores/settings'
 import {
   setSessionModel,
+  getSessionModel,
   resolveSessionModel,
   decideSessionModelAction,
   type SessionModelBinding,
@@ -89,9 +95,14 @@ import {
   useCronCompileLabel,
 } from '@/composables'
 import type { EditedMessageSubmission } from '@/composables/useChatActions'
+import {
+  freezeChatRouteSnapshot,
+  type ChatRouteSnapshot,
+} from '@/stores/chat-route-snapshot'
 import { isDocumentFile, parseDocument } from '@/utils/file-parser'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { normalizeAssistantReasoning } from '@/utils/assistant-reply'
+import { resolveProviderDisplayName } from '@/utils/provider-display-name'
 import { knowledgeHitTitle, knowledgeHitSubtitle } from '@/utils/retrieval-hits'
 import { getSubAgentReports, isSubAgentToolCall, type SubAgentReport } from '@/utils/subagents'
 import { getSkills, type Skill } from '@/api/skills'
@@ -116,7 +127,7 @@ import { openOrDownloadDocument } from '@/utils/download'
 import { backendDeletableMessageId } from '@/utils/chat-message-id'
 import crabLogo from '@/assets/logo-crab.png'
 
-const { t, locale } = useI18n()
+const { t } = useI18n()
 const route = useRoute()
 const router = useRouter()
 const chatStore = useChatStore()
@@ -160,6 +171,12 @@ const messagesContainerRef = ref<HTMLDivElement>()
 const thinkingContentRef = ref<HTMLDivElement>()
 const showScrollToBottom = ref(false)
 const userScrolledUp = ref(false)
+const unreadScenarioResultCount = ref(0)
+const scrollNavigationLabel = computed(() =>
+  unreadScenarioResultCount.value > 0
+    ? t('chat.newResults', { n: unreadScenarioResultCount.value })
+    : t('chat.scrollToBottom', 'Scroll to bottom'),
+)
 const chatWorkspaceMode = ref<ChatWorkspaceMode>(
   chatStore.showArtifacts ? 'artifacts' : appStore.detailPanelOpen ? 'context' : 'sessions',
 )
@@ -232,18 +249,43 @@ const availableSkills = ref<Skill[]>([])
 const knowledgeDocs = ref<KnowledgeDoc[]>([])
 const connections = ref<ConnectionSummary[]>([])
 const connectionDirectoryState = ref<'loading' | 'ready' | 'error'>('loading')
+let connectionDirectoryGeneration = 0
+let connectionDirectoryDisposed = false
 
 async function loadConnectionDirectory() {
+  const generation = ++connectionDirectoryGeneration
+  if (connectionDirectoryDisposed) return
   connectionDirectoryState.value = 'loading'
   try {
     const result = await getConnectionsResult()
+    if (connectionDirectoryDisposed || generation !== connectionDirectoryGeneration) return
     connections.value = result.connections
     connectionDirectoryState.value = result.error ? 'error' : 'ready'
   } catch {
+    if (connectionDirectoryDisposed || generation !== connectionDirectoryGeneration) return
     connections.value = []
     connectionDirectoryState.value = 'error'
   }
 }
+
+let stopSidecarReadyListener: (() => void) | null = null
+let sidecarReadyListenerTimeout: ReturnType<typeof setTimeout> | null = null
+let sidecarReadyHandling = false
+
+function clearSidecarReadyListener() {
+  if (sidecarReadyListenerTimeout) {
+    clearTimeout(sidecarReadyListenerTimeout)
+    sidecarReadyListenerTimeout = null
+  }
+  stopSidecarReadyListener?.()
+  stopSidecarReadyListener = null
+}
+
+onUnmounted(() => {
+  connectionDirectoryDisposed = true
+  connectionDirectoryGeneration += 1
+  clearSidecarReadyListener()
+})
 
 // Message context menu
 const msgCtxMenu = ref<InstanceType<typeof ContextMenu>>()
@@ -391,17 +433,6 @@ function formatThinkingDuration(seconds?: unknown): string {
     return r > 0 ? `${m}m ${r}s` : `${m}m`
   }
   return `${s}s`
-}
-
-function formatFullTime(ts: string): string {
-  return new Date(ts).toLocaleString(locale.value, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  })
 }
 
 function getMessageAttachments(message: ChatMessage): ChatAttachment[] {
@@ -618,13 +649,27 @@ const usesBoundAgentModel = computed(
  *  里的 found，本 ref 即被忽略；进入「列表里有」的选择/恢复路径时清空，避免残留。 */
 const pendingModelMeta = ref<{ name: string; capabilities: string[] } | null>(null)
 
+function projectedAgentDisplay(agentId: string, candidate?: string | null): string {
+  const cfg = agentsStore.findAgent(agentId)
+  const fallback = candidate?.trim() || cfg?.display_name?.trim() || cfg?.name || agentId
+  if (!cfg) return fallback
+  return scenarioRegistry.projectInstanceDisplayName(
+    {
+      agentId: cfg.name,
+      agentName: cfg.display_name,
+      metadata: cfg.metadata,
+    },
+    fallback,
+  )
+}
+
 // 当前模型的显示名
 const selectedModelDisplay = computed(() => {
   // 已绑定 Agent 开启深度思考后仍显示同一 Agent 偏好模型；research 不等于换收件人。
   if (usesBoundAgentModel.value) {
     const cfg = agentsStore.findAgent(chatStore.agentRole)
     if (cfg?.model) {
-      const agentLabel = cfg.display_name || cfg.name || chatStore.agentRole
+      const agentLabel = projectedAgentDisplay(chatStore.agentRole)
       return `${cfg.model} · ${agentLabel}`
     }
   }
@@ -643,8 +688,7 @@ const selectedModelDisplay = computed(() => {
 // display_name，让收件人徽章呈现人看得懂的名字而非英文 name。
 const agentRoleDisplay = computed(() => {
   if (!chatStore.agentRole) return ''
-  const cfg = agentsStore.findAgent(chatStore.agentRole)
-  return cfg?.display_name?.trim() || cfg?.name || chatStore.agentRole
+  return projectedAgentDisplay(chatStore.agentRole)
 })
 
 // 场景包会话增强（架构 §8.4）：由后端/registry 决定当前实例是否有增强视图，
@@ -678,17 +722,24 @@ interface PendingScenarioImageProjection {
 }
 // 编辑图片在 source 仍可见时先写入目标分支；只有该分支真正成为 current 后才允许
 // 投影给场景组件。Map 以 session 为所有权边界，杜绝“同 Agent 即同会话”的错误假设。
-const pendingScenarioImageProjections = new Map<string, PendingScenarioImageProjection>()
+const pendingScenarioImageProjections = new Map<string, PendingScenarioImageProjection[]>()
 function activateScenarioImageProjection(sessionId: string): void {
   if (chatStore.currentSessionId !== sessionId) return
-  const pending = pendingScenarioImageProjections.get(sessionId)
+  if (scenarioComposerImage.value) return
+  const queue = pendingScenarioImageProjections.get(sessionId)
+  const pending = queue?.shift()
   if (!pending || pending.payload.sourceSessionId !== sessionId) return
   if (!chatStore.messages.some((message) => message.id === pending.message.id)) {
     chatStore.messages.push(pending.message)
   }
   scenarioComposerImage.value = pending.payload
-  pendingScenarioImageProjections.delete(sessionId)
+  if (!queue?.length) pendingScenarioImageProjections.delete(sessionId)
   void nextTick(scrollToBottom)
+}
+function handleScenarioComposerImageConsumed(): void {
+  scenarioComposerImage.value = ''
+  const sessionId = chatStore.currentSessionId
+  if (sessionId) void nextTick(() => activateScenarioImageProjection(sessionId))
 }
 function scenarioImageRoute(
   providerValue: string | undefined,
@@ -698,6 +749,30 @@ function scenarioImageRoute(
   const model = modelValue?.trim() ?? ''
   if (!provider || !model || model === 'auto') return undefined
   return { provider, model, capability: 'vision' }
+}
+function scenarioTextRoute(
+  providerValue: string | undefined,
+  modelValue: string | undefined,
+): ScenarioTextModelRoute | undefined {
+  const provider = providerValue?.trim() ?? ''
+  const model = modelValue?.trim() ?? ''
+  if (!provider || !model || model === 'auto') return undefined
+  return { provider, model, capability: 'text' }
+}
+function currentScenarioTextRoute(): ScenarioTextModelRoute | undefined {
+  // 文本场景任务与普通发送/视觉任务遵循同一模型所有权：未手动覆盖时优先 Agent
+  // 绑定；只有 Agent 明确跟随全局默认时才使用 composer 当前选择。
+  if (usesBoundAgentModel.value) {
+    const cfg = agentsStore.findAgent(chatStore.agentRole)
+    const bound = scenarioTextRoute(cfg?.provider, cfg?.model)
+    if (bound) return bound
+    if (cfg?.model?.trim()) {
+      const matched = settingsStore.availableModels.find((candidate) => candidate.modelId === cfg.model)
+      const resolved = scenarioTextRoute(matched?.providerKey, cfg.model)
+      if (resolved) return resolved
+    }
+  }
+  return scenarioTextRoute(selectedProviderKey.value, selectedModel.value)
 }
 function currentScenarioImageRoute(): ScenarioImageModelRoute | undefined {
   // Agent 模式未手动覆盖时，输入框展示的是 Agent 绑定模型；不能拿 selected* 中的
@@ -732,7 +807,13 @@ async function persistScenarioImageMessage(message: ChatMessage, sessionId: stri
 async function handleScenarioImage(
   payload: ScenarioComposerImagePayload,
   targetSessionId?: string,
+  frozenRoute?: ScenarioImageModelRoute | null,
 ): Promise<boolean> {
+  const intendedSessionId =
+    targetSessionId?.trim() || chatStore.currentSessionId?.trim() || ''
+  if (intendedSessionId && chatStore.isSessionExecuting(intendedSessionId)) {
+    return false
+  }
   const message: ChatMessage = {
     id: nanoid(12),
     role: 'user',
@@ -742,7 +823,9 @@ async function handleScenarioImage(
   }
   // request_id 与可见/持久消息使用同一身份；模型选择也在用户动作发生时冻结，
   // 不能在 await 创建会话期间被后续 UI 操作改写。
-  const route = currentScenarioImageRoute()
+  // undefined = ordinary composer submission resolves the current route now;
+  // null/route = an edited submission already froze auto/explicit routing at confirmation.
+  const route = frozenRoute === undefined ? currentScenarioImageRoute() : frozenRoute ?? undefined
   const directedSessionId = targetSessionId?.trim() || ''
   if (!directedSessionId) {
     chatStore.messages.push(message)
@@ -766,7 +849,13 @@ async function handleScenarioImage(
     }
     return false
   }
-  pendingScenarioImageProjections.set(sessionId, { message, payload: routedPayload })
+  chatStore.setSessionExecution(sessionId, {
+    executionId: message.id,
+    state: 'routing',
+  })
+  const queue = pendingScenarioImageProjections.get(sessionId) ?? []
+  queue.push({ message, payload: routedPayload })
+  pendingScenarioImageProjections.set(sessionId, queue)
   activateScenarioImageProjection(sessionId)
   return true
 }
@@ -790,23 +879,54 @@ function handleScenarioInlineActive(active: boolean) {
   scenarioInlineActive.value = active
   if (active) nextTick(() => scrollToBottom(true))
 }
+
+function handleScenarioContentUpdated() {
+  if (userScrolledUp.value) {
+    unreadScenarioResultCount.value += 1
+    showScrollToBottom.value = true
+    return
+  }
+  nextTick(() => scrollToBottom(false))
+}
+
+function handleScenarioSessionExecution(payload: {
+  sessionId: string
+  executionId: string
+  state: string
+  automaticBudgetSeconds?: number
+  automaticStartedAt?: number
+  automaticDeadlineAt?: number
+  operationDeadlineAt?: number
+}) {
+  chatStore.setSessionExecution(payload.sessionId, {
+    executionId: payload.executionId,
+    state: payload.state,
+    automaticBudgetSeconds: payload.automaticBudgetSeconds,
+    automaticStartedAt: payload.automaticStartedAt,
+    automaticDeadlineAt: payload.automaticDeadlineAt,
+    operationDeadlineAt: payload.operationDeadlineAt,
+  })
+}
 const scenarioCtx = computed(() => {
   const name = chatStore.agentRole
   if (!name) return null
   const cfg = agentsStore.findAgent(name)
+  const agentDisplayName = projectedAgentDisplay(name)
   const descriptor = scenarioRegistry.resolveDescriptor({
     agentId: name,
-    agentName: cfg?.display_name,
+    agentName: agentDisplayName,
     metadata: cfg?.metadata,
   })
   if (!descriptor.headerTabs.length) return null
   return {
     agentId: name,
-    agentName: cfg?.display_name || name,
+    agentName: agentDisplayName,
     sessionId: chatStore.currentSessionId ?? '',
     // 透传通用 metadata，场景专属字段由场景增强组件自行解析（ChatView 零场景知识）
     metadata: cfg?.metadata ?? {},
     descriptor,
+    modelRoute: currentScenarioTextRoute(),
+    messageIds: visibleMessages.value.map((message) => message.id),
   }
 })
 watch(
@@ -826,8 +946,8 @@ const INTERNAL_AGENT_ROLES = new Set(['assistant', 'default', 'researcher', 'wri
 function msgAgentDisplay(raw?: string | null): string {
   const name = (raw ?? '').trim()
   if (!name) return ''
-  const registered = agentsStore.findAgent(name)?.display_name?.trim()
-  if (registered) return registered
+  const registered = agentsStore.findAgent(name)
+  if (registered) return projectedAgentDisplay(name)
   // researcher 等是路由/协作角色，不是产品里的智能体名称。场景会话优先显示绑定实例名，
   // 普通会话回退默认助手名，避免把后端内部标识泄漏给用户。
   if (INTERNAL_AGENT_ROLES.has(name)) return scenarioCtx.value?.agentName || t('chat.botName')
@@ -1332,10 +1452,13 @@ onMounted(async () => {
     // 汇点兜底：调用方漏传 roleTitle 时按已加载的 agents 解析 display_name，绝不把内部
     // name 写进会话标题——标题落库后是会话自己的资产，智能体删除也不回退成 ID
     // （BUG-20260711；loadAgents 已在上方 await，此处可同步查）。
-    const roleTitle =
-      roleTitleQuery || agentsStore.findAgent(roleQuery)?.display_name?.trim() || roleQuery
+    const roleTitle = projectedAgentDisplay(roleQuery, roleTitleQuery)
     // 查找是否已有同名会话；兼容存量旧会话（修复前标题 = agent 内部名），避免重复建会话
-    const existing = chatStore.sessions.find((s) => s.title === roleTitle || s.title === roleQuery)
+    const existing = chatStore.sessions.find(
+      (s) =>
+        projectedAgentDisplay(roleQuery, s.title) === roleTitle ||
+        s.title === roleQuery,
+    )
     if (existing) {
       await chatStore.selectSession(existing.id)
     } else {
@@ -1386,17 +1509,37 @@ onMounted(async () => {
   try {
     const { listen } = await import('@tauri-apps/api/event')
     const unlisten = await listen('sidecar-ready', async () => {
-      await settingsStore.loadConfig({ force: true })
-      await settingsStore.syncOllamaModels()
-      // 冷启动补拉（BUG-20260712-K 同类根因）：挂载时引擎未就绪 → 会话/agents 全空，
-      // 就绪后必须重拉，否则列表空白且标题自愈/孤儿文案层（数据就绪驱动）拿不到数据。
-      await agentsStore.loadAgents()
-      await chatStore.loadSessions()
-      // 后端延迟就绪后同样按优先级恢复当前会话模型，避免覆盖会话绑定（同 BUG-20260626-2 根因）。
-      initLLMModelForCurrentSession()
-      unlisten()
+      if (connectionDirectoryDisposed || sidecarReadyHandling) return
+      sidecarReadyHandling = true
+      clearSidecarReadyListener()
+      // 各数据域独立恢复：Provider/Ollama、Agent/会话或连接中的任意一个失败，
+      // 都不得短路另外两个。尤其 @连接必须在 sidecar-ready 后获得自己的第二次加载机会。
+      await Promise.allSettled([
+        (async () => {
+          await settingsStore.loadConfig({ force: true })
+          await settingsStore.syncOllamaModels()
+        })(),
+        (async () => {
+          // 冷启动补拉（BUG-20260712-K 同类根因）：挂载时引擎未就绪 → 会话/agents 全空，
+          // 就绪后必须按依赖顺序重拉，否则标题自愈/孤儿文案层拿不到稳定身份。
+          await agentsStore.loadAgents()
+          await chatStore.loadSessions()
+        })(),
+        // 连接目录与会话/智能体使用同一 sidecar readiness 边界。挂载期的旧失败可能晚于
+        // 本次成功返回；loadConnectionDirectory 内部的 generation 保证只有最新代次可投影。
+        loadConnectionDirectory(),
+      ])
+      if (!connectionDirectoryDisposed) {
+        // 后端延迟就绪后同样按优先级恢复当前会话模型，避免覆盖会话绑定（同 BUG-20260626-2 根因）。
+        initLLMModelForCurrentSession()
+      }
     })
-    setTimeout(() => unlisten(), 30000)
+    if (connectionDirectoryDisposed) {
+      unlisten()
+    } else {
+      stopSidecarReadyListener = unlisten
+      sidecarReadyListenerTimeout = setTimeout(clearSidecarReadyListener, 30000)
+    }
   } catch {
     // 非 Tauri 环境忽略
   }
@@ -1581,6 +1724,7 @@ function jumpToBottomInstant() {
   messagesEndRef.value?.scrollIntoView({ behavior })
   userScrolledUp.value = false
   showScrollToBottom.value = false
+  unreadScenarioResultCount.value = 0
 }
 
 let _scrollTimer: ReturnType<typeof setTimeout> | null = null
@@ -1612,6 +1756,7 @@ function scrollToBottom(force = false) {
     // 不再依赖一个不保证到来的终态 scroll 事件去纠正（头像图片/markdown 异步重排会吃掉它，
     // 导致箭头卡在加载动画中途的残留几何上，默认打开会话即误显下翻箭头）。
     showScrollToBottom.value = false
+    unreadScenarioResultCount.value = 0
   }, 100)
 }
 
@@ -1628,6 +1773,7 @@ function handleMessagesScroll() {
   })
   userScrolledUp.value = flags.userScrolledUp
   showScrollToBottom.value = flags.showScrollToBottom
+  if (!flags.userScrolledUp) unreadScenarioResultCount.value = 0
 }
 
 // BUG-20260626：消息容器内容重排（头像图片/markdown/代码块异步加载）不触发 scroll 事件，
@@ -1707,6 +1853,27 @@ const { handleSend } = useChatSend({
   attachConversationAutomationActions,
 })
 
+function captureEditedMessageRoute(sourceSessionId: string): ChatRouteSnapshot {
+  const sourceAgentRole = getSessionAgent(sourceSessionId) || chatStore.agentRole || ''
+  const sourceSessionModel = getSessionModel(sourceSessionId)
+  const sourceAgent = sourceAgentRole ? agentsStore.findAgent(sourceAgentRole) : undefined
+  const effectiveChatParams = sourceSessionModel
+    ? chatStore.chatParams
+    : {
+        ...chatStore.chatParams,
+        provider: chatStore.chatParams.provider || sourceAgent?.provider,
+        model: chatStore.chatParams.model || sourceAgent?.model,
+      }
+  return freezeChatRouteSnapshot({
+    agentRole: sourceAgentRole,
+    chatParams: effectiveChatParams,
+    thinkingEnabled:
+      getSessionDeepThinking(sourceSessionId) ||
+      (chatStore.chatMode === 'research' && chatStore.thinkingEnabled),
+    sessionModel: sourceSessionModel,
+  })
+}
+
 async function submitEditedMessage(submission: EditedMessageSubmission): Promise<boolean> {
   const attachments = submission.carry?.attachments ?? []
   // 场景会话的单图消息（含可选说明文字）必须回到与 composer 上传/粘贴相同的图片入口；
@@ -1722,15 +1889,20 @@ async function submitEditedMessage(submission: EditedMessageSubmission): Promise
       dataUrl: imageSrc(attachment),
       attachment,
       contextText: submission.content,
-    }, submission.targetSessionId)
+    }, submission.targetSessionId, scenarioImageRoute(
+      submission.routeSnapshot?.chatParams.provider,
+      submission.routeSnapshot?.chatParams.model,
+    ) ?? null)
   }
   return submission.carry
     ? handleSend(submission.content, undefined, {
         ...submission.carry,
         targetSessionId: submission.targetSessionId,
+        routeSnapshot: submission.routeSnapshot,
       })
     : handleSend(submission.content, undefined, {
         targetSessionId: submission.targetSessionId,
+        routeSnapshot: submission.routeSnapshot,
       })
 }
 
@@ -1744,7 +1916,13 @@ const {
   handleEdit,
   confirmEdit,
   cancelEdit,
-} = useChatActions(chatStore, toast, handleSend, submitEditedMessage)
+} = useChatActions(
+  chatStore,
+  toast,
+  handleSend,
+  submitEditedMessage,
+  captureEditedMessageRoute,
+)
 
 // 编辑卡回车的 IME 合成态守卫（与 ChatInput 同源 shouldSendOnEnter）：中文/日文 IME 回车是
 // 「确认候选词」，不能误当「提交编辑」。compositionstart/end 跟踪 + 兜底 WKWebView 早结束竞态。
@@ -1799,6 +1977,7 @@ watch(
     // 不触发，若不在此重置，上个会话遗留的 showScrollToBottom=true 会残留到新会话（BUG-20260628）。
     userScrolledUp.value = false
     showScrollToBottom.value = false
+    unreadScenarioResultCount.value = 0
     // 消息窗口重置(BUG-20260710 P1 窗口化):新会话从尾部 60 条起
     messageWindow.value = MESSAGE_WINDOW_INITIAL
     if (newId) {
@@ -2176,6 +2355,14 @@ function metadataValue(message: import('@/types').ChatMessage, key: string): str
   return typeof value === 'string' && value.trim() ? value : null
 }
 
+function messageProviderDisplay(message: ChatMessage): string {
+  return resolveProviderDisplayName(
+    metadataValue(message, 'provider'),
+    settingsStore.config?.llm.providers ?? [],
+    metadataValue(message, 'provider_display_name'),
+  )
+}
+
 function messageFeedbackValue(message: import('@/types').ChatMessage) {
   const feedback = message.metadata?.user_feedback
   return feedback === 'like' || feedback === 'dislike' ? feedback : null
@@ -2387,10 +2574,12 @@ function startSidebarResize(event: MouseEvent) {
         :composer-action="scenarioComposerAction"
         :composer-image="scenarioComposerImage"
         @update:composer-chips="scenarioComposerChips = $event"
-        @update:composer-image="scenarioComposerImage = $event"
+        @update:composer-image="handleScenarioComposerImageConsumed"
         @update:inline-active="handleScenarioInlineActive"
+        @content-updated="handleScenarioContentUpdated"
         @composer-command="handleScenarioComposerCommand"
         @scenario-image-attempt="handleScenarioImageAttempt"
+        @update:session-execution="handleScenarioSessionExecution"
       />
 
       <!-- Messages -->
@@ -2439,10 +2628,12 @@ function startSidebarResize(event: MouseEvent) {
           </button>
 
           <!-- Message list -->
-          <div
+          <template
             v-for="(msg, idx) in visibleMessages"
-            :id="`msg-${msg.id}`"
             :key="msg.id"
+          >
+          <div
+            :id="`msg-${msg.id}`"
             class="hc-msg"
             :class="msg.role === 'user' ? 'hc-msg--user' : 'hc-msg--assistant'"
             :tabindex="0"
@@ -2518,7 +2709,6 @@ function startSidebarResize(event: MouseEvent) {
                   <div
                     class="hc-msg__bubble hc-msg__bubble--assistant"
                     :class="{ 'hc-msg__bubble--empty': isEmptyReply(msg.content) }"
-                    :title="formatFullTime(msg.timestamp)"
                   >
                     <!-- 验算徽章（solve 结论透传，三态诚实 · shell 通用组件） -->
                     <VerifyBadge v-if="messageVerify(msg)" :result="messageVerify(msg)!" />
@@ -2773,8 +2963,8 @@ function startSidebarResize(event: MouseEvent) {
                 <div class="hc-msg__footer">
                   <div class="hc-msg__meta">
                     <span>{{ formatTime(msg.timestamp) }}</span>
-                    <span v-if="metadataValue(msg, 'provider') || metadataValue(msg, 'model')">{{
-                      [metadataValue(msg, 'provider'), metadataValue(msg, 'model')]
+                    <span v-if="messageProviderDisplay(msg) || metadataValue(msg, 'model')">{{
+                      [messageProviderDisplay(msg), metadataValue(msg, 'model')]
                         .filter(Boolean)
                         .join(' · ')
                     }}</span>
@@ -2814,7 +3004,6 @@ function startSidebarResize(event: MouseEvent) {
                   <div
                     v-if="editingMsgId !== msg.id"
                     class="hc-msg__bubble hc-msg__bubble--user"
-                    :title="formatFullTime(msg.timestamp)"
                   >
                     <div v-if="getMessageAttachments(msg).length" class="hc-msg__attachments">
                       <template v-for="(att, ai) in getMessageAttachments(msg)" :key="ai">
@@ -2967,6 +3156,12 @@ function startSidebarResize(event: MouseEvent) {
               </div>
             </template>
           </div>
+          <div
+            :id="scenarioMessageAnchorId(msg.id)"
+            class="hc-chat__scenario-inline"
+            :data-source-message-id="msg.id"
+          />
+          </template>
 
           <!-- Research progress panel -->
           <ResearchProgress
@@ -3086,9 +3281,12 @@ function startSidebarResize(event: MouseEvent) {
           <button
             v-if="showScrollToBottom"
             class="hc-chat__scroll-btn hc-chat__scroll-btn--bottom"
-            :title="t('chat.scrollToBottom', 'Scroll to bottom')"
+            :class="{ 'hc-chat__scroll-btn--unread': unreadScenarioResultCount > 0 }"
+            :title="scrollNavigationLabel"
+            :aria-label="scrollNavigationLabel"
             @click="scrollToBottom(true)"
           >
+            <span v-if="unreadScenarioResultCount > 0">{{ scrollNavigationLabel }}</span>
             <ChevronDown :size="18" :stroke-width="2.25" />
           </button>
         </Transition>
@@ -3168,8 +3366,8 @@ function startSidebarResize(event: MouseEvent) {
           <ChatInput
             v-else
             ref="chatInputRef"
-            :streaming="chatStore.isCurrentStreaming"
-            :disabled="chatStore.sending"
+            :streaming="chatStore.isCurrentStreaming || chatStore.isCurrentSessionExecuting"
+            :disabled="chatStore.sending || chatStore.isCurrentSessionExecuting"
             :agents="agentsStore.mentionableAgents"
             :skills="availableSkills"
             :knowledge-docs="knowledgeDocs"
@@ -3348,7 +3546,6 @@ function startSidebarResize(event: MouseEvent) {
       :message="t('chat.deleteMessageConfirmMessage')"
       :confirm-text="t('agents.delete', '删除')"
       :cancel-text="t('common.cancel', '取消')"
-      :confirm-delay-ms="5_000"
       :confirmation-key="pendingDeleteMsgId"
       danger
       @confirm="confirmDeleteMessage"
@@ -3609,6 +3806,16 @@ function startSidebarResize(event: MouseEvent) {
 }
 .hc-chat__scroll-btn--bottom {
   bottom: calc(100% + 14px);
+}
+.hc-chat__scroll-btn--unread {
+  width: auto;
+  min-width: 112px;
+  height: 36px;
+  margin-left: -56px;
+  padding: 0 12px;
+  gap: 6px;
+  border-radius: 999px;
+  white-space: nowrap;
 }
 
 /* 进入/退出：弹入(回弹) + 轻微上移缩放，对齐 ChatGPT 那种"冒出来"的轻盈感 */
@@ -4705,7 +4912,6 @@ function startSidebarResize(event: MouseEvent) {
 /* ─── Input area ───── */
 .hc-chat__input-area {
   padding: 8px 16px 10px;
-  border-top: 1px solid var(--hc-divider);
   flex-shrink: 0;
   /* 作为滚动导航箭头的定位锚点：箭头 bottom:100% 即悬于输入框正上方 */
   position: relative;

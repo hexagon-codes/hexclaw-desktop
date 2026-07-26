@@ -5,6 +5,10 @@ import type { MessageContent } from '@/contracts/message-content'
 import { createChatSendAutoTitleController } from './chat-send-auto-title'
 import { createChatSendDeliveryController } from './chat-send-delivery-controller'
 import { shouldBlockChatSend, shouldSeedChatAutoTitle } from './chat-send-guards'
+import {
+  resolveChatRouteSnapshot,
+  type ChatRouteSnapshot,
+} from './chat-route-snapshot'
 
 type ChatServiceModule = typeof import('@/services/chatService')
 type MessageServiceModule = typeof import('@/services/messageService')
@@ -21,6 +25,8 @@ export interface ChatSendOptions {
    * 因而不能从全局 currentSessionId 推断写入目标。
    */
   targetSessionId?: string
+  /** 编辑确认时冻结的源会话路由；存在时不得重新读取可变全局模型状态。 */
+  routeSnapshot?: ChatRouteSnapshot
 }
 
 export function createChatSendController(params: {
@@ -43,6 +49,7 @@ export function createChatSendController(params: {
   clearSessionCancelled: (sessionId: string) => void
   isSessionCancelled: (sessionId: string) => boolean
   isSessionStreaming: (sessionId: string) => boolean
+  isSessionExecuting: (sessionId: string) => boolean
   setSessionPending: (sessionId: string, value: boolean, sending: Ref<boolean>, draftSending: Ref<boolean>) => void
   refreshSendingState: (sending: Ref<boolean>, draftSending: Ref<boolean>) => void
   setLocalSessionTitle: (sessionId: string, title: string) => void
@@ -94,6 +101,7 @@ export function createChatSendController(params: {
     clearSessionCancelled,
     isSessionCancelled,
     isSessionStreaming,
+    isSessionExecuting,
     setSessionPending,
     refreshSendingState,
     setLocalSessionTitle,
@@ -158,6 +166,7 @@ export function createChatSendController(params: {
       pendingSessionIds: pendingSessionIds.value,
       draftSending: draftSending.value,
       isSessionStreaming,
+      isSessionExecuting,
     })) {
       return null
     }
@@ -185,7 +194,11 @@ export function createChatSendController(params: {
       // ensureSession 完成后立即释放 draftSending，不再阻塞后续发送
       draftSending.value = false
       refreshSendingState(sending, draftSending)
-      if (pendingSessionIds.value[sessionId] || isSessionStreaming(sessionId)) {
+      if (
+        pendingSessionIds.value[sessionId] ||
+        isSessionStreaming(sessionId) ||
+        isSessionExecuting(sessionId)
+      ) {
         return null
       }
 
@@ -202,11 +215,11 @@ export function createChatSendController(params: {
       // upsertStreamState 交棒给 isCurrentStreaming，pending 由收尾逻辑清除，无双清风险。
       // U4：点击瞬间快照采样参数——buildRequestMetadata 在下方 Auto-RAG 之后才读，期间用户
       // 切会话会改共享 ref，快照保证在途请求带的是本次发送时的 agent/model/thinking。
-      const samplingSnapshot = {
+      const samplingSnapshot = resolveChatRouteSnapshot(options?.routeSnapshot, {
         agentRole: agentRole.value,
         chatParams: { ...chatParams.value },
         thinkingEnabled: thinkingEnabled.value,
-      }
+      })
       setSessionPending(sessionId, true, sending, draftSending)
       // backendText 惰性解析：气泡已上屏，此处再 await 跑 Auto-RAG（BUG-20260628）；string 形态直用。
       const backendText =

@@ -23,6 +23,7 @@ import { normalizeMathMarkdown } from '@/utils/math-content'
 import { useToast } from './useToast'
 import type { ChatAttachment, ChatDocumentRef, ChatMessage } from '@/types'
 import type { useChatStore } from '@/stores/chat'
+import type { ChatRouteSnapshot } from '@/stores/chat-route-snapshot'
 import {
   buildConversationAutomationActions,
   CHAT_AUTOMATION_METADATA_KEY,
@@ -209,10 +210,17 @@ export function useChatSend(deps: ChatSendDeps) {
       attachments?: ChatAttachment[]
       /** 内部定向发送：编辑版本写入新分支时，当前可见会话仍保持 source。 */
       targetSessionId?: string
+      /** 编辑确认时冻结的源会话路由；普通新消息不传。 */
+      routeSnapshot?: ChatRouteSnapshot
     },
   ): Promise<boolean> {
     // Shared canonical boundary: covers composer sends as well as edit/retry and
     // any future callers that bypass ChatInput's paste adapter.
+    const intendedSessionId =
+      options?.targetSessionId?.trim() || chatStore.currentSessionId?.trim() || ''
+    if (intendedSessionId && chatStore.isSessionExecuting(intendedSessionId)) {
+      return false
+    }
     text = normalizeMathMarkdown(text)
 
     // Validate model selection before sending
@@ -420,6 +428,7 @@ export function useChatSend(deps: ChatSendDeps) {
       skillNames,
       documents: documentRefs.length ? documentRefs : undefined,
       targetSessionId: options?.targetSessionId,
+      routeSnapshot: options?.routeSnapshot,
     }
     const sendPromise = chatStore.sendMessage(
       finalText,

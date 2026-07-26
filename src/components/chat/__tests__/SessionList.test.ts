@@ -9,6 +9,7 @@ import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
 import { scenarioRegistry } from '@/shell/scenario/registry'
 import type { ChatSession } from '@/types'
+import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 
 const { updateSessionTitle, listSessions, searchMessages, listActiveStreams, getSessionBranches } = vi.hoisted(() => ({
   updateSessionTitle: vi.fn().mockResolvedValue({}),
@@ -90,11 +91,11 @@ function pendingDeleteConfirmButton(): HTMLButtonElement {
   return confirmBtn as HTMLButtonElement
 }
 
-/** 删除确认只在弹层打开后冷却；fake timers 精确跨过 5 秒边界。 */
+/** 删除确认只在弹层打开后冷却；fake timers 精确跨过全局边界。 */
 async function confirmPendingDeleteAfterCooldown() {
   const confirmBtn = pendingDeleteConfirmButton()
   expect(confirmBtn.disabled).toBe(true)
-  await vi.advanceTimersByTimeAsync(4_999)
+  await vi.advanceTimersByTimeAsync(DESTRUCTIVE_CONFIRM_COOLDOWN_MS - 1)
   expect(confirmBtn.disabled).toBe(true)
   await vi.advanceTimersByTimeAsync(1)
   expect(confirmBtn.disabled).toBe(false)
@@ -319,8 +320,9 @@ describe('SessionList', () => {
     expect(document.body.querySelector('[data-testid="branches-dialog"]')).toBeNull()
   })
 
-  it('reuses the shared destructive confirmation with a five-second in-dialog cooldown', async () => {
+  it('reuses the shared destructive confirmation with the global three-second cooldown', async () => {
     vi.useFakeTimers()
+    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(3_000)
     const { wrapper, store } = mountSessionList()
     await flushPromises()
 
@@ -333,7 +335,7 @@ describe('SessionList', () => {
     const dialog = wrapper.findComponent(ConfirmDialog)
     expect(dialog.props('open')).toBe(true)
     expect(dialog.props('danger')).toBe(true)
-    expect(dialog.props('confirmDelayMs')).toBe(5_000)
+    expect(dialog.props('confirmDelayMs')).toBe(DESTRUCTIVE_CONFIRM_COOLDOWN_MS)
     expect(dialog.props('confirmationKey')).toBe('s-1')
 
     const confirmBtn = pendingDeleteConfirmButton()
@@ -342,7 +344,7 @@ describe('SessionList', () => {
     await flushPromises()
     expect(store.deleteSession).not.toHaveBeenCalled()
 
-    await vi.advanceTimersByTimeAsync(4_999)
+    await vi.advanceTimersByTimeAsync(DESTRUCTIVE_CONFIRM_COOLDOWN_MS - 1)
     expect(confirmBtn.disabled).toBe(true)
     expect(store.deleteSession).not.toHaveBeenCalled()
 
@@ -561,7 +563,7 @@ describe('SessionList', () => {
     const { wrapper } = mountSessionList()
     await flushPromises()
 
-    await wrapper.get('.hc-sessions__search-input').setValue('命中')
+    await wrapper.get('.hc-sessions__search [data-search-control]').setValue('命中')
     await new Promise((resolve) => setTimeout(resolve, 260))
     await flushPromises()
 
@@ -613,7 +615,7 @@ describe('SessionList', () => {
     await flushPromises()
 
     // 搜索框常驻：直接输入即可过滤，无需先点开
-    const input = wrapper.get('.hc-sessions__search-input')
+    const input = wrapper.get('.hc-sessions__search [data-search-control]')
     await input.setValue('不存在的会话')
     await new Promise((resolve) => setTimeout(resolve, 260))
     await flushPromises()
@@ -624,7 +626,7 @@ describe('SessionList', () => {
     await input.setValue('')
     await flushPromises()
 
-    expect(wrapper.find('.hc-sessions__search-input').exists()).toBe(true)
+    expect(wrapper.find('.hc-sessions__search [data-search-control]').exists()).toBe(true)
     expect(wrapper.text()).toContain('第一个会话')
     expect(wrapper.text()).toContain('第二个会话')
   })
@@ -633,7 +635,7 @@ describe('SessionList', () => {
     const { wrapper } = mountSessionList()
     await flushPromises()
 
-    const input = wrapper.get('.hc-sessions__search-input')
+    const input = wrapper.get('.hc-sessions__search [data-search-control]')
     expect(input.attributes('placeholder')).toBe('搜索会话与内容')
     await input.setValue('第 一 个')
     await new Promise((resolve) => setTimeout(resolve, 260))

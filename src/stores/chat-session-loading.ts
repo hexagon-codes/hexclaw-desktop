@@ -111,7 +111,11 @@ export function createChatSessionLoadingController(params: {
 
   async function loadSessions(opts?: { suppressAutoSelect?: boolean }) {
     try {
-      const loadResult = typeof msgSvc.loadAllSessionsResult === 'function'
+      // Vitest's module proxy throws when an omitted export is read directly.
+      // Check ownership before reading the optional compatibility API so older
+      // embedders/tests can still fall back to loadAllSessions().
+      const hasResultLoader = 'loadAllSessionsResult' in msgSvc
+      const loadResult = hasResultLoader && typeof msgSvc.loadAllSessionsResult === 'function'
         ? await msgSvc.loadAllSessionsResult()
         : { sessions: await msgSvc.loadAllSessions(), succeeded: true }
       // 冷启动 sidecar 尚未就绪时，旧 loadAllSessions 会把请求失败压成 []。失败不是

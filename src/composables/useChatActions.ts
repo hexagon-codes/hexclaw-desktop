@@ -27,6 +27,7 @@ import {
   setSessionDeepThinking,
 } from '@/stores/session-thinking-preference'
 import type { useChatStore } from '@/stores/chat'
+import type { ChatRouteSnapshot } from '@/stores/chat-route-snapshot'
 import type { ChatAttachment, ChatMessage } from '@/types'
 import type { useToast } from './useToast'
 
@@ -35,7 +36,10 @@ type Toast = ReturnType<typeof useToast>
 
 /** 编辑/重试重发时需保留的原消息载荷（图片等附件 + 挂载技能）。 */
 type ResendCarry = { attachments?: ChatAttachment[]; skillNames?: string[] }
-type DirectedResend = ResendCarry & { targetSessionId: string }
+type DirectedResend = ResendCarry & {
+  targetSessionId: string
+  routeSnapshot?: ChatRouteSnapshot
+}
 export interface EditedMessageSubmission {
   /** 被编辑的历史消息只读保留；调用方可据其来源选择正确的提交管道。 */
   sourceMessage: ChatMessage
@@ -44,8 +48,11 @@ export interface EditedMessageSubmission {
   /** 新版本正文。仅用于判空时 trim，提交时保持 canonical 字节不变。 */
   content: string
   carry?: ResendCarry
+  /** 用户确认时冻结的源会话路由；不得由新分支绑定或可变全局状态重建。 */
+  routeSnapshot?: ChatRouteSnapshot
 }
 export type SubmitEditedMessage = (submission: EditedMessageSubmission) => Promise<boolean>
+export type CaptureEditRouteSnapshot = (sourceSessionId: string) => ChatRouteSnapshot
 
 /**
  * Forking a session creates a new client-side preference namespace. Capture it before
@@ -106,6 +113,7 @@ export function useChatActions(
   toast: Toast,
   handleSend: (text: string, files?: File[], options?: ResendCarry | DirectedResend) => Promise<boolean>,
   submitEditedMessage?: SubmitEditedMessage,
+  captureEditRouteSnapshot?: CaptureEditRouteSnapshot,
 ) {
   // ─── 原位编辑（DeepSeek 风格） ──────────────────────
   const editingMsgId = ref<string | null>(null)
@@ -365,6 +373,7 @@ export function useChatActions(
     activeEditSubmission = token
     let branchSessionID: string | null = null
     const branchContext = captureEditBranchContext(chatStore, sourceSessionID)
+    const routeSnapshot = captureEditRouteSnapshot?.(sourceSessionID)
     try {
       // BUG-20260724-009/010：编辑不是原会话尾部追加，更不是破坏性裁剪。
       // 服务端在一个事务中复制「源消息之前」的前缀；手工分支仍默认包含分支点。
@@ -396,10 +405,12 @@ export function useChatActions(
             targetSessionId: branchSessionID,
             content: text,
             carry,
+            ...(routeSnapshot ? { routeSnapshot } : {}),
           })
         : await handleSend(text, undefined, {
             ...carry,
             targetSessionId: branchSessionID,
+            ...(routeSnapshot ? { routeSnapshot } : {}),
           })
       if (!ok) {
         await compensateEditBranch(branchSessionID, sourceSessionID)

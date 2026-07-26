@@ -9,6 +9,7 @@
  * 复杂流程（会话、流式、发送、审批、artifact）下沉到独立 controller。
  */
 
+import { computed } from 'vue'
 import { defineStore } from 'pinia'
 import { nanoid } from 'nanoid'
 import * as chatApi from '@/api/chat'
@@ -27,6 +28,7 @@ import { createChatStoreSelectors } from './chat-store-selectors'
 import { createBoundChatStreamController } from './chat-stream-bound-controller'
 import { createChatStreamController } from './chat-stream-controller'
 import { createChatThinkingTimerController } from './chat-thinking-timer'
+import { createSessionExecutionRegistry } from './session-execution-registry'
 import { useSettingsStore } from './settings'
 
 export const useChatStore = defineStore('chat', () => {
@@ -45,6 +47,7 @@ export const useChatStore = defineStore('chat', () => {
     streamingReasoningEndTime,
     error,
     activeStreams,
+    sessionExecutions,
     pendingSessionIds,
     draftSending,
     chatMode,
@@ -62,6 +65,15 @@ export const useChatStore = defineStore('chat', () => {
     pendingSuggestedTitleExpectation,
     streamingThinkingElapsed,
   } = state
+
+  const {
+    setSessionExecution,
+    clearSessionExecution,
+    isSessionExecuting,
+  } = createSessionExecutionRegistry(sessionExecutions)
+  const isCurrentSessionExecuting = computed(
+    () => !!currentSessionId.value && isSessionExecuting(currentSessionId.value),
+  )
 
   const artifactController = createChatArtifactController({
     artifacts,
@@ -207,6 +219,7 @@ export const useChatStore = defineStore('chat', () => {
     clearSessionCancelled: boundStreamController.clearSessionCancelled,
     isSessionCancelled: boundStreamController.isSessionCancelled,
     isSessionStreaming: boundStreamController.isSessionStreaming,
+    isSessionExecuting,
     setSessionPending: boundStreamController.setSessionPending,
     refreshSendingState: boundStreamController.refreshSendingState,
     setLocalSessionTitle: sessionController.setLocalSessionTitle,
@@ -252,6 +265,7 @@ export const useChatStore = defineStore('chat', () => {
     isCurrentStreaming: selectors.isCurrentStreaming,
     isCurrentStreamingContent: selectors.isCurrentStreamingContent,
     isCurrentStreamingReasoning: selectors.isCurrentStreamingReasoning,
+    isCurrentSessionExecuting,
     streamingThinkingElapsed,
     error,
     chatMode,
@@ -270,6 +284,9 @@ export const useChatStore = defineStore('chat', () => {
     updateMessage: messageController.updateMessage,
     setMessageFeedback: messageController.setMessageFeedback,
     isSessionStreaming: boundStreamController.isSessionStreaming,
+    isSessionExecuting,
+    setSessionExecution,
+    clearSessionExecution,
     hasSessionPendingApproval: approvalController.hasSessionPendingApproval,
     recoverActiveStreams: boundStreamController.recoverActiveStreams,
     addArtifact: artifactController.addArtifact,

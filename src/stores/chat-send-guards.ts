@@ -7,15 +7,24 @@ export function shouldBlockChatSend(params: {
   pendingSessionIds: Record<string, boolean>
   draftSending: boolean
   isSessionStreaming: (sessionId: string) => boolean
+  isSessionExecuting?: (sessionId: string) => boolean
 }): boolean {
   const {
     initialSessionId,
     pendingSessionIds,
     draftSending,
     isSessionStreaming,
+    isSessionExecuting,
   } = params
 
-  if (initialSessionId && (pendingSessionIds[initialSessionId] || isSessionStreaming(initialSessionId))) {
+  if (
+    initialSessionId &&
+    (
+      pendingSessionIds[initialSessionId] ||
+      isSessionStreaming(initialSessionId) ||
+      isSessionExecuting?.(initialSessionId)
+    )
+  ) {
     return true
   }
   if (!initialSessionId && draftSending) {

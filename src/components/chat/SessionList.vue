@@ -2,7 +2,7 @@
 import { ref, computed, nextTick, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { formatTime } from '@/utils/time'
-import { Trash2, MoreHorizontal, Pencil, Pin, PinOff, Search, GitBranch } from 'lucide-vue-next'
+import { Trash2, MoreHorizontal, Pencil, Pin, PinOff, GitBranch } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { useAgentsStore } from '@/stores/agents'
 import { getSessionAgent, getSessionAgentTombstone } from '@/stores/session-agent-binding'
@@ -17,6 +17,7 @@ import {
 import ContextMenu from '@/components/common/ContextMenu.vue'
 import type { ContextMenuItem } from '@/components/common/ContextMenu.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
 import type { ChatSession } from '@/types'
 
 const { t } = useI18n()
@@ -139,10 +140,18 @@ function sessionTitle(s: ChatSession): string {
     if (orphanByAssoc || orphanByPattern) return t('chat.orphanAgentSession')
   }
   // 标题为空 / 恰为 agent 内部名（未手动改名）→ 显示可读名；改过名则保留自定义标题
-  const base =
+  const resolvedBase =
     display && (!raw || raw === boundName || raw === cfg?.name)
       ? display
       : raw || t('chat.newSessionDefault')
+  const base = scenarioRegistry.projectInstanceDisplayName(
+    {
+      agentId: cfg?.name ?? boundName,
+      agentName: display,
+      metadata: cfg?.metadata,
+    },
+    resolvedBase,
+  )
   // 专属智能体（带 avatar emoji）在标题前内联图标（原型做法）
   return avatar ? `${avatar} ${base}` : base
 }
@@ -371,7 +380,7 @@ function formatDate(ts: string): string {
 }
 
 function isSessionGenerating(sessionId: string) {
-  return chatStore.isSessionStreaming(sessionId)
+  return chatStore.isSessionStreaming(sessionId) || chatStore.isSessionExecuting(sessionId)
 }
 
 function isSessionAwaitingApproval(sessionId: string) {
@@ -661,16 +670,12 @@ onUnmounted(() => {
 <template>
   <div class="hc-sessions">
     <!-- 常驻搜索框（对齐原型 .srch：放大镜图标 + 输入框始终可见） -->
-    <div class="hc-sessions__search">
-      <Search :size="14" class="hc-sessions__search-icon" />
-      <HcClearableField>
-        <input
-          v-model="filterQuery"
-          class="hc-sessions__search-input"
-          :placeholder="t('chat.filterSessions')"
-        />
-      </HcClearableField>
-    </div>
+    <SearchInput
+      v-model="filterQuery"
+      fluid
+      class="hc-sessions__search"
+      :placeholder="t('chat.filterSessions')"
+    />
 
     <template v-if="filterQuery.trim()">
       <div v-if="searchingHistory" class="hc-sessions__searching">
@@ -933,7 +938,6 @@ onUnmounted(() => {
       :message="t('chat.deleteSessionConfirmMessage', { title: confirmDeleteTitle })"
       :confirm-text="t('agents.delete', '删除')"
       :cancel-text="t('common.cancel', '取消')"
-      :confirm-delay-ms="5_000"
       :confirmation-key="confirmDeleteId"
       danger
       @confirm="confirmDeleteSession"
@@ -953,42 +957,8 @@ onUnmounted(() => {
 
 /* 常驻搜索框（对齐原型 .srch） */
 .hc-sessions__search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   flex-shrink: 0;
   margin: 6px 4px 12px;
-  padding: 8px 12px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 10px;
-  background: var(--hc-bg-input, var(--hc-bg-hover));
-  transition:
-    border-color 0.15s,
-    box-shadow 0.15s;
-}
-
-.hc-sessions__search:focus-within {
-  border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
-}
-
-.hc-sessions__search-icon {
-  color: var(--hc-text-muted);
-  flex-shrink: 0;
-}
-
-.hc-sessions__search-input {
-  flex: 1;
-  min-width: 0;
-  font-size: 13px;
-  border: none;
-  background: transparent;
-  color: var(--hc-text-primary);
-  outline: none;
-}
-
-.hc-sessions__search-input::placeholder {
-  color: var(--hc-text-muted);
 }
 
 .hc-sessions__section {

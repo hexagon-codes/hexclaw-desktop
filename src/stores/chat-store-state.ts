@@ -9,6 +9,7 @@ import type {
 } from '@/types'
 import type { WebSocketStreamHandle } from '@/services/chatService'
 import type { PendingToolApproval, SessionStreamState } from './chat-stream-helpers'
+import type { SessionExecutionState } from './session-execution-registry'
 
 export type ChatParamsState = {
   provider?: string
@@ -29,6 +30,7 @@ export interface ChatStoreState {
   streamingReasoningEndTime: Ref<number>
   error: Ref<ApiError | null>
   activeStreams: Ref<Record<string, SessionStreamState>>
+  sessionExecutions: Ref<SessionExecutionState>
   pendingSessionIds: Ref<Record<string, boolean>>
   draftSending: Ref<boolean>
   chatMode: Ref<ChatMode>
@@ -70,6 +72,7 @@ export function createChatStoreState(): ChatStoreState {
     streamingReasoningEndTime: ref(0),
     error: ref<ApiError | null>(null),
     activeStreams: ref<Record<string, SessionStreamState>>({}),
+    sessionExecutions: ref<SessionExecutionState>({}),
     pendingSessionIds: ref<Record<string, boolean>>({}),
     draftSending: ref(false),
     chatMode: ref<ChatMode>('chat'),
