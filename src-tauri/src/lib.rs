@@ -55,6 +55,7 @@ pub fn run() {
         // 全局状态
         .manage(sidecar::SidecarState::default())
         .manage(ollama::OllamaState::default())
+        .manage(window::LifecycleState::default())
         // 初始化
         .setup(|app| {
             eprintln!("[HexClaw] setup 开始...");
@@ -174,13 +175,21 @@ pub fn run() {
                 }
             }
             tauri::RunEvent::ExitRequested { code, api, .. } => {
-                if crate::window::consume_app_exit_request() {
-                    return;
-                }
-
                 let _ = code;
-                api.prevent_exit();
-                crate::window::hide_app_to_background(app_handle);
+                match crate::window::lifecycle_decision(
+                    app_handle,
+                    crate::window::LifecycleSource::SystemQuit,
+                ) {
+                    crate::window::LifecycleDecision::Exit => {}
+                    crate::window::LifecycleDecision::HideAndPrompt => {
+                        api.prevent_exit();
+                        crate::window::hide_app_for_system_quit_confirmation(app_handle);
+                    }
+                    crate::window::LifecycleDecision::HideKeepRunning => {
+                        api.prevent_exit();
+                        crate::window::hide_app_to_background(app_handle);
+                    }
+                }
             }
             _ => {}
         }

@@ -39,8 +39,9 @@ dev:
 build:
 	pnpm tauri build
 
-# 本机装机包：先用本地全生态 Go workspace 重建 sidecar，再构建 Tauri 包。
-build-local package-local: sidecar-local
+# 本机装机包：先用本地全生态 Go workspace 重建 sidecar，并校验下载
+# tauri.conf.json 声明的 pandoc/typst externalBin，再构建 Tauri 包。
+build-local package-local: sidecar-local render-bundle
 	pnpm tauri build --config "$(LOCAL_PACKAGE_TAURI_CONFIG)" --bundles app
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		rm -rf "$(LOCAL_DMG_ROOT)" "$(LOCAL_DMG_PATH)"; \

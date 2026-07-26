@@ -8,19 +8,57 @@
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     Emitter, Manager,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TrayLocale {
+    Chinese,
+    English,
+}
+
+fn system_tray_locale() -> TrayLocale {
+    let locale = sys_locale::get_locale().unwrap_or_else(|| "en".to_string());
+    let normalized = locale.replace('_', "-").to_ascii_lowercase();
+    if normalized.starts_with("zh") {
+        TrayLocale::Chinese
+    } else {
+        // Unsupported locale fallback: English.
+        TrayLocale::English
+    }
+}
+
 /// 构建系统托盘
 pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let open = MenuItem::with_id(app, "open", "Open HexClaw", true, None::<&str>)?;
-    let quick_chat = MenuItem::with_id(app, "quick_chat", "Quick Chat...", true, None::<&str>)?;
+    let locale = system_tray_locale();
+    let open = MenuItem::with_id(app, "open",
+        if locale == TrayLocale::Chinese { "打开 HexClaw" } else { "Open HexClaw" },
+        true,
+        None::<&str>,
+    )?;
+    let quick_chat = MenuItem::with_id(app, "quick_chat",
+        if locale == TrayLocale::Chinese { "快速对话..." } else { "Quick Chat..." },
+        true,
+        None::<&str>,
+    )?;
     let separator1 = PredefinedMenuItem::separator(app)?;
-    let logs = MenuItem::with_id(app, "logs", "Logs", true, None::<&str>)?;
-    let settings = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+    let logs = MenuItem::with_id(app, "logs",
+        if locale == TrayLocale::Chinese { "日志" } else { "Logs" },
+        true,
+        None::<&str>,
+    )?;
+    let settings = MenuItem::with_id(app, "settings",
+        if locale == TrayLocale::Chinese { "设置" } else { "Settings" },
+        true,
+        None::<&str>,
+    )?;
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit HexClaw", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit",
+        if locale == TrayLocale::Chinese { "退出 HexClaw" } else { "Quit HexClaw" },
+        true,
+        None::<&str>,
+    )?;
 
     let menu = Menu::with_items(
         app,
@@ -35,16 +73,13 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         ],
     )?;
 
-    let icon = app.default_window_icon().cloned().unwrap_or_else(|| {
-        log::warn!("默认窗口图标不存在，使用空图标");
-        tauri::image::Image::new(&[], 0, 0)
-    });
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
 
     TrayIconBuilder::new()
         .icon(icon)
-        .icon_as_template(false)
+        .icon_as_template(true)
         .menu(&menu)
-        .show_menu_on_left_click(false)
+        .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => {
                 crate::window::show_main_window(app);
@@ -68,18 +103,6 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 crate::window::request_app_exit(app);
             }
             _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            // 左键点击打开主窗口
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                let app = tray.app_handle();
-                crate::window::show_main_window(app);
-            }
         })
         .build(app)?;
 

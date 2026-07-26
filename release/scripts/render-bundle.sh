@@ -125,11 +125,22 @@ download_engine() {
     exit 1
   fi
 
-  # externalBin 命名：<name>-<triple>（Windows 加 .exe）
+  # externalBin 命名：<name>-<triple>（Windows 加 .exe）。
+  # 先写同目录临时文件再原子替换，避免已打包过的只读二进制令 cp 失败后仍被误判成功。
+  local output_name output staged
   if [ "$target" = "windows-x86_64" ]; then
-    cp "$found" "$DEST_DIR/$name-$triple.exe"
+    output_name="$name-$triple.exe"
   else
-    cp "$found" "$DEST_DIR/$name-$triple" && chmod +x "$DEST_DIR/$name-$triple"
+    output_name="$name-$triple"
+  fi
+  output="$DEST_DIR/$output_name"
+  staged="$DEST_DIR/.$output_name.tmp.$$"
+  rm -f "$staged"
+  if ! cp "$found" "$staged" || ! chmod +x "$staged" || ! mv -f "$staged" "$output"; then
+    rm -f "$staged"
+    echo "ERROR: failed to install $name external binary at $output" >&2
+    rm -rf "$staging"
+    return 1
   fi
   rm -rf "$staging"
 }

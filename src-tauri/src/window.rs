@@ -6,7 +6,10 @@
 // 关闭主窗口时隐藏到菜单栏/托盘而不是退出应用
 
 use serde_json::json;
+#[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use tauri_plugin_notification::NotificationExt;
@@ -14,7 +17,77 @@ use tauri_plugin_store::StoreExt;
 
 const UI_STATE_STORE: &str = "ui-state.json";
 const HIDE_NOTICE_SHOWN_KEY: &str = "desktop.hideNoticeShown";
+const SYSTEM_QUIT_CONFIRM_WINDOW: Duration = Duration::from_secs(2);
+
+#[cfg(test)]
 static ALLOW_APP_EXIT: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LifecycleSource {
+    WindowClose,
+    SystemQuit,
+    ExplicitTrayQuit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LifecycleDecision {
+    HideKeepRunning,
+    HideAndPrompt,
+    Exit,
+}
+
+#[derive(Debug, Default)]
+pub struct LifecycleController {
+    last_system_quit: Option<Instant>,
+    explicit_exit_pending: bool,
+}
+
+impl LifecycleController {
+    fn decide(&mut self, source: LifecycleSource, now: Instant) -> LifecycleDecision {
+        match source {
+            LifecycleSource::WindowClose => LifecycleDecision::HideKeepRunning,
+            LifecycleSource::ExplicitTrayQuit => {
+                self.explicit_exit_pending = true;
+                LifecycleDecision::Exit
+            }
+            LifecycleSource::SystemQuit => {
+                if self.explicit_exit_pending {
+                    self.explicit_exit_pending = false;
+                    return LifecycleDecision::Exit;
+                }
+
+                if self
+                    .last_system_quit
+                    .is_some_and(|previous| {
+                        now.saturating_duration_since(previous) < SYSTEM_QUIT_CONFIRM_WINDOW
+                    })
+                {
+                    self.last_system_quit = None;
+                    LifecycleDecision::Exit
+                } else {
+                    self.last_system_quit = Some(now);
+                    LifecycleDecision::HideAndPrompt
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct LifecycleState(Mutex<LifecycleController>);
+
+pub fn lifecycle_decision(
+    app: &tauri::AppHandle,
+    source: LifecycleSource,
+) -> LifecycleDecision {
+    let state = app.state::<LifecycleState>();
+    let decision = state
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .decide(source, Instant::now());
+    decision
+}
 
 fn background_entry_label() -> &'static str {
     #[cfg(target_os = "macos")]
@@ -76,13 +149,29 @@ pub fn hide_app_to_background(app: &tauri::AppHandle) {
     }
 }
 
+/// 首次系统退出请求：隐藏窗口并发出原生轻提示，不触发后台引擎停机。
+pub fn hide_app_for_system_quit_confirmation(app: &tauri::AppHandle) {
+    for window in app.webview_windows().values() {
+        let _ = window.hide();
+    }
+
+    let _ = app
+        .notification()
+        .builder()
+        .title("HexClaw 仍在后台运行")
+        .body("2 秒内再次按 Cmd+Q 退出 HexClaw。")
+        .show();
+}
+
 /// 真正退出应用。
 pub fn request_app_exit(app: &tauri::AppHandle) {
-    ALLOW_APP_EXIT.store(true, Ordering::SeqCst);
+    let decision = lifecycle_decision(app, LifecycleSource::ExplicitTrayQuit);
+    debug_assert_eq!(decision, LifecycleDecision::Exit);
     app.exit(0);
 }
 
 /// 当前退出请求是否允许真正结束应用。
+#[cfg(test)]
 pub fn consume_app_exit_request() -> bool {
     ALLOW_APP_EXIT.swap(false, Ordering::SeqCst)
 }
@@ -160,7 +249,11 @@ pub fn setup_close_behavior(app: &tauri::App) {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 // 阻止默认关闭，改为隐藏
                 api.prevent_close();
-                hide_app_to_background(&app);
+                if lifecycle_decision(&app, LifecycleSource::WindowClose)
+                    == LifecycleDecision::HideKeepRunning
+                {
+                    hide_app_to_background(&app);
+                }
             }
         });
     }

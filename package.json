@@ -20,6 +20,8 @@
     "test:e2e:k12-fixtures:webkit:strict": "node ./scripts/ci/k12-fixtures-webkit-gate.mjs --strict",
     "test:e2e:k12-live": "node ./scripts/ci/k12-live-gate.mjs",
     "test:e2e:k12-live:strict": "node ./scripts/ci/k12-live-gate.mjs --strict",
+    "test:e2e:k12-current-bug-live": "node ./scripts/ci/k12-current-bug-live-gate.mjs",
+    "test:e2e:k12-current-bug-live:strict": "node ./scripts/ci/k12-current-bug-live-gate.mjs --strict",
     "test:e2e:native-smoke": "bash tests/native/native-smoke.sh run",
     "test:e2e:native-smoke:build": "make sidecar-local && bash tests/native/native-smoke.sh build",
     "test:acceptance:package-local": "make package-local",
