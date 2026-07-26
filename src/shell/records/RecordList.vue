@@ -24,7 +24,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'action', payload: { id: 'practiceAgain' | 'markMastered' | 'detail'; record: RecordItem }): void
+  (e: 'action', payload: { id: 'markMastered' | 'detail'; record: RecordItem }): void
 }>()
 
 const { t } = useI18n()
@@ -104,9 +104,7 @@ const reviewItems = computed(() => {
           <!-- data-chip=chip 文本：领域无关的样式钩子，场景层可按值前缀定色（如 K12 学科色） -->
           <span v-for="f in chipFields" :key="f.key" class="rl-chip" :data-chip="chipText(item, f)">{{ chipText(item, f) }}</span>
           <span class="rl-meta rl-spacer" :title="metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ')">{{ metaFields.map((f) => fieldValue(item, f)).filter(Boolean).join(' · ') }}</span>
-          <button class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
-            {{ t('records.practiceAgain') }}
-          </button>
+          <slot name="review-practice-action" :item="item" />
           <button class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
             {{ t('records.markMastered') }}
           </button>
@@ -149,9 +147,7 @@ const reviewItems = computed(() => {
         </span>
         <!-- 「再练」是复习动作：仅可复习集合（schema.reviewable）才渲染——积累本不复习/不再练，
              无条件渲染死按钮会点了无反应（BUG-20260712-#2 治本，schema 门控行内动作）。 -->
-        <button v-if="canPractice(item)" class="rl-btn" @click="emit('action', { id: 'practiceAgain', record: item })">
-          {{ t('records.practice') }}
-        </button>
+        <slot v-if="canPractice(item)" name="list-practice-action" :item="item" />
         <!-- UX-1：全部错题档案行也能「他会了」（未掌握/未归档时才显，幂等）。 -->
         <button v-if="canMarkMastered(item)" class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
           {{ t('records.markMastered') }}

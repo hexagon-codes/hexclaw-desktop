@@ -181,6 +181,7 @@ watch(
       type="button"
       class="hc-select__trigger hc-input"
       :class="{ 'hc-select__trigger--disabled': disabled }"
+      data-governed-select="hc-select"
       role="combobox"
       :aria-label="ariaLabel || undefined"
       :aria-expanded="open"

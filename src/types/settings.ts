@@ -275,6 +275,7 @@ export interface AppConfig {
 /** 后端 LLM Provider 配置（匹配 hexclaw API） */
 export interface BackendLLMProvider {
   provider_instance_id?: string
+  display_name?: string
   api_key: string
   base_url: string
   model: string

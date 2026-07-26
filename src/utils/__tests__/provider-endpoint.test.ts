@@ -15,6 +15,7 @@ describe('provider endpoint classification', () => {
     ['private IPv6 endpoint', 'custom', 'http://[fd00::20]:8000/v1', 'ambiguous', true],
     ['metadata endpoint', 'custom', 'http://169.254.169.254/latest/meta-data', 'blocked', true],
     ['metadata hostname', 'custom', 'http://metadata.google.internal/', 'blocked', true],
+    ['benchmark literal', 'custom', 'https://198.18.0.1/v1', 'blocked', true],
     ['unspecified IPv4', 'custom', 'http://0.0.0.0:8000/v1', 'blocked', true],
   ] as const)(
     '%s',

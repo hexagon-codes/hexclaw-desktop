@@ -224,7 +224,7 @@ async function loadRules() {
  *  display_name 而非英文 name（BUG-20260704，对齐 WelcomeView）。 */
 function enterAgentChat(name: string) {
   const cfg = agents.value.find((a) => a.name === name)
-  const roleTitle = cfg?.display_name?.trim() || name
+  const roleTitle = cfg ? agentDisplayName(cfg) : name
   router.push({ path: '/chat', query: { role: name, roleTitle } })
 }
 
@@ -466,7 +466,7 @@ const filteredAgents = computed(() => {
   const q = searchQuery.value.toLowerCase()
   return agents.value.filter(
     (a) =>
-      (a.display_name ?? '').toLowerCase().includes(q) ||
+      agentDisplayName(a).toLowerCase().includes(q) ||
       a.name.toLowerCase().includes(q) ||
       a.model.toLowerCase().includes(q),
   )
@@ -555,6 +555,16 @@ const agentCardExtension = scenarioRegistry.agentCardExtension
 const agentCardBadgeKey = scenarioRegistry.agentCardBadgeKey
 function isScenarioAgent(agent: AgentConfig): boolean {
   return scenarioRegistry.isScenarioInstance({ agentId: agent.name, metadata: agent.metadata })
+}
+function agentDisplayName(agent: AgentConfig): string {
+  return scenarioRegistry.projectInstanceDisplayName(
+    {
+      agentId: agent.name,
+      agentName: agent.display_name,
+      metadata: agent.metadata,
+    },
+    agent.display_name || agent.name,
+  )
 }
 
 const runtimeBackedProviders = computed(() =>
@@ -837,7 +847,7 @@ async function handleUnregisterAgent() {
                   </div>
                   <div class="min-w-0 flex-1">
                     <div class="hc-cxnm hc-cxnm--card">
-                      <span class="hc-cxnm__label">{{ agent.display_name || agent.name }}</span>
+                      <span class="hc-cxnm__label">{{ agentDisplayName(agent) }}</span>
                       <span
                         v-if="agentCardBadgeKey && isScenarioAgent(agent)"
                         class="hc-tag hc-cxnm__badge"
@@ -1480,6 +1490,7 @@ async function handleUnregisterAgent() {
     <!-- 删除确认（智能体无独立停用态，删除即注销，不可恢复） -->
     <ConfirmDialog
       :open="showUnregisterConfirm"
+      :confirmation-key="unregisteringName"
       :danger="true"
       :title="t('agents.deleteConfirmTitle', '删除智能体')"
       :message="t('agents.deleteConfirmMessage', '确定删除该智能体？此操作不可恢复。')"

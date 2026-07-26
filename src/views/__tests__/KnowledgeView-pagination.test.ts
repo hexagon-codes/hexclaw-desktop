@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { createPinia } from 'pinia'
 import KnowledgeView from '../KnowledgeView.vue'
@@ -60,8 +60,10 @@ function makeDocC(id: string, source: string, content: string) {
   }
 }
 
+const mountedViews: VueWrapper[] = []
+
 function mountView(props: Record<string, unknown> = {}) {
-  return mount(KnowledgeView, {
+  const wrapper = mount(KnowledgeView, {
     props,
     global: {
       plugins: [
@@ -83,6 +85,8 @@ function mountView(props: Record<string, unknown> = {}) {
       },
     },
   })
+  mountedViews.push(wrapper)
+  return wrapper
 }
 
 const cards = (w: ReturnType<typeof mountView>) =>
@@ -90,6 +94,9 @@ const cards = (w: ReturnType<typeof mountView>) =>
 
 describe('KnowledgeView #5 — source grouping + pagination', () => {
   beforeEach(() => vi.clearAllMocks())
+  afterEach(() => {
+    for (const wrapper of mountedViews.splice(0)) wrapper.unmount()
+  })
 
   it('renders a source filter chip per source and filters the list', async () => {
     getDocuments.mockResolvedValue({

@@ -140,6 +140,7 @@ export default {
     startChat: '开始对话',
     startChatDesc: '选择一个智能体或直接发送消息',
     scrollToBottom: '回到底部',
+    newResults: '{n} 道新结果',
     runSetupWizard: '还没配置好？运行首次配置向导',
     inputPlaceholder: '输入消息...',
     composerHint: "　——　支持 / Skill·Prompt、{'@'} 智能体",
@@ -2845,8 +2846,6 @@ export default {
     // 20260718 §4.11 术语统一：「本周复习」（禁「本周该练」作另一套页面名）
     reviewQueueTitle: '本周复习',
     reviewQueueCount: '{count} 道待复习',
-    practiceAgain: '再练一道',
-    practice: '再练',
     // 20260718 §4.11 信任链纠偏：家长确认 ≠ 系统已掌握——按钮语义收敛为「家长确认已会」
     // （替代 20260709 的「他会了」：后端语义拆分另包，这里先修文案口径）
     markMastered: '家长确认已会',

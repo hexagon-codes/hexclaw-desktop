@@ -267,7 +267,9 @@ describe('BUG-20260710：孤儿绑定（agent 已删除）必须被探测并诚�
     await vi.waitFor(() => expect(mockGetAgents).toHaveBeenCalledOnce())
     const chatStore = useChatStore()
 
-    expect(chatStore.agentRole, 'agents 尚未加载完成，不得把空初值误判为已删除').toBe(GHOST_AGENT)
+    // 冷启动先等待 Agent 权威集合，再选择会话；此时尚未选中会话，所以 agentRole
+    // 可以为空，但持久绑定必须保留，不能把“尚未加载”误判成“Agent 已删除”。
+    expect(chatStore.agentRole, 'agents 尚未加载完成时尚未选择会话').toBe('')
     expect(getSessionAgent(ORPHAN_SESSION), 'agents 尚未加载完成，绑定必须保留').toBe(GHOST_AGENT)
 
     resolveAgents({ agents: [], default: '' })

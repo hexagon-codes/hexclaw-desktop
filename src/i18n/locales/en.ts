@@ -134,6 +134,7 @@ export default {
     startChat: 'Start Chat',
     startChatDesc: 'Select an Agent or send a message directly',
     scrollToBottom: 'Scroll to bottom',
+    newResults: '{n} new results',
     runSetupWizard: 'Not set up yet? Run the first-time setup wizard',
     inputPlaceholder: 'Type a message...',
     composerHint: " — / Skill·Prompt, {'@'} Agent",
@@ -2909,8 +2910,6 @@ export default {
   records: {
     reviewQueueTitle: 'Weekly review',
     reviewQueueCount: '{count} due',
-    practiceAgain: 'Practice again',
-    practice: 'Practice',
     markMastered: 'Parent confirmed',
     detail: 'Details',
     all: 'All',

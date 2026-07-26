@@ -133,13 +133,18 @@ describe('RecordList（schema 驱动通用记录视图）', () => {
     expect(pills[0]!.text()).toBe('完成')
   })
 
-  it('每行复习动作外派 action 事件', async () => {
-    const w = render()
-    await w.findAll('.rl-btn').find((b) => b.text() === '再练一道')!.trigger('click')
-    const ev = w.emitted('action')
-    expect(ev).toBeTruthy()
-    const payload = ev?.[0]?.[0] as { id: string } | undefined
-    expect(payload?.id).toBe('practiceAgain')
+  it('场景专属复习动作只经 slot 注入，通用 shell 不硬编码业务动作', () => {
+    const w = mount(RecordList, {
+      props: { schema: DEMO_SCHEMA, view: DEMO_VIEW },
+      slots: {
+        'review-practice-action': '<button data-testid="scenario-review-action">场景动作</button>',
+        'list-practice-action': '<button data-testid="scenario-list-action">场景动作</button>',
+      },
+      global: { plugins: [i18n()] },
+    })
+    expect(w.findAll('[data-testid="scenario-review-action"]')).toHaveLength(1)
+    expect(w.findAll('[data-testid="scenario-list-action"]')).toHaveLength(1)
+    expect(w.text()).not.toContain('再练一道')
   })
 })
 

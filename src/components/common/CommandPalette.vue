@@ -2,9 +2,10 @@
 import { ref, computed, onMounted, onUnmounted, nextTick, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Search, Sun, Plus } from 'lucide-vue-next'
+import { Sun, Plus } from 'lucide-vue-next'
 import { useChatStore } from '@/stores/chat'
 import { navigationItems } from '@/config/navigation'
+import SearchInput from './SearchInput.vue'
 
 const router = useRouter()
 const { t } = useI18n()
@@ -13,7 +14,7 @@ const chatStore = useChatStore()
 const visible = ref(false)
 const query = ref('')
 const selectedIdx = ref(0)
-const inputRef = ref<HTMLInputElement>()
+const inputRef = ref<InstanceType<typeof SearchInput> | null>(null)
 
 interface CmdItem {
   id: string
@@ -129,16 +130,14 @@ defineExpose({ open, close })
       <div v-if="visible" class="hc-cmd-overlay" @click.self="close">
         <div class="hc-cmd">
           <div class="hc-cmd__input-wrap">
-            <Search :size="16" class="hc-cmd__search-icon" />
-            <HcClearableField>
-              <input
+            <SearchInput
               ref="inputRef"
               v-model="query"
-              class="hc-cmd__input"
+              fluid
+              class="hc-cmd__search"
               :placeholder="t('cmd.searchPlaceholder')"
               @keydown="handleKeydown"
             />
-            </HcClearableField>
             <kbd class="hc-cmd__kbd">ESC</kbd>
           </div>
 
@@ -205,22 +204,9 @@ defineExpose({ open, close })
   border-bottom: 1px solid var(--hc-divider);
 }
 
-.hc-cmd__search-icon {
-  flex-shrink: 0;
-  color: var(--hc-text-muted);
-}
-
-.hc-cmd__input {
+.hc-cmd__search {
   flex: 1;
-  border: none;
-  outline: none;
-  background: transparent;
-  font-size: 15px;
-  color: var(--hc-text-primary);
-}
-
-.hc-cmd__input::placeholder {
-  color: var(--hc-text-muted);
+  min-width: 0;
 }
 
 .hc-cmd__kbd {

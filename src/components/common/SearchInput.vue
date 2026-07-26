@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { Search, X } from 'lucide-vue-next'
+import { ref } from 'vue'
+import { Search } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
+import HcClearableField from './HcClearableField.vue'
 
 const { t } = useI18n()
 
@@ -11,6 +13,7 @@ withDefaults(defineProps<{
   inputTestId?: string
   clearTestId?: string
   disabled?: boolean
+  ariaLabel?: string
 }>(), {
   fluid: false,
   inputTestId: undefined,
@@ -21,7 +24,10 @@ withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: string]
   submit: []
+  keydown: [event: KeyboardEvent]
 }>()
+
+const inputRef = ref<HTMLInputElement | null>(null)
 
 // IME 守卫：中文/维语等输入法拼字回车选词时 isComposing 为真（部分环境 keyCode=229），
 // 此时回车用于确认候选词，不应触发搜索提交。参考 ChatView/MemoryView 已有写法。
@@ -29,31 +35,37 @@ function onEnter(e: KeyboardEvent) {
   if (e.isComposing || e.keyCode === 229) return
   emit('submit')
 }
+
+defineExpose({
+  focus: () => inputRef.value?.focus(),
+})
 </script>
 
 <template>
   <div class="hc-search" :class="{ 'hc-search--fluid': fluid }">
     <Search :size="15" class="hc-search__icon" />
-    <input
-      :value="modelValue"
-      :data-testid="inputTestId"
-      type="text"
-      class="hc-search__input"
-      :disabled="disabled"
-      :placeholder="placeholder || `${t('common.search')}...`"
-      @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-      @keydown.enter="onEnter"
-    />
-    <button
-      v-if="modelValue"
-      type="button"
-      :data-testid="clearTestId"
-      class="hc-search__clear"
-      aria-label="Clear search"
-      @click.stop="emit('update:modelValue', '')"
+    <HcClearableField
+      class="hc-search__field"
+      :trailing="0"
+      button-class="hc-search__clear"
+      :button-test-id="clearTestId"
+      :icon-size="13"
     >
-      <X :size="13" />
-    </button>
+      <input
+        ref="inputRef"
+        :value="modelValue"
+        :data-testid="inputTestId"
+        data-search-control
+        type="text"
+        class="hc-search__input"
+        :disabled="disabled"
+        :placeholder="placeholder || `${t('common.search')}...`"
+        :aria-label="ariaLabel || placeholder || `${t('common.search')}...`"
+        @input="emit('update:modelValue', ($event.target as HTMLInputElement).value)"
+        @keydown="emit('keydown', $event)"
+        @keydown.enter="onEnter"
+      />
+    </HcClearableField>
   </div>
 </template>
 
@@ -89,8 +101,12 @@ function onEnter(e: KeyboardEvent) {
   color: var(--hc-text-muted);
 }
 
-.hc-search__input {
+.hc-search__field {
   flex: 1;
+  min-width: 0;
+}
+
+.hc-search__input {
   background: transparent;
   border: none;
   outline: none;
@@ -111,7 +127,7 @@ function onEnter(e: KeyboardEvent) {
   opacity: 0.55;
 }
 
-.hc-search__clear {
+.hc-search :deep(.hc-search__clear) {
   flex-shrink: 0;
   width: 22px;
   height: 22px;
@@ -132,21 +148,21 @@ function onEnter(e: KeyboardEvent) {
     transform 150ms cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
-.hc-search__clear:hover {
+.hc-search :deep(.hc-search__clear:hover) {
   background: color-mix(in srgb, var(--hc-text-muted) 14%, transparent);
   color: var(--hc-text-secondary);
   opacity: 1;
   transform: scale(1.03);
 }
 
-.hc-search__clear:focus-visible {
+.hc-search :deep(.hc-search__clear:focus-visible) {
   outline: none;
   background: var(--hc-accent-subtle);
   color: var(--hc-accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--hc-accent) 22%, transparent);
 }
 
-.hc-search__clear:active {
+.hc-search :deep(.hc-search__clear:active) {
   transform: scale(0.94);
 }
 </style>

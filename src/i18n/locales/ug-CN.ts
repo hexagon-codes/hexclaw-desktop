@@ -147,6 +147,7 @@ export default {
     startChat: 'سۆھبەتنى باشلاش',
     startChatDesc: 'بىر Agent تاللاڭ ياكى بىۋاسىتە ئۇچۇر ئەۋەتىڭ',
     scrollToBottom: 'ئاستىغا قايتىش',
+    newResults: '{n} new results',
     runSetupWizard: 'تېخى تەڭشەلمىدىمۇ؟ تۇنجى قېتىملىق تەڭشەش يېتەكچىسىنى ئىجرا قىلىڭ',
     inputPlaceholder: 'ئۇچۇر يېزىڭ...',
     composerHint: "— / Skill·Prompt، {'@'} Agent",
@@ -2977,8 +2978,6 @@ export default {
   records: {
     reviewQueueTitle: 'بۇ ھەپتىلىك تەكرارلاش',
     reviewQueueCount: '{count} تال تەكرارلاش',
-    practiceAgain: 'يەنە بىر تال مەشىق',
-    practice: 'مەشىق',
     markMastered: 'ئاتا-ئانا بىلگەنلىكىنى جەزملىدى',
     detail: 'تەپسىلاتى',
     all: 'ھەممىسى',

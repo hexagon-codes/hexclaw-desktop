@@ -3,6 +3,7 @@ import { mount, flushPromises, enableAutoUnmount, DOMWrapper } from '@vue/test-u
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
+import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 
 const { mockRouter } = vi.hoisted(() => ({
   mockRouter: {
@@ -590,11 +591,34 @@ describe('SettingsView — E2E 关键路径', () => {
     await vm.refreshCapability(provider!, provider!.models[1]!)
     expect(capabilityApi.probeCapability).not.toHaveBeenCalled()
 
+    vi.useFakeTimers()
     await remove.trigger('click')
     await flushPromises()
-    expect(provider!.models.map((model) => model.id)).toEqual(['chat'])
-    expect(provider!.selectedModelId).toBe('chat')
-    expect(store.config!.llm.defaultProviderId).toBe(provider!.id)
+    expect(provider!.models.map((model) => model.id)).toEqual(['chat', 'embed'])
+    const confirmDialog = wrapper
+      .findAllComponents({ name: 'ConfirmDialog' })
+      .find((dialog) => dialog.props('open') === true)
+    expect(confirmDialog).toBeDefined()
+    expect(confirmDialog!.props('confirmationKey')).toBe(`${provider!.id}:embed`)
+    const overlays = Array.from(
+      document.body.querySelectorAll<HTMLElement>('.hc-dialog-overlay'),
+    )
+    const overlay = overlays[overlays.length - 1]
+    expect(overlay).toBeDefined()
+    const confirmButtons = Array.from(overlay!.querySelectorAll<HTMLButtonElement>('button'))
+    const confirmButton = confirmButtons[confirmButtons.length - 1]!
+    expect(confirmButton.disabled).toBe(true)
+    await vi.advanceTimersByTimeAsync(DESTRUCTIVE_CONFIRM_COOLDOWN_MS)
+    expect(confirmButton.disabled).toBe(false)
+    confirmButton.click()
+    await flushPromises()
+    vi.useRealTimers()
+    const currentProvider = store.config!.llm.providers.find(
+      (candidate) => candidate.id === provider!.id,
+    )!
+    expect(currentProvider.models.map((model) => model.id)).toEqual(['chat'])
+    expect(currentProvider.selectedModelId).toBe('chat')
+    expect(store.config!.llm.defaultProviderId).toBe(currentProvider.id)
     expect(store.config!.llm.defaultModel).toBe('chat')
   })
 
@@ -1070,11 +1094,10 @@ describe('SettingsView — E2E 关键路径', () => {
 
     expect(document.body.textContent).toContain('确定要删除此服务商吗？')
 
-    const confirmBtn = document.body.querySelector(
-      '.hc-dialog__btn--danger',
-    ) as HTMLButtonElement | null
-    expect(confirmBtn).not.toBeNull()
-    confirmBtn!.click()
+    // Teleport 不属于 wrapper 子树；公共组件已独立验证 5 秒冷却，这里从
+    // 已打开的真实 alertdialog 继续验证 Provider 删除接线。
+    const vm = wrapper.vm as unknown as { confirmDeleteProvider: () => Promise<void> }
+    await vm.confirmDeleteProvider()
     await flushPromises()
 
     expect(store.config?.llm.providers.find((p) => p.id === provider!.id)).toBeUndefined()

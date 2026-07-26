@@ -13,7 +13,7 @@
 import { ref, computed, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { Search, Plus, Pencil } from 'lucide-vue-next'
+import { Plus, Pencil } from 'lucide-vue-next'
 import {
   getAgents,
   getRules,
@@ -31,6 +31,7 @@ import {
   userVisibleAgents,
 } from '@/utils/imChannelBinding'
 import { useSettingsStore } from '@/stores/settings'
+import SearchInput from '@/components/common/SearchInput.vue'
 
 const props = defineProps<{ instance: IMInstance }>()
 const emit = defineEmits<{ changed: [] }>()
@@ -197,7 +198,7 @@ async function bindAgentToInstance(agentName: string) {
 const dropdownOpen = ref(false)
 const dropdownFlip = ref(false)
 const searchQuery = ref('')
-const searchInputRef = ref<HTMLInputElement | null>(null)
+const searchInputRef = ref<InstanceType<typeof SearchInput> | null>(null)
 const rootRef = ref<HTMLElement | null>(null)
 
 const filteredAgentOptions = computed(() => {
@@ -272,7 +273,14 @@ onBeforeUnmount(() => {
     <div class="hc-cab__row">
       <span class="hc-cab__label">{{ t('imChannels.bindAgentLabel', '智能体') }}</span>
       <div class="hc-agent-combo" @click.stop>
-        <button class="hc-agent-combo__trigger hc-input" @click="toggleDropdown($event)">
+        <button
+          class="hc-agent-combo__trigger hc-input"
+          data-governed-select="agent-binding"
+          role="combobox"
+          aria-haspopup="listbox"
+          :aria-expanded="dropdownOpen"
+          @click="toggleDropdown($event)"
+        >
           <span class="hc-agent-combo__value">
             {{ boundNamedAgent
               ? (boundNamedAgent.display_name || boundNamedAgent.name)
@@ -283,22 +291,21 @@ onBeforeUnmount(() => {
         <Transition name="dropdown">
           <div v-if="dropdownOpen" class="hc-agent-combo__dropdown" :class="{ 'hc-agent-combo__dropdown--flip': dropdownFlip }">
             <div class="hc-agent-combo__search">
-              <Search :size="12" style="flex-shrink:0;opacity:.45" />
-              <HcClearableField>
-                <input
+              <SearchInput
                 ref="searchInputRef"
                 v-model="searchQuery"
-                type="text"
-                class="hc-agent-combo__search-input"
+                fluid
+                class="hc-agent-combo__search-control"
                 :placeholder="t('common.search', 'Search...')"
-                @keydown.esc="closeDropdown()"
+                @keydown="$event.key === 'Escape' && closeDropdown()"
               />
-              </HcClearableField>
             </div>
-            <div class="hc-agent-combo__list">
+            <div class="hc-agent-combo__list" role="listbox">
               <button
                 class="hc-agent-combo__option"
                 :class="{ 'hc-agent-combo__option--active': !boundNamedAgent }"
+                role="option"
+                :aria-selected="!boundNamedAgent"
                 @click="selectAgent('')"
               >
                 {{ t('agents.defaultAssistantName') }}
@@ -311,6 +318,8 @@ onBeforeUnmount(() => {
                 :key="a.name"
                 class="hc-agent-combo__option"
                 :class="{ 'hc-agent-combo__option--active': boundNamedAgent?.name === a.name }"
+                role="option"
+                :aria-selected="boundNamedAgent?.name === a.name"
                 @click="selectAgent(a.name)"
               >
                 {{ a.display_name || a.name }}
@@ -370,8 +379,7 @@ onBeforeUnmount(() => {
   max-height: 240px; overflow: auto; padding: 4px;
 }
 .hc-agent-combo__dropdown--flip { top: auto; bottom: calc(100% + 4px); }
-.hc-agent-combo__search { display: flex; align-items: center; gap: 6px; padding: 4px 8px; }
-.hc-agent-combo__search-input { flex: 1; border: 0; background: transparent; outline: none; font-size: 13px; color: inherit; }
+.hc-agent-combo__search { padding: 4px 8px; }
 .hc-agent-combo__list { display: flex; flex-direction: column; }
 .hc-agent-combo__group { padding: 6px 10px 2px; font-size: 11px; color: var(--hc-text-muted); text-transform: uppercase; letter-spacing: .04em; }
 .hc-agent-combo__option {

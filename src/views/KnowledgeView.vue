@@ -2037,6 +2037,7 @@ defineExpose({ rebuildAll, openUpload, openFilePicker, docs, loadDocs })
     <!-- 删除确认 -->
     <ConfirmDialog
       :open="showDeleteConfirm"
+      :confirmation-key="deletingDoc?.id"
       :title="t('knowledge.deleteConfirmTitle')"
       :message="t('knowledge.deleteConfirmMessage')"
       :confirm-text="t('common.delete')"

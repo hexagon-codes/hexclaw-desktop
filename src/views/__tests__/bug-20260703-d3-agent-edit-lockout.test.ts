@@ -20,6 +20,7 @@ import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import zhCN from '@/i18n/locales/zh-CN'
+import AgentsView from '../AgentsView.vue'
 
 const { getRoles, getAgents, getRules, addRule, deleteRule, setDefaultAgent, registerAgent, unregisterAgent, updateAgent } = vi.hoisted(() => ({
   getRoles: vi.fn(),
@@ -88,7 +89,6 @@ function createTestI18n() {
 }
 
 async function mountView() {
-  const AgentsView = (await import('../AgentsView.vue')).default
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/agents', component: AgentsView }],

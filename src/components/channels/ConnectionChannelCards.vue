@@ -355,6 +355,7 @@ defineExpose({ openCreate })
 
     <ConfirmDialog
       :open="!!deleteTarget"
+      :confirmation-key="deleteTarget?.id"
       :danger="true"
       :title="t('connections.channels.deleteConfirmTitle', '删除连接')"
       :message="t('connections.channels.deleteConfirmMessage', '确定删除该连接？此操作不可恢复。')"

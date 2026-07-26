@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Search, X, RefreshCw, Sparkles } from 'lucide-vue-next'
+import { X, RefreshCw, Sparkles } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import { useModelCatalogStore, AUTO_ENABLE_CATALOG_LIMIT } from '@/stores/model-catalog'
 import { inferCapabilitiesFromId } from '@/config/providers'
@@ -13,6 +13,7 @@ import {
 import { isCatalogModelFree, catalogModelHasMetadata } from '@/types'
 import type { CatalogModel, ModelCapability, ModelOption, ProviderConfig } from '@/types'
 import SegmentedControl from '@/components/common/SegmentedControl.vue'
+import SearchInput from '@/components/common/SearchInput.vue'
 
 /**
  * 模型管理器 — "目录 / 启用"两层架构的管理入口。
@@ -46,7 +47,7 @@ const capFilters = ref<Set<string>>(new Set())
 const recDismissed = ref(false)
 const clearArmed = ref(false)
 let clearTimer: ReturnType<typeof setTimeout> | null = null
-const searchInputRef = ref<HTMLInputElement | null>(null)
+const searchInputRef = ref<InstanceType<typeof SearchInput> | null>(null)
 const modalRef = ref<HTMLElement | null>(null)
 const draftModels = ref<ModelOption[]>([])
 const draftSelectedModelId = ref('')
@@ -533,17 +534,14 @@ function handleKeydown(e: KeyboardEvent) {
               </button>
             </div>
 
-            <div class="mm-search">
-              <Search :size="14" class="mm-search__icon" />
-              <HcClearableField>
-                <input
-                  ref="searchInputRef"
-                  v-model="search"
-                  type="text"
-                  :placeholder="t('settings.modelManager.searchPlaceholder', '搜索模型 id 或名称…')"
-                  :aria-label="t('settings.modelManager.searchPlaceholder', '搜索模型 id 或名称…')"
-                />
-              </HcClearableField>
+            <div class="mm-search-row">
+              <SearchInput
+                ref="searchInputRef"
+                v-model="search"
+                fluid
+                class="mm-search"
+                :placeholder="t('settings.modelManager.searchPlaceholder', '搜索模型 id 或名称…')"
+              />
               <span class="mm-kbd">⌘F</span>
             </div>
 
@@ -574,17 +572,13 @@ function handleKeydown(e: KeyboardEvent) {
             <!-- 厂商侧栏 -->
             <div v-if="showVendorNav" class="mm-vendors">
               <div class="mm-vendors__sticky">
-                <div v-if="vendorCounts.length > 10" class="mm-vendors__search">
-                  <Search :size="11" />
-                  <HcClearableField>
-                    <input
-                      v-model="vendorSearch"
-                      type="text"
-                      :placeholder="t('settings.modelManager.vendorSearch', '过滤厂商…')"
-                      :aria-label="t('settings.modelManager.vendorSearch', '过滤厂商…')"
-                    />
-                  </HcClearableField>
-                </div>
+                <SearchInput
+                  v-if="vendorCounts.length > 10"
+                  v-model="vendorSearch"
+                  fluid
+                  class="mm-vendors__search"
+                  :placeholder="t('settings.modelManager.vendorSearch', '过滤厂商…')"
+                />
                 <button
                   class="mm-vendor"
                   :class="{ 'mm-vendor--active': vendorFilter === '__all__' }"
@@ -857,35 +851,14 @@ function handleKeydown(e: KeyboardEvent) {
   cursor: default;
 }
 
-.mm-search {
+.mm-search-row {
   display: flex;
   align-items: center;
   gap: var(--hc-space-2);
-  padding: 8px 12px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-input);
-  transition:
-    border-color 150ms ease,
-    box-shadow 150ms ease;
 }
-.mm-search:focus-within {
-  border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
-}
-.mm-search__icon {
-  color: var(--hc-text-muted);
-}
-.mm-search input {
+.mm-search {
   flex: 1;
-  border: none;
-  outline: none;
-  background: none;
-  font-size: 13px;
-  color: var(--hc-text-primary);
-}
-.mm-search input::placeholder {
-  color: var(--hc-text-muted);
+  min-width: 0;
 }
 .mm-kbd {
   padding: 1px 6px;
@@ -958,23 +931,9 @@ function handleKeydown(e: KeyboardEvent) {
   margin-bottom: var(--hc-space-1);
 }
 .mm-vendors__search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
   margin-bottom: var(--hc-space-2);
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-sm);
-  background: var(--hc-bg-input);
-  color: var(--hc-text-muted);
-}
-.mm-vendors__search input {
   width: 100%;
-  border: none;
-  outline: none;
-  background: none;
-  font-size: 11px;
-  color: var(--hc-text-primary);
+  height: 28px;
 }
 .mm-vendor {
   display: flex;

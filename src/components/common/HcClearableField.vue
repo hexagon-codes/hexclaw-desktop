@@ -5,8 +5,15 @@ import { X } from 'lucide-vue-next'
 const props = withDefaults(defineProps<{
   /** 为密码显隐、单位等尾部控件预留的空间（px）。 */
   trailing?: number
+  /** 由组合组件附加语义类；基础清空行为和可访问性仍由本组件唯一负责。 */
+  buttonClass?: string
+  buttonTestId?: string
+  iconSize?: number
 }>(), {
   trailing: 8,
+  buttonClass: undefined,
+  buttonTestId: undefined,
+  iconSize: 14,
 })
 
 const root = ref<HTMLElement | null>(null)
@@ -91,13 +98,14 @@ onBeforeUnmount(() => {
     <button
       v-if="hasValue"
       type="button"
-      class="hc-clearable-field__button"
+      :class="['hc-clearable-field__button', props.buttonClass]"
+      :data-testid="props.buttonTestId"
       :aria-label="clearLabel"
       :title="clearLabel"
       @mousedown.prevent
       @click.stop="clear"
     >
-      <X :size="14" aria-hidden="true" />
+      <X :size="props.iconSize" aria-hidden="true" />
     </button>
   </div>
 </template>

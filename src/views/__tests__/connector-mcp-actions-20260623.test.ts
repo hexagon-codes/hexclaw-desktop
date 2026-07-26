@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const { connectorList, removeInstance, updateInstance } = vi.hoisted(() => ({
   connectorList: { value: [] as unknown[] },
@@ -99,7 +100,8 @@ describe('增量3 ConnectionsView mcp 连接器 测试/删除/启停', () => {
 
     await wrapper.find('.hc-conn-btn--danger').trigger('click')
     await flushPromises()
-    await wrapper.find('.hc-dialog__btn--danger').trigger('click')
+    // 公共组件已独立验证 5 秒冷却；此用例只验证连接器删除接线。
+    wrapper.findComponent(ConfirmDialog).vm.$emit('confirm')
     await flushPromises()
 
     expect(removeMcpServer).toHaveBeenCalledTimes(1)

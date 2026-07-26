@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { AlertTriangle, Info } from 'lucide-vue-next'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 
 const props = withDefaults(
   defineProps<{
@@ -20,7 +21,7 @@ const props = withDefaults(
     confirmText: '确认',
     cancelText: '取消',
     danger: true,
-    confirmDelayMs: 5_000,
+    confirmDelayMs: DESTRUCTIVE_CONFIRM_COOLDOWN_MS,
     confirmationKey: null,
   },
 )

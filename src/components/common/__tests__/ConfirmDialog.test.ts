@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import ConfirmDialog from '../ConfirmDialog.vue'
 import confirmDialogSource from '../ConfirmDialog.vue?raw'
+import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 
 describe('ConfirmDialog', () => {
   afterEach(() => {
@@ -44,8 +45,9 @@ describe('ConfirmDialog', () => {
     expect(wrapper.emitted('confirm')).toHaveLength(1)
   })
 
-  it('uses the global five-second cooldown for destructive actions by default', async () => {
+  it('uses the global three-second cooldown for destructive actions by default', async () => {
     vi.useFakeTimers()
+    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(3_000)
     const wrapper = mount(ConfirmDialog, {
       props: { open: true, danger: true },
       global: { stubs: { Teleport: true } },
@@ -54,7 +56,7 @@ describe('ConfirmDialog', () => {
     const confirmBtn = buttons[buttons.length - 1]!
 
     expect(confirmBtn.attributes('disabled')).toBeDefined()
-    await vi.advanceTimersByTimeAsync(4_999)
+    await vi.advanceTimersByTimeAsync(DESTRUCTIVE_CONFIRM_COOLDOWN_MS - 1)
     expect(confirmBtn.attributes('disabled')).toBeDefined()
     await vi.advanceTimersByTimeAsync(1)
     expect(confirmBtn.attributes('disabled')).toBeUndefined()

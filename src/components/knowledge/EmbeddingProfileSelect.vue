@@ -425,6 +425,7 @@ watch(
       type="button"
       class="kb-profile-select__trigger hc-input"
       :class="{ 'kb-profile-select__trigger--disabled': disabled }"
+      data-governed-select="embedding-profile"
       role="combobox"
       data-testid="kb-index-model-trigger"
       :aria-label="`${labels.selectLabel}: ${displayLabel}`"

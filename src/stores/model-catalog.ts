@@ -19,6 +19,7 @@ import type { CatalogModel, ModelOption, ProviderConfig } from '@/types'
  */
 
 const STORAGE_KEY = 'hexclaw.model-catalog.v1'
+const EXCLUSIONS_STORAGE_KEY = 'hexclaw.model-catalog-exclusions.v1'
 
 /**
  * 小目录（官方直连服务商，如智谱 8 个模型）阈值：
@@ -38,6 +39,11 @@ export interface ProviderCatalog {
 }
 
 type CatalogMap = Record<string, ProviderCatalog>
+type ExclusionMap = Record<string, string[]>
+
+function normalizeExcludedModelId(modelId: string): string {
+  return modelId.trim().toLowerCase()
+}
 
 function loadFromStorage(): CatalogMap {
   try {
@@ -51,8 +57,29 @@ function loadFromStorage(): CatalogMap {
   }
 }
 
+function loadExclusionsFromStorage(): ExclusionMap {
+  try {
+    const raw = localStorage.getItem(EXCLUSIONS_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as ExclusionMap
+    if (typeof parsed !== 'object' || parsed === null) return {}
+    return Object.fromEntries(
+      Object.entries(parsed).map(([providerInstanceId, modelIds]) => [
+        providerInstanceId,
+        Array.isArray(modelIds)
+          ? [...new Set(modelIds.map(normalizeExcludedModelId).filter(Boolean))]
+          : [],
+      ]),
+    )
+  } catch (e) {
+    logger.warn('[ModelCatalog] 读取模型排除集合失败，按空集合处理:', e)
+    return {}
+  }
+}
+
 export const useModelCatalogStore = defineStore('modelCatalog', () => {
   const catalogs = ref<CatalogMap>(loadFromStorage())
+  const exclusions = ref<ExclusionMap>(loadExclusionsFromStorage())
 
   function persist() {
     try {
@@ -61,6 +88,40 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
       // 配额满等场景只降级为"每次重新同步"，不影响功能
       logger.warn('[ModelCatalog] 写入本地缓存失败:', e)
     }
+  }
+
+  function persistExclusions(): boolean {
+    try {
+      localStorage.setItem(EXCLUSIONS_STORAGE_KEY, JSON.stringify(exclusions.value))
+      return true
+    } catch (e) {
+      logger.warn('[ModelCatalog] 写入模型排除集合失败:', e)
+      return false
+    }
+  }
+
+  function excludeModel(providerInstanceId: string, modelId: string): boolean {
+    const normalizedId = normalizeExcludedModelId(modelId)
+    if (!providerInstanceId || !normalizedId) return false
+    const previous = exclusions.value[providerInstanceId] ?? []
+    if (!previous.includes(normalizedId)) {
+      exclusions.value[providerInstanceId] = [...previous, normalizedId]
+    }
+    return persistExclusions()
+  }
+
+  function clearModelExclusion(providerInstanceId: string, modelId: string): boolean {
+    const normalizedId = normalizeExcludedModelId(modelId)
+    if (!providerInstanceId || !normalizedId) return false
+    const previous = exclusions.value[providerInstanceId] ?? []
+    const next = previous.filter((candidate) => candidate !== normalizedId)
+    if (next.length > 0) exclusions.value[providerInstanceId] = next
+    else delete exclusions.value[providerInstanceId]
+    return persistExclusions()
+  }
+
+  function getExcludedModelIds(providerInstanceId: string): ReadonlySet<string> {
+    return new Set(exclusions.value[providerInstanceId] ?? [])
   }
 
   /** 同步一份新目录，自动 diff 出相对上次的新增模型 */
@@ -116,11 +177,15 @@ export const useModelCatalogStore = defineStore('modelCatalog', () => {
 
   return {
     catalogs,
+    exclusions,
     setCatalog,
     ensureFallbackCatalog,
     getCatalog,
     removeCatalog,
     markNewSeen,
+    excludeModel,
+    clearModelExclusion,
+    getExcludedModelIds,
   }
 })
 
@@ -143,38 +208,50 @@ export function reconcileProviderCatalog(
   target: ProviderConfig,
   remoteModels: CatalogModel[],
   presetDefaults: ModelOption[],
+  excludedModelIds: ReadonlySet<string> = new Set(),
 ): ProviderCatalogReconcileResult {
   const before = modelListSignature(target.models, target.selectedModelId)
   const managed = remoteModels.length > AUTO_ENABLE_CATALOG_LIMIT
   const remoteById = new Map(remoteModels.map((model) => [model.id, model]))
+  const normalizedExclusions = new Set(
+    [...excludedModelIds].map(normalizeExcludedModelId).filter(Boolean),
+  )
+  const isExcluded = (modelId: string) =>
+    normalizedExclusions.has(normalizeExcludedModelId(modelId))
 
   if (managed) {
-    target.models = target.models.map((model) => {
-      const remote = remoteById.get(model.id)
-      if (!remote?.name || remote.name === model.name || model.isCustom) return model
-      return canonicalizeModelOption({ ...model, name: remote.name })
-    })
+    target.models = target.models
+      .filter((model) => !isExcluded(model.id))
+      .map((model) => {
+        const remote = remoteById.get(model.id)
+        if (!remote?.name || remote.name === model.name || model.isCustom) return model
+        return canonicalizeModelOption({ ...model, name: remote.name })
+      })
   } else {
     const existingById = new Map(target.models.map((model) => [model.id, model]))
     const presetById = new Map(presetDefaults.map((model) => [model.id, model]))
-    const next: ModelOption[] = remoteModels.map((remote) => {
-      const existing = existingById.get(remote.id)
-      const preset = presetById.get(remote.id)
-      if (existing) {
+    const next: ModelOption[] = remoteModels
+      .filter((remote) => !isExcluded(remote.id))
+      .map((remote) => {
+        const existing = existingById.get(remote.id)
+        const preset = presetById.get(remote.id)
+        if (existing) {
+          return canonicalizeModelOption({
+            ...existing,
+            name: remote.name || existing.name || remote.id,
+          })
+        }
         return canonicalizeModelOption({
-          ...existing,
-          name: remote.name || existing.name || remote.id,
+          id: remote.id,
+          name: remote.name || remote.id,
+          capabilities: preset?.capabilities ?? inferCapabilitiesFromId(remote.id),
+          ...(preset?.embedding ? { embedding: { ...preset.embedding } } : {}),
         })
-      }
-      return canonicalizeModelOption({
-        id: remote.id,
-        name: remote.name || remote.id,
-        capabilities: preset?.capabilities ?? inferCapabilitiesFromId(remote.id),
-        ...(preset?.embedding ? { embedding: { ...preset.embedding } } : {}),
       })
-    })
     for (const existing of target.models) {
-      if (!remoteById.has(existing.id)) next.push(canonicalizeModelOption(existing))
+      if (!remoteById.has(existing.id) && !isExcluded(existing.id)) {
+        next.push(canonicalizeModelOption(existing))
+      }
     }
     target.models = next
   }

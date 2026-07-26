@@ -48,6 +48,7 @@ function isBlockedHost(host: string): boolean {
   if (host === 'metadata.google.internal' || host === '0.0.0.0' || host === '::') return true
   const parts = ipv4Parts(host)
   if (parts?.[0] === 169 && parts[1] === 254) return true
+  if (parts?.[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true
   return host.startsWith('fe80:')
 }
 

@@ -6,6 +6,7 @@
  */
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import SearchInput from '@/components/common/SearchInput.vue'
 
 /** 选择器只需要的最小 skill 结构（与 AgentsView 懒加载的列表形状一致，不绑定完整 Skill 类型） */
 interface PickerSkill {
@@ -88,16 +89,12 @@ function chipIcon(s: PickerSkill): string {
       </button>
     </div>
 
-    <HcClearableField>
-      <input
+    <SearchInput
       v-model="filter"
-      type="text"
-      class="rounded-lg border px-3 py-1.5 text-[12px] outline-none"
-      :style="{ background: 'var(--hc-bg-input)', borderColor: 'var(--hc-border)', color: 'var(--hc-text-primary)' }"
+      fluid
       :placeholder="t('agents.skillsFilterPh', '搜索 Skill…')"
-      data-testid="agent-skill-filter"
+      input-test-id="agent-skill-filter"
     />
-    </HcClearableField>
 
     <div v-if="available.length === 0" class="text-[12px]" :style="{ color: 'var(--hc-text-muted)' }">
       {{ t('agents.noSkillsAvailable', '暂无已安装的 Skill') }}

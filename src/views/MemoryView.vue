@@ -994,6 +994,7 @@ async function handleSearch() {
 
     <ConfirmDialog
       :open="showClearAllConfirm"
+      confirmation-key="memory-clear-all"
       :title="t('memory.clearTitle')"
       :message="t('memory.clearMessage')"
       :confirm-text="t('memory.clearConfirm')"

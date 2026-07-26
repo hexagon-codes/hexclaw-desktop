@@ -587,6 +587,7 @@ async function toggleConnector(inst: ConnectorInstance) {
     <!-- 删除连接器确认（不可逆，含密钥清理） -->
     <ConfirmDialog
       :open="!!deleteTarget"
+      :confirmation-key="deleteTarget?.id"
       :danger="true"
       :title="t('connections.connectors.deleteConfirmTitle', '删除连接器')"
       :message="t('connections.connectors.deleteConfirmMessage', '确定删除该数据连接器？此操作不可恢复。')"

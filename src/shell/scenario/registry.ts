@@ -21,6 +21,17 @@ export interface ScenarioContext {
   metadata?: Record<string, unknown>
 }
 
+/** 场景实例的权威可见身份及其历史自动生成别名；不包含用户自定义会话标题。 */
+export interface ScenarioIdentityProjection {
+  displayName: string
+  generatedAliases: readonly string[]
+}
+
+/** 身份投影解析器：场景包只从自身权威 metadata 生成，缺少事实时返回 null。 */
+export type IdentityProjectionResolver = (
+  ctx: ScenarioContext,
+) => ScenarioIdentityProjection | null
+
 /**
  * 场景投影到通用 composer 的结构化 chip。shell 只转发稳定 action id，
  * 不解释 action 的领域含义；无 actionId 时仍是普通可关闭提示。
@@ -44,6 +55,13 @@ export interface ScenarioImageModelRoute {
   capability: 'vision'
 }
 
+/** 场景文本任务的显式模型路由；与输入框展示使用同一冻结事实。 */
+export interface ScenarioTextModelRoute {
+  provider: string
+  model: string
+  capability: 'text'
+}
+
 /**
  * 通用 composer 拦截图片后交给场景包的完整事实。
  *
@@ -60,6 +78,11 @@ export interface ScenarioComposerImagePayload {
   /** 该图片 attempt 唯一允许投影和建 Job 的来源会话；禁止同 Agent 会话间串任务。 */
   sourceSessionId?: string
   route?: ScenarioImageModelRoute
+}
+
+/** 通用消息之后的场景投影锚点；消息 ID 由 shell 生成，只含 nanoid 安全字符。 */
+export function scenarioMessageAnchorId(messageId: string): string {
+  return `hc-chat-scenario-inline-${messageId}`
 }
 
 /**
@@ -100,6 +123,7 @@ interface RegistryState {
   descriptors: Map<string, InstanceViewDescriptor>
   schemas: Map<string, RecordSchema>
   resolvers: DescriptorResolver[]
+  identityProjectionResolvers: IdentityProjectionResolver[]
   actionHandlers: Map<string, ActionHandler>
   /** 会话增强组件（场景包提供；chat shell 只用 <component :is> 渲染，不 import 场景包） */
   chatEnhancement: Component | null
@@ -121,6 +145,7 @@ function createState(): RegistryState {
     descriptors: new Map(),
     schemas: new Map(),
     resolvers: [],
+    identityProjectionResolvers: [],
     actionHandlers: new Map(),
     chatEnhancement: null,
     agentCardExtension: null,
@@ -161,6 +186,35 @@ export const scenarioRegistry = {
       if (d) return d
     }
     return EMPTY_VIEW_DESCRIPTOR
+  },
+
+  /** 注册场景身份投影；通用 shell 不解释任何领域名称或历史别名。 */
+  registerIdentityProjectionResolver(resolver: IdentityProjectionResolver): void {
+    state.identityProjectionResolvers.push(resolver)
+  },
+  resolveIdentityProjection(ctx: ScenarioContext): ScenarioIdentityProjection | null {
+    for (const resolve of state.identityProjectionResolvers) {
+      const projection = resolve(ctx)
+      if (projection) return projection
+    }
+    return null
+  },
+  /**
+   * 只把内部 ID、空值和场景声明的历史自动名称投影到当前权威身份。
+   * 其他候选值视为用户自定义标题，逐字符保留。
+   */
+  projectInstanceDisplayName(ctx: ScenarioContext, candidate?: string | null): string {
+    const raw = (candidate ?? '').trim()
+    const projection = this.resolveIdentityProjection(ctx)
+    if (!projection) return raw
+    if (
+      raw === '' ||
+      raw === ctx.agentId.trim() ||
+      projection.generatedAliases.includes(raw)
+    ) {
+      return projection.displayName
+    }
+    return raw
   },
 
   /** 注册会话增强组件（场景包提供，如 K12 头部 tab + 记录视图 + 侧栏） */

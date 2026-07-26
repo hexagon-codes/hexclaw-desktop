@@ -807,16 +807,32 @@ function isEmbeddingOnlyModel(model: ModelOption): boolean {
   return capabilities.includes('embedding') && !capabilities.includes('text')
 }
 
-/** 从 Provider 模型列表移除；向量模型不会参与聊天选择回退。 */
-function removeProviderModel(provider: ProviderConfig, modelId: string) {
-  const idx = provider.models.findIndex((m) => m.id === modelId)
-  if (idx < 0) return
-  provider.models.splice(idx, 1)
-  if (provider.selectedModelId === modelId) {
-    provider.selectedModelId = resolveProviderSelectedModelId(provider)
+function providerModelExclusionScope(provider: ProviderConfig): string {
+  return provider.providerInstanceId || provider.id
+}
+
+function isProviderModelRemovable(provider: ProviderConfig, model: ModelOption): boolean {
+  const presetModels = PROVIDER_PRESETS[provider.type]?.defaultModels ?? []
+  if (presetModels.some((preset) => preset.id === model.id)) {
+    return false
   }
-  delete testProviderResult.value[provider.id]
-  autoSave()
+  if (model.isCustom) {
+    return true
+  }
+  return Boolean(
+    catalogStore
+      .getCatalog(provider.id)
+      ?.models.some((catalogModel) => catalogModel.id === model.id),
+  )
+}
+
+function requestDeleteProviderModel(provider: ProviderConfig, model: ModelOption) {
+  if (!isProviderModelRemovable(provider, model)) return
+  pendingDeleteModel.value = {
+    providerId: provider.id,
+    modelId: model.id,
+    modelName: model.name || model.id,
+  }
 }
 
 function capabilitiesForCustomModel(capability: ModelCapability): ModelCapability[] {
@@ -887,6 +903,9 @@ function handleCustomModelDialogKeydown(event: KeyboardEvent) {
 function addCustomModel(provider: ProviderConfig): boolean {
   const modelId = normalizedNewModelId.value
   if (!modelId || provider.models.some((model) => model.id === modelId)) return false
+  if (!catalogStore.clearModelExclusion(providerModelExclusionScope(provider), modelId)) {
+    return false
+  }
   const model = canonicalizeModelOption({
     id: modelId,
     name: modelId,
@@ -997,21 +1016,46 @@ function effectiveProviderLocality(provider: ProviderConfig): 'local' | 'cloud' 
 
 /** 删除模型 */
 function removeModel(provider: ProviderConfig, modelId: string) {
+  const models = provider.models.filter((m) => m.id !== modelId)
   settingsStore.updateProvider(provider.id, {
-    models: provider.models.filter((m) => m.id !== modelId),
+    models,
+    selectedModelId: resolveProviderSelectedModelId({ ...provider, models }),
   })
   autoSave()
 }
 
-function confirmDeleteModel() {
+async function confirmDeleteModel() {
   const target = pendingDeleteModel.value
-  pendingDeleteModel.value = null
   if (!target) return
 
   const provider = settingsStore.config?.llm.providers.find((p) => p.id === target.providerId)
   if (!provider) return
+  const model = provider.models.find((candidate) => candidate.id === target.modelId)
+  if (!model || !isProviderModelRemovable(provider, model)) {
+    pendingDeleteModel.value = null
+    return
+  }
 
+  const previousModels = [...provider.models]
+  const previousSelectedModelId = provider.selectedModelId
+  const exclusionScope = providerModelExclusionScope(provider)
+  if (!catalogStore.excludeModel(exclusionScope, target.modelId)) {
+    toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
+    return
+  }
   removeModel(provider, target.modelId)
+  try {
+    await flushAutoSave({ force: true })
+    pendingDeleteModel.value = null
+  } catch (e) {
+    catalogStore.clearModelExclusion(exclusionScope, target.modelId)
+    settingsStore.updateProvider(provider.id, {
+      models: previousModels,
+      selectedModelId: previousSelectedModelId,
+    })
+    logger.error('[Settings] 删除模型持久化失败:', e)
+    toast.error(t('settings.llm.deleteModelFailed', '删除模型失败，请重试'))
+  }
 }
 
 /** 保存编辑的模型 */
@@ -1157,6 +1201,7 @@ async function syncRemoteModels(
       currentProvider,
       remoteModels,
       currentPreset?.defaultModels ?? [],
+      catalogStore.getExcludedModelIds(providerModelExclusionScope(currentProvider)),
     )
     if (result.changed) {
       if (waitForPersistence) {
@@ -1831,12 +1876,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             {{ MODEL_CAPABILITY_DISPLAY[cap].label }}</span
                           >
                           <button
-                            v-if="model.isCustom || isEmbeddingOnlyModel(model)"
+                            v-if="isProviderModelRemovable(provider, model)"
                             type="button"
                             class="hc-model-chip__remove"
                             :aria-label="`删除 ${model.name || model.id}`"
                             title="删除自定义模型"
-                            @click.stop="removeProviderModel(provider, model.id)"
+                            @click.stop="requestDeleteProviderModel(provider, model)"
                           >
                             ×
                           </button>
@@ -1844,7 +1889,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
                         <!-- 自定义对话模型用非交互容器承载三个互不嵌套的按钮。 -->
                         <div
-                          v-else-if="model.isCustom"
+                          v-else-if="isProviderModelRemovable(provider, model)"
                           class="hc-model-chip hc-model-chip--custom"
                           :class="{
                             'hc-model-chip--active': provider.selectedModelId === model.id,
@@ -1903,7 +1948,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             class="hc-model-chip__remove"
                             :aria-label="`删除 ${model.name || model.id}`"
                             title="删除自定义模型"
-                            @click.stop="removeProviderModel(provider, model.id)"
+                            @click.stop="requestDeleteProviderModel(provider, model)"
                           >
                             ×
                           </button>
@@ -2346,6 +2391,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
   <ConfirmDialog
     :open="pendingDeleteProviderId !== null"
+    :confirmation-key="pendingDeleteProviderId"
     :title="t('settings.llm.deleteProvider')"
     :message="t('settings.llm.deleteProviderConfirm')"
     :confirm-text="t('common.delete')"
@@ -2356,6 +2402,11 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
 
   <ConfirmDialog
     :open="pendingDeleteModel !== null"
+    :confirmation-key="
+      pendingDeleteModel
+        ? `${pendingDeleteModel.providerId}:${pendingDeleteModel.modelId}`
+        : null
+    "
     :title="t('settings.llm.deleteModel')"
     :message="
       pendingDeleteModel

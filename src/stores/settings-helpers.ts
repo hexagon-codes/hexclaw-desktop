@@ -379,7 +379,7 @@ export function backendToProviders(
       id: localProvider?.id ?? name,
       providerInstanceId: p.provider_instance_id ?? localProvider?.providerInstanceId,
       backendKey: name,
-      name: localProvider?.name ?? name,
+      name: localProvider?.name ?? (p.display_name?.trim() || name),
       type: (localProvider?.type ?? matchedType ?? 'custom') as ProviderConfig['type'],
       // 后端 enabled 缺省/true=启用，false=禁用（还原禁用态，bug 2026-06-22）
       enabled: p.enabled ?? true,
@@ -421,6 +421,7 @@ export function providersToBackend(
       : resolveProviderSelectedModelId(p, p.id === defaultProviderId ? defaultModel : '')
     backendProviders[key] = {
       ...(p.providerInstanceId ? { provider_instance_id: p.providerInstanceId } : {}),
+      display_name: p.name,
       api_key: p.apiKey || '',
       base_url: p.baseUrl || '',
       model: selectedModelId,

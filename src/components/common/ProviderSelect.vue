@@ -170,6 +170,7 @@ watch(() => props.modelValue, () => {
       ref="triggerRef"
       type="button"
       class="hc-provider-select__trigger hc-input"
+      data-governed-select="provider-select"
       role="combobox"
       :aria-expanded="open"
       aria-haspopup="listbox"
