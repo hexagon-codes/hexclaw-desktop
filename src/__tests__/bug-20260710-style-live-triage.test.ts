@@ -20,6 +20,7 @@ import path from 'node:path'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '@/features/k12/i18n/zh-CN'
 import K12ProfileForm from '@/features/k12/views/K12ProfileForm.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const SRC = path.resolve(__dirname, '..')
 
@@ -143,15 +144,10 @@ describe('BUG-20260710 ① · K12 卡删除入口下沉', () => {
     openBtn!.click()
     await flushPromises()
 
-    // 二次确认后才真正删除。平台 ConfirmDialog 以 alertdialog + 可访问按钮名称为稳定契约，
-    // 不再依赖已移除的 K12 私有 data-testid。
-    const dialog = document.body.querySelector('[role="alertdialog"]') as HTMLElement | null
-    expect(!!dialog, '删除必须打开二次确认对话框').toBe(true)
-    const confirmBtn = Array.from(dialog!.querySelectorAll('button')).find(
-      (button) => button.textContent?.trim() === '删除',
-    ) as HTMLElement | undefined
-    expect(!!confirmBtn, '二次确认对话框必须提供可访问名称为“删除”的确认按钮').toBe(true)
-    confirmBtn!.click()
+    // 公共 ConfirmDialog 自身已独立覆盖 5 秒冷却；这里只验证删除动作接线。
+    const dialog = wrapper.findComponent(ConfirmDialog)
+    expect(dialog.props('open'), '删除必须打开二次确认对话框').toBe(true)
+    dialog.vm.$emit('confirm')
     await flushPromises()
 
     expect(h.unregisterSpy).toHaveBeenCalledWith('k12-tutor-x')

@@ -66,7 +66,7 @@ describe('SF TasksView — 加载/暂停/删除失败已 surface 到 toast', () 
   it('SF-8 handlePauseResume 失败 → toast.error', () => {
     expect(catchOf(fnBody(src, 'async function handlePauseResume'))).toContain('toast.error')
   })
-  it('SF-9 handleDelete 失败 → toast.error', () => {
-    expect(catchOf(fnBody(src, 'async function handleDelete'))).toContain('toast.error')
+  it('SF-9 confirmDeleteJob 失败 → toast.error', () => {
+    expect(catchOf(fnBody(src, 'async function confirmDeleteJob'))).toContain('toast.error')
   })
 })

@@ -62,7 +62,7 @@ describe('UI-4 CanvasView 不可达死代码已移除', () => {
 // UI-8 [中][已修] PromptsView 增删改不再无 try/catch——失败 surface 到 actionError。
 // 砍薄版（§5）：saveMemory/removeMemory 随记忆薄版 Tab 移除（记忆管理已迁至 MemoryView）。
 describe('UI-8 PromptsView 增删改失败已 surface（不再无 try/catch 静默）', () => {
-  const fns = ['savePrompt', 'removePrompt']
+  const fns = ['savePrompt', 'confirmRemovePrompt']
   it.each(fns)('%s 有 try/catch 且失败写 actionError', (name) => {
     const src = read('views/PromptsView.vue')
     const fn = src.slice(src.indexOf(`async function ${name}`), src.indexOf(`async function ${name}`) + 700)

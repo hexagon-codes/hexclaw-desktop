@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "reportPath": "test-results/k12-current-bug-live/report.json",
+  "specFile": "k12-current-bug-real-matrix.spec.ts",
+  "project": "chromium",
+  "currentSource": {
+    "description": "The caller supplies one frozen installed Desktop artifact and its real Sidecar. This lane starts or substitutes neither service.",
+    "managesWebServer": false,
+    "managesSidecar": false,
+    "usesMocks": false
+  },
+  "provider": {
+    "identity": "hexclaw-gpt",
+    "displayName": "HexClaw-GPT",
+    "model": "gpt-5.6-sol"
+  },
+  "submissions": {
+    "plannedTopLevel": 4,
+    "maximumTopLevel": 8
+  },
+  "fixtures": {
+    "writing": {
+      "env": "HEX_K12_WRITING_IMAGE",
+      "path": "/Users/guoyanjun/work/hexclaw-docs/test/k12-test-作文.png",
+      "sha256": "3b238c46e0ae4515f7b35a28bcfd37081ba1d59a9dfa2b30bf17784aaf3e9157",
+      "bytes": 2509035,
+      "width": 1086,
+      "height": 1448
+    },
+    "homework": {
+      "env": "HEX_K12_PHOTO_CLEAR",
+      "path": "/Users/guoyanjun/work/hexclaw-docs/test/k12-test-批改作业.png",
+      "sha256": "0c4b1a972319203b1483ffbce43e8835b1367be53edceea23c89368a2f2bc861",
+      "bytes": 2178059,
+      "width": 1086,
+      "height": 1448
+    }
+  },
+  "requiredStrictEnvironment": {
+    "HEX_K12_LIVE_RUN": "1",
+    "HEX_K12_LIVE_PROFILE_ISOLATED": "1",
+    "HEX_K12_LIVE_MODEL_AUTHORIZED": "1",
+    "HEX_K12_LIVE_PROVIDER": "hexclaw-gpt",
+    "HEX_K12_LIVE_EXPECTED_PROVIDER_DISPLAY": "HexClaw-GPT",
+    "HEX_K12_LIVE_MODEL": "gpt-5.6-sol",
+    "HEX_K12_LIVE_STATE_TASKS_AUTHORIZED": "1"
+  },
+  "requiredStrictValues": [
+    "HEX_K12_LIVE_APP_URL",
+    "HEX_K12_LIVE_SIDECAR_URL",
+    "HEX_K12_LIVE_APP_BINARY",
+    "HEX_K12_LIVE_APP_SHA256",
+    "HEX_K12_LIVE_EXPECTED_VERSION",
+    "HEX_K12_LIVE_AGENT",
+    "HEX_K12_LIVE_RETRYABLE_DISPATCH_ID",
+    "HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID"
+  ],
+  "forbiddenRequestPathPrefixes": [
+    "/api/k12/tutoring-tips/send",
+    "/api/v1/im/",
+    "/api/v1/connections/"
+  ]
+}

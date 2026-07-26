@@ -359,6 +359,7 @@ describe('K12 ImageTaskDispatch public facade', () => {
             intake: { intake_id: 'intake-1', status: 'promoted' },
             work: { work_id: 'work-1', display_name: '美术作品' },
             feedback: {
+              generation_id: 'generation-1',
               structured_feedback: structuredFeedback,
               projection_markdown: structuredFeedback.projection_markdown,
             },

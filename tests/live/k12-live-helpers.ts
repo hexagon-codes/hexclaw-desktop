@@ -391,6 +391,68 @@ export function lastAssistantWithMarker(
   return undefined
 }
 
+export async function waitForLiveAssistant(
+  request: APIRequestContext,
+  sessionID: string,
+  marker: string,
+): Promise<HistoryMessage> {
+  let terminal: HistoryMessage | undefined
+  await expect
+    .poll(
+      async () => {
+        terminal = lastAssistantWithMarker(await listHistory(request, sessionID), marker)
+        return terminal?.id ?? ''
+      },
+      {
+        timeout: 240_000,
+        intervals: [500, 1_000, 2_000, 4_000],
+        message: `real model must persist a terminal assistant message for ${marker}`,
+      },
+    )
+    .not.toBe('')
+  return terminal!
+}
+
+export async function findLiveSessionByTitle(
+  request: APIRequestContext,
+  title: string,
+): Promise<string> {
+  let sessionID = ''
+  await expect
+    .poll(
+      async () => {
+        const payload = await liveJSON<{
+          sessions?: Array<{ id?: string; title?: string }>
+        }>(
+          request,
+          'GET',
+          `/api/v1/sessions?user_id=${encodeURIComponent(DESKTOP_USER_ID)}&limit=500`,
+        )
+        const matches = (payload.sessions ?? []).filter(
+          (session) => session.title === title && session.id,
+        )
+        if (matches.length === 1) sessionID = matches[0]!.id!
+        return matches.length
+      },
+      { message: 'the role deep-link must create exactly one isolated live session' },
+    )
+    .toBe(1)
+  return sessionID
+}
+
+export async function cleanupLiveSessionsByTitle(
+  request: APIRequestContext,
+  title: string,
+): Promise<void> {
+  if (!title) return
+  const payload = await liveJSON<{
+    sessions?: Array<{ id?: string; title?: string }>
+  }>(request, 'GET', `/api/v1/sessions?user_id=${encodeURIComponent(DESKTOP_USER_ID)}&limit=500`)
+  for (const session of payload.sessions ?? []) {
+    if (session.id && session.title === title) await cleanupLiveSession(request, session.id)
+  }
+}
+
 export async function cleanupLiveSession(
   request: APIRequestContext,
   sessionID: string,

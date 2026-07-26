@@ -72,8 +72,8 @@ describe('desktop page density and responsive style contracts', () => {
   it('keeps creative-work previews fixed and puts full review content in the approved modal', () => {
     const works = source('features/k12/views/K12CreativeWorksPanel.vue')
 
-    expect(works).toMatch(/\.k12cw__card\s*\{[^}]*align-items:\s*start/s)
-    expect(works).toMatch(/\.k12cw__preview\s*\{[^}]*height:\s*112px/s)
+    expect(works).toMatch(/\.k12cw__card\s*\{[^}]*align-items:\s*stretch/s)
+    expect(works).toMatch(/\.k12cw__preview\s*\{[^}]*height:\s*104px/s)
     expect(works).not.toContain('.k12cw__card--expanded')
     expect(works).toContain('class="k12cw-detail-modal"')
   })

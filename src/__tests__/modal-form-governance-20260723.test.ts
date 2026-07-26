@@ -76,7 +76,7 @@ describe('2026-07-23 modal form governance', () => {
       /\.k12cw-modal__body\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0[^}]*box-sizing:\s*border-box[^}]*overflow:\s*auto/s,
     )
     expect(worksSource).toMatch(
-      /\.k12cw-detail-modal__body\s*\{[^}]*max-height:\s*62vh[^}]*overflow:\s*auto/s,
+      /\.k12cw-detail-modal__body\s*\{[^}]*max-height:\s*min\(68vh,\s*680px\)[^}]*overflow:\s*auto/s,
     )
   })
 })

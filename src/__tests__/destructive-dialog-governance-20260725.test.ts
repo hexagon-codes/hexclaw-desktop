@@ -4,10 +4,18 @@ import memorySource from '../views/MemoryView.vue?raw'
 import promptsSource from '../views/PromptsView.vue?raw'
 import tasksSource from '../views/TasksView.vue?raw'
 import mcpSource from '../views/McpView.vue?raw'
+import settingsSource from '../views/SettingsView.vue?raw'
+import connectionsSource from '../views/ConnectionsView.vue?raw'
+import profileSource from '../features/k12/views/K12ProfileForm.vue?raw'
+import knowledgeSource from '../views/KnowledgeView.vue?raw'
+import agentsSource from '../views/AgentsView.vue?raw'
+import channelsSource from '../components/channels/ConnectionChannelCards.vue?raw'
+import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '../config/destructive-actions'
 
 describe('global destructive-dialog governance (2026-07-25)', () => {
-  it('owns the five-second destructive cooldown in the shared dialog', () => {
-    expect(confirmSource).toContain('confirmDelayMs: 5_000')
+  it('owns the three-second destructive cooldown in the shared dialog', () => {
+    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(3_000)
+    expect(confirmSource).toContain('confirmDelayMs: DESTRUCTIVE_CONFIRM_COOLDOWN_MS')
     expect(confirmSource).toContain(
       'const delay = props.danger ? Math.max(0, props.confirmDelayMs) : 0',
     )
@@ -29,6 +37,12 @@ describe('global destructive-dialog governance (2026-07-25)', () => {
     ['PromptsView', promptsSource],
     ['TasksView', tasksSource],
     ['McpView', mcpSource],
+    ['SettingsView', settingsSource],
+    ['ConnectionsView', connectionsSource],
+    ['K12ProfileForm', profileSource],
+    ['KnowledgeView', knowledgeSource],
+    ['AgentsView', agentsSource],
+    ['ConnectionChannelCards', channelsSource],
   ])('%s uses ConfirmDialog instead of the browser-native confirm', (_name, source) => {
     expect(source).toContain("import ConfirmDialog from '@/components/common/ConfirmDialog.vue'")
     expect(source).not.toMatch(/\b(?:window\.)?confirm\s*\(/)

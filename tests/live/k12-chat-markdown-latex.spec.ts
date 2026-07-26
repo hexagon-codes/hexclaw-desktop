@@ -8,13 +8,14 @@ import {
   type TestInfo,
 } from '@playwright/test'
 import {
-  DESKTOP_USER_ID,
   assertCanonicalContent,
   assertLiveRuntime,
   assertRenderManifest,
   attachJSON,
   cleanupLiveSession,
+  cleanupLiveSessionsByTitle,
   envValue,
+  findLiveSessionByTitle,
   lastAssistantWithMarker,
   listHistory,
   liveAppURL,
@@ -23,6 +24,7 @@ import {
   liveSkipReason,
   metadataOf,
   sha256Text,
+  waitForLiveAssistant,
   type HistoryMessage,
   type MessageContentEvidence,
 } from './k12-live-helpers'
@@ -64,62 +66,6 @@ function liveCases(runID: string): ChatCase[] {
   ]
 }
 
-async function findSessionByTitle(request: APIRequestContext, title: string): Promise<string> {
-  let sessionID = ''
-  await expect
-    .poll(
-      async () => {
-        const payload = await liveJSON<{
-          sessions?: Array<{ id?: string; title?: string }>
-        }>(
-          request,
-          'GET',
-          `/api/v1/sessions?user_id=${encodeURIComponent(DESKTOP_USER_ID)}&limit=500`,
-        )
-        const matches = (payload.sessions ?? []).filter(
-          (session) => session.title === title && session.id,
-        )
-        if (matches.length === 1) sessionID = matches[0]!.id!
-        return matches.length
-      },
-      { message: 'the role deep-link must create exactly one isolated live session' },
-    )
-    .toBe(1)
-  return sessionID
-}
-
-async function cleanupSessionsByTitle(request: APIRequestContext, title: string): Promise<void> {
-  if (!title) return
-  const payload = await liveJSON<{
-    sessions?: Array<{ id?: string; title?: string }>
-  }>(request, 'GET', `/api/v1/sessions?user_id=${encodeURIComponent(DESKTOP_USER_ID)}&limit=500`)
-  for (const session of payload.sessions ?? []) {
-    if (session.id && session.title === title) await cleanupLiveSession(request, session.id)
-  }
-}
-
-async function waitForAssistant(
-  request: APIRequestContext,
-  sessionID: string,
-  marker: string,
-): Promise<HistoryMessage> {
-  let terminal: HistoryMessage | undefined
-  await expect
-    .poll(
-      async () => {
-        terminal = lastAssistantWithMarker(await listHistory(request, sessionID), marker)
-        return terminal?.id ?? ''
-      },
-      {
-        timeout: 240_000,
-        intervals: [500, 1_000, 2_000, 4_000],
-        message: `real model must persist a terminal assistant message for ${marker}`,
-      },
-    )
-    .not.toBe('')
-  return terminal!
-}
-
 async function sendLivePrompt(
   page: Page,
   request: APIRequestContext,
@@ -133,7 +79,7 @@ async function sendLivePrompt(
     page.getByTestId('chat-message-user').filter({ hasText: testCase.marker }).last(),
   ).toBeVisible()
 
-  const message = await waitForAssistant(request, sessionID, testCase.marker)
+  const message = await waitForLiveAssistant(request, sessionID, testCase.marker)
   expect(message.content).not.toMatch(/发送失败|模型未生成有效回复|模型未返回有效内容/)
   expect(
     (await listHistory(request, sessionID)).length,
@@ -266,7 +212,7 @@ test.describe.serial('LIVE K12 chat Markdown/LaTeX canonical rendering', () => {
 
   test.afterEach(async ({ request }) => {
     if (sessionID) await cleanupLiveSession(request, sessionID)
-    else if (sessionTitle) await cleanupSessionsByTitle(request, sessionTitle)
+    else if (sessionTitle) await cleanupLiveSessionsByTitle(request, sessionTitle)
     sessionID = ''
     sessionTitle = ''
   })
@@ -307,7 +253,7 @@ test.describe.serial('LIVE K12 chat Markdown/LaTeX canonical rendering', () => {
       page.locator('.k12enh-seg'),
       'the approved Agent must mount the real K12 conversation extension',
     ).toBeVisible()
-    sessionID = await findSessionByTitle(request, sessionTitle)
+    sessionID = await findLiveSessionByTitle(request, sessionTitle)
 
     const evidence: ChatEvidence[] = []
     for (const testCase of cases) {
