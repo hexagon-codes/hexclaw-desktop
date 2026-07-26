@@ -24,9 +24,10 @@ import type {
   ScenarioComposerChip,
   ScenarioComposerCommand,
   ScenarioComposerImagePayload,
-  ScenarioImageModelRoute,
+  ScenarioTextModelRoute,
 } from '@/shell/scenario/registry'
-import { hasImageTaskBinding } from '../image-task-binding'
+import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
+import { listImageTaskBindings } from '../image-task-binding'
 
 const props = defineProps<{
   agentId: string
@@ -36,12 +37,16 @@ const props = defineProps<{
   /** 通用 metadata（ChatView 透传）；年级由本组件解析后端 profile 键 k12.grade_term */
   metadata?: Record<string, string>
   descriptor: InstanceViewDescriptor
+  /** shell 在当前交互时展示的文本模型路由；K12 只透传给会产生异步文本任务的子视图。 */
+  modelRoute?: ScenarioTextModelRoute
   /** composer 改道进来的图片 dataURL（BUG-20260709 拍照发题不解题）：
    *  外壳把 ChatInput 拦下的粘贴/上传图片经此传入 → 自动打开识题护栏并识题；
    *  消费后 emit update:composerImage('') 复位，避免重复触发。通用 prop，零 shell 领域词。 */
   composerImage?: ScenarioComposerImagePayload | string
   /** 通用 shell 转发的结构化 composer action；领域 action id 只由本 feature 解释。 */
   composerAction?: ScenarioComposerAction
+  /** 当前消息窗口的 canonical ID 集合；不存在锚点的任务不投影到会话尾部。 */
+  messageIds?: string[]
 }>()
 
 // 年级 = agent metadata 的 k12.grade_term（后端 profile 契约）；K12 领域键只在 features/k12 解析
@@ -71,10 +76,23 @@ const emit = defineEmits<{
   (e: 'update:composerImage', v: string): void
   /** 会话内联槽是否有活动内容：shell 据此收起空会话占位并把新内容滚入可视区。 */
   (e: 'update:inlineActive', v: boolean): void
+  (e: 'contentUpdated'): void
   /** 请求 shell 操作通用输入框；K12 文案不进入 ChatInput/ChatView。 */
   (e: 'composerCommand', command: ScenarioComposerCommand): void
   /** 失败任务显式重提：只上交原始图片事实；shell 负责新消息身份与当前路由冻结。 */
   (e: 'scenarioImageAttempt', payload: ScenarioComposerImagePayload): void
+  (
+    e: 'update:sessionExecution',
+    payload: {
+      sessionId: string
+      executionId: string
+      state: string
+      automaticBudgetSeconds?: number
+      automaticStartedAt?: number
+      automaticDeadlineAt?: number
+      operationDeadlineAt?: number
+    },
+  ): void
 }>()
 
 const { t } = useI18n()
@@ -105,28 +123,28 @@ function panelIdOfKind(kind: string): string {
   const target = tabOfKind(kind)
   return `k12-enh-view-${target}`
 }
-const recognizeOpen = ref(false)
 const backupOpen = ref(false)
-const pendingRecognizeImage = ref('')
-const pendingRecognizeRequestId = ref('')
-const pendingRecognizeRoute = ref<ScenarioImageModelRoute>()
-const pendingRecognizeMessageIntent = ref('')
-// 消费 composerImage 后仍保留本 attempt 的不可变输入事实，供失败卡片显式重提。
-// request_id/route 仅描述旧 attempt；shell 接到事件后必须丢弃二者并重新冻结。
-const pendingRecognizePayload = ref<ScenarioComposerImagePayload>()
-// composerImage 是离散事件而非图片状态；同一 dataURL 重投也必须让护栏收到新一轮请求。
-const recognizeRequestSequence = ref(0)
-function closeRecognize() {
-  recognizeOpen.value = false
-  pendingRecognizeImage.value = ''
-  pendingRecognizeRequestId.value = ''
-  pendingRecognizeRoute.value = undefined
-  pendingRecognizeMessageIntent.value = ''
-  pendingRecognizePayload.value = undefined
+interface TaskShellProjection {
+  sourceMessageId: string
+  restoreDispatchId?: string
+  payload?: ScenarioComposerImagePayload
 }
-function retryRecognizeAsNewAttempt() {
-  if (!pendingRecognizePayload.value?.requestId?.trim()) return
-  emit('scenarioImageAttempt', pendingRecognizePayload.value)
+const taskShells = ref<TaskShellProjection[]>([])
+const visibleTaskShells = computed(() => {
+  if (!props.messageIds) return taskShells.value
+  const visible = new Set(props.messageIds)
+  return taskShells.value.filter((task) => visible.has(task.sourceMessageId))
+})
+function closeRecognize(task: TaskShellProjection) {
+  taskShells.value = taskShells.value.filter(
+    (candidate) =>
+      candidate.sourceMessageId !== task.sourceMessageId ||
+      candidate.restoreDispatchId !== task.restoreDispatchId,
+  )
+}
+function retryRecognizeAsNewAttempt(task: TaskShellProjection) {
+  if (!task.payload?.requestId?.trim()) return
+  emit('scenarioImageAttempt', task.payload)
 }
 
 // 头部零硬编码动作按钮（20260709）：辅导要点已内联进识题流（识题确认后自动出「这份作业的辅导要点」），
@@ -277,9 +295,9 @@ onMounted(async () => {
 // 学习档案与学情都接管消息区（外壳据 recordsActive 隐藏原生消息/输入）。
 watch(tab, (v) => emit('update:recordsActive', v !== 'chat'), { immediate: true })
 watch(
-  [recognizeOpen, tab],
-  ([open, currentTab]) => {
-    emit('update:inlineActive', open && currentTab === 'chat')
+  [visibleTaskShells, tab],
+  ([tasks, currentTab]) => {
+    emit('update:inlineActive', tasks.length > 0 && currentTab === 'chat')
   },
   { immediate: true },
 )
@@ -304,13 +322,8 @@ watch(
   () => {
     tab.value = tabFromRoute()
     recordsNavigation.value = { target: 'week', subject: '', status: 'all' }
-    recognizeOpen.value = false
+    taskShells.value = []
     backupOpen.value = false
-    pendingRecognizeImage.value = ''
-    pendingRecognizeRequestId.value = ''
-    pendingRecognizeRoute.value = undefined
-    pendingRecognizeMessageIntent.value = ''
-    pendingRecognizePayload.value = undefined
     closeCapabilityDialog(false)
     emit('update:composerImage', '')
   },
@@ -320,12 +333,14 @@ watch(
 watch(
   [() => props.sessionId, () => props.agentId],
   ([sessionId, agentId]) => {
-    const recoverable = hasImageTaskBinding(sessionId, agentId)
-    if (recoverable) {
+    const recoverable = listImageTaskBindings(sessionId, agentId)
+    if (recoverable.length) {
       tab.value = 'chat'
-      pendingRecognizeImage.value = ''
     }
-    recognizeOpen.value = recoverable
+    taskShells.value = recoverable.map((binding) => ({
+      sourceMessageId: binding.sourceMessageId!,
+      restoreDispatchId: binding.dispatchId,
+    }))
   },
   { immediate: true },
 )
@@ -343,26 +358,22 @@ watch(
   (img) => {
     if (!img) return
     // shell 注入的图片 attempt 具有会话所有权；同一 Agent 的其他会话也无权消费。
-    // 兼容 string 仅用于旧调用边界，新结构化 payload 必须 fail-closed。
+    // 没有持久消息身份就不存在合法锚点；旧 string 边界严格不再创建游离 TaskShell。
     if (
-      typeof img !== 'string'
-      && img.sourceSessionId
-      && img.sourceSessionId !== props.sessionId
+      typeof img === 'string' ||
+      !img.requestId?.trim() ||
+      (img.sourceSessionId && img.sourceSessionId !== props.sessionId)
     ) {
       emit('update:composerImage', '')
       return
     }
-    const dataUrl = typeof img === 'string' ? img : img.dataUrl
+    const dataUrl = img.dataUrl
     if (!dataUrl) return
     tab.value = 'chat'
-    recognizeRequestSequence.value += 1
-    recognizeOpen.value = true
-    pendingRecognizeImage.value = dataUrl
-    pendingRecognizeRequestId.value = typeof img === 'string' ? '' : img.requestId?.trim() || ''
-    pendingRecognizeRoute.value = typeof img === 'string' ? undefined : img.route
-    pendingRecognizeMessageIntent.value =
-      typeof img === 'string' ? '' : img.contextText?.trim() || ''
-    pendingRecognizePayload.value = typeof img === 'string' ? undefined : img
+    const sourceMessageId = img.requestId.trim()
+    if (!taskShells.value.some((task) => task.sourceMessageId === sourceMessageId)) {
+      taskShells.value = [...taskShells.value, { sourceMessageId, payload: img }]
+    }
     emit('update:composerImage', '')
   },
   { immediate: true },
@@ -408,8 +419,19 @@ watch(
        识题走独立 OCR 管道不依赖聊天模型 vision；面板头部 ✕ 收起。
        tab 用 v-show 保活（BUG-20260712-S）：v-if 会在切错题本时销毁面板 → 切回重挂载
        重新识题（丢已识结果+重复慢调用）+ 在途 tutoring-tips fetch 被 abort 且错误漏到错题本页。 -->
-    <Teleport v-if="recognizeOpen" defer to="#hc-chat-scenario-inline">
-      <div v-show="tab === 'chat'" class="k12enh-tutor" data-testid="k12-photo-assistant-message">
+    <Teleport
+      v-for="task in visibleTaskShells"
+      :key="`${task.sourceMessageId}:${task.restoreDispatchId || 'new'}`"
+      defer
+      :to="`#${scenarioMessageAnchorId(task.sourceMessageId)}`"
+    >
+      <div
+        v-show="tab === 'chat'"
+        class="k12enh-tutor"
+        data-testid="k12-photo-assistant-message"
+        :data-source-message-id="task.sourceMessageId"
+        :data-dispatch-id="task.restoreDispatchId || undefined"
+      >
         <div class="k12enh-tutor__avatar">
           <img :src="crabLogo" alt="" />
           <span />
@@ -419,18 +441,25 @@ watch(
           <div class="k12enh-tutor__bubble">
             <!-- agent-id=内部名（隔离键）——审计单-High-2：曾传 display name 写错孩子作用域 -->
             <RecognizeGuardPanel
-              :key="`${agentId}:${sessionId || ''}:${recognizeRequestSequence}`"
+              :key="`${agentId}:${sessionId || ''}:${task.sourceMessageId}:${task.restoreDispatchId || 'new'}`"
               :agent-id="agentId"
+              :agent-display-name="headerName"
               :session-id="sessionId"
               :grade="grade"
               :textbook="textbook"
               :textbooks="subjectTextbooks"
-              :initial-image="pendingRecognizeImage"
-              :request-id="pendingRecognizeRequestId"
-              :model-route="pendingRecognizeRoute"
-              :message-intent="pendingRecognizeMessageIntent"
-              @close="closeRecognize"
-              @retry="retryRecognizeAsNewAttempt"
+              :initial-image="task.payload?.dataUrl || ''"
+              :request-id="task.sourceMessageId"
+              :source-message-id="task.sourceMessageId"
+              :restore-dispatch-id="task.restoreDispatchId"
+              :model-route="task.payload?.route"
+              :display-provider="task.payload?.route?.provider || modelRoute?.provider"
+              :display-model="task.payload?.route?.model || modelRoute?.model"
+              :message-intent="task.payload?.contextText?.trim() || ''"
+              @close="closeRecognize(task)"
+              @retry="retryRecognizeAsNewAttempt(task)"
+              @content-updated="emit('contentUpdated')"
+              @update:execution-state="emit('update:sessionExecution', $event)"
             />
           </div>
         </div>
@@ -464,6 +493,7 @@ watch(
       :agent-name="agentName"
       :grade="grade"
       :textbook="textbook"
+      :model-route="modelRoute"
       :active="tab === 'records'"
       :target="recordsNavigation.target"
       :subject="recordsNavigation.subject"

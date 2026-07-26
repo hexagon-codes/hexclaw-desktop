@@ -49,6 +49,8 @@ vi.mock('@/api/k12', () => ({
 
 const correctQuestion = {
   problem_id: 'p-correct',
+  source_number_path: ['一', '1'],
+  display_label: '一. 1',
   question: '4÷0.5=8',
   canonical_markdown: '4\\div 0.5=8',
   knowledge_points: ['小数除法'],
@@ -61,6 +63,8 @@ const correctQuestion = {
 
 const wrongQuestion = {
   problem_id: 'p-wrong',
+  source_number_path: ['一', '2'],
+  display_label: '一. 2',
   question: '10×0.01=1',
   canonical_markdown: '10\\times 0.01=1',
   knowledge_points: ['小数乘法'],
@@ -260,7 +264,8 @@ describe('RecognizeGuardPanel × PhotoGradeOverlay · 自动终态结果', () =>
     }
     const correct = wrapper.get('.grade-card--correct')
     expect(correct.attributes('open')).toBeUndefined()
-    expect(correct.text()).toContain('第 1 题')
+    expect(correct.text()).toContain('一. 1')
+    expect(correct.text()).not.toContain('第 1 题')
   })
 
   it('旧服务没有批注图时才按可靠 bbox 做本地确定性叠加', async () => {

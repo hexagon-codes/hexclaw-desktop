@@ -153,6 +153,8 @@ export interface MistakeDTO {
   /** 抽查复验状态（§3.6：none/scheduled/passed/failed）。前端只消费 failed →
    *  详情「家长确认（复验未过）」事实标注；scheduled 不呈现（不打抽查标签）。 */
   spot_check_state?: string
+  /** 家长主观确认时间；不等于系统掌握证据。 */
+  parent_confirmed_at?: number
   /** 当前软归档事实；恢复后清空，历史审计保存在服务端归档快照。 */
   archived_reason?: string
   archived_at?: number
@@ -230,33 +232,70 @@ export function k12MarkMastered(req: MarkMasteredReq) {
   return apiPost<{ ok: boolean }>(`${BASE}/mark-mastered`, req)
 }
 
-// ── review/retry（再练一道，按错题出同知识点相似题·过 solve 验算链）──────────
-export interface ReviewRetryReq {
-  agent: string
-  record_id: string
-  grade: string
-}
-export interface ReviewRetryResp {
-  /** 相似题 + 解答全文（复制/兼容用；守答案遮罩） */
-  solution: string
-  /** solve 验算裁决：agree/disagree/unverifiable/out_of_scope */
-  verdict: string
-  /** 验算徽章文案 */
-  badge: string
-  /** 题答分离（2026-07-18 P2 清偿）：题面（先显给孩子做）；后端拆不出时为空 → 整段遮罩回退 */
-  question?: string
-  /** 解答 + 答案部分（默认遮罩，家长点按才揭示） */
-  answer?: string
-  /** 最终答案（装篮 expected_answer_markdown 用） */
-  expected_answer?: string
+// ── 错题一键生成练习（服务端持久化异步任务）────────────────────────
+export type MistakePracticeGenerationState =
+  | 'available'
+  | 'pending'
+  | 'joined'
+  | 'failed'
+  | 're_add'
+  | 'hidden'
+
+export interface MistakePracticeGenerationDTO {
+  state: MistakePracticeGenerationState
+  source_mistake_id: string
+  generation_job_id?: string
+  practice_set_id?: string
+  practice_item_id?: string
+  failure_reason?: string
+  source_mistake_summary?: string
+  item?: PracticeItemDTO
+  parent_confirmed?: boolean
+  evidence_mastered?: boolean
 }
 
-/** 「再练一道」：基于某错题出一道同知识点相似题，必过 solve 验算链（POST /review/retry）。
- *  signal：用户关弹窗时中止在途请求，不再空烧算力（BUG-20260712-#4）。 */
-export function k12ReviewRetry(req: ReviewRetryReq, signal?: AbortSignal) {
-  // 真机取证（BUG-20260712-#1）：retry = 生成变式题 + solve + code_exec 验算，实测 ~68s（正确性保证，
-  // 别让它变快）。默认 30s timeout 会腰斩 abort → 前端弹层被静默关，家长看着点了没反应。给足 120s。
-  return apiPost<ReviewRetryResp>(`${BASE}/review/retry`, req, { timeout: 120_000, signal })
+export interface StartMistakePracticeGenerationReq {
+  agent: string
+  /** 路径参数，不进入请求体。 */
+  record_id: string
+  idempotency_key: string
+  grade?: string
+  textbook?: string
+  difficulty?: 'same' | 'easier' | 'harder'
+  provider?: string
+  model?: string
+  source_session?: string
+}
+
+/**
+ * 一次点击只创建一个可恢复的服务端任务；生成、验证与装篮均由后端协调器完成。
+ * 显式路由必须成对冻结，避免界面所示模型与实际任务模型漂移。
+ */
+export function k12StartMistakePracticeGeneration(req: StartMistakePracticeGenerationReq) {
+  if (Boolean(req.provider) !== Boolean(req.model)) {
+    throw new Error('逐题出题模型路由必须同时包含供应商和模型')
+  }
+  const { record_id: recordID, ...body } = req
+  return apiPost<MistakePracticeGenerationDTO>(
+    `${BASE}/mistakes/${encodeURIComponent(recordID)}/practice-generation`,
+    body,
+  )
+}
+
+/** 列表与重启恢复只读服务端投影，不依赖组件内存成功标记。 */
+export function k12GetMistakePracticeGeneration(agent: string, recordID: string) {
+  return apiGet<MistakePracticeGenerationDTO>(
+    `${BASE}/mistakes/${encodeURIComponent(recordID)}/practice-generation`,
+    { agent },
+  )
+}
+
+/** 失败重试复用原 generation job / item，占位题不会重复创建。 */
+export function k12RetryMistakePracticeGeneration(agent: string, recordID: string) {
+  return apiPost<MistakePracticeGenerationDTO>(
+    `${BASE}/mistakes/${encodeURIComponent(recordID)}/practice-generation/retry`,
+    { agent },
+  )
 }
 
 // ── tutoring-tips（辅导要点，固定三段）─────────────────────────────
@@ -370,13 +409,26 @@ export interface TrendCounts {
   total: number
 }
 export interface WeakPoint {
+  subject: string
   knowledge_point: string
   count: number
+  /** 当前月新增错题内的占比；由服务端同一快照计算。 */
+  share: number
 }
 export interface InsightReportResp {
+  learner: string
+  grade_term: string
+  as_of: number
+  source_digest: string
+  source_record_ids: string[]
+  unscoped_source_count: number
+  review_week_start: number
+  review_week_end: number
   trend: TrendCounts
   weak_top3: WeakPoint[]
   month_new_mistakes: number
+  week_pending: number
+  practice_pending: number
   /** -1 = 分母为 0 的哨兵，前端显示「—」 */
   review_completion_rate: number
   /** 连续挫败知识点；可能为 JSON null */
@@ -390,10 +442,21 @@ export function k12InsightReport(agent: string) {
 }
 
 // ── profile（孩子档案，GET/PUT；存 agent metadata k12.*）──────
-/** 字段名对齐后端：grade_term / textbook_edition（非 grade/textbook） */
+export type K12TextbookSubject =
+  | 'math'
+  | 'chinese'
+  | 'english'
+  | 'science'
+  | 'information_technology'
+  | 'art'
+
+export type SubjectTextbooksDTO = Record<K12TextbookSubject, string>
+
+/** subject_textbooks 是唯一可写教材真相；textbook_edition 是服务端派生的数学只读镜像。 */
 export interface ProfileDTO {
   child_name: string
   grade_term: string
+  subject_textbooks: SubjectTextbooksDTO
   textbook_edition: string
 }
 export interface UpdateProfileReq {
@@ -406,6 +469,397 @@ export interface UpdateProfileReq {
 // 无需单独拉档案端点（审计 #8 冗余死绑定清理）。后端 GET /profile 仍存（其它用途/联调）。
 export function k12UpdateProfile(req: UpdateProfileReq) {
   return apiPut<ProfileDTO>(`${BASE}/profile`, req)
+}
+
+// ── weekly practice（本周该练；教材进度、三轨计划与同源输出）────────
+export interface CurriculumCatalogLessonDTO {
+  lesson_id: string
+  title: string
+  page_from: number
+  page_to: number
+}
+
+export interface CurriculumCatalogUnitDTO {
+  unit_id: string
+  title: string
+  page_from: number
+  page_to: number
+  lessons: CurriculumCatalogLessonDTO[]
+}
+
+export interface CurriculumCatalogDTO {
+  agent: string
+  subject: 'math'
+  textbook_binding_id: string
+  textbook_edition: string
+  textbook_version: string
+  title: string
+  volume: string
+  page_min: number
+  page_max: number
+  units: CurriculumCatalogUnitDTO[]
+}
+
+export type CurriculumPageVerificationStatus =
+  | 'not_requested'
+  | 'verified'
+  | 'partially_verified'
+  | 'rejected'
+
+export interface CurriculumProgressDTO {
+  progress_id: string
+  agent: string
+  subject: 'math'
+  revision: number
+  textbook_binding_id: string
+  textbook_edition: string
+  textbook_version: string
+  title: string
+  volume: string
+  unit_id: string
+  unit_title: string
+  lesson_id?: string
+  lesson_title?: string
+  requested_page_from?: number
+  requested_page_to?: number
+  verified_page_from?: number
+  verified_page_to?: number
+  page_verification_status: CurriculumPageVerificationStatus
+  segment_refs: string[]
+  evidence_source: string
+  confirmed_at: string
+  created_at: string
+  updated_at: string
+}
+
+export interface CurriculumProgressResp {
+  progress: CurriculumProgressDTO | null
+}
+
+export interface WeeklyPracticeSettingsDTO {
+  agent: string
+  revision: number
+  timezone: string
+  due_review_enabled: true
+  textbook_consolidation_enabled: boolean
+  arithmetic_warmup_enabled: boolean
+  arithmetic_minutes: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ProfileBundleProfileDTO extends ProfileDTO {
+  revision: number
+}
+
+export interface UpdateProfileBundleReq {
+  agent: string
+  idempotency_key: string
+  expected_profile_revision: number
+  expected_progress_revision: number
+  expected_settings_revision: number
+  profile: {
+    child_name: string
+    grade_term: string
+    subject_textbooks: SubjectTextbooksDTO
+  }
+  curriculum_progress: {
+    subject: 'math'
+    textbook_binding_id: string
+    volume: string
+    unit_id: string
+    lesson_id?: string
+    page_from?: number
+    page_to?: number
+    evidence_source: 'parent_confirmed'
+  }
+  weekly_practice_settings: {
+    timezone: string
+    textbook_consolidation_enabled: boolean
+    arithmetic_warmup_enabled: boolean
+    arithmetic_minutes: number
+  }
+}
+
+export interface ProfileBundleResp {
+  profile: ProfileBundleProfileDTO
+  curriculum_progress: CurriculumProgressDTO
+  weekly_practice_settings: WeeklyPracticeSettingsDTO
+  replayed: boolean
+}
+
+export type WeeklyPracticeSection =
+  | 'due_review'
+  | 'textbook_consolidation'
+  | 'arithmetic_warmup'
+export type WeeklyPracticeTrackStatus = 'ready' | 'disabled' | 'failed'
+export type WeeklyPracticePlanStatus = 'draft' | 'frozen' | 'archived' | 'expired_unused'
+export type WeeklyPracticeGenerationMethod =
+  | 'original'
+  | 'due_review_reuse'
+  | 'ai_variant'
+  | 'ai_generated'
+  | 'rule_generated'
+
+export interface WeeklyPracticeItemVerificationDTO {
+  status: 'verified' | 'failed'
+  evidence_refs: string[]
+  textbook_binding_id?: string
+  unit_id?: string
+  lesson_id?: string
+  verified_page_from?: number
+  verified_page_to?: number
+}
+
+export interface WeeklyPracticeItemDTO {
+  item_id: string
+  position: number
+  plan_section: WeeklyPracticeSection
+  source_kind: string
+  generation_method: WeeklyPracticeGenerationMethod
+  source_ref: string
+  verification: WeeklyPracticeItemVerificationDTO
+  prompt_markdown: string
+}
+
+export interface WeeklyPracticeTrackDTO {
+  plan_section: WeeklyPracticeSection
+  status: WeeklyPracticeTrackStatus
+  failure_message?: string
+  items: WeeklyPracticeItemDTO[]
+}
+
+export interface WeeklyPracticePlanDTO {
+  plan_id: string
+  agent: string
+  revision: number
+  iso_week_year: number
+  iso_week_number: number
+  timezone: string
+  week_start: string
+  week_end: string
+  local_start_date: string
+  local_end_date: string
+  status: WeeklyPracticePlanStatus
+  settings_revision: number
+  curriculum_progress_revision?: number
+  tracks: WeeklyPracticeTrackDTO[]
+  created_at: string
+  updated_at: string
+}
+
+export interface WeeklyPracticePlanResp {
+  plan: WeeklyPracticePlanDTO
+  replayed: boolean
+}
+
+export interface WeeklyPracticeCurrentResp {
+  plan: WeeklyPracticePlanDTO | null
+}
+
+export interface WeeklyPracticeSnapshotDTO {
+  snapshot_id: string
+  plan_id: string
+  plan_revision: number
+  agent: string
+  iso_week_year: number
+  iso_week_number: number
+  timezone: string
+  week_start: string
+  week_end: string
+  local_start_date: string
+  local_end_date: string
+  settings_revision: number
+  curriculum_progress_revision?: number
+  tracks: WeeklyPracticeTrackDTO[]
+  render_version: string
+  snapshot_digest: string
+  created_at: string
+}
+
+export interface WeeklyPracticeHistorySummaryDTO {
+  snapshot_id: string
+  plan_id: string
+  iso_week_year: number
+  iso_week_number: number
+  timezone: string
+  local_start_date: string
+  local_end_date: string
+  item_count: number
+  archived_at: string
+}
+
+export interface WeeklyPracticeHistoryResp {
+  items: WeeklyPracticeHistorySummaryDTO[]
+  next_cursor: string | null
+}
+
+export interface PrintableArtifactDTO {
+  artifact_id: string
+  source_kind: 'weekly_practice_snapshot'
+  source_ref: string
+  title: string
+  source_digest: string
+  format: string
+  render_contract_version: string
+  content_type: string
+  byte_digest: string
+  byte_size: number
+}
+
+export interface WeeklyPracticePrepareOutputResp {
+  snapshot: WeeklyPracticeSnapshotDTO
+  artifact: PrintableArtifactDTO
+}
+
+export interface WeeklyPracticeAttemptDTO {
+  attempt_id: string
+  snapshot_id: string
+  item_id: string
+  assessment_id: string
+  result: 'correct' | 'wrong' | 'needs_review'
+  verification_evidence: unknown
+  mistake_record_id?: string
+  review_scheduled: boolean
+  created_at: string
+}
+
+export interface WeeklyPracticeAttemptResp {
+  attempt: WeeklyPracticeAttemptDTO
+  replayed: boolean
+}
+
+export interface WeeklyPracticeSaveReceiptDTO {
+  save_receipt_id: string
+  plan_id: string
+  plan_revision: number
+  snapshot_id: string
+  practice_set_id: string
+  created_at: string
+}
+
+export interface WeeklyPracticeSaveResp {
+  receipt: WeeklyPracticeSaveReceiptDTO
+  replayed: boolean
+}
+
+export function k12GetCurriculumCatalog(
+  agent: string,
+  textbookEdition: string,
+  volume: string,
+) {
+  return apiGet<CurriculumCatalogDTO>(`${BASE}/curriculum-catalog`, {
+    agent,
+    subject: 'math',
+    textbook_edition: textbookEdition,
+    volume,
+  })
+}
+
+export function k12GetCurriculumProgress(agent: string) {
+  return apiGet<CurriculumProgressResp>(`${BASE}/curriculum-progress`, {
+    agent,
+    subject: 'math',
+  })
+}
+
+export function k12GetWeeklyPracticeSettings(agent: string) {
+  return apiGet<WeeklyPracticeSettingsDTO>(`${BASE}/weekly-practice/settings`, { agent })
+}
+
+export function k12UpdateProfileBundle(req: UpdateProfileBundleReq) {
+  return apiPut<ProfileBundleResp>(`${BASE}/profile-bundle`, req)
+}
+
+export function k12EnsureWeeklyPracticePlan(agent: string, idempotencyKey: string) {
+  return apiPost<WeeklyPracticePlanResp>(`${BASE}/weekly-practice/plans`, {
+    agent,
+    idempotency_key: idempotencyKey,
+  })
+}
+
+export function k12GetCurrentWeeklyPracticePlan(agent: string) {
+  return apiGet<WeeklyPracticeCurrentResp>(`${BASE}/weekly-practice/plans/current`, { agent })
+}
+
+export function k12GetWeeklyPracticeHistory(
+  agent: string,
+  cursor?: string,
+  limit = 20,
+) {
+  return apiGet<WeeklyPracticeHistoryResp>(`${BASE}/weekly-practice/plans/history`, {
+    agent,
+    cursor,
+    limit,
+  })
+}
+
+export function k12GetWeeklyPracticeSnapshot(agent: string, snapshotId: string) {
+  return apiGet<WeeklyPracticeSnapshotDTO>(
+    `${BASE}/weekly-practice/snapshots/${encodeURIComponent(snapshotId)}`,
+    { agent },
+  )
+}
+
+export function k12PrepareWeeklyPracticeOutput(
+  agent: string,
+  planId: string,
+  expectedRevision: number,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyPracticePrepareOutputResp>(
+    `${BASE}/weekly-practice/plans/${encodeURIComponent(planId)}/prepare-output`,
+    {
+      agent,
+      expected_revision: expectedRevision,
+      idempotency_key: idempotencyKey,
+    },
+  )
+}
+
+export function k12SendWeeklyPracticeSnapshot(
+  agent: string,
+  snapshotId: string,
+  idempotencyKey: string,
+) {
+  return apiPost<DeliveryBatchDTO>(
+    `${BASE}/weekly-practice/snapshots/${encodeURIComponent(snapshotId)}/send`,
+    { agent, idempotency_key: idempotencyKey },
+  )
+}
+
+export function k12SubmitWeeklyPracticeAttempt(
+  agent: string,
+  snapshotId: string,
+  itemId: string,
+  studentAnswer: string,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyPracticeAttemptResp>(
+    `${BASE}/weekly-practice/snapshots/${encodeURIComponent(snapshotId)}/attempts`,
+    {
+      agent,
+      item_id: itemId,
+      student_answer: studentAnswer,
+      idempotency_key: idempotencyKey,
+    },
+  )
+}
+
+export function k12SaveWeeklyPracticePlanToPracticeSet(
+  agent: string,
+  planId: string,
+  expectedRevision: number,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyPracticeSaveResp>(
+    `${BASE}/weekly-practice/plans/${encodeURIComponent(planId)}/save-to-practice-set`,
+    {
+      agent,
+      expected_revision: expectedRevision,
+      idempotency_key: idempotencyKey,
+    },
+  )
 }
 
 // ── cold-start（冷启动首拍：按识题知识点倒查推断年级建档，PRD §3.1.4-4）──────
@@ -554,6 +1008,8 @@ export interface HexbakProblem {
   problem_kind: 'standalone' | 'compound_parent' | 'subproblem'
   parent_problem_id?: string
   subproblem_no?: string
+  source_number_path?: string[]
+  display_label?: string
   subject?: string
   stem_raw: string
   stem_markdown: string
@@ -751,6 +1207,10 @@ export interface RecognizedQuestion {
   problem_kind?: ProblemKind
   parent_problem_id?: string
   subproblem_no?: string
+  /** 原卷由大题到当前题的不可变题号 token；缺失时不得按数组位置补号。 */
+  source_number_path?: string[]
+  /** 原卷题号的冻结展示值。 */
+  display_label?: string
   page_asset_id?: string
   /** compound_parent 无 Attempt；standalone/subproblem 各自拥有独立 Attempt。 */
   attempt_id?: string
@@ -908,6 +1368,78 @@ export interface ImageTaskHomeworkProjectionDTO {
   confirmation_state: 'pending' | 'confirmed'
   anchor_state: 'pending' | 'located' | 'degraded'
   recognition?: ImageTaskHomeworkRecognition
+  structure_version?: number
+  problems?: ImageTaskProblemProgressDTO[]
+  coverage?: ImageTaskCoverageDTO
+  projection_revision?: number
+  final_artifact?: Record<string, unknown> | null
+}
+
+export interface ImageTaskProblemProgressDTO {
+  problem_id: string
+  parent_problem_id?: string
+  dependency_group_id?: string
+  source_number_path: string[]
+  display_label: string
+  source_state: string
+  anchor_state: string
+  operation_state: string
+  disposition_state: string
+  result_projection: Record<string, unknown> | null
+  published_revision: number
+  input_revision?: number
+  command_available?: boolean
+}
+
+export interface ImageTaskCoverageDTO {
+  state: 'full' | 'with_skips' | 'incomplete'
+  total: number
+  processed: number
+  skipped: number
+}
+
+interface ImageTaskProblemSourceActionBaseReq {
+  structure_version: number
+  expected_input_revision: number
+}
+
+export type ImageTaskProblemSourceActionReq =
+  | (ImageTaskProblemSourceActionBaseReq & {
+      action: 'correct_text'
+      payload: {
+        question_canonical_markdown?: string
+        answer_canonical_markdown?: string
+      }
+    })
+  | (ImageTaskProblemSourceActionBaseReq & {
+      action: 'select_region'
+      payload: {
+        page_asset_id: string
+        region: { x: number; y: number; width: number; height: number }
+      }
+    })
+  | (ImageTaskProblemSourceActionBaseReq & {
+      action: 'retake'
+      payload: { page_asset_id: string }
+    })
+  | (ImageTaskProblemSourceActionBaseReq & {
+      action: 'skip' | 'resume'
+      payload: Record<string, never>
+    })
+
+export interface ImageTaskProblemSourceActionResp {
+  command_receipt_id: string
+  dispatch_id: string
+  problem_id: string
+  action: ImageTaskProblemSourceActionReq['action']
+  structure_version: number
+  input_revision: number
+  progressive_snapshot: {
+    structure_version: number
+    snapshot_revision: number
+    problem_progress: ImageTaskProblemProgressDTO[]
+    coverage: ImageTaskCoverageDTO
+  }
 }
 
 export interface CreativeConflictDTO {
@@ -959,6 +1491,13 @@ export interface ImageTaskDispatchDTO {
   dispatch_id: string
   task_intent: ImageTaskIntent
   status: ImageTaskDispatchStatus
+  /** 服务端权威动作能力；缺失按 false 处理，客户端不得自行推断为可重试。 */
+  retryable?: boolean
+  automatic_budget_seconds?: number
+  automatic_started_at?: number
+  automatic_deadline_at?: number
+  automatic_remaining_seconds?: number
+  operation_deadline_at?: number
   intent_evidence: string[]
   intent_confidence: number
   confirmation_candidates: ImageTaskIntent[]
@@ -1070,6 +1609,8 @@ export interface ImageTaskStructuredFeedbackDTO {
 }
 
 export interface ImageTaskCreativeFeedbackDTO {
+  /** Same durable latest generation exposed by the CreativeWork detail/list DTO. */
+  generation_id: string
   structured_feedback: ImageTaskStructuredFeedbackDTO
   /** Stable renderer field; must equal structured_feedback.projection_markdown. */
   projection_markdown: string
@@ -1282,6 +1823,8 @@ function assertImageTaskRecognizedQuestion(
     [
       'parent_problem_id',
       'subproblem_no',
+      'source_number_path',
+      'display_label',
       'attempt_id',
       'answer_raw_transcription',
       'answer_canonical_markdown',
@@ -1325,6 +1868,18 @@ function assertImageTaskRecognizedQuestion(
     if (question[key] !== undefined && typeof question[key] !== 'string') {
       throw new Error(message)
     }
+  }
+  if (
+    question.source_number_path !== undefined &&
+    !isImageTaskStringArray(question.source_number_path)
+  ) {
+    throw new Error(message)
+  }
+  if (
+    question.display_label !== undefined &&
+    typeof question.display_label !== 'string'
+  ) {
+    throw new Error(message)
   }
   if (
     question.recognition_confidence !== undefined &&
@@ -1513,7 +2068,14 @@ function assertImageTaskHomeworkProjection(value: ImageTaskWireRecord) {
   assertImageTaskKeys(
     value,
     ['kind', 'stage', 'confirmation_state', 'anchor_state'],
-    ['recognition'],
+    [
+      'recognition',
+      'structure_version',
+      'problems',
+      'coverage',
+      'projection_revision',
+      'final_artifact',
+    ],
     message,
   )
   if (
@@ -1537,6 +2099,180 @@ function assertImageTaskHomeworkProjection(value: ImageTaskWireRecord) {
       assertImageTaskRecognizedQuestion(question, message)
     }
   }
+
+  const progressiveFields = [
+    'structure_version',
+    'problems',
+    'coverage',
+    'projection_revision',
+    'final_artifact',
+  ] as const
+  const hasProgressiveSnapshot = progressiveFields.some((key) => value[key] !== undefined)
+  if (!hasProgressiveSnapshot) return
+  if (!progressiveFields.every((key) => value[key] !== undefined)) {
+    throw new Error(message)
+  }
+  if (!Number.isInteger(value.structure_version) || (value.structure_version as number) < 1) {
+    throw new Error(message)
+  }
+  if (!Array.isArray(value.problems)) {
+    throw new Error(message)
+  }
+  for (const problem of value.problems) {
+    assertImageTaskProblemProgress(problem, message)
+  }
+  assertImageTaskCoverage(value.coverage, message)
+  if (
+    !Number.isInteger(value.projection_revision)
+    || (value.projection_revision as number) < 0
+  ) {
+    throw new Error(message)
+  }
+  if (value.final_artifact !== null) {
+    imageTaskWireRecord(value.final_artifact, message)
+  }
+}
+
+function assertImageTaskProblemProgress(value: unknown, message: string) {
+  const problem = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    problem,
+    [
+      'problem_id',
+      'source_number_path',
+      'display_label',
+      'source_state',
+      'anchor_state',
+      'operation_state',
+      'disposition_state',
+      'result_projection',
+      'published_revision',
+    ],
+    [
+      'parent_problem_id',
+      'dependency_group_id',
+      'input_revision',
+      'command_available',
+    ],
+    message,
+  )
+  if (
+    typeof problem.problem_id !== 'string'
+    || !problem.problem_id.trim()
+    || !Array.isArray(problem.source_number_path)
+    || !problem.source_number_path.every(
+      (part) => typeof part === 'string' && part.trim().length > 0,
+    )
+    || typeof problem.display_label !== 'string'
+    || !problem.display_label.trim()
+    || typeof problem.source_state !== 'string'
+    || !problem.source_state.trim()
+    || typeof problem.anchor_state !== 'string'
+    || !problem.anchor_state.trim()
+    || typeof problem.operation_state !== 'string'
+    || !problem.operation_state.trim()
+    || typeof problem.disposition_state !== 'string'
+    || !problem.disposition_state.trim()
+    || !Number.isInteger(problem.published_revision)
+    || (problem.published_revision as number) < 0
+    || (problem.parent_problem_id !== undefined
+      && (typeof problem.parent_problem_id !== 'string'
+        || !problem.parent_problem_id.trim()))
+    || (problem.dependency_group_id !== undefined
+      && (typeof problem.dependency_group_id !== 'string'
+        || !problem.dependency_group_id.trim()))
+    || (problem.input_revision !== undefined
+      && (!Number.isInteger(problem.input_revision)
+        || (problem.input_revision as number) < 0))
+    || (problem.command_available !== undefined
+      && typeof problem.command_available !== 'boolean')
+  ) {
+    throw new Error(message)
+  }
+  if (problem.result_projection !== null) {
+    imageTaskWireRecord(problem.result_projection, message)
+  }
+}
+
+function assertImageTaskCoverage(value: unknown, message: string) {
+  const coverage = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    coverage,
+    ['state', 'total', 'processed', 'skipped'],
+    [],
+    message,
+  )
+  if (
+    !['full', 'with_skips', 'incomplete'].includes(String(coverage.state))
+    || !Number.isInteger(coverage.total)
+    || (coverage.total as number) < 0
+    || !Number.isInteger(coverage.processed)
+    || (coverage.processed as number) < 0
+    || !Number.isInteger(coverage.skipped)
+    || (coverage.skipped as number) < 0
+    || (coverage.processed as number) + (coverage.skipped as number)
+      > (coverage.total as number)
+  ) {
+    throw new Error(message)
+  }
+}
+
+function assertImageTaskProblemSourceActionResp(
+  value: unknown,
+  expected: {
+    dispatchId: string
+    problemId: string
+    action: ImageTaskProblemSourceActionReq['action']
+  },
+): asserts value is ImageTaskProblemSourceActionResp {
+  const message = 'invalid image task problem source-action response'
+  const response = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    response,
+    [
+      'command_receipt_id',
+      'dispatch_id',
+      'problem_id',
+      'action',
+      'structure_version',
+      'input_revision',
+      'progressive_snapshot',
+    ],
+    [],
+    message,
+  )
+  if (
+    typeof response.command_receipt_id !== 'string'
+    || !response.command_receipt_id.trim()
+    || response.dispatch_id !== expected.dispatchId
+    || response.problem_id !== expected.problemId
+    || response.action !== expected.action
+    || !Number.isInteger(response.structure_version)
+    || (response.structure_version as number) < 1
+    || !Number.isInteger(response.input_revision)
+    || (response.input_revision as number) < 1
+  ) {
+    throw new Error(message)
+  }
+  const snapshot = imageTaskWireRecord(response.progressive_snapshot, message)
+  assertImageTaskKeys(
+    snapshot,
+    ['structure_version', 'snapshot_revision', 'problem_progress', 'coverage'],
+    [],
+    message,
+  )
+  if (
+    snapshot.structure_version !== response.structure_version
+    || !Number.isInteger(snapshot.snapshot_revision)
+    || (snapshot.snapshot_revision as number) < 0
+    || !Array.isArray(snapshot.problem_progress)
+  ) {
+    throw new Error(message)
+  }
+  for (const problem of snapshot.problem_progress) {
+    assertImageTaskProblemProgress(problem, message)
+  }
+  assertImageTaskCoverage(snapshot.coverage, message)
 }
 
 function assertImageTaskCreativeProjection(value: ImageTaskWireRecord) {
@@ -1696,7 +2432,16 @@ function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDisp
       'created_at',
       'updated_at',
     ],
-    ['target', 'target_projection'],
+    [
+      'target',
+      'target_projection',
+      'retryable',
+      'automatic_budget_seconds',
+      'automatic_started_at',
+      'automatic_deadline_at',
+      'automatic_remaining_seconds',
+      'operation_deadline_at',
+    ],
     message,
   )
   if (
@@ -1704,6 +2449,7 @@ function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDisp
     !dispatch.dispatch_id.trim() ||
     !IMAGE_TASK_INTENTS.has(dispatch.task_intent as ImageTaskIntent) ||
     !IMAGE_TASK_STATUSES.has(dispatch.status as ImageTaskDispatchStatus) ||
+    (dispatch.retryable !== undefined && typeof dispatch.retryable !== 'boolean') ||
     !isImageTaskStringArray(dispatch.intent_evidence) ||
     typeof dispatch.intent_confidence !== 'number' ||
     !Number.isFinite(dispatch.intent_confidence) ||
@@ -1712,6 +2458,21 @@ function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDisp
       IMAGE_TASK_INTENTS.has(candidate as ImageTaskIntent),
     ) ||
     !Number.isInteger(dispatch.version) ||
+    (dispatch.automatic_budget_seconds !== undefined &&
+      (!Number.isInteger(dispatch.automatic_budget_seconds) ||
+        dispatch.automatic_budget_seconds < 0)) ||
+    (dispatch.automatic_started_at !== undefined &&
+      (!Number.isInteger(dispatch.automatic_started_at) ||
+        dispatch.automatic_started_at < 0)) ||
+    (dispatch.automatic_deadline_at !== undefined &&
+      (!Number.isInteger(dispatch.automatic_deadline_at) ||
+        dispatch.automatic_deadline_at < 0)) ||
+    (dispatch.automatic_remaining_seconds !== undefined &&
+      (!Number.isInteger(dispatch.automatic_remaining_seconds) ||
+        dispatch.automatic_remaining_seconds < 0)) ||
+    (dispatch.operation_deadline_at !== undefined &&
+      (!Number.isInteger(dispatch.operation_deadline_at) ||
+        dispatch.operation_deadline_at < 0)) ||
     typeof dispatch.created_at !== 'number' ||
     !Number.isFinite(dispatch.created_at) ||
     typeof dispatch.updated_at !== 'number' ||
@@ -1815,9 +2576,16 @@ function assertImageTaskResultResp(value: unknown): asserts value is ImageTaskRe
   }
   if (payload.feedback !== undefined) {
     const feedback = imageTaskWireRecord(payload.feedback, message)
-    assertImageTaskKeys(feedback, ['structured_feedback', 'projection_markdown'], [], message)
+    assertImageTaskKeys(
+      feedback,
+      ['generation_id', 'structured_feedback', 'projection_markdown'],
+      [],
+      message,
+    )
     assertImageTaskStructuredFeedback(feedback.structured_feedback, message)
     if (
+      typeof feedback.generation_id !== 'string' ||
+      !feedback.generation_id.trim() ||
       typeof feedback.projection_markdown !== 'string' ||
       !feedback.projection_markdown.trim() ||
       feedback.projection_markdown !==
@@ -1901,6 +2669,33 @@ export async function k12CancelImageTask(
     { timeout: 60_000, signal },
   )
   assertImageTaskDispatchResp(response)
+  return response
+}
+
+/** 提交题目级来源命令；身份只由服务端 scope/持久 dispatch 解析。 */
+export async function k12SubmitImageTaskProblemSourceAction(
+  dispatchId: string,
+  problemId: string,
+  req: ImageTaskProblemSourceActionReq,
+  idempotencyKey: string,
+  signal?: AbortSignal,
+) {
+  const key = idempotencyKey.trim()
+  if (!key) throw new Error('Idempotency-Key is required')
+  const response = await apiPost<unknown>(
+    `${BASE}/image-tasks/${encodeURIComponent(dispatchId)}/problems/${encodeURIComponent(problemId)}/source-actions`,
+    req,
+    {
+      timeout: 60_000,
+      signal,
+      headers: { 'Idempotency-Key': key },
+    },
+  )
+  assertImageTaskProblemSourceActionResp(response, {
+    dispatchId,
+    problemId,
+    action: req.action,
+  })
   return response
 }
 
@@ -2008,6 +2803,23 @@ export type PracticeStatus =
   | 'closed'
   | 'cancelled'
 export type PracticeItemStatus = 'pending' | 'verified' | 'needs_review' | 'rejected' | 'stale'
+export type PracticeResultEvidence = 'system_verified' | 'human_confirmed'
+export type PracticeRegradeStatus =
+  | 'queued'
+  | 'running'
+  | 'needs_review'
+  | 'completed'
+  | 'failed_retryable'
+  | 'failed_terminal'
+  | 'outcome_unknown'
+export interface PracticeRegradeRouteSnapshot {
+  provider: string
+  model: string
+  route: string
+  capability?: string
+  timeout_ms?: number
+  fallback?: string
+}
 /** 装篮来源（PRD §5.5 added_via）：装篮五入口的 item 级记录 */
 export type PracticeAddedVia = 'weekly' | 'custom' | 'single_variant' | 'manual' | 'accumulation'
 export interface PracticeItemDTO {
@@ -2033,6 +2845,8 @@ export interface PracticeItemDTO {
   actual_difficulty?: CustomPaperDifficulty
   /** 逐题复批结论；缺省表示尚未记录。 */
   result_correct?: boolean
+  /** 系统独立核验 / 家长手工兜底；二者不得混同为同等级掌握证据。 */
+  result_evidence?: PracticeResultEvidence
 }
 export interface PracticeReturnAssetDTO {
   return_id: string
@@ -2040,6 +2854,17 @@ export interface PracticeReturnAssetDTO {
   item_ids: string[]
   /** 服务端 Unix 秒。 */
   returned_at: number
+  /** 自动复批的耐久任务及其冻结模型路由。 */
+  regrade_job_id?: string
+  regrade_status?: PracticeRegradeStatus
+  route_snapshot?: PracticeRegradeRouteSnapshot
+  /** 自动批注后的原图与家长讲题说明。 */
+  annotated_asset_id?: string
+  result_markdown?: string
+  /** 只有这些真实不确定项进入最小人工核对。 */
+  unresolved_item_ids?: string[]
+  /** 服务端 Unix 秒。 */
+  regrade_updated_at?: number
 }
 export interface PracticeSetDTO {
   record_id: string
@@ -2126,6 +2951,8 @@ export interface CustomPaperReq {
   textbook: string
   grade?: string
   source_session?: string
+  provider?: string
+  model?: string
 }
 
 export interface CustomPaperItemDTO {
@@ -2159,6 +2986,9 @@ export function k12GenerateCustomPaper(req: CustomPaperReq) {
   if (!['same', 'easier', 'harder'].includes(req.difficulty)) throw new Error('组卷难度无效')
   if (!['all', 5, 10].includes(req.total)) throw new Error('总题量只能是全部、5 或 10')
   if (!req.textbook.trim()) throw new Error('请先确认教材版本')
+  const hasProvider = !!req.provider?.trim()
+  const hasModel = !!req.model?.trim()
+  if (hasProvider !== hasModel) throw new Error('组卷模型路由必须同时包含供应商和模型')
   return apiPost<CustomPaperResp>(`${BASE}/practice-sets/custom-paper`, req)
 }
 /** 篮内移除某题（只出篮，不影响错题状态与复习安排） */
@@ -2249,7 +3079,11 @@ export interface NativePrintCommitReq {
   printer_snapshot: Record<string, unknown>
 }
 
-export type GenericPrintSourceKind = 'tutoring_tips' | 'practice_question' | 'practice_answer'
+export type GenericPrintSourceKind =
+  | 'tutoring_tips'
+  | 'practice_question'
+  | 'practice_answer'
+  | 'weekly_practice_snapshot'
 
 export interface PrepareGenericPrintJobReq {
   agent: string
@@ -2308,6 +3142,27 @@ export function k12PrepareGenericPrintJob(req: PrepareGenericPrintJobReq) {
     throw new Error('打印实例、幂等键与不可变 Artifact 内容不能为空')
   }
   return apiPost<GenericPrintJobResp>(`${BASE}/print-jobs`, req)
+}
+
+export interface PrepareArtifactPrintJobReq {
+  agent: string
+  idempotency_key: string
+  artifact_id: string
+}
+
+export function k12PrepareArtifactPrintJob(req: PrepareArtifactPrintJobReq) {
+  if (!req.agent.trim() || !req.idempotency_key.trim() || !req.artifact_id.trim()) {
+    throw new Error('打印实例、幂等键与 Artifact 不能为空')
+  }
+  return apiPost<GenericPrintJobResp>(`${BASE}/print-jobs`, req)
+}
+
+export function k12GetPrintArtifactContent(agent: string, artifactId: string) {
+  return api<Blob>(`${BASE}/print-artifacts/${encodeURIComponent(artifactId)}/content`, {
+    method: 'GET',
+    query: { agent },
+    responseType: 'blob',
+  })
 }
 
 export function k12GetGenericPrintArtifact(agent: string, printJobId: string) {

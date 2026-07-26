@@ -166,6 +166,8 @@ function mountRestoredPanel() {
       agentId: 'mingming',
       grade: '五年级上',
       sessionId: 'session-1',
+      sourceMessageId: 'message-1',
+      restoreDispatchId: 'dispatch-unknown',
     },
     global: { plugins: [createPinia(), i18n()] },
     attachTo: document.body,
@@ -356,10 +358,8 @@ describe('K12 整卷批改 recovering 恢复语义', () => {
 
   it('跨孩子 binding fail-closed，不查询其他孩子的图片任务', async () => {
     bind('other-child')
-    const wrapper = mountRestoredPanel()
-    await flushPromises()
+    await expect(useK12Store().restoreImageTask('mingming', 'session-1')).resolves.toBeNull()
     expect(h.getTask).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-testid="recognize-recovering"]').exists()).toBe(false)
   })
 
   it('组件卸载中止活动恢复轮询，不留下后台 GET', async () => {

@@ -43,6 +43,8 @@ vi.mock('@/api/k12', () => ({
 
 const correctQuestion = {
   problem_id: 'p-correct',
+  source_number_path: ['一', '1'],
+  display_label: '一. 1',
   question: '4÷0.5=',
   canonical_markdown: '4\\div 0.5=',
   knowledge_points: ['小数除法'],
@@ -53,6 +55,8 @@ const correctQuestion = {
 
 const wrongQuestion = {
   problem_id: 'p-wrong',
+  source_number_path: ['一', '2'],
+  display_label: '一. 2',
   question: '10×0.01=',
   canonical_markdown: '10\\times 0.01=',
   knowledge_points: ['小数乘法'],
@@ -214,7 +218,8 @@ describe('completed_homework single annotated result surface', () => {
 
     const correct = resultSurface.get('.grade-card--correct')
     expect(correct.attributes('open')).toBeUndefined()
-    expect(correct.text()).toContain('第 1 题')
+    expect(correct.text()).toContain('一. 1')
+    expect(correct.text()).not.toContain('第 1 题')
     expect(correct.text()).toContain('0.5')
   })
 })

@@ -2,15 +2,23 @@
 /**
  * 作业辅导助手建档表单（features/k12）· M1-2 · PRD §5.2.2。
  *
- * 采集 称呼/年级学期/分科教材 → agents.metadata（六科为 Desktop 兼容暂存，数学同步 legacy /profile 字段）。
+ * 采集 称呼/年级学期/分科教材；创建由 registerAgent 原子初始化，编辑由 profile-bundle 组合写。
  * 显示名自动生成「{称呼}的辅导助手 · {年级}」；provider/model 留空=跟随全局默认强推理模型。
  * 回归锁：不按学段×学科拆分老师卡——一张模板一份实例，多孩靠多实例结构隔离。
  */
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { nanoid } from 'nanoid'
 import { registerAgent, updateAgent, unregisterAgent } from '@/api/agents'
-import { k12UpdateProfile } from '@/api/k12'
+import {
+  k12GetCurriculumCatalog,
+  k12GetCurriculumProgress,
+  k12GetWeeklyPracticeSettings,
+  k12UpdateProfileBundle,
+  type CurriculumCatalogDTO,
+  type CurriculumProgressDTO,
+  type WeeklyPracticeSettingsDTO,
+} from '@/api/k12'
 import { useK12Store } from '../store'
 import { useAgentsStore } from '@/stores/agents'
 import { useSettingsStore } from '@/stores/settings'
@@ -18,6 +26,7 @@ import { useToast } from '@/composables/useToast'
 import HcSelect from '@/components/common/HcSelect.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import {
+  FUTURE_GRADE_OPTIONS,
   PRIMARY_GRADES,
   SEMESTERS,
   gradeShort,
@@ -41,6 +50,8 @@ const props = defineProps<{
     provider?: string
     model?: string
   }
+  focusMathProgress?: boolean
+  enableTextbookConsolidation?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -129,6 +140,162 @@ const textbookEditions = reactive<Record<TextbookSubject, string>>(
 const textbook = computed(() => textbookEditions.math)
 const submitting = ref(false)
 const error = ref('')
+const mathProgressSection = ref<HTMLElement | null>(null)
+const curriculumCatalog = ref<CurriculumCatalogDTO | null>(null)
+const curriculumProgress = ref<CurriculumProgressDTO | null>(null)
+const curriculumLoading = ref(false)
+const curriculumReady = ref(!isEdit.value)
+const curriculumError = ref('')
+const volume = ref(`${gradeLevel.value}${semester.value}册`)
+const unitID = ref('')
+const lessonID = ref('')
+const pageFrom = ref<number | ''>('')
+const pageTo = ref<number | ''>('')
+const weeklySettings = ref<WeeklyPracticeSettingsDTO>({
+  agent: props.agent?.name ?? '',
+  revision: 0,
+  timezone: 'Asia/Shanghai',
+  due_review_enabled: true,
+  textbook_consolidation_enabled: false,
+  arithmetic_warmup_enabled: false,
+  arithmetic_minutes: 2,
+  created_at: '',
+  updated_at: '',
+})
+const profileBundleKey = ref('')
+
+const volumeOptions = computed(() =>
+  SEMESTERS.map((term) => {
+    const value = `${gradeLevel.value}${term}册`
+    return { value, label: value }
+  }),
+)
+const unitOptions = computed(() =>
+  (curriculumCatalog.value?.units ?? []).map((unit) => ({
+    value: unit.unit_id,
+    label: unit.title,
+  })),
+)
+const lessonOptions = computed(() => {
+  const lessons =
+    curriculumCatalog.value?.units.find((unit) => unit.unit_id === unitID.value)?.lessons ?? []
+  return [
+    { value: '', label: '选择课时（选填）' },
+    ...lessons.map((lesson) => ({ value: lesson.lesson_id, label: lesson.title })),
+  ]
+})
+const arithmeticMinuteOptions = [1, 2, 3, 4, 5].map((value) => ({
+  value: String(value),
+  label: `${value} 分钟`,
+}))
+const arithmeticMinutesModel = computed({
+  get: () => String(weeklySettings.value.arithmetic_minutes),
+  set: (value: string) => {
+    weeklySettings.value.arithmetic_minutes = Number(value)
+  },
+})
+
+function newCommandKey(prefix: string): string {
+  const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
+  return `desktop-${prefix}:${props.agent?.name ?? 'new'}:${nonce}`
+}
+
+async function loadCurriculumCatalog() {
+  if (!props.agent?.name || !textbook.value || !volume.value) return
+  curriculumLoading.value = true
+  curriculumError.value = ''
+  try {
+    curriculumCatalog.value = await k12GetCurriculumCatalog(
+      props.agent.name,
+      textbook.value,
+      volume.value,
+    )
+    if (
+      unitID.value &&
+      !curriculumCatalog.value.units.some((unit) => unit.unit_id === unitID.value)
+    ) {
+      unitID.value = ''
+      lessonID.value = ''
+    }
+  } catch (cause) {
+    curriculumCatalog.value = null
+    curriculumError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    curriculumLoading.value = false
+  }
+}
+
+async function loadCurriculumProjection() {
+  if (!props.agent?.name) return
+  curriculumLoading.value = true
+  curriculumReady.value = false
+  curriculumError.value = ''
+  try {
+    const [progressResp, settingsResp] = await Promise.all([
+      k12GetCurriculumProgress(props.agent.name),
+      k12GetWeeklyPracticeSettings(props.agent.name),
+    ])
+    curriculumProgress.value = progressResp.progress
+    weeklySettings.value = settingsResp
+    if (progressResp.progress) {
+      textbookEditions.math = progressResp.progress.textbook_edition
+      volume.value = progressResp.progress.volume
+      unitID.value = progressResp.progress.unit_id
+      lessonID.value = progressResp.progress.lesson_id ?? ''
+      pageFrom.value = progressResp.progress.requested_page_from ?? ''
+      pageTo.value = progressResp.progress.requested_page_to ?? ''
+    }
+    if (props.enableTextbookConsolidation) {
+      weeklySettings.value.textbook_consolidation_enabled = true
+    }
+    await loadCurriculumCatalog()
+    curriculumReady.value = true
+    if (props.focusMathProgress) {
+      await nextTick()
+      mathProgressSection.value?.focus()
+    }
+  } catch (cause) {
+    curriculumError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    curriculumLoading.value = false
+  }
+}
+
+watch([gradeLevel, semester], () => {
+  volume.value = `${gradeLevel.value}${semester.value}册`
+})
+watch([textbook, volume], () => {
+  profileBundleKey.value = ''
+  if (isEdit.value && curriculumReady.value) void loadCurriculumCatalog()
+})
+watch(unitID, () => {
+  profileBundleKey.value = ''
+  if (
+    lessonID.value &&
+    !lessonOptions.value.some((option) => option.value === lessonID.value)
+  ) {
+    lessonID.value = ''
+  }
+})
+watch(
+  [
+    childName,
+    grade,
+    lessonID,
+    pageFrom,
+    pageTo,
+    () => weeklySettings.value.timezone,
+    () => weeklySettings.value.textbook_consolidation_enabled,
+    () => weeklySettings.value.arithmetic_warmup_enabled,
+    () => weeklySettings.value.arithmetic_minutes,
+  ],
+  () => {
+    profileBundleKey.value = ''
+  },
+)
+onMounted(() => {
+  if (isEdit.value) void loadCurriculumProjection()
+})
 
 // BUG-20260710 ①：删除档案下沉到编辑弹层（原型 K12 卡动作行无删除，卡面孤行删除是漂移）。
 // 删除必须进入平台 ConfirmDialog（alertdialog）确认，不能把第二次点击伪装成行内确认按钮。
@@ -163,7 +330,7 @@ function metadataWithSubjectTextbooks(base: Record<string, string> = {}): Record
   for (const subject of TEXTBOOK_SUBJECTS) {
     metadata[textbookMetaKey(subject.key)] = textbookEditions[subject.key]
   }
-  // Desktop 兼容暂存：领域后端的 k12_subject_textbooks 尚未完成；legacy 字段始终镜像数学。
+  // 创建事务同时初始化 canonical 六科键；legacy 标量仅为数学的派生读取镜像。
   metadata['k12.textbook_edition'] = textbookEditions.math
   return metadata
 }
@@ -180,10 +347,13 @@ const cardDescription = computed(() => t('k12.profile.cardDesc', { grade: grade.
 
 // HcSelect 选项（替代原生 <select>；WKWebView 下原生 select 显 macOS Aqua 样式 · BUG-20260708 B2）
 const gradeOptions = computed(() =>
-  PRIMARY_GRADES.map((value, index) => ({
-    value,
-    label: t(`k12.profile.gradeLevels.${index + 1}`),
-  })),
+  [
+    ...PRIMARY_GRADES.map((value, index) => ({
+      value,
+      label: t(`k12.profile.gradeLevels.${index + 1}`),
+    })),
+    ...FUTURE_GRADE_OPTIONS,
+  ],
 )
 const semesterOptions = computed(() =>
   SEMESTERS.map((value) => ({
@@ -282,46 +452,54 @@ function automationWorkflowCount(
 }
 
 async function submit() {
+  if (!PRIMARY_GRADES.includes(gradeLevel.value as PrimaryGrade)) return
   submitting.value = true
   error.value = ''
   try {
     if (isEdit.value && props.agent) {
-      // 改档：六科教材先并入现有 metadata 作 Desktop 兼容暂存；官方 /profile 仍只接收数学 legacy 字段。
+      if (!curriculumReady.value || !curriculumCatalog.value || !unitID.value) {
+        throw new Error(curriculumError.value || '请先完成数学教材与当前单元设置')
+      }
+      if (!profileBundleKey.value) profileBundleKey.value = newCommandKey('profile-bundle')
+      await k12UpdateProfileBundle({
+        agent: props.agent.name,
+        idempotency_key: profileBundleKey.value,
+        expected_profile_revision: Number(
+          props.agent.metadata?.['k12.profile_revision'] ?? '0',
+        ),
+        expected_progress_revision: curriculumProgress.value?.revision ?? 0,
+        expected_settings_revision: weeklySettings.value.revision,
+        profile: {
+          child_name: childName.value.trim(),
+          grade_term: grade.value,
+          subject_textbooks: { ...textbookEditions },
+        },
+        curriculum_progress: {
+          subject: 'math',
+          textbook_binding_id: curriculumCatalog.value.textbook_binding_id,
+          volume: volume.value,
+          unit_id: unitID.value,
+          ...(lessonID.value ? { lesson_id: lessonID.value } : {}),
+          ...(typeof pageFrom.value === 'number' ? { page_from: pageFrom.value } : {}),
+          ...(typeof pageTo.value === 'number' ? { page_to: pageTo.value } : {}),
+          evidence_source: 'parent_confirmed',
+        },
+        weekly_practice_settings: {
+          timezone: weeklySettings.value.timezone,
+          textbook_consolidation_enabled:
+            weeklySettings.value.textbook_consolidation_enabled,
+          arithmetic_warmup_enabled: weeklySettings.value.arithmetic_warmup_enabled,
+          arithmetic_minutes: weeklySettings.value.arithmetic_minutes,
+        },
+      })
+      // Agent 基础展示/模型字段不承载教材事实；bundle 失败时不会产生任何 Agent 写入。
       await updateAgent(props.agent.name, {
         display_name: displayName.value,
         description: cardDescription.value,
         system_prompt: soulText.value, // 改档回写人设（家长可编辑的「辅导语气」，未改则随档案派生，F2/D3）
         provider: provider.value, // 模型高级折叠（BUG-20260711-H）：''=跟随全局默认
         model: model.value,
-        metadata: metadataWithSubjectTextbooks(props.agent.metadata),
       })
-      try {
-        await k12UpdateProfile({
-          agent: props.agent.name,
-          child_name: childName.value.trim(),
-          grade_term: grade.value,
-          textbook_edition: textbook.value,
-        })
-      } catch (profileError) {
-        // Agent 与 Profile 是两个后端命令：第二步失败时恢复第一步，避免“新显示名/模型 + 旧年级”。
-        try {
-          await updateAgent(props.agent.name, {
-            display_name: props.agent.display_name || props.agent.name,
-            description: props.agent.description ?? '',
-            system_prompt: props.agent.system_prompt ?? '',
-            provider: props.agent.provider ?? '',
-            model: props.agent.model ?? '',
-            metadata: { ...props.agent.metadata },
-          })
-        } catch (rollbackError) {
-          const original =
-            profileError instanceof Error ? profileError.message : String(profileError)
-          const rollback =
-            rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
-          throw new Error(`${original}; rollback failed: ${rollback}`)
-        }
-        throw profileError
-      }
       await refreshAgentsAfterPersistence()
       // 档案保存是唯一作用域明确的存量修复触发点：只补该 agent 缺失的默认任务。
       // 失败不回滚已成功的档案，也不写“已完成”标记；下次保存会自然重试。
@@ -340,7 +518,7 @@ async function submit() {
       emit('close')
       return
     }
-    // 建档：先注册 agent（scenario 标记驱动前端 registry 解析增强视图），再经 /profile 写档案 k12.*
+    // 建档事务：registerAgent 一次性初始化基本档案、canonical 六科键与数学派生镜像。
     const name = `${K12_SCENARIO_ID}-${nanoid(8)}`
     await registerAgent({
       name,
@@ -355,27 +533,10 @@ async function submit() {
         scenario: K12_SCENARIO_ID,
         avatar: '🎓',
         'k12.learner_id': learnerID,
+        'k12.child_name': childName.value.trim(),
+        'k12.grade_term': grade.value,
       }),
     })
-    try {
-      await k12UpdateProfile({
-        agent: name,
-        child_name: childName.value.trim(),
-        grade_term: grade.value,
-        textbook_edition: textbook.value,
-      })
-    } catch (profileError) {
-      // register 已成功而档案写入失败时，补偿删除刚注册的半成品，避免卡片无年级/无孩子地残留。
-      try {
-        await unregisterAgent(name)
-      } catch (rollbackError) {
-        const original = profileError instanceof Error ? profileError.message : String(profileError)
-        const rollback =
-          rollbackError instanceof Error ? rollbackError.message : String(rollbackError)
-        throw new Error(`${original}; rollback failed: ${rollback}`)
-      }
-      throw profileError
-    }
     await refreshAgentsAfterPersistence()
     // 建档即初始化四个默认工作流。失败不回滚已成功的档案，但必须等待真实结果并显式告警，
     // 不能 fire-and-forget 后仍宣称提醒已注册（架构 §3.13：不支持时需可见提示）。
@@ -464,6 +625,7 @@ async function submit() {
                 v-for="subject in TEXTBOOK_SUBJECTS"
                 :key="subject.key"
                 class="k12pf__textbook-row"
+                :class="{ 'k12pf__textbook-row--math': subject.key === 'math' }"
                 data-testid="k12-textbook-row"
                 :data-subject="subject.key"
               >
@@ -475,6 +637,120 @@ async function submit() {
                     :options="textbookOptions(subject)"
                   />
                 </div>
+                <section
+                  v-if="subject.key === 'math' && isEdit"
+                  ref="mathProgressSection"
+                  class="k12pf__curriculum"
+                  tabindex="-1"
+                  aria-labelledby="k12pf-math-progress-title"
+                  data-testid="k12-math-progress"
+                >
+                  <div class="k12pf__curriculum-head">
+                    <b id="k12pf-math-progress-title">数学教材与当前进度</b>
+                    <span>同步巩固与口算热身默认关闭</span>
+                  </div>
+                  <div v-if="curriculumLoading && !curriculumReady" class="k12pf__hint">
+                    正在读取教材进度…
+                  </div>
+                  <template v-else>
+                    <div class="k12pf__curriculum-grid">
+                      <div class="k12pf__field">
+                        <span>册次</span>
+                        <HcSelect
+                          v-model="volume"
+                          :options="volumeOptions"
+                          data-testid="k12-progress-volume"
+                        />
+                      </div>
+                      <div class="k12pf__field">
+                        <span>当前单元 *</span>
+                        <HcSelect
+                          v-model="unitID"
+                          :options="unitOptions"
+                          data-testid="k12-progress-unit"
+                        />
+                      </div>
+                      <div class="k12pf__field">
+                        <span>课时（选填）</span>
+                        <HcSelect
+                          v-model="lessonID"
+                          :options="lessonOptions"
+                          data-testid="k12-progress-lesson"
+                        />
+                      </div>
+                      <div class="k12pf__field k12pf__field--pages">
+                        <span>页码起止（选填）</span>
+                        <div class="k12pf__pages">
+                          <HcClearableField>
+                            <input
+                              v-model.number="pageFrom"
+                              class="k12pf__input"
+                              type="number"
+                              min="1"
+                              inputmode="numeric"
+                              placeholder="起始页"
+                            />
+                          </HcClearableField>
+                          <span>至</span>
+                          <HcClearableField>
+                            <input
+                              v-model.number="pageTo"
+                              class="k12pf__input"
+                              type="number"
+                              min="1"
+                              inputmode="numeric"
+                              placeholder="结束页"
+                            />
+                          </HcClearableField>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="k12pf__weekly-settings">
+                      <div class="k12pf__weekly-setting">
+                        <button
+                          type="button"
+                          class="k12pf__switch"
+                          :class="{ on: weeklySettings.textbook_consolidation_enabled }"
+                          role="switch"
+                          aria-label="教材同步巩固"
+                          :aria-checked="weeklySettings.textbook_consolidation_enabled"
+                          @click="
+                            weeklySettings.textbook_consolidation_enabled =
+                              !weeklySettings.textbook_consolidation_enabled
+                          "
+                        />
+                        <div><b>教材同步巩固</b><small>根据已确认的数学教材进度补充练习</small></div>
+                      </div>
+                      <div class="k12pf__weekly-setting">
+                        <button
+                          type="button"
+                          class="k12pf__switch"
+                          :class="{ on: weeklySettings.arithmetic_warmup_enabled }"
+                          role="switch"
+                          aria-label="口算热身"
+                          :aria-checked="weeklySettings.arithmetic_warmup_enabled"
+                          @click="
+                            weeklySettings.arithmetic_warmup_enabled =
+                              !weeklySettings.arithmetic_warmup_enabled
+                          "
+                        />
+                        <div><b>口算热身</b><small>只覆盖已经学过的运算</small></div>
+                      </div>
+                      <div
+                        v-if="weeklySettings.arithmetic_warmup_enabled"
+                        class="k12pf__arithmetic-minutes"
+                      >
+                        <span>口算时长</span>
+                        <HcSelect
+                          v-model="arithmeticMinutesModel"
+                          :options="arithmeticMinuteOptions"
+                          data-testid="k12-arithmetic-minutes"
+                        />
+                      </div>
+                    </div>
+                  </template>
+                  <p v-if="curriculumError" class="k12pf__err">{{ curriculumError }}</p>
+                </section>
               </div>
             </div>
           </div>
@@ -554,7 +830,11 @@ async function submit() {
             </button>
             <span class="k12pf__footsp" />
             <button class="k12pf__btn" @click="emit('close')">{{ t('k12.profile.cancel') }}</button>
-            <button class="k12pf__btn k12pf__btn--primary" :disabled="submitting" @click="submit">
+            <button
+              class="k12pf__btn k12pf__btn--primary"
+              :disabled="submitting || curriculumLoading || !curriculumReady || !unitID"
+              @click="submit"
+            >
               {{ t('k12.profile.save') }}
             </button>
           </template>
@@ -577,6 +857,7 @@ async function submit() {
 
   <ConfirmDialog
     :open="deleteConfirming"
+    :confirmation-key="agent?.name"
     :title="t('k12.profile.deleteConfirmTitle')"
     :message="
       t('k12.profile.deleteConfirmMessage', {
@@ -702,6 +983,108 @@ async function submit() {
   font-size: 12px;
   color: var(--hc-text-secondary);
   text-align: right;
+}
+.k12pf__textbook-row--math {
+  grid-column: 1 / -1;
+}
+.k12pf__curriculum {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+  margin-top: 5px;
+  padding: 13px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  outline: none;
+}
+.k12pf__curriculum:focus {
+  border-color: var(--hc-accent);
+  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+}
+.k12pf__curriculum-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.k12pf__curriculum-head b {
+  font-size: 13px;
+}
+.k12pf__curriculum-head span {
+  color: var(--hc-text-muted);
+  font-size: 11px;
+}
+.k12pf__curriculum-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.k12pf__field--pages {
+  grid-column: 1 / -1;
+}
+.k12pf__pages {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+.k12pf__weekly-settings {
+  display: grid;
+  gap: 9px;
+  padding-top: 2px;
+}
+.k12pf__weekly-setting {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.k12pf__weekly-setting > div {
+  display: grid;
+  gap: 2px;
+}
+.k12pf__weekly-setting b {
+  font-size: 12px;
+}
+.k12pf__weekly-setting small {
+  color: var(--hc-text-muted);
+  font-size: 10.5px;
+}
+.k12pf__switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  background: var(--hc-border-strong, var(--hc-border));
+  cursor: pointer;
+}
+.k12pf__switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 160ms ease;
+}
+.k12pf__switch.on {
+  background: var(--hc-accent);
+}
+.k12pf__switch.on::after {
+  transform: translateX(14px);
+}
+.k12pf__arithmetic-minutes {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-left: 43px;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
 }
 .k12pf__skillchips {
   display: flex;

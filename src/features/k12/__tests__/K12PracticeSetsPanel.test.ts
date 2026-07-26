@@ -168,12 +168,10 @@ beforeEach(() => {
     destroy: vi.fn().mockResolvedValue(undefined),
   })
   h.listSpy.mockReset()
-  h.finalizeSpy
-    .mockReset()
-    .mockResolvedValue({
-      set: historySet({ status: 'assigned', status_label: '待完成' }),
-      skipped_blocked_count: 2,
-    })
+  h.finalizeSpy.mockReset().mockResolvedValue({
+    set: historySet({ status: 'assigned', status_label: '待完成' }),
+    skipped_blocked_count: 2,
+  })
   h.deliveryGetSpy.mockReset()
   h.deliveryRetrySpy.mockReset()
   h.deliveryQuerySpy.mockReset()
@@ -791,39 +789,25 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     )
   })
 
-  it('submitted 复批必须逐题明确对/错；空 results 不调用 grade', async () => {
+  it('无回传照片时只保留“手动记结果”兜底，且空结果不调用 grade', async () => {
     h.listSpy.mockResolvedValue({
       items: [
         historySet({
-          status: 'submitted',
-          status_label: '已回传',
-          items: [
-            {
-              ...item('q9', '2.8×0.65=?', '数学', 'verified'),
-              returned: true,
-              return_ids: ['return-grade'],
-            },
-          ],
-          return_assets: [
-            {
-              return_id: 'return-grade',
-              asset_id: 'asset://k12-xiaoming/answer.png',
-              item_ids: ['q9'],
-              returned_at: 1784300100,
-            },
-          ],
+          status: 'assigned',
+          status_label: '待完成',
+          items: [item('q9', '2.8×0.65=?', '数学', 'verified')],
+          return_assets: [],
         }),
       ],
     })
     const w = render()
     await flushPromises()
-    await w
-      .findAll('.k12ps__btn')
-      .find((b) => b.text() === '复批')!
-      .trigger('click')
+    expect(w.findAll('button').some((button) => button.text() === '复批')).toBe(false)
+    await w.find('[data-testid="ps-manual-grade-open"]').trigger('click')
     await flushPromises()
 
     expect(w.find('[data-testid="ps-grade-modal"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ps-grade-modal"]').text()).toContain('手动记结果')
     expect(w.find('[data-testid="ps-grade-confirm"]').attributes('disabled')).toBeDefined()
     expect(h.gradeSpy).not.toHaveBeenCalled()
 
@@ -833,5 +817,152 @@ describe('K12PracticeSetsPanel · 购物车两段（§3.8/§4.13）', () => {
     expect(h.gradeSpy).toHaveBeenCalledWith('k12-xiaoming', 'hist1', [
       { item_id: 'q9', correct: true },
     ])
+  })
+
+  it('回传照片自动复批中显示原位进度，并轮询到可查看结果', async () => {
+    vi.useFakeTimers()
+    const queued = historySet({
+      status: 'submitted',
+      status_label: '已回传',
+      items: [
+        {
+          ...item('q9', '2.8×0.65=?', '数学', 'verified'),
+          returned: true,
+          return_ids: ['return-auto'],
+        },
+      ],
+      return_assets: [
+        {
+          return_id: 'return-auto',
+          asset_id: 'asset://k12-xiaoming/answer.png',
+          item_ids: ['q9'],
+          returned_at: 1784300100,
+          regrade_job_id: 'grade-job-1',
+          regrade_status: 'queued',
+        },
+      ],
+    })
+    const completed = historySet({
+      items: [
+        {
+          ...queued.items[0]!,
+          result_correct: false,
+          result_evidence: 'system_verified',
+        },
+      ],
+      return_assets: [
+        {
+          ...queued.return_assets[0]!,
+          regrade_status: 'completed',
+          annotated_asset_id: 'asset://k12-xiaoming/annotated.png',
+          result_markdown: '## 第 1 题\n\n孩子把小数点位置放错了。',
+        },
+      ],
+    })
+    h.listSpy.mockResolvedValueOnce({ items: [queued] }).mockResolvedValue({ items: [completed] })
+
+    const w = render()
+    await flushPromises()
+    expect(w.find('[data-testid="ps-regrade-status"]').text()).toContain('正在自动复批')
+    expect(w.find('[data-testid="ps-regrade-result-open"]').exists()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1_500)
+    await flushPromises()
+    expect(h.listSpy).toHaveBeenCalledTimes(2)
+    expect(w.find('[data-testid="ps-regrade-result-open"]').exists()).toBe(true)
+    w.unmount()
+  })
+
+  it('自动复批结果以批注原图和家长讲题说明为同一结果面', async () => {
+    h.listSpy.mockResolvedValue({
+      items: [
+        historySet({
+          items: [
+            {
+              ...item('q9', '2.8×0.65=?', '数学', 'verified'),
+              returned: true,
+              return_ids: ['return-result'],
+              result_correct: false,
+              result_evidence: 'system_verified',
+            },
+          ],
+          return_assets: [
+            {
+              return_id: 'return-result',
+              asset_id: 'asset://k12-xiaoming/answer.png',
+              item_ids: ['q9'],
+              returned_at: 1784300100,
+              regrade_job_id: 'grade-job-result',
+              regrade_status: 'completed',
+              annotated_asset_id: 'asset://k12-xiaoming/annotated.png',
+              result_markdown:
+                '## 第 1 题\n\n**错因：** 小数点位置放错。\n\n**家长这样讲：** 先估算。',
+            },
+          ],
+        }),
+      ],
+    })
+
+    const w = render()
+    await flushPromises()
+    await w.find('[data-testid="ps-regrade-result-open"]').trigger('click')
+    await flushPromises()
+
+    const modal = w.find('[data-testid="ps-regrade-result-modal"]')
+    expect(modal.exists()).toBe(true)
+    expect(modal.find('[data-testid="ps-regrade-annotated"]').attributes('src')).toContain(
+      encodeURIComponent('asset://k12-xiaoming/annotated.png'),
+    )
+    expect(modal.find('[data-testid="ps-regrade-markdown"]').text()).toContain('家长这样讲')
+    expect(modal.text()).toContain('1 题继续复习')
+  })
+
+  it('只有真实不确定项进入最小人工核对，其余系统结论不再询问家长', async () => {
+    const q1 = {
+      ...item('q1', '第 1 题', '数学', 'verified'),
+      paper_seq: 1,
+      returned: true,
+      return_ids: ['return-review'],
+      result_correct: true,
+      result_evidence: 'system_verified' as const,
+    }
+    const q2 = {
+      ...item('q2', '第 2 题', '数学', 'verified'),
+      paper_seq: 2,
+      returned: true,
+      return_ids: ['return-review'],
+    }
+    h.listSpy.mockResolvedValue({
+      items: [
+        historySet({
+          status: 'submitted',
+          status_label: '已回传',
+          items: [q1, q2],
+          return_assets: [
+            {
+              return_id: 'return-review',
+              asset_id: 'asset://k12-xiaoming/answer.png',
+              item_ids: ['q1', 'q2'],
+              returned_at: 1784300100,
+              regrade_job_id: 'grade-job-review',
+              regrade_status: 'needs_review',
+              unresolved_item_ids: ['q2'],
+            },
+          ],
+        }),
+      ],
+    })
+
+    const w = render()
+    await flushPromises()
+    expect(w.find('[data-testid="ps-regrade-review"]').text()).toContain('仅 1 题需要核对')
+    await w.find('[data-testid="ps-regrade-manual"]').trigger('click')
+    await flushPromises()
+
+    const modal = w.find('[data-testid="ps-grade-modal"]')
+    expect(modal.text()).toContain('第 2 题')
+    expect(modal.text()).not.toContain('第 1 题')
+    expect(modal.find('[data-testid="ps-grade-correct-q2"]').exists()).toBe(true)
+    expect(modal.find('[data-testid="ps-grade-correct-q1"]').exists()).toBe(false)
   })
 })

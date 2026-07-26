@@ -421,6 +421,25 @@ export function savePracticePaperPdf(markdown: string, title: string): Promise<b
   return saveRenderedPdf(markdown, title)
 }
 
+/** 保存服务端已冻结的 PDF Artifact；不得重新渲染或改写其字节。 */
+export async function savePdfArtifact(pdf: Blob, title: string): Promise<boolean> {
+  const filename = safePdfFilename(title)
+  if (isTauri()) {
+    const b64 = await blobToBase64(pdf)
+    return (await downloadInApp(`data:application/pdf;base64,${b64}`, filename)) !== null
+  }
+  if (typeof document === 'undefined') return false
+  const url = URL.createObjectURL(pdf)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 0)
+  return true
+}
+
 /** 正式打印预览与保存 PDF 共用同一服务端 PDF 渲染结果，避免出现两套分页规则。 */
 export function renderPracticePaperPdf(markdown: string, title: string): Promise<Blob> {
   return renderDocument({ content: markdown, format: 'pdf', title })

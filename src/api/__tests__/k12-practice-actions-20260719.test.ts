@@ -1,12 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
+  apiGet: vi.fn(),
   apiPost: vi.fn(),
 }))
 
 vi.mock('../client', () => ({
   api: vi.fn(),
-  apiGet: vi.fn(),
+  apiGet: (...args: unknown[]) => h.apiGet(...args),
   apiPost: (...args: unknown[]) => h.apiPost(...args),
   apiPut: vi.fn(),
   apiDelete: vi.fn(),
@@ -16,12 +17,68 @@ vi.mock('@/config/env', () => ({ env: { apiBase: 'http://127.0.0.1:8787' } }))
 import {
   k12FillPracticeBasket,
   k12GenerateCustomPaper,
+  k12GetMistakePracticeGeneration,
+  k12RetryMistakePracticeGeneration,
+  k12StartMistakePracticeGeneration,
   k12SubmitPracticeSet,
   k12GradePracticeSet,
 } from '../k12'
 
 describe('K12 练习集动作 API · 禁止空回传/空复批旁路', () => {
-  beforeEach(() => h.apiPost.mockReset().mockResolvedValue({}))
+  beforeEach(() => {
+    h.apiGet.mockReset().mockResolvedValue({})
+    h.apiPost.mockReset().mockResolvedValue({})
+  })
+
+  it('逐题加入练习集使用服务端持久化任务，不再调用旧 review/retry 两阶段链路', async () => {
+    const request = {
+      agent: 'ming ming',
+      record_id: 'mistake/1',
+      idempotency_key: 'desktop-single-practice-1',
+      grade: '五年级下',
+      textbook: '人教版',
+      difficulty: 'same' as const,
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
+    }
+    await k12StartMistakePracticeGeneration(request)
+    expect(h.apiPost).toHaveBeenCalledWith(
+      '/api/k12/mistakes/mistake%2F1/practice-generation',
+      {
+        agent: 'ming ming',
+        idempotency_key: 'desktop-single-practice-1',
+        grade: '五年级下',
+        textbook: '人教版',
+        difficulty: 'same',
+        provider: 'hexclaw-gpt',
+        model: 'gpt-5.6-sol',
+      },
+    )
+
+    await k12GetMistakePracticeGeneration('ming ming', 'mistake/1')
+    expect(h.apiGet).toHaveBeenCalledWith(
+      '/api/k12/mistakes/mistake%2F1/practice-generation',
+      { agent: 'ming ming' },
+    )
+
+    await k12RetryMistakePracticeGeneration('ming ming', 'mistake/1')
+    expect(h.apiPost).toHaveBeenLastCalledWith(
+      '/api/k12/mistakes/mistake%2F1/practice-generation/retry',
+      { agent: 'ming ming' },
+    )
+  })
+
+  it('逐题生成显式模型路由必须成对冻结，禁止界面模型与实际任务漂移', () => {
+    expect(() =>
+      k12StartMistakePracticeGeneration({
+        agent: 'mingming',
+        record_id: 'mistake-1',
+        idempotency_key: 'desktop-single-practice-invalid-route',
+        textbook: '人教版',
+        provider: 'hexclaw-gpt',
+      }),
+    ).toThrow('逐题出题模型路由必须同时包含供应商和模型')
+  })
 
   it('手动生成复习卷复用后端 fill-basket 验证装篮链', async () => {
     await k12FillPracticeBasket('ming ming')
@@ -39,6 +96,8 @@ describe('K12 练习集动作 API · 禁止空回传/空复批旁路', () => {
       textbook: '人教版',
       grade: '五年级上',
       source_session: 'session-1',
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
     })
 
     expect(h.apiPost).toHaveBeenCalledTimes(1)
@@ -52,7 +111,24 @@ describe('K12 练习集动作 API · 禁止空回传/空复批旁路', () => {
       textbook: '人教版',
       grade: '五年级上',
       source_session: 'session-1',
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
     })
+  })
+
+  it('DD-027：显式模型路由必须成对提交，禁止界面模型与实际任务漂移', () => {
+    expect(() =>
+      k12GenerateCustomPaper({
+        agent: 'mingming',
+        idempotency_key: 'desktop-paper-route-invalid',
+        scope: 'week',
+        total: 5,
+        per_source: 1,
+        difficulty: 'same',
+        textbook: '人教版',
+        provider: 'hexclaw-gpt',
+      }),
+    ).toThrow('组卷模型路由必须同时包含供应商和模型')
   })
 
   it('DD-028：回传携带幂等 return_id、照片资产和明确覆盖题；任一为空都在客户端阻断', async () => {

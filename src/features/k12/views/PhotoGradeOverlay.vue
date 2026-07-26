@@ -23,6 +23,10 @@ interface OverlayMark {
   outOfScope?: boolean
   /** 学生作答区域归一化边界框；缺失/非法 → 降级纯文字批改（不叠加）。 */
   bbox?: BBox | null
+  /** 原卷由大题到当前题的不可变题号 token。 */
+  source_number_path?: string[]
+  /** 原卷题号的冻结展示值；禁止由数组位置重新编号。 */
+  display_label?: string
   /** 题干（降级文字批改时展示，供家长对位）。 */
   question?: string
   /** 正确答案（订正，错题时展示）。 */
@@ -84,6 +88,18 @@ function markStyle(b: BBox) {
     top: percent(b.y + b.h * 0.4),
     transform: rightEdge > 0.94 ? 'translate(-100%, -50%)' : 'translate(-10%, -50%)',
   }
+}
+
+function markDisplayLabel(mark: OverlayMark): string {
+  return mark.display_label?.trim() ?? ''
+}
+
+function issueTitle(mark: OverlayMark): string {
+  const issue = mark.outOfScope
+    ? t('k12.overlay.statusOutOfScope')
+    : mark.errorCause || t('k12.overlay.needsAttention')
+  const label = markDisplayLabel(mark)
+  return label ? `${label} · ${issue}` : issue
 }
 </script>
 
@@ -238,14 +254,7 @@ function markStyle(b: BBox) {
         <details v-for="m in attentionMarks" :key="m._i" class="grade-card grade-card--issue" open>
           <summary>
             <span class="grade-card__status">{{ m.outOfScope ? '—' : '×' }}</span>
-            <span>{{
-              t('k12.overlay.issueTitle', {
-                number: m._i + 1,
-                issue: m.outOfScope
-                  ? t('k12.overlay.statusOutOfScope')
-                  : m.errorCause || t('k12.overlay.needsAttention'),
-              })
-            }}</span>
+            <span>{{ issueTitle(m) }}</span>
           </summary>
           <div class="grade-card__body">
             <div v-if="m.question" class="grade-card__row">
@@ -331,7 +340,7 @@ function markStyle(b: BBox) {
               <div v-for="m in correctMarks" :key="m._i" class="grade-correct-item">
                 <span>✓</span>
                 <div>
-                  <b>{{ t('k12.overlay.questionNumber', { number: m._i + 1 }) }}</b>
+                  <b v-if="markDisplayLabel(m)">{{ markDisplayLabel(m) }}</b>
                   <MarkdownRenderer
                     v-if="m.question"
                     class="grade-card__md"

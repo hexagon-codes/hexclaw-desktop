@@ -49,12 +49,22 @@ const h = vi.hoisted(() => {
       mk('c', '「梅须逊雪三分白」漏「须」字', '默写', '语文'),
     ],
     report: {
+      learner_id: 'mingming',
+      grade_term: '五年级上',
+      as_of: '2026-07-25T08:00:00+08:00',
+      source_digest: 'sha256:prototype-c8',
+      source_record_ids: ['a', 'b', 'c', 'd'],
+      unscoped_source_count: 0,
+      review_week_start: '2026-07-24T19:00:00+08:00',
+      review_week_end: '2026-07-31T19:00:00+08:00',
       trend: { mastered: 5, reviewing: 2, retried: 1, archived: 0, total: 8 },
       weak_top3: [],
       month_new_mistakes: 2,
       review_completion_rate: 0.5,
       consecutive_fail_kps: null,
       suggestion: '',
+      week_pending: 3,
+      practice_pending: 0,
     },
   }
 })
@@ -63,7 +73,8 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: h.mistakes }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: h.due }),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
-  k12ReviewRetry: vi.fn(),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn().mockImplementation(() => Promise.resolve(h.report)),
@@ -71,7 +82,7 @@ vi.mock('@/api/k12', () => ({
     .fn()
     .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
-  // 20260718 学情第四瓷片改练习集待打印：InsightPanel 自拉 draft 篮
+  // 其他档案页仍使用练习集列表；InsightPanel 只消费同一份报告快照。
   k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
 }))
 

@@ -21,6 +21,7 @@ import k12Zh from '../i18n/zh-CN'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
+import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
 
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
@@ -132,12 +133,31 @@ function recognizePanel(w: ReturnType<typeof renderEnh>) {
   return w.findComponent(RecognizeGuardPanel)
 }
 
+function imageAttempt(requestId = 'message-homework') {
+  return {
+    dataUrl: 'data:image/png;base64,Zm9v',
+    attachment: {
+      type: 'image' as const,
+      name: 'homework.png',
+      mime: 'image/png',
+      data: 'Zm9v',
+    },
+    requestId,
+    sourceSessionId: 'session-1',
+    route: {
+      provider: 'HexClaw-GPT',
+      model: 'gpt-5.6-sol',
+      capability: 'vision' as const,
+    },
+  }
+}
+
 describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦克风常驻）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     routeQuery.q = {}
     document.body.innerHTML =
-      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+      `<div id="${scenarioMessageAnchorId('message-homework')}"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>`
     voiceRefs.api = {
       isListening: ref(false),
       transcript: ref(''),
@@ -160,7 +180,7 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
     const w = renderEnh()
     await flushPromises()
     expect(recognizePanel(w).exists()).toBe(false)
-    await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
+    await w.setProps({ composerImage: imageAttempt() })
     await flushPromises()
     expect(recognizePanel(w).exists(), '图片改道必须自动打开护栏').toBe(true)
     // 图片消费完成必须复位上报（数据流契约）
@@ -169,7 +189,7 @@ describe('BUG-20260711-E：composer 原型对齐（零手动识题按钮 + 麦�
 
   it('自动打开的任务壳可收起并原位恢复（头部 ✕ 不取消后台任务）', async () => {
     const w = renderEnh()
-    await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
+    await w.setProps({ composerImage: imageAttempt() })
     await flushPromises()
     const panel = recognizePanel(w)
     expect(panel.exists()).toBe(true)
@@ -208,7 +228,7 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
     setActivePinia(createPinia())
     routeQuery.q = {}
     document.body.innerHTML =
-      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+      `<div id="${scenarioMessageAnchorId('message-homework')}"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>`
   })
 
   it('★识题后切 records 再切回 chat：结果仍在、图片任务只创建一次（真机取证：曾重新「正在识题分题」）', async () => {
@@ -217,7 +237,7 @@ describe('BUG-20260712-S：识题面板跨 tab 保活（切错题本再回来不
     recognizeMock.mockClear()
 
     const w = renderEnh()
-    await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
+    await w.setProps({ composerImage: imageAttempt() })
     await flushPromises()
     expect(recognizePanel(w).exists()).toBe(true)
     expect(recognizeMock).toHaveBeenCalledTimes(1)

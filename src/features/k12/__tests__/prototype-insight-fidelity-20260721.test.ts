@@ -30,13 +30,23 @@ vi.mock('@/api/k12', () => ({
 }))
 
 const reportFixture = {
+  learner: 'ming',
+  grade_term: '五年级',
+  as_of: 1784937600,
+  source_digest: 'sha256:insight-fixture',
+  source_record_ids: ['m1', 'm2', 'm3'],
+  unscoped_source_count: 0,
+  review_week_start: 1784900400,
+  review_week_end: 1785505200,
   trend: { total: 11, mastered: 6, reviewing: 4, retried: 1, archived: 0 },
   weak_top3: [
-    { knowledge_point: '简易方程', count: 5 },
-    { knowledge_point: '小数乘法', count: 3 },
-    { knowledge_point: '多边形面积', count: 1 },
+    { subject: '数学', knowledge_point: '简易方程', count: 5, share: 5 / 9 },
+    { subject: '数学', knowledge_point: '小数乘法', count: 3, share: 3 / 9 },
+    { subject: '数学', knowledge_point: '多边形面积', count: 1, share: 1 / 9 },
   ],
   month_new_mistakes: 9,
+  week_pending: 6,
+  practice_pending: 6,
   review_completion_rate: 0.78,
   consecutive_fail_kps: ['简易方程'],
   suggestion: '先做 2 道等式性质热身，再进入本周复习卷中的方程题。',
@@ -120,9 +130,9 @@ describe('app.html 学情指标与行动语义', () => {
       .findAll('[data-testid="insight-weak-bar"]')
     expect(priorityBars).toHaveLength(3)
     expect(priorityBars.map((bar) => bar.get('.k12ins__fill').attributes('style'))).toEqual([
-      'width: 83%;',
-      'width: 50%;',
-      'width: 17%;',
+      'width: 56%;',
+      'width: 33%;',
+      'width: 11%;',
     ])
 
     const setback = wrapper.get('[data-testid="insight-setback-action"]')
@@ -197,6 +207,8 @@ describe('真实 loading / error / empty 状态', () => {
       ...reportFixture,
       trend: { total: 0, mastered: 0, reviewing: 0, retried: 0, archived: 0 },
       weak_top3: [],
+      week_pending: 0,
+      practice_pending: 0,
       consecutive_fail_kps: [],
       suggestion: '',
     })
@@ -217,19 +229,15 @@ describe('真实 loading / error / empty 状态', () => {
 })
 
 describe('多孩实例隔离', () => {
-  it('切换孩子后，较晚返回的旧练习集响应不能覆盖当前孩子的待打印数', async () => {
-    let resolveMing!: (value: {
-      items: Array<{ record_id: string; status: string; items: object[] }>
-    }) => void
-    api.practice.mockImplementation((agentId: string) => {
+  it('切换孩子后，较晚返回的旧学情快照不能覆盖当前孩子', async () => {
+    let resolveMing!: (value: typeof reportFixture) => void
+    api.report.mockImplementation((agentId: string) => {
       if (agentId === 'ming') {
         return new Promise((resolve) => {
           resolveMing = resolve
         })
       }
-      return Promise.resolve({
-        items: [{ record_id: 'hong-p1', status: 'draft', items: [{}, {}, {}] }],
-      })
+      return Promise.resolve({ ...reportFixture, learner: 'hong', practice_pending: 3 })
     })
 
     const wrapper = render({ agentId: 'ming' })
@@ -237,13 +245,14 @@ describe('多孩实例隔离', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="insight-tile-practice"]').text()).toBe('3道练习集待打印')
 
-    resolveMing({
-      items: [{ record_id: 'ming-p1', status: 'draft', items: [{}, {}, {}, {}, {}, {}] }],
-    })
+    resolveMing(reportFixture)
     await flushPromises()
     expect(wrapper.get('[data-testid="insight-tile-practice"]').text()).toBe('3道练习集待打印')
-    expect(api.practice).toHaveBeenNthCalledWith(1, 'ming', 'draft')
-    expect(api.practice).toHaveBeenNthCalledWith(2, 'hong', 'draft')
+    expect(api.report).toHaveBeenNthCalledWith(1, 'ming')
+    expect(api.report).toHaveBeenNthCalledWith(2, 'hong')
+    expect(api.mistakes).not.toHaveBeenCalled()
+    expect(api.queue).not.toHaveBeenCalled()
+    expect(api.practice).not.toHaveBeenCalled()
   })
 })
 

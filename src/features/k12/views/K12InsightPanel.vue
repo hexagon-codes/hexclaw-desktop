@@ -7,7 +7,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { k12ListPracticeSets } from '@/api/k12'
 import { useK12Store } from '../store'
 import type {
   K12MistakeStatusFilter,
@@ -43,43 +42,25 @@ const onNavKey = (e: KeyboardEvent, destination: K12RecordsNavigation) => {
   emit('navigate', destination)
 }
 
-// 练习集待打印数（app.html:2354 第四瓷片）：draft 篮 items 求和，自拉不进 store（练习集面板归另一 agent）。
-const practicePending = ref<number | null>(null)
-async function loadPracticePending(agentId: string, request: number) {
-  try {
-    const resp = await k12ListPracticeSets(agentId, 'draft')
-    if (request === reloadRequest) {
-      practicePending.value = (resp.items ?? []).reduce((sum, s) => sum + (s.items?.length ?? 0), 0)
-    }
-  } catch {
-    if (request === reloadRequest) practicePending.value = null // 拉取失败显示「—」，不编数
-  }
-}
-
 async function reload() {
   const agentId = props.agentId
   const request = ++reloadRequest
-  practicePending.value = null
   if (!agentId) {
     loading.value = false
     return
   }
   loading.value = true
-  await Promise.all([
-    store.loadReport(agentId),
-    store.loadMistakes(agentId),
-    loadPracticePending(agentId, request),
-  ])
+  await store.loadReport(agentId)
   if (request === reloadRequest) loading.value = false
 }
 onMounted(reload)
 watch(() => props.agentId, reload)
 
 const report = computed(() => store.report)
-const weekPending = computed(() => store.mistakeView?.reviewQueue?.length ?? null)
-const errorMessage = computed(() =>
-  [store.reportError, store.mistakesError].filter(Boolean).join('；'),
-)
+const reportGrade = computed(() => report.value?.grade_term || props.grade)
+const weekPending = computed(() => report.value?.week_pending ?? null)
+const practicePending = computed(() => report.value?.practice_pending ?? null)
+const errorMessage = computed(() => store.reportError ?? '')
 const hasInsightData = computed(() =>
   Boolean(
     report.value &&
@@ -91,41 +72,24 @@ const hasInsightData = computed(() =>
   ),
 )
 
-// insight-report 的 weak_top3 只含知识点；学科从同一错题事实集回投。
-// 同名知识点若跨学科冲突则不猜测，降级为“全部学科”。
-const weakSubjectByKnowledgePoint = computed(() => {
-  const subjects = new Map<string, Set<string>>()
-  for (const item of store.mistakeView?.items ?? []) {
-    const subject = String(item.fields.subject ?? '').trim()
-    if (!subject) continue
-    const chip = String(item.fields.knowledge_point ?? '').trim()
-    const prefix = `${subject}·`
-    const knowledgePoint = chip.startsWith(prefix) ? chip.slice(prefix.length) : chip
-    if (!knowledgePoint) continue
-    const values = subjects.get(knowledgePoint) ?? new Set<string>()
-    values.add(subject)
-    subjects.set(knowledgePoint, values)
-  }
-  return new Map(
-    [...subjects].map(([knowledgePoint, values]) => [
-      knowledgePoint,
-      values.size === 1 ? [...values][0]! : '',
-    ]),
-  )
-})
-
-// 薄弱知识点 TOP3 归一化为百分比宽度
+// 薄弱知识点比例由服务端同一快照的 month_new_mistakes 冻结计算；前端不再
+// 用本周队列或第二份错题列表重算。
 const weakBars = computed(() => {
   const list = report.value?.weak_top3 ?? []
-  // 原型 5/6→83%、3/6→50%、1/6→17%：分母与「本周待复习」同一事实源。
-  // 队列为空/不可用时才退回 TOP3 最大值，并钳到 100%，不让异常数据撑破轨道。
-  const weekCount = weekPending.value ?? 0
-  const denominator = weekCount > 0 ? weekCount : Math.max(1, ...list.map((w) => w.count))
+  const monthTotal = report.value?.month_new_mistakes ?? 0
   return list.map((w) => ({
     name: w.knowledge_point,
     count: w.count,
-    pct: Math.min(100, Math.round((w.count / denominator) * 100)),
-    subject: weakSubjectByKnowledgePoint.value.get(w.knowledge_point) ?? '',
+    pct: Math.min(
+      100,
+      Math.max(
+        0,
+        Math.round(
+          (Number.isFinite(w.share) ? w.share : monthTotal > 0 ? w.count / monthTotal : 0) * 100,
+        ),
+      ),
+    ),
+    subject: w.subject ?? '',
   }))
 })
 </script>
@@ -135,7 +99,11 @@ const weakBars = computed(() => {
     <div class="k12ins__head">
       <!-- app.html:2352：「{grade}学习概览 · 从真实批改与复练证据生成」 -->
       <h2 class="k12ins__h" style="margin: 0" data-testid="insight-title">
-        {{ grade ? t('k12.report.titleWithGrade', { grade }) : t('k12.report.title') }}
+        {{
+          reportGrade
+            ? t('k12.report.titleWithGrade', { grade: reportGrade })
+            : t('k12.report.title')
+        }}
       </h2>
       <span class="k12ins__hint" style="margin: 0">{{ t('k12.report.monthlyNote') }}</span>
     </div>

@@ -139,12 +139,15 @@ describe('K12 store ImageTaskDispatch adoption', () => {
       undefined,
     )
     expect(JSON.parse(localStorage.getItem(K12_IMAGE_TASK_BINDINGS_KEY) ?? '{}')).toMatchObject({
-      bindings: {
-        'session-1': {
+      version: 2,
+      bindings: [
+        {
+          source_session_id: 'session-1',
+          source_message_id: 'message-1',
           agent_id: 'mingming',
           dispatch_id: 'dispatch-1',
         },
-      },
+      ],
     })
   })
 

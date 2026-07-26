@@ -21,6 +21,7 @@ import HcSelect from '@/components/common/HcSelect.vue'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
+import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
 
 const AGENT_ID = 'k12-tutor-KKE5v8zQ' // agents.name（后端隔离键）
 const DISPLAY_NAME = '小明的辅导老师' // display_name（仅供展示）
@@ -174,7 +175,24 @@ function render(metadata: Record<string, string>) {
 /** 打开识题面板 → 识题（公共前置动作）。BUG-20260711-E：手动 toggle 已删，
  *  入口=composer 图片自动改道（composerImage prop → 护栏自动 run）。 */
 async function recognizeOnce(w: ReturnType<typeof render>) {
-  await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
+  await w.setProps({
+    composerImage: {
+      dataUrl: 'data:image/png;base64,Zm9v',
+      attachment: {
+        type: 'image',
+        name: 'homework.png',
+        mime: 'image/png',
+        data: 'Zm9v',
+      },
+      requestId: 'message-homework',
+      sourceSessionId: 'session-1',
+      route: {
+        provider: 'HexClaw-GPT',
+        model: 'gpt-5.6-sol',
+        capability: 'vision',
+      },
+    },
+  })
   await flushPromises()
   expect(w.findComponent(RecognizeGuardPanel).find('[data-testid="rq-item"]').exists(), '前置：识题回显护栏出题').toBe(true)
 }
@@ -194,7 +212,7 @@ describe('审计单-High-2：K12 grade/coldStart/tutoringTips 必须用 agents.n
     k12ConfirmImageTask.mockResolvedValue(homeworkDispatch('completed', 'confirmed'))
     k12GetImageTask.mockResolvedValue(homeworkDispatch('completed', 'confirmed'))
     k12GetImageTaskResult.mockResolvedValue(completedResult())
-    document.body.innerHTML = '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+    document.body.innerHTML = `<div id="${scenarioMessageAnchorId('message-homework')}"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>`
   })
 
   it('★image-task：识题/批改 facade 的 agent 必须是 agentId（内部名），不得是 display name', async () => {

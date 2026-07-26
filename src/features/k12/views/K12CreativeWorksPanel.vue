@@ -27,6 +27,7 @@ import {
 } from '@/api/k12'
 import { setClipboard } from '@/api/desktop'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { exportArchiveDocument } from '../export'
@@ -71,11 +72,17 @@ watch(
 type ReviewState = 'pending' | 'reviewed' | 'failed'
 const initialRetryingID = ref('')
 
-function latestFeedback(work: CreativeWorkDTO): WorkFeedbackDTO | undefined {
+function latestFeedbackGeneration(work: CreativeWorkDTO) {
   const generation = work.latest_feedback
-  if (generation?.status === 'succeeded' && generation.feedback) return generation.feedback
-  if (work.initial_feedback.status === 'succeeded') return work.initial_feedback.feedback
+  if (generation?.status === 'succeeded' && generation.feedback) return generation
+  if (work.initial_feedback.status === 'succeeded' && work.initial_feedback.feedback) {
+    return work.initial_feedback
+  }
   return undefined
+}
+
+function latestFeedback(work: CreativeWorkDTO): WorkFeedbackDTO | undefined {
+  return latestFeedbackGeneration(work)?.feedback
 }
 
 function reviewState(work: CreativeWorkDTO): ReviewState {
@@ -237,6 +244,7 @@ function feedbackEvidence(feedback: WorkFeedbackDTO): string {
 function feedbackMarkdown(work: CreativeWorkDTO): string {
   const feedback = latestFeedback(work)
   if (!feedback) return ''
+  if (feedback.projection_markdown?.trim()) return feedback.projection_markdown.trim()
   const lines = [
     `## ${t('k12.works.feedbackVisibleEvidence')}`,
     feedbackEvidence(feedback),
@@ -1161,47 +1169,18 @@ defineExpose({ load, openAdd })
               </div>
             </div>
 
-            <div
+            <CreativeWorkFeedbackRenderer
               v-if="latestFeedback(activeWork)"
-              class="k12cw__feedback"
               data-testid="cw-latest-feedback"
-            >
-              <div class="k12cw__feedback-row">
-                <b>{{ t('k12.works.feedbackVisibleEvidence') }}</b>
-                <MarkdownRenderer
-                  :content="feedbackEvidence(latestFeedback(activeWork)!)"
-                  :show-artifacts="false"
-                />
-              </div>
-              <div class="k12cw__feedback-row">
-                <b>{{ t('k12.works.feedbackAffirmation') }}</b>
-                <MarkdownRenderer
-                  :content="latestFeedback(activeWork)!.affirmation"
-                  :show-artifacts="false"
-                />
-              </div>
-              <div class="k12cw__feedback-row">
-                <b>{{ t('k12.works.feedbackParentGuidance') }}</b>
-                <MarkdownRenderer
-                  :content="latestFeedback(activeWork)!.parent_guidance"
-                  :show-artifacts="false"
-                />
-              </div>
-              <div class="k12cw__feedback-row">
-                <b>{{ t('k12.works.feedbackNextStep') }}</b>
-                <MarkdownRenderer
-                  :content="latestFeedback(activeWork)!.next_step"
-                  :show-artifacts="false"
-                />
-              </div>
-              <div v-if="latestFeedback(activeWork)!.limitations" class="k12cw__feedback-row">
-                <b>{{ t('k12.works.feedbackLimitationsHeading') }}</b>
-                <MarkdownRenderer
-                  :content="latestFeedback(activeWork)!.limitations!"
-                  :show-artifacts="false"
-                />
-              </div>
-            </div>
+              :generation-id="latestFeedbackGeneration(activeWork)!.generation_id"
+              :feedback-id="latestFeedback(activeWork)!.feedback_id"
+              :projection-markdown="feedbackMarkdown(activeWork)"
+              :visible-evidence="latestFeedback(activeWork)!.visible_evidence"
+              :affirmation="latestFeedback(activeWork)!.affirmation"
+              :parent-guidance="latestFeedback(activeWork)!.parent_guidance"
+              :next-step="latestFeedback(activeWork)!.next_step"
+              :limitations="latestFeedback(activeWork)!.limitations"
+            />
             <p
               v-else-if="reviewState(activeWork) === 'failed'"
               class="k12cw__notice k12cw__notice--error"
@@ -1567,7 +1546,6 @@ defineExpose({ load, openAdd })
       :confirm-text="t('k12.works.deleteConfirm')"
       :cancel-text="t('k12.works.cancel')"
       :danger="true"
-      :confirm-delay-ms="5000"
       :confirmation-key="
         deleteTarget ? `${deleteTarget.work_id}:${deleteTarget.row_version}` : null
       "
@@ -2139,9 +2117,9 @@ defineExpose({ load, openAdd })
 .k12cw-modal__body {
   display: grid;
   gap: 13px;
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
+  box-sizing: border-box;
   min-height: 0;
   padding: 18px;
   overflow: auto;

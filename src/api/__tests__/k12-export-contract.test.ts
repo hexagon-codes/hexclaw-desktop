@@ -33,6 +33,7 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12DeleteAccumulation',
   'k12DeleteCreativeWork',
   'k12DeleteMistake',
+  'k12EnsureWeeklyPracticePlan',
   'k12ExportMd',
   'k12FillPracticeBasket',
   'k12FinalizePracticeSet',
@@ -40,16 +41,24 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12GenerateCustomPaper',
   'k12GenerateWorkFeedback',
   'k12GetCreativeWork',
+  'k12GetCurrentWeeklyPracticePlan',
+  'k12GetCurriculumCatalog',
+  'k12GetCurriculumProgress',
   'k12GetDeliveryBatch',
   'k12GetGenericPrintArtifact',
   'k12GetGenericPrintJob',
   'k12GetImageTask',
   'k12GetImageTaskResult',
+  'k12GetMistakePracticeGeneration',
   'k12GetPracticePaper',
   'k12GetPracticePrintJob',
   'k12GetPracticePrintJobPaper',
   'k12GetPracticeSet',
+  'k12GetPrintArtifactContent',
   'k12GetViewDescriptor',
+  'k12GetWeeklyPracticeHistory',
+  'k12GetWeeklyPracticeSettings',
+  'k12GetWeeklyPracticeSnapshot',
   'k12Grade',
   'k12GradePracticeSet',
   'k12InsightReport',
@@ -59,8 +68,10 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12ListPracticeSets',
   'k12MarkMastered',
   'k12TutoringTips',
+  'k12PrepareArtifactPrintJob',
   'k12PrepareGenericPrintJob',
   'k12PreparePracticePrintJob',
+  'k12PrepareWeeklyPracticeOutput',
   'k12ProvisionCron',
   'k12QueryDeliveryBatch',
   'k12RecordMistake',
@@ -73,17 +84,23 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12RetryDeliveryBatch',
   'k12RetryGenericPrintJob',
   'k12RetryImageTask',
+  'k12RetryMistakePracticeGeneration',
   'k12RetryPracticePrintJob',
   'k12ReviewQueue',
-  'k12ReviewRetry',
   'k12RollbackRestoreAs',
+  'k12SaveWeeklyPracticePlanToPracticeSet',
   'k12SendAccumulation',
   'k12SendCreativeWork',
   'k12SendTutoringTips',
+  'k12SendWeeklyPracticeSnapshot',
   'k12Solve',
+  'k12StartMistakePracticeGeneration',
+  'k12SubmitImageTaskProblemSourceAction',
   'k12SubmitPracticeSet',
+  'k12SubmitWeeklyPracticeAttempt',
   'k12TutorTurn',
   'k12UpdateProfile',
+  'k12UpdateProfileBundle',
   'k12UploadAsset',
   'k12VerifyPracticeItem',
   'renderDocument',
@@ -133,6 +150,15 @@ describe('K12 Desktop runtime export contract', () => {
     expect(apiSource).not.toMatch(/export type WorkStatus/)
     expect(apiSource).toContain('interface LegacyWorkVersionDTO')
     expect(apiSource).toMatch(/source:\s*'ai'\s*\|\s*'parent'/)
+  })
+
+  it('matches the weekly-practice item discriminants owned by the server', () => {
+    expect(apiSource).toMatch(
+      /export type WeeklyPracticeGenerationMethod =[\s\S]*?\| 'due_review_reuse'[\s\S]*?export interface WeeklyPracticeItemVerificationDTO/,
+    )
+    expect(apiSource).toMatch(
+      /export interface WeeklyPracticeItemDTO \{[\s\S]*?source_ref:\s*string[\s\S]*?\n\}/,
+    )
   })
 
   it('reads a completed image task only through the owner-scoped public result endpoint', async () => {

@@ -44,7 +44,8 @@ vi.mock('@/api/k12', () => ({
   k12GetDeliveryBatch: vi.fn(),
   k12QueryDeliveryBatch: (...args: unknown[]) => h.querySpy(...args),
   k12RetryDeliveryBatch: (...args: unknown[]) => h.retrySpy(...args),
-  k12ReviewRetry: vi.fn(),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12ExportMd: vi.fn(),
 }))
 vi.mock('@/api/desktop', () => ({

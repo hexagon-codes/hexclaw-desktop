@@ -14,12 +14,28 @@ import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { nanoid } from 'nanoid'
 import { useI18n } from 'vue-i18n'
 import { useK12Store, type ImageTaskView } from '../store'
+import { useSettingsStore } from '@/stores/settings'
+import { resolveProviderDisplayName } from '@/utils/provider-display-name'
+import { formatTime } from '@/utils/time'
+import MessageActions from '@/components/chat/MessageActions.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
 import TutoringTipsPanel from './TutoringTipsPanel.vue'
 import PhotoGradeOverlay from './PhotoGradeOverlay.vue'
+import SourceIssueResolver from '../components/SourceIssueResolver.vue'
+import FinalArtifactActions from '../components/FinalArtifactActions.vue'
+import {
+  sourceIssueOperationLocked,
+  type SourceIssueIntent,
+} from '../source-issue'
+import {
+  k12GetImageTask,
+  k12SubmitImageTaskProblemSourceAction,
+} from '@/api/k12'
+import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import { extractBriefFinalAnswer } from '../graded-photo'
 import { gradeToResult, gradeToVerify } from '../mappers'
 import type {
@@ -28,6 +44,10 @@ import type {
   BBox,
   GradingQuestionCorrection,
   ImageTaskDispatchDTO,
+  ImageTaskCoverageDTO,
+  ImageTaskProblemProgressDTO,
+  ImageTaskProblemSourceActionReq,
+  ImageTaskProblemSourceActionResp,
   ImageTaskCreativeProjectionDTO,
   ImageTaskCreativeResultPayload,
   ImageTaskIntent,
@@ -45,6 +65,9 @@ import type { ScenarioImageModelRoute } from '@/shell/scenario/registry'
 // 传入即预填并自动识题（原型契约「粘贴作业照片即自动 OCR 回显护栏」），家长零多余点击。
 const props = defineProps<{
   agentId: string
+  agentDisplayName?: string
+  displayProvider?: string
+  displayModel?: string
   grade?: string
   textbook?: string
   textbooks?: Partial<
@@ -55,6 +78,10 @@ const props = defineProps<{
   modelRoute?: ScenarioImageModelRoute
   /** §4.10 desktop request_id，与本次图片用户消息 ID 同源。 */
   requestId?: string
+  /** TaskShell 在通用消息流中的稳定 source anchor。 */
+  sourceMessageId?: string
+  /** 刷新恢复时由多值 binding 精确指定，禁止按会话猜当前 dispatch。 */
+  restoreDispatchId?: string
   /** 当前通用会话稳定 ID：只用于后端 source_session 与最小 Job 绑定恢复。 */
   sessionId?: string
   /** 当前图片消息的可选意图提示；仅作为分类证据，不替代服务端裁决。 */
@@ -64,15 +91,31 @@ const props = defineProps<{
 // 收起手段必须内聚在面板自身。
 const emit = defineEmits<{
   (e: 'close'): void
+  (e: 'contentUpdated'): void
   /**
    * 用户主动重试必须由会话 shell 创建新的消息/request_id，并重新冻结当前模型路由。
    * 组件绝不能把旧 Job 的 request_id 原地重放，否则模型改绑后会撞上不可变调用账本。
    */
   (e: 'retry'): void
+  (e: 'sourceIssueIntent', intent: SourceIssueIntent): void
+  (e: 'finalArtifactAction', intent: FinalArtifactActionIntent): void
+  (
+    e: 'update:executionState',
+    payload: {
+      sessionId: string
+      executionId: string
+      state: string
+      automaticBudgetSeconds?: number
+      automaticStartedAt?: number
+      automaticDeadlineAt?: number
+      operationDeadlineAt?: number
+    },
+  ): void
 }>()
 
 const { t } = useI18n()
 const store = useK12Store()
+const settingsStore = useSettingsStore()
 // Shell 正常路径传入与持久消息同源的 request_id；独立/兼容挂载也只生成一次请求身份，
 // 绝不退回“同图同 key”的内容哈希。
 const generatedRequestId = nanoid(12)
@@ -84,6 +127,8 @@ interface GuardRow {
   problemKind: ProblemKind
   parentProblemId: string
   subproblemNo: string
+  sourceNumberPath: string[]
+  displayLabel: string
   attemptId: string
   rawProblem: string
   problem: string // 家长可就地订正的题干（初值=识别原文）
@@ -135,11 +180,28 @@ const hasBlankWorksheetGuide = computed(() => blankWorksheetGuide.value.length >
 // BUG-20260712：选了文件/贴了图片 data URL 时显示缩略图预览，不再把 base64 原文糊在框里（UX 糙）。
 const isImageData = computed(() => imageB64.value.trim().startsWith('data:image'))
 const rows = ref<GuardRow[]>([])
+const problemProgressSlots = ref<ImageTaskProblemProgressDTO[]>([])
+const taskCoverage = ref<ImageTaskCoverageDTO | null>(null)
+const finalArtifact = ref<Record<string, unknown> | null>(null)
+const currentStructureVersion = ref(0)
+const pendingSourceProblemIds = ref(new Set<string>())
+const sourceActionIdempotencyKeys = new Map<string, string>()
+const sourceActionControllers = new Set<AbortController>()
 const recognizing = ref(false)
 const anchoring = ref(false)
 const anchorWarning = ref('')
 const errMsg = ref('')
 const recognitionFailed = ref(false)
+const retryable = ref(false)
+const retrySubmitting = ref(false)
+const currentTaskStage = ref('')
+const taskCreatedAt = ref<number>()
+const automaticBudgetSeconds = ref<number>()
+const automaticStartedAt = ref<number>()
+const automaticDeadlineAt = ref<number>()
+const operationDeadlineAt = ref<number>()
+const runtimeNowSeconds = ref(Math.floor(Date.now() / 1000))
+let runtimeClock: ReturnType<typeof setInterval> | null = null
 const confirmed = ref(false)
 const correctionMode = ref(false)
 const selectedSubject = ref('')
@@ -164,6 +226,58 @@ const confirming = ref(false)
 // Desktop 只持有 facade identity/version；服务端内部目标身份不泄露到客户端。
 const currentDispatchId = ref('')
 const currentDispatchVersion = ref(0)
+
+const executionId = computed(
+  () => props.sourceMessageId?.trim() || effectiveRequestId.value,
+)
+const elapsedSeconds = computed(() =>
+  automaticStartedAt.value === undefined
+    ? 0
+    : Math.max(0, runtimeNowSeconds.value - automaticStartedAt.value),
+)
+const activeStageBudgetSeconds = computed(() => {
+  if (
+    automaticStartedAt.value !== undefined &&
+    operationDeadlineAt.value !== undefined
+  ) {
+    return Math.max(0, operationDeadlineAt.value - automaticStartedAt.value)
+  }
+  return 60
+})
+const activeStageTimingText = computed(
+  () =>
+    `已等待 ${formatDuration(elapsedSeconds.value)} · 阶段预算 ${activeStageBudgetSeconds.value} 秒`,
+)
+
+function formatDuration(totalSeconds: number): string {
+  const normalized = Math.max(0, Math.floor(totalSeconds))
+  const minutes = Math.floor(normalized / 60)
+  const seconds = normalized % 60
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+}
+
+function syncExecutionState(state: string): void {
+  const sessionId = props.sessionId?.trim()
+  const normalizedExecutionId = executionId.value.trim()
+  if (!sessionId || !normalizedExecutionId) return
+  emit('update:executionState', {
+    sessionId,
+    executionId: normalizedExecutionId,
+    state,
+    automaticBudgetSeconds: automaticBudgetSeconds.value,
+    automaticStartedAt: automaticStartedAt.value,
+    automaticDeadlineAt: automaticDeadlineAt.value,
+    operationDeadlineAt: operationDeadlineAt.value,
+  })
+}
+
+function projectRuntimeTiming(dispatch: ImageTaskDispatchDTO): void {
+  automaticBudgetSeconds.value = dispatch.automatic_budget_seconds
+  automaticStartedAt.value = dispatch.automatic_started_at
+  automaticDeadlineAt.value = dispatch.automatic_deadline_at
+  operationDeadlineAt.value = dispatch.operation_deadline_at
+  runtimeNowSeconds.value = Math.floor(Date.now() / 1000)
+}
 const currentTaskIntent = ref<ImageTaskIntent>('unknown')
 interface CreativeConflictRow {
   segmentId: string
@@ -187,11 +301,294 @@ const taskShellTitle = computed(() => {
   if (currentTaskIntent.value === 'artwork') return '美术作品'
   return '图片任务'
 })
+const taskProviderDisplayName = computed(() =>
+  resolveProviderDisplayName(
+    props.displayProvider || props.modelRoute?.provider,
+    settingsStore.config?.llm.providers ?? [],
+  ),
+)
+const taskModelDisplayName = computed(
+  () => props.displayModel?.trim() || props.modelRoute?.model?.trim() || '',
+)
+const taskTimeDisplay = computed(() => {
+  if (!taskCreatedAt.value) return ''
+  const timestamp =
+    taskCreatedAt.value < 1_000_000_000_000
+      ? taskCreatedAt.value * 1000
+      : taskCreatedAt.value
+  return formatTime(new Date(timestamp).toISOString())
+})
+const showTaskFooter = computed(
+  () =>
+    !!currentDispatchId.value &&
+    !['completed', 'feedback_ready', 'promoted', 'cancelled'].includes(currentTaskStage.value),
+)
+const showTaskRetry = computed(
+  () =>
+    currentTaskStage.value === 'failed_retryable' &&
+    retryable.value &&
+    !retrySubmitting.value &&
+    !outcomeUnknown.value,
+)
 const unconfirmedCreativeConflictCount = computed(
   () => creativeConflicts.value.filter((conflict) => !conflict.confirmed).length,
 )
 // recovering 仅表示同一个图片任务正在恢复；不是终态，也不提供二次操作入口。
 const outcomeUnknown = ref(false)
+const isWithSkips = computed(() => taskCoverage.value?.state === 'with_skips')
+const skippedProblems = computed(() =>
+  problemProgressSlots.value.filter(problemIsSkipped),
+)
+const finalArtifactDigest = computed(() => {
+  const digest = finalArtifact.value?.digest
+  return typeof digest === 'string' ? digest.trim() : ''
+})
+const finalArtifactTitle = computed(() => {
+  const title = finalArtifact.value?.title
+  if (typeof title === 'string' && title.trim()) return title.trim()
+  if (isWithSkips.value) {
+    return `整页批改完成 · 有 ${taskCoverage.value?.skipped ?? 0} 题跳过`
+  }
+  return '整页批改完成'
+})
+
+interface SingleProblemProgressItem {
+  kind: 'problem'
+  key: string
+  problem: ImageTaskProblemProgressDTO
+}
+
+interface GroupProblemProgressItem {
+  kind: 'group'
+  key: string
+  groupId: string
+  displayLabel: string
+  ordinal: number
+  problems: ImageTaskProblemProgressDTO[]
+}
+
+type ProblemProgressItem = SingleProblemProgressItem | GroupProblemProgressItem
+
+const SOURCE_ORDINALS: Record<string, number> = {
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+  十: 10,
+}
+
+function sourceOrdinal(problem: ImageTaskProblemProgressDTO): number {
+  const source = problem.source_number_path[0] ?? ''
+  const numeric = Number.parseInt(source, 10)
+  return Number.isFinite(numeric) ? numeric : (SOURCE_ORDINALS[source] ?? 0)
+}
+
+const problemProgressItems = computed<ProblemProgressItem[]>(() => {
+  const projected: ProblemProgressItem[] = []
+  const consumedGroups = new Set<string>()
+  for (const problem of problemProgressSlots.value) {
+    const groupId = problem.dependency_group_id?.trim()
+    if (!groupId) {
+      projected.push({
+        kind: 'problem',
+        key: problem.problem_id,
+        problem,
+      })
+      continue
+    }
+    if (consumedGroups.has(groupId)) continue
+    consumedGroups.add(groupId)
+    const problems = problemProgressSlots.value.filter(
+      candidate => candidate.dependency_group_id === groupId,
+    )
+    const parent = rows.value.find(
+      row => row.problemId === problem.parent_problem_id,
+    )
+    projected.push({
+      kind: 'group',
+      key: `group:${groupId}`,
+      groupId,
+      displayLabel: parent?.displayLabel || problem.source_number_path[0] || problem.display_label,
+      ordinal: sourceOrdinal(problem),
+      problems,
+    })
+  }
+  return projected
+})
+
+function problemIsSkipped(problem: ImageTaskProblemProgressDTO): boolean {
+  return (
+    problem.operation_state === 'skipped'
+    || problem.disposition_state === 'skipped_by_parent'
+  )
+}
+
+function problemNeedsResolver(problem: ImageTaskProblemProgressDTO): boolean {
+  return problem.source_state === 'awaiting_resolution' || problemIsSkipped(problem)
+}
+
+function resolverDisabled(problems: ImageTaskProblemProgressDTO[]): boolean {
+  return problems.some(
+    problem =>
+      pendingSourceProblemIds.value.has(problem.problem_id)
+      ||
+      problem.command_available === false
+      || sourceIssueOperationLocked(problem.operation_state),
+  )
+}
+
+function expectedInputRevision(problems: ImageTaskProblemProgressDTO[]): number {
+  return Math.max(
+    0,
+    ...problems.map(problem => problem.input_revision ?? problem.published_revision),
+  )
+}
+
+function problemProgressStatus(problem: ImageTaskProblemProgressDTO): string {
+  if (problemIsSkipped(problem)) return '已跳过 · 未判断对错'
+  if (problem.source_state === 'awaiting_resolution') return '等待处理题源问题'
+  if (problem.operation_state === 'outcome_unknown') return '正在恢复处理结果'
+  if (problem.disposition_state === 'result') return '已批改'
+  return '处理中'
+}
+
+function sourceActionRequest(
+  intent: SourceIssueIntent,
+): ImageTaskProblemSourceActionReq | null {
+  if (intent.action === 'skip' || intent.action === 'resume') {
+    return {
+      action: intent.action,
+      structure_version: intent.structure_version,
+      expected_input_revision: intent.expected_input_revision,
+      payload: {},
+    }
+  }
+  if (intent.action === 'correct_recognition') {
+    const corrected = intent.payload?.corrected_text?.trim()
+    if (!corrected) return null
+    return {
+      action: 'correct_text',
+      structure_version: intent.structure_version,
+      expected_input_revision: intent.expected_input_revision,
+      payload: { question_canonical_markdown: corrected },
+    }
+  }
+  return null
+}
+
+function updatePendingSourceProblems(problemIds: string[], pending: boolean) {
+  const next = new Set(pendingSourceProblemIds.value)
+  for (const problemId of problemIds) {
+    if (pending) next.add(problemId)
+    else next.delete(problemId)
+  }
+  pendingSourceProblemIds.value = next
+}
+
+function applyProblemSourceSnapshot(response: ImageTaskProblemSourceActionResp) {
+  if (response.dispatch_id !== currentDispatchId.value) return
+  currentStructureVersion.value = response.progressive_snapshot.structure_version
+  problemProgressSlots.value = [...response.progressive_snapshot.problem_progress]
+  taskCoverage.value = response.progressive_snapshot.coverage
+}
+
+function sourceActionStatus(cause: unknown): number | undefined {
+  if (!cause || typeof cause !== 'object') return undefined
+  const error = cause as {
+    status?: unknown
+    statusCode?: unknown
+    response?: { status?: unknown }
+  }
+  for (const value of [error.status, error.statusCode, error.response?.status]) {
+    if (typeof value === 'number') return value
+  }
+  return undefined
+}
+
+async function applyLocalSourceIntent(intent: SourceIssueIntent) {
+  const dispatchId = currentDispatchId.value
+  const problemId = intent.problem_ids[0]?.trim()
+  const request = sourceActionRequest(intent)
+  if (!dispatchId || !problemId || !request) return
+  if (intent.problem_ids.some(id => pendingSourceProblemIds.value.has(id))) return
+
+  emit('sourceIssueIntent', intent)
+  updatePendingSourceProblems(intent.problem_ids, true)
+  errMsg.value = ''
+  const fingerprint = `${dispatchId}:${problemId}:${JSON.stringify(request)}`
+  let idempotencyKey = sourceActionIdempotencyKeys.get(fingerprint)
+  if (!idempotencyKey) {
+    idempotencyKey = `source-action-${nanoid(24)}`
+    sourceActionIdempotencyKeys.set(fingerprint, idempotencyKey)
+  }
+  const controller = new AbortController()
+  sourceActionControllers.add(controller)
+  try {
+    const response = await k12SubmitImageTaskProblemSourceAction(
+      dispatchId,
+      problemId,
+      request,
+      idempotencyKey,
+      controller.signal,
+    )
+    applyProblemSourceSnapshot(response)
+  } catch (cause) {
+    if (sourceActionStatus(cause) === 409 && !controller.signal.aborted) {
+      try {
+        const current = await k12GetImageTask(
+          props.agentId,
+          dispatchId,
+          controller.signal,
+        )
+        if (currentDispatchId.value === dispatchId) {
+          projectImageTaskDispatch(current.dispatch)
+        }
+      } catch (refreshCause) {
+        if (!controller.signal.aborted) {
+          errMsg.value =
+            refreshCause instanceof Error ? refreshCause.message : String(refreshCause)
+        }
+      }
+    } else if (!controller.signal.aborted) {
+      errMsg.value = cause instanceof Error ? cause.message : String(cause)
+    }
+  } finally {
+    sourceActionControllers.delete(controller)
+    updatePendingSourceProblems(intent.problem_ids, false)
+  }
+}
+
+const taskContentProjection = computed(() =>
+  [
+    currentTaskStage.value,
+    recognizing.value ? 'recognizing' : '',
+    anchoring.value ? 'anchoring' : '',
+    batchWorking.value ? 'working' : '',
+    recognitionFailed.value ? 'failed' : '',
+    outcomeUnknown.value ? 'outcome-unknown' : '',
+    anchorWarning.value,
+    errMsg.value,
+    rows.value.length,
+    problemProgressSlots.value
+      .map((problem) => `${problem.problem_id}:${problem.published_revision}`)
+      .join(','),
+    taskCoverage.value
+      ? `${taskCoverage.value.state}:${taskCoverage.value.processed}:${taskCoverage.value.skipped}`
+      : '',
+    finalArtifactDigest.value,
+    blankWorksheetGuide.value.length,
+    annotatedImage.value.length,
+    creativeProjection.value ? 'creative-projection' : '',
+    creativeConflicts.value.length,
+    creativeResult.value ? 'creative-result' : '',
+  ].join('|'),
+)
+watch(taskContentProjection, () => emit('contentUpdated'), { flush: 'post' })
 const restoredFromBinding = ref(false)
 let agentGeneration = 0
 let recognitionGeneration = 0
@@ -247,6 +644,8 @@ const overlayMarks = computed(() =>
       // 超纲只表示“当前学段不应批改”，绝不是孩子答错；叠加层据此禁止画红叉。
       outOfScope: r.verify?.verdict === 'out_of_scope',
       bbox: r.bbox,
+      source_number_path: r.sourceNumberPath,
+      display_label: r.displayLabel,
       question: r.problem,
       // solution 可能是整段 Markdown 推导；原图上只显示简短最终答案。
       correctAnswer: extractBriefFinalAnswer(r.solution),
@@ -361,9 +760,10 @@ function riskLabel(reason: OCRConfirmationReason): string {
 }
 
 function rowLabel(row: GuardRow, index: number): string {
+  void index
+  if (row.displayLabel.trim()) return row.displayLabel
   if (row.problemKind === 'compound_parent') return '公共题干'
-  if (row.problemKind === 'subproblem') return row.subproblemNo || String(index + 1)
-  return String(index + 1)
+  return ''
 }
 
 function normalizeAnswerState(question: RecognizedQuestion): AnswerState {
@@ -384,6 +784,8 @@ function guardRowsFromQuestions(questions: RecognizedQuestion[]): GuardRow[] {
     problemKind: question.problem_kind ?? 'standalone',
     parentProblemId: question.parent_problem_id ?? '',
     subproblemNo: question.subproblem_no ?? '',
+    sourceNumberPath: question.source_number_path ?? [],
+    displayLabel: question.display_label ?? '',
     attemptId: question.attempt_id ?? '',
     rawProblem: question.raw_transcription ?? question.question,
     problem: question.canonical_markdown ?? question.question,
@@ -442,9 +844,20 @@ function projectCreativeIntake(projection?: ImageTaskCreativeProjectionDTO) {
 function projectImageTaskView(view: ImageTaskView) {
   currentDispatchId.value = view.dispatchId
   currentDispatchVersion.value = view.dispatchVersion
+  currentTaskStage.value = view.stage
+  taskCreatedAt.value = view.createdAt
+  automaticBudgetSeconds.value = view.automaticBudgetSeconds
+  automaticStartedAt.value = view.automaticStartedAt
+  automaticDeadlineAt.value = view.automaticDeadlineAt
+  operationDeadlineAt.value = view.operationDeadlineAt
+  runtimeNowSeconds.value = Math.floor(Date.now() / 1000)
+  syncExecutionState(view.stage)
   currentTaskIntent.value = view.taskIntent
   projectCreativeIntake(view.creative)
-  recognitionFailed.value = view.stage === 'feedback_failed'
+  retryable.value = view.retryable === true && view.stage === 'failed_retryable'
+  recognitionFailed.value = ['failed_retryable', 'failed_terminal', 'feedback_failed'].includes(
+    view.stage,
+  )
   errMsg.value = recognitionFailed.value ? t('k12.recognize.jobFailed') : ''
 
   const questions = view.questions
@@ -459,7 +872,7 @@ function projectImageTaskView(view: ImageTaskView) {
   anchoring.value = view.anchorState === 'pending' && !!rows.value.length
   anchorWarning.value = view.anchorState === 'degraded' ? t('k12.recognize.anchorFailed') : ''
   confirmed.value = view.confirmationState === 'confirmed'
-  outcomeUnknown.value = view.stage === 'recovering'
+  outcomeUnknown.value = view.stage === 'recovering' || view.stage === 'outcome_unknown'
   batchWorking.value =
     outcomeUnknown.value ||
     ['assessing', 'rendering', 'projecting', 'feedback_pending'].includes(view.stage)
@@ -472,14 +885,51 @@ function projectImageTaskView(view: ImageTaskView) {
 function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
   currentDispatchId.value = dispatch.dispatch_id
   currentDispatchVersion.value = dispatch.version
+  taskCreatedAt.value = dispatch.created_at
+  projectRuntimeTiming(dispatch)
   currentTaskIntent.value = dispatch.task_intent
   const projection = dispatch.target_projection
+  currentTaskStage.value =
+    projection?.kind === 'homework'
+      ? projection.stage
+      : projection?.kind === 'creative' && dispatch.progress.operation === 'promotion'
+        ? dispatch.progress.state
+        : projection?.kind === 'creative'
+          ? projection.status
+          : dispatch.status
+  syncExecutionState(currentTaskStage.value)
+  retryable.value =
+    dispatch.retryable === true && currentTaskStage.value === 'failed_retryable'
   if (projection?.kind === 'homework') {
+    taskCoverage.value = projection.coverage ?? null
+    finalArtifact.value = projection.final_artifact ?? null
+    currentStructureVersion.value = projection.structure_version ?? 0
+    const sourceOrder = new Map(
+      (projection.recognition?.questions ?? [])
+        .map((question, index) => [question.problem_id, index]),
+    )
+    problemProgressSlots.value = [...(projection.problems ?? [])].sort((left, right) => {
+      const leftIndex = sourceOrder.get(left.problem_id) ?? Number.MAX_SAFE_INTEGER
+      const rightIndex = sourceOrder.get(right.problem_id) ?? Number.MAX_SAFE_INTEGER
+      if (leftIndex !== rightIndex) return leftIndex - rightIndex
+      return left.source_number_path.join('.').localeCompare(
+        right.source_number_path.join('.'),
+        undefined,
+        { numeric: true },
+      )
+    })
     projectImageTaskView({
       dispatchId: dispatch.dispatch_id,
       dispatchVersion: dispatch.version,
+      createdAt: dispatch.created_at,
+      automaticBudgetSeconds: dispatch.automatic_budget_seconds,
+      automaticStartedAt: dispatch.automatic_started_at,
+      automaticDeadlineAt: dispatch.automatic_deadline_at,
+      automaticRemainingSeconds: dispatch.automatic_remaining_seconds,
+      operationDeadlineAt: dispatch.operation_deadline_at,
       taskIntent: dispatch.task_intent,
       stage: projection.stage,
+      retryable: dispatch.retryable === true,
       questions: projection.recognition?.questions ?? [],
       subject: projection.recognition?.subject ?? '',
       anchorState: projection.anchor_state,
@@ -489,6 +939,10 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
     })
     return
   }
+  problemProgressSlots.value = []
+  taskCoverage.value = null
+  finalArtifact.value = null
+  currentStructureVersion.value = 0
   projectCreativeIntake(projection?.kind === 'creative' ? projection : undefined)
   const feedbackState =
     projection?.kind === 'creative' && dispatch.progress.operation === 'promotion'
@@ -537,11 +991,17 @@ watch(
     annotatedImage.value = ''
     blankWorksheetGuide.value = []
     rows.value = []
+    problemProgressSlots.value = []
+    taskCoverage.value = null
+    finalArtifact.value = null
+    currentStructureVersion.value = 0
     recognizing.value = false
     anchoring.value = false
     anchorWarning.value = ''
     errMsg.value = ''
     recognitionFailed.value = false
+    retryable.value = false
+    retrySubmitting.value = false
     confirmed.value = false
     correctionMode.value = false
     batchWorking.value = false
@@ -576,15 +1036,28 @@ watch(
 // 刷新/重启恢复：没有新图片时，只按 session+agent 的最小绑定 GET 同一 dispatch。
 // recovering 仅投影作业链的公开瞬时恢复进度；终态只从同一 facade result 读取。
 onMounted(async () => {
-  if (props.initialImage?.trim() || !props.sessionId?.trim()) return
+  runtimeClock = setInterval(() => {
+    runtimeNowSeconds.value = Math.floor(Date.now() / 1000)
+  }, 1000)
+  if (
+    props.initialImage?.trim() ||
+    !props.sessionId?.trim() ||
+    !props.sourceMessageId?.trim() ||
+    !props.restoreDispatchId?.trim()
+  )
+    return
   const generation = agentGeneration
   const controller = new AbortController()
   restoreAbort = controller
   restoredFromBinding.value = true
   try {
-    const view = await store.restoreImageTask(
+    const view = await store.restoreImageTaskDispatch(
       props.agentId,
-      props.sessionId,
+      {
+        sourceSession: props.sessionId,
+        sourceMessageId: props.sourceMessageId,
+        dispatchId: props.restoreDispatchId,
+      },
       controller.signal,
       (snapshot) => {
         if (generation !== agentGeneration || controller.signal.aborted) return
@@ -648,11 +1121,23 @@ async function run() {
   currentDispatchId.value = ''
   currentDispatchVersion.value = 0
   currentTaskIntent.value = 'unknown'
+  retryable.value = false
+  retrySubmitting.value = false
   creativeProjection.value = null
   creativeConflicts.value = []
   creativeResult.value = null
   rows.value = []
+  problemProgressSlots.value = []
+  taskCoverage.value = null
+  finalArtifact.value = null
+  currentStructureVersion.value = 0
   selectedSubject.value = ''
+  currentTaskStage.value = 'routing'
+  automaticBudgetSeconds.value = undefined
+  automaticStartedAt.value = undefined
+  automaticDeadlineAt.value = undefined
+  operationDeadlineAt.value = undefined
+  syncExecutionState('routing')
   try {
     // 单入口先固化 Asset，再由 /image-tasks 分类；Desktop 不再创建或保存内部 Job identity。
     const task = await store.dispatchImageTask(
@@ -743,6 +1228,7 @@ async function run() {
       return
     errMsg.value = e instanceof Error ? e.message : String(e)
     recognitionFailed.value = true
+    syncExecutionState(currentDispatchId.value ? 'recovering' : 'failed_retryable')
   } finally {
     if (generation === agentGeneration && recognition === recognitionGeneration) {
       recognizing.value = false
@@ -755,6 +1241,8 @@ async function retryRecognitionStage() {
   if (
     outcomeUnknown.value ||
     recognizing.value ||
+    retrySubmitting.value ||
+    !retryable.value ||
     !currentDispatchId.value.trim() ||
     currentDispatchVersion.value < 1
   ) {
@@ -762,9 +1250,9 @@ async function retryRecognitionStage() {
   }
   const generation = agentGeneration
   const dispatchId = currentDispatchId.value
-  recognitionFailed.value = false
   errMsg.value = ''
   batchWorking.value = true
+  retrySubmitting.value = true
   try {
     const view = await store.retryImageTask(
       props.agentId,
@@ -783,6 +1271,7 @@ async function retryRecognitionStage() {
     recognitionFailed.value = true
     errMsg.value = error instanceof Error ? error.message : String(error)
   } finally {
+    if (generation === agentGeneration) retrySubmitting.value = false
     if (generation === agentGeneration && !outcomeUnknown.value) batchWorking.value = false
   }
 }
@@ -1022,6 +1511,13 @@ function truncateProblem(problem: string): string {
 }
 
 onBeforeUnmount(() => {
+  if (runtimeClock) {
+    clearInterval(runtimeClock)
+    runtimeClock = null
+  }
+  for (const controller of sourceActionControllers) controller.abort()
+  sourceActionControllers.clear()
+  pendingSourceProblemIds.value = new Set()
   recognitionGeneration += 1
   restoreAbort?.abort()
   restoreAbort = null
@@ -1196,6 +1692,8 @@ async function coldStart() {
       'rec-panel--collapsed': collapsed,
     }"
     data-testid="recognize-guard"
+    :data-source-message-id="sourceMessageId || undefined"
+    :data-dispatch-id="currentDispatchId || restoreDispatchId || undefined"
   >
     <div class="rec-panel__head">
       <span
@@ -1275,11 +1773,55 @@ async function coldStart() {
     </div>
 
     <div
+      v-if="recognizing && currentTaskIntent === 'unknown'"
+      class="hc-typing-dots"
+      data-testid="image-task-routing-progress"
+      role="status"
+      aria-label="正在识别"
+    >
+      <span class="hc-typing-dots__dot" />
+      <span class="hc-typing-dots__dot" />
+      <span class="hc-typing-dots__dot" />
+    </div>
+
+    <p
+      v-if="
+        currentTaskIntent === 'artwork' &&
+        !creativeResult &&
+        batchWorking &&
+        !recognitionFailed &&
+        !outcomeUnknown
+      "
+      class="rec-creative-progress"
+      data-testid="artwork-feedback-progress"
+      role="status"
+    >
+      <b>已识别出：美术作品</b>
+      <span aria-hidden="true">···</span>
+      <span>正在生成作品点评…</span>
+    </p>
+
+    <p
+      v-if="
+        currentTaskIntent === 'writing' &&
+        !creativeResult &&
+        batchWorking &&
+        !recognitionFailed &&
+        !outcomeUnknown
+      "
+      class="rec-creative-progress"
+      data-testid="writing-feedback-progress"
+      role="status"
+    >
+      <span>正在生成作品点评…</span>
+    </p>
+
+    <div
       v-if="
         outcomeUnknown ||
         ((!hasBlankWorksheetGuide && !showOverlay) &&
           ((currentTaskIntent === 'completed_homework' &&
-            (rows.length || recognitionFailed || batchWorking || anchoring)) ||
+            (rows.length || recognitionFailed || recognizing || batchWorking || anchoring)) ||
             ((currentTaskIntent === 'writing' || currentTaskIntent === 'artwork') &&
               recognitionFailed)))
       "
@@ -1298,6 +1840,74 @@ async function coldStart() {
             : '清晰内容自动处理'
         }}</span>
       </div>
+      <ol
+        v-if="
+          !outcomeUnknown &&
+          currentTaskIntent === 'completed_homework' &&
+          problemProgressSlots.length
+        "
+        class="rec-problem-progress"
+        role="list"
+        aria-label="逐题处理进度"
+      >
+        <li
+          v-for="item in problemProgressItems"
+          :key="item.key"
+          class="rec-problem-progress__item"
+          role="listitem"
+          :data-problem-id="item.kind === 'problem' ? item.problem.problem_id : undefined"
+          :data-problem-group-id="item.kind === 'group' ? item.groupId : undefined"
+        >
+          <template v-if="item.kind === 'problem'">
+            <div class="rec-problem-progress__line">
+              <b>{{ item.problem.display_label }}</b>
+              <span>{{ problemProgressStatus(item.problem) }}</span>
+            </div>
+            <SourceIssueResolver
+              v-if="problemNeedsResolver(item.problem)"
+              scope="problem"
+              :display-label="item.problem.display_label"
+              :affected-labels="[item.problem.display_label]"
+              :problem-ids="[item.problem.problem_id]"
+              :structure-version="currentStructureVersion"
+              :expected-input-revision="expectedInputRevision([item.problem])"
+              :skipped="problemIsSkipped(item.problem)"
+              :command-available="!resolverDisabled([item.problem])"
+              skip-label="跳过这题"
+              @intent="applyLocalSourceIntent"
+            />
+          </template>
+          <template v-else>
+            <div class="rec-problem-progress__line">
+              <b>{{ item.displayLabel }}</b>
+              <span>公共题干 · {{ item.problems.length }} 个小题</span>
+            </div>
+            <div
+              v-for="problem in item.problems"
+              :key="problem.problem_id"
+              class="rec-problem-progress__child"
+              :data-problem-id="problem.problem_id"
+            >
+              <span>{{ problem.display_label }}</span>
+              <span>{{ problemProgressStatus(problem) }}</span>
+            </div>
+            <SourceIssueResolver
+              v-if="item.problems.some(problemNeedsResolver)"
+              scope="group"
+              :display-label="item.displayLabel"
+              :affected-labels="item.problems.map(problem => problem.display_label)"
+              :problem-ids="item.problems.map(problem => problem.problem_id)"
+              :dependency-group-id="item.groupId"
+              :structure-version="currentStructureVersion"
+              :expected-input-revision="expectedInputRevision(item.problems)"
+              :skipped="item.problems.every(problemIsSkipped)"
+              :command-available="!resolverDisabled(item.problems)"
+              :skip-label="`跳过第 ${item.ordinal} 题组`"
+              @intent="applyLocalSourceIntent"
+            />
+          </template>
+        </li>
+      </ol>
       <div
         v-if="!outcomeUnknown && currentTaskIntent === 'completed_homework'"
         class="rec-pipeline__branches"
@@ -1322,18 +1932,30 @@ async function coldStart() {
         >
           <i>{{ anchorWarning ? '!' : rows.length && !anchoring ? '✓' : '2' }}</i>
           <div>
-            <b>{{
-              anchorWarning
-                ? '定位超时 · 已转文字批改'
-                : rows.length && !anchoring
-                  ? '原图题目已定位'
-                  : '正在定位原图题目'
-            }}</b>
+            <b>
+              <span
+                v-if="!anchorWarning && !(rows.length && !anchoring)"
+                class="hc-typing-dots hc-typing-dots--inline"
+                aria-label="处理中"
+                role="status"
+              >
+                <span class="hc-typing-dots__dot"></span>
+                <span class="hc-typing-dots__dot"></span>
+                <span class="hc-typing-dots__dot"></span>
+              </span>
+              {{
+                anchorWarning
+                  ? '定位超时 · 已转文字批改'
+                  : rows.length && !anchoring
+                    ? '原图题目已定位'
+                    : '正在定位原图题目'
+              }}
+            </b>
             <small>{{
               anchorWarning ||
               (rows.length && !anchoring
                 ? '坐标只补充展示，不改写已冻结文字'
-                : '与确认并行 · 阶段预算 60 秒 · 到期转文字批改')
+                : activeStageTimingText)
             }}</small>
           </div>
         </div>
@@ -1345,9 +1967,15 @@ async function coldStart() {
         role="alert"
       >
         <span>{{ t('k12.recognize.err') }}：{{ errMsg }}</span>
-        <button type="button" data-testid="recognize-stage-retry" @click="retryRecognitionStage">
-          重试当前阶段
-        </button>
+        <span v-if="!retryable" data-testid="recognize-stage-not-retryable"
+          >当前状态不能安全重试，系统不会重复提交。</span
+        >
+        <span
+          v-if="retrySubmitting"
+          data-testid="recognize-retry-processing"
+          role="status"
+          >正在处理同一个任务…</span
+        >
       </div>
       <div
         v-if="outcomeUnknown"
@@ -1361,6 +1989,38 @@ async function coldStart() {
         >
       </div>
     </div>
+
+    <section
+      v-if="finalArtifact && finalArtifactDigest"
+      class="rec-final-artifact"
+      data-testid="image-task-final-artifact"
+      :data-artifact-digest="finalArtifactDigest"
+      aria-label="批改最终结果"
+    >
+      <b>{{ isWithSkips ? '处理完成 · 有跳过' : '处理完成' }}</b>
+      <h3>{{ finalArtifactTitle }}</h3>
+      <p v-if="taskCoverage">
+        共 {{ taskCoverage.total }} 题 · 已处理 {{ taskCoverage.processed }} 题 ·
+        {{ taskCoverage.skipped }} 题由家长跳过
+      </p>
+      <div v-if="skippedProblems.length" class="rec-final-artifact__skips">
+        <div
+          v-for="problem in skippedProblems"
+          :key="problem.problem_id"
+          :data-problem-id="problem.problem_id"
+        >
+          <span>{{ problem.display_label }}</span>
+          <span>已跳过 · 未判断对错</span>
+        </div>
+      </div>
+      <p v-if="isWithSkips">
+        本次有 {{ taskCoverage?.skipped ?? 0 }} 题跳过，未生成完整辅导要点。
+      </p>
+      <FinalArtifactActions
+        :artifact-digest="finalArtifactDigest"
+        @intent="emit('finalArtifactAction', $event)"
+      />
+    </section>
 
     <div
       v-show="!hasBlankWorksheetGuide && !showOverlay && rows.length && !selectedSubject"
@@ -1386,11 +2046,27 @@ async function coldStart() {
       :data-intake-status="creativeResult.payload.intake.status"
       :data-work-id="creativeResult.payload.work?.work_id || undefined"
     >
-      <MarkdownRenderer
+      <CreativeWorkFeedbackRenderer
         v-if="creativeResult.payload.feedback"
-        class="rec-creative-result__feedback"
         :data-testid="`${creativeResult.taskIntent}-result-feedback`"
-        :content="creativeResult.payload.feedback.projection_markdown"
+        :generation-id="creativeResult.payload.feedback.generation_id"
+        :feedback-id="creativeResult.payload.feedback.structured_feedback.feedback_id"
+        :projection-markdown="creativeResult.payload.feedback.projection_markdown"
+        :visible-evidence="
+          creativeResult.payload.feedback.structured_feedback.observations.map(
+            (observation) => observation.evidence,
+          )
+        "
+        :affirmation="
+          creativeResult.payload.feedback.structured_feedback.suggestions[0] || ''
+        "
+        :parent-guidance="
+          creativeResult.payload.feedback.structured_feedback.suggestions[1] || ''
+        "
+        :next-step="
+          creativeResult.payload.feedback.structured_feedback.suggestions[2] || ''
+        "
+        :limitations="creativeResult.payload.feedback.structured_feedback.limitations"
       />
     </div>
 
@@ -1745,6 +2421,7 @@ async function coldStart() {
     <TutoringTipsPanel
       v-if="
         !hasBlankWorksheetGuide &&
+        !taskCoverage &&
         confirmed &&
         selectedSubject &&
         rows.length &&
@@ -1759,6 +2436,29 @@ async function coldStart() {
       :textbook="activeTextbook"
       :knowledge-points="allKnowledgePoints"
     />
+    <footer
+      v-if="showTaskFooter"
+      class="rec-panel__footer msg-footer"
+      data-testid="task-shell-footer"
+    >
+      <div class="rec-panel__metadata msg-meta" data-testid="task-shell-metadata">
+        <span>{{ taskTimeDisplay }}</span>
+        <span>·</span>
+        <span>{{ taskProviderDisplayName }}</span>
+        <span>·</span>
+        <span>{{ taskModelDisplayName }}</span>
+        <span>·</span>
+        <span>{{ agentDisplayName }}</span>
+        <span v-if="grade">·</span>
+        <span v-if="grade">{{ grade }}</span>
+      </div>
+      <MessageActions
+        role="assistant"
+        :content="taskShellTitle"
+        :show-retry="showTaskRetry"
+        @retry="retryRecognitionStage"
+      />
+    </footer>
   </div>
 </template>
 
@@ -1773,7 +2473,7 @@ async function coldStart() {
 .rec-panel--conversation {
   padding: 10px 14px 12px;
 }
-.rec-panel--collapsed > :not(.rec-panel__head) {
+.rec-panel--collapsed > :not(.rec-panel__head):not(.rec-panel__footer) {
   display: none !important;
 }
 .rec-panel--collapsed.rec-panel--conversation {
@@ -1922,6 +2622,24 @@ async function coldStart() {
   display: flex;
   align-items: center;
 }
+.rec-panel__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding-top: 7px;
+}
+.rec-panel__metadata {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+  color: var(--hc-text-muted);
+  font-size: 10.5px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
 .rec-panel__title {
   font-size: 13px;
   font-weight: 700;
@@ -1951,6 +2669,18 @@ async function coldStart() {
   color: var(--hc-text-muted);
   line-height: 1.5;
   margin: 0;
+}
+.rec-creative-progress {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--hc-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.rec-creative-progress b {
+  color: var(--hc-text-primary);
 }
 .rec-panel__file {
   display: inline-flex;
@@ -2023,6 +2753,21 @@ async function coldStart() {
 .rec-pipeline__head b {
   color: var(--hc-text-primary);
   font-size: 11.5px;
+}
+.rec-problem-progress {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.rec-problem-progress__item {
+  padding: 8px 9px;
+  border-radius: 9px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-primary);
+  font-size: 10.5px;
+  font-weight: 600;
 }
 .rec-pipeline__branches {
   display: grid;

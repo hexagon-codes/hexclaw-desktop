@@ -56,6 +56,7 @@ function render() {
     props: {
       agentId: 'ming',
       agentName: '小明的辅导老师',
+      sessionId: 'session-1',
       metadata: { 'k12.grade_term': '五年级上' },
       descriptor: K12_VIEW_DESCRIPTOR,
     },
@@ -71,7 +72,7 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     // Teleport 目标锚点（ChatView/ChatInput 提供，测试里预置）：页脚 + composer 上方(能力 chips)
     // + composer 输入行动作(拍照识题按钮) + 场景侧栏(辅导要点停靠)
     document.body.innerHTML =
-      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
+      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-inline-message-1"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div><div id="hc-chat-scenario-sidepanel"></div>'
   })
 
   it('据描述符渲染头部 tab（辅导/学习档案/学情）· 头部零动作按钮（20260709：辅导要点内联进识题流）', () => {
@@ -182,13 +183,20 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     expect(w.find('[data-testid="recognize-guard"]').exists()).toBe(false)
     // 手动识题 toggle 已删（唯一入口=composer 图片自动改道），任何位置都不得出现
     expect(document.querySelector('[data-testid="k12-recognize-toggle"]')).toBeFalsy()
-    await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
+    await w.setProps({
+      composerImage: {
+        dataUrl: 'data:image/png;base64,Zm9v',
+        attachment: { type: 'image', name: 'homework.png', mime: 'image/png', data: 'Zm9v' },
+        requestId: 'message-1',
+        sourceSessionId: 'session-1',
+      },
+    })
     await flushPromises()
     expect(
-      document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]'),
+      document.querySelector('#hc-chat-scenario-inline-message-1 [data-testid="recognize-guard"]'),
     ).toBeTruthy()
     const assistant = document.querySelector(
-      '#hc-chat-scenario-inline [data-testid="k12-photo-assistant-message"]',
+      '#hc-chat-scenario-inline-message-1 [data-testid="k12-photo-assistant-message"]',
     )
     expect(assistant?.querySelector('.k12enh-tutor__avatar img')).toBeTruthy()
     expect(assistant?.querySelector('.k12enh-tutor__name')?.textContent).toContain('小明的辅导老师')
@@ -197,19 +205,19 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
     ).toBeTruthy()
     expect(
       document.querySelectorAll(
-        '#hc-chat-scenario-inline [data-testid="k12-photo-assistant-message"] [data-testid="recognize-close"]',
+        '#hc-chat-scenario-inline-message-1 [data-testid="k12-photo-assistant-message"] [data-testid="recognize-close"]',
       ),
     ).toHaveLength(1)
     const inlineEvents = w.emitted('update:inlineActive') ?? []
     expect(inlineEvents[inlineEvents.length - 1]).toEqual([true])
 
     const taskToggle = document.querySelector<HTMLElement>(
-      '#hc-chat-scenario-inline [data-testid="recognize-close"]',
+      '#hc-chat-scenario-inline-message-1 [data-testid="recognize-close"]',
     )!
     taskToggle.click()
     await flushPromises()
     const collapsedGuard = document.querySelector<HTMLElement>(
-      '#hc-chat-scenario-inline [data-testid="recognize-guard"]',
+      '#hc-chat-scenario-inline-message-1 [data-testid="recognize-guard"]',
     )
     expect(collapsedGuard?.classList.contains('rec-panel--collapsed')).toBe(true)
     expect(taskToggle.getAttribute('aria-label')).toBe('展开任务')
@@ -244,10 +252,17 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
   it('切换实例（agentId 变）→ 关闭上一个孩子的识题面板并清空待识别图片', async () => {
     const w = render()
     // 打开路径=图片自动改道（BUG-20260711-E：手动 toggle 已删）
-    await w.setProps({ composerImage: 'data:image/png;base64,Zm9v' })
+    await w.setProps({
+      composerImage: {
+        dataUrl: 'data:image/png;base64,Zm9v',
+        attachment: { type: 'image', name: 'homework.png', mime: 'image/png', data: 'Zm9v' },
+        requestId: 'message-1',
+        sourceSessionId: 'session-1',
+      },
+    })
     await flushPromises()
     expect(
-      document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]'),
+      document.querySelector('#hc-chat-scenario-inline-message-1 [data-testid="recognize-guard"]'),
     ).toBeTruthy()
 
     await w.setProps({ agentId: 'hong' })
@@ -271,16 +286,21 @@ describe('K12ChatEnhancement（M3-1 会话即入口）', () => {
       dataUrl: 'data:image/png;base64,Zm9v',
       attachment,
       requestId: 'message-old-spark',
+      sourceSessionId: 'session-1',
       route: {
         provider: 'hexclaw-gpt',
         model: 'gpt-5.3-codex-spark',
         capability: 'vision' as const,
       },
     }
+    const sourceAnchor = document.createElement('div')
+    sourceAnchor.id = 'hc-chat-scenario-inline-message-old-spark'
+    document.body.appendChild(sourceAnchor)
     const w = mount(K12ChatEnhancement, {
       props: {
         agentId: 'ming',
         agentName: '小明的辅导老师',
+        sessionId: 'session-1',
         metadata: { 'k12.grade_term': '五年级上' },
         descriptor: K12_VIEW_DESCRIPTOR,
         composerImage: originalAttempt,

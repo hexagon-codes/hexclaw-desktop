@@ -5,6 +5,8 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import HcSelect from '@/components/common/HcSelect.vue'
+import { k12EnsureWeeklyPracticePlan } from '@/api/k12'
+import K12WeeklyPracticePanel from '../components/K12WeeklyPracticePanel.vue'
 import K12RecordsView from '../views/K12RecordsView.vue'
 import K12InsightPanel from '../views/K12InsightPanel.vue'
 
@@ -40,13 +42,9 @@ const h = vi.hoisted(() => {
   return {
     mistakes,
     markMasteredSpy: vi.fn().mockResolvedValue({ ok: true }),
-    retrySpy: vi.fn().mockResolvedValue({
-      solution: '变式题：4.2×3=? 解：12.6',
-      verdict: 'agree',
-      badge: '✅ 已程序验算',
-    }),
     recordMistakeSpy: vi.fn(),
     listMistakesSpy: vi.fn(),
+    prepareWeeklySpy: vi.fn(),
   }
 })
 const markMasteredSpy = h.markMasteredSpy
@@ -55,20 +53,34 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: (...args: unknown[]) => h.listMistakesSpy(...args),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [h.mistakes[0]] }),
   k12MarkMastered: (req: unknown) => h.markMasteredSpy(req),
-  k12ReviewRetry: (req: unknown) => h.retrySpy(req),
+  k12GetMistakePracticeGeneration: vi
+    .fn()
+    .mockImplementation((_agent: string, recordID: string) =>
+      Promise.resolve({ state: 'available', source_mistake_id: recordID }),
+    ),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12RecordMistake: (req: unknown) => h.recordMistakeSpy(req),
   k12InsightReport: vi.fn().mockResolvedValue({
+    learner_id: 'mingming',
+    grade_term: '五年级上',
+    as_of: '2026-07-25T08:00:00+08:00',
+    source_digest: 'sha256:records-view',
+    source_record_ids: ['a', 'b', 'c'],
+    unscoped_source_count: 0,
+    review_week_start: '2026-07-24T19:00:00+08:00',
+    review_week_end: '2026-07-31T19:00:00+08:00',
     trend: { mastered: 5, reviewing: 2, retried: 1, archived: 0, total: 8 },
     weak_top3: [
-      { knowledge_point: '简易方程', count: 2 },
-      { knowledge_point: '小数乘法', count: 1 },
+      { knowledge_point: '简易方程', subject: '数学', count: 2, share: 2 / 9 },
+      { knowledge_point: '小数乘法', subject: '数学', count: 1, share: 1 / 9 },
     ],
     month_new_mistakes: 9,
     review_completion_rate: 0.78,
     consecutive_fail_kps: ['简易方程'],
     suggestion: '「简易方程」连续受挫，建议本周集中复习。',
+    week_pending: 1,
+    practice_pending: 0,
   }),
   k12StudyTime: vi.fn().mockResolvedValue({
     days: [{ date: '2026-07-07', record_count: 3, estimated_minutes: 45 }],
@@ -77,7 +89,63 @@ vi.mock('@/api/k12', () => ({
     note: '近似值',
   }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
-  // 20260718 学情第四瓷片改练习集待打印：InsightPanel 自拉 draft 篮
+  k12GetCurriculumProgress: vi.fn().mockResolvedValue({ progress: null }),
+  k12GetWeeklyPracticeSettings: vi.fn().mockResolvedValue({
+    agent: 'mingming',
+    revision: 0,
+    timezone: 'Asia/Shanghai',
+    due_review_enabled: true,
+    textbook_consolidation_enabled: false,
+    arithmetic_warmup_enabled: false,
+    arithmetic_minutes: 2,
+    created_at: '2026-07-20T00:00:00Z',
+    updated_at: '2026-07-20T00:00:00Z',
+  }),
+  k12EnsureWeeklyPracticePlan: vi.fn().mockResolvedValue({
+    replayed: false,
+    plan: {
+      plan_id: 'weekly-30',
+      agent: 'mingming',
+      revision: 1,
+      iso_week_year: 2026,
+      iso_week_number: 30,
+      timezone: 'Asia/Shanghai',
+      week_start: '2026-07-20T00:00:00+08:00',
+      week_end: '2026-07-26T23:59:59+08:00',
+      local_start_date: '2026-07-20',
+      local_end_date: '2026-07-26',
+      status: 'draft',
+      settings_revision: 0,
+      tracks: [
+        {
+          plan_section: 'due_review',
+          status: 'ready',
+          items: [
+            {
+              item_id: 'due-a',
+              position: 1,
+              plan_section: 'due_review',
+              source_kind: 'mistake',
+              generation_method: 'original',
+              source_ref: 'a',
+              verification: {
+                status: 'verified',
+                evidence_refs: ['小数乘法'],
+              },
+              prompt_markdown: '苹果和梨的价钱',
+            },
+          ],
+        },
+        { plan_section: 'textbook_consolidation', status: 'disabled', items: [] },
+        { plan_section: 'arithmetic_warmup', status: 'disabled', items: [] },
+      ],
+      created_at: '2026-07-20T00:00:00Z',
+      updated_at: '2026-07-20T00:00:00Z',
+    },
+  }),
+  k12GetWeeklyPracticeHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+  k12PrepareWeeklyPracticeOutput: (...args: unknown[]) => h.prepareWeeklySpy(...args),
+  // 其他档案页仍使用练习集列表；InsightPanel 只消费同一份报告快照。
   k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
 }))
 
@@ -112,6 +180,60 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
       record_id: 'manual-cn-1',
       error_cause: '记错下一句',
     })
+    vi.mocked(k12EnsureWeeklyPracticePlan).mockClear()
+    h.prepareWeeklySpy.mockReset().mockResolvedValue({
+      snapshot: {
+        snapshot_id: 'snapshot-30',
+        plan_id: 'weekly-30',
+        plan_revision: 1,
+        agent: 'mingming',
+        iso_week_year: 2026,
+        iso_week_number: 30,
+        timezone: 'Asia/Shanghai',
+        week_start: '2026-07-20T00:00:00+08:00',
+        week_end: '2026-07-26T23:59:59+08:00',
+        local_start_date: '2026-07-20',
+        local_end_date: '2026-07-26',
+        settings_revision: 0,
+        tracks: [],
+        render_version: 'weekly-v1',
+        snapshot_digest: 'sha256:snapshot',
+        created_at: '2026-07-20T00:00:00Z',
+      },
+      artifact: {
+        artifact_id: 'artifact-30',
+        source_kind: 'weekly_practice_snapshot',
+        source_ref: 'snapshot-30',
+        title: '本周该练',
+        source_digest: 'sha256:snapshot',
+        format: 'pdf',
+        render_contract_version: 'practice-print-v1',
+        content_type: 'application/pdf',
+        byte_digest: 'sha256:pdf',
+        byte_size: 128,
+      },
+    })
+  })
+
+  it('reuses the plan command key across retry and rotates it only after success', async () => {
+    const ensurePlan = vi.mocked(k12EnsureWeeklyPracticePlan)
+    ensurePlan.mockRejectedValueOnce(new Error('temporary weekly-plan failure'))
+
+    const w = render()
+    await flushPromises()
+    const panel = w.findComponent(K12WeeklyPracticePanel)
+
+    panel.vm.$emit('retry')
+    await flushPromises()
+
+    expect(ensurePlan).toHaveBeenCalledTimes(2)
+    expect(ensurePlan.mock.calls[1]?.[1]).toBe(ensurePlan.mock.calls[0]?.[1])
+
+    panel.vm.$emit('retry')
+    await flushPromises()
+
+    expect(ensurePlan).toHaveBeenCalledTimes(3)
+    expect(ensurePlan.mock.calls[2]?.[1]).not.toBe(ensurePlan.mock.calls[1]?.[1])
   })
 
   it('挂载即拉取错题本，按 schema 渲染错题 + 复习队列', async () => {
@@ -119,9 +241,9 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     await flushPromises()
     expect(w.text()).toContain('苹果和梨的价钱')
     expect(w.text()).toContain('小数乘法')
-    // 复习队列（due 列表含 record a）
-    expect(w.find('.rl-review').exists()).toBe(true)
-    expect(w.text()).toContain('本周复习')
+    // 本周该练的到期复习轨来自唯一周计划（due 列表含 record a）
+    expect(w.find('[data-track="due_review"]').exists()).toBe(true)
+    expect(w.text()).toContain('本周该练')
   })
 
   it('从辅导切入学习档案时重新拉取，不能停留在进入会话时的旧缓存', async () => {
@@ -135,33 +257,37 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(h.listMistakesSpy).toHaveBeenCalledTimes(2)
   })
 
+  it('生成本周该练只准备同源输出，不再强制切换到练习集', async () => {
+    const w = render()
+    await flushPromises()
+
+    await w.get('[data-testid="prepare-weekly-output"]').trigger('click')
+    await flushPromises()
+
+    expect(h.prepareWeeklySpy).toHaveBeenCalledTimes(1)
+    expect(h.prepareWeeklySpy).toHaveBeenCalledWith(
+      'mingming',
+      'weekly-30',
+      1,
+      'desktop-weekly-prepare:mingming:weekly-30:1',
+    )
+    expect(w.get('[data-testid="subtab-week"]').classes()).toContain('on')
+    expect(w.get('[data-testid="subtab-practicesets"]').classes()).not.toContain('on')
+    expect(w.find('[data-testid="save-weekly-practice-set"]').exists()).toBe(true)
+  })
+
   it('「家长确认已会」→ 调 mark-mastered 并带正确 record_id/version', async () => {
     const w = render()
     await flushPromises()
-    // 复习队列第一行的按钮（20260718 §4.11 信任链纠偏：家长确认 ≠ 系统已掌握，文案「家长确认已会」）
+    // 本周该练禁止家长判断掌握；该档案动作只留在「全部错题」。
+    await w
+      .findAll('.seg button')
+      .find((b) => b.text() === '全部错题')!
+      .trigger('click')
     const masteredBtn = w.findAll('.rl-btn').find((b) => b.text() === '家长确认已会')!
     await masteredBtn.trigger('click')
     await flushPromises()
     expect(markMasteredSpy).toHaveBeenCalledWith({ agent: 'mingming', record_id: 'a', version: 0 })
-  })
-
-  it('「再练一道」→ 守答案真遮罩：答案默认遮住，点「显示答案」才揭示（20260709 信任兑现）', async () => {
-    const w = render()
-    await flushPromises()
-    await w
-      .findAll('.rl-btn')
-      .find((b) => b.text() === '再练一道')!
-      .trigger('click')
-    await flushPromises()
-    // 弹层出现且默认遮罩（bodywrap 带 masked 类 + 揭示按钮在）
-    expect(w.find('.k12retry').exists()).toBe(true)
-    expect(w.find('.k12retry__bodywrap--masked').exists()).toBe(true)
-    const reveal = w.find('[data-testid="retry-reveal"]')
-    expect(reveal.exists()).toBe(true)
-    await reveal.trigger('click')
-    // 揭示后遮罩解除、答案可见
-    expect(w.find('.k12retry__bodywrap--masked').exists()).toBe(false)
-    expect(w.text()).toContain('12.6')
   })
 
   it('手录错题走轻量 record-mistake 端点（非 grade 验算链），透传家长选的非默认学科', async () => {
@@ -204,7 +330,7 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
   it('学习档案五个二级 Tab 的溢出菜单均提供三种导出与备份恢复', async () => {
     const w = render()
     await flushPromises()
-    const tabs = ['本周复习', '全部错题', '练习集', '积累', '作品']
+    const tabs = ['本周该练', '全部错题', '练习集', '积累', '作品']
     const expected = ['导出 PDF', '导出 Word', '导出 Markdown', '备份 / 恢复']
 
     for (const tab of tabs) {

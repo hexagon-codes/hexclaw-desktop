@@ -25,6 +25,8 @@ interface Mark {
   question?: string
   correctAnswer?: string
   errorCause?: string
+  source_number_path?: string[]
+  display_label?: string
 }
 function render(marks: Mark[], image = 'data:image/png;base64,AAAA') {
   return mount(PhotoGradeOverlay, {
@@ -168,5 +170,32 @@ describe('PhotoGradeOverlay（原图批改 Phase 1 · 确定性叠加 + bbox 错
     const w = render([{ correct: true, bbox: { x: 0.1, y: 0.2, w: 0.1, h: 0.05 } }])
     expect(w.find('[data-testid="overlay-toggle"]').exists()).toBe(true)
     expect(w.find('[data-testid="overlay-save"]').exists()).toBe(false)
+  })
+
+  it('BUG-20260726-D 批改卡严格显示原卷层级题号且禁止 index 重新编号', () => {
+    const w = render([
+      {
+        correct: false,
+        bbox: null,
+        source_number_path: ['三', '1'],
+        display_label: '三、1',
+        question: '24÷8=',
+        correctAnswer: '3',
+      },
+      {
+        correct: true,
+        bbox: null,
+        source_number_path: ['三', '2'],
+        display_label: '三、2',
+        question: '8×4=',
+        correctAnswer: '32',
+      },
+    ])
+
+    const cards = w.findAll('.grade-card')
+    expect(cards[0]!.text()).toContain('三、1')
+    expect(cards[1]!.text()).toContain('三、2')
+    expect(cards[0]!.text()).not.toContain('第 1 题')
+    expect(cards[1]!.text()).not.toContain('第 2 题')
   })
 })

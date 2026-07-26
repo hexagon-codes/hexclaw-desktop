@@ -6,12 +6,17 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12ProfileForm from '../views/K12ProfileForm.vue'
 import HcSelect from '@/components/common/HcSelect.vue'
+import { PRIMARY_GRADES } from '../curriculum'
 
 const h = vi.hoisted(() => ({
   registerSpy: vi.fn().mockResolvedValue({}),
   unregisterSpy: vi.fn().mockResolvedValue({}),
   updateSpy: vi.fn().mockResolvedValue({}),
   profileSpy: vi.fn().mockResolvedValue({}),
+  profileBundleSpy: vi.fn().mockResolvedValue({}),
+  catalogSpy: vi.fn(),
+  progressSpy: vi.fn(),
+  settingsSpy: vi.fn(),
   provisionSpy: vi.fn().mockResolvedValue({ provisioned: [] }),
   getAgentsSpy: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
   toastSuccessSpy: vi.fn(),
@@ -26,6 +31,10 @@ vi.mock('@/api/agents', () => ({
 }))
 vi.mock('@/api/k12', () => ({
   k12UpdateProfile: (r: unknown) => h.profileSpy(r),
+  k12UpdateProfileBundle: (r: unknown) => h.profileBundleSpy(r),
+  k12GetCurriculumCatalog: (...args: unknown[]) => h.catalogSpy(...args),
+  k12GetCurriculumProgress: (...args: unknown[]) => h.progressSpy(...args),
+  k12GetWeeklyPracticeSettings: (...args: unknown[]) => h.settingsSpy(...args),
   // useK12Store 依赖（建档尾部 fire-and-forget setupAutomation，需可 resolve）
   k12BindIM: vi.fn().mockResolvedValue({}),
   k12ProvisionCron: (req: unknown) => h.provisionSpy(req),
@@ -73,6 +82,72 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     h.unregisterSpy.mockReset().mockResolvedValue({})
     h.updateSpy.mockClear()
     h.profileSpy.mockReset().mockResolvedValue({})
+    h.profileBundleSpy.mockReset().mockResolvedValue({
+      profile: {
+        child_name: '小明',
+        grade_term: '五年级上',
+        textbook_edition: '人教版',
+        revision: 2,
+      },
+      curriculum_progress: {},
+      weekly_practice_settings: {},
+      replayed: false,
+    })
+    h.catalogSpy.mockReset().mockImplementation(
+      (_agent: string, textbookEdition: string, volume: string) =>
+        Promise.resolve({
+          agent: 'k12-tutor-x',
+          subject: 'math',
+          textbook_binding_id: `binding-${textbookEdition}-${volume}`,
+          textbook_edition: textbookEdition,
+          textbook_version: '2022',
+          title: '数学',
+          volume,
+          page_min: 1,
+          page_max: 120,
+          units: [
+            {
+              unit_id: 'unit-1',
+              title: '第1单元',
+              page_from: 1,
+              page_to: 20,
+              lessons: [],
+            },
+          ],
+        }),
+    )
+    h.progressSpy.mockReset().mockResolvedValue({
+      progress: {
+        progress_id: 'progress-1',
+        agent: 'k12-tutor-x',
+        subject: 'math',
+        revision: 1,
+        textbook_binding_id: 'binding-人教版-五年级上册',
+        textbook_edition: '人教版',
+        textbook_version: '2022',
+        title: '数学',
+        volume: '五年级上册',
+        unit_id: 'unit-1',
+        unit_title: '第1单元',
+        page_verification_status: 'not_requested',
+        segment_refs: [],
+        evidence_source: 'parent_confirmed',
+        confirmed_at: '2026-07-20T00:00:00Z',
+        created_at: '2026-07-20T00:00:00Z',
+        updated_at: '2026-07-20T00:00:00Z',
+      },
+    })
+    h.settingsSpy.mockReset().mockResolvedValue({
+      agent: 'k12-tutor-x',
+      revision: 1,
+      timezone: 'Asia/Shanghai',
+      due_review_enabled: true,
+      textbook_consolidation_enabled: false,
+      arithmetic_warmup_enabled: false,
+      arithmetic_minutes: 2,
+      created_at: '2026-07-20T00:00:00Z',
+      updated_at: '2026-07-20T00:00:00Z',
+    })
     h.provisionSpy.mockReset().mockResolvedValue({ provisioned: [] })
     h.getAgentsSpy.mockReset().mockResolvedValue({ agents: [], total: 0, default: '' })
     h.toastSuccessSpy.mockReset()
@@ -86,7 +161,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(B().find('.k12pf__intro').text()).toContain('小明的辅导助手 · 五年级')
   })
 
-  it('创建 → registerAgent(scenario 标记 + 六科教材兼容暂存) + PUT /profile(数学 legacy fallback) + 显示名 + K12 skills', async () => {
+  it('创建 → registerAgent 一次性写六科 canonical metadata + 数学派生镜像，不再补写 legacy profile', async () => {
     const w = render()
     await B().find('input.k12pf__input').setValue('小明')
     await B().find('.k12pf__btn--primary').trigger('click')
@@ -106,6 +181,8 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(payload.provider).toBe('')
     expect(payload.metadata.scenario).toBe('k12-tutor')
     expect(payload.metadata['k12.learner_id']).toMatch(/^learner-[A-Za-z0-9_-]{8,}$/)
+    expect(payload.metadata['k12.child_name']).toBe('小明')
+    expect(payload.metadata['k12.grade_term']).toBe('五年级上')
     expect(payload.metadata).toMatchObject({
       'k12.textbook_edition': '人教版',
       'k12.textbook_edition.math': '人教版',
@@ -137,13 +214,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(payload.skills).toContain('k12_review')
     expect(payload.skills).not.toContain('physics-tutor')
     expect(payload.skills).not.toContain('chemistry-tutor')
-    // 2) 官方 /profile 仍只有单教材字段：数学同步到 legacy fallback，不伪装分科领域表已实现。
-    expect(h.profileSpy).toHaveBeenCalledTimes(1)
-    const prof = h.profileSpy.mock.calls[0]![0] as Record<string, string>
-    expect(prof.agent).toBe(payload.name)
-    expect(prof.child_name).toBe('小明')
-    expect(prof.grade_term).toBe('五年级上')
-    expect(prof.textbook_edition).toBe('人教版')
+    expect(h.profileSpy).not.toHaveBeenCalled()
     expect(w.emitted('created')).toBeTruthy()
   })
 
@@ -211,6 +282,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       attachTo: document.body,
     })
 
+    await flushPromises()
     const mathSelect = w
       .findAllComponents(HcSelect)
       .find((select) => select.element.closest('[data-testid="k12-textbook-math"]'))!
@@ -219,19 +291,23 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
 
-    const [, update] = h.updateSpy.mock.calls[0] as [string, { metadata: Record<string, string> }]
-    expect(update.metadata).toMatchObject({
-      custom: 'keep-me',
-      'k12.textbook_edition': '北师大版',
-      'k12.textbook_edition.math': '北师大版',
-      'k12.textbook_edition.chinese': '统编版',
-      'k12.textbook_edition.english': '外研版',
-      'k12.textbook_edition.science': '苏教版',
-      'k12.textbook_edition.information_technology': '粤教版',
-      'k12.textbook_edition.art': '湘美版',
-    })
-    expect(h.profileSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ textbook_edition: '北师大版' }),
+    const [, update] = h.updateSpy.mock.calls[0] as [string, Record<string, unknown>]
+    expect(update).not.toHaveProperty('metadata')
+    expect(h.profileBundleSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: {
+          child_name: '小明',
+          grade_term: '五年级上',
+          subject_textbooks: {
+            math: '北师大版',
+            chinese: '统编版',
+            english: '外研版',
+            science: '苏教版',
+            information_technology: '粤教版',
+            art: '湘美版',
+          },
+        },
+      }),
     )
   })
 
@@ -277,22 +353,8 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(h.toastSuccessSpy.mock.calls.flat().join('')).not.toContain('已注册')
   })
 
-  it('建档第二步写档案失败 → 注销刚注册的 agent 作补偿，不留下半成品', async () => {
-    h.profileSpy.mockRejectedValueOnce(new Error('profile write failed'))
-    const w = render()
-    await B().find('input.k12pf__input').setValue('小明')
-    await B().find('.k12pf__btn--primary').trigger('click')
-    await flushPromises()
-
-    expect(h.registerSpy).toHaveBeenCalledTimes(1)
-    const registered = h.registerSpy.mock.calls[0]![0] as { name: string }
-    expect(h.unregisterSpy).toHaveBeenCalledExactlyOnceWith(registered.name)
-    expect(w.emitted('created')).toBeFalsy()
-    expect(B().text()).toContain('profile write failed')
-  })
-
-  it('改档第二步写档案失败 → 回滚第一步 Agent 配置，不留下新名称配旧年级', async () => {
-    h.profileSpy.mockRejectedValueOnce(new Error('profile update failed'))
+  it('改档 bundle 失败 → Agent 基础字段零写入且无补偿写', async () => {
+    h.profileBundleSpy.mockRejectedValueOnce(new Error('profile update failed'))
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
@@ -319,17 +381,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
 
-    expect(h.updateSpy).toHaveBeenCalledTimes(2)
-    expect(h.updateSpy.mock.calls[1]).toEqual([
-      'k12-tutor-x',
-      expect.objectContaining({
-        display_name: '小明的辅导助手 · 五年级',
-        description: '人教版 · 五年级上 · 按年级边界讲解',
-        system_prompt: '旧人设',
-        provider: 'old-provider',
-        model: 'old-model',
-      }),
-    ])
+    expect(h.updateSpy).not.toHaveBeenCalled()
     expect(w.emitted('created')).toBeFalsy()
     expect(h.provisionSpy).not.toHaveBeenCalled()
     expect(B().text()).toContain('profile update failed')
@@ -354,10 +406,11 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       attachTo: document.body,
     })
 
+    await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
 
-    expect(h.profileSpy).toHaveBeenCalledOnce()
+    expect(h.profileBundleSpy).toHaveBeenCalledOnce()
     expect(h.provisionSpy).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ agent: 'k12-tutor-x' }),
     )
@@ -374,12 +427,12 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await flushPromises()
 
     expect(h.registerSpy).toHaveBeenCalledOnce()
-    expect(h.profileSpy).toHaveBeenCalledOnce()
+    expect(h.profileSpy).not.toHaveBeenCalled()
     expect(w.emitted('created')).toBeTruthy()
     expect(h.toastWarningSpy).toHaveBeenCalledWith(expect.stringContaining('已保存'))
   })
 
-  it('改档模式：预填 k12.* + 改年级 → updateAgent(显示名) + PUT /profile(grade_term)', async () => {
+  it('改档模式：预填 k12.* + 改年级 → profile-bundle 六科组合写后更新 Agent 基础字段', async () => {
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
@@ -409,12 +462,20 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     const [name, upd] = h.updateSpy.mock.calls[0] as [string, { display_name: string }]
     expect(name).toBe('k12-tutor-x')
     expect(upd.display_name).toContain('六年级')
-    // 档案字段走后端官方 PUT /profile（grade_term 即讲题边界依据）
-    const prof = h.profileSpy.mock.calls[0]![0] as Record<string, string>
-    expect(prof.agent).toBe('k12-tutor-x')
-    expect(prof.grade_term).toBe('六年级上')
-    expect(prof.child_name).toBe('小明')
-    expect(prof.textbook_edition).toBe('人教版')
+    // 编辑态三对象走唯一 profile-bundle；基础 profile 位于冻结子对象。
+    const bundle = h.profileBundleSpy.mock.calls[0]![0] as {
+      agent: string
+      profile: {
+        child_name: string
+        grade_term: string
+        subject_textbooks: Record<string, string>
+      }
+    }
+    expect(bundle.agent).toBe('k12-tutor-x')
+    expect(bundle.profile.grade_term).toBe('六年级上')
+    expect(bundle.profile.child_name).toBe('小明')
+    expect(bundle.profile.subject_textbooks.math).toBe('人教版')
+    expect(upd).not.toHaveProperty('metadata')
     expect(w.emitted('created')).toBeTruthy()
   })
 
@@ -515,18 +576,38 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(w.emitted('removed')).toEqual([['k12-tutor-x']])
   })
 
-  it('年级与学期拆成 6×2 二级选择（冻结：无初中，grade_term 契约不变）', () => {
+  it('年级展示含未来学段只读预告，持久 grade_term 仍冻结为小学 6×2', () => {
     const w = render()
-    // 两个字段均走 HcSelect；value 仍为稳定中文契约，label 可按语言本地化。
+    // 两个字段均走 HcSelect；小学 value 仍为稳定中文契约，未来学段仅作 disabled 预告。
     const gradeSelect = w.findAllComponents(HcSelect)[0]!
-    const gradeOpts = (gradeSelect.props('options') as { value: string; label: string }[]).map(
-      (o) => o.label,
-    )
+    const gradeOpts = gradeSelect.props('options') as Array<{
+      value: string
+      label: string
+      disabled?: boolean
+    }>
     const semesterOpts = (
       w.findAllComponents(HcSelect)[1]!.props('options') as { value: string; label: string }[]
     ).map((o) => o.label)
-    expect(gradeOpts).toEqual(['一年级', '二年级', '三年级', '四年级', '五年级', '六年级'])
+    expect(PRIMARY_GRADES).toHaveLength(6)
+    expect(gradeOpts).toHaveLength(12)
+    expect(gradeOpts.slice(0, 6).map((option) => option.value)).toEqual(PRIMARY_GRADES)
+    expect(gradeOpts.slice(0, 6).map((option) => option.label)).toEqual([
+      '一年级',
+      '二年级',
+      '三年级',
+      '四年级',
+      '五年级',
+      '六年级',
+    ])
+    expect(gradeOpts.find((option) => option.value === '六年级')?.disabled).not.toBe(true)
+    expect(gradeOpts.slice(6)).toEqual([
+      { value: 'future-junior-1', label: '初一 · 暂未开放', disabled: true },
+      { value: 'future-junior-2', label: '初二 · 暂未开放', disabled: true },
+      { value: 'future-junior-3', label: '初三 · 暂未开放', disabled: true },
+      { value: 'future-senior-1', label: '高一 · 暂未开放', disabled: true },
+      { value: 'future-senior-2', label: '高二 · 暂未开放', disabled: true },
+      { value: 'future-senior-3', label: '高三 · 暂未开放', disabled: true },
+    ])
     expect(semesterOpts).toEqual(['上学期', '下学期'])
-    expect(gradeOpts.some((o) => o.includes('初'))).toBe(false)
   })
 })

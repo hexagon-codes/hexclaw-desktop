@@ -13,14 +13,15 @@ import type { RecordCollectionView } from '@/contracts'
 //  项-5 空态设计（无本周该练 → 等重正向空态卡 + 全部错题默认展开；积累空态卡）。
 //  项-6a 悬空「数学·」芯片（知识点为空 → 只显「数学」不带「·」尾巴）。
 
-const h = vi.hoisted(() => ({ retry: null as unknown as (...a: unknown[]) => Promise<unknown>, mistakes: [] as unknown[], accum: [] as unknown[], queue: [] as unknown[] }))
+const h = vi.hoisted(() => ({ mistakes: [] as unknown[], accum: [] as unknown[], queue: [] as unknown[] }))
 
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockImplementation(() => Promise.resolve({ items: h.mistakes })),
   k12ReviewQueue: vi.fn().mockImplementation(() => Promise.resolve({ items: h.queue })),
   k12MarkMastered: vi.fn(),
   k12DeleteMistake: vi.fn(),
-  k12ReviewRetry: (...args: unknown[]) => h.retry(...args),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({ trend: { mastered: 0, reviewing: 0, retried: 0, archived: 0, total: 0 }, weak_top3: [], month_new_mistakes: 0, review_completion_rate: -1, consecutive_fail_kps: [], suggestion: '' }),
@@ -54,7 +55,7 @@ describe('项-6a 悬空「数学·」芯片：知识点为空只显学科', () =
 })
 
 describe('项-5 空态：无本周该练 → 正向空态卡 + 全部错题默认展开', () => {
-  beforeEach(() => { setActivePinia(createPinia()); h.retry = vi.fn(); h.accum = []; h.queue = [] })
+  beforeEach(() => { setActivePinia(createPinia()); h.accum = []; h.queue = [] })
 
   it('复习队列空 → 渲染空态卡且全部错题不折叠', async () => {
     const now = Math.floor(Date.now() / 1000)
@@ -81,7 +82,7 @@ describe('项-5 空态：无本周该练 → 正向空态卡 + 全部错题默�
 })
 
 describe('积累空态（Bug-20260713：对齐原型 rc1——克制列表占位，非大居中卡）', () => {
-  beforeEach(() => { setActivePinia(createPinia()); h.retry = vi.fn(); h.mistakes = []; h.queue = []; h.accum = [] })
+  beforeEach(() => { setActivePinia(createPinia()); h.mistakes = []; h.queue = []; h.accum = [] })
 
   it('积累本为空 → 克制列表占位（有文案），入口走上方常驻 bar 的「＋记到积累本」', async () => {
     const w = render()

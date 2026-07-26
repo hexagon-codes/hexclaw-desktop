@@ -2,11 +2,12 @@
  * BUG-20260712（真机）· 积累 tab 行「再练/详情」死按钮。
  * 根因：shell RecordList 无条件给每行渲染「再练」+「详情」，而积累 tab 的 <RecordList> 没挂 @action
  *       → 两按钮 no-op。积累行只应有「详情」（积累不复习/不再练）。
- * 治本：① RecordList 按 schema.reviewable 门控「再练」——不可复习集合不渲染再练；
+ * 治本：① RecordList 按 schema.reviewable 门控练习动作——不可复习集合不渲染；
  *       ② K12RecordsView 给积累 RecordList 接线 @action（详情走真 handler）。
  *
  * RED（修前）：积累行渲染「再练」按钮；@action 未接线 → 详情点了无反应。
- * GREEN（修后）：积累行无「再练」、详情按钮点击打开真详情弹层；错题行仍有再练+详情（不回归）。
+ * GREEN（修后）：积累行无练习动作、详情按钮点击打开真详情弹层；错题行仍有
+ * 当前「加入练习集」动作+详情（不回归）。
  */
 import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
@@ -54,10 +55,16 @@ describe('BUG-20260712 #2 记录行内动作按 schema.reviewable 门控', () =>
     expect(firstEvent.id).toBe('detail')
   })
 
-  it('错题行（reviewable=true）仍有「再练」+「详情」（不回归）', () => {
-    const w = mount(RecordList, { props: { schema: MISTAKE_SCHEMA, view: mistakeView }, global: { plugins: [i18n()] } })
+  it('错题行（reviewable=true）仍承载当前「加入练习集」+「详情」（不回归）', () => {
+    const w = mount(RecordList, {
+      props: { schema: MISTAKE_SCHEMA, view: mistakeView },
+      slots: {
+        'list-practice-action': '<button class="rl-btn">加入练习集</button>',
+      },
+      global: { plugins: [i18n()] },
+    })
     const btns = w.findAll('.rl-row .rl-btn').map((b) => b.text())
-    expect(btns).toContain('再练')
+    expect(btns).toContain('加入练习集')
     expect(btns).toContain('详情')
   })
 })

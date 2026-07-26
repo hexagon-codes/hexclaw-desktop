@@ -17,7 +17,7 @@ const h = vi.hoisted(() => ({
     .mockResolvedValue({ record_id: 'ps-1', added: true }),
   customPaperSpy: vi.fn(),
   fillBasketSpy: vi.fn(),
-  reviewRetrySpy: vi.fn(),
+  startPracticeSpy: vi.fn(),
   listPracticeSetsSpy: vi.fn().mockResolvedValue({ items: [] }),
   mistakes: [
     {
@@ -67,7 +67,9 @@ vi.mock('@/api/k12', () => ({
     }),
   ),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
-  k12ReviewRetry: (...a: unknown[]) => h.reviewRetrySpy(...a),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
+  k12StartMistakePracticeGeneration: (...a: unknown[]) => h.startPracticeSpy(...a),
   k12GenerateCustomPaper: (...a: unknown[]) => h.customPaperSpy(...a),
   k12FillPracticeBasket: (...a: unknown[]) => h.fillBasketSpy(...a),
   k12AddToBasket: (...a: unknown[]) => h.addToBasketSpy(...a),
@@ -100,13 +102,14 @@ function i18n() {
   })
 }
 
-function render() {
+function render(route?: { provider: string; model: string }) {
   return mount(K12RecordsView, {
     props: {
       agentId: 'mingming',
       agentName: '小明的辅导老师',
       grade: '五年级上',
       textbook: '人教版',
+      ...(route ? { modelRoute: { ...route, capability: 'text' as const } } : {}),
     },
     global: { plugins: [createPinia(), i18n()] },
   })
@@ -141,18 +144,7 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
       added: 1,
       deduplicated: 0,
     })
-    let retryNo = 0
-    h.reviewRetrySpy.mockReset().mockImplementation((req: { record_id: string }) => {
-      retryNo++
-      return Promise.resolve({
-        solution: `## 问题\n${req.record_id} 变式 ${retryNo}\n## 答案\n${retryNo}`,
-        question: `${req.record_id} 变式 ${retryNo}`,
-        answer: `解答 ${retryNo}`,
-        expected_answer: String(retryNo),
-        verdict: 'agree',
-        badge: 'verified-strong',
-      })
-    })
+    h.startPracticeSpy.mockReset()
     h.listPracticeSetsSpy.mockClear().mockResolvedValue({ items: [] })
   })
 
@@ -175,7 +167,7 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
   })
 
   it('DD-027：全部参数开放，并且 Desktop 只调用一次正式组卷 command', async () => {
-    const w = render()
+    const w = render({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' })
     await flushPromises()
     await w.find('[data-testid="review-split-more"]').trigger('click')
     await w.find('[data-testid="custom-paper-open"]').trigger('click')
@@ -205,8 +197,10 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
       difficulty: 'harder',
       textbook: '人教版',
       grade: '五年级上',
+      provider: 'hexclaw-gpt',
+      model: 'gpt-5.6-sol',
     })
-    expect(h.reviewRetrySpy).not.toHaveBeenCalled()
+    expect(h.startPracticeSpy).not.toHaveBeenCalled()
     expect(h.addToBasketSpy).not.toHaveBeenCalled()
     expect(h.exportPdfSpy).not.toHaveBeenCalled()
     const result = w.find('[data-testid="custom-paper-result"]')

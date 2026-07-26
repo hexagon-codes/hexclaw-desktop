@@ -4,7 +4,7 @@
   打印/发送即家长确认（finalize 一步固化，逐题跳过阻断题）；界面不展示六态时间轴（三态：待打印/待完成/已批改）。
 -->
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import {
@@ -45,7 +45,14 @@ import {
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 
-const props = defineProps<{ agentId: string }>()
+const props = defineProps<{
+  agentId: string
+  focusTarget?: {
+    practiceSetID: string
+    practiceItemID: string
+    nonce: number
+  } | null
+}>()
 const emit = defineEmits<{ (event: 'count', count: number): void }>()
 const { t, locale } = useI18n()
 const toast = useToast()
@@ -69,6 +76,10 @@ const printPreview = ref({
   jobId: '',
   recordId: '',
 })
+const panelRoot = ref<HTMLElement | null>(null)
+const focusedItemID = ref('')
+let focusClearTimer: ReturnType<typeof setTimeout> | null = null
+let regradePollTimer: ReturnType<typeof setTimeout> | null = null
 let printRequestSequence = 0
 
 function newPrintIdempotencyKey(recordId: string): string {
@@ -95,15 +106,63 @@ async function load() {
   try {
     const resp = await k12ListPracticeSets(props.agentId)
     sets.value = resp.items ?? []
+    await focusRequestedItem()
   } catch (e) {
     error.value = (e as Error).message || t('k12.practice.loadError')
   } finally {
     loading.value = false
+    scheduleRegradePoll()
   }
 }
 onMounted(load)
 watch(() => props.agentId, load)
+watch(
+  () => props.focusTarget?.nonce,
+  () => void focusRequestedItem(),
+)
 defineExpose({ load })
+
+async function focusRequestedItem() {
+  const target = props.focusTarget
+  if (!target?.practiceItemID) return
+  await nextTick()
+  const item = [
+    ...(panelRoot.value?.querySelectorAll<HTMLElement>('[data-practice-item-id]') ?? []),
+  ].find((element) => element.dataset.practiceItemId === target.practiceItemID)
+  if (!item) return
+  focusedItemID.value = target.practiceItemID
+  item.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  if (focusClearTimer) clearTimeout(focusClearTimer)
+  focusClearTimer = setTimeout(() => {
+    if (focusedItemID.value === target.practiceItemID) focusedItemID.value = ''
+  }, 2_000)
+}
+
+onBeforeUnmount(() => {
+  if (focusClearTimer) clearTimeout(focusClearTimer)
+  if (regradePollTimer) clearTimeout(regradePollTimer)
+})
+
+function hasPendingRegrade(): boolean {
+  return sets.value.some((set) =>
+    (set.return_assets ?? []).some((asset) =>
+      ['queued', 'running', 'outcome_unknown'].includes(asset.regrade_status ?? ''),
+    ),
+  )
+}
+
+function scheduleRegradePoll() {
+  if (!hasPendingRegrade()) {
+    if (regradePollTimer) clearTimeout(regradePollTimer)
+    regradePollTimer = null
+    return
+  }
+  if (regradePollTimer) return
+  regradePollTimer = setTimeout(() => {
+    regradePollTimer = null
+    void load()
+  }, 1_500)
+}
 
 // ── 待打印篮（单 Learner 单篮：draft 态练习集，§3.8）──
 const basket = computed(() => sets.value.find((s) => s.status === 'draft') ?? null)
@@ -235,11 +294,7 @@ async function finalize(via: 'print' | 'send') {
       throw new Error('上一次打印结果仍待核对，请先查询 PrintJob 回执')
     }
 
-    const rendered = await k12GetPracticePrintJobPaper(
-      props.agentId,
-      job.print_job_id,
-      'question',
-    )
+    const rendered = await k12GetPracticePrintJobPaper(props.agentId, job.print_job_id, 'question')
     const pdf = await renderPracticePaperPdf(rendered.markdown, rendered.title)
     printPreview.value = {
       open: true,
@@ -340,9 +395,9 @@ async function advance(s: PracticeSetDTO, step: 'submit' | 'grade' | 'close', ok
   }
 }
 
-// ── 作答回传 / 逐题复批（§3.8）──
-// 禁止直接用 agent-only 旧调用推进：回传必须有真实照片和覆盖题；复批必须逐题给出对/错，
-// 从调用侧彻底封死后端“空 results = 整卷通过”的兼容旁路。
+// ── 作答回传 / 自动复批 / 最小人工兜底（§3.8 · DD-028）──
+// 照片回传后由服务端冻结路由并自动复批；家长只核对真正无法确认的最小子集。
+// “手动记结果”仅用于无照片场景，后端把它记为 human_confirmed，不能冒充系统掌握证据。
 interface ReturnDraft {
   set: PracticeSetDTO | null
   file: File | null
@@ -433,6 +488,7 @@ async function submitReturn() {
     })
     const index = sets.value.findIndex((entry) => entry.record_id === updated.record_id)
     if (index >= 0) sets.value.splice(index, 1, updated)
+    scheduleRegradePoll()
     toast.success(t('k12.practice.returnSaved'))
     returnDraft.value = emptyReturnDraft()
   } catch (e) {
@@ -442,23 +498,41 @@ async function submitReturn() {
   }
 }
 
-function itemHasReturn(it: PracticeItemDTO): boolean {
-  return !!it.return_ids?.length || !!it.returned
-}
-
 function canUploadReturn(s: PracticeSetDTO): boolean {
   return s.status === 'assigned' || s.status === 'submitted'
 }
 
-function canGradeReturn(s: PracticeSetDTO): boolean {
+function hasActiveRegrade(s: PracticeSetDTO): boolean {
+  return (s.return_assets ?? []).some((asset) =>
+    ['queued', 'running', 'outcome_unknown', 'needs_review'].includes(asset.regrade_status ?? ''),
+  )
+}
+
+function canManualGrade(s: PracticeSetDTO): boolean {
   return (
-    s.status === 'submitted' &&
-    s.items.some(
-      (it) =>
-        it.verification_status === 'verified' &&
-        itemHasReturn(it) &&
-        it.result_correct === undefined,
-    )
+    (s.status === 'assigned' || s.status === 'submitted') &&
+    !hasActiveRegrade(s) &&
+    s.items.some((it) => it.verification_status === 'verified' && it.result_correct === undefined)
+  )
+}
+
+function isRegradeProcessing(asset: PracticeReturnAssetDTO): boolean {
+  return ['queued', 'running', 'outcome_unknown'].includes(asset.regrade_status ?? '')
+}
+
+function regradeProcessingLabel(asset: PracticeReturnAssetDTO): string {
+  return asset.regrade_status === 'outcome_unknown'
+    ? t('k12.practice.regradeRecovering')
+    : t('k12.practice.regradeRunning')
+}
+
+function isRegradeFailed(asset: PracticeReturnAssetDTO): boolean {
+  return ['failed_retryable', 'failed_terminal'].includes(asset.regrade_status ?? '')
+}
+
+function canViewRegradeResult(asset: PracticeReturnAssetDTO): boolean {
+  return (
+    asset.regrade_status === 'completed' || !!asset.annotated_asset_id || !!asset.result_markdown
   )
 }
 
@@ -486,8 +560,13 @@ function returnTimeLabel(returnedAt: number): string {
 }
 
 type GradeChoice = '' | 'correct' | 'incorrect'
-const gradeDraft = ref<{ set: PracticeSetDTO | null; results: Record<string, GradeChoice> }>({
+const gradeDraft = ref<{
+  set: PracticeSetDTO | null
+  itemIds: string[]
+  results: Record<string, GradeChoice>
+}>({
   set: null,
+  itemIds: [],
   results: {},
 })
 const gradeOpen = computed(() => !!gradeDraft.value.set)
@@ -496,7 +575,7 @@ const gradeItems = computed(
     gradeDraft.value.set?.items.filter(
       (it) =>
         it.verification_status === 'verified' &&
-        itemHasReturn(it) &&
+        gradeDraft.value.itemIds.includes(it.item_id) &&
         it.result_correct === undefined,
     ) ?? [],
 )
@@ -505,17 +584,21 @@ const gradeCanSubmit = computed(
     gradeItems.value.length > 0 &&
     gradeItems.value.every((it) => !!gradeDraft.value.results[it.item_id]),
 )
-function openGrade(s: PracticeSetDTO) {
+function openGrade(s: PracticeSetDTO, itemIds?: string[]) {
+  const unresolved =
+    itemIds ??
+    s.items
+      .filter((it) => it.verification_status === 'verified' && it.result_correct === undefined)
+      .map((it) => it.item_id)
   gradeDraft.value = {
     set: s,
-    results: Object.fromEntries(
-      s.items.filter((it) => it.verification_status === 'verified').map((it) => [it.item_id, '']),
-    ),
+    itemIds: unresolved,
+    results: Object.fromEntries(unresolved.map((itemId) => [itemId, ''])),
   }
 }
 function closeGrade() {
   if (busy.value) return
-  gradeDraft.value = { set: null, results: {} }
+  gradeDraft.value = { set: null, itemIds: [], results: {} }
 }
 async function submitGrade() {
   const s = gradeDraft.value.set
@@ -528,13 +611,52 @@ async function submitGrade() {
   try {
     await k12GradePracticeSet(props.agentId, s.record_id, results)
     toast.success(t('k12.practice.gradeSaved'))
-    gradeDraft.value = { set: null, results: {} }
+    gradeDraft.value = { set: null, itemIds: [], results: {} }
     await load()
   } catch (e) {
     toast.error((e as Error).message)
   } finally {
     busy.value = ''
   }
+}
+
+const regradeResult = ref<{
+  set: PracticeSetDTO | null
+  asset: PracticeReturnAssetDTO | null
+}>({
+  set: null,
+  asset: null,
+})
+const regradeResultOpen = computed(() => !!regradeResult.value.set && !!regradeResult.value.asset)
+const regradeResultItems = computed(() => {
+  const set = regradeResult.value.set
+  const asset = regradeResult.value.asset
+  if (!set || !asset) return []
+  return asset.item_ids
+    .map((itemId) => set.items.find((item) => item.item_id === itemId))
+    .filter((item): item is PracticeItemDTO => !!item)
+})
+const regradeAttentionCount = computed(() => {
+  const attention = new Set(regradeResult.value.asset?.unresolved_item_ids ?? [])
+  for (const item of regradeResultItems.value) {
+    if (item.result_correct === false) attention.add(item.item_id)
+  }
+  return attention.size
+})
+const regradeCorrectItems = computed(() =>
+  regradeResultItems.value.filter((item) => item.result_correct === true),
+)
+function openRegradeResult(s: PracticeSetDTO, asset: PracticeReturnAssetDTO) {
+  regradeResult.value = { set: s, asset }
+}
+function closeRegradeResult() {
+  regradeResult.value = { set: null, asset: null }
+}
+function openRegradeAnswerPaper() {
+  const set = regradeResult.value.set
+  if (!set) return
+  closeRegradeResult()
+  void openPaper(set.record_id, 'answer')
 }
 // ── 题目卷/答案卷查看（§4.13 呈现物真实渲染，2026-07-18）──
 // 历史卡片：正卷（页眉/页脚含卷面号）；待打印区：draft 预览走后端同一渲染器
@@ -644,7 +766,7 @@ async function cancelSet(s: PracticeSetDTO) {
 </script>
 
 <template>
-  <section class="k12ps">
+  <section ref="panelRoot" class="k12ps">
     <K12PersistentPrintController
       ref="persistentPrintController"
       @result="onPersistentPrintResult"
@@ -686,7 +808,9 @@ async function cancelSet(s: PracticeSetDTO) {
           <div class="k12ps__bactions">
             <button
               class="k12ps__btn k12ps__btn--primary"
-              :disabled="!canFinalize || busy === basket?.record_id || Boolean(delivery.batch.value)"
+              :disabled="
+                !canFinalize || busy === basket?.record_id || Boolean(delivery.batch.value)
+              "
               :title="!canFinalize ? t('k12.practice.publishBlocked') : ''"
               data-testid="ps-finalize-print"
               @click="finalize('print')"
@@ -725,7 +849,11 @@ async function cancelSet(s: PracticeSetDTO) {
                 v-for="it in g.items"
                 :key="it.item_id"
                 class="k12ps__item"
-                :class="{ 'k12ps__item--blocked': g.blocked }"
+                :class="{
+                  'k12ps__item--blocked': g.blocked,
+                  'k12ps__item--focused': focusedItemID === it.item_id,
+                }"
+                :data-practice-item-id="it.item_id"
               >
                 <i class="k12ps__seq">{{ g.blocked ? '–' : seqOf.get(it.item_id) }}</i>
                 <div class="k12ps__qwrap">
@@ -843,6 +971,55 @@ async function cancelSet(s: PracticeSetDTO) {
                 >
                   {{ returnTimeLabel(asset.returned_at) }}
                 </time>
+                <div class="k12ps__regrade-actions">
+                  <span
+                    v-if="isRegradeProcessing(asset)"
+                    class="k12ps__regrade-state"
+                    data-testid="ps-regrade-status"
+                  >
+                    <i class="k12ps__regrade-dot" aria-hidden="true" />
+                    {{ regradeProcessingLabel(asset) }}
+                  </span>
+                  <template
+                    v-else-if="
+                      asset.regrade_status === 'needs_review' && asset.unresolved_item_ids?.length
+                    "
+                  >
+                    <span
+                      class="k12ps__regrade-state k12ps__regrade-state--warning"
+                      data-testid="ps-regrade-review"
+                    >
+                      {{
+                        t('k12.practice.regradeNeedsReview', {
+                          n: asset.unresolved_item_ids.length,
+                        })
+                      }}
+                    </span>
+                    <button
+                      type="button"
+                      class="k12ps__inline-action"
+                      data-testid="ps-regrade-manual"
+                      @click="openGrade(s, asset.unresolved_item_ids)"
+                    >
+                      {{ t('k12.practice.regradeReviewAction') }}
+                    </button>
+                  </template>
+                  <span
+                    v-else-if="isRegradeFailed(asset)"
+                    class="k12ps__regrade-state k12ps__regrade-state--error"
+                  >
+                    {{ t('k12.practice.regradeFailed') }}
+                  </span>
+                  <button
+                    v-if="canViewRegradeResult(asset)"
+                    type="button"
+                    class="k12ps__inline-action"
+                    data-testid="ps-regrade-result-open"
+                    @click="openRegradeResult(s, asset)"
+                  >
+                    {{ t('k12.practice.regradeViewResult') }}
+                  </button>
+                </div>
               </article>
             </div>
             <footer class="k12ps__hactions">
@@ -865,7 +1042,7 @@ async function cancelSet(s: PracticeSetDTO) {
                   {{ t('k12.practice.paperAnswer') }}
                 </button>
               </template>
-              <!-- DD-028：assigned/submitted 都可继续追加照片；已有覆盖证据的题可分批复批。 -->
+              <!-- DD-028：assigned/submitted 都可继续追加照片；照片自动复批。 -->
               <button
                 v-if="canUploadReturn(s)"
                 class="k12ps__btn"
@@ -876,12 +1053,13 @@ async function cancelSet(s: PracticeSetDTO) {
                 {{ returnButtonLabel(s) }}
               </button>
               <button
-                v-if="canGradeReturn(s)"
-                class="k12ps__btn"
+                v-if="canManualGrade(s)"
+                class="k12ps__btn k12ps__btn--ghost"
                 :disabled="busy === s.record_id"
+                data-testid="ps-manual-grade-open"
                 @click="openGrade(s)"
               >
-                {{ t('k12.practice.grade') }}
+                {{ t('k12.practice.manualGrade') }}
               </button>
               <button
                 v-else-if="s.status === 'graded'"
@@ -1058,7 +1236,7 @@ async function cancelSet(s: PracticeSetDTO) {
       </div>
     </div>
 
-    <!-- 逐题复批：每题必须明确对/错，空 results 无提交入口。 -->
+    <!-- 无照片 / 真不确定项的最小人工兜底；human_confirmed 不冒充系统掌握证据。 -->
     <div
       v-if="gradeOpen"
       class="k12ps__modal"
@@ -1110,6 +1288,89 @@ async function cancelSet(s: PracticeSetDTO) {
             @click="submitGrade"
           >
             {{ t('k12.practice.gradeConfirm') }}
+          </button>
+        </footer>
+      </div>
+    </div>
+
+    <!-- DD-028 自动复批结果：批注原图 + 家长讲题说明，同一结果面查看。 -->
+    <div
+      v-if="regradeResultOpen"
+      class="k12ps__modal"
+      data-testid="ps-regrade-result-modal"
+      @click.self="closeRegradeResult"
+    >
+      <div class="k12ps__mcard k12ps__mcard--result">
+        <header class="k12ps__mhead">
+          <b>{{ t('k12.practice.regradeResultTitle') }}</b>
+          <span class="k12ps__msp" />
+          <button
+            class="k12ps__rm"
+            :aria-label="t('k12.practice.paperClose')"
+            @click="closeRegradeResult"
+          >
+            ✕
+          </button>
+        </header>
+        <div class="k12ps__result-body">
+          <div
+            class="k12ps__result-notice"
+            :class="{ 'k12ps__result-notice--success': regradeAttentionCount === 0 }"
+          >
+            {{
+              regradeAttentionCount
+                ? t('k12.practice.regradeResultNotice', { n: regradeAttentionCount })
+                : t('k12.practice.regradeResultAllCorrect')
+            }}
+          </div>
+          <div class="k12ps__result-workspace">
+            <figure class="k12ps__result-figure">
+              <img
+                data-testid="ps-regrade-annotated"
+                :src="
+                  k12AssetURL(
+                    agentId,
+                    regradeResult.asset?.annotated_asset_id || regradeResult.asset?.asset_id || '',
+                  )
+                "
+                :alt="t('k12.practice.regradeAnnotatedAlt')"
+              />
+              <figcaption>{{ t('k12.practice.regradeAnnotatedCaption') }}</figcaption>
+            </figure>
+            <section class="k12ps__result-guide" data-testid="ps-regrade-markdown">
+              <h3>{{ t('k12.practice.regradeGuideTitle') }}</h3>
+              <MarkdownRenderer
+                :content="
+                  regradeResult.asset?.result_markdown || t('k12.practice.regradeResultEmpty')
+                "
+              />
+              <details v-if="regradeCorrectItems.length" class="k12ps__correct-details">
+                <summary>
+                  {{
+                    t('k12.practice.regradeCorrectCollapsed', {
+                      n: regradeCorrectItems.length,
+                    })
+                  }}
+                </summary>
+                <ol>
+                  <li v-for="item in regradeCorrectItems" :key="item.item_id">
+                    {{ item.paper_seq || item.item_id }}. {{ item.question_markdown }}
+                  </li>
+                </ol>
+              </details>
+            </section>
+          </div>
+        </div>
+        <footer class="k12ps__mfoot">
+          <button
+            v-if="regradeResult.set?.paper_no"
+            class="k12ps__btn"
+            @click="openRegradeAnswerPaper"
+          >
+            {{ t('k12.practice.paperAnswer') }}
+          </button>
+          <button class="k12ps__btn k12ps__btn--primary" @click="closeRegradeResult">
+            {{ t('k12.practice.paperClose') }}
           </button>
         </footer>
       </div>
@@ -1213,6 +1474,9 @@ async function cancelSet(s: PracticeSetDTO) {
 }
 .k12ps__item--blocked {
   opacity: 0.72;
+}
+.k12ps__item--focused {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--hc-accent) 42%, transparent);
 }
 .k12ps__seq {
   width: 21px;
@@ -1404,6 +1668,56 @@ async function cancelSet(s: PracticeSetDTO) {
   color: var(--hc-text-muted);
   font-size: 10px;
 }
+.k12ps__regrade-actions {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.k12ps__regrade-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--hc-accent);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+.k12ps__regrade-state--warning {
+  color: var(--hc-warning, #b26a00);
+}
+.k12ps__regrade-state--error {
+  color: var(--hc-error);
+}
+.k12ps__regrade-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: k12ps-regrade-pulse 1.15s ease-in-out infinite;
+}
+.k12ps__inline-action {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--hc-accent);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.k12ps__inline-action:hover {
+  text-decoration: underline;
+}
+@keyframes k12ps-regrade-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
 .k12ps__delivery--pending {
   color: var(--hc-warning, #b26a00);
 }
@@ -1514,6 +1828,9 @@ async function cancelSet(s: PracticeSetDTO) {
 .k12ps__mcard--compact {
   width: min(620px, 100%);
 }
+.k12ps__mcard--result {
+  width: min(900px, 100%);
+}
 .k12ps__formbody {
   display: grid;
   gap: 10px;
@@ -1578,5 +1895,76 @@ async function cancelSet(s: PracticeSetDTO) {
 }
 .k12ps__grade-row label {
   white-space: nowrap;
+}
+.k12ps__result-body {
+  display: grid;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  overflow-y: auto;
+}
+.k12ps__result-notice {
+  padding: 10px 12px;
+  border-radius: var(--hc-radius-md);
+  color: var(--hc-warning, #9a5b00);
+  background: color-mix(in srgb, var(--hc-warning, #d98b1f) 10%, transparent);
+  font-size: 12px;
+  font-weight: 700;
+}
+.k12ps__result-notice--success {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
+}
+.k12ps__result-workspace {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.9fr) minmax(280px, 1.1fr);
+  gap: 16px;
+  align-items: start;
+}
+.k12ps__result-figure {
+  margin: 0;
+  display: grid;
+  gap: 7px;
+}
+.k12ps__result-figure img {
+  display: block;
+  width: 100%;
+  max-height: 58vh;
+  object-fit: contain;
+  border: 0.5px solid var(--hc-border);
+  border-radius: var(--hc-radius-md);
+  background: var(--hc-bg-input);
+}
+.k12ps__result-figure figcaption {
+  color: var(--hc-text-muted);
+  font-size: 10.5px;
+}
+.k12ps__result-guide {
+  min-width: 0;
+  color: var(--hc-text-primary);
+  font-size: 12.5px;
+}
+.k12ps__result-guide h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.k12ps__correct-details {
+  margin-top: 14px;
+  border-top: 1px solid var(--hc-border);
+  padding-top: 10px;
+  color: var(--hc-text-secondary);
+  font-size: 11.5px;
+}
+.k12ps__correct-details summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+.k12ps__correct-details ol {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+@media (max-width: 720px) {
+  .k12ps__result-workspace {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

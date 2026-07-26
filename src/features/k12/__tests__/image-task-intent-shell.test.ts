@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
@@ -15,6 +18,8 @@ const h = vi.hoisted(() => ({
   retry: vi.fn(),
   cancel: vi.fn(),
 }))
+
+const writingFixtureSHA256 = '3b238c46e0ae4515f7b35a28bcfd37081ba1d59a9dfa2b30bf17784aaf3e9157'
 
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn(),
@@ -40,6 +45,12 @@ vi.mock('@/api/k12', () => ({
   k12BindIM: vi.fn(),
   k12ProvisionCron: vi.fn(),
 }))
+
+function fixtureDataURL(name: string, expectedSHA256: string) {
+  const bytes = readFileSync(resolve(process.cwd(), '../hexclaw-docs/test', name))
+  expect(createHash('sha256').update(bytes).digest('hex')).toBe(expectedSHA256)
+  return `data:image/png;base64,${bytes.toString('base64')}`
+}
 
 function i18n() {
   return createI18n({
@@ -146,14 +157,14 @@ function writingConflictDispatch() {
   }
 }
 
-function mountPanel() {
+function mountPanel(initialImage = 'data:image/png;base64,QUJD') {
   return mount(RecognizeGuardPanel, {
     props: {
       agentId: 'mingming',
       grade: '五年级下',
       sessionId: 'session-1',
       requestId: 'message-1',
-      initialImage: 'data:image/png;base64,QUJD',
+      initialImage,
     },
     global: { plugins: [createPinia(), i18n()] },
     attachTo: document.body,
@@ -259,12 +270,162 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
     expect(h.confirm).not.toHaveBeenCalled()
   })
 
+  it('BUG-20260725-005 shows the approved existing loading dots while image intent is unresolved', async () => {
+    h.create.mockResolvedValue({
+      created: true,
+      dispatch: {
+        dispatch_id: 'dispatch-routing',
+        task_intent: 'unknown',
+        status: 'routing',
+        intent_evidence: [],
+        intent_confidence: 0,
+        confirmation_candidates: [],
+        progress: { operation: 'classification', state: 'running' },
+        version: 1,
+        created_at: 1,
+        updated_at: 1,
+      },
+    })
+    h.get.mockReturnValue(new Promise(() => {}))
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    const progress = wrapper.get('[data-testid="image-task-routing-progress"]')
+    expect(progress.attributes('aria-label')).toBe('正在识别')
+    expect(progress.findAll('.hc-typing-dots__dot')).toHaveLength(3)
+    expect(wrapper.text()).not.toContain('美术作品')
+  })
+
+  it('BUG-20260725-005 projects identified artwork and feedback progress in the same TaskShell', async () => {
+    h.create.mockResolvedValue({
+      created: true,
+      ...creativeDispatch('artwork', 'feedback_pending'),
+    })
+    h.get.mockReturnValue(new Promise(() => {}))
+
+    const wrapper = mountPanel()
+    await flushPromises()
+
+    const progress = wrapper.get('[data-testid="artwork-feedback-progress"]')
+    expect(progress.text()).toContain('已识别出：美术作品')
+    expect(progress.text()).toContain('正在生成作品点评…')
+    expect(wrapper.find('[data-testid="artwork-result-surface"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid="recognize-close"]')).toHaveLength(1)
+  })
+
+  it('BUG-20260726-B writing feedback_pending 显示现有进度并以同源 projection 原位收敛', async () => {
+    const projectionMarkdown =
+      '## 可见证据\n\n- BUG-20260726 同源点评正文。\n\n## 先这样肯定\n\n围绕原稿给出肯定。\n\n## 家长可以这样问或讲\n\n只依据当前原稿提问。\n\n## 下一次只试一个点\n\n补充一个具体细节。\n\n## 说明\n\n同一 generation 的唯一投影。'
+    const pending = creativeDispatch('writing', 'feedback_pending')
+    const ready = creativeDispatch('writing', 'feedback_ready')
+    let releaseReady!: (value: ReturnType<typeof creativeDispatch>) => void
+    h.create.mockResolvedValue({ created: true, ...pending })
+    h.get.mockReturnValue(
+      new Promise<ReturnType<typeof creativeDispatch>>((resolveReady) => {
+        releaseReady = resolveReady
+      }),
+    )
+    h.getResult.mockResolvedValue({
+      dispatch_id: 'dispatch-writing',
+      task_intent: 'writing',
+      status: 'routed',
+      result: {
+        kind: 'writing',
+        payload: {
+          intake: { intake_id: 'intake-1', status: 'promoted' },
+          work: { work_id: 'work-1', display_name: '语文写作' },
+          feedback: {
+            generation_id: 'generation-writing-1',
+            structured_feedback: {
+              feedback_id: 'feedback-1',
+              version_id: 'version-1',
+              feedback_type: 'writing',
+              evidence_refs: ['asset-ref:sha256:writing-fixture'],
+              observations: [{ dimension: '主题', evidence: '文章围绕爸爸展开。' }],
+              source_snapshot: {
+                source: 'ai',
+                method_ref: 'writing-feedback@1.0.0',
+                capability: 'writing_feedback',
+              },
+              limitations: '只依据当前原稿。',
+              suggestions: ['补充一个具体细节。'],
+              projection_markdown: projectionMarkdown,
+            },
+            projection_markdown: projectionMarkdown,
+          },
+        },
+      },
+    })
+
+    const wrapper = mountPanel(
+      fixtureDataURL('k12-test-作文.png', writingFixtureSHA256),
+    )
+    await flushPromises()
+
+    const progress = wrapper.get('[data-testid="writing-feedback-progress"]')
+    expect(progress.text()).toContain('正在生成作品点评…')
+    expect(wrapper.find('[data-testid="writing-result-surface"]').exists()).toBe(false)
+    expect(h.getResult).not.toHaveBeenCalled()
+
+    releaseReady(ready)
+    await flushPromises()
+
+    const feedback = wrapper.get('[data-testid="writing-result-feedback"]')
+    expect(feedback.attributes()).toMatchObject({
+      'data-generation-id': 'generation-writing-1',
+      'data-feedback-id': 'feedback-1',
+    })
+    for (const canonicalContent of [
+      'BUG-20260726 同源点评正文。',
+      '围绕原稿给出肯定。',
+      '只依据当前原稿提问。',
+      '补充一个具体细节。',
+      '同一 generation 的唯一投影。',
+    ]) {
+      expect(feedback.text()).toContain(canonicalContent)
+    }
+    for (const heading of [
+      '可见证据',
+      '先这样肯定',
+      '家长可以这样问或讲',
+      '下一次只试一个点',
+      '说明',
+    ]) {
+      expect(feedback.text()).toContain(heading)
+    }
+    expect(feedback.text()).not.toContain('##')
+    expect(h.create).toHaveBeenCalledTimes(1)
+    expect(h.getResult).toHaveBeenCalledTimes(1)
+  })
+
+  it('BUG-20260726-E expanded writing TaskShell 只渲染一个标题和一条进度', async () => {
+    h.create.mockResolvedValue({
+      created: true,
+      ...creativeDispatch('writing', 'feedback_pending'),
+    })
+    h.get.mockImplementation(() => new Promise(() => {}))
+
+    const wrapper = mountPanel(
+      fixtureDataURL('k12-test-作文.png', writingFixtureSHA256),
+    )
+    await flushPromises()
+
+    const titles = wrapper.findAll('.rec-panel__title').filter((item) => item.isVisible())
+    const statuses = wrapper.findAll('[role="status"]').filter((item) => item.isVisible())
+    expect(titles).toHaveLength(1)
+    expect(titles[0]!.text()).toBe('语文写作')
+    expect(statuses).toHaveLength(1)
+    expect(statuses[0]!.text()).toBe('正在生成作品点评…')
+    expect(wrapper.text().match(/语文写作/g)).toHaveLength(1)
+  })
+
   it('writing/artwork never enter homework rows, pipeline, or homework empty copy', async () => {
     for (const intent of ['writing', 'artwork'] as const) {
       const projectionMarkdown =
         intent === 'writing'
-          ? '## 观察与依据\n\n- 文章围绕爸爸展开。'
-          : '## 观察与依据\n\n- 主体位于画面中央。'
+          ? '## 可见证据\n\n- 文章围绕爸爸展开。\n\n## 先这样肯定\n\n可以先肯定文章围绕一个具体人物展开。\n\n## 家长可以这样问或讲\n\n可以问孩子最想保留哪一句。\n\n## 下一次只试一个点\n\n补充一个具体细节。\n\n## 说明\n\n只依据当前正文。'
+          : '## 可见证据\n\n- 主体位于画面中央。\n\n## 先这样肯定\n\n可以先肯定主体安排清楚。\n\n## 家长可以这样问或讲\n\n可以问孩子最想保留画面中的哪一处。\n\n## 下一次只试一个点\n\n加强最亮与最暗处的差别。\n\n## 说明\n\n只依据当前图片中可见内容。'
       const promoted = creativeDispatch(intent)
       h.create.mockResolvedValue({ created: true, ...promoted })
       h.get.mockResolvedValue(promoted)
@@ -281,6 +442,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
               display_name: intent === 'writing' ? '语文写作' : '美术作品',
             },
             feedback: {
+              generation_id: `generation-${intent}-1`,
               structured_feedback: {
                 feedback_id: 'feedback-1',
                 version_id: 'version-1',
@@ -324,6 +486,15 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
       expect(feedback.text()).toContain(
         intent === 'writing' ? '文章围绕爸爸展开。' : '主体位于画面中央。',
       )
+      for (const heading of [
+        '可见证据',
+        '先这样肯定',
+        '家长可以这样问或讲',
+        '下一次只试一个点',
+        '说明',
+      ]) {
+        expect(feedback.text()).toContain(heading)
+      }
       expect(feedback.text()).not.toContain('##')
       wrapper.unmount()
       h.create.mockReset()
@@ -351,6 +522,7 @@ describe('K12 ImageTask intent-specific TaskShell projection', () => {
           intake: { intake_id: 'intake-1', status: 'promoted' },
           work: { work_id: 'work-1', display_name: '语文写作' },
           feedback: {
+            generation_id: 'generation-writing-1',
             structured_feedback: {
               feedback_id: 'feedback-1',
               version_id: 'version-1',

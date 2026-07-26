@@ -25,7 +25,8 @@ vi.mock('@/api/k12', () => ({
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12ColdStart: vi.fn(),
-  k12ReviewRetry: vi.fn(),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12InsightReport: vi.fn().mockResolvedValue({
     trend: { total: 14, mastered: 6, reviewing: 4, retried: 1, archived: 0 },
     weak_top3: [],

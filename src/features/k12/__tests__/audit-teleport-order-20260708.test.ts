@@ -7,6 +7,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
+import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
 
 // 复现断言1：ChatView 里增强组件（含 Teleport）渲染在锚点 div **之前**（ChatView.vue ~1815 vs
 // 锚点 2344/2346），且不预置 body 锚点（现有 K12ChatEnhancement.test.ts:48 预置了，掩盖了真实顺序）。
@@ -63,14 +64,31 @@ const ChatViewLike = defineComponent({
         h(K12ChatEnhancement, {
           agentId: 'ming',
           agentName: '小明的辅导老师',
+          sessionId: 'session-1',
           metadata: { 'k12.grade_term': '五年级上' },
           descriptor: K12_VIEW_DESCRIPTOR,
-          composerImage: 'data:image/png;base64,Zm9v',
+          composerImage: {
+            dataUrl: 'data:image/png;base64,Zm9v',
+            attachment: {
+              type: 'image',
+              name: 'homework.png',
+              mime: 'image/png',
+              data: 'Zm9v',
+            },
+            requestId: 'message-1',
+            sourceSessionId: 'session-1',
+            route: {
+              provider: 'HexClaw-GPT',
+              model: 'gpt-5.6-sol',
+              capability: 'vision',
+            },
+          },
+          messageIds: ['message-1'],
           'onUpdate:recordsActive': () => {},
         }),
         // 场景交互内容必须进入通用消息滚动区，不能作为消息区之前的兄弟节点把会话挤到屏幕外。
         h('div', { class: 'hc-chat__messages', 'data-testid': 'chat-messages' }, [
-          h('div', { id: 'hc-chat-scenario-inline' }),
+          h('div', { id: scenarioMessageAnchorId('message-1') }),
         ]),
         // 锚点在增强组件**之后**（ChatView 真实顺序）
         h('div', { id: 'hc-chat-scenario-footer' }),
@@ -138,7 +156,7 @@ describe('审计 · K12 Teleport 锚点渲染顺序（断言1）', () => {
     await flushPromises()
 
     const messages = document.querySelector('[data-testid="chat-messages"]')
-    const inline = document.getElementById('hc-chat-scenario-inline')
+    const inline = document.getElementById(scenarioMessageAnchorId('message-1'))
     expect(messages?.contains(inline)).toBe(true)
     expect(inline?.querySelector('.k12enh-tutor')).toBeTruthy()
     expect(inline?.querySelector('[data-testid="recognize-guard-stub"]')).toBeTruthy()

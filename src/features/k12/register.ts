@@ -9,6 +9,7 @@ import { scenarioRegistry } from '@/shell/scenario/registry'
 import type { ScenarioContext } from '@/shell/scenario/registry'
 import { K12_SCHEMAS } from './schemas'
 import { K12_VIEW_DESCRIPTOR, K12_SCENARIO_ID } from './descriptor'
+import { resolveK12AssistantIdentityProjection } from './assistant-identity'
 import K12ChatEnhancement from './views/K12ChatEnhancement.vue'
 import K12AgentCard from './views/K12AgentCard.vue'
 import K12ProfileForm from './views/K12ProfileForm.vue'
@@ -42,6 +43,9 @@ export function registerK12Scenario(): void {
   // 3) 视图描述符 + agent→描述符解析器 → ViewExtensionRegistry
   scenarioRegistry.registerDescriptor(K12_SCENARIO_ID, K12_VIEW_DESCRIPTOR)
   scenarioRegistry.registerResolver((ctx) => (isK12Instance(ctx) ? K12_VIEW_DESCRIPTOR : null))
+  scenarioRegistry.registerIdentityProjectionResolver((ctx) =>
+    isK12Instance(ctx) ? resolveK12AssistantIdentityProjection(ctx.metadata) : null,
+  )
   // 3b) 实例内部名模式（BUG-20260712）：实例删除后元数据不复存在，shell 靠名字形状识别
   // 遗留孤儿会话（标题恰为 k12-tutor-xxx → 列表显示「已删除的智能体」而非裸 ID）
   scenarioRegistry.registerInstanceIdPattern(new RegExp(`^${K12_SCENARIO_ID}-`))

@@ -11,11 +11,9 @@ import type { RecordCollectionView } from '@/contracts'
 
 // UX 收口（真机 · 2026-07-12）：
 //  UX-1 「他会了」下放到全部错题档案行 + 详情弹层（此前只在到期复习队列块，常空）。
-//  UX-2 再练结果弹层不显验算徽章（练习题不是批改，unverifiable 徽章让家长困惑）。
 //  UX-3 详情弹层内克制删除（二次确认，数据纠错）。
 
 const h = vi.hoisted(() => ({
-  retry: null as unknown as (...a: unknown[]) => Promise<unknown>,
   markMastered: vi.fn(),
   del: vi.fn(),
 }))
@@ -37,7 +35,9 @@ vi.mock('@/api/k12', () => ({
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
   k12MarkMastered: (...args: unknown[]) => h.markMastered(...args),
   k12DeleteMistake: (...args: unknown[]) => h.del(...args),
-  k12ReviewRetry: (...args: unknown[]) => h.retry(...args),
+  k12GetMistakePracticeGeneration: vi
+    .fn()
+    .mockResolvedValue({ state: 'available', source_mistake_id: 'a' }),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi
@@ -122,7 +122,6 @@ describe('UX-1 「家长确认已会」下放到全部错题档案行', () => {
 describe('UX-1 详情弹层「家长确认已会」动作', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    h.retry = vi.fn()
     h.markMastered = vi.fn().mockResolvedValue({ ok: true })
   })
 
@@ -152,31 +151,9 @@ describe('UX-1 详情弹层「家长确认已会」动作', () => {
   })
 })
 
-describe('UX-2 再练结果弹层不显验算徽章', () => {
-  beforeEach(() => setActivePinia(createPinia()))
-
-  it('再练结果 badge 不渲染（练习题非批改）', async () => {
-    h.retry = () =>
-      Promise.resolve({ solution: '解：x=14', badge: 'unverifiable', verdict: 'unverifiable' })
-    const w = render()
-    await flushPromises()
-    w.findComponent(RecordList).vm.$emit('action', {
-      id: 'practiceAgain',
-      record: { recordId: 'a', version: 0 },
-    })
-    await flushPromises()
-    const modal = w.find('.k12retry')
-    expect(modal.exists()).toBe(true)
-    // RED：修前 <span class="pill pill-green">{{ retry.badge }}</span> 会显 unverifiable
-    expect(modal.find('.pill').exists()).toBe(false)
-    expect(modal.text()).not.toContain('unverifiable')
-  })
-})
-
 describe('UX-3 详情弹层克制删除 + 二次确认', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    h.retry = vi.fn()
     h.del = vi.fn().mockResolvedValue({ ok: true })
   })
 

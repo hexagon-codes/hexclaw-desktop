@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import RecognizeGuardPanel from '../views/RecognizeGuardPanel.vue'
@@ -47,6 +50,7 @@ import { useK12Store } from '../store'
 
 const originalImage = 'data:image/png;base64,T1JJR0lOQUw='
 const annotatedBase64 = 'QU5OT1RBVEVE'
+const homeworkFixtureSHA256 = '0c4b1a972319203b1483ffbce43e8835b1367be53edceea23c89368a2f2bc861'
 const question = {
   problem_id: 'problem-1',
   question: '4÷0.5=',
@@ -61,6 +65,12 @@ const conflictQuestion = {
   ...question,
   confirmation_required: true,
   confirmation_reasons: ['decimal_point'],
+}
+
+function fixtureDataURL(name: string, expectedSHA256: string) {
+  const bytes = readFileSync(resolve(process.cwd(), '../hexclaw-docs/test', name))
+  expect(createHash('sha256').update(bytes).digest('hex')).toBe(expectedSHA256)
+  return `data:image/png;base64,${bytes.toString('base64')}`
 }
 
 function i18n() {
@@ -136,14 +146,14 @@ function terminalResult() {
   }
 }
 
-function mountPanel() {
+function mountPanel(initialImage = originalImage) {
   return mount(RecognizeGuardPanel, {
     props: {
       agentId: 'mingming',
       grade: '五年级下',
       sessionId: 'session-1',
       requestId: 'message-1',
-      initialImage: originalImage,
+      initialImage,
     },
     global: { plugins: [createPinia(), i18n()] },
     attachTo: document.body,
@@ -154,8 +164,13 @@ function mountRestoredPanel() {
   return mount(RecognizeGuardPanel, {
     props: {
       agentId: 'mingming',
+      agentDisplayName: '小王的辅导助手',
       grade: '五年级下',
       sessionId: 'session-1',
+      sourceMessageId: 'message-1',
+      restoreDispatchId: 'dispatch-1',
+      displayProvider: 'HexClaw-GPT',
+      displayModel: 'gpt-5.6-sol',
     },
     global: { plugins: [createPinia(), i18n()] },
     attachTo: document.body,
@@ -300,10 +315,13 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     localStorage.setItem(
       K12_IMAGE_TASK_BINDINGS_KEY,
       JSON.stringify({
-        version: 1,
-        bindings: {
-          'session-1': { agent_id: 'mingming', dispatch_id: 'dispatch-1' },
-        },
+        version: 2,
+        bindings: [{
+          source_session_id: 'session-1',
+          source_message_id: 'message-1',
+          agent_id: 'mingming',
+          dispatch_id: 'dispatch-1',
+        }],
       }),
     )
     h.getTask
@@ -320,12 +338,12 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     expect(wrapper.find('[data-testid="recognize-confirm-all"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="recognize-grade-all"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="recognize-solve-all"]').exists()).toBe(false)
-    expect(
-      wrapper
-        .findAll('button')
-        .filter((button) => button.isVisible())
-        .map((button) => button.attributes('data-testid')),
-    ).toEqual(['recognize-close'])
+    expect(wrapper.find('[data-testid="task-shell-footer"]').exists()).toBe(true)
+    expect(wrapper.get('[data-testid="task-shell-metadata"]').text()).toContain(
+      'HexClaw-GPT·gpt-5.6-sol·小王的辅导助手·五年级下',
+    )
+    expect(wrapper.find('[data-testid="message-more"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="message-regenerate"]').exists()).toBe(false)
     expect(document.querySelector('[data-testid="recognize-outcome-dialog"]')).toBeNull()
     expect(h.createTask).not.toHaveBeenCalled()
     expect(h.retryTask).not.toHaveBeenCalled()
@@ -375,6 +393,47 @@ describe('BUG-20260724-011/013/015 · TaskShell 与同 dispatch 结果恢复', (
     await vi.advanceTimersByTimeAsync(2_501)
     await flushPromises()
     expect(wrapper.find('[data-testid="photo-grade-overlay"]').exists()).toBe(true)
+  })
+
+  it('BUG-20260726-A completed_homework recognizing 空题列立即显示并在重进后恢复同一进度', async () => {
+    const recognizing = status('recognizing', 'confirmed', {
+      recognition: { questions: [], subject: '数学' },
+      anchor_state: 'pending',
+    })
+    h.createTask.mockResolvedValue({ created: true, ...recognizing })
+    h.getTask.mockImplementation(() => new Promise(() => {}))
+
+    const first = mountPanel(
+      fixtureDataURL('k12-test-批改作业.png', homeworkFixtureSHA256),
+    )
+    await flushPromises()
+
+    const firstProgress = first.get('[data-testid="recognize-pipeline"]')
+    expect(firstProgress.attributes('aria-label')).toBe('已作答作业处理状态')
+    expect(firstProgress.text()).toContain('已作答作业')
+    expect(firstProgress.text().trim()).not.toBe('')
+    expect(first.find('[data-testid="photo-grade-overlay"]').exists()).toBe(false)
+    expect(first.find('[data-testid="recognize-stage-retry"]').exists()).toBe(false)
+    first.unmount()
+
+    h.getTask.mockReset()
+    h.getTask
+      .mockResolvedValueOnce(recognizing)
+      .mockImplementation(() => new Promise(() => {}))
+    const restored = mountRestoredPanel()
+    await flushPromises()
+
+    const restoredProgress = restored.get('[data-testid="recognize-pipeline"]')
+    expect(restoredProgress.text()).toContain('已作答作业')
+    expect(restoredProgress.text().trim()).not.toBe('')
+    expect(h.createTask).toHaveBeenCalledTimes(1)
+    expect(h.getTask).toHaveBeenCalledWith(
+      'mingming',
+      'dispatch-1',
+      expect.any(AbortSignal),
+    )
+    expect(h.retryTask).not.toHaveBeenCalled()
+    expect(h.cancelTask).not.toHaveBeenCalled()
   })
 
   it('TypeScript API 明确声明不可变批注图 wire 字段', () => {

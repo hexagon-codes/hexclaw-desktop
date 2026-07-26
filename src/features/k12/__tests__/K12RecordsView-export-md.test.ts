@@ -21,7 +21,9 @@ vi.mock('@/api/k12', () => ({
   k12ExportMd: (a: string) => h.exportMdSpy(a),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [{ record_id: 'a', question: '3.8×3', knowledge_point: '小数乘法', error_cause: '进位', status: 'new', version: 0, due_at: 1 }] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(), k12ReviewRetry: vi.fn(),
+  k12MarkMastered: vi.fn(),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12InsightReport: vi.fn().mockResolvedValue({ trend: { mastered: 0, reviewing: 1, retried: 0, archived: 0, total: 1 }, weak_top3: [], month_new_mistakes: 1, review_completion_rate: -1, consecutive_fail_kps: null, suggestion: '' }),
   k12StudyTime: vi.fn().mockResolvedValue({ days: [], total_records: 1, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),

@@ -24,6 +24,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12ChatEnhancement from '../views/K12ChatEnhancement.vue'
 import { K12_VIEW_DESCRIPTOR } from '../descriptor'
+import { scenarioMessageAnchorId } from '@/shell/scenario/registry'
 
 const PNG_DATA_URL = 'data:image/png;base64,iVBORw0KGgo='
 
@@ -191,7 +192,7 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     vi.clearAllMocks()
     localStorage.clear()
     document.body.innerHTML =
-      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div>'
+      `<div id="${scenarioMessageAnchorId('message-homework')}"></div><div id="${scenarioMessageAnchorId('message-homework-attempt-1')}"></div><div id="${scenarioMessageAnchorId('message-homework-attempt-2')}"></div><div id="hc-chat-scenario-footer"></div><div id="hc-chat-scenario-composer-top"></div><div id="hc-chat-scenario-composer-actions"></div>`
   })
 
   it('★传入 composerImage → RecognizeGuardPanel 打开、唯一 facade 收到不可变资产与冻结路由、emit 清空', async () => {
@@ -223,7 +224,9 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
       attachTo: document.body,
     })
     expect(
-      document.querySelector('#hc-chat-scenario-inline [data-testid="recognize-guard"]'),
+      document.querySelector(
+        `#${scenarioMessageAnchorId('message-homework')} [data-testid="recognize-guard"]`,
+      ),
     ).toBeTruthy()
     await vi.waitFor(() => expect(k12UploadAsset).toHaveBeenCalledTimes(1))
     // 识题护栏应自动打开并用该图跑识题（回显护栏出题）
@@ -249,7 +252,12 @@ describe('BUG-20260709 ② K12ChatEnhancement：composerImage → 自动打开�
     )
     expect(k12CreateImageTask).toHaveBeenCalledTimes(1)
     await flushPromises()
-    expect(document.querySelector('#hc-chat-scenario-inline [data-testid="rq-item"]'), '识题结果应渲染回显护栏').toBeTruthy()
+    expect(
+      document.querySelector(
+        `#${scenarioMessageAnchorId('message-homework')} [data-testid="rq-item"]`,
+      ),
+      '识题结果应渲染到原图片消息的局部锚点',
+    ).toBeTruthy()
     // 消费后通知外壳清空，避免重复触发
     expect(w.emitted('update:composerImage'), '消费后应 emit 清空').toBeTruthy()
   })

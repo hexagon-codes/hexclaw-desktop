@@ -3,7 +3,7 @@
  * ①标题「学情报告·每月1日自动生成」→「{grade}学习概览 · 从真实批改与复练证据生成」（月报口径退役）；
  * ②瓷片/薄弱条/挫败 CTA 可点 → emit('navigate', target)，外层 K12ChatEnhancement 切学习档案
  *   并把 target 透传给 RecordsView 直达对应对象；
- * ③第四瓷片=练习集待打印（draft 篮 items 求和，自拉 k12ListPracticeSets，不编数）。
+ * ③四块数字、薄弱点与行动卡全部来自一次 k12InsightReport 快照，不再自拉列表拼数。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -15,8 +15,6 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12InsightPanel from '../views/K12InsightPanel.vue'
 import { useK12Store } from '../store'
-
-const h = vi.hoisted(() => ({ practiceSpy: vi.fn() }))
 
 vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({
@@ -37,14 +35,25 @@ vi.mock('@/api/k12', () => ({
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12ColdStart: vi.fn(),
-  k12ReviewRetry: vi.fn(),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12InsightReport: vi.fn().mockResolvedValue({
+    learner: 'k12-tutor-x',
+    grade_term: '',
+    as_of: 1784937600,
+    source_digest: 'sha256:router-fixture',
+    source_record_ids: ['m1'],
+    unscoped_source_count: 0,
+    review_week_start: 1784900400,
+    review_week_end: 1785505200,
     trend: { total: 11, mastered: 6, reviewing: 4, retried: 1, archived: 0 },
     weak_top3: [
-      { knowledge_point: '简易方程', count: 5 },
-      { knowledge_point: '小数乘法', count: 3 },
+      { subject: '数学', knowledge_point: '简易方程', count: 5, share: 5 / 9 },
+      { subject: '数学', knowledge_point: '小数乘法', count: 3, share: 3 / 9 },
     ],
     month_new_mistakes: 9,
+    week_pending: 0,
+    practice_pending: 6,
     review_completion_rate: 0.78,
     consecutive_fail_kps: ['简易方程'],
     suggestion: '先做等式性质热身。',
@@ -53,7 +62,7 @@ vi.mock('@/api/k12', () => ({
     .fn()
     .mockResolvedValue({ days: [], total_records: 0, total_minutes: 0, note: '' }),
   k12ListAccumulation: vi.fn().mockResolvedValue({ items: [] }),
-  k12ListPracticeSets: (agent: string, status?: string) => h.practiceSpy(agent, status),
+  k12ListPracticeSets: vi.fn(),
   k12MistakeSheet: vi.fn(),
   k12ExportMd: vi.fn(),
   k12Backup: vi.fn(),
@@ -82,13 +91,6 @@ async function mountInsight(props: Record<string, string> = {}) {
 
 beforeEach(() => {
   document.body.innerHTML = ''
-  h.practiceSpy.mockReset().mockResolvedValue({
-    // draft 篮两卷 4+2=6 道
-    items: [
-      { record_id: 'ps1', status: 'draft', items: [{}, {}, {}, {}] },
-      { record_id: 'ps2', status: 'draft', items: [{}, {}] },
-    ],
-  })
 })
 
 describe('学情标题（原型 2613：月报口径退役）', () => {
@@ -108,18 +110,11 @@ describe('学情标题（原型 2613：月报口径退役）', () => {
 })
 
 describe('第四瓷片 · 练习集待打印（原型 2617）', () => {
-  it('★draft 篮 items 求和（4+2=6），按 agent+draft 拉取', async () => {
+  it('★直接消费报告快照中的 practice_pending，不发第二次列表请求', async () => {
     const w = await mountInsight()
-    expect(h.practiceSpy).toHaveBeenCalledWith('k12-tutor-x', 'draft')
     const tile = w.find('[data-testid="insight-tile-practice"]')
     expect(tile.text()).toContain('6')
     expect(tile.text()).toContain('练习集待打印')
-  })
-
-  it('拉取失败 → 显示「—」不编数', async () => {
-    h.practiceSpy.mockRejectedValue(new Error('boom'))
-    const w = await mountInsight()
-    expect(w.find('[data-testid="insight-tile-practice"]').text()).toContain('—')
   })
 })
 

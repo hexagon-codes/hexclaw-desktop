@@ -29,9 +29,14 @@ vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 
 const GuardStub = defineComponent({
   name: 'RecognizeGuardPanel',
-  props: { agentId: String, sessionId: String },
+  props: {
+    agentId: String,
+    sessionId: String,
+    sourceMessageId: String,
+    restoreDispatchId: String,
+  },
   template:
-    '<div data-testid="guard-restore-stub" :data-agent="agentId" :data-session="sessionId" />',
+    '<div data-testid="guard-restore-stub" :data-agent="agentId" :data-session="sessionId" :data-source-message="sourceMessageId" :data-dispatch="restoreDispatchId" />',
 })
 
 function i18n() {
@@ -65,34 +70,70 @@ describe('K12 会话刷新后的 ImageTaskDispatch 入口恢复', () => {
     setActivePinia(createPinia())
     localStorage.clear()
     document.body.innerHTML =
-      '<div id="hc-chat-scenario-inline"></div><div id="hc-chat-scenario-footer"></div>'
+      '<div id="hc-chat-scenario-inline-message-1"></div><div id="hc-chat-scenario-inline-message-2"></div><div id="hc-chat-scenario-footer"></div>'
   })
 
-  it('同 session+agent 有绑定时自动恢复原会话位置，并向护栏透传 sessionId', async () => {
+  it('同 session+agent 的多个绑定分别恢复到原消息锚点', async () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        version: 1,
-        bindings: { 'session-1': { agent_id: 'mingming', dispatch_id: 'dispatch-unknown' } },
+        version: 2,
+        bindings: [
+          {
+            source_session_id: 'session-1',
+            agent_id: 'mingming',
+            source_message_id: 'message-1',
+            dispatch_id: 'dispatch-1',
+          },
+          {
+            source_session_id: 'session-1',
+            agent_id: 'mingming',
+            source_message_id: 'message-2',
+            dispatch_id: 'dispatch-2',
+          },
+        ],
       }),
     )
     render()
     await flushPromises()
 
-    const guard = document.querySelector<HTMLElement>(
-      '#hc-chat-scenario-inline [data-testid="guard-restore-stub"]',
+    const guards = document.querySelectorAll<HTMLElement>(
+      '[data-testid="guard-restore-stub"]',
     )
-    expect(guard).not.toBeNull()
-    expect(guard?.dataset.agent).toBe('mingming')
-    expect(guard?.dataset.session).toBe('session-1')
+    expect(guards).toHaveLength(2)
+    expect(
+      document.querySelector<HTMLElement>(
+        '#hc-chat-scenario-inline-message-1 [data-testid="guard-restore-stub"]',
+      )?.dataset,
+    ).toMatchObject({
+      agent: 'mingming',
+      session: 'session-1',
+      sourceMessage: 'message-1',
+      dispatch: 'dispatch-1',
+    })
+    expect(
+      document.querySelector<HTMLElement>(
+        '#hc-chat-scenario-inline-message-2 [data-testid="guard-restore-stub"]',
+      )?.dataset,
+    ).toMatchObject({
+      sourceMessage: 'message-2',
+      dispatch: 'dispatch-2',
+    })
   })
 
   it('相同 session 但 Agent 不匹配时不恢复，不把另一孩子的任务投影进来', async () => {
     localStorage.setItem(
       STORAGE_KEY,
       JSON.stringify({
-        version: 1,
-        bindings: { 'session-1': { agent_id: 'other-child', dispatch_id: 'dispatch-other' } },
+        version: 2,
+        bindings: [
+          {
+            source_session_id: 'session-1',
+            agent_id: 'other-child',
+            source_message_id: 'message-1',
+            dispatch_id: 'dispatch-other',
+          },
+        ],
       }),
     )
     render('mingming')

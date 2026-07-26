@@ -94,8 +94,15 @@ export type ImageTaskCompletionOutcome =
 export interface ImageTaskView {
   dispatchId: string
   dispatchVersion: number
+  createdAt?: number
+  automaticBudgetSeconds?: number
+  automaticStartedAt?: number
+  automaticDeadlineAt?: number
+  automaticRemainingSeconds?: number
+  operationDeadlineAt?: number
   taskIntent: ImageTaskIntent
   stage: string
+  retryable?: boolean
   questions: RecognizedQuestion[]
   subject: string
   anchorState: 'pending' | 'located' | 'degraded'
@@ -456,8 +463,15 @@ export const useK12Store = defineStore('k12', () => {
     return {
       dispatchId: dispatch.dispatch_id,
       dispatchVersion: dispatch.version,
+      createdAt: dispatch.created_at,
+      automaticBudgetSeconds: dispatch.automatic_budget_seconds,
+      automaticStartedAt: dispatch.automatic_started_at,
+      automaticDeadlineAt: dispatch.automatic_deadline_at,
+      automaticRemainingSeconds: dispatch.automatic_remaining_seconds,
+      operationDeadlineAt: dispatch.operation_deadline_at,
       taskIntent: dispatch.task_intent,
       stage: homework?.stage ?? feedbackState ?? creative?.status ?? dispatch.status,
+      retryable: dispatch.retryable === true,
       questions: homework?.recognition?.questions ?? [],
       subject: homework?.recognition?.subject ?? '',
       anchorState: homework?.anchor_state ?? 'pending',
@@ -597,7 +611,7 @@ export const useK12Store = defineStore('k12', () => {
       )
       onStatus?.(created.dispatch)
       const dispatchId = created.dispatch.dispatch_id
-      setImageTaskBinding(sourceSession, input.agent, dispatchId)
+      setImageTaskBinding(sourceSession, input.agent, sourceRef, dispatchId)
       throwIfAborted(signal)
       const dispatch = readyForTaskShell(created.dispatch)
         ? created.dispatch
@@ -790,6 +804,46 @@ export const useK12Store = defineStore('k12', () => {
     }
   }
 
+  async function restoreImageTaskDispatch(
+    agent: string,
+    input: {
+      sourceSession: string
+      sourceMessageId: string
+      dispatchId: string
+    },
+    signal?: AbortSignal,
+    onStatus?: ImageTaskStatusObserver,
+  ): Promise<ImageTaskView | null> {
+    try {
+      const response = await k12GetImageTask(agent, input.dispatchId, signal)
+      throwIfAborted(signal)
+      onStatus?.(response.dispatch)
+      const dispatch = readyForTaskShell(response.dispatch)
+        ? response.dispatch
+        : await continuePollingImageTask(
+            agent,
+            input.dispatchId,
+            readyForTaskShell,
+            JOB_POLL_INTERVAL_MS,
+            signal,
+            onStatus,
+          )
+      return imageTaskView(dispatch)
+    } catch (error) {
+      const code = httpStatus(error)
+      if (code === 403 || code === 404) {
+        clearImageTaskBinding(
+          input.sourceSession,
+          agent,
+          input.sourceMessageId,
+          input.dispatchId,
+        )
+        return null
+      }
+      throw error
+    }
+  }
+
   /** 渐进提示一轮：返回分阶段指令 + 守门标志（阶段三带验算解） */
   async function tutorTurn(req: TutorTurnReq): Promise<TutorTurnResp> {
     return await k12TutorTurn(req)
@@ -865,6 +919,7 @@ export const useK12Store = defineStore('k12', () => {
     cancelImageTask,
     completeImageTask,
     restoreImageTask,
+    restoreImageTaskDispatch,
     coldStart,
     tutorTurn,
     setupAutomation,

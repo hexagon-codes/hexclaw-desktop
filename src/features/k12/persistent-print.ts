@@ -2,6 +2,8 @@ import {
   k12CommitGenericPrintReceipt,
   k12GetGenericPrintArtifact,
   k12GetGenericPrintJob,
+  k12GetPrintArtifactContent,
+  k12PrepareArtifactPrintJob,
   k12PrepareGenericPrintJob,
   k12RecordGenericPrintEvent,
   k12RetryGenericPrintJob,
@@ -20,7 +22,10 @@ export interface PersistentPrintRequest {
   sourceKind: GenericPrintSourceKind
   sourceRef: string
   title: string
-  canonicalMarkdown: string
+  /** Existing canonical content path. Mutually exclusive with artifactId. */
+  canonicalMarkdown?: string
+  /** Existing PrintableArtifact path; the print controller must not render it again. */
+  artifactId?: string
   /** Browser/prototype only. Formal Tauri builds never invoke this callback. */
   browserPrint: () => Promise<boolean>
 }
@@ -39,7 +44,7 @@ export type PersistentPrintPreparation =
     }
 
 function operationIdentity(req: PersistentPrintRequest): string {
-  return `${req.agent}\u0000${req.sourceKind}\u0000${req.sourceRef}\u0000${req.title}\u0000${req.canonicalMarkdown}`
+  return `${req.agent}\u0000${req.sourceKind}\u0000${req.sourceRef}\u0000${req.title}\u0000${req.artifactId ?? req.canonicalMarkdown ?? ''}`
 }
 
 function operationKey(req: PersistentPrintRequest): string {
@@ -63,18 +68,29 @@ function clearOperationKey(req: PersistentPrintRequest) {
  * source. `dialog_open` and native printing remain impossible until confirm().
  */
 async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPreparation> {
+  const artifactId = req.artifactId?.trim()
+  const canonicalMarkdown = req.canonicalMarkdown?.trim()
+  if (Boolean(artifactId) === Boolean(canonicalMarkdown)) {
+    throw new Error('打印请求必须且只能指定 artifactId 或 canonicalMarkdown')
+  }
   if (!isTauri()) {
     return { status: 'completed', printed: await req.browserPrint() }
   }
 
-  const prepared = await k12PrepareGenericPrintJob({
-    agent: req.agent,
-    idempotency_key: operationKey(req),
-    source_kind: req.sourceKind,
-    source_ref: req.sourceRef,
-    title: req.title,
-    canonical_markdown: req.canonicalMarkdown,
-  })
+  const prepared = artifactId
+    ? await k12PrepareArtifactPrintJob({
+        agent: req.agent,
+        idempotency_key: operationKey(req),
+        artifact_id: artifactId,
+      })
+    : await k12PrepareGenericPrintJob({
+        agent: req.agent,
+        idempotency_key: operationKey(req),
+        source_kind: req.sourceKind,
+        source_ref: req.sourceRef,
+        title: req.title,
+        canonical_markdown: canonicalMarkdown!,
+      })
   let job = prepared.print_job
   if (job.status === 'printed') {
     clearOperationKey(req)
@@ -86,8 +102,12 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
     throw new Error('发现未决打印任务，请先核对系统打印队列，不能盲目重复打印')
   }
 
-  const artifact = await k12GetGenericPrintArtifact(req.agent, job.print_job_id)
-  const pdf = await renderPracticePaperPdf(artifact.markdown, artifact.title)
+  const genericArtifact = artifactId
+    ? null
+    : await k12GetGenericPrintArtifact(req.agent, job.print_job_id)
+  const pdf = artifactId
+    ? await k12GetPrintArtifactContent(req.agent, artifactId)
+    : await renderPracticePaperPdf(genericArtifact!.markdown, genericArtifact!.title)
   let confirmation: Promise<boolean> | null = null
   const confirm = () => {
     if (confirmation) return confirmation
@@ -133,7 +153,7 @@ async function prepare(req: PersistentPrintRequest): Promise<PersistentPrintPrep
     return confirmation
   }
 
-  return { status: 'preview', title: artifact.title, pdf, confirm }
+  return { status: 'preview', title: genericArtifact?.title ?? req.title, pdf, confirm }
 }
 
 export function preparePersistentPrint(req: PersistentPrintRequest): Promise<PersistentPrintPreparation> {

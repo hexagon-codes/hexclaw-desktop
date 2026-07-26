@@ -51,7 +51,8 @@ vi.mock('@/api/k12', () => ({
     ],
   }),
   k12MarkMastered: vi.fn(),
-  k12ReviewRetry: vi.fn(),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn().mockResolvedValue({
     badge: 'verified-strong',

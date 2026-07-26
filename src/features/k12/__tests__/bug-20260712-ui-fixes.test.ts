@@ -66,10 +66,12 @@ describe('BUG-20260712 #1 拍照识题选图显缩略图，不糊 base64 原文'
 describe('BUG-20260712 #2 识题面板复用消息区滚动（题目多不撑出视口）', () => {
   it('面板落在消息内联槽，自身不建立第二个滚动容器，滚动终点位于面板之后', () => {
     const tutorRule = k12EnhSrc.match(/\.k12enh-tutor\s*\{[^}]*\}/)?.[0] ?? ''
-    expect(k12EnhSrc).toContain('to="#hc-chat-scenario-inline"')
+    expect(k12EnhSrc).toContain(':to="`#${scenarioMessageAnchorId(task.sourceMessageId)}`"')
     expect(tutorRule).not.toMatch(/max-height\s*:/)
     expect(tutorRule).not.toMatch(/overflow-y\s*:/)
-    expect(chatViewSrc).toMatch(/id="hc-chat-scenario-inline"[\s\S]*ref="messagesEndRef"/)
+    expect(chatViewSrc).toMatch(
+      /:id="scenarioMessageAnchorId\(msg\.id\)"[\s\S]*ref="messagesEndRef"/,
+    )
     expect(chatViewSrc).toMatch(/v-if="[^"]*scenarioInlineActive[^"]*"\s+ref="messagesEndRef"/)
     expect(chatViewSrc).toContain('@update:inline-active="handleScenarioInlineActive"')
     expect(chatViewSrc).toMatch(

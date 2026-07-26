@@ -49,6 +49,8 @@ vi.mock('@/api/k12', () => ({
 
 const correctQuestion = {
   problem_id: 'p-correct',
+  source_number_path: ['一', '1'],
+  display_label: '一. 1',
   question: '516-356=160',
   canonical_markdown: '516-356=160',
   knowledge_points: ['整数减法'],
@@ -60,6 +62,8 @@ const correctQuestion = {
 
 const wrongQuestion = {
   problem_id: 'p-wrong',
+  source_number_path: ['一', '2'],
+  display_label: '一. 2',
   question: '10×0.01=1',
   canonical_markdown: '10\\times0.01=1',
   knowledge_points: ['小数乘法'],
@@ -244,7 +248,8 @@ describe('RecognizeGuardPanel · TaskShell 与正确题折叠不变量', () => {
     const correct = wrapper.get('.grade-card--correct')
     const issue = wrapper.get('.grade-card--issue')
     expect(correct.attributes('open')).toBeUndefined()
-    expect(correct.text()).toContain('第 1 题')
+    expect(correct.text()).toContain('一. 1')
+    expect(correct.text()).not.toContain('第 1 题')
     expect(correct.text()).toContain('516')
     expect(issue.attributes('open')).toBeDefined()
     expect(issue.text()).toContain('把百分之一看成十分之一')

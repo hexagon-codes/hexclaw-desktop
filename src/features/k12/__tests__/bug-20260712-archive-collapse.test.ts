@@ -54,7 +54,8 @@ vi.mock('@/api/k12', () => ({
   k12ListMistakes: vi.fn().mockResolvedValue({ items: h.mistakes }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: h.due }),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
-  k12ReviewRetry: vi.fn(),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12InsightReport: vi.fn().mockImplementation(() => Promise.resolve(h.report)),

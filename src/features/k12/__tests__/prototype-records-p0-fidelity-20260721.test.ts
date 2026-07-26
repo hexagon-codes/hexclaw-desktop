@@ -30,7 +30,8 @@ vi.mock('@/api/k12', () => ({
   k12ListCreativeWorks: (...args: unknown[]) => h.listCreativeWorks(...args),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
   k12DeleteMistake: vi.fn().mockResolvedValue({ ok: true }),
-  k12ReviewRetry: vi.fn(),
+  k12GetMistakePracticeGeneration: vi.fn().mockImplementation((_agent: string, recordID: string) =>
+    Promise.resolve({ state: 'available', source_mistake_id: recordID })),
   k12RecordMistake: vi.fn(),
   k12AddAccumulation: vi.fn(),
   k12AddToBasket: vi.fn(),

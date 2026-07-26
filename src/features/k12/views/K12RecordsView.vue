@@ -14,37 +14,56 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useToast } from '@/composables/useToast'
 import { setClipboard } from '@/api/desktop'
 import { useK12Store } from '../store'
+import { useAgentsStore } from '@/stores/agents'
 import K12PracticeSetsPanel from './K12PracticeSetsPanel.vue'
 import K12CreativeWorksPanel from './K12CreativeWorksPanel.vue'
+import K12ProfileForm from './K12ProfileForm.vue'
+import K12WeeklyPracticePanel from '../components/K12WeeklyPracticePanel.vue'
+import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import {
-  k12ReviewRetry,
   k12ExportMd,
   k12AddAccumulation,
   k12DeleteAccumulation,
   k12GenerateAccumulationDictation,
-  k12AddToBasket,
-  k12FillPracticeBasket,
   k12GenerateCustomPaper,
+  k12GetCurriculumProgress,
+  k12GetPrintArtifactContent,
+  k12GetWeeklyPracticeHistory,
+  k12GetWeeklyPracticeSettings,
+  k12EnsureWeeklyPracticePlan,
+  k12PrepareWeeklyPracticeOutput,
+  k12SaveWeeklyPracticePlanToPracticeSet,
+  k12SendWeeklyPracticeSnapshot,
+  k12GetMistakePracticeGeneration,
   k12ListPracticeSets,
   k12ListCreativeWorks,
+  k12RetryMistakePracticeGeneration,
   k12SendAccumulation,
+  k12StartMistakePracticeGeneration,
   type AccumulationDictationGenerationDTO,
   type AccumulationDictationStatus,
   type CustomPaperDifficulty,
   type CustomPaperResp,
   type CustomPaperScope,
   type CustomPaperTotal,
+  type MistakePracticeGenerationDTO,
+  type CurriculumProgressDTO,
+  type WeeklyPracticeHistorySummaryDTO,
+  type WeeklyPracticePlanDTO,
+  type WeeklyPracticePrepareOutputResp,
+  type WeeklyPracticeSettingsDTO,
 } from '@/api/k12'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 import { MISTAKE_SCHEMA } from '../schemas'
-import { exportArchiveDocument, worksheetFilename, download } from '../export'
+import { exportArchiveDocument, worksheetFilename, download, savePdfArtifact } from '../export'
 import type { RecordCollectionView, RecordItem } from '@/contracts'
 import type {
   K12MistakeStatusFilter,
   K12RecordsNavigation,
   K12RecordsTarget,
 } from '../records-navigation'
+import type { ScenarioTextModelRoute } from '@/shell/scenario/registry'
 
 const props = defineProps<{
   agentId: string
@@ -52,6 +71,8 @@ const props = defineProps<{
   grade: string
   /** 教材边界（k12.textbook_edition）；旧直挂测试可从「年级 · 教材」兼容解析。 */
   textbook?: string
+  /** 当前场景文本任务的冻结路由；缺省时由服务端解析默认模型。 */
+  modelRoute?: ScenarioTextModelRoute
   /** v-show 保活时的可见态；从辅导切回档案必须刷新，避免展示进入会话时的旧缓存。 */
   active?: boolean
   /** 学情路由器直达目标；变化时切到对应档案对象。 */
@@ -73,10 +94,172 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const toast = useToast()
 const store = useK12Store()
+const agentsStore = useAgentsStore()
 const accumulationDelivery = useK12DeliveryBatch({
   agent: () => props.agentId,
   idleLabel: '发送到手机',
 })
+const weeklyDelivery = useK12DeliveryBatch({
+  agent: () => props.agentId,
+  idleLabel: '发送到手机',
+})
+const weeklyProgress = ref<CurriculumProgressDTO | null>(null)
+const weeklySettings = ref<WeeklyPracticeSettingsDTO | null>(null)
+const weeklyPlan = ref<WeeklyPracticePlanDTO | null>(null)
+const weeklyHistory = ref<WeeklyPracticeHistorySummaryDTO[]>([])
+const weeklyOutput = ref<WeeklyPracticePrepareOutputResp | null>(null)
+const weeklyLoading = ref(true)
+const weeklyBusy = ref(false)
+const weeklyError = ref('')
+const weeklyPrintController = ref<InstanceType<typeof K12PersistentPrintController>>()
+const profileOpen = ref(false)
+const profileAgent = computed(() =>
+  agentsStore.agents.find((agent) => agent.name === props.agentId),
+)
+
+function weeklyCommandKey(kind: string, identity: string): string {
+  return `desktop-weekly-${kind}:${props.agentId}:${identity}`
+}
+
+const weeklyPlanIntent = ref<{ agent: string; commandKey: string } | null>(null)
+let weeklyPlanKeySequence = 0
+
+function weeklyPlanCommandKey(): string {
+  if (weeklyPlanIntent.value?.agent === props.agentId) {
+    return weeklyPlanIntent.value.commandKey
+  }
+  const identity =
+    globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++weeklyPlanKeySequence}`
+  const commandKey = weeklyCommandKey('plan', identity)
+  weeklyPlanIntent.value = { agent: props.agentId, commandKey }
+  return commandKey
+}
+
+async function loadWeeklyPractice() {
+  if (!props.agentId) return
+  weeklyLoading.value = true
+  weeklyError.value = ''
+  try {
+    const [progressResp, settingsResp, planResp, historyResp] = await Promise.all([
+      k12GetCurriculumProgress(props.agentId),
+      k12GetWeeklyPracticeSettings(props.agentId),
+      k12EnsureWeeklyPracticePlan(props.agentId, weeklyPlanCommandKey()),
+      k12GetWeeklyPracticeHistory(props.agentId, undefined, 20),
+    ])
+    weeklyProgress.value = progressResp.progress
+    weeklySettings.value = settingsResp
+    weeklyPlan.value = planResp.plan
+    weeklyHistory.value = historyResp.items
+    if (
+      weeklyOutput.value &&
+      weeklyOutput.value.snapshot.plan_revision !== planResp.plan.revision
+    ) {
+      weeklyOutput.value = null
+      weeklyDelivery.reset()
+    }
+    weeklyPlanIntent.value = null
+  } catch (cause) {
+    weeklyError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    weeklyLoading.value = false
+  }
+}
+
+async function prepareWeeklyOutput() {
+  const plan = weeklyPlan.value
+  if (!plan || weeklyBusy.value) return
+  weeklyBusy.value = true
+  try {
+    weeklyOutput.value = await k12PrepareWeeklyPracticeOutput(
+      props.agentId,
+      plan.plan_id,
+      plan.revision,
+      weeklyCommandKey('prepare', `${plan.plan_id}:${plan.revision}`),
+    )
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    weeklyBusy.value = false
+  }
+}
+
+async function runWeeklyArtifactAction(intent: {
+  action: 'print' | 'export_pdf' | 'send_im'
+  artifact_digest: string
+}) {
+  const output = weeklyOutput.value
+  if (!output || weeklyBusy.value) return
+  weeklyBusy.value = true
+  try {
+    if (intent.action === 'print') {
+      await weeklyPrintController.value?.open({
+        agent: props.agentId,
+        idempotencyKey: weeklyCommandKey('print', output.artifact.artifact_id),
+        sourceKind: 'weekly_practice_snapshot',
+        sourceRef: output.snapshot.snapshot_id,
+        title: output.artifact.title,
+        artifactId: output.artifact.artifact_id,
+        browserPrint: async () => {
+          toast.error('当前环境没有可核验的系统打印边界')
+          return false
+        },
+      })
+      return
+    }
+    if (intent.action === 'export_pdf') {
+      const pdf = await k12GetPrintArtifactContent(
+        props.agentId,
+        output.artifact.artifact_id,
+      )
+      await savePdfArtifact(pdf, output.artifact.title)
+      return
+    }
+    await weeklyDelivery.send(() =>
+      k12SendWeeklyPracticeSnapshot(
+        props.agentId,
+        output.snapshot.snapshot_id,
+        weeklyCommandKey('send', output.snapshot.snapshot_id),
+      ),
+    )
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    weeklyBusy.value = false
+  }
+}
+
+async function saveWeeklyPracticeSet() {
+  const plan = weeklyPlan.value
+  if (!plan || weeklyBusy.value) return
+  weeklyBusy.value = true
+  try {
+    const response = await k12SaveWeeklyPracticePlanToPracticeSet(
+      props.agentId,
+      plan.plan_id,
+      plan.revision,
+      weeklyCommandKey('save', `${plan.plan_id}:${plan.revision}`),
+    )
+    toast.success(response.replayed ? '这份周练已在练习集中' : '已保存到练习集')
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    weeklyBusy.value = false
+  }
+}
+
+function openWeeklyProfile() {
+  if (!profileAgent.value) {
+    toast.error('无法读取当前辅导助手档案')
+    return
+  }
+  profileOpen.value = true
+}
+
+async function onWeeklyProfileSaved() {
+  profileOpen.value = false
+  weeklyPlanIntent.value = null
+  await loadWeeklyPractice()
+}
 
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：学习档案五对象 Tab——本周复习(行动)｜全部错题(档案)｜
 // 练习集｜积累｜作品；学情已提升为顶栏一等 Tab（K12InsightPanel）。默认落在「本周复习」（行动优先）。
@@ -196,6 +379,7 @@ async function reloadMistakes() {
   mistakesLoading.value = true
   try {
     await store.loadMistakes(props.agentId)
+    await reloadPracticeGenerationStates()
   } finally {
     mistakesLoading.value = false
   }
@@ -204,6 +388,7 @@ async function reloadMistakes() {
 async function reload() {
   if (!props.agentId) return
   await Promise.all([
+    loadWeeklyPractice(),
     reloadMistakes(),
     store.loadReport(props.agentId), // trend pill（本周复习行动卡）数据源；学情全量在 K12InsightPanel
     reloadAccum(),
@@ -223,7 +408,7 @@ watch(
   () => {
     clearArchiveUndos()
     archiveBusy.value = []
-    closeRetry()
+    resetPracticeGenerationProjection()
     // 删除确认与被确认对象必须随辅导对象切换一并销毁，避免旧对象的
     // 冷却计时器、焦点恢复或迟到响应污染新对象。
     closeDetail()
@@ -335,35 +520,6 @@ async function submitMistake() {
   }
 }
 
-// ── 组卷改道装篮（§3.6/§3.8 闭环断裂修复 · 原型 buildVerifiedPracticeSet 购物车模型）──
-// 「生成复习卷 / 自定义组卷」不再客户端 exportPdf 直出 PDF（绕过练习集=闭环断裂）：
-// 默认复习卷复用后端 FillBasketFromDue；自定义卷走 DD-027 正式命令。Desktop 只提交一次
-// 冻结参数，生成、验证、去重、装篮由后端原子完成，禁止逐题 review/retry + AddToBasket 拼卷。
-const basketBusy = ref(false)
-/** 复习队列对应的到期记录（顺序按队列） */
-function reviewQueueRecords(): RecordItem[] {
-  const v = view.value
-  if (!v?.reviewQueue?.length) return []
-  const byId = new Map(v.items.map((i) => [i.recordId, i]))
-  return v.reviewQueue.map((id) => byId.get(id)).filter((r): r is RecordItem => !!r)
-}
-/** 「生成复习卷」主动作：本周待复习批量装篮 → toast 结果 + 切到练习集 Tab */
-async function buildReviewSet() {
-  if (basketBusy.value) return
-  const records = reviewQueueRecords()
-  if (!records.length) return
-  basketBusy.value = true
-  try {
-    const { added, skipped } = await k12FillPracticeBasket(props.agentId)
-    toast.success(t('k12.records.basketFillAdded', { n: added, m: skipped }))
-    sub.value = 'practiceSets'
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : String(e))
-  } finally {
-    basketBusy.value = false
-  }
-}
-
 // 自定义组卷（DD-027A）：失败时保留请求快照和 idempotency_key；原地重试同一正式命令，
 // 使“服务端已提交、客户端丢响应”能读取同一 committed 回执，不重复装篮。
 const customPaperOpen = ref(false)
@@ -381,23 +537,6 @@ let customPaperKeySequence = 0
 function newCustomPaperKey(): string {
   const uuid = globalThis.crypto?.randomUUID?.()
   return `desktop-custom-paper:${props.agentId}:${uuid ?? `${Date.now()}-${++customPaperKeySequence}`}`
-}
-
-function toggleCustomPaper() {
-  if (basketBusy.value) return
-  if (customPaperOpen.value) {
-    customPaperOpen.value = false
-    return
-  }
-  customPaperError.value = ''
-  customPaperResult.value = null
-  customPaperIdempotencyKey.value = newCustomPaperKey()
-  customPaperOpen.value = true
-}
-
-function openCustomPaperFromReviewMenu() {
-  reviewMenuOpen.value = false
-  toggleCustomPaper()
 }
 
 function closeCustomPaper() {
@@ -458,6 +597,9 @@ async function genCustomPaper() {
       difficulty: paperForm.value.difficulty,
       textbook: textbookBoundary.value,
       ...(gradeBoundary.value ? { grade: gradeBoundary.value } : {}),
+      ...(props.modelRoute
+        ? { provider: props.modelRoute.provider, model: props.modelRoute.model }
+        : {}),
     })
     if (result.status !== 'committed') throw new Error(t('k12.customPaper.notCommitted'))
     customPaperResult.value = result
@@ -475,8 +617,13 @@ function viewCustomPaperBasket() {
 
 const view = computed(() => store.mistakeView)
 const accumView = computed(() => store.accumView)
-const report = computed(() => store.report)
-const weekCount = computed(() => view.value?.reviewQueue?.length ?? 0)
+const weekCount = computed(() =>
+  (weeklyPlan.value?.tracks ?? []).reduce(
+    (count, track) =>
+      count + track.items.filter((item) => item.verification.status === 'verified').length,
+    0,
+  ),
+)
 const mistakeCount = computed(
   () => view.value?.items.filter((item) => item.status !== 'archived').length ?? 0,
 )
@@ -566,95 +713,20 @@ const filteredMistakeView = computed<RecordCollectionView | null>(() => {
 // 项-5：空态设计——复习队列（本周复习）常空时不留尴尬空白。
 // 折叠机制随旧两段 IA 退役（2026-07-18）：本周复习=行动页（hide-list）、全部错题=档案页（hide-review），
 // 不再有「档案折叠在行动卡下方」的形态。
-const hasReviewQueue = computed(() => (view.value?.reviewQueue?.length ?? 0) > 0)
-// 下次到期复习（未到期错题里最近一条）——空态卡给家长「都在计划里·稳步消化」的确定感。
-const nextReview = computed(() => {
-  const items = view.value?.items ?? []
-  const now = Date.now() / 1000
-  const first = items
-    .filter((i) => typeof i.dueAt === 'number' && (i.dueAt as number) > now)
-    .sort((a, b) => (a.dueAt as number) - (b.dueAt as number))[0]
-  if (!first) return null
-  const d = new Date((first.dueAt as number) * 1000)
-  const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  const kp = String(first.fields.knowledge_point ?? '')
-    .replace(/[·・]\s*$/, '')
-    .trim()
-  return { record: first, date, kp }
-})
-// 温和次级 CTA「提前练一练」：复用最近到期（或第一条）错题触发再练弹层。
-function practiceEarly() {
-  const rec = nextReview.value?.record ?? view.value?.items?.[0]
-  if (rec) void doRetry(rec)
-}
-
 // 本周清零庆祝态（§3.6 / 原型 k12WeekClearState）：清零是一周唯一的正反馈时刻——
 // 空态区分「本轮有做对清零」（庆祝）vs「本来就无到期」（中性计划文案）。
 // DTO 无状态变更时间戳（无法判「今天 retried/mastered」），先以会话内清零动作近似：
 // 本会话「家长确认已会」把队列里的题清掉且队列随之清空 → 庆祝（后端下发 updated_at 后可升级为按日判定，
 // 当前会话内近似仅影响庆祝时机粒度，不影响正确性）。
 const clearedThisSession = ref(false)
-const weekCleared = computed(() => !hasReviewQueue.value && clearedThisSession.value)
-const ftueCandidate = computed(() =>
-  Boolean(view.value && view.value.items.length === 0 && !hasReviewQueue.value),
-)
-const ftueAuxLoading = computed(
-  () => ftueCandidate.value && (accumulationLoading.value || objectCountsLoading.value),
-)
-const ftueAuxError = computed(
-  () => ftueCandidate.value && Boolean(store.accumulationError || objectCountsError.value),
-)
-const isFtue = computed(() =>
-  Boolean(
-    ftueCandidate.value &&
-    !ftueAuxLoading.value &&
-    !ftueAuxError.value &&
-    accumView.value &&
-    accumView.value.items.length === 0 &&
-    accumulationTotalCount.value === 0 &&
-    practiceCount.value === 0 &&
-    worksCount.value === 0 &&
-    practiceObjectEmpty.value &&
-    worksObjectEmpty.value,
-  ),
-)
 function isInReviewQueue(recordId: string): boolean {
   return view.value?.reviewQueue?.includes(recordId) ?? false
 }
 
-// 原型 c8a194e：「本周复习」标题带跨科分布（数学 2 · 语文 1 · 英语 1）。
-// 只统计队列里 subject 已知的行（chip=「学科·知识点」，review-queue 契约下发 subject）；
-// 全部未知 → 空串不显括号（诚实降级，/mistakes 列表 subject 是 P2 缺口）。
-const reviewSubjectDist = computed(() => {
-  const v = view.value
-  if (!v?.reviewQueue?.length) return []
-  const byId = new Map(v.items.map((i) => [i.recordId, i]))
-  const counts = new Map<string, number>()
-  for (const id of v.reviewQueue) {
-    const kp = String(byId.get(id)?.fields.knowledge_point ?? '')
-    const dot = kp.indexOf('·')
-    if (dot > 0) {
-      const s = kp.slice(0, dot)
-      counts.set(s, (counts.get(s) ?? 0) + 1)
-    }
-  }
-  return [...counts.entries()].map(([subject, count]) => ({ subject, count }))
-})
-
-// 原型 c8a194e + PRD §3.5.7：趋势 pill 并入行动卡。语义=「仅确有进步才用绿系」——
-// 有已掌握沉淀（trend.mastered>0）→ 绿「趋势 ↑ 在进步」，否则琥珀「趋势 → 待巩固」（非成功绿）。
-const trendPill = computed(() => {
-  const tr = report.value?.trend
-  if (!tr || !tr.total) return null
-  return tr.mastered > 0
-    ? { label: t('k12.records.trendUp'), up: true }
-    : { label: t('k12.records.trendFlat'), up: false }
-})
-
 // 复习完成率/薄弱条已随 IA 迁移抽到 K12InsightPanel（学情=顶栏一等 Tab）。
 
 async function onAction(payload: {
-  id: 'practiceAgain' | 'markMastered' | 'detail'
+  id: 'markMastered' | 'detail'
   record: RecordItem
 }) {
   const { id, record } = payload
@@ -671,8 +743,6 @@ async function onAction(payload: {
       toast.error(e instanceof Error ? e.message : String(e))
       await reload()
     }
-  } else if (id === 'practiceAgain') {
-    void doRetry(record)
   } else if (id === 'detail') {
     openDetail(record)
   }
@@ -731,162 +801,191 @@ function undoArchive(undo: ArchiveUndo) {
   void restoreMistake(undo.recordId, undo.version, true)
 }
 
-// 「再练一道」变式题结果弹层（守答案真遮罩：revealed=false 时答案模糊+禁选中，点按才揭示）。
-// UX-2：再练结果**展示**不含验算徽章（练习题非批改）；badge 仅内部保留供装篮定级（§3.8 入口1），不渲染。
-// 题答分离（2026-07-18 P2 清偿）：question=题面（先显给孩子做）、answer=解答（默认遮罩）、
-// expectedAnswer=最终答案（装篮 expected_answer_markdown 用）；后端拆不出时三者为空 → 整段遮罩回退。
-const retry = ref<{
-  open: boolean
-  loading: boolean
-  error: boolean
-  solution: string
-  question: string
-  answer: string
-  expectedAnswer: string
-  badge: string
-  revealed: boolean
-  basketed: boolean
-}>({
-  open: false,
-  loading: false,
-  error: false,
-  solution: '',
-  question: '',
-  answer: '',
-  expectedAnswer: '',
-  badge: '',
-  revealed: false,
-  basketed: false,
-})
-// BUG-20260712-#4：再练取消守卫——generation 使在途请求结果失效（防幽灵重开），AbortController 中止后台出题。
-let retryGen = 0
-let retryAbort: AbortController | null = null
-// BUG-20260712-#1：记住最近一次再练的错题，失败态「重试」按钮据此重发（不静默关弹层）。
-const retryRecord = ref<RecordItem | null>(null)
+// ── 错题 → 练习集：服务端持久化的一键异步投影 ─────────────────────
+// 产品裁决（2026-07-25）：列表里一次点击完成“生成 → 验证 → 装篮”。桌面端不再保存临时
+// 题答、不再弹第二次加入按钮；切 Tab、切会话或重启后均从服务端恢复五态。
+const practiceGenerationByMistake = ref<Record<string, MistakePracticeGenerationDTO>>({})
+const practiceGenerationBusy = ref<string[]>([])
+const practiceCommandKeys = new Map<string, string>()
+const practiceTarget = ref<{
+  practiceSetID: string
+  practiceItemID: string
+  nonce: number
+} | null>(null)
+let practiceProjectionRequest = 0
+let practiceCommandSequence = 0
+let practicePollTimer: ReturnType<typeof setTimeout> | null = null
 
-// 「再练一道」：调 POST /review/retry 出同知识点相似题（过 solve 验算链，真机实测 ~68s）。
-// 原型终态=变式直接入本周复习卷不亮答案；当前后端 retry 无持久化且 solution 题答混排（P2 缺口），
-// 过渡为「真遮罩弹层」：答案默认模糊不可选中，家长明确点「显示答案」才揭示——守答案承诺交互兑现。
-// BUG-20260712-#4：关弹窗时 abort 中止后台 + generation 守卫丢弃过期结果（关了不空烧算力/不幽灵重开）。
-// BUG-20260712-#1：68s 长请求——loading 显明确进度文案；失败/超时保持弹层 open 给可重试提示，不静默关。
-async function doRetry(record: RecordItem) {
-  retryRecord.value = record
-  const gen = ++retryGen
-  retryAbort?.abort()
-  retryAbort = new AbortController()
-  retry.value = {
-    open: true,
-    loading: true,
-    error: false,
-    solution: '',
-    question: '',
-    answer: '',
-    expectedAnswer: '',
-    badge: '',
-    revealed: false,
-    basketed: false,
+function practiceProjection(recordID: string): MistakePracticeGenerationDTO | undefined {
+  return practiceGenerationByMistake.value[recordID]
+}
+
+function practiceActionLabel(recordID: string): string {
+  const state = practiceProjection(recordID)?.state
+  if (state === 'failed') return '出题失败，重试'
+  if (state === 're_add') return '再次加入练习集'
+  return '加入练习集'
+}
+
+function setPracticeProjection(next: MistakePracticeGenerationDTO) {
+  practiceGenerationByMistake.value = {
+    ...practiceGenerationByMistake.value,
+    [next.source_mistake_id]: next,
   }
+  if (next.state !== 'pending') practiceCommandKeys.delete(next.source_mistake_id)
+}
+
+function setPracticeBusy(recordID: string, busy: boolean) {
+  practiceGenerationBusy.value = busy
+    ? [...new Set([...practiceGenerationBusy.value, recordID])]
+    : practiceGenerationBusy.value.filter((id) => id !== recordID)
+}
+
+function newPracticeCommandKey(recordID: string): string {
+  const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++practiceCommandSequence}`
+  return `desktop-single-practice:${props.agentId}:${recordID}:${nonce}`
+}
+
+function clearPracticePoll() {
+  if (practicePollTimer) clearTimeout(practicePollTimer)
+  practicePollTimer = null
+}
+
+function schedulePracticePoll() {
+  clearPracticePoll()
+  const hasPending = Object.values(practiceGenerationByMistake.value).some(
+    (projection) => projection.state === 'pending',
+  )
+  if (!hasPending || props.active === false) return
+  practicePollTimer = setTimeout(() => {
+    practicePollTimer = null
+    void pollPendingPracticeGenerations()
+  }, 1_500)
+}
+
+async function pollPendingPracticeGenerations() {
+  const agent = props.agentId
+  const pendingIDs = Object.values(practiceGenerationByMistake.value)
+    .filter((projection) => projection.state === 'pending')
+    .map((projection) => projection.source_mistake_id)
+  if (!agent || !pendingIDs.length) return
+  const results = await Promise.allSettled(
+    pendingIDs.map((recordID) => k12GetMistakePracticeGeneration(agent, recordID)),
+  )
+  if (props.agentId !== agent) return
+  let reachedJoined = false
+  results.forEach((result) => {
+    if (result.status !== 'fulfilled') return
+    setPracticeProjection(result.value)
+    if (result.value.state === 'joined') reachedJoined = true
+  })
+  if (reachedJoined) void reloadObjectCounts()
+  schedulePracticePoll()
+}
+
+async function reloadPracticeGenerationStates() {
+  const agent = props.agentId
+  const recordIDs = store.mistakeView?.items.map((item) => item.recordId) ?? []
+  const request = ++practiceProjectionRequest
+  clearPracticePoll()
+  if (!agent || !recordIDs.length) {
+    practiceGenerationByMistake.value = {}
+    return
+  }
+  const results = await Promise.allSettled(
+    recordIDs.map((recordID) => k12GetMistakePracticeGeneration(agent, recordID)),
+  )
+  if (request !== practiceProjectionRequest || props.agentId !== agent) return
+  const next: Record<string, MistakePracticeGenerationDTO> = {}
+  results.forEach((result) => {
+    if (result.status === 'fulfilled') next[result.value.source_mistake_id] = result.value
+  })
+  practiceGenerationByMistake.value = next
+  schedulePracticePoll()
+}
+
+function resetPracticeGenerationProjection() {
+  practiceProjectionRequest++
+  clearPracticePoll()
+  practiceGenerationByMistake.value = {}
+  practiceGenerationBusy.value = []
+  practiceCommandKeys.clear()
+  practiceTarget.value = null
+}
+
+async function runPracticeGeneration(record: RecordItem) {
+  const recordID = record.recordId
+  const projection = practiceProjection(recordID)
+  if (
+    !projection ||
+    practiceGenerationBusy.value.includes(recordID) ||
+    projection.state === 'pending' ||
+    projection.state === 'joined' ||
+    projection.state === 'hidden'
+  ) {
+    return
+  }
+  const agent = props.agentId
+  setPracticeBusy(recordID, true)
   try {
-    const res = await k12ReviewRetry(
-      { agent: props.agentId, record_id: record.recordId, grade: props.grade },
-      retryAbort.signal,
-    )
-    if (gen !== retryGen) return // 已被关闭/取代 → 丢弃，不重开弹窗
-    retry.value = {
-      open: true,
-      loading: false,
-      error: false,
-      solution: res.solution,
-      question: res.question ?? '',
-      answer: res.answer ?? '',
-      expectedAnswer: res.expected_answer ?? '',
-      badge: res.badge ?? '',
-      revealed: false,
-      basketed: false,
+    const next =
+      projection.state === 'failed'
+        ? await k12RetryMistakePracticeGeneration(agent, recordID)
+        : await k12StartMistakePracticeGeneration({
+            agent,
+            record_id: recordID,
+            idempotency_key:
+              practiceCommandKeys.get(recordID) ??
+              (() => {
+                const key = newPracticeCommandKey(recordID)
+                practiceCommandKeys.set(recordID, key)
+                return key
+              })(),
+            ...(gradeBoundary.value ? { grade: gradeBoundary.value } : {}),
+            ...(textbookBoundary.value ? { textbook: textbookBoundary.value } : {}),
+            difficulty: 'same',
+            ...(props.modelRoute
+              ? { provider: props.modelRoute.provider, model: props.modelRoute.model }
+              : {}),
+          })
+    if (props.agentId !== agent) return
+    setPracticeProjection(next)
+    if (next.state === 'joined') void reloadObjectCounts()
+    schedulePracticePoll()
+  } catch (error) {
+    if (props.agentId !== agent) return
+    // 请求结果未知时先用同一来源查询正式状态；查询也失败才向用户报告。
+    try {
+      const recovered = await k12GetMistakePracticeGeneration(agent, recordID)
+      if (props.agentId !== agent) return
+      setPracticeProjection(recovered)
+      schedulePracticePoll()
+    } catch {
+      toast.error(error instanceof Error ? error.message : String(error))
     }
-  } catch {
-    if (gen !== retryGen) return // 主动取消/已过期 → 静默
-    // 失败/超时不静默关弹层：保留弹层 + 显友好可重试提示（原始技术串对家长无价值，故不透出）。
-    retry.value = {
-      open: true,
-      loading: false,
-      error: true,
-      solution: '',
-      question: '',
-      answer: '',
-      expectedAnswer: '',
-      badge: '',
-      revealed: false,
-      basketed: false,
-    }
-  }
-}
-function closeRetry() {
-  retryGen++
-  retryAbort?.abort()
-  retryAbort = null
-  retry.value = {
-    open: false,
-    loading: false,
-    error: false,
-    solution: '',
-    question: '',
-    answer: '',
-    expectedAnswer: '',
-    badge: '',
-    revealed: false,
-    basketed: false,
-  }
-}
-onBeforeUnmount(() => {
-  retryGen++
-  retryAbort?.abort()
-  retryAbort = null
-})
-
-async function copyRetrySolution() {
-  if (!retry.value.revealed || !retry.value.solution) return
-  try {
-    // 复制原始 Markdown，粘贴到钉钉/笔记时仍保留标题、列表和公式结构。
-    await setClipboard(retry.value.solution)
-    toast.success(t('k12.records.retryCopied'))
-  } catch {
-    toast.error(t('k12.records.retryCopyFailed'))
+  } finally {
+    setPracticeBusy(recordID, false)
   }
 }
 
-// 「加入练习集」装篮（§3.8 入口1：错题再练一道逐题装）。变式题装入待打印篮：
-// badge=verified-strong 且学科验证器达质量门（数学/语英，§4.7）→ verified；否则诚实置 pending
-// （后端 AddToBasket 创建入口有质量门双拦截，前端先本地判一致避免 4xx）。
-// P2 清偿（2026-07-18）：后端题答已分离——装篮用拆分题面 + expected_answer；
-// 拆不出（question 空）时回退全文（老口径，最小闭环）。
-const BASKET_GATE_SUBJECTS = new Set(['数学', '语文', '英语', ''])
-async function addRetryToBasket() {
-  const rec = retryRecord.value
-  if (!rec || !retry.value.solution || retry.value.basketed) return
-  const subject = typeof rec.fields?.subject === 'string' ? rec.fields.subject : ''
-  const gated = BASKET_GATE_SUBJECTS.has(subject)
-  const verifiedStrong = retry.value.badge === 'verified-strong' && gated
-  try {
-    const resp = await k12AddToBasket({
-      agent: props.agentId,
-      item: {
-        item_id: '',
-        source_problem_id: rec.recordId,
-        subject,
-        added_via: 'single_variant',
-        question_markdown: retry.value.question || retry.value.solution,
-        expected_answer_markdown: retry.value.expectedAnswer || undefined,
-        verification_status: verifiedStrong ? 'verified' : 'pending',
-        verification_evidence: verifiedStrong ? '独立验算' : undefined,
-      },
-    })
-    retry.value.basketed = true
-    toast.success(resp.added ? t('k12.records.basketAdded') : t('k12.records.basketDuplicate'))
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : String(e))
+function viewGeneratedPractice(recordID: string) {
+  const projection = practiceProjection(recordID)
+  if (
+    projection?.state !== 'joined' ||
+    !projection.practice_set_id ||
+    !projection.practice_item_id
+  ) {
+    return
   }
+  practiceTarget.value = {
+    practiceSetID: projection.practice_set_id,
+    practiceItemID: projection.practice_item_id,
+    nonce: Date.now(),
+  }
+  sub.value = 'practiceSets'
 }
+
+onBeforeUnmount(resetPracticeGenerationProjection)
 
 // ── 详情弹层（BUG-20260712-#2）──
 // 复用列表已有的 RecordItem 字段，不额外请求后端，弹层可关闭。kind 区分错题（题目/知识点/错因）
@@ -1356,49 +1455,6 @@ async function doExportMd() {
           <span class="k12-tab-count" aria-hidden="true" :data-count="worksCount" />
         </button>
       </div>
-      <!-- 原型 2209-2211：本周唯一上下文主操作是 split。主按钮走智能默认；下拉只承载已有真实能力。
-           「自动任务设置」尚无本组件可达的真实命令/路由，不渲染无效假入口。 -->
-      <div v-if="sub === 'week'" class="k12rec__review-action" data-testid="review-split">
-        <div class="k12rec__split">
-          <button
-            class="btn btn-primary"
-            data-testid="build-review-set"
-            :disabled="basketBusy || !hasReviewQueue"
-            @click="buildReviewSet"
-          >
-            <svg class="k12ic" viewBox="0 0 24 24">
-              <path d="M6 9V2h12v7" />
-              <path
-                d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"
-              />
-              <path d="M6 14h12v8H6z" />
-            </svg>
-            {{ t('k12.records.genWorksheet') }}
-          </button>
-          <button
-            type="button"
-            class="k12rec__split-caret"
-            data-testid="review-split-more"
-            :aria-label="t('k12.records.moreWorksheetActions')"
-            aria-haspopup="menu"
-            :aria-expanded="reviewMenuOpen"
-            :disabled="basketBusy"
-            @click="reviewMenuOpen = !reviewMenuOpen"
-          >
-            <svg class="k12ic" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" /></svg>
-          </button>
-        </div>
-        <div v-if="reviewMenuOpen" class="k12rec__menu" role="menu" data-testid="review-split-menu">
-          <button
-            type="button"
-            role="menuitem"
-            data-testid="custom-paper-open"
-            @click="openCustomPaperFromReviewMenu"
-          >
-            {{ t('k12.records.customPaper') }}
-          </button>
-        </div>
-      </div>
       <!-- 20260719 信息架构定稿：①功能位 emoji → 单色描边图标；②导出与备份/恢复均为学习档案级动作，
            不占常驻顶栏，统一收进五个子页均可达的「⋯」溢出菜单。 -->
       <button
@@ -1476,177 +1532,38 @@ async function doExportMd() {
     </div>
 
     <div class="k12rec__body">
-      <!-- 本周复习（行动页，PRD §3.6）：复习队列 + 趋势 + 生成复习卷；档案查管在「全部错题」。 -->
+      <!-- 本周该练：服务端唯一周计划投影。无后端/失败时只显示真实错误，不回退本地错题拼卷。 -->
       <section v-if="sub === 'week'" data-testid="week-section">
-        <div
-          v-if="mistakesLoading && !store.mistakeView"
-          class="k12rec__loading"
-          role="status"
-          data-testid="records-loading"
-        >
-          {{ t('common.loading') }}
-        </div>
-        <div
-          v-else-if="store.mistakesError"
-          class="k12rec__err"
-          role="alert"
-          data-testid="mistakes-error"
-        >
-          <span>{{ store.mistakesError }}</span>
-          <button class="btn btn-ghost" data-testid="mistakes-retry" @click="reloadMistakes">
-            {{ t('common.retry') }}
-          </button>
-        </div>
-        <template v-else>
-          <div
-            v-if="store.reportError"
-            class="k12rec__err"
-            role="alert"
-            data-testid="records-report-error"
-          >
-            <span>{{ store.reportError }}</span>
-            <button
-              class="btn btn-ghost"
-              data-testid="records-report-retry"
-              @click="store.loadReport(props.agentId)"
-            >
-              {{ t('common.retry') }}
-            </button>
-          </div>
-
-          <!-- 五对象真全零 → 原型 FTUE。其他对象未落定或失败时不得抢跑，更不得造示例计数。 -->
-          <div
-            v-if="ftueAuxLoading"
-            class="k12rec__loading"
-            role="status"
-            data-testid="records-ftue-loading"
-          >
-            {{ t('k12.ftue.loading') }}
-          </div>
-          <div
-            v-else-if="ftueAuxError"
-            class="k12rec__err"
-            role="alert"
-            data-testid="records-ftue-error"
-          >
-            <span>{{ t('k12.ftue.loadError') }}</span>
-            <button type="button" class="btn btn-ghost" @click="reload">
-              {{ t('common.retry') }}
-            </button>
-          </div>
-          <div v-else-if="isFtue" class="k12rec__ftue" data-testid="records-ftue">
-            <div class="k12rec__ftue-notice">
-              <b>{{ t('k12.ftue.title') }}</b
-              ><br />
-              {{ t('k12.ftue.journey') }}
-            </div>
-            <div class="k12rec__ftue-list">
-              <div class="k12rec__ftue-row">
-                <b>{{ t('k12.subTabs.week') }}</b>
-                <span>{{ t('k12.ftue.weekValue') }}</span>
-                <button type="button" class="btn btn-primary" @click="emit('go-tutor')">
-                  {{ t('k12.ftue.cta') }}
-                </button>
-              </div>
-              <div class="k12rec__ftue-row">
-                <b>{{ t('k12.subTabs.practiceSets') }}</b>
-                <span>{{ t('k12.ftue.practiceValue') }}</span>
-                <em>{{ t('k12.ftue.none') }}</em>
-              </div>
-              <div class="k12rec__ftue-row">
-                <b>{{ t('k12.ftue.collectionTitle') }}</b>
-                <span>{{ t('k12.ftue.collectionValue') }}</span>
-                <em>{{ t('k12.ftue.none') }}</em>
-              </div>
-            </div>
-          </div>
-
-          <!-- 项-5：复习队列空 → 正向空态卡（不留空白）。
-               §3.6 本周清零庆祝态：本轮有做对清零 → 庆祝（一周唯一正反馈时刻，不做排名不做焦虑）；
-               本来就无到期 → 中性计划文案。 -->
-          <div v-else-if="view && !hasReviewQueue" class="k12empty" data-testid="review-empty-card">
-            <template v-if="weekCleared">
-              <div class="k12empty__icon">🎉</div>
-              <b class="k12empty__title" data-testid="review-cleared-title">{{
-                t('k12.emptyReview.clearedTitle')
-              }}</b>
-              <p class="k12empty__sub">{{ t('k12.emptyReview.clearedSub') }}</p>
-            </template>
-            <template v-else>
-              <div class="k12empty__icon">✅</div>
-              <b class="k12empty__title">{{ t('k12.emptyReview.title') }}</b>
-              <p class="k12empty__sub">{{ t('k12.emptyReview.sub') }}</p>
-              <p v-if="nextReview" class="k12empty__next" data-testid="review-empty-next">
-                {{ t('k12.emptyReview.nextReview', { date: nextReview.date })
-                }}<template v-if="nextReview.kp">（{{ nextReview.kp }}）</template>
-              </p>
-              <button
-                v-if="view.items.length"
-                class="btn k12empty__cta"
-                data-testid="review-empty-cta"
-                @click="practiceEarly"
-              >
-                {{ t('k12.emptyReview.practice') }}
-              </button>
-            </template>
-          </div>
-
-          <div v-if="view" class="k12mistakes k12mistakes--week">
-            <RecordList
-              :schema="MISTAKE_SCHEMA"
-              :view="view"
-              hide-list
-              review-class="k12week__hero"
-              @action="onAction"
-            >
-              <template #review-title="{ items }">
-                <div class="k12week__count">
-                  <b>{{ items.length }}</b>
-                  <span>{{ t('k12.records.dueCountUnit') }}</span>
-                </div>
-              </template>
-              <!-- 原型 2235：学科分布 pill + 趋势 pill 并入 hero 顶部（数据齐才显，诚实降级） -->
-              <template #review-meta>
-                <div v-if="reviewSubjectDist.length" class="k12week__meta">
-                  <span
-                    v-for="entry in reviewSubjectDist"
-                    :key="entry.subject"
-                    class="k12week__subject"
-                    >{{ entry.subject }} {{ entry.count }}</span
-                  >
-                </div>
-                <span
-                  v-if="trendPill"
-                  class="k12trend"
-                  :class="trendPill.up ? 'k12trend--up' : 'k12trend--flat'"
-                  data-testid="trend-pill"
-                  >{{ trendPill.label }}</span
-                >
-              </template>
-              <!-- 周五留存钩子 + 查看学情入口（学情已是顶栏一等 Tab） -->
-              <template #review-foot
-                >{{ t('k12.records.weeklyHook') }} ·
-                <a
-                  class="k12rec__insightlink"
-                  data-testid="go-insights"
-                  @click="emit('go-insights')"
-                  >{{ t('k12.records.viewInsights') }} ›</a
-                ></template
-              >
-              <template #review-row-actions="{ item }">
-                <button
-                  type="button"
-                  class="rl-btn"
-                  :disabled="archiveBusy.includes(item.recordId)"
-                  :data-testid="`mistake-archive-${item.recordId}`"
-                  @click="archiveMistake(item)"
-                >
-                  {{ t('k12.records.archiveReview') }}
-                </button>
-              </template>
-            </RecordList>
-          </div>
-        </template>
+        <K12WeeklyPracticePanel
+          :progress="weeklyProgress"
+          :settings="weeklySettings"
+          :plan="weeklyPlan"
+          :history="weeklyHistory"
+          :output="weeklyOutput"
+          :loading="weeklyLoading"
+          :busy="weeklyBusy"
+          :error="weeklyError"
+          :delivery-label="weeklyDelivery.label.value"
+          :delivery-disabled="weeklyDelivery.disabled.value"
+          @retry="loadWeeklyPractice"
+          @open-progress="openWeeklyProfile"
+          @prepare-output="prepareWeeklyOutput"
+          @artifact-action="runWeeklyArtifactAction"
+          @save-to-practice-set="saveWeeklyPracticeSet"
+        />
+        <K12PersistentPrintController
+          ref="weeklyPrintController"
+          @error="toast.error($event.message)"
+        />
+        <K12ProfileForm
+          v-if="profileOpen && profileAgent"
+          :agent="profileAgent"
+          focus-math-progress
+          enable-textbook-consolidation
+          @created="onWeeklyProfileSaved"
+          @close="profileOpen = false"
+          @removed="profileOpen = false"
+        />
       </section>
 
       <!-- 全部错题（档案页，PRD §3.7）：查找、核对、管理——直接展开筛选 + 全量，不与本周复习重复行动。 -->
@@ -1735,6 +1652,43 @@ async function doExportMd() {
               hide-filters
               @action="onAction"
             >
+              <template #list-practice-action="{ item }">
+                <span
+                  v-if="practiceProjection(item.recordId)?.state === 'pending'"
+                  class="rl-status rl-status--todo"
+                  :data-testid="`mistake-practice-state-${item.recordId}`"
+                  >已加入 · 正在出题…</span
+                >
+                <template v-else-if="practiceProjection(item.recordId)?.state === 'joined'">
+                  <span
+                    class="rl-status rl-status--got"
+                    :data-testid="`mistake-practice-state-${item.recordId}`"
+                    >✓ 已加入练习集</span
+                  >
+                  <button
+                    type="button"
+                    class="rl-btn"
+                    :data-testid="`mistake-practice-view-${item.recordId}`"
+                    @click="viewGeneratedPractice(item.recordId)"
+                  >
+                    查看新题
+                  </button>
+                </template>
+                <button
+                  v-else-if="
+                    ['available', 'failed', 're_add'].includes(
+                      practiceProjection(item.recordId)?.state ?? '',
+                    )
+                  "
+                  type="button"
+                  class="rl-btn"
+                  :disabled="practiceGenerationBusy.includes(item.recordId)"
+                  :data-testid="`mistake-practice-${item.recordId}`"
+                  @click="runPracticeGeneration(item)"
+                >
+                  {{ practiceActionLabel(item.recordId) }}
+                </button>
+              </template>
               <template #list-row-actions="{ item }">
                 <button
                   v-if="item.status === 'archived' && item.fields.restorable === true"
@@ -1764,7 +1718,11 @@ async function doExportMd() {
 
       <!-- 练习集：组好的题（真实 /practice-sets）——生命周期 + 发布门 -->
       <section v-else-if="sub === 'practiceSets'" data-testid="practicesets-section">
-        <K12PracticeSetsPanel :agent-id="props.agentId" @count="updatePracticeCount" />
+        <K12PracticeSetsPanel
+          :agent-id="props.agentId"
+          :focus-target="practiceTarget"
+          @count="updatePracticeCount"
+        />
       </section>
 
       <!-- 积累本：语/英沉淀（真实 /accumulation）——记录本原语第二场景 -->
@@ -2184,81 +2142,6 @@ async function doExportMd() {
             </button>
           </div>
         </div>
-      </div>
-    </div>
-
-    <!-- 「再练一道」变式题结果弹层 -->
-    <div v-if="retry.open" class="k12retry" @click.self="closeRetry">
-      <div class="k12retry__card">
-        <div class="k12retry__head">
-          <!-- UX-2：再练是练习变式题、不是批改——不显验算徽章（badge/verdict），只题目 + 解答，
-               免家长把 unverifiable 误读成「验证失败」。验算徽章只用于「批改」结果。 -->
-          <b>{{ t('k12.records.retryTitle') }}</b>
-          <span class="k12rec__sp" />
-          <button class="btn btn-ghost" @click="closeRetry">✕</button>
-        </div>
-        <p v-if="retry.loading" class="k12rec__hint" data-testid="retry-loading">
-          {{ t('k12.records.retryLoading') }}
-        </p>
-        <div v-else-if="retry.error" class="k12retry__err" data-testid="retry-error">
-          <p class="k12rec__hint">{{ t('k12.records.retryFailed') }}</p>
-          <button
-            class="btn btn-primary"
-            data-testid="retry-again"
-            @click="retryRecord && doRetry(retryRecord)"
-          >
-            {{ t('k12.records.retryRetryBtn') }}
-          </button>
-        </div>
-        <template v-else>
-          <!-- 题答分离（P2 清偿）：题面先显（孩子可直接做题），只遮解答；拆不出时整段遮罩回退 -->
-          <MarkdownRenderer
-            v-if="retry.question"
-            class="k12retry__body k12retry__question"
-            data-testid="retry-question"
-            :content="retry.question"
-          />
-          <p class="k12retry__mask">🔒 {{ t('k12.records.retryMaskHint') }}</p>
-          <!-- 守答案真遮罩：未揭示时模糊 + 禁选中（防孩子凑近一眼看光），家长点按才显示 -->
-          <div
-            class="k12retry__bodywrap"
-            :class="{ 'k12retry__bodywrap--masked': !retry.revealed }"
-          >
-            <!-- 变式题为模型生成的富文本（**加粗** / 列表 / LaTeX 数学）→ md 渲染，勿裸显 markdown 标记。
-                 遮罩层与 aria-hidden 保留：未揭示时模糊 + 不可读屏。 -->
-            <MarkdownRenderer
-              class="k12retry__body"
-              :aria-hidden="!retry.revealed"
-              :content="retry.question ? retry.answer : retry.solution"
-            />
-            <button
-              v-if="!retry.revealed"
-              class="btn btn-primary k12retry__reveal"
-              data-testid="retry-reveal"
-              @click="retry.revealed = true"
-            >
-              {{ t('k12.records.retryReveal') }}
-            </button>
-          </div>
-          <div v-if="retry.revealed" class="k12retry__actions">
-            <!-- 装篮入口（§3.8 入口1）：变式题加入待打印篮，打印时随卷固化 -->
-            <button
-              class="btn btn-primary"
-              :disabled="retry.basketed"
-              data-testid="retry-add-basket"
-              @click="addRetryToBasket"
-            >
-              {{ retry.basketed ? t('k12.records.basketAddedBtn') : t('k12.records.addToBasket') }}
-            </button>
-            <button class="btn" data-testid="retry-copy" @click="copyRetrySolution">
-              <svg class="k12ic" viewBox="0 0 24 24">
-                <rect x="9" y="9" width="11" height="11" rx="2" />
-                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-              </svg>
-              {{ t('k12.records.retryCopy') }}
-            </button>
-          </div>
-        </template>
       </div>
     </div>
 
@@ -3017,7 +2900,7 @@ async function doExportMd() {
   padding: 0;
   margin-bottom: 0;
 }
-/* 记一条错题 / 自定义组卷 弹窗（原型 modal 形态；与 .k12retry 同族样式） */
+/* 记一条错题 / 自定义组卷弹窗（平台标准 modal 形态） */
 .k12modal {
   position: fixed;
   inset: 0;
@@ -3364,83 +3247,21 @@ async function doExportMd() {
   background: color-mix(in srgb, #7048e8 10%, transparent);
   color: #7048e8;
 }
-/* 再练一道弹层 */
-.k12retry {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.32);
-  padding: 24px;
+/* 错题一键加入练习集的服务端状态投影；与通用 RecordList 状态 pill 同口径。 */
+.rl-status {
+  font-size: 10.5px;
+  border-radius: 999px;
+  padding: 2px 9px;
+  font-weight: 700;
+  white-space: nowrap;
 }
-.k12retry__card {
-  width: min(560px, 100%);
-  max-height: 80vh;
-  overflow: auto;
-  background: var(--hc-bg-elevated);
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-lg);
-  box-shadow: var(--hc-shadow-lg);
-  padding: 16px 18px;
-}
-.k12retry__head {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-bottom: 10px;
-}
-.k12retry__mask {
-  font-size: 11.5px;
+.rl-status--todo {
   color: var(--hc-warning);
-  margin-bottom: 8px;
+  background: color-mix(in srgb, var(--hc-warning) 12%, transparent);
 }
-/* 题面区（题答分离）：先显不遮罩，与遮罩解答区视觉分隔 */
-.k12retry__question {
-  padding-bottom: 10px;
-  margin-bottom: 10px;
-  border-bottom: 1px dashed var(--hc-border);
-}
-/* md 渲染:块级元素自带间距，勿用 pre-wrap（会多出空白）。保留字号/断词/色，遮罩 blur 作用于本容器。 */
-.k12retry__body {
-  word-break: break-word;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--hc-text-primary);
-  margin: 0;
-  padding: 16px 20px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: var(--hc-radius-md);
-  background: var(--hc-bg-card);
-}
-/* 守答案真遮罩：模糊 + 禁选中；揭示按钮悬浮居中 */
-.k12retry__bodywrap {
-  position: relative;
-}
-.k12retry__bodywrap--masked .k12retry__body {
-  filter: blur(7px);
-  user-select: none;
-  pointer-events: none;
-}
-.k12retry__reveal {
-  position: absolute;
-  inset: 0;
-  margin: auto;
-  width: fit-content;
-  height: fit-content;
-}
-.k12retry__actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 10px;
-}
-/* 再练失败态：可重试提示（不静默关弹层 · BUG-20260712-#1） */
-.k12retry__err {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 10px;
+.rl-status--got {
+  color: var(--hc-success);
+  background: color-mix(in srgb, var(--hc-success) 10%, transparent);
 }
 /* 错题详情弹层（BUG-20260712-#2）：字段行 label + 值 */
 .k12detail {
