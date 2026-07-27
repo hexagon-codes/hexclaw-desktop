@@ -218,6 +218,10 @@ body,
   background: transparent;
 }
 
+::-webkit-scrollbar-thumb:window-inactive {
+  background: transparent;
+}
+
 /* 原生容器继续处理滚轮、键盘、触控板与可访问滚动；原生视觉保持透明。 */
 * {
   scrollbar-width: thin;

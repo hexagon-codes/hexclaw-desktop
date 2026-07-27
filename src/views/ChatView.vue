@@ -65,7 +65,9 @@ import {
 } from '@/utils/chat-compose'
 import { sanitizeMessageContent } from '@/utils/messageContent'
 import MessageActions from '@/components/chat/MessageActions.vue'
+import MessageFooter from '@/components/chat/MessageFooter.vue'
 import ChatInput from '@/components/chat/ChatInput.vue'
+import { useConversationScrollCoordinator } from '@/composables/useConversationScrollCoordinator'
 import SkillCreateDialog from '@/components/skills/SkillCreateDialog.vue'
 import SkillIcon from '@/components/common/SkillIcon.vue'
 import SessionList from '@/components/chat/SessionList.vue'
@@ -172,6 +174,16 @@ const thinkingContentRef = ref<HTMLDivElement>()
 const showScrollToBottom = ref(false)
 const userScrolledUp = ref(false)
 const unreadScenarioResultCount = ref(0)
+const scrollCoordinator = useConversationScrollCoordinator({
+  getContainer: () => messagesContainerRef.value,
+  getBottomAnchor: () => messagesEndRef.value,
+  isAtBottom: () => !userScrolledUp.value,
+  onFollowBottom: () => {
+    userScrolledUp.value = false
+    showScrollToBottom.value = false
+    unreadScenarioResultCount.value = 0
+  },
+})
 const scrollNavigationLabel = computed(() =>
   unreadScenarioResultCount.value > 0
     ? t('chat.newResults', { n: unreadScenarioResultCount.value })
@@ -881,12 +893,19 @@ function handleScenarioInlineActive(active: boolean) {
 }
 
 function handleScenarioContentUpdated() {
-  if (userScrolledUp.value) {
+  const contentIdentity =
+    typeof scenarioComposerImage.value === 'object'
+      ? (scenarioComposerImage.value.requestId ?? 'scenario-inline')
+      : 'scenario-inline'
+  const update = scrollCoordinator.publishContentUpdated({
+    conversationId: chatStore.currentSessionId ?? '',
+    contentIdentity,
+    reason: 'scenario-content-updated',
+  })
+  if (!update.atBottom) {
     unreadScenarioResultCount.value += 1
     showScrollToBottom.value = true
-    return
   }
-  nextTick(() => scrollToBottom(false))
 }
 
 function handleScenarioSessionExecution(payload: {
@@ -1774,6 +1793,11 @@ function handleMessagesScroll() {
   userScrolledUp.value = flags.userScrolledUp
   showScrollToBottom.value = flags.showScrollToBottom
   if (!flags.userScrolledUp) unreadScenarioResultCount.value = 0
+  scrollCoordinator.recordScrollState()
+}
+
+function markMessagesUserIntent() {
+  scrollCoordinator.markUserIntent()
 }
 
 // BUG-20260626：消息容器内容重排（头像图片/markdown/代码块异步加载）不触发 scroll 事件，
@@ -1785,9 +1809,9 @@ function observeMessagesResize() {
   _msgsResizeObserver?.disconnect()
   const el = messagesContainerRef.value
   if (!el) return
+  scrollCoordinator.recordScrollState()
   _msgsResizeObserver = new ResizeObserver(() => {
-    handleMessagesScroll()
-    if (!userScrolledUp.value) scrollToBottom()
+    scrollCoordinator.notifyLayoutObserved()
   })
   _msgsResizeObserver.observe(el)
 }
@@ -1978,6 +2002,7 @@ watch(
     userScrolledUp.value = false
     showScrollToBottom.value = false
     unreadScenarioResultCount.value = 0
+    scrollCoordinator.reset()
     // 消息窗口重置(BUG-20260710 P1 窗口化):新会话从尾部 60 条起
     messageWindow.value = MESSAGE_WINDOW_INITIAL
     if (newId) {
@@ -2588,6 +2613,9 @@ function startSidebarResize(event: MouseEvent) {
         ref="messagesContainerRef"
         class="hc-chat__messages"
         @scroll="handleMessagesScroll"
+        @wheel.passive="markMessagesUserIntent"
+        @touchstart.passive="markMessagesUserIntent"
+        @pointerdown="markMessagesUserIntent"
       >
         <div
           v-if="
@@ -2637,6 +2665,7 @@ function startSidebarResize(event: MouseEvent) {
             class="hc-msg"
             :class="msg.role === 'user' ? 'hc-msg--user' : 'hc-msg--assistant'"
             :tabindex="0"
+            :data-scroll-anchor-id="msg.id"
             :data-testid="msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'"
             @contextmenu="
               handleMsgContextMenu($event, windowOffset + idx, msg.role as 'user' | 'assistant')
@@ -2960,7 +2989,7 @@ function startSidebarResize(event: MouseEvent) {
                     </div>
                   </div>
                 </div>
-                <div class="hc-msg__footer">
+                <MessageFooter class="hc-msg__footer">
                   <div class="hc-msg__meta">
                     <span>{{ formatTime(msg.timestamp) }}</span>
                     <span v-if="messageProviderDisplay(msg) || metadataValue(msg, 'model')">{{
@@ -2993,7 +3022,7 @@ function startSidebarResize(event: MouseEvent) {
                       @delete="requestDeleteMessage(msg.id)"
                     />
                   </div>
-                </div>
+                </MessageFooter>
               </div>
             </template>
 
@@ -3140,7 +3169,7 @@ function startSidebarResize(event: MouseEvent) {
                     </div>
                   </div>
                 </div>
-                <div class="hc-msg__footer hc-msg__footer--right">
+                <MessageFooter class="hc-msg__footer hc-msg__footer--right">
                   <div class="hc-msg__actions-float hc-msg__actions-float--right">
                     <MessageActions
                       role="user"
@@ -3152,7 +3181,7 @@ function startSidebarResize(event: MouseEvent) {
                   <div class="hc-msg__time hc-msg__time--right">
                     {{ formatTime(msg.timestamp) }}
                   </div>
-                </div>
+                </MessageFooter>
               </div>
             </template>
           </div>
@@ -3275,7 +3304,11 @@ function startSidebarResize(event: MouseEvent) {
       <div v-show="!(scenarioCtx && scenarioRecordsActive)" id="hc-chat-scenario-composer-top" />
 
       <!-- Input area -->
-      <div v-show="!(scenarioCtx && scenarioRecordsActive)" class="hc-chat__input-area">
+      <div
+        v-show="!(scenarioCtx && scenarioRecordsActive)"
+        class="hc-chat__input-area"
+        data-layout-contract="shared-chat-composer-no-divider"
+      >
         <!-- 滚动到底部箭头（ChatGPT 风格：锚定输入框正上方居中；仅在往上翻离开底部时出现，贴底隐藏） -->
         <Transition name="hc-scrollbtn">
           <button
