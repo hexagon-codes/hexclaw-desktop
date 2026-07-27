@@ -125,31 +125,59 @@ async function uploadAndConfirm(page: Page, owner: string, fixture: Fixture) {
   const source = verifyFixture(fixture)
   const createRequest = page.waitForRequest((request) => {
     const path = new URL(request.url()).pathname
-    return request.method() === 'POST' && path.endsWith('/api/k12/grading-jobs')
+    return request.method() === 'POST' && path.endsWith('/api/k12/image-tasks')
   })
   await page.locator('.hc-composer input[type="file"]').setInputFiles(fixture.path)
   const request = await createRequest
   const body = request.postDataJSON() as {
     agent?: string
-    image_base64?: string
+    source_session?: string
     source_kind?: string
-    source_key?: string
+    source_ref?: string
+    source_asset_refs?: string[]
+    attempt_generation?: number
+    route_request?: {
+      provider?: string
+      model?: string
+      selection_source?: string
+    }
   }
   expect(body.agent).toBe(owner)
   expect(body.source_kind).toBe('desktop')
-  expect(body.source_key).toBeTruthy()
-  const encoded = (body.image_base64 || '').replace(/^data:[^,]+;base64,/, '')
-  const transmitted = Buffer.from(encoded, 'base64')
-  expect(transmitted.length).toBe(source.length)
-  expect(digest(transmitted), 'GradingJob must receive the exact frozen source bytes').toBe(
-    fixture.sha256,
+  expect(body.source_session).toBeTruthy()
+  expect(body.source_ref).toBeTruthy()
+  expect(body.source_asset_refs).toHaveLength(1)
+  expect(body.source_asset_refs?.[0]).toMatch(
+    new RegExp(`^asset://${owner.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`),
   )
+  expect(body.attempt_generation).toBe(1)
+  expect(body.route_request).toMatchObject({
+    provider: 'hexclaw-gpt',
+    model: 'gpt-5.6-sol',
+    selection_source: 'explicit',
+  })
+  expect(source.length).toBe(fixture.bytes)
 
   const guard = page.getByTestId('recognize-guard').last()
   await expect(guard, 'recognition belongs inside the Tutor conversation message').toBeVisible({
     timeout: 30_000,
   })
-  await expect(guard.getByTestId('rq-item').first()).toBeVisible({ timeout: 6 * 60_000 })
+  const readyOrFailed = await Promise.race([
+    guard
+      .getByTestId('rq-item')
+      .first()
+      .waitFor({ state: 'visible', timeout: 6 * 60_000 })
+      .then(() => 'ready' as const),
+    guard
+      .locator('.rec-panel__err')
+      .waitFor({ state: 'visible', timeout: 6 * 60_000 })
+      .then(() => 'failed' as const),
+  ])
+  if (readyOrFailed === 'failed') {
+    throw new Error(
+      `real image task failed before producing questions: ${await guard.locator('.rec-panel__err').innerText()}`,
+    )
+  }
   await expect(guard.locator('.rec-panel__err')).toHaveCount(0)
   expect(
     await guard.evaluate((node) =>
@@ -183,7 +211,9 @@ async function uploadAndConfirm(page: Page, owner: string, fixture: Fixture) {
   )
   const packed = (archive.assets || []).find((asset) => asset.asset_id === pageAssetID)
   expect(packed?.owner_agent).toBe(owner)
-  expect(packed?.sha256, 'v5 backup must pack the exact recognized page asset').toBe(fixture.sha256)
+  expect(packed?.sha256, 'v5 backup must pack the exact immutable image-task source asset').toBe(
+    fixture.sha256,
+  )
   return guard
 }
 
