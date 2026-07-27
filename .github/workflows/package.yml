@@ -122,12 +122,15 @@ jobs:
           GOPRIVATE: github.com/hexagon-codes/*
         run: |
           mkdir -p src-tauri/binaries
+          DESKTOP_VERSION="$(node -p "require('./package.json').version.replace(/^v/, '')")"
           cd hexclaw
-          VERSION="$(git describe --tags --always --dirty 2>/dev/null)"
+          VERSION="${DESKTOP_VERSION}"
           COMMIT="$(git rev-parse --short HEAD)"
           DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           go build -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
             -o ../src-tauri/binaries/${{ matrix.sidecar_name }} ./cmd/hexclaw
+          cd ..
+          node ./scripts/ci/verify-sidecar-version.mjs "src-tauri/binaries/${{ matrix.sidecar_name }}"
 
       - name: Download Ollama binary
         shell: bash

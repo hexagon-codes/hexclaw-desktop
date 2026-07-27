@@ -1,6 +1,6 @@
 # HexClaw Desktop — 开发命令
 
-.PHONY: dev build build-local package-local clean verify-local-deps sidecar sidecar-local sidecar-all sidecar-all-local sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src install test refresh-icon
+.PHONY: dev build build-local package-local clean verify-local-deps verify-sidecar-version sidecar sidecar-local sidecar-all sidecar-all-local sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64 sidecar-assets ollama ollama-all ollama-darwin ollama-linux-amd64 ollama-linux-arm64 render-bundle lint lint-fix format prepare-sidecar-src install test refresh-icon
 
 HEXCLAW_REPO_URL ?= https://github.com/hexagon-codes/hexclaw.git
 HEXCLAW_REF ?= refs/tags/v0.5.0-beta
@@ -19,6 +19,7 @@ HEXCLAW_GOWORK ?= $(if $(strip $(HEXCLAW_LOCAL_SRC)),$(HEXCLAW_DEFAULT_GOWORK),)
 HEXCLAW_GO_ENV := $(if $(strip $(HEXCLAW_GOWORK)),GOWORK=$(HEXCLAW_GOWORK),)
 HEXCLAW_LOCAL_MODULES := github.com/hexagon-codes/hexclaw github.com/hexagon-codes/ai-core github.com/hexagon-codes/hexagon github.com/hexagon-codes/toolkit
 DESKTOP_VERSION := $(shell node -p "require('./package.json').version")
+SIDECAR_RELEASE_VERSION := $(patsubst v%,%,$(DESKTOP_VERSION))
 HOST_TRIPLE := $(shell rustc -vV | awk '/host:/ {print $$2}')
 LOCAL_DMG_ARCH := $(if $(findstring aarch64,$(HOST_TRIPLE)),aarch64,x64)
 LOCAL_APP_BUNDLE := $(DESKTOP_ROOT)/src-tauri/target/release/bundle/macos/HexClaw.app
@@ -42,6 +43,7 @@ build:
 # 本机装机包：先用本地全生态 Go workspace 重建 sidecar，并校验下载
 # tauri.conf.json 声明的 pandoc/typst externalBin，再构建 Tauri 包。
 build-local package-local: sidecar-local render-bundle
+	node ./scripts/ci/verify-sidecar-version.mjs "$(SIDECAR_BIN_DIR)/hexclaw-$(HOST_TRIPLE)"
 	pnpm tauri build --config "$(LOCAL_PACKAGE_TAURI_CONFIG)" --bundles app
 	@if [ "$$(uname -s)" = "Darwin" ]; then \
 		rm -rf "$(LOCAL_DMG_ROOT)" "$(LOCAL_DMG_PATH)"; \
@@ -94,7 +96,7 @@ sidecar: prepare-sidecar-src
 	@echo "编译 hexclaw sidecar..."
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_BUILD_SRC)" && \
-		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		HEXAGON_VER="$$(git -C "$(HEXAGON_SRC_DIR)" describe --tags --dirty 2>/dev/null || true)" && \
@@ -121,6 +123,13 @@ sidecar-local: verify-local-deps
 
 # Cross-compile sidecar for all platforms
 sidecar-all: sidecar-darwin-arm64 sidecar-darwin-amd64 sidecar-linux-amd64 sidecar-windows-amd64
+	@for binary in \
+		hexclaw-aarch64-apple-darwin \
+		hexclaw-x86_64-apple-darwin \
+		hexclaw-x86_64-unknown-linux-gnu \
+		hexclaw-x86_64-pc-windows-msvc.exe; do \
+		node ./scripts/ci/verify-sidecar-version.mjs "$(SIDECAR_BIN_DIR)/$$binary" || exit 1; \
+	done
 
 sidecar-all-local: verify-local-deps
 	$(MAKE) sidecar-all HEXCLAW_LOCAL_SRC="$(HEXCLAW_DEFAULT_LOCAL_SRC)" HEXCLAW_GOWORK="$(HEXCLAW_DEFAULT_GOWORK)"
@@ -128,7 +137,7 @@ sidecar-all-local: verify-local-deps
 sidecar-darwin-arm64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_BUILD_SRC)" && \
-		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build \
@@ -138,7 +147,7 @@ sidecar-darwin-arm64: prepare-sidecar-src
 sidecar-darwin-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_BUILD_SRC)" && \
-		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build \
@@ -148,7 +157,7 @@ sidecar-darwin-amd64: prepare-sidecar-src
 sidecar-linux-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_BUILD_SRC)" && \
-		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build \
@@ -158,7 +167,7 @@ sidecar-linux-amd64: prepare-sidecar-src
 sidecar-windows-amd64: prepare-sidecar-src
 	@mkdir -p src-tauri/binaries
 	cd "$(HEXCLAW_BUILD_SRC)" && \
-		VERSION="$$(git describe --tags --always --dirty 2>/dev/null)" && \
+		VERSION="$(SIDECAR_RELEASE_VERSION)" && \
 		COMMIT="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" && \
 		DATE="$$(date -u +%Y-%m-%dT%H:%M:%SZ)" && \
 		GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(HEXCLAW_GO_ENV) go build \

@@ -1,9 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 pub const TEST_MODE_ENV: &str = "HEXCLAW_TEST_MODE";
 pub const TEST_HOME_ENV: &str = "HEXCLAW_TEST_HOME";
 pub const TEST_SIDECAR_PORT_ENV: &str = "HEXCLAW_SIDECAR_PORT";
+
+static SYSTEM_USER_HOME: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TestRunContext {
@@ -19,6 +23,186 @@ impl TestRunContext {
     pub fn artifact_dir(&self) -> PathBuf {
         self.home.join("artifacts")
     }
+
+    #[cfg(target_os = "macos")]
+    pub fn shell_config_dir(&self) -> PathBuf {
+        self.home.join("Library").join("Application Support")
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn shell_data_dir(&self) -> PathBuf {
+        self.shell_config_dir()
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn shell_cache_dir(&self) -> PathBuf {
+        self.home.join("Library").join("Caches")
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn shell_log_dir(&self) -> PathBuf {
+        self.home.join("Library").join("Logs")
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn shell_config_dir(&self) -> PathBuf {
+        self.home.join("AppData").join("Roaming")
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn shell_data_dir(&self) -> PathBuf {
+        self.shell_config_dir()
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn shell_cache_dir(&self) -> PathBuf {
+        self.home.join("AppData").join("Local")
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn shell_log_dir(&self) -> PathBuf {
+        self.shell_cache_dir().join("Logs")
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    pub fn shell_config_dir(&self) -> PathBuf {
+        self.home.join(".config")
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    pub fn shell_data_dir(&self) -> PathBuf {
+        self.home.join(".local").join("share")
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    pub fn shell_cache_dir(&self) -> PathBuf {
+        self.home.join(".cache")
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    pub fn shell_log_dir(&self) -> PathBuf {
+        self.home.join(".local").join("state").join("logs")
+    }
+}
+
+fn system_user_home() -> Option<&'static Path> {
+    SYSTEM_USER_HOME
+        .get_or_init(discover_system_user_home)
+        .as_deref()
+}
+
+#[cfg(unix)]
+fn discover_system_user_home() -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+
+    // SAFETY: getpwuid returns either null or a process-global passwd entry.
+    // Copy pw_dir into an owned PathBuf before returning it.
+    unsafe {
+        let passwd = libc::getpwuid(libc::getuid());
+        if passwd.is_null() || (*passwd).pw_dir.is_null() {
+            return None;
+        }
+
+        let home = CStr::from_ptr((*passwd).pw_dir);
+        Some(PathBuf::from(OsStr::from_bytes(home.to_bytes())))
+    }
+}
+
+#[cfg(not(unix))]
+fn discover_system_user_home() -> Option<PathBuf> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+}
+
+fn protected_user_paths(home: &Path) -> [PathBuf; 4] {
+    [
+        home.join(".hexclaw"),
+        home.join("Library")
+            .join("Application Support")
+            .join("com.hexclaw.desktop"),
+        home.join("Library")
+            .join("Application Support")
+            .join("com.hexclaw.desktop.mock"),
+        home.join("Library")
+            .join("Application Support")
+            .join("com.everyday-items.hexclaw"),
+    ]
+}
+
+fn resolve_existing_ancestor(requested: &Path) -> Result<PathBuf, String> {
+    let mut cursor = requested;
+    let mut missing_tail = Vec::<OsString>::new();
+    let resolved_ancestor = loop {
+        match std::fs::canonicalize(cursor) {
+            Ok(path) => break path,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = cursor.file_name().ok_or_else(|| {
+                    format!(
+                        "failed to find an existing ancestor for {TEST_HOME_ENV} {}",
+                        requested.display()
+                    )
+                })?;
+                missing_tail.push(name.to_os_string());
+                cursor = cursor.parent().ok_or_else(|| {
+                    format!(
+                        "failed to find an existing ancestor for {TEST_HOME_ENV} {}",
+                        requested.display()
+                    )
+                })?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to resolve {TEST_HOME_ENV} {}: {error}",
+                    requested.display()
+                ))
+            }
+        }
+    };
+
+    Ok(missing_tail
+        .into_iter()
+        .rev()
+        .fold(resolved_ancestor, |path, component| path.join(component)))
+}
+
+fn resolve_safe_test_home(raw: &str) -> Result<PathBuf, String> {
+    let requested = PathBuf::from(raw);
+    if !requested.is_absolute() {
+        return Err(format!("{TEST_HOME_ENV} must be an absolute path"));
+    }
+    if requested
+        .components()
+        .any(|component| matches!(component, Component::CurDir | Component::ParentDir))
+    {
+        return Err(format!(
+            "{TEST_HOME_ENV} must be a canonical path without . or .. components"
+        ));
+    }
+
+    let resolved = resolve_existing_ancestor(&requested)?;
+    if resolved.parent().is_none() {
+        return Err(format!("{TEST_HOME_ENV} cannot be a filesystem root"));
+    }
+    if let Some(user_home) = system_user_home() {
+        let canonical_user_home =
+            std::fs::canonicalize(user_home).unwrap_or_else(|_| user_home.to_path_buf());
+        if canonical_user_home.starts_with(&resolved) || resolved.starts_with(&canonical_user_home) {
+            return Err(format!(
+                "{TEST_HOME_ENV} cannot be the real user home, an ancestor, or a descendant"
+            ));
+        }
+        if protected_user_paths(&canonical_user_home).iter().any(|path| {
+            let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            resolved.starts_with(&path) || path.starts_with(&resolved)
+        }) {
+            return Err(format!(
+                "{TEST_HOME_ENV} cannot overlap a real HexClaw user-data path"
+            ));
+        }
+    }
+    Ok(resolved)
 }
 
 pub fn parse_test_run_context(
@@ -33,10 +217,7 @@ pub fn parse_test_run_context(
     let home = test_home
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| format!("{TEST_HOME_ENV} is required when {TEST_MODE_ENV}=1"))?;
-    let home = PathBuf::from(home);
-    if !home.is_absolute() {
-        return Err(format!("{TEST_HOME_ENV} must be an absolute path"));
-    }
+    let home = resolve_safe_test_home(home)?;
 
     let raw_port = sidecar_port
         .filter(|value| !value.trim().is_empty())
@@ -82,11 +263,38 @@ pub fn ensure_sandbox_dirs(ctx: &TestRunContext) -> Result<(), String> {
         &ctx.home.join("tmp"),
         ctx.config_path().parent().unwrap_or(Path::new(".")),
         &ctx.artifact_dir(),
+        &ctx.shell_config_dir(),
+        &ctx.shell_data_dir(),
+        &ctx.shell_cache_dir(),
+        &ctx.shell_log_dir(),
     ] {
         std::fs::create_dir_all(path)
             .map_err(|err| format!("failed to create test sandbox {}: {err}", path.display()))?;
     }
     Ok(())
+}
+
+pub fn prepare_shell_path_isolation() -> Result<Option<TestRunContext>, String> {
+    let Some(ctx) = current()? else {
+        return Ok(None);
+    };
+    ensure_sandbox_dirs(&ctx)?;
+
+    std::env::set_var("HOME", &ctx.home);
+    std::env::set_var("USERPROFILE", &ctx.home);
+    std::env::set_var("TMPDIR", ctx.home.join("tmp"));
+    std::env::set_var("TEMP", ctx.home.join("tmp"));
+    std::env::set_var("TMP", ctx.home.join("tmp"));
+    std::env::set_var("XDG_CONFIG_HOME", ctx.shell_config_dir());
+    std::env::set_var("XDG_DATA_HOME", ctx.shell_data_dir());
+    std::env::set_var("XDG_CACHE_HOME", ctx.shell_cache_dir());
+    std::env::set_var("XDG_STATE_HOME", ctx.shell_log_dir());
+    std::env::set_var("APPDATA", ctx.shell_config_dir());
+    std::env::set_var("LOCALAPPDATA", ctx.shell_cache_dir());
+    #[cfg(target_os = "macos")]
+    std::env::set_var("CFFIXED_USER_HOME", &ctx.home);
+
+    Ok(Some(ctx))
 }
 
 pub fn render_test_config(ctx: &TestRunContext) -> String {
@@ -188,21 +396,18 @@ mod tests {
 
     #[test]
     fn test_run_context_derives_all_mutable_paths_from_the_sandbox() {
+        let expected_home =
+            resolve_existing_ancestor(Path::new("/tmp/hexclaw-test/run-42"))
+                .expect("canonical test home");
         let ctx =
             parse_test_run_context(Some("1"), Some("/tmp/hexclaw-test/run-42"), Some("16061"))
                 .expect("valid test context")
                 .expect("test context enabled");
 
-        assert_eq!(ctx.home, PathBuf::from("/tmp/hexclaw-test/run-42"));
+        assert_eq!(ctx.home, expected_home);
         assert_eq!(ctx.sidecar_port, 16061);
-        assert_eq!(
-            ctx.config_path(),
-            PathBuf::from("/tmp/hexclaw-test/run-42/.hexclaw/hexclaw.yaml")
-        );
-        assert_eq!(
-            ctx.artifact_dir(),
-            PathBuf::from("/tmp/hexclaw-test/run-42/artifacts")
-        );
+        assert_eq!(ctx.config_path(), ctx.home.join(".hexclaw/hexclaw.yaml"));
+        assert_eq!(ctx.artifact_dir(), ctx.home.join("artifacts"));
     }
 
     #[test]
@@ -268,6 +473,192 @@ mod tests {
         assert_eq!(
             values.get("TMPDIR"),
             Some(&Some(ctx.home.join("tmp").display().to_string()))
+        );
+    }
+}
+
+#[cfg(test)]
+mod bug_20260727_003_test_home_isolation_regression {
+    use super::parse_test_run_context;
+    use std::{
+        env,
+        fs,
+        path::PathBuf,
+        process::Command,
+    };
+
+    fn isolated_root(label: &str) -> PathBuf {
+        let root = env::temp_dir().join(format!(
+            "hexclaw-bug-20260727-003-{label}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("create isolated test root");
+        root
+    }
+
+    #[test]
+    fn bug_20260727_003_rejects_real_user_home_before_tauri_initialization() {
+        let real_home = env::var("HOME").expect("real HOME must exist");
+
+        let result = parse_test_run_context(Some("1"), Some(&real_home), Some("16121"));
+        assert!(
+            result.is_err(),
+            "BUG-20260727-003: the real user HOME must fail closed as HEXCLAW_TEST_HOME"
+        );
+    }
+
+    #[test]
+    fn bug_20260727_003_rejects_any_descendant_of_the_system_user_home() {
+        let real_home = PathBuf::from(env::var_os("HOME").expect("real HOME must exist"));
+        let requested = real_home
+            .join("bug-20260727-003-must-not-use-real-home")
+            .to_string_lossy()
+            .into_owned();
+
+        let result = parse_test_run_context(Some("1"), Some(&requested), Some("16121"));
+        assert!(
+            result.is_err(),
+            "BUG-20260727-003: a descendant of the system user home must fail closed"
+        );
+    }
+
+    #[test]
+    fn bug_20260727_003_preisolated_environment_home_remains_a_valid_test_home() {
+        const CHILD_MARKER: &str = "HEXCLAW_BUG003_PREISOLATED_CHILD";
+        if env::var_os(CHILD_MARKER).is_some() {
+            let isolated_home = env::var("HOME").expect("preisolated child HOME");
+            parse_test_run_context(Some("1"), Some(&isolated_home), Some("16121"))
+                .expect("preisolated HOME must not be mistaken for the system account home")
+                .expect("test context enabled");
+            return;
+        }
+
+        let root = isolated_root("preisolated-environment");
+        let status = Command::new(env::current_exe().expect("current Rust test executable"))
+            .args([
+                "--exact",
+                "test_runtime::bug_20260727_003_test_home_isolation_regression::bug_20260727_003_preisolated_environment_home_remains_a_valid_test_home",
+                "--test-threads=1",
+            ])
+            .env(CHILD_MARKER, "1")
+            .env("HOME", &root)
+            .env("CFFIXED_USER_HOME", &root)
+            .status()
+            .expect("spawn preisolated Rust child");
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            status.success(),
+            "BUG-20260727-003: a harness-preisolated HOME must remain valid"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bug_20260727_003_rejects_symlink_that_resolves_to_real_user_home() {
+        use std::os::unix::fs::symlink;
+
+        let real_home = PathBuf::from(env::var_os("HOME").expect("real HOME must exist"));
+        let root = isolated_root("symlink");
+        let link = root.join("test-home");
+        symlink(&real_home, &link).expect("create HOME symlink");
+        let link_string = link.to_string_lossy().into_owned();
+
+        let result = parse_test_run_context(Some("1"), Some(&link_string), Some("16121"));
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            result.is_err(),
+            "BUG-20260727-003: a symlink resolving to the real user HOME must fail closed"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bug_20260727_003_rejects_missing_test_home_below_symlinked_real_home() {
+        use std::os::unix::fs::symlink;
+
+        let real_home = PathBuf::from(env::var_os("HOME").expect("real HOME must exist"));
+        let root = isolated_root("symlink-parent");
+        let link = root.join("parent");
+        symlink(&real_home, &link).expect("create HOME parent symlink");
+        let requested = link.join("not-created-test-home");
+        let requested = requested.to_string_lossy().into_owned();
+
+        let result = parse_test_run_context(Some("1"), Some(&requested), Some("16121"));
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            result.is_err(),
+            "BUG-20260727-003: a missing test home below a symlinked real HOME must fail closed"
+        );
+    }
+
+    #[test]
+    fn bug_20260727_003_requires_canonical_absolute_test_home() {
+        let root = isolated_root("canonical");
+        let canonical = root.join("sandbox");
+        let parent = root.join("parent");
+        fs::create_dir_all(&canonical).expect("create canonical sandbox");
+        fs::create_dir_all(&parent).expect("create parent");
+        let non_canonical = parent.join("..").join("sandbox");
+        let non_canonical = non_canonical.to_string_lossy().into_owned();
+
+        let result = parse_test_run_context(Some("1"), Some(&non_canonical), Some("16121"));
+        let _ = fs::remove_dir_all(root);
+        assert!(
+            result.is_err(),
+            "BUG-20260727-003: non-canonical HEXCLAW_TEST_HOME must fail closed, not be silently accepted"
+        );
+    }
+
+    #[test]
+    fn bug_20260727_003_derives_every_shell_write_root_from_test_home() {
+        let root = isolated_root("shell-roots");
+        let root_string = root.to_string_lossy().into_owned();
+        let ctx = parse_test_run_context(Some("1"), Some(&root_string), Some("16121"))
+            .expect("safe test home")
+            .expect("test mode context");
+
+        super::ensure_sandbox_dirs(&ctx).expect("create isolated shell roots");
+        for path in [
+            ctx.config_path(),
+            ctx.artifact_dir(),
+            ctx.shell_config_dir(),
+            ctx.shell_data_dir(),
+            ctx.shell_cache_dir(),
+            ctx.shell_log_dir(),
+        ] {
+            assert!(
+                path.starts_with(&ctx.home),
+                "BUG-20260727-003: {} escaped {}",
+                path.display(),
+                ctx.home.display()
+            );
+            let directory = if path.extension().is_some() {
+                path.parent().expect("file parent")
+            } else {
+                path.as_path()
+            };
+            assert!(
+                directory.is_dir(),
+                "BUG-20260727-003: expected isolated directory {}",
+                directory.display()
+            );
+        }
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bug_20260727_003_shell_isolation_runs_before_tauri_builder() {
+        let source = include_str!("lib.rs");
+        let isolation = source
+            .find("prepare_shell_path_isolation")
+            .expect("BUG-20260727-003: lib::run must invoke the shell path isolator");
+        let builder = source
+            .find("tauri::Builder::default")
+            .expect("Tauri builder marker");
+        assert!(
+            isolation < builder,
+            "BUG-20260727-003: shell path isolation must run before Tauri builder/plugin initialization"
         );
     }
 }

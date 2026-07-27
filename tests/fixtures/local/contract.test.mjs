@@ -73,6 +73,38 @@ async function makeFixtureSandbox(t, overrides = {}) {
       redistributable: false,
     })
   }
+  if (overrides.includeImages) {
+    const png = join(dir, 'writing.png')
+    const pngBody = overrides.pngBody ?? Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x73, 0x79, 0x6e, 0x74, 0x68, 0x65, 0x74, 0x69, 0x63,
+    ])
+    await writeFile(png, pngBody)
+    fixtures.push({
+      id: 'writing_image',
+      path: 'writing.png',
+      sha256: createHash('sha256').update(pngBody).digest('hex'),
+      bytes: pngBody.length,
+      pages: 1,
+      source: 'private-local',
+      redistributable: false,
+    })
+
+    const jpeg = join(dir, 'problem_solving.jpg')
+    const jpegBody = overrides.jpegBody ?? Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0xff, 0xd9,
+    ])
+    await writeFile(jpeg, jpegBody)
+    fixtures.push({
+      id: 'problem_solving_image',
+      path: 'problem_solving.jpg',
+      sha256: createHash('sha256').update(jpegBody).digest('hex'),
+      bytes: jpegBody.length,
+      pages: 1,
+      source: 'private-local',
+      redistributable: false,
+    })
+  }
   await writeFile(manifest, `${JSON.stringify({ schema_version: 1, fixtures }, null, 2)}\n`)
 
   return { dir, pdf, manifest, pdfBytes, pdfSHA, binDir, scannedPdf, scannedPDFBytes, scannedPDFSHA }
@@ -181,6 +213,37 @@ test('verifier checks every fixture in the two-textbook exact set', async (t) =>
   ])
   assert.equal(output.fixtures[0].sha256, fixture.pdfSHA)
   assert.equal(output.fixtures[1].sha256, fixture.scannedPDFSHA)
+})
+
+test('verifier keeps schema version 1 while checking PDF, PNG, and JPEG fixtures', async (t) => {
+  const fixture = await makeFixtureSandbox(t, {
+    includeScanned: true,
+    includeImages: true,
+  })
+  const result = runVerifier({ manifest: fixture.manifest, binDir: fixture.binDir })
+
+  assert.equal(result.status, 0, result.stderr)
+  const output = JSON.parse(result.stdout)
+  assert.deepEqual(output.fixtures.map((item) => item.fixture), [
+    'textbook_pdf',
+    'scanned_textbook_pdf',
+    'writing_image',
+    'problem_solving_image',
+  ])
+  assert.equal(output.fixtures[2].pages, 1)
+  assert.equal(output.fixtures[3].pages, 1)
+})
+
+test('verifier fails closed when an image extension does not match its signature', async (t) => {
+  const fixture = await makeFixtureSandbox(t, {
+    includeImages: true,
+    pngBody: Buffer.from('not a png'),
+  })
+  const result = runVerifier({ manifest: fixture.manifest, binDir: fixture.binDir })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /PNG signature missing/i)
+  assert.equal(result.stdout, '')
 })
 
 test('verifier fails closed when only the second textbook is corrupted', async (t) => {

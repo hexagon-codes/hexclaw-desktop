@@ -1,8 +1,10 @@
-# Local private/large PDF fixtures
+# Local private/large fixtures
 
 This directory keeps the **contract**, not the copyrighted or private payload.
 The two canonical textbook PDFs are intentionally never copied into the repository:
-the 131-page text-layer textbook and the 122-page scanned/OCR textbook.
+the 131-page text-layer textbook and the 122-page scanned/OCR textbook. A
+machine-local `manifest.json` may also reference private PNG and JPEG K12 images
+without copying them into this repository.
 
 ## One-off verification with an explicit path
 
@@ -13,9 +15,10 @@ HEX_FIXTURE_SCANNED_TEXTBOOK_PDF='/absolute/path/to/scanned-textbook.pdf' \
   --manifest tests/fixtures/local/manifest.example.json
 ```
 
-The command succeeds only after both PDFs' signatures, SHA256 values, exact byte
-counts, and page counts all match. It uses `pdfinfo` when available and falls back to
-the native macOS `mdls` metadata command. Missing tools or metadata fail closed.
+The command succeeds only after every fixture's signature, SHA256 value, exact byte
+count, and page count match. PDF entries use `pdfinfo` when available and fall back
+to the native macOS `mdls` metadata command. PNG and JPEG entries retain schema
+version 1 and use `pages: 1`. Missing tools, signatures, or metadata fail closed.
 
 ## Reusable machine-local manifest
 

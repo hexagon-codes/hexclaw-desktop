@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { createReadStream, existsSync } from 'node:fs'
 import { open, readFile, stat } from 'node:fs/promises'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, extname, isAbsolute, join, resolve } from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -104,6 +104,51 @@ async function assertPDFSignature(path) {
   }
 }
 
+async function assertPNGSignature(path) {
+  const handle = await open(path, 'r')
+  try {
+    const signature = Buffer.alloc(8)
+    const { bytesRead } = await handle.read(signature, 0, signature.length, 0)
+    const expected = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    if (bytesRead !== signature.length || !signature.equals(expected)) {
+      fail(`PNG signature missing: ${path}`)
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+async function assertJPEGSignature(path) {
+  const handle = await open(path, 'r')
+  try {
+    const signature = Buffer.alloc(3)
+    const { bytesRead } = await handle.read(signature, 0, signature.length, 0)
+    if (
+      bytesRead !== signature.length
+      || signature[0] !== 0xff
+      || signature[1] !== 0xd8
+      || signature[2] !== 0xff
+    ) {
+      fail(`JPEG signature missing: ${path}`)
+    }
+  } finally {
+    await handle.close()
+  }
+}
+
+function fixtureKind(path) {
+  const extension = extname(path).toLowerCase()
+  if (extension === '.png') return 'png'
+  if (extension === '.jpg' || extension === '.jpeg') return 'jpeg'
+  return 'pdf'
+}
+
+async function assertFixtureSignature(path, kind) {
+  if (kind === 'png') return assertPNGSignature(path)
+  if (kind === 'jpeg') return assertJPEGSignature(path)
+  return assertPDFSignature(path)
+}
+
 async function hashAndCountBytes(path) {
   const hash = createHash('sha256')
   let bytes = 0
@@ -177,7 +222,8 @@ async function verifyFixture(manifestPath, fixture) {
   }
   if (!before.isFile()) fail(`fixture path is not a regular file: ${path}`)
 
-  await assertPDFSignature(path)
+  const kind = fixtureKind(fixture.path)
+  await assertFixtureSignature(path, kind)
   const evidence = await hashAndCountBytes(path)
   if (evidence.bytes !== fixture.bytes) {
     fail(`${fixtureID}: byte count mismatch: expected ${fixture.bytes}, got ${evidence.bytes}`)
@@ -186,7 +232,7 @@ async function verifyFixture(manifestPath, fixture) {
     fail(`${fixtureID}: SHA256 mismatch: expected ${fixture.sha256}, got ${evidence.sha256}`)
   }
 
-  const pages = countPDFPages(path)
+  const pages = kind === 'pdf' ? countPDFPages(path) : 1
   if (pages !== fixture.pages) {
     fail(`${fixtureID}: page count mismatch: expected ${fixture.pages}, got ${pages}`)
   }

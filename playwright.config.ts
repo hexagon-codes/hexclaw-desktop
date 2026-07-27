@@ -20,6 +20,7 @@ export const currentSourceTestMatch = [
   '**/api-chain.spec.ts',
   '**/streaming-chain.spec.ts',
   '**/browser-chat-background.spec.ts',
+  '**/bug-20260726-030-composer-divider.spec.ts',
   '**/browser-chat-interaction-current-source-20260723.spec.ts',
   '**/browser-clearable-inputs.spec.ts',
   '**/browser-current-ui-regression-20260723.spec.ts',

@@ -8,7 +8,8 @@ OVERLAY="${REPO_ROOT}/src-tauri/tauri.mock.conf.json"
 APP_BUNDLE="${HEX_NATIVE_APP_BUNDLE:-${REPO_ROOT}/src-tauri/target/release/bundle/macos/HexClaw Test.app}"
 APP_EXECUTABLE=""
 ARTIFACT_DIR="${HEX_NATIVE_ARTIFACT_DIR:-${REPO_ROOT}/test-results/native-smoke}"
-PORT=16061
+EXPECTED_BUNDLE_ID="${HEX_NATIVE_EXPECTED_BUNDLE_ID:-com.hexclaw.desktop.mock}"
+PORT="${HEX_NATIVE_PORT:-16061}"
 COMMAND="${1:-run}"
 APP_PID=""
 SANDBOX=""
@@ -25,7 +26,47 @@ Commands:
 
 The lane is macOS-only. It never starts the managed Ollama bundle and never
 loads the user's ~/.hexclaw directory or provider/DingTalk credentials.
+
+Environment:
+  HEX_NATIVE_EXPECTED_BUNDLE_ID  Expected bundle identifier. Defaults to
+                                 com.hexclaw.desktop.mock; production requires
+                                 the explicit value com.hexclaw.desktop.
+  HEX_NATIVE_PORT                Dedicated unprivileged Sidecar port. Defaults
+                                 to 16061; production port 16060 is forbidden.
 USAGE
+}
+
+validate_expected_bundle_id() {
+  case "${EXPECTED_BUNDLE_ID}" in
+    com.hexclaw.desktop.mock)
+      ;;
+    com.hexclaw.desktop)
+      if [[ "${HEX_NATIVE_EXPECTED_BUNDLE_ID:-}" != "com.hexclaw.desktop" ]]; then
+        printf 'production bundle identifier requires explicit HEX_NATIVE_EXPECTED_BUNDLE_ID=com.hexclaw.desktop\n' >&2
+        return 1
+      fi
+      ;;
+    *)
+      printf 'unsupported HEX_NATIVE_EXPECTED_BUNDLE_ID: %s\n' "${EXPECTED_BUNDLE_ID}" >&2
+      return 1
+      ;;
+  esac
+}
+
+validate_port() {
+  if [[ ! "${PORT}" =~ ^[0-9]+$ ]]; then
+    printf 'HEX_NATIVE_PORT must be a numeric TCP port\n' >&2
+    return 1
+  fi
+  PORT="$((10#${PORT}))"
+  if (( PORT < 1024 || PORT > 65535 )); then
+    printf 'HEX_NATIVE_PORT must be an unprivileged TCP port between 1024 and 65535\n' >&2
+    return 1
+  fi
+  if (( PORT == 16060 )); then
+    printf 'HEX_NATIVE_PORT must not use the production port 16060\n' >&2
+    return 1
+  fi
 }
 
 validate() {
@@ -39,6 +80,8 @@ validate() {
       return 1
     fi
   done
+  validate_expected_bundle_id
+  validate_port
   node -e "const c=JSON.parse(require('node:fs').readFileSync(process.argv[1])); if(c.identifier!=='com.hexclaw.desktop.mock'||!c.app.security.csp.includes('localhost:16061')||c.app.security.csp.includes('localhost:11434')) process.exit(1)" "${OVERLAY}"
   bash -n "${BASH_SOURCE[0]}"
 }
@@ -47,8 +90,9 @@ resolve_app_executable() {
   local executable_name bundle_identifier
   executable_name="$(plutil -extract CFBundleExecutable raw -o - "${APP_BUNDLE}/Contents/Info.plist")"
   bundle_identifier="$(plutil -extract CFBundleIdentifier raw -o - "${APP_BUNDLE}/Contents/Info.plist")"
-  if [[ "${bundle_identifier}" != "com.hexclaw.desktop.mock" ]]; then
-    printf 'unexpected native-smoke bundle identifier: %s\n' "${bundle_identifier}" >&2
+  if [[ "${bundle_identifier}" != "${EXPECTED_BUNDLE_ID}" ]]; then
+    printf 'unexpected native-smoke bundle identifier: expected %s, got %s\n' \
+      "${EXPECTED_BUNDLE_ID}" "${bundle_identifier}" >&2
     return 1
   fi
   APP_EXECUTABLE="${APP_BUNDLE}/Contents/MacOS/${executable_name}"
@@ -132,17 +176,25 @@ run_smoke() {
 
   mkdir -p "${ARTIFACT_DIR}"
   SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/hexclaw-native-smoke.XXXXXX")"
+  SANDBOX="$(cd "${SANDBOX}" && pwd -P)"
+  mkdir -p "${SANDBOX}/tmp"
   trap cleanup EXIT INT TERM
 
+  HOME="${SANDBOX}" \
+  USERPROFILE="${SANDBOX}" \
+  CFFIXED_USER_HOME="${SANDBOX}" \
+  TMPDIR="${SANDBOX}/tmp" \
+  TEMP="${SANDBOX}/tmp" \
+  TMP="${SANDBOX}/tmp" \
   HEXCLAW_TEST_MODE=1 \
   HEXCLAW_TEST_HOME="${SANDBOX}" \
-  HEXCLAW_SIDECAR_PORT=16061 \
+  HEXCLAW_SIDECAR_PORT="${PORT}" \
     "${APP_EXECUTABLE}" >"${ARTIFACT_DIR}/app.log" 2>&1 &
   APP_PID=$!
 
   wait_for_health
   test -f "${SANDBOX}/.hexclaw/hexclaw.yaml"
-  grep -q 'port: 16061' "${SANDBOX}/.hexclaw/hexclaw.yaml"
+  grep -q "port: ${PORT}" "${SANDBOX}/.hexclaw/hexclaw.yaml"
   grep -q "${SANDBOX}/.hexclaw/data.db" "${SANDBOX}/.hexclaw/hexclaw.yaml"
   test -f "${SANDBOX}/.hexclaw/data.db"
   printf 'native Tauri smoke passed: app=%s sidecar=http://localhost:%s sandbox=%s\n' \

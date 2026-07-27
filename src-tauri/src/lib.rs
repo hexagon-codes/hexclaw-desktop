@@ -31,6 +31,9 @@ pub fn run() {
         unsafe { libc::umask(0o077); }
     }
 
+    test_runtime::prepare_shell_path_isolation()
+        .unwrap_or_else(|err| panic!("test runtime path isolation refused startup: {err}"));
+
     env_logger::init();
 
     let app = tauri::Builder::default()

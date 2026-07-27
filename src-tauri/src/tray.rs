@@ -29,33 +29,47 @@ fn system_tray_locale() -> TrayLocale {
     }
 }
 
+fn labels_for_locale(locale: TrayLocale) -> [&'static str; 5] {
+    match locale {
+        TrayLocale::Chinese => ["打开 HexClaw", "快速对话…", "日志", "设置", "退出 HexClaw"],
+        TrayLocale::English => [
+            "Open HexClaw",
+            "Quick Chat…",
+            "Logs",
+            "Settings",
+            "Quit HexClaw",
+        ],
+    }
+}
+
 /// 构建系统托盘
 pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let locale = system_tray_locale();
+    let [open_label, quick_chat_label, logs_label, settings_label, quit_label] =
+        labels_for_locale(system_tray_locale());
     let open = MenuItem::with_id(app, "open",
-        if locale == TrayLocale::Chinese { "打开 HexClaw" } else { "Open HexClaw" },
+        open_label,
         true,
         None::<&str>,
     )?;
     let quick_chat = MenuItem::with_id(app, "quick_chat",
-        if locale == TrayLocale::Chinese { "快速对话..." } else { "Quick Chat..." },
+        quick_chat_label,
         true,
         None::<&str>,
     )?;
     let separator1 = PredefinedMenuItem::separator(app)?;
     let logs = MenuItem::with_id(app, "logs",
-        if locale == TrayLocale::Chinese { "日志" } else { "Logs" },
+        logs_label,
         true,
         None::<&str>,
     )?;
     let settings = MenuItem::with_id(app, "settings",
-        if locale == TrayLocale::Chinese { "设置" } else { "Settings" },
+        settings_label,
         true,
         None::<&str>,
     )?;
     let separator2 = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit",
-        if locale == TrayLocale::Chinese { "退出 HexClaw" } else { "Quit HexClaw" },
+        quit_label,
         true,
         None::<&str>,
     )?;
@@ -107,4 +121,37 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .build(app)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{labels_for_locale, TrayLocale};
+
+    #[test]
+    fn bug_20260726_033_uses_exact_chinese_menu_labels_with_unicode_ellipsis() {
+        assert_eq!(
+            labels_for_locale(TrayLocale::Chinese),
+            [
+                "打开 HexClaw",
+                "快速对话…",
+                "日志",
+                "设置",
+                "退出 HexClaw",
+            ]
+        );
+    }
+
+    #[test]
+    fn bug_20260726_033_uses_exact_english_menu_labels_with_unicode_ellipsis() {
+        assert_eq!(
+            labels_for_locale(TrayLocale::English),
+            [
+                "Open HexClaw",
+                "Quick Chat…",
+                "Logs",
+                "Settings",
+                "Quit HexClaw",
+            ]
+        );
+    }
 }
