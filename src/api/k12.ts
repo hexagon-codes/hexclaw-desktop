@@ -143,6 +143,8 @@ export interface MistakeDTO {
   knowledge_point: string
   error_cause: string
   status: string
+  /** 复习调度唯一状态；v57 起替代旧 status/archive 的复习语义。 */
+  review_state?: 'scheduled' | 'deferred_this_week' | 'suppressed' | 'mastered'
   version: number
   /** 到期 unix 秒（omitempty，可缺省/为 null） */
   due_at?: number | null
@@ -185,39 +187,63 @@ export function k12DeleteMistake(agent: string, recordId: string) {
   )
 }
 
-// ── controlled mistake archive / restore（BUG-20260725-017）────────
-export interface MistakeArchiveCommandReq {
+// ── mistake review commands（BUG-20260725-013/017）────────
+export interface MistakeReviewCommandReq {
   agent: string
   version: number
   idempotency_key: string
 }
 
-/** 「不再复习」：CAS 软归档。成功响应中的 version 是 Undo 唯一合法的 restore version。 */
-export function k12ArchiveMistake(
+/** 「不再复习」：长期排除，但不产生掌握证据。 */
+export function k12SuppressMistake(
   agent: string,
   recordId: string,
   version: number,
   idempotencyKey: string,
 ) {
-  return apiPost<MistakeDTO>(`${BASE}/mistakes/${encodeURIComponent(recordId)}/archive`, {
+  return apiPost<MistakeDTO>(`${BASE}/mistakes/${encodeURIComponent(recordId)}/suppress`, {
     agent,
     version,
     idempotency_key: idempotencyKey,
   })
 }
 
-/** 8 秒 Undo 与「已归档」长期恢复共用的唯一 CAS restore。 */
-export function k12RestoreMistake(
+/** 成功 Undo 与「不再复习」筛选中的恢复共用唯一 restore。 */
+export function k12RestoreMistakeReview(
   agent: string,
   recordId: string,
   version: number,
   idempotencyKey: string,
 ) {
-  return apiPost<MistakeDTO>(`${BASE}/mistakes/${encodeURIComponent(recordId)}/restore`, {
+  return apiPost<MistakeDTO>(`${BASE}/mistakes/${encodeURIComponent(recordId)}/restore-review`, {
     agent,
     version,
     idempotency_key: idempotencyKey,
   })
+}
+
+/** @deprecated 仅供旧调用方编译迁移；语义与路由均已切到 suppress/restore-review。 */
+export const k12ArchiveMistake = k12SuppressMistake
+/** @deprecated 仅供旧调用方编译迁移；新代码使用 k12RestoreMistakeReview。 */
+export const k12RestoreMistake = k12RestoreMistakeReview
+
+export interface DeferMistakeThisWeekReq {
+  agent: string
+  version: number
+  plan_id: string
+  plan_revision: number
+  weekly_item_id: string
+  iso_year: number
+  iso_week: number
+  idempotency_key: string
+}
+
+/** 「本周先不练」只影响当前 ISO 周，不写 mastered/suppressed。 */
+export function k12DeferMistakeThisWeek(recordId: string, req: DeferMistakeThisWeekReq) {
+  return apiPost<{ state: 'deferred_this_week'; replayed: boolean }>(
+    `${BASE}/mistakes/${encodeURIComponent(recordId)}/defer-this-week`,
+    req,
+  )
 }
 
 // ── mark-mastered（他会了，乐观锁）───────────────────────────
@@ -232,7 +258,97 @@ export function k12MarkMastered(req: MarkMasteredReq) {
   return apiPost<{ ok: boolean }>(`${BASE}/mark-mastered`, req)
 }
 
-// ── 错题一键生成练习（服务端持久化异步任务）────────────────────────
+// ── 错题候选选择（生成与入集两阶段；BUG-20260725-010/011）────────────
+export type PracticeCandidateState = 'generating' | 'ready' | 'failed' | 'already_in_set'
+export type PracticeCandidateKind = 'original' | 'variant'
+
+export interface PracticeCandidateDTO {
+  candidate_id: string
+  candidate_kind: PracticeCandidateKind
+  batch_ordinal: number
+  candidate_ordinal: number
+  normalized_content_hash: string
+  state: PracticeCandidateState
+  question_markdown: string
+  expected_answer_markdown?: string
+  failure_message?: string
+}
+
+export interface PracticeCandidateSelectionDTO {
+  selection_id: string
+  source_mistake_id: string
+  target_set_record_id: string
+  state: 'open' | 'committed'
+  next_batch_ordinal: number
+  revision: number
+  candidates: PracticeCandidateDTO[]
+}
+
+export interface OpenPracticeCandidateSelectionReq {
+  agent: string
+  idempotency_key: string
+  grade?: string
+  textbook?: string
+  provider?: string
+  model?: string
+  source_session?: string
+}
+
+export function k12OpenPracticeCandidateSelection(
+  recordId: string,
+  req: OpenPracticeCandidateSelectionReq,
+) {
+  if (Boolean(req.provider) !== Boolean(req.model)) {
+    throw new Error('候选题模型路由必须同时包含供应商和模型')
+  }
+  return apiPost<PracticeCandidateSelectionDTO>(
+    `${BASE}/mistakes/${encodeURIComponent(recordId)}/practice-candidate-selection`,
+    req,
+  )
+}
+
+export function k12GeneratePracticeCandidateBatch(
+  selectionId: string,
+  req: {
+    agent: string
+    revision: number
+    idempotency_key: string
+    provider?: string
+    model?: string
+  },
+) {
+  if (Boolean(req.provider) !== Boolean(req.model)) {
+    throw new Error('候选题模型路由必须同时包含供应商和模型')
+  }
+  return apiPost<PracticeCandidateSelectionDTO>(
+    `${BASE}/practice-candidate-selections/${encodeURIComponent(selectionId)}/batches`,
+    req,
+  )
+}
+
+export interface CommitPracticeCandidateSelectionResp {
+  selection: PracticeCandidateSelectionDTO
+  added_count: number
+  already_present: string[]
+  replayed: boolean
+}
+
+export function k12CommitPracticeCandidateSelection(
+  selectionId: string,
+  req: {
+    agent: string
+    revision: number
+    candidate_ids: string[]
+    idempotency_key: string
+  },
+) {
+  return apiPost<CommitPracticeCandidateSelectionResp>(
+    `${BASE}/practice-candidate-selections/${encodeURIComponent(selectionId)}/commit`,
+    req,
+  )
+}
+
+// ── 旧错题一键生成投影（只读兼容；新入口不得调用）────────────────────
 export type MistakePracticeGenerationState =
   | 'available'
   | 'pending'
@@ -385,19 +501,6 @@ export async function k12TutoringTips(req: TutoringTipsReq, signal?: AbortSignal
   return response
 }
 
-// ── grounding（家长教材原文，按 agent scope 写入）──────────
-export interface GroundingReq {
-  agent: string
-  /** 当前作业学科；不传仅保留旧版不分科语义。 */
-  subject?: string
-  title: string
-  content: string
-}
-
-export function k12AddGrounding(req: GroundingReq, signal?: AbortSignal) {
-  return apiPost<{ ok: boolean }>(`${BASE}/grounding`, req, { signal })
-}
-
 // ── insight-report（学情报告）────────────────────────────────
 // study-time API 已删除（架构设计 v0.5.0《明确不做》#6：不做学习时长与无证据投入指标）。
 /** reviewing = new + explained（待复习） */
@@ -491,6 +594,9 @@ export interface CurriculumCatalogDTO {
   agent: string
   subject: 'math'
   textbook_binding_id: string
+  textbook_manifest_id: string
+  document_id: string
+  document_generation: number
   textbook_edition: string
   textbook_version: string
   title: string
@@ -498,6 +604,50 @@ export interface CurriculumCatalogDTO {
   page_min: number
   page_max: number
   units: CurriculumCatalogUnitDTO[]
+}
+
+export interface TextbookManifestPageRefDTO {
+  logical_page: number
+  pdf_page: number
+  segment_refs: string[]
+}
+
+export interface TextbookManifestCatalogDTO {
+  subject: 'math'
+  textbook_edition: string
+  textbook_version: string
+  title: string
+  volume: string
+  page_min: number
+  page_max: number
+  units: CurriculumCatalogUnitDTO[]
+  page_refs: TextbookManifestPageRefDTO[]
+}
+
+export type TextbookManifestState =
+  | 'waiting_ingest'
+  | 'extracting'
+  | 'ready_for_confirmation'
+  | 'failed_retryable'
+  | 'failed_terminal'
+  | 'stale'
+
+export interface TextbookBindingOptionDTO {
+  manifest_id: string
+  document_id: string
+  document_generation: number
+  document_title: string
+  state: TextbookManifestState
+  retryable: boolean
+  failure_message: string
+  text_index_state: string
+  vector_index_state: string
+  catalog: TextbookManifestCatalogDTO | null
+  updated_at: string
+}
+
+export interface TextbookBindingOptionsResp {
+  items: TextbookBindingOptionDTO[]
 }
 
 export type CurriculumPageVerificationStatus =
@@ -512,6 +662,7 @@ export interface CurriculumProgressDTO {
   subject: 'math'
   revision: number
   textbook_binding_id: string
+  textbook_manifest_id: string
   textbook_edition: string
   textbook_version: string
   title: string
@@ -542,6 +693,7 @@ export interface WeeklyPracticeSettingsDTO {
   timezone: string
   due_review_enabled: true
   textbook_consolidation_enabled: boolean
+  textbook_consolidation_tier: WeeklyTextbookConsolidationTier
   arithmetic_warmup_enabled: boolean
   arithmetic_minutes: number
   created_at: string
@@ -558,6 +710,14 @@ export interface UpdateProfileBundleReq {
   expected_profile_revision: number
   expected_progress_revision: number
   expected_settings_revision: number
+  agent_config: {
+    display_name: string
+    description: string
+    system_prompt: string
+    provider: string
+    model: string
+    skills: string[]
+  }
   profile: {
     child_name: string
     grade_term: string
@@ -565,7 +725,7 @@ export interface UpdateProfileBundleReq {
   }
   curriculum_progress: {
     subject: 'math'
-    textbook_binding_id: string
+    textbook_manifest_id: string
     volume: string
     unit_id: string
     lesson_id?: string
@@ -576,12 +736,14 @@ export interface UpdateProfileBundleReq {
   weekly_practice_settings: {
     timezone: string
     textbook_consolidation_enabled: boolean
+    textbook_consolidation_tier: WeeklyTextbookConsolidationTier
     arithmetic_warmup_enabled: boolean
     arithmetic_minutes: number
   }
 }
 
 export interface ProfileBundleResp {
+  agent_config: UpdateProfileBundleReq['agent_config']
   profile: ProfileBundleProfileDTO
   curriculum_progress: CurriculumProgressDTO
   weekly_practice_settings: WeeklyPracticeSettingsDTO
@@ -592,11 +754,17 @@ export type WeeklyPracticeSection =
   | 'due_review'
   | 'textbook_consolidation'
   | 'arithmetic_warmup'
-export type WeeklyPracticeTrackStatus = 'ready' | 'disabled' | 'failed'
+export type WeeklyPracticeTrackStatus = 'ready' | 'disabled' | 'failed' | 'stale'
 export type WeeklyPracticePlanStatus = 'draft' | 'frozen' | 'archived' | 'expired_unused'
+export type WeeklyManualTrackAvailability =
+  | 'available'
+  | 'setup_required'
+  | 'processing'
+  | 'failed_retryable'
+  | 'failed_terminal'
+export type WeeklyTextbookConsolidationTier = 'less' | 'standard' | 'more'
 export type WeeklyPracticeGenerationMethod =
   | 'original'
-  | 'due_review_reuse'
   | 'ai_variant'
   | 'ai_generated'
   | 'rule_generated'
@@ -622,11 +790,45 @@ export interface WeeklyPracticeItemDTO {
   prompt_markdown: string
 }
 
+export type WeeklyArithmeticBatchState =
+  | 'preparing'
+  | 'ready'
+  | 'in_progress'
+  | 'completed'
+  | 'failed_retryable'
+  | 'failed_terminal'
+
+export interface WeeklyArithmeticBatchDTO {
+  batch_id: string
+  state: WeeklyArithmeticBatchState
+  item_count: number
+  content_digest: string
+  retryable: boolean
+  failure_message: string
+  created_at: string
+  updated_at: string
+  completed_at?: string
+}
+
 export interface WeeklyPracticeTrackDTO {
   plan_section: WeeklyPracticeSection
   status: WeeklyPracticeTrackStatus
   failure_message?: string
   items: WeeklyPracticeItemDTO[]
+  arithmetic_batch: WeeklyArithmeticBatchDTO | null
+}
+
+export interface WeeklyManualTrackRecommendationDTO {
+  availability: WeeklyManualTrackAvailability
+  selected_item_count: number
+  recommended_item_count: number
+  min_item_count: number
+  max_item_count: number
+}
+
+export interface WeeklyManualTrackRecommendationsDTO {
+  textbook_consolidation: WeeklyManualTrackRecommendationDTO
+  arithmetic_warmup: WeeklyManualTrackRecommendationDTO
 }
 
 export interface WeeklyPracticePlanDTO {
@@ -644,6 +846,7 @@ export interface WeeklyPracticePlanDTO {
   settings_revision: number
   curriculum_progress_revision?: number
   tracks: WeeklyPracticeTrackDTO[]
+  manual_track_recommendations: WeeklyManualTrackRecommendationsDTO
   created_at: string
   updated_at: string
 }
@@ -659,6 +862,7 @@ export interface WeeklyPracticeCurrentResp {
 
 export interface WeeklyPracticeSnapshotDTO {
   snapshot_id: string
+  artifact_id: string
   plan_id: string
   plan_revision: number
   agent: string
@@ -679,6 +883,7 @@ export interface WeeklyPracticeSnapshotDTO {
 
 export interface WeeklyPracticeHistorySummaryDTO {
   snapshot_id: string
+  artifact_id: string
   plan_id: string
   iso_week_year: number
   iso_week_number: number
@@ -686,6 +891,9 @@ export interface WeeklyPracticeHistorySummaryDTO {
   local_start_date: string
   local_end_date: string
   item_count: number
+  correct_count: number
+  wrong_count: number
+  needs_review_count: number
   archived_at: string
 }
 
@@ -696,7 +904,7 @@ export interface WeeklyPracticeHistoryResp {
 
 export interface PrintableArtifactDTO {
   artifact_id: string
-  source_kind: 'weekly_practice_snapshot'
+  source_kind: GenericPrintSourceKind
   source_ref: string
   title: string
   source_digest: string
@@ -729,6 +937,28 @@ export interface WeeklyPracticeAttemptResp {
   replayed: boolean
 }
 
+export interface WeeklyArithmeticAttemptDTO {
+  attempt_id: string
+  batch_id: string
+  item_id: string
+  assessment_id: string
+  result: 'correct' | 'wrong' | 'needs_review'
+  verification_evidence: unknown
+  mistake_record_id?: string
+  review_scheduled: boolean
+  created_at: string
+}
+
+export interface WeeklyArithmeticAttemptResp {
+  attempt: WeeklyArithmeticAttemptDTO
+  replayed: boolean
+}
+
+export interface WeeklyArithmeticBatchResp {
+  batch: WeeklyArithmeticBatchDTO
+  replayed: boolean
+}
+
 export interface WeeklyPracticeSaveReceiptDTO {
   save_receipt_id: string
   plan_id: string
@@ -758,6 +988,13 @@ export function k12GetCurriculumCatalog(
 
 export function k12GetCurriculumProgress(agent: string) {
   return apiGet<CurriculumProgressResp>(`${BASE}/curriculum-progress`, {
+    agent,
+    subject: 'math',
+  })
+}
+
+export function k12GetTextbookBindingOptions(agent: string) {
+  return apiGet<TextbookBindingOptionsResp>(`${BASE}/textbook-binding-options`, {
     agent,
     subject: 'math',
   })
@@ -841,6 +1078,100 @@ export function k12SubmitWeeklyPracticeAttempt(
       agent,
       item_id: itemId,
       student_answer: studentAnswer,
+      idempotency_key: idempotencyKey,
+    },
+  )
+}
+
+export function k12CreateWeeklyArithmeticBatch(
+  planId: string,
+  planRevision: number,
+  itemCount: number,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyArithmeticBatchResp>(
+    `${BASE}/weekly-practice/plans/${encodeURIComponent(planId)}/arithmetic-batches`,
+    {
+      plan_revision: planRevision,
+      item_count: itemCount,
+      idempotency_key: idempotencyKey,
+    },
+  )
+}
+
+export function k12StartWeeklyArithmeticBatch(
+  agent: string,
+  batchId: string,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyArithmeticBatchResp>(
+    `${BASE}/weekly-practice/arithmetic-batches/${encodeURIComponent(batchId)}/start`,
+    {
+      agent,
+      idempotency_key: idempotencyKey,
+    },
+  )
+}
+
+export function k12RetryWeeklyArithmeticBatch(
+  agent: string,
+  batchId: string,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyArithmeticBatchResp>(
+    `${BASE}/weekly-practice/arithmetic-batches/${encodeURIComponent(batchId)}/retry`,
+    {
+      agent,
+      idempotency_key: idempotencyKey,
+    },
+  )
+}
+
+export function k12SubmitWeeklyArithmeticAttempt(
+  agent: string,
+  batchId: string,
+  itemId: string,
+  studentAnswer: string,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyArithmeticAttemptResp>(
+    `${BASE}/weekly-practice/arithmetic-batches/${encodeURIComponent(batchId)}/attempts`,
+    {
+      agent,
+      item_id: itemId,
+      student_answer: studentAnswer,
+      idempotency_key: idempotencyKey,
+    },
+  )
+}
+
+export function k12RefreshWeeklyPracticeTextbookTrack(
+  agent: string,
+  planId: string,
+  expectedRevision: number,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyPracticePlanResp>(
+    `${BASE}/weekly-practice/plans/${encodeURIComponent(planId)}/tracks/textbook_consolidation/refresh`,
+    {
+      agent,
+      expected_revision: expectedRevision,
+      idempotency_key: idempotencyKey,
+    },
+  )
+}
+
+export function k12PrepareWeeklyPracticeTextbookTrack(
+  planId: string,
+  planRevision: number,
+  itemCount: number,
+  idempotencyKey: string,
+) {
+  return apiPost<WeeklyPracticePlanResp>(
+    `${BASE}/weekly-practice/plans/${encodeURIComponent(planId)}/tracks/textbook_consolidation/prepare`,
+    {
+      plan_revision: planRevision,
+      item_count: itemCount,
       idempotency_key: idempotencyKey,
     },
   )
@@ -1372,7 +1703,20 @@ export interface ImageTaskHomeworkProjectionDTO {
   problems?: ImageTaskProblemProgressDTO[]
   coverage?: ImageTaskCoverageDTO
   projection_revision?: number
-  final_artifact?: Record<string, unknown> | null
+  final_artifact?: GradingFinalArtifactDTO | null
+}
+
+export interface GradingFinalArtifactDTO {
+  artifact_id: string
+  artifact_digest: string
+  title?: string
+  canonical_markdown: string
+  coverage_status: 'complete' | 'with_skips'
+  total_count: number
+  published_count: number
+  skipped_count: number
+  created_at: number
+  updated_at: number
 }
 
 export interface ImageTaskProblemProgressDTO {
@@ -1491,6 +1835,9 @@ export interface ImageTaskDispatchDTO {
   dispatch_id: string
   task_intent: ImageTaskIntent
   status: ImageTaskDispatchStatus
+  /** Exact configured display facts frozen with new dispatch route snapshots. */
+  provider_display_name?: string | null
+  model_id?: string | null
   /** 服务端权威动作能力；缺失按 false 处理，客户端不得自行推断为可重试。 */
   retryable?: boolean
   automatic_budget_seconds?: number
@@ -2435,6 +2782,8 @@ function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDisp
     [
       'target',
       'target_projection',
+      'provider_display_name',
+      'model_id',
       'retryable',
       'automatic_budget_seconds',
       'automatic_started_at',
@@ -2449,6 +2798,12 @@ function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDisp
     !dispatch.dispatch_id.trim() ||
     !IMAGE_TASK_INTENTS.has(dispatch.task_intent as ImageTaskIntent) ||
     !IMAGE_TASK_STATUSES.has(dispatch.status as ImageTaskDispatchStatus) ||
+    (dispatch.provider_display_name !== undefined &&
+      dispatch.provider_display_name !== null &&
+      typeof dispatch.provider_display_name !== 'string') ||
+    (dispatch.model_id !== undefined &&
+      dispatch.model_id !== null &&
+      typeof dispatch.model_id !== 'string') ||
     (dispatch.retryable !== undefined && typeof dispatch.retryable !== 'boolean') ||
     !isImageTaskStringArray(dispatch.intent_evidence) ||
     typeof dispatch.intent_confidence !== 'number' ||
@@ -2459,19 +2814,24 @@ function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDisp
     ) ||
     !Number.isInteger(dispatch.version) ||
     (dispatch.automatic_budget_seconds !== undefined &&
-      (!Number.isInteger(dispatch.automatic_budget_seconds) ||
+      (typeof dispatch.automatic_budget_seconds !== 'number' ||
+        !Number.isInteger(dispatch.automatic_budget_seconds) ||
         dispatch.automatic_budget_seconds < 0)) ||
     (dispatch.automatic_started_at !== undefined &&
-      (!Number.isInteger(dispatch.automatic_started_at) ||
+      (typeof dispatch.automatic_started_at !== 'number' ||
+        !Number.isInteger(dispatch.automatic_started_at) ||
         dispatch.automatic_started_at < 0)) ||
     (dispatch.automatic_deadline_at !== undefined &&
-      (!Number.isInteger(dispatch.automatic_deadline_at) ||
+      (typeof dispatch.automatic_deadline_at !== 'number' ||
+        !Number.isInteger(dispatch.automatic_deadline_at) ||
         dispatch.automatic_deadline_at < 0)) ||
     (dispatch.automatic_remaining_seconds !== undefined &&
-      (!Number.isInteger(dispatch.automatic_remaining_seconds) ||
+      (typeof dispatch.automatic_remaining_seconds !== 'number' ||
+        !Number.isInteger(dispatch.automatic_remaining_seconds) ||
         dispatch.automatic_remaining_seconds < 0)) ||
     (dispatch.operation_deadline_at !== undefined &&
-      (!Number.isInteger(dispatch.operation_deadline_at) ||
+      (typeof dispatch.operation_deadline_at !== 'number' ||
+        !Number.isInteger(dispatch.operation_deadline_at) ||
         dispatch.operation_deadline_at < 0)) ||
     typeof dispatch.created_at !== 'number' ||
     !Number.isFinite(dispatch.created_at) ||
@@ -3084,6 +3444,7 @@ export type GenericPrintSourceKind =
   | 'practice_question'
   | 'practice_answer'
   | 'weekly_practice_snapshot'
+  | 'grading_final_artifact'
 
 export interface PrepareGenericPrintJobReq {
   agent: string
@@ -3131,6 +3492,32 @@ export interface GenericPrintArtifactDTO {
   markdown: string
 }
 
+export interface PrepareGradingFinalArtifactOutputReq {
+  agent: string
+  final_artifact_id: string
+  final_artifact_digest: string
+  title: string
+}
+
+export interface PreparePrintableArtifactResp {
+  artifact: PrintableArtifactDTO
+  replayed?: boolean
+}
+
+export function k12PrepareGradingFinalArtifactOutput(
+  req: PrepareGradingFinalArtifactOutputReq,
+) {
+  if (
+    !req.agent.trim() ||
+    !req.final_artifact_id.trim() ||
+    !req.final_artifact_digest.trim() ||
+    !req.title.trim()
+  ) {
+    throw new Error('批改最终产物身份与标题不能为空')
+  }
+  return apiPost<PreparePrintableArtifactResp>(`${BASE}/print-artifacts`, req)
+}
+
 export function k12PrepareGenericPrintJob(req: PrepareGenericPrintJobReq) {
   if (
     !req.agent.trim() ||
@@ -3158,7 +3545,7 @@ export function k12PrepareArtifactPrintJob(req: PrepareArtifactPrintJobReq) {
 }
 
 export function k12GetPrintArtifactContent(agent: string, artifactId: string) {
-  return api<Blob>(`${BASE}/print-artifacts/${encodeURIComponent(artifactId)}/content`, {
+  return api<Blob, 'blob'>(`${BASE}/print-artifacts/${encodeURIComponent(artifactId)}/content`, {
     method: 'GET',
     query: { agent },
     responseType: 'blob',
@@ -3650,6 +4037,22 @@ export interface DeliveryBatchDTO {
 /** 将当前会话内已生成的辅导要点发送给该智能体绑定的全部有效私聊。 */
 export function k12SendTutoringTips(agent: string, content: string) {
   return apiPost<DeliveryBatchDTO>(`${BASE}/tutoring-tips/send`, { agent, content })
+}
+
+/** 仅按冻结的批改最终产物身份发送；客户端不能注入或重新渲染正文。 */
+export function k12SendGradingFinalArtifact(
+  agent: string,
+  finalArtifactId: string,
+  finalArtifactDigest: string,
+) {
+  if (!agent.trim() || !finalArtifactId.trim() || !finalArtifactDigest.trim()) {
+    throw new Error('批改最终产物身份不能为空')
+  }
+  return apiPost<DeliveryBatchDTO>(`${BASE}/tutoring-tips/send`, {
+    agent,
+    final_artifact_id: finalArtifactId,
+    final_artifact_digest: finalArtifactDigest,
+  })
 }
 
 /** 读取已经冻结目标快照的投递批次；不会重新枚举绑定，也不会触发发送。 */

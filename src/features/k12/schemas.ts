@@ -8,8 +8,8 @@
 import type { RecordSchema } from '@/contracts'
 
 /**
- * 错题本：5 态状态机（对齐后端 scenarios/k12/k12.go:27-33）：
- * new(新录入) → explained(已讲解) → retried(已重做) → mastered(已掌握) → archived(已归档)。
+ * 错题本复习 exact-state：
+ * scheduled → deferred_this_week / suppressed / mastered；restore 回 scheduled。
  * 字段名 1:1 对齐后端 mistakeDTO（question/knowledge_point/error_cause），reviewable（有到期队列）。
  * collection id = 后端 CollectionMistakes «错题本»（GET /api/k12/mistakes 固定路由，id 仅用于前端 registry keying）。
  */
@@ -33,17 +33,21 @@ export const MISTAKE_SCHEMA: RecordSchema = {
     { key: 'error_cause', labelKey: 'k12.mistakeFields.errorCause', type: 'string', role: 'meta' },
   ],
   states: [
-    { id: 'new', labelKey: 'k12.mistakeStatus.new', tone: 'todo' },
-    { id: 'explained', labelKey: 'k12.mistakeStatus.explained', tone: 'todo' },
-    { id: 'retried', labelKey: 'k12.mistakeStatus.retried', tone: 'done' },
+    { id: 'scheduled', labelKey: 'k12.records.scheduledReview', tone: 'todo' },
+    {
+      id: 'deferred_this_week',
+      labelKey: 'k12.records.deferredThisWeek',
+      tone: 'done',
+    },
+    { id: 'suppressed', labelKey: 'k12.records.suppressedReview', tone: 'na' },
     { id: 'mastered', labelKey: 'k12.mistakeStatus.mastered', tone: 'got' },
-    { id: 'archived', labelKey: 'k12.mistakeStatus.archived', tone: 'na' },
   ],
   transitions: [
-    { from: 'new', to: 'explained' },
-    { from: 'explained', to: 'retried' },
-    { from: 'retried', to: 'mastered' },
-    { from: 'mastered', to: 'archived' },
+    { from: 'scheduled', to: 'deferred_this_week' },
+    { from: 'scheduled', to: 'suppressed' },
+    { from: 'scheduled', to: 'mastered' },
+    { from: 'deferred_this_week', to: 'scheduled' },
+    { from: 'suppressed', to: 'scheduled' },
   ],
 }
 

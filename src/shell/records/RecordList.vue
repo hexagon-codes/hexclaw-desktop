@@ -19,6 +19,8 @@ const props = defineProps<{
   hideList?: boolean
   /** 场景层自行提供复合筛选时隐藏内建单维状态筛选。 */
   hideFilters?: boolean
+  /** 场景状态机拥有独立复习命令时，隐藏通用“已会”动作。 */
+  hideMasteryAction?: boolean
   /** 场景层视觉变体类名；通用记录本不解释其业务语义。 */
   reviewClass?: string
 }>()
@@ -149,7 +151,7 @@ const reviewItems = computed(() => {
              无条件渲染死按钮会点了无反应（BUG-20260712-#2 治本，schema 门控行内动作）。 -->
         <slot v-if="canPractice(item)" name="list-practice-action" :item="item" />
         <!-- UX-1：全部错题档案行也能「他会了」（未掌握/未归档时才显，幂等）。 -->
-        <button v-if="canMarkMastered(item)" class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
+        <button v-if="!hideMasteryAction && canMarkMastered(item)" class="rl-btn" @click="emit('action', { id: 'markMastered', record: item })">
           {{ t('records.markMastered') }}
         </button>
         <slot name="list-row-actions" :item="item" />

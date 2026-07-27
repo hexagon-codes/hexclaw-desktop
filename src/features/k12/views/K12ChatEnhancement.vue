@@ -17,7 +17,13 @@ import K12RecordsView from './K12RecordsView.vue'
 import K12InsightPanel from './K12InsightPanel.vue'
 import K12BackupModal from './K12BackupModal.vue'
 import RecognizeGuardPanel from './RecognizeGuardPanel.vue'
+import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import crabLogo from '@/assets/logo-crab.png'
+import { useToast } from '@/composables/useToast'
+import {
+  createFinalArtifactActionHandler,
+  type FinalArtifactActionIntent,
+} from '../final-artifact-action'
 import type { K12RecordsNavigation, K12RecordsTarget } from '../records-navigation'
 import type {
   ScenarioComposerAction,
@@ -97,6 +103,28 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const route = useRoute()
+const toast = useToast()
+const finalArtifactPrintController =
+  ref<InstanceType<typeof K12PersistentPrintController>>()
+const finalArtifactActionHandler = createFinalArtifactActionHandler({
+  agent: () => props.agentId,
+  openPrint: async (request) => {
+    if (!finalArtifactPrintController.value) {
+      throw new Error('打印控制器尚未就绪')
+    }
+    await finalArtifactPrintController.value.open(request)
+  },
+  browserPrint: async () => {
+    toast.error('当前环境没有可核验的系统打印边界')
+    return false
+  },
+})
+
+function runFinalArtifactAction(intent: FinalArtifactActionIntent) {
+  void finalArtifactActionHandler.run(intent).catch((cause) => {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  })
+}
 
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：顶栏三段 辅导｜学习档案｜学情（学情=一等 Tab）。
 const tab = ref<'chat' | 'records' | 'insights'>('chat')
@@ -453,11 +481,10 @@ watch(
               :source-message-id="task.sourceMessageId"
               :restore-dispatch-id="task.restoreDispatchId"
               :model-route="task.payload?.route"
-              :display-provider="task.payload?.route?.provider || modelRoute?.provider"
-              :display-model="task.payload?.route?.model || modelRoute?.model"
               :message-intent="task.payload?.contextText?.trim() || ''"
               @close="closeRecognize(task)"
               @retry="retryRecognizeAsNewAttempt(task)"
+              @final-artifact-action="runFinalArtifactAction"
               @content-updated="emit('contentUpdated')"
               @update:execution-state="emit('update:sessionExecution', $event)"
             />
@@ -620,6 +647,11 @@ watch(
       </div>
     </div>
   </Teleport>
+
+  <K12PersistentPrintController
+    ref="finalArtifactPrintController"
+    @error="toast.error($event.message)"
+  />
 
   <!-- 当前不存在辅导要点 shell 侧栏或锚点。 -->
 </template>

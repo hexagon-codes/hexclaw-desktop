@@ -5,7 +5,7 @@
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { BookOpen, Printer } from 'lucide-vue-next'
+import { Printer } from 'lucide-vue-next'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import { useToast } from '@/composables/useToast'
 import {
@@ -16,7 +16,6 @@ import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 import { printTutoringTips, tutoringTipsToMarkdown, tutoringTipsToText } from '../export'
 import type { PersistentPrintRequest } from '../persistent-print'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
-import { parseDocument } from '@/utils/file-parser'
 
 const props = defineProps<{
   /** 隔离键 = agents.name（与 recognize/grade 同键） */
@@ -100,102 +99,7 @@ function retryTutoringTips() {
   }
 }
 
-const groundingInput = ref<HTMLInputElement | null>(null)
-const groundingBusy = ref(false)
-let groundingGeneration = 0
-let groundingAbort: AbortController | null = null
-
-function cancelGroundingUpload() {
-  groundingGeneration++
-  groundingAbort?.abort()
-  groundingAbort = null
-  groundingBusy.value = false
-}
-
-watch(
-  () => [
-    props.agentId,
-    props.subject,
-    props.dispatchId,
-    props.sessionId,
-    props.generationLocked,
-  ],
-  cancelGroundingUpload,
-)
-onBeforeUnmount(() => {
-  cancelTutoringTips()
-  cancelGroundingUpload()
-})
-
-function openGroundingPicker() {
-  if (!groundingBusy.value && generationAllowed.value) groundingInput.value?.click()
-}
-
-async function onGroundingFile(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = '' // 同一文件修订后可再次选择。
-  if (!file || !generationAllowed.value) return
-
-  groundingAbort?.abort()
-  const controller = new AbortController()
-  groundingAbort = controller
-  const generation = ++groundingGeneration
-  const agentId = props.agentId
-  const subject = props.subject ?? ''
-  const dispatchId = props.dispatchId
-  const sessionId = props.sessionId ?? ''
-  groundingBusy.value = true
-  try {
-    const parsed = await parseDocument(file)
-    if (
-      generation !== groundingGeneration ||
-      controller.signal.aborted ||
-      props.agentId !== agentId ||
-      (props.subject ?? '') !== subject ||
-      props.dispatchId !== dispatchId ||
-      (props.sessionId ?? '') !== sessionId ||
-      props.generationLocked
-    )
-      return
-    if (!parsed.text.trim()) throw new Error('empty grounding document')
-    await store.addGrounding(
-      agentId,
-      subject,
-      parsed.fileName || file.name,
-      parsed.text,
-      controller.signal,
-    )
-    if (
-      generation !== groundingGeneration ||
-      controller.signal.aborted ||
-      props.agentId !== agentId ||
-      (props.subject ?? '') !== subject ||
-      props.dispatchId !== dispatchId ||
-      (props.sessionId ?? '') !== sessionId ||
-      props.generationLocked
-    )
-      return
-    await store.loadTutoringTips(agentId, dispatchId, controller.signal)
-    if (
-      generation === groundingGeneration &&
-      props.agentId === agentId &&
-      (props.subject ?? '') === subject &&
-      props.dispatchId === dispatchId &&
-      (props.sessionId ?? '') === sessionId &&
-      !props.generationLocked
-    )
-      toast.success(t('k12.tutoringTips.groundingUploaded'))
-  } catch {
-    if (!controller.signal.aborted && generation === groundingGeneration)
-      toast.error(t('k12.tutoringTips.groundingFailed'))
-  } finally {
-    if (generation === groundingGeneration) {
-      groundingBusy.value = false
-      groundingAbort = null
-    }
-  }
-}
+onBeforeUnmount(cancelTutoringTips)
 
 const tutoringTipsMeta = () => ({ title: t('k12.tutoringTips.title'), gradeLabel: props.grade })
 
@@ -251,24 +155,6 @@ async function doSendPhone() {
         >{{ store.tutoringTips.knowledge_points[0] }}</span
       >
       <div class="tutoring-tips__actions">
-        <input
-          ref="groundingInput"
-          class="grounding-file"
-          data-testid="tutoring-tips-grounding-file"
-          type="file"
-          accept=".pdf,.doc,.docx,.pptx,.txt,.md,.csv,.xlsx,.xls,.json"
-          @change="onGroundingFile"
-        />
-        <button
-          class="icbtn"
-          :disabled="groundingBusy || !generationAllowed"
-          :title="t('k12.tutoringTips.uploadGrounding')"
-          data-testid="tutoring-tips-grounding-open"
-          @click="openGroundingPicker"
-        >
-          <span v-if="groundingBusy">…</span>
-          <BookOpen v-else :size="17" aria-hidden="true" />
-        </button>
         <button
           class="icbtn tutoring-tips__send"
           :title="t('k12.tutoringTips.sendPhone')"
@@ -408,9 +294,6 @@ async function doSendPhone() {
   min-width: 76px;
   padding: 0 10px;
   white-space: nowrap;
-}
-.grounding-file {
-  display: none;
 }
 .tutoring-tips__body {
   padding: 13px 15px;

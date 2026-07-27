@@ -9,14 +9,16 @@
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { nanoid } from 'nanoid'
-import { registerAgent, updateAgent, unregisterAgent } from '@/api/agents'
+import { registerAgent, unregisterAgent } from '@/api/agents'
 import {
-  k12GetCurriculumCatalog,
   k12GetCurriculumProgress,
+  k12GetTextbookBindingOptions,
   k12GetWeeklyPracticeSettings,
   k12UpdateProfileBundle,
-  type CurriculumCatalogDTO,
   type CurriculumProgressDTO,
+  type TextbookBindingOptionDTO,
+  type TextbookManifestCatalogDTO,
+  type TextbookManifestState,
   type WeeklyPracticeSettingsDTO,
 } from '@/api/k12'
 import { useK12Store } from '../store'
@@ -36,7 +38,7 @@ import {
   type Semester,
 } from '../curriculum'
 import { K12_SCENARIO_ID } from '../descriptor'
-import { K12_INFRA_SKILLS, defaultBoundSkills } from '../manifest'
+import { K12_INFRA_SKILLS, K12_TEMPLATE_SKILLS, defaultBoundSkills } from '../manifest'
 
 /** 建档/改档同构：传 agent 即进「改档」模式（预填 + updateAgent），否则「建档」（registerAgent） */
 const props = defineProps<{
@@ -78,7 +80,7 @@ const gradeLevel = ref<PrimaryGrade>(initialGradeTerm.grade)
 const semester = ref<Semester>(initialGradeTerm.semester)
 // UI 二级联动只拆展示/选择；持久化与所有下游讲题边界继续使用唯一 grade_term 契约。
 const grade = computed(() => joinGradeTerm(gradeLevel.value, semester.value))
-const TEXTBOOK_SUBJECTS = [
+const COMPAT_TEXTBOOK_SUBJECTS = [
   {
     key: 'math',
     labelKey: 'k12.profile.subjects.math',
@@ -116,7 +118,8 @@ const TEXTBOOK_SUBJECTS = [
     options: ['人美版', '湘美版', '岭南版'],
   },
 ] as const
-type TextbookSubject = (typeof TEXTBOOK_SUBJECTS)[number]['key']
+const VISIBLE_TEXTBOOK_SUBJECTS = [COMPAT_TEXTBOOK_SUBJECTS[0]] as const
+type TextbookSubject = (typeof COMPAT_TEXTBOOK_SUBJECTS)[number]['key']
 const BUILTIN_SKILL_KEYS = [
   'k12.profile.builtinSkills.photo',
   'k12.profile.builtinSkills.progressive',
@@ -124,11 +127,34 @@ const BUILTIN_SKILL_KEYS = [
   'k12.profile.builtinSkills.works',
   'k12.profile.builtinSkills.subjects',
 ] as const
+function initialMountedSkills(): Set<string> {
+  const skills = new Set(
+    props.agent?.skills?.length ? props.agent.skills : defaultBoundSkills(),
+  )
+  for (const skill of K12_TEMPLATE_SKILLS) {
+    if (skill.tier === 'P0') skills.add(skill.name)
+  }
+  for (const skill of K12_INFRA_SKILLS) skills.add(skill)
+  return skills
+}
+const mountedSkills = ref(initialMountedSkills())
+const mountedSkillCount = computed(
+  () => K12_TEMPLATE_SKILLS.filter((skill) => mountedSkills.value.has(skill.name)).length,
+)
+function toggleMountedSkill(name: string) {
+  const skill = K12_TEMPLATE_SKILLS.find((candidate) => candidate.name === name)
+  if (!skill || skill.tier === 'P0') return
+  const next = new Set(mountedSkills.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  mountedSkills.value = next
+  profileBundleKey.value = ''
+}
 
 const textbookMetaKey = (subject: TextbookSubject) => `k12.textbook_edition.${subject}`
 const textbookEditions = reactive<Record<TextbookSubject, string>>(
   Object.fromEntries(
-    TEXTBOOK_SUBJECTS.map((subject) => {
+    COMPAT_TEXTBOOK_SUBJECTS.map((subject) => {
       const explicit = props.agent?.metadata?.[textbookMetaKey(subject.key)]
       // 现有 /profile 仅支持单教材字段；它只作为数学兼容 fallback，其他学科绝不静默套用数学版本。
       const legacyMath =
@@ -141,8 +167,13 @@ const textbook = computed(() => textbookEditions.math)
 const submitting = ref(false)
 const error = ref('')
 const mathProgressSection = ref<HTMLElement | null>(null)
-const curriculumCatalog = ref<CurriculumCatalogDTO | null>(null)
+const curriculumCatalog = ref<TextbookManifestCatalogDTO | null>(null)
 const curriculumProgress = ref<CurriculumProgressDTO | null>(null)
+const textbookBindingOptions = ref<TextbookBindingOptionDTO[]>([])
+const textbookManifestID = ref('')
+const effectiveTextbookManifestID = computed(
+  () => textbookManifestID.value || curriculumProgress.value?.textbook_manifest_id || '',
+)
 const curriculumLoading = ref(false)
 const curriculumReady = ref(!isEdit.value)
 const curriculumError = ref('')
@@ -157,6 +188,7 @@ const weeklySettings = ref<WeeklyPracticeSettingsDTO>({
   timezone: 'Asia/Shanghai',
   due_review_enabled: true,
   textbook_consolidation_enabled: false,
+  textbook_consolidation_tier: 'standard',
   arithmetic_warmup_enabled: false,
   arithmetic_minutes: 2,
   created_at: '',
@@ -176,6 +208,24 @@ const unitOptions = computed(() =>
     label: unit.title,
   })),
 )
+const manifestStateLabels: Record<TextbookManifestState, string> = {
+  waiting_ingest: '等待摄取',
+  extracting: '正在识别',
+  ready_for_confirmation: '可确认',
+  failed_retryable: '识别失败',
+  failed_terminal: '默认模型未配置',
+  stale: '源已失效',
+}
+const textbookManifestOptions = computed(() => {
+  if (!textbookBindingOptions.value.length) {
+    return [{ value: '', label: '未上传', disabled: true }]
+  }
+  return textbookBindingOptions.value.map((option) => ({
+    value: option.manifest_id,
+    label: `${option.document_title} · ${manifestStateLabels[option.state]}`,
+    disabled: option.state !== 'ready_for_confirmation',
+  }))
+})
 const lessonOptions = computed(() => {
   const lessons =
     curriculumCatalog.value?.units.find((unit) => unit.unit_id === unitID.value)?.lessons ?? []
@@ -200,28 +250,22 @@ function newCommandKey(prefix: string): string {
   return `desktop-${prefix}:${props.agent?.name ?? 'new'}:${nonce}`
 }
 
-async function loadCurriculumCatalog() {
-  if (!props.agent?.name || !textbook.value || !volume.value) return
-  curriculumLoading.value = true
-  curriculumError.value = ''
-  try {
-    curriculumCatalog.value = await k12GetCurriculumCatalog(
-      props.agent.name,
-      textbook.value,
-      volume.value,
-    )
-    if (
-      unitID.value &&
-      !curriculumCatalog.value.units.some((unit) => unit.unit_id === unitID.value)
-    ) {
-      unitID.value = ''
-      lessonID.value = ''
-    }
-  } catch (cause) {
-    curriculumCatalog.value = null
-    curriculumError.value = cause instanceof Error ? cause.message : String(cause)
-  } finally {
-    curriculumLoading.value = false
+function projectSelectedManifest() {
+  const selected = textbookBindingOptions.value.find(
+    (option) =>
+      option.manifest_id === textbookManifestID.value &&
+      option.state === 'ready_for_confirmation',
+  )
+  curriculumCatalog.value = selected?.catalog ?? null
+  if (!selected?.catalog) return
+  textbookEditions.math = selected.catalog.textbook_edition
+  volume.value = selected.catalog.volume
+  if (
+    unitID.value &&
+    !selected.catalog.units.some((unit) => unit.unit_id === unitID.value)
+  ) {
+    unitID.value = ''
+    lessonID.value = ''
   }
 }
 
@@ -231,12 +275,14 @@ async function loadCurriculumProjection() {
   curriculumReady.value = false
   curriculumError.value = ''
   try {
-    const [progressResp, settingsResp] = await Promise.all([
+    const [progressResp, settingsResp, bindingResp] = await Promise.all([
       k12GetCurriculumProgress(props.agent.name),
       k12GetWeeklyPracticeSettings(props.agent.name),
+      k12GetTextbookBindingOptions(props.agent.name),
     ])
     curriculumProgress.value = progressResp.progress
     weeklySettings.value = settingsResp
+    textbookBindingOptions.value = bindingResp.items
     if (progressResp.progress) {
       textbookEditions.math = progressResp.progress.textbook_edition
       volume.value = progressResp.progress.volume
@@ -245,10 +291,18 @@ async function loadCurriculumProjection() {
       pageFrom.value = progressResp.progress.requested_page_from ?? ''
       pageTo.value = progressResp.progress.requested_page_to ?? ''
     }
-    if (props.enableTextbookConsolidation) {
-      weeklySettings.value.textbook_consolidation_enabled = true
-    }
-    await loadCurriculumCatalog()
+    const activeManifest = progressResp.progress?.textbook_manifest_id
+    const selectableActive = textbookBindingOptions.value.some(
+      (option) =>
+        option.manifest_id === activeManifest &&
+        option.state === 'ready_for_confirmation',
+    )
+    textbookManifestID.value = selectableActive
+      ? activeManifest!
+      : (textbookBindingOptions.value.find(
+          (option) => option.state === 'ready_for_confirmation',
+        )?.manifest_id ?? '')
+    projectSelectedManifest()
     curriculumReady.value = true
     if (props.focusMathProgress) {
       await nextTick()
@@ -266,7 +320,10 @@ watch([gradeLevel, semester], () => {
 })
 watch([textbook, volume], () => {
   profileBundleKey.value = ''
-  if (isEdit.value && curriculumReady.value) void loadCurriculumCatalog()
+})
+watch(textbookManifestID, () => {
+  profileBundleKey.value = ''
+  projectSelectedManifest()
 })
 watch(unitID, () => {
   profileBundleKey.value = ''
@@ -286,6 +343,7 @@ watch(
     pageTo,
     () => weeklySettings.value.timezone,
     () => weeklySettings.value.textbook_consolidation_enabled,
+    () => weeklySettings.value.textbook_consolidation_tier,
     () => weeklySettings.value.arithmetic_warmup_enabled,
     () => weeklySettings.value.arithmetic_minutes,
   ],
@@ -319,15 +377,17 @@ async function removeProfile() {
 
 /** 原型只展示自带能力，不提供技术 skill 清单。新建仍绑定模板默认集；编辑不改既有 skills。 */
 function boundSkills(): string[] {
-  if (props.agent?.skills?.length) return [...props.agent.skills]
-  const s = new Set(defaultBoundSkills())
-  for (const infra of K12_INFRA_SKILLS) s.add(infra)
-  return [...s]
+  const skills = new Set(mountedSkills.value)
+  for (const skill of K12_TEMPLATE_SKILLS) {
+    if (skill.tier === 'P0') skills.add(skill.name)
+  }
+  for (const infra of K12_INFRA_SKILLS) skills.add(infra)
+  return [...skills]
 }
 
 function metadataWithSubjectTextbooks(base: Record<string, string> = {}): Record<string, string> {
   const metadata = { ...base }
-  for (const subject of TEXTBOOK_SUBJECTS) {
+  for (const subject of COMPAT_TEXTBOOK_SUBJECTS) {
     metadata[textbookMetaKey(subject.key)] = textbookEditions[subject.key]
   }
   // 创建事务同时初始化 canonical 六科键；legacy 标量仅为数学的派生读取镜像。
@@ -361,7 +421,7 @@ const semesterOptions = computed(() =>
     label: t(`k12.profile.semesters.${value === '上' ? 'first' : 'second'}`),
   })),
 )
-function textbookOptions(subject: (typeof TEXTBOOK_SUBJECTS)[number]) {
+function textbookOptions(subject: (typeof COMPAT_TEXTBOOK_SUBJECTS)[number]) {
   return subject.options.map((edition) => ({ value: edition, label: edition }))
 }
 
@@ -390,6 +450,21 @@ const modelOptions = computed(() => [
     .filter((m) => m.providerKey === provider.value)
     .map((m) => ({ value: m.modelId, label: m.modelName })),
 ])
+const providerDisplayName = computed(() => {
+  if (!provider.value) return t('agents.useGlobalDefault')
+  return (
+    settingsStore.availableModels.find((entry) => entry.providerKey === provider.value)
+      ?.providerName ?? provider.value
+  )
+})
+const modelDisplayName = computed(() => {
+  if (!model.value) return t('agents.useGlobalDefault')
+  return (
+    settingsStore.availableModels.find(
+      (entry) => entry.providerKey === provider.value && entry.modelId === model.value,
+    )?.modelName ?? model.value
+  )
+})
 
 // 辅导助手人设(SOUL)：只挂 skill 不设 system_prompt → 身份回落默认助理「小蟹」（BUG-20260708 F2，真机
 // qwen3.5:9b 取证）。据档案派生身份 + 讲题边界，随年级/教材跟随；建档/改档均回写，使 tutor 自我认同为
@@ -398,14 +473,9 @@ const legacyTutorSoul = computed(() => {
   const child = childName.value.trim() || t('k12.profile.namePlaceholder')
   return `你是${child}的${grade.value}辅导助手，帮家长辅导孩子——像老师一样有耐心、懂教学法，但教的是家长怎么教，不是通用助手。被问到身份时，明确回答你是「${child}的辅导助手」。始终按${textbook.value} · ${grade.value}的教材范围讲题，绝不超纲用初中/高中说法；用渐进提示引导孩子自己想，不直接报答案；先肯定孩子做对的部分再纠错，多鼓励。家长找你要辅导要点、出题、看学情时照常配合。`
 })
-const subjectTextbookScope = computed(() =>
-  TEXTBOOK_SUBJECTS.map(
-    (subject) => `${t(subject.labelKey)}：${textbookEditions[subject.key]}`,
-  ).join('、'),
-)
 const tutorSoul = computed(() => {
   const child = childName.value.trim() || t('k12.profile.namePlaceholder')
-  return `你是${child}的${grade.value}辅导助手，帮家长辅导孩子——像老师一样有耐心、懂教学法，但教的是家长怎么教，不是通用助手。被问到身份时，明确回答你是「${child}的辅导助手」。始终按${grade.value}各学科对应教材范围讲题（${subjectTextbookScope.value}），绝不超纲用初中/高中说法；用渐进提示引导孩子自己想，不直接报答案；先肯定孩子做对的部分再纠错，多鼓励。家长找你要辅导要点、出题、看学情时照常配合。`
+  return `你是${child}的${grade.value}辅导助手，帮家长辅导孩子——像老师一样有耐心、懂教学法，但教的是家长怎么教，不是通用助手。被问到身份时，明确回答你是「${child}的辅导助手」。数学讲解始终按${textbook.value} · ${grade.value}的教材范围，绝不超纲用初中/高中说法；用渐进提示引导孩子自己想，不直接报答案；先肯定孩子做对的部分再纠错，多鼓励。家长找你要辅导要点、出题、看学情时照常配合。`
 })
 
 // 「辅导语气」可编辑人设（D3·原型建档设计有此编辑框，app 曾漏实现→tutor 无人设回落小蟹）：
@@ -457,8 +527,12 @@ async function submit() {
   error.value = ''
   try {
     if (isEdit.value && props.agent) {
-      if (!curriculumReady.value || !curriculumCatalog.value || !unitID.value) {
-        throw new Error(curriculumError.value || '请先完成数学教材与当前单元设置')
+      if (
+        !curriculumReady.value ||
+        !effectiveTextbookManifestID.value ||
+        !unitID.value
+      ) {
+        throw new Error(curriculumError.value || '请先关联可确认的数学教材并设置当前单元')
       }
       if (!profileBundleKey.value) profileBundleKey.value = newCommandKey('profile-bundle')
       await k12UpdateProfileBundle({
@@ -469,6 +543,14 @@ async function submit() {
         ),
         expected_progress_revision: curriculumProgress.value?.revision ?? 0,
         expected_settings_revision: weeklySettings.value.revision,
+        agent_config: {
+          display_name: displayName.value,
+          description: props.agent.description ?? cardDescription.value,
+          system_prompt: soulText.value,
+          provider: provider.value,
+          model: model.value,
+          skills: boundSkills(),
+        },
         profile: {
           child_name: childName.value.trim(),
           grade_term: grade.value,
@@ -476,7 +558,7 @@ async function submit() {
         },
         curriculum_progress: {
           subject: 'math',
-          textbook_binding_id: curriculumCatalog.value.textbook_binding_id,
+          textbook_manifest_id: effectiveTextbookManifestID.value,
           volume: volume.value,
           unit_id: unitID.value,
           ...(lessonID.value ? { lesson_id: lessonID.value } : {}),
@@ -488,17 +570,11 @@ async function submit() {
           timezone: weeklySettings.value.timezone,
           textbook_consolidation_enabled:
             weeklySettings.value.textbook_consolidation_enabled,
+          textbook_consolidation_tier:
+            weeklySettings.value.textbook_consolidation_tier,
           arithmetic_warmup_enabled: weeklySettings.value.arithmetic_warmup_enabled,
           arithmetic_minutes: weeklySettings.value.arithmetic_minutes,
         },
-      })
-      // Agent 基础展示/模型字段不承载教材事实；bundle 失败时不会产生任何 Agent 写入。
-      await updateAgent(props.agent.name, {
-        display_name: displayName.value,
-        description: cardDescription.value,
-        system_prompt: soulText.value, // 改档回写人设（家长可编辑的「辅导语气」，未改则随档案派生，F2/D3）
-        provider: provider.value, // 模型高级折叠（BUG-20260711-H）：''=跟随全局默认
-        model: model.value,
       })
       await refreshAgentsAfterPersistence()
       // 档案保存是唯一作用域明确的存量修复触发点：只补该 agent 缺失的默认任务。
@@ -622,7 +698,7 @@ async function submit() {
             <span>{{ t('k12.profile.textbookBySubject') }}</span>
             <div class="k12pf__textbook-grid">
               <div
-                v-for="subject in TEXTBOOK_SUBJECTS"
+                v-for="subject in VISIBLE_TEXTBOOK_SUBJECTS"
                 :key="subject.key"
                 class="k12pf__textbook-row"
                 :class="{ 'k12pf__textbook-row--math': subject.key === 'math' }"
@@ -654,6 +730,19 @@ async function submit() {
                   </div>
                   <template v-else>
                     <div class="k12pf__curriculum-grid">
+                      <div class="k12pf__field k12pf__field--manifest">
+                        <span>关联教材文件</span>
+                        <HcSelect
+                          v-model="textbookManifestID"
+                          :options="textbookManifestOptions"
+                          placeholder="未上传"
+                          aria-label="关联教材文件"
+                          data-testid="k12-textbook-manifest"
+                        />
+                        <small v-if="!textbookBindingOptions.length">
+                          关联教材后可生成教材同步练习
+                        </small>
+                      </div>
                       <div class="k12pf__field">
                         <span>册次</span>
                         <HcSelect
@@ -667,7 +756,11 @@ async function submit() {
                         <HcSelect
                           v-model="unitID"
                           :options="unitOptions"
-                          data-testid="k12-progress-unit"
+                          class="k12pf__current-unit-value"
+                          :aria-label="`当前单元：${
+                            unitOptions.find((option) => option.value === unitID)?.label ?? '未选择'
+                          }`"
+                          data-testid="k12-current-unit-value"
                         />
                       </div>
                       <div class="k12pf__field">
@@ -760,7 +853,7 @@ async function submit() {
           <p v-if="isEdit" class="k12pf__intro">{{ t('k12.profile.editNote') }}</p>
 
           <!-- 顶层：能力（人话·只读·安心感），不是让家长勾选的技能清单 -->
-          <div v-if="!isEdit" class="k12pf__field">
+          <div class="k12pf__field" data-testid="k12-profile-capabilities">
             <span>{{ t('k12.profile.skillsLabel') }}</span>
             <div class="k12pf__skillchips">
               <span v-for="key in BUILTIN_SKILL_KEYS" :key="key" class="k12pf__skillchip">{{
@@ -768,6 +861,28 @@ async function submit() {
               }}</span>
             </div>
           </div>
+
+          <details class="k12pf__adv" data-testid="k12-profile-mounted-skills">
+            <summary>挂载 Skill · 已挂载 {{ mountedSkillCount }} 个</summary>
+            <div class="k12pf__skillchips k12pf__skillchips--editable">
+              <label
+                v-for="skill in K12_TEMPLATE_SKILLS"
+                :key="skill.name"
+                class="k12pf__skillchip k12pf__skillchip--editable"
+                :class="{ 'k12pf__skillchip--required': skill.tier === 'P0' }"
+              >
+                <input
+                  type="checkbox"
+                  :checked="mountedSkills.has(skill.name)"
+                  :disabled="skill.tier === 'P0'"
+                  @change="toggleMountedSkill(skill.name)"
+                />
+                <span>{{ skill.icon }} {{ t(skill.labelKey) }}</span>
+                <small v-if="skill.tier === 'P0'">必需</small>
+              </label>
+            </div>
+            <p class="k12pf__hint">必需 Skill 随 K12 模板锁定；可选 Skill 保存到当前辅导助手。</p>
+          </details>
 
           <!-- 辅导语气(人设)：预填据档案派生的人设，家长可微调（D3·原型建档有此编辑框，app 曾漏→tutor 回落小蟹）。
              未改则随年级/教材跟随；改了则保留自定义。回写 agent.system_prompt。 -->
@@ -793,7 +908,7 @@ async function submit() {
              极客/多 Provider 家庭可为辅导实例单独指定（服务商→模型级联，与通用智能体编辑同通道）。 -->
           <details class="k12pf__adv" data-testid="k12pf-model">
             <summary>
-              {{ t('k12.profile.modelAdvanced', '模型 · 默认已配好强推理模型，可不管') }}
+              模型 · {{ providerDisplayName }} · {{ modelDisplayName }}
             </summary>
             <div class="k12pf__row">
               <div class="k12pf__field">
@@ -832,7 +947,13 @@ async function submit() {
             <button class="k12pf__btn" @click="emit('close')">{{ t('k12.profile.cancel') }}</button>
             <button
               class="k12pf__btn k12pf__btn--primary"
-              :disabled="submitting || curriculumLoading || !curriculumReady || !unitID"
+              :disabled="
+                submitting ||
+                curriculumLoading ||
+                !curriculumReady ||
+                !effectiveTextbookManifestID ||
+                !unitID
+              "
               @click="submit"
             >
               {{ t('k12.profile.save') }}
@@ -889,8 +1010,8 @@ async function submit() {
   -webkit-backdrop-filter: blur(3px) saturate(120%);
 }
 .k12pf {
-  width: 478px;
-  max-width: 92vw;
+  width: min(560px, calc(100vw - 40px));
+  max-width: 560px;
   background: var(--hc-bg-elevated);
   border: 0.5px solid var(--hc-border);
   border-radius: 16px;
@@ -942,6 +1063,7 @@ async function submit() {
   flex-direction: column;
   gap: 6px;
   flex: 1;
+  min-width: 0;
 }
 .k12pf__field > span {
   font-size: 13px;
@@ -1019,6 +1141,7 @@ async function submit() {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+  min-width: 0;
 }
 .k12pf__field--pages {
   grid-column: 1 / -1;
@@ -1102,6 +1225,22 @@ async function submit() {
   padding: 5px 8px;
   font-size: 12px;
   color: var(--hc-text-secondary);
+}
+.k12pf__skillchips--editable {
+  padding: 6px 8px 8px;
+}
+.k12pf__skillchip--editable {
+  cursor: pointer;
+}
+.k12pf__skillchip--editable > input {
+  margin: 0;
+}
+.k12pf__skillchip--editable > small {
+  color: var(--hc-text-muted);
+  font-size: 10px;
+}
+.k12pf__skillchip--required {
+  cursor: default;
 }
 .k12pf__adv {
   border: 0.5px solid var(--hc-border);

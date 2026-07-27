@@ -19,12 +19,12 @@ export type PrimaryGrade = (typeof PRIMARY_GRADES)[number]
 // Roadmap-only options for the shared HcSelect. Keeping them outside PRIMARY_GRADES
 // guarantees that unsupported grades cannot enter the persisted grade_term contract.
 export const FUTURE_GRADE_OPTIONS = [
-  { value: 'future-junior-1', label: '初一 · 暂未开放', disabled: true },
-  { value: 'future-junior-2', label: '初二 · 暂未开放', disabled: true },
-  { value: 'future-junior-3', label: '初三 · 暂未开放', disabled: true },
-  { value: 'future-senior-1', label: '高一 · 暂未开放', disabled: true },
-  { value: 'future-senior-2', label: '高二 · 暂未开放', disabled: true },
-  { value: 'future-senior-3', label: '高三 · 暂未开放', disabled: true },
+  { value: 'future-junior-1', label: '初一（暂未开放）', disabled: true },
+  { value: 'future-junior-2', label: '初二（暂未开放）', disabled: true },
+  { value: 'future-junior-3', label: '初三（暂未开放）', disabled: true },
+  { value: 'future-senior-1', label: '高一（暂未开放）', disabled: true },
+  { value: 'future-senior-2', label: '高二（暂未开放）', disabled: true },
+  { value: 'future-senior-3', label: '高三（暂未开放）', disabled: true },
 ] as const
 
 export const SEMESTERS = ['上', '下'] as const

@@ -14,10 +14,9 @@ import { ref, computed, onBeforeUnmount, onMounted, watch } from 'vue'
 import { nanoid } from 'nanoid'
 import { useI18n } from 'vue-i18n'
 import { useK12Store, type ImageTaskView } from '../store'
-import { useSettingsStore } from '@/stores/settings'
-import { resolveProviderDisplayName } from '@/utils/provider-display-name'
 import { formatTime } from '@/utils/time'
 import MessageActions from '@/components/chat/MessageActions.vue'
+import MessageFooter from '@/components/chat/MessageFooter.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
@@ -35,6 +34,7 @@ import {
   k12GetImageTask,
   k12SubmitImageTaskProblemSourceAction,
 } from '@/api/k12'
+import type { GradingFinalArtifactDTO } from '@/api/k12'
 import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import { extractBriefFinalAnswer } from '../graded-photo'
 import { gradeToResult, gradeToVerify } from '../mappers'
@@ -66,7 +66,9 @@ import type { ScenarioImageModelRoute } from '@/shell/scenario/registry'
 const props = defineProps<{
   agentId: string
   agentDisplayName?: string
+  /** Legacy caller compatibility only; footer rendering never reads this mutable value. */
   displayProvider?: string
+  /** Legacy caller compatibility only; footer rendering never reads this mutable value. */
   displayModel?: string
   grade?: string
   textbook?: string
@@ -115,7 +117,6 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const store = useK12Store()
-const settingsStore = useSettingsStore()
 // Shell 正常路径传入与持久消息同源的 request_id；独立/兼容挂载也只生成一次请求身份，
 // 绝不退回“同图同 key”的内容哈希。
 const generatedRequestId = nanoid(12)
@@ -182,7 +183,9 @@ const isImageData = computed(() => imageB64.value.trim().startsWith('data:image'
 const rows = ref<GuardRow[]>([])
 const problemProgressSlots = ref<ImageTaskProblemProgressDTO[]>([])
 const taskCoverage = ref<ImageTaskCoverageDTO | null>(null)
-const finalArtifact = ref<Record<string, unknown> | null>(null)
+const finalArtifact = ref<GradingFinalArtifactDTO | null>(null)
+const frozenProviderDisplayName = ref('')
+const frozenModelID = ref('')
 const currentStructureVersion = ref(0)
 const pendingSourceProblemIds = ref(new Set<string>())
 const sourceActionIdempotencyKeys = new Map<string, string>()
@@ -301,15 +304,8 @@ const taskShellTitle = computed(() => {
   if (currentTaskIntent.value === 'artwork') return '美术作品'
   return '图片任务'
 })
-const taskProviderDisplayName = computed(() =>
-  resolveProviderDisplayName(
-    props.displayProvider || props.modelRoute?.provider,
-    settingsStore.config?.llm.providers ?? [],
-  ),
-)
-const taskModelDisplayName = computed(
-  () => props.displayModel?.trim() || props.modelRoute?.model?.trim() || '',
-)
+const taskProviderDisplayName = computed(() => frozenProviderDisplayName.value)
+const taskModelDisplayName = computed(() => frozenModelID.value)
 const taskTimeDisplay = computed(() => {
   if (!taskCreatedAt.value) return ''
   const timestamp =
@@ -339,8 +335,12 @@ const isWithSkips = computed(() => taskCoverage.value?.state === 'with_skips')
 const skippedProblems = computed(() =>
   problemProgressSlots.value.filter(problemIsSkipped),
 )
+const finalArtifactID = computed(() => {
+  const artifactID = finalArtifact.value?.artifact_id
+  return typeof artifactID === 'string' ? artifactID.trim() : ''
+})
 const finalArtifactDigest = computed(() => {
-  const digest = finalArtifact.value?.digest
+  const digest = finalArtifact.value?.artifact_digest
   return typeof digest === 'string' ? digest.trim() : ''
 })
 const finalArtifactTitle = computed(() => {
@@ -885,6 +885,8 @@ function projectImageTaskView(view: ImageTaskView) {
 function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
   currentDispatchId.value = dispatch.dispatch_id
   currentDispatchVersion.value = dispatch.version
+  frozenProviderDisplayName.value = dispatch.provider_display_name?.trim() ?? ''
+  frozenModelID.value = dispatch.model_id?.trim() ?? ''
   taskCreatedAt.value = dispatch.created_at
   projectRuntimeTiming(dispatch)
   currentTaskIntent.value = dispatch.task_intent
@@ -1991,9 +1993,10 @@ async function coldStart() {
     </div>
 
     <section
-      v-if="finalArtifact && finalArtifactDigest"
+      v-if="finalArtifact && finalArtifactID && finalArtifactDigest"
       class="rec-final-artifact"
       data-testid="image-task-final-artifact"
+      :data-artifact-id="finalArtifactID"
       :data-artifact-digest="finalArtifactDigest"
       aria-label="批改最终结果"
     >
@@ -2017,7 +2020,9 @@ async function coldStart() {
         本次有 {{ taskCoverage?.skipped ?? 0 }} 题跳过，未生成完整辅导要点。
       </p>
       <FinalArtifactActions
+        :artifact-id="finalArtifactID"
         :artifact-digest="finalArtifactDigest"
+        :artifact-title="finalArtifactTitle"
         @intent="emit('finalArtifactAction', $event)"
       />
     </section>
@@ -2436,21 +2441,25 @@ async function coldStart() {
       :textbook="activeTextbook"
       :knowledge-points="allKnowledgePoints"
     />
-    <footer
+    <MessageFooter
       v-if="showTaskFooter"
       class="rec-panel__footer msg-footer"
       data-testid="task-shell-footer"
     >
       <div class="rec-panel__metadata msg-meta" data-testid="task-shell-metadata">
-        <span>{{ taskTimeDisplay }}</span>
-        <span>·</span>
-        <span>{{ taskProviderDisplayName }}</span>
-        <span>·</span>
-        <span>{{ taskModelDisplayName }}</span>
-        <span>·</span>
-        <span>{{ agentDisplayName }}</span>
-        <span v-if="grade">·</span>
-        <span v-if="grade">{{ grade }}</span>
+        <template
+          v-for="(part, index) in [
+            taskTimeDisplay,
+            taskProviderDisplayName,
+            taskModelDisplayName,
+            agentDisplayName,
+            grade,
+          ].filter(Boolean)"
+          :key="`${index}:${part}`"
+        >
+          <span v-if="index">·</span>
+          <span>{{ part }}</span>
+        </template>
       </div>
       <MessageActions
         role="assistant"
@@ -2458,7 +2467,7 @@ async function coldStart() {
         :show-retry="showTaskRetry"
         @retry="retryRecognitionStage"
       />
-    </footer>
+    </MessageFooter>
   </div>
 </template>
 

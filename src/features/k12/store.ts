@@ -9,10 +9,9 @@ import {
   k12ReviewQueue,
   k12MarkMastered,
   k12DeleteMistake,
-  k12ArchiveMistake,
-  k12RestoreMistake,
+  k12SuppressMistake,
+  k12RestoreMistakeReview,
   k12TutoringTips,
-  k12AddGrounding,
   k12Grade,
   k12RecordMistake,
   k12Solve,
@@ -225,7 +224,7 @@ export const useK12Store = defineStore('k12', () => {
     }
   }
 
-  function mistakeCommandKey(action: 'archive' | 'restore', agent: string, recordId: string) {
+  function mistakeCommandKey(action: 'suppress' | 'restore', agent: string, recordId: string) {
     const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
     return `desktop-mistake-${action}:${agent}:${recordId}:${random}`
   }
@@ -235,36 +234,41 @@ export const useK12Store = defineStore('k12', () => {
     return status == null || status >= 500 || status === 408 || status === 425 || status === 429
   }
 
-  /** CAS 归档命令；调用层在确认当前孩子未切换后刷新两份服务端投影。 */
-  async function archiveMistake(agent: string, recordId: string, version: number) {
-    const key = mistakeCommandKey('archive', agent, recordId)
+  /** CAS 长期排除命令；不产生掌握证据。 */
+  async function suppressMistake(agent: string, recordId: string, version: number) {
+    const key = mistakeCommandKey('suppress', agent, recordId)
     try {
-      const archived = await k12ArchiveMistake(agent, recordId, version, key)
+      const archived = await k12SuppressMistake(agent, recordId, version, key)
       replaceMistakeProjection(agent, archived)
       return archived
     } catch (error) {
       // 响应丢失时，用同一幂等键安全读取/重放正式结果；绝不换 key 生成第二个意图。
       if (!controlledCommandMayHaveCommitted(error)) throw error
-      const archived = await k12ArchiveMistake(agent, recordId, version, key)
+      const archived = await k12SuppressMistake(agent, recordId, version, key)
       replaceMistakeProjection(agent, archived)
       return archived
     }
   }
 
   /** Undo 与长期恢复的唯一命令；禁止本地伪造恢复状态。 */
-  async function restoreMistake(agent: string, recordId: string, version: number) {
+  async function restoreMistakeReview(agent: string, recordId: string, version: number) {
     const key = mistakeCommandKey('restore', agent, recordId)
     try {
-      const restored = await k12RestoreMistake(agent, recordId, version, key)
+      const restored = await k12RestoreMistakeReview(agent, recordId, version, key)
       replaceMistakeProjection(agent, restored)
       return restored
     } catch (error) {
       if (!controlledCommandMayHaveCommitted(error)) throw error
-      const restored = await k12RestoreMistake(agent, recordId, version, key)
+      const restored = await k12RestoreMistakeReview(agent, recordId, version, key)
       replaceMistakeProjection(agent, restored)
       return restored
     }
   }
+
+  /** @deprecated 测试与旧插件兼容别名；不得再作为产品语义。 */
+  const archiveMistake = suppressMistake
+  /** @deprecated 测试与旧插件兼容别名。 */
+  const restoreMistake = restoreMistakeReview
 
   /** 学情报告（真实端点，替代客户端聚合） */
   async function loadReport(agent: string): Promise<void> {
@@ -342,17 +346,6 @@ export const useK12Store = defineStore('k12', () => {
     } finally {
       if (request === tutoringTipsRequest) tutoringTipsLoading.value = false
     }
-  }
-
-  /** 家长上传教材原文：按当前孩子 × 学科入库；刷新由调用界面在双重 scope 未变时触发。 */
-  async function addGrounding(
-    agent: string,
-    subject: string,
-    title: string,
-    content: string,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    await k12AddGrounding({ agent, subject: subject || undefined, title, content }, signal)
   }
 
   /** 批改一道题 → 验算徽章数据 + 是否入库 */
@@ -904,8 +897,9 @@ export const useK12Store = defineStore('k12', () => {
     deleteMistake,
     archiveMistake,
     restoreMistake,
+    suppressMistake,
+    restoreMistakeReview,
     loadTutoringTips,
-    addGrounding,
     loadReport,
     loadAccumulation,
     grade,

@@ -19,44 +19,47 @@ import K12PracticeSetsPanel from './K12PracticeSetsPanel.vue'
 import K12CreativeWorksPanel from './K12CreativeWorksPanel.vue'
 import K12ProfileForm from './K12ProfileForm.vue'
 import K12WeeklyPracticePanel from '../components/K12WeeklyPracticePanel.vue'
+import K12BookTabs from '../components/K12BookTabs.vue'
+import FinalArtifactActions from '../components/FinalArtifactActions.vue'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
+import K12PracticeCandidateSelectionModal from '../components/K12PracticeCandidateSelectionModal.vue'
+import K12MistakeReviewMenu from '../components/K12MistakeReviewMenu.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import {
   k12ExportMd,
   k12AddAccumulation,
   k12DeleteAccumulation,
   k12GenerateAccumulationDictation,
-  k12GenerateCustomPaper,
   k12GetCurriculumProgress,
-  k12GetPrintArtifactContent,
+  k12GetWeeklyPracticeSnapshot,
   k12GetWeeklyPracticeHistory,
   k12GetWeeklyPracticeSettings,
   k12EnsureWeeklyPracticePlan,
   k12PrepareWeeklyPracticeOutput,
-  k12SaveWeeklyPracticePlanToPracticeSet,
   k12SendWeeklyPracticeSnapshot,
+  k12CreateWeeklyArithmeticBatch,
+  k12StartWeeklyArithmeticBatch,
+  k12RetryWeeklyArithmeticBatch,
+  k12RefreshWeeklyPracticeTextbookTrack,
+  k12PrepareWeeklyPracticeTextbookTrack,
   k12GetMistakePracticeGeneration,
+  k12RetryMistakePracticeGeneration,
   k12ListPracticeSets,
   k12ListCreativeWorks,
-  k12RetryMistakePracticeGeneration,
   k12SendAccumulation,
-  k12StartMistakePracticeGeneration,
   type AccumulationDictationGenerationDTO,
   type AccumulationDictationStatus,
-  type CustomPaperDifficulty,
-  type CustomPaperResp,
-  type CustomPaperScope,
-  type CustomPaperTotal,
   type MistakePracticeGenerationDTO,
   type CurriculumProgressDTO,
   type WeeklyPracticeHistorySummaryDTO,
   type WeeklyPracticePlanDTO,
   type WeeklyPracticePrepareOutputResp,
   type WeeklyPracticeSettingsDTO,
+  type WeeklyPracticeSnapshotDTO,
 } from '@/api/k12'
 import { useK12DeliveryBatch } from '../useK12DeliveryBatch'
 import { MISTAKE_SCHEMA } from '../schemas'
-import { exportArchiveDocument, worksheetFilename, download, savePdfArtifact } from '../export'
+import { exportArchiveDocument, worksheetFilename, download } from '../export'
 import type { RecordCollectionView, RecordItem } from '@/contracts'
 import type {
   K12MistakeStatusFilter,
@@ -64,6 +67,14 @@ import type {
   K12RecordsTarget,
 } from '../records-navigation'
 import type { ScenarioTextModelRoute } from '@/shell/scenario/registry'
+import {
+  k12CommitPracticeCandidateSelection,
+  k12DeferMistakeThisWeek,
+  k12GeneratePracticeCandidateBatch,
+  k12OpenPracticeCandidateSelection,
+  type PracticeCandidateSelectionDTO,
+  type WeeklyPracticeItemDTO,
+} from '@/api/k12'
 
 const props = defineProps<{
   agentId: string
@@ -108,14 +119,36 @@ const weeklySettings = ref<WeeklyPracticeSettingsDTO | null>(null)
 const weeklyPlan = ref<WeeklyPracticePlanDTO | null>(null)
 const weeklyHistory = ref<WeeklyPracticeHistorySummaryDTO[]>([])
 const weeklyOutput = ref<WeeklyPracticePrepareOutputResp | null>(null)
+const weeklyHistorySnapshot = ref<WeeklyPracticeSnapshotDTO | null>(null)
 const weeklyLoading = ref(true)
 const weeklyBusy = ref(false)
 const weeklyError = ref('')
+const weeklyView = ref<'current' | 'history'>('current')
 const weeklyPrintController = ref<InstanceType<typeof K12PersistentPrintController>>()
 const profileOpen = ref(false)
 const profileAgent = computed(() =>
-  agentsStore.agents.find((agent) => agent.name === props.agentId),
+  agentsStore.registeredAgents.find((agent) => agent.name === props.agentId),
 )
+const weeklyVerifiedItemCount = computed(
+  () =>
+    weeklyPlan.value?.tracks.reduce(
+      (total, track) =>
+        total +
+        track.items.filter((item) => item.verification.status === 'verified').length,
+      0,
+    ) ?? 0,
+)
+const weeklyOutputDisabled = computed(
+  () =>
+    weeklyBusy.value ||
+    weeklyDeferBusy.value ||
+    weeklyVerifiedItemCount.value === 0,
+)
+const weeklyOutputDisabledReason = computed(() => {
+  if (weeklyBusy.value || weeklyDeferBusy.value) return '正在处理本周计划…'
+  if (weeklyVerifiedItemCount.value === 0) return '当前没有可输出的题目'
+  return ''
+})
 
 function weeklyCommandKey(kind: string, identity: string): string {
   return `desktop-weekly-${kind}:${props.agentId}:${identity}`
@@ -165,10 +198,9 @@ async function loadWeeklyPractice() {
   }
 }
 
-async function prepareWeeklyOutput() {
+async function prepareWeeklyOutput(): Promise<WeeklyPracticePrepareOutputResp | null> {
   const plan = weeklyPlan.value
-  if (!plan || weeklyBusy.value) return
-  weeklyBusy.value = true
+  if (!plan) return null
   try {
     weeklyOutput.value = await k12PrepareWeeklyPracticeOutput(
       props.agentId,
@@ -176,21 +208,22 @@ async function prepareWeeklyOutput() {
       plan.revision,
       weeklyCommandKey('prepare', `${plan.plan_id}:${plan.revision}`),
     )
+    return weeklyOutput.value
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : String(cause))
-  } finally {
-    weeklyBusy.value = false
+    return null
   }
 }
 
 async function runWeeklyArtifactAction(intent: {
-  action: 'print' | 'export_pdf' | 'send_im'
+  action: 'print' | 'send_im'
   artifact_digest: string
 }) {
-  const output = weeklyOutput.value
-  if (!output || weeklyBusy.value) return
+  if (weeklyBusy.value) return
   weeklyBusy.value = true
   try {
+    const output = weeklyOutput.value ?? (await prepareWeeklyOutput())
+    if (!output) return
     if (intent.action === 'print') {
       await weeklyPrintController.value?.open({
         agent: props.agentId,
@@ -204,14 +237,6 @@ async function runWeeklyArtifactAction(intent: {
           return false
         },
       })
-      return
-    }
-    if (intent.action === 'export_pdf') {
-      const pdf = await k12GetPrintArtifactContent(
-        props.agentId,
-        output.artifact.artifact_id,
-      )
-      await savePdfArtifact(pdf, output.artifact.title)
       return
     }
     await weeklyDelivery.send(() =>
@@ -228,18 +253,132 @@ async function runWeeklyArtifactAction(intent: {
   }
 }
 
-async function saveWeeklyPracticeSet() {
+async function openWeeklyHistory(item: WeeklyPracticeHistorySummaryDTO) {
+  try {
+    weeklyHistorySnapshot.value = await k12GetWeeklyPracticeSnapshot(
+      props.agentId,
+      item.snapshot_id,
+    )
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  }
+}
+
+async function runWeeklyHistoryArtifactAction(intent: {
+  action: 'print' | 'send_im'
+  snapshot_id: string
+  artifact_id: string
+}) {
+  if (weeklyBusy.value) return
+  weeklyBusy.value = true
+  try {
+    if (intent.action === 'print') {
+      await weeklyPrintController.value?.open({
+        agent: props.agentId,
+        idempotencyKey: weeklyCommandKey('history-print', intent.artifact_id),
+        sourceKind: 'weekly_practice_snapshot',
+        sourceRef: intent.snapshot_id,
+        title: '本周该练',
+        artifactId: intent.artifact_id,
+        browserPrint: async () => {
+          toast.error('当前环境没有可核验的系统打印边界')
+          return false
+        },
+      })
+      return
+    }
+    await weeklyDelivery.send(() =>
+      k12SendWeeklyPracticeSnapshot(
+        props.agentId,
+        intent.snapshot_id,
+        weeklyCommandKey('history-send', intent.snapshot_id),
+      ),
+    )
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    weeklyBusy.value = false
+  }
+}
+
+async function runWeeklyArithmeticAction(intent: {
+  action: 'create' | 'start' | 'resume' | 'retry'
+  batch_id?: string
+  item_count?: number
+}) {
+  const plan = weeklyPlan.value
+  if (!plan || weeklyBusy.value || intent.action === 'resume') return
+  weeklyBusy.value = true
+  try {
+    if (intent.action === 'create') {
+      if (!intent.item_count) {
+        throw new Error('口算题数尚未准备完成，请刷新后重试')
+      }
+      await k12CreateWeeklyArithmeticBatch(
+        plan.plan_id,
+        plan.revision,
+        intent.item_count,
+        weeklyCommandKey(
+          'arithmetic-create',
+          `${plan.plan_id}:${plan.revision}:${intent.item_count}`,
+        ),
+      )
+    } else if (intent.action === 'start' && intent.batch_id) {
+      await k12StartWeeklyArithmeticBatch(
+        props.agentId,
+        intent.batch_id,
+        weeklyCommandKey('arithmetic-start', intent.batch_id),
+      )
+    } else if (intent.action === 'retry' && intent.batch_id) {
+      await k12RetryWeeklyArithmeticBatch(
+        props.agentId,
+        intent.batch_id,
+        weeklyCommandKey('arithmetic-retry', intent.batch_id),
+      )
+    }
+    weeklyPlanIntent.value = null
+    await loadWeeklyPractice()
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    weeklyBusy.value = false
+  }
+}
+
+async function prepareWeeklyTextbookTrack(intent: { item_count: number }) {
   const plan = weeklyPlan.value
   if (!plan || weeklyBusy.value) return
   weeklyBusy.value = true
   try {
-    const response = await k12SaveWeeklyPracticePlanToPracticeSet(
+    const response = await k12PrepareWeeklyPracticeTextbookTrack(
+      plan.plan_id,
+      plan.revision,
+      intent.item_count,
+      weeklyCommandKey(
+        'textbook-prepare',
+        `${plan.plan_id}:${plan.revision}:${intent.item_count}`,
+      ),
+    )
+    weeklyPlan.value = response.plan
+  } catch (cause) {
+    toast.error(cause instanceof Error ? cause.message : String(cause))
+  } finally {
+    weeklyBusy.value = false
+  }
+}
+
+async function refreshWeeklyTextbookTrack() {
+  const plan = weeklyPlan.value
+  if (!plan || weeklyBusy.value) return
+  weeklyBusy.value = true
+  try {
+    const response = await k12RefreshWeeklyPracticeTextbookTrack(
       props.agentId,
       plan.plan_id,
       plan.revision,
-      weeklyCommandKey('save', `${plan.plan_id}:${plan.revision}`),
+      weeklyCommandKey('textbook-refresh', `${plan.plan_id}:${plan.revision}`),
     )
-    toast.success(response.replayed ? '这份周练已在练习集中' : '已保存到练习集')
+    weeklyPlan.value = response.plan
   } catch (cause) {
     toast.error(cause instanceof Error ? cause.message : String(cause))
   } finally {
@@ -264,6 +403,17 @@ async function onWeeklyProfileSaved() {
 // IA 定稿（PRD §1.5，2026-07-18 迁移）：学习档案五对象 Tab——本周复习(行动)｜全部错题(档案)｜
 // 练习集｜积累｜作品；学情已提升为顶栏一等 Tab（K12InsightPanel）。默认落在「本周复习」（行动优先）。
 const sub = ref<K12RecordsTarget>(props.navigation?.target ?? props.target ?? 'week')
+function selectRecordsTab(key: string) {
+  if (
+    key === 'week' ||
+    key === 'mistakes' ||
+    key === 'practiceSets' ||
+    key === 'accumulation' ||
+    key === 'works'
+  ) {
+    sub.value = key
+  }
+}
 const reviewMenuOpen = ref(false)
 watch(
   () => props.target,
@@ -416,7 +566,6 @@ watch(
     mistakeSubject.value = ''
     mistakeStatus.value = 'all'
     accumAddOpen.value = false
-    clearedThisSession.value = false
     practiceCount.value = 0
     accumulationTotalCount.value = 0
     worksCount.value = 0
@@ -522,97 +671,15 @@ async function submitMistake() {
 
 // 自定义组卷（DD-027A）：失败时保留请求快照和 idempotency_key；原地重试同一正式命令，
 // 使“服务端已提交、客户端丢响应”能读取同一 committed 回执，不重复装篮。
-const customPaperOpen = ref(false)
-const paperForm = ref<{
-  scope: CustomPaperScope
-  perQ: 1 | 2 | 3
-  difficulty: CustomPaperDifficulty
-  total: CustomPaperTotal
-}>({ scope: 'week', perQ: 1, difficulty: 'same', total: 'all' })
-const customPaperError = ref('')
-const customPaperResult = ref<CustomPaperResp | null>(null)
-const customPaperIdempotencyKey = ref('')
-let customPaperKeySequence = 0
-
-function newCustomPaperKey(): string {
-  const uuid = globalThis.crypto?.randomUUID?.()
-  return `desktop-custom-paper:${props.agentId}:${uuid ?? `${Date.now()}-${++customPaperKeySequence}`}`
-}
-
-function closeCustomPaper() {
-  if (basketBusy.value) return
-  customPaperOpen.value = false
-}
-
-watch(
-  paperForm,
-  () => {
-    if (basketBusy.value) return
-    customPaperError.value = ''
-    customPaperResult.value = null
-    customPaperIdempotencyKey.value = newCustomPaperKey()
-  },
-  { deep: true },
-)
-
-const gradeBoundary = computed(() => props.grade.split('·')[0]?.trim() ?? '')
-const textbookBoundary = computed(
-  () => props.textbook?.trim() || props.grade.split('·').slice(1).join('·').trim(),
-)
-const paperScopeOpts = computed(() => [
-  { v: 'week' as const, label: t('k12.customPaper.scopeWeek') },
-  { v: 'unmastered' as const, label: t('k12.customPaper.scopeUnmastered') },
-])
-const paperPerQOpts = [1, 2, 3] as const
-const paperDiffOpts = computed(() => [
-  { v: 'same' as const, label: t('k12.customPaper.diffSame') },
-  { v: 'easier' as const, label: t('k12.customPaper.diffEasier') },
-  { v: 'harder' as const, label: t('k12.customPaper.diffHarder') },
-])
-const paperTotalOpts = computed(() => [
-  { v: 'all' as const, label: t('k12.customPaper.totalAll') },
-  { v: 5 as const, label: '≤ 5' },
-  { v: 10 as const, label: '≤ 10' },
-])
-function paperDifficultyLabel(value: CustomPaperDifficulty): string {
-  return paperDiffOpts.value.find((option) => option.v === value)?.label ?? value
-}
-async function genCustomPaper() {
-  if (basketBusy.value) return
-  if (!textbookBoundary.value) {
-    customPaperError.value = t('k12.customPaper.textbookRequired')
+async function suppressWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
+  const source = view.value?.items.find((record) => record.recordId === item.source_ref)
+  if (!source) {
+    toast.error("未找到对应错题，请刷新后重试")
     return
   }
-  customPaperError.value = ''
-  customPaperResult.value = null
-  if (!customPaperIdempotencyKey.value) customPaperIdempotencyKey.value = newCustomPaperKey()
-  basketBusy.value = true
-  try {
-    const result = await k12GenerateCustomPaper({
-      agent: props.agentId,
-      idempotency_key: customPaperIdempotencyKey.value,
-      scope: paperForm.value.scope,
-      total: paperForm.value.total,
-      per_source: paperForm.value.perQ,
-      difficulty: paperForm.value.difficulty,
-      textbook: textbookBoundary.value,
-      ...(gradeBoundary.value ? { grade: gradeBoundary.value } : {}),
-      ...(props.modelRoute
-        ? { provider: props.modelRoute.provider, model: props.modelRoute.model }
-        : {}),
-    })
-    if (result.status !== 'committed') throw new Error(t('k12.customPaper.notCommitted'))
-    customPaperResult.value = result
-  } catch (e) {
-    customPaperError.value = e instanceof Error ? e.message : String(e)
-  } finally {
-    basketBusy.value = false
-  }
-}
-
-function viewCustomPaperBasket() {
-  customPaperOpen.value = false
-  sub.value = 'practiceSets'
+  await suppressMistake(source)
+  weeklyPlanIntent.value = null
+  await loadWeeklyPractice()
 }
 
 const view = computed(() => store.mistakeView)
@@ -625,10 +692,10 @@ const weekCount = computed(() =>
   ),
 )
 const mistakeCount = computed(
-  () => view.value?.items.filter((item) => item.status !== 'archived').length ?? 0,
+  () => view.value?.items.filter((item) => item.status !== 'suppressed').length ?? 0,
 )
-const archivedMistakeCount = computed(
-  () => view.value?.items.filter((item) => item.status === 'archived').length ?? 0,
+const suppressedMistakeCount = computed(
+  () => view.value?.items.filter((item) => item.status === 'suppressed').length ?? 0,
 )
 
 function updatePracticeCount(count: number) {
@@ -675,10 +742,9 @@ const mistakeSubjectFilters = computed(() => [
 ])
 const mistakeStatusFilters = computed(() => [
   { value: 'all' as const, label: t('records.all') },
-  { value: 'review' as const, label: t('k12.mistakeStatus.new') },
-  { value: 'retried' as const, label: t('k12.mistakeStatus.retried') },
+  { value: 'scheduled' as const, label: t('k12.records.scheduledReview') },
   { value: 'mastered' as const, label: t('k12.mistakeStatus.mastered') },
-  { value: 'archived' as const, label: t('k12.mistakeStatus.archived') },
+  { value: 'suppressed' as const, label: t('k12.records.suppressedReview') },
 ])
 
 function mistakeSubjectOf(item: RecordItem): string {
@@ -689,13 +755,12 @@ function mistakeSubjectOf(item: RecordItem): string {
 }
 
 function matchesMistakeStatus(item: RecordItem): boolean {
-  if (mistakeStatus.value === 'all') return item.status !== 'archived'
-  if (mistakeStatus.value === 'review') return item.status === 'new' || item.status === 'explained'
+  if (mistakeStatus.value === 'all') return item.status !== 'suppressed'
   return item.status === mistakeStatus.value
 }
 
 const mistakeResultTotal = computed(() =>
-  mistakeStatus.value === 'archived' ? archivedMistakeCount.value : mistakeCount.value,
+  mistakeStatus.value === 'suppressed' ? suppressedMistakeCount.value : mistakeCount.value,
 )
 
 const filteredMistakeItems = computed(() =>
@@ -710,57 +775,26 @@ const filteredMistakeView = computed<RecordCollectionView | null>(() => {
   return { ...view.value, items: filteredMistakeItems.value }
 })
 
-// 项-5：空态设计——复习队列（本周复习）常空时不留尴尬空白。
-// 折叠机制随旧两段 IA 退役（2026-07-18）：本周复习=行动页（hide-list）、全部错题=档案页（hide-review），
-// 不再有「档案折叠在行动卡下方」的形态。
-// 本周清零庆祝态（§3.6 / 原型 k12WeekClearState）：清零是一周唯一的正反馈时刻——
-// 空态区分「本轮有做对清零」（庆祝）vs「本来就无到期」（中性计划文案）。
-// DTO 无状态变更时间戳（无法判「今天 retried/mastered」），先以会话内清零动作近似：
-// 本会话「家长确认已会」把队列里的题清掉且队列随之清空 → 庆祝（后端下发 updated_at 后可升级为按日判定，
-// 当前会话内近似仅影响庆祝时机粒度，不影响正确性）。
-const clearedThisSession = ref(false)
-function isInReviewQueue(recordId: string): boolean {
-  return view.value?.reviewQueue?.includes(recordId) ?? false
-}
-
-// 复习完成率/薄弱条已随 IA 迁移抽到 K12InsightPanel（学情=顶栏一等 Tab）。
-
 async function onAction(payload: {
   id: 'markMastered' | 'detail'
   record: RecordItem
 }) {
   const { id, record } = payload
-  if (id === 'markMastered') {
-    try {
-      // §4.11 信任链：按钮语义=「家长确认已会」（parent confirmation），非系统「已掌握」；
-      // toast 不得宣称已掌握（后端语义拆分另一包，这里只守文案口径）。
-      const wasInQueue = isInReviewQueue(record.recordId) // reload 前取值（store.markMastered 内含 reload）
-      await store.markMastered(props.agentId, record.recordId, record.version)
-      if (wasInQueue) clearedThisSession.value = true // 本轮清零动作 → 队列清空时亮庆祝态（§3.6）
-      toast.success(t('k12.records.masteredToast'))
-    } catch (e) {
-      // 409 版本冲突：并发改动，刷新后重试
-      toast.error(e instanceof Error ? e.message : String(e))
-      await reload()
-    }
-  } else if (id === 'detail') {
-    openDetail(record)
-  }
+  if (id === 'detail') openDetail(record)
 }
 
-async function archiveMistake(record: RecordItem) {
+async function suppressMistake(record: RecordItem) {
   const agent = props.agentId
-  if (!agent || archiveBusy.value.includes(record.recordId) || record.status === 'archived') return
+  if (!agent || archiveBusy.value.includes(record.recordId) || record.status === 'suppressed') return
   const intent = ++archiveIntentSequence
   setArchiveBusy(record.recordId, true)
   try {
-    const archived = await store.archiveMistake(agent, record.recordId, record.version)
+    const suppressed = await store.suppressMistake(agent, record.recordId, record.version)
     if (props.agentId !== agent) return
-    // 多条归档可并发；Undo 归属按用户发起顺序，而不是网络响应顺序。
-    // 较早请求的迟到成功不得覆盖较晚成功动作的唯一 Undo。
+    // 多条长期排除可并发；Undo 归属按用户发起顺序，而不是网络响应顺序。
     if (intent >= latestArchiveUndoIntent) {
       latestArchiveUndoIntent = intent
-      exposeArchiveUndo(record.recordId, archived.version, agent)
+      exposeArchiveUndo(record.recordId, suppressed.version, agent)
     }
     if (detail.value.record?.recordId === record.recordId) closeDetail()
     void store.calibrateMistakes(agent)
@@ -772,12 +806,12 @@ async function archiveMistake(record: RecordItem) {
   }
 }
 
-async function restoreMistake(recordId: string, version: number, undo = false) {
+async function restoreMistakeReview(recordId: string, version: number, undo = false) {
   const agent = props.agentId
   if (!agent || archiveBusy.value.includes(recordId)) return
   setArchiveBusy(recordId, true)
   try {
-    await store.restoreMistake(agent, recordId, version)
+    await store.restoreMistakeReview(agent, recordId, version)
     if (props.agentId !== agent) return
     removeArchiveUndo(recordId)
     if (detail.value.record?.recordId === recordId) closeDetail()
@@ -791,14 +825,141 @@ async function restoreMistake(recordId: string, version: number, undo = false) {
   }
 }
 
-function restoreArchivedRecord(record: RecordItem) {
-  if (record.status !== 'archived') return
-  void restoreMistake(record.recordId, record.version)
+function restoreSuppressedRecord(record: RecordItem) {
+  if (record.status !== 'suppressed') return
+  void restoreMistakeReview(record.recordId, record.version)
 }
 
 function undoArchive(undo: ArchiveUndo) {
   if (undo.agentId !== props.agentId) return
-  void restoreMistake(undo.recordId, undo.version, true)
+  void restoreMistakeReview(undo.recordId, undo.version, true)
+}
+
+// ── 错题 → 候选选择 → 原子加入练习集（BUG-20260725-010/011）────────
+const practiceCandidateOpen = ref(false)
+const practiceCandidateRecord = ref<RecordItem | null>(null)
+const practiceCandidateSelection = ref<PracticeCandidateSelectionDTO | null>(null)
+const practiceCandidateLoading = ref(false)
+const practiceCandidateGenerating = ref(false)
+const practiceCandidateCommitting = ref(false)
+const practiceCandidateError = ref('')
+const weeklyDeferBusy = ref(false)
+
+function practiceCandidateKey(action: 'open' | 'batch' | 'commit', id: string): string {
+  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
+  return `desktop-practice-candidate-${action}:${props.agentId}:${id}:${random}`
+}
+
+function practiceCandidateQuestion(record: RecordItem | null): string {
+  return String(record?.fields.question ?? '')
+}
+
+const textbookBoundary = computed(() => {
+  const explicit = props.textbook?.trim()
+  if (explicit) return explicit
+  return (
+    props.grade
+      .split('·')
+      .map((segment) => segment.trim())
+      .find((segment) => segment.endsWith('版')) ?? ''
+  )
+})
+
+async function openPracticeCandidateSelection(record: RecordItem) {
+  practiceCandidateRecord.value = record
+  practiceCandidateSelection.value = null
+  practiceCandidateError.value = ''
+  practiceCandidateOpen.value = true
+  practiceCandidateLoading.value = true
+  try {
+    practiceCandidateSelection.value = await k12OpenPracticeCandidateSelection(record.recordId, {
+      agent: props.agentId,
+      idempotency_key: practiceCandidateKey('open', record.recordId),
+      grade: props.grade,
+      textbook: textbookBoundary.value,
+    })
+  } catch (error) {
+    practiceCandidateError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    practiceCandidateLoading.value = false
+  }
+}
+
+function retryPracticeCandidateSelection() {
+  const record = practiceCandidateRecord.value
+  if (record) void openPracticeCandidateSelection(record)
+}
+
+async function generatePracticeCandidateBatch() {
+  const selection = practiceCandidateSelection.value
+  if (!selection || practiceCandidateGenerating.value) return
+  practiceCandidateGenerating.value = true
+  practiceCandidateError.value = ''
+  try {
+    practiceCandidateSelection.value = await k12GeneratePracticeCandidateBatch(
+      selection.selection_id,
+      {
+        agent: props.agentId,
+        revision: selection.revision,
+        idempotency_key: practiceCandidateKey('batch', selection.selection_id),
+      },
+    )
+  } catch (error) {
+    practiceCandidateError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    practiceCandidateGenerating.value = false
+  }
+}
+
+async function commitPracticeCandidateSelection(candidateIds: string[]) {
+  const selection = practiceCandidateSelection.value
+  if (!selection || practiceCandidateCommitting.value || candidateIds.length === 0) return
+  practiceCandidateCommitting.value = true
+  practiceCandidateError.value = ''
+  try {
+    const result = await k12CommitPracticeCandidateSelection(selection.selection_id, {
+      agent: props.agentId,
+      revision: selection.revision,
+      candidate_ids: candidateIds,
+      idempotency_key: practiceCandidateKey('commit', selection.selection_id),
+    })
+    practiceCandidateSelection.value = result.selection
+    practiceCandidateOpen.value = false
+    toast.success(`已加入练习集 ${result.added_count} 道`)
+  } catch (error) {
+    practiceCandidateError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    practiceCandidateCommitting.value = false
+  }
+}
+
+async function deferWeeklyPracticeItem(item: WeeklyPracticeItemDTO) {
+  const plan = weeklyPlan.value
+  if (!plan || weeklyDeferBusy.value || !item.source_ref) return
+  const source = view.value?.items.find((record) => record.recordId === item.source_ref)
+  if (!source) {
+    toast.error('错题版本尚未同步，请刷新后重试')
+    return
+  }
+  weeklyDeferBusy.value = true
+  try {
+    await k12DeferMistakeThisWeek(item.source_ref, {
+      agent: props.agentId,
+      version: source.version,
+      plan_id: plan.plan_id,
+      plan_revision: plan.revision,
+      weekly_item_id: item.item_id,
+      iso_year: plan.iso_week_year,
+      iso_week: plan.iso_week_number,
+      idempotency_key: practiceCandidateKey('commit', `defer:${item.item_id}`),
+    })
+    toast.success('本周已暂时移出，后续复习周期仍可重新安排')
+    await loadWeeklyPractice()
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    weeklyDeferBusy.value = false
+  }
 }
 
 // ── 错题 → 练习集：服务端持久化的一键异步投影 ─────────────────────
@@ -813,19 +974,7 @@ const practiceTarget = ref<{
   nonce: number
 } | null>(null)
 let practiceProjectionRequest = 0
-let practiceCommandSequence = 0
 let practicePollTimer: ReturnType<typeof setTimeout> | null = null
-
-function practiceProjection(recordID: string): MistakePracticeGenerationDTO | undefined {
-  return practiceGenerationByMistake.value[recordID]
-}
-
-function practiceActionLabel(recordID: string): string {
-  const state = practiceProjection(recordID)?.state
-  if (state === 'failed') return '出题失败，重试'
-  if (state === 're_add') return '再次加入练习集'
-  return '加入练习集'
-}
 
 function setPracticeProjection(next: MistakePracticeGenerationDTO) {
   practiceGenerationByMistake.value = {
@@ -835,15 +984,25 @@ function setPracticeProjection(next: MistakePracticeGenerationDTO) {
   if (next.state !== 'pending') practiceCommandKeys.delete(next.source_mistake_id)
 }
 
-function setPracticeBusy(recordID: string, busy: boolean) {
-  practiceGenerationBusy.value = busy
-    ? [...new Set([...practiceGenerationBusy.value, recordID])]
-    : practiceGenerationBusy.value.filter((id) => id !== recordID)
+function practiceGenerationFailed(recordID: string) {
+  return practiceGenerationByMistake.value[recordID]?.state === 'failed'
 }
 
-function newPracticeCommandKey(recordID: string): string {
-  const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${++practiceCommandSequence}`
-  return `desktop-single-practice:${props.agentId}:${recordID}:${nonce}`
+function practiceGenerationIsBusy(recordID: string) {
+  return practiceGenerationBusy.value.includes(recordID)
+}
+
+async function retryMistakePracticeGeneration(recordID: string) {
+  if (!props.agentId || practiceGenerationIsBusy(recordID)) return
+  practiceGenerationBusy.value = [...practiceGenerationBusy.value, recordID]
+  try {
+    setPracticeProjection(await k12RetryMistakePracticeGeneration(props.agentId, recordID))
+    schedulePracticePoll()
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : String(error))
+  } finally {
+    practiceGenerationBusy.value = practiceGenerationBusy.value.filter((id) => id !== recordID)
+  }
 }
 
 function clearPracticePoll() {
@@ -911,78 +1070,6 @@ function resetPracticeGenerationProjection() {
   practiceGenerationBusy.value = []
   practiceCommandKeys.clear()
   practiceTarget.value = null
-}
-
-async function runPracticeGeneration(record: RecordItem) {
-  const recordID = record.recordId
-  const projection = practiceProjection(recordID)
-  if (
-    !projection ||
-    practiceGenerationBusy.value.includes(recordID) ||
-    projection.state === 'pending' ||
-    projection.state === 'joined' ||
-    projection.state === 'hidden'
-  ) {
-    return
-  }
-  const agent = props.agentId
-  setPracticeBusy(recordID, true)
-  try {
-    const next =
-      projection.state === 'failed'
-        ? await k12RetryMistakePracticeGeneration(agent, recordID)
-        : await k12StartMistakePracticeGeneration({
-            agent,
-            record_id: recordID,
-            idempotency_key:
-              practiceCommandKeys.get(recordID) ??
-              (() => {
-                const key = newPracticeCommandKey(recordID)
-                practiceCommandKeys.set(recordID, key)
-                return key
-              })(),
-            ...(gradeBoundary.value ? { grade: gradeBoundary.value } : {}),
-            ...(textbookBoundary.value ? { textbook: textbookBoundary.value } : {}),
-            difficulty: 'same',
-            ...(props.modelRoute
-              ? { provider: props.modelRoute.provider, model: props.modelRoute.model }
-              : {}),
-          })
-    if (props.agentId !== agent) return
-    setPracticeProjection(next)
-    if (next.state === 'joined') void reloadObjectCounts()
-    schedulePracticePoll()
-  } catch (error) {
-    if (props.agentId !== agent) return
-    // 请求结果未知时先用同一来源查询正式状态；查询也失败才向用户报告。
-    try {
-      const recovered = await k12GetMistakePracticeGeneration(agent, recordID)
-      if (props.agentId !== agent) return
-      setPracticeProjection(recovered)
-      schedulePracticePoll()
-    } catch {
-      toast.error(error instanceof Error ? error.message : String(error))
-    }
-  } finally {
-    setPracticeBusy(recordID, false)
-  }
-}
-
-function viewGeneratedPractice(recordID: string) {
-  const projection = practiceProjection(recordID)
-  if (
-    projection?.state !== 'joined' ||
-    !projection.practice_set_id ||
-    !projection.practice_item_id
-  ) {
-    return
-  }
-  practiceTarget.value = {
-    practiceSetID: projection.practice_set_id,
-    practiceItemID: projection.practice_item_id,
-    nonce: Date.now(),
-  }
-  sub.value = 'practiceSets'
 }
 
 onBeforeUnmount(resetPracticeGenerationProjection)
@@ -1059,27 +1146,11 @@ const detailStatusTone = computed(() => {
   const s = detail.value.record?.status
   return MISTAKE_SCHEMA.states?.find((st) => st.id === s)?.tone ?? 'na'
 })
-// UX-1：详情弹层「家长确认已会」——已掌握态不显该动作（幂等，与档案行同口径）。
 const detailMastered = computed(() => detail.value.record?.status === 'mastered')
-const detailArchived = computed(() => detail.value.record?.status === 'archived')
+const detailSuppressed = computed(() => detail.value.record?.status === 'suppressed')
 const detailRestorable = computed(
-  () => detailArchived.value && detail.value.record?.fields.restorable === true,
+  () => detailSuppressed.value && detail.value.record?.fields.restorable === true,
 )
-async function markMasteredFromDetail() {
-  const rec = detail.value.record
-  if (!rec) return
-  try {
-    const wasInQueue = isInReviewQueue(rec.recordId) // reload 前取值
-    await store.markMastered(props.agentId, rec.recordId, rec.version)
-    if (wasInQueue) clearedThisSession.value = true // 本轮清零动作 → 庆祝态（§3.6）
-    // 情绪峰值时刻：toast 说清结果（家长确认口径，§4.11）；store.markMastered 内已 reload 列表。
-    toast.success(t('k12.records.masteredToast'))
-    closeDetail()
-  } catch (e) {
-    toast.error(e instanceof Error ? e.message : String(e)) // 409 版本冲突：刷新后重试
-    await reload()
-  }
-}
 
 // 积累默写 generation 始终以 GET/POST 返回的 durable 摘要为真相源；组件只保留在途提交锁，
 // 不用会话数组冒充持久状态。queued/generating/validating 均为同一 pending 投影。
@@ -1398,63 +1469,49 @@ async function doExportMd() {
     <!-- 学习档案五对象 Tab（PRD §1.5 IA 定稿）：本周复习 / 全部错题 / 练习集 / 积累 / 作品。
          学情已提升为顶栏一等 Tab，不再是二级 Tab。 -->
     <div class="k12rec__tabs">
-      <div class="seg k12rec__object-tabs" role="tablist" :aria-label="t('k12.tabs.records')">
-        <button
-          role="tab"
-          :aria-selected="sub === 'week'"
-          :aria-label="`${t('k12.subTabs.week')} ${weekCount}`"
-          :class="{ on: sub === 'week' }"
-          data-testid="subtab-week"
-          @click="sub = 'week'"
-        >
-          {{ t('k12.subTabs.week') }}
-          <span class="k12-tab-count" aria-hidden="true" :data-count="weekCount" />
-        </button>
-        <button
-          role="tab"
-          :aria-selected="sub === 'mistakes'"
-          :aria-label="`${t('k12.subTabs.mistakes')} ${mistakeCount}`"
-          :class="{ on: sub === 'mistakes' }"
-          data-testid="subtab-mistakes"
-          @click="sub = 'mistakes'"
-        >
-          {{ t('k12.subTabs.mistakes') }}
-          <span class="k12-tab-count" aria-hidden="true" :data-count="mistakeCount" />
-        </button>
-        <button
-          role="tab"
-          :aria-selected="sub === 'practiceSets'"
-          :aria-label="`${t('k12.subTabs.practiceSets')} ${practiceCount}`"
-          :class="{ on: sub === 'practiceSets' }"
-          data-testid="subtab-practicesets"
-          @click="sub = 'practiceSets'"
-        >
-          {{ t('k12.subTabs.practiceSets') }}
-          <span class="k12-tab-count" aria-hidden="true" :data-count="practiceCount" />
-        </button>
-        <button
-          role="tab"
-          :aria-selected="sub === 'accumulation'"
-          :aria-label="`${t('k12.subTabs.accumulation')} ${accumulationTotalCount}`"
-          :class="{ on: sub === 'accumulation' }"
-          data-testid="subtab-accumulation"
-          @click="sub = 'accumulation'"
-        >
-          {{ t('k12.subTabs.accumulation') }}
-          <span class="k12-tab-count" aria-hidden="true" :data-count="accumulationTotalCount" />
-        </button>
-        <button
-          role="tab"
-          :aria-selected="sub === 'works'"
-          :aria-label="`${t('k12.subTabs.works')} ${worksCount}`"
-          :class="{ on: sub === 'works' }"
-          data-testid="subtab-works"
-          @click="sub = 'works'"
-        >
-          {{ t('k12.subTabs.works') }}
-          <span class="k12-tab-count" aria-hidden="true" :data-count="worksCount" />
-        </button>
-      </div>
+      <K12BookTabs
+        :model-value="sub"
+        :label="t('k12.tabs.records')"
+        :tabs="[
+          { key: 'week', label: t('k12.subTabs.week'), count: weekCount, testId: 'subtab-week' },
+          {
+            key: 'mistakes',
+            label: t('k12.subTabs.mistakes'),
+            count: mistakeCount,
+            testId: 'subtab-mistakes',
+          },
+          {
+            key: 'practiceSets',
+            label: t('k12.subTabs.practiceSets'),
+            count: practiceCount,
+            testId: 'subtab-practicesets',
+          },
+          {
+            key: 'accumulation',
+            label: t('k12.subTabs.accumulation'),
+            count: accumulationTotalCount,
+            testId: 'subtab-accumulation',
+          },
+          {
+            key: 'works',
+            label: t('k12.subTabs.works'),
+            count: worksCount,
+            testId: 'subtab-works',
+          },
+        ]"
+        @select="selectRecordsTab"
+      />
+      <FinalArtifactActions
+        v-if="sub === 'week' && weeklyView === 'current'"
+        :actions="['print', 'send_im']"
+        :artifact-digest="weeklyOutput?.snapshot.snapshot_digest ?? ''"
+        :disabled="weeklyOutputDisabled"
+        :disabled-reason="weeklyOutputDisabledReason"
+        primary-action="print"
+        :send-label="weeklyDelivery.label.value"
+        :send-disabled="weeklyDelivery.disabled.value"
+        @intent="runWeeklyArtifactAction"
+      />
       <!-- 20260719 信息架构定稿：①功能位 emoji → 单色描边图标；②导出与备份/恢复均为学习档案级动作，
            不占常驻顶栏，统一收进五个子页均可达的「⋯」溢出菜单。 -->
       <button
@@ -1492,7 +1549,7 @@ async function doExportMd() {
         </svg>
         {{ t('k12.works.addWork') }}
       </button>
-      <div class="k12rec__export">
+      <div v-if="sub !== 'week'" class="k12rec__export">
         <button
           ref="recordsMoreTrigger"
           type="button"
@@ -1539,17 +1596,28 @@ async function doExportMd() {
           :settings="weeklySettings"
           :plan="weeklyPlan"
           :history="weeklyHistory"
+          :history-snapshot="weeklyHistorySnapshot"
           :output="weeklyOutput"
           :loading="weeklyLoading"
-          :busy="weeklyBusy"
+          :busy="weeklyBusy || weeklyDeferBusy"
           :error="weeklyError"
           :delivery-label="weeklyDelivery.label.value"
           :delivery-disabled="weeklyDelivery.disabled.value"
+          :view="weeklyView"
+          :practice-generation-by-mistake="practiceGenerationByMistake"
+          :practice-generation-busy="practiceGenerationBusy"
           @retry="loadWeeklyPractice"
           @open-progress="openWeeklyProfile"
-          @prepare-output="prepareWeeklyOutput"
-          @artifact-action="runWeeklyArtifactAction"
-          @save-to-practice-set="saveWeeklyPracticeSet"
+          @update:view="weeklyView = $event"
+          @open-history="openWeeklyHistory"
+          @history-artifact-action="runWeeklyHistoryArtifactAction"
+          @history-insights="emit('go-insights')"
+          @arithmetic-action="runWeeklyArithmeticAction"
+          @prepare-textbook="prepareWeeklyTextbookTrack"
+          @refresh-textbook="refreshWeeklyTextbookTrack"
+          @defer-item="deferWeeklyPracticeItem"
+          @suppress-item="suppressWeeklyPracticeItem"
+          @retry-mistake-practice="retryMistakePracticeGeneration"
         />
         <K12PersistentPrintController
           ref="weeklyPrintController"
@@ -1559,7 +1627,6 @@ async function doExportMd() {
           v-if="profileOpen && profileAgent"
           :agent="profileAgent"
           focus-math-progress
-          enable-textbook-consolidation
           @created="onWeeklyProfileSaved"
           @close="profileOpen = false"
           @removed="profileOpen = false"
@@ -1650,66 +1717,34 @@ async function doExportMd() {
               :view="filteredMistakeView"
               hide-review
               hide-filters
+              hide-mastery-action
               @action="onAction"
             >
               <template #list-practice-action="{ item }">
-                <span
-                  v-if="practiceProjection(item.recordId)?.state === 'pending'"
-                  class="rl-status rl-status--todo"
-                  :data-testid="`mistake-practice-state-${item.recordId}`"
-                  >已加入 · 正在出题…</span
-                >
-                <template v-else-if="practiceProjection(item.recordId)?.state === 'joined'">
-                  <span
-                    class="rl-status rl-status--got"
-                    :data-testid="`mistake-practice-state-${item.recordId}`"
-                    >✓ 已加入练习集</span
-                  >
-                  <button
-                    type="button"
-                    class="rl-btn"
-                    :data-testid="`mistake-practice-view-${item.recordId}`"
-                    @click="viewGeneratedPractice(item.recordId)"
-                  >
-                    查看新题
-                  </button>
-                </template>
                 <button
-                  v-else-if="
-                    ['available', 'failed', 're_add'].includes(
-                      practiceProjection(item.recordId)?.state ?? '',
-                    )
-                  "
                   type="button"
                   class="rl-btn"
-                  :disabled="practiceGenerationBusy.includes(item.recordId)"
                   :data-testid="`mistake-practice-${item.recordId}`"
-                  @click="runPracticeGeneration(item)"
+                  :disabled="practiceGenerationIsBusy(item.recordId)"
+                  @click="
+                    practiceGenerationFailed(item.recordId)
+                      ? retryMistakePracticeGeneration(item.recordId)
+                      : openPracticeCandidateSelection(item)
+                  "
                 >
-                  {{ practiceActionLabel(item.recordId) }}
+                  {{
+                    practiceGenerationFailed(item.recordId) ? '出题失败 · 重试' : '加入练习集'
+                  }}
                 </button>
               </template>
               <template #list-row-actions="{ item }">
-                <button
-                  v-if="item.status === 'archived' && item.fields.restorable === true"
-                  type="button"
-                  class="rl-btn"
-                  :disabled="archiveBusy.includes(item.recordId)"
-                  :data-testid="`mistake-restore-${item.recordId}`"
-                  @click="restoreArchivedRecord(item)"
-                >
-                  {{ t('k12.records.restoreReview') }}
-                </button>
-                <button
-                  v-else-if="item.status !== 'archived'"
-                  type="button"
-                  class="rl-btn"
-                  :disabled="archiveBusy.includes(item.recordId)"
-                  :data-testid="`mistake-archive-${item.recordId}`"
-                  @click="archiveMistake(item)"
-                >
-                  {{ t('k12.records.archiveReview') }}
-                </button>
+                <K12MistakeReviewMenu
+                  :suppressed="item.status === 'suppressed'"
+                  :restorable="item.fields.restorable === true"
+                  :busy="archiveBusy.includes(item.recordId)"
+                  @suppress="suppressMistake(item)"
+                  @restore="restoreSuppressedRecord(item)"
+                />
               </template>
             </RecordList>
           </div>
@@ -1952,199 +1987,6 @@ async function doExportMd() {
       </div>
     </div>
 
-    <!-- 自定义组卷 modal（原型 openCustomPaper=弹窗，同构位置 · BUG-20260709）
-         渐进披露：一键零配置仍是主动作，微调参数走此弹窗。 -->
-    <div v-if="customPaperOpen" class="k12modal" @click.self="closeCustomPaper">
-      <div
-        class="k12modal__card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="custom-paper-title"
-      >
-        <div class="k12modal__head">
-          <b id="custom-paper-title">{{ t('k12.records.customPaper') }}</b>
-          <span class="k12rec__sp" />
-          <button
-            type="button"
-            class="btn btn-ghost"
-            :disabled="basketBusy"
-            :aria-label="t('k12.customPaper.close')"
-            @click="closeCustomPaper"
-          >
-            ✕
-          </button>
-        </div>
-        <div class="k12accum__form k12accum__form--modal" data-testid="custom-paper-form">
-          <div class="k12rec__addhint">{{ t('k12.customPaper.hint') }}</div>
-          <!-- 范围（原型 openCustomPaper 四档，UI 先做两档：本周待复习 / 全部未掌握） -->
-          <div class="k12paper__row">
-            <span class="k12paper__label">{{ t('k12.customPaper.scope') }}</span>
-            <button
-              v-for="o in paperScopeOpts"
-              :key="o.v"
-              type="button"
-              class="chip"
-              :class="{ on: paperForm.scope === o.v }"
-              :disabled="basketBusy || !!customPaperResult"
-              :aria-pressed="paperForm.scope === o.v"
-              :data-testid="`paper-scope-${o.v}`"
-              @click="paperForm.scope = o.v"
-            >
-              {{ o.label }}
-            </button>
-          </div>
-          <div class="k12paper__row">
-            <span class="k12paper__label">{{ t('k12.customPaper.perQ') }}</span>
-            <button
-              v-for="n in paperPerQOpts"
-              :key="n"
-              type="button"
-              class="chip"
-              :class="{ on: paperForm.perQ === n }"
-              :disabled="basketBusy || !!customPaperResult"
-              :aria-pressed="paperForm.perQ === n"
-              :data-testid="`paper-perq-${n}`"
-              @click="paperForm.perQ = n"
-            >
-              {{ n }}
-            </button>
-          </div>
-          <div class="k12paper__row">
-            <span class="k12paper__label">{{ t('k12.customPaper.difficulty') }}</span>
-            <button
-              v-for="o in paperDiffOpts"
-              :key="o.v"
-              type="button"
-              class="chip"
-              :class="{ on: paperForm.difficulty === o.v }"
-              :disabled="basketBusy || !!customPaperResult"
-              :aria-pressed="paperForm.difficulty === o.v"
-              :data-testid="`paper-difficulty-${o.v}`"
-              @click="paperForm.difficulty = o.v"
-            >
-              {{ o.label }}
-            </button>
-          </div>
-          <div class="k12rec__addhint" data-testid="custom-paper-contract-note">
-            {{ t('k12.customPaper.contractNote') }}
-          </div>
-          <div class="k12paper__row">
-            <span class="k12paper__label">{{ t('k12.customPaper.total') }}</span>
-            <button
-              v-for="o in paperTotalOpts"
-              :key="o.v"
-              type="button"
-              class="chip"
-              :class="{ on: paperForm.total === o.v }"
-              :disabled="basketBusy || !!customPaperResult"
-              :aria-pressed="paperForm.total === o.v"
-              @click="paperForm.total = o.v"
-            >
-              {{ o.label }}
-            </button>
-          </div>
-          <p class="k12rec__addhint" data-testid="custom-paper-boundary">
-            {{
-              t('k12.customPaper.boundary', {
-                textbook: textbookBoundary || t('k12.customPaper.textbookMissing'),
-                grade: gradeBoundary || t('k12.customPaper.gradeMissing'),
-              })
-            }}
-          </p>
-          <p
-            v-if="basketBusy"
-            class="k12rec__addhint"
-            role="status"
-            aria-live="polite"
-            data-testid="custom-paper-progress"
-          >
-            {{ t('k12.customPaper.generating') }}
-          </p>
-          <div
-            v-else-if="customPaperError"
-            class="k12rec__error"
-            role="alert"
-            data-testid="custom-paper-error"
-          >
-            <span>{{ customPaperError }}</span>
-            <button
-              type="button"
-              class="btn btn-ghost"
-              data-testid="custom-paper-retry"
-              @click="genCustomPaper"
-            >
-              {{ t('k12.customPaper.retry') }}
-            </button>
-          </div>
-          <div
-            v-else-if="customPaperResult"
-            class="k12paper__result"
-            role="status"
-            aria-live="polite"
-            data-testid="custom-paper-result"
-          >
-            <b>{{ t('k12.customPaper.completed') }}</b>
-            <span>{{
-              t('k12.customPaper.receipt', {
-                id: customPaperResult.generation_job_id,
-                added: customPaperResult.added,
-                deduplicated: customPaperResult.deduplicated,
-              })
-            }}</span>
-            <span v-if="customPaperResult.added === 0">{{
-              t('k12.customPaper.idempotentReplay')
-            }}</span>
-            <ul v-if="customPaperResult.items.length" class="k12paper__results">
-              <li v-for="item in customPaperResult.items" :key="item.item_id">
-                <span>{{ t('k12.customPaper.sourceItem', { id: item.source_problem_id }) }}</span>
-                <span>{{
-                  t('k12.customPaper.actualDifficulty', {
-                    value: paperDifficultyLabel(item.actual_difficulty),
-                  })
-                }}</span>
-                <span>{{
-                  item.verification_status === 'verified'
-                    ? t('k12.customPaper.verified')
-                    : t('k12.customPaper.blocked')
-                }}</span>
-              </li>
-            </ul>
-          </div>
-          <div class="k12accum__actions">
-            <button
-              type="button"
-              class="btn btn-ghost"
-              :disabled="basketBusy"
-              @click="closeCustomPaper"
-            >
-              {{ customPaperResult ? t('k12.customPaper.close') : t('k12.accum.cancel') }}
-            </button>
-            <button
-              v-if="customPaperResult"
-              type="button"
-              class="btn btn-primary"
-              data-testid="custom-paper-view-basket"
-              @click="viewCustomPaperBasket"
-            >
-              {{ t('k12.customPaper.viewBasket') }}
-            </button>
-            <button
-              v-else
-              type="button"
-              class="btn btn-primary"
-              data-testid="custom-paper-gen"
-              :disabled="basketBusy || !textbookBoundary"
-              @click="genCustomPaper"
-            >
-              {{
-                basketBusy ? t('k12.customPaper.generatingShort') : t('k12.customPaper.generate')
-              }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
     <!-- 错题详情弹层（BUG-20260712-#2）：复用列表已有 RecordItem 字段，不额外请求后端，可关闭。 -->
     <div
       v-if="detail.open && detail.record && !accumulationDeleteConfirmActive"
@@ -2264,40 +2106,22 @@ async function doExportMd() {
           </p>
         </div>
         <p v-if="detail.kind !== 'accum'" class="k12rec__hint">{{ t('k12.detail.footnote') }}</p>
-        <!-- UX-1：详情弹层「家长确认已会」（已掌握态改显只读徽标，幂等）。仅错题（积累不复习/无掌握语义）。 -->
         <div v-if="detail.kind !== 'accum'" class="k12detail__actions">
           <button
             v-if="detailRestorable"
             class="btn btn-primary"
             data-testid="detail-restore-review"
             :disabled="archiveBusy.includes(detail.record!.recordId)"
-            @click="restoreArchivedRecord(detail.record!)"
+            @click="restoreSuppressedRecord(detail.record!)"
           >
             {{ t('k12.records.restoreReview') }}
           </button>
-          <button
-            v-else-if="!detailArchived && !detailMastered"
-            class="btn btn-primary"
-            data-testid="detail-mark-mastered"
-            @click="markMasteredFromDetail"
-          >
-            {{ t('records.markMastered') }}
-          </button>
           <span
-            v-else-if="!detailArchived"
+            v-else-if="detailMastered"
             class="k12detail__status k12detail__status--got"
             data-testid="detail-mastered-label"
             >{{ t('k12.detail.alreadyMastered') }}</span
           >
-          <button
-            v-if="!detailArchived"
-            class="btn btn-ghost"
-            data-testid="detail-archive-review"
-            :disabled="archiveBusy.includes(detail.record!.recordId)"
-            @click="archiveMistake(detail.record!)"
-          >
-            {{ t('k12.records.archiveReview') }}
-          </button>
           <span class="k12rec__sp" />
           <!-- UX-3：克制删除入口——ghost 次级样式（非首屏主按钮），二次确认后才删。 -->
           <button
@@ -2313,6 +2137,20 @@ async function doExportMd() {
         </p>
       </div>
     </div>
+
+    <K12PracticeCandidateSelectionModal
+      :open="practiceCandidateOpen"
+      :original-question="practiceCandidateQuestion(practiceCandidateRecord)"
+      :selection="practiceCandidateSelection"
+      :loading="practiceCandidateLoading"
+      :generating="practiceCandidateGenerating"
+      :committing="practiceCandidateCommitting"
+      :error="practiceCandidateError"
+      @close="practiceCandidateOpen = false"
+      @retry="retryPracticeCandidateSelection"
+      @generate="generatePracticeCandidateBatch"
+      @commit="commitPracticeCandidateSelection"
+    />
 
     <!-- UX-3：删除二次确认（复用平台 ConfirmDialog；副文案说明用途=移除记错/重复条目）。 -->
     <ConfirmDialog
@@ -3009,57 +2847,6 @@ async function doExportMd() {
   color: var(--hc-accent);
   box-shadow: var(--hc-shadow-sm);
   font-weight: 600;
-}
-/* 原型 1172-1177：二级对象 Tab 没有 segmented 底板；选中态仅强调色轻底，不做白卡浮起。 */
-.k12rec__object-tabs {
-  gap: 3px;
-  overflow-x: auto;
-  max-width: 100%;
-  flex: 1 1 auto;
-  background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 0;
-}
-.k12rec__object-tabs button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  padding: 7px 12px;
-  border-radius: 9px;
-  color: var(--hc-text-secondary);
-}
-.k12rec__object-tabs button:hover:not(.on) {
-  background: var(--hc-bg-hover);
-  color: var(--hc-text-primary);
-}
-.k12rec__object-tabs button.on {
-  background: var(--hc-accent-subtle);
-  color: var(--hc-accent);
-  box-shadow: none;
-  font-weight: 600;
-}
-.k12-tab-count {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  box-sizing: border-box;
-  border-radius: 999px;
-  background: var(--hc-bg-input);
-  color: var(--hc-text-muted);
-  font-size: 10px;
-  font-weight: 750;
-  font-variant-numeric: tabular-nums;
-}
-.k12-tab-count::before {
-  content: attr(data-count);
-}
-.k12rec__object-tabs button.on .k12-tab-count {
-  background: color-mix(in srgb, var(--hc-accent) 15%, transparent);
-  color: var(--hc-accent);
 }
 .pill {
   display: inline-flex;

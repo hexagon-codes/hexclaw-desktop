@@ -1,6 +1,6 @@
 export type K12RecordsTarget = 'week' | 'mistakes' | 'practiceSets' | 'accumulation' | 'works'
 
-export type K12MistakeStatusFilter = 'all' | 'review' | 'retried' | 'mastered' | 'archived'
+export type K12MistakeStatusFilter = 'all' | 'scheduled' | 'mastered' | 'suppressed'
 
 /**
  * 学情与场景能力入口的档案导航命令。

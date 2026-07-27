@@ -71,7 +71,10 @@ export default {
     filterSubject: 'Subject',
     filterStatus: 'Status',
     stateMachineHint:
-      'Unmastered questions are never auto-hidden for inactivity; they are archived by term or manually by the parent.',
+      'Unmastered questions are never auto-hidden. “Skip this week” affects only this week; “No longer review” can be restored.',
+    scheduledReview: 'Scheduled',
+    deferredThisWeek: 'Skip this week',
+    suppressedReview: 'No longer review',
     basketBatchAdded: 'Added {n} to the practice set ({m} duplicates skipped)',
     basketFillAdded: 'Added {n} to the practice set ({m} duplicate or unsupported items skipped)',
     masteredToast: 'Parent confirmed · mastery evidence accrues separately',
@@ -470,11 +473,11 @@ export default {
     },
     gradeSupportNote:
       'The current version supports primary grades 1–6. When secondary support opens, you can upgrade this profile without losing learning history.',
-    textbookBySubject: 'Set textbook edition by subject',
+    textbookBySubject: 'Math textbook edition',
     textbookCreateNote:
-      'Grade and term belong to the child profile; textbook editions are bound per subject, and recognition uses only the current subject edition.',
+      'This release manages Math textbook and progress only; other subjects need no setup here.',
     textbookEditNote:
-      'Textbooks are saved per subject; changing Math does not alter the retrieval basis for Chinese, English, or other subjects.',
+      'This release manages Math textbook and progress only; existing bindings for other subjects are preserved unchanged.',
     subjects: {
       math: 'Math',
       chinese: 'Chinese',
@@ -502,7 +505,7 @@ export default {
     autoName: "{child}'s Study Assistant · {grade}",
     assistantName: "{child}'s Study Assistant",
     cardDesc:
-      '{grade} · Textbooks independently bound by subject · Teaching bounded by grade level',
+      '{grade} · Math textbook and progress linked · Teaching bounded by grade level',
     back: 'Back',
     create: 'Create',
     cancel: 'Cancel',
@@ -666,9 +669,6 @@ export default {
     subjectScience: '🔬 Science',
     subjectInfoTech: '💻 Info Tech',
     sendPhone: 'Send to phone',
-    uploadGrounding: 'Upload textbook source',
-    groundingUploaded: 'Textbook uploaded and tutoring tips refreshed',
-    groundingFailed: 'Textbook upload failed. Check the file and try again.',
     print: 'Print (A4)',
     legend:
       '📖 From textbook = searched your uploaded materials · 🧠 Learning signal = from the mistake notebook · 🤖 AI summary (for reference) = generated at the child’s grade level when no textbook is uploaded; please double-check.',

@@ -1697,7 +1697,7 @@ defineExpose({ load, openAdd })
 
 .k12cw__list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
   gap: 14px;
   align-items: stretch;
   margin: 0;
@@ -2016,8 +2016,7 @@ defineExpose({ load, openAdd })
   color: var(--hc-text-primary);
 }
 
-.k12cw__source-content :deep(p),
-.k12cw__feedback-row :deep(p) {
+.k12cw__source-content :deep(p) {
   margin: 0;
 }
 

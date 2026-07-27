@@ -71,7 +71,11 @@ export default {
     filterSubject: '学科',
     filterStatus: '状态',
     // 原型 2527 口径：未掌握题不因久未练习被自动隐藏（旧「30 天自动归档」是错误宣称）
-    stateMachineHint: '未掌握题不会因久未练习被自动隐藏；按学期归档或由家长手动归档。',
+    stateMachineHint:
+      '未掌握题不会因久未练习被自动隐藏；“本周先不练”只跳过本周，“不再复习”可随时恢复。',
+    scheduledReview: '待复习',
+    deferredThisWeek: '本周先不练',
+    suppressedReview: '不再复习',
     // 组卷装篮批量结果（§3.8：生成复习卷/自定义组卷 → 待打印，幂等去重）
     basketBatchAdded: '已加入练习集 {n} 道（去重 {m}）',
     basketFillAdded: '已加入练习集 {n} 道（跳过 {m} 道重复或暂不支持题）',
@@ -456,10 +460,10 @@ export default {
     },
     gradeSupportNote:
       '当前版本支持小学一至六年级。初高中能力开放后，可直接升级当前孩子档案，历史学习记录会继续保留。',
-    textbookBySubject: '按学科设置教材版本',
+    textbookBySubject: '数学教材版本',
     textbookCreateNote:
-      '年级与学期属于孩子档案；教材版本按学科独立绑定，识题后只使用当前学科对应版本。',
-    textbookEditNote: '教材按学科独立保存；修改数学教材不会改变语文、英语或其他学科的检索依据。',
+      '当前版本只开放数学教材与进度管理；其他学科无需在这里配置。',
+    textbookEditNote: '当前版本只开放数学教材与进度管理；其他学科历史绑定会原样保留。',
     subjects: {
       math: '数学',
       chinese: '语文',
@@ -486,7 +490,7 @@ export default {
       '💡 有多个孩子？每个孩子创建一个独立实例，并绑定各自的私聊目标；档案、学习记录与记忆天然隔离。',
     autoName: '{child}的辅导助手 · {grade}',
     assistantName: '{child}的辅导助手',
-    cardDesc: '{grade} · 各学科教材独立绑定 · 按年级边界讲解',
+    cardDesc: '{grade} · 数学教材与进度已绑定 · 按年级边界讲解',
     back: '上一步',
     create: '创建',
     cancel: '取消',
@@ -643,12 +647,9 @@ export default {
     subjectScience: '🔬 科学',
     subjectInfoTech: '💻 信息科技',
     sendPhone: '发送到手机',
-    uploadGrounding: '上传教材原文',
-    groundingUploaded: '教材已上传，辅导要点已按教材刷新',
-    groundingFailed: '教材上传失败，请检查文件内容或稍后重试',
     print: '打印（A4）',
     legend:
-      '📖 依据课本＝检索你上传的教材原文 · 🧠 学情信号＝来自错题本 · 🤖 AI 归纳·供参考＝未上传教材时按孩子年级讲法生成，仅供参考请自行核对。',
+      '📖 依据课本＝读取孩子档案已关联的知识库教材 · 🧠 学情信号＝来自错题本 · 🤖 AI 归纳·供参考＝未关联教材时按孩子年级讲法生成，仅供参考请自行核对。',
     currentBasis: '当前依据：{textbook} · {grade}',
     generateFailed:
       '辅导要点生成失败：模型响应超时或网络中断，请重试。本地模型较慢，可在设置里切换到更快的云端模型。',

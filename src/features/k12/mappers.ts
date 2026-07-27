@@ -17,18 +17,27 @@ function evidenceOf(t: EvidenceType): VerifyEvidence {
  *  RecordList data-chip 前缀选择器上色）；/mistakes 列表暂不下发 subject（P2 缺口），队列行先亮。 */
 export function mistakeToRecord(dto: MistakeDTO, agentId: string, subject?: string): RecordItem {
   const subj = dto.subject || subject
+  const reviewState =
+    dto.review_state ??
+    (dto.status === 'archived'
+      ? 'suppressed'
+      : dto.status === 'mastered'
+        ? 'mastered'
+        : 'scheduled')
   return {
     recordId: dto.record_id,
     agentId,
     collection: MISTAKE_COLLECTION,
     schemaVersion: '1',
-    status: dto.status,
+    status: reviewState,
     fields: {
       question: dto.question,
       knowledge_point: subj ? `${subj}·${dto.knowledge_point}` : dto.knowledge_point,
       error_cause: dto.error_cause,
       // 独立保留学科（M1 学期汇总分科计数用；schema 未声明该字段，不参与行渲染）
       subject: subj,
+      legacy_status: dto.status,
+      review_state: reviewState,
       // 复习队列可混入积累本纠错项；动作层据此区分验算变式与原词重现。
       review_kind: dto.review_kind,
       // 抽查复验（§3.6）：仅 failed 在详情呈现「家长确认（复验未过）」事实标注；
