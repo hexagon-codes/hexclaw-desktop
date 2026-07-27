@@ -25,7 +25,7 @@ afterEach(() => {
 })
 
 describe('global destructive confirmation contract 2026-07-26', () => {
-  it('默认危险确认在 2999ms 仍禁用，3000ms 才启用', async () => {
+  it('默认危险确认在 1499ms 仍禁用，1500ms 才启用', async () => {
     vi.useFakeTimers()
     mount(ConfirmDialog, {
       props: {
@@ -42,14 +42,14 @@ describe('global destructive confirmation contract 2026-07-26', () => {
     expect(confirm).not.toBeNull()
     expect(confirm!.disabled).toBe(true)
 
-    await vi.advanceTimersByTimeAsync(2_999)
+    await vi.advanceTimersByTimeAsync(1_499)
     expect(confirm!.disabled).toBe(true)
 
     await vi.advanceTimersByTimeAsync(1)
     expect(confirm!.disabled).toBe(false)
   })
 
-  it('生产代码只有一个 3000ms 常量，业务调用不得传局部 delay', () => {
+  it('生产代码只有一个 1500ms 常量，业务调用不得传局部 delay', () => {
     const sourceRoot = resolve(process.cwd(), 'src')
     const files = productionFiles(sourceRoot)
     const occurrences: Array<{ file: string; count: number }> = []
@@ -57,7 +57,7 @@ describe('global destructive confirmation contract 2026-07-26', () => {
 
     for (const file of files) {
       const source = readFileSync(file, 'utf8')
-      const count = source.match(/DESTRUCTIVE_CONFIRM_COOLDOWN_MS\s*=\s*3_000/g)?.length ?? 0
+      const count = source.match(/DESTRUCTIVE_CONFIRM_COOLDOWN_MS\s*=\s*1_500/g)?.length ?? 0
       if (count > 0) occurrences.push({ file, count })
       if (
         !file.endsWith('/components/common/ConfirmDialog.vue') &&

@@ -15,7 +15,8 @@ import type { RecordCollectionView } from '@/contracts'
 
 const h = vi.hoisted(() => ({ mistakes: [] as unknown[], accum: [] as unknown[], queue: [] as unknown[] }))
 
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockImplementation(() => Promise.resolve({ items: h.mistakes })),
   k12ReviewQueue: vi.fn().mockImplementation(() => Promise.resolve({ items: h.queue })),
   k12MarkMastered: vi.fn(),
@@ -54,30 +55,32 @@ describe('项-6a 悬空「数学·」芯片：知识点为空只显学科', () =
   })
 })
 
-describe('项-5 空态：无本周该练 → 正向空态卡 + 全部错题默认展开', () => {
+describe('项-5 本周该练：服务端计划是唯一投影，旧本地队列空态退役', () => {
   beforeEach(() => { setActivePinia(createPinia()); h.accum = []; h.queue = [] })
 
-  it('复习队列空 → 渲染空态卡且全部错题不折叠', async () => {
+  it('本地复习队列空 → 仍渲染服务端计划，不渲染旧空态卡；全部错题可独立直达', async () => {
     const now = Math.floor(Date.now() / 1000)
     h.mistakes = [{ record_id: 'a', question: '3.8×3', knowledge_point: '小数乘法', error_cause: 'x', status: 'new', version: 0, due_at: now + 86400 }]
     h.queue = []
     const w = render()
     await flushPromises()
-    const card = w.find('[data-testid="review-empty-card"]')
-    expect(card.exists()).toBe(true) // RED：修前无空态卡，顶部留空白
-    expect(card.text()).toContain('本周暂无到期复习')
-    // 全部错题默认展开（不带折叠类）
+    expect(w.find('.weekly-hero').exists()).toBe(true)
+    expect(w.find('[data-testid="review-empty-card"]').exists()).toBe(false)
+    expect(w.find('.rl-review').exists()).toBe(false)
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
+    await flushPromises()
     expect(w.find('.k12mistakes').classes()).not.toContain('k12mistakes--collapsed')
   })
 
-  it('复习队列有项 → 不渲染空态卡（行动卡常驻；折叠机制已随 IA 退役）', async () => {
+  it('本地复习队列有项 → 不把它重新投影成旧行动卡（服务端计划仍是唯一数据源）', async () => {
     const now = Math.floor(Date.now() / 1000)
     h.mistakes = [{ record_id: 'a', question: '3.8×3', knowledge_point: '小数乘法', error_cause: 'x', status: 'new', version: 0, due_at: now - 10 }]
     h.queue = [{ record_id: 'a', question: '3.8×3', knowledge_point: '小数乘法', error_cause: 'x', status: 'new', version: 0, due_at: now - 10, subject: '数学', review_kind: 'verify' }]
     const w = render()
     await flushPromises()
     expect(w.find('[data-testid="review-empty-card"]').exists()).toBe(false)
-    expect(w.find('.rl-review').exists(), '行动卡应常驻本周复习').toBe(true)
+    expect(w.find('.rl-review').exists(), '旧本地行动卡不得恢复').toBe(false)
+    expect(w.find('.weekly-hero').exists()).toBe(true)
   })
 })
 

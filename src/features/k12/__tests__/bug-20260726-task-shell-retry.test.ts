@@ -71,6 +71,8 @@ function i18n() {
         confirmation_state: 'confirmed',
         anchor_state: 'located',
       },
+      provider_display_name: 'HexClaw-GPT',
+      model_id: 'gpt-5.6-sol',
       progress: { operation: 'homework', state: stage },
       version: 2,
       created_at: 1,
@@ -132,8 +134,8 @@ describe('BUG-20260726-010 · TaskShell retry capability', () => {
 
     await wrapper.setProps({
       agentDisplayName: '小王的辅导助手',
-      displayProvider: 'HexClaw-GPT',
-      displayModel: 'gpt-5.6-sol',
+      displayProvider: '当前设置服务商',
+      displayModel: 'current-model',
       grade: '五年级下',
     })
     const metadata = wrapper.get('[data-testid="task-shell-metadata"]')

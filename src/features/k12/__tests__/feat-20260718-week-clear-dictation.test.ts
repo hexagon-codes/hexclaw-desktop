@@ -42,7 +42,8 @@ const h = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockImplementation(() => Promise.resolve({ items: h.mistakes })),
   k12ReviewQueue: vi.fn().mockImplementation(() => Promise.resolve({ items: h.queue })),
   k12MarkMastered: vi.fn().mockImplementation(() => {
@@ -90,7 +91,7 @@ function render() {
   })
 }
 
-describe('①（§3.6）本周清零庆祝态', () => {
+describe('① 本周该练服务端计划投影（旧本地清零庆祝态退役）', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     h.mistakes = [h.due]
@@ -98,31 +99,25 @@ describe('①（§3.6）本周清零庆祝态', () => {
     h.generateSpy.mockClear()
   })
 
-  it('本轮「家长确认已会」清空队列 → 空态卡显庆祝文案（🎉 本周清零 + 下次出卷预告）', async () => {
+  it('本地队列有项时也不暴露「家长确认已会」或旧清零空态', async () => {
     const w = render()
     await flushPromises()
-    expect(w.find('[data-testid="review-empty-card"]').exists()).toBe(false) // 前置：有队列
-    const btn = w.findAll('.rl-btn').find((b) => b.text() === '家长确认已会')!
-    await btn.trigger('click')
-    await flushPromises()
-    const card = w.find('[data-testid="review-empty-card"]')
-    expect(card.exists()).toBe(true)
-    expect(w.find('[data-testid="review-cleared-title"]').exists()).toBe(true)
-    expect(card.text()).toContain('本周清零')
-    expect(card.text()).toContain('周五 19:00')
-    // 庆祝态不再显中性「本周暂无到期复习」
-    expect(card.text()).not.toContain('本周暂无到期复习')
+    expect(w.find('.weekly-hero').exists()).toBe(true)
+    expect(w.text()).not.toContain('家长确认已会')
+    expect(w.find('[data-testid="review-empty-card"]').exists()).toBe(false)
+    expect(w.find('[data-testid="review-cleared-title"]').exists()).toBe(false)
+    expect(w.text()).not.toContain('本周清零')
   })
 
-  it('本来就无到期（无清零动作）→ 维持中性空态，不假庆祝', async () => {
+  it('本地队列为空时仍由服务端计划表达空周，不回退到旧空态或假庆祝', async () => {
     h.queue = []
     h.mistakes = []
     const w = render()
     await flushPromises()
-    const card = w.find('[data-testid="review-empty-card"]')
-    expect(card.exists()).toBe(true)
-    expect(card.text()).toContain('本周暂无到期复习')
-    expect(card.text()).not.toContain('本周清零')
+    expect(w.find('.weekly-hero').exists()).toBe(true)
+    expect(w.find('[data-testid="review-empty-card"]').exists()).toBe(false)
+    expect(w.text()).not.toContain('本周暂无到期复习')
+    expect(w.text()).not.toContain('本周清零')
   })
 })
 

@@ -445,7 +445,7 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
     ]
     const artifact = {
       artifact_id: 'artifact-with-skips',
-      digest: 'sha256:canonical-with-skips',
+      artifact_digest: 'sha256:canonical-with-skips',
       kind: 'completed_homework',
       title: '整页批改完成 · 有 2 题跳过',
       coverage: { state: 'with_skips', total: 4, processed: 2, skipped: 2 },
@@ -505,7 +505,7 @@ describe('BUG-20260726-031 · SourceIssueResolver and final artifact Wave 2', ()
 
     const finalArtifact = {
       artifact_id: 'artifact-final-only',
-      digest: 'sha256:canonical-final-only',
+      artifact_digest: 'sha256:canonical-final-only',
       kind: 'completed_homework',
       title: '整页批改完成',
       coverage: { state: 'full', total: 2, processed: 2, skipped: 0 },

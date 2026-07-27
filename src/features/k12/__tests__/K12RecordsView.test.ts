@@ -5,7 +5,12 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import HcSelect from '@/components/common/HcSelect.vue'
-import { k12EnsureWeeklyPracticePlan } from '@/api/k12'
+import {
+  k12EnsureWeeklyPracticePlan,
+  k12GetDeliveryBatch,
+  k12QueryDeliveryBatch,
+  k12RetryDeliveryBatch,
+} from '@/api/k12'
 import K12WeeklyPracticePanel from '../components/K12WeeklyPracticePanel.vue'
 import K12RecordsView from '../views/K12RecordsView.vue'
 import K12InsightPanel from '../views/K12InsightPanel.vue'
@@ -17,7 +22,8 @@ const h = vi.hoisted(() => {
       question: '苹果和梨的价钱',
       knowledge_point: '小数乘法',
       error_cause: '计算失误·进位',
-      status: 'new',
+      status: 'scheduled',
+      review_state: 'scheduled',
       version: 0,
       due_at: 1710000000,
     },
@@ -26,7 +32,8 @@ const h = vi.hoisted(() => {
       question: '解方程 2x+15=43',
       knowledge_point: '简易方程',
       error_cause: '移项符号错',
-      status: 'new',
+      status: 'scheduled',
+      review_state: 'scheduled',
       version: 1,
       due_at: 1710000000,
     },
@@ -38,6 +45,16 @@ const h = vi.hoisted(() => {
       status: 'mastered',
       version: 2,
     },
+    {
+      record_id: 'm-poem',
+      question: '「梅须逊雪三分白」漏「须」字',
+      knowledge_point: '古诗默写',
+      error_cause: '漏写“须”字',
+      status: 'scheduled',
+      review_state: 'scheduled',
+      version: 3,
+      due_at: 1710000000,
+    },
   ]
   return {
     mistakes,
@@ -45,19 +62,26 @@ const h = vi.hoisted(() => {
     recordMistakeSpy: vi.fn(),
     listMistakesSpy: vi.fn(),
     prepareWeeklySpy: vi.fn(),
+    getWeeklyHistorySpy: vi.fn(),
+    getWeeklySnapshotSpy: vi.fn(),
+    sendWeeklySpy: vi.fn(),
+    getDeliveryBatchSpy: vi.fn(),
+    queryDeliveryBatchSpy: vi.fn(),
+    retryDeliveryBatchSpy: vi.fn(),
+    getPracticeGenerationSpy: vi.fn(),
+    retryPracticeGenerationSpy: vi.fn(),
   }
 })
 const markMasteredSpy = h.markMasteredSpy
 
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: (...args: unknown[]) => h.listMistakesSpy(...args),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [h.mistakes[0]] }),
   k12MarkMastered: (req: unknown) => h.markMasteredSpy(req),
-  k12GetMistakePracticeGeneration: vi
-    .fn()
-    .mockImplementation((_agent: string, recordID: string) =>
-      Promise.resolve({ state: 'available', source_mistake_id: recordID }),
-    ),
+  k12GetMistakePracticeGeneration: (...args: unknown[]) => h.getPracticeGenerationSpy(...args),
+  k12RetryMistakePracticeGeneration: (...args: unknown[]) =>
+    h.retryPracticeGenerationSpy(...args),
   k12TutoringTips: vi.fn(),
   k12Grade: vi.fn(),
   k12RecordMistake: (req: unknown) => h.recordMistakeSpy(req),
@@ -134,6 +158,19 @@ vi.mock('@/api/k12', () => ({
               },
               prompt_markdown: '苹果和梨的价钱',
             },
+            {
+              item_id: 'due-m-poem',
+              position: 2,
+              plan_section: 'due_review',
+              source_kind: 'mistake',
+              generation_method: 'original',
+              source_ref: 'm-poem',
+              verification: {
+                status: 'verified',
+                evidence_refs: ['古诗默写'],
+              },
+              prompt_markdown: '「梅须逊雪三分白」漏「须」字',
+            },
           ],
         },
         { plan_section: 'textbook_consolidation', status: 'disabled', items: [] },
@@ -143,8 +180,13 @@ vi.mock('@/api/k12', () => ({
       updated_at: '2026-07-20T00:00:00Z',
     },
   }),
-  k12GetWeeklyPracticeHistory: vi.fn().mockResolvedValue({ items: [], next_cursor: null }),
+  k12GetWeeklyPracticeHistory: (...args: unknown[]) => h.getWeeklyHistorySpy(...args),
+  k12GetWeeklyPracticeSnapshot: (...args: unknown[]) => h.getWeeklySnapshotSpy(...args),
   k12PrepareWeeklyPracticeOutput: (...args: unknown[]) => h.prepareWeeklySpy(...args),
+  k12SendWeeklyPracticeSnapshot: (...args: unknown[]) => h.sendWeeklySpy(...args),
+  k12GetDeliveryBatch: (...args: unknown[]) => h.getDeliveryBatchSpy(...args),
+  k12QueryDeliveryBatch: (...args: unknown[]) => h.queryDeliveryBatchSpy(...args),
+  k12RetryDeliveryBatch: (...args: unknown[]) => h.retryDeliveryBatchSpy(...args),
   // 其他档案页仍使用练习集列表；InsightPanel 只消费同一份报告快照。
   k12ListPracticeSets: vi.fn().mockResolvedValue({ items: [] }),
 }))
@@ -162,12 +204,75 @@ function render(props: Record<string, unknown> = {}) {
   return mount(K12RecordsView, {
     props: {
       agentId: 'mingming',
-      agentName: '小明的辅导老师',
+      agentName: '小明的辅导助手',
       grade: '五年级上 · 人教版',
       ...props,
     },
     global: { plugins: [createPinia(), i18n()] },
   })
+}
+
+function preparedWeeklyOutput() {
+  return {
+    snapshot: {
+      snapshot_id: 'snapshot-30',
+      artifact_id: 'artifact-30',
+      plan_id: 'weekly-30',
+      plan_revision: 1,
+      agent: 'mingming',
+      iso_week_year: 2026,
+      iso_week_number: 30,
+      timezone: 'Asia/Shanghai',
+      week_start: '2026-07-20T00:00:00+08:00',
+      week_end: '2026-07-26T23:59:59+08:00',
+      local_start_date: '2026-07-20',
+      local_end_date: '2026-07-26',
+      settings_revision: 0,
+      tracks: [],
+      render_version: 'weekly-v1',
+      snapshot_digest: 'sha256:snapshot',
+      created_at: '2026-07-20T00:00:00Z',
+    },
+    artifact: {
+      artifact_id: 'artifact-30',
+      source_kind: 'weekly_practice_snapshot',
+      source_ref: 'snapshot-30',
+      title: '本周该练',
+      source_digest: 'sha256:snapshot',
+      format: 'pdf',
+      render_contract_version: 'practice-print-v1',
+      content_type: 'application/pdf',
+      byte_digest: 'sha256:pdf',
+      byte_size: 128,
+    },
+  }
+}
+
+function emptyWeeklyPlan() {
+  return {
+    replayed: false,
+    plan: {
+      plan_id: 'weekly-30',
+      agent: 'mingming',
+      revision: 1,
+      iso_week_year: 2026,
+      iso_week_number: 30,
+      timezone: 'Asia/Shanghai',
+      week_start: '2026-07-20T00:00:00+08:00',
+      week_end: '2026-07-26T23:59:59+08:00',
+      local_start_date: '2026-07-20',
+      local_end_date: '2026-07-26',
+      status: 'draft',
+      settings_revision: 0,
+      tracks: [
+        { plan_section: 'due_review', status: 'ready', items: [] },
+        { plan_section: 'textbook_consolidation', status: 'disabled', items: [] },
+        { plan_section: 'arithmetic_warmup', status: 'disabled', items: [] },
+      ],
+      created_at: '2026-07-20T00:00:00Z',
+      updated_at: '2026-07-20T00:00:00Z',
+    },
+  }
 }
 
 describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
@@ -181,38 +286,56 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
       error_cause: '记错下一句',
     })
     vi.mocked(k12EnsureWeeklyPracticePlan).mockClear()
-    h.prepareWeeklySpy.mockReset().mockResolvedValue({
-      snapshot: {
-        snapshot_id: 'snapshot-30',
-        plan_id: 'weekly-30',
-        plan_revision: 1,
-        agent: 'mingming',
-        iso_week_year: 2026,
-        iso_week_number: 30,
-        timezone: 'Asia/Shanghai',
-        week_start: '2026-07-20T00:00:00+08:00',
-        week_end: '2026-07-26T23:59:59+08:00',
-        local_start_date: '2026-07-20',
-        local_end_date: '2026-07-26',
-        settings_revision: 0,
-        tracks: [],
-        render_version: 'weekly-v1',
-        snapshot_digest: 'sha256:snapshot',
-        created_at: '2026-07-20T00:00:00Z',
-      },
-      artifact: {
-        artifact_id: 'artifact-30',
-        source_kind: 'weekly_practice_snapshot',
-        source_ref: 'snapshot-30',
-        title: '本周该练',
-        source_digest: 'sha256:snapshot',
-        format: 'pdf',
-        render_contract_version: 'practice-print-v1',
-        content_type: 'application/pdf',
-        byte_digest: 'sha256:pdf',
-        byte_size: 128,
-      },
+    h.getWeeklyHistorySpy.mockReset().mockResolvedValue({ items: [], next_cursor: null })
+    h.getWeeklySnapshotSpy.mockReset()
+    h.prepareWeeklySpy.mockReset().mockResolvedValue(preparedWeeklyOutput())
+    h.sendWeeklySpy.mockReset().mockResolvedValue({
+      batch_id: 'weekly-delivery-1',
+      status: 'delivered',
     })
+    h.getDeliveryBatchSpy.mockReset()
+    h.queryDeliveryBatchSpy.mockReset()
+    h.retryDeliveryBatchSpy.mockReset()
+    h.getPracticeGenerationSpy
+      .mockReset()
+      .mockImplementation((_agent: string, recordID: string) =>
+        Promise.resolve({ state: 'available', source_mistake_id: recordID }),
+      )
+    h.retryPracticeGenerationSpy.mockReset().mockImplementation((_agent: string, recordID: string) =>
+      Promise.resolve({ state: 'pending', source_mistake_id: recordID }),
+    )
+  })
+
+  it('[BUG-20260727-007] failed practice generation projects one retry command in weekly and all mistakes', async () => {
+    h.getPracticeGenerationSpy.mockImplementation((_agent: string, recordID: string) =>
+      Promise.resolve({
+        state: recordID === 'm-poem' ? 'failed' : 'available',
+        source_mistake_id: recordID,
+      }),
+    )
+    h.retryPracticeGenerationSpy.mockResolvedValue({
+      state: 'failed',
+      source_mistake_id: 'm-poem',
+    })
+
+    const w = render()
+    await flushPromises()
+
+    const weeklyRetry = w.get('[data-testid="weekly-practice-m-poem"]')
+    expect(weeklyRetry.text()).toBe('出题失败 · 重试')
+    await weeklyRetry.trigger('click')
+    await flushPromises()
+    expect(h.retryPracticeGenerationSpy).toHaveBeenCalledTimes(1)
+    expect(h.retryPracticeGenerationSpy).toHaveBeenNthCalledWith(1, 'mingming', 'm-poem')
+
+    await w.get('[data-testid="subtab-mistakes"]').trigger('click')
+    const recordsRetry = w.get('[data-testid="mistake-practice-m-poem"]')
+    expect(recordsRetry.text()).toBe('出题失败 · 重试')
+
+    await recordsRetry.trigger('click')
+    await flushPromises()
+    expect(h.retryPracticeGenerationSpy).toHaveBeenCalledTimes(2)
+    expect(h.retryPracticeGenerationSpy).toHaveBeenNthCalledWith(2, 'mingming', 'm-poem')
   })
 
   it('reuses the plan command key across retry and rotates it only after success', async () => {
@@ -257,11 +380,11 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(h.listMistakesSpy).toHaveBeenCalledTimes(2)
   })
 
-  it('生成本周该练只准备同源输出，不再强制切换到练习集', async () => {
+  it('直接产物动作按需准备同源输出，不强制切换到练习集', async () => {
     const w = render()
     await flushPromises()
 
-    await w.get('[data-testid="prepare-weekly-output"]').trigger('click')
+    await w.get('[data-testid="final-artifact-actions"]').findAll('button')[0]!.trigger('click')
     await flushPromises()
 
     expect(h.prepareWeeklySpy).toHaveBeenCalledTimes(1)
@@ -273,21 +396,201 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     )
     expect(w.get('[data-testid="subtab-week"]').classes()).toContain('on')
     expect(w.get('[data-testid="subtab-practicesets"]').classes()).not.toContain('on')
-    expect(w.find('[data-testid="save-weekly-practice-set"]').exists()).toBe(true)
+    expect(w.find('[data-testid="prepare-weekly-output"]').exists()).toBe(false)
+    expect(
+      w.get('[data-testid="final-artifact-actions"]').findAll('button').map((button) =>
+        button.text(),
+      ),
+    ).toEqual(['打印', '发送到手机'])
+    expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
   })
 
-  it('「家长确认已会」→ 调 mark-mastered 并带正确 record_id/version', async () => {
+  it('[K12-WEEKLY-044] keeps history on its frozen snapshot/artifact and never prepares a current task', async () => {
+    const historyItem = Object.freeze({
+      snapshot_id: 'snapshot-29',
+      artifact_id: 'artifact-29',
+      plan_id: 'weekly-29',
+      iso_week_year: 2026,
+      iso_week_number: 29,
+      timezone: 'Asia/Shanghai',
+      local_start_date: '2026-07-13',
+      local_end_date: '2026-07-19',
+      item_count: 8,
+      correct_count: 7,
+      wrong_count: 1,
+      needs_review_count: 0,
+      archived_at: '2026-07-20T00:00:00+08:00',
+    })
+    const frozenSnapshot = Object.freeze({
+      snapshot_id: 'snapshot-29',
+      artifact_id: 'artifact-29',
+      plan_id: 'weekly-29',
+      plan_revision: 4,
+      agent: 'mingming',
+      iso_week_year: 2026,
+      iso_week_number: 29,
+      timezone: 'Asia/Shanghai',
+      week_start: '2026-07-13T00:00:00+08:00',
+      week_end: '2026-07-19T23:59:59+08:00',
+      local_start_date: '2026-07-13',
+      local_end_date: '2026-07-19',
+      settings_revision: 0,
+      tracks: [],
+      render_version: 'weekly-v1',
+      snapshot_digest: 'sha256:frozen-history-29',
+      created_at: '2026-07-20T00:00:00+08:00',
+    })
+    h.getWeeklyHistorySpy.mockResolvedValue({ items: [historyItem], next_cursor: null })
+    h.getWeeklySnapshotSpy.mockResolvedValue(frozenSnapshot)
+
     const w = render()
     await flushPromises()
-    // 本周该练禁止家长判断掌握；该档案动作只留在「全部错题」。
-    await w
-      .findAll('.seg button')
-      .find((b) => b.text() === '全部错题')!
+    expect(w.find('[data-testid="final-artifact-actions"]').exists()).toBe(true)
+    expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
+
+    const panel = w.findComponent(K12WeeklyPracticePanel)
+    await panel
+      .findAll('[role="tab"]')
+      .find((tab) => tab.text() === '历史')!
       .trigger('click')
-    const masteredBtn = w.findAll('.rl-btn').find((b) => b.text() === '家长确认已会')!
-    await masteredBtn.trigger('click')
+
+    expect(w.find('[data-testid="final-artifact-actions"]').exists()).toBe(false)
+    expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
+    expect(panel.findAll('.weekly-history__card button').map((button) => button.text())).toEqual([
+      '查看周练',
+    ])
+
+    await panel.get('.weekly-history__card button').trigger('click')
     await flushPromises()
-    expect(markMasteredSpy).toHaveBeenCalledWith({ agent: 'mingming', record_id: 'a', version: 0 })
+
+    expect(h.getWeeklySnapshotSpy).toHaveBeenCalledWith('mingming', 'snapshot-29')
+    expect(panel.props('historySnapshot')).toBe(frozenSnapshot)
+    expect((panel.props('historySnapshot') as typeof frozenSnapshot).snapshot_digest).toBe(
+      'sha256:frozen-history-29',
+    )
+
+    panel.vm.$emit('history-artifact-action', {
+      action: 'send_im',
+      snapshot_id: 'snapshot-29',
+      artifact_id: 'artifact-29',
+    })
+    await flushPromises()
+
+    expect(h.sendWeeklySpy).toHaveBeenCalledWith(
+      'mingming',
+      'snapshot-29',
+      'desktop-weekly-history-send:mingming:snapshot-29',
+    )
+    expect(h.prepareWeeklySpy).not.toHaveBeenCalled()
+    expect(frozenSnapshot.snapshot_digest).toBe('sha256:frozen-history-29')
+
+    await panel
+      .findAll('[role="tab"]')
+      .find((tab) => tab.text() === '本周')!
+      .trigger('click')
+    expect(w.find('[data-testid="final-artifact-actions"]').exists()).toBe(true)
+    expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
+  })
+
+  it('[K12-WEEKLY-046] zero items and an in-flight output reject duplicate boundary calls', async () => {
+    vi.mocked(k12EnsureWeeklyPracticePlan).mockResolvedValueOnce(emptyWeeklyPlan() as any)
+    const empty = render()
+    await flushPromises()
+
+    const emptyActions = empty.get('[data-testid="final-artifact-actions"]')
+    expect(emptyActions.get('[role="status"]').text()).toBe('当前没有可输出的题目')
+    for (const button of emptyActions.findAll('button')) {
+      expect(button.attributes('disabled')).toBeDefined()
+      await button.trigger('click')
+    }
+    expect(h.prepareWeeklySpy).not.toHaveBeenCalled()
+    expect(h.sendWeeklySpy).not.toHaveBeenCalled()
+    expect(h.getDeliveryBatchSpy).not.toHaveBeenCalled()
+    expect(h.queryDeliveryBatchSpy).not.toHaveBeenCalled()
+    expect(h.retryDeliveryBatchSpy).not.toHaveBeenCalled()
+    empty.unmount()
+
+    let releaseOutput!: (output: ReturnType<typeof preparedWeeklyOutput>) => void
+    h.prepareWeeklySpy.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseOutput = resolve
+        }),
+    )
+    const busy = render()
+    await flushPromises()
+    const busyActions = busy.get('[data-testid="final-artifact-actions"]')
+    await busyActions.findAll('button')[1]!.trigger('click')
+
+    expect(busyActions.get('[role="status"]').text()).toBe('正在处理本周计划…')
+    expect(busyActions.findAll('button').every((button) => button.attributes('disabled') !== undefined))
+      .toBe(true)
+    for (const button of busyActions.findAll('button')) await button.trigger('click')
+    expect(h.prepareWeeklySpy).toHaveBeenCalledTimes(1)
+    expect(h.sendWeeklySpy).not.toHaveBeenCalled()
+
+    releaseOutput(preparedWeeklyOutput())
+    await flushPromises()
+    expect(h.sendWeeklySpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('[K12-WEEKLY-046] refresh replays stable prepare/send identities without a second delivery batch', async () => {
+    const prepareKeys = new Set<string>()
+    const sendKeys = new Set<string>()
+    const createdBatchIDs = new Set<string>()
+    h.prepareWeeklySpy.mockImplementation(
+      async (_agent: string, _plan: string, _revision: number, key: string) => {
+        prepareKeys.add(key)
+        return preparedWeeklyOutput()
+      },
+    )
+    h.sendWeeklySpy.mockImplementation(
+      async (_agent: string, _snapshot: string, key: string) => {
+        sendKeys.add(key)
+        createdBatchIDs.add('weekly-delivery-1')
+        return { batch_id: 'weekly-delivery-1', status: 'delivered' }
+      },
+    )
+
+    const first = render()
+    await flushPromises()
+    await first
+      .get('[data-testid="final-artifact-actions"]')
+      .findAll('button')[1]!
+      .trigger('click')
+    await flushPromises()
+    expect(first.get('[data-testid="final-artifact-actions"]').text()).toContain('发送成功')
+    first.unmount()
+
+    const refreshed = render()
+    await flushPromises()
+    await refreshed
+      .get('[data-testid="final-artifact-actions"]')
+      .findAll('button')[1]!
+      .trigger('click')
+    await flushPromises()
+
+    expect(h.prepareWeeklySpy).toHaveBeenCalledTimes(2)
+    expect(h.sendWeeklySpy).toHaveBeenCalledTimes(2)
+    expect(prepareKeys).toEqual(
+      new Set(['desktop-weekly-prepare:mingming:weekly-30:1']),
+    )
+    expect(sendKeys).toEqual(
+      new Set(['desktop-weekly-send:mingming:snapshot-30']),
+    )
+    expect(createdBatchIDs).toEqual(new Set(['weekly-delivery-1']))
+    expect(h.queryDeliveryBatchSpy).not.toHaveBeenCalled()
+    expect(h.retryDeliveryBatchSpy).not.toHaveBeenCalled()
+  })
+
+  it('全部错题不提供家长主观改掌握，mastered 只由真实作答证据产生', async () => {
+    const w = render()
+    await flushPromises()
+    await w.get('[data-testid="subtab-mistakes"]').trigger('click')
+
+    expect(w.findAll('.rl-btn').some((button) => button.text() === '家长确认已会')).toBe(false)
+    expect(w.find('[data-testid="detail-mark-mastered"]').exists()).toBe(false)
+    expect(markMasteredSpy).not.toHaveBeenCalled()
   })
 
   it('手录错题走轻量 record-mistake 端点（非 grade 验算链），透传家长选的非默认学科', async () => {
@@ -320,6 +623,10 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
   it('「⋯」溢出菜单：备份/恢复收进菜单（不占常驻顶栏），点击外发 open-backup', async () => {
     const w = render()
     await flushPromises()
+    await w
+      .findAll('.seg button')
+      .find((button) => button.text().includes('全部错题'))!
+      .trigger('click')
     await w.find('.k12rec__export button').trigger('click')
     const backupBtn = w.findAll('.k12rec__menu button').find((b) => b.text().includes('备份'))
     expect(backupBtn, '⋯ 菜单应含备份/恢复').toBeTruthy()
@@ -327,11 +634,24 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
     expect(w.emitted('open-backup')).toBeTruthy()
   })
 
-  it('学习档案五个二级 Tab 的溢出菜单均提供三种导出与备份恢复', async () => {
+  it('本周该练只提供打印与发送，其他四个学习档案 Tab 提供通用导出与备份恢复', async () => {
     const w = render()
     await flushPromises()
-    const tabs = ['本周该练', '全部错题', '练习集', '积累', '作品']
-    const expected = ['导出 PDF', '导出 Word', '导出 Markdown', '备份 / 恢复']
+    expect(
+      w.get('[data-testid="final-artifact-actions"]').findAll('button').map((button) =>
+        button.text(),
+      ),
+    ).toEqual(['打印', '发送到手机'])
+    expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
+    expect(w.find('[data-testid="records-more-trigger"]').exists()).toBe(false)
+
+    const tabs = ['全部错题', '练习集', '积累', '作品']
+    const expectedByTab = {
+      全部错题: ['导出 PDF', '导出 Word', '导出 Markdown', '备份 / 恢复'],
+      练习集: ['导出 PDF', '导出 Word', '导出 Markdown', '备份 / 恢复'],
+      积累: ['导出 PDF', '导出 Word', '导出 Markdown', '备份 / 恢复'],
+      作品: ['导出 PDF', '导出 Word', '导出 Markdown', '备份 / 恢复'],
+    }
 
     for (const tab of tabs) {
       await w
@@ -342,7 +662,7 @@ describe('K12RecordsView（M1-6 记录 + M3-6 复习 + M3-7 学情）', () => {
       if (w.find('.k12rec__menu').exists()) await trigger.trigger('click')
       await trigger.trigger('click')
       const actions = w.findAll('.k12rec__menu button').map((button) => button.text())
-      expect(actions).toEqual(expected)
+      expect(actions).toEqual(expectedByTab[tab as keyof typeof expectedByTab])
     }
   })
 

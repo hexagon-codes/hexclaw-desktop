@@ -56,7 +56,8 @@ vi.mock('../export', () => ({
   exportArchiveDocument: (...a: unknown[]) => h.exportArchiveDocumentSpy(...a),
   download: vi.fn(),
 }))
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: h.mistakes }),
   k12ReviewQueue: vi.fn().mockImplementation(() =>
     Promise.resolve({
@@ -115,9 +116,9 @@ function render(route?: { provider: string; model: string }) {
   })
 }
 
-// §3.8 闭环断裂修复（20260718 改道装篮）：出卷动作不再 exportPdf 直出 PDF（绕过练习集），
-// 统一为装篮（AddToBasket 幂等去重）→ 打印/发送在练习集完成（打印即确认固化）。
-describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', () => {
+// 最新批准合同：本周该练只保留打印和发送；整周复习卷、自定义组卷与独立 PDF 均退役。
+// 单题“加入练习集”继续走共享候选选择与原子提交，不由本组整周动作测试替代。
+describe('本周该练输出 exact-set 与档案导出', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     h.printSpy.mockClear()
@@ -148,103 +149,30 @@ describe('生成复习卷 / 自定义组卷 → 装篮（不再直出 PDF）', (
     h.listPracticeSetsSpy.mockClear().mockResolvedValue({ items: [] })
   })
 
-  it('点「生成复习卷」→ 调后端到期题验证装篮链，不再把全部题硬编码 pending', async () => {
+  it('本周该练移除旧「生成复习卷」，直接提供同源产物动作且不触发旧装篮链', async () => {
     const w = render()
     await flushPromises()
-    const genBtn = w.find('[data-testid="build-review-set"]')
-    expect(genBtn.exists(), '应有「生成复习卷」按钮').toBe(true)
-    expect(genBtn.text()).toContain('生成复习卷')
-    await genBtn.trigger('click')
-    await flushPromises()
 
-    expect(h.fillBasketSpy).toHaveBeenCalledWith('mingming')
+    expect(w.find('[data-testid="build-review-set"]').exists()).toBe(false)
+    expect(
+      w.findAll('[data-testid="final-artifact-actions"] button').map((button) => button.text()),
+    ).toEqual(['打印', '发送到手机'])
+    expect(h.fillBasketSpy).not.toHaveBeenCalled()
     expect(h.addToBasketSpy).not.toHaveBeenCalled()
-    // 旧路径整体删除：不再直出 PDF / 打印
     expect(h.exportPdfSpy).not.toHaveBeenCalled()
     expect(h.printSpy).not.toHaveBeenCalled()
-    // 装篮完成 → 切到练习集 Tab（打印/发送在那完成）
-    expect(w.find('[data-testid="practicesets-section"]').exists()).toBe(true)
+    expect(w.find('[data-testid="week-section"]').exists()).toBe(true)
   })
 
-  it('DD-027：全部参数开放，并且 Desktop 只调用一次正式组卷 command', async () => {
-    const w = render({ provider: 'hexclaw-gpt', model: 'gpt-5.6-sol' })
-    await flushPromises()
-    await w.find('[data-testid="review-split-more"]').trigger('click')
-    await w.find('[data-testid="custom-paper-open"]').trigger('click')
-    expect(w.find('[data-testid="paper-scope-week"]').exists()).toBe(true)
-    expect(w.find('[data-testid="paper-scope-unmastered"]').exists()).toBe(true)
-    await w.find('[data-testid="paper-scope-unmastered"]').trigger('click')
-    await w.find('[data-testid="paper-perq-2"]').trigger('click')
-    await w.find('[data-testid="paper-difficulty-harder"]').trigger('click')
-    await w
-      .findAll('.chip')
-      .find((b) => b.text().includes('≤ 5'))!
-      .trigger('click')
-
-    const gen = w.find('[data-testid="custom-paper-gen"]')
-    expect(gen.text()).toContain('加入练习集')
-    expect(gen.text()).not.toContain('打印')
-    await gen.trigger('click')
-    await flushPromises()
-
-    expect(h.customPaperSpy).toHaveBeenCalledTimes(1)
-    expect(h.customPaperSpy).toHaveBeenCalledWith({
-      agent: 'mingming',
-      idempotency_key: expect.any(String),
-      scope: 'unmastered',
-      total: 5,
-      per_source: 2,
-      difficulty: 'harder',
-      textbook: '人教版',
-      grade: '五年级上',
-      provider: 'hexclaw-gpt',
-      model: 'gpt-5.6-sol',
-    })
-    expect(h.startPracticeSpy).not.toHaveBeenCalled()
-    expect(h.addToBasketSpy).not.toHaveBeenCalled()
-    expect(h.exportPdfSpy).not.toHaveBeenCalled()
-    const result = w.find('[data-testid="custom-paper-result"]')
-    expect(result.attributes('role')).toBe('status')
-    expect(result.text()).toContain('组卷完成')
-    expect(result.text()).toContain('来源题')
-    expect(result.text()).toContain('实际难度')
-    expect(result.text()).toContain('已验证')
-  })
-
-  it('DD-027：失败留在原弹层，原参数和幂等键重试后展示同一任务回执', async () => {
-    h.customPaperSpy
-      .mockRejectedValueOnce(new Error('第 2 题验证失败，未装入半篮'))
-      .mockResolvedValueOnce({
-        generation_job_id: 'paper-job-replayed',
-        status: 'committed',
-        set: { record_id: 'ps-1', status: 'draft', items: [] },
-        items: [],
-        added: 0,
-        deduplicated: 2,
-      })
+  it('DD-027 superseded：整周自定义组卷、更多入口与整周保存均不存在', async () => {
     const w = render()
     await flushPromises()
-    await w.find('[data-testid="review-split-more"]').trigger('click')
-    await w.find('[data-testid="custom-paper-open"]').trigger('click')
-    await w.find('[data-testid="custom-paper-gen"]').trigger('click')
-    await flushPromises()
-
-    const alert = w.find('[data-testid="custom-paper-error"]')
-    expect(alert.attributes('role')).toBe('alert')
-    expect(alert.text()).toContain('未装入半篮')
-    expect(w.find('[data-testid="custom-paper-form"]').exists()).toBe(true)
-    const firstKey = (h.customPaperSpy.mock.calls[0]![0] as { idempotency_key: string })
-      .idempotency_key
-
-    await w.find('[data-testid="custom-paper-retry"]').trigger('click')
-    await flushPromises()
-
-    expect(h.customPaperSpy).toHaveBeenCalledTimes(2)
-    expect(
-      (h.customPaperSpy.mock.calls[1]![0] as { idempotency_key: string }).idempotency_key,
-    ).toBe(firstKey)
-    expect(w.find('[data-testid="custom-paper-result"]').text()).toContain('未重复加入')
-    expect(w.find('[data-testid="custom-paper-result"]').text()).toContain('paper-job-replayed')
+    expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
+    expect(w.find('button[aria-label="更多本周该练操作"]').exists()).toBe(false)
+    expect(w.find('[data-testid="custom-paper-form"]').exists()).toBe(false)
+    expect(w.find('[data-testid="custom-paper-gen"]').exists()).toBe(false)
+    expect(h.customPaperSpy).not.toHaveBeenCalled()
+    expect(h.fillBasketSpy).not.toHaveBeenCalled()
   })
 
   it('溢出菜单的档案导出保留，并消费服务端完整学习档案 Markdown', async () => {

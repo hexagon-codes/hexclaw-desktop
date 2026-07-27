@@ -25,6 +25,44 @@ vi.mock('@/api/k12', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/k12')>()),
   k12UpdateProfile: (...args: unknown[]) => h.legacyProfile(...args),
   k12UpdateProfileBundle: (...args: unknown[]) => h.bundle(...args),
+  k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({
+    agent: 'k12-tutor-x',
+    subject: 'math',
+    items: [
+      {
+        manifest_id: 'manifest-pep-5b',
+        document_id: 'document-pep-5b',
+        document_generation: 1,
+        document_title: '数学五年级下册.pdf',
+        state: 'ready_for_confirmation',
+        retryable: false,
+        failure_message: '',
+        text_index_state: 'ready',
+        vector_index_state: 'ready',
+        updated_at: '',
+        catalog: {
+          subject: 'math',
+          textbook_binding_id: 'pep-5b',
+          textbook_edition: '人教版',
+          textbook_version: '2022',
+          title: '数学',
+          volume: '五年级下册',
+          page_min: 1,
+          page_max: 120,
+          page_refs: [],
+          units: [
+            {
+              unit_id: 'unit-4',
+              title: '第4单元「分数的意义和性质」',
+              page_from: 45,
+              page_to: 62,
+              lessons: [],
+            },
+          ],
+        },
+      },
+    ],
+  }),
   k12GetCurriculumCatalog: vi.fn().mockResolvedValue({
     agent: 'k12-tutor-x',
     subject: 'math',
@@ -59,6 +97,7 @@ vi.mock('@/api/k12', async (importOriginal) => ({
       subject: 'math',
       revision: 4,
       textbook_binding_id: 'pep-5b',
+      textbook_manifest_id: 'manifest-pep-5b',
       textbook_edition: '人教版',
       textbook_version: '2022',
       title: '数学',
@@ -140,6 +179,13 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
     h.updateAgent.mockReset().mockResolvedValue({})
     h.getAgents.mockReset().mockResolvedValue({ agents: [], total: 0, default: '' })
     h.bundle.mockReset().mockResolvedValue({
+      agent_config: {
+        display_name: '小明的辅导助手 · 五年级',
+        description: '',
+        system_prompt: '',
+        provider: '',
+        model: '',
+      },
       profile: {
         child_name: '小明',
         grade_term: '五年级下',
@@ -164,7 +210,7 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
 
     expect(body().findAll('[data-testid="k12-textbook-math"]')).toHaveLength(1)
     expect(body().findAll('[data-testid="k12-math-progress"]')).toHaveLength(1)
-    expect(body().find('[data-testid="k12-progress-unit"]').exists()).toBe(true)
+    expect(body().find('[data-testid="k12-current-unit-value"]').exists()).toBe(true)
     expect(body().findAll('[role="switch"]')).toHaveLength(2)
     expect(body().find('[data-testid="k12-arithmetic-minutes"]').exists()).toBe(false)
 
@@ -189,7 +235,7 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
         }),
         curriculum_progress: expect.objectContaining({
           subject: 'math',
-          textbook_binding_id: 'pep-5b',
+          textbook_manifest_id: 'manifest-pep-5b',
           volume: '五年级下册',
           unit_id: 'unit-4',
           evidence_source: 'parent_confirmed',
@@ -207,11 +253,15 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
       grade_term: '五年级下',
       subject_textbooks: subjectTextbooks,
     })
-    expect(h.updateAgent).toHaveBeenCalledTimes(1)
-    expect(h.updateAgent.mock.calls[0]?.[1]).not.toHaveProperty('metadata')
-    expect(h.bundle.mock.invocationCallOrder[0]).toBeLessThan(
-      h.updateAgent.mock.invocationCallOrder[0]!,
+    expect(h.bundle.mock.calls[0]?.[0].agent_config).toEqual(
+      expect.objectContaining({
+        display_name: '小明的辅导助手 · 五年级',
+        system_prompt: expect.any(String),
+        provider: '',
+        model: '',
+      }),
     )
+    expect(h.updateAgent).not.toHaveBeenCalled()
   })
 
   it('does not write Agent metadata or compensation state when the bundle fails', async () => {

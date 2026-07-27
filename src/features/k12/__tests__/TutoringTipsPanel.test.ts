@@ -102,8 +102,8 @@ describe('TutoringTipsPanel（辅导要点内联卡）', () => {
     await flushPromises()
 
     expect(w.get('.tutoring-tips__unit').text()).toBe('简易方程')
-    // 上传教材与打印使用原型指定 SVG；发送按钮按统一投递合同直接显示四态文案。
-    expect(w.findAll('.tutoring-tips__actions .icbtn svg')).toHaveLength(2)
+    // 教材入口只在 Knowledge/孩子档案；结果卡只保留打印 SVG 与发送四态文案。
+    expect(w.findAll('.tutoring-tips__actions .icbtn svg')).toHaveLength(1)
     expect(w.get('.tutoring-tips__legend').element.parentElement).toBe(
       w.get('.tutoring-tips').element,
     )

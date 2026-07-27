@@ -7,6 +7,7 @@ import k12Zh from '../i18n/zh-CN'
 import RecordList from '@/shell/records/RecordList.vue'
 import K12RecordsView from '../views/K12RecordsView.vue'
 import { MISTAKE_SCHEMA } from '../schemas'
+import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
 import type { RecordCollectionView } from '@/contracts'
 
 // UX 收口（真机 · 2026-07-12）：
@@ -18,7 +19,8 @@ const h = vi.hoisted(() => ({
   del: vi.fn(),
 }))
 
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockResolvedValue({
     items: [
       {
@@ -26,7 +28,8 @@ vi.mock('@/api/k12', () => ({
         question: '3.8×3 = ?',
         knowledge_point: '小数乘法',
         error_cause: '算成了 10.4',
-        status: 'new',
+        status: 'scheduled',
+        review_state: 'scheduled',
         version: 0,
         due_at: null,
       },
@@ -66,7 +69,12 @@ function i18nInst() {
 }
 function render() {
   return mount(K12RecordsView, {
-    props: { agentId: 'mingming', agentName: '小明', grade: '五年级下' },
+    props: {
+      agentId: 'mingming',
+      agentName: '小明',
+      grade: '五年级下',
+      target: 'mistakes',
+    },
     global: { plugins: [createPinia(), i18nInst()] },
   })
 }
@@ -95,23 +103,28 @@ describe('UX-1 「家长确认已会」下放到全部错题档案行', () => {
     }
   }
 
-  it('未掌握档案行渲染「家长确认已会」并 emit markMastered', async () => {
+  it('scheduled 档案行不暴露家长主观改掌握动作', () => {
     const w = mount(RecordList, {
-      props: { schema: MISTAKE_SCHEMA, view: viewWith('new') },
+      props: {
+        schema: MISTAKE_SCHEMA,
+        view: viewWith('scheduled'),
+        hideMasteryAction: true,
+      },
       global: { plugins: [i18nInst()] },
     })
-    const btns = w.findAll('.rl-row .rl-btn').filter((b) => b.text().includes('家长确认已会'))
-    expect(btns.length).toBe(1) // RED：修前档案行无该动作（20260718 §4.11 文案收敛「家长确认已会」）
-    const masteredBtn = btns[0]
-    if (!masteredBtn) throw new Error('前置：未找到「家长确认已会」按钮')
-    await masteredBtn.trigger('click')
-    const evs = w.emitted('action') as unknown[][] | undefined
-    expect(evs?.some((e) => (e[0] as { id: string }).id === 'markMastered')).toBe(true)
+    expect(w.findAll('.rl-row .rl-btn').some((button) => button.text().includes('家长确认已会'))).toBe(
+      false,
+    )
+    expect(w.emitted('action')).toBeUndefined()
   })
 
   it('已掌握档案行不再显示「家长确认已会」（幂等）', () => {
     const w = mount(RecordList, {
-      props: { schema: MISTAKE_SCHEMA, view: viewWith('mastered') },
+      props: {
+        schema: MISTAKE_SCHEMA,
+        view: viewWith('mastered'),
+        hideMasteryAction: true,
+      },
       global: { plugins: [i18nInst()] },
     })
     const btns = w.findAll('.rl-row .rl-btn').filter((b) => b.text().includes('家长确认已会'))
@@ -125,7 +138,7 @@ describe('UX-1 详情弹层「家长确认已会」动作', () => {
     h.markMastered = vi.fn().mockResolvedValue({ ok: true })
   })
 
-  it('详情弹层含「家长确认已会」→ 调 mark-mastered 并关弹层', async () => {
+  it('详情弹层同样不暴露家长主观改掌握动作', async () => {
     const w = render()
     await flushPromises()
     w.findComponent(RecordList).vm.$emit('action', {
@@ -133,7 +146,7 @@ describe('UX-1 详情弹层「家长确认已会」动作', () => {
       record: {
         recordId: 'a',
         version: 0,
-        status: 'new',
+        status: 'scheduled',
         fields: {
           question: '3.8×3 = ?',
           knowledge_point: '数学·小数乘法',
@@ -142,12 +155,10 @@ describe('UX-1 详情弹层「家长确认已会」动作', () => {
       },
     })
     await flushPromises()
-    const btn = w.find('[data-testid="detail-mark-mastered"]')
-    expect(btn.exists()).toBe(true) // RED：修前详情弹层无该动作
-    await btn.trigger('click')
-    await flushPromises()
-    expect(h.markMastered).toHaveBeenCalled()
-    expect(w.find('[data-testid="mistake-detail"]').exists()).toBe(false) // 关弹层
+
+    expect(w.find('[data-testid="detail-mark-mastered"]').exists()).toBe(false)
+    expect(h.markMastered).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="mistake-detail"]').exists()).toBe(true)
   })
 })
 
@@ -166,7 +177,7 @@ describe('UX-3 详情弹层克制删除 + 二次确认', () => {
       record: {
         recordId: 'a',
         version: 0,
-        status: 'new',
+        status: 'scheduled',
         fields: {
           question: '3.8×3 = ?',
           knowledge_point: '数学·小数乘法',
@@ -184,7 +195,7 @@ describe('UX-3 详情弹层克制删除 + 二次确认', () => {
       '.hc-dialog__btn--danger',
     ) as HTMLButtonElement | null
     expect(confirmBtn).toBeTruthy()
-    await vi.advanceTimersByTimeAsync(5_000)
+    await vi.advanceTimersByTimeAsync(DESTRUCTIVE_CONFIRM_COOLDOWN_MS)
     confirmBtn!.click()
     await flushPromises()
     expect(h.del).toHaveBeenCalledWith('mingming', 'a')
@@ -200,7 +211,7 @@ describe('UX-3 详情弹层克制删除 + 二次确认', () => {
       record: {
         recordId: 'a',
         version: 0,
-        status: 'new',
+        status: 'scheduled',
         fields: { question: 'Q', knowledge_point: 'kp', error_cause: 'ec' },
       },
     })

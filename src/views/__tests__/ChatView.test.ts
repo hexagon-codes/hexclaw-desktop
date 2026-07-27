@@ -1602,6 +1602,11 @@ describe('ChatView — E2E 关键路径', () => {
       // 旧 Job/消息的快照保持不变；家长在重试前已把当前绑定切到新模型。
       agents.registeredAgents[0]!.model = 'gpt-5.6-sol'
       await flushPromises()
+      // 失败卡只会在旧尝试进入终态后出现；镜像真实链路先释放会话执行锁，
+      // 再验证显式重试会创建新尝试且仍保持双击幂等。
+      expect(store.isSessionExecuting(store.currentSessionId!)).toBe(true)
+      store.clearSessionExecution(store.currentSessionId!, frozenOldAttempt.requestId)
+      expect(store.isSessionExecuting(store.currentSessionId!)).toBe(false)
       enhancement.vm.$emit('scenarioImageAttempt', enhancement.props('composerImage'))
       enhancement.vm.$emit('scenarioImageAttempt', enhancement.props('composerImage'))
       enhancement.vm.$emit('update:composerImage', '')

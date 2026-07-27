@@ -50,7 +50,8 @@ const h = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: h.mistakes }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: h.due }),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
@@ -85,11 +86,12 @@ function render() {
 describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠机制退役）', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('① 默认落在「本周复习」：行动卡在、档案行不在', async () => {
+  it('① 默认落在「本周该练」：服务端计划在、旧本地行动卡与档案行不在', async () => {
     const w = render()
     await flushPromises()
     expect(w.find('[data-testid="week-section"]').exists()).toBe(true)
-    expect(w.find('.rl-review').exists(), '行动卡应在').toBe(true)
+    expect(w.find('.weekly-hero').exists(), '服务端本周计划应在').toBe(true)
+    expect(w.find('.rl-review').exists(), '旧本地复习行动卡不得恢复').toBe(false)
     // hide-list：档案筛选与全量行不渲染
     expect(w.find('.rl-filters').exists(), '本周复习不应有档案筛选').toBe(false)
     expect(w.text()).not.toContain('未掌握题不会因久未练习被自动隐藏')
@@ -122,14 +124,14 @@ describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠�
     expect(w.find('[data-testid="archive-toggle"]').exists()).toBe(false)
   })
 
-  it('④ 行动卡含趋势 pill 与「查看学情」入口（学情=顶栏一等 Tab）', async () => {
+  it('④ 本周计划不重复承载旧趋势 pill 与「查看学情」入口（学情=顶栏一等 Tab）', async () => {
     const w = render()
     await flushPromises()
-    expect(w.find('.rl-review').text()).toContain('2道待复习')
-    const link = w.find('[data-testid="go-insights"]')
-    expect(link.exists(), '行动卡脚注应有查看学情入口').toBe(true)
-    await link.trigger('click')
-    expect(w.emitted('go-insights'), '点击应上抛 go-insights').toBeTruthy()
+    expect(w.find('.weekly-hero').exists()).toBe(true)
+    expect(w.find('.rl-review').exists()).toBe(false)
+    expect(w.find('[data-testid="go-insights"]').exists()).toBe(false)
+    expect(w.text()).not.toContain('趋势 ↑ 在进步')
+    expect(w.text()).not.toContain('趋势 → 待巩固')
   })
 
   it('⑤ 外层 target 变化可直达 week / mistakes / practiceSets，不丢学情路由目标', async () => {
@@ -142,5 +144,40 @@ describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠�
     expect(w.find('[data-testid="practicesets-section"]').exists()).toBe(true)
     await w.setProps({ target: 'week' })
     expect(w.find('[data-testid="week-section"]').exists()).toBe(true)
+  })
+
+  it('[BUG-20260727-006] 本周仅显示打印和发送，其他四个对象页保留通用更多', async () => {
+    const w = render()
+    await flushPromises()
+
+    const toolbar = w.get('.k12rec__tabs')
+    const weeklyActionNames = toolbar
+      .findAll('button')
+      .map((button) => button.attributes('aria-label') || button.text().trim())
+      .filter((name) =>
+        ['打印', '发送到手机'].includes(name),
+      )
+    expect(weeklyActionNames).toEqual(['打印', '发送到手机'])
+    expect(w.find('[data-testid="records-more-trigger"]').exists()).toBe(false)
+    expect(toolbar.find('button[aria-label="更多本周该练操作"]').exists()).toBe(false)
+    expect(w.find('.weekly-hero [data-testid="final-artifact-actions"]').exists()).toBe(false)
+    expect(w.find('.weekly-hero button[aria-label="更多本周该练操作"]').exists()).toBe(
+      false,
+    )
+
+    for (const testId of [
+      'subtab-mistakes',
+      'subtab-practicesets',
+      'subtab-accumulation',
+      'subtab-works',
+    ]) {
+      await w.get(`[data-testid="${testId}"]`).trigger('click')
+      await flushPromises()
+      expect(
+        w.find('[data-testid="records-more-trigger"]').exists(),
+        `${testId} 必须保留学习档案通用更多入口`,
+      ).toBe(true)
+      expect(w.find('button[aria-label="更多本周该练操作"]').exists()).toBe(false)
+    }
   })
 })

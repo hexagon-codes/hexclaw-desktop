@@ -22,7 +22,8 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
 
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockResolvedValue({
     items: [
       {
@@ -89,7 +90,7 @@ function render() {
   })
 }
 
-describe('BUG-20260709-A 记一条错题/自定义组卷应为 modal 弹窗（原型权威），非内联手风琴', () => {
+describe('BUG-20260709-A 记一条错题使用 modal；退役整周自定义组卷不回流', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
   it('★点「记一条错题」→ 表单出现在 fixed 遮罩弹层内（.k12modal），不内联挤在 tab 下方', async () => {
@@ -109,15 +110,12 @@ describe('BUG-20260709-A 记一条错题/自定义组卷应为 modal 弹窗（�
     expect(modal.find('[data-testid="mistake-submit"]').exists()).toBe(true)
   })
 
-  it('★点「自定义组卷」→ 同为 modal 弹层（原型 openCustomPaper=modal，同构位置）', async () => {
+  it('整周自定义组卷与对应 modal 已按最新批准合同退役', async () => {
     const w = render()
     await flushPromises()
-    await w.find('[data-testid="review-split-more"]').trigger('click')
-    await w.find('[data-testid="custom-paper-open"]').trigger('click')
-    const modal = w.find('.k12modal')
-    expect(modal.exists(), '自定义组卷同为原型 modal').toBe(true)
-    expect(modal.find('[data-testid="custom-paper-form"]').exists()).toBe(true)
-    expect(modal.find('[data-testid="custom-paper-gen"]').exists()).toBe(true)
+    expect(w.find('button[aria-label="更多本周该练操作"]').exists()).toBe(false)
+    expect(w.find('[data-testid="custom-paper-form"]').exists()).toBe(false)
+    expect(w.find('[data-testid="custom-paper-gen"]').exists()).toBe(false)
   })
 
   it('弹层点遮罩/取消可关闭（modal 基本闭环）', async () => {

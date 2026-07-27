@@ -45,9 +45,9 @@ describe('ConfirmDialog', () => {
     expect(wrapper.emitted('confirm')).toHaveLength(1)
   })
 
-  it('uses the global three-second cooldown for destructive actions by default', async () => {
+  it('uses the global 1500ms cooldown for destructive actions by default', async () => {
     vi.useFakeTimers()
-    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(3_000)
+    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(1_500)
     const wrapper = mount(ConfirmDialog, {
       props: { open: true, danger: true },
       global: { stubs: { Teleport: true } },

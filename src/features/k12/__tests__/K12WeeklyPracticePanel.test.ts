@@ -32,6 +32,7 @@ const settings = {
   timezone: 'Asia/Shanghai',
   due_review_enabled: true as const,
   textbook_consolidation_enabled: true,
+  textbook_consolidation_tier: 'standard' as const,
   arithmetic_warmup_enabled: true,
   arithmetic_minutes: 2,
   created_at: '2026-07-20T00:00:00Z',
@@ -114,9 +115,10 @@ describe('K12WeeklyPracticePanel projection', () => {
         settings: {
           ...settings,
           textbook_consolidation_enabled: false,
+          textbook_consolidation_tier: 'standard' as const,
           arithmetic_warmup_enabled: false,
         },
-        plan,
+        plan: plan as any,
         history: [],
       },
       global: {
@@ -134,12 +136,10 @@ describe('K12WeeklyPracticePanel projection', () => {
       '确认当前教材、单元和页码后，系统会补充与课堂同步的练习。错题巩固不受影响。',
     )
     expect(wrapper.text()).toContain('到期复习 · 原题')
-    expect(wrapper.find('[data-track="textbook_consolidation"]').exists()).toBe(false)
+    expect(wrapper.find('[data-track="textbook_consolidation"]').exists()).toBe(true)
 
     await wrapper.get('[data-testid="setup-weekly-progress"]').trigger('click')
-    expect(wrapper.emitted('open-progress')).toEqual([
-      [{ enableTextbookConsolidation: true }],
-    ])
+    expect(wrapper.emitted('open-progress')).toEqual([[]])
   })
 
   it('shows verified evidence, independent degradation, and server-owned ISO week fields', () => {
@@ -167,9 +167,9 @@ describe('K12WeeklyPracticePanel projection', () => {
           confirmed_at: '2026-07-20T00:00:00Z',
           created_at: '2026-07-20T00:00:00Z',
           updated_at: '2026-07-20T00:00:00Z',
-        },
+        } as any,
         settings,
-        plan,
+        plan: plan as any,
         history: [
           {
             snapshot_id: 'snapshot-30',
@@ -182,7 +182,7 @@ describe('K12WeeklyPracticePanel projection', () => {
             item_count: 9,
             archived_at: '2026-07-27T00:00:00+08:00',
           },
-        ],
+        ] as any,
       },
       global: {
         stubs: {
@@ -204,5 +204,93 @@ describe('K12WeeklyPracticePanel projection', () => {
     expect(wrapper.text()).toContain('依据：人教版五下 · 第4单元 · P52–53')
     expect(wrapper.text()).toContain('口算生成暂时不可用，请稍后重试')
     expect(wrapper.text()).toContain('7月20日–7月26日 · 2026年第30周')
+  })
+
+  it('[K12-WEEKLY-044] emits every history action against one frozen snapshot/artifact identity', async () => {
+    const historyItem = Object.freeze({
+      snapshot_id: 'snapshot-29',
+      artifact_id: 'artifact-29',
+      plan_id: 'weekly-29',
+      iso_week_year: 2026,
+      iso_week_number: 29,
+      timezone: 'Asia/Shanghai',
+      local_start_date: '2026-07-13',
+      local_end_date: '2026-07-19',
+      item_count: 8,
+      correct_count: 7,
+      wrong_count: 1,
+      needs_review_count: 0,
+      archived_at: '2026-07-20T00:00:00+08:00',
+    })
+    const historySnapshot = Object.freeze({
+      snapshot_id: 'snapshot-29',
+      artifact_id: 'artifact-29',
+      plan_id: 'weekly-29',
+      plan_revision: 4,
+      agent: 'mingming',
+      iso_week_year: 2026,
+      iso_week_number: 29,
+      timezone: 'Asia/Shanghai',
+      week_start: '2026-07-13T00:00:00+08:00',
+      week_end: '2026-07-19T23:59:59+08:00',
+      local_start_date: '2026-07-13',
+      local_end_date: '2026-07-19',
+      settings_revision: 2,
+      tracks: [],
+      render_version: 'weekly-v1',
+      snapshot_digest: 'sha256:frozen-history-29',
+      created_at: '2026-07-20T00:00:00+08:00',
+    })
+    const wrapper = mount(K12WeeklyPracticePanel, {
+      props: {
+        progress: null,
+        settings,
+        plan: plan as any,
+        history: [historyItem] as any,
+        historySnapshot: historySnapshot as any,
+      },
+      global: {
+        stubs: {
+          MarkdownRenderer: {
+            props: ['content'],
+            template: '<div>{{ content }}</div>',
+          },
+          Teleport: true,
+        },
+      },
+    })
+
+    await wrapper
+      .findAll('[role="tab"]')
+      .find((tab) => tab.text() === '历史')!
+      .trigger('click')
+    expect(wrapper.emitted('update:view')).toEqual([['history']])
+    expect(wrapper.findAll('.weekly-history__card button').map((button) => button.text())).toEqual([
+      '查看周练',
+    ])
+
+    await wrapper.get('.weekly-history__card button').trigger('click')
+    expect(wrapper.emitted('open-history')).toEqual([[historyItem]])
+    const historyActions = wrapper.findAll('.weekly-history-dialog__actions button')
+    expect(historyActions.map((button) => button.text())).toEqual([
+      '打印',
+      '发送到手机',
+      '查看对应学情',
+    ])
+
+    for (const button of historyActions.slice(0, 2)) await button.trigger('click')
+    expect(
+      wrapper.emitted('history-artifact-action')?.map(([intent]) => intent),
+    ).toEqual([
+      { action: 'print', snapshot_id: 'snapshot-29', artifact_id: 'artifact-29' },
+      { action: 'send_im', snapshot_id: 'snapshot-29', artifact_id: 'artifact-29' },
+    ])
+    expect(historySnapshot.snapshot_digest).toBe('sha256:frozen-history-29')
+
+    await wrapper
+      .findAll('[role="tab"]')
+      .find((tab) => tab.text() === '本周')!
+      .trigger('click')
+    expect(wrapper.emitted('update:view')).toEqual([['history'], ['current']])
   })
 })

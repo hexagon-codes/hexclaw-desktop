@@ -1060,6 +1060,7 @@ describe('Dead code detection — unused API exports', () => {
     // Informational: report dead code but test always passes
     expect(true).toBe(true)
     // 全仓文件扫描是 IO 密集：默认 5s testTimeout 在并行全量回归下会被挤爆
-    // （2026-07-03 负载 flaky 取证，空载 <1s）。显式放宽到 30s。
-  }, 30_000)
+    // 2026-07-27 全量串行回归中 30s 仍会被其他全仓扫描挤爆，隔离执行语义通过。
+    // 只调整运行预算，不改变扫描范围或断言。
+  }, 60_000)
 })

@@ -320,9 +320,9 @@ describe('SessionList', () => {
     expect(document.body.querySelector('[data-testid="branches-dialog"]')).toBeNull()
   })
 
-  it('reuses the shared destructive confirmation with the global three-second cooldown', async () => {
+  it('reuses the shared destructive confirmation with the global 1500ms cooldown', async () => {
     vi.useFakeTimers()
-    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(3_000)
+    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(1_500)
     const { wrapper, store } = mountSessionList()
     await flushPromises()
 

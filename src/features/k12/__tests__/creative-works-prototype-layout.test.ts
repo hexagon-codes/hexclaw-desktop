@@ -15,11 +15,11 @@ describe('K12 works prototype layout', () => {
     expect(rules).toBeGreaterThan(filters)
   })
 
-  it('uses the approved adaptive 420px grid, 104px media and 720px detail modal', () => {
+  it('uses the approved stable 420px collection, 104px media and 720px detail modal', () => {
     expect(worksSource).toContain('class="k12cw__preview"')
     expect(worksSource).toContain('data-testid="cw-detail-toggle"')
     expect(worksSource).toMatch(
-      /\.k12cw__list\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(min\(100%,\s*420px\),\s*1fr\)\)/,
+      /\.k12cw__list\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(min\(100%,\s*420px\),\s*1fr\)\)/,
     )
     expect(worksSource).not.toContain('k12cw__card--expanded')
     expect(worksSource).toContain('data-testid="cw-detail-modal"')

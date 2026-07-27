@@ -9,24 +9,10 @@ vi.mock('../client', () => ({
   apiDelete: vi.fn(),
 }))
 
-import { k12AddGrounding, k12TutoringTips } from '../k12'
+import { k12TutoringTips } from '../k12'
 
-describe('K12 教材 grounding API 契约', () => {
+describe('K12 辅导要点 API 契约', () => {
   beforeEach(() => apiPost.mockReset())
-
-  it('按 agent scope 上传教材原文并透传取消信号', async () => {
-    const signal = new AbortController().signal
-    const req = {
-      agent: 'mingming',
-      subject: '数学',
-      title: '人教版五上.pdf',
-      content: '小数乘法教材原文',
-    }
-    apiPost.mockResolvedValue({ ok: true })
-
-    await expect(k12AddGrounding(req, signal)).resolves.toEqual({ ok: true })
-    expect(apiPost).toHaveBeenCalledWith('/api/k12/grounding', req, { signal })
-  })
 
   it('辅导要点请求只透传当前已确认 Job，不接受客户端学科或知识点', async () => {
     const signal = new AbortController().signal

@@ -13,8 +13,8 @@ import channelsSource from '../components/channels/ConnectionChannelCards.vue?ra
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '../config/destructive-actions'
 
 describe('global destructive-dialog governance (2026-07-25)', () => {
-  it('owns the three-second destructive cooldown in the shared dialog', () => {
-    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(3_000)
+  it('owns the 1500ms destructive cooldown in the shared dialog', () => {
+    expect(DESTRUCTIVE_CONFIRM_COOLDOWN_MS).toBe(1_500)
     expect(confirmSource).toContain('confirmDelayMs: DESTRUCTIVE_CONFIRM_COOLDOWN_MS')
     expect(confirmSource).toContain(
       'const delay = props.danger ? Math.max(0, props.confirmDelayMs) : 0',

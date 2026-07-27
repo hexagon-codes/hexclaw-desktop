@@ -38,7 +38,11 @@ describe('2026-07-26 approved chat task UI contract', () => {
     expect(enhancement).toContain("(e: 'contentUpdated'): void")
     expect(enhancement).toContain('@content-updated="emit(\'contentUpdated\')"')
     expect(chat).toContain('@content-updated="handleScenarioContentUpdated"')
+    expect(chat).toContain('useConversationScrollCoordinator')
     expect(chat).toMatch(
+      /function handleScenarioContentUpdated\(\)[\s\S]*?scrollCoordinator\.publishContentUpdated/,
+    )
+    expect(chat).not.toMatch(
       /function handleScenarioContentUpdated\(\)[\s\S]*?nextTick\(\(\) => scrollToBottom\(false\)\)/,
     )
   })

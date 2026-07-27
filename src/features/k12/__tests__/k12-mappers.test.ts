@@ -8,7 +8,8 @@ const dto = (over: Partial<MistakeDTO> = {}): MistakeDTO => ({
   question: '3.8×3=?',
   knowledge_point: '小数乘法',
   error_cause: '计算失误·进位',
-  status: 'new',
+  status: 'scheduled',
+  review_state: 'scheduled',
   version: 0,
   due_at: 1710000000,
   ...over,
@@ -34,7 +35,7 @@ describe('K12 mappers · mistakeDTO → RecordItem', () => {
     // schema 里 title/chip/meta 三个字段的 key 都必须在 fields 里能取到
     const keys = MISTAKE_SCHEMA.fields.map((f) => f.key)
     for (const k of keys) expect(r.fields).toHaveProperty(k)
-    expect(r.status).toBe('new')
+    expect(r.status).toBe('scheduled')
     expect(r.dueAt).toBe(1710000000)
   })
 
@@ -45,12 +46,15 @@ describe('K12 mappers · mistakeDTO → RecordItem', () => {
 
 describe('K12 mappers · mistakesToView', () => {
   it('复习队列取自 due 列表 id，statusCounts 按状态聚合', () => {
-    const all = [dto({ record_id: 'a', status: 'new' }), dto({ record_id: 'b', status: 'mastered' })]
+    const all = [
+      dto({ record_id: 'a', status: 'scheduled', review_state: 'scheduled' }),
+      dto({ record_id: 'b', status: 'mastered', review_state: 'mastered' }),
+    ]
     const due = [dto({ record_id: 'a' })]
     const v = mistakesToView('ming', all, due)
     expect(v.items).toHaveLength(2)
     expect(v.reviewQueue).toEqual(['a'])
-    expect(v.statusCounts).toEqual({ new: 1, mastered: 1 })
+    expect(v.statusCounts).toEqual({ scheduled: 1, mastered: 1 })
   })
 
   it('把 review-queue 独有的积累纠错记录合并进 items，不让通用 RecordList 丢队列项', () => {

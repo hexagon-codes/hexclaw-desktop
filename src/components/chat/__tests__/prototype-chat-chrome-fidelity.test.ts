@@ -33,8 +33,10 @@ describe('prototype chat chrome fidelity', () => {
   })
 
   it('places always-visible assistant actions immediately after metadata while preserving the user hover lane', () => {
-    const assistantFooterStart = chatView.indexOf('<div class="hc-msg__footer">')
-    const userFooterStart = chatView.indexOf('<div class="hc-msg__footer hc-msg__footer--right">')
+    const assistantFooterStart = chatView.indexOf('<MessageFooter class="hc-msg__footer">')
+    const userFooterStart = chatView.indexOf(
+      '<MessageFooter class="hc-msg__footer hc-msg__footer--right">',
+    )
     expect(assistantFooterStart).toBeGreaterThan(-1)
     expect(userFooterStart).toBeGreaterThan(assistantFooterStart)
 

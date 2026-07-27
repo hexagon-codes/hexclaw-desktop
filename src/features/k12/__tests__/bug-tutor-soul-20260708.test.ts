@@ -20,7 +20,7 @@ import K12ProfileForm from '../views/K12ProfileForm.vue'
 const h = vi.hoisted(() => ({
   registerSpy: vi.fn().mockResolvedValue({}),
   updateSpy: vi.fn().mockResolvedValue({}),
-  profileSpy: vi.fn().mockResolvedValue({}),
+  bundleSpy: vi.fn().mockResolvedValue({}),
 }))
 vi.mock('@/api/agents', () => ({
   registerAgent: (a: unknown) => h.registerSpy(a),
@@ -28,15 +28,27 @@ vi.mock('@/api/agents', () => ({
   getAgents: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
-vi.mock('@/api/k12', () => ({
-  k12UpdateProfile: (r: unknown) => h.profileSpy(r),
-  k12BindIM: vi.fn().mockResolvedValue({}),
+vi.mock('@/api/k12', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/k12')>()),
+  k12UpdateProfileBundle: (r: unknown) => h.bundleSpy(r),
+  k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
+  k12GetCurriculumProgress: vi.fn().mockResolvedValue({
+    progress: {
+      revision: 1,
+      textbook_manifest_id: 'manifest-1',
+      volume: '五年级上册',
+      unit_id: 'unit-1',
+    },
+  }),
+  k12GetWeeklyPracticeSettings: vi.fn().mockResolvedValue({
+    revision: 1,
+    timezone: 'Asia/Shanghai',
+    due_review_enabled: true,
+    textbook_consolidation_enabled: false,
+    arithmetic_warmup_enabled: false,
+    arithmetic_minutes: 2,
+  }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-  k12TutorTurn: vi.fn(),
-  k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
-  k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(), k12TutoringTips: vi.fn(), k12Grade: vi.fn(),
-  k12InsightReport: vi.fn(), k12StudyTime: vi.fn(), k12ListAccumulation: vi.fn(),
 }))
 
 function i18n() {
@@ -48,7 +60,7 @@ describe('BUG-20260708 F2 · tutor 建档带人设(SOUL)', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     document.body.innerHTML = ''
-    h.registerSpy.mockClear(); h.updateSpy.mockClear(); h.profileSpy.mockClear()
+    h.registerSpy.mockClear(); h.updateSpy.mockClear(); h.bundleSpy.mockReset().mockResolvedValue({})
   })
 
   it('建档：registerAgent 带非空 system_prompt，含身份锚（辅导老师 + 孩子称呼）', async () => {
@@ -76,15 +88,19 @@ describe('BUG-20260708 F2 · tutor 建档带人设(SOUL)', () => {
     expect(payload.system_prompt).toBe('你是小明的辅导老师，说话温柔一点，多用鼓励。')
   })
 
-  it('改档：updateAgent 也带 system_prompt（改年级后人设随讲题边界更新）', async () => {
+  it('改档：唯一 bundle 的 agent_config 带 system_prompt（改年级后人设随讲题边界更新）', async () => {
     mount(K12ProfileForm, {
       props: { agent: { name: 'k12-tutor-x', display_name: '小明的辅导老师 · 五年级', metadata: { scenario: 'k12-tutor', 'k12.child_name': '小明', 'k12.grade_term': '五年级上', 'k12.textbook_edition': '人教版', avatar: '🎓' } } },
       global: { plugins: [createPinia(), i18n()] }, attachTo: document.body,
     })
+    await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
-    const [, upd] = h.updateSpy.mock.calls[0] as [string, { system_prompt?: string }]
-    expect(upd.system_prompt, '改档也须回写人设').toBeTruthy()
-    expect(upd.system_prompt).toContain('辅导助手')
+    const upd = h.bundleSpy.mock.calls[0]![0] as {
+      agent_config: { system_prompt?: string }
+    }
+    expect(upd.agent_config.system_prompt, '改档也须原子回写人设').toBeTruthy()
+    expect(upd.agent_config.system_prompt).toContain('辅导助手')
+    expect(h.updateSpy).not.toHaveBeenCalled()
   })
 })

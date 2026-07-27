@@ -103,6 +103,8 @@ function status(
         anchor_state: 'located',
         ...extra,
       },
+      provider_display_name: 'HexClaw-GPT',
+      model_id: 'gpt-5.6-sol',
       progress: { operation: 'homework', state: stage },
       version: 1,
       created_at: 1,

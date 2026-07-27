@@ -17,6 +17,7 @@ vi.mock('@/api/client', () => ({
 }))
 
 import {
+  k12CreateWeeklyArithmeticBatch,
   k12EnsureWeeklyPracticePlan,
   k12GetCurrentWeeklyPracticePlan,
   k12GetCurriculumCatalog,
@@ -26,6 +27,7 @@ import {
   k12GetWeeklyPracticeSettings,
   k12GetWeeklyPracticeSnapshot,
   k12PrepareArtifactPrintJob,
+  k12PrepareWeeklyPracticeTextbookTrack,
   k12PrepareWeeklyPracticeOutput,
   k12SaveWeeklyPracticePlanToPracticeSet,
   k12SendWeeklyPracticeSnapshot,
@@ -115,6 +117,7 @@ describe('K12 weekly-practice HTTP contract', () => {
       timezone: 'Asia/Shanghai',
       due_review_enabled: true,
       textbook_consolidation_enabled: false,
+      textbook_consolidation_tier: 'standard',
       arithmetic_warmup_enabled: false,
       arithmetic_minutes: 2,
       created_at: '',
@@ -149,6 +152,7 @@ describe('K12 weekly-practice HTTP contract', () => {
       'due_review_enabled',
       'revision',
       'textbook_consolidation_enabled',
+      'textbook_consolidation_tier',
       'timezone',
       'updated_at',
     ])
@@ -161,6 +165,13 @@ describe('K12 weekly-practice HTTP contract', () => {
       expected_profile_revision: 3,
       expected_progress_revision: 4,
       expected_settings_revision: 5,
+      agent_config: {
+        display_name: '小明的辅导助手',
+        description: '小明的专属辅导助手',
+        system_prompt: '辅导小明完成五年级下学期的学习。',
+        provider: 'HexClaw-GPT',
+        model: 'gpt-5.6-sol',
+      },
       profile: {
         child_name: '小明',
         grade_term: '五年级下',
@@ -175,7 +186,7 @@ describe('K12 weekly-practice HTTP contract', () => {
       },
       curriculum_progress: {
         subject: 'math',
-        textbook_binding_id: 'pep-5b',
+        textbook_manifest_id: 'manifest-pep-5b',
         volume: '五年级下册',
         unit_id: 'unit-4',
         page_from: 45,
@@ -185,11 +196,13 @@ describe('K12 weekly-practice HTTP contract', () => {
       weekly_practice_settings: {
         timezone: 'Asia/Shanghai',
         textbook_consolidation_enabled: true,
+        textbook_consolidation_tier: 'standard',
         arithmetic_warmup_enabled: true,
         arithmetic_minutes: 2,
       },
     }
     const response = {
+      agent_config: request.agent_config,
       profile: { ...request.profile, textbook_edition: '人教版', revision: 4 },
       curriculum_progress: { revision: 5 },
       weekly_practice_settings: { revision: 6 },
@@ -201,6 +214,7 @@ describe('K12 weekly-practice HTTP contract', () => {
 
     expect(h.put).toHaveBeenCalledExactlyOnceWith('/api/k12/profile-bundle', request)
     expect(Object.keys(response).sort()).toEqual([
+      'agent_config',
       'curriculum_progress',
       'profile',
       'replayed',
@@ -263,6 +277,39 @@ describe('K12 weekly-practice HTTP contract', () => {
       limit: 20,
     })
     expect(Object.keys(history).sort()).toEqual(['items', 'next_cursor'])
+  })
+
+  it('sends only the server-owned manual-track command fields', async () => {
+    h.post.mockResolvedValueOnce({ plan, replayed: false }).mockResolvedValueOnce({
+      batch: { batch_id: 'batch-30' },
+      replayed: false,
+    })
+
+    await k12PrepareWeeklyPracticeTextbookTrack('plan-30', 3, 'more', 'sync-1')
+    await k12CreateWeeklyArithmeticBatch('plan-30', 3, 4, 'arithmetic-1')
+
+    expect(h.post).toHaveBeenNthCalledWith(
+      1,
+      '/api/k12/weekly-practice/plans/plan-30/tracks/textbook_consolidation/prepare',
+      {
+        plan_revision: 3,
+        tier: 'more',
+        idempotency_key: 'sync-1',
+      },
+    )
+    expect(h.post).toHaveBeenNthCalledWith(
+      2,
+      '/api/k12/weekly-practice/plans/plan-30/arithmetic-batches',
+      {
+        plan_revision: 3,
+        minutes: 4,
+        idempotency_key: 'arithmetic-1',
+      },
+    )
+    for (const [, body] of h.post.mock.calls) {
+      expect(body).not.toHaveProperty('agent')
+      expect(body).not.toHaveProperty('expected_revision')
+    }
   })
 
   it('prepares one existing artifact and reuses the artifact_id print variant/content endpoint', async () => {

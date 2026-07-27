@@ -1,17 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import { createPinia, setActivePinia } from 'pinia'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
+import K12PracticeCandidateSelectionModal from '../components/K12PracticeCandidateSelectionModal.vue'
 import K12RecordsView from '../views/K12RecordsView.vue'
+import type { PracticeCandidateSelectionDTO } from '@/api/k12'
 
-/**
- * 2026-07-25 产品裁决：
- * 错题列表的一次「加入练习集」直接创建服务端持久化异步任务；题面、答案、质量门和装篮
- * 都由服务端完成。桌面端只投影 available/pending/joined/failed/re_add/hidden，
- * 不再弹“再练一道 → 显示答案 → 再点加入练习集”的第二套临时流程。
- */
 const h = vi.hoisted(() => {
   const mistake = {
     record_id: 'a',
@@ -19,32 +15,60 @@ const h = vi.hoisted(() => {
     knowledge_point: '小数乘法',
     error_cause: '进位',
     subject: '数学',
-    status: 'new',
+    status: 'scheduled',
+    review_state: 'scheduled',
     version: 0,
     due_at: 1710000000,
   }
   return {
     mistake,
-    state: {
-      state: 'available',
-      source_mistake_id: 'a',
-    } as Record<string, unknown>,
-    getGeneration: vi.fn(),
-    startGeneration: vi.fn(),
-    retryGeneration: vi.fn(),
+    openSelection: vi.fn(),
+    generateBatch: vi.fn(),
+    commitSelection: vi.fn(),
   }
 })
 
-vi.mock('@/api/k12', () => ({
+function selection(
+  over: Partial<PracticeCandidateSelectionDTO> = {},
+): PracticeCandidateSelectionDTO {
+  return {
+    selection_id: 'selection-a',
+    source_mistake_id: 'a',
+    target_set_record_id: 'basket-1',
+    state: 'open',
+    next_batch_ordinal: 1,
+    revision: 1,
+    candidates: [
+      {
+        candidate_id: 'original-a',
+        candidate_kind: 'original',
+        batch_ordinal: 0,
+        candidate_ordinal: 0,
+        normalized_content_hash: 'sha256:original',
+        state: 'ready',
+        question_markdown: '3.8×3=?',
+      },
+    ],
+    ...over,
+  }
+}
+
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: [h.mistake] }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: [h.mistake] }),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
-  k12GetMistakePracticeGeneration: (...args: unknown[]) => h.getGeneration(...args),
-  k12StartMistakePracticeGeneration: (...args: unknown[]) => h.startGeneration(...args),
-  k12RetryMistakePracticeGeneration: (...args: unknown[]) => h.retryGeneration(...args),
+  k12OpenPracticeCandidateSelection: (...args: unknown[]) => h.openSelection(...args),
+  k12GeneratePracticeCandidateBatch: (...args: unknown[]) => h.generateBatch(...args),
+  k12CommitPracticeCandidateSelection: (...args: unknown[]) => h.commitSelection(...args),
+  k12GetMistakePracticeGeneration: vi
+    .fn()
+    .mockImplementation((_agent: string, recordID: string) =>
+      Promise.resolve({ state: 'available', source_mistake_id: recordID }),
+    ),
   k12RecordMistake: vi.fn(),
   k12InsightReport: vi.fn().mockResolvedValue({
-    trend: { mastered: 0, reviewing: 1, retried: 0, archived: 0, total: 1 },
+    trend: { mastered: 0, reviewing: 1, total: 1 },
     weak_top3: [],
     month_new_mistakes: 1,
     review_completion_rate: 0,
@@ -61,10 +85,12 @@ vi.mock('@/api/k12', () => ({
 
 function render() {
   return mount(K12RecordsView, {
+    attachTo: document.body,
     props: {
       agentId: 'mingming',
-      agentName: '小明的辅导老师',
+      agentName: '小明的辅导助手',
       grade: '五年级下 · 人教版',
+      target: 'mistakes',
       modelRoute: { provider: 'hexclaw-gpt', model: 'gpt-5.6-sol', capability: 'text' },
     },
     global: {
@@ -81,85 +107,154 @@ function render() {
   })
 }
 
-describe('K12RecordsView · 一键异步加入练习集', () => {
+describe('K12RecordsView · 共享候选选择后原子加入练习集', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
-    h.state = { state: 'available', source_mistake_id: 'a' }
-    h.getGeneration.mockReset().mockImplementation(() => Promise.resolve({ ...h.state }))
-    h.startGeneration.mockReset()
-    h.retryGeneration.mockReset()
+    h.openSelection.mockReset().mockResolvedValue(selection())
+    h.generateBatch.mockReset()
+    h.commitSelection.mockReset()
   })
 
-  it('available 一次点击即冻结年级/教材/界面模型并进入 pending，不显示旧答案弹窗', async () => {
-    h.startGeneration.mockResolvedValue({
-      state: 'pending',
-      source_mistake_id: 'a',
-      generation_job_id: 'job-1',
-    })
+  afterEach(() => {
+    document.body.replaceChildren()
+  })
+
+  it('点击唯一入口恢复同一 selection，并按冻结年级与教材打开批准弹窗', async () => {
     const wrapper = render()
     await flushPromises()
 
-    const action = wrapper.get('[data-testid="mistake-practice-a"]')
-    expect(action.text()).toBe('加入练习集')
-    await action.trigger('click')
+    await wrapper.get('[data-testid="mistake-practice-a"]').trigger('click')
     await flushPromises()
 
-    expect(h.startGeneration).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: 'mingming',
-        record_id: 'a',
-        grade: '五年级下',
-        textbook: '人教版',
-        difficulty: 'same',
-        provider: 'hexclaw-gpt',
-        model: 'gpt-5.6-sol',
+    expect(h.openSelection).toHaveBeenCalledWith('a', {
+      agent: 'mingming',
+      idempotency_key: expect.stringMatching(/^desktop-practice-candidate-open:mingming:a:/),
+      grade: '五年级下 · 人教版',
+      textbook: '人教版',
+    })
+    const modal = wrapper.getComponent(K12PracticeCandidateSelectionModal)
+    expect(modal.props('open')).toBe(true)
+    expect(modal.props('originalQuestion')).toBe('3.8×3=?')
+    expect(document.body.textContent).toContain('选择加入练习集的题目')
+    expect(document.body.textContent).toContain('原题')
+  })
+
+  it('原题固定选中、已存在项禁用，多选 ready 后只提交新增 candidate IDs 一次', async () => {
+    h.openSelection.mockResolvedValue(
+      selection({
+        candidates: [
+          ...selection().candidates,
+          {
+            candidate_id: 'variant-ready',
+            candidate_kind: 'variant',
+            batch_ordinal: 1,
+            candidate_ordinal: 1,
+            normalized_content_hash: 'sha256:ready',
+            state: 'ready',
+            question_markdown: '4.2×3=?',
+          },
+          {
+            candidate_id: 'variant-existing',
+            candidate_kind: 'variant',
+            batch_ordinal: 1,
+            candidate_ordinal: 2,
+            normalized_content_hash: 'sha256:existing',
+            state: 'already_in_set',
+            question_markdown: '5.2×3=?',
+          },
+        ],
       }),
     )
-    expect(wrapper.get('[data-testid="mistake-practice-state-a"]').text()).toBe(
-      '已加入 · 正在出题…',
-    )
-    expect(wrapper.find('.k12retry').exists()).toBe(false)
-  })
-
-  it('joined 从服务端恢复为已加入并提供查看新题，不依赖内存成功标记', async () => {
-    h.state = {
-      state: 'joined',
-      source_mistake_id: 'a',
-      practice_set_id: 'basket-1',
-      practice_item_id: 'item-1',
-    }
-    const wrapper = render()
-    await flushPromises()
-
-    expect(wrapper.get('[data-testid="mistake-practice-state-a"]').text()).toBe(
-      '✓ 已加入练习集',
-    )
-    expect(wrapper.get('[data-testid="mistake-practice-view-a"]').text()).toBe('查看新题')
-  })
-
-  it('failed 只显示原地重试，重试复用既有持久化任务', async () => {
-    h.state = {
-      state: 'failed',
-      source_mistake_id: 'a',
-      generation_job_id: 'job-1',
-      failure_reason: 'provider unavailable',
-    }
-    h.retryGeneration.mockResolvedValue({
-      state: 'pending',
-      source_mistake_id: 'a',
-      generation_job_id: 'job-1',
+    h.commitSelection.mockResolvedValue({
+      selection: selection({ state: 'committed', revision: 2 }),
+      added_count: 2,
+      already_present: ['variant-existing'],
+      replayed: false,
     })
     const wrapper = render()
     await flushPromises()
-
-    const action = wrapper.get('[data-testid="mistake-practice-a"]')
-    expect(action.text()).toBe('出题失败，重试')
-    await action.trigger('click')
+    await wrapper.get('[data-testid="mistake-practice-a"]').trigger('click')
     await flushPromises()
 
-    expect(h.retryGeneration).toHaveBeenCalledWith('mingming', 'a')
-    expect(wrapper.get('[data-testid="mistake-practice-state-a"]').text()).toBe(
-      '已加入 · 正在出题…',
+    const inputs = Array.from(
+      document.body.querySelectorAll<HTMLInputElement>('.candidate-modal input[type="checkbox"]'),
     )
+    expect(inputs).toHaveLength(3)
+    expect(inputs[0]?.checked).toBe(true)
+    expect(inputs[2]?.disabled).toBe(true)
+    inputs[1]?.click()
+    await flushPromises()
+
+    const commit = document.body.querySelector<HTMLButtonElement>(
+      '[data-testid="practice-candidate-commit"]',
+    )
+    expect(commit?.textContent).toContain('加入练习集（2）')
+    commit?.click()
+    await flushPromises()
+
+    expect(h.commitSelection).toHaveBeenCalledWith('selection-a', {
+      agent: 'mingming',
+      revision: 1,
+      candidate_ids: ['original-a', 'variant-ready'],
+      idempotency_key: expect.stringMatching(
+        /^desktop-practice-candidate-commit:mingming:selection-a:/,
+      ),
+    })
+    expect(h.commitSelection).toHaveBeenCalledTimes(1)
+  })
+
+  it('每批生成复用 selection revision；单条失败不阻塞原题和其他 ready 候选', async () => {
+    h.generateBatch.mockResolvedValue(
+      selection({
+        revision: 2,
+        next_batch_ordinal: 2,
+        candidates: [
+          ...selection().candidates,
+          {
+            candidate_id: 'variant-failed',
+            candidate_kind: 'variant',
+            batch_ordinal: 1,
+            candidate_ordinal: 1,
+            normalized_content_hash: 'sha256:failed',
+            state: 'failed',
+            question_markdown: '',
+            failure_message: '模型暂不可用',
+          },
+          {
+            candidate_id: 'variant-ready',
+            candidate_kind: 'variant',
+            batch_ordinal: 1,
+            candidate_ordinal: 2,
+            normalized_content_hash: 'sha256:ready',
+            state: 'ready',
+            question_markdown: '4.2×3=?',
+          },
+        ],
+      }),
+    )
+    const wrapper = render()
+    await flushPromises()
+    await wrapper.get('[data-testid="mistake-practice-a"]').trigger('click')
+    await flushPromises()
+
+    document.body
+      .querySelector<HTMLButtonElement>('[data-testid="practice-candidate-generate"]')
+      ?.click()
+    await flushPromises()
+
+    expect(h.generateBatch).toHaveBeenCalledWith('selection-a', {
+      agent: 'mingming',
+      revision: 1,
+      idempotency_key: expect.stringMatching(
+        /^desktop-practice-candidate-batch:mingming:selection-a:/,
+      ),
+    })
+    expect(document.body.textContent).toContain('生成失败')
+    expect(document.body.textContent).toContain('模型暂不可用')
+    expect(document.body.textContent).toContain('4.2×3=?')
+    expect(
+      document.body.querySelector<HTMLButtonElement>('[data-testid="practice-candidate-commit"]')
+        ?.disabled,
+    ).toBe(false)
   })
 })

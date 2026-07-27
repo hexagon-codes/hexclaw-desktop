@@ -8,7 +8,8 @@ import RecordList from '@/shell/records/RecordList.vue'
 import K12RecordsView from '../views/K12RecordsView.vue'
 
 // 旧“再练一道”弹层与 /review/retry 已在 2026-07-25 退役；本文件只保留仍有效的错题详情回归。
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockResolvedValue({
     items: [
       {
@@ -16,7 +17,8 @@ vi.mock('@/api/k12', () => ({
         question: '3.8×3 = ?',
         knowledge_point: '小数乘法',
         error_cause: '算成了 10.4',
-        status: 'new',
+        status: 'scheduled',
+        review_state: 'scheduled',
         version: 0,
         due_at: 1710000000,
       },
@@ -45,7 +47,12 @@ vi.mock('@/api/k12', () => ({
 
 function render() {
   return mount(K12RecordsView, {
-    props: { agentId: 'mingming', agentName: '小明', grade: '五年级下' },
+    props: {
+      agentId: 'mingming',
+      agentName: '小明',
+      grade: '五年级下',
+      target: 'mistakes',
+    },
     global: {
       plugins: [
         createPinia(),
@@ -71,7 +78,7 @@ describe('BUG-20260712 #2 错题详情', () => {
       record: {
         recordId: 'a',
         version: 0,
-        status: 'new',
+        status: 'scheduled',
         fields: {
           question: '3.8×3 = ?',
           knowledge_point: '数学·小数乘法',

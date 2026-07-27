@@ -6,6 +6,7 @@ import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import K12RecordsView from '../views/K12RecordsView.vue'
 import K12PracticeSetsPanel from '../views/K12PracticeSetsPanel.vue'
+import bookTabsSource from '../components/K12BookTabs.vue?raw'
 import recordsSource from '../views/K12RecordsView.vue?raw'
 import practiceSource from '../views/K12PracticeSetsPanel.vue?raw'
 import type { PracticeItemDTO, PracticeSetDTO } from '@/api/k12'
@@ -21,7 +22,8 @@ const h = vi.hoisted(() => ({
   listCreativeWorks: vi.fn(),
 }))
 
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('ming'),
   k12ListMistakes: (...args: unknown[]) => h.listMistakes(...args),
   k12ReviewQueue: (...args: unknown[]) => h.reviewQueue(...args),
   k12ListAccumulation: (...args: unknown[]) => h.listAccumulation(...args),
@@ -131,7 +133,8 @@ beforeEach(() => {
         question: '小数乘法',
         knowledge_point: '小数乘法',
         error_cause: '进位',
-        status: 'new',
+        status: 'scheduled',
+        review_state: 'scheduled',
         version: 0,
         subject: '数学',
       },
@@ -140,7 +143,8 @@ beforeEach(() => {
         question: 'believe',
         knowledge_point: '错词',
         error_cause: '少 e',
-        status: 'retried',
+        status: 'scheduled',
+        review_state: 'scheduled',
         version: 1,
         subject: '英语',
       },
@@ -162,7 +166,8 @@ beforeEach(() => {
         question: '小数乘法',
         knowledge_point: '小数乘法',
         error_cause: '进位',
-        status: 'new',
+        status: 'scheduled',
+        review_state: 'scheduled',
         version: 0,
         subject: '数学',
       },
@@ -171,7 +176,8 @@ beforeEach(() => {
         question: 'believe',
         knowledge_point: '错词',
         error_cause: '少 e',
-        status: 'retried',
+        status: 'scheduled',
+        review_state: 'scheduled',
         version: 1,
         subject: '英语',
       },
@@ -209,19 +215,22 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     const wrapper = renderRecords()
     await flushPromises()
 
-    const tabs = wrapper.findAll('.k12rec__object-tabs button')
+    const tabs = wrapper.findAll('.k12rec__tabs [role="tablist"] button')
     expect(tabs).toHaveLength(5)
     expect(tabs.map((tab) => tab.find('.k12-tab-count').attributes('data-count'))).toEqual([
-      '2',
+      '0',
       '3',
       '2',
       '1',
       '2',
     ])
-    expect(recordsSource).toMatch(
-      /\.k12rec__object-tabs\s*\{[^}]*background:\s*transparent;[^}]*border:\s*none;/s,
+    expect(recordsSource).toContain('<K12BookTabs')
+    expect(bookTabsSource).toMatch(
+      /\.k12-book-tabs\s*\{[^}]*background:\s*transparent;[^}]*border:\s*none;/s,
     )
-    expect(recordsSource).toMatch(/\.k12rec__object-tabs button\.on\s*\{[^}]*box-shadow:\s*none;/s)
+    expect(bookTabsSource).toMatch(
+      /\.k12-book-tabs button\.on\s*\{[^}]*box-shadow:\s*none;/s,
+    )
   })
 
   it('作品工具栏只显示一个加号图标和纯文案', async () => {
@@ -235,24 +244,24 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     expect(add.findAll('svg')).toHaveLength(1)
   })
 
-  it('本周主操作是工具栏 split；行动页用大数字 hero，卡内不重复操作', async () => {
+  it('本周主操作只保留打印与发送；整周更多和旧本地行动卡不回流', async () => {
     const wrapper = renderRecords()
     await flushPromises()
 
-    const split = wrapper.get('[data-testid="review-split"]')
-    expect(split.get('[data-testid="build-review-set"]').text()).toContain('生成复习卷')
-    await split.get('[data-testid="review-split-more"]').trigger('click')
-    expect(wrapper.get('[data-testid="review-split-menu"]').text()).toContain('自定义组卷')
+    expect(wrapper.find('[data-testid="review-split"]').exists()).toBe(false)
+    expect(
+      wrapper.get('[data-testid="final-artifact-actions"]').findAll('button').map((button) =>
+        button.text(),
+      ),
+    ).toEqual(['打印', '发送到手机'])
+    expect(wrapper.find('button[aria-label="更多本周该练操作"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="custom-paper-form"]').exists()).toBe(false)
 
-    const hero = wrapper.get('.k12week__hero')
-    expect(hero.get('.k12week__count').text()).toContain('2')
-    expect(hero.text()).toContain('数学 1')
-    expect(hero.text()).toContain('英语 1')
-    expect(hero.text()).toContain('趋势 ↑ 在进步')
+    const hero = wrapper.get('.weekly-hero')
+    expect(hero.text()).toContain('0项本周该练')
     expect(hero.find('[data-testid="build-review-set"]').exists()).toBe(false)
-    // BUG-017 已补正式 CAS archive/restore；周队列可直接软归档，但不弹删除确认。
-    expect(hero.findAll('[data-testid^="mistake-archive-"]')).toHaveLength(2)
-    expect(hero.text()).toContain('不再复习')
+    expect(hero.findAll('[data-testid^="mistake-archive-"]')).toHaveLength(0)
+    expect(hero.text()).not.toContain('不再复习')
   })
 
   it('全部错题显示结果数，并同时支持学科与状态筛选', async () => {
@@ -272,8 +281,8 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     expect(wrapper.get('.k12mistakes').text()).not.toContain('小数乘法')
 
     await wrapper.get('[data-testid="mistake-subject-all"]').trigger('click')
-    await wrapper.get('[data-testid="mistake-status-retried"]').trigger('click')
-    expect(wrapper.get('[data-testid="mistake-result-count"]').text()).toBe('显示 1 / 3 道')
+    await wrapper.get('[data-testid="mistake-status-scheduled"]').trigger('click')
+    expect(wrapper.get('[data-testid="mistake-result-count"]').text()).toBe('显示 2 / 3 道')
     expect(wrapper.get('.k12mistakes').text()).toContain('believe')
     expect(wrapper.get('.k12mistakes').text()).not.toContain('古诗默写')
   })
@@ -317,14 +326,14 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     )
   })
 
-  it('错题仍在加载时显示加载态，不把未决请求误报成本周空态', async () => {
+  it('错题仍在加载时只在全部错题对象显示加载态，不污染本周计划', async () => {
     let resolveMistakes!: (value: unknown) => void
     h.listMistakes.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveMistakes = resolve
       }),
     )
-    const wrapper = renderRecords()
+    const wrapper = renderRecords({ target: 'mistakes' })
 
     expect(wrapper.find('[data-testid="records-loading"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="review-empty-card"]').exists()).toBe(false)
@@ -333,7 +342,7 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     await flushPromises()
   })
 
-  it('五个对象均已成功加载且全零时，只显示原型 FTUE 与唯一 aha 动作', async () => {
+  it('五个对象均已成功加载且全零时，本周计划稳定表达空周，不恢复旧全局 FTUE', async () => {
     h.listMistakes.mockReset().mockResolvedValue({ items: [] })
     h.reviewQueue.mockReset().mockResolvedValue({ items: [] })
     h.listAccumulation.mockReset().mockResolvedValue({ items: [] })
@@ -343,20 +352,15 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     const wrapper = renderRecords()
     await flushPromises()
 
-    const ftue = wrapper.get('[data-testid="records-ftue"]')
-    expect(ftue.text()).toContain('从拍第一页作业开始')
-    expect(ftue.text()).toContain('当晚看到第一条错题与辅导要点，之后收到第一张复习卷')
-    expect(ftue.findAll('button')).toHaveLength(1)
-    expect(ftue.get('button').text()).toBe('去辅导 · 上传第一页作业')
+    expect(wrapper.find('[data-testid="records-ftue"]').exists()).toBe(false)
+    expect(wrapper.get('.weekly-hero').text()).toContain('0项本周该练')
+    expect(wrapper.find('[data-testid="setup-weekly-progress"]').exists()).toBe(true)
     expect(
       wrapper.findAll('.k12-tab-count').map((count) => count.attributes('data-count')),
     ).toEqual(['0', '0', '0', '0', '0'])
-
-    await ftue.get('button').trigger('click')
-    expect(wrapper.emitted('go-tutor')).toHaveLength(1)
   })
 
-  it('其他对象尚未落定时显示加载态，不抢跑显示全零 FTUE', async () => {
+  it('其他对象尚未落定时不抢跑旧全局 FTUE，也不阻塞本周计划', async () => {
     let resolvePractice!: (value: unknown) => void
     h.listMistakes.mockReset().mockResolvedValue({ items: [] })
     h.reviewQueue.mockReset().mockResolvedValue({ items: [] })
@@ -372,14 +376,16 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="records-ftue"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="records-ftue-loading"]').attributes('role')).toBe('status')
+    expect(wrapper.find('[data-testid="records-ftue-loading"]').exists()).toBe(false)
+    expect(wrapper.find('.weekly-hero').exists()).toBe(true)
 
     resolvePractice({ items: [] })
     await flushPromises()
-    expect(wrapper.find('[data-testid="records-ftue"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="records-ftue"]').exists()).toBe(false)
+    expect(wrapper.find('.weekly-hero').exists()).toBe(true)
   })
 
-  it('任一对象加载失败时显示错误与重试，不伪装成全零 FTUE', async () => {
+  it('任一旁路对象加载失败时不伪装成全零 FTUE，也不污染本周计划', async () => {
     h.listMistakes.mockReset().mockResolvedValue({ items: [] })
     h.reviewQueue.mockReset().mockResolvedValue({ items: [] })
     h.listAccumulation.mockReset().mockResolvedValue({ items: [] })
@@ -390,10 +396,8 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="records-ftue"]').exists()).toBe(false)
-    const error = wrapper.get('[data-testid="records-ftue-error"]')
-    expect(error.attributes('role')).toBe('alert')
-    expect(error.text()).toContain('部分学习档案加载失败')
-    expect(error.text()).toContain('重试')
+    expect(wrapper.find('[data-testid="records-ftue-error"]').exists()).toBe(false)
+    expect(wrapper.find('.weekly-hero').exists()).toBe(true)
   })
 
   it('积累分科筛选为空不等于积累对象全空，不误显示 FTUE', async () => {
@@ -423,10 +427,9 @@ describe('学习档案 P0 · 原型唯一权威', () => {
     await wrapper.get('[data-testid="subtab-accumulation"]').trigger('click')
     await wrapper.get('[data-testid="accum-filter-english"]').trigger('click')
     await flushPromises()
-    await wrapper.get('[data-testid="subtab-week"]').trigger('click')
 
     expect(wrapper.find('[data-testid="records-ftue"]').exists()).toBe(false)
-    expect(wrapper.get('[data-testid="review-empty-card"]').text()).toContain('本周暂无到期复习')
+    expect(wrapper.find('[data-testid="accum-empty-card"]').exists()).toBe(true)
   })
 
   it('学习档案溢出菜单支持完整菜单语义、键盘导航、外点关闭与焦点恢复', async () => {
@@ -436,6 +439,7 @@ describe('学习档案 P0 · 原型唯一权威', () => {
       global: { plugins: [createPinia(), i18n()] },
     })
     await flushPromises()
+    await wrapper.get('[data-testid="subtab-mistakes"]').trigger('click')
 
     const trigger = wrapper.get('[data-testid="records-more-trigger"]')
     expect(trigger.attributes('aria-haspopup')).toBe('menu')

@@ -69,7 +69,8 @@ const h = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/api/k12', () => ({
+vi.mock('@/api/k12', async () => ({
+  ...(await import('./weekly-practice-api-mock')).weeklyPracticeApiMockDefaults('mingming'),
   k12ListMistakes: vi.fn().mockResolvedValue({ items: h.mistakes }),
   k12ReviewQueue: vi.fn().mockResolvedValue({ items: h.due }),
   k12MarkMastered: vi.fn().mockResolvedValue({ ok: true }),
@@ -108,39 +109,40 @@ describe('原型 c8a194e 对齐 · 错题本行动卡与档案区（20260709 定
     h.report.trend.mastered = 5
   })
 
-  it('①「本周该练」标题带跨科分布（仅统计队列里 subject 已知的行·诚实降级）', async () => {
+  it('①「本周该练」只投影服务端计划，不再从本地复习队列拼跨科行动卡', async () => {
     const w = render()
     await flushPromises()
-    const review = w.find('.rl-review')
-    expect(review.exists()).toBe(true)
-    expect(review.findAll('.k12week__subject').map((pill) => pill.text())).toEqual([
-      '数学 2',
-      '语文 1',
-    ])
+    expect(w.find('.weekly-hero').exists()).toBe(true)
+    expect(w.find('.rl-review').exists()).toBe(false)
+    expect(w.text()).not.toContain('数学 2')
+    expect(w.text()).not.toContain('语文 1')
   })
 
-  it('② 趋势 pill 并入行动卡：确有进步（mastered>0）→ 绿「趋势 ↑ 在进步」', async () => {
+  it('② 学情趋势不重复进入本周计划（mastered>0）', async () => {
     const w = render()
     await flushPromises()
-    const review = w.find('.rl-review')
-    expect(review.text(), '行动卡应含趋势 pill').toContain('趋势 ↑ 在进步')
+    expect(w.find('.weekly-hero').exists()).toBe(true)
+    expect(w.text()).not.toContain('趋势 ↑ 在进步')
   })
 
-  it('② 趋势 pill：无已掌握沉淀（mastered=0）→ 琥珀「趋势 → 待巩固」（PRD §3.5.7 非成功绿）', async () => {
+  it('② 学情趋势不重复进入本周计划（mastered=0）', async () => {
     h.report.trend.mastered = 0
     const w = render()
     await flushPromises()
-    const review = w.find('.rl-review')
-    expect(review.text()).toContain('趋势 → 待巩固')
-    expect(review.text()).not.toContain('在进步')
+    expect(w.find('.weekly-hero').exists()).toBe(true)
+    expect(w.text()).not.toContain('趋势 → 待巩固')
+    expect(w.text()).not.toContain('在进步')
   })
 
-  it('③ 行动卡内脚注：每周五 19:00 自动加入练习集（20260718 术语快修：出卷=装篮 · 只有验证过的进打印）', async () => {
+  it('③ 旧自动装篮与整周菜单退役，保存到练习集只保留单题入口', async () => {
     const w = render()
     await flushPromises()
-    const review = w.find('.rl-review')
-    expect(review.text(), '周五留存钩子应独立成行进行动卡').toContain('每周五 19:00 自动加入练习集')
-    expect(review.text()).toContain('只有验证通过的题目会进入打印版本')
+    expect(w.text()).not.toContain('每周五 19:00 自动加入练习集')
+    expect(w.find('[data-testid="weekly-more-trigger"]').exists()).toBe(false)
+    await w.get('[data-testid="subtab-mistakes"]').trigger('click')
+    const addOne = w.find('[data-testid^="mistake-practice-"]')
+    expect(addOne.exists()).toBe(true)
+    expect(addOne.text()).toBe('加入练习集')
   })
 
   it('⑤ 积累 tab 底部有分界规则脚注（原型 rc1：错了要改→错题 / 好东西要记住→积累）', async () => {

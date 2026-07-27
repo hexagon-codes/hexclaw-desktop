@@ -69,6 +69,7 @@ describe('学习档案三格式导出共用服务端 canonical Markdown', () => 
       global: { plugins: [createPinia(), i18n()] },
     })
     await flushPromises()
+    await w.findAll('.seg button').find((b) => b.text() === '全部错题')!.trigger('click')
     await w.find('.k12rec__export button').trigger('click')
     await w.findAll('.k12rec__menu button').find((b) => b.text().includes(label))!.trigger('click')
     await flushPromises()

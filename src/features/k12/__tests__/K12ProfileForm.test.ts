@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   catalogSpy: vi.fn(),
   progressSpy: vi.fn(),
   settingsSpy: vi.fn(),
+  bindingOptionsSpy: vi.fn(),
   provisionSpy: vi.fn().mockResolvedValue({ provisioned: [] }),
   getAgentsSpy: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
   toastSuccessSpy: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock('@/api/k12', () => ({
   k12GetCurriculumCatalog: (...args: unknown[]) => h.catalogSpy(...args),
   k12GetCurriculumProgress: (...args: unknown[]) => h.progressSpy(...args),
   k12GetWeeklyPracticeSettings: (...args: unknown[]) => h.settingsSpy(...args),
+  k12GetTextbookBindingOptions: (...args: unknown[]) => h.bindingOptionsSpy(...args),
   // useK12Store 依赖（建档尾部 fire-and-forget setupAutomation，需可 resolve）
   k12BindIM: vi.fn().mockResolvedValue({}),
   k12ProvisionCron: (req: unknown) => h.provisionSpy(req),
@@ -148,6 +150,41 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       created_at: '2026-07-20T00:00:00Z',
       updated_at: '2026-07-20T00:00:00Z',
     })
+    h.bindingOptionsSpy.mockReset().mockResolvedValue({
+      items: [
+        {
+          manifest_id: 'manifest-math-1',
+          document_id: 'document-math-1',
+          document_generation: 1,
+          document_title: '义务教育教科书·数学五年级上册.pdf',
+          state: 'ready_for_confirmation',
+          retryable: false,
+          failure_message: '',
+          text_index_state: 'ready',
+          vector_index_state: 'ready',
+          catalog: {
+            subject: 'math',
+            textbook_edition: '人教版',
+            textbook_version: '2022',
+            title: '数学',
+            volume: '五年级上册',
+            page_min: 1,
+            page_max: 120,
+            units: [
+              {
+                unit_id: 'unit-1',
+                title: '第1单元',
+                page_from: 1,
+                page_to: 20,
+                lessons: [],
+              },
+            ],
+            page_refs: [],
+          },
+          updated_at: '2026-07-20T00:00:00Z',
+        },
+      ],
+    })
     h.provisionSpy.mockReset().mockResolvedValue({ provisioned: [] })
     h.getAgentsSpy.mockReset().mockResolvedValue({ agents: [], total: 0, default: '' })
     h.toastSuccessSpy.mockReset()
@@ -192,9 +229,10 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       'k12.textbook_edition.information_technology': '浙教版',
       'k12.textbook_edition.art': '人美版',
     })
-    // 分科绑定必须进入真实辅导边界；不能 UI 保存六科、运行时仍把数学教材套给所有学科。
-    for (const edition of ['人教版', '人教PEP版', '教科版', '浙教版', '人美版']) {
-      expect(payload.system_prompt).toContain(edition)
+    // 当前版本只开放数学教材边界；其他五科仅作兼容 metadata 保留，不注入运行时提示词。
+    expect(payload.system_prompt).toContain('数学讲解始终按人教版')
+    for (const edition of ['人教PEP版', '教科版', '浙教版', '人美版']) {
+      expect(payload.system_prompt).not.toContain(edition)
     }
     // skills 从模板 manifest 全挂好：P0 必备 + P1 默认 + 基础设施（grade-constraint/k12_grade/k12_review）；P2（物化）默认不挂
     for (const s of [
@@ -218,7 +256,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(w.emitted('created')).toBeTruthy()
   })
 
-  it('按原型渲染六科教材行，legacy textbook_edition 仅作为数学 fallback', () => {
+  it('按定版原型只渲染数学教材行，legacy textbook_edition 作为数学 fallback', () => {
     mount(K12ProfileForm, {
       props: {
         agent: {
@@ -237,23 +275,9 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     })
 
     const rows = B().findAll('[data-testid="k12-textbook-row"]')
-    expect(rows).toHaveLength(6)
-    expect(rows.map((row) => row.attributes('data-subject'))).toEqual([
-      'math',
-      'chinese',
-      'english',
-      'science',
-      'information_technology',
-      'art',
-    ])
-    expect(rows.map((row) => row.find('.hc-select__label').text())).toEqual([
-      '北师大版',
-      '人教版',
-      '人教PEP版',
-      '教科版',
-      '浙教版',
-      '人美版',
-    ])
+    expect(rows).toHaveLength(1)
+    expect(rows.map((row) => row.attributes('data-subject'))).toEqual(['math'])
+    expect(rows.map((row) => row.find('.hc-select__label').text())).toEqual(['北师大版'])
   })
 
   it('改数学教材只改数学 metadata，保留其他科和无关 metadata，并同步 legacy fallback', async () => {
@@ -291,8 +315,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
 
-    const [, update] = h.updateSpy.mock.calls[0] as [string, Record<string, unknown>]
-    expect(update).not.toHaveProperty('metadata')
+    expect(h.updateSpy).not.toHaveBeenCalled()
     expect(h.profileBundleSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         profile: {
@@ -432,7 +455,7 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     expect(h.toastWarningSpy).toHaveBeenCalledWith(expect.stringContaining('已保存'))
   })
 
-  it('改档模式：预填 k12.* + 改年级 → profile-bundle 六科组合写后更新 Agent 基础字段', async () => {
+  it('改档模式：预填 k12.* + 改年级 → profile-bundle 原子写六科与 Agent 基础字段', async () => {
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
@@ -458,13 +481,11 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
     expect(h.registerSpy).not.toHaveBeenCalled() // 改档不新建
-    // 显示名走 updateAgent（随年级重算）
-    const [name, upd] = h.updateSpy.mock.calls[0] as [string, { display_name: string }]
-    expect(name).toBe('k12-tutor-x')
-    expect(upd.display_name).toContain('六年级')
-    // 编辑态三对象走唯一 profile-bundle；基础 profile 位于冻结子对象。
+    expect(h.updateSpy).not.toHaveBeenCalled()
+    // 编辑态所有字段走唯一 profile-bundle。
     const bundle = h.profileBundleSpy.mock.calls[0]![0] as {
       agent: string
+      agent_config: { display_name: string }
       profile: {
         child_name: string
         grade_term: string
@@ -472,23 +493,23 @@ describe('K12ProfileForm（M1-2 建档）', () => {
       }
     }
     expect(bundle.agent).toBe('k12-tutor-x')
+    expect(bundle.agent_config.display_name).toContain('六年级')
     expect(bundle.profile.grade_term).toBe('六年级上')
     expect(bundle.profile.child_name).toBe('小明')
     expect(bundle.profile.subject_textbooks.math).toBe('人教版')
-    expect(upd).not.toHaveProperty('metadata')
     expect(w.emitted('created')).toBeTruthy()
   })
 
-  it('卡片副标题：建档严格写原型的「年级 · 各学科教材独立绑定 · 按年级边界讲解」', async () => {
+  it('卡片副标题：建档严格写定版原型的数学教材进度边界', async () => {
     render()
     await B().find('input.k12pf__input').setValue('小明')
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
     const payload = h.registerSpy.mock.calls[0]![0] as { description: string }
-    expect(payload.description).toBe('五年级上 · 各学科教材独立绑定 · 按年级边界讲解')
+    expect(payload.description).toBe('五年级上 · 数学教材与进度已绑定 · 按年级边界讲解')
   })
 
-  it('卡片副标题：改档改年级 → updateAgent 同步派生 description（不写死）', async () => {
+  it('卡片副标题：改档改年级 → profile-bundle 同步派生 description（不写死）', async () => {
     const w = mount(K12ProfileForm, {
       props: {
         agent: {
@@ -510,15 +531,25 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
-    const [, upd] = h.updateSpy.mock.calls[0] as [string, { description: string }]
-    expect(upd.description).toBe('六年级上 · 各学科教材独立绑定 · 按年级边界讲解')
+    const bundle = h.profileBundleSpy.mock.calls[0]![0] as {
+      agent_config: { description: string }
+    }
+    expect(bundle.agent_config.description).toBe(
+      '六年级上 · 数学教材与进度已绑定 · 按年级边界讲解',
+    )
+    expect(h.updateSpy).not.toHaveBeenCalled()
   })
 
-  it('严格按原型只展示自带技能 chips，不渲染原型不存在的高级技能清单', async () => {
+  it('按定版原型分层展示只读能力与真实挂载 Skill，P0 锁定', async () => {
     render()
     expect(B().findAll('.k12pf__skillrow')).toHaveLength(0)
-    expect(B().findAll('.k12pf__skillchip')).toHaveLength(5)
-    expect(B().text()).not.toContain('高级 · 辅导助手的技能')
+    expect(
+      B().find('[data-testid="k12-profile-capabilities"]').findAll('.k12pf__skillchip'),
+    ).toHaveLength(5)
+    const mounted = B().find('[data-testid="k12-profile-mounted-skills"]')
+    expect(mounted.exists()).toBe(true)
+    expect(mounted.findAll('input[type="checkbox"]')).toHaveLength(9)
+    expect(mounted.findAll('input[type="checkbox"][disabled]')).toHaveLength(3)
     await B().find('input.k12pf__input').setValue('小明')
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
@@ -601,12 +632,12 @@ describe('K12ProfileForm（M1-2 建档）', () => {
     ])
     expect(gradeOpts.find((option) => option.value === '六年级')?.disabled).not.toBe(true)
     expect(gradeOpts.slice(6)).toEqual([
-      { value: 'future-junior-1', label: '初一 · 暂未开放', disabled: true },
-      { value: 'future-junior-2', label: '初二 · 暂未开放', disabled: true },
-      { value: 'future-junior-3', label: '初三 · 暂未开放', disabled: true },
-      { value: 'future-senior-1', label: '高一 · 暂未开放', disabled: true },
-      { value: 'future-senior-2', label: '高二 · 暂未开放', disabled: true },
-      { value: 'future-senior-3', label: '高三 · 暂未开放', disabled: true },
+      { value: 'future-junior-1', label: '初一（暂未开放）', disabled: true },
+      { value: 'future-junior-2', label: '初二（暂未开放）', disabled: true },
+      { value: 'future-junior-3', label: '初三（暂未开放）', disabled: true },
+      { value: 'future-senior-1', label: '高一（暂未开放）', disabled: true },
+      { value: 'future-senior-2', label: '高二（暂未开放）', disabled: true },
+      { value: 'future-senior-3', label: '高三（暂未开放）', disabled: true },
     ])
     expect(semesterOpts).toEqual(['上学期', '下学期'])
   })

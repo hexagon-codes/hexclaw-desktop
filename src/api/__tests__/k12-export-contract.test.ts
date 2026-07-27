@@ -15,7 +15,6 @@ import apiSource from '../k12.ts?raw'
 
 const EXPECTED_RUNTIME_EXPORTS = [
   'k12AddAccumulation',
-  'k12AddGrounding',
   'k12AddToBasket',
   'k12AdvancePracticeSet',
   'k12ArchiveMistake',
@@ -26,10 +25,13 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12CancelPracticeSet',
   'k12ColdStart',
   'k12CommitGenericPrintReceipt',
+  'k12CommitPracticeCandidateSelection',
   'k12CommitPracticePrintReceipt',
   'k12ConfirmImageTask',
   'k12CreateCreativeWork',
   'k12CreateImageTask',
+  'k12CreateWeeklyArithmeticBatch',
+  'k12DeferMistakeThisWeek',
   'k12DeleteAccumulation',
   'k12DeleteCreativeWork',
   'k12DeleteMistake',
@@ -39,6 +41,7 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12FinalizePracticeSet',
   'k12GenerateAccumulationDictation',
   'k12GenerateCustomPaper',
+  'k12GeneratePracticeCandidateBatch',
   'k12GenerateWorkFeedback',
   'k12GetCreativeWork',
   'k12GetCurrentWeeklyPracticePlan',
@@ -55,6 +58,7 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12GetPracticePrintJobPaper',
   'k12GetPracticeSet',
   'k12GetPrintArtifactContent',
+  'k12GetTextbookBindingOptions',
   'k12GetViewDescriptor',
   'k12GetWeeklyPracticeHistory',
   'k12GetWeeklyPracticeSettings',
@@ -67,37 +71,47 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'k12ListMistakes',
   'k12ListPracticeSets',
   'k12MarkMastered',
+  'k12OpenPracticeCandidateSelection',
   'k12TutoringTips',
   'k12PrepareArtifactPrintJob',
   'k12PrepareGenericPrintJob',
+  'k12PrepareGradingFinalArtifactOutput',
   'k12PreparePracticePrintJob',
   'k12PrepareWeeklyPracticeOutput',
+  'k12PrepareWeeklyPracticeTextbookTrack',
   'k12ProvisionCron',
   'k12QueryDeliveryBatch',
   'k12RecordMistake',
   'k12RecordGenericPrintEvent',
   'k12RecordPracticePrintEvent',
+  'k12RefreshWeeklyPracticeTextbookTrack',
   'k12RemoveFromBasket',
   'k12Restore',
   'k12RestoreAs',
   'k12RestoreMistake',
+  'k12RestoreMistakeReview',
   'k12RetryDeliveryBatch',
   'k12RetryGenericPrintJob',
   'k12RetryImageTask',
   'k12RetryMistakePracticeGeneration',
   'k12RetryPracticePrintJob',
+  'k12RetryWeeklyArithmeticBatch',
   'k12ReviewQueue',
   'k12RollbackRestoreAs',
   'k12SaveWeeklyPracticePlanToPracticeSet',
   'k12SendAccumulation',
   'k12SendCreativeWork',
+  'k12SendGradingFinalArtifact',
   'k12SendTutoringTips',
   'k12SendWeeklyPracticeSnapshot',
   'k12Solve',
   'k12StartMistakePracticeGeneration',
+  'k12StartWeeklyArithmeticBatch',
   'k12SubmitImageTaskProblemSourceAction',
   'k12SubmitPracticeSet',
+  'k12SubmitWeeklyArithmeticAttempt',
   'k12SubmitWeeklyPracticeAttempt',
+  'k12SuppressMistake',
   'k12TutorTurn',
   'k12UpdateProfile',
   'k12UpdateProfileBundle',
@@ -152,10 +166,20 @@ describe('K12 Desktop runtime export contract', () => {
     expect(apiSource).toMatch(/source:\s*'ai'\s*\|\s*'parent'/)
   })
 
-  it('matches the weekly-practice item discriminants owned by the server', () => {
-    expect(apiSource).toMatch(
-      /export type WeeklyPracticeGenerationMethod =[\s\S]*?\| 'due_review_reuse'[\s\S]*?export interface WeeklyPracticeItemVerificationDTO/,
+  it('[BUG-20260726-034] freezes the server-owned weekly-practice generation exact-set', () => {
+    const generationMethodSource = apiSource.match(
+      /export type WeeklyPracticeGenerationMethod =([\s\S]*?)\n\nexport interface WeeklyPracticeItemVerificationDTO/,
+    )?.[1]
+    const generationMethods = generationMethodSource?.match(/'[^']+'/g)?.map((value) =>
+      value.slice(1, -1),
     )
+
+    expect(generationMethods).toEqual([
+      'original',
+      'ai_variant',
+      'ai_generated',
+      'rule_generated',
+    ])
     expect(apiSource).toMatch(
       /export interface WeeklyPracticeItemDTO \{[\s\S]*?source_ref:\s*string[\s\S]*?\n\}/,
     )

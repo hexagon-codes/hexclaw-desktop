@@ -1027,6 +1027,7 @@ describe('chat controller modules', () => {
       clearSessionCancelled: vi.fn(),
       isSessionCancelled: vi.fn().mockReturnValue(false),
       isSessionStreaming: vi.fn().mockReturnValue(false),
+      isSessionExecuting: vi.fn().mockReturnValue(false),
       setSessionPending: vi.fn(),
       refreshSendingState: vi.fn(),
       setLocalSessionTitle: vi.fn(),

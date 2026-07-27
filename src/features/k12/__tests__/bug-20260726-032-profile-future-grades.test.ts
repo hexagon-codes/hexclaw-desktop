@@ -9,7 +9,7 @@ import K12ProfileForm from '../views/K12ProfileForm.vue'
 const h = vi.hoisted(() => ({
   updateAgent: vi.fn().mockResolvedValue({}),
   getAgents: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
-  updateProfile: vi.fn().mockResolvedValue({}),
+  updateProfileBundle: vi.fn().mockResolvedValue({}),
 }))
 
 vi.mock('@/api/agents', () => ({
@@ -22,7 +22,24 @@ vi.mock('@/api/agents', () => ({
 
 vi.mock('@/api/k12', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/k12')>()),
-  k12UpdateProfile: h.updateProfile,
+  k12UpdateProfileBundle: h.updateProfileBundle,
+  k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
+  k12GetCurriculumProgress: vi.fn().mockResolvedValue({
+    progress: {
+      revision: 1,
+      textbook_manifest_id: 'manifest-1',
+      volume: '五年级下册',
+      unit_id: 'unit-1',
+    },
+  }),
+  k12GetWeeklyPracticeSettings: vi.fn().mockResolvedValue({
+    revision: 1,
+    timezone: 'Asia/Shanghai',
+    due_review_enabled: true,
+    textbook_consolidation_enabled: false,
+    arithmetic_warmup_enabled: false,
+    arithmetic_minutes: 2,
+  }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
 }))
 
@@ -36,12 +53,12 @@ vi.mock('@/composables/useToast', () => ({
 }))
 
 const FUTURE_GRADE_LABELS = [
-  '初一 · 暂未开放',
-  '初二 · 暂未开放',
-  '初三 · 暂未开放',
-  '高一 · 暂未开放',
-  '高二 · 暂未开放',
-  '高三 · 暂未开放',
+  '初一（暂未开放）',
+  '初二（暂未开放）',
+  '初三（暂未开放）',
+  '高一（暂未开放）',
+  '高二（暂未开放）',
+  '高三（暂未开放）',
 ] as const
 
 function i18n() {
@@ -85,7 +102,7 @@ describe('BUG-20260726-032 · 孩子档案未来年级只读预告', () => {
     document.body.innerHTML = ''
     h.updateAgent.mockClear()
     h.getAgents.mockReset().mockResolvedValue({ agents: [], total: 0, default: '' })
-    h.updateProfile.mockReset().mockResolvedValue({})
+    h.updateProfileBundle.mockReset().mockResolvedValue({})
   })
 
   it('BUG-20260726-032 exposes the exact six future grades as visible disabled options', async () => {
@@ -96,8 +113,20 @@ describe('BUG-20260726-032 · 孩子档案未来年级只读预告', () => {
     await flushPromises()
 
     const options = body().findAll('[role="option"]')
+    const primaryOptions = options.slice(0, 6)
     const futureOptions = options.filter((option) =>
       FUTURE_GRADE_LABELS.includes(option.text() as (typeof FUTURE_GRADE_LABELS)[number]),
+    )
+    expect(primaryOptions.map((option) => option.text())).toEqual([
+      '一年级',
+      '二年级',
+      '三年级',
+      '四年级',
+      '五年级',
+      '六年级',
+    ])
+    expect(primaryOptions.every((option) => option.attributes('aria-disabled') !== 'true')).toBe(
+      true,
     )
     expect(futureOptions.map((option) => option.text())).toEqual(FUTURE_GRADE_LABELS)
     expect(futureOptions.every((option) => option.attributes('aria-disabled') === 'true')).toBe(
@@ -127,15 +156,20 @@ describe('BUG-20260726-032 · 孩子档案未来年级只读预告', () => {
 
     expect(combobox!.text()).toContain('五年级')
     expect(h.updateAgent).not.toHaveBeenCalled()
-    expect(h.updateProfile).not.toHaveBeenCalled()
+    expect(h.updateProfileBundle).not.toHaveBeenCalled()
 
     await body().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
-    expect(h.updateProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ agent: 'k12-tutor-x', grade_term: '五年级下' }),
+    expect(h.updateProfileBundle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: 'k12-tutor-x',
+        profile: expect.objectContaining({ grade_term: '五年级下' }),
+      }),
     )
-    expect(h.updateProfile).not.toHaveBeenCalledWith(
-      expect.objectContaining({ grade_term: expect.stringMatching(/^[初高]/) }),
+    expect(h.updateProfileBundle).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        profile: expect.objectContaining({ grade_term: expect.stringMatching(/^[初高]/) }),
+      }),
     )
 
     wrapper.unmount()

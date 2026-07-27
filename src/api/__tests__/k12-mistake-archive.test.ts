@@ -11,28 +11,31 @@ vi.mock('../client', () => ({
   apiPut: vi.fn(),
 }))
 
-import { k12ArchiveMistake, k12RestoreMistake } from '../k12'
+import { k12RestoreMistakeReview, k12SuppressMistake } from '../k12'
 
-describe('K12 mistake controlled archive API', () => {
+describe('K12 mistake controlled review-state API', () => {
   beforeEach(() => client.apiPost.mockReset().mockResolvedValue({ record_id: 'm1', version: 4 }))
 
-  it('archives with owner, CAS version, and durable intent identity', async () => {
-    await k12ArchiveMistake('child-a', 'm/1', 3, 'archive-command-1')
+  it('suppresses with owner, CAS version, and durable intent identity', async () => {
+    await k12SuppressMistake('child-a', 'm/1', 3, 'suppress-command-1')
 
-    expect(client.apiPost).toHaveBeenCalledExactlyOnceWith('/api/k12/mistakes/m%2F1/archive', {
+    expect(client.apiPost).toHaveBeenCalledExactlyOnceWith('/api/k12/mistakes/m%2F1/suppress', {
       agent: 'child-a',
       version: 3,
-      idempotency_key: 'archive-command-1',
+      idempotency_key: 'suppress-command-1',
     })
   })
 
-  it('restores through the same controlled command contract', async () => {
-    await k12RestoreMistake('child-a', 'm/1', 4, 'restore-command-1')
+  it('restores review through the same controlled command contract', async () => {
+    await k12RestoreMistakeReview('child-a', 'm/1', 4, 'restore-review-command-1')
 
-    expect(client.apiPost).toHaveBeenCalledExactlyOnceWith('/api/k12/mistakes/m%2F1/restore', {
+    expect(client.apiPost).toHaveBeenCalledExactlyOnceWith(
+      '/api/k12/mistakes/m%2F1/restore-review',
+      {
       agent: 'child-a',
       version: 4,
-      idempotency_key: 'restore-command-1',
-    })
+        idempotency_key: 'restore-review-command-1',
+      },
+    )
   })
 })

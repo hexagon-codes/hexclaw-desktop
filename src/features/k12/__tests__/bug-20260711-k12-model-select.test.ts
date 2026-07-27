@@ -23,7 +23,7 @@ import { useSettingsStore } from '@/stores/settings'
 const h = vi.hoisted(() => ({
   registerSpy: vi.fn().mockResolvedValue({}),
   updateSpy: vi.fn().mockResolvedValue({}),
-  profileSpy: vi.fn().mockResolvedValue({}),
+  bundleSpy: vi.fn().mockResolvedValue({}),
 }))
 vi.mock('@/api/agents', () => ({
   registerAgent: (a: unknown) => h.registerSpy(a),
@@ -32,19 +32,27 @@ vi.mock('@/api/agents', () => ({
   getAgents: vi.fn().mockResolvedValue({ agents: [], total: 0, default: '' }),
   getRoles: vi.fn().mockResolvedValue({ roles: [] }),
 }))
-vi.mock('@/api/k12', () => ({
-  k12UpdateProfile: (r: unknown) => h.profileSpy(r),
-  k12BindIM: vi.fn().mockResolvedValue({}),
+vi.mock('@/api/k12', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/k12')>()),
+  k12UpdateProfileBundle: (r: unknown) => h.bundleSpy(r),
+  k12GetTextbookBindingOptions: vi.fn().mockResolvedValue({ items: [] }),
+  k12GetCurriculumProgress: vi.fn().mockResolvedValue({
+    progress: {
+      revision: 1,
+      textbook_manifest_id: 'manifest-1',
+      volume: '五年级上册',
+      unit_id: 'unit-1',
+    },
+  }),
+  k12GetWeeklyPracticeSettings: vi.fn().mockResolvedValue({
+    revision: 1,
+    timezone: 'Asia/Shanghai',
+    due_review_enabled: true,
+    textbook_consolidation_enabled: false,
+    arithmetic_warmup_enabled: false,
+    arithmetic_minutes: 2,
+  }),
   k12ProvisionCron: vi.fn().mockResolvedValue({ provisioned: [] }),
-    k12TutorTurn: vi.fn(),
-  k12ListMistakes: vi.fn().mockResolvedValue({ items: [] }),
-  k12ReviewQueue: vi.fn().mockResolvedValue({ items: [] }),
-  k12MarkMastered: vi.fn(),
-  k12TutoringTips: vi.fn(),
-  k12Grade: vi.fn(),
-  k12InsightReport: vi.fn(),
-  k12StudyTime: vi.fn(),
-  k12ListAccumulation: vi.fn(),
 }))
 
 function i18n() {
@@ -97,11 +105,11 @@ describe('BUG-20260711-H：K12 辅导助手必须能选择 LLM 模型（高级�
     document.body.innerHTML = ''
     h.registerSpy.mockClear()
     h.updateSpy.mockClear()
-    h.profileSpy.mockReset().mockResolvedValue({})
+    h.bundleSpy.mockReset().mockResolvedValue({})
     seedProviders()
   })
 
-  it('★改档表单含 服务商→模型 级联（默认「跟随全局默认」），选模型后 updateAgent 回写 provider/model', async () => {
+  it('★改档表单含 服务商→模型 级联，选模型后由唯一 bundle 的 agent_config 原子回写', async () => {
     const w = mountEdit(pinia)
     const modelFold = B().find('[data-testid="k12pf-model"]')
     expect(modelFold.exists(), '高级区必须有模型选择折叠（对齐原型 tutorForm）').toBe(true)
@@ -120,18 +128,25 @@ describe('BUG-20260711-H：K12 辅导助手必须能选择 LLM 模型（高级�
 
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
-    const [, upd] = h.updateSpy.mock.calls[0] as [string, { provider?: string; model?: string }]
-    expect(upd.provider).toBe('zhipu')
-    expect(upd.model).toBe('glm-5.2')
+    const upd = h.bundleSpy.mock.calls[0]![0] as {
+      agent_config: { provider?: string; model?: string }
+    }
+    expect(upd.agent_config.provider).toBe('zhipu')
+    expect(upd.agent_config.model).toBe('glm-5.2')
+    expect(h.updateSpy).not.toHaveBeenCalled()
   })
 
   it('默认不动模型（跟随全局默认）：改档保存不把 provider/model 写成非空值', async () => {
     const w = mountEdit(pinia)
     void w
+    await flushPromises()
     await B().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
-    const [, upd] = h.updateSpy.mock.calls[0] as [string, { provider?: string; model?: string }]
-    expect(upd.provider ?? '').toBe('')
-    expect(upd.model ?? '').toBe('')
+    const upd = h.bundleSpy.mock.calls[0]![0] as {
+      agent_config: { provider?: string; model?: string }
+    }
+    expect(upd.agent_config.provider ?? '').toBe('')
+    expect(upd.agent_config.model ?? '').toBe('')
+    expect(h.updateSpy).not.toHaveBeenCalled()
   })
 })

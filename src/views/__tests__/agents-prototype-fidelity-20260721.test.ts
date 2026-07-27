@@ -45,7 +45,7 @@ describe('AgentsView authoritative prototype fidelity', () => {
       /<div class="hc-cxnm">\s*\{\{ defaultAssistantName \}\}\s*<span class="hc-tag">/s,
     )
     expect(source).toMatch(
-      /<div class="hc-cxnm hc-cxnm--card">\s*<span class="hc-cxnm__label">\{\{ agent\.display_name \|\| agent\.name \}\}<\/span>/s,
+      /<div class="hc-cxnm hc-cxnm--card">\s*<span class="hc-cxnm__label">\{\{ agentDisplayName\(agent\) \}\}<\/span>/s,
     )
     expect(source).toContain('class="hc-cxmeta hc-cxmeta--card"')
     expect(source).toContain('class="hc-tag hc-cxnm__badge"')

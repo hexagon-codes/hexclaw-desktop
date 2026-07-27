@@ -88,7 +88,8 @@ describe('global select control governance', () => {
       'hc-select',
       'provider-select',
     ])
-  })
+    // 全仓 Vue AST 扫描在完整回归负载下超过默认 5s；语义与 owner exact-set 不放宽。
+  }, 30_000)
 
   it('fails closed for a private combobox and an unknown marker', () => {
     const privateSelect = `
