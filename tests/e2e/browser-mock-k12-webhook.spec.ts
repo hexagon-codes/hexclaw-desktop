@@ -137,7 +137,7 @@ test.describe.serial('Desktop + real Sidecar signed K12 webhook lane', () => {
     await request.delete(`${BASE_URL}/api/v1/agents/${encodeURIComponent(agentName)}`)
   })
 
-  test('signed text → Receipt poll → typed confirm → text worker completed/result', async ({
+  test('signed text → Receipt poll → internal grading reference without public route', async ({
     request,
   }) => {
     const accepted = await sendSignedSubmission(request, e2eMarker('text-event'), {
@@ -152,52 +152,13 @@ test.describe.serial('Desktop + real Sidecar signed K12 webhook lane', () => {
     expect(delivered.job_or_execution_ref).toMatch(/^grading_job:/)
 
     const jobID = delivered.job_or_execution_ref!.replace(/^grading_job:/, '')
-    const detail = await jsonRequest<{
-      stage: string
-      job: { recognized_questions: Array<{ problem_id: string; answer_state: string }> }
-    }>(
-      request,
-      'GET',
-      `/api/k12/grading-jobs/${encodeURIComponent(jobID)}?agent=${encodeURIComponent(agentName)}`,
+    const removedPublicRoute = await request.get(
+      `${BASE_URL}/api/k12/grading-jobs/${encodeURIComponent(jobID)}?agent=${encodeURIComponent(agentName)}`,
     )
-    expect(detail.stage).toBe('awaiting_confirmation')
-    expect(detail.job.recognized_questions).toHaveLength(1)
-    expect(detail.job.recognized_questions[0].answer_state).toBe('blank')
-
-    await jsonRequest(
-      request,
-      'POST',
-      `/api/k12/grading-jobs/${encodeURIComponent(jobID)}/confirm`,
-      {
-        agent: agentName,
-        question_corrections: [
-          { problem_id: detail.job.recognized_questions[0].problem_id, confirmed: true },
-        ],
-      },
-    )
-    await expect
-      .poll(
-        async () => {
-          const current = await jsonRequest<{ stage: string }>(
-            request,
-            'GET',
-            `/api/k12/grading-jobs/${encodeURIComponent(jobID)}?agent=${encodeURIComponent(agentName)}`,
-          )
-          return current.stage
-        },
-        { timeout: 180_000, intervals: [250, 500, 1_000] },
-      )
-      .toBe('completed')
-    const result = await jsonRequest<{ result: { markdown: string; items: unknown[] } }>(
-      request,
-      'GET',
-      `/api/k12/grading-jobs/${encodeURIComponent(jobID)}/result?agent=${encodeURIComponent(agentName)}`,
-    )
-    expect(result.result.markdown).toContain('42')
-    expect(result.result.items).toHaveLength(1)
+    expect([404, 405]).toContain(removedPublicRoute.status())
   })
 
-  test('real non-1x1 fixture upload → signed image event → Receipt/job poll → Desktop history', async ({
+  test('real non-1x1 fixture upload → signed image event → Receipt/image-task poll → Desktop history', async ({
     page,
     request,
   }) => {
@@ -224,19 +185,28 @@ test.describe.serial('Desktop + real Sidecar signed K12 webhook lane', () => {
       source_session: 'webhook-e2e-image',
     })
     const delivered = await waitForReceipt(request, accepted.receipt_id, 'succeeded')
-    const jobID = delivered.job_or_execution_ref!.replace(/^grading_job:/, '')
-    const detail = await jsonRequest<{ stage: string; job: { recognized_questions: unknown[] } }>(
-      request,
-      'GET',
-      `/api/k12/grading-jobs/${encodeURIComponent(jobID)}?agent=${encodeURIComponent(agentName)}`,
-    )
-    expect(detail.stage).toBe('awaiting_confirmation')
-    expect(detail.job.recognized_questions.length).toBeGreaterThan(0)
+    expect(delivered.job_or_execution_ref).toMatch(/^image_task:/)
 
     await page.addInitScript(() => sessionStorage.setItem('hexclaw:welcomeRedirectDone', '1'))
     await page.goto('/automation/webhooks', { waitUntil: 'domcontentloaded' })
     // K12 Webhook 是场景页的直接可见面板；旧的额外展开开关已按原型移除。
     await expect(page.getByTestId('k12-webhook-panel')).toBeVisible()
+    const agentSelector = page.getByRole('combobox', { name: '孩子 / 辅导实例' })
+    if (!(await agentSelector.textContent())?.includes('Webhook E2E')) {
+      const scopedBindingResponse = page.waitForResponse((response) => {
+        const url = new URL(response.url())
+        return (
+          response.request().method() === 'GET' &&
+          url.pathname.endsWith('/api/v1/webhooks') &&
+          url.searchParams.get('agent_id') === agentName &&
+          response.ok()
+        )
+      })
+      await agentSelector.click()
+      await page.getByRole('option', { name: 'Webhook E2E', exact: true }).click()
+      await scopedBindingResponse
+    }
+    await expect(agentSelector).toContainText('Webhook E2E')
     await expect(page.getByTestId(`k12-webhook-row-${bindingName}`)).toBeVisible({
       timeout: 30_000,
     })

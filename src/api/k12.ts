@@ -2410,7 +2410,261 @@ function assertImageTaskTarget(value: unknown) {
   }
 }
 
-function assertImageTaskHomeworkProjection(value: ImageTaskWireRecord) {
+function normalizeImageTaskWireProgress(
+  value: unknown,
+  questions: RecognizedQuestion[],
+  projectionAnchorState: ImageTaskHomeworkProjectionDTO['anchor_state'],
+  message: string,
+): ImageTaskProblemProgressDTO {
+  const problem = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    problem,
+    [
+      'problem_id',
+      'status',
+      'input_revision',
+      'published_revision',
+      'current_disposition',
+    ],
+    [],
+    message,
+  )
+  if (
+    typeof problem.problem_id !== 'string'
+    || !problem.problem_id.trim()
+    || typeof problem.status !== 'string'
+    || !problem.status.trim()
+    || !Number.isInteger(problem.input_revision)
+    || (problem.input_revision as number) < 0
+    || !Number.isInteger(problem.published_revision)
+    || (problem.published_revision as number) < 0
+    || typeof problem.current_disposition !== 'string'
+    || !problem.current_disposition.trim()
+  ) {
+    throw new Error(message)
+  }
+  const question = questions.find(candidate => candidate.problem_id === problem.problem_id)
+  if (
+    !question
+    || (
+      question.source_number_path !== undefined
+      && question.source_number_path.some(part => !part.trim())
+    )
+  ) {
+    throw new Error(message)
+  }
+  const status = problem.status as string
+  const isResult = [
+    'correct',
+    'wrong',
+    'unanswered',
+    'answer_unclear',
+    'blank_solved',
+    'out_of_scope',
+    'untrusted',
+  ].includes(status)
+  return {
+    problem_id: problem.problem_id as string,
+    ...(question.parent_problem_id
+      ? {
+          parent_problem_id: question.parent_problem_id,
+          dependency_group_id: question.parent_problem_id,
+        }
+      : {}),
+    source_number_path: [...(question.source_number_path ?? [])],
+    display_label: question.display_label ?? '',
+    source_state: status === 'awaiting_source' ? 'awaiting_resolution' : 'ready',
+    anchor_state: projectionAnchorState,
+    operation_state: status,
+    disposition_state:
+      status === 'skipped'
+        ? 'skipped_by_parent'
+        : isResult
+          ? 'result'
+          : (problem.current_disposition as string),
+    result_projection: null,
+    published_revision: problem.published_revision as number,
+    input_revision: problem.input_revision as number,
+  }
+}
+
+function normalizeImageTaskWireCoverage(
+  value: unknown,
+  message: string,
+): ImageTaskCoverageDTO & { projectionRevision: number } {
+  const coverage = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    coverage,
+    [
+      'total',
+      'published',
+      'skipped',
+      'awaiting',
+      'failed',
+      'status',
+      'projection_revision',
+    ],
+    [],
+    message,
+  )
+  const countKeys = ['total', 'published', 'skipped', 'awaiting', 'failed'] as const
+  if (
+    countKeys.some(
+      key => !Number.isInteger(coverage[key]) || (coverage[key] as number) < 0,
+    )
+    || !['empty', 'incomplete', 'in_progress', 'complete'].includes(
+      String(coverage.status),
+    )
+    || !Number.isInteger(coverage.projection_revision)
+    || (coverage.projection_revision as number) < 0
+    || (coverage.published as number)
+      + (coverage.skipped as number)
+      + (coverage.awaiting as number)
+      + (coverage.failed as number)
+      > (coverage.total as number)
+  ) {
+    throw new Error(message)
+  }
+  return {
+    state:
+      coverage.status === 'complete'
+        ? (coverage.skipped as number) > 0
+          ? 'with_skips'
+          : 'full'
+        : 'incomplete',
+    total: coverage.total as number,
+    processed: coverage.published as number,
+    skipped: coverage.skipped as number,
+    projectionRevision: coverage.projection_revision as number,
+  }
+}
+
+interface NormalizedGradingFinalArtifactWire {
+  artifact: GradingFinalArtifactDTO | null
+  structureVersion: number | null
+}
+
+function normalizeGradingFinalArtifactWire(
+  value: unknown,
+  message: string,
+): NormalizedGradingFinalArtifactWire {
+  if (value === null) {
+    return { artifact: null, structureVersion: null }
+  }
+  const artifact = imageTaskWireRecord(value, message)
+  assertImageTaskKeys(
+    artifact,
+    [
+      'artifact_id',
+      'agent_name',
+      'job_id',
+      'structure_version',
+      'coverage_status',
+      'total_count',
+      'published_count',
+      'skipped_count',
+      'ordered_current_digests_json',
+      'canonical_markdown',
+      'artifact_digest',
+      'summary_invocation_id',
+      'created_at',
+      'updated_at',
+    ],
+    ['title'],
+    message,
+  )
+  const countKeys = ['total_count', 'published_count', 'skipped_count'] as const
+  if (
+    typeof artifact.artifact_id !== 'string'
+    || !artifact.artifact_id.trim()
+    || typeof artifact.agent_name !== 'string'
+    || !artifact.agent_name.trim()
+    || typeof artifact.job_id !== 'string'
+    || !artifact.job_id.trim()
+    || !Number.isInteger(artifact.structure_version)
+    || (artifact.structure_version as number) < 1
+    || (
+      artifact.coverage_status !== 'complete'
+      && artifact.coverage_status !== 'with_skips'
+    )
+    || countKeys.some(
+      key => !Number.isInteger(artifact[key]) || (artifact[key] as number) < 0,
+    )
+    || (artifact.total_count as number) < 1
+    || (artifact.published_count as number) + (artifact.skipped_count as number)
+      !== (artifact.total_count as number)
+    || (
+      artifact.coverage_status === 'complete'
+      && (artifact.skipped_count as number) !== 0
+    )
+    || (
+      artifact.coverage_status === 'with_skips'
+      && (artifact.skipped_count as number) === 0
+    )
+    || typeof artifact.ordered_current_digests_json !== 'string'
+    || !artifact.ordered_current_digests_json.trim()
+    || typeof artifact.canonical_markdown !== 'string'
+    || !artifact.canonical_markdown.trim()
+    || typeof artifact.artifact_digest !== 'string'
+    || !artifact.artifact_digest.trim()
+    || typeof artifact.summary_invocation_id !== 'string'
+    || !artifact.summary_invocation_id.trim()
+    || !Number.isInteger(artifact.created_at)
+    || (artifact.created_at as number) < 0
+    || !Number.isInteger(artifact.updated_at)
+    || (artifact.updated_at as number) < (artifact.created_at as number)
+    || (
+      artifact.title !== undefined
+      && (typeof artifact.title !== 'string' || !artifact.title.trim())
+    )
+  ) {
+    throw new Error(message)
+  }
+  return {
+    structureVersion: artifact.structure_version as number,
+    artifact: {
+      artifact_id: artifact.artifact_id as string,
+      artifact_digest: artifact.artifact_digest as string,
+      ...(artifact.title === undefined ? {} : { title: artifact.title as string }),
+      canonical_markdown: artifact.canonical_markdown as string,
+      coverage_status: artifact.coverage_status as GradingFinalArtifactDTO['coverage_status'],
+      total_count: artifact.total_count as number,
+      published_count: artifact.published_count as number,
+      skipped_count: artifact.skipped_count as number,
+      created_at: artifact.created_at as number,
+      updated_at: artifact.updated_at as number,
+    },
+  }
+}
+
+function assertFinalArtifactMatchesProgressive(
+  finalArtifact: NormalizedGradingFinalArtifactWire,
+  structureVersion: number,
+  problems: ImageTaskProblemProgressDTO[],
+  coverage: ImageTaskCoverageDTO,
+  message: string,
+) {
+  const artifact = finalArtifact.artifact
+  if (artifact === null) return
+  if (
+    finalArtifact.structureVersion !== structureVersion
+    || artifact.total_count !== coverage.total
+    || artifact.published_count !== coverage.processed
+    || artifact.skipped_count !== coverage.skipped
+    || artifact.total_count !== problems.length
+    || (
+      artifact.coverage_status === 'complete'
+      ? coverage.state !== 'full'
+      : coverage.state !== 'with_skips'
+    )
+  ) {
+    throw new Error(message)
+  }
+}
+
+function parseImageTaskHomeworkProjection(
+  value: ImageTaskWireRecord,
+): ImageTaskHomeworkProjectionDTO {
   const message = 'invalid image task dispatch response'
   assertImageTaskKeys(
     value,
@@ -2422,6 +2676,7 @@ function assertImageTaskHomeworkProjection(value: ImageTaskWireRecord) {
       'coverage',
       'projection_revision',
       'final_artifact',
+      'progressive',
     ],
     message,
   )
@@ -2433,6 +2688,7 @@ function assertImageTaskHomeworkProjection(value: ImageTaskWireRecord) {
   ) {
     throw new Error(message)
   }
+  let questions: RecognizedQuestion[] = []
   if (value.recognition !== undefined) {
     const recognition = imageTaskWireRecord(value.recognition, message)
     assertImageTaskKeys(recognition, ['questions'], ['subject'], message)
@@ -2445,18 +2701,88 @@ function assertImageTaskHomeworkProjection(value: ImageTaskWireRecord) {
     for (const question of recognition.questions) {
       assertImageTaskRecognizedQuestion(question, message)
     }
+    questions = recognition.questions as RecognizedQuestion[]
   }
 
-  const progressiveFields = [
+  const legacyProgressiveFields = [
     'structure_version',
     'problems',
     'coverage',
     'projection_revision',
-    'final_artifact',
   ] as const
-  const hasProgressiveSnapshot = progressiveFields.some((key) => value[key] !== undefined)
-  if (!hasProgressiveSnapshot) return
-  if (!progressiveFields.every((key) => value[key] !== undefined)) {
+  const hasLegacyProgressive = legacyProgressiveFields.some(
+    key => value[key] !== undefined,
+  )
+  const hasCurrentProgressive = value.progressive !== undefined
+  const finalArtifact = value.final_artifact === undefined
+    ? undefined
+    : normalizeGradingFinalArtifactWire(value.final_artifact, message)
+  if (hasLegacyProgressive && hasCurrentProgressive) {
+    throw new Error(message)
+  }
+  if (hasCurrentProgressive) {
+    const progressive = imageTaskWireRecord(value.progressive, message)
+    assertImageTaskKeys(
+      progressive,
+      ['structure_version', 'snapshot_revision', 'problem_progress', 'coverage'],
+      [],
+      message,
+    )
+    if (
+      !Number.isInteger(progressive.structure_version)
+      || (progressive.structure_version as number) < 0
+      || !Number.isInteger(progressive.snapshot_revision)
+      || (progressive.snapshot_revision as number) < 0
+      || !Array.isArray(progressive.problem_progress)
+    ) {
+      throw new Error(message)
+    }
+    const coverage = normalizeImageTaskWireCoverage(progressive.coverage, message)
+    const problems = progressive.problem_progress.map(problem =>
+      normalizeImageTaskWireProgress(
+        problem,
+        questions,
+        value.anchor_state as ImageTaskHomeworkProjectionDTO['anchor_state'],
+        message,
+      ),
+    )
+    const { projectionRevision, ...normalizedCoverage } = coverage
+    if (finalArtifact !== undefined) {
+      assertFinalArtifactMatchesProgressive(
+        finalArtifact,
+        progressive.structure_version as number,
+        problems,
+        normalizedCoverage,
+        message,
+      )
+    }
+    return {
+      kind: 'homework',
+      stage: value.stage as ImageTaskHomeworkStage,
+      confirmation_state:
+        value.confirmation_state as ImageTaskHomeworkProjectionDTO['confirmation_state'],
+      anchor_state: value.anchor_state as ImageTaskHomeworkProjectionDTO['anchor_state'],
+      ...(value.recognition === undefined
+        ? {}
+        : { recognition: value.recognition as unknown as ImageTaskHomeworkRecognition }),
+      structure_version: progressive.structure_version as number,
+      problems,
+      coverage: normalizedCoverage,
+      projection_revision: projectionRevision,
+      ...(finalArtifact === undefined
+        ? {}
+        : { final_artifact: finalArtifact.artifact }),
+    }
+  }
+
+  if (!hasLegacyProgressive) {
+    if (finalArtifact?.artifact) throw new Error(message)
+    return {
+      ...(value as unknown as ImageTaskHomeworkProjectionDTO),
+      ...(finalArtifact === undefined ? {} : { final_artifact: finalArtifact.artifact }),
+    }
+  }
+  if (!legacyProgressiveFields.every(key => value[key] !== undefined)) {
     throw new Error(message)
   }
   if (!Number.isInteger(value.structure_version) || (value.structure_version as number) < 1) {
@@ -2475,8 +2801,18 @@ function assertImageTaskHomeworkProjection(value: ImageTaskWireRecord) {
   ) {
     throw new Error(message)
   }
-  if (value.final_artifact !== null) {
-    imageTaskWireRecord(value.final_artifact, message)
+  if (finalArtifact !== undefined) {
+    assertFinalArtifactMatchesProgressive(
+      finalArtifact,
+      value.structure_version as number,
+      value.problems as ImageTaskProblemProgressDTO[],
+      value.coverage as ImageTaskCoverageDTO,
+      message,
+    )
+  }
+  return {
+    ...(value as unknown as ImageTaskHomeworkProjectionDTO),
+    ...(finalArtifact === undefined ? {} : { final_artifact: finalArtifact.artifact }),
   }
 }
 
@@ -2864,7 +3200,9 @@ function assertImageTaskDispatch(value: unknown): asserts value is ImageTaskDisp
   if (dispatch.target !== undefined) assertImageTaskTarget(dispatch.target)
   if (dispatch.target_projection !== undefined) {
     const projection = imageTaskWireRecord(dispatch.target_projection, message)
-    if (projection.kind === 'homework') assertImageTaskHomeworkProjection(projection)
+    if (projection.kind === 'homework') {
+      dispatch.target_projection = parseImageTaskHomeworkProjection(projection)
+    }
     else if (projection.kind === 'creative') assertImageTaskCreativeProjection(projection)
     else throw new Error(message)
   }

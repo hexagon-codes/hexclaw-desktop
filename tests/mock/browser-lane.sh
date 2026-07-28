@@ -108,6 +108,15 @@ llm:
       api_key: local-synthetic-credential
       base_url: "${MOCKSERVER_URL}/v1"
       model: mock-model
+      models:
+        - mock-model
+      model_specs_mode: explicit
+      model_specs:
+        - id: mock-model
+          display_name: Mock Model
+          capabilities:
+            - text
+            - vision
       compatible: openai
       tools_enabled: false
       enabled: true
@@ -118,6 +127,25 @@ llm:
     enabled: false
   tools:
     enabled: "off"
+k12:
+  grading_budget:
+    policy_version: 1
+    queued_seconds: 60
+    normalizing_seconds: 60
+    recognizing_seconds: 120
+    locating_seconds: 60
+    rendering_seconds: 60
+    projecting_seconds: 60
+    assessing_buckets:
+      - max_problems: 1
+        seconds: 90
+      - max_problems: 8
+        seconds: 180
+      - max_problems: 16
+        seconds: 300
+      - max_problems: 32
+        seconds: 540
+    item_concurrency: 2
 storage:
   driver: sqlite
   sqlite:

@@ -260,9 +260,12 @@ test('protocol fixture matrix covers OpenAI, Ollama, and DingTalk contracts', as
   assert.match(openAISSE.httpResponse.body, /HEXCLAW_MOCK_CHAT_OK/)
   assert.match(openAISSE.httpResponse.body, /data: \[DONE\]/)
 
+  const k12Classifier = byID.get('openai-k12-image-task-classifier')
   const k12Recognize = byID.get('openai-k12-recognize-mixed-worksheet')
   const k12Locator = byID.get('openai-k12-answer-locator')
   const k12Transcription = byID.get('openai-k12-answer-transcription')
+  assert.ok(k12Classifier.priority > openAINonstream.priority)
+  assert.match(k12Classifier.httpResponse.body, /completed_homework/)
   assert.ok(k12Recognize.priority > openAINonstream.priority)
   assert.ok(k12Locator.priority > k12Recognize.priority)
   assert.ok(k12Transcription.priority > k12Locator.priority)

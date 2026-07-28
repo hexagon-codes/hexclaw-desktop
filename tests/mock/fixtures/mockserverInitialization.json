@@ -201,6 +201,25 @@
     }
   },
   {
+    "id": "openai-k12-image-task-classifier",
+    "priority": 190,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "REGEX",
+        "regex": "(?s).*图片任务分流器.*task_intent.*"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_k12_image_task_classifier\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"task_intent\\\":\\\"completed_homework\\\",\\\"intent_evidence\\\":[\\\"图片中可见两道数学题，第二题有手写答案 54\\\"],\\\"confidence\\\":0.99,\\\"confirmation_candidates\\\":[],\\\"work_title_candidate\\\":null,\\\"task_requirement_candidate\\\":null}\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":32,\"total_tokens\":48}}"
+    }
+  },
+  {
     "id": "openai-k12-recognize-mixed-worksheet",
     "priority": 100,
     "httpRequest": {
@@ -255,6 +274,25 @@
         "content-type": ["application/json; charset=utf-8"]
       },
       "body": "{\"id\":\"chatcmpl_mock_k12_answer_transcription\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"[{\\\"index\\\":2,\\\"student_answer\\\":\\\"54\\\"}]\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":12,\"total_tokens\":20}}"
+    }
+  },
+  {
+    "id": "openai-k12-parent-teaching-guide",
+    "priority": 220,
+    "httpRequest": {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "body": {
+        "type": "REGEX",
+        "regex": "(?s).*家长可照着使用的辅导指南.*verified_solution.*parent_teaching_sequence.*"
+      }
+    },
+    "httpResponse": {
+      "statusCode": 200,
+      "headers": {
+        "content-type": ["application/json; charset=utf-8"]
+      },
+      "body": "{\"id\":\"chatcmpl_mock_k12_parent_guide\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"hexclaw-mock\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"{\\\"answer\\\":\\\"56\\\",\\\"full_solution_steps\\\":[\\\"8×7=56\\\"],\\\"grade_level_method\\\":\\\"用六年级整数乘法计算。\\\",\\\"likely_mistakes\\\":[\\\"把 8×7 误算成 54。\\\"],\\\"parent_teaching_sequence\\\":[\\\"先让孩子重算 8×7。\\\",\\\"再对照乘法口诀检查。\\\"],\\\"follow_up_questions\\\":[\\\"7×8 为什么等于 56？\\\"],\\\"checking_method\\\":\\\"用 56÷7=8 反向验算。\\\"}\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":16,\"completion_tokens\":48,\"total_tokens\":64}}"
     }
   }
 ]

@@ -133,6 +133,86 @@ function homeworkResult(
   }
 }
 
+function completedHomeworkDispatch() {
+  const firstQuestion = {
+    ...recognizedQuestion,
+    problem_id: 'problem-1',
+    source_number_path: [],
+    display_label: '',
+  }
+  const secondQuestion = {
+    ...recognizedQuestion,
+    problem_id: 'problem-2',
+    question: '57+38=',
+    raw_transcription: '57+38=',
+    canonical_markdown: '57+38=',
+    source_number_path: [],
+    display_label: '',
+  }
+  return {
+    dispatch: dispatch({
+      task_intent: 'completed_homework',
+      target: { type: 'homework_submission', id: 'submission-public-1' },
+      progress: { operation: 'homework', state: 'completed' },
+      target_projection: {
+        kind: 'homework',
+        stage: 'completed',
+        confirmation_state: 'confirmed',
+        anchor_state: 'located',
+        recognition: {
+          subject: '数学',
+          questions: [firstQuestion, secondQuestion],
+        },
+        progressive: {
+          structure_version: 1,
+          snapshot_revision: 1,
+          problem_progress: [
+            {
+              problem_id: 'problem-1',
+              status: 'correct',
+              input_revision: 1,
+              published_revision: 1,
+              current_disposition: 'result',
+            },
+            {
+              problem_id: 'problem-2',
+              status: 'wrong',
+              input_revision: 1,
+              published_revision: 1,
+              current_disposition: 'result',
+            },
+          ],
+          coverage: {
+            total: 2,
+            published: 2,
+            skipped: 0,
+            awaiting: 0,
+            failed: 0,
+            status: 'complete',
+            projection_revision: 1,
+          },
+        },
+        final_artifact: {
+          artifact_id: 'artifact-1',
+          agent_name: 'tutor/小明',
+          job_id: 'grading-job-1',
+          structure_version: 1,
+          coverage_status: 'complete',
+          total_count: 2,
+          published_count: 2,
+          skipped_count: 0,
+          ordered_current_digests_json: '["sha256:first","sha256:second"]',
+          canonical_markdown: '# 批改结果',
+          artifact_digest: '0123456789abcdef',
+          summary_invocation_id: 'summary-invocation-1',
+          created_at: 1_785_234_500,
+          updated_at: 1_785_234_501,
+        },
+      },
+    }),
+  }
+}
+
 describe('K12 ImageTaskDispatch public facade', () => {
   beforeEach(() => {
     Object.values(client).forEach((mock) => mock.mockReset())
@@ -183,6 +263,159 @@ describe('K12 ImageTaskDispatch public facade', () => {
       'parent_teaching_guide',
     ])
     expect(modeValues).toEqual(['grade', 'solve'])
+  })
+
+  it('[BUG-20260728-018] accepts and normalizes the current Sidecar queued progressive projection', async () => {
+    client.apiGet.mockResolvedValueOnce({
+      dispatch: {
+        dispatch_id: 'EPtdYUWhUqQLvublgPSJR',
+        task_intent: 'completed_homework',
+        status: 'routed',
+        provider_display_name: null,
+        model_id: 'mock-model',
+        retryable: false,
+        intent_evidence: ['图片中可见两道数学题，第二题有手写答案 54'],
+        intent_confidence: 0.99,
+        confirmation_candidates: [],
+        target: { type: 'homework_submission', id: 'u6LpZpp3lHz2vW0vSVii5' },
+        progress: { operation: 'homework', state: 'queued' },
+        target_projection: {
+          kind: 'homework',
+          stage: 'queued',
+          confirmation_state: 'pending',
+          anchor_state: 'pending',
+          progressive: {
+            structure_version: 0,
+            snapshot_revision: 0,
+            problem_progress: [],
+            coverage: {
+              total: 0,
+              published: 0,
+              skipped: 0,
+              awaiting: 0,
+              failed: 0,
+              status: 'incomplete',
+              projection_revision: 0,
+            },
+          },
+        },
+        version: 1,
+        created_at: 1_785_234_467,
+        updated_at: 1_785_234_467,
+        automatic_budget_seconds: 300,
+        automatic_started_at: 1_785_234_467,
+        automatic_deadline_at: 1_785_234_767,
+        automatic_remaining_seconds: 300,
+      },
+    })
+
+    const response = await k12Api.k12GetImageTask(
+      'tutor/小明',
+      'EPtdYUWhUqQLvublgPSJR',
+    )
+
+    expect(response.dispatch.target_projection).toEqual({
+      kind: 'homework',
+      stage: 'queued',
+      confirmation_state: 'pending',
+      anchor_state: 'pending',
+      structure_version: 0,
+      problems: [],
+      coverage: {
+        state: 'incomplete',
+        total: 0,
+        processed: 0,
+        skipped: 0,
+      },
+      projection_revision: 0,
+    })
+  })
+
+  it('[BUG-20260728-018] accepts only a final artifact consistent with the current progressive projection', async () => {
+    client.apiGet.mockResolvedValueOnce(completedHomeworkDispatch())
+
+    const response = await k12Api.k12GetImageTask('tutor/小明', 'dispatch-homework')
+
+    expect(response.dispatch.target_projection).toEqual({
+      kind: 'homework',
+      stage: 'completed',
+      confirmation_state: 'confirmed',
+      anchor_state: 'located',
+      recognition: {
+        subject: '数学',
+        questions: [
+          expect.objectContaining({
+            problem_id: 'problem-1',
+            source_number_path: [],
+            display_label: '',
+          }),
+          expect.objectContaining({
+            problem_id: 'problem-2',
+            source_number_path: [],
+            display_label: '',
+          }),
+        ],
+      },
+      structure_version: 1,
+      problems: [
+        expect.objectContaining({
+          problem_id: 'problem-1',
+          source_number_path: [],
+          display_label: '',
+          operation_state: 'correct',
+          published_revision: 1,
+        }),
+        expect.objectContaining({
+          problem_id: 'problem-2',
+          source_number_path: [],
+          display_label: '',
+          operation_state: 'wrong',
+          published_revision: 1,
+        }),
+      ],
+      coverage: {
+        state: 'full',
+        total: 2,
+        processed: 2,
+        skipped: 0,
+      },
+      projection_revision: 1,
+      final_artifact: {
+        artifact_id: 'artifact-1',
+        artifact_digest: '0123456789abcdef',
+        canonical_markdown: '# 批改结果',
+        coverage_status: 'complete',
+        total_count: 2,
+        published_count: 2,
+        skipped_count: 0,
+        created_at: 1_785_234_500,
+        updated_at: 1_785_234_501,
+      },
+    })
+  })
+
+  it('[BUG-20260728-018] rejects a final artifact that contradicts the progressive projection', async () => {
+    const response = completedHomeworkDispatch()
+    const projection = response.dispatch.target_projection as Record<string, any>
+    projection.progressive = {
+      structure_version: 0,
+      snapshot_revision: 0,
+      problem_progress: [],
+      coverage: {
+        total: 0,
+        published: 0,
+        skipped: 0,
+        awaiting: 0,
+        failed: 0,
+        status: 'incomplete',
+        projection_revision: 0,
+      },
+    }
+    client.apiGet.mockResolvedValueOnce(response)
+
+    await expect(
+      k12Api.k12GetImageTask('tutor/小明', 'dispatch-homework'),
+    ).rejects.toThrow(/invalid image task dispatch response/i)
   })
 
   it('calls only the owner-scoped /image-tasks method+path exact-set', async () => {

@@ -111,7 +111,7 @@
       "contains_personal_data": false
     },
     {
-      "id": "openai-k12-recognize-mixed-worksheet",
+      "id": "openai-k12-image-task-classifier",
       "provider": "openai-compatible",
       "method": "POST",
       "path": "/v1/chat/completions",
@@ -120,7 +120,7 @@
       "contains_personal_data": false
     },
     {
-      "id": "openai-k12-answer-locator",
+      "id": "openai-k12-recognize-mixed-worksheet",
       "provider": "openai-compatible",
       "method": "POST",
       "path": "/v1/chat/completions",
@@ -129,11 +129,29 @@
       "contains_personal_data": false
     },
     {
-      "id": "openai-k12-answer-transcription",
+      "id": "openai-k12-answer-locator",
       "provider": "openai-compatible",
       "method": "POST",
       "path": "/v1/chat/completions",
       "expectation_index": 14,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-k12-answer-transcription",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 15,
+      "source": "synthetic",
+      "contains_personal_data": false
+    },
+    {
+      "id": "openai-k12-parent-teaching-guide",
+      "provider": "openai-compatible",
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "expectation_index": 16,
       "source": "synthetic",
       "contains_personal_data": false
     }
