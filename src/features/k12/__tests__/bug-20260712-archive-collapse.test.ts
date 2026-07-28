@@ -150,7 +150,7 @@ describe('IA 定稿 · 本周复习=行动页 / 全部错题=档案页（折叠�
     const w = render()
     await flushPromises()
 
-    const toolbar = w.get('.k12rec__tabs')
+    const toolbar = w.get('.weekly-toolbar')
     const weeklyActionNames = toolbar
       .findAll('button')
       .map((button) => button.attributes('aria-label') || button.text().trim())

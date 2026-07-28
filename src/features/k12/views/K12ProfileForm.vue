@@ -234,17 +234,6 @@ const lessonOptions = computed(() => {
     ...lessons.map((lesson) => ({ value: lesson.lesson_id, label: lesson.title })),
   ]
 })
-const arithmeticMinuteOptions = [1, 2, 3, 4, 5].map((value) => ({
-  value: String(value),
-  label: `${value} 分钟`,
-}))
-const arithmeticMinutesModel = computed({
-  get: () => String(weeklySettings.value.arithmetic_minutes),
-  set: (value: string) => {
-    weeklySettings.value.arithmetic_minutes = Number(value)
-  },
-})
-
 function newCommandKey(prefix: string): string {
   const nonce = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`
   return `desktop-${prefix}:${props.agent?.name ?? 'new'}:${nonce}`
@@ -695,7 +684,7 @@ async function submit() {
           <p class="k12pf__hint">{{ t('k12.profile.gradeSupportNote') }}</p>
 
           <div class="k12pf__field">
-            <span>{{ t('k12.profile.textbookBySubject') }}</span>
+            <span v-if="!isEdit">{{ t('k12.profile.textbookBySubject') }}</span>
             <div class="k12pf__textbook-grid">
               <div
                 v-for="subject in VISIBLE_TEXTBOOK_SUBJECTS"
@@ -705,14 +694,16 @@ async function submit() {
                 data-testid="k12-textbook-row"
                 :data-subject="subject.key"
               >
-                <span>{{ t(subject.labelKey) }}</span>
-                <div :data-testid="`k12-textbook-${subject.key}`">
-                  <HcSelect
-                    v-model="textbookEditions[subject.key]"
-                    class="k12pf__textbook-select"
-                    :options="textbookOptions(subject)"
-                  />
-                </div>
+                <template v-if="!isEdit">
+                  <span>{{ t(subject.labelKey) }}</span>
+                  <div :data-testid="`k12-textbook-${subject.key}`">
+                    <HcSelect
+                      v-model="textbookEditions[subject.key]"
+                      class="k12pf__textbook-select"
+                      :options="textbookOptions(subject)"
+                    />
+                  </div>
+                </template>
                 <section
                   v-if="subject.key === 'math' && isEdit"
                   ref="mathProgressSection"
@@ -723,14 +714,32 @@ async function submit() {
                 >
                   <div class="k12pf__curriculum-head">
                     <b id="k12pf-math-progress-title">数学教材与当前进度</b>
-                    <span>同步巩固与口算热身默认关闭</span>
+                    <span>关联数学教材和当前进度；只有已确认的教材依据会参与推荐。</span>
                   </div>
                   <div v-if="curriculumLoading && !curriculumReady" class="k12pf__hint">
                     正在读取教材进度…
                   </div>
                   <template v-else>
                     <div class="k12pf__curriculum-grid">
-                      <div class="k12pf__field k12pf__field--manifest">
+                      <div class="k12pf__field">
+                        <span>教材版本</span>
+                        <HcSelect
+                          v-model="textbookEditions[subject.key]"
+                          class="k12pf__textbook-select"
+                          :options="textbookOptions(subject)"
+                          :aria-label="`${t(subject.labelKey)}教材版本`"
+                          :data-testid="`k12-textbook-${subject.key}`"
+                        />
+                      </div>
+                      <div class="k12pf__field">
+                        <span>册</span>
+                        <HcSelect
+                          v-model="volume"
+                          :options="volumeOptions"
+                          data-testid="k12-progress-volume"
+                        />
+                      </div>
+                      <div class="k12pf__field k12pf__field--wide">
                         <span>关联教材文件</span>
                         <HcSelect
                           v-model="textbookManifestID"
@@ -743,15 +752,7 @@ async function submit() {
                           关联教材后可生成教材同步练习
                         </small>
                       </div>
-                      <div class="k12pf__field">
-                        <span>册次</span>
-                        <HcSelect
-                          v-model="volume"
-                          :options="volumeOptions"
-                          data-testid="k12-progress-volume"
-                        />
-                      </div>
-                      <div class="k12pf__field">
+                      <div class="k12pf__field k12pf__field--wide">
                         <span>当前单元 *</span>
                         <HcSelect
                           v-model="unitID"
@@ -763,92 +764,54 @@ async function submit() {
                           data-testid="k12-current-unit-value"
                         />
                       </div>
-                      <div class="k12pf__field">
-                        <span>课时（选填）</span>
-                        <HcSelect
-                          v-model="lessonID"
-                          :options="lessonOptions"
-                          data-testid="k12-progress-lesson"
-                        />
-                      </div>
-                      <div class="k12pf__field k12pf__field--pages">
-                        <span>页码起止（选填）</span>
-                        <div class="k12pf__pages">
-                          <HcClearableField>
-                            <input
-                              v-model.number="pageFrom"
-                              class="k12pf__input"
-                              type="number"
-                              min="1"
-                              inputmode="numeric"
-                              placeholder="起始页"
-                            />
-                          </HcClearableField>
-                          <span>至</span>
-                          <HcClearableField>
-                            <input
-                              v-model.number="pageTo"
-                              class="k12pf__input"
-                              type="number"
-                              min="1"
-                              inputmode="numeric"
-                              placeholder="结束页"
-                            />
-                          </HcClearableField>
+                      <div class="k12pf__curriculum-detail-row">
+                        <div class="k12pf__field">
+                          <span>课时（选填）</span>
+                          <HcSelect
+                            v-model="lessonID"
+                            :options="lessonOptions"
+                            data-testid="k12-progress-lesson"
+                          />
+                        </div>
+                        <div class="k12pf__field">
+                          <span>页码范围（选填）</span>
+                          <div class="k12pf__pages">
+                            <HcClearableField>
+                              <input
+                                v-model.number="pageFrom"
+                                class="k12pf__input"
+                                type="number"
+                                min="1"
+                                inputmode="numeric"
+                                placeholder="起始页"
+                              />
+                            </HcClearableField>
+                            <span>至</span>
+                            <HcClearableField>
+                              <input
+                                v-model.number="pageTo"
+                                class="k12pf__input"
+                                type="number"
+                                min="1"
+                                inputmode="numeric"
+                                placeholder="结束页"
+                              />
+                            </HcClearableField>
+                          </div>
                         </div>
                       </div>
                     </div>
-                    <div class="k12pf__weekly-settings">
-                      <div class="k12pf__weekly-setting">
-                        <button
-                          type="button"
-                          class="k12pf__switch"
-                          :class="{ on: weeklySettings.textbook_consolidation_enabled }"
-                          role="switch"
-                          aria-label="教材同步巩固"
-                          :aria-checked="weeklySettings.textbook_consolidation_enabled"
-                          @click="
-                            weeklySettings.textbook_consolidation_enabled =
-                              !weeklySettings.textbook_consolidation_enabled
-                          "
-                        />
-                        <div><b>教材同步巩固</b><small>根据已确认的数学教材进度补充练习</small></div>
-                      </div>
-                      <div class="k12pf__weekly-setting">
-                        <button
-                          type="button"
-                          class="k12pf__switch"
-                          :class="{ on: weeklySettings.arithmetic_warmup_enabled }"
-                          role="switch"
-                          aria-label="口算热身"
-                          :aria-checked="weeklySettings.arithmetic_warmup_enabled"
-                          @click="
-                            weeklySettings.arithmetic_warmup_enabled =
-                              !weeklySettings.arithmetic_warmup_enabled
-                          "
-                        />
-                        <div><b>口算热身</b><small>只覆盖已经学过的运算</small></div>
-                      </div>
-                      <div
-                        v-if="weeklySettings.arithmetic_warmup_enabled"
-                        class="k12pf__arithmetic-minutes"
-                      >
-                        <span>口算时长</span>
-                        <HcSelect
-                          v-model="arithmeticMinutesModel"
-                          :options="arithmeticMinuteOptions"
-                          data-testid="k12-arithmetic-minutes"
-                        />
-                      </div>
-                    </div>
+                    <p class="k12pf__curriculum-hint">
+                      保存后，同步巩固将使用该进度；口算热身仍由你按需开始。
+                    </p>
                   </template>
                   <p v-if="curriculumError" class="k12pf__err">{{ curriculumError }}</p>
                 </section>
               </div>
             </div>
           </div>
-          <p class="k12pf__hint">
-            {{ t(isEdit ? 'k12.profile.textbookEditNote' : 'k12.profile.textbookCreateNote') }}
+          <p v-if="!isEdit" class="k12pf__hint">
+            {{ t('k12.profile.textbookCreateNote') }}
           </p>
           <p v-if="isEdit" class="k12pf__intro">{{ t('k12.profile.editNote') }}</p>
 
@@ -1042,7 +1005,8 @@ async function submit() {
 }
 .k12pf__body {
   padding: 18px;
-  max-height: 62vh;
+  max-height: 70vh;
+  scroll-padding-top: 20px;
   overflow: auto;
   display: flex;
   flex-direction: column;
@@ -1113,101 +1077,63 @@ async function submit() {
   grid-column: 1 / -1;
   display: grid;
   gap: 12px;
-  margin-top: 5px;
-  padding: 13px;
-  border: 0.5px solid var(--hc-border);
-  border-radius: 12px;
-  background: var(--hc-bg-card);
+  margin: 14px 0 0;
+  padding: 14px 0 0;
+  border: 0;
+  border-top: 0.5px solid var(--hc-divider);
+  border-radius: 0;
+  background: transparent;
   outline: none;
+  scroll-margin-top: 20px;
 }
 .k12pf__curriculum:focus {
-  border-color: var(--hc-accent);
-  box-shadow: 0 0 0 3px var(--hc-accent-subtle);
+  border-top-color: var(--hc-accent);
 }
 .k12pf__curriculum-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 10px;
+  display: block;
+  margin-bottom: 4px;
 }
 .k12pf__curriculum-head b {
-  font-size: 13px;
+  display: block;
+  font-size: 15px;
+  line-height: 1.35;
 }
 .k12pf__curriculum-head span {
+  display: block;
+  margin-top: 4px;
   color: var(--hc-text-muted);
-  font-size: 11px;
+  font-size: 11.5px;
+  line-height: 1.55;
 }
 .k12pf__curriculum-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
-.k12pf__field--pages {
+.k12pf__field--wide,
+.k12pf__curriculum-detail-row {
   grid-column: 1 / -1;
+}
+.k12pf__curriculum-detail-row {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 12px;
+  min-width: 0;
 }
 .k12pf__pages {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
-.k12pf__weekly-settings {
-  display: grid;
-  gap: 9px;
-  padding-top: 2px;
-}
-.k12pf__weekly-setting {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-.k12pf__weekly-setting > div {
-  display: grid;
-  gap: 2px;
-}
-.k12pf__weekly-setting b {
-  font-size: 12px;
-}
-.k12pf__weekly-setting small {
+.k12pf__curriculum-hint {
+  margin: 4px 0 0;
+  padding-top: 12px;
+  border-top: 0.5px solid var(--hc-divider);
   color: var(--hc-text-muted);
-  font-size: 10.5px;
-}
-.k12pf__switch {
-  position: relative;
-  width: 34px;
-  height: 20px;
-  flex: 0 0 auto;
-  border: 0;
-  border-radius: 999px;
-  background: var(--hc-border-strong, var(--hc-border));
-  cursor: pointer;
-}
-.k12pf__switch::after {
-  content: '';
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: white;
-  transition: transform 160ms ease;
-}
-.k12pf__switch.on {
-  background: var(--hc-accent);
-}
-.k12pf__switch.on::after {
-  transform: translateX(14px);
-}
-.k12pf__arithmetic-minutes {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding-left: 43px;
-  color: var(--hc-text-secondary);
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.55;
 }
 .k12pf__skillchips {
   display: flex;
@@ -1359,6 +1285,10 @@ async function submit() {
 }
 @media (max-width: 600px) {
   .k12pf__textbook-grid {
+    grid-template-columns: 1fr;
+  }
+  .k12pf__curriculum-grid,
+  .k12pf__curriculum-detail-row {
     grid-template-columns: 1fr;
   }
 }

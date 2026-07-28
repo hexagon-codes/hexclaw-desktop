@@ -200,7 +200,7 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
     h.legacyProfile.mockReset()
   })
 
-  it('renders one math progress section and saves profile/progress/settings in one bundle call', async () => {
+  it('renders one math progress section and preserves hidden weekly settings in one bundle call', async () => {
     mount(K12ProfileForm, {
       props: { agent: editAgent },
       global: { plugins: [createPinia(), i18n()] },
@@ -211,11 +211,8 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
     expect(body().findAll('[data-testid="k12-textbook-math"]')).toHaveLength(1)
     expect(body().findAll('[data-testid="k12-math-progress"]')).toHaveLength(1)
     expect(body().find('[data-testid="k12-current-unit-value"]').exists()).toBe(true)
-    expect(body().findAll('[role="switch"]')).toHaveLength(2)
+    expect(body().findAll('[role="switch"]')).toHaveLength(0)
     expect(body().find('[data-testid="k12-arithmetic-minutes"]').exists()).toBe(false)
-
-    await body().findAll('[role="switch"]')[1]!.trigger('click')
-    expect(body().find('[data-testid="k12-arithmetic-minutes"]').exists()).toBe(true)
 
     await body().find('.k12pf__btn--primary').trigger('click')
     await flushPromises()
@@ -243,7 +240,7 @@ describe('K12ProfileForm weekly-practice bundle contract', () => {
         weekly_practice_settings: {
           timezone: 'Asia/Shanghai',
           textbook_consolidation_enabled: false,
-          arithmetic_warmup_enabled: true,
+          arithmetic_warmup_enabled: false,
           arithmetic_minutes: 2,
         },
       }),

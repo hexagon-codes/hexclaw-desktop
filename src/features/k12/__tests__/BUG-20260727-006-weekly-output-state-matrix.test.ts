@@ -103,11 +103,10 @@ describe('BUG-20260727-006 weekly output state projection', () => {
         buttons.map((button) => button.attributes('disabled') !== undefined),
       ).toEqual(disabled)
       expect(buttons[0]!.classes()).toContain('final-artifact-actions__primary')
-      if (props.disabledReason) {
-        expect(wrapper.get('[role="status"]').text()).toBe(props.disabledReason)
-      } else {
-        expect(wrapper.find('[role="status"]').exists()).toBe(false)
-      }
+      const status = wrapper.find('[role="status"]')
+      const statusText = status.exists() ? status.text() : ''
+      expect(status.exists()).toBe(Boolean(props.disabledReason))
+      expect(statusText).toBe(props.disabledReason ?? '')
 
       for (const button of buttons) await button.trigger('click')
       const intents = wrapper.emitted('intent')?.map(([intent]) => intent) ?? []

@@ -171,6 +171,7 @@ describe('K12 weekly-practice HTTP contract', () => {
         system_prompt: '辅导小明完成五年级下学期的学习。',
         provider: 'HexClaw-GPT',
         model: 'gpt-5.6-sol',
+        skills: [],
       },
       profile: {
         child_name: '小明',
@@ -285,15 +286,15 @@ describe('K12 weekly-practice HTTP contract', () => {
       replayed: false,
     })
 
-    await k12PrepareWeeklyPracticeTextbookTrack('plan-30', 3, 'more', 'sync-1')
-    await k12CreateWeeklyArithmeticBatch('plan-30', 3, 4, 'arithmetic-1')
+    await k12PrepareWeeklyPracticeTextbookTrack('plan-30', 3, 8, 'sync-1')
+    await k12CreateWeeklyArithmeticBatch('plan-30', 3, 15, 'arithmetic-1')
 
     expect(h.post).toHaveBeenNthCalledWith(
       1,
       '/api/k12/weekly-practice/plans/plan-30/tracks/textbook_consolidation/prepare',
       {
         plan_revision: 3,
-        tier: 'more',
+        item_count: 8,
         idempotency_key: 'sync-1',
       },
     )
@@ -302,7 +303,7 @@ describe('K12 weekly-practice HTTP contract', () => {
       '/api/k12/weekly-practice/plans/plan-30/arithmetic-batches',
       {
         plan_revision: 3,
-        minutes: 4,
+        item_count: 15,
         idempotency_key: 'arithmetic-1',
       },
     )

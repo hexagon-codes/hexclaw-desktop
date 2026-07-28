@@ -21,6 +21,7 @@ import K12ProfileForm from './K12ProfileForm.vue'
 import K12WeeklyPracticePanel from '../components/K12WeeklyPracticePanel.vue'
 import K12BookTabs from '../components/K12BookTabs.vue'
 import FinalArtifactActions from '../components/FinalArtifactActions.vue'
+import type { FinalArtifactActionIntent } from '../final-artifact-action'
 import K12PersistentPrintController from '../components/K12PersistentPrintController.vue'
 import K12PracticeCandidateSelectionModal from '../components/K12PracticeCandidateSelectionModal.vue'
 import K12MistakeReviewMenu from '../components/K12MistakeReviewMenu.vue'
@@ -215,10 +216,8 @@ async function prepareWeeklyOutput(): Promise<WeeklyPracticePrepareOutputResp | 
   }
 }
 
-async function runWeeklyArtifactAction(intent: {
-  action: 'print' | 'send_im'
-  artifact_digest: string
-}) {
+async function runWeeklyArtifactAction(intent: FinalArtifactActionIntent) {
+  if (intent.action === 'export_pdf') return
   if (weeklyBusy.value) return
   weeklyBusy.value = true
   try {
@@ -1501,17 +1500,6 @@ async function doExportMd() {
         ]"
         @select="selectRecordsTab"
       />
-      <FinalArtifactActions
-        v-if="sub === 'week' && weeklyView === 'current'"
-        :actions="['print', 'send_im']"
-        :artifact-digest="weeklyOutput?.snapshot.snapshot_digest ?? ''"
-        :disabled="weeklyOutputDisabled"
-        :disabled-reason="weeklyOutputDisabledReason"
-        primary-action="print"
-        :send-label="weeklyDelivery.label.value"
-        :send-disabled="weeklyDelivery.disabled.value"
-        @intent="runWeeklyArtifactAction"
-      />
       <!-- 20260719 信息架构定稿：①功能位 emoji → 单色描边图标；②导出与备份/恢复均为学习档案级动作，
            不占常驻顶栏，统一收进五个子页均可达的「⋯」溢出菜单。 -->
       <button
@@ -1618,7 +1606,21 @@ async function doExportMd() {
           @defer-item="deferWeeklyPracticeItem"
           @suppress-item="suppressWeeklyPracticeItem"
           @retry-mistake-practice="retryMistakePracticeGeneration"
-        />
+        >
+          <template #toolbar-actions>
+            <FinalArtifactActions
+                    v-if="sub === 'week' && weeklyView === 'current'"
+                    :actions="['print', 'send_im']"
+                    :artifact-digest="weeklyOutput?.snapshot.snapshot_digest ?? ''"
+                    :disabled="weeklyOutputDisabled"
+                    :disabled-reason="weeklyOutputDisabledReason"
+                    primary-action="print"
+                    :send-label="weeklyDelivery.label.value"
+                    :send-disabled="weeklyDelivery.disabled.value"
+                    @intent="runWeeklyArtifactAction"
+                  />
+          </template>
+        </K12WeeklyPracticePanel>
         <K12PersistentPrintController
           ref="weeklyPrintController"
           @error="toast.error($event.message)"
@@ -2823,31 +2825,6 @@ async function doExportMd() {
   border-top: 0.5px solid var(--hc-border);
 }
 /* seg / pill / btn 复用全局 global.css 令牌类 */
-.seg {
-  position: relative;
-  display: inline-flex;
-  background: var(--hc-bg-input);
-  border: 1px solid var(--hc-border);
-  border-radius: 11px;
-  padding: 3px;
-  gap: 2px;
-}
-.seg button {
-  padding: 6px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--hc-text-muted);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-}
-.seg button.on {
-  background: var(--hc-bg-elevated);
-  color: var(--hc-accent);
-  box-shadow: var(--hc-shadow-sm);
-  font-weight: 600;
-}
 .pill {
   display: inline-flex;
   align-items: center;

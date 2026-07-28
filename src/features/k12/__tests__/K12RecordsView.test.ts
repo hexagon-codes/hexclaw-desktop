@@ -5,12 +5,7 @@ import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import k12Zh from '../i18n/zh-CN'
 import HcSelect from '@/components/common/HcSelect.vue'
-import {
-  k12EnsureWeeklyPracticePlan,
-  k12GetDeliveryBatch,
-  k12QueryDeliveryBatch,
-  k12RetryDeliveryBatch,
-} from '@/api/k12'
+import { k12EnsureWeeklyPracticePlan } from '@/api/k12'
 import K12WeeklyPracticePanel from '../components/K12WeeklyPracticePanel.vue'
 import K12RecordsView from '../views/K12RecordsView.vue'
 import K12InsightPanel from '../views/K12InsightPanel.vue'

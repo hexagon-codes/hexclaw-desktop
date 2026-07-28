@@ -311,13 +311,16 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
       <button type="button" class="btn btn-ghost" @click="emit('retry')">重试</button>
     </div>
     <template v-else-if="plan && settings">
-      <K12BookTabs
-        class="weekly-view-tabs"
-        :model-value="activeTab"
-        :tabs="weeklyViewTabs"
-        label="本周该练视图"
-        @select="selectView"
-      />
+      <div class="weekly-toolbar">
+        <K12BookTabs
+                class="weekly-view-tabs"
+                :model-value="activeTab"
+                :tabs="weeklyViewTabs"
+                label="本周该练视图"
+                @select="selectView"
+              />
+        <slot name="toolbar-actions" v-if="activeTab === 'current'" />
+      </div>
 
       <template v-if="activeTab === 'current'">
         <div v-if="!progress" class="weekly-progress weekly-progress--missing">
@@ -338,7 +341,6 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
           <div>
             <b>当前教材进度</b>
             <span>{{ progressLabel }}</span>
-            <small>同步巩固与口算热身可按需准备</small>
           </div>
           <button
             type="button"
@@ -607,6 +609,7 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
             </div>
           </article>
         </section>
+    <p v-if="activeTab === 'current'" class="weekly-lifecycle">每周五 19:00 自动整理本周错题 · 同步巩固和口算热身按需准备 · 不自动加入练习集</p>
       </template>
 
       <section v-else class="weekly-history" role="tabpanel" aria-label="历史周练">
@@ -963,6 +966,105 @@ function arithmeticFailure(track: WeeklyPracticeTrackDTO): string {
   }
   .weekly-history__card {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Approved learning-record fidelity contract: period tabs, artifact actions and
+   generated tracks share one compact weekly workspace. */
+.weekly {
+  display: grid;
+  gap: 0;
+}
+
+.weekly-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.weekly-toolbar :slotted(.k12rec__weekly-actions) {
+  margin-left: auto;
+}
+
+.weekly-progress {
+  min-height: 46px;
+  margin-bottom: 12px;
+  padding: 9px 13px;
+  border-radius: 12px;
+  background: var(--hc-bg-card);
+  box-shadow: none;
+}
+
+.weekly-progress > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+}
+
+.weekly-progress > div > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weekly-progress--missing {
+  border-style: dashed;
+  background: var(--hc-bg-card);
+}
+
+.weekly-hero {
+  margin: 0;
+  border-bottom: 0;
+  border-radius: 16px 16px 0 0;
+  box-shadow: none;
+}
+
+.weekly-track {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 16px 14px;
+  border-right: 0.5px solid var(--hc-border);
+  border-left: 0.5px solid var(--hc-border);
+  background: var(--hc-bg-card);
+}
+
+.weekly-track + .weekly-track {
+  padding-top: 6px;
+}
+
+.weekly-item {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(150px, 0.9fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 9px 12px;
+  border: 0.5px solid var(--hc-border);
+  border-radius: 12px;
+  background: var(--hc-bg-elevated);
+  box-shadow: none;
+}
+
+.weekly-lifecycle {
+  margin: 0;
+  padding: 11px 16px 13px;
+  border: 0.5px solid var(--hc-border);
+  border-top: 0;
+  border-radius: 0 0 16px 16px;
+  background: var(--hc-bg-card);
+  color: var(--hc-text-muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+@media (max-width: 960px) {
+  .weekly-item {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 7px;
   }
 }
 </style>

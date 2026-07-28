@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 import { compileTemplate, parse } from 'vue/compiler-sfc'
 
 const EXCLUDED_INPUT_TYPES = new Set([
-  'button', 'checkbox', 'color', 'date', 'file', 'hidden', 'radio', 'range', 'reset', 'submit',
+  'button', 'checkbox', 'color', 'date', 'file', 'hidden', 'number', 'radio', 'range', 'reset', 'submit',
 ])
 
 interface TemplateProp {
