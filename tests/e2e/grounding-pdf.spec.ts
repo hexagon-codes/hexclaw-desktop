@@ -12,12 +12,26 @@ const SCAN_OCR_LIVE = KNOWLEDGE_LIVE && process.env.HEX_K12_SCAN_OCR_LIVE === '1
 const DOCS_ROOT = process.env.HEXCLAW_DOCS_ROOT || resolve(process.cwd(), '../hexclaw-docs')
 const CONTRACT_MANIFEST = resolve(process.cwd(), 'tests/fixtures/local/manifest.example.json')
 const CONTRACT_VERIFIER = resolve(process.cwd(), 'tests/fixtures/local/verify-fixture.mjs')
+const RAG_ORACLE_SOURCE = JSON.parse(
+  readFileSync(
+    resolve(process.cwd(), 'tests/fixtures/local/k12-textbook-rag-oracle.v1.json'),
+    'utf8',
+  ),
+) as {
+  pdfSha256: string
+  query: string
+  citation: { physicalPage: number; normalizedTextSha256: string }
+}
+const RAG_ORACLE = {
+  ...RAG_ORACLE_SOURCE,
+  embeddingModel: 'qwen3-embedding:8b',
+} as const
 const PDFS = {
   text: {
     manifestID: 'textbook_pdf', fixtureID: 'FX-PDF-G5B-TEXT-001',
     path: process.env.HEX_FIXTURE_TEXTBOOK_PDF || resolve(DOCS_ROOT, 'test/义务教育教科书·数学五年级下册.pdf'),
     sha256: '657e1547074668dbb50f2bf37f13c20f292127be64c26c5334190aa34d06de83',
-    bytes: 14_621_452, pages: 131, grade: '五年级下', query: '找次品',
+    bytes: 14_621_452, pages: 131, grade: '五年级下', query: RAG_ORACLE.query,
   },
   scan: {
     manifestID: 'scanned_textbook_pdf', fixtureID: 'FX-PDF-G6A-SCAN-001',
@@ -29,6 +43,11 @@ const PDFS = {
 
 type PDFContract = (typeof PDFS)[keyof typeof PDFS]
 type Json = Record<string, unknown>
+
+function record(value: unknown, label: string): Json {
+  expect(value && typeof value === 'object' && !Array.isArray(value), label).toBe(true)
+  return value as Json
+}
 
 function fileSHA(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
@@ -204,13 +223,53 @@ test.describe('real K12 grounding PDF lifecycle', () => {
       value.request().method() === 'POST' && new URL(value.url()).pathname.endsWith('/api/v1/knowledge/search'),
     )
     await page.getByRole('button', { name: '搜索', exact: true }).click()
-    const results = await (await searchResponse).json() as { results?: Json[]; result?: Json[] }
-    const ownHits = [...(results.results || []), ...(results.result || [])].filter((hit) => hit.doc_id === id)
-    expect(ownHits.length).toBeGreaterThan(0)
-    for (const hit of ownHits) {
-      expect(Number(nested(hit, 'page', 'page_number')), '教材引用必须带可复核页码').toBeGreaterThan(0)
-      expect(String(nested(hit, 'source_digest', 'sha256'))).toBe(PDFS.text.sha256)
+    const results = await (await searchResponse).json() as {
+      results?: Json[]
+      total?: number
+      query_receipts?: Json[]
     }
+    const ownHits = (results.results || []).filter((hit) => hit.doc_id === id)
+    expect(ownHits.length).toBeGreaterThan(0)
+    expect(Number(results.total)).toBeGreaterThanOrEqual(ownHits.length)
+    const oracleHit = ownHits.find((hit) => {
+      const pageStart = Number(hit.page_start)
+      const pageEnd = Number(hit.page_end)
+      return pageStart <= RAG_ORACLE.citation.physicalPage
+        && pageEnd >= RAG_ORACLE.citation.physicalPage
+    })
+    expect(oracleHit, '固定 query 必须命中离线 oracle 的 physical page').toBeTruthy()
+    expect(String(oracleHit!.doc_id)).toBe(id)
+    expect(String(oracleHit!.chunk_id)).not.toBe('')
+    expect(String(oracleHit!.citation_digest)).not.toBe('')
+    expect(String(oracleHit!.source_digest)).toBe(RAG_ORACLE.pdfSha256)
+
+    const receipt = record(
+      (results.query_receipts || []).find((item) => item.operation === 'query_embedding'),
+      'query embedding receipt',
+    )
+    expect(receipt.operation).toBe('query_embedding')
+    expect(receipt.status).toBe('succeeded')
+    expect(receipt.model).toBe(RAG_ORACLE.embeddingModel)
+    expect(String(receipt.provider_id ?? '')).not.toBe('')
+    expect(String(receipt.profile_id ?? '')).not.toBe('')
+    expect(String(receipt.profile_config_hash ?? '')).not.toBe('')
+    expect(Number(receipt.dimension)).toBe(4096)
+    expect(String(receipt.revision_id ?? '')).not.toBe('')
+    expect(String(receipt.query_digest ?? '')).not.toBe('')
+
+    const policyResponse = await request.get(
+      `${BASE_URL}/api/v1/knowledge/corpora/default/embedding-policy?user_id=desktop-user`,
+    )
+    expect(policyResponse.ok()).toBe(true)
+    const policy = await policyResponse.json() as Json
+    const activeRevision = record(policy.active_revision, 'active_revision')
+    const activeProfile = record(activeRevision.profile, 'active embedding profile')
+    expect(activeRevision.revision_id).toBe(receipt.revision_id)
+    expect(activeRevision.profile_config_hash).toBe(receipt.profile_config_hash)
+    expect(activeProfile.profile_id).toBe(receipt.profile_id)
+    expect(activeProfile.provider_id).toBe(receipt.provider_id)
+    expect(activeProfile.model_name).toBe(RAG_ORACLE.embeddingModel)
+    expect(activeProfile.dimension).toBe(receipt.dimension)
   })
 
   test('122-page scanned PDF exposes OCR progress and a persisted cancel/resume boundary', async ({ page, request }) => {

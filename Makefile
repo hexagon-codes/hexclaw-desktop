@@ -27,6 +27,10 @@ LOCAL_DMG_DIR := $(DESKTOP_ROOT)/src-tauri/target/release/bundle/dmg
 LOCAL_DMG_ROOT := $(LOCAL_DMG_DIR)/HexClaw.dmgroot
 LOCAL_DMG_PATH := $(LOCAL_DMG_DIR)/HexClaw_$(DESKTOP_VERSION)_$(LOCAL_DMG_ARCH).dmg
 LOCAL_PACKAGE_TAURI_CONFIG := $(DESKTOP_ROOT)/src-tauri/tauri.package-local.conf.json
+LOCAL_APP_EXECUTABLE := $(LOCAL_APP_BUNDLE)/Contents/MacOS/hexclaw-desktop
+LOCAL_APP_SIDECAR := $(LOCAL_APP_BUNDLE)/Contents/MacOS/hexclaw
+LOCAL_RELEASE_UI_MANIFEST := $(LOCAL_DMG_DIR)/HexClaw_$(DESKTOP_VERSION)_$(LOCAL_DMG_ARCH).release-ui-dist-manifest.json
+LOCAL_RELEASE_UI_RECEIPT := $(LOCAL_DMG_DIR)/HexClaw_$(DESKTOP_VERSION)_$(LOCAL_DMG_ARCH).release-ui-attestation.json
 
 # Ollama 版本控制（更新版本只需改这一处）
 OLLAMA_VERSION ?= 0.30.10
@@ -49,11 +53,20 @@ build-local package-local: sidecar-local render-bundle
 		rm -rf "$(LOCAL_DMG_ROOT)" "$(LOCAL_DMG_PATH)"; \
 		mkdir -p "$(LOCAL_DMG_ROOT)" "$(LOCAL_DMG_DIR)"; \
 		ditto "$(LOCAL_APP_BUNDLE)" "$(LOCAL_DMG_ROOT)/HexClaw.app"; \
-		ln -s /Applications "$(LOCAL_DMG_ROOT)/Applications"; \
-		hdiutil create -volname "HexClaw" -srcfolder "$(LOCAL_DMG_ROOT)" -ov -format UDZO "$(LOCAL_DMG_PATH)"; \
-		rm -rf "$(LOCAL_DMG_ROOT)"; \
-		echo "本地装机 DMG: $(LOCAL_DMG_PATH)"; \
-	fi
+			ln -s /Applications "$(LOCAL_DMG_ROOT)/Applications"; \
+			hdiutil create -volname "HexClaw" -srcfolder "$(LOCAL_DMG_ROOT)" -ov -format UDZO "$(LOCAL_DMG_PATH)"; \
+			rm -rf "$(LOCAL_DMG_ROOT)"; \
+			node ./scripts/ci/k12-release-ui-attestation.mjs create \
+				--dist "$(DESKTOP_ROOT)/dist" \
+				--release-version "$(DESKTOP_VERSION)" \
+				--installed-app "$(LOCAL_APP_EXECUTABLE)" \
+				--sidecar "$(LOCAL_APP_SIDECAR)" \
+				--package "$(LOCAL_DMG_PATH)" \
+				--manifest "$(LOCAL_RELEASE_UI_MANIFEST)" \
+				--receipt "$(LOCAL_RELEASE_UI_RECEIPT)"; \
+			echo "本地装机 DMG: $(LOCAL_DMG_PATH)"; \
+			echo "Release UI attestation: $(LOCAL_RELEASE_UI_RECEIPT)"; \
+		fi
 
 # 仅构建前端
 build-web:

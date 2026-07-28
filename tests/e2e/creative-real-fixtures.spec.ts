@@ -126,6 +126,16 @@ async function listWorks(page: Page, owner: string): Promise<Json[]> {
   return (await json<{ items?: Json[] }>(response)).items || []
 }
 
+function feedbackPayload(work: Json | undefined): Json | undefined {
+  const generation = (
+    work?.latest_feedback ??
+    work?.latest_feedback_generation ??
+    work?.initial_feedback ??
+    work?.initial_feedback_generation
+  ) as Json | undefined
+  return generation?.feedback as Json | undefined
+}
+
 test('§1.2 creative manifest freezes writing and art source bytes', () => {
   const missing = Object.values(FIXTURES)
     .filter((fixture) => !existsSync(fixture.path))
@@ -159,21 +169,19 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     ).toBeDisabled()
     const assetID = await uploadWorkPhoto(page, FIXTURES.art)
     expect(assetID).toMatch(new RegExp(`^asset://${owner.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/`))
-    await modal.getByTestId('cw-add-title').fill(`彩虹女孩-${e2eMarker('work')}`)
-    await modal.getByTestId('cw-add-task').fill('画一幅包含人物、动物和彩虹的彩铅画')
-    await modal.getByTestId('cw-add-intent').fill('练习人物、猫和彩虹的构图关系')
+    const title = `彩虹女孩-${e2eMarker('work')}`
+    await modal.getByTestId('cw-add-title').fill(title)
+    await expect(modal.getByTestId('cw-add-task')).toHaveCount(0)
+    await expect(modal.getByTestId('cw-add-intent')).toHaveCount(0)
     await expect(modal.getByTestId('cw-add-submit')).toBeEnabled()
     await modal.getByTestId('cw-add-submit').click()
     await expect(modal).toHaveCount(0, { timeout: 30_000 })
 
-    const work = (await listWorks(page, owner)).find((item) =>
-      item.title?.toString().startsWith('彩虹女孩-'),
-    )
+    const work = (await listWorks(page, owner)).find((item) => item.work_title === title)
     expect(work, 'visible save must create a sidecar CreativeWork').toBeTruthy()
     expect(work?.work_type).toBe('art')
-    const versions = work?.versions as Json[]
-    expect(versions).toHaveLength(1)
-    expect(versions[0]?.source_asset_id).toBe(assetID)
+    expect(work?.source_asset_id).toBe(assetID)
+    expect(work?.versions).toBeUndefined()
 
     const thumb = page.getByTestId('cw-thumb').first()
     await expect(thumb).toBeVisible()
@@ -186,7 +194,7 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     await expect(page.getByTestId('works-section')).not.toContainText(/评分|排名|分数/)
   })
 
-  test('writing photo requires OCR confirmation, source-grounded feedback and a non-empty v2', async ({
+  test('writing photo requires OCR confirmation, source-grounded feedback and a separate non-empty second work', async ({
     page,
   }) => {
     test.skip(
@@ -210,48 +218,98 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     ).toMatch(/我的好爸爸|爸爸/)
     await modal.getByTestId('cw-ocr-confirm').click()
     await expect(modal.getByTestId('cw-ocr-confirmed')).toBeVisible({ timeout: 60_000 })
-    const title = `我的好爸爸-${e2eMarker('work')}`
-    await modal.getByTestId('cw-add-title').fill(title)
-    await modal.getByTestId('cw-add-task').fill('围绕真实人物与具体事件完成写人作文')
+    await expect(modal.getByTestId('cw-add-title')).toHaveCount(0)
+    await expect(modal.getByTestId('cw-add-task')).toHaveCount(0)
+    await expect(modal.getByTestId('cw-add-intent')).toHaveCount(0)
     await expect(modal.getByTestId('cw-add-submit')).toBeEnabled()
     await modal.getByTestId('cw-add-submit').click()
     await expect(modal).toHaveCount(0, { timeout: 30_000 })
 
-    const card = page.locator('.k12cw__card', { hasText: title })
+    await expect
+      .poll(
+        async () =>
+          (await listWorks(page, owner)).filter((item) => item.source_asset_id === assetID).length,
+        { timeout: 60_000 },
+      )
+      .toBe(1)
+    const firstWork = (await listWorks(page, owner)).find(
+      (item) => item.source_asset_id === assetID,
+    )
+    expect(firstWork, 'confirmed OCR save must create one independent writing work').toBeTruthy()
+    expect(firstWork?.content_markdown).toBe(confirmedText.trim())
+    expect(firstWork?.versions).toBeUndefined()
+    const firstWorkID = String(firstWork?.work_id || '')
+    expect(firstWorkID).not.toBe('')
+
+    const card = page.locator(`.k12cw__card[data-work-id="${firstWorkID}"]`)
     await expect(card).toBeVisible()
+    await expect(card.getByTestId('cw-detail-toggle')).toBeEnabled({ timeout: 6 * 60_000 })
     await card.getByTestId('cw-detail-toggle').click()
     const detail = page.getByTestId('cw-detail-modal')
     await expect(detail).toBeVisible()
+    const firstFeedback = detail.getByTestId('cw-latest-feedback')
     await expect(
-      detail.getByTestId('cw-structured-feedback'),
+      firstFeedback,
       'saving a confirmed work must generate feedback without a separate first-generation action',
     ).toBeVisible({ timeout: 6 * 60_000 })
     await expect(detail.getByTestId('cw-feedback-generate')).toHaveCount(0)
-    const feedback = await detail.getByTestId('cw-structured-feedback').innerText()
+    const feedback = await firstFeedback.innerText()
     expect(feedback).toMatch(/爸爸|程序员|河蟹|AI|数学/)
     expect(feedback).not.toMatch(/校园春景|柳枝像绿色丝带|评分|排名/)
-    await expect(detail.getByTestId('cw-feedback-provenance').first()).toContainText(/AI|方法|证据/)
+    expect(await firstFeedback.getAttribute('data-generation-id')).toBeTruthy()
+    expect(await firstFeedback.getAttribute('data-feedback-id')).toBeTruthy()
+    await expect(detail.getByTestId('cw-revision-input')).toHaveCount(0)
+    await expect(detail.getByTestId('cw-revision-submit')).toHaveCount(0)
+    await expect(detail.locator('[data-testid="cw-version-content"]')).toHaveCount(0)
+    await detail.getByTestId('cw-detail-close').click()
 
-    const revision = `第二稿-${e2eMarker('revision')}：我补充了爸爸用提问引导我检查数学步骤的细节。`
-    await detail.getByTestId('cw-revision-input').fill(revision)
-    await detail.getByTestId('cw-revision-submit').click()
-    await expect(detail.locator('[data-testid="cw-version-content"]')).toHaveCount(2, {
+    const secondDraft = `第二篇-${e2eMarker('work')}：我补充了爸爸用提问引导我检查数学步骤的细节。`
+    await page.getByTestId('cw-add-open').click()
+    const secondModal = page.getByTestId('cw-add-modal')
+    await expect(secondModal).toBeVisible()
+    await secondModal.getByTestId('cw-add-type-writing').click()
+    await expect(secondModal.getByTestId('cw-add-title')).toHaveCount(0)
+    await expect(secondModal.getByTestId('cw-add-task')).toHaveCount(0)
+    await expect(secondModal.getByTestId('cw-add-intent')).toHaveCount(0)
+    await secondModal.getByTestId('cw-add-draft').fill(secondDraft)
+    await expect(secondModal.getByTestId('cw-add-submit')).toBeEnabled()
+    await secondModal.getByTestId('cw-add-submit').click()
+    await expect(secondModal).toHaveCount(0, { timeout: 30_000 })
+
+    await expect
+      .poll(
+        async () =>
+          (await listWorks(page, owner)).filter(
+            (item) => item.content_markdown === secondDraft,
+          ).length,
+        { timeout: 60_000 },
+      )
+      .toBe(1)
+    const secondWork = (await listWorks(page, owner)).find(
+      (item) => item.content_markdown === secondDraft,
+    )
+    expect(secondWork, 'second text must create another independent work').toBeTruthy()
+    const secondWorkID = String(secondWork?.work_id || '')
+    expect(secondWorkID).not.toBe('')
+    expect(secondWorkID).not.toBe(firstWorkID)
+    expect(secondWork?.source_asset_id).toBeUndefined()
+    expect(secondWork?.versions).toBeUndefined()
+
+    const secondCard = page.locator(`.k12cw__card[data-work-id="${secondWorkID}"]`)
+    await expect(secondCard).toBeVisible()
+    await expect(secondCard.getByTestId('cw-detail-toggle')).toBeEnabled({
       timeout: 6 * 60_000,
     })
-    await expect(
-      detail.getByTestId('cw-structured-feedback'),
-      'uploading a revision must automatically generate feedback for v2',
-    ).toHaveCount(2, { timeout: 6 * 60_000 })
-
-    const work = (await listWorks(page, owner)).find((item) => item.title === title)!
-    const versions = work.versions as Json[]
-    expect(versions).toHaveLength(2)
-    expect(versions[0]?.source_asset_id).toBe(assetID)
-    expect(versions[0]?.ocr_job_id).toBeTruthy()
-    expect(versions[0]?.ocr_confirmed_digest).toBeTruthy()
-    expect(versions[0]?.content_markdown).toBe(confirmedText.trim())
-    expect(versions[1]?.content_markdown).toBe(revision)
-    expect(versions[1]?.structured_feedback).toBeTruthy()
+    await secondCard.getByTestId('cw-detail-toggle').click()
+    const secondDetail = page.getByTestId('cw-detail-modal')
+    const secondFeedback = secondDetail.getByTestId('cw-latest-feedback')
+    await expect(secondFeedback).toBeVisible({ timeout: 6 * 60_000 })
+    expect(await secondFeedback.getAttribute('data-generation-id')).toBeTruthy()
+    expect(await secondFeedback.getAttribute('data-feedback-id')).toBeTruthy()
+    const persistedSecond = (await listWorks(page, owner)).find(
+      (item) => item.work_id === secondWorkID,
+    )
+    expect(feedbackPayload(persistedSecond)).toBeTruthy()
   })
 
   test('art save automatically produces feedback that cites visible elements', async ({ page }) => {
@@ -262,24 +320,26 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     await uploadWorkPhoto(page, FIXTURES.art)
     const title = `彩虹和小猫-${e2eMarker('work')}`
     await modal.getByTestId('cw-add-title').fill(title)
-    await modal.getByTestId('cw-add-task').fill('观察人物、猫、彩虹和地面的构图')
-    await modal.getByTestId('cw-add-intent').fill('想画快乐的户外场景')
+    await expect(modal.getByTestId('cw-add-task')).toHaveCount(0)
+    await expect(modal.getByTestId('cw-add-intent')).toHaveCount(0)
     await modal.getByTestId('cw-add-submit').click()
     const card = page.locator('.k12cw__card', { hasText: title })
     await expect(card).toBeVisible({ timeout: 30_000 })
+    await expect(card.getByTestId('cw-detail-toggle')).toBeEnabled({ timeout: 6 * 60_000 })
     await card.getByTestId('cw-detail-toggle').click()
     const detail = page.getByTestId('cw-detail-modal')
     await expect(detail).toBeVisible()
+    const feedbackBlock = detail.getByTestId('cw-latest-feedback')
     await expect(
-      detail.getByTestId('cw-structured-feedback'),
+      feedbackBlock,
       'saving art must generate evidence-grounded feedback automatically',
     ).toBeVisible({ timeout: 6 * 60_000 })
     await expect(detail.getByTestId('cw-feedback-generate')).toHaveCount(0)
-    const persisted = (await listWorks(page, owner)).find((item) => item.title === title)
-    const versions = Array.isArray(persisted?.versions) ? (persisted.versions as Json[]) : []
-    const structured = versions.at(-1)?.structured_feedback as Json
+    const persisted = (await listWorks(page, owner)).find((item) => item.work_title === title)
+    expect(persisted?.versions).toBeUndefined()
+    const structured = feedbackPayload(persisted)
     expect(structured).toBeTruthy()
-    const projection = String(structured.projection_markdown)
+    const projection = String(structured?.projection_markdown)
     expect(projection).toMatch(/女孩|人物/)
     expect(projection).toMatch(/猫/)
     expect(projection).toMatch(/彩虹/)
@@ -292,7 +352,7 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     expect(projection).not.toMatch(
       /(?:未|没有|没能|看不(?:见|清)|无法(?:确认|识别))[^。；\n]{0,16}彩虹/,
     )
-    const text = await detail.getByTestId('cw-structured-feedback').innerText()
+    const text = await feedbackBlock.innerText()
     expect(text).toMatch(
       /(?:中央|中间)[^。；\n]{0,48}(?:女孩|人物)|(?:女孩|人物)[^。；\n]{0,48}(?:中央|中间)/,
     )
@@ -311,12 +371,14 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     expect(text).not.toMatch(/(?:未|没有|没能|看不(?:见|清)|无法(?:确认|识别))[^。；\n]{0,16}彩虹/)
     await expect(detail.getByTestId('cw-practice-card')).toHaveCount(0)
     const generatedContent = JSON.stringify({
-      observations: structured.observations,
-      suggestions: structured.suggestions,
+      visible_evidence: structured?.visible_evidence,
+      affirmation: structured?.affirmation,
+      parent_guidance: structured?.parent_guidance,
+      next_step: structured?.next_step,
     })
     expect(generatedContent).not.toMatch(
       /\d+\s*分(?!钟)|第[一二三四五六七八九十\d]+名|我来重画|帮你重画|代你画/,
     )
-    expect(String(structured.limitations)).toMatch(/不(?:评分|打分).*不排名.*不替孩子重画/)
+    expect(String(structured?.limitations)).toMatch(/不(?:评分|打分).*不排名.*不替孩子重画/)
   })
 })

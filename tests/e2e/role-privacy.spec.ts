@@ -73,7 +73,8 @@ async function createArt(page: Page, title: string): Promise<{ recordID: string;
   const asset = await json<{ asset_id: string }>(await assetResponse)
   await expect(modal.getByTestId('cw-photo-ok'), 'visible upload must reach a server-confirmed asset').toBeVisible()
   await modal.getByTestId('cw-add-title').fill(title)
-  await modal.getByTestId('cw-add-task').fill('owner isolation fixture')
+  await expect(modal.getByTestId('cw-add-task')).toHaveCount(0)
+  await expect(modal.getByTestId('cw-add-intent')).toHaveCount(0)
   const createResponse = page.waitForResponse((response) =>
     response.request().method() === 'POST' && new URL(response.url()).pathname.endsWith('/api/k12/creative-works'),
   )

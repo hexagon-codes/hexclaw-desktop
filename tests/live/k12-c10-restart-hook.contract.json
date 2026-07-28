@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "owner": "caller",
+  "scope": "isolated installed-app Sidecar restart recovery",
+  "oracle": "tests/fixtures/local/k12-textbook-rag-oracle.v1.json",
+  "isolatedDriver": {
+    "module": "scripts/ci/k12-c10-isolated-restart-driver.mjs",
+    "cli": [
+      "--restart-k12-sidecar",
+      "--config",
+      "$HEX_K12_C10_DRIVER_CONFIG"
+    ]
+  },
+  "signedEnvelope": {
+    "algorithm": "Ed25519",
+    "payloadEncoding": "base64-utf8-json",
+    "exactFields": [
+      "algorithm",
+      "payload_b64",
+      "signature_b64"
+    ]
+  },
+  "callerRestart": {
+    "args": [
+      "--restart-k12-sidecar",
+      "--config",
+      "$HEX_K12_C10_DRIVER_CONFIG"
+    ],
+    "shell": false,
+    "invocations": 1
+  },
+  "requiredBefore": [
+    "schema_version",
+    "phase",
+    "run_id",
+    "cycle_id",
+    "restart_method",
+    "sidecar_pid",
+    "document_id",
+    "source_digest",
+    "active_revision_id",
+    "profile_id",
+    "profile_config_hash",
+    "upload_count",
+    "index_count",
+    "query_model",
+    "query_digest",
+    "hit_document_id",
+    "citation_digest",
+    "page_start",
+    "page_end"
+  ],
+  "requiredAfter": [
+    "schema_version",
+    "phase",
+    "run_id",
+    "cycle_id",
+    "restart_method",
+    "sidecar_pid",
+    "document_id",
+    "source_digest",
+    "active_revision_id",
+    "profile_id",
+    "profile_config_hash",
+    "upload_count",
+    "index_count",
+    "query_model",
+    "query_digest",
+    "hit_document_id",
+    "citation_digest",
+    "page_start",
+    "page_end"
+  ],
+  "invariants": {
+    "sidecarPidMustChange": true,
+    "documentIdMustMatch": true,
+    "sourceDigestMustMatch": true,
+    "activeRevisionIdMustMatch": true,
+    "profileIdMustMatch": true,
+    "profileConfigHashMustMatch": true,
+    "queryModel": "qwen3-embedding:8b",
+    "queryDigestMustMatch": true,
+    "uploadCountDelta": 0,
+    "indexCountDelta": 0,
+    "hitDocumentIdMustMatch": true,
+    "citationDigestMustMatch": true,
+    "pageRangeMustMatch": true,
+    "oraclePhysicalPage": 10
+  },
+  "forbiddenEvidence": [
+    "browser_reload",
+    "new_profile",
+    "new_database",
+    "reupload",
+    "full_reindex"
+  ]
+}

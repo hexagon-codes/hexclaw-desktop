@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "configFields": [
+    "dist_manifest_path",
+    "dist_root",
+    "host",
+    "installed_app_binary",
+    "package_path",
+    "port",
+    "release_attestation_path",
+    "release_attestation_sha256",
+    "release_version",
+    "schema_version",
+    "sidecar_binary",
+    "sidecar_url"
+  ],
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 16060,
+    "releaseUIURL": "http://localhost:16060",
+    "occupiedPortPolicy": "fail-closed-no-signal"
+  },
+  "releaseUI": {
+    "source": "attested-dist-only",
+    "bytePolicy": "exact-no-transform",
+    "spaFallback": "attested-index-for-extensionless-routes",
+    "attestationEndpoint": "/__hexclaw_release_attestation"
+  },
+  "sidecar": {
+    "originPolicy": "explicit-isolated-loopback-origin",
+    "httpProxyPaths": [
+      "/api",
+      "/health",
+      "/version",
+      "/_hexclaw/api -> /api"
+    ],
+    "webSocketProxyPaths": [
+      "/ws",
+      "/_hexclaw/ws -> /ws"
+    ],
+    "pathPolicy": "direct-preserve-prefixed-strip-one-exact-prefix"
+  },
+  "forbidden": [
+    "asset-injection",
+    "asset-rewrite",
+    "foreign-port-kill",
+    "foreign-port-reuse",
+    "sidecar-static-root",
+    "vite-preview"
+  ]
+}

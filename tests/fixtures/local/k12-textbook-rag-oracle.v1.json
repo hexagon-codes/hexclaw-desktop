@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "fixtureId": "textbook_pdf",
+  "pdfSha256": "657e1547074668dbb50f2bf37f13c20f292127be64c26c5334190aa34d06de83",
+  "query": "在整数除法中，什么情况下说除数是被除数的因数，被除数是除数的倍数？",
+  "citation": {
+    "physicalPage": 10,
+    "normalizedTextSha256": "7740d0dbfd9cb464d2d22f695d4bf2bcba3bbfe6dc83e0df2a673465f890e0ed",
+    "normalizedLength": 58,
+    "wholePdfExactOccurrences": 1
+  },
+  "extraction": {
+    "tool": "pdftotext",
+    "normalization": "NFKC then remove all whitespace"
+  }
+}

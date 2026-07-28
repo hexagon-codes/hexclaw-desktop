@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "cli": [
+    "--restart-k12-sidecar",
+    "--config",
+    "<absolute-/tmp-config.json>"
+  ],
+  "configFields": [
+    "schema_version",
+    "profile_dir",
+    "sidecar_config_path",
+    "sidecar_config_sha256",
+    "binary_path",
+    "binary_sha256",
+    "expected_version",
+    "port",
+    "pre_envelope_path",
+    "pre_public_key_path",
+    "pre_public_key_sha256",
+    "query_request_path",
+    "post_envelope_path",
+    "post_public_key_path",
+    "evidence_dir"
+  ],
+  "tmpPathFields": [
+    "profile_dir",
+    "sidecar_config_path",
+    "pre_envelope_path",
+    "pre_public_key_path",
+    "query_request_path",
+    "post_envelope_path",
+    "post_public_key_path",
+    "evidence_dir"
+  ],
+  "sidecarArgs": [
+    "serve",
+    "--desktop",
+    "--config",
+    "<sidecar_config_path>"
+  ],
+  "allowedHTTP": [
+    "GET /health",
+    "GET /api/v1/version",
+    "POST /api/v1/knowledge/search",
+    "GET /api/v1/knowledge/corpora/default/embedding-policy"
+  ],
+  "forbiddenPorts": [
+    18080,
+    16060
+  ],
+  "forbiddenNetworkWrites": [
+    "POST /api/v1/knowledge/documents",
+    "POST /api/v1/knowledge/documents/{id}/reindex"
+  ],
+  "queryRequestFields": [
+    "query",
+    "top_k",
+    "user_id"
+  ],
+  "postSignature": {
+    "algorithm": "Ed25519",
+    "privateKeyPersistence": "forbidden",
+    "publicKeyEncoding": "spki-pem"
+  },
+  "stdout": [
+    "absolute_evidence_path"
+  ],
+  "cleanupSignals": [
+    "SIGINT",
+    "SIGTERM"
+  ]
+}

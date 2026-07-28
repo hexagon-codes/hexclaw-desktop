@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "reportPath": "test-results/k12-real-10x-release/report.json",
+  "provider": {
+    "identity": "hexclaw-gpt",
+    "displayName": "HexClaw-GPT",
+    "model": "gpt-5.6-sol",
+    "ragEmbeddingModel": "qwen3-embedding:8b"
+  },
+  "execution": {
+    "workers": 1,
+    "fullyParallel": false,
+    "retries": 0,
+    "forbidOnly": true,
+    "failOnSkipped": true,
+    "dingTalkLiveSend": "0"
+  },
+  "requiredEnvironment": {
+    "exact": {
+      "HEX_K12_LIVE_PROVIDER": "hexclaw-gpt",
+      "HEX_K12_LIVE_EXPECTED_PROVIDER_DISPLAY": "HexClaw-GPT",
+      "HEX_K12_LIVE_MODEL": "gpt-5.6-sol",
+      "HEX_K12_RAG_EMBEDDING_MODEL": "qwen3-embedding:8b"
+    },
+    "values": [
+        "HEX_K12_REAL_10X_RUN_ID",
+        "HEXCLAW_LOCAL_SRC",
+        "HEX_K12_LIVE_FIXTURE_PROFILE",
+        "HEX_K12_LIVE_FIXTURE_STORE",
+        "HEX_K12_LIVE_FIXTURE_MANIFEST",
+        "HEX_K12_LIVE_SIDECAR_CONTROL",
+        "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
+        "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG"
+    ]
+  },
+  "trustedLanes": [
+    {
+      "lane": "current-bug-live-strict",
+      "module": "scripts/ci/k12-current-bug-live-gate.mjs",
+      "args": [
+        "--strict"
+      ]
+    },
+    {
+      "lane": "fixtures-strict",
+      "module": "scripts/ci/k12-fixtures-gate.mjs",
+      "args": [
+        "--strict"
+      ]
+    },
+    {
+      "lane": "c10-restart-recovery-strict",
+      "module": "scripts/ci/k12-c10-restart-recovery-gate.mjs",
+      "args": [
+        "--strict"
+      ]
+    }
+  ],
+  "cycles": [
+    {
+      "id": "C01",
+      "scope": "solve-image",
+      "hook": {
+        "lane": "current-bug-live-strict",
+        "module": "scripts/ci/k12-current-bug-live-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      },
+      "fixture": "tests/live/k12-current-bug-real-matrix.contract.json#fixtures.problem",
+      "requiredHook": "installed exact-model solve-image receipt hook",
+      "requiredProof": [
+        "attachment_digest",
+        "dispatch_id",
+        "solve_terminal_result",
+        "provider_model_receipt"
+      ]
+    },
+    {
+      "id": "C02",
+      "scope": "clear-homework-grading",
+      "hook": {
+        "lane": "current-bug-live-strict",
+        "module": "scripts/ci/k12-current-bug-live-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      }
+    },
+    {
+      "id": "C03",
+      "scope": "boundary-messy-homework-grading",
+      "hook": {
+        "lane": "fixtures-strict",
+        "module": "scripts/ci/k12-fixtures-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      }
+    },
+    {
+      "id": "C04",
+      "scope": "boundary-blank-homework-grading",
+      "hook": {
+        "lane": "fixtures-strict",
+        "module": "scripts/ci/k12-fixtures-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      }
+    },
+    {
+      "id": "C05",
+      "scope": "writing-review",
+      "hook": {
+        "lane": "current-bug-live-strict",
+        "module": "scripts/ci/k12-current-bug-live-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      }
+    },
+    {
+      "id": "C06",
+      "scope": "art-review",
+      "hook": {
+        "lane": "current-bug-live-strict",
+        "module": "scripts/ci/k12-current-bug-live-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      },
+      "requiredHook": "installed exact-model art-review receipt hook",
+      "supportingEvidence": [
+        {
+          "lane": "fixtures-strict",
+          "spec": "creative-real-fixtures.spec.ts",
+          "cases": [
+            "art upload stores the frozen image under the exact Tutor owner and round-trips its bytes",
+            "art save automatically produces feedback that cites visible elements"
+          ]
+        }
+      ],
+      "requiredProof": [
+        "source_digest",
+        "work_id",
+        "generation_id",
+        "feedback_id",
+        "archive_projection_digest",
+        "provider_model_receipt"
+      ]
+    },
+    {
+      "id": "C07",
+      "scope": "textbook-pdf-upload",
+      "hook": {
+        "lane": "fixtures-strict",
+        "module": "scripts/ci/k12-fixtures-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      }
+    },
+    {
+      "id": "C08",
+      "scope": "textbook-pdf-index",
+      "hook": {
+        "lane": "fixtures-strict",
+        "module": "scripts/ci/k12-fixtures-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      }
+    },
+    {
+      "id": "C09",
+      "scope": "textbook-rag-search",
+      "hook": {
+        "lane": "fixtures-strict",
+        "module": "scripts/ci/k12-fixtures-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      },
+      "oracle": "tests/fixtures/local/k12-textbook-rag-oracle.v1.json",
+      "requiredHook": "qwen3-embedding:8b grounded-RAG receipt hook",
+      "supportingEvidence": [
+        {
+          "lane": "fixtures-strict",
+          "spec": "grounding-pdf.spec.ts",
+          "cases": [
+            "131-page text PDF enters through the visible chooser with owner, subject and page-grounded retrieval"
+          ]
+        }
+      ],
+      "requiredProof": [
+        "document_id",
+        "physical_page",
+        "chunk_id",
+        "citation_digest",
+        "qwen3_embedding_query_receipt"
+      ]
+    },
+    {
+      "id": "C10",
+      "scope": "installed-app-sidecar-restart-recovery",
+      "hook": {
+        "lane": "c10-restart-recovery-strict",
+        "module": "scripts/ci/k12-c10-restart-recovery-gate.mjs",
+        "args": [
+          "--strict"
+        ]
+      },
+      "restartContract": "tests/live/k12-c10-restart-hook.contract.json",
+      "requiredHook": "caller-owned installed app and Sidecar restart hook with signed C07-C10 state handoff",
+      "requiredEnvironment": {
+        "exact": {
+          "HEX_K12_C10_RESTART_AUTHORIZED": "1"
+        },
+        "values": [
+          "HEX_K12_C10_RESTART_HOOK",
+          "HEX_K12_C10_RESTART_HOOK_SHA256",
+          "HEX_K12_C10_HANDOFF_PUBLIC_KEY",
+          "HEX_K12_C10_HANDOFF_PUBLIC_KEY_SHA256",
+          "HEX_K12_C10_BEFORE_HANDOFF",
+          "HEX_K12_C10_AFTER_HANDOFF",
+          "HEX_K12_C10_AFTER_HANDOFF_PUBLIC_KEY",
+          "HEX_K12_C10_DRIVER_CONFIG"
+        ]
+      },
+      "supportingEvidence": [
+        {
+          "lane": "native-isolation-smoke",
+          "script": "tests/native/test-home-isolation-smoke.sh",
+          "provesOnly": [
+            "isolated_home",
+            "process_start",
+            "health",
+            "process_stop",
+            "port_release"
+          ]
+        }
+      ]
+    }
+  ]
+}
