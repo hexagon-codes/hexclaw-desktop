@@ -15,7 +15,7 @@
     "model": "gpt-5.6-sol"
   },
   "submissions": {
-    "plannedTopLevel": 4,
+    "plannedTopLevel": 6,
     "maximumTopLevel": 8
   },
   "fixtures": {
@@ -34,6 +34,22 @@
       "bytes": 2178059,
       "width": 1086,
       "height": 1448
+    },
+    "problem": {
+      "env": "HEX_K12_PROBLEM_IMAGE",
+      "path": "/Users/guoyanjun/work/hexclaw-docs/test/k12-test-解题.JPG",
+      "sha256": "76c3bbab79486619d680114b8c182c0e23d15ce305239dc762819a5f0407eed7",
+      "bytes": 204498,
+      "width": 936,
+      "height": 1280
+    },
+    "art": {
+      "env": "HEX_K12_ART_IMAGE",
+      "path": "/Users/guoyanjun/work/hexclaw-docs/test/k12-test-美术.png",
+      "sha256": "7eb16fdbe398236cdf2ce31ea6d2fac5e4787ea3004b96ab74a3eebd540f1d93",
+      "bytes": 2713090,
+      "width": 1254,
+      "height": 1254
     }
   },
   "requiredStrictEnvironment": {
@@ -51,9 +67,14 @@
     "HEX_K12_LIVE_APP_BINARY",
     "HEX_K12_LIVE_APP_SHA256",
     "HEX_K12_LIVE_EXPECTED_VERSION",
-    "HEX_K12_LIVE_AGENT",
-    "HEX_K12_LIVE_RETRYABLE_DISPATCH_ID",
-    "HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID"
+      "HEX_K12_LIVE_AGENT",
+      "HEXCLAW_LOCAL_SRC",
+      "HEX_K12_LIVE_FIXTURE_PROFILE",
+      "HEX_K12_LIVE_FIXTURE_STORE",
+      "HEX_K12_LIVE_FIXTURE_MANIFEST",
+      "HEX_K12_LIVE_SIDECAR_CONTROL",
+      "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
+      "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG"
   ],
   "forbiddenRequestPathPrefixes": [
     "/api/k12/tutoring-tips/send",

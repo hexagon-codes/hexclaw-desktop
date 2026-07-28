@@ -20,9 +20,11 @@ import {
   waitForLiveAssistant,
   type HistoryMessage,
 } from './k12-live-helpers'
+import { classifyOperationReceiptPoll } from './k12-operation-receipt-poll'
 
 type Json = Record<string, unknown>
-type FixtureKey = 'writing' | 'homework'
+type FixtureKey = 'writing' | 'homework' | 'problem' | 'art'
+type CreativeIntent = 'writing' | 'art'
 
 const contract = JSON.parse(
   readFileSync(
@@ -72,19 +74,61 @@ function verifyFixture(key: FixtureKey): Buffer {
   expect(statSync(value.path).isFile(), `${key} must be a regular file`).toBe(true)
   expect(bytes.length, `${key} fixture byte length drift`).toBe(value.bytes)
   expect(sha256(bytes), `${key} fixture SHA-256 drift`).toBe(value.sha256)
-  expect(bytes.subarray(0, 8).toString('hex'), `${key} must remain PNG`).toBe(
-    '89504e470d0a1a0a',
-  )
-  expect({ width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }).toEqual({
-    width: value.width,
-    height: value.height,
-  })
+  if (key === 'problem') {
+    expect(bytes.subarray(0, 3).toString('hex'), `${key} must remain JPEG`).toBe('ffd8ff')
+  } else {
+    expect(bytes.subarray(0, 8).toString('hex'), `${key} must remain PNG`).toBe(
+      '89504e470d0a1a0a',
+    )
+    expect({ width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) }).toEqual({
+      width: value.width,
+      height: value.height,
+    })
+  }
   return bytes
 }
 
 function record(value: unknown, label: string): Json {
   expect(value && typeof value === 'object' && !Array.isArray(value), label).toBe(true)
   return value as Json
+}
+
+function array(value: unknown, label: string): Json[] {
+  expect(Array.isArray(value), label).toBe(true)
+  return value as Json[]
+}
+
+function normalizedDigest(value: unknown): string {
+  return String(value ?? '').replace(/^sha256:/, '')
+}
+
+function operationReceipt(result: Json, operation: 'solve' | 'work_feedback'): Json | undefined {
+  return array(result.operation_receipts, 'operation_receipts must be an array').find(
+    (receipt) => receipt.operation === operation,
+  )
+}
+
+function assertTaskSourceAndReceipt(
+  result: Json,
+  key: FixtureKey,
+  operation: 'solve' | 'work_feedback',
+): Json {
+  const frozen = contract.fixtures[key]
+  expect(normalizedDigest(result.source_digest)).toBe(frozen.sha256)
+  const attachments = array(result.source_attachments, 'source_attachments must be an array')
+  expect(attachments).toHaveLength(1)
+  expect(normalizedDigest(attachments[0]!.digest)).toBe(frozen.sha256)
+  expect(attachments[0]!.size_bytes).toBe(frozen.bytes)
+
+  const receipt = record(operationReceipt(result, operation), `${operation} receipt`)
+  expect(receipt.operation).toBe(operation)
+  expect(receipt.provider).toBe(contract.provider.identity)
+  expect(receipt.model).toBe(contract.provider.model)
+  expect(receipt.attempt).toBe(1)
+  expect(receipt.status).toBe('succeeded')
+  expect(String(receipt.invocation_id ?? '')).not.toBe('')
+  expect(String(receipt.result_digest ?? '')).not.toBe('')
+  return receipt
 }
 
 function sourceMessageID(message: Locator): Promise<string> {
@@ -121,14 +165,14 @@ async function dispatchID(shell: Locator): Promise<string> {
 
 async function waitForCreativeResult(
   shell: Locator,
-  intent: 'writing',
+  intent: CreativeIntent,
 ): Promise<{ dispatchId: string; workId: string; generationId: string; feedbackId: string }> {
   const surface = shell.getByTestId(`${intent}-result-surface`)
   const conflict = shell.getByTestId('creative-conflict-guard')
   await expect
     .poll(
       async () => Number(await surface.isVisible().catch(() => false)) + Number(await conflict.isVisible().catch(() => false)),
-      { timeout: 10 * 60_000, message: 'writing must reach feedback or the explicit OCR conflict stop' },
+      { timeout: 10 * 60_000, message: `${intent} must reach feedback or the explicit OCR conflict stop` },
     )
     .toBeGreaterThan(0)
   if (await conflict.isVisible().catch(() => false)) {
@@ -153,6 +197,81 @@ async function waitForCreativeResult(
   return { dispatchId: await dispatchID(shell), workId, generationId, feedbackId }
 }
 
+async function waitForTaskOperation(
+  page: Page,
+  dispatchId: string,
+  operation: 'solve' | 'work_feedback',
+): Promise<Json> {
+  const deadline = Date.now() + 10 * 60_000
+  const intervals = [100, 250, 500, 1_000]
+  let intervalIndex = 0
+
+  while (true) {
+    const result = await liveJSON<Json>(
+      page.request,
+      'GET',
+      `/api/k12/image-tasks/${encodeURIComponent(dispatchId)}/result?agent=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}`,
+    )
+    const decision = classifyOperationReceiptPoll(operationReceipt(result, operation)?.status)
+    if (decision.kind === 'succeeded') return result
+    if (decision.kind === 'terminal_failure') {
+      throw new Error(`${operation} operation receipt reached terminal status ${decision.status}`)
+    }
+
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      throw new Error(`${operation} must expose one succeeded immutable operation receipt`)
+    }
+    const interval = intervals[Math.min(intervalIndex, intervals.length - 1)]!
+    intervalIndex += 1
+    await page.waitForTimeout(Math.min(interval, remaining))
+  }
+}
+
+async function resolveFixtureAgent(
+  request: Page['request'],
+  retryableID: string,
+  outcomeUnknownID: string,
+): Promise<string> {
+  try {
+    const catalog = await liveJSON<{ agents?: Json[] }>(request, 'GET', '/api/v1/agents')
+    const candidates = Array.isArray(catalog.agents)
+      ? [
+          ...new Set(
+            catalog.agents
+              .map((candidate) => {
+                const agent = record(candidate, 'fixture agent candidate')
+                return typeof agent.name === 'string' ? agent.name.trim() : ''
+              })
+              .filter(Boolean),
+          ),
+        ]
+      : []
+    const owners: string[] = []
+
+    for (const agent of candidates) {
+      const [retryable, outcomeUnknown] = await Promise.all([
+        request.get(
+          liveAppURL(
+            `/_hexclaw/api/k12/image-tasks/${encodeURIComponent(retryableID)}?agent=${encodeURIComponent(agent)}`,
+          ),
+        ),
+        request.get(
+          liveAppURL(
+            `/_hexclaw/api/k12/image-tasks/${encodeURIComponent(outcomeUnknownID)}?agent=${encodeURIComponent(agent)}`,
+          ),
+        ),
+      ])
+      if (retryable.ok() && outcomeUnknown.ok()) owners.push(agent)
+    }
+
+    if (owners.length !== 1) throw new Error('fixture ownership resolution failed')
+    return owners[0]!
+  } catch {
+    throw new Error('fixture ownership resolution failed')
+  }
+}
+
 async function submitImage(page: Page, key: FixtureKey): Promise<{ source: Locator; sourceId: string; shell: Locator }> {
   const before = await page.getByTestId('chat-message-user').count()
   await page.locator('.hc-composer input[type="file"]').setInputFiles(fixture(key).path)
@@ -173,15 +292,20 @@ async function assertCanonicalWork(
   page: Page,
   testInfo: TestInfo,
   evidence: Awaited<ReturnType<typeof waitForCreativeResult>>,
+  intent: CreativeIntent,
+  key: 'writing' | 'art',
 ): Promise<void> {
   const result = await liveJSON<Json>(
     page.request,
     'GET',
     `/api/k12/image-tasks/${encodeURIComponent(evidence.dispatchId)}/result?agent=${encodeURIComponent(envValue('HEX_K12_LIVE_AGENT'))}`,
   )
+  assertTaskSourceAndReceipt(result, key, 'work_feedback')
   const payload = record(record(result.result, 'creative result').payload, 'creative payload')
+  const resultWork = record(payload.work, 'creative result work')
   const feedback = record(payload.feedback, 'creative feedback')
   const structured = record(feedback.structured_feedback, 'structured feedback')
+  expect(resultWork.work_id).toBe(evidence.workId)
   expect(feedback.generation_id).toBe(evidence.generationId)
   expect(structured.feedback_id).toBe(evidence.feedbackId)
   expect(feedback.projection_markdown).toBe(structured.projection_markdown)
@@ -198,7 +322,7 @@ async function assertCanonicalWork(
   expect(archivedFeedback.projection_markdown).toBe(feedback.projection_markdown)
 
   const chatRenderer = page
-    .getByTestId('writing-result-surface')
+    .getByTestId(`${intent}-result-surface`)
     .locator(`[data-generation-id="${evidence.generationId}"]`)
   const chatProjection = await chatRenderer.innerText()
   await page.locator('#k12-enh-tab-records').click()
@@ -211,7 +335,7 @@ async function assertCanonicalWork(
     .locator(`[data-generation-id="${evidence.generationId}"][data-feedback-id="${evidence.feedbackId}"]`)
   await expect(archiveRenderer).toBeVisible()
   expect(await archiveRenderer.innerText()).toBe(chatProjection)
-  await attachJSON(testInfo, 'creative-work-same-source-evidence', {
+  await attachJSON(testInfo, `${intent}-creative-work-same-source-evidence`, {
     work_id_sha256: sha256Text(evidence.workId),
     generation_id_sha256: sha256Text(evidence.generationId),
     feedback_id_sha256: sha256Text(evidence.feedbackId),
@@ -241,12 +365,12 @@ const sourceLabels = [
   '五、1',
 ]
 
-test('fixture manifest freezes the two user-supplied source images and the submission budget', () => {
-  expect(existsSync(fixture('writing').path)).toBe(true)
-  expect(existsSync(fixture('homework').path)).toBe(true)
-  verifyFixture('writing')
-  verifyFixture('homework')
-  expect(contract.submissions.plannedTopLevel).toBe(4)
+test('fixture manifest freezes four user-supplied source images and the submission budget', () => {
+  for (const key of ['writing', 'homework', 'problem', 'art'] as const) {
+    expect(existsSync(fixture(key).path)).toBe(true)
+    verifyFixture(key)
+  }
+  expect(contract.submissions.plannedTopLevel).toBe(6)
   expect(contract.submissions.plannedTopLevel).toBeLessThanOrEqual(
     contract.submissions.maximumTopLevel,
   )
@@ -274,7 +398,7 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
     sessionTitle = ''
   })
 
-  test('four real submissions preserve creative identity, attachment, source order and provider display', async ({
+  test('six real submissions preserve solve/creative receipts, attachment, source order and provider display', async ({
     page,
     request,
   }, testInfo: TestInfo) => {
@@ -311,6 +435,19 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       }
     })
 
+    const problem = await submitImage(page, 'problem')
+    const problemDispatchId = await dispatchID(problem.shell)
+    const problemResult = await waitForTaskOperation(page, problemDispatchId, 'solve')
+    const solveReceipt = assertTaskSourceAndReceipt(problemResult, 'problem', 'solve')
+    record(problemResult.result, 'solve terminal result')
+    const problemHistory = (await listHistory(request, sessionID)).find(
+      (message) => record(message, 'history message').id === problem.sourceId,
+    )
+    expect(problemHistory).toBeTruthy()
+    const persistedProblemBytes = attachmentBytes(problemHistory!)
+    expect(persistedProblemBytes.length).toBe(contract.fixtures.problem.bytes)
+    expect(sha256(persistedProblemBytes)).toBe(contract.fixtures.problem.sha256)
+
     const writing = await submitImage(page, 'writing')
     await expect(
       writing.shell.locator('[role="status"]').first(),
@@ -318,7 +455,12 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
     ).toBeVisible({ timeout: 30_000 })
     const firstCreative = await waitForCreativeResult(writing.shell, 'writing')
     createdWorkIDs.push(firstCreative.workId)
-    await assertCanonicalWork(page, testInfo, firstCreative)
+    await assertCanonicalWork(page, testInfo, firstCreative, 'writing', 'writing')
+
+    const art = await submitImage(page, 'art')
+    const artCreative = await waitForCreativeResult(art.shell, 'art')
+    createdWorkIDs.push(artCreative.workId)
+    await assertCanonicalWork(page, testInfo, artCreative, 'art', 'art')
 
     await writing.source.hover()
     await writing.source.getByRole('button', { name: '编辑消息' }).click()
@@ -421,8 +563,12 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
       provider_identity: contract.provider.identity,
       provider_display_name: contract.provider.displayName,
       model: contract.provider.model,
+      problem_fixture_sha256: contract.fixtures.problem.sha256,
       writing_fixture_sha256: contract.fixtures.writing.sha256,
+      art_fixture_sha256: contract.fixtures.art.sha256,
       homework_fixture_sha256: contract.fixtures.homework.sha256,
+      solve_invocation_sha256: sha256Text(String(solveReceipt.invocation_id)),
+      solve_result_digest: solveReceipt.result_digest,
       exact_source_labels: sourceLabels,
       source_anchored_order: true,
       forbidden_delivery_requests: forbiddenRequests,
@@ -432,9 +578,9 @@ test.describe.serial('LIVE current K12 bug acceptance matrix', () => {
   test('real durable task fixtures distinguish retryable from outcome_unknown without duplicate POST', async ({
     request,
   }, testInfo: TestInfo) => {
-    const agent = envValue('HEX_K12_LIVE_AGENT')
     const retryableID = envValue('HEX_K12_LIVE_RETRYABLE_DISPATCH_ID')
     const unknownID = envValue('HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID')
+    const agent = await resolveFixtureAgent(request, retryableID, unknownID)
     const retryable = await liveJSON<{ dispatch: Json }>(
       request,
       'GET',

@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { basename, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  createFixtureRuntime,
+  installFixtureSignalCleanup,
+  runFixtureLifecycle,
+  validateFixtureEnvironment,
+} from './k12-current-bug-fixture-orchestrator.mjs'
 
 const scriptPath = fileURLToPath(import.meta.url)
 const repoRoot = resolve(fileURLToPath(new URL('../..', import.meta.url)))
@@ -95,8 +101,119 @@ export function currentBugLiveExitCode({ playwrightStatus, strict, auditPassed }
   return 0
 }
 
+const playwrightCommand = [
+  'exec',
+  'playwright',
+  'test',
+  '-c',
+  'playwright.k12.current-bug-live.config.ts',
+]
+
+let activeStrictPlaywright
+
+function redactedWriter(stream, target, secrets) {
+  let pending = ''
+  const redact = (value) => secrets.reduce(
+    (result, secret) => result.split(secret).join('[opaque fixture id]'),
+    value,
+  )
+  stream.setEncoding('utf8')
+  stream.on('data', (chunk) => {
+    pending += chunk
+    let newline
+    while ((newline = pending.indexOf('\n')) >= 0) {
+      target.write(redact(pending.slice(0, newline + 1)))
+      pending = pending.slice(newline + 1)
+    }
+  })
+  return () => {
+    if (pending) target.write(redact(pending))
+    pending = ''
+  }
+}
+
+function runStrictPlaywright(playwrightArgs, fixtureEnvironment) {
+  const secrets = Object.values(fixtureEnvironment)
+  return new Promise((resolvePromise) => {
+    const child = spawn(
+      'pnpm',
+      [...playwrightCommand, ...playwrightArgs],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          DINGTALK_LIVE_SEND: '0',
+          HEX_K12_CURRENT_BUG_LIVE_REQUIRED: '1',
+          ...fixtureEnvironment,
+        },
+        shell: false,
+        stdio: ['inherit', 'pipe', 'pipe'],
+      },
+    )
+    activeStrictPlaywright = child
+    const flushStdout = redactedWriter(child.stdout, process.stdout, secrets)
+    const flushStderr = redactedWriter(child.stderr, process.stderr, secrets)
+    let startError
+    child.once('error', (error) => {
+      startError = error
+    })
+    child.once('close', (code) => {
+      if (activeStrictPlaywright === child) activeStrictPlaywright = undefined
+      flushStdout()
+      flushStderr()
+      resolvePromise({
+        error: startError,
+        status: startError ? 1 : (Number.isInteger(code) ? code : 1),
+      })
+    })
+  })
+}
+
+async function cancelStrictPlaywright() {
+  const child = activeStrictPlaywright
+  if (!child || child.exitCode !== null || child.signalCode !== null) return
+  await new Promise((resolvePromise) => {
+    let settled = false
+    const finish = () => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolvePromise()
+    }
+    const timer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL')
+    }, 2_000)
+    child.once('close', finish)
+    if (!child.kill('SIGTERM')) finish()
+  })
+}
+
+async function runStrictPlaywrightGate(playwrightArgs, fixtureEnvironment) {
+  await rm(absoluteReportPath, { force: true })
+  const playwright = await runStrictPlaywright(playwrightArgs, fixtureEnvironment)
+  if (playwright.error) {
+    process.stderr.write(`K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`)
+  }
+
+  let auditPassed = false
+  if (playwright.status === 0) {
+    try {
+      const report = JSON.parse(await readFile(absoluteReportPath, 'utf8'))
+      const audit = auditCurrentBugLiveReport(report)
+      auditPassed = true
+      process.stdout.write(
+        `K12 current-bug LIVE strict gate: ${audit.total}/3 executed, zero skipped, provider/model and six-submission matrix passed\n`,
+      )
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    }
+  }
+  return { playwrightStatus: playwright.status, auditPassed }
+}
+
 async function runGate(argv) {
   const { strict, playwrightArgs } = normalizeCurrentBugLiveArguments(argv)
+  let fixtureConfig
   try {
     validateCurrentBugLiveArguments({ strict, playwrightArgs })
     if (strict) {
@@ -106,6 +223,7 @@ async function runGate(argv) {
           `K12 current-bug LIVE strict gate missing exact authorization: ${blockers.join(', ')}`,
         )
       }
+      fixtureConfig = validateFixtureEnvironment(process.env)
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
@@ -113,46 +231,75 @@ async function runGate(argv) {
     return
   }
 
-  await rm(absoluteReportPath, { force: true })
-  const playwright = spawnSync(
-    'pnpm',
-    [
-      'exec',
-      'playwright',
-      'test',
-      '-c',
-      'playwright.k12.current-bug-live.config.ts',
-      ...playwrightArgs,
-    ],
-    {
-      cwd: repoRoot,
-      env: {
-        ...process.env,
-        DINGTALK_LIVE_SEND: '0',
-        ...(strict ? { HEX_K12_CURRENT_BUG_LIVE_REQUIRED: '1' } : {}),
+  if (!strict) {
+    await rm(absoluteReportPath, { force: true })
+    const playwright = spawnSync(
+      'pnpm',
+      [...playwrightCommand, ...playwrightArgs],
+      {
+        cwd: repoRoot,
+        env: {
+          ...process.env,
+          DINGTALK_LIVE_SEND: '0',
+        },
+        shell: false,
+        stdio: 'inherit',
       },
-      stdio: 'inherit',
-    },
-  )
-  const playwrightStatus = playwright.error ? 1 : playwright.status
-  if (playwright.error) {
-    process.stderr.write(`K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`)
+    )
+    const playwrightStatus = playwright.error ? 1 : playwright.status
+    if (playwright.error) {
+      process.stderr.write(`K12 current-bug LIVE gate could not start Playwright: ${playwright.error.message}\n`)
+    }
+    process.exitCode = currentBugLiveExitCode({
+      playwrightStatus,
+      strict: false,
+      auditPassed: false,
+    })
+    return
   }
 
-  let auditPassed = false
-  if (strict && playwrightStatus === 0) {
-    try {
-      const report = JSON.parse(await readFile(absoluteReportPath, 'utf8'))
-      const audit = auditCurrentBugLiveReport(report)
-      auditPassed = true
-      process.stdout.write(
-        `K12 current-bug LIVE strict gate: ${audit.total}/3 executed, zero skipped, provider/model and four-submission matrix passed\n`,
-      )
-    } catch (error) {
-      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
-    }
+  const runtime = createFixtureRuntime(fixtureConfig)
+  let lifecyclePromise
+  const uninstallSignalCleanup = installFixtureSignalCleanup(process, {
+    cancelActive: async () => {
+      await cancelStrictPlaywright()
+      await runtime.cancelActive()
+    },
+    cleanup: () => lifecyclePromise
+      ? lifecyclePromise.then(() => undefined, () => undefined)
+      : runtime.cleanup(),
+  })
+  lifecyclePromise = runFixtureLifecycle(fixtureConfig, {
+    stopSidecar: runtime.stopSidecar,
+    startFixture: runtime.startFixture,
+    readManifest: runtime.readManifest,
+    startSidecar: runtime.startSidecar,
+    runStrictGate: (fixtureEnvironment) => runStrictPlaywrightGate(
+      playwrightArgs,
+      fixtureEnvironment,
+    ),
+    cleanupFixture: runtime.cleanupFixture,
+  })
+
+  let gateResult
+  let lifecycleError
+  try {
+    gateResult = await lifecyclePromise
+  } catch (error) {
+    lifecycleError = error
   }
-  process.exitCode = currentBugLiveExitCode({ playwrightStatus, strict, auditPassed })
+  await uninstallSignalCleanup.wait()
+  uninstallSignalCleanup()
+
+  if (process.exitCode === 130 || process.exitCode === 143) return
+  if (lifecycleError) {
+    process.stderr.write(
+      `${lifecycleError instanceof Error ? lifecycleError.message : String(lifecycleError)}\n`,
+    )
+    process.exitCode = 1
+    return
+  }
+  process.exitCode = currentBugLiveExitCode({ ...gateResult, strict: true })
 }
 
 if (resolve(process.argv[1] ?? '') === resolve(scriptPath)) {

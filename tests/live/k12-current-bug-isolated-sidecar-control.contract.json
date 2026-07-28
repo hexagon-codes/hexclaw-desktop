@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 2,
+  "module": "scripts/ci/k12-current-bug-isolated-sidecar-control.mjs",
+  "cli": {
+    "actions": [
+      "start",
+      "stop"
+    ],
+    "args": [
+      "<action>",
+      "--config",
+      "<absolute-/tmp-json>"
+    ],
+    "shell": false
+  },
+  "config": {
+    "exactFields": [
+      "schema_version",
+      "profile_dir",
+      "sidecar_config_path",
+      "sidecar_config_sha256",
+      "binary_path",
+      "binary_sha256",
+      "expected_version",
+      "host",
+      "port",
+      "sidecar_url",
+      "release_ui_url",
+      "release_attestation_path",
+      "release_attestation_sha256",
+      "pid_file",
+      "lock_file",
+      "startup_timeout_ms",
+      "shutdown_timeout_ms"
+    ],
+    "forbiddenPorts": [
+      18080
+    ],
+    "forbidUserProfile": true,
+    "explicitOrigins": [
+      "sidecar_url",
+      "release_ui_url"
+    ],
+    "releaseUIRequiresAttestation": true
+  },
+  "permissions": {
+    "privateDirectory": "0700",
+    "privateFile": "0600",
+    "trustedExecutableAllows": "0755"
+  },
+  "identity": [
+    "pid_file_pid",
+    "process_pid",
+    "executable_canonical_path",
+    "complete_argv",
+    "binary_sha256",
+    "listener_pid",
+    "lock_pid",
+    "health_200",
+    "version_200_exact",
+    "sidecar_root_404",
+    "release_ui_root_200",
+    "release_ui_proxy_health_200",
+    "release_attestation_200_exact"
+  ],
+  "sidecarArgs": [
+    "serve",
+    "--desktop",
+    "--config",
+    "<sidecar_config_path>"
+  ],
+  "environment": {
+    "HOME": "<profile_dir>",
+    "DINGTALK_LIVE_SEND": "0"
+  },
+  "cleanupSignals": [
+    "SIGINT",
+    "SIGTERM"
+  ]
+}

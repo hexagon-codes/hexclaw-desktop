@@ -21,6 +21,15 @@ export const K12_LIVE_SPEC_FILES = Object.freeze([
 ])
 export const K12_LIVE_PROJECTS = Object.freeze(['chromium', 'webkit'])
 
+export function describeLiveSpecSet(specFiles = K12_LIVE_SPEC_FILES) {
+  const count = specFiles.length
+  return {
+    count,
+    fileLabel: `${count}-file`,
+    progressLabel: `${count}/${count} files`,
+  }
+}
+
 const absoluteReportPath = resolve(repoRoot, K12_LIVE_REPORT_PATH)
 
 function collectSpecs(suites, target = []) {
@@ -136,8 +145,9 @@ export function normalizeLiveGateArguments(argv) {
 
 export function validateLiveGateArguments({ strict, playwrightArgs }) {
   if (strict && playwrightArgs.length > 0) {
+    const { fileLabel } = describeLiveSpecSet()
     throw new Error(
-      'K12 LIVE strict gate does not accept Playwright filters or overrides; run the frozen nine-file two-browser exact set',
+      `K12 LIVE strict gate does not accept Playwright filters or overrides; run the frozen ${fileLabel} two-browser exact set`,
     )
   }
 }
@@ -177,8 +187,9 @@ async function runGate(argv) {
       const report = JSON.parse(await readFile(absoluteReportPath, 'utf8'))
       const audit = auditK12LiveReport(report)
       auditPassed = true
+      const { progressLabel } = describeLiveSpecSet()
       process.stdout.write(
-        `K12 LIVE strict gate: ${audit.total} executed result(s), 9/9 files, Chromium+WebKit, zero skipped\n`,
+        `K12 LIVE strict gate: ${audit.total} executed result(s), ${progressLabel}, Chromium+WebKit, zero skipped\n`,
       )
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)

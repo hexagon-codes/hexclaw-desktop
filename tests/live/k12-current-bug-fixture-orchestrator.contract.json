@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "sequence": [
+    "sidecar_stop",
+    "fixture_start",
+    "manifest_validate",
+    "sidecar_start",
+    "strict_gate",
+    "sidecar_stop",
+    "fixture_cleanup"
+  ],
+  "builderCommand": [
+    "go",
+    "run",
+    "-tags",
+    "testtools",
+    "./cmd/k12-live-fixture-testtools"
+  ],
+  "manifestExactFields": [
+    "schema_version",
+    "ownership",
+    "agent_name",
+    "retryable_dispatch_id",
+    "outcome_unknown_dispatch_id",
+    "lease_expires_at"
+  ],
+  "injectedEnvironment": [
+    "HEX_K12_LIVE_RETRYABLE_DISPATCH_ID",
+    "HEX_K12_LIVE_OUTCOME_UNKNOWN_DISPATCH_ID"
+  ],
+  "requiredEnvironment": [
+    "HEXCLAW_LOCAL_SRC",
+    "HEX_K12_LIVE_FIXTURE_PROFILE",
+    "HEX_K12_LIVE_FIXTURE_STORE",
+    "HEX_K12_LIVE_FIXTURE_MANIFEST",
+    "HEX_K12_LIVE_SIDECAR_CONTROL",
+    "HEX_K12_LIVE_SIDECAR_CONTROL_SHA256",
+    "HEX_K12_LIVE_SIDECAR_CONTROL_CONFIG",
+    "HEX_K12_LIVE_APP_URL",
+    "HEX_K12_LIVE_SIDECAR_URL",
+    "HEX_K12_LIVE_APP_SHA256"
+  ],
+  "manifestCleanup": {
+    "order": [
+      "fixture_cleanup_attempt",
+      "manifest_receipt",
+      "canonical_unlink",
+      "alias_absence_verify"
+    ],
+    "receiptExactFields": [
+      "schema_version",
+      "existed",
+      "mode",
+      "sha256",
+      "canonical_alias_equal",
+      "removed"
+    ],
+    "deleteAfterFixtureCleanupNonzero": true,
+    "preserveRootError": true,
+    "printManifestValues": false
+  },
+  "subprocess": {
+    "shell": false,
+    "dingTalkLiveSend": "0"
+  }
+}
