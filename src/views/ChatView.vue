@@ -4944,15 +4944,15 @@ function startSidebarResize(event: MouseEvent) {
 
 /* ─── Input area ───── */
 .hc-chat__input-area {
-  padding: 8px 16px 10px;
+  padding: 8px 24px 10px;
   flex-shrink: 0;
   /* 作为滚动导航箭头的定位锚点：箭头 bottom:100% 即悬于输入框正上方 */
   position: relative;
 }
 
 .hc-chat__input-wrap {
-  max-width: min(94%, 1200px);
-  margin: 0 auto;
+  max-width: none;
+  margin: 0;
 }
 
 .hc-chat__connection-state {
