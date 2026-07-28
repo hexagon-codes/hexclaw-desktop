@@ -1,6 +1,5 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
-import { open as shellOpen } from '@tauri-apps/plugin-shell'
 
 import App from './App.vue'
 import router from './router'
@@ -8,6 +7,7 @@ import { i18n } from './i18n'
 import { createPersistPlugin } from './stores/plugins/persist'
 import { logger } from './utils/logger'
 import { installInputAutofixOff } from './utils/input-autofix'
+import { installExternalLinkController } from './utils/external-links'
 import { registerK12Scenario } from './features/k12'
 import HcClearableField from './components/common/HcClearableField.vue'
 
@@ -46,17 +46,7 @@ app.mount('#app')
 // 统一对文本类 input/textarea 补 autocorrect=off/spellcheck=false/autocapitalize=off（bug-20260626）。
 installInputAutofixOff()
 
-// Open external links in system browser instead of the webview
-document.addEventListener('click', (e) => {
-  const anchor = (e.target as HTMLElement).closest('a[href]') as HTMLAnchorElement | null
-  if (!anchor) return
-	// 带 download 的链接是应用主动生成的文件下载（导出、批改 PNG 等），不是外链。
-	// 若在这里 preventDefault + shellOpen，浏览器会打开 blob 图片新页，下载事件永远不发生。
-	if (anchor.hasAttribute('download')) return
-  const href = anchor.getAttribute('href')
-  if (!href || href.startsWith('#') || href.startsWith('/')) return
-  e.preventDefault()
-  shellOpen(href).catch(() => window.open(href, '_blank'))
-})
+// Open external links through one shared dispatcher instead of the webview.
+installExternalLinkController()
 
 // splash screen 由 AppLayout 在 sidecar 就绪后移除，见 dismissSplash()

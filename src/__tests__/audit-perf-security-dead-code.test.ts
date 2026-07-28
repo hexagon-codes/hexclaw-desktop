@@ -239,18 +239,21 @@ describe('Potential dead references', () => {
   })
 })
 
-// ─── main.ts global listeners ─────────────────────────────
+// ─── app-lifecycle global listeners ───────────────────────
 
-describe('Performance: main.ts global listeners', () => {
-  it('main.ts adds two global listeners without cleanup (acceptable for app lifecycle)', () => {
-    const code = readSrc('main.ts')
-    expect(code).toContain("window.addEventListener('unhandledrejection'")
-    expect(code).toContain("document.addEventListener('click'")
-    expect(code).not.toContain('removeEventListener')
+describe('Performance: app-lifecycle global listeners', () => {
+  it('main.ts delegates external links to the shared controller', () => {
+    const mainCode = readSrc('main.ts')
+    const externalLinksCode = readSrc('utils/external-links.ts')
+    expect(mainCode).toContain("window.addEventListener('unhandledrejection'")
+    expect(mainCode).toContain('installExternalLinkController()')
+    expect(mainCode).not.toContain("document.addEventListener('click'")
+    expect(externalLinksCode).toContain("targetDocument.addEventListener('click'")
+    expect(externalLinksCode).toContain("targetDocument.removeEventListener('click'")
   })
 
   it('global external-link interceptor must not hijack anchors that intentionally download files', () => {
-    const code = readSrc('main.ts')
+    const code = readSrc('utils/external-links.ts')
     expect(code).toContain("anchor.hasAttribute('download')")
   })
 })
