@@ -227,6 +227,33 @@ describe('Settings Store persistence', () => {
     expect(state.savedConfig!.llm.defaultProviderId).toBe('custom-1')
   })
 
+  it('does not persist the server-owned provider probe receipt into the Tauri store', async () => {
+    state.savedConfig = makeConfig({
+      llm: {
+        providers: [makeLocalProvider()],
+        defaultModel: 'gpt-4o',
+        defaultProviderId: 'custom-1',
+      },
+    })
+    state.secureValues.set('llm.provider.custom-1.apiKey', 'sk-live-key')
+    mockGetLLMConfig.mockResolvedValue(makeBackendConfig())
+
+    const { useSettingsStore } = await import('../settings')
+    const store = useSettingsStore()
+    await store.loadConfig()
+    store.config!.llm.providers[0]!.probeReceipt = {
+      providerInstanceId: 'pvd_v1_00112233445566778899aabbccddeeff',
+      outcome: 'passed',
+      testedAt: Date.UTC(2026, 6, 28, 6, 20),
+      latencyMs: 321,
+      locality: 'cloud',
+    }
+
+    await store.saveConfig(store.config!)
+
+    expect(state.savedConfig!.llm.providers[0]!.probeReceipt).toBeUndefined()
+  })
+
   it('never includes restored or submitted API keys in logger arguments', async () => {
     const secret = 'sk-secret-must-never-enter-logs'
     state.savedConfig = makeConfig({

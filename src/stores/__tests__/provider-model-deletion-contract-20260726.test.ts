@@ -35,7 +35,7 @@ describe('provider model deletion contract 2026-07-26', () => {
     setActivePinia(createPinia())
   })
 
-  it('自定义 Provider 的目录模型缺少 isCustom 时仍显示删除入口，预设模型不可删除', () => {
+  it('自定义目录模型与 stale 预设模型可删除，健康预设模型继续受保护', () => {
     const settingsSource = readFileSync(
       resolve(process.cwd(), 'src/views/SettingsView.vue'),
       'utf8',
@@ -51,9 +51,8 @@ describe('provider model deletion contract 2026-07-26', () => {
     expect(settingsSource).toMatch(
       /@click\.stop="[^"]*(?:pendingDeleteModel|requestDelete)[^"]*"/,
     )
-    expect(settingsSource).toMatch(
-      /(?:preset|预设)[\s\S]{0,240}(?:不可删除|not removable)/i,
-    )
+    expect(settingsSource).toMatch(/isStaleModel\(provider,\s*model\)[\s\S]{0,240}return true/)
+    expect(settingsSource).toMatch(/(?:preset|预设)[\s\S]{0,300}(?:不可删除|not removable)/i)
   })
 
   it('≤10 小目录自动同步必须减去持久排除集合', () => {

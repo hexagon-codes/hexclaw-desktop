@@ -812,6 +812,10 @@ function providerModelExclusionScope(provider: ProviderConfig): string {
 }
 
 function isProviderModelRemovable(provider: ProviderConfig, model: ModelOption): boolean {
+  // 上游目录已经移除的已配置模型必须允许用户显式清理；删除仍复用持久化排除集。
+  if (isStaleModel(provider, model)) {
+    return true
+  }
   const presetModels = PROVIDER_PRESETS[provider.type]?.defaultModels ?? []
   if (presetModels.some((preset) => preset.id === model.id)) {
     return false
@@ -940,10 +944,10 @@ function handleProviderModelChange(provider: ProviderConfig) {
     provider.selectedModelId = resolveProviderSelectedModelId(provider)
     return
   }
+  clearProviderProbeState(provider)
   settingsStore.updateProvider(provider.id, {
     selectedModelId: provider.selectedModelId,
   })
-  delete testProviderResult.value[provider.id]
   autoSave()
 }
 
@@ -979,7 +983,7 @@ function handleProviderDestinationChange(provider: ProviderConfig, locality: 'lo
   provider.privateNetworkAccess = decision.requiresPrivateNetworkAccess
     ? { host: decision.host, allowed: true }
     : undefined
-  delete testProviderResult.value[provider.id]
+  clearProviderProbeState(provider)
   autoSave()
 }
 
@@ -1001,12 +1005,12 @@ function handleProviderBaseUrlInput(provider: ProviderConfig) {
           ? 'cloud'
           : 'auto'
   }
-  delete testProviderResult.value[provider.id]
+  clearProviderProbeState(provider)
   autoSave()
 }
 
 function handleProviderNameInput(provider: ProviderConfig) {
-  delete testProviderResult.value[provider.id]
+  void provider
   autoSave()
 }
 
@@ -1093,11 +1097,71 @@ const testingProviderId = ref<string | null>(null)
 const testProviderResult = ref<
   Record<string, { ok: boolean; msg: string; locality?: 'local' | 'cloud' }>
 >({})
+
+function clearProviderProbeState(provider: ProviderConfig) {
+  provider.probeReceipt = undefined
+  delete testProviderResult.value[provider.id]
+}
+
+function providerConnectionResult(provider: ProviderConfig) {
+  const receipt = provider.probeReceipt
+  if (receipt) {
+    return {
+      ok: receipt.outcome === 'passed',
+      msg:
+        receipt.errorMessage ||
+        (receipt.outcome === 'passed'
+          ? t('settings.llm.connectionOk')
+          : t('settings.llm.connectionFailed')),
+      locality: receipt.locality,
+    }
+  }
+  return testProviderResult.value[provider.id]
+}
+
+function formatProviderProbeTime(testedAt: number): string {
+  const date = new Date(testedAt)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+function parseProviderProbeTime(value: string | number | undefined): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value !== 'string') return undefined
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+async function providerWithStableIdentity(provider: ProviderConfig): Promise<ProviderConfig> {
+  const providerInstanceId = provider.providerInstanceId
+  const backendKey = provider.backendKey
+  const providerId = provider.id
+  markAutoSavePending()
+  await flushAutoSave({ force: true })
+  await settingsStore.loadConfig({ force: true })
+
+  return (
+    config.value?.llm.providers.find(
+      (candidate) =>
+        !!candidate.providerInstanceId &&
+        ((!!providerInstanceId && candidate.providerInstanceId === providerInstanceId) ||
+          candidate.id === providerId ||
+          (!!backendKey && candidate.backendKey === backendKey) ||
+          (candidate.name === provider.name && candidate.type === provider.type)),
+    ) ?? provider
+  )
+}
+
 /** API Key 变化后自动测试连接 + 拉取模型（防抖 1.5s） */
 function scheduleAutoTest(provider: ProviderConfig) {
   if (autoTestTimers[provider.id]) clearTimeout(autoTestTimers[provider.id])
-  // 清空旧结果，显示"待验证"状态
-  delete testProviderResult.value[provider.id]
+  clearProviderProbeState(provider)
   const apiKey = provider.apiKey?.trim() || ''
   if (!apiKey || provider.type === 'ollama') return
   autoTestTimers[provider.id] = setTimeout(() => {
@@ -1136,31 +1200,55 @@ async function testProvider(provider: ProviderConfig) {
   }
 
   try {
-    const preset = PROVIDER_PRESETS[provider.type]
+    const activeProvider = await providerWithStableIdentity(provider)
+    if (!activeProvider.providerInstanceId) {
+      throw new Error(t('settings.llm.connectionFailed'))
+    }
+    const activePreferred =
+      activeProvider.models?.find(
+        (model) =>
+          model.id === activeProvider.selectedModelId && isChatModelOption(model),
+      ) || activeProvider.models?.find(isChatModelOption)
+    const activeModelId = (activePreferred?.id || selectedModelId).trim()
+    const preset = PROVIDER_PRESETS[activeProvider.type]
     const result = await testLLMConnection(
       {
         provider: {
-          type: provider.type,
-          api_key: provider.apiKey?.trim() ?? '',
-          base_url: provider.baseUrl || preset?.defaultBaseUrl || '',
-          model: selectedModelId,
+          type: activeProvider.type,
+          api_key: activeProvider.apiKey?.trim() ?? '',
+          base_url: activeProvider.baseUrl || preset?.defaultBaseUrl || '',
+          model: activeModelId,
         },
       },
       {
-        locality: effectiveProviderLocality(provider),
-        privateNetworkAccess: provider.privateNetworkAccess,
+        providerInstanceId: activeProvider.providerInstanceId,
+        locality: effectiveProviderLocality(activeProvider),
+        privateNetworkAccess: activeProvider.privateNetworkAccess,
       },
     )
-    testProviderResult.value[provider.id] = {
-      ok: result.ok,
-      msg:
-        result.message ||
-        (result.ok ? t('settings.llm.connectionOk') : t('settings.llm.connectionFailed')),
-      locality: result.ok ? effectiveProviderLocality(provider) : undefined,
+    const testedAt = parseProviderProbeTime(result.tested_at)
+    if (result.persisted && testedAt !== undefined) {
+      activeProvider.probeReceipt = {
+        providerInstanceId: activeProvider.providerInstanceId,
+        outcome: result.ok ? 'passed' : 'failed',
+        locality: effectiveProviderLocality(activeProvider),
+        latencyMs: result.latency_ms ?? 0,
+        testedAt,
+        ...(result.error_code ? { errorCode: result.error_code } : {}),
+        ...(!result.ok
+          ? { errorMessage: result.error_message || result.message }
+          : {}),
+      }
+      delete testProviderResult.value[provider.id]
+      delete testProviderResult.value[activeProvider.id]
+    } else {
+      activeProvider.probeReceipt = undefined
+      delete testProviderResult.value[provider.id]
+      delete testProviderResult.value[activeProvider.id]
     }
     // 连接成功后自动拉取远程模型列表（Ollama 由 syncOllamaModels 处理）
-    if (result.ok && provider.type !== 'ollama') {
-      syncRemoteModels(provider)
+    if (result.ok && activeProvider.type !== 'ollama') {
+      syncRemoteModels(activeProvider)
     }
   } catch (e) {
     testProviderResult.value[provider.id] = {
@@ -1228,6 +1316,11 @@ function isManagedCatalog(providerId: string): boolean {
   return providerCatalogCount(providerId) > AUTO_ENABLE_CATALOG_LIMIT
 }
 
+/** 所有云端 Provider 共用目录管理器；本地 Ollama 保持独立的本地模型管理链路。 */
+function canManageProviderCatalog(provider: ProviderConfig): boolean {
+  return provider.type !== 'ollama' && effectiveProviderLocality(provider) === 'cloud'
+}
+
 function providerHasNewModels(providerId: string): boolean {
   return (catalogStore.getCatalog(providerId)?.newIds.length ?? 0) > 0
 }
@@ -1293,6 +1386,7 @@ function autoSave() {
 }
 
 function onProviderApiKeyInput(provider: ProviderConfig) {
+  clearProviderProbeState(provider)
   autoSave()
   scheduleAutoTest(provider)
 }
@@ -1584,17 +1678,18 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         'hc-provider__connection-status--testing':
                           testingProviderId === provider.id,
                         'hc-provider__connection-status--ok':
-                          testingProviderId !== provider.id && testProviderResult[provider.id]?.ok,
+                          testingProviderId !== provider.id &&
+                          providerConnectionResult(provider)?.ok,
                         'hc-provider__connection-status--error':
                           testingProviderId !== provider.id &&
-                          testProviderResult[provider.id] &&
-                          !testProviderResult[provider.id]!.ok,
+                          providerConnectionResult(provider) &&
+                          !providerConnectionResult(provider)!.ok,
                       }"
                       aria-live="polite"
                       :aria-label="
-                        testProviderResult[provider.id]?.ok &&
-                        testProviderResult[provider.id]?.locality
-                          ? `${t('settings.llm.connected', '已连接')} · ${testProviderResult[provider.id]!.locality === 'local' ? t('settings.llm.localService') : t('settings.llm.cloudService')}`
+                        providerConnectionResult(provider)?.ok &&
+                        providerConnectionResult(provider)?.locality
+                          ? `${t('settings.llm.verified', '已验证')} · ${providerConnectionResult(provider)!.locality === 'local' ? t('settings.llm.localService') : t('settings.llm.cloudService')}`
                           : undefined
                       "
                     >
@@ -1603,31 +1698,40 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                         :size="12"
                         class="animate-spin"
                       />
-                      <CheckCircle v-else-if="testProviderResult[provider.id]?.ok" :size="12" />
-                      <XCircle v-else-if="testProviderResult[provider.id]" :size="12" />
+                      <CheckCircle
+                        v-else-if="providerConnectionResult(provider)?.ok"
+                        :size="12"
+                      />
+                      <XCircle v-else-if="providerConnectionResult(provider)" :size="12" />
                       <span v-else class="hc-provider__connection-dot" aria-hidden="true" />
                       {{
                         testingProviderId === provider.id
                           ? t('settings.llm.testing', '测试中…')
-                          : testProviderResult[provider.id]?.ok
-                            ? t('settings.llm.connected', '已连接')
-                            : testProviderResult[provider.id]
+                          : providerConnectionResult(provider)?.ok
+                            ? t('settings.llm.verified', '已验证')
+                            : providerConnectionResult(provider)
                               ? t('settings.llm.connectionFailed')
                               : t('settings.llm.untested', '未测试')
                       }}
                       <template
                         v-if="
                           testingProviderId !== provider.id &&
-                          testProviderResult[provider.id]?.ok &&
-                          testProviderResult[provider.id]!.locality
+                          providerConnectionResult(provider)?.ok &&
+                          providerConnectionResult(provider)!.locality
                         "
                       >
                         ·
                         {{
-                          testProviderResult[provider.id]!.locality === 'local'
+                          providerConnectionResult(provider)!.locality === 'local'
                             ? t('settings.llm.localService')
                             : t('settings.llm.cloudService')
                         }}
+                      </template>
+                      <template v-if="provider.probeReceipt">
+                        · {{ t('settings.llm.lastTested', '上次测试') }}
+                        <time :datetime="new Date(provider.probeReceipt.testedAt).toISOString()">
+                          {{ formatProviderProbeTime(provider.probeReceipt.testedAt) }}
+                        </time>
                       </template>
                     </span>
                     <button
@@ -1671,13 +1775,13 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                 <p
                   v-if="
                     testingProviderId !== provider.id &&
-                    testProviderResult[provider.id] &&
-                    !testProviderResult[provider.id]!.ok
+                    providerConnectionResult(provider) &&
+                    !providerConnectionResult(provider)!.ok
                   "
                   class="hc-provider__connection-detail"
                   role="status"
                 >
-                  {{ testProviderResult[provider.id]!.msg }}
+                  {{ providerConnectionResult(provider)!.msg }}
                 </p>
 
                 <!-- Provider 编辑面板 -->
@@ -1822,7 +1926,7 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                           {{ t('settings.llm.modelsAvailable', '可用') }}
                         </span>
                         <button
-                          v-if="isManagedCatalog(provider.id)"
+                          v-if="canManageProviderCatalog(provider)"
                           type="button"
                           class="hc-model-chip hc-model-chip--manage"
                           @click="openModelManager(provider.id, $event)"
@@ -1880,14 +1984,14 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             type="button"
                             class="hc-model-chip__remove"
                             :aria-label="`删除 ${model.name || model.id}`"
-                            title="删除自定义模型"
+                            title="删除模型"
                             @click.stop="requestDeleteProviderModel(provider, model)"
                           >
                             ×
                           </button>
                         </div>
 
-                        <!-- 自定义对话模型用非交互容器承载三个互不嵌套的按钮。 -->
+                        <!-- 可删除对话模型用非交互容器承载三个互不嵌套的按钮。 -->
                         <div
                           v-else-if="isProviderModelRemovable(provider, model)"
                           class="hc-model-chip hc-model-chip--custom"
@@ -1905,6 +2009,12 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                           >
                             <span class="hc-model-chip__name" :title="model.name || model.id">
                               {{ model.name || model.id }}
+                            </span>
+                            <span
+                              v-if="isStaleModel(provider, model)"
+                              class="hc-model-chip__stale-label"
+                            >
+                              {{ t('settings.llm.modelStaleLabel', '已下架') }}
                             </span>
                             <span
                               v-for="cap in displayCapabilities(model)"
@@ -1947,14 +2057,14 @@ function displayCapabilities(model: ModelOption): ModelCapability[] {
                             type="button"
                             class="hc-model-chip__remove"
                             :aria-label="`删除 ${model.name || model.id}`"
-                            title="删除自定义模型"
+                            title="删除模型"
                             @click.stop="requestDeleteProviderModel(provider, model)"
                           >
                             ×
                           </button>
                         </div>
 
-                        <!-- Provider 预设对话模型不可删除。 -->
+                        <!-- 仍存在于上游目录的 Provider 预设对话模型不可删除。 -->
                         <button
                           v-else
                           type="button"

@@ -30,7 +30,7 @@ const OLLAMA_MODEL_CATALOG: ModelEntry[] = [
   // 其他
   { name: 'command-r', ram: 21 }, { name: 'command-r-plus', ram: 63 }, { name: 'smollm2', ram: 1 }, { name: 'starcoder2', ram: 2 },
   // Embedding
-  { name: 'nomic-embed-text', ram: 0.3 }, { name: 'mxbai-embed-large', ram: 0.7 },
+  { name: 'qwen3-embedding:8b', ram: 4.7 }, { name: 'nomic-embed-text', ram: 0.3 }, { name: 'mxbai-embed-large', ram: 0.7 },
 ]
 
 // 兼容层：纯名称列表
@@ -49,7 +49,7 @@ const OLLAMA_FEATURED = [
   'phi4',               // 9GB — 微软，小模型之王
   'qwen3.5:27b',       // 17GB — 质量天花板，32GB 舒适
   'gemma4:31b',        // 12GB — Google Dense 旗舰
-  'deepseek-r1:32b',   // 20GB — 32GB 内存推理最优
+  'qwen3-embedding:8b', // 4.7GB — 多语言文本嵌入模型
   'glm4:9b',           // 6GB — 智谱 GLM-4 9B，大众电脑可跑
   'qwen3-coder:8b',    // 5GB — 阿里编码专项，16GB 轻松跑
 ]
@@ -111,6 +111,8 @@ import { useRouter } from 'vue-router'
 import { waitForOllamaModelVisibility } from '@/utils/ollama-visibility'
 import { resolveOllamaCapabilities } from '@/config/providers'
 import HcSelect from '@/components/common/HcSelect.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { useToast } from '@/composables/useToast'
 import {
   MODEL_CAPABILITY_DISPLAY,
   type DisplayModelCapability,
@@ -121,6 +123,7 @@ import {
 // tools/thinking/insert/embedding 不是模态徽章，不显示（能力真值另在别处用）。
 const OLLAMA_CAP_TO_MODALITY: Record<string, DisplayModelCapability> = {
   completion: 'text',
+  embedding: 'embedding',
   vision: 'vision',
   tools: 'tools',
   thinking: 'thinking',
@@ -149,13 +152,19 @@ function modelCaps(model: { name: string; capabilities?: string[] }): DisplayMod
   return resolveOllamaCapabilities(model.name)
 }
 
+function isOllamaChatModel(model: { name: string; capabilities?: string[] }): boolean {
+  return modelCaps(model).includes('text')
+}
+
 const settingsStore = useSettingsStore()
 const router = useRouter()
+const toast = useToast()
 
 /** 跳转到对话页并预选指定模型 */
-async function goChat(modelName: string) {
+async function goChat(model: { name: string; capabilities?: string[] }) {
+  if (!isOllamaChatModel(model)) return
   await refreshModels()
-  router.push({ path: '/chat', query: { model: modelName } })
+  router.push({ path: '/chat', query: { model: model.name } })
 }
 
 const POLL_INTERVAL = 3000
@@ -374,6 +383,8 @@ const runningProbeState = ref<'loading' | 'ready' | 'error'>('loading')
 const runningProbeError = ref('')
 const unloadingModel = ref('')
 const deletingModel = ref('')
+const pendingDeleteModel = ref<string | null>(null)
+const deleteConfirmationAttempt = ref(0)
 
 function isModelRunning(name: string): boolean {
   return runningModels.value.some(m => m.name === name)
@@ -412,11 +423,25 @@ async function handleUnload(name: string) {
   unloadingModel.value = ''
 }
 
-const deleteError = ref('')
+function requestDelete(name: string) {
+  pendingDeleteModel.value = name
+  deleteConfirmationAttempt.value = 0
+}
+
+function cancelDelete() {
+  if (deletingModel.value) return
+  pendingDeleteModel.value = null
+  deleteConfirmationAttempt.value = 0
+}
+
+async function confirmDeleteModel() {
+  const name = pendingDeleteModel.value
+  if (!name || deletingModel.value) return
+  await handleDelete(name)
+}
 
 async function handleDelete(name: string) {
   deletingModel.value = name
-  deleteError.value = ''
   try {
     // 运行中的模型先 unload，再删除
     if (isModelRunning(name)) {
@@ -425,12 +450,14 @@ async function handleDelete(name: string) {
     }
     await deleteOllamaModel(name)
     await refreshModels()
-  } catch (e) {
-    deleteError.value = e instanceof Error ? e.message : t('settings.ollama.deleteFailed', '删除失败')
-    // 3 秒后自动清除错误提示
-    setTimeout(() => { deleteError.value = '' }, 3000)
+    pendingDeleteModel.value = null
+    deleteConfirmationAttempt.value = 0
+  } catch {
+    toast.error(t('settings.ollama.deleteFailed', '删除失败'))
+    deleteConfirmationAttempt.value += 1
+  } finally {
+    deletingModel.value = ''
   }
-  deletingModel.value = ''
 }
 
 /** 刷新模型列表 + 同步 Provider（不触发 detecting 状态切换） */
@@ -886,7 +913,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
               <span
                 v-else-if="runningProbeState === 'ready'"
                 class="ollama-card__model-status ollama-card__model-status--idle"
-                :title="t('settings.ollama.notLoadedTitle', '就绪，在对话中选择此模型即可自动加载')"
+                :title="isOllamaChatModel(m) ? t('settings.ollama.notLoadedTitle', '就绪，在对话中选择此模型即可自动加载') : undefined"
               >
                 <span class="ollama-card__model-status-dot" />
                 {{ t('settings.ollama.notLoaded', '就绪') }}
@@ -902,10 +929,11 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
               </span>
               <div class="ollama-card__model-actions">
                 <button
+                  v-if="isOllamaChatModel(m)"
                   class="ollama-card__model-btn ollama-card__model-btn--chat"
                   :title="t('settings.ollama.chatWith', { name: m.name })"
                   :aria-label="t('settings.ollama.chatWith', { name: m.name })"
-                  @click="goChat(m.name)"
+                  @click="goChat(m)"
                 >
                   <MessageSquare :size="10" />
                 </button>
@@ -913,7 +941,7 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
                   class="ollama-card__model-btn ollama-card__model-btn--danger"
                   :disabled="deletingModel === m.name"
                   :title="t('settings.ollama.deleteModel', { name: m.name })"
-                  @click="handleDelete(m.name)"
+                  @click="requestDelete(m.name)"
                 >
                   {{ deletingModel === m.name ? t('settings.ollama.deleting', '删除中...') : t('common.delete', '删除') }}
                 </button>
@@ -995,9 +1023,9 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
               <span v-if="pullDetail" class="ollama-card__pull-detail">{{ pullDetail }}</span>
               <span v-else-if="pullProgress > 0 && pullProgress < 100" class="ollama-card__pull-detail">{{ pullProgress }}%</span>
               <button
-                v-if="pullStatus === PULL_DONE && lastDownloaded"
+                v-if="pullStatus === PULL_DONE && lastDownloaded && isOllamaChatModel({ name: lastDownloaded })"
                 class="ollama-card__pull-go-chat"
-                @click="goChat(lastDownloaded)"
+                @click="goChat({ name: lastDownloaded })"
               >
                 <MessageSquare :size="11" />
                 {{ t('settings.ollama.goChat', '去对话') }}
@@ -1025,6 +1053,25 @@ defineExpose({ state, waitingInstall, startInstall, cancelWaiting, detect })
     <div class="ollama-card__footer">
       {{ t('settings.ollama.otherLocal') }}
     </div>
+
+    <ConfirmDialog
+      :open="pendingDeleteModel !== null"
+      :confirmation-key="
+        pendingDeleteModel
+          ? `ollama:${pendingDeleteModel}:${deleteConfirmationAttempt}`
+          : null
+      "
+      :title="t('settings.llm.deleteModel')"
+      :message="
+        pendingDeleteModel
+          ? t('settings.deleteModelConfirm', { name: pendingDeleteModel })
+          : ''
+      "
+      :confirm-text="t('common.delete')"
+      :cancel-text="t('common.cancel')"
+      @confirm="confirmDeleteModel"
+      @cancel="cancelDelete"
+    />
   </div>
 </template>
 

@@ -2054,6 +2054,8 @@ export default {
       recommendText: 'Recommended by "free + tool calling + large context"',
       replacementRequired: 'Select a current chat model before applying changes',
       resync: 'Resync',
+      lastSuccessfulSync: 'Last successful sync: {time}',
+      neverSynced: 'Not synced successfully yet',
       searchPlaceholder: 'Search model id or name…',
       selectGroup: 'Select all in group',
       setCurrentModel: 'Set current',
@@ -2106,6 +2108,8 @@ export default {
         'This grants access only to the current host. A new host requires confirmation again.',
       localService: 'Local service',
       cloudService: 'Cloud service',
+      verified: 'Verified',
+      lastTested: 'Last tested',
       providerServiceNotice:
         'Cloud models are provided by the third-party Provider you configure. The Provider may process transmitted content.',
       providerServiceDocs: 'View third-party AI service details ↗',

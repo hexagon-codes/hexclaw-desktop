@@ -309,7 +309,7 @@ describe('OllamaCard UI — 全状态场景', () => {
     await flushPromises()
     const vm = w.vm as any
     // goChat 内部调 refreshModels → getOllamaStatus → router.push
-    await vm.goChat('qwen3:8b')
+    await vm.goChat({ name: 'qwen3:8b', capabilities: ['text'] })
     await flushPromises()
     // 验证 getOllamaStatus 被 refreshModels 调用
     expect(mockGetOllamaStatus).toHaveBeenCalled()

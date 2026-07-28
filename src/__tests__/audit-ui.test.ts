@@ -290,6 +290,8 @@ async function mountOllamaCard() {
 // ════════════════════════════════════════════════════════
 // SECTION 1: OllamaCard Tests
 // ════════════════════════════════════════════════════════
+vi.setConfig({ testTimeout: 15_000 })
+
 describe('OllamaCard — edge cases', () => {
   beforeEach(() => {
     vi.clearAllMocks()

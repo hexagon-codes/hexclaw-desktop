@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createI18n } from 'vue-i18n'
 import zhCN from '@/i18n/locales/zh-CN'
 import { DESTRUCTIVE_CONFIRM_COOLDOWN_MS } from '@/config/destructive-actions'
+import { PROVIDER_PRESETS } from '@/config/providers'
 
 const { mockRouter } = vi.hoisted(() => ({
   mockRouter: {
@@ -41,6 +42,7 @@ vi.mock('@/api/config', () => ({
     default: 'openai',
     providers: {
       openai: {
+        provider_instance_id: 'pvd_v1_11112222333344445555666677778888',
         api_key: '****test',
         base_url: 'https://api.openai.com/v1',
         model: 'gpt-4o',
@@ -260,6 +262,7 @@ describe('SettingsView — E2E 关键路径', () => {
       default: 'openai',
       providers: {
         openai: {
+          provider_instance_id: 'pvd_v1_11112222333344445555666677778888',
           api_key: '****test',
           base_url: 'https://api.openai.com/v1',
           model: 'gpt-4o',
@@ -278,7 +281,13 @@ describe('SettingsView — E2E 关键路径', () => {
       models: [],
     })
     ollamaApi.getOllamaRunning.mockResolvedValue([])
-    mockTestLLMConnection.mockResolvedValue({ ok: true, message: 'ok' })
+    mockTestLLMConnection.mockResolvedValue({
+      ok: true,
+      message: 'ok',
+      persisted: true,
+      tested_at: '2026-07-28T06:20:00Z',
+      latency_ms: 12,
+    })
     mockFetchProviderModels.mockReset()
     mockFetchProviderModels.mockResolvedValue([])
     capabilityApi.fetchCapabilities.mockReset()
@@ -420,7 +429,9 @@ describe('SettingsView — E2E 关键路径', () => {
     await providerHead!.trigger('click')
     await flushPromises()
 
-    const chips = wrapper.findAll('.hc-model-chip:not(.hc-model-chip--add)')
+    const chips = wrapper.findAll(
+      '.hc-model-chip:not(.hc-model-chip--add):not(.hc-model-chip--manage)',
+    )
     expect(chips.length).toBe(2)
     expect(chips[0]!.text()).toContain('GPT-4o')
   })
@@ -855,7 +866,7 @@ describe('SettingsView — E2E 关键路径', () => {
     expect(settingsRoot.attributes()).not.toHaveProperty('inert')
   }, 10_000)
 
-  it('keeps a small provider catalog inline without a model-manager entry', async () => {
+  it('keeps the shared model-manager entry visible for a small cloud provider catalog', async () => {
     const wrapper = await mountSettingsView()
     await flushPromises()
     const store = await getSettingsStore()
@@ -868,7 +879,43 @@ describe('SettingsView — E2E 关键路径', () => {
     await wrapper.get('.hc-provider__card-head').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('.hc-model-chip--manage').exists()).toBe(false)
+    expect(wrapper.findAll('.hc-model-chip--manage')).toHaveLength(1)
+    expect(wrapper.get('.hc-model-chip--manage').text()).toContain('管理模型')
+  })
+
+  it('gives an upstream-removed preset model the shared delete action without unlocking healthy presets', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    const presetModel = provider.models.find((model) => !model.isCustom)!
+    const healthyPreset = PROVIDER_PRESETS[provider.type]!.defaultModels.find(
+      (model) => model.id !== presetModel.id,
+    )!
+    provider.selectedModelId = presetModel.id
+    store.config!.llm.defaultProviderId = provider.id
+    store.config!.llm.defaultModel = presetModel.id
+    const { useModelCatalogStore } = await import('@/stores/model-catalog')
+    useModelCatalogStore().setCatalog(provider.id, [
+      { id: healthyPreset.id, name: healthyPreset.name },
+    ])
+    provider.models.push({ ...healthyPreset })
+
+    await wrapper.get('.hc-provider__card-head').trigger('click')
+    await flushPromises()
+
+    const staleChip = wrapper
+      .findAll('.hc-model-chip--stale')
+      .find((chip) => chip.text().includes(presetModel.id))
+    expect(staleChip).toBeDefined()
+    expect(staleChip!.text()).toContain('已下架')
+    expect(staleChip!.find('button.hc-model-chip__remove').exists()).toBe(true)
+
+    const healthyPresetChip = wrapper
+      .findAll('.hc-model-chip')
+      .find((chip) => chip.text().includes(healthyPreset.name || healthyPreset.id))
+    expect(healthyPresetChip).toBeDefined()
+    expect(healthyPresetChip!.find('button.hc-model-chip__remove').exists()).toBe(false)
   })
 
   it('surfaces a manual model-catalog resync failure from the manager', async () => {
@@ -1148,14 +1195,15 @@ describe('SettingsView — E2E 关键路径', () => {
       baseUrl: 'https://api.deepseek.com/v1',
       models: [{ id: 'deepseek-chat', name: 'DeepSeek Chat', capabilities: ['text'] }],
     })
-    store.addProvider({
+    const customProvider = store.addProvider({
       name: 'My Provider',
       type: 'custom',
       enabled: true,
       apiKey: 'sk-custom',
       baseUrl: 'https://api.example.com/v1',
       models: [{ id: 'custom-chat-model', name: 'Custom Chat Model', capabilities: ['text'] }],
-    })
+    })!
+    customProvider.providerInstanceId = 'pvd_v1_99990000111122223333444455556666'
     await flushPromises()
 
     for (const type of ['openai', 'deepseek']) {
@@ -1180,15 +1228,21 @@ describe('SettingsView — E2E 关键路径', () => {
 
     await customCard.get('.hc-provider__test-btn').trigger('click')
     await flushPromises()
-    expect(customCard.get('.hc-provider__connection-status').text()).toContain('已连接')
+    expect(customCard.get('.hc-provider__connection-status').text()).toContain('已验证')
 
     await customCard.get('[data-provider-field="name"]').setValue('Renamed Provider')
     await flushPromises()
-    expect(customCard.get('.hc-provider__connection-status').text()).toContain('未测试')
+    expect(customCard.get('.hc-provider__connection-status').text()).toContain('已验证')
   })
 
   it('shows the connection-test lifecycle in the header and disables duplicate clicks', async () => {
-    let resolveTest!: (value: { ok: boolean; message: string }) => void
+    let resolveTest!: (value: {
+      ok: boolean
+      message: string
+      persisted: boolean
+      tested_at: string
+      latency_ms: number
+    }) => void
     mockTestLLMConnection.mockImplementation(
       () =>
         new Promise((resolve) => {
@@ -1212,9 +1266,15 @@ describe('SettingsView — E2E 关键路径', () => {
     await testButton.trigger('click')
     expect(mockTestLLMConnection).toHaveBeenCalledTimes(1)
 
-    resolveTest({ ok: true, message: '连接成功' })
+    resolveTest({
+      ok: true,
+      message: '连接成功',
+      persisted: true,
+      tested_at: '2026-07-28T06:20:00Z',
+      latency_ms: 12,
+    })
     await flushPromises()
-    expect(card.get('.hc-provider__connection-status').text()).toContain('已连接')
+    expect(card.get('.hc-provider__connection-status').text()).toContain('已验证')
     expect(testButton.element.disabled).toBe(false)
   })
 
@@ -1460,6 +1520,286 @@ describe('SettingsView — E2E 关键路径', () => {
     }
   })
 
+  it('restores a saved provider probe receipt after remount without automatically probing again', async () => {
+    const first = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.addProvider({
+      name: 'Receipt restore provider',
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://provider.example.test/v1',
+      models: [{ id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', capabilities: ['text'] }],
+      selectedModelId: 'gpt-5.6-sol',
+    })!
+    provider.providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
+    ;(
+      provider as typeof provider & {
+        probeReceipt?: {
+          providerInstanceId: string
+          outcome: 'passed' | 'failed'
+          testedAt: number
+          latencyMs: number
+          locality: 'local' | 'cloud'
+          message: string
+        }
+      }
+    ).probeReceipt = {
+      providerInstanceId: provider.providerInstanceId,
+      outcome: 'passed',
+      testedAt: Date.UTC(2026, 6, 28, 6, 20),
+      latencyMs: 321,
+      locality: 'cloud',
+      message: '连接测试通过',
+    }
+    await flushPromises()
+
+    const firstRenderedReceipt =
+      first.text().includes('已验证') && first.text().includes('上次测试')
+    first.unmount()
+    mockTestLLMConnection.mockClear()
+    const { getLLMConfig } = await import('@/api/config')
+    vi.mocked(getLLMConfig).mockResolvedValue({
+      default: 'custom',
+      providers: {
+        custom: {
+          provider_instance_id: provider.providerInstanceId,
+          display_name: provider.name,
+          api_key: '****test',
+          base_url: provider.baseUrl,
+          model: provider.selectedModelId!,
+          models: [provider.selectedModelId!],
+          compatible: 'openai',
+          locality: 'cloud',
+          enabled: true,
+          probe_receipt: {
+            provider_instance_id: provider.providerInstanceId,
+            outcome: 'passed',
+            tested_at: '2026-07-28T06:20:00Z',
+            latency_ms: 321,
+            locality: 'cloud',
+          },
+        },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10_000 },
+    } as never)
+
+    const remounted = await mountSettingsView()
+    await flushPromises()
+
+    expect(mockTestLLMConnection).not.toHaveBeenCalled()
+    expect(firstRenderedReceipt).toBe(true)
+    expect(remounted.text()).toContain('已验证')
+    expect(remounted.text()).toContain('上次测试')
+  }, 15_000)
+
+  it('invalidates shared probe receipts for fingerprint edits but preserves display-name edits', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const providerId = store.config!.llm.providers[0]!.id
+    const currentProvider = () =>
+      store.config!.llm.providers.find((candidate) => candidate.id === providerId)!
+    currentProvider().providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
+    const receipt = {
+      providerInstanceId: currentProvider().providerInstanceId!,
+      outcome: 'passed' as const,
+      testedAt: Date.UTC(2026, 6, 28, 6, 20),
+      latencyMs: 321,
+      locality: 'cloud' as const,
+    }
+
+    currentProvider().probeReceipt = { ...receipt }
+    store.updateProvider(providerId, { name: 'Display name only' })
+    expect(currentProvider().probeReceipt).toEqual(receipt)
+
+    const cases = [
+      { type: 'custom' as const },
+      { baseUrl: 'https://changed.example.test/v1' },
+      { apiKey: 'sk-rotated' },
+      { selectedModelId: 'gpt-5.6-terra' },
+      { locality: 'local' as const },
+      { privateNetworkAccess: { host: '10.0.0.8', allowed: true } },
+    ]
+    for (const update of cases) {
+      currentProvider().probeReceipt = { ...receipt }
+      store.updateProvider(providerId, update)
+      expect(currentProvider().probeReceipt).toBeUndefined()
+    }
+
+    const vm = wrapper.vm as unknown as {
+      onProviderApiKeyInput: (provider: unknown) => void
+      handleProviderBaseUrlInput: (provider: unknown) => void
+      handleProviderModelChange: (provider: unknown) => void
+    }
+    currentProvider().probeReceipt = { ...receipt }
+    currentProvider().apiKey = 'sk-direct-input'
+    vm.onProviderApiKeyInput(currentProvider())
+    expect(currentProvider().probeReceipt).toBeUndefined()
+
+    currentProvider().probeReceipt = { ...receipt }
+    currentProvider().baseUrl = 'https://direct-input.example.test/v1'
+    vm.handleProviderBaseUrlInput(currentProvider())
+    expect(currentProvider().probeReceipt).toBeUndefined()
+
+    currentProvider().probeReceipt = { ...receipt }
+    currentProvider().models.push({
+      id: 'gpt-5.6-luna',
+      name: 'gpt-5.6-luna',
+      capabilities: ['text'],
+    })
+    currentProvider().selectedModelId = 'gpt-5.6-luna'
+    vm.handleProviderModelChange(currentProvider())
+    expect(currentProvider().probeReceipt).toBeUndefined()
+
+    wrapper.unmount()
+  })
+
+  it('persists and refreshes a provider without a stable identity before its explicit probe', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.addProvider({
+      name: 'Stable identity provider',
+      type: 'custom',
+      enabled: true,
+      apiKey: 'sk-test',
+      baseUrl: 'https://provider.example.test/v1',
+      models: [{ id: 'gpt-5.6-sol', name: 'gpt-5.6-sol', capabilities: ['text'] }],
+      selectedModelId: 'gpt-5.6-sol',
+    })!
+    const { getLLMConfig, updateLLMConfig } = await import('@/api/config')
+    vi.mocked(getLLMConfig).mockResolvedValue({
+      default: 'custom',
+      providers: {
+        custom: {
+          provider_instance_id: 'pvd_v1_00112233445566778899aabbccddeeff',
+          display_name: provider.name,
+          api_key: '****test',
+          base_url: provider.baseUrl,
+          model: 'gpt-5.6-sol',
+          models: ['gpt-5.6-sol'],
+          compatible: 'openai',
+          locality: 'cloud',
+          enabled: true,
+        },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10_000 },
+    })
+    mockTestLLMConnection.mockResolvedValue({
+      ok: true,
+      message: '连接测试通过',
+      persisted: true,
+      tested_at: '2026-07-28T06:20:00Z',
+      latency_ms: 321,
+    })
+    vi.mocked(updateLLMConfig).mockClear()
+    mockTestLLMConnection.mockClear()
+
+    const vm = wrapper.vm as unknown as {
+      testProvider: (provider: unknown) => Promise<void>
+    }
+    await vm.testProvider(provider)
+
+    expect(updateLLMConfig).toHaveBeenCalled()
+    expect(getLLMConfig).toHaveBeenCalled()
+    expect(mockTestLLMConnection).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        providerInstanceId: 'pvd_v1_00112233445566778899aabbccddeeff',
+      }),
+    )
+  })
+
+  it('serializes an existing provider save and server reload before probing unsaved edits', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
+    provider.baseUrl = 'https://unsaved-edit.example.test/v1'
+    const { getLLMConfig, updateLLMConfig } = await import('@/api/config')
+    const updateLLMConfigMock = vi.mocked(updateLLMConfig)
+    const getLLMConfigMock = vi.mocked(getLLMConfig)
+    updateLLMConfigMock.mockClear()
+    getLLMConfigMock.mockClear()
+    mockTestLLMConnection.mockClear()
+    mockTestLLMConnection.mockResolvedValue({
+      ok: true,
+      message: '连接测试通过',
+      persisted: true,
+      tested_at: '2026-07-28T06:20:00Z',
+      latency_ms: 321,
+    })
+
+    const vm = wrapper.vm as unknown as {
+      testProvider: (provider: unknown) => Promise<void>
+    }
+    await vm.testProvider(provider)
+
+    expect(updateLLMConfigMock).toHaveBeenCalled()
+    expect(getLLMConfigMock).toHaveBeenCalled()
+    expect(updateLLMConfigMock.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTestLLMConnection.mock.invocationCallOrder[0]!,
+    )
+    expect(getLLMConfigMock.mock.invocationCallOrder[0]).toBeLessThan(
+      mockTestLLMConnection.mock.invocationCallOrder[0]!,
+    )
+  })
+
+  it('never renders a stateless persisted=false probe as a durable verified state', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
+    mockTestLLMConnection.mockClear()
+    mockTestLLMConnection.mockResolvedValue({
+      ok: true,
+      message: '连接测试通过，但回执未保存',
+      persisted: false,
+      tested_at: '2026-07-28T06:20:00Z',
+      latency_ms: 321,
+    })
+
+    const vm = wrapper.vm as unknown as {
+      testProvider: (provider: unknown) => Promise<void>
+    }
+    await vm.testProvider(provider)
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('已验证')
+    expect(wrapper.text()).toContain('未测试')
+  })
+
+  it('formats restored provider receipt time with the active locale', async () => {
+    const wrapper = await mountSettingsView()
+    await flushPromises()
+
+    const store = await getSettingsStore()
+    const provider = store.config!.llm.providers[0]!
+    provider.providerInstanceId = 'pvd_v1_00112233445566778899aabbccddeeff'
+    provider.probeReceipt = {
+      providerInstanceId: provider.providerInstanceId,
+      outcome: 'passed',
+      testedAt: new Date(2026, 6, 28, 14, 20).getTime(),
+      latencyMs: 321,
+      locality: 'cloud',
+    }
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('2026-07-28 14:20')
+    expect(wrapper.text()).toContain('2026年7月28日')
+  })
+
   it('coalesces duplicate testProvider invocations while one probe is pending', async () => {
     let resolveTest!: (value: { ok: boolean; message: string }) => void
     mockTestLLMConnection.mockImplementation(
@@ -1482,6 +1822,7 @@ describe('SettingsView — E2E 关键路径', () => {
         baseUrl: 'https://api.openai.com/v1',
         models: [{ id: 'gpt-4o', name: 'gpt-4o', capabilities: ['text'] }],
       }) || store.config!.llm.providers[0]!
+    provider.providerInstanceId = 'pvd_v1_aaaabbbbccccddddeeeeffff00001111'
     await flushPromises()
 
     const vm = wrapper.vm as unknown as {
@@ -1497,7 +1838,7 @@ describe('SettingsView — E2E 关键路径', () => {
 
     resolveTest({ ok: true, message: 'ok' })
     await flushPromises()
-  })
+  }, 15_000)
 
   it('passes provider locality into the connection probe policy', async () => {
     const wrapper = await mountSettingsView()
@@ -1509,6 +1850,27 @@ describe('SettingsView — E2E 关键路径', () => {
     provider.locality = 'local'
     provider.localitySource = 'user'
     provider.confirmedEndpointHost = 'localhost'
+    const { getLLMConfig } = await import('@/api/config')
+    vi.mocked(getLLMConfig).mockResolvedValue({
+      default: 'openai',
+      providers: {
+        openai: {
+          provider_instance_id: provider.providerInstanceId,
+          display_name: provider.name,
+          api_key: provider.apiKey,
+          base_url: provider.baseUrl,
+          model: provider.selectedModelId!,
+          models: provider.models.map((model) => model.id),
+          compatible: 'openai',
+          locality: 'local',
+          locality_source: 'user',
+          confirmed_endpoint_host: 'localhost',
+          enabled: true,
+        },
+      },
+      routing: { enabled: false, strategy: 'cost-aware' },
+      cache: { enabled: true, similarity: 0.92, ttl: '24h', max_entries: 10_000 },
+    })
     mockTestLLMConnection.mockClear()
 
     const vm = wrapper.vm as unknown as {

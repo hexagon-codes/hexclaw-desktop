@@ -2105,7 +2105,9 @@ export default {
       recommendEnable: 'Enable all', // TODO: verify ug
       recommendText: 'Recommended by "free + tool calling + large context"', // TODO: verify ug
       replacementRequired: 'ئۆزگەرتىشنى قوللىنىشتىن بۇرۇن نۆۋەتتىكى سۆھبەت مودېلىنى تاللاڭ',
-      resync: 'Resync', // TODO: verify ug
+      resync: 'قايتا ماسقەدەملەش',
+      lastSuccessfulSync: 'ئاخىرقى مۇۋەپپەقىيەتلىك ماسقەدەملەش: {time}',
+      neverSynced: 'تېخى مۇۋەپپەقىيەتلىك ماسقەدەملەنمىدى',
       searchPlaceholder: 'Search model id or name…', // TODO: verify ug
       selectGroup: 'Select all in group', // TODO: verify ug
       setCurrentModel: 'نۆۋەتتىكى قىلىش',
@@ -2158,6 +2160,8 @@ export default {
         'پەقەت ھازىرقى ساھىبجامالغا ئىجازەت بېرىلىدۇ؛ ئادرېس ئۆزگەرسە قايتا جەزملەش كېرەك.',
       localService: 'يەرلىك مۇلازىمەت',
       cloudService: 'بۇلۇت مۇلازىمىتى',
+      verified: 'دەلىللەندى',
+      lastTested: 'ئاخىرقى سىناق',
       providerServiceNotice:
         'بۇلۇت مودېللىرىنى سىز تەڭشىگەن ئۈچىنچى تەرەپ Provider تەمىنلەيدۇ. Provider يوللانغان مەزمۇننى بىر تەرەپ قىلىشى مۇمكىن.',
       providerServiceDocs: 'ئۈچىنچى تەرەپ AI مۇلازىمەت چۈشەندۈرۈشىنى كۆرۈش ↗',

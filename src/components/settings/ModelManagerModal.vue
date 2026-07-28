@@ -35,7 +35,7 @@ const emit = defineEmits<{
   resync: []
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const settingsStore = useSettingsStore()
 const catalogStore = useModelCatalogStore()
 
@@ -55,6 +55,18 @@ const baselineModels = ref<ModelOption[]>([])
 const baselineSelectedModelId = ref('')
 
 const catalog = computed(() => catalogStore.getCatalog(props.provider.id))
+const lastSuccessfulSyncAt = computed(() =>
+  catalog.value?.source === 'remote' ? catalog.value.syncedAt : '',
+)
+const formattedLastSuccessfulSyncAt = computed(() => {
+  if (!lastSuccessfulSyncAt.value) return ''
+  const parsed = new Date(lastSuccessfulSyncAt.value)
+  if (Number.isNaN(parsed.getTime())) return ''
+  return new Intl.DateTimeFormat(locale.value, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(parsed)
+})
 const catalogModels = computed<CatalogModel[]>(() => catalog.value?.models ?? [])
 const catalogIds = computed(() => new Set(catalogModels.value.map((model) => model.id)))
 const managedModels = computed<CatalogModel[]>(() => [
@@ -515,14 +527,31 @@ function handleKeydown(e: KeyboardEvent) {
                 }}
               </span>
               <span class="mm-spacer" />
+              <span
+                class="mm-sync-meta"
+                data-testid="model-manager-last-sync"
+                :data-synced-at="lastSuccessfulSyncAt || undefined"
+              >
+                {{
+                  formattedLastSuccessfulSyncAt
+                    ? t(
+                        'settings.modelManager.lastSuccessfulSync',
+                        { time: formattedLastSuccessfulSyncAt },
+                        `上次成功同步：${formattedLastSuccessfulSyncAt}`,
+                      )
+                    : t('settings.modelManager.neverSynced', '尚未成功同步')
+                }}
+              </span>
               <button
-                class="mm-icon-btn"
+                class="mm-icon-btn mm-resync"
+                data-testid="model-manager-resync"
                 :title="t('settings.modelManager.resync', '重新同步')"
                 :aria-label="t('settings.modelManager.resync', '重新同步')"
                 :disabled="syncing"
                 @click="emit('resync')"
               >
                 <RefreshCw :size="15" :class="{ 'animate-spin': syncing }" />
+                <span>{{ t('settings.modelManager.resync', '重新同步') }}</span>
               </button>
               <button
                 class="mm-icon-btn"
@@ -849,6 +878,18 @@ function handleKeydown(e: KeyboardEvent) {
 .mm-icon-btn:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.mm-sync-meta {
+  color: var(--hc-text-tertiary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.mm-resync {
+  width: auto;
+  gap: 5px;
+  padding: 0 9px;
 }
 
 .mm-search-row {

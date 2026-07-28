@@ -23,6 +23,7 @@ const mockGetOllamaRunning = vi.fn()
 const mockUnloadOllamaModel = vi.fn()
 const mockDeleteOllamaModel = vi.fn()
 const mockRestartOllama = vi.fn()
+const mockToastError = vi.fn()
 
 vi.mock('@/api/ollama', () => ({
   getOllamaStatus: () => mockGetOllamaStatus(),
@@ -36,6 +37,10 @@ vi.mock('@/api/ollama', () => ({
   unloadOllamaModel: (model: string) => mockUnloadOllamaModel(model),
   deleteOllamaModel: (name: string) => mockDeleteOllamaModel(name),
   restartOllama: () => mockRestartOllama(),
+}))
+
+vi.mock('@/composables/useToast', () => ({
+  useToast: () => ({ error: mockToastError }),
 }))
 
 vi.mock('@tauri-apps/plugin-shell', () => ({
@@ -180,7 +185,7 @@ describe('Bug 6: 删除模型 — 先 unload 运行中模型 + 错误反馈', ()
     vi.useRealTimers()
   })
 
-  it('删除失败时应设置 deleteError（用户能看到错误）', async () => {
+  it('删除失败时应显示共享 Toast 并保留待删除目标', async () => {
     mockGetOllamaStatus.mockResolvedValue({
       running: true, associated: true, model_count: 1,
       models: [{ name: 'qwen3:8b', size: 5_000_000_000 }],
@@ -191,17 +196,13 @@ describe('Bug 6: 删除模型 — 先 unload 运行中模型 + 错误反馈', ()
     await flushPromises()
 
     const vm = wrapper.vm as any
-    await vm.handleDelete('qwen3:8b')
+    vm.requestDelete('qwen3:8b')
+    await vm.confirmDeleteModel()
     await flushPromises()
 
-    // deletingModel 应重置
     expect(vm.deletingModel).toBe('')
-    // 修复后：deleteError 应包含错误信息
-    expect(vm.deleteError).toBe('model is in use')
-
-    // 3 秒后错误自动清除
-    vi.advanceTimersByTime(3000)
-    expect(vm.deleteError).toBe('')
+    expect(vm.pendingDeleteModel).toBe('qwen3:8b')
+    expect(mockToastError).toHaveBeenCalledWith('删除失败')
   })
 
   it('删除运行中的模型应先 unload', async () => {

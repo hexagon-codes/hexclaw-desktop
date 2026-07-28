@@ -113,11 +113,14 @@ export async function updateLLMConfig(config: BackendLLMConfig): Promise<void> {
 }
 
 /**
- * 测试单个 Provider 连接（不持久化）
+ * 测试单个 Provider 连接；提供稳定实例 ID 时由后端持久化测试回执。
  */
 export async function testLLMConnection(
   payload: LLMConnectionTestRequest,
-  context: Pick<ProviderEndpointContext, 'locality' | 'privateNetworkAccess'> = {},
+  context: Pick<
+    ProviderEndpointContext,
+    'providerInstanceId' | 'locality' | 'privateNetworkAccess'
+  > = {},
 ): Promise<LLMConnectionTestResponse> {
   assertExternalBaseUrlAllowed(payload.provider.base_url, {
     providerType: payload.provider.type,
@@ -130,6 +133,7 @@ export async function testLLMConnection(
     JSON.stringify({
       provider: {
         ...payload.provider,
+        provider_instance_id: context.providerInstanceId,
         locality: context.locality,
         private_network_access: context.privateNetworkAccess,
       },

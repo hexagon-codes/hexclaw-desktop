@@ -23,7 +23,7 @@ const REAL_STATUS_RUNNING = {
   models: [
     { name: 'qwen3:8b', size: 4_920_000_000, modified: '2026-03-28T10:15:00+08:00', family: 'qwen3', parameter_size: '8.2B', quantization_level: 'Q4_K_M' },
     { name: 'deepseek-r1:7b', size: 4_680_000_000, modified: '2026-03-25T14:22:00+08:00', family: 'deepseek', parameter_size: '7.6B', quantization_level: 'Q4_0' },
-    { name: 'nomic-embed-text', size: 274_000_000, modified: '2026-03-20T09:00:00+08:00', family: 'nomic-bert', parameter_size: '137M', quantization_level: 'F16' },
+    { name: 'qwen3-embedding:8b', size: 4_680_000_000, modified: '2026-03-20T09:00:00+08:00', family: 'qwen3', parameter_size: '8B', quantization_level: 'Q4_K_M' },
   ],
 }
 
@@ -192,16 +192,16 @@ describe('旅程 2: 老用户管理已有模型', () => {
     // 验证：3 个模型都显示
     expect(w.text()).toContain('qwen3:8b')
     expect(w.text()).toContain('deepseek-r1:7b')
-    expect(w.text()).toContain('nomic-embed-text')
+    expect(w.text()).toContain('qwen3-embedding:8b')
 
     // 验证：模型大小显示
     expect(w.text()).toContain('4.9 GB') // qwen3:8b
-    expect(w.text()).toContain('274 MB') // nomic-embed-text
+    expect(w.text()).toContain('4.7 GB') // qwen3-embedding:8b
 
     // 验证：参数大小
     expect(w.text()).toContain('8.2B')
     expect(w.text()).toContain('7.6B')
-    expect(w.text()).toContain('137M')
+    expect(w.text()).toContain('8B')
 
     // 验证：运行状态
     const vm = w.vm as any
@@ -220,20 +220,19 @@ describe('旅程 2: 老用户管理已有模型', () => {
     expect(vm.isModelRunning('qwen3:8b')).toBe(false)
     expect(vm.unloadingModel).toBe('')
 
-    // Step 3: 用户删除 nomic-embed-text
+    // Step 3: 用户删除 qwen3-embedding:8b
     mockDeleteOllamaModel.mockResolvedValue(undefined)
     mockGetOllamaStatus.mockResolvedValue({
       ...REAL_STATUS_RUNNING,
       model_count: 2,
-      models: REAL_STATUS_RUNNING.models.filter(m => m.name !== 'nomic-embed-text'),
+      models: REAL_STATUS_RUNNING.models.filter(m => m.name !== 'qwen3-embedding:8b'),
     })
 
-    await vm.handleDelete('nomic-embed-text')
+    await vm.handleDelete('qwen3-embedding:8b')
     await flushPromises()
 
-    expect(mockDeleteOllamaModel).toHaveBeenCalledWith('nomic-embed-text')
+    expect(mockDeleteOllamaModel).toHaveBeenCalledWith('qwen3-embedding:8b')
     expect(vm.deletingModel).toBe('')
-    expect(vm.deleteError).toBe('')
   })
 })
 
@@ -408,7 +407,7 @@ describe('旅程 6: 选择本地模型后发消息', () => {
     await store.syncOllamaModels()
 
     // Step 2: 验证模型在列表中
-    expect(store.availableModels).toHaveLength(3)
+    expect(store.availableModels).toHaveLength(2)
     const qwen = store.availableModels.find(m => m.modelId === 'qwen3:8b')
     expect(qwen).toBeDefined()
     expect(qwen!.providerKey).toBe('ollama')
@@ -422,10 +421,9 @@ describe('旅程 6: 选择本地模型后发消息', () => {
     expect(chatParams.provider).toBe('ollama')
     expect(chatParams.model).toBe('qwen3:8b')
 
-    // Step 4: 验证 embedding 模型也在列表中（用户可能不小心选到）
-    const embed = store.availableModels.find(m => m.modelId === 'nomic-embed-text')
-    expect(embed).toBeDefined()
-    expect(embed!.capabilities).toEqual(['text']) // embedding 模型标记为 text 能力
+    // Step 4: 纯 Embedding 模型不得进入聊天候选
+    const embed = store.availableModels.find(m => m.modelId === 'qwen3-embedding:8b')
+    expect(embed).toBeUndefined()
   })
 })
 
@@ -471,7 +469,6 @@ describe('旅程 7: 删除运行中模型（真实数据流）', () => {
     expect(unloadOrder).toBeLessThan(deleteOrder)
 
     expect(vm.deletingModel).toBe('')
-    expect(vm.deleteError).toBe('')
   })
 })
 

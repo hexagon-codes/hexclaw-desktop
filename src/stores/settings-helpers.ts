@@ -2,7 +2,6 @@
  * Settings store 纯函数helpers — 从 settings.ts 拆出以控制文件体积。
  */
 
-import { loadSecureValue, removeSecureValue, saveSecureValue } from '@/utils/secure-store'
 import {
   canonicalizeModelOption,
   cloneModels,
@@ -20,6 +19,7 @@ import type {
   BackendLLMConfig,
   BackendLLMProvider,
 } from '@/types'
+import { cloneProviders } from './settings-provider-copy'
 
 export {
   canonicalizeModelOption,
@@ -29,6 +29,13 @@ export {
   normalizeModelCapabilities,
   resolveProviderSelectedModelId,
 }
+export { cloneProviders } from './settings-provider-copy'
+export {
+  isMaskedApiKey,
+  materializeProviderApiKeys,
+  restoreProviderApiKeys,
+  syncProviderApiKeys,
+} from './settings-provider-secrets'
 
 export const KNOWN_PROVIDER_TYPES = [
   'openai',
@@ -40,17 +47,6 @@ export const KNOWN_PROVIDER_TYPES = [
   'ollama',
 ] as const
 type KnownProviderType = (typeof KNOWN_PROVIDER_TYPES)[number]
-
-export function cloneProviders(providers: ProviderConfig[] = []): ProviderConfig[] {
-  return providers.map((provider) => ({
-    ...provider,
-    models: cloneModels(provider.models),
-  }))
-}
-
-function secureApiKeyKey(providerId: string): string {
-  return `llm.provider.${providerId}.apiKey`
-}
 
 function normalizeProviderName(name: string | undefined | null): string {
   return (name ?? '').trim().toLowerCase()
@@ -88,10 +84,6 @@ export function assertUniqueProviderNames(providers: ProviderConfig[]) {
   }
 }
 
-export function isMaskedApiKey(value: string | undefined | null): boolean {
-  return (value ?? '').includes('*')
-}
-
 export function providerMatchesBackendKey(provider: ProviderConfig, backendKey: string): boolean {
   const normalizedBackendKey = backendKey.trim().toLowerCase()
   return [provider.id, provider.backendKey, provider.name]
@@ -122,6 +114,32 @@ export function mergeProviderRuntimeIdentities(
       ...(runtime.backendKey ? { backendKey: runtime.backendKey } : {}),
     }
   })
+}
+
+/** 与服务端连接指纹字段保持同一失效边界；展示名不参与。 */
+export function providerProbeConnectivityFingerprint(provider: ProviderConfig): string {
+  return JSON.stringify([
+    provider.type,
+    provider.baseUrl.trim().replace(/\/+$/, ''),
+    provider.apiKey,
+    provider.selectedModelId ?? '',
+    provider.locality ?? 'auto',
+    provider.privateNetworkAccess?.host ?? '',
+    provider.privateNetworkAccess?.allowed ?? false,
+  ])
+}
+
+export function invalidateChangedProviderProbeReceipt(
+  previous: ProviderConfig | undefined,
+  next: ProviderConfig | undefined,
+): void {
+  if (
+    !previous ||
+    !next ||
+    !next.probeReceipt ||
+    providerProbeConnectivityFingerprint(previous) === providerProbeConnectivityFingerprint(next)
+  ) return
+  next.probeReceipt = undefined
 }
 
 /** 后端加载后，在有效的本地选择与后端默认之间确定可恢复的默认模型。 */
@@ -300,72 +318,48 @@ export function reconcileDefaultSelection(llmConfig: AppConfig['llm']) {
   }
 }
 
-export async function restoreProviderApiKeys(providers: ProviderConfig[]): Promise<ProviderConfig[]> {
-  const restoredProviders = cloneProviders(providers)
-
-  for (const provider of restoredProviders) {
-    const secureApiKey = await loadSecureValue(secureApiKeyKey(provider.id))
-    if (secureApiKey) {
-      provider.apiKey = secureApiKey
-    }
-  }
-
-  return restoredProviders
-}
-
-export async function materializeProviderApiKeys(providers: ProviderConfig[]): Promise<ProviderConfig[]> {
-  const normalizedProviders = cloneProviders(providers)
-
-  for (const provider of normalizedProviders) {
-    const currentApiKey = provider.apiKey.trim()
-    if (!currentApiKey) continue
-    if (!isMaskedApiKey(currentApiKey)) continue
-
-    const secureApiKey = await loadSecureValue(secureApiKeyKey(provider.id))
-    if (!secureApiKey) {
-      if (provider.backendKey?.trim()) {
-        // 已存在于后端的 provider 可以继续回传脱敏值，让后端保留旧 Key。
-        continue
-      }
-      throw new Error(
-        `服务商 ${provider.name || provider.id} 的 API Key 只有脱敏值，请重新输入完整 Key 后再保存`,
-      )
-    }
-    provider.apiKey = secureApiKey
-  }
-
-  return normalizedProviders
-}
-
-export async function syncProviderApiKeys(
-  providers: ProviderConfig[],
-  previousProviders: ProviderConfig[] = [],
-): Promise<void> {
-  const nextProviderIds = new Set(providers.map((provider) => provider.id))
-
-  for (const previousProvider of previousProviders) {
-    if (!nextProviderIds.has(previousProvider.id)) {
-      await removeSecureValue(secureApiKeyKey(previousProvider.id))
-    }
-  }
-
-  for (const provider of providers) {
-    const apiKey = provider.apiKey.trim()
-    if (!apiKey) {
-      await removeSecureValue(secureApiKeyKey(provider.id))
-      continue
-    }
-    if (isMaskedApiKey(apiKey)) continue
-    await saveSecureValue(secureApiKeyKey(provider.id), apiKey)
-  }
-}
-
 /** 后端格式 -> 桌面格式 */
 export function backendToProviders(
   backend: BackendLLMConfig,
   localProviders: ProviderConfig[] = [],
 ): ProviderConfig[] {
   return Object.entries(backend.providers).map(([name, p]) => {
+    const rawProbeReceipt = (
+      p as typeof p & {
+        probe_receipt?: {
+          provider_instance_id?: string
+          outcome?: string
+          locality?: string
+          latency_ms?: number
+          tested_at?: string | number
+          error_code?: string
+          error_message?: string
+          message?: string
+        }
+      }
+    ).probe_receipt
+    const testedAt = typeof rawProbeReceipt?.tested_at === 'number'
+      ? rawProbeReceipt.tested_at
+      : Date.parse(rawProbeReceipt?.tested_at ?? '')
+    const probeReceipt: ProviderConfig['probeReceipt'] =
+      rawProbeReceipt?.provider_instance_id &&
+      (rawProbeReceipt.outcome === 'passed' || rawProbeReceipt.outcome === 'failed') &&
+      (rawProbeReceipt.locality === 'local' || rawProbeReceipt.locality === 'cloud') &&
+      Number.isFinite(testedAt)
+        ? {
+            providerInstanceId: rawProbeReceipt.provider_instance_id,
+            outcome: rawProbeReceipt.outcome as 'passed' | 'failed',
+            locality: rawProbeReceipt.locality as 'local' | 'cloud',
+            latencyMs: rawProbeReceipt.latency_ms ?? 0,
+            testedAt,
+            ...(rawProbeReceipt.error_code
+              ? { errorCode: rawProbeReceipt.error_code }
+              : {}),
+            ...(rawProbeReceipt.error_message || rawProbeReceipt.message
+              ? { errorMessage: rawProbeReceipt.error_message || rawProbeReceipt.message }
+              : {}),
+          }
+        : undefined
     const localProvider =
       (p.provider_instance_id
         ? localProviders.find(
@@ -378,6 +372,7 @@ export function backendToProviders(
     const nextProvider: ProviderConfig = {
       id: localProvider?.id ?? name,
       providerInstanceId: p.provider_instance_id ?? localProvider?.providerInstanceId,
+      probeReceipt,
       backendKey: name,
       name: localProvider?.name ?? (p.display_name?.trim() || name),
       type: (localProvider?.type ?? matchedType ?? 'custom') as ProviderConfig['type'],

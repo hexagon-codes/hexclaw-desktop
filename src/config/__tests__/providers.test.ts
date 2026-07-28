@@ -274,6 +274,7 @@ describe('isChatModel() / classifyModel() — 聊天页过滤', () => {
 
   it('does not infer arbitrary model ids containing "embed" as embedding models', () => {
     expect(inferCapabilitiesFromId('acme/embed-chat-pro')).toEqual(['text'])
+    expect(inferCapabilitiesFromId('qwen3-embedding:8b')).toEqual(['embedding'])
   })
 })
 

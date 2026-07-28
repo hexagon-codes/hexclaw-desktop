@@ -28,6 +28,7 @@ import {
   backendToProviders,
   providersToBackend,
   appendLocalProvidersMissingFromRuntime,
+  invalidateChangedProviderProbeReceipt,
   mergeProviderRuntimeIdentities,
   resolveLoadedDefaultSelection,
 } from './settings-helpers'
@@ -481,6 +482,7 @@ export const useSettingsStore = defineStore('settings', () => {
         ...previous,
         ...updates,
       } as ProviderConfig
+      invalidateChangedProviderProbeReceipt(previous, merged)
       if (previous.enabled !== merged.enabled) {
         providerSync.invalidate(id)
       }

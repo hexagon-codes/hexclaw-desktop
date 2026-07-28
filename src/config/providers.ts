@@ -206,6 +206,10 @@ export const PROVIDER_PRESETS: Record<ProviderType, ProviderPreset> = {
       { id: 'codegemma', name: 'CodeGemma', capabilities: ['text', 'code'] },
       { id: 'starcoder2', name: 'StarCoder 2', capabilities: ['text', 'code'] },
       { id: 'granite-code', name: 'Granite Code', capabilities: ['text', 'code'] },
+      // 纯 Embedding（不得进入会话）
+      { id: 'qwen3-embedding', name: 'Qwen3 Embedding', capabilities: ['embedding'] },
+      { id: 'nomic-embed-text', name: 'Nomic Embed Text', capabilities: ['embedding'] },
+      { id: 'mxbai-embed-large', name: 'MxBai Embed Large', capabilities: ['embedding'] },
     ],
   },
   custom: {
@@ -233,6 +237,21 @@ export function getProviderTypes(options?: { includeOllama?: boolean }): Provide
  * 纯生成类（image_generation / video_generation）单独返回，不带 text。
  */
 export function inferCapabilitiesFromId(id: string): ModelCapability[] {
+  // 纯 Embedding。服务端明示 capabilities 时以服务端为准；这里只处理
+  // 旧 Ollama /api/tags 不上报能力的精确已知身份回退。不得因任意 ID
+  // 含有 "embed" 子串就把普通会话模型误判为 Embedding。
+  const normalizedId = id.toLowerCase()
+  const isKnownEmbeddingIdentity =
+    /(?:^|\/)(?:qwen3-embedding|nomic-embed-text|mxbai-embed-large|all-minilm|text-embedding-[^/:]+)(?::|$)/.test(
+      normalizedId,
+    ) ||
+    /(?:^|\/)(?:bge|gte)-[^/:]+(?::|$)/.test(normalizedId) ||
+    /(?:^|\/)(?:nemotron-3-embed-1b|llama-nemotron-embed-vl-1b-v2)(?::|$)/.test(
+      normalizedId,
+    )
+  if (isKnownEmbeddingIdentity) {
+    return ['embedding']
+  }
   // 纯图像生成（不做对话）
   if (/cogview|dall-?e|\bflux\b|sdxl|stable-?diffusion|midjourney|imagen|recraft|ideogram|janus/i.test(id)) {
     return ['image_generation']

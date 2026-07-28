@@ -88,6 +88,19 @@ describe('ModelManagerModal — catalog to enabled-pool contract', () => {
     expect(settings.config!.llm.providers[0]!.models.map((model) => model.id)).toEqual(['chat-a'])
   })
 
+  it('shows the last successful catalog sync beside exactly one resync action', () => {
+    const provider = providerFixture()
+    const { catalogStore } = mountManager(provider, [{ id: 'chat-a', name: 'Chat A' }])
+    const syncedAt = catalogStore.getCatalog(provider.id)!.syncedAt
+    const body = dialogBody()
+
+    expect(body.get('[data-testid="model-manager-last-sync"]').text()).toContain('上次成功同步')
+    expect(body.get('[data-testid="model-manager-last-sync"]').attributes('data-synced-at')).toBe(
+      syncedAt,
+    )
+    expect(body.findAll('[data-testid="model-manager-resync"]')).toHaveLength(1)
+  })
+
   it('filters chat and embedding models without relying on optional provider metadata', async () => {
     const provider = providerFixture()
     mountManager(provider, [

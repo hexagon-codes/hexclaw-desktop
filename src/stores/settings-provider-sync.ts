@@ -4,6 +4,7 @@ import { logger } from '@/utils/logger'
 import { invalidateProviderCatalogSync } from './model-catalog'
 import { syncProviderModelCatalogs } from './provider-model-sync'
 import {
+  invalidateChangedProviderProbeReceipt,
   materializeProviderApiKeys,
   providersToBackend,
 } from './settings-helpers'
@@ -34,7 +35,10 @@ export function createSettingsProviderSync(context: SettingsProviderSyncContext)
     const nextById = new Map(nextProviders.map((provider) => [provider.id, provider]))
     const providerIds = new Set([...previousById.keys(), ...nextById.keys()])
     for (const providerId of providerIds) {
-      if (previousById.get(providerId)?.enabled !== nextById.get(providerId)?.enabled) {
+      const previous = previousById.get(providerId)
+      const next = nextById.get(providerId)
+      invalidateChangedProviderProbeReceipt(previous, next)
+      if (previous?.enabled !== next?.enabled) {
         invalidateProviderCatalogSync(providerId)
       }
     }

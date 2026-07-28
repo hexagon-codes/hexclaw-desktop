@@ -82,10 +82,22 @@ export interface PrivateNetworkAccess {
   allowed: boolean
 }
 
+export interface ProviderProbeReceipt {
+  providerInstanceId: string
+  outcome: 'passed' | 'failed'
+  locality: 'local' | 'cloud'
+  latencyMs: number
+  testedAt: number
+  errorCode?: string
+  errorMessage?: string
+}
+
 export interface ProviderConfig {
   id: string
   /** 后端分配/确认的稳定 Provider 实例身份，不随展示名或 map key 变化。 */
   providerInstanceId?: string
+  /** 服务端按当前连接指纹投影的最近一次显式测试回执。 */
+  probeReceipt?: ProviderProbeReceipt
   /** 后端运行时识别的 provider key（对应 hexclaw /api/v1/config/llm 的 map key） */
   backendKey?: string
   name: string
@@ -354,6 +366,7 @@ export interface LLMConnectionTestRequest {
     base_url: string
     api_key: string
     model: string
+    provider_instance_id?: string
     locality?: ProviderLocality
     private_network_access?: PrivateNetworkAccess
   }
@@ -366,4 +379,8 @@ export interface LLMConnectionTestResponse {
   provider?: string
   model?: string
   latency_ms?: number
+  persisted?: boolean
+  tested_at?: string | number
+  error_code?: string
+  error_message?: string
 }
