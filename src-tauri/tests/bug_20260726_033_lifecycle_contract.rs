@@ -96,8 +96,13 @@ fn bug_20260726_033_1999ms_is_second_press_but_2000ms_is_expired() {
 #[test]
 fn bug_20260726_033_tray_quit_remains_explicit_single_press_exit() {
     let tray = read_source("src/tray.rs");
+    let menu = read_source("src/menu.rs");
+    let dispatcher = extract_function_body(&menu, "fn dispatch_native_menu_action")
+        .expect("app and tray must share one native menu action dispatcher");
     assert!(
-        tray.contains("\"quit\"") && tray.contains("request_app_exit(app)"),
+        tray.contains("MenuItem::with_id(app, \"quit\"")
+            && dispatcher.contains("\"quit\"")
+            && dispatcher.contains("request_app_exit(app)"),
         "the explicit tray Quit action must bypass the Cmd+Q gate and exit immediately"
     );
 }

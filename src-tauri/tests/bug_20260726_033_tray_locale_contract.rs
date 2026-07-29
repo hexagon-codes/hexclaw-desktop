@@ -6,56 +6,41 @@
 
 mod support;
 
-use support::read_source;
+use support::{extract_function_body, read_source};
 
-const LABELS: [(&str, &str, &str); 5] = [
+const LABELS: [(&str, &str, &str); 6] = [
     ("open", "Open HexClaw", "打开 HexClaw"),
-    ("quick_chat", "Quick Chat...", "快速对话..."),
+    ("quick_chat", "Quick Chat…", "快速对话…"),
     ("logs", "Logs", "日志"),
     ("settings", "Settings", "设置"),
+    ("about", "About HexClaw", "关于河蟹"),
     ("quit", "Quit HexClaw", "退出 HexClaw"),
 ];
-
-fn menu_item_constructor<'a>(source: &'a str, id: &str) -> Option<&'a str> {
-    let needle = format!("MenuItem::with_id(app, \"{id}\"");
-    let start = source.find(&needle)?;
-    let open = source[start..].find('(')? + start;
-    let bytes = source.as_bytes();
-    let mut depth = 1i32;
-    let mut cursor = open + 1;
-
-    while cursor < bytes.len() && depth > 0 {
-        match bytes[cursor] {
-            b'(' => depth += 1,
-            b')' => depth -= 1,
-            _ => {}
-        }
-        cursor += 1;
-    }
-
-    (depth == 0).then(|| &source[start..cursor])
-}
 
 #[test]
 fn bug_20260726_033_tray_has_exact_chinese_and_english_label_sets() {
     let tray = read_source("src/tray.rs");
+    let labels = extract_function_body(&tray, "fn labels_for_locale")
+        .expect("tray must retain one canonical system-locale label helper");
+    let mut missing_ids = Vec::new();
     let mut missing_english = Vec::new();
     let mut missing_chinese = Vec::new();
 
     for (id, english, chinese) in LABELS {
-        let constructor = menu_item_constructor(&tray, id)
-            .unwrap_or_else(|| panic!("missing MenuItem::with_id constructor for `{id}`"));
-        if !constructor.contains(english) {
+        if !tray.contains(&format!("MenuItem::with_id(app, \"{id}\"")) {
+            missing_ids.push(id);
+        }
+        if !labels.contains(english) {
             missing_english.push(english);
         }
-        if !constructor.contains(chinese) {
+        if !labels.contains(chinese) {
             missing_chinese.push(chinese);
         }
     }
 
     assert!(
-        missing_english.is_empty() && missing_chinese.is_empty(),
-        "BUG-20260726-033 tray label sets incomplete: missing English={missing_english:?}, missing Chinese={missing_chinese:?}"
+        missing_ids.is_empty() && missing_english.is_empty() && missing_chinese.is_empty(),
+        "BUG-20260726-033 tray label sets incomplete: missing IDs={missing_ids:?}, English={missing_english:?}, Chinese={missing_chinese:?}"
     );
 }
 

@@ -8,6 +8,55 @@ use tauri::{
     Emitter, Manager,
 };
 
+fn dispatch_native_menu_action(app: &tauri::AppHandle, id: &str) {
+    let window = app.get_webview_window("main");
+    match id {
+        "open" => {
+            crate::window::show_main_window(app);
+        }
+        "about" => {
+            // 与应用内版本号入口共用同一开窗逻辑（单一关于窗口 + 单套配置）
+            let _ = crate::window::open_about(app);
+        }
+        "preferences" => {
+            if let Some(w) = &window {
+                let _ = w.show();
+                let _ = w.set_focus();
+                let _ = w.emit("navigate", "/settings");
+            }
+        }
+        "settings" => {
+            if let Some(w) = &window {
+                crate::window::show_main_window(app);
+                let _ = w.emit("navigate", "/settings");
+            }
+        }
+        "new_chat" => {
+            if let Some(w) = &window {
+                let _ = w.emit("menu-action", "new-chat");
+            }
+        }
+        "toggle_sidebar" => {
+            if let Some(w) = &window {
+                let _ = w.emit("menu-action", "toggle-sidebar");
+            }
+        }
+        "quick_chat" => {
+            let _ = crate::window::open_quick_chat(app);
+        }
+        "logs" => {
+            if let Some(w) = &window {
+                crate::window::show_main_window(app);
+                let _ = w.emit("navigate", "/logs");
+            }
+        }
+        "quit" => {
+            crate::window::request_app_exit(app);
+        }
+        _ => {}
+    }
+}
+
 /// 构建原生应用菜单栏
 pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let handle = app.handle();
@@ -118,43 +167,10 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     app.set_menu(menu)?;
 
-    // ─── Menu Event Handler ───
-    app.on_menu_event(move |app, event| {
-        let window = app.get_webview_window("main");
-        match event.id().as_ref() {
-            "about" => {
-                // 与应用内版本号入口共用同一开窗逻辑（单一关于窗口 + 单套配置）
-                let _ = crate::window::open_about(app);
-            }
-            "preferences" => {
-                if let Some(w) = &window {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                    let _ = w.emit("navigate", "/settings");
-                }
-            }
-            "new_chat" => {
-                if let Some(w) = &window {
-                    let _ = w.emit("menu-action", "new-chat");
-                }
-            }
-            "toggle_sidebar" => {
-                if let Some(w) = &window {
-                    let _ = w.emit("menu-action", "toggle-sidebar");
-                }
-            }
-            "quick_chat" => {
-                let _ = crate::window::open_quick_chat(app);
-            }
-            "logs" => {
-                if let Some(w) = &window {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                    let _ = w.emit("navigate", "/logs");
-                }
-            }
-            _ => {}
-        }
+    // Tauri 的 App 与 Tray MenuEvent 都进入同一个全局 listener 列表。
+    // 这里只注册一次，避免同一 action 被重复分发。
+    app.on_menu_event(|app, event| {
+        dispatch_native_menu_action(app, event.id().as_ref());
     });
 
     Ok(())

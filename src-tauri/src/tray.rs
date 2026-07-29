@@ -4,12 +4,11 @@
 // Windows: System Tray 图标
 // Linux: System Tray 图标
 //
-// 菜单项：打开主窗口、Quick Chat、日志、设置、退出
+// 菜单项：打开主窗口、Quick Chat、日志、设置、关于、退出
 
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Emitter, Manager,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -29,14 +28,22 @@ fn system_tray_locale() -> TrayLocale {
     }
 }
 
-fn labels_for_locale(locale: TrayLocale) -> [&'static str; 5] {
+fn labels_for_locale(locale: TrayLocale) -> [&'static str; 6] {
     match locale {
-        TrayLocale::Chinese => ["打开 HexClaw", "快速对话…", "日志", "设置", "退出 HexClaw"],
+        TrayLocale::Chinese => [
+            "打开 HexClaw",
+            "快速对话…",
+            "日志",
+            "设置",
+            "关于河蟹",
+            "退出 HexClaw",
+        ],
         TrayLocale::English => [
             "Open HexClaw",
             "Quick Chat…",
             "Logs",
             "Settings",
+            "About HexClaw",
             "Quit HexClaw",
         ],
     }
@@ -44,35 +51,16 @@ fn labels_for_locale(locale: TrayLocale) -> [&'static str; 5] {
 
 /// 构建系统托盘
 pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let [open_label, quick_chat_label, logs_label, settings_label, quit_label] =
+    let [open_label, quick_chat_label, logs_label, settings_label, about_label, quit_label] =
         labels_for_locale(system_tray_locale());
-    let open = MenuItem::with_id(app, "open",
-        open_label,
-        true,
-        None::<&str>,
-    )?;
-    let quick_chat = MenuItem::with_id(app, "quick_chat",
-        quick_chat_label,
-        true,
-        None::<&str>,
-    )?;
+    let open = MenuItem::with_id(app, "open", open_label, true, None::<&str>)?;
+    let quick_chat = MenuItem::with_id(app, "quick_chat", quick_chat_label, true, None::<&str>)?;
     let separator1 = PredefinedMenuItem::separator(app)?;
-    let logs = MenuItem::with_id(app, "logs",
-        logs_label,
-        true,
-        None::<&str>,
-    )?;
-    let settings = MenuItem::with_id(app, "settings",
-        settings_label,
-        true,
-        None::<&str>,
-    )?;
+    let logs = MenuItem::with_id(app, "logs", logs_label, true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", settings_label, true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", about_label, true, None::<&str>)?;
     let separator2 = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit",
-        quit_label,
-        true,
-        None::<&str>,
-    )?;
+    let quit = MenuItem::with_id(app, "quit", quit_label, true, None::<&str>)?;
 
     let menu = Menu::with_items(
         app,
@@ -82,6 +70,7 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             &quick_chat,
             &logs,
             &settings,
+            &about,
             &separator2,
             &quit,
         ],
@@ -94,30 +83,6 @@ pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .icon_as_template(true)
         .menu(&menu)
         .show_menu_on_left_click(true)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "open" => {
-                crate::window::show_main_window(app);
-            }
-            "quick_chat" => {
-                let _ = crate::window::open_quick_chat(app);
-            }
-            "logs" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    crate::window::show_main_window(app);
-                    let _ = window.emit("navigate", "/logs");
-                }
-            }
-            "settings" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    crate::window::show_main_window(app);
-                    let _ = window.emit("navigate", "/settings");
-                }
-            }
-            "quit" => {
-                crate::window::request_app_exit(app);
-            }
-            _ => {}
-        })
         .build(app)?;
 
     Ok(())
@@ -136,6 +101,7 @@ mod tests {
                 "快速对话…",
                 "日志",
                 "设置",
+                "关于河蟹",
                 "退出 HexClaw",
             ]
         );
@@ -150,6 +116,7 @@ mod tests {
                 "Quick Chat…",
                 "Logs",
                 "Settings",
+                "About HexClaw",
                 "Quit HexClaw",
             ]
         );

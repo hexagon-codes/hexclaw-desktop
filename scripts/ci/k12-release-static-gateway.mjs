@@ -405,7 +405,7 @@ function proxyWebSocket(prepared, request, socket, head) {
   socket.once('error', () => upstream.destroy())
 }
 
-async function defaultListenGateway(prepared) {
+export function createReleaseStaticGatewayServer(prepared) {
   const server = createServer((request, response) => {
     const incomingURL = new URL(request.url ?? '/', RELEASE_UI_URL)
     const classification = classifyReleaseGatewayPath(incomingURL.pathname)
@@ -444,7 +444,11 @@ async function defaultListenGateway(prepared) {
     }
     proxyWebSocket(prepared, request, socket, head)
   })
+  return server
+}
 
+async function defaultListenGateway(prepared) {
+  const server = createReleaseStaticGatewayServer(prepared)
   await new Promise((resolvePromise, rejectPromise) => {
     const onError = (error) => {
       server.off('listening', onListening)

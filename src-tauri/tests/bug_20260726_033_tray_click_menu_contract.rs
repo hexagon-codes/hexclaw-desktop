@@ -5,7 +5,14 @@
 
 mod support;
 
-use support::{extract_between, occurrences, read_source};
+use support::{extract_between, extract_function_body, occurrences, read_source};
+
+fn without_whitespace(source: &str) -> String {
+    source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect()
+}
 
 #[test]
 fn bug_20260726_033_left_and_right_click_share_one_native_menu() {
@@ -27,12 +34,23 @@ fn bug_20260726_033_left_and_right_click_share_one_native_menu() {
     if tray.contains(".popup(") || tray.contains("ContextMenu") {
         violations.push("manual popup/second context-menu paths are forbidden");
     }
+    if occurrences(&tray, "MenuItem::with_id(app,") != 6 {
+        violations.push("tray must construct exactly the six approved business items");
+    }
+    if occurrences(&tray, "PredefinedMenuItem::separator(app)") != 2 {
+        violations.push("tray must construct exactly two separators");
+    }
+    let normalized = without_whitespace(&tray);
+    if !normalized.contains(
+        "Menu::with_items(app,&[&open,&separator1,&quick_chat,&logs,&settings,&about,&separator2,&quit,]",
+    ) {
+        violations.push(
+            "tray exact structure must be open/separator/quick_chat/logs/settings/about/separator/quit",
+        );
+    }
 
-    if let Some(click_handler) =
-        extract_between(&tray, ".on_tray_icon_event", ".build(app)")
-    {
-        if click_handler.contains("MouseButton::Left")
-            && click_handler.contains("show_main_window")
+    if let Some(click_handler) = extract_between(&tray, ".on_tray_icon_event", ".build(app)") {
+        if click_handler.contains("MouseButton::Left") && click_handler.contains("show_main_window")
         {
             violations.push("left click still opens the main window directly");
         }
@@ -48,21 +66,25 @@ fn bug_20260726_033_left_and_right_click_share_one_native_menu() {
 #[test]
 fn bug_20260726_033_open_is_the_only_menu_action_that_opens_main_window() {
     let tray = read_source("src/tray.rs");
+    let app_menu = read_source("src/menu.rs");
 
-    for id in ["open", "quick_chat", "logs", "settings", "quit"] {
+    for id in ["open", "quick_chat", "logs", "settings", "about", "quit"] {
         assert!(
             tray.contains(&format!("\"{id}\"")),
             "approved tray menu item `{id}` was removed"
         );
     }
 
-    let menu_handler = extract_between(&tray, ".on_menu_event", ".on_tray_icon_event")
-        .or_else(|| extract_between(&tray, ".on_menu_event", ".build(app)"))
-        .expect("tray must retain one menu event handler");
+    assert_eq!(
+        occurrences(&app_menu, ".on_menu_event(") + occurrences(&tray, ".on_menu_event("),
+        1,
+        "app and tray menus must share exactly one process-wide MenuEvent dispatcher"
+    );
+    let menu_handler = extract_function_body(&app_menu, "fn dispatch_native_menu_action")
+        .expect("native menus must retain one canonical menu action dispatcher");
 
     assert!(
-        menu_handler.contains("\"open\"")
-            && menu_handler.contains("show_main_window(app)"),
+        menu_handler.contains("\"open\"") && menu_handler.contains("show_main_window(app)"),
         "the `open` menu item must remain the explicit main-window entry"
     );
 }
