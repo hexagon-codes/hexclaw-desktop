@@ -1623,6 +1623,7 @@ async function doExportMd() {
         </K12WeeklyPracticePanel>
         <K12PersistentPrintController
           ref="weeklyPrintController"
+          mode="native-dialog"
           @error="toast.error($event.message)"
         />
         <K12ProfileForm

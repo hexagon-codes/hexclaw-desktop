@@ -18,7 +18,9 @@ import { formatTime } from '@/utils/time'
 import MessageActions from '@/components/chat/MessageActions.vue'
 import MessageFooter from '@/components/chat/MessageFooter.vue'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
+import type { ActivityTimelineItem } from '@/components/chat/activity-timeline'
 import CreativeWorkFeedbackRenderer from '../components/CreativeWorkFeedbackRenderer.vue'
+import TaskProgressCard from '../components/TaskProgressCard.vue'
 import { K12_GRADE_SUBJECT_OPTIONS } from '../subjects'
 import HcSelect from '@/components/common/HcSelect.vue'
 import VerifyBadge from '@/shell/chat/VerifyBadge.vue'
@@ -199,6 +201,7 @@ const retryable = ref(false)
 const retrySubmitting = ref(false)
 const currentTaskStage = ref('')
 const taskCreatedAt = ref<number>()
+const taskUpdatedAt = ref<number>()
 const automaticBudgetSeconds = ref<number>()
 const automaticStartedAt = ref<number>()
 const automaticDeadlineAt = ref<number>()
@@ -737,6 +740,77 @@ const riskCount = computed(() => rows.value.filter((row) => row.confirmationRequ
 const unconfirmedRiskCount = computed(
   () => rows.value.filter((row) => row.confirmationRequired && !row.recognitionConfirmed).length,
 )
+const homeworkResultAnchor = ref<HTMLElement | null>(null)
+const homeworkTaskProgressState = computed<'running' | 'completed' | null>(() => {
+  if (
+    currentTaskIntent.value !== 'completed_homework'
+    || !taskCoverage.value
+    || outcomeUnknown.value
+    || recognitionFailed.value
+  ) {
+    return null
+  }
+  if (currentTaskStage.value === 'completed') return 'completed'
+  return batchWorking.value ? 'running' : null
+})
+const homeworkCurrentProblemNumber = computed(() => {
+  const pendingIndex = problemProgressSlots.value.findIndex(
+    problem =>
+      !problemIsSkipped(problem)
+      && problem.disposition_state !== 'result',
+  )
+  if (pendingIndex >= 0) return pendingIndex + 1
+  const coverage = taskCoverage.value
+  if (coverage && coverage.processed < coverage.total) {
+    return Math.min(coverage.total, coverage.processed + 1)
+  }
+  return 0
+})
+const homeworkCompletedDurationSeconds = computed(() => {
+  if (automaticStartedAt.value === undefined || taskUpdatedAt.value === undefined) return 0
+  const updatedAt = taskUpdatedAt.value > 1_000_000_000_000
+    ? Math.floor(taskUpdatedAt.value / 1000)
+    : Math.floor(taskUpdatedAt.value)
+  return Math.max(0, updatedAt - automaticStartedAt.value)
+})
+const homeworkTaskSummary = computed(() => {
+  const coverage = taskCoverage.value
+  const state = homeworkTaskProgressState.value
+  if (!coverage || !state) return ''
+  if (state === 'completed') {
+    const minutes = Math.floor(homeworkCompletedDurationSeconds.value / 60)
+    const seconds = homeworkCompletedDurationSeconds.value % 60
+    return `作业批改完成　${coverage.total} 题　·　${riskCount.value} 题需确认　·　用时 ${minutes} 分 ${seconds} 秒`
+  }
+  return `正在批改作业　${coverage.processed}/${coverage.total}　·　${riskCount.value} 题需确认　·　已用时 ${formatDuration(elapsedSeconds.value)}`
+})
+const homeworkTimelineItems = computed<ActivityTimelineItem[]>(() => {
+  if (!homeworkTaskProgressState.value) return []
+  const items: ActivityTimelineItem[] = [
+    {
+      id: 'structure-frozen',
+      state: 'completed',
+      label: '题目结构已冻结',
+    },
+  ]
+  if (
+    homeworkTaskProgressState.value === 'running'
+    && homeworkCurrentProblemNumber.value > 0
+  ) {
+    items.push({
+      id: 'grading-current',
+      state: 'running',
+      label: `正在批改第 ${homeworkCurrentProblemNumber.value} 题`,
+      detail: `阶段预算 ${activeStageBudgetSeconds.value} 秒`,
+    })
+  }
+  return items
+})
+
+function viewHomeworkResult(): void {
+  homeworkResultAnchor.value?.scrollIntoView({ block: 'nearest' })
+  homeworkResultAnchor.value?.focus({ preventScroll: true })
+}
 
 const OCR_RISK_LABELS: Record<OCRConfirmationReason, string> = {
   fraction: '分数线',
@@ -888,6 +962,7 @@ function projectImageTaskDispatch(dispatch: ImageTaskDispatchDTO) {
   frozenProviderDisplayName.value = dispatch.provider_display_name?.trim() ?? ''
   frozenModelID.value = dispatch.model_id?.trim() ?? ''
   taskCreatedAt.value = dispatch.created_at
+  taskUpdatedAt.value = dispatch.updated_at
   projectRuntimeTiming(dispatch)
   currentTaskIntent.value = dispatch.task_intent
   const projection = dispatch.target_projection
@@ -1818,6 +1893,22 @@ async function coldStart() {
       <span>正在生成作品点评…</span>
     </p>
 
+    <TaskProgressCard
+      v-if="homeworkTaskProgressState"
+      :state="homeworkTaskProgressState"
+      :summary="homeworkTaskSummary"
+      :ariaLabel="'已作答作业处理状态'"
+      :items="homeworkTimelineItems"
+      @view-result="viewHomeworkResult"
+    />
+    <div
+      v-if="homeworkTaskProgressState === 'completed'"
+      ref="homeworkResultAnchor"
+      class="rec-panel__result-anchor"
+      data-testid="homework-results-anchor"
+      tabindex="-1"
+    />
+
     <div
       v-if="
         outcomeUnknown ||
@@ -1832,7 +1923,11 @@ async function coldStart() {
       aria-label="已作答作业处理状态"
     >
       <div
-        v-if="!outcomeUnknown && currentTaskIntent === 'completed_homework'"
+        v-if="
+          !homeworkTaskProgressState
+          && !outcomeUnknown
+          && currentTaskIntent === 'completed_homework'
+        "
         class="rec-pipeline__head"
       >
         <b>已作答作业</b>
@@ -1911,7 +2006,11 @@ async function coldStart() {
         </li>
       </ol>
       <div
-        v-if="!outcomeUnknown && currentTaskIntent === 'completed_homework'"
+        v-if="
+          !homeworkTaskProgressState
+          && !outcomeUnknown
+          && currentTaskIntent === 'completed_homework'
+        "
         class="rec-pipeline__branches"
       >
         <div

@@ -284,6 +284,12 @@ export default {
     thinking: 'Thinking...',
     thoughtProcess: 'Thought process',
     thoughtFor: 'Thought for',
+    thoughtCompletedAria: 'Thinking completed. Collapse details',
+    toolActivity: {
+      running: 'Using “{name}”',
+      completed: '“{name}” completed',
+      failed: '“{name}” did not complete',
+    },
     thinkingOn: 'Deep thinking enabled (model reasons before answering, slower)',
     thinkingOff: 'Deep thinking disabled (direct answers, faster)',
     toolParams: 'Params',

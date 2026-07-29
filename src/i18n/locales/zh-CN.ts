@@ -286,6 +286,12 @@ export default {
     thinking: '正在思考...',
     thoughtProcess: '思考过程',
     thoughtFor: '思考了',
+    thoughtCompletedAria: '思考完成，点击收起',
+    toolActivity: {
+      running: '正在使用「{name}」',
+      completed: '「{name}」已完成',
+      failed: '「{name}」未完成',
+    },
     thinkingOn: '深度思考已开启（模型会先推理再回答，较慢）',
     thinkingOff: '深度思考已关闭（直接回答，更快）',
     toolParams: '参数',

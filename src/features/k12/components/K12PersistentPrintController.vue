@@ -7,6 +7,15 @@ import {
   type PersistentPrintRequest,
 } from '../persistent-print'
 
+const props = withDefaults(
+  defineProps<{
+    mode?: 'app-preview' | 'native-dialog'
+  }>(),
+  {
+    mode: 'app-preview',
+  },
+)
+
 const emit = defineEmits<{
   result: [printed: boolean]
   error: [error: Error]
@@ -32,6 +41,27 @@ async function open(request: PersistentPrintRequest): Promise<void> {
   if (requestGeneration !== generation) return
   if (prepared.status === 'completed') {
     emit('result', prepared.printed)
+    return
+  }
+  if (props.mode === 'native-dialog') {
+    state.value = {
+      open: false,
+      printing: true,
+      title: prepared.title,
+      preparation: prepared,
+    }
+    try {
+      const printed = await prepared.confirm()
+      if (requestGeneration === generation) emit('result', printed)
+    } catch (cause) {
+      if (requestGeneration === generation) {
+        emit('error', cause instanceof Error ? cause : new Error(String(cause)))
+      }
+    } finally {
+      if (requestGeneration === generation) {
+        state.value = { open: false, printing: false, title: '', preparation: null }
+      }
+    }
     return
   }
   state.value = {

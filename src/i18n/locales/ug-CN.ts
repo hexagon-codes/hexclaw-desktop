@@ -300,6 +300,12 @@ export default {
     thinking: 'ئويلاۋاتىدۇ...',
     thoughtProcess: 'ئويلاش جەريانى',
     thoughtFor: 'ئويلاش ۋاقتى',
+    thoughtCompletedAria: 'ئويلاش تاماملاندى، تەپسىلاتنى يىغىش',
+    toolActivity: {
+      running: '«{name}» ئىشلىتىلىۋاتىدۇ',
+      completed: '«{name}» تاماملاندى',
+      failed: '«{name}» تاماملانمىدى',
+    },
     thinkingOn: 'چوڭقۇر ئويلاش ئېچىلدى (مودېل ئالدى بىلەن ئويلاپ ئاندىن جاۋاب بېرىدۇ، ئاستىراق)',
     thinkingOff: 'چوڭقۇر ئويلاش يېپىلدى (بىۋاسىتە جاۋاب، تېز)',
     toolParams: 'پارامېتىر',
