@@ -10,7 +10,11 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const currentSourceSpecs = [
   'api-chain.spec.ts',
   'browser-chat-background.spec.ts',
+  'browser-chat-interaction-current-source-20260723.spec.ts',
   'browser-clearable-inputs.spec.ts',
+  'browser-current-ui-regression-20260723.spec.ts',
+  'browser-k12-profile-linkage-current-source-20260723.spec.ts',
+  'bug-20260726-030-composer-divider.spec.ts',
   'streaming-chain.spec.ts',
 ]
 
@@ -54,11 +58,11 @@ function listPlaywright(config) {
   }
 }
 
-test('default current-source lane collects only the frozen four general specs', () => {
+test('default current-source lane collects only the canonical eight specs', () => {
   const listed = listPlaywright('playwright.config.ts')
 
   assert.deepEqual(listed.files, currentSourceSpecs)
-  assert.equal(listed.fileCount, 4)
+  assert.equal(listed.fileCount, 8)
   for (const forbidden of ['browser-mock-', 'browser-live-', 'real-fixtures', 'webkit-']) {
     assert.doesNotMatch(listed.output, new RegExp(forbidden))
   }

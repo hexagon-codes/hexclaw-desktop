@@ -238,14 +238,36 @@ test('prefixed release API proxy preserves request and upstream response semanti
   assert.ok(sidecarAddress && typeof sidecarAddress === 'object')
   built.config.sidecar_url = `http://127.0.0.1:${sidecarAddress.port}`
 
-  const { startReleaseStaticGateway } = await loadGateway()
+  const {
+    createReleaseStaticGatewayServer,
+    startReleaseStaticGateway,
+  } = await loadGateway()
   let gateway
+  let gatewayPort
   try {
-    gateway = await startReleaseStaticGateway(built.config)
+    gateway = await startReleaseStaticGateway(built.config, {
+      listenGateway: async (prepared) => {
+        const server = createReleaseStaticGatewayServer(prepared)
+        await new Promise((resolve, reject) => {
+          server.once('error', reject)
+          server.listen(0, '127.0.0.1', resolve)
+        })
+        const address = server.address()
+        assert.ok(address && typeof address === 'object')
+        gatewayPort = address.port
+        return {
+          origin: `http://127.0.0.1:${gatewayPort}`,
+          close: () => new Promise((resolve, reject) => {
+            server.close((error) => error ? reject(error) : resolve())
+          }),
+        }
+      },
+    })
+    assert.notEqual(gatewayPort, 16060)
     const received = await new Promise((resolve, reject) => {
       const outgoing = httpRequest({
         host: '127.0.0.1',
-        port: 16060,
+        port: gatewayPort,
         method: 'DELETE',
         path: '/_hexclaw/api/v1/agents?id=agent%2Fproof&mode=cleanup',
         headers: {

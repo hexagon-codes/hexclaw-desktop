@@ -19,5 +19,10 @@ test('strict LIVE gate derives every displayed count from the exact spec set', a
     fileLabel: '9-file',
     progressLabel: '9/9 files',
   })
+  assert.deepEqual(gate.describeLiveSpecSet(gate.K12_LIVE_SPEC_FILES.slice(0, -1)), {
+    count: 7,
+    fileLabel: '7-file',
+    progressLabel: '7/7 files',
+  })
   assert.doesNotMatch(source, /nine-file|9\/9 files/)
 })

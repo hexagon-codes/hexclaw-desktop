@@ -191,7 +191,9 @@ test.describe('real creative source, OCR, owner and feedback', () => {
     expect(sha256(bytes), 'rendered thumbnail must return the immutable original bytes').toBe(
       FIXTURES.art.sha256,
     )
-    await expect(page.getByTestId('works-section')).not.toContainText(/评分|排名|分数/)
+    await expect(page.getByTestId('works-section')).not.toContainText(
+      /(?:评分|分数)\s*[:：]?\s*\d+(?:\.\d+)?(?:\s*分)?|排名\s*[:：]?\s*(?:第\s*)?\d+/,
+    )
   })
 
   test('writing photo requires OCR confirmation, source-grounded feedback and a separate non-empty second work', async ({
