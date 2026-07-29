@@ -30,10 +30,11 @@ interface MountOptions {
   risk?: 'safe' | 'sensitive' | 'dangerous'
   reason?: string
   timeout?: number
+  deadlineAt?: string
 }
 
 function mountCard(overrides: MountOptions = {}) {
-  return mount(ToolApprovalCard, {
+  return mount(ToolApprovalCard as any, {
     props: {
       requestId: overrides.requestId ?? 'req-123',
       toolName: overrides.toolName ?? 'file_write',
@@ -41,6 +42,7 @@ function mountCard(overrides: MountOptions = {}) {
       risk: overrides.risk ?? 'sensitive',
       reason: overrides.reason ?? 'Writes to filesystem',
       timeout: overrides.timeout ?? 30,
+      deadlineAt: overrides.deadlineAt,
     },
     global: {
       plugins: [createTestI18n()],
@@ -64,12 +66,10 @@ describe('ToolApprovalCard', () => {
     expect(wrapper.text()).toContain('Runs shell command')
   })
 
-  it('auto-denies when countdown reaches 0', () => {
+  it('does not auto-deny when the countdown reaches 0', () => {
     const wrapper = mountCard({ timeout: 3 })
     vi.advanceTimersByTime(3000)
-    const events = wrapper.emitted('respond') as unknown[][]
-    expect(events).toHaveLength(1)
-    expect(events[0]).toEqual(['req-123', false, false])
+    expect(wrapper.emitted('respond')).toBeUndefined()
   })
 
   it('timer interval cleaned up on unmount', () => {
@@ -164,5 +164,43 @@ describe('ToolApprovalCard', () => {
     await wrapper.vm.$nextTick()
     expect(timer.text()).toBe('5s')
     expect(timer.attributes('style')).toContain('var(--hc-error)')
+  })
+})
+
+describe('ToolApprovalCard approved lifecycle RED contract', () => {
+  it('projects the server deadline without emitting a local denial', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-29T04:00:00.000Z'))
+    let wrapper: ReturnType<typeof mountCard> | undefined
+    try {
+      wrapper = mountCard({
+        requestId: 'approval-request-1',
+        toolName: 'filesystem.write',
+        risk: 'dangerous',
+        reason: 'Writes a generated file',
+        deadlineAt: '2026-07-29T04:00:05.000Z',
+        timeout: 1,
+      })
+
+      await vi.advanceTimersByTimeAsync(6_000)
+
+      expect(wrapper.emitted('respond')).toBeUndefined()
+    } finally {
+      wrapper?.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('uses the exact approved remember checkbox copy', () => {
+    const wrapper = mountCard({
+      requestId: 'approval-request-1',
+      toolName: 'filesystem.write',
+      risk: 'dangerous',
+      reason: 'Writes a generated file',
+    })
+
+    const checkbox = wrapper.get('input[type="checkbox"]')
+    const labelCopy = checkbox.element.parentElement?.textContent?.replace(/\s+/g, '')
+    expect(labelCopy).toBe('本会话内始终允许此工具')
   })
 })

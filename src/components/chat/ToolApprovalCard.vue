@@ -11,6 +11,7 @@ interface Props {
   arguments?: Record<string, unknown>
   risk: 'safe' | 'sensitive' | 'dangerous'
   reason: string
+  deadlineAt?: string
   timeout?: number // seconds
 }
 
@@ -24,17 +25,22 @@ const emit = defineEmits<{
 
 const remember = ref(false)
 const responded = ref(false)
-const remaining = ref(props.timeout)
+const fallbackDeadlineAt = Date.now() + props.timeout * 1000
+
+function projectRemainingSeconds() {
+  const deadlineAt = props.deadlineAt
+    ? new Date(props.deadlineAt).getTime()
+    : fallbackDeadlineAt
+  return Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000))
+}
+
+const remaining = ref(projectRemainingSeconds())
 
 // Countdown
 const timer = setInterval(() => {
-  remaining.value--
+  remaining.value = projectRemainingSeconds()
   if (remaining.value <= 0) {
     clearInterval(timer)
-    if (!responded.value) {
-      responded.value = true
-      emit('respond', props.requestId, false, false)
-    }
   }
 }, 1000)
 
@@ -100,7 +106,7 @@ const argsPreview = computed(() => {
     <div v-if="!responded" class="hc-approval__actions">
       <label class="hc-approval__remember">
         <input v-model="remember" type="checkbox" />
-        {{ t('chat.alwaysAllow', 'Always allow this tool') }}
+        本会话内始终允许此工具
       </label>
       <div class="hc-approval__buttons">
         <button class="hc-approval__btn hc-approval__btn--deny" @click="deny">

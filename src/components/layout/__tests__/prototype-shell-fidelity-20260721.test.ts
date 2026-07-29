@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 
 const readLayout = (name: string) =>
   readFileSync(resolve(__dirname, `../${name}.vue`), 'utf8')
+const globalCSS = readFileSync(resolve(__dirname, '../../../assets/styles/global.css'), 'utf8')
 
 function cssBlock(source: string, selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -25,6 +26,7 @@ describe('prototype shell fidelity — app surface', () => {
     expect(source).toContain('<div class="hc-app__glow" aria-hidden="true" />')
     expectDeclarations(cssBlock(source, '.hc-app'), ['background: var(--hc-bg-gradient);'])
     expectDeclarations(cssBlock(source, '.hc-app__body'), ['position: relative;'])
+    expect(globalCSS).not.toContain('.hc-app::after')
     expectDeclarations(cssBlock(source, '.hc-app__body::after'), [
       'pointer-events: none;',
       'mix-blend-mode: soft-light;',

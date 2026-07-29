@@ -186,6 +186,8 @@ body,
   font-family:
     -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue',
     'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
   font-feature-settings: 'kern' 1;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -624,37 +626,9 @@ select.hc-input:focus {
   }
 }
 
-/* ─── App shell — hex texture & content highlight (prototype) ─ */
+/* ─── App shell — positioning anchor (prototype) ─────────── */
 .hc-app {
   position: relative;
-}
-
-.hc-app::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='52'%3E%3Cpath d='M30 0l26 15v30L30 60 4 45V15z' fill='none' stroke='%235fb3ea' stroke-width='0.45' opacity='0.06'/%3E%3C/svg%3E");
-  background-size: 60px 52px;
-  mix-blend-mode: soft-light;
-  z-index: 0;
-}
-
-.hc-app__content::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 220px;
-  background: radial-gradient(
-    circle at top center,
-    rgba(95, 179, 234, 0.12) 0%,
-    rgba(95, 179, 234, 0.03) 36%,
-    rgba(95, 179, 234, 0) 72%
-  );
-  pointer-events: none;
-  z-index: 0;
 }
 
 @media (max-width: 1180px) {

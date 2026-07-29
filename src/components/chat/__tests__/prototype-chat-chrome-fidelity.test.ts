@@ -33,12 +33,17 @@ describe('prototype chat chrome fidelity', () => {
   })
 
   it('places always-visible assistant actions immediately after metadata while preserving the user hover lane', () => {
-    const assistantFooterStart = chatView.indexOf('<MessageFooter class="hc-msg__footer">')
-    const userFooterStart = chatView.indexOf(
-      '<MessageFooter class="hc-msg__footer hc-msg__footer--right">',
+    const assistantFooterTag = chatView.match(
+      /<MessageFooter\b[^>]*class="hc-msg__footer"[^>]*>/,
     )
+    const userFooterTag = chatView.match(
+      /<MessageFooter\b[^>]*class="hc-msg__footer hc-msg__footer--right"[^>]*>/,
+    )
+    const assistantFooterStart = assistantFooterTag?.index ?? -1
+    const userFooterStart = userFooterTag?.index ?? -1
     expect(assistantFooterStart).toBeGreaterThan(-1)
     expect(userFooterStart).toBeGreaterThan(assistantFooterStart)
+    expect(assistantFooterTag?.[0]).toContain('v-if="!isLiveAssistantMessage(msg)"')
 
     const assistantFooter = chatView.slice(assistantFooterStart, userFooterStart)
     const assistantMeta = assistantFooter.indexOf('<div class="hc-msg__meta">')

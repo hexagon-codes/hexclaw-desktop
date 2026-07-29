@@ -53,7 +53,7 @@ import {
 } from '@/stores/session-model-binding'
 import { isChatModelOption } from '@/stores/settings-helpers'
 import MarkdownRenderer from '@/components/chat/MarkdownRenderer.vue'
-import ReasoningRenderer from '@/components/chat/ReasoningRenderer.vue'
+import ThinkingProgress from '@/components/chat/ThinkingProgress.vue'
 import MessageText from '@/components/chat/MessageText.vue'
 import {
   shouldSendOnEnter,
@@ -77,7 +77,6 @@ import {
   workspaceAfterRightPanelClose,
   type ChatWorkspaceMode,
 } from '@/components/chat/workspace-mode'
-import ResearchProgress from '@/components/chat/ResearchProgress.vue'
 import AgentBadge from '@/components/chat/AgentBadge.vue'
 import ToolApprovalCard from '@/components/chat/ToolApprovalCard.vue'
 import SubAgentPanel from '@/components/chat/SubAgentPanel.vue'
@@ -159,20 +158,48 @@ const toast = useToast()
 const QUERY_MODEL_RETRY_INTERVAL = 1000
 const QUERY_MODEL_RETRY_TIMES = 4
 let queryModelSelectionAbort: AbortController | null = null
-const streamingReasoningDisplay = computed(() =>
-  normalizeAssistantReasoning(chatStore.isCurrentStreamingReasoning, { trim: false }),
-)
-const showAssistantPending = computed(() => {
-  if (chatStore.isCurrentStreaming || !chatStore.sending || chatStore.messages.length === 0)
-    return false
-  return chatStore.messages[chatStore.messages.length - 1]?.role === 'user'
-})
-
 const messagesEndRef = ref<HTMLDivElement>()
 const messagesContainerRef = ref<HTMLDivElement>()
 const thinkingContentRef = ref<HTMLDivElement>()
+function bindThinkingContentRef(element: HTMLDivElement | null) {
+  thinkingContentRef.value = element ?? undefined
+}
 const showScrollToBottom = ref(false)
 const userScrolledUp = ref(false)
+
+type ThinkingProgressState = 'running' | 'completed' | 'failed' | 'cancelled'
+
+function messageThinkingElapsed(message: ChatMessage): number {
+  const elapsed = Number(message.metadata?.thinking_duration)
+  return Number.isFinite(elapsed) ? Math.max(0, elapsed) : 0
+}
+
+function messageThinkingState(message: ChatMessage): ThinkingProgressState {
+  const state = message.metadata?.thinking_state
+  return state === 'running' ||
+    state === 'completed' ||
+    state === 'failed' ||
+    state === 'cancelled'
+    ? state
+    : 'completed'
+}
+
+function messageReasoningVisibility(message: ChatMessage): 'visible' | 'not_exposed' {
+  if (message.metadata?.reasoning_visibility === 'not_exposed') return 'not_exposed'
+  return message.reasoning ? 'visible' : 'not_exposed'
+}
+
+function hasThinkingProgress(message: ChatMessage): boolean {
+  const state = message.metadata?.thinking_state
+  return (
+    !!normalizeAssistantReasoning(message.reasoning ?? '') ||
+    messageThinkingElapsed(message) > 0 ||
+    state === 'running' ||
+    state === 'completed' ||
+    state === 'failed' ||
+    state === 'cancelled'
+  )
+}
 const unreadScenarioResultCount = ref(0)
 const scrollCoordinator = useConversationScrollCoordinator({
   getContainer: () => messagesContainerRef.value,
@@ -394,11 +421,50 @@ function deleteMessageAt(idx: number) {
 const MESSAGE_WINDOW_INITIAL = 60
 const MESSAGE_WINDOW_STEP = 100
 const messageWindow = ref(MESSAGE_WINDOW_INITIAL)
+// Stream content remains throttled, but the live projection uses the same stable assistant identity.
+const throttledStreamContent = useThrottledText(() => chatStore.isCurrentStreamingContent, 300)
 const visibleMessages = computed(() =>
   chatStore.messages.length > messageWindow.value
     ? chatStore.messages.slice(-messageWindow.value)
     : chatStore.messages,
 )
+const currentLiveStream = computed(() => {
+  const sessionId = chatStore.currentSessionId
+  return sessionId ? (chatStore.activeStreams ?? {})[sessionId] ?? null : null
+})
+const liveAssistantMessage = computed<ChatMessage | null>(() => {
+  const stream = currentLiveStream.value
+  if (!stream?.assistantMessageId) return null
+  const visibility = stream.visibility ?? 'not_exposed'
+  return {
+    id: stream.assistantMessageId,
+    role: 'assistant',
+    content: throttledStreamContent.value,
+    reasoning: visibility === 'visible'
+      ? normalizeAssistantReasoning(stream.reasoning, { trim: false })
+      : undefined,
+    timestamp: new Date(stream.startedAt ?? Date.now()).toISOString(),
+    agent_name: stream.agentDisplayName,
+    metadata: {
+      thinking_state: stream.thinkingEnabled ? stream.state ?? 'running' : undefined,
+      thinking_duration: stream.thinkingEnabled
+        ? chatStore.streamingThinkingElapsed
+        : undefined,
+      reasoning_visibility: stream.thinkingEnabled ? visibility : undefined,
+      recipient_display_name: stream.recipientDisplayName,
+    },
+  }
+})
+const renderedMessages = computed(() => {
+  const live = liveAssistantMessage.value
+  if (!live || visibleMessages.value.some((message) => message.id === live.id)) {
+    return visibleMessages.value
+  }
+  return [...visibleMessages.value, live]
+})
+function isLiveAssistantMessage(message: ChatMessage): boolean {
+  return liveAssistantMessage.value?.id === message.id
+}
 const windowOffset = computed(() => chatStore.messages.length - visibleMessages.value.length)
 const hiddenEarlierCount = computed(() => windowOffset.value)
 function showEarlierMessages() {
@@ -410,10 +476,6 @@ function showEarlierMessages() {
     if (host) host.scrollTop += host.scrollHeight - prevHeight
   })
 }
-// ── 流式 markdown 节流(BUG-20260710 P1)：每 chunk 全量重 parse=O(n²)/流,
-// 降为至多 300ms 一帧 + 尾帧必刷(useThrottledText),长回复不再拖死主线程。
-const throttledStreamContent = useThrottledText(() => chatStore.isCurrentStreamingContent, 300)
-
 // Token count estimate (rough: ~4 chars per token for Chinese, ~4 chars per token for English)
 const estimatedTokens = computed(() => {
   let total = 0
@@ -1334,14 +1396,6 @@ function toggleDeepThinking() {
   syncChatParams()
 }
 
-// Research mode state (kept for streaming display logic)
-const isResearchMode = computed(() => chatStore.chatMode === 'research')
-const researchStreamingContentLength = computed(() =>
-  isResearchMode.value && chatStore.isCurrentStreaming
-    ? (chatStore.isCurrentStreamingContent?.length ?? 0)
-    : 0,
-)
-
 import { formatTime, formatElapsedSeconds } from '@/utils/time'
 import { on } from '@/utils/eventBus'
 import { hexclawWS } from '@/api/websocket'
@@ -1875,7 +1929,34 @@ const { handleSend } = useChatSend({
   clearAttachmentPreview,
   scrollToBottom,
   attachConversationAutomationActions,
+  captureRouteSnapshot: () => captureCurrentMessageRoute(),
 })
+
+function routeDisplaySnapshot(agentRole: string): {
+  agentDisplayName: string
+  recipientDisplayName: string
+} {
+  const scenario = scenarioCtx.value
+  const agentDisplayName = scenario?.agentName
+    || (agentRole && !INTERNAL_AGENT_ROLES.has(agentRole)
+      ? projectedAgentDisplay(agentRole)
+      : t('chat.botName'))
+  const k12 = scenario?.metadata?.k12 as Record<string, unknown> | undefined
+  const recipientDisplayName = typeof k12?.child_name === 'string' && k12.child_name.trim()
+    ? k12.child_name.trim()
+    : agentDisplayName
+  return { agentDisplayName, recipientDisplayName }
+}
+
+function captureCurrentMessageRoute(): ChatRouteSnapshot {
+  const display = routeDisplaySnapshot(chatStore.agentRole || '')
+  return freezeChatRouteSnapshot({
+    agentRole: chatStore.agentRole || '',
+    chatParams: chatStore.chatParams,
+    thinkingEnabled: chatStore.chatMode === 'research' && chatStore.thinkingEnabled,
+    ...display,
+  })
+}
 
 function captureEditedMessageRoute(sourceSessionId: string): ChatRouteSnapshot {
   const sourceAgentRole = getSessionAgent(sourceSessionId) || chatStore.agentRole || ''
@@ -1888,6 +1969,7 @@ function captureEditedMessageRoute(sourceSessionId: string): ChatRouteSnapshot {
         provider: chatStore.chatParams.provider || sourceAgent?.provider,
         model: chatStore.chatParams.model || sourceAgent?.model,
       }
+  const display = routeDisplaySnapshot(sourceAgentRole)
   return freezeChatRouteSnapshot({
     agentRole: sourceAgentRole,
     chatParams: effectiveChatParams,
@@ -1895,6 +1977,7 @@ function captureEditedMessageRoute(sourceSessionId: string): ChatRouteSnapshot {
       getSessionDeepThinking(sourceSessionId) ||
       (chatStore.chatMode === 'research' && chatStore.thinkingEnabled),
     sessionModel: sourceSessionModel,
+    ...display,
   })
 }
 
@@ -2657,7 +2740,7 @@ function startSidebarResize(event: MouseEvent) {
 
           <!-- Message list -->
           <template
-            v-for="(msg, idx) in visibleMessages"
+            v-for="(msg, idx) in renderedMessages"
             :key="msg.id"
           >
           <div
@@ -2666,8 +2749,16 @@ function startSidebarResize(event: MouseEvent) {
             :class="msg.role === 'user' ? 'hc-msg--user' : 'hc-msg--assistant'"
             :tabindex="0"
             :data-scroll-anchor-id="msg.id"
-            :data-testid="msg.role === 'user' ? 'chat-message-user' : 'chat-message-assistant'"
+            :data-testid="
+              msg.role === 'user'
+                ? 'chat-message-user'
+                : isLiveAssistantMessage(msg)
+                  ? 'chat-assistant-pending'
+                  : 'chat-message-assistant'
+            "
+            :data-assistant-message-id="msg.role === 'assistant' ? msg.id : undefined"
             @contextmenu="
+              !isLiveAssistantMessage(msg) &&
               handleMsgContextMenu($event, windowOffset + idx, msg.role as 'user' | 'assistant')
             "
           >
@@ -2695,27 +2786,16 @@ function startSidebarResize(event: MouseEvent) {
                   "
                   :is-handoff="true"
                 />
-                <!-- Thinking block for finalized messages (ChatGPT style) -->
-                <div
-                  v-if="msg.reasoning && normalizeAssistantReasoning(msg.reasoning)"
-                  class="hc-thinking"
-                >
-                  <details class="hc-thinking__details">
-                    <summary class="hc-thinking__summary">
-                      <span class="hc-thinking__icon">●</span>
-                      <span class="hc-thinking__label">{{
-                        formatThinkingDuration(msg.metadata?.thinking_duration)
-                          ? t('chat.thoughtFor') +
-                            ' ' +
-                            formatThinkingDuration(msg.metadata?.thinking_duration)
-                          : t('chat.thoughtProcess')
-                      }}</span>
-                    </summary>
-                    <div class="hc-thinking__content">
-                      <ReasoningRenderer :content="normalizeAssistantReasoning(msg.reasoning)" />
-                    </div>
-                  </details>
-                </div>
+                <ThinkingProgress
+                  v-if="hasThinkingProgress(msg)"
+                  :state="messageThinkingState(msg)"
+                  :elapsed-seconds="messageThinkingElapsed(msg)"
+                  :reasoning="normalizeAssistantReasoning(msg.reasoning ?? '')"
+                  :visibility="messageReasoningVisibility(msg)"
+                  :runtime-events="msg.metadata?.runtime_events ?? []"
+                  :default-open="isLiveAssistantMessage(msg)"
+                  :content-ref="isLiveAssistantMessage(msg) ? bindThinkingContentRef : undefined"
+                />
                 <!-- 子 Agent 协作面板（orchestrate/spawn fan-out 完成后结构化展示） -->
                 <SubAgentPanel
                   v-if="subAgentReportsByMsg.get(msg.id)?.length"
@@ -2739,6 +2819,19 @@ function startSidebarResize(event: MouseEvent) {
                     class="hc-msg__bubble hc-msg__bubble--assistant"
                     :class="{ 'hc-msg__bubble--empty': isEmptyReply(msg.content) }"
                   >
+                    <template v-if="isLiveAssistantMessage(msg)">
+                      <MarkdownRenderer
+                        v-if="msg.content"
+                        :content="sanitizeMessageContent(msg.content)"
+                        surface="desktop"
+                      />
+                      <span v-else class="hc-typing-dots">
+                        <span class="hc-typing-dots__dot" />
+                        <span class="hc-typing-dots__dot" />
+                        <span class="hc-typing-dots__dot" />
+                      </span>
+                    </template>
+                    <template v-else>
                     <!-- 验算徽章（solve 结论透传，三态诚实 · shell 通用组件） -->
                     <VerifyBadge v-if="messageVerify(msg)" :result="messageVerify(msg)!" />
                     <!-- 图像 / 视频 / 音频附件 -->
@@ -2831,6 +2924,7 @@ function startSidebarResize(event: MouseEvent) {
                     />
                     <!-- 入库徽章（判错入库确认，schema 驱动 · shell 通用组件） -->
                     <RecordChip v-if="messageRecordChip(msg)" v-bind="messageRecordChip(msg)!" />
+                    </template>
                   </div>
                 </div>
                 <div v-if="getMessageArtifacts(msg.id).length > 0" class="hc-msg__artifacts">
@@ -2989,7 +3083,7 @@ function startSidebarResize(event: MouseEvent) {
                     </div>
                   </div>
                 </div>
-                <MessageFooter class="hc-msg__footer">
+                <MessageFooter v-if="!isLiveAssistantMessage(msg)" class="hc-msg__footer">
                   <div class="hc-msg__meta">
                     <span>{{ formatTime(msg.timestamp) }}</span>
                     <span v-if="messageProviderDisplay(msg) || metadataValue(msg, 'model')">{{
@@ -3192,77 +3286,6 @@ function startSidebarResize(event: MouseEvent) {
           />
           </template>
 
-          <!-- Research progress panel -->
-          <ResearchProgress
-            v-if="isResearchMode && chatStore.isCurrentStreaming"
-            :active="chatStore.isCurrentStreaming"
-            :content-length="researchStreamingContentLength"
-          />
-
-          <!-- Streaming / Typing indicator -->
-          <div
-            v-if="chatStore.isCurrentStreaming || showAssistantPending"
-            class="hc-msg hc-msg--assistant"
-            data-testid="chat-assistant-pending"
-          >
-            <div class="hc-msg__avatar">
-              <img :src="crabLogo" alt="HC" class="hc-msg__avatar-img" />
-              <span class="hc-msg__avatar-badge" />
-            </div>
-            <div class="hc-msg__body">
-              <div class="hc-msg__name">{{ t('chat.botName') }}</div>
-              <!-- Thinking block: open while reasoning, collapse to <details> once reply starts -->
-              <div
-                v-if="streamingReasoningDisplay && !chatStore.isCurrentStreamingContent"
-                class="hc-thinking"
-              >
-                <div class="hc-thinking__header">
-                  <span class="hc-thinking__spinner" />
-                  <span class="hc-thinking__label">{{ t('chat.thinking') }}</span>
-                  <span v-if="chatStore.streamingThinkingElapsed > 0" class="hc-thinking__time"
-                    >{{ chatStore.streamingThinkingElapsed }}s</span
-                  >
-                </div>
-                <div ref="thinkingContentRef" class="hc-thinking__content">
-                  <ReasoningRenderer :content="streamingReasoningDisplay" />
-                </div>
-              </div>
-              <div
-                v-else-if="streamingReasoningDisplay && chatStore.isCurrentStreamingContent"
-                class="hc-thinking"
-              >
-                <details class="hc-thinking__details">
-                  <summary class="hc-thinking__summary">
-                    <span class="hc-thinking__label">{{ t('chat.thoughtProcess') }}</span>
-                    <span v-if="chatStore.streamingThinkingElapsed > 0" class="hc-thinking__time"
-                      >{{ chatStore.streamingThinkingElapsed }}s</span
-                    >
-                  </summary>
-                  <div class="hc-thinking__content">
-                    <ReasoningRenderer :content="streamingReasoningDisplay" />
-                  </div>
-                </details>
-              </div>
-              <!-- Main reply content -->
-              <div
-                v-if="chatStore.isCurrentStreamingContent"
-                class="hc-msg__bubble hc-msg__bubble--assistant"
-              >
-                <MarkdownRenderer :content="throttledStreamContent" />
-              </div>
-              <div
-                v-else-if="!streamingReasoningDisplay"
-                class="hc-msg__bubble hc-msg__bubble--assistant"
-              >
-                <span class="hc-typing-dots">
-                  <span class="hc-typing-dots__dot" />
-                  <span class="hc-typing-dots__dot" />
-                  <span class="hc-typing-dots__dot" />
-                </span>
-              </div>
-            </div>
-          </div>
-
           <!-- 工具审批卡片 -->
           <ToolApprovalCard
             v-if="chatStore.pendingApproval"
@@ -3270,6 +3293,7 @@ function startSidebarResize(event: MouseEvent) {
             :tool-name="chatStore.pendingApproval.toolName"
             :risk="asToolApprovalRisk(chatStore.pendingApproval.risk)"
             :reason="chatStore.pendingApproval.reason"
+            :deadline-at="chatStore.pendingApproval.deadlineAt"
             @respond="chatStore.respondApproval"
           />
         </div>
