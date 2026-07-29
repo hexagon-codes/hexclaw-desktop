@@ -526,9 +526,7 @@ async function installImplementationMocks(page: Page) {
           { knowledge_point: '简易方程', count: 3, share: 0.27, subject: '数学' },
           { knowledge_point: 'Unit 4 拼写', count: 2, share: 0.18, subject: '英语' },
         ],
-        consecutive_fail_kps: [
-          { knowledge_point: '小数乘法', consecutive_fail_count: 2, subject: '数学' },
-        ],
+        consecutive_fail_kps: ['简易方程'],
         month_new_mistakes: 11,
         review_completion_rate: 0.72,
         week_pending: 6,
